@@ -13,7 +13,7 @@
 |-------------|-----------|
 | `go-rust-submit-return.ko.md` | error-only submit 반환 제안은 승인되지 않았다. 현재 Go `Submit(ctx) (bool, error)`와 `false, nil` semantics를 유지한다. |
 | `python-rust-single-part-naming.ko.md` | Python·Rust method 이름 차이는 아직 parity 결정이 아니다. 현재 각 언어 surface를 유지한다. |
-| `route-mesh-python-go-rust.ko.md` | 이전 Core service header를 근거로 하므로 Core 11 raw-only bindings 입력으로 사용할 수 없다. 필요한 Framework 요구는 Framework 문서에서 별도로 확인한다. |
+| `route-mesh-python-go-rust.ko.md` | 이전 Core service header를 근거로 하므로 Core 0.9.0 raw-only bindings 입력으로 사용할 수 없다. 필요한 Framework 요구는 Framework 문서에서 별도로 확인한다. |
 | `README.ko.md` | 삭제한 설계 후보 목록을 가리키는 index다. |
 
 ## 계획 문서 반영

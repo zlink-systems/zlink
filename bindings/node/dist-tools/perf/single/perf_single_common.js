@@ -477,7 +477,7 @@ function drainRecvSocketNoWaitUntilIdle(socket, collector, payloadSize, viaSubsc
         collector.recordPayload(data, currentEpochNs());
     }
 }
-async function runLocalSocketOneWayBenchmark({ pattern, msgSize, options, endpointToken, createReceiver, createSender, configureReceiver = null, configureSender = null, 
+async function runLocalSocketOneWayBenchmark({ pattern, msgSize, options, endpointToken, createReceiver, createSender, configureReceiver = null, configureSender = null,
 // Single-context inproc parity extensions (used by PUBSUB / ROUTER_ROUTER
 // inproc where the non-inproc path uses a Worker that cannot share the
 // inproc context). Defaults preserve the PAIR/DEALER behaviour.

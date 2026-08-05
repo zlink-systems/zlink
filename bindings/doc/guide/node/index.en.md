@@ -12,7 +12,7 @@ title: "Node.js Binding Guide"
 > covers it. This chapter shows that contract as working sample code.
 
 Explains how to use zlink in Node.js through working sample code.
-See the [core guide](https://kairos-code-dev.github.io/zlink/guide/01-overview/) for
+See the [core guide](https://zlink-systems.github.io/zlink/guide/01-overview/) for
 messaging concepts.
 
 ---
@@ -271,16 +271,16 @@ can see messaging/service usage directly in JavaScript code.
 ## See Also
 
 **Socket patterns**
-- [Socket pattern overview](https://kairos-code-dev.github.io/zlink/guide/03-0-socket-patterns/)
-  — [PAIR](https://kairos-code-dev.github.io/zlink/guide/03-1-pair/) · [PUB/SUB](https://kairos-code-dev.github.io/zlink/guide/03-2-pubsub/) · [DEALER](https://kairos-code-dev.github.io/zlink/guide/03-3-dealer/) · [ROUTER](https://kairos-code-dev.github.io/zlink/guide/03-4-router/) · [STREAM](https://kairos-code-dev.github.io/zlink/guide/03-5-stream/) · [Proxy](https://kairos-code-dev.github.io/zlink/guide/03-6-proxy/)
+- [Socket pattern overview](https://zlink-systems.github.io/zlink/guide/03-0-socket-patterns/)
+  — [PAIR](https://zlink-systems.github.io/zlink/guide/03-1-pair/) · [PUB/SUB](https://zlink-systems.github.io/zlink/guide/03-2-pubsub/) · [DEALER](https://zlink-systems.github.io/zlink/guide/03-3-dealer/) · [ROUTER](https://zlink-systems.github.io/zlink/guide/03-4-router/) · [STREAM](https://zlink-systems.github.io/zlink/guide/03-5-stream/) · [Proxy](https://zlink-systems.github.io/zlink/guide/03-6-proxy/)
 
 **Services**
 - [Framework service overview](../../../../framework/doc/framework/common/guide/server/03-concepts.en.md)
 
 **Operations**
-- [Socket options](https://kairos-code-dev.github.io/zlink/guide/12-socket-options/)
-- [TLS security](https://kairos-code-dev.github.io/zlink/guide/05-tls-security/)
-- [Monitoring](https://kairos-code-dev.github.io/zlink/guide/06-monitoring/)
-- [Thread safety](https://kairos-code-dev.github.io/zlink/guide/11-thread-safety/)
-- [Message API](https://kairos-code-dev.github.io/zlink/guide/09-message-api/)
-- [Routing ID](https://kairos-code-dev.github.io/zlink/guide/08-routing-id/)
+- [Socket options](https://zlink-systems.github.io/zlink/guide/12-socket-options/)
+- [TLS security](https://zlink-systems.github.io/zlink/guide/05-tls-security/)
+- [Monitoring](https://zlink-systems.github.io/zlink/guide/06-monitoring/)
+- [Thread safety](https://zlink-systems.github.io/zlink/guide/11-thread-safety/)
+- [Message API](https://zlink-systems.github.io/zlink/guide/09-message-api/)
+- [Routing ID](https://zlink-systems.github.io/zlink/guide/08-routing-id/)

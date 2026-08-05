@@ -1,6 +1,6 @@
 Format: http://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: Zlink
-Source: https://github.com/kairos-code-dev/zlink
+Source: https://github.com/zlink-systems/zlink
 
 Files: *
 Copyright: 2009-2011, 250bpm s.r.o

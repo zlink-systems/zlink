@@ -48,7 +48,7 @@ node scripts/local-package/core/verify-candidate.mjs \
 # exit code: 1
 ```
 
-따라서 현재 Core 11.2.0 worktree candidate를 Go 11.1.0 승인 입력으로 승격하지 않는다. 반대로 기존 Go
-package evidence도 현재 Core 11.2.0 변경의 승인으로 사용하지 않는다. Go package의 candidate identity는
-기존 승인 Core 11.1.0 입력에 고정하며, 새 Core candidate를 사용하려면 별도 V11-R2 review, Core package
+따라서 현재 Core 0.9.0.2.0 worktree candidate를 Go 11.1.0 승인 입력으로 승격하지 않는다. 반대로 기존 Go
+package evidence도 현재 Core 0.9.0.2.0 변경의 승인으로 사용하지 않는다. Go package의 candidate identity는
+기존 승인 Core 0.9.0.1.0 입력에 고정하며, 새 Core candidate를 사용하려면 별도 V11-R2 review, Core package
 evidence와 Go package 재검증이 모두 필요하다.

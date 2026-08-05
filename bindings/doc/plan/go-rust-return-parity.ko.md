@@ -6,7 +6,7 @@
 ## 1. 문서 역할
 
 반환과 error 의미의 정본은 [공통 bindings spec](../spec/README.ko.md)의 `오류 처리 정책` 절이다. 이
-문서는 Core 11 최신화 과정에서 대응 메서드를 비교하고 evidence를 연결하는 inventory다. 정식 계약을
+문서는 Core 0.9.0 최신화 과정에서 대응 메서드를 비교하고 evidence를 연결하는 inventory다. 정식 계약을
 추가하거나 변경하지 않는다. 이전에 작성된 submit 반환 설계 후보는 공통 승인을 받지 못해 삭제했으며,
 현재 구현과 정식 spec에 없는 반환 형태를 구현 지시로 사용하지 않는다.
 
@@ -60,7 +60,7 @@ Go의 공개 시그니처는 단일·복합 경계 모두 `error`를 반환한�
 
 ## 4. 대응 API inventory
 
-아래 표는 PGR-COMMON-03에서 Core 11 raw 공개 API를 대조해 채운다. 한쪽 메서드가 없으면 `GAP`으로 표시하며,
+아래 표는 PGR-COMMON-03에서 Core 0.9.0 raw 공개 API를 대조해 채운다. 한쪽 메서드가 없으면 `GAP`으로 표시하며,
 private helper나 test-only adapter로 메우지 않는다.
 
 | Core 작업 | Go 현재 surface | Rust 현재 surface | 성공·no-data 의미 | Error 함수군 | Ownership | 상태 | Evidence |

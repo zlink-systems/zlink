@@ -1,8 +1,8 @@
-# Python binding Core 11 검증 log
+# Python binding Core 0.9.0 검증 log
 
 작성일: 2026-08-03
 
-이 log는 Python raw Core 11 작업에서 실행한 local candidate와 package evidence를 기록한다. 공통
+이 log는 Python raw Core 0.9.0 작업에서 실행한 local candidate와 package evidence를 기록한다. 공통
 `V11-R2`·`V11-M3-CORE-PKG` 승인 evidence가 현재 Core `11.2.0` candidate를 가리킨다는 뜻은 아니다.
 이전 `11.1.0` evidence를 현재 candidate의 승인으로 사용하지 않았다.
 
@@ -61,9 +61,9 @@ sourceRevision: each `candidate-input.env` `CORE_REVISION`
 coreManifest: .artifacts/wsl/bindings-candidate/core-11.2.0.env
 coreManifestSha256: each `candidate-input.env` `CANDIDATE_MANIFEST_SHA256`
 coreVersion: 11.2.0
-coreRuntime: core/build/lib/libzlink.so.11.2.0
+coreRuntime: core/build/lib/libzlink.so.0.2.0
 coreRuntimeSha256: each `candidate-input.env` `CORE_RUNTIME_SHA256`
-coreSoname: libzlink.so.11
+coreSoname: libzlink.so.0
 coreSymbolSha256: ac7b04ce8f3a8338b82328ca03d6e93892f56ae57bb78569f9901ba5f65d5823
 coreSourceSha256: 9888dd12f90930fb88a9b57b632f06bf44b3c05c6229246ad4cd62d8c21de1ce
 coreHeaderSha256: f8d51ae49c3c3bb7d2ea54d1d6f067af47de37922dc93ef4e2cc8a624345a5a9
@@ -107,7 +107,7 @@ packagedNativePayloadSha256: 각 `candidate-input.env`의 `PACKAGED_NATIVE_PAYLO
 일치한다. Source manifest SHA와 aggregate SHA는 각 `candidate-input.env`의
 `PYTHON_SOURCE_MANIFEST_SHA256`·`PYTHON_SOURCE_AGGREGATE_SHA256`를 사용한다. Wheel SHA는 각 output
 root의 `python/SHA256SUMS` wheel entry를 사용한다. Wheel에는 `py.typed`와
-`linux-x86_64/libzlink.so.11.2.0`만 포함되며 `libzlink_c`, 이전 SONAME, cross-platform payload와 source
+`linux-x86_64/libzlink.so.0.2.0`만 포함되며 `libzlink_c`, 이전 SONAME, cross-platform payload와 source
 path는 포함되지 않는다.
 
 ## 실행 결과
@@ -115,7 +115,7 @@ path는 포함되지 않는다.
 ### Source test와 static check
 
 ```bash
-ZLINK_LIBRARY_PATH="$PWD/core/build/lib/libzlink.so.11.2.0" \
+ZLINK_LIBRARY_PATH="$PWD/core/build/lib/libzlink.so.0.2.0" \
   PYTHONPATH=bindings/python/src PYTHONDONTWRITEBYTECODE=1 \
   pytest -q bindings/python/tests
 ```
@@ -171,7 +171,7 @@ monitor/recv
 Single runner:
 
 ```bash
-ZLINK_LIBRARY_PATH="$PWD/core/build/lib/libzlink.so.11.2.0" \
+ZLINK_LIBRARY_PATH="$PWD/core/build/lib/libzlink.so.0.2.0" \
   LD_LIBRARY_PATH="$PWD/bindings/python/src/zlink/native/linux-x86_64" \
   PYTHONPATH=bindings/python/src \
   bindings/python/perf/run_benchmarks.sh --smoke --pattern PAIR \
@@ -184,7 +184,7 @@ ZLINK_LIBRARY_PATH="$PWD/core/build/lib/libzlink.so.11.2.0" \
 Multi runner:
 
 ```bash
-ZLINK_LIBRARY_PATH="$PWD/core/build/lib/libzlink.so.11.2.0" \
+ZLINK_LIBRARY_PATH="$PWD/core/build/lib/libzlink.so.0.2.0" \
   LD_LIBRARY_PATH="$PWD/bindings/python/src/zlink/native/linux-x86_64" \
   PYTHONPATH=bindings/python/src \
   bindings/python/perf/run_benchmarks_multi.sh --smoke \
@@ -215,7 +215,7 @@ Linux aarch64, macOS와 Windows는 현재 release target이 아니므로 별도 
 ## 2026-08-04 Codex self-review refresh
 
 package candidate snapshot의 HEAD는 `de948ac89ec753cfda5b1b1f9869c78336f647da`이며, 이후 checkout에는
-이 progress log를 기록한 문서 commit만 추가됐다. Core 11.2.0 runtime SHA는
+이 progress log를 기록한 문서 commit만 추가됐다. Core 0.9.0.2.0 runtime SHA는
 `ce28d7908bf62a1b39b481aad2a76c6e76955e3a93ea73e1cbdaa913c4883138`이다. Core 변경 19개를
 정식 spec·계획 문서와 대조하고 `lb_t`의 smooth weighted round-robin, routing ID tie-break, candidate
 변경, write failure recovery와 `0..10000` validation을 확인했다. 현재 `test_router_multiple_dealers`는

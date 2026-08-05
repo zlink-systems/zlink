@@ -45,11 +45,11 @@ publishing {
             pom {
                 name = 'zlink-ext-netty'
                 description = project.description
-                url = 'https://github.com/kairos-code-dev/zlink'
+                url = 'https://github.com/zlink-systems/zlink'
                 licenses {
                     license {
                         name = 'MPL-2.0'
-                        url = 'https://github.com/kairos-code-dev/zlink/blob/main/LICENSE'
+                        url = 'https://github.com/zlink-systems/zlink/blob/main/LICENSE'
                     }
                 }
             }

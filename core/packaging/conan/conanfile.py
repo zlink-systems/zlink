@@ -7,7 +7,7 @@ import os
 class ZlinkConan(ConanFile):
     name = "zlink"
     license = "MPL-2.0"
-    url = "https://github.com/ulala-x/zlink"
+    url = "https://github.com/zlink-systems/zlink"
     description = "libzlink core library"
     topics = ("messaging", "networking", "ipc", "asio")
 

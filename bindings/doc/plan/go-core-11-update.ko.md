@@ -1,4 +1,4 @@
-# Go binding Core 11 최신화 실행 계획
+# Go binding Core 0.9.0 최신화 실행 계획
 
 > 대상 독자는 Go binding의 module, cgo bridge와 platform payload를 갱신하는 담당자와 reviewer다. 이 문서는
 > “승인된 Core candidate를 받아 Go 작업만 독립적으로 완료하려면 무엇을 바꾸고 어떤 package consumer를
@@ -11,12 +11,12 @@ PGR-COMMON-04가 통과하면 Python과 Rust의 진행 상태와 관계없이 �
 Core candidate identity, V11-R2 review, V11-M3-CORE-PKG evidence, install prefix와 raw symbol allowlist hash를
 기록한다.
 
-현재 Go module은 `zlink.systems/zlink/v11`이고 package version은 `v11.1.0`이다. `bindings/go/include/zlink.h`와
-Linux x86_64 runtime은 Core 11.1.0 raw contract를 사용한다. Linux aarch64에 추적된 payload는 major 9이며,
-Darwin payload는 현재 Core 11 runtime으로 검증되지 않았다. Root의 `VERSION`과 `core/include/zlink.h`에 있는
+현재 Go module은 `zlink.systems/zlink`이고 package version은 `v0.9.0`이다. `bindings/go/include/zlink.h`와
+Linux x86_64 runtime은 Core 0.9.0.1.0 raw contract를 사용한다. Linux aarch64에 추적된 payload는 major 9이며,
+Darwin payload는 현재 Core 0.9.0 runtime으로 검증되지 않았다. Root의 `VERSION`과 `core/include/zlink.h`에 있는
 11.2.0 변경은 다른 workstream의 dirty change이므로 이 작업의 package 입력으로 사용하지 않는다.
 
-현재 Go source, 승인 Core 11.1.0 runtime, raw sample과 candidate identity를 연결한 local file-proxy consumer의 범위는
+현재 Go source, 승인 Core 0.9.0.1.0 runtime, raw sample과 candidate identity를 연결한 local file-proxy consumer의 범위는
 통과했다. Service API, Spot, Actor와 MeshNode projection은 제거했다. 따라서 현재 판정은 **PARTIAL / NOT
 CLEAN**이다. 전체 완료를 막는 조건은 다음과 같다.
 
@@ -27,7 +27,7 @@ CLEAN**이다. 전체 완료를 막는 조건은 다음과 같다.
 
 - Go package는 현재 Core candidate의 `V11-M3-CORE-PKG` pass evidence와 연결되지만, V11-R2 review가
   `independent: false`이므로 독립 review gate는 닫히지 않았다.
-- Linux arm64와 macOS payload의 Core 11 runtime 및 native consumer가 검증되지 않았다.
+- Linux arm64와 macOS payload의 Core 0.9.0 runtime 및 native consumer가 검증되지 않았다.
 - 현재 `scripts/local-package/go/build-wsl.sh`도 `linux-x86_64`만 candidate payload source로 허용한다. `linux-aarch64`,
   `darwin-x86_64`, `darwin-aarch64` 요청은 모두 exit 2로 거부되므로 non-x86_64 gate에는 target payload와
   builder 확장, native consumer 실행 환경이 함께 필요하다.
@@ -59,12 +59,12 @@ Candidate verify 입력은 다음과 같다.
 
 ## 2. Module path와 version 결정
 
-Service API 제거는 breaking change이고 binding package는 Core 11 major/minor에서 다시 시작한다. 이 실행
+Service API 제거는 breaking change이고 binding package는 Core 0.9.0 major/minor에서 다시 시작한다. 이 실행
 계획의 module은 다음과 같다.
 
 ```text
-module zlink.systems/zlink/v11
-version v11.1.0
+module zlink.systems/zlink
+version v0.9.0
 ```
 
 Go semantic import versioning에 따라 source, test, sample, perf와 consumer import는 `/v11`로 함께 사용한다.
@@ -73,7 +73,7 @@ Module source는 commit된 `bindings/go` snapshot에서 materialize한다. Packa
 
 ## 3. 목표와 범위
 
-Go module은 승인된 Core 11 raw C API만 투영한다. Context, message, raw socket, monitor, poller, timer와
+Go module은 승인된 Core 0.9.0 raw C API만 투영한다. Context, message, raw socket, monitor, poller, timer와
 utility를 Go 관례에 맞게 제공하고 service API와 이전 Core runtime을 포함하지 않는다.
 
 다음 작업은 범위 밖이다.
@@ -88,14 +88,14 @@ utility를 Go 관례에 맞게 제공하고 service API와 이전 Core runtime�
 
 ### GO-01 — Module과 공개 entrypoint — PASS
 
-- `go.mod`는 `zlink.systems/zlink/v11`을 선언한다.
-- Root package와 `contracts` package는 Core 11 raw 계약을 projection한다.
+- `go.mod`는 `zlink.systems/zlink`을 선언한다.
+- Root package와 `contracts` package는 Core 0.9.0 raw 계약을 projection한다.
 - Source, sample, perf와 GoDoc은 `/v11` module path와 공개 entrypoint를 사용한다.
 - Internal package와 cgo type은 public signature와 GoDoc에 노출되지 않는다.
 
 ### GO-02 — Raw cgo inventory — PASS
 
-- `internal/native/ffi.go`와 package-local header는 Core 11 raw allowlist로 검사한다.
+- `internal/native/ffi.go`와 package-local header는 Core 0.9.0 raw allowlist로 검사한다.
 - cgo include path는 package 안의 `include/`만 사용하며 repository `core/include`를 package consumer에 노출하지
   않는다.
 - Package header tree에서 `zlink/service/`와 이전 service include를 제거했다.
@@ -198,7 +198,7 @@ Package zip에는 Python report helper가 포함되지 않으므로 `--smoke` �
 
 | Checkpoint | Commit | 내용 |
 |------------|--------|------|
-| Raw contract boundary | `afd96c43aa` | Core 11 raw projection, service surface 제거, `/v11`, HWM contract |
+| Raw contract boundary | `afd96c43aa` | Core 0.9.0 raw projection, service surface 제거, `/v11`, HWM contract |
 | Error/lifecycle/perf boundary | `eab6cf9411` | Error surface, context test, bounded progress pump, sample/perf smoke |
 | Gate boundary | `f1210adaffc` | Raw allowlist, hot-path inventory, package builder와 clean-consumer gate |
 | Candidate provenance boundary | `40dcadb2ef0` | 승인 Core candidate와 package evidence를 검증하는 Go package builder |
@@ -221,7 +221,7 @@ Package zip에는 Python report helper가 포함되지 않으므로 `--smoke` �
 
 ### GO-08 — 정식 문서 — PARTIAL
 
-Go 정식 spec의 한국어·영문 문서는 `/v11` module, Core 11 raw public API, ownership, receive no-data, error
+Go 정식 spec의 한국어·영문 문서는 `/v11` module, Core 0.9.0 raw public API, ownership, receive no-data, error
 surface와 package boundary에 맞춰 갱신했다. `bindings/go/README.godoc.md`, `tests/run_tests.sh`와 sample
 entrypoint도 현재 구현과 맞는다.
 
@@ -237,9 +237,9 @@ target만 나타낸다.
 | Platform | 상태 | 근거와 남은 조건 |
 |----------|------|------------------|
 | Linux amd64 (`linux-x86_64`) | `PASS` | V11-M3-CORE-PKG 승인 runtime SHA-256 `b6fadc481c649b50637a9c0eb01d15a016e6ba4cd5bab967bdb6da4497a3c0c4`, package clean consumer와 ldd path 검증 |
-| Linux arm64 (`linux-aarch64`) | `BLOCKED` | `libzlink.so.9`, SHA-256 `9c3cf64ca56e15b9f2200e33d377d5ce8f19d4fcc180a941f6a5c51442170391`; Core 11 candidate runtime과 consumer가 없음 |
-| macOS amd64 (`darwin-x86_64`) | `UNVERIFIED` | payload SHA-256 `16b52674acbdac834c98727b8cd58228a65d993c738b35176dea939e0940b2a1`가 현재 Core 11 candidate와 연결되지 않았고 이 Linux host에서 native consumer를 실행하지 않음 |
-| macOS arm64 (`darwin-aarch64`) | `UNVERIFIED` | payload SHA-256 `6e6dc25c0360b7cb3a1d79f67ec5161924458653948b7a2cc78ddffaf86a3d8d`가 현재 Core 11 candidate와 연결되지 않았고 이 Linux host에서 native consumer를 실행하지 않음 |
+| Linux arm64 (`linux-aarch64`) | `BLOCKED` | `libzlink.so.9`, SHA-256 `9c3cf64ca56e15b9f2200e33d377d5ce8f19d4fcc180a941f6a5c51442170391`; Core 0.9.0 candidate runtime과 consumer가 없음 |
+| macOS amd64 (`darwin-x86_64`) | `UNVERIFIED` | payload SHA-256 `16b52674acbdac834c98727b8cd58228a65d993c738b35176dea939e0940b2a1`가 현재 Core 0.9.0 candidate와 연결되지 않았고 이 Linux host에서 native consumer를 실행하지 않음 |
+| macOS arm64 (`darwin-aarch64`) | `UNVERIFIED` | payload SHA-256 `6e6dc25c0360b7cb3a1d79f67ec5161924458653948b7a2cc78ddffaf86a3d8d`가 현재 Core 0.9.0 candidate와 연결되지 않았고 이 Linux host에서 native consumer를 실행하지 않음 |
 | Windows | 범위 밖 | 별도 cgo linker·loader 구현 전에는 release 범위 밖 |
 
 Linux와 macOS 각 artifact는 같은 Core candidate identity를 사용해야 하며 runtime hash와 loader evidence를
@@ -256,9 +256,9 @@ V11-M3-CORE-PKG evidence를 먼저 검증한 뒤, commit된 `bindings/go` source
 Binding source의 미커밋 변경, package-local header version drift와 candidate와 다른 native payload를 거부한다.
 
 ```text
-<proxy>/zlink.systems/zlink/v11/@v/v11.1.0.info
-<proxy>/zlink.systems/zlink/v11/@v/v11.1.0.mod
-<proxy>/zlink.systems/zlink/v11/@v/v11.1.0.zip
+<proxy>/zlink.systems/zlink/@v/v0.9.0.info
+<proxy>/zlink.systems/zlink/@v/v0.9.0.mod
+<proxy>/zlink.systems/zlink/@v/v0.9.0.zip
 ```
 
 현재 package command는 다음 입력을 사용한다.
@@ -281,7 +281,7 @@ scripts/local-package/go/build-wsl.sh \
 | Module zip SHA-256 | `e12cdaf3b83d15b3135daf9b8f741bca50c24269dec7cd2fcc21398fed3ed67d` |
 | Header aggregate SHA-256 | `159c8024f8ed090e0c3acfe51e665339d3a43e93b37dc9e21490b703df717f1d` |
 | Source aggregate SHA-256 | `937fb0f27b88aff801c33dbdfe251a6650973cd98693abdbc502555ec9a43aed` |
-| Package evidence | `.artifacts/wsl/go-candidate-final7/go-package-v11.1.0.json` |
+| Package evidence | `.artifacts/wsl/go-candidate-final7/go-package-v0.9.0.json` |
 | Package evidence SHA-256 | `e0ac97b387322843a28b0f328ebf51ab395d81e6b4af588954b8559f1b1b6991` |
 | Core candidate manifest | `.artifacts/v11/evidence/V11-M3-CORE-VERIFY/candidate-reply-match-completion-hwm-20260801.json` |
 | Core package evidence | `.artifacts/v11/evidence/V11-M3-CORE-VERIFY/core-package-20260801.json` |
@@ -297,8 +297,8 @@ scripts/local-package/go/build-wsl.sh \
 | Gate | 상태 | Evidence |
 |------|------|----------|
 | 공통 candidate 입력 확인 | `PASS` (독립 review 제외) | Candidate verify와 matching V11-M3-CORE-PKG pass evidence가 같은 manifest `d318...`/aggregate `327...`을 사용하며 runtime provenance 검증 통과 |
-| Go binding source manifest | `PASS` | `.artifacts/wsl/go-candidate-final6/go-source-manifest-v11.1.0.json`, SHA-256 `3240b10c68ad6dfb1ebe08a8ec27a6ea526a3b02ff48f59ed5c20b0573a59cff` |
-| `/v11` module path와 version | `PASS` | `bindings/go/go.mod`, package evidence `v11.1.0` |
+| Go binding source manifest | `PASS` | `.artifacts/wsl/go-candidate-final6/go-source-manifest-v0.9.0.json`, SHA-256 `3240b10c68ad6dfb1ebe08a8ec27a6ea526a3b02ff48f59ed5c20b0573a59cff` |
+| `/v11` module path와 version | `PASS` | `bindings/go/go.mod`, package evidence `v0.9.0` |
 | Raw cgo·header·symbol allowlist | `PASS` | `bindings/go/tests/raw-core11-allowlist.json`, `TestRawCore11Allowlist` |
 | Public API snapshot과 service 부재 | `PASS` | root/contracts projection, raw surface test, package zip forbidden-entry 검사 |
 | `go test ./...` | `PASS` | fresh6 extracted package와 `bindings/go/tests/run_tests.sh`에서 통과 |
@@ -325,9 +325,9 @@ scripts/local-package/go/build-wsl.sh \
 
 다음 조건을 모두 만족해야 Go 작업을 완료한다.
 
-1. Module은 `zlink.systems/zlink/v11@v11.1.0`이며 승인 Core candidate identity와 Go binding source manifest가
+1. Module은 `zlink.systems/zlink@v0.9.0`이며 승인 Core candidate identity와 Go binding source manifest가
    같은 package evidence에 기록된다.
-2. Raw cgo와 공개 API가 Core 11 allowlist에 맞고 service API가 없다.
+2. Raw cgo와 공개 API가 Core 0.9.0 allowlist에 맞고 service API가 없다.
 3. 함수군별 error, no-data와 ownership이 parity inventory의 Go 열과 일치한다.
 4. Submit 반환 규칙과 `context.Context` cancellation·deadline semantics가 공통 draft 승인 결과와 정식
    contract test에 일치한다. 현재 `(bool, error)`를 임의로 error-only로 바꾸지 않는다.

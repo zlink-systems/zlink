@@ -2,7 +2,7 @@
 
 package contracts
 
-import impl "zlink.systems/zlink/v11/internal/native"
+import impl "zlink.systems/zlink/internal/native"
 
 type (
 	// MonitorEventMask is a bitmask selecting which socket monitor events to subscribe to.

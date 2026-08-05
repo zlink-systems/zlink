@@ -770,5 +770,5 @@ current verification.
   [Async Execution Policy](../../../common/spec/05-async-execution-policy.ko.md)
 - The socket configuration surface:
   [per-language topology public contract](../../../common/spec/server/languages/README.ko.md)
-- The byte-unit contract for a socket option: [the core guide's socket option](https://kairos-code-dev.github.io/zlink/guide/12-socket-options/)
+- The byte-unit contract for a socket option: [the core guide's socket option](https://zlink-systems.github.io/zlink/guide/12-socket-options/)
 - Next axis: [05-channel-messaging](05-channel-messaging.ko.md)

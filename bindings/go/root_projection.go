@@ -3,7 +3,7 @@
 // Package zlink projects the public Go binding contract at the module root.
 package zlink
 
-import impl "zlink.systems/zlink/v11/contracts"
+import impl "zlink.systems/zlink/contracts"
 
 type (
 	SendOp                  = impl.SendOp

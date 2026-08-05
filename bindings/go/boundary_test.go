@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	zlink "zlink.systems/zlink/v11"
+	zlink "zlink.systems/zlink"
 )
 
 func TestRoutingIDBoundary(t *testing.T) {
@@ -134,7 +134,7 @@ func TestSamplesAndPerfUseOnlyPublicBindingContract(t *testing.T) {
 				value := strings.Trim(imported.Path.Value, `"`)
 				if value == "C" ||
 					value == "unsafe" ||
-					strings.HasPrefix(value, "zlink.systems/zlink/v11/internal/") {
+					strings.HasPrefix(value, "zlink.systems/zlink/internal/") {
 					violations = append(violations, path+":"+value)
 				}
 			}

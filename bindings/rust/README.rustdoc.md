@@ -22,8 +22,8 @@ bindings/rust/target/doc/zlink/index.html
 - Domain objects (`Message`, error types, enums)
 - FFI internals (`zlink::ffi`) are private and excluded
 
-The current approved crate payload contains the Core 11.2.0 Linux x86_64
-runtime. Other target triples fail during build until a matching native
+The current approved crate payload contains the Core 0.9.0 ABI with the 0.9.0
+Linux x86_64 runtime. Other target triples fail during build until a matching native
 runtime has passed the Core package provenance and clean-consumer checks.
 
 ## Context Thread Safety

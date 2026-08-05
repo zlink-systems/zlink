@@ -148,7 +148,7 @@ await client.SendToChannel("profile", command).Async(ct);
 Why the peer's delay becomes this side's wait, and when the ceiling locks and unlocks, is
 covered by [04-backpressure](04-backpressure.ko.md). This section and the next only cover
 the options that set values within that behavior. Flow control itself is owned by Core, and
-the exact contract is covered by [the core guide's socket option](https://kairos-code-dev.github.io/zlink/guide/12-socket-options/).
+the exact contract is covered by [the core guide's socket option](https://zlink-systems.github.io/zlink/guide/12-socket-options/).
 
 > **Logical Multicast is judged separately per target.** Failing to submit to one target
 > doesn't roll back a target already accepted, and it doesn't return a per-target failure as

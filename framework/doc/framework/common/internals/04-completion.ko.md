@@ -68,7 +68,7 @@ SubmitResult 보내기(..., out 호출식별자, ...)
 매달린다.
 
 이 문제는 Core가 만든 것이 아니다. Core는 요청·응답 상관을 제공하지 않는다고 명시하고
-있으며([Core runtime 경계 「2」](https://kairos-code-dev.github.io/zlink/spec/core/09-runtime-boundary/)),
+있으며([Core runtime 경계 「2」](https://zlink-systems.github.io/zlink/spec/core/09-runtime-boundary/)),
 호출 식별자와 완료 표는 전적으로 Framework가 소유한다. 따라서 이 순서는 Framework가
 정할 수 있다.
 

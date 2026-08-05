@@ -19,5 +19,5 @@
     "setMaintenanceWave",
     "setMessageFollowDuration"
   ],
-  "bindingVersion": "11.2.0"
+  "bindingVersion": "0.9.0"
 }

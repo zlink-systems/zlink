@@ -12,7 +12,7 @@ title: "Java 바인딩 가이드"
 > 다룬다. 이 장은 그 계약을 실제 샘플 코드로 보여준다.
 
 Java에서 zlink를 사용하는 방법을 실제 샘플 코드 중심으로 설명합니다.
-메시징 개념의 깊은 설명은 [코어 가이드](https://kairos-code-dev.github.io/zlink/guide/01-overview/)가 소유하며, 이 가이드는 Java API 사용에 집중합니다.
+메시징 개념의 깊은 설명은 [코어 가이드](https://zlink-systems.github.io/zlink/guide/01-overview/)가 소유하며, 이 가이드는 Java API 사용에 집중합니다.
 
 ---
 
@@ -24,7 +24,7 @@ Gradle 또는 Maven으로 추가합니다. 네이티브 코어가 플랫폼별�
 
 ```groovy
 dependencies {
-    implementation 'systems.zlink:zlink:11.2.0'
+    implementation 'systems.zlink:zlink:0.9.0'
 }
 ```
 
@@ -34,7 +34,7 @@ dependencies {
 <dependency>
     <groupId>systems.zlink</groupId>
     <artifactId>zlink</artifactId>
-    <version>11.2.0</version>
+    <version>0.9.0</version>
 </dependency>
 ```
 
@@ -310,7 +310,7 @@ if (Zlink.has("draft")) {
 
 **스레딩:** `Context`는 스레드 간 공유 가능하나, 소켓은 **하나의 스레드에서만** 사용해야 합니다.
 디스패치 핸들러는 zlink 내부 워커 스레드에서 호출되므로 핸들러 안에서 오래 블록하지 않아야 합니다.
-자세한 내용은 [스레드 안전성](https://kairos-code-dev.github.io/zlink/guide/11-thread-safety/)을 참고하세요.
+자세한 내용은 [스레드 안전성](https://zlink-systems.github.io/zlink/guide/11-thread-safety/)을 참고하세요.
 
 ---
 
@@ -378,13 +378,13 @@ Kotlin 코드로 바로 볼 수 있습니다.
 ## 더 보기
 
 **소켓 패턴**
-- [소켓 패턴 개요](https://kairos-code-dev.github.io/zlink/guide/03-0-socket-patterns/)
-  - [PAIR](https://kairos-code-dev.github.io/zlink/guide/03-1-pair/)
-  - [PUB/SUB](https://kairos-code-dev.github.io/zlink/guide/03-2-pubsub/)
-  - [DEALER](https://kairos-code-dev.github.io/zlink/guide/03-3-dealer/)
-  - [ROUTER](https://kairos-code-dev.github.io/zlink/guide/03-4-router/)
-  - [STREAM](https://kairos-code-dev.github.io/zlink/guide/03-5-stream/)
-  - [프록시](https://kairos-code-dev.github.io/zlink/guide/03-6-proxy/)
+- [소켓 패턴 개요](https://zlink-systems.github.io/zlink/guide/03-0-socket-patterns/)
+  - [PAIR](https://zlink-systems.github.io/zlink/guide/03-1-pair/)
+  - [PUB/SUB](https://zlink-systems.github.io/zlink/guide/03-2-pubsub/)
+  - [DEALER](https://zlink-systems.github.io/zlink/guide/03-3-dealer/)
+  - [ROUTER](https://zlink-systems.github.io/zlink/guide/03-4-router/)
+  - [STREAM](https://zlink-systems.github.io/zlink/guide/03-5-stream/)
+  - [프록시](https://zlink-systems.github.io/zlink/guide/03-6-proxy/)
 
 **서비스**
 - [Framework 서비스 개요](../../../../framework/doc/framework/common/guide/server/03-concepts.ko.md)
@@ -392,9 +392,9 @@ Kotlin 코드로 바로 볼 수 있습니다.
   - [Actor](../../../../framework/doc/framework/common/guide/server/07-actor-spot.ko.md)
 
 **운영**
-- [소켓 옵션](https://kairos-code-dev.github.io/zlink/guide/12-socket-options/)
-- [TLS 보안](https://kairos-code-dev.github.io/zlink/guide/05-tls-security/)
-- [모니터링](https://kairos-code-dev.github.io/zlink/guide/06-monitoring/)
-- [스레드 안전성](https://kairos-code-dev.github.io/zlink/guide/11-thread-safety/)
-- [메시지 API](https://kairos-code-dev.github.io/zlink/guide/09-message-api/)
-- [라우팅 ID](https://kairos-code-dev.github.io/zlink/guide/08-routing-id/)
+- [소켓 옵션](https://zlink-systems.github.io/zlink/guide/12-socket-options/)
+- [TLS 보안](https://zlink-systems.github.io/zlink/guide/05-tls-security/)
+- [모니터링](https://zlink-systems.github.io/zlink/guide/06-monitoring/)
+- [스레드 안전성](https://zlink-systems.github.io/zlink/guide/11-thread-safety/)
+- [메시지 API](https://zlink-systems.github.io/zlink/guide/09-message-api/)
+- [라우팅 ID](https://zlink-systems.github.io/zlink/guide/08-routing-id/)

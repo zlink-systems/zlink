@@ -8,7 +8,7 @@ if(POLICY CMP0048)
   cmake_policy(SET CMP0048 NEW)
 endif()
 
-project(zlink VERSION 11.2.0 LANGUAGES C CXX)
+project(zlink VERSION 0.9.0 LANGUAGES C CXX)
 
 # Internal repo targets still include the public header from core/include.
 # Define a build-only macro so in-tree code can access private build-only
@@ -1248,7 +1248,7 @@ else()
     # version of the package.
     set_target_properties(
       libzlink PROPERTIES COMPILE_DEFINITIONS "DLL_EXPORT" PUBLIC_HEADER "${public_headers}" VERSION "${ZLINK_VERSION}"
-                        SOVERSION "11" OUTPUT_NAME "${ZLINK_OUTPUT_BASENAME}" PREFIX "lib")
+                        SOVERSION "0" OUTPUT_NAME "${ZLINK_OUTPUT_BASENAME}" PREFIX "lib")
     # Only the public zlink_* C API may be visible from the shared library.
     # Internal C++ and bundled third-party symbols (for example boost::asio)
     # otherwise interpose a consumer's own copies at load time, which crashes

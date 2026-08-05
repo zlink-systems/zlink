@@ -1,4 +1,4 @@
-# Go binding Core 11 package 재검증 기록
+# Go binding Core 0.9.0 package 재검증 기록
 
 이 기록은 2026-08-04에 `427fbce0f5c` 시점의 Go binding source로 생성하고 candidate identity를 연결한 fresh6 package
 evidence를 정리한다. Linux
@@ -21,7 +21,7 @@ x86_64 package·clean consumer·sample·perf smoke 범위는 통과했지만, Go
 | Package evidence SHA-256 | `4ae453178ceb1a7bcaebe8994a39479eac14a86a9f8146642c503df7006888a2` |
 | Package platforms | `linux-x86_64` |
 
-Package evidence는 `zlink.systems/zlink/v11@v11.1.0` module, package-local Core 11 header와 candidate runtime을
+Package evidence는 `zlink.systems/zlink@v0.9.0` module, package-local Core 0.9.0 header와 candidate runtime을
 사용한다. `cleanConsumer`는 `replace` 없이 실제 message roundtrip과 module-cache runtime load를 통과했다.
 Package에는 service·Spot·Actor·build·results forbidden entry가 없다.
 Source manifest는 package 생성 시점의 HEAD `427fbce0f5c`를 기록하며, 이후 계획 문서 commit에서도 `bindings/go`에는
@@ -42,7 +42,7 @@ git diff --name-status 6d698c7e68e0c263ee48dd3948e7b8cc6e865c7d..427fbce0f5c0a3b
 - Single smoke: `PAIR`, `inproc`, message size `64`, duration `1`, run `1`, exit code `0`
 - Multi smoke: `MULTI_DEALER_ROUTER`, `tcp`, clients `1`, message size `64`, duration `1`, run `1`, exit code `0`
 
-Perf smoke는 extracted package의 `native/linux-x86_64/libzlink.so.11.1.0`을 출력하고 runtime SHA-256
+Perf smoke는 extracted package의 `native/linux-x86_64/libzlink.so.0.1.0`을 출력하고 runtime SHA-256
 `b6fadc481c649b50637a9c0eb01d15a016e6ba4cd5bab967bdb6da4497a3c0c4`를 확인했다. Single smoke의 결과 행은
 throughput `1259306.000`, latency `0.034`, p95 `0.120`, p99 `0.195`이고 multi smoke는 throughput
 `9045.000`, latency `0.055`, p95 `0.068`, p99 `0.110`이다. 이 값은 실행 의미를 확인하기 위한 출력이며

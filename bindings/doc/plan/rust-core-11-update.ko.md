@@ -1,4 +1,4 @@
-# Rust binding Core 11 최신화 실행 계획
+# Rust binding Core 0.9.0 최신화 실행 계획
 
 > 대상 독자는 Rust binding의 crate, FFI와 platform payload를 갱신하는 담당자와 reviewer다. 이 문서는
 > “승인된 Core candidate를 받아 Rust 작업만 독립적으로 완료하려면 무엇을 바꾸고 어떤 package consumer를
@@ -17,7 +17,7 @@ SONAME을 사용한다. `src/lib.rs`, `src/runtime/`, test, sample과 perf에는
 먼저 선택한다.
 
 상태는 **구현 미착수**다. 현재 `cargo test` 결과, `cargo package --no-verify` 결과와 path dependency를 쓰는
-consumer를 Core 11 package 증거로 사용하지 않는다.
+consumer를 Core 0.9.0 package 증거로 사용하지 않는다.
 
 ## 2. Version, 목표와 범위
 
@@ -29,7 +29,7 @@ consumer를 Core 11 package 증거로 사용하지 않는다.
 snapshot에서 만든다. `.crate`, clean consumer와 독립 review evidence는 같은 manifest file SHA-256과
 aggregate SHA-256을 기록한다.
 
-Rust crate는 승인된 Core 11 raw C API만 투영한다. Context, message, raw socket, monitor, poller, timer와
+Rust crate는 승인된 Core 0.9.0 raw C API만 투영한다. Context, message, raw socket, monitor, poller, timer와
 utility를 Rust 관례에 맞게 제공하고 service API와 이전 Core runtime을 포함하지 않는다.
 
 다음 작업은 범위 밖이다.
@@ -53,7 +53,7 @@ platform runtime을 넣고 `build.rs`가 현재 target의 directory만 선택하
 
 ### RS-01 — Raw FFI inventory
 
-- `src/runtime/native/ffi.rs`와 복사된 header를 승인 Core 11 raw header allowlist와 대조한다.
+- `src/runtime/native/ffi.rs`와 복사된 header를 승인 Core 0.9.0 raw header allowlist와 대조한다.
 - Package header tree에서 `zlink/service/`와 이전 service include를 제거한다.
 - Header에 없는 service function, struct, enum과 callback 선언을 제거한다.
 - Raw header 함수와 Rust FFI 선언의 누락·추가를 machine-readable snapshot으로 검사한다.
@@ -171,9 +171,9 @@ finding이 0건이고 `Low` finding이 모두 처리됐으며 같은 manifest의
 |----------|------------------|-------------|
 | Linux x86_64 | `linux-x86_64` | Core 10.6.0 교체 필요 |
 | Linux aarch64 | `linux-aarch64` | Major 9 payload 교체 필요 |
-| macOS x86_64/aarch64 | `darwin-*` | Core 11 runtime과 load 검증 필요 |
-| Windows x86_64 | `windows-x86_64` | Core 11 DLL과 dependency inventory 검증 필요 |
-| Windows aarch64 | `windows-aarch64` | Core 11 DLL과 native consumer 검증 필요 |
+| macOS x86_64/aarch64 | `darwin-*` | Core 0.9.0 runtime과 load 검증 필요 |
+| Windows x86_64 | `windows-x86_64` | Core 0.9.0 DLL과 dependency inventory 검증 필요 |
+| Windows aarch64 | `windows-aarch64` | Core 0.9.0 DLL과 native consumer 검증 필요 |
 
 RS-01에서 spec, guide, `build.rs`와 crate payload를 대조해 지원 platform을 확정한다. 확정된 각 platform은 같은
 Core candidate identity와 platform별 runtime provenance를 사용하고 native Rust consumer를 실행한다. Core
@@ -185,7 +185,7 @@ Candidate tooling은 먼저 `cargo package --allow-dirty`를 verification이 활
 `--no-verify`는 사용하지 않는다. 생성된 `.crate`의 file list와 압축 해제 결과에서 다음 항목을 확인한다.
 
 - `Cargo.toml`의 version이 `11.1.0`이고 publish 대상 source가 모두 포함되어 있다.
-- 지원하는 모든 platform의 Core 11 runtime과 필요한 public header만 포함되어 있다.
+- 지원하는 모든 platform의 Core 0.9.0 runtime과 필요한 public header만 포함되어 있다.
 - 이전 runtime, service header, repository build output과 absolute path가 없다.
 - Package runtime과 header hash가 platform provenance와 같다.
 
@@ -231,7 +231,7 @@ Clean consumer는 `.crate`를 source directory로 풀어 path dependency로 연�
 다음 조건을 모두 만족해야 Rust 작업이 완료된다.
 
 1. Crate version은 `11.1.0`이고 승인된 Core candidate identity와 Rust binding source manifest를 기록한다.
-2. Raw FFI와 공개 API가 Core 11 allowlist에 맞고 service API가 없다.
+2. Raw FFI와 공개 API가 Core 0.9.0 allowlist에 맞고 service API가 없다.
 3. 함수군별 error, no-data와 ownership이 parity inventory의 Rust 열과 일치한다.
 4. 성공 값 없는 submit은 `Result<(), SubmitError>`를 반환하고 callback의 `FnOnce + Send + 'static` 조건이
    compile-time contract test로 검증된다.

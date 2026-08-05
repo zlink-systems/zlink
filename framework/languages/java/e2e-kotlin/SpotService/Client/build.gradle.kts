@@ -9,9 +9,9 @@ kotlin {
 
 dependencies {
     implementation(project(":Shared"))
-    implementation("systems.zlink:zlink-framework-core:0.1.0-SNAPSHOT")
-    implementation("systems.zlink:zlink-framework-kotlin:0.1.0-SNAPSHOT")
-    implementation("systems.zlink:zlink-stream-connector:0.1.0-SNAPSHOT")
+    implementation("systems.zlink:zlink-framework-core:0.9.0")
+    implementation("systems.zlink:zlink-framework-kotlin:0.9.0")
+    implementation("systems.zlink:zlink-stream-connector:0.9.0")
     implementation(zlinkLibs.zlink.bindings)
     implementation("com.fasterxml.jackson.core:jackson-databind:2.19.2")
 }

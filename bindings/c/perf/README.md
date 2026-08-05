@@ -106,7 +106,7 @@ aggregation.
 ## Core 10.x archive
 
 Files already present under `baseline/` are a read-only Core 10.x archive.
-Core 11 benchmark runs write only to `results/`; the runners neither update nor
+Core 0.9.0 benchmark runs write only to `results/`; the runners neither update nor
 select the archive as an active baseline.
 
 ## Auto-HWM Profile Sweep

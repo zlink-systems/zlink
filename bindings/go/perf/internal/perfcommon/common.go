@@ -14,7 +14,7 @@ import (
 	"syscall"
 	"time"
 
-	zlink "zlink.systems/zlink/v11"
+	zlink "zlink.systems/zlink"
 )
 
 var endpointCounter uint64

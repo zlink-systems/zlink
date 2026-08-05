@@ -1,4 +1,4 @@
-# Go binding Core 11 완료 조건 최종 대조
+# Go binding Core 0.9.0 완료 조건 최종 대조
 
 이 기록은 `go-core-11-update.ko.md`의 완료 조건 11개를 현재 source, package evidence와 review 입력에
 대조한 결과다. 문서의 누락을 찾기 위한 audit이며, `PARTIAL / NOT CLEAN`인 gate를 완료로 바꾸지 않는다.
@@ -11,7 +11,7 @@
 | Candidate manifest SHA-256 | `d318525a4cf8496b6bef5d900c9a88330ea6d7e10ed4120ac0fd9f19d23f6765` |
 | Candidate aggregate SHA-256 | `327587596195a162374498b630f51a043977dd392eb556061af615bf05186703` |
 | Go source manifest SHA-256 | `3240b10c68ad6dfb1ebe08a8ec27a6ea526a3b02ff48f59ed5c20b0573a59cff` |
-| Go package evidence | `.artifacts/wsl/go-candidate-final6/go-package-v11.1.0.json` |
+| Go package evidence | `.artifacts/wsl/go-candidate-final6/go-package-v0.9.0.json` |
 | Go package evidence SHA-256 | `4ae453178ceb1a7bcaebe8994a39479eac14a86a9f8146642c503df7006888a2` |
 | Module zip SHA-256 | `76f1d83f76c6203765f67938392c199f6d6441fc714f18c1c1e7f7611e57b274` |
 | Core runtime SHA-256 | `b6fadc481c649b50637a9c0eb01d15a016e6ba4cd5bab967bdb6da4497a3c0c4` |
@@ -21,8 +21,8 @@
 
 | # | 완료 조건 | 판정 | 현재 증거와 남은 조건 |
 |---|-----------|------|----------------------|
-| 1 | `/v11@v11.1.0`, 승인 candidate와 source manifest가 같은 package evidence에 기록됨 | `PASS` | fresh6 package evidence와 clean consumer가 module, current source revision, candidate identity를 연결한다 |
-| 2 | Raw cgo·public API가 Core 11 allowlist에 맞고 service API가 없음 | `PASS` | raw allowlist, public surface test와 package forbidden-entry 검사가 통과했다 |
+| 1 | `/v11@v0.9.0`, 승인 candidate와 source manifest가 같은 package evidence에 기록됨 | `PASS` | fresh6 package evidence와 clean consumer가 module, current source revision, candidate identity를 연결한다 |
+| 2 | Raw cgo·public API가 Core 0.9.0 allowlist에 맞고 service API가 없음 | `PASS` | raw allowlist, public surface test와 package forbidden-entry 검사가 통과했다 |
 | 3 | Error·no-data·ownership이 Go–Rust parity 열과 일치함 | `PARTIAL` | 현재 Go evidence는 있으나 submit 반환과 callback completion 의미의 공통 승인이 없다 |
 | 4 | Submit·Context 규칙이 승인 draft와 contract test에 일치함 | `PARTIAL` | Context cancellation/deadline test는 통과했지만 submit draft 승인과 error-only 결정이 없다 |
 | 5 | Source test, vet, hot-path guard, perf smoke와 raw sample이 통과함 | `PASS` | `427fbce0f5c` source로 생성한 fresh6 package에서 `go test`, race, `go vet`, guard, single·multi smoke와 samples `7/7`을 통과했다 |

@@ -1,6 +1,6 @@
 {
   "name": "@zlink-systems/stream-connector",
-  "version": "0.1.0-SNAPSHOT",
+  "version": "0.9.0",
   "license": "SEE LICENSE IN LICENSE",
   "type": "module",
   "types": "dist/browser/index.d.ts",
@@ -15,6 +15,6 @@
     }
   },
   "dependencies": {
-    "@zlink-systems/stream-wire": "0.1.0-SNAPSHOT"
+    "@zlink-systems/stream-wire": "0.9.0"
   }
 }

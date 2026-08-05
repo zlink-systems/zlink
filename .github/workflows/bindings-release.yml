@@ -22,7 +22,7 @@ on:
         required: false
         type: string
       core_version:
-        description: 'Core native version (e.g. 10.2.0). Defaults to the checked-out VERSION and must match it exactly.'
+        description: 'Core native version (e.g. 0.9.0). Defaults to the checked-out VERSION and must match it exactly.'
         required: false
         type: string
       create_release:

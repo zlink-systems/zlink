@@ -921,16 +921,36 @@ bool verify_idle_instance_spot_eviction_closes_local_context ()
         return false;
     }
     set_last_application_work (std::chrono::hours (2));
+    std::cerr << "idle eviction precheck: timeout="
+              << node->instance_spot_idle_timeout.count ()
+              << " kind=" << static_cast<int> (context->kind)
+              << " idle=" << context->idle_quiescent ()
+              << " last=" << context->last_application_work_completed_ns.load ()
+              << " callbacks=" << context->callback_depth
+              << " stopped=" << node->stopping.load () << '\\n';
     runtime.evict_idle_spots ();
     executor->drain ();
 
-    return admission_called && late_application_post_rejected && closing_called
-           && closing_reason == spot_close_reason_t::idle_evicted
-           && context->closed && !context->node
-           && !context->spot_instance
-           && node->spot_contexts_by_id.empty ()
-           && node->spot_ids_by_name.empty ()
-           && node->spot_names_by_id.empty ();
+    const bool result = admission_called && late_application_post_rejected && closing_called
+                        && closing_reason == spot_close_reason_t::idle_evicted
+                        && context->closed && !context->node
+                        && !context->spot_instance
+                        && node->spot_contexts_by_id.empty ()
+                        && node->spot_ids_by_name.empty ()
+                        && node->spot_names_by_id.empty ();
+    if (!result) {
+        std::cerr << "idle eviction mismatch: admission=" << admission_called
+                  << " late_post_rejected=" << late_application_post_rejected
+                  << " closing=" << closing_called
+                  << " reason=" << static_cast<int> (closing_reason)
+                  << " closed=" << context->closed
+                  << " node=" << static_cast<bool> (context->node)
+                  << " instance=" << static_cast<bool> (context->spot_instance)
+                  << " contexts=" << node->spot_contexts_by_id.size ()
+                  << " names=" << node->spot_ids_by_name.size () << "/"
+                  << node->spot_names_by_id.size () << '\\n';
+    }
+    return result;
 }
 
 } // namespace
@@ -1743,6 +1763,10 @@ int main ()
         bounded_executor.drain ();
         if (!bounded_executor.drained ()
             || bounded_executor.live_worker_count () != 0) {
+            std::cerr << "bounded executor final drain mismatch: drained="
+                      << bounded_executor.drained ()
+                      << " live=" << bounded_executor.live_worker_count ()
+                      << '\\n';
             return 53;
         }
     }

@@ -113,7 +113,7 @@ byte[] copy             = fromText.ToArray();         // copy out
 
 `Message` owns native storage, so it's `IDisposable`. The span returned by
 `AsSpan()`/`AsReadOnlySpan()` is only valid while the message is alive. See the
-[message API](https://kairos-code-dev.github.io/zlink/guide/09-message-api/) for the
+[message API](https://zlink-systems.github.io/zlink/guide/09-message-api/) for the
 message model concept.
 
 The binding doesn't provide object codec packages such as JSON, Protobuf, or
@@ -142,7 +142,7 @@ IReadOnlyList<Message> parts = received.Parts;  // full multipart set
 ### 4. RoutingId
 
 A binary-safe value type identifying a peer, spot, or actor. Built only through
-static factories. See [routing ID](https://kairos-code-dev.github.io/zlink/guide/08-routing-id/)
+static factories. See [routing ID](https://zlink-systems.github.io/zlink/guide/08-routing-id/)
 for the concept and policy.
 
 ```csharp
@@ -167,7 +167,7 @@ dispose of it** — always with `using` (or `await using`).
   (`IReadOnlyList<Message>`) are **owned by the caller** — dispose them after use.
 - To hold onto a span, copy it first with `ToArray()`/`CopyTo(...)`.
 
-For thread-safety rules, see [thread safety](https://kairos-code-dev.github.io/zlink/guide/11-thread-safety/).
+For thread-safety rules, see [thread safety](https://zlink-systems.github.io/zlink/guide/11-thread-safety/).
 `IContext` is safe to share across threads. **Sockets are not** — never call the
 same socket from more than one thread concurrently.
 
@@ -220,7 +220,7 @@ if (!socket.Send().Message(m).Flags(SendFlags.DontWait).Submit()) { /* back-pres
 A compressed mapping for anyone coming from the C core (`zlink.h`) or comparing
 against another language binding. .NET wraps raw functions in objects and
 fluent builders, so this isn't 1:1, but it corresponds at the concept level. See
-the [core C API guide](https://kairos-code-dev.github.io/zlink/guide/02-core-api/)
+the [core C API guide](https://zlink-systems.github.io/zlink/guide/02-core-api/)
 for the full list of C functions.
 
 | Area | C API (`zlink_*`) | .NET |
@@ -259,7 +259,7 @@ AOT** publishing, make sure the target RID's assets are included in the output
 (`dotnet publish -r <rid>`).
 
 Threading: `IContext` is thread-safe and shareable across threads. Sockets are
-single-thread-owned — see [thread safety](https://kairos-code-dev.github.io/zlink/guide/11-thread-safety/)
+single-thread-owned — see [thread safety](https://zlink-systems.github.io/zlink/guide/11-thread-safety/)
 for the full rules.
 
 ---
@@ -288,13 +288,13 @@ Run: `./samples/run_samples.sh` (or `run_samples.ps1`).
 ## See Also
 
 **Socket patterns**
-- [Socket pattern overview](https://kairos-code-dev.github.io/zlink/guide/03-0-socket-patterns/)
-  - [PAIR](https://kairos-code-dev.github.io/zlink/guide/03-1-pair/)
-  - [PUB/SUB](https://kairos-code-dev.github.io/zlink/guide/03-2-pubsub/)
-  - [DEALER](https://kairos-code-dev.github.io/zlink/guide/03-3-dealer/)
-  - [ROUTER](https://kairos-code-dev.github.io/zlink/guide/03-4-router/)
-  - [STREAM](https://kairos-code-dev.github.io/zlink/guide/03-5-stream/)
-  - [Proxy](https://kairos-code-dev.github.io/zlink/guide/03-6-proxy/)
+- [Socket pattern overview](https://zlink-systems.github.io/zlink/guide/03-0-socket-patterns/)
+  - [PAIR](https://zlink-systems.github.io/zlink/guide/03-1-pair/)
+  - [PUB/SUB](https://zlink-systems.github.io/zlink/guide/03-2-pubsub/)
+  - [DEALER](https://zlink-systems.github.io/zlink/guide/03-3-dealer/)
+  - [ROUTER](https://zlink-systems.github.io/zlink/guide/03-4-router/)
+  - [STREAM](https://zlink-systems.github.io/zlink/guide/03-5-stream/)
+  - [Proxy](https://zlink-systems.github.io/zlink/guide/03-6-proxy/)
 
 **Services**
 - [Framework service overview](../../../../framework/doc/framework/common/guide/server/03-concepts.en.md)
@@ -302,9 +302,9 @@ Run: `./samples/run_samples.sh` (or `run_samples.ps1`).
   - [Actor](../../../../framework/doc/framework/common/guide/server/07-actor-spot.en.md)
 
 **Operations**
-- [Socket options](https://kairos-code-dev.github.io/zlink/guide/12-socket-options/)
-- [TLS security](https://kairos-code-dev.github.io/zlink/guide/05-tls-security/)
-- [Monitoring](https://kairos-code-dev.github.io/zlink/guide/06-monitoring/)
-- [Thread safety](https://kairos-code-dev.github.io/zlink/guide/11-thread-safety/)
-- [Message API](https://kairos-code-dev.github.io/zlink/guide/09-message-api/)
-- [Routing ID](https://kairos-code-dev.github.io/zlink/guide/08-routing-id/)
+- [Socket options](https://zlink-systems.github.io/zlink/guide/12-socket-options/)
+- [TLS security](https://zlink-systems.github.io/zlink/guide/05-tls-security/)
+- [Monitoring](https://zlink-systems.github.io/zlink/guide/06-monitoring/)
+- [Thread safety](https://zlink-systems.github.io/zlink/guide/11-thread-safety/)
+- [Message API](https://zlink-systems.github.io/zlink/guide/09-message-api/)
+- [Routing ID](https://zlink-systems.github.io/zlink/guide/08-routing-id/)

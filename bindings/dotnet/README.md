@@ -36,4 +36,4 @@ Synchronous builders, immediate configuration calls, and callback-style submit
 methods do not take a token. A token must not be added only to call
 `ThrowIfCancellationRequested()` before a non-cancelable operation.
 
-Project repository: https://github.com/kairos-code-dev/zlink
+Project repository: https://github.com/zlink-systems/zlink

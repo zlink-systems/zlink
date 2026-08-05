@@ -4,7 +4,7 @@
         <AssemblyName>Zlink.HttpClient</AssemblyName>
         <RootNamespace>Zlink.HttpClient</RootNamespace>
         <Description>ZLink-style fluent HTTP client wrapping System.Net.Http for the ZLink framework.</Description>
-        <Version>0.5.2</Version>
+        <Version>0.9.0</Version>
         <IsPackable>true</IsPackable>
         <!-- Overrides Directory.Build.props: this package wraps System.Net.Http rather
              than any zlink-original transport, so it ships under Apache-2.0 instead of

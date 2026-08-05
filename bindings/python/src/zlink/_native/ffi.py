@@ -108,7 +108,7 @@ ZLINK_DONTWAIT = 1
 
 
 class _Lib:
-    """Own the complete Core 11 raw symbol and layout declaration."""
+    """Own the complete Core 0.9.0 raw symbol and layout declaration."""
 
     def __init__(self):
         self.lib = load_native_library(self._bind_loaded)

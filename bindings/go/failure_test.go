@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	zlink "zlink.systems/zlink/v11"
+	zlink "zlink.systems/zlink"
 )
 
 func TestSubmitContextCancellationUsesStandardErrors(t *testing.T) {

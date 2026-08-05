@@ -11541,8 +11541,8 @@
       "action": "replace-package-payload"
     },
     {
-      "id": "file:bindings/cpp/native/linux-x64/libzlink.so.11",
-      "file": "bindings/cpp/native/linux-x64/libzlink.so.11",
+      "id": "file:bindings/cpp/native/linux-x64/libzlink.so.0",
+      "file": "bindings/cpp/native/linux-x64/libzlink.so.0",
       "scope": "binding",
       "language": "cpp",
       "targetOwners": [
@@ -11555,8 +11555,8 @@
       "action": "replace-package-payload"
     },
     {
-      "id": "file:bindings/cpp/native/linux-x64/libzlink.so.11.1.0",
-      "file": "bindings/cpp/native/linux-x64/libzlink.so.11.1.0",
+      "id": "file:bindings/cpp/native/linux-x64/libzlink.so.0.1.0",
+      "file": "bindings/cpp/native/linux-x64/libzlink.so.0.1.0",
       "scope": "binding",
       "language": "cpp",
       "targetOwners": [
@@ -11583,8 +11583,8 @@
       "action": "replace-package-payload"
     },
     {
-      "id": "file:bindings/cpp/native/linux-x86_64/libzlink.so.11",
-      "file": "bindings/cpp/native/linux-x86_64/libzlink.so.11",
+      "id": "file:bindings/cpp/native/linux-x86_64/libzlink.so.0",
+      "file": "bindings/cpp/native/linux-x86_64/libzlink.so.0",
       "scope": "binding",
       "language": "cpp",
       "targetOwners": [
@@ -11597,8 +11597,8 @@
       "action": "replace-package-payload"
     },
     {
-      "id": "file:bindings/cpp/native/linux-x86_64/libzlink.so.11.1.0",
-      "file": "bindings/cpp/native/linux-x86_64/libzlink.so.11.1.0",
+      "id": "file:bindings/cpp/native/linux-x86_64/libzlink.so.0.1.0",
+      "file": "bindings/cpp/native/linux-x86_64/libzlink.so.0.1.0",
       "scope": "binding",
       "language": "cpp",
       "targetOwners": [
@@ -11864,8 +11864,8 @@
       "action": "replace-package-payload"
     },
     {
-      "id": "file:bindings/dotnet/native/linux-x64/libzlink.so.11",
-      "file": "bindings/dotnet/native/linux-x64/libzlink.so.11",
+      "id": "file:bindings/dotnet/native/linux-x64/libzlink.so.0",
+      "file": "bindings/dotnet/native/linux-x64/libzlink.so.0",
       "scope": "binding",
       "language": "dotnet",
       "targetOwners": [
@@ -11878,8 +11878,8 @@
       "action": "replace-package-payload"
     },
     {
-      "id": "file:bindings/dotnet/native/linux-x64/libzlink.so.11.1.0",
-      "file": "bindings/dotnet/native/linux-x64/libzlink.so.11.1.0",
+      "id": "file:bindings/dotnet/native/linux-x64/libzlink.so.0.1.0",
+      "file": "bindings/dotnet/native/linux-x64/libzlink.so.0.1.0",
       "scope": "binding",
       "language": "dotnet",
       "targetOwners": [
@@ -12646,8 +12646,8 @@
       "action": "replace-package-payload"
     },
     {
-      "id": "file:bindings/java/native/linux-x64/libzlink.so.11",
-      "file": "bindings/java/native/linux-x64/libzlink.so.11",
+      "id": "file:bindings/java/native/linux-x64/libzlink.so.0",
+      "file": "bindings/java/native/linux-x64/libzlink.so.0",
       "scope": "binding",
       "language": "java",
       "targetOwners": [
@@ -12661,8 +12661,8 @@
       "action": "replace-package-payload"
     },
     {
-      "id": "file:bindings/java/native/linux-x64/libzlink.so.11.1.0",
-      "file": "bindings/java/native/linux-x64/libzlink.so.11.1.0",
+      "id": "file:bindings/java/native/linux-x64/libzlink.so.0.1.0",
+      "file": "bindings/java/native/linux-x64/libzlink.so.0.1.0",
       "scope": "binding",
       "language": "java",
       "targetOwners": [
@@ -12691,8 +12691,8 @@
       "action": "replace-package-payload"
     },
     {
-      "id": "file:bindings/java/native/linux-x86_64/libzlink.so.11",
-      "file": "bindings/java/native/linux-x86_64/libzlink.so.11",
+      "id": "file:bindings/java/native/linux-x86_64/libzlink.so.0",
+      "file": "bindings/java/native/linux-x86_64/libzlink.so.0",
       "scope": "binding",
       "language": "java",
       "targetOwners": [
@@ -12706,8 +12706,8 @@
       "action": "replace-package-payload"
     },
     {
-      "id": "file:bindings/java/native/linux-x86_64/libzlink.so.11.1.0",
-      "file": "bindings/java/native/linux-x86_64/libzlink.so.11.1.0",
+      "id": "file:bindings/java/native/linux-x86_64/libzlink.so.0.1.0",
+      "file": "bindings/java/native/linux-x86_64/libzlink.so.0.1.0",
       "scope": "binding",
       "language": "java",
       "targetOwners": [
@@ -12853,8 +12853,8 @@
       "action": "replace-package-payload"
     },
     {
-      "id": "file:bindings/java/src/main/resources/native/linux-x64/libzlink.so.11",
-      "file": "bindings/java/src/main/resources/native/linux-x64/libzlink.so.11",
+      "id": "file:bindings/java/src/main/resources/native/linux-x64/libzlink.so.0",
+      "file": "bindings/java/src/main/resources/native/linux-x64/libzlink.so.0",
       "scope": "binding",
       "language": "java",
       "targetOwners": [
@@ -12868,8 +12868,8 @@
       "action": "replace-package-payload"
     },
     {
-      "id": "file:bindings/java/src/main/resources/native/linux-x64/libzlink.so.11.1.0",
-      "file": "bindings/java/src/main/resources/native/linux-x64/libzlink.so.11.1.0",
+      "id": "file:bindings/java/src/main/resources/native/linux-x64/libzlink.so.0.1.0",
+      "file": "bindings/java/src/main/resources/native/linux-x64/libzlink.so.0.1.0",
       "scope": "binding",
       "language": "java",
       "targetOwners": [
@@ -12898,8 +12898,8 @@
       "action": "replace-package-payload"
     },
     {
-      "id": "file:bindings/java/src/main/resources/native/linux-x86_64/libzlink.so.11",
-      "file": "bindings/java/src/main/resources/native/linux-x86_64/libzlink.so.11",
+      "id": "file:bindings/java/src/main/resources/native/linux-x86_64/libzlink.so.0",
+      "file": "bindings/java/src/main/resources/native/linux-x86_64/libzlink.so.0",
       "scope": "binding",
       "language": "java",
       "targetOwners": [
@@ -12913,8 +12913,8 @@
       "action": "replace-package-payload"
     },
     {
-      "id": "file:bindings/java/src/main/resources/native/linux-x86_64/libzlink.so.11.1.0",
-      "file": "bindings/java/src/main/resources/native/linux-x86_64/libzlink.so.11.1.0",
+      "id": "file:bindings/java/src/main/resources/native/linux-x86_64/libzlink.so.0.1.0",
+      "file": "bindings/java/src/main/resources/native/linux-x86_64/libzlink.so.0.1.0",
       "scope": "binding",
       "language": "java",
       "targetOwners": [
@@ -13100,8 +13100,8 @@
       "action": "replace-package-payload"
     },
     {
-      "id": "file:bindings/node/native/linux-x64/libzlink.so.11",
-      "file": "bindings/node/native/linux-x64/libzlink.so.11",
+      "id": "file:bindings/node/native/linux-x64/libzlink.so.0",
+      "file": "bindings/node/native/linux-x64/libzlink.so.0",
       "scope": "binding",
       "language": "node",
       "targetOwners": [
@@ -13114,8 +13114,8 @@
       "action": "replace-package-payload"
     },
     {
-      "id": "file:bindings/node/native/linux-x64/libzlink.so.11.1.0",
-      "file": "bindings/node/native/linux-x64/libzlink.so.11.1.0",
+      "id": "file:bindings/node/native/linux-x64/libzlink.so.0.1.0",
+      "file": "bindings/node/native/linux-x64/libzlink.so.0.1.0",
       "scope": "binding",
       "language": "node",
       "targetOwners": [
@@ -13142,8 +13142,8 @@
       "action": "replace-package-payload"
     },
     {
-      "id": "file:bindings/node/native/linux-x86_64/libzlink.so.11",
-      "file": "bindings/node/native/linux-x86_64/libzlink.so.11",
+      "id": "file:bindings/node/native/linux-x86_64/libzlink.so.0",
+      "file": "bindings/node/native/linux-x86_64/libzlink.so.0",
       "scope": "binding",
       "language": "node",
       "targetOwners": [
@@ -13156,8 +13156,8 @@
       "action": "replace-package-payload"
     },
     {
-      "id": "file:bindings/node/native/linux-x86_64/libzlink.so.11.1.0",
-      "file": "bindings/node/native/linux-x86_64/libzlink.so.11.1.0",
+      "id": "file:bindings/node/native/linux-x86_64/libzlink.so.0.1.0",
+      "file": "bindings/node/native/linux-x86_64/libzlink.so.0.1.0",
       "scope": "binding",
       "language": "node",
       "targetOwners": [

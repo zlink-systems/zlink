@@ -12,7 +12,7 @@ Build-Depends: debhelper (>= 9),
  pkg-config,
  asciidoc-base | asciidoc, xmlto,
 Standards-Version: 3.9.8
-Homepage: https://github.com/kairos-code-dev/zlink
+Homepage: https://github.com/zlink-systems/zlink
 
 Package: libzlink11
 Architecture: any

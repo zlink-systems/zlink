@@ -62,7 +62,7 @@ target_link_libraries(my_game PRIVATE zlink::stream_connector)
 
 ```ini
 [requires]
-zlink-stream-connector/0.1.0
+zlink-stream-connector/0.9.0
 
 [options]
 zlink-stream-connector/*:with_tls=True
@@ -76,7 +76,7 @@ zlink-stream-connector/*:with_lz4=True
 from conan import ConanFile
 
 class MyGameConan(ConanFile):
-    requires = "zlink-stream-connector/0.1.0"
+    requires = "zlink-stream-connector/0.9.0"
     options = {"zlink-stream-connector/*:with_tls": True,
                "zlink-stream-connector/*:with_websocket": True}
 ```
@@ -99,7 +99,7 @@ vcpkg/Conan 없이 소스에서 직접 빌드한다.
 include(FetchContent)
 
 FetchContent_Declare(zlink_stream_connector
-    GIT_REPOSITORY https://github.com/ulala-x/zlink.git
+    GIT_REPOSITORY https://github.com/zlink-systems/zlink.git
     GIT_TAG        main
     SOURCE_SUBDIR  framework/languages/cpp/connector/core
 )

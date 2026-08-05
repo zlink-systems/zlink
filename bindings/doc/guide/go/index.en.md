@@ -6,25 +6,25 @@ title: "Go Binding Guide"
 [Guide list](../README.en.md) | [Previous: Python](../python/index.en.md) | [Next: Rust](../rust/index.en.md)
 <!-- bindings-nav:end -->
 
-# Go Binding Guide (`zlink.systems/zlink/v11`)
+# Go Binding Guide (`zlink.systems/zlink`)
 
 > **Contract-owning document for this chapter** — the [Go bindings spec](../../spec/go/README.en.md)
 > covers it. This chapter shows that contract as working sample code.
 
 Explains how to use zlink in Go through working sample code.
 The deep explanation of messaging concepts is owned by the
-[core guide](https://kairos-code-dev.github.io/zlink/guide/01-overview/);
+[core guide](https://zlink-systems.github.io/zlink/guide/01-overview/);
 this guide focuses on the Go API surface.
 
 ---
 
 ## Installation
 
-Ships as the **`zlink.systems/zlink/v11`** module. The native core is bundled
+Ships as the **`zlink.systems/zlink`** module. The native core is bundled
 per platform.
 
 ```bash
-go get zlink.systems/zlink/v11
+go get zlink.systems/zlink
 ```
 
 - **Go 1.25** or later.
@@ -32,7 +32,7 @@ go get zlink.systems/zlink/v11
   automatically.
 
 ```go
-import zlink "zlink.systems/zlink/v11"
+import zlink "zlink.systems/zlink"
 ```
 
 ---
@@ -112,7 +112,7 @@ opts.SetIOThreads(4)
 
 > It's recommended to close sockets explicitly **before** the context closes.
 > Closing the context interrupts blocking operations on any socket still open.
-> (see [thread safety](https://kairos-code-dev.github.io/zlink/guide/11-thread-safety/))
+> (see [thread safety](https://zlink-systems.github.io/zlink/guide/11-thread-safety/))
 
 ### 2. Message
 
@@ -297,7 +297,7 @@ if zlink.Has("draft") {
 ```
 
 Threading: `Context` can be shared across goroutines, but sockets must be used
-**from a single goroutine only**. (see [thread safety](https://kairos-code-dev.github.io/zlink/guide/11-thread-safety/))
+**from a single goroutine only**. (see [thread safety](https://zlink-systems.github.io/zlink/guide/11-thread-safety/))
 
 ---
 
@@ -331,5 +331,5 @@ go run ./samples/pair_recv_sample/...
 
 ## See Also
 
-- **Socket patterns**: [overview](https://kairos-code-dev.github.io/zlink/guide/03-0-socket-patterns/) — [PAIR](https://kairos-code-dev.github.io/zlink/guide/03-1-pair/) · [PUB/SUB](https://kairos-code-dev.github.io/zlink/guide/03-2-pubsub/) · [DEALER](https://kairos-code-dev.github.io/zlink/guide/03-3-dealer/) · [ROUTER](https://kairos-code-dev.github.io/zlink/guide/03-4-router/) · [STREAM](https://kairos-code-dev.github.io/zlink/guide/03-5-stream/) · [Proxy](https://kairos-code-dev.github.io/zlink/guide/03-6-proxy/)
-- **Operations**: [Socket options](https://kairos-code-dev.github.io/zlink/guide/12-socket-options/) · [TLS](https://kairos-code-dev.github.io/zlink/guide/05-tls-security/) · [Monitoring](https://kairos-code-dev.github.io/zlink/guide/06-monitoring/) · [Thread safety](https://kairos-code-dev.github.io/zlink/guide/11-thread-safety/) · [Message API](https://kairos-code-dev.github.io/zlink/guide/09-message-api/) · [Routing ID](https://kairos-code-dev.github.io/zlink/guide/08-routing-id/)
+- **Socket patterns**: [overview](https://zlink-systems.github.io/zlink/guide/03-0-socket-patterns/) — [PAIR](https://zlink-systems.github.io/zlink/guide/03-1-pair/) · [PUB/SUB](https://zlink-systems.github.io/zlink/guide/03-2-pubsub/) · [DEALER](https://zlink-systems.github.io/zlink/guide/03-3-dealer/) · [ROUTER](https://zlink-systems.github.io/zlink/guide/03-4-router/) · [STREAM](https://zlink-systems.github.io/zlink/guide/03-5-stream/) · [Proxy](https://zlink-systems.github.io/zlink/guide/03-6-proxy/)
+- **Operations**: [Socket options](https://zlink-systems.github.io/zlink/guide/12-socket-options/) · [TLS](https://zlink-systems.github.io/zlink/guide/05-tls-security/) · [Monitoring](https://zlink-systems.github.io/zlink/guide/06-monitoring/) · [Thread safety](https://zlink-systems.github.io/zlink/guide/11-thread-safety/) · [Message API](https://zlink-systems.github.io/zlink/guide/09-message-api/) · [Routing ID](https://zlink-systems.github.io/zlink/guide/08-routing-id/)

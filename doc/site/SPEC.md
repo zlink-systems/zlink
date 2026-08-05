@@ -417,7 +417,7 @@ spec·internals처럼 규칙을 촘촘히 나열하는 문서는 헤더 규약�
 - Python 3.12 + pip install
 - `mkdocs build --strict`
 - `actions/upload-pages-artifact` + `actions/deploy-pages`
-- URL: `https://kairos-code-dev.github.io/zlink/`
+- URL: `https://zlink-systems.github.io/zlink/`
 
 ## 로컬 개발
 

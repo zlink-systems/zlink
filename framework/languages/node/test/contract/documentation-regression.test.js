@@ -29,16 +29,6 @@ const typescriptSpecRoot = path.resolve(
   'languages',
   'typescript'
 );
-const nodeGapDocument = path.join(
-  workspaceRoot,
-  '..',
-  '..',
-  'doc',
-  'plan',
-  'node-framework-spec-gap-ledger',
-  'node-framework-spec-gap-ledger.ko.md'
-);
-
 const guideFiles = [
   '01-overview.ko.md',
   '02-getting-started.ko.md',
@@ -75,11 +65,23 @@ test('node interface specification documents the current execution-turn APIs', (
   assert.doesNotMatch(specification, /public turn 반납 API가 필요하지 않다/);
 });
 
-test('Node gap ledger owns the Node RouteMesh gap', () => {
-  const gapDocument = fs.readFileSync(nodeGapDocument, 'utf8');
-  assert.match(gapDocument, /ND-IMP-001/);
-  assert.match(gapDocument, /RouteMesh/);
-  assert.match(gapDocument, /`addRouteMesh\(meshName\)`/);
+test('Node RouteMesh contract is owned by the canonical spec and implementation', () => {
+  const canonicalSpec = fs.readFileSync(
+    path.join(specRoot, '01-system-structure.ko.md'),
+    'utf8'
+  );
+  const builderSource = fs.readFileSync(
+    path.join(workspaceRoot, 'packages', 'framework', 'src', 'contracts', 'Configuration', 'Builders.ts'),
+    'utf8'
+  );
+
+  assert.match(canonicalSpec, /`addRouteMesh\(meshName\)`/);
+  assert.match(builderSource, /addRouteMesh\(meshName: string\)/);
+  assert.equal(
+    fs.existsSync(path.join(workspaceRoot, '..', '..', 'doc', 'plan', 'node-framework-spec-gap-ledger')),
+    false,
+    'temporary gap ledgers must not remain as a public documentation dependency'
+  );
 });
 
 test('node documentation relative markdown links resolve', () => {
@@ -469,6 +471,7 @@ function allMarkdownFiles(root) {
 
 function readNodeInterfaceCatalog() {
   return allMarkdownFiles(path.join(specRoot, 'interfaces'))
+    .filter((file) => file.endsWith('.ko.md'))
     .sort()
     .map((file) => fs.readFileSync(file, 'utf8'))
     .join('\n');

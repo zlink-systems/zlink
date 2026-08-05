@@ -1,6 +1,6 @@
-# Python binding Core 11 최신화 실행 계획
+# Python binding Core 0.9.0 최신화 실행 계획
 
-> 이 문서는 Python binding의 raw Core 11 구현, package, sample, perf와 검증 evidence를 관리하는 실행
+> 이 문서는 Python binding의 raw Core 0.9.0 구현, package, sample, perf와 검증 evidence를 관리하는 실행
 > 계획이다. Python public contract 자체는 `bindings/doc/spec/python/`이 소유한다.
 
 ## 1. 현재 판정
@@ -16,7 +16,7 @@ Linux x86_64에서 source test, clean wheel consumer, raw sample process와 perf
   target은 Python 3.9로 유지한다. 최신 package snapshot과 hash는 progress log의 self-review evidence에 기록한다.
 - release 지원 target은 Linux x86_64로 한정했고, 다른 target은 setup·loader에서 fail-fast하도록 정리했다.
 - 독립 frontier reviewer는 초기 candidate를 `NOT CLEAN`으로 판정했다. Python source의 High·Medium
-  finding은 수정했다. 최종 재검토에서 공통 spec에 Core 11에 없는 raw socket channel metadata 선언과
+  finding은 수정했다. 최종 재검토에서 공통 spec에 Core 0.9.0에 없는 raw socket channel metadata 선언과
   binding rule이 남은 사실이 추가로 확인되어 두 공통 spec과 contract guard를 수정했다. 이 수정 뒤 최종
   source manifest와 fresh package evidence를 다시 읽은 `CLEAN` 판정은 아직 없다.
 
@@ -30,8 +30,8 @@ evidence를 구분하기 위한 것이다.
 | 항목 | 현재 값 또는 위치 |
 |------|------------------|
 | Core version | `11.2.0` |
-| Core runtime | `core/build/lib/libzlink.so.11.2.0` |
-| Core SONAME | `libzlink.so.11` |
+| Core runtime | `core/build/lib/libzlink.so.0.2.0` |
+| Core SONAME | `libzlink.so.0` |
 | Python package | `zlink==11.2.0` |
 | Python source manifest | progress log self-review evidence에 기록한 각 interpreter의 manifest |
 | package evidence | 각 self-review output root의 `python/candidate-input.env` |
@@ -57,9 +57,9 @@ DDD 기준의 경계는 다음과 같다.
 
 ## 3. 구현 범위와 완료 사실
 
-### PY-01 — Raw FFI와 Core 11 projection — PASS
+### PY-01 — Raw FFI와 Core 0.9.0 projection — PASS
 
-- `ffi.py`와 `_zlink_native.c`는 Core 11 raw symbol과 layout만 선언한다. 공식 perf runner는 public
+- `ffi.py`와 `_zlink_native.c`는 Core 0.9.0 raw symbol과 layout만 선언한다. 공식 perf runner는 public
   Python contract를 사용하므로 별도 private perf native extension을 package에 포함하지 않는다.
 - Core header에 없는 이전 기능의 FFI, callback, include와 compiled entrypoint를 제거했다.
 - `ctx_set_data`/`ctx_get_data`가 필요한 `uint64` option은 Core 함수군의 실제 ABI에 맞춰 연결했다.
@@ -128,14 +128,14 @@ repository `src`를 import하지 않는다. Single·multi perf runner는 `ZLINK_
 
 ### PY-07 — 정식 문서 — PASS (현재 구현 기준)
 
-한국어·영문 Python spec과 한국어 guide는 raw Core 11 public surface, ownership, no-data, error, Python 3.9
+한국어·영문 Python spec과 한국어 guide는 raw Core 0.9.0 public surface, ownership, no-data, error, Python 3.9
 type policy와 현재 `11.2.0` candidate를 설명한다. 구현에 없는 Framework 기능과 이전 Core runtime을 지원
 목록으로 제공하지 않는다. Python callback 표면과 private FFI callback의 경계를 명시하고, `single_part()`
 draft는 승인 전이므로 정식 문서는 현재 accessor 이름을 유지한다.
 
 ## 4. Platform 범위와 검증
 
-이번 Core 11 Python package는 Linux x86_64만 release target으로 지원한다. 다른 target의 native
+이번 Core 0.9.0 Python package는 Linux x86_64만 release target으로 지원한다. 다른 target의 native
 payload를 package에 남겨 두거나 loader에서 자동 선택하지 않으며, 별도 candidate와 clean consumer
 evidence가 생기기 전에는 지원 범위로 표시하지 않는다.
 
@@ -171,19 +171,19 @@ scripts/local-package/bindings-candidate/build-wsl.sh \
 # CPython 3.9 Docker에서는 --python-executable python과 python39 output root를 사용한다.
 
 # Source tests
-ZLINK_LIBRARY_PATH="$PWD/core/build/lib/libzlink.so.11.2.0" \
+ZLINK_LIBRARY_PATH="$PWD/core/build/lib/libzlink.so.0.2.0" \
   PYTHONPATH=bindings/python/src PYTHONDONTWRITEBYTECODE=1 \
   pytest -q bindings/python/tests
 
 # Single perf smoke
-ZLINK_LIBRARY_PATH="$PWD/core/build/lib/libzlink.so.11.2.0" \
+ZLINK_LIBRARY_PATH="$PWD/core/build/lib/libzlink.so.0.2.0" \
   LD_LIBRARY_PATH="$PWD/bindings/python/src/zlink/native/linux-x86_64" \
   PYTHONPATH=bindings/python/src \
   bindings/python/perf/run_benchmarks.sh --smoke --pattern PAIR \
   --duration 1 --msg-sizes 64 --transports inproc --runs 1
 
 # Multi perf smoke
-ZLINK_LIBRARY_PATH="$PWD/core/build/lib/libzlink.so.11.2.0" \
+ZLINK_LIBRARY_PATH="$PWD/core/build/lib/libzlink.so.0.2.0" \
   LD_LIBRARY_PATH="$PWD/bindings/python/src/zlink/native/linux-x86_64" \
   PYTHONPATH=bindings/python/src \
   bindings/python/perf/run_benchmarks_multi.sh --smoke \
@@ -231,7 +231,7 @@ clean consumer, 지원 platform 범위와 독립 review를 결정해야 한다. 
 
 ## 7. 2026-08-04 self-review refresh
 
-Codex가 현재 Core 11.2.0 candidate의 Core diff, Python public contract, owner-layer lifecycle과
+Codex가 현재 Core 0.9.0.2.0 candidate의 Core diff, Python public contract, owner-layer lifecycle과
 POSD·DDD 경계를 직접 다시 검토했다. 이 과정에서 `Message.try_copy_to()`의 contract 반환값 불일치를
 찾아 owner layer와 contract test를 수정했다. 이후 Python source test는 `65 passed`, `pyright`는
 `0 errors, 0 warnings, 0 informations`, Core weighted-selection integration은 `17/17`, typed option

@@ -353,9 +353,9 @@ C++에만 있는 DI · configuration · HTTP hosting · 실행 모델이 18~21�
 | | |
 | --- | --- |
 | 언어 중립 의미와 공개 계약 | [공통 스펙](common/README.ko.md) |
-| 그 아래 메시징 엔진 — 소켓 패턴, 전송, 옵션 | [Core 가이드](https://kairos-code-dev.github.io/zlink/guide/01-overview/) · [Core 스펙](https://kairos-code-dev.github.io/zlink/spec/core/) |
-| Core를 언어에서 직접 쓸 때 — C API binding | [Bindings 가이드](https://kairos-code-dev.github.io/zlink/bindings/guide/) · [Bindings 스펙](https://kairos-code-dev.github.io/zlink/bindings/spec/) |
-| 소스와 이슈 | [github.com/kairos-code-dev/zlink](https://github.com/kairos-code-dev/zlink) |
+| 그 아래 메시징 엔진 — 소켓 패턴, 전송, 옵션 | [Core 가이드](https://zlink-systems.github.io/zlink/guide/01-overview/) · [Core 스펙](https://zlink-systems.github.io/zlink/spec/core/) |
+| Core를 언어에서 직접 쓸 때 — C API binding | [Bindings 가이드](https://zlink-systems.github.io/zlink/bindings/guide/) · [Bindings 스펙](https://zlink-systems.github.io/zlink/bindings/spec/) |
+| 소스와 이슈 | [github.com/zlink-systems/zlink](https://github.com/zlink-systems/zlink) |
 
 Core는 이 프레임워크가 얹히는 메시징 엔진이다. 프레임워크만 사용할 때는 참고할
 필요가 없고, 소켓 수준의 동작이나 전송 옵션을 직접 다뤄야 할 때 그 문서로 내려간다.

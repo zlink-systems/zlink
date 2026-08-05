@@ -1,6 +1,6 @@
 vcpkg_from_git(
     OUT_SOURCE_PATH SOURCE_PATH
-    URL https://github.com/ulala-x/zlink.git
+    URL https://github.com/zlink-systems/zlink.git
     REF core/v${VERSION}
 )
 

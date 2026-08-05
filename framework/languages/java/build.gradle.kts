@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "systems.zlink"
-version = "0.1.0-SNAPSHOT"
+version = "0.9.0"
 
 idea {
     module {
@@ -152,7 +152,7 @@ subprojects {
                     pom {
                         name.set(project.name)
                         description.set(project.description ?: project.name)
-                        url.set("https://github.com/kairos-code-dev/zlink")
+                        url.set("https://github.com/zlink-systems/zlink")
                         licenses {
                             // http-client wraps java.net.http (JDK standard library)
                             // rather than any zlink-original transport, so it ships
@@ -165,14 +165,14 @@ subprojects {
                             } else {
                                 license {
                                     name.set("FSL-1.1-ALv2")
-                                    url.set("https://github.com/kairos-code-dev/zlink/blob/main/framework/LICENSE")
+                                    url.set("https://github.com/zlink-systems/zlink/blob/main/framework/LICENSE")
                                 }
                             }
                         }
                         scm {
-                            connection.set("scm:git:https://github.com/kairos-code-dev/zlink.git")
-                            developerConnection.set("scm:git:git@github.com:kairos-code-dev/zlink.git")
-                            url.set("https://github.com/kairos-code-dev/zlink")
+                            connection.set("scm:git:https://github.com/zlink-systems/zlink.git")
+                            developerConnection.set("scm:git:git@github.com:zlink-systems/zlink.git")
+                            url.set("https://github.com/zlink-systems/zlink")
                         }
                     }
                 }

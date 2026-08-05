@@ -8,7 +8,7 @@ namespace Systems.Zlink.Runtime.Native;
 internal static class NativeLibraryLoader
 {
     private const string LinuxUnversionedName = "libzlink.so";
-    private const string LinuxSoname = "libzlink.so.11";
+    private const string LinuxSoname = "libzlink.so.0";
 
     private static readonly object Sync = new();
     private static readonly ConcurrentDictionary<string, bool> ExportCache = new();
@@ -48,7 +48,7 @@ internal static class NativeLibraryLoader
             }
 
             throw new DllNotFoundException(
-                "The packaged Core 11 runtime was not found. Set ZLINK_LIBRARY_PATH only when testing an approved Core 11 runtime directly.");
+                "The packaged Core 0.9.0 runtime was not found. Set ZLINK_LIBRARY_PATH only when testing an approved Core 0.9.0 runtime directly.");
         }
     }
 

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"zlink.systems/zlink/v11/perf/internal/perfcommon"
+	"zlink.systems/zlink/perf/internal/perfcommon"
 )
 
 func waitForStartToken(msgSize int) bool {

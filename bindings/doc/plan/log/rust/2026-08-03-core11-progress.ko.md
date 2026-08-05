@@ -1,6 +1,6 @@
-# Rust binding Core 11 최신화 진행 기록
+# Rust binding Core 0.9.0 최신화 진행 기록
 
-이 기록은 2026-08-03에 Rust binding에서 수행한 Core 11 raw migration, candidate package 검증과 process
+이 기록은 2026-08-03에 Rust binding에서 수행한 Core 0.9.0 raw migration, candidate package 검증과 process
 smoke 결과를 남긴다. Linux x86_64에서 확인한 결과이며, Go·Rust 공통 submit 계약 승인, 모든 지원 platform과
 independent frontier review까지 완료했다는 뜻은 아니다.
 
@@ -12,7 +12,7 @@ Rust source, candidate-bound crate와 Linux x86_64 consumer·sample·source test
 - `Go·Rust submit 반환 초안`은 PGR-COMMON-03에서 승인되지 않았다. 따라서 현재 구현의 `bool`/`Result<bool,
   SubmitError>` 반환을 임의로 `error`/`Result<(), SubmitError>`로 바꾸지 않았다.
 - V11-R2 evidence의 `independent` 값이 `false`이므로 구현자와 분리된 frontier review가 없다.
-- Candidate-bound package는 현재 Linux x86_64만 포함한다. Linux arm64와 Darwin의 Core 11 runtime·native
+- Candidate-bound package는 현재 Linux x86_64만 포함한다. Linux arm64와 Darwin의 Core 0.9.0 runtime·native
   consumer evidence는 없다.
 
 ## 공통 candidate
@@ -23,13 +23,13 @@ Rust source, candidate-bound crate와 Linux x86_64 consumer·sample·source test
 | Candidate manifest SHA-256 | `d318525a4cf8496b6bef5d900c9a88330ea6d7e10ed4120ac0fd9f19d23f6765` |
 | Candidate aggregate SHA-256 | `327587596195a162374498b630f51a043977dd392eb556061af615bf05186703` |
 | V11-R2 review SHA-256 | `171a9cc8f7203500de08050dcb74ecd36b4c9ce55a75a14ce1bee283705c9e04` |
-| Core runtime | `/home/hep7/project/kairos/zlink/.artifacts/wsl/install/zlink-core/11.1.0/lib/libzlink.so.11.1.0` |
+| Core runtime | `/home/hep7/project/kairos/zlink/.artifacts/wsl/install/zlink-core/11.1.0/lib/libzlink.so.0.1.0` |
 | Core runtime SHA-256 | `b6fadc481c649b50637a9c0eb01d15a016e6ba4cd5bab967bdb6da4497a3c0c4` |
 | Core provenance SHA-256 | `46f7bd17c0be3987fed14ca3cb594139e3edb778d3996248d23b6d2d6b53f693` |
 
 ## 구현과 설계 검토
 
-Core 11 header를 Rust FFI의 유일한 입력으로 고정하고 service, actor, Spot projection과 Core 11에 없는
+Core 0.9.0 header를 Rust FFI의 유일한 입력으로 고정하고 service, actor, Spot projection과 Core 0.9.0에 없는
 legacy symbol을 source·public re-export·sample·perf에서 제거했다. Generic operation은 raw socket 작업별
 state로 나누고, request routing ID와 callback을 operation이 소유하도록 했다. 255-byte routing ID는
 operation enum의 inline 크기를 불필요하게 키우지 않도록 한 번만 heap allocation한다. Callback은
@@ -39,7 +39,7 @@ operation enum의 inline 크기를 불필요하게 키우지 않도록 한 번�
 수명과 소유권을 binding 내부 operation과 resource 경계가 관리하게 하기 위한 것이다. 필요한 allocation은 ownership과
 Core ABI의 수명 조건으로 분류했으며, 불필요한 forwarding layer와 service compatibility surface는 삭제했다.
 
-주요 checkpoint commit은 `2c68dd77bf`(raw Core 11 boundary), `bcb3346e9d`(operation state POSD/DDD refactor),
+주요 checkpoint commit은 `2c68dd77bf`(raw Core 0.9.0 boundary), `bcb3346e9d`(operation state POSD/DDD refactor),
 `ec8191ea40`(candidate-bound crate gate), `c8a9a63890`(candidate runtime resolver와 perf runner),
 `a42e39faca`(candidate runtime source test runner)다.
 

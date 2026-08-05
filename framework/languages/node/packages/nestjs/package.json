@@ -1,6 +1,6 @@
 {
   "name": "@zlink-systems/nestjs",
-  "version": "0.1.0-SNAPSHOT",
+  "version": "0.9.0",
   "license": "SEE LICENSE IN LICENSE",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -15,8 +15,8 @@
   },
   "dependencies": {
     "@nestjs/common": "^10.4.22",
-    "@zlink-systems/framework": "0.1.0-SNAPSHOT",
-    "@zlink-systems/http-client": "0.4.3",
+    "@zlink-systems/framework": "0.9.0",
+    "@zlink-systems/http-client": "0.9.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2"
   },

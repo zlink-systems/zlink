@@ -1,4 +1,4 @@
-# Go binding Core 11 진행 log
+# Go binding Core 0.9.0 진행 log
 
 작성일: 2026-08-03
 
@@ -7,7 +7,7 @@
 
 ## 현재 판정
 
-Go source와 Core 11 raw projection은 Linux x86_64에서 test, sample process, perf smoke와 candidate-bound
+Go source와 Core 0.9.0 raw projection은 Linux x86_64에서 test, sample process, perf smoke와 candidate-bound
 file-proxy clean consumer를 통과했다. 현재 전체 작업은 `PARTIAL / NOT CLEAN`이다. Go package는
 `V11-M3-CORE-PKG` pass evidence와 같은 candidate identity를 사용하지만 V11-R2 review가
 `independent: false`이다. Go–Rust parity, common submit draft 승인, Linux arm64/macOS payload와 독립
@@ -47,7 +47,7 @@ status: pass
 
 | Commit | 범위 |
 |--------|------|
-| `afd96c43aa` | Core 11 raw projection, service API·header·sample·perf 제거, `/v11`, HWM `uint64` 전달 |
+| `afd96c43aa` | Core 0.9.0 raw projection, service API·header·sample·perf 제거, `/v11`, HWM `uint64` 전달 |
 | `eab6cf9411` | `ZlinkError`/`InternalErrno`, context cancellation test, bounded handle progress pump, raw sample/perf runner |
 | `f1210adaffc` | raw header/symbol allowlist, hot-path cost inventory, Go file-proxy package와 clean-consumer gate |
 | `40dcadb2ef0` | 승인 Core candidate manifest/package evidence를 검증하는 package builder와 candidate-bound Linux payload |
@@ -93,7 +93,7 @@ perf/run_benchmarks.sh --smoke --pattern PAIR --duration 1 --msg-sizes 64 --tran
 perf/run_benchmarks_multi.sh --smoke --pattern MULTI_DEALER_ROUTER --duration 1 --msg-sizes 64 --transports tcp --runs 1 --clients 1
 ```
 
-결과: 두 명령 모두 종료 코드 `0`. 두 runner는 `libzlink.so.11.1.0`과 runtime SHA-256
+결과: 두 명령 모두 종료 코드 `0`. 두 runner는 `libzlink.so.0.1.0`과 runtime SHA-256
 `b6fadc481c649b50637a9c0eb01d15a016e6ba4cd5bab967bdb6da4497a3c0c4`를 출력했다. Single runner는 `PAIR`
 inproc, multi runner는 TCP `MULTI_DEALER_ROUTER`에서 READY/active와 필수 `RESULT` metric을 출력했다.
 Smoke 실행은 공식 report를 만들지 않았다.
@@ -111,14 +111,14 @@ scripts/local-package/go/build-wsl.sh \
   --output-root /home/hep7/project/kairos/zlink/.artifacts/wsl/go-candidate-final2
 ```
 
-결과: module `zlink.systems/zlink/v11`, version `v11.1.0`, candidate-bound clean consumer `pass`.
+결과: module `zlink.systems/zlink`, version `v0.9.0`, candidate-bound clean consumer `pass`.
 Consumer는 빈 `GOMODCACHE`와 `GOCACHE`에서 `replace` 없이 module을 다운로드·build하고 Pair message
-roundtrip을 실행했다. `ldd`는 module cache의 `native/linux-x86_64/libzlink.so.11`을 가리켰다.
+roundtrip을 실행했다. `ldd`는 module cache의 `native/linux-x86_64/libzlink.so.0`을 가리켰다.
 
 현재 package evidence:
 
 ```text
-evidence: .artifacts/wsl/go-candidate-final2/go-package-v11.1.0.json
+evidence: .artifacts/wsl/go-candidate-final2/go-package-v0.9.0.json
 evidence sha256: 6c6c46ecaa24e6c3c4ce622310ff030fb0db5996090872b1d75d7d0505e15724
 sourceRevision: c6b37ac0ee2278305bbcb848a17bfc1034af86d3
 sourceManifestSha256: cce6140e65c2853814816888e6f1edaae00a52a36edd41b1d6b988b9402bd75b
@@ -134,7 +134,7 @@ coreProvenanceManifestSha256: 46f7bd17c0be3987fed14ca3cb594139e3edb778d3996248d2
 ```
 
 ```bash
-unzip -Z1 /home/hep7/project/kairos/zlink/.artifacts/wsl/go-candidate-final2/proxy/zlink.systems/zlink/v11/@v/v11.1.0.zip \
+unzip -Z1 /home/hep7/project/kairos/zlink/.artifacts/wsl/go-candidate-final2/proxy/zlink.systems/zlink/@v/v0.9.0.zip \
   | rg 'service|spot|actor|/build/|/results/'
 ```
 
@@ -146,7 +146,7 @@ unzip -Z1 /home/hep7/project/kairos/zlink/.artifacts/wsl/go-candidate-final2/pro
 ```text
 linux-aarch64/libzlink.so.9:
   sha256: 9c3cf64ca56e15b9f2200e33d377d5ce8f19d4fcc180a941f6a5c51442170391
-  result: Core 9 SONAME; candidate-bound Core 11 package evidence 없음
+  result: Core 9 SONAME; candidate-bound Core 0.9.0 package evidence 없음
 darwin-x86_64/libzlink.dylib:
   sha256: 16b52674acbdac834c98727b8cd58228a65d993c738b35176dea939e0940b2a1
   result: candidate provenance와 Linux host loader evidence 없음
@@ -157,14 +157,14 @@ darwin-aarch64/libzlink.dylib:
 
 ## 계약 문서
 
-- `bindings/doc/spec/go/README.ko.md`와 `README.en.md`는 `/v11` raw Core 11 public contract, current
+- `bindings/doc/spec/go/README.ko.md`와 `README.en.md`는 `/v11` raw Core 0.9.0 public contract, current
   `(bool, error)` submit signature, ownership, no-data와 error semantics를 반영한다.
 - `bindings/go/README.godoc.md`와 sample runner는 구현된 public root projection을 기준으로 한다.
 - Common submit draft 승인과 Go–Rust parity inventory 통합은 별도 gate로 남긴다.
 
 ## 남은 작업
 
-1. Linux arm64의 major 9 payload와 Darwin payload를 같은 Core 11 candidate runtime으로 교체한 뒤 native
+1. Linux arm64의 major 9 payload와 Darwin payload를 같은 Core 0.9.0 candidate runtime으로 교체한 뒤 native
    consumer와 loader evidence를 실행한다.
 2. Go–Rust parity inventory와 submit 반환 draft를 승인하고, 현재 signature를 유지할지 error-only로 바꿀지
    공통 contract에 반영한다.

@@ -18,10 +18,7 @@ const provenance = fs.existsSync(provenancePath)
   : undefined;
 const coreVersion = process.env.ZLINK_CORE_VERSION || provenance?.version;
 if (!coreVersion || !/^\d+\.\d+\.\d+$/.test(coreVersion)) {
-  throw new Error('Core 11 package provenance or ZLINK_CORE_VERSION=X.Y.Z is required');
-}
-if (!/^11\./.test(coreVersion)) {
-  throw new Error(`prebuild verification requires Core 11.x, found ${coreVersion}`);
+  throw new Error('Core 0.9.0 package provenance or ZLINK_CORE_VERSION=X.Y.Z is required');
 }
 if (process.env.ZLINK_CORE_VERSION && provenance?.version &&
     process.env.ZLINK_CORE_VERSION !== provenance.version) {
@@ -29,7 +26,8 @@ if (process.env.ZLINK_CORE_VERSION && provenance?.version &&
     `ZLINK_CORE_VERSION=${process.env.ZLINK_CORE_VERSION} does not match provenance=${provenance.version}`
   );
 }
-const coreMajor = coreVersion.split('.')[0];
+const coreMajor = Number(provenance?.abiMajor ?? 0);
+if (coreMajor !== 0) throw new Error(`prebuild verification requires Core ABI 0, found ${coreMajor}`);
 
 function fail(message) {
   throw new Error(message);

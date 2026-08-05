@@ -21,7 +21,7 @@ vcpkg install "zlink-stream-connector[tls,websocket]"
 ### Conan
 
 ```bash
-conan install --requires "zlink-stream-connector/0.1.0" \
+conan install --requires "zlink-stream-connector/0.9.0" \
   -o "zlink-stream-connector/*:with_tls=True" \
   -o "zlink-stream-connector/*:with_websocket=True"
 ```
@@ -31,7 +31,7 @@ conan install --requires "zlink-stream-connector/0.1.0" \
 ```cmake
 include(FetchContent)
 FetchContent_Declare(zlink_stream_connector
-    GIT_REPOSITORY https://github.com/ulala-x/zlink.git
+    GIT_REPOSITORY https://github.com/zlink-systems/zlink.git
     GIT_TAG        main
     SOURCE_SUBDIR  framework/languages/cpp/connector/core
 )

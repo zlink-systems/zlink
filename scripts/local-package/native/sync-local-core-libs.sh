@@ -18,8 +18,10 @@
 # limit the update, for example: cpp dotnet java node.
 #
 # Optional environment overrides:
-#   CORE_LIB_DIR   — directory containing libzlink.so/libzlink.so.MAJOR/
-#                    libzlink.so.MAJOR.MINOR.PATCH (default: core/build/lib).
+#   CORE_LIB_DIR          — directory containing the Core shared library
+#                           (default: core/build/lib).
+#   ZLINK_CORE_ABI_MAJOR — ELF SONAME major (default: 0). This is separate
+#                           from the release version in VERSION.
 #
 set -euo pipefail
 
@@ -43,7 +45,11 @@ case "$(uname -m)" in
 esac
 
 VERSION="$(bash "${ROOT_DIR}/core/version.sh")"
-MAJOR="${VERSION%%.*}"
+ABI_MAJOR="${ZLINK_CORE_ABI_MAJOR:-0}"
+[[ "${ABI_MAJOR}" =~ ^[0-9]+$ ]] || {
+  echo "ZLINK_CORE_ABI_MAJOR must be numeric" >&2
+  exit 2
+}
 
 declare -A selected=()
 if [[ "$#" -eq 0 ]]; then
@@ -63,7 +69,7 @@ for binding in "$@"; do
 done
 
 base="${CORE_LIB_DIR}/libzlink.so"
-soname="${CORE_LIB_DIR}/libzlink.so.${MAJOR}"
+soname="${CORE_LIB_DIR}/libzlink.so.${ABI_MAJOR}"
 versioned="${CORE_LIB_DIR}/libzlink.so.${VERSION}"
 
 for f in "${base}" "${soname}" "${versioned}"; do
@@ -80,7 +86,7 @@ copy_public_headers() {
   mkdir -p "${dir}"
   mkdir -p "${dir}/zlink"
 
-  # Core 11 owns only the raw C headers. Remove the retired service tree and
+  # Core 0.9.0 owns only the raw C headers. Remove the retired service tree and
   # replace each Core-owned lowercase group without touching binding-owned
   # trees such as the C++ Contracts directory.
   rm -rf "${dir}/zlink/service"
@@ -99,12 +105,12 @@ copy_public_headers() {
 copy_libs() {
   local dir="$1"
   mkdir -p "${dir}"
-  rm -f "${dir}/libzlink.so" "${dir}/libzlink.so.${MAJOR}"
+  rm -f "${dir}/libzlink.so" "${dir}/libzlink.so.${ABI_MAJOR}"
   find "${dir}" -maxdepth 1 -type f -name 'libzlink.so.*' -delete
   find "${dir}" -maxdepth 1 -type l -name 'libzlink.so.*' -delete
   install -m 0755 "${versioned}" "${dir}/libzlink.so.${VERSION}"
-  ln -sfn "libzlink.so.${VERSION}" "${dir}/libzlink.so.${MAJOR}"
-  ln -sfn "libzlink.so.${MAJOR}" "${dir}/libzlink.so"
+  ln -sfn "libzlink.so.${VERSION}" "${dir}/libzlink.so.${ABI_MAJOR}"
+  ln -sfn "libzlink.so.${ABI_MAJOR}" "${dir}/libzlink.so"
 }
 
 dirs=()

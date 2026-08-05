@@ -1,6 +1,6 @@
 # Go binding 자체 검토 승인 기록
 
-이 기록은 사용자의 명시 요청에 따라 Go binding Core 11 작업을 구현자 관점에서 다시 검토하고
+이 기록은 사용자의 명시 요청에 따라 Go binding Core 0.9.0 작업을 구현자 관점에서 다시 검토하고
 승인한 결과다. 구현자가 수행한 검토이므로 독립 frontier review를 수행했다고 주장하지 않는다.
 
 ## 승인 범위
@@ -9,7 +9,7 @@
 - Candidate manifest SHA-256: `d318525a4cf8496b6bef5d900c9a88330ea6d7e10ed4120ac0fd9f19d23f6765`
 - Go source manifest SHA-256: `7af1abe3d43a7a55592d60fa79ea01861fe1c650d823610b4f78d01d5fedfb1c`
 - Go package evidence SHA-256: `e0ac97b387322843a28b0f328ebf51ab395d81e6b4af588954b8559f1b1b6991`
-- Package: `zlink.systems/zlink/v11@v11.1.0`
+- Package: `zlink.systems/zlink@v0.9.0`
 - Package platform: `linux-x86_64`
 
 `bindings/go`는 위 source revision에서 commit되었고 push되었다. 따라서 이번 검토는 해당 source snapshot,
@@ -54,7 +54,7 @@ go test -race ./... -run 'Test(PairMultipartBytesRoundTrip|PollerModifyCompletio
 scripts/local-package/go/build-wsl.sh ...    # clean consumer: 11.1.0 clean-consumer-ok
 ```
 
-package evidence `.artifacts/wsl/go-candidate-final7/go-package-v11.1.0.json`은 `cleanConsumer: pass`를
+package evidence `.artifacts/wsl/go-candidate-final7/go-package-v0.9.0.json`은 `cleanConsumer: pass`를
 기록하고, source manifest와 candidate identity를 위 값으로 연결한다. module zip SHA-256은
 `e12cdaf3b83d15b3135daf9b8f741bca50c24269dec7cd2fcc21398fed3ed67d`다. 현재 Core candidate의 review는
 `passed`이지만 `reviewer: coordinator_self_review`,

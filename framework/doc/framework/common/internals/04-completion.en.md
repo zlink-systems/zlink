@@ -87,7 +87,7 @@ that call hangs until timeout.
 
 This problem isn't Core's making. Core explicitly states it doesn't
 provide request-response correlation
-([Core Runtime Boundary 「2」](https://kairos-code-dev.github.io/zlink/spec/core/09-runtime-boundary/)),
+([Core Runtime Boundary 「2」](https://zlink-systems.github.io/zlink/spec/core/09-runtime-boundary/)),
 and the call identifier and completion table are entirely owned by
 Framework. So this order is something Framework can decide.
 

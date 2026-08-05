@@ -11,7 +11,7 @@ metadata description=ZLink-style fluent HTTP client wrapping System.Net.Http for
 metadata id=Zlink.HttpClient
 metadata license=Apache-2.0 type=expression
 metadata licenseUrl=https://licenses.nuget.org/Apache-2.0
-metadata projectUrl=https://github.com/kairos-code-dev/zlink
+metadata projectUrl=https://github.com/zlink-systems/zlink
 metadata version={VERSION}
 metadata repository commit={COMMIT} type=git
 dependency-group targetFramework=net8.0

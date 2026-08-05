@@ -3,10 +3,10 @@
 # Core Source Layout
 
 > **What this chapter answers** — how the raw runtime source that remains in
-> Core 11 is split across directories and include direction.
+> Core 0.9.0 is split across directories and include direction.
 
 This document explains the responsibility and include direction of the raw
-runtime source that remains in Core 11.
+runtime source that remains in Core 0.9.0.
 
 ## Layer Model
 

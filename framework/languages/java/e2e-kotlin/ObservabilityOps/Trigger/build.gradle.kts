@@ -4,8 +4,8 @@ plugins {
 }
 
 dependencies {
-    implementation("systems.zlink:zlink-stream-connector:0.1.0-SNAPSHOT")
-    implementation("systems.zlink:zlink-framework-kotlin:0.1.0-SNAPSHOT")
+    implementation("systems.zlink:zlink-stream-connector:0.9.0")
+    implementation("systems.zlink:zlink-framework-kotlin:0.9.0")
     implementation(zlinkLibs.zlink.bindings)
     implementation("io.micrometer:micrometer-core:1.15.8")
     implementation("com.fasterxml.jackson.core:jackson-databind:2.17.2")

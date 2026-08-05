@@ -2,6 +2,7 @@
     <PropertyGroup>
         <ZLinkFrameworkTargetFrameworks Condition="'$(ZLinkFrameworkTargetFrameworks)' == ''">net8.0</ZLinkFrameworkTargetFrameworks>
         <ZLinkRepoRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../../..'))</ZLinkRepoRoot>
+        <Version Condition="'$(Version)' == ''">0.9.0</Version>
         <ZLinkLocalPackageRoot Condition="'$(ZLINK_LOCAL_PACKAGE_ROOT)' != ''">$(ZLINK_LOCAL_PACKAGE_ROOT)</ZLinkLocalPackageRoot>
         <ZLinkLocalNuGetSource Condition="'$(ZLinkLocalNuGetSource)' == '' and '$(ZLinkLocalPackageRoot)' != '' and Exists('$(ZLinkLocalPackageRoot)/nuget')">$(ZLinkLocalPackageRoot)/nuget</ZLinkLocalNuGetSource>
         <ZLinkLocalNuGetSource Condition="'$(ZLinkLocalNuGetSource)' == '' and Exists('$(ZLinkRepoRoot)/.artifacts/wsl/nuget')">$(ZLinkRepoRoot)/.artifacts/wsl/nuget</ZLinkLocalNuGetSource>
@@ -15,6 +16,6 @@
         <NoWarn>$(NoWarn);CS1591</NoWarn>
         <IsPackable>false</IsPackable>
         <PackageLicenseFile>LICENSE</PackageLicenseFile>
-        <PackageProjectUrl>https://github.com/kairos-code-dev/zlink</PackageProjectUrl>
+        <PackageProjectUrl>https://github.com/zlink-systems/zlink</PackageProjectUrl>
     </PropertyGroup>
 </Project>

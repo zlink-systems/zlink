@@ -7,7 +7,7 @@
 ## 공통 실행 조건
 
 - Core version: `11.2.0`
-- runtime: `/home/hep7/project/kairos/zlink/core/build/lib/libzlink.so.11.2.0`
+- runtime: `/home/hep7/project/kairos/zlink/core/build/lib/libzlink.so.0.2.0`
 - runtime SHA-256: `ce28d7908bf62a1b39b481aad2a76c6e76955e3a93ea73e1cbdaa913c4883138`
 - source freshness: `core/src`와 `core/include`에서 runtime보다 새 파일 0개
 - single smoke: `PAIR / inproc / 64B / 1초 / 1회`
@@ -30,7 +30,7 @@
 | Go | `complete`, 5/5 | 이번 라운드에서 실행하지 않음 | 공식 native package는 11.1.0 |
 | Java | 실행 전 실패 | 실행 전 실패 | 승인된 Core 11.2 package prefix 없음 |
 
-Go의 공식 smoke는 `bindings/go/native/linux-x86_64/libzlink.so.11.1.0`을 사용해
+Go의 공식 smoke는 `bindings/go/native/linux-x86_64/libzlink.so.0.1.0`을 사용해
 결과를 만들었다. 따라서 실행 성공은 확인했지만 현재 11.2.0 Core와 같은 runtime을
 사용한 결과로 보지 않는다. 같은 Core runtime을 package 모양의 임시 경로에 연결한
 개발용 진단에서는 single `PAIR / inproc / 64B`가 통과했지만, 이는 package 배포 검증을

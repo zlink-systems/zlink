@@ -1,6 +1,6 @@
 # Go binding POSD·DDD 자체 설계 검토 기록
 
-이 기록은 2026-08-04에 Go binding의 Core 11 raw 경계와 runtime lifecycle을 다시 읽고 적용한
+이 기록은 2026-08-04에 Go binding의 Core 0.9.0 raw 경계와 runtime lifecycle을 다시 읽고 적용한
 자체 검토 결과다. 구현자가 수행한 검토이므로 독립 frontier review나 최종 `CLEAN` 판정을 대신하지
 않는다.
 

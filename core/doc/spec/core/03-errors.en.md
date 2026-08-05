@@ -181,8 +181,8 @@ typedef enum zlink_config_result_t {
 ## 7. Version
 
 ```c
-#define ZLINK_VERSION_MAJOR 11
-#define ZLINK_VERSION_MINOR 0
+#define ZLINK_VERSION_MAJOR 0
+#define ZLINK_VERSION_MINOR 9
 #define ZLINK_VERSION_PATCH 0
 
 #define ZLINK_MAKE_VERSION(major, minor, patch) \

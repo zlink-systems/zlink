@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.10)
-project(zlink_cpp VERSION 11.2.0 LANGUAGES CXX)
+project(zlink_cpp VERSION 0.9.0 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
@@ -82,7 +82,7 @@ function(zlink_cpp_ensure_core_target out_target_var out_runtime_dir_var)
   endif()
 
   if(ZLINK_CPP_CORE_PACKAGE_PREFIX)
-    find_package(zlink 11 CONFIG REQUIRED
+    find_package(zlink 0.9 CONFIG REQUIRED
       PATHS "${ZLINK_CPP_CORE_PACKAGE_PREFIX}"
       NO_DEFAULT_PATH)
     if(NOT TARGET libzlink)
@@ -111,7 +111,7 @@ function(zlink_cpp_ensure_core_target out_target_var out_runtime_dir_var)
 
   message(FATAL_ERROR
     "No zlink core runtime found for this platform. "
-    "Expected an installed Core 11 package, an existing libzlink target, "
+    "Expected an installed Core 0.9.0 package, an existing libzlink target, "
     "or a targeted source build under ${ZLINK_CPP_CORE_BUILD_DIR}.")
 endfunction()
 

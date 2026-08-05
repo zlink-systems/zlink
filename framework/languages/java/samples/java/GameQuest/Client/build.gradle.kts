@@ -7,8 +7,8 @@ fun sampleProject(name: String) = project("${path.substringBeforeLast(":", "")}:
 dependencies {
     implementation(sampleProject("Shared"))
     implementation(sampleProject("Server:Configuration"))
-    implementation("systems.zlink:zlink-http-client:0.3.1")
-    implementation("systems.zlink:zlink-stream-connector:0.1.0-SNAPSHOT")
+    implementation("systems.zlink:zlink-http-client:0.9.0")
+    implementation("systems.zlink:zlink-stream-connector:0.9.0")
     implementation(zlinkLibs.zlink.bindings)
 }
 

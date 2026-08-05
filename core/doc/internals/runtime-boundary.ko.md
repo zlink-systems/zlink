@@ -14,7 +14,7 @@ title: "Core raw runtime 내부 경계"
 > [Core runtime 경계](../spec/core/09-runtime-boundary.ko.md)가 다룬다. 이 장은 그 경계를
 > 내부 계층이 실제로 어떻게 나눠 지키는지 설명한다.
 
-Core 11은 raw socket과 transport만 구현한다. Public API facade는 argument·handle·ownership을 검증하고,
+Core 0.9.0은 raw socket과 transport만 구현한다. Public API facade는 argument·handle·ownership을 검증하고,
 socket semantic 계층은 PAIR·PUB/SUB·DEALER/ROUTER·STREAM의 routing을 결정한다. Runtime core는
 connection, session, pipe와 I/O thread를 관리하며 engine이 TCP·WebSocket·TLS framing을 처리한다.
 

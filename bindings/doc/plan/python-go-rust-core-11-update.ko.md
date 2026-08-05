@@ -1,4 +1,4 @@
-# Python·Go·Rust bindings Core 11 최신화 공통 계획
+# Python·Go·Rust bindings Core 0.9.0 최신화 공통 계획
 
 > 대상 독자는 세 bindings의 Core 입력을 준비하고 각 언어 작업의 시작·완료를 판정하는 구현 담당자와
 > reviewer다. 이 문서는 “어떤 Core candidate를 공통 입력으로 사용하고, Python·Go·Rust 작업을 어떻게
@@ -6,12 +6,12 @@
 
 ## 1. 현재 판단
 
-Python, Go, Rust bindings는 현재 Core 11 공개 계약과 맞지 않는다. Repository `VERSION`은 `11.1.0`이지만
+Python, Go, Rust bindings는 현재 Core 0.9.0 공개 계약과 맞지 않는다. Repository `VERSION`은 `11.1.0`이지만
 세 bindings의 Linux x86_64 runtime은 `10.6.0`이고 Linux aarch64 runtime은 major 9 SONAME을 사용한다.
 Go와 Rust의 복사된 header에는 `zlink/service/`가 있으며, 세 언어의 공개 API와 sample에도 MeshNode,
 Spot과 Actor가 남아 있다.
 
-Core 11은 raw socket runtime만 제공하고 service runtime은 Framework가 소유한다. 세 bindings는 raw C API만
+Core 0.9.0은 raw socket runtime만 제공하고 service runtime은 Framework가 소유한다. 세 bindings는 raw C API만
 투영하고 service C ABI, wrapper와 호환 alias를 제공하지 않아야 한다. Native library 교체, source test,
 package 검증, clean consumer와 지원 platform 검증을 모두 통과해야 최신화가 완료된다.
 
@@ -42,7 +42,7 @@ inventory가 모두 완료된 뒤 수행한다.
 
 ## 3. 계약과 책임 경계
 
-Core 11 계약은 다음 자료가 소유한다.
+Core 0.9.0 계약은 다음 자료가 소유한다.
 
 1. `core/doc/spec/core/`의 정식 spec
 2. `core/include/zlink.h`와 이 header가 포함하는 domain header
@@ -51,7 +51,7 @@ Core 11 계약은 다음 자료가 소유한다.
 언어별 표현은 [공통 bindings spec](../spec/README.ko.md)과 언어별 bindings spec을 따른다. 다른 언어 구현은
 이름과 언어 관례를 비교할 때만 참고하며 계약 근거로 사용하지 않는다.
 
-Core 11 binding이 제공하는 기능은 context, message, raw socket, transport, eventing과 utility다. MeshNode,
+Core 0.9.0 binding이 제공하는 기능은 context, message, raw socket, transport, eventing과 utility다. MeshNode,
 ChannelName membership, ready batch, claim, Spot, Actor, transfer와 bound STREAM session은 Framework 책임이다.
 Private FFI, deprecated API, sample helper와 package 내부 symbol로 service 기능을 유지하지 않는다.
 
@@ -167,7 +167,7 @@ signature와 언어별 public naming도 판정한다. Python·Rust part 접근 �
 ### 구현 단계의 성능 경계
 
 이번 최신화는 성능 개선 수치나 전체 benchmark 실행을 완료 조건으로 삼지 않는다. 실제 throughput·latency
-개선과 언어 간 수치 비교는 Core 11 최신화가 끝난 뒤 언어별 후속 계획에서 진행한다.
+개선과 언어 간 수치 비교는 Core 0.9.0 최신화가 끝난 뒤 언어별 후속 계획에서 진행한다.
 
 다만 새 wrapper와 FFI 연결이 불필요한 allocation, payload copy 또는 lock contention을 hot path에 추가하면
 후속 최적화의 기준선 자체가 나빠진다. 각 언어는 `tests/hot-path-cost-inventory.json`을 만들고 다음 내용을
@@ -259,7 +259,7 @@ snapshot의 test·package·clean consumer 실행은 구현 후 각 언어 문서
 
 ### PGR-COMMON-02 — Raw header·symbol inventory
 
-- `core/tests/contract/check_public_surface.py`를 확장해 Core 11 정식 spec, install header와 runtime export의
+- `core/tests/contract/check_public_surface.py`를 확장해 Core 0.9.0 정식 spec, install header와 runtime export의
   일치 결과를 machine-readable 목록과 hash로 출력한다.
 - Header, runtime과 세 binding FFI를 비교할 machine-readable inventory 형식을 고정한다.
 - Service header, allowlist 밖 symbol과 이전 SONAME을 fixture로 주입해 실패를 확인한다.
@@ -302,7 +302,7 @@ PGR-COMMON-04는 언어별 platform artifact가 이미 생성됐음을 요구하
 
 ### PGR-COMMON-05 — 이전 bindings 설계 문서 정리
 
-이전에 작성된 RouteMesh Python·Go·Rust 설계 문서는 Core service header를 계약 근거로 사용하므로 Core 11
+이전에 작성된 RouteMesh Python·Go·Rust 설계 문서는 Core service header를 계약 근거로 사용하므로 Core 0.9.0
 raw-only 책임 경계의 구현 입력으로 사용할 수 없어 삭제했다. 아직 필요한 사용자 동작이 있으면 Framework
 공통 정식 spec과 언어별 exact interface에서 계약 근거를 확인한다. 근거가 없는 내용은 Framework 설계 후보로
 분리해 review한다. 삭제 이력은 [공통 정리 log](log/common/2026-08-04-draft-cleanup.ko.md)가 소유한다.
@@ -337,7 +337,7 @@ raw-only 책임 경계의 구현 입력으로 사용할 수 없어 삭제했다.
 
 ## 10. 최종 완료 조건
 
-다음 조건을 모두 만족해야 세 bindings의 Core 11 최신화가 완료된다.
+다음 조건을 모두 만족해야 세 bindings의 Core 0.9.0 최신화가 완료된다.
 
 1. 공통 candidate와 raw symbol allowlist gate가 통과한다.
 2. Python, Go, Rust 실행 문서가 각각 완료 상태다.
