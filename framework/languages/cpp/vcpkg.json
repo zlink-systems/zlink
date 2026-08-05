@@ -1,0 +1,19 @@
+{
+  "name": "zlink-framework-cpp",
+  "version-string": "0.1.0",
+  "dependencies": [
+    "boost-asio",
+    "boost-beast",
+    "gtest",
+    "lz4",
+    "nlohmann-json",
+    "openssl",
+    "protobuf",
+    {
+      "name": "redis-plus-plus",
+      "features": [
+        "async-std"
+      ]
+    }
+  ]
+}

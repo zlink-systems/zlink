@@ -1,0 +1,294 @@
+plugins {
+    id 'java-library'
+    id 'maven-publish'
+}
+
+group = 'systems.zlink'
+version = '11.2.0'
+description = 'zlink Java bindings — high-performance async messaging library'
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(22)
+    }
+}
+
+tasks.withType(Jar).configureEach {
+    preserveFileTimestamps = false
+    reproducibleFileOrder = true
+}
+
+def nativeOs = System.getProperty('os.name').toLowerCase()
+def nativeArch = System.getProperty('os.arch').toLowerCase()
+def nativeBridgeSupported = nativeOs.contains('linux')
+    && ['amd64', 'x86_64'].contains(nativeArch)
+def configuredCorePackagePrefix = System.getenv('ZLINK_CORE_PACKAGE_PREFIX')
+def configuredCorePackageSummary = System.getenv('ZLINK_CORE_PACKAGE_SUMMARY')
+def approvedCorePackage = configuredCorePackageSummary != null
+    && !configuredCorePackageSummary.trim().isEmpty()
+    ? new groovy.json.JsonSlurper().parseText(configuredCorePackageSummary)
+    : null
+def corePackagePrefix = configuredCorePackagePrefix != null
+    && !configuredCorePackagePrefix.trim().isEmpty()
+    ? new File(configuredCorePackagePrefix).absoluteFile
+    : null
+def generatedNativeResourcesDir = layout.buildDirectory.dir(
+    'generated/zlink-native-resources/main')
+def bridgeOutputDir = layout.buildDirectory.dir(
+    'generated/zlink-native-resources/main/native/linux-x86_64')
+
+['apiElements', 'runtimeElements'].each { configurationName ->
+    configurations.named(configurationName) {
+        attributes {
+            attribute(Attribute.of('systems.zlink.core.version', String), '11.2.0')
+            attribute(Attribute.of('systems.zlink.core.soname', String),
+                'libzlink.so.11')
+            attribute(Attribute.of('systems.zlink.core.provenance-sha256', String),
+                approvedCorePackage?.provenanceSha256 ?: 'unverified')
+            attribute(Attribute.of(
+                'systems.zlink.core.candidate-manifest-sha256', String),
+                approvedCorePackage?.candidate?.manifestSha256 ?: 'unverified')
+        }
+    }
+}
+
+sourceSets {
+    main {
+        resources.srcDir(generatedNativeResourcesDir)
+    }
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    api 'io.netty:netty-buffer:4.1.100.Final'
+    testImplementation 'io.netty:netty-buffer:4.1.100.Final'
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.10.2'
+}
+
+tasks.register('buildZlinkJavaBridge', Exec) {
+    onlyIf { nativeBridgeSupported }
+    def source = new File(projectDir, 'native/src/zlink_java_reqrep_bridge.c')
+    def outputDir = bridgeOutputDir.get().asFile
+    def output = new File(outputDir, 'libzlink_java_bridge.so')
+    def javaHome = System.getProperty('java.home')
+    def jniIncludeDir = new File(javaHome, 'include')
+    def jniOsIncludeDir = new File(jniIncludeDir, 'linux')
+    inputs.file(source)
+    if (corePackagePrefix != null) {
+        inputs.dir(new File(corePackagePrefix, 'include'))
+        inputs.dir(new File(corePackagePrefix, 'lib'))
+        inputs.file(new File(corePackagePrefix,
+            'share/zlink/core-package-provenance.json'))
+    }
+    inputs.dir(jniIncludeDir)
+    inputs.dir(jniOsIncludeDir)
+    outputs.files(output,
+        new File(outputDir, 'libzlink.so'),
+        new File(generatedNativeResourcesDir.get().asFile,
+            'META-INF/zlink/core-package-provenance.json'))
+    doFirst {
+        if (corePackagePrefix == null || !corePackagePrefix.isAbsolute()) {
+            throw new GradleException(
+                'ZLINK_CORE_PACKAGE_PREFIX must name an absolute Core 11 install prefix')
+        }
+        def includeDir = new File(corePackagePrefix, 'include')
+        def linkDir = new File(corePackagePrefix, 'lib')
+        def runtime = new File(linkDir, 'libzlink.so')
+        def manifest = new File(corePackagePrefix,
+            'share/zlink/core-package-provenance.json')
+        if (!new File(includeDir, 'zlink.h').isFile()
+            || new File(includeDir, 'zlink/service').exists()
+            || !runtime.isFile() || !manifest.isFile()) {
+            throw new GradleException(
+                'Core package is incomplete or contains the removed service surface')
+        }
+        def metadata = new groovy.json.JsonSlurper().parse(manifest)
+        def publishingPackage = gradle.taskGraph.allTasks.any {
+            it.name.startsWith('publish')
+        }
+        if (publishingPackage && approvedCorePackage == null) {
+            throw new GradleException(
+                'ZLINK_CORE_PACKAGE_SUMMARY must identify the verified Core package')
+        }
+        def manifestSha256 = java.security.MessageDigest.getInstance('SHA-256')
+            .digest(manifest.bytes).encodeHex().toString()
+        def runtimeSha256 = java.security.MessageDigest.getInstance('SHA-256')
+            .digest(runtime.bytes).encodeHex().toString()
+        if (metadata.version != '11.2.0') {
+            throw new GradleException('Core package must report version 11.2.0')
+        }
+        def approved = approvedCorePackage
+        if (approved != null && (approved.version != '11.2.0'
+            || approved.prefix != corePackagePrefix.canonicalPath
+            || approved.provenanceSha256 != manifestSha256
+            || approved.runtime.sha256 != runtimeSha256
+            || approved.runtime.soname != 'libzlink.so.11'
+            || metadata.candidate.ledgerId != approved.candidate.ledgerId
+            || metadata.candidate.baseRevision != approved.candidate.baseRevision
+            || metadata.candidate.manifestSha256 != approved.candidate.manifestSha256
+            || metadata.candidate.aggregateSha256 != approved.candidate.aggregateSha256
+            || metadata.candidate.approvalEvidenceSha256
+                != approved.candidate.approvalEvidenceSha256)) {
+            throw new GradleException(
+                'Core package no longer matches its approved exact provenance')
+        }
+        outputDir.mkdirs()
+        copy {
+            from runtime
+            into outputDir
+            rename { 'libzlink.so' }
+        }
+        copy {
+            from manifest
+            into new File(generatedNativeResourcesDir.get().asFile,
+                'META-INF/zlink')
+        }
+        commandLine 'c++',
+            '-shared',
+            '-fPIC',
+            '-std=c++17',
+            '-O2',
+            '-pthread',
+            '-I', includeDir.absolutePath,
+            '-I', jniIncludeDir.absolutePath,
+            '-I', jniOsIncludeDir.absolutePath,
+            '-L', linkDir.absolutePath,
+            '-Wl,-rpath,$ORIGIN',
+            '-Wl,--no-undefined',
+            '-o', output.absolutePath,
+            source.absolutePath,
+            '-Wl,--no-as-needed',
+            '-lzlink'
+    }
+}
+
+processResources {
+    dependsOn tasks.named('buildZlinkJavaBridge')
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    // A published package must use only the runtime materialized from the
+    // approved Core package. The source resource tree contains development
+    // copies and symlinks which may represent an older candidate.
+    exclude { details ->
+        if (details.file.isDirectory() || !details.path.startsWith('native/')) {
+            return false
+        }
+        def generatedRoot = generatedNativeResourcesDir.get().asFile.canonicalPath
+        return !details.file.canonicalPath.startsWith(generatedRoot + File.separator)
+    }
+}
+
+test {
+    useJUnitPlatform()
+    jvmArgs '--enable-native-access=ALL-UNNAMED'
+    def reqrepDebug = System.getProperty('zlink.reqrep.debug')
+    if (reqrepDebug != null) {
+        systemProperty 'zlink.reqrep.debug', reqrepDebug
+    }
+    filter {
+        excludeTestsMatching 'systems.zlink.integration.*'
+    }
+}
+
+tasks.register('integrationTest', Test) {
+    useJUnitPlatform()
+    jvmArgs '--enable-native-access=ALL-UNNAMED'
+    def reqrepDebug = System.getProperty('zlink.reqrep.debug')
+    if (reqrepDebug != null) {
+        systemProperty 'zlink.reqrep.debug', reqrepDebug
+    }
+    shouldRunAfter test
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+    filter {
+        includeTestsMatching 'systems.zlink.integration.contract.*'
+    }
+}
+
+tasks.register('runMessageOutboundMicrobench') {
+    group = 'benchmark'
+    description = 'Run Java outbound message-path microbenchmarks'
+    dependsOn ':perf-single:runMessageOutboundMicrobench'
+}
+
+javadoc {
+    source = sourceSets.main.allJava.matching {
+        exclude 'systems/zlink/internal/**'
+        exclude 'systems/zlink/InternalAccess.java'
+        exclude 'systems/zlink/runtime/**'
+    }
+    options.encoding = 'UTF-8'
+    options.docTitle = 'zlink Java Binding API'
+    options.windowTitle = 'zlink Java Binding'
+    options.memberLevel = JavadocMemberLevel.PUBLIC
+    options.addStringOption('sourcepath',
+        sourceSets.main.java.srcDirs*.absolutePath.join(File.pathSeparator))
+    // Suppress missing-@param / missing-@return / no-comment warnings: most public
+    // APIs have meaningful class-level Javadoc; per-method param boilerplate adds
+    // noise without value. Broken-reference and syntax warnings remain active.
+    options.addStringOption('Xdoclint:-missing', '-quiet')
+}
+
+publishing {
+    publications {
+        mavenJava(MavenPublication) {
+            from components.java
+            groupId = project.group
+            artifactId = 'zlink'
+            version = project.version
+            pom {
+                name = 'zlink'
+                description = project.description
+                url = 'https://github.com/kairos-code-dev/zlink'
+                licenses {
+                    license {
+                        name = 'MPL-2.0'
+                        url = 'https://github.com/kairos-code-dev/zlink/blob/main/LICENSE'
+                    }
+                }
+                properties = [
+                    'zlink.core.version': '11.2.0',
+                    'zlink.core.soname': 'libzlink.so.11',
+                    'zlink.core.provenance-sha256':
+                        approvedCorePackage?.provenanceSha256 ?: 'unverified',
+                    'zlink.core.candidate-ledger-id':
+                        approvedCorePackage?.candidate?.ledgerId ?: 'unverified',
+                    'zlink.core.candidate-manifest-sha256':
+                        approvedCorePackage?.candidate?.manifestSha256 ?: 'unverified',
+                    'zlink.core.candidate-aggregate-sha256':
+                        approvedCorePackage?.candidate?.aggregateSha256 ?: 'unverified'
+                ]
+            }
+        }
+    }
+    repositories {
+        maven {
+            name = 'releaseRepo'
+            def repoUrl = System.getenv('MAVEN_REPOSITORY_URL')
+            if (repoUrl == null || repoUrl.trim().isEmpty()) {
+                def ghRepo = System.getenv('GITHUB_REPOSITORY')  // owner/repo
+                if (ghRepo != null && !ghRepo.trim().isEmpty()) {
+                    repoUrl = "https://maven.pkg.github.com/${ghRepo}"
+                } else {
+                    repoUrl = "${buildDir}/repo"
+                }
+            }
+            url = uri(repoUrl)
+            if (!url.scheme.equalsIgnoreCase('file')) {
+                credentials {
+                    def u = System.getenv('MAVEN_REPOSITORY_USERNAME')
+                    def p = System.getenv('MAVEN_REPOSITORY_PASSWORD')
+                    if ((u == null || u.trim().isEmpty()) && (p == null || p.trim().isEmpty())) {
+                        u = System.getenv('GITHUB_ACTOR')
+                        p = System.getenv('GITHUB_TOKEN')
+                    }
+                    username = u
+                    password = p
+                }
+            }
+        }
+    }
+}

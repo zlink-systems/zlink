@@ -1,0 +1,18 @@
+{
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "declaration": false,
+    "outDir": "dist",
+    "rootDir": "..",
+    "strict": false,
+    "noUnusedLocals": false,
+    "paths": {
+      "@zlink-systems/framework": ["../../../packages/framework/dist"],
+      "@zlink-systems/framework-locations-redis": ["../../../packages/framework-locations-redis/dist"],
+      "@zlink-systems/nestjs": ["../../../packages/nestjs/dist"],
+      "@zlink-systems/zlink": ["../../../node_modules/-systems/zlink/dist/index.d.ts"]
+    }
+  },
+  "include": ["../Shared/**/*.ts", "**/*.ts"]
+}

@@ -1,0 +1,4 @@
+usr/include/*
+usr/lib/*/libzlink.a
+usr/lib/*/libzlink.so
+usr/lib/*/pkgconfig/libzlink.pc

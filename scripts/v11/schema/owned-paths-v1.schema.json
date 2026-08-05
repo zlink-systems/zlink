@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "zlink-v11-owned-paths-v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "ledgerId", "ownedPaths", "contentSha256"],
+  "properties": {
+    "schema": { "const": "zlink-v11-owned-paths-v1" },
+    "ledgerId": { "type": "string", "minLength": 1 },
+    "ownedPaths": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+    "contentSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+  }
+}

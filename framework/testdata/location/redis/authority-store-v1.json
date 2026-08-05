@@ -1,0 +1,262 @@
+{
+  "notice": "All official Redis extensions must match this fixture. Canonical contract: framework/doc/framework/common/spec/22-location-store-redis.ko.md.",
+  "format": "location-authority-hybrid-v1",
+  "prefixRules": {
+    "examplePrefix": "P",
+    "forbiddenPrefixCharacters": [
+      "{",
+      "}"
+    ],
+    "literalHashTag": "{zlink-location-v1}",
+    "schemaKey": "P:{zlink-location-v1}:schema",
+    "schemaFields": {
+      "format": "location-authority-hybrid-v1",
+      "epoch": "1"
+    }
+  },
+  "keyContract": {
+    "objectKind": "spot",
+    "meshName": "game",
+    "identityHex": "73",
+    "authorityKey": "zla1:s:4:game:1:s",
+    "authorityKeyHex": "7a6c61313a733a343a67616d653a313a73",
+    "authorityKeySha256": "e1bef6b5eb5acdca14cc552bc25e8f7f33441cbb9bc3e0140ec1504fb2c40985",
+    "currentKey": "P:{zlink-location-v1}:authority:current:e1bef6b5eb5acdca14cc552bc25e8f7f33441cbb9bc3e0140ec1504fb2c40985",
+    "historyKey": "P:{zlink-location-v1}:authority:history:e1bef6b5eb5acdca14cc552bc25e8f7f33441cbb9bc3e0140ec1504fb2c40985",
+    "historyRevisionKey": "P:{zlink-location-v1}:authority:history-revisions:e1bef6b5eb5acdca14cc552bc25e8f7f33441cbb9bc3e0140ec1504fb2c40985",
+    "indexKey": "P:{zlink-location-v1}:authority:key-index"
+  },
+  "globalCounters": {
+    "key": "P:{zlink-location-v1}:counter",
+    "fields": [
+      "storeRevision",
+      "objectGeneration",
+      "authorityOwnerGeneration",
+      "leaseGeneration"
+    ],
+    "maximum": "9223372036854775807"
+  },
+  "currentHashFields": [
+    "authorityKey",
+    "payload",
+    "storeVersion",
+    "objectGeneration",
+    "authorityOwnerGeneration",
+    "ownerId",
+    "ownerLeaseGeneration",
+    "allocationState",
+    "objectKind",
+    "stableType",
+    "descriptorKey",
+    "descriptorLifecycleGeneration",
+    "capacityDelta"
+  ],
+  "pendingCurrentHashFields": [
+    "authorityKey",
+    "payload",
+    "storeVersion",
+    "objectGeneration",
+    "authorityOwnerGeneration",
+    "ownerId",
+    "ownerLeaseGeneration",
+    "allocationState",
+    "objectKind",
+    "stableType",
+    "descriptorKey",
+    "descriptorLifecycleGeneration",
+    "capacityDelta",
+    "pendingCreationReservationId",
+    "pendingCreationReference",
+    "pendingCreationSha256",
+    "pendingCreationEncodedSize"
+  ],
+  "capacityBuckets": {
+    "segmentLengthUnit": "UTF-8 bytes",
+    "descriptorKey": "4:game12:67616d652d61",
+    "descriptorLifecycleGeneration": "7",
+    "objectKind": "user_spot",
+    "stableType": "Game.Session",
+    "node": "21:4:game12:67616d652d611:7",
+    "type": "21:4:game12:67616d652d611:79:user_spot12:Game.Session",
+    "unicodeStableType": "룸.세션",
+    "unicodeType": "21:4:game12:67616d652d611:79:user_spot10:룸.세션"
+  },
+  "historyEncoding": {
+    "revisionFieldSeparator": ":",
+    "fullSnapshotDeletedValue": "0",
+    "tombstoneDeletedValue": "1",
+    "fullSnapshotSuffixes": [
+      "deleted",
+      "authorityKey",
+      "payload",
+      "storeVersion",
+      "objectGeneration",
+      "authorityOwnerGeneration",
+      "ownerId",
+      "ownerLeaseGeneration",
+      "allocationState",
+      "objectKind",
+      "stableType",
+      "descriptorKey",
+      "descriptorLifecycleGeneration",
+      "capacityDelta"
+    ],
+    "pendingFullSnapshotSuffixes": [
+      "deleted",
+      "authorityKey",
+      "payload",
+      "storeVersion",
+      "objectGeneration",
+      "authorityOwnerGeneration",
+      "ownerId",
+      "ownerLeaseGeneration",
+      "allocationState",
+      "objectKind",
+      "stableType",
+      "descriptorKey",
+      "descriptorLifecycleGeneration",
+      "capacityDelta",
+      "pendingCreationReservationId",
+      "pendingCreationReference",
+      "pendingCreationSha256",
+      "pendingCreationEncodedSize"
+    ],
+    "tombstoneSuffixes": [
+      "deleted",
+      "authorityKey"
+    ]
+  },
+  "missing": {
+    "kind": "Missing",
+    "storeNowMs": "1721001600000"
+  },
+  "reserve": {
+    "reservationId": "00112233445566778899aabbccddeeff",
+    "key": "P:{zlink-location-v1}:creation:00112233445566778899aabbccddeeff",
+    "expectation": "Missing",
+    "result": "Reserved",
+    "currentHash": {
+      "authorityKey": "zla1:s:4:game:1:s",
+      "payload": "opaque-creating-payload-v1",
+      "storeVersion": "101",
+      "objectGeneration": "11",
+      "authorityOwnerGeneration": "21",
+      "ownerId": "owner-a",
+      "ownerLeaseGeneration": "31",
+      "allocationState": "pending",
+      "objectKind": "user_spot",
+      "stableType": "Game.Session",
+      "descriptorKey": "4:game12:67616d652d61",
+      "descriptorLifecycleGeneration": "7",
+      "capacityDelta": "1",
+      "pendingCreationReservationId": "00112233445566778899aabbccddeeff",
+      "pendingCreationReference": "inline-v1:00000000:",
+      "pendingCreationSha256": "5a00000000000000000000000000000000000000000000000000000000000000",
+      "pendingCreationEncodedSize": "0"
+    },
+    "storeNowMs": "1721001600000"
+  },
+  "commit": {
+    "expectation": {
+      "reservationId": "00112233445566778899aabbccddeeff",
+      "storeVersion": "101"
+    },
+    "result": "Committed",
+    "currentHash": {
+      "authorityKey": "zla1:s:4:game:1:s",
+      "payload": "opaque-ready-payload-v1",
+      "storeVersion": "102",
+      "objectGeneration": "11",
+      "authorityOwnerGeneration": "21",
+      "ownerId": "owner-a",
+      "ownerLeaseGeneration": "31",
+      "allocationState": "active",
+      "objectKind": "user_spot",
+      "stableType": "Game.Session",
+      "descriptorKey": "4:game12:67616d652d61",
+      "descriptorLifecycleGeneration": "7",
+      "capacityDelta": "1"
+    }
+  },
+  "preserve": {
+    "expectation": {
+      "kind": "Found",
+      "storeVersion": "102"
+    },
+    "result": "Stored",
+    "currentHash": {
+      "authorityKey": "zla1:s:4:game:1:s",
+      "payload": "opaque-ready-payload-v2",
+      "storeVersion": "103",
+      "objectGeneration": "11",
+      "authorityOwnerGeneration": "21",
+      "ownerId": "owner-a",
+      "ownerLeaseGeneration": "31",
+      "allocationState": "active",
+      "objectKind": "user_spot",
+      "stableType": "Game.Session",
+      "descriptorKey": "4:game12:67616d652d61",
+      "descriptorLifecycleGeneration": "7",
+      "capacityDelta": "1"
+    }
+  },
+  "newOwner": {
+    "expectation": {
+      "kind": "Found",
+      "storeVersion": "103"
+    },
+    "result": "Stored",
+    "currentHash": {
+      "authorityKey": "zla1:s:4:game:1:s",
+      "payload": "opaque-ready-payload-v3",
+      "storeVersion": "104",
+      "objectGeneration": "11",
+      "authorityOwnerGeneration": "22",
+      "ownerId": "owner-b",
+      "ownerLeaseGeneration": "32",
+      "allocationState": "active",
+      "objectKind": "user_spot",
+      "stableType": "Game.Session",
+      "descriptorKey": "4:game13:67616d652d62",
+      "descriptorLifecycleGeneration": "8",
+      "capacityDelta": "1"
+    }
+  },
+  "delete": {
+    "expectation": {
+      "kind": "Found",
+      "storeVersion": "104"
+    },
+    "result": "Deleted",
+    "consumedStoreRevision": "105",
+    "historyRevisionHex": "0000000000000069",
+    "tombstone": true
+  },
+  "scan": {
+    "watermarkRevision": "104",
+    "watermarkRevisionHex": "0000000000000068",
+    "indexMember": "7a6c61313a733a343a67616d653a313a73",
+    "pageSizeMaximum": 1000,
+    "encodedPageBytesMaximum": 4194304,
+    "cursorBytesMaximum": 4096,
+    "revisionZsetScore": 0
+  },
+  "generationExhausted": {
+    "counterAtMaximum": "9223372036854775807",
+    "result": "GenerationExhausted",
+    "retriable": false,
+    "rowIndexAndCounterMutationCount": 0
+  },
+  "forbidden": [
+    "authority-row-ttl",
+    "synthetic-missing-store-version",
+    "public-missing-cas",
+    "per-key-generation-counter",
+    "permanent-per-key-version-tombstone",
+    "single-serialized-authority-state",
+    "property-split-global-authority-hashes",
+    "dynamic-lua-key-from-argv-or-stored-data",
+    "numeric-zset-store-revision-score",
+    "unbounded-scan-materialization"
+  ]
+}

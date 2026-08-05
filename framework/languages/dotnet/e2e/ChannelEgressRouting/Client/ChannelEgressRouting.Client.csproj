@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <AssemblyName>ChannelEgressRouting.Client</AssemblyName>
+    <RootNamespace>ChannelEgressRouting.Client</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Shared/ChannelEgressRouting.Shared.csproj" />
+    <ProjectReference Include="../../../src/Zlink.Framework/Zlink.Framework.csproj" />
+    <ProjectReference Include="../../../src/Zlink.HttpClient/Zlink.HttpClient.csproj" />
+    <ProjectReference Include="../../../src/Systems.Zlink.Stream.Connector/Systems.Zlink.Stream.Connector.csproj" />
+  </ItemGroup>
+</Project>

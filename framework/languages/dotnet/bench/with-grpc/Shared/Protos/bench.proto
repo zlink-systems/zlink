@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+option csharp_namespace = "WithGrpcBench.Shared";
+
+package zlink.framework.bench.withgrpc;
+
+import "google/protobuf/empty.proto";
+
+service BenchService {
+  rpc Echo(BenchPayload) returns (BenchPayload);
+  rpc Command(BenchPayload) returns (google.protobuf.Empty);
+}
+
+message BenchPayload {
+  bytes body = 1;
+}

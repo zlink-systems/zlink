@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+    <PropertyGroup>
+        <TargetFramework>net8.0</TargetFramework>
+        <OutputType>Exe</OutputType>
+        <AssemblyName>StoreFailure.Client</AssemblyName>
+        <RootNamespace>StoreFailure.Client</RootNamespace>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="../Shared/StoreFailure.Shared.csproj"/>
+        <PackageReference Include="Zlink.HttpClient"/>
+        <ProjectReference Include="../../../src/Zlink.Framework/Zlink.Framework.csproj"/>
+        <ProjectReference Include="../../../src/Systems.Zlink.Stream.Connector/Systems.Zlink.Stream.Connector.csproj"/>
+    </ItemGroup>
+</Project>

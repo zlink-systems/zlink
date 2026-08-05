@@ -1,0 +1,9 @@
+{
+  "$schema": "https://typedoc.org/schema.json",
+  "entryPoints": ["src/index.ts"],
+  "out": "typedoc/html",
+  "tsconfig": "tsconfig.json",
+  "name": "zlink Node Binding",
+  "excludeInternal": true,
+  "excludePrivate": true
+}

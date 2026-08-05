@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>12.0</LangVersion>
+    <IsPackable>false</IsPackable>
+    <AssemblyName>ShoppingMall</AssemblyName>
+    <RootNamespace>ShoppingMall</RootNamespace>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="Shared/ShoppingMall.Shared.csproj" />
+    <ProjectReference Include="Client/ShoppingMall.Client.csproj" />
+    <ProjectReference Include="Server/Configuration/ShoppingMall.Server.Configuration.csproj" />
+    <ProjectReference Include="Server/Shared/ShoppingMall.Server.Shared.csproj" />
+    <ProjectReference Include="Server/CommerceApi/ShoppingMall.CommerceApi.csproj" />
+    <ProjectReference Include="Server/OrderWorkflow/ShoppingMall.OrderWorkflow.csproj" />
+  </ItemGroup>
+</Project>

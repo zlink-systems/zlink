@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk">
+    <PropertyGroup>
+        <TargetFramework>net8.0</TargetFramework>
+        <Nullable>enable</Nullable>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <GenerateDocumentationFile>true</GenerateDocumentationFile>
+        <Version>11.2.0</Version>
+        <AssemblyName>Systems.Zlink</AssemblyName>
+        <PackageId>Systems.Zlink</PackageId>
+        <RootNamespace>Systems.Zlink</RootNamespace>
+        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+        <Authors>ulalax</Authors>
+        <Description>zlink .NET bindings - high-performance async messaging library</Description>
+    </PropertyGroup>
+    <ItemGroup Condition="'$(ZLinkLinuxX64NativeRoot)' != ''">
+        <None Include="$(ZLinkLinuxX64NativeRoot)\libzlink.so;$(ZLinkLinuxX64NativeRoot)\libzlink.so.11;$(ZLinkLinuxX64NativeRoot)\libzlink.so.$(ZLinkCoreVersion)">
+            <Pack>true</Pack>
+            <PackagePath>runtimes\linux-x64\native\%(Filename)%(Extension)</PackagePath>
+            <Link>runtimes\linux-x64\native\%(Filename)%(Extension)</Link>
+            <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+        </None>
+        <None Include="$(ZLinkCoreProvenancePath)">
+            <Pack>true</Pack>
+            <PackagePath>provenance\core-package-provenance.json</PackagePath>
+            <Link>provenance\core-package-provenance.json</Link>
+            <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+        </None>
+    </ItemGroup>
+    <Target Name="ValidateCorePackageInput" BeforeTargets="Pack">
+        <Error Condition="'$(ZLinkLinuxX64NativeRoot)' == ''"
+               Text="ZLinkLinuxX64NativeRoot must identify the approved Core 11 package lib directory." />
+        <Error Condition="'$(ZLinkCoreVersion)' == ''"
+               Text="ZLinkCoreVersion must identify the approved Core 11 package version." />
+        <Error Condition="'$(ZLinkCoreProvenancePath)' == '' Or !Exists('$(ZLinkCoreProvenancePath)')"
+               Text="ZLinkCoreProvenancePath must identify the approved Core 11 package provenance." />
+        <Error Condition="!Exists('$(ZLinkLinuxX64NativeRoot)\libzlink.so')"
+               Text="The approved Core 11 package is missing libzlink.so." />
+        <Error Condition="!Exists('$(ZLinkLinuxX64NativeRoot)\libzlink.so.11')"
+               Text="The approved Core 11 package is missing libzlink.so.11." />
+        <Error Condition="!Exists('$(ZLinkLinuxX64NativeRoot)\libzlink.so.$(ZLinkCoreVersion)')"
+               Text="The approved Core 11 package is missing its exact versioned runtime." />
+    </Target>
+</Project>

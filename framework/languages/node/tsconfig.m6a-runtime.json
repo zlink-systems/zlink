@@ -1,0 +1,17 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "outDir": "build/m6a-runtime",
+    "rootDir": "../..",
+    "types": ["node"]
+  },
+  "include": [
+    "../../runtime/protocol/generated/node/service_wire_constants.ts",
+    "packages/framework/src/runtime/backend/node/node-raw-binding-port.ts",
+    "packages/framework/src/runtime/foundation/**/*.ts",
+    "test/m6a/**/*.ts"
+  ]
+}

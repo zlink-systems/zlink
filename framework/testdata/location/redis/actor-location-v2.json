@@ -1,0 +1,29 @@
+{
+  "notice": "All official Redis extensions must match this fixture. Canonical contract: framework/doc/framework/common/spec/22-location-store-redis.ko.md.",
+  "format": "actor-location-v2",
+  "keyContract": {
+    "objectKind": "actor",
+    "identityHex": "6163746f722d31",
+    "authorityKey": "zla1:a:7:actor-1"
+  },
+  "hashFields": [
+    "payload",
+    "storeVersion",
+    "objectGeneration",
+    "authorityOwnerGeneration",
+    "ownerId",
+    "ownerLeaseGeneration"
+  ],
+  "row": {
+    "kind": "actor",
+    "key": "zla1:a:7:actor-1",
+    "hash": {
+      "payload": "opaque-actor-authority-v1",
+      "storeVersion": "101",
+      "objectGeneration": "11",
+      "authorityOwnerGeneration": "4",
+      "ownerId": "actor-owner-a",
+      "ownerLeaseGeneration": "9"
+    }
+  }
+}

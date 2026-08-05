@@ -1,0 +1,45 @@
+{
+  "name": "zlink-stream-e2e-client",
+  "version-string": "0.1.0",
+  "description": "ZLink C++ Stream Connector scenario client for server e2e, smoke, and perf tests",
+  "homepage": "https://github.com/ulala-x/zlink",
+  "license": "MPL-2.0",
+  "dependencies": [
+    "zlink-stream-connector"
+  ],
+  "features": {
+    "lz4": {
+      "description": "Enable LZ4 packet compression in the core connector dependency",
+      "dependencies": [
+        {
+          "name": "zlink-stream-connector",
+          "features": [
+            "lz4"
+          ]
+        }
+      ]
+    },
+    "tls": {
+      "description": "Enable TLS transport in the core connector dependency",
+      "dependencies": [
+        {
+          "name": "zlink-stream-connector",
+          "features": [
+            "tls"
+          ]
+        }
+      ]
+    },
+    "websocket": {
+      "description": "Enable WebSocket transport in the core connector dependency",
+      "dependencies": [
+        {
+          "name": "zlink-stream-connector",
+          "features": [
+            "websocket"
+          ]
+        }
+      ]
+    }
+  }
+}

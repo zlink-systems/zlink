@@ -1,0 +1,26 @@
+# Entry Spot admission burst benchmark
+# Benchmark: EntrySpotAdmissionBurstBenchmark (fakeBackendTest), 200 actors x 50 packets
+# through an Entry Spot actor send handler, best-of-3 in-process rounds after warmup.
+# Latency = dispatch submit -> handler execution, per packet.
+# Command:
+#   ./gradlew :zlink-framework-testkit:fakeBackendTest --tests "*EntrySpotAdmissionBurstBenchmark*" --no-daemon --no-parallel --rerun-tasks
+
+## BASELINE (unmodified code, commit a2728eb6c, 2026-06-12)
+run1: entry-spot-admission-burst[best-of-3] actors=200 packetsPerActor=50 total=10000 wallMs=61.564 throughputPerSec=162432 p50Us=8.5 p95Us=26.0 p99Us=46.5 maxUs=238.2
+run2: entry-spot-admission-burst[best-of-3] actors=200 packetsPerActor=50 total=10000 wallMs=54.626 throughputPerSec=183062 p50Us=8.2 p95Us=24.4 p99Us=37.5 maxUs=166.7
+run3: entry-spot-admission-burst[best-of-3] actors=200 packetsPerActor=50 total=10000 wallMs=52.311 throughputPerSec=191165 p50Us=7.7 p95Us=22.7 p99Us=28.8 maxUs=171.7
+# baseline median: wallMs=54.6 throughputPerSec=183062 p95Us=24.4
+
+
+## PATCHED (Entry Spot single serial line + worker offload, 2026-06-13)
+run1: entry-spot-admission-burst[best-of-3] actors=200 packetsPerActor=50 total=10000 wallMs=104.324 throughputPerSec=95855 p50Us=29.8 p95Us=298.9 p99Us=447.8 maxUs=629.8
+run2: entry-spot-admission-burst[best-of-3] actors=200 packetsPerActor=50 total=10000 wallMs=59.061 throughputPerSec=169318 p50Us=26.9 p95Us=1165.4 p99Us=1372.3 maxUs=1457.3
+run3: entry-spot-admission-burst[best-of-3] actors=200 packetsPerActor=50 total=10000 wallMs=56.789 throughputPerSec=176092 p50Us=216.9 p95Us=1946.5 p99Us=2152.1 maxUs=2226.3
+# patched median: throughputPerSec=169318 (baseline 183062 대비 -7.5%) → -10% 게이트 PASS
+#
+# p95 해석 노트 (plan §18 #8 escape clause):
+# baseline은 actor별 병렬 mailbox라 per-packet latency에 대기시간이 거의 없었다.
+# patched는 10,000 packet이 하나의 Entry Spot 직렬 줄을 통과하므로 per-packet
+# latency에 큐 체류시간(Little's law)이 포함된다. burst 포화 상태에서 직렬 실행
+# 모델의 구조적 비용(plan §1)이며 handler 실행 시간의 회귀가 아니다. 이 벤치마크의
+# 게이트는 총 wall time/throughput으로 판정한다 (.NET과 동일 기준).

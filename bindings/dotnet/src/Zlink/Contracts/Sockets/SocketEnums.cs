@@ -1,0 +1,148 @@
+// SPDX-License-Identifier: MPL-2.0
+
+namespace Systems.Zlink;
+
+/// <summary>
+///     Identifies a socket's messaging pattern.
+/// </summary>
+public enum SocketType
+{
+    /// <summary>
+    ///     Unspecified socket type.
+    /// </summary>
+    Any = 0,
+
+    /// <summary>
+    ///     Exclusive one-to-one peering with no routing.
+    /// </summary>
+    Pair = 0x1001,
+
+    /// <summary>
+    ///     Publishes topic-filtered messages to subscribers.
+    /// </summary>
+    Pub = 0x1002,
+
+    /// <summary>
+    ///     Subscribes to topics published by PUB/XPUB sockets.
+    /// </summary>
+    Sub = 0x1003,
+
+    /// <summary>
+    ///     Load-balances messages across its connected peers.
+    /// </summary>
+    Dealer = 0x1004,
+
+    /// <summary>
+    ///     Routes messages to peers addressed by routing id.
+    /// </summary>
+    Router = 0x1005,
+
+    /// <summary>
+    ///     Publisher that also surfaces subscriber subscription events.
+    /// </summary>
+    XPub = 0x1006,
+
+    /// <summary>
+    ///     Subscriber whose subscriptions are carried as messages.
+    /// </summary>
+    XSub = 0x1007,
+
+    /// <summary>
+    ///     Exchanges framed packets with raw TCP peers.
+    /// </summary>
+    Stream = 0x1008
+}
+
+/// <summary>
+///     Selects an automatic high-water-mark sizing profile that trades memory,
+///     latency, and throughput.
+/// </summary>
+public enum AutoHwmProfile
+{
+    /// <summary>
+    ///     Smallest queues, minimizing memory use.
+    /// </summary>
+    Compact = 0,
+
+    /// <summary>
+    ///     Small queues that drain quickly to favor latency.
+    /// </summary>
+    LowLatency = 1,
+
+    /// <summary>
+    ///     Balances latency against throughput.
+    /// </summary>
+    Balanced = 2,
+
+    /// <summary>
+    ///     Large queues that favor throughput.
+    /// </summary>
+    Throughput = 3
+}
+
+/// <summary>
+///     Determines how a socket reacts to a peer that reuses an existing routing id.
+/// </summary>
+public enum RidDuplicatePolicy
+{
+    /// <summary>
+    ///     Reject the new peer and keep the existing route.
+    /// </summary>
+    Reject = 0,
+
+    /// <summary>
+    ///     Hand the routing id to the new peer, dropping the previous holder.
+    /// </summary>
+    Handover = 1
+}
+
+/// <summary>
+///     Determines whether a failed submit is retried.
+/// </summary>
+public enum SubmitRetryMode
+{
+    /// <summary>
+    ///     Never retry; a failed submit fails immediately.
+    /// </summary>
+    Off = 0,
+
+    /// <summary>
+    ///     Retry when the submit fails locally, such as under back-pressure.
+    /// </summary>
+    LocalFailure = 1
+}
+
+/// <summary>
+///     Flags that modify send behavior.
+/// </summary>
+[Flags]
+public enum SendFlags
+{
+    /// <summary>
+    ///     Default behavior: block until the message can be queued.
+    /// </summary>
+    None = 0,
+
+    /// <summary>
+    ///     Do not block; report back-pressure instead of waiting when the send
+    ///     would block.
+    /// </summary>
+    DontWait = 1
+}
+
+/// <summary>
+///     Flags that modify receive behavior.
+/// </summary>
+[Flags]
+public enum RecvFlags
+{
+    /// <summary>
+    ///     Default behavior: block until a message is available.
+    /// </summary>
+    None = 0,
+
+    /// <summary>
+    ///     Do not block; return without a message when none is available.
+    /// </summary>
+    DontWait = 1
+}

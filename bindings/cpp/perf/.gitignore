@@ -1,0 +1,6 @@
+/single/build/
+/multi/build/
+/.runtime/
+/results/**/*.txt
+/results/**/*.log
+!/results/**/.gitkeep

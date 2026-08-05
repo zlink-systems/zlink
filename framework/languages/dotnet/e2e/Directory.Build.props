@@ -1,0 +1,12 @@
+<Project>
+    <Import Project="$(MSBuildThisFileDirectory)..\Directory.Build.props" />
+
+    <ItemGroup>
+        <Compile Include="$(MSBuildThisFileDirectory)Common\Configuration\E2eConfiguration.cs"
+                 Link="Configuration\E2eConfiguration.cs" />
+        <Compile Include="$(MSBuildThisFileDirectory)Common\Diagnostics\E2eMessageFlowListener.cs"
+                 Link="Diagnostics\E2eMessageFlowListener.cs" />
+        <PackageReference Include="Microsoft.Extensions.Configuration.Binder" />
+        <PackageReference Include="Microsoft.Extensions.Configuration.Json" />
+    </ItemGroup>
+</Project>

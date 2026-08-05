@@ -1,0 +1,67 @@
+[
+  {
+    "connections": 0,
+    "vmrss_kb": 9600,
+    "vmhwm_kb": 9600,
+    "anon_kb": 3216,
+    "priv_kb": 5244,
+    "fds": 14,
+    "sockstat": {
+      "tcp_inuse": 58,
+      "tcp_alloc": 86,
+      "tcp_mem_pages": 638
+    }
+  },
+  {
+    "connections": 1000,
+    "vmrss_kb": 43680,
+    "vmhwm_kb": 43680,
+    "anon_kb": 37736,
+    "priv_kb": 39828,
+    "fds": 1023,
+    "sockstat": {
+      "tcp_inuse": 2058,
+      "tcp_alloc": 2086,
+      "tcp_mem_pages": 638
+    }
+  },
+  {
+    "connections": 2000,
+    "vmrss_kb": 77600,
+    "vmhwm_kb": 77600,
+    "anon_kb": 72216,
+    "priv_kb": 74308,
+    "fds": 2023,
+    "sockstat": {
+      "tcp_inuse": 4058,
+      "tcp_alloc": 4086,
+      "tcp_mem_pages": 638
+    }
+  },
+  {
+    "connections": 4000,
+    "vmrss_kb": 146400,
+    "vmhwm_kb": 146400,
+    "anon_kb": 141144,
+    "priv_kb": 143236,
+    "fds": 4023,
+    "sockstat": {
+      "tcp_inuse": 8059,
+      "tcp_alloc": 8087,
+      "tcp_mem_pages": 1150
+    }
+  },
+  {
+    "connections": 8000,
+    "vmrss_kb": 284000,
+    "vmhwm_kb": 284000,
+    "anon_kb": 279048,
+    "priv_kb": 281140,
+    "fds": 8023,
+    "sockstat": {
+      "tcp_inuse": 16059,
+      "tcp_alloc": 16093,
+      "tcp_mem_pages": 1150
+    }
+  }
+]

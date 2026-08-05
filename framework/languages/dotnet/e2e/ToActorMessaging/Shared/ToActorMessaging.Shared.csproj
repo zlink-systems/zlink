@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+    <PropertyGroup>
+        <TargetFramework>net8.0</TargetFramework>
+        <AssemblyName>ToActorMessaging.Shared</AssemblyName>
+        <RootNamespace>ToActorMessaging.Shared</RootNamespace>
+    </PropertyGroup>
+</Project>

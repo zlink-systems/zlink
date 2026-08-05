@@ -1,0 +1,11 @@
+/logs/*
+# AutomaticTurnDispatch outputs are never committed.
+!/logs/.gitignore
+/build/
+/.gradle/
+/Client/build/
+/Shared/build/
+/Server/Registry/build/
+/Server/Play/build/
+/Server/Delay/build/
+/Server/Session/build/

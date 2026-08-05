@@ -1,0 +1,121 @@
+name: Deploy Documentation
+
+on:
+  push:
+    branches:
+      - main
+    # 사이트가 담는 트리 전부. core·bindings 문서를 고쳐도 다시 나가야 한다.
+    paths:
+      - 'doc/site/**'
+      - 'framework/doc/framework/**'
+      - 'core/doc/**'
+      - 'bindings/doc/**'
+      - '.github/workflows/docs.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # 공개 계약 추적기가 baseline 커밋을 `git cat-file`로 읽는다.
+          # 기본 depth 1로는 그 커밋이 없어 실패한다.
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r doc/site/requirements.txt
+
+      # 두 사이트의 게이트를 따로 돌린다. 한쪽 회귀가 다른 쪽 검증을 가리지 않는다.
+      # 언어별 장은 공통 소스에서 생성한다. 소스만 고치고 생성물을 안 올리면
+      # 사이트가 옛 내용을 낸다.
+      - name: Check generated language guides are up to date
+        run: python3 doc/site/scripts/generate_language_guides.py --check
+
+      - name: Check framework language tabs and snippets
+        run: python3 doc/site/scripts/check_doc_tabs.py framework
+
+      - name: Check guide example identifiers
+        run: python3 doc/site/scripts/check_guide_identifiers.py
+
+      - name: Check common guide prose neutrality
+        run: python3 doc/site/scripts/check_prose_neutrality.py
+
+      # 상대 링크와 anchor. mkdocs는 docs_dir 안만 보므로 별도로 돌린다.
+      # repo-doc·bindings-doc은 v11에서 정리한 서비스 계층 장을 아직 가리켜 제외한다.
+      # 현재 구현 갭의 기준은 framework/doc/plan/for-interals/와 언어별 gap ledger다.
+      - name: Check document links and anchors
+        run: python3 doc/site/scripts/check_doc_links.py framework framework-plan core-doc
+
+      # 가이드가 인용하는 교육용 예제는 실제 컴파일 대상이다. 계약과 어긋난 코드가
+      # 문서에 실리는 것을 컴파일러가 막는다.
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          # gradle toolchain이 22를 요구한다(framework/languages/java/
+          # build.gradle.kts). 21을 깔면 toolchain을 못 찾아 실패한다.
+          java-version: '22'
+
+      - name: Compile guide examples (Java)
+        working-directory: framework/languages/java
+        # 이 모듈은 `systems.zlink:zlink`(Java 바인딩)에 의존하는데, 그 아티팩트는
+        # 아직 공개 저장소에 없고 로컬 maven 저장소에만 있다. 있는 데서만 돌린다 —
+        # 없는 데서 실패시키면 문서 배포가 그것 때문에 막힌다.
+        run: |
+          if [ -d "$GITHUB_WORKSPACE/.artifacts/wsl/maven" ]; then
+            ./gradlew :zlink-framework-doc-examples:compileJava
+          else
+            echo "로컬 maven 저장소가 없어 건너뛴다 (systems.zlink:zlink 미공개)."
+          fi
+
+      # 문서가 아니라 framework 공개 계약을 검증한다. 계약 작업이 진행 중이면
+      # 여기서 걸리는데, 그것 때문에 문서 배포가 막히면 안 된다. 신호는 남기되
+      # 배포를 세우지 않는다.
+      - name: Check framework document contracts
+        continue-on-error: true
+        run: bash scripts/verify-framework-doc-contracts.sh
+
+      # 사이트는 하나다. `doc/site/docs/`가 정본 트리를 심링크로 모아 두었고
+      # (framework · core · bindings), 한국어가 기본 locale이다.
+      - name: Check core language tabs and snippets
+        run: python3 doc/site/scripts/check_doc_tabs.py core
+
+      - name: Build documentation
+        working-directory: doc/site
+        run: mkdocs build
+
+      # 옛 core 사이트의 `/ko/**`·`/api/**` 주소를 새 자리로 보낸다.
+      - name: Redirect the old paths
+        run: python3 doc/site/scripts/make_core_redirects.py doc/site/site
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: doc/site/site
+
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

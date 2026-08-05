@@ -1,0 +1,37 @@
+{
+  "name": "zlink-stream-connector",
+  "version-string": "0.1.0",
+  "description": "ZLink C++ Stream Connector core library",
+  "homepage": "https://github.com/ulala-x/zlink",
+  "license": "MPL-2.0",
+  "dependencies": [
+    "boost-asio",
+    "boost-beast",
+    "nlohmann-json",
+    {
+      "name": "vcpkg-cmake",
+      "host": true
+    },
+    {
+      "name": "vcpkg-cmake-config",
+      "host": true
+    }
+  ],
+  "features": {
+    "lz4": {
+      "description": "Enable LZ4 packet compression",
+      "dependencies": [
+        "lz4"
+      ]
+    },
+    "tls": {
+      "description": "Enable TLS transport",
+      "dependencies": [
+        "openssl"
+      ]
+    },
+    "websocket": {
+      "description": "Enable WebSocket transport"
+    }
+  }
+}

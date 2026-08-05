@@ -1,0 +1,35 @@
+/* SPDX-License-Identifier: FSL-1.1-ALv2 */
+#pragma once
+
+#include <zlink/framework/contracts/actors/actor.hpp>
+#include <zlink/framework/contracts/channels/call.hpp>
+#include <zlink/framework/contracts/channels/channel.hpp>
+#include <zlink/framework/contracts/codecs/serializer.hpp>
+#include <zlink/framework/contracts/configuration/app.hpp>
+#include <zlink/framework/contracts/configuration/configuration.hpp>
+#include <zlink/framework/contracts/configuration/endpoint_connections.hpp>
+#include <zlink/framework/contracts/configuration/framework_options.hpp>
+#include <zlink/framework/contracts/configuration/logging.hpp>
+#include <zlink/framework/contracts/configuration/mesh_node.hpp>
+#include <zlink/framework/contracts/configuration/module.hpp>
+#include <zlink/framework/contracts/configuration/route_mesh_runtime_options.hpp>
+#include <zlink/framework/contracts/configuration/services.hpp>
+#include <zlink/framework/contracts/configuration/transport.hpp>
+#include <zlink/framework/contracts/configuration/zlink_builder.hpp>
+#include <zlink/framework/contracts/dispatch/execution.hpp>
+#include <zlink/framework/contracts/dispatch/task.hpp>
+#include <zlink/framework/contracts/errors/error.hpp>
+#include <zlink/framework/contracts/errors/result.hpp>
+#include <zlink/framework/contracts/eventing/health.hpp>
+#include <zlink/framework/contracts/handlers/handler_registry.hpp>
+#include <zlink/framework/contracts/http/http.hpp>
+#include <zlink/framework/contracts/locations/runtime_query.hpp>
+#include <zlink/framework/contracts/placement.hpp>
+#include <zlink/framework/contracts/messaging/message.hpp>
+#include <zlink/framework/contracts/monitoring/route_mesh_runtime.hpp>
+#include <zlink/framework/contracts/monitoring/client_server_runtime.hpp>
+#include <zlink/framework/contracts/monitoring/framework_runtime.hpp>
+#include <zlink/framework/contracts/spots/spot.hpp>
+#include <zlink/framework/contracts/streams/stream.hpp>
+#include <zlink/framework/contracts/timers/timer.hpp>
+#include <zlink/framework/version.hpp>

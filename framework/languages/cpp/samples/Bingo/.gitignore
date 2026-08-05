@@ -1,0 +1,3 @@
+# Message-flow log files produced by run_sample.sh (see Server/sample_log_dir.hpp)
+logs/*
+!logs/.gitignore

@@ -1,0 +1,32 @@
+[package]
+name = "zlink-perf-single"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+publish = false
+
+[workspace]
+
+[dependencies]
+libc = "0.2"
+zlink = { path = "../.." }
+
+[[bin]]
+name = "perf_pair"
+path = "src/perf_pair.rs"
+
+[[bin]]
+name = "perf_pubsub"
+path = "src/perf_pubsub.rs"
+
+[[bin]]
+name = "perf_dealer_router"
+path = "src/perf_dealer_router.rs"
+
+[[bin]]
+name = "perf_dealer_dealer"
+path = "src/perf_dealer_dealer.rs"
+
+[[bin]]
+name = "perf_router_router"
+path = "src/perf_router_router.rs"

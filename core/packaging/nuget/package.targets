@@ -1,0 +1,127 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+#################################################################
+#   GENERATED SOURCE CODE, DO NOT EDIT EXCEPT EXPERIMENTALLY    #
+#################################################################
+-->
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+
+  <!-- user interface -->
+  <ItemGroup>
+    <PropertyPageSchema Include="$(MSBuildThisFileDirectory)package.xml" />
+  </ItemGroup>
+
+  <!-- general -->
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <AdditionalIncludeDirectories>$(MSBuildThisFileDirectory)include\;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <Link>
+      <AdditionalLibraryDirectories>$(MSBuildThisFileDirectory)bin\;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Linkage-libzlink)' == 'static' Or '$(Linkage-libzlink)' == 'ltcg'">
+    <ClCompile>
+      <PreprocessorDefinitions>ZLINK_STATIC;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+  </ItemDefinitionGroup>
+
+  <!-- static libraries -->
+  <ItemDefinitionGroup Condition="'$(Platform)' == 'Win32' And ('$(PlatformToolset)' == 'v142' Or '$(PlatformToolset)' == 'CTP_Nov2013') And '$(Linkage-libzlink)' == 'static' And $(Configuration.IndexOf('Release')) != -1">
+    <Link>
+      <AdditionalDependencies>libzlink-x86-v142-mt-s-11_2_0.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Platform)' == 'Win32' And ('$(PlatformToolset)' == 'v142' Or '$(PlatformToolset)' == 'CTP_Nov2013') And '$(Linkage-libzlink)' == 'static' And $(Configuration.IndexOf('Debug')) != -1">
+    <Link>
+      <AdditionalDependencies>libzlink-x86-v142-mt-sgd-11_2_0.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Platform)' == 'x64' And ('$(PlatformToolset)' == 'v142' Or '$(PlatformToolset)' == 'CTP_Nov2013') And '$(Linkage-libzlink)' == 'static' And $(Configuration.IndexOf('Release')) != -1">
+    <Link>
+      <AdditionalDependencies>libzlink-x64-v142-mt-s-11_2_0.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Platform)' == 'x64' And ('$(PlatformToolset)' == 'v142' Or '$(PlatformToolset)' == 'CTP_Nov2013') And '$(Linkage-libzlink)' == 'static' And $(Configuration.IndexOf('Debug')) != -1">
+    <Link>
+      <AdditionalDependencies>libzlink-x64-v142-mt-sgd-11_2_0.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+
+  <!-- static ltcg libraries -->
+  <ItemDefinitionGroup Condition="'$(Platform)' == 'Win32' And ('$(PlatformToolset)' == 'v142' Or '$(PlatformToolset)' == 'CTP_Nov2013') And '$(Linkage-libzlink)' == 'ltcg' And $(Configuration.IndexOf('Release')) != -1">
+    <Link>
+      <AdditionalDependencies>libzlink-x86-v142-mt-s-11_2_0.ltcg.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Platform)' == 'Win32' And ('$(PlatformToolset)' == 'v142' Or '$(PlatformToolset)' == 'CTP_Nov2013') And '$(Linkage-libzlink)' == 'ltcg' And $(Configuration.IndexOf('Debug')) != -1">
+    <Link>
+      <AdditionalDependencies>libzlink-x86-v142-mt-sgd-11_2_0.ltcg.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Platform)' == 'x64' And ('$(PlatformToolset)' == 'v142' Or '$(PlatformToolset)' == 'CTP_Nov2013') And '$(Linkage-libzlink)' == 'ltcg' And $(Configuration.IndexOf('Release')) != -1">
+    <Link>
+      <AdditionalDependencies>libzlink-x64-v142-mt-s-11_2_0.ltcg.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Platform)' == 'x64' And ('$(PlatformToolset)' == 'v142' Or '$(PlatformToolset)' == 'CTP_Nov2013') And '$(Linkage-libzlink)' == 'ltcg' And $(Configuration.IndexOf('Debug')) != -1">
+    <Link>
+      <AdditionalDependencies>libzlink-x64-v142-mt-sgd-11_2_0.ltcg.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+
+  <!-- dynamic import libraries -->
+  <ItemDefinitionGroup Condition="'$(Platform)' == 'Win32' And ('$(PlatformToolset)' == 'v142' Or '$(PlatformToolset)' == 'CTP_Nov2013') And '$(Linkage-libzlink)' == 'dynamic' And $(Configuration.IndexOf('Release')) != -1">
+    <Link>
+      <AdditionalDependencies>libzlink-x86-v142-mt-11_2_0.imp.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Platform)' == 'Win32' And ('$(PlatformToolset)' == 'v142' Or '$(PlatformToolset)' == 'CTP_Nov2013') And '$(Linkage-libzlink)' == 'dynamic' And $(Configuration.IndexOf('Debug')) != -1">
+    <Link>
+      <AdditionalDependencies>libzlink-x86-v142-mt-gd-11_2_0.imp.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Platform)' == 'x64' And ('$(PlatformToolset)' == 'v142' Or '$(PlatformToolset)' == 'CTP_Nov2013') And '$(Linkage-libzlink)' == 'dynamic' And $(Configuration.IndexOf('Release')) != -1">
+    <Link>
+      <AdditionalDependencies>libzlink-x64-v142-mt-11_2_0.imp.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Platform)' == 'x64' And ('$(PlatformToolset)' == 'v142' Or '$(PlatformToolset)' == 'CTP_Nov2013') And '$(Linkage-libzlink)' == 'dynamic' And $(Configuration.IndexOf('Debug')) != -1">
+    <Link>
+      <AdditionalDependencies>libzlink-x64-v142-mt-gd-11_2_0.imp.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+
+  <!-- dynamic libraries with debug symbols -->
+  <Target Name="libzlink_AfterBuild" AfterTargets="AfterBuild" />
+  <Target Name="libzlink_AfterBuild_Win32_v142_Dynamic_Release"
+          Condition="'$(Platform)' == 'Win32' And ('$(PlatformToolset)' == 'v142' Or '$(PlatformToolset)' == 'CTP_Nov2013') And '$(Linkage-libzlink)' == 'dynamic' And $(Configuration.IndexOf('Release')) != -1"
+          AfterTargets="libzlink_AfterBuild">
+    <Copy SourceFiles="$(MSBuildThisFileDirectory)bin\libzlink-x86-v142-mt-11_2_0.dll" DestinationFiles="$(TargetDir)libzlink.dll" SkipUnchangedFiles="true" />
+    <!--<Copy SourceFiles="$(MSBuildThisFileDirectory)bin\libzlink-x86-v142-mt-11_2_0.pdb" DestinationFiles="$(TargetDir)libzlink.pdb" SkipUnchangedFiles="true" />-->
+  </Target>
+  <Target Name="libzlink_AfterBuild_Win32_v142_Dynamic_Debug"
+          Condition="'$(Platform)' == 'Win32' And ('$(PlatformToolset)' == 'v142' Or '$(PlatformToolset)' == 'CTP_Nov2013') And '$(Linkage-libzlink)' == 'dynamic' And $(Configuration.IndexOf('Debug')) != -1"
+          AfterTargets="libzlink_AfterBuild">
+    <Copy SourceFiles="$(MSBuildThisFileDirectory)bin\libzlink-x86-v142-mt-gd-11_2_0.dll" DestinationFiles="$(TargetDir)libzlink.dll" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="$(MSBuildThisFileDirectory)bin\libzlink-x86-v142-mt-gd-11_2_0.pdb" DestinationFiles="$(TargetDir)libzlink.pdb" SkipUnchangedFiles="true" />
+  </Target>
+  <Target Name="libzlink_AfterBuild_x64_v142_Dynamic_Release"
+          Condition="'$(Platform)' == 'x64' And ('$(PlatformToolset)' == 'v142' Or '$(PlatformToolset)' == 'CTP_Nov2013') And '$(Linkage-libzlink)' == 'dynamic' And $(Configuration.IndexOf('Release')) != -1"
+          AfterTargets="libzlink_AfterBuild">
+    <Copy SourceFiles="$(MSBuildThisFileDirectory)bin\libzlink-x64-v142-mt-11_2_0.dll" DestinationFiles="$(TargetDir)libzlink.dll" SkipUnchangedFiles="true" />
+    <!--<Copy SourceFiles="$(MSBuildThisFileDirectory)bin\libzlink-x64-v142-mt-11_2_0.pdb" DestinationFiles="$(TargetDir)libzlink.pdb" SkipUnchangedFiles="true" />-->
+  </Target>
+  <Target Name="libzlink_AfterBuild_x64_v142_Dynamic_Debug"
+          Condition="'$(Platform)' == 'x64' And ('$(PlatformToolset)' == 'v142' Or '$(PlatformToolset)' == 'CTP_Nov2013') And '$(Linkage-libzlink)' == 'dynamic' And $(Configuration.IndexOf('Debug')) != -1"
+          AfterTargets="libzlink_AfterBuild">
+    <Copy SourceFiles="$(MSBuildThisFileDirectory)bin\libzlink-x64-v142-mt-gd-11_2_0.dll" DestinationFiles="$(TargetDir)libzlink.dll" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="$(MSBuildThisFileDirectory)bin\libzlink-x64-v142-mt-gd-11_2_0.pdb" DestinationFiles="$(TargetDir)libzlink.pdb" SkipUnchangedFiles="true" />
+  </Target>
+
+<!--
+#################################################################
+#   GENERATED SOURCE CODE, DO NOT EDIT EXCEPT EXPERIMENTALLY    #
+#################################################################
+-->
+</Project>

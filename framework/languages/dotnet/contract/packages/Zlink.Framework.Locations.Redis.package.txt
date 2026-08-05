@@ -1,0 +1,20 @@
+package Zlink.Framework.Locations.Redis
+entry LICENSE
+entry Zlink.Framework.Locations.Redis.nuspec
+entry [Content_Types].xml
+entry _rels/.rels
+entry lib/net8.0/Zlink.Framework.Locations.Redis.dll
+entry lib/net8.0/Zlink.Framework.Locations.Redis.xml
+entry package/services/metadata/core-properties/{CORE_PROPERTIES}.psmdcp
+content-sha256 lib/net8.0/Zlink.Framework.Locations.Redis.xml=24ba4c2ef161b14d01d4ce67dc0a55888954252040fc6ff8ac13f5066a98c7d6
+metadata authors=Zlink.Framework.Locations.Redis
+metadata description=Official Redis location store extension for the ZLink .NET framework.
+metadata id=Zlink.Framework.Locations.Redis
+metadata license=LICENSE type=file
+metadata licenseUrl=https://aka.ms/deprecateLicenseUrl
+metadata projectUrl=https://github.com/kairos-code-dev/zlink
+metadata version={VERSION}
+metadata repository commit={COMMIT} type=git
+dependency-group targetFramework=net8.0
+dependency targetFramework=net8.0 exclude=Build,Analyzers id=StackExchange.Redis version=2.8.31
+dependency targetFramework=net8.0 exclude=Build,Analyzers id=Zlink.Framework.Provider.Abstractions version=[{VERSION}]

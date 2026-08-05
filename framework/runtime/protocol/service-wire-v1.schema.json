@@ -1,0 +1,4883 @@
+{
+  "schemaDialect": "zlink-service-wire-schema-v1",
+  "schemaVersion": 1,
+  "protocol": {
+    "name": "zlink-framework-service",
+    "magic": [90, 77],
+    "wireMajor": 1,
+    "byteOrder": "big-endian",
+    "headPrefixBytes": 5,
+    "requiredCapability": "framework-service-v11"
+  },
+  "bounds": [
+    { "name": "ridBytes", "value": 255 },
+    { "name": "shortTextBytes", "value": 255 },
+    { "name": "endpointBytes", "value": 4096 },
+    { "name": "blobBytes", "value": 65535 },
+    { "name": "metadataBytes", "value": 1024 },
+    { "name": "packetNameBytes", "value": 255 },
+    { "name": "contentTypeBytes", "value": 255 },
+    { "name": "relocationReferenceBytes", "value": 4096 },
+    { "name": "creationContentReferenceBytes", "value": 4096 },
+    { "name": "authorityStoreVersionBytes", "value": 4096 },
+    { "name": "wireU32CompleteMessageBytes", "value": 4294967295 },
+    { "name": "applicationPayloadAbsoluteBytes", "value": 4294966774 },
+    { "name": "descriptorEnvelopeBytes", "value": 1048576 },
+    { "name": "journalRecordCount", "value": 65535 },
+    { "name": "authorityEnvelopeBytes", "value": 1048576 },
+    { "name": "descriptorPageBytes", "value": 4194304 },
+    { "name": "authorityScanPageBytes", "value": 4194304 },
+    { "name": "relocationChunkBytes", "value": 67108864 },
+    { "name": "relocationChunkEnvelopeBytes", "value": 67108886 },
+    { "name": "relocationChunkCount", "value": 4096 },
+    { "name": "relocationLogicalBytes", "value": 274877906944 },
+    { "name": "relocationManifestBytes", "value": 33554432 },
+    { "name": "relocationControlEnvelopeBytes", "value": 1048576 },
+    { "name": "applicationVersionMax", "value": "9223372036854775807" },
+    { "name": "weightMax", "value": 100 },
+    { "name": "creationIntentBytes", "value": 1048576 },
+    { "name": "creationTerminalEnvelopeBytes", "value": 1048576 },
+    { "name": "maintenanceAggregateParticipants", "value": 1024 },
+    { "name": "relocationResourceParticipants", "value": 2048 },
+    { "name": "maintenanceAggregateBytes", "value": 1048576 },
+    { "name": "messageFollowHopCount", "value": 8 },
+    { "name": "messageFollowMessages", "value": 1024 },
+    { "name": "messageFollowBytes", "value": 16777216 },
+    { "name": "routingIdCollisionAttempts", "value": 8 },
+    { "name": "nodeActiveCapacityDefault", "value": 10000 },
+    { "name": "nodePendingCapacityDefault", "value": 128 },
+    { "name": "objectTypeCapacityMaximum", "value": 2147483647 }
+  ],
+  "flags": [
+    {
+      "name": "metadata",
+      "bit": 1,
+      "frame": { "$ref": "metadata-frame" },
+      "whenSet": "frame-required",
+      "whenClear": "frame-forbidden"
+    },
+    {
+      "name": "boundSession",
+      "bit": 2,
+      "controls": "bound-session-tail"
+    },
+    {
+      "name": "sourceSpotId",
+      "bit": 4,
+      "controls": "bound-session-tail"
+    },
+    {
+      "name": "extension",
+      "bit": 8,
+      "controls": "command-body-extension"
+    }
+  ],
+  "semanticContexts": [
+    {
+      "name": "originalOperationKind",
+      "valueType": { "$ref": "mesh-operation-kind" },
+      "source": "source-operation-table"
+    },
+    {
+      "name": "durableRelocationPresent",
+      "valueKind": "boolean",
+      "source": "current-relocation-authority"
+    },
+    {
+      "name": "applicationSnapshotPresent",
+      "valueKind": "boolean",
+      "source": "current-relocation-authority"
+    }
+  ],
+  "semanticConstraints": [
+    {
+      "kind": "implies",
+      "if": {
+        "contextEquals": {
+          "name": "applicationSnapshotPresent",
+          "value": true
+        }
+      },
+      "then": {
+        "contextEquals": {
+          "name": "durableRelocationPresent",
+          "value": true
+        }
+      }
+    },
+    {
+      "kind": "authority-operation-state-integrity",
+      "authorityType": "authority-payload-v1",
+      "rules": [
+        {
+        "operationKind": "steady",
+        "objectKind": "actor",
+        "relocationState": "absent",
+        "activationRecoveryState": "absent"
+        },
+        {
+        "operationKind": "steady",
+        "objectKind": "spot",
+        "spotKinds": ["entry", "user"],
+        "relocationState": "absent",
+        "activationRecoveryState": "absent"
+        },
+        {
+        "operationKind": "steady",
+        "objectKind": "spot",
+        "spotKind": "instance",
+        "instanceAuthorityStates": ["ready"],
+        "relocationState": "absent",
+        "activationRecoveryState": "optional-until-durable-first-handler-terminal-and-replay-cursor-update"
+        },
+        {
+        "operationKind": "coldActivation",
+        "objectKind": "spot",
+        "spotKind": "instance",
+        "relocationState": "absent",
+        "authorityStates": ["coldActivating"],
+        "activationRecoveryState": "absent"
+        },
+        {
+        "operationKind": "maintenanceRelocation",
+        "objectKinds": ["actor", "spot"],
+        "spotKinds": ["user", "instance"],
+        "relocationState": "present",
+        "relocationPhase": "non-none",
+        "userAuthorityStates": ["relocating"],
+        "instanceAuthorityStates": ["relocating"],
+        "instancePhaseStates": {
+          "relocating": ["preparing", "captured", "prepared", "committed", "activating", "activated", "cleaning", "completed", "aborted"]
+        },
+        "activationRecoveryState": "absent"
+        },
+        {
+        "operationKind": "close",
+        "objectKind": "spot",
+        "spotKinds": ["entry", "user", "instance"],
+        "relocationState": "absent",
+        "authorityStates": ["closing"],
+        "activationRecoveryState": "absent"
+        }
+      ]
+    },
+    {
+      "kind": "spot-authority-aggregate-integrity",
+      "authorityObjectType": "authority-object-identity",
+      "canonicalKeyKind": "spot",
+      "canonicalKeyComponents": ["spotId"],
+      "spotKinds": ["entry", "user", "instance"],
+      "singleAuthoritativeRow": true,
+      "typedSpotLocation": "framework-decoded-projection-not-separate-authority",
+      "createTransitions": {
+        "entry": "new-object-cas",
+        "user": "new-object-cas",
+        "instance": "new-object-cas"
+      },
+      "sharedGeneration": "provider-object-generation-per-canonical-spot-key",
+      "kindTransition": "requires-prior-row-delete-then-new-object-cas-on-same-key",
+      "providerPayloadInterpretation": "forbidden"
+    },
+    {
+      "kind": "relocation-journal-integrity",
+      "relocationType": "relocation-envelope-v1",
+      "progressField": "participantProgress",
+      "journalField": "journal",
+      "completionField": "terminalCompletions",
+      "participantField": "participantId",
+      "sequenceField": "sequence",
+      "acceptedBoundaryField": "acceptedBoundary",
+      "operationField": "operationId",
+      "participantMustExistInProgress": true,
+      "sequenceAtOrBelowAcceptedBoundary": true,
+      "terminalCompletionMustMatchRequestRecord": true,
+      "requestReplayBinding": "operation-id-exact-request-source-fence-and-reply-route-id-are-one-immutable-accepted-record-identity",
+      "operationIdRole": "dedupe-identity-never-a-reply-route-substitute",
+      "authorityRelocationAtomicity": {
+        "mutationEvents": ["completion-append", "replyRelayAck", "requestSourceLeaseExpired"],
+        "writeOrder": "new-immutable-relocation-root-then-one-expected-store-version-authority-cas",
+        "casFields": ["relocation-reference", "relocation-checksum", "terminalCompletionCount", "pendingRelayCount"],
+        "terminalCompletionCount": "equals-referenced-relocation-terminal-completion-entry-count",
+        "pendingRelayCount": "equals-referenced-relocation-deliveryState-pending-count",
+        "completedGate": "accepted-request-count-equals-terminal-completion-count-and-pending-relay-count-zero",
+        "deliveryStateTransition": "pending-to-terminalReceived-or-alreadyTerminal-or-sourceLeaseExpired-only",
+        "mismatch": "recovery-error-and-completed-forbidden"
+      },
+      "requestRecordKinds": [
+        "nodeRequest",
+        "channelRequest",
+        "spotRequest",
+        "actorRequest",
+        "instanceSpotActivation"
+      ],
+      "instanceRequestDiscriminator": "request"
+    },
+    {
+      "kind": "location-relocation-storage-integrity",
+      "locationAuthorityOwns": [
+        "descriptor-and-owner-lease",
+        "object-authority-and-reservation",
+        "aggregate-generation-and-canonical-participant-mutations",
+        "inventory-digest-and-relocation-reference",
+        "participant-replay-cursors-and-terminal-completion-count"
+      ],
+      "relocationRootRole": "immutable-payload-lookup-projection-never-authority",
+      "publicationOrder": [
+        "write-all-immutable-relocation-chunks",
+        "write-immutable-relocation-root-manifest",
+        "read-and-verify-complete-root-from-relocation-provider",
+        "one-location-expected-store-version-cas-publishes-reference-checksum-replay-and-completion-counts"
+      ],
+      "aggregateAuthority": {
+        "format": "maintenance-aggregate-v1",
+        "participantOrder": "canonical-authority-key-bytes",
+        "atomicFields": [
+          "aggregateId",
+          "aggregateGeneration",
+          "participants-and-mutations",
+          "inventoryDigestSha256",
+          "relocationReference-and-checksum"
+        ],
+        "relocationManifestDigest": "must-equal-location-authority-inventory-digest",
+        "manifestAuthority": "forbidden"
+      },
+      "replacement": "write-and-verify-new-root-before-one-location-authority-cas-replaces-reference-and-counts",
+      "orphanCleanup": "unpublished-or-replaced-root-is-not-authority-and-is-deleted-or-expires",
+      "deleteOrder": "release-or-replace-location-authority-reference-before-idempotent-relocation-root-delete",
+      "backend": "location-and-relocation-providers-may-use-different-backends-connections-and-failure-domains",
+      "clock": "retention-and-renewal-use-relocation-provider-storeNow-and-expiresAt-only",
+      "publishedRelocationDataLoss": {
+        "closedTerminalTriggers": [
+          "permanent-published-payload-missing",
+          "published-payload-checksum-mismatch",
+          "published-payload-inventory-digest-mismatch"
+        ],
+        "failureCode": "relocationDataLost",
+        "retriable": false,
+        "rollback": "forbidden",
+        "publication": "Ready-and-Completed-forbidden"
+      }
+    },
+    {
+      "kind": "reply-relay-context-integrity",
+      "command": "replyRelay",
+      "coldActivation": {
+        "readyBarrierAuthorityState": "ready",
+        "readyBarrierOperationKind": "steady",
+        "activationFailureAuthorityState": "coldActivating",
+        "activationFailureOperationKind": "coldActivation",
+        "activationFailureForbidsTerminalResult": "ok"
+      },
+      "maintenanceRelocation": {
+        "requiresRelocationId": true,
+        "requiresTargetAttemptGenerationAsPeerFence": true,
+        "requiresParticipantSequence": true
+      },
+      "acknowledgement": {
+        "command": "replyRelayAck",
+        "scope": "maintenanceRelocation-only",
+        "identity": ["stable-relocation-id", "exact-request-source-fence", "operation-id", "reply-route-id"],
+        "requestSource": "authenticated-exact-source-owner-lease-node-rid-and-generation",
+        "statuses": ["terminalReceived", "alreadyTerminal"],
+        "targetPersistence": "relocation-root-cas-before-ack-effect",
+        "targetRetry": "retransmit-same-terminal-across-connection-replacement-until-ack-or-exact-request-source-owner-lease-expiry",
+        "sourceDuplicate": "reply-already-terminal-still-emits-alreadyTerminal-ack",
+        "completionGate": "pending-relay-count-zero-and-each-accepted-request-has-authenticated-ack-or-store-confirmed-exact-request-source-owner-lease-expiry",
+        "physicalConnectionClose": "never-terminal-proof",
+        "retireWhileSourceLeaseValid": "forceStopped-and-retain-relocation-root-and-reply-bytes-for-retention-window"
+      },
+      "terminalOwnership": "stable-relocation-id-exact-request-source-fence-operation-id-and-reply-route-id-once-independent-of-target-attempt",
+      "replyRoute": "request-and-ack-echo-only"
+    },
+    {
+      "kind": "instance-placement-authority-fence",
+      "routeType": "instance-route-v1",
+      "requestBoundFields": [
+        "targetNodeRid",
+        "targetNodeGeneration",
+        "targetSpotId",
+        "ready.authority-or-coldActivation.stableType-and-targetDescriptorVersion",
+        "coldActivation.deadlineUnixMs"
+      ],
+      "targetComparison": "exact-current-authority-before-mailbox-admission",
+      "sourceOrder": "resolve-select-target-and-submit-complete-first-message-activation-envelope-without-owner-claim-or-reservation",
+      "newObjectGenerations": "nonzero-object-and-authority-owner-generations-allocated-by-provider-cas",
+      "targetClaim": "target-rechecks-current-authority-persists-complete-activation-recovery-root-and-cas-winner-reserves-before-factory",
+      "durableActivationIntent": "coldActivating-row-owned-by-exact-target-host-with-provider-issued-pending-creation-projection",
+      "targetRecovery": "serving-gate-initial-authority-scan-and-background-bounded-reconcile-resume-owned-coldActivating-with-exact-reservation-and-complete-first-message-envelope",
+      "readyOrdering": "durable-activation-inbox-first-record-before-ready-commit-handler-behind-barrier-ready-retains-recovery-root-and-cursor-queue-head-restore-before-barrier-open",
+      "recoveryRelease": "durable-first-handler-terminal-completion-then-replay-cursor-equals-inbox-sequence-then-preserve-cas-release-never-queue-admission",
+      "orphanRule": "recovery-root-put-before-reserve-or-conflict-loser-is-unpublished-orphan-retention-or-idempotent-delete",
+      "activationRegistry": "object-key-object-generation-authority-owner-generation-and-owner-token-converge-late-submit-and-scan-to-one-local-barrier",
+      "staleTargetRecovery": "expected-store-version-newOwner-cas-preserves-object-generation-and-selects-eligible-owner",
+      "originalOperationAfterLostSubmit": "no-hidden-resubmit-caller-normal-timeout-or-failure",
+      "activationFailure": "seal-local-barrier-terminal-once-typed-request-failures-and-one-way-drop-events-then-exact-fenced-delete",
+      "failureDeleteFence": "same-store-version-object-generation-authority-owner-generation-owner-id-and-owner-lease-generation",
+      "failureDeleteAmbiguity": "exact-read-reconcile-registry-remains-failed-until-missing-confirmed",
+      "nextActivation": "only-next-caller-after-missing-may-newObject-claim-new-object-and-owner-generations",
+      "failureCrashRecovery": "owned-coldActivating-scan-may-retry-retry-safe-factory-before-delete-is-confirmed",
+      "deadline": "resolve-select-claim-and-outbound-admission-share-one-source-send-deadline",
+      "oneWay": "after-outbound-admission-does-not-wait-for-factory-or-ready",
+      "leaseDeadline": "store-time-to-local-monotonic-from-read-start",
+      "publicExposure": "forbidden"
+    },
+    {
+      "kind": "actor-route-authority-fence",
+      "routeType": "actor-route-fence",
+      "membershipSensitiveCommands": [
+        "actorSend",
+        "actorRequest",
+        "actorDestroy",
+        "actorJoin",
+        "boundSessionSend",
+        "boundSessionBind"
+      ],
+      "frozenRecordKinds": ["actorSend", "actorRequest"],
+      "messageFollowKey": [
+        "actorId",
+        "objectGeneration",
+        "sourceAuthorityOwnerGeneration",
+        "targetAuthorityOwnerGeneration",
+        "sourceOwnerLeaseGeneration",
+        "targetOwnerLeaseGeneration"
+      ],
+      "targetComparison": "exact-current-owner-authority-before-mailbox-admission",
+      "publicExposure": "forbidden"
+    },
+    {
+      "kind": "instance-operation-timeout-ownership",
+      "command": "instanceSpot",
+      "wireField": "forbidden",
+      "owner": "source-operation-table",
+      "deadline": "single-monotonic-deadline-before-resolve",
+      "replay": "does-not-restart-or-extend-deadline",
+      "send": "no-operation-timeout"
+    },
+    {
+      "kind": "user-spot-terminal-operation-integrity",
+      "commands": {
+        "create": "userSpotCreate",
+        "close": "userSpotClose",
+        "terminal": "reply"
+      },
+      "scope": "route-mesh-object-client-or-server-to-exact-object-server-only",
+      "operationIdentity": "source-node-rid-source-node-generation-and-operation-id-terminal-once",
+      "deadline": "one-source-deadline-covering-resolve-reservation-remote-execution-and-terminal-reply-never-restarted",
+      "create": {
+        "authorityKey": "global-spot-id-user-kind-only",
+        "reservation": "provider-issued-reservation-id-exact-store-version-object-generation-authority-owner-generation-target-node-lifecycle-owner-lease-and-pending-capacity",
+        "content": "target-exact-reads-immutable-pending-creation-content-from-location-store-never-command-payload",
+        "admissionOrder": [
+          "authenticate-source-and-exact-target-lifecycle",
+          "exact-read-pending-user-spot-authority",
+          "compare-key-stable-type-reservation-store-version-owner-and-target-fences",
+          "factory-and-initialize",
+          "same-reservation-commit"
+        ],
+        "terminalStates": ["existing", "created", "rejected"],
+        "terminalTail": "exact-spot-ref-for-all-three-states",
+        "applicationReply": "forbidden-for-existing-optional-for-created-or-rejected"
+      },
+      "close": {
+        "target": "exact-spot-ref-target-node-lifecycle-authority-owner-generation-and-store-version",
+        "admissionOrder": [
+          "authenticate-source-and-exact-target-lifecycle",
+          "exact-read-current-user-spot-authority",
+          "reject-object-generation-or-authority-owner-generation-or-store-version-mismatch",
+          "reject-relocation-or-closing-conflict",
+          "reject-nonempty-active-actor-membership",
+          "closing-cas-and-local-admission-seal"
+        ],
+        "terminalTail": "closed-bool-false-only-for-idempotent-missing-or-active-membership",
+        "retarget": "forbidden"
+      },
+      "polling": "location-row-polling-is-not-terminal-completion",
+      "applicationControlPacket": "forbidden"
+    },
+    {
+      "kind": "actor-create-terminal-operation-integrity",
+      "commands": {
+        "create": "actorCreate",
+        "terminal": "reply"
+      },
+      "scope": "route-mesh-object-client-or-server-to-exact-object-server-only",
+      "operationIdentity": "source-node-rid-source-node-generation-and-operation-id-terminal-once",
+      "deadline": "one-source-deadline-covering-resolve-reservation-remote-execution-and-terminal-reply-never-restarted",
+      "creationInput": "immutable-content-reference-in-reserved-authority-command-carries-no-application-payload",
+      "concurrency": "one-callback-per-actor-reservation-distinct-operation-waits-then-ready-existing-or-rejected-cleanup-new-reservation",
+      "terminalResult": "same-operation-only-existing-created-or-rejected-with-optional-application-payload",
+      "terminalEnvelopeMaximumBytes": { "$bound": "creationTerminalEnvelopeBytes" },
+      "terminalRetention": "original-operation-deadline-plus-300000ms-provider-store-time",
+      "rejectedPublication": "no-ready-authority-no-active-capacity-exact-reserved-cleanup",
+      "applicationControlPacket": "forbidden"
+    },
+    {
+      "kind": "relocation-authority-phase-boundaries",
+      "authorityType": "authority-payload-v1",
+      "writes": "exact-store-version-cas-each-phase",
+      "rules": [
+        {
+          "phase": "preparing",
+          "after": ["local-admission-seal", "accepted-boundaries-fixed"],
+          "relocation": "absent",
+          "targetReservation": "absent"
+        },
+        {
+          "phase": "captured",
+          "after": ["immutable-relocation-put"],
+          "relocation": "present",
+          "targetReservation": "absent"
+        },
+        {
+          "phase": "prepared",
+          "after": [
+            "relocation-reserved-ack-validated",
+            "target-factory-restore-complete",
+            "journal-timer-staging-complete"
+          ],
+          "relocation": "present",
+          "targetReservation": "present"
+        }
+      ],
+      "closedOwnerTargetRules": {
+        "preparingAndCaptured": "main-owner-is-immutable-source-target-attempt-token-and-reservation-absent",
+        "prepared": "main-owner-is-source-exact-nonzero-target-attempt-owner-lease-node-reservation-and-relocation-present",
+        "committedThroughCompleted": "main-owner-is-exact-current-target-and-same-attempt-reservation-relocation-present",
+        "aborted": "main-owner-is-source-until-session-abort-ack-relocation-orphan-cleanup-and-steady-source-normalization"
+      },
+      "preparedToCommitted": "one-newOwner-cas",
+      "sourceFence": "source-owner-id-lease-generation-node-rid-and-generation-immutable-through-terminal",
+      "replacementMutation": "target-attempt-target-owner-lease-node-and-reservation-only-postcommit-reenters-committed",
+      "readyProjection": "forbidden-while-maintenance-relocation-payload-present-including-aborted"
+    },
+    {
+      "kind": "complete-message-bound-integrity",
+      "admissionType": "service-admission",
+      "wireField": "normalizedEffectiveMaxMessageBytes",
+      "range": "1..4294967295",
+      "normalization": {
+        "publicZero": "binding-or-transport-effective-receive-maximum",
+        "unlimitedTransport": 4294967295,
+        "positiveAboveWireMaximum": "startup-configuration-error"
+      },
+      "senderLimit": "minimum-local-and-remote-normalized-bounds",
+      "receiverLimit": "own-admitted-normalized-bound",
+      "lifetimeStability": "startup-only-immutable-for-admitted-connection-lifetime",
+      "liveUpdate": "forbidden-weight-only-remains-live-updatable",
+      "enforcement": "immediately-after-complete-envelope-length-prefix-before-allocation",
+      "payloadLimit": "negotiated-complete-message-bound-minus-actual-envelope-overhead",
+      "mismatch": "oversize-protocol-error-and-connection-not-ready"
+    },
+    {
+      "kind": "participant-sequence-domain",
+      "sequenceFields": [
+        "journal-entry.sequence",
+        "relocation-pending-timer-tick.sequence",
+        "request-completion-entry.sequence",
+        "relocationData.sequence",
+        "reply-relay-context.maintenanceRelocation.sequence"
+      ],
+      "relocationQueueOrdering": "journal-entry-and-pending-timer-tick-share-one-strictly-increasing-participant-sequence",
+      "crossVectorDuplicate": "forbidden-between-journal-entry-and-relocation-pending-timer-tick-only-completion-and-relay-reference-the-original-sequence",
+      "sequenceStart": 1,
+      "zeroMeaning": "no-accepted-or-replayed-record",
+      "progressFields": ["acceptedBoundary", "replayCursor", "highWater"],
+      "overflow": "seal-participant-and-fail-new-admission-terminally",
+      "wrap": "forbidden"
+    },
+    {
+      "kind": "terminal-failure-integrity",
+      "failureCodeType": "framework-error-code",
+      "fields": [
+        "request-completion-entry.failureCode",
+        "frozen-record-body.completion.failureCode",
+        "reply.failureCode",
+        "replyRelay.failureCode",
+        "relocation-control-data.failureCode"
+      ],
+      "success": {
+        "terminalResult": "ok",
+        "failureCode": "none",
+        "applicationPayload": "operation-contract-dependent"
+      },
+      "boundaryFailure": {
+        "terminalResults": ["timedOut", "terminated", "busy", "notConnected", "invalidArgument", "invalidState", "notSupported", "backpressured"],
+        "failureCode": "none",
+        "applicationPayload": "forbidden"
+      },
+      "typedFrameworkFailure": {
+        "terminalResults": ["notFound", "protocolError", "internalError", "rejected", "conflict"],
+        "failureCode": "non-none",
+        "applicationPayload": "forbidden",
+        "exactResultByFailureCode": {
+          "actorRouteNotFound": "notFound",
+          "actorCreateFailed": "internalError",
+          "actorAlreadyExists": "conflict",
+          "actorTypeMismatch": "conflict",
+          "spotCreateFailed": "internalError",
+          "spotRouteNotFound": "notFound",
+          "spotTypeMismatch": "conflict",
+          "actorSessionNotBound": "notFound",
+          "handlerNotFound": "notFound",
+          "routeHandlerNotFound": "notFound",
+          "actorDispatchHandlerNotFound": "notFound",
+          "payloadDecodeFailed": "protocolError",
+          "routeNotConnected": "internalError",
+          "requestTargetNotFound": "notFound",
+          "requestRejected": "rejected",
+          "requestProtocolError": "protocolError",
+          "requestFailed": "internalError",
+          "workerQueueFull": "rejected",
+          "workerTimedOut": "internalError",
+          "workerFailed": "internalError",
+          "actorLocationStale": "conflict",
+          "actorCreateRejected": "rejected",
+          "spotGenerationStale": "conflict",
+          "spotMoving": "conflict",
+          "relocationDataLost": "internalError"
+        }
+      },
+      "unknownFailureCode": "protocol-error-before-application-dispatch",
+      "publicMapping": "wire-value-minus-one",
+      "reservedWireValues": {
+        "first": 23,
+        "last": 32,
+        "reason": "public-only-framework-errors-not-valid-on-service-wire"
+      }
+    },
+    {
+      "kind": "actor-route-transition-integrity",
+      "spotRefType": "spot-ref",
+      "optionalSpotRefType": "optional-spot-ref",
+      "membershipType": "spot-membership",
+      "optionalMembershipType": "optional-spot-membership",
+      "actorJoined": {
+        "previous": "optional",
+        "current": "required",
+        "currentAuthorityOwnerGeneration": "exact-current-authority",
+        "existingPreviousOwnerOrder": "current-greater-than-previous"
+      },
+      "actorLeft": {
+        "previous": "required",
+        "currentAuthorityOwnerGeneration": "exact-current-authority",
+        "authorityOwnerGenerationOrder": "current-greater-than-previous"
+      },
+      "frozenSpotControl": {
+        "created": "current-only",
+        "joined": "optional-previous-and-required-current",
+        "left": "previous-and-current",
+        "disconnected": "current-only",
+        "destroyed": "previous-only",
+        "sameActorAcrossTransition": "exact-actor-id-and-generation",
+        "joinedCommittedOwnerOrder": "current-greater-than-previous",
+        "leftAuthorityOwnerGenerationOrder": "current-greater-than-previous",
+        "authorityComparison": "exact-current-authority-before-replay-dispatch",
+        "failureDelivery": "terminal-completion-not-lifecycle-record"
+      },
+      "authorityOwnerGenerationOverflow": "terminal-authority-error-no-wire-emission"
+    },
+    {
+      "kind": "relocation-participant-resource-integrity",
+      "participantIdentity": {
+        "standaloneObjectMailbox": "exactly-participant-id-1-no-binding-fields",
+        "userSpotObjectMailboxes": "participant-id-1-is-user-spot-then-member-actors-from-2-in-ascending-global-actor-id-order-no-binding-fields",
+        "boundSession": "participant-id-after-all-object-mailboxes-in-owning-object-participant-id-then-ascending-session-rid-order-with-nonzero-binding-generation",
+        "boundSessionOwner": "exact-owning-actor-from-current-binding-record",
+        "sessionOwnerRoute": "node-rid-lifecycle-generation-owner-id-and-lease-generation-match-current-descriptor-and-host-lease-before-seal-or-route-switch",
+        "sessionRid": "unique-within-relocation-transaction",
+        "stability": "same-id-and-fence-for-relocation-recovery-and-retransmit"
+      },
+      "cardinality": {
+        "actor": "exactly-one-objectMailbox-and-zero-or-one-boundSession",
+        "instanceSpot": "exactly-one-objectMailbox-and-no-boundSession",
+        "userSpotAggregate": "exactly-one-user-spot-objectMailbox-and-one-objectMailbox-per-canonical-member-actor-plus-zero-or-one-boundSession-per-member-actor",
+        "userSpotObjectMaximum": { "$bound": "maintenanceAggregateParticipants" },
+        "resourceMaximum": { "$bound": "relocationResourceParticipants" }
+      },
+      "relocationReady": {
+        "targetToSource": {
+          "role": "target",
+          "offeredMessages": "nonzero",
+          "offeredBytes": "nonzero",
+          "participants": "empty"
+        },
+        "sourceToTarget": {
+          "role": "source",
+          "offeredMessages": 0,
+          "offeredBytes": 0,
+          "participants": "nonempty",
+          "participantIdentity": "required-with-zero-capable-exact-allowances",
+          "checkedAllowanceSums": "less-than-or-equal-stored-target-offer"
+        }
+      },
+      "relocationData": {
+        "participant": "must-be-negotiated",
+        "sequence": "nonzero-and-less-than-or-equal-allowanceMessages",
+        "cumulativeBytes": "sum-unique-canonical-frozen-record-encoded-bytes-less-than-or-equal-allowanceBytes",
+        "duplicateSameBytes": "idempotent-no-capacity-recharge",
+        "duplicateDifferentBytes": "protocol-error"
+      },
+      "relocationAck": {
+        "participant": "must-be-negotiated",
+        "highWater": "less-than-or-equal-allowanceMessages"
+      },
+      "relocationSeal": {
+        "request": {
+          "response": false,
+          "direction": "target-to-source",
+          "participants": "empty"
+        },
+        "response": {
+          "response": true,
+          "direction": "source-to-target",
+          "participants": "exact-negotiated-set-once",
+          "highWater": "less-than-or-equal-allowanceMessages"
+        }
+      },
+      "checkedU64Overflow": "protocol-error"
+    },
+    {
+      "kind": "relocation-reservation-handshake-integrity",
+      "sequence": [
+        "source-relocationPrepare-exact-sealed-inventory",
+        "target-relocationReady-capacity-offer",
+        "source-relocationReady-exact-accept",
+        "target-relocationReserved-reservation-ack",
+        "source-prepared-authority-cas"
+      ],
+      "identity": ["stable-relocation-id", "target-attempt-generation", "object-identity"],
+      "prepare": {
+        "phase": "captured",
+        "relocation": "required",
+        "requirements": "exact-participant-set-and-checked-message-byte-sums"
+      },
+      "offer": "nonzero-capacity-and-empty-participant-vector",
+      "accept": "exact-prepare-participant-set-and-requirements-within-offer",
+      "reservationAck": "exact-accepted-participants-target-node-owner-lease-and-nonzero-reservation-generation",
+      "preparedGate": "matching-reservation-ack-and-exact-current-target-host-lease-read-before-cas",
+      "committedGate": "exact-current-target-host-lease-read-before-cas",
+      "activationGate": "exact-current-target-host-lease-read-before-activation",
+      "duplicate": "idempotent-if-identical-else-protocol-error",
+      "crossCandidateReplay": "forbidden"
+    },
+    {
+      "kind": "relocation-replacement-round-integrity",
+      "authorityType": "authority-payload-v1",
+      "fenceType": "relocation-coordinator-fence",
+      "rounds": {
+        "initial": {
+          "phase": "captured",
+          "initiatorRoles": ["source"],
+          "proposedTargetAttemptGeneration": "one"
+        },
+        "preparedReplacement": {
+          "phase": "prepared",
+          "initiatorRoles": ["source", "coordinator"],
+          "proposedTargetAttemptGeneration": "current-target-attempt-generation-plus-one"
+        },
+        "postCommitReplacement": {
+          "phases": ["committed", "activating", "activated", "cleaning"],
+          "initiatorRoles": ["coordinator"],
+          "proposedTargetAttemptGeneration": "current-target-attempt-generation-plus-one"
+        }
+      },
+      "requirementsSource": "exact-current-relocation-participant-inventory",
+      "sequence": [
+        "initiator-relocationPrepare",
+        "candidate-relocationReady-offer",
+        "initiator-relocationReady-accept",
+        "candidate-relocationReserved-ack",
+        "expected-version-authority-cas"
+      ],
+      "replacementCas": "after-ack-atomically-replace-target-attempt-generation-target-and-reservation-prepared-stays-prepared-post-commit-resets-to-committed",
+      "oldTargetFence": "old-target-attempt-generation-or-authority-store-version-rejected",
+      "relocationIdentity": "stable-relocation-id-relocation-root-and-journal-never-rewritten-only-for-target-replacement",
+      "targetActivationRetry": "factory-and-restore-are-at-least-once-across-attempts-and-stale-attempts-may-overlap",
+      "targetCommitFence": "only-current-exact-owner-and-target-attempt-may-commit-completion-or-open-admission",
+      "callbackContract": "retry-safe-no-exactly-once-external-side-effect-guarantee-and-no-public-relocation-id",
+      "crossCandidateReplay": "candidate-node-rid-and-generation-must-match-admitted-peer",
+      "ackBeforeCasCrash": "retry-identical-round-or-release-orphan-reservation-before-new-candidate",
+      "casBeforeReplyCrash": "read-current-authority-and-continue-new-target-without-second-cas"
+    },
+    {
+      "kind": "relocation-coordinator-authorization-integrity",
+      "authorityType": "authority-payload-v1",
+      "fenceType": "relocation-coordinator-fence",
+      "receiverValidation": [
+        "exact-read-current-authority-by-object-key",
+        "compare-relocation-id-target-attempt-generation-when-present-phase-and-expected-store-version",
+        "compare-coordinator-owner-id-lease-generation-node-rid-and-node-generation",
+        "read-current-owner-lease-token",
+        "match-authenticated-admitted-peer-rid-and-generation-to-declared-sender-role"
+      ],
+      "coordinatorSender": "allowed-only-when-authenticated-peer-matches-current-coordinator-node-and-lease-token",
+      "coordinatorTakeover": "expected-version-cas-updates-only-coordinator-fence-unless-object-owner-also-changes",
+      "staleTakeover": "protocol-error-no-mutation",
+      "aba": "global-lease-generation-prevents-owner-id-reuse-from-revalidating-old-control"
+    },
+    {
+      "kind": "bound-session-relocation-barrier-integrity",
+      "sequence": [
+        "source-sessionRelocationSeal",
+        "session-owner-reversible-ingress-seal",
+        "session-owner-sessionRelocationSealed-high-water",
+        "source-receives-every-sequence-through-high-water",
+        "source-captured-relocation",
+        "target-restores-and-replays-through-high-water",
+        "target-stage-bound-session-route-without-switch-or-unseal",
+        "durable-source-cleanup-state-cas",
+        "completed-authority-cas",
+        "target-sessionRelocationRoute-commit",
+        "session-owner-atomic-route-switch-after-completed",
+        "session-owner-sessionRelocationRouted-ack",
+        "maintenance-authority-normalized-to-steady",
+        "target-open-application-admission-and-publish-ready"
+      ],
+      "participantIdentity": "session-owner-node-rid-generation-owner-id-lease-generation-session-rid-binding-generation",
+      "recordSequence": "bound-session-actorSend-or-actorRequest-sourceSessionSequence",
+      "relocationRelation": "participant-sequence-equals-session-sequence-and-accepted-boundary-equals-sealed-high-water",
+      "commitFence": "binding-generation-actor-object-generation-previous-and-target-owner-generation-session-owner-node-generation",
+      "sessionOwnerLeaseFence": "owner-id-and-lease-generation-exact-descriptor-and-current-host-lease-read",
+      "senderAdmissionDeadline": "local-monotonic-deadline-derived-from-last-successful-host-lease-read",
+      "staleSessionOwnerLease": "protocol-error-no-seal-or-route-switch",
+      "commitPhase": "completed-only",
+      "targetAdmission": "sealed-through-activated-cleaning-completed-and-route-ack-open-only-after-steady-normalization",
+      "abort": "source-remains-sealed-aborted-authority-cas-first-then-abort-route-and-routed-ack-cleanup-steady-source-normalization-then-reopen",
+      "duplicate": "idempotent-if-identical-else-protocol-error",
+      "missingSequence": "do-not-capture-or-commit",
+      "sessionOwnerRestart": "stale-node-generation-protocol-error-no-route-switch"
+    },
+    {
+      "kind": "relocation-complete-integrity",
+      "command": "relocationComplete",
+      "direction": "source-or-current-coordinator-to-current-target",
+      "preconditions": [
+        "all-negotiated-participants-sealed",
+        "target-activation-succeeded",
+        "durable-source-cleanup-state-is-completed-or-sourceLeaseExpired",
+        "authority-phase-activated-or-cleaning-or-completed"
+      ],
+      "sourceProof": "completed-requires-authenticated-exact-stored-source-token-sourceLeaseExpired-requires-current-coordinator-exact-read-of-that-token-as-missing-or-stale",
+      "targetEffect": "validate-durable-source-cleanup-state-and-notify-finalization-once",
+      "cleanupGate": "target-activation-complete-and-durable-source-cleanup-state-terminal",
+      "servingGate": "completed-authority-cas-then-bound-session-route-acks-before-application-admission-or-ready-publish",
+      "replacementWindow": "all-nonterminal-phases-before-completed-from-immutable-relocation",
+      "afterCompletedFailure": "ordinary-owner-loss-never-replays-retired-relocation",
+      "finalization": "after-completed-and-bound-session-route-acks-cas-maintenance-authority-to-steady-without-relocation-before-ready-projection",
+      "resolverProjection": "maintenance-relocation-authority-is-never-ready-even-when-target-owner-is-recorded",
+      "duplicate": "idempotent-by-stable-relocation-id-and-durable-source-cleanup-state-target-attempt-is-only-a-peer-fence",
+      "reorder": "hold-until-preconditions",
+      "wrongDirection": "protocol-error"
+    },
+    {
+      "kind": "transport-admission-integrity",
+      "admissionType": "service-admission",
+      "topologies": {
+        "routeMesh": {
+          "descriptor": "route-mesh-admission",
+          "meshName": "required"
+        },
+        "clientServer": {
+          "descriptor": "client-server-admission",
+          "meshName": "forbidden",
+          "helloRole": "client",
+          "admitAndUpdateRole": "server",
+          "direction": "clientToServer",
+          "clientToServerCommands": ["channelSend", "channelRequest", "livenessProbe", "livenessAck"],
+          "serverToClientCommands": ["reply", "livenessProbe", "livenessAck", "update", "reject"],
+          "allOtherServiceCommands": "protocol-error"
+        }
+      },
+      "generation": "nonzero-opaque-lifecycle-equality-token-no-numeric-ordering-store-backed-fenced-by-exact-owner-lease-manual-generated-by-csprng-and-fenced-by-current-connection-handover",
+      "revision": "same-generation-strictly-increasing-update-only",
+      "securityIdentity": "exact-transport-authenticated-identity-match",
+      "connectionLifetime": "admission-bound-to-current-physical-connection-identity-no-cross-connection-replay",
+      "crossTopologyReplay": "protocol-error-before-application-dispatch",
+      "oversizeDescriptor": "reject-before-allocation"
+    },
+    {
+      "kind": "admission-reject-integrity",
+      "reasonType": "reject-reason",
+      "unknownReason": "protocol-error",
+      "localErrnoOnWire": "forbidden"
+    },
+    {
+      "kind": "frozen-record-integrity",
+      "recordType": "frozen-record",
+      "operationMatrix": {
+        "nodeSend": { "operationKind": "none", "operationId": "zero" },
+        "nodeRequest": { "operationKind": "nodeRequest", "operationId": "nonzero" },
+        "channelSend": { "operationKind": "none", "operationId": "zero" },
+        "channelRequest": { "operationKind": "channelRequest", "operationId": "nonzero" },
+        "spotSend": { "operationKind": "none", "operationId": "nonzero-for-message-follow-dedupe" },
+        "spotRequest": { "operationKind": "spotRequest", "operationId": "nonzero" },
+        "spotMulticast": { "operationKind": "none", "operationId": "zero" },
+        "spotControl": { "operationKinds": ["none", "actorJoin", "actorLeave", "actorDestroy"], "operationId": "nonzero-iff-operation-kind-non-none" },
+        "actorSend": { "operationKind": "none", "operationId": "nonzero-for-message-follow-dedupe" },
+        "actorRequest": { "operationKind": "actorRequest", "operationId": "nonzero" },
+        "completion": { "operationKind": "non-none", "operationId": "nonzero" },
+        "sendReady": { "operationKind": "none", "operationId": "zero" },
+        "relocationControl": { "operationKind": "none", "operationId": "zero" },
+        "instanceSpotActivation": { "innerSend": ["none", "zero"], "innerRequest": ["instanceSpotRequest", "nonzero"] }
+      },
+      "replyRoute": {
+        "requiredNonzeroOperationKinds": ["nodeRequest", "channelRequest", "spotRequest", "actorRequest", "instanceSpotRequest"],
+        "allOtherOperationKinds": "forbidden",
+        "source": "exact-original-request-correlation",
+        "operationIdRole": "dedupe-only-not-route"
+      },
+      "metadata": {
+        "allowedRecordKinds": ["nodeSend", "nodeRequest", "channelSend", "channelRequest", "spotSend", "spotRequest", "spotMulticast", "actorSend", "actorRequest", "instanceSpotActivation"],
+        "allOtherRecordKinds": "forbidden"
+      },
+      "sourceIdentity": {
+        "applicationRecordKinds": "node-spot-actor-or-boundSession-closed-union-with-node-lifecycle-generation",
+        "infrastructureRecordKinds": "node-source-only-with-lifecycle-generation",
+        "boundSession": "actor-session-rid-sequence-and-nonzero-binding-generation-all-required",
+        "remoteUseFence": "source-node-generation-must-exactly-match-current-admitted-descriptor-and-connection-without-numeric-comparison",
+        "runtimeLifetimeUnion": "leaseBacked-owner-id-and-lease-generation-or-connectionBound-current-physical-connection-lifetime",
+        "durableRecord": "leaseBacked-only-all-frozen-sources-carry-exact-owner-id-and-lease-generation",
+        "preCapturedDrain": "all-connectionBound-accepted-work-and-all-boundSession-requests-must-reach-terminal-before-captured-cas",
+        "drainFailure": "pre-captured-abort-and-retire-blocked-relocationDisabled-then-restore-admission",
+        "connectionBoundFrozenRecord": "forbidden"
+      },
+      "sourceIdentityMismatch": "protocol-error-before-replay-or-relocation-admission"
+    },
+    {
+      "kind": "durable-operation-identity-integrity",
+      "relocationId": "runtime-generated-nonzero-128-bit-csprng",
+      "relocationIdScope": "unique-across-active-and-retained-relocation-roots-collision-rejected-and-regenerated",
+      "operationId": "nonzero-unique-within-source-owner-lifecycle-for-terminal-dedupe",
+      "replyRouteId": "nonzero-unique-within-source-owner-lifecycle-for-correlation-only",
+      "counterWrapOrReuse": "forbidden-terminal-runtime-error",
+      "terminalIdentity": "stable-relocation-id-plus-exact-request-source-fence-plus-operation-id",
+      "publicExposure": "forbidden"
+    },
+    {
+      "kind": "owner-lease-timing-integrity",
+      "renewIntervalMs": 5000,
+      "ttlMs": 15000,
+      "renewTimeoutMs": 3000,
+      "fencingMarginMs": 5000,
+      "startupRelation": "renewInterval-plus-renewTimeout-strictly-less-than-ttl-minus-fencingMargin",
+      "scope": "all-location-store-hosts-independent-of-routing-allocation"
+    },
+    {
+      "kind": "local-creation-publication-integrity",
+      "objectKinds": ["actor", "userSpot"],
+      "newObjectCas": "allocates-final-object-and-authority-owner-generations-and-creating-row-before-factory",
+      "actorCreate": "typed-factory-initialize-and-initial-entry-membership-before-ready-cas",
+      "userSpotCreate": "factory-configure-and-initialize-before-ready-cas",
+      "readyCas": "same-store-version-object-generation-authority-owner-generation-and-exact-owner-lease",
+      "remoteVisibility": "resolver-and-remote-messaging-ready-only",
+      "failure": "failed-sealed-local-barrier-exact-fenced-delete-and-read-reconcile-next-caller-only-newObject",
+      "lateCallback": "stale-fence-no-mutation",
+      "entrySpot": "startup-initialization-complete-before-host-serving-and-publication"
+    },
+    {
+      "kind": "contract-amendment-limit-integrity",
+      "creationIntentBytesMaximum": { "$bound": "creationIntentBytes" },
+      "creationTerminalEnvelopeBytesMaximum": { "$bound": "creationTerminalEnvelopeBytes" },
+      "aggregateParticipantsMaximum": { "$bound": "maintenanceAggregateParticipants" },
+      "aggregateEncodedBytesMaximum": { "$bound": "maintenanceAggregateBytes" },
+      "aggregateId": "nonzero-128-bit",
+      "messageFollowHopCountMaximum": { "$bound": "messageFollowHopCount" },
+      "messageFollowQueuedMessagesMaximum": { "$bound": "messageFollowMessages" },
+      "messageFollowQueuedBytesMaximum": { "$bound": "messageFollowBytes" },
+      "routingIdEntropyBits": 128,
+      "routingIdCollisionAttemptsMaximum": { "$bound": "routingIdCollisionAttempts" },
+      "nodeActiveCapacityDefault": { "$bound": "nodeActiveCapacityDefault" },
+      "nodePendingCapacityDefault": { "$bound": "nodePendingCapacityDefault" },
+      "objectTypeCapacityMaximum": { "$bound": "objectTypeCapacityMaximum" }
+    },
+    {
+      "kind": "actor-retire-membership-integrity",
+      "relocatable": "source-entry-spot-current-member-only",
+      "userSpotMember": "preflight-blocked-relocationDisabled-state-and-admission-unchanged",
+      "targetOffer": "compatible-initialized-target-entry-spot-id-object-generation-and-kind",
+      "commit": "newOwner-cas-atomically-updates-owner-authority-owner-generation-and-current-target-entry-spot",
+      "callbackOrder": "factory-restore-and-staging-then-owner-entry-membership-commit-then-target-entry-onActorRelocated-then-source-entry-onLeaveActor-and-old-entry-membership-durable-cleanup-or-source-crash-durable-cleanup-terminal-then-journal-replay",
+      "targetCallback": "target-entry-onActorRelocated-after-commit-never-onJoinedActor",
+      "sourceCleanup": "source-entry-onLeaveActor-and-old-entry-membership-removal-durable-before-replay-or-source-crash-durable-cleanup-terminal-substitutes",
+      "userSpotAggregateCallbacks": "onActorJoin-onJoinedActor-onActorRelocated-onLeaveActor-all-forbidden",
+      "targetAdmission": "sealed-through-completed-route-acks-and-steady-normalization",
+      "callbacks": "retry-safe-at-least-once-failure-never-rolls-back-committed-authority"
+    },
+    {
+      "kind": "stateful-capability-integrity",
+      "entryType": "stateful-capability-entry",
+      "key": ["objectKind", "type"],
+      "disabled": { "hasSnapshotAdapter": false },
+      "recreate": { "hasSnapshotAdapter": false },
+      "snapshot": { "hasSnapshotAdapter": true },
+      "eligibility": "same-entry-exact-object-kind-type-policy-snapshot-adapter-availability-and-positive-available",
+      "flat-set-cross-product": "forbidden",
+      "startupValidation": "derive-complete-descriptor-then-validate-before-host-start",
+      "bounds": {
+        "encodedDescriptorBytesMaximum": 1048576,
+        "typeCapabilityEntriesMaximum": 1024
+      },
+      "overflow": "atomic-configuration-failure-never-truncate-split-or-publish-partial"
+    },
+    {
+      "kind": "relocation-application-state-integrity",
+      "stateType": "relocation-application-state",
+      "recreate": "hasState-false-no-payload",
+      "snapshot": "hasState-true-opaque-payload-empty-valid",
+      "participantMapping": "exactly-one-sorted-application-state-entry-per-objectMailbox-participant-id-and-no-boundSession-entry",
+      "participantPayloadMaximumBytes": { "$bound": "relocationChunkBytes" },
+      "relocationPresence": "every-relocation-including-empty-recreate-writes-one-deterministic-envelope",
+      "storage": "canonical-logical-stream-split-into-immutable-chunks-and-one-root-manifest",
+      "chunking": "ordered-byte-stream-may-split-within-a-frozen-record",
+      "applicationInterpretation": "forbidden-framework-validates-byte-count-and-relocation-checksum-only"
+    },
+    {
+      "kind": "framework-json-v1-integrity",
+      "profile": "frameworkJsonV1Profile",
+      "applicationPayloadBytes": "opaque-after-profile-validation-no-byte-canonicalization",
+      "goldenFixture": "golden/framework-json-v1.json"
+    },
+    {
+      "kind": "service-admission-update-integrity",
+      "command": "update",
+      "connection": "current-admitted-physical-connection-only",
+      "immutableExact": [
+        "topologyKind", "meshName-or-channelName", "securityIdentity", "endpoint-connection-identity",
+        "rid", "lifecycleGeneration", "normalizedEffectiveMaxMessageBytes", "channelMembershipKeys",
+        "protocolCapabilities", "spotTypes", "statefulCapabilities", "applicationVersion"
+      ],
+      "revision": "strictly-increasing-same-revision-identical-bytes-idempotent-lower-stale-same-revision-different-protocol-error",
+      "mutableOnly": ["existingChannelWeights", "runtimeState", "placementCapacity", "maintenanceWave"],
+      "failure": "immutable-or-capability-mutation-makes-connection-not-ready-and-is-protocol-error"
+    }
+  ],
+  "authorityKeyFormat": {
+    "name": "authority-key-v1",
+    "encoding": "canonical-ascii-utf8",
+    "prefix": "zla1",
+    "separator": ":",
+    "kindDiscriminators": [
+      { "objectKind": "actor", "wire": "a", "components": ["actorId"] },
+      { "objectKind": "spot", "wire": "s", "components": ["spotId"] }
+    ],
+    "componentLayout": "decimal-raw-byte-length-colon-percent-encoded-bytes",
+    "componentRawBytesMinimum": 1,
+    "componentRawBytesMaximum": 255,
+    "decimalLength": "base10-no-leading-zero",
+    "escaping": "rfc3986-unreserved-literal-otherwise-uppercase-percent-hex",
+    "unicodeNormalization": "none",
+    "maximumEncodedBytes": 776,
+    "goldenFixture": "golden/authority-key-v1.json"
+  },
+  "authorityStoreAccessProfile": {
+    "directResolve": "exact-canonical-key-read",
+    "enumerationPrefixes": [
+      { "objectKind": "actor", "prefix": "zla1:a:" },
+      { "objectKind": "spot", "prefix": "zla1:s:" }
+    ],
+    "pageSizeMinimum": 1,
+    "pageSizeMaximum": 1000,
+    "pageEncodedBytesMaximum": { "$bound": "authorityScanPageBytes" },
+    "pageFill": "return-fewer-items-before-byte-cap-and-reject-single-row-over-authority-envelope-bound",
+    "item": "opaque-canonical-key-payload-store-version-and-generation-metadata",
+    "providerInterpretation": "forbidden",
+    "continuationToken": {
+      "type": "opaque-provider-issued-authority-scan-cursor",
+      "firstPage": "absent",
+      "nextPage": "optional-nonempty",
+      "maximumEncodedBytes": 4096,
+      "frameworkInterpretationOrComposition": "forbidden",
+      "replayOrCrossScanMix": "scanExpired"
+    },
+    "pageOrder": "unsigned-canonical-key-bytes-ascending",
+    "scanConsistency": "first-page-captures-provider-snapshot-watermark",
+    "snapshotCoverage": "every-row-incarnation-existing-at-watermark-exactly-once-across-pages",
+    "concurrentMutation": "delete-may-be-missing-on-exact-read-and-post-watermark-create-or-recreate-waits-next-scan",
+    "candidateValidation": "exact-read-then-expected-store-version-cas",
+    "startupRecoveryGate": "complete-snapshot-scan-for-all-registered-mesh-scopes-before-serving",
+    "backgroundRecovery": "repeat-snapshot-scans-after-serving",
+    "operationalEnumeration": "may-reuse-pages-but-cannot-weaken-recovery-scan",
+    "typedListProjection": "framework-decoded-observability-only-not-routing-authority"
+  },
+  "descriptorEnumerationProfile": {
+    "pageSizeMinimum": 1,
+    "pageSizeMaximum": 1000,
+    "pageEncodedBytesMaximum": { "$bound": "descriptorPageBytes" },
+    "pageFill": "return-fewer-items-before-byte-cap-and-reject-single-descriptor-over-descriptor-envelope-bound",
+    "continuationToken": "opaque-provider-cursor",
+    "stableSnapshot": "read-scope-change-stamp-before-pages-and-after-pages-apply-only-when-equal-otherwise-retry",
+    "unboundedProviderMaterialization": "forbidden",
+    "startupDescriptorValidation": "derive-complete-descriptor-and-validate-atomically-before-publish",
+    "descriptorRevision": "framework-caller-issued-nonzero-u64-monotonic-per-descriptor-never-provider-counter",
+    "descriptorRevisionExhaustion": "host-error-seal-no-wrap-no-publish",
+    "overflow": "configuration-failure-never-truncate-split-or-publish-partial"
+  },
+  "authorityStoreGenerationProfile": {
+    "metadata": ["objectGeneration", "authorityOwnerGeneration"],
+    "generationEncoding": "nonzero-u64-provider-issued",
+    "providerDomainCounters": ["objectGeneration", "authorityOwnerGeneration", "storeRevision"],
+    "expectation": {
+      "kind": "closed-missing-or-found",
+      "missing": "assert-current-absence",
+      "found": "exact-store-version"
+    },
+    "mutationTransitions": {
+      "preserve": "found-only-keep-object-and-owner-generations-consume-store-revision",
+      "newOwner": "found-only-keep-object-generation-consume-authority-owner-generation-and-store-revision",
+      "newObject": "missing-only-consume-object-generation-authority-owner-generation-and-store-revision",
+      "delete": "found-only-consume-store-revision-remove-row-and-current-index-entry"
+    },
+    "atomicity": "validate-expectation-before-atomically-consuming-counters-and-mutating-row-index",
+    "authorityOwnerToken": "framework-ownerId-plus-provider-authorityOwnerGeneration",
+    "delete": "remove-row-with-no-per-key-generation-or-version-tombstone",
+    "scanTombstone": "retain-only-until-all-older-active-scan-leases-finish-or-expire",
+    "generationMaximum": "9223372036854775807",
+    "overflow": "GenerationExhausted-non-retriable-no-row-index-or-counter-mutation-or-consumption",
+    "opaquePayloadGenerationDuplication": "forbidden"
+  },
+  "authorityStoreDurabilityProfile": {
+    "rowLifetime": "durable-until-explicit-fenced-delete",
+    "rowTtl": "forbidden",
+    "snapshotLeaseFields": "forbidden",
+    "putLeaseDuration": "forbidden",
+    "ownerAndCoordinatorLiveness": "separate-owner-lease-token",
+    "expiredOwnerRecovery": "expected-store-version-cas-with-newOwner-transition",
+    "terminalCleanup": "explicit-expected-store-version-delete",
+    "generationCountersAfterDelete": "global-provider-domain-counters-only-no-per-key-retention",
+    "providerPayloadInterpretation": "forbidden"
+  },
+  "ownerLeaseAuthorityProfile": {
+    "ownerId": "framework-generated-lifecycle-unique-not-application-configurable-or-reusable",
+    "token": ["ownerId", "leaseGeneration"],
+    "generationRange": "1..9223372036854775807",
+    "generationSource": "one-durable-global-counter-per-provider-transaction-domain",
+    "operations": {
+      "claimOwnerLease": {
+        "input": ["ownerId", "ttl"],
+        "result": "claimed-token-expiresAt-storeNow-or-conflict-or-GenerationExhausted"
+      },
+      "readOwnerLease": {
+        "input": ["ownerId"],
+        "result": "found-token-expiresAt-storeNow-or-missing"
+      },
+      "renewOwnerLease": {
+        "input": ["token", "ttl"],
+        "result": "renewed-token-expiresAt-storeNow-or-stale"
+      },
+      "releaseOwnerLease": {
+        "input": ["token"],
+        "result": "released-or-stale"
+      }
+    },
+    "scope": "one-host-process-lifecycle-token-shared-by-all-host-descriptors-and-object-authorities",
+    "descriptorAndListSnapshot": "preserve-current-owner-leaseGeneration-with-route-rid-owned-separately",
+    "admissionRecheck": "exact-read-ownerId-and-leaseGeneration-immediately-before-target-admission",
+    "listUse": "observability-only-never-routing-or-resolve-authority",
+    "activeRow": "ttl-backed-and-deleted-on-expiry-or-release",
+    "sameOwnerIdReuse": "new-global-leaseGeneration-keeps-old-token-stale-without-tombstone",
+    "activeIndex": "bounded-to-active-leases-and-pruned-on-expiry-or-release",
+    "delayedOperation": "stale-no-mutation",
+    "overflow": "claim-or-takeover-GenerationExhausted-non-retriable-no-row-index-or-counter-mutation-or-consumption-renew-and-release-excluded"
+  },
+  "relocationRetentionPolicy": {
+    "retentionMs": 86400000,
+    "renewThresholdMs": 43200000,
+    "leaseOwner": "current-authority-owner-or-recovery-coordinator",
+    "referenced": "renew-current-reference-before-expiry-using-provider-store-time",
+    "renewOperation": "RenewManifestTree(root-reference-fixed-retention)",
+    "renewResult": "all-manifest-and-chunks-renewed-expiresAt-storeNow-or-missing-partial-failure",
+    "partialRenewFailure": "retry-before-threshold-and-fail-closed-before-any-expiry",
+    "renewFence": "authority-key-revision-and-current-reference-exact-check-immediately-before-renew",
+    "stagedWriteTracking": "track-provider-expiresAt-and-storeNow-for-every-unlinked-chunk-and-manifest",
+    "preLinkGate": "immediately-before-captured-and-prepared-cas-verify-or-renew-complete-tree-to-more-than-renew-threshold-remaining",
+    "preLinkFailure": "missing-or-partial-renew-aborts-precommit-and-never-links-root",
+    "concurrentReplacement": "one-stale-renew-may-extend-orphan-only-never-authorizes-read",
+    "orphan": "not-renewed-and-provider-deletes-at-expiry",
+    "cleanupOrder": [
+      "cas-authority-reference-removal-or-replacement",
+      "idempotent-delete-no-longer-referenced-manifest-and-all-chunks"
+    ],
+    "reader": "current-authority-reference-only",
+    "providerClock": "relocation-storeNow-and-expiresAt-independent-of-location-provider-clock",
+    "recoveryHorizon": "permanent-published-root-missing-is-non-retriable-RelocationDataLost-no-rollback",
+    "publicOption": "forbidden"
+  },
+  "relocationStorageProfile": {
+    "logicalStreamType": "relocation-envelope-v1",
+    "manifestFormat": "relocation-manifest-v1",
+    "chunkFormat": "relocation-data-chunk-v1",
+    "chunkDataMaximumBytes": 67108864,
+    "chunkCountMaximum": 4096,
+    "logicalMaximumBytes": 274877906944,
+    "manifestFields": ["logicalFormatVersion", "totalLength", "totalChecksumCrc32c", "inventoryDigestSha256", "ordered-chunk-reference-length-checksum"],
+    "writeOrder": ["all-immutable-chunks", "immutable-root-manifest", "read-and-verify-complete-root", "location-authority-reference-cas"],
+    "authority": "forbidden-payload-lookup-projection-only",
+    "backend": "may-differ-from-location-store",
+    "clock": "relocation-provider-storeNow-and-expiresAt-only",
+    "writeFailure": "unreferenced-chunks-or-manifest-are-orphans-never-authority",
+    "emptyRelocation": "deterministic-zero-data-manifest-with-no-chunks",
+    "streaming": "chunk-validated-and-incrementally-decoded-with-bounded-memory",
+    "recordSplit": "allowed-across-chunk-boundaries",
+    "oversize": "reversible-seal-rollback-and-blocked-state-incompatible-before-draining"
+  },
+  "frameworkJsonV1Profile": {
+    "name": "framework-json-v1",
+    "encoding": "utf-8-without-bom",
+    "byteCanonicalization": "not-required-property-order-and-insignificant-whitespace-ignored",
+    "propertyNames": "registered-contract-names-exact-and-case-sensitive",
+    "duplicateProperties": "reject-before-typed-dispatch",
+    "unknownProperties": "ignore-for-forward-compatible-reader",
+    "missingRequiredProperties": "reject",
+    "signedAndUnsigned64": "canonical-decimal-string-without-plus-or-redundant-leading-zero-with-declared-range-check",
+    "integersUpTo32Bits": "json-number-in-declared-range-without-fraction",
+    "floatingPoint": "finite-json-number-only-nan-and-infinity-rejected",
+    "enums": "declared-case-sensitive-string-name",
+    "bytes": "rfc4648-standard-base64-with-required-padding",
+    "objectsAndMaps": "object-members-order-insensitive-map-keys-string-only",
+    "null": "allowed-only-for-contract-declared-nullable-value",
+    "noImplicitCrossLanguageTypes": ["dateTime", "decimal", "uuid", "languageCustomType"],
+    "explicitRepresentationForOtherTypes": "contract-defined-string-or-dto",
+    "applicationBytes": "framework-validates-then-stores-or-forwards-opaque-original-bytes",
+    "goldenFixture": "golden/framework-json-v1.json"
+  },
+  "frameworkMultipartV1Profile": {
+    "name": "framework-multipart-v1",
+    "consumers": ["cpp", "dotnet", "jvm", "node"],
+    "packetName": "ZLinkFrameworkMultipart",
+    "contentType": "application/x-zlink-multipart",
+    "encoding": "u32-big-endian-part-count-then-u32-big-endian-length-prefixed-opaque-parts",
+    "minimumParts": 1,
+    "partCountValidation": "validate-count-against-remaining-length-before-part-array-allocation",
+    "trailingBytes": "forbidden",
+    "applicationInterpretation": "framework-only-message-part-storage",
+    "goldenFixture": "golden/framework-multipart-v1.json"
+  },
+  "maintenanceAdmissionProfile": {
+    "preflight": "validate-capability-eligibility-and-bounded-headroom-without-final-reservation",
+    "reversibleSeal": "hold-new-submissions-without-admission-result",
+    "sizingSnapshot": "exact-participant-boundaries-messages-and-bytes-after-seal",
+    "timerAdmissionSeal": "stop-new-tick-admission-at-turn-boundary-current-handler-only-completes",
+    "acceptedTimerTurns": "unstarted-pending-ticks-enter-deterministic-relocation-envelope",
+    "futureTimerSchedule": "logical-registration-and-next-schedule-cursor-relocated-and-restored-by-target-framework",
+    "timerNativeState": "native-handle-backend-state-and-callback-continuation-forbidden",
+    "readinessScheduling": "infrastructure-notification-per-unit-ready-turn-first-no-kind-or-registration-order",
+    "permitAcquisition": "nonblocking-all-or-nothing-outbound-inbound-capture-restore-and-byte-before-source-seal",
+    "permitFailure": "release-all-provisional-permits-keep-source-admission-open-and-requeue-notification",
+    "defaultPermits": {
+      "activeOutbound": 64,
+      "activeInbound": 64,
+      "captureCallbacks": 8,
+      "restoreCallbacks": 8,
+      "encodedPayloadBytesInFlight": 268435456
+    },
+    "permitConfiguration": "five-application-options-positive-runtime-update-affects-new-admission-only",
+    "aggregateUnit": "user-spot-and-member-actors-share-one-unit-permit-and-commit-generation",
+    "byteReservation": "before-seal-participant-64MiB-plus-deterministic-framework-owned-upper-bound",
+    "byteReconciliation": "after-capture-shrink-to-actual-encoded-size-never-increase",
+    "oversizedUnit": "single-unit-only-when-byte-window-empty-exclusive-until-byte-permit-release",
+    "requestDrainBeforeCaptured": "all-connectionBound-accepted-work-and-boundSession-requests-must-be-terminal-and-are-never-journaled",
+    "requestDrainFailure": "abort-before-captured-retire-blocked-relocationDisabled-and-restore-admission",
+    "phaseOrder": [
+      "preparing-cas",
+      "relocation-put",
+      "captured-cas",
+      "target-reserve",
+      "target-factory-and-restore",
+      "journal-and-timer-staging",
+      "prepared-cas"
+    ],
+    "durableReplayBoundary": "complete-root-linked-by-captured-cas",
+    "sourceCrashBeforeCaptured": "fenced-abort-no-maintenance-continuity-original-request-uses-normal-connection-failure-timeout-or-cancellation-terminal",
+    "unlinkedPutAfterCrash": "orphan-cleanup-never-replay-authority",
+    "rollbackBeforeDraining": "abort-transactions-release-reservations-delete-orphans-and-reopen-serving",
+    "drainingPublish": "after-all-transactions-prepared",
+    "queueGrowthAfterSeal": "forbidden"
+  },
+  "terminationResultProfile": {
+    "outcomes": [
+      { "name": "Stopped", "wireValue": 0 },
+      { "name": "Blocked", "wireValue": 1 },
+      { "name": "ForceStopped", "wireValue": 2 }
+    ],
+    "reasons": [
+      { "name": "None", "wireValue": 0 },
+      { "name": "TargetUnavailable", "wireValue": 1 },
+      { "name": "StoreUnavailable", "wireValue": 2 },
+      { "name": "RelocationDisabled", "wireValue": 3 },
+      { "name": "StateIncompatible", "wireValue": 4 },
+      { "name": "DeadlineExceeded", "wireValue": 5 },
+      { "name": "RelocationFailed", "wireValue": 6 },
+      { "name": "TeardownFailed", "wireValue": 7 },
+      { "name": "RuntimeNotReady", "wireValue": 8 },
+      { "name": "ManualTopologyUnsupported", "wireValue": 9 }
+    ],
+    "allowedPairs": [
+      { "outcome": "Stopped", "reasons": ["None"] },
+      { "outcome": "Blocked", "reasons": ["TargetUnavailable", "StoreUnavailable", "RelocationDisabled", "StateIncompatible", "DeadlineExceeded", "RuntimeNotReady", "ManualTopologyUnsupported"] },
+      { "outcome": "ForceStopped", "reasons": ["DeadlineExceeded", "RelocationFailed", "TeardownFailed"] }
+    ],
+    "undefinedPair": "protocol-error",
+    "relocationCeilingBeforeDraining": "Blocked/StateIncompatible",
+    "preCapturedDeadline": "Blocked/DeadlineExceeded",
+    "peerReadinessDeadline": "Blocked/TargetUnavailable",
+    "postCapturedDeadline": "ForceStopped/DeadlineExceeded",
+    "teardownFailure": "ForceStopped/TeardownFailed"
+  },
+  "livenessProfile": {
+    "probeCommand": "livenessProbe",
+    "ackCommand": "livenessAck",
+    "scope": "admitted-physical-connection-lifetime",
+    "probeIdRule": "connection-local-nonzero-u64-exact-echo",
+    "initialReady": "successful-admission-starts-peer-timeout-deadline",
+    "outstandingProbeMaximum": 1,
+    "probeSchedule": "every-five-seconds-independent-of-application-traffic",
+    "probeTickWithoutOutstanding": "allocate-and-send-new-nonzero-connection-local-id",
+    "probeTickWithOutstanding": "retransmit-same-id-without-growing-outstanding-set",
+    "deadlineRefreshEvidence": "first-ack-matching-current-outstanding-id-on-same-connection-only",
+    "matchingAckEffect": "refresh-peer-timeout-deadline-and-clear-outstanding-id",
+    "duplicatePreviousOrOtherConnectionAck": "ignore-without-deadline-refresh",
+    "otherInboundTraffic": "diagnostics-only-never-resets-round-trip-deadline",
+    "idleProbeIntervalMs": 5000,
+    "peerTimeoutMs": 15000,
+    "orderlyDisconnect": "immediate-not-ready",
+    "staleAck": "ignore-by-outstanding-id-and-connection-identity",
+    "scheduler": "infrastructure-reserve",
+    "applicationDelivery": "forbidden"
+  },
+  "fanoutLivenessProfile": {
+    "scope": "classic-fanout-publisher-lifetime",
+    "direction": "publisher-to-subscriber",
+    "subscriberSocket": "one-dedicated-socket-per-publisher",
+    "publisherAssociation": "automatic-descriptor-or-manual-endpoint",
+    "topicFrameBytes": [1, 90, 76, 70, 49],
+    "reservedTopicMatch": "exact-only",
+    "publicTopicSources": ["explicit-topic", "typed-packet-name-derived-topic"],
+    "publicTopicValidation": "reject-exact-reserved-topic-after-derivation-before-transport",
+    "publicTopicFailure": "argument-or-configuration-error",
+    "payloadFrameBytes": [90, 70, 1, 1],
+    "multipartFrameCount": 2,
+    "subscriberBeaconSubscription": "exact-reserved-topic-always-in-addition-to-application-filters",
+    "malformedReservedTopic": "protocol-error-immediate-not-ready",
+    "receiveActivity": "valid-application-record-or-exact-beacon-on-dedicated-socket",
+    "initialReady": "first-valid-receive",
+    "beaconIntervalMs": 5000,
+    "beaconSchedule": "periodic-independent-of-all-application-topic-traffic",
+    "publisherTimeoutMs": 15000,
+    "ack": "forbidden",
+    "orderlyDisconnect": "immediate-not-ready",
+    "scheduler": "infrastructure-reserve",
+    "applicationDelivery": "forbidden",
+    "publicOption": "forbidden",
+    "locationLease": "independent"
+  },
+  "types": [
+    {
+      "name": "u8",
+      "kind": "integer",
+      "encoding": "u8",
+      "minimum": 0,
+      "maximum": 255
+    },
+    {
+      "name": "u16",
+      "kind": "integer",
+      "encoding": "u16",
+      "minimum": 0,
+      "maximum": 65535
+    },
+    {
+      "name": "u32",
+      "kind": "integer",
+      "encoding": "u32",
+      "minimum": 0,
+      "maximum": 4294967295
+    },
+    {
+      "name": "nonzero-u32",
+      "kind": "integer",
+      "encoding": "u32",
+      "minimum": 1,
+      "maximum": 4294967295
+    },
+    {
+      "name": "u64",
+      "kind": "integer",
+      "encoding": "u64",
+      "minimum": 0,
+      "maximum": "18446744073709551615"
+    },
+    {
+      "name": "nonzero-u64",
+      "kind": "integer",
+      "encoding": "u64",
+      "minimum": 1,
+      "maximum": "9223372036854775807"
+    },
+    {
+      "name": "ordinal-or-zero",
+      "kind": "integer",
+      "encoding": "u64",
+      "minimum": 0,
+      "maximum": "9223372036854775807"
+    },
+    {
+      "name": "relocation-logical-length",
+      "kind": "integer",
+      "encoding": "u64",
+      "minimum": 0,
+      "maximum": { "$bound": "relocationLogicalBytes" }
+    },
+    {
+      "name": "application-version",
+      "kind": "integer",
+      "encoding": "i64",
+      "minimum": 0,
+      "maximum": { "$bound": "applicationVersionMax" }
+    },
+    {
+      "name": "bool8",
+      "kind": "enum",
+      "encoding": "u8",
+      "values": [
+        { "name": "false", "value": 0 },
+        { "name": "true", "value": 1 }
+      ]
+    },
+    {
+      "name": "rid",
+      "kind": "length-prefixed-bytes",
+      "lengthType": { "$ref": "u8" },
+      "minimumBytes": 1,
+      "maximumBytes": { "$bound": "ridBytes" }
+    },
+    {
+      "name": "optional-rid",
+      "kind": "length-prefixed-bytes",
+      "lengthType": { "$ref": "u8" },
+      "minimumBytes": 0,
+      "maximumBytes": { "$bound": "ridBytes" },
+      "zeroLengthMeaning": "absent"
+    },
+    {
+      "name": "text8",
+      "kind": "length-prefixed-text",
+      "lengthType": { "$ref": "u8" },
+      "minimumBytes": 1,
+      "maximumBytes": { "$bound": "shortTextBytes" },
+      "encoding": "utf-8",
+      "nul": "forbidden"
+    },
+    {
+      "name": "optional-text8",
+      "kind": "length-prefixed-text",
+      "lengthType": { "$ref": "u8" },
+      "minimumBytes": 0,
+      "maximumBytes": { "$bound": "shortTextBytes" },
+      "encoding": "utf-8",
+      "nul": "forbidden",
+      "zeroLengthMeaning": "absent"
+    },
+    {
+      "name": "sha256-bytes",
+      "kind": "length-prefixed-bytes",
+      "lengthType": { "$ref": "u8" },
+      "minimumBytes": 32,
+      "maximumBytes": 32
+    },
+    {
+      "name": "creation-request-size",
+      "kind": "integer",
+      "encoding": "u32",
+      "minimum": 0,
+      "maximum": { "$bound": "creationIntentBytes" }
+    },
+    {
+      "name": "text16",
+      "kind": "length-prefixed-text",
+      "lengthType": { "$ref": "u16" },
+      "minimumBytes": 0,
+      "maximumBytes": { "$bound": "blobBytes" },
+      "encoding": "utf-8",
+      "nul": "forbidden"
+    },
+    {
+      "name": "nonempty-text16",
+      "kind": "length-prefixed-text",
+      "lengthType": { "$ref": "u16" },
+      "minimumBytes": 1,
+      "maximumBytes": { "$bound": "blobBytes" },
+      "encoding": "utf-8",
+      "nul": "forbidden"
+    },
+    {
+      "name": "endpoint",
+      "kind": "length-prefixed-text",
+      "lengthType": { "$ref": "u16" },
+      "minimumBytes": 1,
+      "maximumBytes": { "$bound": "endpointBytes" },
+      "encoding": "utf-8",
+      "nul": "forbidden"
+    },
+    {
+      "name": "blob16",
+      "kind": "length-prefixed-bytes",
+      "lengthType": { "$ref": "u16" },
+      "minimumBytes": 0,
+      "maximumBytes": { "$bound": "blobBytes" }
+    },
+    {
+      "name": "nonempty-blob16",
+      "kind": "length-prefixed-bytes",
+      "lengthType": { "$ref": "u16" },
+      "minimumBytes": 1,
+      "maximumBytes": { "$bound": "blobBytes" }
+    },
+    {
+      "name": "packet-name",
+      "kind": "length-prefixed-text",
+      "lengthType": { "$ref": "u8" },
+      "minimumBytes": 1,
+      "maximumBytes": { "$bound": "packetNameBytes" },
+      "encoding": "utf-8",
+      "nul": "forbidden"
+    },
+    {
+      "name": "content-type",
+      "kind": "length-prefixed-text",
+      "lengthType": { "$ref": "u8" },
+      "minimumBytes": 1,
+      "maximumBytes": { "$bound": "contentTypeBytes" },
+      "encoding": "utf-8",
+      "nul": "forbidden"
+    },
+    {
+      "name": "application-payload-bytes",
+      "kind": "length-prefixed-bytes",
+      "lengthType": { "$ref": "u32" },
+      "minimumBytes": 0,
+      "maximumBytes": { "$bound": "applicationPayloadAbsoluteBytes" },
+      "runtimeMaximumBytes": {
+        "$negotiatedBound": "effectiveCompleteMessageBytesMinusActualEnvelopeOverhead",
+        "absoluteMaximum": { "$bound": "applicationPayloadAbsoluteBytes" }
+      }
+    },
+    {
+      "name": "application-payload-envelope-v1",
+      "kind": "versioned-length-delimited",
+      "version": { "$ref": "u8", "constant": 1 },
+      "length": { "$ref": "u32", "covers": "body" },
+      "maximumEncodedBytes": { "$bound": "wireU32CompleteMessageBytes" },
+      "runtimeMaximumEncodedBytes": {
+        "$negotiatedBound": "effectiveCompleteMessageBytes",
+        "absoluteMaximum": { "$bound": "wireU32CompleteMessageBytes" }
+      },
+      "body": [
+        { "name": "packetName", "$ref": "packet-name" },
+        { "name": "contentType", "$ref": "content-type" },
+        { "name": "payload", "$ref": "application-payload-bytes" }
+      ],
+      "trailingBytes": "forbidden"
+    },
+    {
+      "name": "metadata-value",
+      "kind": "length-prefixed-text",
+      "lengthType": { "$ref": "u16" },
+      "minimumBytes": 0,
+      "maximumBytes": { "$bound": "metadataBytes" },
+      "encoding": "utf-8",
+      "nul": "forbidden"
+    },
+    {
+      "name": "metadata-entry",
+      "kind": "struct",
+      "fields": [
+        { "name": "key", "$ref": "text8" },
+        { "name": "value", "$ref": "metadata-value" }
+      ]
+    },
+    {
+      "name": "metadata-frame",
+      "kind": "versioned-vector",
+      "maximumEncodedBytes": { "$bound": "metadataBytes" },
+      "layout": [
+        { "name": "version", "$ref": "u8", "constant": 1 },
+        { "name": "count", "$ref": "u8", "counts": "entries" },
+        {
+          "name": "entries",
+          "kind": "repeat",
+          "countFrom": "count",
+          "item": { "$ref": "metadata-entry" }
+        }
+      ],
+      "constraints": [
+        { "kind": "unique", "field": "key", "comparison": "utf-8-bytes" }
+      ],
+      "trailingBytes": "forbidden"
+    },
+    {
+      "name": "runtime-state",
+      "kind": "enum",
+      "encoding": "u8",
+      "values": [
+        { "name": "preparing", "value": 0 },
+        { "name": "serving", "value": 1 },
+        { "name": "draining", "value": 2 },
+        { "name": "stopped", "value": 3 },
+        { "name": "error", "value": 4 }
+      ]
+    },
+    {
+      "name": "stateful-object-kind",
+      "kind": "enum",
+      "encoding": "u8",
+      "values": [
+        { "name": "actor", "value": 1 },
+        { "name": "userSpot", "value": 2 },
+        { "name": "instanceSpot", "value": 3 }
+      ]
+    },
+    {
+      "name": "object-role",
+      "kind": "enum",
+      "encoding": "u8",
+      "values": [
+        { "name": "none", "value": 0 },
+        { "name": "client", "value": 1 },
+        { "name": "server", "value": 2 }
+      ]
+    },
+    {
+      "name": "object-capacity-limit",
+      "kind": "integer",
+      "encoding": "u32",
+      "minimum": 1,
+      "maximum": { "$bound": "objectTypeCapacityMaximum" }
+    },
+    {
+      "name": "object-pending-capacity-limit",
+      "kind": "integer",
+      "encoding": "u32",
+      "minimum": 0,
+      "maximum": { "$bound": "objectTypeCapacityMaximum" }
+    },
+    {
+      "name": "authority-object-kind",
+      "kind": "enum",
+      "encoding": "u8",
+      "values": [
+        { "name": "actor", "value": 1 },
+        { "name": "spot", "value": 2 }
+      ]
+    },
+    {
+      "name": "spot-kind",
+      "kind": "enum",
+      "encoding": "u8",
+      "values": [
+        { "name": "entry", "value": 1 },
+        { "name": "user", "value": 2 },
+        { "name": "instance", "value": 3 }
+      ]
+    },
+    {
+      "name": "entry-user-spot-authority-state",
+      "kind": "enum",
+      "encoding": "u8",
+      "values": [
+        { "name": "creating", "value": 0 },
+        { "name": "ready", "value": 1 },
+        { "name": "closing", "value": 2 },
+        { "name": "relocating", "value": 3 }
+      ]
+    },
+    {
+      "name": "actor-authority-state",
+      "kind": "enum",
+      "encoding": "u8",
+      "values": [
+        { "name": "creating", "value": 0 },
+        { "name": "ready", "value": 1 }
+      ]
+    },
+    {
+      "name": "relocation-policy-kind",
+      "kind": "enum",
+      "encoding": "u8",
+      "values": [
+        { "name": "disabled", "value": 0 },
+        { "name": "recreate", "value": 1 },
+        { "name": "snapshot", "value": 2 }
+      ]
+    },
+    {
+      "name": "timer-overrun-policy-kind",
+      "kind": "enum",
+      "encoding": "u8",
+      "values": [
+        { "name": "skipLateTicks", "value": 1 },
+        { "name": "catchUpBounded", "value": 2 },
+        { "name": "delayNextTick", "value": 3 }
+      ]
+    },
+    {
+      "name": "actor-spot-kind",
+      "kind": "enum",
+      "encoding": "u8",
+      "values": [
+        { "name": "entry", "value": 1 },
+        { "name": "user", "value": 2 }
+      ]
+    },
+    {
+      "name": "relocation-role",
+      "kind": "enum",
+      "encoding": "u8",
+      "values": [
+        { "name": "source", "value": 1 },
+        { "name": "target", "value": 2 },
+        { "name": "coordinator", "value": 3 }
+      ]
+    },
+    {
+      "name": "relocation-reservation-round-kind",
+      "kind": "enum",
+      "encoding": "u8",
+      "values": [
+        { "name": "initial", "value": 1 },
+        { "name": "preparedReplacement", "value": 2 },
+        { "name": "postCommitReplacement", "value": 3 }
+      ]
+    },
+    {
+      "name": "relocation-participant-kind",
+      "kind": "enum",
+      "encoding": "u8",
+      "values": [
+        { "name": "objectMailbox", "value": 1 },
+        { "name": "boundSession", "value": 2 }
+      ]
+    },
+    {
+      "name": "actor-join-result",
+      "kind": "enum",
+      "encoding": "u32",
+      "values": [
+        { "name": "accepted", "value": 0 },
+        { "name": "rejected", "value": 1 }
+      ]
+    },
+    {
+      "name": "actor-join-reply-tail",
+      "kind": "conditional-union",
+      "discriminators": [
+        { "name": "joinResult", "source": "wire", "$ref": "actor-join-result" }
+      ],
+      "bodyLengthType": { "$ref": "u16" },
+      "bodyLengthCovers": "selected-case",
+      "cases": [
+        {
+          "when": { "joinResult": "accepted" },
+          "fields": [{ "name": "spot", "$ref": "spot-ref" }]
+        },
+        {
+          "when": { "joinResult": "rejected" },
+          "fields": [{ "name": "spot", "$ref": "optional-spot-ref" }]
+        }
+      ],
+      "otherwise": "protocol-error",
+      "trailingBytes": "forbidden"
+    },
+    {
+      "name": "mesh-record-kind",
+      "kind": "enum",
+      "encoding": "u8",
+      "values": [
+        { "name": "nodeSend", "value": 1 },
+        { "name": "nodeRequest", "value": 2 },
+        { "name": "channelSend", "value": 3 },
+        { "name": "channelRequest", "value": 4 },
+        { "name": "spotSend", "value": 5 },
+        { "name": "spotRequest", "value": 6 },
+        { "name": "spotMulticast", "value": 7 },
+        { "name": "spotControl", "value": 8 },
+        { "name": "actorSend", "value": 9 },
+        { "name": "actorRequest", "value": 10 },
+        { "name": "completion", "value": 11 },
+        { "name": "sendReady", "value": 12 },
+        { "name": "relocationControl", "value": 13 },
+        { "name": "instanceSpotActivation", "value": 14 }
+      ]
+    },
+    {
+      "name": "frozen-source-kind",
+      "kind": "enum",
+      "encoding": "u8",
+      "values": [
+        { "name": "node", "value": 1 },
+        { "name": "spot", "value": 2 },
+        { "name": "actor", "value": 3 },
+        { "name": "boundSession", "value": 4 }
+      ]
+    },
+    {
+      "name": "mesh-destination-kind",
+      "kind": "enum",
+      "encoding": "u8",
+      "values": [
+        { "name": "node", "value": 1 },
+        { "name": "channel", "value": 2 },
+        { "name": "spot", "value": 3 },
+        { "name": "actor", "value": 4 },
+        { "name": "boundSession", "value": 5 }
+      ]
+    },
+    {
+      "name": "service-topology-kind",
+      "kind": "enum",
+      "encoding": "u8",
+      "values": [
+        { "name": "routeMesh", "value": 1 },
+        { "name": "clientServer", "value": 2 }
+      ]
+    },
+    {
+      "name": "client-server-role",
+      "kind": "enum",
+      "encoding": "u8",
+      "values": [
+        { "name": "client", "value": 1 },
+        { "name": "server", "value": 2 }
+      ]
+    },
+    {
+      "name": "client-server-direction",
+      "kind": "enum",
+      "encoding": "u8",
+      "values": [
+        { "name": "clientToServer", "value": 1 }
+      ]
+    },
+    {
+      "name": "actor-lifecycle-kind",
+      "kind": "enum",
+      "encoding": "u8",
+      "values": [
+        { "name": "created", "value": 1 },
+        { "name": "joined", "value": 2 },
+        { "name": "left", "value": 3 },
+        { "name": "disconnected", "value": 4 },
+        { "name": "destroyed", "value": 5 }
+      ]
+    },
+    {
+      "name": "bound-session-binding-state",
+      "kind": "enum",
+      "encoding": "u8",
+      "values": [
+        { "name": "active", "value": 1 },
+        { "name": "tombstone", "value": 2 }
+      ]
+    },
+    {
+      "name": "session-relocation-route-action",
+      "kind": "enum",
+      "encoding": "u8",
+      "values": [
+        { "name": "commit", "value": 1 },
+        { "name": "abort", "value": 2 }
+      ]
+    },
+    {
+      "name": "relocation-phase",
+      "kind": "enum",
+      "encoding": "u8",
+      "values": [
+        { "name": "none", "value": 0 },
+        { "name": "preparing", "value": 1 },
+        { "name": "captured", "value": 2 },
+        { "name": "prepared", "value": 3 },
+        { "name": "committed", "value": 4 },
+        { "name": "activating", "value": 5 },
+        { "name": "activated", "value": 6 },
+        { "name": "cleaning", "value": 7 },
+        { "name": "completed", "value": 8 },
+        { "name": "aborted", "value": 9 }
+      ]
+    },
+    {
+      "name": "source-cleanup-state",
+      "kind": "enum",
+      "encoding": "u8",
+      "values": [
+        { "name": "pending", "value": 0 },
+        { "name": "completed", "value": 1 },
+        { "name": "sourceLeaseExpired", "value": 2 }
+      ]
+    },
+    {
+      "name": "reply-relay-ack-status",
+      "kind": "enum",
+      "encoding": "u8",
+      "values": [
+        { "name": "terminalReceived", "value": 1 },
+        { "name": "alreadyTerminal", "value": 2 }
+      ]
+    },
+    {
+      "name": "completion-delivery-state",
+      "kind": "enum",
+      "encoding": "u8",
+      "values": [
+        { "name": "pending", "value": 0 },
+        { "name": "terminalReceived", "value": 1 },
+        { "name": "alreadyTerminal", "value": 2 },
+        { "name": "sourceLeaseExpired", "value": 3 }
+      ]
+    },
+    {
+      "name": "authority-operation-kind",
+      "kind": "enum",
+      "encoding": "u8",
+      "values": [
+        { "name": "steady", "value": 0 },
+        { "name": "coldActivation", "value": 1 },
+        { "name": "maintenanceRelocation", "value": 2 },
+        { "name": "close", "value": 3 }
+      ]
+    },
+    {
+      "name": "mesh-operation-kind",
+      "kind": "enum",
+      "encoding": "u32",
+      "values": [
+        { "name": "none", "value": 0 },
+        { "name": "nodeRequest", "value": 1 },
+        { "name": "channelRequest", "value": 2 },
+        { "name": "spotRequest", "value": 3 },
+        { "name": "actorRequest", "value": 4 },
+        { "name": "actorLookup", "value": 5 },
+        { "name": "actorDestroy", "value": 6 },
+        { "name": "actorJoin", "value": 7 },
+        { "name": "actorLeave", "value": 8 },
+        { "name": "streamBind", "value": 9 },
+        { "name": "streamUnbind", "value": 10 },
+        { "name": "streamClose", "value": 11 },
+        { "name": "instanceSpotRequest", "value": 12 },
+        { "name": "userSpotCreate", "value": 13 },
+        { "name": "userSpotClose", "value": 14 },
+        { "name": "actorCreate", "value": 15 }
+      ]
+    },
+    {
+      "name": "request-terminal-result",
+      "kind": "enum",
+      "encoding": "u32",
+      "values": [
+        { "name": "ok", "value": 0 },
+        { "name": "timedOut", "value": 101 },
+        { "name": "notFound", "value": 102 },
+        { "name": "terminated", "value": 103 },
+        { "name": "protocolError", "value": 104 },
+        { "name": "internalError", "value": 105 },
+        { "name": "rejected", "value": 106 },
+        { "name": "conflict", "value": 107 },
+        { "name": "busy", "value": 108 },
+        { "name": "notConnected", "value": 109 },
+        { "name": "invalidArgument", "value": 110 },
+        { "name": "invalidState", "value": 111 },
+        { "name": "notSupported", "value": 112 },
+        { "name": "backpressured", "value": 113 }
+      ]
+    },
+    {
+      "name": "framework-error-code",
+      "kind": "enum",
+      "encoding": "u32",
+      "values": [
+        { "name": "none", "value": 0 },
+        { "name": "actorRouteNotFound", "value": 1 },
+        { "name": "actorCreateFailed", "value": 2 },
+        { "name": "actorAlreadyExists", "value": 3 },
+        { "name": "actorTypeMismatch", "value": 4 },
+        { "name": "spotCreateFailed", "value": 5 },
+        { "name": "spotRouteNotFound", "value": 6 },
+        { "name": "spotTypeMismatch", "value": 7 },
+        { "name": "actorSessionNotBound", "value": 8 },
+        { "name": "handlerNotFound", "value": 9 },
+        { "name": "routeHandlerNotFound", "value": 10 },
+        { "name": "actorDispatchHandlerNotFound", "value": 11 },
+        { "name": "payloadDecodeFailed", "value": 12 },
+        { "name": "routeNotConnected", "value": 13 },
+        { "name": "requestTargetNotFound", "value": 14 },
+        { "name": "requestRejected", "value": 15 },
+        { "name": "requestProtocolError", "value": 16 },
+        { "name": "requestFailed", "value": 17 },
+        { "name": "workerQueueFull", "value": 18 },
+        { "name": "workerTimedOut", "value": 19 },
+        { "name": "workerFailed", "value": 20 },
+        { "name": "actorLocationStale", "value": 21 },
+        { "name": "actorCreateRejected", "value": 22 },
+        { "name": "spotGenerationStale", "value": 33 },
+        { "name": "spotMoving", "value": 34 },
+        { "name": "relocationDataLost", "value": 35 }
+      ]
+    },
+    {
+      "name": "instance-operation-kind",
+      "kind": "enum",
+      "encoding": "u8",
+      "values": [
+        { "name": "send", "value": 1 },
+        { "name": "request", "value": 2 }
+      ]
+    },
+    {
+      "name": "instance-route-kind",
+      "kind": "enum",
+      "encoding": "u8",
+      "values": [
+        { "name": "ready", "value": 1 },
+        { "name": "coldActivation", "value": 2 }
+      ]
+    },
+    {
+      "name": "user-spot-create-result",
+      "kind": "enum",
+      "encoding": "u8",
+      "values": [
+        { "name": "existing", "value": 1 },
+        { "name": "created", "value": 2 },
+        { "name": "rejected", "value": 3 }
+      ]
+    },
+    {
+      "name": "actor-create-result",
+      "kind": "enum",
+      "encoding": "u8",
+      "values": [
+        { "name": "existing", "value": 1 },
+        { "name": "created", "value": 2 },
+        { "name": "rejected", "value": 3 }
+      ]
+    },
+    {
+      "name": "instance-authority-state",
+      "kind": "enum",
+      "encoding": "u8",
+      "values": [
+        { "name": "coldActivating", "value": 1 },
+        { "name": "ready", "value": 2 },
+        { "name": "closing", "value": 3 },
+        { "name": "relocating", "value": 4 }
+      ]
+    },
+    {
+      "name": "reply-relay-context-kind",
+      "kind": "enum",
+      "encoding": "u8",
+      "values": [
+        { "name": "coldActivation", "value": 1 },
+        { "name": "maintenanceRelocation", "value": 2 }
+      ]
+    },
+    {
+      "name": "cold-activation-completion-kind",
+      "kind": "enum",
+      "encoding": "u8",
+      "values": [
+        { "name": "readyBarrier", "value": 1 },
+        { "name": "activationFailure", "value": 2 }
+      ]
+    },
+    {
+      "name": "reject-reason",
+      "kind": "enum",
+      "encoding": "u32",
+      "values": [
+        { "name": "protocolVersionUnsupported", "value": 1 },
+        { "name": "topologyMismatch", "value": 2 },
+        { "name": "identityMismatch", "value": 3 },
+        { "name": "securityIdentityMismatch", "value": 4 },
+        { "name": "channelMismatch", "value": 5 },
+        { "name": "lifecycleGenerationStale", "value": 6 },
+        { "name": "descriptorRevisionStale", "value": 7 },
+        { "name": "capabilityMismatch", "value": 8 },
+        { "name": "runtimeNotServing", "value": 9 },
+        { "name": "duplicateConnection", "value": 10 },
+        { "name": "invalidDescriptor", "value": 11 },
+        { "name": "resourceLimit", "value": 12 }
+      ]
+    },
+    {
+      "name": "actor-ref",
+      "kind": "struct",
+      "fields": [
+        { "name": "actorId", "$ref": "text8" },
+        { "name": "objectGeneration", "$ref": "nonzero-u64" }
+      ]
+    },
+    {
+      "name": "spot-ref",
+      "kind": "struct",
+      "fields": [
+        { "name": "spotId", "$ref": "text8" },
+        { "name": "objectGeneration", "$ref": "nonzero-u64" }
+      ]
+    },
+    {
+      "name": "actor-create-terminal",
+      "kind": "conditional-union",
+      "discriminators": [
+        { "name": "createResult", "source": "wire", "$ref": "actor-create-result" }
+      ],
+      "bodyLengthType": { "$ref": "u16" },
+      "bodyLengthCovers": "selected-case",
+      "cases": [
+        {
+          "when": { "createResult": "existing" },
+          "fields": [{ "name": "actor", "$ref": "actor-ref" }]
+        },
+        {
+          "when": { "createResult": "created" },
+          "fields": [{ "name": "actor", "$ref": "actor-ref" }]
+        },
+        { "when": { "createResult": "rejected" }, "fields": [] }
+      ],
+      "otherwise": "protocol-error",
+      "trailingBytes": "forbidden"
+    },
+    {
+      "name": "creation-operation-terminal-v1",
+      "kind": "versioned-length-delimited",
+      "version": { "$ref": "u8", "constant": 1 },
+      "length": { "$ref": "u32", "covers": "body" },
+      "maximumEncodedBytes": { "$bound": "creationTerminalEnvelopeBytes" },
+      "body": [
+        { "name": "terminalResult", "$ref": "request-terminal-result" },
+        { "name": "failureCode", "$ref": "framework-error-code" },
+        { "name": "hasCreation", "$ref": "bool8" },
+        {
+          "name": "creation",
+          "$ref": "actor-create-terminal",
+          "when": { "fieldEquals": { "name": "hasCreation", "value": "true" } },
+          "otherwise": "forbidden"
+        },
+        { "name": "hasApplicationPayload", "$ref": "bool8" },
+        {
+          "name": "applicationPayload",
+          "$ref": "application-payload-envelope-v1",
+          "when": {
+            "fieldEquals": { "name": "hasApplicationPayload", "value": "true" }
+          },
+          "otherwise": "forbidden"
+        }
+      ],
+      "constraints": [
+        {
+          "kind": "terminal-success-shape",
+          "when": { "terminalResult": "ok" },
+          "requires": {
+            "failureCode": "none",
+            "hasCreation": "true"
+          }
+        },
+        {
+          "kind": "terminal-failure-shape",
+          "when": { "terminalResultNot": "ok" },
+          "requires": {
+            "hasCreation": "false",
+            "hasApplicationPayload": "false"
+          }
+        },
+        {
+          "kind": "existing-has-no-application-payload",
+          "when": { "creation.createResult": "existing" },
+          "requires": { "hasApplicationPayload": "false" }
+        }
+      ],
+      "correlationFields": "forbidden",
+      "trailingBytes": "forbidden"
+    },
+    {
+      "name": "optional-spot-ref",
+      "kind": "conditional-union",
+      "discriminators": [
+        { "name": "hasSpot", "source": "wire", "$ref": "bool8" }
+      ],
+      "bodyLengthType": { "$ref": "u16" },
+      "bodyLengthCovers": "selected-case",
+      "cases": [
+        { "when": { "hasSpot": "false" }, "fields": [] },
+        {
+          "when": { "hasSpot": "true" },
+          "fields": [{ "name": "spot", "$ref": "spot-ref" }]
+        }
+      ],
+      "otherwise": "protocol-error",
+      "trailingBytes": "forbidden"
+    },
+    {
+      "name": "spot-membership",
+      "kind": "struct",
+      "fields": [
+        { "name": "spot", "$ref": "spot-ref" }
+      ]
+    },
+    {
+      "name": "optional-spot-membership",
+      "kind": "conditional-union",
+      "discriminators": [
+        { "name": "hasMembership", "source": "wire", "$ref": "bool8" }
+      ],
+      "bodyLengthType": { "$ref": "u16" },
+      "bodyLengthCovers": "selected-case",
+      "cases": [
+        { "when": { "hasMembership": "false" }, "fields": [] },
+        {
+          "when": { "hasMembership": "true" },
+          "fields": [{ "name": "membership", "$ref": "spot-membership" }]
+        }
+      ],
+      "otherwise": "protocol-error",
+      "trailingBytes": "forbidden"
+    },
+    {
+      "name": "bound-session-binding-transition",
+      "kind": "conditional-union",
+      "discriminators": [
+        { "name": "bindingState", "source": "wire", "$ref": "bound-session-binding-state" }
+      ],
+      "bodyLengthType": { "$ref": "u16" },
+      "bodyLengthCovers": "selected-case",
+      "cases": [
+        {
+          "when": { "bindingState": "active" },
+          "fields": [{ "name": "bindingGeneration", "$ref": "nonzero-u64" }]
+        },
+        {
+          "when": { "bindingState": "tombstone" },
+          "fields": [{ "name": "retiredBindingGeneration", "$ref": "nonzero-u64" }]
+        }
+      ],
+      "otherwise": "protocol-error",
+      "trailingBytes": "forbidden"
+    },
+    {
+      "name": "session-relocation-route-update",
+      "kind": "conditional-union",
+      "discriminators": [
+        { "name": "action", "source": "wire", "$ref": "session-relocation-route-action" }
+      ],
+      "bodyLengthType": { "$ref": "u16" },
+      "bodyLengthCovers": "selected-case",
+      "cases": [
+        {
+          "when": { "action": "commit" },
+          "fields": [
+            { "name": "previousAuthorityOwnerGeneration", "$ref": "nonzero-u64" },
+            { "name": "targetAuthorityOwnerGeneration", "$ref": "nonzero-u64" },
+            { "name": "targetNodeRid", "$ref": "rid" },
+            { "name": "targetNodeGeneration", "$ref": "nonzero-u64" },
+            { "name": "replayedHighWater", "$ref": "ordinal-or-zero" }
+          ]
+        },
+        {
+          "when": { "action": "abort" },
+          "fields": [
+            { "name": "currentAuthorityOwnerGeneration", "$ref": "nonzero-u64" }
+          ]
+        }
+      ],
+      "otherwise": "protocol-error",
+      "trailingBytes": "forbidden"
+    },
+    {
+      "name": "object-creation-key",
+      "kind": "conditional-union",
+      "discriminators": [
+        { "name": "objectKind", "source": "wire", "$ref": "stateful-object-kind" }
+      ],
+      "bodyLengthType": { "$ref": "u16" },
+      "bodyLengthCovers": "selected-case",
+      "cases": [
+        { "when": { "objectKind": "actor" },
+          "fields": [{ "name": "actorId", "$ref": "text8" }] },
+        { "when": { "objectKind": "userSpot" },
+          "fields": [{ "name": "spotId", "$ref": "text8" }] },
+        { "when": { "objectKind": "instanceSpot" },
+          "fields": [{ "name": "spotId", "$ref": "text8" }] }
+      ],
+      "otherwise": "protocol-error",
+      "trailingBytes": "forbidden"
+    },
+    {
+      "name": "object-creation-intent-v1",
+      "kind": "versioned-length-delimited",
+      "version": { "$ref": "u8", "constant": 1 },
+      "length": { "$ref": "u32", "covers": "body" },
+      "maximumEncodedBytes": { "$bound": "creationIntentBytes" },
+      "body": [
+        { "name": "key", "$ref": "object-creation-key" },
+        { "name": "stableType", "$ref": "text8" },
+        { "name": "initialMeshName", "$ref": "text8" },
+        { "name": "requestContentReference", "$ref": "creation-content-reference" },
+        { "name": "requestSha256", "$ref": "sha256-bytes" },
+        { "name": "requestEncodedSize", "$ref": "creation-request-size" }
+      ],
+      "trailingBytes": "forbidden"
+    },
+    {
+      "name": "pending-object-creation-v1",
+      "kind": "struct",
+      "fields": [
+        { "name": "reservationId", "$ref": "text8" },
+        { "name": "requestContentReference", "$ref": "creation-content-reference" },
+        { "name": "requestSha256", "$ref": "sha256-bytes" },
+        { "name": "requestEncodedSize", "$ref": "creation-request-size" }
+      ],
+      "presence": "required-only-when-allocation-state-is-pending-forbidden-when-active",
+      "storage": "current-authority-row-not-process-local-index",
+      "trailingBytes": "forbidden"
+    },
+    {
+      "name": "object-creation-target-v1",
+      "kind": "struct",
+      "fields": [
+        { "name": "meshName", "$ref": "text8" },
+        { "name": "nodeRid", "$ref": "rid" },
+        { "name": "nodeLifecycleGeneration", "$ref": "nonzero-u64" },
+        { "name": "ownerId", "$ref": "text8" },
+        { "name": "ownerLeaseGeneration", "$ref": "nonzero-u64" }
+      ],
+      "trailingBytes": "forbidden"
+    },
+    {
+      "name": "instance-activation-recovery-v1",
+      "kind": "struct",
+      "fields": [
+        { "name": "targetSpotId", "$ref": "text8" },
+        { "name": "stableType", "$ref": "text8" },
+        { "name": "targetMeshName", "$ref": "text8" },
+        { "name": "targetNodeRid", "$ref": "rid" },
+        { "name": "targetNodeGeneration", "$ref": "nonzero-u64" },
+        { "name": "targetDescriptorVersion", "$ref": "text8" },
+        { "name": "sourceNodeRid", "$ref": "rid" },
+        { "name": "sourceNodeGeneration", "$ref": "nonzero-u64" },
+        { "name": "sourceSpotId", "$ref": "optional-text8" },
+        { "name": "operationKind", "$ref": "instance-operation-kind" },
+        { "name": "operation", "$ref": "operation-id" },
+        { "name": "replyRoute", "$ref": "instance-reply-route" },
+        { "name": "deadlineUnixMs", "$ref": "nonzero-u64" },
+        { "name": "hasMetadata", "$ref": "bool8" },
+        {
+          "name": "metadata",
+          "$ref": "metadata-frame",
+          "when": { "fieldEquals": { "name": "hasMetadata", "value": "true" } },
+          "otherwise": "forbidden"
+        },
+        { "name": "applicationPayload", "$ref": "application-payload-envelope-v1" }
+      ],
+      "maximumEncodedBytes": { "$bound": "creationIntentBytes" },
+      "scope": "target-owned-instance-spot-cold-activation-only",
+      "metadataMeaning": "exact-command-39-metadata-flag-presence-and-immutable-frame-bytes",
+      "queueMeaning": "durable-activation-inbox-first-record-handler-blocked-until-ready-and-local-queue-head-restore",
+      "trailingBytes": "forbidden"
+    },
+    {
+      "name": "object-reservation-fence",
+      "kind": "struct",
+      "fields": [
+        { "name": "reservationId", "$ref": "text8" },
+        { "name": "expectedStoreVersion", "$ref": "authority-store-version" },
+        { "name": "objectGeneration", "$ref": "nonzero-u64" },
+        { "name": "authorityOwnerGeneration", "$ref": "nonzero-u64" },
+        { "name": "targetNodeRid", "$ref": "rid" },
+        { "name": "targetNodeGeneration", "$ref": "nonzero-u64" },
+        { "name": "targetOwnerId", "$ref": "text8" },
+        { "name": "targetOwnerLeaseGeneration", "$ref": "nonzero-u64" },
+        { "name": "pendingCapacityDelta", "$ref": "nonzero-u32" }
+      ],
+      "trailingBytes": "forbidden"
+    },
+    {
+      "name": "generic-reservation-operation-kind",
+      "kind": "enum",
+      "encoding": "u8",
+      "values": [
+        { "name": "reserve", "value": 1 },
+        { "name": "commit", "value": 2 },
+        { "name": "abort", "value": 3 }
+      ]
+    },
+    {
+      "name": "generic-object-reservation-v1",
+      "kind": "conditional-union",
+      "discriminators": [
+        { "name": "operationKind", "source": "wire", "$ref": "generic-reservation-operation-kind" }
+      ],
+      "bodyLengthType": { "$ref": "u32" },
+      "bodyLengthCovers": "selected-case",
+      "maximumEncodedBytes": { "$bound": "creationIntentBytes" },
+      "cases": [
+        { "when": { "operationKind": "reserve" }, "fields": [
+          { "name": "intent", "$ref": "object-creation-intent-v1" },
+          { "name": "target", "$ref": "object-creation-target-v1" },
+          { "name": "creatingPayload", "$ref": "durable-blob" },
+          { "name": "pendingCapacityDelta", "$ref": "nonzero-u32" }
+        ] },
+        { "when": { "operationKind": "commit" }, "fields": [
+          { "name": "key", "$ref": "object-creation-key" },
+          { "name": "fence", "$ref": "object-reservation-fence" }
+        ] },
+        { "when": { "operationKind": "abort" }, "fields": [
+          { "name": "key", "$ref": "object-creation-key" },
+          { "name": "fence", "$ref": "object-reservation-fence" }
+        ] }
+      ],
+      "otherwise": "protocol-error",
+      "trailingBytes": "forbidden"
+    },
+    {
+      "name": "aggregate-id",
+      "kind": "struct",
+      "fields": [
+        { "name": "high", "$ref": "u64" },
+        { "name": "low", "$ref": "u64" }
+      ],
+      "constraints": [{ "kind": "not-both-zero" }]
+    },
+    {
+      "name": "aggregate-participant-mutation-bytes",
+      "kind": "length-prefixed-bytes",
+      "lengthType": { "$ref": "u32" },
+      "minimumBytes": 1,
+      "maximumBytes": { "$bound": "maintenanceAggregateBytes" }
+    },
+    {
+      "name": "maintenance-aggregate-participant-v1",
+      "kind": "struct",
+      "fields": [
+        { "name": "object", "$ref": "relocation-object-identity" },
+        { "name": "expectedStoreVersion", "$ref": "authority-store-version" },
+        { "name": "mutation", "$ref": "aggregate-participant-mutation-bytes" }
+      ],
+      "trailingBytes": "forbidden"
+    },
+    {
+      "name": "aggregate-participant-vector",
+      "kind": "vector",
+      "countType": { "$ref": "u16" },
+      "maximumItems": { "$bound": "maintenanceAggregateParticipants" },
+      "item": { "$ref": "maintenance-aggregate-participant-v1" },
+      "constraints": [
+        { "kind": "sorted", "field": "object", "comparison": "canonical-authority-key-bytes" },
+        { "kind": "unique", "field": "object" }
+      ]
+    },
+    {
+      "name": "maintenance-aggregate-v1",
+      "kind": "versioned-length-delimited",
+      "version": { "$ref": "u8", "constant": 1 },
+      "length": { "$ref": "u32", "covers": "body" },
+      "maximumEncodedBytes": { "$bound": "maintenanceAggregateBytes" },
+      "body": [
+        { "name": "aggregateId", "$ref": "aggregate-id" },
+        { "name": "aggregateGeneration", "$ref": "nonzero-u64" },
+        { "name": "ownerSpot", "$ref": "spot-ref" },
+        { "name": "participants", "$ref": "aggregate-participant-vector" },
+        { "name": "inventoryDigestSha256", "$ref": "sha256-bytes" },
+        { "name": "relocationRoot", "$ref": "relocation-root-pointer" }
+      ],
+      "trailingBytes": "forbidden"
+    },
+    {
+      "name": "actor-route-fence",
+      "kind": "struct",
+      "fields": [
+        { "name": "actor", "$ref": "actor-ref" },
+        { "name": "targetNodeRid", "$ref": "rid" },
+        { "name": "targetNodeGeneration", "$ref": "nonzero-u64" },
+        { "name": "expectedAuthorityOwnerGeneration", "$ref": "nonzero-u64" },
+        { "name": "expectedOwnerLeaseGeneration", "$ref": "nonzero-u64" }
+      ],
+      "trailingBytes": "forbidden"
+    },
+    {
+      "name": "spot-route-fence",
+      "kind": "struct",
+      "fields": [
+        { "name": "spot", "$ref": "spot-ref" },
+        { "name": "targetNodeRid", "$ref": "rid" },
+        { "name": "targetNodeGeneration", "$ref": "nonzero-u64" },
+        { "name": "expectedAuthorityOwnerGeneration", "$ref": "nonzero-u64" },
+        { "name": "expectedOwnerLeaseGeneration", "$ref": "nonzero-u64" }
+      ],
+      "trailingBytes": "forbidden"
+    },
+    {
+      "name": "user-spot-close-fence-v1",
+      "kind": "versioned-length-delimited",
+      "version": { "$ref": "u8", "constant": 1 },
+      "length": { "$ref": "u16", "covers": "body" },
+      "body": [
+        { "name": "spot", "$ref": "spot-ref" },
+        { "name": "targetNodeRid", "$ref": "rid" },
+        { "name": "targetNodeGeneration", "$ref": "nonzero-u64" },
+        { "name": "expectedAuthorityOwnerGeneration", "$ref": "nonzero-u64" },
+        { "name": "expectedStoreVersion", "$ref": "authority-store-version" }
+      ],
+      "trailingBytes": "forbidden"
+    },
+    {
+      "name": "message-follow-route",
+      "kind": "conditional-union",
+      "discriminators": [
+        { "name": "objectKind", "source": "wire", "$ref": "authority-object-kind" }
+      ],
+      "bodyLengthType": { "$ref": "u16" },
+      "bodyLengthCovers": "selected-case",
+      "cases": [
+        { "when": { "objectKind": "actor" },
+          "fields": [{ "name": "actor", "$ref": "actor-route-fence" }] },
+        { "when": { "objectKind": "spot" },
+          "fields": [{ "name": "spot", "$ref": "spot-route-fence" }] }
+      ],
+      "otherwise": "protocol-error",
+      "trailingBytes": "forbidden"
+    },
+    {
+      "name": "message-follow-route-v1",
+      "kind": "versioned-length-delimited",
+      "version": { "$ref": "u8", "constant": 1 },
+      "length": { "$ref": "u32", "covers": "body" },
+      "maximumEncodedBytes": { "$bound": "messageFollowBytes" },
+      "body": [
+        { "name": "source", "$ref": "message-follow-route" },
+        { "name": "target", "$ref": "message-follow-route" },
+        { "name": "hopCount", "$ref": "u8", "minimum": 1,
+          "maximum": { "$bound": "messageFollowHopCount" } },
+        { "name": "queuedMessages", "$ref": "u32", "minimum": 0,
+          "maximum": { "$bound": "messageFollowMessages" } },
+        { "name": "queuedBytes", "$ref": "u32", "minimum": 0,
+          "maximum": { "$bound": "messageFollowBytes" } },
+        { "name": "originalOperation", "$ref": "operation-id" },
+        { "name": "originalReplyRouteId", "$ref": "u64",
+          "description": "nonzero for a request and zero for a one-way message" }
+      ],
+      "trailingBytes": "forbidden"
+    },
+    {
+      "name": "relocation-object-identity",
+      "kind": "conditional-union",
+      "discriminators": [
+        {
+          "name": "objectKind",
+          "source": "wire",
+          "$ref": "stateful-object-kind"
+        }
+      ],
+      "bodyLengthType": { "$ref": "u16" },
+      "bodyLengthCovers": "selected-case",
+      "cases": [
+        {
+          "when": {
+            "objectKind": "actor"
+          },
+          "fields": [
+            { "name": "actor", "$ref": "actor-ref" },
+            { "name": "expectedAuthorityOwnerGeneration", "$ref": "nonzero-u64" }
+          ]
+        },
+        {
+          "when": {
+            "objectKind": "userSpot"
+          },
+          "fields": [
+            { "name": "spot", "$ref": "spot-ref" },
+            { "name": "expectedAuthorityOwnerGeneration", "$ref": "nonzero-u64" }
+          ]
+        },
+        {
+          "when": {
+            "objectKind": "instanceSpot"
+          },
+          "fields": [
+            { "name": "instanceType", "$ref": "text8" },
+            { "name": "spotId", "$ref": "text8" },
+            { "name": "objectGeneration", "$ref": "nonzero-u64" }
+          ]
+        }
+      ],
+      "otherwise": "protocol-error",
+      "trailingBytes": "forbidden"
+    },
+    {
+      "name": "actor-authority-identity",
+      "kind": "struct",
+      "fields": [
+        { "name": "actorType", "$ref": "text8" },
+        { "name": "actorId", "$ref": "text8" },
+        { "name": "state", "$ref": "actor-authority-state" },
+        { "name": "currentSpot", "$ref": "spot-ref" },
+        { "name": "currentSpotKind", "$ref": "actor-spot-kind" }
+      ]
+    },
+    {
+      "name": "instance-authority-identity",
+      "kind": "conditional-union",
+      "discriminators": [
+        {
+          "name": "authorityState",
+          "source": "wire",
+          "$ref": "instance-authority-state"
+        }
+      ],
+      "bodyLengthType": { "$ref": "u16" },
+      "bodyLengthCovers": "selected-case",
+      "cases": [
+        {
+          "when": { "authorityState": "coldActivating" },
+          "fields": [
+            { "name": "instanceType", "$ref": "text8" },
+            { "name": "spotId", "$ref": "text8" }
+          ]
+        },
+        {
+          "when": { "authorityState": "ready" },
+          "fields": [
+            { "name": "instanceType", "$ref": "text8" },
+            { "name": "spotId", "$ref": "text8" }
+          ]
+        },
+        {
+          "when": { "authorityState": "closing" },
+          "fields": [
+            { "name": "instanceType", "$ref": "text8" },
+            { "name": "spotId", "$ref": "text8" }
+          ]
+        },
+        {
+          "when": { "authorityState": "relocating" },
+          "fields": [
+            { "name": "instanceType", "$ref": "text8" },
+            { "name": "spotId", "$ref": "text8" }
+          ]
+        }
+      ],
+      "otherwise": "protocol-error",
+      "trailingBytes": "forbidden"
+    },
+    {
+      "name": "spot-authority-identity",
+      "kind": "conditional-union",
+      "discriminators": [
+        {
+          "name": "spotKind",
+          "source": "wire",
+          "$ref": "spot-kind"
+        }
+      ],
+      "bodyLengthType": { "$ref": "u16" },
+      "bodyLengthCovers": "selected-case",
+      "cases": [
+        {
+          "when": { "spotKind": "entry" },
+          "fields": [
+            { "name": "spotId", "$ref": "text8" },
+            { "name": "spotType", "$ref": "text8" },
+            { "name": "state", "$ref": "entry-user-spot-authority-state" }
+          ]
+        },
+        {
+          "when": { "spotKind": "user" },
+          "fields": [
+            { "name": "spotId", "$ref": "text8" },
+            { "name": "spotType", "$ref": "text8" },
+            { "name": "state", "$ref": "entry-user-spot-authority-state" }
+          ]
+        },
+        {
+          "when": { "spotKind": "instance" },
+          "fields": [
+            { "name": "instance", "$ref": "instance-authority-identity" }
+          ]
+        }
+      ],
+      "otherwise": "protocol-error",
+      "trailingBytes": "forbidden"
+    },
+    {
+      "name": "authority-object-identity",
+      "kind": "conditional-union",
+      "discriminators": [
+        {
+          "name": "objectKind",
+          "source": "wire",
+          "$ref": "authority-object-kind"
+        }
+      ],
+      "bodyLengthType": { "$ref": "u16" },
+      "bodyLengthCovers": "selected-case",
+      "cases": [
+        {
+          "when": { "objectKind": "actor" },
+          "fields": [
+            { "name": "actor", "$ref": "actor-authority-identity" }
+          ]
+        },
+        {
+          "when": { "objectKind": "spot" },
+          "fields": [
+            { "name": "spot", "$ref": "spot-authority-identity" }
+          ]
+        }
+      ],
+      "otherwise": "protocol-error",
+      "trailingBytes": "forbidden"
+    },
+    {
+      "name": "operation-id",
+      "kind": "struct",
+      "fields": [
+        { "name": "high", "$ref": "u64" },
+        { "name": "low", "$ref": "u64" }
+      ],
+      "constraints": [
+        {
+          "kind": "not-both-zero",
+          "unless": "one-way-record-without-terminal-completion"
+        }
+      ]
+    },
+    {
+      "name": "creation-content-reference",
+      "kind": "length-prefixed-text",
+      "lengthType": { "$ref": "u16" },
+      "minimumBytes": 1,
+      "maximumBytes": { "$bound": "creationContentReferenceBytes" },
+      "encoding": "utf-8",
+      "nul": "forbidden"
+    },
+    {
+      "name": "relocation-reference",
+      "kind": "length-prefixed-text",
+      "lengthType": { "$ref": "u16" },
+      "minimumBytes": 1,
+      "maximumBytes": { "$bound": "relocationReferenceBytes" },
+      "encoding": "utf-8",
+      "nul": "forbidden"
+    },
+    {
+      "name": "authority-store-version",
+      "kind": "length-prefixed-text",
+      "lengthType": { "$ref": "u16" },
+      "minimumBytes": 1,
+      "maximumBytes": { "$bound": "authorityStoreVersionBytes" },
+      "encoding": "utf-8",
+      "nul": "forbidden"
+    },
+    {
+      "name": "authority-generation-fence",
+      "kind": "struct",
+      "fields": [
+        { "name": "objectGeneration", "$ref": "nonzero-u64" },
+        { "name": "ownerId", "$ref": "text8" },
+        { "name": "authorityOwnerGeneration", "$ref": "nonzero-u64" },
+        { "name": "leaseGeneration", "$ref": "nonzero-u64" },
+        { "name": "storeVersion", "$ref": "authority-store-version" }
+      ]
+    },
+    {
+      "name": "relocation-coordinator-fence",
+      "kind": "struct",
+      "fields": [
+        { "name": "coordinatorOwnerId", "$ref": "text8" },
+        { "name": "coordinatorLeaseGeneration", "$ref": "nonzero-u64" },
+        { "name": "coordinatorNodeRid", "$ref": "rid" },
+        { "name": "coordinatorNodeGeneration", "$ref": "nonzero-u64" },
+        { "name": "expectedAuthorityStoreVersion", "$ref": "authority-store-version" }
+      ],
+      "trailingBytes": "forbidden"
+    },
+    {
+      "name": "relocation-reservation-candidate",
+      "kind": "struct",
+      "fields": [
+        { "name": "targetNodeRid", "$ref": "rid" },
+        { "name": "targetNodeGeneration", "$ref": "nonzero-u64" },
+        { "name": "targetOwnerId", "$ref": "text8" },
+        { "name": "targetOwnerLeaseGeneration", "$ref": "nonzero-u64" }
+      ],
+      "trailingBytes": "forbidden"
+    },
+    {
+      "name": "relocation-source-cleanup-fence",
+      "kind": "struct",
+      "fields": [
+        { "name": "sourceOwnerId", "$ref": "text8" },
+        { "name": "sourceOwnerLeaseGeneration", "$ref": "nonzero-u64" },
+        { "name": "sourceNodeRid", "$ref": "rid" },
+        { "name": "sourceNodeGeneration", "$ref": "nonzero-u64" }
+      ],
+      "trailingBytes": "forbidden"
+    },
+    {
+      "name": "request-source-fence",
+      "kind": "struct",
+      "fields": [
+        { "name": "sourceOwnerId", "$ref": "text8" },
+        { "name": "sourceOwnerLeaseGeneration", "$ref": "nonzero-u64" },
+        { "name": "sourceNodeRid", "$ref": "rid" },
+        { "name": "sourceNodeGeneration", "$ref": "nonzero-u64" }
+      ],
+      "trailingBytes": "forbidden"
+    },
+    {
+      "name": "relocation-id",
+      "kind": "struct",
+      "fields": [
+        { "name": "high", "$ref": "u64" },
+        { "name": "low", "$ref": "u64" }
+      ],
+      "constraints": [
+        { "kind": "not-both-zero" }
+      ]
+    },
+    {
+      "name": "optional-actor-ref",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "actorId",
+          "$ref": "optional-text8"
+        },
+        {
+          "name": "generation",
+          "$ref": "nonzero-u64",
+          "when": {
+            "fieldPresent": "actorId"
+          },
+          "otherwise": "forbidden"
+        }
+      ],
+      "trailingBytes": "forbidden"
+    },
+    {
+      "name": "optional-bound-session-tail",
+      "kind": "struct",
+      "fields": [
+        { "name": "sourceSessionRid", "$ref": "rid" },
+        { "name": "sourceBindingGeneration", "$ref": "nonzero-u64" },
+        { "name": "sourceSessionSequence", "$ref": "nonzero-u64" }
+      ],
+      "presence": "command-flag-conditioned"
+    },
+    {
+      "name": "channel-entry",
+      "kind": "struct",
+      "fields": [
+        { "name": "channelName", "$ref": "text8" },
+        {
+          "name": "weight",
+          "$ref": "u32",
+          "minimum": 0,
+          "maximum": { "$bound": "weightMax" }
+        }
+      ]
+    },
+    {
+      "name": "channel-vector",
+      "kind": "vector",
+      "countType": { "$ref": "u16" },
+      "item": { "$ref": "channel-entry" },
+      "constraints": [
+        { "kind": "sorted", "field": "channelName", "comparison": "utf-8-bytes" },
+        { "kind": "unique", "field": "channelName", "comparison": "utf-8-bytes" }
+      ]
+    },
+    {
+      "name": "sorted-text8-vector",
+      "kind": "vector",
+      "countType": { "$ref": "u16" },
+      "maximumItems": 1024,
+      "item": { "$ref": "text8" },
+      "constraints": [
+        { "kind": "sorted", "comparison": "utf-8-bytes" },
+        { "kind": "unique", "comparison": "utf-8-bytes" }
+      ]
+    },
+    {
+      "name": "stateful-capability-entry",
+      "kind": "struct",
+      "fields": [
+        { "name": "objectKind", "$ref": "stateful-object-kind" },
+        { "name": "type", "$ref": "text8" },
+        { "name": "relocationPolicy", "$ref": "relocation-policy-kind" },
+        { "name": "activeCapacityLimit", "$ref": "object-capacity-limit" },
+        { "name": "pendingCapacityLimit", "$ref": "object-pending-capacity-limit" },
+        { "name": "hasSnapshotAdapter", "$ref": "bool8" },
+        { "name": "available", "$ref": "ordinal-or-zero" }
+      ]
+    },
+    {
+      "name": "stateful-capability-vector",
+      "kind": "vector",
+      "countType": { "$ref": "u16" },
+      "maximumItems": 1024,
+      "item": { "$ref": "stateful-capability-entry" },
+      "constraints": [
+        {
+          "kind": "sorted",
+          "fields": ["objectKind", "type"],
+          "comparison": "wire-value-then-utf-8-bytes"
+        },
+        { "kind": "unique", "fields": ["objectKind", "type"] }
+      ]
+    },
+    {
+      "name": "descriptor-extension",
+      "kind": "tlv32",
+      "maximumEncodedBytes": { "$bound": "descriptorEnvelopeBytes" },
+      "totalLengthType": { "$ref": "u32" },
+      "fieldIdType": { "$ref": "u8" },
+      "fieldLengthType": { "$ref": "u32" },
+      "fields": [
+        { "id": 1, "name": "runtimeState", "$ref": "runtime-state", "required": true },
+        { "id": 2, "name": "applicationVersion", "$ref": "application-version", "required": true },
+        { "id": 3, "name": "spotTypes", "$ref": "sorted-text8-vector", "required": false },
+        { "id": 4, "name": "statefulCapabilities", "$ref": "stateful-capability-vector", "required": false },
+        { "id": 5, "name": "maintenanceWave", "$ref": "optional-text8", "required": false },
+        {
+          "id": 6,
+          "name": "protocolCapabilities",
+          "$ref": "sorted-text8-vector",
+          "required": true,
+          "constraints": [
+            { "kind": "contains-protocol-required-capability" }
+          ]
+        },
+        { "id": 7, "name": "objectRole", "$ref": "object-role", "required": true },
+        { "id": 8, "name": "placementWeight", "$ref": "u32", "required": true,
+          "minimum": 0, "maximum": { "$bound": "weightMax" } },
+        { "id": 9, "name": "activeCapacityLimit", "$ref": "object-capacity-limit", "required": true },
+        { "id": 10, "name": "pendingCapacityLimit", "$ref": "object-pending-capacity-limit", "required": true },
+        { "id": 11, "name": "activeCapacityUsed", "$ref": "u32", "required": true },
+        { "id": 12, "name": "pendingCapacityUsed", "$ref": "u32", "required": true }
+      ],
+      "encodingOrder": "ascending-field-id",
+      "duplicateField": "protocol-error",
+      "unknownField": "skip-after-length-validation",
+      "trailingBytes": "forbidden"
+    },
+    {
+      "name": "route-mesh-admission",
+      "kind": "struct",
+      "fields": [
+        { "name": "meshName", "$ref": "text8" },
+        { "name": "securityIdentity", "$ref": "text8" },
+        { "name": "normalizedEffectiveMaxMessageBytes", "$ref": "nonzero-u32" },
+        { "name": "lifecycleGeneration", "$ref": "nonzero-u64" },
+        { "name": "descriptorRevision", "$ref": "nonzero-u64" },
+        { "name": "advertisedEndpoint", "$ref": "endpoint" },
+        { "name": "channels", "$ref": "channel-vector" },
+        { "name": "extension", "$ref": "descriptor-extension" }
+      ],
+      "trailingBytes": "forbidden"
+    },
+    {
+      "name": "client-server-admission",
+      "kind": "conditional-union",
+      "discriminators": [
+        { "name": "role", "source": "wire", "$ref": "client-server-role" }
+      ],
+      "bodyLengthType": { "$ref": "u16" },
+      "bodyLengthCovers": "selected-case",
+      "cases": [
+        {
+          "when": { "role": "client" },
+          "fields": [
+            { "name": "channelName", "$ref": "text8" },
+            { "name": "direction", "$ref": "client-server-direction", "constant": "clientToServer" },
+            { "name": "securityIdentity", "$ref": "text8" },
+            { "name": "normalizedEffectiveMaxMessageBytes", "$ref": "nonzero-u32" }
+          ]
+        },
+        {
+          "when": { "role": "server" },
+          "fields": [
+            { "name": "channelName", "$ref": "text8" },
+            { "name": "direction", "$ref": "client-server-direction", "constant": "clientToServer" },
+            { "name": "serverRid", "$ref": "rid" },
+            { "name": "lifecycleGeneration", "$ref": "nonzero-u64" },
+            { "name": "descriptorRevision", "$ref": "nonzero-u64" },
+            { "name": "weight", "$ref": "u32", "minimum": 0, "maximum": { "$bound": "weightMax" } },
+            { "name": "runtimeState", "$ref": "runtime-state" },
+            { "name": "securityIdentity", "$ref": "text8" },
+            { "name": "normalizedEffectiveMaxMessageBytes", "$ref": "nonzero-u32" },
+            { "name": "advertisedEndpoint", "$ref": "endpoint" }
+          ]
+        }
+      ],
+      "otherwise": "protocol-error",
+      "trailingBytes": "forbidden"
+    },
+    {
+      "name": "service-admission",
+      "kind": "conditional-union",
+      "discriminators": [
+        { "name": "topologyKind", "source": "wire", "$ref": "service-topology-kind" }
+      ],
+      "bodyLengthType": { "$ref": "u32" },
+      "bodyLengthCovers": "selected-case",
+      "maximumEncodedBytes": { "$bound": "descriptorEnvelopeBytes" },
+      "cases": [
+        {
+          "when": { "topologyKind": "routeMesh" },
+          "fields": [{ "name": "routeMesh", "$ref": "route-mesh-admission" }]
+        },
+        {
+          "when": { "topologyKind": "clientServer" },
+          "fields": [{ "name": "clientServer", "$ref": "client-server-admission" }]
+        }
+      ],
+      "otherwise": "protocol-error",
+      "trailingBytes": "forbidden"
+    },
+    {
+      "name": "relocation-participant-identity",
+      "kind": "conditional-union",
+      "discriminators": [
+        { "name": "participantKind", "source": "wire", "$ref": "relocation-participant-kind" }
+      ],
+      "bodyLengthType": { "$ref": "u16" },
+      "bodyLengthCovers": "selected-case",
+      "cases": [
+        { "when": { "participantKind": "objectMailbox" }, "fields": [] },
+        {
+          "when": { "participantKind": "boundSession" },
+          "fields": [
+            { "name": "sessionOwnerNodeRid", "$ref": "rid" },
+            { "name": "sessionOwnerNodeGeneration", "$ref": "nonzero-u64" },
+            { "name": "sessionOwnerId", "$ref": "text8" },
+            { "name": "sessionOwnerLeaseGeneration", "$ref": "nonzero-u64" },
+            { "name": "sessionRid", "$ref": "rid" },
+            { "name": "bindingGeneration", "$ref": "nonzero-u64" }
+          ]
+        }
+      ],
+      "otherwise": "protocol-error",
+      "trailingBytes": "forbidden"
+    },
+    {
+      "name": "participant-entry",
+      "kind": "struct",
+      "fields": [
+        { "name": "participantId", "$ref": "nonzero-u64" },
+        { "name": "identity", "$ref": "relocation-participant-identity" },
+        { "name": "allowanceMessages", "$ref": "ordinal-or-zero" },
+        { "name": "allowanceBytes", "$ref": "ordinal-or-zero" }
+      ]
+    },
+    {
+      "name": "participant-vector",
+      "kind": "vector",
+      "countType": { "$ref": "u32" },
+      "maximumItems": { "$bound": "relocationResourceParticipants" },
+      "item": { "$ref": "participant-entry" },
+      "constraints": [
+        { "kind": "sorted", "field": "participantId", "comparison": "unsigned-wire-value" },
+        { "kind": "unique", "field": "participantId" }
+      ]
+    },
+    {
+      "name": "participant-terminal-entry",
+      "kind": "struct",
+      "fields": [
+        { "name": "participantId", "$ref": "nonzero-u64" },
+        { "name": "highWater", "$ref": "ordinal-or-zero" }
+      ]
+    },
+    {
+      "name": "participant-terminal-vector",
+      "kind": "vector",
+      "countType": { "$ref": "u32" },
+      "maximumItems": { "$bound": "relocationResourceParticipants" },
+      "item": { "$ref": "participant-terminal-entry" },
+      "constraints": [
+        { "kind": "sorted", "field": "participantId", "comparison": "unsigned-wire-value" },
+        { "kind": "unique", "field": "participantId" }
+      ]
+    },
+    {
+      "name": "participant-progress-entry",
+      "kind": "struct",
+      "fields": [
+        { "name": "participantId", "$ref": "nonzero-u64" },
+        { "name": "acceptedBoundary", "$ref": "ordinal-or-zero" },
+        { "name": "replayCursor", "$ref": "ordinal-or-zero" }
+      ],
+      "constraints": [
+        {
+          "kind": "field-less-than-or-equal",
+          "left": "replayCursor",
+          "right": "acceptedBoundary"
+        }
+      ]
+    },
+    {
+      "name": "participant-progress-vector",
+      "kind": "vector",
+      "countType": { "$ref": "u32" },
+      "maximumItems": { "$bound": "relocationResourceParticipants" },
+      "item": { "$ref": "participant-progress-entry" },
+      "constraints": [
+        { "kind": "sorted", "field": "participantId", "comparison": "unsigned-wire-value" },
+        { "kind": "unique", "field": "participantId" }
+      ]
+    },
+    {
+      "name": "request-completion-entry",
+      "kind": "struct",
+      "fields": [
+        { "name": "operationId", "$ref": "operation-id" },
+        { "name": "requestSource", "$ref": "request-source-fence" },
+        { "name": "participantId", "$ref": "nonzero-u64" },
+        { "name": "sequence", "$ref": "nonzero-u64" },
+        { "name": "terminalResult", "$ref": "request-terminal-result" },
+        { "name": "failureCode", "$ref": "framework-error-code" },
+        { "name": "deliveryState", "$ref": "completion-delivery-state" },
+        { "name": "hasPayload", "$ref": "bool8" },
+        {
+          "name": "payload",
+          "$ref": "application-payload-envelope-v1",
+          "when": { "fieldEquals": { "name": "hasPayload", "value": "true" } },
+          "otherwise": "forbidden"
+        }
+      ],
+      "trailingBytes": "forbidden"
+    },
+    {
+      "name": "request-completion-vector",
+      "kind": "vector",
+      "countType": { "$ref": "u32" },
+      "maximumItems": { "$bound": "journalRecordCount" },
+      "item": { "$ref": "request-completion-entry" },
+      "constraints": [
+        {
+          "kind": "sorted",
+          "fields": ["participantId", "sequence"],
+          "comparison": "unsigned-wire-value"
+        },
+        { "kind": "unique", "fields": ["participantId", "sequence"] },
+        {
+          "kind": "unique",
+          "fields": [
+            "requestSource.sourceOwnerId",
+            "requestSource.sourceOwnerLeaseGeneration",
+            "requestSource.sourceNodeRid",
+            "requestSource.sourceNodeGeneration",
+            "operationId.high",
+            "operationId.low"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "instance-reply-route",
+      "kind": "conditional-union",
+      "discriminators": [
+        {
+          "name": "operationKind",
+          "source": { "enclosingField": "operationKind" },
+          "$ref": "instance-operation-kind"
+        }
+      ],
+      "cases": [
+        { "when": { "operationKind": "send" }, "fields": [] },
+        {
+          "when": { "operationKind": "request" },
+          "fields": [
+            { "name": "replyRouteId", "$ref": "nonzero-u64" }
+          ]
+        }
+      ],
+      "otherwise": "protocol-error",
+      "trailingBytes": "forbidden"
+    },
+    {
+      "name": "cold-activation-reply-context",
+      "kind": "conditional-union",
+      "discriminators": [
+        {
+          "name": "completionKind",
+          "source": "wire",
+          "$ref": "cold-activation-completion-kind"
+        }
+      ],
+      "bodyLengthType": { "$ref": "u16" },
+      "bodyLengthCovers": "selected-case",
+      "cases": [
+        {
+          "when": { "completionKind": "readyBarrier" },
+          "fields": [
+            { "name": "authority", "$ref": "authority-generation-fence" }
+          ]
+        },
+        {
+          "when": { "completionKind": "activationFailure" },
+          "fields": [
+            { "name": "authority", "$ref": "authority-generation-fence" }
+          ]
+        }
+      ],
+      "otherwise": "protocol-error",
+      "trailingBytes": "forbidden"
+    },
+    {
+      "name": "reply-relay-context",
+      "kind": "conditional-union",
+      "discriminators": [
+        {
+          "name": "contextKind",
+          "source": "wire",
+          "$ref": "reply-relay-context-kind"
+        }
+      ],
+      "bodyLengthType": { "$ref": "u16" },
+      "bodyLengthCovers": "selected-case",
+      "cases": [
+        {
+          "when": { "contextKind": "coldActivation" },
+          "fields": [
+            { "name": "coldActivation", "$ref": "cold-activation-reply-context" }
+          ]
+        },
+        {
+          "when": { "contextKind": "maintenanceRelocation" },
+          "fields": [
+            { "name": "relocation", "$ref": "relocation-id" },
+            { "name": "targetAttemptGeneration", "$ref": "nonzero-u64" },
+            { "name": "coordinator", "$ref": "relocation-coordinator-fence" },
+            { "name": "participantId", "$ref": "nonzero-u64" },
+            { "name": "sequence", "$ref": "nonzero-u64" }
+          ]
+        }
+      ],
+      "otherwise": "protocol-error",
+      "trailingBytes": "forbidden"
+    },
+    {
+      "name": "send-ready-destination",
+      "kind": "conditional-union",
+      "discriminators": [
+        { "name": "destinationKind", "source": "wire", "$ref": "mesh-destination-kind" }
+      ],
+      "bodyLengthType": { "$ref": "u16" },
+      "bodyLengthCovers": "selected-case",
+      "cases": [
+        {
+          "when": { "destinationKind": "node" },
+          "fields": [{ "name": "targetNodeRid", "$ref": "rid" }]
+        },
+        {
+          "when": { "destinationKind": "channel" },
+          "fields": [{ "name": "channelName", "$ref": "text8" }]
+        },
+        {
+          "when": { "destinationKind": "spot" },
+          "fields": [
+            { "name": "targetSpot", "$ref": "spot-route-fence" }
+          ]
+        },
+        {
+          "when": { "destinationKind": "actor" },
+          "fields": [{ "name": "targetActor", "$ref": "actor-route-fence" }]
+        },
+        {
+          "when": { "destinationKind": "boundSession" },
+          "fields": [
+            { "name": "targetActor", "$ref": "actor-route-fence" },
+            { "name": "bindingGeneration", "$ref": "nonzero-u64" }
+          ]
+        }
+      ],
+      "otherwise": "protocol-error",
+      "trailingBytes": "forbidden"
+    },
+    {
+      "name": "actor-membership-snapshot",
+      "kind": "struct",
+      "fields": [
+        { "name": "actor", "$ref": "actor-ref" },
+        { "name": "membership", "$ref": "spot-membership" }
+      ]
+    },
+    {
+      "name": "optional-actor-membership-snapshot",
+      "kind": "conditional-union",
+      "discriminators": [
+        { "name": "hasSnapshot", "source": "wire", "$ref": "bool8" }
+      ],
+      "bodyLengthType": { "$ref": "u16" },
+      "bodyLengthCovers": "selected-case",
+      "cases": [
+        { "when": { "hasSnapshot": "false" }, "fields": [] },
+        {
+          "when": { "hasSnapshot": "true" },
+          "fields": [{ "name": "snapshot", "$ref": "actor-membership-snapshot" }]
+        }
+      ],
+      "otherwise": "protocol-error",
+      "trailingBytes": "forbidden"
+    },
+    {
+      "name": "actor-control-data",
+      "kind": "conditional-union",
+      "discriminators": [
+        { "name": "lifecycleKind", "source": "wire", "$ref": "actor-lifecycle-kind" }
+      ],
+      "bodyLengthType": { "$ref": "u16" },
+      "bodyLengthCovers": "selected-case",
+      "cases": [
+        {
+          "when": { "lifecycleKind": "created" },
+          "fields": [{ "name": "current", "$ref": "actor-membership-snapshot" }]
+        },
+        {
+          "when": { "lifecycleKind": "joined" },
+          "fields": [
+            { "name": "previous", "$ref": "optional-actor-membership-snapshot" },
+            { "name": "current", "$ref": "actor-membership-snapshot" }
+          ]
+        },
+        {
+          "when": { "lifecycleKind": "left" },
+          "fields": [
+            { "name": "previous", "$ref": "actor-membership-snapshot" },
+            { "name": "current", "$ref": "actor-membership-snapshot" }
+          ]
+        },
+        {
+          "when": { "lifecycleKind": "disconnected" },
+          "fields": [{ "name": "current", "$ref": "actor-membership-snapshot" }]
+        },
+        {
+          "when": { "lifecycleKind": "destroyed" },
+          "fields": [{ "name": "previous", "$ref": "actor-membership-snapshot" }]
+        }
+      ],
+      "otherwise": "protocol-error",
+      "trailingBytes": "forbidden"
+    },
+    {
+      "name": "relocation-control-data",
+      "kind": "struct",
+      "fields": [
+        { "name": "phase", "$ref": "relocation-phase" },
+        { "name": "role", "$ref": "relocation-role" },
+        { "name": "relocation", "$ref": "relocation-id" },
+        { "name": "object", "$ref": "relocation-object-identity" },
+        { "name": "terminalResult", "$ref": "request-terminal-result" },
+        { "name": "failureCode", "$ref": "framework-error-code" }
+      ],
+      "trailingBytes": "forbidden"
+    },
+    {
+      "name": "relocation-extension",
+      "kind": "tlv32",
+      "maximumEncodedBytes": { "$bound": "relocationControlEnvelopeBytes" },
+      "totalLengthType": { "$ref": "u32" },
+      "fieldIdType": { "$ref": "u8" },
+      "fieldLengthType": { "$ref": "u32" },
+      "fields": [
+        { "id": 2, "name": "sourceNodeGeneration", "$ref": "nonzero-u64", "required": true },
+        { "id": 3, "name": "targetNodeGeneration", "$ref": "nonzero-u64", "required": true },
+        { "id": 4, "name": "reservationGeneration", "$ref": "nonzero-u64", "required": true },
+        { "id": 5, "name": "relocationReference", "$ref": "relocation-reference", "required": false },
+        { "id": 6, "name": "relocationChecksumCrc32c", "$ref": "u32", "required": false },
+        { "id": 8, "name": "applicationVersion", "$ref": "application-version", "required": true },
+        {
+          "id": 9,
+          "name": "participantProgress",
+          "$ref": "participant-progress-vector",
+          "required": true
+        }
+      ],
+      "presenceRules": [
+        {
+          "when": {
+            "contextEquals": {
+              "name": "durableRelocationPresent",
+              "value": true
+            }
+          },
+          "require": ["relocationReference", "relocationChecksumCrc32c"]
+        },
+        {
+          "when": {
+            "contextEquals": {
+              "name": "durableRelocationPresent",
+              "value": false
+            }
+          },
+          "forbid": ["relocationReference", "relocationChecksumCrc32c"]
+        }
+      ],
+      "encodingOrder": "ascending-field-id",
+      "duplicateField": "protocol-error",
+      "unknownField": "skip-after-length-validation",
+      "trailingBytes": "forbidden"
+    },
+    {
+      "name": "request-specific-tail",
+      "kind": "conditional-union",
+      "discriminators": [
+        {
+          "name": "originalOperationKind",
+          "source": {
+            "context": "originalOperationKind"
+          },
+          "$ref": "mesh-operation-kind"
+        },
+        {
+          "name": "terminalResult",
+          "source": {
+            "enclosingField": "terminalResult"
+          },
+          "$ref": "request-terminal-result"
+        }
+      ],
+      "cases": [
+        {
+          "when": {
+            "originalOperationKind": "actorLookup",
+            "terminalResult": "ok"
+          },
+          "fields": [
+            { "name": "actor", "$ref": "actor-ref" },
+            { "name": "spotId", "$ref": "text8" },
+            { "name": "spotGeneration", "$ref": "nonzero-u64" },
+            { "name": "authorityOwnerGeneration", "$ref": "nonzero-u64" }
+          ]
+        },
+        {
+          "when": {
+            "originalOperationKind": "actorJoin",
+            "terminalResult": "ok"
+          },
+          "fields": [
+            { "name": "join", "$ref": "actor-join-reply-tail" }
+          ]
+        },
+        {
+          "when": {
+            "originalOperationKind": "streamBind",
+            "terminalResult": "ok"
+          },
+          "fields": [
+            { "name": "bindingGeneration", "$ref": "nonzero-u64" },
+            { "name": "authorityOwnerGeneration", "$ref": "nonzero-u64" }
+          ]
+        },
+        {
+          "when": {
+            "originalOperationKind": "userSpotCreate",
+            "terminalResult": "ok"
+          },
+          "fields": [
+            { "name": "createResult", "$ref": "user-spot-create-result" },
+            { "name": "spot", "$ref": "spot-ref" }
+          ]
+        },
+        {
+          "when": {
+            "originalOperationKind": "userSpotClose",
+            "terminalResult": "ok"
+          },
+          "fields": [
+            { "name": "closed", "$ref": "bool8" }
+          ]
+        },
+        {
+          "when": {
+            "originalOperationKind": "actorCreate",
+            "terminalResult": "ok"
+          },
+          "fields": [
+            { "name": "creation", "$ref": "actor-create-terminal" }
+          ]
+        }
+      ],
+      "otherwise": {
+        "fields": []
+      },
+      "trailingBytes": "forbidden"
+    },
+    {
+      "name": "frozen-record-body",
+      "kind": "conditional-union",
+      "discriminators": [
+        {
+          "name": "recordKind",
+          "source": { "enclosingField": "recordKind" },
+          "$ref": "mesh-record-kind"
+        }
+      ],
+      "cases": [
+        {
+          "when": { "recordKind": "nodeSend" },
+          "fields": [{ "name": "payload", "$ref": "application-payload-envelope-v1" }]
+        },
+        {
+          "when": { "recordKind": "nodeRequest" },
+          "fields": [{ "name": "payload", "$ref": "application-payload-envelope-v1" }]
+        },
+        {
+          "when": { "recordKind": "channelSend" },
+          "fields": [
+            { "name": "channelName", "$ref": "text8" },
+            { "name": "payload", "$ref": "application-payload-envelope-v1" }
+          ]
+        },
+        {
+          "when": { "recordKind": "channelRequest" },
+          "fields": [
+            { "name": "channelName", "$ref": "text8" },
+            { "name": "payload", "$ref": "application-payload-envelope-v1" }
+          ]
+        },
+        {
+          "when": { "recordKind": "spotSend" },
+          "fields": [
+            { "name": "targetSpot", "$ref": "spot-route-fence" },
+            { "name": "payload", "$ref": "application-payload-envelope-v1" }
+          ]
+        },
+        {
+          "when": { "recordKind": "spotRequest" },
+          "fields": [
+            { "name": "targetSpot", "$ref": "spot-route-fence" },
+            { "name": "payload", "$ref": "application-payload-envelope-v1" }
+          ]
+        },
+        {
+          "when": { "recordKind": "spotMulticast" },
+          "fields": [
+            { "name": "channelName", "$ref": "text8" },
+            { "name": "topic", "$ref": "text8" },
+            { "name": "payload", "$ref": "application-payload-envelope-v1" }
+          ]
+        },
+        {
+          "when": { "recordKind": "spotControl" },
+          "fields": [{ "name": "control", "$ref": "actor-control-data" }]
+        },
+        {
+          "when": { "recordKind": "actorSend" },
+          "fields": [
+            { "name": "targetActor", "$ref": "actor-route-fence" },
+            { "name": "payload", "$ref": "application-payload-envelope-v1" }
+          ]
+        },
+        {
+          "when": { "recordKind": "actorRequest" },
+          "fields": [
+            { "name": "targetActor", "$ref": "actor-route-fence" },
+            { "name": "payload", "$ref": "application-payload-envelope-v1" }
+          ]
+        },
+        {
+          "when": { "recordKind": "completion" },
+          "fields": [
+            { "name": "terminalResult", "$ref": "request-terminal-result" },
+            { "name": "failureCode", "$ref": "framework-error-code" },
+            { "name": "hasPayload", "$ref": "bool8" },
+            {
+              "name": "payload",
+              "$ref": "application-payload-envelope-v1",
+              "when": { "fieldEquals": { "name": "hasPayload", "value": "true" } },
+              "otherwise": "forbidden"
+            }
+          ]
+        },
+        {
+          "when": { "recordKind": "sendReady" },
+          "fields": [{ "name": "destination", "$ref": "send-ready-destination" }]
+        },
+        {
+          "when": { "recordKind": "relocationControl" },
+          "fields": [{ "name": "control", "$ref": "relocation-control-data" }]
+        },
+        {
+          "when": { "recordKind": "instanceSpotActivation" },
+          "fields": [
+            { "name": "route", "$ref": "instance-route-v1" },
+            { "name": "sourceNodeGeneration", "$ref": "nonzero-u64" },
+            { "name": "operationKind", "$ref": "instance-operation-kind" },
+            { "name": "payload", "$ref": "application-payload-envelope-v1" }
+          ]
+        }
+      ],
+      "otherwise": "protocol-error",
+      "trailingBytes": "forbidden"
+    },
+    {
+      "name": "frozen-source-identity",
+      "kind": "conditional-union",
+      "discriminators": [
+        { "name": "sourceKind", "source": "wire", "$ref": "frozen-source-kind" }
+      ],
+      "bodyLengthType": { "$ref": "u16" },
+      "bodyLengthCovers": "selected-case",
+      "cases": [
+        {
+          "when": { "sourceKind": "node" },
+          "fields": [
+            { "name": "sourceNodeRid", "$ref": "rid" },
+            { "name": "sourceNodeGeneration", "$ref": "nonzero-u64" },
+            { "name": "sourceOwnerId", "$ref": "text8" },
+            { "name": "sourceOwnerLeaseGeneration", "$ref": "nonzero-u64" }
+          ]
+        },
+        {
+          "when": { "sourceKind": "spot" },
+          "fields": [
+            { "name": "sourceNodeRid", "$ref": "rid" },
+            { "name": "sourceNodeGeneration", "$ref": "nonzero-u64" },
+            { "name": "sourceOwnerId", "$ref": "text8" },
+            { "name": "sourceOwnerLeaseGeneration", "$ref": "nonzero-u64" },
+            { "name": "sourceSpotId", "$ref": "text8" }
+          ]
+        },
+        {
+          "when": { "sourceKind": "actor" },
+          "fields": [
+            { "name": "sourceNodeRid", "$ref": "rid" },
+            { "name": "sourceNodeGeneration", "$ref": "nonzero-u64" },
+            { "name": "sourceOwnerId", "$ref": "text8" },
+            { "name": "sourceOwnerLeaseGeneration", "$ref": "nonzero-u64" },
+            { "name": "sourceActor", "$ref": "actor-ref" }
+          ]
+        },
+        {
+          "when": { "sourceKind": "boundSession" },
+          "fields": [
+            { "name": "sourceNodeRid", "$ref": "rid" },
+            { "name": "sourceNodeGeneration", "$ref": "nonzero-u64" },
+            { "name": "sourceOwnerId", "$ref": "text8" },
+            { "name": "sourceOwnerLeaseGeneration", "$ref": "nonzero-u64" },
+            { "name": "sourceActor", "$ref": "actor-ref" },
+            { "name": "sourceSessionRid", "$ref": "rid" },
+            { "name": "sourceBindingGeneration", "$ref": "nonzero-u64" },
+            { "name": "sourceSessionSequence", "$ref": "nonzero-u64" }
+          ]
+        }
+      ],
+      "otherwise": "protocol-error",
+      "trailingBytes": "forbidden"
+    },
+    {
+      "name": "frozen-reply-route",
+      "kind": "conditional-union",
+      "discriminators": [
+        {
+          "name": "originalOperationKind",
+          "source": { "context": "originalOperationKind" },
+          "$ref": "mesh-operation-kind"
+        }
+      ],
+      "bodyLengthType": { "$ref": "u16" },
+      "bodyLengthCovers": "selected-case",
+      "cases": [
+        { "when": { "originalOperationKind": "nodeRequest" }, "fields": [{ "name": "replyRouteId", "$ref": "nonzero-u64" }] },
+        { "when": { "originalOperationKind": "channelRequest" }, "fields": [{ "name": "replyRouteId", "$ref": "nonzero-u64" }] },
+        { "when": { "originalOperationKind": "spotRequest" }, "fields": [{ "name": "replyRouteId", "$ref": "nonzero-u64" }] },
+        { "when": { "originalOperationKind": "actorRequest" }, "fields": [{ "name": "replyRouteId", "$ref": "nonzero-u64" }] },
+        { "when": { "originalOperationKind": "instanceSpotRequest" }, "fields": [{ "name": "replyRouteId", "$ref": "nonzero-u64" }] }
+      ],
+      "otherwise": { "fields": [] },
+      "trailingBytes": "forbidden"
+    },
+    {
+      "name": "frozen-record",
+      "kind": "struct",
+      "fields": [
+        { "name": "recordKind", "$ref": "mesh-record-kind" },
+        { "name": "source", "$ref": "frozen-source-identity" },
+        { "name": "hasMetadata", "$ref": "bool8" },
+        {
+          "name": "metadata",
+          "$ref": "metadata-frame",
+          "when": { "fieldEquals": { "name": "hasMetadata", "value": "true" } },
+          "otherwise": "forbidden"
+        },
+        { "name": "operationId", "$ref": "operation-id" },
+        { "name": "operationKind", "$ref": "mesh-operation-kind" },
+        { "name": "replyRoute", "$ref": "frozen-reply-route" },
+        { "name": "body", "$ref": "frozen-record-body" }
+      ],
+      "trailingBytes": "forbidden"
+    },
+    {
+      "name": "instance-route-v1",
+      "kind": "conditional-union",
+      "discriminators": [
+        { "name": "routeKind", "source": "wire", "$ref": "instance-route-kind" }
+      ],
+      "bodyLengthType": { "$ref": "u16" },
+      "bodyLengthCovers": "selected-case",
+      "cases": [
+        {
+          "when": { "routeKind": "ready" },
+          "fields": [
+            { "name": "targetNodeRid", "$ref": "rid" },
+            { "name": "targetNodeGeneration", "$ref": "nonzero-u64" },
+            { "name": "targetSpotId", "$ref": "text8" },
+            { "name": "authority", "$ref": "authority-generation-fence" }
+          ]
+        },
+        {
+          "when": { "routeKind": "coldActivation" },
+          "fields": [
+            { "name": "targetNodeRid", "$ref": "rid" },
+            { "name": "targetNodeGeneration", "$ref": "nonzero-u64" },
+            { "name": "targetSpotId", "$ref": "text8" },
+            { "name": "targetMeshName", "$ref": "text8" },
+            { "name": "stableType", "$ref": "text8" },
+            { "name": "targetDescriptorVersion", "$ref": "text8" },
+            { "name": "deadlineUnixMs", "$ref": "nonzero-u64" }
+          ]
+        }
+      ],
+      "otherwise": "protocol-error",
+      "trailingBytes": "forbidden"
+    },
+    {
+      "name": "relocation-root-pointer",
+      "kind": "conditional-union",
+      "discriminators": [
+        { "name": "hasRelocation", "source": "wire", "$ref": "bool8" }
+      ],
+      "bodyLengthType": { "$ref": "u16" },
+      "bodyLengthCovers": "selected-case",
+      "cases": [
+        { "when": { "hasRelocation": "false" }, "fields": [] },
+        {
+          "when": { "hasRelocation": "true" },
+          "fields": [
+            { "name": "reference", "$ref": "relocation-reference" },
+            { "name": "checksumCrc32c", "$ref": "u32" }
+          ]
+        }
+      ],
+      "otherwise": "protocol-error",
+      "trailingBytes": "forbidden"
+    },
+    {
+      "name": "authority-relocation-state",
+      "kind": "conditional-union",
+      "discriminators": [
+        { "name": "hasRelocation", "source": "wire", "$ref": "bool8" }
+      ],
+      "bodyLengthType": { "$ref": "u32" },
+      "bodyLengthCovers": "selected-case",
+      "maximumEncodedBytes": { "$bound": "authorityEnvelopeBytes" },
+      "cases": [
+        { "when": { "hasRelocation": "false" }, "fields": [] },
+        {
+          "when": { "hasRelocation": "true" },
+          "fields": [
+            { "name": "relocation", "$ref": "relocation-id" },
+            { "name": "targetAttemptGeneration", "$ref": "ordinal-or-zero" },
+            { "name": "sourceNodeRid", "$ref": "rid" },
+            { "name": "sourceNodeGeneration", "$ref": "nonzero-u64" },
+            { "name": "sourceOwnerId", "$ref": "text8" },
+            { "name": "sourceOwnerLeaseGeneration", "$ref": "nonzero-u64" },
+            { "name": "targetNodeRid", "$ref": "optional-rid" },
+            { "name": "targetNodeGeneration", "$ref": "ordinal-or-zero" },
+            { "name": "targetOwnerId", "$ref": "optional-text8" },
+            { "name": "targetOwnerLeaseGeneration", "$ref": "ordinal-or-zero" },
+            { "name": "reservationGeneration", "$ref": "ordinal-or-zero" },
+            { "name": "coordinatorOwnerId", "$ref": "text8" },
+            { "name": "coordinatorLeaseGeneration", "$ref": "nonzero-u64" },
+            { "name": "coordinatorNodeRid", "$ref": "rid" },
+            { "name": "coordinatorNodeGeneration", "$ref": "nonzero-u64" },
+            { "name": "phase", "$ref": "relocation-phase" },
+            { "name": "relocationRoot", "$ref": "relocation-root-pointer" },
+            { "name": "applicationVersion", "$ref": "application-version" },
+            { "name": "participantProgress", "$ref": "participant-progress-vector" },
+            { "name": "terminalCompletionCount", "$ref": "u32" },
+            { "name": "pendingRelayCount", "$ref": "u32" },
+            { "name": "sourceCleanupState", "$ref": "source-cleanup-state" }
+          ]
+        }
+      ],
+      "otherwise": "protocol-error",
+      "trailingBytes": "forbidden"
+    },
+    {
+      "name": "authority-activation-recovery-state",
+      "kind": "conditional-union",
+      "discriminators": [
+        { "name": "hasActivationRecovery", "source": "wire", "$ref": "bool8" }
+      ],
+      "bodyLengthType": { "$ref": "u32" },
+      "bodyLengthCovers": "selected-case",
+      "cases": [
+        { "when": { "hasActivationRecovery": "false" }, "fields": [] },
+        {
+          "when": { "hasActivationRecovery": "true" },
+          "fields": [
+            { "name": "reference", "$ref": "creation-content-reference" },
+            { "name": "sha256", "$ref": "sha256-bytes" },
+            { "name": "encodedSize", "$ref": "creation-request-size" },
+            { "name": "inboxSequence", "$ref": "nonzero-u64" },
+            { "name": "replayCursor", "$ref": "ordinal-or-zero" }
+          ]
+        }
+      ],
+      "constraints": [
+        {
+          "kind": "field-order",
+          "rule": "replayCursor-less-than-or-equal-to-inboxSequence"
+        }
+      ],
+      "presence": "ready-instance-spot-cold-activation-only-and-forbidden-for-actor-entry-user-closing-relocating-or-coldActivating-authority",
+      "release": "expected-store-version-preserve-cas-only-after-durable-first-handler-terminal-completion-and-replay-cursor-equals-inbox-sequence-before-relocation-store-delete",
+      "otherwise": "protocol-error",
+      "trailingBytes": "forbidden"
+    },
+    {
+      "name": "authority-payload-v1",
+      "kind": "struct",
+      "fields": [
+        { "name": "operationKind", "$ref": "authority-operation-kind" },
+        { "name": "object", "$ref": "authority-object-identity" },
+        { "name": "ownerId", "$ref": "text8" },
+        { "name": "ownerLeaseGeneration", "$ref": "nonzero-u64" },
+        { "name": "ownerMeshName", "$ref": "text8" },
+        { "name": "ownerNodeRid", "$ref": "rid" },
+        { "name": "ownerNodeGeneration", "$ref": "nonzero-u64" },
+        { "name": "relocationState", "$ref": "authority-relocation-state" },
+        { "name": "activationRecoveryState", "$ref": "authority-activation-recovery-state" }
+      ],
+      "trailingBytes": "forbidden"
+    },
+    {
+      "name": "journal-entry",
+      "kind": "struct",
+      "fields": [
+        { "name": "participantId", "$ref": "nonzero-u64" },
+        { "name": "sequence", "$ref": "nonzero-u64" },
+        { "name": "record", "$ref": "frozen-record" }
+      ],
+      "trailingBytes": "forbidden"
+    },
+    {
+      "name": "journal-vector",
+      "kind": "vector",
+      "countType": { "$ref": "u32" },
+      "maximumItems": { "$bound": "journalRecordCount" },
+      "item": { "$ref": "journal-entry" },
+      "constraints": [
+        {
+          "kind": "sorted",
+          "fields": ["participantId", "sequence"],
+          "comparison": "unsigned-wire-value"
+        },
+        { "kind": "unique", "fields": ["participantId", "sequence"] }
+      ]
+    },
+    {
+      "name": "durable-blob",
+      "kind": "length-prefixed-bytes",
+      "lengthType": { "$ref": "u32" },
+      "minimumBytes": 0,
+      "maximumBytes": { "$bound": "relocationChunkBytes" }
+    },
+    {
+      "name": "durable-state-blob",
+      "kind": "length-prefixed-bytes",
+      "lengthType": { "$ref": "u64" },
+      "minimumBytes": 0,
+      "maximumBytes": { "$bound": "relocationChunkBytes" }
+    },
+    {
+      "name": "relocation-chunk-entry-v1",
+      "kind": "struct",
+      "fields": [
+        { "name": "order", "$ref": "u32" },
+        { "name": "reference", "$ref": "relocation-reference" },
+        { "name": "length", "$ref": "nonzero-u64" },
+        { "name": "checksumCrc32c", "$ref": "u32" }
+      ],
+      "trailingBytes": "forbidden"
+    },
+    {
+      "name": "relocation-chunk-vector-v1",
+      "kind": "vector",
+      "countType": { "$ref": "u32" },
+      "maximumItems": { "$bound": "relocationChunkCount" },
+      "item": { "$ref": "relocation-chunk-entry-v1" },
+      "constraints": [
+        { "kind": "sorted", "field": "order", "comparison": "unsigned-wire-value" },
+        { "kind": "unique", "field": "order" }
+      ]
+    },
+    {
+      "name": "relocation-manifest-v1",
+      "kind": "struct",
+      "fields": [
+        { "name": "logicalFormatVersion", "$ref": "u8", "constant": 1 },
+        { "name": "totalLength", "$ref": "relocation-logical-length" },
+        { "name": "totalChecksumCrc32c", "$ref": "u32" },
+        { "name": "inventoryDigestSha256", "$ref": "sha256-bytes" },
+        { "name": "chunks", "$ref": "relocation-chunk-vector-v1" }
+      ],
+      "trailingBytes": "forbidden"
+    },
+    {
+      "name": "relocation-data-chunk-v1",
+      "kind": "struct",
+      "fields": [
+        { "name": "order", "$ref": "u32" },
+        { "name": "data", "$ref": "durable-blob" }
+      ],
+      "trailingBytes": "forbidden"
+    },
+    {
+      "name": "relocation-application-state",
+      "kind": "conditional-union",
+      "discriminators": [
+        { "name": "hasState", "source": "wire", "$ref": "bool8" }
+      ],
+      "bodyLengthType": { "$ref": "u64" },
+      "bodyLengthCovers": "selected-case",
+      "maximumEncodedBytes": { "$bound": "relocationLogicalBytes" },
+      "cases": [
+        { "when": { "hasState": "false" }, "fields": [] },
+        {
+          "when": { "hasState": "true" },
+          "fields": [
+            { "name": "payload", "$ref": "durable-state-blob" }
+          ]
+        }
+      ],
+      "otherwise": "protocol-error",
+      "trailingBytes": "forbidden"
+    },
+    {
+      "name": "relocation-participant-application-state",
+      "kind": "struct",
+      "fields": [
+        { "name": "participantId", "$ref": "nonzero-u64" },
+        { "name": "applicationState", "$ref": "relocation-application-state" }
+      ]
+    },
+    {
+      "name": "relocation-participant-application-state-vector",
+      "kind": "vector",
+      "countType": { "$ref": "u32" },
+      "maximumItems": { "$bound": "maintenanceAggregateParticipants" },
+      "item": { "$ref": "relocation-participant-application-state" },
+      "constraints": [
+        { "kind": "sorted", "field": "participantId", "comparison": "unsigned-wire-value" },
+        { "kind": "unique", "field": "participantId" }
+      ]
+    },
+    {
+      "name": "relocation-timer-registration",
+      "kind": "struct",
+      "fields": [
+        { "name": "participantId", "$ref": "nonzero-u64" },
+        { "name": "name", "$ref": "text8" },
+        { "name": "handlerType", "$ref": "text8" },
+        { "name": "periodMilliseconds", "$ref": "nonzero-u64" },
+        { "name": "overrunPolicy", "$ref": "timer-overrun-policy-kind" },
+        { "name": "maxCatchUpTicks", "$ref": "nonzero-u64" },
+        { "name": "stopOnUnhandledException", "$ref": "bool8" },
+        { "name": "lastCompletedDeliveryIndex", "$ref": "ordinal-or-zero" },
+        { "name": "lastCompletedScheduledIndex", "$ref": "ordinal-or-zero" },
+        { "name": "nextScheduledAtUnixMilliseconds", "$ref": "u64" }
+      ]
+    },
+    {
+      "name": "relocation-timer-registration-vector",
+      "kind": "vector",
+      "countType": { "$ref": "u32" },
+      "item": { "$ref": "relocation-timer-registration" },
+      "constraints": [
+        {
+          "kind": "sorted",
+          "fields": ["participantId", "name"],
+          "comparison": "wire-value-then-utf-8-bytes"
+        },
+        { "kind": "unique", "fields": ["participantId", "name"] }
+      ]
+    },
+    {
+      "name": "relocation-pending-timer-tick",
+      "kind": "struct",
+      "fields": [
+        { "name": "participantId", "$ref": "nonzero-u64" },
+        { "name": "sequence", "$ref": "nonzero-u64" },
+        { "name": "timerName", "$ref": "text8" },
+        { "name": "deliveryIndex", "$ref": "nonzero-u64" },
+        { "name": "scheduledIndex", "$ref": "nonzero-u64" },
+        { "name": "scheduledAtUnixMilliseconds", "$ref": "u64" },
+        { "name": "skippedTicks", "$ref": "ordinal-or-zero" }
+      ]
+    },
+    {
+      "name": "relocation-pending-timer-tick-vector",
+      "kind": "vector",
+      "countType": { "$ref": "u32" },
+      "item": { "$ref": "relocation-pending-timer-tick" },
+      "constraints": [
+        {
+          "kind": "sorted",
+          "fields": ["participantId", "sequence"],
+          "comparison": "unsigned-wire-value"
+        },
+        { "kind": "unique", "fields": ["participantId", "sequence"] }
+      ]
+    },
+    {
+      "name": "relocation-envelope-v1",
+      "kind": "struct",
+      "fields": [
+        { "name": "relocation", "$ref": "relocation-id" },
+        { "name": "object", "$ref": "relocation-object-identity" },
+        { "name": "applicationVersion", "$ref": "application-version" },
+        {
+          "name": "applicationStates",
+          "$ref": "relocation-participant-application-state-vector"
+        },
+        { "name": "participantProgress", "$ref": "participant-progress-vector" },
+        { "name": "journal", "$ref": "journal-vector" },
+        { "name": "timerRegistrations", "$ref": "relocation-timer-registration-vector" },
+        { "name": "pendingTimerTicks", "$ref": "relocation-pending-timer-tick-vector" },
+        { "name": "terminalCompletions", "$ref": "request-completion-vector" }
+      ],
+      "trailingBytes": "forbidden"
+    }
+  ],
+  "durableFormats": [
+    {
+      "name": "authority-payload-v1",
+      "magic": [90, 76, 65, 85],
+      "formatVersion": 1,
+      "flags": 0,
+      "flagsType": { "$ref": "u16" },
+      "byteOrder": "big-endian",
+      "bodyLengthType": { "$ref": "u32" },
+      "maximumEncodedBytes": { "$bound": "authorityEnvelopeBytes" },
+      "body": { "$ref": "authority-payload-v1" },
+      "checksum": {
+        "algorithm": "crc32c-castagnoli",
+        "encoding": "u32-big-endian",
+        "coverage": "magic-through-body",
+        "position": "trailing"
+      },
+      "goldenFixture": "golden/durable-authority-v1.json",
+      "providerInterpretation": "opaque-bytes"
+    },
+    {
+      "name": "instance-activation-recovery-v1",
+      "magic": [90, 76, 73, 65],
+      "formatVersion": 1,
+      "flags": 0,
+      "flagsType": { "$ref": "u16" },
+      "byteOrder": "big-endian",
+      "bodyLengthType": { "$ref": "u32" },
+      "maximumEncodedBytes": { "$bound": "creationIntentBytes" },
+      "body": { "$ref": "instance-activation-recovery-v1" },
+      "checksum": {
+        "algorithm": "crc32c-castagnoli",
+        "encoding": "u32-big-endian",
+        "coverage": "magic-through-body",
+        "position": "trailing"
+      },
+      "goldenFixture": "golden/instance-activation-recovery-v1.json",
+      "providerInterpretation": "opaque-bytes"
+    },
+    {
+      "name": "relocation-data-chunk-v1",
+      "magic": [90, 76, 84, 67],
+      "formatVersion": 1,
+      "flags": 0,
+      "flagsType": { "$ref": "u16" },
+      "byteOrder": "big-endian",
+      "bodyLengthType": { "$ref": "u32" },
+      "maximumEncodedBytes": { "$bound": "relocationChunkEnvelopeBytes" },
+      "body": { "$ref": "relocation-data-chunk-v1" },
+      "checksum": {
+        "algorithm": "crc32c-castagnoli",
+        "encoding": "u32-big-endian",
+        "coverage": "magic-through-body",
+        "position": "trailing"
+      },
+      "goldenFixture": "golden/relocation-data-chunk-v1.json",
+      "providerInterpretation": "opaque-bytes"
+    },
+    {
+      "name": "relocation-manifest-v1",
+      "magic": [90, 76, 84, 77],
+      "formatVersion": 1,
+      "flags": 0,
+      "flagsType": { "$ref": "u16" },
+      "byteOrder": "big-endian",
+      "bodyLengthType": { "$ref": "u32" },
+      "maximumEncodedBytes": { "$bound": "relocationManifestBytes" },
+      "body": { "$ref": "relocation-manifest-v1" },
+      "checksum": {
+        "algorithm": "crc32c-castagnoli",
+        "encoding": "u32-big-endian",
+        "coverage": "magic-through-body",
+        "position": "trailing"
+      },
+      "goldenFixture": "golden/relocation-manifest-v1.json",
+      "providerInterpretation": "opaque-bytes"
+    }
+  ],
+  "relocationLogicalStreamFormat": {
+    "name": "relocation-envelope-v1",
+    "encoding": "canonical-big-endian-field-stream-without-monolithic-provider-envelope",
+    "body": { "$ref": "relocation-envelope-v1" },
+    "maximumBytes": { "$bound": "relocationLogicalBytes" },
+    "chunkSplit": "any-byte-boundary-including-within-frozen-record",
+    "replay": "bounded-incremental-decode-without-whole-stream-allocation",
+    "goldenFixture": "golden/relocation-envelope-v1.json"
+  },
+  "commands": [
+    {
+      "id": 1,
+      "name": "hello",
+      "domain": "infrastructure",
+      "allowedFlags": [],
+      "requiredFlags": [],
+      "body": [{ "name": "admission", "$ref": "service-admission" }],
+      "payload": "forbidden"
+    },
+    {
+      "id": 2,
+      "name": "admit",
+      "domain": "infrastructure",
+      "allowedFlags": [],
+      "requiredFlags": [],
+      "body": [{ "name": "admission", "$ref": "service-admission" }],
+      "payload": "forbidden"
+    },
+    {
+      "id": 3,
+      "name": "reject",
+      "domain": "infrastructure",
+      "allowedFlags": [],
+      "requiredFlags": [],
+      "body": [
+        { "name": "reason", "$ref": "reject-reason" }
+      ],
+      "payload": "forbidden"
+    },
+    {
+      "id": 4,
+      "name": "update",
+      "domain": "infrastructure",
+      "allowedFlags": [],
+      "requiredFlags": [],
+      "body": [{ "name": "admission", "$ref": "service-admission" }],
+      "payload": "forbidden"
+    },
+    {
+      "id": 5,
+      "name": "livenessProbe",
+      "domain": "infrastructure",
+      "allowedFlags": [],
+      "requiredFlags": [],
+      "body": [
+        { "name": "probeId", "$ref": "nonzero-u64" }
+      ],
+      "payload": "forbidden"
+    },
+    {
+      "id": 6,
+      "name": "livenessAck",
+      "domain": "infrastructure",
+      "allowedFlags": [],
+      "requiredFlags": [],
+      "body": [
+        { "name": "probeId", "$ref": "nonzero-u64" }
+      ],
+      "payload": "forbidden"
+    },
+    {
+      "id": 16,
+      "name": "nodeSend",
+      "domain": "application",
+      "allowedFlags": ["metadata"],
+      "requiredFlags": [],
+      "body": [],
+      "payload": "required",
+      "payloadType": { "$ref": "application-payload-envelope-v1" }
+    },
+    {
+      "id": 17,
+      "name": "nodeRequest",
+      "domain": "application",
+      "allowedFlags": ["metadata"],
+      "requiredFlags": [],
+      "body": [
+        { "name": "correlation", "$ref": "nonzero-u64" }
+      ],
+      "payload": "required",
+      "payloadType": { "$ref": "application-payload-envelope-v1" }
+    },
+    {
+      "id": 18,
+      "name": "channelSend",
+      "domain": "application",
+      "allowedFlags": ["metadata"],
+      "requiredFlags": [],
+      "body": [
+        { "name": "channelName", "$ref": "text8" }
+      ],
+      "payload": "required",
+      "payloadType": { "$ref": "application-payload-envelope-v1" }
+    },
+    {
+      "id": 19,
+      "name": "channelRequest",
+      "domain": "application",
+      "allowedFlags": ["metadata"],
+      "requiredFlags": [],
+      "body": [
+        { "name": "correlation", "$ref": "nonzero-u64" },
+        { "name": "channelName", "$ref": "text8" }
+      ],
+      "payload": "required",
+      "payloadType": { "$ref": "application-payload-envelope-v1" }
+    },
+    {
+      "id": 20,
+      "name": "reply",
+      "domain": "infrastructure",
+      "allowedFlags": [],
+      "requiredFlags": [],
+      "body": [
+        { "name": "correlation", "$ref": "nonzero-u64" },
+        { "name": "terminalResult", "$ref": "request-terminal-result" },
+        { "name": "failureCode", "$ref": "framework-error-code" },
+        { "name": "tail", "$ref": "request-specific-tail" }
+      ],
+      "payload": "optional",
+      "payloadType": { "$ref": "application-payload-envelope-v1" }
+    },
+    {
+      "id": 21,
+      "name": "spotSend",
+      "domain": "application",
+      "allowedFlags": ["metadata"],
+      "requiredFlags": [],
+      "body": [
+        { "name": "operation", "$ref": "operation-id" },
+        { "name": "messageFollowHopCount", "$ref": "u8", "minimum": 0,
+          "maximum": { "$bound": "messageFollowHopCount" } },
+        { "name": "sourceSpotId", "$ref": "text8" },
+        { "name": "targetSpot", "$ref": "spot-route-fence" }
+      ],
+      "payload": "required",
+      "payloadType": { "$ref": "application-payload-envelope-v1" }
+    },
+    {
+      "id": 22,
+      "name": "spotRequest",
+      "domain": "application",
+      "allowedFlags": ["metadata"],
+      "requiredFlags": [],
+      "body": [
+        { "name": "correlation", "$ref": "nonzero-u64" },
+        { "name": "operation", "$ref": "operation-id" },
+        { "name": "messageFollowHopCount", "$ref": "u8", "minimum": 0,
+          "maximum": { "$bound": "messageFollowHopCount" } },
+        { "name": "sourceSpotId", "$ref": "text8" },
+        { "name": "targetSpot", "$ref": "spot-route-fence" }
+      ],
+      "payload": "required",
+      "payloadType": { "$ref": "application-payload-envelope-v1" }
+    },
+    {
+      "id": 23,
+      "name": "logicalMulticast",
+      "domain": "application",
+      "allowedFlags": ["metadata"],
+      "requiredFlags": [],
+      "body": [
+        { "name": "channelName", "$ref": "text8" },
+        { "name": "topic", "$ref": "text8" },
+        { "name": "sourceSpotId", "$ref": "text8" }
+      ],
+      "payload": "required",
+      "payloadType": { "$ref": "application-payload-envelope-v1" }
+    },
+    {
+      "id": 24,
+      "name": "actorSend",
+      "domain": "application",
+      "allowedFlags": ["metadata", "boundSession", "sourceSpotId"],
+      "requiredFlags": [],
+      "flagConstraints": [
+        {
+          "kind": "all-or-none",
+          "flags": ["boundSession", "sourceSpotId"]
+        }
+      ],
+      "body": [
+        { "name": "operation", "$ref": "operation-id" },
+        { "name": "messageFollowHopCount", "$ref": "u8", "minimum": 0,
+          "maximum": { "$bound": "messageFollowHopCount" } },
+        { "name": "sourceActor", "$ref": "optional-actor-ref" },
+        { "name": "targetActor", "$ref": "actor-route-fence" },
+        {
+          "name": "boundSessionTail",
+          "$ref": "optional-bound-session-tail",
+          "when": {
+            "allFlagsSet": ["boundSession", "sourceSpotId"]
+          },
+          "otherwise": "forbidden"
+        }
+      ],
+      "payload": "required",
+      "payloadType": { "$ref": "application-payload-envelope-v1" }
+    },
+    {
+      "id": 25,
+      "name": "actorRequest",
+      "domain": "application",
+      "allowedFlags": ["metadata", "boundSession", "sourceSpotId"],
+      "requiredFlags": [],
+      "flagConstraints": [
+        {
+          "kind": "all-or-none",
+          "flags": ["boundSession", "sourceSpotId"]
+        }
+      ],
+      "body": [
+        { "name": "correlation", "$ref": "nonzero-u64" },
+        { "name": "operation", "$ref": "operation-id" },
+        { "name": "messageFollowHopCount", "$ref": "u8", "minimum": 0,
+          "maximum": { "$bound": "messageFollowHopCount" } },
+        { "name": "sourceActor", "$ref": "optional-actor-ref" },
+        { "name": "targetActor", "$ref": "actor-route-fence" },
+        {
+          "name": "boundSessionTail",
+          "$ref": "optional-bound-session-tail",
+          "when": {
+            "allFlagsSet": ["boundSession", "sourceSpotId"]
+          },
+          "otherwise": "forbidden"
+        }
+      ],
+      "payload": "required",
+      "payloadType": { "$ref": "application-payload-envelope-v1" }
+    },
+    {
+      "id": 26,
+      "name": "actorLookup",
+      "domain": "infrastructure",
+      "allowedFlags": [],
+      "requiredFlags": [],
+      "body": [
+        { "name": "correlation", "$ref": "nonzero-u64" },
+        { "name": "actorId", "$ref": "text8" }
+      ],
+      "payload": "forbidden"
+    },
+    {
+      "id": 27,
+      "name": "actorDestroy",
+      "domain": "infrastructure",
+      "allowedFlags": [],
+      "requiredFlags": [],
+      "body": [
+        { "name": "correlation", "$ref": "nonzero-u64" },
+        { "name": "actor", "$ref": "actor-route-fence" }
+      ],
+      "payload": "forbidden"
+    },
+    {
+      "id": 28,
+      "name": "actorJoin",
+      "domain": "infrastructure",
+      "allowedFlags": [],
+      "requiredFlags": [],
+      "body": [
+        { "name": "correlation", "$ref": "nonzero-u64" },
+        { "name": "actor", "$ref": "actor-route-fence" },
+        { "name": "entry", "$ref": "bool8" },
+        { "name": "targetSpot", "$ref": "spot-route-fence" }
+      ],
+      "payload": "optional",
+      "payloadType": { "$ref": "application-payload-envelope-v1" }
+    },
+    {
+      "id": 29,
+      "name": "actorLeft",
+      "domain": "infrastructure",
+      "allowedFlags": [],
+      "requiredFlags": [],
+      "body": [
+        { "name": "actor", "$ref": "actor-ref" },
+        { "name": "previousMembership", "$ref": "spot-membership" },
+        { "name": "currentAuthorityOwnerGeneration", "$ref": "nonzero-u64" }
+      ],
+      "payload": "forbidden"
+    },
+    {
+      "id": 30,
+      "name": "relocationReady",
+      "domain": "infrastructure",
+      "allowedFlags": ["extension"],
+      "requiredFlags": ["extension"],
+      "body": [
+        { "name": "relocation", "$ref": "relocation-id" },
+        { "name": "targetAttemptGeneration", "$ref": "nonzero-u64" },
+        { "name": "roundKind", "$ref": "relocation-reservation-round-kind" },
+        { "name": "coordinator", "$ref": "relocation-coordinator-fence" },
+        { "name": "candidate", "$ref": "relocation-reservation-candidate" },
+        { "name": "object", "$ref": "relocation-object-identity" },
+        { "name": "role", "$ref": "relocation-role" },
+        { "name": "offeredMessages", "$ref": "ordinal-or-zero" },
+        { "name": "offeredBytes", "$ref": "ordinal-or-zero" },
+        { "name": "participants", "$ref": "participant-vector" },
+        { "name": "extension", "$ref": "relocation-extension" }
+      ],
+      "payload": "forbidden"
+    },
+    {
+      "id": 31,
+      "name": "relocationData",
+      "domain": "infrastructure",
+      "allowedFlags": [],
+      "requiredFlags": [],
+      "body": [
+        { "name": "relocation", "$ref": "relocation-id" },
+        { "name": "targetAttemptGeneration", "$ref": "nonzero-u64" },
+        { "name": "coordinator", "$ref": "relocation-coordinator-fence" },
+        { "name": "senderRole", "$ref": "relocation-role" },
+        { "name": "participantId", "$ref": "nonzero-u64" },
+        { "name": "sequence", "$ref": "nonzero-u64" },
+        { "name": "record", "$ref": "frozen-record" }
+      ],
+      "payload": "forbidden"
+    },
+    {
+      "id": 32,
+      "name": "relocationAck",
+      "domain": "infrastructure",
+      "allowedFlags": [],
+      "requiredFlags": [],
+      "body": [
+        { "name": "relocation", "$ref": "relocation-id" },
+        { "name": "targetAttemptGeneration", "$ref": "nonzero-u64" },
+        { "name": "coordinator", "$ref": "relocation-coordinator-fence" },
+        { "name": "senderRole", "$ref": "relocation-role" },
+        { "name": "participantId", "$ref": "nonzero-u64" },
+        { "name": "highWater", "$ref": "ordinal-or-zero" }
+      ],
+      "payload": "forbidden"
+    },
+    {
+      "id": 33,
+      "name": "replyRelay",
+      "domain": "infrastructure",
+      "allowedFlags": [],
+      "requiredFlags": [],
+      "body": [
+        { "name": "operation", "$ref": "operation-id" },
+        { "name": "replyRouteId", "$ref": "nonzero-u64" },
+        { "name": "context", "$ref": "reply-relay-context" },
+        { "name": "terminalResult", "$ref": "request-terminal-result" },
+        { "name": "failureCode", "$ref": "framework-error-code" }
+      ],
+      "payload": "optional",
+      "payloadType": { "$ref": "application-payload-envelope-v1" }
+    },
+    {
+      "id": 34,
+      "name": "relocationSeal",
+      "domain": "infrastructure",
+      "allowedFlags": [],
+      "requiredFlags": [],
+      "body": [
+        { "name": "relocation", "$ref": "relocation-id" },
+        { "name": "targetAttemptGeneration", "$ref": "nonzero-u64" },
+        { "name": "coordinator", "$ref": "relocation-coordinator-fence" },
+        { "name": "senderRole", "$ref": "relocation-role" },
+        { "name": "response", "$ref": "bool8" },
+        { "name": "participants", "$ref": "participant-terminal-vector" }
+      ],
+      "payload": "forbidden"
+    },
+    {
+      "id": 35,
+      "name": "relocationComplete",
+      "domain": "infrastructure",
+      "allowedFlags": [],
+      "requiredFlags": [],
+      "body": [
+        { "name": "relocation", "$ref": "relocation-id" },
+        { "name": "targetAttemptGeneration", "$ref": "nonzero-u64" },
+        { "name": "coordinator", "$ref": "relocation-coordinator-fence" },
+        { "name": "senderRole", "$ref": "relocation-role" },
+        { "name": "source", "$ref": "relocation-source-cleanup-fence" },
+        { "name": "sourceCleanupState", "$ref": "source-cleanup-state" }
+      ],
+      "payload": "forbidden"
+    },
+    {
+      "id": 36,
+      "name": "boundSessionSend",
+      "domain": "application",
+      "allowedFlags": [],
+      "requiredFlags": [],
+      "body": [
+        { "name": "actor", "$ref": "actor-route-fence" },
+        { "name": "expectedBindingGeneration", "$ref": "nonzero-u64" }
+      ],
+      "payload": "required",
+      "payloadType": { "$ref": "application-payload-envelope-v1" }
+    },
+    {
+      "id": 37,
+      "name": "actorJoined",
+      "domain": "infrastructure",
+      "allowedFlags": [],
+      "requiredFlags": [],
+      "body": [
+        { "name": "actor", "$ref": "actor-ref" },
+        { "name": "previousMembership", "$ref": "optional-spot-membership" },
+        { "name": "currentMembership", "$ref": "spot-membership" },
+        { "name": "currentAuthorityOwnerGeneration", "$ref": "nonzero-u64" }
+      ],
+      "payload": "forbidden"
+    },
+    {
+      "id": 38,
+      "name": "boundSessionBind",
+      "domain": "infrastructure",
+      "allowedFlags": [],
+      "requiredFlags": [],
+      "body": [
+        { "name": "correlation", "$ref": "nonzero-u64" },
+        { "name": "actor", "$ref": "actor-route-fence" },
+        { "name": "sessionRid", "$ref": "rid" },
+        { "name": "binding", "$ref": "bound-session-binding-transition" }
+      ],
+      "payload": "forbidden"
+    },
+    {
+      "id": 39,
+      "name": "instanceSpot",
+      "domain": "application",
+      "allowedFlags": ["metadata"],
+      "requiredFlags": [],
+      "body": [
+        { "name": "route", "$ref": "instance-route-v1" },
+        { "name": "sourceNodeGeneration", "$ref": "nonzero-u64" },
+        { "name": "sourceNodeRid", "$ref": "rid" },
+        { "name": "sourceSpotId", "$ref": "optional-text8" },
+        { "name": "operationKind", "$ref": "instance-operation-kind" },
+        { "name": "operation", "$ref": "operation-id" },
+        { "name": "replyRoute", "$ref": "instance-reply-route" }
+      ],
+      "semanticConstraints": [
+        "ready-send-operation-id-zero",
+        "ready-request-operation-id-nonzero",
+        "cold-activation-operation-id-nonzero-for-send-and-request",
+        "cold-activation-target-does-not-contain-authority-generation-fence"
+      ],
+      "payload": "required",
+      "payloadType": { "$ref": "application-payload-envelope-v1" }
+    },
+    {
+      "id": 40,
+      "name": "relocationPrepare",
+      "domain": "infrastructure",
+      "allowedFlags": [],
+      "requiredFlags": [],
+      "body": [
+        { "name": "relocation", "$ref": "relocation-id" },
+        { "name": "targetAttemptGeneration", "$ref": "nonzero-u64" },
+        { "name": "roundKind", "$ref": "relocation-reservation-round-kind" },
+        { "name": "coordinator", "$ref": "relocation-coordinator-fence" },
+        { "name": "candidate", "$ref": "relocation-reservation-candidate" },
+        { "name": "initiatorRole", "$ref": "relocation-role" },
+        { "name": "object", "$ref": "relocation-object-identity" },
+        { "name": "sourceNodeRid", "$ref": "rid" },
+        { "name": "sourceNodeGeneration", "$ref": "nonzero-u64" },
+        { "name": "requiredMessages", "$ref": "ordinal-or-zero" },
+        { "name": "requiredBytes", "$ref": "ordinal-or-zero" },
+        { "name": "requirements", "$ref": "participant-vector" },
+        { "name": "relocationRoot", "$ref": "relocation-root-pointer" },
+        { "name": "applicationVersion", "$ref": "application-version" }
+      ],
+      "payload": "forbidden"
+    },
+    {
+      "id": 41,
+      "name": "relocationReserved",
+      "domain": "infrastructure",
+      "allowedFlags": [],
+      "requiredFlags": [],
+      "body": [
+        { "name": "relocation", "$ref": "relocation-id" },
+        { "name": "targetAttemptGeneration", "$ref": "nonzero-u64" },
+        { "name": "roundKind", "$ref": "relocation-reservation-round-kind" },
+        { "name": "coordinator", "$ref": "relocation-coordinator-fence" },
+        { "name": "candidate", "$ref": "relocation-reservation-candidate" },
+        { "name": "reservationGeneration", "$ref": "nonzero-u64" },
+        { "name": "participants", "$ref": "participant-vector" }
+      ],
+      "payload": "forbidden"
+    },
+    {
+      "id": 42,
+      "name": "sessionRelocationSeal",
+      "domain": "infrastructure",
+      "allowedFlags": [],
+      "requiredFlags": [],
+      "body": [
+        { "name": "relocation", "$ref": "relocation-id" },
+        { "name": "coordinator", "$ref": "relocation-coordinator-fence" },
+        { "name": "senderRole", "$ref": "relocation-role" },
+        { "name": "actor", "$ref": "actor-route-fence" },
+        { "name": "sessionOwnerNodeRid", "$ref": "rid" },
+        { "name": "sessionOwnerNodeGeneration", "$ref": "nonzero-u64" },
+        { "name": "sessionOwnerId", "$ref": "text8" },
+        { "name": "sessionOwnerLeaseGeneration", "$ref": "nonzero-u64" },
+        { "name": "sessionRid", "$ref": "rid" },
+        { "name": "bindingGeneration", "$ref": "nonzero-u64" }
+      ],
+      "payload": "forbidden"
+    },
+    {
+      "id": 43,
+      "name": "sessionRelocationSealed",
+      "domain": "infrastructure",
+      "allowedFlags": [],
+      "requiredFlags": [],
+      "body": [
+        { "name": "relocation", "$ref": "relocation-id" },
+        { "name": "coordinator", "$ref": "relocation-coordinator-fence" },
+        { "name": "actor", "$ref": "actor-route-fence" },
+        { "name": "sessionOwnerNodeRid", "$ref": "rid" },
+        { "name": "sessionOwnerNodeGeneration", "$ref": "nonzero-u64" },
+        { "name": "sessionOwnerId", "$ref": "text8" },
+        { "name": "sessionOwnerLeaseGeneration", "$ref": "nonzero-u64" },
+        { "name": "sessionRid", "$ref": "rid" },
+        { "name": "bindingGeneration", "$ref": "nonzero-u64" },
+        { "name": "lastAcceptedSessionSequence", "$ref": "ordinal-or-zero" }
+      ],
+      "payload": "forbidden"
+    },
+    {
+      "id": 44,
+      "name": "sessionRelocationRoute",
+      "domain": "infrastructure",
+      "allowedFlags": [],
+      "requiredFlags": [],
+      "body": [
+        { "name": "relocation", "$ref": "relocation-id" },
+        { "name": "coordinator", "$ref": "relocation-coordinator-fence" },
+        { "name": "senderRole", "$ref": "relocation-role" },
+        { "name": "actor", "$ref": "actor-ref" },
+        { "name": "sessionOwnerNodeRid", "$ref": "rid" },
+        { "name": "sessionOwnerNodeGeneration", "$ref": "nonzero-u64" },
+        { "name": "sessionOwnerId", "$ref": "text8" },
+        { "name": "sessionOwnerLeaseGeneration", "$ref": "nonzero-u64" },
+        { "name": "sessionRid", "$ref": "rid" },
+        { "name": "bindingGeneration", "$ref": "nonzero-u64" },
+        { "name": "route", "$ref": "session-relocation-route-update" }
+      ],
+      "payload": "forbidden"
+    },
+    {
+      "id": 45,
+      "name": "sessionRelocationRouted",
+      "domain": "infrastructure",
+      "allowedFlags": [],
+      "requiredFlags": [],
+      "body": [
+        { "name": "relocation", "$ref": "relocation-id" },
+        { "name": "coordinator", "$ref": "relocation-coordinator-fence" },
+        { "name": "actor", "$ref": "actor-ref" },
+        { "name": "sessionOwnerNodeRid", "$ref": "rid" },
+        { "name": "sessionOwnerNodeGeneration", "$ref": "nonzero-u64" },
+        { "name": "sessionOwnerId", "$ref": "text8" },
+        { "name": "sessionOwnerLeaseGeneration", "$ref": "nonzero-u64" },
+        { "name": "sessionRid", "$ref": "rid" },
+        { "name": "bindingGeneration", "$ref": "nonzero-u64" },
+        { "name": "action", "$ref": "session-relocation-route-action" },
+        { "name": "currentAuthorityOwnerGeneration", "$ref": "nonzero-u64" },
+        { "name": "lastAcceptedSessionSequence", "$ref": "ordinal-or-zero" }
+      ],
+      "payload": "forbidden"
+    },
+    {
+      "id": 46,
+      "name": "replyRelayAck",
+      "domain": "infrastructure",
+      "allowedFlags": [],
+      "requiredFlags": [],
+      "body": [
+        { "name": "relocation", "$ref": "relocation-id" },
+        { "name": "coordinator", "$ref": "relocation-coordinator-fence" },
+        { "name": "operation", "$ref": "operation-id" },
+        { "name": "replyRouteId", "$ref": "nonzero-u64" },
+        { "name": "requestSource", "$ref": "request-source-fence" },
+        { "name": "status", "$ref": "reply-relay-ack-status" }
+      ],
+      "payload": "forbidden"
+    },
+    {
+      "id": 47,
+      "name": "userSpotCreate",
+      "domain": "infrastructure",
+      "allowedFlags": [],
+      "requiredFlags": [],
+      "body": [
+        { "name": "correlation", "$ref": "nonzero-u64" },
+        { "name": "operation", "$ref": "operation-id" },
+        { "name": "sourceNodeRid", "$ref": "rid" },
+        { "name": "sourceNodeGeneration", "$ref": "nonzero-u64" },
+        { "name": "spotId", "$ref": "text8" },
+        { "name": "stableType", "$ref": "text8" },
+        { "name": "reservation", "$ref": "object-reservation-fence" },
+        { "name": "deadlineUnixMs", "$ref": "nonzero-u64" }
+      ],
+      "payload": "forbidden"
+    },
+    {
+      "id": 48,
+      "name": "userSpotClose",
+      "domain": "infrastructure",
+      "allowedFlags": [],
+      "requiredFlags": [],
+      "body": [
+        { "name": "correlation", "$ref": "nonzero-u64" },
+        { "name": "operation", "$ref": "operation-id" },
+        { "name": "sourceNodeRid", "$ref": "rid" },
+        { "name": "sourceNodeGeneration", "$ref": "nonzero-u64" },
+        { "name": "target", "$ref": "user-spot-close-fence-v1" },
+        { "name": "deadlineUnixMs", "$ref": "nonzero-u64" }
+      ],
+      "payload": "forbidden"
+    },
+    {
+      "id": 49,
+      "name": "actorCreate",
+      "domain": "infrastructure",
+      "allowedFlags": [],
+      "requiredFlags": [],
+      "body": [
+        { "name": "correlation", "$ref": "nonzero-u64" },
+        { "name": "operation", "$ref": "operation-id" },
+        { "name": "sourceNodeRid", "$ref": "rid" },
+        { "name": "sourceNodeGeneration", "$ref": "nonzero-u64" },
+        { "name": "actorId", "$ref": "text8" },
+        { "name": "stableType", "$ref": "text8" },
+        { "name": "reservation", "$ref": "object-reservation-fence" },
+        { "name": "deadlineUnixMs", "$ref": "nonzero-u64" }
+      ],
+      "payload": "forbidden"
+    },
+    {
+      "id": 50,
+      "name": "messageFollow",
+      "domain": "infrastructure",
+      "allowedFlags": [],
+      "requiredFlags": [],
+      "body": [
+        { "name": "route", "$ref": "message-follow-route-v1" }
+      ],
+      "payload": "forbidden"
+    }
+  ],
+  "relocationStateMachine": {
+    "phaseType": { "$ref": "relocation-phase" },
+    "authorityCommitOrder": [
+      {
+        "phase": "preparing",
+        "after": ["local-admission-seal", "accepted-boundaries-fixed"],
+        "relocation": "absent",
+        "targetReservation": "absent"
+      },
+      {
+        "phase": "captured",
+        "after": ["immutable-relocation-put"],
+        "relocation": "present",
+        "targetReservation": "absent"
+      },
+      {
+        "phase": "prepared",
+        "after": [
+          "relocation-reserved-ack-validated",
+          "target-factory-restore-complete",
+          "journal-timer-staging-complete"
+        ],
+        "relocation": "present",
+        "targetReservation": "present"
+      }
+    ],
+    "transitions": [
+      { "from": "none", "to": "preparing" },
+      { "from": "preparing", "to": "captured" },
+      { "from": "captured", "to": "prepared" },
+      { "from": "prepared", "to": "committed" },
+      { "from": "committed", "to": "activating" },
+      { "from": "activating", "to": "committed", "only": "postCommitReplacementAckedCas" },
+      { "from": "activating", "to": "activated" },
+      { "from": "activated", "to": "committed", "only": "postCommitReplacementAckedCas" },
+      { "from": "activated", "to": "cleaning" },
+      { "from": "cleaning", "to": "committed", "only": "postCommitReplacementAckedCas" },
+      { "from": "cleaning", "to": "completed" },
+      { "from": "preparing", "to": "aborted" },
+      { "from": "captured", "to": "aborted" },
+      { "from": "prepared", "to": "aborted" }
+    ],
+    "commandRules": [
+      {
+        "command": "sessionRelocationSeal",
+        "senderRoles": ["source", "coordinator"],
+        "phases": ["preparing"],
+        "duplicate": "idempotent-if-identical-else-protocol-error",
+        "reorder": "hold-until-preparing-authority",
+        "loss": "retransmit-until-sealed-or-deadline"
+      },
+      {
+        "command": "sessionRelocationSealed",
+        "senderKind": "sessionOwner",
+        "phases": ["preparing"],
+        "duplicate": "idempotent-if-identical-else-protocol-error",
+        "reorder": "hold-until-matching-sessionRelocationSeal",
+        "loss": "retransmit-until-captured-or-abort"
+      },
+      {
+        "command": "sessionRelocationRoute",
+        "senderRoles": ["source", "target", "coordinator"],
+        "phases": ["aborted", "completed"],
+        "actionRules": {
+          "abort": { "senderRoles": ["source", "coordinator"], "phases": ["aborted"] },
+          "commit": { "senderRoles": ["target", "coordinator"], "phases": ["completed"] }
+        },
+        "duplicate": "idempotent-if-identical-else-protocol-error",
+        "reorder": "commit-after-replay-or-abort-after-authority-decision",
+        "loss": "retransmit-until-routed-ack"
+      },
+      {
+        "command": "sessionRelocationRouted",
+        "senderKind": "sessionOwner",
+        "phases": ["aborted", "completed"],
+        "actionRules": {
+          "abort": { "phases": ["aborted"] },
+          "commit": { "phases": ["completed"] }
+        },
+        "duplicate": "idempotent-if-identical-else-protocol-error",
+        "reorder": "hold-until-matching-route-action",
+        "loss": "retransmit-until-source-reopen-or-target-ready"
+      },
+      {
+        "command": "relocationPrepare",
+        "senderRoles": ["source", "coordinator"],
+        "phases": ["captured", "prepared", "committed", "activating", "activated", "cleaning"],
+        "duplicate": "idempotent-if-identical-else-protocol-error",
+        "reorder": "hold-until-captured-authority",
+        "loss": "retransmit-until-deadline"
+      },
+      {
+        "command": "relocationReady",
+        "senderRoles": ["source", "target", "coordinator"],
+        "phases": ["captured", "prepared", "committed", "activating", "activated", "cleaning"],
+        "duplicate": "idempotent-if-identical-else-protocol-error",
+        "reorder": "hold-until-matching-relocationPrepare-or-target-offer",
+        "loss": "retransmit-until-deadline"
+      },
+      {
+        "command": "relocationReserved",
+        "senderRoles": ["target"],
+        "phases": ["captured", "prepared", "committed", "activating", "activated", "cleaning"],
+        "duplicate": "idempotent-if-identical-else-protocol-error",
+        "reorder": "hold-until-matching-source-accept",
+        "loss": "retransmit-until-prepared-or-deadline"
+      },
+      {
+        "command": "relocationData",
+        "senderRoles": ["source", "coordinator"],
+        "phases": ["prepared", "committed", "activating"],
+        "duplicate": "idempotent-by-stable-relocation-id-target-attempt-generation-participant-sequence",
+        "reorder": "stage-by-participant-sequence",
+        "loss": "recover-from-relocation-or-retransmit"
+      },
+      {
+        "command": "relocationAck",
+        "senderRoles": ["target"],
+        "phases": ["prepared", "committed", "activating"],
+        "duplicate": "keep-monotonic-high-water-by-stable-relocation-id-target-attempt-generation-participant",
+        "reorder": "ignore-lower-high-water",
+        "loss": "data-retransmit-regenerates-ack"
+      },
+      {
+        "command": "replyRelay",
+        "contextRules": [
+          {
+            "context": "coldActivation",
+            "senderRoles": ["target"],
+            "authorityStateCompletionPairs": [
+              { "authorityState": "ready", "completionKind": "readyBarrier" },
+            { "authorityState": "coldActivating", "completionKind": "activationFailure" }
+            ],
+            "duplicate": "terminal-once-by-operation-id",
+            "reorder": "hold-until-operation-known",
+          "loss": "source-operation-deadline-only-no-replay-restart"
+          },
+          {
+            "context": "maintenanceRelocation",
+            "senderRoles": ["target"],
+            "phases": ["committed", "activating", "activated", "cleaning"],
+            "duplicate": "terminal-once-by-stable-relocation-id-exact-request-source-fence-and-operation-id-target-attempt-is-peer-fence-only",
+            "reorder": "hold-until-operation-known",
+            "loss": "recover-from-durable-completion"
+          }
+        ]
+      },
+      {
+        "command": "replyRelayAck",
+        "senderKind": "requestSource",
+        "phases": ["committed", "activating", "activated", "cleaning"],
+        "duplicate": "idempotent-by-stable-relocation-id-exact-request-source-fence-operation-id-reply-route-id-and-status",
+        "reorder": "hold-until-matching-durable-completion-or-retransmit-causes-source-reack",
+        "loss": "target-retransmits-terminal-until-ack-or-exact-request-source-owner-lease-expiry"
+      },
+      {
+        "command": "relocationSeal",
+        "senderRoles": ["source", "target", "coordinator"],
+        "phases": ["prepared", "committed", "activating"],
+        "duplicate": "idempotent-if-identical-else-protocol-error",
+        "reorder": "hold-until-participant-boundary-reached",
+        "loss": "retransmit-until-deadline"
+      },
+      {
+        "command": "relocationComplete",
+        "senderRoles": ["source", "coordinator"],
+        "phases": ["activated", "cleaning", "completed"],
+        "duplicate": "idempotent-by-stable-relocation-id-target-attempt-generation-and-source-cleanup-state",
+        "reorder": "hold-until-activated-sealed-and-durable-source-cleanup-terminal",
+        "loss": "recover-from-durable-authority"
+      }
+    ]
+  },
+  "reservedCommandRanges": [
+    { "first": 7, "last": 15 },
+    { "first": 51, "last": 255 }
+  ]
+}

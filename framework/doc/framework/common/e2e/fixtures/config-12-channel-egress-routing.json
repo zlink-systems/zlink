@@ -1,0 +1,49 @@
+{
+  "config": "ChannelEgressRouting",
+  "roles": {
+    "session": {
+      "routeMeshes": ["game"],
+      "channels": {
+        "game.session": "server",
+        "game.play": "client",
+        "game.api": "client"
+      }
+    },
+    "play": {
+      "routeMeshes": ["game", "audit"],
+      "channels": {
+        "game.play": "server",
+        "game.session": "client",
+        "game.api": "client",
+        "audit.record": "client"
+      },
+      "clientServer": {
+        "workflow.command": "client"
+      }
+    },
+    "api": {
+      "routeMeshes": ["game"],
+      "channels": {
+        "game.api": "server"
+      }
+    },
+    "workflowClient": {
+      "clientServer": {
+        "workflow.command": "client"
+      }
+    },
+    "workflowServer": {
+      "routeMeshes": ["game"],
+      "channels": {},
+      "clientServer": {
+        "workflow.command": "client_and_server"
+      }
+    },
+    "audit": {
+      "routeMeshes": ["audit"],
+      "channels": {
+        "audit.record": "server"
+      }
+    }
+  }
+}

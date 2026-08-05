@@ -1,0 +1,23 @@
+{
+  "nestjsFrameworkBuilder": [
+    "addClientServerChannel",
+    "addFanoutChannel",
+    "addLocationStore",
+    "addRelocationStore",
+    "addRouteMesh",
+    "addStreamNode",
+    "build",
+    "codecs",
+    "configureDispatch",
+    "configureInboundDispatch",
+    "configureLocations",
+    "configureNetwork",
+    "configureStreamCompression",
+    "options",
+    "setActorTransferTimeout",
+    "setApplicationVersion",
+    "setMaintenanceWave",
+    "setMessageFollowDuration"
+  ],
+  "bindingVersion": "11.2.0"
+}

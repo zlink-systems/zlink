@@ -1,0 +1,74 @@
+{
+  "grpc|1": {
+    "32|latency": 66.92,
+    "32|throughput": 14929.65,
+    "64|latency": 71.09,
+    "64|throughput": 14053.91
+  },
+  "grpc|100": {
+    "1024|latency": 954.32,
+    "1024|throughput": 104764.54,
+    "131072|latency": 11970.68,
+    "131072|throughput": 8347.58,
+    "256|latency": 908.91,
+    "256|throughput": 109988.45,
+    "262144|latency": 22213.33,
+    "262144|throughput": 4486.52,
+    "64|latency": 876.94,
+    "64|throughput": 114012.37,
+    "65536|latency": 6872.89,
+    "65536|throughput": 14546.34
+  },
+  "grpc|20": {
+    "1024|latency": 248.57,
+    "1024|throughput": 80428.63,
+    "131072|latency": 2681.21,
+    "131072|throughput": 7458.01,
+    "256|latency": 248.0,
+    "256|throughput": 80614.03,
+    "262144|latency": 4756.8,
+    "262144|throughput": 4203.37,
+    "64|latency": 237.06,
+    "64|throughput": 84331.84,
+    "65536|latency": 1390.38,
+    "65536|throughput": 14382.22
+  },
+  "libzmq|1": {
+    "32|latency": 134.24,
+    "32|throughput": 1169579.5,
+    "64|latency": 141.08,
+    "64|throughput": 1060824.29
+  },
+  "libzmq|100": {
+    "1024|latency": 313.38,
+    "1024|throughput": 639983.48,
+    "131072|latency": 927802.62,
+    "131072|throughput": 39470.43,
+    "256|latency": 296.45,
+    "256|throughput": 679742.91,
+    "262144|latency": 1159661.55,
+    "262144|throughput": 22375.62,
+    "64|latency": 279.29,
+    "64|throughput": 729364.18,
+    "65536|latency": 497296.43,
+    "65536|throughput": 71325.99
+  },
+  "libzmq|20": {
+    "1024|latency": 418253.61,
+    "1024|throughput": 335378.45,
+    "131072|latency": 53158.72,
+    "131072|throughput": 25660.94,
+    "256|latency": 600223.92,
+    "256|throughput": 640038.14,
+    "262144|latency": 69090.91,
+    "262144|throughput": 12215.34,
+    "64|latency": 4400.84,
+    "64|throughput": 1376618.11,
+    "65536|latency": 40236.54,
+    "65536|throughput": 55599.59
+  },
+  "meta": {
+    "build_dir": "/home/hep7/project/kairos/zlink/core/build/bin",
+    "updated_at_utc": "2026-02-23T10:19:24.590623+00:00"
+  }
+}

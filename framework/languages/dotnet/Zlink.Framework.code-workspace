@@ -1,0 +1,13 @@
+{
+    "folders": [
+        {
+            "path": "."
+        },
+        {
+            "path": "../../../bindings/dotnet/src/Zlink"
+        }
+    ],
+    "settings": {
+        "dotnet.defaultSolution": "Zlink.Framework.sln"
+    }
+}

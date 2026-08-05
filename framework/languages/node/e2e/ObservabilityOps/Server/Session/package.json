@@ -1,0 +1,9 @@
+{
+  "name": "@zlink-systems/e2e-observability-ops-session",
+  "version": "0.1.0-SNAPSHOT",
+  "private": true,
+  "main": "dist/Server/Session/main.js",
+  "scripts": {
+    "build": "node ../../../../node_modules/typescript/bin/tsc -p tsconfig.json"
+  }
+}

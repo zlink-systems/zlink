@@ -1,0 +1,62 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+    "declaration": true,
+    "sourceMap": false,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "typeRoots": [
+      "node_modules/@types"
+    ],
+    "types": [
+      "node"
+    ],
+    "baseUrl": ".",
+    "paths": {
+      "@zlink-systems/framework": [
+        "packages/framework/src"
+      ],
+      "@zlink-systems/framework/nest-integration": [
+        "packages/framework/src/nest-integration"
+      ],
+      "@zlink-systems/framework-codec-msgpack": [
+        "packages/framework-codec-msgpack/src"
+      ],
+      "@zlink-systems/framework-codec-msgpack/framework": [
+        "packages/framework-codec-msgpack/src/framework"
+      ],
+      "@zlink-systems/framework-codec-protobuf": [
+        "packages/framework-codec-protobuf/src"
+      ],
+      "@zlink-systems/framework-codec-protobuf/framework": [
+        "packages/framework-codec-protobuf/src/framework"
+      ],
+      "@zlink-systems/framework-locations-redis": [
+        "packages/framework-locations-redis/src"
+      ],
+      "@zlink-systems/http-client": [
+        "packages/http-client/src"
+      ],
+      "@zlink-systems/nestjs": [
+        "packages/nestjs/src"
+      ],
+      "@zlink-systems/stream-connector": [
+        "packages/stream-connector/src"
+      ],
+      "@zlink-systems/stream-wire": [
+        "packages/stream-wire/src"
+      ],
+      "@zlink-systems/zlink": [
+        "node_modules/@zlink-systems/zlink/dist/index.d.ts"
+      ]
+    }
+  }
+}

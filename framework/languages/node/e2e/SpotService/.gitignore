@@ -1,0 +1,3 @@
+Server/**/dist/
+Client/dist/
+node_modules/

@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+package zlink_c_bench_grpc;
+
+service BenchService {
+  rpc Echo(BenchPayload) returns (BenchPayload);
+  rpc Command(BenchPayload) returns (BenchEmpty);
+}
+
+message BenchPayload {
+  bytes body = 1;
+}
+
+message BenchEmpty {}

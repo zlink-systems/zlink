@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- Server GC: multi-heap with per-core background sweep. Reduces
+         stop-the-world pauses on the perf hot path. The runner spawns one
+         process per (pattern, transport, size) so the larger heap warm-up
+         cost is amortized across the duration window. -->
+    <ServerGarbageCollection>true</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../common/Zlink.BindingBench.Common/Zlink.BindingBench.Common.csproj"
+      SkipGetTargetFrameworkProperties="true" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,38 @@
+{
+  "format": "authority-key-v1",
+  "consumers": ["cpp", "dotnet", "jvm", "node"],
+  "cases": [
+    {
+      "objectKind": "actor",
+      "identityHex": "757365723a3432",
+      "encoded": "zla1:a:7:user%3A42"
+    },
+    {
+      "objectKind": "actor",
+      "identityHex": "557365723a3432",
+      "encoded": "zla1:a:7:User%3A42"
+    },
+    {
+      "objectKind": "actor",
+      "identityHex": "c3a9",
+      "encoded": "zla1:a:2:%C3%A9"
+    },
+    {
+      "objectKind": "actor",
+      "identityHex": "65cc81",
+      "encoded": "zla1:a:3:e%CC%81"
+    },
+    {
+      "objectKind": "spot",
+      "identityHex": "726f6f6d3ac3a9",
+      "encoded": "zla1:s:7:room%3A%C3%A9",
+      "sharedBySpotKinds": ["entry", "user", "instance"]
+    },
+    {
+      "objectKind": "spot",
+      "identityHex": "757365723a3432",
+      "encoded": "zla1:s:7:user%3A42",
+      "sharedBySpotKinds": ["entry", "user", "instance"]
+    }
+  ]
+}

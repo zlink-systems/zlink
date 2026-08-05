@@ -1,0 +1,32 @@
+@PACKAGE_INIT@
+
+get_filename_component(
+  ZLINK_STREAM_CONNECTOR_CPP_PACKAGE_PREFIX
+  "${CMAKE_CURRENT_LIST_DIR}/../../../"
+  ABSOLUTE)
+
+include(CMakeFindDependencyMacro)
+
+find_dependency(Threads)
+find_dependency(nlohmann_json)
+@ZLINK_STREAM_CONNECTOR_EXPORT_OPENSSL_DEPENDENCY@
+
+if(NOT TARGET libzlink)
+  if(WIN32)
+    add_library(libzlink SHARED IMPORTED)
+    set_target_properties(libzlink PROPERTIES
+      IMPORTED_LOCATION "${ZLINK_STREAM_CONNECTOR_CPP_PACKAGE_PREFIX}/bin/zlink.dll")
+  elseif(APPLE)
+    add_library(libzlink SHARED IMPORTED)
+    set_target_properties(libzlink PROPERTIES
+      IMPORTED_LOCATION "${ZLINK_STREAM_CONNECTOR_CPP_PACKAGE_PREFIX}/lib/libzlink.dylib")
+  else()
+    add_library(libzlink SHARED IMPORTED)
+    set_target_properties(libzlink PROPERTIES
+      IMPORTED_LOCATION "${ZLINK_STREAM_CONNECTOR_CPP_PACKAGE_PREFIX}/lib/libzlink.so")
+  endif()
+endif()
+if(NOT TARGET zlink::cpp)
+  include("${CMAKE_CURRENT_LIST_DIR}/../zlink_cpp/zlink_cppTargets.cmake")
+endif()
+include("${CMAKE_CURRENT_LIST_DIR}/zlink_stream_connector_cppTargets.cmake")

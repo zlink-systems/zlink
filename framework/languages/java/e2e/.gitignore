@@ -1,0 +1,7 @@
+/YieldDispatch/.gradle/
+/YieldDispatch/build/
+/YieldDispatch/Client/build/
+/YieldDispatch/Shared/build/
+/YieldDispatch/Server/*/build/
+/YieldDispatch/logs/
+/YieldDispatch/hs_err_pid*.log

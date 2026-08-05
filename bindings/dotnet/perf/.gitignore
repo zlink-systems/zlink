@@ -1,0 +1,12 @@
+# dotnet build outputs
+single/Zlink.BindingBench/bin/
+single/Zlink.BindingBench/obj/
+multi/Zlink.BindingBench.Multi/bin/
+multi/Zlink.BindingBench.Multi/obj/
+
+# results (keep directory placeholders only)
+results/single/tmp/*.txt
+results/single/report/*.txt
+results/multi/tmp/*.txt
+results/multi/report/*.txt
+!results/**/.gitkeep

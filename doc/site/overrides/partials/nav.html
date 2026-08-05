@@ -1,0 +1,33 @@
+{#-
+  mkdocs-material 9.7.6의 partials/nav.html을 포크한다. 왼쪽 드로어 제목의 사이트
+  이름 텍스트("ZLink")도 header.html과 같은 이유로 홈 링크로 감쌌다 — 나머지는
+  원본과 동일하다. Material을 올릴 때는 새 버전의 partials/nav.html과 diff를 떠서
+  반영한다.
+-#}
+{% import "partials/nav-item.html" as item with context %}
+{% set class = "md-nav md-nav--primary" %}
+{% if "navigation.tabs" in features %}
+  {% set class = class ~ " md-nav--lifted" %}
+{% endif %}
+{% if "toc.integrate" in features %}
+  {% set class = class ~ " md-nav--integrated" %}
+{% endif %}
+<nav class="{{ class }}" aria-label="{{ lang.t('nav') }}" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="{{ config.extra.homepage | d(nav.homepage.url, true) | url }}" title="{{ config.site_name | e }}" class="md-nav__button md-logo" aria-label="{{ config.site_name }}" data-md-component="logo">
+      {% include "partials/logo.html" %}
+    </a>
+    <a href="{{ config.extra.homepage | d(nav.homepage.url, true) | url }}" title="{{ config.site_name | e }}">{{ config.site_name }}</a>
+  </label>
+  {% if config.repo_url %}
+    <div class="md-nav__source">
+      {% include "partials/source.html" %}
+    </div>
+  {% endif %}
+  <ul class="md-nav__list" data-md-scrollfix>
+    {% for nav_item in nav.items %}
+      {% set path = "__nav_" ~ loop.index %}
+      {{ item.render(nav_item, path, 1) }}
+    {% endfor %}
+  </ul>
+</nav>

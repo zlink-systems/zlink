@@ -1,0 +1,16 @@
+<Project>
+    <PropertyGroup>
+        <ZLinkRepoRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../../../../..'))</ZLinkRepoRoot>
+        <ZLinkLocalPackageRoot Condition="'$(ZLINK_LOCAL_PACKAGE_ROOT)' != ''">$(ZLINK_LOCAL_PACKAGE_ROOT)</ZLinkLocalPackageRoot>
+        <ZLinkLocalNuGetSource Condition="'$(ZLinkLocalNuGetSource)' == '' and '$(ZLinkLocalPackageRoot)' != '' and Exists('$(ZLinkLocalPackageRoot)/nuget')">$(ZLinkLocalPackageRoot)/nuget</ZLinkLocalNuGetSource>
+        <ZLinkLocalNuGetSource Condition="'$(ZLinkLocalNuGetSource)' == '' and Exists('$(ZLinkRepoRoot)/.artifacts/wsl/nuget')">$(ZLinkRepoRoot)/.artifacts/wsl/nuget</ZLinkLocalNuGetSource>
+        <ZLinkLocalNuGetSource Condition="'$(ZLinkLocalNuGetSource)' == '' and Exists('$(ZLinkRepoRoot)/.artifacts/windows/nuget')">$(ZLinkRepoRoot)/.artifacts/windows/nuget</ZLinkLocalNuGetSource>
+        <RestoreAdditionalProjectSources Condition="'$(ZLinkLocalNuGetSource)' != ''">$(RestoreAdditionalProjectSources);$(ZLinkLocalNuGetSource)</RestoreAdditionalProjectSources>
+        <TargetFramework>net8.0</TargetFramework>
+        <Nullable>enable</Nullable>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <LangVersion>12.0</LangVersion>
+        <Deterministic>true</Deterministic>
+        <IsPackable>false</IsPackable>
+    </PropertyGroup>
+</Project>

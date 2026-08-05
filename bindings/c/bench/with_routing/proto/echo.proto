@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+package bench_echo;
+
+message EchoRequest {
+  bytes payload = 1;
+}
+
+message EchoResponse {
+  bytes payload = 1;
+}
+
+service EchoService {
+  rpc BidirectionalEcho(stream EchoRequest) returns (stream EchoResponse);
+}

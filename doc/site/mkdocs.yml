@@ -1,0 +1,540 @@
+site_name: ZLink
+site_url: https://kairos-code-dev.github.io/zlink/
+site_description: ZLink Framework — 실시간 메시징 서버 프레임워크
+
+repo_url: https://github.com/kairos-code-dev/zlink
+repo_name: kairos-code-dev/zlink
+
+# docs/는 정본 트리를 심링크로 모은 자리다(복사본이 아니다).
+# framework · core · bindings 문서가 한 사이트에 함께 실린다.
+docs_dir: docs
+
+theme:
+  name: material
+  language: ko
+  # header/nav.html 두 partial만 포크한다 — 사이트 이름 텍스트("ZLink")도 로고
+  # 아이콘처럼 홈으로 링크되게 하려고. 그 외 나머지는 Material 원본 그대로다.
+  custom_dir: overrides
+  # Material 기본 Roboto에는 한글 글리프가 없다. 한글이 글자마다 OS 대체 폰트로
+  # 떨어지면서 자간과 굵기가 흔들리므로 시스템 한글 폰트를 쓴다.
+  font: false
+  # 첫 항목이 기본값이다. `media`를 걸면 OS 설정을 따라가므로, 다크로 시작하게
+  # 하려면 빼야 한다. 토글은 그대로 남고 고른 값은 브라우저에 저장된다.
+  # primary는 헤더 바 색, accent는 호버·포커스 색이다. slate에서 teal은 링크가
+  # 청록(#00ccb8)으로 잡히므로 어두운 바탕에서 대비가 넉넉하다.
+  palette:
+    - scheme: slate
+      primary: teal
+      accent: teal
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+    - scheme: default
+      primary: teal
+      accent: teal
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+  features:
+    - content.code.copy
+    - content.tabs.link
+    # navigation.sections를 켜면 언어 묶음이 접히지 않는 제목 덩어리가 된다.
+    # 빼면 각 묶음이 여닫히므로 지금 보는 언어만 펼쳐 둘 수 있다.
+    - navigation.top
+    # 본문 맨 아래에 앞·뒤 장 링크. 순서는 이 파일의 nav가 정한다.
+    - navigation.footer
+    - search.highlight
+
+extra_css:
+  - assets/korean.css
+  - assets/stylesheets/extra.css
+
+# 다이어그램 안 글씨를 키운다. 폰트만 올리면 자연폭이 함께 늘어 축소율이 나빠지므로
+# 폰트와 간격 상수를 같이 조정한다. 자세한 이유는 hook 파일 머리말에.
+hooks:
+  - hooks/mermaid_size.py
+
+plugins:
+  - search
+  # 한국어가 기본이다. framework 402장은 전부 `.ko.md`이고, core·bindings의 영어
+  # 문서는 `.en.md`로 옮겼다 — 접미사 없는 자리가 비어야 이 배치가 성립한다.
+  # nav 라벨은 영어로 적고 번역표가 한국어를 준다.
+  - i18n:
+      docs_structure: suffix
+      languages:
+        - locale: ko
+          name: 한국어
+          default: true
+          build: true
+          nav_translations:
+            Guide: 가이드
+            Overview: 개요
+            Core API: 핵심 API
+            Socket Patterns: 소켓 패턴
+            Transports: 트랜스포트
+            TLS Security: TLS 보안
+            Monitoring: 모니터링
+            Services: 서비스
+            Routing ID: 라우팅 ID
+            Message API: 메시지 API
+            Performance: 성능
+            Thread Safety: 스레드 안전성
+            Socket Options: 소켓 옵션
+            API Reference: API 레퍼런스
+            Context: 컨텍스트
+            Message: 메시지
+            Events: 이벤트
+            Polling: 폴링
+            Errors: 에러
+            Getting Started: 시작하기
+            Messaging: 메시징
+            Operations: 운영
+            Reference: 레퍼런스
+            Utilities: 유틸리티
+            Internals: 내부 구조
+            Architecture: 아키텍처
+            Threading Model: 스레딩 모델
+            Design Decisions: 설계 결정
+            POSD Module Structure: POSD 모듈 구조
+            Services Internals: 서비스 내부
+            Stream Socket: 스트림 소켓
+            Protocol ZMP: ZMP 프로토콜
+            Protocol Raw: Raw 프로토콜
+            SPOT Internals: SPOT 내부 구조
+            I/O Thread: I/O 스레드
+            Result Enums: 결과 Enum
+            Actor: Actor
+        - locale: en
+          name: English
+          build: true
+
+# 문서 트리는 정본을 심링크로 직접 건다(`docs/guide` → `core/doc/guide` 등).
+# 복사본을 두면 양쪽이 갈라진다 — 실제로 갈라져서 사이트가 byte HWM 이전의 낡은
+# 내용을 내고 있었고, v11이 지운 서비스 계층 장까지 남아 있었다.
+#
+# 사이트에 올리지 않을 자리. mkdocs는 nav에 없어도 docs_dir 아래를 전부 빌드한다.
+exclude_docs: |
+  perf/
+  */internals/
+  # framework 내부 구조는 nav에 올린다 — 위 */internals/는 각 언어의
+  # bindings/framework internals(공개용이 아닌 것)를 빼는 규칙이라, 여기서만 되살린다.
+  !common/internals/
+  common/e2e/
+  # 공통 가이드는 언어 탭을 담은 소스다. 읽는 자리는 언어별 생성판이다.
+  common/guide/
+  # 문서 작성 규약이다. 독자용이 아니다.
+  guide/EXAMPLES.ko.md
+  guide/EXAMPLES.en.md
+  guide/STYLE.ko.md
+  guide/STYLE.en.md
+  # 확정 전 초안.
+  spec/draft/
+  # 작업이 끝나면 사라지는 임시 문서다. nav에도 없다.
+  bindings/plan/
+
+nav:
+  - Framework:
+      - 가이드:
+          - .NET:
+              - "가이드 홈": dotnet/guide/server/README.ko.md
+              - "1. 개요": dotnet/guide/server/01-overview.ko.md
+              - "2. 시작하기": dotnet/guide/server/02-getting-started.ko.md
+              - "3. 핵심 개념": dotnet/guide/server/03-concepts.ko.md
+              - "4. Backpressure": dotnet/guide/server/04-backpressure.ko.md
+              - "5. Channel Messaging": dotnet/guide/server/05-channel-messaging.ko.md
+              - "6. Spot": dotnet/guide/server/06-spot.ko.md
+              - "7. Actor와 Spot": dotnet/guide/server/07-actor-spot.ko.md
+              - "8. Session과 Actor binding": dotnet/guide/server/08-actor-session.ko.md
+              - "9. STREAM": dotnet/guide/server/09-stream.ko.md
+              - "10. Location": dotnet/guide/server/10-location.ko.md
+              - "11. Monitoring": dotnet/guide/server/11-monitoring.ko.md
+              - "12. 운영": dotnet/guide/server/12-operations.ko.md
+              - "13. 주요 타입 사용 색인": dotnet/guide/server/13-interface-catalog.ko.md
+              - "14. 샘플 고르기": dotnet/guide/server/14-samples.ko.md
+              - "15. E2E 테스트": dotnet/guide/server/15-e2e-testing.ko.md
+              - "16. Options": dotnet/guide/server/16-options.ko.md
+              - "17. ZLink를 어디에 쓰나": dotnet/guide/server/17-alternative.ko.md
+          - C++:
+              - "가이드 홈": cpp/guide/server/README.ko.md
+              - "1. 개요": cpp/guide/server/01-overview.ko.md
+              - "2. 시작하기": cpp/guide/server/02-getting-started.ko.md
+              - "3. 핵심 개념": cpp/guide/server/03-concepts.ko.md
+              - "4. Backpressure": cpp/guide/server/04-backpressure.ko.md
+              - "5. Channel Messaging": cpp/guide/server/05-channel-messaging.ko.md
+              - "6. Spot": cpp/guide/server/06-spot.ko.md
+              - "7. Actor와 Spot": cpp/guide/server/07-actor-spot.ko.md
+              - "8. Session과 Actor binding": cpp/guide/server/08-actor-session.ko.md
+              - "9. STREAM": cpp/guide/server/09-stream.ko.md
+              - "10. Location": cpp/guide/server/10-location.ko.md
+              - "11. Monitoring": cpp/guide/server/11-monitoring.ko.md
+              - "12. 운영": cpp/guide/server/12-operations.ko.md
+              - "13. 주요 타입 사용 색인": cpp/guide/server/13-interface-catalog.ko.md
+              - "14. 샘플 고르기": cpp/guide/server/14-samples.ko.md
+              - "15. E2E 테스트": cpp/guide/server/15-e2e-testing.ko.md
+              - "16. Options": cpp/guide/server/16-options.ko.md
+              - "17. ZLink를 어디에 쓰나": cpp/guide/server/17-alternative.ko.md
+              - "18. DI 컨테이너": cpp/guide/server/18-di-container.ko.md
+              - "19. Configuration": cpp/guide/server/19-configuration.ko.md
+              - "20. HTTP Hosting": cpp/guide/server/20-http-hosting.ko.md
+              - "21. 실행·구성 모델": cpp/guide/server/21-execution-model.ko.md
+          - Java:
+              - "가이드 홈": java/guide/server/README.ko.md
+              - "1. 개요": java/guide/server/01-overview.ko.md
+              - "2. 시작하기": java/guide/server/02-getting-started.ko.md
+              - "3. 핵심 개념": java/guide/server/03-concepts.ko.md
+              - "4. Backpressure": java/guide/server/04-backpressure.ko.md
+              - "5. Channel Messaging": java/guide/server/05-channel-messaging.ko.md
+              - "6. Spot": java/guide/server/06-spot.ko.md
+              - "7. Actor와 Spot": java/guide/server/07-actor-spot.ko.md
+              - "8. Session과 Actor binding": java/guide/server/08-actor-session.ko.md
+              - "9. STREAM": java/guide/server/09-stream.ko.md
+              - "10. Location": java/guide/server/10-location.ko.md
+              - "11. Monitoring": java/guide/server/11-monitoring.ko.md
+              - "12. 운영": java/guide/server/12-operations.ko.md
+              - "13. 주요 타입 사용 색인": java/guide/server/13-interface-catalog.ko.md
+              - "14. 샘플 고르기": java/guide/server/14-samples.ko.md
+              - "15. E2E 테스트": java/guide/server/15-e2e-testing.ko.md
+              - "16. Options": java/guide/server/16-options.ko.md
+              - "17. ZLink를 어디에 쓰나": java/guide/server/17-alternative.ko.md
+          - Kotlin:
+              - "가이드 홈": kotlin/guide/server/README.ko.md
+              - "1. 개요": kotlin/guide/server/01-overview.ko.md
+              - "2. 시작하기": kotlin/guide/server/02-getting-started.ko.md
+              - "3. 핵심 개념": kotlin/guide/server/03-concepts.ko.md
+              - "4. Backpressure": kotlin/guide/server/04-backpressure.ko.md
+              - "5. Channel Messaging": kotlin/guide/server/05-channel-messaging.ko.md
+              - "6. Spot": kotlin/guide/server/06-spot.ko.md
+              - "7. Actor와 Spot": kotlin/guide/server/07-actor-spot.ko.md
+              - "8. Session과 Actor binding": kotlin/guide/server/08-actor-session.ko.md
+              - "9. STREAM": kotlin/guide/server/09-stream.ko.md
+              - "10. Location": kotlin/guide/server/10-location.ko.md
+              - "11. Monitoring": kotlin/guide/server/11-monitoring.ko.md
+              - "12. 운영": kotlin/guide/server/12-operations.ko.md
+              - "13. 주요 타입 사용 색인": kotlin/guide/server/13-interface-catalog.ko.md
+              - "14. 샘플 고르기": kotlin/guide/server/14-samples.ko.md
+              - "15. E2E 테스트": kotlin/guide/server/15-e2e-testing.ko.md
+              - "17. ZLink를 어디에 쓰나": kotlin/guide/server/17-alternative.ko.md
+          - Node.js:
+              - "가이드 홈": node/guide/server/README.ko.md
+              - "1. 개요": node/guide/server/01-overview.ko.md
+              - "2. 시작하기": node/guide/server/02-getting-started.ko.md
+              - "3. 핵심 개념": node/guide/server/03-concepts.ko.md
+              - "4. Backpressure": node/guide/server/04-backpressure.ko.md
+              - "5. Channel Messaging": node/guide/server/05-channel-messaging.ko.md
+              - "6. Spot": node/guide/server/06-spot.ko.md
+              - "7. Actor와 Spot": node/guide/server/07-actor-spot.ko.md
+              - "8. Session과 Actor binding": node/guide/server/08-actor-session.ko.md
+              - "9. STREAM": node/guide/server/09-stream.ko.md
+              - "10. Location": node/guide/server/10-location.ko.md
+              - "11. Monitoring": node/guide/server/11-monitoring.ko.md
+              - "12. 운영": node/guide/server/12-operations.ko.md
+              - "13. 주요 타입 사용 색인": node/guide/server/13-interface-catalog.ko.md
+              - "14. 샘플 고르기": node/guide/server/14-samples.ko.md
+              - "15. E2E 테스트": node/guide/server/15-e2e-testing.ko.md
+              - "16. Options": node/guide/server/16-options.ko.md
+              - "17. ZLink를 어디에 쓰나": node/guide/server/17-alternative.ko.md
+      - Reference:
+          - .NET:
+              - "Reference home": dotnet/reference/README.md
+              - "01. Host lifecycle": dotnet/reference/01-host-lifecycle.md
+              - "02. Topology discovery": dotnet/reference/02-topology-discovery.md
+              - "03. Messaging execution": dotnet/reference/03-messaging-execution.md
+              - "04. Spot instance": dotnet/reference/04-spot-instance.md
+              - "05. Actor relocation": dotnet/reference/05-actor-relocation.md
+              - "06. Stream session": dotnet/reference/06-stream-session.md
+              - "07. Location authority": dotnet/reference/07-location-authority.md
+              - "08. Observability diagnostics": dotnet/reference/08-observability-diagnostics.md
+          - C++:
+              - "Reference home": cpp/reference/README.md
+              - "01. Host lifecycle": cpp/reference/01-host-lifecycle.md
+              - "02. Topology discovery": cpp/reference/02-topology-discovery.md
+              - "03. Messaging execution": cpp/reference/03-messaging-execution.md
+              - "04. Spot instance": cpp/reference/04-spot-instance.md
+              - "05. Actor relocation": cpp/reference/05-actor-relocation.md
+              - "06. Stream session": cpp/reference/06-stream-session.md
+              - "07. Location authority": cpp/reference/07-location-authority.md
+              - "08. Observability diagnostics": cpp/reference/08-observability-diagnostics.md
+          - Java:
+              - "Reference home": java/reference/README.md
+              - "01. Host lifecycle": java/reference/01-host-lifecycle.md
+              - "02. Topology discovery": java/reference/02-topology-discovery.md
+              - "03. Messaging execution": java/reference/03-messaging-execution.md
+              - "04. Spot instance": java/reference/04-spot-instance.md
+              - "05. Actor relocation": java/reference/05-actor-relocation.md
+              - "06. Stream session": java/reference/06-stream-session.md
+              - "07. Location authority": java/reference/07-location-authority.md
+              - "08. Observability diagnostics": java/reference/08-observability-diagnostics.md
+          - Kotlin:
+              - "Reference home": kotlin/reference/README.md
+              - "01. Host lifecycle": kotlin/reference/01-host-lifecycle.md
+              - "02. Topology discovery": kotlin/reference/02-topology-discovery.md
+              - "03. Messaging execution": kotlin/reference/03-messaging-execution.md
+              - "04. Spot instance": kotlin/reference/04-spot-instance.md
+              - "05. Actor relocation": kotlin/reference/05-actor-relocation.md
+              - "06. Stream session": kotlin/reference/06-stream-session.md
+              - "07. Location authority": kotlin/reference/07-location-authority.md
+              - "08. Observability diagnostics": kotlin/reference/08-observability-diagnostics.md
+          - Node.js:
+              - "Reference home": node/reference/README.md
+              - "01. Host lifecycle": node/reference/01-host-lifecycle.md
+              - "02. Topology discovery": node/reference/02-topology-discovery.md
+              - "03. Messaging execution": node/reference/03-messaging-execution.md
+              - "04. Spot instance": node/reference/04-spot-instance.md
+              - "05. Actor relocation": node/reference/05-actor-relocation.md
+              - "06. Stream session": node/reference/06-stream-session.md
+              - "07. Location authority": node/reference/07-location-authority.md
+              - "08. Observability diagnostics": node/reference/08-observability-diagnostics.md
+      - 스펙:
+          - "공통 스펙": common/README.ko.md
+          - 작성 기준과 공통 용어:
+              - "공개 계약 관리": common/spec/00-public-contract-governance.ko.md
+              - "메시징 용어집": common/spec/01-glossary.ko.md
+          - 기반 계약:
+              - "Framework 개요": common/spec/02-overview.ko.md
+              - "상호작용 모델": common/spec/03-interaction-model.ko.md
+              - "메시지 모델": common/spec/04-message-model.ko.md
+              - "비동기 실행 정책": common/spec/05-async-execution-policy.md
+              - "Framework API": common/spec/06-framework-api.ko.md
+          - Channel과 network:
+              - "RouteMesh topology": common/spec/07-channel-topology.ko.md
+              - "Channel 메시징": common/spec/08-channel-messaging.ko.md
+              - "ClientServer Channel": common/spec/09-client-server-channel.ko.md
+              - "Network listener identity": common/spec/10-network-listener-identity.ko.md
+          - Object 메시징:
+              - "Spot 모델": common/spec/11-spot-model.ko.md
+              - "Spot 메시징": common/spec/12-spot-messaging.ko.md
+              - "MeshNode": common/spec/13-mesh-node.ko.md
+              - "Actor 모델": common/spec/14-actor-model.ko.md
+              - "Spot과 Actor membership": common/spec/15-spot-actor.ko.md
+              - "Spot 주소 메시징": common/spec/16-spot-address-messaging.ko.md
+              - "Stage wrapper on Spot": common/spec/17-stage-wrapper-on-spot.ko.md
+              - "Spot·Actor routing": common/spec/18-object-routing.ko.md
+          - STREAM과 session:
+              - "STREAM 서버 session": common/spec/19-stream-session.ko.md
+              - "Session Actor dispatch": common/spec/20-session-actor-dispatch.ko.md
+          - Location Store와 relocation:
+              - "Location runtime": common/spec/21-location-runtime.ko.md
+              - "Location Store (Redis)": common/spec/22-location-store-redis.ko.md
+              - "Relocation Store (Redis)": common/spec/23-relocation-store-redis.ko.md
+          - 관측과 종료:
+              - "Runtime 상태와 운영 진단": common/spec/24-runtime-monitoring.ko.md
+              - "Runtime metric": common/spec/25-runtime-metrics.ko.md
+              - "Message flow tracing": common/spec/26-message-flow-tracing.ko.md
+              - "Request correlation": common/spec/27-flow-correlation.ko.md
+              - "Host Relocate와 Shutdown": common/spec/28-graceful-drain-handoff.ko.md
+              - "Transport liveness": common/spec/29-transport-liveness.ko.md
+              - "장애 대응과 failover": common/spec/31-failure-failover-policy.ko.md
+              - "Framework 오류 모델": common/spec/32-framework-error-model.ko.md
+      - 내부 구조:
+          - "내부 구조 개요": common/internals/README.ko.md
+          - "1. 계층 경계와 식별자": common/internals/01-layering.ko.md
+          - "2. Spot·Actor 실행 직렬화": common/internals/02-serialization.ko.md
+          - "3. application과 infrastructure 실행 분리": common/internals/03-progress-isolation.ko.md
+          - "4. operation 완료 확정": common/internals/04-completion.ko.md
+          - "5. 이동 중 message 연속성": common/internals/05-relocation-continuity.ko.md
+          - "6. target 선택과 route cache": common/internals/06-routing-and-cache.ko.md
+          - "7. 수신과 dispatch 루프": common/internals/07-dispatch-loop.ko.md
+          - "8. 객체 종류와 활성화": common/internals/08-object-lifecycle.ko.md
+          - "9. Session과 Actor 연결": common/internals/09-session-binding.ko.md
+          - "10. Liveness와 상태 공개": common/internals/10-liveness-and-state.ko.md
+          - "11. Payload 소유권과 복사": common/internals/11-message-ownership.ko.md
+          - "12. Service wire protocol": common/internals/12-service-wire-protocol.md
+  - Bindings:
+      - 가이드:
+        - Overview: bindings/guide/README.ko.md
+        - .NET: bindings/guide/dotnet/index.ko.md
+        - C++: bindings/guide/cpp/index.ko.md
+        - Java: bindings/guide/java/index.ko.md
+        - Node.js: bindings/guide/node/index.ko.md
+        - Python: bindings/guide/python/index.ko.md
+        - Go: bindings/guide/go/index.ko.md
+        - Rust: bindings/guide/rust/index.ko.md
+      - Reference:
+        - C:
+          - "Reference home": bindings/reference/c/README.md
+        - .NET:
+          - "Reference home": bindings/reference/dotnet/README.md
+          - "01. Core": bindings/reference/dotnet/01-core.md
+          - "02. Messaging": bindings/reference/dotnet/02-messaging.md
+          - "03. Sockets": bindings/reference/dotnet/03-sockets.md
+          - "04. Eventing": bindings/reference/dotnet/04-eventing.md
+          - "05. Errors": bindings/reference/dotnet/05-errors.md
+        - C++:
+          - "Reference home": bindings/reference/cpp/README.md
+          - "01. Core": bindings/reference/cpp/01-core.md
+          - "02. Messaging": bindings/reference/cpp/02-messaging.md
+          - "03. Sockets": bindings/reference/cpp/03-sockets.md
+          - "04. Eventing": bindings/reference/cpp/04-eventing.md
+          - "05. Errors": bindings/reference/cpp/05-errors.md
+        - Java:
+          - "Reference home": bindings/reference/java/README.md
+          - "01. Core": bindings/reference/java/01-core.md
+          - "02. Messaging": bindings/reference/java/02-messaging.md
+          - "03. Sockets": bindings/reference/java/03-sockets.md
+          - "04. Eventing": bindings/reference/java/04-eventing.md
+          - "05. Errors": bindings/reference/java/05-errors.md
+        - Node.js:
+          - "Reference home": bindings/reference/node/README.md
+          - "01. Core": bindings/reference/node/01-core.md
+          - "02. Messaging": bindings/reference/node/02-messaging.md
+          - "03. Sockets": bindings/reference/node/03-sockets.md
+          - "04. Eventing": bindings/reference/node/04-eventing.md
+          - "05. Errors": bindings/reference/node/05-errors.md
+        - Python:
+          - "Reference home": bindings/reference/python/README.md
+          - "01. Core": bindings/reference/python/01-core.md
+          - "02. Messaging": bindings/reference/python/02-messaging.md
+          - "03. Sockets": bindings/reference/python/03-sockets.md
+          - "04. Eventing": bindings/reference/python/04-eventing.md
+          - "05. Errors": bindings/reference/python/05-errors.md
+        - Go:
+          - "Reference home": bindings/reference/go/README.md
+          - "01. Core": bindings/reference/go/01-core.md
+          - "02. Messaging": bindings/reference/go/02-messaging.md
+          - "03. Sockets": bindings/reference/go/03-sockets.md
+          - "04. Eventing": bindings/reference/go/04-eventing.md
+          - "05. Errors": bindings/reference/go/05-errors.md
+        - Rust:
+          - "Reference home": bindings/reference/rust/README.md
+          - "01. Core": bindings/reference/rust/01-core.md
+          - "02. Messaging": bindings/reference/rust/02-messaging.md
+          - "03. Sockets": bindings/reference/rust/03-sockets.md
+          - "04. Eventing": bindings/reference/rust/04-eventing.md
+          - "05. Errors": bindings/reference/rust/05-errors.md
+      - 스펙:
+        - Overview: bindings/spec/README.md
+        - Async & Coroutine Policy: bindings/spec/async-coroutine-policy.md
+        - C: bindings/spec/c/README.md
+        - .NET: bindings/spec/dotnet/README.md
+        - C++: bindings/spec/cpp/README.md
+        - Java: bindings/spec/java/README.md
+        - Node.js: bindings/spec/node/README.md
+        - Python: bindings/spec/python/README.md
+        - Go: bindings/spec/go/README.md
+        - Rust: bindings/spec/rust/README.md
+  - Core:
+      - 가이드:
+        - Overview: guide/01-overview.md
+        - Concepts:
+          - Socket Pattern Selection: guide/03-0-socket-patterns.md
+          - Reliability & Delivery: guide/reliability.md
+          - Design Rationale: guide/design-rationale.md
+          - Message API & Ownership: guide/09-message-api.md
+          - Thread Safety: guide/11-thread-safety.md
+        - Messaging Patterns:
+          - Routing ID: guide/08-routing-id.md
+          - PAIR: guide/03-1-pair.md
+          - PUB/SUB: guide/03-2-pubsub.md
+          - DEALER: guide/03-3-dealer.md
+          - ROUTER: guide/03-4-router.md
+          - STREAM: guide/03-5-stream.md
+          - Proxy: guide/03-6-proxy.md
+        - Transports: guide/04-transports.md
+        - TLS Security: guide/05-tls-security.md
+        - Operations:
+          - Monitoring: guide/06-monitoring.md
+          - Performance: guide/10-performance.md
+        - Reference:
+          - Core C API: guide/02-core-api.md
+          - Socket Options: guide/12-socket-options.md
+          - ZMP Protocol: guide/zmp-protocol.md
+          - Glossary: guide/glossary.md
+          - Shared Scenarios: guide/scenarios.md
+      - API Reference:
+        - "Reference home": reference/README.md
+        - "01. Context": reference/01-context.md
+        - "02. Message": reference/02-message.md
+        - "03. Socket lifecycle": reference/03-socket-lifecycle.md
+        - "04. Socket options and identity": reference/04-socket-options.md
+        - "05. Raw receive": reference/05-raw-receive.md
+        - "06. PAIR": reference/06-pair.md
+        - "07. PUB": reference/07-pub.md
+        - "08. SUB": reference/08-sub.md
+        - "09. XPUB": reference/09-xpub.md
+        - "10. XSUB": reference/10-xsub.md
+        - "11. DEALER": reference/11-dealer.md
+        - "12. ROUTER": reference/12-router.md
+        - "13. STREAM": reference/13-stream.md
+        - "14. Socket monitor": reference/14-socket-monitor.md
+        - "15. Polling and pollers": reference/15-polling.md
+        - "16. Timers": reference/16-timers.md
+        - "17. Utilities": reference/17-utilities.md
+        - "18. Errors, results, and version": reference/18-errors.md
+      - 스펙:
+        - Overview: spec/core/README.md
+        - Public Contract Governance: spec/core/00-public-contract-governance.md
+        - Context: spec/core/01-context.md
+        - Message: spec/core/02-message.md
+        - Errors: spec/core/03-errors.md
+        - Result Enums: spec/core/04-errno-map.md
+        - Events: spec/core/05-events.md
+        - Polling: spec/core/06-polling.md
+        - Monitoring: spec/core/07-monitoring.md
+        - Utilities: spec/core/08-utilities.md
+        - Runtime Boundary: spec/core/09-runtime-boundary.md
+        - Sockets:
+          - Overview: spec/core/socket/README.md
+          - PAIR: spec/core/socket/01-pair.md
+          - PUB: spec/core/socket/02-pub.md
+          - SUB: spec/core/socket/03-sub.md
+          - XPUB: spec/core/socket/04-xpub.md
+          - XSUB: spec/core/socket/05-xsub.md
+          - DEALER: spec/core/socket/06-dealer.md
+          - ROUTER: spec/core/socket/07-router.md
+          - STREAM: spec/core/socket/08-stream.md
+      - 내부 구조:
+        - Architecture: internals/architecture.md
+        - Threading Model: internals/threading-model.md
+        - Thread Safety: internals/thread-safety.md
+        - I/O Thread: internals/io-thread.md
+        - Design Decisions: internals/design-decisions.md
+        - POSD Module Structure: internals/posd-module-structure.md
+        - Source Layout: internals/core-source-layout.md
+        - Stream Socket: internals/stream-socket.md
+        - Socket Options: internals/socket-option-defaults.md
+        - Connection Memory: internals/connection-memory.md
+        - Multipart Atomicity: internals/multipart-atomicity.md
+        - Runtime Boundary: internals/runtime-boundary.md
+        - Protocol ZMP: internals/protocol-zmp.md
+        - Protocol Raw: internals/protocol-raw.md
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - pymdownx.highlight:
+      anchor_linenums: true
+      # 줄마다 span을 두면 CSS가 줄 단위로 스타일을 줄 수 있다. 긴 줄을 접을 때
+      # 이어지는 줄을 안쪽으로 들여 원래 한 줄이었음을 보이게 하는 데 쓴다.
+      line_spans: __span
+      # `<div class="highlight language-cpp">`. 접기는 코드에만 걸고 ASCII
+      # 다이어그램(```text)은 가로 스크롤로 남기려면 언어를 구분해야 한다.
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.snippets:
+      dedent_subsections: true
+      # base_path는 mkdocs 실행 cwd(framework/doc/site) 기준.
+      # repo 루트를 포함시켜 가이드가 framework/languages/<lang>/samples/의
+      # 실제 샘플 파일을 그대로 임베드한다.
+      base_path:
+        - .
+        - ../..
+  - tables
+  - toc:
+      permalink: true
+      # 왼쪽 목차에는 `##`까지만 싣는다. 장이 길어 `###`까지 펼치면 목차가
+      # 본문만큼 길어진다. anchor와 permalink는 모든 제목에 그대로 붙으므로
+      # 문서끼리의 `#소제목` 링크는 영향받지 않는다.
+      toc_depth: 2
+      # 한글 제목이 anchor로 살아남으려면 unicode slug가 필요하다.
+      # 기본 slugify는 non-ASCII를 버려서 문서 안의 anchor 링크가 전부 깨진다.
+      slugify: !!python/object/apply:pymdownx.slugs.slugify
+        kwds:
+          case: lower
+          unicode: true

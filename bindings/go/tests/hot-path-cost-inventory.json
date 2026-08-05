@@ -1,0 +1,89 @@
+{
+  "schema": 1,
+  "binding": "go",
+  "scope": "bindings/go/internal/native",
+  "unclassified": [],
+  "entries": [
+    {
+      "id": "message-native-allocation",
+      "classification": "required",
+      "sources": ["internal/native/message.go:173-181"],
+      "reason": "Core owns the message buffer, so caller bytes are copied into native storage before the handle is returned.",
+      "guardTest": "TestMessageCanonicalCopyHelpers"
+    },
+    {
+      "id": "message-snapshot-copy",
+      "classification": "required",
+      "sources": ["internal/native/message.go:251-258"],
+      "reason": "Bytes is the explicit lifetime-independent snapshot API; the copy is required after the native message may close.",
+      "guardTest": "TestMessageBytesSnapshotSurvivesClose"
+    },
+    {
+      "id": "submit-copy-for-preservation",
+      "classification": "required",
+      "sources": ["internal/native/socket_multipart.go:164-191"],
+      "reason": "Message submit preserves the caller handle when Core rejects a send, so the native submit frame is copied before submission.",
+      "guardTest": "TestBlockingSendFailurePreservesMessagePayload"
+    },
+    {
+      "id": "received-adopt-wrapper",
+      "classification": "required",
+      "sources": ["internal/native/socket_multipart_receive.go:13-47"],
+      "reason": "Each received native part needs a Go owner while zlink_msg_adopt transfers the Core buffer without a payload copy.",
+      "guardTest": "TestRecvOwnershipCanBeExplicitlyReleased"
+    },
+    {
+      "id": "topic-buffer-reuse",
+      "classification": "required",
+      "sources": ["internal/native/socket_receive.go:14-18"],
+      "reason": "Core writes topic metadata into caller-provided storage; the result objects retain one reusable buffer instead of allocating 64 KiB on every receive.",
+      "guardTest": "TestTopicOutputStorageReusesBuffer"
+    },
+    {
+      "id": "bytes-builder-native-copy",
+      "classification": "required",
+      "sources": ["internal/native/socket_multipart_request.go:53-95"],
+      "reason": "A builder supplied with []byte must materialize Core-owned messages before Submit returns.",
+      "guardTest": "TestBlockingSendFailurePreservesBytesPayload"
+    },
+    {
+      "id": "option-scratch-buffer",
+      "classification": "required",
+      "sources": [
+        "internal/native/connection_socket.go:134-143",
+        "internal/native/socket_core.go:184-194",
+        "internal/native/socket_misc_helpers.go:42-60"
+      ],
+      "reason": "Core writes option values into caller-provided scratch storage; returned strings and message values acquire Go ownership at the public boundary.",
+      "guardTest": "TestOptionRoundTrips"
+    },
+    {
+      "id": "callback-dispatcher-worker",
+      "classification": "required",
+      "sources": ["internal/native/callbacks.go:24-128"],
+      "reason": "One dispatcher worker per callback registration preserves callback ordering and gives socket close an explicit completion owner.",
+      "guardTest": "TestReceiveCallbackPanicDoesNotCloseSocketOrStopFutureCallbacks"
+    },
+    {
+      "id": "request-completion-dispatcher",
+      "classification": "required",
+      "sources": ["internal/native/request_reply_helpers.go:41-59"],
+      "reason": "One dispatcher worker per socket delivers request callbacks and replaces one blocking waiter goroutine per request while preserving payload cleanup on callback panic.",
+      "guardTest": "TestRequestCallbackDeliveryUsesSocketDispatcher"
+    },
+    {
+      "id": "request-progress-handle-pump",
+      "classification": "required",
+      "sources": ["internal/native/request_progress.go:38-117"],
+      "reason": "A single bounded poller worker is shared by requests on one native handle; completion detaches the request directly without a per-request waiter.",
+      "guardTest": "TestRequestContextDeadlineUsesStandardErrors"
+    },
+    {
+      "id": "cgo-package-runtime-rpath",
+      "classification": "required",
+      "sources": ["internal/native/ffi.go:5-10"],
+      "reason": "The package must link and load the runtime shipped beside the module, including in a clean consumer without repository paths.",
+      "guardTest": "build-wsl.sh clean consumer ldd check"
+    }
+  ]
+}

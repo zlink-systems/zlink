@@ -1,0 +1,130 @@
+{
+  "format": "contract-amendment-v1",
+  "consumers": ["cpp", "dotnet", "jvm", "node"],
+  "descriptor": {
+    "objectRole": "server",
+    "placementWeight": 100,
+    "activeCapacityLimit": 10000,
+    "pendingCapacityLimit": 128,
+    "objectKind": "userSpot",
+    "stableType": "chat-room",
+    "typeCapacityLimit": 4096
+  },
+  "creationIntent": {
+    "objectKind": "instanceSpot",
+    "globalIdHex": "73706f742d31",
+    "stableType": "presence",
+    "initialMeshName": "main",
+    "requestContentReference": "create/1",
+    "requestSha256Hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "requestEncodedSize": 1048576
+  },
+  "reservation": {
+    "operationOrder": ["reserve", "commit", "abort"],
+    "pendingCapacityDelta": 1,
+    "objectGeneration": "2",
+    "authorityOwnerGeneration": "3",
+    "targetNodeRidUtf8Fixture": "node-a",
+    "targetNodeGeneration": "4",
+    "targetOwnerLeaseGeneration": "5",
+    "pendingCreation": {
+      "reservationId": "reservation-1",
+      "requestContentReference": "create/1",
+      "requestSha256Hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "requestEncodedSize": 1048576
+    }
+  },
+  "aggregate": {
+    "aggregateHigh": "0",
+    "aggregateLow": "1",
+    "aggregateGeneration": "6",
+    "participantKinds": ["userSpot", "actor"],
+    "authorityOwner": "location",
+    "canonicalParticipantOrder": ["spot:room-1", "actor:actor-1"],
+    "participantMutations": ["spot-owner-and-membership", "actor-owner-and-membership"],
+    "inventoryDigestSha256Hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "relocationManifestDigestSha256Hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "relocationReferenceUtf8Fixture": "relocation/aggregate-1",
+    "relocationChecksumCrc32c": 305419896,
+    "relocationManifestAuthority": false,
+    "participantMaximum": 1024,
+    "encodedMaximum": 1048576
+  },
+  "messageFollow": {
+    "objectKinds": ["actor", "spot"],
+    "hopMaximum": 8,
+    "queuedMessageMaximum": 1024,
+    "queuedByteMaximum": 16777216,
+    "preserves": ["operationId", "objectGeneration", "payload", "replyRoute"]
+  },
+  "exactRefRoute": {
+    "actor": ["actorId", "objectGeneration", "targetNodeRid", "targetNodeGeneration", "authorityOwnerGeneration"],
+    "spot": ["spotId", "objectGeneration", "targetNodeRid", "targetNodeGeneration", "authorityOwnerGeneration"]
+  },
+  "normalInstanceMessageFields": ["spotId", "objectGeneration", "targetNodeRid", "targetNodeGeneration", "authorityOwnerGeneration"],
+  "terminalServiceOperations": {
+    "commands": {
+      "userSpotCreate": 47,
+      "userSpotClose": 48,
+      "actorCreate": 49,
+      "terminalReply": 20,
+      "messageFollow": 50,
+      "reservedFirst": 51
+    },
+    "replyEnvelopeFields": ["correlation", "terminalResult", "failureCode", "tail"],
+    "createRequestFields": [
+      "correlation",
+      "operation",
+      "sourceNodeRid",
+      "sourceNodeGeneration",
+      "spotId",
+      "stableType",
+      "reservation",
+      "deadlineUnixMs"
+    ],
+    "createReservationFences": [
+      "reservationId",
+      "expectedStoreVersion",
+      "objectGeneration",
+      "authorityOwnerGeneration",
+      "targetNodeRid",
+      "targetNodeGeneration",
+      "targetOwnerId",
+      "targetOwnerLeaseGeneration",
+      "pendingCapacityDelta"
+    ],
+    "createTerminalStates": ["existing", "created", "rejected"],
+    "createTerminalTail": ["createResult", "spot"],
+    "createContentSource": "location-pending-creation-exact-read",
+    "actorCreateRequestFields": [
+      "correlation",
+      "operation",
+      "sourceNodeRid",
+      "sourceNodeGeneration",
+      "actorId",
+      "stableType",
+      "reservation",
+      "deadlineUnixMs"
+    ],
+    "actorCreateTerminalStates": ["existing", "created", "rejected"],
+    "actorCreateTerminalTail": ["creation"],
+    "actorCreateConcurrency": "distinct-operation-waits-then-ready-existing-or-rejected-cleanup-new-reservation",
+    "closeRequestFields": [
+      "correlation",
+      "operation",
+      "sourceNodeRid",
+      "sourceNodeGeneration",
+      "target",
+      "deadlineUnixMs"
+    ],
+    "closeTargetFences": [
+      "spot",
+      "targetNodeRid",
+      "targetNodeGeneration",
+      "expectedAuthorityOwnerGeneration",
+      "expectedStoreVersion"
+    ],
+    "closeTerminalTail": ["closed"],
+    "terminalOnceIdentity": ["sourceNodeRid", "sourceNodeGeneration", "operation"]
+  }
+}

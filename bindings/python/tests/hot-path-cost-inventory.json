@@ -1,0 +1,35 @@
+{
+  "unclassified": [],
+  "entries": [
+    {
+      "path": "src/zlink/_native/_zlink_native.c:prepare_parts",
+      "owner": "Core message allocation and Python input snapshot",
+      "cost_class": "allocation",
+      "guard_test": "test_raw_hot_path_keeps_gil_release_and_part_failure_cleanup"
+    },
+    {
+      "path": "src/zlink/_runtime/handles/native_support.py:_ReceivedPartsOwner",
+      "owner": "Received owner until caller closes storage",
+      "cost_class": "copy",
+      "guard_test": "test_raw_hot_path_keeps_gil_release_and_part_failure_cleanup"
+    },
+    {
+      "path": "src/zlink/_runtime/eventing/dispatcher.py:CallbackDispatcher",
+      "owner": "Callback dispatcher lifecycle and callback thread boundary",
+      "cost_class": "lock",
+      "guard_test": "test_raw_runtime_does_not_use_dynamic_ffi_or_service_fallbacks"
+    },
+    {
+      "path": "src/zlink/_native/_zlink_native.c:Py_BEGIN_ALLOW_THREADS",
+      "owner": "Core blocking send and receive calls",
+      "cost_class": "gil",
+      "guard_test": "test_raw_hot_path_keeps_gil_release_and_part_failure_cleanup"
+    },
+    {
+      "path": "src/zlink/_runtime/messaging/message_materializer.py:Message.data",
+      "owner": "Caller-owned Message native storage",
+      "cost_class": "none",
+      "guard_test": "test_public_operations_remain_builder_only"
+    }
+  ]
+}

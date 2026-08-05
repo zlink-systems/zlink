@@ -1,0 +1,126 @@
+name: Framework .NET
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/framework-dotnet.yml"
+      - "framework/doc/**"
+      - "framework/languages/dotnet/**"
+      - "bindings/dotnet/src/Zlink/**"
+      - "bindings/dotnet/native/**"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/framework-dotnet.yml"
+      - "framework/doc/**"
+      - "framework/languages/dotnet/**"
+      - "bindings/dotnet/src/Zlink/**"
+      - "bindings/dotnet/native/**"
+  workflow_dispatch:
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  FRAMEWORK_SOLUTION: framework/languages/dotnet/Zlink.Framework.sln
+  FRAMEWORK_UNIT_TESTS: framework/languages/dotnet/tests/Zlink.Framework.UnitTests/Zlink.Framework.UnitTests.csproj
+  FRAMEWORK_CONTRACT_TESTS: framework/languages/dotnet/tests/Zlink.Framework.ContractTests/Zlink.Framework.ContractTests.csproj
+  STREAM_CONNECTOR_TESTS: framework/languages/dotnet/tests/Systems.Zlink.Stream.Connector.Tests/Systems.Zlink.Stream.Connector.Tests.csproj
+  ZLinkFrameworkTargetFrameworks: net8.0;net10.0
+
+jobs:
+  framework-dotnet:
+    name: ${{ matrix.target.name }}
+    runs-on: ${{ matrix.target.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - name: win-x64
+            runner: windows-latest
+            rid: win-x64
+          - name: win-arm64
+            runner: windows-11-arm
+            rid: win-arm64
+          - name: linux-x64
+            runner: ubuntu-24.04
+            rid: linux-x64
+          - name: linux-arm64
+            runner: ubuntu-24.04-arm
+            rid: linux-arm64
+          - name: osx-x64
+            runner: macos-15-intel
+            rid: osx-x64
+          - name: osx-arm64
+            runner: macos-15
+            rid: osx-arm64
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Setup .NET 10 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Build local dependency packages
+        shell: pwsh
+        run: |
+          $packageRoot = Join-Path $env:RUNNER_TEMP "zlink-local-packages"
+          $nugetSource = Join-Path $packageRoot "nuget"
+          New-Item -ItemType Directory -Force -Path $nugetSource | Out-Null
+
+          # The framework consumes released package surfaces even in CI. Build the
+          # packages first so restore never falls back to bindings source references.
+          $env:ZLinkLocalPackageRoot = $packageRoot
+          dotnet pack bindings/dotnet/src/Zlink/Zlink.csproj -c Release -o $nugetSource
+          dotnet pack framework/languages/dotnet/src/Zlink.HttpClient/Zlink.HttpClient.csproj -c Release -o $nugetSource
+
+          "ZLinkLocalPackageRoot=$packageRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Restore framework solution
+        run: dotnet restore ${{ env.FRAMEWORK_SOLUTION }}
+
+      - name: Build framework solution (Debug)
+        run: dotnet build ${{ env.FRAMEWORK_SOLUTION }} -c Debug --no-restore
+
+      - name: Build framework solution (Release)
+        run: dotnet build ${{ env.FRAMEWORK_SOLUTION }} -c Release --no-restore
+
+      - name: Run framework unit tests (Debug, net8.0)
+        run: dotnet test ${{ env.FRAMEWORK_UNIT_TESTS }} -c Debug -f net8.0 --no-build
+
+      - name: Run framework contract tests (Debug, net8.0)
+        run: dotnet test ${{ env.FRAMEWORK_CONTRACT_TESTS }} -c Debug -f net8.0 --no-build
+
+      - name: Run stream connector tests (Debug, net8.0)
+        run: dotnet test ${{ env.STREAM_CONNECTOR_TESTS }} -c Debug -f net8.0 --no-build
+
+      - name: Run framework unit tests (Release, net10.0)
+        run: dotnet test ${{ env.FRAMEWORK_UNIT_TESTS }} -c Release -f net10.0 --no-build
+
+      - name: Run framework contract tests (Release, net10.0)
+        run: dotnet test ${{ env.FRAMEWORK_CONTRACT_TESTS }} -c Release -f net10.0 --no-build
+
+      - name: Run stream connector tests (Release, net10.0)
+        run: dotnet test ${{ env.STREAM_CONNECTOR_TESTS }} -c Release -f net10.0 --no-build
+
+  framework-dotnet-gate:
+    name: release-gate
+    runs-on: ubuntu-24.04
+    needs:
+      - framework-dotnet
+    steps:
+      - name: Confirm matrix completed
+        run: |
+          echo "Framework .NET release gate passed."
+          echo "RID matrix: win-x64, win-arm64, linux-x64, linux-arm64, osx-x64, osx-arm64"
+          echo "Test matrix: framework unit, contract, and stream connector tests on net8.0 Debug and net10.0 Release"

@@ -1,0 +1,22 @@
+{
+  "notice": "All official Redis extensions must match this fixture byte-for-byte. Canonical contract: framework/doc/framework/common/spec/22-location-store-redis.ko.md.",
+  "format": "fanout-publisher-descriptor-v1",
+  "hashFields": [
+    "owner",
+    "gen",
+    "json",
+    "updatedAtMs",
+    "channel"
+  ],
+  "row": {
+    "kind": "fanout-publisher",
+    "key": "6:events24:6576656e74732d7075622d61",
+    "hash": {
+      "owner": "fanout-owner-a",
+      "gen": "5",
+      "json": "{\"ChannelName\":\"events\",\"PublisherRid\":\"6576656e74732d7075622d61\",\"LifecycleGeneration\":7,\"DescriptorRevision\":3,\"Endpoint\":\"tcp://10.0.0.3:7500\",\"State\":\"Serving\",\"SecurityIdentity\":\"cluster-a\",\"OwnerId\":\"fanout-owner-a\",\"OwnerLeaseGeneration\":5,\"UpdatedAt\":\"2024-07-15T00:00:00+00:00\"}",
+      "updatedAtMs": "1721001600000",
+      "channel": "events"
+    }
+  }
+}

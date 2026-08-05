@@ -1,0 +1,150 @@
+#ifndef __ZLINK_PLATFORM_HPP_INCLUDED__
+#define __ZLINK_PLATFORM_HPP_INCLUDED__
+
+#cmakedefine ZLINK_USE_CV_IMPL_STL11
+#cmakedefine ZLINK_USE_CV_IMPL_WIN32API
+#cmakedefine ZLINK_USE_CV_IMPL_PTHREADS
+#cmakedefine ZLINK_USE_CV_IMPL_NONE
+
+// ASIO is the only supported I/O poller backend (always enabled)
+#cmakedefine ZLINK_IOTHREAD_POLLER_USE_ASIO
+#cmakedefine ZLINK_HAVE_ASIO_SSL
+#cmakedefine ZLINK_HAVE_ASIO_WS
+#cmakedefine ZLINK_HAVE_ASIO_WSS
+// Poller feature macros retained only as inert placeholders.
+// ASIO is the only supported backend and these are never defined.
+#cmakedefine ZLINK_IOTHREAD_POLLER_USE_KQUEUE
+#cmakedefine ZLINK_IOTHREAD_POLLER_USE_EPOLL
+#cmakedefine ZLINK_IOTHREAD_POLLER_USE_EPOLL_CLOEXEC
+#cmakedefine ZLINK_IOTHREAD_POLLER_USE_DEVPOLL
+#cmakedefine ZLINK_IOTHREAD_POLLER_USE_POLLSET
+#cmakedefine ZLINK_IOTHREAD_POLLER_USE_POLL
+#cmakedefine ZLINK_IOTHREAD_POLLER_USE_SELECT
+#cmakedefine ZLINK_HAVE_PPOLL
+
+#cmakedefine ZLINK_POLL_BASED_ON_SELECT
+#cmakedefine ZLINK_POLL_BASED_ON_POLL
+
+#cmakedefine HAVE_POSIX_MEMALIGN @HAVE_POSIX_MEMALIGN@
+#cmakedefine ZLINK_CACHELINE_SIZE @ZLINK_CACHELINE_SIZE@
+
+#cmakedefine ZLINK_FORCE_MUTEXES
+
+#cmakedefine HAVE_FORK
+#cmakedefine HAVE_CLOCK_GETTIME
+#cmakedefine HAVE_GETHRTIME
+#cmakedefine HAVE_MKDTEMP
+#cmakedefine ZLINK_HAVE_UIO
+
+#cmakedefine ZLINK_HAVE_NOEXCEPT
+
+#cmakedefine ZLINK_HAVE_EVENTFD
+#cmakedefine ZLINK_HAVE_EVENTFD_CLOEXEC
+#cmakedefine ZLINK_HAVE_IFADDRS
+#cmakedefine ZLINK_HAVE_SO_BINDTODEVICE
+
+#cmakedefine ZLINK_HAVE_SO_PEERCRED
+#cmakedefine ZLINK_HAVE_LOCAL_PEERCRED
+#cmakedefine ZLINK_HAVE_BUSY_POLL
+
+#cmakedefine ZLINK_HAVE_O_CLOEXEC
+
+#cmakedefine ZLINK_HAVE_SOCK_CLOEXEC
+#cmakedefine ZLINK_HAVE_SO_KEEPALIVE
+#cmakedefine ZLINK_HAVE_SO_PRIORITY
+#cmakedefine ZLINK_HAVE_TCP_KEEPCNT
+#cmakedefine ZLINK_HAVE_TCP_KEEPIDLE
+#cmakedefine ZLINK_HAVE_TCP_KEEPINTVL
+#cmakedefine ZLINK_HAVE_TCP_KEEPALIVE
+#cmakedefine ZLINK_HAVE_PTHREAD_SETNAME_1
+#cmakedefine ZLINK_HAVE_PTHREAD_SETNAME_2
+#cmakedefine ZLINK_HAVE_PTHREAD_SETNAME_3
+#cmakedefine ZLINK_HAVE_PTHREAD_SET_NAME
+#cmakedefine ZLINK_HAVE_PTHREAD_SET_AFFINITY
+#cmakedefine HAVE_ACCEPT4
+#cmakedefine HAVE_STRNLEN
+#cmakedefine ZLINK_HAVE_STRLCPY
+#cmakedefine ZLINK_HAVE_LIBBSD
+
+#cmakedefine ZLINK_HAVE_IPC
+#cmakedefine ZLINK_HAVE_STRUCT_SOCKADDR_UN
+
+#cmakedefine ZLINK_USE_BUILTIN_SHA1
+#cmakedefine ZLINK_USE_NSS
+#cmakedefine ZLINK_HAVE_WS
+#cmakedefine ZLINK_HAVE_WSS
+#cmakedefine ZLINK_HAVE_TLS
+#cmakedefine ZLINK_HAVE_TIPC
+
+#cmakedefine ZLINK_HAVE_NORM
+#cmakedefine ZLINK_HAVE_VMCI
+
+#cmakedefine ZLINK_MAKE_VALGRIND_HAPPY
+
+#cmakedefine ZLINK_USE_GNUTLS
+#cmakedefine ZLINK_USE_RADIX_TREE
+#cmakedefine HAVE_IF_NAMETOINDEX
+
+#ifdef _AIX
+  #define ZLINK_HAVE_AIX
+#endif
+
+#if defined __ANDROID__
+  #define ZLINK_HAVE_ANDROID
+#endif
+
+#if defined __CYGWIN__
+  #define ZLINK_HAVE_CYGWIN
+#endif
+
+#if defined __MINGW32__
+  #define ZLINK_HAVE_MINGW32
+#endif
+
+#if defined(__FreeBSD__) || defined(__FreeBSD_kernel__)
+  #define ZLINK_HAVE_FREEBSD
+#endif
+
+#if defined(__DragonFly__)
+  #define ZLINK_HAVE_FREEBSD
+  #define ZLINK_HAVE_DRAGONFLY
+#endif
+
+#if defined __hpux
+  #define ZLINK_HAVE_HPUX
+#endif
+
+#if defined __linux__
+  #define ZLINK_HAVE_LINUX
+#endif
+
+#if defined __NetBSD__
+  #define ZLINK_HAVE_NETBSD
+#endif
+
+#if defined __OpenBSD__
+  #define ZLINK_HAVE_OPENBSD
+#endif
+
+// TODO better move OS-specific defines to the automake files, and check for availability of IPC with an explicit test there
+#if defined __VMS
+  #define ZLINK_HAVE_OPENVMS
+  #undef ZLINK_HAVE_IPC
+#endif
+
+#if defined __APPLE__
+  #define ZLINK_HAVE_OSX
+#endif
+
+#if defined __QNXNTO__
+  #define ZLINK_HAVE_QNXNTO
+#endif
+
+#if defined(sun) || defined(__sun)
+  #define ZLINK_HAVE_SOLARIS
+#endif
+
+#cmakedefine ZLINK_HAVE_WINDOWS
+#cmakedefine ZLINK_HAVE_WINDOWS_UWP
+
+#endif

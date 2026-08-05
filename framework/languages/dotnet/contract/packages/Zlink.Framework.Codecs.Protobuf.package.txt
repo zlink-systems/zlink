@@ -1,0 +1,20 @@
+package Zlink.Framework.Codecs.Protobuf
+entry LICENSE
+entry Zlink.Framework.Codecs.Protobuf.nuspec
+entry [Content_Types].xml
+entry _rels/.rels
+entry lib/net8.0/Zlink.Framework.Codecs.Protobuf.dll
+entry lib/net8.0/Zlink.Framework.Codecs.Protobuf.xml
+entry package/services/metadata/core-properties/{CORE_PROPERTIES}.psmdcp
+content-sha256 lib/net8.0/Zlink.Framework.Codecs.Protobuf.xml=e871f77e14cb4df89c616c6373aea9061a961b610db5743fd39d5ddd5500e5b9
+metadata authors=Zlink.Framework.Codecs.Protobuf
+metadata description=Protobuf codec extension for the ZLink .NET framework.
+metadata id=Zlink.Framework.Codecs.Protobuf
+metadata license=LICENSE type=file
+metadata licenseUrl=https://aka.ms/deprecateLicenseUrl
+metadata projectUrl=https://github.com/kairos-code-dev/zlink
+metadata version={VERSION}
+metadata repository commit={COMMIT} type=git
+dependency-group targetFramework=net8.0
+dependency targetFramework=net8.0 exclude=Build,Analyzers id=Google.Protobuf version=3.29.1
+dependency targetFramework=net8.0 exclude=Build,Analyzers id=Zlink.Framework version={VERSION}

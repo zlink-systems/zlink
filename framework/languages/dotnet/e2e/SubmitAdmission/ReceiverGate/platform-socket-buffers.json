@@ -1,0 +1,9 @@
+{
+  "linux-x64": {
+    "requestedSocketBufferBytes": 4096,
+    "callerReceiveBufferBytes": 8192,
+    "callerSendBufferBytes": 8192,
+    "targetReceiveBufferBytes": 8192,
+    "targetSendBufferBytes": 8192
+  }
+}

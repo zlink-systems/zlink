@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+    <PropertyGroup>
+        <IsPackable>true</IsPackable>
+        <TargetFrameworks>$(ZLinkFrameworkTargetFrameworks)</TargetFrameworks>
+        <AssemblyName>Zlink.Framework.Locations.Redis</AssemblyName>
+        <RootNamespace>Zlink.Framework.Locations.Redis</RootNamespace>
+        <Description>Official Redis location store extension for the ZLink .NET framework.</Description>
+        <CentralPackageTransitivePinningEnabled>false</CentralPackageTransitivePinningEnabled>
+        <DefineConstants>$(DefineConstants);ZLINK_REDIS_LOCATION_KEY_FORMATTER</DefineConstants>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="StackExchange.Redis"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="../Zlink.Framework.Provider.Abstractions/Zlink.Framework.Provider.Abstractions.csproj"/>
+    </ItemGroup>
+
+    <Target Name="PinProviderAbstractionsPackageDependency"
+            AfterTargets="_GetProjectReferenceVersions">
+        <ItemGroup>
+            <_ProjectReferencesWithVersions
+                Update="@(_ProjectReferencesWithVersions)"
+                Condition="'%(_ProjectReferencesWithVersions.Filename)' == 'Zlink.Framework.Provider.Abstractions'">
+                <ProjectVersion>[%(_ProjectReferencesWithVersions.ProjectVersion)]</ProjectVersion>
+            </_ProjectReferencesWithVersions>
+        </ItemGroup>
+    </Target>
+</Project>

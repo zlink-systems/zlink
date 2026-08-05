@@ -1,0 +1,112 @@
+assembly Zlink.HttpClient
+  type sealed-class Zlink.HttpClient.HttpResponse<T> required-members
+    generic T variance=invariant nullable=nullable
+    ctor HttpResponse()
+    property required T? Body { get; init; } [nullability=read:nullable,write:nullable]
+    property required System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> Headers { get; init; } [nullability=read:not-null,write:not-null]
+    property required System.String RawBody { get; init; } [nullability=read:not-null,write:not-null]
+    property required System.Int32 Status { get; init; } [nullability=read:not-null,write:not-null]
+  type interface Zlink.HttpClient.IZLinkHttpExecutionScheduler
+    method abstract Zlink.HttpClient.IZLinkHttpExecutionTurn? Capture() [return=read:nullable,write:nullable]
+  type interface Zlink.HttpClient.IZLinkHttpExecutionTurn
+    method abstract System.Void Post(System.Action callback [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method abstract System.Void ReportError(System.Exception exception [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method abstract System.Threading.Tasks.ValueTask<TResult> YieldAsync<TResult>(System.Func<System.Threading.CancellationToken, System.Threading.Tasks.ValueTask<TResult>> operation [nullability=read:not-null,write:not-null], System.Threading.CancellationToken cancellationToken = default [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+      generic TResult variance=invariant nullable=unspecified
+  type sealed-class Zlink.HttpClient.RawHttpResponse required-members
+    ctor RawHttpResponse()
+    property System.String Body { get; init; } [nullability=read:not-null,write:not-null]
+    property required System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> Headers { get; init; } [nullability=read:not-null,write:not-null]
+    property required System.Int32 Status { get; init; } [nullability=read:not-null,write:not-null]
+  type sealed-class Zlink.HttpClient.ZLinkHttpCallback<T> : System.MulticastDelegate, System.ICloneable, System.Runtime.Serialization.ISerializable
+    generic T variance=invariant nullable=nullable
+    ctor ZLinkHttpCallback(System.Object object [nullability=read:unknown,write:unknown], System.IntPtr method [nullability=read:not-null,write:not-null])
+    method virtual System.IAsyncResult BeginInvoke(System.Exception? error [nullability=read:nullable,write:nullable], Zlink.HttpClient.HttpResponse<T?>? response [nullability=read:nullable,write:nullable], System.AsyncCallback callback [nullability=read:unknown,write:unknown], System.Object object [nullability=read:unknown,write:unknown]) [return=read:unknown,write:unknown]
+    method virtual System.Void EndInvoke(System.IAsyncResult result [nullability=read:unknown,write:unknown]) [return=read:not-null,write:not-null]
+    method virtual System.Void Invoke(System.Exception? error [nullability=read:nullable,write:nullable], Zlink.HttpClient.HttpResponse<T?>? response [nullability=read:nullable,write:nullable]) [return=read:not-null,write:not-null]
+  type class Zlink.HttpClient.ZLinkHttpClient : System.IDisposable
+    method static Zlink.HttpClient.ZLinkHttpClientBuilder Create() [return=read:not-null,write:not-null]
+    method static Zlink.HttpClient.ZLinkHttpClientBuilder Create(System.String baseUrl [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method virtual Zlink.HttpClient.ZLinkHttpRequestBuilder Delete(System.String path [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method virtual System.Void Dispose() [return=read:not-null,write:not-null]
+    method virtual Zlink.HttpClient.ZLinkHttpRequestBuilder Get(System.String path [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method virtual Zlink.HttpClient.ZLinkHttpRequestBuilder Head(System.String path [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method virtual Zlink.HttpClient.ZLinkHttpRequestBuilder Options(System.String path [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method virtual Zlink.HttpClient.ZLinkHttpRequestBuilder Patch(System.String path [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method virtual Zlink.HttpClient.ZLinkHttpRequestBuilder Post(System.String path [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method virtual Zlink.HttpClient.ZLinkHttpRequestBuilder Put(System.String path [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+  type sealed-class Zlink.HttpClient.ZLinkHttpClientBuilder
+    ctor ZLinkHttpClientBuilder()
+    method Zlink.HttpClient.ZLinkHttpClientBuilder BaseUrl(System.String value [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method Zlink.HttpClient.ZLinkHttpClientBuilder BasicAuth(System.String user [nullability=read:not-null,write:not-null], System.String password [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method Zlink.HttpClient.ZLinkHttpClientBuilder BearerToken(System.String token [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method Zlink.HttpClient.ZLinkHttpServerClient BuildServer(Zlink.HttpClient.IZLinkHttpExecutionScheduler scheduler [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method Zlink.HttpClient.ZLinkHttpClient Build() [return=read:not-null,write:not-null]
+    method Zlink.HttpClient.ZLinkHttpClientBuilder ClientCertificateFile(System.String certificatePath [nullability=read:not-null,write:not-null], System.String keyPath [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method Zlink.HttpClient.ZLinkHttpClientBuilder Codecs(System.Action<Zlink.Framework.Contracts.Codecs.IZLinkCodecRegistryBuilder> configure [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method Zlink.HttpClient.ZLinkHttpClientBuilder Compression() [return=read:not-null,write:not-null]
+    method Zlink.HttpClient.ZLinkHttpClientBuilder Cookies() [return=read:not-null,write:not-null]
+    method Zlink.HttpClient.ZLinkHttpClientBuilder DefaultHeader(System.String name [nullability=read:not-null,write:not-null], System.String value [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method Zlink.HttpClient.ZLinkHttpRequestBuilder Delete(System.String path [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method Zlink.HttpClient.ZLinkHttpClientBuilder FollowRedirects(System.Int32 maxRedirects = 5 [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method Zlink.HttpClient.ZLinkHttpRequestBuilder Get(System.String path [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method Zlink.HttpClient.ZLinkHttpRequestBuilder Head(System.String path [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method Zlink.HttpClient.ZLinkHttpClientBuilder MaxResponseBodySize(System.Int64 bytes [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method Zlink.HttpClient.ZLinkHttpRequestBuilder Options(System.String path [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method Zlink.HttpClient.ZLinkHttpRequestBuilder Patch(System.String path [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method Zlink.HttpClient.ZLinkHttpRequestBuilder Post(System.String path [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method Zlink.HttpClient.ZLinkHttpClientBuilder ProxyBasicAuth(System.String user [nullability=read:not-null,write:not-null], System.String password [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method Zlink.HttpClient.ZLinkHttpClientBuilder Proxy(System.String url [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method Zlink.HttpClient.ZLinkHttpRequestBuilder Put(System.String path [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method Zlink.HttpClient.ZLinkHttpClientBuilder Retry(System.Int32 attempts [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method Zlink.HttpClient.ZLinkHttpClientBuilder Timeout(System.TimeSpan value [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method Zlink.HttpClient.ZLinkHttpClientBuilder TrustCertificateFile(System.String path [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+  type enum Zlink.HttpClient.ZLinkHttpMethod : System.Enum, System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
+    field const Zlink.HttpClient.ZLinkHttpMethod Delete = 3 [nullability=read:not-null,write:not-null]
+    field const Zlink.HttpClient.ZLinkHttpMethod Get = 0 [nullability=read:not-null,write:not-null]
+    field const Zlink.HttpClient.ZLinkHttpMethod Head = 5 [nullability=read:not-null,write:not-null]
+    field const Zlink.HttpClient.ZLinkHttpMethod Options = 6 [nullability=read:not-null,write:not-null]
+    field const Zlink.HttpClient.ZLinkHttpMethod Patch = 4 [nullability=read:not-null,write:not-null]
+    field const Zlink.HttpClient.ZLinkHttpMethod Post = 1 [nullability=read:not-null,write:not-null]
+    field const Zlink.HttpClient.ZLinkHttpMethod Put = 2 [nullability=read:not-null,write:not-null]
+  type class Zlink.HttpClient.ZLinkHttpRequestBuilder
+    method System.Threading.Tasks.ValueTask<Zlink.HttpClient.RawHttpResponse> AsyncRaw(System.Threading.CancellationToken cancellationToken = default [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method System.Threading.Tasks.ValueTask<Zlink.HttpClient.HttpResponse<T>> Async<T>(System.Threading.CancellationToken cancellationToken = default [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+      generic T variance=invariant nullable=unspecified
+    method System.Void Async<T>(Zlink.HttpClient.ZLinkHttpCallback<T?> callback [nullability=read:not-null,write:not-null], System.Threading.CancellationToken cancellationToken = default [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+      generic T variance=invariant nullable=nullable
+    method virtual Zlink.HttpClient.ZLinkHttpRequestBuilder BodyStream(System.Func<System.Byte[]?> provider [nullability=read:not-null,write:not-null], System.String contentType [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method virtual Zlink.HttpClient.ZLinkHttpRequestBuilder Body(System.String content [nullability=read:not-null,write:not-null], System.String contentType [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method virtual Zlink.HttpClient.ZLinkHttpRequestBuilder Body<T>(T? value [nullability=read:nullable,write:nullable]) [return=read:not-null,write:not-null]
+      generic T variance=invariant nullable=nullable
+    method System.Threading.Tasks.ValueTask<Zlink.HttpClient.RawHttpResponse> DownloadAsync(System.Action<System.ReadOnlyMemory<System.Byte>> sink [nullability=read:not-null,write:not-null], System.Threading.CancellationToken cancellationToken = default [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method System.Threading.Tasks.ValueTask<T> Fetch<T>(System.Threading.CancellationToken cancellationToken = default [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+      generic T variance=invariant nullable=unspecified
+    method virtual Zlink.HttpClient.ZLinkHttpRequestBuilder Form(System.String name [nullability=read:not-null,write:not-null], System.String value [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method virtual Zlink.HttpClient.ZLinkHttpRequestBuilder Header(System.String name [nullability=read:not-null,write:not-null], System.String value [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method virtual Zlink.HttpClient.ZLinkHttpRequestBuilder MultipartFile(System.String name [nullability=read:not-null,write:not-null], System.String filename [nullability=read:not-null,write:not-null], System.String content [nullability=read:not-null,write:not-null], System.String contentType [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method virtual Zlink.HttpClient.ZLinkHttpRequestBuilder Multipart(System.String name [nullability=read:not-null,write:not-null], System.String value [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method virtual Zlink.HttpClient.ZLinkHttpRequestBuilder Query(System.String name [nullability=read:not-null,write:not-null], System.String value [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method virtual Zlink.HttpClient.ZLinkHttpRequestBuilder Timeout(System.TimeSpan value [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+  type sealed-class Zlink.HttpClient.ZLinkHttpServerClient : Zlink.HttpClient.ZLinkHttpClient, System.IDisposable
+    method virtual Zlink.HttpClient.ZLinkHttpServerRequestBuilder Delete(System.String path [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method virtual Zlink.HttpClient.ZLinkHttpServerRequestBuilder Get(System.String path [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method virtual Zlink.HttpClient.ZLinkHttpServerRequestBuilder Head(System.String path [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method virtual Zlink.HttpClient.ZLinkHttpServerRequestBuilder Options(System.String path [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method virtual Zlink.HttpClient.ZLinkHttpServerRequestBuilder Patch(System.String path [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method virtual Zlink.HttpClient.ZLinkHttpServerRequestBuilder Post(System.String path [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method virtual Zlink.HttpClient.ZLinkHttpServerRequestBuilder Put(System.String path [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+  type sealed-class Zlink.HttpClient.ZLinkHttpServerRequestBuilder : Zlink.HttpClient.ZLinkHttpRequestBuilder
+    method System.Threading.Tasks.ValueTask Async(System.Threading.CancellationToken cancellationToken = default [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method virtual Zlink.HttpClient.ZLinkHttpServerRequestBuilder BodyStream(System.Func<System.Byte[]?> provider [nullability=read:not-null,write:not-null], System.String contentType [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method virtual Zlink.HttpClient.ZLinkHttpServerRequestBuilder Body(System.String content [nullability=read:not-null,write:not-null], System.String contentType [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method virtual Zlink.HttpClient.ZLinkHttpServerRequestBuilder Body<T>(T? value [nullability=read:nullable,write:nullable]) [return=read:not-null,write:not-null]
+      generic T variance=invariant nullable=nullable
+    method virtual Zlink.HttpClient.ZLinkHttpServerRequestBuilder Form(System.String name [nullability=read:not-null,write:not-null], System.String value [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method virtual Zlink.HttpClient.ZLinkHttpServerRequestBuilder Header(System.String name [nullability=read:not-null,write:not-null], System.String value [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method virtual Zlink.HttpClient.ZLinkHttpServerRequestBuilder MultipartFile(System.String name [nullability=read:not-null,write:not-null], System.String filename [nullability=read:not-null,write:not-null], System.String content [nullability=read:not-null,write:not-null], System.String contentType [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method virtual Zlink.HttpClient.ZLinkHttpServerRequestBuilder Multipart(System.String name [nullability=read:not-null,write:not-null], System.String value [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method virtual Zlink.HttpClient.ZLinkHttpServerRequestBuilder Query(System.String name [nullability=read:not-null,write:not-null], System.String value [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method virtual Zlink.HttpClient.ZLinkHttpServerRequestBuilder Timeout(System.TimeSpan value [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method System.Threading.Tasks.ValueTask<Zlink.HttpClient.HttpResponse<T>> Yield<T>(System.Threading.CancellationToken cancellationToken = default [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+      generic T variance=invariant nullable=unspecified

@@ -1,0 +1,7 @@
+cmake_minimum_required(VERSION 3.20)
+
+add_library(zlink_stream_e2e_client_source_package INTERFACE)
+add_library(zlink::stream_e2e_client_source_package ALIAS zlink_stream_e2e_client_source_package)
+target_compile_features(zlink_stream_e2e_client_source_package INTERFACE cxx_std_20)
+target_include_directories(zlink_stream_e2e_client_source_package INTERFACE
+  ${CMAKE_CURRENT_LIST_DIR}/include)

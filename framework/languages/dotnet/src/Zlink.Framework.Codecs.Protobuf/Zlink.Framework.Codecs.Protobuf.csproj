@@ -1,0 +1,18 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+    <PropertyGroup>
+        <IsPackable>true</IsPackable>
+        <TargetFrameworks>$(ZLinkFrameworkTargetFrameworks)</TargetFrameworks>
+        <AssemblyName>Zlink.Framework.Codecs.Protobuf</AssemblyName>
+        <RootNamespace>Zlink.Framework.Codecs.Protobuf</RootNamespace>
+        <Description>Protobuf codec extension for the ZLink .NET framework.</Description>
+        <CentralPackageTransitivePinningEnabled>false</CentralPackageTransitivePinningEnabled>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Google.Protobuf"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="../Zlink.Framework/Zlink.Framework.csproj"/>
+    </ItemGroup>
+</Project>

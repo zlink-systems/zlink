@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+    <PropertyGroup>
+        <TargetFrameworks>$(ZLinkFrameworkTargetFrameworks)</TargetFrameworks>
+        <AssemblyName>Zlink.HttpClient</AssemblyName>
+        <RootNamespace>Zlink.HttpClient</RootNamespace>
+        <Description>ZLink-style fluent HTTP client wrapping System.Net.Http for the ZLink framework.</Description>
+        <Version>0.5.2</Version>
+        <IsPackable>true</IsPackable>
+        <!-- Overrides Directory.Build.props: this package wraps System.Net.Http rather
+             than any zlink-original transport, so it ships under Apache-2.0 instead of
+             the framework-wide FSL. -->
+        <PackageLicenseFile></PackageLicenseFile>
+        <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    </PropertyGroup>
+    <ItemGroup>
+        <ProjectReference Include="../Zlink.Framework.Contracts/Zlink.Framework.Contracts.csproj"/>
+    </ItemGroup>
+    <ItemGroup>
+        <InternalsVisibleTo Include="Zlink.HttpClient.UnitTests"/>
+    </ItemGroup>
+</Project>

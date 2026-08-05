@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": ".",
+    "types": ["node"]
+  },
+  "include": [
+    "packages/framework/src/contracts/**/*.ts",
+    "packages/framework/src/runtime/backend/node/node-raw-binding-port.ts",
+    "packages/framework/src/runtime/backend/node/node-raw-binding-port.contract.ts"
+  ]
+}

@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+    <PropertyGroup>
+        <TargetFramework>net8.0</TargetFramework>
+        <OutputType>Exe</OutputType>
+        <AssemblyName>AutomaticTurnDispatch.Client</AssemblyName>
+        <RootNamespace>AutomaticTurnDispatch.Client</RootNamespace>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="../Shared/AutomaticTurnDispatch.Shared.csproj"/>
+        <ProjectReference Include="../../../src/Systems.Zlink.Stream.Connector/Systems.Zlink.Stream.Connector.csproj"/>
+        <ProjectReference Include="../../../src/Zlink.Framework/Zlink.Framework.csproj"/>
+        <ProjectReference Include="../../../src/Zlink.HttpClient/Zlink.HttpClient.csproj"/>
+    </ItemGroup>
+</Project>

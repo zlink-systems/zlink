@@ -1,0 +1,14 @@
+<Project>
+    <PropertyGroup>
+        <Authors>ulalax</Authors>
+        <PackageLicenseExpression Condition="'$(PackageLicenseExpression)' == ''">MPL-2.0</PackageLicenseExpression>
+        <PackageProjectUrl Condition="'$(PackageProjectUrl)' == ''">https://github.com/kairos-code-dev/zlink</PackageProjectUrl>
+        <RepositoryUrl>https://github.com/kairos-code-dev/zlink</RepositoryUrl>
+        <RepositoryType>git</RepositoryType>
+        <PackageReadmeFile Condition="'$(PackageReadmeFile)' == ''">README.md</PackageReadmeFile>
+    </PropertyGroup>
+
+    <ItemGroup Condition="'$(PackageReadmeFile)' == 'README.md' and Exists('$(MSBuildThisFileDirectory)README.md')">
+        <None Include="$(MSBuildThisFileDirectory)README.md" Pack="true" PackagePath="\" Visible="false"/>
+    </ItemGroup>
+</Project>

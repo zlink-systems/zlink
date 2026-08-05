@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package zlink.e2e.registrationcodec;
+
+message ProtobufRoundtripReq {
+  string value = 1;
+}
+
+message ProtobufRoundtripRes {
+  string value = 1;
+  string content_type = 2;
+}
+
+message ProtobufCodecMsg {
+  string value = 1;
+}

@@ -1,0 +1,337 @@
+assembly Systems.Zlink.Stream.Connector
+  type interface Systems.Zlink.Stream.Connector.Contracts.Calls.IZlinkStreamExpectNoneCall
+    method abstract System.Threading.Tasks.ValueTask Async(System.Threading.CancellationToken cancellationToken = default [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method abstract Systems.Zlink.Stream.Connector.Contracts.Calls.IZlinkStreamExpectNoneCall Within(System.TimeSpan window [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+  type interface Systems.Zlink.Stream.Connector.Contracts.Calls.IZlinkStreamLifecycleCall
+    method abstract System.Threading.Tasks.ValueTask Async(System.Threading.CancellationToken cancellationToken = default [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+  type interface Systems.Zlink.Stream.Connector.Contracts.Calls.IZlinkStreamRequestCall
+    method abstract System.Threading.Tasks.ValueTask<Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamEncodedPayload> Async(System.Threading.CancellationToken cancellationToken = default [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method abstract Systems.Zlink.Stream.Connector.Contracts.Calls.IZlinkStreamRequestCall Compress() [return=read:not-null,write:not-null]
+    method abstract Systems.Zlink.Stream.Connector.Contracts.Calls.IZlinkStreamRequestCall Metadata(System.String key [nullability=read:not-null,write:not-null], System.String value [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method abstract Systems.Zlink.Stream.Connector.Contracts.Calls.IZlinkStreamRequestCall Metadata(Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamMetadata metadata [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method abstract Systems.Zlink.Stream.Connector.Contracts.Calls.IZlinkStreamRequestCall PacketName(System.String name [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method abstract System.Void Submit(System.Action<Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamResult<Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamEncodedPayload>> callback [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method abstract System.Void Submit(System.Action<Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamResult> callback [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method abstract Systems.Zlink.Stream.Connector.Contracts.Calls.IZlinkStreamRequestCall Timeout(System.TimeSpan timeout [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+  type interface Systems.Zlink.Stream.Connector.Contracts.Calls.IZlinkStreamSendCall
+    method abstract System.Threading.Tasks.ValueTask Async(System.Threading.CancellationToken cancellationToken = default [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method abstract Systems.Zlink.Stream.Connector.Contracts.Calls.IZlinkStreamSendCall Compress() [return=read:not-null,write:not-null]
+    method abstract Systems.Zlink.Stream.Connector.Contracts.Calls.IZlinkStreamSendCall Metadata(System.String key [nullability=read:not-null,write:not-null], System.String value [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method abstract Systems.Zlink.Stream.Connector.Contracts.Calls.IZlinkStreamSendCall Metadata(Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamMetadata metadata [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method abstract Systems.Zlink.Stream.Connector.Contracts.Calls.IZlinkStreamSendCall PacketName(System.String name [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+  type interface Systems.Zlink.Stream.Connector.Contracts.Calls.IZlinkStreamSequenceCall
+    method abstract System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamMessage<Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamEncodedPayload>>> Async(System.Threading.CancellationToken cancellationToken = default [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method abstract Systems.Zlink.Stream.Connector.Contracts.Calls.IZlinkStreamSequenceCall Expect(System.Func<Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamMessage<Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamEncodedPayload>, System.Boolean> predicate [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method abstract Systems.Zlink.Stream.Connector.Contracts.Calls.IZlinkStreamSequenceCall Timeout(System.TimeSpan timeout [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+  type interface Systems.Zlink.Stream.Connector.Contracts.Calls.IZlinkStreamWaitCall
+    method abstract System.Threading.Tasks.ValueTask<Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamMessage<Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamEncodedPayload>> Async(System.Threading.CancellationToken cancellationToken = default [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method abstract Systems.Zlink.Stream.Connector.Contracts.Calls.IZlinkStreamWaitCall Timeout(System.TimeSpan timeout [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method abstract Systems.Zlink.Stream.Connector.Contracts.Calls.IZlinkStreamWaitCall Where(System.Func<Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamMessage<Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamEncodedPayload>, System.Boolean> predicate [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+  type interface Systems.Zlink.Stream.Connector.Contracts.IZlinkStreamCodecRegistration
+    property Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamCodec Codec { get; } [nullability=read:not-null,write:unknown]
+    property System.String ContentType { get; } [nullability=read:not-null,write:unknown]
+  type interface Systems.Zlink.Stream.Connector.Contracts.IZlinkStreamCompressionCodec
+    method abstract System.ReadOnlyMemory<System.Byte> Compress(System.ReadOnlyMemory<System.Byte> payload [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method abstract System.ReadOnlyMemory<System.Byte> Decompress(System.ReadOnlyMemory<System.Byte> payload [nullability=read:not-null,write:not-null], System.Int32 maxDecompressedPayloadSize [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+  type interface Systems.Zlink.Stream.Connector.Contracts.IZlinkStreamConnector : System.IAsyncDisposable
+    property Systems.Zlink.Stream.Connector.Contracts.Calls.IZlinkStreamLifecycleCall Close { get; } [nullability=read:not-null,write:unknown]
+    property Systems.Zlink.Stream.Connector.Contracts.Calls.IZlinkStreamLifecycleCall Connect { get; } [nullability=read:not-null,write:unknown]
+    property Systems.Zlink.Stream.Connector.Contracts.Calls.IZlinkStreamLifecycleCall Dispatch { get; } [nullability=read:not-null,write:unknown]
+    property System.Boolean IsConnected { get; } [nullability=read:not-null,write:unknown]
+    property Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamConnectorOptions Options { get; } [nullability=read:not-null,write:unknown]
+    property System.Int32 PendingDispatchCount { get; } [nullability=read:not-null,write:unknown]
+    property Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamConnectionState State { get; } [nullability=read:not-null,write:unknown]
+    event System.Func<Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamConnectionStateChanged, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask>? ConnectionStateChanged [nullability=read:nullable,write:nullable]
+    event System.Func<Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamDisconnected, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask>? Disconnected [nullability=read:nullable,write:nullable]
+    event System.Func<Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamError, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask>? ErrorReceived [nullability=read:nullable,write:nullable]
+    method abstract Systems.Zlink.Stream.Connector.Contracts.Calls.IZlinkStreamExpectNoneCall ExpectNone(System.String name [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method abstract System.IDisposable ObserveInbound(System.Func<Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamInboundObservation, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> observer [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method abstract System.IDisposable On(System.String name [nullability=read:not-null,write:not-null], System.Func<Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamMessage<Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamEncodedPayload>, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> handler [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method abstract System.Int32 ReceivedCount(System.String name [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method abstract Systems.Zlink.Stream.Connector.Contracts.Calls.IZlinkStreamRequestCall Request(Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamEncodedPayload payload [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method abstract Systems.Zlink.Stream.Connector.Contracts.Calls.IZlinkStreamSendCall Send(Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamEncodedPayload payload [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method abstract Systems.Zlink.Stream.Connector.Contracts.Calls.IZlinkStreamSequenceCall WaitForSequence(System.String name [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method abstract Systems.Zlink.Stream.Connector.Contracts.Calls.IZlinkStreamWaitCall WaitFor(System.String name [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+  type interface Systems.Zlink.Stream.Connector.Contracts.IZlinkStreamPacketNameResolver
+    method abstract System.String Resolve(System.Type payloadType [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+  type interface Systems.Zlink.Stream.Connector.Contracts.IZlinkStreamPayloadCodec
+    method abstract TPayload? Decode<TPayload>(Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamEncodedPayload payload [nullability=read:not-null,write:not-null]) [return=read:nullable,write:nullable]
+      generic TPayload variance=invariant nullable=nullable
+    method abstract Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamEncodedPayload Encode<TPayload>(TPayload? payload [nullability=read:nullable,write:nullable]) [return=read:not-null,write:not-null]
+      generic TPayload variance=invariant nullable=nullable
+  type static-class Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamAssert
+    method static System.Void Ensure(System.Boolean condition [nullability=read:not-null,write:not-null], System.String message [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method static System.Threading.Tasks.ValueTask<Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamError> ExpectFailureAsync(System.Func<System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> action [nullability=read:not-null,write:not-null], System.String? errorKind = null [nullability=read:nullable,write:nullable]) [return=read:not-null,write:not-null]
+    method static System.Threading.Tasks.ValueTask ExpectTimeoutAsync(System.Func<System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> action [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+  type enum Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamCloseReason : System.Enum, System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
+    field const Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamCloseReason ClientClose = 0 [nullability=read:not-null,write:not-null]
+    field const Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamCloseReason HeartbeatTimeout = 2 [nullability=read:not-null,write:not-null]
+    field const Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamCloseReason IdleTimeout = 1 [nullability=read:not-null,write:not-null]
+    field const Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamCloseReason ProtocolError = 4 [nullability=read:not-null,write:not-null]
+    field const Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamCloseReason ServerDrain = 3 [nullability=read:not-null,write:not-null]
+    field const Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamCloseReason TransportError = 5 [nullability=read:not-null,write:not-null]
+  type enum Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamCodec : System.Enum, System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
+    field const Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamCodec Json = 1 [nullability=read:not-null,write:not-null]
+    field const Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamCodec MessagePack = 2 [nullability=read:not-null,write:not-null]
+    field const Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamCodec Protobuf = 3 [nullability=read:not-null,write:not-null]
+    field const Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamCodec Raw = 0 [nullability=read:not-null,write:not-null]
+  type enum Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamCompression : System.Enum, System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
+    field const Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamCompression Lz4 = 1 [nullability=read:not-null,write:not-null]
+    field const Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamCompression None = 0 [nullability=read:not-null,write:not-null]
+  type enum Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamConnectionState : System.Enum, System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
+    field const Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamConnectionState Closed = 5 [nullability=read:not-null,write:not-null]
+    field const Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamConnectionState Connected = 2 [nullability=read:not-null,write:not-null]
+    field const Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamConnectionState Connecting = 1 [nullability=read:not-null,write:not-null]
+    field const Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamConnectionState Created = 0 [nullability=read:not-null,write:not-null]
+    field const Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamConnectionState Disconnected = 4 [nullability=read:not-null,write:not-null]
+    field const Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamConnectionState Reconnecting = 3 [nullability=read:not-null,write:not-null]
+  type sealed-class Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamConnectionStateChanged : System.IEquatable<Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamConnectionStateChanged>
+    ctor ZlinkStreamConnectionStateChanged(Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamConnectionState Previous [nullability=read:not-null,write:not-null], Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamConnectionState Current [nullability=read:not-null,write:not-null], Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamError? Error = null [nullability=read:nullable,write:nullable])
+    property Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamConnectionState Current { get; init; } [nullability=read:not-null,write:not-null]
+    property Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamError? Error { get; init; } [nullability=read:nullable,write:nullable]
+    property Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamConnectionState Previous { get; init; } [nullability=read:not-null,write:not-null]
+    method Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamConnectionStateChanged <Clone>$() [return=read:not-null,write:not-null]
+    method System.Void Deconstruct(out Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamConnectionState Previous [nullability=read:not-null,write:not-null], out Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamConnectionState Current [nullability=read:not-null,write:not-null], out Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamError? Error [nullability=read:nullable,write:nullable]) [return=read:not-null,write:not-null]
+    method override System.Boolean Equals(System.Object? obj [nullability=read:nullable,write:nullable]) [return=read:not-null,write:not-null]
+    method virtual System.Boolean Equals(Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamConnectionStateChanged? other [nullability=read:nullable,write:nullable]) [return=read:not-null,write:not-null]
+    method override System.Int32 GetHashCode() [return=read:not-null,write:not-null]
+    method override System.String ToString() [return=read:not-null,write:not-null]
+    method static System.Boolean op_Equality(Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamConnectionStateChanged? left [nullability=read:nullable,write:nullable], Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamConnectionStateChanged? right [nullability=read:nullable,write:nullable]) [return=read:not-null,write:not-null]
+    method static System.Boolean op_Inequality(Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamConnectionStateChanged? left [nullability=read:nullable,write:nullable], Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamConnectionStateChanged? right [nullability=read:nullable,write:nullable]) [return=read:not-null,write:not-null]
+  type static-class Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamConnectorFactory
+    method static Systems.Zlink.Stream.Connector.Contracts.IZlinkStreamConnector Create(Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamConnectorOptions options [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+  type sealed-class Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamConnectorOptions required-members
+    ctor ZlinkStreamConnectorOptions()
+    property Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamCompression Compression { get; init; } [nullability=read:not-null,write:not-null]
+    property Systems.Zlink.Stream.Connector.Contracts.IZlinkStreamCompressionCodec? CompressionCodec { get; init; } [nullability=read:nullable,write:nullable]
+    property System.TimeSpan ConnectTimeout { get; init; } [nullability=read:not-null,write:not-null]
+    property Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamDispatchMode DispatchMode { get; init; } [nullability=read:not-null,write:not-null]
+    property required System.Uri Endpoint { get; init; } [nullability=read:not-null,write:not-null]
+    property Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamHeartbeatOptions Heartbeat { get; init; } [nullability=read:not-null,write:not-null]
+    property System.Int32 MaxInboundObserverNotifications { get; init; } [nullability=read:not-null,write:not-null]
+    property System.Int32 MaxInboundObserverPayloadPreviewBytes { get; init; } [nullability=read:not-null,write:not-null]
+    property System.Int32 MaxPendingDispatchCallbacks { get; init; } [nullability=read:not-null,write:not-null]
+    property System.Int32 MaxReceivePayloadSize { get; init; } [nullability=read:not-null,write:not-null]
+    property System.Int32 MaxReceivedMessages { get; init; } [nullability=read:not-null,write:not-null]
+    property System.Int32 MaxSendPayloadSize { get; init; } [nullability=read:not-null,write:not-null]
+    property Systems.Zlink.Stream.Connector.Contracts.IZlinkStreamPacketNameResolver NameResolver { get; init; } [nullability=read:not-null,write:not-null]
+    property Systems.Zlink.Stream.Connector.Contracts.IZlinkStreamPayloadCodec? PayloadCodec { get; init; } [nullability=read:nullable,write:nullable]
+    property Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamReconnectOptions Reconnect { get; init; } [nullability=read:not-null,write:not-null]
+    property System.TimeSpan RequestTimeout { get; init; } [nullability=read:not-null,write:not-null]
+    property System.Boolean SkipServerCertificateValidation { get; init; } [nullability=read:not-null,write:not-null]
+    property System.Nullable<Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamTransport> Transport { get; init; } [nullability=read:nullable,write:nullable]
+    property System.TimeSpan WaitTimeout { get; init; } [nullability=read:not-null,write:not-null]
+  type sealed-class Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamDisconnected : System.IEquatable<Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamDisconnected>
+    ctor ZlinkStreamDisconnected(Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamCloseReason CloseReason [nullability=read:not-null,write:not-null])
+    property Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamCloseReason CloseReason { get; init; } [nullability=read:not-null,write:not-null]
+    method Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamDisconnected <Clone>$() [return=read:not-null,write:not-null]
+    method System.Void Deconstruct(out Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamCloseReason CloseReason [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method override System.Boolean Equals(System.Object? obj [nullability=read:nullable,write:nullable]) [return=read:not-null,write:not-null]
+    method virtual System.Boolean Equals(Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamDisconnected? other [nullability=read:nullable,write:nullable]) [return=read:not-null,write:not-null]
+    method override System.Int32 GetHashCode() [return=read:not-null,write:not-null]
+    method override System.String ToString() [return=read:not-null,write:not-null]
+    method static System.Boolean op_Equality(Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamDisconnected? left [nullability=read:nullable,write:nullable], Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamDisconnected? right [nullability=read:nullable,write:nullable]) [return=read:not-null,write:not-null]
+    method static System.Boolean op_Inequality(Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamDisconnected? left [nullability=read:nullable,write:nullable], Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamDisconnected? right [nullability=read:nullable,write:nullable]) [return=read:not-null,write:not-null]
+  type enum Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamDispatchMode : System.Enum, System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
+    field const Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamDispatchMode Immediate = 1 [nullability=read:not-null,write:not-null]
+    field const Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamDispatchMode Manual = 0 [nullability=read:not-null,write:not-null]
+  type sealed-class Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamEncodedPayload : System.IEquatable<Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamEncodedPayload>
+    ctor ZlinkStreamEncodedPayload(Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamCodec Codec [nullability=read:not-null,write:not-null], System.ReadOnlyMemory<System.Byte> Payload [nullability=read:not-null,write:not-null], System.Type? MessageType = null [nullability=read:nullable,write:nullable])
+    property Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamCodec Codec { get; init; } [nullability=read:not-null,write:not-null]
+    property System.Type? MessageType { get; init; } [nullability=read:nullable,write:nullable]
+    property System.ReadOnlyMemory<System.Byte> Payload { get; init; } [nullability=read:not-null,write:not-null]
+    method Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamEncodedPayload <Clone>$() [return=read:not-null,write:not-null]
+    method System.Void Deconstruct(out Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamCodec Codec [nullability=read:not-null,write:not-null], out System.ReadOnlyMemory<System.Byte> Payload [nullability=read:not-null,write:not-null], out System.Type? MessageType [nullability=read:nullable,write:nullable]) [return=read:not-null,write:not-null]
+    method override System.Boolean Equals(System.Object? obj [nullability=read:nullable,write:nullable]) [return=read:not-null,write:not-null]
+    method virtual System.Boolean Equals(Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamEncodedPayload? other [nullability=read:nullable,write:nullable]) [return=read:not-null,write:not-null]
+    method override System.Int32 GetHashCode() [return=read:not-null,write:not-null]
+    method override System.String ToString() [return=read:not-null,write:not-null]
+    method static System.Boolean op_Equality(Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamEncodedPayload? left [nullability=read:nullable,write:nullable], Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamEncodedPayload? right [nullability=read:nullable,write:nullable]) [return=read:not-null,write:not-null]
+    method static System.Boolean op_Inequality(Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamEncodedPayload? left [nullability=read:nullable,write:nullable], Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamEncodedPayload? right [nullability=read:nullable,write:nullable]) [return=read:not-null,write:not-null]
+  type sealed-class Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamError : System.IEquatable<Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamError>
+    ctor ZlinkStreamError(Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamErrorCode Code [nullability=read:not-null,write:not-null], System.String Message [nullability=read:not-null,write:not-null], System.Exception? Exception = null [nullability=read:nullable,write:nullable])
+    property Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamErrorCode Code { get; init; } [nullability=read:not-null,write:not-null]
+    property System.Exception? Exception { get; init; } [nullability=read:nullable,write:nullable]
+    property System.String Message { get; init; } [nullability=read:not-null,write:not-null]
+    method Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamError <Clone>$() [return=read:not-null,write:not-null]
+    method System.Void Deconstruct(out Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamErrorCode Code [nullability=read:not-null,write:not-null], out System.String Message [nullability=read:not-null,write:not-null], out System.Exception? Exception [nullability=read:nullable,write:nullable]) [return=read:not-null,write:not-null]
+    method override System.Boolean Equals(System.Object? obj [nullability=read:nullable,write:nullable]) [return=read:not-null,write:not-null]
+    method virtual System.Boolean Equals(Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamError? other [nullability=read:nullable,write:nullable]) [return=read:not-null,write:not-null]
+    method override System.Int32 GetHashCode() [return=read:not-null,write:not-null]
+    method override System.String ToString() [return=read:not-null,write:not-null]
+    method static System.Boolean op_Equality(Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamError? left [nullability=read:nullable,write:nullable], Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamError? right [nullability=read:nullable,write:nullable]) [return=read:not-null,write:not-null]
+    method static System.Boolean op_Inequality(Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamError? left [nullability=read:nullable,write:nullable], Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamError? right [nullability=read:nullable,write:nullable]) [return=read:not-null,write:not-null]
+  type enum Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamErrorCode : System.Enum, System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
+    field const Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamErrorCode CompressionFailed = 8 [nullability=read:not-null,write:not-null]
+    field const Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamErrorCode ConfigurationError = 1 [nullability=read:not-null,write:not-null]
+    field const Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamErrorCode ConnectTimeout = 4 [nullability=read:not-null,write:not-null]
+    field const Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamErrorCode DecompressionFailed = 10 [nullability=read:not-null,write:not-null]
+    field const Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamErrorCode Disconnected = 0 [nullability=read:not-null,write:not-null]
+    field const Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamErrorCode FrameDecodeFailed = 5 [nullability=read:not-null,write:not-null]
+    field const Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamErrorCode FrameTooLarge = 6 [nullability=read:not-null,write:not-null]
+    field const Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamErrorCode ObserverDropped = 13 [nullability=read:not-null,write:not-null]
+    field const Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamErrorCode ObserverFailed = 12 [nullability=read:not-null,write:not-null]
+    field const Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamErrorCode ReceivedMessageDropped = 15 [nullability=read:not-null,write:not-null]
+    field const Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamErrorCode RemoteError = 14 [nullability=read:not-null,write:not-null]
+    field const Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamErrorCode RequestTimeout = 3 [nullability=read:not-null,write:not-null]
+    field const Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamErrorCode SendFailed = 7 [nullability=read:not-null,write:not-null]
+    field const Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamErrorCode TlsValidationFailed = 9 [nullability=read:not-null,write:not-null]
+    field const Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamErrorCode UserCallbackFailed = 11 [nullability=read:not-null,write:not-null]
+    field const Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamErrorCode ValidationFailed = 2 [nullability=read:not-null,write:not-null]
+  type sealed-class Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamException : System.Exception, System.Runtime.Serialization.ISerializable
+    ctor ZlinkStreamException(Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamError error [nullability=read:not-null,write:not-null])
+    property Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamError Error { get; } [nullability=read:not-null,write:unknown]
+  type sealed-class Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamHeartbeatOptions
+    ctor ZlinkStreamHeartbeatOptions()
+    property System.Boolean Enabled { get; init; } [nullability=read:not-null,write:not-null]
+    property System.TimeSpan Interval { get; init; } [nullability=read:not-null,write:not-null]
+    property System.TimeSpan Timeout { get; init; } [nullability=read:not-null,write:not-null]
+  type sealed-class Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamInboundObservation : System.IEquatable<Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamInboundObservation>
+    ctor ZlinkStreamInboundObservation(Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamMessageKind Kind [nullability=read:not-null,write:not-null], System.String Name [nullability=read:not-null,write:not-null], Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamCodec Codec [nullability=read:not-null,write:not-null], System.Nullable<System.UInt64> RequestSeq [nullability=read:nullable,write:nullable], Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamMetadata Metadata [nullability=read:not-null,write:not-null], System.Int32 PayloadLength [nullability=read:not-null,write:not-null], System.Boolean IsCompressed [nullability=read:not-null,write:not-null], System.DateTimeOffset ReceivedAt [nullability=read:not-null,write:not-null], System.ReadOnlyMemory<System.Byte> PayloadPreview [nullability=read:not-null,write:not-null])
+    property Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamCodec Codec { get; init; } [nullability=read:not-null,write:not-null]
+    property System.Boolean IsCompressed { get; init; } [nullability=read:not-null,write:not-null]
+    property Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamMessageKind Kind { get; init; } [nullability=read:not-null,write:not-null]
+    property Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamMetadata Metadata { get; init; } [nullability=read:not-null,write:not-null]
+    property System.String Name { get; init; } [nullability=read:not-null,write:not-null]
+    property System.Int32 PayloadLength { get; init; } [nullability=read:not-null,write:not-null]
+    property System.ReadOnlyMemory<System.Byte> PayloadPreview { get; init; } [nullability=read:not-null,write:not-null]
+    property System.DateTimeOffset ReceivedAt { get; init; } [nullability=read:not-null,write:not-null]
+    property System.Nullable<System.UInt64> RequestSeq { get; init; } [nullability=read:nullable,write:nullable]
+    method Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamInboundObservation <Clone>$() [return=read:not-null,write:not-null]
+    method System.Void Deconstruct(out Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamMessageKind Kind [nullability=read:not-null,write:not-null], out System.String Name [nullability=read:not-null,write:not-null], out Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamCodec Codec [nullability=read:not-null,write:not-null], out System.Nullable<System.UInt64> RequestSeq [nullability=read:nullable,write:nullable], out Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamMetadata Metadata [nullability=read:not-null,write:not-null], out System.Int32 PayloadLength [nullability=read:not-null,write:not-null], out System.Boolean IsCompressed [nullability=read:not-null,write:not-null], out System.DateTimeOffset ReceivedAt [nullability=read:not-null,write:not-null], out System.ReadOnlyMemory<System.Byte> PayloadPreview [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method override System.Boolean Equals(System.Object? obj [nullability=read:nullable,write:nullable]) [return=read:not-null,write:not-null]
+    method virtual System.Boolean Equals(Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamInboundObservation? other [nullability=read:nullable,write:nullable]) [return=read:not-null,write:not-null]
+    method override System.Int32 GetHashCode() [return=read:not-null,write:not-null]
+    method override System.String ToString() [return=read:not-null,write:not-null]
+    method static System.Boolean op_Equality(Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamInboundObservation? left [nullability=read:nullable,write:nullable], Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamInboundObservation? right [nullability=read:nullable,write:nullable]) [return=read:not-null,write:not-null]
+    method static System.Boolean op_Inequality(Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamInboundObservation? left [nullability=read:nullable,write:nullable], Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamInboundObservation? right [nullability=read:nullable,write:nullable]) [return=read:not-null,write:not-null]
+  type static-class Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamJsonCodec
+    property static System.Text.Json.JsonSerializerOptions SerializerOptions { get; } [nullability=read:not-null,write:not-null]
+    method static System.Void Configure(System.Text.Json.JsonSerializerOptions options [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+  type static-class Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamJsonExtensions
+    method static T? FromJson<T>(this Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamEncodedPayload payload [nullability=read:not-null,write:not-null]) [return=read:nullable,write:nullable]
+      generic T variance=invariant nullable=nullable
+    method static Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamEncodedPayload ToJson<T>(this T? value [nullability=read:nullable,write:nullable]) [return=read:not-null,write:not-null]
+      generic T variance=invariant nullable=nullable
+  type sealed-class Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamMessage : System.IEquatable<Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamMessage>
+    ctor ZlinkStreamMessage(System.String Name [nullability=read:not-null,write:not-null], Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamMetadata Metadata [nullability=read:not-null,write:not-null], System.Object? Payload [nullability=read:nullable,write:nullable])
+    property Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamMetadata Metadata { get; init; } [nullability=read:not-null,write:not-null]
+    property System.String Name { get; init; } [nullability=read:not-null,write:not-null]
+    property System.Object? Payload { get; init; } [nullability=read:nullable,write:nullable]
+    method Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamMessage <Clone>$() [return=read:not-null,write:not-null]
+    method System.Void Deconstruct(out System.String Name [nullability=read:not-null,write:not-null], out Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamMetadata Metadata [nullability=read:not-null,write:not-null], out System.Object? Payload [nullability=read:nullable,write:nullable]) [return=read:not-null,write:not-null]
+    method override System.Boolean Equals(System.Object? obj [nullability=read:nullable,write:nullable]) [return=read:not-null,write:not-null]
+    method virtual System.Boolean Equals(Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamMessage? other [nullability=read:nullable,write:nullable]) [return=read:not-null,write:not-null]
+    method override System.Int32 GetHashCode() [return=read:not-null,write:not-null]
+    method override System.String ToString() [return=read:not-null,write:not-null]
+    method static System.Boolean op_Equality(Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamMessage? left [nullability=read:nullable,write:nullable], Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamMessage? right [nullability=read:nullable,write:nullable]) [return=read:not-null,write:not-null]
+    method static System.Boolean op_Inequality(Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamMessage? left [nullability=read:nullable,write:nullable], Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamMessage? right [nullability=read:nullable,write:nullable]) [return=read:not-null,write:not-null]
+  type enum Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamMessageKind : System.Enum, System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
+    field const Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamMessageKind Control = 5 [nullability=read:not-null,write:not-null]
+    field const Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamMessageKind Error = 4 [nullability=read:not-null,write:not-null]
+    field const Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamMessageKind Request = 2 [nullability=read:not-null,write:not-null]
+    field const Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamMessageKind Response = 3 [nullability=read:not-null,write:not-null]
+    field const Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamMessageKind Send = 1 [nullability=read:not-null,write:not-null]
+  type sealed-class Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamMessage<TPayload> : System.IEquatable<Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamMessage<TPayload>>
+    generic TPayload variance=invariant nullable=nullable
+    ctor ZlinkStreamMessage(System.String Name [nullability=read:not-null,write:not-null], Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamMetadata Metadata [nullability=read:not-null,write:not-null], TPayload Payload [nullability=read:not-null,write:not-null])
+    property Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamMetadata Metadata { get; init; } [nullability=read:not-null,write:not-null]
+    property System.String Name { get; init; } [nullability=read:not-null,write:not-null]
+    property TPayload? Payload { get; init; } [nullability=read:nullable,write:nullable]
+    method Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamMessage<TPayload> <Clone>$() [return=read:not-null,write:not-null]
+    method System.Void Deconstruct(out System.String Name [nullability=read:not-null,write:not-null], out Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamMetadata Metadata [nullability=read:not-null,write:not-null], out TPayload? Payload [nullability=read:nullable,write:nullable]) [return=read:not-null,write:not-null]
+    method override System.Boolean Equals(System.Object? obj [nullability=read:nullable,write:nullable]) [return=read:not-null,write:not-null]
+    method virtual System.Boolean Equals(Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamMessage<TPayload>? other [nullability=read:nullable,write:nullable]) [return=read:not-null,write:not-null]
+    method override System.Int32 GetHashCode() [return=read:not-null,write:not-null]
+    method override System.String ToString() [return=read:not-null,write:not-null]
+    method static System.Boolean op_Equality(Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamMessage<TPayload>? left [nullability=read:nullable,write:nullable], Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamMessage<TPayload>? right [nullability=read:nullable,write:nullable]) [return=read:not-null,write:not-null]
+    method static System.Boolean op_Inequality(Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamMessage<TPayload>? left [nullability=read:nullable,write:nullable], Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamMessage<TPayload>? right [nullability=read:nullable,write:nullable]) [return=read:not-null,write:not-null]
+  type sealed-class Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamMetadata
+    property System.Int32 Count { get; } [nullability=read:not-null,write:unknown]
+    property static Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamMetadata Empty { get; } [nullability=read:not-null,write:unknown]
+    property System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> Values { get; } [nullability=read:not-null,write:unknown]
+    method System.String? Get(System.String key [nullability=read:not-null,write:not-null]) [return=read:nullable,write:nullable]
+    method System.Boolean TryGet(System.String key [nullability=read:not-null,write:not-null], out System.String value [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamMetadata WithMany(System.Collections.Generic.IEnumerable<System.Collections.Generic.KeyValuePair<System.String, System.String>> values [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamMetadata With(System.String key [nullability=read:not-null,write:not-null], System.String value [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+  type sealed-class Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamPacketNameAttribute : System.Attribute
+    attribute-usage targets=Class, Struct allow-multiple=false inherited=true
+    ctor ZlinkStreamPacketNameAttribute(System.String name [nullability=read:not-null,write:not-null])
+    property System.String Name { get; } [nullability=read:not-null,write:unknown]
+  type sealed-class Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamReconnectOptions
+    ctor ZlinkStreamReconnectOptions()
+    property System.Double BackoffFactor { get; init; } [nullability=read:not-null,write:not-null]
+    property System.Boolean Enabled { get; init; } [nullability=read:not-null,write:not-null]
+    property System.TimeSpan InitialDelay { get; init; } [nullability=read:not-null,write:not-null]
+    property System.Nullable<System.Int32> MaxAttempts { get; init; } [nullability=read:nullable,write:nullable]
+    property System.TimeSpan MaxDelay { get; init; } [nullability=read:not-null,write:not-null]
+  type readonly-struct Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamResult
+    property Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamError? Error { get; } [nullability=read:nullable,write:unknown]
+    property System.Boolean IsSuccess { get; } [nullability=read:not-null,write:unknown]
+    method static Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamResult Failure(Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamError error [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method static Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamResult Success() [return=read:not-null,write:not-null]
+  type readonly-struct Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamResult<T>
+    generic T variance=invariant nullable=unspecified
+    property Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamError? Error { get; } [nullability=read:nullable,write:unknown]
+    property System.Boolean IsSuccess { get; } [nullability=read:not-null,write:unknown]
+    property T? Value { get; } [nullability=read:nullable,write:unknown]
+    method static Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamResult<T?> Failure(Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamError error [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method static Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamResult<T?> Success(T? value [nullability=read:nullable,write:nullable]) [return=read:not-null,write:not-null]
+  type enum Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamTransport : System.Enum, System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
+    field const Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamTransport Tcp = 0 [nullability=read:not-null,write:not-null]
+    field const Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamTransport Tls = 1 [nullability=read:not-null,write:not-null]
+    field const Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamTransport WebSocket = 2 [nullability=read:not-null,write:not-null]
+    field const Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamTransport WebSocketSecure = 3 [nullability=read:not-null,write:not-null]
+  type static-class Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamTypedConnectorExtensions
+    method static Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamTypedExpectNoneBuilder<TPayload?> ExpectNone<TPayload>(this Systems.Zlink.Stream.Connector.Contracts.IZlinkStreamConnector connector [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+      generic TPayload variance=invariant nullable=nullable
+    method static Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamTypedExpectNoneBuilder<TPayload?> ExpectNone<TPayload>(this Systems.Zlink.Stream.Connector.Contracts.IZlinkStreamConnector connector [nullability=read:not-null,write:not-null], System.String name [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+      generic TPayload variance=invariant nullable=nullable
+    method static System.IDisposable On<TPayload>(this Systems.Zlink.Stream.Connector.Contracts.IZlinkStreamConnector connector [nullability=read:not-null,write:not-null], System.Func<Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamMessage<TPayload?>, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> handler [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+      generic TPayload variance=invariant nullable=nullable
+    method static System.IDisposable On<TPayload>(this Systems.Zlink.Stream.Connector.Contracts.IZlinkStreamConnector connector [nullability=read:not-null,write:not-null], System.String name [nullability=read:not-null,write:not-null], System.Func<Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamMessage<TPayload?>, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> handler [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+      generic TPayload variance=invariant nullable=nullable
+    method static Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamTypedRequestBuilder Request<TPayload>(this Systems.Zlink.Stream.Connector.Contracts.IZlinkStreamConnector connector [nullability=read:not-null,write:not-null], TPayload? payload [nullability=read:nullable,write:nullable]) [return=read:not-null,write:not-null]
+      generic TPayload variance=invariant nullable=nullable
+    method static Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamTypedSendBuilder Send<TPayload>(this Systems.Zlink.Stream.Connector.Contracts.IZlinkStreamConnector connector [nullability=read:not-null,write:not-null], TPayload? payload [nullability=read:nullable,write:nullable]) [return=read:not-null,write:not-null]
+      generic TPayload variance=invariant nullable=nullable
+    method static Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamTypedSequenceBuilder<TPayload?> WaitForSequence<TPayload>(this Systems.Zlink.Stream.Connector.Contracts.IZlinkStreamConnector connector [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+      generic TPayload variance=invariant nullable=nullable
+    method static Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamTypedSequenceBuilder<TPayload?> WaitForSequence<TPayload>(this Systems.Zlink.Stream.Connector.Contracts.IZlinkStreamConnector connector [nullability=read:not-null,write:not-null], System.String name [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+      generic TPayload variance=invariant nullable=nullable
+    method static Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamTypedWaitBuilder<TPayload?> WaitFor<TPayload>(this Systems.Zlink.Stream.Connector.Contracts.IZlinkStreamConnector connector [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+      generic TPayload variance=invariant nullable=nullable
+    method static Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamTypedWaitBuilder<TPayload?> WaitFor<TPayload>(this Systems.Zlink.Stream.Connector.Contracts.IZlinkStreamConnector connector [nullability=read:not-null,write:not-null], System.String name [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+      generic TPayload variance=invariant nullable=nullable
+    method static Systems.Zlink.Stream.Connector.Contracts.IZlinkStreamConnector WithInboundObserver(this Systems.Zlink.Stream.Connector.Contracts.IZlinkStreamConnector connector [nullability=read:not-null,write:not-null], System.Func<Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamInboundObservation, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask> observer [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+  type sealed-class Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamTypedExpectNoneBuilder<TPayload>
+    generic TPayload variance=invariant nullable=nullable
+    method System.Threading.Tasks.ValueTask Async(System.Threading.CancellationToken cancellationToken = default [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamTypedExpectNoneBuilder<TPayload?> Within(System.TimeSpan window [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+  type sealed-class Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamTypedRequestBuilder
+    method System.Threading.Tasks.ValueTask<TReply> Async<TReply>(System.Threading.CancellationToken cancellationToken = default [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+      generic TReply variance=invariant nullable=unspecified
+    method Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamTypedRequestBuilder Compress() [return=read:not-null,write:not-null]
+    method Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamTypedRequestBuilder Metadata(System.String key [nullability=read:not-null,write:not-null], System.String value [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamTypedRequestBuilder Metadata(Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamMetadata metadata [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamTypedRequestBuilder PacketName(System.String name [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method System.Void Submit(System.Action<Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamResult> callback [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method System.Void Submit<TReply>(System.Action<Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamResult<TReply>> callback [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+      generic TReply variance=invariant nullable=unspecified
+    method Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamTypedRequestBuilder Timeout(System.TimeSpan timeout [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+  type sealed-class Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamTypedSendBuilder
+    method System.Threading.Tasks.ValueTask Async(System.Threading.CancellationToken cancellationToken = default [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamTypedSendBuilder Compress() [return=read:not-null,write:not-null]
+    method Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamTypedSendBuilder Metadata(System.String key [nullability=read:not-null,write:not-null], System.String value [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamTypedSendBuilder Metadata(Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamMetadata metadata [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamTypedSendBuilder PacketName(System.String name [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+  type sealed-class Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamTypedSequenceBuilder<TPayload>
+    generic TPayload variance=invariant nullable=nullable
+    method System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamMessage<TPayload?>>> Async(System.Threading.CancellationToken cancellationToken = default [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamTypedSequenceBuilder<TPayload?> Expect(System.Func<Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamMessage<TPayload?>, System.Boolean> predicate [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamTypedSequenceBuilder<TPayload?> Timeout(System.TimeSpan timeout [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+  type sealed-class Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamTypedWaitBuilder<TPayload>
+    generic TPayload variance=invariant nullable=nullable
+    method System.Threading.Tasks.ValueTask<Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamMessage<TPayload?>> Async(System.Threading.CancellationToken cancellationToken = default [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamTypedWaitBuilder<TPayload?> Timeout(System.TimeSpan timeout [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamTypedWaitBuilder<TPayload?> Where(System.Func<Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamMessage<TPayload?>, System.Boolean> predicate [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]

@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+    <PropertyGroup>
+        <TargetFramework>net8.0</TargetFramework>
+        <OutputType>Exe</OutputType>
+        <AssemblyName>SpotService.Client</AssemblyName>
+        <RootNamespace>SpotService.Client</RootNamespace>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <Compile Include="../../InstanceSpot/Client/Scenarios/InstanceSpotTrackAScenario.cs" Link="Scenarios/InstanceSpotTrackAScenario.cs" />
+        <Compile Include="../../InstanceSpot/Client/Scenarios/InstanceSpotIdleEvictionScenario.cs" Link="Scenarios/InstanceSpotIdleEvictionScenario.cs" />
+        <ProjectReference Include="../Shared/SpotService.Shared.csproj"/>
+        <ProjectReference Include="../../../src/Systems.Zlink.Stream.Connector/Systems.Zlink.Stream.Connector.csproj"/>
+        <PackageReference Include="Zlink.HttpClient"/>
+        <ProjectReference Include="../../../src/Zlink.Framework/Zlink.Framework.csproj"/>
+    </ItemGroup>
+</Project>

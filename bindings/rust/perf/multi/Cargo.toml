@@ -1,0 +1,48 @@
+[package]
+name = "zlink-perf-multi"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+publish = false
+
+[workspace]
+
+[dependencies]
+libc = "0.2"
+zlink = { path = "../.." }
+
+[[bin]]
+name = "perf_multi_dealer_dealer_server"
+path = "src/perf_multi_dealer_dealer_server.rs"
+
+[[bin]]
+name = "perf_multi_dealer_dealer_client"
+path = "src/perf_multi_dealer_dealer_client.rs"
+
+[[bin]]
+name = "perf_multi_dealer_router_server"
+path = "src/perf_multi_dealer_router_server.rs"
+
+[[bin]]
+name = "perf_multi_dealer_router_client"
+path = "src/perf_multi_dealer_router_client.rs"
+
+[[bin]]
+name = "perf_multi_pubsub_server"
+path = "src/perf_multi_pubsub_server.rs"
+
+[[bin]]
+name = "perf_multi_pubsub_client"
+path = "src/perf_multi_pubsub_client.rs"
+
+[[bin]]
+name = "perf_multi_router_router_server"
+path = "src/perf_multi_router_router_server.rs"
+
+[[bin]]
+name = "perf_multi_router_router_client"
+path = "src/perf_multi_router_router_client.rs"
+
+[[bin]]
+name = "perf_multi_stream_server"
+path = "src/perf_multi_stream_server.rs"

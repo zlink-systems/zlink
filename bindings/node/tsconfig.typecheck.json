@@ -1,0 +1,16 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": ".",
+    "baseUrl": ".",
+    "paths": {
+      "@zlink-systems/zlink": [
+        "dist/index.d.ts"
+      ]
+    }
+  },
+  "include": [
+    "tests/socket_surface.typecheck.ts"
+  ]
+}

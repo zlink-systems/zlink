@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+    <PropertyGroup>
+        <TargetFramework>net8.0</TargetFramework>
+        <AssemblyName>RegistrationCodec.InvalidDuplicate</AssemblyName>
+        <RootNamespace>RegistrationCodec.Server.InvalidDuplicate</RootNamespace>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Google.Protobuf"/>
+        <PackageReference Include="MessagePack"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="../../Shared/RegistrationCodec.Shared.csproj"/>
+        <ProjectReference Include="../../../../src/Zlink.Framework/Zlink.Framework.csproj"/>
+        <ProjectReference Include="../../../../src/Zlink.Framework.AspNetCore/Zlink.Framework.AspNetCore.csproj"/>
+        <ProjectReference Include="../../../../src/Zlink.Framework.Codecs.MessagePack/Zlink.Framework.Codecs.MessagePack.csproj"/>
+        <ProjectReference Include="../../../../src/Zlink.Framework.Codecs.Protobuf/Zlink.Framework.Codecs.Protobuf.csproj"/>
+    </ItemGroup>
+</Project>

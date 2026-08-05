@@ -1,0 +1,18 @@
+/* Ensure ASCII art diagrams render with proper monospace alignment */
+.md-typeset pre > code {
+  font-variant-ligatures: none;
+}
+
+/* Slightly larger code font for readability */
+.md-typeset code {
+  font-size: 0.82em;
+}
+
+/* 오른쪽 "현재 페이지" 목차를 없앤다. mkdocs.yml에 toc.integrate를 켜면 왼쪽
+   nav 안으로 병합되는데, 그러면 nav 트리가 페이지마다 늘어난다. 그 대신 CSS로
+   오른쪽 컬럼만 감춘다 — 왼쪽 nav는 그대로 두고, 본문(.md-content)은
+   flex-grow:1이라 비워진 공간으로 자동으로 넓어진다.
+   레이아웃 폭 자체는 .md-grid의 max-width(theme 기본값)로 계속 제한된다. */
+.md-sidebar--secondary {
+  display: none !important;
+}

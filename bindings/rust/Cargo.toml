@@ -1,0 +1,51 @@
+[package]
+name = "zlink"
+version = "11.2.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Rust bindings for the zlink messaging library"
+license = "MPL-2.0"
+homepage = "https://zlink.systems/"
+
+[lib]
+name = "zlink"
+path = "src/lib.rs"
+
+[workspace]
+resolver = "3"
+members = []
+
+[dependencies]
+libc = "0.2"
+# Inline-storage string for short topics; values <=22 bytes live in the
+# stack-allocated payload and skip the heap, matching the typical pubsub
+# topic ("events", "user.login", etc.).
+smol_str = "0.3"
+
+[[example]]
+name = "request_reply_callback_sample"
+path = "samples/request_reply_callback_sample.rs"
+
+[[example]]
+name = "pair_recv_sample"
+path = "samples/pair_recv_sample.rs"
+
+[[example]]
+name = "pubsub_recv_sample"
+path = "samples/pubsub_recv_sample.rs"
+
+[[example]]
+name = "dealer_router_recv_sample"
+path = "samples/dealer_router_recv_sample.rs"
+
+[[example]]
+name = "stream_recv_sample"
+path = "samples/stream_recv_sample.rs"
+
+[[example]]
+name = "stream_packet_callback_sample"
+path = "samples/stream_packet_callback_sample.rs"
+
+[[example]]
+name = "monitor_recv_sample"
+path = "samples/monitor_recv_sample.rs"

@@ -1,0 +1,20 @@
+plugins {
+    id 'org.jetbrains.kotlin.jvm' version '2.1.0'
+}
+
+repositories {
+    mavenCentral()
+}
+
+kotlin {
+    jvmToolchain(22)
+}
+
+dependencies {
+    implementation project(':')
+    testImplementation 'org.jetbrains.kotlin:kotlin-test:2.1.0'
+}
+
+test {
+    useJUnitPlatform()
+}

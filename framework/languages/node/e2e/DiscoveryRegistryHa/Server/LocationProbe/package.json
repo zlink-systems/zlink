@@ -1,0 +1,8 @@
+{
+  "name": "@zlink-systems/e2e-discovery-registry-ha-location-probe",
+  "private": true,
+  "main": "dist/Server/LocationProbe/main.js",
+  "scripts": {
+    "build": "node ../../../../node_modules/typescript/bin/tsc -p tsconfig.json"
+  }
+}

@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+    <PropertyGroup>
+        <TargetFramework>net8.0</TargetFramework>
+        <AssemblyName>AutomaticTurnDispatch.ExternalApi</AssemblyName>
+        <RootNamespace>AutomaticTurnDispatch.ExternalApi</RootNamespace>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="../../Shared/AutomaticTurnDispatch.Shared.csproj"/>
+    </ItemGroup>
+</Project>

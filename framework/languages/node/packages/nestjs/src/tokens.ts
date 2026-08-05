@@ -1,0 +1,20 @@
+export const ZLINK_NEST_HANDLER_GROUP = Symbol.for('@zlink-systems/nestjs:handler-group');
+export const ZLINK_FRAMEWORK_REGISTRATION = Symbol.for('@zlink-systems/framework:registration');
+export const ZLINK_FRAMEWORK_RUNTIME = Symbol.for('@zlink-systems/framework:runtime');
+export const ZLINK_CHANNEL_CLIENT = Symbol.for('@zlink-systems/framework:channel-client');
+export const ZLINK_CHANNEL_RUNTIME_OPTIONS = Symbol.for('@zlink-systems/framework:channel-runtime-options');
+export const ZLINK_CLIENT_SERVER_RUNTIME = Symbol.for('@zlink-systems/framework:client-server-runtime');
+export const ZLINK_ROUTE_MESH_RUNTIME_OPTIONS =
+  Symbol.for('@zlink-systems/framework:route-mesh-runtime-options');
+export const ZLINK_ROUTE_CLIENT = Symbol.for('@zlink-systems/framework:route-client');
+export const ZLINK_FANOUT_CLIENT = Symbol.for('@zlink-systems/framework:fanout-client');
+export const ZLINK_FANOUT_RUNTIME = Symbol.for('@zlink-systems/framework:fanout-runtime');
+export const ZLINK_ACTOR_CLIENT = Symbol.for('@zlink-systems/framework:actor-client');
+export const ZLINK_BOUND_SESSION_FACTORY = Symbol.for('@zlink-systems/framework:bound-session-factory');
+export const ZLINK_MESSAGE_METADATA_POLICY = Symbol.for('@zlink-systems/framework:message-metadata-policy');
+export const ZLINK_SPOT_MANAGER = Symbol.for('@zlink-systems/framework:spot-manager');
+export const ZLINK_SPOT_OUTBOUND = Symbol.for('@zlink-systems/framework:spot-outbound');
+export const ZLINK_SPOT_PUBLISHER_CLIENT = Symbol.for('@zlink-systems/framework:spot-publisher-client');
+export const ZLINK_ACTOR_MANAGER = Symbol.for('@zlink-systems/framework:actor-manager');
+export const ZLINK_ROUTE_MESH_RUNTIME = Symbol.for('@zlink-systems/framework:route-mesh-runtime');
+export const ZLINK_LOCATION_RUNTIME_QUERY = Symbol.for('@zlink-systems/framework:location-runtime-query');

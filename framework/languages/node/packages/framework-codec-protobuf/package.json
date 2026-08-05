@@ -1,0 +1,27 @@
+{
+  "name": "@zlink-systems/framework-codec-protobuf",
+  "version": "0.1.0-SNAPSHOT",
+  "license": "SEE LICENSE IN LICENSE",
+  "files": ["dist/browser", "dist/server", "dist/framework.d.ts", "dist/index.d.ts", "LICENSE"],
+  "exports": {
+    ".": {
+      "types": "./dist/browser/index.d.ts",
+      "import": "./dist/browser/index.mjs"
+    },
+    "./framework": {
+      "types": "./dist/framework.d.ts",
+      "require": "./dist/server/framework.cjs",
+      "default": "./dist/server/framework.cjs"
+    }
+  },
+  "dependencies": {
+    "@zlink-systems/stream-wire": "0.1.0-SNAPSHOT"
+  },
+  "peerDependencies": {
+    "@zlink-systems/framework": "0.1.0-SNAPSHOT",
+    "@zlink-systems/stream-connector": "0.1.0-SNAPSHOT"
+  },
+  "peerDependenciesMeta": {
+    "@zlink-systems/framework": { "optional": true }
+  }
+}

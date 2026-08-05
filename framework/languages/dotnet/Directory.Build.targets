@@ -1,0 +1,23 @@
+<Project>
+    <!--
+        Imported after each project's own PropertyGroup, so IsPackable here
+        reflects that project's final value (Directory.Build.props alone runs
+        too early to see per-project overrides). TargetFramework=='' scopes
+        this to the outer/cross-targeting evaluation pass for projects using
+        the plural <TargetFrameworks>, which is where package-level content
+        (license, readme, icon) needs to attach.
+
+        PackageLicenseFile is a package-root path. PackagePath must therefore
+        be empty; using "LICENSE" creates LICENSE/LICENSE and makes NuGet
+        report that the declared root file is missing.
+    -->
+    <!--
+        Skip projects that override PackageLicenseExpression (e.g. Apache-2.0
+        for http-client, which wraps a standard library instead of any
+        zlink-original transport). They opt out of the framework-wide FSL
+        file entirely.
+    -->
+    <ItemGroup Condition="'$(IsPackable)' == 'true' and '$(TargetFramework)' == '' and '$(PackageLicenseExpression)' == ''">
+        <None Include="$(MSBuildThisFileDirectory)../../LICENSE" Pack="true" PackagePath="" Visible="false" />
+    </ItemGroup>
+</Project>

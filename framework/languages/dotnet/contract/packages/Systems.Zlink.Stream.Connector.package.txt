@@ -1,0 +1,19 @@
+package Systems.Zlink.Stream.Connector
+entry LICENSE
+entry Systems.Zlink.Stream.Connector.nuspec
+entry [Content_Types].xml
+entry _rels/.rels
+entry lib/net8.0/Systems.Zlink.Stream.Connector.dll
+entry lib/net8.0/Systems.Zlink.Stream.Connector.xml
+entry package/services/metadata/core-properties/{CORE_PROPERTIES}.psmdcp
+content-sha256 lib/net8.0/Systems.Zlink.Stream.Connector.xml=b44fe0bd8344de3cb5761b315572dabff29b6661c74c949f0a757c237431dc9f
+metadata authors=Systems.Zlink.Stream.Connector
+metadata description=ZLink STREAM client connector for .NET.
+metadata id=Systems.Zlink.Stream.Connector
+metadata license=LICENSE type=file
+metadata licenseUrl=https://aka.ms/deprecateLicenseUrl
+metadata projectUrl=https://github.com/kairos-code-dev/zlink
+metadata version={VERSION}
+metadata repository commit={COMMIT} type=git
+dependency-group targetFramework=net8.0
+dependency targetFramework=net8.0 exclude=Build,Analyzers id=K4os.Compression.LZ4 version=1.3.8

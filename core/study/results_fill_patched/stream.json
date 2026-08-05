@@ -1,0 +1,108 @@
+[
+  {
+    "connections": 0,
+    "vmrss_kb": 9760,
+    "vmhwm_kb": 9760,
+    "anon_kb": 3220,
+    "priv_kb": 4188,
+    "fds": 14,
+    "sockstat": {
+      "tcp_inuse": 54,
+      "tcp_alloc": 85,
+      "tcp_mem_pages": 547
+    }
+  },
+  {
+    "connections": 1000,
+    "vmrss_kb": 35680,
+    "vmhwm_kb": 35680,
+    "anon_kb": 29696,
+    "priv_kb": 30632,
+    "fds": 1023,
+    "sockstat": {
+      "tcp_inuse": 2054,
+      "tcp_alloc": 2085,
+      "tcp_mem_pages": 803
+    }
+  },
+  {
+    "connections": 2000,
+    "vmrss_kb": 61920,
+    "vmhwm_kb": 61920,
+    "anon_kb": 56144,
+    "priv_kb": 57080,
+    "fds": 2023,
+    "sockstat": {
+      "tcp_inuse": 4054,
+      "tcp_alloc": 4085,
+      "tcp_mem_pages": 803
+    }
+  },
+  {
+    "connections": 4000,
+    "vmrss_kb": 114880,
+    "vmhwm_kb": 114880,
+    "anon_kb": 109112,
+    "priv_kb": 110008,
+    "fds": 4023,
+    "sockstat": {
+      "tcp_inuse": 8054,
+      "tcp_alloc": 8085,
+      "tcp_mem_pages": 803
+    }
+  },
+  {
+    "connections": 6000,
+    "vmrss_kb": 167360,
+    "vmhwm_kb": 167360,
+    "anon_kb": 162028,
+    "priv_kb": 162924,
+    "fds": 6023,
+    "sockstat": {
+      "tcp_inuse": 12055,
+      "tcp_alloc": 12095,
+      "tcp_mem_pages": 291
+    }
+  },
+  {
+    "connections": 10000,
+    "vmrss_kb": 273760,
+    "vmhwm_kb": 273760,
+    "anon_kb": 267860,
+    "priv_kb": 268752,
+    "fds": 10023,
+    "sockstat": {
+      "tcp_inuse": 20055,
+      "tcp_alloc": 20086,
+      "tcp_mem_pages": 291
+    }
+  },
+  {
+    "connections": 10000,
+    "phase": "after_burst",
+    "vmrss_kb": 274560,
+    "vmhwm_kb": 274560,
+    "anon_kb": 268752,
+    "priv_kb": 269644,
+    "fds": 10023,
+    "sockstat": {
+      "tcp_inuse": 20054,
+      "tcp_alloc": 20085,
+      "tcp_mem_pages": 1565
+    }
+  },
+  {
+    "connections": 10000,
+    "phase": "after_burst_idle",
+    "vmrss_kb": 274560,
+    "vmhwm_kb": 274560,
+    "anon_kb": 268752,
+    "priv_kb": 269644,
+    "fds": 10023,
+    "sockstat": {
+      "tcp_inuse": 20054,
+      "tcp_alloc": 20085,
+      "tcp_mem_pages": 1053
+    }
+  }
+]

@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "zlink"
+version = "11.2.0"
+description = "zlink Python bindings — high-performance async messaging library"
+license = {text = "MPL-2.0"}
+authors = [{name = "Zlink Systems"}]
+requires-python = ">=3.9"
+
+[project.urls]
+Homepage = "https://zlink.systems/"
+Repository = "https://github.com/ulala-x/zlink"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

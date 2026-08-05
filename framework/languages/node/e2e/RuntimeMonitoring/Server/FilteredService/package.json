@@ -1,0 +1,8 @@
+{
+  "private": true,
+  "name": "@zlink-systems/e2e-runtime-monitoring-filtered-service",
+  "version": "0.1.0-SNAPSHOT",
+  "scripts": {
+    "build": "node ../../../../node_modules/typescript/bin/tsc -p tsconfig.json"
+  }
+}

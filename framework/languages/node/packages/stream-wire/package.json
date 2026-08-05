@@ -1,0 +1,23 @@
+{
+  "name": "@zlink-systems/stream-wire",
+  "version": "0.1.0-SNAPSHOT",
+  "license": "SEE LICENSE IN LICENSE",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist/esm",
+    "dist/index.js",
+    "dist/index.d.ts",
+    "dist/lz4-pickle.js",
+    "dist/lz4-pickle.d.ts",
+    "LICENSE"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/esm/index.d.ts",
+      "import": "./dist/esm/index.mjs",
+      "require": "./dist/index.js",
+      "default": "./dist/esm/index.mjs"
+    }
+  }
+}

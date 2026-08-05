@@ -1,0 +1,8 @@
+assembly Zlink.Framework.Codecs.MessagePack
+  type sealed-class Zlink.Framework.Codecs.MessagePack.ZLinkMessagePackCodec : Systems.Zlink.Stream.Connector.Contracts.IZlinkStreamCodecRegistration, Systems.Zlink.Stream.Connector.Contracts.IZlinkStreamPayloadCodec, Zlink.Framework.Contracts.Codecs.IZLinkCodecExtension
+    property static Zlink.Framework.Codecs.MessagePack.ZLinkMessagePackCodec Default { get; } [nullability=read:not-null,write:unknown]
+    method virtual TPayload? Decode<TPayload>(Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamEncodedPayload payload [nullability=read:not-null,write:not-null]) [return=read:nullable,write:nullable]
+      generic TPayload variance=invariant nullable=nullable
+    method virtual Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamEncodedPayload Encode<TPayload>(TPayload? payload [nullability=read:nullable,write:nullable]) [return=read:not-null,write:not-null]
+      generic TPayload variance=invariant nullable=nullable
+    method virtual System.Void Register(Zlink.Framework.Contracts.Codecs.IZLinkCodecRegistrar codecs [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]

@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><TargetFramework>net8.0</TargetFramework><OutputType>Exe</OutputType></PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Shared/ObservabilityOps.Shared.csproj" />
+    <ProjectReference Include="../../../src/Systems.Zlink.Stream.Connector/Systems.Zlink.Stream.Connector.csproj" />
+    <ProjectReference Include="../../../src/Zlink.Framework/Zlink.Framework.csproj" />
+    <PackageReference Include="StackExchange.Redis" />
+    <PackageReference Include="Zlink.HttpClient" />
+  </ItemGroup>
+</Project>

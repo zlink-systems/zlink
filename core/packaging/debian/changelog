@@ -1,0 +1,5 @@
+zlink (11.2.0-0.1) UNRELEASED; urgency=low
+
+  * Package the RouteMesh 11.2.0 raw ABI.
+
+ -- zlink Developers <ulalax@kairoscode.dev>  Sun, 19 Jul 2026 00:00:00 +0900

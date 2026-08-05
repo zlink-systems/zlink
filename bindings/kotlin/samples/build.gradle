@@ -1,0 +1,57 @@
+plugins {
+    id 'org.jetbrains.kotlin.jvm' version '2.1.0'
+    id 'application'
+}
+
+evaluationDependsOn(':')
+
+repositories {
+    mavenCentral()
+}
+
+kotlin {
+    jvmToolchain(22)
+}
+
+// Kotlin samples share the Java binding runtime (systems.zlink.*) and the
+// shared SampleSupport helpers from the Java samples project. No separate native
+// binding exists; this subproject only adds idiomatic Kotlin sample sources.
+dependencies {
+    implementation project(':')
+    implementation project(':samples')
+    compileOnly 'io.netty:netty-buffer:4.1.100.Final'
+}
+
+def sampleMainClasses = [
+    runDealerRouterRecvSample: 'systems.zlink.samples.DealerRouterRecvSampleKt',
+    runMonitorRecvSample: 'systems.zlink.samples.MonitorRecvSampleKt',
+    runPairRecvSample: 'systems.zlink.samples.PairRecvSampleKt',
+    runPubSubRecvSample: 'systems.zlink.samples.PubSubRecvSampleKt',
+    runRequestReplyAsyncSample: 'systems.zlink.samples.RequestReplyAsyncSampleKt',
+    runStreamPacketCallbackSample: 'systems.zlink.samples.StreamPacketCallbackSampleKt',
+    runStreamRecvSample: 'systems.zlink.samples.StreamRecvSampleKt'
+]
+
+def sampleRunTasks = sampleMainClasses.collect { taskName, mainClassName ->
+    tasks.register(taskName, JavaExec) {
+        group = 'application'
+        classpath = sourceSets.main.runtimeClasspath +
+            project(':').sourceSets.main.runtimeClasspath +
+            project(':samples').sourceSets.main.runtimeClasspath
+        mainClass = mainClassName
+        jvmArgs '--enable-native-access=ALL-UNNAMED'
+    }
+}
+
+sampleRunTasks.eachWithIndex { sampleTask, index ->
+    if (index > 0) {
+        sampleTask.configure {
+            mustRunAfter sampleRunTasks[index - 1]
+        }
+    }
+}
+
+tasks.register('runAllKotlinSamples') {
+    group = 'application'
+    dependsOn sampleRunTasks
+}

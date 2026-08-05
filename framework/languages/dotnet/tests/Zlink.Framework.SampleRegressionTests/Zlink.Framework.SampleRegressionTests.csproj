@@ -1,0 +1,55 @@
+<Project Sdk="Microsoft.NET.Sdk">
+    <PropertyGroup>
+        <TargetFrameworks>$(ZLinkFrameworkTargetFrameworks)</TargetFrameworks>
+        <IsPackable>false</IsPackable>
+        <IsTestProject>true</IsTestProject>
+        <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <FrameworkReference Include="Microsoft.AspNetCore.App"/>
+        <PackageReference Include="Microsoft.NET.Test.Sdk"/>
+        <PackageReference Include="coverlet.collector">
+            <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+            <PrivateAssets>all</PrivateAssets>
+        </PackageReference>
+        <PackageReference Include="coverlet.msbuild">
+            <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+            <PrivateAssets>all</PrivateAssets>
+        </PackageReference>
+        <PackageReference Include="xunit"/>
+        <PackageReference Include="xunit.runner.visualstudio">
+            <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+            <PrivateAssets>all</PrivateAssets>
+        </PackageReference>
+    </ItemGroup>
+
+    <ItemGroup>
+        <Compile Include="BingoRegressionTests.cs"/>
+        <Compile Include="CommonSampleContractInventoryRegressionTests.cs"/>
+        <Compile Include="DeliveryDispatchRegressionTests.cs"/>
+        <Compile Include="GameQuestRegressionTests.cs"/>
+        <Compile Include="E2ERunnerRegressionTests.cs"/>
+        <Compile Include="ExecutionTurnRegressionTests.cs"/>
+        <Compile Include="Regression.cs"/>
+        <Compile Include="SampleConfigurationPolicyRegressionTests.cs"/>
+        <Compile Include="ShoppingMallRegressionTests.cs"/>
+        <Compile Include="SupportChatRegressionTests.cs"/>
+        <Compile Include="TicTacToeRegressionTests.cs"/>
+        <Compile Include="ZoneWorldOpsConsoleRegistryTests.cs"/>
+        <Compile Include="ZoneWorldMaintenancePolicyTests.cs"/>
+        <Compile Include="ZoneWorldTopologyRegressionTests.cs"/>
+        <Compile Include="../../samples/ZoneWorld/Server/Ops/Infrastructure/ZLink/Sessions/OpsConsoleRegistry.cs"
+                 Link="ZoneWorld/OpsConsoleRegistry.cs"/>
+        <Compile Include="../../samples/ZoneWorld/Server/Ops/Application/Ops/NodeRegistry.cs"
+                 Link="ZoneWorld/NodeRegistry.cs"/>
+        <Compile Include="../../samples/ZoneWorld/Server/ZoneNode/Application/Node/NodeMaintenancePolicy.cs"
+                 Link="ZoneWorld/NodeMaintenancePolicy.cs"/>
+        <Compile Include="../Common/FrameworkTestEnvironment.cs" Link="Common/FrameworkTestEnvironment.cs"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="../../src/Zlink.Framework/Zlink.Framework.csproj"/>
+        <ProjectReference Include="../../samples/ZoneWorld/Shared/ZoneWorld.Shared.csproj"/>
+    </ItemGroup>
+</Project>

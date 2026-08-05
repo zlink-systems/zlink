@@ -1,0 +1,35 @@
+{
+  "format": "framework-multipart-v1",
+  "consumers": ["cpp", "dotnet", "jvm", "node"],
+  "encoding": "u32-big-endian-part-count-then-u32-big-endian-length-prefixed-opaque-parts",
+  "trailingBytes": "forbidden",
+  "valid": [
+    {
+      "name": "two-opaque-parts",
+      "encodedHex": "010000004b175a4c696e6b4672616d65776f726b4d756c7469706172741d6170706c69636174696f6e2f782d7a6c696e6b2d6d756c746970617274000000110000000200000002010200000003aabbcc",
+      "partsHex": ["0102", "aabbcc"]
+    }
+  ],
+  "invalid": [
+    {
+      "name": "wrong-content-type",
+      "encodedHex": "0100000047175a4c696e6b4672616d65776f726b4d756c746970617274196170706c69636174696f6e2f782d7a6c696e6b2d6f74686572000000110000000200000002010200000003aabbcc",
+      "reason": "contentType"
+    },
+    {
+      "name": "zero-count",
+      "encodedHex": "010000003e175a4c696e6b4672616d65776f726b4d756c7469706172741d6170706c69636174696f6e2f782d7a6c696e6b2d6d756c7469706172740000000400000000",
+      "reason": "minimumParts"
+    },
+    {
+      "name": "truncated-part",
+      "encodedHex": "0100000044175a4c696e6b4672616d65776f726b4d756c7469706172741d6170706c69636174696f6e2f782d7a6c696e6b2d6d756c7469706172740000000a00000001000000040102",
+      "reason": "partLength"
+    },
+    {
+      "name": "trailing-byte",
+      "encodedHex": "010000004c175a4c696e6b4672616d65776f726b4d756c7469706172741d6170706c69636174696f6e2f782d7a6c696e6b2d6d756c746970617274000000120000000200000002010200000003aabbcc00",
+      "reason": "trailingBytes"
+    }
+  ]
+}

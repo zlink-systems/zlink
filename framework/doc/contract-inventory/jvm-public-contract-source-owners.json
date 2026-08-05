@@ -1,0 +1,114 @@
+{
+  "schemaVersion": 1,
+  "providerPublicOwners": [
+    "systems.zlink.framework.locationprovider"
+  ],
+  "apiSnapshots": {
+    "java": "framework/doc/contract-inventory/jvm-api-snapshots/java.api.sha256",
+    "kotlin": "framework/doc/contract-inventory/jvm-api-snapshots/kotlin.api.sha256"
+  },
+  "serverArtifacts": {
+    "java": {
+      "artifact": "systems.zlink:zlink-framework-core",
+      "module": "systems.zlink.framework",
+      "publicOwners": [
+        "systems.zlink.framework",
+        "systems.zlink.framework.actors",
+        "systems.zlink.framework.channels",
+        "systems.zlink.framework.configuration",
+        "systems.zlink.framework.errors",
+        "systems.zlink.framework.execution",
+        "systems.zlink.framework.handlers",
+        "systems.zlink.framework.locations",
+        "systems.zlink.framework.messaging",
+        "systems.zlink.framework.monitoring",
+        "systems.zlink.framework.spots",
+        "systems.zlink.framework.streams",
+        "systems.zlink.framework.runtime.host"
+      ],
+      "providerSpiOwner": "systems.zlink:zlink-framework-provider-abstractions",
+      "runtimeInternalPrefix": "systems.zlink.framework.runtime.internal",
+      "runtimeInternalPolicy": {
+        "applicationExported": false,
+        "rawBindingArtifact": "systems.zlink:zlink-framework-binding-internal",
+        "rawBindingModule": "zlink.framework.binding.internal",
+        "applicationCompileClasspath": false,
+        "companionQualifiedExports": [
+          "systems.zlink.framework",
+          "zlink.framework.spring.boot.starter",
+          "zlink.framework.testkit"
+        ],
+        "languageLevelNonPublicDeclarations": [
+          "ActorTransferControl",
+          "ActorTransferPhase",
+          "FrameworkReadyBatch",
+          "FrameworkReceiveBatch",
+          "MeshMonitorEventMask",
+          "MeshNodeOptions",
+          "MeshRecordPayload",
+          "MessageBuilderStage",
+          "ReplySubmitOperation",
+          "RequestCallbackSubmitOperation",
+          "RequestSubmitOperation",
+          "SpotKind",
+          "StreamSessionBinding",
+          "StreamSessionService",
+          "StreamSessionState",
+          "StreamSessionStatus",
+          "TimeoutSubmitOperation"
+        ]
+      },
+      "boundaryGate": ":zlink-framework-core:verifyPublicContractModuleBoundary"
+    },
+    "kotlin": {
+      "artifact": "systems.zlink:zlink-framework-kotlin",
+      "publicPackage": "systems.zlink.framework.kotlin",
+      "contractSourceOwners": [
+        "src/main/kotlin/systems/zlink/framework/kotlin/contracts/ZLinkOneWayContracts.kt",
+        "src/main/kotlin/systems/zlink/framework/kotlin/contracts/ZLinkSuspendingHandlers.kt"
+      ],
+      "fqnPolicy": "preserve",
+      "boundaryGate": ":zlink-framework-kotlin:contractTest"
+    }
+  },
+  "clientArtifacts": {
+    "javaHttp": {
+      "artifact": "systems.zlink:zlink-http-client",
+      "module": "zlink.http.client",
+      "publicOwners": [
+        "systems.zlink.httpclient"
+      ],
+      "runtimeInternalPrefix": "systems.zlink.httpclient.internal",
+      "contractSourceOwner": "framework/doc/framework/common/spec/http-client/languages/java/java-http-client.ko.md",
+      "boundaryGate": ":zlink-http-client:test"
+    },
+    "kotlinHttp": {
+      "artifact": "systems.zlink:zlink-http-client-kotlin",
+      "publicPackage": "systems.zlink.httpclient.kotlin",
+      "contractSourceOwner": "framework/doc/framework/common/spec/http-client/languages/kotlin/kotlin-http-client.ko.md",
+      "sourceOwner": "zlink-http-client-kotlin/src/main/kotlin/systems/zlink/httpclient/kotlin/HttpClientCoroutines.kt",
+      "boundaryGate": ":zlink-http-client-kotlin:test"
+    },
+    "streamConnector": {
+      "artifact": "systems.zlink:zlink-stream-connector",
+      "module": "zlink.stream.connector",
+      "publicOwners": [
+        "systems.zlink.stream.connector"
+      ],
+      "contractSourceOwner": "framework/doc/framework/common/spec/stream-connector/languages/java/03-stream-connector.ko.md",
+      "boundaryGate": ":zlink-stream-connector:test"
+    },
+    "codecExtensions": {
+      "artifacts": [
+        "systems.zlink:zlink-framework-codec-protobuf",
+        "systems.zlink:zlink-framework-codec-msgpack"
+      ],
+      "publicOwners": [
+        "systems.zlink.framework.codecs.protobuf",
+        "systems.zlink.framework.codecs.msgpack"
+      ],
+      "contractSourceOwner": "framework/doc/framework/common/spec/06-framework-api.ko.md",
+      "boundaryGate": ":zlink-framework-codec-protobuf:test, :zlink-framework-codec-msgpack:test"
+    }
+  }
+}

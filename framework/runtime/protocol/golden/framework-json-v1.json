@@ -1,0 +1,26 @@
+{
+  "format": "framework-json-v1",
+  "consumers": ["cpp", "dotnet", "jvm", "node"],
+  "contract": {
+    "requiredProperties": ["signed64", "unsigned64", "int32", "ratio", "state", "bytes", "nullable", "labels"],
+    "enumNames": ["Ready", "Closed"]
+  },
+  "valid": [
+    {
+      "name": "boundary-values",
+      "jsonUtf8": "{\"signed64\":\"-9223372036854775808\",\"unsigned64\":\"18446744073709551615\",\"int32\":-2147483648,\"ratio\":1.25,\"state\":\"Ready\",\"bytes\":\"AQI=\",\"nullable\":null,\"labels\":{\"a\":1}}"
+    },
+    {
+      "name": "order-whitespace-and-unknown-field",
+      "jsonUtf8": "{ \"labels\": {\"a\":1}, \"unknownFuture\": true, \"nullable\": null, \"bytes\": \"AQI=\", \"state\": \"Ready\", \"ratio\": 1.25, \"int32\": -2147483648, \"unsigned64\": \"18446744073709551615\", \"signed64\": \"-9223372036854775808\" }"
+    }
+  ],
+  "invalid": [
+    { "name": "duplicate-property", "jsonUtf8": "{\"signed64\":\"0\",\"signed64\":\"1\"}", "reason": "duplicateProperties" },
+    { "name": "property-case", "jsonUtf8": "{\"Signed64\":\"0\"}", "reason": "missingRequiredProperties" },
+    { "name": "numeric-u64", "jsonUtf8": "{\"signed64\":0}", "reason": "signedAndUnsigned64" },
+    { "name": "unpadded-base64", "jsonUtf8": "{\"bytes\":\"AQI\"}", "reason": "bytes" },
+    { "name": "fractional-int32", "jsonUtf8": "{\"int32\":1.5}", "reason": "integersUpTo32Bits" },
+    { "name": "unknown-enum-case", "jsonUtf8": "{\"state\":\"ready\"}", "reason": "enums" }
+  ]
+}

@@ -1,0 +1,36 @@
+plugins {
+    id 'application'
+}
+
+def zlinkJarDir = file('../../../../../bindings/java/build/libs')
+def zlinkJarVersion = file('../../../../../bindings/java/build.gradle')
+    .readLines()
+    .find { it.trim().startsWith('version = ') }
+    ?.replaceFirst(/.*'([^']+)'.*/, '$1')
+
+if (!zlinkJarVersion) {
+    throw new GradleException('failed to resolve zlink Java binding version')
+}
+
+def zlinkJar = new File(zlinkJarDir, "zlink-java-${zlinkJarVersion}.jar")
+if (!zlinkJar.isFile()) {
+    throw new GradleException("missing zlink Java binding jar: ${zlinkJar}")
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation files(zlinkJar)
+}
+
+application {
+    mainClass = 'dev.kairoscode.stream.JvmZlinkStreamLen32BeServer'
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(22)
+    }
+}

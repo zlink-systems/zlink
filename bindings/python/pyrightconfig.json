@@ -1,0 +1,16 @@
+{
+    "include": [
+        "src/zlink/contracts"
+    ],
+    "pythonVersion": "3.9",
+    "typeCheckingMode": "basic",
+    "reportUnsupportedDunderAll": "none",
+    "extraPaths": [
+        "src"
+    ],
+    "venvPath": ".",
+    "exclude": [
+        "**/__pycache__",
+        "src/zlink/native"
+    ]
+}

@@ -1,0 +1,115 @@
+sources:
+  "10.0.0":
+    url: "https://github.com/kairos-code-dev/zlink/archive/refs/tags/core/v10.0.0.tar.gz"
+  "10.0.0-rc.1":
+    url: "https://github.com/kairos-code-dev/zlink/archive/refs/tags/core/v10.0.0-rc.1.tar.gz"
+    sha256: "54c74dc0052c07d2b5d5eb0cbee5a7e3e94b05e15d160b13f73651f0fb81eade"
+  "9.0.2":
+    url: "https://github.com/kairos-code-dev/zlink/archive/refs/tags/core/v9.0.2.tar.gz"
+  "9.0.1":
+    url: "https://github.com/kairos-code-dev/zlink/archive/refs/tags/core/v9.0.1.tar.gz"
+  "9.0.0":
+    url: "https://github.com/kairos-code-dev/zlink/archive/refs/tags/core/v9.0.0.tar.gz"
+  "8.6.3":
+    url: "https://github.com/kairos-code-dev/zlink/archive/refs/tags/core/v8.6.3.tar.gz"
+  "8.6.2":
+    url: "https://github.com/kairos-code-dev/zlink/archive/refs/tags/core/v8.6.2.tar.gz"
+  "8.6.1":
+    url: "https://github.com/kairos-code-dev/zlink/archive/refs/tags/core/v8.6.1.tar.gz"
+  "8.6.0":
+    url: "https://github.com/kairos-code-dev/zlink/archive/refs/tags/core/v8.6.0.tar.gz"
+  "8.5.2":
+    url: "https://github.com/kairos-code-dev/zlink/archive/refs/tags/core/v8.5.2.tar.gz"
+  "8.5.1":
+    url: "https://github.com/kairos-code-dev/zlink/archive/refs/tags/core/v8.5.1.tar.gz"
+  "8.5.0":
+    url: "https://github.com/kairos-code-dev/zlink/archive/refs/tags/core/v8.5.0.tar.gz"
+  "8.4.3":
+    url: "https://github.com/kairos-code-dev/zlink/archive/refs/tags/core/v8.4.3.tar.gz"
+  "8.4.2":
+    url: "https://github.com/kairos-code-dev/zlink/archive/refs/tags/core/v8.4.2.tar.gz"
+  "8.4.1":
+    url: "https://github.com/kairos-code-dev/zlink/archive/refs/tags/core/v8.4.1.tar.gz"
+  "8.4.0":
+    url: "https://github.com/kairos-code-dev/zlink/archive/refs/tags/core/v8.4.0.tar.gz"
+  "8.3.0":
+    url: "https://github.com/kairos-code-dev/zlink/archive/refs/tags/core/v8.3.0.tar.gz"
+  "8.2.0":
+    url: "https://github.com/kairos-code-dev/zlink/archive/refs/tags/core/v8.2.0.tar.gz"
+  "8.1.0":
+    url: "https://github.com/kairos-code-dev/zlink/archive/refs/tags/core/v8.1.0.tar.gz"
+  "8.0.0":
+    url: "https://github.com/kairos-code-dev/zlink/archive/refs/tags/core/v8.0.0.tar.gz"
+  "7.2.0":
+    url: "https://github.com/kairos-code-dev/zlink/archive/refs/tags/core/v7.2.0.tar.gz"
+  "7.1.0":
+    url: "https://github.com/kairos-code-dev/zlink/archive/refs/tags/core/v7.1.0.tar.gz"
+  "6.0.4":
+    url: "https://github.com/kairos-code-dev/zlink/archive/refs/tags/core/v6.0.4.tar.gz"
+  "6.0.3":
+    url: "https://github.com/kairos-code-dev/zlink/archive/refs/tags/core/v6.0.3.tar.gz"
+  "6.0.2":
+    url: "https://github.com/kairos-code-dev/zlink/archive/refs/tags/core/v6.0.2.tar.gz"
+  "6.0.1":
+    url: "https://github.com/kairos-code-dev/zlink/archive/refs/tags/core/v6.0.1.tar.gz"
+  "5.3.10":
+    url: "https://github.com/kairos-code-dev/zlink/archive/refs/tags/core/v5.3.10.tar.gz"
+  "5.3.9":
+    url: "https://github.com/kairos-code-dev/zlink/archive/refs/tags/core/v5.3.9.tar.gz"
+  "5.3.8":
+    url: "https://github.com/kairos-code-dev/zlink/archive/refs/tags/core/v5.3.8.tar.gz"
+  "5.3.7":
+    url: "https://github.com/kairos-code-dev/zlink/archive/refs/tags/core/v5.3.7.tar.gz"
+  "5.3.6":
+    url: "https://github.com/kairos-code-dev/zlink/archive/refs/tags/core/v5.3.6.tar.gz"
+  "5.3.4":
+    url: "https://github.com/kairos-code-dev/zlink/archive/refs/tags/core/v5.3.4.tar.gz"
+  "5.3.3":
+    url: "https://github.com/kairos-code-dev/zlink/archive/refs/tags/core/v5.3.3.tar.gz"
+  "5.3.2":
+    url: "https://github.com/kairos-code-dev/zlink/archive/refs/tags/core/v5.3.2.tar.gz"
+  "5.3.1":
+    url: "https://github.com/kairos-code-dev/zlink/archive/refs/tags/core/v5.3.1.tar.gz"
+  "5.3.0":
+    url: "https://github.com/kairos-code-dev/zlink/archive/refs/tags/core/v5.3.0.tar.gz"
+  "5.0.30":
+    url: "https://github.com/kairos-code-dev/zlink/archive/refs/tags/core/v5.0.30.tar.gz"
+  "5.0.29":
+    url: "https://github.com/kairos-code-dev/zlink/archive/refs/tags/core/v5.0.29.tar.gz"
+  "5.0.28":
+    url: "https://github.com/kairos-code-dev/zlink/archive/refs/tags/core/v5.0.28.tar.gz"
+  "5.0.27":
+    url: "https://github.com/kairos-code-dev/zlink/archive/refs/tags/core/v5.0.27.tar.gz"
+  "5.0.25":
+    url: "https://github.com/kairos-code-dev/zlink/archive/refs/tags/core/v5.0.25.tar.gz"
+  "5.0.8":
+    url: "https://github.com/kairos-code-dev/zlink/archive/refs/tags/core/v5.0.8.tar.gz"
+  "5.0.7":
+    url: "https://github.com/kairos-code-dev/zlink/archive/refs/tags/core/v5.0.7.tar.gz"
+  "5.0.6":
+    url: "https://github.com/kairos-code-dev/zlink/archive/refs/tags/core/v5.0.6.tar.gz"
+  "5.0.4":
+    url: "https://github.com/kairos-code-dev/zlink/archive/refs/tags/core/v5.0.4.tar.gz"
+  "5.0.3":
+    url: "https://github.com/kairos-code-dev/zlink/archive/refs/tags/core/v5.0.3.tar.gz"
+  "5.0.2":
+    url: "https://github.com/kairos-code-dev/zlink/archive/refs/tags/core/v5.0.2.tar.gz"
+  "5.0.1":
+    url: "https://github.com/kairos-code-dev/zlink/archive/refs/tags/core/v5.0.1.tar.gz"
+  "5.0.0":
+    url: "https://github.com/kairos-code-dev/zlink/archive/refs/tags/core/v5.0.0.tar.gz"
+  "1.7.3":
+    url: "https://github.com/kairos-code-dev/zlink/archive/refs/tags/core/v1.7.3.tar.gz"
+    sha256: "65710e4d4e239cabae246b8076b6be09a72280bdbc867ea8e39460bb2b0e34cd"
+  "1.7.1":
+    url: "https://github.com/kairos-code-dev/zlink/archive/refs/tags/core/v1.7.1.tar.gz"
+    sha256: "59a43ecc524c7f20bf8f452b4e0ba798a8434341881d3b7bdb586488a335d430"
+  "1.4.0":
+    url: "https://github.com/kairos-code-dev/zlink/archive/refs/tags/core/v1.4.0-hotfix1.tar.gz"
+    sha256: "d4081e63846de62d27ec7e8e79b56d616236e174c8b4524499f76f678a360177"
+  "0.9.0":
+    url: "https://github.com/ulala-x/zlink/archive/refs/tags/0.9.0.tar.gz"
+    sha256: "7f0560d41d201f457ef0158f7e446f2919d9550253afdac522d2202a047716df"
+  "0.6.0":
+    url: "https://github.com/ulala-x/zlink/archive/refs/tags/0.6.tar.gz"
+    sha256: "b47939ff13079da894a4366c39a51742f2c27337c5235553f96de4c55f7db896"

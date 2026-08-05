@@ -1,0 +1,86 @@
+plugins {
+    id 'java-library'
+    id 'maven-publish'
+}
+
+group = rootProject.group
+version = rootProject.version
+description = 'zlink Java Netty buffer extension'
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(22)
+    }
+    withJavadocJar()
+    withSourcesJar()
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    api project(':')
+    api 'io.netty:netty-buffer:4.1.100.Final'
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+test {
+    useJUnitPlatform()
+    jvmArgs '--enable-native-access=ALL-UNNAMED'
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}
+
+publishing {
+    publications {
+        mavenJava(MavenPublication) {
+            from components.java
+            groupId = project.group
+            artifactId = 'zlink-ext-netty'
+            version = project.version
+            pom {
+                name = 'zlink-ext-netty'
+                description = project.description
+                url = 'https://github.com/kairos-code-dev/zlink'
+                licenses {
+                    license {
+                        name = 'MPL-2.0'
+                        url = 'https://github.com/kairos-code-dev/zlink/blob/main/LICENSE'
+                    }
+                }
+            }
+        }
+    }
+    repositories {
+        maven {
+            name = 'releaseRepo'
+            def repoUrl = System.getenv('MAVEN_REPOSITORY_URL')
+            if (repoUrl == null || repoUrl.trim().isEmpty()) {
+                def ghRepo = System.getenv('GITHUB_REPOSITORY')
+                if (ghRepo != null && !ghRepo.trim().isEmpty()) {
+                    repoUrl = "https://maven.pkg.github.com/${ghRepo}"
+                } else {
+                    repoUrl = "${buildDir}/repo"
+                }
+            }
+            url = uri(repoUrl)
+            if (!url.scheme.equalsIgnoreCase('file')) {
+                credentials {
+                    def u = System.getenv('MAVEN_REPOSITORY_USERNAME')
+                    def p = System.getenv('MAVEN_REPOSITORY_PASSWORD')
+                    if ((u == null || u.trim().isEmpty())
+                        && (p == null || p.trim().isEmpty())) {
+                        u = System.getenv('GITHUB_ACTOR')
+                        p = System.getenv('GITHUB_TOKEN')
+                    }
+                    username = u
+                    password = p
+                }
+            }
+        }
+    }
+}

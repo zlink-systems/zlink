@@ -1,0 +1,22 @@
+package systems.zlink.e2e.automaticturn.shared;
+
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+import systems.zlink.framework.ZLinkMessageContext;
+import systems.zlink.framework.channels.ZLinkRequestHandler;
+
+public final class DelayHandler
+    implements ZLinkRequestHandler<Contracts.DelayReq, Contracts.DelayRes> {
+    @Override
+    public CompletionStage<Contracts.DelayRes> handle(
+        Contracts.DelayReq request,
+        ZLinkMessageContext context) {
+        try {
+            Thread.sleep(request.delayMillis());
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("delay interrupted", error);
+        }
+        return CompletableFuture.completedFuture(new Contracts.DelayRes(request.requestId()));
+    }
+}

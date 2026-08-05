@@ -1,0 +1,8 @@
+; Engine configuration file.
+; This project is a runtime gate fixture for the ZLink Godot Stream Connector.
+
+config_version=5
+
+[application]
+config/name="ZLink Godot Stream Connector Tests"
+run/main_scene=""

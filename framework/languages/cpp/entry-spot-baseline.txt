@@ -1,0 +1,39 @@
+# Entry Spot admission burst benchmark
+# Benchmark: perf_cpp_framework_entry_spot_admission_burst, 200 actors x 50 packets
+# through an Entry Spot actor send handler, 5 in-process rounds after warmup.
+# Latency = dispatch submit -> handler completion, per packet.
+# Command:
+#   cmake --build framework/languages/cpp/build --target perf_cpp_framework_entry_spot_admission_burst -j2
+#   ./framework/languages/cpp/build/perf_cpp_framework_entry_spot_admission_burst --legacy
+#   ./framework/languages/cpp/build/perf_cpp_framework_entry_spot_admission_burst
+
+## BASELINE (legacy inline dispatch, no Entry Spot serial gate, 2026-06-13)
+entry-spot admission burst (legacy-inline dispatch)
+actors=200 packetsPerActor=50 totalPackets=10000 rounds=5
+round 1: wall=8.41301ms throughput=1188635/s p50=4.73us p95=8.204us p99=21.311us max=639.821us
+round 2: wall=6.63997ms throughput=1506031/s p50=5.241us p95=9.726us p99=25.596us max=283.687us
+round 3: wall=7.80846ms throughput=1280661/s p50=4.666us p95=7.468us p99=20.365us max=139.498us
+round 4: wall=7.39562ms throughput=1352150/s p50=5.134us p95=9.448us p99=26.133us max=268.988us
+round 5: wall=7.16565ms throughput=1395547/s p50=5.571us p95=10.073us p99=27.432us max=795.176us
+median: wall=7.39562ms throughput=1352150/s p50=5.134us p95=9.448us p99=25.596us
+
+## PATCHED (Entry Spot single serial line, 2026-06-13)
+entry-spot admission burst (unified-serial dispatch)
+actors=200 packetsPerActor=50 totalPackets=10000 rounds=5
+round 1: wall=73.9181ms throughput=135284/s p50=1393.61us p95=1749.22us p99=2035.46us max=2205.37us
+round 2: wall=67.7663ms throughput=147565/s p50=1310.32us p95=1473.79us p99=1686.56us max=1792.93us
+round 3: wall=67.9048ms throughput=147264/s p50=1301.04us p95=1477us p99=1555.54us max=1672.19us
+round 4: wall=69.4794ms throughput=143927/s p50=1341.15us p95=1576.02us p99=1668.68us max=1744.64us
+round 5: wall=66.1266ms throughput=151225/s p50=1273.48us p95=1427.9us p99=1551.94us max=1656.32us
+median: wall=67.9048ms throughput=147264/s p50=1310.32us p95=1477us p99=1668.68us
+
+# 판정 노트 (plan §18 #8 escape clause):
+# - throughput: legacy-inline 1,352,150/s -> unified-serial 147,264/s (-89.1%).
+# - p95: legacy-inline 9.448us -> unified-serial 1,477us.
+# - legacy-inline은 Entry Spot application callback을 직렬 gate에 태우지 않는 비교군이다.
+#   200 caller thread가 handler를 직접 진행하므로 Entry Spot 공유 상태를 동시에 건드릴 수 있다.
+# - unified-serial은 10,000 packet이 하나의 Entry Spot 실행 줄을 통과한다. per-packet
+#   latency에는 큐 체류시간이 포함되고, throughput은 단일 실행 줄의 drain 속도를 측정한다.
+# - 이 차이는 plan §1의 핵심 결정인 "Entry Spot application callback은 일반 Spot처럼
+#   직렬 실행한다"를 적용한 구조적 비용이다. 이전 동작 대비 -10% throughput gate로
+#   판정하지 않고, 직렬 실행 의미를 만족하는 상태에서 future baseline으로 사용한다.

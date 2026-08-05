@@ -1,0 +1,85 @@
+import java.security.MessageDigest
+
+gradle.projectsEvaluated {
+    def expectedJar = System.getenv("ZLINK_EXPECTED_BINDING_JAR")
+    def expectedSha256 = System.getenv("ZLINK_EXPECTED_BINDING_SHA256")
+    def expectedVersion = System.getenv("ZLINK_EXPECTED_BINDING_VERSION")
+    if (!expectedJar || !expectedSha256 || !expectedVersion) {
+        throw new GradleException(
+            "ZLINK_EXPECTED_BINDING_JAR, ZLINK_EXPECTED_BINDING_SHA256 and " +
+                "ZLINK_EXPECTED_BINDING_VERSION are required")
+    }
+
+    gradle.rootProject.allprojects { project ->
+        project.tasks.register("verifyZlinkCandidateClasspath") {
+            group = "verification"
+            description = "Verifies that the runtime classpath uses only the isolated zlink binding candidate."
+
+            doLast {
+                def configuration = project.configurations.findByName("testRuntimeClasspath") ?:
+                    project.configurations.findByName("runtimeClasspath")
+                if (configuration == null) {
+                    throw new GradleException(
+                        "${project.path} does not define testRuntimeClasspath or runtimeClasspath")
+                }
+
+                def artifacts = configuration.incoming.artifactView { }.artifacts.artifacts
+                def bindings = artifacts.findAll { artifact ->
+                    def component = artifact.id.componentIdentifier
+                    component instanceof org.gradle.api.artifacts.component.ModuleComponentIdentifier &&
+                        component.group == "systems.zlink" &&
+                        component.module == "zlink"
+                }
+                if (bindings.size() != 1) {
+                    def resolved = bindings.collect { it.file.canonicalPath }.sort()
+                    throw new GradleException(
+                        "Expected one systems.zlink:zlink artifact, resolved ${bindings.size()}: ${resolved}")
+                }
+
+                def bindingJars = configuration.files.findAll { file ->
+                    file.name ==~ /zlink-[0-9].*\.jar/
+                }
+                if (bindingJars.size() != 1) {
+                    def resolved = bindingJars.collect { it.canonicalPath }.sort()
+                    throw new GradleException(
+                        "Expected one zlink binding jar on ${configuration.name}, " +
+                            "resolved ${bindingJars.size()}: ${resolved}")
+                }
+
+                def binding = bindings.iterator().next()
+                def component = binding.id.componentIdentifier
+                def resolvedFile = binding.file.canonicalFile
+                if (bindingJars.iterator().next().canonicalFile != resolvedFile) {
+                    throw new GradleException(
+                        "The resolved systems.zlink:zlink artifact differs from the binding jar " +
+                            "on testRuntimeClasspath")
+                }
+                def digest = MessageDigest.getInstance("SHA-256")
+                resolvedFile.withInputStream { input ->
+                    byte[] buffer = new byte[8192]
+                    for (int read = input.read(buffer); read >= 0; read = input.read(buffer)) {
+                        if (read > 0) {
+                            digest.update(buffer, 0, read)
+                        }
+                    }
+                }
+                def resolvedSha256 = digest.digest().encodeHex().toString()
+
+                if (component.version != expectedVersion) {
+                    throw new GradleException(
+                        "Expected systems.zlink:zlink:${expectedVersion}, resolved ${component.displayName}")
+                }
+                if (!resolvedSha256.equalsIgnoreCase(expectedSha256)) {
+                    throw new GradleException(
+                        "Resolved binding does not match candidate: " +
+                            "resolved=${resolvedFile} sha256=${resolvedSha256}, " +
+                            "candidate=${new File(expectedJar).canonicalFile} sha256=${expectedSha256}")
+                }
+
+                println("verified_binding_candidate=${new File(expectedJar).canonicalFile}")
+                println("resolved_binding_artifact=${resolvedFile}")
+                println("resolved_binding_sha256=${resolvedSha256}")
+            }
+        }
+    }
+}

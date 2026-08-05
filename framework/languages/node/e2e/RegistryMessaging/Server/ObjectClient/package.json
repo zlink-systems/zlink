@@ -1,0 +1,9 @@
+{
+  "name": "@zlink-systems/e2e-registry-messaging-object-client",
+  "version": "0.1.0-SNAPSHOT",
+  "private": true,
+  "main": "dist/Server/ObjectClient/main.js",
+  "scripts": {
+    "build": "node ../../../../node_modules/typescript/bin/tsc -p tsconfig.json"
+  }
+}

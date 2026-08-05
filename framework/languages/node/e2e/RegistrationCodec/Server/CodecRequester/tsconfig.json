@@ -1,0 +1,31 @@
+{
+  "extends": "../../../../tsconfig.base.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "declaration": false,
+    "outDir": "dist",
+    "rootDir": "../..",
+    "strict": false,
+    "paths": {
+      "@zlink-systems/framework": [
+        "../../../../packages/framework/dist"
+      ],
+      "@zlink-systems/nestjs": [
+        "../../../../packages/nestjs/dist"
+      ],
+      "@zlink-systems/framework-codec-protobuf": [
+        "../../../../packages/framework-codec-protobuf/dist"
+      ],
+      "@zlink-systems/framework-codec-protobuf/framework": [
+        "../../../../packages/framework-codec-protobuf/dist/framework.d.ts"
+      ],
+      "@zlink-systems/zlink": [
+        "../../../../node_modules/-systems/zlink/dist/index.d.ts"
+      ]
+    }
+  },
+  "include": [
+    "../../Shared/**/*.ts",
+    "**/*.ts"
+  ]
+}

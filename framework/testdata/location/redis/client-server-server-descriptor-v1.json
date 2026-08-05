@@ -1,0 +1,22 @@
+{
+  "notice": "All official Redis extensions must match this fixture byte-for-byte. Canonical contract: framework/doc/framework/common/spec/22-location-store-redis.ko.md.",
+  "format": "client-server-server-descriptor-v1",
+  "hashFields": [
+    "owner",
+    "gen",
+    "json",
+    "updatedAtMs",
+    "channel"
+  ],
+  "row": {
+    "kind": "channel-server",
+    "key": "6:orders16:6f72646572732d61",
+    "hash": {
+      "owner": "channel-owner-a",
+      "gen": "5",
+      "json": "{\"ChannelName\":\"orders\",\"ServerRid\":\"6f72646572732d61\",\"LifecycleGeneration\":7,\"DescriptorRevision\":3,\"Endpoint\":\"tcp://10.0.0.2:7400\",\"Weight\":100,\"State\":\"Serving\",\"SecurityIdentity\":\"cluster-a\",\"OwnerId\":\"channel-owner-a\",\"OwnerLeaseGeneration\":5,\"UpdatedAt\":\"2024-07-15T00:00:00+00:00\"}",
+      "updatedAtMs": "1721001600000",
+      "channel": "orders"
+    }
+  }
+}

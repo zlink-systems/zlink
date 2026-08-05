@@ -1,0 +1,232 @@
+/* 한국어 기술문서 타이포그래피.
+   Material 기본값은 Roboto인데 Roboto에는 한글 글리프가 없다. 그래서 한글이
+   글자마다 OS 대체 폰트로 떨어지면서 자간·굵기·행간이 흔들린다. 시스템 한글
+   폰트로 고정하고, 한국어에 필요한 줄바꿈 규칙을 준다. */
+:root {
+  --md-text-font-family: -apple-system, "Apple SD Gothic Neo", "Pretendard",
+    "Noto Sans KR", "Malgun Gothic", "맑은 고딕", "Segoe UI", sans-serif;
+  --md-code-font-family: "JetBrains Mono", "D2Coding", "Cascadia Mono",
+    ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+/* 코드 바탕색. Material 기본 `#f5f5f5`는 흰 바탕과 명도 차가 4%뿐이라 사실상
+   흰색으로 보인다. 푸른 기가 도는 회색으로 바꿔 코드 영역이 색으로도 구분되게
+   한다. 인라인 코드도 같은 변수를 쓰므로 함께 따라간다.
+
+   다크(slate)도 같은 문제가 있다. 페이지 14%·코드 18%로 4% 차이뿐이다. 라이트와
+   달리 코드가 페이지보다 **밝은** 쪽이므로 더 올려서 벌린다. */
+[data-md-color-scheme="default"] {
+  --md-code-bg-color: #eef2f7;
+}
+[data-md-color-scheme="slate"] {
+  --md-code-bg-color: hsla(var(--md-hue), 16%, 21%, 1);
+}
+
+/* 한국어는 어절 중간에서 끊으면 급격히 읽기 어려워진다. keep-all이 그것을 막는다.
+
+   본문은 0.7rem(14px)이다. Material 기본값 0.8rem(16px)에서 줄인 이유는
+   한글의 글자 크기 체감이 영문과 다르기 때문이다. 영문 소문자는 x-height가 em의
+   0.52 정도만 차지하는데 한글은 네모틀을 거의 채운다. 그래서 같은 px에서 한글이
+   15~20% 커 보인다. 영문 본문 16px에 맞먹는 한글 크기가 14~15px다.
+
+   14px 아래로는 내리지 않는다. 한글은 자소가 모여 한 글자를 이루므로 작아지면
+   받침이 뭉개진다. 라틴 문자보다 하한이 높다. */
+.md-typeset {
+  font-size: 0.7rem;
+  line-height: 1.75;
+  word-break: keep-all;
+  overflow-wrap: break-word;
+}
+.md-typeset p, .md-typeset li { letter-spacing: -0.003em; }
+
+/* 제목은 본문 행간을 물려받으면 안 된다. 1.72가 상속되면 제목 하나가 본문 두 줄
+   높이를 먹어 화면이 성기게 보인다. 제목은 짧으니 촘촘히 둔다. */
+.md-typeset h1, .md-typeset h2, .md-typeset h3,
+.md-typeset h4, .md-typeset h5, .md-typeset h6 {
+  line-height: 1.35;
+  word-break: keep-all;
+}
+.md-typeset h1 { font-size: 1.7em; }
+.md-typeset h2 { font-size: 1.32em; }
+.md-typeset h3 { font-size: 1.1em; }
+
+/* 문단 간격도 함께 줄인다. 행간을 줄여 놓고 문단 사이가 넓으면 리듬이 어긋난다. */
+.md-typeset p { margin: 0.7em 0; }
+.md-typeset ul, .md-typeset ol { margin-top: 0.5em; margin-bottom: 0.7em; }
+.md-typeset li { margin-bottom: 0.28em; }
+.md-typeset li > ul, .md-typeset li > ol { margin-top: 0.28em; }
+
+/* 본문 폭. 비교표가 많아 기본 45rem으로는 셀이 짓눌린다. */
+/* 본문이 작아진 만큼 폭도 함께 줄인다. 글자가 작은데 줄이 길면 시선이 되돌아올
+   자리를 잃는다. 비교표는 아래 overflow-x로 따로 처리한다. */
+.md-grid { max-width: 60rem; }
+
+/* 표 — 이 문서군의 핵심 표현 수단이다. 조밀하게, 헤더는 고정 톤으로. */
+.md-typeset table:not([class]) { font-size: 0.68rem; line-height: 1.6; display: table; margin: 0.8em 0; }
+.md-typeset table:not([class]) th { font-weight: 600; white-space: nowrap; }
+.md-typeset table:not([class]) td,
+.md-typeset table:not([class]) th { padding: 0.5em 0.9em; }
+.md-typeset__table { overflow-x: auto; }
+
+/* 코드 블록은 한글 본문보다 조금 작게 두어야 시각 무게가 맞는다. */
+/* 코드는 라틴 monospace다. 한글 본문과 같은 rem이면 오히려 작아 보이므로 맞춰 둔다. */
+.md-typeset pre > code { font-size: 0.7rem; line-height: 1.5; }
+.md-typeset .highlight { margin: 0.8em 0; }
+.md-typeset code { word-break: normal; }
+
+/* 코드 블록의 경계.
+
+   Material 기본은 아주 옅은 회색 배경뿐이라 흰 바탕에서 블록이 어디서 시작해
+   어디서 끝나는지 눈에 잡히지 않는다. 산문과 코드가 번갈아 나오는 문서에서는
+   그 경계가 읽는 흐름을 잡아 주는 표지다.
+
+   테두리를 두르고 위에 언어 이름을 단 띠를 얹는다. 색은 전부 Material 변수라
+   light/dark 양쪽에서 같이 따라간다. */
+.md-typeset .highlight {
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 0.15rem;
+  overflow: hidden;              /* 모서리 둥글기가 안쪽 배경에도 먹게 */
+}
+.md-typeset .highlight > pre { margin: 0; }
+
+.md-typeset .highlight::before {
+  display: block;
+  padding: 0.3em 1.1em;
+  font-family: var(--md-code-font-family);
+  font-size: 0.6rem;
+  letter-spacing: 0.03em;
+  color: var(--md-default-fg-color--light);
+  /* 띠와 코드는 같은 바탕에 두고 선 하나로 나눈다. Material이 파일 이름 띠를
+     그리는 방식과 같아서 둘이 섞여 나와도 어긋나지 않는다. */
+  background-color: var(--md-code-bg-color);
+  border-bottom: 1px solid var(--md-default-fg-color--lightest);
+}
+.md-typeset .highlight.language-cpp::before { content: "C++"; }
+.md-typeset .highlight.language-c::before { content: "C"; }
+.md-typeset .highlight.language-csharp::before { content: "C#"; }
+.md-typeset .highlight.language-java::before { content: "Java"; }
+.md-typeset .highlight.language-kotlin::before { content: "Kotlin"; }
+.md-typeset .highlight.language-typescript::before { content: "TypeScript"; }
+.md-typeset .highlight.language-javascript::before { content: "JavaScript"; }
+.md-typeset .highlight.language-go::before { content: "Go"; }
+.md-typeset .highlight.language-rust::before { content: "Rust"; }
+.md-typeset .highlight.language-python::before { content: "Python"; }
+.md-typeset .highlight.language-bash::before { content: "shell"; }
+.md-typeset .highlight.language-console::before { content: "shell"; }
+.md-typeset .highlight.language-yaml::before { content: "YAML"; }
+.md-typeset .highlight.language-json::before { content: "JSON"; }
+.md-typeset .highlight.language-xml::before { content: "XML"; }
+.md-typeset .highlight.language-cmake::before { content: "CMake"; }
+.md-typeset .highlight.language-ts::before { content: "TypeScript"; }
+.md-typeset .highlight.language-jsonc::before { content: "JSON"; }
+.md-typeset .highlight.language-ini::before { content: "INI"; }
+.md-typeset .highlight.language-toml::before { content: "TOML"; }
+.md-typeset .highlight.language-groovy::before { content: "Groovy"; }
+.md-typeset .highlight.language-gdscript::before { content: "GDScript"; }
+/* ASCII 그림과 실행 출력은 언어가 아니다. 띠 없이 테두리만 남긴다.
+   언어를 안 적은 fence도 여기로 들어온다. */
+.md-typeset .highlight.language-text::before { display: none; }
+
+/* 파일 이름(`title="..."`)을 단 블록은 Material이 이미 띠를 그린다. 겹친다. */
+.md-typeset .highlight:has(span.filename)::before { display: none; }
+.md-typeset .highlight span.filename { margin-top: 0; border-radius: 0; }
+
+/* 긴 줄은 가로 스크롤 대신 접는다.
+
+   코드 블록마다 아래에 스크롤 바가 생기면 문서를 훑는 흐름이 그때마다 끊긴다.
+   가로 스크롤은 읽는 사람이 한 번 더 조작해야 내용을 볼 수 있다는 뜻이기도 하다.
+
+   접힌 줄이 원래 다음 줄인지 이어진 줄인지 구분되지 않으면 코드를 잘못 읽는다.
+   `line_spans`가 줄마다 span을 만들어 주므로 이어지는 줄만 안쪽으로 들여 둔다.
+
+   ASCII 다이어그램(```text)과 mermaid는 제외한다. 칸을 맞춰 그린 그림이라
+   접으면 그림이 깨진다. 그쪽은 가로 스크롤이 맞다. */
+.md-typeset .highlight:not(.language-text) pre > code {
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+.md-typeset .highlight:not(.language-text) pre > code > span[id^="__span"] {
+  display: block;
+  padding-left: 2.4em;
+  text-indent: -2.4em;
+}
+
+/* 그래도 스크롤이 남는 자리(다이어그램·넓은 표)는 바를 얇게 둔다. */
+.md-typeset .highlight pre,
+.md-typeset__table { scrollbar-width: thin; }
+
+/* 제목 간격 — 장이 길어 스캔이 중요하다. 구분선은 남기되 여백은 줄인다. */
+.md-typeset h2 {
+  margin-top: 1.7em;
+  padding-top: 0.55em;
+  border-top: 1px solid var(--md-default-fg-color--lightest);
+}
+.md-typeset h3 { margin-top: 1.25em; }
+.md-typeset h4 { margin-top: 1em; }
+
+/* 다크 모드에서도 다이어그램은 밝은 종이 위에 그린다.
+
+   문서의 `classDef` 397개는 전부 옅은 파스텔 바탕(#e8f5e9·#e3f2fd·#fff3e0 등)에
+   어두운 글씨(#1b5e20·#0d47a1·#bf360c 등) 조합이다. 밝은 화면을 전제로 짠 배색이라
+   다크에서 바탕만 그대로 밝고 글씨는 테마 전경색(옅은 회색)으로 덮여 서로 묻힌다.
+
+   노드마다 글씨 색을 되돌리려면 classDef 이름을 CSS에 일일이 나열해야 하고, 새
+   이름을 쓸 때마다 빠뜨린 노드가 다시 묻힌다. 대신 다이어그램 블록만 밝은 바탕으로
+   되돌려 배색이 의도대로 작동하게 한다.
+
+   **파생 변수도 전부 다시 적어야 한다.** Material은 `:root`에서
+   `--md-mermaid-sequence-message-fg-color: var(--md-mermaid-edge-color)`처럼 스무 개
+   남짓을 파생시킨다. custom property는 선언된 그 자리에서 값이 정해지므로, 여기서
+   `--md-mermaid-edge-color`만 바꿔도 파생값은 이미 `:root`에서 다크 색으로 굳은 뒤다.
+   sequence 다이어그램의 화살표 글씨가 안 보였던 이유가 이것이다.
+
+   state·ER 다이어그램은 themeCSS가 `--md-default-*`를 직접 쓰므로 그쪽도 함께 준다. */
+[data-md-color-scheme="slate"] .md-typeset .mermaid {
+  --paper: #e8ecf0;
+  --ink: hsla(200, 18%, 26%, 1);
+  --tint: rgba(0, 191, 165, 0.12);
+  --line: #00838f;
+
+  background-color: var(--paper);
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 0.15rem;
+  padding: 0.5rem 0.3rem;
+
+  /* 기본 여섯 */
+  --md-mermaid-edge-color: var(--ink);
+  --md-mermaid-label-fg-color: var(--ink);
+  --md-mermaid-label-bg-color: var(--paper);
+  --md-mermaid-node-bg-color: var(--tint);
+  --md-mermaid-node-fg-color: var(--line);
+  --md-accent-bg-color: #ffffff;
+
+  /* :root에서 이미 다크 값으로 굳은 파생 변수들 */
+  --md-mermaid-sequence-actor-bg-color: var(--paper);
+  --md-mermaid-sequence-actor-fg-color: var(--ink);
+  --md-mermaid-sequence-actor-border-color: var(--line);
+  --md-mermaid-sequence-actor-line-color: rgba(0, 0, 0, 0.32);
+  --md-mermaid-sequence-actorman-bg-color: var(--paper);
+  --md-mermaid-sequence-actorman-line-color: var(--line);
+  --md-mermaid-sequence-box-bg-color: var(--tint);
+  --md-mermaid-sequence-box-fg-color: var(--ink);
+  --md-mermaid-sequence-label-bg-color: var(--tint);
+  --md-mermaid-sequence-label-fg-color: var(--line);
+  --md-mermaid-sequence-loop-bg-color: var(--tint);
+  --md-mermaid-sequence-loop-fg-color: var(--ink);
+  --md-mermaid-sequence-loop-border-color: var(--line);
+  --md-mermaid-sequence-message-fg-color: var(--ink);
+  --md-mermaid-sequence-message-line-color: var(--ink);
+  --md-mermaid-sequence-note-bg-color: var(--paper);
+  --md-mermaid-sequence-note-fg-color: var(--ink);
+  --md-mermaid-sequence-note-border-color: var(--ink);
+  --md-mermaid-sequence-number-bg-color: var(--line);
+  --md-mermaid-sequence-number-fg-color: #ffffff;
+
+  /* themeCSS가 직접 참조하는 테마 색(state cluster·divider, ER entity) */
+  --md-default-bg-color: #ffffff;
+  --md-default-fg-color--lightest: rgba(0, 0, 0, 0.07);
+  --md-default-fg-color--lighter: rgba(0, 0, 0, 0.32);
+}
+
+/* 인용(샘플에서 보기 / 계약 소유 문서)은 본문과 확실히 구분한다. */
+.md-typeset blockquote { border-left-width: 3px; }

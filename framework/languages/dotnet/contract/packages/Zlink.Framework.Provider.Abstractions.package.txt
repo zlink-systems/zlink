@@ -1,0 +1,18 @@
+package Zlink.Framework.Provider.Abstractions
+entry LICENSE
+entry Zlink.Framework.Provider.Abstractions.nuspec
+entry [Content_Types].xml
+entry _rels/.rels
+entry lib/net8.0/Zlink.Framework.Provider.Abstractions.dll
+entry lib/net8.0/Zlink.Framework.Provider.Abstractions.xml
+entry package/services/metadata/core-properties/{CORE_PROPERTIES}.psmdcp
+content-sha256 lib/net8.0/Zlink.Framework.Provider.Abstractions.xml=816db3eb19baaecb938ae0ea3bf30f84659946d5d1f3c5eb3fd3a2942904eca2
+metadata authors=Zlink.Framework.Provider.Abstractions
+metadata description=Minimal provider contracts for ZLink framework stores.
+metadata id=Zlink.Framework.Provider.Abstractions
+metadata license=LICENSE type=file
+metadata licenseUrl=https://aka.ms/deprecateLicenseUrl
+metadata projectUrl=https://github.com/kairos-code-dev/zlink
+metadata version={VERSION}
+metadata repository commit={COMMIT} type=git
+dependency-group targetFramework=net8.0

@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <ProjectReference Include="../../Shared/ObservabilityOps.Shared.csproj" />
+    <ProjectReference Include="../../../../src/Zlink.Framework/Zlink.Framework.csproj" />
+  </ItemGroup>
+</Project>

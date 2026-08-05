@@ -1,0 +1,20 @@
+package Zlink.Framework.Codecs.MessagePack
+entry LICENSE
+entry Zlink.Framework.Codecs.MessagePack.nuspec
+entry [Content_Types].xml
+entry _rels/.rels
+entry lib/net8.0/Zlink.Framework.Codecs.MessagePack.dll
+entry lib/net8.0/Zlink.Framework.Codecs.MessagePack.xml
+entry package/services/metadata/core-properties/{CORE_PROPERTIES}.psmdcp
+content-sha256 lib/net8.0/Zlink.Framework.Codecs.MessagePack.xml=089f919c2cef553bedfdcde70d04a3ea83dcf2def0e07c3b60405de3e46e30c5
+metadata authors=Zlink.Framework.Codecs.MessagePack
+metadata description=MessagePack codec extension for the ZLink .NET framework.
+metadata id=Zlink.Framework.Codecs.MessagePack
+metadata license=LICENSE type=file
+metadata licenseUrl=https://aka.ms/deprecateLicenseUrl
+metadata projectUrl=https://github.com/kairos-code-dev/zlink
+metadata version={VERSION}
+metadata repository commit={COMMIT} type=git
+dependency-group targetFramework=net8.0
+dependency targetFramework=net8.0 exclude=Build,Analyzers id=MessagePack version=3.1.7
+dependency targetFramework=net8.0 exclude=Build,Analyzers id=Zlink.Framework version={VERSION}

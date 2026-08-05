@@ -1,0 +1,32 @@
+plugins {
+    id 'application'
+}
+
+def jvmZmqJar = file('/tmp/jvm-zmq-v05/zmq/build/libs/zmq-0.5.jar')
+def jvmZmqCoreJar = file('/tmp/jvm-zmq-v05/zmq-core/build/libs/zmq-core-0.5.jar')
+if (!jvmZmqJar.isFile()) {
+    throw new GradleException("missing jvm-zmq jar: ${jvmZmqJar}")
+}
+if (!jvmZmqCoreJar.isFile()) {
+    throw new GradleException("missing jvm-zmq core jar: ${jvmZmqCoreJar}")
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation files(jvmZmqJar, jvmZmqCoreJar)
+    compileOnly 'io.netty:netty-buffer:4.1.100.Final'
+    runtimeOnly 'io.netty:netty-buffer:4.1.100.Final'
+}
+
+application {
+    mainClass = 'dev.kairoscode.stream.JvmZmqStreamServer'
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(22)
+    }
+}

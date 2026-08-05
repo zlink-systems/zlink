@@ -1,0 +1,28 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "rootDir": "src",
+    "outDir": "dist",
+    "declaration": true,
+    "stripInternal": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "strict": false,
+    "types": [
+      "node"
+    ]
+  },
+  "include": [
+    "src/index.ts",
+    "src/zlink/**/*.ts"
+  ],
+  "exclude": [
+    "dist",
+    "prebuilds",
+    "native",
+    "node_modules"
+  ]
+}

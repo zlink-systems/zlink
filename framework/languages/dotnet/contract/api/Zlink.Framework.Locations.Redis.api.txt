@@ -1,0 +1,28 @@
+assembly Zlink.Framework.Locations.Redis
+  type sealed-class Zlink.Framework.Locations.Redis.ZLinkRedisLocationOptions
+    ctor ZLinkRedisLocationOptions()
+    property StackExchange.Redis.ConfigurationOptions? ConfigurationOptions { get; set; } [nullability=read:nullable,write:nullable]
+    property System.String? ConnectionString { get; set; } [nullability=read:nullable,write:nullable]
+    property System.String KeyPrefix { get; set; } [nullability=read:not-null,write:not-null]
+    property System.TimeSpan OperationTimeout { get; set; } [nullability=read:not-null,write:not-null]
+  type sealed-class Zlink.Framework.Locations.Redis.ZLinkRedisLocationStore : System.IAsyncDisposable, Zlink.Framework.LocationProvider.IZLinkLocationStore
+    ctor ZLinkRedisLocationStore(System.Action<Zlink.Framework.Locations.Redis.ZLinkRedisLocationOptions> configure [nullability=read:not-null,write:not-null])
+    ctor ZLinkRedisLocationStore(Zlink.Framework.Locations.Redis.ZLinkRedisLocationOptions options [nullability=read:not-null,write:not-null])
+    method virtual System.Threading.Tasks.ValueTask DisposeAsync() [return=read:not-null,write:not-null]
+    method virtual System.Threading.Tasks.ValueTask<Zlink.Framework.LocationProvider.ZLinkStoreReadResult> ReadAsync(Zlink.Framework.LocationProvider.ZLinkStoreKey key [nullability=read:not-null,write:not-null], System.Threading.CancellationToken cancellationToken = default [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method virtual System.Threading.Tasks.ValueTask<Zlink.Framework.LocationProvider.ZLinkStoreScanResult> ScanAsync(Zlink.Framework.LocationProvider.ZLinkStoreScanRequest request [nullability=read:not-null,write:not-null], System.Threading.CancellationToken cancellationToken = default [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method virtual System.Threading.Tasks.ValueTask<Zlink.Framework.LocationProvider.ZLinkStoreWriteResult> WriteAsync(Zlink.Framework.LocationProvider.ZLinkStoreWriteRequest request [nullability=read:not-null,write:not-null], System.Threading.CancellationToken cancellationToken = default [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+  type sealed-class Zlink.Framework.Locations.Redis.ZLinkRedisRelocationOptions
+    ctor ZLinkRedisRelocationOptions()
+    property StackExchange.Redis.ConfigurationOptions? ConfigurationOptions { get; set; } [nullability=read:nullable,write:nullable]
+    property System.String? ConnectionString { get; set; } [nullability=read:nullable,write:nullable]
+    property System.String KeyPrefix { get; set; } [nullability=read:not-null,write:not-null]
+    property System.TimeSpan OperationTimeout { get; set; } [nullability=read:not-null,write:not-null]
+  type sealed-class Zlink.Framework.Locations.Redis.ZLinkRedisRelocationStore : System.IAsyncDisposable, Zlink.Framework.LocationProvider.IZLinkRelocationStore
+    ctor ZLinkRedisRelocationStore(System.Action<Zlink.Framework.Locations.Redis.ZLinkRedisRelocationOptions> configure [nullability=read:not-null,write:not-null])
+    ctor ZLinkRedisRelocationStore(Zlink.Framework.Locations.Redis.ZLinkRedisRelocationOptions options [nullability=read:not-null,write:not-null])
+    method virtual System.Threading.Tasks.ValueTask DeleteAsync(Zlink.Framework.LocationProvider.ZLinkBlobReference reference [nullability=read:not-null,write:not-null], System.Threading.CancellationToken cancellationToken = default [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method virtual System.Threading.Tasks.ValueTask DisposeAsync() [return=read:not-null,write:not-null]
+    method virtual System.Threading.Tasks.ValueTask<Zlink.Framework.LocationProvider.ZLinkBlobPutResult> PutAsync(Zlink.Framework.LocationProvider.ZLinkBlobReference reference [nullability=read:not-null,write:not-null], System.ReadOnlyMemory<System.Byte> payload [nullability=read:not-null,write:not-null], System.TimeSpan retention [nullability=read:not-null,write:not-null], System.Threading.CancellationToken cancellationToken = default [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method virtual System.Threading.Tasks.ValueTask<Zlink.Framework.LocationProvider.ZLinkBlobReadResult> ReadAsync(Zlink.Framework.LocationProvider.ZLinkBlobReference reference [nullability=read:not-null,write:not-null], System.Threading.CancellationToken cancellationToken = default [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method virtual System.Threading.Tasks.ValueTask<Zlink.Framework.LocationProvider.ZLinkBlobRenewResult> RenewAsync(Zlink.Framework.LocationProvider.ZLinkBlobReference reference [nullability=read:not-null,write:not-null], System.TimeSpan retention [nullability=read:not-null,write:not-null], System.Threading.CancellationToken cancellationToken = default [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]

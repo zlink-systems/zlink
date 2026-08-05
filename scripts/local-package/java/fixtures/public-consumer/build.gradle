@@ -1,0 +1,17 @@
+plugins {
+    id 'application'
+}
+
+repositories {
+    maven { url = uri(System.getenv('ZLINK_LOCAL_MAVEN_REPOSITORY')) }
+    mavenCentral()
+}
+
+dependencies {
+    implementation 'systems.zlink:zlink:@BINDING_VERSION@'
+}
+
+application {
+    mainClass = 'consumer.PublicConsumer'
+    applicationDefaultJvmArgs = ['--enable-native-access=ALL-UNNAMED']
+}

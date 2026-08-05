@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "zlink-v11-ledger-candidate-v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "ledgerId", "baseRevision", "ownedPaths", "directInputs", "pathCount", "aggregateSha256", "files"],
+  "properties": {
+    "schema": { "const": "zlink-v11-ledger-candidate-v1" },
+    "ledgerId": { "type": "string", "minLength": 1 },
+    "baseRevision": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "ownedPaths": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+    "directInputs": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "contentSha256"],
+        "properties": {
+          "path": { "type": "string", "minLength": 1 },
+          "contentSha256": { "$ref": "#/$defs/sha256" }
+        }
+      }
+    },
+    "pathCount": { "type": "integer", "minimum": 1 },
+    "aggregateSha256": { "$ref": "#/$defs/sha256" },
+    "files": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "status", "mode", "contentSha256", "baseContentSha256"],
+        "properties": {
+          "path": { "type": "string", "minLength": 1 },
+          "status": { "enum": ["added", "modified", "deleted", "observed"] },
+          "mode": { "type": ["string", "null"] },
+          "contentSha256": { "anyOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] },
+          "baseContentSha256": { "anyOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] }
+        }
+      }
+    }
+  },
+  "$defs": { "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" } }
+}

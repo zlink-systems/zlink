@@ -1,0 +1,8 @@
+{
+  "name": "zlink-node-public-consumer",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@zlink-systems/zlink": "11.2.0"
+  }
+}

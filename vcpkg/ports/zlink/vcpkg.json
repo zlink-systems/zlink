@@ -1,0 +1,10 @@
+{
+  "name": "zlink",
+  "version-string": "5.3.0",
+  "description": "libzlink core library",
+  "homepage": "https://github.com/ulala-x/zlink",
+  "license": "MPL-2.0",
+  "dependencies": [
+    "openssl"
+  ]
+}

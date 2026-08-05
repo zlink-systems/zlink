@@ -1,0 +1,3 @@
+moodycamel::ConcurrentQueue v1.0.3
+source: https://github.com/cameron314/concurrentqueue
+upstream-tag: v1.0.3

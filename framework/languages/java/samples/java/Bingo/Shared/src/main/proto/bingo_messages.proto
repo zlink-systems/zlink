@@ -1,0 +1,213 @@
+syntax = "proto3";
+
+package zlink.samples.bingo;
+
+option java_package = "systems.zlink.samples.bingo.shared.contracts";
+option java_outer_classname = "Messages";
+
+message AuthenticateReq {
+  string access_token = 1;
+}
+
+message AuthenticateRes {
+  string actor_id = 1;
+  string display_name = 2;
+  reserved 3;
+}
+
+message AuthenticatePlayerReq {
+  string access_token = 1;
+}
+
+message AuthenticatePlayerRes {
+  bool accepted = 1;
+  string actor_id = 2;
+  string display_name = 3;
+  string reason = 4;
+}
+
+message GetPlayerRecordReq {
+  string actor_id = 1;
+}
+
+message GetPlayerRecordRes {
+  string actor_id = 1;
+  int32 wins = 2;
+  int32 losses = 3;
+}
+
+message ReportBingoResultReq {
+  string room_id = 1;
+  string actor_id = 2;
+  bool won = 3;
+  int32 final_draw_seq = 4;
+}
+
+message ReportBingoResultRes {
+  string actor_id = 1;
+  int32 wins = 2;
+  int32 losses = 3;
+}
+
+message EnsurePlayerActorReq {
+  string actor_id = 1;
+  string display_name = 2;
+  reserved 3;
+}
+
+message EnsurePlayerActorRes {
+  string actor_id = 1;
+  string actor_type = 2;
+  reserved 3;
+}
+
+message MatchBingoReq {
+  string mode = 1;
+}
+
+message MatchBingoRes {
+  string room_id = 1;
+  BingoRoomState state = 2;
+  reserved 3;
+}
+
+message MatchBingoApiReq {
+  string actor_id = 1;
+  string display_name = 2;
+  string mode = 3;
+  reserved 4;
+}
+
+message MatchBingoApiRes {
+  string room_id = 1;
+  reserved 2;
+}
+
+message ReserveBingoRoomReq {
+  string mode = 1;
+  string actor_id = 2;
+  string level_bucket = 3;
+}
+
+message ReserveBingoRoomRes {
+  string room_id = 1;
+  BingoRoomSettingsPayload settings = 2;
+}
+
+message BingoRoomSettingsPayload {
+  string room_name = 1;
+  string mode = 2;
+  int32 required_players = 3;
+  int32 max_draw_number = 4;
+  string purpose = 5;
+  optional string observed_room_id = 6;
+}
+
+message BingoRoomJoinReq {
+  string room_id = 1;
+  string actor_id = 2;
+  string display_name = 3;
+  bool observe_only = 4;
+}
+
+message BingoRoomJoinRes {
+  BingoRoomState state = 1;
+}
+
+message SubmitBingoCardReq {
+  string room_id = 1;
+  repeated int32 card = 2;
+}
+
+message SubmitBingoCardRes {
+  BingoRoomState state = 1;
+}
+
+message ObserveBingoEventsReq {
+  string room_id = 1;
+}
+
+message ObserveBingoEventsRes {
+  bool subscribed = 1;
+  reserved 2;
+}
+
+message StopObservingBingoEventsReq {
+  string room_id = 1;
+}
+
+message StopObservingBingoEventsRes {
+  bool stopped = 1;
+  reserved 2;
+}
+
+message PlayerJoinedNotify {
+  string room_id = 1;
+  string actor_id = 2;
+  string display_name = 3;
+  int32 seat = 4;
+  bool is_host = 5;
+  BingoRoomState state = 6;
+}
+
+message BingoGameStartedNotify {
+  BingoRoomState state = 1;
+}
+
+message BingoNumberDrawnNotify {
+  string room_id = 1;
+  int32 draw_seq = 2;
+  int32 number = 3;
+  BingoRoomState state = 4;
+}
+
+message BingoStateNotify {
+  BingoRoomState state = 1;
+}
+
+message BingoGameEndedNotify {
+  BingoRoomState state = 1;
+}
+
+message BingoRewardAnnouncedNotify {
+  string room_id = 1;
+  string actor_id = 2;
+  int32 draw_seq = 3;
+  string item_id = 4;
+  string item_name = 5;
+  string rarity = 6;
+  reserved 7;
+}
+
+message BingoRewardAcquiredEvent {
+  string room_id = 1;
+  string actor_id = 2;
+  int32 draw_seq = 3;
+  string item_id = 4;
+  string item_name = 5;
+  string rarity = 6;
+}
+
+message BingoRoomState {
+  string room_id = 1;
+  string status = 2;
+  string host_actor_id = 3;
+  bool can_start = 4;
+  int32 draw_seq = 5;
+  optional int32 last_drawn_number = 6;
+  repeated int32 drawn_numbers = 7;
+  repeated BingoPlayerState players = 8;
+  repeated string winners = 9;
+}
+
+message BingoPlayerState {
+  string actor_id = 1;
+  string display_name = 2;
+  int32 seat = 3;
+  bool is_host = 4;
+  repeated int32 card = 5;
+  repeated bool marks = 6;
+  int32 completed_lines = 7;
+  int32 wins = 8;
+  int32 losses = 9;
+}

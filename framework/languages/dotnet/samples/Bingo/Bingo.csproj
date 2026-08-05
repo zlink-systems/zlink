@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>12.0</LangVersion>
+    <IsPackable>false</IsPackable>
+    <AssemblyName>Bingo</AssemblyName>
+    <RootNamespace>Bingo</RootNamespace>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="Shared\Bingo.Shared.csproj" />
+    <ProjectReference Include="Client\Bingo.Client.csproj" />
+    <ProjectReference Include="Server\Api\Bingo.Server.Api.csproj" />
+    <ProjectReference Include="Server\Configuration\Bingo.Server.Configuration.csproj" />
+    <ProjectReference Include="Server\Matchmaking\Bingo.Server.Matchmaking.csproj" />
+    <ProjectReference Include="Server\Play\Bingo.Server.Play.csproj" />
+    <ProjectReference Include="Server\Session\Bingo.Server.Session.csproj" />
+  </ItemGroup>
+</Project>

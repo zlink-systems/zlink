@@ -1,0 +1,29 @@
+{
+  "files": [],
+  "references": [
+    {
+      "path": "./packages/stream-wire"
+    },
+    {
+      "path": "./packages/framework"
+    },
+    {
+      "path": "./packages/stream-connector"
+    },
+    {
+      "path": "./packages/framework-codec-msgpack"
+    },
+    {
+      "path": "./packages/framework-codec-protobuf"
+    },
+    {
+      "path": "./packages/framework-locations-redis"
+    },
+    {
+      "path": "./packages/http-client"
+    },
+    {
+      "path": "./packages/nestjs"
+    }
+  ]
+}

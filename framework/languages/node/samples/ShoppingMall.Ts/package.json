@@ -1,0 +1,9 @@
+{
+  "name": "@zlink-systems/sample-shoppingmall-ts",
+  "version": "0.1.0-SNAPSHOT",
+  "private": true,
+  "main": "dist/Client/main.js",
+  "scripts": {
+    "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && node ../../node_modules/typescript/bin/tsc -p tsconfig.json && node ../../scripts/bundle-node-sample-clients.mjs . Client/main.ts"
+  }
+}

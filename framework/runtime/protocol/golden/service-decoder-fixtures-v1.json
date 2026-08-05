@@ -1,0 +1,319 @@
+{
+  "schema": "zlink-service-wire-decoder-fixtures-v1",
+  "wireMajor": 1,
+  "probeId": "72623859790382856",
+  "canonical": [
+    {
+      "name": "livenessProbe",
+      "commandId": 5,
+      "bytes": [
+        90,
+        77,
+        1,
+        5,
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8
+      ]
+    },
+    {
+      "name": "livenessAck",
+      "commandId": 6,
+      "bytes": [
+        90,
+        77,
+        1,
+        6,
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8
+      ],
+      "echoesProbeIdFrom": "livenessProbe"
+    }
+  ],
+  "malformed": [
+    {
+      "name": "wrongMagic",
+      "bytes": [
+        0,
+        77,
+        1,
+        5,
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8
+      ],
+      "error": "invalid-magic"
+    },
+    {
+      "name": "unknownCommand",
+      "bytes": [
+        90,
+        77,
+        1,
+        7,
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8
+      ],
+      "error": "unknown-command"
+    },
+    {
+      "name": "forbiddenFlag",
+      "bytes": [
+        90,
+        77,
+        1,
+        5,
+        1,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8
+      ],
+      "error": "forbidden-flag"
+    },
+    {
+      "name": "zeroProbeId",
+      "bytes": [
+        90,
+        77,
+        1,
+        5,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "error": "invalid-field"
+    },
+    {
+      "name": "truncatedProbeId",
+      "bytes": [
+        90,
+        77,
+        1,
+        5,
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "error": "truncated-field"
+    },
+    {
+      "name": "trailingByte",
+      "bytes": [
+        90,
+        77,
+        1,
+        5,
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        0
+      ],
+      "error": "trailing-byte"
+    }
+  ],
+  "frameworkErrors": {
+    "publicMapping": "wire-value-minus-one",
+    "canonical": [
+      {
+        "name": "none",
+        "wireValue": 0,
+        "publicValue": null
+      },
+      {
+        "name": "actorRouteNotFound",
+        "wireValue": 1,
+        "publicValue": 0
+      },
+      {
+        "name": "actorCreateFailed",
+        "wireValue": 2,
+        "publicValue": 1
+      },
+      {
+        "name": "actorAlreadyExists",
+        "wireValue": 3,
+        "publicValue": 2
+      },
+      {
+        "name": "actorTypeMismatch",
+        "wireValue": 4,
+        "publicValue": 3
+      },
+      {
+        "name": "spotCreateFailed",
+        "wireValue": 5,
+        "publicValue": 4
+      },
+      {
+        "name": "spotRouteNotFound",
+        "wireValue": 6,
+        "publicValue": 5
+      },
+      {
+        "name": "spotTypeMismatch",
+        "wireValue": 7,
+        "publicValue": 6
+      },
+      {
+        "name": "actorSessionNotBound",
+        "wireValue": 8,
+        "publicValue": 7
+      },
+      {
+        "name": "handlerNotFound",
+        "wireValue": 9,
+        "publicValue": 8
+      },
+      {
+        "name": "routeHandlerNotFound",
+        "wireValue": 10,
+        "publicValue": 9
+      },
+      {
+        "name": "actorDispatchHandlerNotFound",
+        "wireValue": 11,
+        "publicValue": 10
+      },
+      {
+        "name": "payloadDecodeFailed",
+        "wireValue": 12,
+        "publicValue": 11
+      },
+      {
+        "name": "routeNotConnected",
+        "wireValue": 13,
+        "publicValue": 12
+      },
+      {
+        "name": "requestTargetNotFound",
+        "wireValue": 14,
+        "publicValue": 13
+      },
+      {
+        "name": "requestRejected",
+        "wireValue": 15,
+        "publicValue": 14
+      },
+      {
+        "name": "requestProtocolError",
+        "wireValue": 16,
+        "publicValue": 15
+      },
+      {
+        "name": "requestFailed",
+        "wireValue": 17,
+        "publicValue": 16
+      },
+      {
+        "name": "workerQueueFull",
+        "wireValue": 18,
+        "publicValue": 17
+      },
+      {
+        "name": "workerTimedOut",
+        "wireValue": 19,
+        "publicValue": 18
+      },
+      {
+        "name": "workerFailed",
+        "wireValue": 20,
+        "publicValue": 19
+      },
+      {
+        "name": "actorLocationStale",
+        "wireValue": 21,
+        "publicValue": 20
+      },
+      {
+        "name": "actorCreateRejected",
+        "wireValue": 22,
+        "publicValue": 21
+      },
+      {
+        "name": "spotGenerationStale",
+        "wireValue": 33,
+        "publicValue": 32
+      },
+      {
+        "name": "spotMoving",
+        "wireValue": 34,
+        "publicValue": 33
+      },
+      {
+        "name": "relocationDataLost",
+        "wireValue": 35,
+        "publicValue": 34
+      }
+    ],
+    "reservedWireValues": {
+      "first": 23,
+      "last": 32,
+      "reason": "public-only-framework-errors-not-valid-on-service-wire"
+    },
+    "malformed": [
+      {
+        "name": "reservedPublicOnlyFirst",
+        "wireValue": 23,
+        "error": "unknown-framework-error"
+      },
+      {
+        "name": "reservedPublicOnlyLast",
+        "wireValue": 32,
+        "error": "unknown-framework-error"
+      },
+      {
+        "name": "unknownAfterRelocationDataLost",
+        "wireValue": 36,
+        "error": "unknown-framework-error"
+      }
+    ]
+  }
+}

@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+    <PropertyGroup>
+        <TargetFramework>net8.0</TargetFramework>
+        <AssemblyName>StoreFailure.Shared</AssemblyName>
+        <RootNamespace>StoreFailure.Shared</RootNamespace>
+    </PropertyGroup>
+</Project>

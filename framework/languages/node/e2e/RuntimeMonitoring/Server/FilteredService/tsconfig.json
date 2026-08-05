@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+    "outDir": "dist",
+    "rootDir": "../..",
+    "baseUrl": ".",
+    "paths": {
+      "@zlink-systems/framework-locations-redis": [
+        "../../../../packages/framework-locations-redis/dist"
+      ]
+    }
+  },
+  "include": ["**/*.ts", "../Service/**/*.ts", "../../Shared/**/*.ts"]
+}

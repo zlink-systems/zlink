@@ -1,0 +1,25 @@
+# Build directory
+build/
+
+# Test executables
+test_basic
+test_basic.exe
+test_curve
+test_curve.exe
+
+# CMake build artifacts
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.vcxproj
+*.vcxproj.filters
+*.sln
+
+# Visual Studio artifacts
+.vs/
+*.user
+
+# Test results
+*.log
+*.xml

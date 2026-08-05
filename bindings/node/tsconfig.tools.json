@@ -1,0 +1,23 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": "dist-tools",
+    "declaration": false,
+    "sourceMap": false,
+    "moduleDetection": "force"
+  },
+  "include": [
+    "tests/**/*.ts",
+    "samples/**/*.ts",
+    "perf/**/*.ts"
+  ],
+  "exclude": [
+    "dist",
+    "dist-tools",
+    "build",
+    "native",
+    "node_modules",
+    "tests/socket_surface.typecheck.ts"
+  ]
+}

@@ -1,0 +1,9 @@
+<Project>
+  <ItemGroup Condition="'$(MSBuildProjectName)' == 'SampleCommon'">
+    <ProjectReference Include="$(MSBuildThisFileDirectory)..\src\Zlink\Zlink.csproj" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(MSBuildProjectName)' != 'SampleCommon'">
+    <ProjectReference Include="$(MSBuildThisFileDirectory)SampleCommon\SampleCommon.csproj" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+    <PropertyGroup>
+        <TargetFramework>net8.0</TargetFramework>
+        <OutputType>Exe</OutputType>
+        <AssemblyName>ResilienceLifecycle.Client</AssemblyName>
+        <RootNamespace>ResilienceLifecycle.Client</RootNamespace>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="../Shared/ResilienceLifecycle.Shared.csproj"/>
+        <PackageReference Include="Microsoft.Extensions.Hosting"/>
+        <PackageReference Include="Zlink.HttpClient"/>
+        <ProjectReference Include="../../../src/Zlink.Framework/Zlink.Framework.csproj"/>
+        <ProjectReference Include="../../../src/Zlink.Framework.Provider.Abstractions/Zlink.Framework.Provider.Abstractions.csproj"/>
+        <ProjectReference Include="../../../src/Zlink.Framework.AspNetCore/Zlink.Framework.AspNetCore.csproj"/>
+        <ProjectReference Include="../../../src/Zlink.Framework.Locations.Redis/Zlink.Framework.Locations.Redis.csproj"/>
+        <ProjectReference Include="../../../src/Systems.Zlink.Stream.Connector/Systems.Zlink.Stream.Connector.csproj"/>
+    </ItemGroup>
+</Project>

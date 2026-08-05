@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": [],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "rootDir": "src",
+    "outDir": "dist/browser",
+    "skipLibCheck": true,
+    "baseUrl": "../..",
+    "paths": {
+      "@zlink-systems/stream-connector": ["packages/stream-connector/dist/browser"],
+      "@zlink-systems/stream-wire": ["packages/stream-wire/dist"]
+    }
+  },
+  "include": ["src/index.ts"]
+}

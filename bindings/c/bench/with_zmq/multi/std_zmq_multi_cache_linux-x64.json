@@ -1,0 +1,156 @@
+{
+  "meta": {
+    "arch_tag": "x64",
+    "build_dir": "/home/hep7/project/kairos/zlink/core/build/bin",
+    "libzmq_lib_dir": "/home/hep7/project/kairos/zlink/bindings/c/bench/with_zmq/libzmq/libzmq_dist/linux-x64/lib",
+    "platform_tag": "linux",
+    "updated_at_utc": "2026-02-22T16:10:57.404668+00:00"
+  },
+  "patterns": {
+    "MULTI_DEALER_DEALER": {
+      "data": {
+        "tcp|1024|latency": 43.69,
+        "tcp|1024|throughput": 579136.8,
+        "tcp|131072|latency": 140.09,
+        "tcp|131072|throughput": 10285.8,
+        "tcp|256|latency": 31.13,
+        "tcp|256|throughput": 1066280.2,
+        "tcp|262144|latency": 157.91,
+        "tcp|262144|throughput": 6137.4,
+        "tcp|64|latency": 30.64,
+        "tcp|64|throughput": 1705093.4,
+        "tcp|65536|latency": 109.23,
+        "tcp|65536|throughput": 21777.0
+      },
+      "failures": [],
+      "msg_sizes": [
+        64,
+        256,
+        1024,
+        65536,
+        131072,
+        262144
+      ],
+      "transports": [
+        "tcp"
+      ],
+      "updated_at_utc": "2026-02-22T15:53:39.980284+00:00"
+    },
+    "MULTI_DEALER_ROUTER": {
+      "data": {
+        "tcp|1024|latency": 43.55,
+        "tcp|1024|throughput": 570522.2,
+        "tcp|131072|latency": 130.78,
+        "tcp|131072|throughput": 11725.0,
+        "tcp|256|latency": 32.42,
+        "tcp|256|throughput": 920994.4,
+        "tcp|262144|latency": 129.9,
+        "tcp|262144|throughput": 6068.4,
+        "tcp|64|latency": 33.32,
+        "tcp|64|throughput": 1563663.6,
+        "tcp|65536|latency": 112.45,
+        "tcp|65536|throughput": 21452.4
+      },
+      "failures": [],
+      "msg_sizes": [
+        64,
+        256,
+        1024,
+        65536,
+        131072,
+        262144
+      ],
+      "transports": [
+        "tcp"
+      ],
+      "updated_at_utc": "2026-02-22T15:57:03.853256+00:00"
+    },
+    "MULTI_PUBSUB": {
+      "data": {
+        "tcp|1024|latency": 33.99,
+        "tcp|1024|throughput": 171340.0,
+        "tcp|131072|latency": 69.57,
+        "tcp|131072|throughput": 17725.0,
+        "tcp|256|latency": 34.18,
+        "tcp|256|throughput": 175640.0,
+        "tcp|262144|latency": 89.54,
+        "tcp|262144|throughput": 11149.6,
+        "tcp|64|latency": 34.96,
+        "tcp|64|throughput": 178340.0,
+        "tcp|65536|latency": 52.03,
+        "tcp|65536|throughput": 21640.0
+      },
+      "failures": [],
+      "msg_sizes": [
+        64,
+        256,
+        1024,
+        65536,
+        131072,
+        262144
+      ],
+      "transports": [
+        "tcp"
+      ],
+      "updated_at_utc": "2026-02-22T16:04:41.569263+00:00"
+    },
+    "MULTI_ROUTER_ROUTER": {
+      "data": {
+        "tcp|1024|latency": 47.53,
+        "tcp|1024|throughput": 571819.0,
+        "tcp|131072|latency": 96.71,
+        "tcp|131072|throughput": 11497.0,
+        "tcp|256|latency": 44.67,
+        "tcp|256|throughput": 984629.0,
+        "tcp|262144|latency": 84.91,
+        "tcp|262144|throughput": 5433.2,
+        "tcp|64|latency": 31.3,
+        "tcp|64|throughput": 1391250.6,
+        "tcp|65536|latency": 99.07,
+        "tcp|65536|throughput": 21436.2
+      },
+      "failures": [],
+      "msg_sizes": [
+        64,
+        256,
+        1024,
+        65536,
+        131072,
+        262144
+      ],
+      "transports": [
+        "tcp"
+      ],
+      "updated_at_utc": "2026-02-22T16:00:33.613830+00:00"
+    },
+    "MULTI_STREAM": {
+      "data": {
+        "tcp|1024|latency": 28.11,
+        "tcp|1024|throughput": 577061.2,
+        "tcp|131072|latency": 52.93,
+        "tcp|131072|throughput": 11471.8,
+        "tcp|256|latency": 34.87,
+        "tcp|256|throughput": 649169.0,
+        "tcp|262144|latency": 150.64,
+        "tcp|262144|throughput": 5666.4,
+        "tcp|64|latency": 24.15,
+        "tcp|64|throughput": 710061.8,
+        "tcp|65536|latency": 40.26,
+        "tcp|65536|throughput": 22797.2
+      },
+      "failures": [],
+      "msg_sizes": [
+        64,
+        256,
+        1024,
+        65536,
+        131072,
+        262144
+      ],
+      "transports": [
+        "tcp"
+      ],
+      "updated_at_utc": "2026-02-22T16:09:17.584286+00:00"
+    }
+  }
+}

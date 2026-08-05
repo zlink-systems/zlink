@@ -1,0 +1,123 @@
+name: Release Core Conan Package
+
+on:
+  push:
+    tags:
+      - 'core/v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Core version to publish (e.g. 0.9.0). Empty means VERSION file.'
+        required: false
+        type: string
+      conan_remote:
+        description: 'Conan remote name (default: zlink-remote)'
+        required: false
+        default: zlink-remote
+        type: string
+      publish:
+        description: 'Upload package to remote'
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  conan:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Conan 2
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "conan>=2.0,<3.0"
+          conan --version
+
+      - name: Resolve version
+        id: ver
+        shell: bash
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+          if [ -z "${VERSION}" ] && [[ "${GITHUB_REF}" == refs/tags/core/v* ]]; then
+            # Tag-driven runs derive the package version (including any
+            # -rc.N suffix) from the tag itself.
+            VERSION="${GITHUB_REF_NAME#core/v}"
+          fi
+          if [ -z "${VERSION}" ]; then
+            VERSION=$(grep '^LIBZLINK_VERSION=' VERSION | cut -d'=' -f2)
+          fi
+          if [[ "${VERSION}" == *"-rc."* ]]; then
+            echo "channel=rc" >> "$GITHUB_OUTPUT"
+          else
+            echo "channel=stable" >> "$GITHUB_OUTPUT"
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Validate conandata has source for version
+        shell: bash
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          if ! grep -q "\"${VERSION}\":" core/packaging/conan/conandata.yml; then
+            echo "conandata.yml does not contain source for version ${VERSION}" >&2
+            exit 1
+          fi
+          # Source integrity gate: the entry must pin a sha256 digest.
+          if ! python3 - "$VERSION" <<'EOF'
+          import sys, yaml
+          version = sys.argv[1]
+          with open("core/packaging/conan/conandata.yml") as f:
+              data = yaml.safe_load(f)
+          entry = data.get("sources", {}).get(version, {})
+          digest = entry.get("sha256", "")
+          if not isinstance(digest, str) or len(digest) != 64:
+              print(f"conandata.yml entry for {version} has no sha256 digest", file=sys.stderr)
+              sys.exit(1)
+          EOF
+          then
+            exit 1
+          fi
+
+      - name: Create Conan package
+        run: |
+          cd core/packaging/conan
+          conan profile detect --force
+          conan create . --version "${{ steps.ver.outputs.version }}" --build=missing
+
+      - name: Upload Conan package
+        if: github.event_name == 'push' || github.event.inputs.publish == 'true'
+        env:
+          CONAN_REMOTE_URL: ${{ secrets.CONAN_REMOTE_URL }}
+          CONAN_LOGIN_USERNAME: ${{ secrets.CONAN_LOGIN_USERNAME }}
+          CONAN_PASSWORD: ${{ secrets.CONAN_PASSWORD }}
+        run: |
+          if [ "${{ steps.ver.outputs.channel }}" = "rc" ]; then
+            # Release candidates are consumed from local Conan caches only;
+            # the immutable remote namespace stays reserved for stable.
+            echo "Skipping remote upload for release candidate ${{ steps.ver.outputs.version }}."
+            exit 0
+          fi
+          if [ -z "${CONAN_REMOTE_URL}" ] || [ -z "${CONAN_LOGIN_USERNAME}" ] || [ -z "${CONAN_PASSWORD}" ]; then
+            echo "Stable release requires Conan publish credentials." >&2
+            exit 1
+          fi
+
+          REMOTE_NAME="${{ github.event.inputs.conan_remote }}"
+          if [ -z "${REMOTE_NAME}" ]; then
+            REMOTE_NAME="zlink-remote"
+          fi
+
+          conan remote add "${REMOTE_NAME}" "${CONAN_REMOTE_URL}" --force
+          conan remote login "${REMOTE_NAME}" "${CONAN_LOGIN_USERNAME}" -p "${CONAN_PASSWORD}"
+
+          PKG_REF="zlink/${{ steps.ver.outputs.version }}"
+          conan upload "${PKG_REF}" -r "${REMOTE_NAME}" --confirm --only-recipe
+          conan upload "${PKG_REF}" -r "${REMOTE_NAME}" --confirm

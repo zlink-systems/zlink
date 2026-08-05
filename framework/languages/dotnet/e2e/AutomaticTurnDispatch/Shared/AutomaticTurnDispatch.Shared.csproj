@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+    <PropertyGroup>
+        <TargetFramework>net8.0</TargetFramework>
+        <AssemblyName>AutomaticTurnDispatch.Shared</AssemblyName>
+        <RootNamespace>AutomaticTurnDispatch.Shared</RootNamespace>
+    </PropertyGroup>
+</Project>

@@ -1,0 +1,75 @@
+{
+  "schema": "zlink-v11-oracle-manifest-v1",
+  "artifact": {
+    "id": "zlink-core-10-service-behavior-baseline",
+    "version": "10.x-frozen",
+    "sourceRevision": "1de8f43917d7c8d3d0f26dadf97c9f83ede79228",
+    "readOnly": true,
+    "child": {
+      "path": "oracle-child.mjs",
+      "sha256": "7f172bda5a098dc12f572cf7143c13f801205596c7cd34c1fdd9094568be307a"
+    },
+    "sourceEvidence": [
+      {
+        "pathAtFreeze": "core/tests/integration/test_mesh_node_basic.cpp",
+        "sha256": "8347acd8441e54c13bcf6a65bbb37afea351176ffd084cbe36a46831c7e9e81e"
+      },
+      {
+        "pathAtFreeze": "core/tests/unittest/unittest_instance_spot_wire.cpp",
+        "sha256": "c2ee3f1d1c3247c0f43a1cdc876c6d54357bc882fe072467458b8ca4b0edea54"
+      }
+    ],
+    "captureEvidence": [
+      {
+        "commandAtFreeze": "core/build/bin/test_mesh_node_basic",
+        "executableSha256": "f573f5e490aba7e22f1c61da0b537fd5a38aea505997c2e851b77af6ebd76ddb",
+        "exitCode": 0,
+        "testsPassed": 15
+      },
+      {
+        "commandAtFreeze": "core/build/bin/unittest_instance_spot_wire",
+        "executableSha256": "410ed297776210cc8fe8b96ea7a6edbb2ca261372685188f7eb837891f7969e9",
+        "exitCode": 0,
+        "testsPassed": 5
+      }
+    ]
+  },
+  "archivePolicy": {
+    "eligibleForActiveBaseline": false,
+    "excludedFromCandidateBuildLinkLoad": true,
+    "allowedConsumer": "scripts/v11/run-oracle.sh child process only"
+  },
+  "normalization": {
+    "schema": "zlink-v11-normalized-oracle-trace-v1",
+    "excludedFields": ["timestamp", "pid", "threadId", "endpoint", "latency", "throughput"]
+  },
+  "scenarios": [
+    {
+      "id": "V11-E2E-M17",
+      "disposition": "verified-baseline",
+      "outcome": "success",
+      "runner": {
+        "path": "../../../../core/build/bin/test_mesh_node_basic",
+        "sha256": "f573f5e490aba7e22f1c61da0b537fd5a38aea505997c2e851b77af6ebd76ddb"
+      },
+      "expectedTests": [
+        { "test": "test_mesh_local_multicast_and_subscription", "event": "logical-multicast", "result": "delivered" },
+        { "test": "test_mesh_local_multicast_target_specific_drop", "event": "ineligible-target", "result": "excluded" },
+        { "test": "test_mesh_publish_snapshot_cannot_cross_shutdown", "event": "shutdown-fence", "result": "enforced" }
+      ]
+    },
+    {
+      "id": "V11-E2E-M12",
+      "disposition": "verified-baseline",
+      "outcome": "error",
+      "runner": {
+        "path": "../../../../core/build/bin/unittest_instance_spot_wire",
+        "sha256": "410ed297776210cc8fe8b96ea7a6edbb2ca261372685188f7eb837891f7969e9"
+      },
+      "expectedTests": [
+        { "test": "test_stale_origin_reply_cannot_complete_restarted_generation", "event": "stale-reply", "result": "rejected" },
+        { "test": "test_forced_remote_terminal_survives_direct_and_deferred_oom", "event": "forced-terminal", "result": "preserved" }
+      ]
+    }
+  ]
+}

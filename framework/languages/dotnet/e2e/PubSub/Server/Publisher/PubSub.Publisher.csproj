@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+    <PropertyGroup>
+        <TargetFramework>net8.0</TargetFramework>
+        <AssemblyName>PubSub.Publisher</AssemblyName>
+        <RootNamespace>PubSub.Server</RootNamespace>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="../../Shared/PubSub.Shared.csproj"/>
+        <ProjectReference Include="../../../../src/Zlink.Framework/Zlink.Framework.csproj"/>
+        <ProjectReference Include="../../../../src/Zlink.Framework.AspNetCore/Zlink.Framework.AspNetCore.csproj"/>
+    </ItemGroup>
+</Project>

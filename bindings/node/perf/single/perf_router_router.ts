@@ -1,0 +1,219 @@
+// SPDX-License-Identifier: MPL-2.0
+
+'use strict';
+
+const zlink = require('@zlink-systems/zlink');
+const {
+  createMetricCollector,
+  createRunId,
+  currentEpochNs,
+  integerEnv,
+  summarizeMetrics,
+} = require('../common/perf_metrics');
+const {
+  applyContextPolicy,
+  applyAutoHwmMsgUnit,
+  applySocketPolicy,
+  benchmarkEndpoint,
+  closeSenderWorker,
+  configureTlsServer,
+  drainRouterRecvInto,
+  emitSingleSocketHwmDetail,
+  parseSingleBinaryArgs,
+  routedLargeMessageSocketPolicy,
+  runLocalSocketOneWayBenchmark,
+  spawnSenderWorker,
+  waitForWorkerError,
+  waitForMonitorConnectionReady,
+  waitForWorkerMessage,
+} = require('./perf_single_common');
+const { STOP_TOKEN_BYTES } = require('../perf_stop_token');
+
+const RECEIVER_ID = Buffer.from('router-perf-receiver', 'ascii');
+const SENDER_ID = Buffer.from('router-perf-sender', 'ascii');
+const RECEIVER_ROUTING_ID = zlink.RoutingId.from(RECEIVER_ID);
+
+function trace(message) {
+  if (process.env.PERF_NODE_TRACE === '1') {
+    console.error(`[router-router] ${message}`);
+  }
+}
+
+function partStrings(received) {
+  return received.parts.map((part) => part.data().toString());
+}
+
+function handshakeRouterReceiver(receiver) {
+  const ping = new zlink.Received();
+  receiver.recv(ping);
+  try {
+    if (ping.routingId === null || partStrings(ping).join(',') !== 'PING') {
+      throw new Error('router-router handshake receive failed');
+    }
+
+    receiver.send(ping.routingId).message(Buffer.from('PONG')).submit();
+    return ping.routingId;
+  } finally {
+    ping.close();
+  }
+}
+
+async function runRouterRouterBenchmark(msgSize, options) {
+  const socketOptions = routedLargeMessageSocketPolicy(options, msgSize);
+  if (options.transport === 'inproc') {
+    // inproc is context-local so the Worker sender path cannot reach it.
+    // Run both ROUTER sockets in one shared context with the C-faithful
+    // blocking-equivalent one-way model + the PING/PONG routing-id gate
+    // (C perf_router_router.cpp does the same handshake before active).
+    return runLocalSocketOneWayBenchmark({
+      pattern: 'ROUTER_ROUTER',
+      msgSize,
+      options: socketOptions,
+      endpointToken: 'router-router',
+      createReceiver: (ctx) => zlink.createRouterSocket(ctx),
+      createSender: (ctx) => zlink.createRouterSocket(ctx),
+      configureReceiver: (socket) => socket.setRoutingId(RECEIVER_ROUTING_ID),
+      configureSender: (socket) => socket.setRoutingId(zlink.RoutingId.from(SENDER_ID)),
+      handshake: (sender, receiver) => {
+        sender.send(RECEIVER_ROUTING_ID).message(Buffer.from('PING')).submit();
+        const senderRid = handshakeRouterReceiver(receiver);
+        const reply = new zlink.Received();
+        sender.recv(reply);
+        try {
+          if (partStrings(reply).join(',') !== 'PONG') {
+            throw new Error('router-router handshake reply failed');
+          }
+        } finally {
+          reply.close();
+        }
+        // Receiver replies/active are addressed by the sender's routing
+        // id; the sender addresses the receiver by RECEIVER_ROUTING_ID.
+        return RECEIVER_ROUTING_ID;
+      },
+      sendActive: (socket, payload, routingId) => {
+        try {
+          return socket.send(routingId).message(payload)
+            .flags(zlink.SendFlags.DontWait).submit();
+        } catch (error) {
+          if (error instanceof zlink.SubmitError
+            && (error.result === zlink.SubmitResult.Backpressured
+              || error.result === zlink.SubmitResult.NotConnected
+              || error.result === zlink.SubmitResult.NotFound)) {
+            return false;
+          }
+          const text = String(error && error.message ? error.message : error);
+          if ((error && error.code === 'EAGAIN')
+            || text.includes('Resource temporarily unavailable')) {
+            return false;
+          }
+          throw error;
+        }
+      },
+      sendStop: (socket, routingId) => {
+        socket.send(routingId).message(STOP_TOKEN_BYTES)
+          .flags(zlink.SendFlags.None).submit();
+      },
+    });
+  }
+
+  const ctx = zlink.createContext();
+  applyContextPolicy(ctx);
+  const receiver = zlink.createRouterSocket(ctx);
+  const receiverMonitor = receiver.monitorOpen([zlink.MonitorEventType.ConnectionReady]);
+  const endpoint = await benchmarkEndpoint(options.transport, `router-router-${msgSize}`);
+  let worker = null;
+
+  try {
+    applySocketPolicy(receiver, socketOptions);
+    applyAutoHwmMsgUnit(ctx, msgSize);
+    ctx.recalculateAutoHwm();
+    receiver.setRoutingId(RECEIVER_ROUTING_ID);
+    configureTlsServer(receiver, options.transport);
+    receiver.bind(endpoint);
+    worker = spawnSenderWorker({
+      kind: 'router_router',
+      transport: options.transport,
+      endpoint,
+      duration: options.duration,
+      msgSize,
+      runId: options.runId ?? 1,
+      receiverRoutingIdBytes: RECEIVER_ID,
+      senderRoutingIdBytes: SENDER_ID,
+      options: socketOptions,
+    });
+    const workerError = waitForWorkerError(worker);
+    await Promise.race([
+      waitForWorkerMessage(worker, 'connected'),
+      workerError.then((message) => Promise.reject(new Error(message.message)))
+    ]);
+    await waitForMonitorConnectionReady(receiverMonitor);
+    worker.postMessage({ type: 'handshake' });
+    handshakeRouterReceiver(receiver);
+    await Promise.race([
+      waitForWorkerMessage(worker, 'ready'),
+      workerError.then((message) => Promise.reject(new Error(message.message)))
+    ]);
+    trace('handshake done');
+
+    const activeStartNs = currentEpochNs();
+    const activeStopNs = activeStartNs
+      + BigInt(Math.floor(options.duration * 1_000_000_000));
+    const runId = createRunId(options.runId ?? 1);
+    const collector = createMetricCollector({
+      runId,
+      msgSize,
+      activeStartNs,
+      activeStopNs,
+      latencySampleStride: integerEnv('PERF_SINGLE_ROUTED_LATENCY_SAMPLE_STRIDE', 32),
+    });
+
+    // PERF_SINGLE_TEST_POLICY § 1.4 / § 2.0.1: the PING/PONG handshake
+    // above is the routing-id discovery gate (C perf_router_router.cpp
+    // does the same). No extra start/stop control channel — the receiver
+    // uses blocking recv + drain and exits on the wire stop token.
+    const recvTask = drainRouterRecvInto(
+      receiver,
+      msgSize,
+      Object.assign(collector, { runId, activeStartNs }),
+      { recordUntilNs: activeStopNs }
+    );
+    await Promise.race([
+      recvTask,
+      workerError.then((message) => Promise.reject(new Error(message.message)))
+    ]);
+    const result = collector.finish();
+    emitSingleSocketHwmDetail(receiver, 'ROUTER_ROUTER', options.transport, 'receiver', msgSize);
+    return result;
+  } finally {
+    trace('closing');
+    await closeSenderWorker(worker);
+    receiverMonitor.close();
+    receiver.close();
+    trace('receiver closed');
+    ctx.close();
+    trace('ctx closed');
+  }
+}
+
+module.exports = { runRouterRouterBenchmark };
+
+if (require.main === module) {
+  (async () => {
+    const options = parseSingleBinaryArgs(process.argv.slice(2));
+    const result = await runRouterRouterBenchmark(options.msgSize, options);
+    for (const line of summarizeMetrics(
+      'ROUTER_ROUTER',
+      options.transport,
+      options.msgSize,
+      result.latenciesNs,
+      options.duration,
+      options.libName,
+      result.accepted
+    )) {
+      console.log(line);
+    }
+  })().catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
+}

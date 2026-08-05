@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <AssemblyName>RuntimeMonitoring.ThrowingService</AssemblyName>
+    <RootNamespace>RuntimeMonitoring.Server.Service</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="../Service/Handlers/ServiceEventRecorders.cs" Link="Handlers/ServiceEventRecorders.cs" />
+    <Compile Include="../Service/Handlers/ServiceHandlers.cs" Link="Handlers/ServiceHandlers.cs" />
+    <Compile Include="../Service/Support/ServiceEvidenceStore.cs" Link="Support/ServiceEvidenceStore.cs" />
+    <Compile Include="../Service/Support/ServiceOptions.cs" Link="Support/ServiceOptions.cs" />
+    <Compile Include="../Service/Support/ChannelMonitoringRoleHost.cs" Link="Support/ChannelMonitoringRoleHost.cs" />
+    <Compile Include="../Service/Support/ApplicationDispatchGate.cs" Link="Support/ApplicationDispatchGate.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../Shared/RuntimeMonitoring.Shared.csproj" />
+    <ProjectReference Include="../../../../src/Zlink.Framework/Zlink.Framework.csproj" />
+    <ProjectReference Include="../../../../src/Zlink.Framework.AspNetCore/Zlink.Framework.AspNetCore.csproj" />
+    <ProjectReference Include="../../../../src/Zlink.Framework.Locations.Redis/Zlink.Framework.Locations.Redis.csproj"/>
+  </ItemGroup>
+</Project>

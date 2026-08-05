@@ -1,0 +1,9 @@
+/logs/*
+!/logs/.gitignore
+/build/
+/.gradle/
+/Client/build/
+/Shared/build/
+/Server/Registry/build/
+/Server/Service/build/
+/Server/Trigger/build/

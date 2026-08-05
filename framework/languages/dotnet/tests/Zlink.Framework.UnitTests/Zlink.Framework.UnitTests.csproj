@@ -1,0 +1,151 @@
+<Project Sdk="Microsoft.NET.Sdk">
+    <PropertyGroup>
+        <TargetFrameworks>$(ZLinkFrameworkTargetFrameworks)</TargetFrameworks>
+        <IsPackable>false</IsPackable>
+        <IsTestProject>true</IsTestProject>
+        <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+        <NoWarn>$(NoWarn);ZLINK1100</NoWarn>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Microsoft.Extensions.DependencyInjection"/>
+        <PackageReference Include="Microsoft.Extensions.Hosting"/>
+        <PackageReference Include="Microsoft.NET.Test.Sdk"/>
+        <PackageReference Include="Systems.Zlink"/>
+        <PackageReference Include="coverlet.collector">
+            <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+            <PrivateAssets>all</PrivateAssets>
+        </PackageReference>
+        <PackageReference Include="coverlet.msbuild">
+            <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+            <PrivateAssets>all</PrivateAssets>
+        </PackageReference>
+        <PackageReference Include="xunit"/>
+        <PackageReference Include="xunit.runner.visualstudio">
+            <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+            <PrivateAssets>all</PrivateAssets>
+        </PackageReference>
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="../../src/Zlink.Framework.Codecs.MessagePack/Zlink.Framework.Codecs.MessagePack.csproj"/>
+        <ProjectReference Include="../../src/Zlink.Framework.Codecs.Protobuf/Zlink.Framework.Codecs.Protobuf.csproj"/>
+        <ProjectReference Include="../../src/Zlink.Framework/Zlink.Framework.csproj"/>
+        <ProjectReference Include="../../src/Zlink.Framework.Provider.Abstractions/Zlink.Framework.Provider.Abstractions.csproj"/>
+        <ProjectReference Include="../../src/Zlink.Framework.AspNetCore/Zlink.Framework.AspNetCore.csproj"/>
+        <ProjectReference Include="../../src/Zlink.HttpClient/Zlink.HttpClient.csproj"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <Compile Include="AssemblyInfo.cs"/>
+        <Compile Include="Configuration/Registration/Channels.cs"/>
+        <Compile Include="Configuration/Registration/HandlerExposure.cs"/>
+        <Compile Include="Configuration/Registration/InboundDispatchOptionsTests.cs"/>
+        <Compile Include="Configuration/Registration/NodesAndServices.cs"/>
+        <Compile Include="Configuration/Registration/Monitoring.cs"/>
+        <Compile Include="Configuration/Registration/Support.cs"/>
+        <Compile Include="Configuration/Registration/TopologyExactSurface.cs"/>
+        <Compile Include="Contracts/LocationContractTests.cs"/>
+        <Compile Include="Contracts/MessageContextContractTests.cs"/>
+        <Compile Include="Contracts/ScaffoldSmokeTests.cs"/>
+        <Compile Include="Contracts/SpotContractTests.cs"/>
+        <Compile Include="Documentation/Regression.cs"/>
+        <Compile Include="Support/TestActorContext.cs"/>
+        <Compile Include="Support/OwnerLeaseTestSupport.cs"/>
+        <Compile Include="Support/ZLinkLocationStoreTestDouble.cs"/>
+        <Compile Include="Runtime/AutoConnectLoopTests.cs"/>
+        <Compile Include="Runtime/AutoConnectLifecycleCoordinatorTests.cs"/>
+        <Compile Include="Runtime/AutoConnectReconcilerTests.cs"/>
+        <Compile Include="Runtime/ActorRelocationProtocolTests.cs"/>
+        <Compile Include="Runtime/ActorRemoteJoinRecoveryCodecBoundaryTests.cs"/>
+        <Compile Include="Runtime/ActorHandoffTests.cs"/>
+        <Compile Include="Runtime/ActorHandlerActivationTests.cs"/>
+        <Compile Include="Runtime/ActorClientTests.cs"/>
+        <Compile Include="Runtime/ActorBoundSessionRelayTests.cs"/>
+        <Compile Include="Runtime/TransportFailFastTests.cs"/>
+        <Compile Include="Runtime/BackendAdapterFactoryTests.cs"/>
+        <Compile Include="Runtime/BackendStreamSocketConcurrencyTests.cs"/>
+        <Compile Include="Runtime/BackendMonitorWrapperTests.cs"/>
+        <Compile Include="Runtime/CoverageCriticalRuntimeTests.cs"/>
+        <Compile Include="Runtime/ClientServerChannelRuntimeTests.cs"/>
+        <Compile Include="Runtime/CapacityMonitoringProjectionTests.cs"/>
+        <Compile Include="Runtime/CustomSerializerEnvelopeTests.cs"/>
+        <Compile Include="Runtime/DiagnosticsIsolationCollection.cs"/>
+        <Compile Include="Runtime/DrainCoordinatorTests.cs"/>
+        <Compile Include="Runtime/Dispatch/InboundDispatchBudgetTests.cs"/>
+        <Compile Include="Runtime/Dispatch/CompletionAdmissionOwnerTests.cs"/>
+        <Compile Include="Runtime/DeferredActorJoinContractTests.cs"/>
+        <Compile Include="Runtime/DeferredActorJoinDurabilityTests.cs"/>
+        <Compile Include="Runtime/EntrySpotActorDispatchTests.cs"/>
+        <Compile Include="Runtime/EntrySpotIdentityStoreTests.cs"/>
+        <Compile Include="Runtime/FanoutAutomaticDiscoveryTests.cs"/>
+        <Compile Include="Runtime/EnvelopeCodecTests.cs"/>
+        <Compile Include="Runtime/EndpointConnectionsTests.cs"/>
+        <Compile Include="Runtime/ExactMessageFlowRuntimeTests.cs"/>
+        <Compile Include="Runtime/FlowCorrelationTests.cs"/>
+        <Compile Include="Runtime/GeneratedNodeIdentityTests.cs"/>
+        <Compile Include="Runtime/HandlerResultAwaiterTests.cs"/>
+        <Compile Include="Runtime/HttpExecutionSchedulerTests.cs"/>
+        <Compile Include="Runtime/InMemoryLocationStoreTests.cs"/>
+        <Compile Include="Runtime/LocationLifecycleTests.cs"/>
+        <Compile Include="Runtime/LocationResolverTests.cs"/>
+        <Compile Include="Runtime/LocationRuntimeQueryTests.cs"/>
+        <Compile Include="Runtime/InstanceSpotActivationJournalTests.cs"/>
+        <Compile Include="Runtime/LocationRuntimeTests.cs"/>
+        <Compile Include="Runtime/MaintenanceRuntimeTests.cs"/>
+        <Compile Include="Runtime/LogicalMulticastSubmitTests.cs"/>
+        <Compile Include="Runtime/SharedAsyncDisposalTests.cs"/>
+        <Compile Include="Runtime/SubmitAdmissionRuntimeTests.cs"/>
+        <Compile Include="Runtime/OwnerLeaseTrackerTests.cs"/>
+        <Compile Include="Runtime/ProviderLocationRepositoryAuthorityTests.cs"/>
+        <Compile Include="Runtime/ProviderRelocationRepositoryTests.cs"/>
+        <Compile Include="Runtime/MessageFlowTracerTests.cs"/>
+        <Compile Include="Runtime/MeshNodeRouteDispatcherTests.cs"/>
+        <Compile Include="Runtime/PublicContractSnapshotTests.cs"/>
+        <Compile Include="Runtime/SerialExecutorTests.cs"/>
+        <Compile Include="Runtime/ServiceRuntimeFoundationTests.cs"/>
+        <Compile Include="Runtime/ZLinkObservationQueueTests.cs"/>
+        <Compile Include="Runtime/ZLinkMeshPeerAdmissionTests.cs"/>
+        <Compile Include="Runtime/ZLinkMeshPeerControlRetryQueueTests.cs"/>
+        <Compile Include="Runtime/ServiceWireRelocationCodecTests.cs"/>
+        <Compile Include="Runtime/StatefulServiceRuntimeTests.cs"/>
+        <Compile Include="Runtime/SessionActorCoordinatorTests.cs"/>
+        <Compile Include="Runtime/StreamWireInteropTests.cs"/>
+        <Compile Include="Runtime/ZLinkStreamReceiveBufferTests.cs"/>
+        <Compile Include="Runtime/StreamSessionLivenessTests.cs"/>
+        <Compile Include="Runtime/StreamSessionForcedCleanupTests.cs"/>
+        <Compile Include="Runtime/StreamFlowEndToEndTests.cs"/>
+        <Compile Include="Runtime/TimerLifecycleTests.cs"/>
+        <Compile Include="Runtime/SpotHandlerInvokerTests.cs"/>
+        <Compile Include="Runtime/SpotIdValidationTests.cs"/>
+        <Compile Include="Runtime/SpotMessageFollowSubmitTests.cs"/>
+        <Compile Include="Runtime/SpotOutboundTransportTests.cs"/>
+        <Compile Include="Runtime/SpotRouteDispatcherTests.cs"/>
+        <Compile Include="Runtime/SpotPeerConnectorTests.cs"/>
+        <Compile Include="Runtime/SpotAutoRegistrationScannerTests.cs"/>
+        <Compile Include="Runtime/RequestFailureMappingTests.cs"/>
+        <Compile Include="Runtime/RemoteRelayFrameAssemblerTests.cs"/>
+        <Compile Include="Runtime/ReconciliationRunnerTests.cs"/>
+        <Compile Include="Runtime/RelocationRuntimeTests.cs"/>
+        <Compile Include="Runtime/RelocationTreeParallelIoTests.cs"/>
+        <Compile Include="Runtime/StandaloneActorRelocationRuntimeTests.cs"/>
+        <Compile Include="Runtime/StandaloneActorRelocationPrecommitTests.cs"/>
+        <Compile Include="Runtime/CanonicalActorAcceptedJournalTests.cs"/>
+        <Compile Include="Runtime/CanonicalAuthorityAggregateGenerationTests.cs"/>
+        <Compile Include="Runtime/CanonicalRelocationReservationOwnerTests.cs"/>
+        <Compile Include="Runtime/RelocationStartupRecoveryTests.cs"/>
+        <Compile Include="Runtime/RouteCodecTests.cs"/>
+        <Compile Include="Runtime/RouteMeshRuntimeServiceTests.cs"/>
+        <Compile Include="Runtime/RuntimeConcurrencyBoundaryTests.cs"/>
+        <Compile Include="Runtime/RuntimeMetricsTests.cs"/>
+        <Compile Include="Runtime/UnhandledDispatchPolicyTests.cs"/>
+        <Compile Include="Runtime/EntrySpotActorExactRequestMessageFlowTests.cs"/>
+        <Compile Include="Runtime/UserSpotExecutionSchedulerTests.cs"/>
+        <Compile Include="Runtime/WorkerPoolTests.cs"/>
+        <Compile Include="Runtime/WeightContractTests.cs"/>
+        <Compile Include="Runtime/ZLinkAsyncSubmitterTests.cs"/>
+        <Compile Include="../Common/FrameworkGlobalUsings.cs" Link="GlobalUsings.cs"/>
+        <Compile Include="../Common/FrameworkTestEnvironment.cs" Link="Common/FrameworkTestEnvironment.cs"/>
+        <Compile Include="../../scripts/PublicContractSnapshot.cs" Link="Runtime/PublicContractSnapshot.cs"/>
+    </ItemGroup>
+</Project>

@@ -1,0 +1,7 @@
+{
+  "linux": {
+    "requestBytes": 4096,
+    "sendBytes": 8192,
+    "receiveBytes": 8192
+  }
+}

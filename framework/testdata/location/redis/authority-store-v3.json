@@ -1,0 +1,418 @@
+{
+  "notice": "Target-first formal Redis authority fixture. Spot identity is UTF-8 string data and legacy arbitrary binary Spot RID is not accepted.",
+  "format": "location-authority-hybrid-v3",
+  "prefixRules": {
+    "examplePrefix": "P",
+    "forbiddenPrefixCharacters": [
+      "{",
+      "}"
+    ],
+    "literalHashTag": "{zlink-location-v3}",
+    "schemaKey": "P:{zlink-location-v3}:schema",
+    "schemaFields": {
+      "format": "location-authority-hybrid-v3",
+      "epoch": "3"
+    }
+  },
+  "keyContract": {
+    "objectKind": "spot",
+    "identityHex": "73",
+    "authorityKey": "zla1:s:1:s",
+    "authorityKeyHex": "7a6c61313a733a313a73",
+    "authorityKeySha256": "7fc286aedc979d52ccf0c12ce94fb688b77672d707dd676a1cb4413c29bfdf80",
+    "currentKey": "P:{zlink-location-v3}:authority:current:7fc286aedc979d52ccf0c12ce94fb688b77672d707dd676a1cb4413c29bfdf80",
+    "historyKey": "P:{zlink-location-v3}:authority:history:7fc286aedc979d52ccf0c12ce94fb688b77672d707dd676a1cb4413c29bfdf80",
+    "historyRevisionKey": "P:{zlink-location-v3}:authority:history-revisions:7fc286aedc979d52ccf0c12ce94fb688b77672d707dd676a1cb4413c29bfdf80",
+    "indexKey": "P:{zlink-location-v3}:authority:key-index"
+  },
+  "globalCounters": {
+    "key": "P:{zlink-location-v3}:counter",
+    "fields": [
+      "storeRevision",
+      "objectGeneration",
+      "authorityOwnerGeneration",
+      "leaseGeneration"
+    ],
+    "maximum": "9223372036854775807"
+  },
+  "currentHashFields": [
+    "authorityKey",
+    "payload",
+    "storeVersion",
+    "objectGeneration",
+    "authorityOwnerGeneration",
+    "ownerId",
+    "ownerLeaseGeneration",
+    "allocationState",
+    "objectKind",
+    "stableType",
+    "descriptorKey",
+    "descriptorLifecycleGeneration",
+    "capacityBundle"
+  ],
+  "reservedCurrentHashFields": [
+    "authorityKey",
+    "payload",
+    "storeVersion",
+    "objectGeneration",
+    "authorityOwnerGeneration",
+    "ownerId",
+    "ownerLeaseGeneration",
+    "allocationState",
+    "objectKind",
+    "stableType",
+    "descriptorKey",
+    "descriptorLifecycleGeneration",
+    "capacityBundle",
+    "pendingCreationReservationId",
+    "pendingCreationReference",
+    "pendingCreationSha256",
+    "pendingCreationEncodedSize"
+  ],
+  "capacityBundle": {
+    "domain": "zlink-capacity-bundle-v2",
+    "actorSlots": "3",
+    "spotSlots": "1",
+    "spotTypePresence": "1",
+    "spotTypeObjectKind": "user_spot",
+    "spotTypeStableType": "room",
+    "spotTypeSlots": "1",
+    "encoded": "24:zlink-capacity-bundle-v21:31:11:19:user_spot4:room1:1",
+    "hex": "32343a7a6c696e6b2d63617061636974792d62756e646c652d7632313a33313a31313a31393a757365725f73706f74343a726f6f6d313a31"
+  },
+  "contextCapacityBundles": {
+    "actor": "24:zlink-capacity-bundle-v21:11:01:0",
+    "userSpot": "24:zlink-capacity-bundle-v21:01:11:19:user_spot4:room1:1",
+    "aggregate": "24:zlink-capacity-bundle-v21:31:11:19:user_spot4:room1:1"
+  },
+  "capacityBuckets": {
+    "segmentLengthUnit": "UTF-8 bytes",
+    "descriptorKey": "4:game12:67616d652d61",
+    "descriptorLifecycleGeneration": "7",
+    "objectKind": "user_spot",
+    "stableType": "room",
+    "node": "21:4:game12:67616d652d611:74:spot",
+    "spotType": "21:4:game12:67616d652d611:74:spot9:user_spot4:room",
+    "unicodeStableType": "룸.세션",
+    "unicodeSpotType": "21:4:game12:67616d652d611:74:spot9:user_spot10:룸.세션"
+  },
+  "operationRecordFieldSets": {
+    "creation": [
+      "state",
+      "reservationId",
+      "authorityKey",
+      "storeVersion",
+      "objectGeneration",
+      "authorityOwnerGeneration",
+      "reservationVersion",
+      "objectKind",
+      "stableType",
+      "targetDescriptorKey",
+      "targetDescriptorLifecycleGeneration",
+      "targetOwnerId",
+      "targetOwnerLeaseGeneration",
+      "creationReference",
+      "creationSha256",
+      "creationEncodedSize",
+      "capacityBundle"
+    ],
+    "creationTerminal": [
+      "state",
+      "sourceNodeRid",
+      "sourceNodeGeneration",
+      "operationIdHigh",
+      "operationIdLow",
+      "reservationId",
+      "objectKind",
+      "terminalEnvelope",
+      "terminalEnvelopeSha256",
+      "expiresAtUnixMs"
+    ],
+    "standaloneRelocation": [
+      "state",
+      "reservationId",
+      "authorityKey",
+      "expectedStoreVersion",
+      "objectKind",
+      "stableType",
+      "sourceDescriptorKey",
+      "sourceDescriptorLifecycleGeneration",
+      "sourceOwnerId",
+      "sourceOwnerLeaseGeneration",
+      "targetDescriptorKey",
+      "targetDescriptorLifecycleGeneration",
+      "targetOwnerId",
+      "targetOwnerLeaseGeneration",
+      "capacityBundle"
+    ],
+    "aggregate": [
+      "state",
+      "aggregateId",
+      "aggregateGeneration",
+      "participants",
+      "inventoryDigest",
+      "targetDescriptorKey",
+      "targetDescriptorLifecycleGeneration",
+      "targetOwnerId",
+      "targetOwnerLeaseGeneration",
+      "capacityBundle"
+    ]
+  },
+  "operationRecords": {
+    "creation": {
+      "key": "P:{zlink-location-v3}:creation:00112233445566778899aabbccddeeff",
+      "hash": {
+        "state": "Reserved",
+        "reservationId": "00112233445566778899aabbccddeeff",
+        "authorityKey": "zla1:s:1:s",
+        "storeVersion": "101",
+        "objectGeneration": "11",
+        "authorityOwnerGeneration": "21",
+        "reservationVersion": "101",
+        "objectKind": "user_spot",
+        "stableType": "room",
+        "targetDescriptorKey": "4:game12:67616d652d61",
+        "targetDescriptorLifecycleGeneration": "7",
+        "targetOwnerId": "owner-a",
+        "targetOwnerLeaseGeneration": "31",
+        "creationReference": "inline-v2:00000000:",
+        "creationSha256": "5a00000000000000000000000000000000000000000000000000000000000000",
+        "creationEncodedSize": "0",
+        "capacityBundle": "24:zlink-capacity-bundle-v21:01:11:19:user_spot4:room1:1"
+      }
+    },
+    "creationTerminal": {
+      "key": "P:{zlink-location-v3}:creation-terminal:6:6e6f64652d61:7:00000000000000000000000000000001",
+      "hash": {
+        "state": "Rejected",
+        "sourceNodeRid": "node-a",
+        "sourceNodeGeneration": "7",
+        "operationIdHigh": "0",
+        "operationIdLow": "1",
+        "reservationId": "00112233445566778899aabbccddeeff",
+        "objectKind": "actor",
+        "terminalEnvelope": "010000000d00000000000000000103000000",
+        "terminalEnvelopeSha256": "ce55bfa12e48da832d17470e81f80282667be2d06b19625f14a3df8138f66fcd",
+        "expiresAtUnixMs": "1767225600000"
+      }
+    },
+    "standaloneRelocation": {
+      "key": "P:{zlink-location-v3}:relocation:11112222333344445555666677778888",
+      "hash": {
+        "state": "Committed",
+        "reservationId": "11112222333344445555666677778888",
+        "authorityKey": "zla1:s:1:s",
+        "expectedStoreVersion": "103",
+        "objectKind": "actor",
+        "stableType": "Player",
+        "sourceDescriptorKey": "4:game12:67616d652d61",
+        "sourceDescriptorLifecycleGeneration": "7",
+        "sourceOwnerId": "owner-a",
+        "sourceOwnerLeaseGeneration": "31",
+        "targetDescriptorKey": "4:game13:67616d652d62",
+        "targetDescriptorLifecycleGeneration": "8",
+        "targetOwnerId": "owner-b",
+        "targetOwnerLeaseGeneration": "32",
+        "capacityBundle": "24:zlink-capacity-bundle-v21:11:01:0"
+      }
+    },
+    "aggregate": {
+      "key": "P:{zlink-location-v3}:aggregate:22223333444455556666777788889999:9",
+      "hash": {
+        "state": "Aborted",
+        "aggregateId": "22223333444455556666777788889999",
+        "aggregateGeneration": "9",
+        "participants": "7a6c61313a733a313a73",
+        "inventoryDigest": "6b00000000000000000000000000000000000000000000000000000000000000",
+        "targetDescriptorKey": "4:game13:67616d652d62",
+        "targetDescriptorLifecycleGeneration": "8",
+        "targetOwnerId": "owner-b",
+        "targetOwnerLeaseGeneration": "32",
+        "capacityBundle": "24:zlink-capacity-bundle-v21:31:11:19:user_spot4:room1:1"
+      }
+    }
+  },
+  "entryClaim": {
+    "spotId": "mesh-entry-123e4567-e89b-42d3-a456-426614174000",
+    "spotIdSha256": "52704385274f30e952774ce79876f362d51f5564752cc4d687bbb60bb05d453e",
+    "key": "P:{zlink-location-v3}:entry-spot-id:52704385274f30e952774ce79876f362d51f5564752cc4d687bbb60bb05d453e",
+    "hashFields": [
+      "state",
+      "spotId",
+      "descriptorKey",
+      "descriptorLifecycleGeneration",
+      "ownerId",
+      "ownerLeaseGeneration"
+    ],
+    "hash": {
+      "state": "Claimed",
+      "spotId": "mesh-entry-123e4567-e89b-42d3-a456-426614174000",
+      "descriptorKey": "4:game12:67616d652d61",
+      "descriptorLifecycleGeneration": "7",
+      "ownerId": "owner-a",
+      "ownerLeaseGeneration": "31"
+    }
+  },
+  "historyEncoding": {
+    "revisionFieldSeparator": ":",
+    "fullSnapshotDeletedValue": "0",
+    "tombstoneDeletedValue": "1",
+    "fullSnapshotSuffixes": [
+      "deleted",
+      "authorityKey",
+      "payload",
+      "storeVersion",
+      "objectGeneration",
+      "authorityOwnerGeneration",
+      "ownerId",
+      "ownerLeaseGeneration",
+      "allocationState",
+      "objectKind",
+      "stableType",
+      "descriptorKey",
+      "descriptorLifecycleGeneration",
+      "capacityBundle"
+    ],
+    "reservedFullSnapshotSuffixes": [
+      "deleted",
+      "authorityKey",
+      "payload",
+      "storeVersion",
+      "objectGeneration",
+      "authorityOwnerGeneration",
+      "ownerId",
+      "ownerLeaseGeneration",
+      "allocationState",
+      "objectKind",
+      "stableType",
+      "descriptorKey",
+      "descriptorLifecycleGeneration",
+      "capacityBundle",
+      "pendingCreationReservationId",
+      "pendingCreationReference",
+      "pendingCreationSha256",
+      "pendingCreationEncodedSize"
+    ],
+    "tombstoneSuffixes": [
+      "deleted",
+      "authorityKey"
+    ]
+  },
+  "missing": {
+    "kind": "Missing",
+    "storeNowMs": "1721001600000"
+  },
+  "reserve": {
+    "expectation": "Missing",
+    "result": "Reserved",
+    "currentHash": {
+      "authorityKey": "zla1:s:1:s",
+      "payload": "opaque-creating-payload-v2",
+      "storeVersion": "101",
+      "objectGeneration": "11",
+      "authorityOwnerGeneration": "21",
+      "ownerId": "owner-a",
+      "ownerLeaseGeneration": "31",
+      "allocationState": "reserved",
+      "objectKind": "user_spot",
+      "stableType": "room",
+      "descriptorKey": "4:game12:67616d652d61",
+      "descriptorLifecycleGeneration": "7",
+      "capacityBundle": "24:zlink-capacity-bundle-v21:01:11:19:user_spot4:room1:1",
+      "pendingCreationReservationId": "00112233445566778899aabbccddeeff",
+      "pendingCreationReference": "inline-v2:00000000:",
+      "pendingCreationSha256": "5a00000000000000000000000000000000000000000000000000000000000000",
+      "pendingCreationEncodedSize": "0"
+    }
+  },
+  "commit": {
+    "expectation": {
+      "storeVersion": "101"
+    },
+    "result": "Committed",
+    "currentHash": {
+      "authorityKey": "zla1:s:1:s",
+      "payload": "opaque-ready-payload-v2",
+      "storeVersion": "102",
+      "objectGeneration": "11",
+      "authorityOwnerGeneration": "21",
+      "ownerId": "owner-a",
+      "ownerLeaseGeneration": "31",
+      "allocationState": "active",
+      "objectKind": "user_spot",
+      "stableType": "room",
+      "descriptorKey": "4:game12:67616d652d61",
+      "descriptorLifecycleGeneration": "7",
+      "capacityBundle": "24:zlink-capacity-bundle-v21:01:11:19:user_spot4:room1:1"
+    }
+  },
+  "preserve": {
+    "expectation": {
+      "kind": "Found",
+      "storeVersion": "102"
+    },
+    "result": "Stored",
+    "currentHash": {
+      "authorityKey": "zla1:s:1:s",
+      "payload": "opaque-ready-payload-v2-preserved",
+      "storeVersion": "103",
+      "objectGeneration": "11",
+      "authorityOwnerGeneration": "21",
+      "ownerId": "owner-a",
+      "ownerLeaseGeneration": "31",
+      "allocationState": "active",
+      "objectKind": "user_spot",
+      "stableType": "room",
+      "descriptorKey": "4:game12:67616d652d61",
+      "descriptorLifecycleGeneration": "7",
+      "capacityBundle": "24:zlink-capacity-bundle-v21:01:11:19:user_spot4:room1:1"
+    }
+  },
+  "newOwner": {
+    "expectation": {
+      "kind": "Found",
+      "storeVersion": "103"
+    },
+    "result": "Stored",
+    "currentHash": {
+      "authorityKey": "zla1:s:1:s",
+      "payload": "opaque-ready-payload-v2-new-owner",
+      "storeVersion": "104",
+      "objectGeneration": "11",
+      "authorityOwnerGeneration": "22",
+      "ownerId": "owner-b",
+      "ownerLeaseGeneration": "32",
+      "allocationState": "active",
+      "objectKind": "user_spot",
+      "stableType": "room",
+      "descriptorKey": "4:game13:67616d652d62",
+      "descriptorLifecycleGeneration": "8",
+      "capacityBundle": "24:zlink-capacity-bundle-v21:01:11:19:user_spot4:room1:1"
+    }
+  },
+  "delete": {
+    "expectation": {
+      "kind": "Found",
+      "storeVersion": "104"
+    },
+    "result": "Deleted",
+    "consumedStoreRevision": "105",
+    "historyRevisionHex": "0000000000000069",
+    "tombstone": true
+  },
+  "scan": {
+    "watermarkRevision": "104",
+    "watermarkRevisionHex": "0000000000000068",
+    "indexMember": "7a6c61313a733a313a73",
+    "pageSizeMaximum": 1000,
+    "encodedPageBytesMaximum": 4194304,
+    "cursorBytesMaximum": 4096,
+    "revisionZsetScore": 0
+  },
+  "generationExhausted": {
+    "counterAtMaximum": "9223372036854775807",
+    "result": "GenerationExhausted",
+    "retriable": false,
+    "rowIndexAndCounterMutationCount": 0
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "name": "@zlink-systems/http-client",
+  "version": "0.4.3",
+  "license": "Apache-2.0",
+  "private": true,
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "LICENSE"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "browser": "./dist/browser/index.mjs",
+      "default": "./dist/index.js"
+    }
+  },
+  "dependencies": {
+    "@zlink-systems/framework": "0.1.0-SNAPSHOT",
+    "undici": "6.27.0"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "outDir": "build/m6c-runtime",
+    "rootDir": "../..",
+    "types": ["node"]
+  },
+  "include": [
+    "packages/framework/src/runtime/foundation/**/*.ts",
+    "packages/framework/src/runtime/host/user-spot-creation-coordinator.ts",
+    "packages/framework/src/runtime/spots/spot-manager-public.ts",
+    "packages/framework/src/runtime/spots/spot-closing.ts",
+    "test/m6c/**/*.ts"
+  ]
+}

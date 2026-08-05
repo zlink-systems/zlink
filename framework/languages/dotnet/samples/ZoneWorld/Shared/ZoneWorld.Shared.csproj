@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+    <!--
+      No framework reference, on purpose. The wire contract is plain records, and keeping the
+      package out of this project is what turns that from a convention into a fact: the Domain
+      layer may reference these records precisely because doing so cannot drag a ZLink type in
+      behind them (scenario §6, layer table).
+    -->
+</Project>

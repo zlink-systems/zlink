@@ -1,0 +1,273 @@
+name: Framework Node
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/framework-node.yml"
+      - "framework/languages/node/**"
+      - "framework/doc/framework/common/spec/**"
+      - "framework/doc/framework/common/e2e/**"
+      - "framework/doc/framework/common/guide/**"
+      - "framework/doc/plan/node-framework-spec-gap-ledger/**"
+      - "bindings/node/**"
+      - "framework/languages/dotnet/testapps/**"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/framework-node.yml"
+      - "framework/languages/node/**"
+      - "framework/doc/framework/common/spec/**"
+      - "framework/doc/framework/common/e2e/**"
+      - "framework/doc/framework/common/guide/**"
+      - "framework/doc/plan/node-framework-spec-gap-ledger/**"
+      - "bindings/node/**"
+      - "framework/languages/dotnet/testapps/**"
+  workflow_dispatch:
+
+jobs:
+  framework-node:
+    name: ${{ matrix.target.name }} / node${{ matrix.node-version }}
+    runs-on: ${{ matrix.target.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version:
+          - 20
+          - 22
+        target:
+          - name: win-x64
+            runner: windows-latest
+            msvc_arch: x64
+            vcpkg_triplet: x64-windows
+          - name: win-arm64
+            runner: windows-11-arm
+            msvc_arch: arm64
+            vcpkg_triplet: arm64-windows-static
+          - name: linux-x64
+            runner: ubuntu-24.04
+          - name: linux-arm64
+            runner: ubuntu-24.04-arm
+          - name: darwin-x64
+            runner: macos-15-intel
+          - name: darwin-arm64
+            runner: macos-15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      - name: Setup MSVC environment
+        if: startsWith(matrix.target.name, 'win-')
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: ${{ matrix.target.msvc_arch }}
+
+      - name: Install Linux core dependencies
+        if: startsWith(matrix.target.name, 'linux-')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential
+
+      - name: Install macOS core dependencies
+        if: startsWith(matrix.target.name, 'darwin-')
+        run: |
+          xcode-select --print-path
+
+      - name: Install Windows core dependencies
+        if: startsWith(matrix.target.name, 'win-')
+        shell: pwsh
+        run: |
+          vcpkg install openssl:${{ matrix.target.vcpkg_triplet }}
+          $opensslRoot = "$env:VCPKG_INSTALLATION_ROOT\installed\${{ matrix.target.vcpkg_triplet }}"
+          echo "OPENSSL_ROOT_DIR=$opensslRoot" >> $env:GITHUB_ENV
+          echo "CMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake" >> $env:GITHUB_ENV
+          echo "VCPKG_TARGET_TRIPLET=${{ matrix.target.vcpkg_triplet }}" >> $env:GITHUB_ENV
+
+      - name: Use synced core runtime for Node addon
+        if: startsWith(matrix.target.name, 'linux-') || startsWith(matrix.target.name, 'darwin-')
+        run: |
+          if [[ "${{ matrix.target.name }}" == linux-* ]]; then
+            runtime="$GITHUB_WORKSPACE/bindings/node/prebuilds/${{ matrix.target.name }}/libzlink.so"
+            echo "ZLINK_LIB_PATH=$runtime" >> "$GITHUB_ENV"
+            echo "ZLINK_RUNTIME_PATH=$runtime" >> "$GITHUB_ENV"
+          else
+            runtime="$GITHUB_WORKSPACE/bindings/node/prebuilds/${{ matrix.target.name }}/libzlink.dylib"
+            echo "ZLINK_LIB_PATH=$runtime" >> "$GITHUB_ENV"
+            echo "ZLINK_RUNTIME_PATH=$runtime" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build core library for Node addon
+        if: startsWith(matrix.target.name, 'win-')
+        shell: pwsh
+        run: |
+          cmake -S core -B core/build `
+            -G "Ninja" `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DBUILD_SHARED=ON `
+            -DBUILD_STATIC=OFF `
+            -DBUILD_TESTS=OFF `
+            -DZLINK_CXX_STANDARD=17 `
+            -DOPENSSL_ROOT_DIR="$env:OPENSSL_ROOT_DIR" `
+            -DCMAKE_TOOLCHAIN_FILE="$env:CMAKE_TOOLCHAIN_FILE" `
+            -DVCPKG_TARGET_TRIPLET="$env:VCPKG_TARGET_TRIPLET"
+          cmake --build core/build --parallel
+          $libPath = Join-Path $PWD "core/build/lib/zlink.lib"
+          $binPath = Join-Path $PWD "core/build/bin"
+          if (-not (Test-Path $libPath)) {
+            $libPath = Join-Path $PWD "core/build/lib/Release/zlink.lib"
+          }
+          if (-not (Test-Path $binPath)) {
+            $binPath = Join-Path $PWD "core/build/bin/Release"
+          }
+          $libPath = $libPath.Replace('\', '/')
+          echo "ZLINK_LIB_PATH=$libPath" >> $env:GITHUB_ENV
+          echo "$binPath" >> $env:GITHUB_PATH
+
+      - name: Install binding dependencies
+        working-directory: bindings/node
+        run: npm install --ignore-scripts
+
+      - name: Install framework dependencies
+        working-directory: framework/languages/node
+        run: npm ci
+
+      - name: Cache Chromium for browser connector E2E
+        if: matrix.node-version == 22 && (matrix.target.name == 'linux-x64' || matrix.target.name == 'win-x64')
+        uses: actions/cache@v4
+        with:
+          path: framework/languages/node/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('framework/languages/node/package-lock.json') }}
+
+      - name: Install Chromium and Linux dependencies
+        if: matrix.node-version == 22 && matrix.target.name == 'linux-x64'
+        working-directory: framework/languages/node
+        run: npm run browser:install:ci
+
+      - name: Install Chromium on Windows
+        if: matrix.node-version == 22 && matrix.target.name == 'win-x64'
+        working-directory: framework/languages/node
+        run: npm run browser:install
+
+      - name: Build Node binding JavaScript surface
+        working-directory: bindings/node
+        run: npm run build
+
+      - name: Normalize Visual Studio version for node-gyp
+        if: startsWith(matrix.target.name, 'win-')
+        shell: pwsh
+        run: |
+          # GitHub Windows runners currently expose the VS 2026 path through a
+          # VS 18 developer prompt. node-gyp still maps MSVC toolsets by the
+          # Visual Studio major version and only accepts VS 2022 for v143, so
+          # keep the actual toolchain paths from msvc-dev-cmd but present the
+          # prompt version as VS 2022 before node-gyp probes it.
+          echo "VSCMD_VER=17.0" >> $env:GITHUB_ENV
+          echo "VisualStudioVersion=17.0" >> $env:GITHUB_ENV
+
+      - name: Build Node binding native addon
+        working-directory: bindings/node
+        run: npm run rebuild-native
+
+      - name: Expose synced core runtime beside Node addon
+        if: startsWith(matrix.target.name, 'linux-') || startsWith(matrix.target.name, 'darwin-')
+        run: |
+          cp "$ZLINK_RUNTIME_PATH" bindings/node/build/Release/
+          if [[ "${{ matrix.target.name }}" == linux-* && -f "${ZLINK_RUNTIME_PATH}.8" ]]; then
+            cp "${ZLINK_RUNTIME_PATH}.8" bindings/node/build/Release/
+          fi
+          if [[ "${{ matrix.target.name }}" == darwin-* ]]; then
+            if ! otool -l bindings/node/build/Release/zlink.node | grep -q '@loader_path'; then
+              install_name_tool -add_rpath @loader_path bindings/node/build/Release/zlink.node
+            fi
+          fi
+
+      - name: Run Node framework release gate
+        working-directory: framework/languages/node
+        run: npm run verify:ci
+
+      - name: Run actual Chromium Stream Connector E2E
+        if: matrix.node-version == 22 && (matrix.target.name == 'linux-x64' || matrix.target.name == 'win-x64')
+        working-directory: framework/languages/node
+        run: npm run test:browser
+
+  framework-node-cross-language:
+    name: cross-language smoke
+    runs-on: ubuntu-24.04
+    needs:
+      - framework-node
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup .NET 8 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential
+
+      - name: Use synced core runtime for Node addon
+        run: |
+          runtime="$GITHUB_WORKSPACE/bindings/node/prebuilds/linux-x64/libzlink.so"
+          echo "ZLINK_LIB_PATH=$runtime" >> "$GITHUB_ENV"
+          echo "ZLINK_RUNTIME_PATH=$runtime" >> "$GITHUB_ENV"
+
+      - name: Install binding dependencies
+        working-directory: bindings/node
+        run: npm install --ignore-scripts
+
+      - name: Install framework dependencies
+        working-directory: framework/languages/node
+        run: npm ci
+
+      - name: Build Node binding JavaScript surface
+        working-directory: bindings/node
+        run: npm run build
+
+      - name: Build Node binding native addon
+        working-directory: bindings/node
+        run: npm run rebuild-native
+
+      - name: Expose synced core runtime beside Node addon
+        run: |
+          cp "$ZLINK_RUNTIME_PATH" bindings/node/build/Release/
+          if [[ -f "${ZLINK_RUNTIME_PATH}.8" ]]; then
+            cp "${ZLINK_RUNTIME_PATH}.8" bindings/node/build/Release/
+          fi
+
+      - name: Run Node framework cross-language smoke
+        working-directory: framework/languages/node
+        run: npm run verify:cross-language
+
+  framework-node-gate:
+    name: release-gate
+    runs-on: ubuntu-24.04
+    needs:
+      - framework-node
+      - framework-node-cross-language
+    steps:
+      - name: Confirm matrix completed
+        run: |
+          echo "Framework Node release gate passed."
+          echo "ABI matrix: win-x64, win-arm64, linux-x64, linux-arm64, darwin-x64, darwin-arm64"
+          echo "Node runtime matrix: node20, node22"
+          echo "Cross-language smoke: Node <-> dotnet channel and stream paths"

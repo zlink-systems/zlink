@@ -1,0 +1,152 @@
+{
+  "samples": {
+    "Bingo": {
+      "routeMeshes": ["bingo.matchmaking", "bingo.play"],
+      "clientServer": ["bingo.api"],
+      "objectRoles": {
+        "Api": {
+          "bingo.matchmaking": "Client",
+          "bingo.play": "Client"
+        },
+        "Matchmaking": {
+          "bingo.matchmaking": "Server"
+        },
+        "Session": {
+          "bingo.play": "Client"
+        },
+        "Play": {
+          "bingo.play": "Server"
+        }
+      },
+      "instanceSpots": {
+        "bingo.matchmaker": {
+          "mesh": "bingo.matchmaking",
+          "callers": ["Api"],
+          "providers": ["Matchmaking"]
+        }
+      },
+      "channels": {
+        "bingo.api": {"clients": ["Session", "Play"], "servers": ["Api"]},
+        "bingo.room": {"clients": [], "servers": ["Play"]}
+      },
+      "channelKinds": {
+        "bingo.api": "ClientServer",
+        "bingo.room": "RouteMesh"
+      }
+    },
+    "TicTacToe": {
+      "routeMeshes": ["tictactoe"],
+      "clientServer": ["tictactoe.api"],
+      "objectRoles": {
+        "ApiA": {"tictactoe": "Client"},
+        "ApiB": {"tictactoe": "Client"},
+        "PlayA": {"tictactoe": "Server"},
+        "PlayB": {"tictactoe": "Server"}
+      },
+      "manualPeerInitiators": {
+        "ApiA": ["PlayA", "PlayB"],
+        "ApiB": ["PlayA", "PlayB"],
+        "PlayA": ["PlayB"]
+      },
+      "channels": {
+        "tictactoe.api": {"clients": ["PlayA", "PlayB"], "servers": ["ApiA", "ApiB"]},
+        "tictactoe.player.milestone.channel": {
+          "clients": [],
+          "servers": ["PlayA", "PlayB"]
+        }
+      },
+      "channelKinds": {
+        "tictactoe.api": "ClientServer",
+        "tictactoe.player.milestone.channel": "RouteMesh"
+      }
+    },
+    "SupportChat": {
+      "routeMeshes": ["supportchat"],
+      "clientServer": ["supportchat.api"],
+      "objectRoles": {
+        "Session": {"supportchat": "Client"},
+        "Api": {"supportchat": "Client"},
+        "Support": {"supportchat": "Server"}
+      },
+      "channels": {
+        "supportchat.api": {"clients": ["Session", "Support"], "servers": ["Api"]}
+      },
+      "channelKinds": {
+        "supportchat.api": "ClientServer"
+      }
+    },
+    "DeliveryDispatch": {
+      "routeMeshes": ["deliverydispatch.courier", "deliverydispatch.customer"],
+      "clientServer": ["deliverydispatch.dispatch", "deliverydispatch.tracking"],
+      "objectRoles": {
+        "Dispatch": {"deliverydispatch.courier": "Client"},
+        "CourierSession": {"deliverydispatch.courier": "Client"},
+        "CourierActorNode": {"deliverydispatch.courier": "Server"},
+        "Tracking": {"deliverydispatch.customer": "Client"},
+        "CustomerGateway": {"deliverydispatch.customer": "Server"}
+      },
+      "channels": {
+        "deliverydispatch.dispatch": {"clients": ["CourierActorNode"], "servers": ["Dispatch"]},
+        "deliverydispatch.tracking": {"clients": ["Dispatch"], "servers": ["Tracking"]}
+      },
+      "channelKinds": {
+        "deliverydispatch.dispatch": "ClientServer",
+        "deliverydispatch.tracking": "ClientServer"
+      }
+    },
+    "ShoppingMall": {
+      "routeMeshes": ["shoppingmall.workflow"],
+      "clientServer": [],
+      "objectRoles": {
+        "CommerceApi": {"shoppingmall.workflow": "Client"},
+        "WorkflowA": {"shoppingmall.workflow": "Server"},
+        "WorkflowB": {"shoppingmall.workflow": "Server"}
+      },
+      "channels": {},
+      "channelKinds": {},
+      "instanceSpots": {
+        "shoppingmall.order-workflow": {
+          "mesh": "shoppingmall.workflow",
+          "callers": ["CommerceApi"],
+          "providers": ["WorkflowA", "WorkflowB"]
+        }
+      }
+    },
+    "GameQuest": {
+      "routeMeshes": ["gamequest"],
+      "clientServer": [],
+      "objectRoles": {
+        "GameApi": {"gamequest": "Server"},
+        "QuestMissionA": {"gamequest": "Server"},
+        "QuestMissionB": {"gamequest": "Server"}
+      },
+      "channels": {},
+      "channelKinds": {},
+      "instanceSpots": {
+        "gamequest.player-quest": {
+          "mesh": "gamequest",
+          "callers": ["GameApi"],
+          "providers": ["QuestMissionA", "QuestMissionB"]
+        }
+      }
+    },
+    "ZoneWorld": {
+      "routeMeshes": ["zoneworld.mesh"],
+      "clientServer": [],
+      "objectRoles": {
+        "Gateway": {"zoneworld.mesh": "Client"},
+        "ZoneNodeA": {"zoneworld.mesh": "Server"},
+        "ZoneNodeB": {"zoneworld.mesh": "Server"}
+      },
+      "classicFanout": ["zoneworld.broadcast"],
+      "channels": {
+        "zoneworld.report": {"clients": ["ZoneNode"], "servers": ["Ops"]},
+        "zoneworld.zones": {"clients": [], "servers": ["ZoneNode"]}
+      },
+      "channelKinds": {
+        "zoneworld.report": "RouteMesh",
+        "zoneworld.zones": "RouteMesh"
+      }
+    }
+  }
+}

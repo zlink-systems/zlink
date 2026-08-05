@@ -1,0 +1,32 @@
+/* SPDX-License-Identifier: FSL-1.1-ALv2 */
+#pragma once
+
+#include "sample_topology.hpp"
+
+#include <zlink/framework.hpp>
+#include <zlink/locations/redis.hpp>
+
+#include <memory>
+#include <stdexcept>
+
+namespace zlink::samples::deliverydispatch
+{
+
+inline void add_deliverydispatch_location_store (
+  zlink::framework::zlink_framework_options_t &framework,
+  const sample_topology_t &topology)
+{
+    if (topology.redis_endpoint.empty ()) {
+        throw std::runtime_error ("sample.topology.redisEndpoint is required");
+    }
+    if (topology.redis_key_prefix.empty ()) {
+        throw std::runtime_error ("sample.topology.redisKeyPrefix is required");
+    }
+    framework.add_location_store (
+      std::make_shared<zlink::framework::redis::redis_location_store_t> (
+        zlink::framework::redis::redis_location_options_t{
+          .connection_string = topology.redis_endpoint,
+          .key_prefix = topology.redis_key_prefix}));
+}
+
+} // namespace zlink::samples::deliverydispatch

@@ -1,0 +1,39 @@
+# Zlink cmake module
+#
+# The following import targets are created
+#
+# ::
+#
+#   libzlink-static
+#   libzlink
+#
+# This module sets the following variables in your project::
+#
+#   Zlink_FOUND - true if Zlink found on the system
+#   Zlink_INCLUDE_DIR - the directory containing Zlink headers
+#   Zlink_LIBRARY - 
+#   Zlink_STATIC_LIBRARY
+
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+if(@WITH_TLS@)
+  find_dependency(OpenSSL)
+endif()
+
+if(NOT TARGET libzlink AND NOT TARGET libzlink-static)
+  include("${CMAKE_CURRENT_LIST_DIR}/@PROJECT_NAME@Targets.cmake")
+
+  if (TARGET libzlink)
+    get_target_property(@PROJECT_NAME@_INCLUDE_DIR libzlink INTERFACE_INCLUDE_DIRECTORIES)
+  else ()
+    get_target_property(@PROJECT_NAME@_INCLUDE_DIR libzlink-static INTERFACE_INCLUDE_DIRECTORIES)
+  endif()
+
+  if (TARGET libzlink)
+    get_target_property(@PROJECT_NAME@_LIBRARY libzlink LOCATION)
+  endif()
+  if (TARGET libzlink-static)
+    get_target_property(@PROJECT_NAME@_STATIC_LIBRARY libzlink-static LOCATION)
+  endif()
+endif()

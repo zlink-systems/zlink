@@ -1,0 +1,63 @@
+Source: zlink
+Section: libs
+Priority: optional
+Maintainer: zlink Developers <ulalax@kairoscode.dev>
+Build-Depends: debhelper (>= 9),
+ dh-autoreconf,
+ libnorm-dev,
+ libunwind-dev | libunwind8-dev | libunwind7-dev,
+ libnss3-dev,
+ libgnutls28-dev | libgnutls-dev,
+ libbsd-dev,
+ pkg-config,
+ asciidoc-base | asciidoc, xmlto,
+Standards-Version: 3.9.8
+Homepage: https://github.com/kairos-code-dev/zlink
+
+Package: libzlink11
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Pre-Depends: ${misc:Pre-Depends}
+Multi-Arch: same
+Description: lightweight messaging kernel (shared library)
+ zlink is a modern messaging library that provides asynchronous message
+ queues, multiple messaging patterns, message filtering (subscriptions),
+ and seamless access to multiple transport protocols including TCP, IPC,
+ inproc, WebSocket, and TLS.
+ .
+ This package contains the libzlink shared library.
+
+Package: libzlink11-dev
+Architecture: any
+Section: libdevel
+Depends: libzlink11 (= ${binary:Version}), ${misc:Depends},
+ libnorm-dev,
+ libunwind-dev | libunwind8-dev | libunwind7-dev,
+ libnss3-dev,
+ libgnutls28-dev | libgnutls-dev,
+ libbsd-dev,
+Conflicts: libzlink-dev, libzlink10-dev, libzlink6-dev, libzlink5-dev
+Replaces: libzlink10-dev, libzlink6-dev, libzlink5-dev
+Provides: libzlink-dev
+Multi-Arch: same
+Description: lightweight messaging kernel (development files)
+ zlink is a modern messaging library that provides asynchronous message
+ queues, multiple messaging patterns, message filtering (subscriptions),
+ and seamless access to multiple transport protocols including TCP, IPC,
+ inproc, WebSocket, and TLS.
+ .
+ This package contains the Zlink development libraries and header files.
+
+Package: libzlink11-dbg
+Architecture: any
+Priority: extra
+Section: debug
+Depends: libzlink11 (= ${binary:Version}), ${misc:Depends}
+Multi-Arch: same
+Description: lightweight messaging kernel (debugging symbols)
+ zlink is a modern messaging library that provides asynchronous message
+ queues, multiple messaging patterns, message filtering (subscriptions),
+ and seamless access to multiple transport protocols including TCP, IPC,
+ inproc, WebSocket, and TLS.
+ .
+ This package contains the debugging symbols for the Zlink library.

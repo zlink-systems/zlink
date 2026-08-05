@@ -1,0 +1,52 @@
+<Project Sdk="Microsoft.NET.Sdk">
+    <PropertyGroup>
+        <TargetFrameworks>$(ZLinkFrameworkTargetFrameworks)</TargetFrameworks>
+        <IsPackable>false</IsPackable>
+        <IsTestProject>true</IsTestProject>
+        <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Microsoft.NET.Test.Sdk"/>
+        <PackageReference Include="coverlet.collector">
+            <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+            <PrivateAssets>all</PrivateAssets>
+        </PackageReference>
+        <PackageReference Include="coverlet.msbuild">
+            <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+            <PrivateAssets>all</PrivateAssets>
+        </PackageReference>
+        <PackageReference Include="MessagePack"/>
+        <PackageReference Include="xunit"/>
+        <PackageReference Include="xunit.runner.visualstudio">
+            <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+            <PrivateAssets>all</PrivateAssets>
+        </PackageReference>
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="../../src/Systems.Zlink.Stream.Connector/Systems.Zlink.Stream.Connector.csproj"/>
+        <ProjectReference Include="../../src/Zlink.Framework.Contracts/Zlink.Framework.Contracts.csproj"/>
+        <ProjectReference Include="../../src/Zlink.Framework.Codecs.MessagePack/Zlink.Framework.Codecs.MessagePack.csproj"/>
+        <ProjectReference Include="../../src/Zlink.Framework.Codecs.Protobuf/Zlink.Framework.Codecs.Protobuf.csproj"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <Compile Include="Contracts/PublicApiTests.cs"/>
+        <Compile Include="GlobalUsings.cs"/>
+        <Compile Include="Protocol/ErrorAndModeTests.cs"/>
+        <Compile Include="Protocol/HeaderCodecTests.cs"/>
+        <Compile Include="Support/StreamConnectorTestSupport.cs"/>
+        <Compile Include="Transport/DispatchTests.cs"/>
+        <Compile Include="Transport/InboundObserverTests.cs"/>
+        <Compile Include="Transport/LifecycleTests.cs"/>
+        <Compile Include="Transport/RuntimeMetricsTests.cs"/>
+        <Compile Include="Transport/TestHelperTests.cs"/>
+        <Compile Include="Transport/TransportTests.cs"/>
+        <Compile Include="Typed/CodecAndCallbackTests.cs"/>
+        <Compile Include="Typed/CustomPayloadCodecTests.cs"/>
+        <Compile Include="Typed/TypedConnectorExtensionTests.cs"/>
+        <Compile Include="Typed/TypedHandlerRegistryTests.cs"/>
+        <Compile Include="Typed/TypedRequestTests.cs"/>
+    </ItemGroup>
+</Project>

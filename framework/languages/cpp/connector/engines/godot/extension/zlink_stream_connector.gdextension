@@ -1,0 +1,11 @@
+[configuration]
+entry_symbol = "zlink_godot_stream_connector_init"
+compatibility_minimum = "4.1"
+
+[libraries]
+linux.debug.x86_64 = "res://bin/libzlink_godot_stream_connector.linux.debug.x86_64.so"
+linux.release.x86_64 = "res://bin/libzlink_godot_stream_connector.linux.release.x86_64.so"
+windows.debug.x86_64 = "res://bin/zlink_godot_stream_connector.windows.debug.x86_64.dll"
+windows.release.x86_64 = "res://bin/zlink_godot_stream_connector.windows.release.x86_64.dll"
+macos.debug = "res://bin/libzlink_godot_stream_connector.macos.debug.framework"
+macos.release = "res://bin/libzlink_godot_stream_connector.macos.release.framework"

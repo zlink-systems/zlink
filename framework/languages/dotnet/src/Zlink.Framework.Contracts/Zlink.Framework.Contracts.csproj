@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+    <PropertyGroup>
+        <TargetFrameworks>$(ZLinkFrameworkTargetFrameworks)</TargetFrameworks>
+        <AssemblyName>Zlink.Framework.Contracts</AssemblyName>
+        <RootNamespace>Zlink.Framework.Contracts</RootNamespace>
+        <Description>Package-neutral codec and error contracts shared by ZLink framework packages.</Description>
+        <IsPackable>true</IsPackable>
+    </PropertyGroup>
+
+</Project>

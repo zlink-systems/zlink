@@ -1,0 +1,18 @@
+{
+  "name": "@zlink-systems/framework-locations-redis",
+  "version": "0.1.0-SNAPSHOT",
+  "license": "SEE LICENSE IN LICENSE",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "dependencies": {
+    "@zlink-systems/framework": "0.1.0-SNAPSHOT",
+    "@zlink-systems/zlink": "11.2.0",
+    "redis": "^6.1.0"
+  }
+}

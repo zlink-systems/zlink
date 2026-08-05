@@ -1,0 +1,42 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+    <PropertyGroup>
+        <TargetFrameworks>$(ZLinkFrameworkTargetFrameworks)</TargetFrameworks>
+        <AssemblyName>Zlink.Framework</AssemblyName>
+        <RootNamespace>Zlink.Framework</RootNamespace>
+        <Description>ZLink framework core abstractions and runtime for .NET.</Description>
+        <IsPackable>true</IsPackable>
+        <NoWarn>$(NoWarn);ZLINK1100</NoWarn>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions"/>
+        <PackageReference Include="Microsoft.Extensions.Logging.Abstractions"/>
+        <PackageReference Include="Systems.Zlink"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="../Systems.Zlink.Stream.Connector/Systems.Zlink.Stream.Connector.csproj"/>
+        <ProjectReference Include="../Zlink.Framework.Contracts/Zlink.Framework.Contracts.csproj"/>
+        <ProjectReference Include="../Zlink.Framework.Provider.Abstractions/Zlink.Framework.Provider.Abstractions.csproj"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <Compile Include="../Shared/ZLinkCanonicalLocationKeyFormatter.cs"
+                 Link="Internal/ZLinkCanonicalLocationKeyFormatter.cs"/>
+        <Compile Include="../../../../runtime/protocol/generated/dotnet/ServiceWireConstants.g.cs"
+                 Link="Runtime/Protocol/ServiceWireConstants.g.cs"/>
+    </ItemGroup>
+
+    <Target Name="PinStreamConnectorPackageDependency"
+            AfterTargets="_GetProjectReferenceVersions">
+        <ItemGroup>
+            <_ProjectReferencesWithVersions
+                Update="@(_ProjectReferencesWithVersions)"
+                Condition="'%(_ProjectReferencesWithVersions.Filename)' == 'Systems.Zlink.Stream.Connector'
+                           or '%(_ProjectReferencesWithVersions.Filename)' == 'Zlink.Framework.Contracts'
+                           or '%(_ProjectReferencesWithVersions.Filename)' == 'Zlink.Framework.Provider.Abstractions'">
+                <ProjectVersion>[%(_ProjectReferencesWithVersions.ProjectVersion)]</ProjectVersion>
+            </_ProjectReferencesWithVersions>
+        </ItemGroup>
+    </Target>
+</Project>

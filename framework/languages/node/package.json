@@ -1,0 +1,62 @@
+{
+  "name": "@zlink-systems/node-framework-workspace",
+  "version": "0.1.0-SNAPSHOT",
+  "private": true,
+  "description": "ZLink Framework Node.js/NestJS port workspace",
+  "scripts": {
+    "clean": "rm -rf dist packages/*/dist",
+    "build": "node node_modules/typescript/bin/tsc -b tsconfig.build.json && npm run build:browser",
+    "build:browser": "node scripts/prepare_browser_build.mjs && npm run build:stream-wire-browser && node scripts/build-http-client-browser.mjs && node node_modules/typescript/bin/tsc -p packages/stream-connector/tsconfig.browser.json && node_modules/.bin/esbuild packages/stream-connector/src/index.ts --bundle --format=esm --platform=browser --target=es2022 --outfile=packages/stream-connector/dist/browser/index.mjs && npm run build:browser-codecs",
+    "build:stream-wire-browser": "node node_modules/typescript/bin/tsc -p packages/stream-wire/tsconfig.browser.json && node_modules/.bin/esbuild packages/stream-wire/src/index.ts --bundle --format=esm --platform=browser --target=es2022 --outfile=packages/stream-wire/dist/esm/index.mjs",
+    "build:browser-codecs": "node node_modules/typescript/bin/tsc -p packages/framework-codec-msgpack/tsconfig.browser.json && node_modules/.bin/esbuild packages/framework-codec-msgpack/src/index.ts --bundle --format=esm --platform=browser --target=es2022 --outfile=packages/framework-codec-msgpack/dist/browser/index.mjs && node_modules/.bin/esbuild packages/framework-codec-msgpack/src/framework.ts --bundle --format=cjs --platform=node --target=node18 --external:@zlink-systems/framework --external:@zlink-systems/stream-connector --external:@zlink-systems/stream-wire --outfile=packages/framework-codec-msgpack/dist/server/framework.cjs && node node_modules/typescript/bin/tsc -p packages/framework-codec-protobuf/tsconfig.browser.json && node_modules/.bin/esbuild packages/framework-codec-protobuf/src/index.ts --bundle --format=esm --platform=browser --target=es2022 --outfile=packages/framework-codec-protobuf/dist/browser/index.mjs && node_modules/.bin/esbuild packages/framework-codec-protobuf/src/framework.ts --bundle --format=cjs --platform=node --target=node18 --external:@zlink-systems/framework --external:@zlink-systems/stream-connector --external:@zlink-systems/stream-wire --outfile=packages/framework-codec-protobuf/dist/server/framework.cjs",
+    "browser:install": "node scripts/browser-e2e/install-chromium.mjs",
+    "browser:install:ci": "node scripts/browser-e2e/install-chromium.mjs --with-deps",
+    "test:browser": "node --test test/browser/*.test.js",
+    "lint": "eslint \"packages/*/src/**/*.ts\" \"samples/**/*.ts\"",
+    "typecheck": "node node_modules/typescript/bin/tsc -p tsconfig.json --noEmit",
+    "test": "node scripts/run_node_runtime_gate.js",
+    "verify:ci": "node scripts/run_node_framework_ci_gate.js",
+    "verify:p0": "node scripts/run_node_runtime_gate.js",
+    "verify:m5-scaffold": "node node_modules/typescript/bin/tsc -p tsconfig.m5-scaffold.json",
+    "verify:m5-foundation": "rm -rf build/m5-foundation && node node_modules/typescript/bin/tsc -p tsconfig.m5-foundation.json && node --test build/m5-foundation/languages/node/test/m5/m5-foundation.contract.js",
+    "verify:m6a-runtime": "rm -rf build/m6a-runtime && node node_modules/typescript/bin/tsc -p tsconfig.m6a-runtime.json && node --test build/m6a-runtime/languages/node/test/m6a/m6a-runtime.contract.js",
+    "verify:m6b-runtime": "rm -rf build/m6b-runtime && node node_modules/typescript/bin/tsc -p tsconfig.m6b-runtime.json && node --test build/m6b-runtime/languages/node/test/m6b/m6b-runtime.contract.js",
+    "verify:m6c-runtime": "rm -rf build/m6c-runtime && node node_modules/typescript/bin/tsc -p tsconfig.m6c-runtime.json && node --test build/m6c-runtime/languages/node/test/m6c/m6c-*.contract.js",
+    "verify:coverage": "node scripts/run_node_coverage_gate.js",
+    "verify:samples": "./samples/run_samples.sh",
+    "verify:runtime-matrix": "node scripts/verify_node_runtime_matrix.js",
+    "verify:abi-matrix": "node scripts/verify_node_abi_matrix.js",
+    "verify:cross-language": "./cross-language/run_cross_language_smoke.sh",
+    "verify:release": "npm run verify:abi-matrix && npm run verify:p0 && npm run verify:samples && npm run verify:runtime-matrix && npm run verify:cross-language"
+  },
+  "workspaces": [
+    "packages/framework",
+    "packages/framework-codec-msgpack",
+    "packages/framework-codec-protobuf",
+    "packages/framework-locations-redis",
+    "packages/nestjs",
+    "packages/stream-connector",
+    "packages/stream-wire"
+  ],
+  "devDependencies": {
+    "@types/node": "^22.15.30",
+    "esbuild": "^0.25.6",
+    "eslint": "^10.5.0",
+    "playwright": "^1.61.1",
+    "protobufjs": "^8.7.1",
+    "typescript": "^5.8.3",
+    "typescript-eslint": "^8.61.1"
+  },
+  "dependencies": {
+    "@nestjs/common": "^10.4.22",
+    "@nestjs/config": "^4.0.4",
+    "@nestjs/core": "^10.4.22",
+    "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/sdk-metrics": "^2.9.0",
+    "@zlink-systems/http-client": "file:../../../.artifacts/wsl/npm/zlink-systems-http-client-0.4.3.tgz",
+    "@zlink-systems/zlink": "file:../../../.artifacts/wsl/npm/zlink-systems-zlink-11.2.0.tgz",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.2",
+    "undici": "6.27.0"
+  }
+}
