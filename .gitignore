@@ -268,7 +268,12 @@ local.tar.gz
 core/bench/**/results/
 bindings/*/benchwithzlink/results/
 bindings/*/perf/results/
+bindings/c/bench/with_grpc/log/
+bindings/c/bench/with_zmq/results/
 core/tests/scenario/**/result/
+
+# Local Gradle cache
+**/.gradle-codex/
 
 # Refactor execution logs
 core/tools/refactor/logs/

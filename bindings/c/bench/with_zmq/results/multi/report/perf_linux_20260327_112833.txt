@@ -1,1 +1,0 @@
-Error: unsupported pattern 'MULTI_PUBSUB'. Use router_router.

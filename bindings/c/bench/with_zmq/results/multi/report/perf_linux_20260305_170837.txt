@@ -1,4 +1,0 @@
-Error: missing benchmark binaries in /home/hep7/project/kairos/zlink/core/build/bin and auto-build is disabled.
-  - comp_std_zmq_multi_dealer_router
-  - comp_zlink_multi_dealer_router_client
-  - comp_zlink_multi_dealer_router_server
