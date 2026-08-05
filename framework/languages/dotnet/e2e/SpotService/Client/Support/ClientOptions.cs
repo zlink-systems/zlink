@@ -13,11 +13,12 @@ internal sealed record ClientOptions(
     string SessionBStreamEndpoint,
     string SmC6PauseAckFile,
     string SmC6ResumeAckFile,
-    string SmC6BlockingPauseAckFile,
     string PlayATransportProxyAdmin,
     string PlayBTransportProxyAdmin,
     string SessionATransportProxyAdmin,
-    string OperationGroup)
+    string OperationGroup,
+    string? B10ControlEndpoint = null,
+    string? B10ControlRid = null)
 {
     public static ClientOptions Parse(string[] args)
         => E2eConfiguration.Load<ClientOptions>(args);

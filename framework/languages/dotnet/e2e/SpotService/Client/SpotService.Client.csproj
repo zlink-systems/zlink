@@ -7,11 +7,16 @@
     </PropertyGroup>
 
     <ItemGroup>
+        <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    </ItemGroup>
+
+    <ItemGroup>
         <Compile Include="../../InstanceSpot/Client/Scenarios/InstanceSpotTrackAScenario.cs" Link="Scenarios/InstanceSpotTrackAScenario.cs" />
         <Compile Include="../../InstanceSpot/Client/Scenarios/InstanceSpotIdleEvictionScenario.cs" Link="Scenarios/InstanceSpotIdleEvictionScenario.cs" />
         <ProjectReference Include="../Shared/SpotService.Shared.csproj"/>
         <ProjectReference Include="../../../src/Systems.Zlink.Stream.Connector/Systems.Zlink.Stream.Connector.csproj"/>
         <PackageReference Include="Zlink.HttpClient"/>
         <ProjectReference Include="../../../src/Zlink.Framework/Zlink.Framework.csproj"/>
+        <ProjectReference Include="../../../src/Zlink.Framework.AspNetCore/Zlink.Framework.AspNetCore.csproj"/>
     </ItemGroup>
 </Project>

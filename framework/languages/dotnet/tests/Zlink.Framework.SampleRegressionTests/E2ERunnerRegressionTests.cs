@@ -89,7 +89,7 @@ public sealed partial class RegressionTests
         Assert.Contains("action=Drop", rmC5, StringComparison.Ordinal);
         Assert.Contains("ProviderEvidence.WaitFromEitherAsync", rmC5, StringComparison.Ordinal);
         Assert.DoesNotContain("Task.WhenAll(providerAEvidence, providerBEvidence)", rmC5, StringComparison.Ordinal);
-        Assert.Contains("ZLinkFrameworkErrorKind.ProtocolError", rmC8, StringComparison.Ordinal);
+        Assert.DoesNotContain("ExpectedFailureRes", rmC8, StringComparison.Ordinal);
         Assert.DoesNotContain(".Failed", rmC2 + rmC5 + rmC8, StringComparison.Ordinal);
 
         var providerEvidence = File.ReadAllText(Path.Combine(
@@ -292,7 +292,7 @@ public sealed partial class RegressionTests
     }
 
     [Fact]
-    public void LocationMessaging_Dynamic_Providers_Receive_The_Required_Message_Size_Limit()
+    public void LocationMessaging_RmC8_Uses_Transport_Default_Without_Framework_Size_Override()
     {
         var launcher = File.ReadAllText(Path.Combine(
             ResolveE2eRoot(),
@@ -301,8 +301,7 @@ public sealed partial class RegressionTests
             "Support",
             "DynamicClusterLauncher.cs"));
 
-        Assert.Contains("MaxMessageSize", launcher, StringComparison.Ordinal);
-        Assert.Contains("2_097_152", launcher, StringComparison.Ordinal);
+        Assert.DoesNotContain("MaxMessageSize", launcher, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -428,7 +427,7 @@ public sealed partial class RegressionTests
             .Order(StringComparer.Ordinal)
             .ToArray();
 
-        Assert.Equal(58, scenarioIds.Length);
+        Assert.Equal(65, scenarioIds.Length);
         foreach (var scenarioId in scenarioIds)
             Assert.Contains($"\"{scenarioId}\" =>", program, StringComparison.Ordinal);
     }

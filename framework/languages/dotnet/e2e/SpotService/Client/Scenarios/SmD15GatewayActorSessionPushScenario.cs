@@ -26,7 +26,7 @@ internal static class SmD15GatewayActorSessionPushScenario
             MaxReceivedMessages = 1024
         });
         await client.Connect.Async();
-        await client.Request(new AuthReq(actorId, "d15 push chain"))
+        var auth = await client.Request(new AuthReq(actorId, "d15 push chain"))
             .PacketName("AuthReq")
             .Async<AuthRes>();
         await client.Request(new ActorPingReq("d15-bind-probe"))
@@ -46,13 +46,13 @@ internal static class SmD15GatewayActorSessionPushScenario
 
         await playA.Post("/evidence/wait")
             .Body(new EvidenceWaitReq([
-                $"actor-push|rid=play-a|actor={actorId}",
+                $"actor-push|rid={auth.NodeRid}|actor={actorId}",
                 $"|value={marker}"
             ]))
             .Async<string[]>();
         await gateway.Post("/evidence/wait")
             .Body(new EvidenceWaitReq([
-                $"actor-push-delivered|rid=gateway|actor={actorId}|value={marker}|node=play-a"
+                $"actor-push-delivered|rid=gateway|actor={actorId}|value={marker}|node={auth.NodeRid}"
             ]))
             .Async<string[]>();
         Console.WriteLine("operation SpotService.sm-d15 passed");

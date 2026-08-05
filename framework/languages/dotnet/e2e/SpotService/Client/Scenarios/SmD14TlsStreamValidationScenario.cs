@@ -44,7 +44,9 @@ internal static class SmD14TlsStreamValidationScenario
             .Async<ActorPingRes>();
         var notify = await pushed;
         ZlinkStreamAssert.Ensure(reply.ActorId == "actor-sm-d14-tls", "SM-D14 TLS actor reply mismatch.");
-        ZlinkStreamAssert.Ensure(reply.NodeRid == "play-a", "SM-D14 TLS actor node mismatch.");
+        ZlinkStreamAssert.Ensure(
+            reply.NodeRid.StartsWith("play-a-", StringComparison.Ordinal),
+            "SM-D14 TLS actor node mismatch.");
         ZlinkStreamAssert.Ensure(notify.Payload.ActorId == "actor-sm-d14-tls", "SM-D14 TLS push actor mismatch.");
         ZlinkStreamAssert.Ensure(notify.Payload.Value == "tls-push", "SM-D14 TLS push payload mismatch.");
 

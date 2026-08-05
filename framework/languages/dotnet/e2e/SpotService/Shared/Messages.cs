@@ -28,6 +28,7 @@ public static class SpotServiceNames
     public const string WeightCapacitySpotType = "scenario-weight-capacity-spot";
     public const string AlternateSpotType = "scenario-alternate-spot";
     public const string SpotOnlyUserSpotType = "spot-only-user-spot";
+    public const int SpotOnlyTargetDelta = 7;
     public const string MultiSpotTypeA = "multi-spot-a";
     public const string MultiSpotTypeB = "multi-spot-b";
     public const string ActorIdMetadata = "actor-id";
@@ -53,6 +54,16 @@ public sealed record ActorManagerProbeRes(
     string Operation,
     string State,
     ActorRefRes? Actor);
+
+public sealed record ActorCreateRaceReq(string ActorId);
+
+public sealed record ActorCreateRaceRes(
+    string ActorId,
+    string FirstState,
+    string FirstReply,
+    string SecondState,
+    ActorRefRes? SecondActor,
+    ActorRefRes? FinalActor);
 
 public sealed record StateReq(string Operation, int Delta);
 
@@ -138,33 +149,31 @@ public sealed record SpotStageTimerRes(string SpotRid, string Name, bool Started
 
 public sealed record SpotMsg(string Marker);
 
-public sealed record SpotBackpressureMsg(string Marker, int Sequence, string Payload);
+public sealed record SpotBackpressureMsg(
+    string Marker,
+    int Sequence,
+    string Payload,
+    string? GateSpotId = null);
 
 public sealed record SpotBackpressurePublishReq(
     string Marker,
     int PayloadBytes = 65536,
     int MaxAttempts = 20000,
-    bool Blocking = false,
-    int StartSequence = 1);
-
-public sealed record SpotBackpressureSubmitRes(
-    int Sequence,
-    long ElapsedMilliseconds);
-
-public sealed record SpotBackpressureAttemptRes(
-    int Sequence,
-    string Status,
-    long ElapsedMilliseconds,
-    ulong SnapshotRemoteNodeCount,
-    ulong AdmittedRemoteNodeCount,
-    ulong DroppedRemoteNodeCount,
-    ulong SnapshotLocalSpotCount,
-    ulong AdmittedLocalSpotCount,
-    ulong DroppedLocalSpotCount);
+    int StartSequence = 1,
+    string? GateSpotId = null);
 
 public sealed record SpotBackpressurePublishRes(
-    SpotBackpressureAttemptRes NonBlocking,
-    SpotBackpressureAttemptRes Blocking);
+    int StartSequence,
+    int EndSequence,
+    int AcceptedCount,
+    long ElapsedMilliseconds);
+
+public sealed record RuntimeInboundStatusRes(
+    ulong ApplicationHwmBytes,
+    ulong PendingPayloadBytes,
+    ulong QueuedPayloadBytes,
+    ulong ActivePayloadBytes,
+    bool ApplicationReceivePaused);
 
 public sealed record SpotOutboundMsg(string Marker);
 
@@ -187,6 +196,38 @@ public sealed record MissingChannelNotify(string Marker);
 public sealed record CreateSpotReq(string SpotRid);
 
 public sealed record CreateSpotRes(string SpotRid, string NodeRid, string State);
+
+public sealed record EntryIdentityRes(string NodeRid, string EntrySpotId);
+
+public sealed record GatedSpotCreateReq(string SpotRid);
+
+public sealed record GatedSpotCreateRes(string SpotRid, string NodeRid, string State);
+
+public sealed record SpotPublicationProbeRes(
+    string SpotRid,
+    bool Found,
+    string FoundNodeRid,
+    bool RequestSucceeded,
+    string RequestErrorKind,
+    string RequestNodeRid,
+    int Value);
+
+public sealed record AutomaticSpotBatchReq(int Count = 200);
+
+public sealed record AutomaticSpotBatchRes(
+    int Requested,
+    int Created,
+    int DistinctIds,
+    int SuccessfulRequests,
+    string[] SpotIds);
+
+public sealed record SpotIdBoundaryRes(
+    string[] ValidIds,
+    string[] FoundIds,
+    int[] StateValues,
+    string InvalidErrorKind,
+    int InvalidFactoryCalls,
+    bool ExactEquality);
 
 public sealed record CloseSpotReq(string SpotRid);
 
@@ -301,6 +342,11 @@ public sealed record SnapshotRes(string ActorId, int Seen);
 public sealed record ControlPingReq(string Value);
 
 public sealed record ControlPingRes(string Value, string NodeRid);
+
+public sealed record B10ManualStatusRes(
+    bool ActorManagerProvided,
+    bool SpotManagerProvided,
+    bool ObjectOperationsProvided);
 
 public sealed record SpotTypeMismatchReq(string SpotRid);
 

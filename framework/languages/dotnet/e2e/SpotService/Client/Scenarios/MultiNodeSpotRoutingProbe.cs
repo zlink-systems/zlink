@@ -54,16 +54,22 @@ internal static class MultiNodeSpotRoutingProbe
             "SM-Q9 node A create reply node mismatch.");
         ZlinkStreamAssert.Ensure(firstA.Value == 11, "SM-Q9 node A route-to-spot reply value mismatch.");
         ZlinkStreamAssert.Ensure(directA.SpotRid == spotA, "SM-Q9 node A direct spot reply target mismatch.");
-        ZlinkStreamAssert.Ensure(directA.NodeRid == SpotServiceNames.MultiSpotNodeA,
+        ZlinkStreamAssert.Ensure(IsNode(directA.NodeRid, SpotServiceNames.MultiSpotNodeA),
             "SM-Q9 node A direct spot reply node mismatch.");
         ZlinkStreamAssert.Ensure(directA.Value == 11, "SM-Q9 node A direct spot reply value mismatch.");
         ZlinkStreamAssert.Ensure(createdB.NodeRid == SpotServiceNames.MultiSpotNodeB,
             "SM-Q9 node B create reply node mismatch.");
         ZlinkStreamAssert.Ensure(firstB.Value == 17, "SM-Q9 node B route-to-spot reply value mismatch.");
         ZlinkStreamAssert.Ensure(directB.SpotRid == spotB, "SM-Q9 node B direct spot reply target mismatch.");
-        ZlinkStreamAssert.Ensure(directB.NodeRid == SpotServiceNames.MultiSpotNodeB,
+        ZlinkStreamAssert.Ensure(IsNode(directB.NodeRid, SpotServiceNames.MultiSpotNodeB),
             "SM-Q9 node B direct spot reply node mismatch.");
         ZlinkStreamAssert.Ensure(directB.Value == 17, "SM-Q9 node B direct spot reply value mismatch.");
         Console.WriteLine("operation SpotService.sm-q9 passed");
+    }
+
+    private static bool IsNode(string actualRid, string expectedPrefix)
+    {
+        return actualRid == expectedPrefix
+               || actualRid.StartsWith($"{expectedPrefix}-", StringComparison.Ordinal);
     }
 }

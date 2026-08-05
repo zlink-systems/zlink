@@ -44,6 +44,7 @@ internal static class GatewayHostFactory
         });
         builder.WebHost.UseUrls(options.HttpUrl);
         builder.Services.AddSingleton(new EvidenceStore(options.Rid, options.EvidenceFile));
+        builder.Services.AddSingleton<ActorCreationCoordinator>();
         builder.Services.AddSingleton(new E2eMessageFlowListener(
             Path.Combine(options.LogDir, $"{options.Rid}-flow.log"),
             options.Rid));
@@ -70,8 +71,12 @@ internal static class GatewayHostFactory
                 .SetLevel(ZLinkDiagnosticsLevel.Normal);
             var externalMesh = framework.AddRouteMesh(SpotServiceNames.ExternalSpotChannel)
                 .Listen("tcp://127.0.0.1:0")
-                .SetRoutingIdPrefix(options.Rid);
+                .SetRoutingId(RoutingId.From(options.Rid));
             externalMesh.Channel(SpotServiceNames.ExternalSpotChannel).Client();
+            if (!string.IsNullOrWhiteSpace(options.ExternalSpotEndpoint))
+            {
+                externalMesh.PeerConnections.Connect(options.ExternalSpotEndpoint);
+            }
             var mesh19 = framework.AddRouteMesh(SpotServiceNames.SpotChannel)
                 .Listen(Require(options.SpotRouterEndpoint, "SpotRouterEndpoint"))
                 .SetRoutingIdPrefix(options.Rid);
@@ -126,26 +131,55 @@ internal static class GatewayHostFactory
             CancellationToken cancellationToken) =>
         {
             var payload = new string('x', Math.Clamp(request.PayloadBytes, 1024, 1024 * 1024));
-            var sequence = Math.Max(1, request.StartSequence);
+            var startSequence = Math.Max(1, request.StartSequence);
+            var maxAttempts = Math.Clamp(request.MaxAttempts, 1, 200);
             var started = Stopwatch.GetTimestamp();
-            await publisher.Publish(
-                    SpotServiceNames.SpotChannel,
-                    SpotServiceNames.SpotMsgTopic,
-                    new SpotBackpressureMsg(request.Marker, sequence, payload))
-                .Async(cancellationToken);
+            var accepted = 0;
+            var endSequence = startSequence - 1;
+            for (var offset = 0; offset < maxAttempts; offset++)
+            {
+                var sequence = startSequence + offset;
+                try
+                {
+                    await publisher.Publish(
+                            SpotServiceNames.SpotChannel,
+                            SpotServiceNames.SpotMsgTopic,
+                            new SpotBackpressureMsg(
+                                request.Marker,
+                                sequence,
+                                payload,
+                                request.GateSpotId))
+                        .Async(cancellationToken);
+                    accepted++;
+                    endSequence = sequence;
+                }
+                catch (ZLinkFrameworkException) when (accepted > 0)
+                {
+                    break;
+                }
+            }
+            if (accepted == 0)
+                throw new InvalidOperationException(
+                    "The backpressure probe could not submit a publish operation.");
             var elapsed = Stopwatch.GetElapsedTime(started);
-            return Results.Ok(new SpotBackpressureSubmitRes(
-                sequence,
+            return Results.Ok(new SpotBackpressurePublishRes(
+                startSequence,
+                endSequence,
+                accepted,
                 (long)elapsed.TotalMilliseconds));
         });
         app.MapPost("/channel/route-ping", async (
             IZLinkRouteClient routes,
+            IZLinkRouteMeshRuntime meshRuntime,
             ControlPingReq request,
             CancellationToken cancellationToken) =>
         {
             var reply = await routes.RequestToNode(
                     SpotServiceNames.ExternalSpotChannel,
-                    RoutingId.From("play-a"),
+                    ResolveReadyPeerRoutingId(
+                        meshRuntime,
+                        SpotServiceNames.ExternalSpotChannel,
+                        "play-a"),
                     request)
                 .Async<ControlPingRes>(cancellationToken);
             return Results.Ok(reply);
@@ -327,6 +361,77 @@ internal static class GatewayHostFactory
                     "Unknown Actor create terminal result.")
             };
         });
+        app.MapPost("/actor/b11/start", (
+            ActorCreationCoordinator coordinator,
+            ActorRefReq request) =>
+        {
+            coordinator.Start(request.ActorId);
+            return Results.Ok(new ActorManagerProbeRes("start", "Started", null));
+        });
+        app.MapPost("/actor/b11/status", async (
+            ActorCreationCoordinator coordinator,
+            ActorRefReq request) =>
+        {
+            var result = await coordinator.CompleteAsync(request.ActorId);
+            return result switch
+            {
+                ZLinkActorCreateResult.Created created => Results.Ok(
+                    new ActorManagerProbeRes("status", "Created", ToActorRef(created.Actor))),
+                ZLinkActorCreateResult.Existing existing => Results.Ok(
+                    new ActorManagerProbeRes("status", "Existing", ToActorRef(existing.Actor))),
+                ZLinkActorCreateResult.Rejected => Results.Ok(
+                    new ActorManagerProbeRes("status", "Rejected", null)),
+                _ => throw new InvalidOperationException("Unknown Actor create terminal result.")
+            };
+        });
+        app.MapPost("/actor/create-race", async (
+            ActorCreateRaceReq request,
+            IZLinkActorManager actors,
+            CancellationToken cancellationToken) =>
+        {
+            try
+            {
+                var firstTask = actors
+                    .GetOrCreate(request.ActorId, SpotServiceNames.ActorType)
+                    .InMesh(SpotServiceNames.SpotChannel)
+                    .Request(new ScenarioActorCreateReq("first"))
+                    .Timeout(TimeSpan.FromSeconds(15))
+                    .Async(cancellationToken)
+                    .AsTask();
+                if (!string.IsNullOrWhiteSpace(options.ActorCreationRaceGateFile))
+                    await WaitForFileAsync(
+                        options.ActorCreationRaceGateFile + ".entered",
+                        cancellationToken);
+                var secondTask = actors
+                    .GetOrCreate(request.ActorId, SpotServiceNames.ActorType)
+                    .InMesh(SpotServiceNames.SpotChannel)
+                    .Request(new ScenarioActorCreateReq("second"))
+                    .Timeout(TimeSpan.FromSeconds(15))
+                    .Async(cancellationToken)
+                    .AsTask();
+                if (!string.IsNullOrWhiteSpace(options.ActorCreationRaceGateFile))
+                    File.WriteAllText(
+                        options.ActorCreationRaceGateFile + ".release",
+                        "release");
+                var first = await firstTask;
+                var second = await secondTask;
+                var final = await actors.FindAsync(request.ActorId, cancellationToken);
+                return Results.Ok(new ActorCreateRaceRes(
+                    request.ActorId,
+                    StateOf(first),
+                    ReplyOf(first),
+                    StateOf(second),
+                    ActorOf(second),
+                    final is { } current ? ToActorRef(current) : null));
+            }
+            finally
+            {
+                if (!string.IsNullOrWhiteSpace(options.ActorCreationRaceGateFile))
+                    File.WriteAllText(
+                        options.ActorCreationRaceGateFile + ".release",
+                        "release");
+            }
+        });
         app.MapPost("/spot/get-or-create", async (
             CreateSpotReq request,
             IZLinkSpotManager spots,
@@ -467,6 +572,75 @@ internal static class GatewayHostFactory
         return app;
     }
 
+    private static string StateOf(ZLinkActorCreateResult result) => result switch
+    {
+        ZLinkActorCreateResult.Created => "Created",
+        ZLinkActorCreateResult.Existing => "Existing",
+        ZLinkActorCreateResult.Rejected => "Rejected",
+        _ => throw new InvalidOperationException("Unknown Actor create terminal result.")
+    };
+
+    private static string ReplyOf(ZLinkActorCreateResult result) => result switch
+    {
+        ZLinkActorCreateResult.Created created => created.Reply?.Decode<string>() ?? string.Empty,
+        ZLinkActorCreateResult.Rejected rejected => rejected.Reply?.Decode<string>() ?? string.Empty,
+        _ => string.Empty
+    };
+
+    private static ActorRefRes? ActorOf(ZLinkActorCreateResult result) => result switch
+    {
+        ZLinkActorCreateResult.Created created => ToActorRef(created.Actor),
+        ZLinkActorCreateResult.Existing existing => ToActorRef(existing.Actor),
+        _ => null
+    };
+
+    private static ActorRefRes ToActorRef(ActorRef actor) => new(
+        actor.ActorId,
+        actor.NodeRid.ToString(),
+        actor.ObjectGeneration);
+
+    private static RoutingId ResolveReadyPeerRoutingId(
+        IZLinkRouteMeshRuntime meshRuntime,
+        string meshName,
+        string ridOrPrefix)
+    {
+        var readyPeers = meshRuntime.GetStatus(meshName).Peers.Where(candidate =>
+        {
+            var candidateRid = candidate.NodeRid.ToString();
+            return candidate.State == ZLinkPeerState.Ready
+                   && (string.Equals(candidateRid, ridOrPrefix, StringComparison.Ordinal)
+                       || candidateRid.StartsWith(
+                           $"{ridOrPrefix}-",
+                           StringComparison.Ordinal));
+        }).ToArray();
+
+        return readyPeers.Length switch
+        {
+            1 => readyPeers[0].NodeRid,
+            0 => throw new InvalidOperationException(
+                $"Mesh '{meshName}' has no Ready node for prefix '{ridOrPrefix}'."),
+            _ => throw new InvalidOperationException(
+                $"Mesh '{meshName}' has more than one Ready node for prefix "
+                + $"'{ridOrPrefix}': "
+                + string.Join(", ", readyPeers.Select(
+                    static peer => peer.NodeRid.ToString()))
+                + ".")
+        };
+    }
+
+    private static async Task WaitForFileAsync(
+        string path,
+        CancellationToken cancellationToken)
+    {
+        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(15);
+        while (!File.Exists(path))
+        {
+            if (DateTimeOffset.UtcNow >= deadline)
+                throw new TimeoutException($"Timed out waiting for file '{path}'.");
+            await Task.Delay(TimeSpan.FromMilliseconds(5), cancellationToken);
+        }
+    }
+
     static string Require(string? value, string optionName)
         => string.IsNullOrWhiteSpace(value)
             ? throw new InvalidOperationException($"{optionName} is required.")
@@ -547,6 +721,7 @@ internal sealed record GatewayOptions(
     string? ExternalSpotEndpoint = null,
     string? SpotPeerAEndpoint = null,
     string? SpotPeerBEndpoint = null,
+    string? ActorCreationRaceGateFile = null,
     ulong SpotPublisherSendHighWaterMark = 1,
     int SpotPublisherSendTimeoutMilliseconds = 250)
 {

@@ -7,6 +7,7 @@ using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Channels;
 using Zlink.Framework.Runtime.Diagnostics;
 using Zlink.Framework.Runtime.Dispatch;
+using Zlink.Framework.Runtime.Messaging;
 using Peer = Zlink.Framework.Runtime.Service.ZLinkMeshPeer;
 using OwnedMailbox = Zlink.Framework.Runtime.Service.ZLinkMeshNodeOwnedMailbox;
 using QueuedRecord = Zlink.Framework.Runtime.Service.ZLinkMeshQueuedRecord;
@@ -3619,7 +3620,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     }
 
     private static IReadOnlyList<Message> CloneParts(IReadOnlyList<Message> parts) =>
-        parts.Select(Message.From).ToArray();
+        ZLinkMessageParts.CopyAll(parts);
 
     private static void DisposeParts(IReadOnlyList<Message> parts)
     {
@@ -6669,7 +6670,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 ServiceWireConstants.Command.ChannelRequest => MeshRecordKind.ChannelRequest,
                 _ => throw new ArgumentOutOfRangeException(nameof(command))
             };
-            var retained = parts.Select(Message.From).ToArray();
+            var retained = CloneParts(parts);
             Func<IReadOnlyList<Message>, SendFlags, SubmitResult>? reply = null;
             if (correlation != 0)
                 reply = (replyParts, _) =>
@@ -6696,7 +6697,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     null,
                     metadata.IsEmpty ? null : metadata.ToArray(),
                     0,
-                    retained.Length,
+                    retained.Count,
                     0,
                     0,
                     null,
@@ -7184,25 +7185,27 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         MeshRecordPayload? kindData = null,
         bool publishEvent = true)
     {
+        var completionRecord = new MeshReceiveRecord(
+            MeshRecordKind.Completion,
+            MeshReadyDomains.Infrastructure,
+            default,
+            string.Empty,
+            0,
+            default,
+            operationId,
+            operationKind,
+            null,
+            null,
+            null,
+            0,
+            parts.Count,
+            result,
+            failure,
+            kindData);
         var queued = new QueuedRecord(
-            new MeshReceiveRecord(
-                MeshRecordKind.Completion,
-                MeshReadyDomains.Infrastructure,
-                default,
-                string.Empty,
-                0,
-                default,
-                operationId,
-                operationKind,
-                null,
-                null,
-                null,
-                0,
-                parts.Count,
-                result,
-                failure,
-                kindData),
-            parts);
+            completionRecord,
+            parts,
+            GetApplicationPayloadBytes(completionRecord, parts));
         var currentCompletionReplaced = false;
         MeshReceiveRecord? currentOverflowFailure = null;
         List<MeshReceiveRecord>? overflowFailures = null;
@@ -7387,7 +7390,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 record.OperationId,
                 record.OperationKind,
                 RequestResult.Backpressured),
-            Array.Empty<Message>());
+            Array.Empty<Message>(),
+            applicationPayloadBytes: 0);
 
     private void AddPendingInfrastructureCompletionAccounting(
         QueuedRecord queued)
@@ -7520,7 +7524,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         bool admitApplication,
         ref ZLinkInboundReceivePermit? receivePermit)
     {
-        var queued = new QueuedRecord(record, parts);
+        var payloadBytes = GetApplicationPayloadBytes(record, parts);
+        record.ApplicationPayloadBytes = payloadBytes;
+        var queued = new QueuedRecord(record, parts, payloadBytes);
         try
         {
             if (admitApplication
@@ -7568,6 +7574,14 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
     }
 
+    private static ulong GetApplicationPayloadBytes(
+        MeshReceiveRecord record,
+        IReadOnlyList<Message> parts) =>
+        record.ApplicationPayloadBytes
+        ?? (parts is IZLinkApplicationPayloadSized sized
+            ? sized.ApplicationPayloadBytes
+            : ZLinkEnvelopeCodec.MeasureApplicationPayloadBytes(parts));
+
     private void RecordOwnedRecordEnqueued(ulong pendingBytes)
     {
         Interlocked.Increment(ref _queuedMessages);
@@ -7607,7 +7621,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         var count = 0;
         var maximumRecords = Math.Min(ReceiveBatchSize, batch.MaximumRecords);
         while (count < maximumRecords
-               && mailbox.TryDequeue(batch, out var queued))
+               && mailbox.TryDequeue(batch, _inboundDispatchBudget, out var queued))
         {
             batch.Add(queued.Record, queued.TakeParts());
             count++;

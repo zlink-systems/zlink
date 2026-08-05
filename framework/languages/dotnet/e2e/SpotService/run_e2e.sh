@@ -77,7 +77,13 @@ case "$SCENARIO_SET" in
     NEED_SESSION_B=1
     NEED_TLS_STREAM=1
     ;;
-  sm-e1-f4|sm-e2-e3|sm-a7-a8-c4|sm-e4|sm-a5|sm-g2|sm-g5|sm-g5a|sm-g5b)
+  sm-e4|sm-e2-e3)
+    NEED_SESSION_NODES=0
+    ;;
+  sm-a7-a8-c4)
+    NEED_SESSION_NODES=0
+    ;;
+  sm-e1-f4|sm-a5|sm-g2|sm-g5|sm-g5a|sm-g5b)
     NEED_SESSION_NODES=0
     if [[ "$SCENARIO_SET" != "sm-g2" && "$SCENARIO_SET" != "sm-g5" && "$SCENARIO_SET" != "sm-g5a" && "$SCENARIO_SET" != "sm-g5b" ]]; then
       NEED_PLAY_B=0
@@ -86,11 +92,18 @@ case "$SCENARIO_SET" in
   sm-c6)
     NEED_SESSION_NODES=0
     ;;
+  sm-a9|sm-a10|sm-b0a|sm-b10|sm-b11)
+    NEED_SESSION_NODES=0
+    ;;
   sm-d14)
     NEED_PLAY_B=0
     NEED_TLS_STREAM=1
     ;;
   sm-b8)
+    NEED_SESSION_NODES=0
+    NEED_PLAY_B=0
+    ;;
+  sm-a12|sm-a13|sm-a12-a13)
     NEED_SESSION_NODES=0
     NEED_PLAY_B=0
     ;;
@@ -185,11 +198,39 @@ build_projects() {
 if [[ "$SCENARIO_SET" == "all" && "$ALL_CHILD" != "1" ]]; then
   echo "log_dir=$LOG_DIR"
   build_projects
-  for child_group in default-batch sm-f6 sm-g2 sm-g3 sm-g4 sm-g5a sm-g5b sm-g1 sm-q9; do
+  child_manifest="$LOG_DIR/child-manifest.tsv"
+  printf 'operation_group\texit_code\tchild_log_dir\tstdout_log\tstderr_log\n' \
+    >"$child_manifest"
+  for child_group in default-batch sm-a9 sm-a10 sm-b0a sm-b10 sm-b11 sm-f6 sm-g2 sm-g3 sm-g4 sm-g5a sm-g5b sm-g1 sm-q9; do
     echo "child operation_group=${child_group}"
-    timeout "${CHILD_PROCESS_TIMEOUT_SECONDS}s" \
-      "$SCRIPT_DIR/run_e2e.sh" --all-child --skip-build --start-order "$E2E_START_ORDER" "$child_group"
+    child_stdout_log="$LOG_DIR/child-${child_group}.stdout.log"
+    child_stderr_log="$LOG_DIR/child-${child_group}.stderr.log"
+    child_status=0
+    if timeout "${CHILD_PROCESS_TIMEOUT_SECONDS}s" \
+        "$SCRIPT_DIR/run_e2e.sh" --all-child --skip-build --start-order "$E2E_START_ORDER" "$child_group" \
+        >"$child_stdout_log" 2>"$child_stderr_log"; then
+      child_status=0
+    else
+      child_status=$?
+    fi
+    cat "$child_stdout_log"
+    cat "$child_stderr_log" >&2
+    child_log_dir="$(sed -n 's/^log_dir=//p' "$child_stdout_log" | /usr/bin/head -1)"
+    printf '%s\t%s\t%s\t%s\t%s\n' \
+      "$child_group" \
+      "$child_status" \
+      "$child_log_dir" \
+      "$child_stdout_log" \
+      "$child_stderr_log" \
+      >>"$child_manifest"
+    if [[ "$child_status" != "0" ]]; then
+      printf 'spot-service e2e result=failed\toperation_group=%s\texit_code=%s\n' \
+        "$child_group" "$child_status" \
+        >>"$child_manifest"
+      exit "$child_status"
+    fi
   done
+  printf 'spot-service e2e result=passed\n' >>"$child_manifest"
   echo "spot-service e2e result=passed"
   exit 0
 fi
@@ -628,6 +669,75 @@ assert_expected_server_exit() {
   fi
 }
 
+wait_for_server_exit() {
+  local role="$1"
+  local pid="$2"
+  for _ in $(seq 1 "$PROCESS_SHUTDOWN_ATTEMPTS"); do
+    if [[ -f "$LOG_DIR/${role}.exit.log" ]]; then
+      wait "$pid" 2>/dev/null || true
+      return 0
+    fi
+    if ! kill -0 "$pid" 2>/dev/null; then
+      wait "$pid" 2>/dev/null || true
+      return 0
+    fi
+    sleep "$LOCAL_READINESS_POLL_SECONDS"
+  done
+  echo "server role ${role} did not exit within the expected startup window" >&2
+  return 1
+}
+
+assert_b10_invalid_server() {
+  local role="$1"
+  local pid="$2"
+  local http_url="$3"
+  wait_for_server_exit "$role" "$pid"
+  local exit_line
+  exit_line="$(<"$LOG_DIR/${role}.exit.log")"
+  if [[ "$exit_line" == *"exit_code=0" ]]; then
+    echo "SM-B10 invalid role unexpectedly started successfully: ${role}" >&2
+    return 1
+  fi
+  if curl --max-time "$HTTP_PROBE_TIMEOUT_SECONDS" \
+      --connect-timeout "$HTTP_PROBE_TIMEOUT_SECONDS" \
+      -fsS "$http_url/health" >/dev/null 2>&1; then
+    echo "SM-B10 invalid role exposed an HTTP listener: ${role}" >&2
+    return 1
+  fi
+  if ! grep -Eiq "Location Store" \
+      "$LOG_DIR/${role}.stderr.log" "$LOG_DIR/${role}.stdout.log"; then
+    echo "SM-B10 invalid role did not report the Location Store configuration error: ${role}" >&2
+    tail -120 "$LOG_DIR/${role}.stderr.log" >&2 || true
+    return 1
+  fi
+}
+
+run_b10_client() {
+  local config="$CONFIG_DIR/client-sm-b10.json"
+  python3 "$SCRIPT_DIR/../write_role_config.py" "$config" -- \
+    --config-dir "$CONFIG_DIR" \
+    --gateway-url "$GATEWAY_HTTP" \
+    --play-a-url "$PLAY_A_HTTP" \
+    --play-b-url "$PLAY_B_HTTP" \
+    --multi-a-url "$MULTI_A_HTTP" \
+    --multi-b-url "$MULTI_B_HTTP" \
+    --session-a-url "$SESSION_A_HTTP" \
+    --session-a-stream-endpoint "$SESSION_A_STREAM" \
+    --session-a-tls-stream-endpoint "$SESSION_A_TLS_STREAM" \
+    --session-b-stream-endpoint "$SESSION_B_STREAM" \
+    --sm-c6-pause-ack-file "$LOG_DIR/sm-c6-paused" \
+    --sm-c6-resume-ack-file "$LOG_DIR/sm-c6-resumed" \
+    --play-a-transport-proxy-admin "$PLAY_A_TRANSPORT_PROXY_ADMIN" \
+    --play-b-transport-proxy-admin "$PLAY_B_TRANSPORT_PROXY_ADMIN" \
+    --session-a-transport-proxy-admin "$SESSION_A_TRANSPORT_PROXY_ADMIN" \
+    --b10-control-endpoint "$PLAY_A_CONTROL" \
+    --b10-control-rid "b10-manual-control" \
+    --operation-group sm-b10
+  timeout "${CLIENT_PROCESS_TIMEOUT_SECONDS}s" dotnet "$CLIENT_DLL" --config "$config" \
+    2> >(tee -a "$LOG_DIR/client.stderr.log" >&2) \
+    | tee -a "$LOG_DIR/client.stdout.log"
+}
+
 start_named_server() {
   case "$1" in
     session-a)
@@ -708,6 +818,15 @@ start_named_server() {
       if [[ "$SCENARIO_SET" == "instance-idle" ]]; then
         PLAY_A_ARGS+=(--instance-spot-idle-timeout-milliseconds 100)
       fi
+      if [[ "$SCENARIO_SET" == "sm-a9" ]]; then
+        PLAY_A_ARGS+=(--spot-initialization-gate-file "$LOG_DIR/sm-a9-play-a-gate")
+      fi
+      if [[ "$SCENARIO_SET" == "sm-b11" ]]; then
+        PLAY_A_ARGS+=(--actor-factory-gate-file "$LOG_DIR/sm-b11-play-a-gate")
+      fi
+      if [[ "$SCENARIO_SET" == "sm-b0a" ]]; then
+        PLAY_A_ARGS+=(--actor-creation-race-gate-file "$LOG_DIR/sm-b0a-actor-gate")
+      fi
       if [[ "$SCENARIO_SET" == "sm-g5" || "$SCENARIO_SET" == "sm-g5a" || "$SCENARIO_SET" == "sm-g5b" ]]; then
         PLAY_A_ARGS+=(--population-limit 1000)
       fi
@@ -736,6 +855,12 @@ start_named_server() {
       fi
       if [[ "$SCENARIO_SET" == "sm-g5" || "$SCENARIO_SET" == "sm-g5a" || "$SCENARIO_SET" == "sm-g5b" ]]; then
         PLAY_B_ARGS+=(--population-limit 1000)
+      fi
+      if [[ "$SCENARIO_SET" == "sm-c6" || "$SCENARIO_SET" == "default-batch" ]]; then
+        PLAY_B_ARGS+=(
+          --application-hwm-bytes 1048576
+          --backpressure-gate-file "$LOG_DIR/sm-c6-play-b-gate"
+        )
       fi
       start_server play-b "$PLAY_DLL" "${PLAY_B_ARGS[@]}"
       ;;
@@ -770,7 +895,7 @@ start_named_server() {
       start_server multi-node-b "$MULTI_NODE_DLL" "${MULTI_NODE_B_ARGS[@]}"
       ;;
     gateway)
-      start_server gateway "$GATEWAY_DLL" \
+      GATEWAY_ARGS=(
         --rid gateway \
         --http-url "$GATEWAY_HTTP" \
         --redis-endpoint "$REDIS_ENDPOINT" \
@@ -782,6 +907,13 @@ start_named_server() {
         --spot-peer-b-endpoint "$PLAY_B_SPOT_ROUTER" \
         --evidence-file "$LOG_DIR/gateway.evidence.log" \
         --log-dir "$LOG_DIR"
+      )
+      if [[ "$SCENARIO_SET" == "sm-b0a" ]]; then
+        GATEWAY_ARGS+=(
+          --actor-creation-race-gate-file "$LOG_DIR/sm-b0a-actor-gate"
+        )
+      fi
+      start_server gateway "$GATEWAY_DLL" "${GATEWAY_ARGS[@]}"
       ;;
     *) echo "Unknown server role '$1'" >&2; return 1 ;;
   esac
@@ -851,6 +983,51 @@ openssl req -x509 -newkey rsa:2048 -nodes \
   -out "$TLS_CERT" \
   -days 1 \
   -subj "/CN=localhost" >/dev/null 2>&1
+
+if [[ "$SCENARIO_SET" == "sm-b10" ]]; then
+  PIDS=()
+  ORDERED_SERVER_ROLES=(b10-invalid-client)
+  start_server b10-invalid-client "$PLAY_DLL" \
+    --rid b10-invalid-client \
+    --http-url "http://127.0.0.1:${PORTS[44]}" \
+    --control-endpoint "tcp://127.0.0.1:${PORTS[45]}" \
+    --spot-router-endpoint "tcp://127.0.0.1:${PORTS[46]}" \
+    --b10-mode client \
+    --evidence-file "$LOG_DIR/b10-invalid-client.evidence.log" \
+    --log-dir "$LOG_DIR"
+  invalid_pid="${PIDS[0]}"
+  assert_b10_invalid_server b10-invalid-client "$invalid_pid" "http://127.0.0.1:${PORTS[44]}"
+
+  PIDS=()
+  ORDERED_SERVER_ROLES=(b10-invalid-server)
+  start_server b10-invalid-server "$PLAY_DLL" \
+    --rid b10-invalid-server \
+    --http-url "http://127.0.0.1:${PORTS[47]}" \
+    --control-endpoint "tcp://127.0.0.1:${PORTS[48]}" \
+    --spot-router-endpoint "tcp://127.0.0.1:${PORTS[49]}" \
+    --b10-mode server \
+    --evidence-file "$LOG_DIR/b10-invalid-server.evidence.log" \
+    --log-dir "$LOG_DIR"
+  invalid_pid="${PIDS[0]}"
+  assert_b10_invalid_server b10-invalid-server "$invalid_pid" "http://127.0.0.1:${PORTS[47]}"
+
+  PIDS=()
+  ORDERED_SERVER_ROLES=(b10-manual)
+  start_server b10-manual "$PLAY_DLL" \
+    --rid b10-manual \
+    --http-url "$PLAY_A_HTTP" \
+    --control-endpoint "$PLAY_A_CONTROL" \
+    --b10-mode manual \
+    --evidence-file "$LOG_DIR/b10-manual.evidence.log" \
+    --log-dir "$LOG_DIR"
+  WAIT_ROLE_PID="${PIDS[0]}"
+  wait_health b10-manual "$PLAY_A_HTTP"
+  wait_port b10-manual-control "$PLAY_A_CONTROL"
+  run_b10_client
+  assert_servers_alive "SM-B10 completion"
+  echo "spot-service e2e result=passed"
+  exit 0
+fi
 
 # The run owns its Redis: a dedicated, throwaway container is the shared
 # location store every server registers into (no registry process exists).
@@ -986,6 +1163,23 @@ restart_play_a() {
   return 1
 }
 
+stop_play_a() {
+  local pid
+  pid="$(pid_for_role play-a)"
+  curl --max-time "$HTTP_PROBE_TIMEOUT_SECONDS" \
+    --connect-timeout "$HTTP_PROBE_TIMEOUT_SECONDS" \
+    -fsS -X POST "$PLAY_A_HTTP/shutdown" >/dev/null
+  for _ in $(seq 1 "$PROCESS_SHUTDOWN_ATTEMPTS"); do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      wait "$pid" 2>/dev/null || true
+      return 0
+    fi
+    sleep "$LOCAL_READINESS_POLL_SECONDS"
+  done
+  echo "play-a did not stop during lifecycle restart: pid=$pid" >&2
+  return 1
+}
+
 run_client() {
   local operation_group="$1"
   assert_servers_alive "client ${operation_group}"
@@ -1004,7 +1198,6 @@ run_client() {
     --session-b-stream-endpoint "$SESSION_B_STREAM" \
     --sm-c6-pause-ack-file "$LOG_DIR/sm-c6-paused" \
     --sm-c6-resume-ack-file "$LOG_DIR/sm-c6-resumed" \
-    --sm-c6-blocking-pause-ack-file "$LOG_DIR/sm-c6-blocking-paused" \
     --play-a-transport-proxy-admin "$PLAY_A_TRANSPORT_PROXY_ADMIN" \
     --play-b-transport-proxy-admin "$PLAY_B_TRANSPORT_PROXY_ADMIN" \
     --session-a-transport-proxy-admin "$SESSION_A_TRANSPORT_PROXY_ADMIN" \
@@ -1090,7 +1283,7 @@ run_client() {
       "entry-disconnected|rid=play-[ab]|actor=actor-sm-d13" \
       "$play_a_evidence_first_line" "$play_b_evidence_first_line" 600
   elif [[ "$operation_group" == "sm-c6" ]]; then
-    local first_line client_pid client_status play_b_pid play_b_pgid
+    local first_line client_pid client_status
     first_line=$(($(wc -l <"$LOG_DIR/client.stdout.log") + 1))
     timeout "${CLIENT_PROCESS_TIMEOUT_SECONDS}s" dotnet "$CLIENT_DLL" --config "$config" \
       2> >(tee -a "$LOG_DIR/client.stderr.log" >&2) \
@@ -1100,42 +1293,56 @@ run_client() {
       wait "$client_pid" || true
       return 1
     fi
-    play_b_pid="$(pid_for_role play-b)"
-    play_b_pgid="$(ps -o pgid= -p "$play_b_pid" | tr -d ' ')"
-    if [[ "$play_b_pgid" != "$play_b_pid" ]]; then
-      echo "play-b process group mismatch: pid=$play_b_pid pgid=$play_b_pgid" >&2
-      wait "$client_pid" || true
-      return 1
-    fi
-    PAUSED_PROCESS_GROUP="$play_b_pgid"
-    kill -STOP -- "-$PAUSED_PROCESS_GROUP"
     touch "$LOG_DIR/sm-c6-paused"
     if ! wait_for_log_after client.stdout \
-      "spot-service sm-c6 resume-play-b-between-modes-ready" "$first_line" 1200; then
-      kill -CONT -- "-$PAUSED_PROCESS_GROUP" 2>/dev/null || true
-      PAUSED_PROCESS_GROUP=""
+      "spot-service sm-c6 resume-play-b-ready" "$first_line" 1200; then
       wait "$client_pid" || true
       return 1
     fi
-    kill -CONT -- "-$PAUSED_PROCESS_GROUP"
-    PAUSED_PROCESS_GROUP=""
     touch "$LOG_DIR/sm-c6-resumed"
-    if ! wait_for_log_after client.stdout \
-      "spot-service sm-c6 pause-play-b-blocking-ready" "$first_line" 300; then
+    touch "$LOG_DIR/sm-c6-play-b-gate"
+    set +e
+    wait "$client_pid"
+    client_status=$?
+    set -e
+    [[ "$client_status" -eq 0 ]] || return "$client_status"
+  elif [[ "$operation_group" == "sm-a9" || "$operation_group" == "sm-b11" ]]; then
+    local first_line client_pid client_status ready_pattern gate_file
+    first_line=$(($(wc -l <"$LOG_DIR/client.stdout.log") + 1))
+    timeout "${CLIENT_PROCESS_TIMEOUT_SECONDS}s" dotnet "$CLIENT_DLL" --config "$config" \
+      2> >(tee -a "$LOG_DIR/client.stderr.log" >&2) \
+      | tee -a "$LOG_DIR/client.stdout.log" &
+    client_pid=$!
+    if [[ "$operation_group" == "sm-a9" ]]; then
+      ready_pattern="spot-service sm-a9 release-play-a-ready"
+      gate_file="$LOG_DIR/sm-a9-play-a-gate"
+    else
+      ready_pattern="spot-service sm-b11 release-play-a-ready"
+      gate_file="$LOG_DIR/sm-b11-play-a-gate"
+    fi
+    if ! wait_for_log_after client.stdout "$ready_pattern" "$first_line" 300; then
       wait "$client_pid" || true
       return 1
     fi
-    PAUSED_PROCESS_GROUP="$play_b_pgid"
-    kill -STOP -- "-$PAUSED_PROCESS_GROUP"
-    touch "$LOG_DIR/sm-c6-blocking-paused"
-    if ! wait_for_log_after client.stdout "spot-service sm-c6 resume-play-b-ready" "$first_line" 1200; then
-      kill -CONT -- "-$PAUSED_PROCESS_GROUP" 2>/dev/null || true
-      PAUSED_PROCESS_GROUP=""
+    touch "$gate_file"
+    set +e
+    wait "$client_pid"
+    client_status=$?
+    set -e
+    [[ "$client_status" -eq 0 ]] || return "$client_status"
+  elif [[ "$operation_group" == "sm-a10" ]]; then
+    local first_line client_pid client_status
+    first_line=$(($(wc -l <"$LOG_DIR/client.stdout.log") + 1))
+    timeout "${CLIENT_PROCESS_TIMEOUT_SECONDS}s" dotnet "$CLIENT_DLL" --config "$config" \
+      2> >(tee -a "$LOG_DIR/client.stderr.log" >&2) \
+      | tee -a "$LOG_DIR/client.stdout.log" &
+    client_pid=$!
+    if ! wait_for_log_after client.stdout "spot-service sm-a10 restart-play-a-ready" "$first_line" 300; then
       wait "$client_pid" || true
       return 1
     fi
-    kill -CONT -- "-$PAUSED_PROCESS_GROUP"
-    PAUSED_PROCESS_GROUP=""
+    stop_play_a
+    restart_play_a
     set +e
     wait "$client_pid"
     client_status=$?
@@ -1198,6 +1405,7 @@ elif [[ "$SCENARIO_SET" == "all" || "$SCENARIO_SET" == "default-batch" ]]; then
   run_client sm-e2-e3
   run_client sm-a7-a8-c4
   run_client sm-a11
+  run_client sm-a12-a13
   run_client sm-a3-a6-b4-b7
   run_client sm-a5
   run_client sm-a1-a2-a4-f1-f2

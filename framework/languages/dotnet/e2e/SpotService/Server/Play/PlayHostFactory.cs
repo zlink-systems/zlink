@@ -24,6 +24,11 @@ internal static class PlayHostFactory
     public static WebApplication Create(string[] args)
     {
         var options = ServerOptions.Parse(args, "play");
+        var b10Mode = options.B10Mode?.Trim().ToLowerInvariant();
+        if (b10Mode is not (null or "manual" or "client" or "server"))
+            throw new InvalidOperationException(
+                $"Unsupported SM-B10 mode '{options.B10Mode}'.");
+        var b10ManualMode = b10Mode == "manual";
         Directory.CreateDirectory(options.LogDir);
 
         var builder = WebApplication.CreateBuilder(args);
@@ -38,8 +43,14 @@ internal static class PlayHostFactory
         builder.WebHost.UseUrls(options.HttpUrl);
         var evidence = new EvidenceStore(options.Rid, options.EvidenceFile);
         builder.Services.AddSingleton(evidence);
+        builder.Services.AddSingleton(new BackpressureGate(options.BackpressureGateFile));
+        builder.Services.AddSingleton(new SpotInitializationGate(options.SpotInitializationGateFile));
+        builder.Services.AddSingleton(new ActorFactoryGate(options.ActorFactoryGateFile));
+        builder.Services.AddSingleton(new ActorCreationRaceGate(options.ActorCreationRaceGateFile));
+        builder.Services.AddSingleton<EntryIdentity>();
         builder.Services.AddSingleton(new NodeOptions(options.Rid));
         builder.Services.AddSingleton<ApplicationJoinCoordinator>();
+        builder.Services.AddSingleton<SpotInitializationCoordinator>();
         LocationStoreOperationProbe? locationStoreOperationProbe = null;
         builder.Services.AddSingleton(new E2eMessageFlowListener(
             Path.Combine(options.LogDir, $"{options.Rid}-flow.log"),
@@ -62,6 +73,8 @@ internal static class PlayHostFactory
             //  default Auto HWM contract does not depend on the host.
             framework.ConfigureInboundDispatch().ProcessMemoryLimitBytes =
                 1UL * 1024 * 1024 * 1024;
+            if (options.ApplicationHwmBytes is { } applicationHwmBytes)
+                framework.ConfigureInboundDispatch().ApplicationHwmBytes = applicationHwmBytes;
             if (!string.IsNullOrWhiteSpace(options.RedisEndpoint))
             {
                 locationStoreOperationProbe = new LocationStoreOperationProbe(
@@ -91,70 +104,91 @@ internal static class PlayHostFactory
             framework.ConfigureDispatch().Diagnostics
                 .SetLevel(ZLinkDiagnosticsLevel.Normal);
             var controlMesh = framework.AddRouteMesh(SpotServiceNames.ControlChannel)
-                .Listen(Require(options.ControlEndpoint, "ControlEndpoint"))
-                .SetRoutingIdPrefix(options.Rid);
-            controlMesh.Channel(SpotServiceNames.ControlChannel).Server();
-            AddPlayRouteHandlers(controlMesh);
-            var externalSpotChannel = string.Equals(options.Rid, "play-b", StringComparison.Ordinal)
-                ? SpotServiceNames.ExternalSpotChannelB
-                : SpotServiceNames.ExternalSpotChannel;
-            if (!string.IsNullOrWhiteSpace(options.ExternalSpotEndpoint))
+                .Listen(Require(options.ControlEndpoint, "ControlEndpoint"));
+            if (b10Mode is null)
+                controlMesh.SetRoutingIdPrefix(options.Rid);
+            else
+                controlMesh.SetRoutingId(RoutingId.From($"{options.Rid}-control"));
+            var controlChannel = controlMesh.Channel(SpotServiceNames.ControlChannel).Server();
+            if (b10ManualMode)
             {
-                var externalMesh = framework.AddRouteMesh(externalSpotChannel)
-                    .Listen(options.ExternalSpotEndpoint)
-                    .SetRoutingIdPrefix(options.Rid);
-                externalMesh.Channel(externalSpotChannel).Server();
-                AddPlayRouteHandlers(externalMesh);
+                AddManualRouteHandlers(controlMesh);
+                controlChannel.AddRequestHandler<ControlChannelPingHandler>();
             }
-            var spot = framework.AddRouteMesh(SpotServiceNames.SpotChannel)
-                .Listen(Require(options.SpotRouterEndpoint, "SpotRouterEndpoint"))
-                .SetRoutingIdPrefix(options.Rid);
-            if (options.InstanceSpotIdleTimeoutMilliseconds is > 0)
+            else
             {
-                spot.SetInstanceSpotIdleTimeout(
-                    TimeSpan.FromMilliseconds(
-                        options.InstanceSpotIdleTimeoutMilliseconds.Value));
-                evidence.Add(
-                    $"instance-idle-config|rid={options.Rid}"
-                    + $"|milliseconds={options.InstanceSpotIdleTimeoutMilliseconds.Value}");
-            }
-            if (!string.IsNullOrWhiteSpace(options.SpotRouterAdvertiseHost))
-            {
-                spot.SetAdvertiseHost(options.SpotRouterAdvertiseHost);
-            }
-            if (options.PopulationLimit is { } populationLimit)
-            {
-                spot.SetActorLimit(populationLimit);
-                spot.SetSpotLimit(populationLimit);
-            }
-            spot.Objects().Server()
-                .AddEntrySpot<ScenarioEntrySpot>()
-                .AddActorFactory<ScenarioActor, ScenarioActorFactory>(
-                    SpotServiceNames.ActorType, factory => factory.RecreateOnRelocation())
-                .AddSpotFactory<ScenarioUserSpot>(
-                    SpotServiceNames.UserSpotType, factory =>
-                    {
-                        if (options.PopulationLimit is { } stableTypeLimit)
-                            factory.StableTypeLimit(stableTypeLimit);
-                        factory.DisableRelocation();
-                    })
-                .AddInstanceSpotFactory<ScenarioInstanceSpot>(
-                    SpotServiceNames.InstanceSpotType,
-                    factory => factory.DisableRelocation())
-                .AddSpotFactory<ScenarioAlternateSpot>(
-                    SpotServiceNames.AlternateSpotType, factory => factory.DisableRelocation())
-                .AddSpotFactory<ScenarioWeightCapacitySpot>(
-                    SpotServiceNames.WeightCapacitySpotType,
-                    factory => factory
-                        .StableTypeLimit(1)
-                        .DisableRelocation())
-                .AddSpotFactory<MultiNodeSpotA>(
-                    SpotServiceNames.MultiSpotTypeA, factory => factory.DisableRelocation())
-                .AddSpotFactory<MultiNodeSpotB>(
-                    SpotServiceNames.MultiSpotTypeB, factory => factory.DisableRelocation());
-            spot.Channel(SpotServiceNames.SpotChannel).Server();
-            if (string.Equals(options.Rid, "play-a", StringComparison.Ordinal))
-            {
+                AddPlayRouteHandlers(controlMesh);
+                var externalSpotChannel = string.Equals(options.Rid, "play-b", StringComparison.Ordinal)
+                    ? SpotServiceNames.ExternalSpotChannelB
+                    : SpotServiceNames.ExternalSpotChannel;
+                if (!string.IsNullOrWhiteSpace(options.ExternalSpotEndpoint))
+                {
+                    var externalMesh = framework.AddRouteMesh(externalSpotChannel)
+                        .Listen(options.ExternalSpotEndpoint)
+                        .SetRoutingIdPrefix(options.Rid);
+                    externalMesh.Channel(externalSpotChannel).Server();
+                    AddPlayRouteHandlers(externalMesh);
+                }
+                var spot = framework.AddRouteMesh(SpotServiceNames.SpotChannel)
+                    .Listen(Require(options.SpotRouterEndpoint, "SpotRouterEndpoint"));
+                if (b10Mode is null)
+                    spot.SetRoutingIdPrefix(options.Rid);
+                if (options.InstanceSpotIdleTimeoutMilliseconds is > 0)
+                {
+                    spot.SetInstanceSpotIdleTimeout(
+                        TimeSpan.FromMilliseconds(
+                            options.InstanceSpotIdleTimeoutMilliseconds.Value));
+                    evidence.Add(
+                        $"instance-idle-config|rid={options.Rid}"
+                        + $"|milliseconds={options.InstanceSpotIdleTimeoutMilliseconds.Value}");
+                }
+                if (!string.IsNullOrWhiteSpace(options.SpotRouterAdvertiseHost))
+                    spot.SetAdvertiseHost(options.SpotRouterAdvertiseHost);
+                if (options.PopulationLimit is { } populationLimit)
+                {
+                    spot.SetActorLimit(populationLimit);
+                    spot.SetSpotLimit(populationLimit);
+                }
+                if (b10Mode == "client")
+                {
+                    spot.Objects().Client();
+                }
+                else if (b10Mode == "server")
+                {
+                    // Keep the negative case focused on the Object Server
+                    // prerequisite. A bare role is enough to require the
+                    // Location Store before factory-specific validation.
+                    spot.Objects().Server();
+                }
+                else
+                {
+                    spot.Objects().Server()
+                        .AddEntrySpot<ScenarioEntrySpot>()
+                        .AddActorFactory<ScenarioActor, ScenarioActorFactory>(
+                            SpotServiceNames.ActorType, factory => factory.RecreateOnRelocation())
+                        .AddSpotFactory<ScenarioUserSpot>(
+                            SpotServiceNames.UserSpotType, factory =>
+                            {
+                                if (options.PopulationLimit is { } stableTypeLimit)
+                                    factory.StableTypeLimit(stableTypeLimit);
+                                factory.DisableRelocation();
+                            })
+                        .AddInstanceSpotFactory<ScenarioInstanceSpot>(
+                            SpotServiceNames.InstanceSpotType,
+                            factory => factory.DisableRelocation())
+                        .AddSpotFactory<ScenarioAlternateSpot>(
+                            SpotServiceNames.AlternateSpotType, factory => factory.DisableRelocation())
+                        .AddSpotFactory<ScenarioWeightCapacitySpot>(
+                            SpotServiceNames.WeightCapacitySpotType,
+                            factory => factory
+                                .StableTypeLimit(1)
+                                .DisableRelocation())
+                        .AddSpotFactory<MultiNodeSpotA>(
+                            SpotServiceNames.MultiSpotTypeA, factory => factory.DisableRelocation())
+                        .AddSpotFactory<MultiNodeSpotB>(
+                            SpotServiceNames.MultiSpotTypeB, factory => factory.DisableRelocation());
+                }
+                spot.Channel(SpotServiceNames.SpotChannel).Server();
                 spot.Channel(SpotServiceNames.ExternalClientChannel).Server()
                     .AddRequestHandler<ChannelEchoHandler>()
                     .AddSendHandler<ChannelNotifyHandler>();
@@ -165,12 +199,18 @@ internal static class PlayHostFactory
 
         var app = builder.Build();
         OperationalEndpoints.MapOperationalEndpoints(app, options);
-        SpotLifecycleEndpoints.MapSpotLifecycleEndpoints(app);
-        SpotFailureEndpoints.MapSpotFailureEndpoints(app);
-        SpotInteractionEndpoints.MapSpotInteractionEndpoints(app);
-        InstanceSpotEndpoints.MapInstanceSpotEndpoints(app);
-        app.MapGet("/mesh-snapshot", (IZLinkRouteMeshRuntime meshRuntime) =>
-            Results.Ok(meshRuntime.GetStatus(SpotServiceNames.SpotChannel)));
+        if (!b10ManualMode)
+        {
+            SpotLifecycleEndpoints.MapSpotLifecycleEndpoints(app);
+            SpotFailureEndpoints.MapSpotFailureEndpoints(app);
+            SpotInteractionEndpoints.MapSpotInteractionEndpoints(app);
+            InstanceSpotEndpoints.MapInstanceSpotEndpoints(app);
+        }
+        if (b10ManualMode)
+            B10Endpoints.MapManualEndpoints(app);
+        if (!b10ManualMode)
+            app.MapGet("/mesh-snapshot", (IZLinkRouteMeshRuntime meshRuntime) =>
+                Results.Ok(meshRuntime.GetStatus(SpotServiceNames.SpotChannel)));
         return app;
     }
 
@@ -182,6 +222,9 @@ internal static class PlayHostFactory
             .AddRouteRequestHandler<CloseSpotHandler>()
             .AddRouteRequestHandler<SpotTypeMismatchHandler>();
     }
+
+    private static void AddManualRouteHandlers(IZLinkMeshNodeBuilder mesh) =>
+        mesh.AddRouteRequestHandler<ControlPingHandler>();
 
     internal static string Require(string? value, string optionName)
     {

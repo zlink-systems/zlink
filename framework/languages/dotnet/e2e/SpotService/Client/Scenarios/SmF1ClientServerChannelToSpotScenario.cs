@@ -15,7 +15,10 @@ internal static class SmF1ClientServerChannelToSpotScenario
             .Body(new SpotStateRouteReq(spotRid, "add", 7))
             .Async<StateRes>()).Body;
         ZlinkStreamAssert.Ensure(state.SpotRid == spotRid, "SM-F1 request reached the wrong spot.");
-        ZlinkStreamAssert.Ensure(state.NodeRid == "play-a", "SM-F1 request reached the wrong node.");
+        ZlinkStreamAssert.Ensure(
+            state.NodeRid is "play-a"
+            || state.NodeRid.StartsWith("play-a-", StringComparison.Ordinal),
+            "SM-F1 request reached the wrong node.");
         ZlinkStreamAssert.Ensure(state.Value == 7, "SM-F1 state reply mismatch.");
 
         var command = (await api.Post("/spot/state/command")

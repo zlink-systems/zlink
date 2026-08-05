@@ -12,13 +12,13 @@
 | SM-A6 | 구현 | spot initialize와 explicit close lifecycle marker가 있다. |
 | SM-A7 | 구현 | spot type mismatch marker가 있다. |
 | SM-A8 | 구현 | worker offload marker가 있다. |
-| SM-A9 | 미구현 | User Spot factory·initialize 뒤 Location Store publication barrier와 concurrent caller 합류 E2E가 없다. |
-| SM-A10 | 미구현 | Framework 발급 Entry Spot ID 형식과 lifecycle별 새 ID E2E가 없다. |
+| SM-A9 | 구현 | User Spot factory·initialize 뒤 publication barrier와 concurrent caller 합류 결과를 확인한다. `./run_e2e.sh all`의 child 실행 증거는 `logs/20260806-051329-2677096/`에 있다. |
+| SM-A10 | 구현 | Framework가 발급한 Entry Spot ID와 lifecycle별 새 ID를 확인한다. `./run_e2e.sh all`의 child 실행 증거는 `logs/20260806-051351-2679373/`에 있다. |
 | SM-A11 | 구현 | 예약된 Entry Spot ID를 User Spot `GetOrCreate`와 Instance Spot request에 제출하고 두 호출이 모두 `InvalidOperation`으로 끝나는지 확인한다. 해당 ID와 일치하는 Location Store read·write와 User·Instance Spot factory 실행은 모두 0이다. `./run_e2e.sh sm-a11` 증거는 `logs/20260729-154511-1994689/`에 있다. |
-| SM-A12 | 미구현 | User Spot automatic ID의 첫 collision 즉시 실패 E2E가 없다. |
-| SM-A13 | 미구현 | SpotId UTF-8 string 경계와 legacy binary Spot RID 거부 E2E가 없다. |
+| SM-A12 | 구현 | `Create`를 200개 concurrent operation으로 실행해 모두 `Created`와 서로 다른 automatic Spot ID를 반환하는지 확인한다. 각 ID에 state request를 한 번씩 보내 모든 독립 state가 `1`이 되는지 함께 확인한다. `./run_e2e.sh sm-a12-a13` 증거는 `logs/20260805-235650-1283129/`에 있다. |
+| SM-A13 | 구현 | 1-byte·255-byte ID와 대소문자·NFC/NFD 문자열을 create·find·request하고, 256-byte ID는 public validation error로 끝나며 factory 실행이 0인지 확인한다. valid ID의 exact equality와 state 결과를 함께 검증한다. `./run_e2e.sh sm-a12-a13` 증거는 `logs/20260805-235650-1283129/`에 있다. |
 | SM-B0 | 구현 | Missing ID의 manager `Find`가 factory를 실행하지 않는지 먼저 확인한다. 이어 `play-a`만 placement eligible로 두고 explicit Actor ID·stable type `Create`, duplicate `GetOrCreate(...).InMesh(...)`, final `Find`를 실행한다. 세 결과는 `Created`·`Existing`·`Found`이며 같은 Actor generation과 owner로 수렴한다. Factory 실행은 `play-a` 1회, weight 0인 `play-b` 0회다. `./run_e2e.sh sm-b0` 증거는 `logs/20260729-154921-2063035/`에 있다. |
-| SM-B0A | 미구현 | Actor 생성 승인·거절과 concurrent GetOrCreate terminal result E2E가 없다. |
+| SM-B0A | 구현 | Actor 생성 승인·거절과 concurrent GetOrCreate의 terminal result를 확인한다. `./run_e2e.sh all`의 child 실행 증거는 `logs/20260806-051413-2688716/`에 있다. |
 | SM-B1 | 구현 | local actor join marker가 있다. |
 | SM-B2 | 구현 | remote actor join marker가 있다. |
 | SM-B3 | 구현 | request message object fidelity marker가 있다. |
@@ -28,14 +28,14 @@
 | SM-B7 | 구현 | Created → Joined → actor packet 순서 marker가 있다. |
 | SM-B8 | 구현 | explicit actor destroy marker가 있다. |
 | SM-B9 | 구현 | `JoinAdmittedUserSpotActorReq`가 local/remote user spot join admission의 허용과 거부를 확인하고, 거부 actor가 user spot에 join되지 않는 evidence를 검증한다. |
-| SM-B10 | 미구현 | Object role과 Location·Relocation Store startup validation E2E가 없다. |
-| SM-B11 | 미구현 | Store-backed Actor publication barrier와 concurrent caller 결과 E2E가 없다. |
+| SM-B10 | 구현 | Object role과 Location·Relocation Store startup validation을 확인하고, manual Object role의 public route를 검증한다. `./run_e2e.sh all`의 child 실행 증거는 `logs/20260806-051433-2698053/`에 있다. |
+| SM-B11 | 구현 | Store-backed Actor publication barrier와 concurrent caller 결과를 확인한다. `./run_e2e.sh all`의 child 실행 증거는 `logs/20260806-051449-2698744/`에 있다. |
 | SM-C1 | 구현 | channel to spot messaging marker가 있다. |
 | SM-C2 | 구현 | spot to channel messaging marker가 있다. |
 | SM-C3 | 구현 | spot-to-spot request/send/publish와 missing target negative marker가 있다. |
 | SM-C4 | 구현 | spot publisher client marker가 있다. |
 | SM-C5 | 구현 | 10.0.0 MeshNode의 play-a Spot이 발행한 Logical Multicast가 play-b 구독 Spot에 도달하는 evidence를 최신 `default-batch` 실행에서 확인했다. |
-| SM-C6 | 부분 구현 | Gateway publish endpoint는 현재 result-free one-way 계약으로 전환해 제출 완료만 반환한다. 기존 client는 제거된 target별 `ZLinkPublishResult`와 부분 수락 개수를 전제로 하므로, 현재 공개 계약에서 관측할 수 있는 backpressure와 최종 전달 조건으로 scenario를 다시 정의해야 한다. |
+| SM-C6 | 구현 | Gateway의 public publish terminal을 사용해 target별 결과를 읽지 않고 marker를 한 번 제출한다. `play-b` handler 진입과 inbound HWM pause를 확인한 뒤 resume 전 `play-a`만 marker를 1회 처리하는지 검증하고, gate 해제 뒤 `play-b`의 marker 처리 재개와 중복 없는 최종 전달을 확인한다. `./run_e2e.sh sm-c6` 증거는 `logs/20260806-015005-2632637/`에 있다. |
 | SM-D1 | 구현 | local actor session bind/relay marker가 있다. |
 | SM-D2 | 구현 | remote actor session bind/relay marker가 있다. |
 | SM-D3 | 구현 | entry spot bind와 user spot bind를 각각 stream session에 연결하고 relay/push marker를 확인한다. |
@@ -71,6 +71,6 @@
 | SM-G5A | 구현·process 통과 | 800개 Actor와 800개 User Spot을 실제 process에서 생성해 weight 100:300의 `play-b` 소유 비율이 65~85%인지 확인하고, 기존 Actor owner가 유지되는지 검증한다. 유효 weight 0·100·10000과 무효 weight -1·10001도 확인했다. `./run_e2e.sh --skip-build sm-g5a` 증거는 `logs/20260805-110259-1276374/`에 있다. |
 | SM-G5B | 구현·process 통과 | weight 10000의 `play-b`에 stable type capacity 1을 먼저 채운 뒤 같은 type을 다시 생성해 high-weight full node가 제외되고 `play-a`로 배치되는지 실제 process reply로 확인했다. `./run_e2e.sh --skip-build sm-g5b` 증거는 `logs/20260805-110449-1282215/`에 있다. |
 
-현재 표에서 `미구현`과 `전환 대상`인 행은 `run_e2e.sh all`의 완료 범위에 포함되지 않는다.
-따라서 과거 default-batch 결과를 현행 Config 2 전체 완료 증거로 사용하지 않는다. Runtime M6
-완료 뒤 각 행의 public API 시나리오와 runner registration을 추가하고 전체 selector를 다시 검증한다.
+현재 표의 모든 시나리오는 구현 상태이며 `run_e2e.sh all`의 child 목록에 등록되어 있다.
+최신 전체 실행(`logs/20260806-051059-2530650/`)에서 default-batch와 개별 child selector를
+포함한 모든 Config 2 시나리오가 통과했다.

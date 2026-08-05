@@ -245,7 +245,9 @@ internal sealed class SpotOnlyUserSpot(
         {
             var command = request.Decode<SpotOnlyMeshReq>();
             var reply = await Context.Outbound
-                .RequestToSpot(command.TargetSpotRid, new StateReq("add", 7))
+                .RequestToSpot(
+                    command.TargetSpotRid,
+                    new StateReq("add", SpotServiceNames.SpotOnlyTargetDelta))
                 .Async<StateRes>(cancellationToken);
             await Context.Outbound.SendToSpot(
                     command.TargetSpotRid,

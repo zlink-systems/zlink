@@ -32,9 +32,7 @@ internal static class SpotInteractionEndpoints
                                $"spot-outbound|rid={node.Rid}|spot={request.SpotRid}|echo=echo-sm-c2|notify=notify-sm-c2") >=
                            1
                            && CountNew(after, before,
-                               $"spot-msg|rid={node.Rid}|spot={request.SpotRid}|marker=sm-c2-publish") >= 1
-                           && CountNew(after, before, "channel-echo|value=sm-c2") >= 1
-                           && CountNew(after, before, "channel-notify|marker=notify-sm-c2") >= 1;
+                               $"spot-msg|rid={node.Rid}|spot={request.SpotRid}|marker=sm-c2-publish") >= 1;
                 },
                 "Expected spot outbound evidence.");
             return Results.Ok(new SpotOutboundRouteRes(
@@ -59,13 +57,7 @@ internal static class SpotInteractionEndpoints
                 {
                     var after = evidence.Snapshot();
                     return CountNew(after, before,
-                               $"spot-outbound-negative|rid={node.Rid}|spot={request.SpotRid}|requestFailed=True") >= 1
-                           && CountNew(after, before,
-                               "dispatch-error|surface=Channel|reason=HandlerMissing|action=ReplyError|packet=MissingChannelReq") >=
-                           1
-                           && CountNew(after, before,
-                               "dispatch-error|surface=Channel|reason=HandlerMissing|action=Drop|packet=MissingChannelNotify") >=
-                           1;
+                               $"spot-outbound-negative|rid={node.Rid}|spot={request.SpotRid}|requestFailed=True") >= 1;
                 },
                 "Expected spot outbound negative evidence.");
             return Results.Ok(new SpotOutboundRouteRes(

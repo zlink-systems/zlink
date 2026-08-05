@@ -5,6 +5,7 @@ using Zlink.Framework.Contracts.Actors;
 using Zlink.Framework.Contracts.Channels;
 using Zlink.Framework.Contracts.Errors;
 using Zlink.Framework.Contracts.Handlers;
+using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.Contracts.Spots;
 
 namespace SpotService.Server.Play.Handlers;
@@ -67,6 +68,22 @@ internal sealed class ControlPingHandler(NodeOptions node, EvidenceStore evidenc
     public ValueTask<ControlPingRes> HandleAsync(
         ControlPingReq request,
         ZLinkRouteMessageContext context,
+        CancellationToken cancellationToken)
+    {
+        _ = context;
+        cancellationToken.ThrowIfCancellationRequested();
+        evidence.Add($"control-ping|rid={node.Rid}|value={request.Value}");
+        return ValueTask.FromResult(new ControlPingRes(request.Value, node.Rid));
+    }
+}
+
+[ZLinkHandlerGroup("client")]
+internal sealed class ControlChannelPingHandler(NodeOptions node, EvidenceStore evidence)
+    : IZLinkRequestHandler<ControlPingReq, ControlPingRes>
+{
+    public ValueTask<ControlPingRes> HandleAsync(
+        ControlPingReq request,
+        IZLinkMessageContext context,
         CancellationToken cancellationToken)
     {
         _ = context;

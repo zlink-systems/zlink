@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using Zlink.Framework.Runtime.Messaging;
 
 namespace Zlink.Framework.Runtime.Dispatch;
 
@@ -288,10 +289,7 @@ internal sealed class ZLinkInboundDispatchBudget
 
     internal ZLinkInboundDispatchLease? Track(IReadOnlyList<Message> parts)
     {
-        ulong payloadBytes = 0;
-        foreach (var part in parts)
-            payloadBytes = checked(payloadBytes + (ulong)part.Size);
-        return Track(payloadBytes);
+        return Track(ZLinkEnvelopeCodec.MeasureApplicationPayloadBytes(parts));
     }
 
     internal IDisposable RegisterCapacityAvailable(Action handler)

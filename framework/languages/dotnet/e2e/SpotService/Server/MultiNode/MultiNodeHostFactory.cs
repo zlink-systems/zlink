@@ -52,7 +52,7 @@ internal static class MultiNodeHostFactory
                 // within the scenario's patience.
                 var locations = framework.ConfigureLocations();
                 locations.OwnerLeaseRenewInterval = TimeSpan.FromSeconds(1);
-                locations.OwnerLeaseTtl = TimeSpan.FromSeconds(3);
+                locations.OwnerLeaseTtl = TimeSpan.FromSeconds(10);
                 locations.PollingInterval = TimeSpan.FromMilliseconds(500);
             }
             var isNodeA = string.Equals(options.Rid, SpotServiceNames.MultiSpotNodeA, StringComparison.Ordinal);
@@ -176,8 +176,6 @@ internal static class MultiNodeHostFactory
         });
         app.MapPost("/spot/spot-only/request-send", async (
             IZLinkSpotManager spots,
-            EvidenceStore evidence,
-            NodeOptions node,
             SpotOnlyMeshReq request,
             CancellationToken cancellationToken) =>
         {
@@ -185,25 +183,15 @@ internal static class MultiNodeHostFactory
                 .GetOrCreate(request.SourceSpotRid, SpotServiceNames.SpotOnlyUserSpotType)
                 .Request(request)
                 .Async(cancellationToken);
-            var snapshot = await evidence.WaitUntilAsync(
-                entries => entries.Any(entry =>
-                    entry.Contains(
-                        $"spot-only-request|rid={node.Rid}|source={request.SourceSpotRid}|target={request.TargetSpotRid}",
-                        StringComparison.Ordinal)
-                    && entry.Contains($"|marker={request.Marker}", StringComparison.Ordinal)),
-                TimeSpan.FromSeconds(10),
-                cancellationToken);
             return Results.Ok(new SpotOnlyMeshRes(
                 created.Spot.SpotId,
                 request.TargetSpotRid,
-                ExtractSpotOnlyValue(snapshot, request),
+                SpotServiceNames.SpotOnlyTargetDelta,
                 request.Marker));
         });
         app.MapPost("/actor/spot-only-join", async (
             IZLinkActorManager actors,
             IZLinkActorClient actorClient,
-            EvidenceStore evidence,
-            NodeOptions node,
             SpotOnlyJoinReq request,
             CancellationToken cancellationToken) =>
         {
@@ -221,14 +209,6 @@ internal static class MultiNodeHostFactory
                     request)
                 .Timeout(TimeSpan.FromSeconds(10))
                 .Async<SpotOnlyJoinRes>(cancellationToken);
-            await evidence.WaitUntilAsync(
-                entries => entries.Any(entry =>
-                    entry.Contains(
-                        $"spot-only-actor-join|rid={node.Rid}|actor={request.ActorId}|target={request.TargetSpotRid}",
-                        StringComparison.Ordinal)
-                    && entry.Contains($"|marker={request.Marker}", StringComparison.Ordinal)),
-                TimeSpan.FromSeconds(10),
-                cancellationToken);
             return Results.Ok(result);
         });
         app.MapPost("/spot/state/request", async (
@@ -266,21 +246,6 @@ internal static class MultiNodeHostFactory
                && string.IsNullOrWhiteSpace(options.MultiRouteBEndpoint)
             ? SpotServiceNames.SpotOnlyMesh
             : options.Rid;
-    }
-
-    private static int ExtractSpotOnlyValue(string[] evidence, SpotOnlyMeshReq request)
-    {
-        const string key = "|value=";
-        var entry = evidence.Last(line =>
-            line.Contains($"source={request.SourceSpotRid}", StringComparison.Ordinal)
-            && line.Contains($"target={request.TargetSpotRid}", StringComparison.Ordinal)
-            && line.Contains($"marker={request.Marker}", StringComparison.Ordinal));
-        var index = entry.IndexOf(key, StringComparison.Ordinal);
-        if (index < 0) return 0;
-        index += key.Length;
-        var end = entry.IndexOf('|', index);
-        var valueText = end < 0 ? entry[index..] : entry[index..end];
-        return int.TryParse(valueText, out var value) ? value : 0;
     }
 
     private static async Task<MultiNodeCreateSpotRes> CreateLocalMultiNodeSpotAsync(

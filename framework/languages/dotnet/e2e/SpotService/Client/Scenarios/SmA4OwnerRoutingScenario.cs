@@ -15,7 +15,10 @@ internal static class SmA4OwnerRoutingScenario
             .Body(new SpotStateRouteReq(spotRid, "noop", 0))
             .Async<StateRes>()).Body;
         ZlinkStreamAssert.Ensure(reply.SpotRid == spotRid, "SM-A4 request reached the wrong spot.");
-        ZlinkStreamAssert.Ensure(reply.NodeRid == "play-a", "SM-A4 owner routing did not stay on play-a.");
+        ZlinkStreamAssert.Ensure(
+            reply.NodeRid is "play-a"
+            || reply.NodeRid.StartsWith("play-a-", StringComparison.Ordinal),
+            "SM-A4 owner routing did not stay on play-a.");
         Console.WriteLine("operation SpotService.sm-a4 passed");
     }
 }

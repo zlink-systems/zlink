@@ -7,7 +7,9 @@ namespace SpotService.Client.Scenarios;
 
 internal static class SmC2SpotToChannelMessagingScenario
 {
-    public static async Task RunAsync(ZLinkHttpClient playA)
+    public static async Task RunAsync(
+        ZLinkHttpClient playA,
+        ZLinkHttpClient playB)
     {
         var spotRid = $"spot-sm-c2-{Guid.NewGuid():N}";
         var created = (await playA.Post("/spot/create")
@@ -33,12 +35,52 @@ internal static class SmC2SpotToChannelMessagingScenario
             "dispatch-error|surface=Channel|reason=HandlerMissing|action=ReplyError|packet=MissingChannelReq",
             "dispatch-error|surface=Channel|reason=HandlerMissing|action=Drop|packet=MissingChannelNotify"
         };
-        var evidence = (await playA.Post("/evidence/wait")
-            .Body(new EvidenceWaitReq(expectedEvidence))
-            .Async<string[]>()).Body;
-        ZlinkStreamAssert.Ensure(
-            expectedEvidence.All(expected => evidence.Any(line => line.Contains(expected, StringComparison.Ordinal))),
-            "SM-C2 evidence mismatch.");
+        await WaitForEvidenceAsync(
+            playA,
+            expectedEvidence[0],
+            expectedEvidence[1],
+            expectedEvidence[2]);
+        foreach (var expected in expectedEvidence[3..])
+            await WaitForEvidenceOnEitherAsync(playA, playB, expected);
         Console.WriteLine("operation SpotService.sm-c2 passed");
+    }
+
+    private static async Task WaitForEvidenceAsync(
+        ZLinkHttpClient client,
+        params string[] expected)
+    {
+        await client.Post("/evidence/wait")
+            .Body(new EvidenceWaitReq(expected))
+            .Async<string[]>();
+    }
+
+    private static async Task WaitForEvidenceOnEitherAsync(
+        ZLinkHttpClient first,
+        ZLinkHttpClient second,
+        string expected)
+    {
+        var results = await Task.WhenAll(
+            TryWaitForEvidenceAsync(first, expected),
+            TryWaitForEvidenceAsync(second, expected));
+        ZlinkStreamAssert.Ensure(
+            results.Any(static matched => matched),
+            $"SM-C2 evidence was not recorded on either play host: {expected}");
+    }
+
+    private static async Task<bool> TryWaitForEvidenceAsync(
+        ZLinkHttpClient client,
+        string expected)
+    {
+        try
+        {
+            await client.Post("/evidence/wait")
+                .Body(new EvidenceWaitReq(new[] { expected }))
+                .Async<string[]>();
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 }

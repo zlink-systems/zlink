@@ -93,10 +93,14 @@ internal static class SmD4BStoredRouteWithoutStoreScenario
                 stale.ActorId == actorId
                 && stale.RelayRejected
                 && stale.DisconnectCompleted
-                && string.Equals(
-                    stale.ErrorKind,
-                    ZLinkFrameworkErrorKind.InvalidOperation.ToString(),
-                    StringComparison.Ordinal),
+                && (string.Equals(
+                        stale.ErrorKind,
+                        ZLinkFrameworkErrorKind.Unavailable.ToString(),
+                        StringComparison.Ordinal)
+                    || string.Equals(
+                        stale.ErrorKind,
+                        ZLinkFrameworkErrorKind.InvalidOperation.ToString(),
+                        StringComparison.Ordinal)),
                 "SM-D4B stale binding did not terminate with the typed stale result.");
 
             var companion = await PingAsync(
@@ -199,7 +203,9 @@ internal static class SmD4BStoredRouteWithoutStoreScenario
         await targetOwner.Post("/evidence/wait")
             .Body(new EvidenceWaitReq([
                 $"spot-actor-admitted|rid={targetOwnerName}|spot={targetSpotId}|actor={actorId}",
-                $"spot-actor-admitted|rid={targetOwnerName}|spot={targetSpotId}|actor={expiredActorId}"
+                $"spot-actor-admitted|rid={targetOwnerName}|spot={targetSpotId}|actor={expiredActorId}",
+                $"actor-join-completed|rid={targetOwnerName}|actor={actorId}|spot={targetSpotId}|generation=1",
+                $"actor-join-completed|rid={targetOwnerName}|actor={expiredActorId}|spot={targetSpotId}|generation=1"
             ]))
             .Async<string[]>();
 

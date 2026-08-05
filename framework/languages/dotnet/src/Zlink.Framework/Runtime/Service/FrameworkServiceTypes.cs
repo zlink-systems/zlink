@@ -447,6 +447,9 @@ internal sealed class MeshReceiveBatch : IDisposable
         return lease;
     }
 
+    internal ulong? GetApplicationPayloadBytes(int index) =>
+        _entries[index].Record.ApplicationPayloadBytes;
+
     public void Dispose() => Reset();
 }
 
@@ -523,6 +526,10 @@ internal struct MeshReceiveRecord
     public ulong DeadlineUnixMs { get; }
     public MeshRecordPayload? KindData { get; }
     internal ZLinkInboundDispatchLease? InboundDispatchLease { get; set; }
+
+    // Ingress records carry the payload size once it is known. This keeps the
+    // mailbox and dispatch pump from rediscovering envelope boundaries.
+    internal ulong? ApplicationPayloadBytes { get; set; }
 
     internal bool RequiresApplicationDispatchLease =>
         Domain == MeshReadyDomains.Application

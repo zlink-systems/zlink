@@ -39,8 +39,7 @@ public sealed partial class RegressionTests
                      "SpotService/Client/Scenarios/SmD8StreamReconnectRecoveryScenario.cs",
                      "SpotService/Client/Scenarios/SmD4MultipleActorBindingScenario.cs",
                      "SpotService/Client/Scenarios/SmD14TlsStreamValidationScenario.cs",
-                     "SpotService/Client/Scenarios/SmG1BoundActorCrashRecoveryScenario.cs",
-                     "SpotService/Client/Scenarios/SmB8ExplicitActorDestroyScenario.cs"
+                     "SpotService/Client/Scenarios/SmG1BoundActorCrashRecoveryScenario.cs"
                  })
         {
             var source = File.ReadAllText(Path.Combine(

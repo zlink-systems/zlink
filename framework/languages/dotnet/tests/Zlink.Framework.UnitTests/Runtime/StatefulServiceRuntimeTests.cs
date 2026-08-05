@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
@@ -579,6 +580,56 @@ public sealed class StatefulServiceRuntimeTests
         await dispatched.Task.WaitAsync(TimeSpan.FromSeconds(3));
         Assert.Equal(2, dispatchCount);
         Assert.Equal(1L, maximumPendingBytes);
+        Assert.Equal(0UL, budget.PendingPayloadBytes);
+    }
+
+    [Fact]
+    public async Task RouteMesh_Pump_DrainsAllRecordsFromOneMailboxWithoutLoss()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = NewNode(context, "route-pump-same-mailbox-hwm-node");
+        var budget = new ZLinkInboundDispatchBudget(1);
+        node.SetInboundDispatchBudget(budget);
+        var entrySpot = node.EntrySpot();
+        var actor = node.CreateActor("route-pump-same-mailbox-hwm-actor");
+        DrainAndDispose(node);
+
+        await using var pump = new ZLinkMeshDispatchPump(
+            node,
+            new ZLinkMeshCompletionTable());
+
+        using var firstPayload = Message.From(new byte[] { 1 });
+        using var secondPayload = Message.From(new byte[] { 2 });
+        Assert.Equal(SubmitResult.Ok, node.SendToActor(actor, [firstPayload]));
+        Assert.Equal(SubmitResult.Ok, node.SendToActor(actor, [secondPayload]));
+
+        var receivedValues = new ConcurrentQueue<byte>();
+        var dispatched = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        pump.SetDispatchHandler(
+            entrySpot.RoutingId.ToString(),
+            info =>
+            {
+                if (info.Event != ZLinkBackendSpotDispatchEvent.ActorReadable
+                    || info.ActorParts is not { Count: > 0 } parts)
+                    return;
+
+                try
+                {
+                    receivedValues.Enqueue(parts[0].Message.AsReadOnlySpan()[0]);
+                }
+                finally
+                {
+                    foreach (var part in parts)
+                        part.Message.Dispose();
+                    info.ActorDispatchLease?.Dispose();
+                    if (receivedValues.Count == 2)
+                        dispatched.TrySetResult(true);
+                }
+            });
+
+        await dispatched.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        Assert.Equal([1, 2], receivedValues.ToArray());
         Assert.Equal(0UL, budget.PendingPayloadBytes);
     }
 
@@ -1261,7 +1312,8 @@ public sealed class StatefulServiceRuntimeTests
             null);
         var queued = new ZLinkMeshQueuedRecord(
             record,
-            new[] { Message.From(new byte[] { 31, 37 }) });
+            new[] { Message.From(new byte[] { 31, 37 }) },
+            applicationPayloadBytes: 2);
 
         try
         {
@@ -1269,6 +1321,58 @@ public sealed class StatefulServiceRuntimeTests
             Assert.Equal(
                 2UL + 3UL + ZLinkMeshQueuedRecord.FixedRecordBytes,
                 queued.PendingBytes);
+        }
+        finally
+        {
+            queued.Dispose();
+        }
+    }
+
+    [Fact]
+    public void MailboxAccountingExcludesEnvelopeHeaderFromApplicationHwm()
+    {
+        var record = new MeshReceiveRecord(
+            MeshRecordKind.ChannelRequest,
+            MeshReadyDomains.Application,
+            default,
+            string.Empty,
+            0,
+            default,
+            default,
+            MeshOperationKind.NodeRequest,
+            "channel",
+            null,
+            null,
+            0,
+            2,
+            0,
+            0,
+            null);
+        var header = ZLinkEnvelopeCodec.EncodeHeader(
+            new ZLinkEnvelopeHeader(
+                ZLinkMessageKind.Command,
+                "channel",
+                "message",
+                ZLinkEnvelopeCodec.DefaultContentType,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null));
+        var body = Message.From(new byte[] { 31, 37 });
+        Assert.Equal(
+            2UL,
+            ZLinkEnvelopeCodec.MeasureApplicationPayloadBytes(
+                new[] { header, body }));
+        var queued = new ZLinkMeshQueuedRecord(
+            record,
+            new[] { header, body },
+            applicationPayloadBytes: 2);
+
+        try
+        {
+            Assert.Equal(2UL, queued.PayloadBytes);
         }
         finally
         {

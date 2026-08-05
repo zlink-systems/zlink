@@ -31,6 +31,8 @@ internal static partial class ZLinkFrameworkRegistrationValidator
                 globalEntrySpots,
                 handlerExposure);
 
+        ValidateRouteMeshChannelNames(registration);
+
         var clientServerChannels = registration.Channels.Values
             .Where(static channel =>
                 channel.AutoConnectType == ZLinkLocationAutoConnectType.ClientServer)
@@ -43,6 +45,26 @@ internal static partial class ZLinkFrameworkRegistrationValidator
                     $"ChannelName '{membership.ChannelName}' is registered on both RouteMesh and ClientServer physical paths.");
 
         registration.ActorCatalog.Build(registration.SpotNodes.Values);
+    }
+
+    private static void ValidateRouteMeshChannelNames(
+        ZLinkFrameworkRegistration registration)
+    {
+        var owners = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var node in registration.SpotNodes.Values)
+        foreach (var membership in node.ChannelMemberships)
+        {
+            if (!owners.TryAdd(membership.ChannelName, node.SpotNodeName)
+                && !string.Equals(
+                    owners[membership.ChannelName],
+                    node.SpotNodeName,
+                    StringComparison.Ordinal))
+                throw new ZLinkConfigurationException(
+                    $"ChannelName '{membership.ChannelName}' is registered by "
+                    + "more than one process-local RouteMesh "
+                    + $"('{owners[membership.ChannelName]}' and "
+                    + $"'{node.SpotNodeName}').");
+        }
     }
 
     internal static void ValidateInboundDispatch(ZLinkFrameworkRegistration registration)

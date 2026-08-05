@@ -79,7 +79,42 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
 
     public Dictionary<string, ZLinkSpotNodeRuntime> SpotNodes { get; } = new(StringComparer.Ordinal);
 
+    // Channel routing is fixed after startup. Keeping the resolved runtime in
+    // the state avoids scanning every SpotNode and taking SyncRoot on each
+    // application send.
+    public Dictionary<string, ZLinkSpotNodeRuntime> RouteMeshNodesByChannel { get; } =
+        new(StringComparer.Ordinal);
+
     public Dictionary<string, ZLinkStreamNodeRuntime> StreamNodes { get; } = new(StringComparer.Ordinal);
+
+    internal void BuildRouteMeshChannelIndex()
+    {
+        foreach (var registration in Registration.SpotNodes.Values)
+        {
+            if (!SpotNodes.TryGetValue(registration.SpotNodeName, out var nodeRuntime))
+                continue;
+
+            foreach (var membership in registration.ChannelMemberships)
+            {
+                if (!RouteMeshNodesByChannel.TryGetValue(
+                        membership.ChannelName,
+                        out var existing))
+                {
+                    RouteMeshNodesByChannel.Add(
+                        membership.ChannelName,
+                        nodeRuntime);
+                    continue;
+                }
+
+                if (!ReferenceEquals(existing, nodeRuntime))
+                    throw new ZLinkConfigurationException(
+                        $"ChannelName '{membership.ChannelName}' is registered by "
+                        + $"more than one process-local RouteMesh "
+                        + $"('{existing.Registration.SpotNodeName}' and "
+                        + $"'{nodeRuntime.Registration.SpotNodeName}').");
+            }
+        }
+    }
 
     public List<Task> ListenerTasks { get; } = [];
 

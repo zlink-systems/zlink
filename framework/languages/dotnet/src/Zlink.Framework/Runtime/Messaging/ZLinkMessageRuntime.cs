@@ -32,9 +32,10 @@ public sealed partial class ZLinkMessage
     {
         if (_declaredType is not null)
         {
+            var resolution = ResolvePayloadSerializer(_declaredType, codecs);
             return new EncodedZLinkMessage(
-                ResolveContentType(_declaredType, codecs),
-                EncodeValue(_value, _declaredType, codecs));
+                resolution.ContentType,
+                EncodeValue(_value, _declaredType, resolution.Serializer));
         }
 
         return new EncodedZLinkMessage(
@@ -127,16 +128,13 @@ public sealed partial class ZLinkMessage
     private static ZLinkEncodedPayload EncodeValue(
         object? value,
         Type declaredType,
-        IZLinkMessageCodecRegistry codecs)
+        IZLinkMessageSerializer? serializer)
     {
         if (value is null)
             return ZLinkEncodedPayload.From(ReadOnlySpan<byte>.Empty);
 
-        if (codecs.TryResolveSerializer(declaredType, out _, out var serializer))
+        if (serializer is not null)
             return serializer.Serialize(value, declaredType);
-
-        if (codecs.SingleCustomSerializer() is { } custom)
-            return custom.Serializer.Serialize(value, declaredType);
 
         return ZLinkEncodedPayload.From(
             JsonSerializer.SerializeToUtf8Bytes(
@@ -145,14 +143,17 @@ public sealed partial class ZLinkMessage
                 ZLinkJsonSerializerOptions.Default));
     }
 
-    private static string ResolveContentType(
+    private static (string ContentType, IZLinkMessageSerializer? Serializer) ResolvePayloadSerializer(
         Type declaredType,
         IZLinkMessageCodecRegistry codecs)
     {
-        if (codecs.TryResolveSerializer(declaredType, out var contentType, out _))
-            return contentType;
+        if (codecs.TryResolveSerializer(declaredType, out var contentType, out var serializer))
+            return (contentType, serializer);
 
-        return codecs.SingleCustomSerializer()?.ContentType ?? DefaultContentType;
+        if (codecs.SingleCustomSerializer() is { } custom)
+            return (custom.ContentType, custom.Serializer);
+
+        return (DefaultContentType, null);
     }
 }
 

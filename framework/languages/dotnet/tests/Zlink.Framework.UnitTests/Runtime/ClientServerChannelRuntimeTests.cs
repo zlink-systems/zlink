@@ -58,6 +58,30 @@ public sealed class ClientServerChannelRuntimeTests
     }
 
     [Fact]
+    public async Task UnknownRouteChannelLookupDisposesSendPartsBeforeThrowing()
+    {
+        await using var client = CreateClient(ReservePort());
+        var runtime = client.GetRequiredService<ZLinkFrameworkRuntime>();
+        await runtime.StartAsync(CancellationToken.None);
+        var parts = new SingleAccessMessageParts();
+        try
+        {
+            await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+                await runtime.SendToChannelAsync(
+                    "missing-route-channel",
+                    parts,
+                    CancellationToken.None));
+
+            parts.AssertDisposedOnce();
+        }
+        finally
+        {
+            parts.DisposeRemaining();
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
     public async Task CurrentSpotClientServerMetadataFailureUsesGlobalSendOwnership()
     {
         await using var client = CreateClient(ReservePort());

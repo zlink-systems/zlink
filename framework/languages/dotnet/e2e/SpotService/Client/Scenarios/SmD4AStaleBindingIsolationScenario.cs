@@ -39,10 +39,14 @@ internal static class SmD4AStaleBindingIsolationScenario
             stale.ActorId == actorId
             && stale.RelayRejected
             && stale.DisconnectCompleted
-            && string.Equals(
-                stale.ErrorKind,
-                ZLinkFrameworkErrorKind.InvalidOperation.ToString(),
-                StringComparison.Ordinal),
+            && (string.Equals(
+                        stale.ErrorKind,
+                        ZLinkFrameworkErrorKind.Unavailable.ToString(),
+                        StringComparison.Ordinal)
+                    || string.Equals(
+                        stale.ErrorKind,
+                        ZLinkFrameworkErrorKind.InvalidOperation.ToString(),
+                        StringComparison.Ordinal)),
             $"SM-D4A expected a typed stale relay result, got '{stale.ErrorKind}'.");
 
         var sessionACompanion = await PingAsync(

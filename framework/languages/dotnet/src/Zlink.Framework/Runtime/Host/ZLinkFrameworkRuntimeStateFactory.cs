@@ -36,6 +36,7 @@ internal sealed class ZLinkFrameworkComponentStateFactory(
             await channels.InitializeInboundChannelsAsync(state, channelAdapter).ConfigureAwait(false);
             await channels.InitializePublisherChannelsAsync(state, channelAdapter).ConfigureAwait(false);
             await spots.InitializeSpotNodesAsync(state).ConfigureAwait(false);
+            state.BuildRouteMeshChannelIndex();
             await streams.InitializeStreamNodesAsync(state).ConfigureAwait(false);
             return state;
         }

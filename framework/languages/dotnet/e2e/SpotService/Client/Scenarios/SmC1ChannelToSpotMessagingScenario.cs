@@ -19,7 +19,10 @@ internal static class SmC1ChannelToSpotMessagingScenario
             .Body(new SpotStateRouteReq(spotRid, "noop", 0))
             .Async<StateRes>()).Body;
         ZlinkStreamAssert.Ensure(viaChannel.SpotRid == spotRid, "SM-C1 request reached the wrong spot.");
-        ZlinkStreamAssert.Ensure(viaChannel.NodeRid == "play-a", "SM-C1 request reached the wrong node.");
+        ZlinkStreamAssert.Ensure(
+            viaChannel.NodeRid is "play-a"
+            || viaChannel.NodeRid.StartsWith("play-a-", StringComparison.Ordinal),
+            "SM-C1 request reached the wrong node.");
         var command = (await playA.Post("/spot/state/command")
             .Body(new SpotStateCommandReq(spotRid, "sm-c1-send"))
             .Async<SpotStateCommandRes>()).Body;
@@ -32,7 +35,10 @@ internal static class SmC1ChannelToSpotMessagingScenario
             .Body(new SpotStateRouteReq(spotRid, "add", 1))
             .Async<StateRes>()).Body;
         ZlinkStreamAssert.Ensure(afterTimeout.SpotRid == spotRid, "SM-C1 post-timeout request reached the wrong spot.");
-        ZlinkStreamAssert.Ensure(afterTimeout.NodeRid == "play-a", "SM-C1 post-timeout request reached the wrong node.");
+        ZlinkStreamAssert.Ensure(
+            afterTimeout.NodeRid is "play-a"
+            || afterTimeout.NodeRid.StartsWith("play-a-", StringComparison.Ordinal),
+            "SM-C1 post-timeout request reached the wrong node.");
         ZlinkStreamAssert.Ensure(afterTimeout.Value > viaChannel.Value, "SM-C1 post-timeout state did not advance.");
         var expectedEvidence = new[] { $"spot-state-command|rid=play-a|spot={spotRid}|marker=sm-c1-send" };
         var evidence = (await playA.Post("/evidence/wait")

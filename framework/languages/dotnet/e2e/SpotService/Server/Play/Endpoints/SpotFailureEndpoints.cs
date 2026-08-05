@@ -171,5 +171,22 @@ internal static class SpotFailureEndpoints
                 "Expected spot-to-spot negative evidence.");
             return Results.Ok(result);
         });
-    }
+        app.MapPost("/spot/to-spot/negative-cross", async (
+            IZLinkSpotClient routes,
+            EvidenceStore evidence,
+            NodeOptions node,
+            SpotToSpotNegativeRouteReq request) =>
+        {
+            var result = await routes.RequestToSpot(request.SourceSpotRid,
+                    new SpotToSpotNegativeReq(request.TargetSpotRid, request.Marker))
+                .Timeout(TimeSpan.FromSeconds(5))
+                .Async<SpotToSpotNegativeRes>();
+            await WaitUntilAsync(
+                () => CountNew(evidence.Snapshot(), [],
+                           $"spot-to-spot-negative|rid={node.Rid}|source={request.SourceSpotRid}|target={request.TargetSpotRid}|requestFailed=True") >=
+                       1,
+                "Expected source spot-to-spot negative evidence.");
+            return Results.Ok(result);
+        });
+        }
 }

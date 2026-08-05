@@ -32,13 +32,32 @@ internal sealed partial class ZLinkFrameworkRuntime
                 ZLinkMessageParts.DisposeAll(parts);
                 throw ZLinkClassicCallSupport.MetadataNotSupported();
             }
-            return await GetClientServerClientRuntime(channelName)
+            ZLinkClientServerClientRuntime clientRuntime;
+            try
+            {
+                clientRuntime = GetClientServerClientRuntime(channelName);
+            }
+            catch
+            {
+                ZLinkMessageParts.DisposeAll(parts);
+                throw;
+            }
+            return await clientRuntime
                 .SendAsync(parts, cancellationToken)
                 .ConfigureAwait(false);
         }
 
-        var meshName = ResolveRouteMeshForChannel(channelName);
-        return await GetMeshNodeRuntime(meshName).EntryOutbound
+        ZLinkSpotNodeRuntime nodeRuntime;
+        try
+        {
+            nodeRuntime = ResolveRouteMeshNodeForChannel(channelName);
+        }
+        catch
+        {
+            ZLinkMessageParts.DisposeAll(parts);
+            throw;
+        }
+        return await nodeRuntime.EntryOutbound
             .SendToChannelAsync(channelName, parts, cancellationToken, metadata)
             .ConfigureAwait(false);
     }
@@ -58,7 +77,17 @@ internal sealed partial class ZLinkFrameworkRuntime
                 ZLinkMessageParts.DisposeAll(parts);
                 throw ZLinkClassicCallSupport.MetadataNotSupported();
             }
-            return await GetClientServerClientRuntime(channelName)
+            ZLinkClientServerClientRuntime clientRuntime;
+            try
+            {
+                clientRuntime = GetClientServerClientRuntime(channelName);
+            }
+            catch
+            {
+                ZLinkMessageParts.DisposeAll(parts);
+                throw;
+            }
+            return await clientRuntime
                 .RequestAsync(
                     parts,
                     timeout,
@@ -66,35 +95,19 @@ internal sealed partial class ZLinkFrameworkRuntime
                 .ConfigureAwait(false);
         }
 
-        var meshName = ResolveRouteMeshForChannel(channelName);
-        return await GetMeshNodeRuntime(meshName).EntryOutbound
+        ZLinkSpotNodeRuntime nodeRuntime;
+        try
+        {
+            nodeRuntime = ResolveRouteMeshNodeForChannel(channelName);
+        }
+        catch
+        {
+            ZLinkMessageParts.DisposeAll(parts);
+            throw;
+        }
+        return await nodeRuntime.EntryOutbound
             .RequestToChannelAsync(channelName, parts, timeout, cancellationToken, metadata)
             .ConfigureAwait(false);
-    }
-
-    private string ResolveRouteMeshForChannel(string channelName)
-    {
-        var matches = Registration.SpotNodes.Values
-            .Where(node => node.ChannelMemberships.Any(
-                membership => StringComparer.Ordinal.Equals(
-                    membership.ChannelName,
-                    channelName)))
-            .Select(node => node.SpotNodeName)
-            .Distinct(StringComparer.Ordinal)
-            .ToArray();
-        return matches.Length switch
-        {
-            1 => matches[0],
-            //  Spec 08 §7: a ChannelName that is not registered in this
-            //  process ends the call as NotFound and is not sent along any
-            //  other path. Naming a channel this host does not serve is a
-            //  routing outcome the caller can act on, not a startup defect.
-            0 => throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.NotFound,
-                $"No process-local RouteMesh or ClientServer client is registered for ChannelName '{channelName}'."),
-            _ => throw new ZLinkConfigurationException(
-                $"ChannelName '{channelName}' resolves to more than one process-local RouteMesh.")
-        };
     }
 
     private ZLinkRouteMeshTargetClassification ClassifyAutomaticRouteMeshTarget(

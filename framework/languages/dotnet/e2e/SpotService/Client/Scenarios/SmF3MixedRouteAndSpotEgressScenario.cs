@@ -24,9 +24,15 @@ internal static class SmF3MixedRouteAndSpotEgressScenario
             .Body(new SpotStateRouteReq(spotRid, "add", 3))
             .Async<StateRes>()).Body;
         ZlinkStreamAssert.Ensure(
-            state is { SpotRid: var actualSpotRid, NodeRid: "play-a", Value: 3 }
+            state is { SpotRid: var actualSpotRid, Value: 3 }
             && actualSpotRid == spotRid,
-            "SM-F3 spot route request was not dispatched to its target spot.");
+            $"SM-F3 spot route request was not dispatched to its target spot. "
+            + $"actualSpot={state.SpotRid},actualNode={state.NodeRid},"
+            + $"actualValue={state.Value},expectedSpot={spotRid}.");
+        ZlinkStreamAssert.Ensure(
+            state.NodeRid is "play-a"
+            || state.NodeRid.StartsWith("play-a-", StringComparison.Ordinal),
+            "SM-F3 spot route request was dispatched to the wrong node.");
 
         var afterMixed = await RoutePingAsync(gateway, "sm-f3-after");
         ZlinkStreamAssert.Ensure(

@@ -1,4 +1,6 @@
 using System.Text;
+using System.Reflection;
+using System.Reflection.Emit;
 using MessagePack;
 using Systems.Zlink.Stream.Connector.Contracts;
 using Zlink.Framework.Codecs.MessagePack;
@@ -307,6 +309,102 @@ public sealed class CustomSerializerEnvelopeTests
         Assert.Equal("application/json", ZLinkEnvelopeCodec.DecodeHeader(parts).ContentType);
         var decoded = ZLinkEnvelopeCodec.DecodeBody(parts, typeof(Probe), codecs);
         Assert.Equal(new Probe("hello"), decoded);
+    }
+
+    [Fact]
+    public void EncodeParts_Resolves_Unsupported_Serializer_Type_Once()
+    {
+        var resolutionCalls = 0;
+        var codecs = new ZLinkCodecRegistryBuilder();
+        codecs.AddSerializer(
+            "application/avro",
+            new MarkerSerializer(),
+            _ =>
+            {
+                resolutionCalls++;
+                return false;
+            });
+
+        var parts = ZLinkEnvelopeCodec.EncodeParts(
+            CreateHeader(nameof(Probe)),
+            new Probe("hello"),
+            typeof(Probe),
+            codecs);
+        try
+        {
+            Assert.Equal(1, resolutionCalls);
+            Assert.Equal("application/json", ZLinkEnvelopeCodec.DecodeHeader(parts).ContentType);
+
+            ZLinkMessageParts.DisposeAll(parts);
+            parts = ZLinkEnvelopeCodec.EncodeParts(
+                CreateHeader(nameof(Probe)),
+                new Probe("again"),
+                typeof(Probe),
+                codecs);
+            Assert.Equal(1, resolutionCalls);
+        }
+        finally
+        {
+            ZLinkMessageParts.DisposeAll(parts);
+        }
+    }
+
+    [Fact]
+    public void Serializer_Type_Cache_Replaces_Old_Entries_After_Saturation()
+    {
+        var hotTypeResolutions = 0;
+        var codecs = new ZLinkCodecRegistryBuilder();
+        codecs.AddSerializer(
+            "application/avro",
+            new MarkerSerializer(),
+            type =>
+            {
+                if (type == typeof(Probe))
+                    hotTypeResolutions++;
+                return type == typeof(Probe);
+            });
+
+        Assert.True(codecs.TryResolveSerializer(
+            typeof(Probe),
+            out _,
+            out _));
+
+        var assembly = AssemblyBuilder.DefineDynamicAssembly(
+            new AssemblyName("Zlink.SerializerCacheSaturation"),
+            AssemblyBuilderAccess.Run);
+        var module = assembly.DefineDynamicModule("Main");
+        for (var index = 0; index < 4_096; index++)
+        {
+            var type = module.DefineType($"Payload{index}").CreateTypeInfo()!.AsType();
+            Assert.False(codecs.TryResolveSerializer(type, out _, out _));
+        }
+
+        Assert.True(codecs.TryResolveSerializer(
+            typeof(Probe),
+            out _,
+            out _));
+        Assert.Equal(2, hotTypeResolutions);
+    }
+
+    [Fact]
+    public void ZLinkMessage_Resolves_Serializer_Type_Once()
+    {
+        var resolutionCalls = 0;
+        var codecs = new ZLinkCodecRegistryBuilder();
+        codecs.AddSerializer(
+            "application/avro",
+            new MarkerSerializer(),
+            _ =>
+            {
+                resolutionCalls++;
+                return true;
+            });
+
+        var encoded = ZLinkMessage.From(new Probe("hello")).Encode(codecs);
+
+        Assert.Equal(1, resolutionCalls);
+        Assert.Equal("application/avro", encoded.ContentType);
+        Assert.Equal("AVRO:hello", Encoding.UTF8.GetString(encoded.Payload.Bytes.Span));
     }
 
     [Fact]

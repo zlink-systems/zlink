@@ -164,19 +164,6 @@ internal sealed class ZLinkSpotOutboundTransport(
             ownerLeaseGeneration);
     }
 
-    /// <summary>Performs the first non-blocking ChannelName select-one
-    /// admission attempt. False lets the async submitter wait for
-    /// send-ready.</summary>
-    public bool TrySendToChannelOnce(
-        string channelName,
-        IReadOnlyList<Message> parts,
-        ReadOnlyMemory<byte> metadata = default)
-    {
-        return ZLinkSubmitFailureMapper.AcceptOrThrow(
-            nativeSpot.SendToChannel(channelName, parts, SendFlags.DontWait, metadata),
-            $"channel '{channelName}'");
-    }
-
     public ValueTask<ZLinkOneWaySubmitResult> SendToChannelAsync(
         string channelName,
         IReadOnlyList<Message> parts,

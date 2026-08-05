@@ -13,96 +13,84 @@ internal static class SmC6LogicalMulticastBackpressureScenario
         ZLinkHttpClient playA,
         ZLinkHttpClient playB,
         string pauseAckFile,
-        string resumeAckFile,
-        string blockingPauseAckFile)
+        string resumeAckFile)
     {
         var playASpot = $"spot-sm-c6-a-{Guid.NewGuid():N}";
         var playBSpot = $"spot-sm-c6-b-{Guid.NewGuid():N}";
-        await playA.Post("/spot/create")
-            .Body(new CreateSpotReq(playASpot))
-            .Async<CreateSpotRes>();
-        await playB.Post("/spot/create")
-            .Body(new CreateSpotReq(playBSpot))
-            .Async<CreateSpotRes>();
+        await SetPlacementWeightsAsync(playA, playB, 100, 0);
+        try
+        {
+            var createdA = (await playA.Post("/spot/create")
+                .Body(new CreateSpotReq(playASpot))
+                .Async<CreateSpotRes>()).Body;
+            ZlinkStreamAssert.Ensure(createdA.NodeRid == "play-a",
+                "SM-C6 source Spot was not created on play-a.");
 
-        // The runner starts both manually pinned peers before the client. The
-        // publish detail below is the authoritative readiness check: it must
-        // snapshot exactly those two remote targets, so no fixed settle delay
-        // is needed here.
+            await SetPlacementWeightsAsync(playA, playB, 0, 100);
+            var createdB = (await playB.Post("/spot/create")
+                .Body(new CreateSpotReq(playBSpot))
+                .Async<CreateSpotRes>()).Body;
+            ZlinkStreamAssert.Ensure(createdB.NodeRid == "play-b",
+                "SM-C6 blocked Spot was not created on play-b.");
 
-        Console.WriteLine("spot-service sm-c6 pause-play-b-ready");
-        await WaitForRunnerAckAsync(
-            pauseAckFile,
-            "the first paused target");
+            var blockerMarker = $"sm-c6-blocker-{Guid.NewGuid():N}";
+            var blocker = (await gateway.Post("/spot/backpressure-publish")
+                .Body(new SpotBackpressurePublishReq(
+                    blockerMarker,
+                    PayloadBytes: 1024 * 1024,
+                    MaxAttempts: 16,
+                    GateSpotId: playBSpot))
+                .Async<SpotBackpressurePublishRes>()).Body;
+            ZlinkStreamAssert.Ensure(blocker.AcceptedCount == 16,
+                $"SM-C6 blocker publish accepted {blocker.AcceptedCount} messages, expected 16.");
+            await WaitForEvidenceAsync(
+                playB,
+                $"spot-backpressure-entered|rid=play-b|spot={playBSpot}|marker={blockerMarker}");
+            await WaitForInboundPausedAsync(playB);
 
-        var marker = $"sm-c6-{Guid.NewGuid():N}";
-        var selectedNonBlocking = (await gateway.Post("/spot/backpressure-publish")
-            // A large frame fills the stopped peer's kernel send buffer
-            // deterministically. Small frames can all leave the ROUTER pipe
-            // before its HWM is observable, which tests host socket capacity
-            // instead of non-blocking per-target admission.
-            .Body(new SpotBackpressurePublishReq(
-                marker,
-                PayloadBytes: 1024 * 1024,
-                MaxAttempts: 200))
-            .Async<SpotBackpressureAttemptRes>()).Body;
-        EnsurePartialAdmission(selectedNonBlocking, "non-blocking");
+            Console.WriteLine("spot-service sm-c6 pause-play-b-ready");
+            await WaitForRunnerAckAsync(
+                pauseAckFile,
+                "the paused target");
 
-        ZlinkStreamAssert.Ensure(
-            selectedNonBlocking.Status == "Backpressured",
-            $"SM-C6 non-blocking status was {selectedNonBlocking.Status}, expected Backpressured.");
-        ZlinkStreamAssert.Ensure(
-            selectedNonBlocking.ElapsedMilliseconds < 1000,
-            $"SM-C6 non-blocking submit took {selectedNonBlocking.ElapsedMilliseconds}ms.");
+            var marker = $"sm-c6-{Guid.NewGuid():N}";
+            var publish = (await gateway.Post("/spot/backpressure-publish")
+                .Body(new SpotBackpressurePublishReq(
+                    marker,
+                    PayloadBytes: 1024 * 1024,
+                    MaxAttempts: 1))
+                .Async<SpotBackpressurePublishRes>()).Body;
+            ZlinkStreamAssert.Ensure(publish.AcceptedCount == 1,
+                "SM-C6 marker publish did not complete through the public terminal.");
+            await WaitForEvidenceAsync(
+                playA,
+                $"spot-backpressure|rid=play-a|spot={playASpot}|marker={marker}|sequence={publish.StartSequence}");
 
-        // Restore write credit before testing the blocking path. Reusing a
-        // pipe immediately after a DONTWAIT rejection tests recovery rather
-        // than the blocking timeout contract itself.
-        Console.WriteLine("spot-service sm-c6 resume-play-b-between-modes-ready");
-        await WaitForRunnerAckAsync(
-            resumeAckFile,
-            "the resumed target");
-        await Task.Delay(TimeSpan.FromSeconds(2));
-        Console.WriteLine("spot-service sm-c6 pause-play-b-blocking-ready");
-        await WaitForRunnerAckAsync(
-            blockingPauseAckFile,
-            "the second paused target");
+            await VerifyPausedTargetDidNotReceiveAsync(
+                playA,
+                playB,
+                Evidence("play-a", playASpot, marker, publish.StartSequence),
+                Evidence("play-b", playBSpot, marker, publish.StartSequence));
 
-        var blocking = (await gateway.Post("/spot/backpressure-publish")
-            .Body(new SpotBackpressurePublishReq(
-                marker,
-                PayloadBytes: 1024 * 1024,
-                MaxAttempts: 200,
-                Blocking: true,
-                StartSequence: selectedNonBlocking.Sequence + 1))
-            .Async<SpotBackpressureAttemptRes>()).Body;
-        EnsurePartialAdmission(blocking, "blocking");
-        ZlinkStreamAssert.Ensure(
-            blocking.Status == "Backpressured",
-            $"SM-C6 blocking status was {blocking.Status}, expected Backpressured.");
-        ZlinkStreamAssert.Ensure(
-            blocking.ElapsedMilliseconds >= 100
-            && blocking.ElapsedMilliseconds <= 5000,
-            $"SM-C6 blocking submit did not respect the configured timeout: "
-            + $"{blocking.ElapsedMilliseconds}ms.");
+            Console.WriteLine("spot-service sm-c6 resume-play-b-ready");
+            await WaitForRunnerAckAsync(
+                resumeAckFile,
+                "the resumed target");
+            await WaitForEvidenceAsync(
+                playB,
+                $"spot-backpressure|rid=play-b|spot={playBSpot}|marker={marker}|sequence={publish.StartSequence}");
+            await VerifySettledDeliveryAsync(
+                playA,
+                playB,
+                Evidence("play-a", playASpot, marker, publish.StartSequence),
+                Evidence("play-b", playBSpot, marker, publish.StartSequence));
 
-        Console.WriteLine("spot-service sm-c6 resume-play-b-ready");
-        await VerifyExactlyOneDeliveryAsync(
-            playA,
-            playB,
-            Evidence(playASpot, marker, selectedNonBlocking.Sequence),
-            Evidence(playBSpot, marker, selectedNonBlocking.Sequence),
-            "non-blocking");
-        await VerifyExactlyOneDeliveryAsync(
-            playA,
-            playB,
-            Evidence(playASpot, marker, blocking.Sequence),
-            Evidence(playBSpot, marker, blocking.Sequence),
-            "blocking");
-
-        Console.WriteLine(
-            $"operation SpotService.sm-c6 passed non_blocking_ms={selectedNonBlocking.ElapsedMilliseconds}"
-            + $" blocking_ms={blocking.ElapsedMilliseconds}");
+            Console.WriteLine($"operation SpotService.sm-c6 passed accepted={publish.AcceptedCount}");
+        }
+        finally
+        {
+            await SetPlacementWeightsAsync(playA, playB, 100, 100);
+        }
     }
 
     static async Task WaitForRunnerAckAsync(string ackFile, string operation)
@@ -123,62 +111,84 @@ internal static class SmC6LogicalMulticastBackpressureScenario
         }
     }
 
-    static void EnsurePartialAdmission(SpotBackpressureAttemptRes attempt, string operation)
-    {
-        ZlinkStreamAssert.Ensure(
-            attempt.SnapshotRemoteNodeCount >= 2,
-            $"SM-C6 {operation} remote snapshot was {attempt.SnapshotRemoteNodeCount}, expected at least 2.");
-        ZlinkStreamAssert.Ensure(
-            attempt.AdmittedRemoteNodeCount + 1 == attempt.SnapshotRemoteNodeCount,
-            $"SM-C6 {operation} admitted count was {attempt.AdmittedRemoteNodeCount} for snapshot "
-            + $"{attempt.SnapshotRemoteNodeCount}; exactly one stopped target must be excluded.");
-        ZlinkStreamAssert.Ensure(
-            attempt.DroppedRemoteNodeCount == 1,
-            $"SM-C6 {operation} dropped count was {attempt.DroppedRemoteNodeCount}, expected 1.");
-        ZlinkStreamAssert.Ensure(
-            attempt.SnapshotLocalSpotCount == 0
-            && attempt.AdmittedLocalSpotCount == 0
-            && attempt.DroppedLocalSpotCount == 0,
-            $"SM-C6 {operation} unexpectedly included local Spot targets.");
-    }
-
-    static async Task VerifyExactlyOneDeliveryAsync(
+    static async Task VerifyPausedTargetDidNotReceiveAsync(
         ZLinkHttpClient playA,
         ZLinkHttpClient playB,
         string playAEvidence,
-        string playBEvidence,
-        string operation)
+        string playBEvidence)
     {
-        var elapsed = Stopwatch.StartNew();
-        bool deliveredToA;
-        bool deliveredToB;
-        do
-        {
-            var a = (await playA.Get("/evidence").Async<string[]>()).Body;
-            var b = (await playB.Get("/evidence").Async<string[]>()).Body;
-            deliveredToA = a.Any(line => line.Contains(playAEvidence, StringComparison.Ordinal));
-            deliveredToB = b.Any(line => line.Contains(playBEvidence, StringComparison.Ordinal));
-            if (deliveredToA ^ deliveredToB)
-                break;
-            ZlinkStreamAssert.Ensure(
-                elapsed.Elapsed < TimeSpan.FromSeconds(3),
-                $"SM-C6 {operation} multicast was not delivered to exactly one target.");
-            await Task.Delay(TimeSpan.FromMilliseconds(25));
-        }
-        while (true);
-
-        // A target reported as dropped must not receive the message later
-        // after its process resumes and the admitted pipe drains.
-        await Task.Delay(TimeSpan.FromSeconds(2));
-        var settledA = (await playA.Get("/evidence").Async<string[]>()).Body;
-        var settledB = (await playB.Get("/evidence").Async<string[]>()).Body;
-        deliveredToA = settledA.Any(line => line.Contains(playAEvidence, StringComparison.Ordinal));
-        deliveredToB = settledB.Any(line => line.Contains(playBEvidence, StringComparison.Ordinal));
+        var readyEvidence = (await playA.Get("/evidence").Async<string[]>()).Body;
+        var blockedEvidence = (await playB.Get("/evidence").Async<string[]>()).Body;
+        var deliveredToA = readyEvidence.Count(line => line.Contains(playAEvidence, StringComparison.Ordinal));
+        var deliveredToB = blockedEvidence.Count(line => line.Contains(playBEvidence, StringComparison.Ordinal));
         ZlinkStreamAssert.Ensure(
-            deliveredToA ^ deliveredToB,
-            $"SM-C6 {operation} multicast delivery did not match one admitted and one dropped target.");
+            deliveredToA == 1 && deliveredToB == 0,
+            "SM-C6 ready target did not receive exactly one marker before the paused target resumed.");
     }
 
-    static string Evidence(string spotRid, string marker, int sequence)
-        => $"|spot={spotRid}|marker={marker}|sequence={sequence}";
+    static async Task VerifySettledDeliveryAsync(
+        ZLinkHttpClient playA,
+        ZLinkHttpClient playB,
+        string playAEvidence,
+        string playBEvidence)
+    {
+        var settledA = (await playA.Get("/evidence").Async<string[]>()).Body;
+        var settledB = (await playB.Get("/evidence").Async<string[]>()).Body;
+        var deliveredToA = settledA.Count(line => line.Contains(playAEvidence, StringComparison.Ordinal));
+        var deliveredToB = settledB.Count(line => line.Contains(playBEvidence, StringComparison.Ordinal));
+        ZlinkStreamAssert.Ensure(
+            deliveredToA == 1 && deliveredToB == 1,
+            "SM-C6 marker delivery was not exactly once at both targets after the paused target resumed.");
+    }
+
+    static async Task WaitForEvidenceAsync(ZLinkHttpClient client, string expected)
+    {
+        var evidence = (await client.Post("/evidence/wait")
+            .Body(new EvidenceWaitReq([expected]))
+            .Async<string[]>()).Body;
+        ZlinkStreamAssert.Ensure(
+            evidence.Any(line => line.Contains(expected, StringComparison.Ordinal)),
+            $"SM-C6 evidence did not contain '{expected}'.");
+    }
+
+    static async Task WaitForInboundPausedAsync(ZLinkHttpClient client)
+    {
+        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(3);
+        RuntimeInboundStatusRes latest = default!;
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            latest = (await client.Get("/runtime/status")
+                .Async<RuntimeInboundStatusRes>()).Body;
+            if (latest.ApplicationHwmBytes == 1024 * 1024
+                && latest.PendingPayloadBytes >= latest.ApplicationHwmBytes
+                && latest.ApplicationReceivePaused)
+                return;
+            await Task.Delay(TimeSpan.FromMilliseconds(10));
+        }
+
+        throw new InvalidOperationException(
+            "SM-C6 play-b inbound dispatch did not reach the configured HWM. "
+            + $"hwm={latest.ApplicationHwmBytes},pending={latest.PendingPayloadBytes},"
+            + $"queued={latest.QueuedPayloadBytes},active={latest.ActivePayloadBytes},"
+            + $"paused={latest.ApplicationReceivePaused}.");
+    }
+
+    static string Evidence(string nodeRid, string spotId, string marker, int sequence)
+        => $"spot-backpressure|rid={nodeRid}|spot={spotId}"
+           + $"|marker={marker}|sequence={sequence}";
+
+    static async Task SetPlacementWeightsAsync(
+        ZLinkHttpClient playA,
+        ZLinkHttpClient playB,
+        int playAWeight,
+        int playBWeight)
+    {
+        await playA.Post("/placement-weight")
+            .Body(new PlacementWeightReq(playAWeight))
+            .Async<PlacementWeightRes>();
+        await playB.Post("/placement-weight")
+            .Body(new PlacementWeightReq(playBWeight))
+            .Async<PlacementWeightRes>();
+        await Task.Delay(TimeSpan.FromSeconds(2));
+    }
 }

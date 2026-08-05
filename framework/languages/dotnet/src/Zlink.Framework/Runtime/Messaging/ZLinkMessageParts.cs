@@ -2,6 +2,11 @@ using System.Collections;
 
 namespace Zlink.Framework.Runtime.Messaging;
 
+internal interface IZLinkApplicationPayloadSized
+{
+    ulong ApplicationPayloadBytes { get; }
+}
+
 internal static class ZLinkMessageParts
 {
     public static IReadOnlyList<Message> Create(
@@ -26,7 +31,9 @@ internal static class ZLinkMessageParts
         {
             for (; copied < parts.Count; copied++) copies[copied] = parts[copied].Copy();
 
-            return copies;
+            return parts is IZLinkApplicationPayloadSized sized
+                ? new KnownMessageParts(copies, sized.ApplicationPayloadBytes)
+                : copies;
         }
         catch
         {
@@ -36,11 +43,19 @@ internal static class ZLinkMessageParts
         }
     }
 
+    public static IReadOnlyList<Message> WithApplicationPayloadBytes(
+        Message[] parts,
+        ulong applicationPayloadBytes) =>
+        new KnownMessageParts(parts, applicationPayloadBytes);
+
     private sealed class TwoMessageParts(
         Message header,
-        Message body) : IReadOnlyList<Message>
+        Message body) : IReadOnlyList<Message>, IZLinkApplicationPayloadSized
     {
         public int Count => 2;
+
+        public ulong ApplicationPayloadBytes =>
+            checked((ulong)Math.Max(body.Size, 0));
 
         public Message this[int index]
         {
@@ -65,5 +80,21 @@ internal static class ZLinkMessageParts
         {
             return GetEnumerator();
         }
+    }
+
+    private sealed class KnownMessageParts(
+        Message[] parts,
+        ulong applicationPayloadBytes) : IReadOnlyList<Message>, IZLinkApplicationPayloadSized
+    {
+        public int Count => parts.Length;
+
+        public ulong ApplicationPayloadBytes => applicationPayloadBytes;
+
+        public Message this[int index] => parts[index];
+
+        public IEnumerator<Message> GetEnumerator() =>
+            ((IEnumerable<Message>)parts).GetEnumerator();
+
+        IEnumerator IEnumerable.GetEnumerator() => parts.GetEnumerator();
     }
 }

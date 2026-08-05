@@ -3,6 +3,7 @@ using System.Diagnostics;
 using Zlink.Framework.Contracts.Streams;
 using Zlink.Framework.Runtime.Backend.Contracts;
 using Zlink.Framework.Runtime.Dispatch;
+using Zlink.Framework.Runtime.Messaging;
 
 namespace Zlink.Framework.Runtime.Backend.DotNet;
 
@@ -461,7 +462,16 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         var state = ResolveSpotState(
             string.IsNullOrEmpty(ownerSpotId) ? record.SourceSpotId : ownerSpotId);
         var parts = RetainParts(batch, index);
-        var inboundDispatchLease = TrackApplication(batch, index, record.Domain, parts);
+        if (!TryTrackApplication(batch, index, record.Domain, parts,
+                out var inboundDispatchLease))
+        {
+            // Logical multicast has no reply path. When the application HWM
+            // is full, admission stops at the dispatch boundary and the
+            // retained target copy is released instead of entering an
+            // unaccounted subscription queue.
+            ZLinkMessageParts.DisposeAll(parts);
+            return;
+        }
         var message = new ZLinkBackendSubscribeMessage(
             record.ChannelName ?? string.Empty,
             record.Topic ?? string.Empty,
@@ -550,18 +560,41 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
                 parts.Select(static part => part.Message).ToArray()));
     }
 
+    private bool TryTrackApplication(
+        MeshReceiveBatch batch,
+        int index,
+        MeshReadyDomains domain,
+        IReadOnlyList<Message> parts,
+        out ZLinkInboundDispatchLease? lease)
+    {
+        var admitted = batch.TakeInboundDispatchLease(index);
+        if (admitted is not null)
+        {
+            lease = admitted;
+            return true;
+        }
+
+        if (domain != MeshReadyDomains.Application
+            || _inboundDispatchBudget is null)
+        {
+            lease = null;
+            return true;
+        }
+
+        lease = batch.GetApplicationPayloadBytes(index) is { } payloadBytes
+            ? _inboundDispatchBudget.Track(payloadBytes)
+            : _inboundDispatchBudget.Track(parts);
+        return lease is not null;
+    }
+
     private ZLinkInboundDispatchLease? TrackApplication(
         MeshReceiveBatch batch,
         int index,
         MeshReadyDomains domain,
-        IReadOnlyList<Message> parts)
-    {
-        var admitted = batch.TakeInboundDispatchLease(index);
-        return admitted
-            ?? (domain == MeshReadyDomains.Application
-                ? _inboundDispatchBudget?.Track(parts)
-                : null);
-    }
+        IReadOnlyList<Message> parts) =>
+        TryTrackApplication(batch, index, domain, parts, out var lease)
+            ? lease
+            : null;
 
     private void RaiseSendReady(MeshReceiveRecord record)
     {

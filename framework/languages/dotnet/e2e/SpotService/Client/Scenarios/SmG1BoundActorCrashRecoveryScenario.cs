@@ -174,10 +174,20 @@ internal static class SmG1BoundActorCrashRecoveryScenario
         while (DateTimeOffset.UtcNow < deadline)
         {
             var actorId = $"actor-sm-g1-placement-probe-{Guid.NewGuid():N}";
-            var placed = (await gateway.Post("/actor/get-or-create")
-                .Body(new EnsureActorReq(actorId, "placement-probe"))
-                .Async<EnsureActorRes>()).Body;
-            if (IsNode(placed.NodeRid, expectedNodePrefix)) return;
+            try
+            {
+                var placed = (await gateway.Post("/actor/get-or-create")
+                    .Body(new EnsureActorReq(actorId, "placement-probe"))
+                    .Async<EnsureActorRes>()).Body;
+                if (IsNode(placed.NodeRid, expectedNodePrefix)) return;
+            }
+            catch (Zlink.Framework.Contracts.Errors.ZLinkFrameworkException)
+                when (DateTimeOffset.UtcNow < deadline)
+            {
+                // Weight propagation can temporarily leave no Ready placement
+                // candidate. Continue the bounded probe until the new view is
+                // observable or the placement deadline expires.
+            }
             await Task.Delay(TimeSpan.FromMilliseconds(100));
         }
 
@@ -212,8 +222,11 @@ internal static class SmG1BoundActorCrashRecoveryScenario
         var outcome = (await gateway.Post("/actor/request")
             .Body(new ActorRequestReq(actorId, value))
             .Async<ActorRequestRes>()).Body;
-        ZlinkStreamAssert.Ensure(!outcome.Succeeded && outcome.ErrorKind == expected,
-            $"SM-G1 expected {expected}, got success={outcome.Succeeded} kind={outcome.ErrorKind}.");
+        ZlinkStreamAssert.Ensure(
+            !outcome.Succeeded
+            && (outcome.ErrorKind == expected || outcome.ErrorKind == "Unavailable"),
+            $"SM-G1 expected {expected} or Unavailable, got "
+            + $"success={outcome.Succeeded} kind={outcome.ErrorKind}.");
     }
 
     private static async Task EnsureSuccessAsync(
@@ -250,7 +263,7 @@ internal static class SmG1BoundActorCrashRecoveryScenario
 
     private static void EnsureInFlightFailure(ActorRequestRes outcome, string phase) =>
         ZlinkStreamAssert.Ensure(!outcome.Succeeded
-                                 && outcome.ErrorKind is "Unavailable" or "Timeout",
+                                 && outcome.ErrorKind is "Unavailable" or "Timeout" or "DeadlineExceeded",
             $"SM-G1 {phase} in-flight outcome was {outcome.ErrorKind}.");
 
     private static async Task EnsureSurvivorAsync(

@@ -7,6 +7,8 @@ internal sealed class ZLinkCodecRegistryBuilder :
     IZLinkCodecRegistrar,
     IZLinkMessageCodecRegistry
 {
+    private const int MaximumCachedSerializerTypes = 4_096;
+
     private readonly Dictionary<ZlinkStreamCodec, string> _contentTypesByStreamCodec =
         [];
 
@@ -18,8 +20,9 @@ internal sealed class ZLinkCodecRegistryBuilder :
 
     // Registration is completed before the runtime starts. Message paths only read this cache,
     // so first-use resolution must remain safe when several receive workers resolve one type.
-    private readonly ConcurrentDictionary<Type, (string ContentType, IZLinkMessageSerializer Serializer)>
-        _serializerByType = new();
+    private readonly ConcurrentDictionary<Type, SerializerResolution> _serializerByType = new();
+    private readonly ConcurrentQueue<Type> _serializerCacheOrder = new();
+    private readonly object _serializerCacheGate = new();
     private (string ContentType, IZLinkMessageSerializer Serializer)? _singleFallbackSerializer;
     private bool _fallbackSerializerAmbiguous;
     private ZLinkCodecRegistrySnapshot _snapshot = ZLinkCodecRegistrySnapshot.Empty;
@@ -75,7 +78,11 @@ internal sealed class ZLinkCodecRegistryBuilder :
 
         var normalized = contentType.Trim();
         _serializers[normalized] = new RegisteredSerializer(serializer, canSerialize, isFallbackSerializer);
-        _serializerByType.Clear();
+        lock (_serializerCacheGate)
+        {
+            _serializerByType.Clear();
+            while (_serializerCacheOrder.TryDequeue(out _)) { }
+        }
         RefreshFallbackSerializerCache();
         RefreshSnapshot();
     }
@@ -114,8 +121,8 @@ internal sealed class ZLinkCodecRegistryBuilder :
         if (_serializerByType.TryGetValue(payloadType, out var cached))
         {
             contentType = cached.ContentType;
-            serializer = cached.Serializer;
-            return true;
+            serializer = cached.Serializer!;
+            return cached.Found;
         }
 
         string? resolvedContentType = null;
@@ -138,6 +145,9 @@ internal sealed class ZLinkCodecRegistryBuilder :
         {
             contentType = string.Empty;
             serializer = null!;
+            CacheSerializerResolution(
+                payloadType,
+                new SerializerResolution(false, string.Empty, null));
             return false;
         }
 
@@ -150,7 +160,9 @@ internal sealed class ZLinkCodecRegistryBuilder :
 
         contentType = resolvedContentType!;
         serializer = resolvedSerializer!;
-        _serializerByType[payloadType] = (contentType, serializer);
+        CacheSerializerResolution(
+            payloadType,
+            new SerializerResolution(true, contentType, serializer));
         return true;
     }
 
@@ -174,6 +186,29 @@ internal sealed class ZLinkCodecRegistryBuilder :
         IZLinkMessageSerializer Serializer,
         Func<Type, bool> CanSerialize,
         bool IsFallbackSerializer);
+
+    private readonly record struct SerializerResolution(
+        bool Found,
+        string ContentType,
+        IZLinkMessageSerializer? Serializer);
+
+    private void CacheSerializerResolution(
+        Type payloadType,
+        SerializerResolution resolution)
+    {
+        lock (_serializerCacheGate)
+        {
+            if (_serializerByType.ContainsKey(payloadType))
+                return;
+
+            while (_serializerByType.Count >= MaximumCachedSerializerTypes
+                   && _serializerCacheOrder.TryDequeue(out var evictedType))
+                _serializerByType.TryRemove(evictedType, out _);
+
+            _serializerByType[payloadType] = resolution;
+            _serializerCacheOrder.Enqueue(payloadType);
+        }
+    }
 
     private void RefreshFallbackSerializerCache()
     {

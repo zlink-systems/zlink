@@ -24,10 +24,10 @@ internal sealed class SpotMsgHandler(EvidenceStore evidence)
 }
 
 [ZLinkSpotSubscriptionHandler(SpotServiceNames.SpotChannel, SpotServiceNames.SpotMsgTopic)]
-internal sealed class SpotBackpressureMsgHandler(EvidenceStore evidence)
+internal sealed class SpotBackpressureMsgHandler(EvidenceStore evidence, BackpressureGate gate)
     : IZLinkSpotSubscriptionHandler<ScenarioUserSpot, SpotBackpressureMsg>
 {
-    public ValueTask HandleAsync(
+    public async ValueTask HandleAsync(
         ScenarioUserSpot spot,
         SpotBackpressureMsg message,
         ZLinkPublishMessageContext context,
@@ -35,9 +35,21 @@ internal sealed class SpotBackpressureMsgHandler(EvidenceStore evidence)
     {
         cancellationToken.ThrowIfCancellationRequested();
         evidence.Add(
+            $"spot-backpressure-entered|rid={evidence.Rid}|spot={spot.Context.SpotId}"
+            + $"|marker={message.Marker}|sequence={message.Sequence}");
+        // A shared process can contain Spots from earlier scenarios. Only the
+        // target selected by this probe becomes the blocked Logical Multicast
+        // target; other matching Spots remain ready targets.
+        if (string.Equals(
+                message.GateSpotId,
+                spot.Context.SpotId.ToString(),
+                StringComparison.Ordinal))
+        {
+            await gate.WaitForMessageAsync(cancellationToken);
+        }
+        evidence.Add(
             $"spot-backpressure|rid={evidence.Rid}|spot={spot.Context.SpotId}"
             + $"|marker={message.Marker}|sequence={message.Sequence}");
-        return ValueTask.CompletedTask;
     }
 }
 

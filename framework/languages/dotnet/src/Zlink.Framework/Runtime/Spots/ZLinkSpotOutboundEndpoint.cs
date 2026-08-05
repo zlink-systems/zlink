@@ -49,24 +49,16 @@ internal sealed class ZLinkSpotOutboundEndpoint(
         var outcome = "completed";
         try
         {
-            return runtime.Registration.Channels.TryGetValue(
-                       channelName,
-                       out var channel)
-                   && channel.HasClientServerClient
-                ? await runtime.RequestToChannelAsync(
-                        channelName,
-                        parts,
-                        requestTimeout,
-                        cancellationToken,
-                        metadata)
-                    .ConfigureAwait(false)
-                : await outbound.RequestToChannelAsync(
-                        channelName,
-                        parts,
-                        requestTimeout,
-                        cancellationToken,
-                        metadata)
-                    .ConfigureAwait(false);
+            // A Spot may target a channel registered on any process-local
+            // RouteMesh. Resolve that channel through the framework runtime;
+            // the current Spot native socket only owns its own mesh.
+            return await runtime.RequestToChannelAsync(
+                    channelName,
+                    parts,
+                    requestTimeout,
+                    cancellationToken,
+                    metadata)
+                .ConfigureAwait(false);
         }
         catch (TimeoutException)
         {
@@ -89,19 +81,6 @@ internal sealed class ZLinkSpotOutboundEndpoint(
         }
     }
 
-    /// <summary>Performs the first non-blocking ChannelName admission attempt
-    /// on the current MeshNode. False lets the async submitter wait for
-    /// send-ready.</summary>
-    public bool TrySendToChannelOnce(
-        string channelName,
-        IReadOnlyList<Message> parts,
-        ReadOnlyMemory<byte> metadata = default)
-    {
-        activation.EnsureOperationAllowed();
-        using var operation = runtime.EnterOperation();
-        return outbound.TrySendToChannelOnce(channelName, parts, metadata);
-    }
-
     public async ValueTask<ZLinkOneWaySubmitResult> SendToChannelAsync(
         string channelName,
         IReadOnlyList<Message> parts,
@@ -110,22 +89,12 @@ internal sealed class ZLinkSpotOutboundEndpoint(
     {
         activation.EnsureOperationAllowed();
         using var operation = runtime.EnterOperation();
-        return runtime.Registration.Channels.TryGetValue(
-                   channelName,
-                   out var channel)
-               && channel.HasClientServerClient
-            ? await runtime.SendToChannelAsync(
-                    channelName,
-                    parts,
-                    cancellationToken,
-                    metadata)
-                .ConfigureAwait(false)
-            : await outbound.SendToChannelAsync(
-                    channelName,
-                    parts,
-                    cancellationToken,
-                    metadata)
-                .ConfigureAwait(false);
+        return await runtime.SendToChannelAsync(
+                channelName,
+                parts,
+                cancellationToken,
+                metadata)
+            .ConfigureAwait(false);
     }
 
     public ValueTask<IReadOnlyList<Message>> RequestToSpotAsync(

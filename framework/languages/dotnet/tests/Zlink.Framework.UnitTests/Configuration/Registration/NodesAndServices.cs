@@ -253,6 +253,31 @@ public sealed class NodesAndServicesTests : RegistrationValidationSupport
     }
 
     [Fact]
+    public void Registration_Rejects_Duplicate_ProcessLocal_ChannelName()
+    {
+        var services = new ServiceCollection();
+
+        var exception = Assert.Throws<ZLinkConfigurationException>(() =>
+            services.AddZLinkFramework(options =>
+            {
+                options.UseTestLocationStore();
+                options.AddRouteMesh($"first-{Guid.NewGuid():N}")
+                    .Listen($"inproc://first-{Guid.NewGuid():N}")
+                    .Channel("shared-channel")
+                    .Server();
+                options.AddRouteMesh($"second-{Guid.NewGuid():N}")
+                    .Listen($"inproc://second-{Guid.NewGuid():N}")
+                    .Channel("shared-channel")
+                    .Server();
+            }));
+
+        Assert.Contains(
+            "ChannelName 'shared-channel' is registered by more than one",
+            exception.Message,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void AddZLinkFramework_Throws_WhenSpotMeshNameIsDuplicated()
     {
         var services = new ServiceCollection();
@@ -408,7 +433,7 @@ public sealed class NodesAndServicesTests : RegistrationValidationSupport
     }
 
     [Fact]
-    public async Task AddZLinkFramework_Registers_SpotServices_When_SpotNode_Exists()
+    public async Task AddZLinkFramework_Registers_SpotServices_When_ObjectRole_Exists()
     {
         var services = new ServiceCollection();
 
@@ -418,6 +443,7 @@ public sealed class NodesAndServicesTests : RegistrationValidationSupport
             {
                 var mesh = options.AddRouteMesh("stage-node");
                 mesh.Channel("stage-node").Server();
+                mesh.Objects().Client();
                 {
                     var spot = mesh;
                     {
@@ -430,6 +456,24 @@ public sealed class NodesAndServicesTests : RegistrationValidationSupport
         await using var provider = services.BuildServiceProvider();
         Assert.NotNull(provider.GetService<IZLinkSpotManager>());
         Assert.NotNull(provider.GetService<IZLinkSpotOutbound>());
+    }
+
+    [Fact]
+    public void AddZLinkFramework_DoesNot_Register_ObjectManager_For_NoneRole()
+    {
+        var services = new ServiceCollection();
+
+        services.AddZLinkFramework(options =>
+        {
+            var mesh = options.AddRouteMesh("manual-node")
+                .Listen("tcp://127.0.0.1:6202");
+            mesh.Channel("manual-node").Server();
+        });
+
+        using var provider = services.BuildServiceProvider();
+        Assert.Null(provider.GetService<IZLinkSpotManager>());
+        Assert.Null(provider.GetService<IZLinkSpotOutbound>());
+        Assert.NotNull(provider.GetService<IZLinkSpotPublisherClient>());
     }
 
     [Fact]

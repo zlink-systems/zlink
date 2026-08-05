@@ -207,11 +207,15 @@ internal static class ZLinkFrameworkServiceRegistrar
         services.AddSingleton<IZLinkFanoutRuntime>(static provider =>
             provider.GetRequiredService<ZLinkFanoutRuntimeService>());
 
-        if (HasSpotNode(registration))
+        if (HasObjectRole(registration))
         {
             services.AddSingleton<IZLinkSpotManager>(static provider =>
                 provider.GetRequiredService<ZLinkFrameworkRuntime>());
             services.AddSingleton<IZLinkSpotOutbound, ZLinkSpotOutboundService>();
+        }
+
+        if (HasSpotNode(registration))
+        {
             services.AddSingleton<ZLinkSpotPublisherClientService>();
             services.AddSingleton<IZLinkSpotPublisherClient>(static provider =>
                 provider.GetRequiredService<ZLinkSpotPublisherClientService>());
@@ -298,6 +302,11 @@ internal static class ZLinkFrameworkServiceRegistrar
     private static bool HasSpotNode(ZLinkFrameworkRegistration registration)
     {
         return registration.SpotNodes.Count > 0;
+    }
+
+    private static bool HasObjectRole(ZLinkFrameworkRegistration registration)
+    {
+        return registration.SpotNodes.Values.Any(static node => node.ObjectRoleSelected);
     }
 
     private static bool HasRouterSpotNode(ZLinkFrameworkRegistration registration)

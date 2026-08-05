@@ -43,7 +43,10 @@ internal static class SmG3ConcurrentSessionActorLifecycleScenario
                     .PacketName("UserActorPingReq")
                     .Async<ActorPingRes>();
                 ZlinkStreamAssert.Ensure(ping.ActorId == actorId, "SM-G3 actor request target mismatch.");
-                ZlinkStreamAssert.Ensure(ping.NodeRid == "play-a", "SM-G3 actor request reached the wrong node.");
+                ZlinkStreamAssert.Ensure(
+                    ping.NodeRid is "play-a"
+                    || ping.NodeRid.StartsWith("play-a-", StringComparison.Ordinal),
+                    "SM-G3 actor request reached the wrong node.");
                 var left = await client.Request(new LeaveReq(actorId))
                     .PacketName("LeaveReq")
                     .Async<LeaveRes>();

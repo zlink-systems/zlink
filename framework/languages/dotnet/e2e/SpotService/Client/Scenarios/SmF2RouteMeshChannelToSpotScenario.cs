@@ -1,4 +1,5 @@
 // Verifies SM-F2 Route Mesh Channel To Spot behavior.
+using System.Text.Json;
 using SpotService.Client.Support;
 using SpotService.Shared;
 using Zlink.HttpClient;
@@ -22,6 +23,8 @@ internal static class SmF2RouteMeshChannelToSpotScenario
             await target.Post("/placement-weight")
                 .Body(new PlacementWeightReq(100))
                 .Async<PlacementWeightRes>();
+            await WaitPlacementAvailabilityAsync(source, expected: false);
+            await WaitPlacementAvailabilityAsync(target, expected: true);
             await source.Post("/spot/create")
                 .Body(new CreateSpotReq(spotRid))
                 .Async<CreateSpotRes>();
@@ -78,6 +81,25 @@ internal static class SmF2RouteMeshChannelToSpotScenario
             await target.Post("/placement-weight")
                 .Body(new PlacementWeightReq(100))
                 .Async<PlacementWeightRes>();
+        }
+    }
+
+    private static async Task WaitPlacementAvailabilityAsync(
+        ZLinkHttpClient client,
+        bool expected)
+    {
+        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(10);
+        while (true)
+        {
+            var snapshot = (await client.Get("/mesh-snapshot").Async<JsonElement>()).Body;
+            if (snapshot.TryGetProperty("placement", out var placement)
+                && placement.TryGetProperty("isAvailable", out var available)
+                && available.GetBoolean() == expected)
+                return;
+            if (DateTimeOffset.UtcNow >= deadline)
+                throw new InvalidOperationException(
+                    $"SM-F2 placement availability did not reach {expected}.");
+            await Task.Delay(100);
         }
     }
 }

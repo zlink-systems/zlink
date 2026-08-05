@@ -27,7 +27,7 @@ internal static class SmE4TimerOverrunPolicyScenario
             var ready = (await playA.Post("/spot/state/request")
                 .Body(new SpotStateRouteReq(spotRid, "noop", 0))
                 .Async<StateRes>()).Body;
-            ZlinkStreamAssert.Ensure(ready.SpotRid == spotRid && ready.NodeRid == "play-a",
+            ZlinkStreamAssert.Ensure(ready.SpotRid == spotRid && IsPlayANode(ready.NodeRid),
                 "SM-E4 timer spot route did not become ready.");
         }
 
@@ -86,5 +86,11 @@ internal static class SmE4TimerOverrunPolicyScenario
         var end = line.IndexOf('|', start);
         var value = end < 0 ? line[start..] : line[start..end];
         return ulong.Parse(value);
+    }
+
+    private static bool IsPlayANode(string nodeRid)
+    {
+        return nodeRid is "play-a"
+               || nodeRid.StartsWith("play-a-", StringComparison.Ordinal);
     }
 }

@@ -3,6 +3,7 @@ using SpotService.Shared;
 using Systems.Zlink;
 using Zlink.Framework.Contracts.Actors;
 using Zlink.Framework.Contracts.Errors;
+using Zlink.Framework.Contracts.Spots;
 using Zlink.Framework.E2E.Configuration;
 
 namespace SpotService.Server.Play;
@@ -49,6 +50,49 @@ internal sealed class ApplicationJoinCoordinator(
         {
             _operations.TryRemove(request.ActorId, out _);
         }
+    }
+}
+
+internal sealed class SpotInitializationCoordinator(
+    IZLinkSpotManager spots)
+{
+    private readonly ConcurrentDictionary<string, Task<ZLinkSpotCreateResult>> _operations = new(
+        StringComparer.Ordinal);
+
+    public void Start(string spotId)
+    {
+        _operations.GetOrAdd(spotId, _ => CreateAsync(spotId));
+    }
+
+    public async Task<ZLinkSpotCreateResult> CompleteAsync(string spotId)
+    {
+        if (!_operations.TryGetValue(spotId, out var operation))
+            throw new InvalidOperationException(
+                $"Spot initialization operation '{spotId}' was not started.");
+
+        var result = await operation;
+        _operations.TryRemove(spotId, out _);
+        return result;
+    }
+
+    private async Task<ZLinkSpotCreateResult> CreateAsync(string spotId)
+    {
+        return await spots
+            .GetOrCreate(spotId, SpotServiceNames.UserSpotType)
+            .Async();
+    }
+}
+
+internal sealed class EntryIdentity
+{
+    public string NodeRid { get; private set; } = string.Empty;
+
+    public string EntrySpotId { get; private set; } = string.Empty;
+
+    public void Set(string nodeRid, string entrySpotId)
+    {
+        NodeRid = nodeRid;
+        EntrySpotId = entrySpotId;
     }
 }
 
@@ -127,6 +171,60 @@ internal sealed class EvidenceStore
     }
 }
 
+internal class FileReleaseGate(string? releaseFile)
+{
+    private readonly TaskCompletionSource<bool> _released =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private int _monitorStarted;
+
+    public ValueTask WaitForMessageAsync(CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(releaseFile))
+            return ValueTask.CompletedTask;
+
+        if (File.Exists(releaseFile))
+            return ValueTask.CompletedTask;
+
+        if (Interlocked.Exchange(ref _monitorStarted, 1) == 0)
+            _ = MonitorReleaseFileAsync();
+
+        return new ValueTask(_released.Task.WaitAsync(cancellationToken));
+    }
+
+    private async Task MonitorReleaseFileAsync()
+    {
+        while (!File.Exists(releaseFile))
+            await Task.Delay(TimeSpan.FromMilliseconds(5));
+
+        _released.TrySetResult(true);
+    }
+}
+
+internal sealed class BackpressureGate(string? releaseFile) : FileReleaseGate(releaseFile);
+
+internal sealed class SpotInitializationGate(string? releaseFile) : FileReleaseGate(releaseFile);
+
+internal sealed class ActorFactoryGate(string? releaseFile) : FileReleaseGate(releaseFile);
+
+internal sealed class ActorCreationRaceGate(string? gateFile)
+{
+    private readonly string? _gateFile = gateFile;
+
+    public async ValueTask WaitForFirstEntryAsync(
+        string actorId,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(_gateFile))
+            return;
+
+        var enteredFile = _gateFile + ".entered";
+        var releaseFile = _gateFile + ".release";
+        File.WriteAllText(enteredFile, actorId);
+        while (!File.Exists(releaseFile))
+            await Task.Delay(TimeSpan.FromMilliseconds(5), cancellationToken);
+    }
+}
+
 internal sealed record NodeOptions(string Rid);
 
 internal sealed record ServerOptions(
@@ -154,7 +252,13 @@ internal sealed record ServerOptions(
     int? MessageFollowDurationMilliseconds = null,
     int? OwnerLeaseTtlMilliseconds = null,
     int? PopulationLimit = null,
-    int? InstanceSpotIdleTimeoutMilliseconds = null)
+    int? InstanceSpotIdleTimeoutMilliseconds = null,
+    ulong? ApplicationHwmBytes = null,
+    string? BackpressureGateFile = null,
+    string? SpotInitializationGateFile = null,
+    string? ActorFactoryGateFile = null,
+    string? ActorCreationRaceGateFile = null,
+    string? B10Mode = null)
 {
     public static ServerOptions Parse(string[] args, string defaultRole)
         => E2eConfiguration.Load<ServerOptions>(args) with { Role = defaultRole };

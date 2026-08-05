@@ -44,7 +44,10 @@ internal sealed class ZLinkEnvelopeProtocolException(
 internal static class ZLinkEnvelopeCodec
 {
     private const string JsonContentType = "application/json";
+    private const int MaximumSimpleHeaderCacheEntries = 4096;
     private static readonly ConcurrentDictionary<SimpleHeaderKey, byte[]> SimpleHeaderCache = new();
+    private static readonly ConcurrentQueue<SimpleHeaderKey> SimpleHeaderCacheOrder = new();
+    private static readonly object SimpleHeaderCacheGate = new();
     private static readonly object DecodedHeaderCacheGate = new();
     private static HeaderCacheEntry[] DecodedHeaderCache = [];
 
@@ -56,7 +59,26 @@ internal static class ZLinkEnvelopeCodec
         Type? bodyType,
         ZLinkCodecRegistryBuilder? codecs)
     {
-        if (TryResolveBodySerializer(body, bodyType, codecs, out var contentType, out var serializer))
+        if (bodyType == typeof(ZLinkMessage))
+        {
+            if (body is not ZLinkMessage message)
+                throw new InvalidOperationException(
+                    $"Envelope body type is ZLinkMessage, but body instance is '{body?.GetType()}'.");
+
+            var encoded = message.Encode(codecs ?? new ZLinkCodecRegistryBuilder());
+            return ZLinkMessageParts.Create(
+                EncodeHeader(header with { ContentType = encoded.ContentType }),
+                Message.From(encoded.Payload.Bytes.Span));
+        }
+
+        var hasSerializer = TryResolveBodySerializer(
+            body,
+            bodyType,
+            codecs,
+            out var contentType,
+            out var serializer,
+            out var resolutionCompleted);
+        if (hasSerializer)
         {
             var headerMessage = EncodeHeader(header with { ContentType = contentType });
             try
@@ -73,8 +95,18 @@ internal static class ZLinkEnvelopeCodec
         }
 
         return ZLinkMessageParts.Create(
-            EncodeHeader(header with { ContentType = ResolveContentType(body, bodyType, codecs) }),
-            EncodeBody(body, bodyType, codecs));
+            EncodeHeader(header with
+            {
+                ContentType = resolutionCompleted
+                    ? contentType
+                    : JsonContentType
+            }),
+            EncodeBody(
+                body,
+                bodyType,
+                codecs,
+                resolutionCompleted,
+                serializer));
     }
 
     public static IReadOnlyList<Message> EncodeRawBodyParts(
@@ -99,21 +131,12 @@ internal static class ZLinkEnvelopeCodec
             // Hot path: route/request envelopes usually differ only in the body.
             // Reusing immutable header bytes avoids JSON serialization and UTF-8
             // allocation for every request.
-            var bytes = SimpleHeaderCache.GetOrAdd(
-                new SimpleHeaderKey(header.Kind, header.ChannelName, header.MessageName, header.ContentType),
-                static key => EncodeJsonBytes(new ZLinkEnvelopeHeader(
-                    key.Kind,
-                    key.ChannelName,
-                    key.MessageName,
-                    key.ContentType,
-                    null,
-                    null,
-                    null,
-                    null,
-                    null)
-                {
-                    FormatMarker = ZlinkStreamFlowId.FormatMarker
-                }));
+            var key = new SimpleHeaderKey(
+                header.Kind,
+                header.ChannelName,
+                header.MessageName,
+                header.ContentType);
+            var bytes = GetSimpleHeaderBytes(key);
             return Message.From(bytes);
         }
 
@@ -121,6 +144,28 @@ internal static class ZLinkEnvelopeCodec
     }
 
     public static Message EncodeBody(object? body, Type? bodyType, ZLinkCodecRegistryBuilder? codecs)
+    {
+        var hasSerializer = TryResolveBodySerializer(
+            body,
+            bodyType,
+            codecs,
+            out _,
+            out var serializer,
+            out var resolutionCompleted);
+        return EncodeBody(
+            body,
+            bodyType,
+            codecs,
+            resolutionCompleted,
+            hasSerializer ? serializer : null);
+    }
+
+    private static Message EncodeBody(
+        object? body,
+        Type? bodyType,
+        ZLinkCodecRegistryBuilder? codecs,
+        bool resolutionCompleted,
+        IZLinkMessageSerializer? serializer)
     {
         if (bodyType is null || body is null) return Message.From(ReadOnlySpan<byte>.Empty);
 
@@ -142,21 +187,15 @@ internal static class ZLinkEnvelopeCodec
             return Message.From(message.Encode(codecs ?? new ZLinkCodecRegistryBuilder()).Payload.Bytes.Span);
         }
 
-        if (codecs is not null
-            && codecs.TryResolveSerializer(bodyType, out _, out var serializer))
+        if (!resolutionCompleted)
+            return EncodeJsonPart(body, bodyType);
+
+        if (serializer is not null)
         {
             if (serializer is IZLinkMessagePartSerializer partSerializer)
                 return partSerializer.SerializePart(body, bodyType);
 
             return Message.From(serializer.Serialize(body, bodyType).Bytes.Span);
-        }
-
-        if (codecs?.SingleCustomSerializer() is { } custom)
-        {
-            if (custom.Serializer is IZLinkMessagePartSerializer partSerializer)
-                return partSerializer.SerializePart(body, bodyType);
-
-            return Message.From(custom.Serializer.Serialize(body, bodyType).Bytes.Span);
         }
 
         return EncodeJsonPart(body, bodyType);
@@ -218,6 +257,45 @@ internal static class ZLinkEnvelopeCodec
     {
         EnsurePart(parts, 0, "header");
         return DecodeHeader(parts[0]);
+    }
+
+    internal static ulong MeasureApplicationPayloadBytes(
+        IReadOnlyList<Message> parts)
+    {
+        var firstApplicationPart = 0;
+        if (parts.Count != 0 && IsEnvelopeHeader(parts[0]))
+            firstApplicationPart = 1;
+
+        var total = 0UL;
+        for (var index = firstApplicationPart; index < parts.Count; index++)
+        {
+            var size = (ulong)Math.Max(parts[index].Size, 0);
+            if (size > ulong.MaxValue - total)
+                return ulong.MaxValue;
+            total += size;
+        }
+        return total;
+    }
+
+    private static bool IsEnvelopeHeader(Message message)
+    {
+        var bytes = message.AsReadOnlySpan();
+        var first = 0;
+        while (first < bytes.Length
+               && bytes[first] is (byte)' ' or (byte)'\t' or (byte)'\r' or (byte)'\n')
+            first++;
+        if (first == bytes.Length || bytes[first] != (byte)'{')
+            return false;
+
+        try
+        {
+            _ = DecodeHeader(message);
+            return true;
+        }
+        catch (ZLinkEnvelopeProtocolException)
+        {
+            return false;
+        }
     }
 
     public static ZLinkEnvelopeProtocolException MissingHeader() => new(
@@ -313,39 +391,22 @@ internal static class ZLinkEnvelopeCodec
         return JsonSerializer.SerializeToUtf8Bytes(value, valueType, ZLinkJsonSerializerOptions.Default);
     }
 
-    internal static string ResolveContentType(object? body, Type? bodyType, ZLinkCodecRegistryBuilder? codecs)
-    {
-        if (body is null || bodyType is null) return JsonContentType;
-
-        if (bodyType == typeof(Message) || body is Message) return JsonContentType;
-
-        if (bodyType == typeof(ZLinkMessage) && body is ZLinkMessage message)
-        {
-            var encoded = message.Encode(codecs ?? new ZLinkCodecRegistryBuilder());
-            return encoded.ContentType;
-        }
-
-        if (codecs is not null
-            && codecs.TryResolveSerializer(bodyType, out var contentType, out _))
-            return contentType;
-
-        if (codecs?.SingleCustomSerializer() is { } custom) return custom.ContentType;
-
-        return JsonContentType;
-    }
-
     private static bool TryResolveBodySerializer(
         object? body,
         Type? bodyType,
         ZLinkCodecRegistryBuilder? codecs,
         out string contentType,
-        out IZLinkMessageSerializer? serializer)
+        out IZLinkMessageSerializer? serializer,
+        out bool resolutionCompleted)
     {
         contentType = JsonContentType;
         serializer = null;
+        resolutionCompleted = false;
         if (body is null || bodyType is null) return false;
         if (bodyType == typeof(Message) || body is Message) return false;
         if (bodyType == typeof(ZLinkMessage) || body is ZLinkMessage) return false;
+
+        resolutionCompleted = true;
 
         if (codecs is not null
             && codecs.TryResolveSerializer(bodyType, out contentType, out serializer))
@@ -358,6 +419,7 @@ internal static class ZLinkEnvelopeCodec
             return true;
         }
 
+        contentType = JsonContentType;
         return false;
     }
 
@@ -482,6 +544,45 @@ internal static class ZLinkEnvelopeCodec
         string ChannelName,
         string MessageName,
         string ContentType);
+
+    private static byte[] GetSimpleHeaderBytes(SimpleHeaderKey key)
+    {
+        if (SimpleHeaderCache.TryGetValue(key, out var cached))
+            return cached;
+
+        // Message and channel names are application input. Keep a bounded
+        // replacement cache so hot keys remain cheap after arbitrary keys
+        // have filled the cache.
+        lock (SimpleHeaderCacheGate)
+        {
+            if (SimpleHeaderCache.TryGetValue(key, out cached))
+                return cached;
+
+            while (SimpleHeaderCache.Count >= MaximumSimpleHeaderCacheEntries
+                   && SimpleHeaderCacheOrder.TryDequeue(out var evicted))
+                SimpleHeaderCache.TryRemove(evicted, out _);
+
+            var encoded = EncodeSimpleHeaderBytes(key);
+            SimpleHeaderCache[key] = encoded;
+            SimpleHeaderCacheOrder.Enqueue(key);
+            return encoded;
+        }
+    }
+
+    private static byte[] EncodeSimpleHeaderBytes(SimpleHeaderKey key) =>
+        EncodeJsonBytes(new ZLinkEnvelopeHeader(
+            key.Kind,
+            key.ChannelName,
+            key.MessageName,
+            key.ContentType,
+            null,
+            null,
+            null,
+            null,
+            null)
+        {
+            FormatMarker = ZlinkStreamFlowId.FormatMarker
+        });
 
     private static void AddDecodedHeaderCacheEntry(
         ReadOnlySpan<byte> bytes,

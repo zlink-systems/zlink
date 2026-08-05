@@ -7,15 +7,23 @@ using Zlink.Framework.Contracts.Spots;
 
 namespace SpotService.Server.Play.Spots;
 
-internal sealed class ScenarioActorFactory(EvidenceStore evidence) : IZLinkActorFactory<ScenarioActor>
+internal sealed class ScenarioActorFactory(
+    EvidenceStore evidence,
+    ActorFactoryGate factoryGate) : IZLinkActorFactory<ScenarioActor>
 {
-    public ValueTask<ScenarioActor> CreateAsync(
+    public async ValueTask<ScenarioActor> CreateAsync(
         IZLinkActorContext context,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        if (context.ActorId.StartsWith("actor-sm-b11-", StringComparison.Ordinal))
+        {
+            evidence.Add($"actor-factory-started|rid={evidence.Rid}|actor={context.ActorId}");
+            await factoryGate.WaitForMessageAsync(cancellationToken);
+        }
+
         evidence.Add($"actor-factory|rid={evidence.Rid}|actor={context.ActorId}");
-        return ValueTask.FromResult(new ScenarioActor(context.ActorId, context, evidence));
+        return new ScenarioActor(context.ActorId, context, evidence);
     }
 }
 
@@ -61,20 +69,50 @@ internal sealed class ScenarioActor(
 
 internal sealed class ScenarioEntrySpot(
     IZLinkEntrySpotContext context,
-    EvidenceStore evidence) : IZLinkEntrySpot<ScenarioActor>
+    EvidenceStore evidence,
+    EntryIdentity entryIdentity,
+    ActorCreationRaceGate actorCreationRaceGate) : IZLinkEntrySpot<ScenarioActor>
 {
-    public IZLinkEntrySpotContext Context { get; } = context;
+    public IZLinkEntrySpotContext Context { get; } = InitializeIdentity(
+        context,
+        evidence,
+        entryIdentity);
 
-    public ValueTask<ZLinkActorCreateResponse> OnCreateActorAsync(
+    private static IZLinkEntrySpotContext InitializeIdentity(
+        IZLinkEntrySpotContext context,
+        EvidenceStore evidence,
+        EntryIdentity entryIdentity)
+    {
+        entryIdentity.Set(context.NodeRid.ToString(), context.SpotId.ToString());
+        evidence.Add($"entry-startup|rid={context.NodeRid}|entry={context.SpotId}");
+        return context;
+    }
+
+    public async ValueTask<ZLinkActorCreateResponse> OnCreateActorAsync(
         ScenarioActor actor,
         ZLinkMessage createRequest,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (!createRequest.IsEmpty) actor.DisplayName = createRequest.Decode<ScenarioActorCreateReq>().DisplayName;
+        var marker = createRequest.IsEmpty
+            ? string.Empty
+            : createRequest.Decode<ScenarioActorCreateReq>().DisplayName;
+        if (!createRequest.IsEmpty) actor.DisplayName = marker;
+
+        if (actor.ActorId.StartsWith("actor-sm-b0a-", StringComparison.Ordinal)
+            && string.Equals(marker, "first", StringComparison.Ordinal))
+        {
+            await actorCreationRaceGate.WaitForFirstEntryAsync(
+                actor.ActorId,
+                cancellationToken);
+            evidence.Add(
+                $"entry-create-rejected|rid={evidence.Rid}|actor={actor.ActorId}|marker={marker}");
+            return ZLinkActorCreateResponse.Reject(
+                ZLinkMessage.From($"rejected:{marker}"));
+        }
 
         evidence.Add($"entry-created|rid={evidence.Rid}|actor={actor.ActorId}");
-        return ValueTask.FromResult(ZLinkActorCreateResponse.Accept());
+        return ZLinkActorCreateResponse.Accept();
     }
 
     public ValueTask<ZLinkSpotActorJoinResult> OnActorJoinAsync(
@@ -126,17 +164,24 @@ internal sealed class ScenarioEntrySpot(
 
 internal sealed class ScenarioUserSpot(
     IZLinkSpotContext context,
-    EvidenceStore evidence) : IZLinkSpot<ScenarioActor>
+    EvidenceStore evidence,
+    SpotInitializationGate initializationGate) : IZLinkSpot<ScenarioActor>
 {
     private int _value;
 
     public IZLinkSpotContext Context { get; } = context;
 
-    public ValueTask OnInitializeAsync(CancellationToken cancellationToken)
+    public async ValueTask OnInitializeAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        if (Context.SpotId.StartsWith("spot-sm-a9-", StringComparison.Ordinal))
+        {
+            evidence.Add(
+                $"spot-initialize-started|rid={evidence.Rid}|spot={Context.SpotId}");
+            await initializationGate.WaitForMessageAsync(cancellationToken);
+        }
+
         evidence.Add($"spot-initialize|rid={evidence.Rid}|spot={Context.SpotId}");
-        return ValueTask.CompletedTask;
     }
 
     public ValueTask OnClosingAsync(

@@ -12,6 +12,18 @@ internal static class OperationalEndpoints
     {
         app.MapGet("/health", () => Results.Ok(new { status = "ready", options.Role, options.Rid }));
         app.MapGet("/evidence", (EvidenceStore evidence) => Results.Ok(evidence.Snapshot()));
+        app.MapGet("/entry/identity", (EntryIdentity identity) =>
+            Results.Ok(new EntryIdentityRes(identity.NodeRid, identity.EntrySpotId)));
+        app.MapGet("/runtime/status", (IZLinkFrameworkRuntime runtime) =>
+        {
+            var inbound = runtime.Status.InboundDispatch;
+            return Results.Ok(new RuntimeInboundStatusRes(
+                inbound.ApplicationHwmBytes,
+                inbound.PendingPayloadBytes,
+                inbound.QueuedPayloadBytes,
+                inbound.ActivePayloadBytes,
+                inbound.ApplicationReceivePaused));
+        });
         app.MapPost("/evidence/wait", async (
             EvidenceWaitReq request,
             EvidenceStore evidence,

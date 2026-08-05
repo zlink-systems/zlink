@@ -8,8 +8,18 @@ namespace SpotService.Client.Scenarios;
 
 internal static class SmD3EntryAndUserSpotSessionRelayScenario
 {
-    public static async Task RunAsync(ZLinkHttpClient playA, string sessionAStreamEndpoint)
+    public static async Task RunAsync(
+        ZLinkHttpClient playA,
+        ZLinkHttpClient playB,
+        string sessionAStreamEndpoint)
     {
+        await playA.Post("/placement-weight")
+            .Body(new PlacementWeightReq(100))
+            .Async<PlacementWeightRes>();
+        await playB.Post("/placement-weight")
+            .Body(new PlacementWeightReq(0))
+            .Async<PlacementWeightRes>();
+
         var entryActorId = $"actor-sm-d3-entry-{Guid.NewGuid():N}";
         var userSpotRid = $"spot-sm-d3-user-{Guid.NewGuid():N}";
         var userActorId = $"actor-sm-d3-user-{Guid.NewGuid():N}";
@@ -32,7 +42,9 @@ internal static class SmD3EntryAndUserSpotSessionRelayScenario
             .Async<ActorPingRes>();
         var entryNotify = await entryPushed;
         ZlinkStreamAssert.Ensure(entryReply.ActorId == entryActorId, "SM-D3 entry bind actor mismatch.");
-        ZlinkStreamAssert.Ensure(entryReply.NodeRid == "play-a", "SM-D3 entry bind node mismatch.");
+        ZlinkStreamAssert.Ensure(
+            IsPlayNode(entryReply.NodeRid),
+            "SM-D3 entry bind node mismatch.");
         ZlinkStreamAssert.Ensure(entryNotify.Payload.ActorId == entryActorId, "SM-D3 entry push actor mismatch.");
         ZlinkStreamAssert.Ensure(entryNotify.Payload.Value == "entry-push", "SM-D3 entry push value mismatch.");
 
@@ -48,9 +60,23 @@ internal static class SmD3EntryAndUserSpotSessionRelayScenario
         await user.Connect.Async();
         await user.Request(new UserSpotAuthReq(userSpotRid, userActorId, "user bind"))
             .PacketName("UserSpotAuthReq").Async<AuthRes>();
-        await playA.Post("/spot/create").Body(new CreateSpotReq(userSpotRid)).Async<CreateSpotRes>();
-        await user.Request(new JoinUserSpotActorReq(userSpotRid, userActorId))
-            .PacketName("JoinUserSpotActorReq").Async<JoinUserSpotActorRes>();
+        var created = (await playA.Post("/spot/create")
+            .Body(new CreateSpotReq(userSpotRid))
+            .Async<CreateSpotRes>()).Body;
+        ZlinkStreamAssert.Ensure(IsPlayNode(created.NodeRid), "SM-D3 user spot owner mismatch.");
+        var owner = OwnerFor(created.NodeRid, playA, playB);
+        var ownerRid = HostRid(created.NodeRid);
+        var joined = await user.Request(new JoinUserSpotActorReq(userSpotRid, userActorId))
+            .PacketName("JoinUserSpotActorReq")
+            .Async<JoinUserSpotActorRes>();
+        ZlinkStreamAssert.Ensure(
+            joined.Accepted && joined.SpotRid == userSpotRid && joined.ActorId == userActorId,
+            "SM-D3 user spot join was not accepted.");
+        await owner.Post("/evidence/wait")
+            .Body(new EvidenceWaitReq([
+                $"spot-actor-joined|rid={ownerRid}|spot={userSpotRid}|actor={userActorId}"
+            ]))
+            .Async<string[]>();
 
         var userPushed = user.WaitFor<ActorPushNotify>().Async().AsTask();
         var userReply = await user.Request(new ActorPingReq("user-relay"))
@@ -61,28 +87,53 @@ internal static class SmD3EntryAndUserSpotSessionRelayScenario
             .Async<ActorPingRes>();
         var userNotify = await userPushed;
         ZlinkStreamAssert.Ensure(userReply.ActorId == userActorId, "SM-D3 user bind actor mismatch.");
-        ZlinkStreamAssert.Ensure(userReply.NodeRid == "play-a", "SM-D3 user bind node mismatch.");
+        ZlinkStreamAssert.Ensure(
+            IsPlayNode(userReply.NodeRid),
+            "SM-D3 user bind node mismatch.");
         ZlinkStreamAssert.Ensure(userReply.SpotRid == userSpotRid, "SM-D3 user bind spot mismatch.");
         ZlinkStreamAssert.Ensure(userReply.Value == "user-relay", "SM-D3 user relay value mismatch.");
         ZlinkStreamAssert.Ensure(userPushReply.ActorId == userActorId, "SM-D3 user push reply actor mismatch.");
         ZlinkStreamAssert.Ensure(userNotify.Payload.ActorId == userActorId, "SM-D3 user push actor mismatch.");
         ZlinkStreamAssert.Ensure(userNotify.Payload.Value == "user-push", "SM-D3 user push value mismatch.");
 
-        var evidence = (await playA.Post("/evidence/wait")
+        ZlinkStreamAssert.Ensure(
+            string.Equals(HostRid(userReply.NodeRid), ownerRid, StringComparison.Ordinal),
+            "SM-D3 user relay changed owner node.");
+        var evidence = (await owner.Post("/evidence/wait")
             .Body(new EvidenceWaitReq([
-                $"spot-actor-joined|rid=play-a|spot={userSpotRid}|actor={userActorId}",
-                $"actor-ping|rid=play-a|actor={userActorId}|spot={userSpotRid}|value=user-relay"
+                $"actor-ping|rid={userReply.NodeRid}|actor={userActorId}|spot={userSpotRid}|value=user-relay"
             ]))
             .Async<string[]>()).Body;
         ZlinkStreamAssert.Ensure(
             evidence.Any(line => line.Contains(
-                $"spot-actor-joined|rid=play-a|spot={userSpotRid}|actor={userActorId}",
-                StringComparison.Ordinal))
-            && evidence.Any(line => line.Contains(
-                $"actor-ping|rid=play-a|actor={userActorId}|spot={userSpotRid}|value=user-relay",
+                $"actor-ping|rid={userReply.NodeRid}|actor={userActorId}|spot={userSpotRid}|value=user-relay",
                 StringComparison.Ordinal)),
             "SM-D3 expected user spot bind and relay evidence.");
 
         Console.WriteLine("operation SpotService.sm-d3 passed");
     }
+
+    private static bool IsPlayNode(string nodeRid) =>
+        nodeRid is "play-a" or "play-b"
+        || nodeRid.StartsWith("play-a-", StringComparison.Ordinal)
+        || nodeRid.StartsWith("play-b-", StringComparison.Ordinal);
+
+    private static ZLinkHttpClient OwnerFor(
+        string nodeRid,
+    ZLinkHttpClient playA,
+    ZLinkHttpClient playB) =>
+        nodeRid is "play-a" || nodeRid.StartsWith("play-a-", StringComparison.Ordinal)
+            ? playA
+            : nodeRid is "play-b" || nodeRid.StartsWith("play-b-", StringComparison.Ordinal)
+                ? playB
+                : throw new InvalidOperationException(
+                    "SM-D3 user owner node was not an eligible play node.");
+
+    private static string HostRid(string nodeRid) =>
+        nodeRid is "play-a" || nodeRid.StartsWith("play-a-", StringComparison.Ordinal)
+            ? "play-a"
+            : nodeRid is "play-b" || nodeRid.StartsWith("play-b-", StringComparison.Ordinal)
+                ? "play-b"
+                : throw new InvalidOperationException(
+                    "SM-D3 owner node was not an eligible play node.");
 }

@@ -18,7 +18,10 @@ internal static class SmA8WorkerOffloadScenario
         var ready = (await playA.Post("/spot/state/request")
             .Body(new SpotStateRouteReq(spotRid, "noop", 0))
             .Async<StateRes>()).Body;
-        ZlinkStreamAssert.Ensure(ready.SpotRid == spotRid && ready.NodeRid == "play-a",
+        ZlinkStreamAssert.Ensure(
+            ready.SpotRid == spotRid
+            && (ready.NodeRid is "play-a"
+                || ready.NodeRid.StartsWith("play-a-", StringComparison.Ordinal)),
             "SM-A8 worker spot route did not become ready.");
         var workerTask = playA.Post("/spot/worker/start")
             .Body(new SpotWorkerStartReq(spotRid, "sm-a8-worker", 5000))
