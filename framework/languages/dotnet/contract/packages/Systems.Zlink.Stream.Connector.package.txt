@@ -12,7 +12,7 @@ metadata description=ZLink STREAM client connector for .NET.
 metadata id=Systems.Zlink.Stream.Connector
 metadata license=LICENSE type=file
 metadata licenseUrl=https://aka.ms/deprecateLicenseUrl
-metadata projectUrl=https://github.com/kairos-code-dev/zlink
+metadata projectUrl=https://github.com/zlink-systems/zlink
 metadata version={VERSION}
 metadata repository commit={COMMIT} type=git
 dependency-group targetFramework=net8.0

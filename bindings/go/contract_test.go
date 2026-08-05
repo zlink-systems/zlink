@@ -11,13 +11,13 @@ import (
 	"testing"
 	"time"
 
-	zlink "zlink.systems/zlink/v11"
+	zlink "zlink.systems/zlink"
 )
 
 func TestRuntimeVersionIsAvailable(t *testing.T) {
 	version := zlink.RuntimeVersion()
-	if version.Major <= 0 {
-		t.Fatalf("RuntimeVersion().Major = %d, want > 0", version.Major)
+	if version.Major != 0 || version.Minor != 9 || version.Patch != 0 {
+		t.Fatalf("RuntimeVersion() = %d.%d.%d, want 0.9.0", version.Major, version.Minor, version.Patch)
 	}
 }
 

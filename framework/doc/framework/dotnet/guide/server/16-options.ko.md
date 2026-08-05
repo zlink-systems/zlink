@@ -144,7 +144,7 @@ await client.SendToChannel("profile", command).Async(ct);
 상대의 지연이 왜 이쪽 대기가 되는지, 상한이 언제 걸리고 언제 풀리는지는
 [04-backpressure](04-backpressure.ko.md)가 다룬다. 이 절과 다음 절은 그 동작에서 값을 정하는
 옵션만 다룬다. 흐름 제어 자체는 Core가 담당하며 정확한 계약은
-[core guide의 socket option](https://kairos-code-dev.github.io/zlink/guide/12-socket-options/)이 다룬다.
+[core guide의 socket option](https://zlink-systems.github.io/zlink/guide/12-socket-options/)이 다룬다.
 
 > **Logical Multicast는 target마다 따로 판단한다.** 한 target에 제출하지 못해도 이미
 > 수락된 target을 되돌리지 않고, target별 실패를 발행 결과로 돌려주지도 않는다.

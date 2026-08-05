@@ -38,7 +38,7 @@ if (!zlinkBindingsSource.isNullOrBlank()) {
 
 val zlinkGitHubPackagesUrl = providers.gradleProperty("zlink.githubPackagesUrl")
     .orElse(providers.environmentVariable("ZLINK_GITHUB_PACKAGES_URL"))
-    .orElse("https://maven.pkg.github.com/kairos-code-dev/zlink")
+    .orElse("https://maven.pkg.github.com/zlink-systems/zlink")
 val zlinkGitHubPackagesUser = providers.gradleProperty("zlink.githubPackagesUser")
     .orElse(providers.environmentVariable("MAVEN_REPOSITORY_USERNAME"))
     .orElse(providers.environmentVariable("GITHUB_ACTOR"))

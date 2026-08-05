@@ -216,7 +216,7 @@ backend 어댑터 포트는
 
 | 역할 | 의미 | bind |
 |---|---|---|
-| `addRouteMesh(...)` | 물리 MeshName과 MeshNode를 등록한다 | **필요** |
+| `addRouteMesh(meshName)` | 물리 MeshName과 MeshNode를 등록한다 | **필요** |
 | `listen(port?)` | MeshNode가 공유하는 ROUTER listener를 연다. 자동 discovery에서 생략하면 port 0을 사용한다 | 불필요 |
 | `channel(name).server()` | 논리 server membership과 handler namespace를 추가한다 | 불필요 |
 | `channel(name).client()` | server [membership](../../../01-glossary.ko.md#membership) 없이 ChannelName 호출 역할을 추가한다 | 불필요 |

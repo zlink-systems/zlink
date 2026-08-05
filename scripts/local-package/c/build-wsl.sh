@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(git -C "$script_dir" rev-parse --show-toplevel)"
+artifact_root="${ZLINK_LOCAL_PACKAGE_ROOT:-$repo_root/.artifacts/wsl}"
+configuration="${CONFIGURATION:-Release}"
+core_prefix="${ZLINK_CORE_PACKAGE_PREFIX:-}"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --core-prefix) core_prefix="${2:-}"; shift 2 ;;
+    -h|--help) echo "Usage: build-wsl.sh [--core-prefix ABSOLUTE_DIR]"; exit 0 ;;
+    *) echo "Unknown argument: $1" >&2; exit 2 ;;
+  esac
+done
+
+version="$(sed -n 's/^LIBZLINK_VERSION=//p' "$repo_root/VERSION")"
+"$repo_root/scripts/local-package/native/sync-local-core-libs.sh" c
+
+build_dir="$artifact_root/build/bindings-c-$version"
+cmake -S "$repo_root/bindings/c" -B "$build_dir" \
+  -DCMAKE_BUILD_TYPE="$configuration" \
+  -DZLINK_C_CORE_BUILD_DIR="$repo_root/core/build" \
+  -DZLINK_C_BUILD_TESTS=ON -DZLINK_C_REGISTER_CTEST=ON \
+  -DZLINK_C_BUILD_SAMPLES=OFF
+cmake --build "$build_dir" --parallel "${ZLINK_BINDING_BUILD_JOBS:-4}"
+ctest --test-dir "$build_dir" --output-on-failure
+
+out_dir="$artifact_root/c"
+stage="$out_dir/zlink-c-$version"
+archive="$out_dir/zlink-c-$version.tar.gz"
+rm -rf "$stage" "$archive"
+mkdir -p "$stage/include" "$stage/lib" "$stage/provenance"
+cp -a "$repo_root/bindings/c/include/." "$stage/include/"
+cp -a "$repo_root/core/include/." "$stage/include/"
+cp -L "$repo_root/core/build/lib/libzlink.so.$version" "$stage/lib/libzlink.so.$version"
+ln -s "libzlink.so.$version" "$stage/lib/libzlink.so.0"
+ln -s "libzlink.so.0" "$stage/lib/libzlink.so"
+cp "$core_prefix/share/zlink/core-package-provenance.json" \
+  "$stage/provenance/core-package-provenance.json"
+tar -C "$out_dir" -czf "$archive" "zlink-c-$version"
+rm -rf "$stage"
+echo "C local package: $archive"

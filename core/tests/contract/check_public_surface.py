@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Public surface contract gate for Core 11 raw runtime.
+"""Public surface contract gate for Core 0.9.0 raw runtime.
 
 Verifies that the installed public header closure and the built shared
 library expose exactly the C surface defined by the formal spec under

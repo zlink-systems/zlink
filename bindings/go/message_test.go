@@ -3,7 +3,7 @@ package zlink_test
 import (
 	"testing"
 
-	zlink "zlink.systems/zlink/v11"
+	zlink "zlink.systems/zlink"
 )
 
 func TestMessageDiagnosticAPI(t *testing.T) {

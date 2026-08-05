@@ -18,7 +18,7 @@ def _supported_platform() -> str:
     machine = platform.machine().lower()
     if not sys.platform.startswith("linux") or machine not in {"x86_64", "amd64"}:
         raise RuntimeError(
-            "zlink Python Core 11 wheels currently support Linux x86_64 only"
+            "zlink Python Core 0.9.0 wheels currently support Linux x86_64 only"
         )
     return SUPPORTED_PLATFORM
 
@@ -91,10 +91,11 @@ def _native_package_data() -> dict[str, list[str]]:
     platform_dir = TARGET_PLATFORM
     payload_dir = PACKAGE_ROOT / "src" / "zlink" / "native" / platform_dir
     major, minor, patch = _core_version()
+    abi_major = 0
     version = f"{major}.{minor}.{patch}"
     expected_names = {
         "libzlink.so",
-        f"libzlink.so.{major}",
+        f"libzlink.so.{abi_major}",
         f"libzlink.so.{version}",
     }
     if not (payload_dir / f"libzlink.so.{version}").is_file():
@@ -118,7 +119,7 @@ def _native_package_data() -> dict[str, list[str]]:
         "zlink": [
             "py.typed",
             f"native/{platform_dir}/libzlink.so",
-            f"native/{platform_dir}/libzlink.so.{major}",
+            f"native/{platform_dir}/libzlink.so.{abi_major}",
             f"native/{platform_dir}/libzlink.so.{version}",
         ]
     }

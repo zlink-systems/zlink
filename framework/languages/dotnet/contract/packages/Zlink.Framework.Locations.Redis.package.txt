@@ -12,7 +12,7 @@ metadata description=Official Redis location store extension for the ZLink .NET 
 metadata id=Zlink.Framework.Locations.Redis
 metadata license=LICENSE type=file
 metadata licenseUrl=https://aka.ms/deprecateLicenseUrl
-metadata projectUrl=https://github.com/kairos-code-dev/zlink
+metadata projectUrl=https://github.com/zlink-systems/zlink
 metadata version={VERSION}
 metadata repository commit={COMMIT} type=git
 dependency-group targetFramework=net8.0

@@ -1,6 +1,6 @@
 {
   "name": "@zlink-systems/e2e-registration-codec-client",
-  "version": "0.1.0-SNAPSHOT",
+  "version": "0.9.0",
   "private": true,
   "main": "dist/Client/main.js",
   "scripts": {

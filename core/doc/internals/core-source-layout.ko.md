@@ -8,10 +8,10 @@ title: "Core source layout"
 
 # Core source layout
 
-> **이 장이 답하는 것** — Core 11에 남는 raw runtime source가 어떻게 디렉터리와
+> **이 장이 답하는 것** — Core 0.9.0에 남는 raw runtime source가 어떻게 디렉터리와
 > include 방향으로 나뉘는가.
 
-이 문서는 Core 11에 남는 raw runtime source의 책임과 include 방향을 설명한다.
+이 문서는 Core 0.9.0에 남는 raw runtime source의 책임과 include 방향을 설명한다.
 
 ## Layer model
 

@@ -1,6 +1,6 @@
 {
   "name": "@zlink-systems/framework-codec-msgpack",
-  "version": "0.1.0-SNAPSHOT",
+  "version": "0.9.0",
   "license": "SEE LICENSE IN LICENSE",
   "files": ["dist/browser", "dist/server", "dist/framework.d.ts", "dist/index.d.ts", "LICENSE"],
   "exports": {
@@ -16,11 +16,11 @@
   },
   "dependencies": {
     "@msgpack/msgpack": "^3.1.3",
-    "@zlink-systems/stream-wire": "0.1.0-SNAPSHOT"
+    "@zlink-systems/stream-wire": "0.9.0"
   },
   "peerDependencies": {
-    "@zlink-systems/framework": "0.1.0-SNAPSHOT",
-    "@zlink-systems/stream-connector": "0.1.0-SNAPSHOT"
+    "@zlink-systems/framework": "0.9.0",
+    "@zlink-systems/stream-connector": "0.9.0"
   },
   "peerDependenciesMeta": {
     "@zlink-systems/framework": { "optional": true }

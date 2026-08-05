@@ -1733,15 +1733,15 @@ int main ()
     ok &= file_contains (root / "connector/e2e-client/packaging/conan/conanfile.py",
                          "name = \"zlink-stream-e2e-client\"");
     ok &=
-      file_contains (root / "connector/core/packaging/conan/conanfile.py", "version = \"0.1.0\"");
+      file_contains (root / "connector/core/packaging/conan/conanfile.py", "version = \"0.9.0\"");
     ok &= file_contains (root / "connector/e2e-client/packaging/conan/conanfile.py",
-                         "version = \"0.1.0\"");
+                         "version = \"0.9.0\"");
     ok &= file_contains (root / "connector/core/packaging/conan/conanfile.py",
                          "\"shared\": [True, False]");
     ok &= file_contains (root / "connector/e2e-client/packaging/conan/conanfile.py",
                          "package_type = \"header-library\"");
     ok &= file_contains (root / "connector/e2e-client/packaging/conan/conanfile.py",
-                         "requires = \"zlink-stream-connector/0.1.0\"");
+                         "requires = \"zlink-stream-connector/0.9.0\"");
     ok &= file_does_not_contain (root / "connector/e2e-client/packaging/conan/conanfile.py",
                                  "CMake(self).install()",
                                  "e2e Conan package must not reinstall the core connector package");

@@ -23,7 +23,7 @@ title: "Core threading model"
 | Reaper thread | 종료된 socket과 owned object 정리 | Context당 1개 |
 | Timer scheduler | generic timer deadline과 fire count | runtime 소유 |
 
-Core 11에는 service mailbox나 MeshNode 전용 ingress thread가 없다.
+Core 0.9.0에는 service mailbox나 MeshNode 전용 ingress thread가 없다.
 
 ## 2. Thread 간 통신
 

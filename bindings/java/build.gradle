@@ -4,7 +4,7 @@ plugins {
 }
 
 group = 'systems.zlink'
-version = '11.2.0'
+version = '0.9.0'
 description = 'zlink Java bindings — high-performance async messaging library'
 
 java {
@@ -40,14 +40,12 @@ def bridgeOutputDir = layout.buildDirectory.dir(
 ['apiElements', 'runtimeElements'].each { configurationName ->
     configurations.named(configurationName) {
         attributes {
-            attribute(Attribute.of('systems.zlink.core.version', String), '11.2.0')
+            attribute(Attribute.of('systems.zlink.core.version', String), '0.9.0')
             attribute(Attribute.of('systems.zlink.core.soname', String),
-                'libzlink.so.11')
+                'libzlink.so.0')
             attribute(Attribute.of('systems.zlink.core.provenance-sha256', String),
                 approvedCorePackage?.provenanceSha256 ?: 'unverified')
-            attribute(Attribute.of(
-                'systems.zlink.core.candidate-manifest-sha256', String),
-                approvedCorePackage?.candidate?.manifestSha256 ?: 'unverified')
+            attribute(Attribute.of('systems.zlink.core.abi-major', Integer), 0)
         }
     }
 }
@@ -93,16 +91,17 @@ tasks.register('buildZlinkJavaBridge', Exec) {
     doFirst {
         if (corePackagePrefix == null || !corePackagePrefix.isAbsolute()) {
             throw new GradleException(
-                'ZLINK_CORE_PACKAGE_PREFIX must name an absolute Core 11 install prefix')
+                'ZLINK_CORE_PACKAGE_PREFIX must name an absolute Core 0.9.0 install prefix')
         }
         def includeDir = new File(corePackagePrefix, 'include')
         def linkDir = new File(corePackagePrefix, 'lib')
         def runtime = new File(linkDir, 'libzlink.so')
+        def sonameRuntime = new File(linkDir, 'libzlink.so.0')
         def manifest = new File(corePackagePrefix,
             'share/zlink/core-package-provenance.json')
         if (!new File(includeDir, 'zlink.h').isFile()
             || new File(includeDir, 'zlink/service').exists()
-            || !runtime.isFile() || !manifest.isFile()) {
+            || !runtime.isFile() || !sonameRuntime.isFile() || !manifest.isFile()) {
             throw new GradleException(
                 'Core package is incomplete or contains the removed service surface')
         }
@@ -118,21 +117,16 @@ tasks.register('buildZlinkJavaBridge', Exec) {
             .digest(manifest.bytes).encodeHex().toString()
         def runtimeSha256 = java.security.MessageDigest.getInstance('SHA-256')
             .digest(runtime.bytes).encodeHex().toString()
-        if (metadata.version != '11.2.0') {
-            throw new GradleException('Core package must report version 11.2.0')
+        if (metadata.version != '0.9.0') {
+            throw new GradleException('Core package must report version 0.9.0')
         }
         def approved = approvedCorePackage
-        if (approved != null && (approved.version != '11.2.0'
+        if (approved != null && (approved.version != '0.9.0'
             || approved.prefix != corePackagePrefix.canonicalPath
             || approved.provenanceSha256 != manifestSha256
             || approved.runtime.sha256 != runtimeSha256
-            || approved.runtime.soname != 'libzlink.so.11'
-            || metadata.candidate.ledgerId != approved.candidate.ledgerId
-            || metadata.candidate.baseRevision != approved.candidate.baseRevision
-            || metadata.candidate.manifestSha256 != approved.candidate.manifestSha256
-            || metadata.candidate.aggregateSha256 != approved.candidate.aggregateSha256
-            || metadata.candidate.approvalEvidenceSha256
-                != approved.candidate.approvalEvidenceSha256)) {
+            || approved.runtime.soname != 'libzlink.so.0'
+            || metadata.abiMajor != 0)) {
             throw new GradleException(
                 'Core package no longer matches its approved exact provenance')
         }
@@ -141,6 +135,11 @@ tasks.register('buildZlinkJavaBridge', Exec) {
             from runtime
             into outputDir
             rename { 'libzlink.so' }
+        }
+        copy {
+            from sonameRuntime
+            into outputDir
+            rename { 'libzlink.so.0' }
         }
         copy {
             from manifest
@@ -242,24 +241,19 @@ publishing {
             pom {
                 name = 'zlink'
                 description = project.description
-                url = 'https://github.com/kairos-code-dev/zlink'
+                url = 'https://github.com/zlink-systems/zlink'
                 licenses {
                     license {
                         name = 'MPL-2.0'
-                        url = 'https://github.com/kairos-code-dev/zlink/blob/main/LICENSE'
+                        url = 'https://github.com/zlink-systems/zlink/blob/main/LICENSE'
                     }
                 }
                 properties = [
-                    'zlink.core.version': '11.2.0',
-                    'zlink.core.soname': 'libzlink.so.11',
+                    'zlink.core.version': '0.9.0',
+                    'zlink.core.soname': 'libzlink.so.0',
+                    'zlink.core.abi-major': '0',
                     'zlink.core.provenance-sha256':
                         approvedCorePackage?.provenanceSha256 ?: 'unverified',
-                    'zlink.core.candidate-ledger-id':
-                        approvedCorePackage?.candidate?.ledgerId ?: 'unverified',
-                    'zlink.core.candidate-manifest-sha256':
-                        approvedCorePackage?.candidate?.manifestSha256 ?: 'unverified',
-                    'zlink.core.candidate-aggregate-sha256':
-                        approvedCorePackage?.candidate?.aggregateSha256 ?: 'unverified'
                 ]
             }
         }

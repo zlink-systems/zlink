@@ -1895,7 +1895,7 @@ Every data-path function (`send`, `recv`, `request`, `reply`,
   code` (an exception object for exception languages, a return error
   value for return-based languages).
 - For the full enum definition, see
-  [errno-map.md](https://kairos-code-dev.github.io/zlink/en/spec/core/04-errno-map/).
+  [errno-map.md](https://zlink-systems.github.io/zlink/en/spec/core/04-errno-map/).
 
 #### Per-Function Error Type Hierarchy
 
@@ -2167,7 +2167,7 @@ The builder's callback submit method (`submit(callback)`).
 #### Shared
 
 - For the full `zlink_request_result_t` definition, see
-  [errno-map.md](https://kairos-code-dev.github.io/zlink/en/spec/core/04-errno-map/).
+  [errno-map.md](https://zlink-systems.github.io/zlink/en/spec/core/04-errno-map/).
 - Because Go / Rust have no exceptions, a callback request's submit
   failure is also handled in a return-based way (Go: returns
   `*SubmitError`; Rust: returns `Result<_, SubmitError>`).
@@ -4421,7 +4421,7 @@ Codes split into two layers.
 1. **Public result enum codes (0–706)** — the return enum value of a
    public C API function. A binding faces these directly and must
    expose them as a per-language error type. See
-   [core/errno-map.md](https://kairos-code-dev.github.io/zlink/en/spec/core/04-errno-map/)
+   [core/errno-map.md](https://zlink-systems.github.io/zlink/en/spec/core/04-errno-map/)
    for the full definition.
 2. **Internal errno** — the internal raw errno looked up with
    `zlink_errno()`. Used to look up the detailed cause behind a coarse
@@ -5324,7 +5324,7 @@ following criteria.
 
 ## Sample Policy
 - Sample-authoring rules use
-  [`doc/spec/sample/SAMPLE_POLICY.md`](https://kairos-code-dev.github.io/zlink/en/spec/sample/SAMPLE_POLICY/)
+  [`doc/spec/sample/SAMPLE_POLICY.md`](https://zlink-systems.github.io/zlink/en/spec/sample/SAMPLE_POLICY/)
   as the single baseline document.
 - This document covers `core/samples/` and `bindings/*/samples/`
   together.

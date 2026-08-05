@@ -7,7 +7,7 @@ import (
 	"runtime"
 	"time"
 
-	"zlink.systems/zlink/v11/perf/internal/perfcommon"
+	"zlink.systems/zlink/perf/internal/perfcommon"
 )
 
 type multiConfig struct {

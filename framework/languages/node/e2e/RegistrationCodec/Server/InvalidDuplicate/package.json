@@ -1,6 +1,6 @@
 {
   "name": "@zlink-systems/e2e-registration-codec-invalid-duplicate",
-  "version": "0.1.0-SNAPSHOT",
+  "version": "0.9.0",
   "private": true,
   "main": "dist/Server/InvalidDuplicate/main.js",
   "scripts": {

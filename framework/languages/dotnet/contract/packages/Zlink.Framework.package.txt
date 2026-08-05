@@ -12,14 +12,14 @@ metadata description=ZLink framework core abstractions and runtime for .NET.
 metadata id=Zlink.Framework
 metadata license=LICENSE type=file
 metadata licenseUrl=https://aka.ms/deprecateLicenseUrl
-metadata projectUrl=https://github.com/kairos-code-dev/zlink
+metadata projectUrl=https://github.com/zlink-systems/zlink
 metadata version={VERSION}
 metadata repository commit={COMMIT} type=git
 dependency-group targetFramework=net8.0
 dependency targetFramework=net8.0 exclude=Build,Analyzers id=K4os.Compression.LZ4 version=1.3.8
 dependency targetFramework=net8.0 exclude=Build,Analyzers id=Microsoft.Extensions.DependencyInjection.Abstractions version=8.0.0
 dependency targetFramework=net8.0 exclude=Build,Analyzers id=Microsoft.Extensions.Logging.Abstractions version=8.0.0
-dependency targetFramework=net8.0 exclude=Build,Analyzers id=Systems.Zlink version=11.2.0
+dependency targetFramework=net8.0 exclude=Build,Analyzers id=Systems.Zlink version=0.9.0
 dependency targetFramework=net8.0 exclude=Build,Analyzers id=Systems.Zlink.Stream.Connector version=[{VERSION}]
 dependency targetFramework=net8.0 exclude=Build,Analyzers id=Zlink.Framework.Contracts version=[{VERSION}]
 dependency targetFramework=net8.0 exclude=Build,Analyzers id=Zlink.Framework.Provider.Abstractions version=[{VERSION}]

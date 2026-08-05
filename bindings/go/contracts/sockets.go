@@ -2,7 +2,7 @@
 
 package contracts
 
-import impl "zlink.systems/zlink/v11/internal/native"
+import impl "zlink.systems/zlink/internal/native"
 
 type (
 	// SocketType identifies a socket's messaging pattern.

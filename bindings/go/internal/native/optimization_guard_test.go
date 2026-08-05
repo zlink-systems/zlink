@@ -167,8 +167,8 @@ func TestSamplesAndPerfUseRootPublicContract(t *testing.T) {
 		}
 		body := string(bodyBytes)
 		for _, token := range []string{
-			`"zlink.systems/zlink/v11/internal/native"`,
-			`"zlink.systems/zlink/v11/contracts"`,
+			`"zlink.systems/zlink/internal/native"`,
+			`"zlink.systems/zlink/contracts"`,
 		} {
 			if strings.Contains(body, token) {
 				violations = append(violations, filepath.Base(path)+":"+token)

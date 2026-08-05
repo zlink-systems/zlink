@@ -14,7 +14,7 @@ def _require_supported_platform():
     machine = platform.machine().lower()
     if not sys.platform.startswith("linux") or machine not in {"x86_64", "amd64"}:
         raise OSError(
-            "zlink Python Core 11 wheels currently support Linux x86_64 only"
+            "zlink Python Core 0.9.0 wheels currently support Linux x86_64 only"
         )
 
 

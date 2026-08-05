@@ -20,7 +20,7 @@ Please refer to the README file for anything else.
 
 ## Resources
 
-* Repository: https://github.com/kairos-code-dev/zlink
+* Repository: https://github.com/zlink-systems/zlink
 
 ## Copyright
 

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	zlink "zlink.systems/zlink/v11"
+	zlink "zlink.systems/zlink"
 )
 
 type ReadyConfig struct {

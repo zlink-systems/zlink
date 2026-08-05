@@ -94,8 +94,8 @@ def test_package_platform_policy_is_explicit_linux_x86_64_only():
         if path.is_file() or path.is_symlink()
     } == {
         "linux-x86_64/libzlink.so",
-        "linux-x86_64/libzlink.so.11",
-        "linux-x86_64/libzlink.so.11.2.0",
+        "linux-x86_64/libzlink.so.0",
+        "linux-x86_64/libzlink.so.0.9.0",
     }
 
 

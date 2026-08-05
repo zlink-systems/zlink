@@ -3,8 +3,8 @@ package main
 import (
 	"context"
 
-	zlink "zlink.systems/zlink/v11"
-	"zlink.systems/zlink/v11/perf/internal/perfcommon"
+	zlink "zlink.systems/zlink"
+	"zlink.systems/zlink/perf/internal/perfcommon"
 )
 
 // PERF_MULTI_TEST_POLICY / perf_multi_stream_server.cpp: the measured

@@ -6,11 +6,11 @@ title: "Go Bindings Public Contract"
 [Spec index](../README.md) | [Previous: Python](../python/README.md) | [Next: Rust](../rust/README.md)
 <!-- bindings-nav:end -->
 
-# Go binding Core 11 public contract
+# Go binding Core 0.9.0 public contract
 
 > **What this chapter defines** — the public type, ownership, and error
 > contract the currently implemented Go binding provides on top of the
-> Core 11 raw C API.
+> Core 0.9.0 raw C API.
 
 This document defines only the public contract of the currently
 implemented Go binding. It does not add pre-implementation designs or
@@ -20,7 +20,7 @@ matching projection at the module root.
 
 | Section | Covers |
 |---|---|
-| [Module and public package](#module-and-public-package) | Import path, the internal boundary, the Core 11 raw scope |
+| [Module and public package](#module-and-public-package) | Import path, the internal boundary, the Core 0.9.0 raw scope |
 | [Public contract categories](#public-contract-categories) | A table of public concepts by category |
 | [Context and resource lifetime](#context-and-resource-lifetime) | Ownership/release rules for Context/socket/monitor/poller/timer |
 | [Message and ownership](#message-and-ownership) | Native storage, ownership per builder path |
@@ -32,9 +32,9 @@ matching projection at the module root.
 
 ## Module and public package
 
-The Go module's import path is `zlink.systems/zlink/v11`. A typical
+The Go module's import path is `zlink.systems/zlink`. A typical
 consumer imports the `zlink` package at the module root.
-`zlink.systems/zlink/v11/contracts` is a public projection that declares
+`zlink.systems/zlink/contracts` is a public projection that declares
 the same contract split by category, and the root package re-exports it.
 
 Runtime handles, cgo declarations, native structs, callback trampolines,
@@ -42,7 +42,7 @@ the request-progress pump, and buffer marshalling are implementation
 details of `internal/native`. These types and this package are not part of
 the consumer contract.
 
-- The current package contract projects only the Core 11 raw C API.
+- The current package contract projects only the Core 0.9.0 raw C API.
 - It includes Context, Message, raw sockets, monitor, poller, timer, and utility, but not Spot, Actor, MeshNode, or service operations.
 - The Go module has no per-message codec registration API either.
 - The default path for messages and byte payloads uses the typed API the binding provides.
@@ -179,7 +179,7 @@ error is nil. If `bool` is `true`, the output has been filled with one or
 more results. A real failure is `*RecvError`.
 
 A socket monitor is opened with a typed event mask and provides
-`MonitorEvent` and `MonitorStatus`. Each Core 11 monitor event mask and
+`MonitorEvent` and `MonitorStatus`. Each Core 0.9.0 monitor event mask and
 delivered event value is provided as its matching typed constant.
 `MonitorEventMask` is used to open a monitor, and `MonitorEventType` is
 used to check a received `MonitorEvent.Event`. A poller reports the
@@ -224,9 +224,9 @@ allowlist.
 The module package uses the following file proxy layout.
 
 ```text
-zlink.systems/zlink/v11/@v/v11.1.0.info
-zlink.systems/zlink/v11/@v/v11.1.0.mod
-zlink.systems/zlink/v11/@v/v11.1.0.zip
+zlink.systems/zlink/@v/v0.9.0.info
+zlink.systems/zlink/@v/v0.9.0.mod
+zlink.systems/zlink/@v/v0.9.0.zip
 ```
 
 The supported platform runtimes are included under the module's

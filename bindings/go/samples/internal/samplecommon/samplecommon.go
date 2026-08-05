@@ -10,7 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	zlink "zlink.systems/zlink/v11"
+	zlink "zlink.systems/zlink"
 )
 
 var counter uint64

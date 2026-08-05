@@ -120,7 +120,7 @@ def _clone_received_owner(parts_ptr, part_count):
 
 
 def _native_socket_type(sock_type):
-    # Core 11 owns the numeric enum values. Do not reinterpret values from an
+    # Core 0.9.0 owns the numeric enum values. Do not reinterpret values from an
     # older binding surface before passing them to the raw socket factory.
     return int(sock_type)
 

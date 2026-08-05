@@ -9,8 +9,8 @@ zlink_cpp_sample_prepare_build() {
   # versions and dependency prefixes are fixed by that tree's cache so a
   # sample cannot silently create or select a second build provenance.
   BUILD_DIR="${ZLINK_CPP_BUILD_DIR:-$cpp_root/build}"
-  local cpp_version="11.2.0"
-  local core_version="11.2.0"
+  local cpp_version="0.9.0"
+  local core_version="0.9.0"
   local dependency_prefix=""
 
   if [[ -z "$dependency_prefix" && -f "$BUILD_DIR/CMakeCache.txt" ]]; then

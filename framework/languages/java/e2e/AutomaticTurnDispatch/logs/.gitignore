@@ -1,0 +1,3 @@
+*
+# Keep the evidence directory, not generated runs.
+!.gitignore

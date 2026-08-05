@@ -1,12 +1,12 @@
 {
   "name": "@zlink-systems/zlink",
-  "version": "11.2.0",
+  "version": "0.9.0",
   "description": "zlink Node.js bindings \u2014 high-performance async messaging library",
   "license": "MPL-2.0",
   "author": "Zlink Systems",
   "repository": {
     "type": "git",
-    "url": "https://github.com/ulala-x/zlink.git",
+    "url": "https://github.com/zlink-systems/zlink.git",
     "directory": "bindings/node"
   },
   "homepage": "https://zlink.systems/",

@@ -48,7 +48,7 @@ resolve_candidate() {
     return 1
   fi
   if [[ -z "${ZLINK_CORE_PACKAGE_PREFIX:-}" || -z "${ZLINK_CORE_PACKAGE_EVIDENCE:-}" ]]; then
-    echo "ZLINK_CORE_PACKAGE_PREFIX and ZLINK_CORE_PACKAGE_EVIDENCE must identify the approved Core package" >&2
+    echo "ZLINK_CORE_PACKAGE_PREFIX and ZLINK_CORE_PACKAGE_EVIDENCE must identify the Core 0.9.0 package" >&2
     return 1
   fi
   [[ -d "$ZLINK_CORE_PACKAGE_PREFIX" ]] || {
@@ -61,10 +61,9 @@ resolve_candidate() {
   }
   CORE_PACKAGE_PREFIX="$(realpath "$ZLINK_CORE_PACKAGE_PREFIX")"
   CORE_PACKAGE_EVIDENCE="$(realpath "$ZLINK_CORE_PACKAGE_EVIDENCE")"
-  node "$REPO_ROOT/scripts/local-package/java/verify-core-input.mjs" \
-    --prefix "$CORE_PACKAGE_PREFIX" \
-    --core-package-evidence "$CORE_PACKAGE_EVIDENCE" \
-    >"$TEMP_DIR/core-package-summary.json"
+  bash "$REPO_ROOT/scripts/local-package/core/verify-package.sh" \
+    --prefix "$CORE_PACKAGE_PREFIX" >"$TEMP_DIR/core-package-verify.log"
+  cp "$CORE_PACKAGE_EVIDENCE" "$TEMP_DIR/core-package-summary.json"
 
   CANDIDATE_JAR="$(find "$ZLINK_LOCAL_PACKAGE_ROOT/maven/systems/zlink/zlink" \
     -path "*/$BINDING_VERSION/zlink-$BINDING_VERSION.jar" -type f -print -quit)"

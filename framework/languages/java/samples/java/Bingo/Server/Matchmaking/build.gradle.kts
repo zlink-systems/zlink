@@ -13,10 +13,10 @@ fun sampleRootPath(): String {
 dependencies {
     implementation(sampleProject("Shared"))
     implementation(sampleProject("Server:Configuration"))
-    implementation("systems.zlink:zlink-framework-core:0.1.0-SNAPSHOT")
-    implementation("systems.zlink:zlink-framework-codec-protobuf:0.1.0-SNAPSHOT")
-    implementation("systems.zlink:zlink-framework-locations-redis:0.1.0-SNAPSHOT")
-    implementation("systems.zlink:zlink-framework-spring-boot-starter:0.1.0-SNAPSHOT")
+    implementation("systems.zlink:zlink-framework-core:0.9.0")
+    implementation("systems.zlink:zlink-framework-codec-protobuf:0.9.0")
+    implementation("systems.zlink:zlink-framework-locations-redis:0.9.0")
+    implementation("systems.zlink:zlink-framework-spring-boot-starter:0.9.0")
     implementation("io.lettuce:lettuce-core:6.3.2.RELEASE")
     implementation("org.springframework.boot:spring-boot-starter:3.5.14")
 }

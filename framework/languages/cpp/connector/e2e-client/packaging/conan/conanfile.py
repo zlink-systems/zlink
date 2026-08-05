@@ -5,13 +5,13 @@ import os
 
 class ZlinkStreamE2EClientConan(ConanFile):
     name = "zlink-stream-e2e-client"
-    version = "0.1.0"
+    version = "0.9.0"
     license = "MPL-2.0"
-    url = "https://github.com/ulala-x/zlink"
+    url = "https://github.com/zlink-systems/zlink"
     description = "ZLink C++ Stream Connector scenario client for server e2e, smoke, and perf tests"
     package_type = "header-library"
     no_copy_source = True
-    requires = "zlink-stream-connector/0.1.0"
+    requires = "zlink-stream-connector/0.9.0"
 
     def export_sources(self):
         repo_root = os.path.abspath(

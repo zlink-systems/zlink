@@ -13,7 +13,7 @@ title: "C++ Binding Guide"
 
 A binding that wraps the C core in RAII (not header-only — compiled and linked).
 Explains how to use zlink in C++ through working sample code.
-See the [core guide](https://kairos-code-dev.github.io/zlink/guide/01-overview/) for
+See the [core guide](https://zlink-systems.github.io/zlink/guide/01-overview/) for
 the deeper messaging concepts.
 
 ---
@@ -270,7 +270,7 @@ Verified samples live under `bindings/cpp/samples/`.
 | `request_reply_async_sample.cpp` | ROUTER/DEALER async request/reply |
 
 > SPOT/Actor examples are covered by the framework C++ samples, not the core
-> binding — see [Bingo](https://github.com/kairos-code-dev/zlink/tree/main/framework/languages/cpp/samples/Bingo)
+> binding — see [Bingo](https://github.com/zlink-systems/zlink/tree/main/framework/languages/cpp/samples/Bingo)
 > etc. under `framework/languages/cpp/samples/`.
 
 ```bash
@@ -285,5 +285,5 @@ cmake -B build -DZLINK_CPP_BUILD_SAMPLES=ON && cmake --build build
 
 ## See Also
 
-- Socket patterns: [overview](https://kairos-code-dev.github.io/zlink/guide/03-0-socket-patterns/) — [PAIR](https://kairos-code-dev.github.io/zlink/guide/03-1-pair/) · [PUB/SUB](https://kairos-code-dev.github.io/zlink/guide/03-2-pubsub/) · [DEALER](https://kairos-code-dev.github.io/zlink/guide/03-3-dealer/) · [ROUTER](https://kairos-code-dev.github.io/zlink/guide/03-4-router/) · [STREAM](https://kairos-code-dev.github.io/zlink/guide/03-5-stream/) · [Proxy](https://kairos-code-dev.github.io/zlink/guide/03-6-proxy/)
-- Operations: [Socket options](https://kairos-code-dev.github.io/zlink/guide/12-socket-options/) · [TLS](https://kairos-code-dev.github.io/zlink/guide/05-tls-security/) · [Monitoring](https://kairos-code-dev.github.io/zlink/guide/06-monitoring/) · [Thread safety](https://kairos-code-dev.github.io/zlink/guide/11-thread-safety/) · [Message API](https://kairos-code-dev.github.io/zlink/guide/09-message-api/) · [Routing ID](https://kairos-code-dev.github.io/zlink/guide/08-routing-id/)
+- Socket patterns: [overview](https://zlink-systems.github.io/zlink/guide/03-0-socket-patterns/) — [PAIR](https://zlink-systems.github.io/zlink/guide/03-1-pair/) · [PUB/SUB](https://zlink-systems.github.io/zlink/guide/03-2-pubsub/) · [DEALER](https://zlink-systems.github.io/zlink/guide/03-3-dealer/) · [ROUTER](https://zlink-systems.github.io/zlink/guide/03-4-router/) · [STREAM](https://zlink-systems.github.io/zlink/guide/03-5-stream/) · [Proxy](https://zlink-systems.github.io/zlink/guide/03-6-proxy/)
+- Operations: [Socket options](https://zlink-systems.github.io/zlink/guide/12-socket-options/) · [TLS](https://zlink-systems.github.io/zlink/guide/05-tls-security/) · [Monitoring](https://zlink-systems.github.io/zlink/guide/06-monitoring/) · [Thread safety](https://zlink-systems.github.io/zlink/guide/11-thread-safety/) · [Message API](https://zlink-systems.github.io/zlink/guide/09-message-api/) · [Routing ID](https://zlink-systems.github.io/zlink/guide/08-routing-id/)

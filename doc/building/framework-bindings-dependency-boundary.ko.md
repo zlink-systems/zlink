@@ -353,11 +353,8 @@ cmake --install .artifacts/windows/build/bindings-cpp --config Release
 
 ```text
 scripts/local-package/build-wsl.sh
-scripts/local-package/build-windows.ps1
-scripts/local-package/native/update-zlink-libs.sh
 scripts/local-package/native/sync-local-core-libs.sh
 scripts/local-package/<lang>/build-wsl.sh
-scripts/local-package/<lang>/build-windows.ps1
 ```
 
 공통 정책은 같지만 명령, 경로 구분자, native runtime, CMake generator가 다르기 때문이다.

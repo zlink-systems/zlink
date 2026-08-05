@@ -204,7 +204,7 @@ chaining or with a lock and queue is discretion.
 |---|---|
 | The name and signature of an API the application calls | [Per-Language Public Contract](../spec/server/languages/README.en.md) |
 | The meaning and completion condition of public behavior | [Formal Spec](../spec/README.en.md) |
-| The raw socket/transport internal Core provides | [Core Raw Runtime Internal Boundary](https://kairos-code-dev.github.io/zlink/internals/runtime-boundary/) |
+| The raw socket/transport internal Core provides | [Core Raw Runtime Internal Boundary](https://zlink-systems.github.io/zlink/internals/runtime-boundary/) |
 
 The four runtimes implement this document's meaning, but don't share
 source or a common native binary.

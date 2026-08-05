@@ -1,9 +1,9 @@
 site_name: ZLink
-site_url: https://kairos-code-dev.github.io/zlink/
+site_url: https://zlink-systems.github.io/zlink/
 site_description: ZLink Framework — 실시간 메시징 서버 프레임워크
 
-repo_url: https://github.com/kairos-code-dev/zlink
-repo_name: kairos-code-dev/zlink
+repo_url: https://github.com/zlink-systems/zlink
+repo_name: zlink-systems/zlink
 
 # docs/는 정본 트리를 심링크로 모은 자리다(복사본이 아니다).
 # framework · core · bindings 문서가 한 사이트에 함께 실린다.

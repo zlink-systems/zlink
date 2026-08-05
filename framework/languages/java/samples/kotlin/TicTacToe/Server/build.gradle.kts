@@ -18,11 +18,11 @@ fun sampleRootPath(): String {
 
 dependencies {
     implementation(sampleProject("Shared"))
-    implementation("systems.zlink:zlink-framework-core:0.1.0-SNAPSHOT")
-    implementation("systems.zlink:zlink-framework-locations-redis:0.1.0-SNAPSHOT")
-    implementation("systems.zlink:zlink-framework-spring-boot-starter:0.1.0-SNAPSHOT")
-    implementation("systems.zlink:zlink-framework-kotlin:0.1.0-SNAPSHOT")
-    implementation("systems.zlink:zlink-stream-connector:0.1.0-SNAPSHOT")
+    implementation("systems.zlink:zlink-framework-core:0.9.0")
+    implementation("systems.zlink:zlink-framework-locations-redis:0.9.0")
+    implementation("systems.zlink:zlink-framework-spring-boot-starter:0.9.0")
+    implementation("systems.zlink:zlink-framework-kotlin:0.9.0")
+    implementation("systems.zlink:zlink-stream-connector:0.9.0")
     implementation(zlinkLibs.zlink.bindings)
     implementation("com.fasterxml.jackson.core:jackson-databind:2.17.2")
     implementation("com.fasterxml.jackson.module:jackson-module-kotlin:2.17.2")

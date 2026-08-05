@@ -13,8 +13,8 @@ title: "Python Binding Guide"
 
 This document explains how to use Core raw messaging through the `zlink` Python
 package. It supports Python 3.9 and later; the native runtime target for the
-current Core 11 wheel is Linux x86_64. Other operating systems or CPU
-architectures aren't treated as a supported target until a separate Core 11
+current Core 0.9.0 wheel is Linux x86_64. Other operating systems or CPU
+architectures aren't treated as a supported target until a separate Core 0.9.0
 candidate and clean-consumer verification are complete.
 
 ## Installation And A First Round Trip

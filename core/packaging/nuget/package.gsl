@@ -19,14 +19,14 @@
         <title>$(package.id)</title>
         <authors>zlink contributors</authors>
         <owners>zlink contributors</owners>
-        <licenseUrl>https://raw.github.com/kairos-code-dev/zlink/main/LICENSE</licenseUrl>
-        <projectUrl>https://github.com/kairos-code-dev/zlink</projectUrl>
+        <licenseUrl>https://raw.githubusercontent.com/zlink-systems/zlink/main/LICENSE</licenseUrl>
+        <projectUrl>https://github.com/zlink-systems/zlink</projectUrl>
         <iconUrl>https://avatars1.githubusercontent.com/u/109777?s=32</iconUrl>
         <requireLicenseAcceptance>true</requireLicenseAcceptance>
         <developmentDependency>false</developmentDependency>
         <description>zlink is a modern messaging library that provides asynchronous message queues, multiple messaging patterns, message filtering (subscriptions), and seamless access to multiple transport protocols including TCP, IPC, inproc, WebSocket, and TLS.</description>
         <summary>zlink messaging library, packaged for specific Visual Studio compiler.</summary>
-        <releaseNotes>https://raw.github.com/kairos-code-dev/zlink/main/CHANGELOG.md</releaseNotes>
+        <releaseNotes>https://raw.githubusercontent.com/zlink-systems/zlink/main/CHANGELOG.md</releaseNotes>
         <copyright>MPL-2.0</copyright>
         <tags>native, libzlink, zlink, messaging, sockets, C++</tags>
         <dependencies>

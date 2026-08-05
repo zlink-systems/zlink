@@ -7,7 +7,7 @@ fun sampleProject(name: String) = project("${path.substringBeforeLast(":", "")}:
 dependencies {
     implementation(sampleProject("Shared"))
     implementation(sampleProject("Server:Configuration"))
-    implementation("systems.zlink:zlink-http-client:0.3.1")
+    implementation("systems.zlink:zlink-http-client:0.9.0")
 }
 
 java {

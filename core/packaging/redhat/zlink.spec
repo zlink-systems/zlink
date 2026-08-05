@@ -10,13 +10,13 @@
 %endif
 %define lib_name libzlink11
 Name:          zlink
-Version:       11.2.0
+Version:       0.9.0
 Release:       1%{?dist}
 Summary:       The Zlink messaging library
 Group:         Development/Libraries/C and C++
 License:       MPL-2.0
-URL:           https://github.com/kairos-code-dev/zlink
-Source:        https://github.com/kairos-code-dev/zlink/archive/v%{version}.tar.gz
+URL:           https://github.com/zlink-systems/zlink
+Source:        https://github.com/zlink-systems/zlink/archive/v%{version}.tar.gz
 Prefix:        %{_prefix}
 Buildroot:     %{_tmppath}/%{name}-%{version}-%{release}-root
 BuildRequires:  autoconf automake libtool glib2-devel libbsd-devel

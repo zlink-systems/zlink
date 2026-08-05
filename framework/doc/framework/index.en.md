@@ -364,9 +364,9 @@ explanation never drifts no matter which language you're reading.
 | | |
 | --- | --- |
 | Language-neutral meaning and the public contract | [Common Spec](common/README.ko.md) |
-| The messaging engine underneath — socket patterns, transport, options | [Core Guide](https://kairos-code-dev.github.io/zlink/guide/01-overview/) · [Core Spec](https://kairos-code-dev.github.io/zlink/spec/core/) |
-| Using Core directly from a language — the C API binding | [Bindings Guide](https://kairos-code-dev.github.io/zlink/bindings/guide/) · [Bindings Spec](https://kairos-code-dev.github.io/zlink/bindings/spec/) |
-| Source and issues | [github.com/kairos-code-dev/zlink](https://github.com/kairos-code-dev/zlink) |
+| The messaging engine underneath — socket patterns, transport, options | [Core Guide](https://zlink-systems.github.io/zlink/guide/01-overview/) · [Core Spec](https://zlink-systems.github.io/zlink/spec/core/) |
+| Using Core directly from a language — the C API binding | [Bindings Guide](https://zlink-systems.github.io/zlink/bindings/guide/) · [Bindings Spec](https://zlink-systems.github.io/zlink/bindings/spec/) |
+| Source and issues | [github.com/zlink-systems/zlink](https://github.com/zlink-systems/zlink) |
 
 Core is the messaging engine this framework sits on top of. You don't need to reference it
 when you're only using the framework -- go down to that documentation when you need to

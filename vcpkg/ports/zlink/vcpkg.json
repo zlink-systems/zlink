@@ -2,7 +2,7 @@
   "name": "zlink",
   "version-string": "5.3.0",
   "description": "libzlink core library",
-  "homepage": "https://github.com/ulala-x/zlink",
+  "homepage": "https://github.com/zlink-systems/zlink",
   "license": "MPL-2.0",
   "dependencies": [
     "openssl"

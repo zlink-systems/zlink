@@ -7,7 +7,6 @@ REPO_DIR="$(cd "${PROJECT_DIR}/../.." && pwd)"
 CORE_BUILD_DIR="${REPO_DIR}/core/build"
 CORE_LIB_DIR="${CORE_BUILD_DIR}/lib"
 CORE_LIB="${CORE_LIB_DIR}/libzlink.so"
-RUST_RUNTIME_RESOLVER="${REPO_DIR}/scripts/local-package/rust/resolve-candidate-runtime.sh"
 PERF_REPORT_PY="${REPO_DIR}/bindings/python/perf/perf_report.py"
 START_SECONDS="$(date +%s)"
 TOTAL_TIME_ENABLED=0
@@ -42,7 +41,6 @@ OUTPUT_FILE=""
 SMOKE=0
 PIN_CPU=0
 BUILD_DIR=""
-RUST_PACKAGE_EVIDENCE="${ZLINK_RUST_PACKAGE_EVIDENCE:-}"
 EXPLICIT_MSG_SIZES=0
 COMMON_IO_THREADS="${PERF_IO_THREADS:-}"
 SERVER_IO_THREADS=""
@@ -96,8 +94,6 @@ Options:
   --clients N
   --smoke
   --build-dir PATH
-  --rust-package-evidence FILE
-                             Rust candidate package evidence for completion-gate runs.
   --reuse-build
   --clean-build
   --pin-cpu
@@ -146,7 +142,6 @@ while [[ $# -gt 0 ]]; do
         --clients)     CLIENTS="$2"; EXPLICIT_CLIENTS=1; shift 2 ;;
         --smoke)       SMOKE=1; shift ;;
         --build-dir)   BUILD_DIR="$2";   shift 2 ;;
-        --rust-package-evidence) RUST_PACKAGE_EVIDENCE="$2"; shift 2 ;;
         --io-threads) COMMON_IO_THREADS="$2"; shift 2 ;;
         --server-io-threads) SERVER_IO_THREADS="$2"; shift 2 ;;
         --client-io-threads) CLIENT_IO_THREADS="$2"; shift 2 ;;
@@ -290,25 +285,6 @@ memory_available_kb() {
 }
 
 prepare_core_runtime() {
-    if [[ -n "${RUST_PACKAGE_EVIDENCE}" ]]; then
-        [[ -f "${RUST_RUNTIME_RESOLVER}" ]] || {
-            echo "Rust candidate runtime resolver not found: ${RUST_RUNTIME_RESOLVER}" >&2
-            exit 1
-        }
-        # Candidate package evidence owns the runtime path, hash and Core identity.
-        source "${RUST_RUNTIME_RESOLVER}"
-        resolve_rust_package_runtime "${RUST_PACKAGE_EVIDENCE}" "linux-x86_64" \
-            "$(git -C "${REPO_DIR}" rev-parse HEAD)"
-        echo "Rust candidate package evidence: ${RUST_PACKAGE_EVIDENCE}"
-        echo "Rust candidate manifest sha256: ${RUST_CANDIDATE_MANIFEST_SHA256}"
-        echo "Rust candidate aggregate sha256: ${RUST_CANDIDATE_AGGREGATE_SHA256}"
-        echo "Rust perf runtime: ${RUST_CANDIDATE_RUNTIME}"
-        echo "Rust perf runtime sha256: ${RUST_CANDIDATE_RUNTIME_SHA256}"
-        export ZLINK_RUST_NATIVE_DIR="${RUST_CANDIDATE_NATIVE_DIR}"
-        export LD_LIBRARY_PATH="${RUST_CANDIDATE_NATIVE_DIR}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
-        return
-    fi
-
     # Compare against the resolved runtime, not the libzlink.so symlink: the
     # symlink keeps its original creation mtime when only the versioned .so is
     # rebuilt, which made this guard false-positive "stale" after every core
@@ -320,7 +296,7 @@ prepare_core_runtime() {
     [[ -f "${runtime}" ]] || runtime="${native_dir}/libzlink.so.${package_version}"
     if [[ ! -f "${runtime}" ]]; then
         echo "Rust perf runtime not found: ${native_dir}" >&2
-        echo "Build core/build or pass --rust-package-evidence." >&2
+        echo "Build core/build or set ZLINK_RUST_NATIVE_DIR." >&2
         exit 1
     fi
     local resolved_lib

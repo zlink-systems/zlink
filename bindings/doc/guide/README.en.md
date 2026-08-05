@@ -16,15 +16,15 @@ zlink provides bindings in several languages on top of a C core. Each guide cove
 **how to use zlink in that language** — installation, idiomatic examples, type
 mapping, language-specific conventions. The messaging **concepts themselves**
 (socket patterns, transport, services, routing IDs) are language-neutral and are
-covered once, in the [core guide](https://kairos-code-dev.github.io/zlink/guide/01-overview/);
+covered once, in the [core guide](https://zlink-systems.github.io/zlink/guide/01-overview/);
 each language guide links back to the core guide wherever a concept is needed.
 
 ## Reading Order
 
 - **You already know messaging / want to get moving fast** → go straight to your
   language's guide. Follow the core links inline whenever a concept is unclear.
-- **Messaging is new to you** → read the core [overview](https://kairos-code-dev.github.io/zlink/guide/01-overview/)
-  and [socket patterns](https://kairos-code-dev.github.io/zlink/guide/03-0-socket-patterns/)
+- **Messaging is new to you** → read the core [overview](https://zlink-systems.github.io/zlink/guide/01-overview/)
+  and [socket patterns](https://zlink-systems.github.io/zlink/guide/03-0-socket-patterns/)
   first, then come to the language guide.
 
 ## Choosing A Language
@@ -36,7 +36,7 @@ each language guide links back to the core guide wherever a concept is needed.
 | Java | [java/](java/index.en.md) | javadoc | `systems.zlink:zlink` |
 | Node | [node/](node/index.en.md) | typedoc | `@zlink-systems/zlink` |
 | Python | [python/](python/index.en.md) | sphinx | `zlink` (PyPI) |
-| Go | [go/](go/index.en.md) | godoc | `zlink.systems/zlink/v11` |
+| Go | [go/](go/index.en.md) | godoc | `zlink.systems/zlink` |
 | Rust | [rust/](rust/index.en.md) | rustdoc | `zlink` (crates.io) |
 | Kotlin | [java/ §Kotlin](java/index.en.md#kotlin) | (shared with java) | `systems.zlink:zlink` |
 | JavaScript | [node/ §JavaScript](node/index.en.md#javascript) | (shared with node) | `@zlink-systems/zlink` |
@@ -48,7 +48,7 @@ each language guide links back to the core guide wherever a concept is needed.
 > tabs also have separate Kotlin/JavaScript columns.
 
 > C is the core itself, so instead of a separate binding guide, see the
-> [core C API guide](https://kairos-code-dev.github.io/zlink/guide/02-core-api/).
+> [core C API guide](https://zlink-systems.github.io/zlink/guide/02-core-api/).
 
 ## Guide Structure (common to every language)
 
