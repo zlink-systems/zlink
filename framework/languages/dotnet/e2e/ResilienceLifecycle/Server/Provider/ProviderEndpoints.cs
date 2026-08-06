@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Hosting;
 using ResilienceLifecycle.Shared;
 using Zlink.Framework.Contracts.Channels;
 using Zlink.Framework.Contracts.Configuration;
@@ -64,6 +65,7 @@ internal static class ProviderEndpoints
         });
         app.MapPost("/admin/graceful-drain", async (
             [FromServices] IZLinkFrameworkRuntime runtime,
+            [FromServices] IHostApplicationLifetime applicationLifetime,
             CancellationToken cancellationToken) =>
         {
             var relocation = await runtime.RelocateAsync(
@@ -78,7 +80,11 @@ internal static class ProviderEndpoints
                     relocation.Outcome.ToString(),
                     relocation.Reason.ToString()));
             var result = await runtime.ShutdownAsync(TimeSpan.FromSeconds(30), cancellationToken);
-            return Results.Ok(new DrainResultRes(result.Outcome.ToString(), result.Reason.ToString()));
+            var outcome = result.Outcome == ZLinkFrameworkTerminationOutcome.Stopped
+                ? "Drained"
+                : result.Outcome.ToString();
+            applicationLifetime.StopApplication();
+            return Results.Ok(new DrainResultRes(outcome, result.Reason.ToString()));
         });
         app.MapGet("/admin/weight", ([FromServices] IZLinkRouteMeshRuntimeOptions runtimeOptions) =>
         {

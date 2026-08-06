@@ -116,7 +116,7 @@ internal sealed class ResilienceProcessManager(ClientOptions options) : IAsyncDi
 
         using (process)
         {
-            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(60));
         }
     }
 
