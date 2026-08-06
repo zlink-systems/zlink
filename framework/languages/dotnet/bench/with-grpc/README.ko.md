@@ -6,7 +6,7 @@
 |-----------|---------------|---------|
 | `grpc-dotnet` | unary RPC | unary RPC returning empty reply |
 | `zlink-dotnet` | raw request callback | `Dealer.Send().Submit()` |
-| `zlink-framework-dotnet` | `RequestToChannel(...).Async<TReply>()` | `SendToChannel(...).SubmitAsync()` |
+| `zlink-framework-dotnet` | `RequestToChannel(...).Async<TReply>()` | `SendToChannel(...).Async()` |
 
 payload 크기는 protobuf `bytes body` 전체 크기 기준으로 `1024`, `4096` bytes를 기본으로
 실행한다. 앞 29 bytes는 측정 header로 사용한다. 공통 기준은
@@ -68,7 +68,7 @@ perf와 같은 `Throughput`, `Bandwidth`, `Lat.Mean(ms)`, `Lat.P95(ms)`, `Lat.P9
 `command`는 `SEND_CONCURRENCY`개 worker가 동시에 command를 보낸다.
 처리량은 server가 active phase에서 받은 메시지 수를 기준으로 `KMSG/s`로 표시한다.
 `1 KMSG/s`는 초당 1,000개 메시지를 뜻한다. ZLink `send`는 reply가 없으므로 client의
-`SubmitAsync()` 완료 수만으로 처리량을 계산하지 않는다.
+one-way `Async()` 완료 수만으로 처리량을 계산하지 않는다.
 
 ## 측정 방식
 

@@ -174,11 +174,7 @@ foreach (var payloadSize in options.PayloadSizes)
                 options.ZLinkStatsUrl,
                 async (_, payload, ct) =>
                 {
-                    var submit = await zlink.SendToChannel("bench", payload)
-                        .SubmitAsync(ct);
-                    if (submit.Status != ZLinkSubmitStatus.Submitted)
-                        throw new InvalidOperationException(
-                            $"ZLink framework send was not submitted: {submit.Status}.");
+                    await zlink.SendToChannel("bench", payload).Async(ct);
                 }));
             Console.Error.WriteLine("[bench] finished zlink-framework-dotnet-send-saturation");
         }

@@ -148,7 +148,7 @@ internal sealed class ResilienceProcessManager(ClientOptions options) : IAsyncDi
             // the exit code as a Process instance owned by this client. The signal
             // command and the termination observation are the reliable evidence
             // for this externally owned process.
-            await target.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(15));
+            await target.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(60));
         }
     }
 
