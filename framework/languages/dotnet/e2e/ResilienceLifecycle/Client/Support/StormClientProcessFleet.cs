@@ -165,7 +165,6 @@ internal sealed class StormClientProcessFleet : IAsyncDisposable
             start.ArgumentList.Add(redisKeyPrefix);
             start.ArgumentList.Add(logDir);
             start.ArgumentList.Add(index.ToString(System.Globalization.CultureInfo.InvariantCulture));
-            start.Environment["ZLINK_ROUTER_DEBUG"] = "1";
             var process = Process.Start(start)
                           ?? throw new InvalidOperationException($"Unable to start storm client {index}.");
             return new StormProcess(
