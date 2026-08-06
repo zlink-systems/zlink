@@ -17,7 +17,7 @@ using var consumer = ZLinkHttpClient.Create(options.ConsumerUrl)
 using var registry = ZLinkHttpClient.Create(options.TopologyUrl)
     .Timeout(TimeSpan.FromMinutes(10))
     .Build();
-await using var processes = new ResilienceProcessManager(options);
+var processes = new ResilienceProcessManager(options);
 
 using var providerA = ZLinkHttpClient.Create(options.ProviderAUrl)
     .Timeout(TimeSpan.FromMinutes(5))
@@ -92,9 +92,27 @@ var selectedScenarios = string.Equals(
         })
         .ToArray();
 
-foreach (var scenario in selectedScenarios)
+Exception? scenarioFailure = null;
+try
 {
-    await scenario.Run();
-}
+    foreach (var scenario in selectedScenarios)
+        await scenario.Run();
 
-Console.WriteLine("resilience-lifecycle client result=passed");
+    Console.WriteLine("resilience-lifecycle client result=passed");
+}
+catch (Exception error)
+{
+    scenarioFailure = error;
+    throw;
+}
+finally
+{
+    try
+    {
+        await processes.DisposeAsync();
+    }
+    catch (Exception cleanupError) when (scenarioFailure is not null)
+    {
+        scenarioFailure.Data["ResilienceLifecycle.CleanupError"] = cleanupError.ToString();
+    }
+}

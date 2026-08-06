@@ -46,7 +46,7 @@ internal static class RlA5ProviderFlappingScenario
                 .Async<string[]>();
 
             var connectionCount = (await consumer.Get("/connections").Async<string[]>()).Body.Length;
-            var restarted = await processes.StartProviderBAsync();
+            var restarted = await processes.StartProviderBAsync(TimeSpan.FromSeconds(30));
             using var restartedProviderB = ZLinkHttpClient.Create(restarted.Url)
                 .Timeout(TimeSpan.FromMinutes(5))
                 .Build();
@@ -81,16 +81,30 @@ internal static class RlA5ProviderFlappingScenario
                     ["kind=ConnectionReady", $"remote={restarted.Endpoint}"], connectionCount))
                 .Async<string[]>();
 
-            var seen = new HashSet<string>(StringComparer.Ordinal);
-            for (var i = 0; i < 20 && seen.Count < 2; i++)
+            await providerA.Post("/admin/weight/exclude").AsyncRaw();
+            await providerA.Post("/admin/weight/wait")
+                .Body(new WeightWaitReq(0))
+                .AsyncRaw();
+            await ProviderTrafficProbe.WaitUntilProviderExcludedAsync(
+                consumer,
+                "api-a",
+                $"rl-a5-directed-{cycle}",
+                "RL-A5");
+
+            for (var i = 0; i < 10; i++)
             {
                 var reply = (await consumer.Post("/profile/request")
-                    .Body(new ProfileReq("fast", $"rl-a5-up-{cycle}-{i}"))
+                    .Body(new ProfileReq("fast", $"rl-a5-directed-{cycle}-{i}"))
                     .Async<ProfileRes>()).Body;
-                seen.Add(reply.ProviderRid);
+                ZlinkStreamAssert.Ensure(
+                    reply.ProviderRid == "api-b",
+                    "RL-A5 directed request did not use the current provider B.");
             }
-            ZlinkStreamAssert.Ensure(seen.SetEquals(["api-a", "api-b"]),
-                "RL-A5 did not restore both providers within 20 requests.");
+
+            await providerA.Post("/admin/weight/include").AsyncRaw();
+            await providerA.Post("/admin/weight/wait")
+                .Body(new WeightWaitReq(100))
+                .AsyncRaw();
         }
 
         Console.WriteLine("scenario RL-A5 passed");
