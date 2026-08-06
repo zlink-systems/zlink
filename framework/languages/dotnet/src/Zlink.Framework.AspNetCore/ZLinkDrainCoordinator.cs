@@ -446,7 +446,8 @@ internal sealed class ZLinkDrainCoordinator : IDisposable
         // turns the original deadline into OwnerCleanupFailed/TeardownFailed.
         // The original reason remains authoritative while teardown receives
         // the minimum bounded window required to release its resources.
-        var teardownBudget = deadline < MinimumForceStopTeardown
+        var teardownBudget = reason == ZLinkDrainForceReason.DeadlineExceeded
+            || deadline < MinimumForceStopTeardown
             ? MinimumForceStopTeardown
             : deadline;
         Zlink.Framework.Runtime.Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(

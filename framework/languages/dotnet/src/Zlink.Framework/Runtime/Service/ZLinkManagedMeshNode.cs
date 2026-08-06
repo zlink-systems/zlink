@@ -2195,10 +2195,13 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         if (receiveLoop is not null)
             try
             {
-                await receiveLoop.ConfigureAwait(false);
+                await receiveLoop.WaitAsync(shutdownToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
+                when (shutdownToken.IsCancellationRequested)
             {
+                // Force-stop must continue to release the socket and poller
+                // even when the receive loop does not observe cancellation.
             }
 
         await CloseInboundOperationAdmissionAsync(shutdownToken).ConfigureAwait(false);
