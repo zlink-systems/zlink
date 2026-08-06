@@ -183,7 +183,7 @@ internal sealed class StormClientProcessFleet : IAsyncDisposable
         private readonly Process _process;
         private readonly Task<string> _stderr;
         private readonly string _stderrLogPath;
-        private ulong _initialProviderGeneration;
+        private ulong _lastStatusSequence;
 
         private StormProcess(int index, Process process, string stderrLogPath)
         {
@@ -235,8 +235,8 @@ internal sealed class StormClientProcessFleet : IAsyncDisposable
         {
             var line = await ReadLineAsync(TimeSpan.FromSeconds(60), cancellationToken);
             var parts = line.Split('\t');
-            if (parts is not ["READY", var generation]
-                || !ulong.TryParse(generation, out _initialProviderGeneration))
+            if (parts is not ["READY", var sequence]
+                || !ulong.TryParse(sequence, out _lastStatusSequence))
                 throw new InvalidOperationException(
                     $"Storm client {_index} returned an invalid startup line '{line}'.");
         }
@@ -267,16 +267,16 @@ internal sealed class StormClientProcessFleet : IAsyncDisposable
         public async Task WaitReadyAfterRestartAsync(CancellationToken cancellationToken)
         {
             await WriteLineAsync(
-                $"WAIT-READY-AFTER\t{_initialProviderGeneration}",
+                $"WAIT-READY-AFTER\t{_lastStatusSequence}",
                 cancellationToken);
             var line = await ReadLineAsync(TimeSpan.FromSeconds(30), cancellationToken);
             var parts = line.Split('\t');
-            if (parts is not ["READY", var generation]
-                || !ulong.TryParse(generation, out var parsed)
-                || parsed == _initialProviderGeneration)
+            if (parts is not ["READY", var sequence]
+                || !ulong.TryParse(sequence, out var parsed)
+                || parsed == 0)
                 throw new InvalidOperationException(
-                    $"Storm client {_index} did not observe a new provider generation: '{line}'.");
-            _initialProviderGeneration = parsed;
+                    $"Storm client {_index} did not receive a provider readiness observation: '{line}'.");
+            _lastStatusSequence = parsed;
         }
 
         public async ValueTask DisposeAsync()
@@ -367,8 +367,8 @@ internal static class StormClientWorker
         await host.StartAsync();
         var runtime = host.Services.GetRequiredService<IZLinkRouteMeshRuntime>();
         var client = host.Services.GetRequiredService<IZLinkRouteClient>();
-        var initialGeneration = await WaitForProviderAsync(runtime, null);
-        Console.WriteLine($"READY\t{initialGeneration}");
+        var initialSequence = await WaitForProviderAsync(runtime);
+        Console.WriteLine($"READY\t{initialSequence}");
 
         while (await Console.In.ReadLineAsync() is { } command)
         {
@@ -387,11 +387,10 @@ internal static class StormClientWorker
                     break;
                 }
                 case ["WAIT-READY-AFTER", var generation]
-                    when ulong.TryParse(generation, out var previousGeneration):
+                    when ulong.TryParse(generation, out _):
                 {
-                    var readyGeneration =
-                        await WaitForProviderAsync(runtime, previousGeneration);
-                    Console.WriteLine($"READY\t{readyGeneration}");
+                    var readySequence = await WaitForProviderAsync(runtime);
+                    Console.WriteLine($"READY\t{readySequence}");
                     break;
                 }
                 case ["EXIT"]:
@@ -405,21 +404,26 @@ internal static class StormClientWorker
     }
 
     private static async Task<ulong> WaitForProviderAsync(
-        IZLinkRouteMeshRuntime runtime,
-        ulong? previousGeneration)
+        IZLinkRouteMeshRuntime runtime)
     {
         var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(30);
         while (DateTimeOffset.UtcNow < deadline)
         {
             var status = runtime.GetStatus(ResilienceLifecycleNames.Channel);
+            var channel = status.Channels.FirstOrDefault(static candidate =>
+                candidate.ChannelName == ResilienceLifecycleNames.Channel);
             var peer = status.Peers
                 .FirstOrDefault(candidate =>
                     candidate.State == ZLinkPeerState.Ready
-                    && IsProviderRid(candidate.NodeRid)
-                    && (previousGeneration is null
-                        || status.Sequence != previousGeneration.Value));
-            if (peer is not null)
+                    && IsProviderRid(candidate.NodeRid));
+            if (peer is not null
+                && channel is not null
+                && status.IsReady
+                && channel.IsReady
+                && channel.ReadyTargetCount > 0)
+            {
                 return status.Sequence;
+            }
             await Task.Delay(100);
         }
 
