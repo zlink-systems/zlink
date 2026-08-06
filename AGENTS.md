@@ -5,6 +5,20 @@
 
 ---
 
+## 작업 브랜치 규칙
+
+사용자가 특정 branch 사용을 명시적으로 요청하지 않는 한 모든 조사 후 수정,
+commit, push 작업은 `main` branch에서 수행한다.
+
+- 작업을 시작하기 전에 `git branch --show-current`로 현재 branch를 확인한다.
+- 현재 branch가 `main`이 아니면 파일을 수정하거나 commit·push하지 않는다.
+- worktree가 clean하면 `main`으로 전환한 뒤 작업을 시작한다.
+- worktree에 변경사항이 있으면 사용자의 변경을 보존한 상태와 범위를 먼저 보고하고,
+  사용자 승인 없이 branch 전환, `reset`, `restore`, 강제 checkout 또는 삭제를 수행하지 않는다.
+- 사용자가 특정 branch를 명시적으로 요청한 경우에만 해당 branch에서 작업할 수 있으며,
+  작업 시작과 최종 보고에 그 branch 이름을 명시한다.
+- branch를 만들거나 바꾸거나 merge하는 작업은 사용자의 명시적 요청 없이 수행하지 않는다.
+
 ## Chat Output Rules
 
 사용자에게 보내는 진행 상황, 질문, 판단 근거와 최종 보고는
