@@ -43,6 +43,8 @@ class RemoteRoomSpot {
 let app;
 let store;
 let spotManager;
+let locationQuery;
+let routeMeshRuntime;
 let currentSpot;
 let stopping = false;
 let closeExecutions = 0;
@@ -65,7 +67,9 @@ async function start() {
   builder.configureLocations()
     .pollingIntervalMs(20)
     .ownerLeaseRenewIntervalMs(100)
-    .ownerLeaseTtlMs(5_000);
+    .ownerLeaseTtlMs(5_000)
+    .ownerLeaseFencingMarginMs(500)
+    .ownerLeaseRenewTimeoutMs(500);
   const mesh = builder.addRouteMesh(meshName)
     .listen(endpoint)
     .routingId(routingId);
@@ -97,10 +101,41 @@ async function start() {
   if (spotManager === undefined || spotManager === null) {
     throw new Error('ZLINK_SPOT_MANAGER was not registered.');
   }
+  locationQuery = app.get(nestjs.ZLINK_LOCATION_RUNTIME_QUERY, { strict: false });
+  routeMeshRuntime = app.get(nestjs.ZLINK_ROUTE_MESH_RUNTIME, { strict: false });
+  await waitForPublishedNode();
   process.on('message', onMessage);
   process.once('SIGTERM', () => void stop(0));
   process.once('SIGINT', () => void stop(0));
-  send({ type: 'ready', role, pid: process.pid });
+  send({
+    type: 'ready',
+    role,
+    pid: process.pid
+  });
+}
+
+async function waitForPublishedNode() {
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    const page = await locationQuery.listMeshNodeDescriptors(meshName);
+    const descriptor = page.items.find((candidate) =>
+      String(candidate.rid) === routingId && candidate.state === 1
+    );
+    if (descriptor !== undefined) {
+      return descriptor;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(`MeshNode '${routingId}' was not published as Serving.`);
+}
+
+async function waitForRouteReady() {
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    if (routeMeshRuntime.isReady(meshName)) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(`RouteMesh '${meshName}' did not become ready.`);
 }
 
 async function onMessage(message) {
@@ -140,6 +175,9 @@ async function onMessage(message) {
 
 async function execute(action) {
   switch (action) {
+    case 'waitRouteReady':
+      await waitForRouteReady();
+      return true;
     case 'create': {
       const result = await spotManager
         .create('RemoteRoom')

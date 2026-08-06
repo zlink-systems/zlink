@@ -110,6 +110,10 @@ public final class ResilienceScenarioContext {
             + " routers for " + Contracts.CHANNEL);
     }
 
+    public Contracts.PeerSnapshot topologySnapshot() {
+        return new Contracts.PeerSnapshot(peers());
+    }
+
     public void waitForTopologyWithout(String routingId, int seconds) {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(seconds);
         while (System.nanoTime() < deadline) {
@@ -124,6 +128,19 @@ public final class ResilienceScenarioContext {
             sleep(200);
         }
         throw new IllegalStateException("registry topology still reported " + routingId);
+    }
+
+    public void waitForHttpUnavailable(String baseUrl) {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(20);
+        while (System.nanoTime() < deadline) {
+            try {
+                get(baseUrl + "/health");
+            } catch (RuntimeException unavailable) {
+                return;
+            }
+            sleep(100);
+        }
+        throw new IllegalStateException("HTTP endpoint remained available: " + baseUrl);
     }
 
     public void waitForTopologyEndpoint(String routingId, String endpoint) {
@@ -273,6 +290,26 @@ public final class ResilienceScenarioContext {
         }
         throw new IllegalStateException(
             "evidence " + marker + "/" + value + " was not observed at any provider");
+    }
+
+    public void waitForEvidenceValue(String baseUrl, String marker, String value) {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        while (System.nanoTime() < deadline) {
+            if (hasEvidence(baseUrl, marker, value)) {
+                return;
+            }
+            sleep(100);
+        }
+        throw new IllegalStateException(
+            "evidence " + marker + "/" + value + " was not observed at " + baseUrl);
+    }
+
+    public JsonNode readCapabilities(String baseUrl) {
+        try {
+            return json.readTree(get(baseUrl + "/capabilities"));
+        } catch (IOException error) {
+            throw new IllegalStateException("failed to parse capabilities from " + baseUrl, error);
+        }
     }
 
     public void waitForDispatchErrorAny(String packetName, String... baseUrls) {

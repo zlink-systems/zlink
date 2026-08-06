@@ -54,6 +54,21 @@ public final class Contracts {
     public record JsonEchoMsg(String value) {
     }
 
+    @ZLinkPacket("JsonGolden")
+    public record JsonGoldenReq(String value) {
+    }
+
+    public record JsonGoldenRes(
+        String displayName,
+        String status,
+        long balance,
+        byte[] payload,
+        int score,
+        double ratio,
+        String optionalNote,
+        String contentType) {
+    }
+
     @ZLinkPacket("MsgpackEcho")
     public record PackedEchoReq(String value) {
     }

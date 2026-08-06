@@ -185,6 +185,17 @@ final class ZLinkActorLocationCoordinator {
         return lifecycle.releaseActor(actorType == null ? "" : actorType, actorId);
     }
 
+    CompletionStage<Void> releaseActorExact(
+        String actorType,
+        ActorRef actor) {
+        if (lifecycle == null) {
+            return CompletableFuture.completedFuture(null);
+        }
+        return lifecycle.releaseActorExact(
+            actorType == null ? "" : actorType,
+            actor);
+    }
+
     void abandonActor(String actorId) {
         if (lifecycle != null) {
             lifecycle.abandonActor(actorId);

@@ -292,6 +292,62 @@ final class ZLinkJavaRawMeshNodeM6ATest {
     }
 
     @Test
+    void disconnectedChannelRemainsUnavailableUntilAutoTargetIsRemoved()
+        throws Exception {
+        RoutingId localRid = RoutingId.from("jvm-channel-local");
+        RoutingId peerRid = RoutingId.from("jvm-channel-peer");
+        String localEndpoint = "inproc://jvm-channel-local-" + System.nanoTime();
+        String peerEndpoint = "inproc://jvm-channel-peer-" + System.nanoTime();
+        try (var context = Zlink.createContext();
+             var local = new ZLinkJavaRawMeshNode(
+                 context,
+                 "mesh",
+                 System::currentTimeMillis,
+                 Duration.ofMillis(10),
+                 Duration.ofMillis(50));
+             var peer = new ZLinkJavaRawMeshNode(
+                 context,
+                 "mesh",
+                 System::currentTimeMillis,
+                 Duration.ofMillis(10),
+                 Duration.ofMillis(50))) {
+            local.setRoutingId(localRid);
+            local.setBind(localEndpoint);
+            peer.setRoutingId(peerRid);
+            peer.setBind(peerEndpoint);
+            peer.addChannel("game.api");
+            peer.setChannelWeight("game.api", 100);
+            local.start();
+            peer.start();
+            local.observePeerAdmissionExpectation(
+                peerRid,
+                peerEndpoint,
+                peer.status().lifecycleGeneration(),
+                peerRid.toString());
+            long intent = local.connectPeer(peerEndpoint, peerRid);
+            awaitState(local, MeshPeerState.ADMITTED);
+            assertTrue(local.classifyChannelTarget("game.api").isEmpty());
+
+            peer.close();
+            awaitState(local, MeshPeerState.CLOSED);
+            assertEquals(
+                ZLinkOneWayCalls.ROUTE_NOT_CONNECTED,
+                local.classifyChannelTarget("game.api").orElseThrow());
+
+            local.forgetPeerAdmissionExpectation(peerRid);
+            try {
+                local.removePeerConnection(intent);
+            } catch (RuntimeException alreadyDisconnected) {
+                // The remote inproc endpoint has already closed. The intent
+                // cleanup still removes its last-admitted channel knowledge.
+            }
+            assertEquals(
+                ZLinkOneWayCalls.TARGET_NOT_FOUND,
+                local.classifyChannelTarget("game.api").orElseThrow());
+        }
+    }
+
+    @Test
     void command44ReceivesCommand45ThroughInfrastructureDispatcher()
         throws Exception {
         String endpoint = "inproc://jvm-m6c-session-route-" + System.nanoTime();

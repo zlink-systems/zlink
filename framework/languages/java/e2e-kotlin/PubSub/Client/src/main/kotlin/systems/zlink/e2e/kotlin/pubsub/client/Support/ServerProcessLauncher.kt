@@ -9,6 +9,10 @@ class ServerProcessLauncher(private val options: ClientOptions) {
         topics: String,
         httpEndpoint: String,
         handlerDelayMillis: Long? = null,
+        includeAllTopics: Boolean = true,
+        manualEndpoint: String? = null,
+        mixedMode: Boolean = false,
+        noStore: Boolean = false,
     ): LaunchedServer {
         val command = mutableListOf(
             required(options.subscriberBin, "subscriber-bin"),
@@ -16,36 +20,73 @@ class ServerProcessLauncher(private val options: ClientOptions) {
             name,
             "--topics",
             topics,
+            "--include-all",
+            includeAllTopics.toString(),
             "--http-endpoint",
             httpEndpoint,
             "--redis-location-endpoint",
-            required(options.redisLocationEndpoint, "redis-location-endpoint"),
+            if (noStore) "" else required(options.redisLocationEndpoint, "redis-location-endpoint"),
             "--location-key-prefix",
-            required(options.locationKeyPrefix, "location-key-prefix"),
+            if (noStore) "" else required(options.locationKeyPrefix, "location-key-prefix"),
             "--log-dir",
             required(options.logDir, "log-dir"),
         )
+        if (manualEndpoint != null) {
+            command += listOf("--manual-endpoint", manualEndpoint)
+        }
+        if (mixedMode) {
+            command += listOf("--mixed-mode", "true")
+        }
         if (handlerDelayMillis != null) {
             command += listOf("--handler-delay-ms", handlerDelayMillis.toString())
         }
         return start(name, command)
     }
 
-    fun startPublisher(): LaunchedServer {
-        val command = listOf(
+    fun startPublisher(): LaunchedServer =
+        startPublisher(
+            name = "publisher-restarted",
+            publisherEndpoint = options.publisherEndpoint,
+            httpEndpoint = options.publisherHttp,
+            routingId = "publisher-a",
+            channelName = "pubsub.kotlin.events",
+            noStore = false,
+        )
+
+    fun startPublisher(
+        name: String,
+        publisherEndpoint: String,
+        httpEndpoint: String,
+        routingId: String,
+        channelName: String = "pubsub.kotlin.events",
+        noStore: Boolean = false,
+        listenPort: Int? = null,
+        advertiseHost: String? = null,
+    ): LaunchedServer {
+        val command = mutableListOf(
             required(options.publisherBin, "publisher-bin"),
-            "--publisher-endpoint",
-            required(options.publisherEndpoint, "publisher-endpoint"),
             "--http-endpoint",
-            options.publisherHttp,
+            required(httpEndpoint, "publisher2-http"),
+            "--rid",
+            routingId,
+            "--channel-name",
+            channelName,
             "--redis-location-endpoint",
-            required(options.redisLocationEndpoint, "redis-location-endpoint"),
+            if (noStore) "" else required(options.redisLocationEndpoint, "redis-location-endpoint"),
             "--location-key-prefix",
-            required(options.locationKeyPrefix, "location-key-prefix"),
+            if (noStore) "" else required(options.locationKeyPrefix, "location-key-prefix"),
             "--log-dir",
             required(options.logDir, "log-dir"),
         )
-        return start("publisher-restarted", command)
+        if (listenPort != null) {
+            command += listOf("--publisher-port", listenPort.toString())
+        } else {
+            command += listOf("--publisher-endpoint", required(publisherEndpoint, "publisher2-endpoint"))
+        }
+        if (!advertiseHost.isNullOrBlank()) {
+            command += listOf("--advertise-host", advertiseHost)
+        }
+        return start(name, command)
     }
 
     private fun start(name: String, command: List<String>): LaunchedServer {

@@ -21,8 +21,15 @@ public final class ProviderEvidenceStore {
         return options.rid();
     }
 
+    public String lifecycleId() {
+        return options.lifecycleId();
+    }
+
     public synchronized void record(String marker, String value) {
-        String line = "rid=" + options.rid() + " marker=" + marker + " value=" + value;
+        String line = "rid=" + options.rid()
+            + " lifecycle=" + options.lifecycleId()
+            + " marker=" + marker
+            + " value=" + value;
         entries.add(line);
         if (options.evidenceFile() != null && !options.evidenceFile().isBlank()) {
             try {

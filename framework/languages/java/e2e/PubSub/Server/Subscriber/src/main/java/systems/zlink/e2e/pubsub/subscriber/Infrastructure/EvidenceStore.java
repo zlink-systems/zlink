@@ -21,7 +21,7 @@ public final class EvidenceStore {
     }
 
     public boolean accepts(String topic) {
-        return options.topics().contains(topic);
+        return options.topics().contains("*") || options.topics().contains(topic);
     }
 
     public void delayIfConfigured(String scenario) {

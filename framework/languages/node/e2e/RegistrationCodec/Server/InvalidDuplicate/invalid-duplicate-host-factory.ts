@@ -36,7 +36,10 @@ function createInvalidDuplicateModule(): Function {
             .listen(options.channelEndpoint);
           const channel = mesh.channel(RegistrationCodecNames.channel).server();
           if (options.invalidCase === 'missing-handler-group') {
-            channel.addHandlerGroup('missing-handler-group');
+            // A handler group is optional metadata. Exercise the required
+            // handler validation with a real ClientServer role that has no
+            // request or send handler.
+            builder.addClientServerChannel('missing-handler').server().listen(0);
           } else {
             channel.addRequestHandler(PacketNames.echoManualReq, DuplicateEchoRequestHandler);
           }

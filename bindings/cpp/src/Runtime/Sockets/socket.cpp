@@ -183,7 +183,9 @@ int socket_t::receive (received_t &received_, recv_flags_t flags_)
 
 int socket_t::receive (received_t &received_, recv_flags_t flags_, bool attach_routed_send_context_)
 {
-    detail::recv_envelope_t envelope;
+    if (!_receive_envelope)
+        _receive_envelope = std::make_unique<detail::recv_envelope_t> ();
+    auto &envelope = *_receive_envelope;
     const bool use_router_recv = _type == socket_type::router;
     const int rc =
       detail::recv_envelope (detail::native_handle (*this), flags_, envelope, use_router_recv);
@@ -198,14 +200,14 @@ int socket_t::receive (received_t &received_, recv_flags_t flags_, bool attach_r
       envelope.has_request_seq ? std::optional<uint64_t> (envelope.request_seq) : std::nullopt;
 
     if (envelope.single_part.has_value ()) {
-        received_ = detail::received_access_t::make (source_rid, request_seq,
-                                                     std::move (*envelope.single_part));
+        detail::received_access_t::assign (received_, source_rid, request_seq,
+                                           std::move (*envelope.single_part));
     } else if (envelope.parts.size () == 1u) {
-        received_ = detail::received_access_t::make (source_rid, request_seq,
-                                                     std::move (envelope.parts[0]));
+        detail::received_access_t::assign (received_, source_rid, request_seq,
+                                           std::move (envelope.parts[0]));
     } else {
-        received_ = detail::received_access_t::make (source_rid, request_seq,
-                                                     std::move (envelope.parts));
+        detail::received_access_t::assign (received_, source_rid, request_seq,
+                                           envelope.parts);
     }
     if (attach_routed_send_context_ && source_rid.has_value ())
         detail::received_access_t::set_socket_rid_send_context (received_,

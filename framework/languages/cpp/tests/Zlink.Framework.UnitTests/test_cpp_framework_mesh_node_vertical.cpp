@@ -26,6 +26,7 @@
 #include <iostream>
 #include <map>
 #include <mutex>
+#include <regex>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -469,6 +470,7 @@ make_node (std::string endpoint, std::string routing_id)
     auto state =
       std::make_shared<zlink::framework::detail::mesh_node_builder_state_t> ("vertical-mesh");
     state->listen_endpoint = std::move (endpoint);
+    state->listen_port.reset ();
     state->routing_id = zlink::routing_id_t::from (routing_id);
     state->channels.emplace ("work",
                              zlink::framework::detail::mesh_channel_registration_t{
@@ -1071,6 +1073,48 @@ void verify_public_runtime_surface ()
       == zlink::framework::mesh_node_state_t::stopped);
     observation->close ();
     node->stop ();
+}
+
+void verify_automatic_identity_and_port_builder ()
+{
+    zlink::framework::zlink_builder_t builder;
+    auto mesh = builder.add_route_mesh ("automatic-builder-mesh");
+    mesh.set_bind_host ("127.0.0.1")
+      .listen (std::uint16_t{0})
+      .set_automatic_routing_id_prefix ("play.node");
+
+    const auto registrations =
+      zlink::framework::detail::mesh_node_runtime_t::registrations (builder);
+    assert (registrations.size () == 1);
+    const auto &state = registrations.front ();
+    assert (state->listen_endpoint == "tcp://127.0.0.1:0");
+    assert (state->routing_id);
+    assert (std::regex_match (
+      state->routing_id->to_string (),
+      std::regex (R"(play\.node-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})")));
+    assert (state->spot_state->snapshot.routing_id
+            && state->spot_state->snapshot.routing_id->to_string ()
+                 == state->routing_id->to_string ());
+
+    bool rejected_fixed_id = false;
+    try {
+        mesh.set_routing_id (zlink::routing_id_t::from ("fixed"));
+    }
+    catch (const zlink::framework::framework_exception_t &) {
+        rejected_fixed_id = true;
+    }
+    assert (rejected_fixed_id);
+
+    zlink::framework::zlink_builder_t invalid_builder;
+    auto invalid_mesh = invalid_builder.add_route_mesh ("invalid-builder-mesh");
+    bool rejected_prefix = false;
+    try {
+        invalid_mesh.set_automatic_routing_id_prefix ("bad prefix");
+    }
+    catch (const zlink::framework::framework_exception_t &) {
+        rejected_prefix = true;
+    }
+    assert (rejected_prefix);
 }
 
 void verify_slow_observer_does_not_block_stop ()
@@ -1681,6 +1725,7 @@ int run_cross_process_delivery ()
 
 int main ()
 {
+    verify_automatic_identity_and_port_builder ();
     verify_public_runtime_surface ();
     verify_slow_observer_does_not_block_stop ();
     verify_object_client_registration_boundary ();

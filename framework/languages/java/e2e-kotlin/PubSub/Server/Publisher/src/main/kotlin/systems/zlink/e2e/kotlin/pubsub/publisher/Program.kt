@@ -4,11 +4,13 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import org.springframework.boot.WebApplicationType
 import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.boot.builder.SpringApplicationBuilder
+import org.springframework.beans.factory.ObjectProvider
 import org.springframework.context.annotation.Bean
 import org.springframework.context.ConfigurableApplicationContext
 import systems.zlink.e2e.kotlin.pubsub.shared.Contracts
 import systems.zlink.framework.channels.ZLinkFanoutClient
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode
+import systems.zlink.contracts.core.RoutingId
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationOptions
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore
 import systems.zlink.framework.spring.EnableZLinkFramework
@@ -39,8 +41,9 @@ class PublisherApplication {
         fanout: ZLinkFanoutClient,
         json: ObjectMapper,
         application: ConfigurableApplicationContext,
+        runtime: ObjectProvider<systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime>,
     ): PublisherEndpoints =
-        PublisherEndpoints(fanout, json, options.httpEndpoint, application)
+        PublisherEndpoints(fanout, json, options.httpEndpoint, options.channelName, application, runtime)
 
     @Bean
     fun publisherFramework(options: PublisherOptions): ZLinkFrameworkConfigurer =
@@ -49,15 +52,27 @@ class PublisherApplication {
                 .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
                 .traceLogFile("${parsedOptions.logDir}/publisher-flow.log")
                 .traceLabel("kotlin-ps-publisher")
-            options.addFanoutChannel(Contracts.EVENT_CHANNEL)
-                .enablePublisher(parsedOptions.publisherEndpoint)
+            val channel = options.addFanoutChannel(parsedOptions.channelName)
+            parsedOptions.routingId?.let { channel.setRoutingId(RoutingId.from(it)) }
+            parsedOptions.routingIdPrefix?.let { channel.setRoutingIdPrefix(it) }
+            parsedOptions.advertiseHost?.let { channel.setAdvertiseHost(it) }
+            val listenPort = parsedOptions.listenPort
+            if (listenPort != null) {
+                channel.enablePublisher(listenPort)
+            } else {
+                channel.enablePublisher(parsedOptions.publisherEndpoint)
+            }
         }
 
     @Bean
-    fun locationStore(options: PublisherOptions): ZLinkRedisLocationStore =
-        ZLinkRedisLocationStore(
-            ZLinkRedisLocationOptions()
-                .setConnectionString(options.redisLocationEndpoint)
-                .setKeyPrefix(options.locationKeyPrefix),
-        )
+    fun locationStore(options: PublisherOptions): ZLinkRedisLocationStore? =
+        if (options.redisLocationEndpoint == null) {
+            null
+        } else {
+            ZLinkRedisLocationStore(
+                ZLinkRedisLocationOptions()
+                    .setConnectionString(options.redisLocationEndpoint)
+                    .setKeyPrefix(options.locationKeyPrefix!!),
+            )
+        }
 }

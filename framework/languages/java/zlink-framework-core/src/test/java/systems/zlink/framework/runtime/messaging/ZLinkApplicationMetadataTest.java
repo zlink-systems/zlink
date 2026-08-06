@@ -30,6 +30,16 @@ final class ZLinkApplicationMetadataTest {
     }
 
     @Test
+    void emptyEncodingIsReusableAndImmutableByConstruction() {
+        byte[] first = ZLinkApplicationMetadata.empty().encode();
+        byte[] second = ZLinkApplicationMetadata.empty().encode();
+
+        assertEquals(0, first.length);
+        assertEquals(0, second.length);
+        org.junit.jupiter.api.Assertions.assertSame(first, second);
+    }
+
+    @Test
     void rejectsEmptyKeyOversizeAndMalformedFrames() {
         assertThrows(
             IllegalArgumentException.class,

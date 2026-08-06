@@ -24,12 +24,13 @@ import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.configuration.ZLinkMeshNodeBuilder;
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationOptions;
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore;
+import systems.zlink.framework.locations.redis.ZLinkRedisRelocationOptions;
+import systems.zlink.framework.locations.redis.ZLinkRedisRelocationStore;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.spring.EnableZLinkFramework;
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer;
 import systems.zlink.framework.spots.ZLinkSpotManager;
 import systems.zlink.framework.spots.SpotHandleResolver;
-import systems.zlink.framework.channels.ZLinkFanoutClient;
 import io.micrometer.core.instrument.MeterRegistry;
 import systems.zlink.e2e.automaticturn.shared.DrainEvidence;
 import systems.zlink.framework.spring.internal.runtime.ZLinkFrameworkLifecycle;
@@ -72,22 +73,34 @@ public final class Program {
         DrainEvidence drainEvidence,
         ZLinkSpotManager spots,
         systems.zlink.framework.channels.ZLinkRouteClient routes,
+        systems.zlink.framework.channels.ZLinkRouteMeshRuntimeOptions meshOptions,
         PlayOptions config) {
-        drainEvidence.observe(lifecycle.observe());
         return new EvidenceHttpServer(
             evidence, json, config.httpEndpoint(), metrics,
-            lifecycle, lifecycle::monitoringLocationRuntimeQuery, drainEvidence, spots::close,
+            lifecycle, lifecycle::monitoringLocationRuntimeQuery, drainEvidence,
+            spotRid -> spots.find(spotRid.toString())
+                .thenCompose(found -> found
+                    .map(spots::close)
+                    .orElseGet(() -> java.util.concurrent.CompletableFuture.completedFuture(false))),
             () -> routes.requestToNode(
                     Contracts.ROUTE_CHANNEL,
                     RoutingId.from(Contracts.PLAY_NODE_B),
                     new Contracts.EnsureSpotReq("obs-c5-source-route-ready"))
                 .timeout(java.time.Duration.ofSeconds(30))
                 .submit(Contracts.EnsureSpotRes.class)
-                .thenApply(Contracts.EnsureSpotRes::nodeRid));
+                .thenApply(Contracts.EnsureSpotRes::nodeRid),
+            meshOptions);
     }
 
     @Bean
     DrainEvidence drainEvidence() { return new DrainEvidence(); }
+
+    @Bean
+    ApplicationRunner observeRuntime(
+        DrainEvidence drainEvidence,
+        ZLinkFrameworkLifecycle lifecycle) {
+        return ignored -> drainEvidence.observe(lifecycle.observe());
+    }
 
     @Bean(destroyMethod = "close")
     systems.zlink.e2e.automaticturn.shared.PersistentRoomEvents persistentRoomEvents(PlayOptions config) {
@@ -96,9 +109,12 @@ public final class Program {
     }
 
     @Bean
-    ZLinkFrameworkConfigurer framework(PlayOptions config) {
+    ZLinkFrameworkConfigurer framework(
+        PlayOptions config,
+        ZLinkRedisRelocationStore relocationStore) {
         return options -> {
             String nodeRid = config.nodeRid();
+            options.addRelocationStore(relocationStore);
             options.configureDispatch()
                 .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
                 .traceLogFile(config.logDirectory() + "/" + nodeRid + "-flow.log")
@@ -106,7 +122,7 @@ public final class Program {
             ZLinkMeshNodeBuilder mesh = options.addRouteMesh(Contracts.SPOT_MESH)
                 .listen(config.routeEndpoint())
                 .setRoutingId(RoutingId.from(nodeRid));
-            mesh.channelName(Contracts.ROUTE_CHANNEL);
+            mesh.channelName(Contracts.ROUTE_CHANNEL).server();
             String routePeerEndpoint = config.routePeerEndpoint();
             if (!routePeerEndpoint.isBlank()) {
                 mesh.peerConnections().connect(routePeerEndpoint);
@@ -120,7 +136,8 @@ public final class Program {
                 Contracts.EnsureSpotReq.class,
                 Contracts.EnsureSpotRes.class);
             options.addClientServerChannel(Contracts.DELAY_CHANNEL)
-                .enableClient(config.delayEndpoint());
+                .client()
+                .connect(config.delayEndpoint());
             String fanoutEndpoint = config.observabilityFanoutEndpoint();
             if (!fanoutEndpoint.isBlank()) {
                 var fanout = options.addFanoutChannel(Contracts.OBS_FANOUT_CHANNEL);
@@ -155,15 +172,21 @@ public final class Program {
     }
 
     @Bean
+    ZLinkRedisRelocationStore relocationStore(PlayOptions config) {
+        return new ZLinkRedisRelocationStore(new ZLinkRedisRelocationOptions()
+            .setConnectionString(config.redisLocationEndpoint())
+            .setKeyPrefix(config.locationKeyPrefix() + "relocation:"));
+    }
+
+    @Bean
     ApplicationRunner createProbeSpot(ZLinkSpotManager spots, PlayOptions config) {
         return ignored -> {
             if (!Contracts.PLAY_NODE_A.equals(config.nodeRid())) {
                 return;
             }
-            spots.getOrCreate(
-                    AwaitProbeSpot.class,
-                    RoutingId.from(Contracts.TARGET_SPOT),
-                    ZLinkMessage.of("bootstrap"))
+            spots.getOrCreate(Contracts.TARGET_SPOT, Contracts.TARGET_SPOT)
+                .request(ZLinkMessage.of("bootstrap"))
+                .submit()
                 .whenComplete((created, failure) -> {
                     if (failure != null) {
                         System.getLogger(Program.class.getName()).log(
@@ -244,11 +267,8 @@ public final class Program {
 
     @Bean
     AwaitProbeHandlers.TimerTickHandler timerTickHandler(
-        EvidenceStore evidence,
-        ZLinkFanoutClient fanout,
-        PlayOptions config) {
-        return new AwaitProbeHandlers.TimerTickHandler(
-            evidence, fanout, !config.observabilityFanoutEndpoint().isBlank());
+        EvidenceStore evidence) {
+        return new AwaitProbeHandlers.TimerTickHandler(evidence);
     }
 
     @Bean

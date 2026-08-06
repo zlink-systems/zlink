@@ -402,16 +402,17 @@ export class ZLinkFrameworkRuntimeHost implements
               ownerLeaseGeneration: route.ownerLeaseGeneration
             };
       },
-      confirmRemoteActorSessionBinding: (actor, sessionRid, signal) => {
+      confirmRemoteActorSessionBinding: (actor, sessionRid, signal, options) => {
         const sessionNode = this.spotNodeRuntime?.primaryMeshNode;
         return sessionNode === undefined
           ? Promise.resolve()
           : this.boundSessionRelay.actorPackets.confirmRemoteSessionBinding(
-              actor,
-              sessionNode.status().routingId as never,
-              sessionRid,
-              signal
-            );
+            actor,
+            sessionNode.status().routingId as never,
+            sessionRid,
+            signal,
+            options
+          );
       },
       relay: (actor, header, payload, signal) =>
         this.boundSessionRelay.actorPackets.relayActorPacket(actor, header, payload, signal),
@@ -650,6 +651,7 @@ export class ZLinkFrameworkRuntimeHost implements
       meshNode: (meshName) => this.spotNodeRuntime?.meshNode(meshName),
       completions: (meshName) => this.spotNodeRuntime?.meshCompletionTable(meshName),
       spotManager: () => this.spotManager,
+      spotNodeRuntime: () => this.spotNodeRuntime,
       actorManager: () => this.actorManager,
       actorTransfer: this.actorTransferRuntime,
       runtimeEventPublisher: this.runtimeEventPublisher,

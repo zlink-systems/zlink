@@ -24,6 +24,7 @@ public final class ProfileReqHandler
         return CompletableFuture.completedFuture(new Contracts.ProfileRes(
             "profile:" + request.value(),
             evidence.rid(),
+            evidence.lifecycleId(),
             request.marker()));
     }
 }

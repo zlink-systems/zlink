@@ -41,7 +41,7 @@
 | `OfferDeliveryNotify` / `CourierDecision` | `Messages.OfferDeliveryNotify`, `Messages.CourierDecision` | shared-contract | done | courier stream push와 courier client decision이다. |
 | `ReassignDelivery` | `Messages.ReassignDelivery` | shared-contract | done | timeout 재배정 의미를 드러내는 shared message다. |
 | `DeliveryStatusChangedReq` / `DeliveryStatusChangedRes` | `Messages.DeliveryStatusChangedReq`, `Messages.DeliveryStatusChangedRes` | shared-contract | done | Tracking server 기록 요청과 응답이다. |
-| `EnsureCustomerActorReq` / `EnsureCustomerActorRes` | `Messages.EnsureCustomerActorReq`, `Messages.EnsureCustomerActorRes` | shared-contract | partial | actor 생성은 구현됐지만 공통 spec의 기존 actor 위치 조회 흐름은 추가 구현이 필요하다. |
+| `EnsureCustomerActorReq` / `EnsureCustomerActorRes` | `Messages.EnsureCustomerActorReq`, `Messages.EnsureCustomerActorRes` | shared-contract | done | `ZLinkActorManager.find(...)`로 기존 actor 위치를 먼저 확인하고, 없을 때만 `getOrCreate(...).request(...).submit()`으로 생성한다. |
 | `ServerAssertionRequest` / `ServerAssertionResponse` | `Messages.ServerAssertionRequest`, `Messages.ServerAssertionResponse` | shared-contract | done | server-side evidence self-check 계약이다. |
 | courier actor ref wire | `Messages.ActorRefWire` | shared-contract | done | courier actor node rid, actor id, generation을 wire-safe DTO로 전달한 뒤 session bind 직전에 framework actor ref로 재구성한다. |
 | `DeliveryStatus` | `Messages.DeliveryStatus` | shared-contract | done | `Created`, `Assigned`, `Accepted`, `Reassigned`, `PickedUp`, `Delivered`, `Failed` 값을 가진다. |
@@ -68,10 +68,9 @@
 ## 현재 결론
 
 Java `DeliveryDispatch`는 별도 courier gateway 없이 CourierSession에서 courier actor를 찾거나 만든 뒤
-bind 요청을 actor로 relay한다. 메시지 이름과 `CreateDeliveryRes` 필드도 공통 spec에 맞췄다. 다만
-CustomerGateway 재연결에서 기존 customer actor 위치를 먼저 조회하고 없을 때만 생성하는 흐름은
-아직 닫히지 않았으므로 이 샘플의 공통 spec 대조는 진행 중이다. public framework API가 부족하면
-sample helper로 우회하지 않고 public contract gap으로 분리한다.
+bind 요청을 actor로 relay한다. CustomerGateway도 재연결 시 `ZLinkActorManager.find(...)`로 기존
+customer actor 위치를 먼저 조회하고, 없을 때만 `getOrCreate(...)`를 실행한다. 메시지 이름과
+`CreateDeliveryRes` 필드까지 공통 spec과 일치하므로 이 inventory의 public contract 대조는 완료됐다.
 
 ## 검증
 

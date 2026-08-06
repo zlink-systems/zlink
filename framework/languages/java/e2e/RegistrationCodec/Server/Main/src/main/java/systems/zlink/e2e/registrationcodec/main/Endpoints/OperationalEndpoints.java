@@ -59,6 +59,7 @@ public final class OperationalEndpoints implements SmartLifecycle {
             server.createContext("/registration/di-filter-order", exchange -> writeJson(exchange, registrationDi()));
             server.createContext("/registration/filter-order", exchange -> writeJson(exchange, registrationFilterOrder()));
             server.createContext("/codec/roundtrip", exchange -> writeJson(exchange, codecRoundtrip()));
+            server.createContext("/codec/json-golden", exchange -> writeJson(exchange, jsonGolden()));
             server.start();
             running = true;
         } catch (Exception error) {
@@ -168,6 +169,14 @@ public final class OperationalEndpoints implements SmartLifecycle {
                 client.sendToChannel(Contracts.CHANNEL, new Contracts.PackedEchoMsg("msgpack-send")).submit();
                 return reply;
             });
+    }
+
+    private CompletionStage<Contracts.JsonGoldenRes> jsonGolden() {
+        return client.requestToChannel(
+                Contracts.CHANNEL,
+                new Contracts.JsonGoldenReq("rc-b6-golden"))
+            .timeout(Duration.ofSeconds(5))
+            .submit(Contracts.JsonGoldenRes.class);
     }
 
     private void writeJson(

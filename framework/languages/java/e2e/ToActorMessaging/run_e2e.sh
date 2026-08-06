@@ -50,7 +50,7 @@ import socket
 sockets = []
 ports = []
 try:
-    for _ in range(10):
+    for _ in range(12):
         sock = socket.socket()
         sock.bind(("127.0.0.1", 0))
         sockets.append(sock)
@@ -96,19 +96,25 @@ redis_host="${redis_endpoint%:*}"
 redis_port="${redis_endpoint##*:}"
 wait_tcp "${redis_host}" "${redis_port}" redis
 
-read -r actor_http caller_http session_a_http session_b_http \
-  actor_spot caller_spot session_a_spot session_b_spot \
+read -r actor_a_http actor_b_http caller_http session_a_http session_b_http \
+  actor_a_spot actor_b_spot caller_spot session_a_spot session_b_spot \
   session_a_stream session_b_stream < <(reserve_ports)
-actor_http_endpoint="http://127.0.0.1:${actor_http}"
+actor_a_http_endpoint="http://127.0.0.1:${actor_a_http}"
+actor_b_http_endpoint="http://127.0.0.1:${actor_b_http}"
 caller_http_endpoint="http://127.0.0.1:${caller_http}"
 session_a_http_endpoint="http://127.0.0.1:${session_a_http}"
 session_b_http_endpoint="http://127.0.0.1:${session_b_http}"
-actor_spot_endpoint="tcp://127.0.0.1:${actor_spot}"
+actor_a_spot_endpoint="tcp://127.0.0.1:${actor_a_spot}"
+actor_b_spot_endpoint="tcp://127.0.0.1:${actor_b_spot}"
 caller_spot_endpoint="tcp://127.0.0.1:${caller_spot}"
 session_a_stream_endpoint="tcp://127.0.0.1:${session_a_stream}"
 session_b_stream_endpoint="tcp://127.0.0.1:${session_b_stream}"
 actor_rid="actor-a"
 caller_rid="aaa-caller"
+actor_b_advertise_host="127.0.0.2"
+actor_b_proxy_pid=""
+actor_b_proxy_script="$(pwd)/tcp_proxy.py"
+echo "actor_b_spot=tcp://127.0.0.1:${actor_b_spot} actor_b_advertised=tcp://127.0.0.2:${actor_b_spot}"
 echo "session_a_spot=tcp://127.0.0.1:${session_a_spot} session_a_stream=${session_a_stream_endpoint}"
 echo "session_b_spot=tcp://127.0.0.1:${session_b_spot} session_b_stream=${session_b_stream_endpoint}"
 
@@ -135,15 +141,21 @@ write_role_config() {
   } >"${path}"
   chmod 0600 "${path}"
 }
-actor_config="${config_dir}/actor.properties"
+actor_a_config="${config_dir}/actor-a.properties"
+actor_b_config="${config_dir}/actor-b.properties"
 caller_config="${config_dir}/caller.properties"
 session_a_config="${config_dir}/session-a.properties"
 session_b_config="${config_dir}/session-b.properties"
 client_config="${config_dir}/client.properties"
-write_role_config "${actor_config}" \
-  "actor-http-endpoint=${actor_http_endpoint}" "actor-spot-endpoint=${actor_spot_endpoint}" "actor-rid=${actor_rid}"
+write_role_config "${actor_a_config}" \
+  "actor-http-endpoint=${actor_a_http_endpoint}" "actor-spot-endpoint=${actor_a_spot_endpoint}" "actor-rid=${actor_rid}" \
+  "baseline-actor-ids=ta-a1,ta-a2,ta-a3,ta-a4,ta-b2,ta-b3" "actor-advertise-host=127.0.0.1"
+write_role_config "${actor_b_config}" \
+  "actor-http-endpoint=${actor_b_http_endpoint}" "actor-spot-endpoint=${actor_b_spot_endpoint}" "actor-rid=actor-b" \
+  "baseline-actor-ids=actor-route-down" "actor-advertise-host=${actor_b_advertise_host}"
 write_role_config "${caller_config}" \
-  "caller-http-endpoint=${caller_http_endpoint}" "caller-spot-endpoint=${caller_spot_endpoint}" "caller-rid=${caller_rid}"
+  "caller-http-endpoint=${caller_http_endpoint}" "caller-spot-endpoint=${caller_spot_endpoint}" "caller-rid=${caller_rid}" \
+  "actor-route-rid=actor-b"
 write_role_config "${session_a_config}" \
   "session-rid=session-a" "session-http-endpoint=${session_a_http_endpoint}" \
   "session-spot-endpoint=tcp://127.0.0.1:${session_a_spot}" "session-stream-endpoint=${session_a_stream_endpoint}"
@@ -151,7 +163,8 @@ write_role_config "${session_b_config}" \
   "session-rid=session-b" "session-http-endpoint=${session_b_http_endpoint}" \
   "session-spot-endpoint=tcp://127.0.0.1:${session_b_spot}" "session-stream-endpoint=${session_b_stream_endpoint}"
 write_config "${client_config}" \
-  "actorHttpEndpoint=${actor_http_endpoint}" \
+  "actorHttpEndpoint=${actor_a_http_endpoint}" \
+  "actorBHttpEndpoint=${actor_b_http_endpoint}" \
   "callerHttpEndpoint=${caller_http_endpoint}" \
   "sessionAHttpEndpoint=${session_a_http_endpoint}" \
   "sessionBHttpEndpoint=${session_b_http_endpoint}" \
@@ -218,11 +231,37 @@ PY
   return 1
 }
 
+start_actor_b_proxy() {
+  if [[ -n "${actor_b_proxy_pid}" ]] && kill -0 "${actor_b_proxy_pid}" >/dev/null 2>&1; then
+    return 0
+  fi
+  python3 "${actor_b_proxy_script}" \
+    --listen-host 127.0.0.2 --listen-port "${actor_b_spot}" \
+    --upstream-host 127.0.0.1 --upstream-port "${actor_b_spot}" \
+    >"${log_dir}/actor-b-proxy.log" 2>&1 &
+  actor_b_proxy_pid="$!"
+  pids+=("${actor_b_proxy_pid}")
+  wait_tcp 127.0.0.2 "${actor_b_spot}" actor-b-proxy
+}
+
+stop_actor_b_proxy() {
+  if [[ -z "${actor_b_proxy_pid}" ]]; then
+    return 0
+  fi
+  kill "${actor_b_proxy_pid}" >/dev/null 2>&1 || true
+  actor_b_proxy_pid=""
+}
+
 start_role() {
   case "$1" in
-    actor)
+    actor-a)
       ./Server/Actor/build/install/to-actor-actor/bin/to-actor-actor \
-        --config "${actor_config}" >"${log_dir}/actor.log" 2>&1 &
+        --config "${actor_a_config}" >"${log_dir}/actor-a.log" 2>&1 &
+      pids+=("$!")
+      ;;
+    actor-b)
+      ./Server/Actor/build/install/to-actor-actor/bin/to-actor-actor \
+        --config "${actor_b_config}" >"${log_dir}/actor-b.log" 2>&1 &
       pids+=("$!")
       ;;
     caller)
@@ -248,7 +287,8 @@ start_role() {
 
 wait_role() {
   case "$1" in
-    actor) wait_http "${actor_http_endpoint}" ;;
+    actor-a) wait_http "${actor_a_http_endpoint}" ;;
+    actor-b) wait_http "${actor_b_http_endpoint}" ;;
     caller) wait_http "${caller_http_endpoint}" ;;
     session-a) wait_http "${session_a_http_endpoint}" ;;
     session-b) wait_http "${session_b_http_endpoint}" ;;
@@ -272,7 +312,8 @@ wait_log() {
 
 wait_role_ready() {
   case "$1" in
-    actor) wait_log "${log_dir}/actor.log" "\\[boot\\] role=actor step=baselineActors done" "actor baseline readiness" ;;
+    actor-a) wait_log "${log_dir}/actor-a.log" "\\[boot\\] role=actor step=baselineActors done" "actor-a baseline readiness" ;;
+    actor-b) wait_log "${log_dir}/actor-b.log" "\\[boot\\] role=actor step=baselineActors done" "actor-b baseline readiness" ;;
     caller) wait_log "${log_dir}/caller.log" "\\[boot\\] role=caller step=main run done" "caller application readiness" ;;
     session-a) wait_log "${log_dir}/session-a.log" "\[boot\] role=session rid=session-a step=main run done" "session-a application readiness" ;;
     session-b) wait_log "${log_dir}/session-b.log" "\[boot\] role=session rid=session-b step=main run done" "session-b application readiness" ;;
@@ -283,7 +324,7 @@ wait_role_ready() {
 ../../gradlew --no-daemon --no-parallel --max-workers=1 \
   --gradle-user-home "${HOME}/.cache/zlink/java-e2e/toactor-gradle" -p . installDist
 
-SERVER_ROLES=(actor caller session-a session-b)
+SERVER_ROLES=(actor-a actor-b caller session-a session-b)
 mapfile -t ORDERED_SERVER_ROLES < <(zlink_e2e_order_roles "${SERVER_ROLES[@]}")
 for role in "${ORDERED_SERVER_ROLES[@]}"; do
   start_role "$role"
@@ -295,6 +336,36 @@ for role in "${SERVER_ROLES[@]}"; do
   wait_role_ready "$role"
 done
 
-./Client/build/install/to-actor-client/bin/to-actor-client \
-  --config "${client_config}" --scenario "${SCENARIO}" \
-  > >(tee "${log_dir}/client.log") 2>"${log_dir}/client.stderr.log"
+start_actor_b_proxy
+
+if [[ "${SCENARIO}" == "all" || "${SCENARIO}" == "TA-B3" ]]; then
+  ./Client/build/install/to-actor-client/bin/to-actor-client \
+    --config "${client_config}" --scenario "${SCENARIO}" \
+    > >(tee "${log_dir}/client.log") 2>"${log_dir}/client.stderr.log" &
+  client_pid="$!"
+  for _ in $(seq 1 300); do
+    if grep -q '^TA-B3-ready$' "${log_dir}/client.log"; then
+      stop_actor_b_proxy
+      break
+    fi
+    if ! kill -0 "${client_pid}" >/dev/null 2>&1; then
+      break
+    fi
+    sleep 0.1
+  done
+  for _ in $(seq 1 300); do
+    if grep -q '^TA-B3-unavailable$' "${log_dir}/client.log"; then
+      start_actor_b_proxy
+      break
+    fi
+    if ! kill -0 "${client_pid}" >/dev/null 2>&1; then
+      break
+    fi
+    sleep 0.1
+  done
+  wait "${client_pid}"
+else
+  ./Client/build/install/to-actor-client/bin/to-actor-client \
+    --config "${client_config}" --scenario "${SCENARIO}" \
+    > >(tee "${log_dir}/client.log") 2>"${log_dir}/client.stderr.log"
+fi

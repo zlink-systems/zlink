@@ -42,12 +42,50 @@ evidence/admin endpoint, state, dispatch-error observer, request/send handler를
 - `RL-D4`: 미등록 request handler가 public HTTP 실패로 노출되고, provider dispatch-error evidence에 `no_handler`/`reply_error`가 남으며, 이후 request가 정상 동작하는지 확인한다. 공통 문서의 code round-trip 검증은 server-side dispatch evidence 경로로 닫는다.
 - `RL-D5`: 같은 실행 안에서 request와 send를 섞어 여러 window로 지속 주입하고, 처리 성공과 단순 latency drift 한계를 관측한다.
 
+## Config 5 Track E/F 현재 상태
+
+공통 Config 5의 E/F는 현재 ClientServer provider·consumer만 있는 Kotlin fixture로는 완료할 수 없다.
+각 selector는 fixture를 실제 process로 시작하고 public HTTP 및 public runtime snapshot을 조회한 뒤,
+계약을 충족하지 못하면 `passed`를 출력하지 않고 non-zero로 종료한다. Raw frame, private connection
+ID, ID marker 또는 성공을 가정한 응답은 사용하지 않는다.
+
+| Scenario | 실행 결과와 public 근거 | 차단 원인 |
+|---|---|---|
+| `RL-E1` | Blocked. `topologyBefore.matchedRouters=2`, provider B의 `/admin/shutdown` 수락, B HTTP endpoint unavailable, `topologyAfter.matchedRouters=1`, A의 follow-up `WorkReq` reply와 A evidence를 확인했다. | 시작 조건의 RouteMesh target fixture가 없다. |
+| `RL-E2` | Blocked after `/capabilities`와 consumer topology 조회 | directional fault proxy와 RouteMesh target fixture가 없다. |
+| `RL-E3` | Blocked after `/capabilities`와 consumer topology 조회 | old physical connection을 분리해 제어할 RouteMesh/fault fixture가 없다. |
+| `RL-E4` | Blocked after `/capabilities`와 consumer topology 조회 | connection-loss/cancellation race를 제어할 RouteMesh/fault fixture가 없다. |
+| `RL-E5` | Blocked after `/capabilities`와 consumer topology 조회 | Store 중단과 packet blackhole을 함께 제공할 RouteMesh/fault fixture가 없다. |
+| `RL-F1`–`RL-F14` | 각 selector가 provider `/capabilities`와 consumer public topology를 조회한 뒤 Blocked | Actor object server, Spot object server와 Relocation Store fixture가 없다. |
+
+`RL-E1`의 ClientServer orderly-disconnect 부분은 독립적으로 실제 통과 근거를 확보했지만, 공통
+시나리오의 시작 조건인 RouteMesh target이 없으므로 전체 scenario를 PASS로 판정하지 않는다. E/F
+selector는 `run_e2e.sh all`의 완료 gate에 포함하지 않고 개별 실행에서 위 차단 근거를 확인한다.
+
 ## public API/harness 대기
 
 - 위 `RL-A1`에는 Java runtime 오류 정규화와 RuntimeMonitoring socket source identity 수정이 필요하다.
 - 위 `RL-B4`에는 Java 10.0.0 route-mesh runtime options 구현이 필요하다.
+- Config 5 Track E에는 RouteMesh target과 방향별 fault proxy를 포함한 Kotlin fixture가 필요하다.
+- Config 5 Track F에는 Actor/Spot object server와 Relocation Store를 포함한 Kotlin fixture가 필요하다.
+
+## 현재 개별 실행 결과
+
+각 selector는 실제 provider 2개와 consumer process를 시작한 뒤 public endpoint를 조회했다. 완료되지
+않은 selector는 성공 marker를 출력하지 않고 non-zero로 종료했다.
+
+- `RL-E1`: `logs/20260806-020233-2794916` — `topologyBefore.matchedRouters=2`, provider B
+  `/admin/shutdown` 수락, B HTTP unavailable, `topologyAfter.matchedRouters=1`, provider A follow-up
+  reply/evidence를 확인한 뒤 RouteMesh 부재로 block.
+- `RL-E2`–`RL-E5`: 각각 `logs/20260806-020452-2936605`, `logs/20260806-020511-2937977`,
+  `logs/20260806-020543-2939176`, `logs/20260806-020627-2962677` — public topology와
+  `/capabilities`를 확인한 뒤 RouteMesh 또는 directional fault proxy 부재로 block.
+- `RL-F1`–`RL-F14`: `logs/20260806-020334-2799234` 및 각 selector의
+  `logs/20260806-020635-2971604`부터 `logs/20260806-020751-3005633`까지 — public topology와
+  `/capabilities`에서 Actor/Spot/Relocation Store fixture 부재를 확인한 뒤 모두 block.
 
 ## 검증 방법
 
 `run_e2e.sh all`은 RL-A1부터 RL-D5까지 selector를 실행한다. 차단 행은 표에 적은 10.0.0 단언을
-충족한 뒤에만 완료로 바꾼다.
+충족한 뒤에만 완료로 바꾼다. `RL-E1`부터 `RL-F14`까지는 selector별로 실행할 수 있으며,
+fixture capability와 public topology를 확인한 뒤 block evidence를 남긴다.

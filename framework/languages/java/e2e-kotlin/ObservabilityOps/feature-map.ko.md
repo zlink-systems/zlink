@@ -19,6 +19,8 @@ evidence verifier의 대응을 기록한다. verifier는 배포된 framework 프
 | OBS-C3 | 정상 request 뒤 Spot 유지, drain admission seal, accepted turn·actor·STREAM barrier 뒤 local Spot close·row 제거, stale handle의 숨은 원격 생성 금지와 명시적 local `GetOrCreate` 뒤 새 generation | 10.0.0 전환 대상 — Kotlin 역할 host가 없고(E2E-KT-06), 공유 Java runner도 제거 대상인 기존 분기 시나리오를 실행하므로 고정 drain 회귀를 검증하지 않음 |
 | OBS-C4 | force stopping, session-closing, server_drain, forced 계기 | 10.0.0 전환 대상 — Kotlin 역할 host가 없음(E2E-KT-06) |
 | OBS-C5 | serving target 롤아웃과 zero-target deadline 결과 | 10.0.0 전환 대상 — Kotlin 역할 host가 없음(E2E-KT-06) |
+| OBS-A5 | public message-flow mode 전환, typed request handler, `ZLinkMessageFlowObserver` evidence | 구현·compile·focused 실행 통과. typed `ProbeRequest`/`ProbeReply`가 기본 JSON codec에서 decode되고 `key_transitions -> off -> errors_only -> key_transitions` 전환과 trace evidence를 검증했다. 로그 디렉터리: `logs/20260806-054800-3449065-a5/` |
+| OBS-C6..C12 | relocation, maintenance, bound object와 role evidence | BLOCKED. Kotlin tree에는 이 계약을 실행할 maintenance role host와 HTTP adapter가 없고, 현재 runner는 selector만 허용한다. 기존 Java public fixture는 별도 C runner를 사용하며 automatic-topology actor handoff가 `RELOCATION_FAILED`로 막힌 상태이므로 Kotlin marker-only pass나 Java fixture 재사용으로 완료를 주장하지 않았다. |
 
 현재 runner는 Kotlin 공개 adapter를 사용하는 trigger와 공유 Java runtime 역할을 기동한다. Kotlin
 역할 host가 없으므로 scenario별 verifier의 성공은 Kotlin Config 11 완료 증거가 아니다. 각 selector는

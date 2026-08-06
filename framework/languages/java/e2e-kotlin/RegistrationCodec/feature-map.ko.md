@@ -21,6 +21,7 @@ option은 CLI argument로 받는다. 파일별 재분류 상태는 `porting-inve
 | RC-B3 | 구현 완료 | `RcB3MessagePackCodecScenario`가 MessagePack 대상 DTO request/send round-trip과 evidence를 확인한다. |
 | RC-B4 | 구현 완료 | `RcB4CodecCoexistenceScenario`가 JSON/Protobuf/MessagePack codec 공존 처리를 확인한다. |
 | RC-B5 | 구현 완료 | `Server/JsonOnlyPeer`와 `Server/CodecRequester` process가 codec mismatch error와 이후 정상 JSON traffic 회복을 확인한다. |
+| RC-B6 | 구현 완료 | `Server/Main`의 public `/codec/json-golden` endpoint가 기본 JSON typed DTO 왕복을 수행하고, Kotlin client가 int64·bytes·int32·finite floating-point·nullable 값을 확인하며 server evidence를 대조한다. Message-specific codec 등록은 사용하지 않는다. |
 
 ## 포팅 구조 상태
 
@@ -35,9 +36,12 @@ plain HTTP driver로 동작하고 framework 호출은 server role의 public API 
 - `logs/20260704-030854-98943`: `timeout 420s ./run_e2e.sh`
   실행 결과 registry/discovery 의존이 없는 현재 구조에서 전체 scenario가 다시 통과했다.
 - 통과 scenario: `RC-A1`, `RC-A2`, `RC-A3`, `RC-A4`, `RC-A5`, `RC-A6`, `RC-B1`, `RC-B2`,
-  `RC-B3`, `RC-B4`, `RC-B5`.
+  `RC-B3`, `RC-B4`, `RC-B5`, `RC-B6`.
 - 중복 등록 시나리오인 `RC-A6`은 `invalid-server.stdout.log`의 duplicate packet registration startup failure로 확인하고,
   `RC-B5`는 Kotlin client가 `--mode codec-mismatch`로 실행된 `mismatch-client.stdout.log`의
   `scenario RC-B5 passed` marker로 확인한다.
 - 이 결과는 현재 구현의 동작 기준선, process 분리, client scenario/support 분리, server role 파일
   책임 분리 증거다.
+- 현재 추가 검증: `logs/20260806-011931-2194821`에서 `timeout 120s ./run_e2e.sh RC-B6`를
+  실행했고 `scenario RC-B6 passed`와 `registration-codec kotlin e2e result=passed`를 확인했다.
+  `server-flow.log`에는 `JsonGoldenReq`의 실제 RECEIVED/SENT/REPLIED/REPLY_RECEIVED 흐름이 남아 있다.

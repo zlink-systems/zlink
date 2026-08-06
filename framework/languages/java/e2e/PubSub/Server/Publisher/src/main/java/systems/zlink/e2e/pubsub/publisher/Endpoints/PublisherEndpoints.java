@@ -11,11 +11,16 @@ import java.util.HashMap;
 import java.util.Map;
 import java.time.Duration;
 import org.springframework.context.SmartLifecycle;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.context.ConfigurableApplicationContext;
 import systems.zlink.e2e.pubsub.publisher.Configuration.PublisherOptions;
 import systems.zlink.e2e.pubsub.publisher.Infrastructure.EvidenceStore;
 import systems.zlink.e2e.pubsub.shared.Contracts;
 import systems.zlink.framework.channels.ZLinkFanoutClient;
 import systems.zlink.framework.spring.internal.runtime.ZLinkFrameworkLifecycle;
+import systems.zlink.framework.errors.ZLinkConfigurationException;
+import systems.zlink.framework.monitoring.ZLinkListenerKind;
+import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 
 public final class PublisherEndpoints implements SmartLifecycle {
     private final PublisherOptions options;
@@ -23,6 +28,8 @@ public final class PublisherEndpoints implements SmartLifecycle {
     private final EvidenceStore evidence;
     private final ObjectMapper json;
     private final ZLinkFrameworkLifecycle drain;
+    private final ConfigurableApplicationContext application;
+    private final ObjectProvider<ZLinkFrameworkRuntime> runtime;
     private HttpServer server;
     private boolean running;
 
@@ -31,12 +38,16 @@ public final class PublisherEndpoints implements SmartLifecycle {
         ZLinkFanoutClient fanout,
         EvidenceStore evidence,
         ObjectMapper json,
-        ZLinkFrameworkLifecycle drain) {
+        ZLinkFrameworkLifecycle drain,
+        ConfigurableApplicationContext application,
+        ObjectProvider<ZLinkFrameworkRuntime> runtime) {
         this.options = options;
         this.fanout = fanout;
         this.evidence = evidence;
         this.json = json;
         this.drain = drain;
+        this.application = application;
+        this.runtime = runtime;
     }
 
     @Override
@@ -50,6 +61,50 @@ public final class PublisherEndpoints implements SmartLifecycle {
                 publish(exchange, Contracts.EVENT_PACKET));
             server.createContext("/publish/missing", exchange ->
                 publish(exchange, Contracts.MISSING_PACKET));
+            server.createContext("/publish/reserved", exchange -> {
+                try {
+                    fanout.publish(
+                        options.channelName(), "\u0001ZLF1",
+                        new Contracts.EventMsg("ps-f3", 1, "reserved"));
+                    writeText(exchange, 200, "accepted\n");
+                } catch (ZLinkConfigurationException error) {
+                    writeText(exchange, 400, error.getMessage() + "\n");
+                }
+            });
+            server.createContext("/publish/reserved-prefix", exchange -> {
+                fanout.publish(
+                    options.channelName(), "\u0001ZLF1.more",
+                    new Contracts.EventMsg("ps-f3", 2, "reserved-prefix"))
+                    .submit().toCompletableFuture().join();
+                writeText(exchange, 200, "published\n");
+            });
+            server.createContext("/status", exchange -> {
+                var current = runtime.getObject().fanoutRuntime().snapshot(options.channelName());
+                var listener = runtime.getObject().listenerStatus(
+                    ZLinkListenerKind.FANOUT, options.channelName());
+                writeJson(exchange, Map.of(
+                    "channelName", current.channelName(),
+                    "state", current.state().name(),
+                    "isReady", current.isReady(),
+                    "readyPublisherCount", current.readyPublisherCount(),
+                    "publishers", current.publishers().stream().map(publisher -> Map.of(
+                        "nodeRid", publisher.nodeRid().toString(),
+                        "state", publisher.state().name())).toList(),
+                    "sequence", current.sequence(),
+                    "observedAt", current.observedAt().toString(),
+                    "listenerEndpoint", listener.endpoint()));
+            });
+            server.createContext("/shutdown", exchange -> {
+                writeText(exchange, 200, "stopping\n");
+                Thread.ofVirtual().start(() -> {
+                    try {
+                        Thread.sleep(100);
+                    } catch (InterruptedException error) {
+                        Thread.currentThread().interrupt();
+                    }
+                    application.close();
+                });
+            });
             server.createContext("/admin/drain", exchange -> {
                 var result = drain.shutdown(Duration.ofSeconds(30)).toCompletableFuture().join();
                 writeText(exchange, 200,
@@ -74,7 +129,7 @@ public final class PublisherEndpoints implements SmartLifecycle {
             Object event = Contracts.MISSING_PACKET.equals(packetName)
                 ? new Contracts.MissingEventMsg(scenario, sequence, value)
                 : new Contracts.EventMsg(scenario, sequence, value);
-            fanout.publish(Contracts.EVENT_CHANNEL, topic, event)
+            fanout.publish(options.channelName(), topic, event)
                 .submit()
                 .toCompletableFuture()
                 .join();

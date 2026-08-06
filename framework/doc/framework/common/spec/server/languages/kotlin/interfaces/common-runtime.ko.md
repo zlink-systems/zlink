@@ -22,6 +22,10 @@ Host가 continuity preflight를 통과해 relocation unit을 준비하는 동안
 관측하며, relocation이 완료되면 `RELOCATED(3)`으로 전환한다. `shutdown()`을 시작하면
 `DRAINING(4)`으로 전환한다.
 
+Kotlin은 Java runtime facade가 제공하는 listener identity 조회도 그대로 사용한다. `ZLinkListenerKind`와
+`ZLinkListenerStatus`는 Java type이며, `frameworkRuntime.listenerStatus(kind, name)`은 현재 advertised
+endpoint와 조회 시각을 반환한다. wildcard bind 주소나 임시 port `0`은 결과 endpoint로 노출하지 않는다.
+
 ## Kotlin source signature
 
 ```kotlin

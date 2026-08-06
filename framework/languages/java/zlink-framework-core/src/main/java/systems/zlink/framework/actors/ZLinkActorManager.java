@@ -24,6 +24,16 @@ public interface ZLinkActorManager {
     CompletionStage<Optional<systems.zlink.framework.spots.SpotRef>> findSpot(String actorId);
 
     /**
+     * Destroys the exact actor incarnation identified by {@code actor}.
+     *
+     * <p>A missing incarnation is idempotent and completes with {@code false}.
+     * A generation mismatch is rejected with {@code INVALID_OPERATION}; the
+     * manager never retargets the request to a newer actor with the same id.
+     * The actor must already have left its user Spot.</p>
+     */
+    CompletionStage<Boolean> destroy(ActorRef actor);
+
+    /**
      * Finds an actor by id or creates it using the factory registered for the
      * supplied actor type string.
      */

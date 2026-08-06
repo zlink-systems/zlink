@@ -14,6 +14,11 @@ public final class ScenarioSuite {
             case "SM-A6" -> SmA6Scenario.run(context);
             case "SM-A7" -> SmA7Scenario.run(context);
             case "SM-A8" -> SmA8Scenario.run(context);
+            case "SM-A9" -> SmA9Scenario.run(context);
+            case "SM-A10" -> SmA10Scenario.run(context);
+            case "SM-A11" -> SmA11Scenario.run(context);
+            case "SM-A12" -> SmA12Scenario.run(context);
+            case "SM-A13" -> SmA13Scenario.run(context);
             case "SM-B1" -> SmB1Scenario.run(context);
             case "SM-B2" -> SmB2Scenario.run(context);
             case "SM-B3" -> SmB3Scenario.run(context);
@@ -23,6 +28,9 @@ public final class ScenarioSuite {
             case "SM-B7" -> SmB7Scenario.run(context);
             case "SM-B8" -> SmB8Scenario.run(context);
             case "SM-B9" -> SmB9Scenario.run(context);
+            case "SM-B0" -> SmB0Scenario.run(context);
+            case "SM-B0A" -> SmB0AScenario.run(context);
+            case "SM-B11" -> SmB11Scenario.run(context);
             case "SM-C1" -> SmC1Scenario.run(context);
             case "SM-C2" -> SmC2Scenario.run(context);
             case "SM-C3" -> SmC3Scenario.run(context);
@@ -32,7 +40,11 @@ public final class ScenarioSuite {
             case "SM-D2" -> SmD2Scenario.run(context);
             case "SM-D3" -> SmD3Scenario.run(context);
             case "SM-D4" -> SmD4Scenario.run(context);
+            case "SM-D4A" -> SmD4AScenario.run(context);
             case "SM-D5" -> SmD5Scenario.run(context);
+            case "SM-D5A" -> SmD5AScenario.run(context);
+            case "SM-C6" -> SmC6Scenario.run(context);
+            case "SM-D4B" -> SmD4BScenario.run(context);
             case "SM-D6" -> SmD6Scenario.run(context);
             case "SM-D7" -> SmD7Scenario.run(context);
             case "SM-D8" -> SmD8Scenario.run(context);
@@ -57,6 +69,8 @@ public final class ScenarioSuite {
             case "SM-G2" -> SmG2Scenario.run(context);
             case "SM-G3" -> SmG3Scenario.run(context);
             case "SM-G4" -> SmG4Scenario.run(context);
+            case "SM-G5A" -> SmG5Scenario.runWeight(context);
+            case "SM-G5B" -> SmG5Scenario.runCapacity(context);
             case "state1" -> SmA1Scenario.run(context);
             case "state2" -> SmA2Scenario.run(context);
             case "send" -> SendScenario.run(context);

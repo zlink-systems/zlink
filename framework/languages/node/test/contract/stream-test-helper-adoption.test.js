@@ -33,10 +33,11 @@ test('stream-connector sample scenarios use the connector test helper surface', 
   assert.doesNotMatch(samples, /const statusWaits = statuses\.map/);
 });
 
-test('e2e scenarios use the connector assertion surface', () => {
+test('e2e scenarios keep generic assertions in Client/Support', () => {
   const assertions = e2eScenarioAssertions.map(read).join('\n');
-  assert.doesNotMatch(assertions, /export function ensure\b/);
-  assert.equal(assertions.match(/zlinkStreamAssert\.ensure/g)?.length, e2eScenarioAssertions.length);
+  assert.equal(assertions.match(/export function ensure\b/g)?.length, e2eScenarioAssertions.length);
+  assert.doesNotMatch(assertions, /zlinkStreamAssert/);
+  assert.doesNotMatch(assertions, /@zlink-systems\/stream-connector/);
 });
 
 function read(path) {

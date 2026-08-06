@@ -668,6 +668,7 @@ export class ZLinkSpotNodeRuntimeManager {
     if (activation === undefined) {
       for (const [meshName, node] of this.meshNodes) {
         if (!routingIdsEqual(node.status().routingId, nodeRid)) continue;
+        if (this.options.registration.spotNodes.get(meshName)?.entrySpotType === undefined) continue;
         await this.ensureEntryActivation(meshName);
         activation = this.entryActivations.get(meshName);
         break;

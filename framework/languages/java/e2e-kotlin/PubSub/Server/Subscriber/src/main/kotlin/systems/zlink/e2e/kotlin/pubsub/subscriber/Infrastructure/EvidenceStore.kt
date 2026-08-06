@@ -12,7 +12,7 @@ class EvidenceStore(
     private val entries = mutableListOf<EvidenceEntry>()
     private val monitor = Object()
 
-    fun accepts(topic: String): Boolean = topics.contains(topic)
+    fun accepts(topic: String): Boolean = topics.contains("*") || topics.contains(topic)
 
     suspend fun delayIfConfigured(scenario: String) {
         val configuredDelay = handlerDelayMillis

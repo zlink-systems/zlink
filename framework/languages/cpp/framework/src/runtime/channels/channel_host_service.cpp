@@ -126,8 +126,7 @@ class channel_host_service_t::server_loop_t
                 || !_inbound_budget->can_start_application_receive ()) {
                 continue;
             }
-            zlink::received_t received;
-            const int rc = _router->recv (received, zlink::recv_flags_t::dontwait);
+            const int rc = _router->recv (_received, zlink::recv_flags_t::dontwait);
             if (rc == static_cast<int> (zlink::recv_result_t::no_data)) {
                 continue;
             }
@@ -135,9 +134,10 @@ class channel_host_service_t::server_loop_t
                 continue;
             }
             if (is_drained ()) {
+                _received.close ();
                 continue;
             }
-            dispatch_async (std::move (received));
+            dispatch_async (_received);
         }
         if (_handler_executor) {
             _handler_executor->drain ();
@@ -214,11 +214,12 @@ class channel_host_service_t::server_loop_t
         return zlink::framework::runtime::messaging::message_parts_t (std::move (copied));
     }
 
-    void dispatch_async (zlink::received_t received)
+    void dispatch_async (zlink::received_t &received)
     {
         auto routing_id = received.routing_id ();
         const auto request_seq = received.request_seq ();
         auto request_parts = copy_parts (received.parts ());
+        received.close ();
         const auto payload_bytes =
           request_parts.size () >= 2
             ? static_cast<std::uint64_t> (request_parts[1].size ())
@@ -426,6 +427,7 @@ class channel_host_service_t::server_loop_t
     std::shared_ptr<completion_admission_owner_t> _completion_admission;
     std::unique_ptr<zlink::context_t> _context;
     std::unique_ptr<zlink::router_socket_t> _router;
+    zlink::received_t _received;
     zlink::socket_monitor_t _monitor;
     zlink::poller_t _poller;
     std::set<std::string> _pending_handshake_remotes;
@@ -497,15 +499,16 @@ class channel_host_service_t::subscriber_loop_t
                 || !_inbound_budget->can_start_application_receive ()) {
                 continue;
             }
-            zlink::topic_message_t message;
-            const int rc = _subscriber->subscribe (message, zlink::recv_flags_t::dontwait);
+            _received_message.close ();
+            const int rc = _subscriber->subscribe (
+              _received_message, zlink::recv_flags_t::dontwait);
             if (rc == static_cast<int> (zlink::recv_result_t::no_data)) {
                 continue;
             }
             if (rc != static_cast<int> (zlink::recv_result_t::ok)) {
                 continue;
             }
-            dispatch_async (std::move (message));
+            dispatch_async (_received_message);
         }
     }
 
@@ -560,9 +563,10 @@ class channel_host_service_t::subscriber_loop_t
         return zlink::framework::runtime::messaging::message_parts_t (std::move (copied));
     }
 
-    void dispatch_async (zlink::topic_message_t message)
+    void dispatch_async (zlink::topic_message_t &message)
     {
         auto parts = copy_parts (message.parts ());
+        message.close ();
         const auto payload_bytes =
           parts.size () >= 2
             ? static_cast<std::uint64_t> (parts[1].size ())
@@ -626,6 +630,7 @@ class channel_host_service_t::subscriber_loop_t
     std::shared_ptr<inbound_dispatch_budget_t> _inbound_budget;
     std::unique_ptr<zlink::context_t> _context;
     std::unique_ptr<zlink::sub_socket_t> _subscriber;
+    zlink::topic_message_t _received_message;
     zlink::poller_t _poller;
     std::set<std::string> _connected;
     std::unique_ptr<offload_executor_t> _handler_executor;

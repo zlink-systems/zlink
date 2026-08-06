@@ -16,12 +16,16 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.actors.ZLinkActorContext;
+import systems.zlink.framework.actors.ActorRef;
+import systems.zlink.framework.actors.ZLinkActorCreateResult;
 import systems.zlink.framework.actors.ZLinkActorFactory;
 import systems.zlink.framework.actors.ZLinkActorManager;
 import systems.zlink.framework.actors.ZLinkActorClient;
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationOptions;
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore;
+import systems.zlink.framework.locations.redis.ZLinkRedisRelocationOptions;
+import systems.zlink.framework.locations.redis.ZLinkRedisRelocationStore;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.spring.EnableZLinkFramework;
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer;
@@ -30,8 +34,7 @@ import systems.zlink.framework.spots.ZLinkEntrySpotActorRequestHandler;
 import systems.zlink.framework.spots.ZLinkEntrySpotActorSendHandler;
 import systems.zlink.framework.spots.ZLinkEntrySpotContext;
 import systems.zlink.framework.ZLinkMessageContext;
-import systems.zlink.framework.spots.ZLinkSpotActorSendContext;
-import systems.zlink.framework.spots.ZLinkSpotActorJoinResult;
+import systems.zlink.framework.spots.ZLinkActorCreateResponse;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 
 @EnableZLinkFramework
@@ -71,17 +74,27 @@ public final class Program {
         http.get("/evidence", evidence::all);
         boot("http route ensure");
         http.postAsync("/ensure", Contracts.ActorCallRequest.class, request ->
-            actors.getOrCreate(request.actorId(), Contracts.ACTOR_TYPE, ZLinkMessage.of("create"))
-                .thenApply(ignored -> Contracts.ActorCallResponse.ok(
-                    request.scenario(), request.actorId(), "ensured")));
+            actors.getOrCreate(request.actorId(), Contracts.ACTOR_TYPE)
+                .request(ZLinkMessage.of("create"))
+                .submit()
+                .thenApply(result -> {
+                    requireActor(result);
+                    return Contracts.ActorCallResponse.ok(
+                        request.scenario(), request.actorId(), "ensured");
+                }));
         http.postAsync("/ensure-ref", Contracts.ActorCallRequest.class, request ->
-            actors.getOrCreate(request.actorId(), Contracts.ACTOR_TYPE, ZLinkMessage.of("create"))
-                .thenApply(actor -> new Contracts.ActorRefWire(
-                    actor.nodeRid().toHex(), actor.actorId(), actor.objectGeneration())));
+            actors.getOrCreate(request.actorId(), Contracts.ACTOR_TYPE)
+                .request(ZLinkMessage.of("create"))
+                .submit()
+                .thenApply(result -> {
+                    ActorRef actor = requireActor(result);
+                    return new Contracts.ActorRefWire(
+                        actor.nodeRid().toHex(), actor.actorId(), actor.objectGeneration());
+                }));
         http.postAsync("/push", Contracts.BoundPushRequest.class, request ->
             actors.find(request.actorId()).thenCompose(found -> actorClient.requestToActor(
                     found.orElseThrow(() -> new IllegalStateException(
-                        "actor was not found: " + request.actorId())),
+                        "actor was not found: " + request.actorId())).actorId(),
                     request)
                 .submit(Contracts.BoundPushReply.class))
                 .exceptionally(error -> Contracts.BoundPushReply.failed(
@@ -89,13 +102,32 @@ public final class Program {
         http.postAsync("/destroy", Contracts.DestroyActorRequest.class, request ->
             actors.find(request.actorId()).thenCompose(found -> actorClient.requestToActor(
                     found.orElseThrow(() -> new IllegalStateException(
-                        "actor was not found: " + request.actorId())),
+                        "actor was not found: " + request.actorId())).actorId(),
                     request)
                 .submit(Contracts.DestroyActorReply.class)));
+        http.postAsync("/destroy-ref", Contracts.DestroyActorRefRequest.class, request -> {
+            Contracts.ActorRefWire wire = request.actorRef();
+            ActorRef actor = new ActorRef(
+                wire.actorId(),
+                wire.generation(),
+                Contracts.SPOT_MESH,
+                RoutingId.fromHex(wire.nodeRidHex()));
+            return actors.destroy(actor).handle((destroyed, failure) -> {
+                if (failure != null) {
+                    return Contracts.DestroyActorRefReply.failed(
+                        actor.actorId(), errorKind(failure));
+                }
+                if (destroyed) {
+                    evidence.append(new Contracts.ActorEvidence(
+                        request.scenario(), actor.actorId(), "destroy-ref", "destroyed"));
+                }
+                return Contracts.DestroyActorRefReply.completed(actor.actorId(), destroyed);
+            });
+        });
         http.postAsync("/unbind", Contracts.UnbindActorRequest.class, request ->
             actors.find(request.actorId()).thenCompose(found -> actorClient.requestToActor(
                     found.orElseThrow(() -> new IllegalStateException(
-                        "actor was not found: " + request.actorId())),
+                        "actor was not found: " + request.actorId())).actorId(),
                     request)
                 .submit(Contracts.UnbindActorReply.class)));
         boot("http start");
@@ -119,11 +151,19 @@ public final class Program {
                 .setConnectionString(config.redisLocationEndpoint())
                 .setKeyPrefix(config.locationKeyPrefix())));
             boot("addLocationStore done");
+            boot("addRelocationStore");
+            options.addRelocationStore(new ZLinkRedisRelocationStore(new ZLinkRedisRelocationOptions()
+                .setConnectionString(config.redisLocationEndpoint())
+                .setKeyPrefix(config.locationKeyPrefix())));
+            boot("addRelocationStore done");
             boot("addRouteMesh");
             var spotMesh = options.addRouteMesh(Contracts.SPOT_MESH);
             boot("addRouteMesh done");
             boot("listen");
             spotMesh.listen(config.actorSpotEndpoint());
+            if (!config.actorAdvertiseHost().isBlank()) {
+                spotMesh.setAdvertiseHost(config.actorAdvertiseHost());
+            }
             boot("listen done");
             boot("setRoutingId");
             spotMesh.setRoutingId(RoutingId.from(config.actorRid()));
@@ -143,15 +183,20 @@ public final class Program {
     }
 
     @Bean
-    ApplicationRunner createBaselineActors(ZLinkActorManager actors) {
+    ApplicationRunner createBaselineActors(ZLinkActorManager actors, ActorOptions config) {
         return ignored -> {
             boot("baselineActors start");
             CompletionStage<Void> sequence = CompletableFuture.completedFuture(null);
-            for (String actorId : java.util.List.of("ta-a1", "ta-a2", "ta-a3", "ta-a4", "ta-b2", "ta-b3")) {
+            for (String actorId : baselineActorIds(config)) {
                 sequence = sequence.thenCompose(ignoredResult -> {
                     boot("baselineActors getOrCreate actorId=" + actorId);
-                    return actors.getOrCreate(actorId, Contracts.ACTOR_TYPE, ZLinkMessage.of("create"))
-                        .thenAccept(actor -> boot("baselineActors getOrCreate done actorId=" + actorId));
+                    return actors.getOrCreate(actorId, Contracts.ACTOR_TYPE)
+                        .request(ZLinkMessage.of("create"))
+                        .submit()
+                        .thenAccept(result -> {
+                            requireActor(result);
+                            boot("baselineActors getOrCreate done actorId=" + actorId);
+                        });
                 });
             }
             sequence.whenComplete((ignoredResult, failure) -> {
@@ -164,27 +209,35 @@ public final class Program {
         };
     }
 
+    private static java.util.List<String> baselineActorIds(ActorOptions config) {
+        if (config.baselineActorIds().isBlank()) {
+            return java.util.List.of("ta-a1", "ta-a2", "ta-a3", "ta-a4", "ta-b2", "ta-b3");
+        }
+        return java.util.Arrays.stream(config.baselineActorIds().split(","))
+            .map(String::trim)
+            .filter(value -> !value.isBlank())
+            .toList();
+    }
+
     private static void boot(String step) {
         System.out.println("[boot] role=actor step=" + step);
     }
 
     public static final class TestActor implements ZLinkActor {
-        private final String actorId;
         private final ZLinkActorContext context;
 
-        TestActor(String actorId, ZLinkActorContext context) {
-            this.actorId = actorId;
+        TestActor(ZLinkActorContext context) {
             this.context = context;
         }
 
-        @Override public String actorId() { return actorId; }
+        String actorId() { return context.actorId(); }
         @Override public ZLinkActorContext context() { return context; }
     }
 
     public static final class TestActorFactory implements ZLinkActorFactory {
         @Override
-        public CompletionStage<ZLinkActor> create(String actorId, ZLinkActorContext context) {
-            return CompletableFuture.completedFuture(new TestActor(actorId, context));
+        public CompletionStage<ZLinkActor> create(ZLinkActorContext context) {
+            return CompletableFuture.completedFuture(new TestActor(context));
         }
     }
 
@@ -209,17 +262,11 @@ public final class Program {
         }
 
         @Override
-        public CompletionStage<Void> onCreateActor(TestActor actor, ZLinkMessage createRequest) {
+        public CompletionStage<ZLinkActorCreateResponse> onCreateActor(
+            TestActor actor,
+            ZLinkMessage createRequest) {
             evidence.append(new Contracts.ActorEvidence("create", actor.actorId(), "create", "created"));
-            return CompletableFuture.completedFuture(null);
-        }
-
-        @Override
-        public CompletionStage<ZLinkSpotActorJoinResult> onActorJoin(
-            String actorId,
-            ZLinkMessage request) {
-            evidence.append(new Contracts.ActorEvidence("admission", actorId, "join", "accepted"));
-            return CompletableFuture.completedFuture(ZLinkSpotActorJoinResult.accept());
+            return CompletableFuture.completedFuture(ZLinkActorCreateResponse.accept());
         }
 
         @Override
@@ -247,7 +294,7 @@ public final class Program {
         public CompletionStage<Void> handle(
             TestEntrySpot entrySpot,
             TestActor actor,
-            ZLinkSpotActorSendContext context,
+            ZLinkMessageContext context,
             Contracts.ActorNotify message) {
             evidence.append(new Contracts.ActorEvidence(message.scenario(), actor.actorId(), "send", message.value()));
             return CompletableFuture.completedFuture(null);
@@ -356,6 +403,16 @@ public final class Program {
                 return new Contracts.UnbindActorReply(actor.actorId(), true);
             });
         }
+    }
+
+    private static ActorRef requireActor(ZLinkActorCreateResult result) {
+        if (result instanceof ZLinkActorCreateResult.Existing existing) {
+            return existing.actor();
+        }
+        if (result instanceof ZLinkActorCreateResult.Created created) {
+            return created.actor();
+        }
+        throw new IllegalStateException("actor creation was rejected");
     }
 
     private static String errorKind(Throwable error) {

@@ -69,9 +69,6 @@ cleanup() {
     wait "$pid" 2>/dev/null
     status=$?
     set -e
-    if [[ ("$SCENARIO" == "MON-A4" || "$SCENARIO" == "all") && "$name" == "svc-a" && "$status" -eq 137 ]]; then
-      continue
-    fi
     if [[ ("$SCENARIO" == "MON-A4B" || "$SCENARIO" == "all") && "$name" == "svc-b" && "$status" -eq 137 ]]; then
       continue
     fi

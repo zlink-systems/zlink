@@ -78,7 +78,14 @@ inline void run_mon_a4_availability_transition_scenario (
     }
     ensure (channel_ready,
             "MON-A4 recovered channel readiness did not converge");
-    std::cout << "scenario MON-A4 passed\n";
+    if (options.scenario == "mon-a4a")
+        std::cout << "scenario MON-A4A passed\n";
+    else if (options.scenario == "mon-a4b")
+        std::cout << "scenario MON-A4B passed\n";
+    else if (options.scenario == "all")
+        std::cout << "scenario MON-A4A passed\nscenario MON-A4B passed\n";
+    else
+        std::cout << "scenario MON-A4 passed\n";
 }
 
 } // namespace zlink::framework::e2e::runtime_monitoring::client

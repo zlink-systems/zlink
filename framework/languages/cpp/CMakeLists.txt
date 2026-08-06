@@ -100,10 +100,11 @@ target_include_directories(zlink_framework_provider_abstractions INTERFACE
   $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
 
 set(ZLINK_FRAMEWORK_CPP_M6A_RUNTIME_SOURCES
-  framework/src/runtime/backend/native_route_backend.cpp
   framework/src/runtime/backend/raw_dealer_port.cpp
   framework/src/runtime/backend/raw_route_port.cpp
   framework/src/runtime/foundation/operation_registry.cpp
+  framework/src/runtime/dispatch/offload_executor.cpp
+  framework/src/runtime/messaging/async_submit_runtime.cpp
   framework/src/runtime/protocol/service_wire_codec.cpp
   framework/src/runtime/mesh/raw_mesh_node_owner.cpp
   framework/src/runtime/mesh/service_liveness_registry.cpp
@@ -220,6 +221,7 @@ add_library(zlink_framework STATIC
   framework/src/runtime/streams/stream_runtime.cpp
   framework/src/runtime/streams/stream_host_service.cpp
   framework/src/runtime/timers/timer_runtime.cpp
+  framework/src/runtime/utils/uuid.cpp
   framework/src/runtime/transport/endpoint.cpp)
 add_library(zlink::framework ALIAS zlink_framework)
 set_target_properties(zlink_framework PROPERTIES EXPORT_NAME framework)
@@ -1581,6 +1583,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_E2E)
   add_executable(zlink_cpp_e2e_spot_service_gateway
     e2e/SpotService/Server/Gateway/main.cpp)
   target_link_libraries(zlink_cpp_e2e_spot_service_gateway PRIVATE
+    zlink::framework
     zlink::framework_locations_redis)
 
   add_executable(zlink_cpp_e2e_spot_service_multinode
@@ -1592,6 +1595,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_E2E)
   add_executable(zlink_cpp_e2e_spot_service_multinode_requester
     e2e/SpotService/Server/MultiNodeRequester/main.cpp)
   target_link_libraries(zlink_cpp_e2e_spot_service_multinode_requester PRIVATE
+    zlink::framework
     zlink::framework_locations_redis)
 
   add_executable(zlink_cpp_e2e_spot_service_client
@@ -1625,6 +1629,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_E2E)
   add_executable(zlink_cpp_e2e_automatic_turn_dispatch_session
     e2e/AutomaticTurnDispatch/Server/Session/main.cpp)
   target_link_libraries(zlink_cpp_e2e_automatic_turn_dispatch_session PRIVATE
+    zlink::framework
     zlink::framework_locations_redis)
   target_include_directories(zlink_cpp_e2e_automatic_turn_dispatch_session PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
@@ -1889,6 +1894,36 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_E2E)
     zlink::framework_locations_redis
     zlink::stream_connector)
   target_include_directories(zlink_cpp_e2e_submit_admission_role PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
+
+  add_executable(zlink_cpp_e2e_instance_spot_role
+    e2e/InstanceSpot/Server/role.cpp)
+  target_link_libraries(zlink_cpp_e2e_instance_spot_role PRIVATE
+    zlink::framework
+    zlink::framework_locations_redis)
+  target_include_directories(zlink_cpp_e2e_instance_spot_role PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
+
+  add_executable(zlink_cpp_e2e_instance_spot_client
+    e2e/InstanceSpot/Client/main.cpp)
+  target_link_libraries(zlink_cpp_e2e_instance_spot_client PRIVATE
+    zlink::http_client)
+  target_include_directories(zlink_cpp_e2e_instance_spot_client PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
+
+  add_executable(zlink_cpp_e2e_channel_egress_role
+    e2e/ChannelEgressRouting/Server/role.cpp)
+  target_link_libraries(zlink_cpp_e2e_channel_egress_role PRIVATE
+    zlink::framework
+    zlink::framework_locations_redis)
+  target_include_directories(zlink_cpp_e2e_channel_egress_role PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
+
+  add_executable(zlink_cpp_e2e_channel_egress_client
+    e2e/ChannelEgressRouting/Client/main.cpp)
+  target_link_libraries(zlink_cpp_e2e_channel_egress_client PRIVATE
+    zlink::http_client)
+  target_include_directories(zlink_cpp_e2e_channel_egress_client PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
 
   # Cross-language host (G6): the same role modes the peer languages' test

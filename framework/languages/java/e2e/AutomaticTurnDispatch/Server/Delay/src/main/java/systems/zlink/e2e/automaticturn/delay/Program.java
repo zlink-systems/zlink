@@ -8,7 +8,6 @@ import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.core.env.StandardEnvironment;
-import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.e2e.automaticturn.shared.Contracts;
 import systems.zlink.e2e.automaticturn.shared.DelayHandler;
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
@@ -44,13 +43,12 @@ public final class Program {
                 .traceLogFile(config.logDirectory() + "/delay-flow.log")
                 .traceLabel("java-atd-delay");
             options.addClientServerChannel(Contracts.DELAY_CHANNEL)
-                .enableServer(config.delayEndpoint())
-                .setRoutingId(RoutingId.from("delay-a"))
+                .server()
+                .listen(java.net.URI.create(config.delayEndpoint()).getPort())
                 .addRequestHandler(
                     DelayHandler.class,
                     Contracts.DelayReq.class,
-                    Contracts.DelayRes.class,
-                    "DelayReq");
+                    Contracts.DelayRes.class);
         };
     }
 

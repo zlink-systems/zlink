@@ -1598,6 +1598,14 @@ spot_manager_t spot_context_t::manager () const
     return spot_manager_t (_state->node, _state);
 }
 
+route_client_t spot_context_t::spot_route_client () const
+{
+    if (!_state || !_state->node || !_state->node->route_client) {
+        return route_client_t ();
+    }
+    return *_state->node->route_client;
+}
+
 channel_client_t spot_context_t::outbound () const
 {
     if (!_state->channel_runtime) {

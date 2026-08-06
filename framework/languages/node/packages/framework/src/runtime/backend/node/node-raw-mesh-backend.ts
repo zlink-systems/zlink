@@ -93,6 +93,7 @@ import type {
   ZLinkBackendObjectPlacement,
   ZLinkBackendMeshNode
 } from '../contracts';
+import type { ZLinkRawBindingPort } from './node-raw-binding-port';
 
 const MULTIPART_PACKET_NAME = SERVICE_FRAMEWORK_MULTIPART_PACKET_NAME;
 const MULTIPART_CONTENT_TYPE = SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE;
@@ -141,7 +142,8 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
 
   constructor(
     private readonly meshName: string,
-    routingId: string | undefined
+    routingId: string | undefined,
+    private readonly bindingPort?: ZLinkRawBindingPort
   ) {
     if (meshName.length === 0) throw new TypeError('MeshName must be non-empty.');
     if (routingId === undefined || routingId.length === 0) {
@@ -285,6 +287,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     const descriptor = this.createDescriptor();
     const runtime = new RawServiceMeshRuntime({
       descriptor,
+      bindingPort: this.bindingPort,
       onInboundMessageDropped: (surface, messageKind, reason) =>
         this.inboundMessageDropped?.(surface, messageKind, reason),
       onPeerNotRequired: (nodeRoutingId, endpoint) => {
@@ -1753,7 +1756,9 @@ class RawStreamSessionService implements StreamSessionService {
       const parts = decodeMultipartBuffers(decodeApplicationPayloadView(payload).payload);
       if (parts.length === 0) return false;
       let submit = operation.message(parts[0]!);
-      for (const part of parts.slice(1)) submit = submit.message(part);
+      for (let index = 1; index < parts.length; index++) {
+        submit = submit.message(parts[index]!);
+      }
       const delivered = submit.submit();
       if (!delivered) this.sessionTargets.delete(sessionRid);
       return delivered;

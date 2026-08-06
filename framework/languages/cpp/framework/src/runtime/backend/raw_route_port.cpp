@@ -193,8 +193,7 @@ std::optional<raw_received_t> raw_route_port_t::receive_if_ready (
              == 0) {
         return std::nullopt;
     }
-    zlink::received_t received;
-    const int result = _socket->recv (received, zlink::recv_flags_t::dontwait);
+    const int result = _socket->recv (_received, zlink::recv_flags_t::dontwait);
     if (result == static_cast<int> (zlink::recv_result_t::no_data)) {
         return std::nullopt;
     }
@@ -207,11 +206,14 @@ std::optional<raw_received_t> raw_route_port_t::receive_if_ready (
           + std::to_string (result) + " and errno "
           + std::to_string (errno));
     }
-    if (!received.routing_id ()) {
+    if (!_received.routing_id ()) {
         throw std::runtime_error ("raw ROUTER receive omitted source routing id");
     }
-    return raw_received_t{received.routing_id ()->to_bytes (), received.request_seq (),
-                          copy_parts (received.parts ())};
+    auto source_routing_id = _received.routing_id ()->to_bytes ();
+    auto request_sequence = _received.request_seq ();
+    auto parts = copy_parts (_received.parts ());
+    _received.close ();
+    return raw_received_t{std::move (source_routing_id), request_sequence, std::move (parts)};
 }
 
 std::optional<raw_received_t> raw_route_port_t::try_receive ()

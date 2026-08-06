@@ -36,6 +36,7 @@ namespace zlink::framework
 {
 
 class client_server_channel_server_builder_t;
+class app_t;
 
 class inbound_dispatch_options_t
 {
@@ -338,6 +339,41 @@ class metadata_policy_builder_t
     std::shared_ptr<detail::framework_options_state_t> _options;
 };
 
+class network_options_t
+{
+  public:
+    explicit network_options_t (std::shared_ptr<detail::framework_options_state_t> options) :
+        _options (std::move (options))
+    {
+    }
+
+    std::string bind_host () const { return _options->bind_host; }
+
+    network_options_t &set_bind_host (std::string host)
+    {
+        detail::require_non_blank (host, "network bind host is required");
+        _options->bind_host = std::move (host);
+        return *this;
+    }
+
+    std::optional<std::string> advertise_host () const
+    {
+        return _options->advertise_host;
+    }
+
+    network_options_t &set_advertise_host (std::optional<std::string> host)
+    {
+        if (host) {
+            detail::require_non_blank (*host, "network advertise host is required");
+        }
+        _options->advertise_host = std::move (host);
+        return *this;
+    }
+
+  private:
+    std::shared_ptr<detail::framework_options_state_t> _options;
+};
+
 class codec_registration_context_t
 {
   public:
@@ -423,7 +459,7 @@ class client_server_channel_builder_t
     {
         _server_port = port;
         _server_endpoint =
-          "tcp://" + _server_bind_host + ":"
+          "tcp://" + _server_bind_host_override.value_or (_options->bind_host) + ":"
           + (port == 0 ? "*" : std::to_string (port));
         apply_channel ();
     }
@@ -432,7 +468,7 @@ class client_server_channel_builder_t
     {
         detail::require_non_blank (
           host, "client/server server bind host is required");
-        _server_bind_host = std::move (host);
+        _server_bind_host_override = std::move (host);
         if (_server_port)
             listen (*_server_port);
     }
@@ -441,9 +477,11 @@ class client_server_channel_builder_t
     {
         detail::require_non_blank (
           host, "client/server server advertise host is required");
-        _server_advertise_host = std::move (host);
+        _server_advertise_host_override = std::move (host);
         _options->client_server_server_advertise_hosts[
-          _channel_name] = *_server_advertise_host;
+          _channel_name] = *_server_advertise_host_override;
+        _options->client_server_server_advertise_host_overrides[
+          _channel_name] = *_server_advertise_host_override;
     }
 
     void set_server_weight (int weight)
@@ -489,18 +527,23 @@ class client_server_channel_builder_t
     void apply_channel ()
     {
         const auto channel_name = _channel_name;
-        const auto server_endpoint = _server_endpoint;
+        const auto options = _options;
+        const auto server_port = _server_port;
+        const auto server_bind_host_override = _server_bind_host_override;
         const auto server_weight = _server_weight;
         const auto client_enabled = _client_enabled;
         const auto client_endpoints =
           _options->client_endpoint_connections[_channel_name].list_connections ();
-        if (!server_endpoint.empty ()) {
+        if (server_port) {
             _options->client_server_server_actions[channel_name] =
-              [server_endpoint,
+              [options, server_port, server_bind_host_override,
                server_weight] (channel_builder_t &channel) {
                   auto server = channel.enable_server ();
                   server.service_weight (server_weight);
-                  server.bind (server_endpoint);
+                  const auto endpoint =
+                    "tcp://" + server_bind_host_override.value_or (options->bind_host) + ":"
+                    + (*server_port == 0 ? "*" : std::to_string (*server_port));
+                  server.bind (endpoint);
               };
         }
         if (client_enabled) {
@@ -547,8 +590,8 @@ class client_server_channel_builder_t
     handler_registry_t *_handlers;
     serializer_registry_t *_serializers;
     std::string _server_endpoint;
-    std::string _server_bind_host = "0.0.0.0";
-    std::optional<std::string> _server_advertise_host;
+    std::optional<std::string> _server_bind_host_override;
+    std::optional<std::string> _server_advertise_host_override;
     std::optional<std::uint16_t> _server_port;
     int _server_weight = 100;
     bool _client_enabled = false;
@@ -711,14 +754,73 @@ class fanout_channel_builder_t
     fanout_channel_builder_t &enable_publisher (std::string endpoint)
     {
         detail::require_non_blank (endpoint, "fanout publisher endpoint is required");
+        _publisher_port.reset ();
         _publisher_endpoint = std::move (endpoint);
+        apply ();
+        return *this;
+    }
+
+    fanout_channel_builder_t &enable_publisher (std::uint16_t port = 0)
+    {
+        _publisher_port = port;
+        _publisher_endpoint =
+          "tcp://" + _publisher_bind_host_override.value_or (_options->bind_host) + ":"
+          + std::to_string (port);
+        apply ();
+        return *this;
+    }
+
+    fanout_channel_builder_t &set_bind_host (std::string host)
+    {
+        detail::require_non_blank (host, "fanout publisher bind host is required");
+        _publisher_bind_host_override = std::move (host);
+        if (_publisher_port) {
+            _publisher_endpoint =
+              "tcp://" + _publisher_bind_host_override.value_or (_options->bind_host) + ":"
+              + std::to_string (*_publisher_port);
+        }
+        apply ();
+        return *this;
+    }
+
+    fanout_channel_builder_t &set_advertise_host (std::string host)
+    {
+        detail::require_non_blank (host, "fanout publisher advertise host is required");
+        _publisher_advertise_host_override = std::move (host);
+        _options->fanout_publisher_advertise_hosts[_channel_name] =
+          *_publisher_advertise_host_override;
+        _options->fanout_publisher_advertise_host_overrides[_channel_name] =
+          *_publisher_advertise_host_override;
         apply ();
         return *this;
     }
 
     fanout_channel_builder_t &set_routing_id (zlink::routing_id_t routing_id)
     {
+        if (_automatic_routing_id_prefix) {
+            throw framework_exception_t (
+              framework_error_kind_t::protocol_error,
+              "Fanout publisher cannot configure both a fixed routing id and an automatic routing id prefix");
+        }
         _routing_id = std::move (routing_id);
+        apply ();
+        return *this;
+    }
+
+    fanout_channel_builder_t &
+    set_automatic_routing_id_prefix (std::string prefix)
+    {
+        if (!detail::is_valid_automatic_routing_id_prefix (prefix)) {
+            throw framework_exception_t (
+              framework_error_kind_t::protocol_error,
+              "Fanout automatic routing id prefix must contain 1..64 ASCII letters, digits, '.', '_' or '-'");
+        }
+        if (_routing_id) {
+            throw framework_exception_t (
+              framework_error_kind_t::protocol_error,
+              "Fanout publisher cannot configure both a fixed routing id and an automatic routing id prefix");
+        }
+        _automatic_routing_id_prefix = std::move (prefix);
         apply ();
         return *this;
     }
@@ -754,12 +856,21 @@ class fanout_channel_builder_t
         return *this;
     }
 
+    fanout_channel_builder_t &add_handler_group (std::string group_name)
+    {
+        return use_handler_group (std::move (group_name));
+    }
+
   private:
     void apply ()
     {
         const auto channel_name = _channel_name;
+        const auto options = _options;
         const auto publisher_endpoint = _publisher_endpoint;
+        const auto publisher_port = _publisher_port;
+        const auto publisher_bind_host_override = _publisher_bind_host_override;
         const auto routing_id = _routing_id;
+        const auto automatic_routing_id_prefix = _automatic_routing_id_prefix;
         const auto subscriber_enabled = _subscriber_enabled;
         const auto subscriber_endpoints =
           _options->subscriber_endpoint_connections[_channel_name].list_connections ();
@@ -770,22 +881,37 @@ class fanout_channel_builder_t
         } else {
             _options->fanout_channels_with_subscriber.erase (channel_name);
         }
-        if (!publisher_endpoint.empty ()) {
+        const auto publisher_enabled = publisher_port.has_value () || !publisher_endpoint.empty ();
+        if (publisher_enabled) {
             _options->fanout_channels_with_publisher.insert (channel_name);
         } else {
             _options->fanout_channels_with_publisher.erase (channel_name);
         }
         _options->set_zlink_action ("fanout_channel:" + channel_name,
-                                    [channel_name, publisher_endpoint, subscriber_enabled,
+                                    [channel_name, options, publisher_endpoint,
+                                     publisher_port, publisher_bind_host_override,
+                                     subscriber_enabled,
                                      subscriber_endpoints, routing_id,
+                                     automatic_routing_id_prefix,
                                      subscriber_uses_discovery] (zlink_builder_t &zlink) {
                                         auto channel = zlink.channel (channel_name);
-                                        if (!publisher_endpoint.empty ()) {
+                                        if (publisher_port.has_value () || !publisher_endpoint.empty ()) {
                                             auto publisher = channel.enable_publisher ();
                                             if (routing_id) {
                                                 publisher.set_routing_id (*routing_id);
+                                            } else if (automatic_routing_id_prefix) {
+                                                publisher.set_routing_id (
+                                                  zlink::routing_id_t::from (
+                                                    *automatic_routing_id_prefix + "-"
+                                                    + detail::new_uuid_v4 ()));
                                             }
-                                            publisher.bind (publisher_endpoint);
+                                            const auto endpoint = publisher_port
+                                              ? "tcp://"
+                                                  + publisher_bind_host_override.value_or (
+                                                      options->bind_host)
+                                                  + ":" + std::to_string (*publisher_port)
+                                                  : publisher_endpoint;
+                                            publisher.bind (endpoint);
                                         }
                                         if (subscriber_enabled) {
                                             auto subscriber = channel.enable_subscriber ();
@@ -802,7 +928,11 @@ class fanout_channel_builder_t
     std::shared_ptr<detail::framework_options_state_t> _options;
     std::shared_ptr<detail::handler_group_options_state_t> _handler_groups;
     std::string _publisher_endpoint;
+    std::optional<std::uint16_t> _publisher_port;
+    std::optional<std::string> _publisher_bind_host_override;
+    std::optional<std::string> _publisher_advertise_host_override;
     std::optional<zlink::routing_id_t> _routing_id;
+    std::optional<std::string> _automatic_routing_id_prefix;
     bool _subscriber_enabled = false;
 };
 
@@ -876,6 +1006,11 @@ class route_mesh_channel_builder_t
         _route_handler_groups.push_back (std::move (group_name));
         apply ();
         return *this;
+    }
+
+    route_mesh_channel_builder_t &add_handler_group (std::string group_name)
+    {
+        return use_handler_group (std::move (group_name));
     }
 
     template <typename TOwner, typename TMessage>
@@ -992,8 +1127,41 @@ class stream_node_options_builder_t
     stream_node_options_builder_t &bind (std::string endpoint)
     {
         detail::require_non_blank (endpoint, "STREAM bind endpoint is required");
+        _port.reset ();
         _endpoint = std::move (endpoint);
         _options->stream_nodes_with_bind.insert (_stream_name);
+        apply ();
+        return *this;
+    }
+
+    stream_node_options_builder_t &bind (std::uint16_t port = 0)
+    {
+        _port = port;
+        _endpoint =
+          "tcp://" + _bind_host_override.value_or (_options->bind_host) + ":"
+          + std::to_string (port);
+        _options->stream_nodes_with_bind.insert (_stream_name);
+        apply ();
+        return *this;
+    }
+
+    stream_node_options_builder_t &set_bind_host (std::string host)
+    {
+        detail::require_non_blank (host, "STREAM bind host is required");
+        _bind_host_override = std::move (host);
+        if (_port) {
+            _endpoint =
+              "tcp://" + _bind_host_override.value_or (_options->bind_host) + ":"
+              + std::to_string (*_port);
+        }
+        apply ();
+        return *this;
+    }
+
+    stream_node_options_builder_t &set_advertise_host (std::string host)
+    {
+        detail::require_non_blank (host, "STREAM advertise host is required");
+        _advertise_host_override = std::move (host);
         apply ();
         return *this;
     }
@@ -1080,19 +1248,34 @@ class stream_node_options_builder_t
         }
         const auto stream_name = _stream_name;
         const auto endpoint = _endpoint;
+        const auto port = _port;
+        const auto bind_host_override = _bind_host_override;
         const auto session_name = _session_name;
         const auto max_message_size = _socket_config.max_message_size;
         const auto tls_certificate_file = _tls_certificate_file;
         const auto tls_private_key_file = _tls_private_key_file;
         const auto tls_require_client_certificate = _tls_require_client_certificate;
+        const auto advertise_host_override = _advertise_host_override;
+        const auto options = _options;
         _options->set_zlink_action (
           "stream_node:" + stream_name,
-          [stream_name, endpoint, session_name, max_message_size, tls_certificate_file,
-           tls_private_key_file, tls_require_client_certificate] (zlink_builder_t &zlink) {
+          [stream_name, endpoint, port, bind_host_override, options, session_name,
+           max_message_size, tls_certificate_file,
+           tls_private_key_file, tls_require_client_certificate,
+           advertise_host_override] (zlink_builder_t &zlink) {
               auto stream = zlink.stream (stream_name);
               stream.set_max_message_size (max_message_size);
-              if (!endpoint.empty ()) {
+              if (port) {
+                  stream.bind (
+                    "tcp://" + bind_host_override.value_or (options->bind_host) + ":"
+                    + std::to_string (*port));
+              } else if (!endpoint.empty ()) {
                   stream.bind (endpoint);
+              }
+              const auto advertise_host =
+                advertise_host_override ? advertise_host_override : options->advertise_host;
+              if (advertise_host) {
+                  stream.set_advertise_host (*advertise_host);
               }
               if (!tls_certificate_file.empty () || !tls_private_key_file.empty ()) {
                   stream.configure_tls_server (tls_certificate_file, tls_private_key_file,
@@ -1108,6 +1291,9 @@ class stream_node_options_builder_t
     service_collection_t *_services;
     std::shared_ptr<detail::framework_options_state_t> _options;
     std::string _endpoint;
+    std::optional<std::uint16_t> _port;
+    std::optional<std::string> _bind_host_override;
+    std::optional<std::string> _advertise_host_override;
     std::string _session_name;
     std::string _tls_certificate_file;
     std::string _tls_private_key_file;
@@ -1177,6 +1363,7 @@ class zlink_framework_options_t
     {
         _inbound_dispatch.emplace (_options);
         _options->http.bind_services (services, serializers);
+        _network.emplace (_options);
         if (!services.contains (std::type_index (typeid (message_metadata_policy_t)))) {
             auto options = _options;
             services.add_factory<message_metadata_policy_t> (
@@ -1195,6 +1382,8 @@ class zlink_framework_options_t
     codec_options_builder_t codecs () { return codec_options_builder_t (*_serializers); }
 
     metadata_policy_builder_t metadata () { return metadata_policy_builder_t (_options); }
+
+    network_options_t &configure_network () { return *_network; }
 
     dispatch_options_t &configure_dispatch () { return _options->dispatch; }
 
@@ -1331,12 +1520,6 @@ class zlink_framework_options_t
         return _options->client_endpoint_connections;
     }
 
-    const std::map<std::string, std::string> &
-    client_server_server_advertise_hosts () const noexcept
-    {
-        return _options->client_server_server_advertise_hosts;
-    }
-
     std::map<std::string, endpoint_connections_t> &
     subscriber_endpoint_connections () const noexcept
     {
@@ -1364,6 +1547,34 @@ class zlink_framework_options_t
         if (_options->applied) {
             return;
         }
+        for (const auto &channel_name : _options->client_server_channels) {
+            const auto override_host =
+              _options->client_server_server_advertise_host_overrides.find (channel_name);
+            if (override_host !=
+                _options->client_server_server_advertise_host_overrides.end ()) {
+                _options->client_server_server_advertise_hosts[channel_name] =
+                  override_host->second;
+            } else if (_options->advertise_host) {
+                _options->client_server_server_advertise_hosts[channel_name] =
+                  *_options->advertise_host;
+            } else {
+                _options->client_server_server_advertise_hosts.erase (channel_name);
+            }
+        }
+        for (const auto &channel_name : _options->fanout_channels_with_publisher) {
+            const auto override_host =
+              _options->fanout_publisher_advertise_host_overrides.find (channel_name);
+            if (override_host !=
+                _options->fanout_publisher_advertise_host_overrides.end ()) {
+                _options->fanout_publisher_advertise_hosts[channel_name] =
+                  override_host->second;
+            } else if (_options->advertise_host) {
+                _options->fanout_publisher_advertise_hosts[channel_name] =
+                  *_options->advertise_host;
+            } else {
+                _options->fanout_publisher_advertise_hosts.erase (channel_name);
+            }
+        }
         _options->http.validate ();
         detail::validate_framework_options (*_options, *_handler_groups);
         _options->worker.seal ();
@@ -1384,6 +1595,18 @@ class zlink_framework_options_t
     }
 
   private:
+    friend class app_t;
+
+    decltype (auto) runtime_client_server_advertise_hosts () const noexcept
+    {
+        return (_options->client_server_server_advertise_hosts);
+    }
+
+    decltype (auto) runtime_fanout_advertise_hosts () const noexcept
+    {
+        return (_options->fanout_publisher_advertise_hosts);
+    }
+
     void register_location_store_instance (std::shared_ptr<location_store_t> store)
     {
         _services->add_factory<location_store_t> (
@@ -1399,6 +1622,7 @@ class zlink_framework_options_t
     zlink_builder_t *_zlink;
     std::shared_ptr<detail::handler_group_options_state_t> _handler_groups;
     std::shared_ptr<detail::framework_options_state_t> _options;
+    std::optional<network_options_t> _network;
     std::optional<inbound_dispatch_options_t> _inbound_dispatch;
     std::size_t _handler_coroutine_workers = 0;
 };

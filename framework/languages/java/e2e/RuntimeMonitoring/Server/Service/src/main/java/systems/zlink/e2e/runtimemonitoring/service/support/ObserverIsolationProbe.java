@@ -1,6 +1,7 @@
 package systems.zlink.e2e.runtimemonitoring.service.support;
 
 import java.util.concurrent.Flow;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import systems.zlink.e2e.runtimemonitoring.shared.Contracts;
@@ -13,6 +14,9 @@ public final class ObserverIsolationProbe {
     private final AtomicLong normalLatestSequence = new AtomicLong();
     private final AtomicLong slowLatestSequence = new AtomicLong();
     private final AtomicBoolean slowFailed = new AtomicBoolean();
+    private final AtomicBoolean slowEntered = new AtomicBoolean();
+    private final AtomicBoolean slowReleased = new AtomicBoolean();
+    private final CompletableFuture<Void> slowGate = new CompletableFuture<>();
     private volatile Flow.Subscription slowSubscription;
     private volatile boolean started;
 
@@ -49,12 +53,15 @@ public final class ObserverIsolationProbe {
                 @Override
                 public void onSubscribe(Flow.Subscription subscription) {
                     slowSubscription = subscription;
+                    subscription.request(1);
                 }
 
                 @Override
                 public void onNext(ZLinkObservedStatus<ZLinkMeshNodeSnapshot> observed) {
                     ZLinkMeshNodeSnapshot status = observed.status();
                     slowLatestSequence.set(status.sequence());
+                    slowEntered.set(true);
+                    slowGate.join();
                     throw new IllegalStateException("intentional slow observer failure");
                 }
 
@@ -71,10 +78,8 @@ public final class ObserverIsolationProbe {
     }
 
     public Contracts.ObserverIsolationStatus release() {
-        Flow.Subscription subscription = slowSubscription;
-        if (subscription != null) {
-            subscription.request(1);
-        }
+        slowReleased.set(true);
+        slowGate.complete(null);
         return status();
     }
 
@@ -84,6 +89,8 @@ public final class ObserverIsolationProbe {
             normalEventCount.get(),
             normalLatestSequence.get(),
             slowLatestSequence.get(),
-            slowFailed.get());
+            slowFailed.get(),
+            slowEntered.get(),
+            slowReleased.get());
     }
 }

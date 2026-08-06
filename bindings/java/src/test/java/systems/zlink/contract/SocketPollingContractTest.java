@@ -134,6 +134,11 @@ public class SocketPollingContractTest {
                             callbackFailure.set(failure);
                         } finally {
                             Message.closeAll(received);
+                            // Closing from the completion callback is a
+                            // reentrant poller destroy. Core must report
+                            // BUSY until wait returns, and the binding must
+                            // finish the close after that wait.
+                            clientPoller.close();
                             completed.countDown();
                         }
                         });

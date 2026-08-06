@@ -138,7 +138,7 @@ case "${SCENARIO}" in
   RC-B5)
     run_mismatch_scenario=true
     ;;
-  RC-A1|RC-A2|RC-A3|RC-A4|RC-A5|RC-B1|RC-B2|RC-B3|RC-B4)
+  RC-A1|RC-A2|RC-A3|RC-A4|RC-A5|RC-B1|RC-B2|RC-B3|RC-B4|RC-B6)
     run_main_scenarios=true
     ;;
   *)

@@ -3,7 +3,6 @@ export interface MultiNodeOptions {
   readonly httpUrl: string;
   readonly routeEndpoint: string;
   readonly spotRouterEndpoint: string;
-  readonly spotPubEndpoint?: string;
   readonly peerSpotRouterEndpoint?: string;
   readonly redisEndpoint?: string;
   readonly redisKeyPrefix?: string;
@@ -19,7 +18,6 @@ export function validateMultiNodeOptions(value: unknown): MultiNodeOptions {
     httpUrl: requiredString(values, 'httpUrl'),
     routeEndpoint: requiredString(values, 'routeEndpoint'),
     spotRouterEndpoint: requiredString(values, 'spotRouterEndpoint'),
-    spotPubEndpoint: optionalString(values, 'spotPubEndpoint'),
     peerSpotRouterEndpoint: optionalString(values, 'peerSpotRouterEndpoint'),
     redisEndpoint: optionalString(values, 'redisEndpoint'),
     redisKeyPrefix: optionalString(values, 'redisKeyPrefix'),

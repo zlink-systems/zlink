@@ -9,10 +9,12 @@ import {
   type ZLinkFrameworkRelocationResult,
   type ZLinkFrameworkRuntime,
   type ZLinkRouteMeshRuntime,
+  type ZLinkLocationRuntimeQuery,
   type ZLinkFanoutClient,
-  type ZLinkHandlerContext,
-  type ZLinkPublishContext,
+  type ZLinkMessageContext,
+  type ZLinkPublishMessageContext,
   type ZLinkFanoutHandler,
+  type ZLinkActor,
   type ZLinkSpot,
   type ZLinkSpotContext,
   type ZLinkSpotManager,
@@ -20,8 +22,6 @@ import {
   type ZLinkSpotRequestHandler
 } from '@zlink-systems/framework';
 import type {
-  ZLinkActorJoinRequest,
-  ZLinkActorMembership,
   ZLinkMessage,
   ZLinkSpotActorJoinResult,
   ZLinkSpotTimerHandler,
@@ -32,6 +32,7 @@ import { ZLinkRedisLocationStore } from '@zlink-systems/framework-locations-redi
 import {
   ZLINK_FRAMEWORK_RUNTIME,
   ZLINK_ROUTE_MESH_RUNTIME,
+  ZLINK_LOCATION_RUNTIME_QUERY,
   ZLINK_FANOUT_CLIENT,
   ZLINK_SPOT_MANAGER,
   ZLINK_SPOT_OUTBOUND,
@@ -68,8 +69,8 @@ process.once('SIGINT', () => { stopping = true; });
 process.once('SIGTERM', () => { stopping = true; });
 
 @Injectable({ scope: Scope.TRANSIENT })
-class WorkflowSpot implements ZLinkSpot {
-  readonly context!: ZLinkSpotContext;
+class WorkflowSpot implements ZLinkSpot<ZLinkActor> {
+  readonly context!: ZLinkSpotContext<ZLinkActor, WorkflowSpot>;
   private replayed = false;
   private timer?: ZLinkTimer;
 
@@ -87,15 +88,15 @@ class WorkflowSpot implements ZLinkSpot {
     return { accepted: true };
   }
 
-  async onActorJoin(_actor: ZLinkActorJoinRequest, _request: ZLinkMessage): Promise<ZLinkSpotActorJoinResult> {
+  async onActorJoin(_actorId: string, _request: ZLinkMessage): Promise<ZLinkSpotActorJoinResult> {
     return { accepted: false };
   }
 
-  async onJoinedActor(_actor: ZLinkActorMembership): Promise<void> {}
+  async onJoinedActor(_actor: ZLinkActor): Promise<void> {}
 
-  async onLeaveActor(_actor: ZLinkActorMembership): Promise<void> {}
+  async onLeaveActor(_actor: ZLinkActor): Promise<void> {}
 
-  async onDisconnectActor(_actor: ZLinkActorMembership): Promise<void> {}
+  async onDisconnectActor(_actor: ZLinkActor): Promise<void> {}
 
   async completeTimer(): Promise<void> {
     const timer = this.timer;
@@ -113,7 +114,7 @@ class WorkflowSpot implements ZLinkSpot {
 @Injectable()
 @ZLinkPacket('WorkflowApplyReq')
 class WorkflowApplyHandler implements ZLinkSpotRequestHandler<WorkflowSpot, WorkflowApplyReq, WorkflowApplyRes> {
-  async handle(spot: WorkflowSpot, request: WorkflowApplyReq, context: ZLinkHandlerContext): Promise<WorkflowApplyRes> {
+  async handle(spot: WorkflowSpot, request: WorkflowApplyReq, context: ZLinkMessageContext): Promise<WorkflowApplyRes> {
     void context;
     const result = spot.apply(request);
     evidence.add('workflow', request.orderId, 'applied', `${result.value}|node=${result.nodeRid}`);
@@ -123,7 +124,7 @@ class WorkflowApplyHandler implements ZLinkSpotRequestHandler<WorkflowSpot, Work
 
 @Injectable()
 class ProjectionHandler implements ZLinkFanoutHandler<WorkflowProjected> {
-  async handle(message: WorkflowProjected, context: ZLinkPublishContext): Promise<void> {
+  async handle(message: WorkflowProjected, context: ZLinkPublishMessageContext): Promise<void> {
     evidence.add('projection', message.orderId, 'received', `${message.value}|source=${message.sourceRid}|topic=${context.topic}`);
   }
 }
@@ -169,6 +170,7 @@ Module({
           .traceLabel(options.rid);
         builder.addFanoutChannel(WORKFLOW_FANOUT)
           .enablePublisher(options.fanoutEndpoint)
+          .routingId(options.rid)
           .enableSubscriber()
           .addPublishHandler('WorkflowProjected', ProjectionHandler);
         const mesh = builder.addRouteMesh(WORKFLOW_MESH)
@@ -194,10 +196,17 @@ async function main(): Promise<void> {
   fanoutClient = fanout;
   const routeMeshRuntime = app.get(ZLINK_ROUTE_MESH_RUNTIME, { strict: false }) as ZLinkRouteMeshRuntime;
   const frameworkRuntime = app.get(ZLINK_FRAMEWORK_RUNTIME, { strict: false }) as ZLinkFrameworkRuntime;
+  const locations = app.get(ZLINK_LOCATION_RUNTIME_QUERY, { strict: false }) as ZLinkLocationRuntimeQuery;
   let drainResult: ZLinkFrameworkRelocationResult | undefined;
   const server = await startHttpServer(options.httpUrl, [
     { method: 'GET', path: '/health', handle: () => ({ status: 'ok', rid: options.rid }) },
     { method: 'GET', path: '/evidence', handle: () => evidence.snapshot() },
+    {
+      method: 'GET', path: '/location/topology', handle: () => locations.listTopology(
+        {},
+        { pageSize: 100 }
+      )
+    },
     createFlowLogRoute(options.logDir, options.rid),
     { method: 'GET', path: '/metrics', handle: () => metrics.snapshot() },
     { method: 'GET', path: '/drain/status', handle: () => ({
@@ -206,17 +215,24 @@ async function main(): Promise<void> {
     {
       method: 'POST', path: '/workflows', handle: async (body) => {
         const request = body as WorkflowApplyReq;
-        const created = await spots.getOrCreate(WorkflowSpot, request.orderId, request);
-        const handle = await spots.find(String(created.spotId));
+        const created = await spots
+          .getOrCreate(request.orderId, WorkflowSpot.name)
+          .inMesh(WORKFLOW_MESH)
+          .request(request)
+          .submit();
+        const handle = await spots.find(String(created.spot.spotId));
         if (handle === undefined) throw new Error(`Workflow '${request.orderId}' was not resolved.`);
-        const result = await outbound.requestToSpot(handle, new WorkflowApplyReq(request.orderId, request.value))
+        const result = await outbound.requestToSpot(handle.spotId, new WorkflowApplyReq(request.orderId, request.value))
           .timeout(5000).submit<WorkflowApplyRes>();
         await fanout.publish(WORKFLOW_FANOUT,
           new WorkflowProjected(result.orderId, result.value, result.nodeRid)).submit();
         return result;
       }
     },
-    { method: 'POST', path: /^\/workflows\/([^/]+)\/close$/, handle: (_body, match) => spots.close(match![1]) },
+    { method: 'POST', path: /^\/workflows\/([^/]+)\/close$/, handle: async (_body, match) => {
+      const handle = await spots.find(match![1]);
+      return { closed: handle === undefined ? false : await spots.close(handle) };
+    } },
     {
       method: 'POST', path: '/drain', handle: (body) => {
         const deadlineMs = Number((body as { deadlineMs?: number }).deadlineMs ?? 30000);

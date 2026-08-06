@@ -55,16 +55,13 @@
 | message flow marker | `TICTACTOE_LOG_DIR` grep | validation | done | runner가 role별 flow log의 `message flow` marker를 확인한다. |
 | final marker | `run_sample.sh` | validation | done | client의 `tictactoe completed` 계열 marker와 `PASS TicTacToe.Java`를 확인한다. |
 
-## 남은 확인 사항
+## 현재 결론
 
-Java `TicTacToe`의 자동 등록 구현과 전체 runner는 완료됐다. 다만 쓰기 범위 밖의
-`SampleReleaseGateContractTest`가 아직 package scan을 요구하므로 release gate는 실패한다. 이 assertion을
-수동 등록 기준으로 갱신하기 전까지 SMP-JV-30의 저장소 전체 검증은 `partial`이다. 이후 공통 샘플 문서나
-release gate가 바뀌면 이 문서도 같은 기준으로 다시 대조한다.
+Java `TicTacToe`의 자동 등록 구현과 전체 runner가 완료됐다. `SampleReleaseGateContractTest`의
+자동 등록·public API 검증도 현재 checkout에서 16개 테스트 모두 통과했다.
 
 ## 검증
 
 - `nice -n 15 timeout 600s ./run_sample.sh` 통과: `PASS TicTacToe.Java`
 - runner가 host·guest·observer의 `stream-inbound sample=TicTacToe` marker와 RESPONSE·SEND 수신을 확인했다.
-- `SampleReleaseGateContractTest`는 16개 중 15개가 통과했다. 남은 1개는 Java TicTacToe에 package scan을
-  요구하는 기존 assertion(`SampleReleaseGateContractTest:790-827`)이다.
+- `SampleReleaseGateContractTest`는 16개 모두 통과했다.

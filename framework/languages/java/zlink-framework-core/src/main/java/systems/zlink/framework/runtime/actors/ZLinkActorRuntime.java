@@ -2120,6 +2120,51 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         return locations.findStoredSpotRef(actorId);
     }
 
+    @Override
+    public CompletionStage<Boolean> destroy(ActorRef actor) {
+        rejectAfterRelocationReady("Actor destroy");
+        if (actor == null) {
+            throw new ZLinkConfigurationException("actor is required");
+        }
+
+        ZLinkActor current;
+        DefaultActorContext context;
+        synchronized (this) {
+            current = actorRegistry.actor(actor.actorId());
+            if (current == null) {
+                return CompletableFuture.completedFuture(false);
+            }
+            context = actorRegistry.context(current);
+            if (context == null || context.actorRef() == null) {
+                return CompletableFuture.completedFuture(false);
+            }
+
+            ZLinkBackendActorRef currentRef = context.actorRef();
+            if (!currentRef.actorId().equals(actor.actorId())
+                || !currentRef.nodeRid().equals(actor.nodeRid())
+                || currentRef.generation() != actor.objectGeneration()
+                || !meshName.equals(actor.meshName())) {
+                return CompletableFuture.failedFuture(new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                    "actor ref is not current for this runtime: " + actor.actorId()));
+            }
+            if (context.moving() || actorRegistry.isPendingTransfer(actor.actorId())) {
+                return CompletableFuture.failedFuture(new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.UNAVAILABLE,
+                    "actor is sealed for relocation: " + actor.actorId()));
+            }
+            if (context.currentSpot() != null) {
+                return CompletableFuture.failedFuture(new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                    "actor must leave its current Spot before destroy: "
+                        + actor.actorId()));
+            }
+        }
+
+        return destroyFromEntrySpot(actor.nodeRid(), current)
+            .thenApply(ignored -> true);
+    }
+
     CompletionStage<Optional<ActorRef>> findCommittedRemoteActor(
         String actorId,
         RoutingId targetNodeRid,
@@ -3683,7 +3728,13 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             spotNode.destroyActor(actorRef, defaultRequestTimeout)
                 .thenCompose(ignored -> context.disconnectBoundSessionForDestroy()
                     .exceptionally(error -> null))
-                .thenCompose(ignored -> locations.releaseActor(actorType, actorId))
+                .thenCompose(ignored -> locations.releaseActorExact(
+                    actorType,
+                    new ActorRef(
+                        actorId,
+                        actorRef.generation(),
+                        meshName,
+                        actorRef.nodeRid())))
                 .thenRun(() -> {
                     synchronized (this) {
                         removeActorSessionRouteForContext(context);

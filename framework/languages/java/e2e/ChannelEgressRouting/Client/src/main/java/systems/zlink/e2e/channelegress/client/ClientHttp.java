@@ -5,7 +5,7 @@ import systems.zlink.httpclient.HttpResponse;
 import systems.zlink.httpclient.ZLinkHttpClient;
 
 final class ClientHttp {
-    private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(10);
+    private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(30);
 
     private ClientHttp() {
     }

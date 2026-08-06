@@ -11,6 +11,7 @@ import systems.zlink.internal.ContractAccess;
 
 import systems.zlink.contracts.sockets.Socket;
 import systems.zlink.contracts.errors.ZlinkException;
+import systems.zlink.contracts.errors.CloseResult;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
@@ -33,6 +34,7 @@ public final class NativePoller implements Poller {
     private MemorySegment waitEvents = MemorySegment.NULL;
     private MemorySegment waitErrorOut = MemorySegment.NULL;
     private int waitEventsCapacity;
+    private boolean closeRequested;
 
     public static Poller create() {
         return new NativePoller();
@@ -185,27 +187,55 @@ public final class NativePoller implements Poller {
             return 0;
         }
         MemorySegment nativeEvents = waitEvents(events.capacity());
-        int readyCount = Native.pollerWait(handle, nativeEvents, events.capacity(),
-            DurationConversions.toIntMillis(timeout, "timeout"), waitErrorOut);
-        if (readyCount < 0)
-            throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
-        for (int i = 0; i < readyCount; i++) {
-            ContractAccess.pollEventsMarkEvent(events, i,
-                NativePollEvents.sourceKindValue(nativeEvents, i),
-                NativePollEvents.slot(nativeEvents, i),
-                NativePollEvents.revents(nativeEvents, i),
-                NativePollEvents.fd(nativeEvents, i));
+        try {
+            int readyCount = Native.pollerWait(handle, nativeEvents, events.capacity(),
+                DurationConversions.toIntMillis(timeout, "timeout"), waitErrorOut);
+            if (readyCount < 0)
+                throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
+            for (int i = 0; i < readyCount; i++) {
+                ContractAccess.pollEventsMarkEvent(events, i,
+                    NativePollEvents.sourceKindValue(nativeEvents, i),
+                    NativePollEvents.slot(nativeEvents, i),
+                    NativePollEvents.revents(nativeEvents, i),
+                    NativePollEvents.fd(nativeEvents, i));
+            }
+            ContractAccess.pollEventsMarkReadyCount(events, readyCount);
+            return readyCount;
+        } finally {
+            if (closeRequested) {
+                closeAfterWait();
+            }
         }
-        ContractAccess.pollEventsMarkReadyCount(events, readyCount);
-        return readyCount;
     }
 
     @Override
     public void close() {
         if (handle == null || handle.address() == 0)
             return;
-        Native.pollerDestroy(handle);
+        int result = Native.pollerDestroy(handle);
+        if (result == CloseResult.BUSY.value()) {
+            closeRequested = true;
+            return;
+        }
+        if (result != CloseResult.OK.value())
+            throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
+        finishClosed();
+    }
+
+    private void closeAfterWait() {
+        if (handle == null || handle.address() == 0)
+            return;
+        int result = Native.pollerDestroy(handle);
+        if (result == CloseResult.BUSY.value())
+            return;
+        if (result != CloseResult.OK.value())
+            throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
+        finishClosed();
+    }
+
+    private void finishClosed() {
         handle = MemorySegment.NULL;
+        closeRequested = false;
         unregisterAllExternalProgress();
         items.clear();
         closeWaitArena();

@@ -301,6 +301,9 @@ private class JavaActorManager(
         actorType: String,
     ): ZLinkKotlinActorCreateCall =
         JavaActorGetOrCreateCall(manager.getOrCreate(actorId, actorType))
+
+    override suspend fun destroy(actor: systems.zlink.framework.actors.ActorRef): Boolean =
+        awaitFrameworkStage(manager.destroy(actor))
 }
 
 private class JavaSpotCreateCall(

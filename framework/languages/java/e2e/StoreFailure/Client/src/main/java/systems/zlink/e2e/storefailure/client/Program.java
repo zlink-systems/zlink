@@ -4,12 +4,17 @@ import systems.zlink.e2e.storefailure.client.scenarios.SfA1BaselineScenario;
 import systems.zlink.e2e.storefailure.client.scenarios.SfA2PollingFallbackScenario;
 import systems.zlink.e2e.storefailure.client.scenarios.SfB1FailStaticScenario;
 import systems.zlink.e2e.storefailure.client.scenarios.SfB2GraceExceededScenario;
+import systems.zlink.e2e.storefailure.client.scenarios.SfB2RecoveredScenario;
+import systems.zlink.e2e.storefailure.client.scenarios.SfB3OwnerLeaseScenario;
+import systems.zlink.e2e.storefailure.client.scenarios.SfB3TransportScenario;
 import systems.zlink.e2e.storefailure.client.scenarios.SfC1CrashLeaseExpiryScenario;
 import systems.zlink.e2e.storefailure.client.scenarios.SfC2GracefulRemovalScenario;
+import systems.zlink.e2e.storefailure.client.scenarios.SfC3ReplacementOwnerScenario;
 import systems.zlink.e2e.storefailure.client.scenarios.SfD1ShortOutageRecoveryScenario;
 import systems.zlink.e2e.storefailure.client.scenarios.SfD2LongOutageRecoveryScenario;
 import systems.zlink.e2e.storefailure.client.scenarios.SfD3StatusTransitionScenario;
 import systems.zlink.e2e.storefailure.client.scenarios.SfE1StoreDelayNonBlockingScenario;
+import systems.zlink.e2e.storefailure.client.scenarios.SfF9OldLifecycleCleanupScenario;
 import systems.zlink.e2e.storefailure.client.scenarios.SfRecoveredScenario;
 import systems.zlink.e2e.storefailure.client.scenarios.SfRecoveredWithPeersScenario;
 import systems.zlink.e2e.storefailure.client.support.ClientContext;
@@ -48,9 +53,13 @@ public final class Program {
             case "SF-B1" -> new SfB1FailStaticScenario();
             case "SF-B1-RECOVERED" -> new SfRecoveredScenario("SF-B1");
             case "SF-B2" -> new SfB2GraceExceededScenario();
-            case "SF-B2-RECOVERED" -> new SfRecoveredWithPeersScenario("SF-B2");
+            case "SF-B2-RECOVERED" -> new SfB2RecoveredScenario();
+            case "SF-B3-READY" -> new SfB3OwnerLeaseScenario(false);
+            case "SF-B3-EXPIRED" -> new SfB3OwnerLeaseScenario(true);
+            case "SF-B3-TRANSPORT" -> new SfB3TransportScenario();
             case "SF-C1" -> new SfC1CrashLeaseExpiryScenario();
             case "SF-C2" -> new SfC2GracefulRemovalScenario();
+            case "SF-C3" -> new SfC3ReplacementOwnerScenario();
             case "SF-D1" -> new SfD1ShortOutageRecoveryScenario();
             case "SF-D1-RECOVERED" -> new SfRecoveredWithPeersScenario("SF-D1");
             case "SF-D2" -> new SfD2LongOutageRecoveryScenario();
@@ -61,6 +70,7 @@ public final class Program {
             case "SF-D3-RECOVERED" -> new SfD3StatusTransitionScenario(
                 SfD3StatusTransitionScenario.Stage.RECOVERED);
             case "SF-E1" -> new SfE1StoreDelayNonBlockingScenario();
+            case "SF-F9" -> new SfF9OldLifecycleCleanupScenario();
             default -> throw new IllegalArgumentException("unknown scenario " + name);
         };
     }

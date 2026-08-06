@@ -22,6 +22,36 @@ class json_roundtrip_handler_t
     }
 };
 
+class json_golden_handler_t
+{
+  public:
+    using dependency_types = zlink::framework::dependency_list_t<scenario_state_t>;
+    using request_type = json_golden_req_t;
+    using reply_type = json_golden_res_t;
+
+    explicit json_golden_handler_t (scenario_state_t &state) : _state (state) {}
+
+    json_golden_res_t handle (const json_golden_req_t &request,
+                              const zlink::framework::message_context_t &context)
+    {
+        _state.record ("RC-B6-request",
+                       request.display_name + ":" + request.status + ":"
+                         + std::to_string (request.balance) + ":"
+                         + encode_base64 (request.payload));
+        return {.display_name = request.display_name,
+                .status = request.status,
+                .balance = request.balance,
+                .payload = request.payload,
+                .score = request.score,
+                .ratio = request.ratio,
+                .optional_note = request.optional_note,
+                .content_type = context.content_type.value_or ("")};
+    }
+
+  private:
+    scenario_state_t &_state;
+};
+
 class json_codec_send_handler_t
 {
   public:

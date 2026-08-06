@@ -4,8 +4,6 @@ export interface PlayOptions {
   readonly controlRouterEndpoint: string;
   readonly externalSpotEndpoint: string;
   readonly spotRouterEndpoint: string;
-  readonly spotPubEndpoint: string;
-  readonly clientSpotPubEndpoints: readonly string[];
   readonly playAExternalSpotEndpoint?: string;
   readonly externalClientEndpoint?: string;
   readonly redisEndpoint: string;
@@ -22,8 +20,6 @@ export function validatePlayOptions(value: unknown): PlayOptions {
     controlRouterEndpoint: requiredString(values, 'controlRouterEndpoint'),
     externalSpotEndpoint: requiredString(values, 'externalSpotEndpoint'),
     spotRouterEndpoint: requiredString(values, 'spotRouterEndpoint'),
-    spotPubEndpoint: requiredString(values, 'spotPubEndpoint'),
-    clientSpotPubEndpoints: stringList(values, 'clientSpotPubEndpoints'),
     playAExternalSpotEndpoint: optionalString(values, 'playAExternalSpotEndpoint'),
     externalClientEndpoint: optionalString(values, 'externalClientEndpoint'),
     redisEndpoint: requiredString(values, 'redisEndpoint'),
@@ -32,4 +28,4 @@ export function validatePlayOptions(value: unknown): PlayOptions {
     logDir: requiredString(values, 'logDir')
   };
 }
-import { objectValues, optionalString, requiredString, stringList } from '../../../configuration';
+import { objectValues, optionalString, requiredString } from '../../../configuration';

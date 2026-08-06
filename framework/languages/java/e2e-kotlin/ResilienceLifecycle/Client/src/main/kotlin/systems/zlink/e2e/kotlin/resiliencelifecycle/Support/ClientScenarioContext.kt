@@ -74,6 +74,99 @@ class ClientScenarioContext(
             Contracts.TopologyReadRes::class.java,
         )
 
+    fun waitForReadyTopologyCount(expected: Int) {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(20)
+        var last = "unavailable"
+        while (System.nanoTime() < deadline) {
+            try {
+                val topology = readTopology()
+                last = topology.toString()
+                if (topology.status == "ok" && topology.matchedRouters == expected) {
+                    return
+                }
+            } catch (error: Exception) {
+                last = error.message ?: error.javaClass.simpleName
+            }
+            sleep(200)
+        }
+        throw IllegalStateException("ready topology count did not become $expected: $last")
+    }
+
+    fun waitForHttpUnavailable(baseUrl: String) {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(20)
+        while (System.nanoTime() < deadline) {
+            try {
+                get("$baseUrl/health")
+            } catch (_: Exception) {
+                return
+            }
+            sleep(200)
+        }
+        throw IllegalStateException("HTTP endpoint remained available: $baseUrl")
+    }
+
+    fun runCommonScenarioGap(scenario: String) {
+        val topologyBefore = readTopology()
+        val capability = json.readTree(get("${adminA()}/capabilities"))
+        val observations = mutableListOf<String>()
+        var topologyAfter = topologyBefore
+        if (scenario == "RL-E1") {
+            try {
+                waitForReadyTopologyCount(2)
+                observations += "topology-before-ready=2"
+            } catch (error: Exception) {
+                observations += "topology-before-ready-failed=${error.message}"
+            }
+            try {
+                post("${adminB()}/admin/shutdown")
+                observations += "provider-api-b-admin-shutdown=accepted"
+            } catch (error: Exception) {
+                observations += "provider-api-b-admin-shutdown-failed=${error.message}"
+            }
+            try {
+                waitForHttpUnavailable(adminB())
+                observations += "provider-api-b-http=unavailable"
+            } catch (error: Exception) {
+                observations += "provider-api-b-http-unavailable-failed=${error.message}"
+            }
+            try {
+                waitForReadyTopologyCount(1)
+                observations += "topology-after-ready=1"
+            } catch (error: Exception) {
+                observations += "topology-after-ready-count-failed=${error.message}"
+            }
+            topologyAfter = readTopology()
+            try {
+                val surviving = requestWork("rl-e1-surviving")
+                observations += "surviving-request-provider=${surviving.providerRid()}"
+                waitForEvidenceValue(adminA(), "WorkReq", "rl-e1-surviving")
+                observations += "surviving-request-evidence=provider-api-a"
+            } catch (error: Exception) {
+                observations += "surviving-request-failed=${error.message}"
+            }
+        }
+        val missing = buildList {
+            if (!capability.path("routeMeshConfigured").asBoolean(false)) add("RouteMesh target is not configured")
+            if (scenario == "RL-E2" || scenario == "RL-E5") add("directional fault proxy is not configured")
+            if (scenario.startsWith("RL-F")) {
+                if (!capability.path("actorConfigured").asBoolean(false)) add("Actor object server is not configured")
+                if (!capability.path("spotConfigured").asBoolean(false)) add("Spot object server is not configured")
+                if (!capability.path("relocationStoreConfigured").asBoolean(false)) add("Relocation Store is not configured")
+            }
+        }
+        val reasons = if (missing.isEmpty()) {
+            missing + "the requested common scenario has no Kotlin fixture path for its public contract"
+        } else {
+            missing
+        }
+        throw IllegalStateException(
+            "$scenario blocked after public evidence: " +
+                "topologyBefore=$topologyBefore topologyAfter=$topologyAfter " +
+                "capability=$capability observations=${observations.joinToString(" | ")} " +
+                "reason=${reasons.joinToString(", ")}",
+        )
+    }
+
     fun waitForWeight(baseUrl: String, expected: Int) {
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
         while (System.nanoTime() < deadline) {

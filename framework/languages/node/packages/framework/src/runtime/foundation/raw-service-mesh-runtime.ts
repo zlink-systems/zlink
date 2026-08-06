@@ -89,7 +89,6 @@ const DEFAULT_MAILBOX_LIMITS: ServiceMailboxLimits = {
 };
 const MONITOR_DISCONNECTED = 0x0200;
 const MONITOR_CONNECTION_READY = 0x1000;
-const ENDPOINT_BILATERAL_GRACE_MS = 100;
 const MAX_COMPLETION_CONTROL_BYTES = 64 * 1024;
 const COMPLETION_CONTROL_COMMANDS = new Set<number>([
   M6aServiceWireCommand.hello,
@@ -139,14 +138,6 @@ export class RawServiceMeshRuntime {
     readonly lifecycleGeneration?: bigint;
   }>();
   private readonly endpointOnlyPeers = new Set<string>();
-  private readonly passiveBilateralPeers = new Set<string>();
-  private readonly inboundPeerRoutes = new Set<string>();
-  private readonly upgradingEndpointPeers = new Set<string>();
-  private readonly pendingEndpointUpgrades = new Map<string, {
-    readonly endpoint: string;
-    readonly deadlineMs: number;
-  }>();
-  private readonly endpointUpgradePreviousConnections = new Map<string, string>();
   private readonly connectionCandidates = new Map<
     string,
     Map<string, PhysicalConnectionCandidate>
@@ -310,16 +301,26 @@ export class RawServiceMeshRuntime {
   }
 
   isPeerRouteReady(nodeRoutingId: string, lifecycleGeneration?: bigint): boolean {
-    if (this.upgradingEndpointPeers.has(nodeRoutingId)) return false;
     const peer = this.topology.peer(nodeRoutingId);
-    return peer !== undefined
+    const ready = peer !== undefined
       && (lifecycleGeneration === undefined
         || peer.descriptor.lifecycleGeneration === lifecycleGeneration)
       && this.liveness.isReady(nodeRoutingId, peer.connectionId);
+    debugRoute('route-ready-check', {
+      meshName: this.descriptor.meshName,
+      localNodeRoutingId: this.descriptor.nodeRoutingId,
+      remoteNodeRoutingId: nodeRoutingId,
+      connectionId: peer?.connectionId,
+      connectionDiscriminator: peer?.connectionDiscriminator,
+      livenessReady: peer === undefined
+        ? false
+        : this.liveness.isReady(nodeRoutingId, peer.connectionId),
+      ready
+    });
+    return ready;
   }
 
   announceExpectedPeers(): number {
-    this.advanceEndpointUpgrades(Date.now());
     let accepted = 0;
     for (const nodeRoutingId of this.expectedPeers.keys()) {
       // Admission is a one-time fence for the current physical connection.
@@ -413,6 +414,16 @@ export class RawServiceMeshRuntime {
       channelName,
       peer => this.isLocalOrReadyPeer(peer.descriptor.nodeRoutingId)
     );
+    debugRoute('select-channel', {
+      meshName: this.descriptor.meshName,
+      channelName,
+      targetNodeRoutingId: selected?.descriptor.nodeRoutingId,
+      targetConnectionId: selected?.connectionId,
+      targetConnectionDiscriminator: selected?.connectionDiscriminator,
+      targetRouteReady: selected === undefined
+        ? undefined
+        : this.isPeerRouteReady(selected.descriptor.nodeRoutingId)
+    });
     return selected === undefined
       ? undefined
       : this.requestToTarget(selected.descriptor.nodeRoutingId, payload, timeoutMs, channelName);
@@ -601,22 +612,6 @@ export class RawServiceMeshRuntime {
           }
           return 'infrastructure';
         }
-        if (
-          header.command === M6aServiceWireCommand.admit
-          && expected !== undefined
-        ) {
-          const previousConnectionId = this.endpointUpgradePreviousConnections.get(
-            descriptor.nodeRoutingId
-          );
-          if (
-            !this.upgradingEndpointPeers.has(descriptor.nodeRoutingId)
-            || previousConnectionId === undefined
-            || previousConnectionId !== connection.connectionId
-          ) {
-            this.upgradingEndpointPeers.delete(descriptor.nodeRoutingId);
-            this.endpointUpgradePreviousConnections.delete(descriptor.nodeRoutingId);
-          }
-        }
         this.selectBilateralConnection(descriptor);
         if (header.command === M6aServiceWireCommand.hello) {
           this.trySend(
@@ -671,12 +666,20 @@ export class RawServiceMeshRuntime {
             return 'protocolError';
           }
         } else {
-          this.liveness.acknowledge(
+          const accepted = this.liveness.acknowledge(
             received.sourceRid,
             peer.connectionId,
             record.probeId,
             nowMs
           );
+          debugRoute('liveness-ack', {
+            meshName: this.descriptor.meshName,
+            localNodeRoutingId: this.descriptor.nodeRoutingId,
+            remoteNodeRoutingId: received.sourceRid,
+            connectionId: peer.connectionId,
+            accepted,
+            ready: this.liveness.isReady(received.sourceRid, peer.connectionId)
+          });
         }
         return 'infrastructure';
       }
@@ -743,10 +746,20 @@ export class RawServiceMeshRuntime {
     const result = this.liveness.tick(nowMs);
     this.requireStarted();
     for (const probe of result.probes) {
-      this.trySend(probe.nodeRoutingId, [livenessCodec.encodeLivenessRecord({
+      const sent = this.trySend(probe.nodeRoutingId, [livenessCodec.encodeLivenessRecord({
         command: M6aServiceWireCommand.livenessProbe,
         probeId: probe.probeId
       })]);
+      debugRoute('liveness-probe-send', {
+        meshName: this.descriptor.meshName,
+        localNodeRoutingId: this.descriptor.nodeRoutingId,
+        remoteNodeRoutingId: probe.nodeRoutingId,
+        connectionId: probe.connectionId,
+        probeId: probe.probeId.toString(),
+        sent,
+        currentConnectionId: this.topology.peer(probe.nodeRoutingId)?.connectionId,
+        currentConnectionDiscriminator: this.topology.peer(probe.nodeRoutingId)?.connectionDiscriminator
+      });
     }
     for (const nodeRoutingId of result.timedOutNodes) {
       const peer = this.topology.peer(nodeRoutingId);
@@ -789,26 +802,11 @@ export class RawServiceMeshRuntime {
             this.expectedPeers.get(nodeRoutingId)
           );
         }
-        if (event.localAddress === this.topology.localDescriptor().advertisedEndpoint) {
-          this.inboundPeerRoutes.add(nodeRoutingId);
-          this.advanceEndpointUpgrade(nodeRoutingId, Date.now());
-        }
         this.announcePeer(nodeRoutingId);
       } else if (event.event === MONITOR_DISCONNECTED && nodeRoutingId !== undefined) {
         const peer = this.topology.peer(nodeRoutingId);
         const disconnectedId = monitorConnectionId(event);
-        const candidate = this.connectionCandidates.get(nodeRoutingId)?.get(disconnectedId);
         this.removeConnectionCandidate(nodeRoutingId, disconnectedId);
-        if (
-          this.passiveBilateralPeers.has(nodeRoutingId)
-          && peer !== undefined
-          && candidate?.direction === 'outbound'
-          && event.remoteAddress === peer.descriptor.advertisedEndpoint
-        ) {
-          // The larger RID retires only its outbound half after learning the
-          // peer RID. The smaller RID's inbound connection remains canonical.
-          continue;
-        }
         if (peer !== undefined && peer.connectionId === disconnectedId) {
           this.removePeer(peer);
         }
@@ -873,6 +871,13 @@ export class RawServiceMeshRuntime {
       }
       return pending;
     }
+    debugRoute('request-native', {
+      meshName: this.descriptor.meshName,
+      targetNodeRoutingId,
+      targetConnectionId: this.topology.peer(targetNodeRoutingId)?.connectionId,
+      targetConnectionDiscriminator: this.topology.peer(targetNodeRoutingId)?.connectionDiscriminator,
+      targetRouteReady: this.isPeerRouteReady(targetNodeRoutingId)
+    });
     void this.requireStarted().request(
       targetNodeRoutingId,
       [header, encodeApplicationPayload(payload)],
@@ -906,7 +911,16 @@ export class RawServiceMeshRuntime {
           this.operations.fail(pending.id, error);
         }
       },
-      error => this.operations.fail(pending.id, error)
+      error => {
+        debugRoute('request-rejected', {
+          meshName: this.descriptor.meshName,
+          targetNodeRoutingId,
+          targetConnectionId: this.topology.peer(targetNodeRoutingId)?.connectionId,
+          targetRouteReady: this.isPeerRouteReady(targetNodeRoutingId),
+          error: debugError(error)
+        });
+        this.operations.fail(pending.id, error);
+      }
     );
     return pending;
   }
@@ -928,6 +942,15 @@ export class RawServiceMeshRuntime {
       expected,
       connection.discriminator
     );
+    debugRoute('peer-admission', {
+      meshName: this.descriptor.meshName,
+      localNodeRoutingId: this.descriptor.nodeRoutingId,
+      remoteNodeRoutingId: descriptor.nodeRoutingId,
+      connectionId: connection.connectionId,
+      connectionDiscriminator: connection.discriminator,
+      direction: connection.direction,
+      result
+    });
     if (result === 'admitted') {
       this.connectionIds.set(
         descriptor.nodeRoutingId,
@@ -979,8 +1002,7 @@ export class RawServiceMeshRuntime {
               ? 'outbound'
               : 'inbound'
             : 'inbound';
-      const initiator = endpointOnly
-        && localRid.localeCompare(nodeRoutingId) > 0
+      const initiator = endpointOnly && localRid.localeCompare(nodeRoutingId) > 0
         ? nodeRoutingId
         : direction === 'outbound'
           ? localRid
@@ -993,6 +1015,17 @@ export class RawServiceMeshRuntime {
         localAddress: '',
         remoteAddress: advertisedEndpoint
       };
+      debugRoute('candidate-created', {
+        meshName: this.descriptor.meshName,
+        localNodeRoutingId: localRid,
+        remoteNodeRoutingId: nodeRoutingId,
+        advertisedEndpoint,
+        endpointOnly,
+        expected: this.expectedPeers.has(nodeRoutingId),
+        direction,
+        initiator,
+        connectionId
+      });
       let candidates = this.connectionCandidates.get(nodeRoutingId);
       if (candidates === undefined) {
         candidates = new Map();
@@ -1147,81 +1180,6 @@ export class RawServiceMeshRuntime {
       lifecycleGeneration: descriptor.lifecycleGeneration
     });
     this.endpointOnlyPeers.delete(endpoint);
-    this.upgradingEndpointPeers.add(descriptor.nodeRoutingId);
-    const current = this.topology.peer(descriptor.nodeRoutingId);
-    if (current !== undefined) {
-      this.endpointUpgradePreviousConnections.set(
-        descriptor.nodeRoutingId,
-        current.connectionId
-      );
-    }
-    this.pendingEndpointUpgrades.set(descriptor.nodeRoutingId, {
-      endpoint,
-      deadlineMs: Date.now() + ENDPOINT_BILATERAL_GRACE_MS
-    });
-    const localRid = this.topology.localDescriptor().nodeRoutingId;
-    if (
-      localRid.localeCompare(descriptor.nodeRoutingId) > 0
-      && this.topology.peer(descriptor.nodeRoutingId)?.connectionDiscriminator
-        === `initiator:${descriptor.nodeRoutingId}`
-    ) {
-      // An endpoint-only route has no physical direction when the monitor
-      // event is unavailable. Keep the established route and use the lower
-      // RID as the deterministic logical initiator until a physical
-      // candidate is observed.
-      this.pendingEndpointUpgrades.delete(descriptor.nodeRoutingId);
-      this.passiveBilateralPeers.add(descriptor.nodeRoutingId);
-      this.upgradingEndpointPeers.delete(descriptor.nodeRoutingId);
-      this.endpointUpgradePreviousConnections.delete(descriptor.nodeRoutingId);
-      return;
-    }
-    if (localRid.localeCompare(descriptor.nodeRoutingId) <= 0) {
-      // The endpoint-only pipe already carries the admission exchange. Once
-      // the peer RID is known, bind that existing pipe to the expected peer
-      // state instead of tearing it down and racing a replacement pipe.
-      this.pendingEndpointUpgrades.delete(descriptor.nodeRoutingId);
-      this.upgradingEndpointPeers.delete(descriptor.nodeRoutingId);
-      this.endpointUpgradePreviousConnections.delete(descriptor.nodeRoutingId);
-    }
-  }
-
-  private advanceEndpointUpgrades(nowMs: number): void {
-    for (const nodeRoutingId of this.pendingEndpointUpgrades.keys()) {
-      this.advanceEndpointUpgrade(nodeRoutingId, nowMs);
-    }
-  }
-
-  private advanceEndpointUpgrade(nodeRoutingId: string, nowMs: number): void {
-    const pending = this.pendingEndpointUpgrades.get(nodeRoutingId);
-    if (pending === undefined) return;
-    const localRid = this.topology.localDescriptor().nodeRoutingId;
-    if (
-      localRid.localeCompare(nodeRoutingId) > 0
-      && this.inboundPeerRoutes.has(nodeRoutingId)
-    ) {
-      this.pendingEndpointUpgrades.delete(nodeRoutingId);
-      this.requireStarted().disconnect(pending.endpoint);
-      this.passiveBilateralPeers.add(nodeRoutingId);
-      this.upgradingEndpointPeers.delete(nodeRoutingId);
-      this.endpointUpgradePreviousConnections.delete(nodeRoutingId);
-      return;
-    }
-    if (nowMs < pending.deadlineMs) return;
-    this.activateEndpointUpgrade(nodeRoutingId, pending.endpoint);
-  }
-
-  private activateEndpointUpgrade(nodeRoutingId: string, endpoint: string): void {
-    this.pendingEndpointUpgrades.delete(nodeRoutingId);
-    // Replace the endpoint-only probe rather than keeping two connections.
-    // Request/reply sequencing is scoped to one physical route.
-    const current = this.topology.peer(nodeRoutingId);
-    if (current !== undefined) this.removePeer(current);
-    const currentConnectionId = this.connectionIds.get(nodeRoutingId);
-    if (currentConnectionId !== undefined) {
-      this.removeConnectionCandidate(nodeRoutingId, currentConnectionId);
-    }
-    this.requireStarted().disconnect(endpoint);
-    this.requireStarted().connectToRoutingId(nodeRoutingId, endpoint);
   }
 
   private removePeer(peer: AdmittedServicePeer): void {
@@ -1259,6 +1217,28 @@ function validCompletionControlRecord(parts: readonly Uint8Array[]): boolean {
       <= MAX_COMPLETION_CONTROL_BYTES;
 }
 
+function debugRoute(event: string, fields: Record<string, unknown>): void {
+  const processValue = (globalThis as {
+    process?: { env?: Record<string, string | undefined> };
+  }).process;
+  if (processValue?.env?.ZLINK_NODE_ROUTE_DEBUG !== '1') return;
+  console.error(`[zlink-route-debug] ${event} ${JSON.stringify(fields)}`);
+}
+
+function debugError(error: unknown): Record<string, unknown> {
+  if (typeof error !== 'object' || error === null) return { value: String(error) };
+  const value = error as {
+    message?: unknown;
+    result?: unknown;
+    nativeErrno?: unknown;
+  };
+  return {
+    message: value.message,
+    result: value.result,
+    nativeErrno: value.nativeErrno
+  };
+}
+
 function isAlreadyDisconnectedError(error: unknown): boolean {
   if (typeof error !== 'object' || error === null || !('nativeErrno' in error)) {
     return false;
@@ -1285,7 +1265,11 @@ function completionControlCommand(
 
 function monitorConnectionId(event: ZLinkRawMonitorRecord): string {
   return JSON.stringify([
-    event.value,
+    // Monitor `value` is event-specific: CONNECTION_READY reports the
+    // socket's ready count and DISCONNECTED reports its reason. It is not a
+    // connection identity. The public monitor record has no native
+    // connection id, so use the stable routing and endpoint tuple instead.
+    event.routingId ?? '',
     event.localAddress,
     event.remoteAddress
   ]);

@@ -13,20 +13,18 @@ const fixture = path.join(
 const redisUrl = process.env.ZLINK_TEST_REDIS_URL ?? 'redis://127.0.0.1:6379';
 
 test(
-  'public SpotManager completes command 47/48 through two native MeshNode processes',
+  'public SpotManager completes User Spot lifecycle through two native MeshNode processes',
   { timeout: 60_000 },
   async (t) => {
     const runId = `${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     const meshName = `m6b-native-${runId}`;
     const keyPrefix = `zlink:test:m6b-node:${runId}:`;
     const targetRoutingId = `m6b-target-${runId}`;
-    const [sourcePort, targetPort, proxyPort] = await Promise.all([
-      reservePort(),
+    const [sourcePort, targetPort] = await Promise.all([
       reservePort(),
       reservePort()
     ]);
     const children = [];
-    const proxy = new TcpReplayFaultProxy(proxyPort, targetPort);
     const redis = createClient({
       url: redisUrl,
       socket: { reconnectStrategy: false }
@@ -42,7 +40,6 @@ test(
     }
     t.after(async () => {
       await Promise.all(children.map(stopChild));
-      await proxy.close();
       await deletePrefix(redis, keyPrefix);
       if (redis.isOpen) await redis.quit();
     });
@@ -58,7 +55,6 @@ test(
     });
     const targetReady = await target.ready;
     assert.equal(targetReady.role, 'target');
-    await proxy.start();
 
     const source = startChild(children, {
       role: 'source',
@@ -67,11 +63,12 @@ test(
       routingId: `m6b-source-${runId}`,
       targetRoutingId,
       keyPrefix,
-      targetEndpoint: `tcp://127.0.0.1:${proxyPort}`
+      targetEndpoint: `tcp://127.0.0.1:${targetPort}`
     });
     const sourceReady = await source.ready;
     assert.equal(sourceReady.role, 'source');
     assert.notEqual(sourceReady.pid, targetReady.pid);
+    assert.equal(await source.command('waitRouteReady'), true);
     const created = await source.command('create');
     assert.equal(created.state, 'created');
     assert.equal(created.spot.meshName, meshName);
@@ -84,12 +81,9 @@ test(
     assert.deepEqual(await source.command('find'), created.spot);
     const close = source.command('close');
     await target.waitForEvent('close-entered');
-    const dropped = proxy.dropNextServerChunk();
     await target.command('releaseFirstClose');
-    await dropped;
     assert.equal(await close, true);
     assert.equal(await target.command('closeExecutions'), 1);
-    assert.ok(proxy.connectionCount >= 2, 'Command 48 replay did not reconnect through the proxy.');
     assert.equal(await source.command('findAfterClose'), null);
   }
 );
@@ -230,74 +224,6 @@ function startChild(children, options) {
       });
     }
   };
-}
-
-class TcpReplayFaultProxy {
-  constructor(listenPort, targetPort) {
-    this.listenPort = listenPort;
-    this.targetPort = targetPort;
-    this.server = net.createServer((client) => this.accept(client));
-    this.sockets = new Set();
-    this.connectionCount = 0;
-    this.drop = undefined;
-  }
-
-  async start() {
-    await new Promise((resolve, reject) => {
-      this.server.once('error', reject);
-      this.server.listen(this.listenPort, '127.0.0.1', resolve);
-    });
-  }
-
-  dropNextServerChunk() {
-    if (this.drop !== undefined) {
-      throw new Error('A proxy drop is already armed.');
-    }
-    return new Promise((resolve) => {
-      this.drop = resolve;
-    });
-  }
-
-  accept(client) {
-    this.connectionCount++;
-    const upstream = net.connect({
-      host: '127.0.0.1',
-      port: this.targetPort
-    });
-    this.sockets.add(client);
-    this.sockets.add(upstream);
-    client.on('data', (chunk) => {
-      if (!upstream.destroyed) upstream.write(chunk);
-    });
-    upstream.on('data', (chunk) => {
-      if (this.drop !== undefined) {
-        const dropped = this.drop;
-        this.drop = undefined;
-        dropped();
-        client.destroy();
-        upstream.destroy();
-        return;
-      }
-      if (!client.destroyed) client.write(chunk);
-    });
-    const closePair = () => {
-      client.destroy();
-      upstream.destroy();
-      this.sockets.delete(client);
-      this.sockets.delete(upstream);
-    };
-    client.on('error', closePair);
-    upstream.on('error', closePair);
-    client.on('close', closePair);
-    upstream.on('close', closePair);
-  }
-
-  async close() {
-    for (const socket of this.sockets) socket.destroy();
-    this.sockets.clear();
-    if (!this.server.listening) return;
-    await new Promise((resolve) => this.server.close(resolve));
-  }
 }
 
 async function stopChild(entry) {

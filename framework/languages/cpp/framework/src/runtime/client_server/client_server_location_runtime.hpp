@@ -3,6 +3,7 @@
 
 #include "runtime/channels/channel_runtime.hpp"
 #include "runtime/diagnostics/runtime_observation.hpp"
+#include "runtime/diagnostics/listener_status_registry.hpp"
 #include "runtime/dispatch/receive_batch_budget.hpp"
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/client_server/raw_client_server_owner.hpp"
@@ -46,7 +47,8 @@ class client_server_location_runtime_t final : public client_server_runtime_t
       service_provider_t &services,
       serializer_registry_t &serializers,
       const handler_registry_t &handlers,
-      std::map<std::string, std::string> advertise_hosts = {});
+      std::map<std::string, std::string> advertise_hosts = {},
+      std::shared_ptr<listener_status_registry_t> listener_statuses = {});
     ~client_server_location_runtime_t () noexcept;
 
     client_server_location_runtime_t (
@@ -57,6 +59,7 @@ class client_server_location_runtime_t final : public client_server_runtime_t
     void start ();
     void stop () noexcept;
     bool empty () const noexcept;
+    bool publish_descriptor_state (framework_runtime_state_t state) noexcept;
 
     client_server_channel_snapshot_t snapshot (
       std::string channel_name) const override;
@@ -83,7 +86,7 @@ class client_server_location_runtime_t final : public client_server_runtime_t
     void run ();
     void reconcile ();
     void reconcile_channel (client_channel_t &channel);
-    void publish_servers ();
+    bool publish_servers ();
     void pump ();
     void refresh_client_pump_snapshot ();
     void publish_snapshot_changes ();
@@ -137,6 +140,7 @@ class client_server_location_runtime_t final : public client_server_runtime_t
     serializer_registry_t *_serializers;
     const handler_registry_t *_handlers;
     std::map<std::string, std::string> _advertise_hosts;
+    std::shared_ptr<listener_status_registry_t> _listener_statuses;
     mutable std::mutex _gate;
     std::condition_variable _ready;
     std::map<std::string, std::unique_ptr<server_entry_t>> _servers;
@@ -151,6 +155,10 @@ class client_server_location_runtime_t final : public client_server_runtime_t
     std::unique_ptr<zlink::poller_t> _transport_poller;
     eventing::runtime_wake_pipe_t _wake_pipe;
     std::atomic_bool _stop{false};
+    std::mutex _descriptor_publish_mutex;
+    std::condition_variable _descriptor_publish_changed;
+    bool _descriptor_publish_pending = false;
+    bool _descriptor_publish_result = false;
     std::thread _thread;
 };
 

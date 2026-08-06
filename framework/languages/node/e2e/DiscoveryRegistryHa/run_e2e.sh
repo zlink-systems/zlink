@@ -21,12 +21,30 @@ SCENARIOS=(
   SF-A2
   SF-B1
   SF-B2
+  SF-B3
   SF-C1
   SF-C2
+  SF-C3
+  SF-C4
+  SF-C5
   SF-D1
   SF-D2
   SF-D3
   SF-E1
+  SF-F1
+  SF-F2
+  SF-F3
+  SF-F4
+  SF-F5
+  SF-F6
+  SF-F7
+  SF-F8
+  SF-F9
+  SF-F10
+  SF-F11
+  SF-G1
+  SF-G2
+  SF-G3
 )
 mkdir -p "$LOG_DIR"
 
@@ -316,6 +334,11 @@ run_sf_e1() {
   run_client SF-E1 "$LOG_DIR/client.stdout.log" "$LOG_DIR/client.stderr.log"
 }
 
+run_generic_scenario() {
+  start_topology
+  run_client "$SCENARIO" "$LOG_DIR/client.stdout.log" "$LOG_DIR/client.stderr.log"
+}
+
 case "$SCENARIO" in
   SF-A1)
     run_sf_a1
@@ -362,6 +385,10 @@ case "$SCENARIO" in
   SF-E1)
     run_sf_e1
     cat "$LOG_DIR/client-warmup.stdout.log"
+    cat "$LOG_DIR/client.stdout.log"
+    ;;
+  SF-B3|SF-C3|SF-C4|SF-C5|SF-F1|SF-F2|SF-F3|SF-F4|SF-F5|SF-F6|SF-F7|SF-F8|SF-F9|SF-F10|SF-F11|SF-G1|SF-G2|SF-G3)
+    run_generic_scenario
     cat "$LOG_DIR/client.stdout.log"
     ;;
   *)

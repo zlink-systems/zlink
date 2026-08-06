@@ -27,8 +27,10 @@ void add_redis_location_store (zlink::framework::zlink_framework_options_t &fram
         zlink::framework::redis::redis_location_options_t{
           .connection_string = redis.endpoint, .key_prefix = redis.key_prefix}));
     auto &locations = framework.configure_locations ();
-    locations.heartbeat_interval = std::chrono::seconds (1);
+    locations.owner_lease_renew_interval = std::chrono::seconds (1);
     locations.owner_lease_ttl = std::chrono::seconds (3);
+    locations.owner_lease_fencing_margin = std::chrono::seconds (1);
+    locations.owner_lease_renew_timeout = std::chrono::milliseconds (500);
     locations.polling_interval = std::chrono::milliseconds (500);
 }
 
@@ -91,8 +93,6 @@ std::string kind_name (zlink::framework::framework_error_kind_t kind)
             return "actor_route_not_found";
         case zlink::framework::framework_error_kind_t::unavailable:
             return "actor_location_stale";
-        case zlink::framework::framework_error_kind_t::unavailable:
-            return "route_not_connected";
         case zlink::framework::framework_error_kind_t::internal_failure:
             return "request_failed";
         default:

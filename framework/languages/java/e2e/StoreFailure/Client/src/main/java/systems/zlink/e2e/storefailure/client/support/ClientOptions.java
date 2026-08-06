@@ -9,6 +9,7 @@ import java.util.Properties;
 
 public record ClientOptions(
     List<String> expectedRids,
+    String expectedLifecycleId,
     String consumerHttpEndpoint,
     String deadRid,
     List<String> expectedAbsentRids,
@@ -28,6 +29,7 @@ public record ClientOptions(
         if (expected.isEmpty()) throw new IllegalArgumentException("expectedRids is required");
         return new ClientOptions(
             expected,
+            values.getProperty("expectedLifecycleId", ""),
             required(values, "consumerHttpEndpoint"),
             values.getProperty("deadRid", "api-b"),
             csv(values, "expectedAbsentRids"),

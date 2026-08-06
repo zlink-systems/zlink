@@ -9,6 +9,9 @@ Client는 HTTP driver이고, framework spot/route/stream 참여는 `Server/Gatew
 
 마지막 검증:
 
+- focused 명령: `timeout 420s ./run_e2e.sh SM-C2`
+- focused 결과: passed
+- focused 로그: `framework/languages/java/e2e/SpotService/logs/20260806-025423-3829012/`
 - 명령: `nice -n 10 timeout 1200s ./run_e2e.sh all`
 - 결과: passed
 - 로그: `framework/languages/java/e2e/SpotService/logs/20260707-223144-3695956/`

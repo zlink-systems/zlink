@@ -21,6 +21,11 @@ import systems.zlink.framework.streams.ZLinkStreamCodec;
 public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
     void setBind(String endpoint);
 
+    default void setAdvertiseHost(String host) {
+        // Alternate backends may use the bind address as their advertised
+        // endpoint and do not need a separate listener identity.
+    }
+
     void addChannel(String channelName);
 
     void setChannelWeight(String channelName, int weight);
@@ -51,6 +56,11 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
     default void setRouterHighWaterMark(long value) {
         // Optional for test and alternate backends that do not expose Core
         // RouteMesh admission yet.
+    }
+
+    default void setRouterReceiveHighWaterMark(long value) {
+        // Optional for test and alternate backends that do not expose Core
+        // RouteMesh receive admission yet.
     }
 
     default void setRouterSendTimeout(Duration value) {

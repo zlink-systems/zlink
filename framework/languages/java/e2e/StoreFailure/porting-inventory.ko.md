@@ -56,10 +56,12 @@
   - 결과: `scenario SF-A1 passed providers=[api-a]`, `scenario SF-B1 passed providers=[api-a, api-b]`,
     `scenario SF-B1-RECOVERED passed providers=[api-b]`, `store-failure e2e result=passed`
   - 로그: `logs/20260703-212347-99803/`
-- `timeout 420s ./run_e2e.sh SF-B2`
-  - 결과: `scenario SF-A1 passed providers=[api-a]`, `scenario SF-B2 passed providers=[api-b, api-a]`,
-    `scenario SF-B2-RECOVERED passed providers=[api-b]`, `store-failure e2e result=passed`
-  - 로그: `logs/20260703-213206-24636/`
+- `timeout 180s ./run_e2e.sh SF-B2`
+  - 결과: `scenario SF-A1 passed providers=[api-a]`, `scenario SF-B2 passed providers=[api-a]`,
+    `scenario SF-B2-RECOVERED passed providers=[api-a]`, `store-failure e2e result=passed`
+  - outage 중 RouteMesh snapshot에서 기존 A는 READY 상태를 유지하고 B는 target에 없음을 확인했다.
+    Store 복구 뒤에는 Location query에서 B가 READY 상태로 편입된 것을 확인했다.
+  - 로그: `logs/20260806-023951-3481315/`
 - `timeout 360s ./run_e2e.sh SF-D1`
   - 결과: `scenario SF-A1 passed providers=[api-a]`, `scenario SF-D1 passed providers=[api-b, api-a]`,
     `scenario SF-D1-RECOVERED passed providers=[api-a]`, `store-failure e2e result=passed`

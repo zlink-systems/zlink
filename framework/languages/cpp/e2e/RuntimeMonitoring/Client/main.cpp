@@ -24,7 +24,9 @@ using rm_client::client_options_t;
 int run_scenarios (const client_options_t &client_options)
 {
     const auto &scenario = client_options.scenario;
-    if (client_options.scenario == "mon-d1") {
+    if (client_options.scenario == "mon-d1"
+        || client_options.scenario == "mon-d1a"
+        || client_options.scenario == "mon-d1b") {
         rm_client::run_mon_d1_failure_recovery_scenario (client_options);
     } else {
         auto wants = [&scenario] (const char *id) {
@@ -48,14 +50,15 @@ int run_scenarios (const client_options_t &client_options)
         if (wants ("mon-b2")) {
             rm_client::run_mon_b2_publish_monitoring_absence_scenario (client_options);
         }
-        if (scenario == "mon-a4") {
+        if (scenario == "mon-a4" || scenario == "mon-a4a" || scenario == "mon-a4b") {
             rm_client::run_mon_a4_availability_transition_scenario (client_options);
         }
         if (wants ("mon-c1")) {
             rm_client::run_mon_c1_dispatch_failure_scenario (client_options);
         }
         if (!wants ("mon-a1") && !wants ("mon-a2") && !wants ("mon-a3") && !wants ("mon-a5")
-            && !wants ("mon-a4") && !wants ("mon-b1") && !wants ("mon-b2")
+            && !wants ("mon-a4") && !wants ("mon-a4a") && !wants ("mon-a4b")
+            && !wants ("mon-b1") && !wants ("mon-b2")
             && !wants ("mon-c1")) {
             throw std::runtime_error ("unknown RuntimeMonitoring scenario: " + scenario);
         }

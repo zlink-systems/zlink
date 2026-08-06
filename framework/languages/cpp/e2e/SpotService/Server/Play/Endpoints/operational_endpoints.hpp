@@ -26,11 +26,9 @@ class spot_locations_handler_t
         try {
             const auto page =
               _locations
-                .list_spot_locations (
-                  zlink::framework::spot_location_filter_t{
-                    .mesh_name = e2e::spot_mesh,
-                    .spot_type = e2e::user_spot,
-                    .spot_kind = zlink::spot_kind::user},
+                .list_topology (
+                  zlink::framework::location_topology_filter_t{
+                    .mesh_name = e2e::spot_mesh},
                   zlink::framework::location_page_request_t{.page_size = 100})
                 .result ()
                 .value ();
@@ -38,12 +36,11 @@ class spot_locations_handler_t
             for (const auto &row : page.items) {
                 rows.push_back (nlohmann::json{
                   {"mesh_name", row.mesh_name},
-                  {"spot_id", row.spot_id.to_string ()},
-                  {"spot_type", row.spot_type.value_or (std::string{})},
                   {"node_rid", row.node_rid.to_string ()},
-                  {"spot_kind", row.spot_kind == zlink::spot_kind::user ? "user" : "unexpected"},
-                  {"owner_id", row.owner_id},
-                  {"generation", row.generation}});
+                  {"endpoint", row.endpoint},
+                  {"draining", row.draining},
+                  {"state", static_cast<int> (row.state)},
+                  {"ready", row.state == zlink::framework::location_topology_state_t::ready}});
             }
             response.body = rows.dump ();
         }

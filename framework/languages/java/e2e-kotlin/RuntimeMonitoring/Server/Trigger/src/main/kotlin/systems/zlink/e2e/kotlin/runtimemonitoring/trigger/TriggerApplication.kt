@@ -11,8 +11,10 @@ import systems.zlink.e2e.kotlin.runtimemonitoring.Env
 import systems.zlink.e2e.kotlin.runtimemonitoring.service.EvidenceState
 import systems.zlink.framework.channels.ZLinkClient
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode
+import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime
 import systems.zlink.framework.spring.EnableZLinkFramework
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer
+import org.springframework.beans.factory.ObjectProvider
 
 @EnableZLinkFramework
 @SpringBootConfiguration(proxyBeanMethods = false)
@@ -29,12 +31,14 @@ class TriggerApplication {
         state: EvidenceState,
         json: ObjectMapper,
         client: ZLinkClient,
+        runtime: ObjectProvider<ZLinkFrameworkRuntime>,
     ): TriggerHttpServer {
         return TriggerHttpServer(
             Env.get("e2e.http.endpoint"),
             state,
             json,
             client,
+            runtime,
         )
     }
 

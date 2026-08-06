@@ -89,33 +89,73 @@ replacement.
 - "A structure of a typed runtime event the framework has re-interpreted once, plus native detail
   added only when truly necessary"
 
-## 7. Implementation Guidelines
+## 7. Layer and Adapter Selection
 
-An adapter layer always sits between the framework and the backend, with roles cleanly separated.
+Do not add an adapter unconditionally between the framework and the backend. If the
+binding public API has the same meaning, ownership, lifecycle, readiness, error, and
+concurrency rules as the Framework operation, call that public API directly from the
+binding-facing integration. If any of those rules differ, keep a semantic adapter or
+port that hides the difference in one place.
 
-- The framework has an internal backend adapter layer[^backend-adapter].
-- The framework's own responsibilities — registration, lifecycle[^lifecycle], monitoring, query —
-  are handled by the framework service. Actual backend calls are handled by the adapter layer.
-- The adapter calls only the bindings' public raw socket API. It does not use the Core service C
-  API, `NativeMethods`, non-public reflection, direct native symbol calls, or service binding
-  objects.
-- Even if sample documentation directly shows a low-level binding type, that explanation is kept
-  separate from the description of the framework's public API surface.
+The current .NET layering is judged by the following graph.
 
-## 8. Rules For Replacement
+```text
++----------------------------------------------+
+| Framework public/domain contract             |
++----------------------------------------------+
+                       |
+                       v
++----------------------------------------------+
+| Framework semantic runtime core              |
++----------------------------------------------+
+                       |
+                       v
++----------------------------------------------+
+| Binding-facing runtime integration           |
+| direct public call or semantic adapter       |
++----------------------------------------------+
+                       |
+                       v
++----------------------------------------------+
+| Systems.Zlink public API                     |
++----------------------------------------------+
+                       |
+                       v
++----------------------------------------------+
+| Core                                         |
++----------------------------------------------+
+```
 
-When replacing the low-level library later, the following order applies.
+The detailed type, operation, ownership, and receive-storage classification is recorded in
+[runtime integration and receive ownership](runtime-integration-and-ownership.en.md).
 
-1. Keep the framework's public contract unchanged first.
-2. Plug the existing backend adapter and the new backend adapter side by side behind the same
-   contract.
-3. Confirm that the primitives remaining in the public API can still be kept as-is on the new
-   backend.
-4. For a type that can't be kept, don't eliminate it right away as part of the backend replacement —
-   introduce a framework wrapper first, then replace it.
+Keep an adapter only when the code and contract demonstrate at least one of the following:
 
-In other words, a backend replacement is treated fundamentally as a replacement of the adapter layer.
-Replacing the public API itself is kept as a separate breaking-change effort, done independently.
+- It turns a binding fluent operation into one Framework submit result.
+- It maps Framework options to binding options while hiding the decision in one place.
+- It owns disposal order for a context, socket, or session.
+- It maps binding events, readiness, or errors into Framework meaning.
+- It composes several binding objects into one Spot, Stream, or lifecycle operation.
+- It manages the lifetime of message storage handed to an asynchronous Framework queue.
+
+A facade that forwards identical arguments and results, a one-implementation backend added
+only for testability, and a wrapper that only renames binding methods do not satisfy this
+criterion and should be removed. Adapters call only the bindings' public API. They do not use
+the Core service C API, `NativeMethods`, non-public reflection, direct native symbols, or
+service binding objects. Low-level binding types shown in samples remain separate from the
+Framework public API explanation.
+
+## 8. Replacement Rules
+
+When replacing the low-level library, preserve the Framework public contract first. Compare
+a direct binding call and a semantic adapter for the same operation, and introduce an
+adapter only where the comparison proves a semantic difference. Do not promote an internal
+type of the existing adapter into the new public contract.
+
+If the binding public API lacks a required operation, do not add reflection or a raw-frame
+escape hatch in the Framework. Define and test the required public binding contract first,
+update the local package version, and make the Framework call only that public API. A change
+to the public contract itself is reviewed separately as a breaking change.
 
 ## 9. Regression Tests
 

@@ -119,6 +119,18 @@ flowchart LR
 **결정 — 공개하는 상태는 특정 시점의 복사본이다.** 살아 있는 내부 자료구조를 그대로
 넘기면 읽는 쪽이 잠금을 요구하게 되고, 그 잠금이 처리 경로로 번진다.
 
+### bind 뒤에 listener identity를 확정한다
+
+운영 endpoint를 공개할 때 설정값을 그대로 사용하지 않는다. Listener registry는 listener
+종류, 논리 이름, bind가 완료된 뒤 확인한 endpoint를 함께 기록한다. 따라서 wildcard bind와
+port `0`은 상태 record가 공개되기 전에 실제 endpoint로 해석된다.
+
+Runtime은 이 registry에서 immutable snapshot을 반환한다. 다른 process가 사용하는 값은
+advertised endpoint이며 socket과 bind 세부 정보는 registry 뒤에 둔다. bind가 성공한 뒤에만
+record를 추가하고 해당 listener가 종료되면 제거한다. 이 경계를 사용하면 readiness와 endpoint
+발견이 같은 lifecycle 순서를 따르고, 호출자가 socket을 검사하거나 설정값으로 endpoint를
+추정할 필요가 없다.
+
 ### 밀리면 합친다
 
 **결정 — 구독자마다 한도 있는 자리를 따로 두고, 가득 차면 중간 상태 알림을 합친다.**

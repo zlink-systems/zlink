@@ -4,6 +4,7 @@ import java.util.List;
 import java.util.concurrent.CompletionStage;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.actors.ActorRef;
+import systems.zlink.framework.actors.ZLinkActorCreateResult;
 import systems.zlink.framework.actors.ZLinkActorManager;
 import systems.zlink.framework.channels.ZLinkRouteMessageContext;
 import systems.zlink.framework.channels.ZLinkRouteRequestHandler;
@@ -29,10 +30,9 @@ public final class PlayBindActorsHandler
     public CompletionStage<Contracts.BindActorsRes> handle(
         Contracts.BindActorsReq request,
         ZLinkRouteMessageContext context) {
-        return spots.getOrCreate(
-                AwaitProbeSpot.class,
-                RoutingId.from(request.spotRid()),
-                ZLinkMessage.of("bind"))
+        return spots.getOrCreate(request.spotRid(), Contracts.TARGET_SPOT)
+            .request(ZLinkMessage.of("bind"))
+            .submit()
             .thenCompose(created -> bind(request.spotRid(), request.actorA()))
             .thenCompose(actorA -> bind(request.spotRid(), request.actorB())
                 .thenApply(actorB -> new Contracts.BindActorsRes(
@@ -42,11 +42,24 @@ public final class PlayBindActorsHandler
 
     private CompletionStage<ActorRef> bind(String spotRid, String actorId) {
         return actors.getOrCreate(actorId, Contracts.ACTOR_TYPE)
+            .request(ZLinkMessage.of("bind"))
+            .submit()
+            .thenApply(PlayBindActorsHandler::requireActor)
             .thenApply(actor -> {
                 evidence.record("bind-actor", spotRid,
                     "actor=" + actor.actorId() + ";node=" + actor.nodeRid());
                 return actor;
             });
+    }
+
+    private static ActorRef requireActor(ZLinkActorCreateResult result) {
+        if (result instanceof ZLinkActorCreateResult.Existing existing) {
+            return existing.actor();
+        }
+        if (result instanceof ZLinkActorCreateResult.Created created) {
+            return created.actor();
+        }
+        throw new IllegalStateException("actor creation was rejected");
     }
 
     private static Contracts.ActorBinding binding(ActorRef actor) {

@@ -11,6 +11,7 @@
 #include <zlink/framework/contracts/spots/spot.hpp>
 
 #include <chrono>
+#include <concepts>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -90,6 +91,7 @@ class mesh_channel_server_builder_t
   public:
     mesh_channel_server_builder_t &set_weight (int weight);
     mesh_channel_server_builder_t &use_handler_group (std::string group_name);
+    mesh_channel_server_builder_t &add_handler_group (std::string group_name);
 
     template <typename THandler, typename TMessage>
     mesh_channel_server_builder_t &add_send_handler (std::string packet_name = {})
@@ -139,10 +141,14 @@ struct mesh_node_socket_config_t
 class mesh_node_builder_t
 {
   public:
+    mesh_channel_builder_t channel (std::string channel_name);
     mesh_channel_builder_t channel_name (std::string channel_name);
     mesh_node_builder_t &listen (std::string endpoint);
+    mesh_node_builder_t &listen (std::uint16_t port = 0);
+    mesh_node_builder_t &set_bind_host (std::string host);
     mesh_node_builder_t &set_advertise_host (std::string host);
     mesh_node_builder_t &set_routing_id (zlink::routing_id_t routing_id);
+    mesh_node_builder_t &set_automatic_routing_id_prefix (std::string prefix);
     mesh_node_builder_t &set_object_role (object_role_t role);
     mesh_node_builder_t &set_placement_weight (int weight);
     mesh_node_builder_t &set_actor_limit (std::int32_t limit);
@@ -169,6 +175,16 @@ class mesh_node_builder_t
         const auto packet = packet_name.empty () ? detail::message_name<TRequest> ()
                                                  : std::move (packet_name);
         return add_handler<THandler, TRequest, TReply> (true, std::move (packet));
+    }
+
+    template <typename TEntrySpot>
+    requires detail::entry_spot_type<TEntrySpot>
+             && std::constructible_from<TEntrySpot, entry_spot_context_t>
+    mesh_node_builder_t &add_entry_spot ()
+    {
+        return add_entry_spot<TEntrySpot> ([] (entry_spot_context_t context) {
+            return std::make_shared<TEntrySpot> (std::move (context));
+        });
     }
 
     template <typename TEntrySpot>

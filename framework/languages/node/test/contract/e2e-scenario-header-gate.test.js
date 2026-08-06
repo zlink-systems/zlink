@@ -31,12 +31,15 @@ test('every Node e2e scenario starts with its verification intent', () => {
     implementedIds.add(ids[0]);
     const canonicalTitle = canonicalTitles.get(ids[0]);
     if (canonicalTitle !== undefined) {
-      assert.equal(firstLine, `// ${ids[0]}: ${canonicalTitle} 시나리오를 검증한다.`);
+      const headerTitle = canonicalTitle.endsWith('검증한다')
+        ? canonicalTitle
+        : `${canonicalTitle} 시나리오를 검증한다`;
+      assert.equal(firstLine, `// ${ids[0]}: ${headerTitle}.`);
     }
   }
 
   const missing = [...canonicalTitles.keys()].filter((id) => !implementedIds.has(id)).sort();
-  const obsolete = [...implementedIds].filter((id) => id.startsWith('ATD-')).sort();
+  const obsolete = [...implementedIds].filter((id) => !canonicalTitles.has(id)).sort();
   assert.deepEqual(missing, []);
   assert.deepEqual(obsolete, []);
 });

@@ -323,6 +323,9 @@ final class LocationContractTest {
         assertEquals(CompletionStage.class, ZLinkActorManager.class
             .getMethod("find", String.class)
             .getReturnType());
+        assertEquals(CompletionStage.class, ZLinkActorManager.class
+            .getMethod("destroy", ActorRef.class)
+            .getReturnType());
         assertEquals(ZLinkActorGetOrCreateCall.class, ZLinkActorManager.class
             .getMethod("getOrCreate", String.class, String.class)
             .getReturnType());

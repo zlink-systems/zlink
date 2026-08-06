@@ -367,11 +367,6 @@ public sealed class RouteCodecTests
             throw new NotSupportedException();
         }
 
-        public void SetChannelName(string channelName)
-        {
-            throw new NotSupportedException();
-        }
-
         public void SetMaxMessageSize(long value)
         {
             MaxMessageSize = value;
@@ -402,8 +397,6 @@ public sealed class RouteCodecTests
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 
         public void Bind(string endpoint) => throw new NotSupportedException();
-
-        public void SetChannelName(string channelName) => throw new NotSupportedException();
 
         public void SetMaxMessageSize(long value) => throw new NotSupportedException();
 
@@ -445,7 +438,8 @@ public sealed class RouteCodecTests
             CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 
-        public Received? Recv(RecvFlags flags = RecvFlags.None) => throw new NotSupportedException();
+        public bool Recv(Received storage, RecvFlags flags = RecvFlags.None) =>
+            throw new NotSupportedException();
 
         public bool Reply(Received received, Message message) =>
             throw new NotSupportedException();
@@ -487,11 +481,6 @@ public sealed class RouteCodecTests
         }
 
         public void Bind(string endpoint)
-        {
-            throw new NotSupportedException();
-        }
-
-        public void SetChannelName(string channelName)
         {
             throw new NotSupportedException();
         }
@@ -566,7 +555,7 @@ public sealed class RouteCodecTests
             throw new NotSupportedException();
         }
 
-        public Received? Recv(RecvFlags flags = RecvFlags.None)
+        public bool Recv(Received storage, RecvFlags flags = RecvFlags.None)
         {
             throw new NotSupportedException();
         }

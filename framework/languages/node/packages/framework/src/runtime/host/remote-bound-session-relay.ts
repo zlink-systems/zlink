@@ -252,15 +252,19 @@ export class ZLinkRemoteBoundSessionRelay {
       readonly ownershipGeneration?: bigint;
       readonly ownerLeaseGeneration?: bigint;
     };
+    const authorityFence = this.options.streamBindingRuntime().authorityFence(value.actorId);
     const currentOwnershipGeneration = this.actorOwnershipGenerations.get(value.actorId)
+      ?? authorityFence?.authorityOwnerGeneration
       ?? currentFence.ownershipGeneration;
+    const currentOwnerLeaseGeneration = authorityFence?.ownerLeaseGeneration
+      ?? currentFence.ownerLeaseGeneration;
     const rememberedHighWaterMatches = rememberedSeal?.sealId === value.sealId
       && rememberedSeal.acceptedHighWater === acceptedHighWater;
     const targetAlreadyPublished =
       routingIdsEqual(current.nodeRid, actorRef.nodeRid) &&
       currentOwnershipGeneration === ownershipGeneration &&
       currentFence.bindingGeneration === bindingGeneration &&
-      currentFence.ownerLeaseGeneration === targetOwnerLeaseGeneration &&
+      currentOwnerLeaseGeneration === targetOwnerLeaseGeneration &&
       (activeSeal || rememberedHighWaterMatches);
     if (targetAlreadyPublished) {
       this.options.updateRemoteActorPacketTarget(value.actorId, value.actorPacketTarget);
@@ -272,12 +276,19 @@ export class ZLinkRemoteBoundSessionRelay {
     if (
       currentOwnershipGeneration !== previousOwnershipGeneration ||
       currentFence.bindingGeneration !== bindingGeneration ||
-      currentFence.ownerLeaseGeneration !== previousOwnerLeaseGeneration
+      currentOwnerLeaseGeneration !== previousOwnerLeaseGeneration
     ) {
-      throw new Error(`Actor '${value.actorId}' bound-session ownership update was fenced by its binding identity.`);
+      throw new Error(
+        `Actor '${value.actorId}' bound-session ownership update was fenced by its binding identity ` +
+        `(ownership=${currentOwnershipGeneration?.toString() ?? 'none'}/${previousOwnershipGeneration.toString()}, ` +
+        `binding=${currentFence.bindingGeneration?.toString() ?? 'none'}/${bindingGeneration.toString()}, ` +
+        `ownerLease=${currentOwnerLeaseGeneration?.toString() ?? 'none'}/${previousOwnerLeaseGeneration.toString()}).`
+      );
     }
     try {
-      await this.options.streamBindingRuntime().commitActorRoute(actorRef);
+      await this.options.streamBindingRuntime().commitActorRoute(actorRef, undefined, {
+        confirmRemoteSessionBinding: 'send'
+      });
     } catch (error) {
       this.options.reportOwnershipRefreshError?.(value.actorId, error);
       throw error;

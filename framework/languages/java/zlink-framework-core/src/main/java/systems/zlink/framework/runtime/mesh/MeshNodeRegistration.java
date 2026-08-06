@@ -103,6 +103,10 @@ public final class MeshNodeRegistration implements ZLinkMeshNodeBuilder {
         return bindEndpoint;
     }
 
+    public String advertiseHost() {
+        return advertiseHost;
+    }
+
     public synchronized RoutingId routingId() {
         if (routingId == null) {
             routingId = RoutingId.from(
@@ -965,8 +969,8 @@ public final class MeshNodeRegistration implements ZLinkMeshNodeBuilder {
         private long maxMessageSize = 16_777_216L;
         //  HWM is an accounted byte count, so it has to be 64-bit. The mailbox
         //  budgets default to 0, which leaves the runtime default in place.
-        private long sendHighWaterMark = 1000;
-        private long receiveHighWaterMark = 1000;
+        private long sendHighWaterMark = 4_096_000L;
+        private long receiveHighWaterMark = 4_096_000L;
         private long mailboxMessageBudget;
         private long mailboxByteBudget;
         private Duration receiveTimeout;

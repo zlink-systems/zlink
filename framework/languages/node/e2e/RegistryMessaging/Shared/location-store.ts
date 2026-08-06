@@ -17,5 +17,7 @@ export function locationMessagingOptions(options: ZLinkLocationOptions): void {
   options
     .pollingIntervalMs(100)
     .ownerLeaseRenewIntervalMs(1000)
-    .ownerLeaseTtlMs(5000);
+    .ownerLeaseTtlMs(5000)
+    .ownerLeaseFencingMarginMs(500)
+    .ownerLeaseRenewTimeoutMs(500);
 }

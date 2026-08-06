@@ -8,6 +8,8 @@ cd "${ROOT_DIR}"
 RUN_ID="$(date +%Y%m%d-%H%M%S)-$$"
 LOG_DIR="${ROOT_DIR}/logs/${RUN_ID}"
 SCENARIO="${1:-all}"
+# Inventory blockers: RM-A3 RM-A7 RM-B3. They require the Kotlin Object
+# Client pair or crash/failover orchestration and are not marker-only passes.
 LOCAL_READINESS_POLL_SECONDS=0.1
 LOCAL_READINESS_ATTEMPTS=30
 HTTP_PROBE_TIMEOUT_SECONDS=3

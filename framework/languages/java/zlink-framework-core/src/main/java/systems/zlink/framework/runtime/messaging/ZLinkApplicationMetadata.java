@@ -17,6 +17,7 @@ import java.util.Objects;
 public final class ZLinkApplicationMetadata {
     private static final int VERSION = 1;
     private static final int MAX_ENCODED_SIZE = 1024;
+    private static final byte[] EMPTY_ENCODED = new byte[0];
     private static final ZLinkApplicationMetadata EMPTY =
         new ZLinkApplicationMetadata(Map.of());
 
@@ -65,7 +66,9 @@ public final class ZLinkApplicationMetadata {
 
     public byte[] encode() {
         if (values.isEmpty()) {
-            return new byte[0];
+            // An empty byte array has no mutable elements, so it can be shared
+            // across the frequent no-metadata send path.
+            return EMPTY_ENCODED;
         }
         if (values.size() > 255) {
             throw invalid("application metadata may contain at most 255 entries");

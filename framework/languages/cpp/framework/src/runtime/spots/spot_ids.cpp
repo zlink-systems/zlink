@@ -1,12 +1,9 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include <zlink/framework/contracts/spots/spot.hpp>
+#include "runtime/utils/uuid.hpp"
 
-#include <array>
 #include <cstdint>
-#include <iomanip>
-#include <random>
-#include <sstream>
 #include <stdexcept>
 #include <utility>
 
@@ -62,26 +59,6 @@ bool valid_utf8 (std::string_view value) noexcept
     return true;
 }
 
-std::string uuid_v4 ()
-{
-    std::array<std::uint8_t, 16> bytes{};
-    std::random_device random;
-    for (auto &byte : bytes)
-        byte = static_cast<std::uint8_t> (random ());
-    bytes[6] = static_cast<std::uint8_t> (
-      (bytes[6] & 0x0fu) | 0x40u);
-    bytes[8] = static_cast<std::uint8_t> (
-      (bytes[8] & 0x3fu) | 0x80u);
-
-    std::ostringstream text;
-    text << std::hex << std::nouppercase << std::setfill ('0');
-    for (std::size_t index = 0; index < bytes.size (); ++index) {
-        if (index == 4 || index == 6 || index == 8 || index == 10)
-            text << '-';
-        text << std::setw (2) << static_cast<unsigned int> (bytes[index]);
-    }
-    return text.str ();
-}
 } // namespace
 
 bool valid_spot_id (std::string_view value) noexcept
@@ -98,14 +75,14 @@ void require_spot_id (std::string_view value)
 
 spot_id_t new_user_spot_id ()
 {
-    return uuid_v4 ();
+    return new_uuid_v4 ();
 }
 
 spot_id_t new_entry_spot_id (std::string_view diagnostic_prefix)
 {
     std::string value (diagnostic_prefix);
     value += "-entry-";
-    value += uuid_v4 ();
+    value += new_uuid_v4 ();
     require_spot_id (value);
     return value;
 }

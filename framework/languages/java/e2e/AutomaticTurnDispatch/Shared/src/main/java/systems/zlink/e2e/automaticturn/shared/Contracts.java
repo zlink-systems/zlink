@@ -69,6 +69,30 @@ public final class Contracts {
     public record ProbeMsg(String requestId, String marker) {
     }
 
+    public record CounterResetMsg(String requestId, int value) {
+    }
+
+    public record CounterAwaitMsg(String requestId, String operationId, long delayMillis, String terminator) {
+    }
+
+    public record CounterReadReq(String requestId) {
+    }
+
+    public record CounterReadRes(String requestId, int value) {
+    }
+
+    public record IoWorkerMsg(String requestId, long delayMillis, String terminator) {
+    }
+
+    public record IoWorkerBatchReq(String requestId, int count, long delayMillis) {
+    }
+
+    public record IoWorkerBatchRes(String requestId, int completed) {
+    }
+
+    public record CpuWorkerMsg(String requestId, long delayMillis, String terminator) {
+    }
+
     public record TimerStartMsg(
         String requestId,
         String timerName,

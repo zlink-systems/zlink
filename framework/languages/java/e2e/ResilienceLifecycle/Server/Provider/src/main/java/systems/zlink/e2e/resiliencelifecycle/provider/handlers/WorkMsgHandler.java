@@ -2,7 +2,7 @@ package systems.zlink.e2e.resiliencelifecycle.provider.handlers;
 
 import systems.zlink.e2e.resiliencelifecycle.shared.Contracts;
 import systems.zlink.e2e.resiliencelifecycle.provider.infrastructure.ScenarioState;
-import systems.zlink.framework.channels.ZLinkSendContext;
+import systems.zlink.framework.ZLinkMessageContext;
 import systems.zlink.framework.channels.ZLinkSendHandler;
 import systems.zlink.framework.handlers.ZLinkHandlerGroup;
 
@@ -17,7 +17,7 @@ public final class WorkMsgHandler implements ZLinkSendHandler<Contracts.WorkMsg>
     @Override
     public java.util.concurrent.CompletionStage<Void> handle(
         Contracts.WorkMsg message,
-        ZLinkSendContext context) {
+        ZLinkMessageContext context) {
         state.record("WorkMsg", message.value());
         return java.util.concurrent.CompletableFuture.completedFuture(null);
     }

@@ -20,12 +20,15 @@ final class PubSubHttpClient implements AutoCloseable {
     }
 
     String post(String url) {
+        return requireSuccess(postRaw(url), url);
+    }
+
+    RawHttpResponse postRaw(String url) {
         RequestTarget target = target(url);
-        RawHttpResponse response = target.client().post(target.path())
+        return target.client().post(target.path())
             .submitRaw()
             .toCompletableFuture()
             .join();
-        return requireSuccess(response, url);
     }
 
     boolean isHealthy(String endpoint) {

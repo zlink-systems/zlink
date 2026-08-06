@@ -75,3 +75,25 @@ final class SpotWorkflowTimerHandler implements ZLinkSpotTimerHandler<Config12Sp
             });
     }
 }
+
+final class SpotObjectProbeHandler
+    implements ZLinkSpotRequestHandler<
+        Config12Spot,
+        Contracts.ObjectProbeReq,
+        Contracts.ObjectProbeRes> {
+    private final EvidenceState evidence;
+
+    SpotObjectProbeHandler(EvidenceState evidence) {
+        this.evidence = evidence;
+    }
+
+    @Override
+    public CompletionStage<Contracts.ObjectProbeRes> handle(
+        Config12Spot spot,
+        Contracts.ObjectProbeReq request) {
+        String spotId = spot.context().spotId();
+        evidence.add("spot-request", "spot=" + spotId + "|id=" + request.id());
+        return CompletableFuture.completedFuture(new Contracts.ObjectProbeRes(
+            request.id(), "spot", spotId, evidence.role()));
+    }
+}

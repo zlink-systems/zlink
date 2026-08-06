@@ -74,6 +74,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         "1".equals(System.getenv("ZLINK_JAVA_STREAM_TRACE"));
     private final ZLinkBackendContext context;
     private final boolean ownsContext;
+    private final ZLinkFrameworkRegistration registration;
     private final ZLinkMessageSerializer serializer;
     private final ZLinkActorRuntime actors;
     private final Map<String, ZLinkInternalMeshNode> meshNodes;
@@ -209,6 +210,8 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         if (registration.streamNodes().isEmpty()) {
             throw new ZLinkConfigurationException("at least one stream node is required");
         }
+        this.registration = java.util.Objects.requireNonNull(
+            registration, "registration");
         this.serializer = serializer;
         this.actors = actors;
         this.meshNodes = Map.copyOf(meshNodes);
@@ -333,6 +336,28 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             .metadataPolicy(
                 metadataPolicy.sessionToActorKeys(),
                 metadataPolicy.actorToSessionKeys());
+    }
+
+    public String listenerEndpoint(String streamNodeName) {
+        StreamNodeRegistration registration = this.registration.streamNodes().stream()
+            .filter(value -> value.name().equals(streamNodeName))
+            .findFirst()
+            .orElseThrow(() -> new ZLinkConfigurationException(
+                "stream node is not configured: " + streamNodeName));
+        ZLinkBackendStreamSocket stream = streamsByName.get(streamNodeName);
+        if (stream == null) {
+            throw new ZLinkConfigurationException(
+                "stream node is not started: " + streamNodeName);
+        }
+        String actual = stream.lastEndpoint();
+        if (actual == null || actual.isBlank()) {
+            actual = registration.bindEndpoint();
+        }
+        if (actual == null || actual.isBlank() || actual.endsWith(":0")) {
+            throw new ZLinkConfigurationException(
+                "stream listener endpoint is not ready: " + streamNodeName);
+        }
+        return registration.advertisedEndpoint(actual);
     }
 
     public CompletionStage<byte[]> handleSessionRelocationRoute(

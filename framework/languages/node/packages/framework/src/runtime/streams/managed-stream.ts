@@ -38,6 +38,11 @@ import {
 import { ZLinkAsyncSubmitter } from '../messaging';
 
 const ZLINK_SEND_DONT_WAIT = 1;
+const NO_ACCEPTED_TERMINAL_RESULTS: ReadonlySet<number> = new Set();
+const IDEMPOTENT_UNBIND_TERMINAL_RESULTS: ReadonlySet<number> = new Set([
+  RequestResult.NotConnected,
+  RequestResult.NotFound
+]);
 
 export interface ZLinkNativeSessionRoute {
   readonly service: StreamSessionService;
@@ -47,6 +52,7 @@ export interface ZLinkNativeSessionRoute {
 export class ZLinkManagedStream implements ZLinkStream {
   private currentLocalAddr: string | undefined;
   private currentRemoteAddr: string | undefined;
+  private transportClosed = false;
   private readonly nativeActorBindings = new Map<string, {
     readonly actor: ZLinkBackendActorRef;
     readonly bindingGeneration: bigint;
@@ -155,6 +161,7 @@ export class ZLinkManagedStream implements ZLinkStream {
 
   async close(signal?: AbortSignal): Promise<void> {
     throwIfAborted(signal);
+    this.markTransportClosed();
     this.socket.disconnectPeer(this.backendRoutingId());
   }
 
@@ -177,6 +184,7 @@ export class ZLinkManagedStream implements ZLinkStream {
     signal?: AbortSignal
   ): Promise<void> {
     throwIfAborted(signal);
+    this.markTransportClosed();
     const closing = NativeMessage.from(encodeSessionClosingFrame(diagnostic, reason));
     try {
       this.socket.send(this.backendRoutingId(), closing, 0);
@@ -188,6 +196,12 @@ export class ZLinkManagedStream implements ZLinkStream {
 
   async bindActor(actor: ActorRef, timeoutMs: number, signal?: AbortSignal): Promise<void> {
     throwIfAborted(signal);
+    if (this.transportClosed) {
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.RouteNotConnected,
+        `Stream session '${this.sessionId}' is disconnected.`
+      );
+    }
     const route = this.nativeRoute(actor.meshName);
     if (route !== undefined) {
       if (route.service.status().state === 1) {
@@ -261,24 +275,44 @@ export class ZLinkManagedStream implements ZLinkStream {
 
   async unbindActor(actorId: string, timeoutMs: number, signal?: AbortSignal): Promise<void> {
     throwIfAborted(signal);
+    if (this.transportClosed) {
+      // The native stream session is released by transport teardown. Do not
+      // submit a second unbind for a stale binding during reconnect cleanup.
+      this.nativeActorBindings.delete(actorId);
+      return;
+    }
     const binding = this.nativeActorBindings.get(actorId);
     if (binding?.route !== undefined) {
+      if (!this.hasNativeBinding(binding.route, actorId, binding.bindingGeneration)) {
+        this.nativeActorBindings.delete(actorId);
+        return;
+      }
       const operation = binding.route.service.unbindActor(
         this.backendRoutingId(),
         binding.actor as never,
         binding.bindingGeneration,
         timeoutMs
       );
-      await this.requireSuccessfulCompletion(
-        binding.route.completions,
-        operation,
-        `Actor '${actorId}' native session unbind`,
-        signal,
-        // Destroy can remove the actor registry entry before the old
-        // session owner processes its cleanup. Both a disconnected route and
-        // that stale actor route are idempotent unbind outcomes.
-        new Set([RequestResult.NotConnected, RequestResult.NotFound])
-      );
+      try {
+        await this.requireSuccessfulCompletion(
+          binding.route.completions,
+          operation,
+          `Actor '${actorId}' native session unbind`,
+          signal,
+          // Destroy can remove the actor registry entry before the old
+          // session owner processes its cleanup. Both a disconnected route and
+          // that stale actor route are idempotent unbind outcomes.
+          IDEMPOTENT_UNBIND_TERMINAL_RESULTS
+        );
+      } catch (error) {
+        // The service removes its local delivery before sending a remote
+        // tombstone. A transport teardown can therefore report an internal
+        // completion after the exact binding is already gone. Treat only that
+        // exact missing binding as stale cleanup; preserve other failures.
+        if (this.hasNativeBinding(binding.route, actorId, binding.bindingGeneration)) {
+          throw error;
+        }
+      }
       this.nativeActorBindings.delete(actorId);
       return;
     }
@@ -310,6 +344,27 @@ export class ZLinkManagedStream implements ZLinkStream {
     this.currentRemoteAddr = remoteAddr;
   }
 
+  /** @internal Marks transport teardown before asynchronous lifecycle cleanup begins. */
+  markTransportClosed(): void {
+    this.transportClosed = true;
+  }
+
+  private hasNativeBinding(
+    route: ZLinkNativeSessionRoute,
+    actorId: string,
+    bindingGeneration: bigint
+  ): boolean {
+    try {
+      return route.service.bindings(this.backendRoutingId()).some(candidate =>
+        candidate.actor.actorId === actorId
+        && candidate.bindingGeneration === bindingGeneration);
+    } catch {
+      // A closed native service owns the teardown state. Keep the original
+      // error when its binding snapshot is unavailable.
+      return true;
+    }
+  }
+
   private backendRoutingId(): never {
     return this.backendSessionRoutingId as never;
   }
@@ -319,7 +374,7 @@ export class ZLinkManagedStream implements ZLinkStream {
     operation: { readonly high: bigint; readonly low: bigint },
     operationName: string,
     signal?: AbortSignal,
-    acceptedTerminalResults: ReadonlySet<number> = new Set()
+    acceptedTerminalResults: ReadonlySet<number> = NO_ACCEPTED_TERMINAL_RESULTS
   ): Promise<void> {
     const completion = await completions.wait(operation, signal);
     try {

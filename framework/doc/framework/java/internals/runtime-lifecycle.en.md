@@ -52,6 +52,19 @@ monitoring, Spot, route, stream, channel, location, and backend context in order
 and coroutine continuations are each completed or failed by their runtime owner. It does not occupy
 JVM threads or coroutine dispatchers with a blocking wait.
 
+Sockets created by the Java Framework set `linger` to 30 seconds so a reply whose submission was
+accepted can be transmitted before shutdown closes the socket. This value is not an Application
+option; `ZLinkJavaSocketOptions` applies it while creating Framework-owned raw sockets. `linger`
+limits the time available after socket close for the native transport to clean up outbound data that
+it still holds.
+
+This setting does not replace handler completion or confirmation that the remote runtime received the
+reply. The runtime first closes new admission and completes already-accepted work with a terminal
+result, then closes the socket. `linger` is therefore a transport cleanup condition that prevents an
+accepted request reply from being discarded immediately during shutdown; it does not change
+`reply.submit()` from submission acceptance into remote-delivery completion. If the shutdown deadline
+expires, the common shutdown contract allows remaining accepted work to end with a shutdown result.
+
 `retire()` and `shutdown()` target the entire host. The deprecated `drain()` and `awaitDrained()` are
 compatibility facades that use the same host `shutdown()` operation. There is no partial-termination
 operation that takes a MeshName — a single topology is not terminated separately.
@@ -75,6 +88,7 @@ configuration.
 | `HostTest.beanCreationDoesNotStartRuntime` | Bean creation configures the runtime as `PREPARING` but does not start sockets, discovery loops, or workers. |
 | `ZLinkAsyncSubmitterTest.close_failsPendingItems` | Runtime shutdown does not leave pending submits behind. |
 | `KotlinSuspendAnnotationHandlerTest.kotlinSuspendAnnotationCancellationCompletesJavaStageExceptionally` | Kotlin cancellation propagates to the shared Java completion. |
+| `ChannelEgressRouting/CH-E2E-04B` | After ClientServer server shutdown, a request accepted before shutdown ends with a reply, and a new request is delivered to another ready server. |
 
 ---
 <!-- framework-adapter-nav:bottom:start -->

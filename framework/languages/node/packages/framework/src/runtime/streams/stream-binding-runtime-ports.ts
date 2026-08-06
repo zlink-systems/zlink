@@ -6,12 +6,20 @@ import type { ZLinkBoundSessionResponseTarget } from './bound-session-response-t
 
 export interface ZLinkStreamActorLookupPort {
   find(actorId: string): DefaultZLinkSessionActor | undefined;
+  authorityFence(actorId: string): {
+    readonly authorityOwnerGeneration: bigint;
+    readonly ownerLeaseGeneration: bigint;
+  } | undefined;
 }
 
 export interface ZLinkStreamActorLifecyclePort {
   rebindActor(actorRef: ActorRef, signal?: AbortSignal): Promise<void>;
   refreshActor(actorRef: ActorRef, signal?: AbortSignal): Promise<void>;
-  commitActorRoute(actorRef: ActorRef, signal?: AbortSignal): Promise<void>;
+  commitActorRoute(
+    actorRef: ActorRef,
+    signal?: AbortSignal,
+    options?: ZLinkActorRouteCommitOptions
+  ): Promise<void>;
   sealActorRoute(input: {
     readonly actorId: string;
     readonly actorGeneration: bigint;
@@ -23,6 +31,16 @@ export interface ZLinkStreamActorLifecyclePort {
   abortActorRouteSeal(actorId: string, sealId: string): boolean;
   validateActorRouteSeal(actorId: string, sealId: string, acceptedHighWater: bigint): boolean;
   unbindActor(actorId: string): void;
+}
+
+export interface ZLinkActorRouteCommitOptions {
+  /**
+   * Relocation already carries the binding identity to the target actor. The
+   * follow-up confirmation can use a one-way route submission because a
+   * request/ACK would create a nested route request while the Session
+   * ownership command is being dispatched.
+   */
+  readonly confirmRemoteSessionBinding?: boolean | 'send';
 }
 
 export interface ZLinkBoundSessionResponsePort {

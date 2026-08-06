@@ -18,7 +18,7 @@ import systems.zlink.httpclient.ZLinkHttpClient;
 
 public final class DynamicClusterLauncher implements AutoCloseable {
     private static final Duration LOCAL_READINESS_TIMEOUT = Duration.ofSeconds(3);
-    private static final Duration ROUTE_SETTLE_TIMEOUT = Duration.ofSeconds(5);
+    private static final Duration ROUTE_SETTLE_TIMEOUT = Duration.ofSeconds(30);
     private final List<DynamicProcess> processes = new ArrayList<>();
     private final Path logDir;
     private final String buildDir;
@@ -46,16 +46,61 @@ public final class DynamicClusterLauncher implements AutoCloseable {
         return startProvider(name, rid, rid, "");
     }
 
-    public DynamicProvider startProvider(String name, String rid, String instanceId, String weight) {
+    public DynamicProvider startApiProvider(String name, String rid) {
         String httpUrl = pickHttpUrl();
-        String channelEndpoint = pickEndpoint();
+        String apiEndpoint = pickEndpoint();
         DynamicProcess process = startProcess(
             name,
             providerBinary(),
-            providerConfig(rid, instanceId, weight, channelEndpoint, pickEndpoint(), httpUrl),
+            providerConfig(rid, rid, "", false, apiEndpoint, "", "", "", httpUrl),
             httpUrl);
         process.waitReady();
-        return new DynamicProvider(process, httpUrl, channelEndpoint, rid);
+        return new DynamicProvider(process, httpUrl, apiEndpoint, rid);
+    }
+
+    public DynamicProvider startProvider(String name, String rid, String instanceId, String weight) {
+        String httpUrl = pickHttpUrl();
+        String apiEndpoint = pickEndpoint();
+        DynamicProcess process = startProcess(
+            name,
+            providerBinary(),
+            providerConfig(
+                rid, instanceId, weight, false, apiEndpoint, "", "", "", httpUrl),
+            httpUrl);
+        process.waitReady();
+        return new DynamicProvider(process, httpUrl, apiEndpoint, rid);
+    }
+
+    public DynamicProvider startObjectProvider(String name, String rid, String objectMeshName) {
+        String httpUrl = pickHttpUrl();
+        String apiEndpoint = pickEndpoint();
+        String routeEndpoint = pickEndpoint();
+        String objectEndpoint = pickEndpoint();
+        DynamicProcess process = startProcess(
+            name,
+            providerBinary(),
+            providerConfig(
+                rid, rid, "", true, apiEndpoint, routeEndpoint, objectMeshName, objectEndpoint, httpUrl),
+            httpUrl);
+        process.waitReady();
+        return new DynamicProvider(process, httpUrl, objectEndpoint, rid);
+    }
+
+    public DynamicWorkflow startWorkflow(String name, String rid, String objectMeshName) {
+        String httpUrl = pickHttpUrl();
+        String apiEndpoint = pickEndpoint();
+        String routeEndpoint = pickEndpoint();
+        String workflowEndpoint = pickEndpoint();
+        String objectEndpoint = pickEndpoint();
+        DynamicProcess process = startProcess(
+            name,
+            workflowBinary(),
+            workflowConfig(
+                rid, rid, apiEndpoint, routeEndpoint, workflowEndpoint,
+                objectMeshName, objectEndpoint, httpUrl),
+            httpUrl);
+        process.waitReady();
+        return new DynamicWorkflow(process, httpUrl, objectEndpoint, rid);
     }
 
     public DynamicConsumer startConsumer(String name) {
@@ -67,33 +112,6 @@ public final class DynamicClusterLauncher implements AutoCloseable {
             httpUrl);
         process.waitReady();
         return new DynamicConsumer(process, httpUrl);
-    }
-
-    public void waitPeerEndpoint(ZLinkHttpClient consumer, String endpoint) {
-        waitPeers(
-            consumer,
-            peers -> java.util.Arrays.stream(peers)
-                .anyMatch(peer -> endpoint.equals(peer.get("nodeRid"))),
-            "ready peer " + endpoint);
-    }
-
-    public void waitSinglePeer(ZLinkHttpClient consumer, String nodeRid, String endpoint) {
-        waitPeers(
-            consumer,
-            peers -> java.util.Arrays.stream(peers)
-                .filter(peer -> nodeRid.equals(peer.get("nodeRid")))
-                .count() == 1
-                && java.util.Arrays.stream(peers)
-                    .filter(peer -> nodeRid.equals(peer.get("nodeRid")))
-                    .count() == 1,
-            "single ready peer " + nodeRid);
-    }
-
-    public void waitPeerEndpointAbsent(ZLinkHttpClient consumer, String endpoint) {
-        waitPeers(
-            consumer,
-            peers -> java.util.Arrays.stream(peers).noneMatch(peer -> endpoint.equals(peer.get("nodeRid"))),
-            "ready peer removal " + endpoint);
     }
 
     public void waitPeerCount(ZLinkHttpClient consumer, int count) {
@@ -122,10 +140,17 @@ public final class DynamicClusterLauncher implements AutoCloseable {
         try {
             Files.createDirectories(logDir);
             Path configPath = writeConfig(name, config);
+            Files.writeString(
+                logDir.resolve(name + ".launch.properties"),
+                config,
+                StandardOpenOption.CREATE,
+                StandardOpenOption.TRUNCATE_EXISTING,
+                StandardOpenOption.WRITE);
             ProcessBuilder builder = new ProcessBuilder(binary, "--config", configPath.toString());
-            builder.redirectOutput(logDir.resolve(name + ".stdout.log").toFile());
+            Path stdoutLog = logDir.resolve(name + ".stdout.log");
+            builder.redirectOutput(stdoutLog.toFile());
             builder.redirectError(logDir.resolve(name + ".stderr.log").toFile());
-            DynamicProcess process = new DynamicProcess(builder.start(), httpUrl, configPath);
+            DynamicProcess process = new DynamicProcess(builder.start(), httpUrl, configPath, stdoutLog);
             processes.add(process);
             return process;
         } catch (IOException error) {
@@ -134,23 +159,48 @@ public final class DynamicClusterLauncher implements AutoCloseable {
     }
 
     private String providerConfig(
-        String rid, String instanceId, String weight, String apiEndpoint,
-        String routeEndpoint, String httpUrl) {
+        String rid, String instanceId, String weight, boolean apiClient, String apiEndpoint,
+        String routeEndpoint, String objectMeshName, String objectEndpoint, String httpUrl) {
         return """
             e2e.provider-rid=%s
             e2e.provider-instance=%s
             e2e.api-weight=%s
+            e2e.api-client=%s
             e2e.api-endpoint=%s
             e2e.route-endpoint=%s
             e2e.route-peers=
             e2e.workflow-endpoint=
+            e2e.object-mesh-name=%s
+            e2e.object-endpoint=%s
             e2e.http-port=%s
             server.port=${e2e.http-port}
             e2e.redis-location-endpoint=%s
             e2e.location-key-prefix=%s
             e2e.log-dir=%s
-            """.formatted(rid, instanceId, weight, apiEndpoint,
-                routeEndpoint, portOf(httpUrl), options.redisLocationEndpoint(),
+            """.formatted(rid, instanceId, weight, apiClient, apiEndpoint,
+                routeEndpoint, objectMeshName, objectEndpoint, portOf(httpUrl), options.redisLocationEndpoint(),
+                options.locationKeyPrefix(), logDir);
+    }
+
+    private String workflowConfig(
+        String rid, String instanceId, String apiEndpoint, String routeEndpoint,
+        String workflowEndpoint, String objectMeshName, String objectEndpoint, String httpUrl) {
+        return """
+            e2e.provider-rid=%s
+            e2e.provider-instance=%s
+            e2e.api-weight=
+            e2e.api-endpoint=%s
+            e2e.route-endpoint=%s
+            e2e.workflow-endpoint=%s
+            e2e.object-mesh-name=%s
+            e2e.object-endpoint=%s
+            e2e.http-port=%s
+            server.port=${e2e.http-port}
+            e2e.redis-location-endpoint=%s
+            e2e.location-key-prefix=%s
+            e2e.log-dir=%s
+            """.formatted(rid, instanceId, apiEndpoint, routeEndpoint, workflowEndpoint,
+                objectMeshName, objectEndpoint, portOf(httpUrl), options.redisLocationEndpoint(),
                 options.locationKeyPrefix(), logDir);
     }
 
@@ -183,6 +233,10 @@ public final class DynamicClusterLauncher implements AutoCloseable {
 
     private String consumerBinary() {
         return buildDir + "/Server-Consumer/install/registry-messaging-consumer/bin/registry-messaging-consumer";
+    }
+
+    private String workflowBinary() {
+        return buildDir + "/Server-Workflow/install/registry-messaging-workflow/bin/registry-messaging-workflow";
     }
 
     private static void waitPeers(
@@ -233,17 +287,26 @@ public final class DynamicClusterLauncher implements AutoCloseable {
     public record DynamicConsumer(DynamicProcess process, String httpUrl) {
     }
 
+    public record DynamicWorkflow(
+        DynamicProcess process,
+        String httpUrl,
+        String objectEndpoint,
+        String routingId) {
+    }
+
     public static final class DynamicProcess {
         private final Process process;
         private final String httpUrl;
         private final ZLinkHttpClient healthClient;
         private final Path configPath;
+        private final Path stdoutLog;
         private boolean stopped;
 
-        DynamicProcess(Process process, String httpUrl, Path configPath) {
+        DynamicProcess(Process process, String httpUrl, Path configPath, Path stdoutLog) {
             this.process = process;
             this.httpUrl = httpUrl;
             this.configPath = configPath;
+            this.stdoutLog = stdoutLog;
             this.healthClient = ZLinkHttpClient.create(httpUrl)
                 .timeout(Duration.ofMillis(300))
                 .build();
@@ -257,7 +320,8 @@ public final class DynamicClusterLauncher implements AutoCloseable {
                 }
                 try {
                     var response = healthClient.get("/health").submitRaw().toCompletableFuture().join();
-                    if (response.status() >= 200 && response.status() < 300) {
+                    if (response.status() >= 200 && response.status() < 300
+                        && frameworkIsReady()) {
                         return;
                     }
                 } catch (RuntimeException error) {
@@ -266,6 +330,15 @@ public final class DynamicClusterLauncher implements AutoCloseable {
                 sleep(100);
             }
             throw new IllegalStateException("timed out waiting for " + httpUrl);
+        }
+
+        private boolean frameworkIsReady() {
+            try {
+                return Files.exists(stdoutLog)
+                    && Files.readString(stdoutLog).contains("ZLINK_FRAMEWORK_READY");
+            } catch (IOException error) {
+                return false;
+            }
         }
 
         void stop() {
@@ -283,6 +356,28 @@ public final class DynamicClusterLauncher implements AutoCloseable {
             } catch (InterruptedException error) {
                 Thread.currentThread().interrupt();
                 process.destroyForcibly();
+            } finally {
+                try {
+                    Files.deleteIfExists(configPath);
+                } catch (IOException ignored) {
+                }
+            }
+        }
+
+        public void crash() {
+            if (stopped) {
+                return;
+            }
+            stopped = true;
+            healthClient.close();
+            process.destroyForcibly();
+            try {
+                if (!process.waitFor(10, TimeUnit.SECONDS)) {
+                    throw new IllegalStateException("crashed process did not terminate: " + httpUrl);
+                }
+            } catch (InterruptedException error) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("interrupted while crashing " + httpUrl, error);
             } finally {
                 try {
                     Files.deleteIfExists(configPath);

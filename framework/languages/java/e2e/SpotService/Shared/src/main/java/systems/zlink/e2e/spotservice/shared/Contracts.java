@@ -5,7 +5,6 @@ import java.util.List;
 public final class Contracts {
     public static final String ROUTE_CHANNEL = "spot.service.route";
     public static final String ROUTE_PACKET = "RouteReq";
-    public static final String EGRESS_CHANNEL = "spot.service.egress";
     public static final String INGRESS_CHANNEL = "spot.service.ingress";
     public static final String SPOT_MESH = "spot.service.mesh";
     public static final String SPOT_NODE = "play";
@@ -70,6 +69,111 @@ public final class Contracts {
     }
 
     public record PlacementWeightRes(int weight) {
+    }
+
+    public record EntryIdentity(String entrySpotId, String nodeRid) {
+    }
+
+    public record GatedSpotCreateReq(String spotRid) {
+    }
+
+    public record AsyncAccepted(boolean started) {
+    }
+
+    public record GateControlRes(boolean started, boolean released) {
+    }
+
+    public record SpotPublicationProbeRes(
+        boolean found,
+        boolean requestSucceeded,
+        String foundNodeRid,
+        String requestNodeRid,
+        int value) {
+    }
+
+    public record AutomaticSpotBatchReq(int count) {
+    }
+
+    public record AutomaticSpotBatchRes(
+        int requested,
+        int created,
+        int distinctIds,
+        int successfulRequests,
+        List<String> spotIds) {
+    }
+
+    public record SpotIdBoundaryRes(
+        List<String> validIds,
+        List<String> foundIds,
+        List<Integer> stateValues,
+        boolean exactEquality,
+        String invalidErrorKind,
+        int invalidFactoryCalls) {
+    }
+
+    public record ReservedEntryProbeRes(
+        String entrySpotId,
+        String userErrorKind,
+        int userFactoryCalls) {
+    }
+
+    public record ActorManagerProbeReq(String operation, String actorId) {
+    }
+
+    public record ActorRefView(
+        String actorId,
+        long generation,
+        String nodeRid) {
+    }
+
+    public record ActorManagerProbeRes(
+        String state,
+        ActorRefView actor,
+        String reply) {
+    }
+
+    public record ActorCreateRaceReq(String actorId) {
+    }
+
+    public record ActorCreateRaceRes(
+        String firstState,
+        String firstReply,
+        String secondState,
+        ActorRefView secondActor,
+        ActorRefView finalActor) {
+    }
+
+    public record ActorRefReq(String actorId) {
+    }
+
+    public record ActorRequestReq(String actorId, String value, long timeoutMilliseconds) {
+    }
+
+    public record ActorRequestRes(
+        boolean succeeded,
+        String actorId,
+        String value,
+        String errorKind) {
+    }
+
+    public record PlacementProbeRes(boolean accepted, int current, String errorKind) {
+    }
+
+    public record PlacementBatchReq(String suffix, int count) {
+    }
+
+    public record PlacementBatchRes(
+        int actorCount,
+        int actorPlayA,
+        int actorPlayB,
+        int spotCount,
+        int spotPlayA,
+        int spotPlayB) {
+    }
+
+    public record CapacityPlacementRes(
+        String firstNodeRid,
+        String secondNodeRid) {
     }
 
     public record RelocationReq() {
@@ -251,6 +355,14 @@ public final class Contracts {
     }
 
     public record MultiBindRes(int boundCount) {
+    }
+
+    public record NotifyBoundActorDisconnectedReq(String actorId) {
+    }
+
+    public record NotifyBoundActorDisconnectedRes(
+        String actorId,
+        boolean completed) {
     }
 
     public record ActorJoinReq(

@@ -9,6 +9,10 @@ source "${ROOT_DIR}/../start-order-common.sh"
 SCENARIO="${1:-all}"
 e2e_start_order="$(zlink_e2e_start_order_mode "$@")"
 echo "start_order=${e2e_start_order}"
+# Inventory blockers: ST-E1A ST-E1B ST-E1C ST-F3A ST-G1 ST-G2 ST-G3
+# ST-G4 ST-G5 ST-G6 ST-H1 ST-H2 ST-H3 ST-H4 ST-H4A ST-H4B ST-H5
+# ST-I1 ST-I2 ST-I3 ST-I4 ST-I5 ST-I6. The runner must reject these until
+# process evidence exists; component tests are not substituted for E2E passes.
 if rg -q "observedAtNanos" "${ROOT_DIR}/Client" "${ROOT_DIR}/Server" "${ROOT_DIR}/Shared"; then
   echo "SpotActorTransfer evidence must not compare process-local nanoTime values" >&2
   exit 1

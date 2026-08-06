@@ -5,6 +5,7 @@ import { NestFactory } from '@nestjs/core';
 import {
   ZLINK_ACTOR_CLIENT,
   ZLINK_ACTOR_MANAGER,
+  ZLINK_FANOUT_RUNTIME,
   ZLINK_LOCATION_RUNTIME_QUERY,
   ZLINK_ROUTE_CLIENT,
   ZLINK_ROUTE_MESH_RUNTIME,
@@ -14,6 +15,7 @@ import {
 import type {
   ZLinkActorClient,
   ZLinkActorManager,
+  ZLinkFanoutRuntime,
   ZLinkLocationRuntimeQuery,
   ZLinkRouteClient,
   ZLinkRouteMeshRuntime,
@@ -105,11 +107,33 @@ async function bootstrap(): Promise<void> {
     await report();
   }
   console.log(`topology=ready node=${node.nodeId} zones=${zones.join(',')}`);
+  if (zones.length === 0) {
+    const fanout = app.get<ZLinkFanoutRuntime>(ZLINK_FANOUT_RUNTIME, { strict: false });
+    await waitForFanoutSubscriber(fanout, ZoneWorldNames.broadcastChannel, node.nodeId);
+  }
   try {
     await waitForShutdown();
   } finally {
     if (statusTimer !== undefined) clearInterval(statusTimer);
     await closeRuntime(app);
+  }
+}
+
+async function waitForFanoutSubscriber(
+  runtime: ZLinkFanoutRuntime,
+  channelName: string,
+  nodeId: string
+): Promise<void> {
+  const deadline = Date.now() + 10_000;
+  for (;;) {
+    if (runtime.snapshot(channelName).isReady) {
+      console.log(`fanout subscriber=ready node=${nodeId}`);
+      return;
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(`Fanout subscriber '${channelName}' did not become ready on '${nodeId}'.`);
+    }
+    await delay(50);
   }
 }
 

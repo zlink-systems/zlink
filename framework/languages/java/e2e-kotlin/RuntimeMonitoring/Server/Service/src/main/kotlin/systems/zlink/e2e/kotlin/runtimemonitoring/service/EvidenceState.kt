@@ -5,6 +5,7 @@ import java.util.List as JavaList
 
 class EvidenceState {
     private val entries = ArrayList<Contracts.EvidenceEntry>()
+    private var observer: Contracts.ObserverStatus = Contracts.ObserverStatus(false, 0, false, 0, "")
 
     @Synchronized
     fun record(
@@ -19,5 +20,13 @@ class EvidenceState {
     @Synchronized
     fun snapshot(): Contracts.EvidenceSnapshot {
         return Contracts.EvidenceSnapshot(JavaList.copyOf(entries))
+    }
+
+    @Synchronized
+    fun observerStatus(): Contracts.ObserverStatus = observer
+
+    @Synchronized
+    fun observerStatus(value: Contracts.ObserverStatus) {
+        observer = value
     }
 }

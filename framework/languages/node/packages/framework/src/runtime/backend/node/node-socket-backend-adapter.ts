@@ -8,7 +8,6 @@ import {
   submitBindingRequestCallback,
   submitBindingSend,
   toNativeRoutingId,
-  withNativeFallback,
   zlink,
   type ZLinkBindingRequestOperation,
   type ZLinkBindingSendOperation
@@ -31,6 +30,7 @@ export function wrapSocket<T extends { close(): void }>(
   const reusableReceived = options.reuseReceived === true ? new zlink.Received() : undefined;
   const socket = nativeInstance as T & {
     options?: {
+      probe?: boolean;
       peerWeight?: number;
       sendHwm?: number;
       recvHwm?: number;
@@ -71,6 +71,25 @@ export function wrapSocket<T extends { close(): void }>(
     setChannelName(channelName: string): void {
       const setChannelName = (nativeInstance as T & { setChannelName?: (value: string) => void }).setChannelName;
       setChannelName?.call(nativeInstance, channelName);
+    },
+    setProbe(enabled: boolean): void {
+      requireSocketOptions(socket).probe = enabled;
+    },
+    setTlsServer(cert: string, key: string, requireClientCert?: boolean): void {
+      (nativeInstance as T & {
+        setTlsServer(cert: string, key: string, requireClientCert?: boolean): void;
+      }).setTlsServer(cert, key, requireClientCert);
+    },
+    setSubscription(topic: string): void {
+      (nativeInstance as T & { setSubscription(topic: string): void }).setSubscription(topic);
+    },
+    unsetSubscription(topic: string): void {
+      (nativeInstance as T & { unsetSubscription(topic: string): void }).unsetSubscription(topic);
+    },
+    subscribe(result: unknown, flags?: number): boolean {
+      return Boolean((nativeInstance as T & {
+        subscribe(result: unknown, flags?: number): boolean;
+      }).subscribe(result, flags));
     },
     get lastEndpoint(): string | undefined {
       return socket.options?.lastEndpoint;
@@ -154,7 +173,7 @@ export function wrapSocket<T extends { close(): void }>(
           timeoutMs
         );
       }
-      return (nativeInstance as T & { request(...values: unknown[]): unknown }).request(...args);
+      throw new TypeError('Backend request requires a payload and callback.');
     },
     reply(...args: unknown[]): unknown {
       const [routingId, requestSeq, payload] = args as [unknown, bigint, unknown];
@@ -191,7 +210,7 @@ export function wrapSocket<T extends { close(): void }>(
           flags
         );
       }
-      return (nativeInstance as T & { publish(...values: unknown[]): unknown }).publish(...args);
+      throw new TypeError('Backend publish requires a topic, payload, and flags.');
     },
     sendToSpot(targetRid: unknown, targetSpot: unknown, payload: unknown, flags: number): boolean {
       return submitBindingSend(
@@ -237,7 +256,7 @@ export function wrapSocket<T extends { close(): void }>(
       return false;
     }
   };
-  return withNativeFallback(adapter, nativeInstance) as unknown as T & ZLinkBackendObject;
+  return adapter as unknown as T & ZLinkBackendObject;
 }
 
 function requireSocketOptions<TOptions>(socket: { readonly options?: TOptions }): TOptions {

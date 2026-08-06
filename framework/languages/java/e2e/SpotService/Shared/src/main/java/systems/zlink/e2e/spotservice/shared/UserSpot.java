@@ -13,7 +13,7 @@ import systems.zlink.framework.spots.ZLinkSpotActorJoinResult;
 import systems.zlink.framework.spots.ZLinkSpotContext;
 import systems.zlink.framework.spots.ZLinkSpotCreateResponse;
 
-public final class UserSpot implements ZLinkSpot<ScenarioActor> {
+public class UserSpot implements ZLinkSpot<ScenarioActor> {
     private final ZLinkSpotContext context;
     private final ScenarioState evidence;
     private String state = "";
@@ -58,7 +58,9 @@ public final class UserSpot implements ZLinkSpot<ScenarioActor> {
     @Override
     public CompletionStage<Void> onInitialize() {
         evidence.record("SpotInitialized", context.spotId(), "");
-        return CompletableFuture.completedFuture(null);
+        return evidence.hasGate(context.spotId())
+            ? evidence.gate(context.spotId())
+            : CompletableFuture.completedFuture(null);
     }
 
     @Override
@@ -189,6 +191,10 @@ public final class UserSpot implements ZLinkSpot<ScenarioActor> {
 
     public void record(String marker, String value) {
         evidence.record(marker, context.spotId(), value);
+    }
+
+    CompletionStage<Void> evidenceGate(String key) {
+        return evidence.gate(key);
     }
 
     public ScenarioStage stage() {

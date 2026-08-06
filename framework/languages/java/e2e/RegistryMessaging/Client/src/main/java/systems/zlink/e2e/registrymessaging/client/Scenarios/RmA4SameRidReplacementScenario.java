@@ -16,7 +16,7 @@ public final class RmA4SameRidReplacementScenario {
                 cluster.startProvider("api-a-v1", "api-a", "api-a-v1", "");
             DynamicClusterLauncher.DynamicConsumer consumer = cluster.startConsumer("consumer");
             try (ZLinkHttpClient requester = ZLinkHttpClient.create(consumer.httpUrl()).build()) {
-                cluster.waitPeerEndpoint(requester, providerV1.routingId());
+                cluster.waitPeerCount(requester, 1);
                 Contracts.ProfileRes first = ScenarioAssert.requestProfileEventually(requester, "replacement-before");
                 ScenarioAssert.that("api-a".equals(first.providerRid()) && "api-a-v1".equals(first.instanceId()),
                     "RM-A4 initial provider mismatch");
@@ -26,12 +26,12 @@ public final class RmA4SameRidReplacementScenario {
             ScenarioAssert.that("Drained".equals(drainResult),
                 "RM-A4 v1 did not reach terminal Drained: " + drainResult);
             try (ZLinkHttpClient requester = ZLinkHttpClient.create(consumer.httpUrl()).build()) {
-                cluster.waitPeerEndpointAbsent(requester, providerV1.routingId());
+                cluster.waitPeerCount(requester, 0);
             }
             DynamicClusterLauncher.DynamicProvider providerV2 =
                 cluster.startProvider("api-a-v2", "api-a", "api-a-v2", "");
             try (ZLinkHttpClient requester = ZLinkHttpClient.create(consumer.httpUrl()).build()) {
-                cluster.waitSinglePeer(requester, "api-a", providerV2.routingId());
+                cluster.waitPeerCount(requester, 1);
                 for (int index = 0; index < 20; index++) {
                     Contracts.ProfileRes reply =
                         ScenarioAssert.requestProfileEventually(requester, "replacement-after-" + index);

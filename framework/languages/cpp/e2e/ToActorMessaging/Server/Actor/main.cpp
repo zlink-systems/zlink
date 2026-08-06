@@ -26,8 +26,10 @@ void add_redis_location_store (zlink::framework::zlink_framework_options_t &fram
         zlink::framework::redis::redis_location_options_t{
           .connection_string = redis.endpoint, .key_prefix = redis.key_prefix}));
     auto &locations = framework.configure_locations ();
-    locations.heartbeat_interval = std::chrono::seconds (1);
+    locations.owner_lease_renew_interval = std::chrono::seconds (1);
     locations.owner_lease_ttl = std::chrono::seconds (3);
+    locations.owner_lease_fencing_margin = std::chrono::seconds (1);
+    locations.owner_lease_renew_timeout = std::chrono::milliseconds (500);
     locations.polling_interval = std::chrono::milliseconds (500);
 }
 
@@ -144,7 +146,7 @@ class to_actor_e2e_spot_t
     }
 
     void on_notify (to_actor_e2e_actor_t &actor,
-                    zlink::framework::spot_actor_send_context_t &,
+                    zlink::framework::message_context_t &,
                     const e2e::actor_notify_t &message)
     {
         _evidence.append ({message.scenario, actor.actor_id (), "send", message.value});
@@ -152,7 +154,7 @@ class to_actor_e2e_spot_t
 
     zlink::framework::task_t<e2e::actor_reply_t>
     on_ask (to_actor_e2e_actor_t &actor,
-            zlink::framework::spot_actor_request_context_t &,
+            zlink::framework::message_context_t &,
             const e2e::actor_ask_t &message)
     {
         _evidence.append ({message.scenario, actor.actor_id (), "request", message.value});
@@ -174,14 +176,12 @@ class ensure_actor_handler_t
 {
   public:
     using dependency_types =
-      zlink::framework::dependency_list_t<zlink::framework::session_actor_manager_t,
-                                         e2e::actor_configuration_t>;
+      zlink::framework::dependency_list_t<zlink::framework::session_actor_manager_t>;
     using request_type = e2e::actor_call_request_t;
     using reply_type = e2e::actor_call_response_t;
 
-    ensure_actor_handler_t (zlink::framework::session_actor_manager_t actors,
-                            e2e::actor_configuration_t &configuration) :
-        _actors (std::move (actors)), _configuration (configuration)
+    explicit ensure_actor_handler_t (zlink::framework::session_actor_manager_t actors) :
+        _actors (std::move (actors))
     {
     }
 
@@ -197,17 +197,7 @@ class ensure_actor_handler_t
             if (!bound) {
                 throw *bound.error ();
             }
-            auto joined = bound.value ()
-                            .context ()
-                            .join_entry_spot (
-                              zlink::framework::node_rid_t::from_string (
-                                _configuration.node_rid),
-                              zlink::framework::message_t {})
-                            .async ()
-                            .result ();
-            if (!joined) {
-                throw *joined.error ();
-            }
+            bound.value ().context ().join_entry_spot ().defer ();
             return {request.scenario, request.actor_id, "ensured", ""};
         }
         catch (const zlink::framework::framework_exception_t &error) {
@@ -218,7 +208,6 @@ class ensure_actor_handler_t
 
   private:
     zlink::framework::session_actor_manager_t _actors;
-    e2e::actor_configuration_t &_configuration;
 };
 
 class evidence_handler_t

@@ -24,6 +24,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <string_view>
 #include <typeindex>
 #include <typeinfo>
 #include <tuple>
@@ -56,6 +57,28 @@ inline void require_non_blank (const std::string &value, const char *message)
         throw framework_exception_t (framework_error_kind_t::protocol_error, message);
     }
 }
+
+inline bool is_valid_automatic_routing_id_prefix (std::string_view value) noexcept
+{
+    if (value.empty () || value.size () > 64) {
+        return false;
+    }
+    for (const auto character : value) {
+        const auto is_alphanumeric =
+          (character >= 'A' && character <= 'Z')
+          || (character >= 'a' && character <= 'z')
+          || (character >= '0' && character <= '9');
+        if (!is_alphanumeric && character != '.' && character != '_'
+            && character != '-') {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Defined in the runtime so public option builders can defer identity
+ * generation without exposing the random source in an installed header. */
+std::string new_uuid_v4 ();
 
 enum class handler_group_kind_t
 {
@@ -330,6 +353,8 @@ struct framework_options_state_t
     std::map<std::string, std::size_t> client_server_server_registration_counts;
     std::map<std::string, std::string>
       client_server_server_advertise_hosts;
+    std::map<std::string, std::string>
+      client_server_server_advertise_host_overrides;
     std::map<std::string, std::optional<std::chrono::milliseconds>>
       client_server_default_request_timeouts;
     std::map<std::string, std::function<void (channel_builder_t &)>>
@@ -340,6 +365,9 @@ struct framework_options_state_t
     std::set<std::string> fanout_channels_with_subscriber;
     std::set<std::string> fanout_channels_with_automatic_subscriber;
     std::set<std::string> fanout_channels_with_manual_subscriber;
+    std::map<std::string, std::string> fanout_publisher_advertise_hosts;
+    std::map<std::string, std::string>
+      fanout_publisher_advertise_host_overrides;
     std::set<std::string> route_mesh_channels;
     std::set<std::string> mesh_node_channel_names;
     std::set<std::string> route_mesh_channels_with_bind;
@@ -352,6 +380,8 @@ struct framework_options_state_t
     std::map<std::string, stream_session_factory_t> stream_session_factories;
     bool has_location_store_instance = false;
     bool has_relocation_store_instance = false;
+    std::string bind_host = "127.0.0.1";
+    std::optional<std::string> advertise_host;
     location_options_t locations;
     http_options_builder_t http;
     message_metadata_policy_t metadata_policy;

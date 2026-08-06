@@ -27,4 +27,5 @@ test('Bingo runner proves room leave and actor destroy lifecycle boundaries', ()
   const disconnected = session.match(/async onDisconnected\(\)[\s\S]*?\n  }/)?.[0] ?? '';
   assert.match(disconnected, /bingo-lifecycle session-disconnect/);
   assert.doesNotMatch(disconnected, /destroyActor|markForDestroy/);
+  assert.doesNotMatch(disconnected, /notifyDisconnected/);
 });

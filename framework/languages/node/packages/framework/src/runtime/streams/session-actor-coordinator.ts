@@ -33,7 +33,8 @@ export interface ZLinkSessionActorCoordinatorOptions {
   readonly confirmRemoteActorSessionBinding?: (
     actor: ActorRef,
     sessionRid: ActorRef['nodeRid'],
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    options?: { readonly waitForAcknowledgement?: boolean }
   ) => Promise<void>;
   readonly metrics?: ZLinkRuntimeMetrics;
 }
@@ -65,15 +66,22 @@ export class ZLinkSessionActorCoordinator {
   private async replaceBinding(
     context: DefaultZLinkSessionContext,
     actorRef: ActorRef,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    confirmRemoteSessionBinding: boolean | 'send' = true
   ): Promise<DefaultZLinkSessionActor> {
-    return await this.replaceBindingCore(context, actorRef, signal);
+    return await this.replaceBindingCore(
+      context,
+      actorRef,
+      signal,
+      confirmRemoteSessionBinding
+    );
   }
 
   private async replaceBindingCore(
     context: DefaultZLinkSessionContext,
     actorRef: ActorRef,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    confirmRemoteSessionBinding: boolean | 'send' = true
   ): Promise<DefaultZLinkSessionActor> {
     throwIfAborted(signal);
     if (actorRef.actorId.trim().length === 0) {
@@ -105,11 +113,12 @@ export class ZLinkSessionActorCoordinator {
     try {
       await this.bindNativeActor(context, actorRef, signal);
       replacementBound = true;
-      if (this.options.confirmRemoteActorSessionBinding !== undefined) {
+      if (confirmRemoteSessionBinding !== false && this.options.confirmRemoteActorSessionBinding !== undefined) {
         await this.options.confirmRemoteActorSessionBinding(
           actorRef,
           this.actorBindingRoutingId(context),
-          signal
+          signal,
+          { waitForAcknowledgement: confirmRemoteSessionBinding !== 'send' }
         );
       }
     } catch (error) {
@@ -127,7 +136,8 @@ export class ZLinkSessionActorCoordinator {
           await this.bindNativeActor(previous.context, previousRef);
           try {
             if (
-              this.options.confirmRemoteActorSessionBinding !== undefined
+              confirmRemoteSessionBinding !== false
+              && this.options.confirmRemoteActorSessionBinding !== undefined
               && previous.context.routingId !== undefined
             ) {
               await this.options.confirmRemoteActorSessionBinding(
@@ -257,7 +267,11 @@ export class ZLinkSessionActorCoordinator {
     });
   }
 
-  async commitActorRoute(actorRef: ActorRef, signal?: AbortSignal): Promise<void> {
+  async commitActorRoute(
+    actorRef: ActorRef,
+    signal?: AbortSignal,
+    options: { readonly confirmRemoteSessionBinding?: boolean | 'send' } = {}
+  ): Promise<void> {
     const normalizedActorRef = normalizeActorRef(
       actorRef as ActorRef & { readonly generation?: bigint | number },
       this.options.nativeActorMeshNameProvider?.()
@@ -275,8 +289,20 @@ export class ZLinkSessionActorCoordinator {
         }
         return;
       }
-      await this.replaceBinding(route.context, normalizedActorRef, signal);
+      await this.replaceBinding(
+        route.context,
+        normalizedActorRef,
+        signal,
+        options.confirmRemoteSessionBinding
+      );
     });
+  }
+
+  authorityFence(actorId: string): {
+    readonly authorityOwnerGeneration: bigint;
+    readonly ownerLeaseGeneration: bigint;
+  } | undefined {
+    return this.routes.route(actorId)?.authorityFence;
   }
 
   private resolveActorRef(actor: ZLinkActor): ActorRef {

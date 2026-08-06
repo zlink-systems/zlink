@@ -17,8 +17,6 @@ public final class RmB2ScaleInScenario {
             DynamicClusterLauncher.DynamicProvider providerB = cluster.startProvider("api-b", "api-b");
             DynamicClusterLauncher.DynamicConsumer consumer = cluster.startConsumer("consumer");
             try (ZLinkHttpClient requester = ZLinkHttpClient.create(consumer.httpUrl()).build()) {
-                cluster.waitPeerEndpoint(requester, providerA.routingId());
-                cluster.waitPeerEndpoint(requester, providerB.routingId());
                 cluster.waitPeerCount(requester, 2);
                 Set<String> before = ScenarioAssert.requestUntilProvidersSeen(
                     requester,
@@ -30,7 +28,7 @@ public final class RmB2ScaleInScenario {
                 String drainResult = cluster.stop(providerB);
                 ScenarioAssert.that("Drained".equals(drainResult),
                     "RM-B2 provider did not reach terminal Drained: " + drainResult);
-                cluster.waitPeerEndpointAbsent(requester, providerB.routingId());
+                cluster.waitPeerCount(requester, 1);
 
                 for (int index = 0; index < 20; index++) {
                     Contracts.ProfileRes reply =

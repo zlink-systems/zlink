@@ -8,6 +8,8 @@ import systems.zlink.e2e.kotlin.runtimemonitoring.Contracts
 import systems.zlink.e2e.kotlin.runtimemonitoring.Env
 import systems.zlink.e2e.kotlin.runtimemonitoring.service.EvidenceState
 import systems.zlink.framework.channels.ZLinkClient
+import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime
+import org.springframework.beans.factory.ObjectProvider
 import org.springframework.boot.WebApplicationType
 import org.springframework.boot.builder.SpringApplicationBuilder
 import systems.zlink.e2e.kotlin.runtimemonitoring.trigger.transient.TransientTriggerApplication
@@ -21,6 +23,7 @@ class TriggerHttpServer(
     private val state: EvidenceState,
     private val json: ObjectMapper,
     private val client: ZLinkClient,
+    private val runtime: ObjectProvider<ZLinkFrameworkRuntime>,
 ) : SmartLifecycle {
     private var server: HttpServer? = null
     private var running = false
@@ -32,6 +35,23 @@ class TriggerHttpServer(
             nextServer.createContext("/health") { exchange -> write(exchange, "ok\n") }
             nextServer.createContext("/evidence") { exchange ->
                 write(exchange, json.writeValueAsString(state.snapshot()), "application/json")
+            }
+            nextServer.createContext("/runtime/channel-snapshot") { exchange ->
+                val snapshot = runtime.getObject().clientServerRuntime().snapshot(Contracts.CHANNEL)
+                write(
+                    exchange,
+                    json.writeValueAsString(
+                        mapOf(
+                            "channelName" to snapshot.channelName(),
+                            "state" to snapshot.state().name,
+                            "ready" to snapshot.isReady,
+                            "readyTargetCount" to snapshot.readyTargetCount(),
+                            "sequence" to snapshot.sequence(),
+                            "targetRids" to snapshot.targets().map { it.nodeRid().toString() },
+                        ),
+                    ),
+                    "application/json",
+                )
             }
             nextServer.createContext("/profile/request") { exchange ->
                 write(exchange, requestService(), "application/json")
@@ -116,7 +136,8 @@ class TriggerHttpServer(
         contentType: String = "text/plain; charset=utf-8",
     ) {
         val path = exchange.requestURI.path
-        val getAllowed = exchange.requestMethod == "GET" && (path == "/health" || path == "/evidence")
+        val getAllowed = exchange.requestMethod == "GET" &&
+            (path == "/health" || path == "/evidence" || path == "/runtime/channel-snapshot")
         val postAllowed = exchange.requestMethod == "POST"
         if (!getAllowed && !postAllowed) {
             exchange.sendResponseHeaders(405, -1)

@@ -72,7 +72,6 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
         });
     private volatile boolean running;
     private volatile long nextReconcileNanos;
-    private volatile long nextBeaconNanos;
     private long receiveCursor;
     private volatile long lifecycleEpoch;
     private volatile boolean reconciling;
@@ -108,7 +107,6 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
         lifecycleEpoch = Math.addExact(lifecycleEpoch, 1);
         running = true;
         long now = System.nanoTime();
-        nextBeaconNanos = now;
         nextReconcileNanos = now;
         executor.scheduleAtFixedRate(
             this::tickSafely,
@@ -222,12 +220,6 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
         }
         try {
             long now = System.nanoTime();
-            if (now >= nextBeaconNanos) {
-                publishBeacons();
-                nextBeaconNanos = now
-                    + ZLinkClassicFanoutLiveness.DEFAULT_BEACON_INTERVAL
-                        .toNanos();
-            }
             receiveAvailable(now);
             expireConnections(now);
             if (now >= nextReconcileNanos && !reconciling) {
@@ -249,26 +241,6 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
                 Level.WARNING,
                 "fanout location tick failed; the next bounded tick retries",
                 failure);
-        }
-    }
-
-    private void publishBeacons() {
-        List<byte[]> record = ZLinkClassicFanoutLiveness.beaconRecord();
-        String topic = new String(
-            record.getFirst(),
-            StandardCharsets.UTF_8);
-        for (Published value : published.values()) {
-            ZLinkBackendPublisherSocket publisher =
-                sockets.publisher(value.channelName);
-            if (publisher == null) {
-                continue;
-            }
-            try (Message payload = Message.from(record.get(1))) {
-                publisher.publish(
-                    topic,
-                    List.of(payload),
-                    SendFlags.DONT_WAIT);
-            }
         }
     }
 

@@ -51,14 +51,18 @@
 | common: server evidence check | `GameQuestClientScenario.waitForServerAssertion()` | validation | done | server assertion이 통과하면 `gamequest-server-evidence=completed` marker를 출력한다. |
 | common: Domain은 framework 타입을 모름 | `QuestDomain` | design | done | quest 조건 평가와 progress event 생성은 framework context 없이 동작한다. |
 
-## 남은 gap
+## 검증 결과
 
-- Java runner에서 같은 계약의 첫 remote Instance Spot 활성화가 거절된다. Kotlin은 compile과
-  topology 구성을 완료했으며 이 runtime activation gap이 닫힌 뒤 실제 scenario를 다시 검증한다.
+Kotlin process runner의 실제 scenario가 현재 runtime에서 통과했다. runner는 topology를 준비한 뒤
+server evidence, client self-check, gameplay push와 reconnect 흐름을 확인하고 종료했다. Java와 Kotlin
+모두에서 첫 remote Instance Spot 활성화가 성공하므로 이 inventory에 남은 runtime activation gap은 없다.
 
 ## 최근 검증 메모
 
-- 2026-07-30 JVM samples 전체 `classes` 통과.
+- 2026-08-05 JVM samples 전체 `classes` 통과.
+- `ZLINK_SAMPLE_KEEP_RUN_DIR=1 nice -n 10 timeout 600s ./run_sample.sh` 통과.
+- runner 출력: `topology=ready`, `gamequest-server-evidence=completed`, `gamequest=completed`,
+  `gamequest kotlin full client/server self-check completed`.
 - 증거 파일: `build/sample-logs/client.log`, `logs/flow-api-a.log`, `logs/flow-api-b.log`,
   `logs/flow-mission-a.log`, `logs/flow-mission-b.log`.
 - runner cleanup은 직접 기록한 process와 runner가 만든 Redis container만 정리한다. role 이름 pattern으로

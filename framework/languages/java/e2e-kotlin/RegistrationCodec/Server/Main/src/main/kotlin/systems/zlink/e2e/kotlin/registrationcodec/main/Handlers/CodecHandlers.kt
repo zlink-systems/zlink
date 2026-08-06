@@ -5,6 +5,8 @@ import systems.zlink.e2e.kotlin.registrationcodec.Contracts
 import systems.zlink.e2e.kotlin.registrationcodec.JsonEchoMsg
 import systems.zlink.e2e.kotlin.registrationcodec.JsonEchoReq
 import systems.zlink.e2e.kotlin.registrationcodec.JsonEchoRes
+import systems.zlink.e2e.kotlin.registrationcodec.JsonGoldenReq
+import systems.zlink.e2e.kotlin.registrationcodec.JsonGoldenRes
 import systems.zlink.e2e.kotlin.registrationcodec.PackedEchoMsg
 import systems.zlink.e2e.kotlin.registrationcodec.PackedEchoRes
 import systems.zlink.e2e.kotlin.registrationcodec.PackedEchoReq
@@ -30,6 +32,29 @@ class JsonSendHandler(
 ) : ZLinkSuspendingSendHandler<JsonEchoMsg> {
     override suspend fun handle(message: JsonEchoMsg, context: ZLinkMessageContext) {
         state.record("Send", "JsonEchoMsg", message.value)
+    }
+}
+
+@ZLinkHandlerGroup(Contracts.MANUAL_GROUP)
+class JsonGoldenRequestHandler(
+    private val state: ScenarioState,
+) : ZLinkSuspendingRequestHandler<JsonGoldenReq, JsonGoldenRes> {
+    override suspend fun handle(request: JsonGoldenReq, context: ZLinkMessageContext): JsonGoldenRes {
+        state.record(
+            "Request",
+            "JsonGoldenReq",
+            "${request.displayName}|${request.status}|${request.balance}|${request.score}|${request.payload.size}",
+        )
+        return JsonGoldenRes(
+            request.displayName,
+            request.status,
+            request.balance,
+            request.payload,
+            request.score,
+            request.ratio,
+            request.optionalNote,
+            context.contentType().orElse("<null>"),
+        )
     }
 }
 

@@ -28,6 +28,8 @@ import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.configuration.ZLinkMeshNodeBuilder;
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationOptions;
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore;
+import systems.zlink.framework.locations.redis.ZLinkRedisRelocationOptions;
+import systems.zlink.framework.locations.redis.ZLinkRedisRelocationStore;
 import systems.zlink.framework.spring.EnableZLinkFramework;
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer;
 import systems.zlink.framework.spots.SpotHandleResolver;
@@ -90,8 +92,11 @@ public final class Program {
     }
 
     @Bean
-    ZLinkFrameworkConfigurer framework(SessionOptions config) {
+    ZLinkFrameworkConfigurer framework(
+        SessionOptions config,
+        ZLinkRedisRelocationStore relocationStore) {
         return options -> {
+            options.addRelocationStore(relocationStore);
             options.addHandlersFromPackageOf(ScenarioReqHandler.class);
             options.addHandlersFromPackageOf(ForceReconnectSessionHandler.class);
             var dispatch = options.configureDispatch()
@@ -105,14 +110,14 @@ public final class Program {
             ZLinkMeshNodeBuilder mesh = options.addRouteMesh(Contracts.SPOT_MESH)
                 .listen(config.sessionRouteEndpoint())
                 .setRoutingId(RoutingId.from("session-a"));
-            mesh.channelName(Contracts.ROUTE_CHANNEL);
+            mesh.channelName(Contracts.ROUTE_CHANNEL).server();
             mesh.peerConnections().connect(config.routeEndpoint());
             String routeBEndpoint = config.routeBEndpoint();
             if (!routeBEndpoint.isBlank()) {
                 mesh.peerConnections().connect(routeBEndpoint);
             }
             options.addClientServerChannel(Contracts.DELAY_CHANNEL)
-                .enableClient(config.delayEndpoint());
+                .client().connect(config.delayEndpoint());
             mesh.objects()
                 .server()
                 .addEntrySpot(AwaitEntrySpot.class)
@@ -127,6 +132,7 @@ public final class Program {
                     factory -> factory.recreateOnRelocation());
             options.addStreamNode("session")
                 .bind(config.streamEndpoint())
+                .enableActorDispatch()
                 .registerSession(AwaitSession.class);
         };
     }
@@ -136,10 +142,10 @@ public final class Program {
         return ignored -> {
             String spotRid = config.sessionDrainSpot();
             if (!spotRid.isBlank()) {
-                spots.getOrCreate(
-                    AwaitProbeSpot.class,
-                    RoutingId.from(spotRid),
-                    ZLinkMessage.of("drain-hold")).toCompletableFuture().join();
+                spots.getOrCreate(spotRid, Contracts.TARGET_SPOT)
+                    .request(ZLinkMessage.of("drain-hold"))
+                    .submit()
+                    .toCompletableFuture().join();
             }
         };
     }
@@ -147,6 +153,13 @@ public final class Program {
     @Bean
     ZLinkRedisLocationStore locationStore(SessionOptions config) {
         return new ZLinkRedisLocationStore(new ZLinkRedisLocationOptions()
+            .setConnectionString(config.redisLocationEndpoint())
+            .setKeyPrefix(config.locationKeyPrefix()));
+    }
+
+    @Bean(destroyMethod = "close")
+    ZLinkRedisRelocationStore relocationStore(SessionOptions config) {
+        return new ZLinkRedisRelocationStore(new ZLinkRedisRelocationOptions()
             .setConnectionString(config.redisLocationEndpoint())
             .setKeyPrefix(config.locationKeyPrefix()));
     }

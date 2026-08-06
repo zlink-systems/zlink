@@ -36,6 +36,7 @@
 #include "runtime/diagnostics/message_flow_tracer.hpp"
 #include "runtime/diagnostics/runtime_metrics.hpp"
 #include "runtime/diagnostics/runtime_observation.hpp"
+#include "runtime/diagnostics/listener_status_registry.hpp"
 #include "runtime/locations/store_location_resolvers.hpp"
 #include "runtime/stateful/public_store_adapters.hpp"
 #include "runtime/streams/stream_host_service.hpp"
@@ -165,7 +166,9 @@ class app_state_t
   public:
     app_state_t () :
         status_access (std::make_shared<app_state_access_t> ()),
-        monitoring (std::make_shared<monitoring_runtime_state_t> ())
+        monitoring (std::make_shared<monitoring_runtime_state_t> ()),
+        listener_statuses (std::make_shared<
+          runtime::listener_status_registry_t> ())
     {
         status_access->state = this;
     }
@@ -353,6 +356,7 @@ class app_state_t
     config_builder_t config;
     logging_builder_t logging;
     std::shared_ptr<monitoring_runtime_state_t> monitoring;
+    std::shared_ptr<runtime::listener_status_registry_t> listener_statuses;
     health_builder_t health;
     zlink_builder_t zlink;
     serializer_registry_t serializers;
@@ -507,6 +511,7 @@ framework_runtime_status_source_t::observe (
 {
     auto state = std::make_shared<framework_observer_state_t> (
       capacity, std::move (observer));
+    state->start ();
     {
         std::lock_guard lock (_observers_mutex);
         _observers.erase (
@@ -590,7 +595,8 @@ class public_framework_runtime_t final :
     explicit public_framework_runtime_t (app_state_t &state) :
         _source (
           std::make_shared<framework_runtime_status_source_t> (
-            state.status_access))
+            state.status_access)),
+        _listeners (state.listener_statuses)
     {
     }
 
@@ -602,6 +608,18 @@ class public_framework_runtime_t final :
     framework_runtime_status_t status () const override
     {
         return _source->snapshot ();
+    }
+
+    listener_status_t listener_status (
+      listener_kind_t kind,
+      std::string name) const override
+    {
+        const auto status = _listeners->find (kind, name);
+        if (!status)
+            throw framework_exception_t (
+              framework_error_kind_t::not_configured,
+              "listener is not ready or is not registered");
+        return *status;
     }
 
     std::unique_ptr<runtime_observation_t> observe (
@@ -622,6 +640,7 @@ class public_framework_runtime_t final :
 
   private:
     std::shared_ptr<framework_runtime_status_source_t> _source;
+    std::shared_ptr<runtime::listener_status_registry_t> _listeners;
 };
 
 } // namespace
@@ -1272,6 +1291,9 @@ app_t &app_t::add_zlink_framework (std::function<void (zlink_framework_options_t
     actor_gateway_runtime.bind_serializers (_state->serializers);
     actor_gateway_runtime.set_dispatch (options.configure_dispatch ());
     auto channel_runtime = detail::channel_runtime_t::from (_state->zlink.message_bus ());
+    channel_runtime.bind_listener_statuses (_state->listener_statuses);
+    channel_runtime.bind_fanout_advertise_hosts (
+      options.runtime_fanout_advertise_hosts ());
     const auto channel_snapshot = channel_runtime.channel_snapshots ();
     auto channel_runtime_manager = detail::channel_runtime_manager_t::from (_state->zlink);
     channel_runtime_manager.initialize_route_channels (_state->zlink);
@@ -1420,7 +1442,7 @@ app_t &app_t::add_zlink_framework (std::function<void (zlink_framework_options_t
         auto mesh_service = std::make_unique<runtime::mesh_node_host_service_t> (
           std::move (mesh_node_registrations), _state->serializers, _state->handlers,
           options.dispatch_options (), inbound_dispatch_budget,
-          completion_admission);
+          completion_admission, _state->listener_statuses);
         mesh_node_service = mesh_service.get ();
         mesh_nodes = mesh_service->nodes ();
         _state->route_mesh_nodes = mesh_nodes;
@@ -2055,8 +2077,7 @@ app_t &app_t::add_zlink_framework (std::function<void (zlink_framework_options_t
                 runtime::messaging::message_parts_t (
                   std::move (completion.value ().parts)));
           });
-        for (const auto &[channel_name, weight] : mesh->channel_weights ()) {
-            (void) weight;
+        for (const auto &channel_name : mesh->channel_names ()) {
             channel_runtime.bind_mesh_channel_transport (
               channel_name,
               [mesh, channel_name] (runtime::messaging::message_parts_t parts) {
@@ -2336,7 +2357,8 @@ app_t &app_t::add_zlink_framework (std::function<void (zlink_framework_options_t
             provider.get_required<location_repository_t> (),
             provider.get_required<location_repository_t> (), provider,
             _state->serializers, _state->handlers,
-            options.client_server_server_advertise_hosts ());
+            options.runtime_client_server_advertise_hosts (),
+            _state->listener_statuses);
         _state->services.add_factory<client_server_runtime_t> (
           [client_server_runtime] (service_provider_t &) {
               return std::static_pointer_cast<client_server_runtime_t> (
@@ -2344,16 +2366,43 @@ app_t &app_t::add_zlink_framework (std::function<void (zlink_framework_options_t
           },
           service_lifetime_t::singleton);
     }
+    std::shared_ptr<runtime::fanout::fanout_location_runtime_t> fanout_runtime;
+    const auto needs_fanout_runtime =
+      std::any_of (channel_snapshot.begin (), channel_snapshot.end (), [] (const auto &channel) {
+          return (channel.publisher.enabled && channel.publisher.discovery)
+                 || (channel.subscriber.enabled && channel.subscriber.discovery);
+      });
+    if (needs_fanout_runtime
+        && !_state->services.contains (
+          std::type_index (typeid (fanout_runtime_t)))) {
+        auto provider = _state->services.build_provider ();
+        fanout_runtime =
+          std::make_shared<runtime::fanout::fanout_location_runtime_t> (
+            _state->zlink.message_bus (), channel_snapshot,
+            provider.get_required<runtime::location_runtime_t> (),
+            provider.get_required<location_repository_t> (),
+            provider.get_required<location_repository_t> (), provider,
+            _state->serializers, _state->handlers,
+            options.runtime_fanout_advertise_hosts (),
+            _state->listener_statuses);
+        _state->services.add_factory<fanout_runtime_t> (
+          [fanout_runtime] (service_provider_t &) {
+              return std::static_pointer_cast<fanout_runtime_t> (fanout_runtime);
+          },
+          service_lifetime_t::singleton);
+    }
     add_hosted_service (std::make_unique<runtime::location_auto_connect_host_service_t> (
       _state->zlink.message_bus (), channel_snapshot, _state->handlers,
       _state->serializers,
-      options.client_server_server_advertise_hosts (),
+      options.runtime_client_server_advertise_hosts (),
+      options.runtime_fanout_advertise_hosts (),
       options.route_mesh_client_channels (), mesh_nodes,
       [mesh_node_service] {
           return mesh_node_service == nullptr
                  || mesh_node_service->republish_after_store_recovery ();
       },
-      std::move (client_server_runtime)));
+      std::move (client_server_runtime), std::move (fanout_runtime),
+      _state->listener_statuses));
     if (detail::has_inbound_channel (channel_snapshot)) {
         add_hosted_service (std::make_unique<runtime::channel_host_service_t> (
           _state->zlink.message_bus (), channel_snapshot, _state->handlers,
@@ -2362,11 +2411,13 @@ app_t &app_t::add_zlink_framework (std::function<void (zlink_framework_options_t
     }
     if (!stream_snapshot.empty ()) {
         detail::configure_stream_dispatch_executor ();
+        auto stream_runtime = detail::stream_runtime_t::from (_state->zlink);
         auto stream_service = std::make_unique<runtime::stream_host_service_t> (
-          detail::stream_runtime_t::from (_state->zlink), stream_snapshot,
+          stream_runtime, stream_snapshot,
           options.stream_session_factories (),
           mesh_nodes.empty () ? nullptr : mesh_nodes.front (),
-          inbound_dispatch_budget);
+          inbound_dispatch_budget, stream_runtime.advertise_hosts (),
+          _state->listener_statuses);
         stream_service->bind_drain_flag (_state->draining);
         stream_service->bind_monitoring (
           _state->monitoring);
@@ -3546,6 +3597,21 @@ void app_t::run_shared_shutdown (
         }
     };
 
+    /* Publish the draining state before waiting for accepted callbacks. A
+     * caller must stop selecting this host while an already accepted handler
+     * is still completing. */
+    if (std::holds_alternative<shutdown_completed_t> (result)) {
+        state.runtime_state.store (
+          framework_runtime_state_t::draining,
+          std::memory_order_release);
+        publish_draining_markers (false);
+        if (std::holds_alternative<shutdown_completed_t> (result)
+            && !publish_mesh_descriptor_state (
+              state, framework_runtime_state_t::draining)) {
+            force (shutdown_force_reason_t::teardown_failed);
+        }
+    }
+
     /* Admission is sealed before this barrier. Each callback accepted before
      * the seal owns a pending/active count until its terminal reply or send
      * completion, so a normal request completion cannot close its Spot. */
@@ -3562,7 +3628,7 @@ void app_t::run_shared_shutdown (
         while (outbound_pending () && std::chrono::steady_clock::now () < deadline_at)
             std::this_thread::sleep_for (std::chrono::milliseconds (50));
         if (outbound_pending ()) {
-            force (shutdown_force_reason_t::deadline_exceeded);
+                    force (shutdown_force_reason_t::deadline_exceeded);
         } else {
             for (const auto &service : state.hosted_services) {
                 auto *lifecycle = detail::lifecycle_of (service.get ());
@@ -3575,17 +3641,6 @@ void app_t::run_shared_shutdown (
         }
     }
 
-    if (std::holds_alternative<shutdown_completed_t> (result)
-        && !publish_mesh_descriptor_state (
-          state, framework_runtime_state_t::draining)) {
-        force (shutdown_force_reason_t::teardown_failed);
-    }
-    if (std::holds_alternative<shutdown_completed_t> (result)) {
-        state.runtime_state.store (
-          framework_runtime_state_t::draining,
-          std::memory_order_release);
-        publish_draining_markers (false);
-    }
     if (std::holds_alternative<shutdown_completed_t> (result)) {
         for (const auto &service : state.hosted_services) {
             auto *lifecycle = detail::lifecycle_of (service.get ());

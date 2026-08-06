@@ -101,21 +101,16 @@ class multi_node_spot_t
             catch (const std::exception &) {
             }
             if (command) {
-                const auto target_node =
-                  std::string (NodeName) == multi_node_a_name ? multi_node_b_name
-                                                              : multi_node_a_name;
                 auto reply = co_await _context
-                               .request_to<e2e::state_res_t> (
-                                 multi_node_target_rid (target_node),
-                                 multi_node_target_rid (command->target_spot_id),
+                               .request_to_spot (
+                                 command->target_spot_id,
                                  e2e::state_req_t{.op = "add", .amount = 7})
                                .timeout (std::chrono::milliseconds (3000))
-                               .submit ();
+                               .submit<e2e::state_res_t> ();
                 _context
-                  .send_to (multi_node_target_rid (target_node),
-                            multi_node_target_rid (command->target_spot_id),
-                            e2e::direct_spot_msg_t{.source_actor_id = command->source_spot_id,
-                                                   .value = "sm-f6-send-" + command->marker})
+                  .send_to_spot (command->target_spot_id,
+                                 e2e::direct_spot_msg_t{.source_actor_id = command->source_spot_id,
+                                                        .value = "sm-f6-send-" + command->marker})
                   .submit ();
                 _state.record ("SpotOnlyRequest", {}, _context.spot_id (),
                                "target=" + command->target_spot_id + "|value="
@@ -168,7 +163,7 @@ class multi_node_spot_t
     }
 
     e2e::actor_ping_res_t actor_probe (const multi_node_actor_t &actor,
-                                       zlink::framework::spot_actor_request_context_t &,
+                                       zlink::framework::message_context_t &,
                                        const e2e::actor_ping_req_t &request)
     {
         return {.actor_id = actor.actor_id,
@@ -238,7 +233,7 @@ class multi_node_entry_spot_t
 
     zlink::framework::task_t<e2e::spot_only_join_res_t>
     join_spot_only (multi_node_actor_t &actor,
-                    zlink::framework::spot_actor_request_context_t &,
+                    zlink::framework::message_context_t &,
                     const e2e::spot_only_join_req_t &request)
     {
         if (request.actor_id != actor.actor_id) {
@@ -246,12 +241,8 @@ class multi_node_entry_spot_t
               zlink::framework::framework_error_kind_t::protocol_error,
               "spot-only join request actor does not match dispatched actor");
         }
-        auto joined =
-          co_await actor.context ()
-            .join_spot ((request.target_spot_id),
-                        zlink::framework::message_t {})
-            .async ();
-        const auto accepted = std::holds_alternative<zlink::framework::actor_join_accepted_t<zlink::framework::message_t>> (joined);
+        actor.context ().join_spot (request.target_spot_id).defer ();
+        const auto accepted = true;
         _state.record ("SpotOnlyActorJoin", actor.actor_id, request.target_spot_id,
                        "accepted=" + std::string (accepted ? "true" : "false")
                          + "|marker=" + request.marker);

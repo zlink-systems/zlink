@@ -492,10 +492,41 @@ build_snapshot (
     std::vector<mesh_peer_snapshot_t> peer_snapshots;
     std::map<std::string, std::uint64_t> ready_remote_members;
     std::set<std::string> classified_peer_ids;
+    std::map<std::string, const mesh_node_descriptor_t *> location_by_rid;
+    for (const auto &location : location_descriptors)
+        location_by_rid.emplace (location.rid.to_hex (), &location);
+    bool location_is_healthy = false;
+    {
+        std::lock_guard lock (hub->mutex);
+        location_is_healthy = hub->location_state == "ready";
+    }
     peer_snapshots.reserve (
       peers.size () + not_required_peers.size ()
       + location_descriptors.size ());
     for (const auto &peer : peers) {
+        const auto peer_rid = zlink::routing_id_t::from (
+          peer.descriptor.node_routing_id);
+        const auto location = location_by_rid.find (peer_rid.to_hex ());
+        if (location_is_healthy
+            && (location == location_by_rid.end ()
+                || location->second->state != framework_runtime_state_t::serving
+                || location->second->lifecycle_generation
+                     != peer.descriptor.lifecycle_generation)) {
+            classified_peer_ids.insert (peer_rid.to_hex ());
+            const bool draining =
+              location != location_by_rid.end ()
+              && location->second->state == framework_runtime_state_t::draining;
+            peer_snapshots.push_back (mesh_peer_snapshot_t{
+              .node_rid = peer_rid,
+              .state = draining ? peer_state_t::draining
+                                : peer_state_t::not_connected,
+              .unavailable_reason = draining
+                                      ? std::optional<topology_reason_t>{
+                                          topology_reason_t::draining}
+                                      : std::optional<topology_reason_t>{
+                                          topology_reason_t::no_ready_peer}});
+            continue;
+        }
         std::vector<std::string> channel_names;
         for (const auto &channel : peer.descriptor.channels) {
             channel_names.push_back (channel.name);
@@ -503,12 +534,9 @@ build_snapshot (
                 ++ready_remote_members[channel.name];
         }
         std::sort (channel_names.begin (), channel_names.end ());
-        classified_peer_ids.insert (
-          zlink::routing_id_t::from (
-            peer.descriptor.node_routing_id).to_hex ());
+        classified_peer_ids.insert (peer_rid.to_hex ());
         peer_snapshots.push_back (mesh_peer_snapshot_t{
-          .node_rid = zlink::routing_id_t::from (
-            peer.descriptor.node_routing_id),
+          .node_rid = peer_rid,
           .state = peer.descriptor.state == mesh::service_node_state_t::draining
                      ? peer_state_t::draining
                      : peer_state_t::ready,
@@ -710,6 +738,7 @@ route_mesh_runtime_service_t::observe (
     auto initial = snapshot (mesh_name);
     auto registered = std::make_shared<state_t::observer_t> (
       capacity, std::move (observer));
+    registered->start ();
     {
         std::lock_guard lock (hub->mutex);
         hub->observers.push_back (registered);

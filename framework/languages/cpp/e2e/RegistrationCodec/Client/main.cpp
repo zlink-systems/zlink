@@ -11,6 +11,7 @@
 #include "Scenarios/rc_b2_protobuf_codec_scenario.hpp"
 #include "Scenarios/rc_b3_messagepack_codec_scenario.hpp"
 #include "Scenarios/rc_b4_codec_coexistence_scenario.hpp"
+#include "Scenarios/rc_b6_json_golden_scenario.hpp"
 
 #include <iostream>
 #include <stdexcept>
@@ -74,6 +75,10 @@ int main (int argc, char **argv)
             if (wants ("rc-b4")) {
                 ran = true;
                 rc_client::run_codec_coexistence_scenario (options);
+            }
+            if (wants ("rc-b6")) {
+                ran = true;
+                rc_client::run_json_golden_scenario (options);
             }
             if (!ran) {
                 throw std::runtime_error ("unknown RegistrationCodec scenario: " + scenario);

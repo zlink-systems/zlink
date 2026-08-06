@@ -75,7 +75,7 @@ class stream_session_t final : public zlink::framework::packet_stream_session_t
             const auto actor_id = std::string (bound.actor_id ());
             _state.record ("StreamAuthActorBound", actor_id, {}, request.target_node_rid);
             _bound_actors[actor_id] = request.target_node_rid;
-            _bound_session_actors[actor_id] = bound;
+            _bound_session_actors.insert_or_assign (actor_id, bound);
             _state.record ("StreamAuthSessionBound", actor_id, {}, request.target_node_rid);
             _state.record ("StreamBound", actor_id, {},
                            request.target_node_rid + ":" + stream.session_id ());
@@ -124,7 +124,7 @@ class stream_session_t final : public zlink::framework::packet_stream_session_t
             auto bound = bound_result.value ();
             const auto actor_id = std::string (bound.actor_id ());
             _bound_actors[actor_id] = request.target_node_rid;
-            _bound_session_actors[actor_id] = bound;
+            _bound_session_actors.insert_or_assign (actor_id, bound);
             _state.record ("StreamBound", actor_id, {},
                            request.target_node_rid + ":" + stream.session_id ());
             if (!dispatch.can_reply) {
@@ -159,7 +159,7 @@ class stream_session_t final : public zlink::framework::packet_stream_session_t
                                              : "stream join actor bind failed");
                 }
                 auto rebound = rebound_result.value ();
-                _bound_session_actors[std::string (rebound.actor_id ())] = rebound;
+                _bound_session_actors.insert_or_assign (std::string (rebound.actor_id ()), rebound);
             }
             stream.reply_packet (reply).submit ();
             co_return;

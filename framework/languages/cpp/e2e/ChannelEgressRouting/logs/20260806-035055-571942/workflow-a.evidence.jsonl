@@ -1,0 +1,8 @@
+{"entry":"request-start|role=workflow-a|channel=workflow.command|id=workflow-readiness-0","rid":"workflow-a","role":"workflow-a"}
+{"entry":"request-end|role=workflow-a|channel=workflow.command|id=workflow-readiness-0","rid":"workflow-a","role":"workflow-a"}
+{"entry":"request-start|role=workflow-a|channel=workflow.command|id=workflow-readiness-0","rid":"workflow-a","role":"workflow-a"}
+{"entry":"request-end|role=workflow-a|channel=workflow.command|id=workflow-readiness-0","rid":"workflow-a","role":"workflow-a"}
+{"entry":"workflow-spot-start|id=ch-03-34025762723032-workflow|timer=ch-03-34025762723032-timer","rid":"workflow-a","role":"workflow-a"}
+{"entry":"workflow-spot-end|id=ch-03-34025762723032-workflow|timer=ch-03-34025762723032-timer","rid":"workflow-a","role":"workflow-a"}
+{"entry":"workflow-spot-start|id=ch-03-spot-timer-workflow|timer=ch-03-34025762723032-timer","rid":"workflow-a","role":"workflow-a"}
+{"entry":"workflow-spot-end|id=ch-03-spot-timer-workflow|timer=ch-03-34025762723032-timer","rid":"workflow-a","role":"workflow-a"}

@@ -16,7 +16,7 @@ import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.monitoring.ZLinkMeshNodeSnapshot;
 import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime;
-import systems.zlink.framework.spring.internal.runtime.ZLinkFrameworkLifecycle;
+import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 import systems.zlink.framework.spots.ZLinkSpotManager;
 import systems.zlink.framework.spots.ZLinkSpotPublisherClient;
 
@@ -27,7 +27,7 @@ public final class EvidenceHttpServer implements SmartLifecycle {
     private final ZLinkRouteMeshRuntimeOptions meshRuntimeOptions;
     private final ZLinkRouteClient routeClient;
     private final ObjectProvider<ZLinkRouteMeshRuntime> meshRuntime;
-    private final ObjectProvider<ZLinkFrameworkLifecycle> runtimeQuery;
+    private final ObjectProvider<ZLinkFrameworkRuntime> runtimeQuery;
     private final ObserverIsolationProbe observerIsolation;
     private final ObjectProvider<ZLinkSpotManager> spots;
     private final ObjectProvider<ZLinkSpotPublisherClient> publisher;
@@ -43,7 +43,7 @@ public final class EvidenceHttpServer implements SmartLifecycle {
         ZLinkRouteMeshRuntimeOptions meshRuntimeOptions,
         ZLinkRouteClient routeClient,
         ObjectProvider<ZLinkRouteMeshRuntime> meshRuntime,
-        ObjectProvider<ZLinkFrameworkLifecycle> runtimeQuery,
+        ObjectProvider<ZLinkFrameworkRuntime> runtimeQuery,
         ObserverIsolationProbe observerIsolation,
         ObjectProvider<ZLinkSpotManager> spots,
         ObjectProvider<ZLinkSpotPublisherClient> publisher,
@@ -87,6 +87,10 @@ public final class EvidenceHttpServer implements SmartLifecycle {
             server.createContext("/runtime/observer/release", exchange -> write(
                 exchange,
                 json.writeValueAsString(observerIsolation.release())));
+            server.createContext("/runtime/placement/spot/create", this::createPlacementSpot);
+            server.createContext("/runtime/placement/spot/close", this::closePlacementSpot);
+            server.createContext("/runtime/placement/actor/create", this::createPlacementActor);
+            server.createContext("/runtime/placement/actor/destroy", this::destroyPlacementActor);
             server.createContext("/runtime/weight/zero", exchange -> {
                 setMeshWeight(0);
                 write(exchange, json.writeValueAsString(new AdminResult("weight-updated", 0)));
@@ -236,6 +240,146 @@ public final class EvidenceHttpServer implements SmartLifecycle {
             snapshot.placement().activeSpotCount(),
             snapshot.placement().unavailableReason().map(Enum::name).orElse(""),
             host.state().name());
+    }
+
+    private void createPlacementSpot(com.sun.net.httpserver.HttpExchange exchange)
+        throws java.io.IOException {
+        try {
+            String id = query(exchange, "id");
+            var result = spots.getObject()
+                .getOrCreate(id, Contracts.MONITORING_SPOT_TYPE)
+                .inMesh(Contracts.SPOT_MESH)
+                .request(new Contracts.WorkReq("placement-spot"))
+                .submit()
+                .toCompletableFuture()
+                .join();
+            write(exchange, json.writeValueAsString(new PlacementResult(
+                true,
+                id,
+                "spot",
+                result.state().name(),
+                result.spot().nodeRid().toHex(),
+                result.spot().objectGeneration(),
+                "")));
+        } catch (Throwable error) {
+            write(exchange, 409, failure(error));
+        }
+    }
+
+    private void closePlacementSpot(com.sun.net.httpserver.HttpExchange exchange)
+        throws java.io.IOException {
+        try {
+            String id = query(exchange, "id");
+            var found = spots.getObject().find(id).toCompletableFuture().join();
+            if (found.isEmpty()) {
+                write(exchange, json.writeValueAsString(new PlacementResult(
+                    false, id, "spot", "NOT_FOUND", "", 0, "NOT_FOUND")));
+                return;
+            }
+            boolean closed = spots.getObject().close(found.get()).toCompletableFuture().join();
+            write(exchange, json.writeValueAsString(new PlacementResult(
+                closed,
+                id,
+                "spot",
+                closed ? "CLOSED" : "NOT_CLOSED",
+                "",
+                0,
+                closed ? "" : "CLOSE_REJECTED")));
+        } catch (Throwable error) {
+            write(exchange, 409, failure(error));
+        }
+    }
+
+    private void createPlacementActor(com.sun.net.httpserver.HttpExchange exchange)
+        throws java.io.IOException {
+        try {
+            String id = query(exchange, "id");
+            var result = runtimeQuery.getObject().actorManager()
+                .getOrCreate(
+                    id,
+                    systems.zlink.e2e.runtimemonitoring.service.handlers.MonitoringActor.TYPE)
+                .inMesh(Contracts.SPOT_MESH)
+                .request(new Contracts.WorkReq("placement-actor"))
+                .submit()
+                .toCompletableFuture()
+                .join();
+            if (result instanceof systems.zlink.framework.actors.ZLinkActorCreateResult.Existing existing) {
+                write(exchange, json.writeValueAsString(new PlacementResult(
+                    true,
+                    id,
+                    "actor",
+                    "EXISTING",
+                    existing.actor().nodeRid().toHex(),
+                    existing.actor().objectGeneration(),
+                    "")));
+            } else if (result instanceof systems.zlink.framework.actors.ZLinkActorCreateResult.Created created) {
+                write(exchange, json.writeValueAsString(new PlacementResult(
+                    true,
+                    id,
+                    "actor",
+                    "CREATED",
+                    created.actor().nodeRid().toHex(),
+                    created.actor().objectGeneration(),
+                    "")));
+            } else {
+                write(exchange, 409, json.writeValueAsString(new PlacementResult(
+                    false, id, "actor", "REJECTED", "", 0, "REJECTED")));
+            }
+        } catch (Throwable error) {
+            write(exchange, 409, failure(error));
+        }
+    }
+
+    private void destroyPlacementActor(com.sun.net.httpserver.HttpExchange exchange)
+        throws java.io.IOException {
+        try {
+            String id = query(exchange, "id");
+            Contracts.PlacementActorDestroyResponse response = runtimeQuery.getObject()
+                .actorClient()
+                .requestToActor(
+                    id,
+                    new Contracts.PlacementActorDestroyRequest(id))
+                .timeout(java.time.Duration.ofSeconds(5))
+                .submit(Contracts.PlacementActorDestroyResponse.class)
+                .toCompletableFuture()
+                .join();
+            write(exchange, json.writeValueAsString(response));
+        } catch (Throwable error) {
+            write(exchange, 409, failure(error));
+        }
+    }
+
+    private static String query(
+        com.sun.net.httpserver.HttpExchange exchange,
+        String name) {
+        String query = exchange.getRequestURI().getRawQuery();
+        if (query != null) {
+            for (String part : query.split("&")) {
+                String[] pair = part.split("=", 2);
+                if (pair.length == 2 && name.equals(pair[0])) {
+                    return java.net.URLDecoder.decode(pair[1], StandardCharsets.UTF_8);
+                }
+            }
+        }
+        throw new IllegalArgumentException("missing query parameter " + name);
+    }
+
+    private static String failure(Throwable error) {
+        Throwable cause = error.getCause() == null ? error : error.getCause();
+        if (cause instanceof ZLinkFrameworkException frameworkError) {
+            return frameworkError.kind().name() + ": " + frameworkError.getMessage();
+        }
+        return cause.getClass().getName() + ": " + cause.getMessage();
+    }
+
+    private record PlacementResult(
+        boolean accepted,
+        String objectId,
+        String objectKind,
+        String state,
+        String nodeRid,
+        long generation,
+        String errorKind) {
     }
 
     private record AdminResult(String status, int weight) {

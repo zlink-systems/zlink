@@ -2,6 +2,9 @@
 
 #include "runtime/client_server/raw_client_server_owner.hpp"
 #include "runtime/client_server/client_server_failure_mapper.hpp"
+#include "runtime/channels/channel_runtime.hpp"
+#include "runtime/mesh/mesh_node_runtime.hpp"
+#include "runtime/streams/stream_runtime.hpp"
 
 #include <zlink/framework.hpp>
 
@@ -10,6 +13,7 @@
 #include <chrono>
 #include <cstdint>
 #include <future>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -24,6 +28,71 @@ namespace
 std::vector<std::uint8_t> bytes (const std::string &value)
 {
     return {value.begin (), value.end ()};
+}
+
+struct network_probe_message_t
+{
+};
+
+struct network_probe_handler_t
+{
+    using message_type = network_probe_message_t;
+
+    void handle (const network_probe_message_t &) {}
+};
+
+void verify_network_defaults_are_deferred_until_apply ()
+{
+    zlink::framework::service_collection_t services;
+    zlink::framework::handler_registry_t handlers;
+    zlink::framework::serializer_registry_t serializers;
+    zlink::framework::zlink_builder_t zlink;
+    zlink::framework::zlink_framework_options_t options (
+      services, handlers, serializers, zlink);
+
+    auto client_server = options.add_client_server_channel ("network-client-server");
+    options.handlers ().group ("network").add_send<network_probe_handler_t> ();
+    client_server.server ().listen ().add_handler_group ("network");
+    options.add_fanout_channel ("network-fanout").enable_publisher ();
+    auto mesh = options.add_route_mesh ("network-mesh");
+    mesh.set_object_role (zlink::framework::object_role_t::none)
+      .set_routing_id (zlink::routing_id_t::from ("network-mesh-node"))
+      .listen ();
+    options.add_stream_node ("network-stream").bind ().register_session ("network-session");
+
+    auto &network = options.configure_network ();
+    assert (network.bind_host () == "127.0.0.1");
+    assert (!network.advertise_host ());
+    network.set_bind_host ("127.0.0.2")
+      .set_advertise_host (std::string ("network.example"));
+    options.apply ();
+
+    const auto snapshots =
+      zlink::framework::detail::channel_runtime_t::from (zlink.message_bus ())
+        .channel_snapshots ();
+    const auto find_channel = [&snapshots] (const std::string &name) {
+        return std::find_if (
+          snapshots.begin (), snapshots.end (),
+          [&name] (const auto &snapshot) { return snapshot.name == name; });
+    };
+    const auto client_server_snapshot = find_channel ("network-client-server");
+    const auto fanout_snapshot = find_channel ("network-fanout");
+    assert (client_server_snapshot != snapshots.end ());
+    assert (fanout_snapshot != snapshots.end ());
+    assert (client_server_snapshot->server.bind_endpoints.size () == 1);
+    assert (client_server_snapshot->server.bind_endpoints.front ()
+            == "tcp://127.0.0.2:*");
+    assert (fanout_snapshot->publisher.bind_endpoints.size () == 1);
+    assert (fanout_snapshot->publisher.bind_endpoints.front ()
+            == "tcp://127.0.0.2:0");
+    const auto stream_snapshots =
+      zlink::framework::detail::stream_runtime_t::from (zlink).snapshots ();
+    assert (stream_snapshots.size () == 1);
+    assert (stream_snapshots.front ().bind_endpoint == "tcp://127.0.0.2:0");
+    assert (zlink::framework::detail::mesh_node_runtime_t::from (
+              zlink, "network-mesh")
+            ->listen_endpoint ()
+            == "tcp://127.0.0.2:0");
 }
 
 void verify_client_server_runtime_projection_and_observation ()
@@ -100,6 +169,52 @@ void verify_client_server_runtime_projection_and_observation ()
     server.close ();
 }
 
+void verify_public_listener_status_reports_bound_endpoint ()
+{
+    auto app = zlink::framework::app_t::create ();
+    app.add_zlink_framework ([] (zlink::framework::zlink_framework_options_t &options) {
+        options.handlers ().group ("listener-status").add_send<network_probe_handler_t> ();
+        options.add_client_server_channel ("listener-status")
+          .server ()
+          .listen ()
+          .add_handler_group ("listener-status");
+    });
+
+    auto provider = app.advanced ().services ().build_provider ();
+    auto &runtime =
+      provider.get_required<zlink::framework::framework_runtime_t> ();
+
+    char program[] = "listener-status";
+    char *arguments[] = {program, nullptr};
+    std::atomic_int exit_code{-1};
+    std::thread app_thread ([&] {
+        exit_code.store (app.run (1, arguments), std::memory_order_release);
+    });
+
+    std::optional<zlink::framework::listener_status_t> status;
+    const auto deadline = std::chrono::steady_clock::now () + 5s;
+    while (std::chrono::steady_clock::now () < deadline) {
+        try {
+            status = runtime.listener_status (
+              zlink::framework::listener_kind_t::client_server,
+              "listener-status");
+            break;
+        } catch (const zlink::framework::framework_exception_t &) {
+            std::this_thread::sleep_for (1ms);
+        }
+    }
+
+    assert (status.has_value ());
+    assert (status->kind == zlink::framework::listener_kind_t::client_server);
+    assert (status->name == "listener-status");
+    assert (status->endpoint.rfind ("tcp://", 0) == 0);
+    assert (status->endpoint.find (":0") == std::string::npos);
+
+    app.request_stop ();
+    app_thread.join ();
+    assert (exit_code.load (std::memory_order_acquire) == 0);
+}
+
 void verify_client_server_terminal_errors_preserve_public_boundaries ()
 {
     using zlink::framework::runtime::foundation::operation_terminal_t;
@@ -142,7 +257,9 @@ void verify_client_server_terminal_errors_preserve_public_boundaries ()
 
 int main ()
 {
+    verify_network_defaults_are_deferred_until_apply ();
     verify_client_server_terminal_errors_preserve_public_boundaries ();
     verify_client_server_runtime_projection_and_observation ();
+    verify_public_listener_status_reports_bound_endpoint ();
     return 0;
 }

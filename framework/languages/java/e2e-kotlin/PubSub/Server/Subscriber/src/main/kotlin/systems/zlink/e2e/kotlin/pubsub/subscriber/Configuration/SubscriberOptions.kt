@@ -5,8 +5,11 @@ data class SubscriberOptions(
     val topics: Set<String>,
     val httpEndpoint: String,
     val handlerDelayMillis: Long?,
-    val redisLocationEndpoint: String,
-    val locationKeyPrefix: String,
+    val includeAllTopics: Boolean,
+    val manualEndpoint: String?,
+    val mixedMode: Boolean,
+    val redisLocationEndpoint: String?,
+    val locationKeyPrefix: String?,
     val logDir: String,
 ) {
     companion object {
@@ -16,21 +19,39 @@ data class SubscriberOptions(
                 values[key]?.takeIf { it.isNotBlank() } ?: throw IllegalArgumentException("--$key is required.")
             return SubscriberOptions(
                 rid = values["rid"]?.takeIf { it.isNotBlank() } ?: "sub-1",
-                topics = parseTopics(values["topics"] ?: "all"),
+                topics = parseTopics(
+                    values["topics"] ?: "all",
+                    values["include-all"]?.toBoolean() ?: true,
+                ),
                 httpEndpoint = required("http-endpoint"),
                 handlerDelayMillis = values["handler-delay-ms"]?.takeIf { it.isNotBlank() }?.toLong(),
-                redisLocationEndpoint = required("redis-location-endpoint"),
-                locationKeyPrefix = required("location-key-prefix"),
+                includeAllTopics = values["include-all"]?.toBoolean() ?: true,
+                manualEndpoint = values["manual-endpoint"]?.takeIf { it.isNotBlank() },
+                mixedMode = values["mixed-mode"]?.toBoolean() ?: false,
+                redisLocationEndpoint = values["redis-location-endpoint"]?.takeIf { it.isNotBlank() },
+                locationKeyPrefix = values["location-key-prefix"]?.takeIf { it.isNotBlank() },
                 logDir = values["log-dir"]?.takeIf { it.isNotBlank() } ?: "logs",
-            )
+            ).also { options ->
+                require(options.manualEndpoint != null || options.redisLocationEndpoint != null) {
+                    "automatic subscriber requires --redis-location-endpoint or --manual-endpoint."
+                }
+                require(!options.mixedMode || options.manualEndpoint != null) {
+                    "--mixed-mode requires --manual-endpoint."
+                }
+                require(options.redisLocationEndpoint == null || options.locationKeyPrefix != null) {
+                    "--location-key-prefix is required with --redis-location-endpoint."
+                }
+            }
         }
 
-        private fun parseTopics(value: String): Set<String> {
+        private fun parseTopics(value: String, includeAll: Boolean): Set<String> {
             val topics = value.split(",")
                 .map { it.trim() }
                 .filter { it.isNotEmpty() }
                 .toMutableSet()
-            topics += "all"
+            if (includeAll) {
+                topics += "all"
+            }
             return topics
         }
     }

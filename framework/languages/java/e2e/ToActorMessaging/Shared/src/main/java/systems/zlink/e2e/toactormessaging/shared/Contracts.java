@@ -29,9 +29,6 @@ public final class Contracts {
     public record ActorRefWire(String nodeRidHex, String actorId, long generation) {
     }
 
-    public record ActorRefCallRequest(String scenario, ActorRefWire actorRef, String value) {
-    }
-
     public record ActorCallResponse(
         String scenario,
         String actorId,
@@ -44,6 +41,9 @@ public final class Contracts {
         public static ActorCallResponse failed(String scenario, String actorId, String kind) {
             return new ActorCallResponse(scenario, actorId, "failed", kind);
         }
+    }
+
+    public record RouteStatus(boolean ready, String targetRid) {
     }
 
     public record BindActorRequest(ActorRefWire actorRef) {
@@ -72,6 +72,19 @@ public final class Contracts {
     }
 
     public record DestroyActorReply(String actorId, boolean destroyed) {
+    }
+
+    public record DestroyActorRefRequest(String scenario, ActorRefWire actorRef) {
+    }
+
+    public record DestroyActorRefReply(String actorId, boolean destroyed, String errorKind) {
+        public static DestroyActorRefReply completed(String actorId, boolean destroyed) {
+            return new DestroyActorRefReply(actorId, destroyed, null);
+        }
+
+        public static DestroyActorRefReply failed(String actorId, String errorKind) {
+            return new DestroyActorRefReply(actorId, false, errorKind);
+        }
     }
 
     public record UnbindActorRequest(String scenario, String actorId) {

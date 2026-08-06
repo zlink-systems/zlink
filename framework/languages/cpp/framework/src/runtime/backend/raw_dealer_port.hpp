@@ -4,6 +4,7 @@
 #include "runtime/backend/raw_route_port.hpp"
 
 #include <zlink/Contracts/Eventing/poller.hpp>
+#include <zlink/Contracts/Messaging/received.hpp>
 
 #include <memory>
 
@@ -38,6 +39,8 @@ class raw_dealer_port_t
     zlink::dealer_socket_t *_socket;
     std::mutex _owned_socket_mutex;
     std::mutex *_socket_mutex;
+    // Reused for every receive so the binding owns one stable receive buffer.
+    zlink::received_t _received;
 };
 
 } // namespace zlink::framework::detail::backend

@@ -131,10 +131,9 @@ inline int run_play_server (int argc, char **argv)
           .add_singleton<play_b_owner_http_client_t> (
             std::make_unique<play_b_owner_http_client_t> (std::move (play_b_http)))
           .add_transient<ensure_actor_handler_t, scenario_state_t,
-                         zlink::framework::spot_node_manager_t,
                          zlink::framework::session_actor_manager_t> ()
           .add_transient<spot_lifecycle_handler_t, scenario_state_t,
-                         zlink::framework::spot_node_manager_t> ()
+                         zlink::framework::spot_manager_t> ()
           .add_transient<join_spot_handler_t, scenario_state_t,
                          zlink::framework::session_actor_manager_t> ()
           .add_transient<complex_actor_handler_t, scenario_state_t,
@@ -154,64 +153,64 @@ inline int run_play_server (int argc, char **argv)
                          play_b_owner_http_client_t> ()
           .add_transient<worker_spot_handler_t, zlink::framework::session_actor_manager_t> ()
           .add_transient<create_spot_handler_t, scenario_state_t,
-                         zlink::framework::spot_node_manager_t> ()
+                         zlink::framework::spot_manager_t> ()
           .add_transient<create_alternate_spot_handler_t, scenario_state_t,
-                         zlink::framework::spot_node_manager_t> ()
+                         zlink::framework::spot_manager_t> ()
           .add_transient<spot_state_command_route_handler_t,
                          zlink::framework::route_client_t,
-                         zlink::framework::spot_handle_resolver_t> ()
+                         zlink::framework::spot_manager_t> ()
           .add_transient<spot_publish_route_handler_t,
                          zlink::framework::spot_publisher_client_t> ()
           .add_transient<spot_publish_wait_handler_t, scenario_state_t> ()
           .add_transient<spot_worker_start_route_handler_t,
                          zlink::framework::route_client_t,
-                         zlink::framework::spot_handle_resolver_t> ()
+                         zlink::framework::spot_manager_t> ()
           .add_transient<spot_worker_complete_handler_t, scenario_state_t> ()
           .add_transient<spot_stage_probe_route_handler_t,
                          zlink::framework::route_client_t,
-                         zlink::framework::spot_handle_resolver_t> ()
+                         zlink::framework::spot_manager_t> ()
           .add_transient<spot_stage_timer_route_handler_t,
                          zlink::framework::route_client_t,
                          scenario_state_t,
-                         zlink::framework::spot_handle_resolver_t> ()
+                         zlink::framework::spot_manager_t> ()
           .add_transient<spot_idle_close_route_handler_t, scenario_state_t,
-                         zlink::framework::spot_node_manager_t> ()
+                         zlink::framework::spot_manager_t> ()
           .add_transient<spot_overrun_start_route_handler_t, scenario_state_t,
-                         zlink::framework::spot_node_manager_t> ()
+                         zlink::framework::spot_manager_t> ()
           .add_transient<spot_slow_route_handler_t, zlink::framework::route_client_t,
-                         zlink::framework::spot_handle_resolver_t> ()
+                         zlink::framework::spot_manager_t> ()
           .add_transient<spot_missing_handler_request_handler_t,
                          zlink::framework::route_client_t,
                          scenario_state_t,
-                         zlink::framework::spot_handle_resolver_t> ()
+                         zlink::framework::spot_manager_t> ()
           .add_transient<spot_missing_handler_command_handler_t,
                          zlink::framework::route_client_t,
                          scenario_state_t,
-                         zlink::framework::spot_handle_resolver_t> ()
+                         zlink::framework::spot_manager_t> ()
           .add_transient<spot_missing_target_request_handler_t,
                          zlink::framework::route_client_t,
-                         zlink::framework::spot_handle_resolver_t> ()
+                         zlink::framework::spot_manager_t> ()
           .add_transient<spot_missing_route_handler_t, zlink::framework::route_client_t,
-                         zlink::framework::spot_handle_resolver_t> ()
+                         zlink::framework::spot_manager_t> ()
           .add_transient<spot_outbound_route_handler_t, zlink::framework::route_client_t,
-                         zlink::framework::spot_handle_resolver_t> ()
+                         zlink::framework::spot_manager_t> ()
           .add_transient<spot_outbound_negative_route_handler_t,
                          zlink::framework::route_client_t,
-                         zlink::framework::spot_handle_resolver_t> ()
+                         zlink::framework::spot_manager_t> ()
           .add_transient<spot_to_spot_route_handler_t, zlink::framework::route_client_t,
-                         zlink::framework::spot_handle_resolver_t> ()
+                         zlink::framework::spot_manager_t> ()
           .add_transient<spot_to_spot_timeout_route_handler_t,
                          zlink::framework::route_client_t,
-                         zlink::framework::spot_handle_resolver_t> ()
+                         zlink::framework::spot_manager_t> ()
           .add_transient<spot_to_spot_negative_route_handler_t,
                          zlink::framework::route_client_t,
-                         zlink::framework::spot_handle_resolver_t> ()
+                         zlink::framework::spot_manager_t> ()
           .add_transient<lifecycle_spot_handler_t, scenario_state_t,
-                         zlink::framework::spot_node_manager_t> ()
+                         zlink::framework::spot_manager_t> ()
           .add_transient<close_spot_handler_t, scenario_state_t,
-                         zlink::framework::spot_node_manager_t> ()
+                         zlink::framework::spot_manager_t> ()
           .add_transient<type_mismatch_spot_handler_t, scenario_state_t,
-                         zlink::framework::spot_node_manager_t,
+                         zlink::framework::spot_manager_t,
                          zlink::framework::session_actor_manager_t> ();
         configure_codecs (options.codecs ());
         add_redis_location_store (options, redis_endpoint, redis_key_prefix);
@@ -238,10 +237,15 @@ inline int run_play_server (int argc, char **argv)
         if (!api_endpoint.empty () || !api_peer_endpoint.empty ()) {
             auto api = options.add_client_server_channel (e2e::api_channel);
             if (!api_endpoint.empty ()) {
-                api.enable_server (api_endpoint).use_handler_group (e2e::handler_group);
+                const auto endpoint = parse_spot_tcp_endpoint (api_endpoint);
+                api.server ()
+                  .set_bind_host (endpoint.host)
+                  .set_advertise_host (endpoint.host)
+                  .listen (endpoint.port)
+                  .add_handler_group (e2e::handler_group);
             }
             if (!api_peer_endpoint.empty ()) {
-                api.enable_client (api_peer_endpoint);
+                api.client ().connect (api_peer_endpoint);
             }
         }
         if (!publisher_endpoint.empty ()) {
@@ -258,13 +262,13 @@ inline int run_play_server (int argc, char **argv)
                                        e2e::channel_echo_req_t,
                                        e2e::channel_echo_res_t> ("ChannelEchoReq");
         spot.add_entry_spot<entry_spot_t> (
-          [state_ptr] (entry_spot_context_t context) {
+          [state_ptr] (zlink::framework::entry_spot_context_t context) {
               return std::make_shared<entry_spot_t> (
                 std::move (context), *state_ptr);
           })
           .add_spot_factory<user_spot_t> (
             e2e::user_spot,
-            [state_ptr] (spot_context_t context) {
+            [state_ptr] (zlink::framework::spot_context_t context) {
                 return std::make_shared<user_spot_t> (
                   std::move (context), *state_ptr);
             },
@@ -273,7 +277,7 @@ inline int run_play_server (int argc, char **argv)
             })
           .add_spot_factory<alternate_user_spot_t> (
             e2e::alternate_spot,
-            [] (spot_context_t context) {
+            [] (zlink::framework::spot_context_t context) {
                 return std::make_shared<alternate_user_spot_t> (
                   std::move (context));
             },

@@ -369,6 +369,17 @@ public class SpotServiceScenarioContext {
             Contracts.EvidenceSnapshot.class);
     }
 
+    protected static Contracts.EvidenceSnapshot readEvidence(String endpoint) {
+        try (ZLinkHttpClient http = ZLinkHttpClient.create(endpoint).build()) {
+            return http.get("/evidence")
+                .timeout(REQUEST_TIMEOUT)
+                .submit(Contracts.EvidenceSnapshot.class)
+                .toCompletableFuture()
+                .join()
+                .body();
+        }
+    }
+
     protected static <T> T postJson(
         String endpoint,
         String path,

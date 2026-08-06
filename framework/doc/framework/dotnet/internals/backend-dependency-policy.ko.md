@@ -89,35 +89,75 @@ surface 에 남을 수 있다. 그래도 다음 원칙으로 폭을 좁힌다.
 - "framework 가 한 번 재해석한 typed runtime event + 꼭 필요할 때만 추가되는
   native detail" 구조
 
-## 7. 구현 지침
+## 7. 계층과 어댑터 선택 기준
 
-framework 와 backend 사이에는 항상 어댑터 한 층을 두고, 역할을 깔끔하게
-나누어 둔다.
+framework 와 backend 사이에 어댑터를 무조건 추가하지 않는다. Framework runtime이
+binding public API와 같은 의미·소유권·수명·readiness·error·동시성 규칙을 그대로
+사용할 수 있으면 binding-facing integration에서 public API를 직접 호출한다.
+그 중 하나라도 Framework 의미와 다르면 그 차이를 한 곳에 숨기는 semantic
+adapter 또는 port를 둔다.
 
-- framework 내부에는 backend adapter layer[^backend-adapter] 를 둔다.
-- registration, lifecycle[^lifecycle], monitoring, query 같은 framework 본연의
-  역할은 framework service 가 맡는다. 실제 backend 호출은 adapter layer 가
-  떠맡는다.
-- Adapter는 bindings의 public raw socket API만 호출한다. Core service C API, `NativeMethods`, non-public
-  reflection, native symbol 직접 호출과 service binding object를 사용하지 않는다.
-- 샘플 문서가 low-level binding 타입을 직접 보여 주더라도, 그 설명이 framework
-  의 public API 표면 설명과 섞이지 않게 분리한다.
+현재 .NET의 계층은 다음 그래프로 판단한다.
+
+```text
++----------------------------------------------+
+| Framework public/domain contract             |
++----------------------------------------------+
+                       |
+                       v
++----------------------------------------------+
+| Framework semantic runtime core              |
++----------------------------------------------+
+                       |
+                       v
++----------------------------------------------+
+| Binding-facing runtime integration           |
+| direct public call or semantic adapter       |
++----------------------------------------------+
+                       |
+                       v
++----------------------------------------------+
+| Systems.Zlink public API                     |
++----------------------------------------------+
+                       |
+                       v
++----------------------------------------------+
+| Core                                         |
++----------------------------------------------+
+```
+
+이 기준을 적용한 상세한 type·operation·ownership 분류와 수신 storage 수명은
+[runtime integration and receive ownership](runtime-integration-and-ownership.ko.md)에
+기록한다.
+
+Adapter를 유지하려면 다음 중 하나가 실제 코드와 계약에 있어야 한다.
+
+- binding fluent operation을 Framework의 단일 submit 결과로 바꾼다.
+- Framework 옵션을 binding 옵션으로 변환하고 그 결정을 한 곳에 숨긴다.
+- Context, socket 또는 session의 ownership과 disposal 순서를 관리한다.
+- binding event, readiness, error를 Framework 의미로 변환한다.
+- 여러 binding object를 하나의 Spot, Stream 또는 lifecycle 동작으로 결합한다.
+- Framework가 async queue에 넘긴 message storage의 수명을 관리한다.
+
+인자와 결과를 그대로 전달하는 facade, testability만을 위한 구현 하나짜리 backend,
+binding method 이름만 바꾸는 wrapper는 이 기준을 만족하지 않으므로 제거한다.
+Adapter는 bindings의 public API만 호출한다. Core service C API, `NativeMethods`,
+non-public reflection, native symbol 직접 호출과 service binding object는 사용하지
+않는다. 샘플 문서가 low-level binding 타입을 직접 보여 주더라도 Framework public
+API 설명과 섞지 않는다.
 
 ## 8. 교체 시 규칙
 
-나중에 저수준 라이브러리를 교체할 때는 아래 순서를 지킨다.
+저수준 library를 교체할 때도 Framework public contract를 먼저 유지한다. direct
+binding call과 semantic adapter를 같은 contract에 대해 비교하고, 차이가 있는
+operation만 adapter로 감싼다. 기존 adapter의 내부 type을 새 adapter의 public
+contract로 승격하지 않는다.
 
-1. framework 의 public contract 를 먼저 그대로 유지한다.
-2. 기존 backend adapter 와 새 backend adapter 를 같은 contract 뒤에 나란히
-   꽂는다.
-3. public API 에 남아 있는 primitive 가 새 backend 에서도 그대로 유지될 수 있는지
-   확인한다.
-4. 유지 불가능한 타입이 있으면, backend 교체와 같은 작업에서 즉시 없애지 말고
-   먼저 framework wrapper 를 도입한 뒤에 교체한다.
-
-즉 backend 교체는 어디까지나 adapter layer 의 교체를 기본으로 본다. public API
-자체의 교체는 그것과는 별개의 breaking change 작업으로 분리해서 진행하는 편을
-원칙으로 삼는다.
+binding public API에 필요한 operation이 없으면 Framework 내부에서 reflection이나
+raw-frame 우회를 추가하지 않는다. 필요한 public binding contract와 binding test를
+먼저 추가하고, local package 버전을 갱신한 뒤 Framework는 그 public API만 호출한다.
+public contract 자체의 변경은 backend 교체와 분리한 breaking change 작업으로
+검토한다.
 
 ## 9. 회귀 테스트
 

@@ -92,6 +92,9 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
 
     @Override public synchronized Socket nativeSocket() { return socket; }
     @Override public synchronized String name() { return "stream"; }
+    @Override public synchronized String lastEndpoint() {
+        return socket.options().lastEndpoint();
+    }
     @Override public synchronized void setTlsServer(
         String certificatePath,
         String keyPath,

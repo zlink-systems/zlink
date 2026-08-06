@@ -43,13 +43,12 @@ public final class Program {
                 .traceLogFile(config.logDir() + "/delay-flow.log")
                 .traceLabel("java-observability-delay");
             options.addClientServerChannel(Contracts.DELAY_CHANNEL)
-                .enableServer(config.delayEndpoint())
-                .setRoutingId(RoutingId.from("delay-a"))
+                .server()
+                .listen(java.net.URI.create(config.delayEndpoint()).getPort())
                 .addRequestHandler(
                     DelayHandler.class,
                     Contracts.DelayReq.class,
-                    Contracts.DelayRes.class,
-                    "DelayReq");
+                    Contracts.DelayRes.class);
         };
     }
 

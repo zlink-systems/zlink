@@ -31,6 +31,7 @@ public final class Config12Spot implements ZLinkSpot<ZLinkActor> {
     @Override
     public void configure() {
         context.handlers().addHandler(SpotWorkflowHandler.class);
+        context.handlers().addHandler(SpotObjectProbeHandler.class);
     }
 
     @Override

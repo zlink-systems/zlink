@@ -190,7 +190,10 @@ final class ZLinkSpotDirectOutbound {
                 metadata.encode(),
                 parts,
                 SendFlags.DONT_WAIT),
-            () -> parts.forEach(Message::close));
+            () -> parts.forEach(Message::close))
+            // Keep the admission future private. The public stage must not
+            // allow callers to complete an operation that is still pending.
+            .thenApply(ignored -> null);
     }
 
     <TReply> CompletionStage<TReply> submitRequest(

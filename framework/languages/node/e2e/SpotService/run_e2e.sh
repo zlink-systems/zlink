@@ -223,9 +223,6 @@ SESSION_B_ALTERNATE_OBJECT_PORT="$(allocate_port)"
 GATEWAY_ROUTER_PORT="$(allocate_port)"
 MULTI_A_ROUTE_PORT="$(allocate_port)"
 MULTI_B_ROUTE_PORT="$(allocate_port)"
-PLAY_A_SPOT_PUB_PORT="$(allocate_port)"
-PLAY_B_SPOT_PUB_PORT="$(allocate_port)"
-GATEWAY_SPOT_PUB_PORT="$(allocate_port)"
 PLAY_A_EXTERNAL_CLIENT_PORT="$(allocate_port)"
 PLAY_B_EXTERNAL_CLIENT_PORT="$(allocate_port)"
 SESSION_A_STREAM_PORT="$(allocate_port)"
@@ -233,8 +230,6 @@ SESSION_A_TLS_STREAM_PORT="$(allocate_port)"
 SESSION_B_STREAM_PORT="$(allocate_port)"
 MULTI_A_SPOT_ROUTER_PORT="$(allocate_port)"
 MULTI_B_SPOT_ROUTER_PORT="$(allocate_port)"
-MULTI_A_SPOT_PUB_PORT="$(allocate_port)"
-MULTI_B_SPOT_PUB_PORT="$(allocate_port)"
 
 PLAY_A_URL="http://127.0.0.1:$PLAY_A_HTTP_PORT"
 PLAY_B_URL="http://127.0.0.1:$PLAY_B_HTTP_PORT"
@@ -258,9 +253,6 @@ SESSION_B_ALTERNATE_OBJECT="tcp://127.0.0.1:$SESSION_B_ALTERNATE_OBJECT_PORT"
 GATEWAY_ROUTER="tcp://127.0.0.1:$GATEWAY_ROUTER_PORT"
 MULTI_A_ROUTE="tcp://127.0.0.1:$MULTI_A_ROUTE_PORT"
 MULTI_B_ROUTE="tcp://127.0.0.1:$MULTI_B_ROUTE_PORT"
-PLAY_A_SPOT_PUB="tcp://127.0.0.1:$PLAY_A_SPOT_PUB_PORT"
-PLAY_B_SPOT_PUB="tcp://127.0.0.1:$PLAY_B_SPOT_PUB_PORT"
-GATEWAY_SPOT_PUB="tcp://127.0.0.1:$GATEWAY_SPOT_PUB_PORT"
 PLAY_A_EXTERNAL_CLIENT="tcp://127.0.0.1:$PLAY_A_EXTERNAL_CLIENT_PORT"
 PLAY_B_EXTERNAL_CLIENT="tcp://127.0.0.1:$PLAY_B_EXTERNAL_CLIENT_PORT"
 SESSION_A_STREAM="ws://127.0.0.1:$SESSION_A_STREAM_PORT"
@@ -268,8 +260,6 @@ SESSION_A_TLS_STREAM="wss://127.0.0.1:$SESSION_A_TLS_STREAM_PORT"
 SESSION_B_STREAM="ws://127.0.0.1:$SESSION_B_STREAM_PORT"
 MULTI_A_SPOT_ROUTER="tcp://127.0.0.1:$MULTI_A_SPOT_ROUTER_PORT"
 MULTI_B_SPOT_ROUTER="tcp://127.0.0.1:$MULTI_B_SPOT_ROUTER_PORT"
-MULTI_A_SPOT_PUB="tcp://127.0.0.1:$MULTI_A_SPOT_PUB_PORT"
-MULTI_B_SPOT_PUB="tcp://127.0.0.1:$MULTI_B_SPOT_PUB_PORT"
 
 PLAY_MAIN="$ROOT_DIR/Server/Play/dist/Server/Play/main.js"
 SESSION_MAIN="$ROOT_DIR/Server/Session/dist/Server/Session/main.js"
@@ -294,8 +284,7 @@ write_config() {
 write_config play-a \
   --string rid play-a --string httpUrl "$PLAY_A_URL" \
   --string controlRouterEndpoint "$PLAY_A_CONTROL" --string externalSpotEndpoint "$PLAY_A_EXTERNAL_SPOT" \
-  --string spotRouterEndpoint "$PLAY_A_ROUTER" --string spotPubEndpoint "$PLAY_A_SPOT_PUB" \
-  --array clientSpotPubEndpoints "$GATEWAY_SPOT_PUB,$PLAY_B_SPOT_PUB" \
+  --string spotRouterEndpoint "$PLAY_A_ROUTER" \
   --string externalClientEndpoint "$PLAY_A_EXTERNAL_CLIENT" \
   --string redisEndpoint "$REDIS_ENDPOINT" --string redisKeyPrefix "$REDIS_KEY_PREFIX" \
   --string evidenceFile "$LOG_DIR/play-a.evidence.log" --string logDir "$LOG_DIR"
@@ -303,8 +292,7 @@ write_config play-b \
   --string rid play-b --string httpUrl "$PLAY_B_URL" \
   --string controlRouterEndpoint "$PLAY_B_CONTROL" --string externalSpotEndpoint "$PLAY_B_EXTERNAL_SPOT" \
   --string playAExternalSpotEndpoint "$PLAY_A_EXTERNAL_SPOT" \
-  --string spotRouterEndpoint "$PLAY_B_ROUTER" --string spotPubEndpoint "$PLAY_B_SPOT_PUB" \
-  --array clientSpotPubEndpoints "$GATEWAY_SPOT_PUB,$PLAY_A_SPOT_PUB" \
+  --string spotRouterEndpoint "$PLAY_B_ROUTER" \
   --string externalClientEndpoint "$PLAY_B_EXTERNAL_CLIENT" \
   --string redisEndpoint "$REDIS_ENDPOINT" --string redisKeyPrefix "$REDIS_KEY_PREFIX" \
   --string evidenceFile "$LOG_DIR/play-b.evidence.log" --string logDir "$LOG_DIR"
@@ -343,13 +331,13 @@ if [[ "$SCENARIO" != "SM-F6" && "$SCENARIO" != "SM-G2" && "$SCENARIO" != "cross-
 fi
 write_config multi-node-a \
   --string rid multi-node-a --string httpUrl "$MULTI_A_URL" --string routeEndpoint "$MULTI_A_ROUTE" \
-  --string spotRouterEndpoint "$MULTI_A_SPOT_ROUTER" --string spotPubEndpoint "$MULTI_A_SPOT_PUB" \
+  --string spotRouterEndpoint "$MULTI_A_SPOT_ROUTER" \
   "${multi_a_peer[@]}" --string redisEndpoint "$REDIS_ENDPOINT" --string redisKeyPrefix "$REDIS_KEY_PREFIX" \
   --boolean spotOnly "$([[ "$SCENARIO" == "SM-F6" || "$SCENARIO" == "SM-G2" || "$SCENARIO" == "cross-mesh-actor-dispatch" ]] && echo true || echo false)" \
   --string evidenceFile "$LOG_DIR/multi-node-a.evidence.log" --string logDir "$LOG_DIR"
 write_config multi-node-b \
   --string rid multi-node-b --string httpUrl "$MULTI_B_URL" --string routeEndpoint "$MULTI_B_ROUTE" \
-  --string spotRouterEndpoint "$MULTI_B_SPOT_ROUTER" --string spotPubEndpoint "$MULTI_B_SPOT_PUB" \
+  --string spotRouterEndpoint "$MULTI_B_SPOT_ROUTER" \
   "${multi_b_peer[@]}" --string redisEndpoint "$REDIS_ENDPOINT" --string redisKeyPrefix "$REDIS_KEY_PREFIX" \
   --boolean spotOnly "$([[ "$SCENARIO" == "SM-F6" || "$SCENARIO" == "SM-G2" ]] && echo true || echo false)" \
   --string evidenceFile "$LOG_DIR/multi-node-b.evidence.log" --string logDir "$LOG_DIR"
@@ -420,7 +408,6 @@ wait_named_server() {
       wait_health "$MULTI_A_URL" multi-node-a "${pid_by_name[multi-node-a]:-}"
       if [[ "$SCENARIO" != "SM-F6" && "$SCENARIO" != "SM-G2" && "$SCENARIO" != "cross-mesh-actor-dispatch" ]]; then
         wait_port multi-node-a-route "$MULTI_A_ROUTE"
-        wait_port multi-node-a-spot-pub "$MULTI_A_SPOT_PUB"
       fi
       wait_port multi-node-a-spot-router "$MULTI_A_SPOT_ROUTER"
       ;;
@@ -428,7 +415,6 @@ wait_named_server() {
       wait_health "$MULTI_B_URL" multi-node-b "${pid_by_name[multi-node-b]:-}"
       if [[ "$SCENARIO" != "SM-F6" && "$SCENARIO" != "SM-G2" ]]; then
         wait_port multi-node-b-route "$MULTI_B_ROUTE"
-        wait_port multi-node-b-spot-pub "$MULTI_B_SPOT_PUB"
       fi
       wait_port multi-node-b-spot-router "$MULTI_B_SPOT_ROUTER"
       ;;
@@ -458,7 +444,7 @@ wait_control_route() {
 }
 
 wait_topology_routes() {
-  if [[ "$SCENARIO" == "SM-F6" || "$SCENARIO" == "SM-G2" || "$SCENARIO" == "SM-Q9" ]]; then
+  if [[ "$SCENARIO" == "SM-F6" || "$SCENARIO" == "SM-G2" ]]; then
     return 0
   fi
   if [[ "$SCENARIO" == "SM-F3" || "$SCENARIO" == "SM-F4" || "$SCENARIO" == "SM-C4" ]]; then
@@ -491,7 +477,7 @@ wait_topology_routes() {
 
 case "$SCENARIO" in
   SM-G2) SERVER_ROLES=(multi-node-a) ;;
-  SM-F6|SM-Q9) SERVER_ROLES=(multi-node-a multi-node-b) ;;
+  SM-F6) SERVER_ROLES=(multi-node-a multi-node-b) ;;
   SM-C4) SERVER_ROLES=(play-a gateway) ;;
   SM-F3|SM-F4) SERVER_ROLES=(play-a) ;;
   SM-F5) SERVER_ROLES=(play-a play-b) ;;

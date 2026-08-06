@@ -22,12 +22,15 @@ Runner는 실행별 role 설정 파일을 만들어 server에 전달한다. Clie
 ./run_e2e.sh SF-A2
 ./run_e2e.sh SF-B1
 ./run_e2e.sh SF-B2
+./run_e2e.sh SF-B3
 ./run_e2e.sh SF-C1
 ./run_e2e.sh SF-C2
+./run_e2e.sh SF-C3
 ./run_e2e.sh SF-D1
 ./run_e2e.sh SF-D2
 ./run_e2e.sh SF-D3
 ./run_e2e.sh SF-E1
+./run_e2e.sh SF-F9
 ./run_e2e.sh all
 ```
 
@@ -36,7 +39,8 @@ stdout, stderr, flow log를 출력한다.
 
 ## 현재 검증 범위
 
-시나리오별 완료 여부는 `feature-map.ko.md`가 소유한다. `SF-B2`는 grace 초과 뒤 재시작한 provider의
-신규 outbound 연결 억제 단언이 남아 있어 부분 구현이며, runner 성공만으로 완료 처리하지 않는다.
+시나리오별 완료 여부는 `feature-map.ko.md`가 소유한다. `SF-B2`, `SF-B3`, `SF-D2`는
+공통 계약의 단언을 실제로 실행한 뒤 현재 runtime blocker를 기록하므로 runner 성공으로 처리하지
+않는다. `SF-C1`과 `SF-E1`은 public topology state와 실제 Redis response delay를 사용한다.
 
 Config 6 범위는 public HTTP harness, runtime query, 실제 messaging 결과를 함께 사용해 검증한다.

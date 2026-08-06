@@ -16,6 +16,7 @@ import systems.zlink.e2e.registrymessaging.workflow.Handlers.ProfileReqHandler;
 import systems.zlink.e2e.registrymessaging.workflow.Handlers.RouteReqHandler;
 import systems.zlink.e2e.registrymessaging.workflow.Handlers.WorkflowReqHandler;
 import systems.zlink.e2e.registrymessaging.workflow.Infrastructure.ScenarioState;
+import systems.zlink.e2e.registrymessaging.shared.IdentityObjects;
 import systems.zlink.e2e.registrymessaging.shared.Contracts;
 import systems.zlink.framework.channels.ZLinkChannelRuntimeOptions;
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
@@ -66,6 +67,10 @@ public final class Program {
                         error.errorReason() + "/" + error.errorAction() + "/" + error.packetName());
                     return CompletableFuture.completedFuture(null);
                 });
+            options.configureLocations()
+                .setOwnerLeaseRenewInterval(java.time.Duration.ofMillis(500));
+            options.configureLocations().setOwnerLeaseTtl(java.time.Duration.ofSeconds(3));
+            options.configureLocations().setPollingInterval(java.time.Duration.ofMillis(250));
             options.addHandlersFromPackageOf(ProfileReqHandler.class);
 
             String apiEndpoint = server.apiEndpoint();
@@ -77,6 +82,23 @@ public final class Program {
                     .setAdvertiseHost(endpoint.getHost())
                     .listen(endpoint.getPort())
                     .addHandlerGroup(Contracts.HANDLER_GROUP);
+            }
+
+            if (!server.objectEndpoint().isBlank()) {
+                var objects = options.addRouteMesh(server.objectMeshName())
+                    .listen(server.objectEndpoint())
+                    .setRoutingId(RoutingId.from(state.providerRid()))
+                    .objects().server();
+                objects.addEntrySpot(IdentityObjects.EntrySpot.class)
+                    .addActorFactory(
+                        Contracts.OBJECT_ACTOR_TYPE,
+                        IdentityObjects.Actor.class,
+                        IdentityObjects.ActorFactory.class,
+                        factory -> factory.disableRelocation())
+                    .addSpotFactory(
+                        Contracts.OBJECT_SPOT_TYPE,
+                        IdentityObjects.Spot.class,
+                        factory -> factory.disableRelocation());
             }
 
             String workflowEndpoint = server.workflowEndpoint();

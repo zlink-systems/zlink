@@ -154,6 +154,20 @@ moment.** Passing a live internal data structure as-is forces the
 reading side to require a lock, and that lock spreads into the
 processing path.
 
+### Listener identity is resolved after bind
+
+Operational endpoint reporting does not reuse the configured endpoint. The
+listener registry records the listener family, its logical name, and the
+endpoint confirmed by the completed bind. A wildcard bind and port `0` are
+therefore resolved before the status record is published.
+
+The runtime returns an immutable snapshot from this registry. Remote
+processes use its advertised endpoint, while the registry keeps the socket
+and binding details private. The record is added only after bind succeeds and
+is removed when the owning listener closes. This keeps readiness and endpoint
+discovery on the same lifecycle boundary and avoids making callers inspect a
+socket or infer an endpoint from configuration.
+
 ### Coalesce When Backed Up
 
 **Decision — keep a bounded slot per subscriber separately, and

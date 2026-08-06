@@ -83,6 +83,26 @@ message_t detail::lazy_message_parts_t::single_part_or_throw ()
     return _parts.front ();
 }
 
+void detail::lazy_message_parts_t::replace (std::vector<message_t> &parts_)
+{
+    if (_single_part.has_value ())
+        _single_part->close ();
+    _single_part.reset ();
+    close_parts (_parts);
+    _parts.reserve (parts_.size ());
+    for (auto &part : parts_)
+        _parts.push_back (std::move (part));
+    parts_.clear ();
+}
+
+void detail::lazy_message_parts_t::replace (message_t part_)
+{
+    if (_single_part.has_value ())
+        _single_part->close ();
+    _single_part = std::move (part_);
+    close_parts (_parts);
+}
+
 void detail::lazy_message_parts_t::close ()
 {
     if (_single_part.has_value ())

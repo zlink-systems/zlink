@@ -79,6 +79,7 @@ import {
   type ZLinkStreamSessionRuntimeOptions as ZLinkStreamSessionRuntimeCoreOptions
 } from './stream-session-runtime';
 import { ZLinkStreamDispatchCapacity } from './stream-dispatch-capacity';
+import type { ZLinkActorRouteCommitOptions } from './stream-binding-runtime-ports';
 export { ZLinkPendingSessionRequest } from './session-requests';
 export { ZLinkActorSessionLifecycleCoordinator } from './actor-session-lifecycle-coordinator';
 export { ZLinkActorSessionBindingRegistry } from './actor-session-binding-registry';
@@ -120,7 +121,8 @@ export interface ZLinkStreamBindingRuntimeOptions {
   readonly confirmRemoteActorSessionBinding?: (
     actor: ActorRef,
     sessionRid: ActorRef['nodeRid'],
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    options?: { readonly waitForAcknowledgement?: boolean }
   ) => Promise<void>;
   readonly relay?: (actor: ZLinkSessionActor, header: ZLinkStreamFrameHeader, payload: Message, signal?: AbortSignal) => Promise<boolean>;
   readonly notifyDisconnected?: (actor: ZLinkSessionActor, signal?: AbortSignal) => Promise<void>;
@@ -420,8 +422,19 @@ export class ZLinkStreamBindingRuntime {
     await this.sessionActors.refreshActor(actorRef, signal);
   }
 
-  async commitActorRoute(actorRef: ActorRef, signal?: AbortSignal): Promise<void> {
-    await this.sessionActors.commitActorRoute(actorRef, signal);
+  async commitActorRoute(
+    actorRef: ActorRef,
+    signal?: AbortSignal,
+    options?: ZLinkActorRouteCommitOptions
+  ): Promise<void> {
+    await this.sessionActors.commitActorRoute(actorRef, signal, options);
+  }
+
+  authorityFence(actorId: string): {
+    readonly authorityOwnerGeneration: bigint;
+    readonly ownerLeaseGeneration: bigint;
+  } | undefined {
+    return this.sessionActors.authorityFence(actorId);
   }
 
   sealActorRoute(input: {

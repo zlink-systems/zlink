@@ -18,7 +18,7 @@ public final class RmC2TargetedRouteScenario {
             .body(new Contracts.RouteReq("missing"))
             .submit(Contracts.RequestFailureRes.class).toCompletableFuture().join().body();
         ScenarioAssert.that(missing.failed(), "RM-C2 missing rid request should fail");
-        ScenarioAssert.that("REQUEST_TARGET_NOT_FOUND".equals(missing.errorKind()),
+        ScenarioAssert.that("NOT_FOUND".equals(missing.errorKind()),
             "RM-C2 expected public target-not-found error, got " + missing.errorKind());
         System.out.println("scenario RM-C2 passed");
     }

@@ -33,12 +33,11 @@ public final class PersistentRoomStateSessionHandler
         ZLinkSessionDispatchContext dispatch,
         Contracts.PersistentRoomStateReq request) {
         RoutingId spotRid = RoutingId.from(dispatch.metadata().get(Contracts.SPOT_RID_METADATA));
-        return spots.resolveSpotHandle(spotRid)
-            .thenCompose(handle -> routes.requestToSpot(
-                    handle.orElseThrow(() -> new IllegalStateException("spot not found: " + spotRid)),
+        return routes.requestToSpot(
+                    spotRid.toString(),
                     request)
                 .timeout(Duration.ofSeconds(30))
-                .submit(Contracts.PersistentRoomStateRes.class))
+                .submit(Contracts.PersistentRoomStateRes.class)
             .thenAccept(reply -> context.client().reply(reply).submit());
     }
 }

@@ -366,7 +366,6 @@ public sealed class FanoutAutomaticDiscoveryTests
         public void SetSubscription(string topic) { }
         public void SetRoutingId(RoutingId routingId) { }
         public void Bind(string endpoint) { }
-        public void SetChannelName(string channelName) { }
         public void ApplySocketConfig(IZLinkSocketConfig config) { }
         public void SetMaxMessageSize(long value) { }
         public void SetSendHighWaterMark(ulong value) { }

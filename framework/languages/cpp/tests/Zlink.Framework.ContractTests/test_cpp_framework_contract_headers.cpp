@@ -44,6 +44,7 @@
 #include <zlink/framework/contracts/messaging/message.hpp>
 #include <zlink/framework/contracts/messaging/message_context.hpp>
 #include <zlink/framework/contracts/monitoring/client_server_runtime.hpp>
+#include <zlink/framework/contracts/monitoring/fanout_runtime.hpp>
 #include <zlink/framework/contracts/monitoring/framework_runtime.hpp>
 #include <zlink/framework/contracts/monitoring/route_mesh_runtime.hpp>
 #include <zlink/framework/contracts/placement.hpp>
@@ -389,6 +390,9 @@ static_assert (!has_future_get<zlink::framework::task_t<int>>);
 
 static_assert (std::is_abstract_v<zlink::framework::route_mesh_runtime_t>);
 static_assert (std::is_abstract_v<zlink::framework::mesh_runtime_observation_t>);
+static_assert (std::is_abstract_v<zlink::framework::framework_runtime_t>);
+static_assert (std::is_abstract_v<zlink::framework::fanout_runtime_t>);
+static_assert (std::is_abstract_v<zlink::framework::fanout_runtime_observation_t>);
 static_assert (std::is_abstract_v<zlink::framework::route_mesh_runtime_options_t>);
 static_assert (std::is_abstract_v<zlink::framework::mesh_channel_runtime_options_t>);
 static_assert (
@@ -436,6 +440,24 @@ static_assert (
   std::is_same_v<decltype (std::declval<const zlink::framework::route_mesh_runtime_t &> ()
                              .is_ready (std::declval<std::string> ())),
                  bool>);
+static_assert (
+  std::is_same_v<decltype (std::declval<const zlink::framework::framework_runtime_t &> ()
+                             .listener_status (
+                               zlink::framework::listener_kind_t::stream,
+                               std::declval<std::string> ())),
+                 zlink::framework::listener_status_t>);
+static_assert (
+  std::is_same_v<decltype (std::declval<const zlink::framework::fanout_runtime_t &> ()
+                             .snapshot (std::declval<std::string> ())),
+                 zlink::framework::fanout_channel_snapshot_t>);
+static_assert (
+  std::is_same_v<
+    decltype (std::declval<zlink::framework::fanout_runtime_t &> ().observe (
+      std::declval<std::string> (),
+      std::declval<std::size_t> (),
+      std::declval<std::function<void (const zlink::framework::observed_status_t<
+        zlink::framework::fanout_runtime_event_t> &)>> ())),
+    std::unique_ptr<zlink::framework::fanout_runtime_observation_t>>);
 static_assert (
   std::is_same_v<
     decltype (std::declval<zlink::framework::app_t &> ().relocate (

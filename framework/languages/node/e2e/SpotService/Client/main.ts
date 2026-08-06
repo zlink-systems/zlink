@@ -38,7 +38,6 @@ import { runSmD12 } from './Scenarios/sm-d12-scenario';
 import { runSmD13 } from './Scenarios/sm-d13-scenario';
 import { runSmD14 } from './Scenarios/sm-d14-scenario';
 import { runSmD15 } from './Scenarios/sm-d15-scenario';
-import { runSmD16 } from './Scenarios/sm-d16-scenario';
 import { runSmE1 } from './Scenarios/sm-e1-scenario';
 import { runSmE2 } from './Scenarios/sm-e2-scenario';
 import { runSmE3 } from './Scenarios/sm-e3-scenario';
@@ -53,8 +52,19 @@ import { runSmG1 } from './Scenarios/sm-g1-scenario';
 import { prepareSmG2, verifySmG2 } from './Scenarios/sm-g2-scenario';
 import { runSmG3 } from './Scenarios/sm-g3-scenario';
 import { runSmG4 } from './Scenarios/sm-g4-scenario';
-import { runSmQ9 } from './Scenarios/sm-q9-scenario';
 import { parseClientOptions } from './Support/client-options';
+import { runSMA9 } from './Scenarios/sm-a9-scenario';
+import { runSMA10 } from './Scenarios/sm-a10-scenario';
+import { runSMA11 } from './Scenarios/sm-a11-scenario';
+import { runSMA12 } from './Scenarios/sm-a12-scenario';
+import { runSMA13 } from './Scenarios/sm-a13-scenario';
+import { runSMB0 } from './Scenarios/sm-b0-scenario';
+import { runSMB0A } from './Scenarios/sm-b0a-scenario';
+import { runSMB10 } from './Scenarios/sm-b10-scenario';
+import { runSMB11 } from './Scenarios/sm-b11-scenario';
+import { runSMC6 } from './Scenarios/sm-c6-scenario';
+import { runSMG5A } from './Scenarios/sm-g5a-scenario';
+import { runSMG5B } from './Scenarios/sm-g5b-scenario';
 import { browserE2eConfig, runBrowserE2e } from '../../browser-client-runtime';
 
 async function main(): Promise<void> {
@@ -100,7 +110,6 @@ async function main(): Promise<void> {
     'SM-D13': () => runSmD13(options),
     'SM-D14': () => runSmD14(options),
     'SM-D15': () => runSmD15(options),
-    'SM-D16': () => runSmD16(options),
     'SM-E1': () => runSmE1(options),
     'SM-E2': () => runSmE2(options),
     'SM-E3': () => runSmE3(options),
@@ -116,9 +125,20 @@ async function main(): Promise<void> {
     'SM-G2-VERIFY': () => verifySmG2(options),
     'SM-G3': () => runSmG3(options),
     'SM-G4': () => runSmG4(options),
-    'SM-Q9': () => runSmQ9(options)
+    'SM-A9': () => runSMA9(options),
+    'SM-A10': () => runSMA10(options),
+    'SM-A11': () => runSMA11(options),
+    'SM-A12': () => runSMA12(options),
+    'SM-A13': () => runSMA13(options),
+    'SM-B0': () => runSMB0(options),
+    'SM-B0A': () => runSMB0A(options),
+    'SM-B10': () => runSMB10(options),
+    'SM-B11': () => runSMB11(options),
+    'SM-C6': () => runSMC6(options),
+    'SM-G5A': () => runSMG5A(options),
+    'SM-G5B': () => runSMG5B(options),
   };
-  const defaultScenarioIds = ['SM-A1', 'SM-A2', 'SM-A3', 'SM-A4', 'SM-A5', 'SM-A6', 'SM-A7', 'SM-A8', 'SM-B1', 'SM-B2', 'SM-B3', 'SM-B4', 'SM-B5', 'SM-B6', 'SM-B7', 'SM-B8', 'SM-B9', 'SM-C1', 'SM-C2', 'SM-C3', 'SM-C4', 'SM-C5', 'SM-D1', 'SM-D2', 'SM-D3', 'SM-D4', 'SM-D5', 'SM-D6', 'SM-D7', 'SM-D9', 'SM-D10', 'SM-D11', 'SM-D12', 'SM-D13', 'SM-D14', 'SM-D15', 'SM-E1', 'SM-E2', 'SM-E3', 'SM-E4', 'SM-F1', 'SM-F2', 'SM-F3', 'SM-F4', 'SM-F5', 'SM-F6'];
+  const defaultScenarioIds = ['SM-A1', 'SM-A2', 'SM-A3', 'SM-A4', 'SM-A5', 'SM-A6', 'SM-A7', 'SM-A8', 'SM-A9', 'SM-A10', 'SM-A11', 'SM-A12', 'SM-A13', 'SM-B0', 'SM-B0A', 'SM-B1', 'SM-B2', 'SM-B3', 'SM-B4', 'SM-B5', 'SM-B6', 'SM-B7', 'SM-B8', 'SM-B9', 'SM-B10', 'SM-B11', 'SM-C1', 'SM-C2', 'SM-C3', 'SM-C4', 'SM-C5', 'SM-C6', 'SM-D1', 'SM-D2', 'SM-D3', 'SM-D4', 'SM-D5', 'SM-D6', 'SM-D7', 'SM-D9', 'SM-D10', 'SM-D11', 'SM-D12', 'SM-D13', 'SM-D14', 'SM-D15', 'SM-E1', 'SM-E2', 'SM-E3', 'SM-E4', 'SM-F1', 'SM-F2', 'SM-F3', 'SM-F4', 'SM-F5', 'SM-F6', 'SM-G5A', 'SM-G5B'];
   const operationGroups: Record<string, readonly string[]> = {
     'default-batch': defaultScenarioIds,
     'sm-b1-b2-b3-b5': ['SM-B1', 'SM-B2', 'SM-B3', 'SM-B5'],
@@ -129,7 +149,6 @@ async function main(): Promise<void> {
     'sm-d4': ['SM-D4'],
     'session-binding-e2e': ['SM-D4A', 'SM-D4B', 'SM-D5', 'SM-D5A'],
     'session-binding-regression': ['SM-D4A', 'SM-D4B', 'SM-D5A'],
-    'cross-mesh-actor-dispatch': ['SM-D16'],
     'sm-d5': ['SM-D5'],
     'sm-d7': ['SM-D7'],
     'sm-d8': ['SM-D8'],

@@ -75,7 +75,10 @@ public final class Program {
             } else {
                 node.channelName(Contracts.ROUTE_CHANNEL).client();
             }
-            options.addClientServerChannel(Contracts.EGRESS_CHANNEL).client();
+            // The gateway is the Client role for the channel served by each Play role.
+            // Both sides must register the same ChannelName so the Spot callback can
+            // use its public requestToChannel/sendToChannel surface.
+            options.addClientServerChannel(Contracts.INGRESS_CHANNEL).client();
         };
     }
 

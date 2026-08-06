@@ -42,6 +42,14 @@ public final class EvidenceVerifier {
                 case "OBS-C3" -> verifyC3(evidence);
                 case "OBS-C4" -> verifyC4(evidence);
                 case "OBS-C5" -> verifyC5(evidence);
+                case "OBS-C6" -> verifyC6(evidence);
+                case "OBS-C7" -> verifyC7(evidence);
+                case "OBS-C8" -> verifyC8(evidence);
+                case "OBS-C9A" -> verifyC9A(evidence);
+                case "OBS-C9B" -> verifyC9B(evidence);
+                case "OBS-C10" -> verifyC10(evidence);
+                case "OBS-C11" -> verifyC11(evidence);
+                case "OBS-C12" -> verifyC12(evidence);
                 default -> throw new IllegalArgumentException("Unknown scenario " + id);
             }
             passed.add(id);
@@ -54,7 +62,9 @@ public final class EvidenceVerifier {
             return List.of(
                 "OBS-A1", "OBS-A2", "OBS-A3", "OBS-A4",
                 "OBS-B1", "OBS-B2", "OBS-B3", "OBS-B4",
-                "OBS-C1", "OBS-C2", "OBS-C3", "OBS-C4", "OBS-C5");
+                "OBS-C1", "OBS-C2", "OBS-C3", "OBS-C4", "OBS-C5",
+                "OBS-C6", "OBS-C7", "OBS-C8", "OBS-C9A", "OBS-C9B",
+                "OBS-C10", "OBS-C11", "OBS-C12");
         }
         String normalized = selector.toUpperCase();
         if (!scenarioIds("all").contains(normalized)) {
@@ -191,6 +201,145 @@ public final class EvidenceVerifier {
             "OBS-C5 zero-target reason mismatch");
     }
 
+    private static void verifyC6(JsonNode root) {
+        requireRelocated(root, "ROLLING_UPDATE", 2);
+        requireMovedObjects(root, "play-a", "play-b");
+        ensure("play-b".equals(root.path("handler").path("nodeRid").asText()),
+            "OBS-C6 target handler evidence is missing");
+        ensure("RELOCATED".equals(root.path("sourceStatus").path("state").asText()),
+            "OBS-C6 source did not remain Relocated");
+        requireStopped(root.path("shutdown"), "OBS-C6 source shutdown");
+    }
+
+    private static void verifyC7(JsonNode root) {
+        requireRelocated(root, "PLANNED_MAINTENANCE", 1);
+        requireMovedObjects(root, "play-a", "play-b");
+        ensure("play-b".equals(root.path("handler").path("nodeRid").asText()),
+            "OBS-C7 target handler evidence is missing");
+        requireStopped(root.path("shutdown"), "OBS-C7 source shutdown");
+    }
+
+    private static void verifyC8(JsonNode root) {
+        JsonNode gate = object(root, "gate");
+        String callbackDeadline = requiredText(gate, "callbackDeadline");
+        String hostDeadline = requiredText(root, "hostDeadline");
+        ensure(callbackDeadline.equals(hostDeadline),
+            "OBS-C8 closing callback did not receive the host deadline");
+        JsonNode shutdown = object(root, "shutdown");
+        ensure("FORCE_STOPPED".equals(text(shutdown, "outcome")),
+            "OBS-C8 did not force stop at the deadline");
+        ensure("DEADLINE_EXCEEDED".equals(text(shutdown, "reason")),
+            "OBS-C8 deadline reason is missing");
+        ensure(root.path("forcedMetricDelta").asInt(-1) == 1,
+            "OBS-C8 forced shutdown metric delta is not exactly one");
+        ensure(root.path("terminalStable").asBoolean(false),
+            "OBS-C8 late callback changed the terminal result");
+    }
+
+    private static void verifyC9A(JsonNode root) {
+        JsonNode source = object(root, "sourceDuring");
+        ensure("play-a".equals(object(source, "spot").path("nodeRid").asText()),
+            "OBS-C9A source Spot did not remain available while target was absent");
+        requireRelocated(root, "ROLLING_UPDATE", 2);
+        ensure(any(array(object(root, "targetStatus"), "topology"),
+                row -> "play-b".equals(text(row, "nodeRid"))
+                    && "READY".equals(text(row, "state"))),
+            "OBS-C9A target did not become publicly READY");
+        requireMovedObjects(root, "play-a", "play-b");
+        ensure("play-b".equals(root.path("handler").path("nodeRid").asText()),
+            "OBS-C9A target handler evidence is missing");
+    }
+
+    private static void verifyC9B(JsonNode root) {
+        JsonNode relocation = object(root, "relocation");
+        ensure("BLOCKED".equals(text(relocation, "outcome")),
+            "OBS-C9B manual topology was not blocked");
+        ensure("MANUAL_TOPOLOGY_UNSUPPORTED".equals(text(relocation, "reason")),
+            "OBS-C9B manual topology blocker reason mismatch");
+        JsonNode source = object(root, "sourceDuring");
+        ensure("play-a".equals(object(source, "spot").path("nodeRid").asText()),
+            "OBS-C9B source Spot did not remain on the source node");
+        requireStopped(root.path("shutdown"), "OBS-C9B explicit shutdown");
+    }
+
+    private static void verifyC10(JsonNode root) {
+        requireRelocated(root.path("planned"), "PLANNED_MAINTENANCE", 1);
+        requireRelocated(root.path("rolling"), "ROLLING_UPDATE", 2);
+        ensure("play-b".equals(object(root, "firstTarget").path("spot").path("nodeRid").asText()),
+            "OBS-C10 planned maintenance selected the wrong same-version node");
+        ensure("play-c".equals(object(root, "secondTarget").path("spot").path("nodeRid").asText()),
+            "OBS-C10 rolling update selected the wrong target version");
+        ensure(!root.path("highVersionNodeObserved").asBoolean(true),
+            "OBS-C10 observed a handler on the excluded higher version");
+        ensure("play-c".equals(root.path("handler").path("nodeRid").asText()),
+            "OBS-C10 target handler evidence is missing");
+    }
+
+    private static void verifyC11(JsonNode root) {
+        JsonNode first = object(root, "first");
+        JsonNode joined = object(root, "joined");
+        ensure(first.equals(joined), "OBS-C11 equal relocation intents returned different results");
+        requireRelocated(first, "ROLLING_UPDATE", 2);
+        requireBlocked(root.path("conflictingMode"));
+        requireBlocked(root.path("conflictingVersion"));
+        ensure("play-b".equals(object(root, "target").path("spot").path("nodeRid").asText()),
+            "OBS-C11 target object evidence is missing");
+    }
+
+    private static void verifyC12(JsonNode root) {
+        JsonNode primary = object(root, "primary");
+        ensure("BLOCKED".equals(text(primary, "outcome"))
+                && "SHUTDOWN_REQUESTED".equals(text(primary, "reason")),
+            "OBS-C12 relocation did not resolve against concurrent shutdown");
+        JsonNode shutdown = object(root, "shutdown");
+        ensure("STOPPED".equals(text(shutdown, "outcome"))
+                || "FORCE_STOPPED".equals(text(shutdown, "outcome")),
+            "OBS-C12 shutdown did not reach a terminal result");
+        ensure(root.path("cancelledWaiter").asBoolean(false),
+            "OBS-C12 second waiter was not cancelled");
+        ensure(root.path("terminalStable").asBoolean(false),
+            "OBS-C12 terminal status changed on repeated observation");
+    }
+
+    private static void requireRelocated(JsonNode root, String mode, long version) {
+        JsonNode relocation = object(root, "relocation");
+        ensure(mode.equals(text(relocation, "mode")), "relocation mode mismatch");
+        ensure(relocation.path("effectiveTargetApplicationVersion").asLong(-1) == version,
+            "relocation effective application version mismatch");
+        ensure("RELOCATED".equals(text(relocation, "outcome")), "relocation did not complete");
+        ensure("NONE".equals(text(relocation, "reason")), "relocation reason is not NONE");
+    }
+
+    private static void requireMovedObjects(JsonNode root, String source, String target) {
+        JsonNode before = object(root, "before");
+        JsonNode after = object(root, "after");
+        ensure(source.equals(object(before, "spot").path("nodeRid").asText()),
+            "source Spot evidence is missing");
+        ensure(target.equals(object(after, "spot").path("nodeRid").asText()),
+            "target Spot evidence is missing");
+        ensure(source.equals(object(before, "actor").path("nodeRid").asText()),
+            "source Actor evidence is missing");
+        ensure(target.equals(object(after, "actor").path("nodeRid").asText()),
+            "target Actor evidence is missing");
+        ensure(object(before, "spot").path("objectGeneration").asLong(-1)
+                == object(after, "spot").path("objectGeneration").asLong(-2),
+            "User Spot ObjectGeneration changed during relocation");
+        ensure(object(before, "actor").path("objectGeneration").asLong(-1)
+                == object(after, "actor").path("objectGeneration").asLong(-2),
+            "Actor ObjectGeneration changed during relocation");
+    }
+
+    private static void requireStopped(JsonNode result, String label) {
+        ensure("STOPPED".equals(text(result, "outcome")), label + " did not stop cleanly");
+        ensure("NONE".equals(text(result, "reason")), label + " reason mismatch");
+    }
+
+    private static void requireBlocked(JsonNode result) {
+        ensure("BLOCKED".equals(text(result, "outcome"))
+                && "OPERATION_IN_PROGRESS".equals(text(result, "reason")),
+            "conflicting relocation was not blocked by the active operation");
+    }
+
     private static JsonNode metrics(JsonNode root) {
         JsonNode metrics = array(root, "metrics");
         assertNoHighCardinalityTags(metrics);
@@ -266,6 +415,12 @@ public final class EvidenceVerifier {
     private static JsonNode array(JsonNode root, String name) {
         JsonNode value = root.path(name);
         ensure(value.isArray(), name + " must be an array");
+        return value;
+    }
+
+    private static JsonNode object(JsonNode root, String name) {
+        JsonNode value = root.path(name);
+        ensure(value.isObject(), name + " must be an object");
         return value;
     }
 

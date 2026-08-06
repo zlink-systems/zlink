@@ -3,6 +3,7 @@ package systems.zlink.framework.kotlin
 import java.time.Duration
 import kotlin.reflect.KClass
 import systems.zlink.contracts.core.RoutingId
+import systems.zlink.framework.actors.ActorRef
 import systems.zlink.framework.actors.ZLinkActorCreateResult
 import systems.zlink.framework.spots.ZLinkSpotCreateResult
 
@@ -90,6 +91,7 @@ interface ZLinkKotlinActorCreateCall {
 interface ZLinkKotlinActorManager {
     fun create(actorId: String, actorType: String): ZLinkKotlinActorCreateCall
     fun getOrCreate(actorId: String, actorType: String): ZLinkKotlinActorCreateCall
+    suspend fun destroy(actor: ActorRef): Boolean
 }
 
 interface ZLinkKotlinSpotSendCall {

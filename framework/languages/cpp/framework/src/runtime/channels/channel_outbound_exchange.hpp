@@ -49,4 +49,10 @@ class channel_outbound_exchange_t
 void close_native_channel_transports (
   const std::shared_ptr<channel_runtime_state_t> &state) noexcept;
 
+void initialize_manual_channel_publishers (
+  const std::shared_ptr<channel_runtime_state_t> &state);
+
+void close_manual_channel_publishers (
+  const std::shared_ptr<channel_runtime_state_t> &state) noexcept;
+
 } // namespace zlink::framework::detail

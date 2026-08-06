@@ -44,10 +44,10 @@ inline void configure_play_host (zlink::framework::app_t &app,
         options.services ()
           .add_singleton<evidence_store_t> (std::move (evidence))
           .add_transient<bind_await_actors_handler_t, evidence_store_t,
-                         zlink::framework::spot_node_manager_t,
+                         zlink::framework::spot_manager_t,
                          zlink::framework::session_actor_manager_t> ()
           .add_transient<ensure_spot_handler_t, evidence_store_t,
-                         zlink::framework::spot_node_manager_t> ()
+                         zlink::framework::spot_manager_t> ()
           .add_transient<evidence_handler_t, evidence_store_t> ()
           .add_transient<evidence_wait_handler_t, evidence_store_t> ();
         server::configure_codecs (options.codecs ());
@@ -86,13 +86,13 @@ inline void configure_play_host (zlink::framework::app_t &app,
         spot.set_routing_id (zlink::routing_id_t::from (play_options.node_rid))
           .listen (play_options.spot_router_endpoint)
           .add_entry_spot<await_entry_spot_t> (
-            [evidence_ptr] (entry_spot_context_t context) {
+            [evidence_ptr] (zlink::framework::entry_spot_context_t context) {
                 return std::make_shared<await_entry_spot_t> (
                   std::move (context), *evidence_ptr);
             })
           .add_spot_factory<await_probe_spot_t> (
             yd::probe_spot_name,
-            [evidence_ptr, external_api] (spot_context_t context) {
+            [evidence_ptr, external_api] (zlink::framework::spot_context_t context) {
                 return std::make_shared<await_probe_spot_t> (
                   std::move (context), *evidence_ptr, external_api);
             },

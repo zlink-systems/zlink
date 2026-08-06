@@ -187,6 +187,13 @@ Listener를 다시 시작하면 조회 결과의 endpoint가 달라질 수 있�
 이 값을 subscriber 설정에 복사하지 않고, automatic subscriber가 current
 descriptor를 따라가는지 확인하는 관찰 자료로만 사용한다.
 
+공통 조회는 listener 종류와 설정 이름으로 현재 process의 listener를 지정한다.
+결과에는 종류, 이름, advertised endpoint와 조회 시각이 포함된다. 해당 listener의
+bind가 끝난 뒤에만 조회가 성공하며, 알 수 없는 listener나 bind가 끝나지 않은
+listener는 configuration error를 반환한다. 정확한 메서드와 값의 타입은 언어별
+interface에서 고정하지만, 모든 구현은 `ROUTE_MESH`, `CLIENT_SERVER`, `FANOUT`,
+`STREAM` 네 종류를 같은 의미로 제공한다.
+
 ## 5. Listener 종류별 record
 
 확정된 [advertised endpoint](01-glossary.ko.md#advertised-endpoint)는 listener

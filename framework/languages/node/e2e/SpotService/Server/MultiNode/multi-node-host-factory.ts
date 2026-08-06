@@ -91,7 +91,9 @@ export async function startMultiNodeHost(): Promise<void> {
             builder.configureLocations()
               .pollingIntervalMs(100)
               .ownerLeaseRenewIntervalMs(1000)
-              .ownerLeaseTtlMs(5000);
+              .ownerLeaseTtlMs(5000)
+              .ownerLeaseFencingMarginMs(500)
+              .ownerLeaseRenewTimeoutMs(500);
           } else {
             throw new Error('MultiNode SpotService requires the Redis location store configuration.');
           }

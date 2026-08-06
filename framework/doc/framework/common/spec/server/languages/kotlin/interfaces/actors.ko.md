@@ -148,6 +148,7 @@ interface ZLinkKotlinActorManager {
         actorId: String,
         actorType: String,
     ): ZLinkKotlinActorCreateCall
+    suspend fun destroy(actor: ActorRef): Boolean
 }
 
 interface ZLinkKotlinActorClient {

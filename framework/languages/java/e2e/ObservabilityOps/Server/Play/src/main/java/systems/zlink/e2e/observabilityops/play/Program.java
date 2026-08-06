@@ -8,6 +8,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.core.env.StandardEnvironment;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.e2e.automaticturn.shared.Contracts;
@@ -24,6 +25,8 @@ import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.configuration.ZLinkMeshNodeBuilder;
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationOptions;
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore;
+import systems.zlink.framework.locations.redis.ZLinkRedisRelocationOptions;
+import systems.zlink.framework.locations.redis.ZLinkRedisRelocationStore;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.spring.EnableZLinkFramework;
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer;
@@ -75,7 +78,10 @@ public final class Program {
         PlayOptions config) {
         return new EvidenceHttpServer(
             evidence, json, config.httpEndpoint(), metrics,
-            lifecycle, lifecycle::monitoringLocationRuntimeQuery, drainEvidence, spots::close,
+            lifecycle, lifecycle::monitoringLocationRuntimeQuery, drainEvidence,
+            spotRid -> spots.find(spotRid.toString()).thenCompose(found ->
+                found.map(spots::close).orElse(
+                    java.util.concurrent.CompletableFuture.completedFuture(false))),
             () -> routes.requestToNode(
                     Contracts.ROUTE_CHANNEL,
                     RoutingId.from(Contracts.PLAY_NODE_B),
@@ -88,6 +94,22 @@ public final class Program {
     @Bean
     DrainEvidence drainEvidence() { return new DrainEvidence(); }
 
+    @Bean
+    MaintenanceGate maintenanceGate() {
+        return new MaintenanceGate();
+    }
+
+    @Bean
+    MaintenanceHttpServer maintenanceHttpServer(
+        ObjectMapper json,
+        MeterRegistry metrics,
+        ObjectProvider<systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime> runtime,
+        ZLinkSpotManager spots,
+        PlayOptions config,
+        MaintenanceGate gate) {
+        return new MaintenanceHttpServer(json, metrics, runtime, spots, config, gate);
+    }
+
     @Bean(destroyMethod = "close")
     systems.zlink.e2e.automaticturn.shared.PersistentRoomEvents persistentRoomEvents(PlayOptions config) {
         return new systems.zlink.e2e.automaticturn.shared.PersistentRoomEvents(
@@ -95,8 +117,12 @@ public final class Program {
     }
 
     @Bean
-    ZLinkFrameworkConfigurer framework(PlayOptions config) {
+    ZLinkFrameworkConfigurer framework(
+        PlayOptions config,
+        ZLinkRedisRelocationStore relocationStore) {
         return options -> {
+            options.setApplicationVersion(config.applicationVersion());
+            options.addRelocationStore(relocationStore);
             String nodeRid = config.nodeRid();
             options.configureDispatch()
                 .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
@@ -104,10 +130,11 @@ public final class Program {
                 .traceLabel("java-observability-" + nodeRid);
             ZLinkMeshNodeBuilder mesh = options.addRouteMesh(Contracts.SPOT_MESH)
                 .listen(config.routeEndpoint())
-                .setRoutingId(RoutingId.from(nodeRid));
-            mesh.channelName(Contracts.ROUTE_CHANNEL);
+                .setRoutingId(RoutingId.from(nodeRid))
+                .setPlacementWeight(config.placementWeight());
+            mesh.channelName(Contracts.ROUTE_CHANNEL).server();
             String routePeerEndpoint = config.routePeerEndpoint();
-            if (!routePeerEndpoint.isBlank()) {
+            if (!config.automaticTopology() && !routePeerEndpoint.isBlank()) {
                 mesh.peerConnections().connect(routePeerEndpoint);
             }
             mesh.addRouteRequestHandler(
@@ -118,8 +145,10 @@ public final class Program {
                 EnsureSpotHandler.Play.class,
                 Contracts.EnsureSpotReq.class,
                 Contracts.EnsureSpotRes.class);
-            options.addClientServerChannel(Contracts.DELAY_CHANNEL)
-                .enableClient(config.delayEndpoint());
+            if (!config.automaticTopology()) {
+                options.addClientServerChannel(Contracts.DELAY_CHANNEL)
+                    .client().connect(config.delayEndpoint());
+            }
             String fanoutEndpoint = config.fanoutEndpoint();
             if (!fanoutEndpoint.isBlank()) {
                 var fanout = options.addFanoutChannel(Contracts.OBS_FANOUT_CHANNEL);
@@ -133,11 +162,23 @@ public final class Program {
             }
             mesh.objects()
                 .server()
-                .addEntrySpot(AwaitEntrySpot.class)
+                .addEntrySpot(config.automaticTopology()
+                    ? ObservabilityEntrySpot.class
+                    : AwaitEntrySpot.class)
                 .addSpotFactory(
                     "await-probe",
                     AwaitProbeSpot.class,
-                    factory -> factory.disableRelocation())
+                    factory -> {
+                        if (!config.automaticTopology()) {
+                            factory.disableRelocation();
+                        } else {
+                            factory.recreateOnRelocation();
+                        }
+                    })
+                .addSpotFactory(
+                    "maintenance-probe",
+                    MaintenanceProbeSpot.class,
+                    factory -> factory.recreateOnRelocation())
                 .addActorFactory(
                     Contracts.ACTOR_TYPE,
                     AwaitActor.class,
@@ -153,16 +194,22 @@ public final class Program {
             .setKeyPrefix(config.locationKeyPrefix()));
     }
 
+    @Bean(destroyMethod = "close")
+    ZLinkRedisRelocationStore relocationStore(PlayOptions config) {
+        return new ZLinkRedisRelocationStore(new ZLinkRedisRelocationOptions()
+            .setConnectionString(config.redisLocationEndpoint())
+            .setKeyPrefix(config.locationKeyPrefix()));
+    }
+
     @Bean
     ApplicationRunner createProbeSpot(ZLinkSpotManager spots, PlayOptions config) {
         return ignored -> {
             if (!Contracts.PLAY_NODE_A.equals(config.nodeRid())) {
                 return;
             }
-            spots.getOrCreate(
-                    AwaitProbeSpot.class,
-                    RoutingId.from(Contracts.TARGET_SPOT),
-                    ZLinkMessage.of("bootstrap"))
+            spots.getOrCreate(Contracts.TARGET_SPOT, Contracts.TARGET_SPOT)
+                .request(ZLinkMessage.of("bootstrap"))
+                .submit()
                 .whenComplete((created, failure) -> {
                     if (failure != null) {
                         System.getLogger(Program.class.getName()).log(

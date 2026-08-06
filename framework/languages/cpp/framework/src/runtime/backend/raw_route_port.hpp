@@ -10,6 +10,7 @@
 #include <vector>
 
 #include <zlink/Contracts/Eventing/poller.hpp>
+#include <zlink/Contracts/Messaging/received.hpp>
 
 namespace zlink
 {
@@ -79,6 +80,9 @@ class raw_route_port_t
     std::mutex _owned_socket_mutex;
     std::mutex *_socket_mutex;
     zlink::poll_event_flag_t _receive_events;
+    // Keep the binding receive envelope across polls so its message storage
+    // capacity is reused by the binding public receive API.
+    zlink::received_t _received;
 };
 
 } // namespace zlink::framework::detail::backend

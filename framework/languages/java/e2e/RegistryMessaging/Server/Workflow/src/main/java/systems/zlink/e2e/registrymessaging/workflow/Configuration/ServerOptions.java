@@ -10,6 +10,8 @@ public record ServerOptions(
     String apiEndpoint,
     String routeEndpoint,
     String workflowEndpoint,
+    String objectMeshName,
+    String objectEndpoint,
     int httpPort,
     String redisLocationEndpoint,
     String locationKeyPrefix,
@@ -24,6 +26,8 @@ public record ServerOptions(
         apiEndpoint = optional(apiEndpoint);
         routeEndpoint = optional(routeEndpoint);
         workflowEndpoint = optional(workflowEndpoint);
+        objectMeshName = optional(objectMeshName);
+        objectEndpoint = optional(objectEndpoint);
     }
 
     private static String optional(String value) { return value == null ? "" : value; }

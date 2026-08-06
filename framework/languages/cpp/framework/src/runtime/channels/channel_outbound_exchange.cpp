@@ -9,6 +9,8 @@
 #include "runtime/diagnostics/flow_context.hpp"
 #include "runtime/diagnostics/runtime_metrics.hpp"
 #include "runtime/diagnostics/message_flow_tracer.hpp"
+#include "runtime/diagnostics/listener_status_registry.hpp"
+#include "runtime/transport/listener_identity.hpp"
 #include "runtime/messaging/client_call_codec.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
 #include "runtime/messaging/request_failure_mapper.hpp"
@@ -322,9 +324,11 @@ class channel_native_client_t
                              channel_runtime_t runtime) :
         _channel_name (std::move (channel_name)), _client (client), _runtime (std::move (runtime))
     {
-        runtime::messaging::activate_submit_owner (this);
         initialize_transport ();
+        runtime::messaging::activate_submit_owner (this);
     }
+
+    ~channel_native_client_t () { close (); }
 
     result_t<runtime::messaging::message_parts_t>
     request (const runtime::messaging::message_parts_t &parts,
@@ -476,13 +480,13 @@ class channel_native_client_t
 
     void close () noexcept
     {
-        runtime::messaging::shutdown_submit_owner (this);
+        const std::lock_guard lock (_mutex);
         const bool was_closed = _closed.exchange (true, std::memory_order_acq_rel);
         notify_readiness_changed ();
         if (was_closed) {
             return;
         }
-        std::lock_guard lock (_mutex);
+        runtime::messaging::shutdown_submit_owner (this);
         if (_transport) {
             _transport->close_noexcept ();
             _transport.reset ();
@@ -512,6 +516,7 @@ class channel_native_client_t
 
         void close_noexcept () noexcept
         {
+            const std::lock_guard lock (mutex);
             if (socket) {
                 try {
                     poller.close ();
@@ -780,15 +785,21 @@ class channel_native_publisher_t
   public:
     channel_native_publisher_t (std::string channel_name,
                                 const channel_capability_snapshot_t &publisher,
-                                std::size_t pending_capacity) :
+                                std::size_t pending_capacity,
+                                std::optional<std::string> advertise_host,
+                                std::shared_ptr<runtime::listener_status_registry_t>
+                                  listener_statuses) :
         _channel_name (std::move (channel_name)),
         _pending_capacity (pending_capacity),
+        _advertise_host (std::move (advertise_host)),
+        _listener_statuses (std::move (listener_statuses)),
         _socket (_context)
     {
-        runtime::messaging::activate_submit_owner (this);
         apply_common_channel_socket_options (_socket, publisher);
+        std::string listener_endpoint;
         for (const auto &endpoint : publisher.bind_endpoints) {
             _socket.bind (endpoint);
+            listener_endpoint = _socket.options ().last_endpoint ();
         }
         for (const auto &endpoint : publisher.connect_endpoints) {
             _socket.connect (endpoint);
@@ -798,7 +809,16 @@ class channel_native_publisher_t
             runtime::messaging::notify_submit_ready (
               "fanout:" + _channel_name, this);
         });
+        if (_listener_statuses && !listener_endpoint.empty ())
+            _listener_statuses->update (
+              listener_kind_t::fanout,
+              _channel_name,
+              runtime::transport::advertised_tcp_endpoint (
+                std::move (listener_endpoint), _advertise_host, "Fanout"));
+        runtime::messaging::activate_submit_owner (this);
     }
+
+    ~channel_native_publisher_t () { close (); }
 
     result_t<void> publish (const std::string &topic,
                             const runtime::messaging::message_parts_t &parts,
@@ -830,10 +850,17 @@ class channel_native_publisher_t
 
     void close () noexcept
     {
+        const std::lock_guard lock (_mutex);
+        if (_closed.exchange (true, std::memory_order_acq_rel))
+            return;
         runtime::messaging::shutdown_submit_owner (this);
-        _closed.store (true, std::memory_order_release);
         try {
             _poller.close ();
+        }
+        catch (...) {
+        }
+        try {
+            _socket.close ();
         }
         catch (...) {
         }
@@ -842,18 +869,21 @@ class channel_native_publisher_t
         }
         catch (...) {
         }
+        if (_listener_statuses)
+            _listener_statuses->remove (
+              listener_kind_t::fanout, _channel_name);
     }
 
   private:
     void drain_subscription_events ()
     {
-        const auto deadline = std::chrono::steady_clock::now () + std::chrono::milliseconds (200);
-        while (std::chrono::steady_clock::now () < deadline) {
+        constexpr std::size_t max_events_per_publish = 32;
+        for (std::size_t event_count = 0;
+             event_count < max_events_per_publish;
+             ++event_count) {
             zlink::poll_event_t readiness;
-            const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds> (
-              deadline - std::chrono::steady_clock::now ());
             try {
-                if (_poller.wait (&readiness, 1, remaining) != 1
+                if (_poller.wait (&readiness, 1, std::chrono::milliseconds (0)) != 1
                     || readiness.slot != 1
                     || (static_cast<short> (readiness.revents)
                         & static_cast<short> (zlink::poll_event_flag_t::pollin))
@@ -872,12 +902,76 @@ class channel_native_publisher_t
 
     std::string _channel_name;
     std::size_t _pending_capacity;
+    std::optional<std::string> _advertise_host;
+    std::shared_ptr<runtime::listener_status_registry_t> _listener_statuses;
     zlink::context_t _context;
     zlink::xpub_socket_t _socket;
     zlink::poller_t _poller;
     std::mutex _mutex;
     std::atomic_bool _closed{false};
 };
+
+void initialize_manual_channel_publishers (
+  const std::shared_ptr<channel_runtime_state_t> &state)
+{
+    if (!state)
+        return;
+    std::vector<std::pair<std::string, channel_capability_snapshot_t>>
+      configurations;
+    std::map<std::string, std::string> advertise_hosts;
+    std::shared_ptr<runtime::listener_status_registry_t> listener_statuses;
+    std::size_t pending_capacity = 0;
+    {
+        std::lock_guard lock (state->mutex);
+        advertise_hosts = state->fanout_publisher_advertise_hosts;
+        listener_statuses = state->listener_statuses;
+        pending_capacity = state->max_pending;
+        for (const auto &[channel_name, channel] : state->channels) {
+            const auto &publisher = channel.publisher;
+            if (!publisher.enabled || publisher.discovery
+                || (publisher.bind_endpoints.empty ()
+                    && publisher.connect_endpoints.empty ())
+                || state->native_publishers.contains (channel_name)) {
+                continue;
+            }
+            configurations.emplace_back (channel_name, publisher);
+        }
+    }
+    for (auto &[channel_name, publisher] : configurations) {
+        std::optional<std::string> advertise_host;
+        if (const auto found = advertise_hosts.find (channel_name);
+            found != advertise_hosts.end ()) {
+            advertise_host = found->second;
+        }
+        auto native = std::make_shared<channel_native_publisher_t> (
+          channel_name, publisher, pending_capacity,
+          std::move (advertise_host), listener_statuses);
+        std::lock_guard lock (state->mutex);
+        if (state->closed || state->shutdown) {
+            native->close ();
+            return;
+        }
+        state->native_publishers.emplace (channel_name, std::move (native));
+    }
+}
+
+void close_manual_channel_publishers (
+  const std::shared_ptr<channel_runtime_state_t> &state) noexcept
+{
+    if (!state)
+        return;
+    std::vector<std::shared_ptr<channel_native_publisher_t>> publishers;
+    {
+        std::lock_guard lock (state->mutex);
+        for (auto &[_, publisher] : state->native_publishers) {
+            if (publisher)
+                publishers.push_back (std::move (publisher));
+        }
+        state->native_publishers.clear ();
+    }
+    for (auto &publisher : publishers)
+        publisher->close ();
+}
 
 void close_native_channel_transports (
   const std::shared_ptr<channel_runtime_state_t> &state) noexcept
@@ -1403,8 +1497,16 @@ channel_outbound_exchange_t::submit_publish (std::string channel_name,
                 }
                 auto &stored = _state->native_publishers[channel_name];
                 if (!stored) {
+                    std::optional<std::string> advertise_host;
+                    if (const auto configured =
+                          _state->fanout_publisher_advertise_hosts.find (channel_name);
+                        configured
+                          != _state->fanout_publisher_advertise_hosts.end ()) {
+                        advertise_host = configured->second;
+                    }
                     stored = std::make_shared<detail::channel_native_publisher_t> (
-                      channel_name, *publisher, _state->max_pending);
+                      channel_name, *publisher, _state->max_pending,
+                      std::move (advertise_host), _state->listener_statuses);
                 }
                 native_publisher = stored;
             }

@@ -33,6 +33,10 @@ public final class SfE1StoreDelayNonBlockingScenario implements ClientScenario {
                 "SF-E1 unrelated request p99 grew too much during store delay. baseline="
                     + baselineP99 + " ms concurrent=" + concurrentP99 + " ms budget=" + budget + " ms");
 
+            // The common scenario releases the Store response gate before the
+            // follow-up request. Keep the delayed query's terminal evidence,
+            // then restore normal Store responses before checking recovery.
+            context.setStoreDelay(0);
             return context.requestUntilAnyProvider("SF-E1", "sf-e1-recovery", 1);
         } finally {
             context.setStoreDelay(0);

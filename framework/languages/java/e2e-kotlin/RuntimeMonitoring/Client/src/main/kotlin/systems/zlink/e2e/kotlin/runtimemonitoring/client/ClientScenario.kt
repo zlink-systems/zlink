@@ -6,6 +6,7 @@ import systems.zlink.e2e.kotlin.runtimemonitoring.client.scenarios.MonA2Registry
 import systems.zlink.e2e.kotlin.runtimemonitoring.client.scenarios.MonA3SpotEventsScenario
 import systems.zlink.e2e.kotlin.runtimemonitoring.client.scenarios.MonA4AvailabilityTransitionScenario
 import systems.zlink.e2e.kotlin.runtimemonitoring.client.scenarios.MonA5FixedKindsScenario
+import systems.zlink.e2e.kotlin.runtimemonitoring.client.scenarios.MonA6PlacementScenario
 import systems.zlink.e2e.kotlin.runtimemonitoring.client.scenarios.MonB1KindFilterScenario
 import systems.zlink.e2e.kotlin.runtimemonitoring.client.scenarios.MonC1DispatchFailureScenario
 import systems.zlink.e2e.kotlin.runtimemonitoring.client.scenarios.MonD1FailureRecoveryScenario
@@ -19,6 +20,7 @@ class ClientScenario(
     private val monA2 = MonA2RegistryEventsScenario(options, evidence)
     private val monA3 = MonA3SpotEventsScenario(options, evidence)
     private val monA4 = MonA4AvailabilityTransitionScenario(options, evidence)
+    private val monA6 = MonA6PlacementScenario(options, evidence)
     private val monA5 = MonA5FixedKindsScenario(options, evidence)
     private val monB1 = MonB1KindFilterScenario(options, evidence)
     private val monC1 = MonC1DispatchFailureScenario(options, evidence)
@@ -33,6 +35,9 @@ class ClientScenario(
         monA2.run()
         monA3.run()
         monA4.runDrainSubset()
+        monA4.runReplacement(false, "MON-A4A")
+        monA4.runReplacement(true, "MON-A4B")
+        monA6.run()
         monA5.run()
         monB1.run()
         monC1.run()
@@ -45,10 +50,15 @@ class ClientScenario(
             "MON-A2" -> monA2.run()
             "MON-A3" -> monA3.run()
             "MON-A4" -> monA4.runDrainSubset()
+            "MON-A4A" -> monA4.runReplacement(false, "MON-A4A")
+            "MON-A4B" -> monA4.runReplacement(true, "MON-A4B")
+            "MON-A6" -> monA6.run()
             "MON-A5" -> monA5.run()
             "MON-B1" -> monB1.run()
             "MON-C1" -> monC1.run()
             "MON-D1" -> monD1.run()
+            "MON-D1A" -> monD1.runUnknownMesh()
+            "MON-D1B" -> monD1.runRepeatedReplacement()
             else -> throw IllegalArgumentException("Unknown RuntimeMonitoring scenario '$scenario'.")
         }
     }

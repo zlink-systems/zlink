@@ -5,7 +5,9 @@
 #include "runtime/protocol/service_wire_codec.hpp"
 
 #include <zlink/Contracts/Eventing/poller.hpp>
+#include <zlink/Contracts/Messaging/topic_message.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <map>
@@ -51,6 +53,25 @@ struct fanout_publisher_intent_t
     std::string endpoint;
     mesh::service_node_state_t state =
       mesh::service_node_state_t::preparing;
+};
+
+enum class raw_fanout_connection_state_t
+{
+    connecting,
+    ready,
+    disconnected,
+    reconnecting
+};
+
+struct raw_fanout_connection_snapshot_t
+{
+    std::vector<std::uint8_t> publisher_routing_id;
+    std::uint64_t lifecycle_generation = 0;
+    bool connection_intent = false;
+    bool ready = false;
+    raw_fanout_connection_state_t state =
+      raw_fanout_connection_state_t::disconnected;
+    std::optional<std::string> last_failure;
 };
 
 class raw_fanout_publisher_t
@@ -100,6 +121,8 @@ class raw_fanout_subscriber_t
     bool ready (
       const std::vector<std::uint8_t> &publisher_routing_id) const;
     std::size_t publisher_count () const;
+    std::vector<raw_fanout_connection_snapshot_t>
+    connection_snapshots () const;
 
   private:
     struct publisher_intent_key_t
@@ -110,10 +133,14 @@ class raw_fanout_subscriber_t
         friend bool operator< (const publisher_intent_key_t &left,
                                const publisher_intent_key_t &right) noexcept
         {
-            if (left.routing_id < right.routing_id) {
+            if (std::lexicographical_compare (
+                  left.routing_id.begin (), left.routing_id.end (),
+                  right.routing_id.begin (), right.routing_id.end ())) {
                 return true;
             }
-            if (right.routing_id < left.routing_id) {
+            if (std::lexicographical_compare (
+                  right.routing_id.begin (), right.routing_id.end (),
+                  left.routing_id.begin (), left.routing_id.end ())) {
                 return false;
             }
             return left.lifecycle_generation < right.lifecycle_generation;
@@ -127,6 +154,7 @@ class raw_fanout_subscriber_t
         std::uintptr_t poller_slot = 0;
         bool automatic = false;
         bool ready = false;
+        bool reconnecting = false;
         std::chrono::steady_clock::time_point deadline{};
     };
 
@@ -144,6 +172,8 @@ class raw_fanout_subscriber_t
     std::map<publisher_intent_key_t, connection_t> _connections;
     std::optional<bool> _automatic_mode;
     std::size_t _receive_cursor = 0;
+    // One caller-owned binding envelope is reused across subscriber sockets.
+    zlink::topic_message_t _received;
     bool _closed = false;
 };
 

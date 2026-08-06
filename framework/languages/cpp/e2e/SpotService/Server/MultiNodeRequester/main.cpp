@@ -102,8 +102,7 @@ int main (int argc, char **argv)
           .add_transient<multi_node_route_ping_proxy_handler_t, scenario_state_t,
                          zlink::framework::route_client_t> ()
           .add_transient<multi_node_state_route_handler_t, scenario_state_t,
-                         zlink::framework::route_client_t,
-                         zlink::framework::spot_handle_resolver_t> ();
+                         zlink::framework::route_client_t> ();
         configure_codecs (options.codecs ());
         add_redis_location_store (options, redis_endpoint, redis_key_prefix);
         const auto route_name = multi_node_route_channel_for (node_rid);
@@ -118,7 +117,7 @@ int main (int argc, char **argv)
           .channel_name (requester_mesh);
         spot.add_spot_factory<requester_bridge_spot_t> (
           "requester-bridge",
-          [] (spot_context_t context) {
+          [] (zlink::framework::spot_context_t context) {
               return std::make_shared<requester_bridge_spot_t> (
                 std::move (context));
           },

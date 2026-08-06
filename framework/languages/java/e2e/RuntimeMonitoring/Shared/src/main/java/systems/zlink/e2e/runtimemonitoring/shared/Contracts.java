@@ -22,6 +22,12 @@ public final class Contracts {
     public record WorkRes(String value, String providerRid) {
     }
 
+    public record PlacementActorDestroyRequest(String actorId) {
+    }
+
+    public record PlacementActorDestroyResponse(String actorId, boolean destroyed) {
+    }
+
     public record SpotSubjectProbe(String value) {
     }
 
@@ -36,7 +42,9 @@ public final class Contracts {
         long normalEventCount,
         long normalLatestSequence,
         long slowLatestSequence,
-        boolean slowFailed) {
+        boolean slowFailed,
+        boolean slowEntered,
+        boolean slowReleased) {
     }
 
     public record RuntimePeer(

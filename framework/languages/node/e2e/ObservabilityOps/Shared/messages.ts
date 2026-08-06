@@ -6,11 +6,18 @@ export const ObservabilityOpsNames = {
   packetHandoff: 'HandoffProbe',
   packetBoundPush: 'BoundPushReq',
   packetBoundNotify: 'BoundPushNotify',
-  packetBindActor: 'BindActorSessionReq'
+  packetBindActor: 'BindActorSessionReq',
+  packetSessionKeepAlive: 'SessionKeepAlive'
 } as const;
 
 export interface ActorCreateReq { actorId: string; actorType: string; stateVersion: number }
-export interface ActorCreateRes { actorId: string; actorType: string; nodeRid: string; generation: string }
+export interface ActorCreateRes {
+  actorId: string;
+  actorType: string;
+  nodeRid: string;
+  objectGeneration: string;
+  meshName: string;
+}
 export interface CreateSpotReq { spotId: string; mode?: string }
 export interface CreateSpotRes { spotId: string; nodeRid: string; state: string }
 export interface GateReleaseRes { key: string; released: boolean }
@@ -40,6 +47,9 @@ export class ProbeReq {
   ) {}
 }
 export class HandoffProbe extends ProbeReq {}
+export class SessionKeepAlive {
+  constructor(readonly scenario: string) {}
+}
 export interface ProbeRes {
   scenario: string;
   actorId: string;
@@ -51,11 +61,18 @@ export interface ProbeRes {
 export interface BindActorSessionReq {
   scenario: string;
   actorId: string;
-  nodeRid?: string;
-  generation?: string;
+  nodeRid: string;
+  objectGeneration: string;
+  meshName: string;
   transferId?: string;
 }
-export interface BindActorSessionRes { scenario: string; actorId: string; nodeRid: string; generation: string }
+export interface BindActorSessionRes {
+  scenario: string;
+  actorId: string;
+  nodeRid: string;
+  objectGeneration: string;
+  meshName: string;
+}
 export class BoundPushReq {
   constructor(readonly scenario: string, readonly marker: string) {}
 }
@@ -71,7 +88,12 @@ export class BoundPushNotify implements ProbeRes {
   ) {}
 }
 export interface EvidenceWaitReq { containsAll: readonly string[]; timeoutMilliseconds?: number }
-export interface ActorRefSnapshotRes { actorId: string; nodeRid: string; generation: string }
+export interface ActorRefSnapshotRes {
+  actorId: string;
+  nodeRid: string;
+  objectGeneration: string;
+  meshName: string;
+}
 export interface TransferStateDto { actorId: string; actorType: string; stateVersion: number }
 export interface ActorEvidence {
   scenario: string;

@@ -11,5 +11,5 @@ test('SpotService all runs only scenarios defined by the common config', () => {
 
   assert.ok(allChildren, 'SpotService all child list is missing.');
   assert.doesNotMatch(allChildren[1], /\bSM-Q9\b/);
-  assert.match(runner, /SCENARIO" == "SM-Q9"/);
+  assert.doesNotMatch(runner, /\bSM-Q9\b/);
 });

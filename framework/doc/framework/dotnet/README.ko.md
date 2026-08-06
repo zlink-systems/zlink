@@ -4,7 +4,7 @@
 
 [가이드 홈](../index.ko.md) | [공통 스펙](../common/README.ko.md)
 
-[공통 스펙](../common/README.ko.md) | [비동기 실행](../common/spec/05-async-execution-policy.ko.md) | [Exact interface](../common/spec/server/languages/dotnet/interfaces/README.ko.md) | [Stream Connector](../common/spec/stream-connector/languages/dotnet/03-stream-connector.ko.md) | [Unity 가이드](guide/stream-connector/02-unity.ko.md) | [공통 내부 구조](../common/internals/README.ko.md) | [Regression Matrix](internals/regression-test-matrix.ko.md) | [Backend Policy](internals/backend-dependency-policy.ko.md)
+[공통 스펙](../common/README.ko.md) | [비동기 실행](../common/spec/05-async-execution-policy.ko.md) | [Exact interface](../common/spec/server/languages/dotnet/interfaces/README.ko.md) | [Stream Connector](../common/spec/stream-connector/languages/dotnet/03-stream-connector.ko.md) | [Unity 가이드](guide/stream-connector/02-unity.ko.md) | [공통 내부 구조](../common/internals/README.ko.md) | [Regression Matrix](internals/regression-test-matrix.ko.md) | [Backend Policy](internals/backend-dependency-policy.ko.md) | [Runtime Integration](internals/runtime-integration-and-ownership.ko.md)
 
 # ZLink Framework for .NET
 
@@ -180,6 +180,7 @@ interface 목차의 대응 category를 참조한다.
 | [공통 내부 구조](../common/internals/README.ko.md) | 네 언어가 공유하는 runtime 아키텍처 결정 |
 | [regression-test-matrix.ko.md](internals/regression-test-matrix.ko.md) | 항상 유지해야 할 회귀 테스트 항목, CI 계층, release gate |
 | [backend-dependency-policy.ko.md](internals/backend-dependency-policy.ko.md) | backend 의존 관계와 저수준 라이브러리 교체 경계 |
+| [runtime-integration-and-ownership.ko.md](internals/runtime-integration-and-ownership.ko.md) | binding public API 선택, adapter 책임과 receive storage ownership |
 | [public-symbol-delta-v11.ko.md](internals/public-symbol-delta-v11.ko.md) | 내부 이관 0건과 maintenance 최소 public delta 분류 |
 
 ### 2.4 샘플 문서

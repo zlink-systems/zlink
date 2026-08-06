@@ -2,7 +2,6 @@ package systems.zlink.e2e.toactormessaging.caller;
 
 import java.time.Duration;
 import java.nio.file.Path;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -21,6 +20,8 @@ import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationOptions;
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore;
+import systems.zlink.framework.monitoring.ZLinkPeerState;
+import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime;
 import systems.zlink.framework.spring.EnableZLinkFramework;
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer;
 
@@ -46,54 +47,40 @@ public final class Program {
     }
 
     @Bean(destroyMethod = "close")
-    JsonHttp http(ZLinkActorClient actors, ZLinkActorDirectory actorRefs, CallerOptions config) {
+    JsonHttp http(
+        ZLinkActorClient actors,
+        ZLinkActorDirectory actorRefs,
+        ZLinkRouteMeshRuntime meshRuntime,
+        CallerOptions config) {
         boot("http create");
         JsonHttp http = new JsonHttp(config.callerHttpEndpoint());
         boot("http route health");
         http.get("/health", () -> java.util.Map.of("status", "ok"));
+        http.get("/route-status", () -> {
+            boolean ready = meshRuntime.snapshot(Contracts.SPOT_MESH).peers().stream()
+                .anyMatch(peer -> peer.nodeRid().toString().equals(config.actorRouteRid())
+                    && (peer.state() == ZLinkPeerState.READY
+                        || peer.state() == ZLinkPeerState.NOT_REQUIRED));
+            return new Contracts.RouteStatus(ready, config.actorRouteRid());
+        });
         boot("http route send");
         http.postAsync("/send", Contracts.ActorCallRequest.class, request ->
             actorRef(actorRefs, request.actorId()).thenApply(actorRef -> {
                 actors.sendToActor(
-                    actorRef,
+                    actorRef.actorId(),
                     new Contracts.ActorNotify(request.scenario(), request.actorId(), request.value())).submit();
                 return Contracts.ActorCallResponse.ok(request.scenario(), request.actorId(), "sent");
             }).exceptionally(error -> failed(request, error)));
         boot("http route request");
         http.postAsync("/request", Contracts.ActorCallRequest.class, request ->
             actorRef(actorRefs, request.actorId()).thenCompose(actorRef -> actors.requestToActor(
-                    actorRef,
+                    actorRef.actorId(),
                     new Contracts.ActorAsk(request.scenario(), request.actorId(), request.value()))
                 .timeout(Duration.ofSeconds(5))
                 .submit(Contracts.ActorReply.class))
                 .thenApply(reply -> Contracts.ActorCallResponse.ok(
                     request.scenario(), request.actorId(), reply.value()))
                 .exceptionally(error -> failed(request, error)));
-        boot("http route send-ref");
-        http.postAsync("/send-ref", Contracts.ActorRefCallRequest.class, request -> {
-            ActorRef actorRef = toActorRef(request.actorRef());
-            try {
-                actors.sendToActor(
-                    actorRef,
-                    new Contracts.ActorNotify(request.scenario(), actorRef.actorId(), request.value())).submit();
-                return CompletableFuture.completedFuture(
-                    Contracts.ActorCallResponse.ok(request.scenario(), actorRef.actorId(), "sent"));
-            } catch (RuntimeException error) {
-                return CompletableFuture.completedFuture(failed(request, error));
-            }
-        });
-        boot("http route request-ref");
-        http.postAsync("/request-ref", Contracts.ActorRefCallRequest.class, request -> {
-            ActorRef actorRef = toActorRef(request.actorRef());
-            return actors.requestToActor(
-                        actorRef,
-                        new Contracts.ActorAsk(request.scenario(), actorRef.actorId(), request.value()))
-                    .timeout(Duration.ofSeconds(5))
-                    .submit(Contracts.ActorReply.class)
-                .thenApply(reply -> Contracts.ActorCallResponse.ok(
-                    request.scenario(), actorRef.actorId(), reply.value()))
-                .exceptionally(error -> failed(request, error));
-        });
         boot("http start");
         http.start();
         boot("http start done");
@@ -124,6 +111,9 @@ public final class Program {
             boot("setRoutingId");
             spotMesh.setRoutingId(RoutingId.from(config.callerRid()));
             boot("setRoutingId done");
+            boot("configureActorClient");
+            spotMesh.objects().client();
+            boot("configureActorClient done");
         };
     }
 
@@ -135,12 +125,6 @@ public final class Program {
         Contracts.ActorCallRequest request,
         Throwable ex) {
         return failed(request.scenario(), request.actorId(), ex);
-    }
-
-    private static Contracts.ActorCallResponse failed(
-        Contracts.ActorRefCallRequest request,
-        Throwable ex) {
-        return failed(request.scenario(), request.actorRef().actorId(), ex);
     }
 
     private static Contracts.ActorCallResponse failed(
@@ -172,10 +156,6 @@ public final class Program {
                 .orElseThrow(() -> new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.NOT_FOUND,
                     "actor ref not found: " + actorId)));
-    }
-
-    private static ActorRef toActorRef(Contracts.ActorRefWire ref) {
-        return new ActorRef(RoutingId.fromHex(ref.nodeRidHex()), ref.actorId(), ref.generation());
     }
 
     private static String configPath(String[] args) {

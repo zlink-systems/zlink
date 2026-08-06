@@ -17,12 +17,15 @@ public final class Evidence {
     }
 
     public Contracts.EvidenceSnapshot snapshot(String subscriberRid) {
-        String endpoint = options.subscriberHttp(subscriberRid);
+        return snapshotAt(options.subscriberHttp(subscriberRid));
+    }
+
+    public Contracts.EvidenceSnapshot snapshotAt(String endpoint) {
         try {
             String body = http.get(endpoint + "/evidence");
             return json.readValue(body, Contracts.EvidenceSnapshot.class);
         } catch (Exception error) {
-            throw new IllegalStateException("failed to fetch evidence from " + subscriberRid, error);
+            throw new IllegalStateException("failed to fetch evidence from " + endpoint, error);
         }
     }
 
@@ -36,6 +39,15 @@ public final class Evidence {
         int sequence) {
         return waitFor(
             subscriberRid,
+            "kind=event&scenario=" + encode(scenario) + "&sequence=" + sequence);
+    }
+
+    public Contracts.EvidenceSnapshot waitForEventAt(
+        String endpoint,
+        String scenario,
+        int sequence) {
+        return waitForAt(
+            endpoint,
             "kind=event&scenario=" + encode(scenario) + "&sequence=" + sequence);
     }
 
@@ -66,12 +78,15 @@ public final class Evidence {
     }
 
     private Contracts.EvidenceSnapshot waitFor(String subscriberRid, String query) {
-        String endpoint = options.subscriberHttp(subscriberRid);
+        return waitForAt(options.subscriberHttp(subscriberRid), query);
+    }
+
+    private Contracts.EvidenceSnapshot waitForAt(String endpoint, String query) {
         try {
             String body = http.get(endpoint + "/evidence/wait?" + query);
             return json.readValue(body, Contracts.EvidenceSnapshot.class);
         } catch (Exception error) {
-            throw new IllegalStateException("failed to wait for evidence from " + subscriberRid, error);
+            throw new IllegalStateException("failed to wait for evidence from " + endpoint, error);
         }
     }
 

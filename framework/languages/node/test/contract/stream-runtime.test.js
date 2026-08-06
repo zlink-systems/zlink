@@ -188,6 +188,182 @@ test('managed stream treats an actor-destroy stale unbind as idempotent cleanup'
   await assert.doesNotReject(() => stream.unbindActor('actor-destroy', 1000));
 });
 
+test('managed stream skips native unbind after transport teardown', async () => {
+  const operations = new Map();
+  let nextOperation = 1n;
+  let nativeUnbinds = 0;
+  const operation = (kind) => {
+    const id = { high: 0n, low: nextOperation++ };
+    operations.set(id.low, kind);
+    return id;
+  };
+  const binding = {
+    actor: { actorId: 'actor-closed', generation: 1n },
+    bindingGeneration: 1n
+  };
+  const service = {
+    start() {},
+    shutdown() { return 0; },
+    close() {},
+    status() {
+      return {
+        state: 2,
+        lifecycleGeneration: 1n,
+        sessionCount: 1n,
+        bindingCount: 1n,
+        pendingMessageCount: 0n,
+        pendingByteCount: 0n,
+        lastError: 0
+      };
+    },
+    lookupActor() { return operation('lookup'); },
+    bindActor() { return operation('bind'); },
+    unbindActor() {
+      nativeUnbinds += 1;
+      return operation('unbind');
+    },
+    bindings() { return [binding]; },
+    sendToActor() { return 0; }
+  };
+  const completions = {
+    async wait(id) {
+      const kind = operations.get(id.low);
+      return {
+        terminalResult: 0,
+        failureErrno: 0,
+        operationKind: 0,
+        kindData: kind === 'lookup'
+          ? {
+              kind: 'actorLookupCompletion',
+              location: {
+                actor: {
+                  actorId: 'actor-closed',
+                  generation: 1n,
+                  nodeRid: 'node-a'
+                }
+              }
+            }
+          : null,
+        parts: []
+      };
+    }
+  };
+  const stream = new framework.ZLinkManagedStream(
+    {
+      sendTimeoutMs: 1000,
+      sendHighWaterMark: 16,
+      onSendReady() {},
+      send() { return true; },
+      disconnectPeer() {},
+      recv() { return undefined; }
+    },
+    'session-rid',
+    undefined,
+    service,
+    completions
+  );
+
+  await stream.bindActor({
+    actorId: 'actor-closed',
+    objectGeneration: 1n,
+    meshName: 'play',
+    nodeRid: 'node-a'
+  }, 1000);
+  await stream.close();
+  await stream.unbindActor('actor-closed', 1000);
+
+  assert.equal(nativeUnbinds, 0);
+});
+
+test('managed stream accepts an internal unbind result after the exact delivery is gone', async () => {
+  const operations = new Map();
+  let nextOperation = 1n;
+  let bound = true;
+  const operation = (kind) => {
+    const id = { high: 0n, low: nextOperation++ };
+    operations.set(id.low, kind);
+    return id;
+  };
+  const service = {
+    start() {},
+    shutdown() { return 0; },
+    close() {},
+    status() {
+      return {
+        state: 2,
+        lifecycleGeneration: 1n,
+        sessionCount: 1n,
+        bindingCount: bound ? 1n : 0n,
+        pendingMessageCount: 0n,
+        pendingByteCount: 0n,
+        lastError: 0
+      };
+    },
+    lookupActor() { return operation('lookup'); },
+    bindActor() { return operation('bind'); },
+    unbindActor() {
+      bound = false;
+      return operation('unbind');
+    },
+    bindings() {
+      return bound
+        ? [{
+            sessionRid: 'session-rid',
+            actor: { actorId: 'actor-stale', generation: 1n },
+            bindingGeneration: 1n,
+            membershipEpoch: 1n
+          }]
+        : [];
+    },
+    sendToActor() { return 0; }
+  };
+  const completions = {
+    async wait(id) {
+      const kind = operations.get(id.low);
+      return {
+        terminalResult: kind === 'unbind' ? RequestResult.InternalError : 0,
+        failureErrno: kind === 'unbind' ? 17 : 0,
+        operationKind: 0,
+        kindData: kind === 'lookup'
+          ? {
+              kind: 'actorLookupCompletion',
+              location: {
+                actor: {
+                  actorId: 'actor-stale',
+                  generation: 1n,
+                  nodeRid: 'node-a'
+                }
+              }
+            }
+          : null,
+        parts: []
+      };
+    }
+  };
+  const stream = new framework.ZLinkManagedStream(
+    {
+      sendTimeoutMs: 1000,
+      sendHighWaterMark: 16,
+      onSendReady() {},
+      send() { return true; },
+      disconnectPeer() {},
+      recv() { return undefined; }
+    },
+    'session-rid',
+    undefined,
+    service,
+    completions
+  );
+
+  await stream.bindActor({
+    actorId: 'actor-stale',
+    objectGeneration: 1n,
+    meshName: 'play',
+    nodeRid: 'node-a'
+  }, 1000);
+  await assert.doesNotReject(() => stream.unbindActor('actor-stale', 1000));
+});
+
 test('ZLinkStreamBindingRuntime creates dotnet-shaped session context and closes through stream', async () => {
   let closed = 0;
   const runtime = new framework.ZLinkStreamBindingRuntime();

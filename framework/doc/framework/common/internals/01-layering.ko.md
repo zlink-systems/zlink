@@ -16,79 +16,130 @@ runtime을 어떤 덩어리로 나눌지, 그리고 어떤 값을 하나로 합�
 이 두 결정은 나중에 바꾸기가 가장 어렵다 — 경계를 잘못 그으면 코드 전체에 퍼지고,
 식별자를 합쳐 두면 "이 값이 언제까지 유효한가"를 되물을 수 없게 된다.
 
-## 1. binding 경계를 한 자리에 모은다
+## 1. binding 경계를 의미 기준으로 잡는다
 
-**결정.** runtime이 필요로 하는 socket·context·message 동작을 **runtime의 말로 선언한 계약
-층**을 두고, 그 계약을 그 언어 binding 호출로 옮기는 **adapter 층**을 따로 둔다.
-binding type 이름은 adapter 층에만 나타난다.
+**결정.** 모든 언어 구현은 같은 책임 그래프를 따른다. 이 그래프는 binding의 type 이름,
+package 배치 또는 문법이 아니라 의미의 소유와 runtime 비용으로 정의한다.
 
-```text
-+-------------------------------------------------------------+
-| application handler                                         |
-|   Framework 공개 계약만 본다                                |
-+-------------------------------------------------------------+
-| runtime 본체                                                |
-|   선택기 · dispatch · 실행 권한 · 객체 · 관측               |
-|   binding type 이름이 여기 없어야 한다                      |
-+-------------------------------------------------------------+
-        | runtime의 말로 선언한 계약 (socket · context · message)
-        v
-+-------------------------------------------------------------+
-| adapter                                                     |
-|   binding type이 나타나는 유일한 자리                       |
-+-------------------------------------------------------------+
-| 설치된 binding package                                      |
-+-------------------------------------------------------------+
-| Core                                                        |
-+-------------------------------------------------------------+
+Framework에는 public contract와 두 개의 내부 runtime 영역이 있다. public contract와 의미
+runtime core는 binding과 독립적이어야 한다. binding과 만나는 runtime integration은 binding
+동작의 의미·소유권·수명·준비 상태·오류 의미가 Framework 계약과 이미 같을 때 binding
+public API를 직접 사용할 수 있다. 이 의미가 다르거나 여러 binding object를 하나의 Framework
+동작으로 결합해야 할 때만 의미 adapter 또는 port를 둔다.
+
+`SpotNode`와 `Stream`은 이런 결합의 공통 예다. 특별히 면제된 영역이 아니며, 다른 adapter도
+아래 POSDDD와 성능 검토를 같은 기준으로 통과해야 한다.
+
+```mermaid
+flowchart TB
+    PUBLIC["Framework public contract"] --> CORE["Framework semantic runtime core"]
+    CORE --> EDGE["Binding-facing runtime integration"]
+    EDGE --> DIRECT["Direct binding calls<br/>exact-match operations"]
+    EDGE --> ADAPTER["Spot/Stream semantic adapters<br/>and other proven mismatches"]
+    DIRECT --> BINDING["Language binding public API"]
+    ADAPTER --> BINDING
+    BINDING --> CORE["Core"]
 ```
 
-위 두 층과 아래 세 층 사이의 화살표가 이 문서가 지키려는 경계다. **화살표는 한 방향으로만
-간다** — binding type이 위로 올라오면 안 되고, adapter가 runtime의 결정을 대신 내려도 안
-된다(아래 「경계가 새는 두 경로」와 「반대 방향의 함정」).
+public contract와 의미 runtime core는 binding type을 노출하지 않는다. binding과 만나는
+runtime integration만 binding public type을 참조할 수 있다. 인위적인 추상화 경계를
+유지하려고 binding type을 Framework domain contract에 복사하지 않는다. Adapter는 runtime
+구현의 일부이며 binding package 안으로 Framework 결정을 옮기지 않는다.
 
-**왜.** binding은 Framework와 별개 주기로 바뀐다. 경계가 흩어져 있으면 binding의 사소한
-변경이 runtime 전역 수정이 되고, 더 나쁘게는 **어디까지가 runtime의 결정이고 어디부터가
-binding이 강제한 것인지** 읽어낼 수 없게 된다.
+이 경계가 보호하는 것은 class 개수가 아니라 의미와 소유권이다. 모든 언어가 같은 그래프를
+가져야 한다. 의미 runtime core, 하나의 binding-facing runtime integration 가장자리,
+의미가 같으면 직접 사용하고 차이가 남을 때만 의미 adapter를 두는 구조를 유지한다.
+binding type은 public contract나 domain contract 전체로 퍼뜨리지 않는다. 다음의 「type을
+추가하기 전에 동작을 분류한다」와 「POSDDD 검토 관문」 및 「성능 관문」이 이 판단을
+구체화한다.
 
-### 경계가 새는 두 경로
+**왜.** binding은 Framework와 별개 주기로 바뀐다. binding type과 소유권 규칙이 public
+contract에 흩어지면 binding 변경이 API 전체 수정이 된다. 반대로 binding 메서드마다
+일대일 class를 만들면 의미를 숨기지 못한 채 이름만 늘어난다.
 
-네 구현에서 실제로 관찰된 누수 경로는 다음과 같다.
+### type을 추가하기 전에 동작을 분류한다
 
-| 누수 형태 | 결과 |
+언어나 binding class가 아니라 동작을 분류한다.
+
+| 질문 | binding 직접 사용 | 의미 adapter 또는 port |
+|---|---|---|
+| binding 동작이 Framework 계약을 이미 만족하는가 | binding public API를 직접 사용한다 | 동작을 변환하고 차이를 문서화한다 |
+| 소유권과 수명이 같은가 | 두 번째 소유자를 만들지 않고 값을 전달한다 | 이전·재사용·반납·보유를 명시적으로 소유한다 |
+| 준비 상태와 오류 결과가 같은가 | binding 결과를 유지한다 | Framework 결과로 한 곳에서 변환한다 |
+| 동시성 규칙이 같은가 | 추가 gate를 만들지 않는다 | 필요한 직렬화 또는 실행 소유자를 adapter가 관리한다 |
+| 하나의 binding object가 전체 동작을 제공하는가 | 직접 호출한다 | 여러 binding object를 하나의 의미 동작으로 결합한다 |
+
+이 표는 모든 언어에 동일하게 적용한다. binding API가 다르다는 사실만으로 Framework
+구조를 다르게 만들지 않는다.
+
+adapter는 binding 결과를 Framework 결과로 매핑하거나, 정해진 순서로 resource를 닫거나,
+호출자가 넘긴 수신 storage를 재사용하거나, MeshNode와 stream session을 하나의 동작으로
+결합하는 결정을 소유할 때 필요하다. binding type이 외부 package에 있다는 사실만으로는
+충분한 이유가 아니다.
+
+### POSDDD 검토 관문
+
+adapter를 추가하거나 남기기 전에 POSD와 DDD 관점에서 함께 검토한다.
+
+| 검토 질문 | 필요한 결과 |
 |---|---|
-| runtime 헤더 다수가 binding 헤더를 직접 포함 | 경계가 존재하지 않는 것과 같다. 어느 파일이 binding에 의존하는지 셀 수 없다 |
-| 계약 층은 있는데 message·routing id 같은 **값 타입**만 binding에서 직접 가져다 씀 | 겉보기에는 경계가 있으나 타입이 새어 나가 교체가 불가능하다 |
+| 깊은 모듈인가 | adapter가 작은 Framework 동작 뒤에 binding의 중요한 결정을 숨긴다. binding API를 그대로 복제하지 않는다 |
+| 정보 은닉이 되는가 | 소유권·lifecycle·준비 상태·오류 변환·protocol 결정에 owner가 하나이고 호출부로 새지 않는다 |
+| 복잡성을 아래로 내리는가 | 호출자가 binding option을 넘기거나 오류를 해석하거나 native storage와 순서를 관리하지 않는다 |
+| 오류를 정의로 줄였는가 | 잘못된 조합을 표현할 수 없게 하거나, 남은 실패를 한 곳에서 분류한다 |
+| bounded context를 지키는가 | 두 모델을 변환하되 binding 용어가 Framework domain model이 되지 않는다 |
+| 두 가지 설계를 검토했는가 | 직접 public binding 사용과 의미 adapter/port를 비교한 뒤 선택한다 |
 
-두 번째가 특히 놓치기 쉽다. 계약 interface를 잘 만들어 놓고도 payload를 담는 타입
-하나를 binding에서 그대로 쓰면 경계는 무너진다.
+숨길 중요한 결정이 없는 adapter는 제거한다. test fake, 미래의 backend 가능성 또는 다른
+namespace는 충분한 이유가 아니다.
 
-### 반대 방향의 함정
+### 성능 관문
 
-경계를 만든다는 이유로 **구현이 하나뿐인 interface를 층층이 쌓지 않는다.** 실제로
-한 구현에서 계약 interface 11개에 구현이 하나뿐이고 대부분이 호출을 그대로 넘기기만
-하는 상태가 관찰되었다. 이런 층은 경계를 만들지 못하면서 읽는 사람에게 "여기 무언가
-갈아 끼울 수 있다"는 잘못된 기대만 준다.
+공통 구조가 알려진 hot path 비용을 추가하면 작업을 완료한 것으로 보지 않는다. 모든
+message 경로와 readiness 경로에서 다음을 확인한다.
 
-판단 기준은 "interface가 있는가"도, **type 이름이 보이는가**도 아니다. 이름은 별칭이나
-변환 wrapper로 감출 수 있고, 반대로 경계 DTO 이름에 binding 용어가 들어 있어도 의존
-방향은 옳을 수 있다.
+- binding이 지원하면 호출자가 제공한 receive storage를 재사용한다.
+- 인위적인 계층을 통과시키기 위해 message part를 복사하거나 bytes와 message object를
+  두 번 변환하지 않는다.
+- 소유권 계약이 요구하지 않는데 message마다 wrapper·collection·task·completion object를
+  만들지 않는다.
+- binding 동작을 감싸는 두 번째 lock을 추가하지 않는다. 직렬화가 필요하면 하나의 owner나
+  하나의 gate로 정의하고 계약을 설명한다.
+- poll event storage를 재사용한다. task/future 생성은 일반 message 경로가 아니라 operation과
+  lifecycle 경로에 둔다.
+- 완료 판정 전에 관련 언어의 throughput, p99 latency, allocation/GC, lock contention을
+  측정한다.
 
-**판단 기준은 세 가지다.**
+ownership이나 protocol 정확성 때문에 필요한 adapter는 비용이 있더라도 유지할 수 있다.
+다만 비용을 격리하고 측정하며, 다른 언어 구현에서 같은 비용을 중복하지 않는다.
 
-| 기준 | 내용 |
-|---|---|
-| import 방향 | runtime 본체가 binding package·header를 직접 참조하지 않는다 |
-| 값의 소유 | runtime이 다루는 message·routing 값은 backend port가 소유한 타입이다 |
-| 의미의 변환 | binding의 수명, errno, 준비 상태를 adapter가 runtime 결과로 바꾼다. runtime이 binding의 오류 코드를 그대로 해석하지 않는다 |
+### 금지하는 구조
 
-정본은 **허용 의존 그래프**다. type 이름 검색은 그 그래프를 어긴 자리를 빨리 찾는 보조
-수단일 뿐이다.
+다음 구조는 모든 언어에서 설계 오류다.
+
+- binding object와 인자·결과가 같은 `*Wrapper` class
+- test나 가상의 backend만을 이유로 만든 구현 하나짜리 `IBackend*` interface
+- binding method 이름만 바꾸거나 binding option을 두 번째로 노출하는 facade
+- binding public API를 우회하는 reflection, internal member 접근, visibility hack, raw-frame 우회
+- 다른 언어에 있는 구현 세부 사항만을 근거로 추가한 언어별 public API
+
+### 언어 간 동일성
+
+언어별 class 이름과 file layout은 같을 필요가 없다. 대신 책임 그래프, public 동작, 소유권
+규칙, lifecycle 순서와 성능 기대치는 같아야 한다.
+
+어떤 언어의 binding이 필요한 동작을 표현하지 못하면 의미 차이와 필요한 binding 변경을
+기록한다. private wrapper, raw-frame 경로 또는 언어 전용 public contract로 보상하지 않는다.
+
+정본은 **허용 의존 그래프**, POSDDD 검토 관문과 성능 관문을 함께 적용한 결과다. type 이름
+검색은 이 기준을 어긴 자리를 빨리 찾는 보조 수단일 뿐이다.
 
 ### 언어별 재량
 
-계약을 interface·추상 class·protocol·함수 묶음 중 무엇으로 표현할지, adapter를 몇
-파일로 나눌지는 자유다.
+각 언어는 interface·추상 class·protocol·함수 묶음 또는 binding 직접 호출 중 하나를
+선택할 수 있다. 의미 adapter를 몇 파일로 나눌지도 자유다. 공통 규칙은 public binding
+API만 사용하고, 호출 전달 wrapper를 새로 만들지 않으며, 소유권·의미 변환·측정한 runtime
+비용을 명시하는 것이다.
 
 ## 2. 종료를 topology마다 두지 않는다
 
@@ -322,8 +373,16 @@ message를 처리한 뒤다.
 
 ## 7. 확인할 결과
 
-- runtime 본체 코드에서 binding type 이름이 검색되지 않는다.
+- Framework public contract와 domain contract에 binding type이 없고, binding과 만나는
+  코드는 binding public API만 사용한다.
 - 구현이 하나뿐이면서 호출을 그대로 넘기기만 하는 계약 층이 없다.
+- binding과 만나는 type은 의미와 소유권이 이미 같을 때 직접 사용하거나, 의미 변환을
+  소유하는 adapter로 둔다.
+- binding surface를 복제하는 호출 전달 wrapper가 없다.
+- message마다 실행되는 경로가 재사용 가능한 storage를 보존하고, 불필요한 복사·할당·lock을
+  추가하지 않는다.
+- 관련 throughput, p99 latency, allocation/GC, lock contention을 기준선과 비교해 측정하고,
+  설명되지 않은 성능 저하가 남아 있지 않다.
 - topology resource를 개별적으로 닫는 호출이 host 종료 절차를 건너뛰지 않는다.
 - 종료 경로에 구체 타입을 검사해 분기하는 코드가 없다.
 - 이전 후 종료와 즉시 종료가 동시에 요청되면 하나의 절차만 진행한다.

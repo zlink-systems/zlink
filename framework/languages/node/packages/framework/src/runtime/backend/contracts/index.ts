@@ -518,10 +518,8 @@ export interface ZLinkBackendRequestOperation {
 }
 
 export interface ZLinkBackendRouterSocket extends ZLinkBackendConnectableSocket {
-  readonly options?: {
-    probe?: boolean;
-    setConnectRoutingId?(routingId: RoutingId): void;
-  };
+  /** Enables the native probe handshake for manually configured routes. */
+  setProbe(enabled: boolean): void;
   peerWeight: number;
   sendHighWaterMark: number;
   receiveHighWaterMark: number;

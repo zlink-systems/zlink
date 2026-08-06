@@ -6,9 +6,11 @@ import com.sun.net.httpserver.HttpServer
 import java.net.InetSocketAddress
 import java.net.URI
 import java.nio.charset.StandardCharsets
+import org.springframework.beans.factory.ObjectProvider
 import org.springframework.context.ConfigurableApplicationContext
 import org.springframework.context.SmartLifecycle
 import systems.zlink.framework.channels.ZLinkChannelRuntimeOptions
+import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime
 
 class EvidenceHttpServer(
     private val state: ScenarioState,
@@ -16,6 +18,7 @@ class EvidenceHttpServer(
     private val endpoint: String?,
     private val runtimeOptions: ZLinkChannelRuntimeOptions,
     private val applicationContext: ConfigurableApplicationContext,
+    private val runtime: ObjectProvider<ZLinkFrameworkRuntime>,
 ) : SmartLifecycle {
     private var server: HttpServer? = null
     private var running = false
@@ -33,6 +36,9 @@ class EvidenceHttpServer(
                 exchange.responseHeaders.add("Content-Type", "application/json")
                 exchange.sendResponseHeaders(200, body.size.toLong())
                 exchange.responseBody.use { it.write(body) }
+            }
+            httpServer.createContext("/capabilities") { exchange ->
+                exchange.writeJson(capabilities())
             }
             httpServer.createContext("/admin/drain") { exchange -> setWeight(exchange, 0, "drained") }
             httpServer.createContext("/admin/restore") { exchange -> setWeight(exchange, 100, "restored") }
@@ -98,5 +104,41 @@ class EvidenceHttpServer(
         val body = value.toByteArray(StandardCharsets.UTF_8)
         exchange.sendResponseHeaders(status, body.size.toLong())
         exchange.responseBody.use { it.write(body) }
+    }
+
+    private fun capabilities(): Map<String, Any> {
+        val current = runtime.getObject()
+        val routeMeshConfigured = try {
+            current.monitoringMeshNodeChannelNames("resilience.lifecycle.mesh")
+            true
+        } catch (_: Exception) {
+            false
+        }
+        val actorConfigured = try {
+            current.actorManager()
+            true
+        } catch (_: Exception) {
+            false
+        }
+        val spotConfigured = try {
+            current.spotManager()
+            true
+        } catch (_: Exception) {
+            false
+        }
+        return mapOf(
+            "clientServerListener" to true,
+            "routeMeshConfigured" to routeMeshConfigured,
+            "actorConfigured" to actorConfigured,
+            "spotConfigured" to spotConfigured,
+            "relocationStoreConfigured" to false,
+        )
+    }
+
+    private fun HttpExchange.writeJson(value: Any) {
+        val body = json.writeValueAsBytes(value)
+        responseHeaders.add("Content-Type", "application/json")
+        sendResponseHeaders(200, body.size.toLong())
+        responseBody.use { it.write(body) }
     }
 }

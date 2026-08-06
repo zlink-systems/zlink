@@ -10,9 +10,9 @@ export async function runSmA7(options: ClientOptions): Promise<void> {
     spotId
   } satisfies SpotTypeMismatchReq);
   ensure(mismatch.failed, 'SM-A7 expected SpotTypeMismatch.');
-  ensure(mismatch.errorKind === 'SpotTypeMismatch', 'SM-A7 error kind mismatch.');
+  ensure(mismatch.errorKind === 'TypeMismatch', 'SM-A7 error kind mismatch.');
 
-  const expected = `spot-type-mismatch|rid=play-a|spot=${mismatch.spotId}|kind=SpotTypeMismatch`;
+  const expected = `spot-type-mismatch|rid=play-a|spot=${mismatch.spotId}|kind=TypeMismatch`;
   const evidence = await postJson<string[]>(options.playAUrl, '/evidence/wait', {
     containsAll: [expected],
     timeoutMilliseconds: 10000

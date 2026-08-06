@@ -389,7 +389,8 @@ export class ZLinkActorPacketRelay {
     actor: ActorRef,
     sessionNodeRid: RoutingId,
     sessionRid: RoutingId,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    options?: { readonly waitForAcknowledgement?: boolean }
   ): Promise<void> {
     const target = this.targets.targetForActorRef(actor);
     if (target === undefined) return;
@@ -409,6 +410,16 @@ export class ZLinkActorPacketRelay {
       header,
       payload: encodeRemoteActorSessionBinding({ sessionNodeRid, sessionRid })
     });
+    if (options?.waitForAcknowledgement === false) {
+      void this.options.routeTransport.sendToSpot(
+        { ...target, spotKind: target.spotKind ?? ZLinkSpotKind.Entry },
+        request,
+        { packetName: ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET, signal }
+      ).catch((error) => {
+        this.options.errorSink().reportRuntimeTaskException('remote session binding send', error);
+      });
+      return;
+    }
     const reply = await this.requestRemoteTarget<{
       readonly ok?: boolean;
       readonly error?: unknown;

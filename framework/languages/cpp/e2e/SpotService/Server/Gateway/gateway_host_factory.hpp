@@ -24,8 +24,6 @@ std::string gateway_error_kind_name (zlink::framework::framework_error_kind_t ki
             return "actor_route_not_found";
         case zlink::framework::framework_error_kind_t::unavailable:
             return "actor_location_stale";
-        case zlink::framework::framework_error_kind_t::not_found:
-            return "actor_dispatch_handler_not_found";
         default:
             return "request_failed";
     }
@@ -69,6 +67,7 @@ class gateway_publish_handler_t
           _publisher
             .publish (e2e::publisher_channel, e2e::mesh_topic,
                       e2e::mesh_msg_t{"evt-sm-c4", request.marker})
+            .submit ()
             .result ();
         if (!published) {
             throw zlink::framework::framework_exception_t (

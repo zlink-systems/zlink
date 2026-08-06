@@ -20,6 +20,7 @@ import systems.zlink.e2e.registrationcodec.main.Handlers.AutoSendHandler;
 import systems.zlink.e2e.registrationcodec.main.Handlers.DiLifecycleReqHandler;
 import systems.zlink.e2e.registrationcodec.main.Handlers.FirstOrderFilter;
 import systems.zlink.e2e.registrationcodec.main.Handlers.JsonRequestHandler;
+import systems.zlink.e2e.registrationcodec.main.Handlers.JsonGoldenRequestHandler;
 import systems.zlink.e2e.registrationcodec.main.Handlers.JsonSendHandler;
 import systems.zlink.e2e.registrationcodec.main.Handlers.ManualRequestHandler;
 import systems.zlink.e2e.registrationcodec.main.Handlers.ManualSendHandler;
@@ -112,6 +113,10 @@ public final class RegistrationCodecServerApplication {
                 JsonRequestHandler.class,
                 Contracts.JsonEchoReq.class,
                 Contracts.EchoRes.class);
+            server.addRequestHandler(
+                JsonGoldenRequestHandler.class,
+                Contracts.JsonGoldenReq.class,
+                Contracts.JsonGoldenRes.class);
             server.addSendHandler(
                 JsonSendHandler.class,
                 Contracts.JsonEchoMsg.class);
@@ -155,6 +160,9 @@ public final class RegistrationCodecServerApplication {
     @Scope(ConfigurableBeanFactory.SCOPE_PROTOTYPE)
     DiScopedDependency diScopedDependency(EvidenceStore evidence) { return new DiScopedDependency(evidence); }
     @Bean JsonRequestHandler jsonRequestHandler(EvidenceStore evidence) { return new JsonRequestHandler(evidence); }
+    @Bean JsonGoldenRequestHandler jsonGoldenRequestHandler(EvidenceStore evidence) {
+        return new JsonGoldenRequestHandler(evidence);
+    }
     @Bean JsonSendHandler jsonSendHandler(EvidenceStore evidence) { return new JsonSendHandler(evidence); }
     @Bean ProtobufRequestHandler protobufRequestHandler(EvidenceStore evidence) { return new ProtobufRequestHandler(evidence); }
     @Bean ProtobufSendHandler protobufSendHandler(EvidenceStore evidence) { return new ProtobufSendHandler(evidence); }

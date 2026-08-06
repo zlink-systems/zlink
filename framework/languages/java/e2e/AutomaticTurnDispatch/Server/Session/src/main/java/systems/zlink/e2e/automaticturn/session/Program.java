@@ -28,6 +28,8 @@ import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.configuration.ZLinkMeshNodeBuilder;
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationOptions;
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore;
+import systems.zlink.framework.locations.redis.ZLinkRedisRelocationOptions;
+import systems.zlink.framework.locations.redis.ZLinkRedisRelocationStore;
 import systems.zlink.framework.spring.EnableZLinkFramework;
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer;
 import systems.zlink.framework.spots.SpotHandleResolver;
@@ -75,7 +77,6 @@ public final class Program {
         ZLinkFrameworkLifecycle lifecycle,
         DrainEvidence drainEvidence,
         SessionOptions config) {
-        drainEvidence.observe(lifecycle.observe());
         return new EvidenceHttpServer(
             evidence, json, config.httpEndpoint(), metrics,
             lifecycle, lifecycle::monitoringLocationRuntimeQuery, drainEvidence, null, null);
@@ -84,6 +85,13 @@ public final class Program {
     @Bean
     DrainEvidence drainEvidence() { return new DrainEvidence(); }
 
+    @Bean
+    ApplicationRunner observeRuntime(
+        DrainEvidence drainEvidence,
+        ZLinkFrameworkLifecycle lifecycle) {
+        return ignored -> drainEvidence.observe(lifecycle.observe());
+    }
+
     @Bean(destroyMethod = "close")
     systems.zlink.e2e.automaticturn.shared.PersistentRoomEvents persistentRoomEvents(SessionOptions config) {
         return new systems.zlink.e2e.automaticturn.shared.PersistentRoomEvents(
@@ -91,8 +99,11 @@ public final class Program {
     }
 
     @Bean
-    ZLinkFrameworkConfigurer framework(SessionOptions config) {
+    ZLinkFrameworkConfigurer framework(
+        SessionOptions config,
+        ZLinkRedisRelocationStore relocationStore) {
         return options -> {
+            options.addRelocationStore(relocationStore);
             options.addHandlersFromPackageOf(ScenarioReqHandler.class);
             var dispatch = options.configureDispatch()
                 .messageFlow("off".equals(config.messageFlowMode())
@@ -104,15 +115,18 @@ public final class Program {
             }
             ZLinkMeshNodeBuilder mesh = options.addRouteMesh(Contracts.SPOT_MESH)
                 .listen(config.sessionRouteEndpoint())
-                .setRoutingId(RoutingId.from("session-a"));
-            mesh.channelName(Contracts.ROUTE_CHANNEL);
+                .setRoutingId(RoutingId.from("session-a"))
+                // Session relays requests but is not a placement target for User Spots.
+                .setPlacementWeight(0);
+            mesh.channelName(Contracts.ROUTE_CHANNEL).server();
             mesh.peerConnections().connect(config.routeEndpoint());
             String routeBEndpoint = config.routeBEndpoint();
             if (!routeBEndpoint.isBlank()) {
                 mesh.peerConnections().connect(routeBEndpoint);
             }
             options.addClientServerChannel(Contracts.DELAY_CHANNEL)
-                .enableClient(config.delayEndpoint());
+                .client()
+                .connect(config.delayEndpoint());
             mesh.objects()
                 .server()
                 .addEntrySpot(AwaitEntrySpot.class)
@@ -127,6 +141,7 @@ public final class Program {
                     factory -> factory.recreateOnRelocation());
             options.addStreamNode("session")
                 .bind(config.streamEndpoint())
+                .enableActorDispatch()
                 .registerSession(AwaitSession.class);
         };
     }
@@ -136,10 +151,10 @@ public final class Program {
         return ignored -> {
             String spotRid = config.sessionDrainSpotRid();
             if (!spotRid.isBlank()) {
-                spots.getOrCreate(
-                    AwaitProbeSpot.class,
-                    RoutingId.from(spotRid),
-                    ZLinkMessage.of("drain-hold")).toCompletableFuture().join();
+                spots.getOrCreate(spotRid, Contracts.TARGET_SPOT)
+                    .request(ZLinkMessage.of("drain-hold"))
+                    .submit()
+                    .toCompletableFuture().join();
             }
         };
     }
@@ -149,6 +164,13 @@ public final class Program {
         return new ZLinkRedisLocationStore(new ZLinkRedisLocationOptions()
             .setConnectionString(config.redisLocationEndpoint())
             .setKeyPrefix(config.locationKeyPrefix()));
+    }
+
+    @Bean
+    ZLinkRedisRelocationStore relocationStore(SessionOptions config) {
+        return new ZLinkRedisRelocationStore(new ZLinkRedisRelocationOptions()
+            .setConnectionString(config.redisLocationEndpoint())
+            .setKeyPrefix(config.locationKeyPrefix() + "relocation:"));
     }
 
     @Bean
@@ -237,10 +259,50 @@ public final class Program {
     }
 
     @Bean
+    SpotCommandHandler.CounterReset counterResetCommandHandler(
+        systems.zlink.framework.channels.ZLinkRouteClient routes,
+        SpotHandleResolver spots) {
+        return new SpotCommandHandler.CounterReset(routes, spots);
+    }
+
+    @Bean
+    SpotCommandHandler.CounterAwait counterAwaitCommandHandler(
+        systems.zlink.framework.channels.ZLinkRouteClient routes,
+        SpotHandleResolver spots) {
+        return new SpotCommandHandler.CounterAwait(routes, spots);
+    }
+
+    @Bean
+    SpotCommandHandler.IoWorker ioWorkerCommandHandler(
+        systems.zlink.framework.channels.ZLinkRouteClient routes,
+        SpotHandleResolver spots) {
+        return new SpotCommandHandler.IoWorker(routes, spots);
+    }
+
+    @Bean
+    SpotCommandHandler.CpuWorker cpuWorkerCommandHandler(
+        systems.zlink.framework.channels.ZLinkRouteClient routes,
+        SpotHandleResolver spots) {
+        return new SpotCommandHandler.CpuWorker(routes, spots);
+    }
+
+    @Bean
     SpotCommandHandler.ProbeRequest probeRequestHandler(
         systems.zlink.framework.channels.ZLinkRouteClient routes,
         SpotHandleResolver spots) {
         return new SpotCommandHandler.ProbeRequest(routes, spots);
+    }
+
+    @Bean
+    SpotCommandHandler.CounterReadRequest counterReadRequestHandler(
+        systems.zlink.framework.channels.ZLinkRouteClient routes) {
+        return new SpotCommandHandler.CounterReadRequest(routes);
+    }
+
+    @Bean
+    SpotCommandHandler.IoWorkerBatchRequest ioWorkerBatchRequestHandler(
+        systems.zlink.framework.channels.ZLinkRouteClient routes) {
+        return new SpotCommandHandler.IoWorkerBatchRequest(routes);
     }
 
     @Bean

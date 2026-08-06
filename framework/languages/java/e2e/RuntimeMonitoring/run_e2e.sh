@@ -17,7 +17,7 @@ echo "start_order=${e2e_start_order}"
 
 if [[ "${SCENARIO}" == "all" && "${ZLINK_RUNTIME_MONITORING_AGGREGATE_CHILD:-0}" != "1" ]]; then
   aggregate_status=0
-  for scenario in MON-A1 MON-A2 MON-A3 MON-A4A MON-A4B MON-A5 MON-B1 MON-B2 MON-D1A MON-D1B; do
+  for scenario in MON-A6 MON-A1 MON-A2 MON-A3 MON-A4A MON-A4B MON-A5 MON-B1 MON-B2 MON-C1 MON-D1A MON-D1B; do
     echo "[runtime-monitoring] scenario=${scenario} start_order=${e2e_start_order}"
     if ! ZLINK_RUNTIME_MONITORING_AGGREGATE_CHILD=1 \
       "${BASH_SOURCE[0]}" "${scenario}" --start-order "${e2e_start_order}"; then
@@ -246,11 +246,15 @@ trigger_config="${config_dir}/trigger.properties"
 client_config="${config_dir}/client.properties"
 
 create_configs() {
+  local service_capacity_args=()
+  if [[ "${SCENARIO}" == "MON-A6" || "${SCENARIO}" == "all" ]]; then
+    service_capacity_args=("actor-capacity=1" "spot-capacity=2")
+  fi
   write_role_config "${service_config}" \
     "routing-id=svc-a" "api-endpoint=${API_ENDPOINT}" \
     "handshake-endpoint=${HANDSHAKE_ENDPOINT}" "mesh-endpoint=${MESH_ENDPOINT}" \
     "http-endpoint=${SERVICE_HTTP}" \
-    "enable-handshake=true" "enable-spot=true"
+    "enable-handshake=true" "enable-spot=true" "${service_capacity_args[@]}"
   write_role_config "${filtered_service_config}" \
     "routing-id=svc-b" "api-endpoint=${FILTER_API_ENDPOINT}" \
     "mesh-endpoint=${MESH_B_ENDPOINT}" "mesh-peer-endpoint=${MESH_ENDPOINT}" \
@@ -322,6 +326,8 @@ if [[ "${SCENARIO}" == "all" ]]; then
   grep -q "scenario MON-A4A passed" "${log_dir}/client.stdout.log"
   grep -q "scenario MON-A4B passed" "${log_dir}/client.stdout.log"
   grep -q "scenario MON-A5 passed" "${log_dir}/client.stdout.log"
+  grep -q "scenario MON-A6 passed" "${log_dir}/client.stdout.log"
+  grep -q "scenario MON-C1 passed" "${log_dir}/client.stdout.log"
   grep -q "scenario MON-D1A passed" "${log_dir}/client.stdout.log"
   grep -q "scenario MON-D1B passed" "${log_dir}/client.stdout.log"
 else

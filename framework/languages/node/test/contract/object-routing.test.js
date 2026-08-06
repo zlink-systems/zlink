@@ -547,6 +547,148 @@ test('Spot address requests preserve the original route failure after invalidati
   assert.equal(invalidated, 1);
 });
 
+test('Instance Spot address requests follow a route published after a stale target reply', async () => {
+  class Lookup {}
+  const staleRoute = {
+    routerChannelId: 'play',
+    targetNodeRid: 'node-a',
+    spotId: 'spot-1',
+    spotKind: framework.ZLinkSpotKind.Instance,
+    stableType: 'chat-room',
+    targetSpotGeneration: 1n,
+    targetNodeGeneration: 1n,
+    authorityOwnerGeneration: 1n,
+    targetOwnerId: 'owner-a',
+    ownerLeaseGeneration: 1n,
+    authorityStoreVersion: 'v1'
+  };
+  const freshRoute = {
+    ...staleRoute,
+    targetNodeRid: 'node-b',
+    targetNodeGeneration: 2n,
+    targetOwnerId: 'owner-b',
+    ownerLeaseGeneration: 2n,
+    authorityStoreVersion: 'v2'
+  };
+  let currentRoute = staleRoute;
+  let invalidated = 0;
+  let requests = 0;
+  const addressTransport = new internal.ZLinkHostSpotAddressTransport({
+    resolver: () => ({
+      async resolve() {
+        return currentRoute;
+      },
+      invalidate() {
+        invalidated += 1;
+        currentRoute = freshRoute;
+      }
+    }),
+    routed: {
+      async sendToSpot() {
+        throw new Error('send is not used by this test.');
+      },
+      async requestToSpot(route) {
+        requests += 1;
+        if (route === staleRoute) {
+          throw internal.createInternalFrameworkException(
+            ZLinkFrameworkInternalErrorKind.RequestTargetNotFound,
+            'stale instance target'
+          );
+        }
+        return { route: route.targetNodeRid };
+      }
+    },
+    meshNames: () => ['play'],
+    meshNode: () => undefined,
+    completions: () => undefined,
+    defaultRequestTimeoutMs: 1_000
+  });
+
+  const reply = await addressTransport.requestToSpotAddress('spot-1', new Lookup(), {
+    instanceSpot: true,
+    instanceSpotType: 'chat-room'
+  });
+
+  assert.deepEqual(reply, { route: 'node-b' });
+  assert.equal(requests, 2);
+  assert.equal(invalidated, 1);
+});
+
+test('Missing Instance requests reselect a placement after a stale target reply', async () => {
+  class Lookup {}
+  const freshRoute = {
+    routerChannelId: 'play',
+    targetNodeRid: 'node-b',
+    spotId: 'spot-1',
+    spotKind: framework.ZLinkSpotKind.Instance,
+    stableType: 'chat-room',
+    targetSpotGeneration: 2n,
+    targetNodeGeneration: 2n,
+    authorityOwnerGeneration: 2n,
+    targetOwnerId: 'owner-b',
+    ownerLeaseGeneration: 2n,
+    authorityStoreVersion: 'v2'
+  };
+  let invalidated = 0;
+  let missingRequests = 0;
+  const addressTransport = new internal.ZLinkHostSpotAddressTransport({
+    resolver: () => ({
+      async resolve() {
+        if (invalidated === 0) {
+          throw internal.createInternalFrameworkException(
+            ZLinkFrameworkInternalErrorKind.SpotRouteNotFound,
+            'missing instance'
+          );
+        }
+        return freshRoute;
+      },
+      invalidate() {
+        invalidated += 1;
+      }
+    }),
+    routed: {
+      async sendToSpot() {
+        throw new Error('send is not used by this test.');
+      },
+      async requestToSpot(route) {
+        assert.equal(route, freshRoute);
+        return { route: route.targetNodeRid };
+      }
+    },
+    meshNames: () => ['play'],
+    meshNode: () => ({
+      instanceSpotPlacementTypes: () => ['chat-room'],
+      selectObjectPlacement: () => ({
+        kind: 'selected',
+        target: {
+          targetNodeRid: 'node-a',
+          targetNodeGeneration: 1n,
+          descriptorVersion: '1'
+        }
+      }),
+      requestToMissingInstanceSpot: () => {
+        missingRequests += 1;
+        return { high: 1n, low: BigInt(missingRequests) };
+      }
+    }),
+    completions: () => ({
+      async wait() {
+        return { terminalResult: 102, failureErrno: 21, parts: [] };
+      }
+    }),
+    defaultRequestTimeoutMs: 1_000
+  });
+
+  const reply = await addressTransport.requestToSpotAddress('spot-1', new Lookup(), {
+    instanceSpot: true,
+    instanceSpotType: 'chat-room'
+  });
+
+  assert.deepEqual(reply, { route: 'node-b' });
+  assert.equal(invalidated, 1);
+  assert.equal(missingRequests, 1);
+});
+
 test('Spot address deadline includes authority resolution and prevents a late submit', async () => {
   let resolveAuthority;
   let submits = 0;

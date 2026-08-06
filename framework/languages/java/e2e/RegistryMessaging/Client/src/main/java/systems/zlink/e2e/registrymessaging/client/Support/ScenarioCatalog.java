@@ -4,8 +4,10 @@ import systems.zlink.e2e.registrymessaging.client.Scenarios.RmA1DiscoveryRequest
 import systems.zlink.e2e.registrymessaging.client.Scenarios.RmA2ManualEndpointScenario;
 import systems.zlink.e2e.registrymessaging.client.Scenarios.RmA4SameRidReplacementScenario;
 import systems.zlink.e2e.registrymessaging.client.Scenarios.RmA6MultipleChannelsScenario;
+import systems.zlink.e2e.registrymessaging.client.Scenarios.RmA7GlobalIdentityRaceScenario;
 import systems.zlink.e2e.registrymessaging.client.Scenarios.RmB1ScaleOutScenario;
 import systems.zlink.e2e.registrymessaging.client.Scenarios.RmB2ScaleInScenario;
+import systems.zlink.e2e.registrymessaging.client.Scenarios.RmB3ProviderCrashFailoverScenario;
 import systems.zlink.e2e.registrymessaging.client.Scenarios.RmC1RequestSendScenario;
 import systems.zlink.e2e.registrymessaging.client.Scenarios.RmC2TargetedRouteScenario;
 import systems.zlink.e2e.registrymessaging.client.Scenarios.RmC3MultiProviderDistributionScenario;
@@ -37,10 +39,12 @@ public final class ScenarioCatalog {
                 http.providerA(),
                 http.providerB(),
                 http.workflow());
+            case "RM-A7" -> RmA7GlobalIdentityRaceScenario.run(options);
             case "scale-out" -> RmB1ScaleOutScenario.run(options);
             case "scale-in" -> RmB2ScaleInScenario.run(options);
             case "RM-B1" -> RmB1ScaleOutScenario.run(options);
             case "RM-B2" -> RmB2ScaleInScenario.run(options);
+            case "RM-B3" -> RmB3ProviderCrashFailoverScenario.run(options);
             case "RM-A4" -> RmA4SameRidReplacementScenario.run(options);
             case "RM-C1" -> RmC1RequestSendScenario.run(http.providerA(), http.providerB());
             case "RM-C2" -> RmC2TargetedRouteScenario.run(http.providerA());

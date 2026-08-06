@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "runtime/client_server/raw_client_server_owner.hpp"
+#include "runtime/transport/listener_identity.hpp"
 
 #include <zlink/Contracts/Eventing/poller.hpp>
 #include <zlink/Contracts/Core/byte_count.hpp>
@@ -79,25 +80,6 @@ std::uint64_t client_server_hwm_bytes (
     return message_bytes > maximum - client_server_wire_hwm_margin
              ? maximum
              : message_bytes + client_server_wire_hwm_margin;
-}
-
-std::string advertised_endpoint (
-  std::string bound_endpoint,
-  const std::optional<std::string> &advertise_host)
-{
-    if (!advertise_host)
-        return bound_endpoint;
-    const auto port = bound_endpoint.rfind (':');
-    if (!bound_endpoint.starts_with ("tcp://")
-        || port == std::string::npos || port < 6) {
-        throw std::invalid_argument (
-          "ClientServer advertise host requires a TCP bind endpoint");
-    }
-    const auto host =
-      advertise_host->find (':') == std::string::npos
-        ? *advertise_host
-        : "[" + *advertise_host + "]";
-    return "tcp://" + host + bound_endpoint.substr (port);
 }
 
 std::vector<std::uint8_t> liveness_connection_identity (
@@ -187,9 +169,8 @@ void raw_client_server_server_t::start ()
                             | zlink::monitor_event::disconnected));
     router->bind (_options.descriptor.advertised_endpoint);
     _options.descriptor.advertised_endpoint =
-      advertised_endpoint (
-        router->options ().last_endpoint (),
-        _options.advertise_host);
+      transport::advertised_tcp_endpoint (
+        router->options ().last_endpoint (), _options.advertise_host, "ClientServer");
     if (_options.descriptor.descriptor_revision
         == std::numeric_limits<std::uint64_t>::max ()) {
         throw std::overflow_error (

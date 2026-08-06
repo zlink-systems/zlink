@@ -249,7 +249,7 @@ gradle_run() {
 install_dist() {
   if [[ "${SCENARIO}" == "RM-A3" ]]; then
     gradle_run :Server:ObjectClient:installDist
-  elif [[ "${SCENARIO}" == "all" || "${SCENARIO}" == "RM-A6" ]]; then
+  elif [[ "${SCENARIO}" == "all" || "${SCENARIO}" == "RM-A6" || "${SCENARIO}" == "RM-A7" ]]; then
     gradle_run \
       :Client:installDist \
       :Server:Provider:installDist \
@@ -506,9 +506,9 @@ with urllib.request.urlopen(request, timeout=3) as response:
 if result.get("terminal") != "NotFound":
     raise SystemExit(f"Object Client Node direct was not NotFound: {result!r}")
 for field in ("sendErrorKind", "requestErrorKind"):
-    if result.get(field) != "REQUEST_TARGET_NOT_FOUND":
+    if result.get(field) != "NOT_FOUND":
         raise SystemExit(f"Object Client lost typed {field}: {result!r}")
-print("rm-a3 node-direct send=request=REQUEST_TARGET_NOT_FOUND")
+print("rm-a3 node-direct send=request=NOT_FOUND")
 PY
 }
 
@@ -662,6 +662,11 @@ if [[ "${SCENARIO}" == "RM-A3" ]]; then
   exit 0
 fi
 
+if [[ "${SCENARIO}" == "RM-A7" || "${SCENARIO}" == "RM-B3" ]]; then
+  run_client "${SCENARIO}" "${SCENARIO,,}" env
+  cat "${log_dir}/client-${SCENARIO,,}.stdout.log"
+fi
+
 if is_common_scenario "${SCENARIO}"; then
   SERVER_ROLES=(api-a api-b)
   if needs_workflow_role "${SCENARIO}"; then
@@ -753,6 +758,13 @@ fi
 if [[ "${SCENARIO}" == "all" || "${SCENARIO}" == "RM-A4" ]]; then
   run_client "RM-A4" rm-a4 env
   cat "${log_dir}/client-rm-a4.stdout.log"
+fi
+
+if [[ "${SCENARIO}" == "all" ]]; then
+  run_client "RM-A7" rm-a7 env
+  cat "${log_dir}/client-rm-a7.stdout.log"
+  run_client "RM-B3" rm-b3 env
+  cat "${log_dir}/client-rm-b3.stdout.log"
 fi
 
 if [[ "${SCENARIO}" == "all" ]]; then

@@ -17,7 +17,6 @@ internal sealed class ZLinkChannelBundleFactory(
         try
         {
             dealer = adapter.CreateDealerSocket(state.Context);
-            dealer.SetChannelName(channelName);
             ApplySocketConfig(dealer, channel.Client!.SocketConfig);
             dealer.SetProbe(true);
             bundle = new ZLinkChannelRuntimeBundle(
@@ -53,7 +52,6 @@ internal sealed class ZLinkChannelBundleFactory(
         try
         {
             router = adapter.CreateRouterSocket(state.Context);
-            router.SetChannelName(channelName);
             var serverRid = channel.Server!.ServerRid;
             router.SetRoutingId(serverRid);
             ApplySocketConfig(router, channel.Server!.SocketConfig);
@@ -103,7 +101,6 @@ internal sealed class ZLinkChannelBundleFactory(
         try
         {
             subscriber = adapter.CreateSubscriberSocket(state.Context);
-            subscriber.SetChannelName(channelName);
             ApplySocketConfig(subscriber, channel.Subscriber!.SocketConfig);
             RoutingId localRid = default;
             if (channel.RoutingId.Size > 0)
@@ -143,7 +140,6 @@ internal sealed class ZLinkChannelBundleFactory(
         try
         {
             publisher = adapter.CreatePublisherSocket(state.Context);
-            publisher.SetChannelName(channelName);
             ApplySocketConfig(publisher, channel.Publisher!.SocketConfig);
             var localRid = ResolvePublisherRid(channelName, channel.Publisher);
             publisher.Bind(ResolvePublisherBindEndpoint(channel.Publisher));

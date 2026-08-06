@@ -33,6 +33,11 @@ final class ZLinkFrameworkActorManagerBean implements ZLinkActorManager {
     }
 
     @Override
+    public CompletionStage<Boolean> destroy(ActorRef actor) {
+        return lifecycle.actorManager().destroy(actor);
+    }
+
+    @Override
     public ZLinkActorGetOrCreateCall getOrCreate(
         String actorId,
         String actorType) {

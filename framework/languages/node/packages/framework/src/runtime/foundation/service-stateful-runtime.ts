@@ -77,7 +77,6 @@ import { validateServiceMetadataFrame } from './service-metadata-codec';
 import {
   ZLinkFrameworkException
 } from '../../contracts';
-import { appendFileSync } from 'node:fs';
 
 const ACTOR_ROUTE_STALE = 21;
 const SPOT_MOVING = 34;
@@ -2075,26 +2074,10 @@ export class ServiceStatefulRuntime {
     localReply?: NonNullable<ServiceStatefulMailboxData['reply']>,
     metadataFrame?: Buffer
   ): Promise<void> {
-    let stage = 'validate';
-    statefulDebugTrace('missing-start', [
-      `node=${this.nodeRid}`,
-      `target=${record.target.targetSpotId}`,
-      `source=${record.sourceNodeRid}`,
-      `operation=${record.operation.toString()}`,
-      `reply=${record.replyRouteId?.toString() ?? 'none'}`
-    ]);
     try {
       this.validateInstanceIngress(ingress, record);
-      stage = 'activate';
       const activation = await this.activateMissingInstanceAsync(record, payloadFrame, metadataFrame);
-      statefulDebugTrace('missing-activated', [
-        `node=${this.nodeRid}`,
-        `target=${record.target.targetSpotId}`,
-        `generation=${activation.route.objectGeneration.toString()}`,
-        `ownerGeneration=${activation.route.authorityOwnerGeneration.toString()}`
-      ]);
       if (this.closed) return;
-      stage = 'enqueue';
       const admitted = this.enqueueActivatedInstanceSpot(
         ingress,
         record,
@@ -2110,17 +2093,6 @@ export class ServiceStatefulRuntime {
         throw new Error('Activated Instance message was not admitted to the local queue.');
       }
     } catch (error) {
-      statefulDebugTrace('missing-error', [
-        `node=${this.nodeRid}`,
-        `target=${record.target.targetSpotId}`,
-        `targetNode=${record.target.targetNodeRid}`,
-        `targetGeneration=${record.target.targetNodeGeneration.toString()}`,
-        `currentGeneration=${this.nodeGeneration.toString()}`,
-        `sourceNode=${record.sourceNodeRid}`,
-        `sourceGeneration=${record.sourceNodeGeneration.toString()}`,
-        `stage=${stage}`,
-        `error=${error instanceof Error ? `${error.name}:${error.message}` : String(error)}`
-      ]);
       let terminalError = error;
       if (error instanceof ServiceInstanceActivationRedirectError && !this.closed) {
         try {
@@ -2212,18 +2184,7 @@ export class ServiceStatefulRuntime {
     return () => completion ??= (async () => {
       let authorityCompletionSignaled = false;
       try {
-        statefulDebugTrace('activation-completion-start', [
-          `node=${this.nodeRid}`,
-          `target=${target.targetSpotId}`,
-          `generation=${route.objectGeneration.toString()}`,
-          `ownerGeneration=${route.authorityOwnerGeneration.toString()}`
-        ]);
         const released = await this.asyncInstanceAuthority?.complete(target, route);
-        statefulDebugTrace('activation-completion-ok', [
-          `node=${this.nodeRid}`,
-          `target=${target.targetSpotId}`,
-          `released=${released === undefined ? 'none' : released.storeVersion}`
-        ]);
         this.completeInstanceAuthorityOperation(target.targetSpotId);
         authorityCompletionSignaled = true;
         if (released !== undefined) {
@@ -2235,13 +2196,6 @@ export class ServiceStatefulRuntime {
             this.forgetClosedInstanceRoute(released);
           }
         }
-      } catch (error) {
-        statefulDebugTrace('activation-completion-error', [
-          `node=${this.nodeRid}`,
-          `target=${target.targetSpotId}`,
-          `error=${error instanceof Error ? `${error.name}:${error.message}` : String(error)}`
-        ]);
-        throw error;
       } finally {
         if (!authorityCompletionSignaled) {
           this.completeInstanceAuthorityOperation(target.targetSpotId);
@@ -2537,15 +2491,6 @@ export class ServiceStatefulRuntime {
       || target.targetNodeGeneration !== this.nodeGeneration
       || record.deadlineUnixMs < BigInt(Date.now())
     ) {
-      statefulDebugTrace('missing-fence-error', [
-        `node=${this.nodeRid}`,
-        `target=${target.targetSpotId}`,
-        `targetNode=${target.targetNodeRid}`,
-        `targetGeneration=${target.targetNodeGeneration.toString()}`,
-        `currentGeneration=${this.nodeGeneration.toString()}`,
-        `deadline=${record.deadlineUnixMs.toString()}`,
-        `now=${Date.now()}`
-      ]);
       throw new ServiceStaleGenerationError('spot', target.targetSpotId);
     }
     if (this.instanceApplicationLifecycle?.isIdleEvicting?.(target) === true) {
@@ -2643,15 +2588,6 @@ export class ServiceStatefulRuntime {
       || target.targetNodeGeneration !== this.nodeGeneration
       || record.deadlineUnixMs < BigInt(Date.now())
     ) {
-      statefulDebugTrace('missing-fence-error', [
-        `node=${this.nodeRid}`,
-        `target=${target.targetSpotId}`,
-        `targetNode=${target.targetNodeRid}`,
-        `targetGeneration=${target.targetNodeGeneration.toString()}`,
-        `currentGeneration=${this.nodeGeneration.toString()}`,
-        `deadline=${record.deadlineUnixMs.toString()}`,
-        `now=${Date.now()}`
-      ]);
       throw new ServiceStaleGenerationError('spot', target.targetSpotId);
     }
     const authority = this.asyncInstanceAuthority;
@@ -2661,28 +2597,11 @@ export class ServiceStatefulRuntime {
 
     const local = this.registry.spot(target.targetSpotId);
     const current = await authority.read(target);
-    statefulDebugTrace('missing-state', [
-      `node=${this.nodeRid}`,
-      `target=${target.targetSpotId}`,
-      `authority=${current.kind}`,
-      `local=${local?.kind ?? 'none'}`,
-      `localState=${local?.kind === 'instance' ? local.state : 'none'}`,
-      `localGeneration=${local?.kind === 'instance' ? local.ref.generation.toString() : 'none'}`,
-      `localOwnerGeneration=${local?.kind === 'instance' ? local.authorityOwnerGeneration.toString() : 'none'}`
-    ]);
     if (current.kind === 'ready') {
       if (current.route.targetNodeRid !== this.nodeRid) {
         throw new ServiceInstanceActivationRedirectError(current.route);
       }
       if (current.route.targetNodeGeneration !== this.nodeGeneration) {
-        statefulDebugTrace('missing-authority-error', [
-          `node=${this.nodeRid}`,
-          `target=${target.targetSpotId}`,
-          `currentNode=${current.route.targetNodeRid}`,
-          `currentGeneration=${current.route.targetNodeGeneration.toString()}`,
-          `localGeneration=${this.nodeGeneration.toString()}`,
-          `objectGeneration=${current.route.objectGeneration.toString()}`
-        ]);
         throw new ServiceStaleGenerationError('spot', target.targetSpotId);
       }
       if (
@@ -2692,14 +2611,6 @@ export class ServiceStatefulRuntime {
           || local.stableType !== target.stableType
         )
       ) {
-        statefulDebugTrace('missing-local-error', [
-          `node=${this.nodeRid}`,
-          `target=${target.targetSpotId}`,
-          `authority=${current.kind}`,
-          `local=${local.kind}`,
-          `localType=${local.kind === 'instance' ? local.stableType : 'none'}`,
-          `targetType=${target.stableType}`
-        ]);
         throw new ServiceStaleGenerationError('spot', target.targetSpotId);
       }
       if (
@@ -2741,16 +2652,6 @@ export class ServiceStatefulRuntime {
         (!joinsCreating && !replacesClosingProjection && current.kind !== 'missing')
         || (!joinsCreating && !closing && materialized !== false && !materializing)
       ) {
-        statefulDebugTrace('missing-projection-error', [
-          `node=${this.nodeRid}`,
-          `target=${target.targetSpotId}`,
-          `authority=${current.kind}`,
-          `closing=${closing}`,
-          `materialized=${materialized === undefined ? 'none' : String(materialized)}`,
-          `materializing=${materializing}`,
-          `joinsCreating=${joinsCreating}`,
-          `replacesClosingProjection=${replacesClosingProjection}`
-        ]);
         throw new ServiceStaleGenerationError('spot', target.targetSpotId);
       }
     }
@@ -3636,16 +3537,7 @@ export class ServiceStatefulRuntime {
       failureCode,
       replyPayload,
       tail
-    ) => {
-      statefulDebugTrace('local-reply', [
-        `node=${this.nodeRid}`,
-        `pending=${pending.id.toString()}`,
-        `kind=${decoded.kind}`,
-        `result=${terminalResult}`,
-        `failure=${failureCode}`,
-        `tail=${tail?.kind ?? 'none'}`
-      ]);
-      return this.operations.reply(pending.id, this.resultFromReply(
+    ) => this.operations.reply(pending.id, this.resultFromReply(
         terminalResult,
         failureCode,
         replyPayload,
@@ -3653,7 +3545,6 @@ export class ServiceStatefulRuntime {
         this.nodeRid,
         actor
       ));
-    };
     if (decoded.kind === 'spotRequest') {
       this.validateDirectSpotFence(decoded.target);
       this.enqueueApplicationFrame(
@@ -3835,17 +3726,6 @@ export class ServiceStatefulRuntime {
     try {
       if (reply.length < 1 || reply.length > 2) throw new ServiceWireProtocolError('Invalid M6B reply parts.');
       const decoded = decodeStatefulReply(reply[0]!, pending.id, operationKind, reply.length >= 2);
-      if (decoded.terminalResult !== RequestResult.Ok || decoded.failureCode !== 0) {
-        statefulDebugTrace('remote-reply-error', [
-          `node=${this.nodeRid}`,
-          `pending=${pending.id.toString()}`,
-          `target=${targetNodeRid}`,
-          `kind=${operationKind}`,
-          `result=${decoded.terminalResult}`,
-          `failure=${decoded.failureCode}`,
-          `tail=${decoded.tail?.kind ?? 'none'}`
-        ]);
-      }
       const payload = reply.length < 2 ? undefined : decodeApplicationPayload(reply[1]);
       if (
         operationKind === 'actorJoin'
@@ -4814,20 +4694,6 @@ function instanceOperationParts(
     validateServiceMetadataFrame(metadataFrame),
     headerAndPayload[1]!
   ];
-}
-
-function statefulDebugTrace(event: string, fields: readonly string[]): void {
-  const mode = process.env.ZLINK_NODE_FILE_TRACE_DEBUG;
-  if (mode !== '1' && mode !== 'errors') return;
-  if (mode === 'errors' && !event.endsWith('-error')) return;
-  try {
-    appendFileSync(
-      process.env.ZLINK_NODE_FILE_TRACE_PATH ?? '/tmp/zlink-node-stateful-debug.log',
-      `${new Date().toISOString()} pid=${process.pid} ${event} ${fields.join(' ')}\n`
-    );
-  } catch {
-    // Diagnostic tracing must never affect runtime behavior.
-  }
 }
 
 export function statefulMailboxData(record: ServiceMailboxRecord): ServiceStatefulMailboxData | undefined {

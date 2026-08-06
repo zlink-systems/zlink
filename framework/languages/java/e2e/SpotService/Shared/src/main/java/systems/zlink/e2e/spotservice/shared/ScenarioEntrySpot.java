@@ -33,6 +33,7 @@ public final class ScenarioEntrySpot implements ZLinkEntrySpot<ScenarioActor> {
 
     @Override
     public void configure() {
+        evidence.recordEntryIdentity(context.spotId(), context.nodeRid().toString());
         context.handlers().addHandler(EntryActorPingHandler.class);
         context.handlers().addHandler(EntryActorEchoHandler.class);
         context.handlers().addHandler(EntryActorPushHandler.class);
@@ -54,6 +55,19 @@ public final class ScenarioEntrySpot implements ZLinkEntrySpot<ScenarioActor> {
                 request.profile().displayName() + "/"
                     + request.profile().level() + "/"
                     + String.join(",", request.profile().tags()));
+        }
+        if (!createRequest.isEmpty()) {
+            Contracts.ActorAuthReq request = createRequest.decode(Contracts.ActorAuthReq.class);
+            if (request.profile().displayName().equals("reject:first")) {
+                evidence.record("ActorCreateRejected", "entry", actor.actorId() + "/first");
+                return CompletableFuture.completedFuture(
+                    ZLinkActorCreateResponse.reject("rejected:first"));
+            }
+            if (request.profile().displayName().equals("sm-b11-gated")) {
+                evidence.record("ActorFactoryStarted", "entry", actor.actorId());
+                return evidence.gate(actor.actorId()).thenApply(ignored ->
+                    ZLinkActorCreateResponse.accept());
+            }
         }
         evidence.record("ActorCreated", "entry", actor.actorId() + "#" + actor.nextSequence());
         return CompletableFuture.completedFuture(ZLinkActorCreateResponse.accept());

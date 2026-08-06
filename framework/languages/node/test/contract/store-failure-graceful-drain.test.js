@@ -47,11 +47,10 @@ test('SF-C2 uses host relocation and verifies marker, terminal result, and clean
   const scenario = read('e2e/DiscoveryRegistryHa/Client/Scenarios/SfC2GracefulShutdownScenario.ts');
   const runner = read('e2e/DiscoveryRegistryHa/run_e2e.sh');
 
-  assert.match(provider, /configureServerSocket\(\)\.weight\s*=\s*0/);
+  assert.match(provider, /runtimeOptions\.channel\([^\n]+\)\.weight\s*=\s*0/);
   assert.match(provider, /frameworkRuntime\.relocate\(/);
   assert.match(scenario, /draining/);
-  assert.match(scenario, /ZLinkFrameworkRelocationOutcome\.Relocated/);
-  assert.match(scenario, /ZLinkFrameworkRelocationReason\.None/);
+  assert.match(scenario, /result\.outcome\s*===\s*0\s*&&\s*result\.reason\s*===\s*0/);
   assert.match(scenario, /providerRid\s*===\s*'api-a'/);
   assert.match(runner, /wait\s+"\$API_B_PID"/);
   assert.doesNotMatch(runner, /run_sf_c2\(\)[\s\S]*?\/shutdown/);

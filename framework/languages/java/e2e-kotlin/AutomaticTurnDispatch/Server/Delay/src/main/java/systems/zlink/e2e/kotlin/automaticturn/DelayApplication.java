@@ -36,14 +36,13 @@ public final class DelayApplication {
                 .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
                 .traceLogFile(logDir + "/delay-flow.log")
                 .traceLabel("kotlin-atd-delay");
-            ClientServerChannelBuilder delay = options.addClientServerChannel(Contracts.DELAY_CHANNEL)
-                .enableServer(Env.get("delayEndpoint"))
-                .setRoutingId(RoutingId.from(nodeRid));
-            delay.addRequestHandler(
+            options.addClientServerChannel(Contracts.DELAY_CHANNEL)
+                .server()
+                .listen(java.net.URI.create(Env.get("delayEndpoint")).getPort())
+                .addRequestHandler(
                 DelayHandler.class,
                 Contracts.DelayReq.class,
-                Contracts.DelayRes.class,
-                "DelayReq");
+                Contracts.DelayRes.class);
         };
     }
 

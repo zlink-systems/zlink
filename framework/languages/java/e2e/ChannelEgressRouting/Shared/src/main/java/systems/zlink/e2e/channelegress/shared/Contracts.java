@@ -9,9 +9,13 @@ public final class Contracts {
     public static final String PLAY_CHANNEL = "game.play";
     public static final String API_CHANNEL = "game.api";
     public static final String AUDIT_CHANNEL = "audit.record";
+    public static final String FANOUT_CHANNEL = "game.fanout";
+    public static final String STREAM_NODE = "game.stream";
     public static final String WORKFLOW_CHANNEL = "workflow.command";
     public static final String INSTANCE_SPOT_TYPE = "config12.workflow-spot";
+    public static final String ACTOR_TYPE = "config12.workflow-actor";
     public static final String HANDLER_GROUP = "channel-egress";
+    public static final String FANOUT_HANDLER_GROUP = "channel-egress-fanout";
 
     private Contracts() {
     }
@@ -36,6 +40,20 @@ public final class Contracts {
     public record ChannelProbeMsg(String id) {
     }
 
+    public record FanoutProbe(String id) {
+    }
+
+    public record StreamProbe(String id) {
+    }
+
+    public record ListenerStatus(
+        String kind,
+        String name,
+        boolean isReady,
+        String advertisedEndpoint,
+        String detail) {
+    }
+
     public record SpotWorkflowReq(String id, String timerName) {
         public SpotWorkflowReq(String id) {
             this(id, id + "-timer");
@@ -46,6 +64,50 @@ public final class Contracts {
         public SpotWorkflowRes {
             sequence = List.copyOf(sequence);
         }
+    }
+
+    public record SpotCreateReq(String spotId) {
+    }
+
+    public record SpotCreateRes(String spotId, String nodeRid) {
+    }
+
+    public record ActorCreateReq(String actorId) {
+    }
+
+    public record ActorCreateRes(String actorId, String nodeRid) {
+    }
+
+    public record ObjectProbeReq(String id) {
+    }
+
+    public record ObjectProbeRes(String id, String kind, String objectId, String role) {
+    }
+
+    public record StateAddressReq(String id, String spotId, String actorId) {
+    }
+
+    public record StateAddressRes(String id, List<String> downstream) {
+        public StateAddressRes {
+            downstream = List.copyOf(downstream);
+        }
+    }
+
+    public record WorkflowStatus(
+        String state,
+        boolean isReady,
+        int readyTargetCount,
+        String localRole,
+        List<WorkflowTarget> targets) {
+        public WorkflowStatus {
+            targets = List.copyOf(targets);
+        }
+    }
+
+    public record WorkflowTarget(String rid, int weight, String state) {
+    }
+
+    public record LocationEntry(String meshName, String rid, String endpoint, String state) {
     }
 
     public record InvokeReq(String channel, String id, String mode) {

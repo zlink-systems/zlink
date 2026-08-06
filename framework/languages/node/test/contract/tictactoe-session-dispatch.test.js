@@ -13,10 +13,8 @@ test('TicTacToe relays ObserveMilestoneReq to the bound actor', async () => {
   try {
     compileSession(outputRoot);
     fs.symlinkSync(path.join(nodeRoot, 'node_modules'), path.join(outputRoot, 'node_modules'), 'dir');
-    const { PlaySession } = require(path.join(
-      outputRoot,
-      'Server/Play/Infrastructure/ZLink/Sessions/play-session.js'
-    ));
+    // A single-file TypeScript compilation emits the module at outDir root.
+    const { PlaySession } = require(path.join(outputRoot, 'play-session.js'));
     let relayCalls = 0;
     let orphanEntrySpotCalls = 0;
     let authenticated = false;

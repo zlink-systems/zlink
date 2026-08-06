@@ -71,6 +71,7 @@ zlink/framework/contracts/handlers/*.hpp
 zlink/framework/contracts/http/*.hpp
 zlink/framework/contracts/locations/*.hpp
 zlink/framework/contracts/messaging/*.hpp
+zlink/framework/contracts/monitoring/*.hpp
 zlink/framework/contracts/spots/*.hpp
 zlink/framework/contracts/streams/*.hpp
 zlink/framework/contracts/timers/*.hpp

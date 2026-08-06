@@ -33,6 +33,8 @@ namespace zlink::framework::detail
 {
 namespace host = zlink::framework::runtime::host;
 
+struct framework_options_state_t;
+
 struct mesh_channel_registration_t
 {
     int weight = 100;
@@ -48,13 +50,19 @@ struct mesh_node_builder_state_t
     std::mutex mutex;
     std::string mesh_name;
     std::string listen_endpoint;
+    std::optional<std::uint16_t> listen_port;
+    std::string bind_host = "127.0.0.1";
+    std::optional<std::string> bind_host_override;
     std::optional<std::string> advertise_host;
+    std::optional<std::string> advertise_host_override;
+    std::weak_ptr<framework_options_state_t> framework_options;
     std::optional<zlink::routing_id_t> routing_id;
+    std::optional<std::string> automatic_routing_id_prefix;
     object_role_t object_role = object_role_t::server;
     bool has_node_direct_handler = false;
     int placement_weight = 100;
-    std::int32_t actor_limit = 10000;
-    std::int32_t spot_limit = 128;
+    std::int32_t actor_limit = 0;
+    std::int32_t spot_limit = 0;
     std::chrono::milliseconds instance_spot_idle_timeout{0};
     std::int32_t activation_concurrency_limit = 128;
     std::map<std::string, mesh_channel_registration_t> channels;
@@ -163,6 +171,8 @@ class mesh_node_runtime_t
     void forget_peer (const zlink::routing_id_t &expected_routing_id,
                       const std::string &endpoint);
     void disconnect_peer (const std::string &endpoint) noexcept;
+    void disconnect_peer (const zlink::routing_id_t &expected_routing_id,
+                          const std::string &endpoint) noexcept;
     bool wait_for_peer_ready (
       const zlink::routing_id_t &target,
       std::chrono::milliseconds timeout) const;

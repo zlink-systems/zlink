@@ -24,7 +24,8 @@ class BingoSession implements ZLinkSession {
 
   async onDisconnected(): Promise<void> {
     const actors = this.context.actors.bound;
-    await Promise.allSettled(actors.map((actor) => actor.notifyDisconnected()));
+    // Framework cleanup owns disconnect notification; this callback only records
+    // the sample lifecycle evidence without submitting another notification.
     console.error(`bingo-lifecycle session-disconnect actor=${actors[0]?.actorId ?? '-'} destroy=false`);
   }
 }

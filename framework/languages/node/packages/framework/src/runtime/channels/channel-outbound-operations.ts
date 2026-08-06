@@ -258,6 +258,14 @@ export class ZLinkChannelOutboundOperations {
     if (!accepted) {
       return publishResult(ZLinkSubmitStatus.Backpressured);
     }
+    this.dispatchServices.traceOutbound(ZLinkMessageFlowOutcome.Sent, () => ({
+      surface: ZLinkDispatchErrorSurface.Channel,
+      messageKind: ZLinkDispatchMessageKind.Publish,
+      channelName,
+      packetName,
+      correlationId: undefined,
+      topic
+    }));
     return publishResult(ZLinkSubmitStatus.Submitted);
   }
 
@@ -296,6 +304,14 @@ export class ZLinkChannelOutboundOperations {
       }
       throw error;
     }
+    this.dispatchServices.traceOutbound(ZLinkMessageFlowOutcome.Sent, () => ({
+      surface: ZLinkDispatchErrorSurface.Channel,
+      messageKind: ZLinkDispatchMessageKind.Publish,
+      channelName,
+      packetName,
+      correlationId: undefined,
+      topic
+    }));
     return publishResult(ZLinkSubmitStatus.Submitted);
   }
 

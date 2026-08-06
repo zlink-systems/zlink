@@ -21,6 +21,7 @@ set(required_labels
   framework-observability
   framework-http
   framework-http-e2e
+  framework-e2e
   framework-perf-smoke
   framework-package
   framework-tooling

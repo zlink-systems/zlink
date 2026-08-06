@@ -1,6 +1,6 @@
 # Java ObservabilityOps E2E
 
-이 디렉터리는 공통 Config 11의 OBS-A1~C5 증거를 검증한다. 검증기는 배포된 Java framework 역할이
+이 디렉터리는 공통 Config 11의 OBS-A1~C12 증거를 검증한다. 검증기는 배포된 Java framework 역할이
 생성한 scenario별 JSON을 읽는다. 테스트를 통과시키기 위한 임의 계기나 drain 결과를 만들지 않는다.
 
 각 파일 이름은 `OBS-A1.json`부터 `OBS-C5.json`까지이며 `scenario` 필드가 파일 이름과 같아야 한다.
@@ -26,8 +26,24 @@ ZLink meter series가 만들어지지 않았는지 확인한다. runner가 meter
 ./run_e2e.sh all
 ```
 
-Track A의 단일 시나리오는 OBS-A1부터 OBS-A4까지 지정할 수 있다.
+Track A의 단일 시나리오는 OBS-A1부터 OBS-A5까지 지정할 수 있다.
 
 ```bash
 ./run_e2e.sh OBS-A2
 ```
+
+OBS-A5는 현재 기존 Track A 역할 모듈과 분리된 `A5/` 독립 fixture를 사용한다. 실제 Java
+framework process의 public message-flow mode와 typed request를 검증하려면 다음 selector를
+사용한다.
+
+```bash
+./run_e2e.sh OBS-A5
+```
+
+현재 C track의 실제 selector 결과는 `OBS-C8`만 PASS이다. `OBS-C6`, `OBS-C7`, `OBS-C9A`,
+`OBS-C10`, `OBS-C11`, `OBS-C12`는 automatic topology actor relocation 중 public
+bound-session push handoff가 `one-way submission did not obtain queue capacity before the send
+deadline`로 실패하여 BLOCKED로 남겼다. `OBS-C9B`는 public relocation 결과
+`MANUAL_TOPOLOGY_UNSUPPORTED`와 bounded Shutdown을 확인했지만 source Spot evidence가 없어
+strict verifier를 통과하지 못했으므로 PASS로 기록하지 않는다. 상세 로그와 상태는
+`feature-map.ko.md`에 기록한다.

@@ -24,13 +24,13 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendPublisherSoc
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRouterSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRecvMode;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpotRouteBridge;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSubscriberSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSocketMonitor;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkReceiveBatchBudget;
+import systems.zlink.framework.monitoring.ZLinkListenerKind;
 
 final class ZLinkChannelSocketRegistry {
     private static final long READY_POLL_INTERVAL_MILLIS = 5;
@@ -422,6 +422,7 @@ final class ZLinkChannelSocketRegistry {
                 new ClientServerTargetSnapshot(
                     descriptor.serverRid(),
                     descriptor.weight(),
+                    connection.ready(),
                     connection.ready()
                         && descriptor.state()
                             == systems.zlink.framework.runtime.host
@@ -517,9 +518,21 @@ final class ZLinkChannelSocketRegistry {
             }
             if (control
                     instanceof ZLinkClientServerServiceWire.LivenessProbe probe
-                && received.requestSeq().isPresent()) {
-                reply = ZLinkClientServerServiceWire.encodeLivenessAck(
+                && received.routingId().isPresent()) {
+                byte[] ack = ZLinkClientServerServiceWire.encodeLivenessAck(
                     probe.probeId());
+                if (received.requestSeq().isPresent()) {
+                    reply = ack;
+                } else {
+                    try (Message message = Message.from(ack)) {
+                        router.send(
+                            received.routingId().get(),
+                            List.of(message),
+                            SendFlags.DONT_WAIT);
+                    }
+                    received.close();
+                    return true;
+                }
             } else {
             ZLinkClientServerServerDescriptor descriptor;
             synchronized (this) {
@@ -562,7 +575,7 @@ final class ZLinkChannelSocketRegistry {
         return true;
     }
 
-    void tickClientServerLiveness(long nowNanos, Duration requestTimeout) {
+    void tickClientServerLiveness(long nowNanos) {
         List<ClientServerConnection> clientConnections;
         List<ClientServerServerPeer> serverPeers;
         synchronized (this) {
@@ -585,8 +598,8 @@ final class ZLinkChannelSocketRegistry {
             clientServerControlCursor =
                 (connectionStart + offset + 1) % connectionCount;
             drainClientServerControls(connection);
+            flushClientServerLivenessAck(connection);
             long probeId = 0;
-            long physicalGeneration = 0;
             synchronized (this) {
                 if (!connection.aliases.stream().anyMatch(
                         alias -> clientServerConnections.get(alias)
@@ -608,13 +621,8 @@ final class ZLinkChannelSocketRegistry {
                     ? allocateProbeId()
                     : connection.outstandingProbeId;
                 connection.outstandingProbeId = probeId;
-                physicalGeneration = connection.physicalGeneration;
             }
-            requestClientServerProbe(
-                connection,
-                physicalGeneration,
-                probeId,
-                requestTimeout);
+            sendClientServerProbe(connection, probeId);
         }
         for (ClientServerServerPeer peer : serverPeers) {
             long probeId;
@@ -682,15 +690,31 @@ final class ZLinkChannelSocketRegistry {
                         received.parts().get(0).toByteArray());
                 if (control
                         instanceof ZLinkClientServerServiceWire.LivenessProbe probe) {
+                    connection.pendingLivenessAckId = probe.probeId();
                     try (Message ack = Message.from(
                         ZLinkClientServerServiceWire.encodeLivenessAck(
                             probe.probeId()))) {
-                        connection.dealer.send(
-                            List.of(ack), SendFlags.DONT_WAIT);
+                        try {
+                            if (connection.dealer.send(
+                                    List.of(ack), SendFlags.DONT_WAIT)) {
+                                connection.pendingLivenessAckId = 0;
+                            }
+                        } catch (ZlinkSubmitException ignored) {
+                            // A DEALER may reject an unsolicited control
+                            // reply while its accepted application request is
+                            // still awaiting the matching completion. Keep
+                            // the physical connection and let the next
+                            // liveness probe retry after the application
+                            // completion; terminating here would violate the
+                            // in-flight request completion contract.
+                        }
                     }
                 } else if (control
                         instanceof ZLinkClientServerServiceWire.Update update) {
                     applyClientServerUpdate(connection, update.admission());
+                } else if (control
+                        instanceof ZLinkClientServerServiceWire.LivenessAck ack) {
+                    acceptClientServerClientAck(connection, ack.probeId());
                 } else {
                     terminateClientServerProtocol(connection);
                 }
@@ -700,48 +724,44 @@ final class ZLinkChannelSocketRegistry {
         }
     }
 
-    private void requestClientServerProbe(
+    private void flushClientServerLivenessAck(
+        ClientServerConnection connection) {
+        long probeId = connection.pendingLivenessAckId;
+        if (probeId == 0) {
+            return;
+        }
+        try (Message ack = Message.from(
+            ZLinkClientServerServiceWire.encodeLivenessAck(probeId))) {
+            if (connection.dealer.send(List.of(ack), SendFlags.DONT_WAIT)) {
+                connection.pendingLivenessAckId = 0;
+            }
+        } catch (ZlinkSubmitException ignored) {
+        }
+    }
+
+    private void sendClientServerProbe(
         ClientServerConnection connection,
-        long physicalGeneration,
-        long probeId,
-        Duration requestTimeout) {
+        long probeId) {
         try (Message message = Message.from(
             ZLinkClientServerServiceWire.encodeLivenessProbe(probeId))) {
-            connection.dealer.request(
-                List.of(message),
-                reply -> {
-                    try (reply) {
-                        if (reply.result() != ZLinkBackendRequestResult.OK
-                            || reply.parts().size() != 1) {
-                            return;
-                        }
-                        ZLinkClientServerServiceWire.Control control =
-                            ZLinkClientServerServiceWire.decode(
-                                reply.parts().get(0).toByteArray());
-                        if (!(control
-                                instanceof ZLinkClientServerServiceWire
-                                    .LivenessAck ack)
-                            || ack.probeId() != probeId) {
-                            return;
-                        }
-                        synchronized (this) {
-                            if (connection.aliases.stream().anyMatch(
-                                    alias -> clientServerConnections.get(alias)
-                                        == connection)
-                                && connection.physicalGeneration
-                                    == physicalGeneration
-                                && connection.outstandingProbeId == probeId) {
-                                connection.outstandingProbeId = 0;
-                                connection.deadlineAtNanos =
-                                    System.nanoTime()
-                                        + CLIENT_SERVER_DEADLINE_NANOS;
-                            }
-                        }
-                    }
-                },
-                SendFlags.DONT_WAIT,
-                requestTimeout);
+            connection.dealer.send(List.of(message), SendFlags.DONT_WAIT);
+        } catch (ZlinkSubmitException ignored) {
+            // The same outstanding probe ID is retried on the next interval.
+            // A transient send-admission race is not a connection result.
         }
+    }
+
+    private synchronized void acceptClientServerClientAck(
+        ClientServerConnection connection,
+        long probeId) {
+        if (!connection.aliases.stream().anyMatch(
+                alias -> clientServerConnections.get(alias) == connection)
+            || connection.outstandingProbeId != probeId) {
+            return;
+        }
+        connection.outstandingProbeId = 0;
+        connection.deadlineAtNanos =
+            System.nanoTime() + CLIENT_SERVER_DEADLINE_NANOS;
     }
 
     private synchronized void applyClientServerUpdate(
@@ -895,6 +915,52 @@ final class ZLinkChannelSocketRegistry {
 
     ZLinkBackendPublisherSocket publisher(String channelName) {
         return publishers.get(channelName);
+    }
+
+    synchronized String listenerEndpoint(
+        ZLinkListenerKind kind,
+        String channelName) {
+        ChannelRegistration registration = registrations.get(channelName);
+        if (registration == null) {
+            throw new ZLinkConfigurationException(
+                "channel is not configured: " + channelName);
+        }
+        return switch (kind) {
+            case CLIENT_SERVER -> {
+                if (registration.kind() != ChannelKind.CLIENT_SERVER
+                    || !registration.clientServerServerEnabled()) {
+                    throw new ZLinkConfigurationException(
+                        "ClientServer server is not configured: " + channelName);
+                }
+                ZLinkBackendRouterSocket router = servers.get(channelName);
+                if (router == null || registration.serverBinds().isEmpty()) {
+                    throw new ZLinkConfigurationException(
+                        "ClientServer listener is not started: " + channelName);
+                }
+                yield advertisedEndpoint(
+                    registration.serverBinds().getFirst(),
+                    router,
+                    registration.clientServerAdvertiseHost());
+            }
+            case FANOUT -> {
+                if (registration.kind() != ChannelKind.FANOUT
+                    || !registration.publisherEnabled()) {
+                    throw new ZLinkConfigurationException(
+                        "fanout publisher is not configured: " + channelName);
+                }
+                ZLinkBackendPublisherSocket publisher = publishers.get(channelName);
+                if (publisher == null || registration.publisherBinds().isEmpty()) {
+                    throw new ZLinkConfigurationException(
+                        "fanout listener is not started: " + channelName);
+                }
+                yield advertisedEndpoint(
+                    registration.publisherBinds().getFirst(),
+                    publisher,
+                    registration.fanoutAdvertiseHost());
+            }
+            default -> throw new ZLinkConfigurationException(
+                "listener kind is not a Channel listener: " + kind);
+        };
     }
 
     ZLinkBackendSubscriberSocket subscriber(String channelName) {
@@ -1186,6 +1252,7 @@ final class ZLinkChannelSocketRegistry {
     record ClientServerTargetSnapshot(
         RoutingId nodeRid,
         int weight,
+        boolean connectionReady,
         boolean ready) {
     }
 
@@ -1196,6 +1263,7 @@ final class ZLinkChannelSocketRegistry {
         private final ZLinkBackendDealerSocket dealer;
         private ZLinkBackendSocketMonitor monitor;
         private boolean ready;
+        private long pendingLivenessAckId;
         private long physicalGeneration = 1;
         private long admissionGeneration = 1;
         private long nextProbeAtNanos;

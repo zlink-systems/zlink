@@ -1,47 +1,34 @@
-# Java AutomaticTurnDispatch E2E feature map
+# Java AutomaticTurnDispatch feature map
 
-기준 문서는 [Config 8 — 실행 turn](../../../../doc/framework/common/e2e/config-8-execution-turn.ko.md)이다.
-아래 표는 정식 시나리오 ID를 한 행씩 기록한다. 현재 runner와 로그는 10.0.0 MeshNode
-topology와 `TD-*` 공개 계약을 직접 증명하지 않으므로 완료 근거로 사용하지 않는다.
+기준 계약은 `framework/doc/framework/common/e2e/config-8-execution-turn.ko.md`와 현재 Java public
+API 문서다. 이 변경에서는 fixture의 stale 호출을 현재 API로 교체하고, `TD-*` selector가 실제
+message, Spot handler, actor/timer/worker 경로를 호출하도록 구성했다. 실행 evidence는 아래 blocker가
+해소된 뒤 focused runner에서 확정해야 한다.
 
-| 시나리오 | 상태 | 검증 대상 |
+| selector | 현재 상태 | 근거 또는 남은 조건 |
 |---|---|---|
-| `TD-A1` | deferred | 공개 API와 독립 marker로 검증할 대상: 세 terminator 공개 표면과 기본 의미. |
-| `TD-A2` | deferred | 공개 API와 독립 marker로 검증할 대상: 비동기 완료 전 같은 Spot callback 차단. |
-| `TD-A3` | deferred | 공개 API와 독립 marker로 검증할 대상: 비동기 구간의 Spot 상태 불변식. |
-| `TD-A4` | deferred | 공개 API와 독립 marker로 검증할 대상: 비동기 대기가 완료 처리를 점유하지 않음. |
-| `TD-A5` | deferred | 공개 API와 독립 marker로 검증할 대상: 비동기 handler가 같은 Spot timer를 지연. |
-| `TD-B1` | deferred | 공개 API와 독립 marker로 검증할 대상: yield 중 같은 Spot의 다른 callback 진행. |
-| `TD-B2` | deferred | 공개 API와 독립 marker로 검증할 대상: yield continuation 재삽입 순서. |
-| `TD-B3` | deferred | 공개 API와 독립 marker로 검증할 대상: yield 경계의 상태 불변식 비보장. |
-| `TD-B4` | deferred | 공개 API와 독립 marker로 검증할 대상: yield 중 같은 Spot timer 진행. |
-| `TD-C1` | deferred | 공개 API와 독립 marker로 검증할 대상: HTTP client 작업의 yield 실행. |
-| `TD-C2` | deferred | 공개 API와 독립 marker로 검증할 대상: HTTP client 작업의 async 실행과 turn 유지. |
-| `TD-C3` | deferred | 공개 API와 독립 marker로 검증할 대상: I/O worker 대기 중 worker thread 비점유. |
-| `TD-C4` | deferred | 공개 API와 독립 marker로 검증할 대상: CPU worker 실행과 terminator별 turn 의미. |
-| `TD-C5` | deferred | 공개 API와 독립 marker로 검증할 대상: CPU worker에서 blocking I/O 금지. |
-| `TD-D1` | deferred | 공개 API와 독립 marker로 검증할 대상: 서로 다른 actor의 진행. |
-| `TD-D2` | deferred | 공개 API와 독립 marker로 검증할 대상: 같은 actor handler 재진입 금지. |
-| `TD-D3` | deferred | 공개 API와 독립 marker로 검증할 대상: Actor가 yield한 동안 같은 Spot의 다음 timer record 진행. |
-| `TD-D4` | deferred | 공개 API와 독립 marker로 검증할 대상: PerActor의 Async가 같은 Actor만 차단. |
-| `TD-D5` | deferred | 공개 API와 독립 marker로 검증할 대상: 지원하지 않는 문맥의 Yield를 제출 전에 거부. |
-| `TD-D6` | deferred | 공개 API와 독립 marker로 검증할 대상: self awaited request와 same-gate Async를 제출 전에 거부. |
-| `TD-E1` | deferred | 공개 API와 독립 marker로 검증할 대상: Entry Spot에서 user Spot으로 join하는 비동기 경계. |
-| `TD-E2` | deferred | 공개 API와 독립 marker로 검증할 대상: user Spot 사이 join의 비동기 경계. |
-| `TD-E2A` | deferred | 공개 API와 독립 marker로 검증할 대상: handler 실패 시 비활성 deferred Join barrier 폐기. |
-| `TD-E3` | deferred | 공개 API와 독립 marker로 검증할 대상: 반대 방향 join의 동시 진행. |
-| `TD-F1` | deferred | 공개 API와 독립 marker로 검증할 대상: remote Spot에서도 같은 terminator 의미. |
-| `TD-F2` | deferred | 공개 API와 독립 marker로 검증할 대상: MeshNode routed handler의 같은 terminator 의미. |
-| `TD-F3` | deferred | 공개 API와 독립 marker로 검증할 대상: session relay actor handler의 같은 terminator 의미. |
-| `TD-F4` | deferred | 공개 API와 독립 marker로 검증할 대상: timeout 뒤 turn 해제. |
-| `TD-F5` | deferred | 공개 API와 독립 marker로 검증할 대상: waiter cancellation 뒤 turn 정리. |
-| `TD-F5A` | deferred | 공개 API와 독립 marker로 검증할 대상: host Shutdown 뒤 turn 정리. |
-| `TD-F6` | deferred | 공개 API와 독립 marker로 검증할 대상: 상호 대기 cycle의 timeout 종료. |
-| `TD-G1` | deferred | 공개 API와 독립 marker로 검증할 대상: 언어별 terminator 공개 의미 일치. |
+| `TD-A3`, `TD-B3` | code-ready | counter reset/read와 8개 async/yield continuation을 실제 Spot 상태로 검증한다. |
+| `TD-A5`, `TD-B4` | code-ready | timer tick handler가 public channel `submit/yield`와 다음 tick을 실제로 검증한다. |
+| `TD-C1`~`TD-C5` | code-ready | public `runIoWorker`/`runCpuWorker`와 batch request를 실제 handler에서 호출한다. |
+| `TD-D1`~`TD-D4`, `TD-D6` | code-ready | 기존 actor/timer/timeout fixture를 현재 actor, timer, request surface로 연결한다. actor admission 완료를 다음 request 전에 확인하는 runtime evidence는 아래 contract gap의 영향을 받는다. |
+| `TD-E1`, `TD-E2` | code-ready | user Spot join과 반대 방향 join을 실제 actor join request로 실행한다. |
+| `TD-E2A` | contract-gap | 현재 `ZLinkActorJoinCall.defer()`는 결과/실패 stage를 반환하지 않는다. handler 실패 후 deferred join barrier를 관찰하는 공개 경로가 없어 같은 의미를 보장할 수 없다. |
+| `TD-F1`~`TD-F6` | code-ready | remote Spot, route bridge, session relay, timeout/cancel 경로를 기존 public fixture로 실행한다. cycle 자체의 독립 evidence는 후속 보강 대상이다. |
+| `TD-F5A` | blocked | source host의 public drain seal 뒤 pending await는 종료되지만, 같은 session에서 시작한 새 request가 Java runtime의 정식 `ShuttingDown`이 아니라 `TimeoutException`으로 끝난다. 실행 로그 `logs/20260806-045139-1930524/`의 `session-flow.log`와 `client-td-f5a-probe.stderr.log`가 이 결과를 보인다. 이 error mapping을 runner에서 성공으로 분류하지 않는다. |
+| `TD-G1` | partial | Java public terminator surface compile check와 async scenario selector는 있으나 cross-language parity evidence는 Kotlin compile blocker 이후 확정한다. |
+| `TD-A1`, `TD-A2`, `TD-A4`, `TD-B1`, `TD-B2`, `TD-D5` | partial | 기존 selector 또는 public method-reference contract check가 있다. `TD-D5`는 unsupported context를 런타임에 만들 공개 API가 없어 compile-time contract check로 제한된다. |
 
-## 완료 조건
+## 검증 조건
 
-구현 단계에서 각 행에 대응하는 독립 `TD-* result=passed` marker와 최종
-`automatic-turn-dispatch e2e result=passed` marker를 남긴다. runner는 실제 사용한 bindings package
-이름, version과 경로를 출력하고, 제거 대상 builder, Spot 전용 router/pub/sub와 별도 중계 계층을
-사용하지 않는다는 정적 검사를 통과해야 한다.
+`framework/languages/java/e2e/AutomaticTurnDispatch`에서 `../../gradlew compileJava --no-daemon
+--console=plain`이 통과했다. `bash -n run_e2e.sh`와 `git diff --check`도 통과한다.
+
+focused `run_e2e.sh TD-A3`, `TD-A5`, `TD-C3`는 각각 실제 server topology와 evidence를 사용해
+`result=passed`를 확인했다. `run_e2e.sh all`은 ATD-A1~A4와 ATD-B1까지 통과한 뒤 ATD-B2에서
+중단됐다. `ActorJoinCall.defer()`가 `void`를 반환하므로 deferred admission 완료를 public API로
+기다릴 수 없는 것이 원인이다. 이 조건을 감추기 위해 sleep, reflection, raw frame 또는 internal
+API를 추가하지 않았다.
+
+Kotlin counterpart는 Delay fixture 일부를 current channel API로 갱신했지만, Play/Shared 전반에
+삭제된 context, generic join result, old factory/getOrCreate/enableClient 호출이 남아 있어 별도
+범위로 남긴다.

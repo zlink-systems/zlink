@@ -8,6 +8,8 @@ import systems.zlink.framework.runtime.internal.backend.*;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -15,6 +17,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
@@ -34,6 +37,8 @@ import systems.zlink.framework.configuration.ZLinkSpotRelocationReadinessMode;
 import systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode;
 import systems.zlink.framework.configuration.ZLinkUserSpotFactoryBuilder;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.spots.ZLinkEntrySpot;
 import systems.zlink.framework.spots.ZLinkEntrySpotContext;
 import systems.zlink.framework.spots.ZLinkInstanceSpot;
@@ -308,6 +313,37 @@ final class NodesAndServicesTest {
                     .toCompletableFuture()
                     .join()
                     instanceof systems.zlink.framework.actors.ZLinkActorCreateResult.Existing);
+        }
+    }
+
+    @Test
+    void actorManagerDestroyUsesExactIncarnationAndIsIdempotent() {
+        DefaultZLinkFrameworkOptions options = optionsWithSpotNodeAndActorFactory();
+
+        try (ZLinkFrameworkRuntime runtime =
+                 ZLinkFrameworkRuntimeTestAccess.start(options, new ZLinkJavaBackendAdapterFactory())) {
+            ActorRef first = ((systems.zlink.framework.actors.ZLinkActorCreateResult.Created)
+                runtime.actorManager().create("player-destroy", "player")
+                    .submit().toCompletableFuture().join()).actor();
+
+            assertTrue(runtime.actorManager().destroy(first)
+                .toCompletableFuture().join());
+            assertFalse(runtime.actorManager().destroy(first)
+                .toCompletableFuture().join());
+
+            ActorRef second = ((systems.zlink.framework.actors.ZLinkActorCreateResult.Created)
+                runtime.actorManager().create("player-destroy", "player")
+                    .submit().toCompletableFuture().join()).actor();
+            assertNotEquals(first.objectGeneration(), second.objectGeneration());
+            CompletionException error = assertThrows(
+                CompletionException.class,
+                () -> runtime.actorManager().destroy(first)
+                    .toCompletableFuture().join());
+            assertEquals(
+                ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                ((ZLinkFrameworkException) error.getCause()).kind());
+            assertTrue(runtime.actorManager().destroy(second)
+                .toCompletableFuture().join());
         }
     }
 

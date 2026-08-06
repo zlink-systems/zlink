@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
+#include "runtime/transport/listener_identity.hpp"
 
 #include "runtime/protocol/service_wire_codec.hpp"
 
@@ -125,25 +126,6 @@ std::size_t raw_received_bytes (
     return total;
 }
 
-std::string advertised_endpoint (
-  std::string bound_endpoint,
-  const std::optional<std::string> &advertise_host)
-{
-    if (!advertise_host)
-        return bound_endpoint;
-    const auto port = bound_endpoint.rfind (':');
-    if (!bound_endpoint.starts_with ("tcp://")
-        || port == std::string::npos || port < 6) {
-        throw std::invalid_argument (
-          "MeshNode advertise host requires a TCP bind endpoint");
-    }
-    const auto host =
-      advertise_host->find (':') == std::string::npos
-        ? *advertise_host
-        : "[" + *advertise_host + "]";
-    return "tcp://" + host + bound_endpoint.substr (port);
-}
-
 std::vector<std::uint8_t> pack_infrastructure_reply (
   const detail::backend::raw_message_t &parts)
 {
@@ -247,6 +229,30 @@ bool raw_mesh_connection_candidates_t::disconnect (
     return removed;
 }
 
+std::optional<std::vector<std::uint8_t>>
+raw_mesh_connection_candidates_t::disconnect_by_connection_id (
+  const std::vector<std::uint8_t> &connection_id,
+  std::string_view remote_endpoint)
+{
+    for (auto node = _candidates.begin (); node != _candidates.end (); ++node) {
+        const auto candidate = std::find_if (
+          node->second.begin (), node->second.end (),
+          [&] (const auto &entry) {
+              return entry.first == connection_id
+                     && (remote_endpoint.empty ()
+                         || entry.second.remote_endpoint == remote_endpoint);
+          });
+        if (candidate == node->second.end ())
+            continue;
+        const auto node_routing_id = node->first;
+        node->second.erase (candidate);
+        if (node->second.empty ())
+            _candidates.erase (node);
+        return node_routing_id;
+    }
+    return std::nullopt;
+}
+
 std::size_t raw_mesh_connection_candidates_t::size (
   const std::vector<std::uint8_t> &node_routing_id) const
 {
@@ -313,8 +319,8 @@ void raw_mesh_node_owner_t::start ()
         == std::numeric_limits<std::uint64_t>::max ()) {
         throw std::overflow_error ("service descriptor revision is exhausted");
     }
-    descriptor.advertised_endpoint = advertised_endpoint (
-      router->options ().last_endpoint (), _options.advertise_host);
+    descriptor.advertised_endpoint = transport::advertised_tcp_endpoint (
+      router->options ().last_endpoint (), _options.advertise_host, "MeshNode");
     ++descriptor.descriptor_revision;
 
     _port = std::make_shared<detail::backend::raw_route_port_t> (
@@ -451,6 +457,7 @@ bool raw_mesh_node_owner_t::connect_peer (const std::string &endpoint)
     }
     try {
         std::lock_guard socket_lock (_socket_mutex);
+        trace_mesh ("connect endpoint=" + endpoint);
         _router->connect (endpoint);
         _outbound_endpoints.insert (endpoint);
         return true;
@@ -472,12 +479,44 @@ bool raw_mesh_node_owner_t::connect_peer (
       expected_descriptor.node_routing_id, expected_descriptor);
     try {
         std::lock_guard socket_lock (_socket_mutex);
+        trace_mesh ("connect endpoint=" + endpoint
+                    + " expected=" + owner_key (expected_descriptor.node_routing_id));
         _router->connect (endpoint);
         _outbound_endpoints.insert (endpoint);
         return true;
     }
     catch (...) {
         return false;
+    }
+}
+
+void raw_mesh_node_owner_t::disconnect_peer (const std::string &endpoint) noexcept
+{
+    disconnect_peer ({}, endpoint);
+}
+
+void raw_mesh_node_owner_t::disconnect_peer (
+  const std::vector<std::uint8_t> &expected_routing_id,
+  const std::string &endpoint) noexcept
+{
+    if (endpoint.empty ())
+        return;
+    std::lock_guard lifecycle_lock (_lifecycle_mutex);
+    if (!_router)
+        return;
+    try {
+        std::lock_guard socket_lock (_socket_mutex);
+        trace_mesh ("disconnect endpoint=" + endpoint
+                    + " expected=" + owner_key (expected_routing_id));
+        if (!expected_routing_id.empty ())
+            _router->disconnect_rid (
+              zlink::routing_id_t::from (expected_routing_id));
+        // Remove the configured endpoint after terminating the current RID.
+        // Otherwise the binding may reconnect the same stale endpoint.
+        _router->disconnect (endpoint);
+        _outbound_endpoints.erase (endpoint);
+    }
+    catch (...) {
     }
 }
 
@@ -2798,15 +2837,52 @@ std::size_t raw_mesh_node_owner_t::drain_monitor_events (
             return count;
         }
         ++count;
-        if (!event->routing_id) {
-            continue;
-        }
-        const auto node_routing_id = event->routing_id->to_bytes ();
         const std::vector<std::uint8_t> connection_id{
           static_cast<std::uint8_t> ((event->value >> 24u) & 0xffu),
           static_cast<std::uint8_t> ((event->value >> 16u) & 0xffu),
           static_cast<std::uint8_t> ((event->value >> 8u) & 0xffu),
           static_cast<std::uint8_t> (event->value & 0xffu)};
+        trace_mesh (
+          "monitor event="
+            + std::to_string (static_cast<int> (event->event))
+            + " remote=" + event->remote_addr
+            + " connection=" + owner_key (connection_id)
+            + " routing="
+            + (event->routing_id
+                 ? owner_key (event->routing_id->to_bytes ())
+                 : std::string ("-")));
+        if (event->event == zlink::monitor_event::disconnected) {
+            std::optional<std::vector<std::uint8_t>> disconnected_node;
+            {
+                std::lock_guard lifecycle_lock (_lifecycle_mutex);
+                if (event->routing_id) {
+                    const auto node_routing_id = event->routing_id->to_bytes ();
+                    if (_connections.disconnect (node_routing_id, connection_id))
+                        disconnected_node = node_routing_id;
+                }
+                if (!disconnected_node)
+                    disconnected_node = _connections.disconnect_by_connection_id (
+                      connection_id, event->remote_addr);
+                if (!disconnected_node)
+                    disconnected_node = _connections.disconnect_by_connection_id (
+                      connection_id);
+            }
+            if (disconnected_node) {
+                const auto removed = _topology.disconnect (
+                  *disconnected_node, connection_id);
+                (void) _liveness.disconnect (
+                  *disconnected_node, connection_id);
+                if (removed) {
+                    discard_pending_unadmitted_applications (*disconnected_node);
+                }
+            }
+            static_cast<void> (now);
+            continue;
+        }
+        if (!event->routing_id) {
+            continue;
+        }
+        const auto node_routing_id = event->routing_id->to_bytes ();
         if (event->event == zlink::monitor_event::connection_ready) {
             std::shared_ptr<detail::backend::raw_route_port_t> port;
             {
@@ -2843,23 +2919,6 @@ std::size_t raw_mesh_node_owner_t::drain_monitor_events (
                       _lifecycle_mutex);
                     (void) _connections.disconnect (
                       node_routing_id, connection_id);
-                }
-            }
-        } else if (event->event == zlink::monitor_event::disconnected) {
-            bool known = false;
-            {
-                std::lock_guard lifecycle_lock (_lifecycle_mutex);
-                known = _connections.disconnect (
-                  node_routing_id, connection_id);
-            }
-            if (known) {
-                const auto removed = _topology.disconnect (
-                  node_routing_id, connection_id);
-                (void) _liveness.disconnect (
-                  node_routing_id, connection_id);
-                if (removed) {
-                    discard_pending_unadmitted_applications (
-                      node_routing_id);
                 }
             }
         }

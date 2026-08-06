@@ -54,6 +54,16 @@ public final class ConsumerEndpoints {
         return requestProfile(request, Duration.ofSeconds(5));
     }
 
+    @PostMapping("/profile/request/outcome")
+    public CompletionStage<Contracts.RequestOutcome> profileRequestOutcome(
+        @RequestBody Contracts.ProfileReq request) {
+        return requestProfile(request, Duration.ofSeconds(5))
+            .handle((reply, error) -> error == null
+                ? new Contracts.RequestOutcome(request.value(), reply.providerRid(), false, "")
+                : new Contracts.RequestOutcome(
+                    request.value(), "", true, FailureEvidence.from(error).errorKind()));
+    }
+
     @PostMapping("/workflow/request")
     public CompletionStage<Contracts.WorkflowRes> workflowRequest(@RequestBody Contracts.WorkflowReq request) {
         return client.requestToChannel(Contracts.WORKFLOW_CHANNEL, request)

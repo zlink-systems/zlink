@@ -22,6 +22,7 @@
 #include <set>
 #include <span>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -94,6 +95,9 @@ class raw_mesh_connection_candidates_t
     bool disconnect (
       const std::vector<std::uint8_t> &node_routing_id,
       const std::vector<std::uint8_t> &connection_id);
+    std::optional<std::vector<std::uint8_t>> disconnect_by_connection_id (
+      const std::vector<std::uint8_t> &connection_id,
+      std::string_view remote_endpoint = {});
     std::size_t size (
       const std::vector<std::uint8_t> &node_routing_id) const;
 
@@ -131,6 +135,9 @@ class raw_mesh_node_owner_t
     bool connect_peer (const std::string &endpoint);
     bool connect_peer (const std::string &endpoint,
                        service_node_descriptor_t expected_descriptor);
+    void disconnect_peer (const std::string &endpoint) noexcept;
+    void disconnect_peer (const std::vector<std::uint8_t> &expected_routing_id,
+                          const std::string &endpoint) noexcept;
     void expect_peer (service_node_descriptor_t expected_descriptor);
     void forget_peer (const std::vector<std::uint8_t> &node_routing_id,
                       const std::string &endpoint);

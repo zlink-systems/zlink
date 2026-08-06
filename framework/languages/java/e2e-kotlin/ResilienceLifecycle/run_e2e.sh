@@ -266,7 +266,9 @@ start_consumer() {
 
 read -r API_A API_B API_A_REPLACEMENT API_B_GREEN HTTP_A HTTP_B HTTP_A_REPLACEMENT HTTP_B_GREEN CONSUMER_HTTP <<<"$(reserve_ports)"
 
-gradle_run clean installDist
+if [[ "${ZLINK_KOTLIN_E2E_SKIP_BUILD:-false}" != "true" ]]; then
+  gradle_run clean installDist
+fi
 
 start_provider api-a "${API_A}" "${HTTP_A}"
 PROVIDER_A_PID="${pids[-1]}"
@@ -518,6 +520,17 @@ ZLINK_KOTLIN_E2E_HTTP_B_ENDPOINT="${HTTP_B}" \
 ZLINK_KOTLIN_E2E_LOG_DIR="${log_dir}" \
   zlink_kotlin_e2e_run "$(client_bin)" >"${log_dir}/client-cleanup.stdout.log" 2>"${log_dir}/client-cleanup.stderr.log"
 fi
+
+case "${SCENARIO}" in
+  RL-E1|RL-E2|RL-E3|RL-E4|RL-E5|RL-F1|RL-F2|RL-F3|RL-F4|RL-F5|RL-F6|RL-F7|RL-F8|RL-F9|RL-F10|RL-F11|RL-F12|RL-F13|RL-F14)
+    ZLINK_KOTLIN_E2E_SCENARIO="${SCENARIO}" \
+    ZLINK_KOTLIN_E2E_CONSUMER_HTTP_ENDPOINT="${CONSUMER_HTTP}" \
+    ZLINK_KOTLIN_E2E_HTTP_A_ENDPOINT="${CURRENT_HTTP_A}" \
+    ZLINK_KOTLIN_E2E_HTTP_B_ENDPOINT="${HTTP_B}" \
+    ZLINK_KOTLIN_E2E_LOG_DIR="${log_dir}" \
+      zlink_kotlin_e2e_run "$(client_bin)" >"${log_dir}/client-common.stdout.log" 2>"${log_dir}/client-common.stderr.log"
+    ;;
+esac
 
 for log in "${log_dir}"/client-*.stdout.log; do
   [[ -f "${log}" ]] && cat "${log}"

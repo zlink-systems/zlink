@@ -20,11 +20,6 @@ internal sealed class ZLinkBackendDealerSocketWrapper(IDealerSocket nativeSocket
         nativeSocket.Bind(endpoint);
     }
 
-    public void SetChannelName(string channelName)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(channelName);
-    }
-
     public void SetMaxMessageSize(long value)
     {
         nativeSocket.Options.MaxMessageSize = value;
@@ -144,16 +139,11 @@ internal sealed class ZLinkBackendDealerSocketWrapper(IDealerSocket nativeSocket
         }
     }
 
-    public Received? Recv(RecvFlags flags = RecvFlags.None)
+    public bool Recv(Received storage, RecvFlags flags = RecvFlags.None)
     {
-        var received = Received.Create();
+        ArgumentNullException.ThrowIfNull(storage);
         lock (_gate)
-        {
-            if (nativeSocket.Recv(received, flags)) return received;
-        }
-
-        received.Dispose();
-        return null;
+            return nativeSocket.Recv(storage, flags);
     }
 
     public bool Reply(

@@ -3,12 +3,13 @@ using System.Threading.Channels;
 using Zlink.Framework.Runtime.Dispatch;
 namespace Zlink.Framework.Runtime.Channels;
 
-internal sealed class ZLinkChannelApplicationDispatchQueue : IAsyncDisposable
+internal sealed class ZLinkChannelApplicationDispatchQueue<TWork> : IAsyncDisposable
 {
     private const int Capacity = 1024;
     private static readonly TimeSpan ShutdownJoinTimeout =
         TimeSpan.FromSeconds(1);
-    private readonly Channel<DispatchWork> _queue = Channel.CreateBounded<DispatchWork>(
+    private readonly Channel<DispatchWork<TWork>> _queue =
+        Channel.CreateBounded<DispatchWork<TWork>>(
         new BoundedChannelOptions(Capacity)
         {
             FullMode = BoundedChannelFullMode.Wait,
@@ -20,6 +21,8 @@ internal sealed class ZLinkChannelApplicationDispatchQueue : IAsyncDisposable
     private readonly CancellationTokenSource _stop;
     private readonly string _name;
     private readonly Task _worker;
+    private readonly Func<TWork, CancellationToken, ValueTask> _dispatch;
+    private readonly Action<TWork> _reject;
     private int _stopped;
 
     internal ZLinkChannelReplyGate ReplyGate { get; } = new();
@@ -27,10 +30,14 @@ internal sealed class ZLinkChannelApplicationDispatchQueue : IAsyncDisposable
     internal ZLinkChannelApplicationDispatchQueue(
         string name,
         IZLinkRuntimeFailureReporter errorSink,
-        CancellationToken laneCancellationToken)
+        CancellationToken laneCancellationToken,
+        Func<TWork, CancellationToken, ValueTask> dispatch,
+        Action<TWork> reject)
     {
         _name = name;
         _errorSink = errorSink;
+        _dispatch = dispatch ?? throw new ArgumentNullException(nameof(dispatch));
+        _reject = reject ?? throw new ArgumentNullException(nameof(reject));
         _stop = CancellationTokenSource.CreateLinkedTokenSource(
             laneCancellationToken);
         _worker = Task.Run(
@@ -39,19 +46,15 @@ internal sealed class ZLinkChannelApplicationDispatchQueue : IAsyncDisposable
     }
 
     internal ValueTask<bool> PostAsync(
-        Func<CancellationToken, ValueTask> dispatch,
-        Action reject,
+        TWork payload,
         ZLinkInboundDispatchBudget budget,
         ulong payloadBytes,
         CancellationToken cancellationToken,
         bool overageReservation = false)
     {
-        ArgumentNullException.ThrowIfNull(dispatch);
-        ArgumentNullException.ThrowIfNull(reject);
         ArgumentNullException.ThrowIfNull(budget);
-        var work = new DispatchWork(
-            dispatch,
-            reject,
+        var work = new DispatchWork<TWork>(
+            payload,
             budget,
             payloadBytes,
             overageReservation);
@@ -122,7 +125,8 @@ internal sealed class ZLinkChannelApplicationDispatchQueue : IAsyncDisposable
                 {
                     work.Budget.HandlerStarted(work.PayloadBytes);
                     handlerStarted = true;
-                    await work.Dispatch(cancellationToken).ConfigureAwait(false);
+                    await _dispatch(work.Payload, cancellationToken)
+                        .ConfigureAwait(false);
                 }
                 catch (OperationCanceledException)
                     when (cancellationToken.IsCancellationRequested)
@@ -153,11 +157,11 @@ internal sealed class ZLinkChannelApplicationDispatchQueue : IAsyncDisposable
         }
     }
 
-    private void Reject(DispatchWork work)
+    private void Reject(DispatchWork<TWork> work)
     {
         try
         {
-            work.Reject();
+            _reject(work.Payload);
         }
         catch (Exception exception)
         {
@@ -183,9 +187,8 @@ internal sealed class ZLinkChannelApplicationDispatchQueue : IAsyncDisposable
         }
     }
 
-    private sealed record DispatchWork(
-        Func<CancellationToken, ValueTask> Dispatch,
-        Action Reject,
+    private readonly record struct DispatchWork<TPayload>(
+        TPayload Payload,
         ZLinkInboundDispatchBudget Budget,
         ulong PayloadBytes,
         bool OverageReservation);

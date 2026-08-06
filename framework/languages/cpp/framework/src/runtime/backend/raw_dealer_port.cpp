@@ -154,9 +154,8 @@ std::optional<raw_message_t> raw_dealer_port_t::try_receive ()
              == 0) {
         return std::nullopt;
     }
-    zlink::received_t received;
     const auto result =
-      _socket->recv (received, zlink::recv_flags_t::dontwait);
+      _socket->recv (_received, zlink::recv_flags_t::dontwait);
     if (result == static_cast<int> (zlink::recv_result_t::no_data)
         || result == static_cast<int> (zlink::recv_result_t::busy)
         || (result == -1
@@ -166,7 +165,9 @@ std::optional<raw_message_t> raw_dealer_port_t::try_receive ()
     if (result != 0) {
         throw std::runtime_error ("raw dealer receive failed");
     }
-    return copy_parts (received.parts ());
+    auto parts = copy_parts (_received.parts ());
+    _received.close ();
+    return parts;
 }
 
 void raw_dealer_port_t::close () noexcept

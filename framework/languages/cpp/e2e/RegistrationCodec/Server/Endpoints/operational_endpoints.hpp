@@ -232,6 +232,43 @@ class codec_roundtrip_handler_t
     zlink::framework::channel_client_t &_channels;
 };
 
+class codec_json_golden_handler_t
+{
+  public:
+    using dependency_types = zlink::framework::dependency_list_t<zlink::framework::channel_client_t>;
+
+    explicit codec_json_golden_handler_t (zlink::framework::channel_client_t &channels) :
+        _channels (channels)
+    {
+    }
+
+    zlink::framework::http_response_t handle (const zlink::framework::http_request_t &)
+    {
+        const auto reply = request_channel_with_retry<json_golden_res_t> (
+          _channels,
+          json_golden_req_t{.display_name = "Ada Lovelace",
+                            .status = "ready",
+                            .balance = -9'223'372'036'854'775'000,
+                            .payload = {0x00, 0x7f, 0x80, 0xff},
+                            .score = 2'147'000'001,
+                            .ratio = 0.125,
+                            .optional_note = std::nullopt});
+        if (reply.display_name != "Ada Lovelace" || reply.status != "ready"
+            || reply.balance != -9'223'372'036'854'775'000
+            || reply.payload != std::vector<std::uint8_t>{0x00, 0x7f, 0x80, 0xff}
+            || reply.score != 2'147'000'001 || reply.ratio != 0.125
+            || reply.optional_note.has_value ()) {
+            throw std::runtime_error ("RC-B6 JSON golden value was not restored");
+        }
+        if (reply.content_type != "application/json")
+            throw std::runtime_error ("RC-B6 expected the default JSON content type");
+        return json_response (reply);
+    }
+
+  private:
+    zlink::framework::channel_client_t &_channels;
+};
+
 class codec_coexistence_handler_t
 {
   public:

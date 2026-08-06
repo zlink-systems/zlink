@@ -1929,8 +1929,6 @@ public sealed class StreamSessionForcedCleanupTests
 
         public void Bind(string endpoint) { }
 
-        public void SetChannelName(string channelName) { }
-
         public void SetTlsServer(string certPath, string keyPath, bool requireClientCert) { }
 
         public void OnSendReady(Action handler) { }

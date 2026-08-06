@@ -617,6 +617,46 @@ public final class ZLinkFrameworkRuntime
         return channels.fanoutRuntime();
     }
 
+    /**
+     * Returns the endpoint the current local listener provides to remote
+     * processes. The query only succeeds after the selected listener has
+     * completed its bind operation.
+     */
+    public systems.zlink.framework.monitoring.ZLinkListenerStatus listenerStatus(
+        systems.zlink.framework.monitoring.ZLinkListenerKind kind,
+        String name) {
+        java.util.Objects.requireNonNull(kind, "kind");
+        if (name == null || name.isBlank()) {
+            throw new IllegalArgumentException("name is required");
+        }
+        String endpoint = switch (kind) {
+            case ROUTE_MESH -> {
+                systems.zlink.framework.runtime.mesh.MeshNodeRegistration mesh =
+                    registration.meshNodes().stream()
+                        .filter(value -> value.meshName().equals(name))
+                        .findFirst()
+                        .orElseThrow(() -> new ZLinkConfigurationException(
+                            "RouteMesh is not configured: " + name));
+                systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode node =
+                    meshNodes.nodesByName().get(name);
+                if (node == null) {
+                    throw new ZLinkConfigurationException(
+                        "RouteMesh is not started: " + name);
+                }
+                String actual = node.status().localEndpoint();
+                if (actual == null || actual.isBlank() || actual.endsWith(":0")) {
+                    throw new ZLinkConfigurationException(
+                        "RouteMesh listener endpoint is not ready: " + name);
+                }
+                yield mesh.advertisedEndpoint(actual);
+            }
+            case CLIENT_SERVER, FANOUT -> channels.listenerEndpoint(kind, name);
+            case STREAM -> streams.listenerEndpoint(name);
+        };
+        return new systems.zlink.framework.monitoring.ZLinkListenerStatus(
+            kind, name, endpoint, java.time.Instant.now());
+    }
+
     public ZLinkSpotManager spotManager() {
         if (spots == null) {
             throw new ZLinkConfigurationException("Spot runtime is not configured");
@@ -1848,8 +1888,14 @@ public final class ZLinkFrameworkRuntime
     }
 
     private boolean workloadsDrained() {
+        systems.zlink.framework.runtime.internal.dispatch
+            .ZLinkInboundDispatchBudget.Snapshot inbound =
+                registration.inboundDispatchBudget().snapshot();
         return (spots == null || spots.drainComplete())
-            && (actors == null || actors.drainComplete());
+            && (actors == null || actors.drainComplete())
+            && inbound.pendingPayloadBytes() == 0
+            && registration.inboundDispatchBudget()
+                .pendingCompletionSends() == 0;
     }
 
     private void completeDrain() {

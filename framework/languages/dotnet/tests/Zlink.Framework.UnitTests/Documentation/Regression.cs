@@ -19,6 +19,7 @@ public sealed class RegressionTests
         "dotnet-http-client.ko.md",
         "regression-test-matrix.ko.md",
         "backend-dependency-policy.ko.md",
+        "runtime-integration-and-ownership.ko.md",
     ];
 
     /// <summary>

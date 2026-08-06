@@ -21,6 +21,7 @@ public final class AwaitProbeSpot implements ZLinkSpot<AwaitActor> {
     private String persistentValue = "";
     private int persistentEventCount;
     private boolean replayed;
+    private int counter;
     private final Map<String, TimerScenario> timerScenarios = new HashMap<>();
     private final Map<String, ZLinkTimer> timers = new HashMap<>();
 
@@ -57,6 +58,12 @@ public final class AwaitProbeSpot implements ZLinkSpot<AwaitActor> {
         context.handlers().addHandler(AwaitProbeHandlers.SpotActorFastHandler.class);
         context.handlers().addHandler(AwaitProbeHandlers.SpotActorJoinHandler.class);
         context.handlers().addHandler(AwaitProbeHandlers.PersistentRoomStateHandler.class);
+        context.handlers().addHandler(AwaitProbeHandlers.CounterResetMsgHandler.class);
+        context.handlers().addHandler(AwaitProbeHandlers.CounterAwaitMsgHandler.class);
+        context.handlers().addHandler(AwaitProbeHandlers.CounterReadHandler.class);
+        context.handlers().addHandler(AwaitProbeHandlers.IoWorkerMsgHandler.class);
+        context.handlers().addHandler(AwaitProbeHandlers.IoWorkerBatchReqHandler.class);
+        context.handlers().addHandler(AwaitProbeHandlers.CpuWorkerMsgHandler.class);
     }
 
     public synchronized CompletionStage<Void> startTimer(Contracts.TimerStartMsg command) {
@@ -133,6 +140,18 @@ public final class AwaitProbeSpot implements ZLinkSpot<AwaitActor> {
         return new Contracts.PersistentRoomStateRes(
             context.spotId(), persistentValue, persistentEventCount,
             replayed, evidence.nodeRid());
+    }
+
+    public synchronized int counter() {
+        return counter;
+    }
+
+    public synchronized void resetCounter(int value) {
+        counter = value;
+    }
+
+    public synchronized int incrementCounter() {
+        return ++counter;
     }
 
     @Override

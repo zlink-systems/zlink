@@ -32,6 +32,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.locks.LockSupport;
 import java.util.function.Supplier;
+import java.util.logging.Level;
 import java.util.logging.Logger;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.errors.ZlinkSubmitException;
@@ -90,6 +91,7 @@ import systems.zlink.framework.runtime.handlers.ZLinkScannedHandlerSurface;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationAdapter;
 import systems.zlink.framework.runtime.internal.channels.ZLinkClientServerRuntimeConfiguration;
 import systems.zlink.framework.runtime.internal.channels.ZLinkFanoutRuntimeConfiguration;
+import systems.zlink.framework.runtime.internal.service.ZLinkClassicFanoutLiveness;
 import systems.zlink.framework.runtime.messaging.ZLinkPayloadEncoding;
 import systems.zlink.framework.runtime.messaging.ZLinkMessagePayloads;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorReply;
@@ -138,6 +140,7 @@ public final class ZLinkChannelRuntime
     private final ZLinkChannelMessageDispatcher messageDispatcher;
     private final ZLinkChannelRouteDispatcher routeDispatcher;
     private ZLinkFanoutLocationRuntime fanoutLocationRuntime;
+    private ZLinkManualFanoutRuntime manualFanoutRuntime;
     private volatile Supplier<ZLinkFrameworkRuntimeState> hostState =
         () -> ZLinkFrameworkRuntimeState.SERVING;
     private final systems.zlink.framework.monitoring.ZLinkClientServerRuntime
@@ -148,6 +151,7 @@ public final class ZLinkChannelRuntime
         fanoutRuntime = new ZLinkFanoutRuntimeView(
             sockets,
             () -> fanoutLocationRuntime,
+            () -> manualFanoutRuntime,
             () -> hostState.get());
     private Supplier<ZLinkInternalSpotNode> spotRouteBridgeOwner;
     private final ExecutorService spotRouteBridgeExecutor = Executors.newSingleThreadExecutor(task -> {
@@ -199,6 +203,12 @@ public final class ZLinkChannelRuntime
     public systems.zlink.framework.monitoring.ZLinkFanoutRuntime
         fanoutRuntime() {
         return fanoutRuntime;
+    }
+
+    public String listenerEndpoint(
+        systems.zlink.framework.monitoring.ZLinkListenerKind kind,
+        String channelName) {
+        return sockets.listenerEndpoint(kind, channelName);
     }
 
     public void setHostStateSupplier(
@@ -529,14 +539,26 @@ public final class ZLinkChannelRuntime
             attachProcessLocalClientServerAdmissions(
                 registration.channels());
             timeoutExecutor.scheduleAtFixedRate(
-                () -> sockets.tickClientServerLiveness(
-                    System.nanoTime(), defaultRequestTimeout),
+                () -> sockets.tickClientServerLiveness(System.nanoTime()),
                 100,
                 100,
                 TimeUnit.MILLISECONDS);
         }
         installClientServerLocationRuntime(handlerFactory);
+        installManualFanoutRuntime(registration.channels());
         installFanoutLocationRuntime(handlerFactory);
+        List<String> fanoutPublishers = registration.channels().stream()
+            .filter(channel -> channel.kind() == ChannelKind.FANOUT
+                && channel.publisherEnabled())
+            .map(ChannelRegistration::name)
+            .toList();
+        if (!fanoutPublishers.isEmpty()) {
+            timeoutExecutor.scheduleAtFixedRate(
+                () -> publishFanoutBeacons(fanoutPublishers),
+                0,
+                ZLinkClassicFanoutLiveness.DEFAULT_BEACON_INTERVAL.toMillis(),
+                TimeUnit.MILLISECONDS);
+        }
     }
 
 
@@ -681,7 +703,7 @@ public final class ZLinkChannelRuntime
         if (backendFactory == null
             || registrations.stream().noneMatch(
                 channel -> channel.kind() == ChannelKind.FANOUT
-                    && channel.automaticSubscriberEnabled())) {
+                    && channel.subscriberEnabled())) {
             return null;
         }
         try {
@@ -689,6 +711,44 @@ public final class ZLinkChannelRuntime
                 adapterOptions);
         } catch (UnsupportedOperationException unavailable) {
             return null;
+        }
+    }
+
+    private void installManualFanoutRuntime(
+        List<ChannelRegistration> registrations) {
+        List<ChannelRegistration> manualChannels = registrations.stream()
+            .filter(channel -> channel.kind() == ChannelKind.FANOUT
+                && channel.subscriberEnabled()
+                && !channel.automaticSubscriberEnabled())
+            .toList();
+        if (manualChannels.isEmpty()) return;
+        ZLinkManualFanoutRuntime runtime = new ZLinkManualFanoutRuntime(
+            channelBackend,
+            fanoutMonitoringBackend,
+            context,
+            messageDispatcher::dispatchPublish);
+        manualFanoutRuntime = runtime;
+        for (ChannelRegistration channel : manualChannels) {
+            channel.subscriberConnections().attach(
+                runtime.connections(channel.name()));
+        }
+        runtime.start();
+    }
+
+    private void publishFanoutBeacons(List<String> channelNames) {
+        List<byte[]> record = ZLinkClassicFanoutLiveness.beaconRecord();
+        String topic = new String(record.getFirst(), StandardCharsets.UTF_8);
+        for (String channelName : channelNames) {
+            ZLinkBackendPublisherSocket publisher = sockets.publisher(channelName);
+            if (publisher == null) continue;
+            try (Message payload = Message.from(record.get(1))) {
+                publisher.publish(topic, List.of(payload), SendFlags.DONT_WAIT);
+            } catch (RuntimeException failure) {
+                LOGGER.log(Level.WARNING,
+                    "classic fanout liveness beacon publish failed for "
+                        + channelName,
+                    failure);
+            }
         }
     }
 
@@ -932,7 +992,8 @@ public final class ZLinkChannelRuntime
                 encoded.contentType());
         }
         throw new ZLinkConfigurationException(
-            "channel is not configured: " + channelName);
+            ZLinkFrameworkErrorKind.NOT_FOUND,
+            "channel has no request route: " + channelName);
     }
 
     private ZLinkPayloadEncoding.EncodedPayload encodePayload(Object message) {
@@ -982,7 +1043,8 @@ public final class ZLinkChannelRuntime
                 encoded.contentType());
         }
         throw new ZLinkConfigurationException(
-            "channel is not configured: " + channelName);
+            ZLinkFrameworkErrorKind.NOT_FOUND,
+            "channel has no request route: " + channelName);
     }
 
     /**
@@ -1001,9 +1063,16 @@ public final class ZLinkChannelRuntime
         ZLinkBackendDealerSocket ready =
             sockets.awaitClientForOutbound(channelName, bound);
         if (ready == null) {
+            boolean knownUnavailableTarget = sockets.clientServerTargetSnapshots(channelName)
+                .stream()
+                .anyMatch(snapshot -> !snapshot.connectionReady());
             throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.NOT_FOUND,
-                "client/server channel has no ready server: " + channelName);
+                knownUnavailableTarget
+                    ? ZLinkFrameworkErrorKind.UNAVAILABLE
+                    : ZLinkFrameworkErrorKind.NOT_FOUND,
+                knownUnavailableTarget
+                    ? "client/server channel target is unavailable: " + channelName
+                    : "client/server channel has no known server: " + channelName);
         }
         return ready;
     }
@@ -1028,6 +1097,7 @@ public final class ZLinkChannelRuntime
         String topic,
         Object message) {
         rejectAfterRelocationReady("Channel publish");
+        requireApplicationFanoutTopic(topic);
         ZLinkPayloadEncoding.EncodedPayload encoded =
             encodePayload(message);
         return new PublishCall(
@@ -1037,6 +1107,15 @@ public final class ZLinkChannelRuntime
             encoded.payload(),
             Optional.of(encoded.packetName()),
             encoded.contentType());
+    }
+
+    static void requireApplicationFanoutTopic(String topic) {
+        Objects.requireNonNull(topic, "topic");
+        if (ZLinkClassicFanoutLiveness.isReservedTopic(
+                topic.getBytes(StandardCharsets.UTF_8))) {
+            throw new ZLinkConfigurationException(
+                "fanout topic is reserved for transport liveness");
+        }
     }
 
     private static void rejectAfterRelocationReady(String operation) {
@@ -1487,6 +1566,9 @@ public final class ZLinkChannelRuntime
         beginClose();
         if (fanoutLocationRuntime != null) {
             fanoutLocationRuntime.close();
+        }
+        if (manualFanoutRuntime != null) {
+            manualFanoutRuntime.close();
         }
         receiveLoops.close();
         spotRouteBridgeDrainLoopExecutor.shutdownNow();

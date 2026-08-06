@@ -7,11 +7,13 @@ import java.util.Properties;
 
 public record ClientOptions(
     String streamEndpoint, String playHttpEndpoint, String playBHttpEndpoint,
-    String sessionHttpEndpoint, String shutdownRequestId, String shutdownSpotRid) {
+    String sessionHttpEndpoint, String shutdownRequestId, String shutdownSpotRid,
+    String controlDirectory) {
     public ClientOptions {
         required(streamEndpoint, "streamEndpoint"); required(playHttpEndpoint, "playHttpEndpoint");
         required(playBHttpEndpoint, "playBHttpEndpoint"); required(sessionHttpEndpoint, "sessionHttpEndpoint");
         shutdownRequestId = optional(shutdownRequestId); shutdownSpotRid = optional(shutdownSpotRid);
+        controlDirectory = optional(controlDirectory);
     }
     public static ClientOptions load(String path) {
         Properties values = new Properties();
@@ -19,10 +21,12 @@ public record ClientOptions(
         catch (Exception error) { throw new IllegalStateException("Could not load AutomaticTurnDispatch client config", error); }
         return new ClientOptions(required(values, "streamEndpoint"), required(values, "playHttpEndpoint"),
             required(values, "playBHttpEndpoint"), required(values, "sessionHttpEndpoint"),
-            values.getProperty("shutdownRequestId", ""), values.getProperty("shutdownSpotRid", ""));
+            values.getProperty("shutdownRequestId", ""), values.getProperty("shutdownSpotRid", ""),
+            values.getProperty("controlDirectory", ""));
     }
     public String requiredShutdownRequestId() { required(shutdownRequestId, "shutdownRequestId"); return shutdownRequestId; }
     public String requiredShutdownSpotRid() { required(shutdownSpotRid, "shutdownSpotRid"); return shutdownSpotRid; }
+    public String requiredControlDirectory() { required(controlDirectory, "controlDirectory"); return controlDirectory; }
     private static String required(Properties values, String name) { String value = values.getProperty(name); required(value, name); return value; }
     private static String optional(String value) { return value == null ? "" : value; }
     private static void required(String value, String name) {

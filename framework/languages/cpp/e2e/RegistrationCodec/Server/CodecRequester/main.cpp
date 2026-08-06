@@ -29,6 +29,7 @@ int main (int argc, char **argv)
         options.http ()
           .listen (http_endpoint)
           .map_health ("/health")
+          .map_post<rc_server::codec_json_golden_handler_t> ("/codec/json-golden")
           .map_post<rc_server::codec_mismatch_handler_t> ("/codec/mismatch");
     });
 

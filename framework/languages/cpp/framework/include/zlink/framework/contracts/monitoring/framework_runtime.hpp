@@ -9,9 +9,29 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <string>
 
 namespace zlink::framework
 {
+
+enum class listener_kind_t
+{
+    route_mesh,
+    client_server,
+    fanout,
+    stream
+};
+
+struct listener_status_t
+{
+    listener_kind_t kind = listener_kind_t::route_mesh;
+    std::string name;
+    std::string endpoint;
+    std::chrono::system_clock::time_point observed_at{};
+
+    friend bool operator== (const listener_status_t &,
+                            const listener_status_t &) = default;
+};
 
 struct observation_loss_t
 {
@@ -73,6 +93,9 @@ class framework_runtime_t
   public:
     virtual ~framework_runtime_t () = default;
     virtual framework_runtime_status_t status () const = 0;
+    virtual listener_status_t listener_status (
+      listener_kind_t kind,
+      std::string name) const = 0;
     virtual std::unique_ptr<runtime_observation_t>
     observe (
       std::size_t capacity,

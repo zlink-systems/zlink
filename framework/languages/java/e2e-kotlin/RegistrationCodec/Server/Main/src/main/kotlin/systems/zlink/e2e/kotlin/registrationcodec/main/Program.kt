@@ -20,6 +20,8 @@ import systems.zlink.e2e.kotlin.registrationcodec.EchoManualRes
 import systems.zlink.e2e.kotlin.registrationcodec.JsonEchoMsg
 import systems.zlink.e2e.kotlin.registrationcodec.JsonEchoReq
 import systems.zlink.e2e.kotlin.registrationcodec.JsonEchoRes
+import systems.zlink.e2e.kotlin.registrationcodec.JsonGoldenReq
+import systems.zlink.e2e.kotlin.registrationcodec.JsonGoldenRes
 import systems.zlink.e2e.kotlin.registrationcodec.PackedEchoMsg
 import systems.zlink.e2e.kotlin.registrationcodec.PackedEchoRes
 import systems.zlink.e2e.kotlin.registrationcodec.PackedEchoReq
@@ -34,6 +36,7 @@ import systems.zlink.e2e.kotlin.registrationcodec.main.handlers.DiLifecycleReque
 import systems.zlink.e2e.kotlin.registrationcodec.main.handlers.FirstOrderFilter
 import systems.zlink.e2e.kotlin.registrationcodec.main.handlers.JsonRequestHandler
 import systems.zlink.e2e.kotlin.registrationcodec.main.handlers.JsonSendHandler
+import systems.zlink.e2e.kotlin.registrationcodec.main.handlers.JsonGoldenRequestHandler
 import systems.zlink.e2e.kotlin.registrationcodec.main.handlers.ManualRequestHandler
 import systems.zlink.e2e.kotlin.registrationcodec.main.handlers.ManualSendHandler
 import systems.zlink.e2e.kotlin.registrationcodec.main.handlers.MsgpackRequestHandler
@@ -116,6 +119,7 @@ class ServerApplication {
     fun diScopedDependency(state: ScenarioState): DiScopedDependency = DiScopedDependency(state)
     @Bean fun jsonRequestHandler(state: ScenarioState): JsonRequestHandler = JsonRequestHandler(state)
     @Bean fun jsonSendHandler(state: ScenarioState): JsonSendHandler = JsonSendHandler(state)
+    @Bean fun jsonGoldenRequestHandler(state: ScenarioState): JsonGoldenRequestHandler = JsonGoldenRequestHandler(state)
     @Bean fun protobufRequestHandler(state: ScenarioState): ProtobufRequestHandler = ProtobufRequestHandler(state)
     @Bean fun protobufSendHandler(state: ScenarioState): ProtobufSendHandler = ProtobufSendHandler(state)
     @Bean fun msgpackRequestHandler(state: ScenarioState): MsgpackRequestHandler = MsgpackRequestHandler(state)

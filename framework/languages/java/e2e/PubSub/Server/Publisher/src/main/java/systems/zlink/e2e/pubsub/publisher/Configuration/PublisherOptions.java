@@ -6,14 +6,26 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 public record PublisherOptions(
     String httpEndpoint,
     String publisherEndpoint,
+    Integer publisherPort,
+    String routingId,
+    String routingIdPrefix,
+    String advertiseHost,
+    String channelName,
     String redisLocationEndpoint,
     String locationKeyPrefix,
     String logDir) {
     public PublisherOptions {
         required(httpEndpoint, "http-endpoint");
-        required(publisherEndpoint, "publisher-endpoint");
-        required(redisLocationEndpoint, "redis-location-endpoint");
-        required(locationKeyPrefix, "location-key-prefix");
+        if ((publisherEndpoint == null || publisherEndpoint.isBlank()) && publisherPort == null) {
+            throw new IllegalArgumentException(
+                "e2e.publisher-endpoint or e2e.publisher-port is required");
+        }
+        channelName = channelName == null || channelName.isBlank()
+            ? systems.zlink.e2e.pubsub.shared.Contracts.EVENT_CHANNEL
+            : channelName;
+        if (redisLocationEndpoint != null && !redisLocationEndpoint.isBlank()) {
+            required(locationKeyPrefix, "location-key-prefix");
+        }
         required(logDir, "log-dir");
     }
 

@@ -189,8 +189,9 @@ public sealed class BackendAdapterFactoryTests
         var deadline = DateTime.UtcNow + timeout;
         while (DateTime.UtcNow < deadline)
         {
-            var received = router.Recv(RecvFlags.DontWait);
-            if (received is not null) return received;
+            var received = Received.Create();
+            if (router.Recv(received, RecvFlags.DontWait)) return received;
+            received.Dispose();
             await Task.Delay(5);
         }
 

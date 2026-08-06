@@ -204,6 +204,14 @@ The application doesn't copy this value into subscriber configuration —
 it only uses it as observation material to confirm whether an automatic
 subscriber is following the current descriptor.
 
+The common query identifies a local listener by its listener kind and
+configured name. Its result contains the kind, name, advertised endpoint,
+and observation time. The query is successful only after that listener has
+completed bind; an unknown listener or a listener that has not completed
+bind is a configuration error. The exact method and value types are fixed
+by each language interface, but every implementation exposes the same four
+listener kinds: `ROUTE_MESH`, `CLIENT_SERVER`, `FANOUT`, and `STREAM`.
+
 ## 5. Records Per Listener Kind
 
 The confirmed

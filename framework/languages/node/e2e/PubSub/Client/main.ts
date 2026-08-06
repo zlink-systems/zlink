@@ -22,6 +22,8 @@ import { runPsD2 } from './Scenarios/ps-d2-channel-name-filter-scenario';
 import { runPsE2A } from './Scenarios/ps-e2a-automatic-subscriber-without-store-scenario';
 import { runPsE2B } from './Scenarios/ps-e2b-mixed-subscriber-mode-scenario';
 import { runPsE2C } from './Scenarios/ps-e2c-publisher-identity-validation-scenario';
+import { runPsD7B } from './Scenarios/ps-d7b-scenario';
+import { runPsF1 } from './Scenarios/ps-f1-scenario';
 
 async function main(): Promise<void> {
   const options = parseClientOptions(process.argv.slice(2));
@@ -76,7 +78,15 @@ async function main(): Promise<void> {
       options.redisEndpoint,
       options.redisKeyPrefix,
       processes
-    )
+    ),
+    'PS-D7B': () => runPsD7B(
+      options.publisherUrl,
+      subscribers[0],
+      options.lateSubscriberUrl,
+      processes,
+      options.publisherEndpoint
+    ),
+    'PS-F1': () => runPsF1(options.publisherUrl, subscribers[0])
   };
 
   try {

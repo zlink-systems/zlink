@@ -42,6 +42,7 @@ namespace zlink::framework::runtime
 {
 class offload_executor_t;
 class spot_address_resolver_t;
+class listener_status_registry_t;
 } // namespace zlink::framework::runtime
 
 namespace zlink::framework::detail
@@ -222,6 +223,8 @@ class channel_runtime_state_t
     dispatch_options_t dispatch;
     serializer_registry_t *serializers = nullptr;
     std::shared_ptr<monitoring_runtime_state_t> monitoring;
+    std::shared_ptr<runtime::listener_status_registry_t> listener_statuses;
+    std::map<std::string, std::string> fanout_publisher_advertise_hosts;
     bool auto_connect_active = false;
     bool shutdown = false;
     bool closed = false;
@@ -285,6 +288,12 @@ class channel_runtime_t
     std::size_t pending_limit () const noexcept;
     std::vector<channel_runtime_state_t::outbound_call_record_t> outbound_calls () const;
     void bind_serializers (serializer_registry_t &serializers) noexcept;
+    void bind_listener_statuses (
+      std::shared_ptr<runtime::listener_status_registry_t> statuses) noexcept;
+    void bind_fanout_advertise_hosts (
+      std::map<std::string, std::string> hosts) noexcept;
+    void initialize_manual_channel_publishers ();
+    void close_manual_channel_publishers () noexcept;
     void bind_spot_mesh_transport (std::string mesh_name,
                                    channel_runtime_state_t::spot_mesh_send_t send,
                                    channel_runtime_state_t::spot_mesh_request_t request);

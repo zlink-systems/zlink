@@ -9,6 +9,7 @@ import java.time.Duration;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import systems.zlink.e2e.pubsub.shared.Contracts;
 
 public final class ServerProcessLauncher {
     private static final Duration START_TIMEOUT = Duration.ofSeconds(3);
@@ -27,32 +28,75 @@ public final class ServerProcessLauncher {
     }
 
     public ManagedProcess startSubscriber(String rid, String topics, String httpEndpoint) {
-        String config = """
+        return startSubscriber(rid, topics, httpEndpoint, null, true, null, false, false);
+    }
+
+    public ManagedProcess startSubscriber(
+        String rid,
+        String topics,
+        String httpEndpoint,
+        Long handlerDelayMillis,
+        boolean includeAll,
+        String manualEndpoint,
+        boolean mixedMode,
+        boolean noStore) {
+        StringBuilder config = new StringBuilder("""
             e2e.rid=%s
             e2e.topics=%s
             e2e.http-endpoint=%s
-            e2e.redis-location-endpoint=%s
-            e2e.location-key-prefix=%s
             e2e.log-dir=%s
-            e2e.delay.delay-millis=0
-            """.formatted(rid, topics, httpEndpoint, options.redisLocationEndpoint(),
-                options.locationKeyPrefix(), options.logDir());
-        ManagedProcess process = start(rid, subscriberBin(), config);
+            e2e.include-all=%s
+            e2e.delay.delay-millis=%d
+            """.formatted(rid, topics, httpEndpoint, options.logDir(), includeAll,
+                handlerDelayMillis == null ? 0L : handlerDelayMillis));
+        if (!noStore) {
+            config.append("e2e.redis-location-endpoint=").append(options.redisLocationEndpoint()).append('\n');
+            config.append("e2e.location-key-prefix=").append(options.locationKeyPrefix()).append('\n');
+        }
+        if (manualEndpoint != null && !manualEndpoint.isBlank()) {
+            config.append("e2e.manual-endpoint=").append(manualEndpoint).append('\n');
+        }
+        if (mixedMode) config.append("e2e.mixed-mode=true\n");
+        ManagedProcess process = start(rid, subscriberBin(), config.toString());
         waitHealthy(rid, httpEndpoint);
         return process;
     }
 
     public ManagedProcess startPublisher(String name) {
-        String config = """
+        return startPublisher(
+            name, options.publisherEndpoint(), options.publisherHttp(),
+            "publisher-a", Contracts.EVENT_CHANNEL, false, null, null);
+    }
+
+    public ManagedProcess startPublisher(
+        String name,
+        String publisherEndpoint,
+        String httpEndpoint,
+        String routingId,
+        String channelName,
+        boolean noStore,
+        Integer listenPort,
+        String advertiseHost) {
+        StringBuilder config = new StringBuilder("""
             e2e.http-endpoint=%s
-            e2e.publisher-endpoint=%s
-            e2e.redis-location-endpoint=%s
-            e2e.location-key-prefix=%s
             e2e.log-dir=%s
-            """.formatted(options.publisherHttp(), options.publisherEndpoint(),
-                options.redisLocationEndpoint(), options.locationKeyPrefix(), options.logDir());
-        ManagedProcess process = start(name, publisherBin(), config);
-        waitHealthy(name, options.publisherHttp());
+            e2e.channel-name=%s
+            e2e.routing-id=%s
+            """.formatted(httpEndpoint, options.logDir(), channelName, routingId));
+        if (listenPort == null) {
+            config.append("e2e.publisher-endpoint=").append(publisherEndpoint).append('\n');
+        } else {
+            config.append("e2e.publisher-port=").append(listenPort).append('\n');
+        }
+        if (!noStore) {
+            config.append("e2e.redis-location-endpoint=").append(options.redisLocationEndpoint()).append('\n');
+            config.append("e2e.location-key-prefix=").append(options.locationKeyPrefix()).append('\n');
+        }
+        if (advertiseHost != null && !advertiseHost.isBlank()) {
+            config.append("e2e.advertise-host=").append(advertiseHost).append('\n');
+        }
+        ManagedProcess process = start(name, publisherBin(), config.toString());
+        waitHealthy(name, httpEndpoint);
         return process;
     }
 
@@ -71,6 +115,96 @@ public final class ServerProcessLauncher {
         String result = http.post(options.publisherHttp() + "/admin/drain").trim();
         publisher.close();
         return result;
+    }
+
+    public void expectAutomaticSubscriberWithoutStoreFailure() {
+        String config = """
+            e2e.rid=negative-e2a
+            e2e.topics=all
+            e2e.http-endpoint=%s
+            e2e.log-dir=%s
+            e2e.include-all=true
+            e2e.delay.delay-millis=0
+            """.formatted(options.sub4Http(), options.logDir());
+        expectStartupFailure("PS-E2A", subscriberBin(), config,
+            "requires location auto-connect or manual connections");
+    }
+
+    public void expectMixedSubscriberModeFailure() {
+        String config = """
+            e2e.rid=negative-e2b
+            e2e.topics=all
+            e2e.http-endpoint=%s
+            e2e.log-dir=%s
+            e2e.include-all=true
+            e2e.delay.delay-millis=0
+            e2e.redis-location-endpoint=%s
+            e2e.location-key-prefix=%s
+            e2e.manual-endpoint=%s
+            e2e.mixed-mode=true
+            """.formatted(options.sub4Http(), options.logDir(),
+                options.redisLocationEndpoint(), options.locationKeyPrefix(),
+                options.publisherEndpoint());
+        expectStartupFailure("PS-E2B", subscriberBin(), config,
+            "cannot combine automatic subscriber discovery");
+    }
+
+    public void expectPublisherIdentityFailures() {
+        String base = """
+            e2e.http-endpoint=%s
+            e2e.publisher-endpoint=%s
+            e2e.log-dir=%s
+            e2e.channel-name=%s
+            e2e.redis-location-endpoint=%s
+            e2e.location-key-prefix=%s
+            """.formatted(options.publisher2Http(), options.publisher2Endpoint(),
+                options.logDir(), Contracts.EVENT_CHANNEL,
+                options.redisLocationEndpoint(), options.locationKeyPrefix());
+        expectStartupFailure("PS-E2C-missing", publisherBin(), base,
+            "exactly one publisher identity mode");
+        expectStartupFailure("PS-E2C-duplicate", publisherBin(), base + """
+            e2e.routing-id=publisher-fixed
+            e2e.routing-id-prefix=publisher-allocated
+            """, "exactly one publisher identity mode");
+    }
+
+    private void expectStartupFailure(
+        String name,
+        Path bin,
+        String config,
+        String expectedText) {
+        Path configPath = null;
+        try {
+            configPath = writeConfig(name, config);
+            Path stdout = Path.of(options.logDir(), name + ".stdout.log");
+            Path stderr = Path.of(options.logDir(), name + ".stderr.log");
+            Process process = new ProcessBuilder(
+                bin.toString(), "--config", configPath.toString())
+                .redirectOutput(stdout.toFile())
+                .redirectError(stderr.toFile())
+                .start();
+            if (!process.waitFor(30, TimeUnit.SECONDS)) {
+                process.destroyForcibly();
+                throw new IllegalStateException(name + " did not fail during startup");
+            }
+            if (process.exitValue() == 0) {
+                throw new IllegalStateException(name + " unexpectedly started successfully");
+            }
+            String output = Files.readString(stdout) + Files.readString(stderr);
+            if (!output.contains(expectedText)) {
+                throw new IllegalStateException(
+                    name + " did not expose the expected public configuration error: " + output);
+            }
+        } catch (IOException error) {
+            throw new IllegalStateException("failed to run " + name, error);
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("interrupted while running " + name, error);
+        } finally {
+            if (configPath != null) {
+                try { Files.deleteIfExists(configPath); } catch (IOException ignored) { }
+            }
+        }
     }
 
     public void waitPublisherRow(boolean present) {

@@ -28,6 +28,8 @@ public final class ChannelRegistration {
     private final Set<String> handlerGroups = new LinkedHashSet<>();
     private RoutingId routingId;
     private String routingIdPrefix;
+    private boolean fixedRoutingIdConfigured;
+    private boolean routingIdPrefixConfigured;
     private RoutingId routeRoutingId;
     private Duration defaultRequestTimeout;
 
@@ -270,6 +272,7 @@ public final class ChannelRegistration {
                     : "client/server channel routing id is required: " + name);
         }
         this.routingId = routingId;
+        fixedRoutingIdConfigured = true;
     }
 
     void setRoutingIdPrefix(String prefix) {
@@ -277,7 +280,7 @@ public final class ChannelRegistration {
             throw new ZLinkConfigurationException("routing ID prefix is required: " + name);
         }
         routingIdPrefix = prefix;
-        routingId = null;
+        routingIdPrefixConfigured = true;
     }
 
     void addClientManualEndpoint(String endpoint) {
@@ -466,6 +469,12 @@ public final class ChannelRegistration {
         if (fanout.publisherEnabled && fanout.publisherBinds.isEmpty()) {
             throw new ZLinkConfigurationException(
                 "fanout channel publisher requires at least one bind endpoint: " + name);
+        }
+        if (fanout.publisherEnabled && locationAutoConnectEnabled
+            && fixedRoutingIdConfigured == routingIdPrefixConfigured) {
+            throw new ZLinkConfigurationException(
+                "automatic fanout publisher requires exactly one publisher identity mode "
+                    + "(fixed routing ID or routing ID prefix): " + name);
         }
         if (fanout.subscriberEnabled
             && fanout.automaticSubscriberEnabled

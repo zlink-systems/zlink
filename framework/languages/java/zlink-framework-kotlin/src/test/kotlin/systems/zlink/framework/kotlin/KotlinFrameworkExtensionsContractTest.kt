@@ -434,6 +434,9 @@ class KotlinFrameworkExtensionsContractTest {
             actorId: String,
         ): CompletionStage<Optional<systems.zlink.framework.spots.SpotRef>> =
             CompletableFuture.completedFuture(Optional.empty())
+
+        override fun destroy(actor: ActorRef): CompletionStage<Boolean> =
+            CompletableFuture.completedFuture(false)
     }
 
     private class RecordingActorCall(

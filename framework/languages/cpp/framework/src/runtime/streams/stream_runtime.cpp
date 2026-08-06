@@ -735,7 +735,7 @@ stream_builder_t &stream_builder_t::bind (std::string endpoint)
 
 stream_builder_t &stream_builder_t::bind (std::uint16_t port)
 {
-    return bind ("tcp://0.0.0.0:" + std::to_string (port));
+    return bind ("tcp://127.0.0.1:" + std::to_string (port));
 }
 
 stream_builder_t &stream_builder_t::set_bind_host (std::string host)
@@ -835,6 +835,15 @@ std::vector<stream_snapshot_t> stream_runtime_t::snapshots () const
     result.reserve (_state->streams.size ());
     for (const auto &[_, state] : _state->streams) {
         result.push_back (state->snapshot);
+    }
+    return result;
+}
+
+std::map<std::string, std::optional<std::string>> stream_runtime_t::advertise_hosts () const
+{
+    std::map<std::string, std::optional<std::string>> result;
+    for (const auto &[name, state] : _state->streams) {
+        result.emplace (name, state->advertise_host);
     }
     return result;
 }

@@ -6,6 +6,9 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.core.env.StandardEnvironment;
 import java.nio.file.Path;
 import systems.zlink.e2e.pubsub.publisher.Configuration.PublisherOptions;
@@ -17,6 +20,8 @@ import systems.zlink.framework.locations.redis.ZLinkRedisLocationOptions;
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore;
 import systems.zlink.framework.spring.EnableZLinkFramework;
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer;
+import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 
 @EnableZLinkFramework
 @EnableConfigurationProperties(PublisherOptions.class)
@@ -49,8 +54,11 @@ public final class PublisherApplication {
         systems.zlink.framework.channels.ZLinkFanoutClient fanout,
         EvidenceStore evidence,
         ObjectMapper json,
-        systems.zlink.framework.spring.internal.runtime.ZLinkFrameworkLifecycle drain) {
-        return new PublisherEndpoints(options, fanout, evidence, json, drain);
+        systems.zlink.framework.spring.internal.runtime.ZLinkFrameworkLifecycle drain,
+        ConfigurableApplicationContext application,
+        ObjectProvider<ZLinkFrameworkRuntime> runtime) {
+        return new PublisherEndpoints(
+            options, fanout, evidence, json, drain, application, runtime);
     }
 
     @Bean
@@ -60,12 +68,26 @@ public final class PublisherApplication {
                 .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
                 .traceLogFile(options.logDir() + "/publisher-flow.log")
                 .traceLabel("java-ps-publisher");
-            framework.addFanoutChannel(Contracts.EVENT_CHANNEL)
-                .enablePublisher(options.publisherEndpoint());
+            var channel = framework.addFanoutChannel(options.channelName());
+            if (options.routingId() != null && !options.routingId().isBlank()) {
+                channel.setRoutingId(RoutingId.from(options.routingId()));
+            }
+            if (options.routingIdPrefix() != null && !options.routingIdPrefix().isBlank()) {
+                channel.setRoutingIdPrefix(options.routingIdPrefix());
+            }
+            if (options.advertiseHost() != null && !options.advertiseHost().isBlank()) {
+                channel.setAdvertiseHost(options.advertiseHost());
+            }
+            if (options.publisherPort() != null) {
+                channel.enablePublisher(options.publisherPort());
+            } else {
+                channel.enablePublisher(options.publisherEndpoint());
+            }
         };
     }
 
     @Bean
+    @ConditionalOnProperty(prefix = "e2e", name = "redis-location-endpoint")
     ZLinkRedisLocationStore locationStore(PublisherOptions options) {
         return new ZLinkRedisLocationStore(new ZLinkRedisLocationOptions()
             .setConnectionString(options.redisLocationEndpoint())

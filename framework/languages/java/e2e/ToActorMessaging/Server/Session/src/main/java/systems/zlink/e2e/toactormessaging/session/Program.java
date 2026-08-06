@@ -67,9 +67,10 @@ public final class Program {
             options.addLocationStore(new ZLinkRedisLocationStore(new ZLinkRedisLocationOptions()
                 .setConnectionString(config.redisLocationEndpoint())
                 .setKeyPrefix(config.locationKeyPrefix())));
-            options.addRouteMesh(Contracts.SPOT_MESH)
+            var spotMesh = options.addRouteMesh(Contracts.SPOT_MESH)
                 .listen(config.sessionSpotEndpoint())
                 .setRoutingId(RoutingId.from(rid));
+            spotMesh.objects().client();
             options.addStreamNode("to-actor-" + rid)
                 .bind(config.sessionStreamEndpoint())
                 .enableActorDispatch()
@@ -171,7 +172,10 @@ public final class Program {
             Contracts.BindActorRequest request) {
             Contracts.ActorRefWire wire = request.actorRef();
             ActorRef actor = new ActorRef(
-                RoutingId.fromHex(wire.nodeRidHex()), wire.actorId(), wire.generation());
+                wire.actorId(),
+                wire.generation(),
+                Contracts.SPOT_MESH,
+                RoutingId.fromHex(wire.nodeRidHex()));
             return context.actors().bindOrGet(actor).thenAccept(bound -> {
                 evidence.append(new Contracts.ActorEvidence(
                     "bind", actor.actorId(), "actor-bound",

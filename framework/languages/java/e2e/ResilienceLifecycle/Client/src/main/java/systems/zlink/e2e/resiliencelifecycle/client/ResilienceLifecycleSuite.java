@@ -23,6 +23,7 @@ import systems.zlink.e2e.resiliencelifecycle.client.Scenarios.RlD2ObserverFaultS
 import systems.zlink.e2e.resiliencelifecycle.client.Scenarios.RlD3DispatchErrorEvidenceScenario;
 import systems.zlink.e2e.resiliencelifecycle.client.Scenarios.RlD4MissingRequestHandlerScenario;
 import systems.zlink.e2e.resiliencelifecycle.client.Scenarios.RlD5MixedBurstScenario;
+import systems.zlink.e2e.resiliencelifecycle.client.Scenarios.CommonScenarioGapScenario;
 import systems.zlink.e2e.resiliencelifecycle.client.Support.ClientOptions;
 import systems.zlink.e2e.resiliencelifecycle.client.Support.ResilienceScenarioContext;
 import systems.zlink.e2e.resiliencelifecycle.client.Support.ResilienceProcessManager;
@@ -34,6 +35,7 @@ public final class ResilienceLifecycleSuite {
     private ResilienceProcessManager.ManagedProcess providerA;
     private ResilienceProcessManager.ManagedProcess providerB;
     private String currentHttpA;
+    private boolean blocked;
 
     public ResilienceLifecycleSuite(
         ClientOptions options,
@@ -45,11 +47,11 @@ public final class ResilienceLifecycleSuite {
         this.currentHttpA = options.httpAEndpoint();
     }
 
-    public void run() {
-        run("all");
+    public boolean run() {
+        return run("all");
     }
 
-    public void run(String scenario) {
+    public boolean run(String scenario) {
         processes.prepareControlDir();
         for (String role : startOrder) {
             if ("api-a".equals(role)) {
@@ -87,7 +89,22 @@ public final class ResilienceLifecycleSuite {
             case "RL-B1", "RL-B3", "RL-B4", "RL-B5", "RL-B6", "RL-D2", "RL-D3", "RL-D4" ->
                 runDefault(scenario);
             case "RL-C1", "RL-D5" -> runCleanup(scenario);
+            case "RL-E1", "RL-E2", "RL-E3", "RL-E4", "RL-E5",
+                "RL-F1", "RL-F2", "RL-F3", "RL-F4", "RL-F5", "RL-F6", "RL-F7",
+                "RL-F8", "RL-F9", "RL-F10", "RL-F11", "RL-F12", "RL-F13", "RL-F14" ->
+                runCommonScenario(scenario);
             default -> throw new IllegalArgumentException("unknown ResilienceLifecycle scenario: " + scenario);
+        }
+        return blocked;
+    }
+
+    private void runCommonScenario(String scenario) {
+        String consumerHttp = processes.reserveHttpEndpoint();
+        try (var consumerProcess = processes.startConsumer(
+            "consumer-common-" + scenario.toLowerCase(), consumerHttp, options.logDir())) {
+            ResilienceScenarioContext consumer = new ResilienceScenarioContext(consumerHttp, currentHttpA, options);
+            CommonScenarioGapScenario.run(scenario, consumer);
+            blocked = true;
         }
     }
 

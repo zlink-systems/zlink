@@ -25,18 +25,16 @@ handle_remote_spot_yield (zlink::framework::spot_context_t &context,
                   + spot_id + "|request=" + request.request_id + "|target="
                   + request.target_spot_id + "|handler=spot");
     auto call =
-      context
-        .request_to<yd::automatic_turn_dispatch_res_t> (
-          zlink::routing_id_t::from ("play-b"),
-          request.target_spot_id,
-          yd::await_req_t{.request_id = request.request_id,
-                          .delay_ms = request.delay_ms,
-                          .correlation_id = "remote-spot"})
+      context.request_to_spot (
+        request.target_spot_id,
+        yd::await_req_t{.request_id = request.request_id,
+                        .delay_ms = request.delay_ms,
+                        .correlation_id = "remote-spot"})
         .timeout (std::chrono::milliseconds (5000));
     evidence.add ("remote-await-released|rid=" + evidence.node_rid + "|spot="
                   + spot_id + "|request=" + request.request_id + "|target="
                   + request.target_spot_id + "|handler=spot");
-    auto target_reply = co_await call.submit ();
+    auto target_reply = co_await call.submit<yd::automatic_turn_dispatch_res_t> ();
     evidence.add ("remote-await-resumed|rid=" + evidence.node_rid + "|spot="
                   + spot_id + "|request=" + request.request_id + "|target="
                   + request.target_spot_id + "|targetNode=" + target_reply.node_rid

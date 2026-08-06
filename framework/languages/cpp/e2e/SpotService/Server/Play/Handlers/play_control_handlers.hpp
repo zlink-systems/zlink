@@ -12,36 +12,78 @@
 namespace
 {
 
+template <typename TRequest>
+zlink::framework::spot_create_result_t
+create_spot (zlink::framework::spot_manager_t &spots,
+             zlink::framework::spot_id_t spot_id,
+             std::string stable_type,
+             TRequest request)
+{
+    auto created = spots
+                     .get_or_create (std::move (spot_id), std::move (stable_type))
+                     .creation_request (std::move (request))
+                     .submit ()
+                     .result ();
+    if (!created) {
+        throw zlink::framework::framework_exception_t (
+          created.error_kind (),
+          created.error () ? created.error ()->what () : "Spot creation failed");
+    }
+    return created.value ();
+}
+
+bool close_spot (zlink::framework::spot_manager_t &spots,
+                 const zlink::framework::spot_id_t &spot_id)
+{
+    auto found = spots.find (spot_id).result ();
+    if (!found) {
+        throw zlink::framework::framework_exception_t (
+          found.error_kind (),
+          found.error () ? found.error ()->what () : "Spot lookup failed");
+    }
+    if (!found.value ()) {
+        return false;
+    }
+    auto closed = spots.close (*found.value ()).result ();
+    if (!closed) {
+        throw zlink::framework::framework_exception_t (
+          closed.error_kind (),
+          closed.error () ? closed.error ()->what () : "Spot close failed");
+    }
+    return closed.value ();
+}
+
 class spot_lifecycle_handler_t
 {
   public:
     using dependency_types =
-      zlink::framework::dependency_list_t<scenario_state_t, zlink::framework::spot_node_manager_t>;
+      zlink::framework::dependency_list_t<scenario_state_t, zlink::framework::spot_manager_t>;
     using request_type = e2e::lifecycle_req_t;
     using reply_type = e2e::lifecycle_res_t;
 
     spot_lifecycle_handler_t (scenario_state_t &state,
-                              zlink::framework::spot_node_manager_t &spots) :
+                              zlink::framework::spot_manager_t &spots) :
         _state (state), _spots (spots)
     {
     }
 
-    e2e::lifecycle_res_t handle (const e2e::lifecycle_req_t &request,
-                                 const zlink::framework::route_handler_context_t &)
+    e2e::lifecycle_res_t handle (
+      const e2e::lifecycle_req_t &request,
+      const zlink::framework::route_message_context_t &)
     {
         const auto rid = user_spot_id (request.key);
-        const auto created = _spots.get_or_create_spot (e2e::user_spot, rid, request);
-        const auto closed = _spots.close_spot (rid).result ();
+        const auto created = create_spot (_spots, rid, e2e::user_spot, request);
+        const auto closed = close_spot (_spots, rid);
         _state.record ("SpotLifecycleClosed", {}, rid,
-                       closed && closed.value () ? "closed" : "not-closed");
-        return {.spot_id = created.spot_id,
+                       closed ? "closed" : "not-closed");
+        return {.spot_id = std::string (created.spot.spot_id ()),
                 .created = created.state == zlink::framework::spot_create_state_t::created,
-                .closed = closed && closed.value ()};
+                .closed = closed};
     }
 
   private:
     scenario_state_t &_state;
-    zlink::framework::spot_node_manager_t &_spots;
+    zlink::framework::spot_manager_t &_spots;
 };
 
 class ensure_actor_handler_t
@@ -49,28 +91,24 @@ class ensure_actor_handler_t
   public:
     using dependency_types =
       zlink::framework::dependency_list_t<scenario_state_t,
-                                          zlink::framework::spot_node_manager_t,
                                           zlink::framework::session_actor_manager_t>;
     using request_type = e2e::ensure_actor_req_t;
     using reply_type = e2e::ensure_actor_res_t;
 
     ensure_actor_handler_t (scenario_state_t &state,
-                            zlink::framework::spot_node_manager_t &spots,
                             zlink::framework::session_actor_manager_t &actors) :
-        _state (state), _spots (spots), _actors (actors)
+        _state (state), _actors (actors)
     {
     }
 
     e2e::ensure_actor_res_t handle (
       const e2e::ensure_actor_req_t &request,
-      const zlink::framework::route_handler_context_t &)
+      const zlink::framework::route_message_context_t &)
     {
-        auto current = _spots.current_actor_ref (zlink::framework::actor_ref_t (
-          zlink::framework::actor_id_t (request.actor_id), 1, e2e::spot_mesh,
-          zlink::framework::node_rid_t::from_string (_state.node_rid)));
+        auto current = _actors.find (request.actor_id);
         if (current) {
             _state.record ("ActorEnsured", request.actor_id, {}, request.display_name);
-            return {.actor = from_actor_ref (*current)};
+            return {.actor = from_actor_ref (current->ref ())};
         }
         auto actor = _actors.get_or_create (e2e::actor_type, request.actor_id);
         if (!actor) {
@@ -84,32 +122,13 @@ class ensure_actor_handler_t
               bound.error_kind (),
               bound.error () ? bound.error ()->what () : "ensure actor bind failed");
         }
-        auto joined =
-          bound.value ()
-            .context ()
-            .join_entry_spot (zlink::framework::node_rid_t::from_string (_state.node_rid),
-                              zlink::framework::message_t {})
-            .async ()
-            .result ();
-        const auto *joined_accepted =
-          joined ? std::get_if<zlink::framework::actor_join_accepted_t<zlink::framework::message_t>> (&joined.value ()) : nullptr;
-        if (joined_accepted == nullptr) {
-            if (!joined) {
-                throw zlink::framework::framework_exception_t (
-                  joined.error_kind (),
-                  joined.error () ? joined.error ()->what () : "ensure actor entry join failed");
-            }
-            throw zlink::framework::framework_exception_t (
-              zlink::framework::framework_error_kind_t::rejected,
-              "ensure actor entry join was rejected");
-        }
+        bound.value ().context ().join_entry_spot ().defer ();
         _state.record ("ActorEnsured", request.actor_id, {}, request.display_name);
-        return {.actor = from_actor_ref (joined_accepted->actor)};
+        return {.actor = from_actor_ref (bound.value ().ref ())};
     }
 
   private:
     scenario_state_t &_state;
-    zlink::framework::spot_node_manager_t &_spots;
     zlink::framework::session_actor_manager_t &_actors;
 };
 
@@ -118,10 +137,10 @@ class create_spot_handler_t
   public:
     using dependency_types =
       zlink::framework::dependency_list_t<scenario_state_t,
-                                          zlink::framework::spot_node_manager_t>;
+                                          zlink::framework::spot_manager_t>;
 
     create_spot_handler_t (scenario_state_t &state,
-                           zlink::framework::spot_node_manager_t &spots) :
+                           zlink::framework::spot_manager_t &spots) :
         _state (state), _spots (spots)
     {
     }
@@ -130,11 +149,11 @@ class create_spot_handler_t
     {
         const auto request = nlohmann::json::parse (http.body).get<e2e::create_spot_req_t> ();
         const auto rid = (request.spot_id);
-        const auto created = _spots.get_or_create_spot (e2e::user_spot, rid, request);
+        const auto created = create_spot (_spots, rid, e2e::user_spot, request);
 
         zlink::framework::http_response_t response;
         response.body = nlohmann::json (e2e::create_spot_res_t{
-                          .spot_id = created.spot_id,
+                          .spot_id = std::string (created.spot.spot_id ()),
                           .owner_node_rid = _state.node_rid,
                           .created = created.state == zlink::framework::spot_create_state_t::created})
                           .dump ();
@@ -143,7 +162,7 @@ class create_spot_handler_t
 
   private:
     scenario_state_t &_state;
-    zlink::framework::spot_node_manager_t &_spots;
+    zlink::framework::spot_manager_t &_spots;
 };
 
 class create_alternate_spot_handler_t
@@ -151,10 +170,10 @@ class create_alternate_spot_handler_t
   public:
     using dependency_types =
       zlink::framework::dependency_list_t<scenario_state_t,
-                                          zlink::framework::spot_node_manager_t>;
+                                          zlink::framework::spot_manager_t>;
 
     create_alternate_spot_handler_t (scenario_state_t &state,
-                                     zlink::framework::spot_node_manager_t &spots) :
+                                     zlink::framework::spot_manager_t &spots) :
         _state (state), _spots (spots)
     {
     }
@@ -163,11 +182,11 @@ class create_alternate_spot_handler_t
     {
         const auto request = nlohmann::json::parse (http.body).get<e2e::create_spot_req_t> ();
         const auto rid = (request.spot_id);
-        const auto created = _spots.get_or_create_spot (e2e::alternate_spot, rid, request);
+        const auto created = create_spot (_spots, rid, e2e::alternate_spot, request);
 
         zlink::framework::http_response_t response;
         response.body = nlohmann::json (e2e::create_spot_res_t{
-                          .spot_id = created.spot_id,
+                          .spot_id = std::string (created.spot.spot_id ()),
                           .owner_node_rid = _state.node_rid,
                           .created = created.state == zlink::framework::spot_create_state_t::created})
                           .dump ();
@@ -176,7 +195,7 @@ class create_alternate_spot_handler_t
 
   private:
     scenario_state_t &_state;
-    zlink::framework::spot_node_manager_t &_spots;
+    zlink::framework::spot_manager_t &_spots;
 };
 
 class lifecycle_spot_handler_t
@@ -184,10 +203,10 @@ class lifecycle_spot_handler_t
   public:
     using dependency_types =
       zlink::framework::dependency_list_t<scenario_state_t,
-                                          zlink::framework::spot_node_manager_t>;
+                                          zlink::framework::spot_manager_t>;
 
     lifecycle_spot_handler_t (scenario_state_t &state,
-                              zlink::framework::spot_node_manager_t &spots) :
+                              zlink::framework::spot_manager_t &spots) :
         _state (state), _spots (spots)
     {
     }
@@ -197,23 +216,23 @@ class lifecycle_spot_handler_t
         const auto request = nlohmann::json::parse (http.body).get<e2e::lifecycle_req_t> ();
         const auto rid =
           (e2e::user_spot_id_for_key (request.key));
-        const auto created = _spots.get_or_create_spot (e2e::user_spot, rid, request);
-        const auto closed = _spots.close_spot (rid).result ();
+        const auto created = create_spot (_spots, rid, e2e::user_spot, request);
+        const auto closed = close_spot (_spots, rid);
         _state.record ("SpotLifecycleClosed", {}, rid,
-                       closed && closed.value () ? "closed" : "not-closed");
+                       closed ? "closed" : "not-closed");
 
         zlink::framework::http_response_t response;
         response.body = nlohmann::json (e2e::lifecycle_res_t{
-                          .spot_id = created.spot_id,
+                          .spot_id = std::string (created.spot.spot_id ()),
                           .created = created.state == zlink::framework::spot_create_state_t::created,
-                          .closed = closed && closed.value ()})
+                          .closed = closed})
                           .dump ();
         return response;
     }
 
   private:
     scenario_state_t &_state;
-    zlink::framework::spot_node_manager_t &_spots;
+    zlink::framework::spot_manager_t &_spots;
 };
 
 class close_spot_handler_t
@@ -221,9 +240,9 @@ class close_spot_handler_t
   public:
     using dependency_types =
       zlink::framework::dependency_list_t<scenario_state_t,
-                                          zlink::framework::spot_node_manager_t>;
+                                          zlink::framework::spot_manager_t>;
 
-    close_spot_handler_t (scenario_state_t &state, zlink::framework::spot_node_manager_t &spots) :
+    close_spot_handler_t (scenario_state_t &state, zlink::framework::spot_manager_t &spots) :
         _state (state), _spots (spots)
     {
     }
@@ -233,21 +252,21 @@ class close_spot_handler_t
         const auto request = nlohmann::json::parse (http.body).get<e2e::close_spot_req_t> ();
         const auto rid =
           (e2e::user_spot_id_for_key (request.key));
-        const auto closed = _spots.close_spot (rid).result ();
+        const auto closed = close_spot (_spots, rid);
         _state.record ("SpotCloseRequested", {}, rid,
-                       closed && closed.value () ? "closed" : "not-closed");
+                       closed ? "closed" : "not-closed");
 
         zlink::framework::http_response_t response;
         response.body = nlohmann::json (
                           e2e::close_spot_res_t{.spot_id = rid,
-                                                .closed = closed && closed.value ()})
+                                                .closed = closed})
                           .dump ();
         return response;
     }
 
   private:
     scenario_state_t &_state;
-    zlink::framework::spot_node_manager_t &_spots;
+    zlink::framework::spot_manager_t &_spots;
 };
 
 class type_mismatch_spot_handler_t
@@ -255,11 +274,11 @@ class type_mismatch_spot_handler_t
   public:
     using dependency_types =
       zlink::framework::dependency_list_t<scenario_state_t,
-                                          zlink::framework::spot_node_manager_t,
+                                          zlink::framework::spot_manager_t,
                                           zlink::framework::session_actor_manager_t>;
 
     type_mismatch_spot_handler_t (scenario_state_t &state,
-                                  zlink::framework::spot_node_manager_t &spots,
+                                  zlink::framework::spot_manager_t &spots,
                                   zlink::framework::session_actor_manager_t &actors) :
         _state (state), _spots (spots), _actors (actors)
     {
@@ -281,18 +300,7 @@ class type_mismatch_spot_handler_t
             throw zlink::framework::framework_exception_t (
               bound.error_kind (), bound.error () ? bound.error ()->what () : "actor bind failed");
         }
-        auto joined = bound.value ()
-                        .context ()
-                        .join_entry_spot (
-                          zlink::framework::node_rid_t::from_string (_state.node_rid),
-                          zlink::framework::message_t {})
-                        .async ()
-                        .result ();
-        if (!joined) {
-            throw zlink::framework::framework_exception_t (
-              joined.error_kind (),
-              joined.error () ? joined.error ()->what () : "entry SPOT join failed");
-        }
+        bound.value ().context ().join_entry_spot ().defer ();
         auto current = _actors.find (actor_id);
         if (!current) {
             throw zlink::framework::framework_exception_t (
@@ -328,11 +336,11 @@ class type_mismatch_spot_handler_t
               seeded.error () ? seeded.error ()->what () : "SM-A7 seed state failed");
         }
         try {
-            (void) _spots.get_or_create_spot (e2e::alternate_spot, rid, request);
+            (void) create_spot (_spots, rid, e2e::alternate_spot, request);
         }
         catch (const zlink::framework::framework_exception_t &error) {
             if (error.kind () == zlink::framework::framework_error_kind_t::type_mismatch) {
-                const auto spot_name = _spots.spot_name_for (rid).value_or ("");
+                const auto spot_name = std::string (e2e::user_spot);
                 auto observed =
                   current
                     ->relay_request ("StateReq",
@@ -367,7 +375,7 @@ class type_mismatch_spot_handler_t
 
   private:
     scenario_state_t &_state;
-    zlink::framework::spot_node_manager_t &_spots;
+    zlink::framework::spot_manager_t &_spots;
     zlink::framework::session_actor_manager_t &_actors;
 };
 

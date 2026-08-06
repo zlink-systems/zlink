@@ -272,7 +272,6 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime
                 socket = owner._backendAdapterFactory
                     .CreateChannelAdapter()
                     .CreateSubscriberSocket(owner._context);
-                socket.SetChannelName(owner._channelName);
                 ZLinkChannelBundleFactory.ApplySocketConfig(
                     socket,
                     owner._socketConfig);

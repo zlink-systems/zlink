@@ -67,19 +67,16 @@ inline int run_multi_node_server (int argc, char **argv)
           .add_singleton<scenario_state_t> (std::move (state))
           .add_transient<multi_node_route_ping_handler_t, scenario_state_t> ()
           .add_transient<multi_node_create_local_handler_t, scenario_state_t,
-                         zlink::framework::spot_node_manager_t,
-                         zlink::framework::route_client_t> ()
+                         zlink::framework::spot_manager_t> ()
           .add_transient<multi_node_state_route_handler_t, scenario_state_t,
-                         zlink::framework::route_client_t,
-                         zlink::framework::spot_handle_resolver_t> ()
+                         zlink::framework::route_client_t> ()
           .add_transient<multi_node_create_user_local_handler_t, scenario_state_t,
-                         zlink::framework::spot_node_manager_t> ()
+                         zlink::framework::spot_manager_t> ()
           .add_transient<multi_node_spot_only_mesh_handler_t, scenario_state_t,
-                         zlink::framework::spot_node_manager_t> ()
+                         zlink::framework::spot_manager_t> ()
           .add_transient<multi_node_spot_only_join_handler_t, scenario_state_t,
                          zlink::framework::session_actor_manager_t> ()
-          .add_transient<multi_node_state_member_handler_t, zlink::framework::route_client_t,
-                         zlink::framework::spot_handle_resolver_t> ();
+          .add_transient<multi_node_state_member_handler_t, zlink::framework::route_client_t> ();
         configure_codecs (options.codecs ());
         add_redis_location_store (options, redis_endpoint, redis_key_prefix);
 
@@ -111,7 +108,7 @@ inline int run_multi_node_server (int argc, char **argv)
           .set_routing_id (zlink::routing_id_t::from (node_rid))
           .channel_name (spot_name);
         spot.add_entry_spot<multi_node_entry_spot_t> (
-          [state_ptr] (entry_spot_context_t context) {
+          [state_ptr] (zlink::framework::entry_spot_context_t context) {
               return std::make_shared<multi_node_entry_spot_t> (
                 std::move (context), *state_ptr);
           })
@@ -122,7 +119,7 @@ inline int run_multi_node_server (int argc, char **argv)
         if (node_rid == multi_node_a_name) {
             spot.add_spot_factory<multi_node_spot_a_t> (
               e2e::multi_spot_a,
-              [state_ptr] (spot_context_t context) {
+              [state_ptr] (zlink::framework::spot_context_t context) {
                   return std::make_shared<multi_node_spot_a_t> (
                     std::move (context), *state_ptr);
               },
@@ -132,7 +129,7 @@ inline int run_multi_node_server (int argc, char **argv)
         } else {
             spot.add_spot_factory<multi_node_spot_b_t> (
               e2e::multi_spot_b,
-              [state_ptr] (spot_context_t context) {
+              [state_ptr] (zlink::framework::spot_context_t context) {
                   return std::make_shared<multi_node_spot_b_t> (
                     std::move (context), *state_ptr);
               },

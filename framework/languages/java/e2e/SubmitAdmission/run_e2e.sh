@@ -23,6 +23,9 @@ CANDIDATE_RUNTIME_SHA256=""
 implemented_process=(SA-E2E-01 SA-E2E-05 SA-E2E-08 SA-E2E-09 SA-E2E-14 SA-E2E-20)
 implemented_regression=(SA-REG-01 SA-REG-02 SA-REG-03)
 implemented=("${implemented_process[@]}" "${implemented_regression[@]}")
+# Inventory blockers: SA-E2E-02 SA-E2E-03 SA-E2E-04 SA-E2E-06 SA-E2E-07
+# SA-E2E-10 SA-E2E-11 SA-E2E-12 SA-E2E-13 SA-E2E-15 SA-E2E-16
+# SA-E2E-17 SA-E2E-18 SA-E2E-19. The feature map owns their reasons.
 CANDIDATE_JAR=""
 CANDIDATE_SHA256=""
 pids=()

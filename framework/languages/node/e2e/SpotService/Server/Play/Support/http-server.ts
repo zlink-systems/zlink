@@ -1,6 +1,6 @@
 import * as http from 'node:http';
 import type { IncomingMessage, Server, ServerResponse } from 'node:http';
-import { ZLinkFrameworkException } from '@zlink-systems/framework';
+import { ZLinkFrameworkErrorKind, ZLinkFrameworkException } from '@zlink-systems/framework';
 
 export interface HttpRoute {
   readonly method: string;
@@ -30,9 +30,7 @@ export async function startHttpServer(endpoint: string, routes: readonly HttpRou
       response.end(JSON.stringify(error instanceof ZLinkFrameworkException
         ? {
             error: error.message,
-            kind: error.kind,
-            code: error.code,
-            isRetriable: error.isRetriable
+            kind: publicErrorKind(error)
           }
         : { error: error instanceof Error ? error.message : String(error) }));
     }
@@ -43,6 +41,10 @@ export async function startHttpServer(endpoint: string, routes: readonly HttpRou
     server.listen(Number(url.port), url.hostname, resolve);
   });
   return server;
+}
+
+function publicErrorKind(error: ZLinkFrameworkException): string {
+  return ZLinkFrameworkErrorKind[error.kind] ?? String(error.kind);
 }
 
 export function closeHttpServer(server: Server): Promise<void> {

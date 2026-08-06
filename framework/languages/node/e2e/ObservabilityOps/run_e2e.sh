@@ -15,7 +15,7 @@ if [[ "$CHILD_RUN" != "--child-run" && "$SCENARIO" == "all" ]]; then
   build_package "$ROOT_DIR/Server/Session"
   build_package "$ROOT_DIR/Server/Workflow"
   build_package "$ROOT_DIR/Client"
-  for scenario in OBS-A1 OBS-A2 OBS-A3 OBS-A4 OBS-B1 OBS-B2 OBS-B3 OBS-B4 OBS-C1 OBS-C2 OBS-C3 OBS-C4; do
+  for scenario in OBS-A1 OBS-A2 OBS-A3 OBS-A4 OBS-A5 OBS-B1 OBS-B2 OBS-B3 OBS-B4 OBS-C1 OBS-C2 OBS-C3 OBS-C4 OBS-C6 OBS-C7 OBS-C8 OBS-C9A OBS-C9B OBS-C10 OBS-C11 OBS-C12; do
     OBSERVABILITY_OPS_SKIP_BUILD=1 "$0" "$scenario" --child-run
   done
   OBSERVABILITY_OPS_SKIP_BUILD=1 "$0" OBS-C5 --child-run sequential
@@ -25,7 +25,7 @@ if [[ "$CHILD_RUN" != "--child-run" && "$SCENARIO" == "all" ]]; then
 fi
 
 case "$SCENARIO" in
-  OBS-A1|OBS-A2|OBS-A3|OBS-A4|OBS-B1|OBS-B2|OBS-B3|OBS-B4|OBS-C1|OBS-C2|OBS-C3|OBS-C4|OBS-C5) ;;
+  OBS-A1|OBS-A2|OBS-A3|OBS-A4|OBS-A5|OBS-B1|OBS-B2|OBS-B3|OBS-B4|OBS-C1|OBS-C2|OBS-C3|OBS-C4|OBS-C5|OBS-C6|OBS-C7|OBS-C8|OBS-C9A|OBS-C9B|OBS-C10|OBS-C11|OBS-C12) ;;
   *) echo "Unknown ObservabilityOps scenario '$SCENARIO'." >&2; exit 2 ;;
 esac
 

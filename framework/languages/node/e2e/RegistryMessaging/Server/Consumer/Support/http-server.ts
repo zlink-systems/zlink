@@ -21,6 +21,7 @@ export async function startHttpServer(endpoint: string, routes: readonly HttpRou
       response.writeHead(200, { 'content-type': 'application/json' });
       response.end(payload);
     } catch (error) {
+      console.error(error);
       response.writeHead(500, { 'content-type': 'application/json' });
       response.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
     }

@@ -1,0 +1,11 @@
+{
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "declaration": false,
+    "outDir": "dist",
+    "rootDir": ".",
+    "strict": true
+  },
+  "include": ["main.ts", "Support/**/*.ts", "Scenarios/**/*.ts"]
+}

@@ -24,11 +24,7 @@ inline std::string public_error_kind_name (zlink::framework::framework_error_kin
 {
     switch (kind) {
         case zlink::framework::framework_error_kind_t::not_found:
-            return "actor_dispatch_handler_not_found";
-        case zlink::framework::framework_error_kind_t::not_found:
             return "handler_not_found";
-        case zlink::framework::framework_error_kind_t::not_found:
-            return "route_handler_not_found";
         default:
             return "request_failed";
     }
@@ -50,17 +46,7 @@ class join_spot_handler_t
     {
         const auto request = nlohmann::json::parse (http.body).get<e2e::join_req_t> ();
         auto actor = bind_actor (request);
-        auto joined = actor.context ()
-                        .join_entry_spot (
-                          zlink::framework::node_rid_t::from_string (_state.node_rid),
-                          zlink::framework::message_t {})
-                        .async ()
-                        .result ();
-        if (!joined) {
-            throw zlink::framework::framework_exception_t (
-              joined.error_kind (),
-              joined.error () ? joined.error ()->what () : "entry SPOT join failed");
-        }
+        actor.context ().join_entry_spot ().defer ();
         auto current = _actors.find (request.actor_id);
         if (!current) {
             throw zlink::framework::framework_exception_t (
@@ -120,7 +106,7 @@ class channel_echo_handler_t
 
     e2e::channel_echo_res_t handle (
       const e2e::channel_echo_req_t &request,
-      const zlink::framework::route_handler_context_t &)
+      const zlink::framework::route_message_context_t &)
     {
         return handle (request);
     }
@@ -234,19 +220,7 @@ class complex_actor_handler_t
               bound.error_kind (),
               bound.error () ? bound.error ()->what () : "complex actor bind failed");
         }
-        auto entry_joined =
-          bound.value ()
-            .context ()
-            .join_entry_spot (zlink::framework::node_rid_t::from_string (_state.node_rid),
-                              zlink::framework::message_t {})
-            .async ()
-            .result ();
-        if (!entry_joined) {
-            throw zlink::framework::framework_exception_t (
-              entry_joined.error_kind (),
-              entry_joined.error () ? entry_joined.error ()->what ()
-                                    : "complex entry SPOT join failed");
-        }
+        bound.value ().context ().join_entry_spot ().defer ();
         auto current = _actors.find (request.join.actor_id);
         if (!current) {
             throw zlink::framework::framework_exception_t (
@@ -316,19 +290,7 @@ class missing_actor_handler_t
               bound.error_kind (),
               bound.error () ? bound.error ()->what () : "missing actor bind failed");
         }
-        auto entry_joined =
-          bound.value ()
-            .context ()
-            .join_entry_spot (zlink::framework::node_rid_t::from_string (_state.node_rid),
-                              zlink::framework::message_t {})
-            .async ()
-            .result ();
-        if (!entry_joined) {
-            throw zlink::framework::framework_exception_t (
-              entry_joined.error_kind (),
-              entry_joined.error () ? entry_joined.error ()->what ()
-                                    : "missing actor entry SPOT join failed");
-        }
+        bound.value ().context ().join_entry_spot ().defer ();
         auto current = _actors.find (request.join.actor_id);
         if (!current) {
             throw zlink::framework::framework_exception_t (
@@ -404,19 +366,7 @@ class remote_actor_flow_handler_t
               bound.error_kind (),
               bound.error () ? bound.error ()->what () : "remote actor bind failed");
         }
-        auto entry_joined =
-          bound.value ()
-            .context ()
-            .join_entry_spot (zlink::framework::node_rid_t::from_string (_state.node_rid),
-                              zlink::framework::message_t {})
-            .async ()
-            .result ();
-        if (!entry_joined) {
-            throw zlink::framework::framework_exception_t (
-              entry_joined.error_kind (),
-              entry_joined.error () ? entry_joined.error ()->what ()
-                                    : "remote entry SPOT join failed");
-        }
+        bound.value ().context ().join_entry_spot ().defer ();
         auto current = _actors.find (request.join.actor_id);
         if (!current) {
             throw zlink::framework::framework_exception_t (
@@ -524,19 +474,7 @@ class remote_actor_request_handler_t
               bound.error_kind (),
               bound.error () ? bound.error ()->what () : "remote request actor bind failed");
         }
-        auto entry_joined =
-          bound.value ()
-            .context ()
-            .join_entry_spot (zlink::framework::node_rid_t::from_string (_state.node_rid),
-                              zlink::framework::message_t {})
-            .async ()
-            .result ();
-        if (!entry_joined) {
-            throw zlink::framework::framework_exception_t (
-              entry_joined.error_kind (),
-              entry_joined.error () ? entry_joined.error ()->what ()
-                                    : "remote actor entry SPOT join failed");
-        }
+        bound.value ().context ().join_entry_spot ().defer ();
         auto current = _actors.find (request.join.actor_id);
         if (!current) {
             throw zlink::framework::framework_exception_t (

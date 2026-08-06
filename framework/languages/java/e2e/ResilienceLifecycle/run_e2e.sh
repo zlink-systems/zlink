@@ -301,7 +301,15 @@ if [[ "${SCENARIO}" == "all" ]]; then
     grep -q "scenario ${scenario} passed" "${log_dir}/client.stdout.log"
   done
 else
-  grep -q "scenario ${SCENARIO} passed" "${log_dir}/client.stdout.log"
+  case "${SCENARIO}" in
+    RL-E1|RL-E2|RL-E3|RL-E4|RL-E5|RL-F1|RL-F2|RL-F3|RL-F4|RL-F5|RL-F6|RL-F7|RL-F8|RL-F9|RL-F10|RL-F11|RL-F12|RL-F13|RL-F14)
+      grep -q "scenario ${SCENARIO} blocked:" "${log_dir}/client.stdout.log"
+      grep -q "resilience-lifecycle e2e result=blocked" "${log_dir}/client.stdout.log"
+      ;;
+    *)
+      grep -q "scenario ${SCENARIO} passed" "${log_dir}/client.stdout.log"
+      grep -q "resilience-lifecycle e2e result=passed" "${log_dir}/client.stdout.log"
+      ;;
+  esac
 fi
-grep -q "resilience-lifecycle e2e result=passed" "${log_dir}/client.stdout.log"
 grep -Rq "message flow" "${log_dir}"/*-flow.log

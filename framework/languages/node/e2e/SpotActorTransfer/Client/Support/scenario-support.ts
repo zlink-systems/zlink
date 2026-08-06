@@ -73,6 +73,9 @@ export async function runRemoteTransfer(
   await waitEvidence(targetNode, [
     `${scenario}|${actorId}|join_completion|accepted|`
   ]);
+  // Join completion is the public lifecycle signal; the target actor route may
+  // publish its reconciliation fence immediately after that signal.
+  await delay(250);
   const probe = await probeActor(targetNode, actorId, scenario, 'after-transfer');
   const authority = await waitActorRef(sourceNode, actorId, targetSpot.nodeRid);
   require(

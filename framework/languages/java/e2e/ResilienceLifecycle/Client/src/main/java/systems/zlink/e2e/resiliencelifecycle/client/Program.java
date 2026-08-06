@@ -11,11 +11,12 @@ public final class Program {
     public static void main(String... args) {
         Inputs inputs = parseInputs(args);
         ClientOptions options = ClientOptions.load(inputs.configPath());
+        boolean blocked;
         try (ResilienceProcessManager processes = new ResilienceProcessManager(options)) {
-            new ResilienceLifecycleSuite(options, processes, inputs.startOrder())
+            blocked = new ResilienceLifecycleSuite(options, processes, inputs.startOrder())
                 .run(inputs.scenario());
         }
-        System.out.println("resilience-lifecycle e2e result=passed");
+        System.out.println("resilience-lifecycle e2e result=" + (blocked ? "blocked" : "passed"));
     }
 
     private static Inputs parseInputs(String[] args) {

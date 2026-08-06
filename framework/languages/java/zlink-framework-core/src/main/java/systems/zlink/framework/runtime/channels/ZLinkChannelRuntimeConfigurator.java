@@ -104,15 +104,9 @@ final class ZLinkChannelRuntimeConfigurator {
                 handlers.publishHandlers(channel));
             return;
         }
-        ZLinkBackendSubscriberSocket subscriber = backend.createSubscriberSocket(context);
-        subscriber.setChannelName(channel.name());
-        channel.subscriberConnections().attach(subscriber);
-        subscriber.setSubscription("");
-        sockets.registerSubscriber(channel.name(), subscriber);
         dispatchRegistry.registerFanout(
             channel.name(),
             handlers.publishHandlers(channel));
-        startSubscribeLoop.accept(channel.name(), subscriber);
     }
 
     private void configureRouteMesh(ChannelRegistration channel) {

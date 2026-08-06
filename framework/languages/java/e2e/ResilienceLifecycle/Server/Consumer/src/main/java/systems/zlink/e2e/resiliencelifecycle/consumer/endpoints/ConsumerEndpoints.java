@@ -11,31 +11,32 @@ import java.util.concurrent.Executors;
 import java.util.function.Supplier;
 import org.springframework.context.SmartLifecycle;
 import systems.zlink.e2e.resiliencelifecycle.shared.Contracts;
-import systems.zlink.framework.locationprovider.ZLinkLocationStore;
-import systems.zlink.framework.channels.ZLinkClient;
-import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
+import systems.zlink.framework.channels.ZLinkRouteClient;
+import systems.zlink.framework.locations.ZLinkLocationRuntimeQuery;
+import systems.zlink.framework.locations.ZLinkLocationTopologyFilter;
 import systems.zlink.framework.locations.ZLinkPageRequest;
+import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime;
 import systems.zlink.framework.spring.internal.runtime.ZLinkFrameworkLifecycle;
 
 public final class ConsumerEndpoints implements SmartLifecycle {
     private final ObjectMapper json;
-    private final ZLinkClient client;
+    private final ZLinkRouteClient routes;
+    private final ZLinkRouteMeshRuntime meshRuntime;
     private final ZLinkFrameworkLifecycle lifecycle;
-    private final ZLinkLocationStore locations;
     private final String endpoint;
     private HttpServer server;
     private boolean running;
 
     public ConsumerEndpoints(
         ObjectMapper json,
-        ZLinkClient client,
+        ZLinkRouteClient routes,
+        ZLinkRouteMeshRuntime meshRuntime,
         ZLinkFrameworkLifecycle lifecycle,
-        ZLinkLocationStore locations,
         String endpoint) {
         this.json = json;
-        this.client = client;
+        this.routes = routes;
+        this.meshRuntime = meshRuntime;
         this.lifecycle = lifecycle;
-        this.locations = locations;
         this.endpoint = endpoint;
     }
 
@@ -45,10 +46,24 @@ public final class ConsumerEndpoints implements SmartLifecycle {
             URI uri = URI.create(endpoint);
             server = HttpServer.create(new InetSocketAddress(uri.getHost(), uri.getPort()), 0);
             server.setExecutor(Executors.newCachedThreadPool());
-            server.createContext("/health", exchange -> writeJson(exchange, Map.of("status", "ready")));
+            server.createContext("/health", exchange -> {
+                boolean ready;
+                try {
+                    ready = meshRuntime.snapshot(Contracts.CHANNEL).channels().stream()
+                        .anyMatch(channel -> channel.channelName().equals(Contracts.CHANNEL)
+                            && channel.isReady());
+                } catch (RuntimeException unavailable) {
+                    ready = false;
+                }
+                if (!ready) {
+                    writeJson(exchange, 503, Map.of("status", "starting"));
+                    return;
+                }
+                writeJson(exchange, Map.of("status", "ready"));
+            });
             server.createContext("/operations/request/work", exchange -> handle(exchange, () -> {
                 Contracts.WorkOperation request = read(exchange, Contracts.WorkOperation.class);
-                return client.requestToChannel(Contracts.CHANNEL, new Contracts.WorkReq(request.value()))
+                return routes.requestToChannel(Contracts.CHANNEL, new Contracts.WorkReq(request.value()))
                     .timeout(Duration.ofMillis(request.timeoutMillis()))
                     .submit(Contracts.WorkRes.class)
                     .toCompletableFuture()
@@ -56,7 +71,7 @@ public final class ConsumerEndpoints implements SmartLifecycle {
             }));
             server.createContext("/operations/request/unhandled", exchange -> handle(exchange, () -> {
                 Contracts.UnhandledOperation request = read(exchange, Contracts.UnhandledOperation.class);
-                return client.requestToChannel(Contracts.CHANNEL, new Contracts.UnhandledReq(request.value()))
+                return routes.requestToChannel(Contracts.CHANNEL, new Contracts.UnhandledReq(request.value()))
                     .timeout(Duration.ofMillis(request.timeoutMillis()))
                     .submit(Contracts.WorkRes.class)
                     .toCompletableFuture()
@@ -64,22 +79,23 @@ public final class ConsumerEndpoints implements SmartLifecycle {
             }));
             server.createContext("/operations/send/work", exchange -> handle(exchange, () -> {
                 Contracts.WorkMsg request = read(exchange, Contracts.WorkMsg.class);
-                client.sendToChannel(Contracts.CHANNEL, request).submit();
+                routes.sendToChannel(Contracts.CHANNEL, request).submit();
                 return Map.of("status", "accepted");
             }));
             server.createContext("/operations/peers", exchange -> handle(exchange, () -> {
-                List<Contracts.PeerLocation> peers = locations
-                    .listClientServers(
-                        Contracts.CHANNEL,
+                List<Contracts.PeerLocation> peers = lifecycle
+                    .monitoringLocationRuntimeQuery()
+                    .listTopology(
+                        new ZLinkLocationTopologyFilter(Contracts.CHANNEL, null, null),
                         new ZLinkPageRequest(1_000, null))
                     .toCompletableFuture()
                     .join()
                     .items().stream()
                     .map(server -> new Contracts.PeerLocation(
-                        server.serverRid().toString(),
+                        server.nodeRid().toString(),
                         server.endpoint(),
-                        server.ownerId(),
-                        server.lifecycleGeneration()))
+                        "",
+                        server.updatedAt().toEpochMilli()))
                     .toList();
                 return new Contracts.PeerSnapshot(peers);
             }));

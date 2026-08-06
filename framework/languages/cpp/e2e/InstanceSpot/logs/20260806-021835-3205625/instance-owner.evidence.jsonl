@@ -1,0 +1,4 @@
+{"lifecycle":{"closedInstances":0,"materializedInstances":1}}
+{"evidence":{"completed":0,"entered":1,"instanceCount":1,"ownerRid":"instance-owner","spotId":"IS-E2E-01-spot"},"operationId":"IS-E2E-01-request"}
+{"evidence":{"completed":1,"entered":1,"instanceCount":1,"ownerRid":"instance-owner","spotId":"IS-E2E-01-spot"},"operationId":"IS-E2E-01-request"}
+{"lifecycle":{"closedInstances":1,"materializedInstances":1}}

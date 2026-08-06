@@ -16,6 +16,8 @@ import systems.zlink.e2e.registrymessaging.provider.Handlers.ProfileMsgHandler;
 import systems.zlink.e2e.registrymessaging.provider.Handlers.ProfileReqHandler;
 import systems.zlink.e2e.registrymessaging.provider.Handlers.RouteReqHandler;
 import systems.zlink.e2e.registrymessaging.provider.Infrastructure.ScenarioState;
+import systems.zlink.e2e.registrymessaging.provider.Infrastructure.ProfileGate;
+import systems.zlink.e2e.registrymessaging.shared.IdentityObjects;
 import systems.zlink.e2e.registrymessaging.shared.Contracts;
 import systems.zlink.framework.channels.ZLinkChannelRuntimeOptions;
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
@@ -50,6 +52,11 @@ public final class Program {
     }
 
     @Bean
+    ProfileGate profileGate() {
+        return new ProfileGate();
+    }
+
+    @Bean
     ZLinkFrameworkConfigurer providerFramework(ScenarioState state, ServerOptions server) {
         return options -> {
             String logDir = server.logDir();
@@ -66,6 +73,10 @@ public final class Program {
                         error.errorReason() + "/" + error.errorAction() + "/" + error.packetName());
                     return CompletableFuture.completedFuture(null);
                 });
+            options.configureLocations()
+                .setOwnerLeaseRenewInterval(java.time.Duration.ofMillis(500));
+            options.configureLocations().setOwnerLeaseTtl(java.time.Duration.ofSeconds(3));
+            options.configureLocations().setPollingInterval(java.time.Duration.ofMillis(250));
             options.addHandlersFromPackageOf(ProfileReqHandler.class);
 
             String apiEndpoint = server.apiEndpoint();
@@ -77,7 +88,26 @@ public final class Program {
                     .setAdvertiseHost(endpoint.getHost())
                     .listen(endpoint.getPort())
                     .addHandlerGroup(Contracts.HANDLER_GROUP);
-                api.client();
+                if (server.apiClientEnabled()) {
+                    api.client();
+                }
+            }
+
+            if (!server.objectEndpoint().isBlank()) {
+                var objects = options.addRouteMesh(server.objectMeshName())
+                    .listen(server.objectEndpoint())
+                    .setRoutingId(RoutingId.from(state.providerRid()))
+                    .objects().server();
+                objects.addEntrySpot(IdentityObjects.EntrySpot.class)
+                    .addActorFactory(
+                        Contracts.OBJECT_ACTOR_TYPE,
+                        IdentityObjects.Actor.class,
+                        IdentityObjects.ActorFactory.class,
+                        factory -> factory.disableRelocation())
+                    .addSpotFactory(
+                        Contracts.OBJECT_SPOT_TYPE,
+                        IdentityObjects.Spot.class,
+                        factory -> factory.disableRelocation());
             }
 
             String workflowEndpoint = server.workflowEndpoint();
@@ -102,6 +132,10 @@ public final class Program {
                     RouteReqHandler.class,
                     Contracts.RouteReq.class,
                     Contracts.RouteRes.class);
+                route.addRouteRequestHandler(
+                    systems.zlink.e2e.registrymessaging.provider.Handlers.RoutePayloadReqHandler.class,
+                    Contracts.PayloadReq.class,
+                    Contracts.PayloadRes.class);
                 String[] peers = server.routePeers().split(",");
                 String[] peerRids = server.routePeerRids().split(",");
                 for (int index = 0; index < peers.length; index++) {
@@ -141,8 +175,8 @@ public final class Program {
     }
 
     @Bean
-    ProfileReqHandler profileRequestHandler(ScenarioState state) {
-        return new ProfileReqHandler(state);
+    ProfileReqHandler profileRequestHandler(ScenarioState state, ProfileGate gate) {
+        return new ProfileReqHandler(state, gate);
     }
 
     @Bean

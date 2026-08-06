@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Duration;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Bean;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.e2e.storefailure.shared.Contracts;
@@ -44,12 +45,37 @@ public final class ProviderApplication {
             //  참조 lane인 `.NET` provider와 같은 topology다. ClientServer channel이
             //  아니라 RouteMesh node 위의 channel server이며, routing id는 mesh node의
             //  prefix로 정한다(ClientServer server builder에는 routing id 설정이 없다).
-            framework.addRouteMesh(Contracts.CHANNEL)
+            var mesh = framework.addRouteMesh(Contracts.CHANNEL)
                 .listen(options.channelEndpoint())
-                .setRoutingIdPrefix(options.rid())
-                .channelName(Contracts.CHANNEL)
+                .setRoutingIdPrefix(options.rid());
+            mesh.channelName(Contracts.CHANNEL)
                 .server()
                 .addHandlerGroup(Contracts.HANDLER_GROUP);
+            if (options.c4Roles()) {
+                framework.addRouteMesh(Contracts.C4_ROUTE_A_MESH)
+                    .listen(options.c4RouteAEndpoint())
+                    .setRoutingIdPrefix(options.rid() + "-c4-a")
+                    .channelName(Contracts.C4_ROUTE_A_CHANNEL)
+                    .server()
+                    .addHandlerGroup(Contracts.HANDLER_GROUP);
+                framework.addRouteMesh(Contracts.C4_ROUTE_B_MESH)
+                    .listen(options.c4RouteBEndpoint())
+                    .setRoutingIdPrefix(options.rid() + "-c4-b")
+                    .channelName(Contracts.C4_ROUTE_B_CHANNEL)
+                    .server()
+                    .addHandlerGroup(Contracts.HANDLER_GROUP);
+                framework.addClientServerChannel(Contracts.C4_CLIENT_SERVER_CHANNEL)
+                    .server()
+                    .listen(options.c4ClientServerPort())
+                    .addHandlerGroup(Contracts.HANDLER_GROUP);
+                framework.addFanoutChannel(Contracts.C4_FANOUT_CHANNEL)
+                    .enablePublisher(options.c4FanoutPort())
+                    .setRoutingIdPrefix(options.rid() + "-c4-fanout");
+            }
+            mesh.objects().server().addInstanceSpotFactory(
+                Contracts.LEASE_PROBE_SPOT_TYPE,
+                LeaseProbeSpot.class,
+                factory -> factory.disableRelocation());
         };
     }
 
@@ -70,7 +96,8 @@ public final class ProviderApplication {
     ProviderEndpoints providerEndpoints(
         ProviderOptions options,
         ProviderEvidenceStore evidence,
-        ObjectMapper json) {
-        return new ProviderEndpoints(options, evidence, json);
+        ObjectMapper json,
+        ObjectProvider<systems.zlink.framework.channels.ZLinkFanoutClient> fanout) {
+        return new ProviderEndpoints(options, evidence, json, fanout);
     }
 }

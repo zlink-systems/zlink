@@ -3631,13 +3631,14 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private async Task ReceiveLoop(CancellationToken cancellationToken)
     {
         var events = new PollEvent[1];
+        using var received = Received.Create();
         while (!cancellationToken.IsCancellationRequested)
         {
             try
             {
                 var count = _poller!.Wait(events, PollInterval);
                 if (count > 0)
-                    DrainRawSocket();
+                    DrainRawSocket(received);
                 ProcessInfrastructure(Stopwatch.GetTimestamp());
             }
             catch (ObjectDisposedException) when (cancellationToken.IsCancellationRequested)
@@ -3658,7 +3659,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
     }
 
-    private void DrainRawSocket()
+    private void DrainRawSocket(Received received)
     {
         var startedAt = Stopwatch.GetTimestamp();
         long bytes = 0;
@@ -3679,7 +3680,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                         return;
                 }
 
-                using var received = Received.Create();
                 bool available;
                 lock (_socketGate)
                     available = _socket!.Recv(received, RecvFlags.DontWait);

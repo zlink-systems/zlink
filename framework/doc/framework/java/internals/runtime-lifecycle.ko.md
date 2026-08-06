@@ -44,6 +44,17 @@ Spring `SmartLifecycle` 종료는 `ZLinkFrameworkRuntime.shutdown()`을 호출�
 channel, location, backend context 순서로 정리한다. pending completion과 coroutine continuation은 각 runtime
 소유자가 완료하거나 실패시킨다. JVM thread와 coroutine dispatcher를 blocking wait로 점유하지 않는다.
 
+Java Framework가 생성한 binding socket은 종료 전에 reply 제출이 수락된 응답을 전송할 수 있도록 `linger`를
+30초로 설정한다. 이 값은 Application option이 아니며 `ZLinkJavaSocketOptions`가 Framework 소유 raw socket을
+만들 때 적용한다. `linger`는 socket close 뒤 native transport가 아직 보유한 outbound data를 정리할 수 있는
+시간을 제한한다.
+
+이 설정은 handler 완료나 remote runtime의 수신 확인을 대신하지 않는다. Runtime은 먼저 새 admission을 닫고
+이미 수락한 작업을 terminal result로 끝낸 뒤 socket을 닫는다. 따라서 `linger`는 shutdown 중 accepted request의
+reply가 즉시 폐기되지 않도록 하는 transport 정리 조건이며, `reply.submit()`의 수락을 remote 전달 완료로
+변경하지 않는다. shutdown deadline이 만료되면 공통 shutdown 계약에 따라 남은 작업은 shutdown 결과로 끝날 수
+있다.
+
 `retire()`와 `shutdown()`은 host 전체를 대상으로 한다. Deprecated `drain()`과 `awaitDrained()`는 같은 host
 `shutdown()` operation을 사용하는 compatibility facade다. MeshName을 받는 partial termination operation은
 없으며, 하나의 topology만 별도로 종료하지 않는다.
@@ -66,6 +77,7 @@ package 설정을 따른다.
 | `HostTest.beanCreationDoesNotStartRuntime` | Bean 생성은 runtime을 `PREPARING`으로 구성하지만 socket, discovery loop와 worker를 시작하지 않는다. |
 | `ZLinkAsyncSubmitterTest.close_failsPendingItems` | runtime 종료가 pending submit을 남겨 두지 않는다. |
 | `KotlinSuspendAnnotationHandlerTest.kotlinSuspendAnnotationCancellationCompletesJavaStageExceptionally` | Kotlin cancellation이 공유 Java completion에 전달된다. |
+| `ChannelEgressRouting/CH-E2E-04B` | ClientServer server의 shutdown 이후에도 shutdown 전에 수락한 request가 reply로 끝나고, 새 request는 다른 ready server로 전달된다. |
 
 ---
 <!-- framework-adapter-nav:bottom:start -->

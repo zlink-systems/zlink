@@ -1002,10 +1002,6 @@ export class ZLinkActorTransferRuntime {
             state.endMove();
             terminal = 'committed';
           }
-          if (acceptedRoot !== undefined) {
-            await this.boundSessionAcceptedJournal()?.delete(acceptedRoot);
-            acceptedRoot = undefined;
-          }
         },
         rollback: async () => {
           if (terminal !== 'prepared') return;
@@ -1136,9 +1132,10 @@ export class ZLinkActorTransferRuntime {
   private async abortBoundSessionRouteSeal(
     actor: ZLinkActor,
     state: ZLinkActorRuntimeState,
-    sealId: string
+    sealId: string,
+    targetOverride?: ZLinkRemoteBoundSessionTarget
   ): Promise<void> {
-    const target = preferredRemoteBoundSessionTarget(
+    const target = targetOverride ?? preferredRemoteBoundSessionTarget(
       state.remoteBoundSessionTarget,
       state.boundSessionTransferTarget
     );
@@ -1627,7 +1624,11 @@ export class ZLinkActorTransferRuntime {
     let immediateRetry = true;
     while (this.options.shutdownSignal?.()?.aborted !== true) {
       try {
-        await this.abortBoundSessionRouteSeal(actor, state, sealId);
+        // This update can run after a newer Actor transfer has replaced the
+        // mutable state target. Release the route and journal belonging to
+        // this update, not whichever target is current now.
+        await this.abortBoundSessionRouteSeal(actor, state, sealId, target);
+        await this.deleteBoundSessionAcceptedJournal(actor, state, target);
         return;
       } catch (error) {
         lastError = error;
@@ -1644,6 +1645,39 @@ export class ZLinkActorTransferRuntime {
       `Actor '${actor.context.actorId}' Session route remained sealed while the runtime stopped.`,
       { cause: lastError }
     );
+  }
+
+  private async deleteBoundSessionAcceptedJournal(
+    actor: ZLinkActor,
+    state: ZLinkActorRuntimeState,
+    targetOverride?: ZLinkRemoteBoundSessionTarget
+  ): Promise<void> {
+    const target = targetOverride ?? preferredRemoteBoundSessionTarget(
+      state.remoteBoundSessionTarget,
+      state.boundSessionTransferTarget
+    );
+    const actorRef = state.nativeActorRef;
+    const journal = this.boundSessionAcceptedJournal();
+    if (
+      target === undefined
+      || actorRef === undefined
+      || target.relocationSealId === undefined
+      || target.acceptedHighWater === undefined
+      || target.acceptedJournalReference === undefined
+      || target.acceptedJournalChecksumCrc32c === undefined
+      || journal === undefined
+    ) return;
+    await journal.delete({
+      actorId: actor.context.actorId,
+      actorGeneration: actorRef.generation,
+      sealId: target.relocationSealId,
+      acceptedHighWater: target.acceptedHighWater,
+      reference: {
+        value: target.acceptedJournalReference
+      } as import('../../contracts').ZLinkBlobReference,
+      checksumCrc32c: target.acceptedJournalChecksumCrc32c
+    });
+    state.clearBoundSessionAcceptedJournalFence(target);
   }
 
   clearRoutedActor(actor: ZLinkActor): void {
@@ -1843,9 +1877,14 @@ export class ZLinkActorTransferRuntime {
         if (!await retry.wait(this.options.shutdownSignal?.())) break;
       }
     }
+    const causeDescription = lastError instanceof Error
+      ? ` Cause: ${lastError.message}`
+      : lastError === undefined
+        ? ''
+        : ` Cause: ${String(lastError)}`;
     throw new Error(
       `Actor '${actorId}' bound-session ownership update stopped before command 45 ACK on route ` +
-      `'${target.routerChannelId}' to '${String(target.targetNodeRid)}'.`,
+      `'${target.routerChannelId}' to '${String(target.targetNodeRid)}'.${causeDescription}`,
       { cause: lastError }
     );
   }

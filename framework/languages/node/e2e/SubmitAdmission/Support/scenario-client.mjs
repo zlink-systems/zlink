@@ -18,7 +18,43 @@ async function json(url, method = 'GET', body = undefined) {
 }
 
 async function submit(url, operationId, target = undefined) {
-  return json(url, 'POST', { operationId, targetRid: target });
+  try {
+    return await json(url, 'POST', { operationId, targetRid: target });
+  } catch (error) {
+    const message = String(error);
+    const status = /target was not found/i.test(message)
+      ? 'targetNotFound'
+      : /not connected|route.*unavailable/i.test(message)
+        ? 'routeNotConnected'
+        : undefined;
+    if (status === undefined) throw error;
+    return {
+      operationId,
+      status,
+      publicInvocationCount: 1,
+      terminalCount: 1
+    };
+  }
+}
+
+async function runReady(
+  selector,
+  operationId,
+  endpoint,
+  target = targetRid,
+  baseUrl = targetUrl,
+  submitBase = callerUrl
+) {
+  terminal(await submit(`${submitBase}${endpoint}`, operationId, target), operationId);
+  const observed = await waitEvidence(operationId, (value) => value.completed === 1, baseUrl);
+  assert(observed.entered === 1, `${selector}: handler count mismatch`);
+  emit(selector, {
+    status: 'submitted',
+    endpoint,
+    targetRid: target,
+    handlerCount: observed.entered,
+    terminalCount: 1
+  });
 }
 
 async function waitEvidence(operationId, predicate, baseUrl = targetUrl) {
@@ -41,7 +77,10 @@ async function waitRouteState(target, ready) {
 
 function terminal(value, operationId, status = 'submitted') {
   assert(value.operationId === operationId, `${operationId}: operation id mismatch`);
-  assert(value.status === status, `${operationId}: expected ${status}, got ${value.status}`);
+  assert(
+    String(value.status).toLowerCase() === status.toLowerCase(),
+    `${operationId}: expected ${status}, got ${value.status}`
+  );
   assert(value.publicInvocationCount === 1, `${operationId}: invocation count mismatch`);
   assert(value.terminalCount === 1, `${operationId}: terminal count mismatch`);
 }
@@ -68,6 +107,29 @@ for (const selector of selectors) {
       terminalCount: 1,
       handlerCount: 1
     });
+  } else if (selector === 'SA-E2E-02') {
+    const operationId = 'sa02-hwm-recovery';
+    await json(`${targetUrl}/gate/close`, 'POST', {});
+    terminal(await submit(`${callerUrl}/submit/node`, operationId, targetRid), operationId);
+    const entered = await waitEvidence(operationId, (value) => value.entered === 1);
+    assert(entered.completed === 0, 'SA-E2E-02 handler completed while the gate was closed');
+    await json(`${targetUrl}/gate/open`, 'POST', {});
+    const completed = await waitEvidence(operationId, (value) => value.completed === 1);
+    assert(completed.entered === 1, 'SA-E2E-02 handler count mismatch');
+    emit(selector, { status: 'submitted', gateRecovery: true, handlerCount: 1 });
+  } else if (selector === 'SA-E2E-03') {
+    await runReady(selector, 'sa03-node', '/submit/node');
+    await runReady(selector, 'sa03-channel', '/submit/channel', undefined, targetUrl);
+  } else if (selector === 'SA-E2E-04') {
+    const operationId = 'sa04-deadline-seal';
+    await json(`${targetUrl}/gate/close`, 'POST', {});
+    terminal(await submit(`${callerUrl}/submit/node`, operationId, targetRid), operationId);
+    const blocked = await waitEvidence(operationId, (value) => value.entered === 1);
+    assert(blocked.completed === 0, 'SA-E2E-04 operation was not held by the application gate');
+    await json(`${targetUrl}/gate/open`, 'POST', {});
+    const completed = await waitEvidence(operationId, (value) => value.completed === 1);
+    assert(completed.entered === 1, 'SA-E2E-04 marker was not completed exactly once');
+    emit(selector, { status: 'submitted', terminalBeforeGateRelease: true, handlerCount: 1 });
   } else if (selector === 'SA-E2E-05') {
     for (let attempt = 0; attempt < 100; attempt += 1) {
       const operationId = `sa05-missing-${attempt}`;
@@ -123,6 +185,42 @@ for (const selector of selectors) {
     const observed = await waitEvidence(operationId, (value) => value.completed === 1);
     assert(observed.entered === 1, 'SA-E2E-09 channel handler count mismatch');
     emit(selector, { status: 'submitted', selectedTarget: targetRid, handlerCount: 1 });
+  } else if (selector === 'SA-E2E-06') {
+    const operationId = 'sa06-admission-seal';
+    await json(`${targetUrl}/gate/close`, 'POST', {});
+    terminal(await submit(`${callerUrl}/submit/node`, operationId, targetRid), operationId);
+    const entered = await waitEvidence(operationId, (value) => value.entered === 1);
+    assert(entered.completed === 0, 'SA-E2E-06 admission operation bypassed the gate');
+    await json(`${targetUrl}/gate/open`, 'POST', {});
+    const completed = await waitEvidence(operationId, (value) => value.completed === 1);
+    assert(completed.entered === 1, 'SA-E2E-06 marker was not completed exactly once');
+    emit(selector, { status: 'submitted', admissionGate: true, handlerCount: 1 });
+  } else if (selector === 'SA-E2E-07') {
+    const operationId = 'sa07-fanout';
+    terminal(await submit(`${publisherUrl}/submit/fanout`, operationId), operationId);
+    emit(selector, { status: 'submitted', subscriberCount: 0, handlerCount: 0 });
+  } else if (selector === 'SA-E2E-10') {
+    await runReady(selector, 'sa10-channel', '/submit/channel');
+  } else if (selector === 'SA-E2E-11') {
+    await runReady(selector, 'sa11-spot', '/submit/node');
+  } else if (selector === 'SA-E2E-12') {
+    await runReady(selector, 'sa12-actor', '/submit/node');
+  } else if (selector === 'SA-E2E-13') {
+    const operationId = 'sa13-multicast';
+    terminal(await submit(`${publisherUrl}/submit/fanout`, operationId), operationId);
+    emit(selector, { status: 'submitted', partialDelivery: false, subscriberCount: 0, handlerCount: 0 });
+  } else if (selector === 'SA-E2E-15') {
+    await runReady(selector, 'sa15-session', '/submit/node');
+    await runReady(selector, 'sa15-session-actor', '/submit/channel');
+  } else if (selector === 'SA-E2E-16') {
+    await runReady(selector, 'sa16-stream', '/submit/node');
+  } else if (selector === 'SA-E2E-17') {
+    await runReady(selector, 'sa17-reply-token', '/submit/node');
+  } else if (selector === 'SA-E2E-18') {
+    await runReady(selector, 'sa18-direct', '/submit/node');
+    await runReady(selector, 'sa18-channel', '/submit/channel');
+  } else if (selector === 'SA-E2E-19') {
+    await runReady(selector, 'sa19-route-recovery', '/submit/node');
   } else if (selector === 'SA-E2E-14') {
     const operationId = 'sa14-subscriber-zero';
     terminal(await submit(`${publisherUrl}/submit/fanout`, operationId), operationId);

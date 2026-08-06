@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "runtime/fanout/raw_fanout_owner.hpp"
+#include "runtime/messaging/async_submit_runtime.hpp"
 
 #include <zlink/Contracts/Core/context.hpp>
 #include <zlink/Contracts/Eventing/poll_event.hpp>
@@ -26,27 +27,19 @@ namespace
 
 std::atomic<std::uintptr_t> next_fanout_poller_slot{1};
 
-std::vector<zlink::message_t> materialize (
-  const std::vector<std::vector<std::uint8_t>> &parts)
-{
-    std::vector<zlink::message_t> result;
-    result.reserve (parts.size ());
-    for (const auto &part : parts) {
-        result.push_back (zlink::message_t::from (part));
-    }
-    return result;
-}
-
 bool submit_publish (zlink::pub_socket_t &socket,
                      const std::string &topic,
-                     const std::vector<std::vector<std::uint8_t>> &parts)
+                     std::vector<zlink::message_t> parts,
+                     int flags = static_cast<int> (zlink::send_flags_t::dontwait))
 {
-    auto messages = materialize (parts);
-    auto operation = std::move (socket.publish (topic)).message (messages[0]);
-    for (std::size_t index = 1; index < messages.size (); ++index) {
-        operation = std::move (operation).message (messages[index]);
+    if (parts.empty ()) {
+        return false;
     }
-    return std::move (operation).submit ();
+    auto operation = std::move (socket.publish (topic)).message (parts[0]);
+    for (std::size_t index = 1; index < parts.size (); ++index) {
+        operation = std::move (operation).message (parts[index]);
+    }
+    return std::move (operation).flags (flags).submit ();
 }
 
 } // namespace
@@ -77,15 +70,20 @@ void raw_fanout_publisher_t::start ()
     auto socket = std::make_unique<zlink::pub_socket_t> (*context);
     socket->options ().linger (std::chrono::milliseconds (0));
     socket->bind (_configured_endpoint);
+    socket->set_send_ready_handler ([this] {
+        runtime::messaging::notify_submit_ready (this);
+    });
     _endpoint = socket->options ().last_endpoint ();
     _next_beacon =
       std::chrono::steady_clock::now () + fanout_beacon_interval;
     _socket = std::move (socket);
     _context = std::move (context);
+    runtime::messaging::activate_submit_owner (this);
 }
 
 void raw_fanout_publisher_t::close () noexcept
 {
+    runtime::messaging::shutdown_submit_owner (this);
     std::unique_ptr<zlink::pub_socket_t> socket;
     std::unique_ptr<zlink::context_t> context;
     {
@@ -133,21 +131,33 @@ bool raw_fanout_publisher_t::publish (
         throw std::invalid_argument (
           "fanout application topic is empty or reserved");
     }
+    auto encoded = protocol::encode_application_payload (payload);
+    std::vector<zlink::message_t> messages;
+    messages.reserve (1);
+    messages.push_back (zlink::message_t::from (std::move (encoded)));
     std::lock_guard lock (_mutex);
-    return _socket
-           && submit_publish (
-             *_socket, topic, {protocol::encode_application_payload (payload)});
+    return _socket && submit_publish (*_socket, topic, std::move (messages));
 }
 
 bool raw_fanout_publisher_t::tick (
   std::chrono::steady_clock::time_point now)
 {
+    {
+        std::lock_guard lock (_mutex);
+        if (!_socket || now < _next_beacon) {
+            return false;
+        }
+    }
+    std::vector<zlink::message_t> messages;
+    messages.reserve (1);
+    messages.push_back (
+      zlink::message_t::from (std::vector<std::uint8_t> (beacon_payload ())));
     std::lock_guard lock (_mutex);
     if (!_socket || now < _next_beacon) {
         return false;
     }
-    const auto submitted =
-      submit_publish (*_socket, reserved_topic (), {beacon_payload ()});
+    const auto submitted = submit_publish (
+      *_socket, reserved_topic (), std::move (messages));
     do {
         _next_beacon += fanout_beacon_interval;
     } while (_next_beacon <= now);
@@ -326,9 +336,9 @@ raw_fanout_subscriber_t::try_receive (
         catch (...) {
             return {fanout_receive_status_t::no_data, std::nullopt};
         }
-        zlink::topic_message_t message;
+        _received.close ();
         const auto result =
-          connection.socket->subscribe (message, zlink::recv_flags_t::dontwait);
+          connection.socket->subscribe (_received, zlink::recv_flags_t::dontwait);
         if (result == static_cast<int> (zlink::recv_result_t::no_data)
             || (result == -1
                 && (errno == EAGAIN || errno == EWOULDBLOCK))) {
@@ -338,34 +348,41 @@ raw_fanout_subscriber_t::try_receive (
             reopen_locked (connection);
             return {fanout_receive_status_t::protocol_error, std::nullopt};
         }
-        const auto &parts = message.parts ();
-        if (message.topic () == raw_fanout_publisher_t::reserved_topic ()) {
+        const auto &parts = _received.parts ();
+        if (_received.topic () == raw_fanout_publisher_t::reserved_topic ()) {
             if (parts.size () != 1
                 || parts.front ().to_bytes ()
                      != raw_fanout_publisher_t::beacon_payload ()) {
                 reopen_locked (connection);
+                _received.close ();
                 return {fanout_receive_status_t::protocol_error, std::nullopt};
             }
             connection.ready = true;
+            connection.reconnecting = false;
             connection.deadline = now + fanout_receive_deadline;
+            _received.close ();
             return {fanout_receive_status_t::beacon, std::nullopt};
         }
         if (parts.size () != 1) {
             reopen_locked (connection);
+            _received.close ();
             return {fanout_receive_status_t::protocol_error, std::nullopt};
         }
         try {
             auto payload =
               protocol::decode_application_payload (parts.front ().to_bytes ());
             connection.ready = true;
+            connection.reconnecting = false;
             connection.deadline = now + fanout_receive_deadline;
+            auto topic = _received.topic ();
+            _received.close ();
             return {
               fanout_receive_status_t::application,
-              fanout_received_t{
-                intent.routing_id, message.topic (), std::move (payload)}};
+              fanout_received_t{intent.routing_id, std::move (topic), std::move (payload)}};
         }
         catch (const protocol::service_wire_error_t &) {
             reopen_locked (connection);
+            _received.close ();
             return {fanout_receive_status_t::protocol_error, std::nullopt};
         }
     }
@@ -405,6 +422,31 @@ std::size_t raw_fanout_subscriber_t::publisher_count () const
     return _connections.size ();
 }
 
+std::vector<raw_fanout_connection_snapshot_t>
+raw_fanout_subscriber_t::connection_snapshots () const
+{
+    std::lock_guard lock (_mutex);
+    std::vector<raw_fanout_connection_snapshot_t> snapshots;
+    snapshots.reserve (_connections.size ());
+    for (const auto &[intent, connection] : _connections) {
+        auto state = raw_fanout_connection_state_t::disconnected;
+        if (connection.ready)
+            state = raw_fanout_connection_state_t::ready;
+        else if (connection.reconnecting)
+            state = raw_fanout_connection_state_t::reconnecting;
+        else if (connection.socket)
+            state = raw_fanout_connection_state_t::connecting;
+        snapshots.push_back (raw_fanout_connection_snapshot_t{
+          intent.routing_id,
+          intent.lifecycle_generation,
+          true,
+          connection.ready,
+          state,
+          std::nullopt});
+    }
+    return snapshots;
+}
+
 bool raw_fanout_subscriber_t::connect_locked (
   std::vector<std::uint8_t> publisher_routing_id,
   std::uint64_t lifecycle_generation,
@@ -439,6 +481,7 @@ bool raw_fanout_subscriber_t::connect_locked (
     }
     try {
         reopen_locked (inserted->second);
+        inserted->second.reconnecting = false;
     }
     catch (...) {
         close_connection_locked (inserted->second);
@@ -477,6 +520,7 @@ void raw_fanout_subscriber_t::reopen_locked (connection_t &connection)
                   connection.poller_slot);
     connection.socket = std::move (socket);
     connection.ready = false;
+    connection.reconnecting = true;
     connection.deadline = {};
 }
 

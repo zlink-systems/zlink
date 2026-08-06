@@ -20,13 +20,11 @@ class await_session_t final : public zlink::framework::packet_stream_session_t
   public:
     using dependency_types =
       zlink::framework::dependency_list_t<zlink::framework::route_client_t,
-                                          zlink::framework::session_actor_manager_t,
-                                          zlink::framework::spot_handle_resolver_t>;
+                                          zlink::framework::session_actor_manager_t>;
 
     await_session_t (zlink::framework::route_client_t &routes,
-                     zlink::framework::session_actor_manager_t &actors,
-                     zlink::framework::spot_handle_resolver_t &spots) :
-        _routes (routes), _actors (actors), _spots (spots)
+                     zlink::framework::session_actor_manager_t &actors) :
+        _routes (routes), _actors (actors)
     {
     }
 
@@ -322,24 +320,6 @@ class await_session_t final : public zlink::framework::packet_stream_session_t
           .evidence = std::move (evidence.evidence)};
     }
 
-    /* Resolves the opaque messaging handle for each bounded fixture attempt.
-     * The handle itself owns the safe refresh rule of the spot-address
-     * messaging contract; the retry here only covers startup races before
-     * the location row exists. */
-    zlink::framework::spot_handle_t resolve_spot (const std::string &spot_id)
-    {
-        auto handle =
-          _spots.resolve_spot_handle ((spot_id))
-            .result ()
-            .value ();
-        if (!handle) {
-            throw zlink::framework::framework_exception_t (
-              zlink::framework::framework_error_kind_t::not_found,
-              "Spot '" + spot_id + "' has no live location row.");
-        }
-        return *handle;
-    }
-
     template <typename TRequest>
     zlink::framework::task_t<void>
     send_spot (zlink::routing_id_t target,
@@ -349,19 +329,7 @@ class await_session_t final : public zlink::framework::packet_stream_session_t
     {
         (void) target;
         (void) packet;
-        const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (20);
-        std::exception_ptr last;
-        while (std::chrono::steady_clock::now () < deadline) {
-            try {
-                _routes.send_to_spot (resolve_spot (spot_id), request).submit ();
-                co_return;
-            }
-            catch (const zlink::framework::framework_exception_t &) {
-                last = std::current_exception ();
-                std::this_thread::sleep_for (std::chrono::milliseconds (100));
-            }
-        }
-        std::rethrow_exception (last);
+        co_await _routes.send_to_spot (spot_id, request).submit ();
     }
 
     template <typename TReply, typename TRequest>
@@ -374,25 +342,9 @@ class await_session_t final : public zlink::framework::packet_stream_session_t
     {
         (void) target;
         (void) packet;
-        const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (20);
-        std::exception_ptr last;
-        while (std::chrono::steady_clock::now () < deadline) {
-            try {
-                auto reply = co_await _routes.request_to_spot (resolve_spot (spot_id), request)
-                               .timeout (timeout)
-                               .template submit<TReply> ();
-                co_return reply;
-            }
-            catch (const zlink::framework::framework_exception_t &error) {
-                if (zlink::framework::detail::boundary_state (error)
-                    == zlink::framework::detail::boundary_error_t::timed_out) {
-                    throw;
-                }
-                last = std::current_exception ();
-                std::this_thread::sleep_for (std::chrono::milliseconds (100));
-            }
-        }
-        std::rethrow_exception (last);
+        co_return co_await _routes.request_to_spot (spot_id, request)
+          .timeout (timeout)
+          .template submit<TReply> ();
     }
 
     static zlink::routing_id_t
@@ -416,7 +368,6 @@ class await_session_t final : public zlink::framework::packet_stream_session_t
 
     zlink::framework::route_client_t &_routes;
     zlink::framework::session_actor_manager_t &_actors;
-    zlink::framework::spot_handle_resolver_t &_spots;
     std::map<std::string, std::string> _bound_actors;
 };
 

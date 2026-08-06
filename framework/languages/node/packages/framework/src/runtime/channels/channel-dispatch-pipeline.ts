@@ -290,9 +290,6 @@ export class ZLinkChannelDispatchPipeline {
   }
 
   private trace(outcome: ZLinkMessageFlowOutcome, fields: ZLinkChannelDispatchFields): void {
-    if (fields.messageKind === ZLinkDispatchMessageKind.Publish) {
-      return;
-    }
     const flow = this.options.dispatchErrors.flow;
     if (!flow.enabled(outcome)) {
       return;

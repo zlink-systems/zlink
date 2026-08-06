@@ -72,6 +72,7 @@ class stream_runtime_t
 
     static stream_runtime_t from (const zlink_builder_t &builder);
     std::vector<stream_snapshot_t> snapshots () const;
+    std::map<std::string, std::optional<std::string>> advertise_hosts () const;
 
     result_t<std::vector<std::uint8_t>> encode_header (const stream_header_t &header) const;
     result_t<stream_header_t> decode_header (const std::vector<std::uint8_t> &bytes) const;

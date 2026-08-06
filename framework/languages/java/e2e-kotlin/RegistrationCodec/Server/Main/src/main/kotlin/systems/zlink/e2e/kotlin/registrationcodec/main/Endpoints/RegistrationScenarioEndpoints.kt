@@ -23,6 +23,8 @@ import systems.zlink.e2e.kotlin.registrationcodec.EchoManualRes
 import systems.zlink.e2e.kotlin.registrationcodec.JsonEchoMsg
 import systems.zlink.e2e.kotlin.registrationcodec.JsonEchoReq
 import systems.zlink.e2e.kotlin.registrationcodec.JsonEchoRes
+import systems.zlink.e2e.kotlin.registrationcodec.JsonGoldenReq
+import systems.zlink.e2e.kotlin.registrationcodec.JsonGoldenRes
 import systems.zlink.e2e.kotlin.registrationcodec.PackedEchoMsg
 import systems.zlink.e2e.kotlin.registrationcodec.PackedEchoReq
 import systems.zlink.e2e.kotlin.registrationcodec.PackedEchoRes
@@ -96,6 +98,22 @@ class RegistrationScenarioEndpoints(
                         }
                 }
             exchange.writeJson(response)
+        }
+        httpServer.createContext("/codec/json-golden") { exchange ->
+            exchange.writeJson(
+                request(
+                    JsonGoldenReq(
+                        "Ada Lovelace",
+                        "ready",
+                        -9_223_372_036_854_775_000L,
+                        byteArrayOf(0x00, 0x7f, 0x80.toByte(), 0xff.toByte()),
+                        2_147_000_001,
+                        0.125,
+                        null,
+                    ),
+                    JsonGoldenRes::class.java,
+                ),
+            )
         }
     }
 

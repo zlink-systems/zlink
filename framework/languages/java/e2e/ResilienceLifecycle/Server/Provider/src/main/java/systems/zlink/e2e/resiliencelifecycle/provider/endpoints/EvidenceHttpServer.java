@@ -5,18 +5,19 @@ import com.sun.net.httpserver.HttpServer;
 import java.net.InetSocketAddress;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.util.Map;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.SmartLifecycle;
 import systems.zlink.e2e.resiliencelifecycle.provider.infrastructure.ScenarioState;
 import systems.zlink.e2e.resiliencelifecycle.shared.Contracts;
-import systems.zlink.framework.channels.ZLinkChannelRuntimeOptions;
+import systems.zlink.framework.channels.ZLinkRouteMeshRuntimeOptions;
 import systems.zlink.framework.spring.internal.runtime.ZLinkFrameworkLifecycle;
 
 public final class EvidenceHttpServer implements SmartLifecycle {
     private final ScenarioState state;
     private final ObjectMapper json;
     private final String endpoint;
-    private final ZLinkChannelRuntimeOptions runtimeOptions;
+    private final ZLinkRouteMeshRuntimeOptions runtimeOptions;
     private final ConfigurableApplicationContext applicationContext;
     private final ZLinkFrameworkLifecycle drain;
     private HttpServer server;
@@ -27,7 +28,7 @@ public final class EvidenceHttpServer implements SmartLifecycle {
         ScenarioState state,
         ObjectMapper json,
         String endpoint,
-        ZLinkChannelRuntimeOptions runtimeOptions,
+        ZLinkRouteMeshRuntimeOptions runtimeOptions,
         ConfigurableApplicationContext applicationContext,
         ZLinkFrameworkLifecycle drain) {
         this.state = state;
@@ -56,6 +57,14 @@ public final class EvidenceHttpServer implements SmartLifecycle {
                 exchange.getResponseBody().write(body);
                 exchange.close();
             });
+            server.createContext("/capabilities", exchange -> writeJson(exchange, Map.of(
+                "providerRid", state.providerRid(),
+                "clientServerConfigured", true,
+                "routeMeshConfigured", false,
+                "directionalFaultProxyConfigured", false,
+                "actorConfigured", false,
+                "spotConfigured", false,
+                "relocationStoreConfigured", false)));
             server.createContext("/admin/drain", exchange -> setWeight(exchange, 0, "drained"));
             server.createContext("/admin/restore", exchange -> setWeight(exchange, 100, "restored"));
             server.createContext("/admin/weight", exchange -> write(
@@ -108,9 +117,7 @@ public final class EvidenceHttpServer implements SmartLifecycle {
         com.sun.net.httpserver.HttpExchange exchange,
         int weight,
         String status) throws java.io.IOException {
-        runtimeOptions.clientServerChannel(Contracts.CHANNEL)
-            .configureServerSocket()
-            .weight(weight);
+        runtimeOptions.channel(Contracts.CHANNEL).weight(weight);
         state.weight(weight);
         state.record("AdminWeight", String.valueOf(weight));
         write(exchange, 200, "{\"status\":\"" + status + "\",\"weight\":" + weight + "}\n");
@@ -122,6 +129,16 @@ public final class EvidenceHttpServer implements SmartLifecycle {
         String value) throws java.io.IOException {
         byte[] body = value.getBytes(StandardCharsets.UTF_8);
         exchange.sendResponseHeaders(status, body.length);
+        exchange.getResponseBody().write(body);
+        exchange.close();
+    }
+
+    private void writeJson(
+        com.sun.net.httpserver.HttpExchange exchange,
+        Object value) throws java.io.IOException {
+        byte[] body = json.writeValueAsBytes(value);
+        exchange.getResponseHeaders().add("Content-Type", "application/json");
+        exchange.sendResponseHeaders(200, body.length);
         exchange.getResponseBody().write(body);
         exchange.close();
     }

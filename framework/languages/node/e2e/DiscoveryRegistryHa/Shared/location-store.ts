@@ -110,5 +110,7 @@ export function configureStoreFailureLocationOptions(options: ZLinkLocationOptio
     .pollingIntervalMs(100)
     .ownerLeaseRenewIntervalMs(1000)
     .ownerLeaseTtlMs(3000)
+    .ownerLeaseFencingMarginMs(500)
+    .ownerLeaseRenewTimeoutMs(500)
     .storeFailureGraceMs(6000);
 }

@@ -5,7 +5,6 @@ import java.util.concurrent.CompletionStage;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.spots.ZLinkEntrySpot;
 import systems.zlink.framework.spots.ZLinkEntrySpotContext;
-import systems.zlink.framework.spots.ZLinkSpotActorJoinResult;
 
 public final class AwaitEntrySpot implements ZLinkEntrySpot<AwaitActor> {
     private final ZLinkEntrySpotContext context;
@@ -26,13 +25,6 @@ public final class AwaitEntrySpot implements ZLinkEntrySpot<AwaitActor> {
         context.handlers().addHandler(AwaitProbeHandlers.ActorFastHandler.class);
         context.handlers().addHandler(AwaitProbeHandlers.ActorJoinAwaitHandler.class);
         context.handlers().addHandler(AwaitProbeHandlers.ActorPushNotifyAwaitHandler.class);
-    }
-
-    @Override
-    public CompletionStage<ZLinkSpotActorJoinResult> onActorJoin(
-        String actorId,
-        ZLinkMessage request) {
-        return CompletableFuture.completedFuture(ZLinkSpotActorJoinResult.accept());
     }
 
     @Override

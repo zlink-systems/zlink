@@ -300,7 +300,8 @@ client_server_location_runtime_t::client_server_location_runtime_t (
   service_provider_t &services,
   serializer_registry_t &serializers,
   const handler_registry_t &handlers,
-  std::map<std::string, std::string> advertise_hosts) :
+  std::map<std::string, std::string> advertise_hosts,
+  std::shared_ptr<listener_status_registry_t> listener_statuses) :
     _bus (std::move (bus)),
     _channel_runtime (detail::channel_runtime_t::from (_bus)),
     _channels (std::move (channels)),
@@ -310,7 +311,8 @@ client_server_location_runtime_t::client_server_location_runtime_t (
     _services (services),
     _serializers (&serializers),
     _handlers (&handlers),
-    _advertise_hosts (std::move (advertise_hosts))
+    _advertise_hosts (std::move (advertise_hosts)),
+    _listener_statuses (std::move (listener_statuses))
 {
 }
 
@@ -477,6 +479,7 @@ client_server_location_runtime_t::observe (
           "ClientServer observation requires a channel and callback");
     auto value = std::make_shared<observer_t> (
       capacity, std::move (observer));
+    value->start ();
     {
         std::lock_guard lock (_gate);
         _observers[channel_name].push_back (value);
@@ -639,7 +642,11 @@ void client_server_location_runtime_t::start_server (
         }
         entry->published_descriptor = std::move (descriptor);
     }
+    const auto endpoint = entry->owner->endpoint ();
     _servers.emplace (channel.name, std::move (entry));
+    if (_listener_statuses)
+        _listener_statuses->update (
+          listener_kind_t::client_server, channel.name, endpoint);
 }
 
 void client_server_location_runtime_t::start_client (
@@ -668,13 +675,64 @@ void client_server_location_runtime_t::start_client (
           return request (name, std::move (packet_name),
                           std::move (content_type),
                           std::move (message), timeout);
-      });
+    });
+}
+
+bool client_server_location_runtime_t::publish_descriptor_state (
+  framework_runtime_state_t state) noexcept
+{
+    if (state != framework_runtime_state_t::draining)
+        return true;
+    {
+        std::lock_guard lock (_descriptor_publish_mutex);
+        if (_stop.load (std::memory_order_acquire))
+            return false;
+        _descriptor_publish_result = false;
+        _descriptor_publish_pending = true;
+    }
+    try {
+        _wake_pipe.signal ();
+    }
+    catch (...) {
+        std::lock_guard lock (_descriptor_publish_mutex);
+        _descriptor_publish_pending = false;
+        _descriptor_publish_changed.notify_all ();
+        return false;
+    }
+
+    std::unique_lock lock (_descriptor_publish_mutex);
+    if (!_descriptor_publish_changed.wait_for (
+          lock, std::chrono::seconds (5),
+          [this] { return !_descriptor_publish_pending; })) {
+        return false;
+    }
+    return _descriptor_publish_result;
 }
 
 void client_server_location_runtime_t::run ()
 {
     auto next_reconcile = std::chrono::steady_clock::now ();
     while (!_stop.load (std::memory_order_acquire)) {
+        bool publish_requested = false;
+        {
+            std::lock_guard lock (_descriptor_publish_mutex);
+            publish_requested = _descriptor_publish_pending;
+        }
+        if (publish_requested) {
+            bool published = true;
+            try {
+                published = publish_servers ();
+            }
+            catch (...) {
+                published = false;
+            }
+            {
+                std::lock_guard lock (_descriptor_publish_mutex);
+                _descriptor_publish_result = published;
+                _descriptor_publish_pending = false;
+            }
+            _descriptor_publish_changed.notify_all ();
+        }
         const auto now = std::chrono::steady_clock::now ();
         if (now >= next_reconcile) {
             try {
@@ -746,11 +804,16 @@ void client_server_location_runtime_t::run ()
     }
 }
 
-void client_server_location_runtime_t::publish_servers ()
+bool client_server_location_runtime_t::publish_servers ()
 {
     const auto owner = _locations->current_owner_token ();
-    if (!owner)
-        return;
+    if (!owner) {
+        return std::none_of (
+          _servers.begin (), _servers.end (), [] (const auto &entry) {
+              return entry.second->published_descriptor.has_value ();
+          });
+    }
+    bool published = true;
     for (auto &[channel_name, server] : _servers) {
         if (!server->published_descriptor)
             continue;
@@ -789,7 +852,10 @@ void client_server_location_runtime_t::publish_servers ()
             .value ();
         if (written.status == location_write_status_t::stored)
             server->published_descriptor = std::move (descriptor);
+        else
+            published = false;
     }
+    return published;
 }
 
 void client_server_location_runtime_t::reconcile ()
@@ -1414,17 +1480,33 @@ void client_server_location_runtime_t::stop () noexcept
 {
     const bool was_stopped =
       _stop.exchange (true, std::memory_order_acq_rel);
+    {
+        std::lock_guard lock (_descriptor_publish_mutex);
+        _descriptor_publish_result = false;
+        _descriptor_publish_pending = false;
+    }
+    _descriptor_publish_changed.notify_all ();
     _ready.notify_all ();
-    for (const auto &[channel_name, _] : _clients)
-        _channel_runtime.unbind_client_server_transport (
-          channel_name);
     _wake_pipe.signal ();
     if (_thread.joinable ())
         _thread.join ();
-    if (!was_stopped || !_servers.empty () || !_clients.empty ()) {
+    std::vector<std::string> client_channels;
+    bool has_servers = false;
+    bool has_clients = false;
+    {
+        std::lock_guard lock (_gate);
+        client_channels.reserve (_clients.size ());
+        for (const auto &[channel_name, _] : _clients)
+            client_channels.push_back (channel_name);
+        has_servers = !_servers.empty ();
+        has_clients = !_clients.empty ();
+    }
+    if (!was_stopped || has_servers || has_clients) {
         stop_clients ();
         stop_servers ();
     }
+    for (const auto &channel_name : client_channels)
+        _channel_runtime.unbind_client_server_transport (channel_name);
     if (_transport_poller && _wake_pipe.read_fd () >= 0) {
         try {
             _transport_poller->remove_fd (_wake_pipe.read_fd ());
@@ -1462,9 +1544,18 @@ void client_server_location_runtime_t::stop_clients () noexcept
 
 void client_server_location_runtime_t::stop_servers () noexcept
 {
-    for (auto &[_, server] : _servers) {
+    std::map<std::string, std::unique_ptr<server_entry_t>> servers;
+    {
+        std::lock_guard lock (_gate);
+        servers.swap (_servers);
+        _server_pump_snapshot.clear ();
+    }
+    for (auto &[channel_name, server] : servers) {
         if (!server->published_descriptor) {
             server->owner->close ();
+            if (_listener_statuses)
+                _listener_statuses->remove (
+                  listener_kind_t::client_server, channel_name);
             continue;
         }
         try {
@@ -1505,9 +1596,10 @@ void client_server_location_runtime_t::stop_servers () noexcept
         catch (...) {
         }
         server->owner->close ();
+        if (_listener_statuses)
+            _listener_statuses->remove (
+              listener_kind_t::client_server, channel_name);
     }
-    _servers.clear ();
-    _server_pump_snapshot.clear ();
 }
 
 std::uint64_t

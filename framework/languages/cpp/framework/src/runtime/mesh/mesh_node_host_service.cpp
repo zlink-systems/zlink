@@ -344,11 +344,12 @@ mesh_node_host_service_t::mesh_node_host_service_t (
   serializer_registry_t &serializers,
   dispatch_options_t dispatch_options,
   std::shared_ptr<inbound_dispatch_budget_t> inbound_budget,
-  std::shared_ptr<completion_admission_owner_t> completion_admission) :
+  std::shared_ptr<completion_admission_owner_t> completion_admission,
+  std::shared_ptr<listener_status_registry_t> listener_statuses) :
     mesh_node_host_service_t (
       std::move (registrations), serializers, empty_handler_filters (),
       std::move (dispatch_options), std::move (inbound_budget),
-      std::move (completion_admission))
+      std::move (completion_admission), std::move (listener_statuses))
 {
 }
 
@@ -358,7 +359,8 @@ mesh_node_host_service_t::mesh_node_host_service_t (
   handler_registry_t &filters,
   dispatch_options_t dispatch_options,
   std::shared_ptr<inbound_dispatch_budget_t> inbound_budget,
-  std::shared_ptr<completion_admission_owner_t> completion_admission) :
+  std::shared_ptr<completion_admission_owner_t> completion_admission,
+  std::shared_ptr<listener_status_registry_t> listener_statuses) :
     _registrations (std::move (registrations)),
     _serializers (&serializers),
     _filters (&filters),
@@ -373,7 +375,8 @@ mesh_node_host_service_t::mesh_node_host_service_t (
     _completion_admission (
       completion_admission
         ? std::move (completion_admission)
-        : std::make_shared<completion_admission_owner_t> (65'536))
+        : std::make_shared<completion_admission_owner_t> (65'536)),
+    _listener_statuses (std::move (listener_statuses))
 {
     detail::register_spot_route_packet_serializers (serializers);
     _nodes.reserve (_registrations.size ());
@@ -1769,6 +1772,7 @@ task_t<bool> mesh_node_host_service_t::close_user_spot (
 
 void mesh_node_host_service_t::start (service_provider_t &services)
 {
+    try {
     _services = &services;
     if (auto actor_gateway =
           services.get<detail::actor_gateway_runtime_t> ()) {
@@ -2212,6 +2216,13 @@ void mesh_node_host_service_t::start (service_provider_t &services)
               }
           });
         node->start ();
+        if (_listener_statuses) {
+            const auto status = node->status ();
+            _listener_statuses->update (
+              listener_kind_t::route_mesh,
+              node->mesh_name (),
+              status.local_endpoint ());
+        }
         node->native_node ().objects ().configure_relocation_state (
           [registration] (
             const stateful::object_ref_t &spot,
@@ -2694,6 +2705,11 @@ void mesh_node_host_service_t::start (service_provider_t &services)
             }
         });
     }
+    }
+    catch (...) {
+        stop ();
+        throw;
+    }
 }
 
 void mesh_node_host_service_t::request_stop () noexcept
@@ -2745,12 +2761,12 @@ bool mesh_node_host_service_t::publish_descriptor_state (
   framework_runtime_state_t state) noexcept
 {
     std::lock_guard lock (_descriptor_publish_mutex);
-    if (!_location_store || !_location_owner)
+    if (!_location_store || !_location_owner) {
         return _published_mesh_descriptors.empty ();
+    }
     try {
         for (std::size_t index = 0;
-             index < _published_mesh_descriptors.size ();
-             ++index) {
+             index < _published_mesh_descriptors.size ();) {
             auto current = _published_mesh_descriptors[index];
             location_page_request_t page;
             bool found = false;
@@ -2779,10 +2795,24 @@ bool mesh_node_host_service_t::publish_descriptor_state (
                 page.continuation_token =
                   std::move (listed.continuation_token);
             } while (page.continuation_token);
-            if (!found)
+            if (!found) {
+                /* A draining host may already have lost its descriptor when
+                 * an earlier lease cleanup fenced the row. Shutdown is
+                 * idempotent in that state; relocation still requires the
+                 * descriptor to be present so it keeps the store failure
+                 * signal. */
+                if (state == framework_runtime_state_t::draining) {
+                    _published_mesh_descriptors.erase (
+                      _published_mesh_descriptors.begin () + index);
+                    _published_mesh_nodes.erase (
+                      _published_mesh_nodes.begin () + index);
+                    continue;
+                }
                 return false;
+            }
             if (current.state == state) {
                 _published_mesh_descriptors[index] = std::move (current);
+                ++index;
                 continue;
             }
             if (current.descriptor_revision
@@ -2797,9 +2827,11 @@ bool mesh_node_host_service_t::publish_descriptor_state (
                                      location_write_intent_t::renew)
                                    .result ()
                                    .value ();
-            if (written.status != location_write_status_t::stored)
+            if (written.status != location_write_status_t::stored) {
                 return false;
+            }
             _published_mesh_descriptors[index] = std::move (current);
+            ++index;
         }
         return true;
     }
@@ -2860,9 +2892,15 @@ void mesh_node_host_service_t::stop () noexcept
     if (_location_store && _location_owner) {
         for (const auto &key : _published_mesh_nodes) {
             try {
-                (void) _location_store
-                  ->remove_mesh_node (key, *_location_owner)
-                  .result ();
+                const auto removed = _location_store
+                                       ->remove_mesh_node (key, *_location_owner)
+                                       .result ()
+                                       .value ();
+                const char *trace = std::getenv ("ZLINK_CPP_HOST_STOP_TRACE");
+                if (trace != nullptr && *trace != '\0' && std::string_view (trace) != "0")
+                    std::cerr << "zlink-cpp-host-stop mesh-descriptor-remove mesh="
+                              << key.mesh_name << " status="
+                              << static_cast<int> (removed) << std::endl;
             }
             catch (...) {
             }
@@ -2874,6 +2912,9 @@ void mesh_node_host_service_t::stop () noexcept
     for (auto &node : _nodes) {
         trace_mesh_host_stop ("node-stop-begin");
         node->stop ();
+        if (_listener_statuses)
+            _listener_statuses->remove (
+              listener_kind_t::route_mesh, node->mesh_name ());
         trace_mesh_host_stop ("node-stop-end");
     }
 }

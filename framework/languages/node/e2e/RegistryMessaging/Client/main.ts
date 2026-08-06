@@ -15,6 +15,7 @@ import { runRmC5 } from './Scenarios/rm-c5-missing-packet-scenario';
 import { runRmC7 } from './Scenarios/rm-c7-weighted-provider-scenario';
 import { runRmC8 } from './Scenarios/rm-c8-payload-round-trip-scenario';
 import { runRmC9 } from './Scenarios/rm-c9-backpressure-scenario';
+import { runRMA7 } from './Scenarios/rm-a7-scenario';
 
 async function main(): Promise<void> {
   const options = parseClientOptions(process.argv.slice(2));
@@ -34,11 +35,13 @@ async function main(): Promise<void> {
     'RM-C5': () => runRmC5(options.locationConsumerUrl, options.providerAUrl, options.providerBUrl),
     'RM-C7': () => runRmC7(options),
     'RM-C8': () => runRmC8(options.singleConsumerUrl, options.directConsumerUrl, options.providerAUrl),
-    'RM-C9': () => runRmC9(options.backpressureConsumerUrl, options.providerAUrl)
+    'RM-C9': () => runRmC9(options.backpressureConsumerUrl, options.providerAUrl),
+    'RM-A7': () => runRMA7(options)
   };
   const defaultScenarioIds = [
     'RM-A1',
     'RM-A2',
+    'RM-A7',
     'RM-A4',
     'RM-A6',
     'RM-B1',

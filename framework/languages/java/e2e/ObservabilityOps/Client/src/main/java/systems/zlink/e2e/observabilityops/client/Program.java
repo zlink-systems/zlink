@@ -53,8 +53,16 @@ public final class Program {
                 options.streamEndpoint(), options.requiredDrainUrl(), options.requiredScenarioOutput());
             case "OBS-C5-BIND" -> support.runDrainRolloutBind(connector);
             case "OBS-C5-PROBE" -> support.runDrainTargetProbe(connector);
+            case "OBS-C6-PREPARE", "OBS-C7-PREPARE", "OBS-C8-PREPARE",
+                "OBS-C9A-PREPARE", "OBS-C9B-PREPARE", "OBS-C10-PREPARE",
+                "OBS-C11-PREPARE", "OBS-C12-PREPARE" ->
+                support.runRelocationWorkloadPrepare(connector, scenario.replace("-PREPARE", ""));
+            case "OBS-C6-AFTER", "OBS-C7-AFTER", "OBS-C9A-AFTER", "OBS-C10-AFTER",
+                "OBS-C11-AFTER" ->
+                support.runRelocationWorkloadAfter(connector, scenario.replace("-AFTER", ""));
             default -> throw new IllegalArgumentException(
                 "unknown ObservabilityOps client scenario: " + scenario);
         }
     }
+
 }

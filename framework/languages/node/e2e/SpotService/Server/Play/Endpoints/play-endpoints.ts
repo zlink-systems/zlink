@@ -136,14 +136,14 @@ export function createPlayEndpoints(
         } catch (error) {
           if (
             error instanceof ZLinkFrameworkException
-            && error.kind === ZLinkFrameworkErrorKind.SpotGenerationStale
+            && error.kind === ZLinkFrameworkErrorKind.InvalidOperation
           ) {
             evidence.add(`close-spot-stale|rid=${evidence.rid}|spot=${request.spotId}`);
             return {
               spotId: request.spotId,
               closed: false,
               staleGeneration: true,
-              errorKind: error.kind
+              errorKind: 'InvalidOperation'
             } satisfies CloseSpotExactRes;
           }
           throw error;
@@ -180,13 +180,13 @@ export function createPlayEndpoints(
             .inMesh(SpotServiceNames.spotChannel)
             .submit();
         } catch (error) {
-          if (error instanceof ZLinkFrameworkException && error.kind === ZLinkFrameworkErrorKind.SpotTypeMismatch) {
-            evidence.add(`spot-type-mismatch|rid=${evidence.rid}|spot=${request.spotId}|kind=SpotTypeMismatch`);
+          if (error instanceof ZLinkFrameworkException && error.kind === ZLinkFrameworkErrorKind.TypeMismatch) {
+            evidence.add(`spot-type-mismatch|rid=${evidence.rid}|spot=${request.spotId}|kind=TypeMismatch`);
             const state = typeof first.state === 'string' ? first.state : String(first.state);
             return {
               spotId: request.spotId,
               failed: true,
-              errorKind: 'SpotTypeMismatch',
+              errorKind: 'TypeMismatch',
               state
             };
           }
@@ -568,7 +568,7 @@ export function createPlayEndpoints(
             .submit<StateRes>();
         } catch (error) {
           failed = true;
-          if (error instanceof ZLinkFrameworkException) errorKind = error.kind;
+          if (error instanceof ZLinkFrameworkException) errorKind = publicErrorKind(error);
         }
         return {
           spotId: request.spotId,
@@ -591,7 +591,7 @@ export function createPlayEndpoints(
             .submit();
         } catch (error) {
           failed = true;
-          if (error instanceof ZLinkFrameworkException) errorKind = error.kind;
+          if (error instanceof ZLinkFrameworkException) errorKind = publicErrorKind(error);
         }
         return {
           spotId: request.spotId,
@@ -742,11 +742,15 @@ async function requireSpotRef(spotRefs: ZLinkSpotManager, spotId: string) {
   const spot = await spotRefs.find(spotId);
   if (spot === undefined) {
     throw new ZLinkFrameworkException(
-      ZLinkFrameworkErrorKind.SpotRouteNotFound,
+      ZLinkFrameworkErrorKind.NotFound,
       `SPOT '${spotId}' has no live location row.`
     );
   }
   return spot;
+}
+
+function publicErrorKind(error: ZLinkFrameworkException): string {
+  return ZLinkFrameworkErrorKind[error.kind] ?? String(error.kind);
 }
 
 async function fails(operation: () => Promise<void>): Promise<boolean> {

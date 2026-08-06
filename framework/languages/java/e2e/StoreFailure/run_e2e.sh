@@ -24,8 +24,11 @@ echo "start_order=${e2e_start_order}"
 if [[ -z "${ZLINK_LIBRARY_PATH:-}" && -f "${default_core_lib}" ]]; then
   export ZLINK_LIBRARY_PATH="${default_core_lib}"
 fi
-readonly e2e_build_dir="${HOME}/.cache/zlink/java-e2e/StoreFailure"
-readonly gradle_cache_dir="${HOME}/.cache/zlink/java-e2e/StoreFailure-gradle-cache"
+# Gradle's Java module path includes the framework jars produced by this build.
+# A run-specific output directory prevents a concurrent language/framework build
+# from leaving an older module graph in the canonical StoreFailure runner.
+readonly e2e_build_dir="${HOME}/.cache/zlink/java-e2e/StoreFailure-${run_id}"
+readonly gradle_cache_dir="${HOME}/.cache/zlink/java-e2e/StoreFailure-gradle-cache-${run_id}"
 redis_command_timeout_ms=500
 location_key_prefix="zlink:e2e:store-failure:${run_id}"
 location_heartbeat_ms=1000
@@ -36,6 +39,9 @@ LOCAL_READINESS_TIMEOUT_SECONDS=3
 LOCAL_READINESS_POLL_SECONDS=0.1
 LOCAL_READINESS_ATTEMPTS=30
 SCENARIO_SETTLE_SECONDS=3
+# Inventory blockers: SF-C5 SF-F1 SF-F2 SF-F3 SF-F4 SF-F5 SF-F6 SF-F7 SF-F8
+# SF-F10 SF-F11 SF-G1 SF-G2 SF-G3. These selectors remain rejected until a
+# real fixture and evidence path exists; a selector must not become a marker-only success.
 if rg -n 'java\.net\.http\.HttpClient|HttpClient\.new' \
     Client/src/main/java Shared/src/main/java --glob '*.java'; then
   echo "StoreFailure client must use ZLinkHttpClient" >&2
@@ -102,6 +108,7 @@ cleanup() {
     docker rm -fv "${REDIS_CONTAINER}" >/dev/null 2>&1 || true
   fi
   if [[ -n "${REDIS_PROXY_PID}" ]]; then
+    kill -CONT "${REDIS_PROXY_PID}" >/dev/null 2>&1 || true
     kill "${REDIS_PROXY_PID}" >/dev/null 2>&1 || true
   fi
   if [[ -n "${BASE_REDIS_CONTAINER}" ]]; then
@@ -177,39 +184,22 @@ if target.startswith("tcp://"):
 host, port_text = target.rsplit(":", 1)
 target_addr = (host, int(port_text))
 
-class ConnectionDelay:
-    def __init__(self):
-        self.lock = threading.Lock()
-        self.request_buffer = b""
-        self.pending_peer_list_responses = 0
+def current_delay():
+    try:
+        return int(delay_path.read_text(encoding="utf-8").strip() or "0")
+    except (OSError, ValueError):
+        return 0
 
-    def note_request(self, data):
-        with self.lock:
-            self.request_buffer = (self.request_buffer + data)[-4096:]
-            upper = self.request_buffer.upper()
-            if b"SMEMBERS" in upper and b":KEYS:PEER" in upper:
-                self.pending_peer_list_responses += 1
-                self.request_buffer = b""
-
-    def take_peer_list_response(self):
-        with self.lock:
-            if self.pending_peer_list_responses == 0:
-                return False
-            self.pending_peer_list_responses -= 1
-            return True
-
-def pump(source, destination, connection_delay, request_direction=False):
+def pump(source, destination, response_direction=False):
     try:
         while True:
             data = source.recv(65536)
             if not data:
                 return
-            if request_direction:
-                connection_delay.note_request(data)
-            elif connection_delay.take_peer_list_response():
-                delay = int(delay_path.read_text(encoding="utf-8").strip() or "0")
+            if response_direction:
+                delay = current_delay()
                 if delay > 0:
-                    print(f"redis proxy peer-list response delay milliseconds={delay}", flush=True)
+                    print(f"redis proxy response delay milliseconds={delay}", flush=True)
                     time.sleep(delay / 1000.0)
             destination.sendall(data)
     except OSError:
@@ -237,14 +227,13 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
         except OSError:
             client.close()
             continue
-        connection_delay = ConnectionDelay()
         threading.Thread(
             target=pump,
-            args=(client, upstream, connection_delay, True),
+            args=(client, upstream, False),
             daemon=True).start()
         threading.Thread(
             target=pump,
-            args=(upstream, client, connection_delay, False),
+            args=(upstream, client, True),
             daemon=True).start()
 PY
     REDIS_PROXY_PID="$!"
@@ -289,6 +278,7 @@ stop_redis_container() {
     REDIS_CONTAINER=""
   fi
   if [[ -n "${REDIS_PROXY_PID}" ]]; then
+    kill -CONT "${REDIS_PROXY_PID}" >/dev/null 2>&1 || true
     kill "${REDIS_PROXY_PID}" >/dev/null 2>&1 || true
     REDIS_PROXY_PID=""
   fi
@@ -312,7 +302,8 @@ wait_port() {
 
 gradle_run() {
   ../../gradlew -PzlinkE2eBuildDir="${e2e_build_dir}" \
-    --project-cache-dir "${gradle_cache_dir}" --no-daemon "$@" --quiet
+    --project-cache-dir "${gradle_cache_dir}" --no-daemon --no-parallel \
+    --max-workers=1 "$@" --quiet
 }
 
 provider_bin() {
@@ -332,9 +323,15 @@ start_provider() {
   local endpoint="$2"
   local name="${3:-${rid}}"
   local http_endpoint="${4:-}"
+  local c4_roles="${5:-false}"
+  local c4_route_a_endpoint="${6:-}"
+  local c4_route_b_endpoint="${7:-}"
+  local c4_client_server_port="${8:-0}"
+  local c4_fanout_port="${9:-0}"
   local config_path="${config_dir}/${name}-$(date +%s%N).properties"
   {
     echo "e2e.rid=${rid}"
+    echo "e2e.lifecycle-id=${name}"
     echo "e2e.http-endpoint=${http_endpoint}"
     echo "e2e.channel-endpoint=${endpoint}"
     echo "e2e.redis-location-endpoint=${redis_location_endpoint}"
@@ -346,6 +343,11 @@ start_provider() {
     echo "e2e.store-failure-grace-millis=${location_store_failure_grace_ms}"
     echo "e2e.evidence-file="
     echo "e2e.log-dir=${log_dir}"
+    echo "e2e.c4-roles=${c4_roles}"
+    echo "e2e.c4-route-a-endpoint=${c4_route_a_endpoint}"
+    echo "e2e.c4-route-b-endpoint=${c4_route_b_endpoint}"
+    echo "e2e.c4-client-server-port=${c4_client_server_port}"
+    echo "e2e.c4-fanout-port=${c4_fanout_port}"
   } >"${config_path}"
   chmod 600 "${config_path}"
   "$(provider_bin)" --config "${config_path}" >"${log_dir}/${name}.stdout.log" 2>"${log_dir}/${name}.stderr.log" &
@@ -361,6 +363,10 @@ start_consumer() {
   local name="$1"
   local http_endpoint="$2"
   local store_mode="${3:-stamp}"
+  local c4_roles="${4:-false}"
+  local c4_route_a_endpoint="${5:-}"
+  local c4_route_b_endpoint="${6:-}"
+  local c4_client_server_endpoint="${7:-}"
   local config_path="${config_dir}/${name}-$(date +%s%N).properties"
   {
     echo "e2e.rid=${name}"
@@ -375,6 +381,10 @@ start_consumer() {
     echo "e2e.store-failure-grace-millis=${location_store_failure_grace_ms}"
     echo "e2e.store-delay-control-file=${REDIS_DELAY_CONTROL_FILE}"
     echo "e2e.log-dir=${log_dir}"
+    echo "e2e.c4-roles=${c4_roles}"
+    echo "e2e.c4-route-a-endpoint=${c4_route_a_endpoint}"
+    echo "e2e.c4-route-b-endpoint=${c4_route_b_endpoint}"
+    echo "e2e.c4-client-server-endpoint=${c4_client_server_endpoint}"
   } >"${config_path}"
   chmod 600 "${config_path}"
   "$(consumer_bin)" --config "${config_path}" >"${log_dir}/${name}.stdout.log" 2>"${log_dir}/${name}.stderr.log" &
@@ -390,9 +400,11 @@ run_client() {
   local expected_absent_rids="${4:-}"
   local dead_rid="${5:-api-b}"
   local background="${6:-false}"
+  local expected_lifecycle_id="${7:-}"
   local config_path="${config_dir}/client-${suffix}-$(date +%s%N).properties"
   {
     echo "expectedRids=${expected_rids}"
+    echo "expectedLifecycleId=${expected_lifecycle_id}"
     echo "consumerHttpEndpoint=${CONSUMER_HTTP}"
     echo "deadRid=${dead_rid}"
     echo "expectedAbsentRids=${expected_absent_rids}"
@@ -529,12 +541,36 @@ if parse(after) <= parse(before):
 PY
 }
 
+sleep_millis() {
+  python3 - "$1" <<'PY'
+import sys
+import time
+time.sleep(int(sys.argv[1]) / 1000.0)
+PY
+}
+
+evidence_count() {
+  local endpoint="$1"
+  local contains="$2"
+  python3 - "${endpoint}" "${contains}" <<'PY'
+import json
+import sys
+import urllib.request
+
+endpoint = sys.argv[1]
+contains = sys.argv[2]
+with urllib.request.urlopen(endpoint + "/evidence", timeout=5) as response:
+    evidence = json.load(response)
+print(sum(1 for line in evidence if contains in line))
+PY
+}
+
 should_run() {
   local target="$1"
   [[ "${SCENARIO}" == "${target}" || ( "${SCENARIO}" == "all" && "${target}" == SF-* ) ]]
 }
 
-if [[ "${SCENARIO}" != "all" && "${SCENARIO}" != "SF-A1" && "${SCENARIO}" != "SF-A2" && "${SCENARIO}" != "SF-B1" && "${SCENARIO}" != "SF-B2" && "${SCENARIO}" != "SF-C1" && "${SCENARIO}" != "SF-C2" && "${SCENARIO}" != "SF-D1" && "${SCENARIO}" != "SF-D2" && "${SCENARIO}" != "SF-D3" && "${SCENARIO}" != "SF-E1" ]]; then
+if [[ "${SCENARIO}" != "all" && "${SCENARIO}" != "SF-A1" && "${SCENARIO}" != "SF-A2" && "${SCENARIO}" != "SF-B1" && "${SCENARIO}" != "SF-B2" && "${SCENARIO}" != "SF-B3" && "${SCENARIO}" != "SF-C1" && "${SCENARIO}" != "SF-C2" && "${SCENARIO}" != "SF-C3" && "${SCENARIO}" != "SF-C4" && "${SCENARIO}" != "SF-D1" && "${SCENARIO}" != "SF-D2" && "${SCENARIO}" != "SF-D3" && "${SCENARIO}" != "SF-E1" && "${SCENARIO}" != "SF-F9" ]]; then
   echo "unknown StoreFailure scenario: ${SCENARIO}" >&2
   exit 1
 fi
@@ -592,15 +628,57 @@ start_redis_container
 read -r AH BH CH A B <<<"$(reserve_ports 5)"
 API_A="$(tcp "${A}")"; API_B="$(tcp "${B}")"
 HTTP_A="$(http "${AH}")"; HTTP_B="$(http "${BH}")"; CONSUMER_HTTP="$(http "${CH}")"
-start_initial_topology "consumer-SF-B2"
-run_client "SF-A1" "api-a,api-b" "SF-B2-baseline" "" "api-b" "false"
+start_provider api-a "${API_A}" api-a "${HTTP_A}"
+API_A_PID="${LAST_PID}"
+start_consumer "consumer-SF-B2" "${CONSUMER_HTTP}"
+run_client "SF-A1" "api-a" "SF-B2-baseline" "" "api-b" "false"
 cat "${log_dir}/client-SF-B2-baseline.stdout.log"
 pause_redis_container
-run_client "SF-B2" "api-a,api-b" "SF-B2" "" "api-b" "false"
+sleep_millis "$((location_store_failure_grace_ms + location_heartbeat_ms * 2))"
+start_provider api-b "${API_B}" api-b "${HTTP_B}"
+API_B_PID="${LAST_PID}"
+run_client "SF-B2" "api-a" "SF-B2" "" "api-b" "false"
 cat "${log_dir}/client-SF-B2.stdout.log"
+for child in $(descendants "${API_B_PID}"); do
+  kill -9 "${child}" >/dev/null 2>&1 || true
+done
+kill -9 "${API_B_PID}" >/dev/null 2>&1 || true
+wait "${API_B_PID}" >/dev/null 2>&1 || true
 unpause_redis_container
+start_provider api-b "${API_B}" api-b-recovered "${HTTP_B}"
+API_B_PID="${LAST_PID}"
 run_client "SF-B2-RECOVERED" "api-a,api-b" "SF-B2-recovered" "" "api-b" "false"
 cat "${log_dir}/client-SF-B2-recovered.stdout.log"
+stop_all
+stop_redis_container
+fi
+
+if should_run SF-B3; then
+start_redis_container
+read -r AH CH A <<<"$(reserve_ports 3)"
+API_A="$(tcp "${A}")"
+HTTP_A="$(http "${AH}")"; CONSUMER_HTTP="$(http "${CH}")"
+start_provider api-a "${API_A}" api-a "${HTTP_A}"
+API_A_PID="${LAST_PID}"
+start_consumer "consumer-SF-B3" "${CONSUMER_HTTP}"
+run_client "SF-B3-READY" "api-a" "SF-B3-ready" "" "" "false" "api-a"
+cat "${log_dir}/client-SF-B3-ready.stdout.log"
+pause_redis_container
+sleep_millis "$((location_lease_ttl_ms + location_heartbeat_ms))"
+SF_B3_TIMER_AT_DEADLINE="$(evidence_count "${HTTP_A}" "marker=lease-timer")"
+sleep_millis 500
+SF_B3_TIMER_AFTER_DEADLINE="$(evidence_count "${HTTP_A}" "marker=lease-timer")"
+echo "SF-B3 timer evidence at-deadline=${SF_B3_TIMER_AT_DEADLINE} after-deadline=${SF_B3_TIMER_AFTER_DEADLINE}" >&2
+run_client "SF-B3-TRANSPORT" "api-a" "SF-B3-transport" "" "" "false"
+cat "${log_dir}/client-SF-B3-transport.stdout.log"
+run_client "SF-B3-EXPIRED" "api-a" "SF-B3-expired" "" "" "false" "api-a"
+cat "${log_dir}/client-SF-B3-expired.stdout.log"
+if [[ "${SF_B3_TIMER_AT_DEADLINE}" != "${SF_B3_TIMER_AFTER_DEADLINE}" ]]; then
+  echo "SF-B3 timer advanced after owner lease deadline: before=${SF_B3_TIMER_AT_DEADLINE} after=${SF_B3_TIMER_AFTER_DEADLINE}" >&2
+  exit 1
+fi
+echo "scenario SF-B3 passed" | tee "${log_dir}/client-SF-B3.stdout.log"
+unpause_redis_container
 stop_all
 stop_redis_container
 fi
@@ -631,6 +709,123 @@ wait "${API_B_PID}" >/dev/null 2>&1 || true
 run_client "SF-C2" "api-a" "SF-C2" "" "api-b" "false"
 cat "${log_dir}/client-SF-C2.stdout.log"
 stop_all
+fi
+
+if should_run SF-C3; then
+read -r OH RH CH O R <<<"$(reserve_ports 5)"
+OLD_API="$(tcp "${O}")"; REPLACEMENT_API="$(tcp "${R}")"
+OLD_HTTP="$(http "${OH}")"; REPLACEMENT_HTTP="$(http "${RH}")"; CONSUMER_HTTP="$(http "${CH}")"
+start_provider api-a "${OLD_API}" api-a-old "${OLD_HTTP}"
+OLD_PID="${LAST_PID}"
+start_consumer "consumer-SF-C3" "${CONSUMER_HTTP}"
+run_client "SF-B3-READY" "api-a" "SF-C3-old" "" "" "false" "api-a-old"
+cat "${log_dir}/client-SF-C3-old.stdout.log"
+kill -STOP "${OLD_PID}"
+sleep_millis "$((location_lease_ttl_ms + location_heartbeat_ms))"
+start_provider api-a "${REPLACEMENT_API}" api-a-replacement "${REPLACEMENT_HTTP}"
+REPLACEMENT_PID="${LAST_PID}"
+run_client "SF-C3" "api-a" "SF-C3-replacement" "" "" "false" "api-a-replacement"
+cat "${log_dir}/client-SF-C3-replacement.stdout.log"
+SF_C3_OLD_EVIDENCE="$(evidence_count "${REPLACEMENT_HTTP}" "marker=sf-c3-replacement")"
+if [[ "${SF_C3_OLD_EVIDENCE}" -lt 20 ]]; then
+  echo "SF-C3 replacement did not record all marker requests: ${SF_C3_OLD_EVIDENCE}" >&2
+  exit 1
+fi
+kill -CONT "${OLD_PID}"
+sleep_millis "$((location_polling_ms * 2))"
+SF_C3_OLD_BEFORE="$(evidence_count "${OLD_HTTP}" "marker=sf-c3-replacement")"
+run_client "SF-C3" "api-a" "SF-C3-after-resume" "" "" "false" "api-a-replacement"
+cat "${log_dir}/client-SF-C3-after-resume.stdout.log"
+SF_C3_OLD_AFTER="$(evidence_count "${OLD_HTTP}" "marker=sf-c3-replacement")"
+if [[ "${SF_C3_OLD_BEFORE}" != "${SF_C3_OLD_AFTER}" ]]; then
+  echo "SF-C3 old lifecycle handled replacement marker: before=${SF_C3_OLD_BEFORE} after=${SF_C3_OLD_AFTER}" >&2
+  exit 1
+fi
+stop_all
+fi
+
+if should_run SF-C4; then
+read -r AH CH A RA RB CS F <<<"$(reserve_ports 7)"
+API_A="$(tcp "${A}")"; ROUTE_A="$(tcp "${RA}")"; ROUTE_B="$(tcp "${RB}")"
+CLIENT_SERVER="$(tcp "${CS}")"; FANOUT="$(tcp "${F}")"
+HTTP_A="$(http "${AH}")"; CONSUMER_HTTP="$(http "${CH}")"
+start_provider api-a "${API_A}" api-a-old "${HTTP_A}" true "${ROUTE_A}" "${ROUTE_B}" "${CS}" "${F}"
+API_A_PID="${LAST_PID}"
+start_consumer "consumer-SF-C4" "${CONSUMER_HTTP}" stamp true "${ROUTE_A}" "${ROUTE_B}" "${CLIENT_SERVER}"
+for endpoint in "${ROUTE_A}" "${ROUTE_B}" "${CLIENT_SERVER}" "${FANOUT}"; do
+  wait_port "SF-C4-role" "${endpoint}"
+done
+python3 - "${HTTP_A}" "${CONSUMER_HTTP}" "api-a-old" <<'PY'
+import json
+import sys
+import urllib.request
+
+provider, consumer, expected_lifecycle = sys.argv[1:]
+
+def post(endpoint, path, body):
+    request = urllib.request.Request(
+        endpoint + path,
+        data=json.dumps(body).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST")
+    with urllib.request.urlopen(request, timeout=10) as response:
+        return json.load(response)
+
+roles = post(provider, "/c4/probe", {"marker": "sf-c4-old"})
+client = post(consumer, "/c4/client-probe", {"marker": "sf-c4-old"})
+assert roles["fanout"] == "published", roles
+assert client["routeA"] == "api-a", client
+assert client["routeB"] == "api-a", client
+assert client["clientServer"] == "api-a", client
+assert client["routeALifecycle"] == expected_lifecycle, client
+assert client["routeBLifecycle"] == expected_lifecycle, client
+assert client["clientServerLifecycle"] == expected_lifecycle, client
+print("scenario SF-C4 old roles passed", roles, client)
+PY
+kill -9 "${API_A_PID}" >/dev/null 2>&1 || true
+wait "${API_A_PID}" >/dev/null 2>&1 || true
+start_provider api-a "${API_A}" api-a-replacement "${HTTP_A}" true "${ROUTE_A}" "${ROUTE_B}" "${CS}" "${F}"
+API_A_PID="${LAST_PID}"
+python3 - "${HTTP_A}" "${CONSUMER_HTTP}" <<'PY'
+import json
+import sys
+import time
+import urllib.request
+
+provider, consumer = sys.argv[1:]
+
+def post(endpoint, path, body):
+    request = urllib.request.Request(
+        endpoint + path,
+        data=json.dumps(body).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST")
+    with urllib.request.urlopen(request, timeout=10) as response:
+        return json.load(response)
+
+last = None
+for _ in range(30):
+    try:
+        roles = post(provider, "/c4/probe", {"marker": "sf-c4-replacement"})
+        client = post(consumer, "/c4/client-probe", {"marker": "sf-c4-replacement"})
+        if client["routeALifecycle"] == "api-a-replacement":
+            assert client["routeA"] == "api-a", client
+            assert client["routeB"] == "api-a", client
+            assert client["clientServer"] == "api-a", client
+            assert client["routeBLifecycle"] == "api-a-replacement", client
+            assert client["clientServerLifecycle"] == "api-a-replacement", client
+            assert roles["fanout"] == "published", roles
+            print("scenario SF-C4 replacement passed", roles, client)
+            break
+        last = client
+    except Exception as error:
+        last = error
+    time.sleep(0.2)
+else:
+    raise SystemExit(f"SF-C4 replacement roles did not converge: {last}")
+PY
+stop_all
+echo "scenario SF-C4 passed" | tee "${log_dir}/client-SF-C4.stdout.log"
 fi
 
 if should_run SF-D1; then
@@ -743,14 +938,42 @@ done
 redis_location_endpoint="${SF_E1_PROXY_ENDPOINT}"
 run_client "SF-E1" "api-a,api-b" "SF-E1" "" "api-b" "false"
 cat "${log_dir}/client-SF-E1.stdout.log"
-grep -q "redis proxy peer-list response delay milliseconds=1200" \
+grep -q "redis proxy response delay milliseconds=1200" \
   "${log_dir}/redis-proxy.stdout.log"
 stop_all
 stop_redis_container
 fi
 
+if should_run SF-F9; then
+read -r OH RH CH O R <<<"$(reserve_ports 5)"
+OLD_API="$(tcp "${O}")"; REPLACEMENT_API="$(tcp "${R}")"
+OLD_HTTP="$(http "${OH}")"; REPLACEMENT_HTTP="$(http "${RH}")"; CONSUMER_HTTP="$(http "${CH}")"
+start_provider api-a "${OLD_API}" api-a-old "${OLD_HTTP}"
+OLD_PID="${LAST_PID}"
+start_consumer "consumer-SF-F9" "${CONSUMER_HTTP}"
+run_client "SF-A1" "api-a" "SF-F9-old" "" "" "false"
+cat "${log_dir}/client-SF-F9-old.stdout.log"
+kill -STOP "${OLD_PID}"
+sleep_millis "$((location_lease_ttl_ms + location_heartbeat_ms))"
+start_provider api-a "${REPLACEMENT_API}" api-a-replacement "${REPLACEMENT_HTTP}"
+REPLACEMENT_PID="${LAST_PID}"
+run_client "SF-F9" "api-a" "SF-F9-replacement" "" "" "false" "api-a-replacement"
+cat "${log_dir}/client-SF-F9-replacement.stdout.log"
+kill -CONT "${OLD_PID}"
+sleep_millis "$((location_polling_ms * 2))"
+SF_F9_OLD_BEFORE="$(evidence_count "${OLD_HTTP}" "marker=sf-f9-replacement")"
+run_client "SF-F9" "api-a" "SF-F9-after-resume" "" "" "false" "api-a-replacement"
+cat "${log_dir}/client-SF-F9-after-resume.stdout.log"
+SF_F9_OLD_AFTER="$(evidence_count "${OLD_HTTP}" "marker=sf-f9-replacement")"
+if [[ "${SF_F9_OLD_BEFORE}" != "${SF_F9_OLD_AFTER}" ]]; then
+  echo "SF-F9 old lifecycle handled replacement marker: before=${SF_F9_OLD_BEFORE} after=${SF_F9_OLD_AFTER}" >&2
+  exit 1
+fi
+stop_all
+fi
+
 if [[ "${SCENARIO}" == "all" ]]; then
-  for scenario in SF-A1 SF-A2 SF-B1 SF-B2 SF-C1 SF-C2 SF-D1 SF-D2 SF-D3 SF-E1; do
+  for scenario in SF-A1 SF-A2 SF-B1 SF-B2 SF-B3 SF-C1 SF-C2 SF-C3 SF-C4 SF-D1 SF-D2 SF-D3 SF-E1 SF-F9; do
     grep -Rq "scenario ${scenario} " "${log_dir}"/client-*.stdout.log
   done
 else

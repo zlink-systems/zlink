@@ -11,6 +11,7 @@ import systems.zlink.e2e.kotlin.registrationcodec.client.scenarios.RcB1JsonCodec
 import systems.zlink.e2e.kotlin.registrationcodec.client.scenarios.RcB2ProtobufCodecScenario
 import systems.zlink.e2e.kotlin.registrationcodec.client.scenarios.RcB3MessagePackCodecScenario
 import systems.zlink.e2e.kotlin.registrationcodec.client.scenarios.RcB4CodecCoexistenceScenario
+import systems.zlink.e2e.kotlin.registrationcodec.client.scenarios.RcB6JsonGoldenScenario
 import systems.zlink.e2e.kotlin.registrationcodec.client.support.ClientOptions
 import systems.zlink.e2e.kotlin.registrationcodec.client.support.ProcessSupport
 import systems.zlink.e2e.kotlin.registrationcodec.client.support.ScenarioAssert
@@ -35,6 +36,7 @@ class ClientScenario(
             "RC-B2" to { RcB2ProtobufCodecScenario(server, assert).run() },
             "RC-B3" to { RcB3MessagePackCodecScenario(server, assert).run() },
             "RC-B4" to { RcB4CodecCoexistenceScenario(server, assert).run() },
+            "RC-B6" to { RcB6JsonGoldenScenario(server, assert).run() },
             "RC-B5" to { CodecMismatchScenario(codecRequester, assert).run() },
         )
         when (options.mode) {

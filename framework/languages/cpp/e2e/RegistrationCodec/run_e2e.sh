@@ -7,7 +7,7 @@ BUILD_DIR="$CPP_DIR/build"
 SCENARIO="${1:-all}"
 SCENARIO_LOWER="$(printf '%s' "$SCENARIO" | tr '[:upper:]' '[:lower:]')"
 case "$SCENARIO_LOWER" in
-  all|rc-a[1-6]|rc-b[1-5]|b5) ;;
+  all|rc-a[1-6]|rc-b[1-6]|b5) ;;
   *)
     echo "Unsupported RegistrationCodec scenario: $SCENARIO" >&2
     exit 2
@@ -181,7 +181,7 @@ wait_port codec-requester-http "$REQUESTER_HTTP"
 
 sleep "$ROUTE_SETTLE_SECONDS"
 
-if [[ "$SCENARIO_LOWER" == "all" || "$SCENARIO_LOWER" == rc-a[1-6] || "$SCENARIO_LOWER" == rc-b[1-4] ]]; then
+if [[ "$SCENARIO_LOWER" == "all" || "$SCENARIO_LOWER" == rc-a[1-6] || "$SCENARIO_LOWER" == rc-b[1-4] || "$SCENARIO_LOWER" == "rc-b6" ]]; then
   write_client_config "$CONFIG_DIR/client.json" "$SCENARIO_LOWER" "$API" "$HTTP"
   "$CLIENT" --config="$CONFIG_DIR/client.json" \
     >"$LOG_DIR/client.stdout.log" 2>"$LOG_DIR/client.stderr.log"

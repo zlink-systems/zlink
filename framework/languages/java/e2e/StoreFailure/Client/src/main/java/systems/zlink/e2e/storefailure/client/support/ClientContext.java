@@ -55,6 +55,139 @@ public final class ClientContext implements AutoCloseable {
         throw new IllegalStateException(scenarioName + " consumer request did not complete");
     }
 
+    public DiscoveryApiResult requestReplacementLifecycle(
+        String scenarioName,
+        String markerPrefix,
+        int count) {
+        ScenarioAssert.that(!options.expectedLifecycleId().isBlank(),
+            scenarioName + " expected lifecycle id is required");
+        Set<String> providers = new HashSet<>();
+        for (int index = 0; index < count; index++) {
+            Contracts.ProfileReq request = new Contracts.ProfileReq(
+                markerPrefix + "-msg-" + index,
+                markerPrefix + "-marker-" + index);
+            Contracts.ProfileRes reply = index == 0
+                ? awaitReplacementProfile(scenarioName, request)
+                : requestProfile(scenarioName, request);
+            ScenarioAssert.that(options.expectedRids().contains(reply.providerRid()),
+                scenarioName + " unexpected provider " + reply.providerRid());
+            ScenarioAssert.that(options.expectedLifecycleId().equals(reply.providerLifecycle()),
+                scenarioName + " request reached lifecycle " + reply.providerLifecycle()
+                    + " instead of " + options.expectedLifecycleId());
+            providers.add(reply.providerRid());
+        }
+        return new DiscoveryApiResult(Set.copyOf(providers));
+    }
+
+    private Contracts.ProfileRes awaitReplacementProfile(
+        String scenarioName,
+        Contracts.ProfileReq request) {
+        RuntimeException lastError = null;
+        for (int attempt = 0; attempt < 20; attempt++) {
+            try {
+                Contracts.ProfileRes reply = requestProfile(scenarioName, request);
+                if (options.expectedLifecycleId().equals(reply.providerLifecycle())) {
+                    return reply;
+                }
+                lastError = new IllegalStateException(
+                    scenarioName + " still selected lifecycle " + reply.providerLifecycle());
+            } catch (RuntimeException error) {
+                lastError = error;
+            }
+            Wait.sleep(Duration.ofMillis(200));
+        }
+        throw new IllegalStateException(
+            scenarioName + " replacement lifecycle did not become selectable",
+            lastError);
+    }
+
+    private Contracts.ProfileRes requestProfile(
+        String scenarioName,
+        Contracts.ProfileReq request) {
+        try {
+            return JSON.readValue(
+                http.postJson("/profile/request/wait", request),
+                Contracts.ProfileRes.class);
+        } catch (Exception error) {
+            throw new IllegalStateException(scenarioName + " replacement request failed", error);
+        }
+    }
+
+    public DiscoveryApiResult requestInstanceOwner(
+        String scenarioName,
+        String spotId,
+        String markerPrefix,
+        int count) {
+        ScenarioAssert.that(!options.expectedLifecycleId().isBlank(),
+            scenarioName + " expected lifecycle id is required");
+        Set<String> providers = new HashSet<>();
+        for (int index = 0; index < count; index++) {
+            Contracts.InstanceReq request =
+                new Contracts.InstanceReq(spotId, markerPrefix + "-" + index);
+            Contracts.InstanceOutcome outcome = index == 0
+                ? awaitInstanceOwner(scenarioName, request)
+                : instanceRequest(request);
+            ScenarioAssert.that(outcome.succeeded(),
+                scenarioName + " instance request failed: " + outcome.errorKind()
+                    + " " + outcome.errorMessage());
+            Contracts.InstanceRes reply = outcome.reply();
+            ScenarioAssert.that(spotId.equals(reply.spotId()),
+                scenarioName + " instance spot id mismatch");
+            ScenarioAssert.that(options.expectedLifecycleId().equals(reply.ownerLifecycle()),
+                scenarioName + " instance request reached lifecycle " + reply.ownerLifecycle()
+                    + " instead of " + options.expectedLifecycleId());
+            ScenarioAssert.that(reply.objectGeneration() > 0,
+                scenarioName + " instance object generation is not positive");
+            providers.add(reply.ownerRid());
+            if (index == 0 && count > 1) {
+                // The cold activation reply can precede publication of its
+                // current authority row. Follow-up calls begin only after one
+                // configured polling interval has elapsed.
+                Wait.sleep(Duration.ofMillis(options.locationPollingMillis()));
+            }
+        }
+        return new DiscoveryApiResult(Set.copyOf(providers));
+    }
+
+    private Contracts.InstanceOutcome awaitInstanceOwner(
+        String scenarioName,
+        Contracts.InstanceReq request) {
+        Contracts.InstanceOutcome last = null;
+        for (int attempt = 0; attempt < 40; attempt++) {
+            last = instanceRequest(request);
+            if (last.succeeded()
+                && options.expectedLifecycleId().equals(last.reply().ownerLifecycle())) {
+                return last;
+            }
+            Wait.sleep(Duration.ofMillis(200));
+        }
+        throw new IllegalStateException(
+            scenarioName + " instance replacement did not become selectable; last=" + last);
+    }
+
+    public DiscoveryApiResult requestInstanceUnavailable(
+        String scenarioName,
+        String spotId) {
+        Contracts.InstanceOutcome outcome = instanceRequest(
+            new Contracts.InstanceReq(spotId, "sf-b3-after-lease"));
+        ScenarioAssert.that(!outcome.succeeded(),
+            scenarioName + " accepted a new stateful request after owner lease expiry");
+        ScenarioAssert.that("UNAVAILABLE".equals(outcome.errorKind()),
+            scenarioName + " expected UNAVAILABLE but received " + outcome.errorKind()
+                + ": " + outcome.errorMessage());
+        return new DiscoveryApiResult(Set.of());
+    }
+
+    private Contracts.InstanceOutcome instanceRequest(Contracts.InstanceReq request) {
+        try {
+            return JSON.readValue(
+                http.postJson("/instance/request", request),
+                Contracts.InstanceOutcome.class);
+        } catch (Exception error) {
+            throw new IllegalStateException("instance request endpoint failed", error);
+        }
+    }
+
     public long measureStoreRead() {
         Instant started = Instant.now();
         waitForLivePeerRows();
@@ -201,7 +334,7 @@ public final class ClientContext implements AutoCloseable {
                     Set<String> rids = new HashSet<>();
                     for (JsonNode entry : root) {
                         String rid = entry.path("nodeRid").asText("");
-                        if (!rid.isBlank()) {
+                        if (isReadyPeer(entry) && !rid.isBlank()) {
                             rids.add(rid);
                         }
                     }
@@ -225,7 +358,7 @@ public final class ClientContext implements AutoCloseable {
                     Set<String> rids = new HashSet<>();
                     for (JsonNode entry : root) {
                         String rid = entry.path("nodeRid").asText("");
-                        if (!rid.isBlank()) {
+                        if (isReadyPeer(entry) && !rid.isBlank()) {
                             rids.add(rid);
                         }
                     }
@@ -240,6 +373,60 @@ public final class ClientContext implements AutoCloseable {
             "location rows missing survivor providers " + survivorSet + ": " + observed);
         ScenarioAssert.that(observed.stream().noneMatch(value -> value.equals(deadRid) || value.contains(deadRid)),
             "location rows still include crashed provider " + deadRid + ": " + observed);
+    }
+
+    public void waitForReadyTargetsExcluding(String excludedRid, Duration timeout) {
+        Set<String> expectedSet = new HashSet<>(options.expectedRids());
+        Set<String> observed = Wait.until(
+            timeout,
+            "consumer ready targets did not retain " + expectedSet
+                + " while excluding " + excludedRid,
+            () -> {
+                try {
+                    JsonNode root = JSON.readTree(http.get("/mesh/peers"));
+                    Set<String> rids = new HashSet<>();
+                    for (JsonNode entry : root) {
+                        String rid = entry.path("nodeRid").asText("");
+                        if ("READY".equals(entry.path("state").asText("")) && !rid.isBlank()) {
+                            rids.add(rid);
+                        }
+                    }
+                    boolean hasExpected = containsAllRids(rids, expectedSet);
+                    boolean hasExcluded = rids.stream()
+                        .anyMatch(value -> value.equals(excludedRid) || value.contains(excludedRid));
+                    return hasExpected && !hasExcluded ? rids : null;
+                } catch (Exception error) {
+                    return null;
+                }
+            });
+        ScenarioAssert.that(containsAllRids(observed, expectedSet),
+            "ready targets missing existing providers " + expectedSet + ": " + observed);
+        ScenarioAssert.that(observed.stream()
+                .noneMatch(value -> value.equals(excludedRid) || value.contains(excludedRid)),
+            "ready targets include unverified provider " + excludedRid + ": " + observed);
+    }
+
+    public void waitForReadyPeerRow(String expectedRid, Duration timeout) {
+        String observed = Wait.until(
+            timeout,
+            "consumer location query did not include ready provider " + expectedRid,
+            () -> {
+                try {
+                    JsonNode root = JSON.readTree(http.get("/locations/peers"));
+                    for (JsonNode entry : root) {
+                        String rid = entry.path("nodeRid").asText("");
+                        if (isReadyPeer(entry)
+                            && (rid.equals(expectedRid) || rid.contains(expectedRid))) {
+                            return rid;
+                        }
+                    }
+                    return null;
+                } catch (Exception error) {
+                    return null;
+                }
+            });
+        ScenarioAssert.that(observed.equals(expectedRid) || observed.contains(expectedRid),
+            "ready provider row does not match " + expectedRid + ": " + observed);
     }
 
     public JsonNode waitForHealthyStatus() {
@@ -337,6 +524,11 @@ public final class ClientContext implements AutoCloseable {
             }
         }
         return true;
+    }
+
+    private static boolean isReadyPeer(JsonNode entry) {
+        return "READY".equals(entry.path("state").asText(""))
+            && !entry.path("draining").asBoolean(false);
     }
 
     @Override

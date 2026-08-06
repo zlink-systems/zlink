@@ -28,7 +28,7 @@ import systems.zlink.framework.monitoring.ZLinkObservedStatus;
 import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime;
 import systems.zlink.framework.spring.EnableZLinkFramework;
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer;
-import systems.zlink.framework.spring.internal.runtime.ZLinkFrameworkLifecycle;
+import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 import systems.zlink.framework.spots.ZLinkSpotManager;
 import systems.zlink.framework.spots.ZLinkSpotPublisherClient;
 
@@ -73,7 +73,7 @@ public final class Program {
         systems.zlink.framework.channels.ZLinkRouteMeshRuntimeOptions meshRuntimeOptions,
         systems.zlink.framework.channels.ZLinkRouteClient routeClient,
         ObjectProvider<ZLinkRouteMeshRuntime> meshRuntime,
-        ObjectProvider<ZLinkFrameworkLifecycle> runtimeQuery,
+        ObjectProvider<ZLinkFrameworkRuntime> runtimeQuery,
         ObserverIsolationProbe observerIsolation,
         ObjectProvider<ZLinkSpotManager> spots,
         ObjectProvider<ZLinkSpotPublisherClient> publisher,
@@ -128,7 +128,9 @@ public final class Program {
             if (config.enableSpot()) {
                 ZLinkMeshNodeBuilder node = options.addRouteMesh(Contracts.SPOT_MESH)
                     .listen(config.meshEndpoint())
-                    .setRoutingIdPrefix(config.routingId());
+                    .setRoutingIdPrefix(config.routingId())
+                    .setActorCapacity(config.actorCapacity())
+                    .setSpotCapacity(config.spotCapacity());
                 node.configureRouterSocket().setReceiveHighWaterMark(1);
                 node.channelName(Contracts.SPOT_CHANNEL)
                     .server()
@@ -140,6 +142,13 @@ public final class Program {
                     node.peerConnections().connect(config.meshPeerEndpoint());
                 }
                 var objects = node.objects().server();
+                objects.addEntrySpot(
+                    systems.zlink.e2e.runtimemonitoring.service.handlers.MonitoringEntrySpot.class);
+                objects.addActorFactory(
+                    systems.zlink.e2e.runtimemonitoring.service.handlers.MonitoringActor.TYPE,
+                    systems.zlink.e2e.runtimemonitoring.service.handlers.MonitoringActor.class,
+                    systems.zlink.e2e.runtimemonitoring.service.handlers.MonitoringActorFactory.class,
+                    factory -> factory.disableRelocation());
                 objects.addSpotFactory(
                     Contracts.MONITORING_SPOT_TYPE,
                     MonitoringSpot.class,
@@ -190,13 +199,13 @@ public final class Program {
 
     @Bean
     ApplicationRunner recordMonitoringLifecycle(
-        org.springframework.beans.factory.ObjectProvider<ZLinkFrameworkLifecycle> lifecycle,
+        ObjectProvider<ZLinkFrameworkRuntime> lifecycle,
         EvidenceState state) {
         return ignored -> state.record(
             "system",
             "service",
             "FrameworkLifecycle",
-            "running=" + lifecycle.stream().anyMatch(ZLinkFrameworkLifecycle::isRunning));
+            "state=" + lifecycle.getObject().status().state());
     }
 
     @Bean

@@ -44,11 +44,12 @@ void release_poller_registration (const poller_registration_t &registration_);
 
 struct poller_handle_t
 {
-    poller_handle_t () : tag (0x706f6c6c) {}
+    poller_handle_t () : tag (0x706f6c6c), wait_active (false) {}
 
     bool check_tag () const { return tag == 0x706f6c6c; }
 
     uint32_t tag;
+    bool wait_active;
     zlink::socket_poller_t poller;
     std::vector<poller_registration_t> registrations;
     std::vector<zlink::socket_poller_t::event_t> native_events;

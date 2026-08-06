@@ -6,7 +6,6 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.TimeUnit;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.channels.ZLinkRouteClient;
-import systems.zlink.framework.spots.SpotHandle;
 import systems.zlink.framework.spots.SpotHandleResolver;
 import systems.zlink.framework.streams.ZLinkSessionContext;
 import systems.zlink.framework.streams.ZLinkSessionDispatchContext;
@@ -50,11 +49,10 @@ public final class ScenarioReqHandler
         };
         RoutingId targetSpotRid = RoutingId.from(dispatch.metadata()
             .getOrDefault(Contracts.SPOT_RID_METADATA, Contracts.TARGET_SPOT));
-        return spots.resolveSpotHandle(targetSpotRid)
-            .thenCompose(handle -> runScenario(
-                requireSpot(handle, targetSpotRid),
+        return runScenario(
+                targetSpotRid.toString(),
                 spotRequest,
-                request))
+                request)
             .whenComplete((reply, error) -> {
                 if (error != null) {
                     evidence.record("scenario-failed", request.scenarioId(), error.toString());
@@ -64,11 +62,11 @@ public final class ScenarioReqHandler
     }
 
     private CompletionStage<Contracts.ScenarioRes> runScenario(
-        SpotHandle handle,
+        String spotId,
         Object spotRequest,
         Contracts.ScenarioReq request) {
         CompletionStage<Contracts.ScenarioRes> scenario = routes.requestToSpot(
-                handle,
+                spotId,
                 spotRequest)
             .timeout(ROUTE_REQUEST_TIMEOUT)
             .submit(Contracts.ScenarioRes.class);
@@ -79,7 +77,7 @@ public final class ScenarioReqHandler
         }
         CompletionStage<Contracts.ProbeRes> probe = delayed(500)
             .thenCompose(ignored -> routes.requestToSpot(
-                    handle,
+                    spotId,
                     new Contracts.ProbeReq(request.requestId()))
                 .timeout(ROUTE_REQUEST_TIMEOUT)
                 .submit(Contracts.ProbeRes.class));
@@ -94,9 +92,4 @@ public final class ScenarioReqHandler
             CompletableFuture.delayedExecutor(millis, TimeUnit.MILLISECONDS));
     }
 
-    private static SpotHandle requireSpot(
-        java.util.Optional<SpotHandle> handle,
-        RoutingId spotRid) {
-        return handle.orElseThrow(() -> new IllegalStateException("spot not found: " + spotRid));
-    }
 }

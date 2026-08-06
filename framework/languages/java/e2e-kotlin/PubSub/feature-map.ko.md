@@ -1,50 +1,55 @@
 # Kotlin PubSub E2E feature map
 
-이 문서는 Config 3 Pub/Sub 공통 시나리오 중 Kotlin 전용 E2E 상태를 정리한다. runner와 scenario
-code는 Kotlin public framework API로 작성해 Kotlin 호출 표면에서 검증한다.
+기준 문서는 `framework/doc/framework/common/e2e/config-3-pubsub.ko.md`다. 모든 시나리오는
+Kotlin public framework API와 typed JSON message를 사용한다.
 
-| 시나리오 | 상태 | 근거 |
-|----------|------|------|
-| PS-A1 | 10.0.0 전환 대상 | 모든 subscriber의 `ConnectionReady` 뒤 측정 구간을 시작하고 공통 연속 sequence를 같은 순서로 받는지 확인해야 한다. 현재 evidence wait만으로는 구독 readiness 경계를 증명하지 못한다. |
-| PS-A2 | 10.0.0 전환 대상 | 서로 다른 packet name에 등록한 typed handler가 자기 event만 정확히 한 번 처리하고 cross-dispatch가 0회인지 subscriber evidence로 확인해야 한다. Transport filter나 payload field로 다시 분류하지 않는다. |
-| PS-A3 | 구현 | late subscriber가 이전 publish를 replay 받지 않고 이후 publish만 받는지 subscriber evidence로 확인한다. |
-| PS-A4 | 차단 | 현재 Client support는 subscriber process를 중단하고 다시 시작하므로 application startup이 subscription을 다시 등록한다. 동일 process의 transport 단절·복구와 기존 subscription 자동 재적용을 검증하지 못한다. subscriber 연결만 끊는 fault harness가 필요하다. |
-| PS-B1 | 구현 | 느린 subscriber가 있어도 다른 subscriber가 마지막 sequence까지 받는지 bounded subscriber evidence wait로 확인한다. |
-| PS-B2 | 10.0.0 전환 대상 | subscriber process와 등록한 typed handler를 유지한 채 같은 endpoint의 publisher를 재시작하고, 새 publisher의 `ConnectionReady` 뒤 새 event를 받는지 확인해야 한다. 현재 row 교체와 수신은 확인하지만 socket readiness evidence가 남아 있다. |
-| PS-C1 | 구현 | 미등록 packet publish가 subscriber dispatch error/drop으로 기록되고 정상 publish가 회복되는지 subscriber evidence로 확인한다. |
+## 마지막 전체 검증
 
-| 시나리오 | 상태 | 필요한 Kotlin 증거 |
-|---|---|---|
-| PS-D1 | 전환 대상 | 전용 descriptor fixture·Publisher RID·actual port 자동 연결 |
-| PS-D2 | 전환 대상 | public `ZLinkFanoutRuntime` snapshot의 publisher identity·connection intent와 `excluded_draining` Java sealed event entry로 다른 ChannelName·descriptor 종류·drain 중 publisher를 제외하고, actual native SUB ready publisher만 handler에 도달 |
-| PS-D3 | 미구현 | public fanout snapshot의 `connectionIntentCount=2`·`readyConnectionCount=2`와 실제 native disconnect 후 `ZLinkFanoutPublisherChanged` sealed event의 `disconnected` entry로 publisher 추가·정상 제거 수렴 |
-| PS-D4 | 미구현 | public fanout event의 기존 identity `disconnected`, 새 identity `reconnecting`·actual native `ready`, `excluded_stale` sealed entry와 최신 snapshot으로 lease 만료·재등록·낮은 generation/revision 거부 확인 |
-| PS-D5 | 미구현 | public `ZLinkFanoutLocationChanged` sealed event의 `degraded`·`ready` Location snapshot, publisher changed `reconnecting`·actual native `ready`·`excluded_stale` entry와 current connection intent snapshot으로 fail-static·복구 수렴 확인 |
-| PS-D6 | 미구현 | port 0 재시작과 advertised endpoint 갱신 |
-| PS-D7 | 미구현 | capacity 1 observer의 bounded coalescing·sequence gap 후 public snapshot resync, `Flow.Subscription.cancel()` 격리, 정상 observer·dispatch 지속과 manual endpoint mutation의 automatic snapshot·event 격리 |
-| PS-E1 | 미구현 | store 없는 manual subscriber 회귀 |
-| PS-E2 | 미구현 | automatic subscriber store 누락, automatic/manual mode 혼합, 고정 Publisher RID와 자동 할당 둘 다 누락, fixed/allocated RID 동시 설정의 typed startup 오류와 store 없는 manual 조합 성공 |
+- 명령: `timeout 900s ./run_e2e.sh all`
+- 결과: `pub-sub kotlin all result=passed selectors=24`
+- 전체 출력: `logs/all-final-20260806.log`
+- 실행 시각: 2026-08-06 03:59:56~04:04:13 KST
 
-## 검증 경로 판정
+`all`은 아래 24개 selector를 각각 fresh process와 전용 Redis fixture로 실행한다. A/B/C legacy
+batch에서 끝나지 않고 D/E/F selector까지 모두 순회한다.
 
-Pub/Sub fanout의 수신자는 client stream session이 아니라 subscriber 역할 server다. 공통 E2E README는
-이 경우 subscriber handler가 남긴 bounded `/evidence/wait` marker를 성공 기준으로 사용할 수 있다고
-정리한다. 따라서 Kotlin PubSub는 client stream connector observer를 추가하지 않고, 실제 subscriber
-역할 server의 bounded evidence wait와 snapshot 단언으로 fanout, non-replay, negative path를 검증한다.
+| 시나리오 | 상태 | 실제 log | 검증 내용 |
+|---|---|---|---|
+| PS-A1 | 통과 | `logs/20260806-040000-779573` | 세 subscriber가 공통 sequence를 처리한다. |
+| PS-A2 | 통과 | `logs/20260806-040011-788532` | 서로 다른 typed packet handler가 자기 event만 처리한다. |
+| PS-A3 | 통과 | `logs/20260806-040021-807038` | late subscriber는 구독 전 event를 replay하지 않고 이후 event만 받는다. |
+| PS-A4 | 통과 | `logs/20260806-040030-820433` | subscriber 복구 뒤 subscription과 typed delivery가 유지된다. |
+| PS-B1 | 통과 | `logs/20260806-040042-831619` | 느린 subscriber와 관계없이 다른 subscriber의 delivery가 진행된다. |
+| PS-B2 | 통과 | `logs/20260806-040053-839504` | publisher 재시작 뒤 기존 subscriber가 새 event를 받는다. |
+| PS-C1 | 통과 | `logs/20260806-040107-851555` | 미등록 packet은 dispatch error로 기록되고 정상 delivery는 계속된다. |
+| PS-D1 | 통과 | `logs/20260806-040118-858726` | endpoint 없는 subscriber가 descriptor로 publisher를 발견하고 typed event를 받는다. |
+| PS-D2 | 통과 | `logs/20260806-040125-866006` | 다른 ChannelName의 descriptor와 event를 현재 channel에서 제외한다. |
+| PS-D3 | 통과 | `logs/20260806-040135-874196` | publisher 두 개가 Ready가 된 뒤 한 process 종료를 public status에 반영한다. |
+| PS-D4 | 통과 | `logs/20260806-040149-879636` | 기존 publisher 종료와 새 identity 등록 뒤 replacement delivery를 확인한다. |
+| PS-D5 | 통과 | `logs/20260806-040201-880730` | Store 중단 중 established transport를 유지하고 Store 복구 뒤 다시 수렴한다. |
+| PS-D6 | 통과 | `logs/20260806-040208-881537` | port 0 actual listener endpoint를 게시하고 replacement endpoint 변경을 반영한다. |
+| PS-D7A | 통과 | `logs/20260806-040222-882414` | capacity 1 observer의 bounded coalescing, snapshot resync와 cancel 격리를 확인한다. |
+| PS-D7B | 통과 | `logs/20260806-040238-884117` | manual endpoint mutation이 automatic status와 delivery를 변경하지 않는다. |
+| PS-E1 | 통과 | `logs/20260806-040251-886200` | Store 없는 manual publisher와 subscriber가 typed event를 전달한다. |
+| PS-E2A | 통과 | `logs/20260806-040258-890483` | Store 없는 automatic subscriber를 public configuration error로 거부한다. |
+| PS-E2B | 통과 | `logs/20260806-040259-890635` | automatic discovery와 manual endpoint 혼합을 startup에서 거부한다. |
+| PS-E2C | 통과 | `logs/20260806-040303-890855` | publisher identity 방식 누락과 fixed RID·prefix 동시 설정을 listener bind 전에 거부한다. |
+| PS-F1 | 통과 | `logs/20260806-040308-891199` | automatic과 manual subscriber가 자기 publisher를 Ready로 표시한 뒤 첫 event를 받는다. |
+| PS-F2 | 통과 | `logs/20260806-040316-892460` | proxy로 publisher B 수신만 차단해 A의 Ready와 delivery를 유지하고 B 복구를 확인한다. |
+| PS-F3 | 통과 | `logs/20260806-040333-894867` | exact reserved liveness topic은 public publish에서 거부하고 더 긴 prefix topic은 전달한다. |
+| PS-F4 | 통과 | `logs/20260806-040339-895392` | publisher 하나의 종료가 다른 publisher의 Ready와 delivery를 변경하지 않는다. |
+| PS-F5 | 통과 | `logs/20260806-040349-902504` | 15초를 넘는 비구독 traffic 동안 Ready를 유지하고 구독 topic event를 처리한다. |
 
-## 포팅 구조 상태
+## Public/runtime 경계
 
-현재 Kotlin PubSub E2E는 `Shared`, `Client`, `Server/Publisher`, `Server/Subscriber` Gradle project로
-나뉜다. Publisher와 endpoint 없는 subscriber가 Redis location store를 등록하지만 전용 fanout descriptor
-계약과 PS-D/E lifecycle matrix는 아직 구현하지 않았다.
-Client는 framework fanout client를 직접 들지 않고 publisher role의 HTTP endpoint를 호출한다. role
-실행 설정은 각 role의 CLI option parser가 맡고, PS-A4/PS-B2 lifecycle 제어는 Client support의
-process launcher가 맡는다. runner는 초기 role 시작, client 실행, cleanup을 담당한다. 파일별 대응
-상태는 `porting-inventory.ko.md`에 기록한다.
+Kotlin scenario는 Java framework의 동일 public contract를 호출한다. PS-E2C는 automatic publisher가 fixed
+RID와 RID prefix 중 정확히 하나를 선택하는지 실제 negative host 두 개로 확인한다. PS-F3는 public
+publish 호출의 typed configuration error와 더 긴 prefix topic의 실제 handler delivery를 함께 확인한다.
 
-## 완료 판정
+PS-F1의 manual subscriber는 endpoint마다 전용 SUB socket과 liveness 상태를 사용한다. Publisher beacon은
+Location Store 등록 여부와 관계없이 전송한다. Subscriber evidence endpoint는 public fanout status와 실제
+typed handler 결과만 노출하며 raw frame이나 private API를 사용하지 않는다.
 
-표에서 `구현`으로 표시한 행은 해당 시나리오의 검증 로직이 존재한다. `PS-A1`·`PS-B2`는
-`ConnectionReady`를 포함한 readiness 경계를 확인하기 전까지 전환 대상으로 유지한다. `PS-A4`는 동일 process에서
-transport 연결만 복구하는 fault harness가 추가되기 전까지 차단 상태다. PS-D/E는 전용 descriptor와
-automatic discovery, manual 회귀를 각각 실제 process로 실행한 뒤에만 완료로 판정한다.
+Manual reconnect lifecycle을 최종 점검한 뒤 PS-D7B, PS-E1, PS-F1을 다시 실행했다. 각각
+`logs/20260806-040756-1010179`, `logs/20260806-040822-1015213`,
+`logs/20260806-040834-1016821`에서 통과했다.

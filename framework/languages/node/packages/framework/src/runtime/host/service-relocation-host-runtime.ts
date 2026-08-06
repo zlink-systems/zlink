@@ -86,7 +86,10 @@ import {
   type ServiceRelocationAggregatePlan
 } from '../foundation/service-relocation-aggregate-committer';
 import { createProviderInstance } from '../spots/spot-provider';
-import type { DefaultZLinkSpotManager } from '../spots';
+import type {
+  DefaultZLinkSpotManager,
+  ZLinkSpotNodeRuntimeManager
+} from '../spots';
 import type { ZLinkSpotActivation } from '../spots/spot-activation-state';
 import type { DefaultZLinkActorManager } from '../actors';
 import type { ZLinkActorRuntimeState, ZLinkRemoteBoundSessionTarget } from '../actors/actor-runtime-state';
@@ -155,6 +158,7 @@ interface ZLinkHostRelocationOptions {
   readonly meshNode: (meshName: string) => ZLinkBackendMeshNode | undefined;
   readonly completions: (meshName: string) => ZLinkMeshCompletionTable | undefined;
   readonly spotManager: () => DefaultZLinkSpotManager | undefined;
+  readonly spotNodeRuntime: () => ZLinkSpotNodeRuntimeManager | undefined;
   readonly actorManager: () => DefaultZLinkActorManager | undefined;
   readonly actorTransfer: ZLinkActorTransferRuntime;
   readonly runtimeEventPublisher?: ZLinkRuntimeEventPublisher;
@@ -3364,8 +3368,22 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
         );
       if (actor === undefined) throw new Error('Relocation membership Actor staging is missing.');
       const state = this.requireActorManager().getState(actor.context.actorId)!;
-      const spotId = spotIdentity as RoutingId;
-      state.setJoinedSpot(spotId, spot?.spot, membership.membershipEpoch);
+      const localDescriptor = this.options.localDescriptor?.(this.meshName);
+      const isEntryMembership = localDescriptor?.entrySpotId === spotIdentity;
+      if (isEntryMembership) {
+        // Entry Spot identity is published as a Location membership key, but
+        // it is not a User Spot activation in the Actor runtime. The native
+        // restore already received the target MeshNode RID as its Entry
+        // membership; clearing the framework Spot state keeps dispatch on the
+        // local Entry Spot path after the target commit.
+        state.clearJoinedSpot();
+      } else {
+        state.setJoinedSpot(
+          spotIdentity as RoutingId,
+          spot?.spot,
+          membership.membershipEpoch
+        );
+      }
       spot?.commitActorJoin(actor);
     }
   }
@@ -3421,18 +3439,32 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
     }
     const packet = decodeQueuedHandoffPacket(message);
     const state = this.requireActorManager().getState(hidden.actor.context.actorId);
-    if (state?.spotId === undefined) throw new Error('Relocated Actor membership is not staged.');
+    if (state === undefined) throw new Error('Relocated Actor state is not staged.');
     const [result] = await replayActorHandoffBacklog(
       [packet],
-      (parts, returnResponse, remoteBoundSessionTarget, fallbackActorRef) =>
-        this.requireSpotManager().dispatchRoutedActorPacket(
-          state.spotId!,
+      (parts, returnResponse, remoteBoundSessionTarget, fallbackActorRef) => {
+        if (state.spotId === undefined) {
+          const runtime = this.options.spotNodeRuntime();
+          if (runtime === undefined) {
+            throw new Error('Relocated Entry Spot Actor dispatch is unavailable.');
+          }
+          return runtime.dispatchEntryActorPacket(
+            hidden.actor!.context.actorId,
+            parts,
+            returnResponse,
+            remoteBoundSessionTarget,
+            fallbackActorRef
+          );
+        }
+        return this.requireSpotManager().dispatchRoutedActorPacket(
+          state.spotId,
           hidden.actor!.context.actorId,
           parts,
           returnResponse,
           remoteBoundSessionTarget,
           fallbackActorRef
-        )
+        );
+      }
     );
     hidden.replayResults.push(result!);
     hidden.replayPackets.push(packet);

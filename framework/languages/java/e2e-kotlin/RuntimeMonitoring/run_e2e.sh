@@ -10,6 +10,8 @@ REDIS_CONTAINER=""
 run_id="$(date +%Y%m%d-%H%M%S)-$$"
 log_dir="$(pwd)/logs/${run_id}"
 SCENARIO="${1:-all}"
+# MON-A6 may report a public-contract blocker when the runtime snapshot does
+# not project the live Spot count. A blocker is an explicit result, not a pass.
 repo_root="$(cd ../../../../.. && pwd)"
 default_core_lib="${repo_root}/core/build/lib/libzlink.so"
 mkdir -p "${log_dir}"
@@ -159,6 +161,7 @@ HANDSHAKE_ENDPOINT="$(tcp "${HANDSHAKE_PORT}")"
 MESH_ENDPOINT="$(tcp "${MESH_PORT}")"
 SERVICE_HTTP="$(http "${SVC_HTTP_PORT}")"
 FILTERED_API_ENDPOINT="$(tcp "${FILTERED_API_PORT}")"
+FILTERED_MESH_ENDPOINT="$(tcp "${UNUSED_SPOT_PUB_PORT}")"
 FILTERED_SERVICE_HTTP="$(http "${FILTERED_HTTP_PORT}")"
 THROWING_API_ENDPOINT="$(tcp "${THROWING_API_PORT}")"
 THROWING_SERVICE_HTTP="$(http "${THROWING_HTTP_PORT}")"
@@ -184,6 +187,7 @@ ZLINK_KOTLIN_E2E_RID="svc-b" \
 ZLINK_KOTLIN_E2E_REDIS_LOCATION_ENDPOINT="${ZLINK_KOTLIN_E2E_REDIS_LOCATION_ENDPOINT}" \
 ZLINK_KOTLIN_E2E_LOCATION_KEY_PREFIX="${ZLINK_KOTLIN_E2E_LOCATION_KEY_PREFIX}" \
 ZLINK_KOTLIN_E2E_API_ENDPOINT="${FILTERED_API_ENDPOINT}" \
+ZLINK_KOTLIN_E2E_MESH_ENDPOINT="${FILTERED_MESH_ENDPOINT}" \
 ZLINK_KOTLIN_E2E_HTTP_ENDPOINT="${FILTERED_SERVICE_HTTP}" \
 ZLINK_KOTLIN_E2E_LOG_DIR="${log_dir}" \
   zlink_kotlin_e2e_run "$(filtered_service_bin)" >"${log_dir}/filtered-service.stdout.log" 2>"${log_dir}/filtered-service.stderr.log" &
@@ -204,6 +208,7 @@ wait_port throwing-service-http "${THROWING_SERVICE_HTTP}"
 ZLINK_KOTLIN_E2E_HTTP_ENDPOINT="${TRIGGER_HTTP}" \
 ZLINK_KOTLIN_E2E_SERVICE_API_ENDPOINT="${API_ENDPOINT}" \
 ZLINK_KOTLIN_E2E_FILTERED_API_ENDPOINT="${FILTERED_API_ENDPOINT}" \
+ZLINK_KOTLIN_E2E_FILTERED_MESH_ENDPOINT="${FILTERED_MESH_ENDPOINT}" \
 ZLINK_KOTLIN_E2E_THROWING_API_ENDPOINT="${THROWING_API_ENDPOINT}" \
 ZLINK_KOTLIN_E2E_LOG_DIR="${log_dir}" \
   zlink_kotlin_e2e_run "$(trigger_bin)" >"${log_dir}/trigger.stdout.log" 2>"${log_dir}/trigger.stderr.log" &
@@ -213,6 +218,7 @@ wait_port trigger-http "${TRIGGER_HTTP}"
 ZLINK_KOTLIN_E2E_API_ENDPOINT="${API_ENDPOINT}" \
 ZLINK_KOTLIN_E2E_HANDSHAKE_ENDPOINT="${HANDSHAKE_ENDPOINT}" \
 ZLINK_KOTLIN_E2E_FILTERED_API_ENDPOINT="${FILTERED_API_ENDPOINT}" \
+ZLINK_KOTLIN_E2E_FILTERED_MESH_ENDPOINT="${FILTERED_MESH_ENDPOINT}" \
 ZLINK_KOTLIN_E2E_THROWING_API_ENDPOINT="${THROWING_API_ENDPOINT}" \
 ZLINK_KOTLIN_E2E_REDIS_LOCATION_ENDPOINT="${ZLINK_KOTLIN_E2E_REDIS_LOCATION_ENDPOINT}" \
 ZLINK_KOTLIN_E2E_LOCATION_KEY_PREFIX="${ZLINK_KOTLIN_E2E_LOCATION_KEY_PREFIX}" \
@@ -227,6 +233,10 @@ ZLINK_KOTLIN_E2E_LOG_DIR="${log_dir}" \
 
 cat "${log_dir}/client.stdout.log"
 if [[ "${SCENARIO}" == "all" ]]; then
+  if grep -q "scenario .* blocked:" "${log_dir}/client.stdout.log"; then
+    echo "runtime-monitoring kotlin all result=blocked log_dir=${log_dir}"
+    exit 0
+  fi
   grep -q "scenario MON-A1 passed" "${log_dir}/client.stdout.log"
   grep -q "scenario MON-A2 passed" "${log_dir}/client.stdout.log"
   grep -q "scenario MON-A3 passed" "${log_dir}/client.stdout.log"
@@ -236,8 +246,17 @@ if [[ "${SCENARIO}" == "all" ]]; then
   grep -q "scenario MON-B2 passed" "${log_dir}/client.stdout.log"
   grep -q "scenario MON-C1 passed" "${log_dir}/client.stdout.log"
   grep -q "scenario MON-D1 passed" "${log_dir}/client.stdout.log"
+  grep -q "scenario MON-A4A passed" "${log_dir}/client.stdout.log"
+  grep -q "scenario MON-A4B passed" "${log_dir}/client.stdout.log"
 else
-  grep -q "scenario ${SCENARIO} passed" "${log_dir}/client.stdout.log"
+  if grep -q "scenario ${SCENARIO} passed" "${log_dir}/client.stdout.log"; then
+    :
+  elif grep -q "scenario ${SCENARIO} blocked:" "${log_dir}/client.stdout.log"; then
+    echo "runtime-monitoring kotlin ${SCENARIO} result=blocked log_dir=${log_dir}"
+  else
+    echo "runtime-monitoring kotlin ${SCENARIO} result=failed log_dir=${log_dir}" >&2
+    exit 1
+  fi
 fi
 if compgen -G "${log_dir}/*-flow.log" >/dev/null; then
   grep -Rq "message flow" "${log_dir}"/*-flow.log

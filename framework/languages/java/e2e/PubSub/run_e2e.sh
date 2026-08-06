@@ -94,7 +94,7 @@ import socket
 sockets = []
 ports = []
 try:
-    for _ in range(8):
+    for _ in range(11):
         sock = socket.socket()
         sock.bind(("127.0.0.1", 0))
         sockets.append(sock)
@@ -123,6 +123,20 @@ wait_port() {
     sleep "${LOCAL_READINESS_POLL_SECONDS}"
   done
   echo "Timed out waiting for ${name} at ${endpoint}" >&2
+  return 1
+}
+
+wait_redis_port() {
+  local endpoint="$1"
+  local port
+  port="$(port_of "${endpoint}")"
+  for _ in $(seq 1 600); do
+    if (echo >"/dev/tcp/127.0.0.1/${port}") >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  echo "Timed out waiting for Redis fixture at ${endpoint}" >&2
   return 1
 }
 
@@ -170,6 +184,7 @@ start_redis_container() {
   zlink_redis_start_scoped_assign REDIS_CONTAINER redis_port \
     "zlink-redis-java-e2e" "redis:7.2-alpine"
   redis_location_endpoint="127.0.0.1:${redis_port}"
+  wait_redis_port "tcp://${redis_location_endpoint}"
 }
 
 gradle_run() {
@@ -191,21 +206,41 @@ subscriber_bin() {
 
 start_publisher() {
   local suffix="${1:-publisher}"
+  local endpoint="${2:-${PUBLISHER_ENDPOINT}}"
+  local http="${3:-${PUBLISHER_HTTP}}"
+  local rid="${4:-publisher-a}"
+  local channel="${5:-pubsub.events}"
+  local no_store="${6:-false}"
+  local port="${7:-}"
+  local advertise_host="${8:-}"
   local config="${config_dir}/${suffix}.properties"
   cat >"${config}" <<EOF
-e2e.http-endpoint=${PUBLISHER_HTTP}
-e2e.publisher-endpoint=${PUBLISHER_ENDPOINT}
-e2e.redis-location-endpoint=${redis_location_endpoint}
-e2e.location-key-prefix=${location_key_prefix}
+e2e.http-endpoint=${http}
 e2e.log-dir=${log_dir}
+e2e.channel-name=${channel}
+e2e.routing-id=${rid}
 EOF
+  if [[ -n "${port}" ]]; then
+    echo "e2e.publisher-port=${port}" >>"${config}"
+  else
+    echo "e2e.publisher-endpoint=${endpoint}" >>"${config}"
+  fi
+  if [[ "${no_store}" != "true" ]]; then
+    echo "e2e.redis-location-endpoint=${redis_location_endpoint}" >>"${config}"
+    echo "e2e.location-key-prefix=${location_key_prefix}" >>"${config}"
+  fi
+  if [[ -n "${advertise_host}" ]]; then
+    echo "e2e.advertise-host=${advertise_host}" >>"${config}"
+  fi
   chmod 0600 "${config}"
   "$(publisher_bin)" --config "${config}" \
     >"${log_dir}/${suffix}.stdout.log" 2>"${log_dir}/${suffix}.stderr.log" &
   LAST_PID="$!"
   pids+=("${LAST_PID}")
-  wait_port publisher-fanout "${PUBLISHER_ENDPOINT}"
-  wait_health "${suffix}" "${PUBLISHER_HTTP}"
+  if [[ -z "${port}" || "${port}" != "0" ]]; then
+    wait_port publisher-fanout "${endpoint}"
+  fi
+  wait_health "${suffix}" "${http}"
 }
 
 start_subscriber() {
@@ -213,16 +248,29 @@ start_subscriber() {
   local topics="$2"
   local http="$3"
   local delay="${4:-}"
+  local include_all="${5:-true}"
+  local manual_endpoint="${6:-}"
+  local mixed_mode="${7:-false}"
+  local no_store="${8:-false}"
   local config="${config_dir}/${rid}.properties"
   cat >"${config}" <<EOF
 e2e.rid=${rid}
 e2e.topics=${topics}
 e2e.http-endpoint=${http}
-e2e.redis-location-endpoint=${redis_location_endpoint}
-e2e.location-key-prefix=${location_key_prefix}
 e2e.log-dir=${log_dir}
+e2e.include-all=${include_all}
 e2e.delay.delay-millis=${delay:-0}
 EOF
+  if [[ "${no_store}" != "true" ]]; then
+    echo "e2e.redis-location-endpoint=${redis_location_endpoint}" >>"${config}"
+    echo "e2e.location-key-prefix=${location_key_prefix}" >>"${config}"
+  fi
+  if [[ -n "${manual_endpoint}" ]]; then
+    echo "e2e.manual-endpoint=${manual_endpoint}" >>"${config}"
+  fi
+  if [[ "${mixed_mode}" == "true" ]]; then
+    echo "e2e.mixed-mode=true" >>"${config}"
+  fi
   chmod 0600 "${config}"
   "$(subscriber_bin)" --config "${config}" \
     >"${log_dir}/${rid}.stdout.log" 2>"${log_dir}/${rid}.stderr.log" &
@@ -247,9 +295,29 @@ run_client_mode() {
   cat "${log_dir}/client-${suffix}.stdout.log"
 }
 
-read -r _UNUSED_PUB _UNUSED_ROUTER PUBLISHER_ENDPOINT _UNUSED_HTTP PUBLISHER_HTTP SUB1_HTTP SUB2_HTTP SUB3_HTTP <<<"$(reserve_ports)"
+read -r PUBLISHER_ENDPOINT PUBLISHER2_ENDPOINT AUDIT_ENDPOINT \
+  PUBLISHER_HTTP PUBLISHER2_HTTP AUDIT_HTTP SUB1_HTTP SUB2_HTTP SUB3_HTTP SUB4_HTTP RECONNECT_HTTP \
+  <<<"$(reserve_ports)"
 
-gradle_run installDist
+if [[ "${SCENARIO}" == "all" ]]; then
+  gradle_run installDist
+  selectors=(
+    PS-A1 PS-A2 PS-A3 PS-A4 PS-B1 PS-B2 PS-C1
+    PS-D1 PS-D2 PS-D3 PS-D4 PS-D5 PS-D6 PS-D7A PS-D7B
+    PS-E1 PS-E2A PS-E2B PS-E2C
+    PS-F1 PS-F2 PS-F3 PS-F4 PS-F5
+  )
+  for selector in "${selectors[@]}"; do
+    echo "=== Java PubSub ${selector} ==="
+    ZLINK_JAVA_E2E_SKIP_BUILD=true "$(pwd)/run_e2e.sh" "${selector}"
+  done
+  echo "pub-sub java all result=passed selectors=${#selectors[@]}"
+  exit 0
+fi
+
+if [[ "${ZLINK_JAVA_E2E_SKIP_BUILD:-false}" != "true" ]]; then
+  gradle_run installDist
+fi
 start_redis_container
 
 PUBLISHER_READY="${log_dir}/publisher-ready"
@@ -259,12 +327,21 @@ LATE_CONTINUE="${log_dir}/late-continue"
 client_config="${config_dir}/client.properties"
 cat >"${client_config}" <<EOF
 publisherHttp=${PUBLISHER_HTTP}
+publisher2Http=${PUBLISHER2_HTTP}
+publisher2Endpoint=${PUBLISHER2_ENDPOINT}
+publisher2Rid=publisher-b
+publisher2NoStore=false
+publisher2AdvertiseHost=
+auditPublisherHttp=${AUDIT_HTTP}
 publisherEndpoint=${PUBLISHER_ENDPOINT}
 redisLocationEndpoint=${redis_location_endpoint}
 locationKeyPrefix=${location_key_prefix}
 sub1Http=${SUB1_HTTP}
 sub2Http=${SUB2_HTTP}
 sub3Http=${SUB3_HTTP}
+sub4Http=${SUB4_HTTP}
+reconnectHttp=${RECONNECT_HTTP}
+publisherPid=
 publisherReadyFile=${PUBLISHER_READY}
 prelateContinueFile=${PRELATE_CONTINUE}
 lateReadyFile=${LATE_READY}
@@ -354,13 +431,106 @@ case "${SCENARIO}" in
     grep -Rq "message flow" "${log_dir}"/*-flow.log
     exit 0
     ;;
-  all)
+  PS-D1)
+    start_publisher publisher
+    start_subscriber sub-1 all "${SUB1_HTTP}"
+    run_client_mode PS-D1 PS-D1
+    ;;
+  PS-D2)
+    start_publisher publisher
+    start_publisher audit "${AUDIT_ENDPOINT}" "${AUDIT_HTTP}" audit-publisher pubsub.audit
+    start_subscriber sub-1 all "${SUB1_HTTP}"
+    run_client_mode PS-D2 PS-D2
+    ;;
+  PS-D3)
+    start_publisher publisher
+    start_subscriber sub-1 all "${SUB1_HTTP}"
+    run_client_mode PS-D3 PS-D3
+    ;;
+  PS-D4)
+    start_publisher publisher
+    PUBLISHER_PID="${LAST_PID}"
+    echo "publisherPid=${PUBLISHER_PID}" >>"${client_config}"
+    start_subscriber sub-1 all "${SUB1_HTTP}"
+    run_client_mode PS-D4 PS-D4
+    ;;
+  PS-D5)
+    start_publisher publisher
+    start_subscriber sub-1 all "${SUB1_HTTP}"
+    docker pause "${REDIS_CONTAINER}" >/dev/null
+    if ! run_client_mode PS-D5 PS-D5-outage; then
+      docker unpause "${REDIS_CONTAINER}" >/dev/null 2>&1 || true
+      exit 1
+    fi
+    docker unpause "${REDIS_CONTAINER}" >/dev/null
+    run_client_mode PS-D5-RECOVERY PS-D5-recovery
+    grep -q "scenario PS-D5 passed" "${log_dir}/client-PS-D5-outage.stdout.log"
+    grep -q "scenario PS-D5-RECOVERY passed" "${log_dir}/client-PS-D5-recovery.stdout.log"
+    exit 0
+    ;;
+  PS-D6)
+    echo "publisher2Port=0" >>"${client_config}"
+    start_publisher publisher "${PUBLISHER_ENDPOINT}" "${PUBLISHER_HTTP}" publisher-a pubsub.events false 0
+    start_subscriber sub-1 all "${SUB1_HTTP}"
+    run_client_mode PS-D6 PS-D6
+    ;;
+  PS-D7A)
+    start_publisher publisher
+    start_subscriber sub-1 all "${SUB1_HTTP}"
+    run_client_mode PS-D7A PS-D7A
+    ;;
+  PS-D7B)
+    start_publisher publisher
+    start_subscriber sub-1 all "${SUB1_HTTP}"
+    start_subscriber sub-4 all "${SUB4_HTTP}" "" true "${PUBLISHER_ENDPOINT}" false true
+    run_client_mode PS-D7B PS-D7B
+    ;;
+  PS-E1)
+    start_publisher publisher "${PUBLISHER_ENDPOINT}" "${PUBLISHER_HTTP}" publisher-a pubsub.events true
+    start_subscriber sub-4 all "${SUB4_HTTP}" "" true "${PUBLISHER_ENDPOINT}" false true
+    run_client_mode PS-E1 PS-E1
+    ;;
+  PS-E2A|PS-E2B|PS-E2C)
+    run_client_mode "${SCENARIO}" "${SCENARIO}"
+    ;;
+  PS-F1)
+    echo "publisher2NoStore=true" >>"${client_config}"
+    start_publisher publisher
+    start_subscriber sub-1 all "${SUB1_HTTP}"
+    start_subscriber sub-4 all "${SUB4_HTTP}" "" true "${PUBLISHER2_ENDPOINT}" false true
+    run_client_mode PS-F1 PS-F1
+    ;;
+  PS-F2)
+    publisher2_port="${PUBLISHER2_ENDPOINT##*:}"
+    echo "publisher2Endpoint=tcp://127.0.0.2:${publisher2_port}" >>"${client_config}"
+    echo "publisher2AdvertiseHost=127.0.0.1" >>"${client_config}"
+    start_publisher publisher
+    start_subscriber sub-1 all "${SUB1_HTTP}"
+    run_client_mode PS-F2 PS-F2
+    ;;
+  PS-F3)
+    start_publisher publisher
+    start_subscriber sub-1 '*' "${SUB1_HTTP}" "" false
+    run_client_mode PS-F3 PS-F3
+    ;;
+  PS-F4)
+    start_publisher publisher
+    start_subscriber sub-1 all "${SUB1_HTTP}"
+    run_client_mode PS-F4 PS-F4
+    ;;
+  PS-F5)
+    start_publisher publisher
+    start_subscriber sub-1 events.b "${SUB1_HTTP}" "" false
+    run_client_mode PS-F5 PS-F5
     ;;
   *)
     echo "Unknown PubSub scenario: ${SCENARIO}" >&2
     exit 1
     ;;
 esac
+
+grep -q "scenario ${SCENARIO} passed" "${log_dir}/client-${SCENARIO}.stdout.log"
+exit 0
 
 start_ordered_roles "" publisher
 

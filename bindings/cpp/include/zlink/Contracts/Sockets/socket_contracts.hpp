@@ -31,6 +31,7 @@ namespace detail
 class socket_handle_t;
 struct socket_callback_state_t;
 struct socket_access_t;
+struct recv_envelope_t;
 } // namespace detail
 
 
@@ -146,6 +147,7 @@ class socket_t
 
     std::unique_ptr<detail::socket_handle_t> _socket;
     std::unique_ptr<detail::socket_callback_state_t> _callbacks;
+    std::unique_ptr<detail::recv_envelope_t> _receive_envelope;
     socket_type _type;
 };
 

@@ -12,6 +12,8 @@ public record RoleOptions(
     String locationKeyPrefix,
     String logDirectory,
     String gameEndpoint,
+    String gameBindHost,
+    String gameAdvertiseHost,
     String gamePeerRids,
     String gamePeerEndpoints,
     String gameServers,
@@ -22,12 +24,23 @@ public record RoleOptions(
     String auditServers,
     String auditClients,
     String workflowEndpoint,
+    String workflowBindHost,
+    String workflowAdvertiseHost,
     int workflowPort,
     int workflowWeight,
     boolean workflowClient,
     boolean workflowServer,
     boolean instanceSpot,
-    boolean objectClient) {
+    boolean objectClient,
+    boolean fanoutPublisher,
+    boolean fanoutSubscriber,
+    String fanoutBindHost,
+    String fanoutAdvertiseHost,
+    int fanoutPort,
+    boolean streamServer,
+    String streamBindHost,
+    String streamAdvertiseHost,
+    int streamPort) {
     public RoleOptions {
         required(role, "role");
         required(rid, "rid");
@@ -37,6 +50,8 @@ public record RoleOptions(
         required(locationKeyPrefix, "location-key-prefix");
         required(logDirectory, "log-directory");
         gamePeerRids = empty(gamePeerRids);
+        gameBindHost = defaultValue(gameBindHost, "127.0.0.1");
+        gameAdvertiseHost = defaultValue(gameAdvertiseHost, "127.0.0.1");
         gamePeerEndpoints = empty(gamePeerEndpoints);
         gameServers = empty(gameServers);
         gameClients = empty(gameClients);
@@ -45,6 +60,12 @@ public record RoleOptions(
         auditServers = empty(auditServers);
         auditClients = empty(auditClients);
         workflowEndpoint = empty(workflowEndpoint);
+        workflowBindHost = defaultValue(workflowBindHost, "127.0.0.1");
+        workflowAdvertiseHost = defaultValue(workflowAdvertiseHost, "127.0.0.1");
+        fanoutBindHost = defaultValue(fanoutBindHost, "127.0.0.1");
+        fanoutAdvertiseHost = defaultValue(fanoutAdvertiseHost, "127.0.0.1");
+        streamBindHost = defaultValue(streamBindHost, "127.0.0.1");
+        streamAdvertiseHost = defaultValue(streamAdvertiseHost, "127.0.0.1");
         if (workflowWeight < 0) {
             throw new IllegalArgumentException("e2e.workflow-weight must not be negative");
         }
@@ -90,6 +111,10 @@ public record RoleOptions(
 
     private static String empty(String value) {
         return value == null ? "" : value;
+    }
+
+    private static String defaultValue(String value, String fallback) {
+        return value == null || value.isBlank() ? fallback : value;
     }
 
     private static String[] values(String value) {

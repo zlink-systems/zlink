@@ -111,7 +111,7 @@ class KotlinPublicSurfaceContractTest {
         )
         assertPublicMethodCounts(
             "ZLinkKotlinActorManager",
-            mapOf("create" to 1, "getOrCreate" to 1),
+            mapOf("create" to 1, "getOrCreate" to 1, "destroy" to 1),
         )
     }
 

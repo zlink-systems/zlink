@@ -34,6 +34,7 @@ public final class ZLinkMeshNodeRuntime implements AutoCloseable {
                 node.setRoutingId(registration.routingId());
             }
             node.setBind(registration.bindEndpoint());
+            node.setAdvertiseHost(registration.advertiseHost());
             node.setObjectRole(
                 registration.objectServer()
                     ? systems.zlink.framework.locations.ZLinkMeshNodeObjectRole.SERVER
@@ -47,6 +48,8 @@ public final class ZLinkMeshNodeRuntime implements AutoCloseable {
             long routerSendHighWaterMark =
                 registration.configureRouterSocket().sendHighWaterMark();
             node.setRouterHighWaterMark(routerSendHighWaterMark);
+            node.setRouterReceiveHighWaterMark(
+                registration.configureRouterSocket().receiveHighWaterMark());
             node.setRouterPendingAdmissionCapacity(
                 routerSendHighWaterMark > 0
                     ? (int) Math.min(routerSendHighWaterMark, Integer.MAX_VALUE)
@@ -55,7 +58,7 @@ public final class ZLinkMeshNodeRuntime implements AutoCloseable {
                 registration.configureRouterSocket().sendTimeout()
                     .orElse(Duration.ofSeconds(1)));
             node.setMailboxMessageBudget(
-                registration.configureRouterSocket().receiveHighWaterMark());
+                registration.configureRouterSocket().mailboxMessageBudget());
             if (applicationDispatchBudget != null) {
                 node.setApplicationDispatchBudget(applicationDispatchBudget);
             }

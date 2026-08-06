@@ -14,11 +14,6 @@ internal sealed class ZLinkBackendSubscriberSocketWrapper(ISubSocket nativeSocke
         nativeSocket.Bind(endpoint);
     }
 
-    public void SetChannelName(string channelName)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(channelName);
-    }
-
     public void SetMaxMessageSize(long value)
     {
         nativeSocket.Options.MaxMessageSize = value;

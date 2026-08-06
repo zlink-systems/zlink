@@ -17,6 +17,7 @@ import java.util.concurrent.CompletionStage;
 import systems.zlink.framework.locations.ZLinkLocationRuntimeQuery;
 import systems.zlink.framework.locations.ZLinkLocationTopologyFilter;
 import systems.zlink.framework.locations.ZLinkPageRequest;
+import systems.zlink.framework.channels.ZLinkRouteMeshRuntimeOptions;
 import systems.zlink.framework.spring.internal.runtime.ZLinkFrameworkLifecycle;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkTerminationResult;
 
@@ -31,6 +32,7 @@ public final class EvidenceHttpServer implements SmartLifecycle {
     private final java.util.function.Function<systems.zlink.contracts.core.RoutingId,
         CompletionStage<Boolean>> closeSpot;
     private final java.util.function.Supplier<CompletionStage<String>> routeProbe;
+    private final ZLinkRouteMeshRuntimeOptions meshOptions;
     private volatile CompletionStage<ZLinkFrameworkTerminationResult> drainResult;
     private HttpServer server;
     private boolean running;
@@ -58,6 +60,22 @@ public final class EvidenceHttpServer implements SmartLifecycle {
         java.util.function.Function<systems.zlink.contracts.core.RoutingId,
             CompletionStage<Boolean>> closeSpot,
         java.util.function.Supplier<CompletionStage<String>> routeProbe) {
+        this(evidence, json, endpoint, metrics, drain, locations, drainEvidence,
+            closeSpot, routeProbe, null);
+    }
+
+    public EvidenceHttpServer(
+        EvidenceStore evidence,
+        ObjectMapper json,
+        String endpoint,
+        MeterRegistry metrics,
+        ZLinkFrameworkLifecycle drain,
+        java.util.function.Supplier<ZLinkLocationRuntimeQuery> locations,
+        DrainEvidence drainEvidence,
+        java.util.function.Function<systems.zlink.contracts.core.RoutingId,
+            CompletionStage<Boolean>> closeSpot,
+        java.util.function.Supplier<CompletionStage<String>> routeProbe,
+        ZLinkRouteMeshRuntimeOptions meshOptions) {
         this.evidence = evidence;
         this.json = json;
         this.endpoint = endpoint;
@@ -67,6 +85,7 @@ public final class EvidenceHttpServer implements SmartLifecycle {
         this.drainEvidence = drainEvidence;
         this.closeSpot = closeSpot;
         this.routeProbe = routeProbe;
+        this.meshOptions = meshOptions;
     }
 
     @Override
@@ -81,6 +100,45 @@ public final class EvidenceHttpServer implements SmartLifecycle {
             server.createContext("/evidence", exchange -> write(
                 exchange,
                 json.writeValueAsString(evidence.snapshot())));
+            server.createContext("/evidence/wait", exchange -> {
+                String query = exchange.getRequestURI().getRawQuery();
+                String marker = queryValue(query, "marker");
+                String subject = queryValue(query, "subject");
+                long timeoutMs = queryLong(query, "timeoutMs", 30000L);
+                boolean matched;
+                try {
+                    matched = !marker.isBlank()
+                        && !subject.isBlank()
+                        && timeoutMs > 0
+                        && evidence.awaitMarker(
+                            marker,
+                            subject,
+                            Duration.ofMillis(Math.min(timeoutMs, 30000L)));
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    matched = false;
+                }
+                write(exchange, "{\"matched\":" + matched + "}");
+            });
+            server.createContext("/placement-weight", exchange -> {
+                if (meshOptions == null) {
+                    write(exchange, "{\"accepted\":false}");
+                    return;
+                }
+                if (!("P" + "OST").equalsIgnoreCase(exchange.getRequestMethod())) {
+                    write(exchange, "{\"accepted\":false,\"error\":\"write method required\"}");
+                    return;
+                }
+                long weight = queryLong(exchange.getRequestURI().getRawQuery(), "weight", -1L);
+                if (weight < 0 || weight > 10_000) {
+                    write(exchange, "{\"accepted\":false,\"error\":\"invalid weight\"}");
+                    return;
+                }
+                var placement = meshOptions.mesh(Contracts.SPOT_MESH);
+                placement.setPlacementWeight((int) weight);
+                write(exchange, "{\"accepted\":true,\"weight\":"
+                    + placement.placementWeight() + "}");
+            });
             server.createContext("/metrics", exchange -> write(
                 exchange,
                 json.writeValueAsString(metricSnapshot())));

@@ -11,9 +11,13 @@ public record PlayOptions(
     String delayEndpoint,
     String fanoutEndpoint,
     String httpEndpoint,
+    String maintenanceEndpoint,
     String redisLocationEndpoint,
     String locationKeyPrefix,
-    String logDir) {
+    String logDir,
+    long applicationVersion,
+    int placementWeight,
+    boolean automaticTopology) {
     public PlayOptions {
         required(nodeRid, "node-rid");
         required(routeEndpoint, "route-endpoint");
@@ -22,9 +26,16 @@ public record PlayOptions(
         required(delayEndpoint, "delay-endpoint");
         fanoutEndpoint = optional(fanoutEndpoint, "");
         required(httpEndpoint, "http-endpoint");
+        maintenanceEndpoint = optional(maintenanceEndpoint, "");
         required(redisLocationEndpoint, "redis-location-endpoint");
         required(locationKeyPrefix, "location-key-prefix");
         required(logDir, "log-dir");
+        if (applicationVersion < 0) {
+            throw new IllegalArgumentException("e2e.application-version must not be negative");
+        }
+        if (placementWeight < 0) {
+            throw new IllegalArgumentException("e2e.placement-weight must not be negative");
+        }
     }
 
     private static String optional(String value, String fallback) {

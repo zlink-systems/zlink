@@ -3,6 +3,12 @@
 
 #include <nlohmann/json.hpp>
 
+#include <cstdint>
+#include <charconv>
+#include <system_error>
+#include <optional>
+#include <span>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -143,6 +149,30 @@ struct mismatch_roundtrip_res_t
     std::string value;
 };
 
+struct json_golden_req_t
+{
+    static constexpr const char *packet_name = "JsonGolden";
+    std::string display_name;
+    std::string status;
+    std::int64_t balance = 0;
+    std::vector<std::uint8_t> payload;
+    std::int32_t score = 0;
+    double ratio = 0;
+    std::optional<std::string> optional_note;
+};
+
+struct json_golden_res_t
+{
+    std::string display_name;
+    std::string status;
+    std::int64_t balance = 0;
+    std::vector<std::uint8_t> payload;
+    std::int32_t score = 0;
+    double ratio = 0;
+    std::optional<std::string> optional_note;
+    std::string content_type;
+};
+
 struct scoped_lifecycle_req_t
 {
     static constexpr const char *packet_name = "ScopedLifecycleReq";
@@ -216,6 +246,140 @@ struct evidence_snapshot_t
 {
     std::vector<evidence_entry_t> entries;
 };
+
+inline std::string encode_base64 (std::span<const std::uint8_t> bytes)
+{
+    constexpr char alphabet[] =
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string result;
+    result.reserve ((bytes.size () + 2) / 3 * 4);
+    for (std::size_t index = 0; index < bytes.size (); index += 3) {
+        const auto remaining = bytes.size () - index;
+        const auto first = bytes[index];
+        const auto second = remaining > 1 ? bytes[index + 1] : 0;
+        const auto third = remaining > 2 ? bytes[index + 2] : 0;
+        result.push_back (alphabet[first >> 2]);
+        result.push_back (alphabet[((first & 0x03u) << 4) | (second >> 4)]);
+        result.push_back (remaining > 1 ? alphabet[((second & 0x0fu) << 2) | (third >> 6)] : '=');
+        result.push_back (remaining > 2 ? alphabet[third & 0x3fu] : '=');
+    }
+    return result;
+}
+
+inline std::uint8_t decode_base64_digit (char value)
+{
+    if (value >= 'A' && value <= 'Z')
+        return static_cast<std::uint8_t> (value - 'A');
+    if (value >= 'a' && value <= 'z')
+        return static_cast<std::uint8_t> (value - 'a' + 26);
+    if (value >= '0' && value <= '9')
+        return static_cast<std::uint8_t> (value - '0' + 52);
+    if (value == '+')
+        return 62;
+    if (value == '/')
+        return 63;
+    throw std::invalid_argument ("invalid base64 digit");
+}
+
+inline std::vector<std::uint8_t> decode_base64 (const std::string &encoded)
+{
+    if (encoded.size () % 4 != 0)
+        throw std::invalid_argument ("base64 value must be padded");
+    std::vector<std::uint8_t> result;
+    result.reserve (encoded.size () / 4 * 3);
+    for (std::size_t index = 0; index < encoded.size (); index += 4) {
+        const auto first = decode_base64_digit (encoded[index]);
+        const auto second = decode_base64_digit (encoded[index + 1]);
+        const auto third_padded = encoded[index + 2] == '=';
+        const auto fourth_padded = encoded[index + 3] == '=';
+        if (fourth_padded && !third_padded && index + 4 != encoded.size ())
+            throw std::invalid_argument ("invalid base64 padding");
+        const auto third = third_padded ? 0 : decode_base64_digit (encoded[index + 2]);
+        const auto fourth = fourth_padded ? 0 : decode_base64_digit (encoded[index + 3]);
+        if (third_padded && !fourth_padded)
+            throw std::invalid_argument ("invalid base64 padding");
+        if (third_padded && (second & 0x0fu) != 0)
+            throw std::invalid_argument ("non-zero base64 padding bits");
+        if (fourth_padded && !third_padded && (third & 0x03u) != 0)
+            throw std::invalid_argument ("non-zero base64 padding bits");
+        result.push_back (static_cast<std::uint8_t> ((first << 2) | (second >> 4)));
+        if (!third_padded)
+            result.push_back (static_cast<std::uint8_t> ((second << 4) | (third >> 2)));
+        if (!fourth_padded)
+            result.push_back (static_cast<std::uint8_t> ((third << 6) | fourth));
+    }
+    return result;
+}
+
+inline std::int64_t parse_json_int64 (const nlohmann::json &value)
+{
+    if (value.is_number_integer ())
+        return value.get<std::int64_t> ();
+    if (!value.is_string ())
+        throw std::invalid_argument ("JSON int64 value must be a decimal string or integer");
+    const auto text = value.get<std::string> ();
+    std::int64_t result = 0;
+    const auto [end, error] = std::from_chars (text.data (), text.data () + text.size (), result);
+    if (error != std::errc{} || end != text.data () + text.size ())
+        throw std::invalid_argument ("JSON int64 value is not a decimal integer");
+    return result;
+}
+
+inline void from_json (const nlohmann::json &json, json_golden_req_t &value)
+{
+    json.at ("displayName").get_to (value.display_name);
+    json.at ("status").get_to (value.status);
+    value.balance = parse_json_int64 (json.at ("balance"));
+    value.payload = decode_base64 (json.at ("payload").get<std::string> ());
+    json.at ("score").get_to (value.score);
+    json.at ("ratio").get_to (value.ratio);
+    if (!json.contains ("optionalNote") || json.at ("optionalNote").is_null ())
+        value.optional_note.reset ();
+    else
+        value.optional_note = json.at ("optionalNote").get<std::string> ();
+}
+
+inline void to_json (nlohmann::json &json, const json_golden_req_t &value)
+{
+    json = nlohmann::json{{"displayName", value.display_name},
+                          {"status", value.status},
+                          {"balance", std::to_string (value.balance)},
+                          {"payload", encode_base64 (value.payload)},
+                          {"score", value.score},
+                          {"ratio", value.ratio},
+                          {"optionalNote", value.optional_note
+                                               ? nlohmann::json (*value.optional_note)
+                                               : nlohmann::json (nullptr)}};
+}
+
+inline void from_json (const nlohmann::json &json, json_golden_res_t &value)
+{
+    json.at ("displayName").get_to (value.display_name);
+    json.at ("status").get_to (value.status);
+    value.balance = parse_json_int64 (json.at ("balance"));
+    value.payload = decode_base64 (json.at ("payload").get<std::string> ());
+    json.at ("score").get_to (value.score);
+    json.at ("ratio").get_to (value.ratio);
+    if (!json.contains ("optionalNote") || json.at ("optionalNote").is_null ())
+        value.optional_note.reset ();
+    else
+        value.optional_note = json.at ("optionalNote").get<std::string> ();
+    json.at ("contentType").get_to (value.content_type);
+}
+
+inline void to_json (nlohmann::json &json, const json_golden_res_t &value)
+{
+    json = nlohmann::json{{"displayName", value.display_name},
+                          {"status", value.status},
+                          {"balance", std::to_string (value.balance)},
+                          {"payload", encode_base64 (value.payload)},
+                          {"score", value.score},
+                          {"ratio", value.ratio},
+                          {"optionalNote", value.optional_note
+                                               ? nlohmann::json (*value.optional_note)
+                                               : nlohmann::json (nullptr)},
+                          {"contentType", value.content_type}};
+}
 
 inline void to_json (nlohmann::json &json, const echo_auto_req_t &value)
 {

@@ -15,7 +15,11 @@ public record ConsumerOptions(
     long storeFailureGraceMillis,
     String storeMode,
     String storeDelayControlFile,
-    String logDir) {
+    String logDir,
+    boolean c4Roles,
+    String c4RouteAEndpoint,
+    String c4RouteBEndpoint,
+    String c4ClientServerEndpoint) {
     public ConsumerOptions {
         required(rid, "rid");
         required(httpEndpoint, "http-endpoint");
@@ -29,6 +33,14 @@ public record ConsumerOptions(
         required(storeMode, "store-mode");
         required(logDir, "log-dir");
         storeDelayControlFile = storeDelayControlFile == null ? "" : storeDelayControlFile;
+        c4RouteAEndpoint = c4RouteAEndpoint == null ? "" : c4RouteAEndpoint;
+        c4RouteBEndpoint = c4RouteBEndpoint == null ? "" : c4RouteBEndpoint;
+        c4ClientServerEndpoint = c4ClientServerEndpoint == null ? "" : c4ClientServerEndpoint;
+        if (c4Roles) {
+            required(c4RouteAEndpoint, "c4-route-a-endpoint");
+            required(c4RouteBEndpoint, "c4-route-b-endpoint");
+            required(c4ClientServerEndpoint, "c4-client-server-endpoint");
+        }
     }
 
     private static void required(String value, String name) {

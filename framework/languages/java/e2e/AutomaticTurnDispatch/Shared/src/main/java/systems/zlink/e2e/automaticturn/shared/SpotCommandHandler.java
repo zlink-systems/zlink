@@ -1,5 +1,6 @@
 package systems.zlink.e2e.automaticturn.shared;
 
+import java.time.Duration;
 import java.util.concurrent.CompletionStage;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.channels.ZLinkRouteClient;
@@ -35,9 +36,8 @@ public abstract class SpotCommandHandler<TCommand>
         TCommand command) {
         RoutingId targetSpotRid = RoutingId.from(dispatch.metadata()
             .getOrDefault(Contracts.SPOT_RID_METADATA, Contracts.TARGET_SPOT));
-        return spots.resolveSpotHandle(targetSpotRid).thenCompose(handle -> routes.sendToSpot(
-            handle.orElseThrow(() -> new IllegalStateException("spot not found: " + targetSpotRid)),
-            command).submit().thenApply(ignored -> null));
+        return routes.sendToSpot(targetSpotRid.toString(), command)
+            .submit().thenApply(ignored -> null);
     }
 
     public static final class WorkerAwait
@@ -58,6 +58,34 @@ public abstract class SpotCommandHandler<TCommand>
         extends SpotCommandHandler<Contracts.ProbeMsg> {
         public Probe(ZLinkRouteClient routes, SpotHandleResolver spots) {
             super(routes, spots, Contracts.ProbeMsg.class);
+        }
+    }
+
+    public static final class CounterReset
+        extends SpotCommandHandler<Contracts.CounterResetMsg> {
+        public CounterReset(ZLinkRouteClient routes, SpotHandleResolver spots) {
+            super(routes, spots, Contracts.CounterResetMsg.class);
+        }
+    }
+
+    public static final class CounterAwait
+        extends SpotCommandHandler<Contracts.CounterAwaitMsg> {
+        public CounterAwait(ZLinkRouteClient routes, SpotHandleResolver spots) {
+            super(routes, spots, Contracts.CounterAwaitMsg.class);
+        }
+    }
+
+    public static final class IoWorker
+        extends SpotCommandHandler<Contracts.IoWorkerMsg> {
+        public IoWorker(ZLinkRouteClient routes, SpotHandleResolver spots) {
+            super(routes, spots, Contracts.IoWorkerMsg.class);
+        }
+    }
+
+    public static final class CpuWorker
+        extends SpotCommandHandler<Contracts.CpuWorkerMsg> {
+        public CpuWorker(ZLinkRouteClient routes, SpotHandleResolver spots) {
+            super(routes, spots, Contracts.CpuWorkerMsg.class);
         }
     }
 
@@ -83,12 +111,63 @@ public abstract class SpotCommandHandler<TCommand>
             Contracts.ProbeReq request) {
             RoutingId targetSpotRid = RoutingId.from(dispatch.metadata()
                 .getOrDefault(Contracts.SPOT_RID_METADATA, Contracts.TARGET_SPOT));
-            return spots.resolveSpotHandle(targetSpotRid)
-                .thenCompose(handle -> routes.requestToSpot(
-                        handle.orElseThrow(() ->
-                            new IllegalStateException("spot not found: " + targetSpotRid)),
+            return routes.requestToSpot(
+                        targetSpotRid.toString(),
                         request)
-                    .submit(Contracts.ProbeRes.class))
+                    .submit(Contracts.ProbeRes.class)
+                .thenAccept(reply -> context.client().reply(reply).submit());
+        }
+    }
+
+    public static final class CounterReadRequest
+        implements ZLinkTypedSessionPacketHandler<ZLinkSessionContext, Contracts.CounterReadReq> {
+        private final ZLinkRouteClient routes;
+
+        public CounterReadRequest(ZLinkRouteClient routes) {
+            this.routes = routes;
+        }
+
+        @Override
+        public Class<Contracts.CounterReadReq> messageType() {
+            return Contracts.CounterReadReq.class;
+        }
+
+        @Override
+        public CompletionStage<Void> handle(
+            ZLinkSessionContext context,
+            ZLinkSessionDispatchContext dispatch,
+            Contracts.CounterReadReq request) {
+            String spotId = dispatch.metadata()
+                .getOrDefault(Contracts.SPOT_RID_METADATA, Contracts.TARGET_SPOT);
+            return routes.requestToSpot(spotId, request)
+                .submit(Contracts.CounterReadRes.class)
+                .thenAccept(reply -> context.client().reply(reply).submit());
+        }
+    }
+
+    public static final class IoWorkerBatchRequest
+        implements ZLinkTypedSessionPacketHandler<ZLinkSessionContext, Contracts.IoWorkerBatchReq> {
+        private final ZLinkRouteClient routes;
+
+        public IoWorkerBatchRequest(ZLinkRouteClient routes) {
+            this.routes = routes;
+        }
+
+        @Override
+        public Class<Contracts.IoWorkerBatchReq> messageType() {
+            return Contracts.IoWorkerBatchReq.class;
+        }
+
+        @Override
+        public CompletionStage<Void> handle(
+            ZLinkSessionContext context,
+            ZLinkSessionDispatchContext dispatch,
+            Contracts.IoWorkerBatchReq request) {
+            String spotId = dispatch.metadata()
+                .getOrDefault(Contracts.SPOT_RID_METADATA, Contracts.TARGET_SPOT);
+            return routes.requestToSpot(spotId, request)
+                .timeout(Duration.ofSeconds(10))
+                .submit(Contracts.IoWorkerBatchRes.class)
                 .thenAccept(reply -> context.client().reply(reply).submit());
         }
     }

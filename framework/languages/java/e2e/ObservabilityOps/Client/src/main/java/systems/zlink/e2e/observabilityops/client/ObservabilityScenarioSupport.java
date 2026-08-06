@@ -285,6 +285,69 @@ public final class ObservabilityScenarioSupport {
         System.out.println("OBS-C5 target-ready=" + ready.nodeRid());
     }
 
+    public void runRelocationWorkloadPrepare(
+        ZLinkStreamConnector connector,
+        String scenarioId) {
+        String normalized = scenarioId.toLowerCase().replaceAll("[^a-z0-9]+", "-");
+        String spotRid = "obs-" + normalized + "-room";
+        String actorId = "obs-" + normalized + "-actor";
+        Contracts.BindActorsRes bound = connector
+            .request(new Contracts.BindActorsReq(spotRid, actorId, actorId + "-peer"))
+            .timeout(REQUEST_TIMEOUT)
+            .submit(Contracts.BindActorsRes.class)
+            .toCompletableFuture().join();
+        ensure(actorId.equals(bound.actorA()), scenarioId + " actor bind mismatch");
+        Contracts.ActorJoinRes joined = connector
+            .request(new Contracts.ActorJoinReq(scenarioId + "-join", spotRid))
+            .metadata(Contracts.ACTOR_ID_METADATA, actorId)
+            .timeout(REQUEST_TIMEOUT)
+            .submit(Contracts.ActorJoinRes.class)
+            .toCompletableFuture().join();
+        ensure(actorId.equals(joined.actorId()), scenarioId + " actor join mismatch");
+        System.out.println(scenarioId + " prepared spot=" + spotRid
+            + " actor=" + actorId + " generation=" + bound.actors().getFirst().generation());
+        System.out.flush();
+        CompletionStage<ZLinkStreamMessage<Contracts.ActorPushNotify>> push = connector
+            .waitFor(Contracts.ActorPushNotify.class)
+            .timeout(Duration.ofSeconds(45))
+            .submit(Contracts.ActorPushNotify.class);
+        try {
+            connector.request(new Contracts.ActorPushAwaitReq(
+                    scenarioId, 15_000, scenarioId + "-pending"))
+                .metadata(Contracts.ACTOR_ID_METADATA, actorId)
+                .timeout(Duration.ofSeconds(45))
+                .submit(Contracts.ActorPushAwaitRes.class)
+                .toCompletableFuture().join();
+            connector.dispatch().submit().toCompletableFuture().join();
+            Contracts.ActorPushNotify notify = push.toCompletableFuture().join().payload();
+            System.out.println(scenarioId + " pending-completed node=" + notify.nodeRid());
+        } catch (RuntimeException error) {
+            System.out.println(scenarioId + " pending-terminal=" + error.getClass().getSimpleName());
+        }
+    }
+
+    public void runRelocationWorkloadAfter(
+        ZLinkStreamConnector connector,
+        String scenarioId) {
+        String normalized = scenarioId.toLowerCase().replaceAll("[^a-z0-9]+", "-");
+        String actorId = "obs-" + normalized + "-actor";
+        CompletionStage<ZLinkStreamMessage<Contracts.ActorPushNotify>> push = connector
+            .waitFor(Contracts.ActorPushNotify.class)
+            .timeout(REQUEST_TIMEOUT)
+            .submit(Contracts.ActorPushNotify.class);
+        connector.request(new Contracts.ActorPushAwaitReq(
+                scenarioId + "-after", 50, scenarioId + "-after"))
+            .metadata(Contracts.ACTOR_ID_METADATA, actorId)
+            .timeout(REQUEST_TIMEOUT)
+            .submit(Contracts.ActorPushAwaitRes.class)
+            .toCompletableFuture().join();
+        connector.dispatch().submit().toCompletableFuture().join();
+        Contracts.ActorPushNotify notify = push.toCompletableFuture().join().payload();
+        ensure(actorId.equals(notify.actorId()), scenarioId + " after actor mismatch");
+        System.out.println(scenarioId + " after node=" + notify.nodeRid()
+            + " actor=" + notify.actorId());
+    }
+
     private void runScenario(
         ZLinkStreamConnector connector,
         String scenarioId,

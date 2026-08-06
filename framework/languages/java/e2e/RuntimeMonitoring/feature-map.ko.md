@@ -18,7 +18,8 @@ operation은 Trigger와 Service role이 실행한다.
 | MON-A5 | 구현 | Redis를 정지·복구해 `zlink.runtime.location.store_changed`의 `degraded`·`ready` 전이, location state·last success·last failure, 장애 중 admitted messaging 유지와 복구 뒤 ready topology를 확인했다. | 없음 |
 | MON-B1 | 부분 구현 | zero-target publish를 실제로 시작한 뒤 public snapshot·event에 publish 전용 필드가 없고, public record와 runtime class file에 제거한 type·metric·event 이름이 없음을 검사한다. | 막힌 remote target이 있어도 시작 뒤 정상 완료하며 rollback·자동 재시도가 없음을 process E2E에서 추가로 확인한다. |
 | MON-B2 | 부분 구현 | local subscriber를 만든 뒤 publish하고 public snapshot·event에 publish 전용 관측값이 없음을 검사한다. | subscriber handler의 단일 처리와 막힌 local target, message-flow trace의 target별 결과 부재를 추가로 확인한다. |
-| MON-C1 | 10.0.0 전환 대상 | Application callback과 monitoring observer의 격리 구현은 유지한다. | claim progress·request completion·느린 observer 격리·sequence gap 뒤 snapshot resync를 한 시나리오에서 다시 검증한다. |
+| MON-C1 | 구현 | `logs/20260806-013629-2464166/`에서 느린 observer callback을 해제하지 않은 동안 `svc-b` 재기동과 별도 Channel request를 완료하고, normal observer 진행(`normal-events=5`)과 public snapshot resync(`sequence=994`)를 확인했다. | 없음 |
+| MON-A6 | 차단 | `logs/20260806-013551-2459907/client.stderr.log`에서 public `ZLinkSpotManager` create endpoint가 반환한 뒤, `ZLinkRouteMeshRuntime.snapshot(...).placement.activeSpotCount`가 생성 전후 모두 `0`이어서 중단됐다. | current public placement projection이 live actor/Spot count를 publish해야 한다. 최신 작업 범위는 core/runtime 수정 금지이므로 Java fixture에서 count를 만들 수 없다. |
 | MON-D1A | 구현 | 등록하지 않은 MeshName 조회가 public runtime endpoint에서 configuration error로 끝나고 기존 Mesh 상태에는 영향을 주지 않는다. | 없음 |
 | MON-D1B | 구현 | 동일 observer에서 peer crash와 restart를 세 번 반복하고 각 cycle의 ready 수렴과 replacement request를 확인한다. | 없음 |
 
@@ -38,6 +39,6 @@ MON-B1·MON-B2 실행 결과는 제거된 target별 publish 집계를 검증했�
 사용하지 않는다. 표에서 `부분 구현`, `10.0.0 전환 대상` 또는 `11.0.0 전환 대상`으로 남긴
 항목은 공통 Config7의 세부 gate를 모두 단언하지 않으므로 완료 증거로 사용하지 않는다.
 
-## 공통 scenario parity gap — 2026-07-29
+## 공통 scenario parity gap — 2026-08-06
 
-- `MON-A6`: 공통 scenario는 추가됐지만 Java actual fixture와 runner selector가 없다.
+- `MON-A6`은 Java public manager로 실제 생성까지 실행했지만 public placement snapshot의 count가 갱신되지 않아 차단됐다. 위 실행 로그가 현재 구현과 공통 계약의 차이를 기록한다.

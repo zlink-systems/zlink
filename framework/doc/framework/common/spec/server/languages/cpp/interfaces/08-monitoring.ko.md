@@ -56,6 +56,9 @@ class framework_runtime_t {
 public:
     virtual ~framework_runtime_t() = default;
     virtual framework_runtime_status_t status() const = 0;
+    virtual listener_status_t listener_status(
+      listener_kind_t kind,
+      std::string name) const = 0;
     virtual std::unique_ptr<runtime_observation_t> observe(
       std::size_t capacity,
       std::function<void(
@@ -68,7 +71,38 @@ public:
 readiness를 판단하는 데 필요한 값만 제공한다. Relocation unit 수, queue, barrier와 Store 내부 상태는
 포함하지 않는다.
 
-### 1.1 RouteMesh 상태
+### 1.1 Local listener identity
+
+Framework는 local listener가 bind를 완료한 뒤 확인한 endpoint를 제공한다. Remote descriptor,
+connection generation과 transport socket handle은 공개하지 않는다.
+
+```cpp
+enum class listener_kind_t {
+    route_mesh,
+    client_server,
+    fanout,
+    stream
+};
+
+struct listener_status_t {
+    listener_kind_t kind;
+    std::string name;
+    std::string endpoint;
+    std::chrono::system_clock::time_point observed_at;
+};
+```
+
+`framework_runtime_t::listener_status(...)`는 이름이 지정된 local listener가 bind를 완료한 뒤의
+현재 advertised endpoint를 반환한다. Listener를 찾을 수 없거나 bind가 끝나지 않았으면
+`framework_error_kind_t::not_configured`인 `framework_exception_t`를 던진다. Port `0`으로
+설정한 listener는 OS가 선택한 0이 아닌 실제 port를 반환한다. `AdvertiseHost`를 설정한 경우
+그 host를 사용하고, 설정하지 않으면 확인한 bind host를 사용한다.
+
+`name`은 설정한 MeshName, ChannelName 또는 StreamNodeName이다. Classic fanout publisher에서는
+ChannelName을 사용한다. 호출자는 반환된 값을 관찰과 readiness 확인에 사용하며 다른 listener의
+설정에 복사하지 않는다.
+
+### 1.2 RouteMesh 상태
 
 ```cpp
 enum class mesh_node_state_t {

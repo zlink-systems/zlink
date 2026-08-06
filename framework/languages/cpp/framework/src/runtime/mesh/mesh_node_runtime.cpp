@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "runtime/mesh/mesh_node_runtime.hpp"
+#include <zlink/framework/contracts/configuration/detail/framework_options_state.hpp>
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/locations/sha256.hpp"
 #include "runtime/messaging/async_submit_runtime.hpp"
@@ -11,6 +12,7 @@
 #include "runtime/messaging/envelope_codec.hpp"
 #include "runtime/messaging/request_failure_mapper.hpp"
 #include "runtime/spots/spot_route_packets.hpp"
+#include "runtime/utils/uuid.hpp"
 
 #include <zlink/framework/contracts/configuration/zlink_builder.hpp>
 #include <zlink/framework/contracts/errors/error.hpp>
@@ -18,8 +20,11 @@
 #include <algorithm>
 #include <atomic>
 #include <cerrno>
+#include <chrono>
 #include <limits>
+#include <random>
 #include <set>
+#include <string_view>
 #include <thread>
 #include <utility>
 
@@ -31,6 +36,36 @@ namespace
 std::chrono::milliseconds one_way_send_timeout (const mesh_node_builder_state_t &state)
 {
     return state.socket.send_timeout.value_or (std::chrono::seconds (1));
+}
+
+std::uint64_t make_lifecycle_generation ()
+{
+    static std::atomic_uint64_t counter{1};
+    const auto random =
+      (static_cast<std::uint64_t> (std::random_device{} ()) << 32u)
+      ^ static_cast<std::uint64_t> (std::random_device{} ());
+    const auto time = static_cast<std::uint64_t> (
+      std::chrono::steady_clock::now ().time_since_epoch ().count ());
+    auto value =
+      (random ^ time ^ counter.fetch_add (1, std::memory_order_relaxed))
+      & static_cast<std::uint64_t> (std::numeric_limits<std::int64_t>::max ());
+    return value == 0 ? 1 : value;
+}
+
+bool valid_routing_id_prefix (std::string_view value) noexcept
+{
+    if (value.empty () || value.size () > 64)
+        return false;
+    for (const auto character : value) {
+        const auto is_alphanumeric =
+          (character >= 'A' && character <= 'Z')
+          || (character >= 'a' && character <= 'z')
+          || (character >= '0' && character <= '9');
+        if (!is_alphanumeric && character != '.' && character != '_'
+            && character != '-')
+            return false;
+    }
+    return true;
 }
 
 bool framework_owned_node_message (
@@ -145,6 +180,8 @@ mesh_node_builder_state_t::mesh_node_builder_state_t (std::string name) :
     spot_state (std::make_shared<spot_node_builder_state_t> (name)),
     spot_builder (spot_state)
 {
+    listen_port = 0;
+    listen_endpoint = "tcp://" + bind_host + ":0";
 }
 
 mesh_node_runtime_t::mesh_node_runtime_t (std::shared_ptr<mesh_node_builder_state_t> state) :
@@ -183,6 +220,19 @@ void mesh_node_runtime_t::start ()
     runtime::messaging::activate_submit_owner (this);
 
     std::lock_guard lock (_state->mutex);
+    if (const auto options = _state->framework_options.lock ()) {
+        if (!_state->bind_host_override) {
+            _state->bind_host = options->bind_host;
+        }
+        if (!_state->advertise_host_override) {
+            _state->advertise_host = options->advertise_host;
+        }
+    }
+    if (_state->listen_port) {
+        _state->listen_endpoint =
+          "tcp://" + _state->bind_host + ":"
+          + std::to_string (*_state->listen_port);
+    }
     _state->spot_state->one_way_send_timeout = one_way_send_timeout (*_state);
     _state->spot_state->instance_spot_idle_timeout =
       _state->instance_spot_idle_timeout;
@@ -255,7 +305,7 @@ void mesh_node_runtime_t::start ()
           runtime::mesh::service_node_descriptor_t{
             .mesh_name = _state->mesh_name,
             .node_routing_id = _state->routing_id->to_bytes (),
-            .lifecycle_generation = 1,
+            .lifecycle_generation = make_lifecycle_generation (),
             .descriptor_revision = 1,
             .advertised_endpoint = _state->listen_endpoint,
             .channels = std::move (channels),
@@ -1175,10 +1225,24 @@ void mesh_node_runtime_t::disconnect_peer (const std::string &endpoint) noexcept
     try {
         std::lock_guard lock (_peer_mutex);
         const auto found = _peer_connection_intents.find (endpoint);
-        if (found == _peer_connection_intents.end ())
-            return;
         _node->disconnect_peer (endpoint);
-        _peer_connection_intents.erase (found);
+        if (found != _peer_connection_intents.end ())
+            _peer_connection_intents.erase (found);
+    }
+    catch (...) {
+    }
+}
+
+void mesh_node_runtime_t::disconnect_peer (
+  const zlink::routing_id_t &expected_routing_id,
+  const std::string &endpoint) noexcept
+{
+    if (!_node || endpoint.empty ())
+        return;
+    try {
+        std::lock_guard lock (_peer_mutex);
+        _node->disconnect_peer (expected_routing_id.to_bytes (), endpoint);
+        _peer_connection_intents.erase (endpoint);
     }
     catch (...) {
     }
@@ -2670,6 +2734,12 @@ std::optional<zlink::routing_id_t> mesh_node_runtime_t::routing_id () const
 std::string mesh_node_runtime_t::listen_endpoint () const
 {
     std::lock_guard lock (_state->mutex);
+    if (_state->listen_port && !_state->bind_host_override) {
+        if (const auto options = _state->framework_options.lock ()) {
+            return "tcp://" + options->bind_host + ":"
+                   + std::to_string (*_state->listen_port);
+        }
+    }
     return _state->listen_endpoint;
 }
 
@@ -2985,6 +3055,12 @@ mesh_channel_server_builder_t::use_handler_group (std::string group_name)
 }
 
 mesh_channel_server_builder_t &
+mesh_channel_server_builder_t::add_handler_group (std::string group_name)
+{
+    return use_handler_group (std::move (group_name));
+}
+
+mesh_channel_server_builder_t &
 mesh_channel_server_builder_t::add_handler_registration (
   detail::mesh_handler_registration_t registration)
 {
@@ -3024,13 +3100,44 @@ mesh_channel_builder_t mesh_node_builder_t::channel_name (std::string channel_na
     return mesh_channel_builder_t (_state, std::move (channel_name));
 }
 
+mesh_channel_builder_t mesh_node_builder_t::channel (std::string channel_name)
+{
+    return this->channel_name (std::move (channel_name));
+}
+
 mesh_node_builder_t &mesh_node_builder_t::listen (std::string endpoint)
 {
     if (endpoint.empty ()) {
         throw detail::configuration_error ("MeshNode listen endpoint is required");
     }
     std::lock_guard lock (_state->mutex);
+    _state->listen_port.reset ();
     _state->listen_endpoint = std::move (endpoint);
+    return *this;
+}
+
+mesh_node_builder_t &mesh_node_builder_t::listen (std::uint16_t port)
+{
+    std::lock_guard lock (_state->mutex);
+    _state->listen_port = port;
+    _state->listen_endpoint =
+      "tcp://" + _state->bind_host + ":" + std::to_string (port);
+    return *this;
+}
+
+mesh_node_builder_t &mesh_node_builder_t::set_bind_host (std::string host)
+{
+    if (host.empty ())
+        throw detail::configuration_error (
+          "MeshNode bind host is required");
+    std::lock_guard lock (_state->mutex);
+    _state->bind_host_override = host;
+    _state->bind_host = std::move (host);
+    if (_state->listen_port) {
+        _state->listen_endpoint =
+          "tcp://" + _state->bind_host + ":"
+          + std::to_string (*_state->listen_port);
+    }
     return *this;
 }
 
@@ -3041,6 +3148,7 @@ mesh_node_builder_t::set_advertise_host (std::string host)
         throw detail::configuration_error (
           "MeshNode advertise host is required");
     std::lock_guard lock (_state->mutex);
+    _state->advertise_host_override = host;
     _state->advertise_host = std::move (host);
     return *this;
 }
@@ -3048,8 +3156,28 @@ mesh_node_builder_t::set_advertise_host (std::string host)
 mesh_node_builder_t &mesh_node_builder_t::set_routing_id (zlink::routing_id_t routing_id)
 {
     std::lock_guard lock (_state->mutex);
+    if (_state->automatic_routing_id_prefix)
+        throw detail::configuration_error (
+          "MeshNode cannot configure both a fixed routing id and an automatic routing id prefix");
     _state->spot_state->snapshot.routing_id = routing_id;
     _state->routing_id = std::move (routing_id);
+    return *this;
+}
+
+mesh_node_builder_t &
+mesh_node_builder_t::set_automatic_routing_id_prefix (std::string prefix)
+{
+    if (!detail::valid_routing_id_prefix (prefix))
+        throw detail::configuration_error (
+          "MeshNode automatic routing id prefix must contain 1..64 ASCII letters, digits, '.', '_' or '-'");
+    std::lock_guard lock (_state->mutex);
+    if (_state->routing_id)
+        throw detail::configuration_error (
+          "MeshNode cannot configure both a fixed routing id and an automatic routing id prefix");
+    _state->automatic_routing_id_prefix = prefix;
+    _state->routing_id = zlink::routing_id_t::from (
+      prefix + "-" + detail::new_uuid_v4 ());
+    _state->spot_state->snapshot.routing_id = *_state->routing_id;
     return *this;
 }
 

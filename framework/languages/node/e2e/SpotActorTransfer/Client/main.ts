@@ -35,6 +35,17 @@ import { runStH3 } from './Scenarios/st-h3-context-fence-scenario';
 import { runStH4 } from './Scenarios/st-h4-deferred-join-rejection-scenario';
 import { runStH5 } from './Scenarios/st-h5-message-context-scenario';
 import { closeScenarioClients, options } from './Support/scenario-support';
+import { runSTE1B } from './Scenarios/st-e1b-scenario';
+import { runSTE1C } from './Scenarios/st-e1c-scenario';
+import { runSTF3A } from './Scenarios/st-f3a-scenario';
+import { runSTG1 } from './Scenarios/st-g1-scenario';
+import { runSTG2 } from './Scenarios/st-g2-scenario';
+import { runSTG3 } from './Scenarios/st-g3-scenario';
+import { runSTG4 } from './Scenarios/st-g4-scenario';
+import { runSTG5 } from './Scenarios/st-g5-scenario';
+import { runSTG6 } from './Scenarios/st-g6-scenario';
+import { runSTH4A } from './Scenarios/st-h4a-scenario';
+import { runSTH4B } from './Scenarios/st-h4b-scenario';
 
 const scenarios: Readonly<Record<string, () => Promise<void>>> = {
   'ST-A1': runStA1, 'ST-A2': runStA2, 'ST-A3': runStA3,
@@ -57,7 +68,18 @@ const scenarios: Readonly<Record<string, () => Promise<void>>> = {
   'ST-I3': runStI3,
   'ST-I4': runStI4,
   'ST-I5': runStI5,
-  'ST-I6': runStI6
+  'ST-I6': runStI6,
+  'ST-E1B': runSTE1B,
+  'ST-E1C': runSTE1C,
+  'ST-F3A': runSTF3A,
+  'ST-G1': runSTG1,
+  'ST-G2': runSTG2,
+  'ST-G3': runSTG3,
+  'ST-G4': runSTG4,
+  'ST-G5': runSTG5,
+  'ST-G6': runSTG6,
+  'ST-H4A': runSTH4A,
+  'ST-H4B': runSTH4B,
 };
 
 async function main(): Promise<void> {

@@ -51,9 +51,10 @@ public final class BindActorsHandler
         CompletionStage<Void> chain = CompletableFuture.completedFuture(null);
         for (Contracts.ActorBinding actor : reply.actors()) {
             chain = chain.thenCompose(ignored -> context.actors().bind(new ActorRef(
-                    RoutingId.from(actor.nodeRid()),
                     actor.actorId(),
-                    actor.objectGeneration()))
+                    actor.generation(),
+                    Contracts.SPOT_MESH,
+                    RoutingId.from(actor.nodeRid())))
                 .thenApply(bound -> null));
         }
         return chain;

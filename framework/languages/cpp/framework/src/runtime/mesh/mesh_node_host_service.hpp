@@ -5,6 +5,7 @@
 #include "runtime/dispatch/inbound_dispatch_budget.hpp"
 #include "runtime/dispatch/completion_admission_owner.hpp"
 #include "runtime/host/hosted_service_lifecycle.hpp"
+#include "runtime/diagnostics/listener_status_registry.hpp"
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/mesh/mesh_node_runtime.hpp"
 
@@ -37,14 +38,16 @@ class mesh_node_host_service_t final : public hosted_service_t,
       serializer_registry_t &serializers,
       dispatch_options_t dispatch_options = {},
       std::shared_ptr<inbound_dispatch_budget_t> inbound_budget = {},
-      std::shared_ptr<completion_admission_owner_t> completion_admission = {});
+      std::shared_ptr<completion_admission_owner_t> completion_admission = {},
+      std::shared_ptr<listener_status_registry_t> listener_statuses = {});
     mesh_node_host_service_t (
       std::vector<std::shared_ptr<detail::mesh_node_builder_state_t>> registrations,
       serializer_registry_t &serializers,
       handler_registry_t &filters,
       dispatch_options_t dispatch_options = {},
       std::shared_ptr<inbound_dispatch_budget_t> inbound_budget = {},
-      std::shared_ptr<completion_admission_owner_t> completion_admission = {});
+      std::shared_ptr<completion_admission_owner_t> completion_admission = {},
+      std::shared_ptr<listener_status_registry_t> listener_statuses = {});
     ~mesh_node_host_service_t () override;
 
     void start (service_provider_t &services) override;
@@ -114,6 +117,7 @@ class mesh_node_host_service_t final : public hosted_service_t,
     std::unique_ptr<offload_executor_t> _application_dispatch;
     std::shared_ptr<inbound_dispatch_budget_t> _inbound_budget;
     std::shared_ptr<completion_admission_owner_t> _completion_admission;
+    std::shared_ptr<listener_status_registry_t> _listener_statuses;
     std::vector<std::shared_ptr<detail::mesh_node_runtime_t>> _nodes;
     std::vector<std::thread> _threads;
 };

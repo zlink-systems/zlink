@@ -7905,8 +7905,6 @@ public sealed partial class EntrySpotActorDispatchTests
     {
         public void Bind(string endpoint) { }
 
-        public void SetChannelName(string channelName) { }
-
         public void SetTlsServer(
             string certPath,
             string keyPath,

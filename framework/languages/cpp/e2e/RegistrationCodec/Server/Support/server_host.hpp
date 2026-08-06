@@ -205,6 +205,7 @@ inline void configure_http (zlink::framework::http_options_builder_t &http,
       .map_post<registration_di_lifecycle_handler_t> ("/registration/di-lifecycle")
       .map_post<registration_filter_order_handler_t> ("/registration/filter-order")
       .map_post<codec_roundtrip_handler_t> ("/codec/roundtrip")
+      .map_post<codec_json_golden_handler_t> ("/codec/json-golden")
       .map_post<codec_coexistence_handler_t> ("/codec/coexistence")
       .map_post<codec_mismatch_handler_t> ("/codec/mismatch");
 }
@@ -222,6 +223,7 @@ inline void configure_handlers (zlink::framework::handler_options_builder_t hand
       .add<scoped_lifecycle_stats_handler_t> ()
       .add<filter_order_handler_t> ()
       .add<json_roundtrip_handler_t> ()
+      .add<json_golden_handler_t> ()
       .add_send<json_codec_send_handler_t> ()
       .add<protobuf_roundtrip_handler_t> ()
       .add_send<protobuf_codec_send_handler_t> ()

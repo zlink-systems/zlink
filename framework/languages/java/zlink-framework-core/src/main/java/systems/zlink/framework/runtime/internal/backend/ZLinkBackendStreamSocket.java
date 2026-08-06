@@ -11,6 +11,11 @@ import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
 
 public interface ZLinkBackendStreamSocket
     extends ZLinkBackendSocket, ZLinkBackendReceiveSocket {
+    /** Returns the actual endpoint selected by the most recent bind. */
+    default String lastEndpoint() {
+        return "";
+    }
+
     void setTlsServer(String certificatePath, String keyPath, boolean requireClientCertificate);
 
     void setMaxMessageSize(long value);

@@ -465,6 +465,25 @@ export class ZLinkActorRuntimeState {
         : { ...target, bindingGeneration };
   }
 
+  /**
+   * Removes the accepted-journal fence after command 46 has released the
+   * corresponding Session route. Keep the route coordinates so a later
+   * relocation can seal the same route again, but do not retain a reference
+   * to a journal that has already been deleted.
+   */
+  clearBoundSessionAcceptedJournalFence(
+    target: ZLinkRemoteBoundSessionTarget
+  ): void {
+    this.remoteBoundSessionTargetValue = clearAcceptedJournalFence(
+      this.remoteBoundSessionTargetValue,
+      target
+    );
+    this.boundSessionTransferTargetValue = clearAcceptedJournalFence(
+      this.boundSessionTransferTargetValue,
+      target
+    );
+  }
+
   setRemoteActorPacketTarget(target: ZLinkRemoteActorPacketTarget | undefined): void {
     this.remoteActorPacketTargetValue = target;
   }
@@ -541,6 +560,32 @@ export class ZLinkActorRuntimeState {
     this.deferredJoinPendingValue = false;
     this.destroyTask = undefined;
   }
+}
+
+function clearAcceptedJournalFence(
+  current: ZLinkRemoteBoundSessionTarget | undefined,
+  released: ZLinkRemoteBoundSessionTarget
+): ZLinkRemoteBoundSessionTarget | undefined {
+  if (
+    current === undefined
+    || current.routerChannelId !== released.routerChannelId
+    || !routingIdsEqual(current.targetNodeRid, released.targetNodeRid)
+    || !routingIdsEqual(current.spotId, released.spotId)
+    || current.relocationSealId !== released.relocationSealId
+    || current.acceptedJournalReference !== released.acceptedJournalReference
+    || current.acceptedJournalChecksumCrc32c !== released.acceptedJournalChecksumCrc32c
+    || current.acceptedHighWater !== released.acceptedHighWater
+  ) {
+    return current;
+  }
+  const {
+    acceptedHighWater: _acceptedHighWater,
+    relocationSealId: _relocationSealId,
+    acceptedJournalReference: _acceptedJournalReference,
+    acceptedJournalChecksumCrc32c: _acceptedJournalChecksumCrc32c,
+    ...withoutAcceptedJournalFence
+  } = current;
+  return withoutAcceptedJournalFence;
 }
 
 function maxBindingGeneration(...values: (bigint | undefined)[]): bigint | undefined {

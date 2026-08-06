@@ -23,3 +23,12 @@ Runner는 실행별 role 설정 파일을 만들어 server에 전달한다. Clie
 
 runner는 role별 Gradle `installDist` binary를 사용한다. 로그와 evidence는 `logs/<run-id>/` 아래에 남는다.
 현재 완료/gap 분류는 `feature-map.ko.md`를 기준으로 본다.
+
+`MON-C1`은 느린 monitoring observer와 별도 request의 진행 및 public snapshot resync를 개별
+실행으로 검증한다. `MON-A6`은 public placement snapshot이 실제 Spot count를 반영하는지
+검증하며, 현재 실행에서는 생성 전후 count가 갱신되지 않아 차단 증거를 남긴다.
+
+```bash
+./run_e2e.sh MON-C1
+./run_e2e.sh MON-A6
+```

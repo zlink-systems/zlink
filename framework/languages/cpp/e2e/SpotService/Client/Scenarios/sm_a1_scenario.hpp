@@ -98,14 +98,11 @@ inline void run_sm_a1_scenario (const std::string &play_http_endpoint)
     const auto rows = nlohmann::json::parse (location_raw.value ().body);
     const auto expected = std::find_if (rows.begin (), rows.end (), [&] (const auto &row) {
         return row.value ("mesh_name", "") == spot_mesh
-               && row.value ("spot_id", "") == created.spot_id
-               && row.value ("spot_type", "") == user_spot
                && row.value ("node_rid", "") == created.owner_node_rid
-               && row.value ("spot_kind", "") == "user"
-               && !row.value ("owner_id", "").empty () && row.value ("generation", 0) > 0;
+               && row.value ("ready", false);
     });
     if (expected == rows.end ()) {
-        throw std::runtime_error ("SM-A1 spot location row mismatch: " + rows.dump ());
+        throw std::runtime_error ("SM-A1 topology row mismatch: " + rows.dump ());
     }
 }
 

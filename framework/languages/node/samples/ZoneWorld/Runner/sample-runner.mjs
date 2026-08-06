@@ -90,6 +90,7 @@ export async function runSample(ctx) {
   const extra = await zoneNodeConfig(ctx, shared, 'zone-node-3', 'extra', { disableBots: true });
   await ctx.start('zone-node-3', 'dist/Server/ZoneNode/main.js', ['--config', extra.path]);
   await ctx.waitLog('zone-node-3', 'topology=ready node=zone-node-3 zones=');
+  await ctx.waitLog('zone-node-3', 'fanout subscriber=ready node=zone-node-3');
   ctx.runNode(path.join(ctx.sampleRoot, 'dist/Client/special.js'), [
     '--config', specialClientConfig(ctx, shared, gateway, ops, 'D2')
   ]);

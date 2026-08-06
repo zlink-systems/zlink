@@ -26,7 +26,7 @@ final class ZLinkTopologyRuntimeViewsTest {
         var clientServerRuntime =
             new ZLinkClientServerRuntimeView(sockets, hostState::get);
         var fanoutRuntime = new ZLinkFanoutRuntimeView(
-            sockets, () -> null, hostState::get);
+            sockets, () -> null, () -> null, hostState::get);
 
         assertTrue(clientServerRuntime.snapshot("orders").isReady());
 
@@ -58,7 +58,7 @@ final class ZLinkTopologyRuntimeViewsTest {
         var clientServerRuntime =
             new ZLinkClientServerRuntimeView(sockets, hostState::get);
         var fanoutRuntime = new ZLinkFanoutRuntimeView(
-            sockets, () -> null, hostState::get);
+            sockets, () -> null, () -> null, hostState::get);
 
         assertEquals(
             ZLinkTopologyState.STOPPED,

@@ -5,7 +5,9 @@ import systems.zlink.e2e.runtimemonitoring.client.Scenarios.MonA2LocationEventsS
 import systems.zlink.e2e.runtimemonitoring.client.Scenarios.MonA3SpotEventsScenario;
 import systems.zlink.e2e.runtimemonitoring.client.Scenarios.MonA4AvailabilityTransitionScenario;
 import systems.zlink.e2e.runtimemonitoring.client.Scenarios.MonA5FixedKindsScenario;
+import systems.zlink.e2e.runtimemonitoring.client.Scenarios.MonA6PlacementScenario;
 import systems.zlink.e2e.runtimemonitoring.client.Scenarios.MonBPublishMonitoringAbsenceScenario;
+import systems.zlink.e2e.runtimemonitoring.client.Scenarios.MonC1ObserverIsolationScenario;
 import systems.zlink.e2e.runtimemonitoring.client.Scenarios.MonD1FailureRecoveryScenario;
 import systems.zlink.e2e.runtimemonitoring.client.Support.MonitoringScenarioContext;
 
@@ -34,6 +36,7 @@ public final class Program {
                 System.out.println("monitoring e2e result=passed");
                 return;
             }
+            MonA6PlacementScenario.run(context);
             MonA1SocketEventsScenario.run(context);
             MonA2LocationEventsScenario.run(context);
             MonA3SpotEventsScenario.run(context);
@@ -42,6 +45,7 @@ public final class Program {
             MonA5FixedKindsScenario.run(context);
             MonBPublishMonitoringAbsenceScenario.runZeroTarget(context);
             MonBPublishMonitoringAbsenceScenario.runLocalTarget(context);
+            MonC1ObserverIsolationScenario.run(context);
             MonD1FailureRecoveryScenario.runUnknownMesh(context, "MON-D1A");
             MonD1FailureRecoveryScenario.runRepeated(context, "MON-D1B");
             System.out.println("monitoring e2e result=passed");
@@ -57,8 +61,10 @@ public final class Program {
             case "MON-A4A" -> MonA4AvailabilityTransitionScenario.runReplacement(context, "MON-A4A");
             case "MON-A4B" -> MonA4AvailabilityTransitionScenario.runCrashReplacement(context, "MON-A4B");
             case "MON-A5" -> MonA5FixedKindsScenario.run(context);
+            case "MON-A6" -> MonA6PlacementScenario.run(context);
             case "MON-B1" -> MonBPublishMonitoringAbsenceScenario.runZeroTarget(context);
             case "MON-B2" -> MonBPublishMonitoringAbsenceScenario.runLocalTarget(context);
+            case "MON-C1" -> MonC1ObserverIsolationScenario.run(context);
             case "MON-D1" -> MonD1FailureRecoveryScenario.run(context);
             case "MON-D1A" -> MonD1FailureRecoveryScenario.runUnknownMesh(context, "MON-D1A");
             case "MON-D1B" -> MonD1FailureRecoveryScenario.runRepeated(context, "MON-D1B");

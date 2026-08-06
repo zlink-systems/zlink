@@ -8,6 +8,7 @@ import {
   type ZLinkFrameworkRelocationResult,
   type ZLinkFrameworkRuntime,
   type ZLinkRouteMeshRuntime,
+  type ZLinkLocationRuntimeQuery,
   type ZLinkMessage,
   type ZLinkSession,
   type ZLinkSessionContext,
@@ -15,11 +16,18 @@ import {
   type ZLinkSessionFactory
 } from '@zlink-systems/framework';
 import { ZLinkRedisLocationStore } from '@zlink-systems/framework-locations-redis';
-import { ZLINK_FRAMEWORK_RUNTIME, ZLINK_ROUTE_MESH_RUNTIME, ZLinkModule, zlinkFramework } from '@zlink-systems/nestjs';
+import {
+  ZLINK_FRAMEWORK_RUNTIME,
+  ZLINK_ROUTE_MESH_RUNTIME,
+  ZLINK_LOCATION_RUNTIME_QUERY,
+  ZLinkModule,
+  zlinkFramework
+} from '@zlink-systems/nestjs';
 import {
   ObservabilityOpsNames,
   type BindActorSessionReq,
-  type BindActorSessionRes
+  type BindActorSessionRes,
+  type SessionKeepAlive
 } from '../../Shared/messages';
 import { closeHttpServer, startHttpServer } from '../Support/http-server';
 import { createFlowLogRoute } from '../Support/flow-log-route';
@@ -52,29 +60,32 @@ class GatewaySession implements ZLinkSession {
   }
 
   async onDispatch(dispatch: ZLinkSessionDispatchContext, payload: ZLinkMessage, signal?: AbortSignal): Promise<void> {
+    if (dispatch.packetName === ObservabilityOpsNames.packetSessionKeepAlive) {
+      payload.decode<SessionKeepAlive>(Object as never);
+      return;
+    }
     if (dispatch.packetName === ObservabilityOpsNames.packetBindActor) {
       const request = payload.decode<BindActorSessionReq>(Object as never);
-      if (request.nodeRid === undefined || request.generation === undefined) {
-        throw new Error('Session gateway bind requires an ActorRef snapshot.');
-      }
       const actor = {
         actorId: request.actorId,
         nodeRid: request.nodeRid,
-        generation: BigInt(request.generation)
-      } as ActorRef;
+        objectGeneration: BigInt(request.objectGeneration),
+        meshName: request.meshName
+      } satisfies ActorRef;
       evidence.correlate(request.actorId, request.transferId);
       await this.context.actors.bindOrGet(actor, signal);
       evidence.add(
         request.scenario,
         request.actorId,
         'session_bound',
-        `gateway=${options.rid}|node=${String(actor.nodeRid)}|generation=${actor.generation}`
+        `gateway=${options.rid}|node=${String(actor.nodeRid)}|generation=${actor.objectGeneration}`
       );
       this.context.client.reply({
         scenario: request.scenario,
         actorId: actor.actorId,
         nodeRid: String(actor.nodeRid),
-        generation: actor.generation.toString()
+        objectGeneration: actor.objectGeneration.toString(),
+        meshName: actor.meshName
       } satisfies BindActorSessionRes).submit();
       return;
     }
@@ -122,11 +133,13 @@ Module({
           .messageFlow(options.messageFlowEnabled ? ZLinkMessageFlowLogMode.KeyTransitions : ZLinkMessageFlowLogMode.Off)
           .traceLogFile(path.join(options.logDir, `${options.rid}-flow.log`))
           .traceLabel(options.rid);
-        builder.addRouteMesh(ObservabilityOpsNames.mesh)
-          .listen(options.routerEndpoint).routingId(options.rid)
-          .channel(ObservabilityOpsNames.mesh).server();
+        const mesh = builder.addRouteMesh(ObservabilityOpsNames.mesh)
+          .listen(options.routerEndpoint).routingId(options.rid);
+        mesh.objects().client();
+        mesh.channel(ObservabilityOpsNames.mesh).server();
         builder.addStreamNode(`${ObservabilityOpsNames.mesh}-${options.rid}`)
           .bind(options.streamEndpoint)
+          .enableActorDispatch()
           .registerSession(GatewaySessionFactory);
         return builder.build();
       }
@@ -139,10 +152,17 @@ async function main(): Promise<void> {
   const app = await NestFactory.createApplicationContext(SessionModule, { logger: false, abortOnError: false });
   const routeMeshRuntime = app.get(ZLINK_ROUTE_MESH_RUNTIME, { strict: false }) as ZLinkRouteMeshRuntime;
   const frameworkRuntime = app.get(ZLINK_FRAMEWORK_RUNTIME, { strict: false }) as ZLinkFrameworkRuntime;
+  const locations = app.get(ZLINK_LOCATION_RUNTIME_QUERY, { strict: false }) as ZLinkLocationRuntimeQuery;
   let drainResult: ZLinkFrameworkRelocationResult | undefined;
   const server = await startHttpServer(options.httpUrl, [
     { method: 'GET', path: '/health', handle: () => ({ status: 'ok', rid: options.rid }) },
     { method: 'GET', path: '/evidence', handle: () => evidence.snapshot() },
+    {
+      method: 'GET', path: '/location/topology', handle: () => locations.listTopology(
+        {},
+        { pageSize: 100 }
+      )
+    },
     createFlowLogRoute(options.logDir, options.rid),
     { method: 'GET', path: '/metrics', handle: () => metrics.snapshot() },
     { method: 'GET', path: '/drain/status', handle: () => ({

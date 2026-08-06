@@ -78,6 +78,8 @@ export async function startPlayHost(): Promise<void> {
             .pollingIntervalMs(100)
             .ownerLeaseRenewIntervalMs(1000)
             .ownerLeaseTtlMs(3000)
+            .ownerLeaseFencingMarginMs(500)
+            .ownerLeaseRenewTimeoutMs(500)
             .routeCacheMaxAgeMs(500);
           builder
             .configureDispatch()

@@ -78,6 +78,16 @@ public record ZLinkFrameworkTerminationResult(
     ZLinkFrameworkTerminationOutcome outcome,
     ZLinkFrameworkTerminationReason reason) {}
 
+public enum ZLinkListenerKind {
+    ROUTE_MESH, CLIENT_SERVER, FANOUT, STREAM
+}
+
+public record ZLinkListenerStatus(
+    ZLinkListenerKind kind,
+    String name,
+    String endpoint,
+    Instant observedAt) {}
+
 public final class ZLinkFrameworkRuntime
     implements AutoCloseable, ZLinkMessageFlowControl {
     public ZLinkClient client();
@@ -88,6 +98,8 @@ public final class ZLinkFrameworkRuntime
     public ZLinkRouteMeshRuntime routeMeshRuntime();
     public ZLinkClientServerRuntime clientServerRuntime();
     public ZLinkFanoutRuntime fanoutRuntime();
+    public ZLinkListenerStatus listenerStatus(
+        ZLinkListenerKind kind, String name);
     public ZLinkSpotManager spotManager();
     public ZLinkSpotOutbound spotOutbound();
     public ZLinkSpotPublisherClient spotPublisherClient();
@@ -294,6 +306,21 @@ public final class systems.zlink.framework.runtime.host.ZLinkFrameworkTerminatio
   public systems.zlink.framework.runtime.host.ZLinkFrameworkTerminationResult(systems.zlink.framework.runtime.host.ZLinkFrameworkTerminationOutcome, systems.zlink.framework.runtime.host.ZLinkFrameworkTerminationReason);
   public systems.zlink.framework.runtime.host.ZLinkFrameworkTerminationOutcome outcome();
   public systems.zlink.framework.runtime.host.ZLinkFrameworkTerminationReason reason();
+}
+public final class systems.zlink.framework.monitoring.ZLinkListenerKind extends java.lang.Enum<systems.zlink.framework.monitoring.ZLinkListenerKind> {
+  public static final systems.zlink.framework.monitoring.ZLinkListenerKind ROUTE_MESH;
+  public static final systems.zlink.framework.monitoring.ZLinkListenerKind CLIENT_SERVER;
+  public static final systems.zlink.framework.monitoring.ZLinkListenerKind FANOUT;
+  public static final systems.zlink.framework.monitoring.ZLinkListenerKind STREAM;
+  public static systems.zlink.framework.monitoring.ZLinkListenerKind[] values();
+  public static systems.zlink.framework.monitoring.ZLinkListenerKind valueOf(java.lang.String);
+}
+public final class systems.zlink.framework.monitoring.ZLinkListenerStatus extends java.lang.Record {
+  public systems.zlink.framework.monitoring.ZLinkListenerStatus(systems.zlink.framework.monitoring.ZLinkListenerKind, java.lang.String, java.lang.String, java.time.Instant);
+  public systems.zlink.framework.monitoring.ZLinkListenerKind kind();
+  public java.lang.String name();
+  public java.lang.String endpoint();
+  public java.time.Instant observedAt();
 }
 public interface systems.zlink.framework.ZLinkMessageContext {
   public abstract java.util.Optional<java.lang.String> meshName();

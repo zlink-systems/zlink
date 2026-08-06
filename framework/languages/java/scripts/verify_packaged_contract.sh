@@ -42,7 +42,7 @@ for artifact in "${artifacts[@]}"; do
     publish_tasks+=(":$artifact:publishAllPublicationsToReleaseRepoRepository")
 done
 MAVEN_REPOSITORY_URL="file://$maven_dir" \
-    "$root_dir/gradlew" --no-daemon "${publish_tasks[@]}"
+    "$root_dir/gradlew" --no-daemon -p "$root_dir" "${publish_tasks[@]}"
 
 mapfile -t published < <(
     find "$maven_dir/systems/zlink" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort

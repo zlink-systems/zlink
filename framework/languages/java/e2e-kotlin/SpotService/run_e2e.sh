@@ -4,6 +4,10 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/e2e-redis-common.sh"
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/e2e-kotlin-config.sh"
 SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 
+# Inventory blockers: SM-A9 SM-A10 SM-A11 SM-A12 SM-A13 SM-B0 SM-B0A SM-B9
+# SM-B10 SM-B11 SM-C5 SM-C6 SM-D4A SM-D4B SM-D5A SM-D15 SM-G5A SM-G5B.
+# These remain rejected until the Kotlin role topology provides the evidence.
+
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
 if rg -n '@EnableZLinkFramework|ClientDriverSpot|\bZLink(SpotOutbound|RouteClient|SpotManager)\b' \

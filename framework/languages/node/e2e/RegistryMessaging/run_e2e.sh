@@ -324,6 +324,38 @@ wait_role() {
   esac
 }
 
+wait_route_ready() {
+  local url="$1"
+  local name="$2"
+  local minimum="$3"
+  for _ in $(seq 1 "${ROUTE_SETTLE_TIMEOUT_SECONDS}0"); do
+    if node - "$url" "$minimum" <<'NODE'
+const [url, minimumText] = process.argv.slice(2);
+const minimum = Number(minimumText);
+(async () => {
+  try {
+    const response = await fetch(`${url}/route/status`);
+    if (!response.ok) process.exit(1);
+    const snapshot = await response.json();
+    const ready = snapshot.channels?.reduce(
+      (total, channel) => total + Number(channel.readyTargetCount ?? 0),
+      0
+    ) ?? 0;
+    process.exit(ready >= minimum ? 0 : 1);
+  } catch {
+    process.exit(1);
+  }
+})();
+NODE
+    then
+      return 0
+    fi
+    sleep "${LOCAL_READINESS_POLL_SECONDS}"
+  done
+  echo "Timed out waiting for $name route readiness at $url" >&2
+  return 1
+}
+
 if [[ "$SCENARIO" == "RM-A3" || "$SCENARIO" == "rm-a3" ]]; then
   echo "rm-a3 phase=automatic-not-required"
   start_rm_a3_object_client client-a "$RM_A3_ROUTE_A" "$RM_A3_HTTP_A"
@@ -385,6 +417,10 @@ done
 for role in "${SERVER_ROLES[@]}"; do
   wait_role "$role"
 done
+wait_route_ready "http://127.0.0.1:$CONSUMER_HTTP_PORT" direct-consumer 1
+wait_route_ready "http://127.0.0.1:$SINGLE_CONSUMER_HTTP_PORT" single-consumer 1
+wait_route_ready "http://127.0.0.1:$BACKPRESSURE_CONSUMER_HTTP_PORT" backpressure-consumer 1
+wait_route_ready "http://127.0.0.1:$LOCATION_CONSUMER_HTTP_PORT" location-consumer 1
 
 if [[ "$SCENARIO" == "all" || "$SCENARIO" == "RM-A2" || "$SCENARIO" == "rm-a2" ]]; then
   start_configured_server manual-consumer "$CONSUMER_MAIN" \

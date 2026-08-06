@@ -62,6 +62,9 @@ class framework_runtime_t {
 public:
     virtual ~framework_runtime_t() = default;
     virtual framework_runtime_status_t status() const = 0;
+    virtual listener_status_t listener_status(
+      listener_kind_t kind,
+      std::string name) const = 0;
     virtual std::unique_ptr<runtime_observation_t> observe(
       std::size_t capacity,
       std::function<void(
@@ -76,7 +79,43 @@ Status only provides the value the application needs to judge a
 lifecycle operation's result and readiness. It doesn't include
 relocation unit count, queue, barrier, and Store-internal state.
 
-### 1.1 RouteMesh Status
+### 1.1 Local Listener Identity
+
+The Framework exposes the endpoint that a local listener has confirmed
+after binding. It does not expose a remote descriptor, connection
+generation, or transport socket handle.
+
+```cpp
+enum class listener_kind_t {
+    route_mesh,
+    client_server,
+    fanout,
+    stream
+};
+
+struct listener_status_t {
+    listener_kind_t kind;
+    std::string name;
+    std::string endpoint;
+    std::chrono::system_clock::time_point observed_at;
+};
+```
+
+`framework_runtime_t::listener_status(...)` returns the current
+advertised endpoint after the named local listener has completed its
+bind. If the listener is unknown or has not completed binding, it
+throws `framework_exception_t` with
+`framework_error_kind_t::not_configured`. A listener configured with
+port `0` therefore reports the non-zero port selected by the operating
+system. The endpoint uses the listener's `AdvertiseHost` when one is
+configured; otherwise it uses the confirmed bind host.
+
+The `name` is the configured MeshName, ChannelName, or StreamNodeName.
+For a classic fanout publisher it is the ChannelName. The caller uses
+the returned value for observation and readiness checks; it does not
+copy the value into another listener's configuration.
+
+### 1.2 RouteMesh Status
 
 ```cpp
 enum class mesh_node_state_t {

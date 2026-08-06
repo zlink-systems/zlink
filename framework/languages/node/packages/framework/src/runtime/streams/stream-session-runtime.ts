@@ -329,6 +329,7 @@ export class ZLinkStreamSessionRuntime {
     if (this.disconnected) {
       return;
     }
+    this.stream.markTransportClosed();
     this.disconnected = true;
     this.stopLivenessChecks();
     this.enqueue(async () => this.complete(error, true));
@@ -336,6 +337,7 @@ export class ZLinkStreamSessionRuntime {
 
   async close(signal?: AbortSignal): Promise<void> {
     throwIfAborted(signal);
+    this.stream.markTransportClosed();
     await this.stream.close(signal);
     if (this.disconnected) {
       return;
@@ -350,6 +352,7 @@ export class ZLinkStreamSessionRuntime {
       return;
     }
     this.disposed = true;
+    this.stream.markTransportClosed();
     this.stopLivenessChecks();
     await this.serial.dispose();
     if (!this.disconnected) {
@@ -364,6 +367,7 @@ export class ZLinkStreamSessionRuntime {
     this.closeReason = 'server_drain';
     await this.serial.run(async () => {
       if (this.disposed) return;
+      this.stream.markTransportClosed();
       this.stopLivenessChecks();
       await this.stream.closeForDrain();
       if (!this.disconnected) {
@@ -558,6 +562,7 @@ export class ZLinkStreamSessionRuntime {
     if (this.disconnected) {
       return;
     }
+    this.stream.markTransportClosed();
     this.disconnected = true;
     this.closeReason = closeReason;
     this.stopLivenessChecks();

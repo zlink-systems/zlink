@@ -10,6 +10,11 @@ result wrapper, or runtime facade. There's no separate drain facade or
 partial termination member taking a MeshName — Kotlin uses the Java
 host's `Relocate` and `Shutdown` unchanged.
 
+Kotlin also uses Java's `ZLinkListenerKind` and `ZLinkListenerStatus`.
+`ZLinkFrameworkRuntime.listenerStatus(kind, name)` returns the current
+advertised endpoint after the selected listener has completed bind; it
+doesn't add a Kotlin-specific wrapper.
+
 The source owner of the call, handler, and coroutine lifecycle adapter
 the Kotlin artifact directly declares is
 `systems/zlink/framework/kotlin/contracts/`. Even if the source moves to

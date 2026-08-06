@@ -15,7 +15,7 @@ final class EvidenceVerifierTest {
 
     @Test
     void selectorContainsEveryConfig11Scenario() {
-        assertEquals(13, EvidenceVerifier.scenarioIds("all").size());
+        assertEquals(21, EvidenceVerifier.scenarioIds("all").size());
         assertEquals("OBS-C5", EvidenceVerifier.scenarioIds("OBS-C5").getFirst());
     }
 

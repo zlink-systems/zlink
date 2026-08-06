@@ -13,6 +13,7 @@ import org.springframework.core.env.StandardEnvironment;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.e2e.spotservice.shared.ActorAuthHandler;
 import systems.zlink.e2e.spotservice.shared.Contracts;
+import systems.zlink.e2e.spotservice.shared.CapacitySpot;
 import systems.zlink.e2e.spotservice.shared.EvidenceHttpServer;
 import systems.zlink.e2e.spotservice.shared.IngressMsgHandler;
 import systems.zlink.e2e.spotservice.shared.MismatchedSpot;
@@ -73,6 +74,8 @@ public final class Program {
         ScenarioState state,
         com.fasterxml.jackson.databind.ObjectMapper json,
         ZLinkSpotManager spots,
+        systems.zlink.framework.actors.ZLinkActorManager actors,
+        systems.zlink.framework.actors.ZLinkActorClient actorClient,
         systems.zlink.framework.channels.ZLinkRouteClient routes,
         systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime meshRuntime,
         systems.zlink.framework.channels.ZLinkRouteMeshRuntimeOptions meshOptions,
@@ -83,6 +86,8 @@ public final class Program {
             json,
             options.httpEndpoint(),
             spots,
+            actors,
+            actorClient,
             routes,
             meshRuntime,
             meshOptions,
@@ -135,6 +140,10 @@ public final class Program {
                 NoopIngressHandler.class,
                 Contracts.StateReq.class,
                 String.class);
+            // Spot callbacks use the same public ChannelName as a client.  The
+            // process also owns the local server, so its client role loops back
+            // to the advertised server endpoint.
+            ingress.client().connect(play.ingressEndpoint());
             node.objects()
                 .server()
                 .addEntrySpot(ScenarioEntrySpot.class)
@@ -142,6 +151,10 @@ public final class Program {
                     "user",
                     UserSpot.class,
                     factory -> factory.recreateOnRelocation())
+                .addSpotFactory(
+                    "capacity",
+                    CapacitySpot.class,
+                    factory -> factory.stableTypeLimit(1).recreateOnRelocation())
                 .addSpotFactory(
                     "mismatched",
                     MismatchedSpot.class,

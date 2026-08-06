@@ -5,8 +5,11 @@
 마지막 검증:
 
 - 명령: `nice -n 10 timeout 600s ./run_e2e.sh all`
-- 결과: `RC-A1`~`RC-A6`, `RC-B1`~`RC-B5` 통과, `registration-codec e2e result=passed`
+- 결과: `RC-A1`~`RC-A6`, `RC-B1`~`RC-B6` 통과, `registration-codec e2e result=passed`
 - 로그: `framework/languages/java/e2e/RegistrationCodec/logs/20260707-215508-3550080/`
+- 추가 검증: `timeout 300s ./run_e2e.sh RC-B5`가
+  `framework/languages/java/e2e/RegistrationCodec/logs/20260806-022142-3227047/`에서
+  canonical `PROTOCOL_ERROR`와 JSON recovery를 실제 process로 확인했다.
 - 명령: `for scenario in RC-B1 RC-B2 RC-B3 RC-B4; do ./run_e2e.sh "${scenario}"; done`
 - 결과: passed
 - 로그:
@@ -28,6 +31,7 @@
 | RC-B3 | 구현 | typed MessagePack codec factory로 지정한 DTO가 왕복하고 handler context의 `application/x-msgpack` content-type evidence를 확인한다. |
 | RC-B4 | 구현 | JSON fallback, Protobuf predicate codec, typed MessagePack codec을 한 host에 같이 등록하고 세 content-type evidence가 함께 남는지 확인한다. |
 | RC-B5 | 구현 | Client HTTP driver가 codec requester endpoint를 호출해 json-only peer에 Protobuf request를 보내고 public error와 정상 JSON recovery를 검증한다. |
+| RC-B6 | 구현 | 기본 JSON codec으로 typed golden DTO를 왕복하고 문자열·int64·bytes·int32·floating-point·nullable 값을 application 값으로 복원하며 content-type evidence를 확인한다. |
 
 ## Content-type 검증
 
@@ -37,5 +41,3 @@
 scenario는 RC-B1~RC-B4에서 JSON, Protobuf, MessagePack content-type이 기대값과 일치하는지 확인한다.
 
 ## 공통 scenario parity gap — 2026-07-29
-
-- `RC-B6`: 공통 scenario는 추가됐지만 Java actual fixture와 runner selector가 없다.

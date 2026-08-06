@@ -8,12 +8,22 @@ import java.util.Properties;
 public record ClientOptions(
     String mode,
     String publisherHttp,
+    String publisher2Http,
+    String publisher2Endpoint,
+    Integer publisher2Port,
+    String publisher2Rid,
+    boolean publisher2NoStore,
+    String publisher2AdvertiseHost,
+    String auditPublisherHttp,
     String publisherEndpoint,
     String redisLocationEndpoint,
     String locationKeyPrefix,
     String sub1Http,
     String sub2Http,
     String sub3Http,
+    String sub4Http,
+    String reconnectHttp,
+    Long publisherPid,
     String publisherReadyFile,
     String prelateContinueFile,
     String lateReadyFile,
@@ -36,12 +46,22 @@ public record ClientOptions(
         return new ClientOptions(
             args[3],
             required(values, "publisherHttp"),
+            optional(values, "publisher2Http"),
+            optional(values, "publisher2Endpoint"),
+            optionalInteger(values, "publisher2Port"),
+            values.getProperty("publisher2Rid", "publisher-b"),
+            Boolean.parseBoolean(values.getProperty("publisher2NoStore", "false")),
+            optional(values, "publisher2AdvertiseHost"),
+            optional(values, "auditPublisherHttp"),
             required(values, "publisherEndpoint"),
             required(values, "redisLocationEndpoint"),
             required(values, "locationKeyPrefix"),
             required(values, "sub1Http"),
             required(values, "sub2Http"),
             required(values, "sub3Http"),
+            optional(values, "sub4Http"),
+            optional(values, "reconnectHttp"),
+            optionalLong(values, "publisherPid"),
             required(values, "publisherReadyFile"),
             required(values, "prelateContinueFile"),
             required(values, "lateReadyFile"),
@@ -56,6 +76,7 @@ public record ClientOptions(
             case "sub-1" -> sub1Http;
             case "sub-2" -> sub2Http;
             case "sub-3" -> sub3Http;
+            case "sub-4" -> sub4Http;
             default -> throw new IllegalArgumentException("unknown subscriber " + rid);
         };
     }
@@ -66,5 +87,19 @@ public record ClientOptions(
             throw new IllegalArgumentException(name + " is required in PubSub client config");
         }
         return value;
+    }
+
+    private static String optional(Properties values, String name) {
+        return values.getProperty(name, "");
+    }
+
+    private static Integer optionalInteger(Properties values, String name) {
+        String value = optional(values, name);
+        return value.isBlank() ? null : Integer.valueOf(value);
+    }
+
+    private static Long optionalLong(Properties values, String name) {
+        String value = optional(values, name);
+        return value.isBlank() ? null : Long.valueOf(value);
     }
 }

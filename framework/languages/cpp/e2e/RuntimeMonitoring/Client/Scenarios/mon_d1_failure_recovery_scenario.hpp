@@ -72,7 +72,14 @@ inline void run_mon_d1_failure_recovery_scenario (const client_options_t &option
     }
     ensure (ready_peers >= 2,
             "MON-D1 current ready peers did not recover");
-    std::cout << "scenario MON-D1 passed\n";
+    if (options.scenario == "mon-d1a")
+        std::cout << "scenario MON-D1A passed\n";
+    else if (options.scenario == "mon-d1b")
+        std::cout << "scenario MON-D1B passed\n";
+    else if (options.scenario == "all")
+        std::cout << "scenario MON-D1A passed\nscenario MON-D1B passed\n";
+    else
+        std::cout << "scenario MON-D1 passed\n";
 }
 
 } // namespace zlink::framework::e2e::runtime_monitoring::client

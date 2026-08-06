@@ -17,19 +17,21 @@ inline void wait_for_sm_c5_spot_locations (zlink::http_client::client_t &locatio
                                            const std::string &source_spot_id,
                                            const std::string &target_spot_id)
 {
+    (void) source_spot_id;
+    (void) target_spot_id;
     const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (10);
     while (std::chrono::steady_clock::now () < deadline) {
         auto response = locations.get ("/locations/spots").submit_raw ().result ();
         if (response && response.value ().status < 400) {
             const auto rows = nlohmann::json::parse (response.value ().body);
-            bool source_ready = false;
-            bool target_ready = false;
+            bool play_a_ready = false;
+            bool play_b_ready = false;
             for (const auto &row : rows) {
-                const auto spot_id = row.value ("spot_id", std::string{});
-                source_ready = source_ready || spot_id == source_spot_id;
-                target_ready = target_ready || spot_id == target_spot_id;
+                const auto node_rid = row.value ("node_rid", std::string{});
+                play_a_ready = play_a_ready || (node_rid == "play-a" && row.value ("ready", false));
+                play_b_ready = play_b_ready || (node_rid == "play-b" && row.value ("ready", false));
             }
-            if (source_ready && target_ready) {
+            if (play_a_ready && play_b_ready) {
                 return;
             }
         }

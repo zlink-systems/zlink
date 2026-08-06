@@ -27,15 +27,27 @@ fi
 
 SELECTOR="${1:-all}"
 case "${SELECTOR}" in
-  all|OBS-A1|OBS-A2|OBS-A3|OBS-A4|OBS-B1|OBS-B2|OBS-B3|OBS-B4|OBS-C1|OBS-C2|OBS-C3|OBS-C4|OBS-C5) ;;
+  all|OBS-A1|OBS-A2|OBS-A3|OBS-A4|OBS-A5|OBS-B1|OBS-B2|OBS-B3|OBS-B4|OBS-C1|OBS-C2|OBS-C3|OBS-C4|OBS-C5|OBS-C6|OBS-C7|OBS-C8|OBS-C9A|OBS-C9B|OBS-C10|OBS-C11|OBS-C12) ;;
   *) echo "Unknown ObservabilityOps selector." >&2; exit 2 ;;
+esac
+
+if [[ "${SELECTOR}" == OBS-A5 ]]; then
+  exec bash "${SCRIPT_DIR}/run_a5_e2e.sh" "$@"
+fi
+
+case "${SELECTOR}" in
+  OBS-C6|OBS-C7|OBS-C8|OBS-C9A|OBS-C9B|OBS-C10|OBS-C11|OBS-C12)
+    exec bash "${SCRIPT_DIR}/run_c_e2e.sh" "$@"
+    ;;
 esac
 
 if [[ "${SELECTOR}" == all ]]; then
   for selector in \
     OBS-A1 OBS-A2 OBS-A3 OBS-A4 \
+    OBS-A5 \
     OBS-B1 OBS-B2 OBS-B3 OBS-B4 \
-    OBS-C1 OBS-C2 OBS-C3 OBS-C4 OBS-C5; do
+    OBS-C1 OBS-C2 OBS-C3 OBS-C4 OBS-C5 \
+    OBS-C6 OBS-C7 OBS-C8 OBS-C9A OBS-C9B OBS-C10 OBS-C11 OBS-C12; do
     echo "===== OBSERVABILITY OPS START ${selector} ====="
     "${BASH_SOURCE[0]}" "${selector}" --start-order "${e2e_start_order}"
     echo "===== OBSERVABILITY OPS PASS ${selector} ====="

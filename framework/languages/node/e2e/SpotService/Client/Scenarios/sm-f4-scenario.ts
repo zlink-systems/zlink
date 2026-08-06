@@ -26,8 +26,8 @@ export async function runSmF4(options: ClientOptions): Promise<void> {
   } satisfies SpotMissingTargetReq);
   ensure(missingTarget.failed, 'SM-F4 missing target request did not fail.');
   ensure(
-    missingTarget.errorKind === 'requestTargetNotFound',
-    'SM-F4 missing request did not report requestTargetNotFound.'
+    missingTarget.errorKind === 'NotFound',
+    'SM-F4 missing request did not report NotFound.'
   );
 
   const missingSend = await postJson<SpotMissingTargetMsgRes>(
@@ -37,8 +37,8 @@ export async function runSmF4(options: ClientOptions): Promise<void> {
   );
   ensure(missingSend.failed === true && !missingSend.sent, 'SM-F4 missing target send did not fail.');
   ensure(
-    missingSend.errorKind === 'spotRouteNotFound',
-    'SM-F4 missing send did not report spotRouteNotFound.'
+    missingSend.errorKind === 'NotFound',
+    'SM-F4 missing send did not report NotFound.'
   );
   ensure(
     !missingSend.evidence.some((entry) => entry.includes(`spot=${missingSpotId}`)),
@@ -83,8 +83,8 @@ export async function runSmF4(options: ClientOptions): Promise<void> {
   ensure(
     staleClose.staleGeneration
       && !staleClose.closed
-      && staleClose.errorKind === 'spotGenerationStale',
-    'SM-F4 stale SpotRef did not report spotGenerationStale.'
+      && staleClose.errorKind === 'InvalidOperation',
+    'SM-F4 stale SpotRef did not report InvalidOperation.'
   );
 
   const channel = await postJson<ChannelRouteRes>(options.playAUrl, '/channel/route/request', {

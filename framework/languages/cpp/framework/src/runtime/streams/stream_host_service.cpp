@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "runtime/streams/stream_host_service.hpp"
+#include "runtime/transport/listener_identity.hpp"
 #include "runtime/configuration/service_scope.hpp"
 #include "runtime/dispatch/receive_batch_budget.hpp"
 #include "runtime/messaging/async_submit_runtime.hpp"
@@ -458,13 +459,27 @@ parsed_tcp_endpoint_t parse_tcp_endpoint (const std::string &endpoint)
                                      "STREAM host currently supports tcp endpoints only");
     }
     const auto host_start = prefix.size ();
-    const auto separator = endpoint.rfind (':');
+    std::size_t separator = endpoint.rfind (':');
+    std::size_t host_end = separator;
+    if (endpoint.size () > host_start && endpoint[host_start] == '[') {
+        const auto closing = endpoint.find (']', host_start + 1);
+        if (closing == std::string::npos || closing + 1 >= endpoint.size ()
+            || endpoint[closing + 1] != ':') {
+            throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                         "STREAM tcp endpoint must be tcp://host:port");
+        }
+        separator = closing + 1;
+        host_end = closing;
+    }
     if (separator == std::string::npos || separator <= host_start
-        || separator + 1 >= endpoint.size ()) {
+        || separator + 1 >= endpoint.size () || host_end <= host_start) {
         throw framework_exception_t (framework_error_kind_t::protocol_error,
                                      "STREAM tcp endpoint must be tcp://host:port");
     }
-    return {endpoint.substr (host_start, separator - host_start), endpoint.substr (separator + 1)};
+    const auto bracketed = endpoint[host_start] == '[';
+    return {endpoint.substr (host_start + (bracketed ? 1 : 0),
+                             host_end - host_start - (bracketed ? 1 : 0)),
+            endpoint.substr (separator + 1)};
 }
 
 parsed_tcp_endpoint_t parse_tls_endpoint (const std::string &endpoint)
@@ -524,6 +539,53 @@ parsed_tcp_endpoint_t parse_stream_endpoint (const stream_snapshot_t &stream)
         return parse_websocket_endpoint (stream.bind_endpoint);
     }
     return parse_tcp_endpoint (stream.bind_endpoint);
+}
+
+void validate_stream_listener_identity (
+  const stream_snapshot_t &stream,
+  const std::optional<std::string> &advertise_host)
+{
+    const auto endpoint = parse_stream_endpoint (stream);
+    if (advertise_host && transport::is_wildcard_host (*advertise_host)) {
+        throw framework_exception_t (
+          framework_error_kind_t::protocol_error,
+          "STREAM advertise host must be a remotely reachable, non-wildcard host: "
+            + *advertise_host);
+    }
+    if (transport::is_wildcard_host (endpoint.host) && !advertise_host) {
+        throw framework_exception_t (
+          framework_error_kind_t::protocol_error,
+          "STREAM wildcard bind host requires an advertise host: " + stream.name);
+    }
+}
+
+std::string stream_listener_advertised_endpoint (
+  std::string bound_endpoint,
+  const std::optional<std::string> &advertise_host)
+{
+    std::string scheme = "tcp://";
+    if (const auto separator = bound_endpoint.find ("://");
+        separator != std::string::npos) {
+        scheme = bound_endpoint.substr (0, separator + 3);
+        bound_endpoint.erase (0, separator + 3);
+    }
+    const auto port_separator = bound_endpoint.rfind (':');
+    if (port_separator == std::string::npos
+        || port_separator + 1 >= bound_endpoint.size ())
+        return {};
+    const auto port = bound_endpoint.substr (port_separator + 1);
+    if (port == "0")
+        return {};
+    auto bound_host = bound_endpoint.substr (0, port_separator);
+    if (bound_host.size () >= 2 && bound_host.front () == '['
+        && bound_host.back () == ']')
+        bound_host = bound_host.substr (1, bound_host.size () - 2);
+    const auto host = advertise_host ? *advertise_host : bound_host;
+    const auto formatted_host = host.find (':') == std::string::npos
+                                  ? host
+                                  : (host.starts_with ("[") ? host
+                                                              : "[" + host + "]");
+    return scheme + formatted_host + ":" + port;
 }
 
 std::optional<std::string> socket_endpoint_text (const tcp::endpoint &endpoint)
@@ -859,6 +921,7 @@ class stream_host_service_t::listener_t
   public:
     listener_t (detail::stream_runtime_t runtime,
                 stream_snapshot_t stream,
+                std::optional<std::string> advertise_host,
                 detail::stream_session_factory_t session_factory,
                 service_provider_t &services,
                 std::atomic_bool &stop,
@@ -868,6 +931,7 @@ class stream_host_service_t::listener_t
                 std::shared_ptr<inbound_dispatch_budget_t> inbound_budget) :
         _runtime (std::move (runtime)),
         _stream (std::move (stream)),
+        _advertise_host (std::move (advertise_host)),
         _session_factory (std::move (session_factory)),
         _services (&services),
         _stop (&stop),
@@ -1182,6 +1246,7 @@ class stream_host_service_t::listener_t
 
     void run ()
     {
+        validate_stream_listener_identity (_stream, _advertise_host);
         _receive_scheduler.start ();
         if (_mesh_node && !stream_uses_tls (_stream) && !stream_uses_websocket (_stream)) {
             run_core_stream ();
@@ -1201,9 +1266,25 @@ class stream_host_service_t::listener_t
         _acceptor.set_option (tcp::acceptor::reuse_address (true));
         _acceptor.bind (endpoints.begin ()->endpoint ());
         _acceptor.listen ();
+        if (const auto endpoint = socket_endpoint_text (_acceptor.local_endpoint ()))
+            _bound_endpoint = *endpoint;
         start_boost_accept ();
         mark_started ();
         _io.run ();
+    }
+
+    void run_guarded () noexcept
+    {
+        try {
+            run ();
+        }
+        catch (const std::exception &error) {
+            mark_start_failed (error.what ());
+        }
+        catch (...) {
+            mark_start_failed ("STREAM listener failed with an unknown exception: "
+                               + _stream.name);
+        }
     }
 
     void wait_started ()
@@ -1220,6 +1301,18 @@ class stream_host_service_t::listener_t
               _start_error.empty () ? "STREAM listener failed to start: " + _stream.name
                                     : _start_error);
         }
+    }
+
+    std::string listener_endpoint () const
+    {
+        std::lock_guard lock (_ready_mutex);
+        return stream_listener_advertised_endpoint (
+          _bound_endpoint, _advertise_host);
+    }
+
+    const std::string &name () const noexcept
+    {
+        return _stream.name;
     }
 
     void request_stop () noexcept
@@ -1248,24 +1341,7 @@ class stream_host_service_t::listener_t
         if (fd < 0) {
             return;
         }
-        const auto endpoint = parse_tcp_endpoint (_stream.bind_endpoint);
-        const int wake_fd = ::socket (AF_INET, SOCK_STREAM, 0);
-        if (wake_fd < 0) {
-            return;
-        }
-        set_nonblocking (wake_fd);
-        sockaddr_in address{};
-        address.sin_family = AF_INET;
-        address.sin_port = htons (static_cast<std::uint16_t> (std::stoi (endpoint.port)));
-        if (::inet_pton (AF_INET, endpoint.host.c_str (), &address.sin_addr) != 1) {
-            address.sin_addr.s_addr = htonl (INADDR_LOOPBACK);
-        }
-        (void) ::connect (wake_fd, reinterpret_cast<sockaddr *> (&address), sizeof (address));
-        pollfd wake_poll{};
-        wake_poll.fd = wake_fd;
-        wake_poll.events = POLLOUT;
-        (void) ::poll (&wake_poll, 1, 50);
-        ::close (wake_fd);
+        (void) ::shutdown (fd, SHUT_RDWR);
     }
 
     void stop_connections () noexcept
@@ -1439,6 +1515,7 @@ class stream_host_service_t::listener_t
                     close_core_session (*event.routing_id, "client_close");
             });
             _core_socket->bind (_stream.bind_endpoint);
+            _bound_endpoint = _core_socket->options ().last_endpoint ();
             mark_started ();
             zlink::poller_t poller;
             poller.add (*_core_socket, zlink::poll_event_flag_t::pollin, 1);
@@ -1984,34 +2061,62 @@ class stream_host_service_t::listener_t
     void run_tcp_native_accept ()
     {
         const auto endpoint = parse_tcp_endpoint (_stream.bind_endpoint);
-        const int server_fd = ::socket (AF_INET, SOCK_STREAM, 0);
+        addrinfo hints{};
+        hints.ai_family = AF_UNSPEC;
+        hints.ai_socktype = SOCK_STREAM;
+        hints.ai_flags = AI_NUMERICSERV
+                         | (endpoint.host == "*" ? AI_PASSIVE : 0);
+        addrinfo *resolved = nullptr;
+        const char *host = endpoint.host == "*" ? nullptr : endpoint.host.c_str ();
+        const auto resolve_error = ::getaddrinfo (
+          host, endpoint.port.c_str (), &hints, &resolved);
+        if (resolve_error != 0) {
+            mark_start_failed (
+              "STREAM TCP listener address resolution failed: "
+              + std::string (::gai_strerror (resolve_error)));
+            return;
+        }
+
+        int server_fd = -1;
+        std::string last_error = "STREAM TCP listener bind failed";
+        for (auto *candidate = resolved; candidate != nullptr;
+             candidate = candidate->ai_next) {
+            server_fd = ::socket (candidate->ai_family,
+                                  candidate->ai_socktype,
+                                  candidate->ai_protocol);
+            if (server_fd < 0) {
+                last_error = std::string ("STREAM TCP socket create failed: ")
+                             + std::strerror (errno);
+                continue;
+            }
+            {
+                const std::lock_guard<std::mutex> lock (_native_accept_mutex);
+                _native_accept_fd = server_fd;
+            }
+            int reuse = 1;
+            (void) ::setsockopt (
+              server_fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof (reuse));
+            set_nonblocking (server_fd);
+            if (::bind (server_fd, candidate->ai_addr, candidate->ai_addrlen) == 0
+                && ::listen (server_fd, SOMAXCONN) == 0) {
+                break;
+            }
+            last_error = std::string ("STREAM TCP listener bind failed: ")
+                         + std::strerror (errno);
+            {
+                const std::lock_guard<std::mutex> lock (_native_accept_mutex);
+                ::close (server_fd);
+                _native_accept_fd = -1;
+            }
+            server_fd = -1;
+        }
+        ::freeaddrinfo (resolved);
         if (server_fd < 0) {
-            mark_start_failed ("STREAM TCP socket create failed: " + _stream.name);
+            mark_start_failed (last_error);
             return;
         }
-        {
-            const std::lock_guard<std::mutex> lock (_native_accept_mutex);
-            _native_accept_fd = server_fd;
-        }
-        int reuse = 1;
-        (void) ::setsockopt (server_fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof (reuse));
-        set_nonblocking (server_fd);
-        sockaddr_in address{};
-        address.sin_family = AF_INET;
-        address.sin_port = htons (static_cast<std::uint16_t> (std::stoi (endpoint.port)));
-        if (::inet_pton (AF_INET, endpoint.host.c_str (), &address.sin_addr) != 1) {
-            address.sin_addr.s_addr = htonl (INADDR_LOOPBACK);
-        }
-        if (::bind (server_fd, reinterpret_cast<sockaddr *> (&address), sizeof (address)) != 0
-            || ::listen (server_fd, SOMAXCONN) != 0) {
-            const auto message =
-              std::string ("STREAM TCP listener failed: ") + std::strerror (errno);
-            const std::lock_guard<std::mutex> lock (_native_accept_mutex);
-            ::close (server_fd);
-            _native_accept_fd = -1;
-            mark_start_failed (message);
-            return;
-        }
+        if (const auto endpoint = native_local_endpoint_text (server_fd))
+            _bound_endpoint = *endpoint;
         mark_started ();
         while (!_stop->load (std::memory_order_acquire)) {
             pollfd accept_poll{};
@@ -2038,7 +2143,7 @@ class stream_host_service_t::listener_t
                 std::this_thread::sleep_for (std::chrono::milliseconds (1));
                 continue;
             }
-            sockaddr_in peer{};
+            sockaddr_storage peer{};
             socklen_t peer_len = sizeof (peer);
             const int accepted =
               ::accept (server_fd, reinterpret_cast<sockaddr *> (&peer), &peer_len);
@@ -3136,6 +3241,7 @@ class stream_host_service_t::listener_t
 
     detail::stream_runtime_t _runtime;
     stream_snapshot_t _stream;
+    std::optional<std::string> _advertise_host;
     detail::stream_session_factory_t _session_factory;
     service_provider_t *_services;
     std::atomic_bool *_stop;
@@ -3167,8 +3273,9 @@ class stream_host_service_t::listener_t
     stream_receive_scheduler_t _receive_scheduler;
     std::mutex _workers_mutex;
     std::vector<std::thread> _workers;
-    std::mutex _ready_mutex;
+    mutable std::mutex _ready_mutex;
     std::condition_variable _ready_cv;
+    std::string _bound_endpoint;
     bool _started = false;
     bool _start_failed = false;
     std::string _start_error;
@@ -3179,34 +3286,52 @@ stream_host_service_t::stream_host_service_t (
   std::vector<stream_snapshot_t> streams,
   std::map<std::string, detail::stream_session_factory_t> session_factories,
   std::shared_ptr<detail::mesh_node_runtime_t> mesh_node,
-  std::shared_ptr<inbound_dispatch_budget_t> inbound_budget) :
+  std::shared_ptr<inbound_dispatch_budget_t> inbound_budget,
+  std::map<std::string, std::optional<std::string>> advertise_hosts,
+  std::shared_ptr<listener_status_registry_t> listener_statuses) :
     _runtime (std::move (runtime)),
     _streams (std::move (streams)),
     _session_factories (std::move (session_factories)),
+    _advertise_hosts (std::move (advertise_hosts)),
+    _listener_statuses (std::move (listener_statuses)),
     _mesh_node (std::move (mesh_node)),
     _inbound_budget (std::move (inbound_budget))
 {
 }
 
-stream_host_service_t::~stream_host_service_t () = default;
+stream_host_service_t::~stream_host_service_t ()
+{
+    stop ();
+}
 
 void stream_host_service_t::start (service_provider_t &services)
 {
     _services = &services;
     _stop.store (false, std::memory_order_release);
+    try {
     for (const auto &stream : _streams) {
         auto factory = _session_factories.find (stream.packet_session_name);
         if (factory == _session_factories.end ()) {
             continue;
         }
+        const auto advertise = _advertise_hosts.find (stream.name);
+        const auto advertise_host =
+          advertise == _advertise_hosts.end () ? std::optional<std::string>{}
+                                               : advertise->second;
+        validate_stream_listener_identity (stream, advertise_host);
         auto listener =
-          std::make_unique<listener_t> (_runtime, stream, factory->second, services, _stop,
-                                        _drain_flag, _monitoring, _mesh_node,
+          std::make_unique<listener_t> (_runtime, stream, advertise_host, factory->second,
+                                        services, _stop, _drain_flag, _monitoring, _mesh_node,
                                         _inbound_budget);
         auto *raw = listener.get ();
         _listeners.push_back (std::move (listener));
-        _threads.emplace_back ([raw] { raw->run (); });
+        _threads.emplace_back ([raw] { raw->run_guarded (); });
         raw->wait_started ();
+        if (_listener_statuses)
+            _listener_statuses->update (
+              listener_kind_t::stream,
+              stream.name,
+              raw->listener_endpoint ());
     }
     if (!_listeners.empty ()) {
         /* One liveness sweep loop per node (graceful-drain-handoff §7.2):
@@ -3228,6 +3353,11 @@ void stream_host_service_t::start (service_provider_t &services)
                 }
             }
         });
+    }
+    }
+    catch (...) {
+        stop ();
+        throw;
     }
 }
 
@@ -3314,6 +3444,9 @@ void stream_host_service_t::stop () noexcept
     _threads.clear ();
     for (auto &listener : _listeners) {
         listener->stop_connections ();
+        if (_listener_statuses)
+            _listener_statuses->remove (
+              listener_kind_t::stream, listener->name ());
     }
     _listeners.clear ();
     _services = nullptr;

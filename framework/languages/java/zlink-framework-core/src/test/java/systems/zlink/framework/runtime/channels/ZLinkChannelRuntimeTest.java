@@ -119,6 +119,41 @@ final class ZLinkChannelRuntimeTest {
     }
 
     @Test
+    void channelRequestWithoutAnEgressRouteIsNotFound() {
+        DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        FakeChannelBackendAdapter backend = new FakeChannelBackendAdapter();
+        try (ZLinkChannelRuntime runtime = new ZLinkChannelRuntime(
+            backend,
+            options.registration(),
+            new ZLinkJsonMessageSerializer(),
+            handlers())) {
+            ZLinkFrameworkException failure = assertThrows(
+                ZLinkFrameworkException.class,
+                () -> runtime.requestToChannel("missing", new TestRequest("missing")));
+
+            assertEquals(ZLinkFrameworkErrorKind.NOT_FOUND, failure.kind());
+        }
+    }
+
+    @Test
+    void serverOnlyClientServerRequestIsNotFound() {
+        DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        options.addClientServerChannel("api").server();
+        FakeChannelBackendAdapter backend = new FakeChannelBackendAdapter();
+        try (ZLinkChannelRuntime runtime = new ZLinkChannelRuntime(
+            backend,
+            options.registration(),
+            new ZLinkJsonMessageSerializer(),
+            handlers())) {
+            ZLinkFrameworkException failure = assertThrows(
+                ZLinkFrameworkException.class,
+                () -> runtime.requestToChannel("api", new TestRequest("server-only")));
+
+            assertEquals(ZLinkFrameworkErrorKind.NOT_FOUND, failure.kind());
+        }
+    }
+
+    @Test
     void meshChannelRequestPreservesPayloadAcrossReadinessRetry() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.setDefaultRequestTimeout(Duration.ofMillis(300));

@@ -11,6 +11,7 @@ import systems.zlink.e2e.registrationcodec.client.Scenarios.RcB1JsonCodecScenari
 import systems.zlink.e2e.registrationcodec.client.Scenarios.RcB2ProtobufCodecScenario;
 import systems.zlink.e2e.registrationcodec.client.Scenarios.RcB3MessagePackCodecScenario;
 import systems.zlink.e2e.registrationcodec.client.Scenarios.RcB4CodecCoexistenceScenario;
+import systems.zlink.e2e.registrationcodec.client.Scenarios.RcB6JsonGoldenScenario;
 import systems.zlink.e2e.registrationcodec.client.Support.ScenarioContext;
 
 public final class ScenarioRunner {
@@ -37,6 +38,7 @@ public final class ScenarioRunner {
         RcB3MessagePackCodecScenario.run(context);
         RcB4CodecCoexistenceScenario.run(context);
         CodecMismatchScenario.run(context);
+        RcB6JsonGoldenScenario.run(context);
     }
 
     private void runOne(String scenario) {
@@ -52,6 +54,7 @@ public final class ScenarioRunner {
             case "RC-B3" -> RcB3MessagePackCodecScenario.run(context);
             case "RC-B4" -> RcB4CodecCoexistenceScenario.run(context);
             case "RC-B5" -> CodecMismatchScenario.run(context);
+            case "RC-B6" -> RcB6JsonGoldenScenario.run(context);
             default -> throw new IllegalArgumentException("Unknown RegistrationCodec scenario '" + scenario + "'.");
         }
     }

@@ -41,6 +41,8 @@ public final class Program {
                 .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
                 .traceLogFile(logDir + "/" + consumer.consumerName() + "-flow.log")
                 .traceLabel("java-rm-" + consumer.consumerName());
+            options.configureLocations()
+                .setPollingInterval(java.time.Duration.ofMillis(250));
 
             String mode = consumer.consumerMode();
             var channel = options.addClientServerChannel(Contracts.API_CHANNEL);

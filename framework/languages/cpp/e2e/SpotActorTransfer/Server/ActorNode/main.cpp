@@ -1015,12 +1015,12 @@ class create_actor_handler_t
           "create", request.actor_id,
           "create_actor_requested",
           request.actor_type);
-        fw::actor_create_result_t created;
+        std::optional<fw::actor_create_result_t> created;
         try {
-            created = co_await _actor_manager
-              .get_or_create (fw::actor_id_t (request.actor_id), request.actor_type)
-              .creation_request (request)
-              .submit ();
+            created.emplace (co_await _actor_manager
+                               .get_or_create (fw::actor_id_t (request.actor_id), request.actor_type)
+                               .creation_request (request)
+                               .submit ());
         }
         catch (const std::exception &error) {
             _evidence.add ("create", request.actor_id,
@@ -1040,7 +1040,7 @@ class create_actor_handler_t
                   return result.actor;
               }
           },
-          created);
+          *created);
         try {
             auto bound = co_await _session_actors
               .bind_or_get (ref)

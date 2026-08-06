@@ -27,27 +27,6 @@ export interface ZLinkBindingPromiseRequestSubmitOperation<TParts extends unknow
   submit(callback: (result: number, parts: TParts) => void): boolean;
 }
 
-export function withNativeFallback<TAdapter extends object, TNative extends object>(
-  adapter: TAdapter,
-  nativeInstance: TNative
-): TAdapter & TNative {
-  return new Proxy(adapter as TAdapter & TNative, {
-    get(target, property, receiver) {
-      if (Reflect.has(target, property)) {
-        const value = Reflect.get(target, property, receiver);
-        return typeof value === 'function' ? value.bind(target) : value;
-      }
-      const value = Reflect.get(nativeInstance, property, nativeInstance);
-      return typeof value === 'function' ? value.bind(nativeInstance) : value;
-    },
-    set(target, property, value, receiver) {
-      return Reflect.has(target, property)
-        ? Reflect.set(target, property, value, receiver)
-        : Reflect.set(nativeInstance, property, value, nativeInstance);
-    }
-  });
-}
-
 export function unwrapBackendObject(value: unknown): unknown {
   if (typeof value === 'object' && value !== null) {
     const nativeInstance = (value as Partial<ZLinkBackendObject>).nativeInstance;

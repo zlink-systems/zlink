@@ -1137,8 +1137,6 @@ int main ()
                               "zlink/framework.hpp or contracts/*");
     }
     ok &= require_exists (root / "framework/src/runtime");
-    ok &= require_exists (root / "framework/src/runtime/backend/native_route_backend.cpp");
-    ok &= require_exists (root / "framework/src/runtime/backend/native_route_backend.hpp");
     ok &= require_exists (root / "framework/src/runtime/channels/channel_packet_dispatcher.cpp");
     ok &= require_exists (root / "framework/src/runtime/channels/channel_packet_dispatcher.hpp");
     ok &= require_exists (root / "framework/src/runtime/channels/channel_pending_requests.cpp");

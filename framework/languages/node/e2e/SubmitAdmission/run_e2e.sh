@@ -19,7 +19,12 @@ mkdir -p "$LOG_DIR"
 
 source "$NODE_ROOT/e2e/runner-common.sh"
 
-IMPLEMENTED_PROCESS=(SA-E2E-01 SA-E2E-08 SA-E2E-09 SA-E2E-14 SA-E2E-20 SA-E2E-05)
+IMPLEMENTED_PROCESS=(
+  SA-E2E-01 SA-E2E-02 SA-E2E-03 SA-E2E-04 SA-E2E-06 SA-E2E-07
+  SA-E2E-08 SA-E2E-09 SA-E2E-10 SA-E2E-11 SA-E2E-12 SA-E2E-13
+  SA-E2E-14 SA-E2E-15 SA-E2E-16 SA-E2E-17 SA-E2E-18 SA-E2E-19
+  SA-E2E-20 SA-E2E-05
+)
 IMPLEMENTED_REGRESSION=(SA-REG-01 SA-REG-02 SA-REG-03 SA-REG-04)
 ALL_KNOWN=()
 for number in $(seq 1 20); do ALL_KNOWN+=("$(printf 'SA-E2E-%02d' "$number")"); done
@@ -112,13 +117,16 @@ if [[ "$NEEDS_NATIVE" == 1 ]]; then
 fi
 
 if [[ "$(realpath "$PACKAGE_ROOT")" != "$(realpath "$NODE_ROOT")" ]]; then
-  mkdir -p "$PACKAGE_ROOT/e2e/SubmitAdmission/Role" "$PACKAGE_ROOT/e2e/SubmitAdmission/Contract"
+  mkdir -p "$PACKAGE_ROOT/e2e/SubmitAdmission/Role" "$PACKAGE_ROOT/e2e/SubmitAdmission/Client" "$PACKAGE_ROOT/e2e/SubmitAdmission/Contract"
   cp "$ROOT_DIR/Role/main.ts" "$ROOT_DIR/Role/package.json" "$ROOT_DIR/Role/tsconfig.json" \
     "$PACKAGE_ROOT/e2e/SubmitAdmission/Role/"
+  cp "$ROOT_DIR/Client/main.ts" "$ROOT_DIR/Client/package.json" "$ROOT_DIR/Client/tsconfig.json" \
+    "$PACKAGE_ROOT/e2e/SubmitAdmission/Client/"
   cp "$ROOT_DIR/Contract/contract.ts" "$ROOT_DIR/Contract/tsconfig.json" \
     "$PACKAGE_ROOT/e2e/SubmitAdmission/Contract/"
 fi
 build_package "$PACKAGE_ROOT/e2e/SubmitAdmission/Role"
+build_package "$PACKAGE_ROOT/e2e/SubmitAdmission/Client"
 {
   echo "compile_typescript=$(realpath "$PACKAGE_ROOT/node_modules/typescript/bin/tsc")"
   echo "compile_framework_declaration=$(realpath "$PACKAGE_ROOT/packages/framework/dist/index.d.ts")"
@@ -190,14 +198,15 @@ if [[ "${#PROCESS_SELECTORS[@]}" -gt 0 ]]; then
   CALLER_RID="submit-caller"
   TARGET_RID="submit-target"
 
-  python3 - "$TEMP_DIR" "$CALLER_HTTP_PORT" "$TARGET_HTTP_PORT" "$PUBLISHER_HTTP_PORT" \
+  python3 - "$TEMP_DIR" "$EVIDENCE_FILE" "$CALLER_HTTP_PORT" "$TARGET_HTTP_PORT" "$PUBLISHER_HTTP_PORT" \
     "$CALLER_MESH_PORT" "$TARGET_MESH_PORT" "$FANOUT_PORT" <<'PY'
 import json
 import pathlib
 import sys
 
 root = pathlib.Path(sys.argv[1])
-caller_http, target_http, publisher_http, caller_mesh, target_mesh, fanout = map(int, sys.argv[2:])
+evidence_file = sys.argv[2]
+caller_http, target_http, publisher_http, caller_mesh, target_mesh, fanout = map(int, sys.argv[3:])
 values = {
     "caller": {
         "role": "caller", "rid": "submit-caller", "httpPort": caller_http,
@@ -211,6 +220,13 @@ values = {
     "publisher": {
         "role": "publisher", "rid": "submit-publisher", "httpPort": publisher_http,
         "fanoutEndpoint": f"tcp://127.0.0.1:{fanout}"
+    },
+    "client": {
+        "callerUrl": f"http://127.0.0.1:{caller_http}",
+        "targetUrl": f"http://127.0.0.1:{target_http}",
+        "publisherUrl": f"http://127.0.0.1:{publisher_http}",
+        "callerRid": "submit-caller", "targetRid": "submit-target",
+        "evidenceFile": evidence_file
     }
 }
 for name, value in values.items():
@@ -242,9 +258,8 @@ PY
     exit 1
   fi
 
-  node "$ROOT_DIR/Support/scenario-client.mjs" \
-    "$CALLER_URL" "$TARGET_URL" "$PUBLISHER_URL" "$CALLER_RID" "$TARGET_RID" \
-    "$EVIDENCE_FILE" "${PROCESS_SELECTORS[@]}" | tee "$LOG_DIR/client.log"
+  node "$PACKAGE_ROOT/e2e/SubmitAdmission/Client/dist/main.js" \
+    --config="$TEMP_DIR/client.json" "${PROCESS_SELECTORS[@]}" | tee "$LOG_DIR/client.log"
 fi
 
 echo "SubmitAdmission PASS scenarios=${SELECTORS[*]} logs=$LOG_DIR"

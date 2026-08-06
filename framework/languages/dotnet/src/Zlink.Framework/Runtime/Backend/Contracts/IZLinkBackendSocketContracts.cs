@@ -3,8 +3,6 @@ namespace Zlink.Framework.Runtime.Backend.Contracts;
 internal interface IZLinkBackendSocket : IAsyncDisposable
 {
     void Bind(string endpoint);
-
-    void SetChannelName(string channelName);
 }
 
 internal interface IZLinkBackendSocketOptions : IZLinkBackendSocket
@@ -67,7 +65,7 @@ internal interface IZLinkBackendDealerSocket : IZLinkBackendConnectableSocket, I
         TimeSpan timeout,
         CancellationToken cancellationToken);
 
-    Received? Recv(RecvFlags flags = RecvFlags.None);
+    bool Recv(Received storage, RecvFlags flags = RecvFlags.None);
 
     bool Reply(
         Received received,
@@ -99,7 +97,7 @@ internal interface IZLinkBackendRouterSocket : IZLinkBackendConnectableSocket, I
 
     void DisconnectPeer(RoutingId routingId);
 
-    Received? Recv(RecvFlags flags = RecvFlags.None);
+    bool Recv(Received storage, RecvFlags flags = RecvFlags.None);
 
     bool Send(
         RoutingId routingId,

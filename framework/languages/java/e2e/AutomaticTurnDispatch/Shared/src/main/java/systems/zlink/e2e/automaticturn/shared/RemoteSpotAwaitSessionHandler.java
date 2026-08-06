@@ -31,12 +31,11 @@ public final class RemoteSpotAwaitSessionHandler
         Contracts.RemoteSpotAwaitReq request) {
         RoutingId targetSpotRid = RoutingId.from(dispatch.metadata()
             .getOrDefault(Contracts.SPOT_RID_METADATA, Contracts.TARGET_SPOT));
-        return spots.resolveSpotHandle(targetSpotRid)
-            .thenCompose(handle -> routes.requestToSpot(
-                    handle.orElseThrow(() -> new IllegalStateException("spot not found: " + targetSpotRid)),
+        return routes.requestToSpot(
+                    targetSpotRid.toString(),
                     request)
                 .timeout(Duration.ofSeconds(30))
-                .submit(Contracts.ScenarioRes.class))
+                .submit(Contracts.ScenarioRes.class)
             .thenAccept(reply -> context.client().reply(reply).submit());
     }
 }

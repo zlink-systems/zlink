@@ -139,6 +139,9 @@ LOCAL_READINESS_POLL_SECONDS=0.1
 LOCAL_READINESS_ATTEMPTS=30
 TOPOLOGY_READINESS_ATTEMPTS=100
 SCENARIO_SETTLE_SECONDS=3
+# Inventory blockers: SM-A9 SM-A10 SM-A11 SM-A12 SM-A13 SM-B0 SM-B0A
+# SM-B10 SM-B11 SM-C6 SM-D4A SM-D4B SM-D5A SM-G5A SM-G5B. The feature map
+# owns the public-fixture reasons; the runner does not claim these as passes.
 
 print_logs() {
   local status="$1"
@@ -818,6 +821,14 @@ scenario_modes() {
     SM-A6) echo "owner" ;;
     SM-A7) echo "owner" ;;
     SM-A8) echo "worker" ;;
+    SM-A9) echo "SM-A9" ;;
+    SM-A10) echo "SM-A10" ;;
+    SM-A11) echo "SM-A11" ;;
+    SM-A12) echo "SM-A12" ;;
+    SM-A13) echo "SM-A13" ;;
+    SM-B0) echo "SM-B0" ;;
+    SM-B0A) echo "SM-B0A" ;;
+    SM-B11) echo "SM-B11" ;;
     SM-B1|SM-B3|SM-B7|SM-D1|SM-D3|SM-D9) echo "actor-session" ;;
     SM-B2|SM-B4|SM-D2) echo "remote-actor-session" ;;
     SM-B5) echo "actor-missing" ;;
@@ -830,6 +841,10 @@ scenario_modes() {
     SM-C4) echo "spot-mesh-cross-node" ;;
     SM-C5) echo "spot-mesh-cross-node" ;;
     SM-D5) echo "actor-disconnect-notify" ;;
+    SM-D4A) echo "SM-D4A" ;;
+    SM-D5A) echo "SM-D5A" ;;
+    SM-C6) echo "SM-C6" ;;
+    SM-D4B) echo "SM-D4B" ;;
     SM-D6) echo "bound-push-isolation" ;;
     SM-D7) echo "stream-auth" ;;
     SM-D8) echo "stream-reconnect" ;;
@@ -840,6 +855,8 @@ scenario_modes() {
     SM-D13) echo "stream-heartbeat" ;;
     SM-D14) echo "stream-tls" ;;
     SM-D15) echo "actor-push-chain" ;;
+    SM-G5A) echo "SM-G5A" ;;
+    SM-G5B) echo "SM-G5B" ;;
     SM-E1) echo "missing" ;;
     SM-E2) echo "state1" ;;
     SM-E3) echo "idle-timer" ;;

@@ -3,12 +3,15 @@ package systems.zlink.e2e.automaticturn.client.Support;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.net.URI;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
 import systems.zlink.e2e.automaticturn.shared.Contracts;
 import systems.zlink.e2e.automaticturn.client.ClientOptions;
 import systems.zlink.httpclient.RawHttpResponse;
@@ -27,6 +30,10 @@ public final class AutomaticTurnDispatchScenarioSupport {
 
     public AutomaticTurnDispatchScenarioSupport(ClientOptions options) {
         this.options = options;
+    }
+
+    public void setDefaultPlacement() throws Exception {
+        setPlacementWeights(100, 0);
     }
 
     public void runTerminatorSurface() {
@@ -121,6 +128,131 @@ public final class AutomaticTurnDispatchScenarioSupport {
             "yield-resumed", "completed"));
     }
 
+    public void runCounterScenario(
+        ZLinkStreamConnector connector,
+        String scenarioId,
+        String terminator) throws Exception {
+        String requestId = scenarioId.toLowerCase().replace("-", "") + "-" + System.nanoTime();
+        Map<String, String> metadata = Map.of(
+            Contracts.SPOT_RID_METADATA, Contracts.TARGET_SPOT,
+            Contracts.TARGET_NODE_RID_METADATA, Contracts.PLAY_NODE_A);
+        connector.send(new Contracts.CounterResetMsg(requestId, 0)).metadata(metadata).submit();
+        waitMarkerCount(options.playHttpEndpoint() + "/evidence", requestId, "counter-reset", 1);
+        for (int index = 0; index < 8; index++) {
+            connector.send(new Contracts.CounterAwaitMsg(
+                requestId, "op-" + index, 150, terminator)).metadata(metadata).submit();
+        }
+        waitMarkerCount(options.playHttpEndpoint() + "/evidence", requestId,
+            "counter-operation-completed", 8);
+        Contracts.CounterReadRes result = connector
+            .request(new Contracts.CounterReadReq(requestId))
+            .metadata(metadata)
+            .timeout(REQUEST_TIMEOUT)
+            .submit(Contracts.CounterReadRes.class).toCompletableFuture().join();
+        ensure(result.value() == 8,
+            scenarioId + " expected serialized counter value 8, actual " + result.value());
+        ensure(observedMarkers(options.playHttpEndpoint() + "/evidence", requestId)
+            .contains("counter-after-yield"), scenarioId + " did not observe continuation state");
+    }
+
+    public void runTimerTerminatorScenario(
+        ZLinkStreamConnector connector,
+        String scenarioId,
+        String mode) throws Exception {
+        String requestId = scenarioId.toLowerCase().replace("-", "") + "-" + System.nanoTime();
+        Map<String, String> metadata = Map.of(
+            Contracts.SPOT_RID_METADATA, Contracts.TARGET_SPOT,
+            Contracts.TARGET_NODE_RID_METADATA, Contracts.PLAY_NODE_A);
+        connector.send(new Contracts.TimerStartMsg(
+            requestId, requestId + "-timer", mode, 40, 350)).metadata(metadata).submit();
+        if ("yield-then-next".equals(mode)) {
+            assertOrder(options.playHttpEndpoint() + "/evidence", requestId,
+                List.of("yield-released", "yield-held", "yield-resumed", "yield-completed",
+                    "timer-next-started", "timer-next-completed"));
+        } else {
+            assertOrder(options.playHttpEndpoint() + "/evidence", requestId,
+                List.of("timer-await-started", "timer-await-released",
+                    "timer-await-resumed", "timer-await-completed"));
+        }
+        connector.send(new Contracts.TimerStopMsg(requestId)).metadata(metadata).submit();
+    }
+
+    public void runIoWorkerScenario(
+        ZLinkStreamConnector connector,
+        String scenarioId,
+        String terminator) throws Exception {
+        String requestId = scenarioId.toLowerCase().replace("-", "") + "-" + System.nanoTime();
+        Map<String, String> metadata = Map.of(
+            Contracts.SPOT_RID_METADATA, Contracts.TARGET_SPOT,
+            Contracts.TARGET_NODE_RID_METADATA, Contracts.PLAY_NODE_A);
+        connector.send(new Contracts.IoWorkerMsg(requestId, 350, terminator))
+            .metadata(metadata).submit();
+        assertOrder(options.playHttpEndpoint() + "/evidence", requestId,
+            List.of("io-worker-started"));
+        connector.send(new Contracts.ProbeMsg(requestId, scenarioId + "-probe"))
+            .metadata(metadata).submit();
+        if ("yield".equals(terminator)) {
+            assertOrder(options.playHttpEndpoint() + "/evidence", requestId,
+                List.of("io-worker-started", "probe-started", "probe-completed",
+                    "io-worker-resumed", "io-worker-completed"));
+        } else {
+            assertOrder(options.playHttpEndpoint() + "/evidence", requestId,
+                List.of("io-worker-started", "io-worker-resumed", "io-worker-completed",
+                    "probe-started", "probe-completed"));
+        }
+    }
+
+    public void runIoWorkerBatch(ZLinkStreamConnector connector, String scenarioId) throws Exception {
+        String requestId = scenarioId.toLowerCase().replace("-", "") + "-" + System.nanoTime();
+        Map<String, String> metadata = Map.of(
+            Contracts.SPOT_RID_METADATA, Contracts.TARGET_SPOT,
+            Contracts.TARGET_NODE_RID_METADATA, Contracts.PLAY_NODE_A);
+        Contracts.IoWorkerBatchRes result = connector
+            .request(new Contracts.IoWorkerBatchReq(requestId, 16, 100))
+            .metadata(metadata)
+            .timeout(Duration.ofSeconds(10))
+            .submit(Contracts.IoWorkerBatchRes.class).toCompletableFuture().join();
+        ensure(result.completed() == 16, scenarioId + " incomplete I/O worker batch");
+        assertOrder(options.playHttpEndpoint() + "/evidence", requestId,
+            List.of("io-worker-batch-completed"));
+    }
+
+    public void runCpuWorkerScenario(
+        ZLinkStreamConnector connector,
+        String scenarioId,
+        String terminator) throws Exception {
+        String requestId = scenarioId.toLowerCase().replace("-", "") + "-" + System.nanoTime();
+        Map<String, String> metadata = Map.of(
+            Contracts.SPOT_RID_METADATA, Contracts.TARGET_SPOT,
+            Contracts.TARGET_NODE_RID_METADATA, Contracts.PLAY_NODE_A);
+        connector.send(new Contracts.CpuWorkerMsg(requestId, 250, terminator))
+            .metadata(metadata).submit();
+        assertOrder(options.playHttpEndpoint() + "/evidence", requestId,
+            List.of("cpu-worker-started"));
+        connector.send(new Contracts.ProbeMsg(requestId, scenarioId + "-probe"))
+            .metadata(metadata).submit();
+        assertOrder(options.playHttpEndpoint() + "/evidence", requestId,
+            "yield".equals(terminator)
+                ? List.of("cpu-worker-started", "probe-started", "probe-completed",
+                    "cpu-worker-resumed", "cpu-worker-completed")
+                : List.of("cpu-worker-started", "cpu-worker-resumed", "cpu-worker-completed",
+                    "probe-started", "probe-completed"));
+    }
+
+    private void waitMarkerCount(String evidenceUrl, String requestId, String marker, int count)
+        throws Exception {
+        long deadline = System.nanoTime() + REQUEST_TIMEOUT.toNanos();
+        while (System.nanoTime() < deadline) {
+            int observed = 0;
+            for (String value : observedMarkers(evidenceUrl, requestId)) {
+                if (marker.equals(value)) observed++;
+            }
+            if (observed >= count) return;
+            Thread.sleep(100);
+        }
+        throw new IllegalStateException("timed out waiting for " + count + " " + marker);
+    }
+
     private void runTurnInterleave(
         ZLinkStreamConnector connector,
         String scenarioId,
@@ -151,20 +283,20 @@ public final class AutomaticTurnDispatchScenarioSupport {
     public void runBasicTerminator(ZLinkStreamConnector connector) throws Exception {
         runScenario(connector, "ATD-A1", List.of(
             "hold-started",
-            "probe-started",
-            "probe-completed",
             "hold-resumed",
-            "hold-completed"));
+            "hold-completed",
+            "probe-started",
+            "probe-completed"));
     }
 
     public void runAwaitTerminator(ZLinkStreamConnector connector) throws Exception {
         runScenario(connector, "ATD-A2", List.of(
             "await-started",
             "await-released",
-            "probe-started",
-            "probe-completed",
             "await-resumed",
-            "await-completed"));
+            "await-completed",
+            "probe-started",
+            "probe-completed"));
     }
 
     public void runContinuationContext(ZLinkStreamConnector connector) throws Exception {
@@ -249,10 +381,10 @@ public final class AutomaticTurnDispatchScenarioSupport {
         assertOrder(playEvidence, requestId, List.of(
             "worker-await-started",
             "worker-await-released",
-            "probe-started",
-            "probe-completed",
             "worker-await-resumed",
-            "worker-await-completed"));
+            "worker-await-completed",
+            "probe-started",
+            "probe-completed"));
     }
 
     public void runSameActorReentry(ZLinkStreamConnector connector) throws Exception {
@@ -403,7 +535,14 @@ public final class AutomaticTurnDispatchScenarioSupport {
                 50,
                 ISOLATION_DELAY_MILLIS))
             .metadata(metadata)
-            .submit();
+            .submit()
+            .toCompletableFuture()
+            .join();
+        awaitEvidenceMarker(
+            playEvidence + "/wait?marker=timer-await-released&subject="
+                + requestId + "&timeoutMs=30000",
+            requestId,
+            "timer-await-released");
         connector
             .send(new Contracts.TimerStartMsg(
                 requestId,
@@ -412,14 +551,16 @@ public final class AutomaticTurnDispatchScenarioSupport {
                 100,
                 0))
             .metadata(metadata)
-            .submit();
+            .submit()
+            .toCompletableFuture()
+            .join();
         assertOrder(playEvidence, requestId, List.of(
             "timer-await-started",
             "timer-await-released",
-            "timer-fast-started",
-            "timer-fast-completed",
             "timer-await-resumed",
-            "timer-await-completed"));
+            "timer-await-completed",
+            "timer-fast-started",
+            "timer-fast-completed"));
         connector
             .send(new Contracts.TimerStopMsg(requestId))
             .metadata(metadata)
@@ -528,10 +669,10 @@ public final class AutomaticTurnDispatchScenarioSupport {
         assertOrder(playEvidence, requestId, List.of(
             "actor-await-started",
             "actor-await-released",
-            "timer-fast-started",
-            "timer-fast-completed",
             "actor-await-resumed",
-            "actor-await-completed"));
+            "actor-await-completed",
+            "timer-fast-started",
+            "timer-fast-completed"));
         assertAllValuesContain(playEvidence, requestId, List.of(
             "actor-await-started",
             "actor-await-released",
@@ -572,10 +713,10 @@ public final class AutomaticTurnDispatchScenarioSupport {
         assertOrder(playEvidence, requestId, List.of(
             "timer-await-started",
             "timer-await-released",
-            "actor-fast-started",
-            "actor-fast-completed",
             "timer-await-resumed",
-            "timer-await-completed"));
+            "timer-await-completed",
+            "actor-fast-started",
+            "actor-fast-completed"));
         connector
             .send(new Contracts.TimerStopMsg(requestId))
             .metadata(timerMetadata)
@@ -596,67 +737,81 @@ public final class AutomaticTurnDispatchScenarioSupport {
         String targetSpot = requestId + "-target";
         String playAEvidence = options.playHttpEndpoint() + "/evidence";
         String playBEvidence = options.playBHttpEndpoint() + "/evidence";
-        Contracts.EnsureSpotRes owner = connector
-            .request(new Contracts.EnsureSpotReq(ownerSpot))
-            .metadata(Contracts.TARGET_NODE_RID_METADATA, Contracts.PLAY_NODE_A)
-            .timeout(REQUEST_TIMEOUT)
-            .submit(Contracts.EnsureSpotRes.class).toCompletableFuture().join();
-        ensure(ownerSpot.equals(owner.spotId()), "ATD-D2 owner spot mismatch");
-        ensure(Contracts.PLAY_NODE_A.equals(owner.nodeRid()), "ATD-D2 owner node mismatch");
-        Contracts.EnsureSpotRes target = connector
-            .request(new Contracts.EnsureSpotReq(targetSpot))
-            .metadata(Contracts.TARGET_NODE_RID_METADATA, Contracts.PLAY_NODE_B)
-            .timeout(REQUEST_TIMEOUT)
-            .submit(Contracts.EnsureSpotRes.class).toCompletableFuture().join();
-        ensure(targetSpot.equals(target.spotId()), "ATD-D2 target spot mismatch");
-        ensure(Contracts.PLAY_NODE_B.equals(target.nodeRid()), "ATD-D2 target node mismatch");
+        try {
+            setPlacementWeights(100, 0);
+            Contracts.EnsureSpotRes owner = connector
+                .request(new Contracts.EnsureSpotReq(ownerSpot))
+                .metadata(Contracts.TARGET_NODE_RID_METADATA, Contracts.PLAY_NODE_A)
+                .timeout(REQUEST_TIMEOUT)
+                .submit(Contracts.EnsureSpotRes.class).toCompletableFuture().join();
+            ensure(ownerSpot.equals(owner.spotRid()), "ATD-D2 owner spot mismatch");
+            ensure(Contracts.PLAY_NODE_A.equals(owner.nodeRid()), "ATD-D2 owner node mismatch");
 
-        Contracts.ScenarioRes reply = connector
-            .request(new Contracts.RemoteSpotAwaitReq(requestId, targetSpot, 350))
-            .metadata(Contracts.TARGET_NODE_RID_METADATA, Contracts.PLAY_NODE_A)
-            .metadata(Contracts.SPOT_RID_METADATA, ownerSpot)
-            .timeout(REQUEST_TIMEOUT)
-            .submit(Contracts.ScenarioRes.class).toCompletableFuture().join();
-        ensure("ATD-D2".equals(reply.scenarioId()), "ATD-D2 reply scenario mismatch");
-        ensure(requestId.equals(reply.requestId()), "ATD-D2 reply request mismatch");
-        ensure(Contracts.PLAY_NODE_A.equals(reply.result()), "ATD-D2 owner continuation node mismatch");
+            setPlacementWeights(0, 100);
+            Contracts.EnsureSpotRes target = connector
+                .request(new Contracts.EnsureSpotReq(targetSpot))
+                .metadata(Contracts.TARGET_NODE_RID_METADATA, Contracts.PLAY_NODE_B)
+                .timeout(REQUEST_TIMEOUT)
+                .submit(Contracts.EnsureSpotRes.class).toCompletableFuture().join();
+            ensure(targetSpot.equals(target.spotRid()), "ATD-D2 target spot mismatch");
+            ensure(Contracts.PLAY_NODE_B.equals(target.nodeRid()), "ATD-D2 target node mismatch");
 
-        assertOrder(playAEvidence, requestId, List.of(
-            "remote-await-started",
-            "remote-await-released",
-            "remote-await-resumed",
-            "remote-await-completed"));
-        assertAllValuesContain(playAEvidence, requestId, List.of(
-            "remote-await-started",
-            "remote-await-released",
-            "remote-await-resumed",
-            "remote-await-completed"), "spot=" + ownerSpot);
-        assertAllValuesContain(playAEvidence, requestId, List.of(
-            "remote-await-resumed",
-            "remote-await-completed"), "targetNode=" + Contracts.PLAY_NODE_B);
-        assertOrder(playBEvidence, requestId, List.of(
-            "await-started",
-            "await-released",
-            "await-resumed",
-            "await-completed"));
-        assertAllValuesContain(playBEvidence, requestId, List.of(
-            "await-started",
-            "await-released",
-            "await-resumed",
-            "await-completed"), "spot=" + targetSpot);
-        assertNoMarker(playBEvidence, requestId, "remote-await-resumed");
+            setPlacementWeights(100, 0);
+            Contracts.ScenarioRes reply = connector
+                .request(new Contracts.RemoteSpotAwaitReq(requestId, targetSpot, 350))
+                .metadata(Contracts.TARGET_NODE_RID_METADATA, Contracts.PLAY_NODE_A)
+                .metadata(Contracts.SPOT_RID_METADATA, ownerSpot)
+                .timeout(REQUEST_TIMEOUT)
+                .submit(Contracts.ScenarioRes.class).toCompletableFuture().join();
+            ensure("ATD-D2".equals(reply.scenarioId()), "ATD-D2 reply scenario mismatch");
+            ensure(requestId.equals(reply.requestId()), "ATD-D2 reply request mismatch");
+            ensure(Contracts.PLAY_NODE_A.equals(reply.result()), "ATD-D2 owner continuation node mismatch");
+
+            assertOrder(playAEvidence, requestId, List.of(
+                "remote-await-started",
+                "remote-await-released",
+                "remote-await-resumed",
+                "remote-await-completed"));
+            assertAllValuesContain(playAEvidence, requestId, List.of(
+                "remote-await-started",
+                "remote-await-released",
+                "remote-await-resumed",
+                "remote-await-completed"), "spot=" + ownerSpot);
+            assertAllValuesContain(playAEvidence, requestId, List.of(
+                "remote-await-resumed",
+                "remote-await-completed"), "targetNode=" + Contracts.PLAY_NODE_B);
+            assertOrder(playBEvidence, requestId, List.of(
+                "await-started",
+                "await-released",
+                "await-resumed",
+                "await-completed"));
+            assertAllValuesContain(playBEvidence, requestId, List.of(
+                "await-started",
+                "await-released",
+                "await-resumed",
+                "await-completed"), "spot=" + targetSpot);
+            assertNoMarker(playBEvidence, requestId, "remote-await-resumed");
+        } finally {
+            setPlacementWeights(100, 0);
+        }
     }
 
     public void runRouteBridgeAwait(ZLinkStreamConnector connector) throws Exception {
         String requestId = "atdd3-" + System.nanoTime();
         String spotRid = requestId + "-spot";
         String playBEvidence = options.playBHttpEndpoint() + "/evidence";
-        Contracts.EnsureSpotRes target = connector
-            .request(new Contracts.EnsureSpotReq(spotRid))
-            .metadata(Contracts.TARGET_NODE_RID_METADATA, Contracts.PLAY_NODE_B)
-            .timeout(REQUEST_TIMEOUT)
-            .submit(Contracts.EnsureSpotRes.class).toCompletableFuture().join();
-        ensure(spotRid.equals(target.spotId()), "ATD-D3 target spot mismatch");
+        setPlacementWeights(0, 100);
+        Contracts.EnsureSpotRes target;
+        try {
+            target = connector
+                .request(new Contracts.EnsureSpotReq(spotRid))
+                .metadata(Contracts.TARGET_NODE_RID_METADATA, Contracts.PLAY_NODE_B)
+                .timeout(REQUEST_TIMEOUT)
+                .submit(Contracts.EnsureSpotRes.class).toCompletableFuture().join();
+        } finally {
+            setPlacementWeights(100, 0);
+        }
+        ensure(spotRid.equals(target.spotRid()), "ATD-D3 target spot mismatch");
         ensure(Contracts.PLAY_NODE_B.equals(target.nodeRid()), "ATD-D3 target node mismatch");
 
         Map<String, String> metadata = Map.of(
@@ -677,10 +832,10 @@ public final class AutomaticTurnDispatchScenarioSupport {
         assertOrder(playBEvidence, requestId, List.of(
             "await-started",
             "await-released",
-            "probe-started",
-            "probe-completed",
             "await-resumed",
-            "await-completed"));
+            "await-completed",
+            "probe-started",
+            "probe-completed"));
         assertAllValuesContain(playBEvidence, requestId, List.of(
             "await-started",
             "await-released",
@@ -786,7 +941,7 @@ public final class AutomaticTurnDispatchScenarioSupport {
             .metadata(Contracts.TARGET_NODE_RID_METADATA, Contracts.PLAY_NODE_A)
             .timeout(REQUEST_TIMEOUT)
             .submit(Contracts.EnsureSpotRes.class).toCompletableFuture().join();
-        ensure(spotRid.equals(target.spotId()), "ATD-E1 spot mismatch");
+        ensure(spotRid.equals(target.spotRid()), "ATD-E1 spot mismatch");
         ensure(Contracts.PLAY_NODE_A.equals(target.nodeRid()), "ATD-E1 node mismatch");
 
         Map<String, String> metadata = Map.of(
@@ -831,7 +986,7 @@ public final class AutomaticTurnDispatchScenarioSupport {
             .metadata(Contracts.TARGET_NODE_RID_METADATA, Contracts.PLAY_NODE_A)
             .timeout(REQUEST_TIMEOUT)
             .submit(Contracts.EnsureSpotRes.class).toCompletableFuture().join();
-        ensure(spotRid.equals(target.spotId()), "ATD-E2 spot mismatch");
+        ensure(spotRid.equals(target.spotRid()), "ATD-E2 spot mismatch");
         ensure(Contracts.PLAY_NODE_A.equals(target.nodeRid()), "ATD-E2 node mismatch");
 
         Map<String, String> metadata = Map.of(
@@ -885,39 +1040,101 @@ public final class AutomaticTurnDispatchScenarioSupport {
         }
     }
 
+    public void runShutdownWaitAndRecovery(
+        ZLinkStreamConnector connector,
+        ZLinkStreamConnector recovery) throws Exception {
+        String requestId = options.requiredShutdownRequestId();
+        String spotRid = options.requiredShutdownSpotRid();
+        CompletionStage<Contracts.AwaitShutdownRes> pending = connector
+            .request(new Contracts.AwaitShutdownScenarioReq(requestId, spotRid, 30_000))
+            .timeout(Duration.ofSeconds(90))
+            .submit(Contracts.AwaitShutdownRes.class);
+        awaitEvidenceMarker(
+            options.playHttpEndpoint() + "/evidence/wait?marker=await-released&subject="
+                + requestId + "&timeoutMs=30000",
+            requestId,
+            "await-released");
+        touchControlFile("atd-e3-ready-to-stop-play");
+        expectFailure(pending, "ATD-E3 pending await unexpectedly completed");
+        waitForControlFile("atd-e3-play-restarted");
+        runShutdownRecovery(recovery, requestId, spotRid);
+    }
+
     public void runShutdownRecovery(ZLinkStreamConnector connector) throws Exception {
         String requestId = options.requiredShutdownRequestId();
         String spotRid = options.requiredShutdownSpotRid();
+        runShutdownRecovery(connector, requestId, spotRid);
+    }
+
+    private void runShutdownRecovery(
+        ZLinkStreamConnector connector,
+        String requestId,
+        String spotRid) throws Exception {
         Contracts.AwaitShutdownRes result = connector
             .request(new Contracts.AwaitShutdownRecoveryReq(requestId, spotRid))
             .timeout(REQUEST_TIMEOUT)
             .submit(Contracts.AwaitShutdownRes.class).toCompletableFuture().join();
         ensure("atd.e3-shutdown-recovery".equals(result.operation()), "ATD-E3 recovery operation mismatch");
         ensure(requestId.equals(result.requestId()), "ATD-E3 recovery request mismatch");
-        ensure(spotRid.equals(result.spotId()), "ATD-E3 recovery spot mismatch");
+        ensure(spotRid.equals(result.spotRid()), "ATD-E3 recovery spot mismatch");
         assertOrder(options.playHttpEndpoint() + "/evidence", requestId, List.of(
             "probe-started",
             "probe-completed"));
         System.out.println("automatic-turn-dispatch shutdown recovery result=passed");
     }
 
-    public void runReadinessProbe(ZLinkStreamConnector connector) throws Exception {
-        Contracts.EnsureSpotRes playA = connector
-            .request(new Contracts.EnsureSpotReq(Contracts.TARGET_SPOT))
-            .metadata(Contracts.TARGET_NODE_RID_METADATA, Contracts.PLAY_NODE_A)
-            .timeout(REQUEST_TIMEOUT)
-            .submit(Contracts.EnsureSpotRes.class).toCompletableFuture().join();
-        ensure(Contracts.TARGET_SPOT.equals(playA.spotId()), "readiness play-a spot mismatch");
-        ensure(Contracts.PLAY_NODE_A.equals(playA.nodeRid()), "readiness play-a node mismatch");
+    private void touchControlFile(String fileName) throws Exception {
+        Path directory = Path.of(options.requiredControlDirectory());
+        Files.createDirectories(directory);
+        Files.writeString(directory.resolve(fileName), "ready\n");
+    }
 
-        String playBSpot = Contracts.TARGET_SPOT + "-readiness-b";
-        Contracts.EnsureSpotRes playB = connector
-            .request(new Contracts.EnsureSpotReq(playBSpot))
-            .metadata(Contracts.TARGET_NODE_RID_METADATA, Contracts.PLAY_NODE_B)
-            .timeout(REQUEST_TIMEOUT)
-            .submit(Contracts.EnsureSpotRes.class).toCompletableFuture().join();
-        ensure(playBSpot.equals(playB.spotId()), "readiness play-b spot mismatch");
-        ensure(Contracts.PLAY_NODE_B.equals(playB.nodeRid()), "readiness play-b node mismatch");
+    private void waitForControlFile(String fileName) throws Exception {
+        Path file = Path.of(options.requiredControlDirectory()).resolve(fileName);
+        long deadline = System.nanoTime() + Duration.ofSeconds(70).toNanos();
+        while (System.nanoTime() < deadline) {
+            if (Files.exists(file)) {
+                return;
+            }
+            Thread.sleep(100);
+        }
+        throw new IllegalStateException("timed out waiting for ATD-E3 control file " + file);
+    }
+
+    private static void expectFailure(
+        CompletionStage<?> stage,
+        String unexpectedCompletionMessage) {
+        try {
+            stage.toCompletableFuture().get(20, TimeUnit.SECONDS);
+        } catch (Exception expected) {
+            return;
+        }
+        throw new IllegalStateException(unexpectedCompletionMessage);
+    }
+
+    public void runReadinessProbe(ZLinkStreamConnector connector) throws Exception {
+        try {
+            setPlacementWeights(100, 0);
+            Contracts.EnsureSpotRes playA = connector
+                .request(new Contracts.EnsureSpotReq(Contracts.TARGET_SPOT))
+                .metadata(Contracts.TARGET_NODE_RID_METADATA, Contracts.PLAY_NODE_A)
+                .timeout(REQUEST_TIMEOUT)
+                .submit(Contracts.EnsureSpotRes.class).toCompletableFuture().join();
+            ensure(Contracts.TARGET_SPOT.equals(playA.spotRid()), "readiness play-a spot mismatch");
+            ensure(Contracts.PLAY_NODE_A.equals(playA.nodeRid()), "readiness play-a node mismatch");
+
+            setPlacementWeights(0, 100);
+            String playBSpot = Contracts.TARGET_SPOT + "-readiness-b";
+            Contracts.EnsureSpotRes playB = connector
+                .request(new Contracts.EnsureSpotReq(playBSpot))
+                .metadata(Contracts.TARGET_NODE_RID_METADATA, Contracts.PLAY_NODE_B)
+                .timeout(REQUEST_TIMEOUT)
+                .submit(Contracts.EnsureSpotRes.class).toCompletableFuture().join();
+            ensure(playBSpot.equals(playB.spotRid()), "readiness play-b spot mismatch");
+            ensure(Contracts.PLAY_NODE_B.equals(playB.nodeRid()), "readiness play-b node mismatch");
+        } finally {
+            setPlacementWeights(100, 0);
+        }
     }
 
     private void joinActor(
@@ -935,8 +1152,14 @@ public final class AutomaticTurnDispatchScenarioSupport {
         String requestId,
         String actorId,
         String targetSpotRid) throws Exception {
-        return requestActorJoin(connector, requestId, actorId, targetSpotRid)
+        Contracts.ActorJoinRes reply = requestActorJoin(connector, requestId, actorId, targetSpotRid)
             .toCompletableFuture().join();
+        awaitEvidenceMarker(
+            options.playHttpEndpoint() + "/evidence/wait?marker=actor-target-joined&subject="
+                + actorId + "&timeoutMs=30000",
+            actorId,
+            "actor-target-joined");
+        return reply;
     }
 
     private CompletionStage<Contracts.ActorJoinRes> requestActorJoin(
@@ -957,7 +1180,7 @@ public final class AutomaticTurnDispatchScenarioSupport {
             .metadata(Contracts.TARGET_NODE_RID_METADATA, Contracts.PLAY_NODE_A)
             .timeout(REQUEST_TIMEOUT)
             .submit(Contracts.EnsureSpotRes.class).toCompletableFuture().join();
-        ensure(spotRid.equals(ensured.spotId()), "ensured spot mismatch: " + spotRid);
+        ensure(spotRid.equals(ensured.spotRid()), "ensured spot mismatch: " + spotRid);
     }
 
     private void bindActors(
@@ -1111,6 +1334,10 @@ public final class AutomaticTurnDispatchScenarioSupport {
     }
 
     private String get(String url) throws Exception {
+        return get(url, Duration.ofSeconds(3));
+    }
+
+    private String get(String url, Duration timeout) throws Exception {
         URI target = URI.create(url);
         String baseUrl = target.getScheme() + "://" + target.getRawAuthority();
         String path = target.getRawPath();
@@ -1118,7 +1345,7 @@ public final class AutomaticTurnDispatchScenarioSupport {
             path += "?" + target.getRawQuery();
         }
         RawHttpResponse response = ZLinkHttpClient.create(baseUrl)
-            .timeout(Duration.ofSeconds(3))
+            .timeout(timeout)
             .get(path)
             .submitRaw()
             .toCompletableFuture()
@@ -1126,6 +1353,37 @@ public final class AutomaticTurnDispatchScenarioSupport {
         ensure(response.status() >= 200 && response.status() < 300,
             "GET " + url + " returned " + response.status());
         return response.body();
+    }
+
+    private String post(String url, Duration timeout) throws Exception {
+        URI target = URI.create(url);
+        String baseUrl = target.getScheme() + "://" + target.getRawAuthority();
+        String path = target.getRawPath();
+        if (target.getRawQuery() != null) {
+            path += "?" + target.getRawQuery();
+        }
+        RawHttpResponse response = ZLinkHttpClient.create(baseUrl)
+            .timeout(timeout)
+            .post(path)
+            .submitRaw()
+            .toCompletableFuture()
+            .join();
+        ensure(response.status() >= 200 && response.status() < 300,
+            "HTTP write " + url + " returned " + response.status());
+        return response.body();
+    }
+
+    private void setPlacementWeights(int playAWeight, int playBWeight) throws Exception {
+        post(options.playHttpEndpoint() + "/placement-weight?weight=" + playAWeight,
+            REQUEST_TIMEOUT);
+        post(options.playBHttpEndpoint() + "/placement-weight?weight=" + playBWeight,
+            REQUEST_TIMEOUT);
+    }
+
+    private void awaitEvidenceMarker(String url, String subject, String marker) throws Exception {
+        JsonNode result = JSON.readTree(get(url, REQUEST_TIMEOUT));
+        ensure(result.path("matched").asBoolean(false),
+            "timed out waiting for " + marker + " for " + subject);
     }
 
     private void ensure(boolean condition, String message) {

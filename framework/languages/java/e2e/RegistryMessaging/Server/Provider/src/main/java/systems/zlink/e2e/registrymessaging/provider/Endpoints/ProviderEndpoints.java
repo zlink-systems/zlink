@@ -7,12 +7,17 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.beans.factory.ObjectProvider;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.e2e.registrymessaging.provider.Infrastructure.ScenarioState;
 import systems.zlink.e2e.registrymessaging.shared.Contracts;
 import systems.zlink.e2e.registrymessaging.shared.FailureEvidence;
 import systems.zlink.framework.channels.ZLinkClient;
 import systems.zlink.framework.channels.ZLinkRouteClient;
+import systems.zlink.framework.actors.ZLinkActorClient;
+import systems.zlink.framework.actors.ZLinkActorManager;
+import systems.zlink.framework.spots.ZLinkSpotManager;
+import systems.zlink.e2e.registrymessaging.shared.IdentityOperations;
 import systems.zlink.framework.spring.internal.runtime.ZLinkFrameworkLifecycle;
 
 @RestController
@@ -21,16 +26,25 @@ public final class ProviderEndpoints {
     private final ZLinkClient client;
     private final ZLinkRouteClient routes;
     private final ZLinkFrameworkLifecycle drain;
+    private final ObjectProvider<ZLinkActorManager> actors;
+    private final ObjectProvider<ZLinkSpotManager> spots;
+    private final ObjectProvider<ZLinkActorClient> actorClient;
 
     public ProviderEndpoints(
         ScenarioState state,
         ZLinkClient client,
         ZLinkRouteClient routes,
-        ZLinkFrameworkLifecycle drain) {
+        ZLinkFrameworkLifecycle drain,
+        ObjectProvider<ZLinkActorManager> actors,
+        ObjectProvider<ZLinkSpotManager> spots,
+        ObjectProvider<ZLinkActorClient> actorClient) {
         this.state = state;
         this.client = client;
         this.routes = routes;
         this.drain = drain;
+        this.actors = actors;
+        this.spots = spots;
+        this.actorClient = actorClient;
     }
 
     @GetMapping("/health")
@@ -55,6 +69,62 @@ public final class ProviderEndpoints {
     @GetMapping("/evidence")
     public List<String> evidence() {
         return state.lines();
+    }
+
+    @PostMapping("/identity/create")
+    public CompletionStage<Contracts.IdentityCreateRes> identityCreate(
+        @RequestBody Contracts.IdentityCreateReq request) {
+        Contracts.IdentityCreateRes result = IdentityOperations.create(
+                state.providerRid(), request, actors.getIfAvailable(), spots.getIfAvailable())
+            .toCompletableFuture().join();
+        state.record("IdentityCreate", request.marker() + ":" + result.actorState()
+            + ":" + result.spotState());
+        return java.util.concurrent.CompletableFuture.completedFuture(result);
+    }
+
+    @PostMapping("/identity/ping")
+    public CompletionStage<Contracts.IdentityPingRes> identityPing(
+        @RequestBody Contracts.IdentityPingReq request) {
+        return IdentityOperations.ping(
+                request, actorClient.getIfAvailable(), routes)
+            .thenApply(result -> {
+                state.record("IdentityPing", request.marker());
+                return result;
+            });
+    }
+
+    @PostMapping("/identity/ping-actor")
+    public CompletionStage<Contracts.IdentityActorPingRes> identityActorPing(
+        @RequestBody Contracts.IdentityActorDirectReq request) {
+        return IdentityOperations.pingActor(request, actorClient.getIfAvailable())
+            .thenApply(result -> {
+                state.record("IdentityActorPing", request.marker());
+                return result;
+            });
+    }
+
+    @PostMapping("/identity/ping-spot")
+    public CompletionStage<Contracts.IdentitySpotPingRes> identitySpotPing(
+        @RequestBody Contracts.IdentitySpotDirectReq request) {
+        return IdentityOperations.pingSpot(request, routes)
+            .thenApply(result -> {
+                state.record("IdentitySpotPing", request.marker());
+                return result;
+            });
+    }
+
+    @PostMapping("/profile/gate/reset")
+    public java.util.Map<String, String> resetProfileGate(
+        systems.zlink.e2e.registrymessaging.provider.Infrastructure.ProfileGate gate) {
+        gate.reset();
+        return java.util.Map.of("status", "closed");
+    }
+
+    @PostMapping("/profile/gate/release")
+    public java.util.Map<String, String> releaseProfileGate(
+        systems.zlink.e2e.registrymessaging.provider.Infrastructure.ProfileGate gate) {
+        gate.open();
+        return java.util.Map.of("status", "released");
     }
 
     @PostMapping("/evidence/clear")
@@ -94,6 +164,17 @@ public final class ProviderEndpoints {
         return routes.requestToNode(Contracts.ROUTE_CHANNEL, RoutingId.from("api-b"), request)
             .timeout(Duration.ofSeconds(5))
             .submit(Contracts.RouteRes.class);
+    }
+
+    @PostMapping("/profile/route/payload")
+    public CompletionStage<Contracts.PayloadRes> routePayload(
+        @RequestBody Contracts.PayloadReq request) {
+        return routes.requestToNode(
+                Contracts.ROUTE_CHANNEL,
+                RoutingId.from("api-b"),
+                request)
+            .timeout(Duration.ofSeconds(10))
+            .submit(Contracts.PayloadRes.class);
     }
 
     @PostMapping("/profile/route/missing")

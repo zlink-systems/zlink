@@ -1509,14 +1509,11 @@ export class ZLinkChannelSocketRegistry {
     }
     const router = this.adapter.createRouterSocket(this.context);
     router.setChannelName(routerChannelId);
-    const routerOptions: unknown = 'options' in router ? router.options : undefined;
     if (
       (routeChannel.manualConnections?.length ?? 0) > 0 &&
-      typeof routerOptions === 'object' &&
-      routerOptions !== null &&
-      'probe' in routerOptions
+      typeof router.setProbe === 'function'
     ) {
-      (routerOptions as { probe: boolean }).probe = true;
+      router.setProbe(true);
     }
     router.setRoutingId(
       routeChannel.routingId

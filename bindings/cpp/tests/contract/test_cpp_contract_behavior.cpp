@@ -107,6 +107,41 @@ void test_pair_recv_nonblocking_returns_empty_without_data ()
         assert (errno == EAGAIN || errno == EWOULDBLOCK);
 }
 
+void test_receive_reuses_caller_storage_capacity ()
+{
+    zlink::context_t ctx;
+    zlink::pair_socket_t sender (ctx);
+    zlink::pair_socket_t receiver (ctx);
+    zlink::socket_monitor_t sender_monitor = sender.monitor_open ();
+    zlink::socket_monitor_t receiver_monitor = receiver.monitor_open ();
+
+    const std::string endpoint = zlink_cpp_contract::unique_inproc ("receive-storage");
+    sender.bind (endpoint);
+    receiver.connect (endpoint);
+    assert (zlink_cpp_contract::wait_for_socket_monitor_event (
+      sender_monitor, static_cast<uint64_t> (zlink::monitor_event::connection_ready), 2000));
+    assert (zlink_cpp_contract::wait_for_socket_monitor_event (
+      receiver_monitor, static_cast<uint64_t> (zlink::monitor_event::connection_ready), 2000));
+
+    zlink::message_t first = zlink_cpp_contract::make_message ("first");
+    zlink::message_t second = zlink_cpp_contract::make_message ("second");
+    assert (receiver.send ().message (first).message (second).submit ());
+
+    zlink::received_t received;
+    assert (sender.recv (received) == 0);
+    assert (received.parts ().size () == 2);
+    const std::size_t retained_capacity = received.parts ().capacity ();
+    assert (retained_capacity >= 2);
+    received.close ();
+
+    zlink::message_t third = zlink_cpp_contract::make_message ("third");
+    zlink::message_t fourth = zlink_cpp_contract::make_message ("fourth");
+    assert (receiver.send ().message (third).message (fourth).submit ());
+    assert (sender.recv (received) == 0);
+    assert (received.parts ().size () == 2);
+    assert (received.parts ().capacity () >= retained_capacity);
+}
+
 void test_sub_subscribe_nonblocking_returns_empty_without_data ()
 {
     zlink::context_t ctx;
@@ -436,6 +471,7 @@ void test_async_result_wait_pumps_progress ()
 int main ()
 {
     test_pair_recv_nonblocking_returns_empty_without_data ();
+    test_receive_reuses_caller_storage_capacity ();
     test_sub_subscribe_nonblocking_returns_empty_without_data ();
     test_xpub_receive_subscription_event_nonblocking_returns_empty_without_data ();
     test_pair_send_without_peer_preserves_submit_surface ();

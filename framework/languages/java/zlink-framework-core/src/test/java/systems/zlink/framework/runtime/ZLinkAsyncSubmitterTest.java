@@ -29,6 +29,7 @@ import systems.zlink.contracts.errors.ZlinkCloseException;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
+import systems.zlink.framework.runtime.internal.service.ZLinkClassicFanoutLiveness;
 
 final class ZLinkAsyncSubmitterTest {
     @Test
@@ -378,7 +379,10 @@ final class ZLinkAsyncSubmitterTest {
         @Override public void setRoutingId(RoutingId routingId) { }
         @Override public boolean publish(String topic, List<Message> parts, SendFlags flags) {
             owner.flags = flags;
-            owner.submissions++;
+            if (!ZLinkClassicFanoutLiveness.isReservedTopic(
+                    topic.getBytes(StandardCharsets.UTF_8))) {
+                owner.submissions++;
+            }
             return true;
         }
         @Override public void close() { }

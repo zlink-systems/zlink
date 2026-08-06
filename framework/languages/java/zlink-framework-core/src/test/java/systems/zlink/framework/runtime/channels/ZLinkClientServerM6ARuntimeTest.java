@@ -126,23 +126,35 @@ final class ZLinkClientServerM6ARuntimeTest {
 
         long base = System.nanoTime();
         sockets.tickClientServerLiveness(
-            base + TimeUnit.SECONDS.toNanos(6),
-            Duration.ofSeconds(1));
+            base + TimeUnit.SECONDS.toNanos(6));
         ZLinkClientServerServiceWire.LivenessProbe probe =
             (ZLinkClientServerServiceWire.LivenessProbe)
                 ZLinkClientServerServiceWire.decode(
-                    dealer.requests.get(0));
-        dealer.reply(0, ZLinkClientServerServiceWire.encodeLivenessAck(
-            probe.probeId() + 1));
+                    dealer.sent.get(0));
+        assertTrue(dealer.requests.isEmpty());
+        dealer.inbound.add(received(
+            ZLinkClientServerServiceWire.encodeLivenessAck(
+                probe.probeId() + 1)));
         sockets.tickClientServerLiveness(
-            base + TimeUnit.SECONDS.toNanos(16),
-            Duration.ofSeconds(1));
+            base + TimeUnit.SECONDS.toNanos(16));
         assertNull(sockets.clientForOutbound("orders"));
 
         ZLinkChannelSocketRegistry.AdmissionFence nextFence =
             sockets.clientServerTransportReady("automatic");
         assertTrue(sockets.admitClientServerConnection(
             "automatic", value, nextFence));
+        long nextBase = System.nanoTime();
+        sockets.tickClientServerLiveness(
+            nextBase + TimeUnit.SECONDS.toNanos(6));
+        ZLinkClientServerServiceWire.LivenessProbe nextProbe =
+            (ZLinkClientServerServiceWire.LivenessProbe)
+                ZLinkClientServerServiceWire.decode(dealer.sent.get(1));
+        dealer.inbound.add(received(
+            ZLinkClientServerServiceWire.encodeLivenessAck(
+                nextProbe.probeId())));
+        sockets.tickClientServerLiveness(System.nanoTime());
+        assertSame(dealer, sockets.clientForOutbound("orders"));
+
         ZLinkClientServerServerDescriptor updated =
             descriptor(
                 "orders", value.serverRid(), 7, 2,
@@ -150,8 +162,7 @@ final class ZLinkClientServerM6ARuntimeTest {
         dealer.inbound.add(received(
             ZLinkClientServerServiceWire.encodeUpdate(
                 updated, Integer.MAX_VALUE)));
-        sockets.tickClientServerLiveness(
-            System.nanoTime(), Duration.ofSeconds(1));
+        sockets.tickClientServerLiveness(System.nanoTime());
         assertEquals(
             25,
             sockets.clientServerConnectionDescriptor(
@@ -164,8 +175,7 @@ final class ZLinkClientServerM6ARuntimeTest {
         dealer.inbound.add(received(
             ZLinkClientServerServiceWire.encodeUpdate(
                 conflict, Integer.MAX_VALUE)));
-        sockets.tickClientServerLiveness(
-            System.nanoTime(), Duration.ofSeconds(1));
+        sockets.tickClientServerLiveness(System.nanoTime());
         assertNull(sockets.clientForOutbound("orders"));
     }
 
@@ -409,16 +419,14 @@ final class ZLinkClientServerM6ARuntimeTest {
 
         long base = System.nanoTime();
         sockets.tickClientServerLiveness(
-            base + TimeUnit.SECONDS.toNanos(6),
-            Duration.ofSeconds(1));
+            base + TimeUnit.SECONDS.toNanos(6));
         ZLinkClientServerServiceWire.LivenessProbe probe =
             (ZLinkClientServerServiceWire.LivenessProbe)
                 ZLinkClientServerServiceWire.decode(
                     router.sent.get(0));
         router.acceptSend = false;
         sockets.tickClientServerLiveness(
-            base + TimeUnit.SECONDS.toNanos(12),
-            Duration.ofSeconds(1));
+            base + TimeUnit.SECONDS.toNanos(12));
         ZLinkClientServerServiceWire.LivenessProbe retry =
             (ZLinkClientServerServiceWire.LivenessProbe)
                 ZLinkClientServerServiceWire.decode(
@@ -436,8 +444,7 @@ final class ZLinkClientServerM6ARuntimeTest {
                 Optional.empty(),
                 List.of(wrongAck)));
         sockets.tickClientServerLiveness(
-            base + TimeUnit.SECONDS.toNanos(16),
-            Duration.ofSeconds(1));
+            base + TimeUnit.SECONDS.toNanos(16));
         assertEquals(List.of(client), router.disconnected);
     }
 
@@ -699,9 +706,8 @@ final class ZLinkClientServerM6ARuntimeTest {
         implements ZLinkBackendDealerSocket {
         private final Deque<ZLinkBackendReceived> inbound =
             new ArrayDeque<>();
+        private final List<byte[]> sent = new ArrayList<>();
         private final List<byte[]> requests = new ArrayList<>();
-        private final List<ZLinkBackendRequestCallback> callbacks =
-            new ArrayList<>();
 
         @Override public String name() {
             return "controlled";
@@ -722,6 +728,7 @@ final class ZLinkClientServerM6ARuntimeTest {
         @Override public boolean send(
             List<Message> parts,
             SendFlags flags) {
+            sent.add(parts.get(0).toByteArray());
             return true;
         }
 
@@ -731,7 +738,6 @@ final class ZLinkClientServerM6ARuntimeTest {
             SendFlags flags,
             Duration timeout) {
             requests.add(parts.get(0).toByteArray());
-            callbacks.add(callback);
             return true;
         }
 
@@ -742,10 +748,6 @@ final class ZLinkClientServerM6ARuntimeTest {
 
         @Override public boolean waitForReadable(Duration timeout) {
             return !inbound.isEmpty();
-        }
-
-        void reply(int index, byte[] frame) {
-            callbacks.get(index).handle(received(frame));
         }
 
         @Override public void close() {

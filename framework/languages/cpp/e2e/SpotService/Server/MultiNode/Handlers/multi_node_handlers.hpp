@@ -36,18 +36,11 @@ inline const char *multi_node_route_channel_for (const std::string &node_rid)
 }
 
 inline e2e::state_res_t request_multi_node_state (zlink::framework::route_client_t &routes,
-                                                  zlink::framework::spot_handle_resolver_t &handles,
                                                   const std::string &spot_id,
                                                   int delta)
 {
-    auto handle = handles.resolve_spot_handle ((spot_id))
-                    .result ()
-                    .value ();
-    if (!handle) {
-        throw std::runtime_error ("multi-node spot '" + spot_id + "' has no live location row");
-    }
     auto reply = routes
-                   .request_to_spot (*handle, e2e::state_req_t{.op = "add", .amount = delta})
+                   .request_to_spot (spot_id, e2e::state_req_t{.op = "add", .amount = delta})
                    .timeout (std::chrono::milliseconds (3000))
                    .submit<e2e::state_res_t> ()
                    .result ();
@@ -71,7 +64,7 @@ class multi_node_route_ping_handler_t
 
     e2e::channel_control_ping_res_t handle (
       const e2e::channel_control_ping_req_t &request,
-      const zlink::framework::route_handler_context_t &)
+      const zlink::framework::route_message_context_t &)
     {
         return {.node_rid = _state.node_rid, .value = request.value};
     }
@@ -123,14 +116,13 @@ class multi_node_create_local_handler_t
 {
   public:
     using dependency_types = zlink::framework::dependency_list_t<
-      scenario_state_t, zlink::framework::spot_node_manager_t, zlink::framework::route_client_t>;
+      scenario_state_t, zlink::framework::spot_manager_t>;
     using request_type = e2e::multi_node_create_spot_req_t;
     using reply_type = e2e::multi_node_create_spot_res_t;
 
     multi_node_create_local_handler_t (scenario_state_t &state,
-                                       zlink::framework::spot_node_manager_t &spots,
-                                       zlink::framework::route_client_t &routes) :
-        _state (state), _spots (spots), _routes (routes)
+                                       zlink::framework::spot_manager_t &spots) :
+        _state (state), _spots (spots)
     {
     }
 
@@ -142,7 +134,7 @@ class multi_node_create_local_handler_t
 
     e2e::multi_node_create_spot_res_t handle (
       const e2e::multi_node_create_spot_req_t &request,
-      const zlink::framework::route_handler_context_t &)
+      const zlink::framework::route_message_context_t &)
     {
         return create_spot (request);
     }
@@ -152,11 +144,19 @@ class multi_node_create_local_handler_t
       const e2e::multi_node_create_spot_req_t &request)
     {
         const auto rid = (request.spot_id);
-        const auto created =
-          _spots.get_or_create_spot (multi_node_spot_name_for (_state.node_rid), rid, request);
+        auto created =
+          _spots.get_or_create (rid, multi_node_spot_name_for (_state.node_rid))
+            .creation_request (request)
+            .submit ()
+            .result ();
+        if (!created) {
+            throw zlink::framework::framework_exception_t (
+              created.error_kind (),
+              created.error () ? created.error ()->what () : "multi-node Spot creation failed");
+        }
         const auto state =
-          created.state == zlink::framework::spot_create_state_t::created ? "created"
-                                                                          : "existing";
+          created.value ().state == zlink::framework::spot_create_state_t::created ? "created"
+                                                                                    : "existing";
         _state.record ("MultiCreateSpot", {}, request.spot_id, state);
         return {.spot_id = request.spot_id,
                 .node_rid = _state.node_rid,
@@ -165,8 +165,7 @@ class multi_node_create_local_handler_t
     }
 
     scenario_state_t &_state;
-    zlink::framework::spot_node_manager_t &_spots;
-    zlink::framework::route_client_t &_routes;
+    zlink::framework::spot_manager_t &_spots;
 };
 
 /* Spot-addressed messaging is a mesh member's surface: a spot handle carries
@@ -179,27 +178,23 @@ class multi_node_create_local_handler_t
 class multi_node_state_member_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<zlink::framework::route_client_t,
-                                          zlink::framework::spot_handle_resolver_t>;
+    using dependency_types = zlink::framework::dependency_list_t<zlink::framework::route_client_t>;
     using request_type = e2e::multi_node_state_route_req_t;
     using reply_type = e2e::state_res_t;
 
-    multi_node_state_member_handler_t (zlink::framework::route_client_t &routes,
-                                       zlink::framework::spot_handle_resolver_t &handles) :
-        _routes (routes), _handles (handles)
+    explicit multi_node_state_member_handler_t (zlink::framework::route_client_t &routes) :
+        _routes (routes)
     {
     }
 
     e2e::state_res_t handle (const e2e::multi_node_state_route_req_t &request,
-                             const zlink::framework::route_handler_context_t &)
+                             const zlink::framework::route_message_context_t &)
     {
-        return request_multi_node_state (_routes, _handles, request.spot_id, request.delta);
+        return request_multi_node_state (_routes, request.spot_id, request.delta);
     }
 
   private:
     zlink::framework::route_client_t &_routes;
-    zlink::framework::spot_handle_resolver_t &_handles;
 };
 
 class multi_node_state_route_handler_t
@@ -207,15 +202,13 @@ class multi_node_state_route_handler_t
   public:
     using dependency_types =
       zlink::framework::dependency_list_t<scenario_state_t,
-                                          zlink::framework::route_client_t,
-                                          zlink::framework::spot_handle_resolver_t>;
+                                          zlink::framework::route_client_t>;
     using request_type = e2e::multi_node_state_route_req_t;
     using reply_type = e2e::state_res_t;
 
     multi_node_state_route_handler_t (scenario_state_t &state,
-                                      zlink::framework::route_client_t &routes,
-                                      zlink::framework::spot_handle_resolver_t &handles) :
-        _state (state), _routes (routes), _handles (handles)
+                                      zlink::framework::route_client_t &routes) :
+        _state (state), _routes (routes)
     {
     }
 
@@ -238,7 +231,6 @@ class multi_node_state_route_handler_t
   private:
     scenario_state_t &_state;
     zlink::framework::route_client_t &_routes;
-    zlink::framework::spot_handle_resolver_t &_handles;
 };
 
 class multi_node_create_user_local_handler_t
@@ -246,10 +238,10 @@ class multi_node_create_user_local_handler_t
   public:
     using dependency_types =
       zlink::framework::dependency_list_t<scenario_state_t,
-                                          zlink::framework::spot_node_manager_t>;
+                                          zlink::framework::spot_manager_t>;
 
     multi_node_create_user_local_handler_t (scenario_state_t &state,
-                                            zlink::framework::spot_node_manager_t &spots) :
+                                            zlink::framework::spot_manager_t &spots) :
         _state (state), _spots (spots)
     {
     }
@@ -258,25 +250,34 @@ class multi_node_create_user_local_handler_t
     {
         const auto request = nlohmann::json::parse (http.body).get<e2e::create_spot_req_t> ();
         const auto rid = (request.spot_id);
-        const auto created =
-          _spots.get_or_create_spot (multi_node_spot_name_for (_state.node_rid), rid, request);
+        auto created =
+          _spots.get_or_create (rid, multi_node_spot_name_for (_state.node_rid))
+            .creation_request (request)
+            .submit ()
+            .result ();
+        if (!created) {
+            throw zlink::framework::framework_exception_t (
+              created.error_kind (),
+              created.error () ? created.error ()->what () : "multi-node user Spot creation failed");
+        }
         const auto state =
-          created.state == zlink::framework::spot_create_state_t::created ? "created"
-                                                                          : "existing";
+          created.value ().state == zlink::framework::spot_create_state_t::created ? "created"
+                                                                                    : "existing";
         _state.record ("CreateUserSpot", {}, request.spot_id, state);
 
         zlink::framework::http_response_t response;
         response.body = nlohmann::json (e2e::create_spot_res_t{
                           .spot_id = request.spot_id,
                           .owner_node_rid = _state.node_rid,
-                          .created = created.state == zlink::framework::spot_create_state_t::created})
+                          .created = created.value ().state
+                                     == zlink::framework::spot_create_state_t::created})
                           .dump ();
         return response;
     }
 
   private:
     scenario_state_t &_state;
-    zlink::framework::spot_node_manager_t &_spots;
+    zlink::framework::spot_manager_t &_spots;
 };
 
 class multi_node_spot_only_mesh_handler_t
@@ -284,10 +285,10 @@ class multi_node_spot_only_mesh_handler_t
   public:
     using dependency_types =
       zlink::framework::dependency_list_t<scenario_state_t,
-                                          zlink::framework::spot_node_manager_t>;
+                                          zlink::framework::spot_manager_t>;
 
     multi_node_spot_only_mesh_handler_t (scenario_state_t &state,
-                                         zlink::framework::spot_node_manager_t &spots) :
+                                         zlink::framework::spot_manager_t &spots) :
         _state (state), _spots (spots)
     {
     }
@@ -296,7 +297,16 @@ class multi_node_spot_only_mesh_handler_t
     {
         const auto request = nlohmann::json::parse (http.body).get<e2e::spot_only_mesh_req_t> ();
         const auto rid = (request.source_spot_id);
-        (void) _spots.get_or_create_spot (multi_node_spot_name_for (_state.node_rid), rid, request);
+        auto created =
+          _spots.get_or_create (rid, multi_node_spot_name_for (_state.node_rid))
+            .creation_request (request)
+            .submit ()
+            .result ();
+        if (!created) {
+            throw zlink::framework::framework_exception_t (
+              created.error_kind (),
+              created.error () ? created.error ()->what () : "multi-node Spot creation failed");
+        }
         const auto value_marker = "marker=" + request.marker;
         auto snapshot = _state.wait_until (
           [&] (const e2e::evidence_snapshot_t &current) {
@@ -334,7 +344,7 @@ class multi_node_spot_only_mesh_handler_t
 
   private:
     scenario_state_t &_state;
-    zlink::framework::spot_node_manager_t &_spots;
+    zlink::framework::spot_manager_t &_spots;
 };
 
 class multi_node_spot_only_join_handler_t
@@ -365,19 +375,7 @@ class multi_node_spot_only_join_handler_t
               bound.error_kind (),
               bound.error () ? bound.error ()->what () : "spot-only actor bind failed");
         }
-        auto entry_joined =
-          bound.value ()
-            .context ()
-            .join_entry_spot (zlink::framework::node_rid_t::from_string (_state.node_rid),
-                              zlink::framework::message_t {})
-            .async ()
-            .result ();
-        if (!entry_joined) {
-            throw zlink::framework::framework_exception_t (
-              entry_joined.error_kind (),
-              entry_joined.error () ? entry_joined.error ()->what ()
-                                    : "spot-only entry SPOT join failed");
-        }
+        bound.value ().context ().join_entry_spot ().defer ();
         auto current = _actors.find (request.actor_id);
         if (!current) {
             throw zlink::framework::framework_exception_t (

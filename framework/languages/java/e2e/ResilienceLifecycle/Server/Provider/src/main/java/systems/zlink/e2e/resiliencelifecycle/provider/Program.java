@@ -17,7 +17,7 @@ import systems.zlink.e2e.resiliencelifecycle.provider.handlers.WorkMsgHandler;
 import systems.zlink.e2e.resiliencelifecycle.provider.handlers.WorkReqHandler;
 import systems.zlink.e2e.resiliencelifecycle.provider.infrastructure.ScenarioState;
 import systems.zlink.e2e.resiliencelifecycle.shared.Contracts;
-import systems.zlink.framework.channels.ZLinkChannelRuntimeOptions;
+import systems.zlink.framework.channels.ZLinkRouteMeshRuntimeOptions;
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.configuration.ZLinkMessageFlowOutcome;
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationOptions;
@@ -59,7 +59,7 @@ public final class Program {
     EvidenceHttpServer evidenceHttpServer(
         ScenarioState state,
         ObjectMapper json,
-        ZLinkChannelRuntimeOptions runtimeOptions,
+        ZLinkRouteMeshRuntimeOptions runtimeOptions,
         ConfigurableApplicationContext applicationContext,
         systems.zlink.framework.spring.internal.runtime.ZLinkFrameworkLifecycle drain,
         ProviderOptions options) {
@@ -95,9 +95,11 @@ public final class Program {
                     return CompletableFuture.completedFuture(null);
                 });
             options.addHandlersFromPackageOf(WorkReqHandler.class);
-            options.addClientServerChannel(Contracts.CHANNEL)
-                .enableServer(provider.apiEndpoint())
-                .setRoutingId(RoutingId.from(state.providerRid()))
+            var mesh = options.addRouteMesh(Contracts.CHANNEL)
+                .listen(provider.apiEndpoint())
+                .setRoutingId(RoutingId.from(state.providerRid()));
+            mesh.channelName(Contracts.CHANNEL)
+                .server()
                 .addHandlerGroup(Contracts.HANDLER_GROUP);
         };
     }

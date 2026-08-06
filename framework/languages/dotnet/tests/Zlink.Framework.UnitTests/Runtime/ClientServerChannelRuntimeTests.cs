@@ -1084,7 +1084,7 @@ public sealed class ClientServerChannelRuntimeTests
             TimeSpan.FromSeconds(2),
             CancellationToken.None);
         using var inbound = await PollReceivedAsync(
-            () => router.Recv(RecvFlags.DontWait),
+            storage => router.Recv(storage, RecvFlags.DontWait),
             TimeSpan.FromSeconds(2));
         var sourceRid = Assert.IsType<RoutingId>(inbound.RoutingId);
         var requestSeq = Assert.IsType<ulong>(inbound.RequestSeq);
@@ -1106,7 +1106,7 @@ public sealed class ClientServerChannelRuntimeTests
             ZLinkClientServerControlProtocol.EncodeLivenessProbe(17);
         Assert.True(router.Send(sourceRid, probe, SendFlags.None));
         using var delivered = await PollReceivedAsync(
-            () => dealer.Recv(RecvFlags.DontWait),
+            storage => dealer.Recv(storage, RecvFlags.DontWait),
             TimeSpan.FromSeconds(2));
         Assert.True(
             ZLinkClientServerControlProtocol.TryDecodeLivenessProbe(
@@ -1116,16 +1116,18 @@ public sealed class ClientServerChannelRuntimeTests
     }
 
     private static async Task<Received> PollReceivedAsync(
-        Func<Received?> receive,
+        Func<Received, bool> receive,
         TimeSpan timeout)
     {
+        var received = Received.Create();
         var deadline = DateTime.UtcNow + timeout;
         while (DateTime.UtcNow < deadline)
         {
-            if (receive() is { } received)
+            if (receive(received))
                 return received;
             await Task.Delay(5);
         }
+        received.Dispose();
         throw new TimeoutException("Expected raw record was not received.");
     }
 
@@ -1212,7 +1214,7 @@ public sealed class ClientServerChannelRuntimeTests
         {
             var transport = runtime.GetClientServerClientRuntime("work");
             using var firstHello = await PollReceivedAsync(
-                () => TryReceive(router),
+                storage => TryReceive(router, storage),
                 TimeSpan.FromSeconds(5));
             Assert.True(
                 ZLinkClientServerControlProtocol.TryDecodeHello(
@@ -1235,7 +1237,7 @@ public sealed class ClientServerChannelRuntimeTests
                     .Submit());
 
             using var secondHello = await PollReceivedAsync(
-                () => TryReceive(router),
+                storage => TryReceive(router, storage),
                 TimeSpan.FromSeconds(5));
             Assert.True(
                 ZLinkClientServerControlProtocol.TryDecodeHello(
@@ -1252,13 +1254,9 @@ public sealed class ClientServerChannelRuntimeTests
         }
     }
 
-    private static Received? TryReceive(IRouterSocket router)
+    private static bool TryReceive(IRouterSocket router, Received storage)
     {
-        var received = Received.Create();
-        if (router.Recv(received, RecvFlags.DontWait))
-            return received;
-        received.Dispose();
-        return null;
+        return router.Recv(storage, RecvFlags.DontWait);
     }
 
     private static void ReplyAdmission(

@@ -169,6 +169,65 @@ class CodecRoundtripRes() {
     }
 }
 
+class JsonGoldenReq() {
+    var displayName: String = ""
+    var status: String = ""
+    var balance: Long = 0
+    var payload: ByteArray = byteArrayOf()
+    var score: Int = 0
+    var ratio: Double = 0.0
+    var optionalNote: String? = null
+
+    constructor(
+        displayName: String,
+        status: String,
+        balance: Long,
+        payload: ByteArray,
+        score: Int,
+        ratio: Double,
+        optionalNote: String?,
+    ) : this() {
+        this.displayName = displayName
+        this.status = status
+        this.balance = balance
+        this.payload = payload
+        this.score = score
+        this.ratio = ratio
+        this.optionalNote = optionalNote
+    }
+}
+
+class JsonGoldenRes() {
+    var displayName: String = ""
+    var status: String = ""
+    var balance: Long = 0
+    var payload: ByteArray = byteArrayOf()
+    var score: Int = 0
+    var ratio: Double = 0.0
+    var optionalNote: String? = null
+    var contentType: String = ""
+
+    constructor(
+        displayName: String,
+        status: String,
+        balance: Long,
+        payload: ByteArray,
+        score: Int,
+        ratio: Double,
+        optionalNote: String?,
+        contentType: String,
+    ) : this() {
+        this.displayName = displayName
+        this.status = status
+        this.balance = balance
+        this.payload = payload
+        this.score = score
+        this.ratio = ratio
+        this.optionalNote = optionalNote
+        this.contentType = contentType
+    }
+}
+
 fun isPackedType(type: Class<*>): Boolean =
     type == PackedEchoReq::class.java ||
         type == PackedEchoRes::class.java ||

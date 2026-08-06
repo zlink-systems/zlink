@@ -8,6 +8,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.boot.builder.SpringApplicationBuilder
 import org.springframework.context.ConfigurableApplicationContext
 import org.springframework.context.annotation.Bean
+import org.springframework.beans.factory.ObjectProvider
 import systems.zlink.e2e.kotlin.resiliencelifecycle.handlers.WorkCommandHandler
 import systems.zlink.e2e.kotlin.resiliencelifecycle.handlers.WorkRequestHandler
 import systems.zlink.framework.channels.ZLinkChannelRuntimeOptions
@@ -36,6 +37,7 @@ open class ProviderApplication {
         json: ObjectMapper,
         runtimeOptions: ZLinkChannelRuntimeOptions,
         applicationContext: ConfigurableApplicationContext,
+        runtime: ObjectProvider<systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime>,
     ): EvidenceHttpServer =
         EvidenceHttpServer(
             state,
@@ -43,6 +45,7 @@ open class ProviderApplication {
             Env.get("e2e.http.endpoint"),
             runtimeOptions,
             applicationContext,
+            runtime,
         )
 
     @Bean

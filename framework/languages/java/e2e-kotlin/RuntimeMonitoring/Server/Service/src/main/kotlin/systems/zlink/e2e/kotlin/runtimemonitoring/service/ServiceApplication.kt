@@ -17,6 +17,8 @@ import systems.zlink.framework.messaging.ZLinkMessage
 import systems.zlink.framework.spring.EnableZLinkFramework
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer
 import systems.zlink.framework.spots.ZLinkSpotManager
+import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime
+import org.springframework.beans.factory.ObjectProvider
 import java.time.Duration
 
 @EnableZLinkFramework
@@ -33,12 +35,14 @@ class ServiceApplication {
         state: EvidenceState,
         json: ObjectMapper,
         runtimeOptions: ZLinkChannelRuntimeOptions,
+        runtime: ObjectProvider<ZLinkFrameworkRuntime>,
     ): EvidenceHttpServer {
         return EvidenceHttpServer(
             state,
             json,
             Env.get("e2e.http.endpoint"),
             runtimeOptions,
+            runtime,
         )
     }
 
@@ -72,12 +76,19 @@ class ServiceApplication {
                 .addHandlerGroup(Contracts.HANDLER_GROUP)
             val node = options.addRouteMesh(Contracts.SPOT_MESH)
             node.listen(Env.get("e2e.mesh.endpoint"))
-                .setRoutingId(RoutingId.from("svc-a-spot"))
-            node.channelName(Contracts.SPOT_CHANNEL)
+                .setRoutingId(RoutingId.from(Env.get("e2e.rid", "svc-a") + "-spot"))
+                .setActorCapacity(1)
+                .setSpotCapacity(2)
+            node.channelName(Contracts.SPOT_CHANNEL).server()
             node.objects().server()
                 .addSpotFactory(
                     "monitoring",
                     MonitoringSpot::class.java,
+                ) { factory -> factory.disableRelocation() }
+                .addActorFactory(
+                    Contracts.ACTOR_TYPE,
+                    MonitoringActor::class.java,
+                    MonitoringActorFactory::class.java,
                 ) { factory -> factory.disableRelocation() }
         }
     }

@@ -8,7 +8,7 @@ public final class PublisherClient {
     private final PubSubHttpClient http;
     private final String endpoint;
 
-    PublisherClient(PubSubHttpClient http, String endpoint) {
+    public PublisherClient(PubSubHttpClient http, String endpoint) {
         this.http = http;
         this.endpoint = endpoint;
     }
@@ -23,6 +23,18 @@ public final class PublisherClient {
 
     public boolean canReachHealth() {
         return http.isHealthy(endpoint);
+    }
+
+    public int publishReservedStatus() {
+        return http.postRaw(endpoint + "/publish/reserved").status();
+    }
+
+    public void publishReservedPrefix() {
+        http.post(endpoint + "/publish/reserved-prefix");
+    }
+
+    public void shutdown() {
+        http.post(endpoint + "/shutdown");
     }
 
     private void post(String path, String topic, Contracts.EventMsg message) {

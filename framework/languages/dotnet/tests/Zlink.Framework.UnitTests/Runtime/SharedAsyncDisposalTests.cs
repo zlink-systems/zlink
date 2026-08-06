@@ -344,7 +344,6 @@ public sealed class SharedAsyncDisposalTests
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal int DisposeCount => Volatile.Read(ref _disposeCount);
         public void Bind(string endpoint) { }
-        public void SetChannelName(string channelName) { }
         public async ValueTask DisposeAsync()
         {
             Interlocked.Increment(ref _disposeCount);
@@ -369,8 +368,6 @@ public sealed class SharedAsyncDisposalTests
         internal int DisposeCount => Volatile.Read(ref _disposeCount);
 
         public void Bind(string endpoint) { }
-
-        public void SetChannelName(string channelName) { }
 
         public void Connect(string endpoint)
         {

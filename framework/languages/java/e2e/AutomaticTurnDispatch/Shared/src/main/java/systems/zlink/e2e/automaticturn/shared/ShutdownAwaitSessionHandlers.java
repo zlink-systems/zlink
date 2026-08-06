@@ -43,9 +43,9 @@ public final class ShutdownAwaitSessionHandlers {
             RoutingId playNode = RoutingId.from(Contracts.PLAY_NODE_A);
             RoutingId spotRid = RoutingId.from(request.spotRid());
             return ensure(routes, playNode, request.spotRid())
-                .thenCompose(ignored -> spots.resolveSpotHandle(spotRid))
-                .thenCompose(handle -> routes.requestToSpot(
-                        requireSpot(handle, spotRid),
+                .thenCompose(ignored -> resolveSpotId(spots, spotRid.toString(), 50))
+                .thenCompose(resolvedSpotId -> routes.requestToSpot(
+                        resolvedSpotId,
                         new Contracts.AwaitReq("ATD-E3", request.requestId(), "shutdown"))
                     .timeout(ROUTE_REQUEST_TIMEOUT)
                     .submit(Contracts.ScenarioRes.class))
@@ -105,12 +105,12 @@ public final class ShutdownAwaitSessionHandlers {
         RoutingId spotRid,
         String requestId,
         int remaining) {
-        return spots.resolveSpotHandle(spotRid)
-            .thenCompose(handle -> routes.requestToSpot(
-                    requireSpot(handle, spotRid),
-                    new Contracts.ProbeReq(requestId))
-                .timeout(RECOVERY_PROBE_ATTEMPT_TIMEOUT)
-                .submit(Contracts.ProbeRes.class))
+        return resolveSpotId(spots, spotRid.toString(), 50)
+            .thenCompose(resolvedSpotId -> routes.requestToSpot(
+                        resolvedSpotId,
+                        new Contracts.ProbeReq(requestId))
+                    .timeout(RECOVERY_PROBE_ATTEMPT_TIMEOUT)
+                    .submit(Contracts.ProbeRes.class))
             .handle((reply, error) -> {
                 if (error == null) {
                     return CompletableFuture.<Void>completedFuture(null);
@@ -126,7 +126,24 @@ public final class ShutdownAwaitSessionHandlers {
             .thenCompose(stage -> stage);
     }
 
-    private static SpotHandle requireSpot(java.util.Optional<SpotHandle> handle, RoutingId spotRid) {
-        return handle.orElseThrow(() -> new IllegalStateException("spot not found: " + spotRid));
+    private static CompletionStage<String> resolveSpotId(
+        SpotHandleResolver spots,
+        String spotRid,
+        int remainingAttempts) {
+        return spots.resolveSpotHandle(spotRid).thenCompose(handle -> {
+            if (handle.isPresent()) {
+                return java.util.concurrent.CompletableFuture.completedFuture(
+                    handle.get().spotId());
+            }
+            if (remainingAttempts <= 1) {
+                return java.util.concurrent.CompletableFuture.failedFuture(
+                    new IllegalStateException("spot location was not published: " + spotRid));
+            }
+            return java.util.concurrent.CompletableFuture.runAsync(
+                    () -> { },
+                    java.util.concurrent.CompletableFuture.delayedExecutor(100, TimeUnit.MILLISECONDS))
+                .thenCompose(ignored -> resolveSpotId(spots, spotRid, remainingAttempts - 1));
+        });
     }
+
 }

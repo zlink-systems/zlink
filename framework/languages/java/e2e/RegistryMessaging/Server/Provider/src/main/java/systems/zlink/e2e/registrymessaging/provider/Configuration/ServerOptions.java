@@ -7,11 +7,14 @@ public record ServerOptions(
     String providerRid,
     String providerInstance,
     String apiWeight,
+    String apiClient,
     String apiEndpoint,
     String routeEndpoint,
     String routePeers,
     String routePeerRids,
     String workflowEndpoint,
+    String objectMeshName,
+    String objectEndpoint,
     int httpPort,
     String redisLocationEndpoint,
     String locationKeyPrefix,
@@ -23,14 +26,21 @@ public record ServerOptions(
         required(locationKeyPrefix, "location-key-prefix");
         required(logDir, "log-dir");
         apiWeight = optional(apiWeight);
+        apiClient = optional(apiClient);
         apiEndpoint = optional(apiEndpoint);
         routeEndpoint = optional(routeEndpoint);
         routePeers = optional(routePeers);
         routePeerRids = optional(routePeerRids);
         workflowEndpoint = optional(workflowEndpoint);
+        objectMeshName = optional(objectMeshName);
+        objectEndpoint = optional(objectEndpoint);
     }
 
     private static String optional(String value) { return value == null ? "" : value; }
+
+    public boolean apiClientEnabled() {
+        return apiClient.isBlank() || Boolean.parseBoolean(apiClient);
+    }
     private static void required(String value, String name) {
         if (value == null || value.isBlank()) throw new IllegalArgumentException("e2e." + name + " is required");
     }

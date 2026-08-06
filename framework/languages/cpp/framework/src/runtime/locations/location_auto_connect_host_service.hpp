@@ -45,17 +45,25 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
       handler_registry_t &handlers,
       serializer_registry_t &serializers,
       std::map<std::string, std::string> client_server_advertise_hosts = {},
+      std::map<std::string, std::string> fanout_publisher_advertise_hosts = {},
       std::set<std::string> route_mesh_client_channels = {},
       std::vector<std::shared_ptr<detail::mesh_node_runtime_t>> mesh_nodes = {},
       std::function<bool ()> republish_after_store_recovery = {},
       std::shared_ptr<client_server::client_server_location_runtime_t>
-        client_server_runtime = nullptr) :
+        client_server_runtime = nullptr,
+      std::shared_ptr<fanout::fanout_location_runtime_t>
+        fanout_runtime = nullptr,
+      std::shared_ptr<listener_status_registry_t>
+        listener_statuses = nullptr) :
         _bus (std::move (bus)), _channels (std::move (channels)),
         _handlers (&handlers), _serializers (&serializers),
         _client_server_advertise_hosts (std::move (client_server_advertise_hosts)),
+        _fanout_publisher_advertise_hosts (std::move (fanout_publisher_advertise_hosts)),
         _route_mesh_client_channels (std::move (route_mesh_client_channels)),
         _mesh_nodes (std::move (mesh_nodes)),
         _client_server (std::move (client_server_runtime)),
+        _fanout (std::move (fanout_runtime)),
+        _listener_statuses (std::move (listener_statuses)),
         _republish_after_store_recovery (
           std::move (republish_after_store_recovery))
     {
@@ -66,6 +74,16 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
     bool participates_in_drain_propagation () const noexcept override
     {
         return true;
+    }
+
+    bool publish_descriptor_state (
+      framework_runtime_state_t state) noexcept override
+    {
+        bool published = true;
+        if (_client_server && _client_server_started)
+            published = _client_server->publish_descriptor_state (state)
+                        && published;
+        return published;
     }
 
     void start (service_provider_t &services) override
@@ -81,6 +99,7 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
         manager.initialize_publisher_channels ();
         manager.initialize_client_channels ();
         manager.initialize_inbound_channels ();
+        detail::channel_runtime_t::from (_bus).initialize_manual_channel_publishers ();
 
         const auto needs_client_server =
           std::any_of (_channels.begin (), _channels.end (), [] (const auto &channel) {
@@ -94,20 +113,24 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
             if (!_client_server)
                 _client_server =
                   std::make_shared<client_server::client_server_location_runtime_t> (
-                    _bus, _channels, *_runtime, *_store, *_store, services,
-                    *_serializers, *_handlers, _client_server_advertise_hosts);
+                  _bus, _channels, *_runtime, *_store, *_store, services,
+                  *_serializers, *_handlers, _client_server_advertise_hosts,
+                  _listener_statuses);
             _client_server->start ();
+            _client_server_started = true;
         }
 
         const auto needs_fanout =
           std::any_of (_channels.begin (), _channels.end (), [] (const auto &channel) {
               return (channel.publisher.enabled && channel.publisher.discovery)
                      || (channel.subscriber.enabled && channel.subscriber.discovery);
-          });
+        });
         if (needs_fanout) {
-            _fanout = std::make_unique<fanout::fanout_location_runtime_t> (
-              _bus, _channels, *_runtime, *_store, *_store, services,
-              *_serializers, *_handlers);
+            if (!_fanout)
+                _fanout = std::make_shared<fanout::fanout_location_runtime_t> (
+                  _bus, _channels, *_runtime, *_store, *_store, services,
+                  *_serializers, *_handlers, _fanout_publisher_advertise_hosts,
+                  _listener_statuses);
             _fanout->start ();
         }
 
@@ -116,11 +139,14 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
             auto &route = manager.get_route_channel (route_channel_id);
             configured_meshes.insert (route.router_channel_id ());
             const auto manual = route.manual_connections ();
+            auto local_rid = route.routing_id ();
             std::optional<object_role_t> local_object_role;
             bool local_has_server_channel = false;
             for (const auto &mesh_node : _mesh_nodes) {
                 if (mesh_node
                     && mesh_node->mesh_name () == route.router_channel_id ()) {
+                    if (!local_rid)
+                        local_rid = mesh_node->routing_id ();
                     local_object_role = mesh_node->object_role ();
                     local_has_server_channel =
                       !mesh_node->channel_weights ().empty ();
@@ -128,7 +154,8 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
                 }
             }
             add_loop (
-              route.router_channel_id (), route.routing_id (), route.bind_endpoint (),
+              route.router_channel_id (), std::move (local_rid),
+              route.bind_endpoint (),
               local_object_role, local_has_server_channel,
               [this, &route, manual] (const target_t &target) {
                   if (std::find (manual.begin (), manual.end (), target.endpoint)
@@ -161,7 +188,8 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
                           mesh_node->forget_peer (
                             target.node_rid, target.endpoint);
                           if (target.initiates_connection)
-                              mesh_node->disconnect_peer (target.endpoint);
+                              mesh_node->disconnect_peer (
+                                target.node_rid, target.endpoint);
                       }
                   }
                   if (target.initiates_connection)
@@ -192,7 +220,8 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
                   mesh_node->forget_peer (
                     target.node_rid, target.endpoint);
                   if (target.initiates_connection)
-                      mesh_node->disconnect_peer (target.endpoint);
+                      mesh_node->disconnect_peer (
+                        target.node_rid, target.endpoint);
               });
         }
 
@@ -208,6 +237,7 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
         _stop.store (true, std::memory_order_release);
         if (_client_server) {
             _client_server->stop ();
+            _client_server_started = false;
             _client_server.reset ();
         }
         if (_fanout) {
@@ -221,6 +251,7 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
                 stop_target (loop, target);
         }
         _loops.clear ();
+        detail::channel_runtime_t::from (_bus).close_manual_channel_publishers ();
     }
 
   private:
@@ -403,8 +434,14 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
                        || current->second.lifecycle_generation
                             != target.lifecycle_generation) {
                 disconnect (loop, current->second);
-                connect (loop, target);
-                loop.active[key] = target;
+                /* A descriptor replacement is a two-phase lifecycle change.
+                 * The disconnect command only schedules physical pipe
+                 * teardown in the binding runtime. Connecting the new
+                 * generation in this same tick can therefore create two
+                 * pipes with one routing ID before the old pipe has been
+                 * removed. Keep the key absent and let the next tick create
+                 * the replacement after the teardown has progressed. */
+                loop.active.erase (current);
             }
         }
     }
@@ -491,6 +528,7 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
     handler_registry_t *_handlers;
     serializer_registry_t *_serializers;
     std::map<std::string, std::string> _client_server_advertise_hosts;
+    std::map<std::string, std::string> _fanout_publisher_advertise_hosts;
     std::set<std::string> _route_mesh_client_channels;
     std::vector<std::shared_ptr<detail::mesh_node_runtime_t>> _mesh_nodes;
     location_runtime_t *_runtime = nullptr;
@@ -500,7 +538,9 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
     std::atomic_bool _stop{false};
     std::vector<loop_t> _loops;
     std::shared_ptr<client_server::client_server_location_runtime_t> _client_server;
-    std::unique_ptr<fanout::fanout_location_runtime_t> _fanout;
+    bool _client_server_started = false;
+    std::shared_ptr<fanout::fanout_location_runtime_t> _fanout;
+    std::shared_ptr<listener_status_registry_t> _listener_statuses;
     std::function<bool ()> _republish_after_store_recovery;
 };
 

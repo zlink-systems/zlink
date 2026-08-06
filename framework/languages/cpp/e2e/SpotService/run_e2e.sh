@@ -1498,14 +1498,14 @@ run_focused_from_all() {
 }
 
 if [[ "$SCENARIO" == "SM-A1" || "$SCENARIO" == "sm-a1" ]]; then
-  if ! rg -q 'list_spot_locations' \
+  if ! rg -q 'list_topology' \
       "$SCRIPT_DIR/Server/Play/Endpoints/operational_endpoints.hpp"; then
-    echo "SM-A1 contract gate failed: server does not query spot location rows" >&2
+    echo "SM-A1 contract gate failed: server does not query public topology rows" >&2
     exit 1
   fi
-  if ! rg -q 'spot location row mismatch' \
+  if ! rg -q 'topology row mismatch' \
       "$SCRIPT_DIR/Client/Scenarios/sm_a1_scenario.hpp"; then
-    echo "SM-A1 contract gate failed: client does not validate the spot location row" >&2
+    echo "SM-A1 contract gate failed: client does not validate the topology row" >&2
     exit 1
   fi
   ensure_location_store

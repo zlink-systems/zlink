@@ -46,15 +46,15 @@ public final class Program {
     @Bean
     ConsumerEndpoints consumerEndpoints(
         ObjectMapper json,
-        systems.zlink.framework.channels.ZLinkClient client,
+        systems.zlink.framework.channels.ZLinkRouteClient routes,
+        systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime meshRuntime,
         ZLinkFrameworkLifecycle lifecycle,
-        systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository locations,
         ConsumerOptions options) {
         return new ConsumerEndpoints(
             json,
-            client,
+            routes,
+            meshRuntime,
             lifecycle,
-            locations,
             options.httpEndpoint());
     }
 
@@ -68,7 +68,11 @@ public final class Program {
                 .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
                 .traceLogFile(logDir + "/consumer-flow.log")
                 .traceLabel("java-rl-consumer");
-            options.addClientServerChannel(Contracts.CHANNEL).client();
+            options.addRouteMesh(Contracts.CHANNEL)
+                .listen("tcp://127.0.0.1:0")
+                .setRoutingIdPrefix("resilience-consumer")
+                .channelName(Contracts.CHANNEL)
+                .client();
         };
     }
 

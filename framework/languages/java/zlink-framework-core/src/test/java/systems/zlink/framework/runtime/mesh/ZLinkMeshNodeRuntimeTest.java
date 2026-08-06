@@ -21,6 +21,16 @@ import systems.zlink.framework.runtime.internal.dispatch.ZLinkInboundDispatchBud
 
 class ZLinkMeshNodeRuntimeTest {
     @Test
+    void routerDefaultsUseAccountedBytesInsteadOfLegacyMessageCounts() {
+        MeshNodeRegistration registration = new MeshNodeRegistration("game");
+
+        assertEquals(4_096_000L,
+            registration.configureRouterSocket().sendHighWaterMark());
+        assertEquals(4_096_000L,
+            registration.configureRouterSocket().receiveHighWaterMark());
+    }
+
+    @Test
     void automaticRoutingIdUsesStablePrefixAndCanonicalUuid() {
         MeshNodeRegistration registration = new MeshNodeRegistration("game");
         registration.setRoutingIdPrefix("play");
@@ -70,6 +80,8 @@ class ZLinkMeshNodeRuntimeTest {
         MeshNodeRegistration registration = new MeshNodeRegistration("game");
         registration.listen("inproc://game-1");
         registration.configureRouterSocket().setSendHighWaterMark(7);
+        registration.configureRouterSocket().setReceiveHighWaterMark(11);
+        registration.configureRouterSocket().setMailboxMessageBudget(13);
         registration.configureRouterSocket().setSendTimeout(Duration.ofMillis(23));
         registration.configureSpotPublisher().setSendHighWaterMark(91);
 
@@ -79,6 +91,8 @@ class ZLinkMeshNodeRuntimeTest {
             (context, meshName) -> node,
             new RecordingContext())) {
             assertEquals(7L, node.routerHighWaterMark);
+            assertEquals(11L, node.routerReceiveHighWaterMark);
+            assertEquals(13L, node.mailboxMessageBudget);
             assertEquals(7, node.pendingAdmissionCapacity);
             assertEquals(Duration.ofMillis(23), node.routerSendTimeout);
         }
@@ -112,6 +126,8 @@ class ZLinkMeshNodeRuntimeTest {
     private static final class RecordingMeshNode implements ZLinkInternalMeshNode {
         private final List<String> calls = new ArrayList<>();
         private long routerHighWaterMark;
+        private long routerReceiveHighWaterMark;
+        private long mailboxMessageBudget;
         private int pendingAdmissionCapacity;
         private Duration routerSendTimeout;
         private ZLinkInboundDispatchBudget applicationDispatchBudget;
@@ -129,6 +145,12 @@ class ZLinkMeshNodeRuntimeTest {
         }
         @Override public void setRouterHighWaterMark(long value) {
             routerHighWaterMark = value;
+        }
+        @Override public void setRouterReceiveHighWaterMark(long value) {
+            routerReceiveHighWaterMark = value;
+        }
+        @Override public void setMailboxMessageBudget(long value) {
+            mailboxMessageBudget = value;
         }
         @Override public void setRouterPendingAdmissionCapacity(int value) {
             pendingAdmissionCapacity = value;

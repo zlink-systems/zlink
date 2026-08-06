@@ -59,17 +59,23 @@ export async function connectAndBind(
     waitTimeoutMs: 15000,
     requestTimeoutMs: 10000
   });
-  await connector.connect();
-  const bound = await connector.request({
-    scenario,
-    actorId: actor.actorId,
-    nodeRid: actor.nodeRid,
-    generation: actor.generation,
-    transferId
-  } satisfies BindActorSessionReq).packetName(ObservabilityOpsNames.packetBindActor).submit<BindActorSessionRes>();
-  require(bound.actorId === actor.actorId, `${scenario} session bind mismatch.`);
-  await delay(500);
-  return connector;
+  try {
+    await connector.connect();
+    const bound = await connector.request({
+      scenario,
+      actorId: actor.actorId,
+      nodeRid: actor.nodeRid,
+      objectGeneration: actor.objectGeneration,
+      meshName: actor.meshName,
+      transferId
+    } satisfies BindActorSessionReq).packetName(ObservabilityOpsNames.packetBindActor).submit<BindActorSessionRes>();
+    require(bound.actorId === actor.actorId, `${scenario} session bind mismatch.`);
+    await delay(500);
+    return connector;
+  } catch (error) {
+    await connector.close().catch(() => undefined);
+    throw error;
+  }
 }
 
 export async function assertBoundPush(

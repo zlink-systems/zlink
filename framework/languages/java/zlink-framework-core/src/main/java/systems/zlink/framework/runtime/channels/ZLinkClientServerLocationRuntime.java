@@ -335,6 +335,22 @@ final class ZLinkClientServerLocationRuntime implements AutoCloseable {
                         current.withExpected(entry.getValue(), true));
                     continue;
                 }
+                if (current.ready()) {
+                    // A descriptor revision changes routing policy such as
+                    // weight or serving state. The existing physical
+                    // connection remains valid; re-admitting it would put a
+                    // second request on the same DEALER while an accepted
+                    // application request may still be waiting for its
+                    // reply. The control update already carries the new
+                    // descriptor to this connection, so preserve readiness
+                    // and let in-flight work finish on the same transport.
+                    connections.put(
+                        entry.getKey(),
+                        current.withExpected(entry.getValue(), true));
+                    sockets.updateClientServerConnection(
+                        entry.getKey(), entry.getValue(), true);
+                    continue;
+                }
                 Connection pending = current.withExpected(
                     entry.getValue(), false);
                 connections.put(entry.getKey(), pending);

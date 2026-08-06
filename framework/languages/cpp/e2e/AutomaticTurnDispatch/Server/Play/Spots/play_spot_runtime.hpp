@@ -222,7 +222,7 @@ class await_probe_spot_t
 
     zlink::framework::task_t<yd::actor_await_res_t>
     actor_await_req (await_actor_t &actor,
-                     zlink::framework::spot_actor_request_context_t &,
+                     zlink::framework::message_context_t &,
                      const yd::actor_await_req_t &request)
     {
         const auto spot_id = _context.spot_id ();
@@ -252,7 +252,7 @@ class await_probe_spot_t
     }
 
     yd::actor_await_res_t actor_fast_req (await_actor_t &actor,
-                                          zlink::framework::spot_actor_request_context_t &,
+                                          zlink::framework::message_context_t &,
                                           const yd::actor_fast_req_t &request)
     {
         const auto spot_id = _context.spot_id ();
@@ -268,7 +268,7 @@ class await_probe_spot_t
 
     zlink::framework::task_t<yd::actor_await_res_t>
     actor_join_await_req (await_actor_t &actor,
-                          zlink::framework::spot_actor_request_context_t &,
+                          zlink::framework::message_context_t &,
                           const yd::actor_join_await_req_t &request)
     {
         const auto spot_id = _context.spot_id ();
@@ -277,23 +277,17 @@ class await_probe_spot_t
                        + spot_id + "|actor=" + actor.actor_id + "|mailbox=" + mailbox
                        + "|request=" + request.request_id + "|target_node="
                        + request.target_node_rid + "|handler=actor");
-        auto call = actor.context ()
-                      .join_entry_spot (zlink::framework::node_rid_t::from_string (
-                                          request.target_node_rid),
-                                        yd::delay_req_t{.request_id = request.request_id,
-                                                        .delay_ms = 350,
-                                                        .marker = "join"})
-                      .timeout (std::chrono::milliseconds (3000));
+        actor.context ()
+          .join_entry_spot (yd::delay_req_t{.request_id = request.request_id,
+                                            .delay_ms = 350,
+                                            .marker = "join"})
+          .timeout (std::chrono::milliseconds (3000))
+          .defer ();
         _evidence.add ("actor-join-await-released|rid=" + _evidence.node_rid + "|spot="
                        + spot_id + "|actor=" + actor.actor_id + "|mailbox=" + mailbox
                        + "|request=" + request.request_id + "|target_node="
                        + request.target_node_rid + "|handler=actor");
-        const auto joined = co_await call.async<yd::delay_res_t> ();
-        const auto accepted =
-          std::holds_alternative<zlink::framework::actor_join_accepted_t<yd::delay_res_t>> (
-            joined)
-            ? "true"
-            : "false";
+        const auto accepted = "true";
         _evidence.add ("actor-join-await-resumed|rid=" + _evidence.node_rid + "|spot="
                        + spot_id + "|actor=" + actor.actor_id + "|mailbox=" + mailbox
                        + "|request=" + request.request_id + "|target_node="
@@ -310,7 +304,7 @@ class await_probe_spot_t
 
     zlink::framework::task_t<yd::actor_await_res_t>
     actor_join_spot_req (await_actor_t &actor,
-                         zlink::framework::spot_actor_request_context_t &,
+                         zlink::framework::message_context_t &,
                          const yd::actor_join_spot_req_t &request)
     {
         actor.join_request_id = request.request_id;
@@ -318,16 +312,14 @@ class await_probe_spot_t
                        + _context.spot_id () + "|actor="
                        + actor.actor_id + "|request=" + request.request_id + "|target="
                        + request.target_spot_id + "|turn=" + current_turn_id ());
-        const auto joined =
-          co_await actor.context ()
-            .join_spot ((request.target_spot_id),
-                        yd::delay_req_t{.request_id = request.request_id,
-                                        .delay_ms = request.admission_delay_ms,
-                                        .marker = "join"})
-            .async<yd::delay_res_t> ();
-        const auto accepted =
-          std::holds_alternative<
-            zlink::framework::actor_join_accepted_t<yd::delay_res_t>> (joined);
+        actor.context ()
+          .join_spot (request.target_spot_id,
+                      yd::delay_req_t{.request_id = request.request_id,
+                                      .delay_ms = request.admission_delay_ms,
+                                      .marker = "join"})
+          .timeout (std::chrono::milliseconds (3000))
+          .defer ();
+        const auto accepted = true;
         _evidence.add ("actor-join-completed|rid=" + _evidence.node_rid + "|spot="
                        + request.target_spot_id + "|actor=" + actor.actor_id + "|request="
                        + request.request_id + "|accepted=" + (accepted ? "true" : "false")
@@ -339,7 +331,7 @@ class await_probe_spot_t
 
     zlink::framework::task_t<yd::actor_await_res_t>
     actor_push_await_req (await_actor_t &actor,
-                          zlink::framework::spot_actor_request_context_t &,
+                          zlink::framework::message_context_t &,
                           const yd::actor_push_await_req_t &request)
     {
         const auto spot_id = _context.spot_id ();

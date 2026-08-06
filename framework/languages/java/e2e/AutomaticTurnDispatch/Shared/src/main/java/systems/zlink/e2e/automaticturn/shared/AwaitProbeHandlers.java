@@ -15,7 +15,6 @@ import systems.zlink.framework.spots.ZLinkSpotActorRequestHandler;
 import systems.zlink.framework.spots.ZLinkSpotPacketHandler;
 import systems.zlink.framework.spots.ZLinkSpotTimerHandler;
 import systems.zlink.framework.spots.ZLinkTimerTick;
-import systems.zlink.framework.channels.ZLinkFanoutClient;
 import systems.zlink.framework.channels.ZLinkPublishMessageContext;
 import systems.zlink.framework.channels.ZLinkFanoutHandler;
 
@@ -186,6 +185,148 @@ public final class AwaitProbeHandlers {
         }
     }
 
+    public static final class CounterResetMsgHandler
+        implements ZLinkSpotPacketHandler<AwaitProbeSpot, Contracts.CounterResetMsg> {
+        private final EvidenceStore evidence;
+
+        public CounterResetMsgHandler(EvidenceStore evidence) {
+            this.evidence = evidence;
+        }
+
+        @Override
+        public CompletionStage<Void> handle(AwaitProbeSpot spot, Contracts.CounterResetMsg request) {
+            spot.resetCounter(request.value());
+            evidence.record("counter-reset", request.requestId(), "value=" + request.value());
+            return CompletableFuture.completedFuture(null);
+        }
+    }
+
+    public static final class CounterAwaitMsgHandler
+        implements ZLinkSpotPacketHandler<AwaitProbeSpot, Contracts.CounterAwaitMsg> {
+        private final EvidenceStore evidence;
+
+        public CounterAwaitMsgHandler(EvidenceStore evidence) {
+            this.evidence = evidence;
+        }
+
+        @Override
+        public CompletionStage<Void> handle(AwaitProbeSpot spot, Contracts.CounterAwaitMsg request) {
+            int before = spot.counter();
+            evidence.record("counter-before", request.requestId(),
+                request.operationId() + ";value=" + before);
+            var call = spot.context().outbound()
+                .requestToChannel(Contracts.DELAY_CHANNEL,
+                    new Contracts.DelayReq(request.requestId(), request.delayMillis()))
+                .timeout(delayRequestTimeout(request.delayMillis()));
+            CompletionStage<Contracts.DelayRes> completion = "yield".equals(request.terminator())
+                ? call.yield(Contracts.DelayRes.class)
+                : call.submit(Contracts.DelayRes.class);
+            return completion.thenAccept(ignored -> {
+                int observed = spot.counter();
+                int value = spot.incrementCounter();
+                evidence.record("counter-after-yield", request.requestId(),
+                    request.operationId() + ";before=" + before + ";observed=" + observed
+                        + ";value=" + value);
+                evidence.record("counter-operation-completed", request.requestId(),
+                    request.operationId());
+            });
+        }
+    }
+
+    public static final class CounterReadHandler
+        implements systems.zlink.framework.spots.ZLinkSpotRequestHandler<AwaitProbeSpot,
+            Contracts.CounterReadReq, Contracts.CounterReadRes> {
+        @Override
+        public CompletionStage<Contracts.CounterReadRes> handle(
+            AwaitProbeSpot spot, Contracts.CounterReadReq request) {
+            return CompletableFuture.completedFuture(
+                new Contracts.CounterReadRes(request.requestId(), spot.counter()));
+        }
+    }
+
+    public static final class IoWorkerMsgHandler
+        implements ZLinkSpotPacketHandler<AwaitProbeSpot, Contracts.IoWorkerMsg> {
+        private final EvidenceStore evidence;
+
+        public IoWorkerMsgHandler(EvidenceStore evidence) {
+            this.evidence = evidence;
+        }
+
+        @Override
+        public CompletionStage<Void> handle(AwaitProbeSpot spot, Contracts.IoWorkerMsg request) {
+            evidence.record("io-worker-started", request.requestId(), request.terminator());
+            var call = spot.context().runIoWorker(cancellation -> {
+                return CompletableFuture.supplyAsync(
+                    () -> request.requestId(),
+                    CompletableFuture.delayedExecutor(
+                        request.delayMillis(), TimeUnit.MILLISECONDS));
+            }).timeout(Duration.ofSeconds(10));
+            CompletionStage<String> result = "yield".equals(request.terminator())
+                ? call.yield() : call.submit();
+            return result.thenAccept(value -> {
+                evidence.record("io-worker-resumed", request.requestId(), value);
+                evidence.record("io-worker-completed", request.requestId(), request.terminator());
+            });
+        }
+    }
+
+    public static final class IoWorkerBatchReqHandler
+        implements systems.zlink.framework.spots.ZLinkSpotRequestHandler<AwaitProbeSpot,
+            Contracts.IoWorkerBatchReq, Contracts.IoWorkerBatchRes> {
+        private final EvidenceStore evidence;
+
+        public IoWorkerBatchReqHandler(EvidenceStore evidence) {
+            this.evidence = evidence;
+        }
+
+        @Override
+        public CompletionStage<Contracts.IoWorkerBatchRes> handle(
+            AwaitProbeSpot spot, Contracts.IoWorkerBatchReq request) {
+            java.util.List<CompletionStage<String>> calls = new java.util.ArrayList<>();
+            for (int index = 0; index < request.count(); index++) {
+                int operation = index;
+                calls.add(spot.context().runIoWorker(cancellation -> {
+                    return CompletableFuture.supplyAsync(
+                        () -> request.requestId() + "-" + operation,
+                        CompletableFuture.delayedExecutor(
+                            request.delayMillis(), TimeUnit.MILLISECONDS));
+                }).yield());
+            }
+            return CompletableFuture.allOf(calls.stream()
+                    .map(stage -> stage.toCompletableFuture())
+                    .toArray(CompletableFuture[]::new))
+                .thenApply(ignored -> {
+                    evidence.record("io-worker-batch-completed", request.requestId(),
+                        "count=" + request.count());
+                    return new Contracts.IoWorkerBatchRes(request.requestId(), request.count());
+                });
+        }
+    }
+
+    public static final class CpuWorkerMsgHandler
+        implements ZLinkSpotPacketHandler<AwaitProbeSpot, Contracts.CpuWorkerMsg> {
+        private final EvidenceStore evidence;
+
+        public CpuWorkerMsgHandler(EvidenceStore evidence) {
+            this.evidence = evidence;
+        }
+
+        @Override
+        public CompletionStage<Void> handle(AwaitProbeSpot spot, Contracts.CpuWorkerMsg request) {
+            evidence.record("cpu-worker-started", request.requestId(), request.terminator());
+            var call = spot.context().runCpuWorker(cancellation -> {
+                Thread.sleep(request.delayMillis());
+                return request.requestId();
+            }).timeout(Duration.ofSeconds(10));
+            CompletionStage<String> result = "yield".equals(request.terminator())
+                ? call.yield() : call.submit();
+            return result.thenAccept(value -> {
+                evidence.record("cpu-worker-resumed", request.requestId(), value);
+                evidence.record("cpu-worker-completed", request.requestId(), request.terminator());
+            });
+        }
+    }
+
     public static final class ProbeMsgHandler
         implements ZLinkSpotPacketHandler<AwaitProbeSpot, Contracts.ProbeMsg> {
         private final EvidenceStore evidence;
@@ -316,13 +457,11 @@ public final class AwaitProbeHandlers {
             String value = "spot=" + spot.context().spotId() + ";target=" + request.targetSpotRid();
             evidence.record("remote-await-started", request.requestId(), value);
             evidence.record("remote-await-released", request.requestId(), value);
-            RoutingId targetRid = RoutingId.from(request.targetSpotRid());
-            return spots.resolveSpotHandle(targetRid)
-                .thenCompose(target -> spot.context().outbound()
-                    .requestToSpot(requireSpot(target, targetRid),
+            return spot.context().outbound()
+                    .requestToSpot(request.targetSpotRid(),
                         new Contracts.AwaitReq("ATD-D2", request.requestId(), "remote-spot"))
                     .timeout(Duration.ofSeconds(5))
-                    .submit(Contracts.ScenarioRes.class))
+                    .submit(Contracts.ScenarioRes.class)
                 .thenApply(targetReply -> {
                     String resumed = value + ";targetNode=" + targetReply.result();
                     evidence.record("remote-await-resumed", request.requestId(), resumed);
@@ -351,21 +490,9 @@ public final class AwaitProbeHandlers {
 
     public static final class TimerTickHandler implements ZLinkSpotTimerHandler<AwaitProbeSpot> {
         private final EvidenceStore evidence;
-        private final ZLinkFanoutClient fanout;
-        private final boolean fanoutEnabled;
 
         public TimerTickHandler(EvidenceStore evidence) {
-            this(evidence, null, false);
-        }
-
-        public TimerTickHandler(EvidenceStore evidence, ZLinkFanoutClient fanout) {
-            this(evidence, fanout, fanout != null);
-        }
-
-        public TimerTickHandler(EvidenceStore evidence, ZLinkFanoutClient fanout, boolean fanoutEnabled) {
             this.evidence = evidence;
-            this.fanout = fanout;
-            this.fanoutEnabled = fanoutEnabled;
         }
 
         @Override
@@ -376,42 +503,43 @@ public final class AwaitProbeHandlers {
             }
             String value = "timer=" + tick.name() + ";mailbox=timer:" + tick.name()
                 + ";tick=" + tick.deliveryIndex() + ";spot=" + spot.context().spotId();
+            boolean yield = "yield-on-first".equals(scenario.mode())
+                || "yield-then-next".equals(scenario.mode());
             if (tick.deliveryIndex() == 1
-                && ("await-on-first".equals(scenario.mode()) || "await-then-next".equals(scenario.mode()))) {
-                evidence.record("timer-await-started", scenario.requestId(), value);
-                evidence.record("timer-await-released", scenario.requestId(), value);
-                return spot.context().outbound()
+                && ("await-on-first".equals(scenario.mode())
+                    || "await-then-next".equals(scenario.mode())
+                    || yield)) {
+                evidence.record(yield ? "yield-released" : "timer-await-started",
+                    scenario.requestId(), value);
+                evidence.record(yield ? "yield-held" : "timer-await-released",
+                    scenario.requestId(), value);
+                var call = spot.context().outbound()
                     .requestToChannel(
                         Contracts.DELAY_CHANNEL,
                         new Contracts.DelayReq(scenario.requestId(), scenario.delayMillis()))
-                    .timeout(delayRequestTimeout(scenario.delayMillis()))
-                    .submit(Contracts.DelayRes.class)
+                    .timeout(delayRequestTimeout(scenario.delayMillis()));
+                CompletionStage<Contracts.DelayRes> completion = yield
+                    ? call.yield(Contracts.DelayRes.class)
+                    : call.submit(Contracts.DelayRes.class);
+                return completion
                     .thenAccept(reply -> {
-                        evidence.record("timer-await-resumed", scenario.requestId(), value);
-                        evidence.record("timer-await-completed", scenario.requestId(), value);
-                        if ("await-on-first".equals(scenario.mode())) {
+                        evidence.record(yield ? "yield-resumed" : "timer-await-resumed",
+                            scenario.requestId(), value);
+                        evidence.record(yield ? "yield-completed" : "timer-await-completed",
+                            scenario.requestId(), value);
+                        if ("await-on-first".equals(scenario.mode())
+                            || "yield-on-first".equals(scenario.mode())) {
                             spot.closeTimer(tick.name());
                         }
                     });
             }
-            if (tick.deliveryIndex() == 2 && "await-then-next".equals(scenario.mode())) {
+            if (tick.deliveryIndex() == 2
+                && ("await-then-next".equals(scenario.mode())
+                    || "yield-then-next".equals(scenario.mode()))) {
                 evidence.record("timer-next-started", scenario.requestId(), value);
                 evidence.record("timer-next-completed", scenario.requestId(), value);
                 spot.closeTimer(tick.name());
             } else if ("fast".equals(scenario.mode())) {
-                if (fanout != null && fanoutEnabled) {
-                    return fanout.publish(
-                        Contracts.OBS_FANOUT_CHANNEL,
-                        new Contracts.ObservabilityFanoutEvent(
-                            scenario.requestId(), tick.deliveryIndex()))
-                        .submit()
-                        .thenApply(ignored -> {
-                            evidence.record("timer-fast-started", scenario.requestId(), value);
-                            evidence.record("timer-fast-completed", scenario.requestId(), value);
-                            spot.closeTimer(tick.name());
-                            return null;
-                        });
-                }
                 evidence.record("timer-fast-started", scenario.requestId(), value);
                 evidence.record("timer-fast-completed", scenario.requestId(), value);
                 spot.closeTimer(tick.name());
@@ -471,15 +599,13 @@ public final class AwaitProbeHandlers {
             AwaitActor actor,
             ZLinkMessageContext context,
             Contracts.ActorJoinReq request) {
-            return actor.context().joinSpot(RoutingId.from(request.spotRid()), "join")
+            actor.context().joinSpot(request.spotRid(), "join")
                 .timeout(Duration.ofSeconds(5))
-                .submit()
-                .thenApply(joined -> {
-                    evidence.record("actor-joined", request.requestId(),
-                        "actor=" + joinedActorId(joined) + ";spot=" + request.spotRid());
-                    return new Contracts.ActorJoinRes(
-                        "ATD-B-JOIN", request.requestId(), actor.actorId(), "joined");
-                });
+                .defer();
+            evidence.record("actor-joined", request.requestId(),
+                "actor=" + actor.actorId() + ";spot=" + request.spotRid());
+            return CompletableFuture.completedFuture(new Contracts.ActorJoinRes(
+                "ATD-B-JOIN", request.requestId(), actor.actorId(), "joined"));
         }
     }
 
@@ -502,17 +628,24 @@ public final class AwaitProbeHandlers {
                 + ";target=" + request.targetSpotRid();
             evidence.record("actor-join-await-started", request.requestId(), value);
             evidence.record("actor-join-await-released", request.requestId(), value);
-            return actor.context().joinSpot(
-                    RoutingId.from(request.targetSpotRid()),
+            actor.context().joinSpot(
+                    request.targetSpotRid(),
                     new Contracts.DelayReq(request.requestId(), 350))
                 .timeout(Duration.ofSeconds(5))
-                .submit()
-                .thenApply(joined -> {
-                    String resumed = value + ";joined=" + joinedActorId(joined);
+                .defer();
+            return spot.context().outbound()
+                .requestToChannel(
+                    Contracts.DELAY_CHANNEL,
+                    new Contracts.DelayReq(request.requestId(), 350))
+                .timeout(Duration.ofSeconds(5))
+                .submit(Contracts.DelayRes.class)
+                .thenApply(ignored -> {
+                    String resumed = value + ";joined=" + request.targetSpotRid();
                     evidence.record("actor-join-await-resumed", request.requestId(), resumed);
                     evidence.record("actor-join-await-completed", request.requestId(), resumed);
                     return new Contracts.ActorJoinAwaitRes(
-                        "ATD-B3", request.requestId(), actor.actorId(), "actor-join-await-completed");
+                        "ATD-B3", request.requestId(), actor.actorId(),
+                        "actor-join-await-completed");
                 });
         }
     }
@@ -625,32 +758,33 @@ public final class AwaitProbeHandlers {
             AwaitActor actor,
             ZLinkMessageContext context,
             Contracts.ActorJoinReq request) {
-            return actor.context().joinSpot(RoutingId.from(request.spotRid()), "join")
+            actor.context().joinSpot(request.spotRid(), "join")
                 .timeout(Duration.ofSeconds(5))
-                .submit()
-                .thenApply(joined -> {
-                    evidence.record("actor-joined", request.requestId(),
-                        "actor=" + joinedActorId(joined) + ";spot=" + request.spotRid());
-                    return new Contracts.ActorJoinRes(
-                        "TD-E", request.requestId(), actor.actorId(), "joined");
-                });
+                .defer();
+            evidence.record("actor-joined", request.requestId(),
+                "actor=" + actor.actorId() + ";spot=" + request.spotRid());
+            return CompletableFuture.completedFuture(new Contracts.ActorJoinRes(
+                "TD-E", request.requestId(), actor.actorId(), "joined"));
         }
     }
 
     private static CompletionStage<Contracts.ActorAwaitRes> actorAwait(
         systems.zlink.framework.spots.ZLinkSpotOutbound outbound,
-        RoutingId spotRid,
+        String spotRid,
         AwaitActor actor,
         Contracts.ActorAwaitReq request,
         EvidenceStore evidence) {
         String value = actorValue(spotRid, actor);
         evidence.record("actor-await-started", request.requestId(), value);
         evidence.record("actor-await-released", request.requestId(), value);
-        return outbound.requestToChannel(
+        var call = outbound.requestToChannel(
                 Contracts.DELAY_CHANNEL,
                 new Contracts.DelayReq(request.requestId(), request.delayMillis()))
-            .timeout(delayRequestTimeout(request.delayMillis()))
-            .submit(Contracts.DelayRes.class)
+            .timeout(delayRequestTimeout(request.delayMillis()));
+        CompletionStage<Contracts.DelayRes> completion = request.requestId().startsWith("atdb1-")
+            ? call.yield(Contracts.DelayRes.class)
+            : call.submit(Contracts.DelayRes.class);
+        return completion
             .thenApply(reply -> {
                 evidence.record("actor-await-resumed", request.requestId(), value);
                 evidence.record("actor-await-completed", request.requestId(), value);
@@ -660,7 +794,7 @@ public final class AwaitProbeHandlers {
     }
 
     private static CompletionStage<Contracts.ActorFastRes> fast(
-        RoutingId spotRid,
+        String spotRid,
         AwaitActor actor,
         Contracts.ActorFastReq request,
         EvidenceStore evidence) {
@@ -671,20 +805,10 @@ public final class AwaitProbeHandlers {
             "ATD-B", request.requestId(), actor.actorId(), request.marker()));
     }
 
-    private static String actorValue(RoutingId spotRid, AwaitActor actor) {
+    private static String actorValue(String spotRid, AwaitActor actor) {
         return "actor=" + actor.actorId() + ";mailbox=actor:" + actor.actorId() + ";spot=" + spotRid;
     }
 
-    private static String joinedActorId(ZLinkSpotActorJoinResult<?> result) {
-        if (result instanceof ZLinkSpotActorJoinResult.Accepted<?> accepted) {
-            return accepted.actor().actorId();
-        }
-        throw new IllegalStateException("actor join was rejected");
-    }
-
-    private static SpotHandle requireSpot(java.util.Optional<SpotHandle> handle, RoutingId spotRid) {
-        return handle.orElseThrow(() -> new IllegalStateException("spot not found: " + spotRid));
-    }
 
     private static void recordProbe(EvidenceStore evidence, AwaitProbeSpot spot, String requestId) {
         String value = spot.context().spotId();

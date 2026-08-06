@@ -1066,8 +1066,22 @@ void public_host_runtime_t::forget_peer (
 void public_host_runtime_t::disconnect_peer (
   const std::string &endpoint) noexcept
 {
-    std::lock_guard lock (_mutex);
-    _peer_endpoints.erase (endpoint);
+    {
+        std::lock_guard lock (_mutex);
+        _peer_endpoints.erase (endpoint);
+    }
+    _transport->disconnect_peer (endpoint);
+}
+
+void public_host_runtime_t::disconnect_peer (
+  const std::vector<std::uint8_t> &expected_routing_id,
+  const std::string &endpoint) noexcept
+{
+    {
+        std::lock_guard lock (_mutex);
+        _peer_endpoints.erase (endpoint);
+    }
+    _transport->disconnect_peer (expected_routing_id, endpoint);
 }
 
 node_status_t public_host_runtime_t::status () const

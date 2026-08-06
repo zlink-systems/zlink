@@ -24,6 +24,7 @@ import {
 } from '@zlink-systems/zlink';
 import { isPollerInterruptedError } from './node-backend-adapter-support';
 import { isEndpointCloseIgnorableError } from './node-socket-backend-adapter';
+import { ZLinkAsyncSubmitter } from '../../messaging';
 
 export interface ZLinkRawReceivedRecord {
   readonly sourceRid: string;
@@ -111,8 +112,13 @@ export interface ZLinkRawBindingPort {
 }
 
 export class ZLinkNodeRawBindingPort implements ZLinkRawBindingPort {
+  constructor(private readonly sharedContext?: Context) {}
+
   createHost(): ZLinkRawHostPort {
-    return new NodeRawHostPort(createContext());
+    return new NodeRawHostPort(
+      this.sharedContext ?? createContext(),
+      this.sharedContext === undefined
+    );
   }
 }
 
@@ -120,7 +126,10 @@ class NodeRawHostPort implements ZLinkRawHostPort {
   private readonly resources: Array<{ close(): void }> = [];
   private state: 'open' | 'stopping' | 'closed' = 'open';
 
-  constructor(private readonly context: Context) {}
+  constructor(
+    private readonly context: Context,
+    private readonly ownsContext: boolean
+  ) {}
 
   createRouter(): ZLinkRawRouterPort {
     this.requireOpen();
@@ -135,7 +144,7 @@ class NodeRawHostPort implements ZLinkRawHostPort {
   shutdown(): void {
     if (this.state !== 'open') return;
     this.state = 'stopping';
-    this.context.shutdown();
+    if (this.ownsContext) this.context.shutdown();
   }
 
   close(): void {
@@ -149,10 +158,12 @@ class NodeRawHostPort implements ZLinkRawHostPort {
         failures.push(error);
       }
     }
-    try {
-      this.context.close();
-    } catch (error) {
-      failures.push(error);
+    if (this.ownsContext) {
+      try {
+        this.context.close();
+      } catch (error) {
+        failures.push(error);
+      }
     }
     this.state = 'closed';
     if (failures.length > 0) {
@@ -177,6 +188,9 @@ abstract class NodeRawSocketPort<TSocket extends Socket> implements ZLinkRawSock
   private readonly monitors = new Set<NodeRawMonitorPort>();
   private readonly readablePoller = createPoller();
   private readonly readableEvents = createPollEvents(1);
+  // Raw receive copies the parts into the Framework-owned mailbox before the
+  // next receive begins, so the binding envelope can be reused safely.
+  private readonly received = new Received();
   private closed = false;
 
   protected constructor(protected readonly socket: TSocket) {
@@ -259,6 +273,11 @@ abstract class NodeRawSocketPort<TSocket extends Socket> implements ZLinkRawSock
     } catch (error) {
       failures.push(error);
     }
+    try {
+      this.received.close();
+    } catch (error) {
+      failures.push(error);
+    }
     this.closed = true;
     if (failures.length > 0) {
       console.error('Raw socket cleanup causes:', failures);
@@ -270,7 +289,10 @@ abstract class NodeRawSocketPort<TSocket extends Socket> implements ZLinkRawSock
     if (this.closed) throw new Error('Raw socket is closed.');
   }
 
-  protected receiveRecord(dontWait: boolean): ZLinkRawReceivedRecord | undefined {
+  protected receiveRecord(
+    dontWait: boolean,
+    reply?: RawReceivedReply
+  ): ZLinkRawReceivedRecord | undefined {
     const timeoutMs = dontWait ? 0 : -1;
     try {
       if (
@@ -283,13 +305,14 @@ abstract class NodeRawSocketPort<TSocket extends Socket> implements ZLinkRawSock
       if (isPollerInterruptedError(error)) return undefined;
       throw error;
     }
-    return receiveRecord(this.socket as never, true);
+    return receiveRecord(this.socket as never, true, reply, this.received);
   }
 }
 
 class NodeRawRouterPort extends NodeRawSocketPort<RouterSocket> implements ZLinkRawRouterPort {
   private readonly completionPoller = createPoller();
   private readonly completionEvents = createPollEvents(1);
+  private readonly replySubmitter: ZLinkAsyncSubmitter;
   private completionTimer?: ReturnType<typeof setTimeout>;
   private completionClosed = false;
 
@@ -305,6 +328,15 @@ class NodeRawRouterPort extends NodeRawSocketPort<RouterSocket> implements ZLink
     socket.options.handover = true;
     socket.options.mandatory = true;
     socket.options.probe = true;
+    this.replySubmitter = new ZLinkAsyncSubmitter(
+      handler => socket.setSendReadyHandler(handler),
+      {
+        timeoutMs: socket.options.requestTimeout > 0
+          ? socket.options.requestTimeout
+          : 30_000,
+        capacity: 4096
+      }
+    );
     this.completionPoller.add(socket, [PollEventFlag.PollCompletion], 1);
   }
 
@@ -345,12 +377,20 @@ class NodeRawRouterPort extends NodeRawSocketPort<RouterSocket> implements ZLink
 
   receive(dontWait = false): ZLinkRawReceivedRecord | undefined {
     this.requireOpen();
-    return this.receiveRecord(dontWait);
+    return this.receiveRecord(dontWait, (targetRid, requestSeq, parts) => {
+      this.reply(targetRid, requestSeq, parts);
+    });
   }
 
   reply(targetRid: string | Uint8Array, requestSeq: bigint, parts: readonly Uint8Array[]): void {
     this.requireOpen();
-    appendReplyParts(this.socket.reply(bindingRoutingId(targetRid), requestSeq), parts).submit();
+    if (this.tryReply(targetRid, requestSeq, parts)) return;
+    // A request reply is already accepted work. Keep it on the bounded
+    // send-ready queue when the peer's completion lane is temporarily full;
+    // application sends must not be given this treatment at their call site.
+    this.replySubmitter.submitCommandOneWay(
+      () => this.tryReply(targetRid, requestSeq, parts)
+    );
   }
 
   trySendCompletionControl(
@@ -358,12 +398,10 @@ class NodeRawRouterPort extends NodeRawSocketPort<RouterSocket> implements ZLink
     parts: readonly Uint8Array[]
   ): boolean {
     this.requireOpen();
-    const messages = parts.map(part => Message.from(part));
-    try {
-      return this.socket.trySendCompletionControl(bindingRoutingId(targetRid), messages);
-    } finally {
-      for (const message of messages) message.close();
-    }
+    // The public binding accepts MessageLike values and performs the native
+    // handoff itself. Do not create a temporary Message for every control
+    // part; the input is explicitly non-consuming.
+    return this.socket.trySendCompletionControl(bindingRoutingId(targetRid), parts);
   }
 
   setCompletionControlHandler(
@@ -395,6 +433,7 @@ class NodeRawRouterPort extends NodeRawSocketPort<RouterSocket> implements ZLink
 
   override close(): void {
     this.completionClosed = true;
+    this.replySubmitter.dispose();
     if (this.completionTimer !== undefined) {
       clearTimeout(this.completionTimer);
       this.completionTimer = undefined;
@@ -420,6 +459,20 @@ class NodeRawRouterPort extends NodeRawSocketPort<RouterSocket> implements ZLink
       }
     }, 5);
     this.completionTimer.unref();
+  }
+
+  private tryReply(
+    targetRid: string | Uint8Array,
+    requestSeq: bigint,
+    parts: readonly Uint8Array[]
+  ): boolean {
+    try {
+      appendReplyParts(this.socket.reply(bindingRoutingId(targetRid), requestSeq), parts).submit();
+      return true;
+    } catch (error) {
+      if (isReplyBackpressured(error)) return false;
+      throw error;
+    }
   }
 }
 
@@ -478,8 +531,8 @@ function appendSendParts(
   parts: readonly Uint8Array[]
 ): SendSubmitOperation {
   const [first, ...rest] = requireParts(parts);
-  let next = operation.message(Message.from(first));
-  for (const part of rest) next = next.message(Message.from(part));
+  let next = operation.message(first);
+  for (const part of rest) next = next.message(part);
   return next;
 }
 
@@ -488,8 +541,8 @@ function appendRequestParts(
   parts: readonly Uint8Array[]
 ): RequestSubmitOperation {
   const [first, ...rest] = requireParts(parts);
-  let next = operation.message(Message.from(first));
-  for (const part of rest) next = next.message(Message.from(part));
+  let next = operation.message(first);
+  for (const part of rest) next = next.message(part);
   return next;
 }
 
@@ -498,9 +551,18 @@ function appendReplyParts(
   parts: readonly Uint8Array[]
 ): ReplySubmitOperation {
   const [first, ...rest] = requireParts(parts);
-  let next = operation.message(Message.from(first));
-  for (const part of rest) next = next.message(Message.from(part));
+  let next = operation.message(first);
+  for (const part of rest) next = next.message(part);
   return next;
+}
+
+function isReplyBackpressured(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false;
+  const nativeErrno = (error as { readonly nativeErrno?: unknown }).nativeErrno;
+  if (nativeErrno === 11) return true;
+  return /resource temporarily unavailable|eagain/i.test(
+    String((error as { readonly message?: unknown }).message ?? '')
+  );
 }
 
 function requireParts(parts: readonly Uint8Array[]): [Uint8Array, ...Uint8Array[]] {
@@ -508,28 +570,46 @@ function requireParts(parts: readonly Uint8Array[]): [Uint8Array, ...Uint8Array[
   return parts as [Uint8Array, ...Uint8Array[]];
 }
 
+type RawReceivedReply = (
+  targetRid: Uint8Array,
+  requestSeq: bigint,
+  parts: readonly Uint8Array[]
+) => void;
+
 function receiveRecord(
   socket: Pick<RouterSocket | DealerSocket, 'recv'>,
-  dontWait: boolean
+  dontWait: boolean,
+  reply: RawReceivedReply | undefined,
+  received: Received
 ): ZLinkRawReceivedRecord | undefined {
-  const received = new Received();
   if (!socket.recv(received, dontWait ? 1 : 0)) {
     received.close();
     return undefined;
   }
   try {
-    const reply = received.requestSeq === null
+    const sourceRid = received.routingId?.toString() ?? '';
+    const sourceRoute = received.routingId?.toBytes() ?? Buffer.alloc(0);
+    const requestSeq = received.requestSeq;
+    const receivedReply = requestSeq === null
       ? undefined
-      : received.reply();
+      : reply === undefined
+        ? received.reply()
+        : (parts: readonly Uint8Array[]) => {
+            reply(sourceRoute, requestSeq, parts);
+          };
     return {
-      sourceRid: received.routingId?.toString() ?? '',
-      sourceRoute: received.routingId?.toBytes() ?? Buffer.alloc(0),
-      ...(received.requestSeq === null ? {} : { requestSeq: received.requestSeq }),
-      ...(reply === undefined
+      sourceRid,
+      sourceRoute,
+      ...(requestSeq === null ? {} : { requestSeq }),
+      ...(receivedReply === undefined
         ? {}
         : {
             reply: (parts: readonly Uint8Array[]) => {
-              appendReplyParts(reply, parts).submit();
+              if (typeof receivedReply === 'function') {
+                receivedReply(parts);
+                return;
+              }
+              appendReplyParts(receivedReply, parts).submit();
             }
           }),
       parts: received.parts.map(part => part.toBytes())

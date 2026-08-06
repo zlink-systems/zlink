@@ -6,25 +6,8 @@ import test from 'node:test';
 const root = path.resolve(import.meta.dirname, '../..');
 
 test('Config 9 and 10 keep one client scenario file per documented id', () => {
-  assertScenarioLayout('ToActorMessaging', ids('TA', { A: 4, B: 3 }));
-  assertScenarioLayout(
-    'SpotActorTransfer',
-    [
-      ...ids('ST', { A: 3, B: 4, C: 3, D: 2, E: 2, F: 6 }),
-      'ST-E1A',
-      'ST-H1',
-      'ST-H2',
-      'ST-H3',
-      'ST-H4',
-      'ST-H5',
-      'ST-I1',
-      'ST-I2',
-      'ST-I3',
-      'ST-I4',
-      'ST-I5',
-      'ST-I6'
-    ].sort()
-  );
+  assertScenarioLayout('ToActorMessaging', documentedIds('TA', 'config-9-'));
+  assertScenarioLayout('SpotActorTransfer', documentedIds('ST', 'config-10-'));
 });
 
 function assertScenarioLayout(configName, expectedIds) {
@@ -58,8 +41,15 @@ function assertScenarioLayout(configName, expectedIds) {
   assert.doesNotMatch(main, /(?:async\s+)?function\s+run(?:Ta)?[A-F][0-9]+\s*\(/);
 }
 
-function ids(prefix, tracks) {
-  return Object.entries(tracks)
-    .flatMap(([track, count]) => Array.from({ length: count }, (_, index) => `${prefix}-${track}${index + 1}`))
-    .sort();
+function documentedIds(prefix, filePrefix) {
+  const docsDirectory = path.resolve(root, '../../doc/framework/common/e2e');
+  const ids = new Set();
+  for (const name of fs.readdirSync(docsDirectory)) {
+    if (!name.startsWith(filePrefix) || !name.endsWith('.md')) continue;
+    const source = fs.readFileSync(path.join(docsDirectory, name), 'utf8');
+    for (const match of source.matchAll(new RegExp(`^####\\s+(${prefix}-[A-Z0-9]+)\\b`, 'gm'))) {
+      ids.add(match[1]);
+    }
+  }
+  return [...ids].sort();
 }

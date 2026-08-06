@@ -612,7 +612,6 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                 ZLinkClientServerControlProtocol.NormalizeMaximumMessageBytes(
                     socketConfig.MaxMessageSize);
             Socket = socket;
-            Socket.SetChannelName(channelName);
             Socket.SetRoutingId(RoutingId.From($"csc-{Guid.NewGuid():N}"));
             ZLinkChannelBundleFactory.ApplySocketConfig(Socket, socketConfig);
             Socket.SetProbe(false);
@@ -1177,6 +1176,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         {
             var cancellationToken = _admissionStop.Token;
             using var receivePoller = Socket.CreateReceivePoller();
+            using var received = Received.Create();
             while (!cancellationToken.IsCancellationRequested)
             {
                 try
@@ -1186,8 +1186,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                                       | PollEventFlags.PollErr
                                       | PollEventFlags.PollPri)) == 0)
                         continue;
-                    using var received = Socket.Recv(RecvFlags.DontWait);
-                    if (received is null)
+                    if (!Socket.Recv(received, RecvFlags.DontWait))
                     {
                         await Task.Delay(
                                 TimeSpan.FromMilliseconds(10),

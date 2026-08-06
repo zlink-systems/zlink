@@ -12,6 +12,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.core.env.StandardEnvironment;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.e2e.channelegress.shared.ChannelProbeRequestHandler;
+import systems.zlink.e2e.channelegress.shared.ChannelProbePublishHandler;
 import systems.zlink.e2e.channelegress.shared.Contracts;
 import systems.zlink.e2e.channelegress.shared.EvidenceState;
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
@@ -57,19 +58,31 @@ public final class Program {
         EvidenceState evidence,
         com.fasterxml.jackson.databind.ObjectMapper json,
         systems.zlink.framework.channels.ZLinkClient client,
+        systems.zlink.framework.channels.ZLinkFanoutClient fanout,
         systems.zlink.framework.channels.ZLinkRouteClient routes,
+        systems.zlink.framework.channels.ZLinkChannelRuntimeOptions runtimeOptions,
+        org.springframework.beans.factory.ObjectProvider<systems.zlink.framework.spots.ZLinkSpotManager> spots,
+        org.springframework.beans.factory.ObjectProvider<systems.zlink.framework.actors.ZLinkActorManager> actors,
         systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime routeRuntime,
         systems.zlink.framework.monitoring.ZLinkClientServerRuntime clientServerRuntime,
-        systems.zlink.framework.spring.internal.runtime.ZLinkFrameworkLifecycle lifecycle) {
+        systems.zlink.framework.monitoring.ZLinkFanoutRuntime fanoutRuntime,
+        systems.zlink.framework.spring.internal.runtime.ZLinkFrameworkLifecycle lifecycle,
+        org.springframework.beans.factory.ObjectProvider<systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime> runtime) {
         return new ChannelEgressHttpServer(
             options,
             evidence,
             json,
             client,
+            fanout,
             routes,
+            runtimeOptions,
+            spots.getIfAvailable(),
+            actors.getIfAvailable(),
             routeRuntime,
             clientServerRuntime,
-            lifecycle);
+            fanoutRuntime,
+            lifecycle,
+            runtime);
     }
 
     @Bean
@@ -90,6 +103,7 @@ public final class Program {
                     return CompletableFuture.completedFuture(null);
                 });
             options.addHandlersFromPackageOf(ChannelProbeRequestHandler.class);
+            options.addHandlersFromPackageOf(ChannelProbePublishHandler.class);
             options.addHandlersFromPackageOf(SpotWorkflowHandler.class);
 
             String[] gameServers = role.gameServerNames();
@@ -97,7 +111,9 @@ public final class Program {
             if (gameServers.length > 0 || gameClients.length > 0
                 || role.instanceSpot() || role.objectClient()) {
                 ZLinkMeshNodeBuilder game = options.addRouteMesh(Contracts.GAME_MESH)
-                    .listen(role.gameEndpoint())
+                    .setBindHost(role.gameBindHost())
+                    .setAdvertiseHost(role.gameAdvertiseHost())
+                    .listen(URI.create(role.gameEndpoint()).getPort())
                     .setRoutingId(RoutingId.from(role.rid()));
                 connectPeers(
                     game,
@@ -107,9 +123,16 @@ public final class Program {
                 if (role.instanceSpot() || role.objectClient()) {
                     var objects = game.objects();
                     if (role.instanceSpot()) {
-                        objects.server().addSpotFactory(
+                        var server = objects.server();
+                        server.addEntrySpot(Config12ActorComponents.EntrySpot.class);
+                        server.addSpotFactory(
                             Contracts.INSTANCE_SPOT_TYPE,
                             Config12Spot.class,
+                            factory -> factory.disableRelocation());
+                        server.addActorFactory(
+                            Contracts.ACTOR_TYPE,
+                            Config12ActorComponents.Actor.class,
+                            Config12ActorComponents.ActorFactory.class,
                             factory -> factory.disableRelocation());
                     }
                     if (role.objectClient()) {
@@ -137,14 +160,42 @@ public final class Program {
                     workflow.client();
                 }
                 if (role.workflowServer()) {
-                    URI endpoint = URI.create(role.workflowEndpoint());
-                    workflow.server()
-                        .setBindHost(endpoint.getHost())
-                        .setAdvertiseHost(endpoint.getHost())
+                    var workflowServer = workflow.server();
+                    workflowServer
+                        .setBindHost(role.workflowBindHost())
+                        .setAdvertiseHost(role.workflowAdvertiseHost())
                         .listen(role.workflowPort())
                         .setWeight(role.workflowWeight())
                         .addHandlerGroup(Contracts.HANDLER_GROUP);
+                    if (role.objectClient()) {
+                        workflowServer.addRequestHandler(
+                            StateAddressRequestHandler.class,
+                            Contracts.StateAddressReq.class,
+                            Contracts.StateAddressRes.class);
+                    }
                 }
+            }
+
+            if (role.fanoutPublisher() || role.fanoutSubscriber()) {
+                var fanout = options.addFanoutChannel(Contracts.FANOUT_CHANNEL);
+                if (role.fanoutPublisher()) {
+                    fanout.enablePublisher(role.fanoutPort())
+                        .setBindHost(role.fanoutBindHost())
+                        .setAdvertiseHost(role.fanoutAdvertiseHost())
+                        .setRoutingId(RoutingId.from(role.rid() + "-fanout"));
+                }
+                if (role.fanoutSubscriber()) {
+                    fanout.enableSubscriber()
+                        .addHandlerGroup(Contracts.FANOUT_HANDLER_GROUP);
+                }
+            }
+
+            if (role.streamServer()) {
+                options.addStreamNode(Contracts.STREAM_NODE)
+                    .setBindHost(role.streamBindHost())
+                    .setAdvertiseHost(role.streamAdvertiseHost())
+                    .bind(role.streamPort())
+                    .registerSession(ChannelProbeSession.class);
             }
         };
     }

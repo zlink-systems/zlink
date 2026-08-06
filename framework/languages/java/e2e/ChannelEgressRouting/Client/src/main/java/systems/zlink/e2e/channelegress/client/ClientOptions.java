@@ -13,7 +13,8 @@ public record ClientOptions(
     String workflowBEndpoint,
     String apiAEndpoint,
     String apiBEndpoint,
-    String callerEndpoint) {
+    String callerEndpoint,
+    String fanoutSubscriberEndpoint) {
     public static ClientOptions load(String path) {
         Properties values = new Properties();
         try (Reader reader = Files.newBufferedReader(Path.of(path))) {
@@ -29,7 +30,8 @@ public record ClientOptions(
             required(values, "workflowBEndpoint"),
             required(values, "apiAEndpoint"),
             required(values, "apiBEndpoint"),
-            required(values, "callerEndpoint"));
+            required(values, "callerEndpoint"),
+            required(values, "fanoutSubscriberEndpoint"));
     }
 
     private static String required(Properties values, String name) {

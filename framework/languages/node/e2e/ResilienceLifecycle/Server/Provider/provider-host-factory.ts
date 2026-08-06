@@ -101,7 +101,8 @@ function createProviderModule(): Function {
           }
           if (options.fanoutEndpoint !== undefined) {
             builder.addFanoutChannel(ResilienceNames.fanoutChannel)
-              .enablePublisher(options.fanoutEndpoint);
+              .enablePublisher(options.fanoutEndpoint)
+              .routingId(options.rid);
           }
           return builder.build();
         }

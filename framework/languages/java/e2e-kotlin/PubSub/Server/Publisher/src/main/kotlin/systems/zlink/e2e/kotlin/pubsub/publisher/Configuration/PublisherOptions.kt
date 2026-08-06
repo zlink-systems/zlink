@@ -3,8 +3,13 @@ package systems.zlink.e2e.kotlin.pubsub.publisher
 data class PublisherOptions(
     val publisherEndpoint: String,
     val httpEndpoint: String,
-    val redisLocationEndpoint: String,
-    val locationKeyPrefix: String,
+    val routingId: String?,
+    val routingIdPrefix: String?,
+    val advertiseHost: String?,
+    val channelName: String,
+    val listenPort: Int?,
+    val redisLocationEndpoint: String?,
+    val locationKeyPrefix: String?,
     val logDir: String,
 ) {
     companion object {
@@ -13,12 +18,25 @@ data class PublisherOptions(
             fun required(key: String): String =
                 values[key]?.takeIf { it.isNotBlank() } ?: throw IllegalArgumentException("--$key is required.")
             return PublisherOptions(
-                publisherEndpoint = required("publisher-endpoint"),
+                publisherEndpoint = values["publisher-endpoint"]?.takeIf { it.isNotBlank() }.orEmpty(),
                 httpEndpoint = required("http-endpoint"),
-                redisLocationEndpoint = required("redis-location-endpoint"),
-                locationKeyPrefix = required("location-key-prefix"),
+                routingId = values["rid"]?.takeIf { it.isNotBlank() },
+                routingIdPrefix = values["routing-id-prefix"]?.takeIf { it.isNotBlank() },
+                advertiseHost = values["advertise-host"]?.takeIf { it.isNotBlank() },
+                channelName = values["channel-name"]?.takeIf { it.isNotBlank() }
+                    ?: systems.zlink.e2e.kotlin.pubsub.shared.Contracts.EVENT_CHANNEL,
+                listenPort = values["publisher-port"]?.takeIf { it.isNotBlank() }?.toInt(),
+                redisLocationEndpoint = values["redis-location-endpoint"]?.takeIf { it.isNotBlank() },
+                locationKeyPrefix = values["location-key-prefix"]?.takeIf { it.isNotBlank() },
                 logDir = values["log-dir"]?.takeIf { it.isNotBlank() } ?: "logs",
-            )
+            ).also { options ->
+                require(options.publisherEndpoint.isNotBlank() || options.listenPort != null) {
+                    "--publisher-endpoint or --publisher-port is required."
+                }
+                require(options.redisLocationEndpoint == null || options.locationKeyPrefix != null) {
+                    "--location-key-prefix is required with --redis-location-endpoint."
+                }
+            }
         }
     }
 }

@@ -46,6 +46,10 @@ zlink_close_result_t zlink_poller_destroy (void **poller_p_)
     poller_handle_t *poller = as_poller_handle (*poller_p_);
     if (!poller)
         return ZLINK_CLOSE_INVALID_HANDLE;
+    if (poller->wait_active) {
+        errno = EBUSY;
+        return ZLINK_CLOSE_BUSY;
+    }
     for (size_t i = 0; i < poller->registrations.size (); ++i)
         release_poller_registration (poller->registrations[i]);
     poller->tag = 0xdeadbeef;
@@ -162,6 +166,17 @@ int zlink_poller_wait (void *poller_,
             *error_out_ = ZLINK_CONFIG_INVALID_ARGUMENT;
         return -1;
     }
+    struct wait_scope_t
+    {
+        explicit wait_scope_t (poller_handle_t *poller_) : poller (poller_)
+        {
+            poller->wait_active = true;
+        }
+
+        ~wait_scope_t () { poller->wait_active = false; }
+
+        poller_handle_t *poller;
+    } wait_scope (poller);
     zlink::clock_t clock;
     const uint64_t deadline_ms =
       timeout_ > 0 ? clock.now_ms () + static_cast<uint64_t> (timeout_) : 0;

@@ -14,6 +14,9 @@ public final class SfB2GraceExceededScenario implements ClientScenario {
                 + context.options().locationHeartbeatMillis() * 2),
             "SF-B2");
         context.waitForUnhealthyStatus("SF-B2");
+        context.waitForReadyTargetsExcluding(
+            context.options().deadRid(),
+            Duration.ofMillis(context.options().locationHeartbeatMillis() * 2));
         return result;
     }
 }

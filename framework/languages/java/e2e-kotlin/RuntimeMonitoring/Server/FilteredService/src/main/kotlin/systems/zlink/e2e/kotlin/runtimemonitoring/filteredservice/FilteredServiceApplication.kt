@@ -8,6 +8,9 @@ import org.springframework.context.annotation.Bean
 import systems.zlink.contracts.core.RoutingId
 import systems.zlink.e2e.kotlin.runtimemonitoring.Contracts
 import systems.zlink.e2e.kotlin.runtimemonitoring.Env
+import systems.zlink.e2e.kotlin.runtimemonitoring.service.MonitoringActor
+import systems.zlink.e2e.kotlin.runtimemonitoring.service.MonitoringActorFactory
+import systems.zlink.e2e.kotlin.runtimemonitoring.service.MonitoringSpot
 import systems.zlink.e2e.kotlin.runtimemonitoring.service.EvidenceHttpServer
 import systems.zlink.e2e.kotlin.runtimemonitoring.service.EvidenceState
 import systems.zlink.e2e.kotlin.runtimemonitoring.service.WorkRequestHandler
@@ -52,6 +55,19 @@ class FilteredServiceApplication {
                 .setAdvertiseHost(apiEndpoint.host)
                 .listen(apiEndpoint.port)
                 .addHandlerGroup(Contracts.HANDLER_GROUP)
+            val node = options.addRouteMesh(Contracts.SPOT_MESH)
+                .listen(Env.get("e2e.mesh.endpoint"))
+                .setRoutingId(RoutingId.from(Env.get("e2e.rid", "svc-b") + "-spot"))
+                .setActorCapacity(1)
+                .setSpotCapacity(2)
+            node.channelName(Contracts.SPOT_CHANNEL).server()
+            node.objects().server()
+                .addSpotFactory("monitoring", MonitoringSpot::class.java) { factory -> factory.disableRelocation() }
+                .addActorFactory(
+                    Contracts.ACTOR_TYPE,
+                    MonitoringActor::class.java,
+                    MonitoringActorFactory::class.java,
+                ) { factory -> factory.disableRelocation() }
         }
     }
 

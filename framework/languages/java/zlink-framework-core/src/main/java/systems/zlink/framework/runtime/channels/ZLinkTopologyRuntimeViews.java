@@ -134,16 +134,20 @@ final class ZLinkClientServerRuntimeView implements ZLinkClientServerRuntime {
 final class ZLinkFanoutRuntimeView implements ZLinkFanoutRuntime {
     private final ZLinkChannelSocketRegistry sockets;
     private final Supplier<ZLinkFanoutLocationRuntime> locationRuntime;
+    private final Supplier<ZLinkManualFanoutRuntime> manualRuntime;
     private final Supplier<ZLinkFrameworkRuntimeState> hostState;
     private final AtomicLong sequence = new AtomicLong();
 
     ZLinkFanoutRuntimeView(
         ZLinkChannelSocketRegistry sockets,
         Supplier<ZLinkFanoutLocationRuntime> locationRuntime,
+        Supplier<ZLinkManualFanoutRuntime> manualRuntime,
         Supplier<ZLinkFrameworkRuntimeState> hostState) {
         this.sockets = Objects.requireNonNull(sockets, "sockets");
         this.locationRuntime = Objects.requireNonNull(
             locationRuntime, "locationRuntime");
+        this.manualRuntime = Objects.requireNonNull(
+            manualRuntime, "manualRuntime");
         this.hostState = Objects.requireNonNull(hostState, "hostState");
     }
 
@@ -151,9 +155,9 @@ final class ZLinkFanoutRuntimeView implements ZLinkFanoutRuntime {
     public ZLinkFanoutStatus snapshot(String channelName) {
         requireChannel(channelName);
         ZLinkFanoutLocationRuntime location = locationRuntime.get();
-        List<ZLinkMeshPeerSnapshot> publishers = location == null
-            ? List.of()
-            : location.publisherSnapshots(channelName).stream()
+        List<ZLinkMeshPeerSnapshot> publishers = new java.util.ArrayList<>();
+        if (location != null) {
+            publishers.addAll(location.publisherSnapshots(channelName).stream()
                 .map(publisher -> new ZLinkMeshPeerSnapshot(
                     publisher.nodeRid(),
                     publisher.ready()
@@ -162,7 +166,21 @@ final class ZLinkFanoutRuntimeView implements ZLinkFanoutRuntime {
                     publisher.ready()
                         ? Optional.empty()
                         : Optional.of(ZLinkTopologyReason.NO_READY_PEER)))
-                .toList();
+                .toList());
+        }
+        ZLinkManualFanoutRuntime manual = manualRuntime.get();
+        if (manual != null) {
+            publishers.addAll(manual.publisherSnapshots(channelName).stream()
+                .map(publisher -> new ZLinkMeshPeerSnapshot(
+                    publisher.nodeRid(),
+                    publisher.ready()
+                        ? ZLinkPeerState.READY
+                        : ZLinkPeerState.NOT_CONNECTED,
+                    publisher.ready()
+                        ? Optional.empty()
+                        : Optional.of(ZLinkTopologyReason.NO_READY_PEER)))
+                .toList());
+        }
         int readyPublisherCount = Math.toIntExact(publishers.stream()
             .filter(publisher -> publisher.state() == ZLinkPeerState.READY)
             .count());

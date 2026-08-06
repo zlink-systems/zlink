@@ -113,6 +113,26 @@ class MonitoringEvidenceClient(
         }
     }
 
+    fun postRaw(url: String): Pair<Int, String> {
+        return try {
+            val response = http.send(
+                HttpRequest.newBuilder(URI.create(url))
+                    .timeout(Duration.ofSeconds(10))
+                    .POST(HttpRequest.BodyPublishers.noBody())
+                    .build(),
+                HttpResponse.BodyHandlers.ofString(),
+            )
+            response.statusCode() to response.body()
+        } catch (error: IOException) {
+            throw IllegalStateException("POST failed: $url", error)
+        } catch (error: InterruptedException) {
+            Thread.currentThread().interrupt()
+            throw IllegalStateException("POST interrupted: $url", error)
+        }
+    }
+
+    fun json(url: String) = json.readTree(get(url))
+
     fun postBestEffort(url: String) {
         try {
             post(url)

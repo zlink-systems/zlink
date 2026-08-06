@@ -17,6 +17,8 @@ echo "log_dir=${log_dir}"
 SCENARIO="${1:-all}"
 e2e_start_order="$(zlink_e2e_start_order_mode "$@")"
 echo "start_order=${e2e_start_order}"
+# Inventory blocker: TD-F5A. The existing ATD-E3 flow is related but does not
+# provide the TD-F5A new-request rejection assertion.
 if [[ -z "${ZLINK_LIBRARY_PATH:-}" && -f "${default_core_lib}" ]]; then
   export ZLINK_LIBRARY_PATH="${default_core_lib}"
 fi
@@ -28,6 +30,8 @@ redis_location_endpoint="127.0.0.1:${redis_port}"
 location_key_prefix="zlink:e2e:automaticturn:${run_id}"
 config_dir="$(mktemp -d)"
 chmod 0700 "${config_dir}"
+control_dir="${log_dir}/control"
+mkdir -p "${control_dir}"
 LOCAL_READINESS_TIMEOUT_SECONDS=3
 LOCAL_READINESS_POLL_SECONDS=0.1
 LOCAL_READINESS_ATTEMPTS=30
@@ -233,6 +237,30 @@ scenario_prefixes = {
     "ATD-E3": ["atde3-"],
     "ATD-E4": ["atde4-"],
     "ATD-E5": ["atde5-"],
+    "TD-A3": ["tda3-"],
+    "TD-A5": ["tda5-"],
+    "TD-B3": ["tdb3-"],
+    "TD-B4": ["tdb4-"],
+    "TD-C1": ["tdc1-"],
+    "TD-C2": ["tdc2-"],
+    "TD-C3": ["tdc3-"],
+    "TD-C4": ["tdc4async-", "tdc4yield-"],
+    "TD-C5": ["tdc5-"],
+    "TD-D1": ["atdb1-"],
+    "TD-D2": ["atdb2-"],
+    "TD-D3": ["atdc2-"],
+    "TD-D4": ["atdc3-"],
+    "TD-D6": ["atde1-"],
+    "TD-E1": ["tde2-"],
+    "TD-E2": ["tde3-"],
+    "TD-E2A": ["tde2-"],
+    "TD-F1": ["atdd2-"],
+    "TD-F2": ["atdd3-"],
+    "TD-F3": ["atdd4-"],
+    "TD-F4": ["atde1-"],
+    "TD-F5": ["atde2-"],
+    "TD-F6": ["atde1-", "atde2-"],
+    "TD-G1": ["tda2-"],
 }
 required_markers = {
     "ATD-A1": ["hold-started", "probe-started", "probe-completed", "hold-resumed", "hold-completed"],
@@ -242,18 +270,42 @@ required_markers = {
     "ATD-B1": ["actor-await-started", "actor-await-released", "actor-fast-started", "actor-fast-completed", "actor-await-resumed", "actor-await-completed"],
     "ATD-B2": ["actor-await-started", "actor-await-released", "actor-await-resumed", "actor-await-completed", "actor-fast-started", "actor-fast-completed"],
     "ATD-B3": ["actor-join-await-started", "actor-join-await-released", "actor-fast-started", "actor-fast-completed", "actor-join-await-resumed", "actor-join-await-completed"],
-    "ATD-C1": ["timer-await-started", "timer-await-released", "timer-fast-started", "timer-fast-completed", "timer-await-resumed", "timer-await-completed"],
+    "ATD-C1": ["timer-await-started", "timer-await-released", "timer-await-resumed", "timer-await-completed", "timer-fast-started", "timer-fast-completed"],
     "ATD-C2": ["timer-await-started", "timer-await-released", "timer-await-resumed", "timer-await-completed", "timer-next-started", "timer-next-completed"],
-    "ATD-C3": ["actor-await-started", "actor-await-released", "timer-fast-started", "timer-fast-completed", "actor-await-resumed", "actor-await-completed", "timer-await-started", "timer-await-released", "actor-fast-started", "actor-fast-completed", "timer-await-resumed", "timer-await-completed"],
+    "ATD-C3": ["actor-await-started", "actor-await-released", "actor-await-resumed", "actor-await-completed", "timer-fast-started", "timer-fast-completed", "timer-await-started", "timer-await-released", "timer-await-resumed", "timer-await-completed", "actor-fast-started", "actor-fast-completed"],
     "ATD-D1": ["await-started", "await-released", "probe-started", "probe-completed", "await-resumed", "await-completed"],
     "ATD-D2": ["remote-await-started", "remote-await-released", "remote-await-resumed", "remote-await-completed", "await-started", "await-released", "await-resumed", "await-completed"],
-    "ATD-D3": ["await-started", "await-released", "probe-started", "probe-completed", "await-resumed", "await-completed"],
+    "ATD-D3": ["await-started", "await-released", "await-resumed", "await-completed", "probe-started", "probe-completed"],
     "ATD-D4": ["actor-push-await-started", "actor-push-await-released", "actor-push-await-resumed", "actor-push-await-completed"],
     "ATD-E1": ["timeout-await-started", "timeout-await-released", "timeout-await-completed", "probe-started", "probe-completed"],
     "ATD-E2": ["cancel-await-started", "cancel-await-released", "cancel-await-completed", "probe-started", "probe-completed"],
     "ATD-E3": ["shutdown-await-cleaned", "shutdown-recovery-completed"],
     "ATD-E4": ["static-contract-verified"],
     "ATD-E5": ["marker-schema-verified"],
+    "TD-A3": ["counter-reset", "counter-before", "counter-after-yield", "counter-operation-completed"],
+    "TD-A5": ["timer-await-started", "timer-await-released", "timer-await-resumed", "timer-await-completed"],
+    "TD-B3": ["counter-reset", "counter-before", "counter-after-yield", "counter-operation-completed"],
+    "TD-B4": ["yield-released", "yield-held", "yield-resumed", "yield-completed", "timer-next-started", "timer-next-completed"],
+    "TD-C1": ["io-worker-started", "io-worker-resumed", "io-worker-completed", "probe-started", "probe-completed"],
+    "TD-C2": ["io-worker-started", "io-worker-resumed", "io-worker-completed", "probe-started", "probe-completed"],
+    "TD-C3": ["io-worker-batch-completed"],
+    "TD-C4": ["cpu-worker-started", "cpu-worker-resumed", "cpu-worker-completed"],
+    "TD-C5": ["cpu-worker-started", "cpu-worker-resumed", "cpu-worker-completed"],
+    "TD-D1": ["actor-await-started", "actor-fast-completed", "actor-await-completed"],
+    "TD-D2": ["actor-await-started", "actor-await-completed", "actor-fast-completed"],
+    "TD-D3": ["timer-await-started", "timer-next-completed"],
+    "TD-D4": ["actor-await-started", "timer-fast-completed", "actor-await-completed"],
+    "TD-D6": ["timeout-await-started", "timeout-await-completed", "probe-completed"],
+    "TD-E1": ["actor-joined"],
+    "TD-E2": ["actor-joined"],
+    "TD-E2A": ["actor-joined"],
+    "TD-F1": ["remote-await-started", "remote-await-completed"],
+    "TD-F2": ["await-started", "probe-completed", "await-completed"],
+    "TD-F3": ["actor-push-await-started", "actor-push-await-completed"],
+    "TD-F4": ["timeout-await-started", "timeout-await-completed", "probe-completed"],
+    "TD-F5": ["cancel-await-started", "cancel-await-completed", "probe-completed"],
+    "TD-F6": ["timeout-await-completed", "cancel-await-completed"],
+    "TD-G1": ["await-held", "await-resumed", "completed"],
 }
 
 entries = []
@@ -438,7 +490,8 @@ write_client_config() {
     "playBHttpEndpoint=${PLAY_B_HTTP}" \
     "sessionHttpEndpoint=${SESSION_HTTP}" \
     "shutdownRequestId=${shutdown_request_id}" \
-    "shutdownSpotRid=${shutdown_spot_rid}"
+    "shutdownSpotRid=${shutdown_spot_rid}" \
+    "controlDirectory=${control_dir}"
 }
 delay_config="${config_dir}/delay.properties"
 play_a_config="${config_dir}/play-a.properties"
@@ -514,7 +567,44 @@ for role in "${ORDERED_SERVER_ROLES[@]}"; do
 done
 assert_readiness
 
-timeout -k 5s 90s "$(client_bin)" --config "${client_config}" "${SCENARIO}" \
+if [[ "${SCENARIO}" == "ATD-E3" ]]; then
+  SHUTDOWN_ID="atde3-$(date +%s)-$$"
+  SHUTDOWN_SPOT="await-probe"
+  shutdown_client_config="${config_dir}/client-shutdown.properties"
+  write_client_config "${shutdown_client_config}" "${SHUTDOWN_ID}" "${SHUTDOWN_SPOT}"
+  timeout -k 5s 120s "$(client_bin)" \
+    --config "${shutdown_client_config}" --shutdown-wait \
+      >"${log_dir}/client-shutdown-wait.stdout.log" 2>"${log_dir}/client-shutdown-wait.stderr.log" &
+  SHUTDOWN_CLIENT_PID=$!
+  pids+=("${SHUTDOWN_CLIENT_PID}")
+  wait_evidence_contains \
+    "${PLAY_A_HTTP}" \
+    "await-released" \
+    "${SHUTDOWN_ID}" \
+    "ATD-E3 pending await marker was not observed before shutdown."
+  fetch_evidence "${PLAY_A_HTTP}" "${log_dir}/play-a-shutdown-before-stop-evidence.json"
+  terminate_gracefully play-a "${pids[1]}"
+  "$(play_bin)" --config "${play_a_config}" \
+    >"${log_dir}/play-a-restart.stdout.log" 2>"${log_dir}/play-a-restart.stderr.log" &
+  pids+=("$!")
+  wait_port play-a-route "${ROUTE_A_ENDPOINT}"
+  wait_http play-a-http "${PLAY_A_HTTP}"
+  assert_readiness
+  touch "${control_dir}/atd-e3-play-restarted"
+  wait "${SHUTDOWN_CLIENT_PID}"
+  cat "${log_dir}/client-shutdown-wait.stdout.log"
+  grep -q "automatic-turn-dispatch shutdown recovery result=passed" "${log_dir}/client-shutdown-wait.stdout.log"
+  fetch_evidence "${PLAY_A_HTTP}" "${log_dir}/play-a-restart-evidence.json"
+  echo "scenario ATD-E3 passed"
+  echo "automatic-turn-dispatch e2e result=passed"
+  exit 0
+fi
+
+scenario_timeout=90
+if [[ "${SCENARIO}" == "all" ]]; then
+  scenario_timeout=300
+fi
+timeout -k 5s "${scenario_timeout}s" "$(client_bin)" --config "${client_config}" "${SCENARIO}" \
   >"${log_dir}/client.stdout.log" 2>"${log_dir}/client.stderr.log"
 
 fetch_evidence "${PLAY_A_HTTP}" "${log_dir}/play-a-evidence.json"
@@ -522,24 +612,58 @@ fetch_evidence "${PLAY_B_HTTP}" "${log_dir}/play-b-evidence.json"
 fetch_evidence "${SESSION_HTTP}" "${log_dir}/session-evidence.json"
 cat "${log_dir}/client.stdout.log"
 if [[ "${SCENARIO}" == "all" ]]; then
-  grep -q "scenario ATD-A1 passed" "${log_dir}/client.stdout.log"
-  grep -q "scenario ATD-A2 passed" "${log_dir}/client.stdout.log"
-  grep -q "scenario ATD-A3 passed" "${log_dir}/client.stdout.log"
-  grep -q "scenario ATD-A4 passed" "${log_dir}/client.stdout.log"
-  grep -q "scenario ATD-B1 passed" "${log_dir}/client.stdout.log"
-  grep -q "scenario ATD-B2 passed" "${log_dir}/client.stdout.log"
-  grep -q "scenario ATD-B3 passed" "${log_dir}/client.stdout.log"
-  grep -q "scenario ATD-C1 passed" "${log_dir}/client.stdout.log"
-  grep -q "scenario ATD-C2 passed" "${log_dir}/client.stdout.log"
-  grep -q "scenario ATD-C3 passed" "${log_dir}/client.stdout.log"
-  grep -q "scenario ATD-D1 passed" "${log_dir}/client.stdout.log"
-  grep -q "scenario ATD-D2 passed" "${log_dir}/client.stdout.log"
-  grep -q "scenario ATD-D3 passed" "${log_dir}/client.stdout.log"
-  grep -q "scenario ATD-D4 passed" "${log_dir}/client.stdout.log"
-  grep -q "scenario ATD-E1 passed" "${log_dir}/client.stdout.log"
-  grep -q "scenario ATD-E2 passed" "${log_dir}/client.stdout.log"
-  grep -q "scenario ATD-E4 passed" "${log_dir}/client.stdout.log"
-  grep -q "scenario ATD-E5 passed" "${log_dir}/client.stdout.log"
+  while IFS= read -r scenario_id; do
+    grep -q "scenario ${scenario_id} passed" "${log_dir}/client.stdout.log"
+  done <<'SCENARIOS'
+ATD-A1
+ATD-A2
+ATD-A3
+ATD-A4
+ATD-B1
+ATD-B2
+ATD-B3
+ATD-C1
+ATD-C2
+ATD-C3
+ATD-D1
+ATD-D2
+ATD-D3
+ATD-D4
+ATD-E1
+ATD-E2
+ATD-E4
+ATD-E5
+TD-A1
+TD-A2
+TD-A3
+TD-A4
+TD-A5
+TD-B1
+TD-B2
+TD-B3
+TD-B4
+TD-C1
+TD-C2
+TD-C3
+TD-C4
+TD-C5
+TD-D1
+TD-D2
+TD-D3
+TD-D4
+TD-D5
+TD-D6
+TD-E1
+TD-E2
+TD-E2A
+TD-F1
+TD-F2
+TD-F3
+TD-F4
+TD-F5
+TD-F6
+TD-G1
+SCENARIOS
 else
   grep -q "scenario ${SCENARIO} passed" "${log_dir}/client.stdout.log"
 fi
@@ -548,7 +672,7 @@ grep -Rq "message flow" "${log_dir}"/*-flow.log
 
 if [[ "${SCENARIO}" == "all" ]]; then
   SHUTDOWN_ID="atde3-$(date +%s)-$$"
-  SHUTDOWN_SPOT="atd-shutdown-${run_id//[^a-zA-Z0-9]/}"
+  SHUTDOWN_SPOT="await-probe"
   shutdown_client_config="${config_dir}/client-shutdown.properties"
   write_client_config "${shutdown_client_config}" "${SHUTDOWN_ID}" "${SHUTDOWN_SPOT}"
   timeout -k 5s 120s "$(client_bin)" \
@@ -562,24 +686,17 @@ if [[ "${SCENARIO}" == "all" ]]; then
     "ATD-E3 pending await marker was not observed before shutdown."
   fetch_evidence "${PLAY_A_HTTP}" "${log_dir}/play-a-shutdown-before-stop-evidence.json"
   terminate_gracefully play-a "${pids[1]}"
-  wait "${SHUTDOWN_CLIENT_PID}"
-  cat "${log_dir}/client-shutdown-wait.stdout.log"
-  grep -q "automatic-turn-dispatch shutdown wait result=passed" "${log_dir}/client-shutdown-wait.stdout.log"
-
   "$(play_bin)" --config "${play_a_config}" \
     >"${log_dir}/play-a-restart.stdout.log" 2>"${log_dir}/play-a-restart.stderr.log" &
   pids+=("$!")
   wait_port play-a-route "${ROUTE_A_ENDPOINT}"
   wait_http play-a-http "${PLAY_A_HTTP}"
   assert_readiness
-
-  timeout -k 5s 90s "$(client_bin)" \
-    --config "${shutdown_client_config}" --shutdown-recovery \
-      >"${log_dir}/client-shutdown-recovery.stdout.log" 2>"${log_dir}/client-shutdown-recovery.stderr.log"
-  cat "${log_dir}/client-shutdown-recovery.stdout.log"
-  grep -q "automatic-turn-dispatch shutdown recovery result=passed" "${log_dir}/client-shutdown-recovery.stdout.log"
+  touch "${control_dir}/atd-e3-play-restarted"
+  wait "${SHUTDOWN_CLIENT_PID}"
+  cat "${log_dir}/client-shutdown-wait.stdout.log"
+  grep -q "automatic-turn-dispatch shutdown recovery result=passed" "${log_dir}/client-shutdown-wait.stdout.log"
   fetch_evidence "${PLAY_A_HTTP}" "${log_dir}/play-a-restart-evidence.json"
-  grep -q "automatic-turn-dispatch shutdown recovery result=passed" "${log_dir}/client-shutdown-recovery.stdout.log"
   echo "scenario ATD-E3 passed"
 fi
 

@@ -11,6 +11,7 @@
 
 #include "runtime/channels/channel_outbound_exchange.hpp"
 #include "runtime/channels/channel_runtime_manager.hpp"
+#include "runtime/diagnostics/listener_status_registry.hpp"
 #include "runtime/diagnostics/monitoring_runtime.hpp"
 #include "runtime/diagnostics/flow_context.hpp"
 #include "runtime/diagnostics/dispatch_error_reporter.hpp"
@@ -521,6 +522,30 @@ channel_runtime_t::outbound_calls () const
 void channel_runtime_t::bind_serializers (serializer_registry_t &serializers) noexcept
 {
     _state->serializers = &serializers;
+}
+
+void channel_runtime_t::bind_listener_statuses (
+  std::shared_ptr<runtime::listener_status_registry_t> statuses) noexcept
+{
+    std::lock_guard lock (_state->mutex);
+    _state->listener_statuses = std::move (statuses);
+}
+
+void channel_runtime_t::bind_fanout_advertise_hosts (
+  std::map<std::string, std::string> hosts) noexcept
+{
+    std::lock_guard lock (_state->mutex);
+    _state->fanout_publisher_advertise_hosts = std::move (hosts);
+}
+
+void channel_runtime_t::initialize_manual_channel_publishers ()
+{
+    detail::initialize_manual_channel_publishers (_state);
+}
+
+void channel_runtime_t::close_manual_channel_publishers () noexcept
+{
+    detail::close_manual_channel_publishers (_state);
 }
 
 void channel_runtime_t::bind_spot_mesh_transport (
@@ -2249,6 +2274,7 @@ mesh_node_builder_t zlink_framework_options_t::add_route_mesh (
   std::string mesh_name)
 {
     auto builder = _zlink->add_route_mesh (std::move (mesh_name));
+    builder._state->framework_options = _options;
     std::weak_ptr<detail::framework_options_state_t> options = _options;
     std::lock_guard lock (builder._state->mutex);
     builder._state->channel_name_observer =

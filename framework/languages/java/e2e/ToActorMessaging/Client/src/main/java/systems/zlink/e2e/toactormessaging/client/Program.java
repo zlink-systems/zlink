@@ -20,6 +20,7 @@ public final class Program {
             "Usage: Client --config <path> --scenario <selector>");
         ClientOptions options = ClientOptions.load(args[1]);
         String actorUrl = options.actorHttpEndpoint();
+        String actorBUrl = options.actorBHttpEndpoint();
         String callerUrl = options.callerHttpEndpoint();
         String sessionAUrl = options.sessionAHttpEndpoint();
         String sessionBUrl = options.sessionBHttpEndpoint();
@@ -32,7 +33,7 @@ public final class Program {
 
         if (selected(selector, "TA-A1")) {
             Contracts.ActorRefWire actorRef = ensureRef(actorUrl, "TA-A1", "ta-a1");
-            waitRefUntilReady(callerUrl, "TA-A1-ready", actorRef);
+            waitUntilReady(callerUrl, "TA-A1-ready", actorRef.actorId());
             ZLinkStreamConnector connector = connectAndBind(sessionAStream, actorRef);
             try {
                 assertBoundPush(connector, actorUrl, "TA-A1-before", "ta-a1", "Before");
@@ -49,7 +50,7 @@ public final class Program {
             ensureReady(actorUrl, callerUrl, "TA-A2", "ta-a2");
             assertCall(callerUrl, "TA-A2-send", "ta-a2", "a2-send", "sent", true);
             assertCall(callerUrl, "TA-A2-request", "ta-a2", "a2-request", "reply:a2-request", false);
-            assertBoundPushFailure(actorUrl, "TA-A2-push", "ta-a2", "Unbound", "REQUEST_FAILED");
+            assertBoundPushFailure(actorUrl, "TA-A2-push", "ta-a2", "Unbound", "NOT_CONFIGURED");
             assertNoSessionBinding(sessionAUrl, sessionBUrl, "ta-a2", "TA-A2 actor was unexpectedly bound");
         }
 
@@ -59,7 +60,7 @@ public final class Program {
             assertCall(callerUrl, "TA-A3-before-bind-request", "ta-a3", "a3-before-request",
                 "reply:a3-before-request", false);
             assertBoundPushFailure(actorUrl, "TA-A3-before-bind-push", "ta-a3", "BeforeBind",
-                "REQUEST_FAILED");
+                "NOT_CONFIGURED");
             Contracts.ActorRefWire actorRef = ensureRef(actorUrl, "TA-A3", "ta-a3");
             ZLinkStreamConnector connector = connectAndBind(sessionBStream, actorRef);
             try {
@@ -75,7 +76,7 @@ public final class Program {
 
         if (selected(selector, "TA-A4")) {
             Contracts.ActorRefWire actorRef = ensureRef(actorUrl, "TA-A4", "ta-a4");
-            waitRefUntilReady(callerUrl, "TA-A4-ready", actorRef);
+            waitUntilReady(callerUrl, "TA-A4-ready", actorRef.actorId());
             ZLinkStreamConnector connector = connectAndBind(sessionAStream, actorRef);
             assertBoundPush(connector, actorUrl, "TA-A4-before-disconnect", "ta-a4", "BeforeDisconnect");
             Contracts.UnbindActorReply unbound = ToActorHttpClient.postJson(
@@ -84,7 +85,7 @@ public final class Program {
             require(unbound.unbound(), "TA-A4 unbind was not acknowledged");
             assertSessionEvidence(sessionAUrl, "ta-a4", "actor-bound", "TA-A4 bind evidence missing");
             assertBoundPushFailure(actorUrl, "TA-A4-after-disconnect-push", "ta-a4", "AfterDisconnect",
-                "REQUEST_FAILED");
+                "NOT_CONFIGURED");
             assertCall(callerUrl, "TA-A4-disconnected-send", "ta-a4", "a4-send", "sent", true);
             assertCall(callerUrl, "TA-A4-disconnected-request", "ta-a4", "a4-request", "reply:a4-request", false);
             close(connector);
@@ -96,41 +97,54 @@ public final class Program {
         }
 
         if (selected(selector, "TA-B1")) {
-            Contracts.ActorRefWire missingRef = ensureRef(actorUrl, "TA-B1", "ta-b1");
-            waitRefUntilReady(callerUrl, "TA-B1-ref-ready", missingRef);
-            Contracts.DestroyActorReply destroyed = ToActorHttpClient.postJson(
-                actorUrl + "/destroy",
-                new Contracts.DestroyActorRequest("TA-B1-destroy", missingRef.actorId()),
-                Contracts.DestroyActorReply.class);
-            require(destroyed.destroyed(), "TA-B1 destroy was not acknowledged");
-            waitUntilMissing(callerUrl, "TA-B1-row-removed", missingRef.actorId());
-            Contracts.ActorCallResponse missingSend = refCall(
-                callerUrl, "TA-B1-missing-send", missingRef, "missing", true);
-            require(missingSend.errorKind() == null && "sent".equals(missingSend.result()),
-                "TA-B1 one-way send submit was not accepted locally");
-            assertRefFailure(callerUrl, "TA-B1-missing-request", missingRef, "ACTOR_ROUTE_NOT_FOUND", false);
+            assertFailure(callerUrl, "TA-B1-missing-send", "ta-b1", "NOT_FOUND", true);
+            assertFailure(callerUrl, "TA-B1-missing-request", "ta-b1", "NOT_FOUND", false);
         }
 
         if (selected(selector, "TA-B2")) {
-            Contracts.ActorRefWire b2Ref = ensureRef(actorUrl, "TA-B2", "ta-b2");
-            waitRefUntilReady(callerUrl, "TA-B2-ref-ready", b2Ref);
-            Contracts.ActorRefWire staleB2Ref = new Contracts.ActorRefWire(
-                b2Ref.nodeRidHex(), b2Ref.actorId(), b2Ref.generation() + 1);
-            assertRefFailure(callerUrl, "TA-B2-stale-ref", staleB2Ref, "ACTOR_LOCATION_STALE", false);
-            assertCall(callerUrl, "TA-B2-live-after-reresolve", "ta-b2", "b2-request", "reply:b2-request", false);
+            Contracts.ActorRefWire first = ensureRef(actorUrl, "TA-B2-first", "actor-recreated");
+            waitUntilReady(callerUrl, "TA-B2-first-ready", first.actorId());
+
+            Contracts.DestroyActorRefReply firstDestroyed = ToActorHttpClient.postJson(
+                actorUrl + "/destroy-ref",
+                new Contracts.DestroyActorRefRequest("TA-B2-first-destroy", first),
+                Contracts.DestroyActorRefReply.class);
+            require(firstDestroyed.destroyed() && firstDestroyed.errorKind() == null,
+                "TA-B2 first exact destroy was not acknowledged: " + firstDestroyed.errorKind());
+            waitUntilMissing(callerUrl, "TA-B2-first-missing", first.actorId());
+
+            Contracts.ActorRefWire second = ensureRef(actorUrl, "TA-B2-second", first.actorId());
+            require(first.actorId().equals(second.actorId()), "TA-B2 actor id changed during recreation");
+            require(first.generation() != second.generation(), "TA-B2 actor generation was reused");
+            waitUntilReady(callerUrl, "TA-B2-second-ready", second.actorId());
+            assertCall(callerUrl, "TA-B2-send", second.actorId(), "recreated-send", "sent", true);
+            assertCall(callerUrl, "TA-B2-request", second.actorId(), "recreated-request",
+                "reply:recreated-request", false);
+
+            Contracts.DestroyActorRefReply staleDestroy = ToActorHttpClient.postJson(
+                actorUrl + "/destroy-ref",
+                new Contracts.DestroyActorRefRequest("TA-B2-stale-destroy", first),
+                Contracts.DestroyActorRefReply.class);
+            require(!staleDestroy.destroyed(), "TA-B2 stale ActorRef destroyed the new actor");
+            require("INVALID_OPERATION".equals(staleDestroy.errorKind()),
+                "TA-B2 stale ActorRef expected INVALID_OPERATION, got " + staleDestroy.errorKind());
+            assertCall(callerUrl, "TA-B2-after-stale-destroy", second.actorId(), "still-current",
+                "reply:still-current", false);
         }
 
         if (selected(selector, "TA-B3")) {
-            Contracts.ActorRefWire b3Ref = ensureRef(actorUrl, "TA-B3", "ta-b3");
-            waitRefUntilReady(callerUrl, "TA-B3-ref-ready", b3Ref);
-            Contracts.ActorRefWire disconnectedB3Ref = new Contracts.ActorRefWire(
-                systems.zlink.contracts.core.RoutingId.from("actor-missing-route").toHex(),
-                b3Ref.actorId(), b3Ref.generation());
-            assertRefFailure(callerUrl, "TA-B3-route-disconnected", disconnectedB3Ref, "ROUTE_NOT_CONNECTED", false);
-            assertCall(callerUrl, "TA-B3-route-restored", "ta-b3", "b3-request", "reply:b3-request", false);
+            Contracts.ActorRefWire routeDown = ensureRef(actorBUrl, "TA-B3-ready", "actor-route-down");
+            waitUntilReady(callerUrl, "TA-B3-ready", routeDown.actorId());
+            System.out.println("TA-B3-ready");
+            waitUntilRouteDown(callerUrl, "TA-B3-route-down");
+            assertFailure(callerUrl, "TA-B3-unavailable", routeDown.actorId(), "UNAVAILABLE", false);
+            System.out.println("TA-B3-unavailable");
+            waitUntilRouteReady(callerUrl, "TA-B3-route-recovered");
+            assertCall(callerUrl, "TA-B3-recovered", routeDown.actorId(), "recovered",
+                "reply:recovered", false);
         }
 
-        assertActorEvidence(actorUrl, selector);
+        assertActorEvidence(actorUrl, actorBUrl, selector);
 
         System.out.println("to-actor-messaging selector=" + selector + " result=passed");
         System.out.println("to-actor-messaging e2e result=passed");
@@ -275,7 +289,7 @@ public final class Program {
         Contracts.ActorCallResponse response = null;
         while (System.nanoTime() < deadline) {
             response = call(callerUrl, scenario, actorId, "after-destroy", false);
-            if ("ACTOR_ROUTE_NOT_FOUND".equals(response.errorKind())) {
+            if ("NOT_FOUND".equals(response.errorKind())) {
                 return;
             }
             if (response.errorKind() != null && !isConvergenceError(response.errorKind())) {
@@ -287,28 +301,30 @@ public final class Program {
         throw new IllegalStateException(scenario + " actor remained reachable " + result);
     }
 
-    private static void waitRefUntilReady(
-        String callerUrl,
-        String scenario,
-        Contracts.ActorRefWire actorRef) {
-        long deadline = System.nanoTime() + 30_000_000_000L;
-        Contracts.ActorCallResponse response = null;
+    private static void waitUntilRouteDown(String callerUrl, String scenario) {
+        waitForRoute(callerUrl, scenario, false);
+    }
+
+    private static void waitUntilRouteReady(String callerUrl, String scenario) {
+        waitForRoute(callerUrl, scenario, true);
+    }
+
+    private static void waitForRoute(String callerUrl, String scenario, boolean expectedReady) {
+        long deadline = System.nanoTime() + 20_000_000_000L;
+        Contracts.RouteStatus status = null;
         while (System.nanoTime() < deadline) {
-            response = refCall(callerUrl, scenario, actorRef, "ready", false);
-            if (response.errorKind() == null && "reply:ready".equals(response.result())) {
+            status = ToActorHttpClient.getJson(callerUrl + "/route-status", Contracts.RouteStatus.class);
+            if (status.ready() == expectedReady) {
                 return;
-            }
-            if (!isConvergenceError(response.errorKind()) && !"ROUTE_NOT_CONNECTED".equals(response.errorKind())) {
-                break;
             }
             sleepBriefly();
         }
-        String error = response == null ? "no response" : response.errorKind();
-        throw new IllegalStateException(scenario + " ref readiness failed " + error);
+        throw new IllegalStateException(scenario + " expected ready=" + expectedReady
+            + " got " + (status == null ? "no response" : status.ready()));
     }
 
     private static boolean isConvergenceError(String errorKind) {
-        return "REQUEST_FAILED".equals(errorKind) || "ACTOR_ROUTE_NOT_FOUND".equals(errorKind);
+        return "NOT_FOUND".equals(errorKind) || "UNAVAILABLE".equals(errorKind);
     }
 
     private static void sleepBriefly() {
@@ -347,21 +363,6 @@ public final class Program {
             scenario + " expected " + expectedKind + " got " + response.errorKind());
     }
 
-    private static void assertRefFailure(
-        String callerUrl,
-        String scenario,
-        Contracts.ActorRefWire actorRef,
-        String expectedKind,
-        boolean send) {
-        String endpoint = send ? "/send-ref" : "/request-ref";
-        Contracts.ActorCallResponse response = ToActorHttpClient.postJson(
-            callerUrl + endpoint,
-            new Contracts.ActorRefCallRequest(scenario, actorRef, "fault"),
-            Contracts.ActorCallResponse.class);
-        require(expectedKind.equals(response.errorKind()),
-            scenario + " expected " + expectedKind + " got " + response.errorKind());
-    }
-
     private static Contracts.ActorCallResponse call(
         String callerUrl,
         String scenario,
@@ -375,22 +376,13 @@ public final class Program {
             Contracts.ActorCallResponse.class);
     }
 
-    private static Contracts.ActorCallResponse refCall(
-        String callerUrl,
-        String scenario,
-        Contracts.ActorRefWire actorRef,
-        String value,
-        boolean send) {
-        String endpoint = send ? "/send-ref" : "/request-ref";
-        return ToActorHttpClient.postJson(
-            callerUrl + endpoint,
-            new Contracts.ActorRefCallRequest(scenario, actorRef, value),
-            Contracts.ActorCallResponse.class);
-    }
-
-    private static void assertActorEvidence(String actorUrl, String selector) {
-        List<Contracts.ActorEvidence> evidence = List.of(
-            ToActorHttpClient.getJson(actorUrl + "/evidence", Contracts.ActorEvidence[].class));
+    private static void assertActorEvidence(String actorUrl, String actorBUrl, String selector) {
+        List<Contracts.ActorEvidence> evidence = new java.util.ArrayList<>(List.of(
+            ToActorHttpClient.getJson(actorUrl + "/evidence", Contracts.ActorEvidence[].class)));
+        if (selected(selector, "TA-B3")) {
+            evidence.addAll(List.of(
+                ToActorHttpClient.getJson(actorBUrl + "/evidence", Contracts.ActorEvidence[].class)));
+        }
         if (selected(selector, "TA-A1")) {
             require(containsEvidence(evidence, "TA-A1-send", "ta-a1", "send"), "TA-A1 send evidence missing");
             require(containsEvidence(evidence, "TA-A1-request", "ta-a1", "request"), "TA-A1 request evidence missing");
@@ -438,15 +430,20 @@ public final class Program {
             require(!containsScenario(evidence, "TA-B1-missing-request"), "TA-B1 missing actor request reached actor");
         }
         if (selected(selector, "TA-B2")) {
-            require(containsEvidence(evidence, "TA-B2-live-after-reresolve", "ta-b2", "request"),
-                "TA-B2 live follow-up evidence missing");
-            require(!containsScenario(evidence, "TA-B2-stale-ref"), "TA-B2 stale ref reached actor");
+            require(containsEvidence(evidence, "TA-B2-send", "actor-recreated", "send"),
+                "TA-B2 recreated send evidence missing");
+            require(containsEvidence(evidence, "TA-B2-request", "actor-recreated", "request"),
+                "TA-B2 recreated request evidence missing");
+            require(containsEvidence(evidence, "TA-B2-after-stale-destroy", "actor-recreated", "request"),
+                "TA-B2 post-stale-destroy request evidence missing");
+            require(!containsScenario(evidence, "TA-B2-stale-destroy"),
+                "TA-B2 stale destroy reached an actor handler");
         }
         if (selected(selector, "TA-B3")) {
-            require(containsEvidence(evidence, "TA-B3-route-restored", "ta-b3", "request"),
-                "TA-B3 restored route evidence missing");
-            require(!containsScenario(evidence, "TA-B3-route-disconnected"),
-                "TA-B3 disconnected route reached actor");
+            require(containsEvidence(evidence, "TA-B3-recovered", "actor-route-down", "request"),
+                "TA-B3 recovered request evidence missing");
+            require(!containsScenario(evidence, "TA-B3-unavailable"),
+                "TA-B3 unavailable request reached an actor handler");
         }
     }
 
@@ -471,5 +468,9 @@ public final class Program {
         if (!condition) {
             throw new IllegalStateException(message);
         }
+    }
+
+    private static IllegalStateException contractBlocker(String message) {
+        return new IllegalStateException("contract blocker: " + message);
     }
 }

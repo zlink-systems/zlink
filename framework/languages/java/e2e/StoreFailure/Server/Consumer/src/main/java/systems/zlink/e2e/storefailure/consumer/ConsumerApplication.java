@@ -42,6 +42,23 @@ public final class ConsumerApplication {
                 .setRoutingIdPrefix(options.rid())
                 .channelName(Contracts.CHANNEL)
                 .client();
+            if (options.c4Roles()) {
+                var c4RouteA = framework.addRouteMesh(Contracts.C4_ROUTE_A_MESH)
+                    .listen("tcp://127.0.0.1:0")
+                    .setRoutingIdPrefix(options.rid() + "-c4-a")
+                    ;
+                c4RouteA.peerConnections().connect(options.c4RouteAEndpoint());
+                c4RouteA.channelName(Contracts.C4_ROUTE_A_CHANNEL).client();
+                var c4RouteB = framework.addRouteMesh(Contracts.C4_ROUTE_B_MESH)
+                    .listen("tcp://127.0.0.1:0")
+                    .setRoutingIdPrefix(options.rid() + "-c4-b")
+                    ;
+                c4RouteB.peerConnections().connect(options.c4RouteBEndpoint());
+                c4RouteB.channelName(Contracts.C4_ROUTE_B_CHANNEL).client();
+                framework.addClientServerChannel(Contracts.C4_CLIENT_SERVER_CHANNEL)
+                    .client()
+                    .connect(options.c4ClientServerEndpoint());
+            }
         };
     }
 
@@ -65,12 +82,14 @@ public final class ConsumerApplication {
     ConsumerEndpoints consumerEndpoints(
         ConsumerOptions options,
         systems.zlink.framework.channels.ZLinkClient client,
+        systems.zlink.framework.channels.ZLinkRouteClient routes,
         systems.zlink.framework.spring.internal.runtime.ZLinkFrameworkLifecycle lifecycle,
         LocationStoreDelayState delayState,
         ObjectMapper json) {
         return new ConsumerEndpoints(
             options,
             client,
+            routes,
             lifecycle,
             lifecycle::monitoringLocationRuntimeQuery,
             delayState,

@@ -9,12 +9,25 @@ ATD_DIR="${JAVA_E2E_DIR}/AutomaticTurnDispatch"
 source "${JAVA_E2E_DIR}/../e2e-redis-common.sh"
 
 SELECTOR="${1:-all}"
+# OBS-A5 has its own Kotlin server/client process topology.
+if [[ "${SELECTOR}" == "OBS-A5" ]]; then
+  exec bash "${SCRIPT_DIR}/run_a5_e2e.sh"
+fi
 case "${SELECTOR}" in
-  all|OBS-A1|OBS-A2|OBS-A3|OBS-A4|OBS-B1|OBS-B2|OBS-B3|OBS-B4|OBS-C1|OBS-C2|OBS-C3|OBS-C4|OBS-C5) ;;
+  OBS-C6|OBS-C7|OBS-C8|OBS-C9A|OBS-C9B|OBS-C10|OBS-C11|OBS-C12)
+    echo "scenario ${SELECTOR} blocked: Kotlin maintenance role host is not implemented" >&2
+    exit 3
+    ;;
+esac
+case "${SELECTOR}" in
+  all|OBS-A1|OBS-A2|OBS-A3|OBS-A4|OBS-A5|OBS-B1|OBS-B2|OBS-B3|OBS-B4|OBS-C1|OBS-C2|OBS-C3|OBS-C4|OBS-C5|OBS-C6|OBS-C7|OBS-C8|OBS-C9A|OBS-C9B|OBS-C10|OBS-C11|OBS-C12) ;;
   *) echo "Unknown ObservabilityOps selector." >&2; exit 2 ;;
 esac
 
 if [[ "${SELECTOR}" == all ]]; then
+  echo "===== OBSERVABILITY OPS START OBS-A5 ====="
+  bash "${SCRIPT_DIR}/run_a5_e2e.sh"
+  echo "===== OBSERVABILITY OPS PASS OBS-A5 ====="
   for selector in \
     OBS-A1 OBS-A2 OBS-A3 OBS-A4 \
     OBS-B1 OBS-B2 OBS-B3 OBS-B4 \

@@ -22,91 +22,152 @@ a wrong boundary spreads through the whole codebase, and merged
 identifiers make it impossible to ask again "until when is this value
 valid."
 
-## 1. Gather The Binding Boundary In One Spot
+## 1. Keep The Binding Boundary Semantic
 
-**Decision.** Put a **contract layer declared in the runtime's own
-words** for the socket/context/message behavior the runtime needs, and
-put a separate **adapter layer** that moves that contract into that
-language's binding call. The binding type name only appears in the
-adapter layer.
+**Decision.** Every language implementation follows the same
+responsibility graph. The graph is defined by semantic ownership and
+runtime cost, not by a binding's type names, package layout, or syntax.
 
-```text
-+-------------------------------------------------------------+
-| application handler                                         |
-|   only sees the Framework public contract                   |
-+-------------------------------------------------------------+
-| runtime core                                                |
-|   selector · dispatch · execution authority · object · observation |
-|   the binding type name must not be here                    |
-+-------------------------------------------------------------+
-        | contract declared in the runtime's own words (socket · context · message)
-        v
-+-------------------------------------------------------------+
-| adapter                                                     |
-|   the only spot a binding type appears                      |
-+-------------------------------------------------------------+
-| installed binding package                                   |
-+-------------------------------------------------------------+
-| Core                                                        |
-+-------------------------------------------------------------+
+The Framework has a public contract and two internal runtime zones. Its
+public contract and semantic runtime core are binding-neutral. Its
+binding-facing integration may use a binding public API directly when
+that operation already has the exact Framework meaning, ownership,
+lifetime, readiness, and error semantics. A semantic adapter or port is
+used only when those semantics differ or when several binding objects
+must be composed into one Framework operation.
+
+`SpotNode` and `Stream` are common examples of such composition. They
+are not a special exemption: every proposed adapter must pass the same
+POSDDD and performance review below.
+
+```mermaid
+flowchart TB
+    PUBLIC["Framework public contract"] --> CORE["Framework semantic runtime core"]
+    CORE --> EDGE["Binding-facing runtime integration"]
+    EDGE --> DIRECT["Direct binding calls<br/>exact-match operations"]
+    EDGE --> ADAPTER["Spot/Stream semantic adapters<br/>and other proven mismatches"]
+    DIRECT --> BINDING["Language binding public API"]
+    ADAPTER --> BINDING
+    BINDING --> CORE["Core"]
 ```
 
-The arrow between the two layers above and the three layers below is
-the boundary this document protects. **The arrow only goes one
-direction** — a binding type must not climb up, and the adapter must
-not make a runtime decision on its own behalf (see "Two Paths The
-Boundary Leaks" and "The Reverse-Direction Pitfall" below).
+The public contract and semantic runtime core must not expose binding
+types. Only the binding-facing integration may reference binding public
+types. A binding-specific type must not be copied into a Framework
+domain contract merely to preserve an artificial abstraction boundary.
+An adapter is part of the runtime implementation and must not move a
+Framework decision into the binding package.
+
+The boundary protects meaning and ownership, not a particular number of
+classes. The same graph must be present in every language: a semantic
+runtime core, one binding-facing integration edge, direct use when
+semantics already match, and a semantic adapter only when a documented
+mismatch remains. Binding types do not spread through public or domain
+contracts. This is the boundary described by "The POSDDD Review Gate"
+and "The Performance Gate" below.
 
 **Why.** A binding changes on a cycle separate from Framework. If the
-boundary is scattered, a trivial binding change becomes a
-runtime-wide edit, and worse, **what's a runtime decision and what's
-forced by the binding** becomes unreadable.
+binding type and its ownership rules are scattered through the public
+contract, a binding change becomes an API-wide edit. Conversely, if
+every binding method is hidden behind a one-to-one class, the code has
+more names without hiding a meaningful decision.
 
-### Two Paths The Boundary Leaks
+### Classify The Operation Before Adding A Type
 
-The leak path actually observed across the four implementations is
-below.
+Classify the operation, not the language or the binding class.
 
-| Leak Form | Result |
+| Question | Direct binding use | Semantic adapter or port |
+|---|---|---|
+| Does the binding operation already satisfy the Framework contract? | Use the binding public API directly | Translate the operation and document the mismatch |
+| Is ownership and lifetime identical? | Pass the value through without a second owner | Own transfer, reuse, disposal, or retention explicitly |
+| Are readiness and error results identical? | Preserve the binding result | Map them once into the Framework result |
+| Are concurrency rules identical? | Do not add another gate | Own the required serialization or execution owner |
+| Does one binding object provide the whole operation? | Call it directly | Combine the binding objects behind one semantic operation |
+
+The same table applies to every language. A different binding API is not
+by itself a reason for a different Framework structure.
+
+An adapter is justified when it owns a decision such as mapping a
+binding result to a Framework result, closing resources in a defined
+order, preserving caller-provided receive storage, or combining a
+MeshNode with a stream session. It is not justified merely because a
+binding type is external.
+
+### The POSDDD Review Gate
+
+Before adding or retaining an adapter, review it from both POSD and DDD
+perspectives.
+
+| Review question | Required result |
 |---|---|
-| Many runtime headers directly include a binding header | Equivalent to having no boundary at all. Which file depends on the binding can't be counted |
-| A contract layer exists, but only a **value type** like message/routing id is taken directly from the binding | The boundary looks like it exists, but the type has leaked out and can't be swapped |
+| Deep module | The adapter hides a substantial binding decision behind a smaller Framework operation. Its interface is not a copy of the binding API |
+| Information hiding | Ownership, lifecycle, readiness, error mapping, and protocol decisions have one owner and do not leak into callers |
+| Complexity downward | Callers do not supply binding options, decode binding errors, manage native storage, or coordinate adapter ordering |
+| Error by construction | The adapter makes invalid combinations unrepresentable or classifies the remaining failure in one place |
+| Bounded context | The adapter translates between two models without making binding vocabulary part of the Framework domain model |
+| Two designs reviewed | Direct public binding use and a semantic adapter/port were considered before choosing one |
 
-The second is especially easy to miss. Even with a well-built contract
-interface, using one type carrying a payload directly from the binding
-collapses the boundary.
+If the adapter has no substantial decision to hide, remove it. A test
+fake, a future backend possibility, or a different namespace is not
+enough justification.
 
-### The Reverse-Direction Pitfall
+### The Performance Gate
 
-Don't stack layers of an interface with **only one implementation**
-just because you're making a boundary. In fact, one implementation was
-observed to have 11 contract interfaces with only one implementation
-each, most of which just forward the call as is. Such a layer fails
-to make a boundary, and only gives the reader the wrong expectation
-that "something can be swapped out here."
+The common structure is incomplete if it introduces a known hot-path
+cost. Review every message and readiness path for the following.
 
-The judgment standard is neither "does an interface exist" nor "is a
-type name visible." A name can be hidden behind an alias or conversion
-wrapper, and conversely, even if a boundary DTO's name contains
-binding terminology, the dependency direction can still be correct.
+- Reuse caller-provided receive storage when the binding supports it.
+- Do not copy message parts or convert bytes and message objects twice
+  merely to cross an artificial layer.
+- Do not allocate a wrapper, collection, task, or completion object per
+  message or empty poll unless the ownership contract requires it.
+- Do not add a second lock around a binding operation. If serialization
+  is required, define one owner or one gate and explain the contract.
+- Reuse poll event storage. Keep task/future creation on operation and
+  lifecycle paths rather than ordinary message paths.
+- Measure throughput, p99 latency, allocation/GC, and lock contention
+  for the relevant language before declaring an adapter complete.
 
-**There are three judgment standards.**
+An adapter that is required for ownership or protocol correctness may
+remain even when it has a cost, but the cost must be isolated, measured,
+and not duplicated by another language implementation.
 
-| Standard | Content |
-|---|---|
-| Import direction | The runtime core doesn't directly reference a binding package/header |
-| Value ownership | The message/routing value the runtime handles is a type the backend port owns |
-| Meaning conversion | The adapter converts the binding's lifetime, errno, and readiness state into a runtime result. The runtime doesn't interpret the binding's error code as is |
+### Forbidden Shapes
 
-The canonical document is the **allowed dependency graph**. A type
-name search is just an auxiliary means to quickly find a spot that
-violates that graph.
+The following shapes are design failures in every language.
+
+- A `*Wrapper` class whose methods have the same arguments and result
+  as the binding object.
+- A one-implementation `IBackend*` interface created only for tests or
+  a hypothetical backend.
+- A facade that only renames binding methods or exposes a second copy of
+  the binding options.
+- Reflection, internal-member access, visibility hacks, or raw-frame
+  workarounds to bypass the binding public API.
+- A language-specific public API added because another language already
+  has an implementation detail.
+
+### Cross-Language Consistency
+
+Language implementations do not need identical class names or file
+layouts. They must have the same responsibility graph, public behavior,
+ownership rules, lifecycle order, and performance expectations.
+
+When a language binding cannot express a required operation, record the
+semantic gap and the required binding change. Do not compensate with a
+private wrapper, a raw-frame path, or a language-only public contract.
+
+The canonical document is the **allowed dependency graph**, the
+POSDDD review gate, and the performance gate together. A type-name
+search is only an auxiliary means to find a spot that violates them.
 
 ### Per-Language Discretion
 
-Whether to express the contract as an interface, abstract class,
-protocol, or function bundle, and how many files to split the adapter
-into, is free.
+Each language may choose an interface, abstract class, protocol,
+function bundle, or direct binding call. It may also choose how many
+files implement a semantic adapter. The common rules are that public
+binding APIs are used, pass-through wrappers are not introduced, and
+ownership, meaning conversion, and measured runtime cost are explicit.
 
 ## 2. Don't Put Shutdown Per Topology
 
@@ -399,9 +460,18 @@ depending on that value's stability.
 
 ## 7. Result To Confirm
 
-- A binding type name isn't found by search in the runtime core code.
+- Binding types do not appear in Framework public or domain contracts,
+  and binding-facing code uses only the binding public API.
 - There's no contract layer with only one implementation that just
   forwards the call as is.
+- A binding-facing type is either used directly because its meaning and
+  ownership already match, or it owns a documented semantic conversion.
+- No pass-through wrapper duplicates a binding surface.
+- Per-message paths preserve reusable storage and do not add an
+  unnecessary copy, allocation, or lock.
+- The relevant throughput, p99 latency, allocation/GC, and lock
+  contention are measured against a baseline; no unexplained regression
+  remains.
 - A call individually closing a topology resource doesn't skip the
   host shutdown procedure.
 - The shutdown path has no code that branches by checking a concrete

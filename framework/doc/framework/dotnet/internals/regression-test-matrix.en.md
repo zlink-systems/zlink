@@ -297,6 +297,7 @@ The target documents are as follows.
 - `../../common/internals/README.ko.md`
 - `public-symbol-delta-v11.ko.md`
 - `backend-dependency-policy.ko.md`
+- `runtime-integration-and-ownership.ko.md`
 
 [^public-contract]: The public contract means the API surface exposed to external users, whose compatibility must be maintained on change.
 [^regression]: A regression is a phenomenon where a feature that worked well in a previous version breaks again because of a new change. A regression test is a test bundle that always runs to prevent that.

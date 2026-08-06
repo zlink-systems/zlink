@@ -470,6 +470,8 @@ class public_host_runtime_t :
     void forget_peer (const std::string &endpoint,
                       const zlink::routing_id_t &expected);
     void disconnect_peer (const std::string &endpoint) noexcept;
+    void disconnect_peer (const std::vector<std::uint8_t> &expected_routing_id,
+                          const std::string &endpoint) noexcept;
     node_status_t status () const;
     void set_channel_weight (const std::string &channel_name,
                              std::uint32_t weight);

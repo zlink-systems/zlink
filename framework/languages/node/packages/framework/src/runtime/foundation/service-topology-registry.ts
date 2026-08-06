@@ -169,6 +169,13 @@ export class ServiceTopologyRegistry {
       && current.descriptor.descriptorRevision === descriptor.descriptorRevision
       && sameDescriptor(current.descriptor, descriptor)
       && current.connectionId !== connectionId
+      // A fallback candidate is only a logical placeholder. Once the
+      // monitor reports the physical connection, its evidence supersedes
+      // candidate ordering so the request path uses the native route.
+      && !(
+        isUnmonitoredConnectionId(current.connectionId)
+        && !isUnmonitoredConnectionId(connectionId)
+      )
       && compareConnectionCandidate(
         current.connectionDiscriminator,
         current.connectionId,
@@ -551,6 +558,10 @@ function sameImmutableDescriptor(
 function arraysEqual(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length
     && left.every((value, index) => value === right[index]);
+}
+
+function isUnmonitoredConnectionId(connectionId: string): boolean {
+  return connectionId.startsWith('unmonitored:');
 }
 
 function compareConnectionCandidate(

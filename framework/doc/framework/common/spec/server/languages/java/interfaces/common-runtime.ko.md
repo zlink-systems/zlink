@@ -184,6 +184,27 @@ Application은 `ZLinkFrameworkRuntime`을 직접 시작하지 않는다. Runtime
 소유한다. 따라서 `start(...)` factory는 public contract에 포함하지 않는다. Core의 internal bootstrap은
 starter module에만 qualified export한다. Testkit은 test source에만 같은 package access helper를 둔다.
 
+Runtime은 각 listener의 현재 advertised endpoint를 조회하는 public member도 제공한다. `kind`는
+RouteMesh, ClientServer, Fanout 또는 STREAM을 지정하고 `name`은 해당 registration name을 지정한다.
+registration이 없거나 role이 endpoint를 제공하지 않으면 public error로 완료한다. 반환된 status의
+`observedAt`은 조회 시각이며 endpoint 문자열은 wildcard bind 주소가 아니라 peer가 사용할 advertised
+주소를 나타낸다.
+
+```java
+public enum ZLinkListenerKind {
+    ROUTE_MESH, CLIENT_SERVER, FANOUT, STREAM;
+}
+
+public record ZLinkListenerStatus(
+    ZLinkListenerKind kind,
+    String name,
+    String endpoint,
+    Instant observedAt) {}
+
+public ZLinkListenerStatus listenerStatus(
+    ZLinkListenerKind kind, String name);
+```
+
 ## Exact public member `javap` inventory
 
 아래 선언은 `javap`가 출력하는 binary signature 형식으로 Java public type과 member를 고정한다.

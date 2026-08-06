@@ -9,6 +9,13 @@ public final class OutboundMsgHandler
         UserSpot spot,
         Contracts.OutboundMsg message) {
         spot.record("SpotToSpotSend", message.value());
+        if (message.value().equals("sm-c6-marker")) {
+            spot.context().outbound().publish(
+                Contracts.ROUTE_CHANNEL,
+                "spot.events",
+                new Contracts.MeshMsg("publish:sm-c6-marker"))
+                .submit();
+        }
         return java.util.concurrent.CompletableFuture.completedFuture(null);
     }
 }

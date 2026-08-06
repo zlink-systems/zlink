@@ -1,0 +1,1 @@
+{"e2e": {"scenario": "CH-E2E-03", "sessionUrl": "", "playUrl": "http://127.0.0.1:20419", "auditUrl": "", "callerUrl": "http://127.0.0.1:11177", "workflowAUrl": "http://127.0.0.1:65269", "workflowBUrl": "", "negativeUrl": "", "apiAUrl": "", "apiBUrl": "", "spotId": "ch-03-spot"}}

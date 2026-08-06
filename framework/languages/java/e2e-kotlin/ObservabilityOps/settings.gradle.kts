@@ -15,3 +15,4 @@ if (gradle.parent == null) {
 }
 
 include(":Trigger", ":Verifier")
+include(":A5:Server", ":A5:Client")

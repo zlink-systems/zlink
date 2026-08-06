@@ -62,7 +62,9 @@ export async function startGatewayHost(): Promise<void> {
           builder.configureLocations()
             .pollingIntervalMs(100)
             .ownerLeaseRenewIntervalMs(1000)
-            .ownerLeaseTtlMs(5000);
+            .ownerLeaseTtlMs(5000)
+            .ownerLeaseFencingMarginMs(500)
+            .ownerLeaseRenewTimeoutMs(500);
           builder.addRouteMesh(SpotServiceNames.spotChannel)
             .routingId(options.rid)
             .listen(options.spotRouterEndpoint)

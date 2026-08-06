@@ -30,6 +30,10 @@ class lazy_message_parts_t
 
     message_t &first_part ();
     message_t single_part_or_throw ();
+    // Replaces a receive result while retaining the vector capacity owned by
+    // this envelope for the next caller-provided receive.
+    void replace (std::vector<message_t> &parts_);
+    void replace (message_t part_);
     void close ();
 
   private:

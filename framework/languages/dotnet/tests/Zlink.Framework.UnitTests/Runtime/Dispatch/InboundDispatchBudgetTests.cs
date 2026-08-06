@@ -218,10 +218,12 @@ public sealed class InboundDispatchBudgetTests
     public async Task Dispatch_queue_completes_host_byte_accounting_once()
     {
         using var errors = new ZLinkRuntimeErrorSink();
-        await using var queue = new ZLinkChannelApplicationDispatchQueue(
+        await using var queue = new ZLinkChannelApplicationDispatchQueue<TestDispatchWork>(
             nameof(InboundDispatchBudgetTests),
             errors,
-            CancellationToken.None);
+            CancellationToken.None,
+            DispatchTestWorkAsync,
+            RejectTestWork);
         var budget = new ZLinkInboundDispatchBudget(10);
         var release = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
@@ -229,8 +231,9 @@ public sealed class InboundDispatchBudgetTests
         var capacity = budget.WaitForReceiveCapacityAsync(
             CancellationToken.None).AsTask();
         var posted = await queue.PostAsync(
-            async _ => await release.Task.ConfigureAwait(false),
-            static () => { },
+            new TestDispatchWork(
+                async _ => await release.Task.ConfigureAwait(false),
+                static () => { }),
             budget,
             12,
             CancellationToken.None);
@@ -247,10 +250,12 @@ public sealed class InboundDispatchBudgetTests
     public async Task Dispatch_queue_rejects_when_full_without_blocking_receive_loop()
     {
         using var errors = new ZLinkRuntimeErrorSink();
-        await using var queue = new ZLinkChannelApplicationDispatchQueue(
+        await using var queue = new ZLinkChannelApplicationDispatchQueue<TestDispatchWork>(
             nameof(Dispatch_queue_rejects_when_full_without_blocking_receive_loop),
             errors,
-            CancellationToken.None);
+            CancellationToken.None,
+            DispatchTestWorkAsync,
+            RejectTestWork);
         var budget = new ZLinkInboundDispatchBudget(0);
         var release = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
@@ -258,8 +263,9 @@ public sealed class InboundDispatchBudgetTests
 
         budget.Received(1);
         Assert.True(await queue.PostAsync(
-            async _ => await release.Task.ConfigureAwait(false),
-            () => Interlocked.Increment(ref rejected),
+            new TestDispatchWork(
+                async _ => await release.Task.ConfigureAwait(false),
+                () => Interlocked.Increment(ref rejected)),
             budget,
             1,
             CancellationToken.None));
@@ -269,8 +275,9 @@ public sealed class InboundDispatchBudgetTests
         {
             budget.Received(1);
             Assert.True(await queue.PostAsync(
-                static _ => ValueTask.CompletedTask,
-                () => Interlocked.Increment(ref rejected),
+                new TestDispatchWork(
+                    static _ => ValueTask.CompletedTask,
+                    () => Interlocked.Increment(ref rejected)),
                 budget,
                 1,
                 CancellationToken.None));
@@ -278,8 +285,9 @@ public sealed class InboundDispatchBudgetTests
 
         budget.Received(1);
         var full = queue.PostAsync(
-            static _ => ValueTask.CompletedTask,
-            () => Interlocked.Increment(ref rejected),
+            new TestDispatchWork(
+                static _ => ValueTask.CompletedTask,
+                () => Interlocked.Increment(ref rejected)),
             budget,
             1,
             CancellationToken.None);
@@ -333,19 +341,22 @@ public sealed class InboundDispatchBudgetTests
     {
         const int workCount = 16;
         using var errors = new ZLinkRuntimeErrorSink();
-        var queue = new ZLinkChannelApplicationDispatchQueue(
+        var queue = new ZLinkChannelApplicationDispatchQueue<TestDispatchWork>(
             nameof(Dispatch_queue_shutdown_has_one_reader_and_releases_each_budget_once),
             errors,
-            CancellationToken.None);
+            CancellationToken.None,
+            DispatchTestWorkAsync,
+            RejectTestWork);
         var budget = new ZLinkInboundDispatchBudget(1024);
         var rejected = 0;
         for (var index = 0; index < workCount; index++)
         {
             budget.Received(1);
             Assert.True(await queue.PostAsync(
-                static async token =>
-                    await Task.Delay(Timeout.InfiniteTimeSpan, token),
-                () => Interlocked.Increment(ref rejected),
+                new TestDispatchWork(
+                    static async token =>
+                        await Task.Delay(Timeout.InfiniteTimeSpan, token),
+                    () => Interlocked.Increment(ref rejected)),
                 budget,
                 1,
                 CancellationToken.None));
@@ -357,6 +368,18 @@ public sealed class InboundDispatchBudgetTests
         Assert.Equal(workCount - 1, Volatile.Read(ref rejected));
         Assert.Equal(0UL, budget.PendingPayloadBytes);
     }
+
+    private static ValueTask DispatchTestWorkAsync(
+        TestDispatchWork work,
+        CancellationToken cancellationToken) =>
+        work.Dispatch(cancellationToken);
+
+    private static void RejectTestWork(TestDispatchWork work) =>
+        work.Reject();
+
+    private readonly record struct TestDispatchWork(
+        Func<CancellationToken, ValueTask> Dispatch,
+        Action Reject);
 
     private static async Task WaitUntilAsync(Func<bool> predicate)
     {

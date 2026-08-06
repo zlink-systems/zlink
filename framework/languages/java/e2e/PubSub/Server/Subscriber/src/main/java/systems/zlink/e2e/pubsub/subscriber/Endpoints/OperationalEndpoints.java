@@ -11,6 +11,8 @@ import java.util.Map;
 import org.springframework.context.SmartLifecycle;
 import systems.zlink.e2e.pubsub.subscriber.Configuration.SubscriberOptions;
 import systems.zlink.e2e.pubsub.subscriber.Infrastructure.EvidenceStore;
+import systems.zlink.e2e.pubsub.subscriber.Infrastructure.FanoutObserverController;
+import systems.zlink.e2e.pubsub.subscriber.Infrastructure.SubscriberConnections;
 import systems.zlink.e2e.pubsub.shared.Contracts;
 import systems.zlink.framework.monitoring.ZLinkFanoutRuntime;
 import systems.zlink.framework.monitoring.ZLinkPeerState;
@@ -20,6 +22,8 @@ public final class OperationalEndpoints implements SmartLifecycle {
     private final EvidenceStore evidence;
     private final ObjectMapper json;
     private final ZLinkFanoutRuntime fanoutRuntime;
+    private final SubscriberConnections connections;
+    private final FanoutObserverController observers;
     private HttpServer server;
     private boolean running;
 
@@ -27,11 +31,15 @@ public final class OperationalEndpoints implements SmartLifecycle {
         SubscriberOptions options,
         EvidenceStore evidence,
         ObjectMapper json,
-        ZLinkFanoutRuntime fanoutRuntime) {
+        ZLinkFanoutRuntime fanoutRuntime,
+        SubscriberConnections connections,
+        FanoutObserverController observers) {
         this.options = options;
         this.evidence = evidence;
         this.json = json;
         this.fanoutRuntime = fanoutRuntime;
+        this.connections = connections;
+        this.observers = observers;
     }
 
     @Override
@@ -68,6 +76,66 @@ public final class OperationalEndpoints implements SmartLifecycle {
                 exchange.getResponseBody().write(body);
                 exchange.close();
             });
+            server.createContext("/status", exchange -> {
+                var status = fanoutRuntime.snapshot(Contracts.EVENT_CHANNEL);
+                writeJson(exchange, Map.of(
+                    "channelName", status.channelName(),
+                    "state", status.state().name(),
+                    "isReady", status.isReady(),
+                    "readyPublisherCount", status.readyPublisherCount(),
+                    "publishers", status.publishers().stream().map(publisher -> Map.of(
+                        "nodeRid", publisher.nodeRid().toString(),
+                        "state", publisher.state().name())).toList(),
+                    "sequence", status.sequence(),
+                    "observedAt", status.observedAt().toString()));
+            });
+            server.createContext("/connections", exchange -> {
+                try {
+                    Map<String, String> values = query(exchange.getRequestURI());
+                    switch (values.getOrDefault("operation", "list")) {
+                        case "connect" -> connections.connect(required(values, "endpoint"));
+                        case "disconnect" -> connections.disconnect(required(values, "endpoint"));
+                        case "list" -> { }
+                        default -> throw new IllegalArgumentException("unsupported connection operation");
+                    }
+                    writeJson(exchange, Map.of("connections", connections.list()));
+                } catch (Exception error) {
+                    writeText(exchange, 400, error.getMessage() + "\n");
+                }
+            });
+            server.createContext("/observer/start", exchange -> {
+                try {
+                    Map<String, String> values = query(exchange.getRequestURI());
+                    observers.start(
+                        values.getOrDefault("name", "normal"),
+                        intQuery(values, "capacity", 1),
+                        Boolean.parseBoolean(values.getOrDefault("slow", "false")));
+                    writeJson(exchange, Map.of("status", "started"));
+                } catch (Exception error) {
+                    writeText(exchange, 400, error.getMessage() + "\n");
+                }
+            });
+            server.createContext("/observer/release", exchange -> {
+                observers.release(query(exchange.getRequestURI()).getOrDefault("name", "slow"));
+                writeJson(exchange, Map.of("status", "released"));
+            });
+            server.createContext("/observer/cancel", exchange -> {
+                observers.cancel(query(exchange.getRequestURI()).getOrDefault("name", "slow"));
+                writeJson(exchange, Map.of("status", "cancelled"));
+            });
+            server.createContext("/observer/wait", exchange -> {
+                try {
+                    Map<String, String> values = query(exchange.getRequestURI());
+                    observers.waitFor(
+                        values.getOrDefault("name", "normal"),
+                        longQuery(values, "timeoutMs", 30_000L));
+                    writeJson(exchange, Map.of("status", "observed"));
+                } catch (Exception error) {
+                    writeText(exchange, 504, error.getMessage() + "\n");
+                }
+            });
+            server.createContext("/observer/evidence", exchange ->
+                writeJson(exchange, observers.snapshot()));
             server.createContext("/evidence/wait", exchange -> {
                 try {
                     Map<String, String> query = query(exchange.getRequestURI());
@@ -162,5 +230,39 @@ public final class OperationalEndpoints implements SmartLifecycle {
     private static long longQuery(Map<String, String> query, String name, long fallback) {
         String value = query.get(name);
         return value == null || value.isBlank() ? fallback : Long.parseLong(value);
+    }
+
+    private static String required(Map<String, String> values, String name) {
+        String value = values.get(name);
+        if (value == null || value.isBlank()) {
+            throw new IllegalArgumentException(name + " is required");
+        }
+        return value;
+    }
+
+    private void writeJson(com.sun.net.httpserver.HttpExchange exchange, Object value) {
+        try {
+            byte[] body = json.writeValueAsBytes(value);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        } catch (Exception error) {
+            throw new IllegalStateException("failed to write subscriber json response", error);
+        }
+    }
+
+    private static void writeText(
+        com.sun.net.httpserver.HttpExchange exchange,
+        int status,
+        String value) {
+        try {
+            byte[] body = value.getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(status, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        } catch (Exception error) {
+            throw new IllegalStateException("failed to write subscriber response", error);
+        }
     }
 }

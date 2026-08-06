@@ -8,7 +8,7 @@ BUILD_DIR="${ZLINK_CPP_E2E_BUILD_DIR:-${ZLINK_CPP_BUILD_DIR:-$FRAMEWORK_DIR/buil
 SCENARIO="${1:-all}"
 SCENARIO_LOWER="$(printf '%s' "$SCENARIO" | tr '[:upper:]' '[:lower:]')"
 case "$SCENARIO_LOWER" in
-  all|mon-a[1-5]|mon-b[1-2]|mon-c1|mon-d1) ;;
+  all|mon-a[1-5]|mon-a4a|mon-a4b|mon-b[1-2]|mon-c1|mon-d1|mon-d1a|mon-d1b) ;;
   *)
     echo "Unsupported RuntimeMonitoring scenario: $SCENARIO" >&2
     exit 2
@@ -229,6 +229,8 @@ request_profile() {
   python3 - "$HTTP_TRIGGER" "$marker" <<'PY'
 import json
 import sys
+import time
+import urllib.error
 import urllib.request
 
 base, marker = sys.argv[1:]
@@ -297,7 +299,8 @@ while time.monotonic() < deadline:
     time.sleep(0.1)
 else:
     raise RuntimeError(
-        f"RouteMesh peer {rid} readiness did not become {expected}")
+        f"RouteMesh peer {rid} readiness did not become {expected}; "
+        f"snapshot={json.dumps(snapshot, sort_keys=True)}")
 PY
 }
 
@@ -449,7 +452,8 @@ else:
 PY
 fi
 
-if [[ "$SCENARIO_LOWER" != "mon-a4" && "$SCENARIO_LOWER" != "mon-d1" ]]; then
+if [[ "$SCENARIO_LOWER" != "mon-a4" && "$SCENARIO_LOWER" != "mon-a4a" && "$SCENARIO_LOWER" != "mon-a4b" \
+      && "$SCENARIO_LOWER" != "mon-d1" && "$SCENARIO_LOWER" != "mon-d1a" && "$SCENARIO_LOWER" != "mon-d1b" ]]; then
   write_client_config "$SCENARIO_LOWER"
   "$CLIENT" --config="$CONFIG_DIR/client.json" \
     >"$LOG_DIR/client.stdout.log" 2>"$LOG_DIR/client.stderr.log"
@@ -466,7 +470,7 @@ if [[ "$SCENARIO_LOWER" != "mon-a4" && "$SCENARIO_LOWER" != "mon-d1" ]]; then
   fi
 fi
 
-if [[ "$SCENARIO_LOWER" == "all" || "$SCENARIO_LOWER" == "mon-a4" ]]; then
+if [[ "$SCENARIO_LOWER" == "all" || "$SCENARIO_LOWER" == "mon-a4" || "$SCENARIO_LOWER" == "mon-a4a" || "$SCENARIO_LOWER" == "mon-a4b" ]]; then
   python3 - "$HTTP_SERVICE" <<'PY'
 import sys
 import urllib.request
@@ -485,6 +489,8 @@ PY
   python3 - "$HTTP_SERVICE" <<'PY'
 import json
 import sys
+import time
+import urllib.error
 import urllib.request
 
 base = sys.argv[1]
@@ -492,9 +498,26 @@ body = json.dumps({"value": "normal-restart", "marker": "mon-a4-normal"}).encode
 request = urllib.request.Request(
     f"{base}/mesh/profile/request?targetRid=svc-b", data=body,
     headers={"Content-Type": "application/json"}, method="POST")
-with urllib.request.urlopen(request, timeout=5) as response:
-    if json.load(response)["provider_rid"] != "svc-b":
-        raise RuntimeError("normal replacement request reached the wrong peer")
+deadline = time.monotonic() + 15
+while time.monotonic() < deadline:
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            if json.load(response)["provider_rid"] != "svc-b":
+                raise RuntimeError("normal replacement request reached the wrong peer")
+            break
+    except urllib.error.HTTPError as error:
+        if error.code != 503:
+            raise
+        time.sleep(0.1)
+else:
+    try:
+        with urllib.request.urlopen(f"{base}/runtime/snapshot", timeout=2) as response:
+            snapshot = json.load(response)
+    except Exception as snapshot_error:
+        snapshot = f"snapshot-error={snapshot_error}"
+    raise RuntimeError(
+        "normal replacement request did not converge; "
+        f"snapshot={json.dumps(snapshot, sort_keys=True) if isinstance(snapshot, dict) else snapshot}")
 PY
   crash_service "$FILTERED_PID" filtered-service-crash "$HTTP_FILTERED"
   wait_mesh_peer_ready svc-b false
@@ -521,16 +544,28 @@ PY
   python3 - "$HTTP_SERVICE" <<'PY'
 import json
 import sys
+import time
 import urllib.request
+import urllib.error
 
 base = sys.argv[1]
 body = json.dumps({"value": "crash-restart", "marker": "mon-a4-recovered"}).encode()
 request = urllib.request.Request(
     f"{base}/mesh/profile/request?targetRid=svc-b", data=body,
     headers={"Content-Type": "application/json"}, method="POST")
-with urllib.request.urlopen(request, timeout=5) as response:
-    if json.load(response)["provider_rid"] != "svc-b":
-        raise RuntimeError("crash recovery request reached the wrong peer")
+deadline = time.monotonic() + 15
+while time.monotonic() < deadline:
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            if json.load(response)["provider_rid"] != "svc-b":
+                raise RuntimeError("crash recovery request reached the wrong peer")
+            break
+    except urllib.error.HTTPError as error:
+        if error.code != 503:
+            raise
+        time.sleep(0.1)
+else:
+    raise RuntimeError("crash recovery request did not converge")
 PY
 
   write_client_config mon-a4
@@ -538,10 +573,16 @@ PY
     >"$LOG_DIR/client-a4.stdout.log" 2>"$LOG_DIR/client-a4.stderr.log"
 
   cat "$LOG_DIR/client-a4.stdout.log"
-  grep -q "scenario MON-A4 passed" "$LOG_DIR/client-a4.stdout.log"
+  if [[ "$SCENARIO_LOWER" == "mon-a4a" ]]; then
+    grep -q "scenario MON-A4A passed" "$LOG_DIR/client-a4.stdout.log"
+  elif [[ "$SCENARIO_LOWER" == "mon-a4b" ]]; then
+    grep -q "scenario MON-A4B passed" "$LOG_DIR/client-a4.stdout.log"
+  else
+    grep -q "scenario MON-A4 passed" "$LOG_DIR/client-a4.stdout.log"
+  fi
 fi
 
-if [[ "$SCENARIO_LOWER" == "all" || "$SCENARIO_LOWER" == "mon-d1" ]]; then
+if [[ "$SCENARIO_LOWER" == "all" || "$SCENARIO_LOWER" == "mon-d1" || "$SCENARIO_LOWER" == "mon-d1a" || "$SCENARIO_LOWER" == "mon-d1b" ]]; then
   python3 - "$HTTP_SERVICE" <<'PY'
 import sys
 import urllib.request
@@ -565,7 +606,13 @@ PY
     >"$LOG_DIR/client-d1.stdout.log" 2>"$LOG_DIR/client-d1.stderr.log"
 
   cat "$LOG_DIR/client-d1.stdout.log"
-  grep -q "scenario MON-D1 passed" "$LOG_DIR/client-d1.stdout.log"
+  if [[ "$SCENARIO_LOWER" == "mon-d1a" ]]; then
+    grep -q "scenario MON-D1A passed" "$LOG_DIR/client-d1.stdout.log"
+  elif [[ "$SCENARIO_LOWER" == "mon-d1b" ]]; then
+    grep -q "scenario MON-D1B passed" "$LOG_DIR/client-d1.stdout.log"
+  else
+    grep -q "scenario MON-D1 passed" "$LOG_DIR/client-d1.stdout.log"
+  fi
 fi
 
 echo "runtime-monitoring e2e result=passed"

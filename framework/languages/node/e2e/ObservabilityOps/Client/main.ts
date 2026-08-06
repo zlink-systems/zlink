@@ -12,6 +12,15 @@ import { runObsC3 } from './Scenarios/obs-c3-spot-drain-policies-scenario.js';
 import { runObsC4 } from './Scenarios/obs-c4-forced-session-drain-scenario.js';
 import { runObsC5 } from './Scenarios/obs-c5-rollout-scenario.js';
 import { closeScenarioClients, options } from './Support/scenario-support.js';
+import { runOBSA5 } from './Scenarios/obs-a5-scenario.js';
+import { runOBSC6 } from './Scenarios/obs-c6-scenario.js';
+import { runOBSC7 } from './Scenarios/obs-c7-scenario.js';
+import { runOBSC8 } from './Scenarios/obs-c8-scenario.js';
+import { runOBSC9A } from './Scenarios/obs-c9a-scenario.js';
+import { runOBSC9B } from './Scenarios/obs-c9b-scenario.js';
+import { runOBSC10 } from './Scenarios/obs-c10-scenario.js';
+import { runOBSC11 } from './Scenarios/obs-c11-scenario.js';
+import { runOBSC12 } from './Scenarios/obs-c12-scenario.js';
 
 const scenarios: Readonly<Record<string, () => Promise<void>>> = {
   'OBS-A1': runObsA1,
@@ -26,7 +35,16 @@ const scenarios: Readonly<Record<string, () => Promise<void>>> = {
   'OBS-C2': runObsC2,
   'OBS-C3': runObsC3,
   'OBS-C4': runObsC4,
-  'OBS-C5': runObsC5
+  'OBS-C5': runObsC5,
+  'OBS-A5': runOBSA5,
+  'OBS-C6': runOBSC6,
+  'OBS-C7': runOBSC7,
+  'OBS-C8': runOBSC8,
+  'OBS-C9A': runOBSC9A,
+  'OBS-C9B': runOBSC9B,
+  'OBS-C10': runOBSC10,
+  'OBS-C11': runOBSC11,
+  'OBS-C12': runOBSC12,
 };
 
 async function main(): Promise<void> {

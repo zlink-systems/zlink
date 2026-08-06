@@ -19,27 +19,35 @@ zlink_kotlin_e2e_create_config() {
 }
 
 zlink_kotlin_e2e_run() {
-  local config_file status
+  local config_file status restore_errexit=false
   config_file="$(zlink_kotlin_e2e_create_config)"
 
-  set +e
+  case "$-" in
+    *e*) restore_errexit=true; set +e ;;
+  esac
   "$@" --e2e-config "${config_file}"
   status="$?"
-  set -e
   rm -f "${config_file}"
+  if [[ "${restore_errexit}" == "true" ]]; then
+    set -e
+  fi
   return "${status}"
 }
 
 zlink_kotlin_e2e_run_timeout() {
-  local timeout_duration="$1"
+  local timeout_duration="$1" restore_errexit=false
   shift
   local config_file status
   config_file="$(zlink_kotlin_e2e_create_config)"
 
-  set +e
+  case "$-" in
+    *e*) restore_errexit=true; set +e ;;
+  esac
   timeout -k 5s "${timeout_duration}" "$@" --e2e-config "${config_file}"
   status="$?"
-  set -e
   rm -f "${config_file}"
+  if [[ "${restore_errexit}" == "true" ]]; then
+    set -e
+  fi
   return "${status}"
 }

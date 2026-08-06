@@ -20,6 +20,8 @@ import {
 } from '../../channels/channel-multipart';
 import type { ZLinkChannelClientTransport } from '../../channels/channel-transports';
 
+const EMPTY_METADATA: ReadonlyMap<string, string> = new Map();
+
 /** Adapter used by direct binding-socket integration and its contract tests. */
 export class ZLinkDealerChannelClientTransport implements ZLinkChannelClientTransport {
   constructor(
@@ -31,7 +33,7 @@ export class ZLinkDealerChannelClientTransport implements ZLinkChannelClientTran
     channelName: string,
     packetName: string | undefined,
     message: Message,
-    metadata: ReadonlyMap<string, string> = new Map()
+    metadata: ReadonlyMap<string, string> = EMPTY_METADATA
   ): ZLinkSubmitResult {
     const result = appendParts(
       this.dealer.send(),
@@ -58,7 +60,7 @@ export class ZLinkDealerChannelClientTransport implements ZLinkChannelClientTran
     packetName: string | undefined,
     message: Message,
     signal?: AbortSignal,
-    metadata: ReadonlyMap<string, string> = new Map()
+    metadata: ReadonlyMap<string, string> = EMPTY_METADATA
   ): Promise<ZLinkSubmitResult> {
     throwIfAborted(signal);
     return this.trySend(channelName, packetName, message, metadata);
@@ -70,7 +72,7 @@ export class ZLinkDealerChannelClientTransport implements ZLinkChannelClientTran
     request: Message,
     timeoutMs: number | undefined,
     signal?: AbortSignal,
-    metadata: ReadonlyMap<string, string> = new Map()
+    metadata: ReadonlyMap<string, string> = EMPTY_METADATA
   ): Promise<TReply> {
     throwIfAborted(signal);
     const operation = appendParts(
@@ -102,7 +104,7 @@ export class ZLinkDealerChannelClientTransport implements ZLinkChannelClientTran
     topic: string,
     packetName: string | undefined,
     event: Message,
-    metadata: ReadonlyMap<string, string> = new Map()
+    metadata: ReadonlyMap<string, string> = EMPTY_METADATA
   ): ZLinkSubmitResult {
     if (this.publisher === undefined) {
       throw new ZLinkConfigurationException('Channel publisher runtime is not started.');
@@ -133,7 +135,7 @@ export class ZLinkDealerChannelClientTransport implements ZLinkChannelClientTran
     packetName: string | undefined,
     event: Message,
     signal?: AbortSignal,
-    metadata: ReadonlyMap<string, string> = new Map()
+    metadata: ReadonlyMap<string, string> = EMPTY_METADATA
   ): Promise<ZLinkSubmitResult> {
     throwIfAborted(signal);
     return this.tryPublish(channelName, topic, packetName, event, metadata);

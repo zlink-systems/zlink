@@ -76,7 +76,7 @@ for artifact in "${artifacts[@]}"; do
     publish_tasks+=(":$artifact:publishAllPublicationsToReleaseRepoRepository")
 done
 MAVEN_REPOSITORY_URL="file://$maven_dir" \
-    "$root_dir/gradlew" --no-daemon --no-parallel "${publish_tasks[@]}"
+    "$root_dir/gradlew" --no-daemon --no-parallel -p "$root_dir" "${publish_tasks[@]}"
 
 source_jars=()
 package_jars=()

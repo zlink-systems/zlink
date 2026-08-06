@@ -15,29 +15,52 @@
 
 namespace e2e = zlink::framework::e2e::spot_service;
 
-/* Resolves the spot id from an E2E payload once and returns the opaque
- * messaging handle. A missing live location row fails with the typed routing
- * error so the negative scenarios do not wait for a request timeout. */
-inline std::optional<zlink::framework::spot_handle_t>
-try_resolve_spot_handle (zlink::framework::spot_handle_resolver_t &handles,
-                         const std::string &spot_id)
+template <typename TRequest>
+zlink::framework::spot_create_result_t
+create_route_spot (zlink::framework::spot_manager_t &spots,
+                   zlink::framework::spot_id_t spot_id,
+                   std::string stable_type,
+                   TRequest request)
 {
-    return handles.resolve_spot_handle ((spot_id))
-      .result ()
-      .value ();
+    auto created = spots
+                     .get_or_create (std::move (spot_id), std::move (stable_type))
+                     .creation_request (std::move (request))
+                     .submit ()
+                     .result ();
+    if (!created) {
+        throw zlink::framework::framework_exception_t (
+          created.error_kind (),
+          created.error () ? created.error ()->what () : "Spot creation failed");
+    }
+    return created.value ();
 }
 
-inline zlink::framework::spot_handle_t
-resolve_required_spot_handle (zlink::framework::spot_handle_resolver_t &handles,
-                              const std::string &spot_id)
+/* Resolve the global SpotId through the public lifecycle manager before
+ * submitting the direct route operation. The route client itself still owns
+ * the transport lookup; this check only gives negative scenarios a bounded
+ * not-found result instead of waiting for a request timeout. */
+inline std::optional<zlink::framework::spot_id_t>
+try_resolve_spot_id (zlink::framework::spot_manager_t &spots,
+                     const std::string &spot_id)
 {
-    auto handle = try_resolve_spot_handle (handles, spot_id);
-    if (!handle) {
+    auto found = spots.find (spot_id).result ();
+    if (!found || !found.value ()) {
+        return std::nullopt;
+    }
+    return found.value ()->spot_id ();
+}
+
+inline zlink::framework::spot_id_t
+resolve_required_spot_id (zlink::framework::spot_manager_t &spots,
+                          const std::string &spot_id)
+{
+    auto resolved = try_resolve_spot_id (spots, spot_id);
+    if (!resolved) {
         throw zlink::framework::framework_exception_t (
           zlink::framework::framework_error_kind_t::not_found,
           "Spot '" + spot_id + "' has no live location row.");
     }
-    return *handle;
+    return std::move (*resolved);
 }
 
 class route_spot_state_handler_t
@@ -45,11 +68,11 @@ class route_spot_state_handler_t
   public:
     using dependency_types =
       zlink::framework::dependency_list_t<zlink::framework::route_client_t,
-                                          zlink::framework::spot_handle_resolver_t>;
+                                          zlink::framework::spot_manager_t>;
 
     route_spot_state_handler_t (zlink::framework::route_client_t &routes,
-        zlink::framework::spot_handle_resolver_t &handles) :
-        _routes (routes), _handles (handles)
+        zlink::framework::spot_manager_t &spots) :
+        _routes (routes), _spots (spots)
     {
     }
 
@@ -62,7 +85,7 @@ class route_spot_state_handler_t
                                 : request.spot_id;
         auto reply =
           _routes
-            .request_to_spot (resolve_required_spot_handle (_handles, spot_id), request.state)
+            .request_to_spot (resolve_required_spot_id (_spots, spot_id), request.state)
             .submit<e2e::state_res_t> ()
             .result ();
         if (!reply) {
@@ -78,7 +101,7 @@ class route_spot_state_handler_t
 
   private:
     zlink::framework::route_client_t &_routes;
-    zlink::framework::spot_handle_resolver_t &_handles;
+    zlink::framework::spot_manager_t &_spots;
 };
 
 class direct_spot_route_handler_t
@@ -86,11 +109,11 @@ class direct_spot_route_handler_t
   public:
     using dependency_types =
       zlink::framework::dependency_list_t<zlink::framework::route_client_t,
-                                          zlink::framework::spot_handle_resolver_t>;
+                                          zlink::framework::spot_manager_t>;
 
     direct_spot_route_handler_t (zlink::framework::route_client_t &routes,
-        zlink::framework::spot_handle_resolver_t &handles) :
-        _routes (routes), _handles (handles)
+        zlink::framework::spot_manager_t &spots) :
+        _routes (routes), _spots (spots)
     {
     }
 
@@ -100,7 +123,7 @@ class direct_spot_route_handler_t
           nlohmann::json::parse (http.body).get<e2e::direct_spot_route_req_t> ();
         auto reply =
           _routes
-            .request_to_spot (resolve_required_spot_handle (_handles, request.spot_id),
+            .request_to_spot (resolve_required_spot_id (_spots, request.spot_id),
                               e2e::direct_spot_req_t{request.source_actor_id, request.value})
             .submit<e2e::direct_spot_res_t> ()
             .result ();
@@ -117,7 +140,7 @@ class direct_spot_route_handler_t
 
   private:
     zlink::framework::route_client_t &_routes;
-    zlink::framework::spot_handle_resolver_t &_handles;
+    zlink::framework::spot_manager_t &_spots;
 };
 
 class direct_spot_command_route_handler_t
@@ -125,11 +148,11 @@ class direct_spot_command_route_handler_t
   public:
     using dependency_types =
       zlink::framework::dependency_list_t<zlink::framework::route_client_t,
-                                          zlink::framework::spot_handle_resolver_t>;
+                                          zlink::framework::spot_manager_t>;
 
     direct_spot_command_route_handler_t (zlink::framework::route_client_t &routes,
-        zlink::framework::spot_handle_resolver_t &handles) :
-        _routes (routes), _handles (handles)
+        zlink::framework::spot_manager_t &spots) :
+        _routes (routes), _spots (spots)
     {
     }
 
@@ -138,7 +161,7 @@ class direct_spot_command_route_handler_t
         const auto request =
           nlohmann::json::parse (http.body).get<e2e::direct_spot_route_req_t> ();
         _routes
-          .send_to_spot (resolve_required_spot_handle (_handles, request.spot_id),
+          .send_to_spot (resolve_required_spot_id (_spots, request.spot_id),
                          e2e::direct_spot_msg_t{request.source_actor_id, request.value})
           .submit ();
 
@@ -150,7 +173,7 @@ class direct_spot_command_route_handler_t
 
   private:
     zlink::framework::route_client_t &_routes;
-    zlink::framework::spot_handle_resolver_t &_handles;
+    zlink::framework::spot_manager_t &_spots;
 };
 
 class spot_stage_probe_route_handler_t
@@ -158,11 +181,11 @@ class spot_stage_probe_route_handler_t
   public:
     using dependency_types =
       zlink::framework::dependency_list_t<zlink::framework::route_client_t,
-                                          zlink::framework::spot_handle_resolver_t>;
+                                          zlink::framework::spot_manager_t>;
 
     spot_stage_probe_route_handler_t (zlink::framework::route_client_t &routes,
-        zlink::framework::spot_handle_resolver_t &handles) :
-        _routes (routes), _handles (handles)
+        zlink::framework::spot_manager_t &spots) :
+        _routes (routes), _spots (spots)
     {
     }
 
@@ -173,7 +196,7 @@ class spot_stage_probe_route_handler_t
         auto reply =
           _routes
             .request_to_spot (
-              resolve_required_spot_handle (_handles, request.spot_id),
+              resolve_required_spot_id (_spots, request.spot_id),
               e2e::stage_probe_req_t{.marker = request.marker, .delta = request.delta})
             .timeout (std::chrono::seconds (3))
             .submit<e2e::state_res_t> ()
@@ -191,7 +214,7 @@ class spot_stage_probe_route_handler_t
 
   private:
     zlink::framework::route_client_t &_routes;
-    zlink::framework::spot_handle_resolver_t &_handles;
+    zlink::framework::spot_manager_t &_spots;
 };
 
 class spot_stage_timer_route_handler_t
@@ -200,12 +223,12 @@ class spot_stage_timer_route_handler_t
     using dependency_types =
       zlink::framework::dependency_list_t<zlink::framework::route_client_t,
                                           scenario_state_t,
-                                          zlink::framework::spot_handle_resolver_t>;
+                                          zlink::framework::spot_manager_t>;
 
     spot_stage_timer_route_handler_t (zlink::framework::route_client_t &routes,
                                       scenario_state_t &state,
-                                      zlink::framework::spot_handle_resolver_t &handles) :
-        _routes (routes), _state (state), _handles (handles)
+                                      zlink::framework::spot_manager_t &spots) :
+        _routes (routes), _state (state), _spots (spots)
     {
     }
 
@@ -215,7 +238,7 @@ class spot_stage_timer_route_handler_t
           nlohmann::json::parse (http.body).get<e2e::spot_stage_timer_req_t> ();
         _routes
           .send_to_spot (
-            resolve_required_spot_handle (_handles, request.spot_id),
+            resolve_required_spot_id (_spots, request.spot_id),
             e2e::stage_timer_start_msg_t{.name = request.name, .period_ms = request.period_ms})
           .submit ();
 
@@ -232,7 +255,7 @@ class spot_stage_timer_route_handler_t
   private:
     zlink::framework::route_client_t &_routes;
     scenario_state_t &_state;
-    zlink::framework::spot_handle_resolver_t &_handles;
+    zlink::framework::spot_manager_t &_spots;
 };
 
 class spot_state_command_route_handler_t
@@ -240,11 +263,11 @@ class spot_state_command_route_handler_t
   public:
     using dependency_types =
       zlink::framework::dependency_list_t<zlink::framework::route_client_t,
-                                          zlink::framework::spot_handle_resolver_t>;
+                                          zlink::framework::spot_manager_t>;
 
     spot_state_command_route_handler_t (zlink::framework::route_client_t &routes,
-        zlink::framework::spot_handle_resolver_t &handles) :
-        _routes (routes), _handles (handles)
+        zlink::framework::spot_manager_t &spots) :
+        _routes (routes), _spots (spots)
     {
     }
 
@@ -253,7 +276,7 @@ class spot_state_command_route_handler_t
         const auto request =
           nlohmann::json::parse (http.body).get<e2e::spot_state_command_route_req_t> ();
         _routes
-          .send_to_spot (resolve_required_spot_handle (_handles, request.spot_id),
+          .send_to_spot (resolve_required_spot_id (_spots, request.spot_id),
                          e2e::direct_spot_msg_t{"sm-c1-client", request.marker})
           .submit ();
 
@@ -265,7 +288,7 @@ class spot_state_command_route_handler_t
 
   private:
     zlink::framework::route_client_t &_routes;
-    zlink::framework::spot_handle_resolver_t &_handles;
+    zlink::framework::spot_manager_t &_spots;
 };
 
 class spot_publish_route_handler_t
@@ -353,11 +376,11 @@ class spot_worker_start_route_handler_t
   public:
     using dependency_types =
       zlink::framework::dependency_list_t<zlink::framework::route_client_t,
-                                          zlink::framework::spot_handle_resolver_t>;
+                                          zlink::framework::spot_manager_t>;
 
     spot_worker_start_route_handler_t (zlink::framework::route_client_t &routes,
-        zlink::framework::spot_handle_resolver_t &handles) :
-        _routes (routes), _handles (handles)
+        zlink::framework::spot_manager_t &spots) :
+        _routes (routes), _spots (spots)
     {
     }
 
@@ -367,7 +390,7 @@ class spot_worker_start_route_handler_t
           nlohmann::json::parse (http.body).get<e2e::spot_worker_start_req_t> ();
         auto reply =
           _routes
-            .request_to_spot (resolve_required_spot_handle (_handles, request.spot_id), request)
+            .request_to_spot (resolve_required_spot_id (_spots, request.spot_id), request)
             .timeout (std::chrono::seconds (30))
             .submit<e2e::spot_worker_start_res_t> ()
             .result ();
@@ -384,7 +407,7 @@ class spot_worker_start_route_handler_t
 
   private:
     zlink::framework::route_client_t &_routes;
-    zlink::framework::spot_handle_resolver_t &_handles;
+    zlink::framework::spot_manager_t &_spots;
 };
 
 class spot_worker_complete_handler_t
@@ -439,10 +462,10 @@ class spot_idle_close_route_handler_t
   public:
     using dependency_types =
       zlink::framework::dependency_list_t<scenario_state_t,
-                                          zlink::framework::spot_node_manager_t>;
+                                          zlink::framework::spot_manager_t>;
 
     spot_idle_close_route_handler_t (scenario_state_t &state,
-                                     zlink::framework::spot_node_manager_t &spots) :
+                                     zlink::framework::spot_manager_t &spots) :
         _state (state), _spots (spots)
     {
     }
@@ -451,8 +474,8 @@ class spot_idle_close_route_handler_t
     {
         const auto request =
           nlohmann::json::parse (http.body).get<e2e::spot_idle_close_req_t> ();
-        const auto created = _spots.get_or_create_spot (
-          e2e::user_spot, (request.spot_id),
+        const auto created = create_route_spot (
+          _spots, (request.spot_id), e2e::user_spot,
           e2e::idle_close_msg_t{.name = request.name, .period_ms = request.period_ms});
         if (created.state != zlink::framework::spot_create_state_t::created) {
             throw std::runtime_error ("idle close spot already exists");
@@ -500,7 +523,7 @@ class spot_idle_close_route_handler_t
     }
 
     scenario_state_t &_state;
-    zlink::framework::spot_node_manager_t &_spots;
+    zlink::framework::spot_manager_t &_spots;
 };
 
 class spot_overrun_start_route_handler_t
@@ -508,10 +531,10 @@ class spot_overrun_start_route_handler_t
   public:
     using dependency_types =
       zlink::framework::dependency_list_t<scenario_state_t,
-                                          zlink::framework::spot_node_manager_t>;
+                                          zlink::framework::spot_manager_t>;
 
     spot_overrun_start_route_handler_t (scenario_state_t &state,
-                                        zlink::framework::spot_node_manager_t &spots) :
+                                        zlink::framework::spot_manager_t &spots) :
         _state (state), _spots (spots)
     {
     }
@@ -520,8 +543,8 @@ class spot_overrun_start_route_handler_t
     {
         const auto request =
           nlohmann::json::parse (http.body).get<e2e::spot_overrun_start_req_t> ();
-        const auto created = _spots.get_or_create_spot (
-          e2e::user_spot, (request.spot_id),
+        const auto created = create_route_spot (
+          _spots, (request.spot_id), e2e::user_spot,
           e2e::overrun_timer_msg_t{
             .name = request.name, .policy = request.policy, .period_ms = request.period_ms});
         if (created.state != zlink::framework::spot_create_state_t::created) {
@@ -539,7 +562,7 @@ class spot_overrun_start_route_handler_t
     }
 
     scenario_state_t &_state;
-    zlink::framework::spot_node_manager_t &_spots;
+    zlink::framework::spot_manager_t &_spots;
 };
 
 class spot_slow_route_handler_t
@@ -547,11 +570,11 @@ class spot_slow_route_handler_t
   public:
     using dependency_types =
       zlink::framework::dependency_list_t<zlink::framework::route_client_t,
-                                          zlink::framework::spot_handle_resolver_t>;
+                                          zlink::framework::spot_manager_t>;
 
     spot_slow_route_handler_t (zlink::framework::route_client_t &routes,
-        zlink::framework::spot_handle_resolver_t &handles) :
-        _routes (routes), _handles (handles)
+        zlink::framework::spot_manager_t &spots) :
+        _routes (routes), _spots (spots)
     {
     }
 
@@ -561,7 +584,7 @@ class spot_slow_route_handler_t
           nlohmann::json::parse (http.body).get<e2e::spot_slow_route_req_t> ();
         auto reply =
           _routes
-            .request_to_spot (resolve_required_spot_handle (_handles, request.spot_id),
+            .request_to_spot (resolve_required_spot_id (_spots, request.spot_id),
                               e2e::slow_spot_req_t{request.value})
             .timeout (std::chrono::milliseconds (request.timeout_ms))
             .submit<e2e::direct_spot_res_t> ()
@@ -575,7 +598,7 @@ class spot_slow_route_handler_t
 
   private:
     zlink::framework::route_client_t &_routes;
-    zlink::framework::spot_handle_resolver_t &_handles;
+    zlink::framework::spot_manager_t &_spots;
 };
 
 class spot_missing_route_handler_t
@@ -583,11 +606,11 @@ class spot_missing_route_handler_t
   public:
     using dependency_types =
       zlink::framework::dependency_list_t<zlink::framework::route_client_t,
-                                          zlink::framework::spot_handle_resolver_t>;
+                                          zlink::framework::spot_manager_t>;
 
     spot_missing_route_handler_t (zlink::framework::route_client_t &routes,
-        zlink::framework::spot_handle_resolver_t &handles) :
-        _routes (routes), _handles (handles)
+        zlink::framework::spot_manager_t &spots) :
+        _routes (routes), _spots (spots)
     {
     }
 
@@ -595,7 +618,7 @@ class spot_missing_route_handler_t
     {
         const auto request =
           nlohmann::json::parse (http.body).get<e2e::spot_missing_route_req_t> ();
-        const auto target = try_resolve_spot_handle (_handles, request.spot_id);
+        const auto target = try_resolve_spot_id (_spots, request.spot_id);
         bool request_failed = true;
         if (target) {
             auto missing_request = _routes
@@ -626,7 +649,7 @@ class spot_missing_route_handler_t
 
   private:
     zlink::framework::route_client_t &_routes;
-    zlink::framework::spot_handle_resolver_t &_handles;
+    zlink::framework::spot_manager_t &_spots;
 };
 
 class spot_missing_handler_request_handler_t
@@ -635,12 +658,12 @@ class spot_missing_handler_request_handler_t
     using dependency_types =
       zlink::framework::dependency_list_t<zlink::framework::route_client_t,
                                           scenario_state_t,
-                                          zlink::framework::spot_handle_resolver_t>;
+                                          zlink::framework::spot_manager_t>;
 
     spot_missing_handler_request_handler_t (zlink::framework::route_client_t &routes,
                                             scenario_state_t &state,
-                                            zlink::framework::spot_handle_resolver_t &handles) :
-        _routes (routes), _state (state), _handles (handles)
+                                            zlink::framework::spot_manager_t &spots) :
+        _routes (routes), _state (state), _spots (spots)
     {
     }
 
@@ -650,7 +673,7 @@ class spot_missing_handler_request_handler_t
           nlohmann::json::parse (http.body).get<e2e::spot_missing_handler_req_t> ();
         auto reply =
           _routes
-            .request_to_spot (resolve_required_spot_handle (_handles, request.spot_id),
+            .request_to_spot (resolve_required_spot_id (_spots, request.spot_id),
                               e2e::unhandled_spot_req_t{"missing-handler"})
             .timeout (std::chrono::milliseconds (2000))
             .submit<e2e::direct_spot_res_t> ()
@@ -667,7 +690,7 @@ class spot_missing_handler_request_handler_t
   private:
     zlink::framework::route_client_t &_routes;
     scenario_state_t &_state;
-    zlink::framework::spot_handle_resolver_t &_handles;
+    zlink::framework::spot_manager_t &_spots;
 };
 
 class spot_missing_handler_command_handler_t
@@ -676,12 +699,12 @@ class spot_missing_handler_command_handler_t
     using dependency_types =
       zlink::framework::dependency_list_t<zlink::framework::route_client_t,
                                           scenario_state_t,
-                                          zlink::framework::spot_handle_resolver_t>;
+                                          zlink::framework::spot_manager_t>;
 
     spot_missing_handler_command_handler_t (zlink::framework::route_client_t &routes,
                                             scenario_state_t &state,
-                                            zlink::framework::spot_handle_resolver_t &handles) :
-        _routes (routes), _state (state), _handles (handles)
+                                            zlink::framework::spot_manager_t &spots) :
+        _routes (routes), _state (state), _spots (spots)
     {
     }
 
@@ -690,7 +713,7 @@ class spot_missing_handler_command_handler_t
         const auto request =
           nlohmann::json::parse (http.body).get<e2e::spot_missing_command_req_t> ();
         _routes
-          .send_to_spot (resolve_required_spot_handle (_handles, request.spot_id),
+          .send_to_spot (resolve_required_spot_id (_spots, request.spot_id),
                          e2e::unhandled_spot_msg_t{e2e::unhandled_spot_req_t{request.marker}})
           .submit ();
 
@@ -708,7 +731,7 @@ class spot_missing_handler_command_handler_t
   private:
     zlink::framework::route_client_t &_routes;
     scenario_state_t &_state;
-    zlink::framework::spot_handle_resolver_t &_handles;
+    zlink::framework::spot_manager_t &_spots;
 };
 
 class spot_missing_target_request_handler_t
@@ -716,11 +739,11 @@ class spot_missing_target_request_handler_t
   public:
     using dependency_types =
       zlink::framework::dependency_list_t<zlink::framework::route_client_t,
-                                          zlink::framework::spot_handle_resolver_t>;
+                                          zlink::framework::spot_manager_t>;
 
     spot_missing_target_request_handler_t (zlink::framework::route_client_t &routes,
-        zlink::framework::spot_handle_resolver_t &handles) :
-        _routes (routes), _handles (handles)
+        zlink::framework::spot_manager_t &spots) :
+        _routes (routes), _spots (spots)
     {
     }
 
@@ -729,7 +752,7 @@ class spot_missing_target_request_handler_t
         const auto request =
           nlohmann::json::parse (http.body).get<e2e::spot_missing_target_req_t> ();
         bool failed = true;
-        const auto target = try_resolve_spot_handle (_handles, request.spot_id);
+        const auto target = try_resolve_spot_id (_spots, request.spot_id);
         if (target) {
             auto reply = _routes
                            .request_to_spot (*target,
@@ -749,7 +772,7 @@ class spot_missing_target_request_handler_t
 
   private:
     zlink::framework::route_client_t &_routes;
-    zlink::framework::spot_handle_resolver_t &_handles;
+    zlink::framework::spot_manager_t &_spots;
 };
 
 class spot_outbound_route_handler_t
@@ -757,11 +780,11 @@ class spot_outbound_route_handler_t
   public:
     using dependency_types =
       zlink::framework::dependency_list_t<zlink::framework::route_client_t,
-                                          zlink::framework::spot_handle_resolver_t>;
+                                          zlink::framework::spot_manager_t>;
 
     spot_outbound_route_handler_t (zlink::framework::route_client_t &routes,
-        zlink::framework::spot_handle_resolver_t &handles) :
-        _routes (routes), _handles (handles)
+        zlink::framework::spot_manager_t &spots) :
+        _routes (routes), _spots (spots)
     {
     }
 
@@ -771,7 +794,7 @@ class spot_outbound_route_handler_t
           nlohmann::json::parse (http.body).get<e2e::spot_outbound_route_req_t> ();
         auto reply =
           _routes
-            .request_to_spot (resolve_required_spot_handle (_handles, request.spot_id),
+            .request_to_spot (resolve_required_spot_id (_spots, request.spot_id),
                               e2e::outbound_req_t{request.marker})
             .timeout (std::chrono::milliseconds (3000))
             .submit<e2e::outbound_res_t> ()
@@ -792,7 +815,7 @@ class spot_outbound_route_handler_t
 
   private:
     zlink::framework::route_client_t &_routes;
-    zlink::framework::spot_handle_resolver_t &_handles;
+    zlink::framework::spot_manager_t &_spots;
 };
 
 class spot_outbound_negative_route_handler_t
@@ -800,11 +823,11 @@ class spot_outbound_negative_route_handler_t
   public:
     using dependency_types =
       zlink::framework::dependency_list_t<zlink::framework::route_client_t,
-                                          zlink::framework::spot_handle_resolver_t>;
+                                          zlink::framework::spot_manager_t>;
 
     spot_outbound_negative_route_handler_t (zlink::framework::route_client_t &routes,
-        zlink::framework::spot_handle_resolver_t &handles) :
-        _routes (routes), _handles (handles)
+        zlink::framework::spot_manager_t &spots) :
+        _routes (routes), _spots (spots)
     {
     }
 
@@ -814,7 +837,7 @@ class spot_outbound_negative_route_handler_t
           nlohmann::json::parse (http.body).get<e2e::spot_outbound_route_req_t> ();
         auto reply =
           _routes
-            .request_to_spot (resolve_required_spot_handle (_handles, request.spot_id),
+            .request_to_spot (resolve_required_spot_id (_spots, request.spot_id),
                               e2e::outbound_negative_req_t{e2e::outbound_req_t{request.marker}})
             .timeout (std::chrono::milliseconds (3000))
             .submit<e2e::outbound_res_t> ()
@@ -835,7 +858,7 @@ class spot_outbound_negative_route_handler_t
 
   private:
     zlink::framework::route_client_t &_routes;
-    zlink::framework::spot_handle_resolver_t &_handles;
+    zlink::framework::spot_manager_t &_spots;
 };
 
 class spot_to_spot_route_handler_t
@@ -843,11 +866,11 @@ class spot_to_spot_route_handler_t
   public:
     using dependency_types =
       zlink::framework::dependency_list_t<zlink::framework::route_client_t,
-                                          zlink::framework::spot_handle_resolver_t>;
+                                          zlink::framework::spot_manager_t>;
 
     spot_to_spot_route_handler_t (zlink::framework::route_client_t &routes,
-        zlink::framework::spot_handle_resolver_t &handles) :
-        _routes (routes), _handles (handles)
+        zlink::framework::spot_manager_t &spots) :
+        _routes (routes), _spots (spots)
     {
     }
 
@@ -855,7 +878,7 @@ class spot_to_spot_route_handler_t
     {
         const auto request =
           nlohmann::json::parse (http.body).get<e2e::spot_to_spot_route_req_t> ();
-        const auto source = try_resolve_spot_handle (_handles, request.source_spot_id);
+        const auto source = try_resolve_spot_id (_spots, request.source_spot_id);
         if (!source) {
             throw zlink::framework::framework_exception_t (
               zlink::framework::framework_error_kind_t::not_found,
@@ -879,7 +902,7 @@ class spot_to_spot_route_handler_t
 
   private:
     zlink::framework::route_client_t &_routes;
-    zlink::framework::spot_handle_resolver_t &_handles;
+    zlink::framework::spot_manager_t &_spots;
 };
 
 class spot_to_spot_timeout_route_handler_t
@@ -887,11 +910,11 @@ class spot_to_spot_timeout_route_handler_t
   public:
     using dependency_types =
       zlink::framework::dependency_list_t<zlink::framework::route_client_t,
-                                          zlink::framework::spot_handle_resolver_t>;
+                                          zlink::framework::spot_manager_t>;
 
     spot_to_spot_timeout_route_handler_t (zlink::framework::route_client_t &routes,
-        zlink::framework::spot_handle_resolver_t &handles) :
-        _routes (routes), _handles (handles)
+        zlink::framework::spot_manager_t &spots) :
+        _routes (routes), _spots (spots)
     {
     }
 
@@ -901,7 +924,7 @@ class spot_to_spot_timeout_route_handler_t
           nlohmann::json::parse (http.body).get<e2e::spot_to_spot_route_req_t> ();
         auto reply =
           _routes
-            .request_to_spot (resolve_required_spot_handle (_handles, request.source_spot_id),
+            .request_to_spot (resolve_required_spot_id (_spots, request.source_spot_id),
                               e2e::spot_to_spot_timeout_req_t{request})
             .timeout (std::chrono::milliseconds (3000))
             .submit<e2e::spot_to_spot_timeout_route_res_t> ()
@@ -919,7 +942,7 @@ class spot_to_spot_timeout_route_handler_t
 
   private:
     zlink::framework::route_client_t &_routes;
-    zlink::framework::spot_handle_resolver_t &_handles;
+    zlink::framework::spot_manager_t &_spots;
 };
 
 class spot_to_spot_negative_route_handler_t
@@ -927,11 +950,11 @@ class spot_to_spot_negative_route_handler_t
   public:
     using dependency_types =
       zlink::framework::dependency_list_t<zlink::framework::route_client_t,
-                                          zlink::framework::spot_handle_resolver_t>;
+                                          zlink::framework::spot_manager_t>;
 
     spot_to_spot_negative_route_handler_t (zlink::framework::route_client_t &routes,
-        zlink::framework::spot_handle_resolver_t &handles) :
-        _routes (routes), _handles (handles)
+        zlink::framework::spot_manager_t &spots) :
+        _routes (routes), _spots (spots)
     {
     }
 
@@ -941,7 +964,7 @@ class spot_to_spot_negative_route_handler_t
           nlohmann::json::parse (http.body).get<e2e::spot_to_spot_route_req_t> ();
         auto reply =
           _routes
-            .request_to_spot (resolve_required_spot_handle (_handles, request.source_spot_id),
+            .request_to_spot (resolve_required_spot_id (_spots, request.source_spot_id),
                               e2e::spot_to_spot_negative_req_t{request})
             .timeout (std::chrono::milliseconds (3000))
             .submit<e2e::spot_to_spot_negative_route_res_t> ()
@@ -959,5 +982,5 @@ class spot_to_spot_negative_route_handler_t
 
   private:
     zlink::framework::route_client_t &_routes;
-    zlink::framework::spot_handle_resolver_t &_handles;
+    zlink::framework::spot_manager_t &_spots;
 };

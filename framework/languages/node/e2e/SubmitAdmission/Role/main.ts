@@ -8,9 +8,9 @@ import {
   type ZLinkFanoutClient,
   type ZLinkRouteMeshRuntime,
   type ZLinkRouteClient,
-  type ZLinkRouteSendContext,
+  type ZLinkRouteMessageContext,
   type ZLinkRouteSendHandler,
-  type ZLinkSendContext,
+  type ZLinkMessageContext,
   type ZLinkSendHandler
 } from '@zlink-systems/framework';
 import {
@@ -66,7 +66,7 @@ async function awaitGate(): Promise<void> {
 
 @ZLinkPacket('AdmissionMessage')
 class RouteAdmissionHandler implements ZLinkRouteSendHandler<AdmissionMessage> {
-  async handle(message: AdmissionMessage, _context: ZLinkRouteSendContext): Promise<void> {
+  async handle(message: AdmissionMessage, _context: ZLinkRouteMessageContext): Promise<void> {
     record(message.operationId, 'entered');
     await awaitGate();
     record(message.operationId, 'completed');
@@ -75,7 +75,7 @@ class RouteAdmissionHandler implements ZLinkRouteSendHandler<AdmissionMessage> {
 
 @ZLinkPacket('AdmissionMessage')
 class ChannelAdmissionHandler implements ZLinkSendHandler<AdmissionMessage> {
-  async handle(message: AdmissionMessage, _context: ZLinkSendContext): Promise<void> {
+  async handle(message: AdmissionMessage, _context: ZLinkMessageContext): Promise<void> {
     record(message.operationId, 'entered');
     await awaitGate();
     record(message.operationId, 'completed');
@@ -161,7 +161,7 @@ async function handleRequest(
   if (request.method === 'GET' && url.pathname === '/ready') {
     const targetRid = url.searchParams.get('targetRid');
     const snapshot = runtime?.snapshot(meshName);
-    const ready = snapshot?.peers.some((peer) => String(peer.rid) === targetRid && peer.ready) ?? false;
+    const ready = snapshot?.peers.some((peer) => String(peer.nodeRid) === targetRid && peer.state === 1) ?? false;
     return { status: ready ? 200 : 503, body: { ready, targetRid } };
   }
   if (request.method === 'GET' && url.pathname === '/evidence') {

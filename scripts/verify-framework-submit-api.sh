@@ -252,9 +252,17 @@ for (const [language, relative, extensions] of publicRoots) {
   }
 }
 
-const kotlinOneWayWrappers = read(
-  'framework/languages/java/zlink-framework-kotlin/src/main/kotlin/'
-  + 'systems/zlink/framework/kotlin/ZLinkOneWayCalls.kt');
+// Kotlin keeps application-facing declarations in the contract source owner
+// and the Java-backed adapters in the implementation file. Read both files so
+// this gate checks the published surface without encoding an obsolete layout.
+const kotlinOneWayWrappers = [
+  read(
+    'framework/languages/java/zlink-framework-kotlin/src/main/kotlin/'
+    + 'systems/zlink/framework/kotlin/contracts/ZLinkOneWayContracts.kt'),
+  read(
+    'framework/languages/java/zlink-framework-kotlin/src/main/kotlin/'
+    + 'systems/zlink/framework/kotlin/ZLinkOneWayCalls.kt'),
+].join('\n');
 for (const fragment of [
   'interface ZLinkKotlinMessageSendCall',
   'interface ZLinkKotlinSpotSendCall',
@@ -270,9 +278,9 @@ for (const fragment of [
 
 for (const relative of [
   'framework/languages/java/zlink-framework-core/src/main/java/'
-    + 'systems/zlink/framework/runtime/messaging/ZLinkOneWayAdmission.java',
+    + 'systems/zlink/framework/runtime/host/ZLinkOneWayAdmission.java',
   'framework/languages/java/zlink-framework-core/src/main/java/'
-    + 'systems/zlink/framework/runtime/messaging/ZLinkOneWayAdmissionStatus.java',
+    + 'systems/zlink/framework/runtime/host/ZLinkOneWayAdmissionStatus.java',
 ]) {
   const source = read(relative);
   if (/^\s*public\s+(?:final\s+)?(?:class|enum|interface)\s+ZLinkOneWay/m.test(source)) {
@@ -282,7 +290,7 @@ for (const relative of [
 
 const javaBackendObject = read(
   'framework/languages/java/zlink-framework-core/src/main/java/'
-  + 'systems/zlink/framework/runtime/backend/ZLinkBackendObject.java');
+  + 'systems/zlink/framework/runtime/internal/backend/ZLinkBackendObject.java');
 if (/\b(?:ONE_WAY_|submitOneWay|beginOneWay|adaptOneWay|oneWayStatus)\b/.test(
   javaBackendObject)) {
   fail('java public backend interface exposes internal one-way admission helpers');

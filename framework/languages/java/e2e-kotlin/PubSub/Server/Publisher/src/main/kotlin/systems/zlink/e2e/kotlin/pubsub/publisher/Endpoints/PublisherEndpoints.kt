@@ -7,18 +7,23 @@ import com.sun.net.httpserver.HttpServer
 import java.net.InetSocketAddress
 import java.net.URI
 import java.nio.charset.StandardCharsets
+import org.springframework.beans.factory.ObjectProvider
 import org.springframework.context.ConfigurableApplicationContext
 import org.springframework.context.SmartLifecycle
 import systems.zlink.e2e.kotlin.pubsub.shared.Contracts
 import systems.zlink.e2e.kotlin.pubsub.shared.EventMsg
 import systems.zlink.e2e.kotlin.pubsub.shared.MissingEventMsg
 import systems.zlink.framework.channels.ZLinkFanoutClient
+import systems.zlink.framework.monitoring.ZLinkListenerKind
+import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime
 
 class PublisherEndpoints(
     private val fanout: ZLinkFanoutClient,
     private val json: ObjectMapper,
     private val endpoint: String,
+    private val channelName: String,
     private val application: ConfigurableApplicationContext,
+    private val runtime: ObjectProvider<ZLinkFrameworkRuntime>,
 ) : SmartLifecycle {
     private var server: HttpServer? = null
     private var running = false
@@ -37,7 +42,7 @@ class PublisherEndpoints(
         }
         httpServer.createContext("/publish") { exchange ->
             val request = exchange.readJson<PublishReq>()
-            fanout.publish(Contracts.EVENT_CHANNEL, request.topic, request.message)
+            fanout.publish(channelName, request.topic, request.message)
                 .submit()
                 .toCompletableFuture()
                 .join()
@@ -46,11 +51,60 @@ class PublisherEndpoints(
         httpServer.createContext("/publish-missing") { exchange ->
             val request = exchange.readJson<PublishReq>()
             fanout.publish(
-                Contracts.EVENT_CHANNEL,
+                channelName,
                 request.topic,
                 MissingEventMsg(request.message.scenario, request.message.sequence, request.message.value),
             ).submit().toCompletableFuture().join()
             exchange.writeJson(mapOf("status" to "published"))
+        }
+        httpServer.createContext("/publish-reserved") { exchange ->
+            try {
+                fanout.publish(channelName, "\u0001ZLF1", EventMsg("ps-f3", 1, "reserved"))
+                    .submit()
+                    .toCompletableFuture()
+                    .join()
+                exchange.writeJson(mapOf("status" to "accepted"))
+            } catch (error: Exception) {
+                val body = json.writeValueAsBytes(
+                    mapOf(
+                        "error" to (error.message ?: error.javaClass.simpleName),
+                        "type" to error.javaClass.simpleName,
+                    ),
+                )
+                exchange.responseHeaders.add("Content-Type", "application/json")
+                exchange.sendResponseHeaders(400, body.size.toLong())
+                exchange.responseBody.use { it.write(body) }
+            } finally {
+                exchange.close()
+            }
+        }
+        httpServer.createContext("/publish-reserved-prefix") { exchange ->
+            fanout.publish(channelName, "\u0001ZLF1.more", EventMsg("ps-f3", 2, "reserved-prefix"))
+                .submit()
+                .toCompletableFuture()
+                .join()
+            exchange.writeJson(mapOf("status" to "published"))
+        }
+        httpServer.createContext("/status") { exchange ->
+            val status = runtime.getObject().fanoutRuntime().snapshot(channelName)
+            val listener = runtime.getObject().listenerStatus(ZLinkListenerKind.FANOUT, channelName)
+            exchange.writeJson(
+                mapOf(
+                    "channelName" to status.channelName(),
+                    "state" to status.state().name,
+                    "isReady" to status.isReady,
+                    "readyPublisherCount" to status.readyPublisherCount(),
+                    "publishers" to status.publishers().map { publisher ->
+                        mapOf(
+                            "nodeRid" to publisher.nodeRid().toString(),
+                            "state" to publisher.state().name,
+                        )
+                    },
+                    "sequence" to status.sequence(),
+                    "observedAt" to status.observedAt().toString(),
+                    "listenerEndpoint" to listener.endpoint(),
+                ),
+            )
         }
         httpServer.createContext("/shutdown") { exchange ->
             val body = "stopping\n".toByteArray(StandardCharsets.UTF_8)
