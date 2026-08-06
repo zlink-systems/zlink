@@ -653,7 +653,7 @@ zlink::socket_base_t::detach_monitor_socket (bool send_monitor_stopped_event_)
         }
 
         if (monitor.task_id != 0) {
-            control_runtime_t *runtime = get_ctx ()->control_runtime ();
+            control_runtime_t *runtime = get_ctx ()->control_runtime_if_started ();
             if (runtime)
                 (void) runtime->remove_task (monitor.task_id);
         }

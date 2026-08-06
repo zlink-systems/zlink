@@ -263,6 +263,35 @@ void test_ctx_destroy ()
     TEST_ASSERT_SUCCESS_ERRNO (zlink_ctx_term (ctx));
 }
 
+void test_ctx_term_with_open_socket_monitors ()
+{
+    void *ctx = zlink_ctx_new ();
+    TEST_ASSERT_NOT_NULL (ctx);
+
+    void *router = zlink_socket (ctx, ZLINK_SOCKET_ROUTER);
+    void *dealer = zlink_socket (ctx, ZLINK_SOCKET_DEALER);
+    TEST_ASSERT_NOT_NULL (router);
+    TEST_ASSERT_NOT_NULL (dealer);
+
+    zlink_socket_monitor_open_options_t options;
+    memset (&options, 0, sizeof (options));
+    options.events = ZLINK_EVENT_CONNECTION_READY;
+    void *router_monitor = zlink_socket_monitor_open (router, &options);
+    void *dealer_monitor = zlink_socket_monitor_open (dealer, &options);
+    TEST_ASSERT_NOT_NULL (router_monitor);
+    TEST_ASSERT_NOT_NULL (dealer_monitor);
+
+    // The application may close the source sockets before it consumes the raw
+    // monitor handles. Context termination must detach the source monitor
+    // tasks before it reaps those still-open monitor sockets.
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_close (dealer));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_close (router));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_ctx_shutdown (ctx));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_monitor_close (&dealer_monitor));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_monitor_close (&router_monitor));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_ctx_term (ctx));
+}
+
 void test_ctx_shutdown ()
 {
     //  Set up our context and sockets
@@ -507,6 +536,7 @@ int main (void)
     RUN_TEST (test_pipe_lifetime_state_rejects_invalid_transitions);
     RUN_TEST (test_pipe_lifetime_state_assigns_one_delete_owner);
     RUN_TEST (test_ctx_destroy);
+    RUN_TEST (test_ctx_term_with_open_socket_monitors);
     RUN_TEST (test_ctx_shutdown);
     RUN_TEST (test_ctx_shutdown_socket_opened_after);
     RUN_TEST (test_ctx_shutdown_only_socket_opened_after);

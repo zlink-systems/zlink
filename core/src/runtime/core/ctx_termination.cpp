@@ -70,6 +70,14 @@ bool zlink::ctx_t::begin_shutdown_locked (bool allow_fork_cleanup_)
     debug_dump_sockets_locked ("terminate-before-stop");
     std::vector<socket_base_t *> sockets;
     _socket_registry.collect_sockets (&sockets);
+
+    // A raw monitor peer is a context-owned socket, but its delivery task is
+    // owned by the source socket. Detach every source monitor before sending
+    // stop commands to the socket set so the control runtime cannot pump a
+    // monitor runtime after its peer has begun teardown.
+    for (std::vector<socket_base_t *>::size_type i = 0, size = sockets.size (); i != size; ++i)
+        sockets[i]->stop_monitor (false);
+
     for (std::vector<socket_base_t *>::size_type i = 0, size = sockets.size (); i != size; ++i)
         sockets[i]->stop ();
     if (sockets.empty ())

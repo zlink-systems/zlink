@@ -522,6 +522,7 @@ class socket_base_t : public own_t,
     bool has_attached_pipes () const;
 
   private:
+    friend class ctx_t;
     friend class socket_poller_t;
     friend struct multipart_send_facade_t;
 
