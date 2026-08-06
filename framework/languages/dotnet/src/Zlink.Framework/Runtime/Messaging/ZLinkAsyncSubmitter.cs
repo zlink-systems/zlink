@@ -657,13 +657,15 @@ internal sealed class ZLinkAsyncSubmitter : IAsyncDisposable
         {
             ObjectDisposedException.ThrowIf(!_accepting, this);
             retryableFailure = null;
+            IReadOnlyList<Message>? attempt = null;
             try
             {
                 if (pending?.IsCompleted == true) return false;
-                // The binding consumes the caller-owned parts only after an
-                // accepted submit and restores ownership on failure. Keep the
-                // original parts for retry instead of cloning every attempt.
-                var accepted = trySubmit(parts);
+                // Keep Framework-owned parts valid for the pending request and
+                // its completion callback. The binding receives a separate
+                // attempt payload whose ownership ends with this attempt.
+                attempt = ZLinkMessageParts.CopyAll(parts);
+                var accepted = trySubmit(attempt);
                 if (accepted) onAccepted?.Invoke();
                 return accepted;
             }
@@ -671,6 +673,11 @@ internal sealed class ZLinkAsyncSubmitter : IAsyncDisposable
             {
                 retryableFailure = error;
                 return false;
+            }
+            finally
+            {
+                if (attempt is not null)
+                    ZLinkMessageParts.DisposeAll(attempt);
             }
         }
     }
