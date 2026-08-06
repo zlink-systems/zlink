@@ -3,6 +3,7 @@ namespace ResilienceLifecycle.Shared;
 public static class ResilienceLifecycleNames
 {
     public const string Channel = "resilience.profile";
+    public const string ClientServerChannel = "resilience.profile.client-server";
 }
 
 public sealed record ProfileReq(string Value, string Marker);

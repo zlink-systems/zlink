@@ -65,10 +65,24 @@ internal static class ProviderHostFactory
             var mesh = framework.AddRouteMesh(ResilienceLifecycleNames.Channel)
                 .Listen(Require(options.ChannelEndpoint, "ChannelEndpoint"))
                 .SetRoutingIdPrefix(options.Rid);
+            if (!string.IsNullOrWhiteSpace(options.ChannelAdvertiseHost))
+                mesh.SetAdvertiseHost(options.ChannelAdvertiseHost);
             mesh.Channel(ResilienceLifecycleNames.Channel).Server()
                 .SetWeight(options.Weight)
                 .AddRequestHandler<ProfileRequestHandler, ProfileReq, ProfileRes>("ProfileReq")
                 .AddSendHandler<ProfileCommandHandler, ProfileMsg>("ProfileMsg");
+
+            if (options.ClientServerEnabled)
+            {
+                var server = framework.AddClientServerChannel(
+                        ResilienceLifecycleNames.ClientServerChannel)
+                    .Server()
+                    .Listen(ParsePort(options.ClientServerEndpoint))
+                    .SetBindHost(options.ClientServerBindHost ?? "127.0.0.1")
+                    .SetAdvertiseHost(options.ClientServerAdvertiseHost ?? "127.0.0.1")
+                    .SetWeight(options.Weight);
+                server.AddRequestHandler<ProfileRequestHandler, ProfileReq, ProfileRes>("ProfileReq");
+            }
         });
 
         var app = builder.Build();
@@ -81,5 +95,13 @@ internal static class ProviderHostFactory
         return string.IsNullOrWhiteSpace(value)
             ? throw new InvalidOperationException($"{name} is required.")
             : value;
+    }
+
+    private static int ParsePort(string? endpoint)
+    {
+        if (!Uri.TryCreate(endpoint, UriKind.Absolute, out var uri)
+            || uri.Port is < 1 or > 65535)
+            throw new InvalidOperationException("ClientServerEndpoint must contain a valid TCP port.");
+        return uri.Port;
     }
 }

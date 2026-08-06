@@ -173,7 +173,12 @@ internal sealed record ServerOptions(
     string? RedisEndpoint = null,
     string? RedisKeyPrefix = null,
     string? ChannelEndpoint = null,
-    string? EvidenceFile = null)
+    string? EvidenceFile = null,
+    string? ChannelAdvertiseHost = null,
+    bool ClientServerEnabled = false,
+    string? ClientServerEndpoint = null,
+    string? ClientServerBindHost = null,
+    string? ClientServerAdvertiseHost = null)
 {
     public static ServerOptions Parse(string[] args, string defaultRole)
         => E2eConfiguration.Load<ServerOptions>(args) with { Role = defaultRole };

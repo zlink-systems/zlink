@@ -41,6 +41,8 @@ var scenarios = new (string Name, Func<Task> Run)[]
         options, providerA, providerB)),
     ("RL-E4", () => RlE4ConnectionLossRaceScenario.RunAsync(
         options, providerA, providerB)),
+    ("RL-E2", () => RlE2HalfOpenConnectionScenario.RunAsync(
+        options, consumer, providerA, providerB)),
     ("RL-A1", () => RlA1ProviderRestartScenario.RunAsync(consumer, registry, processes, providerA, providerB)),
     ("RL-A2", () => RlA2ProviderEndpointRemapScenario.RunAsync(
         consumer, registry, processes, providerA, providerB)),

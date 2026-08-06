@@ -55,6 +55,8 @@ internal static class ConsumerHostFactory
             framework.ConfigureDispatch().Diagnostics
                 .SetLevel(ZLinkDiagnosticsLevel.Normal);
             JoinConsumerMesh(framework, "consumer");
+            if (options.ClientServerEnabled)
+                JoinConsumerClientServer(framework);
         });
         // Mesh peers replace the 9.x socket monitor as the connection-evidence
         // source: a peer reaching ready is the wire-level ConnectionReady and a
@@ -153,6 +155,20 @@ internal static class ConsumerHostFactory
             var reply = await RequestProfileAsync(channel, request);
             return Results.Ok(reply);
         });
+        app.MapPost("/profile/clientserver/request", async (
+            ProfileReq request,
+            IZLinkRouteClient channel) =>
+        {
+            var reply = await channel.RequestToChannel(
+                    ResilienceLifecycleNames.ClientServerChannel, request)
+                .Timeout(TimeSpan.FromSeconds(5))
+                .Async<ProfileRes>();
+            return Results.Ok(reply);
+        });
+        app.MapGet("/clientserver/status", (IZLinkClientServerRuntime runtime) =>
+            Results.Ok(runtime.GetStatus(ResilienceLifecycleNames.ClientServerChannel)));
+        app.MapGet("/route/status", (IZLinkRouteMeshRuntime runtime) =>
+            Results.Ok(runtime.GetStatus(ResilienceLifecycleNames.Channel)));
         app.MapPost("/profile/request/timeout/{milliseconds:int}", async (
             int milliseconds,
             ProfileReq request,
@@ -246,6 +262,12 @@ internal static class ConsumerHostFactory
         mesh.Channel(ResilienceLifecycleNames.Channel).Client();
     }
 
+    private static void JoinConsumerClientServer(IZLinkFrameworkOptions framework)
+    {
+        framework.AddClientServerChannel(ResilienceLifecycleNames.ClientServerChannel)
+            .Client();
+    }
+
     static async Task<ProfileRes> RequestProfileAsync(
         IZLinkRouteClient channel,
         ProfileReq request)
@@ -259,7 +281,8 @@ internal sealed record ConsumerOptions(
     string HttpUrl,
     string RedisEndpoint,
     string RedisKeyPrefix,
-    string LogDir)
+    string LogDir,
+    bool ClientServerEnabled = false)
 {
     public static ConsumerOptions Parse(string[] args)
         => E2eConfiguration.Load<ConsumerOptions>(args);
