@@ -24,7 +24,7 @@
 | RL-D3 | 구현 | dispatch-error evidence의 `failed`·`no_handler`·`reply_error`·packet 값을 확인했다(`logs/20260720-033851-1989147`). |
 | RL-D4 | 구현 | missing handler의 wire Error와 client request 예외, 정상 follow-up Response를 확인했다(`logs/20260720-033905-1990307`). |
 | RL-D5 | 구현 | request/send 혼합 burst와 두 evidence 흐름을 확인했다(`logs/20260720-033918-1991019`). |
-| RL-E1 | 부분 구현 | .NET source에 RouteMesh provider의 normal close와 process RST variant가 추가되어 있다. 공통 시나리오가 요구하는 RouteMesh·ClientServer 두 target과 두 topology의 affected-only 검증은 아직 fixture에 없으므로 완료로 판정하지 않는다. |
+| RL-E1 | 구현 | RouteMesh와 ClientServer를 각각 두 target으로 준비하고, fresh connection에서 normal close와 process RST를 수행했다. 두 variant 모두 affected target의 not-ready 전환이 15초 peer deadline 전에 관찰되었고, surviving provider A가 두 channel request를 처리했다(`logs/20260806-170432-307506`). 구현 세부는 `framework/doc/framework/dotnet/internals/resilience-e1-orderly-disconnect-e2e.ko.md`에 기록했다. |
 
 현행 공통 Config 5에 추가된 아래 시나리오는 `.NET` role server와 runner에 등록된 뒤 계약 검증을
 완료하지 않았다. 기존 `RL-A1~D5`와 RL-E1이 통과해도 아래 행을 완료로 계산하지 않는다.

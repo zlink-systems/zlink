@@ -219,14 +219,32 @@ internal sealed class ResilienceProcessManager(ClientOptions options) : IAsyncDi
         string endpoint,
         string evidenceFile)
     {
+        var clientServerEndpoint = ClientServerEndpointFor(rid);
         return StartProcess(
             name,
             options.ProviderProject,
             new DynamicProviderOptions(
                 "provider", rid, url, options.LogDir, 100,
-                options.RedisEndpoint, options.RedisKeyPrefix, endpoint, evidenceFile),
+                options.RedisEndpoint, options.RedisKeyPrefix, endpoint, evidenceFile,
+                clientServerEndpoint,
+                clientServerEndpoint is null ? null : ClientServerBindHostFor(clientServerEndpoint),
+                clientServerEndpoint is null ? null : "127.0.0.1",
+                clientServerEndpoint is not null),
             url);
     }
+
+    private string? ClientServerEndpointFor(string rid) => rid switch
+    {
+        "api-a" => options.ProviderAClientServerEndpoint,
+        "api-b" => options.ProviderBClientServerRestartEndpoint
+                   ?? options.ProviderBClientServerEndpoint,
+        _ => null
+    };
+
+    private static string ClientServerBindHostFor(string endpoint)
+        => endpoint.Contains("127.0.0.2", StringComparison.Ordinal)
+            ? "127.0.0.2"
+            : "127.0.0.1";
 
     private ManagedProcess StartProcess(
         string name,
@@ -300,7 +318,11 @@ internal sealed record DynamicProviderOptions(
     string RedisEndpoint,
     string RedisKeyPrefix,
     string ChannelEndpoint,
-    string EvidenceFile);
+    string EvidenceFile,
+    string? ClientServerEndpoint = null,
+    string? ClientServerBindHost = null,
+    string? ClientServerAdvertiseHost = null,
+    bool ClientServerEnabled = false);
 
 internal sealed record ProviderStartResult(string Rid, string Status, string Url, string Endpoint);
 

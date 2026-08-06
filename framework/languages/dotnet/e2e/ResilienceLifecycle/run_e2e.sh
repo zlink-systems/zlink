@@ -193,7 +193,7 @@ run_rl_e2() {
   API_B_GREEN_URL="http://127.0.0.1:$API_B_GREEN_HTTP_PORT"
   API_B_GREEN="tcp://127.0.0.1:$API_B_GREEN_PORT"
   CLIENT_SERVER_A="tcp://127.0.0.1:$CLIENT_SERVER_A_PORT"
-  CLIENT_SERVER_B="tcp://127.0.0.2:$CLIENT_SERVER_B_PORT"
+  CLIENT_SERVER_B="tcp://127.0.0.1:$CLIENT_SERVER_B_PORT"
   CLIENT_SERVER_PROXY="tcp://127.0.0.1:$CLIENT_SERVER_B_PORT"
   ROUTE_PROXY_CONTROL_URL="http://127.0.0.1:$ROUTE_PROXY_CONTROL_PORT"
   CLIENT_SERVER_PROXY_CONTROL_URL="http://127.0.0.1:$CLIENT_SERVER_PROXY_CONTROL_PORT"
@@ -271,10 +271,86 @@ run_rl_e2() {
   cat "$LOG_DIR/client.stdout.log"
 }
 
+run_rl_e1() {
+  mapfile -t ROLE_PORTS < <(pick_ports 12)
+  if [[ "${#ROLE_PORTS[@]}" -ne 12 ]]; then
+    echo "Failed to allocate the RL-E1 ports." >&2
+    exit 1
+  fi
+  API_A_HTTP_PORT="${ROLE_PORTS[0]}"
+  API_B_HTTP_PORT="${ROLE_PORTS[1]}"
+  CONSUMER_HTTP_PORT="${ROLE_PORTS[2]}"
+  API_A_PORT="${ROLE_PORTS[3]}"
+  API_B_PORT="${ROLE_PORTS[4]}"
+  API_B_REMAP_HTTP_PORT="${ROLE_PORTS[5]}"
+  API_B_REMAP_PORT="${ROLE_PORTS[6]}"
+  API_B_GREEN_HTTP_PORT="${ROLE_PORTS[7]}"
+  API_B_GREEN_PORT="${ROLE_PORTS[8]}"
+  CLIENT_SERVER_A_PORT="${ROLE_PORTS[9]}"
+  CLIENT_SERVER_B_PORT="${ROLE_PORTS[10]}"
+  CLIENT_SERVER_B_RESTART_PORT="${ROLE_PORTS[11]}"
+
+  API_A="tcp://127.0.0.1:$API_A_PORT"
+  API_B="tcp://127.0.0.1:$API_B_PORT"
+  API_A_URL="http://127.0.0.1:$API_A_HTTP_PORT"
+  API_B_URL="http://127.0.0.1:$API_B_HTTP_PORT"
+  API_B_REMAP_URL="http://127.0.0.1:$API_B_REMAP_HTTP_PORT"
+  API_B_REMAP="tcp://127.0.0.1:$API_B_REMAP_PORT"
+  API_B_GREEN_URL="http://127.0.0.1:$API_B_GREEN_HTTP_PORT"
+  API_B_GREEN="tcp://127.0.0.1:$API_B_GREEN_PORT"
+  CLIENT_SERVER_A="tcp://127.0.0.1:$CLIENT_SERVER_A_PORT"
+  CLIENT_SERVER_B="tcp://127.0.0.1:$CLIENT_SERVER_B_PORT"
+  CLIENT_SERVER_B_RESTART="tcp://127.0.0.1:$CLIENT_SERVER_B_RESTART_PORT"
+
+  start_server api-a "$PROVIDER_PROJECT" \
+    --rid api-a --http-url "$API_A_URL" \
+    --redis-endpoint "$REDIS_ENDPOINT" --redis-key-prefix "$REDIS_KEY_PREFIX" \
+    --channel-endpoint "$API_A" --weight 100 \
+    --client-server-enabled true --client-server-endpoint "$CLIENT_SERVER_A" \
+    --evidence-file "$LOG_DIR/api-a.evidence.log" --log-dir "$LOG_DIR"
+  API_A_PID="${pids[$((${#pids[@]} - 1))]}"
+  wait_health "$API_A_URL" api-a
+
+  start_server api-b "$PROVIDER_PROJECT" \
+    --rid api-b --http-url "$API_B_URL" \
+    --redis-endpoint "$REDIS_ENDPOINT" --redis-key-prefix "$REDIS_KEY_PREFIX" \
+    --channel-endpoint "$API_B" --weight 100 \
+    --client-server-enabled true --client-server-endpoint "$CLIENT_SERVER_B" \
+    --evidence-file "$LOG_DIR/api-b.evidence.log" --log-dir "$LOG_DIR"
+  API_B_PID="${pids[$((${#pids[@]} - 1))]}"
+  wait_health "$API_B_URL" api-b
+
+  start_server consumer "$CONSUMER_PROJECT" \
+    --http-url "http://127.0.0.1:$CONSUMER_HTTP_PORT" \
+    --redis-endpoint "$REDIS_ENDPOINT" --redis-key-prefix "$REDIS_KEY_PREFIX" \
+    --client-server-enabled true --log-dir "$LOG_DIR"
+  wait_health "http://127.0.0.1:$CONSUMER_HTTP_PORT" consumer
+
+  python3 "$ROOT_DIR/../write_role_config.py" "$CONFIG_DIR/client.json" -- \
+    --config-dir "$CONFIG_DIR" --consumer-url "http://127.0.0.1:$CONSUMER_HTTP_PORT" \
+    --topology-url "http://127.0.0.1:$CONSUMER_HTTP_PORT" \
+    --redis-endpoint "$REDIS_ENDPOINT" --redis-key-prefix "$REDIS_KEY_PREFIX" \
+    --redis-container "$REDIS_CONTAINER" --provider-a-url "$API_A_URL" \
+    --provider-a-process-id "$API_A_PID" --provider-a-endpoint "$API_A" \
+    --provider-a-evidence-file "$LOG_DIR/api-a.evidence.log" \
+    --provider-b-url "$API_B_URL" --provider-b-process-id "$API_B_PID" \
+    --provider-b-endpoint "$API_B" --provider-b-evidence-file "$LOG_DIR/api-b.evidence.log" \
+    --provider-a-client-server-endpoint "$CLIENT_SERVER_A" \
+    --provider-b-client-server-endpoint "$CLIENT_SERVER_B" \
+    --provider-b-client-server-restart-endpoint "$CLIENT_SERVER_B_RESTART" \
+    --provider-b-remap-url "$API_B_REMAP_URL" --provider-b-remap-endpoint "$API_B_REMAP" \
+    --provider-b-green-url "$API_B_GREEN_URL" --provider-b-green-endpoint "$API_B_GREEN" \
+    --provider-project "$PROVIDER_PROJECT" --log-dir "$LOG_DIR" --scenario RL-E1
+  CLIENT_APPLICATION="$ROOT_DIR/Client/bin/Debug/net8.0/ResilienceLifecycle.Client.dll"
+  dotnet "$CLIENT_APPLICATION" --config "$CONFIG_DIR/client.json" \
+    >"$LOG_DIR/client.stdout.log" 2>"$LOG_DIR/client.stderr.log"
+  cat "$LOG_DIR/client.stdout.log"
+}
+
 echo "log_dir=$LOG_DIR"
-dotnet build "$PROVIDER_PROJECT" --maxcpucount:1 >/dev/null
-dotnet build "$CONSUMER_PROJECT" --maxcpucount:1 >/dev/null
-dotnet build "$CLIENT_PROJECT" --maxcpucount:1 >/dev/null
+dotnet build "$PROVIDER_PROJECT" --no-restore --maxcpucount:1 >/dev/null
+dotnet build "$CONSUMER_PROJECT" --no-restore --maxcpucount:1 >/dev/null
+dotnet build "$CLIENT_PROJECT" --no-restore --maxcpucount:1 >/dev/null
 
 # The run owns its Redis: a dedicated, throwaway container is the shared
 # location store every server registers into (no registry process exists).
@@ -293,6 +369,10 @@ REDIS_KEY_PREFIX="resilience-e2e:$$:"
 
 if [[ "$SCENARIO" == "RL-E2" ]]; then
   run_rl_e2
+  exit 0
+fi
+if [[ "$SCENARIO" == "RL-E1" ]]; then
+  run_rl_e1
   exit 0
 fi
 

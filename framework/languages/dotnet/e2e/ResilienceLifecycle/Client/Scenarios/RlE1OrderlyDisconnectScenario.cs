@@ -4,11 +4,12 @@ using ResilienceLifecycle.Client.Support;
 using ResilienceLifecycle.Shared;
 using Zlink.HttpClient;
 using Zlink.Framework.Contracts.Errors;
+using Zlink.Framework.Contracts.Configuration;
 
 namespace ResilienceLifecycle.Client.Scenarios;
 
 // RL-E1 verifies that normal close and an abrupt process close remove only the
-// affected RouteMesh target before the common peer deadline.
+// affected RouteMesh and ClientServer targets before the common peer deadline.
 internal static class RlE1OrderlyDisconnectScenario
 {
     private static readonly TimeSpan PeerDeadline = TimeSpan.FromSeconds(15);
@@ -45,6 +46,7 @@ internal static class RlE1OrderlyDisconnectScenario
         await registry.Post("/topology/wait")
             .Body(new TopologyWaitReq("api-b", "Ready", 1))
             .Async<TopologyEntryRes[]>();
+        await WaitForClientServerReadyAsync(consumer, 2);
 
         Console.WriteLine("scenario RL-E1 passed");
     }
@@ -61,17 +63,20 @@ internal static class RlE1OrderlyDisconnectScenario
         await registry.Post("/topology/wait")
             .Body(new TopologyWaitReq("api-a", "Ready", 1))
             .Async<TopologyEntryRes[]>();
+
         await registry.Post("/topology/wait")
             .Body(new TopologyWaitReq("api-b", "Ready", 1))
             .Async<TopologyEntryRes[]>();
+        await WaitForClientServerReadyAsync(consumer, 2);
 
         var marker = $"rl-e1-{variant}-{Guid.NewGuid():N}";
         await stop();
         // Measure the public liveness observation after the close operation
-        // has completed. Process startup/kill and HTTP health probing are
-        // harness overhead, not the peer deadline being verified.
+        // has completed. Process startup/kill is harness overhead, not the
+        // peer deadline being verified. The process manager already owns
+        // process termination; probing its dead HTTP endpoint would wait on a
+        // separate client liveness deadline and contaminate this measurement.
         var before = Stopwatch.StartNew();
-        await WaitUntilUnavailableAsync(providerB);
         await registry.Post("/topology/wait")
             .Body(new TopologyWaitReq(
                 "api-b",
@@ -79,6 +84,7 @@ internal static class RlE1OrderlyDisconnectScenario
                 0,
                 TimeoutMilliseconds: 30000))
             .Async<TopologyEntryRes[]>();
+        await WaitForClientServerLossAsync(consumer);
         before.Stop();
 
         ZlinkStreamAssert.Ensure(
@@ -104,6 +110,14 @@ internal static class RlE1OrderlyDisconnectScenario
             followUp.Reply?.ProviderRid == "api-a",
             $"RL-E1 {variant} follow-up selected an unavailable target.");
 
+        var clientServerMarker = $"{marker}-client-server";
+        var clientServerSurviving = (await consumer.Post("/profile/clientserver/request")
+            .Body(new ProfileReq("client-server", clientServerMarker))
+            .Async<ProfileRes>()).Body;
+        ZlinkStreamAssert.Ensure(
+            clientServerSurviving.ProviderRid == "api-a",
+            $"RL-E1 {variant} ClientServer selected the affected target: {clientServerSurviving.ProviderRid}.");
+
         Console.WriteLine($"scenario RL-E1 variant={variant} elapsedMs={before.ElapsedMilliseconds}");
     }
 
@@ -125,22 +139,57 @@ internal static class RlE1OrderlyDisconnectScenario
         throw new TimeoutException("RL-E1 provider did not become healthy.");
     }
 
-    private static async Task WaitUntilUnavailableAsync(ZLinkHttpClient provider)
+    private static async Task WaitForClientServerReadyAsync(
+        ZLinkHttpClient consumer,
+        int expected)
     {
-        for (var attempt = 0; attempt < 100; attempt++)
+        await WaitForClientServerAsync(
+            consumer,
+            status => status.ReadyTargetCount >= expected,
+            $"ClientServer ready target count {expected}");
+    }
+
+    private static async Task WaitForClientServerLossAsync(ZLinkHttpClient consumer)
+    {
+        await WaitForClientServerAsync(
+            consumer,
+            status => status.ReadyTargetCount < 2,
+            "ClientServer affected target not-ready");
+    }
+
+    private static async Task WaitForClientServerAsync(
+        ZLinkHttpClient consumer,
+        Func<ZLinkClientServerStatus, bool> predicate,
+        string description)
+    {
+        var deadline = DateTime.UtcNow + PeerDeadline + TimeSpan.FromSeconds(5);
+        while (DateTime.UtcNow < deadline)
         {
             try
             {
-                if ((await provider.Get("/health").AsyncRaw()).Status != 200) return;
+                var status = (await consumer.Get("/clientserver/status")
+                    .Async<ZLinkClientServerStatus>()).Body;
+                if (predicate(status)) return;
             }
-            catch (ZLinkFrameworkException)
+            catch (Exception) when (DateTime.UtcNow < deadline)
             {
-                return;
             }
 
             await Task.Delay(100);
         }
 
-        throw new TimeoutException("RL-E1 provider did not become unavailable.");
+        try
+        {
+            var status = (await consumer.Get("/clientserver/status")
+                .Async<ZLinkClientServerStatus>()).Body;
+            var targets = string.Join(",", status.Targets.Select(target =>
+                $"{target.NodeRid}:{target.Weight}:{target.State}"));
+            Console.WriteLine($"RL-E1 ClientServer diagnostic description={description} ready={status.ReadyTargetCount} targets={targets}");
+        }
+        catch
+        {
+        }
+
+        throw new TimeoutException($"RL-E1 timed out waiting for {description}.");
     }
 }

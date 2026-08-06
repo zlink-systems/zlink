@@ -25,7 +25,10 @@ internal sealed record ClientOptions(
     string Scenario,
     string? RouteProxyControlUrl = null,
     string? ClientServerProxyControlUrl = null,
-    string? ConsumerRouteProxyControlUrl = null)
+    string? ConsumerRouteProxyControlUrl = null,
+    string? ProviderAClientServerEndpoint = null,
+    string? ProviderBClientServerEndpoint = null,
+    string? ProviderBClientServerRestartEndpoint = null)
 {
     public static ClientOptions Parse(string[] args)
         => E2eConfiguration.Load<ClientOptions>(args);
