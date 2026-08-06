@@ -24,7 +24,8 @@ internal sealed record ClientOptions(
     string LogDir,
     string Scenario,
     string? RouteProxyControlUrl = null,
-    string? ClientServerProxyControlUrl = null)
+    string? ClientServerProxyControlUrl = null,
+    string? ConsumerRouteProxyControlUrl = null)
 {
     public static ClientOptions Parse(string[] args)
         => E2eConfiguration.Load<ClientOptions>(args);

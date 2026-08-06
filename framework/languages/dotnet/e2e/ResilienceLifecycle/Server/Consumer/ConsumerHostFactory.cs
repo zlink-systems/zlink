@@ -54,7 +54,7 @@ internal static class ConsumerHostFactory
             framework.AddLocationStore(new ZLinkRedisLocationStore(redis => { redis.ConnectionString = options.RedisEndpoint; redis.KeyPrefix = options.RedisKeyPrefix; }));
             framework.ConfigureDispatch().Diagnostics
                 .SetLevel(ZLinkDiagnosticsLevel.Normal);
-            JoinConsumerMesh(framework, "consumer");
+            JoinConsumerMesh(framework, "consumer", options);
             if (options.ClientServerEnabled)
                 JoinConsumerClientServer(framework);
         });
@@ -254,12 +254,28 @@ internal static class ConsumerHostFactory
     // A caller joins the providers' RouteMesh with its own membership and
     // issues ChannelName select-one calls through IZLinkRouteClient. The bind
     // uses an ephemeral port and a Framework-generated lifecycle identity.
-    internal static void JoinConsumerMesh(IZLinkFrameworkOptions framework, string ridPrefix)
+    internal static void JoinConsumerMesh(
+        IZLinkFrameworkOptions framework,
+        string ridPrefix,
+        ConsumerOptions options)
     {
         var mesh = framework.AddRouteMesh(ResilienceLifecycleNames.Channel)
-            .Listen("tcp://127.0.0.1:0")
             .SetRoutingIdPrefix(ridPrefix);
+        if (string.IsNullOrWhiteSpace(options.RouteEndpoint))
+            mesh.Listen("tcp://127.0.0.1:0");
+        else
+            mesh.Listen(ParsePort(options.RouteEndpoint))
+                .SetBindHost(options.RouteBindHost ?? "127.0.0.1")
+                .SetAdvertiseHost(options.RouteAdvertiseHost ?? "127.0.0.1");
         mesh.Channel(ResilienceLifecycleNames.Channel).Client();
+    }
+
+    private static int ParsePort(string? endpoint)
+    {
+        if (!Uri.TryCreate(endpoint, UriKind.Absolute, out var uri)
+            || uri.Port is < 1 or > 65535)
+            throw new InvalidOperationException("RouteEndpoint must contain a valid TCP port.");
+        return uri.Port;
     }
 
     private static void JoinConsumerClientServer(IZLinkFrameworkOptions framework)
@@ -282,7 +298,10 @@ internal sealed record ConsumerOptions(
     string RedisEndpoint,
     string RedisKeyPrefix,
     string LogDir,
-    bool ClientServerEnabled = false)
+    bool ClientServerEnabled = false,
+    string? RouteEndpoint = null,
+    string? RouteBindHost = null,
+    string? RouteAdvertiseHost = null)
 {
     public static ConsumerOptions Parse(string[] args)
         => E2eConfiguration.Load<ConsumerOptions>(args);

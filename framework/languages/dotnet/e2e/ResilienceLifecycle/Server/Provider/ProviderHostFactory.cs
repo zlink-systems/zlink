@@ -63,8 +63,12 @@ internal static class ProviderHostFactory
             framework.ConfigureDispatch().Diagnostics
                 .SetLevel(ZLinkDiagnosticsLevel.Normal);
             var mesh = framework.AddRouteMesh(ResilienceLifecycleNames.Channel)
-                .Listen(Require(options.ChannelEndpoint, "ChannelEndpoint"))
                 .SetRoutingIdPrefix(options.Rid);
+            if (string.IsNullOrWhiteSpace(options.ChannelBindHost))
+                mesh.Listen(Require(options.ChannelEndpoint, "ChannelEndpoint"));
+            else
+                mesh.Listen(ParsePort(options.ChannelEndpoint))
+                    .SetBindHost(options.ChannelBindHost);
             if (!string.IsNullOrWhiteSpace(options.ChannelAdvertiseHost))
                 mesh.SetAdvertiseHost(options.ChannelAdvertiseHost);
             mesh.Channel(ResilienceLifecycleNames.Channel).Server()

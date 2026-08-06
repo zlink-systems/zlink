@@ -175,6 +175,7 @@ internal sealed record ServerOptions(
     string? ChannelEndpoint = null,
     string? EvidenceFile = null,
     string? ChannelAdvertiseHost = null,
+    string? ChannelBindHost = null,
     bool ClientServerEnabled = false,
     string? ClientServerEndpoint = null,
     string? ClientServerBindHost = null,

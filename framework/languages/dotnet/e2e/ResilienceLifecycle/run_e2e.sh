@@ -14,7 +14,7 @@ else
   SCENARIO="$*"
   SCENARIO="${SCENARIO// /,}"
 fi
-LOCAL_READINESS_TIMEOUT_SECONDS=3
+LOCAL_READINESS_TIMEOUT_SECONDS=10
 LOCAL_READINESS_POLL_SECONDS=0.1
 REDIS_READINESS_TIMEOUT_SECONDS=60
 HTTP_PROBE_TIMEOUT_SECONDS=3
@@ -24,7 +24,7 @@ if [[ "$SCENARIO" == "all" ]]; then
     RL-A1 RL-A2 RL-A3 RL-A4 RL-A5
     RL-B1 RL-B2 RL-B3 RL-B4 RL-B5 RL-B6
     RL-C1 RL-C2 RL-C3 RL-C4
-    RL-D1 RL-D2 RL-D3 RL-D4 RL-D5 RL-E1 RL-E3 RL-E4
+    RL-D1 RL-D2 RL-D3 RL-D4 RL-D5 RL-E1 RL-E2 RL-E3 RL-E4
   )
   for index in "${!scenarios[@]}"; do
     "$0" "${scenarios[$index]}"
@@ -162,8 +162,8 @@ start_server() {
 }
 
 run_rl_e2() {
-  mapfile -t ROLE_PORTS < <(pick_ports 13)
-  if [[ "${#ROLE_PORTS[@]}" -ne 13 ]]; then
+  mapfile -t ROLE_PORTS < <(pick_ports 15)
+  if [[ "${#ROLE_PORTS[@]}" -ne 15 ]]; then
     echo "Failed to allocate the RL-E2 ports." >&2
     exit 1
   fi
@@ -180,6 +180,8 @@ run_rl_e2() {
   CLIENT_SERVER_B_PORT="${ROLE_PORTS[10]}"
   ROUTE_PROXY_CONTROL_PORT="${ROLE_PORTS[11]}"
   CLIENT_SERVER_PROXY_CONTROL_PORT="${ROLE_PORTS[12]}"
+  CONSUMER_ROUTE_PORT="${ROLE_PORTS[13]}"
+  CONSUMER_ROUTE_PROXY_CONTROL_PORT="${ROLE_PORTS[14]}"
 
   API_A="tcp://127.0.0.1:$API_A_PORT"
   API_B="tcp://127.0.0.1:$API_B_PORT"
@@ -195,12 +197,20 @@ run_rl_e2() {
   CLIENT_SERVER_PROXY="tcp://127.0.0.1:$CLIENT_SERVER_B_PORT"
   ROUTE_PROXY_CONTROL_URL="http://127.0.0.1:$ROUTE_PROXY_CONTROL_PORT"
   CLIENT_SERVER_PROXY_CONTROL_URL="http://127.0.0.1:$CLIENT_SERVER_PROXY_CONTROL_PORT"
+  CONSUMER_ROUTE_PROXY_CONTROL_URL="http://127.0.0.1:$CONSUMER_ROUTE_PROXY_CONTROL_PORT"
 
   setsid python3 "$ROOT_DIR/Support/directional_fault_proxy.py" \
     --listen "127.0.0.1:$API_B_PORT" \
     --target "127.0.0.2:$API_B_PORT" \
     --control "127.0.0.1:$ROUTE_PROXY_CONTROL_PORT" \
     >"$LOG_DIR/route-proxy.stdout.log" 2>"$LOG_DIR/route-proxy.stderr.log" &
+  pids+=("$!")
+  setsid python3 "$ROOT_DIR/Support/directional_fault_proxy.py" \
+    --listen "127.0.0.1:$CONSUMER_ROUTE_PORT" \
+    --target "127.0.0.2:$CONSUMER_ROUTE_PORT" \
+    --control "127.0.0.1:$CONSUMER_ROUTE_PROXY_CONTROL_PORT" \
+    --block-routing-prefix api-b \
+    >"$LOG_DIR/consumer-route-proxy.stdout.log" 2>"$LOG_DIR/consumer-route-proxy.stderr.log" &
   pids+=("$!")
   setsid python3 "$ROOT_DIR/Support/directional_fault_proxy.py" \
     --listen "127.0.0.1:$CLIENT_SERVER_B_PORT" \
@@ -210,11 +220,12 @@ run_rl_e2() {
   pids+=("$!")
   wait_health "$ROUTE_PROXY_CONTROL_URL" route-proxy
   wait_health "$CLIENT_SERVER_PROXY_CONTROL_URL" client-server-proxy
+  wait_health "$CONSUMER_ROUTE_PROXY_CONTROL_URL" consumer-route-proxy
 
   start_server api-a "$PROVIDER_PROJECT" \
     --rid api-a --http-url "$API_A_URL" \
     --redis-endpoint "$REDIS_ENDPOINT" --redis-key-prefix "$REDIS_KEY_PREFIX" \
-    --channel-endpoint "$API_A" --weight 100 \
+    --channel-endpoint "$API_A" --weight 100 --channel-bind-host 127.0.0.1 \
     --client-server-enabled true --client-server-endpoint "$CLIENT_SERVER_A" \
     --evidence-file "$LOG_DIR/api-a.evidence.log" --log-dir "$LOG_DIR"
   API_A_PID="${pids[$((${#pids[@]} - 1))]}"
@@ -222,7 +233,8 @@ run_rl_e2() {
   start_server api-b "$PROVIDER_PROJECT" \
     --rid api-b --http-url "$API_B_URL" \
     --redis-endpoint "$REDIS_ENDPOINT" --redis-key-prefix "$REDIS_KEY_PREFIX" \
-    --channel-endpoint "$API_B_NATIVE" --channel-advertise-host 127.0.0.1 \
+    --channel-endpoint "$API_B_NATIVE" --channel-bind-host 127.0.0.2 \
+    --channel-advertise-host 127.0.0.1 \
     --weight 100 --client-server-enabled true \
     --client-server-endpoint "$CLIENT_SERVER_B" --client-server-bind-host 127.0.0.2 \
     --client-server-advertise-host 127.0.0.1 \
@@ -232,7 +244,9 @@ run_rl_e2() {
   start_server consumer "$CONSUMER_PROJECT" \
     --http-url "http://127.0.0.1:$CONSUMER_HTTP_PORT" \
     --redis-endpoint "$REDIS_ENDPOINT" --redis-key-prefix "$REDIS_KEY_PREFIX" \
-    --client-server-enabled true --log-dir "$LOG_DIR"
+    --client-server-enabled true --log-dir "$LOG_DIR" \
+    --route-endpoint "tcp://127.0.0.2:$CONSUMER_ROUTE_PORT" \
+    --route-bind-host 127.0.0.2 --route-advertise-host 127.0.0.1
   wait_health "http://127.0.0.1:$CONSUMER_HTTP_PORT" consumer
 
   python3 "$ROOT_DIR/../write_role_config.py" "$CONFIG_DIR/client.json" -- \
@@ -249,6 +263,7 @@ run_rl_e2() {
     --provider-project "$PROVIDER_PROJECT" --log-dir "$LOG_DIR" \
     --route-proxy-control-url "$ROUTE_PROXY_CONTROL_URL" \
     --client-server-proxy-control-url "$CLIENT_SERVER_PROXY_CONTROL_URL" \
+    --consumer-route-proxy-control-url "$CONSUMER_ROUTE_PROXY_CONTROL_URL" \
     --scenario RL-E2
   CLIENT_APPLICATION="$ROOT_DIR/Client/bin/Debug/net8.0/ResilienceLifecycle.Client.dll"
   dotnet "$CLIENT_APPLICATION" --config "$CONFIG_DIR/client.json" \

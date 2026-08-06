@@ -16,24 +16,34 @@ bytes를 확인하는 독립 증거로 사용한다.
 
 ## 확인된 결과
 
-세 번의 RL-E2 실행에서 proxy는 연결을 수락했고 `blocked=true` 및 `droppedBytes` 증가를 기록했다. 마지막 실행의 결과는
-다음과 같다.
+초기 fixture에서는 provider endpoint 쪽 physical connection만 차단했다. 그러나 RouteMesh는 provider와 consumer 사이에
+양방향 physical connection을 별도로 만들기 때문에 consumer가 provider B에서 직접 받는 liveness probe는 계속 도착했다.
+그 결과 proxy의 bytes는 버려졌지만 public RouteMesh status는 `ReadyTargetCount=2`를 유지했다. 이 결과는 fixture가 connection
+pair 전체를 차단하지 못한 것으로 판정했다.
+
+수정된 fixture는 provider B endpoint와 consumer endpoint 양쪽에 proxy를 배치한다. consumer endpoint proxy는 초기 ZLink
+handshake에 포함된 routing identity를 읽어 `api-b` connection만 분류하고, A connection은 계속 전달한다. 두 physical
+connection에서 liveness probe가 향하는 client-to-target 흐름을 차단하면 B의 liveness round trip만 실패한다. 차단 전에
+B handler에 request를 진입시키고 gate를 차단 뒤 해제하여, reverse application reply가 계속 전달되는지도 확인한다. 마지막
+실행의 결과는 다음과 같다.
 
 ```text
-RouteMesh channel: resilience.profile: ReadyTargetCount=2, IsReady=true
-Proxy: accepted=2, droppedBytes=4864
-Elapsed: 20 seconds or more after the block
+RouteMesh and ClientServer: two targets ready before the block
+Directional proxy: api-b connection pair only
+Result: affected target became not-ready within the liveness budget
+Result: reverse application reply completed while the fault was active
+Result: surviving target request succeeded
+Log: logs/20260806-164652-2539767
 ```
 
-따라서 proxy가 테스트 경로에 들어가지 않았다는 fixture gap은 아니다. 그러나 public RouteMesh status가 affected target을
-not-ready로 바꾸지 않아, 공통 시나리오의 15초 liveness deadline을 만족하지 못했다. 이 결과는 RL-E2 완료 증거가 아니다.
+따라서 RL-E2는 RouteMesh와 ClientServer 양쪽에서 공통 시나리오의 liveness deadline 및 failure isolation 조건을 통과했다.
 
-## 남은 구현 조건
+## 구현 경계
 
-RouteMesh liveness owner가 client→server half-open 흐름에서 probe·ack deadline을 만료시키고, 해당 channel의
-`ReadyTargetCount`와 public request selection을 갱신해야 한다. 수정 뒤에는 같은 검증을 ClientServer channel에도 수행하고,
-반대 target request 성공과 반대 방향 application traffic 지속 조건을 확인해야 한다. 이 조건을 통과하기 전에는 feature-map의
-RL-E2를 구현으로 변경하지 않는다.
+proxy는 초기 handshake를 통과시켜 routing identity를 확인한 뒤 선택된 connection의 liveness 방향 bytes를 버린다.
+이 과정은 Framework public API나 binding internal member에 의존하지 않으며, fixture 내부의 TCP fault injection 책임으로
+한정된다. proxy의 routing identity 판정은 application payload를 해석하는 codec 경로가 아니라 transport handshake의
+초기 식별 정보만 사용한다.
 
 RouteMesh status의 `NodeRid`는 이 fixture에서 public target routing id가 아니라 transport identity로 표시된다. 따라서 시나리오는
 identity 문자열을 추정하지 않고 channel의 ready target 수와 public request 결과를 사용해야 한다.

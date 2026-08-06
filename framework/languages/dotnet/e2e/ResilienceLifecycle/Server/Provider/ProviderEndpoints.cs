@@ -130,6 +130,41 @@ internal static class ProviderEndpoints
                 $"Provider weight did not become {request.Expected}.",
                 statusCode: StatusCodes.Status504GatewayTimeout);
         });
+        app.MapPost("/admin/clientserver/weight/exclude", (
+            [FromServices] IZLinkRouteMeshRuntimeOptions runtimeOptions,
+            [FromServices] EvidenceStore evidence) =>
+        {
+            runtimeOptions.Channel(ResilienceLifecycleNames.ClientServerChannel).Weight = 0;
+            evidence.Add($"admin|rid={evidence.Rid}|action=clientserver-weight-exclude|weight=0");
+            return Results.Ok(new { status = "excluded", weight = 0 });
+        });
+        app.MapPost("/admin/clientserver/weight/include", (
+            [FromServices] IZLinkRouteMeshRuntimeOptions runtimeOptions,
+            [FromServices] EvidenceStore evidence) =>
+        {
+            runtimeOptions.Channel(ResilienceLifecycleNames.ClientServerChannel).Weight = 100;
+            evidence.Add($"admin|rid={evidence.Rid}|action=clientserver-weight-include|weight=100");
+            return Results.Ok(new { status = "included", weight = 100 });
+        });
+        app.MapPost("/admin/clientserver/weight/wait", async (
+            WeightWaitReq request,
+            [FromServices] IZLinkRouteMeshRuntimeOptions runtimeOptions,
+            CancellationToken cancellationToken) =>
+        {
+            var timeout = TimeSpan.FromMilliseconds(Math.Clamp(request.TimeoutMilliseconds, 1, 30000));
+            var deadline = DateTimeOffset.UtcNow + timeout;
+            while (DateTimeOffset.UtcNow < deadline)
+            {
+                var weight = runtimeOptions.Channel(ResilienceLifecycleNames.ClientServerChannel).Weight;
+                if (weight == request.Expected) return Results.Ok(new { weight });
+
+                await Task.Delay(TimeSpan.FromMilliseconds(50), cancellationToken);
+            }
+
+            return Results.Problem(
+                $"ClientServer weight did not become {request.Expected}.",
+                statusCode: StatusCodes.Status504GatewayTimeout);
+        });
         return app;
     }
 }
