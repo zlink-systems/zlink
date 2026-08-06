@@ -1,4 +1,4 @@
-English | [한국어](04-transports.ko.md)
+English | [한국어](https://zlink-systems.github.io/zlink/ko/guide/04-transports/)
 
 <!-- zlink-nav:start -->
 [← Proxy](03-6-proxy.en.md) | [TLS/Security →](05-tls-security.en.md)

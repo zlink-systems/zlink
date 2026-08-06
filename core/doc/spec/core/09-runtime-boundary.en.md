@@ -1,4 +1,4 @@
-[한국어](09-runtime-boundary.ko.md) | English
+[한국어](https://zlink-systems.github.io/zlink/ko/spec/core/09-runtime-boundary/) | English
 
 [Specification index](../README.en.md) · [Core index](README.en.md)
 

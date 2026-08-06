@@ -290,7 +290,7 @@ limit doesn't apply to server-to-client outbound messages. ClientServer and
 RouteMesh SS don't gain this setting.
 
 The exact declaration of `IZLinkCodecRegistryBuilder` and the codec
-extension is owned by [Serialization](11-serialization.ko.md).
+extension is owned by [Serialization](11-serialization.en.md).
 
 `AddRouteMesh(meshName)` registers one process-local
 [MeshNode](../../../../01-glossary.en.md#meshnode). Registering the same
@@ -413,7 +413,7 @@ automatic subscriber's discovery results aren't changed by this handle.
 `AddHandlersFromAssemblyOf(...)` and `AddHandlersFromAssembly(...)` only
 add the specified assembly to the handler scan scope. The exact
 declaration of the method, group, and packet attributes used for the
-scan is owned by [Common Runtime](01-common-runtime.ko.md).
+scan is owned by [Common Runtime](01-common-runtime.en.md).
 
 `EnableActorDispatch()` only activates a STREAM node's Actor dispatch
 capability. If the same host has no Mesh whose object role is `Client`

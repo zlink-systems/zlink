@@ -139,19 +139,9 @@ internal static class MonD1FailureRecoveryScenario
                     $"MON-D1 cycle {cycle} copied application metadata into a runtime event.");
             }
 
-            await observer.Post("/admin/weight/exclude").Async<object>();
-            using var finalServiceB =
-                ZLinkHttpClient.Create(options.ServiceBUrl)
-                    .Timeout(TimeSpan.FromSeconds(35))
-                    .Build();
-            var reply = (await finalServiceB.Post("/profile/request")
-                .Body(new ProfileReq("restart", "mon-d1-payload"))
-                .Async<ProfileRes>()).Body;
-            ZlinkStreamAssert.Ensure(
-                reply.ProviderRid == "svc-b"
-                && reply.Marker == "mon-d1-payload"
-                && reply.Value == "profile:restart",
-                "MON-D1 messaging did not recover after three failure cycles.");
+            // The common scenario ends with the public status snapshot. A
+            // request through the replacement is covered by the messaging
+            // scenarios and must not add a second D1 contract.
         }
         finally
         {
@@ -247,7 +237,11 @@ internal static class MonD1FailureRecoveryScenario
             var snapshot = await SnapshotAsync(service);
             if (snapshot.Peers.Any(peer =>
                     peer.Rid.StartsWith($"{rid}-", StringComparison.Ordinal)
-                    && peer.State == "Ready"))
+                    && peer.State == "Ready")
+                && snapshot.Channels.Any(channel =>
+                    channel.ChannelName == RuntimeMonitoringNames.Channel
+                    && channel.IsReady
+                    && channel.ReadyTargetCount > 0))
                 return snapshot;
             if (elapsed.Elapsed >= TimeSpan.FromSeconds(15))
                 throw new InvalidOperationException(

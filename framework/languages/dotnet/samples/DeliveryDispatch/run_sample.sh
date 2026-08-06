@@ -115,7 +115,7 @@ wait_port() {
   local port
   host="$(endpoint_host "${endpoint}")"
   port="$(endpoint_port "${endpoint}")"
-  for _ in $(seq 1 120); do
+  for _ in $(seq 1 600); do
     if (echo >"/dev/tcp/${host}/${port}") >/dev/null 2>&1; then
       return 0
     fi

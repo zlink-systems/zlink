@@ -7,6 +7,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterProvi
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerState;
+import systems.zlink.framework.runtime.internal.binding.spot.MeshNodeState;
 
 import systems.zlink.framework.runtime.internal.backend.*;
 
@@ -1035,12 +1036,21 @@ public final class ZLinkSpotRuntime
                 var intent =
                     new ZLinkInternalMeshNode.UserSpotCreateIntent(
                         spotId, stableType, fence, deadline);
-                ensureManualObjectPeer(
-                    meshName, source, target);
-                CompletionStage<ZLinkInternalMeshNode.UserSpotCreateResponse>
+                CompletionStage<ZLinkInternalMeshNode.UserSpotCreateResponse> targetCreate;
+                try {
+                    ensureManualObjectPeer(meshName, source, target);
                     targetCreate = source.requestUserSpotCreate(
                         target.rid(), intent, timeout);
+                } catch (RuntimeException error) {
+                    return locations.abort(reservation, () -> false)
+                        .thenCompose(ignored ->
+                            CompletableFuture.failedFuture(error));
+                }
                 return targetCreate
+                    .exceptionallyCompose(error ->
+                        locations.abort(reservation, () -> false)
+                            .thenCompose(ignored ->
+                                CompletableFuture.failedFuture(error)))
                     .thenApply(response -> {
                         ZLinkMessage reply =
                             response.applicationReply().isEmpty()
@@ -1128,7 +1138,13 @@ public final class ZLinkSpotRuntime
                 meshName,
                 new systems.zlink.framework.locations.ZLinkPageRequest(
                     1000, null))
+            .toCompletableFuture()
+            .orTimeout(
+                Math.max(1L, deadlineUnixMs - System.currentTimeMillis()),
+                TimeUnit.MILLISECONDS)
             .thenApply(page -> {
+                ZLinkInternalMeshNode source =
+                    routeMeshNodesByName.get(meshName);
                 List<systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptor> candidates =
                         page.items().stream()
                             .filter(node ->
@@ -1138,6 +1154,7 @@ public final class ZLinkSpotRuntime
                                     && node.objectRole()
                                         == systems.zlink.framework.locations.ZLinkMeshNodeObjectRole.SERVER
                                     && node.placementWeight() > 0
+                                    && isExactReadyUserSpotTarget(node, source)
                                     && !excludedTargets.contains(
                                         descriptorKey(node))
                                     && node.objectCapabilities().stream()
@@ -1154,6 +1171,27 @@ public final class ZLinkSpotRuntime
                                                 capability)))
                             .toList();
                 if (candidates.isEmpty()) {
+                    boolean capacityKnown = page.items().stream()
+                        .filter(node ->
+                            node.state()
+                                == systems.zlink.framework.runtime.host
+                                    .ZLinkFrameworkRuntimeState.SERVING
+                            && node.objectRole()
+                                == systems.zlink.framework.locations
+                                    .ZLinkMeshNodeObjectRole.SERVER
+                            && node.placementWeight() > 0)
+                        .filter(node -> isExactReadyUserSpotTarget(node, source))
+                        .flatMap(node -> node.objectCapabilities().stream())
+                        .anyMatch(capability ->
+                            capability.objectKind()
+                                == systems.zlink.framework.locations
+                                    .ZLinkPlacementObjectKind.USER_SPOT
+                            && capability.stableType().equals(stableType));
+                    if (capacityKnown) {
+                        throw new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.CAPACITY_EXCEEDED,
+                            "User Spot capacity exceeded");
+                    }
                     if (System.currentTimeMillis() >= deadlineUnixMs) {
                         throw new IllegalStateException(
                             "No Ready User Spot placement target");
@@ -1187,7 +1225,7 @@ public final class ZLinkSpotRuntime
                         meshName,
                         stableType,
                         deadlineUnixMs,
-                        java.util.Set.of())));
+                        excludedTargets)));
     }
 
     static boolean hasCapacity(
@@ -1202,6 +1240,30 @@ public final class ZLinkSpotRuntime
                 .findFirst()
                 .map(type -> hasRoom(type.usage()))
                 .orElse(false);
+    }
+
+    private static boolean isExactReadyUserSpotTarget(
+        systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptor candidate,
+        ZLinkInternalMeshNode source) {
+        if (source == null) {
+            return false;
+        }
+        try {
+            var localStatus = source.status();
+            if (candidate.rid().equals(localStatus.routingId())) {
+                return candidate.meshName().equals(localStatus.meshName())
+                    && localStatus.state() == MeshNodeState.READY
+                    && candidate.lifecycleGeneration()
+                        == localStatus.lifecycleGeneration();
+            }
+            return source.peers().stream().anyMatch(peer ->
+                peer.routingId().equals(candidate.rid())
+                    && peer.lifecycleGeneration()
+                        == candidate.lifecycleGeneration()
+                    && peer.state() == MeshPeerState.ADMITTED);
+        } catch (RuntimeException transientStatusFailure) {
+            return false;
+        }
     }
 
     private static boolean hasRoom(
@@ -1517,6 +1579,10 @@ public final class ZLinkSpotRuntime
 
     public int activeUserSpotCount() {
         return spotLifecycle.userSpotCount();
+    }
+
+    public int activeInstanceSpotCount() {
+        return instanceSpotActivations.size();
     }
 
     public List<String> activeUserSpotIds() {
@@ -2225,7 +2291,8 @@ public final class ZLinkSpotRuntime
         }
         if (System.currentTimeMillis() >= deadline) {
             return CompletableFuture.failedFuture(
-                new java.util.concurrent.TimeoutException(
+                new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
                     "Instance Spot did not finish activation before the request deadline"));
         }
         return CompletableFuture.supplyAsync(

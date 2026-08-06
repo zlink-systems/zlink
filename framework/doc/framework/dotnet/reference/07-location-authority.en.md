@@ -5,9 +5,9 @@
 This category covers Location·Relocation Store registration, tuning `ZLinkLocationOptions`, and
 the entry points `IZLinkLocationReadiness` and `IZLinkLocationRuntimeQuery` provide. The exact
 signatures are owned by the
-[Location configuration and operations exact interface](../../common/spec/server/languages/dotnet/interfaces/08-location-maintenance.ko.md)
+[Location configuration and operations exact interface](../../common/spec/server/languages/dotnet/interfaces/08-location-maintenance.en.md)
 and the
-[Official Redis Store exact interface](../../common/spec/server/languages/dotnet/interfaces/08-location-provider-redis.ko.md)
+[Official Redis Store exact interface](../../common/spec/server/languages/dotnet/interfaces/08-location-provider-redis.en.md)
 (both Korean-only).
 
 ---
@@ -167,6 +167,6 @@ topology-discovery category's status-query entry.
 ---
 
 The full basis is the
-[Location configuration and operations exact interface](../../common/spec/server/languages/dotnet/interfaces/08-location-maintenance.ko.md) and the
-[Official Redis Store exact interface](../../common/spec/server/languages/dotnet/interfaces/08-location-provider-redis.ko.md)
+[Location configuration and operations exact interface](../../common/spec/server/languages/dotnet/interfaces/08-location-maintenance.en.md) and the
+[Official Redis Store exact interface](../../common/spec/server/languages/dotnet/interfaces/08-location-provider-redis.en.md)
 (both Korean-only).

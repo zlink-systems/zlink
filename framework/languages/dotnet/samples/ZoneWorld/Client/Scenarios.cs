@@ -56,6 +56,18 @@ public static class Scenarios
             ["ZW-G2"] = G2ReverseStartedNodeOperations
         };
 
+    // Cross-node observation includes actor relocation and the first target-zone snapshot.
+    // This is a harness budget, not a public latency guarantee.
+    private static readonly TimeSpan CrossNodeObservationTimeout = TimeSpan.FromSeconds(30);
+
+    // Bot observation includes the first snapshot after world admission. This is a harness
+    // budget for a busy full-sample run, not a public latency guarantee.
+    private static readonly TimeSpan BotObservationTimeout = TimeSpan.FromSeconds(30);
+
+    // Border observation includes several movement snapshots before the cross-zone assertion.
+    // This is a harness budget for a busy full-sample run, not a public latency guarantee.
+    private static readonly TimeSpan BorderObservationTimeout = TimeSpan.FromSeconds(30);
+
     // --- Track A: entry and movement ----------------------------------------
 
     private static async ValueTask A1EnterAndMove(ClientOptions options, CancellationToken ct)
@@ -230,7 +242,7 @@ public static class Scenarios
                 {
                     var changed = client.Connector.WaitFor<ZoneChangedNotify>()
                         .Where(message => message.Payload.PlayerId == client.PlayerId)
-                        .Timeout(TimeSpan.FromSeconds(15))
+                        .Timeout(BorderObservationTimeout)
                         .Async(ct);
                     await client.MoveAsync(target.X, target.Y);
                     await changed;
@@ -243,7 +255,7 @@ public static class Scenarios
                     var arrived = client.Connector.WaitFor<ZoneStateNotify>()
                         .Where(message => message.Payload.Players.Any(p =>
                             p.PlayerId == client.PlayerId && p.X == step.X && p.Y == step.Y))
-                        .Timeout(TimeSpan.FromSeconds(15))
+                        .Timeout(BorderObservationTimeout)
                         .Async(ct);
                     await client.MoveAsync(step.X, step.Y);
                     await arrived;
@@ -259,14 +271,14 @@ public static class Scenarios
         var borderVisible = east.Connector.WaitFor<ZoneStateNotify>()
             .Where(message => message.Payload.ZoneId == ZoneIds.NorthEast
                               && message.Payload.Players.Any(p => p.PlayerId == westId))
-            .Timeout(TimeSpan.FromSeconds(15))
+            .Timeout(BorderObservationTimeout)
             .Async(ct);
         foreach (var step in west.PlanWalkWithinZone(45, 45))
         {
             var arrived = west.Connector.WaitFor<ZoneStateNotify>()
                 .Where(message => message.Payload.Players.Any(p =>
                     p.PlayerId == west.PlayerId && p.X == step.X && p.Y == step.Y))
-                .Timeout(TimeSpan.FromSeconds(15))
+                .Timeout(BorderObservationTimeout)
                 .Async(ct);
             await west.MoveAsync(step.X, step.Y);
             await arrived;
@@ -289,7 +301,7 @@ public static class Scenarios
             var state = (await diagonal.Connector.WaitFor<ZoneStateNotify>()
                 .Where(message => message.Payload.ZoneId == ZoneIds.SouthEast
                                   && message.Payload.Players.Any(p => p.PlayerId == diagonalId))
-                .Timeout(TimeSpan.FromSeconds(15))
+                .Timeout(BorderObservationTimeout)
                 .Async(ct)).Payload;
             ZlinkStreamAssert.Ensure(
                 state.Players.All(p => p.PlayerId != westId),
@@ -665,6 +677,7 @@ public static class Scenarios
         await using var ops = await OpsClient.ConnectAsync(options.OpsEndpoint, ct);
         var observed = await ops.WatchNodesAsync(ct);
         var targetNodeId = observed.Nodes.Single(node => node.Zones.Contains(ZoneIds.NorthEast)).NodeId;
+        var sourceNodeId = observed.Nodes.Single(node => node.Zones.Contains(ZoneIds.NorthWest)).NodeId;
         foreach (var nodeId in observed.Nodes.Where(node => node.Registered).Select(node => node.NodeId))
         {
             var resetObserved = ops.Connector.WaitFor<NodeStatusNotify>()
@@ -701,17 +714,36 @@ public static class Scenarios
             ZlinkStreamAssert.Ensure(applied.Zones.Contains(ZoneIds.NorthEast),
                 "maintenance response reports the target zone's current owner");
 
-            // Entering zone-ne is refused; the coordinate does not move.
-            var rejectedWait = player.Connector.WaitFor<MoveRejectedNotify>()
-                .Timeout(TimeSpan.FromSeconds(15))
-                .Async(ct);
-            await player.MoveAsync(52, 25);
-            var rejected = (await rejectedWait).Payload;
-            ZlinkStreamAssert.Ensure(object.Equals(MoveRejectReasons.ZoneMaintenance, rejected.Reason), "the maintained node refuses arrivals");
-            ZlinkStreamAssert.Ensure(object.Equals(48, rejected.X), "a refused move leaves the coordinate untouched");
+            if (!string.Equals(sourceNodeId, targetNodeId, StringComparison.Ordinal))
+            {
+                // A cross-node arrival into the maintained target owner is refused. The
+                // source/target relation is observed at runtime because Location Store does
+                // not fix a zone-to-node assignment.
+                var rejectedWait = player.Connector.WaitFor<MoveRejectedNotify>()
+                    .Timeout(TimeSpan.FromSeconds(15))
+                    .Async(ct);
+                await player.MoveAsync(52, 25);
+                var rejected = (await rejectedWait).Payload;
+                ZlinkStreamAssert.Ensure(object.Equals(MoveRejectReasons.ZoneMaintenance, rejected.Reason),
+                    "the maintained target owner refuses cross-node arrivals");
+                ZlinkStreamAssert.Ensure(object.Equals(48, rejected.X),
+                    "a refused cross-node move leaves the coordinate untouched");
+            }
+            else
+            {
+                // Same-node zone movement remains available during maintenance. This also
+                // proves that maintenance is targeted rather than a broadcast stop.
+                var maintainedMove = player.Connector.WaitFor<ZoneStateNotify>()
+                    .Where(message => message.Payload.Players.Any(p =>
+                        p.PlayerId == player.PlayerId && p.X == 45 && p.Y == 25))
+                    .Timeout(TimeSpan.FromSeconds(15))
+                    .Async(ct);
+                await player.MoveAsync(45, 25);
+                await maintainedMove;
+                player.Position = (45, 25);
+            }
 
-            // If the same current owner also hosts zone-se, its admission must be rejected too.
-            foreach (var step in player.PlanWalkWithinZone(48, 48))
+            foreach (var step in player.PlanWalkWithinZone(45, 45))
             {
                 var arrived = player.Connector.WaitFor<ZoneStateNotify>()
                     .Where(message => message.Payload.Players.Any(p =>
@@ -722,45 +754,6 @@ public static class Scenarios
                 await arrived;
                 player.Position = step;
             }
-            var southChanged = player.Connector.WaitFor<ZoneChangedNotify>()
-                .Where(message => message.Payload.PlayerId == player.PlayerId)
-                .Timeout(TimeSpan.FromSeconds(15))
-                .Async(ct);
-            await player.MoveAsync(48, 52);
-            await southChanged;
-            player.Position = (48, 52);
-            foreach (var step in player.PlanWalkWithinZone(48, 55))
-            {
-                var arrived = player.Connector.WaitFor<ZoneStateNotify>()
-                    .Where(message => message.Payload.Players.Any(p =>
-                        p.PlayerId == player.PlayerId && p.X == step.X && p.Y == step.Y))
-                    .Timeout(TimeSpan.FromSeconds(15))
-                    .Async(ct);
-                await player.MoveAsync(step.X, step.Y);
-                await arrived;
-                player.Position = step;
-            }
-            if (applied.Zones.Contains(ZoneIds.SouthEast))
-            {
-                var refusedSouthWait = player.Connector.WaitFor<MoveRejectedNotify>()
-                    .Timeout(TimeSpan.FromSeconds(15))
-                    .Async(ct);
-                await player.MoveAsync(52, 55);
-                var refusedSouth = (await refusedSouthWait).Payload;
-                ZlinkStreamAssert.Ensure(object.Equals(MoveRejectReasons.ZoneMaintenance, refusedSouth.Reason),
-                    "another zone on the observed owner refuses arrivals too");
-                ZlinkStreamAssert.Ensure(object.Equals(48, refusedSouth.X), "a refused move leaves the coordinate untouched");
-            }
-
-            // zone-node-1 is untouched: a move inside it still works.
-            var westMove = player.Connector.WaitFor<ZoneStateNotify>()
-                .Where(message => message.Payload.Players.Any(p =>
-                    p.PlayerId == player.PlayerId && p.X == 45 && p.Y == 55))
-                .Timeout(TimeSpan.FromSeconds(15))
-                .Async(ct);
-            await player.MoveAsync(45, 55);
-            await westMove;
-            player.Position = (45, 55);
         }
         finally
         {
@@ -1108,7 +1101,7 @@ public static class Scenarios
         }
         var eastChanged = east.Connector.WaitFor<ZoneChangedNotify>()
             .Where(message => message.Payload.PlayerId == east.PlayerId)
-            .Timeout(TimeSpan.FromSeconds(15))
+            .Timeout(CrossNodeObservationTimeout)
             .Async(ct);
         await east.MoveAsync(52, 25);
         await eastChanged;
@@ -1225,7 +1218,7 @@ public static class Scenarios
 
         var first = (await player.Connector.WaitFor<ZoneStateNotify>()
             .Where(message => message.Payload.Players.Count(p => p.IsBot) >= ZoneWorldSpec.BotsPerZone)
-            .Timeout(TimeSpan.FromSeconds(15))
+            .Timeout(BotObservationTimeout)
             .Async(ct)).Payload;
         var bots = first.Players.Where(p => p.IsBot).ToDictionary(p => p.PlayerId, StringComparer.Ordinal);
         ZlinkStreamAssert.Ensure(
@@ -1238,7 +1231,7 @@ public static class Scenarios
         {
             var state = (await player.Connector.WaitFor<ZoneStateNotify>()
                 .Where(message => message.Payload.Players.Any(p => p.PlayerId == player.PlayerId))
-                .Timeout(TimeSpan.FromSeconds(15))
+                .Timeout(BotObservationTimeout)
                 .Async(ct)).Payload;
             foreach (var bot in state.Players.Where(p => p.IsBot))
             {

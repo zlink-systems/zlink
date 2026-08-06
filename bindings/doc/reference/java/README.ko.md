@@ -1,4 +1,4 @@
-한국어 | [English](README.en.md)
+한국어 | [English](https://zlink-systems.github.io/zlink/bindings/reference/java/)
 
 [Java 바인딩 스펙](../../spec/java/README.ko.md) · [Java 바인딩 가이드](../../guide/java/index.ko.md)
 

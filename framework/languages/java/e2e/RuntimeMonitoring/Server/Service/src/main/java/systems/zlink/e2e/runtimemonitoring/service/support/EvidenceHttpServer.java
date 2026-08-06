@@ -250,6 +250,7 @@ public final class EvidenceHttpServer implements SmartLifecycle {
                 .getOrCreate(id, Contracts.MONITORING_SPOT_TYPE)
                 .inMesh(Contracts.SPOT_MESH)
                 .request(new Contracts.WorkReq("placement-spot"))
+                .timeout(java.time.Duration.ofSeconds(10))
                 .submit()
                 .toCompletableFuture()
                 .join();
@@ -300,6 +301,7 @@ public final class EvidenceHttpServer implements SmartLifecycle {
                     systems.zlink.e2e.runtimemonitoring.service.handlers.MonitoringActor.TYPE)
                 .inMesh(Contracts.SPOT_MESH)
                 .request(new Contracts.WorkReq("placement-actor"))
+                .timeout(java.time.Duration.ofSeconds(10))
                 .submit()
                 .toCompletableFuture()
                 .join();

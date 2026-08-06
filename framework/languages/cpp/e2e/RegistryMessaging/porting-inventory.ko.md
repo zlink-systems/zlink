@@ -32,7 +32,7 @@ C++ config-1 E2E의 대응 파일과 남은 gap을 기록한다. C++ 디렉터�
 | `Client/Scenarios/RmA2ManualEndpointScenario.cs` | `Client/Scenarios/rm_a2_manual_endpoint_scenario.hpp` | scenario | done | 최초 manual request, in-flight 보존, automatic descriptor 병합과 두 ready target 선택을 actual-process로 검증한다. |
 | `Client/Scenarios/RmA4SameRidFailoverScenario.cs` | `Client/Scenarios/rm_a4_same_rid_failover_scenario.hpp` | scenario | partial | Persistent Consumer의 v1→v2 public messaging replacement는 actual-process로 검증한다. Automatic RID와 public ClientServer status 조건은 source 구현 gap으로 남아 있다. |
 | `Client/Scenarios/RmA6MultipleChannelsScenario.cs` | `Client/Scenarios/rm_a6_multiple_channels_scenario.hpp` | scenario | partial | 같은 persistent Consumer의 api/workflow public messaging과 각 channel scale-in 격리는 actual-process로 검증한다. MeshName별 public status 조건은 구현 gap으로 남아 있다. |
-| `Client/Scenarios/RmA7GlobalObjectIdentityScenario.cs` | 없음 | scenario | blocked | M6B focused regression은 Actor·User Spot의 global create 합류, typed mismatch와 후속 InMesh 불변을 검증한다. Public Object fixture가 current exact interface로 compile되지 않아 두 process의 manager `Find`와 direct messaging actual은 아직 작성하지 않았다. |
+| `Client/Scenarios/RmA7GlobalObjectIdentityScenario.cs` | 없음 | scenario | gap | M6B focused regression은 Actor·User Spot의 global create 합류, typed mismatch와 후속 InMesh 불변을 검증한다. C++ Object fixture target은 현재 public interface로 compile되지만, 서로 다른 Mesh의 두 process manager `Find`와 direct messaging actual은 아직 작성하지 않았다. |
 | `Client/Scenarios/RmB1ScaleOutScenario.cs` | `Client/Scenarios/rm_b1_scale_out_scenario.hpp` | scenario | done | RM-B1 scale-out barrier와 post-scale 검증을 provider HTTP endpoint로 실행한다. |
 | `Client/Scenarios/RmB2ScaleInScenario.cs` | `Client/Scenarios/rm_b2_scale_in_scenario.hpp` | scenario | done | RM-B2 scale-in barrier와 stale 회피 검증을 provider HTTP endpoint로 실행한다. |
 | `Client/Scenarios/RmC1RequestSendScenario.cs` | `Client/Scenarios/rm_c1_request_send_scenario.hpp` | scenario | done | RM-C1 request/send happy path를 provider HTTP endpoint로 실행한다. |
@@ -72,7 +72,7 @@ C++ config-1 E2E의 대응 파일과 남은 gap을 기록한다. C++ 디렉터�
 | `RM-A2` | `Client/Scenarios/rm_a2_manual_endpoint_scenario.hpp` | done | scenario 파일이 직접 검증한다. |
 | `RM-A4` | `Client/Scenarios/rm_a4_same_rid_failover_scenario.hpp` | partial | Public messaging replacement는 통과했다. Automatic identity/status/Shutdown/conflict 조건은 남아 있다. |
 | `RM-A6` | `Client/Scenarios/rm_a6_multiple_channels_scenario.hpp` | partial | Public messaging 격리와 scale-in 독립성은 통과했다. MeshName별 status sequence·ready count는 남아 있다. |
-| `RM-A7` | 없음 | blocked | `test_cpp_framework_m6b_runtime`은 global create/CAS 의미를 검증한다. Public Object fixture를 exact interface로 이관한 뒤 actual-process `GetOrCreate`·`Find`·direct request를 추가해야 한다. |
+| `RM-A7` | 없음 | gap | `test_cpp_framework_m6b_runtime`은 global create/CAS 의미를 검증한다. Public Object fixture target은 compile되며, 서로 다른 Mesh의 actual-process `GetOrCreate`·`Find`·direct request를 추가해야 한다. |
 | `RM-B1` | `Client/Scenarios/rm_b1_scale_out_scenario.hpp` | done | scenario 파일이 직접 검증한다. |
 | `RM-B2` | `Client/Scenarios/rm_b2_scale_in_scenario.hpp` | done | scenario 파일이 직접 검증한다. |
 | `RM-C1` | `Client/Scenarios/rm_c1_request_send_scenario.hpp` | done | scenario 파일이 직접 검증한다. |

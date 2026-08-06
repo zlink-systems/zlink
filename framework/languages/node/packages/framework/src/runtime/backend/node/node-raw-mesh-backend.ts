@@ -139,6 +139,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   private messageFollowHandler?: (
     record: import('../../foundation/service-stateful-wire-codec').ServiceMessageFollowRecord
   ) => void;
+  private readonly peerDisconnectedHandlers = new Set<(endpoint: string) => void>();
 
   constructor(
     private readonly meshName: string,
@@ -183,6 +184,10 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     reason: 'backpressure'
   ) => void): void {
     this.inboundMessageDropped = handler;
+  }
+
+  onPeerDisconnected(handler: (endpoint: string) => void): void {
+    this.peerDisconnectedHandlers.add(handler);
   }
 
   selectObjectPlacement(stableType: string): ZLinkBackendObjectPlacement {
@@ -302,6 +307,17 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
             this.peerIntents.delete(intent);
           }
         }
+      },
+      onPeerDisconnected: (nodeRoutingId, endpoint) => {
+        for (const [intentId, peer] of this.peerIntents) {
+          if (
+            peer.endpoint === endpoint
+            && (peer.nodeRoutingId === undefined || peer.nodeRoutingId === nodeRoutingId)
+          ) {
+            this.peerIntents.delete(intentId);
+          }
+        }
+        for (const handler of this.peerDisconnectedHandlers) handler(endpoint);
       }
     });
     runtime.start();

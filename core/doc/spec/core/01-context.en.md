@@ -1,4 +1,4 @@
-[한국어](01-context.ko.md) | English
+[한국어](https://zlink-systems.github.io/zlink/ko/spec/core/01-context/) | English
 
 [Spec Index](../README.en.md) · [Core Index](README.en.md)
 

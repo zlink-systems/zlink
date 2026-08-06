@@ -56,7 +56,7 @@ Layout 변경은 public API snapshot, package consumer build와 owner gate를 �
 필요하면 대상 declaration과 dependency 이유를 개별적으로 기록하며 directory나 assembly 전체를
 포괄하는 예외를 두지 않는다.
 
-이 경계는 [bindings public/internal 경계](../../../../../bindings/doc/spec/README.en.md#public-vs-internal-api-boundary)와
+이 경계는 [bindings public/internal 경계](../../../../../bindings/doc/spec/README.ko.md#공개-vs-내부-api-경계)와
 같은 방향을 사용한다. Framework와 bindings는 서로 다른 배포 package이므로 source root는 각각의
 spec이 소유하지만, public contract가 runtime 구현에 역으로 의존하지 않는다는 원칙은 동일하다.
 

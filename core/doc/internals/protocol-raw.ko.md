@@ -2,7 +2,7 @@
 title: "RAW (STREAM) 프로토콜 상세"
 ---
 
-[English](protocol-raw.en.md)
+[English](protocol-raw.ko.md)
 
 <!-- zlink-nav:start -->
 [가이드 목차](../guide/README.ko.md) | [이전: ZMP 프로토콜 상세](protocol-zmp.ko.md)

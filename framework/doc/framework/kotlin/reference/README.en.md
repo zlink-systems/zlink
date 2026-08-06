@@ -11,12 +11,12 @@ reference documents **only the entry points that call in a different shape from 
 configuration entries that call the Java builder directly as-is (topology registration, Store
 registration, `configureLocations()`, etc.) are not recreated here; instead this document points
 directly at the corresponding entry in the
-[Java reference](../../java/reference/README.ko.md) (Korean-only). Contract content such as
+[Java reference](../../java/reference/README.en.md) (Korean-only). Contract content such as
 completion kinds, defaults, and ranges are all identical to Java and are not repeated in this
 document.
 
 The exact signatures are owned by the
-[Kotlin exact interface](../../common/spec/server/languages/kotlin/interfaces/README.ko.md)
+[Kotlin exact interface](../../common/spec/server/languages/kotlin/interfaces/README.en.md)
 (Korean-only).
 
 ## Category

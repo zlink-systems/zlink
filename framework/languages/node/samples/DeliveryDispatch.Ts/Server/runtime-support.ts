@@ -1,3 +1,5 @@
+import type { ZLinkRouteMeshRuntime, ZLinkRouteMeshStatus } from '@zlink-systems/framework';
+
 function waitForShutdown(): Promise<void> {
   return new Promise((resolve) => {
     const keepAlive = setInterval(() => undefined, 60_000);
@@ -7,6 +9,25 @@ function waitForShutdown(): Promise<void> {
     };
     process.once('SIGINT', stop);
     process.once('SIGTERM', stop);
+  });
+}
+
+function observeDeliveryRouteReadiness(
+  runtime: ZLinkRouteMeshRuntime,
+  meshName: string,
+  role: string
+): void {
+  let reported = false;
+  const report = (status: ZLinkRouteMeshStatus): void => {
+    if (reported || !status.isReady) return;
+    reported = true;
+    console.log(`deliverydispatch-route-ready role=${role} mesh=${meshName}`);
+  };
+  void (async () => {
+    report(runtime.snapshot(meshName));
+    for await (const observed of runtime.observe(meshName, 64)) report(observed.status);
+  })().catch((error: unknown) => {
+    console.error(`deliverydispatch readiness observer failed role=${role} mesh=${meshName}`, error);
   });
 }
 
@@ -20,4 +41,4 @@ async function closeNestRuntime(container: { close(): Promise<void> }): Promise<
   }
 }
 
-export { closeNestRuntime, waitForShutdown };
+export { closeNestRuntime, observeDeliveryRouteReadiness, waitForShutdown };

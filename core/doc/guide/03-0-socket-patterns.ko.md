@@ -2,7 +2,7 @@
 title: "Socket pattern 선택"
 ---
 
-[English](03-0-socket-patterns.en.md)
+[English](03-0-socket-patterns.ko.md)
 
 <!-- zlink-nav:start -->
 [가이드 목록](README.ko.md) | [이전: 개요](01-overview.ko.md) | [다음: Raw messaging 신뢰성](reliability.ko.md)

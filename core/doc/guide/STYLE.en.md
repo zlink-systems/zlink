@@ -1,4 +1,4 @@
-[한국어](STYLE.ko.md)
+[한국어](STYLE.en.md)
 
 [Guide index](README.en.md)
 
@@ -58,7 +58,7 @@ mapping table, distribution). The messaging, service, and operations
 concepts are covered once by the core guide, and the language guide's "See
 also" section links to the matching core document.
 
-See the [binding guide README](../../../bindings/doc/guide/README.ko.md)
+See the [binding guide README](../../../bindings/doc/guide/README.en.md)
 for the detailed structure.
 
 ## 5. Diagram Convention

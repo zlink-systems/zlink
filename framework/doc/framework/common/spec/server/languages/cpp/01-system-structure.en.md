@@ -273,7 +273,7 @@ handler filter's `next` delegate approach
 ## 8. Handler Registration And Filter
 
 The handler registration surface and filter contract are owned by
-[Channel Messaging §3](interfaces/03-channel-messaging.ko.md#3-handler-registry).
+[Channel Messaging §3](interfaces/03-channel-messaging.en.md#3-handler-registry).
 Filter's language-neutral meaning is owned by
 [Framework API §8.1](../../../06-framework-api.en.md#81-handler-filter).
 
@@ -299,7 +299,7 @@ The registration surface of each capability is owned by the
 **C++ turns every violation into a failure before host start.** The
 error follows the `result_t`/`framework_exception_t` boundary
 convention, not an exception
-([common runtime](interfaces/01-common-runtime.ko.md)).
+([common runtime](interfaces/01-common-runtime.en.md)).
 
 ## 10. Regression Test
 

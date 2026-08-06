@@ -30,8 +30,6 @@ RUN_ID="$(date +%Y%m%d-%H%M%S)-$$"
 LOG_DIR="$SCRIPT_DIR/logs/$RUN_ID"
 LOCAL_READINESS_TIMEOUT_SECONDS=3
 LOCAL_READINESS_POLL_SECONDS=0.1
-ROUTE_SETTLE_SECONDS=5
-SCENARIO_SETTLE_SECONDS=3
 HTTP_PROBE_TIMEOUT_SECONDS=3
 LOCAL_READINESS_ATTEMPTS="$(
   python3 - "$LOCAL_READINESS_TIMEOUT_SECONDS" "$LOCAL_READINESS_POLL_SECONDS" <<'PY'
@@ -45,6 +43,9 @@ PY
 )"
 pids=()
 REDIS_CONTAINER_OWNED=0
+ACTOR_B_PID=""
+ACTOR_B_PAUSED=0
+CALLER_PID=""
 
 mkdir -p "$LOG_DIR"
 echo "log_dir=$LOG_DIR"
@@ -249,6 +250,9 @@ cleanup() {
   local cleanup_failed=0
   local wait_status
   set +e
+  if [[ "$ACTOR_B_PAUSED" == "1" && -n "$ACTOR_B_PID" ]]; then
+    kill -CONT "$ACTOR_B_PID" >/dev/null 2>&1 || true
+  fi
   print_logs "$status"
   for ((i=${#pids[@]}-1; i>=0; i--)); do
     kill "${pids[$i]}" >/dev/null 2>&1 || true
@@ -313,6 +317,40 @@ PY
   return 1
 }
 
+wait_file_contains() {
+  local path="$1"
+  local marker="$2"
+  local description="$3"
+  local pid="$4"
+  for _ in $(seq 1 300); do
+    if grep -Fq "$marker" "$path" 2>/dev/null; then
+      return 0
+    fi
+    if ! kill -0 "$pid" >/dev/null 2>&1; then
+      echo "$description" >&2
+      return 1
+    fi
+    sleep 0.1
+  done
+  echo "$description" >&2
+  return 1
+}
+
+wait_route_state() {
+  local expected="$1"
+  local status=""
+  for _ in $(seq 1 300); do
+    status="$(curl --max-time "$HTTP_PROBE_TIMEOUT_SECONDS" -fsS -X POST \
+      "$CALLER_HTTP/route/status" 2>/dev/null || true)"
+    if [[ "$status" == "$expected" ]]; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  echo "Timed out waiting for caller route status=$expected last=$status" >&2
+  return 1
+}
+
 start_role() {
   case "$1" in
     actor-a)
@@ -324,11 +362,13 @@ start_role() {
       "$BUILD_DIR/zlink_cpp_e2e_to_actor_messaging_actor" \
         --config="$CONFIG_DIR/actor-b.json" >"$LOG_DIR/actor-b.stdout.log" 2>"$LOG_DIR/actor-b.stderr.log" &
       pids+=("$!")
+      ACTOR_B_PID="$!"
       ;;
     caller)
       "$BUILD_DIR/zlink_cpp_e2e_to_actor_messaging_caller" \
         --config="$CONFIG_DIR/caller.json" >"$LOG_DIR/caller.stdout.log" 2>"$LOG_DIR/caller.stderr.log" &
       pids+=("$!")
+      CALLER_PID="$!"
       ;;
     session-a|session-b)
       "$BUILD_DIR/zlink_cpp_e2e_to_actor_messaging_session" \
@@ -350,6 +390,55 @@ wait_role() {
   esac
 }
 
+route_socket_count() {
+  local sockets
+  if ! sockets="$(sudo -n ss -Htnp state established 2>/dev/null)"; then
+    echo "TA-B3 failed to inspect established sockets" >&2
+    return 2
+  fi
+  awk -v actor_b_port=":$actor_b_spot" -v caller_pid="$CALLER_PID" \
+      'index($0, "pid=" caller_pid ",") && ($3 ~ actor_b_port || $4 ~ actor_b_port) { count++ } END { print count + 0 }' \
+      <<<"$sockets"
+}
+
+route_socket_dump() {
+  sudo -n ss -Htn state established 2>/dev/null || true
+}
+
+wait_route_sockets_gone() {
+  local deadline=$((SECONDS + LOCAL_READINESS_TIMEOUT_SECONDS))
+  while (( SECONDS < deadline )); do
+    local count
+    if ! count="$(route_socket_count)"; then
+      return 1
+    fi
+    if [[ "$count" == "0" ]]; then
+      return 0
+    fi
+    sleep "$LOCAL_READINESS_POLL_SECONDS"
+  done
+  echo "TA-B3 route sockets remained after the kernel disconnect request (actor_b=$actor_b_spot)." >&2
+  route_socket_dump >&2
+  return 1
+}
+
+wait_route_sockets_present() {
+  local deadline=$((SECONDS + LOCAL_READINESS_TIMEOUT_SECONDS))
+  while (( SECONDS < deadline )); do
+    local count
+    if ! count="$(route_socket_count)"; then
+      return 1
+    fi
+    if [[ "$count" != "0" ]]; then
+      return 0
+    fi
+    sleep "$LOCAL_READINESS_POLL_SECONDS"
+  done
+  echo "TA-B3 actor-b route did not establish after reconnect." >&2
+  route_socket_dump >&2
+  return 1
+}
+
 mapfile -t ORDERED_SERVER_ROLES < <(ordered_roles actor-a actor-b caller session-a session-b)
 for role in "${ORDERED_SERVER_ROLES[@]}"; do
   start_role "$role"
@@ -358,10 +447,48 @@ for role in actor-a actor-b caller session-a session-b; do
   wait_role "$role"
 done
 
-"$BUILD_DIR/zlink_cpp_e2e_to_actor_messaging_client" \
-  --actor-http="$ACTOR_HTTP" --caller-http="$CALLER_HTTP" \
-  --actor-b-http="$ACTOR_B_HTTP" --route-control-http="$CALLER_HTTP" \
-  --session-a-http="$SESSION_A_HTTP" --session-a-stream="$SESSION_A_STREAM" \
-  --session-b-http="$SESSION_B_HTTP" --session-b-stream="$SESSION_B_STREAM" \
-  --scenario="$SCENARIO" \
-  > >(tee "$LOG_DIR/client.log") 2>"$LOG_DIR/client.stderr.log"
+run_client() {
+  "$BUILD_DIR/zlink_cpp_e2e_to_actor_messaging_client" \
+    --actor-http="$ACTOR_HTTP" --caller-http="$CALLER_HTTP" \
+    --actor-b-http="$ACTOR_B_HTTP" --route-control-http="$CALLER_HTTP" \
+    --session-a-http="$SESSION_A_HTTP" --session-a-stream="$SESSION_A_STREAM" \
+    --session-b-http="$SESSION_B_HTTP" --session-b-stream="$SESSION_B_STREAM" \
+    --scenario="$SCENARIO"
+}
+
+if [[ "$SCENARIO" == "TA-B3" || "$SCENARIO" == "ta-b3" || "$SCENARIO" == "all" ]]; then
+  run_client > >(tee "$LOG_DIR/client.log") 2>"$LOG_DIR/client.stderr.log" &
+  CLIENT_PID="$!"
+  pids+=("$CLIENT_PID")
+  wait_file_contains "$LOG_DIR/client.log" \
+    "scenario-control TA-B3 disconnect-route" \
+    "TA-B3 client did not request route disconnection." "$CLIENT_PID"
+  kill -STOP "$ACTOR_B_PID"
+  ACTOR_B_PAUSED=1
+  if ! initial_route_socket_count="$(route_socket_count)"; then
+    echo "TA-B3 could not measure the initial route socket" >&2
+    exit 1
+  fi
+  if [[ "$initial_route_socket_count" == "0" ]]; then
+    echo "TA-B3 route port actor_b=$actor_b_spot" >&2
+    route_socket_dump >&2
+    echo "TA-B3 expected an established actor-b/caller route before disconnect." >&2
+    exit 1
+  fi
+  curl --max-time "$HTTP_PROBE_TIMEOUT_SECONDS" -fsS -X POST \
+    "$CALLER_HTTP/route/disconnect" >/dev/null
+  wait_route_state not_ready
+  wait_route_sockets_gone
+  wait_file_contains "$LOG_DIR/client.log" \
+    "scenario-control TA-B3 restore-route" \
+    "TA-B3 client did not request route restoration." "$CLIENT_PID"
+  kill -CONT "$ACTOR_B_PID"
+  ACTOR_B_PAUSED=0
+  curl --max-time "$HTTP_PROBE_TIMEOUT_SECONDS" -fsS -X POST \
+    "$CALLER_HTTP/route/reconnect" >/dev/null
+  wait_route_sockets_present
+  wait_route_state ready
+  wait "$CLIENT_PID"
+else
+  run_client > >(tee "$LOG_DIR/client.log") 2>"$LOG_DIR/client.stderr.log"
+fi

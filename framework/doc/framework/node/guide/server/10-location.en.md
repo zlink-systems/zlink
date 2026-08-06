@@ -18,9 +18,9 @@ View in another language — [C#/.NET](../../../dotnet/guide/server/10-location.
 # 10. Location — Auto-Connect And Object Location
 
 > **The documents that own this chapter's contract** — defined by
-> [Location runtime](../../../common/spec/21-location-runtime.ko.md),
-> [Location Store](../../../common/spec/22-location-store-redis.ko.md), and the
-> [per-language location public contract](../../../common/spec/server/languages/README.ko.md).
+> [Location runtime](../../../common/spec/21-location-runtime.en.md),
+> [Location Store](../../../common/spec/22-location-store-redis.en.md), and the
+> [per-language location public contract](../../../common/spec/server/languages/README.en.md).
 > This document explains how the application registers a Store and checks status.
 
 ## 0. What It Provides
@@ -158,7 +158,7 @@ already in the queue still finishes and cleans up. This is the mechanism that ke
 owner and an old owner from writing at the same time.
 
 The Capture/Restore callback ceiling follows the
-[per-language location option contract](../../../common/spec/server/languages/README.ko.md).
+[per-language location option contract](../../../common/spec/server/languages/README.en.md).
 
 ## 4. Readiness And Operational Queries
 
@@ -205,7 +205,7 @@ generation.
 
 - Runnable verification examples for this chapter's contract: `13. Interface Catalog`
   chapter §6 — the verification class `LocationContracts`
-- The formal contract: [Location runtime](../../../common/spec/21-location-runtime.ko.md)
+- The formal contract: [Location runtime](../../../common/spec/21-location-runtime.en.md)
 - Manual connection without auto-connect:
-  [05-channel-messaging §6](05-channel-messaging.ko.md#6-연결-제어)
-- Host relocate and drain observability: [12-operations](12-operations.ko.md)
+  [05-channel-messaging §6](05-channel-messaging.en.md#6-connection-control)
+- Host relocate and drain observability: [12-operations](12-operations.en.md)

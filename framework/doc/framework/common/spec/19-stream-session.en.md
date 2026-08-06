@@ -4,7 +4,7 @@ title: "STREAM Server Session"
 
 # STREAM Server Session
 
-[Spec table of contents](README.en.md) · [Previous: Spot/Actor Routing](18-object-routing.ko.md) · [Next: Session-Actor Dispatch](20-session-actor-dispatch.en.md)
+[Spec table of contents](README.en.md) · [Previous: Spot/Actor Routing](18-object-routing.en.md) · [Next: Session-Actor Dispatch](20-session-actor-dispatch.en.md)
 
 > **What this chapter defines** — the public contract for a server-side STREAM
 > session, the execution unit keeping packet processing and request correlation
@@ -19,7 +19,7 @@ codec, and error boundary. The client-side contract is defined by the
 [Stream Connector Common Spec](stream-connector/32-stream-connector.en.md), and
 the two documents share the same wire contract. Per-language types and
 signatures are fixed by the STREAM documents in the
-[per-language Server interface table of contents](server/languages/README.ko.md).
+[per-language Server interface table of contents](server/languages/README.en.md).
 
 ## 1. Purpose
 

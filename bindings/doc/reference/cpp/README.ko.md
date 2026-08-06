@@ -1,4 +1,4 @@
-한국어 | [English](README.en.md)
+한국어 | [English](https://zlink-systems.github.io/zlink/bindings/reference/cpp/)
 
 [C++ 바인딩 스펙](../../spec/cpp/README.ko.md) · [C++ 바인딩 가이드](../../guide/cpp/index.ko.md)
 

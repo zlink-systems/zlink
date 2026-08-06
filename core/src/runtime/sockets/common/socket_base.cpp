@@ -523,7 +523,9 @@ int zlink::socket_base_t::xsend_routed (const zlink_routing_id_t *target_rid_,
                                        msg_t *msg_,
                                        uint64_t *connection_id_out_,
                                        uint64_t expected_connection_id_,
-                                       pipe_t **pipe_out_)
+                                       pipe_t **pipe_out_,
+                                       uint64_t expected_transport_pair_id_,
+                                       uint64_t expected_transport_pair_generation_)
 {
     LIBZLINK_UNUSED (target_rid_);
     LIBZLINK_UNUSED (msg_);
@@ -532,6 +534,8 @@ int zlink::socket_base_t::xsend_routed (const zlink_routing_id_t *target_rid_,
     if (pipe_out_)
         *pipe_out_ = NULL;
     LIBZLINK_UNUSED (expected_connection_id_);
+    LIBZLINK_UNUSED (expected_transport_pair_id_);
+    LIBZLINK_UNUSED (expected_transport_pair_generation_);
     errno = ENOTSUP;
     return -1;
 }

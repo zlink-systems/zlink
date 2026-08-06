@@ -7,12 +7,12 @@ per capability. Check the formal declaration by moving to the matching
 category document in the
 [C++ exact interface table of contents](interfaces/README.en.md).
 
-- [Common runtime](interfaces/01-common-runtime.ko.md)
+- [Common runtime](interfaces/01-common-runtime.en.md)
 - [Configuration and host](interfaces/02-configuration-host.en.md)
-- [Channel messaging](interfaces/03-channel-messaging.ko.md)
-- [Spot](interfaces/04-spots.ko.md)
-- [Actor](interfaces/05-actors.ko.md)
-- [STREAM session](interfaces/06-stream-session.ko.md)
+- [Channel messaging](interfaces/03-channel-messaging.en.md)
+- [Spot](interfaces/04-spots.en.md)
+- [Actor](interfaces/05-actors.en.md)
+- [STREAM session](interfaces/06-stream-session.en.md)
 - [Location · Relocation Store · Redis](interfaces/07-location-store.en.md)
 - [Monitoring](interfaces/08-monitoring.en.md)
 

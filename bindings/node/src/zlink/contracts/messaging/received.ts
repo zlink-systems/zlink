@@ -33,6 +33,10 @@ function invalidSendContextError(): SubmitError {
  * a per-receive allocation.
  */
 export class Received extends MessagePartsEnvelope {
+  /** Source transport identity used by framework routing admission. */
+  transportPairId?: bigint;
+  /** Source transport generation used by framework routing admission. */
+  transportPairGeneration?: bigint;
   /** The source routing id, or null when the receive path provides none. */
   routingId: RoutingId | null;
   /** The request sequence, present when this envelope can be replied to. */

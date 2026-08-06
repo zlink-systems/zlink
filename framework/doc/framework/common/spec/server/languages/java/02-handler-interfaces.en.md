@@ -2,7 +2,7 @@
 
 Java handler and application-facing public signatures are provided per
 feature in the
-[exact interface table of contents](interfaces/README.ko.md).
+[exact interface table of contents](interfaces/README.en.md).
 
 - [Channel Messaging](interfaces/channel-messaging.en.md)
 - [Spot](interfaces/spots.en.md)

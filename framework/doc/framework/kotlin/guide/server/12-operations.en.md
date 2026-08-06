@@ -18,11 +18,11 @@ View in another language — [C#/.NET](../../../dotnet/guide/server/12-operation
 # 12. Operations — Runtime Metrics · Graceful Drain · Readiness
 
 > **The documents that own this chapter's contract** — owned by the common spec
-> [Runtime state query and operational diagnostics](../../../common/spec/24-runtime-monitoring.ko.md),
-> [Runtime metrics](../../../common/spec/25-runtime-metrics.ko.md), and
-> [Graceful Drain & Handoff](../../../common/spec/28-graceful-drain-handoff.ko.md). The
+> [Runtime state query and operational diagnostics](../../../common/spec/24-runtime-monitoring.en.md),
+> [Runtime metrics](../../../common/spec/25-runtime-metrics.en.md), and
+> [Graceful Drain & Handoff](../../../common/spec/28-graceful-drain-handoff.en.md). The
 > formal definition of each language's surface is owned by the
-> [per-language topology/monitoring public contract](../../../common/spec/server/languages/README.ko.md).
+> [per-language topology/monitoring public contract](../../../common/spec/server/languages/README.en.md).
 > This chapter focuses on usage — what you actually wire up and declare in an operational
 > environment.
 
@@ -73,9 +73,9 @@ Metrics.addRegistry(prometheusRegistry)
 
 The instrument catalog is below. The labels, units, and kinds of the MeshNode,
 object/STREAM, and location/fanout instruments are set by
-[Runtime Metrics §§3-5](../../../common/spec/25-runtime-metrics.ko.md), and the drain
+[Runtime Metrics §§3-5](../../../common/spec/25-runtime-metrics.en.md), and the drain
 instruments by
-[Host Relocate and Shutdown §13](../../../common/spec/28-graceful-drain-handoff.ko.md#13-관측-정보).
+[Host Relocate and Shutdown §13](../../../common/spec/28-graceful-drain-handoff.en.md#13-observability-information).
 
 | Instrument | What it measures |
 |---|---|
@@ -216,7 +216,7 @@ confirm the result is `Relocated`, and only then move on to this call (the examp
 A Spot's lifetime is independent of any request. A User/Instance Spot isn't closed just
 because an ordinary request finished. Likewise, preparing a nonexistent Instance Spot never
 starts from a separate address or manager create — only from attaching Instance intent to a
-SpotId direct call ([06-spot](06-spot.ko.md) §5).
+SpotId direct call ([06-spot](06-spot.en.md) §5).
 
 ## 4. Wiring Operational Calls And Readiness
 
@@ -388,8 +388,8 @@ the `zlink.host.*` instruments from §1.
 - Runnable verification examples for this chapter's contract: `13. Interface Catalog`
   chapter §7 — the verification class `FrameworkRuntimeContracts`
 - The formal contract:
-  [Host Relocate and Shutdown](../../../common/spec/28-graceful-drain-handoff.ko.md) ·
-  [Runtime Metrics](../../../common/spec/25-runtime-metrics.ko.md)
+  [Host Relocate and Shutdown](../../../common/spec/28-graceful-drain-handoff.en.md) ·
+  [Runtime Metrics](../../../common/spec/25-runtime-metrics.en.md)
 - Status observation and diagnostics: the [11. Monitoring](11-monitoring.en.md)
 - The Spot where the application decides the relocation boundary:
-  [06-spot §7](06-spot.ko.md#7-relocation을-시작해도-되는-시점-알리기)
+  [06-spot §7](06-spot.en.md#7-signaling-when-relocation-may-begin)

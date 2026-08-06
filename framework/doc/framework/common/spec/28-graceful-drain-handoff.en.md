@@ -4,7 +4,7 @@ title: "Host Relocate And Shutdown"
 
 # Host Relocate And Shutdown
 
-[Spec table of contents](README.en.md) · [Previous: Request Correlation And Business Flow Identification](27-flow-correlation.ko.md) · [Next: Transport Connection Liveness](29-transport-liveness.ko.md)
+[Spec table of contents](README.en.md) · [Previous: Request Correlation And Business Flow Identification](27-flow-correlation.en.md) · [Next: Transport Connection Liveness](29-transport-liveness.en.md)
 
 > **What this chapter defines** — the call sequence and outcomes when moving a host's
 > stateful workload to another node, or shutting a host down.
@@ -66,12 +66,12 @@ node currently processing an Actor/Spot is called the
 Actor/Spot's owner and location is called
 [authority](01-glossary.en.md#authority). The order in which the framework uses
 authority and the two Stores is defined by
-[40 Location Runtime](21-location-runtime.ko.md). The provider contract for the
+[40 Location Runtime](21-location-runtime.en.md). The provider contract for the
 [Location Store](01-glossary.en.md#location-store), which stores the current owner and
 location, is defined by
-[41 Location Store Provider](22-location-store-redis.ko.md). The provider contract for
+[41 Location Store Provider](22-location-store-redis.en.md). The provider contract for
 storing the payload to restore is defined by
-[42 Relocation Store Provider](23-relocation-store-redis.ko.md). This document doesn't
+[42 Relocation Store Provider](23-relocation-store-redis.en.md). This document doesn't
 repeat storage format — it only defines the public order of host operations.
 
 ## 2. Operations The Application Chooses
@@ -400,7 +400,7 @@ The application can specify the following five caps as positive values in Locati
 settings. A setting change applies starting from new relocation admission. The table
 below shows the common meaning, .NET public member, and default together. Other
 languages' names are set by that language's interface document. See
-[.NET Location Settings](server/languages/dotnet/interfaces/08-location-maintenance.ko.md#2-location-option)
+[.NET Location Settings](server/languages/dotnet/interfaces/08-location-maintenance.en.md#2-location-option)
 for the `ConfigureLocations()` registration location and exact declaration.
 
 | Limited item | .NET public member | Default cap |
@@ -509,7 +509,7 @@ a [relocation unit](01-glossary.en.md#relocation-unit).
    a `sessionActorLocationUpdateReqMsg` asking it to change the current Actor location.
    The target Actor keeps processing messages while waiting for this response. The
    resend interval when there's no response is defined by
-   [Session-Actor Dispatch §5.1](20-session-actor-dispatch.ko.md#51-session-actor-위치-갱신-message).
+   [Session-Actor Dispatch §5.1](20-session-actor-dispatch.en.md#51-session-actor-location-update-message).
 10. `OnClosing(RelocationOut)` is called on an instance remaining at a User Spot's or
     Instance Spot's previous location, after the Location Store's location change. The
     Entry Spot itself doesn't move, so the Entry Spot's closing callback isn't called.
@@ -811,7 +811,7 @@ the Entry Spot's closing callback isn't called. An Instance Spot has no Actor, s
 no Actor lifecycle callback at all.
 
 A cross-node Actor join uses the same policy and adapter, but the exact lifecycle is
-owned by [23 Spot Actor](15-spot-actor.ko.md). A same-node join doesn't call the
+owned by [23 Spot Actor](15-spot-actor.en.md). A same-node join doesn't call the
 adapter. Instance Spot maintenance relocation doesn't newly create an Instance Spot not
 present on the source.
 
@@ -859,7 +859,7 @@ location update response, a Message Follow route only delivers packets arriving 
 previous route to the target Actor within `MessageFollowDuration`. Packets and replies
 of a previous generation are rejected. A newly created Actor under the same ActorId
 must be rebound by the application. The detailed route-change order is defined by
-[31 Session-Actor Dispatch](20-session-actor-dispatch.ko.md#5-actor-relocation-route-barrier).
+[31 Session-Actor Dispatch](20-session-actor-dispatch.en.md#5-actor-relocation-route-barrier).
 
 An Instance Spot's `Close` and relocation are ordered within the same authority commit.
 If `Closing` comes first, close finishes and it isn't moved. If relocation comes first,
@@ -895,7 +895,7 @@ If the payload the Location Store points to is permanently missing, or the check
 the relocation target list's content checksum differs, it's an unrecoverable `DataLost`
 even on retry. It doesn't guess a previous payload or roll back to the source.
 Determination and recovery are defined by
-[42 Relocation Store](23-relocation-store-redis.ko.md).
+[42 Relocation Store](23-relocation-store-redis.en.md).
 
 If some MeshNodes' `Relocating` descriptor write result can't be confirmed, every
 attempted descriptor is rolled back to `Serving`. Only once every rollback is confirmed
@@ -997,7 +997,7 @@ effective target version. Version isn't added as a metric label.
 Host state and terminal results are checked in host status and structured logs. When
 aggregation is needed, host state, relocation mode/outcome/reason, and shutdown
 outcome/reason are recorded on the instruments defined by
-[51 Runtime Metrics](25-runtime-metrics.ko.md#5-host-relocation과-shutdown). Object
+[51 Runtime Metrics](25-runtime-metrics.en.md#5-host-relocation-and-shutdown). Object
 relocation instruments and host-wide operation instruments use different names.
 
 The global string address for finding a Spot system-wide is called a
@@ -1005,8 +1005,8 @@ The global string address for finding a Spot system-wide is called a
 node RID, endpoint, session ID, or relocation ID. Individual blocker and relocation
 state is checked via count-limited diagnostic queries and traces. Telemetry provider
 failure doesn't block operation progress. The full observability contract is owned by
-[50 Runtime Monitoring](24-runtime-monitoring.ko.md) and
-[51 Runtime Metrics](25-runtime-metrics.ko.md).
+[50 Runtime Monitoring](24-runtime-monitoring.en.md) and
+[51 Runtime Metrics](25-runtime-metrics.en.md).
 
 ## 14. Contract Test Verification Requirements
 

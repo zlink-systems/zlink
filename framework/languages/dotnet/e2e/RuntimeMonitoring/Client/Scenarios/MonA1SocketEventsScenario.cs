@@ -14,13 +14,15 @@ internal static class MonA1SocketEventsScenario
             .Timeout(TimeSpan.FromSeconds(35))
             .Build();
 
+        var hostBaseline = await HostSnapshotAsync(observer);
         var baseline = await SnapshotAsync(observer);
-        AssertBaseline(baseline);
+        AssertBaseline(hostBaseline, baseline);
         var evidenceBaseline =
             (await observer.Get("/evidence").Async<string[]>()).Body.Length;
 
         await using var serviceB = await EphemeralService.StartAsync(options, "svc-b");
         var ready = await WaitForPeerAsync(observer, "svc-b");
+        var hostAfter = await HostSnapshotAsync(observer);
         var peer = ready.Peers.Single(candidate =>
             candidate.Rid.StartsWith("svc-b-", StringComparison.Ordinal)
             && candidate.State == "Ready");
@@ -28,14 +30,15 @@ internal static class MonA1SocketEventsScenario
         ZlinkStreamAssert.Ensure(
             ready.Sequence > baseline.Sequence
             && baseline.Peers.Length == 0
+            && hostAfter == hostBaseline
             && peer.UnavailableReason is null,
             "MON-A1 immutable status or ready peer state was incomplete.");
 
         var channel = ready.Channels.Single(candidate =>
             candidate.ChannelName == RuntimeMonitoringNames.Channel);
         ZlinkStreamAssert.Ensure(
-            channel.IsReady && channel.ReadyTargetCount == 2,
-            "MON-A1 channel status did not include both ready targets.");
+            channel.IsReady && channel.ReadyTargetCount == 1,
+            "MON-A1 channel status did not include the ready target.");
 
         var evidence = (await observer.Post("/evidence/wait")
             .Body(new EvidenceWaitReq(
@@ -59,20 +62,26 @@ internal static class MonA1SocketEventsScenario
         Console.WriteLine("scenario MON-A1 passed");
     }
 
-    private static void AssertBaseline(MeshRuntimeSnapshotRes status)
+    private static void AssertBaseline(
+        HostRuntimeSnapshotRes host,
+        MeshRuntimeSnapshotRes status)
     {
         var channel = status.Channels.Single(candidate =>
             candidate.ChannelName == RuntimeMonitoringNames.Channel);
         ZlinkStreamAssert.Ensure(
             status.MeshName == RuntimeMonitoringNames.Channel
             && status.State == "Ready"
+            && host.State == "Serving"
+            && host.IsReady
+            && host.AcceptingWork
+            && host.Sequence > 0
             && status.IsReady
             && status.ReadyPeerCount == 0
             && status.Sequence > 0
             && status.ObservedAt != default
             && status.Peers.Length == 0
-            && channel.IsReady
-            && channel.ReadyTargetCount == 1
+            && !channel.IsReady
+            && channel.ReadyTargetCount == 0
             && !status.Placement.IsAvailable,
             "MON-A1 baseline RouteMesh status was incomplete.");
     }
@@ -82,6 +91,11 @@ internal static class MonA1SocketEventsScenario
         => (await service.Get(
                 $"/runtime/snapshot/{RuntimeMonitoringNames.Channel}")
             .Async<MeshRuntimeSnapshotRes>()).Body;
+
+    private static async Task<HostRuntimeSnapshotRes> HostSnapshotAsync(
+        ZLinkHttpClient service)
+        => (await service.Get("/runtime/host/status")
+            .Async<HostRuntimeSnapshotRes>()).Body;
 
     private static async Task<MeshRuntimeSnapshotRes> WaitForPeerAsync(
         ZLinkHttpClient service,

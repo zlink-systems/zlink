@@ -3,7 +3,7 @@ title: "11. Monitoring — Status Observation And Diagnostics · Kotlin"
 ---
 
 <!-- framework-adapter-nav:start -->
-[Guide Home](../../../index.ko.md) | [Previous: Location](10-location.en.md) | [Next: Operations — metrics · drain · readiness](12-operations.en.md)
+[Guide Home](../../../index.en.md) | [Previous: Location](10-location.en.md) | [Next: Operations — metrics · drain · readiness](12-operations.en.md)
 <!-- framework-adapter-nav:end -->
 
 # 11. Monitoring — Status Observation And Diagnostics

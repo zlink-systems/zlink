@@ -235,7 +235,7 @@ delayed even with a ceiling in place.
 
 This rule applies to **every multi-connection receive path** —
 fanout, as well as
-[RouteMesh](../spec/01-glossary.ko.md#routemesh) where multiple nodes
+[RouteMesh](../spec/01-glossary.en.md#routemesh) where multiple nodes
 find each other by name, ClientServer, service connection, and STREAM
 are all targets
 ([Transport Liveness](../spec/29-transport-liveness.en.md)).

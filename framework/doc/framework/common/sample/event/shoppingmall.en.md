@@ -1,6 +1,6 @@
 # ShoppingMall Sample Scenario
 
-[Event Sample List](README.en.md) · [Framework Common Sample](../README.ko.md)
+[Event Sample List](README.en.md) · [Framework Common Sample](../README.en.md)
 
 > ShoppingMall is a sample where a single owner processes one order in order, recording inventory
 > reservation, payment authorization, confirmation, and compensation results in an event stream. The

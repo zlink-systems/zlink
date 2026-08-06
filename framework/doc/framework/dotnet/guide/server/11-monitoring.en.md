@@ -25,13 +25,13 @@ through one of the three channels below.
 
 | What you're watching | Surface | Where it's covered |
 |---|---|---|
-| Host lifecycle (relocate/drain/readiness) | `IZLinkFrameworkRuntime.Status` · `ObserveAsync` | [12-operations](12-operations.ko.md) §6.1 |
-| A MeshNode's node/peer/channel readiness | `IZLinkRouteMeshRuntime.GetStatus` · `ObserveAsync` | [12-operations](12-operations.ko.md) §5 |
+| Host lifecycle (relocate/drain/readiness) | `IZLinkFrameworkRuntime.Status` · `ObserveAsync` | [12-operations](12-operations.en.md) §6.1 |
+| A MeshNode's node/peer/channel readiness | `IZLinkRouteMeshRuntime.GetStatus` · `ObserveAsync` | [12-operations](12-operations.en.md) §5 |
 | A ClientServer channel's target status | `IZLinkClientServerRuntime.GetStatus` · `ObserveAsync` | This chapter §2 |
 | A pub/sub channel's publisher status | `IZLinkFanoutRuntime.GetStatus` · `ObserveAsync` | This chapter §2 |
-| Location store status and topology | `IZLinkLocationRuntimeQuery` | [10-location](10-location.ko.md) §4 |
+| Location store status and topology | `IZLinkLocationRuntimeQuery` | [10-location](10-location.en.md) §4 |
 | Message receive/dispatch/failure and flow | Diagnostics level + `ActivitySource`·`ILogger` | This chapter §3 |
-| Numbers like CCU and queue depth | `Meter` `zlink.framework` | [12-operations](12-operations.ko.md) §1 |
+| Numbers like CCU and queue depth | `Meter` `zlink.framework` | [12-operations](12-operations.en.md) §1 |
 
 ```mermaid
 %%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
@@ -146,8 +146,8 @@ flow respectively. Publish never confirms a per-subscriber result, so it never c
 per-target trace or count.
 
 For exact attributes and propagation rules, see
-[Message Flow Tracing](../../../common/spec/26-message-flow-tracing.ko.md) and
-[Flow Correlation](../../../common/spec/27-flow-correlation.ko.md).
+[Message Flow Tracing](../../../common/spec/26-message-flow-tracing.en.md) and
+[Flow Correlation](../../../common/spec/27-flow-correlation.en.md).
 
 ## 4. Common Problems
 
@@ -159,28 +159,28 @@ For exact attributes and propagation rules, see
   continue with the stream.
 - **I want to see auto-connect status** → in a deployment that registered a location store,
   query the store's status and topology with `IZLinkLocationRuntimeQuery`
-  ([10-location](10-location.ko.md) §4).
+  ([10-location](10-location.en.md) §4).
 - **I expect a health/metric endpoint** → the framework doesn't create an HTTP endpoint.
   Readiness is wired by connecting `IZLinkFrameworkRuntime.IsReady` to the app's existing
-  endpoint ([12-operations](12-operations.ko.md) §4), and numbers are exposed by registering
+  endpoint ([12-operations](12-operations.en.md) §4), and numbers are exposed by registering
   the meter `zlink.framework` in the app's collection pipeline
-  ([12-operations](12-operations.ko.md) §1).
+  ([12-operations](12-operations.en.md) §1).
 - **I want to know about an unregistered message** → set `ConfigureDispatch().Diagnostics`'s
   level to `Errors` or higher and check the application's `ILogger` or `ActivitySource`
   exporter. A request failure comes back as an error reply, and a send failure can be
   confirmed through a diagnostic record. Publish never confirms a per-subscriber result, so
   it never creates a per-target record.
 - **I want to see a Spot timer handler failure** → at diagnostics level `Errors` or higher,
-  it's recorded as a dispatch error. See [06-spot](06-spot.ko.md) §6 for timer policy.
+  it's recorded as a dispatch error. See [06-spot](06-spot.en.md) §6 for timer policy.
 
 ## 5. Related Documents
 
 - Runnable verification examples for this chapter's contract:
-  [13-interface-catalog](13-interface-catalog.ko.md) §7 — the verification class
+  [13-interface-catalog](13-interface-catalog.en.md) §7 — the verification class
   `EventingContracts`
-- The formal contract: [spec/aspnet-core-monitoring](../../../common/spec/server/languages/dotnet/01-system-structure.ko.md)
-- Location operational queries: [10-location](10-location.ko.md)
-- Runtime metrics/mesh status/drain observation: [12-operations](12-operations.ko.md)
+- The formal contract: [spec/aspnet-core-monitoring](../../../common/spec/server/languages/dotnet/01-system-structure.en.md)
+- Location operational queries: [10-location](10-location.en.md)
+- Runtime metrics/mesh status/drain observation: [12-operations](12-operations.en.md)
 
 ---
 <!-- framework-adapter-nav:bottom:start -->

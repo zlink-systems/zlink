@@ -3,7 +3,7 @@ title: "16. Options — Setting List And Defaults · Node/TypeScript"
 ---
 
 <!-- framework-adapter-nav:start -->
-[Guide Home](../../../index.ko.md) | [Previous: E2E Testing](15-e2e-testing.ko.md) | [Next: Where To Use ZLink](17-alternative.en.md)
+[Guide Home](../../../index.en.md) | [Previous: E2E Testing](15-e2e-testing.en.md) | [Next: Where To Use ZLink](17-alternative.en.md)
 <!-- framework-adapter-nav:end -->
 
 # 16. Options — Setting List And Defaults

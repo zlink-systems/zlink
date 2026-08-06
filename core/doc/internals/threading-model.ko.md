@@ -2,7 +2,7 @@
 title: "Core threading model"
 ---
 
-[English](threading-model.en.md) | 한국어
+[English](https://zlink-systems.github.io/zlink/internals/threading-model/) | 한국어
 
 <!-- zlink-nav:start -->
 [가이드 목차](../guide/README.ko.md) | [이전: Architecture](architecture.ko.md) | [다음: Thread safety](thread-safety.ko.md)

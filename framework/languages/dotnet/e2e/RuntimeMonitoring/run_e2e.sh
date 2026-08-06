@@ -55,6 +55,7 @@ PY
 
 SVC_HTTP_PORT="$(pick_port)"
 SVC_B_HTTP_PORT="$(pick_port)"
+SVC_C_HTTP_PORT="$(pick_port)"
 THROW_HTTP_PORT="$(pick_port)"
 FILTERED_HTTP_PORT="$(pick_port)"
 CHANNEL_PORT="$(pick_port)"
@@ -65,19 +66,26 @@ SPOT_ROUTER_PORT="$(pick_port)"
 SPOT_PUB_PORT="$(pick_port)"
 SPOT_B_ROUTER_PORT="$(pick_port)"
 SPOT_B_PUB_PORT="$(pick_port)"
+SPOT_C_ROUTER_PORT="$(pick_port)"
+SPOT_C_PUB_PORT="$(pick_port)"
 
 SVC_URL="http://127.0.0.1:$SVC_HTTP_PORT"
 SVC_B_URL="http://127.0.0.1:$SVC_B_HTTP_PORT"
+SVC_C_URL="http://127.0.0.1:$SVC_C_HTTP_PORT"
 THROW_URL="http://127.0.0.1:$THROW_HTTP_PORT"
 FILTERED_URL="http://127.0.0.1:$FILTERED_HTTP_PORT"
 CHANNEL_ENDPOINT="tcp://127.0.0.1:$CHANNEL_PORT"
 CHANNEL_B_ENDPOINT="tcp://127.0.0.1:$CHANNEL_B_PORT"
+CHANNEL_C_PORT="$(pick_port)"
+CHANNEL_C_ENDPOINT="tcp://127.0.0.1:$CHANNEL_C_PORT"
 THROW_CHANNEL_ENDPOINT="tcp://127.0.0.1:$THROW_CHANNEL_PORT"
 FILTERED_CHANNEL_ENDPOINT="tcp://127.0.0.1:$FILTERED_CHANNEL_PORT"
 SPOT_ROUTER_ENDPOINT="tcp://127.0.0.1:$SPOT_ROUTER_PORT"
 SPOT_PUB_ENDPOINT="tcp://127.0.0.1:$SPOT_PUB_PORT"
 SPOT_B_ROUTER_ENDPOINT="tcp://127.0.0.1:$SPOT_B_ROUTER_PORT"
 SPOT_B_PUB_ENDPOINT="tcp://127.0.0.1:$SPOT_B_PUB_PORT"
+SPOT_C_ROUTER_ENDPOINT="tcp://127.0.0.1:$SPOT_C_ROUTER_PORT"
+SPOT_C_PUB_ENDPOINT="tcp://127.0.0.1:$SPOT_C_PUB_PORT"
 
 pids=()
 cleanup() {
@@ -194,13 +202,15 @@ start_service svc-a "$SERVICE_PROJECT" \
   --redis-key-prefix "$REDIS_KEY_PREFIX" \
   --channel-endpoint "$CHANNEL_ENDPOINT" \
   --spot-router-endpoint "$SPOT_ROUTER_ENDPOINT" \
-  --spot-pub-endpoint "$SPOT_PUB_ENDPOINT" \
-  --evidence-file "$LOG_DIR/svc-a.evidence.log" \
-  --log-dir "$LOG_DIR"
+    --spot-pub-endpoint "$SPOT_PUB_ENDPOINT" \
+    --evidence-file "$LOG_DIR/svc-a.evidence.log" \
+    --log-dir "$LOG_DIR" \
+    --subject-spot-type "$([[ "$SCENARIO" == "MON-B1" ]] && echo "monitor.subject.svc-a" || echo "monitoring-subject")" \
+    $([[ "$SCENARIO" == "MON-B1" || "$SCENARIO" == "MON-B2" || "$SCENARIO" == "MON-C1" ]] && echo "--spot-limit 2")
 wait_health "$SVC_URL" svc-a
 
 SERVICE_B_PID=0
-if [[ "$SCENARIO" != "MON-A1" && "$SCENARIO" != "MON-A2" && "$SCENARIO" != "MON-D1A" ]]; then
+if [[ "$SCENARIO" != "MON-A1" && "$SCENARIO" != "MON-A2" && "$SCENARIO" != "MON-A6" && "$SCENARIO" != "MON-B2" && "$SCENARIO" != "MON-D1A" ]]; then
   start_service svc-b "$SERVICE_PROJECT" \
     --rid svc-b \
     --http-url "$SVC_B_URL" \
@@ -210,9 +220,30 @@ if [[ "$SCENARIO" != "MON-A1" && "$SCENARIO" != "MON-A2" && "$SCENARIO" != "MON-
     --spot-router-endpoint "$SPOT_B_ROUTER_ENDPOINT" \
     --spot-pub-endpoint "$SPOT_B_PUB_ENDPOINT" \
     --evidence-file "$LOG_DIR/svc-b.evidence.log" \
-    --log-dir "$LOG_DIR"
+    --log-dir "$LOG_DIR" \
+    --subject-spot-type "$([[ "$SCENARIO" == "MON-B1" ]] && echo "monitor.subject.svc-b" || echo "monitoring-subject")" \
+    $([[ "$SCENARIO" == "MON-B1" || "$SCENARIO" == "MON-C1" ]] && echo "--spot-limit 2") \
+    $([[ "$SCENARIO" == "MON-B1" ]] && echo "--application-hwm-bytes 128")
   SERVICE_B_PID="${pids[-1]}"
   wait_health "$SVC_B_URL" svc-b
+fi
+
+SERVICE_C_PID=0
+if [[ "$SCENARIO" == "MON-B1" ]]; then
+  start_service svc-c "$SERVICE_PROJECT" \
+    --rid svc-c \
+    --http-url "$SVC_C_URL" \
+    --redis-endpoint "$REDIS_ENDPOINT" \
+    --redis-key-prefix "$REDIS_KEY_PREFIX" \
+    --channel-endpoint "$CHANNEL_C_ENDPOINT" \
+    --spot-router-endpoint "$SPOT_C_ROUTER_ENDPOINT" \
+    --spot-pub-endpoint "$SPOT_C_PUB_ENDPOINT" \
+    --evidence-file "$LOG_DIR/svc-c.evidence.log" \
+    --log-dir "$LOG_DIR" \
+    --subject-spot-type "monitor.subject.svc-c" \
+    --spot-limit 2
+  SERVICE_C_PID="${pids[-1]}"
+  wait_health "$SVC_C_URL" svc-c
 fi
 
 start_service svc-filtered "$FILTERED_SERVICE_PROJECT" \
@@ -243,6 +274,10 @@ python3 "$ROOT_DIR/../write_role_config.py" "$CONFIG_DIR/client.json" -- \
   --service-b-channel-endpoint "$CHANNEL_B_ENDPOINT" \
   --service-b-spot-router-endpoint "$SPOT_B_ROUTER_ENDPOINT" \
   --service-b-spot-pub-endpoint "$SPOT_B_PUB_ENDPOINT" \
+  --service-c-url "$SVC_C_URL" \
+  --service-c-channel-endpoint "$CHANNEL_C_ENDPOINT" \
+  --service-c-spot-router-endpoint "$SPOT_C_ROUTER_ENDPOINT" \
+  --service-c-spot-pub-endpoint "$SPOT_C_PUB_ENDPOINT" \
   --filtered-service-url "$FILTERED_URL" \
   --filtered-channel-endpoint "$FILTERED_CHANNEL_ENDPOINT" \
   --throw-service-url "$THROW_URL" \

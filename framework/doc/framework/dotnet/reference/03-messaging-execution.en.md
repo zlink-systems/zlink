@@ -4,7 +4,7 @@
 
 This category covers the entry points `IZLinkRouteClient` and `IZLinkFanoutClient` provide. The
 exact signatures are owned by the
-[Channel messaging exact interface](../../common/spec/server/languages/dotnet/interfaces/04-channel-messaging.ko.md)
+[Channel messaging exact interface](../../common/spec/server/languages/dotnet/interfaces/04-channel-messaging.en.md)
 (Korean-only). This document does not repeat that signature — it collects only what is needed to
 complete a call to each entry point in practice.
 
@@ -189,6 +189,6 @@ These apply in common to every entry point in this category and are not repeated
   (`NotFound`/`Unavailable`/`DeadlineExceeded`/`ShuttingDown`).
 
 The full basis is the
-[Channel messaging exact interface](../../common/spec/server/languages/dotnet/interfaces/04-channel-messaging.ko.md) and the
-[Common runtime exact interface](../../common/spec/server/languages/dotnet/interfaces/01-common-runtime.ko.md)
+[Channel messaging exact interface](../../common/spec/server/languages/dotnet/interfaces/04-channel-messaging.en.md) and the
+[Common runtime exact interface](../../common/spec/server/languages/dotnet/interfaces/01-common-runtime.en.md)
 (both Korean-only).

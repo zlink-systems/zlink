@@ -765,6 +765,7 @@ bool verify_runtime_observation_loss_and_terminal_retention ()
           }
           changed.notify_all ();
       });
+    observer->start ();
     observer->enqueue (probe_status_t{1});
     {
         std::unique_lock lock (gate);
@@ -815,6 +816,7 @@ bool verify_runtime_observation_loss_and_terminal_retention ()
           }
           terminal_changed.notify_all ();
       });
+    terminal_observer->start ();
     terminal_observer->enqueue (probe_status_t{10});
     {
         std::unique_lock lock (terminal_gate);

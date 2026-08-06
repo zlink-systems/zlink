@@ -2058,57 +2058,66 @@ task_t<void> entry_spot_context_t::destroy_actor_erased (const actor_ref_t &acto
         }
         return task_t<void> (result_t<void>::success ());
     }
-    std::lock_guard<std::recursive_mutex> node_lock (_state->node->mutex);
-    if (actor.node_rid ().empty () || actor.node_rid ().value () != _state->node_rid.value ()) {
-        return task_t<void> (result_t<void>::failure (framework_error_kind_t::not_found,
-                                                      "actor is not owned by this Entry SPOT"));
-    }
-
+    std::function<result_t<void> (const actor_ref_t &)> destroy_registry;
     const auto key = std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (actor)) + ":" + std::string (actor.actor_id ().value ());
-    const auto found_location = _state->node->actor_spot_ids.find (key);
-    if (found_location != _state->node->actor_spot_ids.end ()
-        && found_location->second != _state->spot_id) {
-        return task_t<void> (
-          result_t<void>::failure (framework_error_kind_t::not_found,
-                                   "actor must leave its current SPOT before destroy"));
+    {
+        std::lock_guard<std::recursive_mutex> node_lock (_state->node->mutex);
+        if (actor.node_rid ().empty () || actor.node_rid ().value () != _state->node_rid.value ()) {
+            return task_t<void> (result_t<void>::failure (framework_error_kind_t::not_found,
+                                                          "actor is not owned by this Entry SPOT"));
+        }
+
+        const auto found_location = _state->node->actor_spot_ids.find (key);
+        if (found_location != _state->node->actor_spot_ids.end ()
+            && found_location->second != _state->spot_id) {
+            return task_t<void> (
+              result_t<void>::failure (framework_error_kind_t::not_found,
+                                       "actor must leave its current SPOT before destroy"));
+        }
+
+        const auto found_generation = _state->node->actor_generations.find (key);
+        if (found_generation != _state->node->actor_generations.end ()
+            && found_generation->second != actor.object_generation ()) {
+            return task_t<void> (result_t<void>::success ());
+        }
+        if (_state->node->destroying_actors.contains (key)) {
+            return task_t<void> (result_t<void>::success ());
+        }
+
+        if (found_location != _state->node->actor_spot_ids.end ()) {
+            _state->node->destroying_actors.insert (key);
+            release_actor_location (*_state->node, actor);
+            erase_actor_route_unlocked (*_state->node, key);
+            _state->node->actor_created_keys.erase (key);
+            _state->node->destroyed_actor_keys.insert (key);
+            _state->node->actor_instances.erase (key);
+            detail::erase_actor_instance_index_unlocked (*_state->node, ::zlink::framework::detail::actor_ref_access_t::actor_type (actor),
+                                                         actor.actor_id ().value ());
+            _state->node->actor_mailboxes.erase (key);
+            (void) _state->node->dispatched_request_replies.erase_if (
+              [&] (const auto &request_key) {
+                  return request_key.starts_with (actor_request_dedup_prefix (key));
+              });
+            decrement_actor_count_unlocked (*_state);
+            destroy_registry = _state->node->destroy_actor_registry;
+        }
     }
 
-    const auto found_generation = _state->node->actor_generations.find (key);
-    if (found_generation != _state->node->actor_generations.end ()
-        && found_generation->second != actor.object_generation ()) {
-        return task_t<void> (result_t<void>::success ());
-    }
-    if (_state->node->destroying_actors.contains (key)) {
-        return task_t<void> (result_t<void>::success ());
-    }
-
-    if (found_location != _state->node->actor_spot_ids.end ()) {
-        _state->node->destroying_actors.insert (key);
-        release_actor_location (*_state->node, actor);
-        erase_actor_route_unlocked (*_state->node, key);
-        _state->node->actor_created_keys.erase (key);
-        _state->node->destroyed_actor_keys.insert (key);
-        _state->node->actor_instances.erase (key);
-        detail::erase_actor_instance_index_unlocked (*_state->node, ::zlink::framework::detail::actor_ref_access_t::actor_type (actor),
-                                                     actor.actor_id ().value ());
-        _state->node->actor_mailboxes.erase (key);
-        (void) _state->node->dispatched_request_replies.erase_if (
-          [&] (const auto &request_key) {
-              return request_key.starts_with (actor_request_dedup_prefix (key));
-          });
-        decrement_actor_count_unlocked (*_state);
-        if (_state->node->destroy_actor_registry) {
-            auto cleanup = _state->node->destroy_actor_registry (actor);
-            _state->node->destroying_actors.erase (key);
-            if (!cleanup) {
-                const auto *error = cleanup.error ();
-                return task_t<void> (result_t<void>::failure (
-                  cleanup.error_kind (),
-                  error != nullptr ? error->what () : "actor registry cleanup failed"));
-            }
-        } else {
+    if (destroy_registry) {
+        auto cleanup = destroy_registry (actor);
+        {
+            std::lock_guard<std::recursive_mutex> node_lock (_state->node->mutex);
             _state->node->destroying_actors.erase (key);
         }
+        if (!cleanup) {
+            const auto *error = cleanup.error ();
+            return task_t<void> (result_t<void>::failure (
+              cleanup.error_kind (),
+              error != nullptr ? error->what () : "actor registry cleanup failed"));
+        }
+    } else {
+        std::lock_guard<std::recursive_mutex> node_lock (_state->node->mutex);
+        _state->node->destroying_actors.erase (key);
     }
 
     return task_t<void> (result_t<void>::success ());

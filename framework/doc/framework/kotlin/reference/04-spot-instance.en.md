@@ -3,7 +3,7 @@
 [Reference index](README.en.md)
 
 Completion kinds, capacity/timeout rules, and relocation ordering are exactly the same as
-[Java reference 04. Spot instance](../../java/reference/04-spot-instance.ko.md) (Korean-only).
+[Java reference 04. Spot instance](../../java/reference/04-spot-instance.en.md) (Korean-only).
 What Kotlin adds is a suspending lifecycle base class family (`ZLinkSuspendingSpot`) and
 `ZLinkKotlinSpotManager`/`ZLinkKotlinRouteClient` extensions that wrap the same fluent state in
 coroutines. The exact signatures are owned by the
@@ -111,7 +111,7 @@ Publishes a typed event to subscribers by ChannelName and topic. Uses Java's
 `ZLinkSpotPublisherClient`/`ZLinkSpotOutbound.publish(...)` directly and calls
 `ZLinkPublishCall`'s `submit()` — there is no separate Kotlin-only coroutine wrapper. The
 completion rules are the same as the
-[`publish` entry in the Java reference's document 04](../../java/reference/04-spot-instance.ko.md)
+[`publish` entry in the Java reference's document 04](../../java/reference/04-spot-instance.en.md)
 (Korean-only).
 
 ---
@@ -164,12 +164,12 @@ Calls the same-named methods of Java's `ZLinkSpotContext`/`ZLinkEntrySpotContext
 with `.await()` if needed). `relocationReady().defer()` is also identical to Java, and
 `onRelocationReadyCompletedSuspending(...)` receives the completion. The completion rules are the
 same as the corresponding entry in
-[the Java reference's document 04](../../java/reference/04-spot-instance.ko.md) (Korean-only).
+[the Java reference's document 04](../../java/reference/04-spot-instance.en.md) (Korean-only).
 
 ---
 
 See the
 [Kotlin Spot exact interface](../../common/spec/server/languages/kotlin/interfaces/spots.en.md)
 and
-[Java reference 04. Spot instance](../../java/reference/04-spot-instance.ko.md) (Korean-only)
+[Java reference 04. Spot instance](../../java/reference/04-spot-instance.en.md) (Korean-only)
 for the full rationale.

@@ -1,4 +1,5 @@
 using Zlink.Framework.Contracts.Actors;
+using Zlink.Framework.Contracts.Errors;
 using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.Contracts.Spots;
 using ZoneWorld.Server.Configuration;
@@ -27,6 +28,9 @@ internal sealed class ZoneNodeBootstrap(
     ZoneNodeSettings settings,
     ILogger<ZoneNodeBootstrap> logger) : IHostedService
 {
+    private const int StartupRetryAttempts = 120;
+    private static readonly TimeSpan StartupRetryDelay = TimeSpan.FromMilliseconds(250);
+
     public async Task StartAsync(CancellationToken cancellationToken)
     {
         await RestoreMaintenanceAsync(cancellationToken);
@@ -74,6 +78,26 @@ internal sealed class ZoneNodeBootstrap(
     }
 
     private async Task SpawnBotAsync(BotRoute route, CancellationToken cancellationToken)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                await SpawnBotCoreAsync(route, cancellationToken);
+                return;
+            }
+            catch (ZLinkFrameworkException exception)
+                when (exception.Kind == ZLinkFrameworkErrorKind.Unavailable
+                      && attempt + 1 < StartupRetryAttempts)
+            {
+                await Task.Delay(StartupRetryDelay, cancellationToken);
+            }
+        }
+    }
+
+    private async Task SpawnBotCoreAsync(
+        BotRoute route,
+        CancellationToken cancellationToken)
     {
         // A bot outlives the node that first requested it. GetOrCreate resolves the global
         // ActorId and joins a concurrent claim instead of doing a separate check-before-create.

@@ -19,18 +19,17 @@ internal static class MonC1DispatchFailureScenario
         await serviceA.Post(
                 $"/runtime/observer/start/{RuntimeMonitoringNames.SpotChannel}")
             .Async<ObserverIsolationStatusRes>();
-        await serviceA.Post("/admin/application-gate/reset").Async<object>();
-        await serviceB.Post("/admin/spot-weight/exclude").Async<object>();
+        await serviceB.Post("/admin/application-gate/reset").Async<object>();
 
         var evidenceBaseline =
-            (await serviceA.Get("/evidence").Async<string[]>()).Body.Length;
+            (await serviceB.Get("/evidence").Async<string[]>()).Body.Length;
         var blockedRequest = serviceA.Post("/spot/profile/request")
             .Body(new ProfileReq("application-gate", "mon-c1-gated"))
             .Timeout(TimeSpan.FromSeconds(30))
             .Async<ProfileRes>();
-        await serviceA.Post("/evidence/wait")
+        await serviceB.Post("/evidence/wait")
             .Body(new EvidenceWaitReq(
-                ["application-gate-enter|rid=svc-a|marker=mon-c1-gated"],
+                ["application-gate-enter|rid=svc-b|marker=mon-c1-gated"],
                 [],
                 TimeoutMilliseconds: 3000,
                 AfterIndex: evidenceBaseline))
@@ -46,13 +45,12 @@ internal static class MonC1DispatchFailureScenario
             !blockedRequest.IsCompleted,
             "MON-C1 application gate did not hold the request handler.");
 
-        await serviceB.Post("/admin/spot-weight/include").Async<object>();
-        await serviceA.Post("/admin/spot-weight/exclude").Async<object>();
+        await serviceB.Post("/admin/spot-weight/exclude").Async<object>();
         var terminalReply = (await serviceB.Post("/spot/profile/request")
             .Body(new ProfileReq("parallel", "mon-c1-terminal"))
             .Async<ProfileRes>()).Body;
         ZlinkStreamAssert.Ensure(
-            terminalReply.ProviderRid == "svc-b"
+            terminalReply.ProviderRid == "svc-a"
             && terminalReply.Marker == "mon-c1-terminal",
             "MON-C1 separate request did not complete while the application gate was held.");
         ZlinkStreamAssert.Ensure(
@@ -110,10 +108,10 @@ internal static class MonC1DispatchFailureScenario
                 channel.ChannelName == RuntimeMonitoringNames.SpotChannel),
             "MON-C1 snapshot resync did not retain the latest channel state.");
 
-        await serviceA.Post("/admin/application-gate/release").Async<object>();
+        await serviceB.Post("/admin/application-gate/release").Async<object>();
         var gatedReply = (await blockedRequest).Body;
         ZlinkStreamAssert.Ensure(
-            gatedReply.ProviderRid == "svc-a"
+            gatedReply.ProviderRid == "svc-b"
             && gatedReply.Marker == "mon-c1-gated",
             "MON-C1 gated request did not complete after release.");
 
@@ -124,7 +122,7 @@ internal static class MonC1DispatchFailureScenario
             followUp.Value == "profile:recovery",
             "MON-C1 messaging stopped after the observer consumer failure.");
 
-        await serviceA.Post("/admin/spot-weight/include").Async<object>();
+        await serviceB.Post("/admin/spot-weight/include").Async<object>();
         Console.WriteLine("scenario MON-C1 passed");
     }
 

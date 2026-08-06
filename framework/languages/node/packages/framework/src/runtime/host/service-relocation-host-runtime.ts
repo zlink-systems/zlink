@@ -3758,7 +3758,8 @@ function relocationTargetSupports(
   descriptor: ZLinkMeshNodeDescriptor,
   requirements: readonly RelocationTargetRequirement[]
 ): boolean {
-  if (descriptor.activationConcurrency.active >= descriptor.activationConcurrency.limit) {
+  if (descriptor.activationConcurrency.limit !== 0
+      && descriptor.activationConcurrency.active >= descriptor.activationConcurrency.limit) {
     return false;
   }
   const actorCount = requirements
@@ -3767,12 +3768,14 @@ function relocationTargetSupports(
   const spotCount = requirements
     .filter(value => value.objectKind !== 'actor')
     .reduce((sum, value) => sum + value.count, 0);
-  if (descriptor.populationCapacity.actors.active
+  if ((descriptor.populationCapacity.actors.limit !== 0
+      && descriptor.populationCapacity.actors.active
       + descriptor.populationCapacity.actors.reserved
       + actorCount > descriptor.populationCapacity.actors.limit
-    || descriptor.populationCapacity.spots.active
+    ) || (descriptor.populationCapacity.spots.limit !== 0
+      && descriptor.populationCapacity.spots.active
       + descriptor.populationCapacity.spots.reserved
-      + spotCount > descriptor.populationCapacity.spots.limit) {
+      + spotCount > descriptor.populationCapacity.spots.limit)) {
     return false;
   }
   for (const requirement of requirements) {
@@ -3787,7 +3790,8 @@ function relocationTargetSupports(
         value.objectKind === requirement.objectKind
         && value.stableType === requirement.stableType);
       if (capacity === undefined
-        || capacity.active + capacity.reserved + requirement.count > capacity.limit) {
+        || (capacity.limit !== 0
+          && capacity.active + capacity.reserved + requirement.count > capacity.limit)) {
         return false;
       }
     }

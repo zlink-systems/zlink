@@ -1,6 +1,6 @@
 # Per-Language Representation Of The Common Samples
 
-[Common Samples](../README.ko.md)
+[Common Samples](../README.en.md)
 
 The common samples' server roles, message names, DTO fields, state transitions, and verification
 criteria are defined by each scenario document. The C++, .NET, Java, Kotlin, and Node.js

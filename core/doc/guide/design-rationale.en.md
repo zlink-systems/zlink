@@ -1,4 +1,4 @@
-[한국어](design-rationale.ko.md)
+[한국어](design-rationale.en.md)
 
 # Design Rationale — Why It Was Built This Way
 
@@ -70,7 +70,7 @@ Context owns — keep a callback short, don't hold a lock inside it, and
 don't close a handle from inside it. Multiple sockets are grouped under one
 loop with a poller (the concept is in [02 Core API](02-core-api.en.md); the
 per-language surface is in each
-[binding guide](../../../bindings/doc/guide/README.ko.md)).
+[binding guide](../../../bindings/doc/guide/README.en.md)).
 
 ### Protocol Agnostic — Separating Transport From Protocol
 

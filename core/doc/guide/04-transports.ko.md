@@ -2,7 +2,7 @@
 title: "Transport 가이드"
 ---
 
-[English](04-transports.en.md)
+[English](04-transports.ko.md)
 
 <!-- zlink-nav:start -->
 [가이드 목록](README.ko.md) | [이전: 프록시 패턴](03-6-proxy.ko.md) | [다음: TLS와 WSS](05-tls-security.ko.md)

@@ -46,8 +46,9 @@ internal static class ServiceHostFactory
             //  This E2E host is not started inside a memory-limited
             //  container. Supply a deterministic finite limit so the
             //  default Auto HWM contract does not depend on the host.
-            framework.ConfigureInboundDispatch().ProcessMemoryLimitBytes =
-                1UL * 1024 * 1024 * 1024;
+            var inboundDispatch = framework.ConfigureInboundDispatch();
+            inboundDispatch.ProcessMemoryLimitBytes = 1UL * 1024 * 1024 * 1024;
+            inboundDispatch.ApplicationHwmBytes = options.ApplicationHwmBytes;
             if (!string.IsNullOrWhiteSpace(options.RedisEndpoint))
             {
                 var redisConfiguration = ConfigurationOptions.Parse(options.RedisEndpoint);
@@ -69,7 +70,9 @@ internal static class ServiceHostFactory
             channelMesh.Channel(RuntimeMonitoringNames.Channel).Server()
                 .AddRequestHandler<ProfileRequestHandler, ProfileReq, ProfileRes>("ProfileReq");
 
-            var spotMesh = framework.AddRouteMesh(RuntimeMonitoringNames.SpotChannel);
+            var spotMesh = framework.AddRouteMesh(RuntimeMonitoringNames.SpotChannel)
+                .SetActorLimit(1)
+                .SetSpotLimit(options.SpotLimit);
             spotMesh.Channel(RuntimeMonitoringNames.SpotChannel).Server()
                 .AddRequestHandler<
                     ProfileRequestHandler,
@@ -79,10 +82,14 @@ internal static class ServiceHostFactory
                 .SetRoutingIdPrefix(options.Rid);
             spotMesh.Objects().Server()
                 .AddEntrySpot<MonitoringEntrySpot>()
+                .AddActorFactory<MonitoringActor, MonitoringActorFactory>(
+                    RuntimeMonitoringNames.ActorType,
+                    factory => factory.DisableRelocation())
                 .AddSpotFactory<MonitoringSubjectSpot>(
-                    RuntimeMonitoringNames.SubjectSpotType, factory => factory.DisableRelocation());
+                    options.SubjectSpotType, factory => factory.DisableRelocation());
             var spotRouter = spotMesh.ConfigureRouterSocket();
-            spotRouter.SendHighWaterMark = 1;
+            spotRouter.MaxMessageSize = 4096;
+            spotRouter.SendHighWaterMark = 4096;
             spotRouter.SendTimeout = TimeSpan.FromMilliseconds(250);
             spotRouter.MailboxMessageBudget = 1;
             spotRouter.MailboxByteBudget = 2 * 1024 * 1024;
@@ -101,6 +108,21 @@ internal static class ServiceHostFactory
             string meshName,
             [FromServices] IZLinkRouteMeshRuntime runtime) =>
             Results.Ok(Project(runtime.GetStatus(meshName))));
+        app.MapGet("/runtime/host/status", (
+            [FromServices] IZLinkFrameworkRuntime runtime) =>
+        {
+            var status = runtime.Status;
+            return Results.Ok(new HostRuntimeSnapshotRes(
+                status.State.ToString(),
+                status.IsReady,
+                status.AcceptingWork,
+                status.Sequence,
+                status.InboundDispatch.ApplicationHwmBytes,
+                status.InboundDispatch.PendingPayloadBytes,
+                status.InboundDispatch.QueuedPayloadBytes,
+                status.InboundDispatch.ActivePayloadBytes,
+                status.InboundDispatch.ApplicationReceivePaused));
+        });
         app.MapPost("/runtime/observer/start/{meshName}", (
             string meshName,
             [FromServices] ObserverIsolationProbe probe) =>
@@ -212,7 +234,7 @@ internal static class ServiceHostFactory
         {
             await spots.GetOrCreate(
                     "monitor-subject",
-                    RuntimeMonitoringNames.SubjectSpotType)
+                    options.SubjectSpotType)
                 .InMesh(RuntimeMonitoringNames.SpotChannel)
                 .Async(cancellationToken);
             return Results.Ok(new { status = "created" });
@@ -224,7 +246,7 @@ internal static class ServiceHostFactory
         {
             await spots.GetOrCreate(
                     spotRid,
-                    RuntimeMonitoringNames.SubjectSpotType)
+                    options.SubjectSpotType)
                 .InMesh(RuntimeMonitoringNames.SpotChannel)
                 .Async(cancellationToken);
             return Results.Ok(new { status = "created", spotRid });
@@ -250,6 +272,40 @@ internal static class ServiceHostFactory
             {
                 status = closed ? "closed" : "not-found",
                 spotRid
+            });
+        });
+        app.MapPost("/admin/actor/create/{actorId}", async (
+            string actorId,
+            [FromServices] IZLinkActorManager actors,
+            CancellationToken cancellationToken) =>
+        {
+            var result = await actors.Create(actorId, RuntimeMonitoringNames.ActorType)
+                .InMesh(RuntimeMonitoringNames.SpotChannel)
+                .Async(cancellationToken);
+            return Results.Ok(new
+            {
+                status = result switch
+                {
+                    ZLinkActorCreateResult.Created => "created",
+                    ZLinkActorCreateResult.Existing => "existing",
+                    ZLinkActorCreateResult.Rejected => "rejected",
+                    _ => "unknown"
+                },
+                actorId
+            });
+        });
+        app.MapPost("/admin/actor/close/{actorId}", async (
+            string actorId,
+            [FromServices] IZLinkActorManager actors,
+            CancellationToken cancellationToken) =>
+        {
+            var actor = await actors.FindAsync(actorId, cancellationToken);
+            var closed = actor is not null
+                         && await actors.DestroyAsync(actor.Value, cancellationToken);
+            return Results.Ok(new
+            {
+                status = closed ? "closed" : "not-found",
+                actorId
             });
         });
         app.MapPost("/admin/weight/exclude", (

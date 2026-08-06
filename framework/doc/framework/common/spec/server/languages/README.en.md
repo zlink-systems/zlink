@@ -18,11 +18,11 @@ contract follows
 
 | Language | Public contract |
 |------|-----------|
-| `.NET` | [dotnet](dotnet/README.ko.md) |
-| Java | [java](java/README.ko.md) |
-| Kotlin | [kotlin](kotlin/README.ko.md) |
-| Node.js framework | [node](node/README.ko.md) |
-| C++ | [cpp](cpp/README.ko.md) |
+| `.NET` | [dotnet](dotnet/README.en.md) |
+| Java | [java](java/README.en.md) |
+| Kotlin | [kotlin](kotlin/README.en.md) |
+| Node.js framework | [node](node/README.en.md) |
+| C++ | [cpp](cpp/README.en.md) |
 
 The per-language specs aren't documents that copy each other's
 signatures. They each fix the same common behavior as a public contract

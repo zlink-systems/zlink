@@ -1,6 +1,6 @@
 # ZLink C++ Framework Samples
 
-C++ 샘플은 10.0.0 framework의 공개 API로 여러 서버 역할을 구성하는 방법을 보여 준다. 업무 흐름과
+C++ 샘플은 0.10.0 framework의 공개 API로 여러 서버 역할을 구성하는 방법을 보여 준다. 업무 흐름과
 검증 기준은 [공통 sample 문서](../../../doc/framework/common/sample/README.ko.md)를 따르며, C++ 코드는
 runtime reflection 대신 compile-time 타입으로 handler를 등록한다.
 
@@ -39,7 +39,8 @@ Linux 또는 WSL에서 샘플 하나를 실행하려면 해당 runner를 호출�
 ./framework/languages/cpp/samples/Bingo/run_sample.sh
 ```
 
-지원하는 여섯 샘플을 순서대로 실행하려면 통합 runner를 사용한다.
+현재 C++ 지원 범위인 여섯 샘플을 순서대로 실행하려면 통합 runner를 사용한다. 공통 sample의
+ZoneWorld는 현재 .NET과 Node.js만 지원하며 C++ sample 계약에는 포함되지 않는다.
 
 ```bash
 ./framework/languages/cpp/samples/run_samples.sh

@@ -14,9 +14,13 @@ public final class MonA6PlacementScenario {
         String baseUrl = context.serviceEndpoint();
         Contracts.RuntimeSnapshot baseline = context.awaitRuntimeSnapshot(
             baseUrl,
-            MonitoringScenarioContext::routeMeshTargetReady,
-            "MON-A6 RouteMesh did not become ready");
+            snapshot -> MonitoringScenarioContext.routeMeshTargetReady(snapshot)
+                && snapshot.placementAvailable(),
+            "MON-A6 RouteMesh placement did not become ready");
         int baselineSpots = baseline.activeSpotCount();
+        MonitoringScenarioContext.ensure(
+            baselineSpots == 0,
+            "MON-A6 fixture bootstrap Spot was not disabled: baseline=" + baselineSpots);
 
         RawHttpResponse firstSpot = raw(
             baseUrl,
@@ -34,15 +38,24 @@ public final class MonA6PlacementScenario {
             baseUrl,
             "/runtime/placement/spot/create?id=mon-a6-placement-overflow");
         MonitoringScenarioContext.ensure(
-            secondSpot.status() == 409 && secondSpot.body().contains("CAPACITY_EXCEEDED"),
-            "MON-A6 second Spot did not expose CAPACITY_EXCEEDED: "
+            secondSpot.status() == 200 && secondSpot.body().contains("\"accepted\":true"),
+            "MON-A6 second Spot was rejected before reaching the configured limit: "
                 + secondSpot.status() + ": " + secondSpot.body());
-        Contracts.RuntimeSnapshot unavailable = context.awaitRuntimeSnapshot(
+        context.awaitRuntimeSnapshot(
             baseUrl,
-            snapshot -> !snapshot.placementAvailable()
-                && "CAPACITY_EXCEEDED".equals(snapshot.placementUnavailableReason()),
-            "MON-A6 placement did not expose the capacity reason");
+            snapshot -> snapshot.activeSpotCount() == baselineSpots + 2,
+            "MON-A6 placement snapshot did not count both Spots at the limit");
 
+        RawHttpResponse spotOverflow = raw(
+            baseUrl,
+            "/runtime/placement/spot/create?id=mon-a6-placement-overflow-2");
+        MonitoringScenarioContext.ensure(
+            spotOverflow.status() == 409 && spotOverflow.body().contains("CAPACITY_EXCEEDED"),
+            "MON-A6 Spot over limit did not expose CAPACITY_EXCEEDED: "
+                + spotOverflow.status() + ": " + spotOverflow.body());
+
+        // Config-7 defines placement as unavailable only after both the Actor
+        // and Spot capacity limits are full.
         RawHttpResponse actor = raw(
             baseUrl,
             "/runtime/placement/actor/create?id=mon-a6-placement-actor");
@@ -62,6 +75,27 @@ public final class MonA6PlacementScenario {
             "MON-A6 second actor did not expose CAPACITY_EXCEEDED: "
                 + actorOverflow.status() + ": " + actorOverflow.body());
 
+        Contracts.RuntimeSnapshot unavailable = context.awaitRuntimeSnapshot(
+            baseUrl,
+            snapshot -> !snapshot.placementAvailable()
+                && "CAPACITY_EXCEEDED".equals(snapshot.placementUnavailableReason()),
+            "MON-A6 placement did not expose the capacity reason");
+
+        RawHttpResponse closedAtLimit = raw(
+            baseUrl,
+            "/runtime/placement/spot/close?id=mon-a6-placement-spot");
+        MonitoringScenarioContext.ensure(
+            closedAtLimit.status() == 200 && closedAtLimit.body().contains("\"accepted\":true"),
+            "MON-A6 Spot close did not return public success: "
+                + closedAtLimit.status() + ": " + closedAtLimit.body());
+        context.awaitRuntimeSnapshot(
+            baseUrl,
+            snapshot -> snapshot.activeSpotCount() == baselineSpots + 1
+                && !snapshot.placementAvailable()
+                && "CAPACITY_EXCEEDED".equals(
+                    snapshot.placementUnavailableReason()),
+            "MON-A6 placement availability did not retain the full Actor limit");
+
         RawHttpResponse destroyed = raw(
             baseUrl,
             "/runtime/placement/actor/destroy?id=mon-a6-placement-actor");
@@ -71,8 +105,9 @@ public final class MonA6PlacementScenario {
                 + destroyed.status() + ": " + destroyed.body());
         context.awaitRuntimeSnapshot(
             baseUrl,
-            snapshot -> snapshot.activeActorCount() == 0,
-            "MON-A6 actor capacity was not released after destroy");
+            snapshot -> snapshot.activeActorCount() == 0
+                && snapshot.placementAvailable(),
+            "MON-A6 placement did not recover after freeing both capacities");
 
         RawHttpResponse replacement = raw(
             baseUrl,
@@ -85,16 +120,37 @@ public final class MonA6PlacementScenario {
             baseUrl,
             snapshot -> snapshot.activeSpotCount() == baselineSpots + 2,
             "MON-A6 replacement Spot was not counted after capacity recovery");
+
+        RawHttpResponse actorReplacement = raw(
+            baseUrl,
+            "/runtime/placement/actor/create?id=mon-a6-placement-actor-replacement");
+        MonitoringScenarioContext.ensure(
+            actorReplacement.status() == 200 && actorReplacement.body().contains("\"accepted\":true"),
+            "MON-A6 replacement Actor was rejected after capacity recovery: "
+                + actorReplacement.status() + ": " + actorReplacement.body());
+        context.awaitRuntimeSnapshot(
+            baseUrl,
+            snapshot -> snapshot.activeActorCount() == 1,
+            "MON-A6 replacement Actor was not counted after capacity recovery");
+        RawHttpResponse actorReplacementDestroyed = raw(
+            baseUrl,
+            "/runtime/placement/actor/destroy?id=mon-a6-placement-actor-replacement");
+        MonitoringScenarioContext.ensure(
+            actorReplacementDestroyed.status() == 200
+                && actorReplacementDestroyed.body().contains("\"destroyed\":true"),
+            "MON-A6 replacement Actor cleanup did not return public success: "
+                + actorReplacementDestroyed.status() + ": "
+                + actorReplacementDestroyed.body());
         RawHttpResponse closed = raw(
             baseUrl,
-            "/runtime/placement/spot/close?id=mon-a6-placement-spot");
+            "/runtime/placement/spot/close?id=mon-a6-placement-replacement");
         MonitoringScenarioContext.ensure(
             closed.status() == 200 && closed.body().contains("\"accepted\":true"),
-            "MON-A6 Spot close did not return public success: "
+            "MON-A6 replacement Spot close did not return public success: "
                 + closed.status() + ": " + closed.body());
 
         // Keep the fixture baseline for later scenarios in an all-suite run.
-        raw(baseUrl, "/runtime/placement/spot/close?id=mon-a6-placement-replacement");
+        raw(baseUrl, "/runtime/placement/spot/close?id=mon-a6-placement-overflow");
         context.awaitRuntimeSnapshot(
             baseUrl,
             snapshot -> snapshot.activeSpotCount() == baselineSpots
@@ -105,11 +161,19 @@ public final class MonA6PlacementScenario {
     }
 
     private static RawHttpResponse raw(String baseUrl, String path) {
-        return ZLinkHttpClient.create(baseUrl)
-            .timeout(Duration.ofSeconds(10))
-            .post(path)
-            .submitRaw()
-            .toCompletableFuture()
-            .join();
+        try {
+            return ZLinkHttpClient.create(baseUrl)
+                // The Framework operation has its own deadline; leave HTTP response
+                // time for the service to translate that terminal result.
+                .timeout(Duration.ofSeconds(20))
+                .post(path)
+                .submitRaw()
+                .toCompletableFuture()
+                .join();
+        } catch (RuntimeException error) {
+            throw new IllegalStateException(
+                "MON-A6 HTTP request failed: " + path,
+                error);
+        }
     }
 }

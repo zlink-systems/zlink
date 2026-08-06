@@ -364,6 +364,17 @@ void assert_captured_failure (zlink::http_client::client_t &caller,
                + " result=" + response.result);
 }
 
+void assert_captured_destroy_failure (zlink::http_client::client_t &caller,
+                                      const std::string &scenario,
+                                      const std::string &actor_id,
+                                      const std::string &expected_kind)
+{
+    const auto response = call (caller, "/destroy-captured", scenario, actor_id, "destroy");
+    require (response.error_kind == expected_kind,
+             scenario + " expected " + expected_kind + " got " + response.error_kind
+               + " result=" + response.result);
+}
+
 void control_route (zlink::http_client::client_t &control, const std::string &operation)
 {
     const auto response = control.post ("/route/" + operation)

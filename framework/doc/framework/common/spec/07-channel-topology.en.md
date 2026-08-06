@@ -730,7 +730,7 @@ make it impossible to distinguish which publisher's receive activity and
 timeout belong to which publisher.
 
 Fanout connection ready and liveness are defined by
-[Transport Liveness](29-transport-liveness.ko.md).
+[Transport Liveness](29-transport-liveness.en.md).
 
 ## 10. Verification Requirements
 

@@ -72,6 +72,13 @@ internal static class MonA4AvailabilityTransitionScenario
         ZLinkHttpClient observer)
     {
         var beforeCrash = await WaitForReadyPeerAsync(observer, "svc-b");
+        var oldRoutingId = beforeCrash.Peers.Single(peer =>
+            peer.Rid.StartsWith("svc-b-", StringComparison.Ordinal)
+            && peer.State == "Ready").Rid;
+        ZlinkStreamAssert.Ensure(
+            Channel(beforeCrash).IsReady
+            && Channel(beforeCrash).ReadyTargetCount == 1,
+            "MON-A4 crash precondition did not have exactly one ready target.");
         var evidenceBaseline = await EvidenceCountAsync(observer);
 
         using (var process = Process.GetProcessById(options.ServiceBProcessId))
@@ -82,27 +89,48 @@ internal static class MonA4AvailabilityTransitionScenario
 
         var unavailable = await WaitUntilNotReadyAsync(observer, "svc-b");
         ZlinkStreamAssert.Ensure(
-            unavailable.Sequence > beforeCrash.Sequence,
+            unavailable.Sequence > beforeCrash.Sequence
+            && Channel(unavailable).ReadyTargetCount == 0,
             "MON-A4 crash removal did not advance the status sequence.");
-
-        var started = Stopwatch.GetTimestamp();
-        var followUp = await observer.Post("/profile/request")
-            .Body(new ProfileReq("after-crash", "mon-a4-after-crash"))
-            .Async<ProfileRes>();
-        ZlinkStreamAssert.Ensure(
-            Stopwatch.GetElapsedTime(started) < TimeSpan.FromSeconds(3)
-            && followUp.Body.ProviderRid == "svc-a",
-            "MON-A4 follow-up request did not reach a bounded live provider.");
 
         await using var replacement = await EphemeralService.StartAsync(options, "svc-b");
         var restored = await WaitForReadyPeerAsync(observer, "svc-b");
+        var newRoutingId = restored.Peers.Single(peer =>
+            peer.Rid.StartsWith("svc-b-", StringComparison.Ordinal)
+            && peer.State == "Ready").Rid;
         ZlinkStreamAssert.Ensure(
             restored.Sequence > unavailable.Sequence
             && restored.Peers.Count(peer =>
                 peer.Rid.StartsWith("svc-b-", StringComparison.Ordinal)
                 && peer.State == "Ready") == 1
-            && Channel(restored).ReadyTargetCount >= 2,
+            && !string.Equals(oldRoutingId, newRoutingId, StringComparison.Ordinal)
+            && Channel(restored).IsReady
+            && Channel(restored).ReadyTargetCount == 1,
             "MON-A4 crash replacement did not restore the ready topology.");
+        var latest = await SnapshotAsync(observer);
+        ZlinkStreamAssert.Ensure(
+            latest.Sequence >= restored.Sequence
+            && latest.Peers.Any(peer =>
+                peer.Rid == newRoutingId && peer.State == "Ready")
+            && Channel(latest).IsReady
+            && Channel(latest).ReadyTargetCount == 1,
+            "MON-A4 crash replacement latest status did not match the ready snapshot.");
+        using var replacementClient = ZLinkHttpClient.Create(replacement.Url)
+            .Timeout(TimeSpan.FromSeconds(35))
+            .Build();
+        var replacementEvidenceBaseline = await EvidenceCountAsync(replacementClient);
+        var reply = await observer.Post("/profile/request")
+            .Body(new ProfileReq("after-crash", "mon-a4-after-crash"))
+            .Async<ProfileRes>();
+        ZlinkStreamAssert.Ensure(
+            string.Equals(reply.Body.ProviderRid, "svc-b", StringComparison.Ordinal),
+            "MON-A4 crash replacement request did not reach the replacement handler.");
+        var replacementEntries = (await replacementClient.Get("/evidence")
+                .Async<string[]>()).Body;
+        ZlinkStreamAssert.Ensure(
+            replacementEntries.Skip(replacementEvidenceBaseline).Count(line =>
+                line.Contains("mon-a4-after-crash", StringComparison.Ordinal)) == 1,
+            "MON-A4 replacement handler evidence was not unique.");
         await AssertPeerEventSequenceAsync(observer, evidenceBaseline, "svc-b");
     }
 
@@ -129,7 +157,9 @@ internal static class MonA4AvailabilityTransitionScenario
             var status = await SnapshotAsync(service);
             if (status.Peers.Any(peer =>
                     peer.Rid.StartsWith($"{rid}-", StringComparison.Ordinal)
-                    && peer.State == "Ready"))
+                    && peer.State == "Ready")
+                && Channel(status).IsReady
+                && Channel(status).ReadyTargetCount > 0)
                 return status;
             if (elapsed.Elapsed >= TimeSpan.FromSeconds(15))
                 throw new InvalidOperationException(

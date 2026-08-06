@@ -18,8 +18,8 @@ View in another language — [C#/.NET](../../../dotnet/guide/server/04-backpress
 # 4. Backpressure — When Arrival Outpaces Processing
 
 > **The documents that own this chapter's contract** — covered by the
-> [Async Execution Policy](../../../common/spec/05-async-execution-policy.ko.md) and the
-> [per-language topology public contract](../../../common/spec/server/languages/README.ko.md).
+> [Async Execution Policy](../../../common/spec/05-async-execution-policy.en.md) and the
+> [per-language topology public contract](../../../common/spec/server/languages/README.en.md).
 > This chapter explains that behavior as concepts and principles, and covers which options
 > affect it. Option defaults and when they can change are owned by the `16. Options`
 > chapter. Any part of the contract this chapter uses that isn't yet reflected in the
@@ -146,7 +146,7 @@ the send rate, and the HWM carries that effect all the way up to the application
 all the sender can know is the fact "I have no room" — it never gets the information "the
 peer is slow." `DeadlineExceeded` doesn't tell you the peer's status either, so to
 distinguish the cause, check the peer node's processing metrics together
-([12-operations](12-operations.ko.md) §1).
+([12-operations](12-operations.en.md) §1).
 
 ### 2.3 Lock And Release Thresholds
 
@@ -224,7 +224,7 @@ retrying, sending again immediately just piles the request back onto a queue tha
 drained yet and grows the congestion, so leave a gap between retries.
 
 Only that call waits during the wait — the execution thread handles other work
-([05-channel-messaging](05-channel-messaging.ko.md#비동기-실행)).
+([05-channel-messaging](05-channel-messaging.en.md#asynchronous-execution)).
 
 **There's one case that fails immediately instead of waiting until the ceiling.** When even
 the space that holds calls waiting for a slot is full. In that case, the payload isn't held
@@ -360,12 +360,12 @@ picks bytes from the connection-count bucket, the other multiplies the effective
 budget by a ratio. If no profile is specified, both use balanced.
 
 A STREAM socket uses a smaller value than this even at the same profile
-([09-stream](09-stream.ko.md)).
+([09-stream](09-stream.en.md)).
 
 Don't guess the computed result — read the value the monitor status provides. It gives the
 planned bytes, the actually applied bytes, bytes with a shrink held back, the current
 in-flight bytes, and the count and max size of a message let through over the ceiling,
-separately ([12-operations](12-operations.ko.md) §1).
+separately ([12-operations](12-operations.en.md) §1).
 
 ### 4.2 Setting An HWM Directly
 
@@ -509,7 +509,7 @@ genuinely happened. The metric to check alongside it is
 `zlink.mesh_node.request.timeouts` (how many times a request hit the boundary), and which
 execution target is causing the delay is narrowed down using handler execution time and
 per-node processing metrics (the [11. Monitoring](11-monitoring.en.md) ·
-[12-operations](12-operations.ko.md)).
+[12-operations](12-operations.en.md)).
 
 `zlink.mesh_node.messages.dropped` isn't a backpressure indicator. If this value rises, a
 message was dropped for a separately confirmed reason, not load, so check the `reason`
@@ -528,8 +528,8 @@ current verification.
   ([§2.4](#24-splitting-the-application-connection-and-completion-connection)).
 - **Held-byte attribution observability** — querying which execution target is holding
   backlog bytes while receiving is stopped. Here, an execution target is a
-  [Spot](03-concepts.ko.md#2-spot--상태를-소유하고-순서대로-처리하는-단위) or an
-  [Actor](03-concepts.ko.md#3-actor--id로-식별되는-상태-객체), which processes the
+  [Spot](03-concepts.en.md#2-spot--a-unit-that-owns-state-and-processes-it-in-order) or an
+  [Actor](03-concepts.en.md#3-actor--a-state-object-identified-by-id), which processes the
   messages addressed to it one at a time, in a single line. A message with no target decided
   yet, a message caught between two owners as in relocation, and bytes held by a handler
   whose execution has already started, are each tallied separately.
@@ -567,7 +567,7 @@ current verification.
 - **`publish` completed normally, but the subscriber never received it** → publish's
   completion means only that it was ready to send and the runtime accepted the submission.
   Delivery, resend, and ack aren't provided
-  ([05-channel-messaging](05-channel-messaging.ko.md#13-pubsub의-두-갈래)).
+  ([05-channel-messaging](05-channel-messaging.en.md#13-two-branches-of-pubsub)).
 - **A request inside a handler hangs for a long time** → if both sides' processing is
   delayed at the same time, a finite timeout is where recovery starts. Give a nested request
   a `timeout(...)`.
@@ -579,8 +579,8 @@ current verification.
 
 - Option defaults and when they can change: `16. Options` chapter §3
 - The formal contract for one-way submit and the completion boundary:
-  [Async Execution Policy](../../../common/spec/05-async-execution-policy.ko.md)
+  [Async Execution Policy](../../../common/spec/05-async-execution-policy.en.md)
 - The socket configuration surface:
-  [per-language topology public contract](../../../common/spec/server/languages/README.ko.md)
+  [per-language topology public contract](../../../common/spec/server/languages/README.en.md)
 - The byte-unit contract for a socket option: [the core guide's socket option](https://zlink-systems.github.io/zlink/guide/12-socket-options/)
-- Next axis: [05-channel-messaging](05-channel-messaging.ko.md)
+- Next axis: [05-channel-messaging](05-channel-messaging.en.md)

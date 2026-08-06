@@ -5,6 +5,7 @@ import { BINGO_SAMPLE_CONFIG, createBingoConfigurationModule } from '../Configur
 import { SampleNames } from '../Configuration/sample-names';
 import { bingoLocationOptions, createBingoLocationStore } from '../Configuration/location-store';
 import { createBingoRelocationStore } from '../Configuration/relocation-store';
+import { MatchmakingReadinessHandler } from '../Configuration/matchmaking-readiness-handler';
 import { BingoMatchReservationStore } from './bingo-match-reservation-store';
 import { BingoMatchmaker, BingoMatchmakerIdleTimer } from './bingo-matchmaker';
 import type { BingoSampleConfig } from '../Configuration/sample-config';
@@ -46,7 +47,8 @@ function createBingoMatchmakingModule() {
     providers: [
       BingoMatchReservationStore,
       BingoMatchmaker,
-      BingoMatchmakerIdleTimer
+      BingoMatchmakerIdleTimer,
+      MatchmakingReadinessHandler
     ]
   })(BingoMatchmakingModule);
   return BingoMatchmakingModule;

@@ -181,11 +181,22 @@ public final class NativeMonitorSocket implements SocketMonitor {
               NativeLayouts.MONITOR_LOCAL_OFFSET, 256), 256);
             String remote = NativeHelpers.fromCString(evt.asSlice(
               NativeLayouts.MONITOR_REMOTE_OFFSET, 256), 256);
+            long connectionId = evt.get(java.lang.foreign.ValueLayout.JAVA_LONG,
+              NativeLayouts.MONITOR_CONNECTION_ID_OFFSET);
+            long transportPairId = evt.get(java.lang.foreign.ValueLayout.JAVA_LONG,
+              NativeLayouts.MONITOR_TRANSPORT_PAIR_ID_OFFSET);
+            long transportPairGeneration = evt.get(java.lang.foreign.ValueLayout.JAVA_LONG,
+              NativeLayouts.MONITOR_TRANSPORT_PAIR_GENERATION_OFFSET);
+            int transportLane = evt.get(java.lang.foreign.ValueLayout.JAVA_INT,
+              NativeLayouts.MONITOR_TRANSPORT_LANE_OFFSET);
+            int eventFlags = evt.get(java.lang.foreign.ValueLayout.JAVA_INT,
+              NativeLayouts.MONITOR_FLAGS_OFFSET);
             MonitorEvent monitorEvent = new MonitorEvent(
               MonitorEventType.fromValue(eventValue), value,
               routingSize == 0 ? Optional.empty()
                 : Optional.of(InternalAccess.routingIdFromTrusted(routing)),
-              local, remote);
+              local, remote, connectionId, transportPairId,
+              transportPairGeneration, transportLane, eventFlags);
             executor.execute(() -> dispatchEvent(handler, monitorEvent));
         } catch (RuntimeException ex) {
             callbacks.recordFailure(ex);

@@ -2310,10 +2310,12 @@ app_t &app_t::add_zlink_framework (std::function<void (zlink_framework_options_t
         _state->services.add_factory<actor_client_t> (
           [mesh_nodes, actor_location_observer,
            location_options = options.location_options ()] (service_provider_t &provider) mutable {
+              auto route_runtime = provider.get<route_mesh_runtime_t> ();
               return runtime::make_actor_client (
                 provider.get_required<runtime::live_location_reader_t> (),
                 provider.get_required<serializer_registry_t> (), mesh_nodes,
-                actor_location_observer, location_options);
+                actor_location_observer, location_options,
+                route_runtime ? &route_runtime->get () : nullptr);
           },
           service_lifetime_t::singleton);
     }

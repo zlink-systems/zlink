@@ -98,8 +98,13 @@ class raw_mesh_connection_candidates_t
     std::optional<std::vector<std::uint8_t>> disconnect_by_connection_id (
       const std::vector<std::uint8_t> &connection_id,
       std::string_view remote_endpoint = {});
+    std::vector<std::pair<std::vector<std::uint8_t>,
+                          std::vector<std::uint8_t>>>
+    disconnect_by_endpoint (std::string_view remote_endpoint);
     std::size_t size (
       const std::vector<std::uint8_t> &node_routing_id) const;
+    bool contains (const std::vector<std::uint8_t> &node_routing_id,
+                   const std::vector<std::uint8_t> &connection_id) const;
 
   private:
     std::map<
@@ -357,6 +362,8 @@ class raw_mesh_node_owner_t
       protocol::command command,
       peer_admission_result_t result);
     void discard_pending_unadmitted_applications (
+      const std::vector<std::uint8_t> &node_routing_id);
+    void discard_pending_unadmitted_applications_locked (
       const std::vector<std::uint8_t> &node_routing_id);
     bool reply_infrastructure (
       const service_mailbox_record_t &request,

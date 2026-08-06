@@ -141,22 +141,24 @@ public final class Program {
                 if (!config.meshPeerEndpoint().isBlank()) {
                     node.peerConnections().connect(config.meshPeerEndpoint());
                 }
-                var objects = node.objects().server();
-                objects.addEntrySpot(
-                    systems.zlink.e2e.runtimemonitoring.service.handlers.MonitoringEntrySpot.class);
-                objects.addActorFactory(
-                    systems.zlink.e2e.runtimemonitoring.service.handlers.MonitoringActor.TYPE,
-                    systems.zlink.e2e.runtimemonitoring.service.handlers.MonitoringActor.class,
-                    systems.zlink.e2e.runtimemonitoring.service.handlers.MonitoringActorFactory.class,
-                    factory -> factory.disableRelocation());
-                objects.addSpotFactory(
-                    Contracts.MONITORING_SPOT_TYPE,
-                    MonitoringSpot.class,
-                    factory -> factory.disableRelocation());
-                objects.addSpotFactory(
-                    Contracts.TRIGGERED_MONITORING_SPOT_TYPE,
-                    TriggeredMonitoringSpot.class,
-                    factory -> factory.disableRelocation());
+                if (config.registerPlacementObjects()) {
+                    var objects = node.objects().server();
+                    objects.addEntrySpot(
+                        systems.zlink.e2e.runtimemonitoring.service.handlers.MonitoringEntrySpot.class);
+                    objects.addActorFactory(
+                        systems.zlink.e2e.runtimemonitoring.service.handlers.MonitoringActor.TYPE,
+                        systems.zlink.e2e.runtimemonitoring.service.handlers.MonitoringActor.class,
+                        systems.zlink.e2e.runtimemonitoring.service.handlers.MonitoringActorFactory.class,
+                        factory -> factory.disableRelocation());
+                    objects.addSpotFactory(
+                        Contracts.MONITORING_SPOT_TYPE,
+                        MonitoringSpot.class,
+                        factory -> factory.disableRelocation());
+                    objects.addSpotFactory(
+                        Contracts.TRIGGERED_MONITORING_SPOT_TYPE,
+                        TriggeredMonitoringSpot.class,
+                        factory -> factory.disableRelocation());
+                }
             }
         };
     }
@@ -177,7 +179,9 @@ public final class Program {
     @Bean
     ApplicationRunner createSpot(ObjectProvider<ZLinkSpotManager> spots, ServiceOptions config) {
         return ignored -> {
-            if (!config.enableSpot()) {
+            if (!config.enableSpot()
+                || !config.registerPlacementObjects()
+                || config.disableBootstrapSpot()) {
                 return;
             }
             ZLinkSpotManager manager = spots.getIfAvailable();

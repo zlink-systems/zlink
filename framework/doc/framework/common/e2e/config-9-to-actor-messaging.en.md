@@ -92,7 +92,7 @@ Session binding stay intact?
 - Detailed behavior: verifies the separation between direct message
   and binding from
   [Actor Model §5](../spec/14-actor-model.en.md#5-actor-messaging) and
-  [Session Actor Dispatch §4](../spec/20-session-actor-dispatch.ko.md#4-session이-actor-route를-보관하는-방법).
+  [Session Actor Dispatch §4](../spec/20-session-actor-dispatch.en.md#4-how-a-session-holds-an-actor-route).
 
 #### TA-A2 Send A Direct Send/Request To An Unbound Actor
 

@@ -74,6 +74,8 @@ struct mesh_node_builder_state_t
     std::function<void (const std::string &)> channel_name_observer;
     route_handler_registry_t handlers;
     std::vector<mesh_peer_connection_t> peer_connections;
+    std::function<void (const mesh_peer_connection_t &)> runtime_peer_connect;
+    std::function<void (const mesh_peer_connection_t &)> runtime_peer_disconnect;
     mesh_node_socket_config_t socket;
     std::chrono::milliseconds default_request_timeout{std::chrono::seconds (30)};
     zlink::auto_hwm_profile auto_hwm_profile =
@@ -170,6 +172,8 @@ class mesh_node_runtime_t
     void connect_peer (const zlink::routing_id_t &expected_routing_id,
                        const std::string &endpoint,
                        std::uint64_t expected_lifecycle_generation = 0,
+                       std::string security_identity = "default");
+    void connect_peer (const std::string &endpoint,
                        std::string security_identity = "default");
     void expect_peer (const zlink::routing_id_t &expected_routing_id,
                       const std::string &endpoint,
@@ -337,7 +341,8 @@ class mesh_node_runtime_t
     std::optional<actor_ref_t> follow_relocated_actor (const actor_ref_t &actor);
     result_t<operation_completion_t> wait_for_completion (
       const host::operation_id_t &operation,
-      std::chrono::milliseconds timeout);
+      std::chrono::milliseconds timeout,
+      std::optional<zlink::routing_id_t> target = std::nullopt);
     std::size_t dispatch_ready (
       const std::function<void (const host::ready_record_t &,
                                 const host::receive_record_t &,
@@ -351,6 +356,7 @@ class mesh_node_runtime_t
     std::size_t admitted_peer_count () const;
     bool has_admitted_peer (const zlink::routing_id_t &peer_rid,
                             std::uint64_t lifecycle_generation) const;
+    bool has_admitted_peer (const zlink::routing_id_t &peer_rid) const;
     std::string mesh_name () const;
     std::optional<zlink::routing_id_t> routing_id () const;
     std::string listen_endpoint () const;
@@ -378,6 +384,14 @@ class mesh_node_runtime_t
     registrations (zlink_builder_t &builder);
 
   private:
+    struct peer_callback_gate_t
+    {
+        std::mutex mutex;
+        std::condition_variable changed;
+        bool stopping = false;
+        std::size_t active = 0;
+    };
+
     result_t<actor_join_reply_t> actor_join_reply_from_completion (
       const host::receive_record_t &record,
       const std::vector<zlink::message_t> &parts,
@@ -419,6 +433,8 @@ class mesh_node_runtime_t
                         int,
                         std::uint64_t)> _descriptor_publisher;
     std::shared_ptr<host::public_host_runtime_t> _node;
+    std::shared_ptr<peer_callback_gate_t> _peer_callback_gate =
+      std::make_shared<peer_callback_gate_t> ();
     std::mutex _message_follow_mutex;
     std::function<void (const runtime::protocol::message_follow_notice_t &)>
       _message_follow_handler;

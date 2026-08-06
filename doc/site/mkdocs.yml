@@ -11,7 +11,9 @@ docs_dir: docs
 
 theme:
   name: material
-  language: ko
+  # i18n 플러그인이 로케일마다 이 값을 덮어쓴다. 여기 적은 값은 기본 로케일과
+  # 같아야 한다.
+  language: en
   # header/nav.html 두 partial만 포크한다 — 사이트 이름 텍스트("ZLink")도 로고
   # 아이콘처럼 홈으로 링크되게 하려고. 그 외 나머지는 Material 원본 그대로다.
   custom_dir: overrides
@@ -56,15 +58,24 @@ hooks:
 
 plugins:
   - search
-  # 한국어가 기본이다. framework 402장은 전부 `.ko.md`이고, core·bindings의 영어
-  # 문서는 `.en.md`로 옮겼다 — 접미사 없는 자리가 비어야 이 배치가 성립한다.
-  # nav 라벨은 영어로 적고 번역표가 한국어를 준다.
+  # 영어가 기본이고 한국어는 고르는 쪽이다. 영어는 `/`, 한국어는 `/ko/`에 실린다.
+  #
+  # 모든 장이 `.ko.md`/`.en.md` 쌍으로 있고 접미사 없는 자리는 비어 있다. nav
+  # 경로도 접미사 없이 적어야 한다 — 그래야 로케일마다 제 짝을 찾는다. `.ko.md`로
+  # 못박으면 영어 빌드가 자기 파일 집합에 없는 파일을 찾아 경고를 쏟고, 기본
+  # 로케일을 바꾸는 것 자체가 막힌다.
+  #
+  # nav 라벨은 영어로 적고 번역표가 한국어를 준다. 반대로 적으면 영어 화면에
+  # 한국어가 남는다.
   - i18n:
       docs_structure: suffix
       languages:
+        - locale: en
+          name: English
+          default: true
+          build: true
         - locale: ko
           name: 한국어
-          default: true
           build: true
           # 번역표는 nav 라벨 문자열 전체를 키로 잡는 평면 map이다. 키는 nav에
           # 적힌 영어 그대로여야 하고, 여기 없는 라벨은 한국어 화면에서도 영어로
@@ -160,9 +171,6 @@ plugins:
             Protocol Raw: Raw 프로토콜
             I/O Thread: I/O 스레드
             Result Enums: 결과 Enum
-        - locale: en
-          name: English
-          build: true
 
 # 문서 트리는 정본을 심링크로 직접 건다(`docs/guide` → `core/doc/guide` 등).
 # 복사본을 두면 양쪽이 갈라진다 — 실제로 갈라져서 사이트가 byte HWM 이전의 낡은
@@ -192,103 +200,103 @@ nav:
   - Framework:
       - Guide:
           - .NET:
-              - "Guide home": dotnet/guide/server/README.ko.md
-              - "1. Overview": dotnet/guide/server/01-overview.ko.md
-              - "2. Getting started": dotnet/guide/server/02-getting-started.ko.md
-              - "3. Core concepts": dotnet/guide/server/03-concepts.ko.md
-              - "4. Backpressure": dotnet/guide/server/04-backpressure.ko.md
-              - "5. Channel Messaging": dotnet/guide/server/05-channel-messaging.ko.md
-              - "6. Spot": dotnet/guide/server/06-spot.ko.md
-              - "7. Actor and Spot": dotnet/guide/server/07-actor-spot.ko.md
-              - "8. Session and Actor binding": dotnet/guide/server/08-actor-session.ko.md
-              - "9. STREAM": dotnet/guide/server/09-stream.ko.md
-              - "10. Location": dotnet/guide/server/10-location.ko.md
-              - "11. Monitoring": dotnet/guide/server/11-monitoring.ko.md
-              - "12. Operations": dotnet/guide/server/12-operations.ko.md
-              - "13. Key type index": dotnet/guide/server/13-interface-catalog.ko.md
-              - "14. Picking a sample": dotnet/guide/server/14-samples.ko.md
-              - "15. E2E testing": dotnet/guide/server/15-e2e-testing.ko.md
-              - "16. Options": dotnet/guide/server/16-options.ko.md
-              - "17. Where ZLink fits": dotnet/guide/server/17-alternative.ko.md
+              - "Guide home": dotnet/guide/server/README.md
+              - "1. Overview": dotnet/guide/server/01-overview.md
+              - "2. Getting started": dotnet/guide/server/02-getting-started.md
+              - "3. Core concepts": dotnet/guide/server/03-concepts.md
+              - "4. Backpressure": dotnet/guide/server/04-backpressure.md
+              - "5. Channel Messaging": dotnet/guide/server/05-channel-messaging.md
+              - "6. Spot": dotnet/guide/server/06-spot.md
+              - "7. Actor and Spot": dotnet/guide/server/07-actor-spot.md
+              - "8. Session and Actor binding": dotnet/guide/server/08-actor-session.md
+              - "9. STREAM": dotnet/guide/server/09-stream.md
+              - "10. Location": dotnet/guide/server/10-location.md
+              - "11. Monitoring": dotnet/guide/server/11-monitoring.md
+              - "12. Operations": dotnet/guide/server/12-operations.md
+              - "13. Key type index": dotnet/guide/server/13-interface-catalog.md
+              - "14. Picking a sample": dotnet/guide/server/14-samples.md
+              - "15. E2E testing": dotnet/guide/server/15-e2e-testing.md
+              - "16. Options": dotnet/guide/server/16-options.md
+              - "17. Where ZLink fits": dotnet/guide/server/17-alternative.md
           - C++:
-              - "Guide home": cpp/guide/server/README.ko.md
-              - "1. Overview": cpp/guide/server/01-overview.ko.md
-              - "2. Getting started": cpp/guide/server/02-getting-started.ko.md
-              - "3. Core concepts": cpp/guide/server/03-concepts.ko.md
-              - "4. Backpressure": cpp/guide/server/04-backpressure.ko.md
-              - "5. Channel Messaging": cpp/guide/server/05-channel-messaging.ko.md
-              - "6. Spot": cpp/guide/server/06-spot.ko.md
-              - "7. Actor and Spot": cpp/guide/server/07-actor-spot.ko.md
-              - "8. Session and Actor binding": cpp/guide/server/08-actor-session.ko.md
-              - "9. STREAM": cpp/guide/server/09-stream.ko.md
-              - "10. Location": cpp/guide/server/10-location.ko.md
-              - "11. Monitoring": cpp/guide/server/11-monitoring.ko.md
-              - "12. Operations": cpp/guide/server/12-operations.ko.md
-              - "13. Key type index": cpp/guide/server/13-interface-catalog.ko.md
-              - "14. Picking a sample": cpp/guide/server/14-samples.ko.md
-              - "15. E2E testing": cpp/guide/server/15-e2e-testing.ko.md
-              - "16. Options": cpp/guide/server/16-options.ko.md
-              - "17. Where ZLink fits": cpp/guide/server/17-alternative.ko.md
-              - "18. DI container": cpp/guide/server/18-di-container.ko.md
-              - "19. Configuration": cpp/guide/server/19-configuration.ko.md
-              - "20. HTTP Hosting": cpp/guide/server/20-http-hosting.ko.md
-              - "21. Execution and configuration model": cpp/guide/server/21-execution-model.ko.md
+              - "Guide home": cpp/guide/server/README.md
+              - "1. Overview": cpp/guide/server/01-overview.md
+              - "2. Getting started": cpp/guide/server/02-getting-started.md
+              - "3. Core concepts": cpp/guide/server/03-concepts.md
+              - "4. Backpressure": cpp/guide/server/04-backpressure.md
+              - "5. Channel Messaging": cpp/guide/server/05-channel-messaging.md
+              - "6. Spot": cpp/guide/server/06-spot.md
+              - "7. Actor and Spot": cpp/guide/server/07-actor-spot.md
+              - "8. Session and Actor binding": cpp/guide/server/08-actor-session.md
+              - "9. STREAM": cpp/guide/server/09-stream.md
+              - "10. Location": cpp/guide/server/10-location.md
+              - "11. Monitoring": cpp/guide/server/11-monitoring.md
+              - "12. Operations": cpp/guide/server/12-operations.md
+              - "13. Key type index": cpp/guide/server/13-interface-catalog.md
+              - "14. Picking a sample": cpp/guide/server/14-samples.md
+              - "15. E2E testing": cpp/guide/server/15-e2e-testing.md
+              - "16. Options": cpp/guide/server/16-options.md
+              - "17. Where ZLink fits": cpp/guide/server/17-alternative.md
+              - "18. DI container": cpp/guide/server/18-di-container.md
+              - "19. Configuration": cpp/guide/server/19-configuration.md
+              - "20. HTTP Hosting": cpp/guide/server/20-http-hosting.md
+              - "21. Execution and configuration model": cpp/guide/server/21-execution-model.md
           - Java:
-              - "Guide home": java/guide/server/README.ko.md
-              - "1. Overview": java/guide/server/01-overview.ko.md
-              - "2. Getting started": java/guide/server/02-getting-started.ko.md
-              - "3. Core concepts": java/guide/server/03-concepts.ko.md
-              - "4. Backpressure": java/guide/server/04-backpressure.ko.md
-              - "5. Channel Messaging": java/guide/server/05-channel-messaging.ko.md
-              - "6. Spot": java/guide/server/06-spot.ko.md
-              - "7. Actor and Spot": java/guide/server/07-actor-spot.ko.md
-              - "8. Session and Actor binding": java/guide/server/08-actor-session.ko.md
-              - "9. STREAM": java/guide/server/09-stream.ko.md
-              - "10. Location": java/guide/server/10-location.ko.md
-              - "11. Monitoring": java/guide/server/11-monitoring.ko.md
-              - "12. Operations": java/guide/server/12-operations.ko.md
-              - "13. Key type index": java/guide/server/13-interface-catalog.ko.md
-              - "14. Picking a sample": java/guide/server/14-samples.ko.md
-              - "15. E2E testing": java/guide/server/15-e2e-testing.ko.md
-              - "16. Options": java/guide/server/16-options.ko.md
-              - "17. Where ZLink fits": java/guide/server/17-alternative.ko.md
+              - "Guide home": java/guide/server/README.md
+              - "1. Overview": java/guide/server/01-overview.md
+              - "2. Getting started": java/guide/server/02-getting-started.md
+              - "3. Core concepts": java/guide/server/03-concepts.md
+              - "4. Backpressure": java/guide/server/04-backpressure.md
+              - "5. Channel Messaging": java/guide/server/05-channel-messaging.md
+              - "6. Spot": java/guide/server/06-spot.md
+              - "7. Actor and Spot": java/guide/server/07-actor-spot.md
+              - "8. Session and Actor binding": java/guide/server/08-actor-session.md
+              - "9. STREAM": java/guide/server/09-stream.md
+              - "10. Location": java/guide/server/10-location.md
+              - "11. Monitoring": java/guide/server/11-monitoring.md
+              - "12. Operations": java/guide/server/12-operations.md
+              - "13. Key type index": java/guide/server/13-interface-catalog.md
+              - "14. Picking a sample": java/guide/server/14-samples.md
+              - "15. E2E testing": java/guide/server/15-e2e-testing.md
+              - "16. Options": java/guide/server/16-options.md
+              - "17. Where ZLink fits": java/guide/server/17-alternative.md
           - Kotlin:
-              - "Guide home": kotlin/guide/server/README.ko.md
-              - "1. Overview": kotlin/guide/server/01-overview.ko.md
-              - "2. Getting started": kotlin/guide/server/02-getting-started.ko.md
-              - "3. Core concepts": kotlin/guide/server/03-concepts.ko.md
-              - "4. Backpressure": kotlin/guide/server/04-backpressure.ko.md
-              - "5. Channel Messaging": kotlin/guide/server/05-channel-messaging.ko.md
-              - "6. Spot": kotlin/guide/server/06-spot.ko.md
-              - "7. Actor and Spot": kotlin/guide/server/07-actor-spot.ko.md
-              - "8. Session and Actor binding": kotlin/guide/server/08-actor-session.ko.md
-              - "9. STREAM": kotlin/guide/server/09-stream.ko.md
-              - "10. Location": kotlin/guide/server/10-location.ko.md
-              - "11. Monitoring": kotlin/guide/server/11-monitoring.ko.md
-              - "12. Operations": kotlin/guide/server/12-operations.ko.md
-              - "13. Key type index": kotlin/guide/server/13-interface-catalog.ko.md
-              - "14. Picking a sample": kotlin/guide/server/14-samples.ko.md
-              - "15. E2E testing": kotlin/guide/server/15-e2e-testing.ko.md
-              - "17. Where ZLink fits": kotlin/guide/server/17-alternative.ko.md
+              - "Guide home": kotlin/guide/server/README.md
+              - "1. Overview": kotlin/guide/server/01-overview.md
+              - "2. Getting started": kotlin/guide/server/02-getting-started.md
+              - "3. Core concepts": kotlin/guide/server/03-concepts.md
+              - "4. Backpressure": kotlin/guide/server/04-backpressure.md
+              - "5. Channel Messaging": kotlin/guide/server/05-channel-messaging.md
+              - "6. Spot": kotlin/guide/server/06-spot.md
+              - "7. Actor and Spot": kotlin/guide/server/07-actor-spot.md
+              - "8. Session and Actor binding": kotlin/guide/server/08-actor-session.md
+              - "9. STREAM": kotlin/guide/server/09-stream.md
+              - "10. Location": kotlin/guide/server/10-location.md
+              - "11. Monitoring": kotlin/guide/server/11-monitoring.md
+              - "12. Operations": kotlin/guide/server/12-operations.md
+              - "13. Key type index": kotlin/guide/server/13-interface-catalog.md
+              - "14. Picking a sample": kotlin/guide/server/14-samples.md
+              - "15. E2E testing": kotlin/guide/server/15-e2e-testing.md
+              - "17. Where ZLink fits": kotlin/guide/server/17-alternative.md
           - Node.js:
-              - "Guide home": node/guide/server/README.ko.md
-              - "1. Overview": node/guide/server/01-overview.ko.md
-              - "2. Getting started": node/guide/server/02-getting-started.ko.md
-              - "3. Core concepts": node/guide/server/03-concepts.ko.md
-              - "4. Backpressure": node/guide/server/04-backpressure.ko.md
-              - "5. Channel Messaging": node/guide/server/05-channel-messaging.ko.md
-              - "6. Spot": node/guide/server/06-spot.ko.md
-              - "7. Actor and Spot": node/guide/server/07-actor-spot.ko.md
-              - "8. Session and Actor binding": node/guide/server/08-actor-session.ko.md
-              - "9. STREAM": node/guide/server/09-stream.ko.md
-              - "10. Location": node/guide/server/10-location.ko.md
-              - "11. Monitoring": node/guide/server/11-monitoring.ko.md
-              - "12. Operations": node/guide/server/12-operations.ko.md
-              - "13. Key type index": node/guide/server/13-interface-catalog.ko.md
-              - "14. Picking a sample": node/guide/server/14-samples.ko.md
-              - "15. E2E testing": node/guide/server/15-e2e-testing.ko.md
-              - "16. Options": node/guide/server/16-options.ko.md
-              - "17. Where ZLink fits": node/guide/server/17-alternative.ko.md
+              - "Guide home": node/guide/server/README.md
+              - "1. Overview": node/guide/server/01-overview.md
+              - "2. Getting started": node/guide/server/02-getting-started.md
+              - "3. Core concepts": node/guide/server/03-concepts.md
+              - "4. Backpressure": node/guide/server/04-backpressure.md
+              - "5. Channel Messaging": node/guide/server/05-channel-messaging.md
+              - "6. Spot": node/guide/server/06-spot.md
+              - "7. Actor and Spot": node/guide/server/07-actor-spot.md
+              - "8. Session and Actor binding": node/guide/server/08-actor-session.md
+              - "9. STREAM": node/guide/server/09-stream.md
+              - "10. Location": node/guide/server/10-location.md
+              - "11. Monitoring": node/guide/server/11-monitoring.md
+              - "12. Operations": node/guide/server/12-operations.md
+              - "13. Key type index": node/guide/server/13-interface-catalog.md
+              - "14. Picking a sample": node/guide/server/14-samples.md
+              - "15. E2E testing": node/guide/server/15-e2e-testing.md
+              - "16. Options": node/guide/server/16-options.md
+              - "17. Where ZLink fits": node/guide/server/17-alternative.md
       - Reference:
           - .NET:
               - "Reference home": dotnet/reference/README.md
@@ -341,70 +349,70 @@ nav:
               - "07. Location authority": node/reference/07-location-authority.md
               - "08. Observability diagnostics": node/reference/08-observability-diagnostics.md
       - Spec:
-          - "Common spec": common/README.ko.md
+          - "Common spec": common/README.md
           - Conventions and glossary:
-              - "Public contract governance": common/spec/00-public-contract-governance.ko.md
-              - "Messaging glossary": common/spec/01-glossary.ko.md
+              - "Public contract governance": common/spec/00-public-contract-governance.md
+              - "Messaging glossary": common/spec/01-glossary.md
           - Foundation contracts:
-              - "Framework overview": common/spec/02-overview.ko.md
-              - "Interaction model": common/spec/03-interaction-model.ko.md
-              - "Message model": common/spec/04-message-model.ko.md
+              - "Framework overview": common/spec/02-overview.md
+              - "Interaction model": common/spec/03-interaction-model.md
+              - "Message model": common/spec/04-message-model.md
               - "Async execution policy": common/spec/05-async-execution-policy.md
-              - "Framework API": common/spec/06-framework-api.ko.md
+              - "Framework API": common/spec/06-framework-api.md
           - Channel and network:
-              - "RouteMesh topology": common/spec/07-channel-topology.ko.md
-              - "Channel messaging": common/spec/08-channel-messaging.ko.md
-              - "ClientServer Channel": common/spec/09-client-server-channel.ko.md
-              - "Network listener identity": common/spec/10-network-listener-identity.ko.md
+              - "RouteMesh topology": common/spec/07-channel-topology.md
+              - "Channel messaging": common/spec/08-channel-messaging.md
+              - "ClientServer Channel": common/spec/09-client-server-channel.md
+              - "Network listener identity": common/spec/10-network-listener-identity.md
           - Object messaging:
-              - "Spot model": common/spec/11-spot-model.ko.md
-              - "Spot messaging": common/spec/12-spot-messaging.ko.md
-              - "MeshNode": common/spec/13-mesh-node.ko.md
-              - "Actor model": common/spec/14-actor-model.ko.md
-              - "Spot and Actor membership": common/spec/15-spot-actor.ko.md
-              - "Spot address messaging": common/spec/16-spot-address-messaging.ko.md
-              - "Stage wrapper on Spot": common/spec/17-stage-wrapper-on-spot.ko.md
-              - "Spot·Actor routing": common/spec/18-object-routing.ko.md
+              - "Spot model": common/spec/11-spot-model.md
+              - "Spot messaging": common/spec/12-spot-messaging.md
+              - "MeshNode": common/spec/13-mesh-node.md
+              - "Actor model": common/spec/14-actor-model.md
+              - "Spot and Actor membership": common/spec/15-spot-actor.md
+              - "Spot address messaging": common/spec/16-spot-address-messaging.md
+              - "Stage wrapper on Spot": common/spec/17-stage-wrapper-on-spot.md
+              - "Spot·Actor routing": common/spec/18-object-routing.md
           - STREAM and session:
-              - "STREAM server session": common/spec/19-stream-session.ko.md
-              - "Session Actor dispatch": common/spec/20-session-actor-dispatch.ko.md
+              - "STREAM server session": common/spec/19-stream-session.md
+              - "Session Actor dispatch": common/spec/20-session-actor-dispatch.md
           - Location Store and relocation:
-              - "Location runtime": common/spec/21-location-runtime.ko.md
-              - "Location Store (Redis)": common/spec/22-location-store-redis.ko.md
-              - "Relocation Store (Redis)": common/spec/23-relocation-store-redis.ko.md
+              - "Location runtime": common/spec/21-location-runtime.md
+              - "Location Store (Redis)": common/spec/22-location-store-redis.md
+              - "Relocation Store (Redis)": common/spec/23-relocation-store-redis.md
           - Observability and shutdown:
-              - "Runtime status and diagnostics": common/spec/24-runtime-monitoring.ko.md
-              - "Runtime metric": common/spec/25-runtime-metrics.ko.md
-              - "Message flow tracing": common/spec/26-message-flow-tracing.ko.md
-              - "Request correlation": common/spec/27-flow-correlation.ko.md
-              - "Host relocate and shutdown": common/spec/28-graceful-drain-handoff.ko.md
-              - "Transport liveness": common/spec/29-transport-liveness.ko.md
-              - "Failure handling and failover": common/spec/31-failure-failover-policy.ko.md
-              - "Framework error model": common/spec/32-framework-error-model.ko.md
+              - "Runtime status and diagnostics": common/spec/24-runtime-monitoring.md
+              - "Runtime metric": common/spec/25-runtime-metrics.md
+              - "Message flow tracing": common/spec/26-message-flow-tracing.md
+              - "Request correlation": common/spec/27-flow-correlation.md
+              - "Host relocate and shutdown": common/spec/28-graceful-drain-handoff.md
+              - "Transport liveness": common/spec/29-transport-liveness.md
+              - "Failure handling and failover": common/spec/31-failure-failover-policy.md
+              - "Framework error model": common/spec/32-framework-error-model.md
       - Internals:
-          - "Internals overview": common/internals/README.ko.md
-          - "1. Layer boundary and identifier": common/internals/01-layering.ko.md
-          - "2. Spot and Actor execution serialization": common/internals/02-serialization.ko.md
-          - "3. Application and infrastructure isolation": common/internals/03-progress-isolation.ko.md
-          - "4. Operation completion": common/internals/04-completion.ko.md
-          - "5. Message continuity during a move": common/internals/05-relocation-continuity.ko.md
-          - "6. Target selection and route cache": common/internals/06-routing-and-cache.ko.md
-          - "7. Receive and dispatch loop": common/internals/07-dispatch-loop.ko.md
-          - "8. Object kind and activation": common/internals/08-object-lifecycle.ko.md
-          - "9. Session and Actor connection": common/internals/09-session-binding.ko.md
-          - "10. Liveness and status publication": common/internals/10-liveness-and-state.ko.md
-          - "11. Payload ownership and copy": common/internals/11-message-ownership.ko.md
+          - "Internals overview": common/internals/README.md
+          - "1. Layer boundary and identifier": common/internals/01-layering.md
+          - "2. Spot and Actor execution serialization": common/internals/02-serialization.md
+          - "3. Application and infrastructure isolation": common/internals/03-progress-isolation.md
+          - "4. Operation completion": common/internals/04-completion.md
+          - "5. Message continuity during a move": common/internals/05-relocation-continuity.md
+          - "6. Target selection and route cache": common/internals/06-routing-and-cache.md
+          - "7. Receive and dispatch loop": common/internals/07-dispatch-loop.md
+          - "8. Object kind and activation": common/internals/08-object-lifecycle.md
+          - "9. Session and Actor connection": common/internals/09-session-binding.md
+          - "10. Liveness and status publication": common/internals/10-liveness-and-state.md
+          - "11. Payload ownership and copy": common/internals/11-message-ownership.md
           - "12. Service wire protocol": common/internals/12-service-wire-protocol.md
   - Bindings:
       - Guide:
-        - Overview: bindings/guide/README.ko.md
-        - .NET: bindings/guide/dotnet/index.ko.md
-        - C++: bindings/guide/cpp/index.ko.md
-        - Java: bindings/guide/java/index.ko.md
-        - Node.js: bindings/guide/node/index.ko.md
-        - Python: bindings/guide/python/index.ko.md
-        - Go: bindings/guide/go/index.ko.md
-        - Rust: bindings/guide/rust/index.ko.md
+        - Overview: bindings/guide/README.md
+        - .NET: bindings/guide/dotnet/index.md
+        - C++: bindings/guide/cpp/index.md
+        - Java: bindings/guide/java/index.md
+        - Node.js: bindings/guide/node/index.md
+        - Python: bindings/guide/python/index.md
+        - Go: bindings/guide/go/index.md
+        - Rust: bindings/guide/rust/index.md
       - Reference:
         - C:
           - "Reference home": bindings/reference/c/README.md

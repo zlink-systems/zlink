@@ -4,7 +4,7 @@ title: "Actor Model"
 
 # Actor Model
 
-[Spec table of contents](README.en.md) · [Previous: MeshNode](13-mesh-node.ko.md) · [Next: Spot And Actor Membership](15-spot-actor.en.md)
+[Spec table of contents](README.en.md) · [Previous: MeshNode](13-mesh-node.en.md) · [Next: Spot And Actor Membership](15-spot-actor.en.md)
 
 > **What this chapter defines** — an Actor's identity, location, message queue,
 > lifecycle, and session binding.
@@ -24,7 +24,7 @@ The related contracts are owned by the following documents.
 
 | Related contract | Document that defines it |
 |---|---|
-| [MeshNode](01-glossary.en.md#meshnode) route and peer admission | [MeshNode](13-mesh-node.ko.md) |
+| [MeshNode](01-glossary.en.md#meshnode) route and peer admission | [MeshNode](13-mesh-node.en.md) |
 | [Spot](01-glossary.en.md#spot) [membership](01-glossary.en.md#membership) transactions and relocation | [Spot Actor](15-spot-actor.en.md) |
 | STREAM session integration | [Session Actor Dispatch](20-session-actor-dispatch.en.md) |
 | Payload and metadata | [Message Model](04-message-model.en.md) |
@@ -400,7 +400,7 @@ an explicit bind.
 The following .NET excerpt is an example to help understand the common rule of
 registering factory and relocation policy together. It doesn't require the same
 signature in other languages; the exact .NET contract is defined by the
-[.NET Actor interface](server/languages/dotnet/interfaces/06-actors.ko.md).
+[.NET Actor interface](server/languages/dotnet/interfaces/06-actors.en.md).
 
 ```csharp
 public interface IZLinkActorRelocationAdapter<TActor>

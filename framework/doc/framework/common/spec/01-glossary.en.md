@@ -4,12 +4,12 @@ title: "Framework Messaging Glossary"
 
 # Framework Messaging Glossary
 
-[Spec table of contents](README.en.md) · [Previous: Framework Public Contract Governance](00-public-contract-governance.ko.md) · [Next: ZLink Framework Overview](02-overview.en.md)
+[Spec table of contents](README.en.md) · [Previous: Framework Public Contract Governance](00-public-contract-governance.en.md) · [Next: ZLink Framework Overview](02-overview.en.md)
 
 > **What this chapter defines** — the common domain terms, state names, and result names used throughout this spec.
 
 [Spec documentation writing guide](../../../../../doc/principal/documentation/spec-writing-guide.ko.md) ·
-[Spot Messaging](12-spot-messaging.ko.md)
+[Spot Messaging](12-spot-messaging.en.md)
 
 ## How To Read The Tables And .NET Code Examples
 
@@ -34,7 +34,7 @@ interface as-is, and each member's role is explained with a Korean comment on th
 same line.
 
 The single source of truth for the actual .NET declarations is the
-[.NET Server exact interface](server/languages/dotnet/interfaces/README.ko.md) and the
+[.NET Server exact interface](server/languages/dotnet/interfaces/README.en.md) and the
 [.NET Stream Connector exact interface](stream-connector/languages/dotnet/03-stream-connector.en.md).
 The .NET notation in this glossary is a supplementary notation for reading the common
 contract concretely.
@@ -113,7 +113,7 @@ framework issuance, so if a caller specifies a User/Instance Spot ID in the same
 format, it's rejected with `InvalidOperation` before the Store and factory run.
 
 The three kinds' functionality, and the differences in Actor membership, close, and
-relocation, are defined by the [Spot model](11-spot-model.ko.md).
+relocation, are defined by the [Spot model](11-spot-model.en.md).
 
 <a id="actor-membership"></a>
 ### Actor Membership
@@ -726,7 +726,7 @@ This information is kept even when the target has to newly prepare the Spot or
 forward the request to the current owner. A downstream request the handler starts
 separately uses a value different from the original request's.
 
-The full generation/propagation contract follows [Flow correlation](27-flow-correlation.ko.md).
+The full generation/propagation contract follows [Flow correlation](27-flow-correlation.en.md).
 
 <a id="deadline"></a>
 ### Deadline
@@ -2128,7 +2128,7 @@ The response result is `Applied`, `AlreadyApplied`, `Stale`, or
 latter two mean a more recent location exists, or the Session/binding closed, so the
 previous location wasn't applied. The exact wire values and the conditions for
 removing a Message Follow route are defined by
-[Session-Actor dispatch §5.1](20-session-actor-dispatch.ko.md#51-session-actor-위치-갱신-message).
+[Session-Actor dispatch §5.1](20-session-actor-dispatch.en.md#51-session-actor-location-update-message).
 
 <a id="binding-generation"></a>
 ### Binding Generation

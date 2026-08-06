@@ -8,6 +8,7 @@ import java.time.Instant;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationOwnerToken;
@@ -22,11 +23,17 @@ final class ZLinkLocationRuntimeRecoveryTest {
     @Test
     void staleOwnerLeaseRenewalReclaimsANewGeneration() {
         StaleThenClaimStore store = new StaleThenClaimStore();
+        AtomicBoolean republishRequested = new AtomicBoolean();
         try (ZLinkLocationRuntime runtime = new ZLinkLocationRuntime(
             store,
             "owner-a",
             Duration.ofSeconds(30),
             Duration.ofSeconds(5))) {
+            runtime.setOwnerLeaseRecoveryListener(
+                () -> {
+                    republishRequested.set(true);
+                    return CompletableFuture.completedFuture(null);
+                });
             runtime.start(RoutingId.from("node-a"))
                 .toCompletableFuture()
                 .join();
@@ -37,6 +44,7 @@ final class ZLinkLocationRuntimeRecoveryTest {
             assertTrue(runtime.ownerLeaseHealthy());
             assertEquals(2, store.claimCount.get());
             assertEquals(2, runtime.currentOwnerToken().leaseGeneration());
+            assertTrue(republishRequested.get());
         }
     }
 

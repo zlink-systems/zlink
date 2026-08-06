@@ -336,11 +336,11 @@ switch line at the top of each chapter lets you view the same chapter in another
 
 | Language | Server guide | Get started right away | Client-side guide |
 | --- | --- | --- | --- |
-| `.NET` | [Server](dotnet/guide/server/README.ko.md) | [Installation and first run](dotnet/guide/server/02-getting-started.ko.md) | [Stream Connector](dotnet/guide/stream-connector/README.en.md) · [HTTP Client](dotnet/guide/http-client/README.en.md) |
-| C++ | [Server](cpp/guide/server/README.ko.md) | [Installation and first run](cpp/guide/server/02-getting-started.ko.md) | [Stream Connector](cpp/guide/stream-connector/README.en.md) · [HTTP Client](cpp/guide/http-client/README.en.md) |
-| Java | [Server](java/guide/server/README.ko.md) | [Installation and first run](java/guide/server/02-getting-started.ko.md) | [Stream Connector](java/guide/stream-connector/README.en.md) · [HTTP Client](java/guide/http-client/README.en.md) |
-| Kotlin | [Server](kotlin/guide/server/README.ko.md) | [Installation and first run](kotlin/guide/server/02-getting-started.ko.md) | [Stream Connector](kotlin/guide/stream-connector/README.en.md) · [HTTP Client](kotlin/guide/http-client/README.en.md) |
-| Node.js | [Server](node/guide/server/README.ko.md) | [Installation and first run](node/guide/server/02-getting-started.ko.md) | [Stream Connector](node/guide/stream-connector/README.en.md) · [HTTP Client](node/guide/http-client/README.en.md) |
+| `.NET` | [Server](dotnet/guide/server/README.en.md) | [Installation and first run](dotnet/guide/server/02-getting-started.en.md) | [Stream Connector](dotnet/guide/stream-connector/README.en.md) · [HTTP Client](dotnet/guide/http-client/README.en.md) |
+| C++ | [Server](cpp/guide/server/README.en.md) | [Installation and first run](cpp/guide/server/02-getting-started.en.md) | [Stream Connector](cpp/guide/stream-connector/README.en.md) · [HTTP Client](cpp/guide/http-client/README.en.md) |
+| Java | [Server](java/guide/server/README.en.md) | [Installation and first run](java/guide/server/02-getting-started.en.md) | [Stream Connector](java/guide/stream-connector/README.en.md) · [HTTP Client](java/guide/http-client/README.en.md) |
+| Kotlin | [Server](kotlin/guide/server/README.en.md) | [Installation and first run](kotlin/guide/server/02-getting-started.en.md) | [Stream Connector](kotlin/guide/stream-connector/README.en.md) · [HTTP Client](kotlin/guide/http-client/README.en.md) |
+| Node.js | [Server](node/guide/server/README.en.md) | [Installation and first run](node/guide/server/02-getting-started.en.md) | [Stream Connector](node/guide/stream-connector/README.en.md) · [HTTP Client](node/guide/http-client/README.en.md) |
 
 **The two client-side guides** cover libraries deployed separately from the server
 framework. Stream Connector is the library a client uses to connect to a STREAM endpoint
@@ -363,7 +363,7 @@ explanation never drifts no matter which language you're reading.
 
 | | |
 | --- | --- |
-| Language-neutral meaning and the public contract | [Common Spec](common/README.ko.md) |
+| Language-neutral meaning and the public contract | [Common Spec](common/README.en.md) |
 | The messaging engine underneath — socket patterns, transport, options | [Core Guide](https://zlink-systems.github.io/zlink/guide/01-overview/) · [Core Spec](https://zlink-systems.github.io/zlink/spec/core/) |
 | Using Core directly from a language — the C API binding | [Bindings Guide](https://zlink-systems.github.io/zlink/bindings/guide/) · [Bindings Spec](https://zlink-systems.github.io/zlink/bindings/spec/) |
 | Source and issues | [github.com/zlink-systems/zlink](https://github.com/zlink-systems/zlink) |

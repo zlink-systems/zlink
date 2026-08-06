@@ -1,4 +1,4 @@
-[한국어](07-router.ko.md) | English
+[한국어](https://zlink-systems.github.io/zlink/ko/spec/core/socket/07-router/) | English
 
 [Specification index](../../README.en.md) · [Core index](../README.en.md) · [Socket overview](README.en.md) · [errno map](../04-errno-map.en.md)
 

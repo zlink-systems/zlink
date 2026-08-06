@@ -4,7 +4,7 @@ title: "Transport Connection Liveness"
 
 # Transport Connection Liveness
 
-[Spec table of contents](README.en.md) · [Previous: Host Relocate And Shutdown](28-graceful-drain-handoff.en.md) · [Next: Failure Handling And Failover Scope](31-failure-failover-policy.ko.md)
+[Spec table of contents](README.en.md) · [Previous: Host Relocate And Shutdown](28-graceful-drain-handoff.en.md) · [Next: Failure Handling And Failover Scope](31-failure-failover-policy.en.md)
 
 > **What this chapter defines** — how the framework continuously checks
 > whether a remote service connection is usable, and reconnects if it drops.

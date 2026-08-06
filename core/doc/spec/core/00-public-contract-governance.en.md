@@ -1,4 +1,4 @@
-[한국어](00-public-contract-governance.ko.md) | English
+[한국어](https://zlink-systems.github.io/zlink/ko/spec/core/00-public-contract-governance/) | English
 
 [Specification index](../README.en.md) · [Core index](README.en.md)
 

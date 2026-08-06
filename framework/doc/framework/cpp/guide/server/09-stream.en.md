@@ -18,9 +18,9 @@ View in another language — [C#/.NET](../../../dotnet/guide/server/09-stream.en
 # 9. STREAM
 
 > **The documents that own this chapter's contract** —
-> [STREAM server session](../../../common/spec/19-stream-session.ko.md) owns the behavior,
+> [STREAM server session](../../../common/spec/19-stream-session.en.md) owns the behavior,
 > and the
-> [per-language STREAM session public contract](../../../common/spec/server/languages/README.ko.md)
+> [per-language STREAM session public contract](../../../common/spec/server/languages/README.en.md)
 > owns the server's exact signatures. The client package follows the Stream Connector guide
 > and the [per-language public contract](../../../common/spec/stream-connector/README.en.md).
 
@@ -175,7 +175,7 @@ co_await stream.send (server_notice_t{"maintenance"})
 
 After authentication, bind an Actor to the session, and a message not handled by a
 session-only handler can be handed off through the session actor's relay call. The detailed
-flow follows [Session And Actor Binding](08-actor-session.ko.md).
+flow follows [Session And Actor Binding](08-actor-session.en.md).
 
 The application doesn't query the session route from the Location Store directly. Once Actor
 relocation completes, the Framework updates the binding route.
@@ -221,6 +221,6 @@ heartbeat, and bounded queue settings are explained in the Stream Connector guid
 
 - Runnable verification examples for this chapter's contract: `13. Interface Catalog`
   chapter §5 — the verification class `StreamContracts`
-- Session and Actor binding: [Session Actor Dispatch](08-actor-session.ko.md)
+- Session and Actor binding: [Session Actor Dispatch](08-actor-session.en.md)
 - Full client connector usage: the Stream Connector guide
-- Location Store and auto-connect: [Location](10-location.ko.md)
+- Location Store and auto-connect: [Location](10-location.en.md)

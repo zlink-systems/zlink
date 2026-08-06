@@ -285,6 +285,12 @@ public final class ZLinkFrameworkRuntime
                         this.registration,
                         this.meshNodes.nodesByName())
                 : null;
+        if (this.locationRuntime != null && this.objectDescriptors != null) {
+            this.locationRuntime.setOwnerLeaseRecoveryListener(() ->
+                this.objectDescriptors.recoverAfterOwnerLease(
+                    this.runtimeState.get(),
+                    this.locationRuntime.recoveryPreviousOwnerToken()));
+        }
         this.routeMeshRuntimeOptions =
             new systems.zlink.framework.runtime.channels
                 .ZLinkRouteMeshRuntimeOptionsRuntime(
@@ -711,19 +717,35 @@ public final class ZLinkFrameworkRuntime
         if (locationStores != null) {
             var store = locationStores.unifiedStore();
             try {
+                long storeDeadlineNanos = System.nanoTime()
+                    + java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(500);
                 String continuation = null;
                 do {
+                    long remainingMillis = java.util.concurrent.TimeUnit.NANOSECONDS
+                        .toMillis(storeDeadlineNanos - System.nanoTime());
+                    if (remainingMillis <= 0) {
+                        throw new java.util.concurrent.CompletionException(
+                            new java.util.concurrent.TimeoutException(
+                                "Runtime monitoring Store query deadline exceeded"));
+                    }
                     var page = store.listMeshNodes(
                             meshName,
                             new systems.zlink.framework.locations.ZLinkPageRequest(
                                 128,
                                 continuation))
                         .toCompletableFuture()
+                        .orTimeout(
+                            remainingMillis,
+                            java.util.concurrent.TimeUnit.MILLISECONDS)
                         .join();
                     for (var descriptor : page.items()) {
                         if (descriptor.rid().equals(rid)) {
                             return systems.zlink.framework.runtime.internal.monitoring
-                                .ZLinkMeshNodeMonitoringProjection.fromDescriptor(descriptor);
+                                .ZLinkMeshNodeMonitoringProjection.fromDescriptor(
+                                    descriptor)
+                                .withActiveObjectCounts(
+                                    activeActorCount(),
+                                    activeSpotCount());
                         }
                     }
                     continuation = page.continuationToken();
@@ -738,6 +760,16 @@ public final class ZLinkFrameworkRuntime
                 configured,
                 node.status().descriptorRevision(),
                 node.placementWeight());
+    }
+
+    public int activeActorCount() {
+        return actors == null ? 0 : actors.activeActorIds().size();
+    }
+
+    public int activeSpotCount() {
+        return spots == null
+            ? 0
+            : spots.activeUserSpotCount() + spots.activeInstanceSpotCount();
     }
 
     public java.util.List<String> monitoringMeshNodeChannelNames(String meshName) {

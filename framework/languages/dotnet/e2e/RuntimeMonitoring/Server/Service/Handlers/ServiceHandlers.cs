@@ -1,7 +1,9 @@
 using RuntimeMonitoring.Server.Service.Support;
 using RuntimeMonitoring.Shared;
+using Zlink.Framework.Contracts.Actors;
 using Zlink.Framework.Contracts.Channels;
 using Zlink.Framework.Contracts.Handlers;
+using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.Contracts.Spots;
 using Zlink.Framework.Contracts.Timers;
 
@@ -40,9 +42,70 @@ internal sealed class ProfileRequestHandler(
     }
 }
 
-internal sealed class MonitoringEntrySpot(IZLinkEntrySpotContext context) : IZLinkEntrySpot
+internal sealed class MonitoringActor(
+    string actorId,
+    IZLinkActorContext context) : IZLinkActor
+{
+    public string ActorId { get; } = actorId;
+
+    public IZLinkActorContext Context { get; } = context;
+}
+
+internal sealed class MonitoringActorFactory : IZLinkActorFactory<MonitoringActor>
+{
+    public ValueTask<MonitoringActor> CreateAsync(
+        IZLinkActorContext context,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return ValueTask.FromResult(new MonitoringActor(context.ActorId, context));
+    }
+}
+
+internal sealed class MonitoringEntrySpot(IZLinkEntrySpotContext context)
+    : IZLinkEntrySpot<MonitoringActor>
 {
     public IZLinkEntrySpotContext Context { get; } = context;
+
+    public ValueTask<ZLinkActorCreateResponse> OnCreateActorAsync(
+        MonitoringActor actor,
+        ZLinkMessage createRequest,
+        CancellationToken cancellationToken)
+    {
+        _ = actor;
+        _ = createRequest;
+        cancellationToken.ThrowIfCancellationRequested();
+        return ValueTask.FromResult(ZLinkActorCreateResponse.Accept());
+    }
+
+    public ValueTask<ZLinkSpotActorJoinResult> OnActorJoinAsync(
+        string actorId,
+        ZLinkMessage request,
+        CancellationToken cancellationToken)
+    {
+        _ = actorId;
+        _ = request;
+        cancellationToken.ThrowIfCancellationRequested();
+        return ValueTask.FromResult(ZLinkSpotActorJoinResult.Accept());
+    }
+
+    public ValueTask OnJoinedActorAsync(
+        MonitoringActor actor,
+        CancellationToken cancellationToken)
+    {
+        _ = actor;
+        cancellationToken.ThrowIfCancellationRequested();
+        return ValueTask.CompletedTask;
+    }
+
+    public ValueTask OnLeaveActorAsync(
+        MonitoringActor actor,
+        CancellationToken cancellationToken)
+    {
+        _ = actor;
+        cancellationToken.ThrowIfCancellationRequested();
+        return ValueTask.CompletedTask;
+    }
 
     public async ValueTask OnInitializeAsync(CancellationToken cancellationToken)
     {
@@ -71,7 +134,8 @@ internal sealed class FailingTimerHandler : IZLinkSpotTimerHandler<MonitoringEnt
     }
 }
 
-internal sealed class MonitoringSubjectSpot(IZLinkSpotContext context) : IZLinkSpot
+internal sealed class MonitoringSubjectSpot(IZLinkSpotContext context)
+    : IZLinkSpot
 {
     public IZLinkSpotContext Context { get; } = context;
 
@@ -80,22 +144,33 @@ internal sealed class MonitoringSubjectSpot(IZLinkSpotContext context) : IZLinkS
         Context.Handlers.AddSubscribe<MonitoringSubjectHandler>(
             RuntimeMonitoringNames.SpotChannel,
             "monitor.dynamic");
+        Context.Handlers.AddSubscribe<MonitoringSubjectHandler>(
+            RuntimeMonitoringNames.SpotChannel,
+            "monitor.blocker");
     }
+
 }
 
-internal sealed class MonitoringSubjectHandler(EvidenceStore evidence)
+internal sealed class MonitoringSubjectHandler(
+    EvidenceStore evidence,
+    ApplicationDispatchGate gate)
     : IZLinkSpotSubscriptionHandler<MonitoringSubjectSpot, ProfileReq>
 {
-    public ValueTask HandleAsync(
+    public async ValueTask HandleAsync(
         MonitoringSubjectSpot spot,
         ProfileReq message,
         ZLinkPublishMessageContext context,
         CancellationToken cancellationToken)
     {
         _ = context;
+        if (spot.Context.SpotId == "monitor-blocked")
+        {
+            evidence.Add(
+                $"application-gate-enter|spot={spot.Context.SpotId}|topic={context.Topic}");
+            await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
         cancellationToken.ThrowIfCancellationRequested();
         evidence.Add(
-            $"logical-publish|topic=monitor.dynamic|marker={message.Marker}");
-        return ValueTask.CompletedTask;
+            $"logical-publish|spot={spot.Context.SpotId}|topic={context.Topic}|marker={message.Marker}");
     }
 }

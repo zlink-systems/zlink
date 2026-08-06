@@ -343,6 +343,12 @@ public final class Native {
         ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.JAVA_INT,
         ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
         ValueLayout.ADDRESS));
+    private static final MethodHandle MH_ROUTER_REQUEST_TRANSPORT_PAIR_PART = downcall(
+      "zlink_router_request_transport_pair_part",
+      FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
+        ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG,
+        ValueLayout.ADDRESS, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT,
+        ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
     private static final MethodHandle MH_DEALER_REQUEST_PART = downcall(
       "zlink_dealer_request_part",
       FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
@@ -1068,10 +1074,21 @@ public final class Native {
             }
             String local = NativeHelpers.fromCString(evt.asSlice(NativeLayouts.MONITOR_LOCAL_OFFSET, 256), 256);
             String remote = NativeHelpers.fromCString(evt.asSlice(NativeLayouts.MONITOR_REMOTE_OFFSET, 256), 256);
+            long connectionId = evt.get(ValueLayout.JAVA_LONG,
+              NativeLayouts.MONITOR_CONNECTION_ID_OFFSET);
+            long transportPairId = evt.get(ValueLayout.JAVA_LONG,
+              NativeLayouts.MONITOR_TRANSPORT_PAIR_ID_OFFSET);
+            long transportPairGeneration = evt.get(ValueLayout.JAVA_LONG,
+              NativeLayouts.MONITOR_TRANSPORT_PAIR_GENERATION_OFFSET);
+            int transportLane = evt.get(ValueLayout.JAVA_INT,
+              NativeLayouts.MONITOR_TRANSPORT_LANE_OFFSET);
+            int eventFlags = evt.get(ValueLayout.JAVA_INT,
+              NativeLayouts.MONITOR_FLAGS_OFFSET);
             return new MonitorEvent(EnumCodecs.monitorEventTypeFromValue(event), value,
               routingSize == 0 ? java.util.Optional.empty()
                 : java.util.Optional.of(RoutingId.from(routing)),
-              local, remote);
+              local, remote, connectionId, transportPairId,
+              transportPairGeneration, transportLane, eventFlags);
         } catch (ZlinkException ex) {
             throw ex;
         } catch (Throwable t) {
@@ -1377,6 +1394,27 @@ public final class Native {
                 part, flags, partFlag, timeoutMs, handler, userdata);
         } catch (Throwable t) {
             throw new RuntimeException("zlink_router_request_part failed", t);
+        }
+    }
+
+    public static int routerRequestTransportPairPart(
+            MemorySegment router,
+            MemorySegment peerRid,
+            long transportPairId,
+            long transportPairGeneration,
+            MemorySegment part,
+            int flags,
+            int partFlag,
+            int timeoutMs,
+            MemorySegment handler,
+            MemorySegment userdata) {
+        try {
+            return (int) MH_ROUTER_REQUEST_TRANSPORT_PAIR_PART.invokeExact(
+                router, peerRid, transportPairId, transportPairGeneration,
+                part, flags, partFlag, timeoutMs, handler, userdata);
+        } catch (Throwable t) {
+            throw new RuntimeException(
+                "zlink_router_request_transport_pair_part failed", t);
         }
     }
 

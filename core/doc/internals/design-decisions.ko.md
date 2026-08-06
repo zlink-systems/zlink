@@ -2,7 +2,7 @@
 title: "Core 설계 결정"
 ---
 
-[English](design-decisions.en.md)
+[English](design-decisions.ko.md)
 
 <!-- zlink-nav:start -->
 [가이드 목차](../guide/README.ko.md) | [이전: I/O thread](io-thread.ko.md) | [다음: POSD module 구조](posd-module-structure.ko.md)

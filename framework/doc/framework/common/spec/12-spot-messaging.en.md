@@ -4,7 +4,7 @@ title: "SPOT Messaging"
 
 # SPOT Messaging
 
-[Spec table of contents](README.en.md) · [Previous: Spot Model — Entry, User, Instance](11-spot-model.ko.md) · [Next: MeshNode](13-mesh-node.ko.md)
+[Spec table of contents](README.en.md) · [Previous: Spot Model — Entry, User, Instance](11-spot-model.en.md) · [Next: MeshNode](13-mesh-node.en.md)
 
 > **What this chapter defines** — the common public contract for delivering messages
 > to a Spot.
@@ -41,10 +41,10 @@ This document explains the order for deciding targets and running callbacks in t
 two methods. The following is defined by other documents.
 
 - MeshNode's physical connection:
-  [21 MeshNode](13-mesh-node.ko.md)
+  [21 MeshNode](13-mesh-node.en.md)
 - The process of identifying and creating a Spot, and newly preparing an Instance
   Spot:
-  [24 Spot Address Messaging](16-spot-address-messaging.ko.md)
+  [24 Spot Address Messaging](16-spot-address-messaging.en.md)
 - Payload and metadata:
   [03 Message Model](04-message-model.en.md)
 - Async execution of callbacks:
@@ -59,7 +59,7 @@ the C# shape in other languages.
 
 The exact .NET signature is defined by
 [.NET Spot Public Interface](server/languages/dotnet/interfaces/05-spots.en.md) and
-[.NET Common Runtime Interface](server/languages/dotnet/interfaces/01-common-runtime.ko.md).
+[.NET Common Runtime Interface](server/languages/dotnet/interfaces/01-common-runtime.en.md).
 
 The following interface shows how to send messages from Spot direct and a Spot
 callback. The members described in this document are excerpted exactly as their
@@ -264,7 +264,7 @@ create an Instance Spot isn't provided.
 
 The detailed contract for identifying and creating a Spot, and preparing a new
 instance, is defined by
-[24 Spot Address Messaging](16-spot-address-messaging.ko.md).
+[24 Spot Address Messaging](16-spot-address-messaging.en.md).
 
 ### 2.4 The Boundary With Classic Fanout
 
@@ -533,7 +533,7 @@ creation authority records itself as owner and runs the factory.
   information.
 - A failed Spot direct request isn't automatically resent to a different Spot.
 - How owner changes, route cache, and a stale owner route are handled is defined by
-  [24 Spot Address Messaging](16-spot-address-messaging.ko.md).
+  [24 Spot Address Messaging](16-spot-address-messaging.en.md).
 
 After receiving a failure result, the application can start a new request with the
 same Spot ID or a different Spot ID. The new request is a separate operation, not an
@@ -896,7 +896,7 @@ a control claim.
 
 The scope of control work and its execution order relative to the Actor control
 claim are defined by
-[22 Actor Model §4](14-actor-model.ko.md#4-spot이-처리하는-actor-control).
+[22 Actor Model §4](14-actor-model.en.md#4-actor-control-handled-by-a-spot).
 
 ### 5.3 Work Put On The Spot Application Queue
 
@@ -979,7 +979,7 @@ callback — it's submitted directly to the Actor queue.
 
 If an Actor needs to change Spot state, it must submit an explicit Spot call. The
 boundary between Actor payload and membership control is defined by
-[22 Actor Model](14-actor-model.ko.md).
+[22 Actor Model](14-actor-model.en.md).
 
 ### 5.5 Work Handled Separately From Application Callbacks
 

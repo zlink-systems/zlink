@@ -29,6 +29,7 @@ export async function runSample(ctx) {
 
   await ctx.start('matchmaking', 'dist/Server/Matchmaking/main.js', ['--config', matchmakingConfig]);
   await ctx.waitTcp(matchmaking);
+  await waitForRouteReadiness(ctx, 'matchmaking', true, 'bingo-matchmaking-status');
   await ctx.start('api-b', 'dist/Server/Api/main.js', ['--config', apiBConfig]);
   await ctx.waitTcp(apiB);
   await ctx.start('api-a', 'dist/Server/Api/main.js', ['--config', apiAConfig]);
@@ -124,8 +125,13 @@ async function verifyPlaySlotHandoff(ctx, redisKeyPrefix, oldRoomEndpoint) {
   return replacement;
 }
 
-async function waitForRouteReadiness(ctx, role, requiresPlacement = false) {
-  await ctx.waitLog(role, 'bingo-room-status state=1 readyPeers=');
+async function waitForRouteReadiness(
+  ctx,
+  role,
+  requiresPlacement = false,
+  marker = 'bingo-room-status'
+) {
+  await ctx.waitLog(role, `${marker} state=1 readyPeers=`);
   if (requiresPlacement) await ctx.waitLog(role, 'placement=true');
 }
 

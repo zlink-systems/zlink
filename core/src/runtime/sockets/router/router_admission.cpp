@@ -50,6 +50,77 @@ bool router_debug_enabled ()
 
 namespace zlink
 {
+pipe_t *router_t::find_transport_pair_pipe (
+  const zlink_routing_id_t *target_rid_,
+  uint64_t transport_pair_id_,
+  uint64_t transport_pair_generation_) const
+{
+    if (!target_rid_ || transport_pair_id_ == 0 || transport_pair_generation_ == 0)
+        return NULL;
+
+    const blob_t target_rid (const_cast<unsigned char *> (target_rid_->data),
+                             target_rid_->size, reference_tag_t ());
+    const out_pipe_t *current = lookup_out_pipe (target_rid);
+    if (current && current->pipe
+        && current->pipe->get_transport_lane () == transport_lane_application
+        && current->pipe->get_transport_pair_id () == transport_pair_id_
+        && current->pipe->get_transport_pair_generation () == transport_pair_generation_) {
+        if (router_debug_enabled ())
+            fprintf (stderr, "router pair lookup: current pipe=%p pair=%llu/%llu\\n",
+                     static_cast<void *> (current->pipe),
+                     static_cast<unsigned long long> (transport_pair_id_),
+                     static_cast<unsigned long long> (transport_pair_generation_));
+        return current->pipe;
+    }
+
+    for (std::map<pipe_t *, blob_t>::const_iterator it = _standby_pipes.begin ();
+         it != _standby_pipes.end (); ++it) {
+        if (!(it->second < target_rid) && !(target_rid < it->second)
+            && it->first
+            && it->first->get_transport_lane () == transport_lane_application
+            && it->first->get_transport_pair_id () == transport_pair_id_
+            && it->first->get_transport_pair_generation () == transport_pair_generation_) {
+            if (router_debug_enabled ())
+                fprintf (stderr, "router pair lookup: standby pipe=%p pair=%llu/%llu\\n",
+                         static_cast<void *> (it->first),
+                         static_cast<unsigned long long> (transport_pair_id_),
+                         static_cast<unsigned long long> (transport_pair_generation_));
+            return it->first;
+        }
+    }
+    return NULL;
+}
+
+bool router_t::emit_transport_pair_ready (pipe_t *pipe_)
+{
+    if (!pipe_ || pipe_->get_transport_pair_id () == 0
+        || pipe_->get_transport_lane () != transport_lane_application)
+        return false;
+
+    const blob_t *routing_id = NULL;
+    const blob_t &pipe_routing_id = pipe_->get_routing_id ();
+    const out_pipe_t *current =
+      pipe_routing_id.size () > 0 ? lookup_out_pipe (pipe_routing_id) : NULL;
+    if (current && current->pipe == pipe_)
+        routing_id = &pipe_routing_id;
+    else {
+        const std::map<pipe_t *, blob_t>::const_iterator standby =
+          _standby_pipes.find (pipe_);
+        if (standby != _standby_pipes.end () && standby->second.size () > 0)
+            routing_id = &standby->second;
+    }
+    if (!routing_id)
+        return false;
+
+    endpoint_uri_pair_t endpoint_pair = pipe_->get_endpoint_pair ();
+    endpoint_pair.connection_id = pipe_->get_transport_connection_id ();
+    event_connection_ready_changed (
+      endpoint_pair, routing_id->data (), routing_id->size (),
+      transport_lane_application, pipe_->get_transport_pair_id (),
+      pipe_->get_transport_pair_generation ());
+    return true;
+}
+
 bool router_t::identify_peer (pipe_t *pipe_, bool locally_initiated_)
 {
     msg_t msg;
@@ -93,9 +164,10 @@ bool router_t::duplicate_pipe_should_replace (const out_pipe_t &existing_outpipe
     if (!existing_outpipe_.active || existing_outpipe_.weight == 0)
         return true;
 
-    // A reconnect created by the same side always supersedes the older pipe.
-    // Traffic observed on that older pipe is historical and does not prove
-    // that its transport is still usable.
+    // A reconnect created by the same side supersedes the older route. The
+    // reconnect carries the current Framework transport generation; retaining
+    // the older current route would make readiness select a pipe that is no
+    // longer connected to the replacement process.
     if (existing_outpipe_.locally_initiated == locally_initiated_)
         return true;
 
@@ -135,7 +207,10 @@ bool router_t::adopt_peer_routing_id (pipe_t *pipe_, blob_t routing_id_, bool lo
         const bool same_local_endpoint_reconnect =
           locally_initiated_ && existing_outpipe->locally_initiated
           && !new_endpoint.empty () && new_endpoint == existing_endpoint;
-        if (!_handover && !same_local_endpoint_reconnect)
+        const bool paired_application =
+          pipe_->get_transport_pair_id () != 0
+          && pipe_->get_transport_lane () == transport_lane_application;
+        if (!_handover && !same_local_endpoint_reconnect && !paired_application)
             return false;
 
         if (!duplicate_pipe_should_replace (*existing_outpipe, routing_id_, locally_initiated_)) {
@@ -192,6 +267,19 @@ bool router_t::adopt_peer_routing_id (pipe_t *pipe_, blob_t routing_id_, bool lo
 
     pipe_->set_router_socket_routing_id (routing_id_);
     add_out_pipe (ZLINK_MOVE (routing_id_), pipe_, locally_initiated_);
+    if (pipe_->get_transport_pair_id () != 0
+        && pipe_->get_transport_lane () == transport_lane_application
+        && completion_pipe_for_transport_pair (
+             pipe_->get_transport_pair_id (),
+             pipe_->get_transport_pair_generation ())) {
+        endpoint_uri_pair_t endpoint_pair = pipe_->get_endpoint_pair ();
+        endpoint_pair.connection_id = pipe_->get_transport_connection_id ();
+        const blob_t &peer_routing_id = pipe_->get_routing_id ();
+        event_connection_ready_changed (
+          endpoint_pair, peer_routing_id.data (), peer_routing_id.size (),
+          transport_lane_application, pipe_->get_transport_pair_id (),
+          pipe_->get_transport_pair_generation ());
+    }
     if (router_debug_enabled ()) {
         char rid_text[160];
         format_blob_routing_id_debug (pipe_->get_routing_id (), rid_text, sizeof (rid_text));

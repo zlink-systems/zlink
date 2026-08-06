@@ -8,6 +8,7 @@ public static class RuntimeMonitoringNames
     public const string ChannelClientSource = "monitor.profile.client";
     public const string SpotChannel = "monitor.spot";
     public const string SubjectSpotType = "monitor.subject";
+    public const string ActorType = "monitor.actor";
 }
 
 public sealed record ProfileReq(string Value, string Marker);
@@ -42,6 +43,17 @@ public sealed record MeshRuntimePlacementRes(
     int ActiveActorCount,
     int ActiveSpotCount,
     string? UnavailableReason);
+
+public sealed record HostRuntimeSnapshotRes(
+    string State,
+    bool IsReady,
+    bool AcceptingWork,
+    ulong Sequence,
+    ulong ApplicationHwmBytes = 0,
+    ulong PendingPayloadBytes = 0,
+    ulong QueuedPayloadBytes = 0,
+    ulong ActivePayloadBytes = 0,
+    bool ApplicationReceivePaused = false);
 
 public sealed record EvidenceWaitReq(
     string[] ContainsAll,

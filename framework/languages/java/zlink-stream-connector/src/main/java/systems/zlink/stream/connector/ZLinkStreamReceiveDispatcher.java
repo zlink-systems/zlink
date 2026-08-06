@@ -169,9 +169,13 @@ final class ZLinkStreamReceiveDispatcher {
             flow.flowId(),
             flowOrigin);
         java.util.function.Supplier<CompletionStage<Void>> dispatch = () -> {
+            // The registered list is a CopyOnWriteArrayList. Its iterator already
+            // provides the snapshot required while callbacks may register or
+            // remove handlers, so copying it again for every received message
+            // only adds hot-path allocation.
             List<ZLinkStreamMessageHandler<ZLinkStreamEncodedPayload>> registered =
-                List.copyOf(handlers.getOrDefault(header.name(), List.of()));
-            if (registered.isEmpty()) {
+                handlers.get(header.name());
+            if (registered == null || registered.isEmpty()) {
                 message.payload().payload().close();
                 return CompletableFuture.completedFuture(null);
             }

@@ -1,6 +1,6 @@
 # Event Sample Scenarios
 
-[Sample List](../README.ko.md)
+[Sample List](../README.en.md)
 
 This directory defines common sample scenarios that showcase framework features centered on event
 propagation. Both samples deal with events, but with different purposes.

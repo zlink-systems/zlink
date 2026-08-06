@@ -1322,8 +1322,8 @@ void zlink::pipe_t::send_hwms_to_peer (uint64_t inhwm_, uint64_t outhwm_)
 
 void zlink::pipe_t::set_endpoint_pair (zlink::endpoint_uri_pair_t endpoint_pair_)
 {
-    set_transport_connection_id (endpoint_pair_.connection_id);
     _endpoint_pair = ZLINK_MOVE (endpoint_pair_);
+    set_transport_connection_id (_endpoint_pair.connection_id);
 }
 
 const zlink::endpoint_uri_pair_t &zlink::pipe_t::get_endpoint_pair () const
@@ -1336,6 +1336,7 @@ void zlink::pipe_t::set_transport_connection_id (uint64_t connection_id_)
     if (_transport_lifetime)
         _transport_lifetime->connection_id.store (
           connection_id_, std::memory_order_release);
+    _endpoint_pair.connection_id = connection_id_;
 }
 
 uint64_t zlink::pipe_t::get_transport_connection_id () const

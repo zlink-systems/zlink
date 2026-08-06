@@ -1,4 +1,4 @@
-한국어 | [English](05-errors.en.md)
+한국어 | [English](https://zlink-systems.github.io/zlink/bindings/reference/node/05-errors/)
 
 [레퍼런스 목차](README.ko.md)
 

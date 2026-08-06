@@ -13,8 +13,8 @@ server e2e/perf clients.
 | Document | Content |
 |------|------|
 | [Guide INDEX](INDEX.en.md) | Overview, getting started, options, send/receive, lifecycle, engine adapters, packaging, performance |
-| [core — async runtime](core/guide/async-runtime.ko.md) | The no-exception, no-coroutine core runtime |
-| [e2e-client — coroutine client](e2e-client/guide/coroutine-client.ko.md) | A coroutine helper for server e2e/perf use |
+| [core — async runtime](core/guide/async-runtime.en.md) | The no-exception, no-coroutine core runtime |
+| [e2e-client — coroutine client](e2e-client/guide/coroutine-client.en.md) | A coroutine helper for server e2e/perf use |
 | [Stream Connector Common Spec](../../../common/spec/stream-connector/32-stream-connector.en.md) | **Authoritative** — target environment, transport, wire contract |
 
 > **This connector can't be used for a web (WASM) build.** Cocos Creator web and Godot Web use the

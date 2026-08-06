@@ -1,4 +1,4 @@
-[English](protocol-zmp.en.md) | [한국어](protocol-zmp.ko.md)
+[English](protocol-zmp.en.md) | [한국어](protocol-zmp.en.md)
 
 # ZMP v1.0 Protocol Details
 

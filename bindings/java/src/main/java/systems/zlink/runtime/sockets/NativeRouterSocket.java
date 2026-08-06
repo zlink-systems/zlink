@@ -100,6 +100,23 @@ final class NativeRouterSocket extends NativeSocketBase implements RouterSocket 
                 requestCallback(rid, parts, callback, flags, timeout));
     }
 
+    public RequestOperation request(RoutingId rid,
+                                    long transportPairId,
+                                    long transportPairGeneration) {
+        if (transportPairId == 0 || transportPairGeneration == 0) {
+            throw new IllegalArgumentException(
+                "transport pair identity must be non-zero");
+        }
+        return MessageOperations.request(
+            (parts, flags, timeout) -> NativeRouterRequestSupport.requestStage(
+                this, rid, transportPairId, transportPairGeneration,
+                parts, flags, timeout),
+            (parts, callback, flags, timeout) ->
+                NativeRouterRequestSupport.requestCallback(
+                    this, rid, transportPairId, transportPairGeneration,
+                    parts, callback, flags, timeout));
+    }
+
     private CompletableFuture<List<Message>> requestStage(RoutingId rid,
                                                           List<Message> parts,
                                                           SendFlags flags,

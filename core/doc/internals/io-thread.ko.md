@@ -2,7 +2,7 @@
 title: "I/O Thread 내부 구조"
 ---
 
-[English](io-thread.en.md) | 한국어
+[English](https://zlink-systems.github.io/zlink/internals/io-thread/) | 한국어
 
 <!-- zlink-nav:start -->
 [가이드 목차](../guide/README.ko.md) | [이전: Thread safety](thread-safety.ko.md) | [다음: Design decisions](design-decisions.ko.md)

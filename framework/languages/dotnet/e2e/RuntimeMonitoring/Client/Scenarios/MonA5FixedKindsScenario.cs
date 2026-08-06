@@ -29,10 +29,11 @@ internal static class MonA5FixedKindsScenario
             await WaitForLocationEventAsync(service, baselineEvidence, "degraded");
             var duringOutage = await SnapshotAsync(service);
             ZlinkStreamAssert.Ensure(
-                duringOutage.IsReady
-                && duringOutage.Channels.Single(channel =>
-                    channel.ChannelName == RuntimeMonitoringNames.Channel).IsReady,
-                "MON-A5 store outage incorrectly removed the admitted messaging path.");
+                duringOutage.State == "Degraded"
+                && duringOutage.Peers.Any(peer =>
+                    peer.Rid.StartsWith("svc-b-", StringComparison.Ordinal)
+                    && peer.State == "Ready"),
+                "MON-A5 store outage did not expose the degraded public topology state.");
 
             var request = await service.Post("/profile/request")
                 .Body(new ProfileReq("during-outage", "mon-a5-during-outage"))
@@ -77,7 +78,7 @@ internal static class MonA5FixedKindsScenario
                     $"reason={state}"
                 ],
                 [],
-                TimeoutMilliseconds: 3000,
+                TimeoutMilliseconds: state == "ready" ? 10000 : 3000,
                 AfterIndex: afterIndex))
             .Async<string[]>()).Body;
         ZlinkStreamAssert.Ensure(

@@ -4,7 +4,7 @@
 
 Session bind failure rules, physical disconnect handling, and relocation route refresh are
 exactly the same as
-[Java reference 06. Stream session](../../java/reference/06-stream-session.ko.md) (Korean-only).
+[Java reference 06. Stream session](../../java/reference/06-stream-session.en.md) (Korean-only).
 What Kotlin adds is a suspending session base class and Kotlin-only wrappers around one-way
 calls. The exact signatures are owned by the
 [Kotlin STREAM session exact interface](../../common/spec/server/languages/kotlin/interfaces/stream-session.en.md)
@@ -122,7 +122,7 @@ the Java reference.
 
 Calls Java's `ZLinkSessionContext.close()` directly (chain with `.await()` if needed). The
 completion rules are the same as the
-[`close` entry in the Java reference's document 06](../../java/reference/06-stream-session.ko.md)
+[`close` entry in the Java reference's document 06](../../java/reference/06-stream-session.en.md)
 (Korean-only).
 
 ---
@@ -130,5 +130,5 @@ completion rules are the same as the
 See the
 [Kotlin STREAM session exact interface](../../common/spec/server/languages/kotlin/interfaces/stream-session.en.md)
 and
-[Java reference 06. Stream session](../../java/reference/06-stream-session.ko.md) (Korean-only)
+[Java reference 06. Stream session](../../java/reference/06-stream-session.en.md) (Korean-only)
 for the full rationale.

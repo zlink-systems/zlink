@@ -2,7 +2,7 @@
 title: "Core 공개 계약 관리"
 ---
 
-[English](00-public-contract-governance.en.md) | 한국어
+[English](https://zlink-systems.github.io/zlink/spec/core/00-public-contract-governance/) | 한국어
 
 <!-- zlink-nav:start -->
 [Core 스펙 목차](README.ko.md) | [이전: 개요](README.ko.md) | [다음: Context](01-context.ko.md)

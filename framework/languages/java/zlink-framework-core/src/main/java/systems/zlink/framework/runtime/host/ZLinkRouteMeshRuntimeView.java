@@ -130,8 +130,8 @@ final class ZLinkRouteMeshRuntimeView
             nativePeers.stream().map(ZLinkRouteMeshRuntimeView::peer).toList(),
             new ZLinkPlacementSnapshot(
                 placementAvailable,
-                placement.objectCapacity().actors().active(),
-                placement.objectCapacity().spots().active(),
+                runtime.activeActorCount(),
+                runtime.activeSpotCount(),
                 placementAvailable
                     ? Optional.empty()
                     : Optional.of(
@@ -142,7 +142,7 @@ final class ZLinkRouteMeshRuntimeView
                             : state != ZLinkTopologyState.READY
                                 ? ZLinkTopologyReason.RUNTIME_NOT_READY
                                 : ZLinkTopologyReason.CAPACITY_EXCEEDED)),
-            sequence.incrementAndGet(),
+            sequence.get(),
             Instant.now());
     }
 
@@ -239,6 +239,7 @@ final class ZLinkRouteMeshRuntimeView
             return runtime.monitoringLocationRuntimeQuery()
                 .getStatus()
                 .toCompletableFuture()
+                .orTimeout(500, java.util.concurrent.TimeUnit.MILLISECONDS)
                 .join()
                 .storeHealthy();
         } catch (ZLinkConfigurationException notConfigured) {
@@ -310,7 +311,7 @@ final class ZLinkRouteMeshRuntimeView
             && (placement.objectCapacity().spotTypes().isEmpty()
                 || placement.objectCapacity().spotTypes().stream()
                     .anyMatch(type -> hasRemainingCapacity(type.usage())));
-        return actorAvailable || spotAvailable;
+        return actorAvailable && spotAvailable;
     }
 
     private static boolean hasRemainingCapacity(ZLinkCapacityUsage capacity) {
@@ -325,7 +326,7 @@ final class ZLinkRouteMeshRuntimeView
             || placement.activationConcurrency().active() < limit;
     }
 
-    private static final class SignalHub implements AutoCloseable {
+    private final class SignalHub implements AutoCloseable {
         private final ZLinkInternalMeshNode node;
         private final Object gate = new Object();
         private final List<Runnable> signals = new ArrayList<>();
@@ -357,6 +358,7 @@ final class ZLinkRouteMeshRuntimeView
         }
 
         void signal() {
+            sequence.incrementAndGet();
             Runnable[] current;
             synchronized (gate) {
                 current = signals.toArray(Runnable[]::new);
@@ -412,14 +414,18 @@ final class ZLinkRouteMeshRuntimeView
                 status,
                 peers,
                 Map.copyOf(peerChannels),
-                Map.copyOf(node.channelWeights()));
+                Map.copyOf(node.channelWeights()),
+                runtime.activeActorCount(),
+                runtime.activeSpotCount());
         }
 
         private record SourceSnapshot(
             MeshNodeStatus status,
             List<MeshPeerEntry> peers,
             Map<RoutingId, PeerChannels> peerChannels,
-            Map<String, Integer> channelWeights) {
+            Map<String, Integer> channelWeights,
+            int activeActorCount,
+            int activeSpotCount) {
         }
 
         @Override

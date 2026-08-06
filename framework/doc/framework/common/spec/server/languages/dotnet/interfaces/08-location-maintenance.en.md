@@ -1,14 +1,14 @@
 # .NET Location Configuration And Operations Public Interface
 
 [.NET exact interface table of contents](README.en.md) · [Location Runtime](../../../../21-location-runtime.en.md) ·
-[Provider SPI](08-authority-relocation.ko.md) · [Host Monitoring](10-topology-monitoring.en.md)
+[Provider SPI](08-authority-relocation.en.md) · [Host Monitoring](10-topology-monitoring.en.md)
 
 ## 1. Scope
 
 This document only defines the Location configuration, readiness, and
 operational queries the application uses. The technical primitives the
 Store provider implements are owned by the
-[provider SPI](08-authority-relocation.ko.md).
+[provider SPI](08-authority-relocation.en.md).
 
 Authority key/version, owner token, descriptor record, capacity fence,
 reservation, aggregate, and relocation reference are framework-internal

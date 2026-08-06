@@ -11,6 +11,7 @@ var scenarios = new (string Name, Func<Task> Run)[]
     ("MON-A4A", () => MonA4AvailabilityTransitionScenario.RunPlannedAsync(options)),
     ("MON-A4B", () => MonA4AvailabilityTransitionScenario.RunCrashAsync(options)),
     ("MON-A5", () => MonA5FixedKindsScenario.RunAsync(options)),
+    ("MON-A6", () => MonA6PlacementCapacityScenario.RunAsync(options)),
     ("MON-B1", () => MonBPublishMonitoringAbsenceScenario.RunZeroTargetAsync(options)),
     ("MON-B2", () => MonBPublishMonitoringAbsenceScenario.RunLocalTargetAsync(options)),
     ("MON-C1", () => MonC1DispatchFailureScenario.RunAsync(options)),

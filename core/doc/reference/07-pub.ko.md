@@ -1,4 +1,4 @@
-한국어 | [English](07-pub.en.md)
+한국어 | [English](https://zlink-systems.github.io/zlink/reference/07-pub/)
 
 [레퍼런스 목차](README.ko.md)
 

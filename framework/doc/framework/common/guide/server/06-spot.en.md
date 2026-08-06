@@ -1,8 +1,8 @@
 # 6. Spot
 
-> **The document that owns this chapter's contract** — the [Spot model](../../../common/spec/11-spot-model.ko.md)
-> and [SPOT messaging](../../../common/spec/12-spot-messaging.ko.md) own the behavior, and
-> the [per-language Spot public contract](../../../common/spec/server/languages/README.ko.md)
+> **The document that owns this chapter's contract** — the [Spot model](../../../common/spec/11-spot-model.en.md)
+> and [SPOT messaging](../../../common/spec/12-spot-messaging.en.md) own the behavior, and
+> the [per-language Spot public contract](../../../common/spec/server/languages/README.en.md)
 > owns the exact signatures. Actor and Spot membership are explained in
 > [Actor & Spot Hosting](07-actor-spot.en.md).
 

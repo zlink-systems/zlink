@@ -1,4 +1,4 @@
-[한국어](02-message.ko.md) | English
+[한국어](https://zlink-systems.github.io/zlink/ko/reference/02-message/) | English
 
 [Reference index](README.en.md)
 

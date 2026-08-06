@@ -9,7 +9,7 @@ title: "13. Key Type Usage Index · C#/.NET"
 # 13. Key Type Usage Index
 
 > **The document that owns this chapter's contract** —
-> [.NET exact interface](../../../common/spec/server/languages/dotnet/interfaces/README.ko.md)
+> [.NET exact interface](../../../common/spec/server/languages/dotnet/interfaces/README.en.md)
 > owns the exact signatures. This chapter is a guide for finding the public interfaces an
 > application uses most often, by feature.
 
@@ -48,7 +48,7 @@ var status = await routeClient
 ```
 
 For the exact handler and call interfaces, see the
-[Channel messaging exact interface](../../../common/spec/server/languages/dotnet/interfaces/04-channel-messaging.ko.md).
+[Channel messaging exact interface](../../../common/spec/server/languages/dotnet/interfaces/04-channel-messaging.en.md).
 
 ## 2. Topology Registration
 
@@ -199,7 +199,7 @@ actor.Context
 ActorId.
 
 For the exact interfaces, see the
-[Actor exact interface](../../../common/spec/server/languages/dotnet/interfaces/06-actors.ko.md).
+[Actor exact interface](../../../common/spec/server/languages/dotnet/interfaces/06-actors.en.md).
 
 ## 5. STREAM Session
 
@@ -239,8 +239,8 @@ public sealed class GatewaySession(IZLinkSessionContext context) : IZLinkSession
 | `IZLinkBoundSession` | Pushes from an Actor to the bound session |
 
 For the exact interfaces, see
-[STREAM](../../../common/spec/server/languages/dotnet/interfaces/07-stream-session.ko.md) and
-[Bound session](../../../common/spec/server/languages/dotnet/interfaces/07-bound-stream-session.ko.md).
+[STREAM](../../../common/spec/server/languages/dotnet/interfaces/07-stream-session.en.md) and
+[Bound session](../../../common/spec/server/languages/dotnet/interfaces/07-bound-stream-session.en.md).
 
 ## 6. Location And Relocation
 
@@ -306,8 +306,8 @@ logs/traces or the Framework's internal diagnostics.
 
 ## 8. Related Documents
 
-- [Public contract governance principles](../../../common/spec/00-public-contract-governance.ko.md)
-- [.NET exact interface index](../../../common/spec/server/languages/dotnet/interfaces/README.ko.md)
+- [Public contract governance principles](../../../common/spec/00-public-contract-governance.en.md)
+- [.NET exact interface index](../../../common/spec/server/languages/dotnet/interfaces/README.en.md)
 
 ---
 <!-- framework-adapter-nav:bottom:start -->

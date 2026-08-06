@@ -4,7 +4,7 @@ title: "Runtime Status Query And Operational Diagnostics"
 
 # Runtime Status Query And Operational Diagnostics
 
-[Spec table of contents](README.en.md) · [Previous: Relocation Store Provider SPI And The Official Redis Implementation](23-relocation-store-redis.ko.md) · [Next: Runtime Metrics And Aggregation Rules](25-runtime-metrics.ko.md)
+[Spec table of contents](README.en.md) · [Previous: Relocation Store Provider SPI And The Official Redis Implementation](23-relocation-store-redis.en.md) · [Next: Runtime Metrics And Aggregation Rules](25-runtime-metrics.en.md)
 
 > **What this chapter defines** — how an operator queries the framework runtime's
 > current status, observes changes, and finds causes in logs.
@@ -20,10 +20,10 @@ the scope of a failure, and relocation/shutdown results.
 This document owns the complete status at a specific point in time, the status-change
 stream, and structured-log identifiers. The name/unit/label of numbers accumulated or
 collected over time is owned by
-[Runtime Metrics](25-runtime-metrics.ko.md); the progress record of one message is
-owned by [Message Flow Tracing](26-message-flow-tracing.ko.md); the state transitions
+[Runtime Metrics](25-runtime-metrics.en.md); the progress record of one message is
+owned by [Message Flow Tracing](26-message-flow-tracing.en.md); the state transitions
 of relocation and shutdown are owned by
-[Host Relocation And Shutdown](28-graceful-drain-handoff.ko.md).
+[Host Relocation And Shutdown](28-graceful-drain-handoff.en.md).
 
 | Actor | Responsibility |
 |---|---|
@@ -113,7 +113,7 @@ within a time limit is called
 `IsReady` is `true` only when `State` is `serving`. `AcceptingWork` indicates whether
 the current host accepts new application operations. Don't reinterpret the two values
 as separate conditions. The exact meaning of relocation option, deadline, and result is
-set by [Host Relocation And Shutdown](28-graceful-drain-handoff.ko.md).
+set by [Host Relocation And Shutdown](28-graceful-drain-handoff.en.md).
 
 Host status's inbound dispatch item shows how much application payload the framework
 has received and is currently processing. The value is read from a running total the
@@ -320,7 +320,7 @@ as a messaging target or placement selector.
 The fields, page size, and cache contract provided by the
 [Location Store](01-glossary.en.md#location-store), the reference storage for
 location information, are set by
-[Location Runtime's Operational Query](21-location-runtime.ko.md#64-운영-도구에서-현재-위치를-조회한다).
+[Location Runtime's Operational Query](21-location-runtime.en.md#64-querying-the-current-location-from-operational-tools).
 
 ## 5. Structured Log
 
@@ -353,7 +353,7 @@ A structured log or dedicated metric isn't recorded when work enters or leaves a
 mailbox. The framework doesn't turn a mailbox's individual enqueue/dequeue and turn
 into operational events. Operation failure is aggregated into drop/timeout/backpressure
 metrics, and individual message delay is investigated via
-[Message Flow Tracing](26-message-flow-tracing.ko.md).
+[Message Flow Tracing](26-message-flow-tracing.en.md).
 
 Publisher state is recorded as `excluded_draining`, `excluded_stale`, `reconnecting`,
 `disconnected`. A log is a judgment at the time it was recorded and isn't the basis for

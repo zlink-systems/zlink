@@ -1154,7 +1154,7 @@ app.add_zlink_framework([](auto &options) {
 ## 6. HTTP Route And Middleware
 
 **The HTTP hosting scenario is owned by
-[60](../60-http-hosting.ko.md) · [61](../61-embedded-http-server.ko.md).**
+[60](../60-http-hosting.en.md) · [61](../61-embedded-http-server.en.md).**
 Only the public type is fixed here.
 
 ```cpp

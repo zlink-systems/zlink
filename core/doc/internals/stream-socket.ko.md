@@ -2,7 +2,7 @@
 title: "STREAM 소켓 WS/WSS 최적화"
 ---
 
-[English](stream-socket.en.md)
+[English](stream-socket.ko.md)
 
 <!-- zlink-nav:start -->
 [가이드 목차](../guide/README.ko.md) | [이전: Source layout](core-source-layout.ko.md) | [다음: Socket option 기본값](socket-option-defaults.ko.md)

@@ -1,4 +1,4 @@
-한국어 | [English](17-utilities.en.md)
+한국어 | [English](https://zlink-systems.github.io/zlink/reference/17-utilities/)
 
 [레퍼런스 목차](README.ko.md)
 

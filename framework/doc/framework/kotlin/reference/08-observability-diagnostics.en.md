@@ -4,7 +4,7 @@
 
 The diagnostics option values, host status fields, and the `ZLinkFrameworkErrorKind`
 correspondence table are exactly the same as
-[Java reference 08. Observability diagnostics](../../java/reference/08-observability-diagnostics.ko.md)
+[Java reference 08. Observability diagnostics](../../java/reference/08-observability-diagnostics.en.md)
 (Korean-only) — Kotlin uses Java's `ZLinkFrameworkErrorKind`/`ZLinkFrameworkException` directly
 and adds no separate enum or exception hierarchy. The only thing Kotlin adds is a single
 extension function wrapping message-flow observer registration in a receiver lambda. The exact
@@ -44,7 +44,7 @@ use a lambda directly instead of making the observer a separate class.
 Host status (`ZLinkFrameworkRuntimeStatus`, `ZLinkInboundDispatchStatus`) and the
 `ZLinkFrameworkErrorKind` correspondence table use the Java types directly — no Kotlin-only data
 class or enum is added. See
-[the Java reference's document 08](../../java/reference/08-observability-diagnostics.ko.md)
+[the Java reference's document 08](../../java/reference/08-observability-diagnostics.en.md)
 (Korean-only) for the field meaning and correspondence table of both entries.
 
 ---
@@ -52,5 +52,5 @@ class or enum is added. See
 See the
 [Kotlin monitoring exact interface](../../common/spec/server/languages/kotlin/interfaces/monitoring.en.md)
 and
-[Java reference 08. Observability diagnostics](../../java/reference/08-observability-diagnostics.ko.md)
+[Java reference 08. Observability diagnostics](../../java/reference/08-observability-diagnostics.en.md)
 (Korean-only) for the full rationale.

@@ -2,7 +2,7 @@
 title: "Result와 errno 대응"
 ---
 
-[English](04-errno-map.en.md) | 한국어
+[English](https://zlink-systems.github.io/zlink/spec/core/04-errno-map/) | 한국어
 
 <!-- zlink-nav:start -->
 [Core 스펙 목차](README.ko.md) | [이전: Errors](03-errors.ko.md) | [다음: Events](05-events.ko.md)

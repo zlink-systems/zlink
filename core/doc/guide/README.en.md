@@ -1,4 +1,4 @@
-[한국어](README.ko.md)
+[한국어](README.en.md)
 
 # zlink Core Guide
 

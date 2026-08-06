@@ -177,7 +177,7 @@ mkdocs build --strict   # doc/site에서 실행
 |---|---|
 | Application이 호출하는 API의 이름과 signature | [언어별 공개 계약](../spec/server/languages/README.ko.md) |
 | 공개 동작의 의미와 완료 조건 | [정식 spec](../spec/README.ko.md) |
-| Core가 제공하는 raw socket·transport 내부 | [Core raw runtime 내부 경계](https://zlink-systems.github.io/zlink/internals/runtime-boundary/) |
+| Core가 제공하는 raw socket·transport 내부 | [Core raw runtime 내부 경계](https://zlink-systems.github.io/zlink/ko/internals/runtime-boundary/) |
 
 네 runtime은 이 문서의 의미를 구현하지만 source나 공통 native binary를 공유하지 않는다.
 

@@ -1,4 +1,4 @@
-한국어 | [English](16-timers.en.md)
+한국어 | [English](https://zlink-systems.github.io/zlink/reference/16-timers/)
 
 [레퍼런스 목차](README.ko.md)
 

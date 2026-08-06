@@ -1589,14 +1589,11 @@ export class ZLinkFrameworkRuntimeHost implements
     const failureHandler = () => {
       recoveryRequired = true;
       if (runtime.ownerLeaseUsable) return;
-      transportFence = transportFence
-        .then(() => spotNodeRuntime.fenceLocationAutoConnect())
-        .catch(error => {
-          this.runtimeOrPreStartErrorSink.reportRuntimeTaskException(
-            'owner lease transport fencing',
-            error
-          );
-        });
+      // A Store failure invalidates new ownership and discovery work, but it
+      // must not tear down transports that were already established. The
+      // auto-connect reconciler applies storeFailureGraceMs to the last
+      // complete descriptor set; fencing here would bypass that contract and
+      // make existing requests fail during the grace window.
       const routes = this.statefulAuthorityRoutes;
       if (routes === undefined) return;
       this.statefulAuthorityRoutes = undefined;
@@ -2048,7 +2045,8 @@ export class ZLinkFrameworkRuntimeHost implements
 
   createSpotManagerOptions(): Partial<ZLinkSpotManagerOptions> {
     this.ensureLocationRuntime();
-    return new ZLinkSpotRuntimeOptionsFactory({
+    return {
+      ...new ZLinkSpotRuntimeOptionsFactory({
       registration: this.options.registration,
       channelTransport: this.channelTransport,
       routeTransport: this.routeTransport,
@@ -2079,9 +2077,25 @@ export class ZLinkFrameworkRuntimeHost implements
       detachedTaskRunner: this.detachedTaskRunner(),
       metrics: this.metrics,
       admission: this.admission,
-      statefulExecutionAllowed: () =>
-        this.locationOwner.currentRuntime?.ownerLeaseUsable ?? true
-    }).create(this.actorTransferRuntime);
+      statefulExecutionAllowed: () => {
+        const locationRuntime = this.locationOwner.currentRuntime;
+        if (locationRuntime !== undefined) return locationRuntime.ownerLeaseUsable;
+        // A host configured with a Location Store must not execute stateful
+        // timers while its lease runtime is unavailable. Hosts without a
+        // Location Store have no owner lease to fence.
+        return this.locationOwner.currentStores?.locationStore === undefined;
+      }
+    }).create(this.actorTransferRuntime),
+      activationConcurrencyLimitProvider: (meshName: string) =>
+        this.options.registration.spotNodes.get(meshName)?.activationConcurrencyLimit ?? 128,
+      onInstanceActivationConcurrencyChanged: (meshName: string) => {
+        void this.spotNodeRuntime?.publishMeshNodeState(
+          this.runtimeState,
+          this.executionState?.abortController.signal,
+          meshName
+        ).catch(() => undefined);
+      }
+    };
   }
 
   createPublicSpotManager(local: DefaultZLinkSpotManager): import('../../contracts').ZLinkSpotManager {
@@ -2257,7 +2271,7 @@ export class ZLinkFrameworkRuntimeHost implements
               && descriptor.objectRole === 'server'
               && descriptor.placementWeight > 0
               && excludedNodeRids?.has(String(descriptor.rid)) !== true
-              && spots.active + spots.reserved < spots.limit
+              && (spots.limit === 0 || spots.active + spots.reserved < spots.limit)
               && capability !== undefined
               && (spotTypeCapacity === undefined
                 || spotTypeCapacity.limit === 0
@@ -2626,7 +2640,7 @@ export class ZLinkFrameworkRuntimeHost implements
       inboundDispatchBudget: this.inboundDispatchBudget,
       oneWayFailureSink: (error) =>
         this.runtimeOrPreStartErrorSink.reportRuntimeTaskException('channel one-way submit', error)
-    }).create();
+      }).create();
   }
 
   private createSpotNodeRuntimeOptions(
@@ -2666,7 +2680,11 @@ export class ZLinkFrameworkRuntimeHost implements
         });
       },
       meshRecordDispatcher: (meshName: string, owner: ReadyRecord, record: ReceiveRecord) =>
-        this.dispatchMeshRecord(meshName, owner, record, this.executionState?.abortController.signal)
+        this.dispatchMeshRecord(meshName, owner, record, this.executionState?.abortController.signal),
+      instanceActivationConcurrencyProvider: (meshName: string) => {
+        return this.spotManager?.instanceActivationConcurrency(meshName)
+          ?? { active: 0, limit: this.options.registration.spotNodes.get(meshName)?.activationConcurrencyLimit ?? 128 };
+      }
     };
   }
 

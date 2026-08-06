@@ -337,7 +337,7 @@ A connector is created with `zlinkStreamConnectorFactory.create(options)`.
 
 - **Cancellation is delivered through an optional `AbortSignal`.** It
   doesn't replicate another language's cancellation token shape
-  ([Async Execution And Coroutine Policy](../../../05-async-execution-policy.ko.md)).
+  ([Async Execution And Coroutine Policy](../../../05-async-execution-policy.en.md)).
 - **An event subscription returns a `Disposable`.** Dispose it with
   that `Disposable`.
 - `send`/`request`/`waitFor` don't execute immediately — they

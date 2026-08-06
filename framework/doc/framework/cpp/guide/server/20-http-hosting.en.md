@@ -20,7 +20,7 @@ and web clients coming in over REST, and the handler model is the same as a chan
 just map the same handler class onto an HTTP route.
 
 The **sending** side (the client) is a separate artifact --
-the [zlink::http_client guide](../http-client/README.ko.md).
+the [zlink::http_client guide](../http-client/README.en.md).
 
 ## 2. Mapping Routes
 

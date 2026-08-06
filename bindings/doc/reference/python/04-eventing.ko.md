@@ -1,4 +1,4 @@
-한국어 | [English](04-eventing.en.md)
+한국어 | [English](https://zlink-systems.github.io/zlink/bindings/reference/python/04-eventing/)
 
 [레퍼런스 목차](README.ko.md)
 

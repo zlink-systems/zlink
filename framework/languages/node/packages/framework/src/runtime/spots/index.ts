@@ -283,6 +283,8 @@ export interface ZLinkSpotManagerOptions {
   readonly metrics?: import('../diagnostics').ZLinkRuntimeMetrics;
   readonly admission?: ZLinkRuntimeAdmissionGate;
   readonly statefulExecutionAllowed?: () => boolean;
+  readonly activationConcurrencyLimitProvider?: (meshName: string) => number;
+  readonly onInstanceActivationConcurrencyChanged?: (meshName: string) => void;
 }
 
 export class DefaultZLinkSpotManager {
@@ -299,6 +301,17 @@ export class DefaultZLinkSpotManager {
     string,
     Promise<ZLinkSpotActivation>
   >();
+  private readonly instanceActivationGates = new Map<string, {
+    readonly meshName: string;
+    readonly limit: number;
+    active: number;
+    readonly waiters: Array<{
+      resolve: (release: () => void) => void;
+      reject: (error: unknown) => void;
+      signal?: AbortSignal;
+      abort?: () => void;
+    }>;
+  }>();
   private readonly pendingInstanceCloses = new Map<string, Promise<boolean>>();
   private readonly pendingInstanceTerminals = new Map<string, number>();
   private readonly pendingInstanceTerminalGenerations = new Map<string, Map<string, number>>();
@@ -429,6 +442,11 @@ export class DefaultZLinkSpotManager {
     return this.activations.list(meshName).length;
   }
 
+  instanceActivationConcurrency(meshName: string): { readonly active: number; readonly limit: number } {
+    const limit = this.options.activationConcurrencyLimitProvider?.(meshName) ?? 128;
+    return { active: this.instanceActivationGates.get(meshName)?.active ?? 0, limit };
+  }
+
   resolveRelocationActivation(
     meshName: string,
     spotId: RoutingId
@@ -487,6 +505,28 @@ export class DefaultZLinkSpotManager {
   }
 
   async materializeInstance(
+    meshName: string,
+    instanceType: string,
+    spotId: RoutingId,
+    objectGeneration: bigint,
+    signal?: AbortSignal
+  ): Promise<void> {
+    const existing = this.pendingInstanceMaterializations.get(
+      instanceMaterializationKey(meshName, spotId, objectGeneration)
+    );
+    if (existing !== undefined) {
+      await awaitWithAbort(existing, signal);
+      return;
+    }
+    const release = await this.acquireInstanceActivation(meshName, signal);
+    try {
+      await this.materializeInstanceCore(meshName, instanceType, spotId, objectGeneration, signal);
+    } finally {
+      release();
+    }
+  }
+
+  private async materializeInstanceCore(
     meshName: string,
     instanceType: string,
     spotId: RoutingId,
@@ -587,6 +627,59 @@ export class DefaultZLinkSpotManager {
       await pending;
       return;
     }
+  }
+
+  private async acquireInstanceActivation(
+    meshName: string,
+    signal?: AbortSignal
+  ): Promise<() => void> {
+    let gate = this.instanceActivationGates.get(meshName);
+    if (gate === undefined) {
+      gate = {
+        meshName,
+        limit: this.options.activationConcurrencyLimitProvider?.(meshName) ?? 128,
+        active: 0,
+        waiters: []
+      };
+      this.instanceActivationGates.set(meshName, gate);
+    }
+    if (signal?.aborted === true) throw signal.reason;
+    if (gate.active < gate.limit) {
+      gate.active += 1;
+      this.options.onInstanceActivationConcurrencyChanged?.(meshName);
+      return () => this.releaseInstanceActivation(gate!);
+    }
+    return new Promise<() => void>((resolve, reject) => {
+      const waiter = { resolve, reject, signal, abort: undefined as (() => void) | undefined };
+      waiter.abort = () => {
+        const index = gate!.waiters.indexOf(waiter);
+        if (index >= 0) gate!.waiters.splice(index, 1);
+        reject(signal?.reason);
+      };
+      signal?.addEventListener('abort', waiter.abort, { once: true });
+      gate!.waiters.push(waiter);
+    });
+  }
+
+  private releaseInstanceActivation(gate: {
+    readonly meshName: string;
+    readonly limit: number;
+    active: number;
+    readonly waiters: Array<{
+      resolve: (release: () => void) => void;
+      reject: (error: unknown) => void;
+      signal?: AbortSignal;
+      abort?: () => void;
+    }>;
+  }): void {
+    const waiter = gate.waiters.shift();
+    if (waiter !== undefined) {
+      if (waiter.abort !== undefined) waiter.signal?.removeEventListener('abort', waiter.abort);
+      waiter.resolve(() => this.releaseInstanceActivation(gate));
+      return;
+    }
+    gate.active -= 1;
+    this.options.onInstanceActivationConcurrencyChanged?.(gate.meshName);
   }
 
   isInstanceMaterialized(

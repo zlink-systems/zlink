@@ -3,13 +3,13 @@ title: "13. Key Type Usage Index · Node/TypeScript"
 ---
 
 <!-- framework-adapter-nav:start -->
-[Guide Home](../../../index.ko.md) | [Previous: Operations — metrics · drain · readiness](12-operations.en.md) | [Next: Picking A Sample](14-samples.en.md)
+[Guide Home](../../../index.en.md) | [Previous: Operations — metrics · drain · readiness](12-operations.en.md) | [Next: Picking A Sample](14-samples.en.md)
 <!-- framework-adapter-nav:end -->
 
 # 13. Key Type Usage Index
 
 > **The document that owns this chapter's contract** —
-> the [Node.js exact interface table of contents](../../../common/spec/server/languages/node/interfaces/README.ko.md)
+> the [Node.js exact interface table of contents](../../../common/spec/server/languages/node/interfaces/README.en.md)
 > owns the exact signatures. This chapter is a guide to finding the public surface an
 > application uses often, organized by feature.
 
@@ -151,6 +151,6 @@ Three spots that trip up readers coming from another language.
 
 ## 9. Related Documents
 
-- Exact signatures: [Node.js exact interface table of contents](../../../common/spec/server/languages/node/interfaces/README.ko.md)
+- Exact signatures: [Node.js exact interface table of contents](../../../common/spec/server/languages/node/interfaces/README.en.md)
 - Registration entry point: [2. Getting Started](02-getting-started.en.md)
 - The NestJS host contract: [Node.js NestJS host public contract](../../../common/spec/server/languages/node/interfaces/07-nestjs-host.en.md)

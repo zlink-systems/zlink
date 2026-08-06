@@ -54,10 +54,10 @@
 
     | Package | When to add it |
     | --- | --- |
-    | `Zlink.Framework.Locations.Redis` | When using the Redis location store for auto-connect ([10-location](10-location.ko.md)) |
-    | `Zlink.Framework.Codecs.Protobuf` · `.MessagePack` | To use instead of the default JSON codec ([05-channel-messaging §7](05-channel-messaging.ko.md#7-직렬화-codec)) |
-    | `Systems.Zlink.Stream.Connector` | When building an external client (a game client, mobile) ([09-stream](09-stream.ko.md)) |
-    | `Zlink.HttpClient` | When the server calls out over HTTP ([HTTP Client guide](../http-client/README.ko.md)) |
+    | `Zlink.Framework.Locations.Redis` | When using the Redis location store for auto-connect ([10-location](10-location.en.md)) |
+    | `Zlink.Framework.Codecs.Protobuf` · `.MessagePack` | To use instead of the default JSON codec ([05-channel-messaging §7](05-channel-messaging.en.md#7-serialization-codec)) |
+    | `Systems.Zlink.Stream.Connector` | When building an external client (a game client, mobile) ([09-stream](09-stream.en.md)) |
+    | `Zlink.HttpClient` | When the server calls out over HTTP ([HTTP Client guide](../http-client/README.en.md)) |
 
     Framework packages ship starting at **0.9**. `Systems.Zlink` (the core binding) and
     `Zlink.HttpClient` follow their own version tracks, so the three packages' version
@@ -65,7 +65,7 @@
 
     The license differs by layer — core/binding is MPL-2.0, framework is FSL-1.1-ALv2, and
     `Zlink.HttpClient` is Apache-2.0. There's no cost to building and selling a service
-    ([17-alternative §7](17-alternative.ko.md#7-라이선스--쓰는-데-드는-비용)).
+    ([17-alternative §7](17-alternative.en.md#7-license--the-cost-of-using-it)).
 
 === "C++"
 
@@ -81,16 +81,16 @@
 
     | Target | When to add it |
     | --- | --- |
-    | `zlink::framework_locations_redis` | When using the Redis location store for auto-connect ([10-location](10-location.ko.md)) |
-    | `zlink::framework_codec_protobuf` · `_msgpack` | To use instead of the default JSON codec ([05-channel-messaging §7](05-channel-messaging.ko.md#7-직렬화-codec)) |
-    | stream connector | When building an external client (a game client, mobile) ([09-stream](09-stream.ko.md)) |
-    | `zlink::http_client` | When the server calls out over HTTP ([HTTP Client guide](../http-client/README.ko.md)) |
+    | `zlink::framework_locations_redis` | When using the Redis location store for auto-connect ([10-location](10-location.en.md)) |
+    | `zlink::framework_codec_protobuf` · `_msgpack` | To use instead of the default JSON codec ([05-channel-messaging §7](05-channel-messaging.en.md#7-serialization-codec)) |
+    | stream connector | When building an external client (a game client, mobile) ([09-stream](09-stream.en.md)) |
+    | `zlink::http_client` | When the server calls out over HTTP ([HTTP Client guide](../http-client/README.en.md)) |
 
     It uses C++20 coroutines, so a compiler that supports at least that is required.
 
     The license differs by layer — core/binding is MPL-2.0, framework is FSL-1.1-ALv2, and
     `zlink::http_client` is Apache-2.0. There's no cost to building and selling a service
-    ([17-alternative §7](17-alternative.ko.md#7-라이선스--쓰는-데-드는-비용)).
+    ([17-alternative §7](17-alternative.en.md#7-license--the-cost-of-using-it)).
 
 === "Java"
 
@@ -106,16 +106,16 @@
 
     | Artifact | When to add it |
     | --- | --- |
-    | `zlink-framework-locations-redis` | When using the Redis location store for auto-connect ([10-location](10-location.ko.md)) |
-    | `zlink-framework-codec-protobuf` · `-codec-msgpack` | To use instead of the default JSON codec ([05-channel-messaging §7](05-channel-messaging.ko.md#7-직렬화-codec)) |
-    | `zlink-stream-connector` | When building an external client (a game client, mobile) ([09-stream](09-stream.ko.md)) |
-    | `zlink-http-client` | When the server calls out over HTTP ([HTTP Client guide](../http-client/README.ko.md)) |
+    | `zlink-framework-locations-redis` | When using the Redis location store for auto-connect ([10-location](10-location.en.md)) |
+    | `zlink-framework-codec-protobuf` · `-codec-msgpack` | To use instead of the default JSON codec ([05-channel-messaging §7](05-channel-messaging.en.md#7-serialization-codec)) |
+    | `zlink-stream-connector` | When building an external client (a game client, mobile) ([09-stream](09-stream.en.md)) |
+    | `zlink-http-client` | When the server calls out over HTTP ([HTTP Client guide](../http-client/README.en.md)) |
 
     JDK 21 or later is required.
 
     The license differs by layer — core/binding is MPL-2.0, framework is FSL-1.1-ALv2, and
     `zlink-http-client` is Apache-2.0. There's no cost to building and selling a service
-    ([17-alternative §7](17-alternative.ko.md#7-라이선스--쓰는-데-드는-비용)).
+    ([17-alternative §7](17-alternative.en.md#7-license--the-cost-of-using-it)).
 
 === "Kotlin"
 
@@ -132,16 +132,16 @@
 
     | Artifact | When to add it |
     | --- | --- |
-    | `zlink-framework-locations-redis` | When using the Redis location store for auto-connect ([10-location](10-location.ko.md)) |
-    | `zlink-framework-codec-protobuf` · `-codec-msgpack` | To use instead of the default JSON codec ([05-channel-messaging §7](05-channel-messaging.ko.md#7-직렬화-codec)) |
-    | `zlink-stream-connector` | When building an external client (a game client, mobile) ([09-stream](09-stream.ko.md)) |
-    | `zlink-http-client` | When the server calls out over HTTP ([HTTP Client guide](../http-client/README.ko.md)) |
+    | `zlink-framework-locations-redis` | When using the Redis location store for auto-connect ([10-location](10-location.en.md)) |
+    | `zlink-framework-codec-protobuf` · `-codec-msgpack` | To use instead of the default JSON codec ([05-channel-messaging §7](05-channel-messaging.en.md#7-serialization-codec)) |
+    | `zlink-stream-connector` | When building an external client (a game client, mobile) ([09-stream](09-stream.en.md)) |
+    | `zlink-http-client` | When the server calls out over HTTP ([HTTP Client guide](../http-client/README.en.md)) |
 
     JDK 21 or later is required.
 
     The license differs by layer — core/binding is MPL-2.0, framework is FSL-1.1-ALv2, and
     `zlink-http-client` is Apache-2.0. There's no cost to building and selling a service
-    ([17-alternative §7](17-alternative.ko.md#7-라이선스--쓰는-데-드는-비용)).
+    ([17-alternative §7](17-alternative.en.md#7-license--the-cost-of-using-it)).
 
 === "Node/TypeScript"
 
@@ -156,16 +156,16 @@
 
     | Package | When to add it |
     | --- | --- |
-    | `@zlink-systems/framework-locations-redis` | When using the Redis location store for auto-connect ([10-location](10-location.ko.md)) |
-    | `@zlink-systems/framework-codec-protobuf` · `-codec-msgpack` | To use instead of the default JSON codec ([05-channel-messaging §7](05-channel-messaging.ko.md#7-직렬화-codec)) |
-    | `@zlink-systems/stream-connector` | When building an external client (a game client, mobile) ([09-stream](09-stream.ko.md)) |
-    | `@zlink-systems/http-client` | When the server calls out over HTTP ([HTTP Client guide](../http-client/README.ko.md)) |
+    | `@zlink-systems/framework-locations-redis` | When using the Redis location store for auto-connect ([10-location](10-location.en.md)) |
+    | `@zlink-systems/framework-codec-protobuf` · `-codec-msgpack` | To use instead of the default JSON codec ([05-channel-messaging §7](05-channel-messaging.en.md#7-serialization-codec)) |
+    | `@zlink-systems/stream-connector` | When building an external client (a game client, mobile) ([09-stream](09-stream.en.md)) |
+    | `@zlink-systems/http-client` | When the server calls out over HTTP ([HTTP Client guide](../http-client/README.en.md)) |
 
     Node.js 20 or later is required.
 
     The license differs by layer — core/binding is MPL-2.0, framework is FSL-1.1-ALv2, and
     `@zlink-systems/http-client` is Apache-2.0. There's no cost to building and selling a
-    service ([17-alternative §7](17-alternative.ko.md#7-라이선스--쓰는-데-드는-비용)).
+    service ([17-alternative §7](17-alternative.en.md#7-license--the-cost-of-using-it)).
 
 ## 2. A Minimal Example — Two Processes Calling Each Other
 
@@ -502,7 +502,7 @@ Three things are confirmed here — the package is wired up, the two processes a
 through the mesh, and the call was routed by logical name (`greeting`) alone. This example
 has no Redis and no location store. For the calling code to stay the same as servers scale
 up and down, you need auto-connect, which is covered by
-[10-location](10-location.ko.md).
+[10-location](10-location.en.md).
 
 ## 3. TicTacToe — The Flow Of Creating One Room
 

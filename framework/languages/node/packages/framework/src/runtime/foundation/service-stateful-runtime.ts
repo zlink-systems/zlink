@@ -2146,14 +2146,19 @@ export class ServiceStatefulRuntime {
         route.objectGeneration
       );
       if (this.closed) return;
-      const spot = this.requireInstanceActivation(ingress, record);
+      const latestRoute = this.instanceIntents.get(record.route.targetSpotId)?.route;
+      const refreshedRecord = latestRoute !== undefined
+        && sameInstanceApplicationOwner(latestRoute, record.route)
+        ? { ...record, route: latestRoute }
+        : record;
+      const spot = this.requireInstanceActivation(ingress, refreshedRecord);
       const admitted = this.enqueueActivatedInstanceSpot(
         ingress,
-        record,
+        refreshedRecord,
         payloadFrame,
         spot,
         undefined,
-        this.instanceApplicationTerminalCompletion(this.instanceApplicationTarget(record)),
+        this.instanceApplicationTerminalCompletion(this.instanceApplicationTarget(refreshedRecord)),
         metadataFrame
       );
       if (admitted !== 'application') {

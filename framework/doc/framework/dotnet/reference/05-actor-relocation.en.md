@@ -5,7 +5,7 @@
 This category covers the external entry points `IZLinkActorManager`·`IZLinkActorClient`
 provide, the entry points used inside Actor code through `IZLinkActorContext` to join a Spot, and
 relocation-policy selection. The exact signatures are owned by the
-[Actor exact interface](../../common/spec/server/languages/dotnet/interfaces/06-actors.ko.md)
+[Actor exact interface](../../common/spec/server/languages/dotnet/interfaces/06-actors.en.md)
 (Korean-only).
 
 ---
@@ -181,5 +181,5 @@ afterward.
 ---
 
 The full basis is the
-[Actor exact interface](../../common/spec/server/languages/dotnet/interfaces/06-actors.ko.md)
+[Actor exact interface](../../common/spec/server/languages/dotnet/interfaces/06-actors.en.md)
 (Korean-only).

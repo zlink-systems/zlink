@@ -1559,6 +1559,15 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_E2E)
   target_include_directories(zlink_cpp_e2e_registry_messaging_object_client PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
 
+  add_executable(zlink_cpp_e2e_registry_messaging_global_object_node
+    e2e/RegistryMessaging/Server/GlobalObjectNode/main.cpp)
+  target_link_libraries(zlink_cpp_e2e_registry_messaging_global_object_node PRIVATE
+    zlink::framework
+    zlink::framework_locations_redis
+    OpenSSL::Crypto)
+  target_include_directories(zlink_cpp_e2e_registry_messaging_global_object_node PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
+
   add_executable(zlink_cpp_e2e_registry_messaging_client
     e2e/RegistryMessaging/Client/main.cpp)
   target_link_libraries(zlink_cpp_e2e_registry_messaging_client PRIVATE

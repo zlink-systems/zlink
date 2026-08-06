@@ -1,4 +1,4 @@
-[한국어](architecture.ko.md)
+[한국어](architecture.en.md)
 
 # Core runtime architecture
 

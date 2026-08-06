@@ -26,6 +26,7 @@ import systems.zlink.framework.locationprovider.ZLinkStoreKey;
 import systems.zlink.framework.locationprovider.ZLinkStoreMissingCondition;
 import systems.zlink.framework.locationprovider.ZLinkStorePut;
 import systems.zlink.framework.locationprovider.ZLinkStoreReadFound;
+import systems.zlink.framework.locationprovider.ZLinkStoreCancellation;
 import systems.zlink.framework.locationprovider.ZLinkStoreScanCursor;
 import systems.zlink.framework.locationprovider.ZLinkStoreScanExpired;
 import systems.zlink.framework.locationprovider.ZLinkStoreScanPageResult;
@@ -112,6 +113,18 @@ final class ZLinkProviderDescriptorRepository {
             page,
             DEFAULT_MESH_PAGE,
             bytes -> decodeMesh(bytes).descriptor());
+    }
+
+    CompletionStage<java.util.Optional<ZLinkMeshNodeDescriptor>> readMeshNode(
+        ZLinkMeshNodeDescriptorKey key,
+        ZLinkStoreCancellation cancellation) {
+        Objects.requireNonNull(key, "key");
+        Objects.requireNonNull(cancellation, "cancellation");
+        return provider.read(meshKey(key.meshName(), key.rid()), cancellation)
+            .thenApply(result -> result instanceof ZLinkStoreReadFound found
+                ? java.util.Optional.of(decodeMesh(found.value().bytes())
+                    .descriptor())
+                : java.util.Optional.empty());
     }
 
     CompletionStage<ZLinkLocationWriteResult> updateClientServer(

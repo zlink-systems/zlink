@@ -1,4 +1,4 @@
-[한국어](runtime-boundary.ko.md) | English
+[한국어](https://zlink-systems.github.io/zlink/ko/internals/runtime-boundary/) | English
 
 # Core Raw-Runtime Internal Boundary
 

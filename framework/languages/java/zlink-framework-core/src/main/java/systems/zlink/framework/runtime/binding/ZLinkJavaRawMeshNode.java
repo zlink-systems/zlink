@@ -160,6 +160,10 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         pendingConnectionIds = new ConcurrentHashMap<>();
     private final Map<String, java.util.concurrent.ConcurrentLinkedQueue<String>>
         monitorConnectionIds = new ConcurrentHashMap<>();
+    private final Map<String, TransportPair> transportPairs =
+        new ConcurrentHashMap<>();
+    private final Map<RoutingId, TransportPair> applicationTransportPairs =
+        new ConcurrentHashMap<>();
     private final Map<RoutingId, Long> nextAnnouncementNanos =
         new ConcurrentHashMap<>();
     private volatile RoutingId routingId;
@@ -1192,6 +1196,16 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         streamTrace("request-channel-select channel=" + selectedChannel
             + " target=" + target.map(RoutingId::toString).orElse("none")
             + " peerCount=" + (topology == null ? 0 : topology.peers().size()));
+        if (target.isPresent()
+            && transportPairFor(target.orElseThrow()) == null) {
+            // Liveness admission may complete before the Application lane is
+            // available. Do not submit through the unscoped RID route, which
+            // can select a stale or Completion transport during reconnect.
+            streamTrace("request-channel-deferred channel=" + selectedChannel
+                + " target=" + target.orElseThrow()
+                + " reason=application-pair-not-ready");
+            return false;
+        }
         boolean submitted;
         try {
             submitted = target.isPresent() && request(
@@ -3353,17 +3367,39 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 Optional.empty(),
                 List.of()));
         });
-        boolean submitted = port.request(
-            requireStarted(),
-            target,
-            frames,
-            timeout,
-            (result, replyFrames) -> completeRequest(
-                operation.id(),
+        TransportPair pair = transportPairFor(target);
+        if (channelName != null) {
+            streamTrace("request-channel-pair channel=" + channelName
+                + " target=" + target
+                + " pair=" + (pair == null
+                    ? "none"
+                    : pair.id() + "/" + pair.generation()));
+        }
+        boolean submitted = pair == null
+            ? port.request(
+                requireStarted(),
                 target,
-                correlation,
-                result,
-                replyFrames));
+                frames,
+                timeout,
+                (result, replyFrames) -> completeRequest(
+                    operation.id(),
+                    target,
+                    correlation,
+                    result,
+                    replyFrames))
+            : port.request(
+                requireStarted(),
+                target,
+                pair.id(),
+                pair.generation(),
+                frames,
+                timeout,
+                (result, replyFrames) -> completeRequest(
+                    operation.id(),
+                    target,
+                    correlation,
+                    result,
+                    replyFrames));
         if (!submitted) {
             operations.discard(operation.id());
         }
@@ -3478,6 +3514,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         admittedPeerChannels.clear();
         knownPeerChannels.clear();
         connectionIds.clear();
+        transportPairs.clear();
+        applicationTransportPairs.clear();
         admissionControlReadyConnections.clear();
         pendingConnectionIds.clear();
         monitorConnectionIds.clear();
@@ -3677,6 +3715,10 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         }
         int command = header.command();
         int flags = header.flags();
+        streamTrace("service-received command=" + command
+            + " source=" + inbound.source()
+            + " requestSequence=" + inbound.requestSequence()
+            + " frameCount=" + frames.size());
         if (command == ServiceWireConstants.COMMAND_HELLO
             || command == ServiceWireConstants.COMMAND_ADMIT
             || command == ServiceWireConstants.COMMAND_UPDATE) {
@@ -4210,6 +4252,11 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         } catch (RuntimeException invalid) {
             return;
         }
+        streamTrace("spot-received request=" + header.request()
+            + " source=" + inbound.source()
+            + " target=" + header.target().targetNodeRid()
+            + " spot=" + header.target().spotId()
+            + " generation=" + header.target().spotGeneration());
         ZLinkServiceM6AWireCodec.ApplicationPayload payload;
         try {
             payload = wire.decodeApplicationPayload(frames.get(payloadOffset));
@@ -4229,6 +4276,13 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             ? frames.get(1).clone()
             : new byte[0];
         resolveAcceptedAuthorities(inbound).whenComplete((authorities, failure) -> {
+            streamTrace("spot-authorities request=" + header.request()
+                + " target=" + header.target().targetNodeRid()
+                + " spot=" + header.target().spotId()
+                + " present=" + (authorities != null && authorities.isPresent())
+                + " failure=" + (failure == null
+                    ? "none"
+                    : failure.getClass().getSimpleName()));
             if (failure != null || authorities.isEmpty()) {
                 replySpotFailure(inbound, header, 107, 33);
                 return;
@@ -4292,6 +4346,9 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                         }
                     });
             if (!accepted) {
+                streamTrace("spot-enqueue-rejected target="
+                    + header.target().targetNodeRid()
+                    + " spot=" + header.target().spotId());
                 messages.forEach(Message::close);
                 replySpotFailure(inbound, header, 102, 1);
             }
@@ -5612,6 +5669,10 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             streamTrace("transport-event event=" + event.event()
                 + " peer=" + peer.orElseThrow()
                 + " value=" + event.value()
+                + " connectionId=" + event.connectionId()
+                + " pairId=" + event.transportPairId()
+                + " pairGeneration=" + event.transportPairGeneration()
+                + " lane=" + event.transportLane()
                 + " local=" + event.localAddr()
                 + " remote=" + event.remoteAddr());
             if (event.event() == MonitorEventType.CONNECTION_READY) {
@@ -5643,6 +5704,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                         disconnectedId);
                 }
                 disconnectAdmitted(peer.orElseThrow(), disconnectedId);
+                removeApplicationTransportPair(peer.orElseThrow(), event);
                 nextAnnouncementNanos.put(peer.orElseThrow(), 0L);
             }
         }
@@ -5851,7 +5913,37 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             transportEventKey(event),
             ignored -> new java.util.concurrent.ConcurrentLinkedQueue<>())
             .add(id);
+        if (event.transportPairId() != 0
+            && event.transportPairGeneration() != 0) {
+            TransportPair pair = new TransportPair(
+                event.transportPairId(), event.transportPairGeneration());
+            transportPairs.put(id, pair);
+            if (event.transportLane() == 0
+                && (event.connectionId() != 0
+                    || !event.localAddr().isBlank())) {
+                applicationTransportPairs.put(peer, pair);
+            }
+        }
         return id;
+    }
+
+    private TransportPair transportPairFor(RoutingId peer) {
+        return applicationTransportPairs.get(peer);
+    }
+
+    private void removeApplicationTransportPair(
+        RoutingId peer,
+        MonitorEvent event) {
+        if (event.transportLane() != 0
+            || event.transportPairId() == 0
+            || event.transportPairGeneration() == 0) {
+            return;
+        }
+        applicationTransportPairs.computeIfPresent(peer, (ignored, current) ->
+            current.id() == event.transportPairId()
+                && current.generation() == event.transportPairGeneration()
+                ? null
+                : current);
     }
 
     private ZLinkServiceAdmissionGuard.ConnectionDirection
@@ -5882,6 +5974,9 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         if (ids.isEmpty()) {
             monitorConnectionIds.remove(key, ids);
         }
+        if (id != null) {
+            transportPairs.remove(id);
+        }
         return id;
     }
 
@@ -5911,6 +6006,9 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         return String.valueOf(event.localAddr())
             + "|"
             + String.valueOf(event.remoteAddr());
+    }
+
+    private record TransportPair(long id, long generation) {
     }
 
     private void disconnectNotRequiredTransport(RoutingId peer) {

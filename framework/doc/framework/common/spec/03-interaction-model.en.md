@@ -58,10 +58,10 @@ directly select a transport socket or endpoint.
 
 The code below is an explanatory declaration, abbreviated in .NET notation, to show
 the shape of a common interaction. The exact per-language signature is owned by
-[.NET Channel Messaging](server/languages/dotnet/interfaces/04-channel-messaging.ko.md),
+[.NET Channel Messaging](server/languages/dotnet/interfaces/04-channel-messaging.en.md),
 [.NET Spot](server/languages/dotnet/interfaces/05-spots.en.md),
-[.NET Actor](server/languages/dotnet/interfaces/06-actors.ko.md), and
-[.NET STREAM Session](server/languages/dotnet/interfaces/07-stream-session.ko.md).
+[.NET Actor](server/languages/dotnet/interfaces/06-actors.en.md), and
+[.NET STREAM Session](server/languages/dotnet/interfaces/07-stream-session.en.md).
 
 ```csharp
 public interface IZLinkRouteClient

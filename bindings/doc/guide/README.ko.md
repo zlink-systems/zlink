@@ -15,15 +15,15 @@ title: "언어별 바인딩 가이드"
 zlink는 C 코어 위에 여러 언어 바인딩을 제공합니다. 각 가이드는 **그 언어에서
 zlink를 쓰는 방법**(설치, 관용 예제, 타입 매핑, 언어 고유 규칙)을 다룹니다.
 메시징 **개념 자체**(소켓 패턴, 트랜스포트, 서비스, 라우팅 ID)는 언어에 매이지
-않도록 [코어 가이드](https://zlink-systems.github.io/zlink/guide/01-overview/)가 한 번만 다루며, 각 언어 가이드는
+않도록 [코어 가이드](https://zlink-systems.github.io/zlink/ko/guide/01-overview/)가 한 번만 다루며, 각 언어 가이드는
 개념이 필요한 자리마다 코어로 링크합니다.
 
 ## 읽는 순서
 
 - **이미 메시징을 안다 / 빨리 쓰고 싶다** → 자기 언어 가이드로 바로 가세요. 막히는
   개념은 그 자리에서 코어 링크로 확인하면 됩니다.
-- **메시징이 처음이다** → 코어 [개요](https://zlink-systems.github.io/zlink/guide/01-overview/)와
-  [소켓 패턴](https://zlink-systems.github.io/zlink/guide/03-0-socket-patterns/)을 먼저 본 뒤 언어 가이드로 오세요.
+- **메시징이 처음이다** → 코어 [개요](https://zlink-systems.github.io/zlink/ko/guide/01-overview/)와
+  [소켓 패턴](https://zlink-systems.github.io/zlink/ko/guide/03-0-socket-patterns/)을 먼저 본 뒤 언어 가이드로 오세요.
 
 ## 언어 고르기
 
@@ -45,7 +45,7 @@ zlink를 쓰는 방법**(설치, 관용 예제, 타입 매핑, 언어 고유 규
 > 코어 가이드의 언어 탭에는 Kotlin·JavaScript 칸이 따로 있습니다.
 
 > C는 코어 그 자체이므로 별도 바인딩 가이드 대신
-> [코어 C API 가이드](https://zlink-systems.github.io/zlink/guide/02-core-api/)를 봅니다.
+> [코어 C API 가이드](https://zlink-systems.github.io/zlink/ko/guide/02-core-api/)를 봅니다.
 
 ## 가이드 구성 (모든 언어 공통)
 

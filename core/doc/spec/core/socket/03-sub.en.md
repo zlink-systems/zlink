@@ -1,4 +1,4 @@
-[한국어](03-sub.ko.md) | English
+[한국어](https://zlink-systems.github.io/zlink/ko/spec/core/socket/03-sub/) | English
 
 [Spec Index](../../README.en.md) · [Core Index](../README.en.md) · [Socket Common](README.en.md)
 

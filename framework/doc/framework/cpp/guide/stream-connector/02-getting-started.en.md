@@ -21,7 +21,7 @@ vcpkg install "zlink-stream-connector[tls,websocket]"
 ### Conan
 
 ```bash
-conan install --requires "zlink-stream-connector/0.9.0" \
+conan install --requires "zlink-stream-connector/0.10.0" \
   -o "zlink-stream-connector/*:with_tls=True" \
   -o "zlink-stream-connector/*:with_websocket=True"
 ```

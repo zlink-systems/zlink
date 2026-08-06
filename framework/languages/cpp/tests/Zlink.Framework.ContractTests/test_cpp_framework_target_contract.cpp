@@ -1325,15 +1325,17 @@ int main ()
     gate.require (runtime_monitoring_a4.find (
                     "identifier=zlink.runtime.mesh_node.peer_changed")
                     != std::string::npos
-                    && runtime_monitoring_a4.find ("generations.size () >= 2")
+                    && runtime_monitoring_a4.find ("svc_b_events >= 4")
                          != std::string::npos,
                   "E2E-CP-35", "MON-A4 does not assert public replacement events");
     gate.require (runtime_monitoring_a4.find ("svc_b_ready == 1")
                     != std::string::npos
-                    && runtime_monitoring_a4.find ("readyMemberCount")
+                    && runtime_monitoring_a4.find ("readyTargetCount")
                          != std::string::npos,
                   "E2E-CP-35", "MON-A4 does not resync peer and channel snapshot");
-    gate.require (runtime_monitoring_d1.find ("sequence > previous")
+    gate.require (runtime_monitoring_d1.find ("sequence == previous")
+                    != std::string::npos
+                    && runtime_monitoring_d1.find ("sequence > previous")
                     != std::string::npos
                     && runtime_monitoring_d1.find ("checked >= 6")
                          != std::string::npos,
@@ -1464,7 +1466,8 @@ int main ()
                     && store_failure_client.find ("SF-C2 Shutdown did not complete as Stopped")
                          != std::string::npos,
                   "E2E-CP-43", "SF-C2 has no Framework Shutdown terminal-result proof");
-    gate.require (app_runtime.find ("drain propagation bound") != std::string::npos
+    gate.require (app_runtime.find ("propagation_bound") != std::string::npos
+                    && app_runtime.find ("polling_interval") != std::string::npos
                     && app_runtime.find ("std::chrono::seconds (5)") != std::string::npos,
                   "E2E-CP-43", "drain removes owner rows before the polling propagation bound");
     gate.require (store_failure_location_store.find (
@@ -1572,10 +1575,12 @@ int main ()
                     && observability_server.find ("/spot/action") != std::string::npos,
                   "E2E-CP-61", "ObservabilityOps exposes no lease or existing-route evidence");
 
-    /* E2E-CP-58/60 — caller observes framework failure; Track B proves no delivery or row. */
+    /* E2E-CP-58/60 — caller delegates route resolution and failure mapping to
+     * the public actor client; Track B proves no delivery or row. */
     gate.require (to_actor_caller.find ("actor route was not found") == std::string::npos
-                    && to_actor_caller.find ("candidate_actor_ref") != std::string::npos,
-                  "E2E-CP-58", "ToActor caller still manufactures directory-miss errors");
+                    && to_actor_caller.find (".send (") != std::string::npos
+                    && to_actor_caller.find (".request (") != std::string::npos,
+                  "E2E-CP-58", "ToActor caller does not delegate route resolution to actor client");
     gate.require (to_actor_client.find ("TA-B1-missing-send") == std::string::npos,
                   "E2E-CP-58", "TA-B1 still uses send submit as an existence check");
     gate.require (to_actor_client.find ("require_no_evidence") != std::string::npos
@@ -1615,12 +1620,14 @@ int main ()
                   "E2E-CP-59", "Config 9 does not start two actor owner nodes");
     gate.require (to_actor_b2.find ("capture_ref") != std::string::npos
                     && to_actor_b2.find ("actor_b") != std::string::npos
-                    && to_actor_b2.find ("assert_captured_failure") != std::string::npos,
+                    && to_actor_b2.find ("assert_captured_destroy_failure")
+                         != std::string::npos,
                   "E2E-CP-59", "TA-B2 does not replace the owner and exercise the stale ref");
-    gate.require (to_actor_b3.find ("control_route") != std::string::npos
-                    && to_actor_b3.find ("disconnect") != std::string::npos
-                    && to_actor_b3.find ("reconnect") != std::string::npos
-                    && to_actor_b3.find ("assert_captured_failure") != std::string::npos,
+    gate.require (to_actor_b3.find ("scenario-control") != std::string::npos
+                    && to_actor_b3.find ("/route/status") != std::string::npos
+                    && to_actor_b3.find ("assert_captured_failure") != std::string::npos
+                    && to_actor_runner.find ("/route/disconnect") != std::string::npos
+                    && to_actor_runner.find ("/route/reconnect") != std::string::npos,
                   "E2E-CP-59", "TA-B3 does not disconnect and deterministically restore a live route");
     for (const auto &[config, source] : location_option_consumers) {
         gate.require (source.find ("auto locations = framework.configure_locations ()")

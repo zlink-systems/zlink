@@ -379,6 +379,19 @@ void verify_physical_candidates_preserve_survivor ()
               mesh::service_connection_direction_t::inbound)
               ->connection_id
             == outbound);
+
+    const auto second_peer = bytes ("second-peer");
+    const auto shared_endpoint = "tcp://127.0.0.1:7110";
+    candidates.ready (
+      peer, bytes ("stale-peer-connection"),
+      mesh::service_connection_direction_t::inbound, shared_endpoint);
+    candidates.ready (
+      second_peer, bytes ("stale-second-connection"),
+      mesh::service_connection_direction_t::outbound, shared_endpoint);
+    const auto removed = candidates.disconnect_by_endpoint (shared_endpoint);
+    assert (removed.size () == 2);
+    assert (candidates.size (peer) == 1);
+    assert (candidates.size (second_peer) == 0);
 }
 
 void verify_bilateral_raw_connection_without_public_pipe_id_keeps_survivor ()

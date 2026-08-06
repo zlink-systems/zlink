@@ -1,4 +1,4 @@
-[한국어](socket-option-defaults.ko.md)
+[한국어](socket-option-defaults.en.md)
 
 # Socket option defaults
 

@@ -2078,10 +2078,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 peer.PhysicalRoutingId,
                 parts,
                 checked(head.Length + metadata.Length)));
-            // Publish has already crossed its admission boundary. A remote target
-            // that is no longer reachable must not hold this worker until the
-            // socket send timeout; target acceptance is neither a public result nor
-            // publish-specific monitoring data after the transaction starts.
+            // Publish has crossed its admission boundary. The bounded socket send
+            // timeout provides a terminal submission result without exposing a
+            // per-target delivery report to the caller.
             _ = TrySend(
                 peer.PhysicalRoutingId,
                 wireParts,
@@ -6000,12 +5999,28 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         ZLinkServiceAdmissionDecision decision;
         lock (_gate)
         {
-            peer = _peerAdmission.FindForAdmission(
+            var matchedPeer = _peerAdmission.FindForAdmission(
                        _peersByRid,
                        _peersByIntent.Values,
                        sourceRid,
                        command,
-                       admission.AdvertisedEndpoint)
+                       admission.AdvertisedEndpoint);
+            if (matchedPeer is null
+                && command != ServiceWireConstants.Command.Hello)
+            {
+                // An Admit/Update arriving after its intent was removed is a
+                // stale transport message. It must not create a new inbound
+                // peer, otherwise a retired connection can re-enter the
+                // public mesh status during a same-endpoint handover.
+                ZLinkFrameworkDebugLog.SpotDiscovery(
+                    $"mesh_peer_admission_rejected local={_routingId} peer={sourceRid} "
+                    + $"reason=stale_{command.ToString().ToLowerInvariant()} "
+                    + $"endpoint={admission.AdvertisedEndpoint}");
+                Publish(MeshMonitorEventKind.PeerRejected, peerRid: sourceRid);
+                return;
+            }
+
+            peer = matchedPeer
                    ?? new Peer(
                        checked(++_nextIntent),
                        admission.AdvertisedEndpoint,
@@ -6276,9 +6291,22 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 continue;
             if (!peer.Admitted)
             {
+                if (peer.Direction != ZLinkServiceConnectionDirection.Outbound
+                    || peer.State != MeshPeerState.Connecting)
+                    continue;
                 if (now >= peer.NextAdmissionTimestamp)
                 {
-                    peer.NextAdmissionTimestamp = Add(now, AdmissionRetryInterval);
+                    lock (_gate)
+                    {
+                        if (!_peersByIntent.TryGetValue(peer.Intent, out var current)
+                            || !ReferenceEquals(current, peer)
+                            || current.Direction
+                                != ZLinkServiceConnectionDirection.Outbound
+                            || current.State != MeshPeerState.Connecting)
+                            continue;
+                        current.NextAdmissionTimestamp =
+                            Add(now, AdmissionRetryInterval);
+                    }
                     SendAdmission(peer, ServiceWireConstants.Command.Hello);
                 }
                 continue;
@@ -6377,7 +6405,19 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     ? indexed
                     : _peersByIntent.Values.FirstOrDefault(candidate =>
                         candidate.PhysicalRoutingId == routingId);
-                if (peer is null || !peer.Admitted)
+                if (peer is null)
+                    continue;
+
+                if (peer.Direction == ZLinkServiceConnectionDirection.Inbound)
+                {
+                    // An inbound transport has no local retry intent. Once
+                    // its physical pipe closes, remove the peer instead of
+                    // converting it into a locally reconnecting candidate.
+                    RemovePeer(peer, disconnect: false);
+                    continue;
+                }
+
+                if (!peer.Admitted)
                     continue;
 
                 peer.Admitted = false;
@@ -8012,7 +8052,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         IReadOnlyList<ReadOnlyMemory<byte>> parts,
         SendFlags flags)
     {
-        if (!FitsCompleteMessageBound(parts, GetEffectiveSendMessageBound(target)))
+        var messageBound = GetEffectiveSendMessageBound(target);
+        if (!FitsCompleteMessageBound(parts, messageBound))
             return MeshSendOutcome.PermanentFailure;
         if (TryGetCompletionControlCommand(parts, out var completionCommand)
             && (parts.Count > MaxCompletionControlParts
@@ -8184,21 +8225,28 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         {
             lock (_socketGate)
             {
-                if (wasAdmitted && !physicalRoutingId.IsEmpty)
+                var replacementUsesEndpoint = _peersByIntent.Values.Any(
+                    otherPeer =>
+                        !ReferenceEquals(otherPeer, peer)
+                        && string.Equals(
+                            otherPeer.Endpoint,
+                            peer.Endpoint,
+                            StringComparison.Ordinal)
+                        && otherPeer.State != MeshPeerState.Closed);
+                if (wasAdmitted || replacementUsesEndpoint)
                 {
-                    // Endpoint termination is broader than one mesh lifetime.
-                    // During a rolling RID handover it can terminate the old
-                    // pipe while the replacement connect is being attached.
-                    // An admitted peer has an exact physical RID, so retire
-                    // only that pipe and leave other candidates on the endpoint
-                    // untouched.
-                    _socket!.DisconnectRid(physicalRoutingId);
+                    if (!physicalRoutingId.IsEmpty)
+                        _socket!.DisconnectRid(physicalRoutingId);
                     ZLinkFrameworkDebugLog.SpotDiscovery(
                         $"mesh_peer_transport_disconnect local={_routingId} "
-                        + $"peer={peer.RoutingId} mode=rid physical={physicalRoutingId}");
+                        + $"peer={peer.RoutingId} mode=rid physical={physicalRoutingId} "
+                        + $"replacement={replacementUsesEndpoint}");
                     return;
                 }
 
+                // With no replacement, endpoint disconnect also cancels the
+                // binding's reconnect intent. This is required for a removed
+                // Connecting peer whose physical RID is still pending.
                 _socket!.Disconnect(peer.Endpoint);
                 ZLinkFrameworkDebugLog.SpotDiscovery(
                     $"mesh_peer_transport_disconnect local={_routingId} "

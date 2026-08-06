@@ -35,9 +35,40 @@
 namespace zlink::framework::runtime
 {
 
+struct mesh_node_host_service_t::actor_destroy_callback_gate_t
+{
+    std::mutex mutex;
+    std::condition_variable changed;
+    bool stopping = false;
+    std::size_t active = 0;
+
+    bool try_enter ()
+    {
+        std::lock_guard lock (mutex);
+        if (stopping)
+            return false;
+        ++active;
+        return true;
+    }
+
+    void leave ()
+    {
+        std::lock_guard lock (mutex);
+        --active;
+        if (active == 0)
+            changed.notify_all ();
+    }
+
+    void stop_and_wait () noexcept
+    {
+        std::unique_lock lock (mutex);
+        stopping = true;
+        changed.wait (lock, [this] { return active == 0; });
+    }
+};
+
 namespace
 {
-
 std::atomic_uint64_t next_user_spot_operation{1};
 
 class terminal_callback_guard_t final
@@ -1106,6 +1137,18 @@ result_t<void> mesh_node_host_service_t::finalize_local_actor_destroy (
           "Actor destroy requires an exact ActorRef");
     }
 
+    const auto node = std::find_if (
+      _nodes.begin (), _nodes.end (), [&actor] (const auto &candidate) {
+          const auto routing_id = candidate ? candidate->routing_id () : std::nullopt;
+          return routing_id
+                 && routing_id->to_string () == actor.node_rid ().value ();
+      });
+    if (node != _nodes.end ()) {
+        const auto cleaned = (*node)->cleanup_application_actor_stateful (actor);
+        if (!cleaned)
+            return cleaned;
+    }
+
     std::optional<authority_snapshot_t> removed_snapshot;
     if (_location_store) {
         const authority_key_t key{"1:" + std::string (actor.actor_id ().value ())};
@@ -1138,6 +1181,10 @@ result_t<void> mesh_node_host_service_t::finalize_local_actor_destroy (
                 if (std::holds_alternative<authority_deleted_t> (
                       removed.value ())) {
                     removed_snapshot = *snapshot;
+                } else {
+                    return result_t<void>::failure (
+                      framework_error_kind_t::unavailable,
+                      "Actor destroy authority changed before deletion");
                 }
             }
         }
@@ -1163,18 +1210,6 @@ result_t<void> mesh_node_host_service_t::finalize_local_actor_destroy (
             (void) actor_resolver->get ().invalidate_actor_address_if_matches (
               actor.actor_id ().value (), expected);
         }
-    }
-
-    const auto node = std::find_if (
-      _nodes.begin (), _nodes.end (), [&actor] (const auto &candidate) {
-          const auto routing_id = candidate ? candidate->routing_id () : std::nullopt;
-          return routing_id
-                 && routing_id->to_string () == actor.node_rid ().value ();
-      });
-    if (node != _nodes.end ()) {
-        const auto cleaned = (*node)->cleanup_application_actor_stateful (actor);
-        if (!cleaned)
-            return cleaned;
     }
 
     if (_services) {
@@ -1233,6 +1268,24 @@ task_t<bool> mesh_node_host_service_t::destroy_actor (
                   framework_error_kind_t::unavailable,
                   "Actor transfer is in progress"));
             }
+
+            /* The local Spot owns the first destructive step. Its cleanup
+             * callback runs after local state is detached and only then
+             * removes Location authority. This keeps a failed local cleanup
+             * from leaving a deleted authority with retained capacity. */
+            const auto local_destroyed =
+              (*node)->destroy_application_actor (actor);
+            if (!local_destroyed) {
+                return task_t<bool> (result_t<bool>::failure (
+                  local_destroyed.error_kind (),
+                  local_destroyed.error ()
+                    ? local_destroyed.error ()->what ()
+                    : "Actor runtime cleanup failed"));
+            }
+            /* The Spot destroy callback owns the authority and gateway
+             * finalization for a local Actor. Keep this outer operation as
+             * the result boundary so the finalizer runs exactly once. */
+            return task_t<bool> (result_t<bool>::success (true));
         }
 
         const auto removed = _location_store
@@ -1284,16 +1337,6 @@ task_t<bool> mesh_node_host_service_t::destroy_actor (
             }
         }
 
-        if (node != _nodes.end ()) {
-            auto local_destroyed = (*node)->destroy_application_actor (actor);
-            if (!local_destroyed) {
-                return task_t<bool> (result_t<bool>::failure (
-                  local_destroyed.error_kind (),
-                  local_destroyed.error ()
-                    ? local_destroyed.error ()->what ()
-                    : "Actor runtime cleanup failed"));
-            }
-        }
         const auto finalized = finalize_local_actor_destroy (actor);
         if (!finalized) {
             return task_t<bool> (detail::result_access_t::failure<bool> (
@@ -1844,6 +1887,8 @@ void mesh_node_host_service_t::start (service_provider_t &services)
     }
     _stop.store (false, std::memory_order_release);
     _accept_application_dispatch.store (true, std::memory_order_release);
+    _actor_destroy_gate =
+      std::make_shared<actor_destroy_callback_gate_t> ();
     auto store = std::shared_ptr<location_repository_t> (
       &services.get_required<location_repository_t> (),
       [] (location_repository_t *) noexcept {});
@@ -1851,9 +1896,22 @@ void mesh_node_host_service_t::start (service_provider_t &services)
     for (const auto &registration : _registrations) {
         if (!registration || !registration->spot_state)
             continue;
+        const auto gate = _actor_destroy_gate;
         detail::spot_node_runtime_t (registration->spot_state)
-          .on_destroy_actor ([this] (const actor_ref_t &actor) {
-              return finalize_local_actor_destroy (actor);
+          .on_destroy_actor ([this, gate] (const actor_ref_t &actor) {
+              if (!gate->try_enter ())
+                  return result_t<void>::failure (
+                    framework_error_kind_t::shutting_down,
+                    "Actor destroy cleanup was rejected during Mesh shutdown");
+              try {
+                  auto result = finalize_local_actor_destroy (actor);
+                  gate->leave ();
+                  return result;
+              }
+              catch (...) {
+                  gate->leave ();
+                  throw;
+              }
           });
     }
     auto &location_runtime =
@@ -2949,6 +3007,8 @@ bool mesh_node_host_service_t::republish_after_store_recovery () noexcept
 
 void mesh_node_host_service_t::stop () noexcept
 {
+    if (_actor_destroy_gate)
+        _actor_destroy_gate->stop_and_wait ();
     request_stop ();
     if (_application_dispatch)
         _application_dispatch->drain ();
@@ -2993,6 +3053,7 @@ void mesh_node_host_service_t::stop () noexcept
               listener_kind_t::route_mesh, node->mesh_name ());
         trace_mesh_host_stop ("node-stop-end");
     }
+    _actor_destroy_gate.reset ();
 }
 
 std::optional<location_owner_token_t>

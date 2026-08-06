@@ -1,4 +1,4 @@
-[한국어](thread-safety.ko.md) | English
+[한국어](https://zlink-systems.github.io/zlink/ko/internals/thread-safety/) | English
 
 # Core Thread-Safety Implementation
 

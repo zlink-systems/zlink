@@ -4,7 +4,7 @@ title: "Request Correlation And Business Flow Identification"
 
 # Request Correlation And Business Flow Identification
 
-[Spec table of contents](README.en.md) · [Previous: Message Flow Tracing](26-message-flow-tracing.ko.md) · [Next: Host Relocate And Shutdown](28-graceful-drain-handoff.en.md)
+[Spec table of contents](README.en.md) · [Previous: Message Flow Tracing](26-message-flow-tracing.en.md) · [Next: Host Relocate And Shutdown](28-graceful-drain-handoff.en.md)
 
 > **What this chapter defines** — the contract linking a request and terminal
 > reply, and identifying several messages continuing from the same cause as
@@ -30,7 +30,7 @@ lifetime of these three fields. The ownership and size of metadata the
 application sends with a message is defined by
 [Message Model](04-message-model.en.md). The condition for including a field
 in trace and sampling are defined by
-[Message Flow Tracing](26-message-flow-tracing.ko.md). The three fields are
+[Message Flow Tracing](26-message-flow-tracing.en.md). The three fields are
 framework-managed context — not an application metadata key.
 
 ## 2. The Role Of The Two Identifiers
@@ -112,7 +112,7 @@ completion. If tracing is `off`, this context isn't built or put into
 async-local storage.
 
 The rule for changing diagnostics level at runtime follows
-[Message Flow Tracing](26-message-flow-tracing.ko.md#41-실행-중에-기록-수준-변경).
+[Message Flow Tracing](26-message-flow-tracing.en.md#41-changing-the-record-level-at-runtime).
 Once each processing point confirms `off`, it doesn't build a flow ID,
 validate, capture context, add an envelope field, or build an internal
 propagation message. A change isn't retroactively applied to an
@@ -197,7 +197,7 @@ contract.
 
 Tracing records `correlation_id`, `flow_id`, and `flow_origin`. The exact
 inclusion condition and structured-log key are defined by
-[Message Flow Tracing](26-message-flow-tracing.ko.md#32-attribute-포함-조건).
+[Message Flow Tracing](26-message-flow-tracing.en.md#32-attribute-inclusion-conditions).
 None of the three values is used in a metric label.
 
 The three fields don't encode user ID, Actor ID, Spot ID, endpoint, payload,

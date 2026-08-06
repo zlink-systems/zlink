@@ -2,7 +2,7 @@
 title: "Connection별 memory"
 ---
 
-[English](connection-memory.en.md)
+[English](connection-memory.ko.md)
 
 <!-- zlink-nav:start -->
 [가이드 목차](../guide/README.ko.md) | [이전: Socket option 기본값](socket-option-defaults.ko.md) | [다음: Multipart atomicity](multipart-atomicity.ko.md)

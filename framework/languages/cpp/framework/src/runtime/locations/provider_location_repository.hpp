@@ -289,13 +289,31 @@ class provider_location_repository_t final : public location_repository_t
             if (!advance_store_version (snapshot))
                 return completed (
                   authority_compare_exchange_result_t{authority_generation_exhausted_t{}});
-            auto written =
-              write ({{version_condition (row_key, found->value.version),
-                       version_condition (key_owner (snapshot.owner.owner_id),
-                                          target->owner_provider_version),
-                       version_condition (target->key, target->provider_version)},
-                      {store_delete_t{row_key},
-                       store_put_t{target->key, encode_target_record (*target), std::nullopt}}});
+            const auto separator = key.value.find (':');
+            const object_creation_key_t object_key_value{
+              snapshot.allocation.object_kind,
+              separator == std::string::npos
+                ? key.value
+                : key.value.substr (separator + 1)};
+            const auto reservation_key = key_reservation (object_key_value);
+            const auto reservation = read (reservation_key);
+            const auto *stored_reservation =
+              std::get_if<store_found_t> (&reservation);
+            store_write_request_t write_request;
+            write_request.conditions = {
+              version_condition (row_key, found->value.version),
+              version_condition (key_owner (snapshot.owner.owner_id),
+                                 target->owner_provider_version),
+              version_condition (target->key, target->provider_version)};
+            write_request.mutations = {
+              store_delete_t{row_key},
+              store_put_t{target->key, encode_target_record (*target), std::nullopt}};
+            if (stored_reservation) {
+                write_request.conditions.push_back (
+                  version_condition (reservation_key, stored_reservation->value.version));
+                write_request.mutations.push_back (store_delete_t{reservation_key});
+            }
+            auto written = write (std::move (write_request));
             if (const auto *applied = std::get_if<store_write_applied_t> (&written))
                 return completed (authority_compare_exchange_result_t{
                   authority_deleted_t{snapshot.store_version, applied->store_now}});
@@ -543,13 +561,31 @@ class provider_location_repository_t final : public location_repository_t
         }
 
         auto target = read_target_descriptor (request.target);
+        if (!target) {
+            // A node lease renewal or descriptor publication can advance the
+            // lifecycle/owner version between candidate enumeration and the
+            // reservation CAS. Refresh the target by its stable node key
+            // before classifying the candidate as unavailable.
+            auto refreshed = read_target_descriptor (request.target, true, false);
+            if (refreshed
+                && target_accepts (refreshed->descriptor, request.key.kind,
+                                   request.intent.stable_type)) {
+                request.target.node_lifecycle_generation =
+                  refreshed->descriptor.lifecycle_generation;
+                request.target.owner = {
+                  refreshed->descriptor.owner_id,
+                  refreshed->descriptor.lease_generation};
+                target = std::move (refreshed);
+            }
+        }
         if (!target
             || !target_accepts (target->descriptor, request.key.kind, request.intent.stable_type)
             || !owner_is_live (request.target.owner))
             return completed (object_reserve_result_t{object_reserve_conflict_t{
               authority_missing_t{std::get<store_missing_t> (authority).store_now}}});
-        if (!capacity_available (target->descriptor, request.capacity_bundle))
+        if (!capacity_available (target->descriptor, request.capacity_bundle)) {
             return completed (object_reserve_result_t{object_placement_capacity_exhausted_t{}});
+        }
         if (!adjust_capacity (target->descriptor, request.capacity_bundle, 1, 0))
             return completed (object_reserve_result_t{object_placement_capacity_exhausted_t{}});
 
@@ -3020,8 +3056,10 @@ class provider_location_repository_t final : public location_repository_t
                  });
     }
 
-    std::optional<stored_target_t> read_target_descriptor (const object_creation_target_t &target,
-                                                           bool require_live = true)
+    std::optional<stored_target_t> read_target_descriptor (
+      const object_creation_target_t &target,
+      bool require_live = true,
+      bool require_identity = true)
     {
         const auto row_key = key_mesh (
           target.mesh_name, zlink::routing_id_t::from (std::string (target.node_rid.value ())));
@@ -3031,15 +3069,21 @@ class provider_location_repository_t final : public location_repository_t
             return std::nullopt;
         const auto record = parse_json (found->value.bytes);
         auto descriptor = decode_mesh_descriptor (record.at ("descriptor"));
-        if (descriptor.lifecycle_generation != target.node_lifecycle_generation
-            || descriptor.owner_id != target.owner.owner_id
-            || descriptor.lease_generation != target.owner.lease_generation
+        if ((require_identity
+             && (descriptor.lifecycle_generation != target.node_lifecycle_generation
+                 || descriptor.owner_id != target.owner.owner_id
+                 || descriptor.lease_generation != target.owner.lease_generation))
             || (require_live && descriptor.state != framework_runtime_state_t::serving))
             return std::nullopt;
-        auto owner = read (key_owner (target.owner.owner_id));
+        const auto owner_id = require_identity
+                                ? target.owner.owner_id
+                                : descriptor.owner_id;
+        const auto owner = read (key_owner (owner_id));
         const auto *live = std::get_if<store_found_t> (&owner);
         if (require_live
-            && (!live || owner_generation (live->value.bytes) != target.owner.lease_generation))
+            && (!live
+                || owner_generation (live->value.bytes)
+                     != descriptor.lease_generation))
             return std::nullopt;
         return stored_target_t{row_key, found->value.version.value,
                                live ? live->value.version.value : std::string{},

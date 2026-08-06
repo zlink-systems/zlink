@@ -3,7 +3,7 @@ title: "11. Monitoring — Status Observation And Diagnostics · Node/TypeScript
 ---
 
 <!-- framework-adapter-nav:start -->
-[Guide Home](../../../index.ko.md) | [Previous: Location](10-location.en.md) | [Next: Operations — metrics · drain · readiness](12-operations.en.md)
+[Guide Home](../../../index.en.md) | [Previous: Location](10-location.en.md) | [Next: Operations — metrics · drain · readiness](12-operations.en.md)
 <!-- framework-adapter-nav:end -->
 
 # 11. Monitoring — Status Observation And Diagnostics
@@ -135,7 +135,7 @@ Register the observer as a provider class — a class that implements
 > before building a dashboard.**
 
 The contract for instrument names, kinds, units, and labels is owned by
-[Runtime Metrics And Aggregation Rules](../../../common/spec/25-runtime-metrics.ko.md).
+[Runtime Metrics And Aggregation Rules](../../../common/spec/25-runtime-metrics.en.md).
 
 ## 5. Readiness And Liveness
 

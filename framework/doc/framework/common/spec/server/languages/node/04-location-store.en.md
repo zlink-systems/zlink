@@ -6,7 +6,7 @@ Store and the official Redis provider are owned by
 The Location runtime's public event and observability declarations are
 in [Location, Monitoring, And Metrics](interfaces/03-location-observability.en.md).
 The full document list of the Node.js public interface is provided by
-the [public interface table of contents](interfaces/README.ko.md).
+the [public interface table of contents](interfaces/README.en.md).
 
 This file is a notice document connecting links using this document's
 address to the new document, and doesn't duplicate the declaration.

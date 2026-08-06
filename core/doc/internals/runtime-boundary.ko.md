@@ -2,7 +2,7 @@
 title: "Core raw runtime 내부 경계"
 ---
 
-[English](runtime-boundary.en.md) | 한국어
+[English](https://zlink-systems.github.io/zlink/internals/runtime-boundary/) | 한국어
 
 <!-- zlink-nav:start -->
 [가이드 목차](../guide/README.ko.md) | [이전: Multipart atomicity](multipart-atomicity.ko.md) | [다음: ZMP 프로토콜 상세](protocol-zmp.ko.md)

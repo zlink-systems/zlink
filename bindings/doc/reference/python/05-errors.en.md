@@ -1,4 +1,4 @@
-[한국어](05-errors.ko.md) | English
+[한국어](https://zlink-systems.github.io/zlink/ko/bindings/reference/python/05-errors/) | English
 
 [Reference index](README.en.md)
 

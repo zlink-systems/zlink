@@ -115,6 +115,12 @@ int zlink::router_t::xsend (msg_t *msg_)
         return 0;
     }
 
+    if (router_debug_enabled ()) {
+        fprintf (stderr, "router xsend continuation: pipe=%p size=%zu more=%d\\n",
+                 static_cast<void *> (_current_out), msg_ ? msg_->size () : 0,
+                 (msg_->flags () & msg_t::more) != 0 ? 1 : 0);
+    }
+
     _more_out = (msg_->flags () & msg_t::more) != 0;
 
     if (_current_out) {
@@ -122,6 +128,10 @@ int zlink::router_t::xsend (msg_t *msg_)
           _current_out_connection_id);
         const bool ok =
           _more_out ? _current_out->write (msg_) : _current_out->write_and_flush (msg_);
+        if (router_debug_enabled ())
+            fprintf (stderr, "router xsend write: pipe=%p ok=%d more=%d\\n",
+                     static_cast<void *> (_current_out), ok ? 1 : 0,
+                     _more_out ? 1 : 0);
         if (unlikely (!ok)) {
             // The first multipart frame can pass the readiness check and a
             // later frame can encounter HWM. Preserve that as capacity
@@ -175,7 +185,9 @@ int zlink::router_t::xsend_routed (const zlink_routing_id_t *target_rid_,
                                   msg_t *msg_,
                                   uint64_t *connection_id_out_,
                                   uint64_t expected_connection_id_,
-                                  pipe_t **pipe_out_)
+                                  pipe_t **pipe_out_,
+                                  uint64_t expected_transport_pair_id_,
+                                  uint64_t expected_transport_pair_generation_)
 {
     zlink_assert (!_more_out);
     zlink_assert (!_current_out);
@@ -186,9 +198,56 @@ int zlink::router_t::xsend_routed (const zlink_routing_id_t *target_rid_,
 
     _more_out = (msg_->flags () & msg_t::more) != 0;
 
+    if (router_debug_enabled ()) {
+        fprintf (stderr,
+                 "router xsend_routed enter: rid_size=%u pair=%llu/%llu size=%zu more=%d\\n",
+                 static_cast<unsigned> (target_rid_ ? target_rid_->size : 0),
+                 static_cast<unsigned long long> (expected_transport_pair_id_),
+                 static_cast<unsigned long long> (expected_transport_pair_generation_),
+                 msg_ ? msg_->size () : 0, _more_out ? 1 : 0);
+    }
+
     out_pipe_t *out_pipe = lookup_out_pipe (blob_t (const_cast<unsigned char *> (target_rid_->data),
                                                     target_rid_->size, zlink::reference_tag_t ()));
-    if (out_pipe) {
+    pipe_t *scoped_pipe = NULL;
+    if (expected_transport_pair_id_ != 0 || expected_transport_pair_generation_ != 0) {
+        scoped_pipe = find_transport_pair_pipe (
+          target_rid_, expected_transport_pair_id_, expected_transport_pair_generation_);
+        if (!scoped_pipe) {
+            _more_out = false;
+            errno = EHOSTUNREACH;
+            return -1;
+        }
+        _current_out = scoped_pipe;
+        _current_out_connection_id = _current_out->get_transport_connection_id ();
+        if (expected_connection_id_ != 0
+            && _current_out_connection_id != expected_connection_id_) {
+            _current_out = NULL;
+            _current_out_connection_id = 0;
+            _more_out = false;
+            errno = EHOSTUNREACH;
+            return -1;
+        }
+        if (connection_id_out_)
+            *connection_id_out_ = _current_out_connection_id;
+        if (pipe_out_)
+            *pipe_out_ = _current_out;
+        out_pipe = NULL;
+    }
+    if (scoped_pipe) {
+        const pipe_write_status_t write_status = _current_out->check_write_status ();
+        if (write_status != pipe_write_ready) {
+            _current_out = NULL;
+            _current_out_connection_id = 0;
+            if (connection_id_out_)
+                *connection_id_out_ = 0;
+            if (pipe_out_)
+                *pipe_out_ = NULL;
+            _more_out = false;
+            errno = write_status == pipe_write_hwm_full ? EAGAIN : EHOSTUNREACH;
+            return -1;
+        }
+    } else if (out_pipe) {
         if (out_pipe->weight == 0) {
             _more_out = false;
             errno = ECONNREFUSED;
@@ -253,6 +312,13 @@ int zlink::router_t::xsend_routed (const zlink_routing_id_t *target_rid_,
     }
 
     if (_current_out) {
+        if (router_debug_enabled ()) {
+            fprintf (stderr, "router xsend_routed selected: pipe=%p lane=%d pair=%llu/%llu\\n",
+                     static_cast<void *> (_current_out),
+                     static_cast<int> (_current_out->get_transport_lane ()),
+                     static_cast<unsigned long long> (_current_out->get_transport_pair_id ()),
+                     static_cast<unsigned long long> (_current_out->get_transport_pair_generation ()));
+        }
         msg_->set_transport_connection_id (
           _current_out_connection_id);
         const bool ok =

@@ -1,7 +1,10 @@
 import 'reflect-metadata';
 import * as http from 'node:http';
 import { NestFactory } from '@nestjs/core';
-import { closeNestRuntime, waitForShutdown } from '../runtime-support';
+import { closeNestRuntime, waitForRouteMeshReady, waitForShutdown } from '../runtime-support';
+import { ZLINK_ROUTE_MESH_RUNTIME } from '@zlink-systems/nestjs';
+import type { ZLinkRouteMeshRuntime } from '@zlink-systems/framework';
+import { SampleNames } from '../Configuration/sample-settings';
 import { TICTACTOE_SAMPLE_CONFIG } from '../Configuration/sample-config';
 import type { TicTacToeSampleConfig } from '../Configuration/sample-config';
 import { createTicTacToeApiModule, getCreateGameEndpoint } from './tictactoe-api-module';
@@ -20,6 +23,10 @@ async function main(): Promise<void> {
     abortOnError: false
   });
   const config = apiApp.get<TicTacToeSampleConfig>(TICTACTOE_SAMPLE_CONFIG);
+  await waitForRouteMeshReady(
+    apiApp.get<ZLinkRouteMeshRuntime>(ZLINK_ROUTE_MESH_RUNTIME),
+    SampleNames.playSpotNode
+  );
   const createGameReq = getCreateGameEndpoint(apiApp);
 
   const server = http.createServer(async (request: IncomingMessage, response: ServerResponse) => {

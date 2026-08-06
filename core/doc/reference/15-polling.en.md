@@ -1,4 +1,4 @@
-[한국어](15-polling.ko.md) | English
+[한국어](https://zlink-systems.github.io/zlink/ko/reference/15-polling/) | English
 
 [Reference index](README.en.md)
 

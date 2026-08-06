@@ -717,12 +717,12 @@ class DefaultZLinkNestMeshNodeBuilder extends ZLinkNestOptionsBuilder implements
   }
 
   setActorLimit(limit: number): this {
-    this.spotOptions.actorLimit = requirePositiveCapacity(limit, 'Actor limit');
+    this.spotOptions.actorLimit = requireCapacity(limit, 'Actor limit');
     return this;
   }
 
   setSpotLimit(limit: number): this {
-    this.spotOptions.spotLimit = requirePositiveCapacity(limit, 'Spot limit');
+    this.spotOptions.spotLimit = requireCapacity(limit, 'Spot limit');
     return this;
   }
 
@@ -1171,10 +1171,10 @@ function validateUserSpotFactoryConfiguration(
 function validateStableTypeLimit(value: number | undefined): void {
   if (
     value !== undefined
-    && (!Number.isInteger(value) || value < 1 || value > 2_147_483_647)
+    && (!Number.isInteger(value) || value < 0 || value > 2_147_483_647)
   ) {
     throw new framework.ZLinkConfigurationException(
-      'stableTypeLimit must be an integer from 1 through 2147483647.'
+      'stableTypeLimit must be an integer from 0 through 2147483647.'
     );
   }
 }
@@ -1183,6 +1183,15 @@ function requirePositiveCapacity(value: number, label: string): number {
   if (!Number.isSafeInteger(value) || value <= 0 || value > 0x7fff_ffff) {
     throw new framework.ZLinkConfigurationException(
       `${label} must be an integer in 1..2147483647.`
+    );
+  }
+  return value;
+}
+
+function requireCapacity(value: number, label: string): number {
+  if (!Number.isSafeInteger(value) || value < 0 || value > 0x7fff_ffff) {
+    throw new framework.ZLinkConfigurationException(
+      `${label} must be an integer in 0..2147483647.`
     );
   }
   return value;

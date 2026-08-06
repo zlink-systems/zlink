@@ -1,4 +1,4 @@
-한국어 | [English](README.en.md)
+한국어 | [English](https://zlink-systems.github.io/zlink/bindings/reference/rust/)
 
 [Rust 바인딩 스펙](../../spec/rust/README.ko.md) · [Rust 바인딩 가이드](../../guide/rust/index.ko.md)
 

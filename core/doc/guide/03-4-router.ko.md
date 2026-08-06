@@ -2,7 +2,7 @@
 title: "ROUTER"
 ---
 
-[English](03-4-router.en.md)
+[English](03-4-router.ko.md)
 
 <!-- zlink-nav:start -->
 [가이드 목록](README.ko.md) | [이전: DEALER](03-3-dealer.ko.md) | [다음: STREAM](03-5-stream.ko.md)

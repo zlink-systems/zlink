@@ -1,4 +1,4 @@
-[한국어](README.ko.md) | English
+[한국어](https://zlink-systems.github.io/zlink/ko/spec/core/socket/) | English
 
 [Spec Index](../../README.en.md) · [Core Index](../README.en.md)
 

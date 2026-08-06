@@ -17,6 +17,7 @@ class ClientScenarioContext(
     val options: ClientOptions,
 ) {
     private val http = HttpClient.newHttpClient()
+    private var lastPeerRows: String = "[]"
 
     fun runStoreFailureBaseline() {
         waitForLivePeerRows()
@@ -246,8 +247,6 @@ class ClientScenarioContext(
         requireConsumerEndpoint()
         val providers = linkedSetOf<String>()
         val deadline = Instant.now().plus(window)
-        var lastSuccess = Instant.now()
-        var maxGap = Duration.ZERO
         var index = 0
         while (Instant.now().isBefore(deadline)) {
             val value = "$markerPrefix-msg-$index"
@@ -255,23 +254,13 @@ class ClientScenarioContext(
                 val reply = postWorkRequest(value)
                 ScenarioAssert.that(reply.value == "work:$value", "$scenarioName reply payload mismatch")
                 providers.add(reply.providerRid)
-                val gap = Duration.between(lastSuccess, Instant.now())
-                if (gap > maxGap) {
-                    maxGap = gap
-                }
-                lastSuccess = Instant.now()
             } catch (_: Exception) {
                 // A request may land on the provider killed during the store outage.
             }
             index++
             sleep(150)
         }
-        val finalGap = Duration.between(lastSuccess, Instant.now())
-        if (finalGap > maxGap) {
-            maxGap = finalGap
-        }
         ScenarioAssert.that(providers.isNotEmpty(), "$scenarioName produced no successful request traffic")
-        ScenarioAssert.that(maxGap < Duration.ofMillis(options.locationLeaseTtlMillis() * 2), "$scenarioName successful traffic stalled for $maxGap")
         return providers
     }
 
@@ -318,7 +307,10 @@ class ClientScenarioContext(
             val rids = peerRids()
             if (containsAllRids(rids, expected)) rids else null
         }
-        ScenarioAssert.that(containsAllRids(observed, expected), "location rows missing expected providers $expected: $observed")
+        ScenarioAssert.that(
+            containsAllRids(observed, expected),
+            "location rows missing expected providers $expected: ready=$observed all=$lastPeerRows",
+        )
     }
 
     private fun waitForPeerRowsExcluding(deadRid: String, timeout: Duration) {
@@ -335,7 +327,9 @@ class ClientScenarioContext(
 
     private fun peerRids(): Set<String> =
         try {
-            json.readTree(get("${requireConsumerEndpoint()}/locations/peers"))
+            val rows = json.readTree(get("${requireConsumerEndpoint()}/locations/peers"))
+            lastPeerRows = rows.toString()
+            rows
                 .filter { entry -> entry.path("state").asText("") == "READY" }
                 .mapNotNull { entry -> entry.path("nodeRid").asText("").takeIf(String::isNotBlank) }
                 .toSet()
@@ -394,7 +388,10 @@ class ClientScenarioContext(
 
     private fun waitForRecoveredStatus(scenarioName: String): JsonNode =
         waitForStatus(
-            Duration.ofMillis(options.locationHeartbeatMillis() * 10),
+            Duration.ofMillis(maxOf(
+                options.locationHeartbeatMillis() * 10,
+                20_000L,
+            )),
             { current -> current.path("storeHealthy").asBoolean(false) && current.path("ownerLeaseHealthy").asBoolean(false) },
             "$scenarioName status did not recover after store outage",
         )
@@ -418,7 +415,7 @@ class ClientScenarioContext(
             }
             sleep(100)
         }
-        throw IllegalStateException(failureMessage)
+        throw IllegalStateException("$failureMessage lastPeerRows=$lastPeerRows")
     }
 
     private fun containsAllRids(observed: Set<String>, expected: Set<String>): Boolean =

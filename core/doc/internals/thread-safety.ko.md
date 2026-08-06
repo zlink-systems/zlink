@@ -2,7 +2,7 @@
 title: "Core thread safety 구현"
 ---
 
-[English](thread-safety.en.md) | 한국어
+[English](https://zlink-systems.github.io/zlink/internals/thread-safety/) | 한국어
 
 <!-- zlink-nav:start -->
 [가이드 목차](../guide/README.ko.md) | [이전: Threading model](threading-model.ko.md) | [다음: I/O thread](io-thread.ko.md)

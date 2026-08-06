@@ -1,4 +1,4 @@
-[한국어](README.ko.md) | English
+[한국어](https://zlink-systems.github.io/zlink/ko/bindings/reference/python/) | English
 
 [Python binding spec](../../spec/python/README.en.md) · [Python binding guide](../../guide/python/index.en.md)
 

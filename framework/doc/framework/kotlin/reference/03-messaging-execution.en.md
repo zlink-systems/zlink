@@ -3,7 +3,7 @@
 [Reference index](README.en.md)
 
 Completion kinds, timeout rules, and codec registration are exactly the same as
-[Java reference 03. Messaging execution](../../java/reference/03-messaging-execution.ko.md)
+[Java reference 03. Messaging execution](../../java/reference/03-messaging-execution.en.md)
 (Korean-only) — Kotlin only adds `ZLinkKotlinClient`/`ZLinkKotlinRouteClient`/
 `ZLinkKotlinFanoutClient`, which wrap the same operations in coroutine shape. The exact signatures
 are owned by the
@@ -111,5 +111,5 @@ Specifying the reserved topic bytes (`01 5A 4C 46 31`) throws the Java runtime's
 See the
 [Kotlin channel messaging exact interface](../../common/spec/server/languages/kotlin/interfaces/channel-messaging.en.md)
 and
-[Java reference 03. Messaging execution](../../java/reference/03-messaging-execution.ko.md)
+[Java reference 03. Messaging execution](../../java/reference/03-messaging-execution.en.md)
 (Korean-only) for the full rationale.

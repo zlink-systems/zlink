@@ -51,7 +51,10 @@ inline int run_service_host (int argc, char **argv)
         framework.handlers ().group (handler_group).add<profile_request_handler_t> ();
         auto mesh = framework.add_route_mesh (route_mesh_name);
         mesh.listen (options.mesh_endpoint)
-          .set_routing_id (zlink::routing_id_t::from (options.rid));
+          .set_routing_id (zlink::routing_id_t::from (options.rid))
+          .set_placement_weight (options.placement_weight)
+          .set_actor_limit (options.actor_limit)
+          .set_spot_limit (options.spot_limit);
         mesh.channel_name (route_mesh_channel)
           .server ()
           .add_request_handler<mesh_profile_request_dispatch_handler_t,
@@ -87,6 +90,17 @@ inline int run_service_host (int argc, char **argv)
           [] (auto &factory) {
               factory.disable_relocation ();
           });
+        mesh.add_entry_spot<monitoring_entry_spot_t> (
+          [] (zlink::framework::entry_spot_context_t context) {
+              return std::make_shared<monitoring_entry_spot_t> (
+                std::move (context));
+          });
+        mesh.add_actor_factory<monitoring_actor_t, monitoring_actor_factory_t> (
+          monitoring_actor_type,
+          std::make_shared<monitoring_actor_factory_t> (),
+          [] (auto &factory) {
+              factory.disable_relocation ();
+          });
         for (const auto &endpoint : options.mesh_peer_endpoints)
             mesh.peer_connections ().connect (endpoint);
         app.logging ().use_callback_sink (
@@ -113,6 +127,8 @@ inline int run_service_host (int argc, char **argv)
               .map_post<server::evidence_wait_handler_t> ("/evidence/wait")
               .map_post<server_weight_handler_t> ("/admin/server-weight")
               .map_post<create_spot_handler_t> ("/spot/create")
+              .map_post<create_actor_handler_t> ("/actor/create")
+              .map_post<delete_actor_handler_t> ("/actor/delete")
               .map_post<create_subject_handler_t> (
                 "/admin/subject/create")
               .map_post<close_subject_handler_t> (

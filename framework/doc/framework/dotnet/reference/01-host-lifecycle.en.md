@@ -4,7 +4,7 @@
 
 This category covers the `IServiceCollection` registration entry point and the entry points
 `IZLinkFrameworkRuntime` provides. The exact signatures are owned by the
-[Host registration exact interface](../../common/spec/server/languages/dotnet/interfaces/02-configuration-host.ko.md)
+[Host registration exact interface](../../common/spec/server/languages/dotnet/interfaces/02-configuration-host.en.md)
 and the
 [Topology monitoring exact interface](../../common/spec/server/languages/dotnet/interfaces/10-topology-monitoring.en.md)
 (Korean-only).
@@ -162,6 +162,6 @@ transitions without missing any, use `ObserveAsync`.
 ---
 
 The full basis is
-[Host registration exact interface](../../common/spec/server/languages/dotnet/interfaces/02-configuration-host.ko.md),
+[Host registration exact interface](../../common/spec/server/languages/dotnet/interfaces/02-configuration-host.en.md),
 [Topology monitoring exact interface](../../common/spec/server/languages/dotnet/interfaces/10-topology-monitoring.en.md), and
-[Host Relocate·Shutdown·Handoff](../../common/spec/28-graceful-drain-handoff.ko.md) (all Korean-only).
+[Host Relocate·Shutdown·Handoff](../../common/spec/28-graceful-drain-handoff.en.md) (all Korean-only).

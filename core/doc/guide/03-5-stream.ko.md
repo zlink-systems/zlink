@@ -2,7 +2,7 @@
 title: "STREAM 소켓"
 ---
 
-[English](03-5-stream.en.md)
+[English](03-5-stream.ko.md)
 
 <!-- zlink-nav:start -->
 [가이드 목록](README.ko.md) | [이전: ROUTER](03-4-router.ko.md) | [다음: 프록시 패턴](03-6-proxy.ko.md)

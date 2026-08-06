@@ -3,7 +3,7 @@ title: "11. Monitoring — Status Observation And Diagnostics · Java"
 ---
 
 <!-- framework-adapter-nav:start -->
-[Guide Home](../../../index.ko.md) | [Previous: Location](10-location.en.md) | [Next: Operations — metrics · drain · readiness](12-operations.en.md)
+[Guide Home](../../../index.en.md) | [Previous: Location](10-location.en.md) | [Next: Operations — metrics · drain · readiness](12-operations.en.md)
 <!-- framework-adapter-nav:end -->
 
 # 11. Monitoring — Status Observation And Diagnostics
@@ -144,7 +144,7 @@ ZLinkMetricsCustomizer zlinkMetrics(PlaySettings settings) {
 ```
 
 Instrument names start with `zlink.`. The exact names, kinds, units, and labels are owned
-by [Runtime Metrics And Aggregation Rules](../../../common/spec/25-runtime-metrics.ko.md).
+by [Runtime Metrics And Aggregation Rules](../../../common/spec/25-runtime-metrics.en.md).
 
 > **The Java runtime currently emits only part of the contract.** Of the 47 the contract
 > defines, only 14 are emitted, and the three request-related ones come out as
@@ -195,4 +195,4 @@ blips.
 - The formal contract: [Java monitoring public interface](../../../common/spec/server/languages/java/interfaces/monitoring.en.md)
 - Metrics and drain/readiness operations: [12. Operations](12-operations.en.md)
 - Diagnostics option list: [16. Options](16-options.en.md) §4
-- Instrument naming convention: [Runtime Metrics And Aggregation Rules](../../../common/spec/25-runtime-metrics.ko.md)
+- Instrument naming convention: [Runtime Metrics And Aggregation Rules](../../../common/spec/25-runtime-metrics.en.md)

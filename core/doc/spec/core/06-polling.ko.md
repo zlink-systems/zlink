@@ -2,7 +2,7 @@
 title: "Poll과 poller"
 ---
 
-[English](06-polling.en.md) | 한국어
+[English](https://zlink-systems.github.io/zlink/spec/core/06-polling/) | 한국어
 
 <!-- zlink-nav:start -->
 [Core 스펙 목차](README.ko.md) | [이전: Events](05-events.ko.md) | [다음: Monitoring](07-monitoring.ko.md)

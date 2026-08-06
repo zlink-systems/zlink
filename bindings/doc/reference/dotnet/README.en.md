@@ -1,4 +1,4 @@
-[한국어](README.ko.md) | English
+[한국어](https://zlink-systems.github.io/zlink/ko/bindings/reference/dotnet/) | English
 
 [.NET binding spec](../../spec/dotnet/README.en.md) · [.NET binding guide](../../guide/dotnet/index.en.md)
 

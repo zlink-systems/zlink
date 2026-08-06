@@ -1,8 +1,8 @@
 # 1. Overview
 
 > **The documents that own this chapter's contract** — owned by the
-> [Framework Overview](../../../common/spec/02-overview.ko.md) and the
-> [per-language public contract index](../../../common/spec/server/languages/README.ko.md).
+> [Framework Overview](../../../common/spec/02-overview.en.md) and the
+> [per-language public contract index](../../../common/spec/server/languages/README.en.md).
 
 === "C#/.NET"
 
@@ -10,9 +10,9 @@
     > and usage of ZLink Framework directly so an `ASP.NET Core` developer can **read it and
     > start writing code right away.** The **language-neutral formal definition** of a
     > concept is owned by the [common spec
-    > overview](../../../common/spec/02-overview.ko.md), and the **formal contract** of the
+    > overview](../../../common/spec/02-overview.en.md), and the **formal contract** of the
     > `.NET` public API is owned by the
-    > [spec/interfaces index](../../../common/spec/server/languages/dotnet/interfaces/README.ko.md)
+    > [spec/interfaces index](../../../common/spec/server/languages/dotnet/interfaces/README.en.md)
     > document. If the two disagree, the spec wins.
 
 === "C++"
@@ -21,9 +21,9 @@
     > and usage of ZLink Framework directly so a C++ developer can **read it and start
     > writing code right away.** The **language-neutral formal definition** of a concept is
     > owned by the [common spec
-    > overview](../../../common/spec/02-overview.ko.md), and the **formal contract** of the
+    > overview](../../../common/spec/02-overview.en.md), and the **formal contract** of the
     > `C++` public API is owned by the
-    > [C++ exact interface index](../../../common/spec/server/languages/cpp/interfaces/README.ko.md)
+    > [C++ exact interface index](../../../common/spec/server/languages/cpp/interfaces/README.en.md)
     > document. If the two disagree, the spec wins.
 
 === "Java"
@@ -32,9 +32,9 @@
     > and usage of ZLink Framework directly so a Java developer can **read it and start
     > writing code right away.** The **language-neutral formal definition** of a concept is
     > owned by the [common spec
-    > overview](../../../common/spec/02-overview.ko.md), and the **formal contract** of the
+    > overview](../../../common/spec/02-overview.en.md), and the **formal contract** of the
     > `Java` public API is owned by the
-    > [Java exact interface index](../../../common/spec/server/languages/java/interfaces/README.ko.md)
+    > [Java exact interface index](../../../common/spec/server/languages/java/interfaces/README.en.md)
     > document. If the two disagree, the spec wins.
 
 === "Kotlin"
@@ -43,9 +43,9 @@
     > concepts and usage of ZLink Framework directly so a Kotlin developer can **read it and
     > start writing code right away.** The **language-neutral formal definition** of a
     > concept is owned by the [common spec
-    > overview](../../../common/spec/02-overview.ko.md), and the **formal contract** of the
+    > overview](../../../common/spec/02-overview.en.md), and the **formal contract** of the
     > `Kotlin` public API is owned by the
-    > [Java exact interface index](../../../common/spec/server/languages/java/interfaces/README.ko.md)
+    > [Java exact interface index](../../../common/spec/server/languages/java/interfaces/README.en.md)
     > document. If the two disagree, the spec wins.
 
 === "Node/TypeScript"
@@ -54,9 +54,9 @@
     > concepts and usage of ZLink Framework directly so a Node.js developer can **read it
     > and start writing code right away.** The **language-neutral formal definition** of a
     > concept is owned by the [common spec
-    > overview](../../../common/spec/02-overview.ko.md), and the **formal contract** of the
+    > overview](../../../common/spec/02-overview.en.md), and the **formal contract** of the
     > `Node.js` public API is owned by the
-    > [Node.js exact interface index](../../../common/spec/server/languages/node/interfaces/README.ko.md)
+    > [Node.js exact interface index](../../../common/spec/server/languages/node/interfaces/README.en.md)
     > document. If the two disagree, the spec wins.
 
 ## 1. One-Line Definition
@@ -106,7 +106,7 @@ calls and pub/sub find their target purely by a logical `channel name`, with **n
 gateway or dedicated load balancer.** The real-time state units are `SPOT` (room · stage ·
 zone), an actor (a stateful object representing one connection/user), and `STREAM` (an
 external client connection) — if these terms are unfamiliar, see the concept walkthrough in
-[03-concepts](03-concepts.ko.md) first. A developer writes a **handler, client, and filter**
+[03-concepts](03-concepts.en.md) first. A developer writes a **handler, client, and filter**
 with the same feel as using HTTP/gRPC, and the framework handles connection, location lookup,
 routing, reconnect, and correlation.
 
@@ -116,7 +116,7 @@ routing, reconnect, and correlation.
 > services implemented in different languages call each other over the same channel (e.g., a
 > room server in C++, an API server in .NET/Java). This guide is `.NET`-based and treats the
 > `.NET` implementation as the reference implementation. The detailed cross-language model is
-> covered by [17-alternative §2.1](17-alternative.ko.md).
+> covered by [17-alternative §2.1](17-alternative.en.md).
 
 ## 2. Situations Where You Need It
 
@@ -207,24 +207,24 @@ flowchart TB
   splits this into Spot (an execution-isolation unit) and Actor (a domain entity). What's
   closer to Orleans's virtual actor/grain isn't ZLink's Actor — it's the **Instance Spot**
   this approach uses. The detailed comparison is covered in
-  [Chapter 17 §6](17-alternative.ko.md).
+  [Chapter 17 §6](17-alternative.en.md).
 
 **What ZLink provides.** A feature answers each difficulty, one by one.
 
 | Difficulty | ZLink feature | Details |
 | --- | --- | --- |
-| Building a genre's topology from raw sockets | **Declare topology by combining channels** — 1:N request/response, fan-out, a node-addressed route mesh, a room-scoped spot mesh, all composed in a few lines of registration; the location store keeps connections up automatically | [§3 Architecture](#아키텍처--계층-구조와-등록-지점) · [05](05-channel-messaging.ko.md)·[06](06-spot.ko.md)·[10](10-location.ko.md) |
-| Locks/contention on in-memory state | **SPOT serial execution** — every message for one room lines up on a single execution line and runs in order. Locks disappear from business logic | The code below · [06](06-spot.ko.md) |
-| Implementing socket framing/session lifetime directly | **STREAM** — the framework owns connection lifetime, framing, and packet codec (TCP/TLS/WS/WSS) | [09](09-stream.ko.md) |
-| Tracking a reconnected user's location | **Actor binding** — a new connection after reconnect picks up the same actor | [08](08-actor-session.ko.md) |
-| Users dropped during deployment | **Graceful drain** — blocks new admission, hands off actors, finishes in-progress work, then shuts down. 0 lines of app code | [12](12-operations.ko.md) |
+| Building a genre's topology from raw sockets | **Declare topology by combining channels** — 1:N request/response, fan-out, a node-addressed route mesh, a room-scoped spot mesh, all composed in a few lines of registration; the location store keeps connections up automatically | [§3 Architecture](#아키텍처--계층-구조와-등록-지점) · [05](05-channel-messaging.en.md)·[06](06-spot.en.md)·[10](10-location.en.md) |
+| Locks/contention on in-memory state | **SPOT serial execution** — every message for one room lines up on a single execution line and runs in order. Locks disappear from business logic | The code below · [06](06-spot.en.md) |
+| Implementing socket framing/session lifetime directly | **STREAM** — the framework owns connection lifetime, framing, and packet codec (TCP/TLS/WS/WSS) | [09](09-stream.en.md) |
+| Tracking a reconnected user's location | **Actor binding** — a new connection after reconnect picks up the same actor | [08](08-actor-session.en.md) |
+| Users dropped during deployment | **Graceful drain** — blocks new admission, hands off actors, finishes in-progress work, then shuts down. 0 lines of app code | [12](12-operations.en.md) |
 
 And the **four patterns above all become combinations on the same declarative model.**
 There's no need to rebuild from the socket for each one.
 
 - **① Zone-sharding** — set up a zone with `AddRouteMesh` + a node-addressed route mesh. A
   player crossing a boundary is handed off by **cross-node actor relocation**
-  ([07](07-actor-spot.ko.md)) instead. [ZoneWorld](../../../common/sample/zoneworld/README.en.md)
+  ([07](07-actor-spot.en.md)) instead. [ZoneWorld](../../../common/sample/zoneworld/README.en.md)
   is exactly this approach.
 - **② Lobby + room** — entry/matching is the Entry Spot, and a room is a room spot created
   with `GetOrCreate`. [Bingo](../../../common/sample/bingo/README.en.md) is exactly this
@@ -289,7 +289,7 @@ means no new runtime to learn.
 > tolerates loss. STREAM currently provides TCP/TLS/WS/WSS as transport, and **unreliable
 > transport (QUIC datagram/WebTransport) is planned.** Even for that kind of game, though,
 > matching/lobby/meta/social are handled just fine today by these four approaches. Exactly
-> where the line falls is covered in [Chapter 17](17-alternative.ko.md) §4.
+> where the line falls is covered in [Chapter 17](17-alternative.en.md) §4.
 
 **How is this different from a game server engine or service?** The path that avoids
 building it yourself includes engines and managed services. Laying out what each provides,
@@ -461,7 +461,7 @@ Several players send requests at the same time and a timer runs in this room, ye
 `lock`, no `Interlocked`, no Redis distributed lock. That's because the framework lines up
 every message for one room (requests, subscription events, timer ticks, actor packets) on
 **a single execution line and runs them in order.** Here, "serial" isn't codec serialization
-— it's **serialization of execution order** ([06 §3](06-spot.ko.md)).
+— it's **serialization of execution order** ([06 §3](06-spot.en.md)).
 
 Runnable reference samples: [TicTacToe](../../../common/sample/tictactoe/README.en.md) ·
 [Bingo](../../../common/sample/bingo/README.en.md) · [GameQuest](../../../common/sample/event/gamequest.en.md)
@@ -486,9 +486,9 @@ execution unit.
 
 | What you used to assemble | ZLink feature | Details |
 | --- | --- | --- |
-| A Redis distributed lock per guild id | **Instance Spot** — one spot, cold-activated by guild id, processes every request for that guild serially | [06](06-spot.ko.md) |
-| Lock acquire/release/timeout handling | **Serial execution** — the lock concept disappears entirely; everything is always processed in spot queue order | [06 §3](06-spot.ko.md) |
-| Inter-server calls/LB to find the guild spot | **channel name + location store** | [05](05-channel-messaging.ko.md)·[10](10-location.ko.md) |
+| A Redis distributed lock per guild id | **Instance Spot** — one spot, cold-activated by guild id, processes every request for that guild serially | [06](06-spot.en.md) |
+| Lock acquire/release/timeout handling | **Serial execution** — the lock concept disappears entirely; everything is always processed in spot queue order | [06 §3](06-spot.en.md) |
+| Inter-server calls/LB to find the guild spot | **channel name + location store** | [05](05-channel-messaging.en.md)·[10](10-location.en.md) |
 | Pre-provisioning a new guild | Cold-activated on the spot when the first request arrives — no separate preparation needed | |
 
 **The existing approach** — lock acquire/release makes a round trip on every request.
@@ -623,10 +623,10 @@ LB, broker detour, distributed lock — plus the operational burden of running i
 
 | What you used to assemble | ZLink feature | Details |
 | --- | --- | --- |
-| A WebSocket server + sticky LB | **STREAM** — the app server receives client connections directly | [09](09-stream.ko.md) |
-| A distributed lock for ordering | **SPOT owner routing** — the same order/conversation always executes serially in its own one Spot | [06](06-spot.ko.md) |
-| Real-time delivery through a broker | **channel/fanout** — inter-server delivery and fan-out go through transport directly | [05](05-channel-messaging.ko.md) |
-| Managing "who's connected where" | **Actor binding + location store** — the framework owns reconnect portability and location lookup | [08](08-actor-session.ko.md)·[10](10-location.ko.md) |
+| A WebSocket server + sticky LB | **STREAM** — the app server receives client connections directly | [09](09-stream.en.md) |
+| A distributed lock for ordering | **SPOT owner routing** — the same order/conversation always executes serially in its own one Spot | [06](06-spot.en.md) |
+| Real-time delivery through a broker | **channel/fanout** — inter-server delivery and fan-out go through transport directly | [05](05-channel-messaging.en.md) |
+| Managing "who's connected where" | **Actor binding + location store** — the framework owns reconnect portability and location lookup | [08](08-actor-session.en.md)·[10](10-location.en.md) |
 
 Drawing the same system — a web API + real-time features (chat/order tracking) — both ways
 shows the difference right in the picture.
@@ -898,22 +898,22 @@ gone in the after picture.
 **What stays, stays.** Client HTTP ingress is still stateless, so an L7 LB/Ingress
 distributes to API servers as usual (gray), and order state is still stored in the DB.
 Unlike gRPC, this HTTP ingress path also doesn't **additionally** require an L7 distribution
-device (the reason is covered in [Chapter 17 §5.1](17-alternative.ko.md)).
+device (the reason is covered in [Chapter 17 §5.1](17-alternative.en.md)).
 
 **What ZLink provides.** Solving "gather the same key in one place, in order" with **owner
 routing** instead of a log means most of the pieces above simply never need to be assembled.
 
 | What you used to assemble | ZLink feature | Details |
 | --- | --- | --- |
-| Key partition + consumer group | **SPOT owner routing** — the same `OrderId` always executes serially on the same Spot. Whichever API instance receives it, it's routed to the same owner | [06](06-spot.ko.md) |
-| DB load-modify-store per event | **The owner spot's hot state** — state lives in the owner's memory, and the app decides when to persist based on business rules | [06](06-spot.ko.md) |
-| Version check/distributed lock against redelivery | **Serial execution** — no concurrent writer for the same unit, so there's no lock/version contention on the normal path | [06 §3](06-spot.ko.md) |
-| LB/service discovery for inter-server calls | **channel name + location store** — call by the name `"inventory"` and it sends directly to a currently available peer | [05](05-channel-messaging.ko.md)·[10](10-location.ko.md) |
+| Key partition + consumer group | **SPOT owner routing** — the same `OrderId` always executes serially on the same Spot. Whichever API instance receives it, it's routed to the same owner | [06](06-spot.en.md) |
+| DB load-modify-store per event | **The owner spot's hot state** — state lives in the owner's memory, and the app decides when to persist based on business rules | [06](06-spot.en.md) |
+| Version check/distributed lock against redelivery | **Serial execution** — no concurrent writer for the same unit, so there's no lock/version contention on the normal path | [06 §3](06-spot.en.md) |
+| LB/service discovery for inter-server calls | **channel name + location store** — call by the name `"inventory"` and it sends directly to a currently available peer | [05](05-channel-messaging.en.md)·[10](10-location.en.md) |
 | Operating offset/lag/resync jobs | With no consumption pipeline, that operational item doesn't exist at all | |
 
 **The boundary stays where it is.** Where a durable log is genuinely needed — event replay,
 long-term retention, broad fan-out to independent systems — Kafka is the right fit and stays
-exactly there ([Chapter 17 §4](17-alternative.ko.md)). What ZLink cuts is the case where a
+exactly there ([Chapter 17 §4](17-alternative.en.md)). What ZLink cuts is the case where a
 log pipeline was assembled **only** for entity-scoped ordered processing. If order and
 consistency were the entire goal, owner routing achieves that goal directly, with no
 pipeline.
@@ -1368,7 +1368,7 @@ bottom two layers (`bindings/dotnet`, the Core C API) are used only as a backend
 behind the framework — never directly exposed on the public API, and application code
 doesn't change even if they're replaced later. This backend boundary and data flow are
 explained separately by
-[internals/backend-dependency-policy](../../internals/backend-dependency-policy.ko.md).
+[internals/backend-dependency-policy](../../internals/backend-dependency-policy.en.md).
 
 The point where the application meets this stack is **one registration spot.** This is where
 you declare the MeshNode, fanout, and STREAM node.
@@ -1488,18 +1488,18 @@ Topologies you used to assemble separately with gRPC+LB, a broker, and a WebSock
 collapse down to **one declarative model.** Once the location store is registered,
 connections auto-connect and auto-clean-up as servers scale up or down — nothing to edit in
 a config file, no LB to reconfigure.
-([05](05-channel-messaging.ko.md)·[06](06-spot.ko.md)·[09](09-stream.ko.md)·[10](10-location.ko.md))
+([05](05-channel-messaging.en.md)·[06](06-spot.en.md)·[09](09-stream.en.md)·[10](10-location.en.md))
 
 What you declare, and where, comes down to three spots.
 
 | Surface | Role | Chapter that covers it |
 | --- | --- | --- |
-| `builder.Services.AddZLinkFramework(...)` | Declare channel/SPOT/STREAM | [Chapter 5](05-channel-messaging.ko.md)~[Chapter 9](09-stream.ko.md) |
-| `options.AddRouteMesh(...)` / `AddFanoutChannel(...)` | Declare RouteMesh/fanout | [Chapter 5](05-channel-messaging.ko.md) |
-| `IZLink*Runtime` status | Status observation and diagnostics | [Chapter 11](11-monitoring.ko.md) |
+| `builder.Services.AddZLinkFramework(...)` | Declare channel/SPOT/STREAM | [Chapter 5](05-channel-messaging.en.md)~[Chapter 9](09-stream.en.md) |
+| `options.AddRouteMesh(...)` / `AddFanoutChannel(...)` | Declare RouteMesh/fanout | [Chapter 5](05-channel-messaging.en.md) |
+| `IZLink*Runtime` status | Status observation and diagnostics | [Chapter 11](11-monitoring.en.md) |
 
 Every option settable at each surface, with its default, is collected in
-[16-options](16-options.ko.md).
+[16-options](16-options.en.md).
 
 ## 4. The Four Integration Axes, Summarized
 
@@ -1517,13 +1517,13 @@ Every option settable at each surface, with its default, is collected in
 
     | Axis | What the user sees | Guide chapter |
     | --- | --- | --- |
-    | channel messaging | `IZLinkRequestHandler`, `IZLinkSendHandler`, `IZLinkRouteClient`, `IZLinkHandlerFilter` | [05-channel-messaging](05-channel-messaging.ko.md) |
-    | fanout | `AddFanoutChannel`, `IZLinkFanoutHandler` | [05-channel-messaging](05-channel-messaging.ko.md) |
-    | SPOT | Typed spot factory, Spot context outbound, timer | [06-spot](06-spot.ko.md) |
-    | actor / session | Actor factory, Entry Spot, `IZLinkBoundSession`, session actor dispatch | [07-actor-spot](07-actor-spot.ko.md) · [08-actor-session](08-actor-session.ko.md) |
-    | STREAM | Framework session packet, Stream Connector | [09-stream](09-stream.ko.md) |
-    | Infrastructure | Location-based auto-connect/operational queries, runtime monitoring | [10-location](10-location.ko.md), [11-monitoring](11-monitoring.ko.md) |
-    | Operations | Runtime metrics (one `AddMeter` line), graceful drain, readiness probe | [12-operations](12-operations.ko.md) |
+    | channel messaging | `IZLinkRequestHandler`, `IZLinkSendHandler`, `IZLinkRouteClient`, `IZLinkHandlerFilter` | [05-channel-messaging](05-channel-messaging.en.md) |
+    | fanout | `AddFanoutChannel`, `IZLinkFanoutHandler` | [05-channel-messaging](05-channel-messaging.en.md) |
+    | SPOT | Typed spot factory, Spot context outbound, timer | [06-spot](06-spot.en.md) |
+    | actor / session | Actor factory, Entry Spot, `IZLinkBoundSession`, session actor dispatch | [07-actor-spot](07-actor-spot.en.md) · [08-actor-session](08-actor-session.en.md) |
+    | STREAM | Framework session packet, Stream Connector | [09-stream](09-stream.en.md) |
+    | Infrastructure | Location-based auto-connect/operational queries, runtime monitoring | [10-location](10-location.en.md), [11-monitoring](11-monitoring.en.md) |
+    | Operations | Runtime metrics (one `AddMeter` line), graceful drain, readiness probe | [12-operations](12-operations.en.md) |
 
 === "C++"
 
@@ -1539,13 +1539,13 @@ Every option settable at each surface, with its default, is collected in
 
     | Axis | What the user sees | Guide chapter |
     | --- | --- | --- |
-    | channel messaging | Request handler, send handler, `request_client_t`, handler filter | [05-channel-messaging](05-channel-messaging.ko.md) |
-    | fanout | `AddFanoutChannel`, fanout handler | [05-channel-messaging](05-channel-messaging.ko.md) |
-    | SPOT | Typed spot factory, Spot context outbound, timer | [06-spot](06-spot.ko.md) |
-    | actor / session | Actor factory, Entry Spot, `bound_session_t`, session actor dispatch | [07-actor-spot](07-actor-spot.ko.md) · [08-actor-session](08-actor-session.ko.md) |
-    | STREAM | Framework session packet, Stream Connector | [09-stream](09-stream.ko.md) |
-    | Infrastructure | Location-based auto-connect/operational queries, runtime monitoring | [10-location](10-location.ko.md), [11-monitoring](11-monitoring.ko.md) |
-    | Operations | Runtime metrics (one registration line), graceful drain, readiness probe | [12-operations](12-operations.ko.md) |
+    | channel messaging | Request handler, send handler, `request_client_t`, handler filter | [05-channel-messaging](05-channel-messaging.en.md) |
+    | fanout | `AddFanoutChannel`, fanout handler | [05-channel-messaging](05-channel-messaging.en.md) |
+    | SPOT | Typed spot factory, Spot context outbound, timer | [06-spot](06-spot.en.md) |
+    | actor / session | Actor factory, Entry Spot, `bound_session_t`, session actor dispatch | [07-actor-spot](07-actor-spot.en.md) · [08-actor-session](08-actor-session.en.md) |
+    | STREAM | Framework session packet, Stream Connector | [09-stream](09-stream.en.md) |
+    | Infrastructure | Location-based auto-connect/operational queries, runtime monitoring | [10-location](10-location.en.md), [11-monitoring](11-monitoring.en.md) |
+    | Operations | Runtime metrics (one registration line), graceful drain, readiness probe | [12-operations](12-operations.en.md) |
 
 === "Java"
 
@@ -1561,13 +1561,13 @@ Every option settable at each surface, with its default, is collected in
 
     | Axis | What the user sees | Guide chapter |
     | --- | --- | --- |
-    | channel messaging | `ZLinkRequestHandler`, `ZLinkSendHandler`, `ZLinkRouteClient`, `ZLinkHandlerFilter` | [05-channel-messaging](05-channel-messaging.ko.md) |
-    | fanout | `AddFanoutChannel`, `ZLinkFanoutHandler` | [05-channel-messaging](05-channel-messaging.ko.md) |
-    | SPOT | Typed spot factory, Spot context outbound, timer | [06-spot](06-spot.ko.md) |
-    | actor / session | Actor factory, Entry Spot, `ZLinkBoundSession`, session actor dispatch | [07-actor-spot](07-actor-spot.ko.md) · [08-actor-session](08-actor-session.ko.md) |
-    | STREAM | Framework session packet, Stream Connector | [09-stream](09-stream.ko.md) |
-    | Infrastructure | Location-based auto-connect/operational queries, runtime monitoring | [10-location](10-location.ko.md), [11-monitoring](11-monitoring.ko.md) |
-    | Operations | Runtime metrics (one registration line), graceful drain, readiness probe | [12-operations](12-operations.ko.md) |
+    | channel messaging | `ZLinkRequestHandler`, `ZLinkSendHandler`, `ZLinkRouteClient`, `ZLinkHandlerFilter` | [05-channel-messaging](05-channel-messaging.en.md) |
+    | fanout | `AddFanoutChannel`, `ZLinkFanoutHandler` | [05-channel-messaging](05-channel-messaging.en.md) |
+    | SPOT | Typed spot factory, Spot context outbound, timer | [06-spot](06-spot.en.md) |
+    | actor / session | Actor factory, Entry Spot, `ZLinkBoundSession`, session actor dispatch | [07-actor-spot](07-actor-spot.en.md) · [08-actor-session](08-actor-session.en.md) |
+    | STREAM | Framework session packet, Stream Connector | [09-stream](09-stream.en.md) |
+    | Infrastructure | Location-based auto-connect/operational queries, runtime monitoring | [10-location](10-location.en.md), [11-monitoring](11-monitoring.en.md) |
+    | Operations | Runtime metrics (one registration line), graceful drain, readiness probe | [12-operations](12-operations.en.md) |
 
 === "Kotlin"
 
@@ -1583,13 +1583,13 @@ Every option settable at each surface, with its default, is collected in
 
     | Axis | What the user sees | Guide chapter |
     | --- | --- | --- |
-    | channel messaging | `ZLinkRequestHandler`, `ZLinkSendHandler`, `ZLinkRouteClient`, `ZLinkHandlerFilter` | [05-channel-messaging](05-channel-messaging.ko.md) |
-    | fanout | `AddFanoutChannel`, `ZLinkFanoutHandler` | [05-channel-messaging](05-channel-messaging.ko.md) |
-    | SPOT | Typed spot factory, Spot context outbound, timer | [06-spot](06-spot.ko.md) |
-    | actor / session | Actor factory, Entry Spot, `ZLinkBoundSession`, session actor dispatch | [07-actor-spot](07-actor-spot.ko.md) · [08-actor-session](08-actor-session.ko.md) |
-    | STREAM | Framework session packet, Stream Connector | [09-stream](09-stream.ko.md) |
-    | Infrastructure | Location-based auto-connect/operational queries, runtime monitoring | [10-location](10-location.ko.md), [11-monitoring](11-monitoring.ko.md) |
-    | Operations | Runtime metrics (one registration line), graceful drain, readiness probe | [12-operations](12-operations.ko.md) |
+    | channel messaging | `ZLinkRequestHandler`, `ZLinkSendHandler`, `ZLinkRouteClient`, `ZLinkHandlerFilter` | [05-channel-messaging](05-channel-messaging.en.md) |
+    | fanout | `AddFanoutChannel`, `ZLinkFanoutHandler` | [05-channel-messaging](05-channel-messaging.en.md) |
+    | SPOT | Typed spot factory, Spot context outbound, timer | [06-spot](06-spot.en.md) |
+    | actor / session | Actor factory, Entry Spot, `ZLinkBoundSession`, session actor dispatch | [07-actor-spot](07-actor-spot.en.md) · [08-actor-session](08-actor-session.en.md) |
+    | STREAM | Framework session packet, Stream Connector | [09-stream](09-stream.en.md) |
+    | Infrastructure | Location-based auto-connect/operational queries, runtime monitoring | [10-location](10-location.en.md), [11-monitoring](11-monitoring.en.md) |
+    | Operations | Runtime metrics (one registration line), graceful drain, readiness probe | [12-operations](12-operations.en.md) |
 
 === "Node/TypeScript"
 
@@ -1605,13 +1605,13 @@ Every option settable at each surface, with its default, is collected in
 
     | Axis | What the user sees | Guide chapter |
     | --- | --- | --- |
-    | channel messaging | `ZLinkRequestHandler`, `ZLinkSendHandler`, `ZLinkRouteClient`, `ZLinkHandlerFilter` | [05-channel-messaging](05-channel-messaging.ko.md) |
-    | fanout | `AddFanoutChannel`, `ZLinkFanoutHandler` | [05-channel-messaging](05-channel-messaging.ko.md) |
-    | SPOT | Typed spot factory, Spot context outbound, timer | [06-spot](06-spot.ko.md) |
-    | actor / session | Actor factory, Entry Spot, `ZLinkBoundSession`, session actor dispatch | [07-actor-spot](07-actor-spot.ko.md) · [08-actor-session](08-actor-session.ko.md) |
-    | STREAM | Framework session packet, Stream Connector | [09-stream](09-stream.ko.md) |
-    | Infrastructure | Location-based auto-connect/operational queries, runtime monitoring | [10-location](10-location.ko.md), [11-monitoring](11-monitoring.ko.md) |
-    | Operations | Runtime metrics (one registration line), graceful drain, readiness probe | [12-operations](12-operations.ko.md) |
+    | channel messaging | `ZLinkRequestHandler`, `ZLinkSendHandler`, `ZLinkRouteClient`, `ZLinkHandlerFilter` | [05-channel-messaging](05-channel-messaging.en.md) |
+    | fanout | `AddFanoutChannel`, `ZLinkFanoutHandler` | [05-channel-messaging](05-channel-messaging.en.md) |
+    | SPOT | Typed spot factory, Spot context outbound, timer | [06-spot](06-spot.en.md) |
+    | actor / session | Actor factory, Entry Spot, `ZLinkBoundSession`, session actor dispatch | [07-actor-spot](07-actor-spot.en.md) · [08-actor-session](08-actor-session.en.md) |
+    | STREAM | Framework session packet, Stream Connector | [09-stream](09-stream.en.md) |
+    | Infrastructure | Location-based auto-connect/operational queries, runtime monitoring | [10-location](10-location.en.md), [11-monitoring](11-monitoring.en.md) |
+    | Operations | Runtime metrics (one registration line), graceful drain, readiness probe | [12-operations](12-operations.en.md) |
 
 ## 5. The Overall Topology
 
@@ -1698,45 +1698,45 @@ transport implementation to the application
     code. An application developer uses the public feature set through the DI, hosted
     service, handler, and location store model. Anyone reviewing the formal public API
     contract should also read the
-    [spec/interfaces index](../../../common/spec/server/languages/dotnet/interfaces/README.ko.md);
+    [spec/interfaces index](../../../common/spec/server/languages/dotnet/interfaces/README.en.md);
     anyone changing the runtime's internal structure should also read
-    [internals/](../../internals/backend-dependency-policy.ko.md).
+    [internals/](../../internals/backend-dependency-policy.en.md).
 
 === "C++"
 
     code. An application developer uses the public feature set through the DI, hosted
     service, handler, and location store model. Anyone reviewing the formal public API
     contract should also read the
-    [spec/interfaces index](../../../common/spec/server/languages/cpp/interfaces/README.ko.md);
+    [spec/interfaces index](../../../common/spec/server/languages/cpp/interfaces/README.en.md);
     anyone changing the runtime's internal structure should also read
-    [internals/](../../internals/backend-dependency-policy.ko.md).
+    [internals/](../../internals/backend-dependency-policy.en.md).
 
 === "Java"
 
     code. An application developer uses the public feature set through the DI, hosted
     service, handler, and location store model. Anyone reviewing the formal public API
     contract should also read the
-    [spec/interfaces index](../../../common/spec/server/languages/java/interfaces/README.ko.md);
+    [spec/interfaces index](../../../common/spec/server/languages/java/interfaces/README.en.md);
     anyone changing the runtime's internal structure should also read
-    [internals/](../../internals/backend-dependency-policy.ko.md).
+    [internals/](../../internals/backend-dependency-policy.en.md).
 
 === "Kotlin"
 
     code. An application developer uses the public feature set through the DI, hosted
     service, handler, and location store model. Anyone reviewing the formal public API
     contract should also read the
-    [spec/interfaces index](../../../common/spec/server/languages/java/interfaces/README.ko.md);
+    [spec/interfaces index](../../../common/spec/server/languages/java/interfaces/README.en.md);
     anyone changing the runtime's internal structure should also read
-    [internals/](../../internals/backend-dependency-policy.ko.md).
+    [internals/](../../internals/backend-dependency-policy.en.md).
 
 === "Node/TypeScript"
 
     code. An application developer uses the public feature set through the DI, hosted
     service, handler, and location store model. Anyone reviewing the formal public API
     contract should also read the
-    [spec/interfaces index](../../../common/spec/server/languages/node/interfaces/README.ko.md);
+    [spec/interfaces index](../../../common/spec/server/languages/node/interfaces/README.en.md);
     anyone changing the runtime's internal structure should also read
-    [internals/](../../internals/backend-dependency-policy.ko.md).
+    [internals/](../../internals/backend-dependency-policy.en.md).
 
 ## 7. Naming Convention
 
@@ -1807,100 +1807,100 @@ transport implementation to the application
 
 === "C#/.NET"
 
-    - [02-getting-started](02-getting-started.ko.md) — From the package to your first working check
-    - [03-concepts](03-concepts.ko.md) — Core concepts (channel, roles, DI)
-    - [05-channel-messaging](05-channel-messaging.ko.md) — request/send/pub-sub in detail
-    - [06-spot](06-spot.ko.md) — room/stage/zone, timer, routed Spot calls
-    - [07-actor-spot](07-actor-spot.ko.md) — Actor lifecycle, Spot hosting/callbacks
-    - [08-actor-session](08-actor-session.ko.md) — session↔actor binding/dispatch, client push
-    - [09-stream](09-stream.ko.md) — The external-client (STREAM) server + Stream Connector
-    - [10-location](10-location.ko.md) — Location-store-based auto-connect and operational queries
-    - [11-monitoring](11-monitoring.ko.md) — Status observation and diagnostics
-    - [13-interface-catalog](13-interface-catalog.ko.md) — Every contract interface as code (ContractTests verification)
-    - [14-samples](14-samples.ko.md) — Checking it against runnable samples
-    - [16-options](16-options.ko.md) — The option list and defaults, what changes when
-    - [17-alternative](17-alternative.ko.md) — **Where ZLink fits** (where it's used, warning signs, the technology-choice boundary)
+    - [02-getting-started](02-getting-started.en.md) — From the package to your first working check
+    - [03-concepts](03-concepts.en.md) — Core concepts (channel, roles, DI)
+    - [05-channel-messaging](05-channel-messaging.en.md) — request/send/pub-sub in detail
+    - [06-spot](06-spot.en.md) — room/stage/zone, timer, routed Spot calls
+    - [07-actor-spot](07-actor-spot.en.md) — Actor lifecycle, Spot hosting/callbacks
+    - [08-actor-session](08-actor-session.en.md) — session↔actor binding/dispatch, client push
+    - [09-stream](09-stream.en.md) — The external-client (STREAM) server + Stream Connector
+    - [10-location](10-location.en.md) — Location-store-based auto-connect and operational queries
+    - [11-monitoring](11-monitoring.en.md) — Status observation and diagnostics
+    - [13-interface-catalog](13-interface-catalog.en.md) — Every contract interface as code (ContractTests verification)
+    - [14-samples](14-samples.en.md) — Checking it against runnable samples
+    - [16-options](16-options.en.md) — The option list and defaults, what changes when
+    - [17-alternative](17-alternative.en.md) — **Where ZLink fits** (where it's used, warning signs, the technology-choice boundary)
     - [Common samples](../../../common/sample/README.en.md) — Representative business scenarios and verification criteria
-    - [spec/interfaces index](../../../common/spec/server/languages/dotnet/interfaces/README.ko.md) — The formal contract (interface catalog)
+    - [spec/interfaces index](../../../common/spec/server/languages/dotnet/interfaces/README.en.md) — The formal contract (interface catalog)
 
     ---
 
 === "C++"
 
-    - [02-getting-started](02-getting-started.ko.md) — From install to your first working check
-    - [03-concepts](03-concepts.ko.md) — Core concepts (channel, roles, DI)
-    - [05-channel-messaging](05-channel-messaging.ko.md) — request/send/pub-sub in detail
-    - [06-spot](06-spot.ko.md) — room/stage/zone, timer, routed Spot calls
-    - [07-actor-spot](07-actor-spot.ko.md) — Actor lifecycle, Spot hosting/callbacks
-    - [08-actor-session](08-actor-session.ko.md) — session↔actor binding/dispatch, client push
-    - [09-stream](09-stream.ko.md) — The external-client (STREAM) server + Stream Connector
-    - [10-location](10-location.ko.md) — Location-store-based auto-connect and operational queries
-    - [11-monitoring](11-monitoring.ko.md) — Status observation and diagnostics
-    - [13-interface-catalog](13-interface-catalog.ko.md) — The key public surface as code
-    - [14-samples](14-samples.ko.md) — Checking it against runnable samples
-    - [16-options](16-options.ko.md) — The option list and defaults, what changes when
-    - [17-alternative](17-alternative.ko.md) — **Where ZLink fits**
-    - [18-di-container](18-di-container.ko.md) — The DI container
-    - [19-configuration](19-configuration.ko.md) — Configuration binding
-    - [20-http-hosting](20-http-hosting.ko.md) — An HTTP endpoint inside the process
-    - [21-execution-model](21-execution-model.ko.md) — The coroutine execution model
+    - [02-getting-started](02-getting-started.en.md) — From install to your first working check
+    - [03-concepts](03-concepts.en.md) — Core concepts (channel, roles, DI)
+    - [05-channel-messaging](05-channel-messaging.en.md) — request/send/pub-sub in detail
+    - [06-spot](06-spot.en.md) — room/stage/zone, timer, routed Spot calls
+    - [07-actor-spot](07-actor-spot.en.md) — Actor lifecycle, Spot hosting/callbacks
+    - [08-actor-session](08-actor-session.en.md) — session↔actor binding/dispatch, client push
+    - [09-stream](09-stream.en.md) — The external-client (STREAM) server + Stream Connector
+    - [10-location](10-location.en.md) — Location-store-based auto-connect and operational queries
+    - [11-monitoring](11-monitoring.en.md) — Status observation and diagnostics
+    - [13-interface-catalog](13-interface-catalog.en.md) — The key public surface as code
+    - [14-samples](14-samples.en.md) — Checking it against runnable samples
+    - [16-options](16-options.en.md) — The option list and defaults, what changes when
+    - [17-alternative](17-alternative.en.md) — **Where ZLink fits**
+    - [18-di-container](18-di-container.en.md) — The DI container
+    - [19-configuration](19-configuration.en.md) — Configuration binding
+    - [20-http-hosting](20-http-hosting.en.md) — An HTTP endpoint inside the process
+    - [21-execution-model](21-execution-model.en.md) — The coroutine execution model
     - [Common samples](../../../common/sample/README.en.md) — Representative business scenarios and verification criteria
-    - [C++ exact interface index](../../../common/spec/server/languages/cpp/interfaces/README.ko.md) — The formal contract
+    - [C++ exact interface index](../../../common/spec/server/languages/cpp/interfaces/README.en.md) — The formal contract
 
 === "Java"
 
-    - [02-getting-started](02-getting-started.ko.md) — From the package to your first working check
-    - [03-concepts](03-concepts.ko.md) — Core concepts (channel, roles, DI)
-    - [05-channel-messaging](05-channel-messaging.ko.md) — request/send/pub-sub in detail
-    - [06-spot](06-spot.ko.md) — room/stage/zone, timer, routed Spot calls
-    - [07-actor-spot](07-actor-spot.ko.md) — Actor lifecycle, Spot hosting/callbacks
-    - [08-actor-session](08-actor-session.ko.md) — session↔actor binding/dispatch, client push
-    - [09-stream](09-stream.ko.md) — The external-client (STREAM) server + Stream Connector
-    - [10-location](10-location.ko.md) — Location-store-based auto-connect and operational queries
-    - [11-monitoring](11-monitoring.ko.md) — Status observation and diagnostics
-    - [13-interface-catalog](13-interface-catalog.ko.md) — Every contract interface as code (ContractTests verification)
-    - [14-samples](14-samples.ko.md) — Checking it against runnable samples
-    - [16-options](16-options.ko.md) — The option list and defaults, what changes when
-    - [17-alternative](17-alternative.ko.md) — **Where ZLink fits** (where it's used, warning signs, the technology-choice boundary)
+    - [02-getting-started](02-getting-started.en.md) — From the package to your first working check
+    - [03-concepts](03-concepts.en.md) — Core concepts (channel, roles, DI)
+    - [05-channel-messaging](05-channel-messaging.en.md) — request/send/pub-sub in detail
+    - [06-spot](06-spot.en.md) — room/stage/zone, timer, routed Spot calls
+    - [07-actor-spot](07-actor-spot.en.md) — Actor lifecycle, Spot hosting/callbacks
+    - [08-actor-session](08-actor-session.en.md) — session↔actor binding/dispatch, client push
+    - [09-stream](09-stream.en.md) — The external-client (STREAM) server + Stream Connector
+    - [10-location](10-location.en.md) — Location-store-based auto-connect and operational queries
+    - [11-monitoring](11-monitoring.en.md) — Status observation and diagnostics
+    - [13-interface-catalog](13-interface-catalog.en.md) — Every contract interface as code (ContractTests verification)
+    - [14-samples](14-samples.en.md) — Checking it against runnable samples
+    - [16-options](16-options.en.md) — The option list and defaults, what changes when
+    - [17-alternative](17-alternative.en.md) — **Where ZLink fits** (where it's used, warning signs, the technology-choice boundary)
     - [Common samples](../../../common/sample/README.en.md) — Representative business scenarios and verification criteria
-    - [Java exact interface index](../../../common/spec/server/languages/java/interfaces/README.ko.md) — The formal contract
+    - [Java exact interface index](../../../common/spec/server/languages/java/interfaces/README.en.md) — The formal contract
 
     ---
 
 === "Kotlin"
 
-    - [02-getting-started](02-getting-started.ko.md) — From the package to your first working check
-    - [03-concepts](03-concepts.ko.md) — Core concepts (channel, roles, DI)
-    - [05-channel-messaging](05-channel-messaging.ko.md) — request/send/pub-sub in detail
-    - [06-spot](06-spot.ko.md) — room/stage/zone, timer, routed Spot calls
-    - [07-actor-spot](07-actor-spot.ko.md) — Actor lifecycle, Spot hosting/callbacks
-    - [08-actor-session](08-actor-session.ko.md) — session↔actor binding/dispatch, client push
-    - [09-stream](09-stream.ko.md) — The external-client (STREAM) server + Stream Connector
-    - [10-location](10-location.ko.md) — Location-store-based auto-connect and operational queries
-    - [11-monitoring](11-monitoring.ko.md) — Status observation and diagnostics
-    - [13-interface-catalog](13-interface-catalog.ko.md) — Every contract interface as code (ContractTests verification)
-    - [14-samples](14-samples.ko.md) — Checking it against runnable samples
-    - [16-options](16-options.ko.md) — The option list and defaults, what changes when
-    - [17-alternative](17-alternative.ko.md) — **Where ZLink fits** (where it's used, warning signs, the technology-choice boundary)
+    - [02-getting-started](02-getting-started.en.md) — From the package to your first working check
+    - [03-concepts](03-concepts.en.md) — Core concepts (channel, roles, DI)
+    - [05-channel-messaging](05-channel-messaging.en.md) — request/send/pub-sub in detail
+    - [06-spot](06-spot.en.md) — room/stage/zone, timer, routed Spot calls
+    - [07-actor-spot](07-actor-spot.en.md) — Actor lifecycle, Spot hosting/callbacks
+    - [08-actor-session](08-actor-session.en.md) — session↔actor binding/dispatch, client push
+    - [09-stream](09-stream.en.md) — The external-client (STREAM) server + Stream Connector
+    - [10-location](10-location.en.md) — Location-store-based auto-connect and operational queries
+    - [11-monitoring](11-monitoring.en.md) — Status observation and diagnostics
+    - [13-interface-catalog](13-interface-catalog.en.md) — Every contract interface as code (ContractTests verification)
+    - [14-samples](14-samples.en.md) — Checking it against runnable samples
+    - [16-options](16-options.en.md) — The option list and defaults, what changes when
+    - [17-alternative](17-alternative.en.md) — **Where ZLink fits** (where it's used, warning signs, the technology-choice boundary)
     - [Common samples](../../../common/sample/README.en.md) — Representative business scenarios and verification criteria
-    - [Java exact interface index](../../../common/spec/server/languages/java/interfaces/README.ko.md) — The formal contract
+    - [Java exact interface index](../../../common/spec/server/languages/java/interfaces/README.en.md) — The formal contract
 
     ---
 
 === "Node/TypeScript"
 
-    - [02-getting-started](02-getting-started.ko.md) — From the package to your first working check
-    - [03-concepts](03-concepts.ko.md) — Core concepts (channel, roles, DI)
-    - [05-channel-messaging](05-channel-messaging.ko.md) — request/send/pub-sub in detail
-    - [06-spot](06-spot.ko.md) — room/stage/zone, timer, routed Spot calls
-    - [07-actor-spot](07-actor-spot.ko.md) — Actor lifecycle, Spot hosting/callbacks
-    - [08-actor-session](08-actor-session.ko.md) — session↔actor binding/dispatch, client push
-    - [09-stream](09-stream.ko.md) — The external-client (STREAM) server + Stream Connector
-    - [10-location](10-location.ko.md) — Location-store-based auto-connect and operational queries
-    - [11-monitoring](11-monitoring.ko.md) — Status observation and diagnostics
-    - [13-interface-catalog](13-interface-catalog.ko.md) — Every contract interface as code (ContractTests verification)
-    - [14-samples](14-samples.ko.md) — Checking it against runnable samples
-    - [16-options](16-options.ko.md) — The option list and defaults, what changes when
-    - [17-alternative](17-alternative.ko.md) — **Where ZLink fits** (where it's used, warning signs, the technology-choice boundary)
+    - [02-getting-started](02-getting-started.en.md) — From the package to your first working check
+    - [03-concepts](03-concepts.en.md) — Core concepts (channel, roles, DI)
+    - [05-channel-messaging](05-channel-messaging.en.md) — request/send/pub-sub in detail
+    - [06-spot](06-spot.en.md) — room/stage/zone, timer, routed Spot calls
+    - [07-actor-spot](07-actor-spot.en.md) — Actor lifecycle, Spot hosting/callbacks
+    - [08-actor-session](08-actor-session.en.md) — session↔actor binding/dispatch, client push
+    - [09-stream](09-stream.en.md) — The external-client (STREAM) server + Stream Connector
+    - [10-location](10-location.en.md) — Location-store-based auto-connect and operational queries
+    - [11-monitoring](11-monitoring.en.md) — Status observation and diagnostics
+    - [13-interface-catalog](13-interface-catalog.en.md) — Every contract interface as code (ContractTests verification)
+    - [14-samples](14-samples.en.md) — Checking it against runnable samples
+    - [16-options](16-options.en.md) — The option list and defaults, what changes when
+    - [17-alternative](17-alternative.en.md) — **Where ZLink fits** (where it's used, warning signs, the technology-choice boundary)
     - [Common samples](../../../common/sample/README.en.md) — Representative business scenarios and verification criteria
-    - [Node.js exact interface index](../../../common/spec/server/languages/node/interfaces/README.ko.md) — The formal contract
+    - [Node.js exact interface index](../../../common/spec/server/languages/node/interfaces/README.en.md) — The formal contract

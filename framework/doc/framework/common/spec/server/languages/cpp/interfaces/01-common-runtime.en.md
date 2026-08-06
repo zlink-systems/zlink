@@ -3,7 +3,7 @@
 [C++ exact interface table of contents](README.en.md)
 
 <!-- framework-adapter-nav:start -->
-[Spec table of contents](README.en.md) | [Previous: C++ System Structure](../01-system-structure.en.md) | [Next: C++ HTTP Hosting](../60-http-hosting.ko.md)
+[Spec table of contents](README.en.md) | [Previous: C++ System Structure](../01-system-structure.en.md) | [Next: C++ HTTP Hosting](../60-http-hosting.en.md)
 <!-- framework-adapter-nav:end -->
 
 [Spec table of contents](../../../../../README.en.md)
@@ -415,5 +415,5 @@ are owned by
 
 ---
 <!-- framework-adapter-nav:bottom:start -->
-[Spec table of contents](README.en.md) | [Previous: C++ System Structure](../01-system-structure.en.md) | [Next: C++ HTTP Hosting](../60-http-hosting.ko.md)
+[Spec table of contents](README.en.md) | [Previous: C++ System Structure](../01-system-structure.en.md) | [Next: C++ HTTP Hosting](../60-http-hosting.en.md)
 <!-- framework-adapter-nav:bottom:end -->

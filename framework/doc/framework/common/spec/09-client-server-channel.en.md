@@ -56,7 +56,7 @@ and example together.
 
 The exact .NET signature is defined by
 [.NET Topology Public Interface](server/languages/dotnet/interfaces/03-configuration-topology.en.md) and
-[.NET Channel Messaging Public Interface](server/languages/dotnet/interfaces/04-channel-messaging.ko.md).
+[.NET Channel Messaging Public Interface](server/languages/dotnet/interfaces/04-channel-messaging.en.md).
 
 ## 3. Client And Server Roles
 

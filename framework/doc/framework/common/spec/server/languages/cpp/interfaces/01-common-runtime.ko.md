@@ -24,7 +24,7 @@ callback, RAII ownership에 맞게 표현만 바꾼다.
 
 binding 기준은 아래 문서를 따른다.
 
-- [C++ Binding Specification](../../../../../../../../../bindings/doc/spec/cpp/README.en.md)
+- [C++ Binding Specification](../../../../../../../../../bindings/doc/spec/cpp/README.ko.md)
 - [C++ Codec Extension Specification](../../../../../../../../../bindings/doc/spec/cpp/codec.en.md)
 
 framework public API는 `zlink::framework` namespace 아래에 둔다. 설치되는 public header에는

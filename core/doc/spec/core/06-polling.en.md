@@ -1,4 +1,4 @@
-[한국어](06-polling.ko.md) | English
+[한국어](https://zlink-systems.github.io/zlink/ko/spec/core/06-polling/) | English
 
 [Specification index](../README.en.md) · [Core index](README.en.md) · [errno map](04-errno-map.en.md)
 

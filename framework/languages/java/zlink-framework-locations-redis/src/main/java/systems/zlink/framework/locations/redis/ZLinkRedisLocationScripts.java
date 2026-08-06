@@ -104,7 +104,7 @@ final class ZLinkRedisLocationScripts {
             if currentOwner
                 and leaseIsLive(
                     KEYS[9], currentOwner, currentLease) then
-                return {'conflict', 0, nowMs}
+                return {'conflict-live', 0, nowMs}
             end
         else
             if not currentOwner
@@ -132,7 +132,20 @@ final class ZLinkRedisLocationScripts {
 
         if entrySpotId ~= '' then
             if redis.call('EXISTS', KEYS[11]) == 1 then
-                return {'conflict', 0, nowMs}
+                local authorityOwner = redis.call(
+                    'HGET', KEYS[11], 'ownerId')
+                local authorityLease = redis.call(
+                    'HGET', KEYS[11], 'ownerLeaseGeneration')
+                local sameExpiredDescriptor = currentOwner == ARGV[2]
+                    and not leaseIsLive(
+                        KEYS[9], currentOwner, currentLease)
+                if not sameExpiredDescriptor
+                    and (not authorityOwner
+                        or authorityOwner ~= ARGV[2]
+                        or leaseIsLive(
+                            KEYS[12], authorityOwner, authorityLease)) then
+                    return {'conflict', 0, nowMs}
+                end
             end
             local claimOwner =
                 redis.call('HGET', KEYS[10], 'ownerId')

@@ -24,7 +24,7 @@ Entry Spot play?" How messages are delivered is owned by
 [20 Spot Messaging](12-spot-messaging.en.md); the exact order of Actor callbacks
 by [23 Spot And Actor Membership](15-spot-actor.en.md); User/Instance Spot's
 creation and address contract by
-[24 Spot Address Messaging](16-spot-address-messaging.ko.md).
+[24 Spot Address Messaging](16-spot-address-messaging.en.md).
 
 ## 2. The Three Spots Differ In When They're Prepared And Their Purpose
 
@@ -390,7 +390,7 @@ and doesn't call the completion callback.
 
 The exact-generation check for creation request, placement, `SpotRef`, and
 close is defined by
-[24 Spot Address Messaging](16-spot-address-messaging.ko.md).
+[24 Spot Address Messaging](16-spot-address-messaging.en.md).
 
 ### 5.2 User Spot Lifecycle
 
@@ -464,7 +464,7 @@ Instance Spot from a Missing RID, Instance intent must be specified on the same
 call. A regular message and `Find` don't start a hidden create. Cold
 activation preserving the first message, factory execution, and the Ready
 barrier are defined by
-[24 Spot Address Messaging §4](16-spot-address-messaging.ko.md#4-direct-message로-instance-spot-생성을-허용하는-방법).
+[24 Spot Address Messaging §4](16-spot-address-messaging.en.md#4-how-to-allow-instance-spot-creation-via-a-direct-message).
 
 An Instance Spot can be closed by an application handler or timer from its own
 context. Host `Relocate` treats one Actor-less Spot as a relocation unit. An
@@ -492,7 +492,7 @@ after a relocation commit.
 The framework can clean up an Instance Spot based on an idle criterion.
 **User Spot and Entry Spot aren't cleaned up** — since a regular message
 doesn't create a nonexistent object
-([Spot/Actor Routing](18-object-routing.ko.md)), a message arriving at a
+([Spot/Actor Routing](18-object-routing.en.md)), a message arriving at a
 cleaned-up User Spot can't be revived and fails. An Instance Spot is
 recoverable on the next call even if cleaned up, since a call specifying
 Instance intent cold-activates it again.
@@ -613,9 +613,9 @@ The exact full interface and lifecycle callbacks are owned by the
 | Document | Detailed contract it owns |
 |---|---|
 | [20 Spot Messaging](12-spot-messaging.en.md) | Spot direct, Logical Multicast, queue admission, and dispatch |
-| [21 MeshNode](13-mesh-node.ko.md) | Object role, Entry Spot and factory registration, placement capability |
+| [21 MeshNode](13-mesh-node.en.md) | Object role, Entry Spot and factory registration, placement capability |
 | [23 Spot And Actor Membership](15-spot-actor.en.md) | Actor creation, Entry/User Spot membership, and callback/commit order |
-| [24 Spot Address Messaging](16-spot-address-messaging.ko.md) | User/Instance Spot ID, creation, cold activation, route, and close |
+| [24 Spot Address Messaging](16-spot-address-messaging.en.md) | User/Instance Spot ID, creation, cold activation, route, and close |
 | [54 Host Relocate, Shutdown And Handoff](28-graceful-drain-handoff.en.md) | Shutdown, relocation, and recovery order for all three Spot kinds |
 
 ## 9. Verification Requirements

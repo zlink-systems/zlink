@@ -2,15 +2,15 @@
 
 > This set is the formal ZLink Framework documentation for `Node.js` and `NestJS`. This
 > directory holds `internals/` (implementation and verification criteria), and the public
-> contract lives in the [central Node.js spec](../common/spec/server/languages/node/README.ko.md).
-> Common meaning follows the [common spec](../common/README.ko.md); here we give that
+> contract lives in the [central Node.js spec](../common/spec/server/languages/node/README.en.md).
+> Common meaning follows the [common spec](../common/README.en.md); here we give that
 > meaning concrete shape only on the Node.js and NestJS surface. The public contract is
 > owned by the central per-language spec and the common framework spec; other-language
 > implementations are used only as reference material for comparing contract
 > interpretation.
 
 The common meaning of async execution, `Promise`, and helper synchronous functions
-follows the [Async Execution And Coroutine Policy](../common/spec/05-async-execution-policy.ko.md).
+follows the [Async Execution And Coroutine Policy](../common/spec/05-async-execution-policy.en.md).
 The Node framework's server and client network APIs are projected as `Promise`-based
 async functions. The `Async` suffix isn't carried over -- the async contract is expressed
 through the action name and a `Promise<T>` return type, as in `connect()`, `close()`,
@@ -29,8 +29,8 @@ usage examples are found in the [common sample](../common/sample/README.en.md) a
 [Node sample](../../../languages/node/samples/README.ko.md).
 
 Usage of the client libraries used separately from the server framework is found in the
-[HTTP client guide](guide/http-client/README.ko.md) and the
-[Stream connector guide](guide/stream-connector/README.ko.md).
+[HTTP client guide](guide/http-client/README.en.md) and the
+[Stream connector guide](guide/stream-connector/README.en.md).
 
 ## 2. Public Contract Spec
 
@@ -40,9 +40,9 @@ actually exists in the current Node code and regression tests.
 | Document | Scope |
 |------|------|
 | [system-structure](../common/spec/server/languages/node/01-system-structure.en.md) | Package structure, NestJS registration, lifecycle, and startup validation |
-| [Interface table of contents](../common/spec/server/languages/node/interfaces/README.ko.md) | The interface/decorator/context/options catalog by category |
+| [Interface table of contents](../common/spec/server/languages/node/interfaces/README.en.md) | The interface/decorator/context/options catalog by category |
 
-**The meaning and behavioral rules of a feature are owned by the [common spec](../common/spec/README.ko.md).**
+**The meaning and behavioral rules of a feature are owned by the [common spec](../common/spec/README.en.md).**
 Language-specific documents only fix what shape that meaning takes in Node/NestJS.
 
 ## 3. Internal Criteria (`internals/`)

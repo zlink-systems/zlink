@@ -14,9 +14,9 @@ title: "12. Service wire protocol"
 > confirmable-result distinction.
 >
 > **Related contracts** — [Layer Boundaries and Identifiers](01-layering.en.md) ·
-> [Location runtime](../spec/21-location-runtime.ko.md) ·
-> [Redis Relocation Store](../spec/23-relocation-store-redis.ko.md) ·
-> [Transport liveness](../spec/29-transport-liveness.ko.md)
+> [Location runtime](../spec/21-location-runtime.en.md) ·
+> [Redis Relocation Store](../spec/23-relocation-store-redis.en.md) ·
+> [Transport liveness](../spec/29-transport-liveness.en.md)
 
 | Section | Covers |
 |---|---|
@@ -60,13 +60,13 @@ enum/bound/conditional field.
 ### Location Store authority key format
 
 The store that records which node an object currently lives on is called the
-[Location Store](../spec/01-glossary.ko.md#location-store). The rule for
+[Location Store](../spec/01-glossary.en.md#location-store). The rule for
 building its authority key is fixed by the same schema and golden fixtures.
 
 | Object | Key format |
 |---|---|
 | Actor | `zla1:a:<byte-length>:<encoded-ActorId>` |
-| [Spot](../spec/01-glossary.ko.md#spot) | `zla1:s:<byte-length>:<encoded-SpotRid>` |
+| [Spot](../spec/01-glossary.en.md#spot) | `zla1:s:<byte-length>:<encoded-SpotRid>` |
 
 - MeshName is not part of the key — it is stored only as the authority payload's current placement attribute.
 - Percent encoding leaves RFC 3986 unreserved bytes as-is and represents everything else as uppercase hex.
@@ -249,9 +249,9 @@ command body.
 
 ### ClientServer direction
 
-- A ClientServer connection fixes a single application-attached channel name, the [ChannelName](../spec/01-glossary.ko.md#channelname), and a client-to-server direction.
+- A ClientServer connection fixes a single application-attached channel name, the [ChannelName](../spec/01-glossary.en.md#channelname), and a client-to-server direction.
 - The client sends only send/request and liveness commands; the server sends only reply, liveness, update, and reject.
-- Reusing a [RouteMesh](../spec/01-glossary.ko.md#routemesh) record — where multiple nodes find each other by name — for a ClientServer connection, or the reverse, is a protocol error.
+- Reusing a [RouteMesh](../spec/01-glossary.en.md#routemesh) record — where multiple nodes find each other by name — for a ClientServer connection, or the reverse, is a protocol error.
 
 ## 5. Service liveness
 
@@ -276,7 +276,7 @@ sequenceDiagram
 ### Classic fanout beacon
 
 A one-way delivery style where the receiving side never responds is called
-[Classic fanout](../spec/01-glossary.ko.md#classic-fanout). Since this kind
+[Classic fanout](../spec/01-glossary.en.md#classic-fanout). Since this kind
 of publisher can't receive an ACK, it sends a separate beacon every 5
 seconds. The beacon is sent periodically, independent of application
 publish traffic.
@@ -326,7 +326,7 @@ an application-specific version.
 
 - Store-backed authority keeps the provider-issued `StoreVersion`, `ObjectGeneration`, and `AuthorityOwnerGeneration` separate from the current host's `OwnerId` and `OwnerLeaseGeneration`.
 - The object generation changes only when a new object is created under the same key after a delete.
-- The current owner recorded by the store, and its standing, is called [Authority](../spec/01-glossary.ko.md#authority); the authority owner generation increases every time that object's owner changes, blocking changes from a stale owner.
+- The current owner recorded by the store, and its standing, is called [Authority](../spec/01-glossary.en.md#authority); the authority owner generation increases every time that object's owner changes, blocking changes from a stale owner.
 - The host owner lease token is shared across the whole process.
 
 ### Creation record
@@ -337,7 +337,7 @@ a `Creating` row.
 
 - A creation record preserves the object kind, global key, stable type, target descriptor, capacity delta, provider-issued fence, and the content reference/hash of a complete request envelope up to 1 MiB.
 - This value, preserved in the pending current row, is called the `stored creation intent`. During recovery, this record can be scanned to confirm the fence value and receipt still match exactly, and used to restore state.
-- The application code that actually creates the object is called the [Factory](../spec/01-glossary.ko.md#factory). Once Factory, initialize, and initial membership finish, the reservation commit and the `Ready` CAS run under the same fence.
+- The application code that actually creates the object is called the [Factory](../spec/01-glossary.en.md#factory). Once Factory, initialize, and initial membership finish, the reservation commit and the `Ready` CAS run under the same fence.
 - Only target-owned Instance cold activation additionally fixes the durable activation inbox's first record before commit.
 - Manager `Find` and ID-only messaging use only `Ready`.
 - Entry Spot is published after startup initialization, before the host becomes `Serving`, and is never created by a caller.
@@ -373,7 +373,7 @@ length.
 
 | Kind | Purpose | Contents |
 |---|---|---|
-| `1` | Resumes an existing [Ready](../spec/01-glossary.ko.md#ready) authority | The object/owner/lease generation and StoreVersion of a state that can accept new work — byte-compatible with the earlier wire |
+| `1` | Resumes an existing [Ready](../spec/01-glossary.en.md#ready) authority | The object/owner/lease generation and StoreVersion of a state that can accept new work — byte-compatible with the earlier wire |
 | `2` | Missing cold activation only | The target Mesh/node RID/lifecycle, Spot RID, stable type, descriptor version, and deadline — an authority fence is forbidden |
 
 If a kind `2` route's operation identity or metadata presence/bytes differ
@@ -408,7 +408,7 @@ rejected as a protocol error before reservation.
 
 - A User Spot remote close uses command 48.
 - Besides the source node lifecycle and operation identity, it sends the `SpotRef` that exactly identifies the target to close, the target node lifecycle, the AuthorityOwnerGeneration, and the StoreVersion.
-- Before deciding whether to accept, the target checks the current authority and [Actor membership](../spec/01-glossary.ko.md#actor-membership) — which Spot each active Actor belongs to — and the relocation state.
+- Before deciding whether to accept, the target checks the current authority and [Actor membership](../spec/01-glossary.en.md#actor-membership) — which Spot each active Actor belongs to — and the relocation state.
 - Both commands are RouteMesh infrastructure commands and allow neither flags nor a payload.
 
 #### Reply envelope
@@ -435,7 +435,7 @@ Both operations reuse the existing command 20 reply envelope as-is.
 ### Preconditions before drain
 
 - Accepted send/request with `connectionBound` source lifetime, and every bound-session request, drain to a terminal state before `Captured`. This work is not recorded in the frozen journal.
-- The moment by which a call must finish is called the [Deadline](../spec/01-glossary.ko.md#deadline). If it doesn't finish in time, relocation is aborted pre-Captured, ends as `Blocked`/`DeadlineExceeded`, and source admission is restored.
+- The moment by which a call must finish is called the [Deadline](../spec/01-glossary.en.md#deadline). If it doesn't finish in time, relocation is aborted pre-Captured, ends as `Blocked`/`DeadlineExceeded`, and source admission is restored.
 
 ### Durable frozen record
 

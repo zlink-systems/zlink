@@ -158,6 +158,10 @@ class ZLinkSpotNodeAutoConnectExecutor implements IZLinkAutoConnectExecutor {
     private readonly manualConnections: boolean
   ) {}
 
+  onDisconnected(handler: (endpoint: string) => void): void {
+    this.node.onPeerDisconnected?.(handler);
+  }
+
   connect(target: ZLinkAutoConnectTarget): boolean {
     if (this.manualConnections) return false;
     return this.connectPeer(target);

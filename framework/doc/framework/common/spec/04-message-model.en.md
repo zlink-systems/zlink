@@ -4,7 +4,7 @@ title: "Framework Message Contract"
 
 # Framework Message Contract
 
-[Spec Table Of Contents](README.ko.md) · [Previous: ZLink Framework Interaction Model](03-interaction-model.ko.md) · [Next: Async Execution And The Handler Turn](05-async-execution-policy.ko.md)
+[Spec Table Of Contents](README.en.md) · [Previous: ZLink Framework Interaction Model](03-interaction-model.en.md) · [Next: Async Execution And The Handler Turn](05-async-execution-policy.en.md)
 
 > **What this chapter defines** — the public contract for typed messages, application
 > metadata, and responses and errors.
@@ -39,7 +39,7 @@ transport inspection and codec extension implementation.
 | STREAM send/request | A one-way message or a reply-requiring message sent to a connected session | Follows the session sequence and lifecycle contract |
 
 A request's reply correlation is owned by an operation ID issued by transport, or by the
-[session sequence](01-glossary.ko.md#session-sequence). Neither the packet name nor
+[session sequence](01-glossary.en.md#session-sequence). Neither the packet name nor
 application metadata is used as the reply matching key. A reply completes with exactly one
 of a success payload or a framework error, and the same request can never complete twice.
 
@@ -50,7 +50,7 @@ the placement reservation. A factory receives the logical key, ObjectGeneration,
 creation attempt together, and must converge to the same result even under at-least-once
 execution of the same attempt. A CAS loser never sends the creation request as a regular
 message. The content reference is kept until Ready commit or fenced failure cleanup
-finishes. [ObjectGeneration](01-glossary.ko.md#objectgeneration), AuthorityOwnerGeneration,
+finishes. [ObjectGeneration](01-glossary.en.md#objectgeneration), AuthorityOwnerGeneration,
 attempt, and the owner lease token are used only for Store fencing and never included in
 the application message payload or handler context.
 
@@ -110,7 +110,7 @@ an exponent are not allowed.
 ## 3. Application Metadata
 
 Application metadata is a small key-value snapshot carried separately from the business
-payload. Node direct, [ChannelName](01-glossary.ko.md#channelname), Spot direct, Actor, and
+payload. Node direct, [ChannelName](01-glossary.en.md#channelname), Spot direct, Actor, and
 STREAM send/request all use the same contract.
 
 | Item | Contract |
@@ -118,7 +118,7 @@ STREAM send/request all use the same contract.
 | Key and value | UTF-8, and never contain NUL |
 | Total size | At most 1024 bytes, including the encoded key and value and structural overhead |
 | Same key | The value most recently set on the outbound builder applies |
-| Receiving | The handler context provides an unmodifiable [snapshot](01-glossary.ko.md#snapshot) |
+| Receiving | The handler context provides an unmodifiable [snapshot](01-glossary.en.md#snapshot) |
 | Lifetime | Valid until the handler turn ends; the application copies a value if it needs to keep it |
 | Malformed input | Treated as a protocol error, without calling the handler |
 | Reply | Request metadata isn't auto-copied, and a regular reply provides no metadata setter |
@@ -131,9 +131,9 @@ application assemble or parse a frame, even on a path that needs relaying.
 
 | Path | Metadata delivery |
 |---|---|
-| [Node direct](01-glossary.ko.md#node-direct) and ChannelName | The source snapshot is delivered to the handler context of the selected [MeshNode](01-glossary.ko.md#meshnode) |
-| [Spot](01-glossary.ko.md#spot) | Delivered to the application claim at the global Spot ID's current [Ready](01-glossary.ko.md#ready) owner |
-| [Logical Multicast](01-glossary.ko.md#logical-multicast) | The same publish snapshot is delivered to each matching Spot handler |
+| [Node direct](01-glossary.en.md#node-direct) and ChannelName | The source snapshot is delivered to the handler context of the selected [MeshNode](01-glossary.en.md#meshnode) |
+| [Spot](01-glossary.en.md#spot) | Delivered to the application claim at the global Spot ID's current [Ready](01-glossary.en.md#ready) owner |
+| [Logical Multicast](01-glossary.en.md#logical-multicast) | The same publish snapshot is delivered to each matching Spot handler |
 | Actor | Delivered to the Actor handler context, without passing through a Spot callback |
 | STREAM session | Delivered to the session send/request context |
 | Relay from a bound session to an Actor | Only keys allowed by the root metadata policy's session-to-actor allowlist are delivered |
@@ -142,7 +142,7 @@ application assemble or parse a frame, even on a path that needs relaying.
 When the framework creates a new request, it doesn't auto-copy the original metadata. It's
 included in the new outbound snapshot only if the caller explicitly passed the current
 handler's metadata. Trace information that needs auto-propagation is managed as a separate
-framework field by [Message Flow Correlation](27-flow-correlation.ko.md).
+framework field by [Message Flow Correlation](27-flow-correlation.en.md).
 
 ## 5. Ownership And Size Limits
 
@@ -158,7 +158,7 @@ payload storage, reply correlation, and the route envelope together with callbac
 completion.
 
 The same ownership rule applies while an object creation is pending. So that Location
-Store I/O and the [factory](01-glossary.ko.md#factory) don't depend on the caller's payload
+Store I/O and the [factory](01-glossary.en.md#factory) don't depend on the caller's payload
 object or native buffer lifetime, the framework's service runtime pins the immutable
 encoded payload in the content store. After Ready or fenced failure, it releases, once,
 the payload storage owned by that attempt.
@@ -166,4 +166,4 @@ the payload storage owned by that attempt.
 The payload's max size follows the target transport's `MaxMessageSize`. If the whole
 message exceeds the limit, no part of it is delivered, and the entire submit or receive
 fails. Per-target submission and result aggregation for Logical Multicast are defined by
-[Spot Messaging](12-spot-messaging.ko.md).
+[Spot Messaging](12-spot-messaging.en.md).

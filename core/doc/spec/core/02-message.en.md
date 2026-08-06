@@ -1,4 +1,4 @@
-[한국어](02-message.ko.md) | English
+[한국어](https://zlink-systems.github.io/zlink/ko/spec/core/02-message/) | English
 
 [Spec Index](../README.en.md) · [Core Index](README.en.md)
 

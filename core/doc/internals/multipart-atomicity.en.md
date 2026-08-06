@@ -1,4 +1,4 @@
-[한국어](multipart-atomicity.ko.md)
+[한국어](multipart-atomicity.en.md)
 
 # Multipart Atomicity
 

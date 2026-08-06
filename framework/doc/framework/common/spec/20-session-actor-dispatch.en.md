@@ -4,7 +4,7 @@ title: "Session-Actor Dispatch"
 
 # Session-Actor Dispatch
 
-[Spec table of contents](README.en.md) · [Previous: STREAM Server Session](19-stream-session.ko.md) · [Next: Location Runtime](21-location-runtime.en.md)
+[Spec table of contents](README.en.md) · [Previous: STREAM Server Session](19-stream-session.en.md) · [Next: Location Runtime](21-location-runtime.en.md)
 
 > **What this chapter defines** — the typed dispatch, binding, owner handoff, and
 > execution order connecting a STREAM session and the Actor runtime.
@@ -207,7 +207,7 @@ membership.
 The following .NET excerpt shows the public surface where a session binds an exact
 `ActorRef` and relays payload to the Actor queue. It doesn't require the same signature
 in other languages; the exact .NET contract is defined by the
-[.NET STREAM session interface](server/languages/dotnet/interfaces/07-stream-session.ko.md).
+[.NET STREAM session interface](server/languages/dotnet/interfaces/07-stream-session.en.md).
 
 ```csharp
 public interface IZLinkSessionActors

@@ -30,6 +30,7 @@ class router_t : public routing_socket_base_t
     void xattach_pipe (zlink::pipe_t *pipe_,
                        bool subscribe_to_all_,
                        bool locally_initiated_) ZLINK_FINAL;
+    bool emit_transport_pair_ready (zlink::pipe_t *pipe_) ZLINK_OVERRIDE;
     int xsetsockopt (int option_, const void *optval_, size_t optvallen_) ZLINK_FINAL;
     int xgetsockopt (int option_, void *optval_, size_t *optvallen_) ZLINK_FINAL;
     int xsend (zlink::msg_t *msg_) ZLINK_OVERRIDE;
@@ -38,7 +39,9 @@ class router_t : public routing_socket_base_t
                       zlink::msg_t *msg_,
                       uint64_t *connection_id_out_,
                       uint64_t expected_connection_id_,
-                      zlink::pipe_t **pipe_out_) ZLINK_OVERRIDE;
+                      zlink::pipe_t **pipe_out_,
+                      uint64_t expected_transport_pair_id_ = 0,
+                      uint64_t expected_transport_pair_generation_ = 0) ZLINK_OVERRIDE;
     int xrecv (zlink::msg_t *msg_) ZLINK_OVERRIDE;
     int xrecv_routed (zlink::msg_t *msg_,
                       zlink_routing_id_t *source_rid_out_,
@@ -71,6 +74,9 @@ class router_t : public routing_socket_base_t
     void copy_router_pipe_source_rid (pipe_t *pipe_,
                                       zlink_routing_id_t *out_) const;
     void promote_anonymous_pipe_for_dispatch (pipe_t *pipe_);
+    pipe_t *find_transport_pair_pipe (const zlink_routing_id_t *target_rid_,
+                                      uint64_t transport_pair_id_,
+                                      uint64_t transport_pair_generation_) const;
     int apply_peer_weight (pipe_t *pipe_, uint32_t weight_) ZLINK_OVERRIDE;
 
     //  Fair queueing object for inbound pipes.

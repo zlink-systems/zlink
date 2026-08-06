@@ -12,7 +12,7 @@ SCENARIO="${1:-all}"
 LOCAL_READINESS_TIMEOUT_SECONDS=3
 LOCAL_READINESS_POLL_SECONDS=0.1
 LOCAL_READINESS_ATTEMPTS=30
-ROUTE_SETTLE_TIMEOUT_SECONDS=5
+ROUTE_SETTLE_TIMEOUT_SECONDS=15
 SCENARIO_SETTLE_TIMEOUT_SECONDS=3
 HTTP_PROBE_TIMEOUT_SECONDS=3
 LONG_OUTAGE_SECONDS=4
@@ -53,7 +53,11 @@ REDIS_CONTAINER_ID=""
 LAST_STARTED_PID=""
 API_A_PID=""
 PROVIDER_A_CHANNEL_ENDPOINT=""
+PROVIDER_A_FANOUT_ENDPOINT=""
 PROVIDER_B_CHANNEL_PORT=""
+PROVIDER_B_FANOUT_PORT=""
+MULTI_ROLE_MODE="disabled"
+CAPACITY_PROFILE="default"
 cleanup() {
   local code=$?
   # SIGTERM cannot stop a provider that is intentionally paused by SF-C3.
@@ -149,14 +153,19 @@ start_configured_server() {
 start_topology() {
   local with_provider_b="${1:-yes}"
   local store_response_gate="${2:-disabled}"
+  local multi_role="${3:-disabled}"
+  CAPACITY_PROFILE="${4:-default}"
+  MULTI_ROLE_MODE="$multi_role"
   local reg_http_port consumer_http_port provider_a_http_port provider_b_http_port
-  local provider_a_channel_port provider_b_channel_port
+  local provider_a_channel_port provider_b_channel_port provider_a_fanout_port provider_b_fanout_port
   reg_http_port="$(pick_port)"
   consumer_http_port="$(pick_port)"
   provider_a_http_port="$(pick_port)"
   provider_b_http_port="$(pick_port)"
   provider_a_channel_port="$(pick_port)"
   provider_b_channel_port="$(pick_port)"
+  provider_a_fanout_port="$(pick_port)"
+  provider_b_fanout_port="$(pick_port)"
 
   LOCATION_PROBE_URL="http://127.0.0.1:$reg_http_port"
   CONSUMER_URL="http://127.0.0.1:$consumer_http_port"
@@ -164,6 +173,8 @@ start_topology() {
   PROVIDER_B_URL="http://127.0.0.1:$provider_b_http_port"
   PROVIDER_B_CHANNEL_PORT="$provider_b_channel_port"
   PROVIDER_A_CHANNEL_ENDPOINT="tcp://127.0.0.1:$provider_a_channel_port"
+  PROVIDER_A_FANOUT_ENDPOINT="tcp://127.0.0.1:$provider_a_fanout_port"
+  PROVIDER_B_FANOUT_PORT="$provider_b_fanout_port"
 
   start_configured_server reg-1 "$LOCATION_PROBE_MAIN" \
     --rid reg-1 \
@@ -180,6 +191,9 @@ start_topology() {
     --redis-endpoint "$REDIS_ENDPOINT" \
     --redis-key-prefix "$REDIS_KEY_PREFIX" \
     --channel-endpoint "tcp://127.0.0.1:$provider_a_channel_port" \
+    --fanout-endpoint "$PROVIDER_A_FANOUT_ENDPOINT" \
+    --multi-role "$MULTI_ROLE_MODE" \
+    --capacity-profile "$CAPACITY_PROFILE" \
     --evidence-file "$LOG_DIR/api-a.evidence.log" \
     --log-dir "$LOG_DIR"
   API_A_PID="$LAST_STARTED_PID"
@@ -187,8 +201,6 @@ start_topology() {
 
   if [[ "$with_provider_b" == "yes" ]]; then
     start_provider_b
-  else
-    PROVIDER_B_URL=""
   fi
 
   start_configured_server consumer "$CONSUMER_MAIN" \
@@ -197,6 +209,8 @@ start_topology() {
     --redis-key-prefix "$REDIS_KEY_PREFIX" \
     --trace-label consumer \
     --store-response-gate "$store_response_gate" \
+    --multi-role "$MULTI_ROLE_MODE" \
+    --capacity-profile "$CAPACITY_PROFILE" \
     --log-dir "$LOG_DIR"
   wait_health "$CONSUMER_URL" consumer "$LAST_STARTED_PID"
 }
@@ -208,6 +222,9 @@ start_provider_b() {
     --redis-endpoint "$REDIS_ENDPOINT" \
     --redis-key-prefix "$REDIS_KEY_PREFIX" \
     --channel-endpoint "tcp://127.0.0.1:$PROVIDER_B_CHANNEL_PORT" \
+    --fanout-endpoint "tcp://127.0.0.1:$PROVIDER_B_FANOUT_PORT" \
+    --multi-role "$MULTI_ROLE_MODE" \
+    --capacity-profile "$CAPACITY_PROFILE" \
     --evidence-file "$LOG_DIR/api-b.evidence.log" \
     --log-dir "$LOG_DIR"
   API_B_PID="$LAST_STARTED_PID"
@@ -215,17 +232,22 @@ start_provider_b() {
 }
 
 start_provider_a_replacement() {
-  local provider_a_http_port provider_a_channel_port
+  local provider_a_http_port provider_a_channel_port provider_a_fanout_port
   provider_a_http_port="$(pick_port)"
   provider_a_channel_port="$(pick_port)"
+  provider_a_fanout_port="$(pick_port)"
   PROVIDER_A_URL="http://127.0.0.1:$provider_a_http_port"
   PROVIDER_A_CHANNEL_ENDPOINT="tcp://127.0.0.1:$provider_a_channel_port"
+  PROVIDER_A_FANOUT_ENDPOINT="tcp://127.0.0.1:$provider_a_fanout_port"
   start_configured_server api-a-replacement "$PROVIDER_MAIN" \
     --rid api-a \
     --http-url "$PROVIDER_A_URL" \
     --redis-endpoint "$REDIS_ENDPOINT" \
     --redis-key-prefix "$REDIS_KEY_PREFIX" \
     --channel-endpoint "tcp://127.0.0.1:$provider_a_channel_port" \
+    --fanout-endpoint "$PROVIDER_A_FANOUT_ENDPOINT" \
+    --multi-role "$MULTI_ROLE_MODE" \
+    --capacity-profile "$CAPACITY_PROFILE" \
     --evidence-file "$LOG_DIR/api-a-replacement.evidence.log" \
     --log-dir "$LOG_DIR"
   API_A_REPLACEMENT_PID="$LAST_STARTED_PID"
@@ -280,6 +302,30 @@ wait_for_profile_ready() {
   curl --max-time "${HTTP_PROBE_TIMEOUT_SECONDS}" -fsS "$CONSUMER_URL/route/status" >&2 || true
   echo >&2
   return 1
+}
+
+wait_for_c4_ready() {
+  local deadline=$((SECONDS + ROUTE_SETTLE_TIMEOUT_SECONDS))
+  while (( SECONDS < deadline )); do
+    if node -e "fetch(process.argv[1] + '/c4/status', { signal: AbortSignal.timeout(500) }).then(async (r) => { const s = await r.json(); const routes = s.routes ?? []; process.exit(routes.length === 2 && routes.every((route) => route.isReady === true) && s.clientServer?.isReady === true && s.fanout?.isReady === true && s.fanout.readyPublisherCount >= 1 ? 0 : 1); }).catch(() => process.exit(1));" "$CONSUMER_URL"; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  echo "Timed out waiting for SF-C4 role readiness" >&2
+  curl --max-time "${HTTP_PROBE_TIMEOUT_SECONDS}" -fsS "$CONSUMER_URL/c4/status" >&2 || true
+  echo >&2
+  curl --max-time "${HTTP_PROBE_TIMEOUT_SECONDS}" -fsS "$PROVIDER_A_URL/location/status" >&2 || true
+  echo >&2
+  if command -v redis-cli >/dev/null 2>&1; then
+    redis-cli -h "${REDIS_ENDPOINT%:*}" -p "${REDIS_ENDPOINT##*:}" --scan --pattern "*fanout*" >&2 || true
+  fi
+  return 1
+}
+
+verify_c4_replacement_roles() {
+  local baseline_file="$1"
+  node -e "const fs=require('node:fs'); const old=JSON.parse(fs.readFileSync(process.argv[2], 'utf8')); fetch(process.argv[1] + '/c4/status').then(async (r) => { const current=await r.json(); const oldSecondary=new Set((old.routes.find((v) => v.meshName === 'secondary')?.peers ?? []).map((v) => v.nodeRid)); const oldClientServer=new Set((old.clientServer?.targets ?? []).map((v) => v.nodeRid)); const oldFanout=new Set((old.fanout?.publishers ?? []).map((v) => v.nodeRid)); const secondary=current.routes.find((v) => v.meshName === 'secondary'); const readySecondary=(secondary?.peers ?? []).filter((v) => v.state === 1); const readyClientServer=(current.clientServer?.targets ?? []).filter((v) => v.state === 1); const readyFanout=(current.fanout?.publishers ?? []).filter((v) => v.state === 1); const stale=[...readySecondary, ...readyClientServer, ...readyFanout].some((v) => oldSecondary.has(v.nodeRid) || oldClientServer.has(v.nodeRid) || oldFanout.has(v.nodeRid)); process.exit(current.fanout?.readyPublisherCount >= 1 && readySecondary.length >= 1 && readyClientServer.length >= 1 && readyFanout.length >= 1 && !stale ? 0 : 1); }).catch(() => process.exit(1));" "$CONSUMER_URL" "$baseline_file"
 }
 
 run_client() {
@@ -337,12 +383,25 @@ run_sf_b1() {
 }
 
 run_sf_b2() {
-  start_topology
-  run_warmup
+  # The common scenario starts with A only. B must be introduced after the
+  # Store outage so the test can prove that discovery grace rejects it.
+  start_topology no
+  wait_for_profile_ready
   stop_redis
-  kill_pid "$API_B_PID"
+  wait_location_unhealthy "$CONSUMER_URL" consumer
   start_provider_b
   run_client SF-B2 "$LOG_DIR/client.stdout.log" "$LOG_DIR/client.stderr.log"
+}
+
+run_sf_b3() {
+  local client_pid
+  start_topology no
+  run_client SF-B3 "$LOG_DIR/client-baseline.stdout.log" "$LOG_DIR/client-baseline.stderr.log" &
+  client_pid="$!"
+  wait_file_contains "$LOG_DIR/client-baseline.stdout.log" "scenario-control SF-B3 stop-redis" \
+    "SF-B3 client did not request Redis stop" "$client_pid"
+  stop_redis
+  wait "$client_pid"
 }
 
 run_sf_c1() {
@@ -420,11 +479,40 @@ run_sf_e1() {
   run_client SF-E1 "$LOG_DIR/client.stdout.log" "$LOG_DIR/client.stderr.log"
 }
 
+run_sf_c4() {
+  local old_provider_a_channel_endpoint old_evidence_lines current_old_evidence_lines baseline_file
+  start_topology no disabled enabled
+  wait_for_c4_ready
+  baseline_file="$LOG_DIR/c4-baseline.json"
+  curl --max-time "${HTTP_PROBE_TIMEOUT_SECONDS}" -fsS "$CONSUMER_URL/c4/status" > "$baseline_file"
+  old_provider_a_channel_endpoint="$PROVIDER_A_CHANNEL_ENDPOINT"
+  old_evidence_lines="$(wc -l < "$LOG_DIR/api-a.evidence.log")"
+  kill_pid "$API_A_PID"
+  wait_for_peer_absent "$old_provider_a_channel_endpoint"
+  start_provider_a_replacement
+  wait_for_peer_endpoint "$PROVIDER_A_CHANNEL_ENDPOINT"
+  wait_for_c4_ready
+  if ! verify_c4_replacement_roles "$baseline_file"; then
+    echo "SF-C4 replacement role identity check failed" >&2
+    cat "$baseline_file" >&2 || true
+    curl --max-time "${HTTP_PROBE_TIMEOUT_SECONDS}" -fsS "$CONSUMER_URL/c4/status" >&2 || true
+    echo >&2
+    return 1
+  fi
+  run_client SF-C4 "$LOG_DIR/client.stdout.log" "$LOG_DIR/client.stderr.log"
+  current_old_evidence_lines="$(wc -l < "$LOG_DIR/api-a.evidence.log")"
+  if [[ "$current_old_evidence_lines" != "$old_evidence_lines" ]]; then
+    echo "SF-C4 old provider handled requests after replacement: before=$old_evidence_lines after=$current_old_evidence_lines" >&2
+    return 1
+  fi
+}
+
 run_sf_c3() {
+  local scenario="${1:-SF-C3}"
   local old_provider_a_channel_endpoint old_evidence_lines current_old_evidence_lines
   # Isolate the same-role replacement from unrelated load-balancing choices.
   start_topology no
-  run_client SF-C3 "$LOG_DIR/client-baseline.stdout.log" "$LOG_DIR/client-baseline.stderr.log"
+  run_client "$scenario" "$LOG_DIR/client-baseline.stdout.log" "$LOG_DIR/client-baseline.stderr.log"
   old_evidence_lines="$(wc -l < "$LOG_DIR/api-a.evidence.log")"
   old_provider_a_channel_endpoint="$PROVIDER_A_CHANNEL_ENDPOINT"
   kill -STOP "$API_A_PID"
@@ -432,11 +520,11 @@ run_sf_c3() {
   start_provider_a_replacement
   wait_for_peer_endpoint "$PROVIDER_A_CHANNEL_ENDPOINT"
   wait_for_profile_ready
-  run_client SF-C3 "$LOG_DIR/client-replacement.stdout.log" "$LOG_DIR/client-replacement.stderr.log"
+  run_client "$scenario" "$LOG_DIR/client-replacement.stdout.log" "$LOG_DIR/client-replacement.stderr.log"
   kill -CONT "$API_A_PID"
   wait_for_peer_endpoint "$PROVIDER_A_CHANNEL_ENDPOINT"
   wait_for_profile_ready
-  run_client SF-C3 "$LOG_DIR/client-resumed.stdout.log" "$LOG_DIR/client-resumed.stderr.log"
+  run_client "$scenario" "$LOG_DIR/client-resumed.stdout.log" "$LOG_DIR/client-resumed.stderr.log"
   current_old_evidence_lines="$(wc -l < "$LOG_DIR/api-a.evidence.log")"
   if [[ "$current_old_evidence_lines" != "$old_evidence_lines" ]]; then
     echo "SF-C3 old provider handled requests after replacement: before=$old_evidence_lines after=$current_old_evidence_lines" >&2
@@ -467,8 +555,11 @@ case "$SCENARIO" in
     ;;
   SF-B2)
     run_sf_b2
-    cat "$LOG_DIR/client-warmup.stdout.log"
     cat "$LOG_DIR/client.stdout.log"
+    ;;
+  SF-B3)
+    run_sf_b3
+    cat "$LOG_DIR/client-baseline.stdout.log"
     ;;
   SF-C1)
     run_sf_c1
@@ -502,6 +593,18 @@ case "$SCENARIO" in
   SF-C3)
     run_sf_c3
     ;;
+  SF-F9)
+    run_sf_c3 SF-F9
+    ;;
+  SF-F6)
+    start_topology no
+    run_client SF-F6 "$LOG_DIR/client.stdout.log" "$LOG_DIR/client.stderr.log"
+    cat "$LOG_DIR/client.stdout.log"
+    ;;
+  SF-C4)
+    run_sf_c4
+    cat "$LOG_DIR/client.stdout.log"
+    ;;
   SF-C5)
     start_topology no
     PROVIDER_B_URL=""
@@ -509,8 +612,18 @@ case "$SCENARIO" in
     run_client SF-C5 "$LOG_DIR/client.stdout.log" "$LOG_DIR/client.stderr.log"
     cat "$LOG_DIR/client.stdout.log"
     ;;
-  SF-B3|SF-C4|SF-F1|SF-F2|SF-F3|SF-F4|SF-F5|SF-F6|SF-F7|SF-F8|SF-F9|SF-F10|SF-F11|SF-G1|SF-G2|SF-G3)
+  SF-F1|SF-F2|SF-F3|SF-F4|SF-F5|SF-F7|SF-F8|SF-F10|SF-F11|SF-G3)
     run_unimplemented_scenario
+    ;;
+  SF-G2)
+    start_topology no disabled disabled sf-g2
+    run_client SF-G2 "$LOG_DIR/client.stdout.log" "$LOG_DIR/client.stderr.log"
+    cat "$LOG_DIR/client.stdout.log"
+    ;;
+  SF-G1)
+    start_topology no disabled disabled sf-g1
+    run_client SF-G1 "$LOG_DIR/client.stdout.log" "$LOG_DIR/client.stderr.log"
+    cat "$LOG_DIR/client.stdout.log"
     ;;
   *)
     echo "Unsupported scenario '$SCENARIO'. Supported: all, ${SCENARIOS[*]}" >&2

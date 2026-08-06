@@ -3,13 +3,13 @@ title: "13. Key Type Usage Index · C++"
 ---
 
 <!-- framework-adapter-nav:start -->
-[Guide Home](../../../index.ko.md) | [Previous: Operations — metrics · drain · readiness](12-operations.en.md) | [Next: Picking A Sample](14-samples.en.md)
+[Guide Home](../../../index.en.md) | [Previous: Operations — metrics · drain · readiness](12-operations.en.md) | [Next: Picking A Sample](14-samples.en.md)
 <!-- framework-adapter-nav:end -->
 
 # 13. Key Type Usage Index
 
 > **The document that owns this chapter's contract** —
-> the [C++ exact interface table of contents](../../../common/spec/server/languages/cpp/interfaces/README.ko.md)
+> the [C++ exact interface table of contents](../../../common/spec/server/languages/cpp/interfaces/README.en.md)
 > owns the exact signatures. This chapter is a guide to finding the public types an
 > application uses often, organized by feature.
 
@@ -100,7 +100,7 @@ Types the application inherits to build are split from context the framework han
 **A Spot handler is a member function of the Spot.** Register it in `configure ()` as
 `add_handler<&TSpot::method> ()`. There's one exception — **only the timer has a separate
 handler type**, registered with `add_timer<THandler> ()`, and that type's `handle` takes
-both the target Spot and the tick ([6. Spot](06-spot.ko.md) §6.1).
+both the target Spot and the tick ([6. Spot](06-spot.en.md) §6.1).
 
 | Timer-related type | What it does |
 | --- | --- |
@@ -188,11 +188,11 @@ Usage of the observation surfaces is covered in [11. Monitoring](11-monitoring.e
 | A startup-phase builder returns it | The `mesh_node_builder_t` family · `stream_node_options_builder_t` |
 | A call returns it | `*_call_t` · `*_result_t` · `*_ref_t` |
 
-DI injection rules are covered in [18. DI Container](18-di-container.ko.md).
+DI injection rules are covered in [18. DI Container](18-di-container.en.md).
 
 ## 9. Related Documents
 
-- Exact signatures: [C++ exact interface table of contents](../../../common/spec/server/languages/cpp/interfaces/README.ko.md)
-- The execution model and `task_t` / `result_t`: [21. Execution & Configuration Model](21-execution-model.ko.md)
+- Exact signatures: [C++ exact interface table of contents](../../../common/spec/server/languages/cpp/interfaces/README.en.md)
+- The execution model and `task_t` / `result_t`: [21. Execution & Configuration Model](21-execution-model.en.md)
 - Options and defaults: [16. Options](16-options.en.md)
 - Observation surfaces: [11. Monitoring](11-monitoring.en.md)

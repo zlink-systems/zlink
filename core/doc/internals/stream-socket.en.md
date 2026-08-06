@@ -1,4 +1,4 @@
-[English](stream-socket.en.md) | [한국어](stream-socket.ko.md)
+[English](stream-socket.en.md) | [한국어](stream-socket.en.md)
 
 # STREAM Socket WS/WSS Optimization
 

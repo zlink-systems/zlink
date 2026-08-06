@@ -62,7 +62,7 @@ target_link_libraries(my_game PRIVATE zlink::stream_connector)
 
 ```ini
 [requires]
-zlink-stream-connector/0.9.0
+zlink-stream-connector/0.10.0
 
 [options]
 zlink-stream-connector/*:with_tls=True
@@ -76,7 +76,7 @@ zlink-stream-connector/*:with_lz4=True
 from conan import ConanFile
 
 class MyGameConan(ConanFile):
-    requires = "zlink-stream-connector/0.9.0"
+    requires = "zlink-stream-connector/0.10.0"
     options = {"zlink-stream-connector/*:with_tls": True,
                "zlink-stream-connector/*:with_websocket": True}
 ```

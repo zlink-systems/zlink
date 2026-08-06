@@ -1,4 +1,4 @@
-[한국어](01-core.ko.md) | English
+[한국어](https://zlink-systems.github.io/zlink/ko/bindings/reference/go/01-core/) | English
 
 [Reference index](README.en.md)
 

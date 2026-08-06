@@ -22,6 +22,14 @@ public interface RouterSocket extends Socket {
     SendOperation send(RoutingId rid);
     boolean recv(Received result, RecvFlags flags);
     RequestOperation request(RoutingId rid);
+    /**
+     * Creates a request operation pinned to the specified physical transport
+     * pair. The pair identity must come from a monitor event for this router;
+     * a stale or unknown pair is rejected by the native socket.
+     */
+    RequestOperation request(RoutingId rid,
+                             long transportPairId,
+                             long transportPairGeneration);
     ReplyOperation reply(RoutingId rid, long requestSequence);
     /**
      * Tries to submit an opaque record on the peer's existing Completion

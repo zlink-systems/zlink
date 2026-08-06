@@ -2,7 +2,7 @@
 title: "ZMP v1.0 프로토콜 상세"
 ---
 
-[English](protocol-zmp.en.md)
+[English](protocol-zmp.ko.md)
 
 <!-- zlink-nav:start -->
 [가이드 목차](../guide/README.ko.md) | [이전: Core raw runtime 내부 경계](runtime-boundary.ko.md) | [다음: RAW 프로토콜 상세](protocol-raw.ko.md)

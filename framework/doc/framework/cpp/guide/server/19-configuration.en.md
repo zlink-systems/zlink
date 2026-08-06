@@ -3,7 +3,7 @@ title: "19. Configuration · C++"
 ---
 
 <!-- framework-adapter-nav:start -->
-[Guide Home](../../../index.en.md) | [Previous: 18. DI Container](18-di-container.en.md) | [Next: 20. HTTP Hosting](20-http-hosting.ko.md)
+[Guide Home](../../../index.en.md) | [Previous: 18. DI Container](18-di-container.en.md) | [Next: 20. HTTP Hosting](20-http-hosting.en.md)
 <!-- framework-adapter-nav:end -->
 
 # 19. Configuration

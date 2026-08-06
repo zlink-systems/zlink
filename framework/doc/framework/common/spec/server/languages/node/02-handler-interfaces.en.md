@@ -2,7 +2,7 @@
 
 The exact public TypeScript declarations of the Node.js server package
 are managed split across per-category documents. See the
-[public interface table of contents](interfaces/README.ko.md) for the
+[public interface table of contents](interfaces/README.en.md) for the
 full document list.
 
 - Builder and configuration options: [Foundation Types And Configuration](interfaces/01-foundation-configuration.en.md)

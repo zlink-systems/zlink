@@ -125,6 +125,10 @@ export interface ZLinkSpotNodeRuntimeManagerOptions {
   ) => void | Promise<void>;
   readonly inboundDispatchBudget?: ZLinkInboundDispatchBudget;
   readonly messageFollowReceiver?: (record: ServiceMessageFollowRecord) => void;
+  readonly instanceActivationConcurrencyProvider?: (meshName: string) => {
+    readonly active: number;
+    readonly limit: number;
+  };
 }
 
 interface ZLinkPublishSlotWaiter {
@@ -168,6 +172,7 @@ export class ZLinkSpotNodeRuntimeManager {
   private readonly runtimeChannelWeights = new Map<string, Map<string, number>>();
   private readonly entrySpotIds = new Map<string, string>();
   private runtimeWeightPublication = Promise.resolve();
+  private statePublication = Promise.resolve();
   private locationAutoConnect?: ZLinkSpotNodeLocationAutoConnectContext;
 
   constructor(private readonly options: ZLinkSpotNodeRuntimeManagerOptions) {}
@@ -291,7 +296,10 @@ export class ZLinkSpotNodeRuntimeManager {
             ?? (hasLegacyObjectFactories ? 'server' : 'none'),
           placementWeight: spotNode.placementWeight ?? 100,
           activeCapacityLimit:
-            (spotNode.actorLimit ?? 10_000) + (spotNode.spotLimit ?? 128),
+            aggregatePlacementCapacity(
+              spotNode.actorLimit ?? 0,
+              spotNode.spotLimit ?? 0
+            ),
           pendingCapacityLimit: spotNode.activationConcurrencyLimit ?? 128,
           objectCapabilities: [
             ...stableTypes.map(type => `object-type:${type}`),
@@ -355,6 +363,22 @@ export class ZLinkSpotNodeRuntimeManager {
     signal?: AbortSignal,
     selectedMeshName?: string
   ): Promise<void> {
+    const previous = this.statePublication;
+    let release!: () => void;
+    this.statePublication = new Promise<void>((resolve) => { release = resolve; });
+    await previous;
+    try {
+      await this.publishMeshNodeStateCore(state, signal, selectedMeshName);
+    } finally {
+      release();
+    }
+  }
+
+  private async publishMeshNodeStateCore(
+    state: ZLinkFrameworkRuntimeState,
+    signal?: AbortSignal,
+    selectedMeshName?: string
+  ): Promise<void> {
     const location = this.locationAutoConnect;
     const owner = location?.runtime.currentOwnerToken;
     if (location === undefined || owner === undefined) return;
@@ -407,12 +431,12 @@ export class ZLinkSpotNodeRuntimeManager {
           actors: {
             active: current?.populationCapacity.actors.active ?? 0,
             reserved: current?.populationCapacity.actors.reserved ?? 0,
-            limit: registration.actorLimit ?? 10_000
+            limit: registration.actorLimit ?? 0
           },
           spots: {
             active: current?.populationCapacity.spots.active ?? 0,
             reserved: current?.populationCapacity.spots.reserved ?? 0,
-            limit: registration.spotLimit ?? 128
+            limit: registration.spotLimit ?? 0
           },
           spotTypes: capabilities
             .filter(capability => capability.objectKind !== 'actor')
@@ -430,8 +454,12 @@ export class ZLinkSpotNodeRuntimeManager {
             })
         },
         activationConcurrency: {
-          active: current?.activationConcurrency.active ?? 0,
-          limit: registration.activationConcurrencyLimit ?? 128
+          active: this.options.instanceActivationConcurrencyProvider?.(meshName).active
+            ?? current?.activationConcurrency.active
+            ?? 0,
+          limit: this.options.instanceActivationConcurrencyProvider?.(meshName).limit
+            ?? registration.activationConcurrencyLimit
+            ?? 128
         },
         channelWeights: Object.fromEntries(
           Object.entries(registration.meshChannels ?? {})
@@ -1468,6 +1496,13 @@ function objectCapability(
       ? 0
       : factory.options?.stableTypeLimit ?? 0
   };
+}
+
+function aggregatePlacementCapacity(actorLimit: number, spotLimit: number): number {
+  const unlimited = 0x7fff_ffff;
+  const actors = actorLimit === 0 ? unlimited : actorLimit;
+  const spots = spotLimit === 0 ? unlimited : spotLimit;
+  return Math.min(unlimited, actors + spots);
 }
 
 function maxBigInt(left: bigint, right: bigint): bigint {

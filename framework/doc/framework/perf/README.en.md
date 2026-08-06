@@ -27,10 +27,10 @@ measured.
 
 Per-language detail policy lives in the documents below.
 
-- [C++ framework perf](bindings/cpp-framework-performance.ko.md)
-- [Java framework perf](bindings/java-framework-performance.ko.md)
-- [.NET framework perf](bindings/dotnet-framework-performance.ko.md)
-- [Node framework perf](bindings/node-framework-performance.ko.md)
+- [C++ framework perf](bindings/cpp-framework-performance.en.md)
+- [Java framework perf](bindings/java-framework-performance.en.md)
+- [.NET framework perf](bindings/dotnet-framework-performance.en.md)
+- [Node framework perf](bindings/node-framework-performance.en.md)
 
 ## Common Principles
 

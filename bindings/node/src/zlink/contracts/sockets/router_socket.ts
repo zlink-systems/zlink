@@ -35,6 +35,20 @@ export interface RouterSocket extends ConnectableSocket {
   getRoutingId(): RoutingId;
   /** Begin a request to peer `peerRid`; parts are consumed on submit and a reply is awaited. */
   request(peerRid: RoutingId): RequestOperation;
+  /** Begin a request constrained to the monitor-identified transport pair. */
+  requestTransportPair(
+    peerRid: RoutingId,
+    transportPairId: bigint,
+    transportPairGeneration: bigint
+  ): RequestOperation;
+  /** Submit a message constrained to the monitor-identified transport pair. */
+  sendTransportPair(
+    peerRid: RoutingId,
+    transportPairId: bigint,
+    transportPairGeneration: bigint,
+    parts: MessageLike | readonly MessageLike[],
+    flags?: import('./socket_constants').SendFlags
+  ): void;
   /** Begin a reply to request `requestSeq` from `peerRid`; parts are consumed on a successful submit. */
   reply(peerRid: RoutingId, requestSeq: bigint): ReplyOperation;
   /**
@@ -43,6 +57,13 @@ export interface RouterSocket extends ConnectableSocket {
    */
   trySendCompletionControl(
     peerRid: RoutingId,
+    parts: readonly MessageLike[]
+  ): boolean;
+  /** Submit Completion-control data through the monitor-identified pair. */
+  trySendCompletionControlTransportPair(
+    peerRid: RoutingId,
+    transportPairId: bigint,
+    transportPairGeneration: bigint,
     parts: readonly MessageLike[]
   ): boolean;
   /**

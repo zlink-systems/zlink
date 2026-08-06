@@ -1223,6 +1223,13 @@ void public_host_runtime_t::configure_spot_route_fence_resolver (
     _spot_route_fences.clear ();
 }
 
+void public_host_runtime_t::configure_peer_readiness_resolver (
+  peer_readiness_resolver_t resolver)
+{
+    std::lock_guard lock (_mutex);
+    _peer_readiness_resolver = std::move (resolver);
+}
+
 void public_host_runtime_t::configure_actor_create_operations (
   actor_create_operation_target_t target)
 {
@@ -2327,9 +2334,25 @@ zlink::submit_result_t public_host_runtime_t::send_to_actor (
     }
     const auto peer = _transport->topology ().peer (
       target_routing_id.to_bytes ());
+    if (!peer) {
+        return zlink::submit_result_t::not_connected;
+    }
+    peer_readiness_resolver_t readiness_resolver;
+    {
+        std::lock_guard lock (_mutex);
+        readiness_resolver = _peer_readiness_resolver;
+    }
+    if (readiness_resolver && !readiness_resolver (target_routing_id)) {
+        return zlink::submit_result_t::not_connected;
+    }
     const auto node_generation =
-      peer ? peer->descriptor.lifecycle_generation
-           : status ().lifecycle_generation ();
+      peer->descriptor.lifecycle_generation;
+    const auto current_peer = _transport->topology ().peer (
+      target_routing_id.to_bytes ());
+    if (!current_peer
+        || current_peer->descriptor.lifecycle_generation != node_generation) {
+        return zlink::submit_result_t::not_connected;
+    }
     const auto object = resolve_actor (target);
     const auto authority_generation = authority_owner_generation != 0
       ? authority_owner_generation
@@ -2379,9 +2402,28 @@ zlink::submit_result_t public_host_runtime_t::request_to_actor (
     }
     const auto peer = _transport->topology ().peer (
       target_routing_id.to_bytes ());
+    if (!peer) {
+        release_completion (operation);
+        return zlink::submit_result_t::not_connected;
+    }
+    peer_readiness_resolver_t readiness_resolver;
+    {
+        std::lock_guard lock (_mutex);
+        readiness_resolver = _peer_readiness_resolver;
+    }
+    if (readiness_resolver && !readiness_resolver (target_routing_id)) {
+        release_completion (operation);
+        return zlink::submit_result_t::not_connected;
+    }
     const auto node_generation =
-      peer ? peer->descriptor.lifecycle_generation
-           : status ().lifecycle_generation ();
+      peer->descriptor.lifecycle_generation;
+    const auto current_peer = _transport->topology ().peer (
+      target_routing_id.to_bytes ());
+    if (!current_peer
+        || current_peer->descriptor.lifecycle_generation != node_generation) {
+        release_completion (operation);
+        return zlink::submit_result_t::not_connected;
+    }
     const auto object = resolve_actor (target);
     const auto authority_generation = authority_owner_generation != 0
       ? authority_owner_generation
@@ -5110,6 +5152,7 @@ std::size_t public_host_runtime_t::dispatch_ready (
     (void) _relocation_wire->retry_source_replays (now);
     (void) _relocation_wire->retry_terminal_relays (now);
     (void) _relocation_wire->reap_terminal_tombstones (now);
+    (void) _transport->tick_liveness (now);
     (void) _transport->drain_monitor_events (now);
     std::size_t count = 0;
     receive_batch_budget_t budget;

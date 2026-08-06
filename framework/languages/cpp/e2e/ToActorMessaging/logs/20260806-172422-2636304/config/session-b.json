@@ -1,0 +1,16 @@
+{
+  "e2e": {
+    "redis": {
+      "endpoint": "127.0.0.1:55769",
+      "keyPrefix": "zlink:e2e:toactor:20260806-172422-2636304"
+    },
+    "logDir": "/home/hep7/project/kairos/zlink/framework/languages/cpp/e2e/ToActorMessaging/logs/20260806-172422-2636304",
+    "nodeRid": "session-b",
+    "httpEndpoint": "http://127.0.0.1:62925",
+    "streamEndpoint": "tcp://127.0.0.1:20773",
+    "spotEndpoint": "tcp://127.0.0.1:38925",
+    "pubSubEndpoint": "tcp://127.0.0.1:23853",
+    "actorRid": "actor-a",
+    "actorSpotEndpoint": "tcp://127.0.0.1:4533"
+  }
+}

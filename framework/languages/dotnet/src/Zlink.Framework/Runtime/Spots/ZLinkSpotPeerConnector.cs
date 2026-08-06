@@ -98,6 +98,7 @@ internal sealed class ZLinkSpotPeerConnector(
         lock (_gate)
         {
             var result = DisconnectAuto(
+                peerRid,
                 endpoint,
                 () => connections.RemovePeerAuto(peerRid, endpoint),
                 () => connections.RestorePeerAuto(endpoint, peerRid));
@@ -129,20 +130,55 @@ internal sealed class ZLinkSpotPeerConnector(
     }
 
     private bool DisconnectAuto(
+        RoutingId? peerRid,
         string endpoint,
         Func<bool> release,
         Action restore)
     {
-        if (!release()) return true;
+        var released = release();
+        // A different auto target may already own the endpoint after a RID
+        // replacement. The old physical peer still requires exact cleanup;
+        // only an endpoint-only release can return without a transport step.
+        if (!released && peerRid is not { Size: > 0 }) return true;
         try
         {
-            node.DisconnectPeer(endpoint);
+            if (peerRid is { Size: > 0 } rid)
+            {
+                DisconnectPeerLifetime(rid, endpoint);
+            }
+            else
+            {
+                node.DisconnectPeer(endpoint);
+            }
             return true;
         }
         catch
         {
-            restore();
+            if (released) restore();
             return false;
+        }
+    }
+
+    private void DisconnectPeerLifetime(RoutingId peerRid, string endpoint)
+    {
+        foreach (var peer in node.MeshPeers())
+        {
+            if (peer.RoutingId != peerRid
+                || !string.Equals(peer.Endpoint, endpoint, StringComparison.Ordinal))
+                continue;
+
+            if (peer.State is MeshPeerState.Admitted or MeshPeerState.Draining)
+            {
+                node.DisconnectPeerLifetime(peerRid, peer.LifecycleGeneration);
+            }
+            else
+            {
+                node.DisconnectPeerBeforeAdmission(
+                    peerRid,
+                    endpoint,
+                    peer.LifecycleGeneration);
+            }
+            return;
         }
     }
 

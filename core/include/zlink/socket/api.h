@@ -293,6 +293,22 @@ ZLINK_EXPORT zlink_submit_result_t zlink_send_part_rid (void *s_,
                                                         zlink_send_flags_t flags_,
                                                         zlink_part_flag_t part_flag_);
 
+/**
+ * @brief Submit one ROUTER part only through the specified transport pair.
+ *
+ * The routing id and pair identity must describe the same admitted peer. The
+ * operation does not fall back to another physical connection with the same
+ * routing id. The pair identity is copied from a monitor event.
+ */
+ZLINK_EXPORT zlink_submit_result_t zlink_send_part_transport_pair (
+  void *s_,
+  const zlink_routing_id_t *target_rid_,
+  uint64_t transport_pair_id_,
+  uint64_t transport_pair_generation_,
+  zlink_msg_t *part_,
+  zlink_send_flags_t flags_,
+  zlink_part_flag_t part_flag_);
+
 ZLINK_EXPORT zlink_submit_result_t zlink_dealer_request_part (void *dealer_,
                                                               zlink_msg_t *part_,
                                                               zlink_send_flags_t flags_,
@@ -322,6 +338,19 @@ ZLINK_EXPORT zlink_submit_result_t zlink_router_request_part (void *router_,
                                                               zlink_reply_handler_fn handler_,
                                                               void *userdata_);
 
+/** @brief Submit a ROUTER request part through one specified transport pair. */
+ZLINK_EXPORT zlink_submit_result_t zlink_router_request_transport_pair_part (
+  void *router_,
+  const zlink_routing_id_t *peer_rid_,
+  uint64_t transport_pair_id_,
+  uint64_t transport_pair_generation_,
+  zlink_msg_t *part_,
+  zlink_send_flags_t flags_,
+  zlink_part_flag_t part_flag_,
+  uint32_t timeout_ms_,
+  zlink_reply_handler_fn handler_,
+  void *userdata_);
+
 ZLINK_EXPORT zlink_submit_result_t zlink_router_reply_part (void *router_,
                                                             const zlink_routing_id_t *peer_rid_,
                                                             uint64_t request_seq_,
@@ -343,6 +372,15 @@ ZLINK_EXPORT zlink_submit_result_t zlink_router_completion_control_part (
   zlink_msg_t *part_,
   zlink_part_flag_t part_flag_);
 
+/** @brief Submit a Completion-control part through one specified transport pair. */
+ZLINK_EXPORT zlink_submit_result_t zlink_router_completion_control_transport_pair_part (
+  void *router_,
+  const zlink_routing_id_t *peer_rid_,
+  uint64_t transport_pair_id_,
+  uint64_t transport_pair_generation_,
+  zlink_msg_t *part_,
+  zlink_part_flag_t part_flag_);
+
 ZLINK_EXPORT zlink_recv_result_t
 zlink_router_recv_part (void *router_,
                         const zlink_routing_id_t **source_node_rid_out_,
@@ -350,6 +388,17 @@ zlink_router_recv_part (void *router_,
                         zlink_msg_t *part_out_,
                         zlink_part_flag_t *has_more_out_,
                         zlink_recv_flags_t flags_);
+
+/** @brief Receives one Router part and returns the source transport pair identity. */
+ZLINK_EXPORT zlink_recv_result_t
+zlink_router_recv_part_v2 (void *router_,
+                           const zlink_routing_id_t **source_node_rid_out_,
+                           uint64_t *request_seq_out_,
+                           uint64_t *transport_pair_id_out_,
+                           uint64_t *transport_pair_generation_out_,
+                           zlink_msg_t *part_out_,
+                           zlink_part_flag_t *has_more_out_,
+                           zlink_recv_flags_t flags_);
 
 ZLINK_EXPORT zlink_recv_result_t zlink_recv_part (void *s_,
                                                   const zlink_routing_id_t **source_rid_out_,

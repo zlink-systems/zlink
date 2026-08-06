@@ -4,7 +4,7 @@ title: "Async Execution and Handler Turns"
 
 # Async Execution and Handler Turns
 
-[Spec index](README.ko.md) · [Previous: Framework Message Contract](04-message-model.ko.md) · [Next: ZLink Framework API](06-framework-api.ko.md)
+[Spec index](README.en.md) · [Previous: Framework Message Contract](04-message-model.en.md) · [Next: ZLink Framework API](06-framework-api.en.md)
 
 > **What this chapter defines** — the public contract for submit, request
 > completion, serial handler execution, timeout, cancellation, and timers.
@@ -46,7 +46,7 @@ same option repeats, and the error for re-invoking a terminal.
 | terminator | completion meaning after acceptance | owner turn |
 |---|---|---|
 | one-way async terminal | Completes with no return data if source-local admission succeeds, or with an exception on failure | Does not make the current turn wait unless awaited |
-| general async terminal | Waits until the request, worker, or create's application result reaches a terminal state | Holds the current [owner](01-glossary.ko.md#owner) turn until the completion continuation finishes |
+| general async terminal | Waits until the request, worker, or create's application result reaches a terminal state | Holds the current [owner](01-glossary.en.md#owner) turn until the completion continuation finishes |
 | `Yield` | Submits the operation, then releases the shared Spot turn while waiting for the application result | The completion continuation re-acquires the same Spot gate and resumes in a new turn |
 
 #### Per-language terminal names
@@ -94,7 +94,7 @@ registration, close, or destroy.
 
 - CPU work and async I/O work are submitted to a bounded worker scheduler owned by the Framework.
 - A worker call keeps the type of the application result it computes, and in the permitted `SpotWide`/Instance contexts, that same result can be awaited with `Yield`.
-- Completion is `CapacityExceeded` if the queue is full, `DeadlineExceeded` if the [deadline](01-glossary.ko.md#deadline) is exceeded, and `InternalFailure` if the work itself fails.
+- Completion is `CapacityExceeded` if the queue is full, `DeadlineExceeded` if the [deadline](01-glossary.en.md#deadline) is exceeded, and `InternalFailure` if the work itself fails.
 - Work that finishes late, after a timeout or cancellation, does not produce a second terminal result.
 
 ### 1.3 One-way submit
@@ -115,7 +115,7 @@ accepted the message.
 | Local target | The matching mailbox or relay queue |
 | Classic fanout/STREAM | The matching socket queue |
 
-Global Spot/Actor send waits from the current [Ready](01-glossary.ko.md#ready)
+Global Spot/Actor send waits from the current [Ready](01-glossary.en.md#ready)
 authority resolve through this source-local admission.
 
 #### Backpressure and error classification
@@ -143,12 +143,12 @@ local capacity up to that family's send timeout, and follows these rules:
 
 - Pending admission keeps the caller-specified Node RID, global Spot/Actor ID, and session binding token.
 - It does not switch to a different logical target after the send-ready signal.
-- A RouteMesh/ClientServer select-one Channel may re-select the current eligible member of the same [ChannelName](01-glossary.ko.md#channelname) until admission succeeds, and the target is fixed at the moment the transport queue accepts it.
+- A RouteMesh/ClientServer select-one Channel may re-select the current eligible member of the same [ChannelName](01-glossary.en.md#channelname) until admission succeeds, and the target is fixed at the moment the transport queue accepts it.
 - There is no automatic resubmission after completion.
 
 #### Logical Multicast
 
-[Logical Multicast](01-glossary.ko.md#logical-multicast) follows these rules:
+[Logical Multicast](01-glossary.en.md#logical-multicast) follows these rules:
 
 - It fixes a target snapshot when the operation starts and attempts each target exactly once.
 - If the operation itself cannot be submitted to the local executor, it waits up to the send timeout.
@@ -159,7 +159,7 @@ local capacity up to that family's send timeout, and follows these rules:
 
 #### Classic fanout
 
-[Classic fanout](01-glossary.ko.md#classic-fanout) completes normally once
+[Classic fanout](01-glossary.en.md#classic-fanout) completes normally once
 the publisher socket queue accepts the message, even with no subscribers.
 Subscriber count and receipt are not exposed as a public result.
 
@@ -168,11 +168,11 @@ Subscriber count and receipt are not exposed as a public result.
 #### Deadline owner
 
 The one-way admission deadline is owned by the outbound socket or
-[MeshNode](01-glossary.ko.md#meshnode) that the operation actually uses.
+[MeshNode](01-glossary.en.md#meshnode) that the operation actually uses.
 
 | Operation family | Deadline owner | Default rule |
 |---|---|---|
-| [RouteMesh](01-glossary.ko.md#routemesh) node/channel, Spot, Actor | The selected MeshNode's ROUTER send timeout | Includes global object route resolve time; 1 second if unset |
+| [RouteMesh](01-glossary.en.md#routemesh) node/channel, Spot, Actor | The selected MeshNode's ROUTER send timeout | Includes global object route resolve time; 1 second if unset |
 | ClientServer | The client's DEALER send timeout | 1 second if unset |
 | Logical Multicast | The selected MeshNode ROUTER's per-target send timeout | Applies to each remote target of a committed publish transaction |
 | Classic fanout | The publisher socket's send timeout | 1 second if unset |
@@ -196,7 +196,7 @@ Bound session and session Actor relay do not roll back a remote failure that
 occurs after the local relay has accepted the message, and do not
 auto-replay it as the same submit's failure.
 
-The one-shot [reply token](01-glossary.ko.md#reply-token) rules for STREAM
+The one-shot [reply token](01-glossary.en.md#reply-token) rules for STREAM
 reply are:
 
 - The request sequence and the token are preserved when the call is created.
@@ -314,7 +314,7 @@ sequenceDiagram
 Object placement and activation follow these rules:
 
 - They are handled on infrastructure tasks.
-- Only the owner that the Location Store reservation confirms runs the [factory](01-glossary.ko.md#factory).
+- Only the owner that the Location Store reservation confirms runs the [factory](01-glossary.en.md#factory).
 - AuthorityOwnerGeneration and the owner lease are used only for Store and runtime fencing.
 - ObjectGeneration is also used for public refs and exact-incarnation mutation/session bind.
 - Only target-owned Instance cold activation additionally fixes the durable activation inbox's first record before commit.
@@ -430,7 +430,7 @@ boundary are:
 A Draining MeshNode is also excluded from new object placement candidates.
 Pending activation completes the request as a terminal exactly once, and
 drops the one-way payload, at whichever boundary is reached first between
-the [drain deadline](01-glossary.ko.md#drain-deadline) and the Framework
+the [drain deadline](01-glossary.en.md#drain-deadline) and the Framework
 activation deadline. Even if cancellation, timeout, shutdown, and the
 activation barrier opening all race, the pending operation and payload
 reservation are cleaned up exactly once.
@@ -462,7 +462,7 @@ collapsed into a single pending record.
 ### Owner lease and admission
 
 A Spot timer can only be admitted after the service runtime checks the
-current [owner lease](01-glossary.ko.md#owner-lease) and the admission
+current [owner lease](01-glossary.en.md#owner-lease) and the admission
 deadline. If lease renewal stops and the monotonic deadline is exceeded, no
 new tick is queued and no callback is started after resuming, even if the
 Framework process had been suspended. Pending ticks from a previous
@@ -484,11 +484,11 @@ representation.
 
 | Language | General async completion | Returning the Spot turn | exact interface owner |
 |---|---|---|---|
-| .NET | `Async(...)` returns `ValueTask` or `ValueTask<T>` | `Yield(...)` | [exact interface index](server/languages/dotnet/interfaces/README.ko.md) |
+| .NET | `Async(...)` returns `ValueTask` or `ValueTask<T>` | `Yield(...)` | [exact interface index](server/languages/dotnet/interfaces/README.en.md) |
 | Java | `submit(...)` returns `CompletionStage<T>` | `yield(...)` | [Channel messaging](server/languages/java/interfaces/channel-messaging.en.md) |
 | Kotlin | Uses the dedicated call wrapper's suspending `await()` | The dedicated wrapper's `yield()` | [Channel messaging](server/languages/kotlin/interfaces/channel-messaging.en.md) |
-| Node.js | `submit(...)` returns `Promise<T>` | `yield(...)` | [interface index](server/languages/node/interfaces/README.ko.md) |
-| C++ | `submit(...)` returns `task_t<T>` | `yield(...)` | [framework interfaces](server/languages/cpp/interfaces/README.ko.md) |
+| Node.js | `submit(...)` returns `Promise<T>` | `yield(...)` | [interface index](server/languages/node/interfaces/README.en.md) |
+| C++ | `submit(...)` returns `task_t<T>` | `yield(...)` | [framework interfaces](server/languages/cpp/interfaces/README.en.md) |
 
 Each exact interface fixes the return type, cancellation argument, and
 callback or coroutine representation per terminator. Even when the

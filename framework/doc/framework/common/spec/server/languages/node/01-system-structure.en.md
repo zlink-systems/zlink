@@ -354,7 +354,7 @@ the application callback.
 - **One stream node only has one session.**
 - **A bind endpoint must exist.**
 Raw stream's `write(...)`, `close(...)` signatures are owned by
-[Channel And Routing Interface](interfaces/02-channel-messaging.ko.md),
+[Channel And Routing Interface](interfaces/02-channel-messaging.en.md),
 and backpressure semantics are owned by
 [stream-session](../../../19-stream-session.en.md).
 

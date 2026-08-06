@@ -187,6 +187,7 @@ export interface ZLinkBackendMeshNode {
     readonly descriptorRevision: bigint;
     readonly endpoint: string;
   }[]): void;
+  onPeerDisconnected?(handler: (endpoint: string) => void): void;
   expectPeer?(peer: {
     readonly nodeRoutingId: string;
     readonly endpoint: string;

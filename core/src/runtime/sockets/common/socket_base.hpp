@@ -176,7 +176,9 @@ class socket_base_t : public own_t,
                             socket_public_send_scope_t &scope_,
                             uint64_t *connection_id_out_ = NULL,
                             uint64_t expected_connection_id_ = 0,
-                            zlink::pipe_t **pipe_out_ = NULL);
+                            zlink::pipe_t **pipe_out_ = NULL,
+                            uint64_t expected_transport_pair_id_ = 0,
+                            uint64_t expected_transport_pair_generation_ = 0);
     std::unique_ptr<socket_public_send_scope_t> begin_public_send_scope (bool force_sync_);
     std::unique_ptr<socket_public_api_scope_t> begin_public_api_scope ();
     int rollback ();
@@ -191,6 +193,8 @@ class socket_base_t : public own_t,
     pipe_t *completion_pipe_for_application (pipe_t *application_pipe_) const;
     pipe_t *application_pipe_for_completion (pipe_t *completion_pipe_) const;
     pipe_t *completion_pipe_for_peer (const zlink_routing_id_t *peer_rid_) const;
+    pipe_t *completion_pipe_for_transport_pair (uint64_t transport_pair_id_,
+                                                uint64_t transport_pair_generation_) const;
     //  Request/reply submit entries write to transport pipes directly instead
     //  of going through send()/recv(). They still have to drain pending socket
     //  commands (throttled, exactly like the send() entry does); otherwise a
@@ -388,6 +392,10 @@ class socket_base_t : public own_t,
 
     bool is_ctx_terminated () const;
 
+    //  Re-evaluate a paired route after the transport engine installs its
+    //  concrete endpoint and connection identity.
+    void notify_transport_pair_ready (zlink::pipe_t *pipe_);
+
   protected:
     socket_base_t (zlink::ctx_t *parent_, uint32_t tid_, int sid_);
     ~socket_base_t () ZLINK_OVERRIDE;
@@ -397,6 +405,15 @@ class socket_base_t : public own_t,
     virtual void xattach_pipe (zlink::pipe_t *pipe_,
                                bool subscribe_to_all_ = false,
                                bool locally_initiated_ = false) = 0;
+
+    //  A paired Router may learn the peer routing ID before the Completion
+    //    lane makes the transport pair ready. Concrete routing sockets can
+    //  publish the deferred pair-ready edge when the second lane attaches.
+    virtual bool emit_transport_pair_ready (zlink::pipe_t *pipe_)
+    {
+        LIBZLINK_UNUSED (pipe_);
+        return false;
+    }
 
     //  The default implementation assumes there are no specific socket
     //  options for the particular socket type. If not so, ZLINK_FINAL this
@@ -416,7 +433,9 @@ class socket_base_t : public own_t,
                               zlink::msg_t *msg_,
                               uint64_t *connection_id_out_,
                               uint64_t expected_connection_id_,
-                              zlink::pipe_t **pipe_out_);
+                              zlink::pipe_t **pipe_out_,
+                              uint64_t expected_transport_pair_id_ = 0,
+                              uint64_t expected_transport_pair_generation_ = 0);
     virtual bool xsubmit_retry_allowed (const zlink_routing_id_t *target_rid_, int err_) const;
     virtual int xrollback ();
 
@@ -520,7 +539,9 @@ class socket_base_t : public own_t,
                                 uint64_t *connection_id_out_ = NULL,
                                 uint64_t expected_connection_id_ = 0,
                                 bool report_multipart_abort_ = false,
-                                zlink::pipe_t **pipe_out_ = NULL);
+                                zlink::pipe_t **pipe_out_ = NULL,
+                                uint64_t expected_transport_pair_id_ = 0,
+                                uint64_t expected_transport_pair_generation_ = 0);
 
     enum
     {

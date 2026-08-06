@@ -63,11 +63,11 @@ failure/completion conditions its implementation and contract tests need.
 The exact public types, signatures, and async representation each language
 uses for the common server contract are owned by the following documents.
 
-- [C++](server/languages/cpp/README.ko.md)
-- [.NET](server/languages/dotnet/README.ko.md)
-- [Java](server/languages/java/README.ko.md)
-- [Kotlin](server/languages/kotlin/README.ko.md)
-- [Node.js](server/languages/node/README.ko.md)
+- [C++](server/languages/cpp/README.en.md)
+- [.NET](server/languages/dotnet/README.en.md)
+- [Java](server/languages/java/README.en.md)
+- [Kotlin](server/languages/kotlin/README.en.md)
+- [Node.js](server/languages/node/README.en.md)
 
 ## HTTP Client
 

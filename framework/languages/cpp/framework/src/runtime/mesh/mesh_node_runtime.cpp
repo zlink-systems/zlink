@@ -440,6 +440,55 @@ void mesh_node_runtime_t::start ()
         }
     }
     _node = std::move (node);
+    const auto callback_gate = _peer_callback_gate;
+    _state->runtime_peer_connect = [this, callback_gate] (
+      const mesh_peer_connection_t &connection) {
+        {
+            std::lock_guard lock (callback_gate->mutex);
+            if (callback_gate->stopping)
+                return;
+            ++callback_gate->active;
+        }
+        try {
+            if (connection.expected_routing_id)
+                connect_peer (*connection.expected_routing_id, connection.endpoint);
+            else
+                connect_peer (connection.endpoint);
+        }
+        catch (...) {
+            std::lock_guard lock (callback_gate->mutex);
+            if (--callback_gate->active == 0)
+                callback_gate->changed.notify_all ();
+            throw;
+        }
+        std::lock_guard lock (callback_gate->mutex);
+        if (--callback_gate->active == 0)
+            callback_gate->changed.notify_all ();
+    };
+    _state->runtime_peer_disconnect = [this, callback_gate] (
+      const mesh_peer_connection_t &connection) {
+        {
+            std::lock_guard lock (callback_gate->mutex);
+            if (callback_gate->stopping)
+                return;
+            ++callback_gate->active;
+        }
+        try {
+            if (connection.expected_routing_id)
+                disconnect_peer (*connection.expected_routing_id, connection.endpoint);
+            else
+                disconnect_peer (connection.endpoint);
+        }
+        catch (...) {
+            std::lock_guard lock (callback_gate->mutex);
+            if (--callback_gate->active == 0)
+                callback_gate->changed.notify_all ();
+            throw;
+        }
+        std::lock_guard lock (callback_gate->mutex);
+        if (--callback_gate->active == 0)
+            callback_gate->changed.notify_all ();
+    };
     spot_node_runtime_t spot_runtime (_state->spot_state);
     spot_runtime.attach_native_node (_node);
     if (_state->spot_state->snapshot.entry_spot_name) {
@@ -1232,6 +1281,17 @@ void mesh_node_runtime_t::stop () noexcept
     _completion_ready.notify_all ();
     runtime::messaging::shutdown_submit_owner (this);
     {
+        std::lock_guard state_lock (_state->mutex);
+        _state->runtime_peer_connect = {};
+        _state->runtime_peer_disconnect = {};
+    }
+    {
+        std::unique_lock callback_lock (_peer_callback_gate->mutex);
+        _peer_callback_gate->stopping = true;
+        _peer_callback_gate->changed.wait (
+          callback_lock, [this] { return _peer_callback_gate->active == 0; });
+    }
+    {
         std::lock_guard lock (_completion_mutex);
         _actor_join_continuations.clear ();
         _completed_operations.clear ();
@@ -1276,6 +1336,20 @@ void mesh_node_runtime_t::connect_peer (
     if (submitted)
         _peer_connection_intents.emplace (
           endpoint, next_connection_intent_id ());
+}
+
+void mesh_node_runtime_t::connect_peer (
+  const std::string &endpoint, std::string security_identity)
+{
+    if (!_node || endpoint.empty ())
+        return;
+    std::lock_guard lock (_peer_mutex);
+    if (_peer_connection_intents.contains (endpoint))
+        return;
+    if (_node->connect_peer (endpoint))
+        _peer_connection_intents.emplace (
+          endpoint, next_connection_intent_id ());
+    static_cast<void> (security_identity);
 }
 
 void mesh_node_runtime_t::expect_peer (
@@ -1494,6 +1568,17 @@ bool mesh_node_runtime_t::has_admitted_peer (
     return peer
            && peer->descriptor.lifecycle_generation
                 == lifecycle_generation
+           && peer->descriptor.state
+                == runtime::mesh::service_node_state_t::serving;
+}
+
+bool mesh_node_runtime_t::has_admitted_peer (
+  const zlink::routing_id_t &peer_rid) const
+{
+    if (!_node)
+        return false;
+    const auto peer = _node->transport ().topology ().peer (peer_rid.to_bytes ());
+    return peer
            && peer->descriptor.state
                 == runtime::mesh::service_node_state_t::serving;
 }
@@ -2372,7 +2457,7 @@ mesh_node_runtime_t::relay_application_actor (
               framework_error_kind_t::internal_failure,
               "Actor relay request was not accepted");
         }
-        auto completed = wait_for_completion (operation, timeout);
+        auto completed = wait_for_completion (operation, timeout, target_node_rid);
         if (!completed) {
             return detail::propagate_failure<std::optional<zlink::message_t>> (
               completed, "Actor relay request completion failed");
@@ -2590,7 +2675,8 @@ mesh_node_runtime_t::follow_relocated_actor (const actor_ref_t &actor)
 result_t<mesh_node_runtime_t::operation_completion_t>
 mesh_node_runtime_t::wait_for_completion (
   const host::operation_id_t &operation,
-  std::chrono::milliseconds timeout)
+  std::chrono::milliseconds timeout,
+  std::optional<zlink::routing_id_t> target)
 {
     std::unique_lock lock (_completion_mutex);
     if (!_completion_ready.wait_for (
@@ -2598,6 +2684,11 @@ mesh_node_runtime_t::wait_for_completion (
               return _completed_operations.contains (operation)
                      || _stopping.load (std::memory_order_acquire);
           })) {
+        if (target && !_node->transport ().topology ().peer (target->to_bytes ())) {
+            return result_t<operation_completion_t>::failure (
+              framework_error_kind_t::unavailable,
+              "MeshNode target RouteMesh peer became unavailable");
+        }
         return detail::boundary_failure<operation_completion_t> (
           detail::boundary_error_t::timed_out,
           "MeshNode operation timed out");
@@ -3046,9 +3137,16 @@ void mesh_peer_connections_t::connect (std::string endpoint)
     if (endpoint.empty ()) {
         throw detail::configuration_error ("peer endpoint is required");
     }
-    std::lock_guard lock (_state->mutex);
-    _state->peer_connections.push_back (
-      mesh_peer_connection_t{detail::next_connection_intent_id (), {}, std::move (endpoint)});
+    mesh_peer_connection_t connection{
+      detail::next_connection_intent_id (), {}, std::move (endpoint)};
+    std::function<void (const mesh_peer_connection_t &)> activate;
+    {
+        std::lock_guard lock (_state->mutex);
+        _state->peer_connections.push_back (connection);
+        activate = _state->runtime_peer_connect;
+    }
+    if (activate)
+        activate (connection);
 }
 
 void mesh_peer_connections_t::connect (zlink::routing_id_t expected_routing_id,
@@ -3057,18 +3155,38 @@ void mesh_peer_connections_t::connect (zlink::routing_id_t expected_routing_id,
     if (endpoint.empty ()) {
         throw detail::configuration_error ("peer endpoint is required");
     }
-    std::lock_guard lock (_state->mutex);
-    _state->peer_connections.push_back (mesh_peer_connection_t{
-      detail::next_connection_intent_id (), std::move (expected_routing_id), std::move (endpoint)});
+    mesh_peer_connection_t connection{
+      detail::next_connection_intent_id (), std::move (expected_routing_id), std::move (endpoint)};
+    std::function<void (const mesh_peer_connection_t &)> activate;
+    {
+        std::lock_guard lock (_state->mutex);
+        _state->peer_connections.push_back (connection);
+        activate = _state->runtime_peer_connect;
+    }
+    if (activate)
+        activate (connection);
 }
 
 void mesh_peer_connections_t::disconnect (std::string endpoint)
 {
-    std::lock_guard lock (_state->mutex);
-    std::erase_if (_state->peer_connections,
-                   [&endpoint] (const mesh_peer_connection_t &connection) {
-                       return connection.endpoint == endpoint;
-                   });
+    std::vector<mesh_peer_connection_t> removed;
+    std::function<void (const mesh_peer_connection_t &)> deactivate;
+    {
+        std::lock_guard lock (_state->mutex);
+        for (auto it = _state->peer_connections.begin ();
+             it != _state->peer_connections.end ();) {
+            if (it->endpoint != endpoint) {
+                ++it;
+                continue;
+            }
+            removed.push_back (*it);
+            it = _state->peer_connections.erase (it);
+        }
+        deactivate = _state->runtime_peer_disconnect;
+    }
+    if (deactivate)
+        for (const auto &connection : removed)
+            deactivate (connection);
 }
 
 std::vector<mesh_peer_connection_t> mesh_peer_connections_t::list_connections () const

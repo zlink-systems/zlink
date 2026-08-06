@@ -2,7 +2,7 @@
 title: "Core runtime architecture"
 ---
 
-[English](architecture.en.md)
+[English](architecture.ko.md)
 
 <!-- zlink-nav:start -->
 [가이드 목차](../guide/README.ko.md) | [다음: Threading model](threading-model.ko.md)

@@ -1,4 +1,4 @@
-[한국어](05-events.ko.md) | English
+[한국어](https://zlink-systems.github.io/zlink/ko/spec/core/05-events/) | English
 
 [Specification index](../README.en.md) · [Core index](README.en.md) · [Monitoring](07-monitoring.en.md) · [Polling](06-polling.en.md)
 

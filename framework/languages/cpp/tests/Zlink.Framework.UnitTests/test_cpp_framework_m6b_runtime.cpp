@@ -2157,7 +2157,7 @@ void verify_relocated_source_reply_failure_keeps_terminal_record ()
     target.close ();
 }
 
-void verify_raw_request_survives_remote_admission_race ()
+void verify_node_request_requires_remote_admission ()
 {
     mesh::raw_mesh_node_owner_t source (
       mesh::raw_mesh_node_options_t{descriptor ("request-source")});
@@ -2172,18 +2172,28 @@ void verify_raw_request_survives_remote_admission_race ()
 
     const auto deadline =
       mesh::service_liveness_registry_t::clock_t::now () + 5s;
-    while (!source.topology ().peer (target_descriptor.node_routing_id)
-           && mesh::service_liveness_registry_t::clock_t::now ()
-                < deadline) {
+    // Transport readiness is not service admission. A Node direct request is
+    // rejected until the remote descriptor has completed service admission.
+    assert (!source.request_to_node (
+      target_descriptor.node_routing_id,
+      {"DeferredRequest", "application/json", bytes ("request")}, 2s,
+      [] (foundation::operation_terminal_t,
+          std::vector<std::uint8_t>) {}));
+
+    while ((!source.topology ().peer (target_descriptor.node_routing_id)
+             || !target.topology ().peer (source_descriptor.node_routing_id))
+           && mesh::service_liveness_registry_t::clock_t::now () < deadline) {
         const auto now = mesh::service_liveness_registry_t::clock_t::now ();
         (void) source.drain_monitor_events (now);
         (void) target.drain_monitor_events (now);
-        const auto pumped = source.pump_one (now);
-        assert (pumped != mesh::raw_mesh_pump_result_t::protocol_error);
+        const auto source_pump = source.pump_one (now);
+        const auto target_pump = target.pump_one (now);
+        assert (source_pump != mesh::raw_mesh_pump_result_t::protocol_error);
+        assert (target_pump != mesh::raw_mesh_pump_result_t::protocol_error);
         std::this_thread::sleep_for (1ms);
     }
     assert (source.topology ().peer (target_descriptor.node_routing_id));
-    assert (!target.topology ().peer (source_descriptor.node_routing_id));
+    assert (target.topology ().peer (source_descriptor.node_routing_id));
 
     using request_result_t =
       std::pair<foundation::operation_terminal_t,
@@ -3850,7 +3860,7 @@ int main ()
     verify_location_store_accepted_record_authority ();
     verify_raw_spot_and_actor_routing ();
     verify_relocated_source_reply_failure_keeps_terminal_record ();
-    verify_raw_request_survives_remote_admission_race ();
+    verify_node_request_requires_remote_admission ();
     verify_raw_relocation_replay_and_monotonic_ack ();
     verify_raw_reply_relay_and_exact_source_ack ();
     verify_durable_reply_relay_single_winner ();

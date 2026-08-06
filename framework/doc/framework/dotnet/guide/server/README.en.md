@@ -37,6 +37,6 @@ and surface names differ per language.
 ## Related Documents
 
 - `.NET` documentation entry point: [ZLink Framework for .NET](../../README.en.md)
-- Public contract: [.NET public contract](../../../common/spec/server/languages/dotnet/README.ko.md)
-- Language-neutral meaning: [Common spec](../../../common/README.ko.md)
-- Client library: [HTTP client](../http-client/README.ko.md) · [Stream connector](../stream-connector/INDEX.ko.md)
+- Public contract: [.NET public contract](../../../common/spec/server/languages/dotnet/README.en.md)
+- Language-neutral meaning: [Common spec](../../../common/README.en.md)
+- Client library: [HTTP client](../http-client/README.en.md) · [Stream connector](../stream-connector/INDEX.en.md)

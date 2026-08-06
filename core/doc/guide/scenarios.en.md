@@ -1,4 +1,4 @@
-[한국어](scenarios.ko.md)
+[한국어](scenarios.en.md)
 
 # Core Usage Scenarios
 

@@ -1,4 +1,4 @@
-[한국어](06-dealer.ko.md) | English
+[한국어](https://zlink-systems.github.io/zlink/ko/spec/core/socket/06-dealer/) | English
 
 [Specification index](../../README.en.md) · [Core index](../README.en.md) · [Socket overview](README.en.md) · [errno map](../04-errno-map.en.md)
 

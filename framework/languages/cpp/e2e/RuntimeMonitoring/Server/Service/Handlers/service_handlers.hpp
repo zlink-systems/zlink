@@ -78,6 +78,9 @@ inline const char *topology_reason_name (zlink::framework::topology_reason_t rea
     return "internal_failure";
 }
 
+inline const char *monitoring_error_kind_name (
+  zlink::framework::framework_error_kind_t kind);
+
 class application_gate_t
 {
   public:
@@ -507,11 +510,24 @@ class create_spot_handler_t
     {
     }
 
-    zlink::framework::http_response_t handle (const zlink::framework::http_request_t &)
+    zlink::framework::http_response_t handle (
+      const zlink::framework::http_request_t &request)
     {
-        const auto created = _spots.create (spot_channel).submit ().result ();
+      try {
+        const auto requested = request.query_values.find ("spotId");
+        const auto created = requested == request.query_values.end ()
+                               ? _spots.create (spot_channel).submit ().result ()
+                               : _spots
+                                   .get_or_create (zlink::framework::spot_id_t (
+                                                     requested->second),
+                                                   spot_channel)
+                                   .submit ()
+                                   .result ();
         if (!created) {
-            return {.status = 500, .body = R"({"error":"spot creation failed"})"};
+            return {.status = 409,
+                    .body = nlohmann::json{{"error", monitoring_error_kind_name (created.error_kind ())},
+                                           {"detail", created.error ()->what ()}}
+                              .dump ()};
         }
         const auto &result = created.value ();
         const auto spot_id = result.spot.spot_id ();
@@ -520,16 +536,225 @@ class create_spot_handler_t
         zlink::framework::http_response_t response;
         response.body = nlohmann::json{
           {"spotId", spot_id},
+          {"providerRid", result.spot.node_rid ().value ()},
           {"state", result.state == zlink::framework::spot_create_state_t::existing
                        ? "existing"
                        : "created"}}
                           .dump ();
         return response;
+      }
+      catch (const zlink::framework::framework_exception_t &error) {
+        return {.status = 409,
+                .body = nlohmann::json{{"error", monitoring_error_kind_name (error.kind ())},
+                                       {"detail", error.what ()}}
+                          .dump ()};
+      }
     }
 
   private:
     zlink::framework::spot_manager_t &_spots;
     server::evidence_store_t &_evidence;
+};
+
+class monitoring_actor_t final : public zlink::framework::actor_t
+{
+  public:
+    explicit monitoring_actor_t (zlink::framework::actor_context_t context) :
+        _context (std::move (context))
+    {
+    }
+
+    zlink::framework::actor_context_t &context () noexcept override
+    {
+        return _context;
+    }
+
+    const zlink::framework::actor_context_t &context () const noexcept override
+    {
+        return _context;
+    }
+
+  private:
+    zlink::framework::actor_context_t _context;
+};
+
+struct monitoring_actor_factory_t final
+    : zlink::framework::actor_factory_t<monitoring_actor_t>
+{
+    zlink::framework::task_t<std::shared_ptr<monitoring_actor_t>>
+    create (zlink::framework::actor_context_t context, std::stop_token) override
+    {
+        co_return std::make_shared<monitoring_actor_t> (std::move (context));
+    }
+};
+
+class monitoring_entry_spot_t final
+    : public zlink::framework::entry_spot_t<monitoring_actor_t>
+{
+  public:
+    explicit monitoring_entry_spot_t (zlink::framework::entry_spot_context_t context) :
+        _context (std::move (context))
+    {
+    }
+
+    zlink::framework::entry_spot_context_t &context () noexcept override
+    {
+        return _context;
+    }
+
+    const zlink::framework::entry_spot_context_t &context () const noexcept override
+    {
+        return _context;
+    }
+
+    void configure () override
+    {
+        _context.handlers ().add_actor_request<&monitoring_entry_spot_t::actor_probe> (
+          "runtime.monitoring.actor-probe");
+    }
+
+    void actor_probe (monitoring_actor_t &,
+                      zlink::framework::message_context_t &,
+                      const profile_req_t &) const
+    {
+    }
+
+    zlink::framework::task_t<zlink::framework::spot_actor_join_result_t>
+    on_actor_join (std::string_view, const zlink::framework::message_t &) override
+    {
+        co_return zlink::framework::spot_actor_join_result_t::accept ();
+    }
+
+    zlink::framework::task_t<void> on_actor_joined (monitoring_actor_t &) override
+    {
+        co_return;
+    }
+
+    zlink::framework::task_t<void> on_leave_actor (monitoring_actor_t &) override
+    {
+        co_return;
+    }
+
+  private:
+    zlink::framework::entry_spot_context_t _context;
+};
+
+inline const char *monitoring_error_kind_name (
+  zlink::framework::framework_error_kind_t kind)
+{
+    using kind_t = zlink::framework::framework_error_kind_t;
+    switch (kind) {
+      case kind_t::not_found:
+        return "not_found";
+      case kind_t::already_exists:
+        return "already_exists";
+      case kind_t::type_mismatch:
+        return "type_mismatch";
+      case kind_t::not_configured:
+        return "not_configured";
+      case kind_t::rejected:
+        return "rejected";
+      case kind_t::unavailable:
+        return "unavailable";
+      case kind_t::capacity_exceeded:
+        return "capacity_exceeded";
+      case kind_t::deadline_exceeded:
+        return "deadline_exceeded";
+      case kind_t::shutting_down:
+        return "shutting_down";
+      case kind_t::protocol_error:
+        return "protocol_error";
+      case kind_t::invalid_operation:
+        return "invalid_operation";
+      case kind_t::data_lost:
+        return "data_lost";
+      case kind_t::internal_failure:
+        return "internal_failure";
+    }
+    return "internal_failure";
+}
+
+class create_actor_handler_t
+{
+  public:
+    using dependency_types =
+      zlink::framework::dependency_list_t<zlink::framework::actor_manager_t>;
+
+    explicit create_actor_handler_t (zlink::framework::actor_manager_t &actors) :
+        _actors (actors)
+    {
+    }
+
+    zlink::framework::http_response_t
+    handle (const zlink::framework::http_request_t &request)
+    {
+        const auto actor_id = request.query_values.at ("actorId");
+        try {
+            const auto result = _actors
+              .create (zlink::framework::actor_id_t (actor_id), monitoring_actor_type)
+              .creation_request (zlink::framework::message_t::from (std::string{}))
+              .submit ()
+              .result ();
+            const auto &created = result.value ();
+            std::string provider_rid;
+            const auto accepted = std::visit (
+              [&provider_rid] (const auto &value) {
+                  using value_t = std::decay_t<decltype (value)>;
+                  if constexpr (!std::is_same_v<value_t,
+                                                zlink::framework::actor_create_rejected_t>) {
+                      provider_rid = value.actor.node_rid ().value ();
+                      return true;
+                  } else {
+                      return false;
+                  }
+              },
+              created);
+            if (!accepted)
+                return {.status = 409, .body = R"({"error":"rejected"})"};
+            return {.body = nlohmann::json{{"actorId", actor_id},
+                                           {"providerRid", provider_rid},
+                                           {"status", "created"}}
+                                 .dump ()};
+        }
+        catch (const zlink::framework::framework_exception_t &error) {
+            return {.status = 409,
+                    .body = nlohmann::json{{"error", monitoring_error_kind_name (error.kind ())},
+                                           {"detail", error.what ()}}
+                              .dump ()};
+        }
+    }
+
+  private:
+    zlink::framework::actor_manager_t &_actors;
+};
+
+class delete_actor_handler_t
+{
+  public:
+    using dependency_types =
+      zlink::framework::dependency_list_t<zlink::framework::actor_manager_t>;
+
+    explicit delete_actor_handler_t (zlink::framework::actor_manager_t &actors) :
+        _actors (actors)
+    {
+    }
+
+    zlink::framework::http_response_t
+    handle (const zlink::framework::http_request_t &request)
+    {
+        const auto actor_id = request.query_values.at ("actorId");
+        const auto found = _actors.find (zlink::framework::actor_id_t (actor_id))
+                             .result ();
+        if (!found || !found.value ())
+            return {.body = nlohmann::json{{"status", "not-found"}}
+                                  .dump ()};
+        const auto destroyed = _actors.destroy (*found.value ()).result ();
+        return {.body = nlohmann::json{{"status", destroyed ? "deleted" : "not-found"}}
+                              .dump ()};
+    }
+
+  private:
+    zlink::framework::actor_manager_t &_actors;
 };
 
 class create_subject_handler_t

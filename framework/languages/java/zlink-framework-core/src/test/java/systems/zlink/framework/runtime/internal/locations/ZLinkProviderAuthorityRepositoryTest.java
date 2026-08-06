@@ -2,6 +2,7 @@ package systems.zlink.framework.runtime.internal.locations;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.lang.reflect.Constructor;
@@ -15,6 +16,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletionStage;
@@ -32,10 +34,72 @@ import systems.zlink.framework.locationprovider.ZLinkStoreScanPageResult;
 import systems.zlink.framework.locationprovider.ZLinkStoreWriteRequest;
 import systems.zlink.framework.locationprovider.ZLinkStoreWriteResult;
 import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
+import systems.zlink.framework.locations.ZLinkActivationConcurrency;
+import systems.zlink.framework.locations.ZLinkCapacityUsage;
+import systems.zlink.framework.locations.ZLinkMeshNodeObjectRole;
+import systems.zlink.framework.locations.ZLinkObjectCapability;
+import systems.zlink.framework.locations.ZLinkObjectMaintenancePolicyKind;
+import systems.zlink.framework.locations.ZLinkPlacementCapacity;
+import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryProviderLocationStore;
 import systems.zlink.framework.runtime.locations.ZLinkActorAuthorityPayloadCodec;
 
 final class ZLinkProviderAuthorityRepositoryTest {
+    @Test
+    void opaqueProviderCapacityIsReservedCommittedAndReleasedAtomically()
+        throws Exception {
+        var provider = new ZLinkInMemoryProviderLocationStore();
+        var owners = new ZLinkProviderOwnerLeaseRepository(provider);
+        var owner = ((ZLinkOwnerLeaseClaimed) owners.claim(
+                "owner-capacity", Duration.ofMinutes(1))
+            .toCompletableFuture().get()).token();
+        var descriptors = new ZLinkProviderDescriptorRepository(provider);
+        var descriptor = capacityDescriptor(owner);
+        assertEquals(
+            ZLinkLocationWriteStatus.STORED,
+            descriptors.updateMeshNode(
+                    descriptor, ZLinkLocationWriteIntent.NEW_CLAIM)
+                .toCompletableFuture().get().status());
+        var repository = new ZLinkProviderAuthorityRepository(
+            provider, descriptors);
+        var first = capacityRequest("spot-a", descriptor, owner);
+        var second = capacityRequest("spot-b", descriptor, owner);
+
+        var reservation = assertInstanceOf(
+            ZLinkObjectReserved.class,
+            repository.reserve(first, () -> false)
+                .toCompletableFuture().get()).reservation();
+        assertInstanceOf(
+            ZLinkPlacementCapacityExhausted.class,
+            repository.reserve(second, () -> false)
+                .toCompletableFuture().get());
+        assertEquals(
+            ZLinkObjectCommitResult.COMMITTED,
+            repository.commit(reservation, new byte[] {2}, null, () -> false)
+                .toCompletableFuture().get());
+        assertInstanceOf(
+            ZLinkPlacementCapacityExhausted.class,
+            repository.reserve(second, () -> false)
+                .toCompletableFuture().get());
+
+        var current = assertInstanceOf(
+            ZLinkAuthoritySnapshot.class,
+            repository.read("spot-a", () -> false)
+                .toCompletableFuture().get());
+        assertInstanceOf(
+            ZLinkAuthorityDeleted.class,
+            repository.compareExchange(
+                    "spot-a",
+                    new ZLinkAuthorityExpectFound(current.storeVersion()),
+                    new ZLinkAuthorityDelete(),
+                    () -> false)
+                .toCompletableFuture().get());
+        assertInstanceOf(
+            ZLinkObjectReserved.class,
+            repository.reserve(second, () -> false)
+                .toCompletableFuture().get());
+    }
+
     @Test
     void aggregateMarkerRoundTripPreservesCompletionCounters()
         throws ReflectiveOperationException {
@@ -373,6 +437,61 @@ final class ZLinkProviderAuthorityRepositoryTest {
     private static byte[] encodedAuthorityRecord()
         throws ReflectiveOperationException {
         return encodedAuthorityRecord(null);
+    }
+
+    private static ZLinkObjectReservationRequest capacityRequest(
+        String authorityKey,
+        ZLinkMeshNodeDescriptor descriptor,
+        ZLinkLocationOwnerToken owner) {
+        return new ZLinkObjectReservationRequest(
+            ZLinkPlacementObjectKind.USER_SPOT,
+            authorityKey,
+            "room",
+            "inline-v1:test",
+            new byte[32],
+            4,
+            new ZLinkMeshNodeDescriptorKey(
+                descriptor.meshName(), descriptor.rid()),
+            descriptor.lifecycleGeneration(),
+            owner,
+            new byte[] {1},
+            ZLinkPlacementCapacityBundle.spot(
+                ZLinkPlacementObjectKind.USER_SPOT,
+                "room",
+                1));
+    }
+
+    private static ZLinkMeshNodeDescriptor capacityDescriptor(
+        ZLinkLocationOwnerToken owner) {
+        return new ZLinkMeshNodeDescriptor(
+            "game",
+            RoutingId.from("capacity-node"),
+            1,
+            1,
+            "tcp://127.0.0.1:7100",
+            Map.of(),
+            1,
+            List.of(new ZLinkObjectCapability(
+                ZLinkPlacementObjectKind.USER_SPOT,
+                "room",
+                ZLinkObjectMaintenancePolicyKind.DISABLED,
+                false,
+                1)),
+            ZLinkMeshNodeObjectRole.SERVER,
+            Optional.of(
+                "capacity-node-entry-00000000-0000-4000-8000-000000000001"),
+            100,
+            new ZLinkPlacementCapacity(
+                new ZLinkCapacityUsage(0, 0, 1),
+                new ZLinkCapacityUsage(0, 0, 1),
+                List.of()),
+            new ZLinkActivationConcurrency(0, 64),
+            Optional.empty(),
+            ZLinkFrameworkRuntimeState.SERVING,
+            "capacity-security",
+            owner.ownerId(),
+            owner.leaseGeneration(),
+            Instant.parse("2026-08-06T00:00:00Z"));
     }
 
     private static byte[] encodedAuthorityRecord(Object aggregate)

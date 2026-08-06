@@ -264,11 +264,46 @@ raw_mesh_connection_candidates_t::disconnect_by_connection_id (
     return std::nullopt;
 }
 
+std::vector<std::pair<std::vector<std::uint8_t>,
+                      std::vector<std::uint8_t>>>
+raw_mesh_connection_candidates_t::disconnect_by_endpoint (
+  std::string_view remote_endpoint)
+{
+    std::vector<std::pair<std::vector<std::uint8_t>,
+                          std::vector<std::uint8_t>>> removed;
+    if (remote_endpoint.empty ())
+        return removed;
+    for (auto node = _candidates.begin (); node != _candidates.end ();) {
+        for (auto candidate = node->second.begin ();
+             candidate != node->second.end ();) {
+            if (candidate->second.remote_endpoint != remote_endpoint) {
+                ++candidate;
+                continue;
+            }
+            removed.emplace_back (node->first, candidate->first);
+            candidate = node->second.erase (candidate);
+        }
+        if (node->second.empty ())
+            node = _candidates.erase (node);
+        else
+            ++node;
+    }
+    return removed;
+}
+
 std::size_t raw_mesh_connection_candidates_t::size (
   const std::vector<std::uint8_t> &node_routing_id) const
 {
     const auto found = _candidates.find (node_routing_id);
     return found == _candidates.end () ? 0 : found->second.size ();
+}
+
+bool raw_mesh_connection_candidates_t::contains (
+  const std::vector<std::uint8_t> &node_routing_id,
+  const std::vector<std::uint8_t> &connection_id) const
+{
+    const auto found = _candidates.find (node_routing_id);
+    return found != _candidates.end () && found->second.contains (connection_id);
 }
 
 raw_mesh_node_owner_t::raw_mesh_node_owner_t (raw_mesh_node_options_t options) :
@@ -516,10 +551,54 @@ void raw_mesh_node_owner_t::disconnect_peer (
     if (!_router)
         return;
     try {
-        std::lock_guard socket_lock (_socket_mutex);
         trace_mesh ("disconnect endpoint=" + endpoint
                     + " expected=" + owner_key (expected_routing_id));
+        std::optional<admitted_peer_t> admitted;
         if (!expected_routing_id.empty ()) {
+            admitted = _topology.peer (expected_routing_id);
+            if (!admitted) {
+                for (const auto &candidate : _topology.peers ()) {
+                    if (candidate.descriptor.advertised_endpoint == endpoint) {
+                        admitted = candidate;
+                        break;
+                    }
+                }
+            }
+        }
+        else {
+            for (const auto &candidate : _topology.peers ()) {
+                if (candidate.descriptor.advertised_endpoint == endpoint) {
+                    admitted = candidate;
+                    break;
+                }
+            }
+        }
+        if (admitted) {
+            trace_mesh ("disconnect admitted="
+                        + owner_key (admitted->descriptor.node_routing_id)
+                        + " connection="
+                        + owner_key (admitted->connection_id));
+            (void) _connections.disconnect (admitted->descriptor.node_routing_id,
+                                             admitted->connection_id);
+            (void) _topology.disconnect (admitted->descriptor.node_routing_id,
+                                         admitted->connection_id);
+            (void) _liveness.disconnect (admitted->descriptor.node_routing_id,
+                                         admitted->connection_id);
+            discard_pending_unadmitted_applications_locked (
+              admitted->descriptor.node_routing_id);
+        }
+        else {
+            const auto candidates = _connections.disconnect_by_endpoint (endpoint);
+            trace_mesh ("disconnect admitted=none candidates="
+                        + std::to_string (candidates.size ()));
+            for (const auto &[node_routing_id, connection_id] : candidates) {
+                (void) _topology.disconnect (node_routing_id, connection_id);
+                (void) _liveness.disconnect (node_routing_id, connection_id);
+                discard_pending_unadmitted_applications_locked (node_routing_id);
+            }
+        }
+        if (!expected_routing_id.empty ()) {
+            std::lock_guard socket_lock (_socket_mutex);
             try {
                 _router->disconnect_rid (
                   zlink::routing_id_t::from (expected_routing_id));
@@ -531,6 +610,7 @@ void raw_mesh_node_owner_t::disconnect_peer (
             }
         }
         try {
+            std::lock_guard socket_lock (_socket_mutex);
             // Remove the configured endpoint after terminating the current
             // RID. Otherwise the binding may reconnect the same stale
             // endpoint. This step must still run when the RID index is stale.
@@ -539,6 +619,7 @@ void raw_mesh_node_owner_t::disconnect_peer (
         catch (...) {
         }
         _outbound_endpoints.erase (endpoint);
+        trace_mesh ("disconnect endpoint-complete=" + endpoint);
     }
     catch (...) {
     }
@@ -755,6 +836,12 @@ void raw_mesh_node_owner_t::discard_pending_unadmitted_applications (
   const std::vector<std::uint8_t> &node_routing_id)
 {
     std::lock_guard lifecycle_lock (_lifecycle_mutex);
+    discard_pending_unadmitted_applications_locked (node_routing_id);
+}
+
+void raw_mesh_node_owner_t::discard_pending_unadmitted_applications_locked (
+  const std::vector<std::uint8_t> &node_routing_id)
+{
     std::size_t discarded = 0;
     for (auto pending = _pending_unadmitted_applications.begin ();
          pending != _pending_unadmitted_applications.end ();) {
@@ -2038,13 +2125,21 @@ raw_mesh_pump_result_t raw_mesh_node_owner_t::pump_one (
                     && expected->second.lifecycle_generation != 0)
                     expected_descriptor = expected->second;
             }
-            const auto admission =
-              expected_descriptor
-                ? _topology.admit (
-                    descriptor, connection_id, direction,
-                    *expected_descriptor)
-                : _topology.admit (
-                    descriptor, connection_id, direction);
+            peer_admission_result_t admission;
+            {
+                std::lock_guard lifecycle_lock (_lifecycle_mutex);
+                if (!_connections.contains (received->source_routing_id,
+                                            connection_id)) {
+                    trace_mesh ("admission-discard reason=connection-disconnected");
+                    return raw_mesh_pump_result_t::infrastructure;
+                }
+                admission = expected_descriptor
+                  ? _topology.admit (
+                      descriptor, connection_id, direction,
+                      *expected_descriptor)
+                  : _topology.admit (
+                      descriptor, connection_id, direction);
+            }
             if (admission == peer_admission_result_t::not_required) {
                 trace_admission_phase (
                   received->source_routing_id,

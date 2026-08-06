@@ -1,4 +1,4 @@
-[한국어](zmp-protocol.ko.md)
+[한국어](zmp-protocol.en.md)
 
 # ZMP Protocol
 

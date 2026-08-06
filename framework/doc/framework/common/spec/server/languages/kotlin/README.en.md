@@ -6,7 +6,7 @@ the [Java Public Contract](../java/README.en.md) and aren't copied and
 redefined here.
 
 The Kotlin coroutine and DSL signatures are based on the
-[Per-Feature Interfaces](interfaces/README.ko.md). A server extension
+[Per-Feature Interfaces](interfaces/README.en.md). A server extension
 waiting on a Java API is also included in this directory's formal
 contract. Kotlin source and contract tests must follow this contract.
 The client Stream Connector's coroutine wrapper and `Flow` surface are
@@ -34,7 +34,7 @@ Framework-issued reference, unchanged. Kotlin only adds `send` and
 `request` extensions to the ID-only direct call, and doesn't declare a
 suspend `requestToSpot` that conflicts with the Java member. The exact
 extension and Store type reuse are fixed by the
-[Per-Feature Interfaces](interfaces/README.ko.md).
+[Per-Feature Interfaces](interfaces/README.en.md).
 
 The shared JVM runtime implements placement and the activation barrier
 using the Java binding's public raw socket API. It doesn't use the Core
@@ -45,7 +45,7 @@ and doesn't use a process-local handle or separate address.
 
 The official Redis location extension's Kotlin call boundary and Java
 type reuse rule are fixed by
-[Location And Maintenance](interfaces/location-maintenance.ko.md).
+[Location And Maintenance](interfaces/location-maintenance.en.md).
 
 ## Cancellation Argument
 

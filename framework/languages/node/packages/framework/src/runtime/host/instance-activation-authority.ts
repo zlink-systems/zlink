@@ -195,6 +195,12 @@ implements ServiceAsyncInstanceActivationAuthority {
         reserved.kind
       );
       await this.deleteOrphan(stored.reference);
+      if (reserved.kind === 'placementCapacityExhausted') {
+        throw createInternalFrameworkException(
+          ZLinkFrameworkInternalErrorKind.PlacementCapacityExhausted,
+          `Instance Spot placement capacity is exhausted for '${String(target.targetSpotId)}'.`
+        );
+      }
       throw new Error(`Instance activation reservation failed: ${reserved.kind}.`);
     }
     const reservation: ServiceInstanceActivationReservation = {

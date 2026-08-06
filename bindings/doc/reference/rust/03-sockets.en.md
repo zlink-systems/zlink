@@ -1,4 +1,4 @@
-[한국어](03-sockets.ko.md) | English
+[한국어](https://zlink-systems.github.io/zlink/ko/bindings/reference/rust/03-sockets/) | English
 
 [Reference index](README.en.md)
 

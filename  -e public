@@ -1,0 +1,18 @@
+     1	namespace Zlink.Framework.Runtime.Host;
+2
+     3	internal sealed class ZLinkFrameworkHostLifecycleState
+     4	{
+     5	    private int _state = (int)ZLinkFrameworkRuntimeState.Preparing;
+6
+     7	    internal ZLinkFrameworkRuntimeState State =>
+     8	        (ZLinkFrameworkRuntimeState)Volatile.Read(ref _state);
+9
+    10	    internal event Action<ZLinkFrameworkRuntimeState>? Changed;
+11
+    12	    internal void TransitionTo(ZLinkFrameworkRuntimeState state)
+    13	    {
+    14	        if (Interlocked.Exchange(ref _state, (int)state) == (int)state)
+    15	            return;
+    16	        Changed?.Invoke(state);
+    17	    }
+    18	}

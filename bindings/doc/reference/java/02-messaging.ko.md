@@ -1,4 +1,4 @@
-한국어 | [English](02-messaging.en.md)
+한국어 | [English](https://zlink-systems.github.io/zlink/bindings/reference/java/02-messaging/)
 
 [레퍼런스 목차](README.ko.md)
 

@@ -2,7 +2,7 @@
 title: "Raw socket monitoring"
 ---
 
-[English](06-monitoring.en.md)
+[English](06-monitoring.ko.md)
 
 <!-- zlink-nav:start -->
 [가이드 목록](README.ko.md) | [이전: TLS와 WSS](05-tls-security.ko.md) | [다음: Core 성능](10-performance.ko.md)

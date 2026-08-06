@@ -61,7 +61,7 @@ developer worries about less.** The application deals only with domain units
 
 - **You call knowing only the channel name** — you don't know the target host/port/stub.
 - **Service location and peer distribution** are handled by location-store-based
-  auto-connect ([10-location](10-location.ko.md)).
+  auto-connect ([10-location](10-location.en.md)).
 - **Request correlation and waiting for a reply** are handled by the framework.
 - **Client connection lifecycle and packet framing** are handled by STREAM.
 - **Serial state for a room/zone/symbol** is handled by the SPOT execution queue.
@@ -258,7 +258,7 @@ sequenceDiagram
 | "Reuse stubs/channels" | The route client is a DI singleton and the framework manages the MeshNode connection lifecycle | Nothing to create per call |
 | RPC deadline | `RequestToChannel(...).Timeout(...)` | The reply-wait duration |
 | L7 load balancing (Envoy/Istio) | Channel name + store auto-connect distributes the peer | No sidecar needed |
-| Interceptor | Handler filter | [5](05-channel-messaging.ko.md) §5 |
+| Interceptor | Handler filter | [5](05-channel-messaging.en.md) §5 |
 | Event broker (Kafka/NATS) | fanout channel pub/sub | Real-time fan-out only. A broker stays for persistence/replay |
 | Unified observability (mesh telemetry) | The status stream and standard diagnostics | [11. Monitoring](11-monitoring.en.md) |
 | Bidirectional streaming | STREAM session | Admits external clients. HTTP-edge policy is separate |
@@ -398,9 +398,9 @@ belongs to
 ## 8. Related Documents
 
 - Common business scenarios: [Framework Common Sample Scenarios](../../../common/sample/README.en.md)
-- How to use it: [Channel Messaging](05-channel-messaging.ko.md)
-- Surface mapping: [05-channel-messaging](05-channel-messaging.ko.md) §0, [13. Interface Catalog](13-interface-catalog.en.md) §1.6
-- Samples as runnable code: [14-samples](14-samples.ko.md)
+- How to use it: [Channel Messaging](05-channel-messaging.en.md)
+- Surface mapping: [05-channel-messaging](05-channel-messaging.en.md) §0, [13. Interface Catalog](13-interface-catalog.en.md) §1.6
+- Samples as runnable code: [14-samples](14-samples.en.md)
 
 ### References
 

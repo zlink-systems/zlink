@@ -208,5 +208,15 @@ public final class NativeLayouts {
             PathElement.groupElement("local_addr"));
     public static final long MONITOR_REMOTE_OFFSET = MONITOR_EVENT_LAYOUT.byteOffset(
             PathElement.groupElement("remote_addr"));
+    public static final long MONITOR_CONNECTION_ID_OFFSET = MONITOR_EVENT_LAYOUT.byteOffset(
+            PathElement.groupElement("connection_id"));
+    public static final long MONITOR_TRANSPORT_PAIR_ID_OFFSET = MONITOR_EVENT_LAYOUT.byteOffset(
+            PathElement.groupElement("transport_pair_id"));
+    public static final long MONITOR_TRANSPORT_PAIR_GENERATION_OFFSET = MONITOR_EVENT_LAYOUT.byteOffset(
+            PathElement.groupElement("transport_pair_generation"));
+    public static final long MONITOR_TRANSPORT_LANE_OFFSET = MONITOR_EVENT_LAYOUT.byteOffset(
+            PathElement.groupElement("transport_lane"));
+    public static final long MONITOR_FLAGS_OFFSET = MONITOR_EVENT_LAYOUT.byteOffset(
+            PathElement.groupElement("flags"));
 
 }
