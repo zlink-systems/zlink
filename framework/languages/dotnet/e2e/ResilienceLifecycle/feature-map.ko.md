@@ -33,7 +33,7 @@
 |---|---|---|
 | RL-E2 | 미구현 | RouteMesh·ClientServer half-open 판정 |
 | RL-E3 | 구현 | old request를 application gate에 보류한 뒤 old ephemeral connection을 닫고 replacement connection에서 새 marker의 reply를 받은 다음 old gate를 해제해 stale reply가 새 operation을 완료하지 않음을 확인했다(`logs/20260806-154109-2297086`). |
-| RL-E4 | 미구현 | Connection loss와 terminal completion |
+| RL-E4 | 구현 | admission 전, handler 진입 직후, reply 직전의 세 connection-loss race variant에서 public terminal이 정확히 하나이고 같은 marker의 handler completion이 한 번 이하임을 확인했다(`logs/20260806-155645-473165`). |
 | RL-E5 | 미구현 | Store 독립과 liveness cleanup |
 | RL-F1 | 미구현 | Preflight·admission seal capacity 경쟁 |
 | RL-F2 | 미구현 | Actor owner ABA fence |
