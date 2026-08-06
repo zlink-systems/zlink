@@ -725,13 +725,13 @@ function isInstanceRouteStaleError(error: unknown): error is ZLinkFrameworkExcep
   if (!(error instanceof ZLinkFrameworkException)) return false;
   const kind = internalFrameworkErrorKind(error);
   // RequestTargetNotFound from an existing route is a pre-admission route
-  // lookup failure. ActorLocationStale can be reported after the routed
-  // request has crossed the transport boundary, so resubmitting the same
-  // application operation could execute it twice.
+  // lookup failure. A stale owner result is terminal for this application
+  // operation: the routed request may already have crossed the transport
+  // boundary, so refreshing the route and resubmitting it could execute the
+  // same operation twice. Instance cold activation is selected only when the
+  // authority resolver itself reports that the Ready route is absent.
   if (kind === ZLinkFrameworkInternalErrorKind.RequestTargetNotFound) return true;
-  return (error as ZLinkFrameworkException & { readonly physicalSubmission?: boolean })
-    .physicalSubmission !== true
-    && kind === ZLinkFrameworkInternalErrorKind.ActorLocationStale;
+  return false;
 }
 
 function isMissingInstanceRetryError(error: unknown): error is ZLinkFrameworkException {

@@ -5,11 +5,11 @@
   "abiMajor": 0,
   "runtime": {
     "path": "lib/libzlink.so.0.10.0",
-    "sha256": "d96ca4ada266c2c8689d608508b070a2300d885f7470f6595e236b603c75ac32",
+    "sha256": "6ba35435168daf1369617dcbbe5dcdfd7e9e71513ac3a88d3578f03f3c963ed0",
     "soname": "libzlink.so.0"
   },
   "source": {
-    "revision": "5b642524f0d875493713836f05dff51cfce3b467",
+    "revision": "e3e43237c6007f1d0a5d3ebe6e43bf7df71e5706",
     "dirty": true
   },
   "files": [
@@ -63,11 +63,11 @@
     },
     {
       "path": "lib/libzlink.a",
-      "sha256": "73bea8b2d6ff77e7c1d6a05a11928df2d8d2aacf0f582a3bd660d4fec47a0170"
+      "sha256": "0ea0dcaca730838cda0c24fee8897123ff055dc667f9f84054dd89ad692b84b1"
     },
     {
       "path": "lib/libzlink.so.0.10.0",
-      "sha256": "d96ca4ada266c2c8689d608508b070a2300d885f7470f6595e236b603c75ac32"
+      "sha256": "6ba35435168daf1369617dcbbe5dcdfd7e9e71513ac3a88d3578f03f3c963ed0"
     },
     {
       "path": "lib/pkgconfig/libzlink.pc",

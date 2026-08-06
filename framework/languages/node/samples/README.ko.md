@@ -1,6 +1,6 @@
 # ZLink Node.js Framework Samples
 
-이 디렉터리에는 Node.js/NestJS framework의 11.1.0 공개 API를 사용하는 일곱 샘플이 있다. 각 샘플의
+이 디렉터리에는 Node.js/NestJS framework의 0.10.0 공개 API를 사용하는 일곱 샘플이 있다. 각 샘플의
 업무 흐름과 검증 기준은
 [framework 공통 sample 문서](../../../doc/framework/common/sample/README.ko.md)를 따른다.
 

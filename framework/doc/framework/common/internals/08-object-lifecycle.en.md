@@ -215,6 +215,12 @@ already-accepted application request — it's an owner-route refresh to
 decide cold activation. This behavior isn't applied to a normal Spot's
 stale-route error.
 
+The Node.js runtime applies the same boundary. `requestToSpotAddress` sends
+only an Instance intent whose resolver reports the route absence as
+`RequestTargetNotFound` before admission through the cold-activation path.
+When an already-Ready route returns `ActorLocationStale`, it does not
+resubmit the application request and instead returns a terminal error.
+
 The idle-cleanup state of other Framework languages, and the common
 process-verification result, aren't treated as complete just from this
 .NET structural explanation. Each language must separately confirm the

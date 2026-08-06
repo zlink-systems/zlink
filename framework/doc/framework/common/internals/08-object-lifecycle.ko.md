@@ -174,6 +174,11 @@ activation을 dispose하며, Location Store의 Spot location을 release한다. �
 아니라, cold activation을 결정하기 위한 owner route 갱신이다. 일반 Spot의 stale route
 오류에는 이 동작을 적용하지 않는다.
 
+Node.js runtime도 같은 경계를 적용한다. `requestToSpotAddress`는 resolver가 admission 전에
+route 부재를 `RequestTargetNotFound`로 확인한 Instance intent만 cold activation 경로로
+보낸다. 이미 Ready 상태였던 route에서 `ActorLocationStale`가 반환되면 해당 application
+request를 다시 제출하지 않고 terminal error로 전달한다.
+
 다른 Framework 언어의 유휴 정리 상태와 공통 process 검증 결과는 이 .NET 구조 설명만으로
 완료로 간주하지 않는다. 각 언어는 같은 종료 조건과 process evidence를 별도로 확인해야
 한다.
