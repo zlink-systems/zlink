@@ -6,7 +6,44 @@ using Zlink.Framework.E2E.Configuration;
 
 internal sealed class FaultState
 {
+    private readonly object _gate = new();
+    private readonly Dictionary<string, TaskCompletionSource<bool>> _heldRequests =
+        new(StringComparer.Ordinal);
+
     public string Mode { get; set; } = "none";
+
+    public void HoldRequest(string marker)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(marker);
+        lock (_gate)
+        {
+            _heldRequests[marker] = new TaskCompletionSource<bool>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+        }
+    }
+
+    public bool TryGetRequestGate(
+        string marker,
+        out TaskCompletionSource<bool> gate)
+    {
+        lock (_gate)
+        {
+            return _heldRequests.TryGetValue(marker, out gate!);
+        }
+    }
+
+    public bool ReleaseRequest(string marker)
+    {
+        TaskCompletionSource<bool>? gate;
+        lock (_gate)
+        {
+            if (!_heldRequests.Remove(marker, out gate))
+                return false;
+        }
+
+        gate.TrySetResult(true);
+        return true;
+    }
 }
 
 internal sealed class EvidenceStore

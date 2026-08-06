@@ -37,6 +37,8 @@ var scenarios = new (string Name, Func<Task> Run)[]
 {
     ("RL-E1", () => RlE1OrderlyDisconnectScenario.RunAsync(
         consumer, registry, processes, providerA, providerB)),
+    ("RL-E3", () => RlE3StaleReplyScenario.RunAsync(
+        options, providerA, providerB)),
     ("RL-A1", () => RlA1ProviderRestartScenario.RunAsync(consumer, registry, processes, providerA, providerB)),
     ("RL-A2", () => RlA2ProviderEndpointRemapScenario.RunAsync(
         consumer, registry, processes, providerA, providerB)),

@@ -47,6 +47,26 @@ internal static class ProviderEndpoints
             evidence.Add($"admin|rid={evidence.Rid}|action=fault|mode={mode}");
             return Results.Ok(new { status = "fault", mode });
         });
+        app.MapPost("/admin/profile/hold/{marker}", (
+            string marker,
+            [FromServices] FaultState fault,
+            [FromServices] EvidenceStore evidence) =>
+        {
+            fault.HoldRequest(marker);
+            evidence.Add($"admin|rid={evidence.Rid}|action=profile-hold|marker={marker}");
+            return Results.Ok(new { status = "held", marker });
+        });
+        app.MapPost("/admin/profile/release/{marker}", (
+            string marker,
+            [FromServices] FaultState fault,
+            [FromServices] EvidenceStore evidence) =>
+        {
+            if (!fault.ReleaseRequest(marker))
+                return Results.NotFound(new { status = "not-held", marker });
+
+            evidence.Add($"admin|rid={evidence.Rid}|action=profile-release|marker={marker}");
+            return Results.Ok(new { status = "released", marker });
+        });
         app.MapPost("/admin/weight/exclude", (
             [FromServices] IZLinkRouteMeshRuntimeOptions runtimeOptions,
             [FromServices] EvidenceStore evidence) =>

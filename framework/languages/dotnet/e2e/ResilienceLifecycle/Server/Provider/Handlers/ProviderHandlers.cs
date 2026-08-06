@@ -24,6 +24,12 @@ internal sealed class ProfileRequestHandler(EvidenceStore evidence, FaultState f
             await Task.Delay(TimeSpan.FromMilliseconds(700), cancellationToken);
         }
 
+        if (fault.TryGetRequestGate(request.Marker, out var gate))
+        {
+            evidence.Add($"profile-start|rid={evidence.Rid}|marker={request.Marker}|value=held");
+            await gate.Task.WaitAsync(cancellationToken);
+        }
+
         evidence.Add($"profile-request|rid={evidence.Rid}|marker={request.Marker}|value={request.Value}");
         return new ProfileRes($"profile:{request.Value}", evidence.Rid, request.Marker);
     }

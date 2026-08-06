@@ -87,11 +87,13 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         _observedSpotAuthorities = new();
     private readonly ConcurrentDictionary<ObservedActorAuthorityKey, ObservedAuthority>
         _observedActorAuthorities = new();
+    private readonly ConcurrentQueue<RoutingId> _transportDisconnects = new();
     private readonly List<RawMeshMonitor> _monitors = new();
     private readonly HashSet<Task> _inboundOperations = [];
     private readonly ulong _lifecycleGeneration = NewNonZeroToken();
 
     private IRouterSocket? _socket;
+    private ISocketMonitor? _socketMonitor;
     private IPoller? _poller;
     private CancellationTokenSource? _stop;
     private Task? _receiveLoop;
@@ -238,6 +240,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             }
 
             var socket = _context.CreateRouterSocket();
+            ISocketMonitor? socketMonitor = null;
             IPoller? poller = null;
             try
             {
@@ -264,6 +267,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                         StringComparison.Ordinal))
                     _advertisedEndpoint = _bindEndpoint;
 
+                socketMonitor = socket.MonitorOpen(
+                    SocketEvent.Disconnected | SocketEvent.Closed);
+                socketMonitor.OnEvent(OnSocketMonitorEvent);
+
                 poller = Systems.Zlink.Zlink.CreatePoller();
                 // One poller owns both inbound frames and request completion.
                 // Registering only PollIn lets the binding create a second
@@ -271,11 +278,14 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 // queue concurrently during disconnect and close.
                 poller.Add(
                     socket,
-                    PollEventFlags.PollIn | PollEventFlags.PollCompletion,
+                    PollEventFlags.PollIn | PollEventFlags.PollErr
+                    | PollEventFlags.PollCompletion,
                     1);
                 _socket = socket;
+                _socketMonitor = socketMonitor;
                 _activeSocketGeneration = _lifecycleGeneration;
                 _poller = poller;
+                socketMonitor = null;
                 poller = null;
                 _stop = new CancellationTokenSource();
                 _state = MeshNodeState.Started;
@@ -294,6 +304,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 _poller?.Dispose();
                 _poller = null;
                 poller?.Dispose();
+                _socketMonitor?.Dispose();
+                _socketMonitor = null;
+                socketMonitor?.Dispose();
                 socket.Dispose();
                 _socket = null;
                 _activeSocketGeneration = 0;
@@ -2207,13 +2220,16 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         await CloseInboundOperationAdmissionAsync(shutdownToken).ConfigureAwait(false);
 
         IRouterSocket? socket;
+        ISocketMonitor? socketMonitor;
         IPoller? poller;
         lock (_socketGate)
         {
             _activeSocketGeneration = 0;
             socket = _socket;
+            socketMonitor = _socketMonitor;
             poller = _poller;
             _socket = null;
+            _socketMonitor = null;
             _poller = null;
         }
 
@@ -2237,11 +2253,15 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             mailbox.Dispose();
         _ownedMailboxes.Clear();
         _peerControlRetry.Clear();
+        while (_transportDisconnects.TryDequeue(out _))
+        {
+        }
         foreach (var spot in _spots.Values)
             await spot.DisposeAsync().ConfigureAwait(false);
         _spots.Clear();
 
         poller?.Dispose();
+        socketMonitor?.Dispose();
         socket?.Dispose();
         _stop?.Dispose();
         Publish(MeshMonitorEventKind.StateChanged);
@@ -6245,6 +6265,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private void ProcessInfrastructure(long now)
     {
         FlushPendingInfrastructureCompletions();
+        DrainTransportDisconnects(now);
         Peer[] peers;
         lock (_gate)
             peers = _peersByIntent.Values.ToArray();
@@ -6311,6 +6332,52 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             // edge that may already have been coalesced.
             if (_peerControlRetry.Count != 0)
                 Interlocked.Exchange(ref _peerControlRetryReady, 1);
+        }
+    }
+
+    private void OnSocketMonitorEvent(MonitorEvent value)
+    {
+        if (value.Event is not (MonitorEventType.Disconnected or MonitorEventType.Closed)
+            || value.RoutingId is not { } routingId
+            || routingId.IsEmpty)
+            return;
+
+        // Monitor callbacks run on the binding dispatch thread. Only enqueue
+        // the identity here; peer state remains owned by ReceiveLoop.
+        _transportDisconnects.Enqueue(routingId);
+    }
+
+    private void DrainTransportDisconnects(long now)
+    {
+        while (_transportDisconnects.TryDequeue(out var routingId))
+        {
+            Peer? peer;
+            lock (_gate)
+            {
+                peer = _peersByRid.TryGetValue(routingId, out var indexed)
+                    ? indexed
+                    : _peersByIntent.Values.FirstOrDefault(candidate =>
+                        candidate.PhysicalRoutingId == routingId);
+                if (peer is null || !peer.Admitted)
+                    continue;
+
+                peer.Admitted = false;
+                peer.State = MeshPeerState.Connecting;
+                peer.Admission = null;
+                peer.Liveness = null;
+                if (!peer.RoutingId.IsEmpty
+                    && _peersByRid.TryGetValue(peer.RoutingId, out var current)
+                    && ReferenceEquals(current, peer))
+                    _peersByRid.Remove(peer.RoutingId);
+                _peerControlRetry.RemoveTarget(peer.PhysicalRoutingId);
+                RebuildChannelSelectionPlansUnderLock();
+                peer.NextAdmissionTimestamp = now;
+                _state = _peersByRid.Count == 0
+                    ? MeshNodeState.Started
+                    : MeshNodeState.PartialReady;
+            }
+
+            Publish(MeshMonitorEventKind.PeerClosed, peerRid: peer.RoutingId);
         }
     }
 
