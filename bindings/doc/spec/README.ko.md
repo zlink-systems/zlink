@@ -1966,6 +1966,12 @@ public API는 part helper 호출 결과를 언어별 multipart 객체로 조립�
 - `RoutingId` 필드는 typed `RoutingId` 하나만 둔다. `RoutingId: string` +
   `RoutingIdValue: RoutingId?` 같은 이중 property 금지.
 
+.NET binding은 추가로 `TopicMessage.ReleaseForReuse()`를 제공한다. 이 메서드는 현재
+part와 metadata를 해제하고 내부 topic 수신 버퍼를 유지해 다음 `Subscribe`에서 재사용하게
+한다. 객체가 열린 상태에서만 사용할 수 있으며 terminal `Dispose()` 뒤에는
+`ObjectDisposedException`을 던지고 객체를 다시 열지 않는다. 이 메서드는 .NET lifecycle을
+위한 언어별 표현이며 모든 binding이 같은 이름을 제공해야 한다는 뜻은 아니다.
+
 #### `Received`
 
 PAIR / DEALER / ROUTER / STREAM / SPOT routed recv 결과를 담는 단일 canonical

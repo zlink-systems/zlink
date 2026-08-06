@@ -17,15 +17,13 @@ internal sealed class ZLinkFrameworkComponentStateFactory(
                 registration)
             .ConfigureAwait(false);
 
-        var channelAdapter = backendAdapterFactory.CreateChannelAdapter();
-        IZLinkBackendContext? context = null;
+        IZLinkBackendRuntimeContext? context = null;
         ZLinkFrameworkComponentState? state = null;
 
         try
         {
-            context = channelAdapter.CreateContext();
-            channelAdapter.ConfigureAutoHwm(
-                context,
+            context = backendAdapterFactory.CreateRuntimeContext();
+            context.ConfigureAutoHwm(
                 registration.InboundDispatchOptions.ApplicationHwmProfile);
             state = new ZLinkFrameworkComponentState(
                 context,
@@ -33,8 +31,8 @@ internal sealed class ZLinkFrameworkComponentStateFactory(
                 frameworkRuntime.Services,
                 frameworkRuntime.PrepareErrorSink(),
                 frameworkRuntime.ExecutionOwner);
-            await channels.InitializeInboundChannelsAsync(state, channelAdapter).ConfigureAwait(false);
-            await channels.InitializePublisherChannelsAsync(state, channelAdapter).ConfigureAwait(false);
+            await channels.InitializeInboundChannelsAsync(state).ConfigureAwait(false);
+            await channels.InitializePublisherChannelsAsync(state).ConfigureAwait(false);
             await spots.InitializeSpotNodesAsync(state).ConfigureAwait(false);
             state.BuildRouteMeshChannelIndex();
             await streams.InitializeStreamNodesAsync(state).ConfigureAwait(false);

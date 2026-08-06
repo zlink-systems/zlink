@@ -58,7 +58,6 @@ internal sealed class ZLinkChannelReceiveLoop(
                         continue;
                     }
                     var owned = received;
-                    received = null;
                     var payloadBytes = MeasurePayloadBytes(owned.Parts);
                     var overageReservation = inboundDispatchBudget.Received(
                         receivePermit,
@@ -77,6 +76,11 @@ internal sealed class ZLinkChannelReceiveLoop(
                             cancellationToken,
                             overageReservation)
                         .ConfigureAwait(false);
+                    // PostAsync either handed ownership to the queue or ran
+                    // the rejection callback. Keep the storage local until that
+                    // result is known so a pre-handoff exception is returned by
+                    // this loop's finally block.
+                    received = null;
                 }
                 catch (Exception) when (cancellationToken.IsCancellationRequested)
                 {
@@ -267,9 +271,7 @@ internal sealed class ZLinkChannelReceiveLoop(
                     if (!inboundDispatchBudget.TryAcquireReceive(
                             out receivePermit))
                         continue;
-                    if (!subscriber.Subscribe(
-                            topicMessage!,
-                            RecvFlags.DontWait))
+                    if (!subscriber.TryReceive(topicMessage!))
                         continue;
 
                     // The beacon shares the publisher's PUB socket, so a manual
@@ -281,7 +283,9 @@ internal sealed class ZLinkChannelReceiveLoop(
                     {
                         if (ZLinkFanoutLivenessProtocol.IsValidBeacon(topicMessage))
                         {
-                            topicMessagePool.Return(topicMessage);
+                            var completed = topicMessage;
+                            topicMessage = null;
+                            topicMessagePool.Return(completed);
                             topicMessage = topicMessagePool.Rent();
                             continue;
                         }
@@ -297,7 +301,6 @@ internal sealed class ZLinkChannelReceiveLoop(
                     }
 
                     var owned = topicMessage!;
-                    topicMessage = topicMessagePool.Rent();
                     var payloadBytes = MeasurePayloadBytes(owned.Parts);
                     var overageReservation = inboundDispatchBudget.Received(
                         receivePermit,
@@ -314,6 +317,12 @@ internal sealed class ZLinkChannelReceiveLoop(
                             cancellationToken,
                             overageReservation)
                         .ConfigureAwait(false);
+                    // The queue or its rejection callback owns the storage as
+                    // soon as PostAsync returns. Clear the local owner before
+                    // renting the next storage so a rent failure cannot return
+                    // the handed-off envelope a second time.
+                    topicMessage = null;
+                    topicMessage = topicMessagePool.Rent();
                 }
                 catch (Exception) when (cancellationToken.IsCancellationRequested)
                 {
@@ -369,9 +378,7 @@ internal sealed class ZLinkChannelReceiveLoop(
                     if (!inboundDispatchBudget.TryAcquireReceive(
                             out receivePermit))
                         continue;
-                    if (!subscriber.Subscribe(
-                            topicMessage!,
-                            RecvFlags.DontWait))
+                    if (!subscriber.TryReceive(topicMessage!))
                         continue;
 
                     if (ZLinkFanoutLivenessProtocol.IsReservedTopic(
@@ -380,7 +387,9 @@ internal sealed class ZLinkChannelReceiveLoop(
                         if (ZLinkFanoutLivenessProtocol.IsValidBeacon(topicMessage))
                         {
                             onActivity();
-                            topicMessagePool.Return(topicMessage);
+                            var completed = topicMessage;
+                            topicMessage = null;
+                            topicMessagePool.Return(completed);
                             topicMessage = topicMessagePool.Rent();
                             continue;
                         }
@@ -391,7 +400,6 @@ internal sealed class ZLinkChannelReceiveLoop(
 
                     onActivity();
                     var owned = topicMessage!;
-                    topicMessage = topicMessagePool.Rent();
                     var payloadBytes = MeasurePayloadBytes(owned.Parts);
                     var overageReservation = inboundDispatchBudget.Received(
                         receivePermit,
@@ -408,6 +416,8 @@ internal sealed class ZLinkChannelReceiveLoop(
                             cancellationToken,
                             overageReservation)
                         .ConfigureAwait(false);
+                    topicMessage = null;
+                    topicMessage = topicMessagePool.Rent();
                 }
                 catch (Exception) when (cancellationToken.IsCancellationRequested)
                 {
@@ -459,10 +469,10 @@ internal sealed class ZLinkChannelReceiveLoop(
         return total;
     }
 
-    private static bool IsReadable(PollEventFlags readiness) =>
-        (readiness & (PollEventFlags.PollIn
-                      | PollEventFlags.PollErr
-                      | PollEventFlags.PollPri)) != 0;
+    private static bool IsReadable(ZLinkBackendSocketReadiness readiness) =>
+        (readiness & (ZLinkBackendSocketReadiness.Readable
+                      | ZLinkBackendSocketReadiness.Error
+                      | ZLinkBackendSocketReadiness.Priority)) != 0;
 
     private readonly record struct ClientServerDispatchWork(
         string ChannelName,

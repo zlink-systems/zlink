@@ -204,7 +204,7 @@ public sealed class SharedAsyncDisposalTests
     public async Task FrameworkRuntimeState_Concurrent_Dispose_Callers_Share_Blocked_Context_Cleanup()
     {
         await using var services = new ServiceCollection().BuildServiceProvider();
-        var context = DispatchProxy.Create<IZLinkBackendContext, BlockingContextProxy>();
+        var context = DispatchProxy.Create<IZLinkBackendRuntimeContext, BlockingContextProxy>();
         var proxy = (BlockingContextProxy)(object)context;
         var failure = new InvalidOperationException("context cleanup failed");
         proxy.DisposeFailure = failure;
@@ -387,9 +387,7 @@ public sealed class SharedAsyncDisposalTests
 
     private sealed class EmptyBackendAdapterFactory : IZLinkBackendAdapterFactory
     {
-        public IZLinkChannelBackendAdapter CreateChannelAdapter() => null!;
-        public IZLinkSpotBackendAdapter CreateSpotAdapter() => null!;
-        public IZLinkStreamBackendAdapter CreateStreamAdapter() => null!;
+        public IZLinkBackendRuntimeContext CreateRuntimeContext() => null!;
         public IZLinkMonitoringBackendAdapter CreateMonitoringAdapter() => new EmptyMonitoringAdapter();
     }
 
@@ -426,7 +424,6 @@ public sealed class SharedAsyncDisposalTests
             ArgumentNullException.ThrowIfNull(targetMethod);
             return targetMethod.Name switch
             {
-                nameof(IZLinkBackendContext.Shutdown) => null,
                 nameof(IAsyncDisposable.DisposeAsync) => Dispose(),
                 _ => throw new NotSupportedException(targetMethod.Name)
             };

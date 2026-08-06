@@ -48,8 +48,6 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
         ZLinkFrameworkRuntime runtime,
         ZLinkFrameworkRegistration frameworkRegistration,
         ZLinkSpotNodeRegistration registration,
-        IZLinkBackendContext context,
-        IZLinkChannelBackendAdapter channelAdapter,
         IZLinkBackendSpotNode node,
         ZLinkCompletionAdmissionOwner completionAdmission,
         ZLinkTimerScheduler timerScheduler,

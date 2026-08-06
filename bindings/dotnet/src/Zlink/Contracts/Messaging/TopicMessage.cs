@@ -50,6 +50,20 @@ public sealed partial class TopicMessage : IDisposable
     }
 
     /// <summary>
+    ///     Releases the message parts and metadata while keeping this instance
+    ///     usable as caller-provided storage for a later <c>Subscribe</c> call.
+    /// </summary>
+    /// <remarks>
+    ///     Call this only after consumers have finished using the current
+    ///     message. Unlike <see cref="Dispose" />, this method retains the
+    ///     internal topic receive buffers so repeated receives can reuse them.
+    /// </remarks>
+    public void ReleaseForReuse()
+    {
+        ResetForReuse();
+    }
+
+    /// <summary>
     ///     Returns the first message part; it stays owned by this envelope.
     /// </summary>
     public Message FirstPart()

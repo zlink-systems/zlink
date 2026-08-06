@@ -16,8 +16,14 @@ by the [common spec](../../common/spec/README.en.md) and the .NET exact-interfac
 ## 1. Layering rule
 
 The `.NET` implementation follows this responsibility graph. The `Framework public/domain
-contract` and `Framework semantic runtime core` do not know binding types or binding options.
-Code that calls binding types stays inside the last two layers.
+contract` never exposes binding types or binding options. The internal contracts under
+`Runtime/Backend/Contracts` are the binding-facing seam at the bottom of the Framework runtime,
+not a Framework public/domain model: they may carry the binding's public `Message`, `Received`,
+`TopicMessage`, and flag types when that preserves caller-provided storage and zero-copy
+ownership. These types must stop at this seam and must not spread into Framework public APIs,
+semantic application models, or binding-independent documentation. Meaning, lifecycle,
+readiness, error, and concurrency translation remains in the adapter implementation that owns
+the seam.
 
 ```text
 +----------------------------------------------+
@@ -65,20 +71,31 @@ remove an internal Framework surface that only forwards the same input.
 
 | Type/path | Binding operation | Semantic mismatch | Ownership/lifecycle | Hot-path cost | Decision |
 |---|---|---|---|---|---|
-| `ZLinkBackendContextWrapper` | Create, shutdown, and dispose `IContext` | It binds context identity and Framework context lifetime into one port. | It owns context lifetime relative to sockets created from it. | Lifecycle only. | Keep semantic adapter. |
-| DEALER/ROUTER socket adapter | Fluent `Send`, `Request`, and `Reply` | Framework uses direct operations and `bool`/callback results; the binding uses builder submission. | It owns the socket operation owner relative to close. | A gate is used for send/request/receive/reply. | Keep semantic adapter; removing the gate requires separate concurrency proof. |
+| .NET runtime context port | Create, configure, create children, and dispose `IContext` | Semantic runtime needs one generation-scoped resource owner, while `IContext` and binding option mapping belong to binding integration. | The port owns context configuration and is disposed after all child sockets and services have stopped. | Lifecycle and creation only; no message hot-path work. | Keep `IZLinkBackendRuntimeContext`; binding public calls stay inside its .NET implementation. |
+| DEALER/ROUTER socket adapter | Fluent `Send`, `Request`, and `Reply` | Framework uses direct operations and `bool`/callback results; the binding uses builder submission. | The Framework runtime owns one receive consumer and joins it before socket close; the binding/Core lifecycle contract reports `EBUSY` for a close that races an admitted operation. | Independent send/request/reply submissions use the binding/Core concurrency path; the Framework adapter adds no per-operation gate. | Keep semantic adapter for result and builder translation; direct binding concurrency contract. |
 | DEALER/ROUTER receive | `Recv(Received, RecvFlags)` | The caller supplies storage instead of receiving a new envelope object. | Storage is not reused while an async queue owns it. | No `Received.Create()` per receive. | Keep caller-provided-storage adapter. |
-| PUB/SUB socket adapter | Fluent publish and `Subscribe(TopicMessage, ...)` | Framework topic/message operations are translated to a binding builder and subscription result. | The queue owns `TopicMessage` until dispatch completes. | A topic storage pool is used. | Keep semantic adapter. |
+| PUB/SUB socket integration | Socket configuration, poller creation, and `ISubSocket.Subscribe(TopicMessage, ...)` | Configuration and readiness are translated. The semantic ingress fixes the nonblocking receive form and supplies caller-owned storage. | The queue owns `TopicMessage` until dispatch completes. | The topic storage pool is reused; the ingress adds no Framework envelope. | Keep semantic ingress port; call binding `Subscribe` only inside the binding adapter. |
 | monitor adapter | `MonitorEvent`, `ISocketMonitor.Recv` | Native events, timeout, and results are converted to Framework monitor events. | It owns monitor disposal and callback lifetime. | Monitor array and nonblocking poll storage are reused. | Keep semantic adapter. |
-| socket poller | `IPoller.Poll(PollEvent[])` | Binding event arrays become Framework readiness flags. | The owner disposes the poller and event array together. | One `PollEvent[1]` is reused for the lifecycle. | Keep semantic port. |
+| socket poller | Public `IPoller.Wait(Span<PollEvent>, TimeSpan)` mapped to `ZLinkBackendSocketReadiness` | Binding event flags become a Framework readiness contract. | The owner disposes the poller and event array together. | One binding `PollEvent[1]` is reused for the lifecycle. | Keep semantic port; binding flags stop at the .NET adapter. |
 | `ZLinkBackendSpotNodeWrapper` / `ZLinkBackendSpotWrapper` | `IMeshNode`, `ISpot`, and dispatch callbacks | A binding mesh object becomes Spot, Actor, completion, and lifecycle meaning. | It owns completion tables, dispatch pump, and Spot/Actor lifetime. | Only required semantic translation is performed. | Keep semantic adapter. |
 | `ZLinkBackendStreamSocketWrapper` | `IStreamSocket`, `IStreamSessionService` | Raw frames and bound-actor sessions become one Framework Stream meaning. | It owns session/socket shutdown order and shared MeshNode ownership. | `_sendGate` preserves session submit order. | Keep semantic adapter. |
-| `ZLinkRawRouterServicePort` / `ZLinkManagedMeshNode` raw receive | Public `IRouterSocket.Recv(Received, ...)` | This path handles service wire directly without another Framework application envelope. | One receive owner holds storage; the binding resets it on the next receive. | Caller-provided `Received` and reusable event arrays. | Direct public binding call. |
+| `ZLinkRawRouterServicePort` / `ZLinkManagedMeshNode` raw receive | Public `IRouterSocket.Recv(Received, ...)` | This path handles service wire directly without another Framework application envelope. | One receive owner holds storage; the binding resets it on the next receive. Async request completion remains with the binding progress pump. | Caller-provided `Received` and reusable event arrays; the receive poller does not also claim `PollCompletion`. | Direct public binding call inside backend integration. |
 | `SetChannelName` on backend sockets | None | Channel name is a Framework domain/config value and had no binding socket meaning. | It stored no value and changed no lifecycle. | It added a call, validation, and fake method only. | Remove pass-through. |
+
+The runtime context port is not a second public `Context` surface. It owns one binding context
+for one Framework runtime generation, applies the Framework HWM policy, creates the backend
+children, and closes the context after those children have stopped. Semantic runtime code sees
+only `IZLinkBackendRuntimeContext` and backend contracts; it cannot access `IContext` options.
 
 The DEALER/ROUTER socket adapters do not re-export binding sockets as Framework public APIs.
 They are internal boundaries that translate Framework submit results, option mapping, and
-lifecycle rules to the binding public builders.
+lifecycle rules to the binding public builders. They do not serialize independent message
+operations a second time. The subscriber ingress contract is part of this binding-facing seam:
+its `TryReceive(TopicMessage)` operation fixes the poll-loop's nonblocking receive contract
+without allocating a second Framework envelope, while the binding adapter maps it to the public
+`ISubSocket.Subscribe` operation. The `TopicMessage` parameter is binding caller-owned storage,
+not a Framework public/domain type.
+`ISubSocket` never crosses the semantic backend contract.
 
 ## 3. Comparing a direct call with an adapter
 
@@ -93,7 +110,9 @@ Non-trivial operations are designed with at least two alternatives before implem
 The existence of a binding object such as `IContext`, `IRouterSocket`, or `IStreamSocket` is
 not by itself a reason to keep every adapter. Conversely, an interface is not removed merely
 because it has one implementation. First establish whether it owns a Framework-domain meaning
-or lifecycle rule.
+or lifecycle rule. `IZLinkBackendRuntimeContext` is retained because it owns a runtime-generation
+resource boundary and the child-creation/disposal order; it is not a method-for-method context
+facade.
 
 The following forms are forbidden:
 
@@ -130,6 +149,16 @@ receive loop cannot reuse the same storage until the queue worker finishes the h
 4. An application message transfers storage ownership to the queue item.
 5. After the handler or rejection callback finishes, parts are disposed and storage is returned.
 
+The topic-message pool calls the binding public `TopicMessage.ReleaseForReuse` operation when
+it returns storage. This releases received parts and metadata but retains the binding's topic
+receive buffers. Terminal callers still use `Dispose`, which also releases those buffers.
+
+The receive loop keeps the current storage as its owner until `PostAsync` returns. A rejection
+callback then returns the storage to the pool, and a successful post transfers it to the queue.
+If measuring the payload, reserving budget, or posting fails before that return, the receive-loop
+`finally` block still owns and returns the storage. This ordering prevents a handoff-before-queue
+exception from leaking an envelope.
+
 The rejection path returns ownership when the queue is full or cancellation occurs. Therefore,
 storage in a pool is no longer used by the queue, handler, or reply callback. Conversely, a path
 such as `ZLinkRawRouterServicePort` that stores an envelope in a separate record must not share
@@ -142,16 +171,23 @@ follows the binding ownership contract, and the Framework does not copy the same
 
 ## 5. Lifecycle and concurrency
 
-The DEALER/ROUTER adapter `_gate` is not a facade for the binding fluent builder. It is a
-lifecycle guard that makes Framework receive, reply, send/request, and socket disposal use one
-socket owner. Binding submit serialization is separate; Framework must also define an execution
-order for raw receive and close. Removing this gate requires tests and measurements that prove
-all of the following:
+The binding public socket contract permits independent send, request, and reply builders to be
+submitted concurrently on one socket. The binding and Core preserve each multipart submission as
+one operation; they do not require the Framework to add a second hot-path lock. Receive remains a
+single-consumer operation, so each Framework receive loop has one explicit owner and never shares
+its `Received` or `TopicMessage` storage with another receive call.
 
-- the public binding contract permits concurrent receive, reply, request-callback registration,
-  and dispose;
-- a close that rejects an in-flight public operation has a defined Framework owner that joins it;
-- throughput, p99 latency, and lock contention improve against the baseline after removal.
+Close and dispose use Core's stricter lifecycle gate. A close that races an admitted operation or
+callback can report `EBUSY`; the Framework stops the relevant poller, receive loop, submitter, or
+request-progress owner before closing and retries in the ClientServer connection path where a
+request callback is still being released. The DEALER/ROUTER adapters therefore do not add a
+second `_gate` around send, request, reply, receive, or dispose. This removes duplicate lock
+contention while preserving the actual binding/Core ownership rules.
+
+The public binding concurrency contract and the request/reply and mixed-submission regression
+tests in `test_socket_concurrency` pin this decision. They cover multipart send, concurrent
+request and reply, and concurrent send/request submission. If a future binding changes the
+contract, the binding contract and tests must be updated before changing Framework integration.
 
 The Stream adapter `_sendGate` serializes `IStreamSessionService.SendToActor` submission. A
 concurrency test requires that concurrent bound-actor sends reach the binding session service
@@ -171,6 +207,8 @@ An implementation change is checked against all of these conditions:
 - Caller-provided `Recv` and `Subscribe` storage is not reused before the queued handler ends.
 - Poll event arrays, receive envelopes, and topic envelopes are reused within their safe lifetime.
 - Framework callers do not assemble binding send/request builders directly.
+- DEALER/ROUTER hot-path calls do not add a Framework lock above the binding/Core concurrency
+  contract.
 - Pass-through contracts such as `SetChannelName` do not return.
 
 The basic build commands are:
@@ -191,9 +229,11 @@ The following tests pin the decisions in this document:
 
 | Test | Pass criteria |
 |---|---|
-| `BackendAdapterFactoryTests.BackendFactory_Creates_Channel_Spot_And_Stream_Wrappers` | The backend factory creates the semantic adapters required by the Framework without exposing binding objects in the public surface. |
+| `BackendAdapterFactoryTests.BackendFactory_Creates_Backend_Resources_Through_Runtime_Context` | The backend factory creates sockets, Spot, and Stream resources through one generation-scoped semantic context port; the binding context stays inside the .NET integration boundary. |
 | `ClientServerChannelRuntimeTests.BackendWrappers_DeliverUnsolicitedLivenessProbe` | A caller-provided `Received` envelope is reused for control receive and is not retained by the application queue. |
 | `InboundDispatchBudgetTests.Dispatch_queue_rejects_when_full_without_blocking_receive_loop` | A full application queue rejects its owned envelope and keeps the control receive loop nonblocking. |
+| `test_pubsub.pubsub_topic_message_can_be_released_for_reuse` | The binding public reuse operation clears received parts while allowing the same topic envelope to receive the next publish. |
+| `test_socket_concurrency.dealer_and_router_allow_concurrent_public_sends` | Independent public DEALER and ROUTER send builders complete concurrently without a Framework duplicate gate, while each receive remains single-consumer. |
 | `BackendStreamSocketConcurrencyTests.ConcurrentBoundActorMessages_AreSubmittedSerially` | The Stream semantic adapter preserves the single submit owner required by the binding session service. |
 | `RegressionTests.DotNetContractDocuments_AllExposeRegressionTestSection` | The document remains part of the .NET formal-document regression set. |
 

@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Reflection;
 using System.Runtime.Versioning;
+using Systems.Zlink;
 
 namespace Zlink.Framework.Tests.Common;
 
@@ -132,4 +133,43 @@ internal static class FrameworkTestEnvironment
 
         return startInfo;
     }
+}
+
+internal sealed class TestContext : IContext
+{
+    public IContextOptions Options =>
+        throw new NotSupportedException("The test context does not create native sockets.");
+
+    public IPairSocket CreatePairSocket() => throw NotSupported();
+
+    public IDealerSocket CreateDealerSocket() => throw NotSupported();
+
+    public IRouterSocket CreateRouterSocket() => throw NotSupported();
+
+    public IPubSocket CreatePubSocket() => throw NotSupported();
+
+    public ISubSocket CreateSubSocket() => throw NotSupported();
+
+    public IXPubSocket CreateXPubSocket() => throw NotSupported();
+
+    public IXSubSocket CreateXSubSocket() => throw NotSupported();
+
+    public IStreamSocket CreateStreamSocket() => throw NotSupported();
+
+    public void Shutdown()
+    {
+    }
+
+    public void RecalculateAutoHwm()
+    {
+    }
+
+    public void Dispose()
+    {
+    }
+
+    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+    private static NotSupportedException NotSupported() =>
+        new("The test context does not create native sockets.");
 }

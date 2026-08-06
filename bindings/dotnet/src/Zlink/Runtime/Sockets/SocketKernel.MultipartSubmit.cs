@@ -59,24 +59,25 @@ internal sealed partial class SocketKernel
         int flags, string paramName, bool mapNoWaitResult)
     {
         if (parts.Length == 1)
-        {
-            var part = parts[0] ?? throw new ArgumentException(
-                "Parts must not contain null messages.", paramName);
-            return kind switch
-            {
-                MultipartSubmitKind.Send => mapNoWaitResult
-                    ? SendSingleResultCore(part, flags)
-                    : SubmitSingle(part, flags),
-                MultipartSubmitKind.Publish => mapNoWaitResult
-                    ? PublishNoWaitSingleCore(topic!, part)
-                    : SubmitSinglePublish(topic!, part, flags),
-                MultipartSubmitKind.RoutedSend => mapNoWaitResult
-                    ? SendSingleResultCore(ref routingId, part, flags)
-                    : SubmitSingle(ref routingId, part, flags),
-                _ => throw new InvalidOperationException()
-            };
-        }
+            return SubmitSinglePartCore(
+                kind,
+                topic,
+                ref routingId,
+                parts[0] ?? throw new ArgumentException(
+                    "Parts must not contain null messages.", paramName),
+                flags,
+                mapNoWaitResult);
 
+        lock (SubmitGate)
+            return SubmitMultipartCoreUnlocked(kind, topic, ref routingId, parts,
+                flags, paramName, mapNoWaitResult);
+    }
+
+    private unsafe SendResult SubmitMultipartCoreUnlocked(
+        MultipartSubmitKind kind, string? topic, ref ZlinkRoutingId routingId,
+        ReadOnlySpan<Message> parts, int flags, string paramName,
+        bool mapNoWaitResult)
+    {
         ZlinkMsg[]? rented = null;
         var nativeParts = parts.Length <= NativeMessageParts.StackPartLimit
             ? stackalloc ZlinkMsg[NativeMessageParts.StackPartLimit]
@@ -90,7 +91,7 @@ internal sealed partial class SocketKernel
             NativeMessageParts.MoveToNative(parts, nativeParts, paramName,
                 ref built);
             var publishTopicUtf8 = kind == MultipartSubmitKind.Publish
-                ? GetPublishTopicUtf8(topic!)
+                ? GetPublishTopicUtf8Unlocked(topic!)
                 : null;
             for (var i = 0; i < built; i++)
             {
@@ -147,6 +148,29 @@ internal sealed partial class SocketKernel
             if (rented != null)
                 ArrayPool<ZlinkMsg>.Shared.Return(rented);
         }
+    }
+
+    private SendResult SubmitSinglePartCore(
+        MultipartSubmitKind kind,
+        string? topic,
+        ref ZlinkRoutingId routingId,
+        Message part,
+        int flags,
+        bool mapNoWaitResult)
+    {
+        return kind switch
+        {
+            MultipartSubmitKind.Send => mapNoWaitResult
+                ? SendSingleResultCore(part, flags)
+                : SubmitSingle(part, flags),
+            MultipartSubmitKind.Publish => mapNoWaitResult
+                ? PublishNoWaitSingleCore(topic!, part)
+                : SubmitSinglePublish(topic!, part, flags),
+            MultipartSubmitKind.RoutedSend => mapNoWaitResult
+                ? SendSingleResultCore(ref routingId, part, flags)
+                : SubmitSingle(ref routingId, part, flags),
+            _ => throw new InvalidOperationException()
+        };
     }
 
     private SendResult SubmitSingle(Message part, int flags)

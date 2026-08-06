@@ -80,19 +80,18 @@ public sealed partial class UnhandledDispatchPolicyTests
         registryB.Bind(nonOwner, spotB);
 
         var backendFactory = new ZLinkDotNetBackendAdapterFactory();
-        var channelAdapter = backendFactory.CreateChannelAdapter();
-        await using var context = channelAdapter.CreateContext();
-        await using var publisher = channelAdapter.CreatePublisherSocket(context);
-        await using var subscriberA = channelAdapter.CreateSubscriberSocket(context);
-        await using var subscriberB = channelAdapter.CreateSubscriberSocket(context);
+        await using var context = backendFactory.CreateRuntimeContext();
+        await using var publisher = context.CreatePublisherSocket();
+        await using var subscriberA = context.CreateSubscriberSocket();
+        await using var subscriberB = context.CreateSubscriberSocket();
         var endpoint = GetTcpEndpoint();
         publisher.Bind(endpoint);
         subscriberA.Connect(endpoint);
         subscriberB.Connect(endpoint);
         subscriberA.SetSubscription("events.child");
         subscriberB.SetSubscription("events.child");
-        spotA.SubscribeHandler = subscriberA.Subscribe;
-        spotB.SubscribeHandler = subscriberB.Subscribe;
+        spotA.SubscribeHandler = subscriberA.TryReceive;
+        spotB.SubscribeHandler = subscriberB.TryReceive;
 
         var header = new ZLinkEnvelopeHeader(
             ZLinkMessageKind.Publish,
@@ -425,10 +424,9 @@ public sealed partial class UnhandledDispatchPolicyTests
             null,
             null);
         var backendFactory = new ZLinkDotNetBackendAdapterFactory();
-        var channelAdapter = backendFactory.CreateChannelAdapter();
-        await using var context = channelAdapter.CreateContext();
-        await using var publisher = channelAdapter.CreatePublisherSocket(context);
-        await using var subscriber = channelAdapter.CreateSubscriberSocket(context);
+        await using var context = backendFactory.CreateRuntimeContext();
+        await using var publisher = context.CreatePublisherSocket();
+        await using var subscriber = context.CreateSubscriberSocket();
         var endpoint = GetTcpEndpoint();
         publisher.Bind(endpoint);
         subscriber.Connect(endpoint);
@@ -453,7 +451,7 @@ public sealed partial class UnhandledDispatchPolicyTests
                 ZLinkMessageParts.DisposeAll(parts);
             }
 
-            if (subscriber.Subscribe(topicMessage, RecvFlags.DontWait))
+            if (subscriber.TryReceive(topicMessage))
             {
                 received = true;
                 break;
@@ -680,15 +678,14 @@ public sealed partial class UnhandledDispatchPolicyTests
             CancellationToken.None);
 
         var backendFactory = new ZLinkDotNetBackendAdapterFactory();
-        var channelAdapter = backendFactory.CreateChannelAdapter();
-        await using var context = channelAdapter.CreateContext();
-        await using var publisher = channelAdapter.CreatePublisherSocket(context);
-        await using var subscriber = channelAdapter.CreateSubscriberSocket(context);
+        await using var context = backendFactory.CreateRuntimeContext();
+        await using var publisher = context.CreatePublisherSocket();
+        await using var subscriber = context.CreateSubscriberSocket();
         var endpoint = GetTcpEndpoint();
         publisher.Bind(endpoint);
         subscriber.Connect(endpoint);
         subscriber.SetSubscription("events");
-        nativeSpot.SubscribeHandler = subscriber.Subscribe;
+        nativeSpot.SubscribeHandler = subscriber.TryReceive;
 
         var header = new ZLinkEnvelopeHeader(
             ZLinkMessageKind.Publish,
@@ -1029,7 +1026,7 @@ public sealed partial class UnhandledDispatchPolicyTests
 
         public int SubscriptionFailuresRemaining { get; init; }
 
-        public Func<TopicMessage, RecvFlags, bool>? SubscribeHandler { get; set; }
+        public Func<TopicMessage, bool>? SubscribeHandler { get; set; }
 
         public int? LastJoinResultCode { get; private set; }
 
@@ -1057,7 +1054,7 @@ public sealed partial class UnhandledDispatchPolicyTests
             var topicMessage = new TopicMessage();
             try
             {
-                if (!SubscribeHandler(topicMessage, flags)) return null;
+                if (!SubscribeHandler(topicMessage)) return null;
                 var parts = topicMessage.Parts
                     .Select(static part => Message.From(part.AsReadOnlySpan()))
                     .ToArray();

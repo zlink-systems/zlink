@@ -20,7 +20,10 @@ internal sealed class ZLinkTopicMessageStoragePool
     internal void Return(TopicMessage storage)
     {
         ArgumentNullException.ThrowIfNull(storage);
-        storage.Dispose();
+        // Release message parts and metadata while retaining the binding's
+        // reusable topic receive buffers. Dispose would drop those buffers and
+        // make every next Subscribe allocate them again.
+        storage.ReleaseForReuse();
         _available.Add(storage);
     }
 }

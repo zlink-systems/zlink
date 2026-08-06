@@ -3,12 +3,10 @@ using Zlink.Framework.Runtime.Messaging;
 namespace Zlink.Framework.Runtime.Channels;
 
 internal sealed class ZLinkChannelBundleFactory(
-    IZLinkBackendAdapterFactory backendAdapterFactory,
     ZLinkFrameworkRegistration registration)
 {
     public async ValueTask<ZLinkChannelRuntimeBundle> CreateClientServerClientBundleAsync(
         ZLinkFrameworkComponentState state,
-        IZLinkChannelBackendAdapter adapter,
         string channelName,
         ZLinkChannelRegistration channel)
     {
@@ -16,7 +14,7 @@ internal sealed class ZLinkChannelBundleFactory(
         ZLinkChannelRuntimeBundle? bundle = null;
         try
         {
-            dealer = adapter.CreateDealerSocket(state.Context);
+            dealer = state.Context.CreateDealerSocket();
             ApplySocketConfig(dealer, channel.Client!.SocketConfig);
             dealer.SetProbe(true);
             bundle = new ZLinkChannelRuntimeBundle(
@@ -43,7 +41,6 @@ internal sealed class ZLinkChannelBundleFactory(
 
     public async ValueTask<ZLinkChannelRuntimeBundle> CreateClientServerServerBundleAsync(
         ZLinkFrameworkComponentState state,
-        IZLinkChannelBackendAdapter adapter,
         string channelName,
         ZLinkChannelRegistration channel)
     {
@@ -51,7 +48,7 @@ internal sealed class ZLinkChannelBundleFactory(
         ZLinkChannelRuntimeBundle? bundle = null;
         try
         {
-            router = adapter.CreateRouterSocket(state.Context);
+            router = state.Context.CreateRouterSocket();
             var serverRid = channel.Server!.ServerRid;
             router.SetRoutingId(serverRid);
             ApplySocketConfig(router, channel.Server!.SocketConfig);
@@ -92,7 +89,6 @@ internal sealed class ZLinkChannelBundleFactory(
 
     public async ValueTask<ZLinkChannelRuntimeBundle> CreateSubscriberBundleAsync(
         ZLinkFrameworkComponentState state,
-        IZLinkChannelBackendAdapter adapter,
         string channelName,
         ZLinkChannelRegistration channel)
     {
@@ -100,7 +96,7 @@ internal sealed class ZLinkChannelBundleFactory(
         ZLinkChannelRuntimeBundle? bundle = null;
         try
         {
-            subscriber = adapter.CreateSubscriberSocket(state.Context);
+            subscriber = state.Context.CreateSubscriberSocket();
             ApplySocketConfig(subscriber, channel.Subscriber!.SocketConfig);
             RoutingId localRid = default;
             if (channel.RoutingId.Size > 0)
@@ -131,15 +127,13 @@ internal sealed class ZLinkChannelBundleFactory(
     public async ValueTask<ZLinkChannelRuntimeBundle> CreatePublisherBundleAsync(
         ZLinkFrameworkComponentState state,
         string channelName,
-        ZLinkChannelRegistration channel,
-        IZLinkChannelBackendAdapter? adapter = null)
+        ZLinkChannelRegistration channel)
     {
-        adapter ??= backendAdapterFactory.CreateChannelAdapter();
         IZLinkBackendPublisherSocket? publisher = null;
         ZLinkChannelRuntimeBundle? bundle = null;
         try
         {
-            publisher = adapter.CreatePublisherSocket(state.Context);
+            publisher = state.Context.CreatePublisherSocket();
             ApplySocketConfig(publisher, channel.Publisher!.SocketConfig);
             var localRid = ResolvePublisherRid(channelName, channel.Publisher);
             publisher.Bind(ResolvePublisherBindEndpoint(channel.Publisher));

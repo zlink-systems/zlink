@@ -168,7 +168,7 @@ factory. There are two check criteria.
 | Test Case | Pass Criteria |
 |---------------|-----------|
 | `ScaffoldSmokeTests.PublicSurface_DoesNotExpose_BackendConcreteTypes` | Except for the allowed value types, backend concrete types do not appear in the public surface. |
-| `BackendAdapterFactoryTests.BackendFactory_Creates_Channel_Spot_And_Stream_Wrappers` | The backend factory creates all of the channel, SPOT, and STREAM wrappers. |
+| `BackendAdapterFactoryTests.BackendFactory_Creates_Backend_Resources_Through_Runtime_Context` | The backend factory creates sockets, SPOT, and STREAM resources through one generation-scoped semantic context port; the binding context remains inside the .NET integration boundary. |
 | `BackendAdapterFactoryTests.BackendFactory_Creates_MonitoringAdapter` | The monitoring adapter creation path stays inside the backend. |
 | `BackendDependencyTests.Runtime_Uses_Only_Public_Raw_Binding_Surface` | There are zero references to the service C API, private members, or reflection. |
 

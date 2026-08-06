@@ -187,8 +187,3 @@ internal readonly record struct ZLinkBackendSocketMonitorEvent(
     string LocalAddr,
     string RemoteAddr,
     uint Value);
-
-internal interface IZLinkBackendContext : IAsyncDisposable
-{
-    void Shutdown();
-}

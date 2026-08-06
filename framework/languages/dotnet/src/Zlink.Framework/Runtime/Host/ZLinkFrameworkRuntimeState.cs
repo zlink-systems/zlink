@@ -12,7 +12,7 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
     private int _operationFenced;
 
     public ZLinkFrameworkComponentState(
-        IZLinkBackendContext context,
+        IZLinkBackendRuntimeContext context,
         ZLinkFrameworkRegistration registration,
         IServiceProvider services,
         ZLinkRuntimeErrorSink errorSink,
@@ -36,7 +36,7 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
             ownsSupervisor: true);
     }
 
-    public IZLinkBackendContext Context { get; }
+    public IZLinkBackendRuntimeContext Context { get; }
 
     public ZLinkFrameworkRegistration Registration { get; }
 

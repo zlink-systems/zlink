@@ -3,16 +3,12 @@ namespace Zlink.Framework.Runtime.Spots;
 internal sealed class ZLinkSpotNodeInitializer(
     IServiceProvider services,
     ZLinkFrameworkRuntime runtime,
-    IZLinkBackendAdapterFactory backendAdapterFactory,
     ZLinkFrameworkRegistration registration,
     ZLinkLocationLifecycle? locationLifecycle)
 {
     public async ValueTask InitializeAsync(ZLinkFrameworkComponentState state)
     {
         if (registration.SpotNodes.Count == 0) return;
-
-        var channelAdapter = backendAdapterFactory.CreateChannelAdapter();
-        var spotAdapter = backendAdapterFactory.CreateSpotAdapter();
 
         foreach (var spotNodeRegistration in registration.SpotNodes.Values)
         {
@@ -21,7 +17,7 @@ internal sealed class ZLinkSpotNodeInitializer(
             // is the meshName from AddRouteMesh(meshName) (falls back to the node name).
             var meshName = spotNodeRegistration.SpotMeshChannelName
                 ?? spotNodeRegistration.SpotNodeName;
-            var node = spotAdapter.CreateSpotNode(state.Context, meshName);
+            var node = state.Context.CreateSpotNode(meshName);
             var nodeRoutingId = PrepareNodeRoutingId(spotNodeRegistration);
             node.SetRoutingId(nodeRoutingId);
             node.SetObjectRole(spotNodeRegistration.ObjectRole);
@@ -153,8 +149,6 @@ internal sealed class ZLinkSpotNodeInitializer(
                     runtime,
                     registration,
                     spotNodeRegistration,
-                    state.Context,
-                    channelAdapter,
                     node,
                     state.CompletionAdmission,
                     state.TimerScheduler,

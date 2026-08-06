@@ -171,7 +171,7 @@ backend 의존 정책은 framework 의 public API 와 adapter factory 두 축으
 | 테스트 케이스 | 확인 기준 |
 |---------------|-----------|
 | `ScaffoldSmokeTests.PublicSurface_DoesNotExpose_BackendConcreteTypes` | 허용한 값 타입을 제외하면, backend concrete type 이 public surface 에 나타나지 않는다. |
-| `BackendAdapterFactoryTests.BackendFactory_Creates_Channel_Spot_And_Stream_Wrappers` | backend factory 가 channel, SPOT, STREAM wrapper 를 모두 만들어 낸다. |
+| `BackendAdapterFactoryTests.BackendFactory_Creates_Backend_Resources_Through_Runtime_Context` | backend factory가 하나의 generation 단위 semantic context port를 통해 socket·SPOT·STREAM resource를 만들며 binding context는 .NET integration 경계 안에 남는다. |
 | `BackendAdapterFactoryTests.BackendFactory_Creates_MonitoringAdapter` | monitoring adapter 생성 경로가 backend 내부 안에 머문다. |
 | `BackendDependencyTests.Runtime_Uses_Only_Public_Raw_Binding_Surface` | service C API, private member와 reflection 참조가 0건이다. |
 

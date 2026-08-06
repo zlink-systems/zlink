@@ -443,6 +443,10 @@ part 루프, 콜백 userdata, interop 마샬링, request 진행을 보조하기 
   `Received` 객체를 채우고 `bool`을 반환한다.
 - raw `SUB` / `XSUB`와 SPOT subscribe는 호출자 제공 `TopicMessage`나
   `SubscriptionEvent` 객체를 채우고 `bool`을 반환한다.
+- `TopicMessage.ReleaseForReuse()`는 현재 part와 metadata를 해제하고 내부 topic 수신
+  버퍼를 유지해 다음 `Subscribe`에서 재사용하게 한다. `TopicMessage`가 열린 상태에서만
+  사용할 수 있으며 terminal `Dispose()` 뒤에는 `ObjectDisposedException`을 던지고 객체를
+  다시 열지 않는다.
 - `false`는 `RecvFlags.DontWait`를 사용한 nonblocking receive에서만 데이터
   없음을 의미한다.
 - 실제 receive 실패(데이터 없음이 아닌 실패)는 `ZlinkRecvException`을 던진다.
@@ -529,6 +533,9 @@ binding은 기존 request/reply lifetime과 ownership 계약을 그대로 전달
 - 네이티브 interop은 core part 기판에서 직접 관리되는 `Message`, `Received`,
   `TopicMessage` 값을 만든다. 공개 호출자 소유 `Received` 버퍼는
   `Received.Create()`로 만든다.
+- 반복 publish를 drain하는 호출자는 현재 소비자가 작업을 마친 뒤
+  `TopicMessage.ReleaseForReuse()`를 호출할 수 있다. 이 방식은 현재 message part의
+  ownership을 바꾸지 않으면서 topic 수신 버퍼의 재할당을 줄인다.
 - request 진행은 가능한 경우 핸들 단위로 공유한다. request마다 polling
   thread나 timer를 새로 만들지 않는다.
 - perf, 샘플, 프레임워크 어댑터는 공개 계약과 생성 진입점만 사용한다.

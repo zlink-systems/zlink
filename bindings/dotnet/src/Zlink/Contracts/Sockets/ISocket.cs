@@ -67,7 +67,11 @@ public interface ISocket : IZlinkSocket, IDisposable, IAsyncDisposable
     /// <summary>
     ///     Closes the socket and releases its native resources; further operations
     ///     throw. Unlike <see cref="IDisposable.Dispose" />, this closes the native
-    ///     socket immediately.
+    ///     socket immediately. Send and request operations may be admitted from
+    ///     multiple threads, while receive is single-consumer. Close and dispose
+    ///     use a stricter lifecycle gate and may report <c>EBUSY</c> while an
+    ///     admitted operation or callback is still running; stop and join the
+    ///     owning receive/callback path before retrying close.
     /// </summary>
     void Close();
 }

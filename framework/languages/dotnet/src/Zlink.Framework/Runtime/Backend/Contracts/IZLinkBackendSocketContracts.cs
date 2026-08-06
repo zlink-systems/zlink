@@ -1,5 +1,11 @@
 namespace Zlink.Framework.Runtime.Backend.Contracts;
 
+// This namespace is the internal binding-facing seam. Message, Received,
+// TopicMessage, and binding flags are public caller-owned storage and operation
+// types used here to preserve the binding's zero-copy ownership contract. They
+// must not appear in Framework public/domain contracts or semantic application
+// models. Meaning, lifecycle, readiness, and error translation remain in the
+// adapter implementations that own this seam.
 internal interface IZLinkBackendSocket : IAsyncDisposable
 {
     void Bind(string endpoint);
@@ -153,6 +159,11 @@ internal interface IZLinkBackendPublisherSocket : IZLinkBackendSocket, IZLinkBac
 
 internal interface IZLinkBackendSubscriberSocket : IZLinkBackendConnectableSocket, IZLinkBackendSocketOptions
 {
+    // The port fixes the receive operation to the nonblocking form owned by
+    // the Framework poll loop. The binding-facing adapter supplies the
+    // caller-provided storage and maps this operation to its public API.
+    bool TryReceive(TopicMessage storage);
+
     IZLinkBackendSocketPoller CreateReceivePoller() =>
         throw new NotSupportedException(
             "The backend subscriber socket does not provide a receive poller.");
@@ -160,8 +171,6 @@ internal interface IZLinkBackendSubscriberSocket : IZLinkBackendConnectableSocke
     void SetRoutingId(RoutingId routingId);
 
     void SetSubscription(string topic);
-
-    bool Subscribe(TopicMessage result, RecvFlags flags = RecvFlags.None);
 }
 
 internal interface IZLinkBackendStreamSocket : IZLinkBackendSocket

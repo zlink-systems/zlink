@@ -120,13 +120,19 @@ string topic = published.Topic;
 | Member | Returns | Meaning |
 | --- | --- | --- |
 | `TopicMessage()` | — | public constructor (unlike `Received`, not a factory) |
+| `ReleaseForReuse()` | `void` | releases the current parts and metadata while retaining internal topic receive buffers for a later `Subscribe` call; throws `ObjectDisposedException` after terminal `Dispose()` |
 | `RoutingId` | `RoutingId?` | the publisher's routing id, present when the receive path provides one |
 | `Topic` | `string` | decoded lazily from topic bytes |
 | `Parts` | `IReadOnlyList<Message>` | every message part this publish holds |
 | `IsSinglePart` | `bool` | whether `Parts` has exactly one element |
 | `FirstPart()` / `SinglePartOrThrow()` | `Message` | same shape as `Received` — first part without transfer, or the single part (throws if multipart) |
 
-**Completion result.** Synchronous. `Dispose()` releases the parts this instance owns.
+**Completion result.** Synchronous. `Dispose()` releases the parts and topic buffers this
+instance owns. `ReleaseForReuse()` releases the current parts and metadata but keeps the
+internal topic receive buffers so a caller can reuse the same storage in a later `Subscribe`
+call. The caller must not inspect the old parts after releasing them. `ReleaseForReuse()` may
+be called repeatedly while the instance is open; after terminal `Dispose()`, it throws
+`ObjectDisposedException` and does not reopen the instance.
 
 **When to use.** Reuse one instance across a subscribe-receive loop the same way `Received` is
 reused.

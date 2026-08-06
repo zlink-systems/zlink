@@ -21,6 +21,9 @@ public interface IRoutedMessageSocket : ISocket
 {
     /// <summary>
     ///     Start a multipart send operation addressed to <paramref name="routingId" />.
+    ///     Independent send builders may be submitted concurrently on the same
+    ///     socket. Do not share one builder or one message between concurrent
+    ///     operations.
     /// </summary>
     SendOperation Send(RoutingId routingId);
 
@@ -33,6 +36,11 @@ public interface IRoutedMessageSocket : ISocket
     ///     true on success; false when <see cref="RecvFlags.DontWait" /> is set
     ///     and no message is available.
     /// </returns>
+    /// <remarks>
+    ///     Receive is a single-consumer operation for one socket. The caller must
+    ///     not use the same <paramref name="result" /> concurrently or start a
+    ///     second receive on this socket until the first receive has returned.
+    /// </remarks>
     bool Recv(Received result, RecvFlags flags = RecvFlags.None);
 
     /// <summary>
@@ -70,12 +78,16 @@ public interface IRouterSocket : IConnectableRoutedMessageSocket
     RoutingId GetRoutingId();
 
     /// <summary>
-    ///     Start a request operation addressed to a peer routing id.
+    ///     Start a request operation addressed to a peer routing id. Independent
+    ///     request builders may be submitted concurrently on the same socket. Do
+    ///     not share one builder or one message between concurrent operations.
     /// </summary>
     RequestOperation Request(RoutingId peerRid);
 
     /// <summary>
-    ///     Start a reply operation addressed to a peer request.
+    ///     Start a reply operation addressed to a peer request. Independent reply
+    ///     builders may be submitted concurrently on the same socket. Do not share
+    ///     one builder or one message between concurrent operations.
     /// </summary>
     ReplyOperation Reply(RoutingId rid, ulong requestSeq);
 

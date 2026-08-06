@@ -2,9 +2,13 @@ namespace Zlink.Framework.Runtime.Backend.DotNet.Wrappers;
 
 internal sealed class ZLinkBackendSubscriberSocketWrapper(ISubSocket nativeSocket) : IZLinkBackendSubscriberSocket
 {
+    internal ISubSocket NativeSocket => nativeSocket;
+
     public void ApplySocketConfig(IZLinkSocketConfig config) =>
         ZLinkBackendSocketOptionsMapper.Apply(nativeSocket.Options, config);
-    internal ISubSocket NativeSocket => nativeSocket;
+
+    public bool TryReceive(TopicMessage storage) =>
+        nativeSocket.Subscribe(storage, RecvFlags.DontWait);
 
     public IZLinkBackendSocketPoller CreateReceivePoller() =>
         ZLinkBackendSocketPoller.Create(nativeSocket);
@@ -47,11 +51,6 @@ internal sealed class ZLinkBackendSubscriberSocketWrapper(ISubSocket nativeSocke
     public void SetSubscription(string topic)
     {
         nativeSocket.SetSubscription(topic);
-    }
-
-    public bool Subscribe(TopicMessage result, RecvFlags flags = RecvFlags.None)
-    {
-        return nativeSocket.Subscribe(result, flags);
     }
 
     public ValueTask DisposeAsync()

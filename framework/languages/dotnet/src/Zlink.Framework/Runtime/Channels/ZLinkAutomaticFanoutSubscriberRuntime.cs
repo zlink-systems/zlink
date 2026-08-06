@@ -19,8 +19,7 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime
     private static readonly TimeSpan ReconnectDelay =
         TimeSpan.FromSeconds(1);
     private readonly string _channelName;
-    private readonly IZLinkBackendAdapterFactory _backendAdapterFactory;
-    private readonly IZLinkBackendContext _context;
+    private readonly IZLinkBackendRuntimeContext _context;
     private readonly IZLinkSocketConfig _socketConfig;
     private readonly ZLinkChannelReceiveLoop _receiveLoop;
     private readonly ZLinkFanoutRuntimeService _monitoring;
@@ -39,8 +38,7 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime
 
     internal ZLinkAutomaticFanoutSubscriberRuntime(
         string channelName,
-        IZLinkBackendAdapterFactory backendAdapterFactory,
-        IZLinkBackendContext context,
+        IZLinkBackendRuntimeContext context,
         IZLinkSocketConfig socketConfig,
         ZLinkChannelReceiveLoop receiveLoop,
         ZLinkFanoutRuntimeService monitoring,
@@ -50,7 +48,6 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime
         ZLinkInboundDispatchBudget? inboundDispatchBudget = null)
     {
         _channelName = channelName;
-        _backendAdapterFactory = backendAdapterFactory;
         _context = context;
         _socketConfig = socketConfig;
         _receiveLoop = receiveLoop;
@@ -269,9 +266,7 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime
                     cancellationToken);
             try
             {
-                socket = owner._backendAdapterFactory
-                    .CreateChannelAdapter()
-                    .CreateSubscriberSocket(owner._context);
+                socket = owner._context.CreateSubscriberSocket();
                 ZLinkChannelBundleFactory.ApplySocketConfig(
                     socket,
                     owner._socketConfig);

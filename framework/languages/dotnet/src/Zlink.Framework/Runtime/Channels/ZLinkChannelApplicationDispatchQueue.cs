@@ -1,6 +1,7 @@
 using System.Threading.Channels;
 
 using Zlink.Framework.Runtime.Dispatch;
+
 namespace Zlink.Framework.Runtime.Channels;
 
 internal sealed class ZLinkChannelApplicationDispatchQueue<TWork> : IAsyncDisposable
@@ -10,13 +11,13 @@ internal sealed class ZLinkChannelApplicationDispatchQueue<TWork> : IAsyncDispos
         TimeSpan.FromSeconds(1);
     private readonly Channel<DispatchWork<TWork>> _queue =
         Channel.CreateBounded<DispatchWork<TWork>>(
-        new BoundedChannelOptions(Capacity)
-        {
-            FullMode = BoundedChannelFullMode.Wait,
-            SingleReader = true,
-            SingleWriter = true,
-            AllowSynchronousContinuations = false
-        });
+            new BoundedChannelOptions(Capacity)
+            {
+                FullMode = BoundedChannelFullMode.Wait,
+                SingleReader = true,
+                SingleWriter = true,
+                AllowSynchronousContinuations = false
+            });
     private readonly IZLinkRuntimeFailureReporter _errorSink;
     private readonly CancellationTokenSource _stop;
     private readonly string _name;
@@ -143,7 +144,7 @@ internal sealed class ZLinkChannelApplicationDispatchQueue<TWork> : IAsyncDispos
                         handlerStarted,
                         work.OverageReservation);
                 }
-        }
+            }
         }
         catch (OperationCanceledException)
             when (cancellationToken.IsCancellationRequested)
@@ -167,12 +168,19 @@ internal sealed class ZLinkChannelApplicationDispatchQueue<TWork> : IAsyncDispos
         {
             Report(exception);
         }
-        finally
+        try
         {
             work.Budget.Completed(
                 work.PayloadBytes,
                 handlerStarted: false,
                 overageReservation: work.OverageReservation);
+        }
+        catch (Exception exception)
+        {
+            // Rejection has already returned the payload to its owner. Budget
+            // accounting must not turn that completed handoff into an exception
+            // visible to the receive loop.
+            Report(exception);
         }
     }
 

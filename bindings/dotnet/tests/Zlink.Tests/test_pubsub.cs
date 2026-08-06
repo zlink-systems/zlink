@@ -133,6 +133,56 @@ public sealed class test_pubsub
     }
 
     [Fact]
+    public void pubsub_topic_message_can_be_released_for_reuse()
+    {
+        if (!CoreTestSupport.IsNativeAvailable())
+            return;
+        if (!CoreTestSupport.IsTransportSupported("inproc"))
+            return;
+
+        using var ctx = Zlink.CreateContext();
+        using var publisher = ctx.CreatePubSocket();
+        using var subscriber = ctx.CreateSubSocket();
+
+        string endpoint = CoreTestSupport.NewEndpoint("inproc",
+            "pubsub-topic-message-reuse");
+        publisher.Bind(endpoint);
+        subscriber.Connect(endpoint);
+        subscriber.SetSubscription(string.Empty);
+        Thread.Sleep(100);
+
+        using var result = new TopicMessage();
+        CoreTestSupport.PublishWithRetry(publisher, "first", "one"u8, 2000);
+        Assert.True(SubscribeWithTimeout(subscriber, result, 2000));
+        Assert.Equal("first", result.Topic);
+        Assert.Equal("one", result.SinglePartOrThrow().GetString());
+
+        result.ReleaseForReuse();
+        result.ReleaseForReuse();
+
+        CoreTestSupport.PublishWithRetry(publisher, "second", "two"u8, 2000);
+        Assert.True(SubscribeWithTimeout(subscriber, result, 2000));
+        Assert.Equal("second", result.Topic);
+        Assert.Equal("two", result.SinglePartOrThrow().GetString());
+
+        result.ReleaseForReuse();
+
+        CoreTestSupport.PublishWithRetry(publisher, "third", "three"u8, 2000);
+        Assert.True(SubscribeWithTimeout(subscriber, result, 2000));
+        Assert.Equal("third", result.Topic);
+        Assert.Equal("three", result.SinglePartOrThrow().GetString());
+    }
+
+    [Fact]
+    public void pubsub_topic_message_cannot_be_reopened_after_dispose()
+    {
+        using var result = new TopicMessage();
+        result.Dispose();
+
+        Assert.Throws<ObjectDisposedException>(result.ReleaseForReuse);
+    }
+
+    [Fact]
     public void pubsub_direct_single_message_publish_roundtrips()
     {
         if (!CoreTestSupport.IsNativeAvailable())
@@ -221,5 +271,21 @@ public sealed class test_pubsub
 
         subscribed.Dispose();
         throw new TimeoutException("subscribe timeout");
+    }
+
+    private static bool SubscribeWithTimeout(
+        ISubscriberSocket socket,
+        TopicMessage result,
+        int timeoutMs)
+    {
+        DateTime deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+        while (DateTime.UtcNow < deadline)
+        {
+            if (socket.Subscribe(result, RecvFlags.DontWait))
+                return true;
+            Thread.Sleep(10);
+        }
+
+        return false;
     }
 }

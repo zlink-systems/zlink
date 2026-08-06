@@ -149,13 +149,7 @@ public sealed class MonitoringTests : RegistrationValidationSupport
 
     private sealed class FailIfRuntimeStartsBackendAdapterFactory : IZLinkBackendAdapterFactory
     {
-        public IZLinkChannelBackendAdapter CreateChannelAdapter() =>
-            throw new InvalidOperationException("Static monitoring validation must run before native startup.");
-
-        public IZLinkSpotBackendAdapter CreateSpotAdapter() =>
-            throw new InvalidOperationException("Static monitoring validation must run before native startup.");
-
-        public IZLinkStreamBackendAdapter CreateStreamAdapter() =>
+        public IZLinkBackendRuntimeContext CreateRuntimeContext() =>
             throw new InvalidOperationException("Static monitoring validation must run before native startup.");
 
         public IZLinkMonitoringBackendAdapter CreateMonitoringAdapter() => new UnusedMonitoringBackendAdapter();

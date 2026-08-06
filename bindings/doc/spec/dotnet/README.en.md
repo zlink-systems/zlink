@@ -355,6 +355,10 @@ allocation-free draining.
 
 - Message/routed receive fills a caller-provided `Received` object, created with `Received.Create()`, and returns `bool`.
 - Raw `SUB`/`XSUB` and SPOT subscribe fill a caller-provided `TopicMessage` or `SubscriptionEvent` object and return `bool`.
+- `TopicMessage.ReleaseForReuse()` releases the current parts and metadata while retaining the
+  internal topic receive buffers for a later `Subscribe` call. It is valid only while the
+  `TopicMessage` is open; after terminal `Dispose()` it throws `ObjectDisposedException` and
+  does not reopen the object.
 - `false` means no data only for a non-blocking receive using `RecvFlags.DontWait`.
 - A real receive failure (one that is not simply no-data) throws `ZlinkRecvException`.
 - A control-plane API such as monitor recv or timer recv may keep a nullable return form when no-data is a natural value shape.
@@ -419,6 +423,9 @@ request/reply lifetime and ownership contract as-is.
 
 - The hot path never uses reflection, dynamic invocation, repeated boxing, avoidable allocation, avoidable buffer copies, hidden sleeps, busy waits, thread joins, or broad locks.
 - Native interop creates `Message`, `Received`, and `TopicMessage` values managed directly from the core part substrate. A public, caller-owned `Received` buffer is created with `Received.Create()`.
+- A caller that drains repeated publishes may call `TopicMessage.ReleaseForReuse()` after the
+  current consumers finish. This avoids reallocating the topic receive buffers without changing
+  the ownership of the current message parts.
 - Request progress is shared per handle wherever possible. It does not create a new polling thread or timer per request.
 - Perf, samples, and framework adapters use only the public contract and creation entry points.
 

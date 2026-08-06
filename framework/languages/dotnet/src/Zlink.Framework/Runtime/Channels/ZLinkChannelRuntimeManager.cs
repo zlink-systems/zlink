@@ -6,7 +6,7 @@ internal sealed class ZLinkChannelRuntimeManager(
     ZLinkChannelReceiveLoop receiveLoop,
     ZLinkFanoutRuntimeService fanoutRuntime)
 {
-    private readonly ZLinkChannelBundleFactory _bundleFactory = new(backendAdapterFactory, registration);
+    private readonly ZLinkChannelBundleFactory _bundleFactory = new(registration);
 
     public ZLinkChannelRuntimeBundle GetPublisherBundle(
         ZLinkFrameworkComponentState state,
@@ -56,8 +56,7 @@ internal sealed class ZLinkChannelRuntimeManager(
     }
 
     public async ValueTask InitializeInboundChannelsAsync(
-        ZLinkFrameworkComponentState state,
-        IZLinkChannelBackendAdapter adapter)
+        ZLinkFrameworkComponentState state)
     {
         foreach (var entry in registration.Channels)
         {
@@ -68,7 +67,6 @@ internal sealed class ZLinkChannelRuntimeManager(
             {
                 var bundle = await _bundleFactory.CreateClientServerServerBundleAsync(
                         state,
-                        adapter,
                         channelName,
                         channel)
                     .ConfigureAwait(false);
@@ -95,7 +93,6 @@ internal sealed class ZLinkChannelRuntimeManager(
                         channelName,
                         new ZLinkAutomaticFanoutSubscriberRuntime(
                             channelName,
-                            backendAdapterFactory,
                             state.Context,
                             channel.Subscriber.SocketConfig,
                             receiveLoop,
@@ -106,7 +103,7 @@ internal sealed class ZLinkChannelRuntimeManager(
                     continue;
                 }
 
-                var bundle = await _bundleFactory.CreateSubscriberBundleAsync(state, adapter, channelName, channel)
+                var bundle = await _bundleFactory.CreateSubscriberBundleAsync(state, channelName, channel)
                     .ConfigureAwait(false);
                 state.SubscriberBundles.Add(channelName, bundle);
                 state.ListenerTasks.Add(state.TaskRunner.RunLongRunning(
@@ -122,8 +119,7 @@ internal sealed class ZLinkChannelRuntimeManager(
     }
 
     public async ValueTask InitializePublisherChannelsAsync(
-        ZLinkFrameworkComponentState state,
-        IZLinkChannelBackendAdapter adapter)
+        ZLinkFrameworkComponentState state)
     {
         foreach (var entry in registration.Channels)
         {
@@ -132,7 +128,6 @@ internal sealed class ZLinkChannelRuntimeManager(
                 var channel = entry.Value;
                 var runtime = new ZLinkClientServerClientRuntime(
                     entry.Key,
-                    adapter,
                     backendAdapterFactory.CreateMonitoringAdapter(),
                     state.Context,
                     channel.Client!.SocketConfig,
@@ -164,8 +159,7 @@ internal sealed class ZLinkChannelRuntimeManager(
                 await _bundleFactory.CreatePublisherBundleAsync(
                         state,
                         entry.Key,
-                        entry.Value,
-                        adapter)
+                        entry.Value)
                     .ConfigureAwait(false);
             state.PublisherBundles.Add(entry.Key, publisherBundle);
             state.ListenerTasks.Add(state.TaskRunner.Run(

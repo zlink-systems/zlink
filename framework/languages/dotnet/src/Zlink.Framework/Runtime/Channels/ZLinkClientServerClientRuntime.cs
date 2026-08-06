@@ -7,9 +7,8 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
     private static readonly TimeSpan ControlReceivePollInterval =
         TimeSpan.FromMilliseconds(100);
     private readonly string _channelName;
-    private readonly IZLinkChannelBackendAdapter _adapter;
     private readonly IZLinkMonitoringBackendAdapter _monitoring;
-    private readonly IZLinkBackendContext _context;
+    private readonly IZLinkBackendRuntimeContext _context;
     private readonly IZLinkSocketConfig _socketConfig;
     private readonly TimeSpan _requestTimeout;
     private readonly CancellationToken _stopToken;
@@ -33,15 +32,13 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
 
     internal ZLinkClientServerClientRuntime(
         string channelName,
-        IZLinkChannelBackendAdapter adapter,
         IZLinkMonitoringBackendAdapter monitoring,
-        IZLinkBackendContext context,
+        IZLinkBackendRuntimeContext context,
         IZLinkSocketConfig socketConfig,
         TimeSpan requestTimeout,
         CancellationToken stopToken)
     {
         _channelName = channelName;
-        _adapter = adapter;
         _monitoring = monitoring;
         _context = context;
         _socketConfig = socketConfig;
@@ -401,7 +398,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                 _channelName,
                 endpoint,
                 expected,
-                _adapter.CreateDealerSocket(_context),
+                _context.CreateDealerSocket(),
                 _monitoring,
                 _socketConfig,
                 _requestTimeout,
@@ -1182,9 +1179,9 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                 try
                 {
                     var readiness = receivePoller.Wait(ControlReceivePollInterval);
-                    if ((readiness & (PollEventFlags.PollIn
-                                      | PollEventFlags.PollErr
-                                      | PollEventFlags.PollPri)) == 0)
+                    if ((readiness & (ZLinkBackendSocketReadiness.Readable
+                                      | ZLinkBackendSocketReadiness.Error
+                                      | ZLinkBackendSocketReadiness.Priority)) == 0)
                         continue;
                     if (!Socket.Recv(received, RecvFlags.DontWait))
                     {

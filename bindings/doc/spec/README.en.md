@@ -2306,6 +2306,12 @@ Rules:
 - Keep only a single typed `RoutingId` field. Do not create a dual
   property such as `RoutingId: string` plus `RoutingIdValue: RoutingId?`.
 
+The .NET binding additionally exposes `TopicMessage.ReleaseForReuse()`. It releases the
+current parts and metadata while retaining the internal topic receive buffers for a later
+`Subscribe` call. It is valid only while the object is open; after terminal `Dispose()` it
+throws `ObjectDisposedException` and does not reopen the object. This is a .NET lifecycle
+operation, not a requirement that every binding expose the same method name.
+
 #### `Received`
 
 The single canonical domain object that carries a PAIR / DEALER / ROUTER

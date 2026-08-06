@@ -9,7 +9,6 @@ internal sealed class ZLinkStreamRuntimeManager(
     {
         if (registration.StreamNodes.Count == 0) return;
 
-        var streamAdapter = backendAdapterFactory.CreateStreamAdapter();
         var monitoringAdapter = backendAdapterFactory.CreateMonitoringAdapter();
 
         foreach (var streamNodeRegistration in registration.StreamNodes.Values)
@@ -19,8 +18,7 @@ internal sealed class ZLinkStreamRuntimeManager(
             ZLinkStreamNodeRuntime? runtime = null;
             try
             {
-                socket = streamAdapter.CreateStreamSocket(
-                    state.Context,
+                socket = state.Context.CreateStreamSocket(
                     streamNodeRegistration.StreamNodeName,
                     actorDispatchNode: null);
                 if (streamNodeRegistration.TlsServer is { } tlsServer)

@@ -122,13 +122,18 @@ string topic = published.Topic;
 | Member | 반환 | 의미 |
 | --- | --- | --- |
 | `TopicMessage()` | — | public 생성자(`Received`와 달리 factory가 아니라 직접 생성) |
+| `ReleaseForReuse()` | `void` | 현재 part와 metadata를 해제하고 내부 topic 수신 버퍼는 유지해 다음 `Subscribe`에서 재사용; terminal `Dispose()` 뒤에는 `ObjectDisposedException` |
 | `RoutingId` | `RoutingId?` | 발행자의 routing id, receive 경로가 제공할 때만 존재 |
 | `Topic` | `string` | topic byte에서 지연 디코딩 |
 | `Parts` | `IReadOnlyList<Message>` | 이 publish가 담은 모든 message part |
 | `IsSinglePart` | `bool` | `Parts`가 정확히 하나인지 |
 | `FirstPart()` / `SinglePartOrThrow()` | `Message` | `Received`와 같은 형태 — 소유권 이전 없는 첫 part, 또는 단일 part(multipart면 예외) |
 
-**완료 결과.** 동기다. `Dispose()`는 이 instance가 소유한 part를 해제한다.
+**완료 결과.** 동기다. `Dispose()`는 이 instance가 소유한 part와 topic 버퍼를 해제한다.
+`ReleaseForReuse()`는 현재 part와 metadata를 해제하지만 내부 topic 수신 버퍼는 유지하므로
+호출자는 같은 storage를 다음 `Subscribe`에서 재사용할 수 있다. 해제한 이전 part는 더 이상
+사용하지 않는다. 열린 instance에서는 `ReleaseForReuse()`를 반복 호출할 수 있다. terminal
+`Dispose()` 뒤에는 `ObjectDisposedException`을 던지며 instance를 다시 열지 않는다.
 
 **선택 기준.** `Received`를 재사용하는 것과 같은 방식으로 subscribe-receive loop
 전체에서 instance 하나를 재사용한다.

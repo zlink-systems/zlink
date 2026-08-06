@@ -7,7 +7,6 @@ namespace Zlink.Framework.Runtime.Spots;
 internal sealed class ZLinkSpotRuntimeManager(
     IServiceProvider services,
     ZLinkFrameworkRuntime runtime,
-    IZLinkBackendAdapterFactory backendAdapterFactory,
     ZLinkFrameworkRegistration registration,
     ZLinkLocationLifecycle? locationLifecycle)
 {
@@ -23,7 +22,6 @@ internal sealed class ZLinkSpotRuntimeManager(
     private readonly ZLinkSpotNodeInitializer _nodeInitializer = new(
         services,
         runtime,
-        backendAdapterFactory,
         registration,
         locationLifecycle);
 

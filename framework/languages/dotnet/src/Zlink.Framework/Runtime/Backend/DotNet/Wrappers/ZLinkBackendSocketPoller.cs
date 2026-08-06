@@ -41,12 +41,29 @@ internal sealed class ZLinkBackendSocketPoller : IZLinkBackendSocketPoller
         }
     }
 
-    public PollEventFlags Wait(TimeSpan timeout)
+    public ZLinkBackendSocketReadiness Wait(TimeSpan timeout)
     {
         return _poller.Wait(_events, timeout) == 0
-            ? PollEventFlags.None
-            : _events[0].Revents;
+            ? ZLinkBackendSocketReadiness.None
+            : MapReadiness(_events[0].Revents);
     }
 
     public void Dispose() => _poller.Dispose();
+
+    private static ZLinkBackendSocketReadiness MapReadiness(
+        PollEventFlags flags)
+    {
+        var readiness = ZLinkBackendSocketReadiness.None;
+        if ((flags & PollEventFlags.PollIn) != 0)
+            readiness |= ZLinkBackendSocketReadiness.Readable;
+        if ((flags & PollEventFlags.PollOut) != 0)
+            readiness |= ZLinkBackendSocketReadiness.Writable;
+        if ((flags & PollEventFlags.PollErr) != 0)
+            readiness |= ZLinkBackendSocketReadiness.Error;
+        if ((flags & PollEventFlags.PollPri) != 0)
+            readiness |= ZLinkBackendSocketReadiness.Priority;
+        if ((flags & PollEventFlags.PollCompletion) != 0)
+            readiness |= ZLinkBackendSocketReadiness.Completion;
+        return readiness;
+    }
 }

@@ -117,6 +117,7 @@ public sealed partial class TopicMessage
 
     internal byte[] GetWritableTopicBuffer(int minimumLength)
     {
+        EnsureOpen();
         if (minimumLength < 0)
             throw new ArgumentOutOfRangeException(nameof(minimumLength));
         var topicWriteBuffer = _topicWriteBuffer;
@@ -184,6 +185,9 @@ public sealed partial class TopicMessage
 
     private void ResetForReuse(bool resetTopic = true, bool reopen = true)
     {
+        if (reopen)
+            EnsureOpen();
+
         if (_parts != null)
             _parts.Dispose();
         else
@@ -199,7 +203,13 @@ public sealed partial class TopicMessage
         }
 
         if (reopen)
-            _closed = 0;
+            Volatile.Write(ref _closed, 0);
+    }
+
+    private void EnsureOpen()
+    {
+        if (Volatile.Read(ref _closed) != 0)
+            throw new ObjectDisposedException(nameof(TopicMessage));
     }
 
     private void DisposeCore()

@@ -141,7 +141,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
         _spotRouteRouter = new ZLinkSpotRouteRouterDispatcher(GetOrStartState);
     }
 
-    public IZLinkBackendContext? Context
+    public IZLinkBackendRuntimeContext? Context
         => Volatile.Read(ref _lifecyclePhase) == (int)ZLinkRuntimeLifecyclePhase.Running
             ? _state?.Context
             : null;

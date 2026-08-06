@@ -2049,11 +2049,13 @@ public sealed class StreamSessionForcedCleanupTests
         Func<bool> isReadable,
         AutoResetEvent signal) : IZLinkBackendSocketPoller
     {
-        public PollEventFlags Wait(TimeSpan timeout)
+        public ZLinkBackendSocketReadiness Wait(TimeSpan timeout)
         {
             if (!isReadable() && timeout > TimeSpan.Zero)
                 signal.WaitOne(timeout);
-            return isReadable() ? PollEventFlags.PollIn : PollEventFlags.None;
+            return isReadable()
+                ? ZLinkBackendSocketReadiness.Readable
+                : ZLinkBackendSocketReadiness.None;
         }
 
         public void Dispose() => signal.Set();

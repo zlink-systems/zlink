@@ -37,6 +37,7 @@ internal sealed partial class SocketKernel : IDisposable
 
     public IntPtr Handle => _handle.DangerousGetHandle();
     public SocketType Type => _policy.SocketType;
+    internal object SubmitGate { get; } = new();
 
     public bool ReceiveSubscriptionEvent(SubscriptionEvent result,
         RecvFlags flags = RecvFlags.None)
@@ -55,12 +56,15 @@ internal sealed partial class SocketKernel : IDisposable
         var cloned = RequestReplySupport.CloneParts(parts);
         try
         {
-            RequestReplySupport.SubmitClonedParts(cloned,
-                (ref ZlinkMsg nativePart,
-                    NativeMethods.ZlinkPartFlag partFlag) =>
-                    NativeMethods.zlink_router_reply_part(Handle,
-                        ref nativeRoutingId, requestSeq, ref nativePart,
-                        partFlag));
+            lock (SubmitGate)
+            {
+                RequestReplySupport.SubmitClonedParts(cloned,
+                    (ref ZlinkMsg nativePart,
+                        NativeMethods.ZlinkPartFlag partFlag) =>
+                        NativeMethods.zlink_router_reply_part(Handle,
+                            ref nativeRoutingId, requestSeq, ref nativePart,
+                            partFlag));
+            }
         }
         catch
         {

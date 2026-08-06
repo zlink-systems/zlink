@@ -8786,49 +8786,37 @@ public sealed partial class EntrySpotActorDispatchTests
     private sealed class CapturingBackendAdapterFactory(
         CapturingSpotNode node) : IZLinkBackendAdapterFactory
     {
-        private readonly CapturingChannelBackendAdapter _channelAdapter = new();
-
-        public IZLinkChannelBackendAdapter CreateChannelAdapter() => _channelAdapter;
-
-        public IZLinkSpotBackendAdapter CreateSpotAdapter() =>
-            new CapturingSpotBackendAdapter(node);
-
-        public IZLinkStreamBackendAdapter CreateStreamAdapter() => throw new NotSupportedException();
+        public IZLinkBackendRuntimeContext CreateRuntimeContext() =>
+            new CapturingBackendRuntimeContext(node);
 
         public IZLinkMonitoringBackendAdapter CreateMonitoringAdapter() => throw new NotSupportedException();
     }
 
-    private sealed class CapturingChannelBackendAdapter : IZLinkChannelBackendAdapter
+    private sealed class CapturingBackendRuntimeContext(
+        CapturingSpotNode node) : IZLinkBackendRuntimeContext
     {
-        public IZLinkBackendContext CreateContext() => new CapturingBackendContext();
+        public void ConfigureAutoHwm(ZLinkApplicationHwmProfile profile) { }
 
-        public IZLinkBackendDealerSocket CreateDealerSocket(IZLinkBackendContext context) =>
+        public IZLinkBackendDealerSocket CreateDealerSocket() =>
             throw new NotSupportedException();
 
-        public IZLinkBackendRouterSocket CreateRouterSocket(IZLinkBackendContext context) =>
+        public IZLinkBackendRouterSocket CreateRouterSocket() =>
             throw new NotSupportedException();
 
-        public IZLinkBackendPublisherSocket CreatePublisherSocket(IZLinkBackendContext context) =>
+        public IZLinkBackendPublisherSocket CreatePublisherSocket() =>
             throw new NotSupportedException();
 
-        public IZLinkBackendSubscriberSocket CreateSubscriberSocket(IZLinkBackendContext context) =>
+        public IZLinkBackendSubscriberSocket CreateSubscriberSocket() =>
             throw new NotSupportedException();
-    }
 
-    private sealed class CapturingSpotBackendAdapter(
-        CapturingSpotNode node) : IZLinkSpotBackendAdapter
-    {
-        public IZLinkBackendSpotNode CreateSpotNode(IZLinkBackendContext context, string meshName)
-        {
-            return node;
-        }
-    }
+        public IZLinkBackendSpotNode CreateSpotNode(string meshName) => node;
 
-    private sealed class CapturingBackendContext : IZLinkBackendContext
-    {
+        public IZLinkBackendStreamSocket CreateStreamSocket(
+            string standaloneMeshName,
+            IZLinkBackendSpotNode? actorDispatchNode = null) =>
+            throw new NotSupportedException();
+
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
-
-        public void Shutdown() { }
     }
 
     private sealed class CapturingMessageFlowObserver : IDisposable
@@ -8938,11 +8926,7 @@ public sealed partial class EntrySpotActorDispatchTests
 
     private sealed class ThrowingBackendAdapterFactory : IZLinkBackendAdapterFactory
     {
-        public IZLinkChannelBackendAdapter CreateChannelAdapter() => throw new NotSupportedException();
-
-        public IZLinkSpotBackendAdapter CreateSpotAdapter() => throw new NotSupportedException();
-
-        public IZLinkStreamBackendAdapter CreateStreamAdapter() => throw new NotSupportedException();
+        public IZLinkBackendRuntimeContext CreateRuntimeContext() => throw new NotSupportedException();
 
         public IZLinkMonitoringBackendAdapter CreateMonitoringAdapter() => throw new NotSupportedException();
     }

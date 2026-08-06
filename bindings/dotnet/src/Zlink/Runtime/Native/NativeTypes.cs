@@ -29,6 +29,11 @@ internal unsafe struct ZlinkMonitorEvent
     public ZlinkRoutingId RoutingId;
     public fixed byte LocalAddr[256];
     public fixed byte RemoteAddr[256];
+    public ulong ConnectionId;
+    public ulong TransportPairId;
+    public ulong TransportPairGeneration;
+    public uint TransportLane;
+    public uint Flags;
 }
 
 [StructLayout(LayoutKind.Sequential)]

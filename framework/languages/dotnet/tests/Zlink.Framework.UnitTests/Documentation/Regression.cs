@@ -955,7 +955,7 @@ public sealed class RegressionTests
         var testsRoot = GetTestsRoot();
         var sourceFiles = new HashSet<string>(StringComparer.Ordinal);
 
-        foreach (var projectPath in Directory.EnumerateFiles(testsRoot, "*.csproj", SearchOption.AllDirectories))
+        foreach (var projectPath in EnumerateFilesSkippingGeneratedDirectories(testsRoot, "*.csproj"))
             AddProjectSources(projectPath, sourceFiles);
 
         var activeTests = new HashSet<string>(StringComparer.Ordinal);
@@ -994,10 +994,7 @@ public sealed class RegressionTests
             "dotnet",
             "e2e"));
         var scenarios = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var featureMap in Directory.EnumerateFiles(
-                     e2eRoot,
-                     "feature-map.ko.md",
-                     SearchOption.AllDirectories))
+        foreach (var featureMap in EnumerateFilesSkippingGeneratedDirectories(e2eRoot, "feature-map.ko.md"))
         {
             var text = File.ReadAllText(featureMap);
             var runnerPath = Path.Combine(
@@ -1008,16 +1005,8 @@ public sealed class RegressionTests
             var fixtureRoot = Path.GetDirectoryName(featureMap)!;
             var implementationText = string.Join(
                 Environment.NewLine,
-                Directory
-                    .EnumerateFiles(fixtureRoot, "*", SearchOption.AllDirectories)
-                    .Where(static path => path.EndsWith(".cs", StringComparison.Ordinal)
-                                          || path.EndsWith(".sh", StringComparison.Ordinal))
-                    .Where(static path => !path.Contains(
-                                              $"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}",
-                                              StringComparison.Ordinal)
-                                          && !path.Contains(
-                                              $"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}",
-                                              StringComparison.Ordinal))
+                EnumerateFilesSkippingGeneratedDirectories(fixtureRoot, "*.cs")
+                    .Concat(EnumerateFilesSkippingGeneratedDirectories(fixtureRoot, "*.sh"))
                     .Select(File.ReadAllText));
             foreach (Match match in Regex.Matches(
                          text,
@@ -1150,5 +1139,28 @@ public sealed class RegressionTests
 
         throw new DirectoryNotFoundException(
             "Could not find framework/languages/dotnet/tests from test runtime.");
+    }
+
+    private static IEnumerable<string> EnumerateFilesSkippingGeneratedDirectories(
+        string root,
+        string pattern)
+    {
+        var pending = new Stack<string>();
+        pending.Push(root);
+
+        while (pending.Count > 0)
+        {
+            var directory = pending.Pop();
+
+            foreach (var file in Directory.EnumerateFiles(directory, pattern, SearchOption.TopDirectoryOnly))
+                yield return file;
+
+            foreach (var child in Directory.EnumerateDirectories(directory, "*", SearchOption.TopDirectoryOnly))
+            {
+                var name = Path.GetFileName(child);
+                if (name is "bin" or "obj" or "logs" or "nuget-packages" or "artifacts") continue;
+                pending.Push(child);
+            }
+        }
     }
 }

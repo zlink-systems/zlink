@@ -11,7 +11,9 @@ public interface IMessageSocket : IConnectableSocket
     /// <summary>
     ///     Begins a multipart send: add parts on the returned builder, then submit.
     ///     The parts are consumed on a successful submit (see
-    ///     <see cref="SendOperation" /> for the ownership contract).
+    ///     <see cref="SendOperation" /> for the ownership contract). Independent
+    ///     send builders may be submitted concurrently on the same socket. Do not
+    ///     share one builder or one message between concurrent operations.
     /// </summary>
     SendOperation Send();
 
@@ -24,6 +26,11 @@ public interface IMessageSocket : IConnectableSocket
     ///     true on success; false when <see cref="RecvFlags.DontWait" /> is set
     ///     and no message is available.
     /// </returns>
+    /// <remarks>
+    ///     Receive is a single-consumer operation for one socket. The caller must
+    ///     not use the same <paramref name="result" /> concurrently or start a
+    ///     second receive on this socket until the first receive has returned.
+    /// </remarks>
     bool Recv(Received result, RecvFlags flags = RecvFlags.None);
 
     /// <summary>
@@ -65,7 +72,9 @@ public interface IDealerSocket : IMessageSocket
     /// <summary>
     ///     Begins a request: add parts on the returned builder, then submit and
     ///     await a reply. Request parts are consumed on a successful submit (see
-    ///     <see cref="SendOperation" /> for the ownership contract).
+    ///     <see cref="SendOperation" /> for the ownership contract). Independent
+    ///     request builders may be submitted concurrently on the same socket. Do
+    ///     not share one builder or one message between concurrent operations.
     /// </summary>
     RequestOperation Request();
 }

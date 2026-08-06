@@ -326,9 +326,9 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
 
                 backoff.Reset();
                 var readiness = _receivePoller!.Wait(ReceivePollInterval);
-                if ((readiness & (PollEventFlags.PollIn
-                                  | PollEventFlags.PollErr
-                                  | PollEventFlags.PollPri)) == 0)
+                if ((readiness & (ZLinkBackendSocketReadiness.Readable
+                                  | ZLinkBackendSocketReadiness.Error
+                                  | ZLinkBackendSocketReadiness.Priority)) == 0)
                     continue;
 
                 var batchStartedAt = Stopwatch.GetTimestamp();

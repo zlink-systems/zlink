@@ -2,11 +2,6 @@ namespace Zlink.Framework.Runtime.Backend.DotNet.Wrappers;
 
 internal sealed class ZLinkBackendDealerSocketWrapper(IDealerSocket nativeSocket) : IZLinkBackendDealerSocket
 {
-    // The binding serializes multipart submission, but native close rejects an
-    // in-flight public API with EBUSY. Keep one framework lifecycle gate so
-    // DisposeAsync waits for send/request/recv instead of surfacing close failure.
-    private readonly object _gate = new();
-
     internal IDealerSocket NativeSocket => nativeSocket;
 
     public IZLinkBackendSocketPoller CreateReceivePoller() =>
@@ -72,24 +67,18 @@ internal sealed class ZLinkBackendDealerSocketWrapper(IDealerSocket nativeSocket
 
     public bool Send(Message message, SendFlags flags)
     {
-        lock (_gate)
-        {
-            return nativeSocket.Send()
-                .Message(message)
-                .Flags(flags)
-                .Submit();
-        }
+        return nativeSocket.Send()
+            .Message(message)
+            .Flags(flags)
+            .Submit();
     }
 
     public bool Send(IReadOnlyList<Message> parts, SendFlags flags)
     {
-        lock (_gate)
-        {
-            return nativeSocket.Send()
-                .Messages(parts)
-                .Flags(flags)
-                .Submit();
-        }
+        return nativeSocket.Send()
+            .Messages(parts)
+            .Flags(flags)
+            .Submit();
     }
 
     public bool Request(
@@ -98,15 +87,12 @@ internal sealed class ZLinkBackendDealerSocketWrapper(IDealerSocket nativeSocket
         SendFlags flags,
         TimeSpan? timeout)
     {
-        lock (_gate)
-        {
-            var operation = nativeSocket.Request()
-                .Message(message)
-                .Flags(flags);
-            if (timeout is { } value) operation = operation.Timeout(value);
+        var operation = nativeSocket.Request()
+            .Message(message)
+            .Flags(flags);
+        if (timeout is { } value) operation = operation.Timeout(value);
 
-            return operation.Submit(callback);
-        }
+        return operation.Submit(callback);
     }
 
     public bool Request(
@@ -115,14 +101,11 @@ internal sealed class ZLinkBackendDealerSocketWrapper(IDealerSocket nativeSocket
         SendFlags flags,
         TimeSpan? timeout)
     {
-        lock (_gate)
-        {
-            var operation = nativeSocket.Request().Messages(parts);
+        var operation = nativeSocket.Request().Messages(parts);
 
-            if (timeout is { } value) operation = operation.Timeout(value);
+        if (timeout is { } value) operation = operation.Timeout(value);
 
-            return operation.Flags(flags).Submit(callback);
-        }
+        return operation.Flags(flags).Submit(callback);
     }
 
     public Task<IReadOnlyList<Message>> RequestAsync(
@@ -130,39 +113,26 @@ internal sealed class ZLinkBackendDealerSocketWrapper(IDealerSocket nativeSocket
         TimeSpan timeout,
         CancellationToken cancellationToken)
     {
-        lock (_gate)
-        {
-            return nativeSocket.Request()
-                .Message(message)
-                .Timeout(timeout)
-                .Async(cancellationToken);
-        }
+        return nativeSocket.Request()
+            .Message(message)
+            .Timeout(timeout)
+            .Async(cancellationToken);
     }
 
     public bool Recv(Received storage, RecvFlags flags = RecvFlags.None)
     {
         ArgumentNullException.ThrowIfNull(storage);
-        lock (_gate)
-            return nativeSocket.Recv(storage, flags);
+        return nativeSocket.Recv(storage, flags);
     }
 
     public bool Reply(
         Received received,
         Message message)
     {
-        lock (_gate)
-        {
-            return received.Send()
-                .Message(message)
-                .Submit();
-        }
+        return received.Send()
+            .Message(message)
+            .Submit();
     }
 
-    public ValueTask DisposeAsync()
-    {
-        lock (_gate)
-        {
-            return nativeSocket.DisposeAsync();
-        }
-    }
+    public ValueTask DisposeAsync() => nativeSocket.DisposeAsync();
 }

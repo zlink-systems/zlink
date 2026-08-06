@@ -216,10 +216,9 @@ public sealed class FanoutAutomaticDiscoveryTests
             hostLifecycle);
         var factory = new RecordingBackendFactory();
         using var failureSink = new ZLinkRuntimeErrorSink();
-        await using var context = new TestBackendContext();
+        await using var context = factory.CreateRuntimeContext();
         await using var runtime = new ZLinkAutomaticFanoutSubscriberRuntime(
             "events",
-            factory,
             context,
             new ZLinkSocketConfig(),
             new ZLinkChannelReceiveLoop(null!, null!),
@@ -305,33 +304,39 @@ public sealed class FanoutAutomaticDiscoveryTests
             get { lock (_gate) return _subscribers.ToArray(); }
         }
 
-        public IZLinkChannelBackendAdapter CreateChannelAdapter() =>
-            new RecordingChannelAdapter(this);
+        public IZLinkBackendRuntimeContext CreateRuntimeContext() =>
+            new RecordingRuntimeContext(this);
 
-        public IZLinkSpotBackendAdapter CreateSpotAdapter() => null!;
-        public IZLinkStreamBackendAdapter CreateStreamAdapter() => null!;
         public IZLinkMonitoringBackendAdapter CreateMonitoringAdapter() =>
             null!;
 
-        private sealed class RecordingChannelAdapter(
-            RecordingBackendFactory owner) : IZLinkChannelBackendAdapter
+        private sealed class RecordingRuntimeContext(
+            RecordingBackendFactory owner) : IZLinkBackendRuntimeContext
         {
-            public IZLinkBackendContext CreateContext() => null!;
-            public IZLinkBackendDealerSocket CreateDealerSocket(
-                IZLinkBackendContext context) => null!;
-            public IZLinkBackendRouterSocket CreateRouterSocket(
-                IZLinkBackendContext context) => null!;
-            public IZLinkBackendPublisherSocket CreatePublisherSocket(
-                IZLinkBackendContext context) => null!;
+            public void ConfigureAutoHwm(
+                ZLinkApplicationHwmProfile profile)
+            {
+            }
 
-            public IZLinkBackendSubscriberSocket CreateSubscriberSocket(
-                IZLinkBackendContext context)
+            public IZLinkBackendDealerSocket CreateDealerSocket() => null!;
+            public IZLinkBackendRouterSocket CreateRouterSocket() => null!;
+            public IZLinkBackendPublisherSocket CreatePublisherSocket() => null!;
+
+            public IZLinkBackendSubscriberSocket CreateSubscriberSocket()
             {
                 var socket = new RecordingSubscriberSocket();
                 lock (owner._gate)
                     owner._subscribers.Add(socket);
                 return socket;
             }
+
+            public IZLinkBackendSpotNode CreateSpotNode(string meshName) => null!;
+
+            public IZLinkBackendStreamSocket CreateStreamSocket(
+                string standaloneMeshName,
+                IZLinkBackendSpotNode? actorDispatchNode = null) => null!;
+
+            public ValueTask DisposeAsync() => ValueTask.CompletedTask;
         }
     }
 
@@ -339,6 +344,8 @@ public sealed class FanoutAutomaticDiscoveryTests
         : IZLinkBackendSubscriberSocket
     {
         private readonly List<string> _endpoints = [];
+        public bool TryReceive(TopicMessage storage) => false;
+
         internal IReadOnlyList<string> Endpoints
         {
             get { lock (_endpoints) return _endpoints.ToArray(); }
@@ -356,10 +363,6 @@ public sealed class FanoutAutomaticDiscoveryTests
                 _endpoints.Remove(endpoint);
         }
 
-        public bool Subscribe(
-            TopicMessage result,
-            RecvFlags flags = RecvFlags.None) => false;
-
         public IZLinkBackendSocketPoller CreateReceivePoller() =>
             new EmptyReceivePoller();
 
@@ -376,19 +379,14 @@ public sealed class FanoutAutomaticDiscoveryTests
         {
             private readonly ManualResetEventSlim _stop = new(false);
 
-            public PollEventFlags Wait(TimeSpan timeout)
+            public ZLinkBackendSocketReadiness Wait(TimeSpan timeout)
             {
                 _stop.Wait(timeout);
-                return PollEventFlags.None;
+                return ZLinkBackendSocketReadiness.None;
             }
 
             public void Dispose() => _stop.Set();
         }
     }
 
-    private sealed class TestBackendContext : IZLinkBackendContext
-    {
-        public void Shutdown() { }
-        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
-    }
 }

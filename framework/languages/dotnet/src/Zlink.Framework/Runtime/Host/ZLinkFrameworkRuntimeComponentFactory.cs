@@ -73,7 +73,6 @@ internal static class ZLinkFrameworkRuntimeComponentFactory
         var spots = new ZLinkSpotRuntimeManager(
             services,
             runtime,
-            backendAdapterFactory,
             registration,
             locationLifecycle);
         var stateFactory = new ZLinkFrameworkComponentStateFactory(
