@@ -40,7 +40,7 @@ func TestRawCore11AllowlistMatchesHeadersAndCgo(t *testing.T) {
 	if err := json.Unmarshal(body, &allowlist); err != nil {
 		t.Fatal(err)
 	}
-	if allowlist.Schema != 1 || allowlist.CoreVersion != "0.10.0" {
+	if allowlist.Schema != 1 || allowlist.CoreVersion != "0.11.0" {
 		t.Fatalf("unexpected raw Core allowlist identity: schema=%d version=%q", allowlist.Schema, allowlist.CoreVersion)
 	}
 

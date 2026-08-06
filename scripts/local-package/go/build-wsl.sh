@@ -10,8 +10,8 @@ usage() {
   cat <<'EOF'
 Usage: build-wsl.sh [--core-prefix ABSOLUTE_DIR]
 
-Creates zlink-go-0.10.0.tar.gz containing the Go module source, headers, and
-the Core 0.10.0 Linux runtime. The Go module path is zlink.systems/zlink.
+Creates zlink-go-0.11.0.tar.gz containing the Go module source, headers, and
+the Core 0.11.0 Linux runtime. The Go module path is zlink.systems/zlink.
 EOF
 }
 

@@ -231,7 +231,7 @@ class raw_tcp_client_t
     boost::asio::ip::tcp::socket _socket;
 };
 
-//  RouteMesh service helpers used to live here. Core 0.10.0 removed the service
+//  RouteMesh service helpers used to live here. Core 0.11.0 removed the service
 //  contracts from the binding headers, so these samples use the raw socket and
 //  socket monitor public API only. The Actor, Spot, session binding, timer and
 //  Logical Multicast scenarios are owned by the C++ Framework samples under

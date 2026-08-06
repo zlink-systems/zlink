@@ -11,7 +11,7 @@ usage() {
   cat <<'EOF'
 Usage: build-wsl.sh [--core-prefix ABSOLUTE_DIR] [--python-executable PATH]
 
-Creates zlink-0.10.0 source and wheel packages with the Core 0.10.0 Linux
+Creates zlink-0.11.0 source and wheel packages with the Core 0.11.0 Linux
 runtime. The current Python native target is Linux x86_64.
 EOF
 }
