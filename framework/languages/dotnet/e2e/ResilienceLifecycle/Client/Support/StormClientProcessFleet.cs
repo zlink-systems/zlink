@@ -19,6 +19,7 @@ internal sealed class StormClientProcessFleet : IAsyncDisposable
 {
     private const int ClientCount = 100;
     private const int StartupBatchSize = 4;
+    private const int StartupAttempts = 3;
     // Worker processes are terminated after scenario assertions; batching keeps
     // teardown bounded without entering native graceful shutdown concurrently.
     private const int ShutdownBatchSize = 8;
@@ -41,22 +42,19 @@ internal sealed class StormClientProcessFleet : IAsyncDisposable
             {
                 var batch = new List<StormProcess>(
                     Math.Min(StartupBatchSize, ClientCount - firstIndex));
+                var startTasks = new List<Task<StormProcess>>(
+                    Math.Min(firstIndex + StartupBatchSize, ClientCount) - firstIndex);
                 for (var index = firstIndex;
                      index < Math.Min(firstIndex + StartupBatchSize, ClientCount);
                      index++)
                 {
-                    var worker = StormProcess.Start(
-                        assemblyPath,
-                        options.RedisEndpoint,
-                        options.RedisKeyPrefix,
-                        options.LogDir,
-                        index);
-                    workers.Add(worker);
-                    batch.Add(worker);
+                    startTasks.Add(StartWorkerWithRetryAsync(
+                        assemblyPath, options, index, cancellationToken));
                 }
 
-                await Task.WhenAll(batch.Select(worker =>
-                    worker.WaitStartedAsync(cancellationToken)));
+                var started = await Task.WhenAll(startTasks);
+                workers.AddRange(started);
+                batch.AddRange(started);
             }
 
             return new StormClientProcessFleet(workers.ToArray());
@@ -66,6 +64,35 @@ internal sealed class StormClientProcessFleet : IAsyncDisposable
             await DisposeWorkersAsync(workers);
             throw;
         }
+    }
+
+    private static async Task<StormProcess> StartWorkerWithRetryAsync(
+        string assemblyPath,
+        ClientOptions options,
+        int index,
+        CancellationToken cancellationToken)
+    {
+        for (var attempt = 1; attempt <= StartupAttempts; attempt++)
+        {
+            var worker = StormProcess.Start(
+                assemblyPath,
+                options.RedisEndpoint,
+                options.RedisKeyPrefix,
+                options.LogDir,
+                index);
+            try
+            {
+                await worker.WaitStartedAsync(cancellationToken);
+                return worker;
+            }
+            catch when (attempt < StartupAttempts)
+            {
+                await worker.DisposeAsync();
+                await Task.Delay(TimeSpan.FromMilliseconds(250 * attempt), cancellationToken);
+            }
+        }
+
+        throw new InvalidOperationException($"Storm client {index} did not start.");
     }
 
     public async Task<ProfileRes[]> RequestAllAsync(
