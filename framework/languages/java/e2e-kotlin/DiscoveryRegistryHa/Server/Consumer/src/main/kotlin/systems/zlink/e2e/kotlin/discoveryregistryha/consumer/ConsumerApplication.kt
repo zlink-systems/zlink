@@ -11,7 +11,7 @@ import systems.zlink.e2e.kotlin.discoveryregistryha.Contracts
 import systems.zlink.e2e.kotlin.discoveryregistryha.consumer.Configuration.ConsumerOptions
 import systems.zlink.framework.channels.ZLinkClient
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode
-import systems.zlink.framework.locations.ZLinkLocationStore
+import systems.zlink.framework.locationprovider.ZLinkLocationStore
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationOptions
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore
 import systems.zlink.framework.spring.internal.runtime.ZLinkFrameworkLifecycle
@@ -49,11 +49,15 @@ class ConsumerApplication {
                 .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
                 .traceLogFile("${consumerOptions.logDir}/${consumerOptions.rid}-flow.log")
                 .traceLabel(consumerOptions.rid)
-            options.configureLocations().setHeartbeatInterval(Duration.ofMillis(consumerOptions.heartbeatMillis))
+            options.configureLocations().setOwnerLeaseRenewInterval(Duration.ofMillis(consumerOptions.heartbeatMillis))
             options.configureLocations().setOwnerLeaseTtl(Duration.ofMillis(consumerOptions.leaseTtlMillis))
             options.configureLocations().setPollingInterval(Duration.ofMillis(consumerOptions.pollingMillis))
             options.configureLocations().setStoreFailureGrace(Duration.ofMillis(consumerOptions.storeFailureGraceMillis))
-            options.addClientServerChannel(Contracts.CHANNEL).enableClient()
+            options.addRouteMesh(Contracts.CHANNEL)
+                .listen("tcp://127.0.0.1:0")
+                .setRoutingIdPrefix(consumerOptions.rid)
+                .channelName(Contracts.CHANNEL)
+                .client()
         }
 
     @Bean
@@ -80,10 +84,15 @@ class ConsumerApplication {
     fun consumerHttpServer(
         client: ZLinkClient,
         lifecycle: ZLinkFrameworkLifecycle,
-        locations: ZLinkLocationStore,
         json: ObjectMapper,
         consumerOptions: ConsumerOptions,
         delayState: LocationStoreDelayState,
     ): ConsumerHttpServer =
-        ConsumerHttpServer(client, lifecycle, locations, json, consumerOptions, delayState)
+        ConsumerHttpServer(
+            client,
+            lifecycle,
+            json,
+            consumerOptions,
+            delayState,
+        )
 }

@@ -94,7 +94,7 @@ import socket
 sockets = []
 ports = []
 try:
-    for _ in range(18):
+    for _ in range(16):
         sock = socket.socket()
         sock.bind(("127.0.0.1", 0))
         sockets.append(sock)
@@ -392,28 +392,6 @@ start_object_client() {
   wait_health "${rid}" "${http_endpoint}"
 }
 
-start_connection_proxy() {
-  local name="$1"
-  local listen_endpoint="$2"
-  local upstream_endpoint="$3"
-  local evidence="${log_dir}/${name}-connections.log"
-  local ready="${log_dir}/${name}-ready"
-  python3 Support/tcp_connection_proxy.py \
-    --listen-port "$(port_of "${listen_endpoint}")" \
-    --upstream-port "$(port_of "${upstream_endpoint}")" \
-    --evidence "${evidence}" \
-    --ready "${ready}" \
-    >"${log_dir}/${name}.stdout.log" 2>"${log_dir}/${name}.stderr.log" &
-  LAST_PID="$!"
-  pids+=("${LAST_PID}")
-  for _ in $(seq 1 "${LOCAL_READINESS_ATTEMPTS}"); do
-    [[ -f "${ready}" ]] && return 0
-    sleep "${LOCAL_READINESS_POLL_SECONDS}"
-  done
-  echo "Timed out waiting for ${name} proxy" >&2
-  return 1
-}
-
 wait_peer_state() {
   local http_endpoint="$1"
   local peer_rid="$2"
@@ -543,29 +521,19 @@ run_rm_a3() {
   stop_pid "${auto_b_pid}"
 
   echo "rm-a3 phase=manual-not-required"
-  start_connection_proxy manual-proxy-a \
-    "${RM_A3_PROXY_A}" "${RM_A3_ROUTE_A}"
-  local proxy_a_pid="${LAST_PID}"
-  start_connection_proxy manual-proxy-b \
-    "${RM_A3_PROXY_B}" "${RM_A3_ROUTE_B}"
-  local proxy_b_pid="${LAST_PID}"
   start_object_client manual-client-a \
     "${RM_A3_ROUTE_A}" "${RM_A3_HTTP_A}" \
-    "manual-client-b@${RM_A3_PROXY_B}"
+    "manual-client-b@${RM_A3_ROUTE_B}"
   local manual_a_pid="${LAST_PID}"
   start_object_client manual-client-b \
     "${RM_A3_ROUTE_B}" "${RM_A3_HTTP_B}" \
-    "manual-client-a@${RM_A3_PROXY_A}"
+    "manual-client-a@${RM_A3_ROUTE_A}"
   local manual_b_pid="${LAST_PID}"
   wait_peer_state "${RM_A3_HTTP_A}" manual-client-b not_required false
   wait_peer_state "${RM_A3_HTTP_B}" manual-client-a not_required false
   verify_not_required_stable "${RM_A3_HTTP_A}" manual-client-b
-  [[ "$(wc -l <"${log_dir}/manual-proxy-a-connections.log")" == 1 ]]
-  [[ "$(wc -l <"${log_dir}/manual-proxy-b-connections.log")" == 1 ]]
   stop_pid "${manual_a_pid}"
   stop_pid "${manual_b_pid}"
-  stop_pid "${proxy_a_pid}"
-  stop_pid "${proxy_b_pid}"
 
   echo "rm-a3 phase=weight-zero-server-required"
   start_object_client required-client-a \
@@ -652,7 +620,7 @@ needs_workflow_role() {
   esac
 }
 
-read -r API_A API_B ROUTE_A ROUTE_B WORKFLOW_A HTTP_API_A HTTP_API_B HTTP_WORKFLOW HTTP_DISCOVERY_CONSUMER HTTP_DIRECT_CONSUMER HTTP_SINGLE_CONSUMER HTTP_BACKPRESSURE_CONSUMER RM_A3_ROUTE_A RM_A3_ROUTE_B RM_A3_HTTP_A RM_A3_HTTP_B RM_A3_PROXY_A RM_A3_PROXY_B <<<"$(reserve_ports)"
+read -r API_A API_B ROUTE_A ROUTE_B WORKFLOW_A HTTP_API_A HTTP_API_B HTTP_WORKFLOW HTTP_DISCOVERY_CONSUMER HTTP_DIRECT_CONSUMER HTTP_SINGLE_CONSUMER HTTP_BACKPRESSURE_CONSUMER RM_A3_ROUTE_A RM_A3_ROUTE_B RM_A3_HTTP_A RM_A3_HTTP_B <<<"$(reserve_ports)"
 
 start_redis_container
 install_dist

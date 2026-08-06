@@ -16,7 +16,7 @@ public final class AwaitTimeoutReqHandler
     public CompletionStage<Contracts.AwaitTimeoutRes> handle(
         ProbeSpot spot,
         Contracts.AwaitTimeoutReq request) {
-        String value = "spot=" + spot.context().spotRid() + ";node=" + spot.context().nodeRid();
+        String value = "spot=" + spot.context().spotId() + ";node=" + spot.context().nodeRid();
         evidence.record(request.requestId(), "timeout-await-started", value);
         evidence.record(request.requestId(), "timeout-await-released", value);
         return spot.context().outbound()
@@ -36,10 +36,11 @@ public final class AwaitTimeoutReqHandler
                 return new Contracts.AwaitTimeoutRes(
                     "ATD-E1",
                     request.requestId(),
-                    spot.context().spotRid().toString(),
+                    spot.context().spotId().toString(),
                     spot.context().nodeRid().toString(),
                     timedOut,
                     errorType);
             });
     }
 }
+

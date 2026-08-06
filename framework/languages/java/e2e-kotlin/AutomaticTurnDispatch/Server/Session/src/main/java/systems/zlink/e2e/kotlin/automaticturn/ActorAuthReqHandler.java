@@ -24,8 +24,15 @@ public final class ActorAuthReqHandler
         ZLinkSessionContext context,
         ZLinkSessionDispatchContext dispatch,
         Contracts.ActorAuthReq request) {
-        return actors.getOrCreate(request.actorId(), "probe", request)
-            .thenCompose(context.actors()::bind)
+        return actors.getOrCreate(request.actorId(), "probe")
+            .request(request)
+            .submit()
+            .thenCompose(result -> context.actors().bind(switch (result) {
+                case systems.zlink.framework.actors.ZLinkActorCreateResult.Existing existing -> existing.actor();
+                case systems.zlink.framework.actors.ZLinkActorCreateResult.Created created -> created.actor();
+                case systems.zlink.framework.actors.ZLinkActorCreateResult.Rejected rejected ->
+                    throw new IllegalStateException("actor creation rejected");
+            }))
             .thenRun(() -> context.client()
                 .reply(new Contracts.ActorAuthRes(request.actorId()))
                 .submit());

@@ -94,7 +94,8 @@ if SELECTOR in ("all", "OBS-A4"):
     play_b = lines("play-b-flow.log")
     published = require([
         line for line in play_a
-        if "outcome=SENT" in line and "kind=PUBLISH" in line
+        if ("outcome=SENT" in line or "outcome=RECEIVED" in line)
+        and "kind=PUBLISH" in line
         and "packet=ObservabilityFanoutEvent" in line and "origin=TIMER" in line
         and flow_of(line)
     ], "OBS-A4 timer fanout publish log missing")[-1]

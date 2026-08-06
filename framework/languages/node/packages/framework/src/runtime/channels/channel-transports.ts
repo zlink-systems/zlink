@@ -1208,11 +1208,20 @@ function meshRequestFailure(meshName: string, result: number, nativeErrno: numbe
             : result === RequestResult.NotConnected || result === RequestResult.Backpressured
               ? ZLinkFrameworkInternalErrorKind.RouteNotConnected
               : wireKind ?? ZLinkFrameworkInternalErrorKind.RequestFailed;
-  return createInternalFrameworkException(
+  const error = createInternalFrameworkException(
     kind,
     `MeshNode '${meshName}' request failed with result ${result} and errno ${nativeErrno}.`,
     result === RequestResult.NotConnected || result === RequestResult.Backpressured
   );
+  // An operation id was returned before this completion was observed. The
+  // application envelope therefore crossed the native submission boundary,
+  // including terminal NotFound replies; callers must not resubmit it through
+  // a cold route.
+  Object.defineProperty(error, 'physicalSubmission', {
+    value: true,
+    enumerable: false
+  });
+  return error;
 }
 
 function requestMetricOutcome(error: unknown): string {

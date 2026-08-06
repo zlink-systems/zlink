@@ -83,6 +83,29 @@ int zlink::socket_base_t::xterm_peer_rid (const zlink_routing_id_t *peer_rid_)
     return 0;
 }
 
+int zlink::socket_base_t::xterm_transport_pair (
+  uint64_t transport_pair_id_, uint64_t transport_pair_generation_)
+{
+    std::vector<pipe_t *> pipes;
+    snapshot_attached_pipes (&pipes);
+
+    size_t match_count = 0;
+    for (size_t i = 0; i < pipes.size (); ++i) {
+        pipe_t *pipe = pipes[i];
+        if (!pipe || pipe->get_transport_pair_id () != transport_pair_id_
+            || pipe->get_transport_pair_generation () != transport_pair_generation_)
+            continue;
+        pipe->terminate (false);
+        ++match_count;
+    }
+
+    if (match_count == 0) {
+        errno = ENOENT;
+        return -1;
+    }
+    return 0;
+}
+
 void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
                                         bool subscribe_to_all_,
                                         bool locally_initiated_,
@@ -365,6 +388,11 @@ int zlink::socket_base_t::get_events_internal (int events_, uint32_t *out_)
         return -1;
     }
 
+    if (lifecycle_coordinator ().public_close_requested ()) {
+        *out_ = ZLINK_POLLERR;
+        return 0;
+    }
+
     const int rc = process_commands (0, false);
     if (rc != 0 && (errno == EINTR || errno == ETERM))
         return -1;
@@ -393,6 +421,17 @@ int zlink::socket_base_t::get_events_internal (int events_, uint32_t *out_)
 
     *out_ = events;
     return 0;
+}
+
+int zlink::socket_base_t::get_events_for_poller (int events_, uint32_t *out_)
+{
+    socket_public_api_scope_t admission (lifecycle_coordinator ());
+    if (!admission.acquired ()) {
+        if (out_)
+            *out_ = ZLINK_POLLERR;
+        return 0;
+    }
+    return get_events_internal (events_, out_);
 }
 
 int zlink::socket_base_t::drain_request_completion_controls ()
@@ -654,13 +693,17 @@ void zlink::socket_base_t::pipe_terminated (pipe_t *pipe_)
     {
         scoped_lock_t lock (monitor_runtime ().sync);
         endpoint_runtime ().detach_pipe (pipe_);
-        ready_changed = monitor_runtime ().erase_ready_connection (endpoint_pair, routing_id_data,
-                                                                   routing_id_size, &ready_count);
+        ready_changed = monitor_runtime ().erase_ready_connection (
+          endpoint_pair, routing_id_data, routing_id_size, &ready_count,
+          pair_id, pair_generation);
     }
     if (ready_changed) {
         uint64_t values[1] = {ready_count};
         event (endpoint_pair, routing_id_data, routing_id_size, values, 1,
-               ZLINK_EVENT_CONNECTION_READY);
+               ZLINK_EVENT_CONNECTION_READY, 0,
+               pipe_ && pair_id != 0 ? pipe_->get_transport_lane ()
+                                     : transport_lane_application,
+               pair_id, pair_generation);
     }
 
     const std::string &identifier = pipe_->get_endpoint_pair ().identifier ();

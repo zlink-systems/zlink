@@ -51,9 +51,13 @@ mkdir -p "$LOG_DIR"
 pids=()
 REDIS_CONTAINER_ID=""
 LAST_STARTED_PID=""
+API_A_PID=""
+PROVIDER_A_CHANNEL_ENDPOINT=""
 PROVIDER_B_CHANNEL_PORT=""
 cleanup() {
   local code=$?
+  # SIGTERM cannot stop a provider that is intentionally paused by SF-C3.
+  [[ -z "$API_A_PID" ]] || kill -CONT "$API_A_PID" 2>/dev/null || true
   stop_live_pids
   wait_all_pids_ignoring_status
   remove_redis_container
@@ -159,6 +163,7 @@ start_topology() {
   PROVIDER_A_URL="http://127.0.0.1:$provider_a_http_port"
   PROVIDER_B_URL="http://127.0.0.1:$provider_b_http_port"
   PROVIDER_B_CHANNEL_PORT="$provider_b_channel_port"
+  PROVIDER_A_CHANNEL_ENDPOINT="tcp://127.0.0.1:$provider_a_channel_port"
 
   start_configured_server reg-1 "$LOCATION_PROBE_MAIN" \
     --rid reg-1 \
@@ -177,10 +182,13 @@ start_topology() {
     --channel-endpoint "tcp://127.0.0.1:$provider_a_channel_port" \
     --evidence-file "$LOG_DIR/api-a.evidence.log" \
     --log-dir "$LOG_DIR"
+  API_A_PID="$LAST_STARTED_PID"
   wait_health "$PROVIDER_A_URL" api-a "$LAST_STARTED_PID"
 
   if [[ "$with_provider_b" == "yes" ]]; then
     start_provider_b
+  else
+    PROVIDER_B_URL=""
   fi
 
   start_configured_server consumer "$CONSUMER_MAIN" \
@@ -206,17 +214,95 @@ start_provider_b() {
   wait_health "$PROVIDER_B_URL" api-b "$LAST_STARTED_PID"
 }
 
+start_provider_a_replacement() {
+  local provider_a_http_port provider_a_channel_port
+  provider_a_http_port="$(pick_port)"
+  provider_a_channel_port="$(pick_port)"
+  PROVIDER_A_URL="http://127.0.0.1:$provider_a_http_port"
+  PROVIDER_A_CHANNEL_ENDPOINT="tcp://127.0.0.1:$provider_a_channel_port"
+  start_configured_server api-a-replacement "$PROVIDER_MAIN" \
+    --rid api-a \
+    --http-url "$PROVIDER_A_URL" \
+    --redis-endpoint "$REDIS_ENDPOINT" \
+    --redis-key-prefix "$REDIS_KEY_PREFIX" \
+    --channel-endpoint "tcp://127.0.0.1:$provider_a_channel_port" \
+    --evidence-file "$LOG_DIR/api-a-replacement.evidence.log" \
+    --log-dir "$LOG_DIR"
+  API_A_REPLACEMENT_PID="$LAST_STARTED_PID"
+  wait_health "$PROVIDER_A_URL" api-a-replacement "$LAST_STARTED_PID"
+}
+
+wait_for_peer_endpoint() {
+  local endpoint="$1"
+  local deadline=$((SECONDS + ROUTE_SETTLE_TIMEOUT_SECONDS))
+  while (( SECONDS < deadline )); do
+    if node -e "fetch(process.argv[1] + '/location/peers', { signal: AbortSignal.timeout(500) }).then(async (r) => { const rows = await r.json(); process.exit(rows.some((row) => row.endpoint === process.argv[2]) ? 0 : 1); }).catch(() => process.exit(1));" "$CONSUMER_URL" "$endpoint"; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  echo "Timed out waiting for current peer endpoint $endpoint" >&2
+  echo "Current peer rows:" >&2
+  curl --max-time "${HTTP_PROBE_TIMEOUT_SECONDS}" -fsS "$CONSUMER_URL/location/peers" >&2 || true
+  echo >&2
+  echo "Current location status:" >&2
+  curl --max-time "${HTTP_PROBE_TIMEOUT_SECONDS}" -fsS "$CONSUMER_URL/location/status" >&2 || true
+  echo >&2
+  return 1
+}
+
+wait_for_peer_absent() {
+  local endpoint="$1"
+  local deadline=$((SECONDS + ROUTE_SETTLE_TIMEOUT_SECONDS))
+  while (( SECONDS < deadline )); do
+    if node -e "fetch(process.argv[1] + '/location/peers', { signal: AbortSignal.timeout(500) }).then(async (r) => { const rows = await r.json(); process.exit(rows.some((row) => row.endpoint === process.argv[2]) ? 1 : 0); }).catch(() => process.exit(1));" "$CONSUMER_URL" "$endpoint"; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  echo "Timed out waiting for stale peer endpoint removal $endpoint" >&2
+  echo "Current peer rows:" >&2
+  curl --max-time "${HTTP_PROBE_TIMEOUT_SECONDS}" -fsS "$CONSUMER_URL/location/peers" >&2 || true
+  echo >&2
+  return 1
+}
+
+wait_for_profile_ready() {
+  local deadline=$((SECONDS + ROUTE_SETTLE_TIMEOUT_SECONDS))
+  while (( SECONDS < deadline )); do
+    if node -e "fetch(process.argv[1] + '/route/status', { signal: AbortSignal.timeout(500) }).then(async (r) => { const status = await r.json(); const apiA = status.peers?.find((peer) => peer.nodeRid === 'api-a'); const channel = status.channels?.find((entry) => entry.channelName === 'profile'); process.exit(status.isReady === true && apiA?.state === 1 && channel?.isReady === true && channel.readyTargetCount >= 1 ? 0 : 1); }).catch(() => process.exit(1));" "$CONSUMER_URL"; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  echo "Timed out waiting for profile route readiness" >&2
+  echo "Current route status:" >&2
+  curl --max-time "${HTTP_PROBE_TIMEOUT_SECONDS}" -fsS "$CONSUMER_URL/route/status" >&2 || true
+  echo >&2
+  return 1
+}
+
 run_client() {
   local scenario="$1"
   local stdout="$2"
   local stderr="$3"
   local client_config="$CONFIG_DIR/client-${scenario}.config.json"
-  node "$ROOT_DIR/write-config.mjs" "$client_config" \
-    --topology-url "$LOCATION_PROBE_URL" --consumer-url "$CONSUMER_URL" \
-    --provider-a-url "$PROVIDER_A_URL" --provider-b-url "$PROVIDER_B_URL" --scenario "$scenario"
-  node "$CLIENT_MAIN" \
+  local -a config_args=(
+    --topology-url "$LOCATION_PROBE_URL" --consumer-url "$CONSUMER_URL"
+    --provider-a-url "$PROVIDER_A_URL" --scenario "$scenario"
+  )
+  [[ -z "$PROVIDER_B_URL" ]] || config_args+=(--provider-b-url "$PROVIDER_B_URL")
+  node "$ROOT_DIR/write-config.mjs" "$client_config" "${config_args[@]}"
+  if ! node "$CLIENT_MAIN" \
     --config "$client_config" \
-    >"$stdout" 2>"$stderr"
+    >"$stdout" 2>"$stderr"; then
+    echo "Client scenario $scenario failed; consumer location and route snapshots:" >&2
+    curl --max-time "${HTTP_PROBE_TIMEOUT_SECONDS}" -fsS "$CONSUMER_URL/location/mesh" >&2 || true
+    echo >&2
+    curl --max-time "${HTTP_PROBE_TIMEOUT_SECONDS}" -fsS "$CONSUMER_URL/route/status" >&2 || true
+    echo >&2
+    return 1
+  fi
 }
 
 run_warmup() {
@@ -334,9 +420,35 @@ run_sf_e1() {
   run_client SF-E1 "$LOG_DIR/client.stdout.log" "$LOG_DIR/client.stderr.log"
 }
 
-run_generic_scenario() {
-  start_topology
-  run_client "$SCENARIO" "$LOG_DIR/client.stdout.log" "$LOG_DIR/client.stderr.log"
+run_sf_c3() {
+  local old_provider_a_channel_endpoint old_evidence_lines current_old_evidence_lines
+  # Isolate the same-role replacement from unrelated load-balancing choices.
+  start_topology no
+  run_client SF-C3 "$LOG_DIR/client-baseline.stdout.log" "$LOG_DIR/client-baseline.stderr.log"
+  old_evidence_lines="$(wc -l < "$LOG_DIR/api-a.evidence.log")"
+  old_provider_a_channel_endpoint="$PROVIDER_A_CHANNEL_ENDPOINT"
+  kill -STOP "$API_A_PID"
+  wait_for_peer_absent "$old_provider_a_channel_endpoint"
+  start_provider_a_replacement
+  wait_for_peer_endpoint "$PROVIDER_A_CHANNEL_ENDPOINT"
+  wait_for_profile_ready
+  run_client SF-C3 "$LOG_DIR/client-replacement.stdout.log" "$LOG_DIR/client-replacement.stderr.log"
+  kill -CONT "$API_A_PID"
+  wait_for_peer_endpoint "$PROVIDER_A_CHANNEL_ENDPOINT"
+  wait_for_profile_ready
+  run_client SF-C3 "$LOG_DIR/client-resumed.stdout.log" "$LOG_DIR/client-resumed.stderr.log"
+  current_old_evidence_lines="$(wc -l < "$LOG_DIR/api-a.evidence.log")"
+  if [[ "$current_old_evidence_lines" != "$old_evidence_lines" ]]; then
+    echo "SF-C3 old provider handled requests after replacement: before=$old_evidence_lines after=$current_old_evidence_lines" >&2
+    return 1
+  fi
+  cat "$LOG_DIR/client-replacement.stdout.log"
+  cat "$LOG_DIR/client-resumed.stdout.log"
+}
+
+run_unimplemented_scenario() {
+  echo "$SCENARIO is not implemented by the Config 6 Node fixture; refusing profile-only success." >&2
+  exit 3
 }
 
 case "$SCENARIO" in
@@ -387,9 +499,18 @@ case "$SCENARIO" in
     cat "$LOG_DIR/client-warmup.stdout.log"
     cat "$LOG_DIR/client.stdout.log"
     ;;
-  SF-B3|SF-C3|SF-C4|SF-C5|SF-F1|SF-F2|SF-F3|SF-F4|SF-F5|SF-F6|SF-F7|SF-F8|SF-F9|SF-F10|SF-F11|SF-G1|SF-G2|SF-G3)
-    run_generic_scenario
+  SF-C3)
+    run_sf_c3
+    ;;
+  SF-C5)
+    start_topology no
+    PROVIDER_B_URL=""
+    wait_for_peer_endpoint "$PROVIDER_A_CHANNEL_ENDPOINT"
+    run_client SF-C5 "$LOG_DIR/client.stdout.log" "$LOG_DIR/client.stderr.log"
     cat "$LOG_DIR/client.stdout.log"
+    ;;
+  SF-B3|SF-C4|SF-F1|SF-F2|SF-F3|SF-F4|SF-F5|SF-F6|SF-F7|SF-F8|SF-F9|SF-F10|SF-F11|SF-G1|SF-G2|SF-G3)
+    run_unimplemented_scenario
     ;;
   *)
     echo "Unsupported scenario '$SCENARIO'. Supported: all, ${SCENARIOS[*]}" >&2

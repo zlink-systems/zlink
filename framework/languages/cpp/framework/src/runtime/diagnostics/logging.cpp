@@ -194,7 +194,13 @@ void emit_log (const std::shared_ptr<logging_state_t> &state,
         output << line << '\n';
     }
     for (const auto &callback : callbacks) {
-        callback (record);
+        try {
+            callback (record);
+        }
+        catch (...) {
+            // A logging provider is an observation boundary.  Its failure
+            // must not escape into the dispatch or lifecycle owner.
+        }
     }
 }
 

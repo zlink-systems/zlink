@@ -30,7 +30,8 @@ internal sealed class ResilienceProcessManager(ClientOptions options) : IAsyncDi
         return new ProviderStartResult("api-a", "started", options.ProviderAUrl, options.ProviderAEndpoint);
     }
 
-    public async Task<ProviderStartResult> StartProviderBAsync()
+    public async Task<ProviderStartResult> StartProviderBAsync(
+        TimeSpan? readinessTimeout = null)
     {
         var process = StartProvider(
             "api-b-restart",
@@ -38,7 +39,7 @@ internal sealed class ResilienceProcessManager(ClientOptions options) : IAsyncDi
             options.ProviderBUrl,
             options.ProviderBEndpoint,
             options.ProviderBEvidenceFile);
-        await process.WaitReadyAsync();
+        await process.WaitReadyAsync(readinessTimeout);
         _providerB = process;
         return new ProviderStartResult("api-b", "started", options.ProviderBUrl, options.ProviderBEndpoint);
     }
@@ -310,13 +311,14 @@ internal sealed class ManagedProcess(Process process, string healthUrl)
     private static readonly TimeSpan ReadinessPollInterval = TimeSpan.FromMilliseconds(100);
     private bool _disposed;
 
-    public async Task WaitReadyAsync()
+    public async Task WaitReadyAsync(TimeSpan? readinessTimeout = null)
     {
         var elapsed = Stopwatch.StartNew();
         using var http = ZLinkHttpClient.Create(healthUrl)
             .Timeout(TimeSpan.FromMilliseconds(250))
             .Build();
-        while (elapsed.Elapsed < ReadinessTimeout)
+        var timeout = readinessTimeout ?? ReadinessTimeout;
+        while (elapsed.Elapsed < timeout)
         {
             if (process.HasExited)
                 throw new InvalidOperationException($"Process exited before readiness: {process.ExitCode}.");

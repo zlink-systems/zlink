@@ -336,6 +336,7 @@ class ClientScenarioContext(
     private fun peerRids(): Set<String> =
         try {
             json.readTree(get("${requireConsumerEndpoint()}/locations/peers"))
+                .filter { entry -> entry.path("state").asText("") == "READY" }
                 .mapNotNull { entry -> entry.path("nodeRid").asText("").takeIf(String::isNotBlank) }
                 .toSet()
         } catch (_: Exception) {

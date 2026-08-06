@@ -34,7 +34,7 @@ object PlayServer {
 
             node.listen(routeEndpoint)
                 .setRoutingIdPrefix("tictactoe-play")
-            node.channelName(SampleNames.PlayNode).server()
+        node.channelName(SampleNames.PlayNode).server()
             node.peerConnections().connect(settings.peerSpotEndpoint)
             node.objects().server()
                 .addEntrySpot(PlayEntrySpot::class.java)

@@ -108,7 +108,19 @@ typedef struct zlink_monitor_event_t {
   zlink_routing_id_t routing_id;
   char local_addr[256];
   char remote_addr[256];
+  uint64_t connection_id;
+  uint64_t transport_pair_id;
+  uint64_t transport_pair_generation;
+  uint32_t transport_lane;
+  uint32_t flags;
 } zlink_monitor_event_t;
+
+typedef enum zlink_monitor_transport_lane_e {
+  ZLINK_MONITOR_TRANSPORT_LANE_APPLICATION = 0,
+  ZLINK_MONITOR_TRANSPORT_LANE_COMPLETION  = 1
+} zlink_monitor_transport_lane_t;
+
+#define ZLINK_MONITOR_EVENT_FLAG_CONNECTION_READY_EDGE (1u << 0)
 
 typedef void (*zlink_monitor_handler_fn)(
   const zlink_monitor_event_t *event,
@@ -178,6 +190,10 @@ ZLINK_EXPORT zlink_recv_result_t zlink_socket_monitor_recv(
   void *monitor,
   zlink_socket_monitor_event_t *event_out,
   zlink_recv_flags_t flags);
+ZLINK_EXPORT zlink_recv_result_t zlink_socket_monitor_recv_v2(
+  void *monitor,
+  zlink_socket_monitor_event_t *event_out,
+  zlink_recv_flags_t flags);
 ZLINK_EXPORT zlink_config_result_t zlink_monitor_status(
   void *monitor,
   zlink_monitor_status_t *status_out);
@@ -230,6 +246,26 @@ values contain the errno for that failure.
 the event or `userdata`. `event` is a borrowed view valid only for the call.
 Registering it through the handler API makes it an ordinary callback consumer
 that drains each event without taking further action.
+
+`connection_id` identifies one physical transport attempt within the current
+process. When Application and Completion transports form one Framework peer,
+both events use the same `transport_pair_id` and `transport_pair_generation`,
+and `transport_lane` distinguishes the two lanes. For an unpaired transport,
+the pair fields are zero and `transport_lane` is the Application value. A pair
+id is not a global identifier that survives process restarts.
+
+For `CONNECTION_READY`, `value` is the current count of ready transports
+reported by the monitor source. Use
+`ZLINK_MONITOR_EVENT_FLAG_CONNECTION_READY_EDGE` in `flags` to identify the
+transition that increased the count. A ready-count event without this flag is
+a count snapshot, not a new connection-ready edge.
+
+`zlink_socket_monitor_recv` writes only the event prefix that predates the
+appended physical identity fields, so callers built against the previous
+layout remain safe. Callers that need `connection_id` or transport pair
+information must use `zlink_socket_monitor_recv_v2`. Both functions read from
+the same event stream, and the caller must provide an output buffer that
+matches the selected function contract.
 
 ## 2. Ordering, overflow, and thread safety
 

@@ -16,7 +16,7 @@ public final class ProbeMsgHandler
     public CompletionStage<Void> handle(
         ProbeSpot spot,
         Contracts.ProbeMsg command) {
-        String value = "spot=" + spot.context().spotRid()
+        String value = "spot=" + spot.context().spotId()
             + ";node=" + spot.context().nodeRid()
             + ";marker=" + command.marker();
         evidence.record(command.requestId(), "probe-started", value);
@@ -24,3 +24,4 @@ public final class ProbeMsgHandler
         return CompletableFuture.completedFuture(null);
     }
 }
+

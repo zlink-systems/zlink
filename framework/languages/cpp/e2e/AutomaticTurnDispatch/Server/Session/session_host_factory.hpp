@@ -28,6 +28,7 @@ inline void configure_session_host (zlink::framework::app_t &app,
         server::add_redis_location_store (framework_options, session_options.redis_endpoint,
                                           session_options.redis_key_prefix);
         auto control_route = framework_options.add_route_mesh (yd::control_channel);
+        control_route.channel (yd::control_channel).server ();
         control_route.listen ("tcp://127.0.0.1:0")
           .set_routing_id (zlink::routing_id_t::from (session_options.node_rid))
           .channel_name (yd::control_channel);
@@ -37,6 +38,7 @@ inline void configure_session_host (zlink::framework::app_t &app,
               session_options.control_peer_endpoint);
         }
         auto spot_route = framework_options.add_route_mesh (yd::spot_route_channel);
+        spot_route.channel (yd::spot_route_channel).server ();
         spot_route.listen ("tcp://127.0.0.1:0")
           .set_routing_id (zlink::routing_id_t::from (session_options.node_rid))
           .channel_name (yd::spot_route_channel);
@@ -46,7 +48,8 @@ inline void configure_session_host (zlink::framework::app_t &app,
               session_options.spot_route_peer_endpoint);
         }
         auto spot = framework_options.add_route_mesh (yd::spot_channel);
-        spot.channel_name (yd::spot_route_channel);
+        spot.channel (yd::spot_channel).server ();
+        spot.channel_name (yd::spot_channel);
         spot.set_routing_id (zlink::routing_id_t::from (session_options.node_rid))
           .listen (session_options.spot_router_endpoint);
         framework_options.add_stream_node (yd::stream_node)

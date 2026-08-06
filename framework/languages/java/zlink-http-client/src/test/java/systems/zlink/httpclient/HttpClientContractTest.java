@@ -8,10 +8,10 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.nio.charset.StandardCharsets;
 import java.io.OutputStream;
 import java.net.ServerSocket;
 import java.net.Socket;
-import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -273,41 +273,13 @@ final class HttpClientContractTest {
     @Test
     void streamingUploadSendsAllChunks() throws Exception {
         AtomicReference<String> captured = new AtomicReference<>();
-        ServerSocket serverSocket = new ServerSocket(0, 0, java.net.InetAddress.getLoopbackAddress());
-        Thread serverThread = new Thread(() -> {
-            try (Socket socket = serverSocket.accept()) {
-                StringBuilder buf = new StringBuilder();
-                int b;
-                while ((b = socket.getInputStream().read()) >= 0) {
-                    buf.append((char) b);
-                    if (buf.indexOf("0\r\n\r\n") >= 0) {
-                        break;
-                    }
-                }
-                String raw = buf.substring(buf.indexOf("\r\n\r\n") + 4);
-                StringBuilder body = new StringBuilder();
-                int pos = 0;
-                while (true) {
-                    int nl = raw.indexOf("\r\n", pos);
-                    int size = Integer.parseInt(raw.substring(pos, nl).trim(), 16);
-                    if (size == 0) {
-                        break;
-                    }
-                    body.append(raw, nl + 2, nl + 2 + size);
-                    pos = nl + 2 + size + 2;
-                }
-                captured.set(body.toString());
-                OutputStream out = socket.getOutputStream();
-                out.write("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}".getBytes(StandardCharsets.US_ASCII));
-                out.flush();
-            } catch (Exception ignored) {
-                // test teardown
-            }
+        AtomicReference<String> transferEncoding = new AtomicReference<>();
+        TestSupport.Server server = TestSupport.httpServer(exchange -> {
+            transferEncoding.set(exchange.getRequestHeaders().getFirst("Transfer-encoding"));
+            captured.set(TestSupport.readBody(exchange));
+            TestSupport.respond(exchange, 200, "{}");
         });
-        serverThread.setDaemon(true);
-        serverThread.start();
-        int port = serverSocket.getLocalPort();
-        try (ZLinkHttpClient client = ZLinkHttpClient.create("http://127.0.0.1:" + port).build()) {
+        try (ZLinkHttpClient client = ZLinkHttpClient.create(server.baseUrl()).build()) {
             Deque<byte[]> chunks = new ArrayDeque<>(List.of(
                 "part-1;".getBytes(StandardCharsets.UTF_8),
                 "part-2;".getBytes(StandardCharsets.UTF_8),
@@ -316,9 +288,9 @@ final class HttpClientContractTest {
                 .bodyStream(() -> chunks.isEmpty() ? null : chunks.poll(), "application/octet-stream")
                 .submitRaw().toCompletableFuture().join();
         } finally {
-            serverThread.join(2000);
-            serverSocket.close();
+            server.closeable().close();
         }
+        assertEquals("chunked", transferEncoding.get());
         assertEquals("part-1;part-2;part-3", captured.get());
     }
 

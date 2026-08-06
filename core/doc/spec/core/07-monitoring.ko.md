@@ -116,7 +116,19 @@ typedef struct zlink_monitor_event_t {
   zlink_routing_id_t routing_id;
   char local_addr[256];
   char remote_addr[256];
+  uint64_t connection_id;
+  uint64_t transport_pair_id;
+  uint64_t transport_pair_generation;
+  uint32_t transport_lane;
+  uint32_t flags;
 } zlink_monitor_event_t;
+
+typedef enum zlink_monitor_transport_lane_e {
+  ZLINK_MONITOR_TRANSPORT_LANE_APPLICATION = 0,
+  ZLINK_MONITOR_TRANSPORT_LANE_COMPLETION  = 1
+} zlink_monitor_transport_lane_t;
+
+#define ZLINK_MONITOR_EVENT_FLAG_CONNECTION_READY_EDGE (1u << 0)
 
 typedef void (*zlink_monitor_handler_fn)(
   const zlink_monitor_event_t *event,
@@ -186,6 +198,10 @@ ZLINK_EXPORT zlink_recv_result_t zlink_socket_monitor_recv(
   void *monitor,
   zlink_socket_monitor_event_t *event_out,
   zlink_recv_flags_t flags);
+ZLINK_EXPORT zlink_recv_result_t zlink_socket_monitor_recv_v2(
+  void *monitor,
+  zlink_socket_monitor_event_t *event_out,
+  zlink_recv_flags_t flags);
 ZLINK_EXPORT zlink_config_result_t zlink_monitor_status(
   void *monitor,
   zlink_monitor_status_t *status_out);
@@ -228,6 +244,21 @@ recv에서는 caller-owned output 구조체 안의 값이다. callback의 event 
 `zlink_monitor_ignore_handler()`는 전달된 event와 `userdata`를 보관하거나 해제하지 않는 no-op 함수다.
 `event`는 호출 동안만 유효한 borrowed view다. 이 함수를 handler API에 등록하면 일반 callback
 consumer처럼 event queue를 소비하되 각 event에 아무 작업도 하지 않는다.
+
+`connection_id`는 현재 프로세스에서 하나의 물리적 transport 시도를 식별한다. Application과
+Completion transport가 한 Framework peer를 구성하는 경우 두 event는 같은 `transport_pair_id`와
+`transport_pair_generation`을 사용하고 `transport_lane`으로 각각의 lane을 구분한다. Pair를 사용하지
+않는 transport에서는 pair field가 0이며 `transport_lane`은 Application 값이다. Pair id는 프로세스
+재시작 사이에 유지되는 전역 식별자가 아니다.
+
+`CONNECTION_READY`의 `value`는 해당 monitor source가 ready인 transport 수의 현재 count다. Count가
+증가한 순간을 구분해야 하면 `flags`의 `ZLINK_MONITOR_EVENT_FLAG_CONNECTION_READY_EDGE`를 사용한다.
+이 flag가 없는 ready count event는 count snapshot이며 새로운 연결의 ready edge를 뜻하지 않는다.
+
+`zlink_socket_monitor_recv`는 물리 연결 식별자 필드가 추가되기 전의 event prefix만 기록하므로 이전
+layout으로 빌드한 호출자의 buffer를 안전하게 사용할 수 있다. `connection_id` 또는 transport pair
+정보가 필요한 호출자는 `zlink_socket_monitor_recv_v2`를 사용해야 한다. 두 함수는 같은 event stream을
+읽으며 호출자는 선택한 함수의 계약에 맞는 크기의 output buffer를 제공해야 한다.
 
 ## 2. Ordering, overflow와 thread safety
 

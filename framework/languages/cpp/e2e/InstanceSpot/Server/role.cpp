@@ -463,7 +463,19 @@ int main (int argc, char **argv)
             }
             app.request_stop ();
         });
-        const int code = app.run (argc, argv);
+        int code = 0;
+        try {
+            code = app.run (argc, argv);
+        }
+        catch (...) {
+            if (auto *state = shutdown_pointer.load (std::memory_order_acquire)) {
+                state->request ();
+            }
+            if (shutdown_watcher.joinable ()) {
+                shutdown_watcher.join ();
+            }
+            throw;
+        }
         if (auto *state = shutdown_pointer.load (std::memory_order_acquire)) {
             state->request ();
         }

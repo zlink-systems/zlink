@@ -35,6 +35,27 @@
 - 개별 정책 문서는 해당 suite **전용** 규칙만 기술하며, 공통 규칙은 본 문서를 참조한다.
 - 각 바인딩의 실행 스크립트 경로는 `perf/single/` 및 `perf/multi/`에 위치한다.
 
+### 1.1 계획 문서와 측정 시트 분리
+
+bindings 성능 개선 계획 문서는 실행 규칙과 완료 기준을 정의하는 문서다. 계획 문서에는
+진행 로그, 작업 대화, 중간 결과, 실패 이력, 임시 결론을 추가하지 않는다. 측정값과 실행
+조건은 언어별 측정 시트 및 runner report에 기록하고, 진행 로그와 실패 이력은 해당 언어
+문서 폴더의 `log/`에 별도 파일로 기록한다. 계획 문서에는 작업 시작 시의
+목표와 범위, 마지막 완료 판정, 필요한 근거 링크만 둔다.
+
+새 Core 버전의 작업은
+`doc/perf/perf/bindings-library-performance-improvement-plan-template.ko.md`를 복사한 뒤
+`doc/perf/perf/core-<version>/` 폴더에 버전별 문서를 만든다. 언어별 계획 문서와 측정 시트를
+그 폴더에 둔다. 
+측정 시트의 상태 값은 `미측정`, `측정 gap`,
+`미달`, `보류`, `통과`를 사용하며, 계획 문서의 상태는 최종 판정 때만 변경한다.
+
+기준 측정은 전체 baseline을 장시간 실행하지 않는다. 매번 비교할
+`suite + pattern + transport + message size`만 선택하고, C와 대상 binding을 같은
+조건으로 연속 실행하는 짧은 paired 측정을 사용한다. 개선 전과 개선 후에도 동일한
+선택 범위, duration, runs, client 수, option을 유지한다. Multi `STREAM`은 CCU를
+`100`으로 고정하며 `10000` CCU 기준은 사용하지 않는다.
+
 ## 1.1 공통 원칙
 
 아래 원칙은 `bindings/c/perf`를 기준으로 모든 bindings perf에 동일하게 적용한다.

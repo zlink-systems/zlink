@@ -84,7 +84,10 @@ test('framework host republishes the current lifecycle state after owner lease r
   recoveryHandler();
   await new Promise((resolve) => setImmediate(resolve));
 
-  assert.deepEqual(publishedStates, [framework.ZLinkFrameworkRuntimeState.Draining]);
+  assert.deepEqual(publishedStates, [
+    framework.ZLinkFrameworkRuntimeState.Preparing,
+    framework.ZLinkFrameworkRuntimeState.Draining
+  ]);
   host.removeOwnerLeaseRecoveryPublication();
 });
 

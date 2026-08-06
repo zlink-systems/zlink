@@ -187,6 +187,12 @@ export interface ZLinkBackendMeshNode {
     readonly descriptorRevision: bigint;
     readonly endpoint: string;
   }[]): void;
+  expectPeer?(peer: {
+    readonly nodeRoutingId: string;
+    readonly endpoint: string;
+    readonly securityIdentity?: string;
+    readonly lifecycleGeneration: bigint;
+  }): void;
   isObjectClientNodeDirectTarget?(targetRid: unknown): boolean;
   isPeerRouteReady?(targetRid: unknown, lifecycleGeneration?: bigint): boolean;
   sendToNode(

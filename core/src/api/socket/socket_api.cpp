@@ -65,6 +65,16 @@ zlink_connect_result_t zlink_disconnect_rid (void *s_, const zlink_routing_id_t 
     return zlink::connect_result_internal::from_rc (handle.socket->term_peer_rid (peer_rid_));
 }
 
+zlink_connect_result_t zlink_disconnect_transport_pair (
+  void *s_, uint64_t transport_pair_id_, uint64_t transport_pair_generation_)
+{
+    socket_handle_t handle = as_socket_handle (s_);
+    if (!handle.socket)
+        return zlink::connect_result_internal::from_errno (EFAULT);
+    return zlink::connect_result_internal::from_rc (
+      handle.socket->term_transport_pair (transport_pair_id_, transport_pair_generation_));
+}
+
 int zlink_stream_attach_raw (void *s_, zlink_stream_on_raw_fn on_raw_)
 {
     socket_handle_t handle = as_socket_handle (s_);

@@ -56,7 +56,8 @@ export class ZLinkSpotTimerRegistry {
     private readonly executionSerialForTimer?: (
       name: string,
       fallback: ZLinkSpotSerialExecutor
-    ) => ZLinkSpotSerialExecutor
+    ) => ZLinkSpotSerialExecutor,
+    private readonly executionAllowed: () => boolean = () => true
   ) {}
 
   setExecutionBarrier(barrier: ZLinkExecutionBarrier): void {
@@ -107,6 +108,7 @@ export class ZLinkSpotTimerRegistry {
           if (current?.generation !== generation || current.timer !== timer) {
             return undefined;
           }
+          if (!this.executionAllowed()) return undefined;
           return runWithFlow(timerFlow, () => handler.handle(spot, tick));
         });
       },

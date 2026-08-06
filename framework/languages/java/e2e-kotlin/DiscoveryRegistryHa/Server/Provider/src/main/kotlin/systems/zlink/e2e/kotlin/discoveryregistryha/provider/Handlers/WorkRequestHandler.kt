@@ -2,7 +2,7 @@ package systems.zlink.e2e.kotlin.discoveryregistryha.provider.Handlers
 
 import systems.zlink.e2e.kotlin.discoveryregistryha.Contracts
 import systems.zlink.e2e.kotlin.discoveryregistryha.provider.Support.ProviderEvidenceStore
-import systems.zlink.framework.channels.ZLinkRequestContext
+import systems.zlink.framework.ZLinkMessageContext
 import systems.zlink.framework.handlers.ZLinkHandlerGroup
 import systems.zlink.framework.kotlin.ZLinkSuspendingRequestHandler
 
@@ -12,7 +12,7 @@ class WorkRequestHandler(
 ) : ZLinkSuspendingRequestHandler<Contracts.WorkReq, Contracts.WorkRes> {
     override suspend fun handle(
         request: Contracts.WorkReq,
-        context: ZLinkRequestContext,
+        context: ZLinkMessageContext,
     ): Contracts.WorkRes =
         Contracts.WorkRes("work:${request.value}", state.providerRid)
 }

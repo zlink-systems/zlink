@@ -26,7 +26,11 @@ internal static class RlA3ReconnectStormScenario
             .Body(new TopologyWaitReq("api-b", "Ready", 0))
             .Async<TopologyEntryRes[]>();
 
-        await processes.StartProviderBAsync();
+        // The common scenario bounds readiness, but the replacement host is
+        // intentionally started while 100 client processes reconnect. Keep
+        // the ordinary three-second local readiness contract for other
+        // scenarios and give this storm setup its own finite startup budget.
+        await processes.StartProviderBAsync(TimeSpan.FromSeconds(30));
         await registry.Post("/topology/wait")
             .Body(new TopologyWaitReq("api-b", "Ready", 1))
             .Async<TopologyEntryRes[]>();

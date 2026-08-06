@@ -8,7 +8,7 @@ import type {
 export type RedisCommandValue = string | Buffer;
 export type RedisCommandClient = Pick<
   RedisClientType,
-  'isOpen' | 'isReady' | 'connect' | 'sendCommand' | 'quit' | 'on'
+  'isOpen' | 'isReady' | 'connect' | 'disconnect' | 'sendCommand' | 'quit' | 'on'
 >;
 
 export class RedisConnection {
@@ -79,10 +79,15 @@ export class RedisConnection {
     if (client === undefined) throw new Error('Redis Store is disposed.');
     if (isClientReady(client)) return client;
     if (this.connectionAttempt === undefined) {
-      if (client.isOpen === true) {
-        throw new Error('Redis client is connecting outside the Store lifecycle.');
-      }
-      const attempt = client.connect().then(() => undefined);
+      // Publish the attempt before any await. A failed connection can leave
+      // node-redis open but not ready; the close and reconnect sequence must
+      // still be owned by this single promise when callers arrive together.
+      const attempt = (async () => {
+        if (client.isOpen === true && !isClientReady(client)) {
+          await client.disconnect();
+        }
+        await client.connect();
+      })();
       this.connectionAttempt = attempt;
       attempt.then(
         () => {

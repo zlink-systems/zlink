@@ -565,11 +565,15 @@ final class NativeSocketRuntime implements AutoCloseable {
 
     void closeInternal() {
         if (handle != null && handle.address() != 0) {
-            RequestProgressPump.stopSocketProgress(handle);
             if (own) {
                 int rc = Native.close(handle);
                 if (rc != 0)
                     throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CLOSE);
+                // Stop progress only after Core accepts close. A BUSY result
+                // must leave completion ownership intact for the caller's
+                // retry; stopping it before the native admission can leave a
+                // partially closed socket.
+                RequestProgressPump.stopSocketProgress(handle);
             }
             socketCore.closeCommonState();
             handle = MemorySegment.NULL;

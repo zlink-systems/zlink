@@ -15,7 +15,7 @@ public final class ShutdownAwaitReqHandler {
     public CompletionStage<Contracts.ScenarioRes> handle(
         ProbeSpot spot,
         Contracts.ShutdownAwaitReq request) {
-        String value = "spot=" + spot.context().spotRid() + ";scenario=ATD-E3";
+        String value = "spot=" + spot.context().spotId() + ";scenario=ATD-E3";
         evidence.record(request.requestId(), "shutdown-await-started", value);
         evidence.record(request.requestId(), "shutdown-await-released", value);
         return spot.context().outbound()
@@ -34,3 +34,4 @@ public final class ShutdownAwaitReqHandler {
             });
     }
 }
+

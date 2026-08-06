@@ -54,7 +54,6 @@ inline int run_service_host (int argc, char **argv)
           .set_routing_id (zlink::routing_id_t::from (options.rid));
         mesh.channel_name (route_mesh_channel)
           .server ()
-          .use_handler_group (handler_group)
           .add_request_handler<mesh_profile_request_dispatch_handler_t,
                                profile_req_t,
                                profile_res_t> ()
@@ -62,7 +61,10 @@ inline int run_service_host (int argc, char **argv)
                                application_gate_req_t,
                                application_gate_res_t> ();
         mesh.configure_router_socket ().send_high_water_mark =
-          zlink::byte_count_t::bytes (1);
+          // The request envelope has multiple frames. Keep the test's HWM
+          // deliberately small while leaving room for one complete typed
+          // RouteMesh request after a peer replacement.
+          zlink::byte_count_t::bytes (4 * 1024);
         mesh.configure_router_socket ().send_timeout =
           std::chrono::milliseconds (250);
         mesh.configure_router_socket ().mailbox_message_budget = 1;

@@ -614,7 +614,7 @@ test('Instance Spot address requests follow a route published after a stale targ
   assert.equal(invalidated, 1);
 });
 
-test('Missing Instance requests reselect a placement after a stale target reply', async () => {
+test('Missing Instance terminal NotFound is not resubmitted after completion', async () => {
   class Lookup {}
   const freshRoute = {
     routerChannelId: 'play',
@@ -679,13 +679,11 @@ test('Missing Instance requests reselect a placement after a stale target reply'
     defaultRequestTimeoutMs: 1_000
   });
 
-  const reply = await addressTransport.requestToSpotAddress('spot-1', new Lookup(), {
+  await assert.rejects(() => addressTransport.requestToSpotAddress('spot-1', new Lookup(), {
     instanceSpot: true,
     instanceSpotType: 'chat-room'
-  });
-
-  assert.deepEqual(reply, { route: 'node-b' });
-  assert.equal(invalidated, 1);
+  }), /Instance Spot request failed with result 102/);
+  assert.equal(invalidated, 0);
   assert.equal(missingRequests, 1);
 });
 

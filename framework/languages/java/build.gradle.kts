@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "systems.zlink"
-version = "0.9.0"
+version = "0.10.0"
 
 idea {
     module {

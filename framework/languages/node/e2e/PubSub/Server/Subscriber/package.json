@@ -1,6 +1,6 @@
 {
   "name": "@zlink-systems/e2e-pubsub-subscriber",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "private": true,
   "main": "dist/Server/Subscriber/main.js",
   "scripts": {

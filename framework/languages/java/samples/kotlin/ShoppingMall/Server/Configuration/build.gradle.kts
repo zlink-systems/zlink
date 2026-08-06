@@ -16,8 +16,8 @@ fun sampleRootPath(): String {
 
 dependencies {
     api(sampleProject("Shared"))
-    api("systems.zlink:zlink-framework-core:0.9.0")
-    api("systems.zlink:zlink-framework-locations-redis:0.9.0")
+    api("systems.zlink:zlink-framework-core:0.10.0")
+    api("systems.zlink:zlink-framework-locations-redis:0.10.0")
     api("com.fasterxml.jackson.core:jackson-databind:2.17.2")
     api("com.fasterxml.jackson.module:jackson-module-kotlin:2.17.2")
     api("org.springframework.boot:spring-boot:3.5.14")

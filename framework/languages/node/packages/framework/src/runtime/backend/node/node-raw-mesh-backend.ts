@@ -405,6 +405,20 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     return intent;
   }
 
+  expectPeer(peer: {
+    readonly nodeRoutingId: string;
+    readonly endpoint: string;
+    readonly securityIdentity?: string;
+    readonly lifecycleGeneration: bigint;
+  }): void {
+    this.requireRuntime().expectPeerByRoutingId(
+      peer.endpoint,
+      peer.nodeRoutingId,
+      peer.securityIdentity,
+      peer.lifecycleGeneration
+    );
+  }
+
   removePeerConnection(intentId: bigint): void {
     const intent = this.peerIntents.get(intentId);
     if (intent === undefined) return;

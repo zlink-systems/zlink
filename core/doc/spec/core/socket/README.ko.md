@@ -905,6 +905,31 @@ lifecycle 소유권 충돌은 `ZLINK_CONNECT_BUSY`입니다. `zlink_errno()`는
 
 ---
 
+### zlink_disconnect_transport_pair
+
+모니터 이벤트에서 얻은 transport pair identity와 일치하는 연결만
+비동기 종료 대상으로 지정한다.
+
+```c
+ZLINK_EXPORT zlink_connect_result_t zlink_disconnect_transport_pair (
+  void *s_, uint64_t transport_pair_id_, uint64_t transport_pair_generation_);
+```
+
+`transport_pair_id_`와 `transport_pair_generation_`은 종료할 연결의 모니터
+이벤트에서 복사해야 한다. 이 함수는 해당 pair에 속한 모든 lane을 종료
+대상으로 지정하며, 같은 peer routing id를 사용하는 다른 연결에는 영향을
+주지 않는다. 두 값 중 하나라도 0이면 잘못된 인자이며, 이미 제거된
+identity를 지정하면 `ZLINK_CONNECT_NOT_FOUND`를 반환한다.
+
+**반환값:** 하나 이상의 lane을 종료 대상으로 지정하면
+`ZLINK_CONNECT_OK`를 반환한다. 그 밖의 경우에는
+`zlink_connect_result_t` 오류를 반환하고, 자세한 원인은 `zlink_errno()`로
+확인한다.
+
+**참고:** `zlink_disconnect_rid`, `zlink_socket_monitor_recv`
+
+---
+
 ### zlink_send_ready_handler
 
 send-ready 콜백을 설정하거나 교체합니다.

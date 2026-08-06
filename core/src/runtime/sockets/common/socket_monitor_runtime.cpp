@@ -7,8 +7,10 @@
 namespace
 {
 std::string make_monitor_ready_key (const zlink::endpoint_uri_pair_t &endpoint_uri_pair_,
-                                    const unsigned char *routing_id_,
-                                    size_t routing_id_size_)
+                                     const unsigned char *routing_id_,
+                                     size_t routing_id_size_,
+                                     uint64_t transport_pair_id_,
+                                     uint64_t transport_pair_generation_)
 {
     std::string key = endpoint_uri_pair_.identifier ();
     if (key.empty ())
@@ -17,9 +19,16 @@ std::string make_monitor_ready_key (const zlink::endpoint_uri_pair_t &endpoint_u
     if (routing_id_ && routing_id_size_ > 0)
         key.append (reinterpret_cast<const char *> (routing_id_), routing_id_size_);
     key.push_back ('\0');
-    key.append (reinterpret_cast<const char *> (
-                  &endpoint_uri_pair_.connection_id),
-                sizeof (endpoint_uri_pair_.connection_id));
+    if (transport_pair_id_ != 0) {
+        key.append (reinterpret_cast<const char *> (&transport_pair_id_),
+                    sizeof (transport_pair_id_));
+        key.append (reinterpret_cast<const char *> (&transport_pair_generation_),
+                    sizeof (transport_pair_generation_));
+    } else {
+        key.append (reinterpret_cast<const char *> (
+                      &endpoint_uri_pair_.connection_id),
+                    sizeof (endpoint_uri_pair_.connection_id));
+    }
     return key;
 }
 
@@ -60,11 +69,14 @@ bool zlink::socket_monitor_runtime_t::mark_ready_connection (
   const endpoint_uri_pair_t &endpoint_uri_pair_,
   const unsigned char *routing_id_,
   size_t routing_id_size_,
-  uint32_t *ready_count_out_)
+  uint32_t *ready_count_out_,
+  uint64_t transport_pair_id_,
+  uint64_t transport_pair_generation_)
 {
     const bool inserted =
       ready_connections
-        .insert (make_monitor_ready_key (endpoint_uri_pair_, routing_id_, routing_id_size_))
+        .insert (make_monitor_ready_key (endpoint_uri_pair_, routing_id_, routing_id_size_,
+                                         transport_pair_id_, transport_pair_generation_))
         .second;
     if (inserted && ready_count_out_)
         *ready_count_out_ = ready_count ();
@@ -75,10 +87,13 @@ bool zlink::socket_monitor_runtime_t::erase_ready_connection (
   const endpoint_uri_pair_t &endpoint_uri_pair_,
   const unsigned char *routing_id_,
   size_t routing_id_size_,
-  uint32_t *ready_count_out_)
+  uint32_t *ready_count_out_,
+  uint64_t transport_pair_id_,
+  uint64_t transport_pair_generation_)
 {
     const bool erased = ready_connections.erase (make_monitor_ready_key (
-                          endpoint_uri_pair_, routing_id_, routing_id_size_))
+                          endpoint_uri_pair_, routing_id_, routing_id_size_,
+                          transport_pair_id_, transport_pair_generation_))
                         != 0;
     if (erased && ready_count_out_)
         *ready_count_out_ = ready_count ();
@@ -86,8 +101,34 @@ bool zlink::socket_monitor_runtime_t::erase_ready_connection (
 }
 
 bool zlink::socket_monitor_runtime_t::erase_ready_connection_for_endpoint (
-  const endpoint_uri_pair_t &endpoint_uri_pair_, uint32_t *ready_count_out_)
+  const endpoint_uri_pair_t &endpoint_uri_pair_,
+  uint32_t *ready_count_out_,
+  uint64_t transport_pair_id_,
+  uint64_t transport_pair_generation_)
 {
+    if (transport_pair_id_ != 0) {
+        const std::string prefix = make_monitor_ready_endpoint_prefix (endpoint_uri_pair_);
+        std::string pair_suffix;
+        pair_suffix.append (reinterpret_cast<const char *> (&transport_pair_id_),
+                            sizeof (transport_pair_id_));
+        pair_suffix.append (reinterpret_cast<const char *> (&transport_pair_generation_),
+                            sizeof (transport_pair_generation_));
+        for (std::set<std::string>::iterator it = ready_connections.begin ();
+             it != ready_connections.end (); ++it) {
+            if (it->compare (0, prefix.size (), prefix) != 0
+                || it->size () < prefix.size () + pair_suffix.size ()
+                || it->compare (it->size () - pair_suffix.size (), pair_suffix.size (),
+                                pair_suffix)
+                     != 0)
+                continue;
+
+            ready_connections.erase (it);
+            if (ready_count_out_)
+                *ready_count_out_ = ready_count ();
+            return true;
+        }
+        return false;
+    }
     const std::string prefix = make_monitor_ready_endpoint_prefix (endpoint_uri_pair_);
     for (std::set<std::string>::iterator it = ready_connections.begin ();
          it != ready_connections.end (); ++it) {

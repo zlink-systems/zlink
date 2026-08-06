@@ -8,6 +8,7 @@ namespace
 
 /* TA-A4: the client owns the requests, failure classification, and evidence assertions. */
 inline void run_ta_a4_scenario (zlink::http_client::client_t &actor,
+                                zlink::http_client::client_t &actor_b,
                                 zlink::http_client::client_t &caller,
                                 zlink::http_client::client_t &session_gateway,
                                 const std::string &session_stream)
@@ -23,7 +24,7 @@ inline void run_ta_a4_scenario (zlink::http_client::client_t &actor,
     require_location (caller, "TA-A4-location-missing", "ta-a4", "missing");
     assert_failure (caller, "TA-A4-destroyed", "ta-a4", "actor_route_not_found", false);
 
-    const auto evidence = actor.get ("/evidence").submit<std::vector<e2e::actor_evidence_t>> ().result ().value ().body;
+    const auto evidence = actor_evidence (actor, actor_b);
     require_evidence (evidence, "TA-A4-disconnected-send", "send");
 }
 

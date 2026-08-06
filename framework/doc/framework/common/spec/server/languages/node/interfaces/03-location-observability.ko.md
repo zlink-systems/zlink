@@ -67,6 +67,28 @@ export interface ZLinkLocationRuntimeQuery {
     page?: ZLinkPageRequest,
     signal?: AbortSignal
   ): Promise<ZLinkLocationPage<ZLinkLocationServiceSummary>>;
+  listObjectLocations(
+    filter: ZLinkLocationObjectFilter,
+    page?: ZLinkPageRequest,
+    signal?: AbortSignal
+  ): Promise<ZLinkLocationPage<ZLinkLocationObjectEntry>>;
+}
+
+export type ZLinkLocationObjectState = 'creating' | 'ready';
+
+export interface ZLinkLocationObjectEntry {
+  readonly globalId: string;
+  readonly objectGeneration: bigint;
+  readonly meshName: string;
+  readonly nodeRid: RoutingId;
+  readonly state: ZLinkLocationObjectState;
+  readonly stableType: string;
+}
+
+export interface ZLinkLocationObjectFilter {
+  readonly objectKind: 'actor' | 'user_spot' | 'instance_spot';
+  readonly stableType?: string;
+  readonly meshName?: string;
 }
 
 export interface ZLinkLocationTopologyFilter {
@@ -107,7 +129,10 @@ export interface ZLinkLocationReadiness {
 }
 ```
 
-Spot·Actor·route 저장 행 query, 저장 key, `ZLinkLocationAutoConnectType`, watch store와 change stamp는 runtime 내부 계약이다. Application은 aggregate topology와 service summary를 조회한다.
+Spot·Actor 위치 조회는 운영 도구가 현재 object 위치를 확인하기 위한 공개 query다. 이 query는
+filter와 page를 함께 사용하며, 한 번에 반환하는 항목 수는 `1..1000` 범위로 제한한다. 반환된
+위치를 application message의 target 목록이나 배치 조건으로 사용하지 않는다. route 저장 행 query,
+저장 key, `ZLinkLocationAutoConnectType`, watch store와 change stamp는 runtime 내부 계약이다.
 
 ## 3. Runtime 상태와 structured log
 

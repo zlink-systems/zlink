@@ -18,7 +18,7 @@ public final class AwaitCancelMsgHandler
     public CompletionStage<Void> handle(
         ProbeSpot spot,
         Contracts.AwaitCancelMsg command) {
-        String value = "spot=" + spot.context().spotRid() + ";node=" + spot.context().nodeRid();
+        String value = "spot=" + spot.context().spotId() + ";node=" + spot.context().nodeRid();
         evidence.record(command.requestId(), "cancel-await-started", value);
         evidence.record(command.requestId(), "cancel-await-released", value);
         CompletableFuture<Contracts.DelayRes> pending = spot.context().outbound()
@@ -40,3 +40,4 @@ public final class AwaitCancelMsgHandler
         });
     }
 }
+

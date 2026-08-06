@@ -184,6 +184,42 @@ mesh_node_builder_state_t::mesh_node_builder_state_t (std::string name) :
     listen_endpoint = "tcp://" + bind_host + ":0";
 }
 
+void bind_mesh_handler_services (std::shared_ptr<mesh_node_builder_state_t> state,
+                                 service_collection_t &services)
+{
+    if (!state) {
+        throw configuration_error ("MeshNode registration is required");
+    }
+    std::vector<std::function<void (service_collection_t &)>> registrars;
+    {
+        std::lock_guard lock (state->mutex);
+        state->services = &services;
+        registrars.swap (state->pending_handler_service_registrars);
+    }
+    for (auto &registrar : registrars) {
+        registrar (services);
+    }
+}
+
+void register_mesh_handler_service (
+  std::shared_ptr<mesh_node_builder_state_t> state,
+  std::function<void (service_collection_t &)> registrar)
+{
+    if (!state || !registrar) {
+        throw configuration_error ("MeshNode handler service registration is invalid");
+    }
+    service_collection_t *services = nullptr;
+    {
+        std::lock_guard lock (state->mutex);
+        services = state->services;
+        if (services == nullptr) {
+            state->pending_handler_service_registrars.push_back (std::move (registrar));
+            return;
+        }
+    }
+    registrar (*services);
+}
+
 mesh_node_runtime_t::mesh_node_runtime_t (std::shared_ptr<mesh_node_builder_state_t> state) :
     _state (std::move (state))
 {
@@ -218,6 +254,27 @@ void mesh_node_runtime_t::start ()
     }
     _stopping.store (false, std::memory_order_release);
     runtime::messaging::activate_submit_owner (this);
+
+    std::shared_ptr<handler_group_options_state_t> handler_groups;
+    std::vector<std::pair<std::string, std::string>> mesh_handler_groups;
+    {
+        std::lock_guard state_lock (_state->mutex);
+        handler_groups = _state->handler_groups;
+        if (handler_groups) {
+            for (const auto &[channel_name, channel] : _state->channels) {
+                if (channel.server && !channel.handler_group.empty ()) {
+                    mesh_handler_groups.emplace_back (
+                      channel_name, channel.handler_group);
+                }
+            }
+        }
+    }
+    if (handler_groups) {
+        for (const auto &[channel_name, group_name] : mesh_handler_groups) {
+            mesh_channel_server_builder_t channel (_state, channel_name);
+            handler_groups->install_mesh_handlers (group_name, channel);
+        }
+    }
 
     std::lock_guard lock (_state->mutex);
     if (const auto options = _state->framework_options.lock ()) {
@@ -737,7 +794,33 @@ bool mesh_node_runtime_t::application_actor_transfer_in_progress (
 result_t<bool> mesh_node_runtime_t::destroy_application_actor (
   const actor_ref_t &actor)
 {
-    return spot_node_runtime_t (_state->spot_state).destroy_actor (actor);
+    const auto destroyed =
+      spot_node_runtime_t (_state->spot_state).destroy_actor (actor);
+    if (!destroyed)
+        return destroyed;
+    const auto stateful = cleanup_application_actor_stateful (actor);
+    if (!stateful)
+        return result_t<bool>::failure (
+          stateful.error_kind (),
+          stateful.error () ? stateful.error ()->what ()
+                            : "stateful Actor cleanup failed");
+    return result_t<bool>::success (true);
+}
+
+result_t<void> mesh_node_runtime_t::cleanup_application_actor_stateful (
+  const actor_ref_t &actor)
+{
+    if (_node) {
+        const auto stateful = _node->destroy_application_actor (
+          actor.actor_id ().value (), actor.object_generation ());
+        if (stateful != runtime::stateful::stateful_error_t::none
+            && stateful != runtime::stateful::stateful_error_t::not_found)
+            return result_t<void>::failure (
+              framework_error_kind_t::internal_failure,
+              "stateful Actor cleanup failed");
+        _actors.erase (std::string (actor.actor_id ().value ()));
+    }
+    return result_t<void>::success ();
 }
 
 runtime::stateful::aggregate_relocation_result_t
@@ -3049,8 +3132,19 @@ mesh_channel_server_builder_t::use_handler_group (std::string group_name)
     if (group_name.empty ()) {
         throw detail::configuration_error ("handler group name is required");
     }
-    std::lock_guard lock (_state->mutex);
-    _state->channels[_channel_name].handler_group = std::move (group_name);
+    std::shared_ptr<detail::handler_group_options_state_t> handler_groups;
+    {
+        std::lock_guard lock (_state->mutex);
+        _state->channels[_channel_name].handler_group = group_name;
+        handler_groups = _state->handler_groups;
+    }
+    if (handler_groups) {
+        handler_groups->add_mesh_channel (
+          group_name, _channel_name,
+          {detail::handler_group_kind_t::request,
+           detail::handler_group_kind_t::send},
+          "MeshNode channel");
+    }
     return *this;
 }
 

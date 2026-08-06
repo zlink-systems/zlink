@@ -31,7 +31,9 @@ if [[ ! -x "${LEGACY_RUNNER}" ]]; then
 fi
 
 if [[ "${SCENARIO}" == "all" ]]; then
-  exec "${LEGACY_RUNNER}" all
+  echo "Kotlin StoreFailure all is incomplete; blocked selectors: ${blocked_common[*]}" >&2
+  echo "Run an individual supported selector to execute the available fixture." >&2
+  exit 3
 fi
 
 if contains "${SCENARIO}" "${blocked_common[@]}"; then

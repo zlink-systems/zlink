@@ -28,6 +28,11 @@ inline void record_runtime_log (evidence_store_t &evidence,
     if (record.message == "zlink.runtime.transport.connection_changed") {
         evidence.add ("monitor-socket|source=" + log_field (record, "source_name")
                       + "|kind=" + log_field (record, "state"));
+    } else if (record.message == "zlink.runtime.location.store_changed") {
+        evidence.add ("monitor-location|source="
+                      + log_field (record, "source_name")
+                      + "|identifier=zlink.runtime.location.store_changed|reason="
+                      + log_field (record, "state"));
     } else if (record.message == "zlink.runtime.spot.timer_failed") {
         evidence.add ("monitor-spot|source=" + log_field (record, "source_name")
                       + "|kind=TimerFailed|timer=" + log_field (record, "timer_name"));

@@ -259,6 +259,13 @@ public interface ZLinkLocationRuntimeQuery {
     CompletionStage<ZLinkLocationPage<ZLinkLocationServiceSummary>> listServiceSummaries(
         ZLinkLocationServiceSummaryFilter filter,
         ZLinkPageRequest page);
+    CompletionStage<java.util.Optional<ZLinkLocationObjectEntry>> findActorLocation(
+        String actorId);
+    CompletionStage<java.util.Optional<ZLinkLocationObjectEntry>> findSpotLocation(
+        String spotId);
+    CompletionStage<ZLinkLocationPage<ZLinkLocationObjectEntry>> listObjectLocations(
+        ZLinkLocationObjectFilter filter,
+        ZLinkPageRequest page);
 }
 
 public interface ZLinkLocationReadiness {
@@ -269,8 +276,13 @@ public interface ZLinkLocationReadiness {
 }
 ```
 
-운영 조회는 bounded page만 반환한다. Raw Spot·Actor authority row, Store key, scan cursor와 provider
-version은 application 조회 계약에 포함하지 않는다.
+운영 조회는 bounded page만 반환한다. `findActorLocation`과 `findSpotLocation`은 현재 `Ready`
+위치가 없으면 빈 `Optional`을 반환하고, `Creating` 상태는 해당 상태를 담은 entry로 반환한다.
+`findSpotLocation`은 `USER_SPOT`과 `INSTANCE_SPOT`을 모두 같은 `spotId` 조회 계약으로 다룬다.
+`listObjectLocations`는 object kind와 stable type별로 조회하며 page size는 `1..1000`, encoded page는
+4 MiB 이하로 제한한다. `ZLinkLocationObjectEntry`는 global ID, `ObjectGeneration`, MeshName, Node RID,
+상태와 stable type을 담는다. Raw authority row, Store key, scan cursor와 provider version은 application
+조회 계약에 포함하지 않는다.
 
 ## Redis extension
 

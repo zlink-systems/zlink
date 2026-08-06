@@ -49,4 +49,9 @@ export interface MonitorEventValueRaw {
   remote?: string;
   localAddr?: string;
   remoteAddr?: string;
+  connectionId?: bigint;
+  transportPairId?: bigint;
+  transportPairGeneration?: bigint;
+  transportLane?: number;
+  flags?: number;
 }

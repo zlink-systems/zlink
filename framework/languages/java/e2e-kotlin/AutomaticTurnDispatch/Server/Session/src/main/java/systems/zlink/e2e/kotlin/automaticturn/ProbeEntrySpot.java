@@ -2,10 +2,8 @@ package systems.zlink.e2e.kotlin.automaticturn;
 
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
-import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.spots.ZLinkEntrySpot;
 import systems.zlink.framework.spots.ZLinkEntrySpotContext;
-import systems.zlink.framework.spots.ZLinkSpotActorJoinResult;
 
 public final class ProbeEntrySpot implements ZLinkEntrySpot<ProbeActor> {
     private final ZLinkEntrySpotContext context;
@@ -22,13 +20,6 @@ public final class ProbeEntrySpot implements ZLinkEntrySpot<ProbeActor> {
     @Override
     public void configure() {
         context.handlers().addHandler(EntryActorJoinHandler.class);
-    }
-
-    @Override
-    public CompletionStage<ZLinkSpotActorJoinResult> onActorJoin(
-        String actorId,
-        ZLinkMessage request) {
-        return CompletableFuture.completedFuture(ZLinkSpotActorJoinResult.accept());
     }
 
     @Override

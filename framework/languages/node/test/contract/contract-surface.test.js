@@ -702,7 +702,7 @@ test('location contract exposes only opaque provider primitives and aggregate op
   assert.match(runtimeQuery, /listTopology\(/);
   assert.match(runtimeQuery, /listServiceSummaries\(/);
   assert.match(runtimeQuery, /Promise<ZLinkLocationPage<ZLinkLocationServiceSummary>>/);
-  assert.doesNotMatch(runtimeQuery, /list(?:Peer|Spot|Actor|Route)Locations\(/);
+  assert.match(runtimeQuery, /listObjectLocations\(/);
   assert.match(topologyFilter, /readonly meshName\?: string/);
   assert.match(topologyFilter, /readonly nodeRid\?: RoutingId/);
   assert.match(topologyFilter, /readonly state\?: ZLinkLocationTopologyState/);

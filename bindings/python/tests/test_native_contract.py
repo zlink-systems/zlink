@@ -95,7 +95,7 @@ def test_package_platform_policy_is_explicit_linux_x86_64_only():
     } == {
         "linux-x86_64/libzlink.so",
         "linux-x86_64/libzlink.so.0",
-        "linux-x86_64/libzlink.so.0.9.0",
+        "linux-x86_64/libzlink.so.0.10.0",
     }
 
 

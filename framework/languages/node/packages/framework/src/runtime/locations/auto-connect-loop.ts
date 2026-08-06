@@ -79,7 +79,9 @@ export class ZLinkAutoConnectLoop {
         const liveOwners = this.leaseTracker === undefined
           ? 0
           : await this.leaseTracker.getLiveOwnerSetVersion(signal);
-        if (this.lastStamp === stamp && this.lastLiveOwnerSetVersion === liveOwners) {
+        if (this.lastStamp === stamp
+          && this.lastLiveOwnerSetVersion === liveOwners
+          && this.reconciler.localPublicationReady) {
           return;
         }
         const tickFailed = await this.runReconcile(signal);

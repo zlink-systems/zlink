@@ -37,9 +37,25 @@ int poller_add_registration (poller_handle_t *poller_,
         errno = EFAULT;
         return -1;
     }
-    const size_t registration_index = poller_->registrations.size ();
-    if (poller_->poller.add (socket_, poller_index_user_data (registration_index), events_) != 0)
+    if (!socket_->acquire_poller_registration ())
         return -1;
+
+    const size_t registration_index = poller_->registrations.size ();
+    // Reserve every container before touching the native poller.  The C ABI
+    // must not leave a native registration behind when a C++ allocation
+    // fails while publishing the framework registration.
+    try {
+        poller_->registrations.reserve (registration_index + 1);
+        poller_->socket_registration_indices.reserve (registration_index + 1);
+    } catch (...) {
+        socket_->release_poller_registration ();
+        errno = ENOMEM;
+        return -1;
+    }
+    if (poller_->poller.add (socket_, poller_index_user_data (registration_index), events_) != 0) {
+        socket_->release_poller_registration ();
+        return -1;
+    }
 
     poller_registration_t registration;
     registration.socket = static_cast<void *> (socket_);
@@ -48,8 +64,22 @@ int poller_add_registration (poller_handle_t *poller_,
     registration.subject_kind = subject_kind_;
     registration.user_data = user_data_;
     registration.events = events_;
-    poller_->registrations.push_back (registration);
-    poller_->socket_registration_indices[registration.socket] = poller_->registrations.size () - 1;
+    registration.owns_socket_lifetime = true;
+    try {
+        poller_->registrations.push_back (registration);
+        const auto inserted = poller_->socket_registration_indices.emplace (
+          registration.socket, poller_->registrations.size () - 1);
+        if (!inserted.second)
+            throw std::bad_alloc ();
+    } catch (...) {
+        (void) poller_->poller.remove (socket_);
+        if (!poller_->registrations.empty ()
+            && poller_->registrations.back ().socket == registration.socket)
+            poller_->registrations.pop_back ();
+        socket_->release_poller_registration ();
+        errno = ENOMEM;
+        return -1;
+    }
     return 0;
 }
 
@@ -65,6 +95,13 @@ int poller_add_fd_registration (poller_handle_t *poller_,
         return -1;
     }
     const size_t registration_index = poller_->registrations.size ();
+    try {
+        poller_->registrations.reserve (registration_index + 1);
+        poller_->fd_registration_indices.reserve (registration_index + 1);
+    } catch (...) {
+        errno = ENOMEM;
+        return -1;
+    }
     if (poller_->poller.add_fd (fd_, poller_index_user_data (registration_index), events_) != 0)
         return -1;
 
@@ -75,8 +112,20 @@ int poller_add_fd_registration (poller_handle_t *poller_,
     registration.subject_kind = subject_kind_;
     registration.user_data = user_data_;
     registration.events = events_;
-    poller_->registrations.push_back (registration);
-    poller_->fd_registration_indices[registration.fd] = poller_->registrations.size () - 1;
+    try {
+        poller_->registrations.push_back (registration);
+        const auto inserted = poller_->fd_registration_indices.emplace (
+          registration.fd, poller_->registrations.size () - 1);
+        if (!inserted.second)
+            throw std::bad_alloc ();
+    } catch (...) {
+        (void) poller_->poller.remove_fd (fd_);
+        if (!poller_->registrations.empty () && poller_->registrations.back ().fd == registration.fd
+            && !poller_->registrations.back ().socket)
+            poller_->registrations.pop_back ();
+        errno = ENOMEM;
+        return -1;
+    }
     return 0;
 }
 
@@ -189,6 +238,10 @@ void release_poller_registration (const poller_registration_t &registration_)
     if (registration_.socket && registration_.owns_completion_processing) {
         static_cast<zlink::socket_base_t *> (registration_.socket)
           ->release_completion_poller ();
+    }
+    if (registration_.socket && registration_.owns_socket_lifetime) {
+        static_cast<zlink::socket_base_t *> (registration_.socket)
+          ->release_poller_registration ();
     }
     switch (registration_.subject_kind) {
         case poller_subject_timer:

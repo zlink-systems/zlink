@@ -105,6 +105,11 @@ type MissingTargetSelection =
   | { readonly kind: 'capacity' }
   | { readonly kind: 'unavailable' };
 
+// Only a synchronous target-admission rejection is safe to retry. A
+// completion with the same public error kind may already represent an
+// admitted application operation, so it must not enter the retry loop.
+const PRE_ADMISSION_MISSING_INSTANCE_ERRORS = new WeakSet<ZLinkFrameworkException>();
+
 /** Owns global Spot authority lookup and Missing Instance placement. */
 export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport {
   constructor(private readonly options: ZLinkHostSpotAddressTransportOptions) {}
@@ -325,7 +330,7 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
         try {
           return await this.requestToMissingInstance(spotId, request, call, deadline);
         } catch (error) {
-          if (!isInstanceRouteStaleError(error)) throw error;
+          if (!isMissingInstanceRetryError(error)) throw error;
           // A placement node can finish cleanup before its stale native result
           // reaches this process. Refresh authority and select again under the
           // same end-to-end deadline; the old envelope was not admitted.
@@ -444,13 +449,24 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
       deadline.deadlineMs
     );
     deadline.requireRemaining();
-    const operation = selected.node.requestToMissingInstanceSpot(
-      selected.target,
-      encoded,
-      deadlineUnixMs,
-      call.sourceSpot === undefined ? undefined : String(call.sourceSpot.routingId),
-      call.metadata
-    );
+    let operation: ReturnType<ZLinkBackendMeshNode['requestToMissingInstanceSpot']>;
+    try {
+      operation = selected.node.requestToMissingInstanceSpot(
+        selected.target,
+        encoded,
+        deadlineUnixMs,
+        call.sourceSpot === undefined ? undefined : String(call.sourceSpot.routingId),
+        call.metadata
+      );
+    } catch (error) {
+      if (
+        error instanceof ZLinkFrameworkException
+        && internalFrameworkErrorKind(error) === ZLinkFrameworkInternalErrorKind.RequestTargetNotFound
+      ) {
+        PRE_ADMISSION_MISSING_INSTANCE_ERRORS.add(error);
+      }
+      throw error;
+    }
     this.traceInstanceAddress(
       ZLinkMessageFlowOutcome.Sent,
       ZLinkDispatchMessageKind.Request,
@@ -758,9 +774,19 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
 
 function isInstanceRouteStaleError(error: unknown): error is ZLinkFrameworkException {
   if (!(error instanceof ZLinkFrameworkException)) return false;
+  if ((error as ZLinkFrameworkException & { readonly physicalSubmission?: boolean })
+    .physicalSubmission === true) return false;
   const kind = internalFrameworkErrorKind(error);
-  return kind === ZLinkFrameworkInternalErrorKind.RequestTargetNotFound
-    || kind === ZLinkFrameworkInternalErrorKind.ActorLocationStale;
+  // RequestTargetNotFound from an existing route is a pre-admission route
+  // lookup failure. ActorLocationStale can be reported after the routed
+  // request has crossed the transport boundary, so resubmitting the same
+  // application operation could execute it twice.
+  return kind === ZLinkFrameworkInternalErrorKind.RequestTargetNotFound;
+}
+
+function isMissingInstanceRetryError(error: unknown): error is ZLinkFrameworkException {
+  return error instanceof ZLinkFrameworkException
+    && PRE_ADMISSION_MISSING_INSTANCE_ERRORS.has(error);
 }
 
 function missingInstanceRequestFailure(

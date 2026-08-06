@@ -34,6 +34,7 @@ namespace zlink::framework::detail
 namespace host = zlink::framework::runtime::host;
 
 struct framework_options_state_t;
+struct handler_group_options_state_t;
 
 struct mesh_channel_registration_t
 {
@@ -56,6 +57,10 @@ struct mesh_node_builder_state_t
     std::optional<std::string> advertise_host;
     std::optional<std::string> advertise_host_override;
     std::weak_ptr<framework_options_state_t> framework_options;
+    service_collection_t *services = nullptr;
+    std::vector<std::function<void (service_collection_t &)>>
+      pending_handler_service_registrars;
+    std::shared_ptr<handler_group_options_state_t> handler_groups;
     std::optional<zlink::routing_id_t> routing_id;
     std::optional<std::string> automatic_routing_id_prefix;
     object_role_t object_role = object_role_t::server;
@@ -132,6 +137,8 @@ class mesh_node_runtime_t
       relocation_capacity_fence_t capacity_fence);
     bool application_actor_transfer_in_progress (
       const actor_ref_t &actor) const;
+    result_t<void> cleanup_application_actor_stateful (
+      const actor_ref_t &actor);
     result_t<bool> destroy_application_actor (const actor_ref_t &actor);
     runtime::stateful::aggregate_relocation_result_t
     relocate_application_unit (

@@ -13,6 +13,8 @@ import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.lang.reflect.Method;
+import java.util.concurrent.CompletionStage;
 import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
@@ -26,6 +28,31 @@ import systems.zlink.framework.runtime.internal.locations.*;
 final class LocationStoreContractTest {
     private static final Instant STORE_NOW = Instant.parse("2026-07-03T00:00:00Z");
     private static final RoutingId NODE_A = RoutingId.from("node-a");
+
+    @Test
+    void runtimeQueryExposesBoundedObjectLocationOperations() throws Exception {
+        Method actor = ZLinkLocationRuntimeQuery.class
+            .getMethod("findActorLocation", String.class);
+        Method spot = ZLinkLocationRuntimeQuery.class
+            .getMethod("findSpotLocation", String.class);
+        Method list = ZLinkLocationRuntimeQuery.class
+            .getMethod("listObjectLocations",
+                ZLinkLocationObjectFilter.class, ZLinkPageRequest.class);
+
+        assertEquals(CompletionStage.class,
+            java.lang.reflect.ParameterizedType.class.cast(actor.getGenericReturnType())
+                .getRawType());
+        assertEquals(CompletionStage.class,
+            java.lang.reflect.ParameterizedType.class.cast(spot.getGenericReturnType())
+                .getRawType());
+        assertEquals(CompletionStage.class,
+            java.lang.reflect.ParameterizedType.class.cast(list.getGenericReturnType())
+                .getRawType());
+        assertEquals(ZLinkPlacementObjectKind.ACTOR,
+            ZLinkLocationObjectFilter.of(ZLinkPlacementObjectKind.ACTOR).objectKind());
+        assertThrows(NullPointerException.class,
+            () -> new ZLinkLocationObjectFilter(null, null, null));
+    }
 
     @Test
     void registrationKeepsOneUnifiedProviderBoundary() {

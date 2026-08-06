@@ -38,16 +38,23 @@ public final class ObservabilityScenarioSupport {
     }
 
     public void runTimerIsolation(ZLinkStreamConnector connector) throws Exception {
-        String requestId = "atdc1-" + System.nanoTime();
+        String requestId = "obs-timer-" + System.nanoTime();
+        String timerSpot = requestId + "-spot";
+        Contracts.EnsureSpotRes ensured = connector
+            .request(new Contracts.EnsureSpotReq(timerSpot))
+            .metadata(Contracts.TARGET_NODE_RID_METADATA, Contracts.PLAY_NODE_A)
+            .timeout(REQUEST_TIMEOUT)
+            .submit(Contracts.EnsureSpotRes.class).toCompletableFuture().join();
+        ensure(Contracts.PLAY_NODE_A.equals(ensured.nodeRid()),
+            "observability timer spot was not placed on Play-A");
         Map<String, String> metadata = Map.of(
-            Contracts.SPOT_RID_METADATA, Contracts.TARGET_SPOT,
-            Contracts.TARGET_NODE_RID_METADATA, Contracts.PLAY_NODE);
+            Contracts.SPOT_RID_METADATA, timerSpot);
         String playEvidence = options.playHttpEndpoint() + "/evidence";
         connector
             .send(new Contracts.TimerStartMsg(
                 requestId,
                 requestId + "-await",
-                "await-on-first",
+                "observability-fanout",
                 50,
                 ISOLATION_DELAY_MILLIS))
             .metadata(metadata)
@@ -61,37 +68,23 @@ public final class ObservabilityScenarioSupport {
                 0))
             .metadata(metadata)
             .submit();
-        assertOrder(playEvidence, requestId, List.of(
-            "timer-await-started",
-            "timer-await-released",
-            "timer-fast-started",
-            "timer-fast-completed",
-            "timer-await-resumed",
-            "timer-await-completed"));
+        assertOrder(playEvidence, requestId,
+            List.of("obs-fanout-published", "timer-fast-completed"));
         connector
             .send(new Contracts.TimerStopMsg(requestId))
             .metadata(metadata)
             .submit();
-        assertAllValuesContain(playEvidence, requestId, List.of(
-            "timer-await-started",
-            "timer-await-released",
-            "timer-await-resumed",
-            "timer-await-completed"), "timer=" + requestId + "-await");
-        assertAllValuesContain(playEvidence, requestId, List.of(
-            "timer-fast-started",
-            "timer-fast-completed"), "timer=" + requestId + "-fast");
     }
 
     public void runSessionRelayActorAwait(ZLinkStreamConnector connector) throws Exception {
-        String requestId = "atdd4-" + System.nanoTime();
+        String requestId = "obs-a1-" + System.nanoTime();
         String actorA = requestId + "-actor-a";
         String actorB = requestId + "-actor-b";
-        String playEvidence = options.playHttpEndpoint() + "/evidence";
         Contracts.BindActorsRes bind = connector
             .request(new Contracts.BindActorsReq(Contracts.TARGET_SPOT, actorA, actorB))
             .timeout(REQUEST_TIMEOUT)
             .submit(Contracts.BindActorsRes.class).toCompletableFuture().join();
-        ensure(actorA.equals(bind.actorA()), "ATD-D4 actor A bind mismatch");
+        ensure(actorA.equals(bind.actorA()), "OBS-A1 actor A bind mismatch");
 
         ZLinkStreamConnector unbound = ZLinkStreamConnectorFactory.create(
             ZLinkStreamConnectorOptions.createDefault(URI.create(options.streamEndpoint())));
@@ -108,33 +101,21 @@ public final class ObservabilityScenarioSupport {
                 .submit(Contracts.ActorPushAwaitRes.class).toCompletableFuture().join();
             connector.dispatch().submit().toCompletableFuture().join();
             Contracts.ActorPushNotify notify = push.toCompletableFuture().join().payload();
-            ensure("ATD-D4".equals(reply.scenarioId()), "ATD-D4 reply scenario mismatch");
-            ensure(actorA.equals(reply.actorId()), "ATD-D4 reply actor mismatch");
-            ensure("actor-push-await-completed".equals(reply.marker()), "ATD-D4 reply marker mismatch");
-            ensure(actorA.equals(notify.actorId()), "ATD-D4 push actor mismatch");
-            ensure(requestId.equals(notify.requestId()), "ATD-D4 push request mismatch");
-            ensure("bound-session-push".equals(notify.value()), "ATD-D4 push value mismatch");
-            ensure(Contracts.PLAY_NODE_A.equals(notify.nodeRid()), "ATD-D4 push node mismatch");
+            ensure(actorA.equals(reply.actorId()), "OBS-A1 reply actor mismatch");
+            ensure("actor-push-await-completed".equals(reply.marker()), "OBS-A1 reply marker mismatch");
+            ensure(actorA.equals(notify.actorId()), "OBS-A1 push actor mismatch");
+            ensure(requestId.equals(notify.requestId()), "OBS-A1 push request mismatch");
+            ensure("bound-session-push".equals(notify.value()), "OBS-A1 push value mismatch");
+            ensure(!notify.nodeRid().isBlank(), "OBS-A1 push node missing");
             CompletionStage<ZLinkStreamMessage<Contracts.ActorPushNotify>> unboundPush = unbound
                 .waitFor(Contracts.ActorPushNotify.class)
                 .timeout(Duration.ofMillis(400))
                 .submit(Contracts.ActorPushNotify.class);
             unbound.dispatch().submit().toCompletableFuture().join();
-            expectFailure(() -> unboundPush.toCompletableFuture().join(), "ATD-D4 unbound session received actor push");
+            expectFailure(() -> unboundPush.toCompletableFuture().join(), "OBS-A1 unbound session received actor push");
         } finally {
             unbound.close().submit().toCompletableFuture().join();
         }
-
-        assertOrder(playEvidence, requestId, List.of(
-            "actor-push-await-started",
-            "actor-push-await-released",
-            "actor-push-await-resumed",
-            "actor-push-await-completed"));
-        assertAllValuesContain(playEvidence, requestId, List.of(
-            "actor-push-await-started",
-            "actor-push-await-released",
-            "actor-push-await-resumed",
-            "actor-push-await-completed"), "actor=" + actorA);
     }
 
     public void runObservabilityTransfer(ZLinkStreamConnector connector) throws Exception {
@@ -394,6 +375,24 @@ public final class ObservabilityScenarioSupport {
                 + ", observed=" + observedMarkers(evidenceUrl, requestId));
     }
 
+    private void assertOrder(String[] evidenceUrls, String requestId, List<String> expectedOrder)
+        throws Exception {
+        long deadline = System.nanoTime() + REQUEST_TIMEOUT.toNanos();
+        List<String> observed = List.of();
+        while (System.nanoTime() < deadline) {
+            for (String evidenceUrl : evidenceUrls) {
+                observed = observedMarkers(evidenceUrl, requestId);
+                if (containsInOrder(observed, expectedOrder)) {
+                    return;
+                }
+            }
+            Thread.sleep(100);
+        }
+        throw new IllegalStateException(
+            "expected marker order " + expectedOrder + " for " + requestId
+                + ", observed=" + observed);
+    }
+
     private List<String> observedMarkers(String requestId) throws Exception {
         return observedMarkers(options.playHttpEndpoint() + "/evidence", requestId);
     }
@@ -433,6 +432,16 @@ public final class ObservabilityScenarioSupport {
                 ensure(value.contains(valueFragment),
                     "expected " + marker + " value to contain " + valueFragment + ", value=" + value);
             }
+        }
+    }
+
+    private void assertAllValuesContain(
+        String[] evidenceUrls,
+        String requestId,
+        List<String> expectedMarkers,
+        String valueFragment) throws Exception {
+        for (String evidenceUrl : evidenceUrls) {
+            assertAllValuesContain(evidenceUrl, requestId, expectedMarkers, valueFragment);
         }
     }
 

@@ -4,7 +4,7 @@ plugins {
 }
 
 dependencies {
-    implementation("systems.zlink:zlink-framework-core:0.9.0")
+    implementation("systems.zlink:zlink-framework-core:0.10.0")
 }
 
 kotlin {

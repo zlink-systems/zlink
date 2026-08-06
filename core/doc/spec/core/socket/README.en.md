@@ -921,6 +921,29 @@ diagnostics.
 ---
 
 
+### zlink_disconnect_transport_pair
+
+Disconnect the exact transport pair identified by monitor identity.
+
+```c
+ZLINK_EXPORT zlink_connect_result_t zlink_disconnect_transport_pair (
+  void *s_, uint64_t transport_pair_id_, uint64_t transport_pair_generation_);
+```
+
+The pair id and generation must be copied from a monitor event for the
+connection to be terminated. The operation terminates every lane belonging to
+that exact pair and does not affect another connection that uses the same peer
+routing id. A zero id or generation is invalid, and an identity that is no
+longer attached returns `ZLINK_CONNECT_NOT_FOUND`.
+
+**Returns:** `ZLINK_CONNECT_OK` when at least one lane was scheduled for
+termination; otherwise a `zlink_connect_result_t` value. `zlink_errno()` keeps
+the detailed internal errno for diagnostics.
+
+**See also:** `zlink_disconnect_rid`, `zlink_socket_monitor_recv`
+
+---
+
 ### zlink_send_ready_handler
 
 Install or replace the send-ready callback.

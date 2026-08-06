@@ -91,6 +91,16 @@ export class MonitorEvent {
   readonly localAddr: string;
   /** The remote endpoint address. */
   readonly remoteAddr: string;
+  /** Process-local identity of the physical transport attempt. */
+  readonly connectionId: bigint;
+  /** Non-zero when the event belongs to a paired Application/Completion transport. */
+  readonly transportPairId: bigint;
+  /** Generation of the paired transport, or zero for an unpaired transport. */
+  readonly transportPairGeneration: bigint;
+  /** The transport lane associated with the event: 0 Application, 1 Completion. */
+  readonly transportLane: number;
+  /** Event-specific flags, including the connection-ready edge flag. */
+  readonly flags: number;
 
   private constructor() {
     throw new TypeError('MonitorEvent values are created by monitor recv operations');

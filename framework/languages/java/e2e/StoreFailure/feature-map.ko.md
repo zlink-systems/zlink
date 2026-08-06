@@ -71,7 +71,10 @@
 - `SF-C4`는 한 provider process에 두 RouteMesh role, ClientServer server와 fanout publisher를 함께
   구성하고 role별 consumer를 추가해야 한다. 현재 provider는 RouteMesh role 하나만 제공한다.
 - `SF-C5`, `SF-F6`이 요구하는 object page query는 public Java
-  `ZLinkLocationRuntimeQuery`에 없다. 현재 public query는 topology와 service summary page만 제공한다.
+  `ZLinkLocationRuntimeQuery`에 구현되었다. `findActorLocation`, `findSpotLocation`과
+  `listObjectLocations`는 bounded continuation과 4 MiB page budget을 적용한다. SF-C5의
+  남은 작업은 1,001개 object를 실제 process fixture에서 생성하고 누락·중복 없는 결과를
+  확인하는 것이다.
 - `SF-F1`은 다른 언어 caller와 replacement process가 필요하다. Java StoreFailure 디렉터리 안의
   process만으로 언어 간 payload와 identity를 검증할 수 없다.
 - `SF-F2`, `SF-F3`, `SF-F4`, `SF-F5`, `SF-F7`, `SF-F8`, `SF-F10`, `SF-F11`은 relocation store,
@@ -91,7 +94,18 @@
 
 다음 공통 scenario는 현재 Java StoreFailure fixture와 public surface만으로는 완료할 수 없다.
 
-- `SF-C4`, `SF-C5`
+- `SF-C4`
 - `SF-F1`, `SF-F2`, `SF-F3`, `SF-F4`, `SF-F5`, `SF-F6`
 - `SF-F7`, `SF-F8`, `SF-F10`, `SF-F11`
 - `SF-G1`, `SF-G2`, `SF-G3`
+
+## SF-C5 구현 및 검증 상태
+
+SF-C5의 Java fixture는 서로 다른 1,001개 Instance Spot object를 public request 경로로 만든다. Consumer는
+public `ZLinkLocationRuntimeQuery.listObjectLocations`를 통해 page size 1, 100, 1,000을 순서대로 조회하고,
+continuation token을 따라가며 중복·누락·잘못된 stable type·잘못된 generation을 검사한다. Page가 끝났을 때
+관찰한 global ID 수가 정확히 1,001개인지 확인한다.
+
+구현 파일은 `Client`, `Server/Consumer`, `Shared`, `run_e2e.sh`에 있다. 2026-08-06 focused runner는
+provider channel readiness 단계에서 중단되어 scenario 결과를 통과로 기록하지 않았다. native runtime 기동
+문제를 해결한 뒤 같은 selector로 재검증해야 한다.

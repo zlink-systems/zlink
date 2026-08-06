@@ -16,7 +16,7 @@ public final class WorkerAwaitMsgHandler
     public CompletionStage<Void> handle(
         ProbeSpot spot,
         Contracts.WorkerAwaitMsg command) {
-        String value = "spot=" + spot.context().spotRid()
+        String value = "spot=" + spot.context().spotId()
             + ";handler=spot";
         evidence.record(command.requestId(), "worker-await-started", value);
         var call = spot.context().runCpuWorker(cancellation -> {
@@ -31,3 +31,4 @@ public final class WorkerAwaitMsgHandler
         });
     }
 }
+

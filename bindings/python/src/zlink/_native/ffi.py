@@ -26,6 +26,11 @@ class ZlinkMonitorEvent(ctypes.Structure):
         ("routing_id", ZlinkRoutingId),
         ("local_addr", ctypes.c_char * 256),
         ("remote_addr", ctypes.c_char * 256),
+        ("connection_id", ctypes.c_uint64),
+        ("transport_pair_id", ctypes.c_uint64),
+        ("transport_pair_generation", ctypes.c_uint64),
+        ("transport_lane", ctypes.c_uint32),
+        ("flags", ctypes.c_uint32),
     ]
 
 

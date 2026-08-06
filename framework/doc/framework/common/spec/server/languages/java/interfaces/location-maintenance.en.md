@@ -291,6 +291,13 @@ public interface ZLinkLocationRuntimeQuery {
     CompletionStage<ZLinkLocationPage<ZLinkLocationServiceSummary>> listServiceSummaries(
         ZLinkLocationServiceSummaryFilter filter,
         ZLinkPageRequest page);
+    CompletionStage<java.util.Optional<ZLinkLocationObjectEntry>> findActorLocation(
+        String actorId);
+    CompletionStage<java.util.Optional<ZLinkLocationObjectEntry>> findSpotLocation(
+        String spotId);
+    CompletionStage<ZLinkLocationPage<ZLinkLocationObjectEntry>> listObjectLocations(
+        ZLinkLocationObjectFilter filter,
+        ZLinkPageRequest page);
 }
 
 public interface ZLinkLocationReadiness {
@@ -301,9 +308,13 @@ public interface ZLinkLocationReadiness {
 }
 ```
 
-An operational query only returns a bounded page. Raw Spot/Actor
-authority rows, Store keys, scan cursors, and provider version aren't
-included in the application query contract.
+Operational queries only return a bounded page. `findActorLocation` and `findSpotLocation` return an empty
+`Optional` when no current `Ready` location exists and return a `Creating` entry while creation is in progress.
+`findSpotLocation` accepts both `USER_SPOT` and `INSTANCE_SPOT` authority rows for the supplied `spotId`.
+`listObjectLocations` queries one object kind and stable type at a time. Its page size is `1..1000` and the
+encoded page is at most 4 MiB. `ZLinkLocationObjectEntry` contains the global ID, `ObjectGeneration`, MeshName,
+Node RID, state, and stable type. Raw Spot/Actor authority rows, Store keys, scan cursors, and provider versions
+are not part of the application query contract.
 
 ## Redis Extension
 

@@ -23,6 +23,7 @@
     zlink_dealer_request_part;
     zlink_disconnect;
     zlink_disconnect_rid;
+    zlink_disconnect_transport_pair;
     zlink_errno;
     zlink_get_dealer_option;
     zlink_get_option;
@@ -87,6 +88,7 @@
     zlink_socket_monitor_handler;
     zlink_socket_monitor_open;
     zlink_socket_monitor_recv;
+    zlink_socket_monitor_recv_v2;
     zlink_stopwatch_intermediate;
     zlink_stopwatch_start;
     zlink_stopwatch_stop;

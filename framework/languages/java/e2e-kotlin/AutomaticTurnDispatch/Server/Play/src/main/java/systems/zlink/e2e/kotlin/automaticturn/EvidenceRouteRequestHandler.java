@@ -2,7 +2,7 @@ package systems.zlink.e2e.kotlin.automaticturn;
 
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
-import systems.zlink.framework.channels.ZLinkRouteRequestContext;
+import systems.zlink.framework.channels.ZLinkRouteMessageContext;
 import systems.zlink.framework.channels.ZLinkRouteRequestHandler;
 
 public final class EvidenceRouteRequestHandler
@@ -16,7 +16,8 @@ public final class EvidenceRouteRequestHandler
     @Override
     public CompletionStage<Contracts.EvidenceRes> handle(
         Contracts.EvidenceReq request,
-        ZLinkRouteRequestContext context) {
+        ZLinkRouteMessageContext context) {
         return CompletableFuture.completedFuture(evidence.evidence(request.requestId()));
     }
 }
+

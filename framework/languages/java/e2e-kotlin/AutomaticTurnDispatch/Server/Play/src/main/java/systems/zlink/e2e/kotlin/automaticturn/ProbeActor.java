@@ -4,17 +4,10 @@ import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.actors.ZLinkActorContext;
 
 public final class ProbeActor implements ZLinkActor {
-    private final String actorId;
     private final ZLinkActorContext context;
 
-    public ProbeActor(String actorId, ZLinkActorContext context) {
-        this.actorId = actorId;
+    public ProbeActor(ZLinkActorContext context) {
         this.context = context;
-    }
-
-    @Override
-    public String actorId() {
-        return actorId;
     }
 
     @Override

@@ -101,7 +101,7 @@ int main (int argc, char **argv)
             .packet_name (yd::bind_await_actors_req_t::packet_name)
             .timeout (std::chrono::milliseconds (15000))
             .submit<yd::bind_await_actors_res_t> ();
-        ensure (static_cast<bool> (bound_actors), "ATD-B bind actors failed");
+        ensure_result (bound_actors, "ATD-B bind actors failed");
         ensure (bound_actors.value ().actors.size () == 2, "ATD-B bind actor count mismatch");
         auto observer_bound_actors =
           observer.request (
@@ -110,8 +110,7 @@ int main (int argc, char **argv)
             .packet_name (yd::bind_await_actors_req_t::packet_name)
             .timeout (std::chrono::milliseconds (15000))
             .submit<yd::bind_await_actors_res_t> ();
-        ensure (static_cast<bool> (observer_bound_actors),
-                "ATD-B observer bind actors failed");
+        ensure_result (observer_bound_actors, "ATD-B observer bind actors failed");
         if (wants ("atd-a1")) {
             atd_client::run_atd_a1_basic_terminator_scenario (client, spot_id);
         }

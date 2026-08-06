@@ -12,8 +12,6 @@ object RmB2ScaleInScenario {
             val providerB = cluster.startProvider("api-b-scale-in", "api-b")
             val consumer = cluster.startConsumer("consumer-scale-in")
             val requester = HttpJson(consumer.httpUrl)
-            cluster.waitPeerEndpoint(requester, providerA.routingId)
-            cluster.waitPeerEndpoint(requester, providerB.routingId)
             cluster.waitPeerCount(requester, 2)
             val before = ScenarioAssert.requestUntilProvidersSeen(
                 requester,
@@ -22,7 +20,7 @@ object RmB2ScaleInScenario {
             )
             ScenarioAssert.that(before.contains("api-a") && before.contains("api-b"), "RM-B2 did not start with both providers.")
             cluster.stop(providerB)
-            cluster.waitPeerEndpointAbsent(requester, providerB.routingId)
+            cluster.waitPeerCount(requester, 1)
             repeat(20) { afterIndex ->
                 val reply = ScenarioAssert.requestProfileEventually(requester, "scale-in-after-$afterIndex")
                 ScenarioAssert.that(reply.providerRid == "api-a", "RM-B2 routed to removed provider.")

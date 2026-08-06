@@ -5,7 +5,7 @@ plugins {
 
 dependencies {
     implementation(project(":Shared"))
-    implementation("systems.zlink:zlink-stream-connector:0.9.0")
+    implementation("systems.zlink:zlink-stream-connector:0.10.0")
 }
 
 kotlin {

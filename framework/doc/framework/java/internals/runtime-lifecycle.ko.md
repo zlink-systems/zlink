@@ -79,7 +79,41 @@ package 설정을 따른다.
 | `KotlinSuspendAnnotationHandlerTest.kotlinSuspendAnnotationCancellationCompletesJavaStageExceptionally` | Kotlin cancellation이 공유 Java completion에 전달된다. |
 | `ChannelEgressRouting/CH-E2E-04B` | ClientServer server의 shutdown 이후에도 shutdown 전에 수락한 request가 reply로 끝나고, 새 request는 다른 ready server로 전달된다. |
 
+## 5. Native runtime package 동기화
+
+Java binding과 Core package의 release version은 `0.10.0`으로 일치해야 한다. Java binding을
+검증하거나 배포할 때는 `/home/hep7/project/kairos/zlink/.artifacts/wsl/install/zlink-core/0.10.0`의
+Core package를 bridge 입력으로 지정하고, 같은 provenance manifest와 native runtime을 사용한다.
+
+Java binding은 test classpath의 `ZLINK_LIBRARY_PATH`가 가리키는 native runtime을 먼저 확인한다.
+이 값이 지정되지 않으면 source resource에 남아 있는 개발용 native 파일이 선택될 수 있다. Core를
+수정한 뒤에는 local package를 다시 만들고 source resource를 동기화하거나 `ZLINK_LIBRARY_PATH`를
+검증한 runtime으로 지정해야 한다. 그렇지 않으면 Java test가 수정 전 native binary를 실행하여
+heap corruption을 재현하거나 수정 결과를 숨길 수 있다.
+
+현재 poller 수명 수정은 blocking wait 중에는 `operation_sync`를 점유하지 않고, 등록 변경만
+`wait_active`로 차단한다. 따라서 readiness event 변환 중 callback이 같은 poller API에 재진입해도
+non-recursive mutex deadlock이 발생하지 않는다. poller를 삭제할 때는 먼저 native registration을
+분리하고 ownership을 해제한다. 등록된 socket을 close하면 socket lifetime pin이 registration
+remove까지 유지되고, poller는 `POLLERR`를 반환한다. Java `NativePoller.close()`는 wait가 끝날
+때까지 native destroy를 예약한다. 수정 결과는 Core package verification, Java binding contract
+test, 그리고 `ZLINK_LIBRARY_PATH`를 지정한 반복 실행으로 확인한다.
+
+이번 heap corruption의 직접 원인은 Core monitor event에 추가된 diagnostic tail을 Java
+`MONITOR_EVENT_LAYOUT`이 할당하지 않은 상태에서 Core가 전체 구조체를 기록한 것이다. Java layout에
+`connection_id`, transport pair 식별자, transport lane과 event flags를 추가해 Core 구조체 전체
+크기 816 bytes를 확보했다. 현재 Java public `MonitorEvent`가 이 diagnostic 값을 노출하지 않더라도
+수신 buffer는 native public layout 전체를 수용해야 한다. `NativeLayoutsTest`가 이 크기를 고정하고,
+`MonitorBehaviorContractTest`가 실제 blocking receive를 검증한다.
+
 ---
 <!-- framework-adapter-nav:bottom:start -->
 [문서 목록](../README.ko.md) | [다음: Regression Test Matrix](regression-test-matrix.ko.md)
+Location object query는 authority page 내부의 마지막 검사 위치를 opaque continuation token에
+함께 보존한다. 필터가 앞부분에서 여러 항목을 제외하거나 한 page가 1,000개 경계에서
+끝나도 다음 요청이 항목을 건너뛰지 않는다. 반환 page는 JSON 표현의 encoded size를
+계산해 4 MiB를 넘기지 않으며, 단일 항목이 이 제한을 넘으면 일부 결과를 성공으로 반환하지
+않고 실패한다. `findSpotLocation`은 user Spot과 Instance Spot의 authority row를 모두
+조회한다.
+
 <!-- framework-adapter-nav:bottom:end -->

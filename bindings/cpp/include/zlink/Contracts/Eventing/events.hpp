@@ -3,6 +3,8 @@
 
 #include "../Core/routing_id.hpp"
 
+#include <cstdint>
+
 namespace zlink
 {
 
@@ -39,6 +41,11 @@ struct monitor_event_t
     monitor_event_t () :
         event (monitor_event::closed),
         value (0),
+        connection_id (0),
+        transport_pair_id (0),
+        transport_pair_generation (0),
+        transport_lane (0),
+        flags (0),
         routing_id (std::nullopt),
         local_addr (),
         remote_addr ()
@@ -46,7 +53,14 @@ struct monitor_event_t
     }
 
     monitor_event event;
-    uint32_t value;
+    std::uint64_t value;
+    /* Identifies the physical transport attempt that emitted the event. */
+    std::uint64_t connection_id;
+    /* Identifies the paired application/completion transport, when present. */
+    std::uint64_t transport_pair_id;
+    std::uint64_t transport_pair_generation;
+    std::uint32_t transport_lane;
+    std::uint32_t flags;
     std::optional<routing_id_t> routing_id;
     std::string local_addr;
     std::string remote_addr;

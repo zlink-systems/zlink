@@ -236,7 +236,7 @@ import urllib.request
 base, marker = sys.argv[1:]
 body = json.dumps({"value": "availability", "marker": marker}).encode()
 request = urllib.request.Request(
-    f"{base}/profile/request",
+    f"{base}/profile/request/service-a",
     data=body,
     headers={"Content-Type": "application/json"},
     method="POST",
@@ -254,6 +254,7 @@ wait_trigger_route_state() {
 import json
 import sys
 import time
+import urllib.error
 import urllib.request
 
 base, rid, endpoint = sys.argv[1:]
@@ -290,8 +291,13 @@ base, rid, expected = sys.argv[1:]
 wanted = expected == "true"
 deadline = time.monotonic() + 25
 while time.monotonic() < deadline:
-    with urllib.request.urlopen(f"{base}/runtime/snapshot", timeout=2) as response:
-        snapshot = json.load(response)
+    try:
+        with urllib.request.urlopen(f"{base}/runtime/snapshot", timeout=2) as response:
+            snapshot = json.load(response)
+    except urllib.error.HTTPError as error:
+        raise RuntimeError(
+            "runtime snapshot failed during store failure: "
+            + error.read().decode("utf-8", errors="replace")) from error
     peers = [peer for peer in snapshot["peers"] if peer["rid"] == rid]
     ready = any(peer["state"] == "ready" for peer in peers)
     if ready == wanted:
@@ -389,7 +395,7 @@ os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
 PY
 }
 
-if [[ "$SCENARIO_LOWER" == "mon-a5" ]]; then
+run_mon_a5() {
   python3 - "$HTTP_SERVICE" <<'PY'
 import json
 import sys
@@ -405,7 +411,7 @@ deadline = time.monotonic() + 15
 while time.monotonic() < deadline:
     with urllib.request.urlopen(f"{base}/runtime/snapshot", timeout=2) as response:
         snapshot = json.load(response)
-    if snapshot["location"]["state"] == "ready":
+    if snapshot["state"] == "ready":
         break
     time.sleep(0.1)
 else:
@@ -416,15 +422,21 @@ PY
 import json
 import sys
 import time
+import urllib.error
 import urllib.request
 
 base = sys.argv[1]
 deadline = time.monotonic() + 30
 while time.monotonic() < deadline:
-    with urllib.request.urlopen(f"{base}/runtime/snapshot", timeout=2) as response:
-        snapshot = json.load(response)
-    if snapshot["location"]["state"] == "degraded":
-        if sum(1 for peer in snapshot["peers"] if peer["ready"]) < 2:
+    try:
+        with urllib.request.urlopen(f"{base}/runtime/snapshot", timeout=2) as response:
+            snapshot = json.load(response)
+    except urllib.error.HTTPError as error:
+        raise RuntimeError(
+            "runtime snapshot failed during recovery: "
+            + error.read().decode("utf-8", errors="replace")) from error
+    if snapshot["state"] == "degraded":
+        if sum(1 for peer in snapshot["peers"] if peer["state"] == "ready") < 2:
             raise RuntimeError("admitted peers were lost during store-only failure")
         break
     time.sleep(0.2)
@@ -437,49 +449,77 @@ PY
 import json
 import sys
 import time
+import urllib.error
 import urllib.request
 
 base = sys.argv[1]
 deadline = time.monotonic() + 30
 while time.monotonic() < deadline:
-    with urllib.request.urlopen(f"{base}/runtime/snapshot", timeout=2) as response:
-        snapshot = json.load(response)
-    if snapshot["location"]["state"] == "ready":
+    try:
+        with urllib.request.urlopen(f"{base}/runtime/snapshot", timeout=2) as response:
+            snapshot = json.load(response)
+    except urllib.error.HTTPError as error:
+        raise RuntimeError(
+            "runtime snapshot failed during recovery: "
+            + error.read().decode("utf-8", errors="replace")) from error
+    if snapshot["state"] == "ready":
         break
     time.sleep(0.2)
 else:
     raise RuntimeError("location runtime did not recover after Redis restart")
 PY
+}
+
+if [[ "$SCENARIO_LOWER" == "mon-a5" ]]; then
+  run_mon_a5
 fi
 
-if [[ "$SCENARIO_LOWER" != "mon-a4" && "$SCENARIO_LOWER" != "mon-a4a" && "$SCENARIO_LOWER" != "mon-a4b" \
-      && "$SCENARIO_LOWER" != "mon-d1" && "$SCENARIO_LOWER" != "mon-d1a" && "$SCENARIO_LOWER" != "mon-d1b" ]]; then
-  write_client_config "$SCENARIO_LOWER"
+run_monitor_client() {
+  local scenario="$1"
+  write_client_config "$scenario"
   "$CLIENT" --config="$CONFIG_DIR/client.json" \
-    >"$LOG_DIR/client.stdout.log" 2>"$LOG_DIR/client.stderr.log"
+    >"$LOG_DIR/client-${scenario}.stdout.log" 2>"$LOG_DIR/client-${scenario}.stderr.log"
 
-  cat "$LOG_DIR/client.stdout.log"
-  grep -q "runtime-monitoring client result=passed" "$LOG_DIR/client.stdout.log"
-  if [[ "$SCENARIO_LOWER" == "all" || "$SCENARIO_LOWER" == "mon-c1" ]]; then
+  cat "$LOG_DIR/client-${scenario}.stdout.log"
+  grep -q "runtime-monitoring client result=passed" \
+    "$LOG_DIR/client-${scenario}.stdout.log"
+  if [[ "$scenario" == "mon-c1" ]]; then
     grep -q "mesh-request-completed|target=svc-throw|marker=mon-c1-infrastructure" \
       "$LOG_DIR/filtered.evidence.log"
-    grep -q "claim-domain=application|reason=active" \
-      "$LOG_DIR/filtered.evidence.log"
-    grep -q "claim-domain=application|reason=released" \
-      "$LOG_DIR/filtered.evidence.log"
+    grep -q "application-gate|state=entered" "$LOG_DIR/filtered.evidence.log"
+    grep -q "application-gate|state=released" "$LOG_DIR/filtered.evidence.log"
   fi
+}
+
+if [[ "$SCENARIO_LOWER" == "all" ]]; then
+  # Run the ordinary monitoring scenarios before the destructive replacement
+  # and Store-failure phases. The previous all branch skipped these scenarios
+  # and only printed a passing result for A4, D1, and A5.
+  for scenario in mon-a1 mon-a2 mon-a3 mon-b1 mon-b2 mon-c1; do
+    run_monitor_client "$scenario"
+  done
+elif [[ "$SCENARIO_LOWER" != "mon-a4" && "$SCENARIO_LOWER" != "mon-a4a" && "$SCENARIO_LOWER" != "mon-a4b" \
+      && "$SCENARIO_LOWER" != "mon-d1" && "$SCENARIO_LOWER" != "mon-d1a" && "$SCENARIO_LOWER" != "mon-d1b" \
+      && "$SCENARIO_LOWER" != "mon-a5" ]]; then
+  run_monitor_client "$SCENARIO_LOWER"
 fi
 
 if [[ "$SCENARIO_LOWER" == "all" || "$SCENARIO_LOWER" == "mon-a4" || "$SCENARIO_LOWER" == "mon-a4a" || "$SCENARIO_LOWER" == "mon-a4b" ]]; then
   python3 - "$HTTP_SERVICE" <<'PY'
 import sys
+import urllib.error
 import urllib.request
 
 base = sys.argv[1]
 request = urllib.request.Request(f"{base}/runtime/observe", data=b"", method="POST")
-with urllib.request.urlopen(request, timeout=5) as response:
-    if response.status >= 400:
-        raise RuntimeError("failed to start public RouteMesh observer")
+try:
+    with urllib.request.urlopen(request, timeout=5) as response:
+        if response.status >= 400:
+            raise RuntimeError("failed to start public RouteMesh observer")
+except urllib.error.HTTPError as error:
+    raise RuntimeError(
+        "failed to start public RouteMesh observer: "
+        + error.read().decode("utf-8", errors="replace")) from error
 PY
   wait_mesh_peer_ready svc-b true
   stop_service "$FILTERED_PID" filtered-service-normal "$HTTP_FILTERED"
@@ -521,6 +561,10 @@ else:
 PY
   crash_service "$FILTERED_PID" filtered-service-crash "$HTTP_FILTERED"
   wait_mesh_peer_ready svc-b false
+  # A crash cannot remove the old descriptor.  The replacement must wait for
+  # the crashed process's owner lease to expire before it claims the same RID.
+  # RuntimeMonitoring uses a five-second lease and a one-second fencing margin.
+  sleep 6
   python3 - "$HTTP_SERVICE" <<'PY'
 import json
 import sys
@@ -568,7 +612,11 @@ else:
     raise RuntimeError("crash recovery request did not converge")
 PY
 
-  write_client_config mon-a4
+  if [[ "$SCENARIO_LOWER" == "all" ]]; then
+    write_client_config mon-a4
+  else
+    write_client_config "$SCENARIO_LOWER"
+  fi
   "$CLIENT" --config="$CONFIG_DIR/client.json" \
     >"$LOG_DIR/client-a4.stdout.log" 2>"$LOG_DIR/client-a4.stderr.log"
 
@@ -597,6 +645,10 @@ PY
   for cycle in $(seq 1 "$MON_D1_CYCLES"); do
     crash_service "$FILTERED_PID" "filtered-service-cycle-$cycle" "$HTTP_FILTERED"
     wait_mesh_peer_ready svc-b false
+    # A crashed owner keeps its descriptor until the five-second lease and
+    # one-second fencing margin expire. Leave additional scheduling margin
+    # before reusing the same routing id.
+    sleep 10
     start_service_b "filtered-restart-$cycle"
     wait_mesh_peer_ready svc-b true
   done
@@ -613,6 +665,15 @@ PY
   else
     grep -q "scenario MON-D1 passed" "$LOG_DIR/client-d1.stdout.log"
   fi
+fi
+
+if [[ "$SCENARIO_LOWER" == "all" ]]; then
+  run_mon_a5
+  write_client_config mon-a5
+  "$CLIENT" --config="$CONFIG_DIR/client.json" \
+    >"$LOG_DIR/client-all.stdout.log" 2>"$LOG_DIR/client-all.stderr.log"
+  cat "$LOG_DIR/client-all.stdout.log"
+  grep -q "runtime-monitoring client result=passed" "$LOG_DIR/client-all.stdout.log"
 fi
 
 echo "runtime-monitoring e2e result=passed"

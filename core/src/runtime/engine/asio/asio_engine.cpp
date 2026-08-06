@@ -1827,7 +1827,10 @@ void zlink::asio_engine_t::error (error_reason_t reason_)
     const unsigned char *routing_id_data = routing_id ? routing_id->data () : NULL;
     const size_t routing_id_size = routing_id ? routing_id->size () : 0;
     _connection_facade.socket->event_disconnected (_endpoint_uri_pair, disconnect_reason,
-                                                   routing_id_data, routing_id_size);
+                                                   routing_id_data, routing_id_size,
+                                                   _connection_facade.session->transport_lane (),
+                                                   _connection_facade.session->transport_pair_id (),
+                                                   _connection_facade.session->transport_pair_generation ());
     _connection_facade.session->flush ();
     _connection_facade.session->engine_error (!_connection_facade.handshaking, reason_);
     unplug ();

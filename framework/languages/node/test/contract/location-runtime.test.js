@@ -159,6 +159,44 @@ test('location runtime schedules heartbeats from a monotonic fixed cadence after
   await runtime.stop();
 });
 
+test('location runtime subtracts Store round trip from local lease eligibility', async () => {
+  const store = new internal.ZLinkInMemoryLocationStore(() => new Date(0));
+  let monotonicMs = 0;
+  const leaseStore = {
+    claimOwnerLease: async (...args) => {
+      const result = await store.claimOwnerLease(...args);
+      monotonicMs = 100;
+      return result;
+    },
+    readOwnerLease: store.readOwnerLease.bind(store),
+    renewOwnerLease: store.renewOwnerLease.bind(store),
+    releaseOwnerLease: store.releaseOwnerLease.bind(store)
+  };
+  const runtime = new internal.ZLinkLocationRuntime({
+    stores: {
+      locationStore: store,
+      authorityStore: store,
+      peerStore: store,
+      spotStore: store,
+      actorStore: store,
+      routeStore: store,
+      ownerLeaseStore: leaseStore
+    },
+    options: { ownerLeaseTtlMs: 1_000, ownerLeaseFencingMarginMs: 0 },
+    now: () => new Date(0),
+    monotonicNowMs: () => monotonicMs,
+    setTimer() { return 0; },
+    clearTimer() {}
+  });
+
+  await runtime.start(rid('node-a'));
+  monotonicMs = 899;
+  assert.equal(runtime.ownerLeaseUsable, true);
+  monotonicMs = 1_000;
+  assert.equal(runtime.ownerLeaseUsable, false);
+  await runtime.stop();
+});
+
 test('location runtime waits for an in-flight heartbeat before removing the owner lease', async () => {
   const store = new internal.ZLinkInMemoryLocationStore();
   const timers = [];
@@ -1181,6 +1219,33 @@ test('location resolvers resolve Entry Spots from live MeshNode descriptors', as
   assert.equal(address.spotId, entrySpotId);
   assert.equal(address.spotKind, framework.ZLinkSpotKind.Entry);
 
+  await runtime.stop();
+});
+
+test('location runtime recreates a missing MeshNode row after Renew conflict', async () => {
+  const store = new internal.ZLinkInMemoryLocationStore();
+  const runtime = runtimeFor(store, { ownerId: 'owner-a' });
+  await runtime.start(rid('node-a'));
+  const descriptor = placementDescriptor('node-a', 'Player', 100, 0, 0);
+
+  assert.equal(
+    (await runtime.writeMeshNode(descriptor, internal.ZLinkLocationWriteIntent.NewClaim)).status,
+    internal.ZLinkLocationWriteStatus.Stored
+  );
+  assert.equal(
+    await store.removeMeshNode(
+      { meshName: descriptor.meshName, rid: descriptor.rid },
+      runtime.currentOwnerToken
+    ),
+    internal.ZLinkLocationWriteStatus.Stored
+  );
+
+  const renewed = await runtime.writeMeshNode(
+    descriptor,
+    internal.ZLinkLocationWriteIntent.Renew
+  );
+  assert.equal(renewed.status, internal.ZLinkLocationWriteStatus.Stored);
+  assert.equal((await store.listMeshNodes('play')).items.length, 1);
   await runtime.stop();
 });
 

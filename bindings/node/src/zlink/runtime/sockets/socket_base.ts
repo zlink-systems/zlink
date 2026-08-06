@@ -129,6 +129,16 @@ export class ConnectableSocket extends SocketBase {
       );
     });
   }
+
+  disconnectTransportPair(transportPairId: bigint, transportPairGeneration: bigint): void {
+    connectCall('socket disconnect by transport pair failed', () => {
+      requireNative().socketDisconnectTransportPair(
+        getNativeHandle(this),
+        transportPairId,
+        transportPairGeneration
+      );
+    });
+  }
 }
 
 export class SendReadySocket extends ConnectableSocket {

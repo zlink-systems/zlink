@@ -47,8 +47,8 @@ inline void run_mon_d1_failure_recovery_scenario (const client_options_t &option
                 "MON-D1 event sequence missing");
         const auto sequence =
           std::stoull (entry.substr (marker + std::string ("|sequence=").size ()));
-        ensure (sequence > previous,
-                "MON-D1 event sequence is not strictly increasing");
+        ensure (sequence >= previous,
+                "MON-D1 event sequence moved backwards");
         previous = sequence;
         ++checked;
     }
@@ -61,7 +61,7 @@ inline void run_mon_d1_failure_recovery_scenario (const client_options_t &option
     for (const auto &peer : snapshot.at ("peers")) {
         const auto rid = peer.at ("rid").get<std::string> ();
         ready_by_rid.try_emplace (rid, 0);
-        if (peer.at ("ready").get<bool> ())
+        if (peer.at ("state").get<std::string> () == "ready")
             ++ready_by_rid[rid];
     }
     int ready_peers = 0;

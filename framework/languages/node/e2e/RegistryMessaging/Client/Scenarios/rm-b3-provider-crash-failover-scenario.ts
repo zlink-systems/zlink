@@ -73,7 +73,10 @@ export async function runRmB3(options: ClientOptions): Promise<void> {
     const missing = await postJson<RouteMissingRes>(providerB.httpUrl, '/profile/route/target', {
       targetRid: 'api-missing', value: 'rm-b3-missing'
     });
-    ensure(missing.errorKind === REQUEST_TARGET_NOT_FOUND, 'RM-B3 unknown target did not report RequestTargetNotFound.');
+    ensure(
+      missing.errorKind === REQUEST_TARGET_NOT_FOUND,
+      `RM-B3 unknown target did not report RequestTargetNotFound: ${missing.errorKind}.`
+    );
     console.log('scenario RM-B3 passed');
   } finally {
     await cluster.close();

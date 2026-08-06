@@ -1501,7 +1501,8 @@ app_t &app_t::add_zlink_framework (std::function<void (zlink_framework_options_t
           std::make_shared<runtime::route_mesh_runtime_service_t> (
             mesh_nodes,
             location_runtime ? &location_runtime->get () : nullptr,
-            location_store ? &location_store->get () : nullptr);
+            location_store ? &location_store->get () : nullptr,
+            _state->monitoring);
         _state->services.add_factory<route_mesh_runtime_t> (
           [mesh_runtime] (service_provider_t &) {
               return std::static_pointer_cast<route_mesh_runtime_t> (mesh_runtime);
@@ -3580,10 +3581,6 @@ void app_t::run_shared_shutdown (
               location_runtime.options ().polling_interval
               + std::chrono::seconds (5)
               + std::chrono::milliseconds (100);
-            std::cerr << "zlink drain propagation bound polling_ms="
-                      << location_runtime.options ().polling_interval.count ()
-                      << " store_read_timeout_ms=5000 scheduler_jitter_ms=100 total_ms="
-                      << propagation_bound.count () << std::endl;
             if (std::chrono::steady_clock::now () + propagation_bound
                 > deadline_at) {
                 std::this_thread::sleep_until (deadline_at);

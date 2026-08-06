@@ -17,6 +17,7 @@ import systems.zlink.framework.spots.ZLinkSpotTimerHandler;
 import systems.zlink.framework.spots.ZLinkTimerTick;
 import systems.zlink.framework.channels.ZLinkPublishMessageContext;
 import systems.zlink.framework.channels.ZLinkFanoutHandler;
+import systems.zlink.framework.channels.ZLinkFanoutClient;
 
 public final class AwaitProbeHandlers {
     public static final class PersistentRoomStateHandler
@@ -490,9 +491,15 @@ public final class AwaitProbeHandlers {
 
     public static final class TimerTickHandler implements ZLinkSpotTimerHandler<AwaitProbeSpot> {
         private final EvidenceStore evidence;
+        private final ZLinkFanoutClient fanout;
 
         public TimerTickHandler(EvidenceStore evidence) {
+            this(evidence, null);
+        }
+
+        public TimerTickHandler(EvidenceStore evidence, ZLinkFanoutClient fanout) {
             this.evidence = evidence;
+            this.fanout = fanout;
         }
 
         @Override
@@ -503,6 +510,22 @@ public final class AwaitProbeHandlers {
             }
             String value = "timer=" + tick.name() + ";mailbox=timer:" + tick.name()
                 + ";tick=" + tick.deliveryIndex() + ";spot=" + spot.context().spotId();
+            if (tick.deliveryIndex() == 1
+                && "observability-fanout".equals(scenario.mode())) {
+                if (fanout == null) {
+                    return CompletableFuture.failedFuture(
+                        new IllegalStateException("observability fanout is not configured"));
+                }
+                CompletionStage<Void> published = fanout.publish(
+                    Contracts.OBS_FANOUT_CHANNEL,
+                    "all",
+                    new Contracts.ObservabilityFanoutEvent(scenario.requestId(), 1))
+                    .submit();
+                return published.thenRun(() -> {
+                    evidence.record("obs-fanout-published", scenario.requestId(), value);
+                    spot.closeTimer(tick.name());
+                });
+            }
             boolean yield = "yield-on-first".equals(scenario.mode())
                 || "yield-then-next".equals(scenario.mode());
             if (tick.deliveryIndex() == 1
@@ -539,10 +562,18 @@ public final class AwaitProbeHandlers {
                 evidence.record("timer-next-started", scenario.requestId(), value);
                 evidence.record("timer-next-completed", scenario.requestId(), value);
                 spot.closeTimer(tick.name());
-            } else if ("fast".equals(scenario.mode())) {
+            } else if ("fast".equals(scenario.mode()) && tick.deliveryIndex() == 1) {
                 evidence.record("timer-fast-started", scenario.requestId(), value);
-                evidence.record("timer-fast-completed", scenario.requestId(), value);
-                spot.closeTimer(tick.name());
+                return spot.context().outbound()
+                    .requestToChannel(
+                        Contracts.DELAY_CHANNEL,
+                        new Contracts.DelayReq(scenario.requestId() + "-fast", 1))
+                    .timeout(delayRequestTimeout(1))
+                    .submit(Contracts.DelayRes.class)
+                    .thenAccept(ignored -> {
+                        evidence.record("timer-fast-completed", scenario.requestId(), value);
+                        spot.closeTimer(tick.name());
+                    });
             }
             return CompletableFuture.completedFuture(null);
         }

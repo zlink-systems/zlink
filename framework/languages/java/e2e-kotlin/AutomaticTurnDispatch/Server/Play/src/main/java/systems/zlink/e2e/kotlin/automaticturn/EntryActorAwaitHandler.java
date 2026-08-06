@@ -3,7 +3,7 @@ package systems.zlink.e2e.kotlin.automaticturn;
 import java.time.Duration;
 import java.util.concurrent.CompletionStage;
 import systems.zlink.framework.handlers.ZLinkSpotActorRequest;
-import systems.zlink.framework.spots.ZLinkSpotActorRequestContext;
+import systems.zlink.framework.ZLinkMessageContext;
 
 public final class EntryActorAwaitHandler {
     private final PlayEvidenceStore evidence;
@@ -16,9 +16,9 @@ public final class EntryActorAwaitHandler {
     public CompletionStage<Contracts.ActorRes> handle(
         ProbeEntrySpot spot,
         ProbeActor actor,
-        ZLinkSpotActorRequestContext context,
+        ZLinkMessageContext context,
         Contracts.ActorAwaitReq request) {
-        String value = "actor=" + actor.actorId() + ";spot=" + spot.context().spotRid();
+        String value = "actor=" + actor.context().actorId() + ";spot=" + spot.context().spotId();
         evidence.record(request.requestId(), "actor-await-started", value);
         evidence.record(request.requestId(), "actor-await-released", value);
         return spot.context().outbound()
@@ -31,7 +31,9 @@ public final class EntryActorAwaitHandler {
                 evidence.record(request.requestId(), "actor-await-resumed", value);
                 evidence.record(request.requestId(), "actor-await-completed", value);
                 return new Contracts.ActorRes(
-                    "ATD-B", request.requestId(), actor.actorId(), "actor-await-completed");
+                    "ATD-B", request.requestId(), actor.context().actorId(), "actor-await-completed");
             });
     }
 }
+
+

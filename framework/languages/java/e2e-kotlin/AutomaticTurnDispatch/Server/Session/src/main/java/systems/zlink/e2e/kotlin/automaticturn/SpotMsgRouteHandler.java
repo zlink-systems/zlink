@@ -1,7 +1,7 @@
 package systems.zlink.e2e.kotlin.automaticturn;
 
-import java.util.concurrent.CompletionStage;
 import systems.zlink.contracts.core.RoutingId;
+import java.util.concurrent.CompletionStage;
 import systems.zlink.framework.channels.ZLinkRouteClient;
 import systems.zlink.framework.spots.SpotHandleResolver;
 import systems.zlink.framework.streams.ZLinkSessionContext;
@@ -33,9 +33,9 @@ abstract class SpotMsgRouteHandler<TCommand>
         ZLinkSessionContext context,
         ZLinkSessionDispatchContext dispatch,
         TCommand command) {
-        RoutingId targetSpotRid = targetSpot(dispatch);
+        String targetSpotRid = targetSpot(dispatch);
         return spots.resolveSpotHandle(targetSpotRid).thenCompose(handle -> routes.sendToSpot(
-            handle.orElseThrow(() -> new IllegalStateException("spot not found: " + targetSpotRid)),
+            handle.orElseThrow(() -> new IllegalStateException("spot not found: " + targetSpotRid)).spotId(),
             command).submit().thenApply(ignored -> null));
     }
 
@@ -44,8 +44,8 @@ abstract class SpotMsgRouteHandler<TCommand>
             .getOrDefault(Contracts.TARGET_NODE_RID_METADATA, "play-a"));
     }
 
-    static RoutingId targetSpot(ZLinkSessionDispatchContext dispatch) {
-        return RoutingId.from(dispatch.metadata()
-            .getOrDefault(Contracts.SPOT_RID_METADATA, "room-a"));
+    static String targetSpot(ZLinkSessionDispatchContext dispatch) {
+        return dispatch.metadata()
+            .getOrDefault(Contracts.SPOT_RID_METADATA, "room-a");
     }
 }

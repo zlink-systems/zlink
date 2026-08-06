@@ -4971,7 +4971,7 @@ test('Ready Instance request ends on a disconnected stale route without resubmis
         attempts += 1;
         if (attempts === 1) {
           throw createInternalFrameworkException(
-            ZLinkFrameworkInternalErrorKind.RouteNotConnected,
+            ZLinkFrameworkInternalErrorKind.ActorLocationStale,
             `stale route ${String((route as { targetNodeRid: string }).targetNodeRid)}`
           );
         }

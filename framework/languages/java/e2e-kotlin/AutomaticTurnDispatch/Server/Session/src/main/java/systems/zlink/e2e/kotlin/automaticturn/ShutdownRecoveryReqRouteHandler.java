@@ -36,7 +36,7 @@ public final class ShutdownRecoveryReqRouteHandler
         ZLinkSessionDispatchContext dispatch,
         Contracts.AwaitShutdownRecoveryReq request) {
         RoutingId targetNode = SpotMsgRouteHandler.targetNode(dispatch);
-        RoutingId targetSpot = RoutingId.from(request.spotRid());
+        String targetSpot = request.spotRid();
         long deadline = System.nanoTime() + RECOVERY_DEADLINE.toNanos();
         return ensureSpot(targetNode, request.spotRid())
             .thenCompose(ignored -> requestRecoveryProbe(targetSpot, request, deadline))
@@ -52,7 +52,7 @@ public final class ShutdownRecoveryReqRouteHandler
         RoutingId targetNode,
         String spotRid) {
         return routes.requestToNode(
-                Contracts.SPOT_MESH,
+                Contracts.ROUTE_CHANNEL,
                 targetNode,
                 new Contracts.EnsureSpotReq(spotRid))
             .timeout(ATTEMPT_TIMEOUT)
@@ -60,12 +60,12 @@ public final class ShutdownRecoveryReqRouteHandler
     }
 
     private CompletionStage<Contracts.EvidenceRes> requestRecoveryProbe(
-        RoutingId targetSpot,
+        String targetSpot,
         Contracts.AwaitShutdownRecoveryReq request,
         long deadline) {
         return spots.resolveSpotHandle(targetSpot)
             .thenCompose(handle -> routes.requestToSpot(
-                    handle.orElseThrow(() -> new IllegalStateException("spot not found: " + targetSpot)),
+                    handle.orElseThrow(() -> new IllegalStateException("spot not found: " + targetSpot)).spotId(),
                     new Contracts.ProbeReq("shutdown-recovery-probe", 0))
                 .timeout(ATTEMPT_TIMEOUT)
                 .submit(Contracts.ProbeRes.class))

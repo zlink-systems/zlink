@@ -3,7 +3,7 @@ plugins {
 }
 
 dependencies {
-    implementation("systems.zlink:zlink-http-client:0.9.0")
+    implementation("systems.zlink:zlink-http-client:0.10.0")
     implementation("com.fasterxml.jackson.core:jackson-databind:2.17.2")
 }
 

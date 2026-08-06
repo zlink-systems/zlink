@@ -1148,6 +1148,40 @@ public_host_runtime_t::objects () noexcept
     return _objects;
 }
 
+stateful::stateful_error_t public_host_runtime_t::destroy_application_actor (
+  std::string_view actor_id,
+  std::uint64_t object_generation)
+{
+    stateful::object_ref_t object;
+    {
+        std::lock_guard lock (_mutex);
+        const auto found = _actors.find (std::string (actor_id));
+        if (found != _actors.end ()) {
+            if (found->second.second.object_generation != object_generation)
+                return stateful::stateful_error_t::generation_stale;
+            object = found->second.second;
+        }
+    }
+    if (object.key.empty ()) {
+        const auto local = _objects.find (
+          stateful::object_kind_t::actor, std::string (actor_id));
+        if (!local)
+            return stateful::stateful_error_t::not_found;
+        if (local->object_generation != object_generation)
+            return stateful::stateful_error_t::generation_stale;
+        object = *local;
+    }
+    const auto destroyed = _objects.destroy_actor (object);
+    if (destroyed != stateful::stateful_error_t::none)
+        return destroyed;
+    std::lock_guard lock (_mutex);
+    const auto found = _actors.find (std::string (actor_id));
+    if (found != _actors.end ()
+        && found->second.second.object_generation == object_generation)
+        _actors.erase (found);
+    return stateful::stateful_error_t::none;
+}
+
 stateful::stream_session_registry_t &
 public_host_runtime_t::sessions () noexcept
 {

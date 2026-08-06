@@ -12,6 +12,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CompletionException;
@@ -21,6 +22,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.context.annotation.Bean;
 import systems.zlink.contracts.core.RoutingId;
@@ -37,6 +39,7 @@ import systems.zlink.framework.monitoring.ZLinkPeerState;
 import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime;
 import systems.zlink.framework.spring.EnableZLinkFramework;
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer;
+import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 
 @EnableZLinkFramework
 @SpringBootApplication(proxyBeanMethods = false)
@@ -79,11 +82,17 @@ public class SubmitAdmissionRole {
     ZLinkFrameworkConfigurer configureFramework(RoleState state) {
         return options -> {
             RoleConfig config = state.config();
+            if ("target".equals(config.role())) {
+                // Keep two deterministic payloads within the host-wide budget so
+                // the second submit must wait for the first handler to complete.
+                options.configureInboundDispatch().setApplicationHwmBytes(1024);
+            }
             if (!"publisher".equals(config.role()) && !"subscriber".equals(config.role())) {
                 var mesh = options.addRouteMesh(MESH)
                     .listen(config.meshEndpoint())
                     .setRoutingId(RoutingId.from(config.rid()))
                     .setDefaultRequestTimeout(Duration.ofSeconds(1));
+                mesh.configureRouterSocket().setMaxMessageSize(4096);
                 mesh.addRouteSendHandler(RouteHandler.class, Probe.class);
                 mesh.channelName(CHANNEL)
                     .server()
@@ -111,11 +120,12 @@ public class SubmitAdmissionRole {
         RoleState state,
         ZLinkRouteClient routes,
         ZLinkFanoutClient fanout,
-        ZLinkRouteMeshRuntime meshRuntime) throws IOException {
-        return new RoleHttpServer(state, routes, fanout, meshRuntime);
+        ZLinkRouteMeshRuntime meshRuntime,
+        ObjectProvider<ZLinkFrameworkRuntime> runtimeProvider) throws IOException {
+        return new RoleHttpServer(state, routes, fanout, meshRuntime, runtimeProvider);
     }
 
-    public record Probe(String operationId, int sequence) {
+    public record Probe(String operationId, int sequence, String payload) {
     }
 
     public static final class RouteHandler implements ZLinkRouteSendHandler<Probe> {
@@ -161,6 +171,7 @@ public class SubmitAdmissionRole {
         private final RoleConfig config;
         private final AtomicInteger handlerStarted = new AtomicInteger();
         private final AtomicInteger handlerCompleted = new AtomicInteger();
+        private final ConcurrentHashMap<String, OperationState> operations = new ConcurrentHashMap<>();
 
         RoleState(RoleConfig config) {
             this.config = config;
@@ -168,6 +179,39 @@ public class SubmitAdmissionRole {
 
         RoleConfig config() {
             return config;
+        }
+
+        void startOperation(String operationId, CompletionStage<Void> operation) {
+            if (operations.putIfAbsent(operationId, new OperationState()) != null) {
+                throw new IllegalArgumentException("operation already exists: " + operationId);
+            }
+            OperationState state = operations.get(operationId);
+            Thread.ofVirtual().start(() -> {
+                state.status = "RUNNING";
+                record("operation_started", Map.of("operationId", operationId));
+                try {
+                    operation.toCompletableFuture().whenComplete((ignored, failure) -> {
+                        if (failure == null) {
+                            state.status = "Submitted";
+                            record("operation_terminal", Map.of(
+                                "operationId", operationId, "status", "Submitted"));
+                        } else {
+                            state.status = errorKind(failure);
+                            record("operation_terminal", Map.of(
+                                "operationId", operationId, "status", state.status));
+                        }
+                    });
+                } catch (Throwable failure) {
+                    state.status = errorKind(failure);
+                    record("operation_terminal", Map.of(
+                        "operationId", operationId, "status", state.status));
+                }
+            });
+        }
+
+        String operationStatus(String operationId) {
+            OperationState state = operations.get(operationId);
+            return state == null ? "UNKNOWN" : state.status;
         }
 
         CompletionStage<Void> handle(String family, Probe message) {
@@ -235,6 +279,21 @@ public class SubmitAdmissionRole {
         private static String escape(String value) {
             return value.replace("\\", "\\\\").replace("\"", "\\\"");
         }
+
+        private static String errorKind(Throwable failure) {
+            Throwable current = failure;
+            while ((current instanceof CompletionException || current instanceof ExecutionException)
+                && current.getCause() != null) {
+                current = current.getCause();
+            }
+            return current instanceof ZLinkFrameworkException frameworkFailure
+                ? frameworkFailure.kind().name()
+                : current.getClass().getSimpleName();
+        }
+
+        private static final class OperationState {
+            private volatile String status = "PENDING";
+        }
     }
 
     static final class RoleHttpServer implements AutoCloseable {
@@ -242,25 +301,31 @@ public class SubmitAdmissionRole {
         private final ZLinkRouteClient routes;
         private final ZLinkFanoutClient fanout;
         private final ZLinkRouteMeshRuntime meshRuntime;
+        private final ObjectProvider<ZLinkFrameworkRuntime> runtimeProvider;
         private final HttpServer server;
 
         RoleHttpServer(
             RoleState state,
             ZLinkRouteClient routes,
             ZLinkFanoutClient fanout,
-            ZLinkRouteMeshRuntime meshRuntime) throws IOException {
+            ZLinkRouteMeshRuntime meshRuntime,
+            ObjectProvider<ZLinkFrameworkRuntime> runtimeProvider) throws IOException {
             this.state = state;
             this.routes = routes;
             this.fanout = fanout;
             this.meshRuntime = meshRuntime;
+            this.runtimeProvider = runtimeProvider;
             server = HttpServer.create(new InetSocketAddress("127.0.0.1", state.config().httpPort()), 0);
             server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
             server.createContext("/health", exchange -> respond(exchange, 200, "ok"));
             server.createContext("/ready", this::ready);
             server.createContext("/send-node", this::sendNode);
+            server.createContext("/start-node", this::startNode);
+            server.createContext("/operation", this::operation);
             server.createContext("/send-channel", this::sendChannel);
             server.createContext("/publish", this::publish);
             server.createContext("/counts", this::counts);
+            server.createContext("/inbound-status", this::inboundStatus);
             server.start();
             state.record("role_ready", Map.of("httpPort", Integer.toString(state.config().httpPort())));
         }
@@ -282,9 +347,10 @@ public class SubmitAdmissionRole {
             String operationId = query.getOrDefault("operationId", "missing-operation");
             String targetRid = query.getOrDefault("targetRid", "missing-target");
             int sequence = Integer.parseInt(query.getOrDefault("sequence", "0"));
+            String payload = query.getOrDefault("payload", "");
             try {
                 routes.sendToNode(
-                        MESH, RoutingId.from(targetRid), new Probe(operationId, sequence))
+                        MESH, RoutingId.from(targetRid), new Probe(operationId, sequence, payload))
                     .submit().toCompletableFuture().get(2, TimeUnit.SECONDS);
                 state.record("submit_terminal", Map.of(
                     "family", "node",
@@ -296,12 +362,32 @@ public class SubmitAdmissionRole {
             }
         }
 
+        private void startNode(HttpExchange exchange) throws IOException {
+            Map<String, String> query = query(exchange.getRequestURI());
+            String operationId = query.getOrDefault("operationId", "missing-operation");
+            String targetRid = query.getOrDefault("targetRid", "missing-target");
+            int sequence = Integer.parseInt(query.getOrDefault("sequence", "0"));
+            String payload = query.getOrDefault("payload", "");
+            try {
+                state.startOperation(operationId, routes.sendToNode(
+                    MESH, RoutingId.from(targetRid), new Probe(operationId, sequence, payload)).submit());
+                respond(exchange, 202, operationId);
+            } catch (Exception failure) {
+                respond(exchange, 500, errorKind(failure));
+            }
+        }
+
+        private void operation(HttpExchange exchange) throws IOException {
+            String operationId = query(exchange.getRequestURI()).getOrDefault("operationId", "");
+            respond(exchange, 200, state.operationStatus(operationId));
+        }
+
         private void sendChannel(HttpExchange exchange) throws IOException {
             Map<String, String> query = query(exchange.getRequestURI());
             String operationId = query.getOrDefault("operationId", "missing-operation");
             int sequence = Integer.parseInt(query.getOrDefault("sequence", "0"));
             try {
-                routes.sendToChannel(CHANNEL, new Probe(operationId, sequence))
+                    routes.sendToChannel(CHANNEL, new Probe(operationId, sequence, query.getOrDefault("payload", "")))
                     .submit().toCompletableFuture().get(2, TimeUnit.SECONDS);
                 state.record("submit_terminal", Map.of(
                     "family", "channel",
@@ -318,7 +404,7 @@ public class SubmitAdmissionRole {
             String operationId = query.getOrDefault("operationId", "missing-operation");
             int sequence = Integer.parseInt(query.getOrDefault("sequence", "0"));
             try {
-                fanout.publish(FANOUT, new Probe(operationId, sequence))
+                fanout.publish(FANOUT, new Probe(operationId, sequence, query.getOrDefault("payload", "")))
                     .submit().toCompletableFuture().get(2, TimeUnit.SECONDS);
                 state.record("submit_terminal", Map.of(
                     "family", "fanout",
@@ -333,6 +419,13 @@ public class SubmitAdmissionRole {
         private void counts(HttpExchange exchange) throws IOException {
             respond(exchange, 200,
                 "started=" + state.handlerStarted() + ",completed=" + state.handlerCompleted());
+        }
+
+        private void inboundStatus(HttpExchange exchange) throws IOException {
+            var status = runtimeProvider.getObject().status().inboundDispatch();
+            respond(exchange, 200,
+                "hwm=" + status.applicationHwmBytes()
+                    + ",paused=" + status.applicationReceivePaused());
         }
 
         @Override

@@ -21,25 +21,25 @@ int main (int argc, char **argv)
     validate_selector (selected);
 
     if (should_run (selected, {"TA-A1", "ta-a1"})) {
-        run_ta_a1_scenario (actor, caller, session_a, configuration.session_a_stream);
+        run_ta_a1_scenario (actor, actor_b, caller, session_a, configuration.session_a_stream);
     }
     if (should_run (selected, {"TA-A2", "ta-a2"})) {
-        run_ta_a2_scenario (actor, caller, session_a, session_b);
+        run_ta_a2_scenario (actor, actor_b, caller, session_a, session_b);
     }
     if (should_run (selected, {"TA-A3", "ta-a3"})) {
-        run_ta_a3_scenario (actor, caller, session_b, configuration.session_b_stream);
+        run_ta_a3_scenario (actor, actor_b, caller, session_b, configuration.session_b_stream);
     }
     if (should_run (selected, {"TA-A4", "ta-a4"})) {
-        run_ta_a4_scenario (actor, caller, session_a, configuration.session_a_stream);
+        run_ta_a4_scenario (actor, actor_b, caller, session_a, configuration.session_a_stream);
     }
     if (should_run (selected, {"TA-B1", "ta-b1"})) {
-        run_ta_b1_scenario (actor, caller);
+        run_ta_b1_scenario (actor, actor_b, caller);
     }
     if (should_run (selected, {"TA-B2", "ta-b2"})) {
         run_ta_b2_scenario (actor, actor_b, caller);
     }
     if (should_run (selected, {"TA-B3", "ta-b3"})) {
-        run_ta_b3_scenario (actor, caller, route_control);
+        run_ta_b3_scenario (actor, actor_b, caller, route_control);
     }
 
     std::cout << "to-actor-messaging e2e result=passed\n";

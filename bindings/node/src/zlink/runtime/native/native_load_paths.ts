@@ -56,6 +56,31 @@ export function prepareDevelopmentRuntimeLink(packageRoot: string): void {
 }
 
 export function preparePrebuiltRuntimePath(prebuiltDir: string): void {
+  if (process.platform === 'linux') {
+    const soname = path.join(prebuiltDir, LINUX_SONAME);
+    if (!fs.existsSync(soname)) {
+      const packageRoot = path.dirname(path.dirname(prebuiltDir));
+      let versionedLibrary: string | undefined;
+      try {
+        const packageJson = JSON.parse(
+          fs.readFileSync(path.join(packageRoot, 'package.json'), 'utf8')
+        ) as { version?: string };
+        if (packageJson.version !== undefined) {
+          const candidate = path.join(
+            prebuiltDir,
+            `libzlink.so.${packageJson.version}`
+          );
+          if (fs.existsSync(candidate)) versionedLibrary = candidate;
+        }
+      } catch {
+        // The normal package path has package.json. If it is unavailable,
+        // leave native loading to the development fallback below.
+      }
+      if (versionedLibrary !== undefined) fs.symlinkSync(versionedLibrary, soname);
+    }
+    prependLibraryPath([prebuiltDir]);
+    return;
+  }
   if (process.platform !== 'win32') {
     return;
   }

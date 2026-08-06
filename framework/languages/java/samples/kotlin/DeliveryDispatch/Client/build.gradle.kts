@@ -6,9 +6,9 @@ plugins {
 dependencies {
     implementation(project("${path.substringBeforeLast(":Client")}:Shared"))
     implementation(project("${path.substringBeforeLast(":Client")}:Server:Configuration"))
-    implementation("systems.zlink:zlink-stream-connector:0.9.0")
-    implementation("systems.zlink:zlink-framework-kotlin:0.9.0")
-    implementation("systems.zlink:zlink-http-client-kotlin:0.9.0")
+    implementation("systems.zlink:zlink-stream-connector:0.10.0")
+    implementation("systems.zlink:zlink-framework-kotlin:0.10.0")
+    implementation("systems.zlink:zlink-http-client-kotlin:0.10.0")
     implementation(zlinkLibs.zlink.bindings)
     implementation("io.netty:netty-buffer:4.1.100.Final")
 }

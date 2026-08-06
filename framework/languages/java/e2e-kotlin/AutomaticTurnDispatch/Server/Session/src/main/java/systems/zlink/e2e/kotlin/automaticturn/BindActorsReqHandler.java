@@ -29,7 +29,7 @@ public final class BindActorsReqHandler
         ZLinkSessionDispatchContext dispatch,
         Contracts.BindActorsReq request) {
         return routes.requestToNode(
-                Contracts.SPOT_MESH,
+                Contracts.ROUTE_CHANNEL,
                 RoutingId.from("play-a"),
                 request)
             .timeout(Duration.ofSeconds(30))
@@ -44,9 +44,10 @@ public final class BindActorsReqHandler
         CompletionStage<Void> chain = CompletableFuture.completedFuture(null);
         for (Contracts.ActorBinding actor : reply.actors()) {
             chain = chain.thenCompose(ignored -> context.actors().bind(new ActorRef(
-                    RoutingId.from(actor.nodeRid()),
                     actor.actorId(),
-                    actor.generation()))
+                    actor.generation(),
+                    Contracts.SPOT_MESH,
+                    RoutingId.from(actor.nodeRid())))
                 .thenApply(bound -> null));
         }
         return chain;

@@ -4,6 +4,7 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import systems.zlink.e2e.kotlin.instancespot.shared.Contracts
 import systems.zlink.framework.kotlin.ZLinkSuspendingInstanceSpot
+import systems.zlink.framework.kotlin.addHandler
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionStage
 import systems.zlink.framework.spots.ZLinkInstanceSpotContext
@@ -26,9 +27,9 @@ class ProbeSpot(
     }
 
     override fun configure() {
-        context.handlers().addPacket(ProbeRequestHandler::class.java)
-        context.handlers().addPacket(ProbeSendHandler::class.java)
-        context.handlers().addPacket(CloseHandler::class.java)
+        context.handlers().addHandler<ProbeRequestHandler>()
+        context.handlers().addHandler<ProbeSendHandler>()
+        context.handlers().addHandler<CloseHandler>()
     }
 
     override suspend fun onInitializeSuspending() {

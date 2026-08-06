@@ -11,7 +11,7 @@ object RmA4SameRidFailoverScenario {
             val providerV1 = cluster.startProvider("api-a-v1", "api-a", instanceId = "api-a-v1")
             val consumer = cluster.startConsumer("consumer")
             val requester = HttpJson(consumer.httpUrl)
-            cluster.waitPeerEndpoint(requester, providerV1.routingId)
+            cluster.waitPeerCount(requester, 1)
             val first = ScenarioAssert.requestProfileEventually(requester, "failover-before")
             ScenarioAssert.that(
                 first.providerRid == "api-a" && first.instanceId == "api-a-v1",
@@ -19,9 +19,9 @@ object RmA4SameRidFailoverScenario {
             )
 
             cluster.stop(providerV1)
-            cluster.waitPeerEndpointAbsent(requester, providerV1.routingId)
+            cluster.waitPeerCount(requester, 0)
             val providerV2 = cluster.startProvider("api-a-v2", "api-a", instanceId = "api-a-v2")
-            cluster.waitPeerEndpoint(requester, providerV2.routingId)
+            cluster.waitPeerCount(requester, 1)
             repeat(20) { index ->
                 val reply = ScenarioAssert.requestProfileEventually(requester, "failover-after-$index")
                 ScenarioAssert.that(

@@ -16,7 +16,7 @@ public final class HoldMsgHandler
     public CompletionStage<Void> handle(
         ProbeSpot spot,
         Contracts.HoldMsg command) {
-        String value = "spot=" + spot.context().spotRid()
+        String value = "spot=" + spot.context().spotId()
             + ";handler=spot";
         evidence.record(command.requestId(), "hold-started", value);
         return spot.context().outbound()
@@ -31,3 +31,4 @@ public final class HoldMsgHandler
             });
     }
 }
+

@@ -204,7 +204,7 @@ class CoreApiAlignmentTests(unittest.TestCase):
         )
         self.assertEqual(
             (ctypes.sizeof(ZlinkMonitorEvent), ctypes.alignment(ZlinkMonitorEvent)),
-            (784, 8),
+            (816, 8),
         )
         self.assertEqual(
             (ctypes.sizeof(ZlinkMonitorStatus), ctypes.alignment(ZlinkMonitorStatus)),

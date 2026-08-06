@@ -55,7 +55,6 @@ export class ZLinkAutoConnectReconciler {
   private recoveryDeferUntilMs = 0;
   private lastDesired = new Map<string, ZLinkAutoConnectTarget>();
   private meshMemberRidHexes?: ReadonlySet<string>;
-  private lastSuccessfulCandidateScanHadCandidates = false;
 
   constructor(options: ZLinkAutoConnectReconcilerOptions) {
     this.local = options.local;
@@ -72,6 +71,10 @@ export class ZLinkAutoConnectReconciler {
 
   get storeFailed(): boolean {
     return this.storeFailedValue;
+  }
+
+  get localPublicationReady(): boolean {
+    return this.localPublished;
   }
 
   get activeTargets(): readonly ZLinkAutoConnectTarget[] {
@@ -110,14 +113,42 @@ export class ZLinkAutoConnectReconciler {
       return;
     }
 
+    // A restarted Store can accept commands and return an empty live set
+    // before the previous descriptor rows are rebuilt. In that case the
+    // earlier publishLocal call did not observe an error, so localPublished
+    // is still true even though this owner no longer has a row. Re-publish
+    // only when the authoritative read proves that this local row is absent;
+    // existing transport targets remain untouched during the rebuild window.
+    if (
+      this.localPublished
+      && this.localRow !== undefined
+      && !rows.some(row => row.nodeRid === this.localRow!.nodeRid)
+    ) {
+      this.localPublished = false;
+      try {
+        const republished = await this.publishLocal(signal);
+        if (!republished) {
+          this.recordStoreFailure();
+          return;
+        }
+      } catch {
+        this.recordStoreFailure();
+        return;
+      }
+    }
+
     if (this.storeFailedValue) {
       this.storeFailedValue = false;
       this.storeFailureStartedAtMs = undefined;
       // After a store restart, owners may need one full lease interval to
       // reclaim their token and republish a descriptor. Do not interpret the
       // incomplete post-restart scan as a definitive removal.
+      // Keep the existing transport set through one lease interval while
+      // owners reclaim their tokens and republish descriptors. This deferral
+      // applies only after a Store operation failed; a successful empty scan
+      // is authoritative and must remove stale peers promptly.
       this.recoveryDeferUntilMs = this.monotonicNowMs()
-        + this.options.ownerLeaseRenewIntervalMs;
+        + this.options.ownerLeaseTtlMs;
     }
 
     this.meshMemberRidHexes = new Set(rows
@@ -126,17 +157,7 @@ export class ZLinkAutoConnectReconciler {
       .map((nodeRid) => encodeRoutingIdHex(nodeRid)));
     const candidates = ZLinkAutoConnectPlanner.computeCandidates(this.local, rows);
     const nowMs = this.monotonicNowMs();
-    if (this.lastSuccessfulCandidateScanHadCandidates && candidates.size === 0) {
-      // An empty successful scan can be the first visible result while a
-      // restarted Store is rebuilding its live descriptors. Preserve
-      // admitted transport peers for one lease-renewal interval before an
-      // empty candidate set is treated as authoritative.
-      this.recoveryDeferUntilMs = Math.max(
-        this.recoveryDeferUntilMs,
-        nowMs + this.options.ownerLeaseRenewIntervalMs
-      );
-    }
-    this.lastSuccessfulCandidateScanHadCandidates = candidates.size > 0;
+    this.executor.expectPeers?.([...candidates.values()]);
     this.executor.replaceNotRequired?.(
       ZLinkAutoConnectPlanner.computeNotRequired(this.local, rows)
     );
@@ -156,7 +177,16 @@ export class ZLinkAutoConnectReconciler {
     const connectedEndpoints: string[] = [];
     const disconnectedEndpoints: string[] = [];
     for (const [key, target] of desired) {
-      const current = this.active.get(key);
+      let current = this.active.get(key);
+      if (
+        current !== undefined
+        && current.endpoint === target.endpoint
+        && current.ownerId === target.ownerId
+        && this.executor.isDisconnected?.(current) === true
+      ) {
+        this.active.delete(key);
+        current = undefined;
+      }
       if (current === undefined) {
         const disconnecting = this.pendingDisconnects.get(key);
         if (disconnecting !== undefined
@@ -259,16 +289,16 @@ export class ZLinkAutoConnectReconciler {
     this.executor.disconnect(target);
   }
 
-  private async publishLocal(signal?: AbortSignal): Promise<void> {
+  private async publishLocal(signal?: AbortSignal): Promise<boolean> {
     if (this.localRow === undefined || this.localPublished) {
-      return;
+      return this.localPublished;
     }
 
     const claimed = await this.runtime.writePeer(this.localRow, ZLinkLocationWriteIntent.NewClaim, signal);
     if (claimed.status === ZLinkLocationWriteStatus.Stored) {
       this.localGeneration = claimed.generation;
       this.localPublished = true;
-      return;
+      return true;
     }
 
     if (claimed.status === ZLinkLocationWriteStatus.RejectedConflict && this.localGeneration > 0n) {
@@ -277,7 +307,9 @@ export class ZLinkAutoConnectReconciler {
         generation: this.localGeneration
       }, ZLinkLocationWriteIntent.Renew, signal);
       this.localPublished = renewed.status === ZLinkLocationWriteStatus.Stored;
+      return this.localPublished;
     }
+    return false;
   }
 
   private recordStoreFailure(): void {

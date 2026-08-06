@@ -86,8 +86,14 @@ inline void run_mon_b_publish_monitoring_absence_scenario (
 
     const auto snapshot =
       publish_monitoring_runtime_snapshot (options.service_url);
-    ensure (snapshot.contains ("peers") && snapshot.contains ("channels")
-              && snapshot.contains ("claims") && snapshot.contains ("drain"),
+    // Verify only the public RouteMesh snapshot fields.  Publish-specific
+    // counters, claim aggregates, and drain projections are not part of the
+    // common runtime contract.
+    ensure (snapshot.contains ("meshName") && snapshot.contains ("state")
+              && snapshot.contains ("isReady")
+              && snapshot.contains ("readyPeerCount")
+              && snapshot.contains ("peers") && snapshot.contains ("channels")
+              && snapshot.contains ("placement"),
             std::string (scenario)
               + " generic RouteMesh monitoring fields are missing");
     assert_publish_monitoring_absent (

@@ -13,13 +13,12 @@ object RmB1ScaleOutScenario {
             val providerA = cluster.startProvider("api-a-scale-out", "api-a")
             val consumer = cluster.startConsumer("consumer-scale-out")
             val requester = HttpJson(consumer.httpUrl)
-            cluster.waitPeerEndpoint(requester, providerA.routingId)
+            cluster.waitPeerCount(requester, 1)
             repeat(5) { index ->
                 val reply = requester.post<ProfileRes>("/profile/request", ProfileReq("scale-out-before-$index"))
                 ScenarioAssert.that(reply.providerRid == "api-a", "RM-B1 initial traffic should only use api-a.")
             }
             val providerB = cluster.startProvider("api-b-scale-out", "api-b")
-            cluster.waitPeerEndpoint(requester, providerB.routingId)
             cluster.waitPeerCount(requester, 2)
             val providers = mutableSetOf<String>()
             var index = 0

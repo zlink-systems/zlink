@@ -228,6 +228,24 @@ export class ZLinkSpotNodeRuntimeManager {
     }
   }
 
+  /**
+   * Fences transport connections that were created under an owner token which
+   * is no longer valid. The loops are discarded so a later owner renewal can
+   * build them again with the current lifecycle descriptor.
+   */
+  async fenceLocationAutoConnect(): Promise<void> {
+    const loops = [...this.autoConnectLoops];
+    this.autoConnectLoops.length = 0;
+    await Promise.allSettled(loops.map((loop) => loop.prepareTransportShutdown()));
+    for (const node of this.meshNodes.values()) {
+      for (const peer of node.peers()) {
+        if (peer.routingId !== null) {
+          node.disconnectPeer(peer.routingId, peer.lifecycleGeneration);
+        }
+      }
+    }
+  }
+
   async start(): Promise<void> {
     if (this.options.registration.spotNodes.size === 0) {
       return;
@@ -442,7 +460,7 @@ export class ZLinkSpotNodeRuntimeManager {
       const result = await location.runtime.writeMeshNode(
         descriptor,
         ownerChanged
-          ? ZLinkLocationWriteIntent.Takeover
+          ? ZLinkLocationWriteIntent.Renew
           : current === undefined
             ? ZLinkLocationWriteIntent.NewClaim
             : ZLinkLocationWriteIntent.Renew,

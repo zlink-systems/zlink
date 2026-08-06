@@ -66,6 +66,7 @@ class socket_poller_t
         fd_t fd;
         void *user_data;
         short events;
+        bool terminal_event_delivered;
 #if defined ZLINK_POLL_BASED_ON_POLL
         int pollfd_index;
 #endif

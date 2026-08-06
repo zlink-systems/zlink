@@ -23,6 +23,7 @@ import systems.zlink.e2e.automaticturn.shared.AwaitProbeHandlers;
 import systems.zlink.e2e.automaticturn.shared.AwaitProbeSpot;
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.configuration.ZLinkMeshNodeBuilder;
+import systems.zlink.framework.channels.ZLinkFanoutClient;
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationOptions;
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore;
 import systems.zlink.framework.locations.redis.ZLinkRedisRelocationOptions;
@@ -32,7 +33,6 @@ import systems.zlink.framework.spring.EnableZLinkFramework;
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer;
 import systems.zlink.framework.spots.ZLinkSpotManager;
 import systems.zlink.framework.spots.SpotHandleResolver;
-import systems.zlink.framework.channels.ZLinkFanoutClient;
 import io.micrometer.core.instrument.MeterRegistry;
 import systems.zlink.e2e.automaticturn.shared.DrainEvidence;
 import systems.zlink.framework.spring.internal.runtime.ZLinkFrameworkLifecycle;
@@ -153,6 +153,7 @@ public final class Program {
             if (!fanoutEndpoint.isBlank()) {
                 var fanout = options.addFanoutChannel(Contracts.OBS_FANOUT_CHANNEL);
                 if (Contracts.PLAY_NODE_A.equals(nodeRid)) {
+                    fanout.setRoutingId(RoutingId.from(nodeRid));
                     fanout.enablePublisher(fanoutEndpoint);
                 }
                 fanout.connect(fanoutEndpoint)
@@ -291,8 +292,8 @@ public final class Program {
     @Bean
     AwaitProbeHandlers.TimerTickHandler timerTickHandler(
         EvidenceStore evidence,
-        ZLinkFanoutClient fanout) {
-        return new AwaitProbeHandlers.TimerTickHandler(evidence, fanout);
+        ObjectProvider<ZLinkFanoutClient> fanout) {
+        return new AwaitProbeHandlers.TimerTickHandler(evidence, fanout.getIfAvailable());
     }
 
     @Bean

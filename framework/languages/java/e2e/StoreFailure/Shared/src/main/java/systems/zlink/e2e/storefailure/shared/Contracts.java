@@ -66,6 +66,11 @@ public final class Contracts {
         int delayMilliseconds) {
     }
 
+    public record ObjectLocationQueryReq(
+        int pageSize,
+        String continuationToken) {
+    }
+
     public record C4ProbeReq(
         String marker) {
     }

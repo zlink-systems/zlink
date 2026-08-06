@@ -60,6 +60,17 @@ std::string trace_owner_key (const void *owner)
     return stream.str ();
 }
 
+std::vector<std::uint8_t> monitor_connection_id (std::uint64_t value)
+{
+    std::vector<std::uint8_t> result (sizeof (value));
+    for (std::size_t index = 0; index < result.size (); ++index) {
+        const auto shift =
+          static_cast<unsigned int> ((result.size () - index - 1) * 8);
+        result[index] = static_cast<std::uint8_t> ((value >> shift) & 0xffu);
+    }
+    return result;
+}
+
 bool completion_control_command (protocol::command kind) noexcept
 {
     switch (kind) {
@@ -508,12 +519,25 @@ void raw_mesh_node_owner_t::disconnect_peer (
         std::lock_guard socket_lock (_socket_mutex);
         trace_mesh ("disconnect endpoint=" + endpoint
                     + " expected=" + owner_key (expected_routing_id));
-        if (!expected_routing_id.empty ())
-            _router->disconnect_rid (
-              zlink::routing_id_t::from (expected_routing_id));
-        // Remove the configured endpoint after terminating the current RID.
-        // Otherwise the binding may reconnect the same stale endpoint.
-        _router->disconnect (endpoint);
+        if (!expected_routing_id.empty ()) {
+            try {
+                _router->disconnect_rid (
+                  zlink::routing_id_t::from (expected_routing_id));
+            }
+            catch (...) {
+                /* The routing-id index can already be gone after a monitor
+                 * replacement event. Endpoint teardown remains required to
+                 * disable reconnect for every pipe configured by this owner. */
+            }
+        }
+        try {
+            // Remove the configured endpoint after terminating the current
+            // RID. Otherwise the binding may reconnect the same stale
+            // endpoint. This step must still run when the RID index is stale.
+            _router->disconnect (endpoint);
+        }
+        catch (...) {
+        }
         _outbound_endpoints.erase (endpoint);
     }
     catch (...) {
@@ -2837,11 +2861,7 @@ std::size_t raw_mesh_node_owner_t::drain_monitor_events (
             return count;
         }
         ++count;
-        const std::vector<std::uint8_t> connection_id{
-          static_cast<std::uint8_t> ((event->value >> 24u) & 0xffu),
-          static_cast<std::uint8_t> ((event->value >> 16u) & 0xffu),
-          static_cast<std::uint8_t> ((event->value >> 8u) & 0xffu),
-          static_cast<std::uint8_t> (event->value & 0xffu)};
+        const auto connection_id = monitor_connection_id (event->connection_id);
         trace_mesh (
           "monitor event="
             + std::to_string (static_cast<int> (event->event))

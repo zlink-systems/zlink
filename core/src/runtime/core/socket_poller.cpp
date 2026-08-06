@@ -81,7 +81,7 @@ int zlink::socket_poller_t::add_item (socket_base_t *socket_,
                                       void *user_data_,
                                       short events_)
 {
-    const item_t item = {socket_, fd_, user_data_, events_
+    const item_t item = {socket_, fd_, user_data_, events_, false
 #if defined ZLINK_POLL_BASED_ON_POLL
                          ,
                          -1
@@ -315,9 +315,22 @@ void zlink::socket_poller_t::zero_trail_events (zlink::socket_poller_t::event_t 
 
 int zlink::socket_poller_t::collect_socket_event (item_t &item_, event_t *event_)
 {
+    if (item_.terminal_event_delivered)
+        return 0;
+
     uint32_t events;
-    if (item_.socket->get_events_internal (item_.events, &events) == -1)
+    if (item_.socket->get_events_for_poller (item_.events, &events) == -1) {
         return -1;
+    }
+
+    if (events & ZLINK_POLLERR) {
+        item_.terminal_event_delivered = true;
+        event_->socket = item_.socket;
+        event_->fd = zlink::retired_fd;
+        event_->user_data = item_.user_data;
+        event_->events = ZLINK_POLLERR;
+        return 1;
+    }
 
     if (!(item_.events & events))
         return 0;

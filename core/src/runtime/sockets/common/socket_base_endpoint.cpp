@@ -584,3 +584,28 @@ int zlink::socket_base_t::term_peer_rid (const zlink_routing_id_t *peer_rid_)
 
     return xterm_peer_rid (peer_rid_);
 }
+
+int zlink::socket_base_t::term_transport_pair (
+  uint64_t transport_pair_id_, uint64_t transport_pair_generation_)
+{
+    if (transport_pair_id_ == 0 || transport_pair_generation_ == 0) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    socket_public_api_scope_t admission (lifecycle_coordinator ());
+    if (!admission.acquired ())
+        return -1;
+    socket_public_api_lock_scope_t guard (lifecycle_coordinator ());
+
+    if (unlikely (_ctx_terminated)) {
+        errno = ETERM;
+        return -1;
+    }
+
+    const int rc = process_commands (0, false);
+    if (unlikely (rc != 0))
+        return -1;
+
+    return xterm_transport_pair (transport_pair_id_, transport_pair_generation_);
+}

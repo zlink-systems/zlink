@@ -6,7 +6,6 @@ import { ensure } from './scenario-assert';
 /** Exercises a missing scenario through the public RouteMesh request and provider evidence surfaces. */
 export async function runRegistryCoverage(options: ClientOptions, scenario: string): Promise<void> {
   const value = scenario.toLowerCase() + '-' + Date.now().toString(36);
-  console.log(JSON.stringify(await getJson(options.directConsumerUrl, '/route/status')));
   const reply = await postJson<ProfileRes>(options.directConsumerUrl, '/profile/request', { value });
   ensure(reply.value === 'profile:' + value, scenario + ' profile reply mismatch.');
   const evidence = (await Promise.all([

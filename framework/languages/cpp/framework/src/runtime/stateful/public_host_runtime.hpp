@@ -480,6 +480,9 @@ class public_host_runtime_t :
       const std::vector<std::uint8_t> &target_routing_id,
       const protocol::message_follow_notice_t &notice);
     stateful::stateful_object_runtime_t &objects () noexcept;
+    stateful::stateful_error_t destroy_application_actor (
+      std::string_view actor_id,
+      std::uint64_t object_generation);
     stateful::stream_session_registry_t &sessions () noexcept;
     void configure_maintenance (
       stateful::maintenance_provider_set_t providers,

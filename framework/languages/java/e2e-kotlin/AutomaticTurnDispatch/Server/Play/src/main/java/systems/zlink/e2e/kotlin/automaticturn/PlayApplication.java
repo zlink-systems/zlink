@@ -10,6 +10,8 @@ import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.configuration.ZLinkMeshNodeBuilder;
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationOptions;
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore;
+import systems.zlink.framework.locations.redis.ZLinkRedisRelocationOptions;
+import systems.zlink.framework.locations.redis.ZLinkRedisRelocationStore;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.spring.EnableZLinkFramework;
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer;
@@ -31,8 +33,9 @@ public final class PlayApplication {
     }
 
     @Bean
-    ZLinkFrameworkConfigurer framework() {
+    ZLinkFrameworkConfigurer framework(ZLinkRedisRelocationStore relocationStore) {
         return options -> {
+            options.addRelocationStore(relocationStore);
             String nodeRid = Env.get("nodeRid", "play-a");
             String logDir = Env.get("logDirectory", "logs");
             options.configureDispatch()
@@ -42,7 +45,7 @@ public final class PlayApplication {
             ZLinkMeshNodeBuilder mesh = options.addRouteMesh(Contracts.SPOT_MESH)
                 .listen(Env.get("playRouteEndpoint"))
                 .setRoutingId(RoutingId.from(nodeRid));
-            mesh.channelName(Contracts.SPOT_MESH);
+            mesh.channelName(Contracts.ROUTE_CHANNEL).server();
             mesh.peerConnections().connect(Env.get("sessionRouteEndpoint"));
             mesh.addRouteRequestHandler(
                 EvidenceRouteRequestHandler.class,
@@ -57,7 +60,8 @@ public final class PlayApplication {
                 Contracts.BindActorsReq.class,
                 Contracts.BindActorsRes.class);
             options.addClientServerChannel(Contracts.DELAY_CHANNEL)
-                .enableClient(Env.get("delayEndpoint"));
+                .client()
+                .connect(Env.get("delayEndpoint"));
             mesh.objects()
                 .server()
                 .addEntrySpot(ProbeEntrySpot.class)
@@ -81,15 +85,26 @@ public final class PlayApplication {
     }
 
     @Bean
+    ZLinkRedisRelocationStore relocationStore() {
+        return new ZLinkRedisRelocationStore(new ZLinkRedisRelocationOptions()
+            .setConnectionString(Env.get("redisLocationEndpoint"))
+            .setKeyPrefix(Env.get("locationKeyPrefix") + "relocation:"));
+    }
+
+    @Bean
     ApplicationRunner createSpots(ZLinkSpotManager spots) {
         return ignored -> {
             if (!"play-a".equals(Env.get("nodeRid", "play-a"))) {
                 return;
             }
-            spots.getOrCreate(ProbeSpot.class, RoutingId.from("room-a"), ZLinkMessage.of("bootstrap"))
+            spots.getOrCreate("room-a", "probe")
+                .request(ZLinkMessage.of("bootstrap"))
+                .submit()
                 .toCompletableFuture()
                 .join();
-            spots.getOrCreate(ProbeSpot.class, RoutingId.from("room-b"), ZLinkMessage.of("bootstrap"))
+            spots.getOrCreate("room-b", "probe")
+                .request(ZLinkMessage.of("bootstrap"))
+                .submit()
                 .toCompletableFuture()
                 .join();
         };

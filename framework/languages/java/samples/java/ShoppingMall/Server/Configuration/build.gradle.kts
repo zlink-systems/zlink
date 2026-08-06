@@ -11,7 +11,7 @@ fun sampleRootPath(): String {
 
 dependencies {
     api(sampleProject("Shared"))
-    api("systems.zlink:zlink-framework-locations-redis:0.9.0")
+    api("systems.zlink:zlink-framework-locations-redis:0.10.0")
     api("org.springframework.boot:spring-boot:3.5.14")
 }
 

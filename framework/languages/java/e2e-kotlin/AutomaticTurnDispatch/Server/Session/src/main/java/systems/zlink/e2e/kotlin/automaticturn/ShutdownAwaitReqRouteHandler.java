@@ -31,7 +31,7 @@ public final class ShutdownAwaitReqRouteHandler
         var targetSpotRid = SpotMsgRouteHandler.targetSpot(dispatch);
         return spots.resolveSpotHandle(targetSpotRid)
             .thenCompose(handle -> routes.requestToSpot(
-                handle.orElseThrow(() -> new IllegalStateException("spot not found: " + targetSpotRid)),
+                handle.orElseThrow(() -> new IllegalStateException("spot not found: " + targetSpotRid)).spotId(),
                 request)
             .timeout(Duration.ofSeconds(20))
             .submit(Contracts.ScenarioRes.class))

@@ -321,6 +321,11 @@ void *test_context_socket_close_zero_linger (void *socket_)
     return test_context_socket_close (socket_);
 }
 
+void test_context_socket_mark_closed (void *socket_)
+{
+    internal_manage_test_sockets (socket_, false);
+}
+
 void test_bind (void *socket_, const char *bind_address_, char *my_endpoint_, size_t len_)
 {
     TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (socket_, bind_address_));

@@ -68,6 +68,21 @@ class PayloadRequestHandler(
 }
 
 @ZLinkHandlerGroup(Contracts.ROUTE_HANDLER_GROUP)
+class RoutePayloadRequestHandler(
+    private val evidence: EvidenceStore,
+) : ZLinkSuspendingRouteRequestHandler<PayloadReq, PayloadRes> {
+    override suspend fun handle(request: PayloadReq, context: ZLinkRouteMessageContext): PayloadRes {
+        val digest = MessageDigest.getInstance("SHA-256").digest(request.payload.toByteArray(Charsets.UTF_8))
+        val hash = HexFormat.of().formatHex(digest).uppercase()
+        evidence.add(
+            "payload-request|rid=${evidence.rid}|marker=${request.marker}" +
+                "|length=${request.payload.length}|sha256=$hash|packet=${context.packetName()}",
+        )
+        return PayloadRes(request.marker, request.payload.length, hash)
+    }
+}
+
+@ZLinkHandlerGroup(Contracts.ROUTE_HANDLER_GROUP)
 class RoutePingHandler(
     private val evidence: EvidenceStore,
 ) : ZLinkSuspendingRouteRequestHandler<ScenarioRoutePingReq, ScenarioRoutePingRes> {

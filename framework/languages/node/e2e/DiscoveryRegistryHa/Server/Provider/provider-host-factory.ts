@@ -12,14 +12,18 @@ import {
   ZLinkModule,
   zlinkFramework
 } from '@zlink-systems/nestjs';
-import { ChannelNames, PacketNames } from '../../Shared/messages';
+import { ChannelNames, ObjectSpotType, PacketNames } from '../../Shared/messages';
 import { configureStoreFailureLocationOptions, createRedisLocationStore } from '../../Shared/location-store';
-import type { ZLinkRedisLocationStore } from '@zlink-systems/framework-locations-redis';
+import {
+  ZLinkRedisLocationStore,
+  ZLinkRedisRelocationStore
+} from '@zlink-systems/framework-locations-redis';
 import { validateProviderOptions } from './Configuration/provider-options';
 import type { ProviderOptions } from './Configuration/provider-options';
 import { DISCOVERY_OPTIONS, createDiscoveryConfigurationModule } from '../../configuration';
 import { createProviderEndpoints } from './Endpoints/provider-endpoints';
 import { ProfileRequestHandler } from './Handlers/profile-request-handler';
+import { Config6InstanceSpot, configureObjectEvidence, ObjectRequestHandler } from './Handlers/object-request-handler';
 import { EvidenceStore } from './Infrastructure/evidence-store';
 import { closeHttpServer, startHttpServer } from './Support/http-server';
 
@@ -30,6 +34,7 @@ export async function startProviderHost(): Promise<void> {
   const app = await NestFactory.createApplicationContext(provider.moduleType, { logger: false, abortOnError: false });
   const options = app.get(DISCOVERY_OPTIONS, { strict: false }) as ProviderOptions;
   const evidence = app.get(EvidenceStore, { strict: false });
+  configureObjectEvidence(evidence);
   const runtimeOptions = app.get(ZLINK_ROUTE_MESH_RUNTIME_OPTIONS, { strict: false }) as ZLinkRouteMeshRuntimeOptions;
   const frameworkRuntime = app.get(ZLINK_FRAMEWORK_RUNTIME, { strict: false }) as ZLinkFrameworkRuntime;
   const server = await startHttpServer(
@@ -52,6 +57,7 @@ function createProviderModule(): {
   readonly disposeLocationStore: () => Promise<void>;
 } {
   let locationStore: ZLinkRedisLocationStore | undefined;
+  let relocationStore: ZLinkRedisRelocationStore | undefined;
   class ProviderModule {}
   const configuration = createDiscoveryConfigurationModule(validateProviderOptions);
   Module({
@@ -70,12 +76,27 @@ function createProviderModule(): {
               .traceLabel(options.rid);
           locationStore = createRedisLocationStore(options);
           builder.addLocationStore(locationStore);
+          relocationStore = new ZLinkRedisRelocationStore({
+            url: `redis://${options.redisEndpoint}`,
+            keyPrefix: `${options.redisKeyPrefix}:relocation`
+          });
+          builder.addRelocationStore(relocationStore);
           configureStoreFailureLocationOptions(builder.configureLocations());
           const profile = builder.addRouteMesh(ChannelNames.profile)
             .listen(options.channelEndpoint)
-            .routingId(options.rid);
+            .routingId(options.rid)
+            .setSpotLimit(2000)
+            .setActivationConcurrency(64);
           profile.channel(ChannelNames.profile).server()
             .addRequestHandler(PacketNames.profileReq, ProfileRequestHandler);
+          profile.objects().server().addInstanceSpotFactory(
+            ObjectSpotType,
+            Config6InstanceSpot,
+            (factory) => {
+              factory.disableRelocation();
+              factory.stableTypeLimit(2000);
+            }
+          );
           return builder.build();
         }
       })
@@ -84,7 +105,9 @@ function createProviderModule(): {
       { provide: EvidenceStore, inject: [DISCOVERY_OPTIONS], useFactory: (value: unknown) => {
         const options = value as ProviderOptions; return new EvidenceStore(options.rid, options.evidenceFile);
       } },
-      ProfileRequestHandler
+      ProfileRequestHandler,
+      ObjectRequestHandler,
+      Config6InstanceSpot
     ]
   })(ProviderModule);
   return {
@@ -92,6 +115,8 @@ function createProviderModule(): {
     disposeLocationStore: async () => {
       await locationStore?.dispose();
       locationStore = undefined;
+      await relocationStore?.dispose();
+      relocationStore = undefined;
     }
   };
 }

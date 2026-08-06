@@ -667,11 +667,22 @@ void test_router_recv_dontwait_no_data_does_not_break_poller_rearm ()
                                   zlink_msg_size (&parts[0]));
     zlink_multipart_close (parts, part_count);
 
+    // Closing a registered socket is terminal for the source, but the poller
+    // keeps the socket registration and lifetime pin until it is removed.
+    TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, zlink_close (router));
+    memset (&event, 0, sizeof (event));
+    TEST_ASSERT_EQUAL_INT (1, zlink_poller_wait (poller, &event, 1, 5000, NULL));
+    TEST_ASSERT_EQUAL_INT (ZLINK_POLLERR, event.events);
+    TEST_ASSERT_EQUAL_PTR (router, event.socket);
+    memset (&event, 0, sizeof (event));
+    TEST_ASSERT_EQUAL_INT (0, zlink_poller_wait (poller, &event, 1, 50, NULL));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_poller_remove (poller, router));
+
     TEST_ASSERT_SUCCESS_ERRNO (zlink_poller_destroy (&poller));
     close_delivery_ready_monitor (&dealer_monitor);
     close_delivery_ready_monitor (&router_monitor);
     test_context_socket_close_zero_linger (dealer);
-    test_context_socket_close_zero_linger (router);
+    test_context_socket_mark_closed (router);
 }
 
 void test_pubsub_callback_is_supported_on_raw_sub_sockets ()

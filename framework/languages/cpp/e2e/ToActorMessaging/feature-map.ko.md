@@ -7,9 +7,9 @@
 - request 터미널: `request_to_actor(...).async<TReply>()`
 - 실패 분류: `actor_route_not_found`, `actor_location_stale`, `route_not_connected`
 
-최신 proof는 `timeout 480s framework/languages/cpp/e2e/ToActorMessaging/run_e2e.sh all`이며,
-로그는 `logs/20260716-091927-3274099`이다. 이 실행은 actor owner 두 개, caller, `session-a`, `session-b`,
-Redis location store와 connector client를 실행하고 `to-actor-messaging e2e result=passed`를 출력했다.
+이전에 전체 runner가 통과한 proof는 `logs/20260716-091927-3274099`에 남아 있다. 그러나 현재
+placement와 actor lifecycle 변경 이후에는 각 scenario를 다시 검증해야 하며, 이전 proof만으로 현재
+구현 완료를 판정하지 않는다.
 
 | 공통 항목 | 상태 | C++ 구현 |
 |-----------|------|----------|
@@ -17,8 +17,8 @@ Redis location store와 connector client를 실행하고 `to-actor-messaging e2e
 | TA-A2 bind 안 된 actor send/request | implemented | 두 session gateway에 bind evidence가 없는 상태에서 actor mailbox send와 request reply를 확인한다. |
 | TA-A3 no-bind 전달 뒤 이후 bind | implemented | bind 전 send/request 뒤 `session-b`에 bind하고, bind 후 send/request와 `LateBindNotify` push를 확인한다. |
 | TA-A4 unbind/disconnect 후 | implemented | connector disconnect evidence 뒤 같은 actor 호출이 성공하고, 명시적 destroy 뒤 같은 id request가 `actor_route_not_found`인지 확인한다. |
-| TA-B1 row 없음 | implemented | `TA-B1-missing*`가 request의 `actor_route_not_found`와 send 뒤 역할 서버 evidence 부재를 검증한다. |
-| TA-B2 stale location | implemented | actor-a에서 만든 ref를 저장하고 actor를 제거한 뒤 같은 id를 actor-b에서 다시 만든다. 저장한 이전 ref는 `actor_location_stale`, 다시 찾은 ref는 actor-b 성공 evidence를 남기는지 확인한다. |
+| TA-B1 row 없음 | implemented | `TA-B1-missing*`가 send/request 모두 `actor_route_not_found`를 반환하고 역할 서버 evidence를 만들지 않는지 검증한다. |
+| TA-B2 stale location | implementation gap | Actor process의 ensure fixture를 `actor_manager_t` public creation 경로로 이관하고 destroy callback의 stateful reservation 정리를 보강했다. 이전 재검증은 `Actor placement candidates were exhausted`로 종료됐으며(`logs/20260806-150955-2682657`), 수정 후 재검증은 Redis readiness timeout으로 종료되어 placement capacity 회수와 이전 `ActorRef` stale 검증을 아직 완료하지 못했다. |
 | TA-B3 route not connected | 전환 필요 | 현재 source는 정식 C++ interface에 없는 `router_connections()`를 사용한다. `mesh.peer_connections()`의 public `disconnect(endpoint)`와 `connect(endpoint)`로 두 actor endpoint를 제거·복구하고, 저장한 ref의 `route_not_connected`, 복구 뒤 같은 ref와 actor-a evidence를 다시 검증해야 한다. |
 
 `run_e2e.sh`는 Redis를 준비한 뒤 actor owner 두 개, caller, session gateway 두 개를 시작하고 모든 health를

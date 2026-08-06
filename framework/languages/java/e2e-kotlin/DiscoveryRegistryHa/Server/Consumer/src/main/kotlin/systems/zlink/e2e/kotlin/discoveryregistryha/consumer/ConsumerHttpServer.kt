@@ -17,14 +17,13 @@ import org.springframework.context.SmartLifecycle
 import systems.zlink.e2e.kotlin.discoveryregistryha.Contracts
 import systems.zlink.e2e.kotlin.discoveryregistryha.consumer.Configuration.ConsumerOptions
 import systems.zlink.framework.channels.ZLinkClient
-import systems.zlink.framework.locations.ZLinkLocationStore
+import systems.zlink.framework.locations.ZLinkLocationTopologyFilter
 import systems.zlink.framework.locations.ZLinkPageRequest
 import systems.zlink.framework.spring.internal.runtime.ZLinkFrameworkLifecycle
 
 class ConsumerHttpServer(
     private val client: ZLinkClient,
     private val lifecycle: ZLinkFrameworkLifecycle,
-    private val locations: ZLinkLocationStore,
     private val json: ObjectMapper,
     private val options: ConsumerOptions,
     private val delayState: LocationStoreDelayState,
@@ -118,16 +117,18 @@ class ConsumerHttpServer(
             .submit(Contracts.WorkRes::class.java)
 
     private fun peers(): CompletionStage<List<Map<String, Any>>> =
-        locations.listClientServers(
-            Contracts.CHANNEL,
+        lifecycle.monitoringLocationRuntimeQuery().listTopology(
+            ZLinkLocationTopologyFilter.all(),
             ZLinkPageRequest(1_000, null),
         ).thenApply { page -> page.items().map { server ->
                 mapOf(
-                    "nodeRid" to server.serverRid().toString(),
+                    "nodeRid" to server.nodeRid().toString(),
                     "endpoint" to server.endpoint(),
-                    "ownerId" to server.ownerId(),
+                    "ownerId" to "",
                     "role" to "ROUTER",
-                    "meshName" to server.channelName(),
+                    "state" to server.state().name,
+                    "draining" to server.draining,
+                    "meshName" to server.meshName(),
                 )
             } }
 

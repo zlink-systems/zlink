@@ -305,7 +305,10 @@ void zlink::socket_base_t::event_close_failed (const endpoint_uri_pair_t &endpoi
 void zlink::socket_base_t::event_disconnected (const endpoint_uri_pair_t &endpoint_uri_pair_,
                                                uint64_t reason_,
                                                const unsigned char *routing_id_,
-                                               size_t routing_id_size_)
+                                               size_t routing_id_size_,
+                                               transport_lane_t transport_lane_,
+                                               uint64_t transport_pair_id_,
+                                               uint64_t transport_pair_generation_)
 {
     if (monitor_runtime ().events_atomic.load (std::memory_order_acquire) == 0)
         return;
@@ -325,13 +328,21 @@ void zlink::socket_base_t::event_disconnected (const endpoint_uri_pair_t &endpoi
             enqueue_disconnected = build_monitor_event_record (
               &disconnected_record, ZLINK_EVENT_DISCONNECTED, values, 1,
               routing_id_, routing_id_size_, endpoint_uri_pair_);
+            if (enqueue_disconnected) {
+                disconnected_record.transport_lane = transport_lane_;
+                disconnected_record.transport_pair_id = transport_pair_id_;
+                disconnected_record.transport_pair_generation =
+                  transport_pair_generation_;
+            }
         }
 
-        changed = monitor_runtime ().erase_ready_connection (endpoint_uri_pair_, routing_id_,
-                                                             routing_id_size_, &ready_count);
+        changed = monitor_runtime ().erase_ready_connection (
+          endpoint_uri_pair_, routing_id_, routing_id_size_, &ready_count,
+          transport_pair_id_, transport_pair_generation_);
         if (!changed)
-            changed = monitor_runtime ().erase_ready_connection_for_endpoint (endpoint_uri_pair_,
-                                                                              &ready_count);
+            changed = monitor_runtime ().erase_ready_connection_for_endpoint (
+              endpoint_uri_pair_, &ready_count, transport_pair_id_,
+              transport_pair_generation_);
 
         LIBZLINK_UNUSED (changed);
         if (monitor_runtime ().events & ZLINK_EVENT_CONNECTION_READY) {
@@ -339,6 +350,12 @@ void zlink::socket_base_t::event_disconnected (const endpoint_uri_pair_t &endpoi
             enqueue_ready_count = build_monitor_event_record (
               &ready_count_record, ZLINK_EVENT_CONNECTION_READY, ready_values,
               1, routing_id_, routing_id_size_, endpoint_uri_pair_);
+            if (enqueue_ready_count) {
+                ready_count_record.transport_lane = transport_lane_;
+                ready_count_record.transport_pair_id = transport_pair_id_;
+                ready_count_record.transport_pair_generation =
+                  transport_pair_generation_;
+            }
         }
     }
     //  Reliable internal monitors may apply queue backpressure. Never wait for
@@ -373,14 +390,18 @@ void zlink::socket_base_t::event_handshake_failed_auth (
 void zlink::socket_base_t::event_connection_ready_changed (
   const endpoint_uri_pair_t &endpoint_uri_pair_,
   const unsigned char *routing_id_,
-  size_t routing_id_size_)
+  size_t routing_id_size_,
+  transport_lane_t transport_lane_,
+  uint64_t transport_pair_id_,
+  uint64_t transport_pair_generation_)
 {
     uint32_t ready_count = 0;
     bool changed = false;
     {
         scoped_lock_t lock (monitor_runtime ().sync);
-        changed = monitor_runtime ().mark_ready_connection (endpoint_uri_pair_, routing_id_,
-                                                            routing_id_size_, &ready_count);
+        changed = monitor_runtime ().mark_ready_connection (
+          endpoint_uri_pair_, routing_id_, routing_id_size_, &ready_count,
+          transport_pair_id_, transport_pair_generation_);
     }
     if (!changed)
         return;
@@ -388,7 +409,8 @@ void zlink::socket_base_t::event_connection_ready_changed (
     uint64_t values[1] = {ready_count};
     event (endpoint_uri_pair_, routing_id_, routing_id_size_, values, 1,
            ZLINK_EVENT_CONNECTION_READY,
-           socket_monitor_internal_connection_ready_edge);
+           socket_monitor_internal_connection_ready_edge,
+           transport_lane_, transport_pair_id_, transport_pair_generation_);
 }
 
 void zlink::socket_base_t::event_transport_pair_lane_ready (
@@ -412,7 +434,8 @@ void zlink::socket_base_t::event_transport_pair_lane_ready (
     }
     if (pair_ready)
         event_connection_ready_changed (
-          endpoint_uri_pair_, routing_id_, routing_id_size_);
+          endpoint_uri_pair_, routing_id_, routing_id_size_, lane_, pair_id_,
+          generation_);
 }
 
 void zlink::socket_base_t::emit_inproc_connection_ready (pipe_t *pipe_)
@@ -476,7 +499,10 @@ void zlink::socket_base_t::event (const endpoint_uri_pair_t &endpoint_uri_pair_,
                                   uint64_t values_[],
                                   uint64_t values_count_,
                                   uint64_t type_,
-                                  uint32_t internal_flags_)
+                                  uint32_t internal_flags_,
+                                  transport_lane_t transport_lane_,
+                                  uint64_t transport_pair_id_,
+                                  uint64_t transport_pair_generation_)
 {
     if (monitor_runtime ().events_atomic.load (std::memory_order_acquire) == 0)
         return;
@@ -491,6 +517,11 @@ void zlink::socket_base_t::event (const endpoint_uri_pair_t &endpoint_uri_pair_,
               routing_id_size_, endpoint_uri_pair_);
             if (enqueue)
                 record.internal_flags = internal_flags_;
+            if (enqueue) {
+                record.transport_lane = transport_lane_;
+                record.transport_pair_id = transport_pair_id_;
+                record.transport_pair_generation = transport_pair_generation_;
+            }
         }
     }
     //  A reliable internal monitor waits for its bounded queue. Keep the
@@ -565,7 +596,15 @@ bool zlink::socket_base_t::dispatch_monitor_event (void *monitor_socket_,
     if (record_.values_count > 0)
         wire_event.event.value = record_.values[0];
     wire_event.event.routing_id = record_.routing_id;
+    wire_event.event.connection_id = record_.endpoint_uri_pair.connection_id;
+    wire_event.event.transport_pair_id = record_.transport_pair_id;
+    wire_event.event.transport_pair_generation = record_.transport_pair_generation;
+    wire_event.event.transport_lane = static_cast<uint32_t> (record_.transport_lane);
+    wire_event.event.flags = record_.internal_flags;
     wire_event.connection_id = record_.endpoint_uri_pair.connection_id;
+    wire_event.transport_pair_id = record_.transport_pair_id;
+    wire_event.transport_pair_generation = record_.transport_pair_generation;
+    wire_event.transport_lane = static_cast<uint32_t> (record_.transport_lane);
     wire_event.internal_flags = record_.internal_flags;
 
     zlink::copy_fixed_c_string_from_bytes (wire_event.event.local_addr,

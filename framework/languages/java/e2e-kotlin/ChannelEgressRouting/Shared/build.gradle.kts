@@ -4,8 +4,8 @@ plugins {
 }
 
 dependencies {
-    api("systems.zlink:zlink-framework-core:0.9.0")
-    api("systems.zlink:zlink-framework-kotlin:0.9.0")
+    api("systems.zlink:zlink-framework-core:0.10.0")
+    api("systems.zlink:zlink-framework-kotlin:0.10.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
 }
 

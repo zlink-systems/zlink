@@ -9,6 +9,8 @@ import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.configuration.ZLinkMeshNodeBuilder;
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationOptions;
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore;
+import systems.zlink.framework.locations.redis.ZLinkRedisRelocationOptions;
+import systems.zlink.framework.locations.redis.ZLinkRedisRelocationStore;
 import systems.zlink.framework.spring.EnableZLinkFramework;
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer;
 
@@ -26,8 +28,9 @@ public final class SessionApplication {
     }
 
     @Bean
-    ZLinkFrameworkConfigurer framework() {
+    ZLinkFrameworkConfigurer framework(ZLinkRedisRelocationStore relocationStore) {
         return options -> {
+            options.addRelocationStore(relocationStore);
             String nodeRid = Env.get("nodeRid", "session-a");
             String logDir = Env.get("logDirectory", "logs");
             options.configureDispatch()
@@ -36,13 +39,18 @@ public final class SessionApplication {
                 .traceLabel("kotlin-atd-session");
             ZLinkMeshNodeBuilder mesh = options.addRouteMesh(Contracts.SPOT_MESH)
                 .listen(Env.get("sessionRouteEndpoint"))
-                .setRoutingId(RoutingId.from(nodeRid));
-            mesh.channelName(Contracts.SPOT_MESH);
+                .setRoutingId(RoutingId.from(nodeRid))
+                // Session relays requests and is not a User Spot placement target.
+                .setPlacementWeight(0);
+            mesh.channelName(Contracts.ROUTE_CHANNEL).server();
             mesh.peerConnections().connect(Env.get("playRouteEndpoint"));
             String playBRoute = Env.get("playBRouteEndpoint", "");
             if (!playBRoute.isBlank()) {
                 mesh.peerConnections().connect(playBRoute);
             }
+            options.addClientServerChannel(Contracts.DELAY_CHANNEL)
+                .client()
+                .connect(Env.get("delayEndpoint"));
             mesh.objects()
                 .server()
                 .addEntrySpot(ProbeEntrySpot.class)
@@ -53,6 +61,7 @@ public final class SessionApplication {
                     factory -> factory.recreateOnRelocation());
             options.addStreamNode("gateway")
                 .bind(Env.get("streamEndpoint"))
+                .enableActorDispatch()
                 .registerSession(ProbeSession.class)
                 .addSessionPacketHandler(ActorAuthReqHandler.class)
                 .addSessionPacketHandler(BindActorsReqHandler.class)
@@ -81,5 +90,12 @@ public final class SessionApplication {
         return new ZLinkRedisLocationStore(new ZLinkRedisLocationOptions()
             .setConnectionString(Env.get("redisLocationEndpoint"))
             .setKeyPrefix(Env.get("locationKeyPrefix")));
+    }
+
+    @Bean
+    ZLinkRedisRelocationStore relocationStore() {
+        return new ZLinkRedisRelocationStore(new ZLinkRedisRelocationOptions()
+            .setConnectionString(Env.get("redisLocationEndpoint"))
+            .setKeyPrefix(Env.get("locationKeyPrefix") + "relocation:"));
     }
 }

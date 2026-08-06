@@ -1,15 +1,16 @@
 # Kotlin AutomaticTurnDispatch feature map
 
-Kotlin counterpart는 Java fixture와 disjoint하게 끝낼 수 있는 Delay fixture 두 파일만 현재
-channel API로 갱신했다. 나머지 Kotlin AutomaticTurnDispatch source는 현재 public API와 아직 맞지
-않으므로 완료로 표시하지 않는다.
+Kotlin counterpart는 Java fixture와 별도로 현재 Java Framework public API를 기준으로
+구성한다. 이번 migration에서 Delay, Shared, Client, Server/Play, Server/Session의
+source compile을 현재 API에 맞췄다. Runtime scenario의 동작 검증 상태와 source compile
+상태는 분리해 기록한다.
 
 | 범위 | 상태 | 근거 또는 blocker |
 |---|---|---|
-| `Server/Delay/DelayApplication.java` | partial | `server().listen(...).addRequestHandler(...)`로 갱신했다. |
-| `Server/Delay/DelayHandler.java` | partial | 삭제된 request context 대신 현재 message context를 사용한다. |
-| `Shared`, `Client`, `Server/Play`, `Server/Session` | blocked | 삭제된 `ZLinkRouteRequestContext`/`ZLinkSpotActorRequestContext`, old `spotRid()`, generic `ZLinkActorJoinResult`, old factory/getOrCreate/channel 호출이 남아 compile이 중단된다. |
+| `Server/Delay`, `Shared`, `Client`, `Server/Play`, `Server/Session` | compile-verified | `:Client:compileKotlin`, `:Client:compileJava`, `:Shared:compileJava`, `:Server:Delay:compileJava`, `:Server:Play:compileJava`, `:Server:Session:compileJava`가 성공했다. |
+| `Server/Play`, `Server/Session` join flow | runtime follow-up | 현재 join contract인 `joinSpot(...).defer()`와 `ZLinkActorJoinCompletion` lifecycle을 사용하도록 migration했다. 각 scenario의 실제 process-matrix 결과는 별도 E2E 실행으로 확인해야 한다. |
 
-Kotlin focused compile에서 약 70개의 stale public API 오류가 확인됐다. Java 범위를 침범하거나
-reflection/raw/internal workaround를 추가하지 않고 이 작업에서는 Kotlin 전체 포팅을 완료했다고
-주장하지 않는다.
+이 migration은 삭제된 request context, 구형 `spotRid()` context accessor, generic join result,
+구형 actor factory/getOrCreate/channel 호출을 제거했다. Framework 내부 API나 reflection/raw
+우회는 추가하지 않았다. `run_e2e.sh`의 주석에 남은 항목은 compile blocker가 아니라 아직
+process-matrix runtime 검증이 필요한 scenario 목록이다.

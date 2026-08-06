@@ -5,6 +5,7 @@ import java.util.List;
 public final class Contracts {
     public static final String DELAY_CHANNEL = "await.dispatch.delay";
     public static final String SPOT_MESH = "await.dispatch.mesh";
+    public static final String ROUTE_CHANNEL = "await.dispatch.route";
     public static final String SPOT_RID_METADATA = "spot-rid";
     public static final String TARGET_NODE_RID_METADATA = "target-node-rid";
 

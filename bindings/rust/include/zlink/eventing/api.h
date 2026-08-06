@@ -10,6 +10,16 @@
 extern "C" {
 #endif
 
+/** Identifies the transport lane associated with a monitor event. */
+typedef enum zlink_monitor_transport_lane_e
+{
+    ZLINK_MONITOR_TRANSPORT_LANE_APPLICATION = 0,
+    ZLINK_MONITOR_TRANSPORT_LANE_COMPLETION = 1
+} zlink_monitor_transport_lane_t;
+
+/** Set when a CONNECTION_READY event changes a connection from not-ready to ready. */
+#define ZLINK_MONITOR_EVENT_FLAG_CONNECTION_READY_EDGE (1u << 0)
+
 typedef struct
 {
     uint64_t event;
@@ -17,6 +27,16 @@ typedef struct
     zlink_routing_id_t routing_id;
     char local_addr[256];
     char remote_addr[256];
+    /* Process-local identity of the physical transport attempt. */
+    uint64_t connection_id;
+    /* Non-zero for a paired Application/Completion transport. */
+    uint64_t transport_pair_id;
+    /* Generation of the paired transport. Zero for an unpaired transport. */
+    uint64_t transport_pair_generation;
+    /* One of zlink_monitor_transport_lane_t. */
+    uint32_t transport_lane;
+    /* Event-specific flags, including ZLINK_MONITOR_EVENT_FLAG_*. */
+    uint32_t flags;
 } zlink_monitor_event_t;
 
 typedef void (*zlink_monitor_handler_fn) (const zlink_monitor_event_t *event_, void *userdata_);
@@ -171,6 +191,18 @@ ZLINK_EXPORT zlink_handler_result_t zlink_socket_monitor_handler (
 ZLINK_EXPORT zlink_recv_result_t zlink_socket_monitor_recv (void *monitor_,
                                                             zlink_socket_monitor_event_t *out_,
                                                             zlink_recv_flags_t flags_);
+
+/**
+ * @brief Read an event using the extended monitor event layout.
+ *
+ * The legacy recv function writes only the stable event prefix so callers
+ * built against the previous layout remain safe. Callers that need physical
+ * connection identity must use this versioned entry point.
+ */
+ZLINK_EXPORT zlink_recv_result_t zlink_socket_monitor_recv_v2 (
+  void *monitor_,
+  zlink_socket_monitor_event_t *out_,
+  zlink_recv_flags_t flags_);
 
 /** @brief Read the current snapshot for a monitor handle. */
 ZLINK_EXPORT zlink_config_result_t zlink_monitor_status (void *monitor_,

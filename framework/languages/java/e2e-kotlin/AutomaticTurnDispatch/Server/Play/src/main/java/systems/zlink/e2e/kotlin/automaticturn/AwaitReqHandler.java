@@ -15,7 +15,7 @@ public final class AwaitReqHandler {
     public CompletionStage<Contracts.ScenarioRes> handle(
         ProbeSpot spot,
         Contracts.AwaitReq request) {
-        String value = "spot=" + spot.context().spotRid() + ";correlation=" + request.correlationId();
+        String value = "spot=" + spot.context().spotId() + ";correlation=" + request.correlationId();
         evidence.record(request.requestId(), "await-started", value);
         evidence.record(request.requestId(), "await-released", value);
         return spot.context().outbound()
@@ -34,3 +34,4 @@ public final class AwaitReqHandler {
             });
     }
 }
+

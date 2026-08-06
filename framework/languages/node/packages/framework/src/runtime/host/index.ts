@@ -257,6 +257,7 @@ export class ZLinkFrameworkRuntimeHost implements
   private spotManager?: DefaultZLinkSpotManager;
   private ownerLeaseRecoveryRuntime?: ZLinkLocationRuntime;
   private ownerLeaseRecoveryHandler?: () => void;
+  private ownerLeaseFailureHandler?: () => void;
   private registerUserSpotHandlers?: (runtime: ZLinkSpotNodeRuntimeManager) => void;
   private readonly destroyedActorRefs = new Map<string, ActorRef>();
   private readonly runtimeEventPublisher: ZLinkRuntimeEventPublisher;
@@ -686,7 +687,7 @@ export class ZLinkFrameworkRuntimeHost implements
         }
         const runtime = this.locationOwner.currentRuntime;
         return runtime !== undefined
-          && runtime.ownerLeaseHealthy
+          && runtime.ownerLeaseUsable
           && runtime.lastError === undefined;
       },
       hostState: () => this.runtimeState,
@@ -1353,87 +1354,20 @@ export class ZLinkFrameworkRuntimeHost implements
         this.installOwnerLeaseRecoveryPublication(locationRuntime, spotNodeRuntime, channelRuntime);
       }
       const locationStore = this.locationOwner.currentStores?.locationStore;
-      if (locationStore !== undefined) {
+      if (locationStore !== undefined && locationRuntime?.ownerLeaseUsable !== false) {
         await spotNodeRuntime.publishMeshNodeState(
           ZLinkFrameworkRuntimeState.Preparing,
           this.executionState.abortController.signal
         );
-        for (const [meshName, node] of spotNodeRuntime.meshNodesByName) {
-          const activationNode = node as typeof node & {
-            registerAsyncInstanceActivationAuthority?: (
-              authority: ServiceAsyncInstanceActivationAuthority
-            ) => void;
-            registerInstanceIntent: (
-              instanceType: string,
-              route: import('../foundation/service-stateful-wire-codec').ServiceInstanceRouteFence,
-              expectedCurrentRoute?: import('../foundation/service-stateful-wire-codec').ServiceInstanceRouteFence | null
-            ) => void;
-            registerInstanceApplicationLifecycle?: (
-              lifecycle: ServiceInstanceApplicationLifecycle
-            ) => void;
-          };
-          const spotManager = this.spotManager;
-          if (spotManager !== undefined) {
-            this.registerInstanceApplicationLifecycle(meshName, activationNode, spotManager);
-          }
-          activationNode.registerAsyncInstanceActivationAuthority?.(
-            new ZLinkInstanceActivationAuthority({
-              store: locationStore,
-              relocationStore:
-                this.options.registration.locations.relocationStoreInstance,
-              meshName,
-              owner: () => this.locationOwner.currentRuntime?.currentOwnerToken,
-              metrics: this.metrics,
-              onReady: (target, route) => {
-                // Publish the in-memory route in the same synchronous
-                // continuation as the durable Ready commit. The activation
-                // continuation repeats this idempotently after it admits the
-                // first application message, but it must not leave a window
-                // where Store authority is Ready and target intent is absent.
-                activationNode.registerInstanceIntent(target.stableType, route);
-                this.locationOwner.currentLifecycle?.trackInstanceSpot({
-                  meshName,
-                  spotId: target.targetSpotId,
-                  stableType: target.stableType,
-                  nodeRid: route.targetNodeRid,
-                  nodeGeneration: route.targetNodeGeneration,
-                  objectGeneration: route.objectGeneration,
-                  authorityOwnerGeneration: route.authorityOwnerGeneration,
-                  ownerId: route.ownerId,
-                  ownerLeaseGeneration: route.leaseGeneration,
-                  storeVersion: route.storeVersion,
-                  deactivate: async () => {
-                    await spotManager?.close(meshName, target.targetSpotId as never);
-                  }
-                });
-              }
-            })
+        if (this.requiresStatefulAuthorityRuntime()) {
+          this.installLocationBackedAuthorities(locationStore, spotNodeRuntime);
+          statefulAuthorityRoutes = this.createStatefulAuthorityRoutes(
+            locationStore,
+            spotNodeRuntime
           );
+          await statefulAuthorityRoutes.start(this.executionState.abortController.signal);
+          this.statefulAuthorityRoutes = statefulAuthorityRoutes;
         }
-        statefulAuthorityRoutes = new ZLinkStatefulAuthorityRouteRuntime({
-          store: locationStore,
-          creationStore: locationStore,
-          relocationStore:
-            this.options.registration.locations.relocationStoreInstance,
-          meshNodes: spotNodeRuntime.meshNodesByName,
-          pollingIntervalMs:
-            this.options.registration.locations.options.pollingIntervalMs
-            ?? zlinkDefaultLocationOptions.pollingIntervalMs,
-          pageSize: 1000,
-          reportError: (error) =>
-            this.runtimeOrPreStartErrorSink.reportRuntimeTaskException(
-              'stateful authority route reconciliation',
-              error
-            ),
-          recoverActor: (authority, signal) =>
-            this.recoverPublishedActorAuthority(authority, signal),
-          recoverRelocation: (authority, signal) =>
-            this.serviceRelocation.recoverPublishedAuthority(authority, signal),
-          onSpotRouteChanged: (spotId) =>
-            this.cachedLocationSpotRouteResolver?.invalidate?.(spotId)
-        });
-        await statefulAuthorityRoutes.start(this.executionState.abortController.signal);
-        this.statefulAuthorityRoutes = statefulAuthorityRoutes;
       }
       streamRuntime = new ZLinkStreamRuntimeManager({
         registration: this.options.registration,
@@ -1457,10 +1391,12 @@ export class ZLinkFrameworkRuntimeHost implements
       });
       streamRuntime.start();
       this.streamRuntime = streamRuntime;
-      await spotNodeRuntime.publishMeshNodeState(
-        ZLinkFrameworkRuntimeState.Serving,
-        this.executionState.abortController.signal
-      );
+      if (locationRuntime === undefined || locationRuntime.ownerLeaseUsable) {
+        await spotNodeRuntime.publishMeshNodeState(
+          ZLinkFrameworkRuntimeState.Serving,
+          this.executionState.abortController.signal
+        );
+      }
       this.routeMeshCoordinator.markServing();
       this.setRuntimeState(ZLinkFrameworkRuntimeState.Serving);
       this.lifecycleSink?.push('framework:started');
@@ -1578,24 +1514,65 @@ export class ZLinkFrameworkRuntimeHost implements
   ): void {
     let publishing = false;
     let lastPublishedOwnerToken = runtime.currentOwnerToken;
+    let recoveryRequired = false;
+    let recoveringServices: Promise<void> | undefined;
+    let stoppingServices: Promise<void> | undefined;
+    let transportFence = Promise.resolve();
     const handler = () => {
       const ownerToken = runtime.currentOwnerToken;
       if (
         publishing
         || ownerToken === undefined
-        || ownerToken === lastPublishedOwnerToken
+        || (ownerToken === lastPublishedOwnerToken && !recoveryRequired)
       ) return;
+      if (runtime.ownerLeaseUsable === false) return;
       publishing = true;
       const signal = this.executionState?.abortController.signal;
-      void spotNodeRuntime.publishMeshNodeState(
-          this.runtimeState,
+      const recoverServices = async (): Promise<void> => {
+        if (stoppingServices !== undefined) {
+          await stoppingServices;
+          stoppingServices = undefined;
+        }
+        if (this.statefulAuthorityRoutes !== undefined) return;
+        const store = this.locationOwner.currentStores?.locationStore;
+        if (store === undefined || this.executionState === undefined) return;
+        if (recoveringServices !== undefined) return await recoveringServices;
+        recoveringServices = (async () => {
+          if (this.requiresStatefulAuthorityRuntime()) {
+            const routes = this.createStatefulAuthorityRoutes(store, spotNodeRuntime);
+            await routes.start(this.executionState?.abortController.signal);
+            this.statefulAuthorityRoutes = routes;
+          }
+        })();
+        try {
+          await recoveringServices;
+        } finally {
+          recoveringServices = undefined;
+        }
+      };
+      void transportFence
+        .then(() => spotNodeRuntime.publishMeshNodeState(
+          ZLinkFrameworkRuntimeState.Preparing,
           signal
-        )
+        ))
+        .then(() => recoverServices())
+        .then(() => {
+          const currentOwnerToken = runtime.currentOwnerToken;
+          if (runtime.ownerLeaseUsable === false
+            || currentOwnerToken === undefined
+            || currentOwnerToken.ownerId !== ownerToken.ownerId
+            || currentOwnerToken.leaseGeneration !== ownerToken.leaseGeneration) {
+            throw new Error('Owner lease changed during recovery.');
+          }
+          return spotNodeRuntime.publishMeshNodeState(this.runtimeState, signal);
+        })
+        .then(() => spotNodeRuntime.startLocationAutoConnect(signal))
         .then(() => channelRuntime.reclaimLocationOwnerRows(signal))
         .then(() => this.locationOwner.currentLifecycle?.reclaimOwnerRows() ?? Promise.resolve())
         .then(
         () => {
           lastPublishedOwnerToken = ownerToken;
+          recoveryRequired = false;
           publishing = false;
         },
         error => {
@@ -1609,15 +1586,136 @@ export class ZLinkFrameworkRuntimeHost implements
     };
     this.ownerLeaseRecoveryRuntime = runtime;
     this.ownerLeaseRecoveryHandler = handler;
+    const failureHandler = () => {
+      recoveryRequired = true;
+      if (runtime.ownerLeaseUsable) return;
+      transportFence = transportFence
+        .then(() => spotNodeRuntime.fenceLocationAutoConnect())
+        .catch(error => {
+          this.runtimeOrPreStartErrorSink.reportRuntimeTaskException(
+            'owner lease transport fencing',
+            error
+          );
+        });
+      const routes = this.statefulAuthorityRoutes;
+      if (routes === undefined) return;
+      this.statefulAuthorityRoutes = undefined;
+      stoppingServices = routes.stop();
+      void stoppingServices.catch(error =>
+        this.runtimeOrPreStartErrorSink.reportRuntimeTaskException(
+          'stateful authority route fencing',
+          error
+        ));
+    };
+    this.ownerLeaseFailureHandler = failureHandler;
     runtime.addOwnerLeaseRenewedHandler(handler);
+    if (typeof runtime.addOwnerLeaseRenewalFailedHandler === 'function') {
+      runtime.addOwnerLeaseRenewalFailedHandler(failureHandler);
+    }
+  }
+
+  private createStatefulAuthorityRoutes(
+    locationStore: import('../locations/domain-store-contract').ZLinkDomainLocationStore,
+    spotNodeRuntime: ZLinkSpotNodeRuntimeManager
+  ): ZLinkStatefulAuthorityRouteRuntime {
+    return new ZLinkStatefulAuthorityRouteRuntime({
+      store: locationStore,
+      creationStore: locationStore,
+      relocationStore: this.options.registration.locations.relocationStoreInstance,
+      meshNodes: spotNodeRuntime.meshNodesByName,
+      pollingIntervalMs:
+        this.options.registration.locations.options.pollingIntervalMs
+        ?? zlinkDefaultLocationOptions.pollingIntervalMs,
+      pageSize: 1000,
+      reportError: (error) =>
+        this.runtimeOrPreStartErrorSink.reportRuntimeTaskException(
+          'stateful authority route reconciliation',
+          error
+        ),
+      recoverActor: (authority, signal) =>
+        this.recoverPublishedActorAuthority(authority, signal),
+      recoverRelocation: (authority, signal) =>
+        this.serviceRelocation.recoverPublishedAuthority(authority, signal),
+      onSpotRouteChanged: (spotId) =>
+        this.cachedLocationSpotRouteResolver?.invalidate?.(spotId)
+    });
+  }
+
+  private requiresStatefulAuthorityRuntime(): boolean {
+    for (const options of this.options.registration.spotNodes.values()) {
+      if (Object.keys(options.spotFactoryRegistrations ?? {}).length > 0
+        || Object.keys(options.instanceSpotFactoryRegistrations ?? {}).length > 0
+        || Object.keys(options.actorFactoryRegistrations ?? {}).length > 0) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private installLocationBackedAuthorities(
+    locationStore: import('../locations/domain-store-contract').ZLinkDomainLocationStore,
+    spotNodeRuntime: ZLinkSpotNodeRuntimeManager
+  ): void {
+    for (const [meshName, node] of spotNodeRuntime.meshNodesByName) {
+      const activationNode = node as typeof node & {
+        registerAsyncInstanceActivationAuthority?: (
+          authority: ServiceAsyncInstanceActivationAuthority
+        ) => void;
+        registerInstanceIntent: (
+          instanceType: string,
+          route: import('../foundation/service-stateful-wire-codec').ServiceInstanceRouteFence,
+          expectedCurrentRoute?: import('../foundation/service-stateful-wire-codec').ServiceInstanceRouteFence | null
+        ) => void;
+        registerInstanceApplicationLifecycle?: (
+          lifecycle: ServiceInstanceApplicationLifecycle
+        ) => void;
+      };
+      const spotManager = this.spotManager;
+      if (spotManager !== undefined) {
+        this.registerInstanceApplicationLifecycle(meshName, activationNode, spotManager);
+      }
+      activationNode.registerAsyncInstanceActivationAuthority?.(
+        new ZLinkInstanceActivationAuthority({
+          store: locationStore,
+          relocationStore: this.options.registration.locations.relocationStoreInstance,
+          meshName,
+          owner: () => this.locationOwner.currentRuntime?.currentOwnerToken,
+          metrics: this.metrics,
+          onReady: (target, route) => {
+            activationNode.registerInstanceIntent(target.stableType, route);
+            this.locationOwner.currentLifecycle?.trackInstanceSpot({
+              meshName,
+              spotId: target.targetSpotId,
+              stableType: target.stableType,
+              nodeRid: route.targetNodeRid,
+              nodeGeneration: route.targetNodeGeneration,
+              objectGeneration: route.objectGeneration,
+              authorityOwnerGeneration: route.authorityOwnerGeneration,
+              ownerId: route.ownerId,
+              ownerLeaseGeneration: route.leaseGeneration,
+              storeVersion: route.storeVersion,
+              deactivate: async () => {
+                await spotManager?.close(meshName, target.targetSpotId as never);
+              }
+            });
+          }
+        })
+      );
+    }
   }
 
   private removeOwnerLeaseRecoveryPublication(): void {
     if (this.ownerLeaseRecoveryRuntime !== undefined && this.ownerLeaseRecoveryHandler !== undefined) {
       this.ownerLeaseRecoveryRuntime.removeOwnerLeaseRenewedHandler(this.ownerLeaseRecoveryHandler);
     }
+    if (this.ownerLeaseRecoveryRuntime !== undefined && this.ownerLeaseFailureHandler !== undefined) {
+      if (typeof this.ownerLeaseRecoveryRuntime.removeOwnerLeaseRenewalFailedHandler === 'function') {
+        this.ownerLeaseRecoveryRuntime.removeOwnerLeaseRenewalFailedHandler(this.ownerLeaseFailureHandler);
+      }
+    }
     this.ownerLeaseRecoveryRuntime = undefined;
     this.ownerLeaseRecoveryHandler = undefined;
+    this.ownerLeaseFailureHandler = undefined;
   }
 
   async onApplicationBootstrap(): Promise<void> {
@@ -1980,7 +2078,9 @@ export class ZLinkFrameworkRuntimeHost implements
       runtimeOrPreStartErrorSink: this.runtimeOrPreStartErrorSink,
       detachedTaskRunner: this.detachedTaskRunner(),
       metrics: this.metrics,
-      admission: this.admission
+      admission: this.admission,
+      statefulExecutionAllowed: () =>
+        this.locationOwner.currentRuntime?.ownerLeaseUsable ?? true
     }).create(this.actorTransferRuntime);
   }
 

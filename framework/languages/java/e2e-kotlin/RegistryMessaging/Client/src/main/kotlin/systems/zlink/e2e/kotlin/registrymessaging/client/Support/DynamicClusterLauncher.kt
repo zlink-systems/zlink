@@ -67,18 +67,6 @@ class DynamicClusterLauncher private constructor(
         return DynamicConsumer(process, httpUrl)
     }
 
-    fun waitPeerEndpoint(consumer: HttpJson, endpoint: String) {
-        waitPeers(consumer, "peer endpoint $endpoint") { peers ->
-            peers.any { it["nodeRid"] == endpoint }
-        }
-    }
-
-    fun waitPeerEndpointAbsent(consumer: HttpJson, endpoint: String) {
-        waitPeers(consumer, "peer endpoint removal $endpoint") { peers ->
-            peers.none { it["nodeRid"] == endpoint }
-        }
-    }
-
     fun waitPeerCount(consumer: HttpJson, count: Int) {
         waitPeers(consumer, "peer count $count") { peers -> peers.size == count }
     }

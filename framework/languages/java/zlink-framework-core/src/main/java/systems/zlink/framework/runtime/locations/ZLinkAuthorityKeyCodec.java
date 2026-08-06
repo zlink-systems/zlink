@@ -53,6 +53,49 @@ public final class ZLinkAuthorityKeyCodec {
         return "zla1:a:";
     }
 
+    static String actorId(String key) {
+        return decode(key, actorPrefix(), "actor");
+    }
+
+    static String spotId(String key) {
+        return decode(key, spotPrefix(), "spot");
+    }
+
+    private static String decode(String key, String prefix, String kind) {
+        if (key == null || !key.startsWith(prefix))
+            throw new IllegalArgumentException("invalid " + kind + " authority key");
+        int lengthEnd = key.indexOf(':', prefix.length());
+        if (lengthEnd < 0)
+            throw new IllegalArgumentException("invalid " + kind + " authority key");
+        int length;
+        try {
+            length = Integer.parseInt(key.substring(prefix.length(), lengthEnd));
+        } catch (NumberFormatException exception) {
+            throw new IllegalArgumentException("invalid " + kind + " authority key", exception);
+        }
+        String encoded = key.substring(lengthEnd + 1);
+        java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream(length);
+        for (int index = 0; index < encoded.length();) {
+            char value = encoded.charAt(index++);
+            if (value != '%') {
+                if (value > 0x7f)
+                    throw new IllegalArgumentException("invalid " + kind + " authority key");
+                bytes.write((byte) value);
+                continue;
+            }
+            if (index + 1 >= encoded.length())
+                throw new IllegalArgumentException("invalid " + kind + " authority key");
+            int high = Character.digit(encoded.charAt(index++), 16);
+            int low = Character.digit(encoded.charAt(index++), 16);
+            if (high < 0 || low < 0)
+                throw new IllegalArgumentException("invalid " + kind + " authority key");
+            bytes.write((high << 4) | low);
+        }
+        if (bytes.size() != length || length == 0 || length > 0xff)
+            throw new IllegalArgumentException("invalid " + kind + " authority key");
+        return new String(bytes.toByteArray(), java.nio.charset.StandardCharsets.UTF_8);
+    }
+
     private static boolean isUnreserved(int value) {
         return value >= 'A' && value <= 'Z'
             || value >= 'a' && value <= 'z'

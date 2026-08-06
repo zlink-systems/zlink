@@ -5,12 +5,12 @@ plugins {
 }
 
 group = "systems.zlink.e2e"
-version = "0.9.0"
+version = "0.10.0"
 
 dependencies {
-    implementation("systems.zlink:zlink-framework-core:0.9.0")
-    implementation("systems.zlink:zlink-framework-kotlin:0.9.0")
-    implementation("systems.zlink:zlink-framework-spring-boot-starter:0.9.0")
+    implementation("systems.zlink:zlink-framework-core:0.10.0")
+    implementation("systems.zlink:zlink-framework-kotlin:0.10.0")
+    implementation("systems.zlink:zlink-framework-spring-boot-starter:0.10.0")
     implementation(zlinkLibs.zlink.bindings)
     implementation("com.fasterxml.jackson.module:jackson-module-kotlin:2.17.2")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0")

@@ -32,7 +32,7 @@ public final class CleanupProbeReqRouteHandler
         return spots.resolveSpotHandle(targetSpotRid)
             .thenCompose(handle -> routes.requestToSpot(
                     handle.orElseThrow(() ->
-                        new IllegalStateException("spot not found: " + targetSpotRid)),
+                        new IllegalStateException("spot not found: " + targetSpotRid)).spotId(),
                     request)
                 .timeout(Duration.ofSeconds(15))
                 .submit(Contracts.CleanupProbeRes.class))

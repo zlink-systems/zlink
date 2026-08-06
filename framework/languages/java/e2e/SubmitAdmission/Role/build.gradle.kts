@@ -3,13 +3,13 @@ plugins {
 }
 
 group = "systems.zlink.e2e"
-version = "0.9.0"
+version = "0.10.0"
 
 dependencies {
-    implementation("systems.zlink:zlink-framework-core:0.9.0")
-    implementation("systems.zlink:zlink-framework-spring-boot-starter:0.9.0")
+    implementation("systems.zlink:zlink-framework-core:0.10.0")
+    implementation("systems.zlink:zlink-framework-spring-boot-starter:0.10.0")
     val zlinkBindingVersion = providers.environmentVariable("ZLINK_EXPECTED_BINDING_VERSION")
-        .orElse("0.9.0")
+        .orElse("0.10.0")
         .get()
     implementation("systems.zlink:zlink:$zlinkBindingVersion")
     implementation("org.springframework.boot:spring-boot-starter:3.5.14")

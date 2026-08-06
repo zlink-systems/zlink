@@ -1,6 +1,6 @@
 {
   "name": "zlink-stream-connector",
-  "version-string": "0.9.0",
+  "version-string": "0.10.0",
   "description": "ZLink C++ Stream Connector core library",
   "homepage": "https://github.com/zlink-systems/zlink",
   "license": "MPL-2.0",

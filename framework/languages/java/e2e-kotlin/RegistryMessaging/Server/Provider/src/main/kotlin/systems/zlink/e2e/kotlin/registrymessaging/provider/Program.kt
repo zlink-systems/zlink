@@ -14,6 +14,7 @@ import systems.zlink.e2e.kotlin.registrymessaging.provider.Handlers.PayloadReque
 import systems.zlink.e2e.kotlin.registrymessaging.provider.Handlers.ProfileCommandHandler
 import systems.zlink.e2e.kotlin.registrymessaging.provider.Handlers.ProfileRequestHandler
 import systems.zlink.e2e.kotlin.registrymessaging.provider.Handlers.RoutePingHandler
+import systems.zlink.e2e.kotlin.registrymessaging.provider.Handlers.RoutePayloadRequestHandler
 import systems.zlink.e2e.kotlin.registrymessaging.provider.Infrastructure.EvidenceStore
 import systems.zlink.e2e.kotlin.registrymessaging.shared.Contracts
 import systems.zlink.e2e.kotlin.registrymessaging.shared.PayloadRes
@@ -84,6 +85,11 @@ class ProviderApplication {
                     ScenarioRoutePingReq::class.java,
                     ScenarioRoutePingRes::class.java,
                 )
+                route.addRouteRequestHandler(
+                    RoutePayloadRequestHandler::class.java,
+                    PayloadReq::class.java,
+                    PayloadRes::class.java,
+                )
                 options.routePeers.forEachIndexed { index, peer ->
                     val peerRid = options.routePeerRids.getOrNull(index)
                     if (!peerRid.isNullOrBlank()) {
@@ -130,4 +136,8 @@ class ProviderApplication {
     @Bean
     fun routePingHandler(evidence: EvidenceStore): RoutePingHandler =
         RoutePingHandler(evidence)
+
+    @Bean
+    fun routePayloadRequestHandler(evidence: EvidenceStore): RoutePayloadRequestHandler =
+        RoutePayloadRequestHandler(evidence)
 }

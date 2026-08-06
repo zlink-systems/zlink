@@ -77,20 +77,10 @@ inline void run_mon_c1_dispatch_failure_scenario (const client_options_t &option
             < 400,
           "MON-C1 application callback did not enter its gate");
 
-        nlohmann::json gated_snapshot;
-        const auto claim_deadline =
-          std::chrono::steady_clock::now () + std::chrono::seconds (5);
-        do {
-            gated_snapshot = runtime_snapshot (options.filtered_service_url);
-            if (gated_snapshot.at ("claims")
-                  .at ("applicationActive")
-                  .get<bool> ())
-                break;
-            std::this_thread::sleep_for (std::chrono::milliseconds (20));
-        } while (std::chrono::steady_clock::now () < claim_deadline);
-        ensure (
-          gated_snapshot.at ("claims").at ("applicationActive").get<bool> (),
-          "MON-C1 snapshot did not expose the active application callback");
+        wait_evidence_contains (
+          options.filtered_service_url,
+          "application-gate|state=entered",
+          std::chrono::seconds (5));
 
         const auto request_reply =
           http.post ("/mesh/profile/request?targetRid=svc-throw")
@@ -116,10 +106,6 @@ inline void run_mon_c1_dispatch_failure_scenario (const client_options_t &option
                     "MON-C1 channel pressure transition failed");
         }
 
-        wait_for_new_evidence (
-          options.filtered_service_url,
-          "identifier=zlink.runtime.mesh_node.claim_changed",
-          0, std::chrono::seconds (10));
         ensure (
           gated_request.wait_for (std::chrono::milliseconds (0))
             != std::future_status::ready,
@@ -132,24 +118,18 @@ inline void run_mon_c1_dispatch_failure_scenario (const client_options_t &option
           "MON-C1 gated application request did not complete after release");
         wait_evidence_contains (
           options.filtered_service_url,
-          "claim-domain=application|reason=released",
+          "application-gate|state=released",
           std::chrono::seconds (10));
 
         const auto evidence = fetch_evidence (options.filtered_service_url);
-        ensure (
-          any_contains (
-            evidence,
-            "identifier=zlink.runtime.mesh_node.claim_changed")
-            && any_contains (evidence, "claim-domain=application|reason=active"),
-          "MON-C1 normal observer missed application claim progress");
+        ensure (any_contains (evidence, "application-gate|state=entered")
+                  && any_contains (evidence, "application-gate|state=released"),
+                "MON-C1 application gate evidence did not converge");
         ensure (count_contains (evidence, "mesh-runtime-throwing|") == 1,
                 "MON-C1 failing observer was not isolated after its exception");
-        ensure (
-          count_contains (
-            evidence,
-            "mesh-runtime-event|mesh=runtime.monitoring.mesh|identifier=zlink.runtime.mesh_node.channel_changed")
-            >= 2,
-          "MON-C1 normal observer did not progress under queue pressure");
+        ensure (count_contains (evidence, "mesh-runtime-snapshot|mesh=runtime.monitoring.mesh|")
+                  >= 2,
+                "MON-C1 normal observer did not progress under queue pressure");
 
         std::vector<std::uint64_t> slow_sequences;
         for (const auto &line : evidence) {
@@ -165,9 +145,8 @@ inline void run_mon_c1_dispatch_failure_scenario (const client_options_t &option
                 "MON-C1 slow observer did not expose a coalesced sequence gap");
 
         const auto recovered = runtime_snapshot (options.filtered_service_url);
-        ensure (
-          !recovered.at ("claims").at ("applicationActive").get<bool> (),
-          "MON-C1 application claim did not release");
+        ensure (recovered.at ("state").get<std::string> () != "degraded",
+                "MON-C1 runtime did not remain available after release");
         ensure (
           recovered.at ("sequence").get<std::uint64_t> ()
             > slow_sequences.back (),

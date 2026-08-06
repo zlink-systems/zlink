@@ -36,6 +36,7 @@ export interface IZLinkAutoConnectExecutor {
   isDisconnected?(target: ZLinkAutoConnectTarget): boolean;
   onDisconnected?(handler: (endpoint: string) => void): void;
   replaceNotRequired?(targets: readonly ZLinkAutoConnectTarget[]): void;
+  expectPeers?(targets: readonly ZLinkAutoConnectTarget[]): void;
 }
 
 export interface IZLinkAutoConnectPeerPublisher {

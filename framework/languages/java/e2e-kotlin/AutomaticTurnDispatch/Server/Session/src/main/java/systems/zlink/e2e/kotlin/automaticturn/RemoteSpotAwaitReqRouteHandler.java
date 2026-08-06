@@ -31,7 +31,7 @@ public final class RemoteSpotAwaitReqRouteHandler
         var targetSpotRid = SpotMsgRouteHandler.targetSpot(dispatch);
         return spots.resolveSpotHandle(targetSpotRid)
             .thenCompose(handle -> routes.requestToSpot(
-                handle.orElseThrow(() -> new IllegalStateException("spot not found: " + targetSpotRid)),
+                handle.orElseThrow(() -> new IllegalStateException("spot not found: " + targetSpotRid)).spotId(),
                 request)
             .timeout(Duration.ofSeconds(10))
             .submit(Contracts.ScenarioRes.class))

@@ -271,6 +271,16 @@ ZLINK_EXPORT zlink_connect_result_t zlink_disconnect (void *s_, const char *addr
 ZLINK_EXPORT zlink_connect_result_t zlink_disconnect_rid (void *s_,
                                                           const zlink_routing_id_t *peer_rid_);
 
+/**
+ * @brief Disconnect the exact transport pair identified by its monitor identity.
+ *
+ * The pair id and generation must be copied from a monitor event for the
+ * connection to be terminated.  This operation does not affect another
+ * connection that uses the same peer routing id.
+ */
+ZLINK_EXPORT zlink_connect_result_t zlink_disconnect_transport_pair (
+  void *s_, uint64_t transport_pair_id_, uint64_t transport_pair_generation_);
+
 /* ========== Raw part send/receive ========== */
 ZLINK_EXPORT zlink_submit_result_t zlink_send_part (void *s_,
                                                     zlink_msg_t *part_,

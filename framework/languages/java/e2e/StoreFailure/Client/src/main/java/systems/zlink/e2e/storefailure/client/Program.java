@@ -10,6 +10,7 @@ import systems.zlink.e2e.storefailure.client.scenarios.SfB3TransportScenario;
 import systems.zlink.e2e.storefailure.client.scenarios.SfC1CrashLeaseExpiryScenario;
 import systems.zlink.e2e.storefailure.client.scenarios.SfC2GracefulRemovalScenario;
 import systems.zlink.e2e.storefailure.client.scenarios.SfC3ReplacementOwnerScenario;
+import systems.zlink.e2e.storefailure.client.scenarios.SfC5ObjectLocationPagingScenario;
 import systems.zlink.e2e.storefailure.client.scenarios.SfD1ShortOutageRecoveryScenario;
 import systems.zlink.e2e.storefailure.client.scenarios.SfD2LongOutageRecoveryScenario;
 import systems.zlink.e2e.storefailure.client.scenarios.SfD3StatusTransitionScenario;
@@ -60,6 +61,7 @@ public final class Program {
             case "SF-C1" -> new SfC1CrashLeaseExpiryScenario();
             case "SF-C2" -> new SfC2GracefulRemovalScenario();
             case "SF-C3" -> new SfC3ReplacementOwnerScenario();
+            case "SF-C5" -> new SfC5ObjectLocationPagingScenario();
             case "SF-D1" -> new SfD1ShortOutageRecoveryScenario();
             case "SF-D1-RECOVERED" -> new SfRecoveredWithPeersScenario("SF-D1");
             case "SF-D2" -> new SfD2LongOutageRecoveryScenario();

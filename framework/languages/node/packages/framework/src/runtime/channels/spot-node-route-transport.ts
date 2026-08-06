@@ -69,7 +69,11 @@ export class ZLinkSpotNodeRouteTransport {
               releasePhysical();
               try {
                 if (result !== 0) {
-                  reject(this.requestFailure(target.routerChannelId, result));
+                  reject(this.requestFailure(
+                    target.routerChannelId,
+                    result,
+                    physicalSubmitted
+                  ));
                   return;
                 }
                 resolve(decodeChannelReply<TReply>(replyParts as readonly Message[], codecs));
@@ -122,7 +126,11 @@ export class ZLinkSpotNodeRouteTransport {
               }
               if (result !== 0) {
                 closeMessages(replyParts as readonly Message[]);
-                reject(this.requestFailure(target.routerChannelId, result));
+                reject(this.requestFailure(
+                  target.routerChannelId,
+                  result,
+                  physicalSubmitted
+                ));
                 return;
               }
               if (!resolve(replyParts as readonly Message[])) {
@@ -222,14 +230,25 @@ export class ZLinkSpotNodeRouteTransport {
     });
   }
 
-  private requestFailure(routerChannelId: string, result: number): Error {
-    return createInternalFrameworkException(
+  private requestFailure(
+    routerChannelId: string,
+    result: number,
+    physicalSubmitted: boolean
+  ): Error {
+    const error = createInternalFrameworkException(
       result === 102
         ? ZLinkFrameworkInternalErrorKind.RequestTargetNotFound
         : ZLinkFrameworkInternalErrorKind.RouteNotConnected,
       `SpotNode router '${routerChannelId}' spot request failed with result ${result}.`,
       result === 109 || result === 113
     );
+    if (physicalSubmitted) {
+      Object.defineProperty(error, 'physicalSubmission', {
+        value: true,
+        enumerable: false
+      });
+    }
+    return error;
   }
 
   private notReady(routerChannelId: string, operation: 'request' | 'send'): ZLinkConfigurationException {

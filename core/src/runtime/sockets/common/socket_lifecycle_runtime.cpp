@@ -51,6 +51,23 @@ void zlink::socket_lifecycle_coordinator_t::leave_public_api ()
     zlink_assert ((old & public_api_inflight_mask) > 0);
 }
 
+bool zlink::socket_lifecycle_coordinator_t::acquire_poller_registration ()
+{
+    // Admission is needed only while taking the lifetime pin. Keeping a
+    // registration in public_api_state would reject the documented close
+    // transition and prevent the poller from reporting POLLERR.
+    if (!enter_public_api ())
+        return false;
+    inc_mailbox_ref ();
+    leave_public_api ();
+    return true;
+}
+
+bool zlink::socket_lifecycle_coordinator_t::release_poller_registration ()
+{
+    return dec_mailbox_ref ();
+}
+
 bool zlink::socket_lifecycle_coordinator_t::enter_callback_api ()
 {
     if (!enter_public_api ())

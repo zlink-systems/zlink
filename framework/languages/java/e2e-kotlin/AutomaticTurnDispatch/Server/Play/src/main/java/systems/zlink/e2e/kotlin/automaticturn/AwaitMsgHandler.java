@@ -16,7 +16,7 @@ public final class AwaitMsgHandler
     public CompletionStage<Void> handle(
         ProbeSpot spot,
         Contracts.AwaitMsg command) {
-        String value = "spot=" + spot.context().spotRid()
+        String value = "spot=" + spot.context().spotId()
             + ";correlation=" + command.correlationId()
             + ";handler=spot";
         boolean yields = command.correlationId().startsWith("TD-B");
@@ -39,3 +39,4 @@ public final class AwaitMsgHandler
             });
     }
 }
+

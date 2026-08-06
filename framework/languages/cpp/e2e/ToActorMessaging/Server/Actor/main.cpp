@@ -150,6 +150,12 @@ class to_actor_e2e_spot_t
                     const e2e::actor_notify_t &message)
     {
         _evidence.append ({message.scenario, actor.actor_id (), "send", message.value});
+        if (message.push_to_session) {
+            actor.context ()
+              .bound_session ()
+              .send (e2e::actor_push_notify_t{message.scenario, actor.actor_id (), message.value})
+              .submit ();
+        }
     }
 
     zlink::framework::task_t<e2e::actor_reply_t>
@@ -176,11 +182,11 @@ class ensure_actor_handler_t
 {
   public:
     using dependency_types =
-      zlink::framework::dependency_list_t<zlink::framework::session_actor_manager_t>;
+      zlink::framework::dependency_list_t<zlink::framework::actor_manager_t>;
     using request_type = e2e::actor_call_request_t;
     using reply_type = e2e::actor_call_response_t;
 
-    explicit ensure_actor_handler_t (zlink::framework::session_actor_manager_t actors) :
+    explicit ensure_actor_handler_t (zlink::framework::actor_manager_t actors) :
         _actors (std::move (actors))
     {
     }
@@ -188,16 +194,18 @@ class ensure_actor_handler_t
     e2e::actor_call_response_t handle (const e2e::actor_call_request_t &request)
     {
         try {
-            auto actor = _actors.get_or_create (e2e::actor_type_name, request.actor_id,
-                                                std::string ("create"));
-            if (!actor) {
-                throw *actor.error ();
-            }
-            auto bound = _actors.bind_or_get (actor.value ().ref ()).submit ().result ();
-            if (!bound) {
-                throw *bound.error ();
-            }
-            bound.value ().context ().join_entry_spot ().defer ();
+            const auto created = _actors
+              .get_or_create (zlink::framework::actor_id_t (request.actor_id),
+                              e2e::actor_type_name)
+              .in_mesh (e2e::spot_mesh_name)
+              .timeout (std::chrono::seconds (15))
+              .submit ()
+              .result ();
+            if (!created)
+                throw *created.error ();
+            if (std::holds_alternative<zlink::framework::actor_create_rejected_t> (
+                  created.value ()))
+                throw std::runtime_error ("Actor creation was rejected");
             return {request.scenario, request.actor_id, "ensured", ""};
         }
         catch (const zlink::framework::framework_exception_t &error) {
@@ -207,7 +215,7 @@ class ensure_actor_handler_t
     }
 
   private:
-    zlink::framework::session_actor_manager_t _actors;
+    zlink::framework::actor_manager_t _actors;
 };
 
 class evidence_handler_t
@@ -232,29 +240,35 @@ class push_actor_handler_t
 {
   public:
     using dependency_types =
-      zlink::framework::dependency_list_t<zlink::framework::session_actor_manager_t>;
+      zlink::framework::dependency_list_t<zlink::framework::actor_client_t>;
     using request_type = e2e::actor_call_request_t;
     using reply_type = e2e::actor_call_response_t;
 
-    explicit push_actor_handler_t (zlink::framework::session_actor_manager_t &actors) :
+    explicit push_actor_handler_t (zlink::framework::actor_client_t &actors) :
         _actors (actors)
     {
     }
 
-    e2e::actor_call_response_t handle (const e2e::actor_call_request_t &request)
+    zlink::framework::task_t<e2e::actor_call_response_t>
+    handle (const e2e::actor_call_request_t &request)
     {
-        const auto actor = _actors.find (request.actor_id);
-        if (!actor) {
-            return {request.scenario, request.actor_id, "", "actor_route_not_found"};
+        try {
+            co_await _actors
+              .send (zlink::framework::actor_id_t (request.actor_id),
+                     e2e::actor_notify_t{request.scenario, request.actor_id,
+                                         request.value, true})
+              .submit ();
+            co_return e2e::actor_call_response_t{request.scenario, request.actor_id,
+                                                "pushed", ""};
         }
-        actor->bound_session ()
-          .send (e2e::actor_push_notify_t{request.scenario, request.actor_id, request.value})
-          .submit ();
-        return {request.scenario, request.actor_id, "pushed", ""};
+        catch (const zlink::framework::framework_exception_t &error) {
+            co_return e2e::actor_call_response_t{
+              request.scenario, request.actor_id, "", error.what ()};
+        }
     }
 
   private:
-    zlink::framework::session_actor_manager_t &_actors;
+    zlink::framework::actor_client_t &_actors;
 };
 
 } // namespace

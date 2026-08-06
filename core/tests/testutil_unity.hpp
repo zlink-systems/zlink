@@ -761,6 +761,7 @@ void *test_context_socket_close (void *socket_);
 // CAUTION: this function is not thread-safe, and may only be used from the
 // main thread.
 void *test_context_socket_close_zero_linger (void *socket_);
+void test_context_socket_mark_closed (void *socket_);
 
 /////////////////////////////////////////////////////////////////////////////
 // Utility function for handling wildcard binds.

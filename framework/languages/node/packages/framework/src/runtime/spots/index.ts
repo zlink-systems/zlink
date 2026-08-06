@@ -282,6 +282,7 @@ export interface ZLinkSpotManagerOptions {
   readonly actorHandoffRuntime?: ZLinkSpotActorHandoffRuntime;
   readonly metrics?: import('../diagnostics').ZLinkRuntimeMetrics;
   readonly admission?: ZLinkRuntimeAdmissionGate;
+  readonly statefulExecutionAllowed?: () => boolean;
 }
 
 export class DefaultZLinkSpotManager {
@@ -372,6 +373,7 @@ export class DefaultZLinkSpotManager {
       boundSessionRuntime: options.boundSessionRuntime,
       actorHandoffRuntime: options.actorHandoffRuntime,
       admission: options.admission,
+      statefulExecutionAllowed: options.statefulExecutionAllowed,
       leaveActor: (spotId, actor, signal, meshName) =>
         this.actorMembership.leaveActor(spotId, actor, signal, meshName),
       closeSpot: (meshName, spotId, signal, reason) =>

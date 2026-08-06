@@ -8,6 +8,7 @@ namespace
 
 /* TA-A3: the client owns the requests, failure classification, and evidence assertions. */
 inline void run_ta_a3_scenario (zlink::http_client::client_t &actor,
+                                zlink::http_client::client_t &actor_b,
                                 zlink::http_client::client_t &caller,
                                 zlink::http_client::client_t &session_gateway,
                                 const std::string &session_stream)
@@ -27,7 +28,7 @@ inline void run_ta_a3_scenario (zlink::http_client::client_t &actor,
     push_actor (actor, "TA-A3-late-bind", "ta-a3", "LateBindNotify");
     require (pushed.get ().value == "LateBindNotify", "TA-A3 LateBindNotify mismatch");
 
-    const auto evidence = actor.get ("/evidence").submit<std::vector<e2e::actor_evidence_t>> ().result ().value ().body;
+    const auto evidence = actor_evidence (actor, actor_b);
     require_evidence (evidence, "TA-A3-after-bind-request", "request");
 }
 

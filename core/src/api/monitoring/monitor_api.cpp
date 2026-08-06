@@ -144,7 +144,8 @@ void monitor_handler_task (void *arg_)
     void *monitor_socket = static_cast<void *> (state_->socket);
     while (!state_->stop.load (std::memory_order_acquire)) {
         zlink_monitor_event_t event;
-        const int rc = recv_socket_monitor_event_unchecked (monitor_socket, &event, ZLINK_DONTWAIT);
+        const int rc = recv_socket_monitor_event_extended_unchecked (
+          monitor_socket, &event, ZLINK_DONTWAIT);
         if (rc != 0)
             break;
 
@@ -165,7 +166,15 @@ void monitor_handler_task (void *arg_)
             state_->callback_depth.fetch_add (1, std::memory_order_acq_rel);
         }
         const zlink::monitor_dispatch_context_t dispatch_scope (state_);
-        handler (&event, handler_userdata);
+        // A C callback must not let a C++ exception cross the ABI boundary.
+        // Preserve callback-depth accounting so self-close cleanup still runs.
+        try {
+            handler (&event, handler_userdata);
+        }
+        catch (...) {
+            state_->close_requested.store (true, std::memory_order_release);
+            state_->stop.store (true, std::memory_order_release);
+        }
         const int depth_after = state_->callback_depth.fetch_sub (1, std::memory_order_acq_rel) - 1;
         if (state_->close_requested.load (std::memory_order_acquire) && depth_after == 0) {
             finalize_monitor_handler_self_close (state_);

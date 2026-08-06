@@ -21,7 +21,7 @@ public final class TimerTickHandler implements ZLinkSpotTimerHandler<ProbeSpot> 
         if (scenario == null) {
             return CompletableFuture.completedFuture(null);
         }
-        String value = "spot=" + spot.context().spotRid()
+        String value = "spot=" + spot.context().spotId()
             + ";timer=" + tick.name()
             + ";mailbox=timer:" + tick.name()
             + ";tick=" + tick.deliveryIndex();
@@ -57,3 +57,4 @@ public final class TimerTickHandler implements ZLinkSpotTimerHandler<ProbeSpot> 
         return CompletableFuture.completedFuture(null);
     }
 }
+

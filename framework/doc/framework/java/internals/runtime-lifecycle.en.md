@@ -90,7 +90,43 @@ configuration.
 | `KotlinSuspendAnnotationHandlerTest.kotlinSuspendAnnotationCancellationCompletesJavaStageExceptionally` | Kotlin cancellation propagates to the shared Java completion. |
 | `ChannelEgressRouting/CH-E2E-04B` | After ClientServer server shutdown, a request accepted before shutdown ends with a reply, and a new request is delivered to another ready server. |
 
+## 5. Native Runtime Package Synchronization
+
+The Java binding and Core package must use the same release version, `0.10.0`. When the Java binding
+is verified or published, the Core package at
+`/home/hep7/project/kairos/zlink/.artifacts/wsl/install/zlink-core/0.10.0` is supplied as the bridge
+input, and the same provenance manifest and native runtime are used.
+
+The Java binding checks the native runtime named by `ZLINK_LIBRARY_PATH` before using the test
+classpath's source resource. If that variable is absent, a development native file left in the
+source resource tree can be selected. After changing Core, rebuild the local package and synchronize
+the source resource, or set `ZLINK_LIBRARY_PATH` to the verified runtime. Otherwise a Java test can
+execute an older native binary, reproducing heap corruption or hiding the result of the fix.
+
+The current poller lifetime fix does not hold `operation_sync` during a blocking wait. It blocks
+registration mutation with `wait_active`, so a callback during readiness conversion can re-enter
+the same poller API without deadlocking on the non-recursive mutex. Native registrations are
+detached before poller destruction, and their ownership is released afterward. When a registered
+socket is closed, its lifetime pin remains until the registration is removed and the poller returns
+`POLLERR`. Java `NativePoller.close()` defers native destruction until the wait ends. The result is
+checked with Core package verification, Java binding contract tests, and repeated runs with
+`ZLINK_LIBRARY_PATH` explicitly set.
+
+The direct cause of the heap corruption was that the Java `MONITOR_EVENT_LAYOUT` did not allocate
+the diagnostic tail added to the Core monitor event while Core still wrote the complete structure.
+The Java layout now includes `connection_id`, transport-pair identity, transport lane, and event
+flags, reserving the full 816-byte Core structure. The current Java public `MonitorEvent` does not
+expose those diagnostic values, but its receive buffer must still accommodate the complete native
+public layout. `NativeLayoutsTest` fixes this size, and `MonitorBehaviorContractTest` verifies an
+actual blocking receive.
+
 ---
 <!-- framework-adapter-nav:bottom:start -->
 [Document List](../README.en.md) | [Next: Regression Test Matrix](regression-test-matrix.en.md)
+Location object queries preserve the last inspected position inside an authority page in an
+opaque continuation token. Filtering or crossing the authority page boundary therefore does not
+skip objects. The returned page is bounded by the encoded JSON size of 4 MiB; an individual entry
+that cannot fit is reported as a failure instead of returning a partial success. `findSpotLocation`
+accepts both user-Spot and instance-Spot authority rows.
+
 <!-- framework-adapter-nav:bottom:end -->

@@ -34,7 +34,8 @@ public final class NativePoller implements Poller {
     private MemorySegment waitEvents = MemorySegment.NULL;
     private MemorySegment waitErrorOut = MemorySegment.NULL;
     private int waitEventsCapacity;
-    private boolean closeRequested;
+    private volatile boolean closeRequested;
+    private boolean waitActive;
 
     public static Poller create() {
         return new NativePoller();
@@ -46,11 +47,11 @@ public final class NativePoller implements Poller {
             throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
     }
 
-    public void add(Socket socket, long slot, PollEventFlags... events) {
+    public synchronized void add(Socket socket, long slot, PollEventFlags... events) {
         addSocket(socket, combine(events), slot);
     }
 
-    public void addFd(int fd, long slot, PollEventFlags... events) {
+    public synchronized void addFd(int fd, long slot, PollEventFlags... events) {
         ensureOpen();
         validateSlot(slot);
         PollItem item = PollItem.fd(fd, combine(events), slot);
@@ -60,7 +61,7 @@ public final class NativePoller implements Poller {
         items.add(item);
     }
 
-    public void add(ZlinkTimer timer, long slot) {
+    public synchronized void add(ZlinkTimer timer, long slot) {
         ensureOpen();
         Objects.requireNonNull(timer, "timer");
         validateSlot(slot);
@@ -71,7 +72,7 @@ public final class NativePoller implements Poller {
         items.add(item);
     }
 
-    public void modify(Socket socket, PollEventFlags... events) {
+    public synchronized void modify(Socket socket, PollEventFlags... events) {
         ensureOpen();
         Objects.requireNonNull(socket, "socket");
         int index = findSocket(InternalAccess.socketHandle(socket));
@@ -105,7 +106,7 @@ public final class NativePoller implements Poller {
         item.events = mask;
     }
 
-    public void modifyFd(int fd, PollEventFlags... events) {
+    public synchronized void modifyFd(int fd, PollEventFlags... events) {
         ensureOpen();
         int index = findFd(fd);
         if (index < 0)
@@ -117,7 +118,7 @@ public final class NativePoller implements Poller {
         items.get(index).events = mask;
     }
 
-    public boolean remove(Socket socket) {
+    public synchronized boolean remove(Socket socket) {
         ensureOpen();
         Objects.requireNonNull(socket, "socket");
         int index = findSocket(InternalAccess.socketHandle(socket));
@@ -133,7 +134,7 @@ public final class NativePoller implements Poller {
         return true;
     }
 
-    public boolean remove(int fd) {
+    public synchronized boolean remove(int fd) {
         ensureOpen();
         int index = findFd(fd);
         if (index < 0)
@@ -145,7 +146,7 @@ public final class NativePoller implements Poller {
         return true;
     }
 
-    public boolean remove(ZlinkTimer timer) {
+    public synchronized boolean remove(ZlinkTimer timer) {
         ensureOpen();
         Objects.requireNonNull(timer, "timer");
         int index = findZlinkTimer(InternalAccess.timerHandle(timer));
@@ -158,8 +159,10 @@ public final class NativePoller implements Poller {
         return true;
     }
 
-    public void clear() {
+    public synchronized void clear() {
         ensureOpen();
+        if (waitActive)
+            throw new IllegalStateException("cannot clear a poller while wait is active");
         int rc = Native.pollerDestroy(handle);
         if (rc != 0)
             throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
@@ -171,7 +174,7 @@ public final class NativePoller implements Poller {
         socketIndexes.clear();
     }
 
-    public int size() {
+    public synchronized int size() {
         ensureOpen();
         int rc = Native.pollerSize(handle);
         if (rc < 0)
@@ -180,14 +183,21 @@ public final class NativePoller implements Poller {
     }
 
     public int wait(PollEvents events, Duration timeout) {
-        ensureOpen();
-        Objects.requireNonNull(events, "events");
-        if (items.isEmpty()) {
-            ContractAccess.pollEventsMarkReadyCount(events, 0);
-            return 0;
+        final boolean empty;
+        synchronized (this) {
+            ensureOpen();
+            if (waitActive)
+                throw new IllegalStateException("poller wait is already active");
+            waitActive = true;
+            empty = items.isEmpty();
         }
-        MemorySegment nativeEvents = waitEvents(events.capacity());
         try {
+            Objects.requireNonNull(events, "events");
+            if (empty) {
+                ContractAccess.pollEventsMarkReadyCount(events, 0);
+                return 0;
+            }
+            MemorySegment nativeEvents = waitEvents(events.capacity());
             int readyCount = Native.pollerWait(handle, nativeEvents, events.capacity(),
                 DurationConversions.toIntMillis(timeout, "timeout"), waitErrorOut);
             if (readyCount < 0)
@@ -202,16 +212,22 @@ public final class NativePoller implements Poller {
             ContractAccess.pollEventsMarkReadyCount(events, readyCount);
             return readyCount;
         } finally {
-            if (closeRequested) {
-                closeAfterWait();
+            synchronized (this) {
+                waitActive = false;
+                if (closeRequested)
+                    closeAfterWait();
             }
         }
     }
 
     @Override
-    public void close() {
+    public synchronized void close() {
         if (handle == null || handle.address() == 0)
             return;
+        if (waitActive) {
+            closeRequested = true;
+            return;
+        }
         int result = Native.pollerDestroy(handle);
         if (result == CloseResult.BUSY.value()) {
             closeRequested = true;

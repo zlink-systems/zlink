@@ -170,4 +170,14 @@ export class StreamSocket extends SocketBase {
       native.socketDisconnectRid(getNativeHandle(this), normalizedRoutingId);
     });
   }
+
+  disconnectTransportPair(transportPairId: bigint, transportPairGeneration: bigint): void {
+    configCall('stream disconnect by transport pair failed', () => {
+      native.socketDisconnectTransportPair(
+        getNativeHandle(this),
+        transportPairId,
+        transportPairGeneration
+      );
+    });
+  }
 }

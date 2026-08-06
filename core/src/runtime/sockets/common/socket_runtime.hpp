@@ -38,7 +38,10 @@ struct socket_monitor_event_record_t
     socket_monitor_event_record_t () :
         event (0),
         values_count (0),
-        internal_flags (0)
+        internal_flags (0),
+        transport_pair_id (0),
+        transport_pair_generation (0),
+        transport_lane (transport_lane_application)
     {
         memset (values, 0, sizeof (values));
         memset (&routing_id, 0, sizeof (routing_id));
@@ -50,6 +53,9 @@ struct socket_monitor_event_record_t
     zlink_routing_id_t routing_id;
     endpoint_uri_pair_t endpoint_uri_pair;
     uint32_t internal_flags;
+    uint64_t transport_pair_id;
+    uint64_t transport_pair_generation;
+    transport_lane_t transport_lane;
 };
 
 typedef void (socket_monitor_worker_idle_fn) (void *);
@@ -153,13 +159,19 @@ struct socket_monitor_runtime_t
     bool mark_ready_connection (const endpoint_uri_pair_t &endpoint_uri_pair_,
                                 const unsigned char *routing_id_,
                                 size_t routing_id_size_,
-                                uint32_t *ready_count_out_);
+                                uint32_t *ready_count_out_,
+                                uint64_t transport_pair_id_ = 0,
+                                uint64_t transport_pair_generation_ = 0);
     bool erase_ready_connection (const endpoint_uri_pair_t &endpoint_uri_pair_,
                                  const unsigned char *routing_id_,
                                  size_t routing_id_size_,
-                                 uint32_t *ready_count_out_);
+                                 uint32_t *ready_count_out_,
+                                 uint64_t transport_pair_id_ = 0,
+                                 uint64_t transport_pair_generation_ = 0);
     bool erase_ready_connection_for_endpoint (const endpoint_uri_pair_t &endpoint_uri_pair_,
-                                              uint32_t *ready_count_out_);
+                                              uint32_t *ready_count_out_,
+                                              uint64_t transport_pair_id_ = 0,
+                                              uint64_t transport_pair_generation_ = 0);
     bool mark_transport_pair_lane_ready (
       const endpoint_uri_pair_t &endpoint_uri_pair_,
       transport_lane_t lane_,
@@ -255,6 +267,12 @@ class socket_lifecycle_coordinator_t
 
     bool enter_public_api ();
     void leave_public_api ();
+    // A poller registration keeps the socket object usable until the
+    // registration is removed. This admission is held across the
+    // registration lifetime rather than only during zlink_poller_add().
+    bool acquire_poller_registration ();
+    // Returns true when this release removed the last mailbox/lifetime pin.
+    bool release_poller_registration ();
     bool enter_public_api_and_lock_sync ();
     bool enter_callback_api ();
     bool leave_callback_api ();

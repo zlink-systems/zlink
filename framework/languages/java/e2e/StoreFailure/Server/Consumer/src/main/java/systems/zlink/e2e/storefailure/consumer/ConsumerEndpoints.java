@@ -11,7 +11,10 @@ import systems.zlink.e2e.storefailure.shared.Contracts;
 import systems.zlink.e2e.storefailure.shared.HttpSupport;
 import systems.zlink.e2e.storefailure.shared.Wait;
 import systems.zlink.framework.locations.ZLinkLocationRuntimeQuery;
+import systems.zlink.framework.locations.ZLinkLocationObjectEntry;
+import systems.zlink.framework.locations.ZLinkLocationObjectFilter;
 import systems.zlink.framework.locations.ZLinkLocationTopologyFilter;
+import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
 import systems.zlink.framework.channels.ZLinkClient;
 import systems.zlink.framework.channels.ZLinkRouteClient;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
@@ -113,6 +116,11 @@ public final class ConsumerEndpoints implements SmartLifecycle {
                 exchange,
                 json,
                 peers()));
+            server.createContext("/locations/objects", exchange -> {
+                Contracts.ObjectLocationQueryReq request =
+                    HttpSupport.readJson(exchange, json, Contracts.ObjectLocationQueryReq.class);
+                HttpSupport.writeJson(exchange, json, objectLocations(request));
+            });
             server.createContext("/mesh/peers", exchange -> HttpSupport.writeJson(
                 exchange,
                 json,
@@ -250,6 +258,33 @@ public final class ConsumerEndpoints implements SmartLifecycle {
                 "nodeRid", peer.nodeRid().toString(),
                 "state", peer.state().name()))
             .toList();
+    }
+
+    private java.util.Map<String, Object> objectLocations(Contracts.ObjectLocationQueryReq request) {
+        var page = locationQuery.get().listObjectLocations(
+                new ZLinkLocationObjectFilter(
+                    ZLinkPlacementObjectKind.INSTANCE_SPOT,
+                    Contracts.LEASE_PROBE_SPOT_TYPE,
+                    null),
+                new ZLinkPageRequest(request.pageSize(), request.continuationToken()))
+            .toCompletableFuture()
+            .join();
+        List<java.util.Map<String, Object>> items = page.items().stream()
+            .map(ConsumerEndpoints::objectLocation)
+            .toList();
+        return java.util.Map.of(
+            "items", items,
+            "continuationToken", page.continuationToken() == null ? "" : page.continuationToken());
+    }
+
+    private static java.util.Map<String, Object> objectLocation(ZLinkLocationObjectEntry entry) {
+        return java.util.Map.of(
+            "globalId", entry.globalId(),
+            "objectGeneration", entry.objectGeneration(),
+            "meshName", entry.meshName(),
+            "nodeRid", entry.nodeRid().toString(),
+            "state", entry.state().name(),
+            "stableType", entry.stableType());
     }
 
     private java.util.Map<String, Object> status() {

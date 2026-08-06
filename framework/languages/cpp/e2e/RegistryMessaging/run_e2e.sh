@@ -724,6 +724,7 @@ if [[ "$SCENARIO" == "RM-A1" || "$SCENARIO" == "rm-a1" ]]; then
   start_standard_provider_pair
   start_consumer store-consumer "$HTTP_STORE_CONSUMER" "" "$REDIS_ENDPOINT"
   STORE_CONSUMER_PID="$LAST_PID"
+  wait_client_server_ready_targets "$HTTP_STORE_CONSUMER" registry.messaging.api 2 30
   run_client rm-a1 rm-a1
   cat "$LOG_DIR/client-rm-a1.stdout.log"
   exit 0

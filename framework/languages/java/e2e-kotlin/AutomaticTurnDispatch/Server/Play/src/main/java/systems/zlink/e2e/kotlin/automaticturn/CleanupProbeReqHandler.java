@@ -15,7 +15,7 @@ public final class CleanupProbeReqHandler {
     public CompletionStage<Contracts.CleanupProbeRes> handle(
         ProbeSpot spot,
         Contracts.CleanupProbeReq request) {
-        String value = "spot=" + spot.context().spotRid()
+        String value = "spot=" + spot.context().spotId()
             + ";node=" + spot.context().nodeRid()
             + ";marker=" + request.marker();
         evidence.record(request.requestId(), "probe-started", value);
@@ -24,3 +24,4 @@ public final class CleanupProbeReqHandler {
             new Contracts.CleanupProbeRes(request.requestId()));
     }
 }
+

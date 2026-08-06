@@ -1,7 +1,7 @@
 # C++ ChannelEgressRouting feature map
 
 기준 문서는 `framework/doc/framework/common/e2e/config-12-channel-egress-routing.ko.md`다.
-C++ 구현은 `0.9.0` public framework surface와 실제 process E2E runner를 함께 사용한다.
+C++ 구현은 `0.10.0` public framework surface와 실제 process E2E runner를 함께 사용한다.
 Host lifecycle에 channel 단위 `drain()` public method는 없으므로 CH-E2E-04B는
 `app_t::request_stop()`이 시작하는 host `shutdown()`으로 검증한다. 이 shutdown은
 ClientServer descriptor를 신규 선택에서 제외하고, 이미 수락한 handler를 완료한 뒤

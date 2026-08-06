@@ -14,6 +14,7 @@
 #include <csignal>
 #include <stdexcept>
 #include <string>
+#include <set>
 #include <thread>
 #include <mutex>
 
@@ -662,9 +663,36 @@ class runtime_observation_store_t
             return;
         _observation = runtime.observe (
           route_mesh_name, 32,
-          [&evidence] (const zlink::framework::observed_status_t<
+          [this, &evidence] (const zlink::framework::observed_status_t<
                          zlink::framework::mesh_node_snapshot_t> &observed) {
               const auto &event = observed.status;
+              std::set<std::string> current_ready_peers;
+              for (const auto &peer : event.peers) {
+                  if (peer.state == zlink::framework::peer_state_t::ready)
+                      current_ready_peers.insert (peer.node_rid.to_string ());
+              }
+              for (const auto &peer : current_ready_peers) {
+                  if (_ready_peers.insert (peer).second)
+                      evidence.add (
+                        "monitor-mesh|source=" + event.mesh_name
+                        + "|identifier=zlink.runtime.mesh_node.peer_changed"
+                        + "|kind=ConnectionReady|routing=" + peer
+                        + "|sequence=" + std::to_string (event.sequence)
+                        + "|state=ready");
+              }
+              for (auto it = _ready_peers.begin (); it != _ready_peers.end ();) {
+                  if (current_ready_peers.count (*it) != 0) {
+                      ++it;
+                      continue;
+                  }
+                  evidence.add (
+                    "monitor-mesh|source=" + event.mesh_name
+                    + "|identifier=zlink.runtime.mesh_node.peer_changed"
+                    + "|kind=Disconnected|routing=" + *it
+                    + "|sequence=" + std::to_string (event.sequence)
+                    + "|state=" + mesh_state_name (event.state));
+                  it = _ready_peers.erase (it);
+              }
               auto line = "mesh-runtime-snapshot|mesh=" + event.mesh_name
                           + "|sequence=" + std::to_string (event.sequence)
                           + "|ready=" + (event.is_ready ? "true" : "false")
@@ -704,6 +732,7 @@ class runtime_observation_store_t
 
   private:
     std::mutex _mutex;
+    std::set<std::string> _ready_peers;
     std::unique_ptr<zlink::framework::mesh_runtime_observation_t> _observation;
     std::unique_ptr<zlink::framework::mesh_runtime_observation_t> _slow_observation;
     std::unique_ptr<zlink::framework::mesh_runtime_observation_t>
@@ -785,7 +814,14 @@ class runtime_snapshot_handler_t
     zlink::framework::http_response_t
     handle (const zlink::framework::http_request_t &)
     {
-        const auto snapshot = _runtime.snapshot (route_mesh_name);
+        zlink::framework::mesh_node_snapshot_t snapshot;
+        try {
+            snapshot = _runtime.snapshot (route_mesh_name);
+        }
+        catch (const std::exception &error) {
+            return {.status = 500,
+                    .body = nlohmann::json{{"error", error.what ()}}.dump ()};
+        }
         nlohmann::json peers = nlohmann::json::array ();
         for (const auto &peer : snapshot.peers) {
             peers.push_back (

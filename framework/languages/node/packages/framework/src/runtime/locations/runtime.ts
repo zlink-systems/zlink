@@ -40,6 +40,12 @@ import {
   type ZLinkSpotLocationKey
 } from './internal-location-contracts';
 import type {
+  ZLinkLocationObjectEntry,
+  ZLinkLocationObjectFilter
+} from '../../contracts/Locations/RuntimeQuery';
+import { ZLinkAuthorityScanCursor as PublicAuthorityScanCursor } from '../../contracts/Locations/Authority';
+import { decodeAuthorityKey } from './authority-key-codec';
+import type {
   ZLinkActorLocationStore,
   ZLinkActorLocationQueryStore,
   ZLinkAuthorityStore,
@@ -148,10 +154,17 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
   private nextLeaseRenewAtMs?: number;
   private ownerToken?: ZLinkLocationOwnerToken;
   private lastOwnerToken?: ZLinkLocationOwnerToken;
+  private ownerLeaseDeadlineMs?: number;
 
   ownerLeaseHealthy = false;
   ownerLeaseRenewedAt?: Date;
   lastError?: string;
+
+  get ownerLeaseUsable(): boolean {
+    return this.ownerLeaseHealthy
+      && (this.ownerLeaseDeadlineMs === undefined
+        || this.monotonicNowMs() < this.ownerLeaseDeadlineMs);
+  }
 
   constructor(runtimeOptions: ZLinkLocationRuntimeOptions) {
     this.stores = runtimeOptions.stores;
@@ -287,6 +300,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     this.started = true;
     this.ownerCleanupComplete = false;
     this.nodeRidValue = nodeRid;
+    const claimStartedAtMs = this.monotonicNowMs();
     let claim: Awaited<ReturnType<ZLinkOwnerLeaseStore['claimOwnerLease']>>;
     try {
       claim = await withTimeout(
@@ -299,15 +313,19 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
         signal
       );
     } catch (error) {
-      this.started = false;
-      this.ownerCleanupComplete = true;
-      this.nodeRidValue = undefined;
       this.ownerLeaseHealthy = false;
-      this.nextLeaseRenewAtMs = undefined;
+      this.ownerLeaseDeadlineMs = undefined;
       if (signal?.aborted === true) throw error;
       this.recordFailure(errorMessage(error), 'owner_lease_claim');
-      throw error;
+      // A Location host can still serve transport work while the Store is
+      // unavailable. Keep the runtime in degraded mode so the heartbeat can
+      // claim a lease after recovery; no descriptor or stateful authority is
+      // published until that claim succeeds.
+      this.nextLeaseRenewAtMs = this.monotonicNowMs();
+      this.scheduleHeartbeat();
+      return;
     }
+    const claimCompletedAtMs = this.monotonicNowMs();
     if (claim.kind !== 'claimed') {
       this.started = false;
       this.ownerCleanupComplete = true;
@@ -316,6 +334,12 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     this.ownerToken = claim.token;
     this.ownerLeaseHealthy = true;
     this.ownerLeaseRenewedAt = claim.storeNow;
+    this.setOwnerLeaseDeadline(
+      claimStartedAtMs,
+      claimCompletedAtMs,
+      claim.leaseExpiresAt,
+      claim.storeNow
+    );
     this.nextLeaseRenewAtMs = this.monotonicNowMs() + this.options.ownerLeaseRenewIntervalMs;
     this.scheduleHeartbeat();
   }
@@ -331,6 +355,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
       this.heartbeatTimer = undefined;
     }
     this.nextLeaseRenewAtMs = undefined;
+    this.ownerLeaseDeadlineMs = undefined;
     await this.heartbeatRenewal;
 
     await this.cleanupOwner(signal);
@@ -368,6 +393,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     }
 
     try {
+      const renewStartedAtMs = this.monotonicNowMs();
       const result = await withTimeout(
         (renewSignal) => this.stores.ownerLeaseStore.renewOwnerLease(
             this.ownerToken as ZLinkLocationOwnerToken,
@@ -377,6 +403,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
         this.options.ownerLeaseRenewTimeoutMs,
         signal
       );
+      const renewCompletedAtMs = this.monotonicNowMs();
       if (result.kind !== 'renewed') {
         // The provider may have been restarted with an empty store. The
         // previous token can no longer be renewed, so the next heartbeat must
@@ -384,6 +411,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
         this.lastOwnerToken = this.ownerToken;
         this.ownerToken = undefined;
         this.ownerLeaseHealthy = false;
+        this.ownerLeaseDeadlineMs = undefined;
         this.recordFailure('Owner lease token is stale.');
         for (const handler of this.ownerLeaseRenewalFailedHandlers) handler();
         // The store has already told us that this owner token cannot be
@@ -393,6 +421,12 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
       }
       this.ownerLeaseHealthy = true;
       this.ownerLeaseRenewedAt = result.storeNow;
+      this.setOwnerLeaseDeadline(
+        renewStartedAtMs,
+        renewCompletedAtMs,
+        result.leaseExpiresAt,
+        result.storeNow
+      );
       this.lastError = undefined;
       for (const handler of this.ownerLeaseRenewedHandlers) handler(result);
       return true;
@@ -407,6 +441,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
 
   private async claimFreshOwnerLease(signal?: AbortSignal): Promise<boolean> {
     try {
+      const claimStartedAtMs = this.monotonicNowMs();
       const claim = await withTimeout(
         (claimSignal) => this.stores.ownerLeaseStore.claimOwnerLease(
           this.ownerId,
@@ -416,6 +451,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
         this.options.ownerLeaseRenewTimeoutMs,
         signal
       );
+      const claimCompletedAtMs = this.monotonicNowMs();
       if (claim.kind !== 'claimed') {
         this.recordFailure(`Owner lease claim failed with '${claim.kind}'.`, 'owner_lease_claim');
         return false;
@@ -430,6 +466,12 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
       this.ownerToken = claim.token;
       this.ownerLeaseHealthy = true;
       this.ownerLeaseRenewedAt = claim.storeNow;
+      this.setOwnerLeaseDeadline(
+        claimStartedAtMs,
+        claimCompletedAtMs,
+        claim.leaseExpiresAt,
+        claim.storeNow
+      );
       this.lastError = undefined;
       this.nextLeaseRenewAtMs = this.monotonicNowMs() + this.options.ownerLeaseRenewIntervalMs;
       for (const handler of this.ownerLeaseRenewedHandlers) {
@@ -446,6 +488,23 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
       this.recordFailure(errorMessage(error), 'owner_lease_claim');
       return false;
     }
+  }
+
+  private setOwnerLeaseDeadline(
+    requestStartedAtMs: number,
+    requestCompletedAtMs: number,
+    leaseExpiresAt: Date,
+    storeNow: Date
+  ): void {
+    const roundTripMs = Math.max(0, requestCompletedAtMs - requestStartedAtMs);
+    const remainingTtlMs = Math.max(0, leaseExpiresAt.getTime() - storeNow.getTime());
+    // The Store's remaining TTL is measured at an unknown point during the
+    // request. Subtract the full observed round trip and the fencing margin
+    // so local eligibility cannot outlive the conservative pre-request bound.
+    this.ownerLeaseDeadlineMs = requestCompletedAtMs + Math.max(
+      0,
+      remainingTtlMs - roundTripMs - this.options.ownerLeaseFencingMarginMs
+    );
   }
 
   async publishDraining(signal?: AbortSignal): Promise<boolean> {
@@ -485,8 +544,24 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
       leaseGeneration: owner.leaseGeneration,
       updatedAt: new Date(0)
     };
-    const result = await this.guardWrite(() =>
+    let result = await this.guardWrite(() =>
       this.stores.locationStore.updateMeshNode(stamped, intent, signal));
+    if (
+      intent === ZLinkLocationWriteIntent.Renew
+      && (result.status === ZLinkLocationWriteStatus.RejectedConflict
+        || result.status === ZLinkLocationWriteStatus.IgnoredStale)
+    ) {
+      // A Store restart can remove the descriptor while retaining the
+      // in-process owner token. Renew cannot recreate an absent row, so use
+      // NewClaim as a bounded fallback. If another owner has recreated the
+      // row, NewClaim remains rejected and the caller keeps the conflict.
+      result = await this.guardWrite(() =>
+        this.stores.locationStore.updateMeshNode(
+          stamped,
+          ZLinkLocationWriteIntent.NewClaim,
+          signal
+        ));
+    }
     this.notifyIfStale(
       result,
       ZLinkLocationKind.Peer,
@@ -624,7 +699,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
       pollingIntervalMs: this.options.pollingIntervalMs,
       lastRefreshAt: this.ownerLeaseRenewedAt,
       lastError: this.lastError,
-      ownerLeaseHealthy: this.ownerLeaseHealthy,
+      ownerLeaseHealthy: this.ownerLeaseUsable,
       ownerLeaseRenewedAt: this.ownerLeaseRenewedAt
     };
   }
@@ -691,6 +766,58 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
       items: await this.filterLive(rows.items, (row) => row.ownerId, signal),
       continuationToken: rows.continuationToken
     };
+  }
+
+  async listObjectLocations(
+    filter: ZLinkLocationObjectFilter,
+    page: ZLinkPageRequest = {},
+    signal?: AbortSignal
+  ): Promise<ZLinkLocationPage<ZLinkLocationObjectEntry>> {
+    const normalizedPage = this.pageRequest(page);
+    const pageSize = normalizedPage.pageSize ?? this.options.listPageSize;
+    const requestedCursor = normalizedPage.continuationToken;
+    let cursor = requestedCursor === undefined
+      ? undefined
+      : PublicAuthorityScanCursor.from(requestedCursor);
+    const items: ZLinkLocationObjectEntry[] = [];
+    for (;;) {
+      // Keep the Store cursor at the public page boundary. Scanning 1000 rows
+      // and returning only a smaller page would discard the unreturned rows.
+      const result = await this.stores.authorityStore.listAuthorities('', cursor, pageSize, signal);
+      if (result.kind === 'scanExpired') {
+        throw new Error('The authority query snapshot expired.');
+      }
+      const liveEntries = await this.liveRows.filter(
+        result.items,
+        (entry) => entry.snapshot.ownerId,
+        signal
+      );
+      for (const entry of liveEntries) {
+        const identity = decodeAuthorityKey(entry.key);
+        const allocation = entry.snapshot.allocation;
+        if (allocation.objectKind !== filter.objectKind
+          || (filter.stableType !== undefined && allocation.stableType !== filter.stableType)
+          || (filter.meshName !== undefined && allocation.descriptor.meshName !== filter.meshName)
+          ) continue;
+        items.push({
+          globalId: identity.globalId,
+          objectGeneration: entry.snapshot.objectGeneration,
+          meshName: allocation.descriptor.meshName,
+          nodeRid: allocation.descriptor.rid,
+          state: allocation.state === 'reserved' ? 'creating' : 'ready',
+          stableType: allocation.stableType
+        });
+        if (items.length >= pageSize) break;
+      }
+      const nextCursor = result.nextCursor;
+      if (items.length >= pageSize || nextCursor === undefined) {
+        return {
+          items,
+          continuationToken: nextCursor?.encoded
+        };
+      }
+      cursor = nextCursor;
+    }
   }
 
   async listRouteLocations(
@@ -827,6 +954,12 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
         this.metrics?.recordOwnerLeaseRenewLateness(lateness, scope.kind, scope.name);
       }
       this.nextLeaseRenewAtMs = scheduledAt + this.options.ownerLeaseRenewIntervalMs;
+      if (this.ownerLeaseDeadlineMs !== undefined
+        && this.monotonicNowMs() >= this.ownerLeaseDeadlineMs) {
+        this.ownerLeaseHealthy = false;
+        this.recordFailure('Owner lease expired before renewal completed.', 'lease_expired');
+        for (const handler of this.ownerLeaseRenewalFailedHandlers) handler();
+      }
       const renewal = this.renewOwnerLeaseOnce().then(
         () => undefined,
         () => undefined

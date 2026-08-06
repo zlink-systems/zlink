@@ -3,7 +3,7 @@ plugins {
 }
 
 dependencies {
-    api("systems.zlink:zlink-framework-core:0.9.0")
+    api("systems.zlink:zlink-framework-core:0.10.0")
 }
 
 java {

@@ -40,6 +40,11 @@ export interface ZLinkRawMonitorRecord {
   readonly routingId?: string;
   readonly localAddress: string;
   readonly remoteAddress: string;
+  readonly connectionId?: bigint;
+  readonly transportPairId?: bigint;
+  readonly transportPairGeneration?: bigint;
+  readonly transportLane?: number;
+  readonly flags?: number;
 }
 
 export interface ZLinkRawSocketPort {
@@ -59,6 +64,8 @@ export interface ZLinkRawMonitorPort {
 export interface ZLinkRawRouterPort extends ZLinkRawSocketPort {
   /** Disconnects the route identified by the peer RoutingId, including an inbound route. */
   disconnectRid?(routingId: string): void;
+  /** Disconnects only the physical transport pair identified by monitor identity. */
+  disconnectTransportPair?(transportPairId: bigint, transportPairGeneration: bigint): void;
   localEndpoint(): string;
   setRoutingId(routingId: string): void;
   connectToRoutingId(routingId: string, endpoint: string): void;
@@ -323,6 +330,13 @@ class NodeRawRouterPort extends NodeRawSocketPort<RouterSocket> implements ZLink
     }).disconnectRid(bindingRoutingId(routingId));
   }
 
+  disconnectTransportPair(transportPairId: bigint, transportPairGeneration: bigint): void {
+    this.requireOpen();
+    (this.socket as RouterSocket & {
+      disconnectTransportPair(id: bigint, generation: bigint): void;
+    }).disconnectTransportPair(transportPairId, transportPairGeneration);
+  }
+
   constructor(socket: RouterSocket) {
     super(socket);
     socket.options.handover = true;
@@ -530,9 +544,11 @@ function appendSendParts(
   operation: SendOperation,
   parts: readonly Uint8Array[]
 ): SendSubmitOperation {
-  const [first, ...rest] = requireParts(parts);
-  let next = operation.message(first);
-  for (const part of rest) next = next.message(part);
+  requireParts(parts);
+  let next = operation.message(parts[0]);
+  for (let index = 1; index < parts.length; index += 1) {
+    next = next.message(parts[index]);
+  }
   return next;
 }
 
@@ -540,9 +556,11 @@ function appendRequestParts(
   operation: RequestOperation,
   parts: readonly Uint8Array[]
 ): RequestSubmitOperation {
-  const [first, ...rest] = requireParts(parts);
-  let next = operation.message(first);
-  for (const part of rest) next = next.message(part);
+  requireParts(parts);
+  let next = operation.message(parts[0]);
+  for (let index = 1; index < parts.length; index += 1) {
+    next = next.message(parts[index]);
+  }
   return next;
 }
 
@@ -550,9 +568,11 @@ function appendReplyParts(
   operation: ReplyOperation,
   parts: readonly Uint8Array[]
 ): ReplySubmitOperation {
-  const [first, ...rest] = requireParts(parts);
-  let next = operation.message(first);
-  for (const part of rest) next = next.message(part);
+  requireParts(parts);
+  let next = operation.message(parts[0]);
+  for (let index = 1; index < parts.length; index += 1) {
+    next = next.message(parts[index]);
+  }
   return next;
 }
 
@@ -650,6 +670,11 @@ function copyMonitorEvent(event: MonitorEvent): ZLinkRawMonitorRecord {
     value: event.value,
     ...(event.routingId === null ? {} : { routingId: event.routingId.toString() }),
     localAddress: event.localAddr,
-    remoteAddress: event.remoteAddr
+    remoteAddress: event.remoteAddr,
+    connectionId: event.connectionId,
+    transportPairId: event.transportPairId,
+    transportPairGeneration: event.transportPairGeneration,
+    transportLane: event.transportLane,
+    flags: event.flags
   };
 }

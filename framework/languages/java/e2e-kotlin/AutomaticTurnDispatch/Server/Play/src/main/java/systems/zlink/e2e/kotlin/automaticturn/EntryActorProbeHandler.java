@@ -4,14 +4,14 @@ import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import systems.zlink.framework.handlers.ZLinkSpotActorRequest;
-import systems.zlink.framework.spots.ZLinkSpotActorRequestContext;
+import systems.zlink.framework.ZLinkMessageContext;
 
 public final class EntryActorProbeHandler {
     @ZLinkSpotActorRequest(packetName = "ProbeReq")
     public CompletionStage<Contracts.ProbeRes> handle(
         ProbeEntrySpot spot,
         ProbeActor actor,
-        ZLinkSpotActorRequestContext context,
+        ZLinkMessageContext context,
         Contracts.ProbeReq request) {
         if (request.millis() <= 0) {
             return CompletableFuture.completedFuture(
@@ -29,9 +29,10 @@ public final class EntryActorProbeHandler {
         Contracts.ProbeReq request,
         String value) {
         return new Contracts.ProbeRes(
-            spot.context().spotRid().toString(),
+            spot.context().spotId().toString(),
             spot.context().nodeRid().toString(),
             request.op(),
             value + "#entry");
     }
 }
+

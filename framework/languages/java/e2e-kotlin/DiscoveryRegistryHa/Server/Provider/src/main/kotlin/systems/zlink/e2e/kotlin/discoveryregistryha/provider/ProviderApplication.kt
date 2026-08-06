@@ -1,6 +1,7 @@
 package systems.zlink.e2e.kotlin.discoveryregistryha.provider
 
 import java.time.Duration
+import java.net.URI
 import org.springframework.boot.ApplicationArguments
 import org.springframework.boot.WebApplicationType
 import org.springframework.boot.autoconfigure.SpringBootApplication
@@ -57,13 +58,15 @@ class ProviderApplication {
                 .traceLogFile("${providerOptions.logDir()}/${state.providerRid}-flow.log")
                 .traceLabel("kotlin-dr-${state.providerRid}")
             options.addHandlersFromPackageOf(WorkRequestHandler::class.java)
-            options.configureLocations().setHeartbeatInterval(Duration.ofMillis(providerOptions.heartbeatMillis()))
+            options.configureLocations().setOwnerLeaseRenewInterval(Duration.ofMillis(providerOptions.heartbeatMillis()))
             options.configureLocations().setOwnerLeaseTtl(Duration.ofMillis(providerOptions.leaseTtlMillis()))
             options.configureLocations().setPollingInterval(Duration.ofMillis(providerOptions.pollingMillis()))
             options.configureLocations().setStoreFailureGrace(Duration.ofMillis(providerOptions.storeFailureGraceMillis()))
-            options.addClientServerChannel(Contracts.CHANNEL)
-                .enableServer(providerOptions.apiEndpoint())
-                .setRoutingId(RoutingId.from(state.providerRid))
+            val mesh = options.addRouteMesh(Contracts.CHANNEL)
+                .listen(providerOptions.apiEndpoint())
+                .setRoutingIdPrefix(state.providerRid)
+            mesh.channelName(Contracts.CHANNEL)
+                .server()
                 .addHandlerGroup(Contracts.HANDLER_GROUP)
         }
 

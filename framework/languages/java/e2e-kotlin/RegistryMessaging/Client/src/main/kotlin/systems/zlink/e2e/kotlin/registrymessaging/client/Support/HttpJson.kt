@@ -44,7 +44,14 @@ class HttpJson(
         if (response.statusCode() !in 200..299) {
             throw IllegalStateException("HTTP ${response.statusCode()} from ${request.uri()}: ${response.body()}")
         }
-        return mapper.readValue(response.body())
+        return try {
+            mapper.readValue(response.body())
+        } catch (error: Exception) {
+            throw IllegalStateException(
+                "Invalid JSON response from ${request.uri()}: ${response.body()}",
+                error,
+            )
+        }
     }
 
     override fun close() {

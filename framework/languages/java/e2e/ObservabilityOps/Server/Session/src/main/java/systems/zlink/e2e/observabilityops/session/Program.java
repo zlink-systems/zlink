@@ -18,8 +18,6 @@ import systems.zlink.e2e.automaticturn.shared.ScenarioReqHandler;
 import systems.zlink.e2e.automaticturn.shared.ShutdownAwaitSessionHandlers;
 import systems.zlink.e2e.automaticturn.shared.SpotCommandHandler;
 import systems.zlink.e2e.automaticturn.shared.RemoteSpotAwaitSessionHandler;
-import systems.zlink.e2e.automaticturn.shared.AwaitActorFactory;
-import systems.zlink.e2e.automaticturn.shared.AwaitActor;
 import systems.zlink.e2e.automaticturn.shared.AwaitEntrySpot;
 import systems.zlink.e2e.automaticturn.shared.AwaitProbeHandlers;
 import systems.zlink.e2e.automaticturn.shared.AwaitProbeSpot;
@@ -109,7 +107,10 @@ public final class Program {
             }
             ZLinkMeshNodeBuilder mesh = options.addRouteMesh(Contracts.SPOT_MESH)
                 .listen(config.sessionRouteEndpoint())
-                .setRoutingId(RoutingId.from("session-a"));
+                .setRoutingId(RoutingId.from("session-a"))
+                // The Session gateway relays requests and is not an Actor or
+                // User Spot placement target.
+                .setPlacementWeight(0);
             mesh.channelName(Contracts.ROUTE_CHANNEL).server();
             mesh.peerConnections().connect(config.routeEndpoint());
             String routeBEndpoint = config.routeBEndpoint();
@@ -124,12 +125,7 @@ public final class Program {
                 .addSpotFactory(
                     "await-probe",
                     AwaitProbeSpot.class,
-                    factory -> factory.disableRelocation())
-                .addActorFactory(
-                    Contracts.ACTOR_TYPE,
-                    AwaitActor.class,
-                    AwaitActorFactory.class,
-                    factory -> factory.recreateOnRelocation());
+                    factory -> factory.disableRelocation());
             options.addStreamNode("session")
                 .bind(config.streamEndpoint())
                 .enableActorDispatch()

@@ -59,15 +59,28 @@ suspend fun ZLinkLocationRuntimeQuery.listServiceSummaries(
     page: ZLinkPageRequest = ZLinkPageRequest.firstPage(),
 ): ZLinkLocationPage<ZLinkLocationServiceSummary>
 
+suspend fun ZLinkLocationRuntimeQuery.findActorLocation(
+    actorId: String,
+): ZLinkLocationObjectEntry?
+
+suspend fun ZLinkLocationRuntimeQuery.findSpotLocation(
+    spotId: String,
+): ZLinkLocationObjectEntry?
+
+suspend fun ZLinkLocationRuntimeQuery.listObjectLocations(
+    filter: ZLinkLocationObjectFilter,
+    page: ZLinkPageRequest = ZLinkPageRequest.firstPage(),
+): ZLinkLocationPage<ZLinkLocationObjectEntry>
+
 fun ZLinkLocationRuntimeQuery.topology(
     filter: ZLinkLocationTopologyFilter,
     pageSize: Int = 100,
 ): Flow<ZLinkLocationTopologyEntry>
 ```
 
-The query projection keeps the bounded page and Java result type. Raw
-Spot/Actor authority rows, Store keys, provider version, and scan
-cursor aren't added to the application query result.
+The query projection keeps the bounded page and Java result type. Object queries select one kind and stable type;
+their page size is `1..1000` and the encoded page is at most 4 MiB. Raw Spot/Actor authority rows, Store keys,
+provider versions, and scan cursors aren't added to the application query result.
 
 ## Redis Extension
 

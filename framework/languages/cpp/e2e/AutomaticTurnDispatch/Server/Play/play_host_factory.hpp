@@ -45,6 +45,7 @@ inline void configure_play_host (zlink::framework::app_t &app,
           .add_singleton<evidence_store_t> (std::move (evidence))
           .add_transient<bind_await_actors_handler_t, evidence_store_t,
                          zlink::framework::spot_manager_t,
+                         zlink::framework::actor_manager_t,
                          zlink::framework::session_actor_manager_t> ()
           .add_transient<ensure_spot_handler_t, evidence_store_t,
                          zlink::framework::spot_manager_t> ()
@@ -57,6 +58,7 @@ inline void configure_play_host (zlink::framework::app_t &app,
           .client ()
           .connect (play_options.delay_endpoint);
         auto control = options.add_route_mesh (yd::control_channel);
+        control.channel (yd::control_channel).server ();
         control.listen (play_options.control_endpoint)
           .set_routing_id (zlink::routing_id_t::from (play_options.node_rid))
           .channel_name (yd::control_channel);
@@ -78,11 +80,13 @@ inline void configure_play_host (zlink::framework::app_t &app,
                                       yd::await_evidence_res_t> (
             yd::await_evidence_wait_req_t::packet_name);
         auto spot_route = options.add_route_mesh (yd::spot_route_channel);
+        spot_route.channel (yd::spot_route_channel).server ();
         spot_route.listen (play_options.spot_route_endpoint)
           .set_routing_id (zlink::routing_id_t::from (play_options.node_rid))
           .channel_name (yd::spot_route_channel);
         auto spot = options.add_route_mesh (yd::spot_channel);
-        spot.channel_name (yd::spot_route_channel);
+        spot.channel (yd::spot_channel).server ();
+        spot.channel_name (yd::spot_channel);
         spot.set_routing_id (zlink::routing_id_t::from (play_options.node_rid))
           .listen (play_options.spot_router_endpoint)
           .add_entry_spot<await_entry_spot_t> (

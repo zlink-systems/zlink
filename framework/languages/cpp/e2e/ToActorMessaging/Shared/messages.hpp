@@ -20,6 +20,7 @@ struct actor_notify_t
     std::string scenario;
     std::string actor_id;
     std::string value;
+    bool push_to_session = false;
 };
 
 struct actor_ask_t
@@ -101,7 +102,10 @@ struct actor_evidence_t
 
 inline void to_json (nlohmann::json &json, const actor_notify_t &value)
 {
-    json = {{"scenario", value.scenario}, {"actorId", value.actor_id}, {"value", value.value}};
+    json = {{"scenario", value.scenario},
+            {"actorId", value.actor_id},
+            {"value", value.value},
+            {"pushToSession", value.push_to_session}};
 }
 
 inline void from_json (const nlohmann::json &json, actor_notify_t &value)
@@ -110,6 +114,7 @@ inline void from_json (const nlohmann::json &json, actor_notify_t &value)
     value.actor_id = json.contains ("actorId") ? json.value ("actorId", "")
                                                 : json.value ("actor_id", "");
     value.value = json.value ("value", "");
+    value.push_to_session = json.value ("pushToSession", false);
 }
 
 inline void to_json (nlohmann::json &json, const actor_ask_t &value)

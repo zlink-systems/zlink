@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import { Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { ZLinkMessageFlowLogMode, type ZLinkLocationRuntimeQuery, type ZLinkRouteClient, type ZLinkRouteMeshRuntime } from '@zlink-systems/framework';
-import { ZLINK_LOCATION_RUNTIME_QUERY, ZLINK_ROUTE_CLIENT, ZLINK_ROUTE_MESH_RUNTIME, ZLinkModule, zlinkFramework } from '@zlink-systems/nestjs';
+import { ZLINK_LOCATION_RUNTIME_QUERY, ZLINK_ROUTE_CLIENT, ZLINK_ROUTE_MESH_RUNTIME, ZLINK_SPOT_OUTBOUND, ZLinkModule, zlinkFramework } from '@zlink-systems/nestjs';
 import { ChannelNames } from '../../Shared/messages';
 import {
   configureStoreFailureLocationOptions,
@@ -23,11 +23,12 @@ export async function startConsumerHost(): Promise<void> {
   const app = await NestFactory.createApplicationContext(consumer.moduleType, { logger: false, abortOnError: false });
   const options = app.get(DISCOVERY_OPTIONS, { strict: false }) as ConsumerOptions;
   const channel = app.get(ZLINK_ROUTE_CLIENT, { strict: false }) as ZLinkRouteClient;
+  const spotOutbound = app.get(ZLINK_SPOT_OUTBOUND, { strict: false }) as import('@zlink-systems/framework').ZLinkSpotOutbound;
   const locationQuery = app.get(ZLINK_LOCATION_RUNTIME_QUERY, { strict: false }) as ZLinkLocationRuntimeQuery;
   const routeRuntime = app.get(ZLINK_ROUTE_MESH_RUNTIME, { strict: false }) as ZLinkRouteMeshRuntime;
   const server = await startHttpServer(
     options.httpUrl,
-    createConsumerEndpoints(channel, locationQuery, routeRuntime, consumer.responseGate(), () => { stopping = true; })
+    createConsumerEndpoints(channel, spotOutbound, locationQuery, routeRuntime, consumer.responseGate(), () => { stopping = true; })
   );
   while (!stopping) {
     await new Promise((resolve) => setTimeout(resolve, 100));
@@ -63,6 +64,7 @@ function createConsumerModule(): {
           const profile = builder.addRouteMesh(ChannelNames.profile);
           profile.peerConnections();
           profile.channel(ChannelNames.profile).client();
+          profile.objects().client();
           return builder.build();
         }
       })

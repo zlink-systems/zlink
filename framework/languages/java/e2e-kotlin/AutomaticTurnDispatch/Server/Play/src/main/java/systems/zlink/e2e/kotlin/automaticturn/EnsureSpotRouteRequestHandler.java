@@ -2,7 +2,7 @@ package systems.zlink.e2e.kotlin.automaticturn;
 
 import java.util.concurrent.CompletionStage;
 import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.framework.channels.ZLinkRouteRequestContext;
+import systems.zlink.framework.channels.ZLinkRouteMessageContext;
 import systems.zlink.framework.channels.ZLinkRouteRequestHandler;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.spots.ZLinkSpotManager;
@@ -22,11 +22,10 @@ public final class EnsureSpotRouteRequestHandler
     @Override
     public CompletionStage<Contracts.EnsureSpotRes> handle(
         Contracts.EnsureSpotReq request,
-        ZLinkRouteRequestContext context) {
-        return spots.getOrCreate(
-                ProbeSpot.class,
-                RoutingId.from(request.spotRid()),
-                ZLinkMessage.of("ensure"))
+        ZLinkRouteMessageContext context) {
+        return spots.getOrCreate(request.spotRid(), "probe")
+            .request(ZLinkMessage.of("ensure"))
+            .submit()
             .thenApply(ignored -> {
                 String nodeRid = Env.get("nodeRid", "play-a");
                 evidence.record(request.spotRid(), "spot-ensured", "node=" + nodeRid);

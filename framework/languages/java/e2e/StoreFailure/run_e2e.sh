@@ -39,7 +39,7 @@ LOCAL_READINESS_TIMEOUT_SECONDS=3
 LOCAL_READINESS_POLL_SECONDS=0.1
 LOCAL_READINESS_ATTEMPTS=30
 SCENARIO_SETTLE_SECONDS=3
-# Inventory blockers: SF-C5 SF-F1 SF-F2 SF-F3 SF-F4 SF-F5 SF-F6 SF-F7 SF-F8
+# Inventory blockers: SF-F1 SF-F2 SF-F3 SF-F4 SF-F5 SF-F6 SF-F7 SF-F8
 # SF-F10 SF-F11 SF-G1 SF-G2 SF-G3. These selectors remain rejected until a
 # real fixture and evidence path exists; a selector must not become a marker-only success.
 if rg -n 'java\.net\.http\.HttpClient|HttpClient\.new' \
@@ -570,12 +570,30 @@ should_run() {
   [[ "${SCENARIO}" == "${target}" || ( "${SCENARIO}" == "all" && "${target}" == SF-* ) ]]
 }
 
-if [[ "${SCENARIO}" != "all" && "${SCENARIO}" != "SF-A1" && "${SCENARIO}" != "SF-A2" && "${SCENARIO}" != "SF-B1" && "${SCENARIO}" != "SF-B2" && "${SCENARIO}" != "SF-B3" && "${SCENARIO}" != "SF-C1" && "${SCENARIO}" != "SF-C2" && "${SCENARIO}" != "SF-C3" && "${SCENARIO}" != "SF-C4" && "${SCENARIO}" != "SF-D1" && "${SCENARIO}" != "SF-D2" && "${SCENARIO}" != "SF-D3" && "${SCENARIO}" != "SF-E1" && "${SCENARIO}" != "SF-F9" ]]; then
+if [[ "${SCENARIO}" != "all" && "${SCENARIO}" != "SF-A1" && "${SCENARIO}" != "SF-A2" && "${SCENARIO}" != "SF-B1" && "${SCENARIO}" != "SF-B2" && "${SCENARIO}" != "SF-B3" && "${SCENARIO}" != "SF-C1" && "${SCENARIO}" != "SF-C2" && "${SCENARIO}" != "SF-C3" && "${SCENARIO}" != "SF-C4" && "${SCENARIO}" != "SF-C5" && "${SCENARIO}" != "SF-D1" && "${SCENARIO}" != "SF-D2" && "${SCENARIO}" != "SF-D3" && "${SCENARIO}" != "SF-E1" && "${SCENARIO}" != "SF-F9" ]]; then
   echo "unknown StoreFailure scenario: ${SCENARIO}" >&2
   exit 1
 fi
 
+if [[ "${SCENARIO}" == "all" ]]; then
+  echo "Java StoreFailure all is incomplete; common scenarios outside this runner are not implemented." >&2
+  echo "Run an individual selector only after checking the feature map." >&2
+  exit 3
+fi
+
 gradle_run installDist
+
+if should_run SF-C5; then
+start_redis_container
+read -r AH BH CH A B <<<"$(reserve_ports 5)"
+API_A="$(tcp "${A}")"; API_B="$(tcp "${B}")"
+HTTP_A="$(http "${AH}")"; HTTP_B="$(http "${BH}")"; CONSUMER_HTTP="$(http "${CH}")"
+start_initial_topology "consumer-SF-C5"
+run_client "SF-C5" "api-a,api-b" "SF-C5" "" "api-b" "false"
+cat "${log_dir}/client-SF-C5.stdout.log"
+stop_all
+stop_redis_container
+fi
 
 if should_run SF-A1; then
 read -r AH BH CH A B <<<"$(reserve_ports 5)"

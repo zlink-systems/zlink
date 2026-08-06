@@ -26,7 +26,7 @@ public final class EnsureSpotReqHandler
         ZLinkSessionDispatchContext dispatch,
         Contracts.EnsureSpotReq request) {
         return routes.requestToNode(
-                Contracts.SPOT_MESH,
+                Contracts.ROUTE_CHANNEL,
                 SpotMsgRouteHandler.targetNode(dispatch),
                 request)
             .timeout(Duration.ofSeconds(30))

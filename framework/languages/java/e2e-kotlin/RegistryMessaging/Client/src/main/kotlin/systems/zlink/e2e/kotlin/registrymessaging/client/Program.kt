@@ -39,7 +39,7 @@ fun main(args: Array<String>) {
                                     "RM-C4" to { RmC4TimeoutIsolationScenario.run(discoveryConsumer, providerA, providerB) },
                                     "RM-C5" to { RmC5MissingPacketScenario.run(discoveryConsumer, providerA, providerB) },
                                     "RM-C7" to { RmC7WeightedProviderScenario.run(options) },
-                                    "RM-C8" to { RmC8PayloadRoundTripScenario.run(singleConsumer, providerA, providerB) },
+                                    "RM-C8" to { RmC8PayloadRoundTripScenario.run(providerA, providerB) },
                                     "RM-C9" to { RmC9BackpressureScenario.run(backpressureConsumer, providerA, providerB) },
                                 )
                                 if (options.scenario.equals("all", ignoreCase = true)) {

@@ -8,6 +8,7 @@ namespace
 
 /* TA-A1: the client owns the requests, failure classification, and evidence assertions. */
 inline void run_ta_a1_scenario (zlink::http_client::client_t &actor,
+                                zlink::http_client::client_t &actor_b,
                                 zlink::http_client::client_t &caller,
                                 zlink::http_client::client_t &session_gateway,
                                 const std::string &session_stream)
@@ -27,7 +28,7 @@ inline void run_ta_a1_scenario (zlink::http_client::client_t &actor,
              "TA-A1 no-bind calls changed the existing session binding");
     require_session_evidence (bindings, "ta-a1", "bind", "session-a");
 
-    const auto evidence = actor.get ("/evidence").submit<std::vector<e2e::actor_evidence_t>> ().result ().value ().body;
+    const auto evidence = actor_evidence (actor, actor_b);
     require_evidence (evidence, "TA-A1-send", "send");
     require_evidence (evidence, "TA-A1-request", "request");
 }

@@ -15,7 +15,8 @@ mkdir -p "${log_dir}"
 mkdir -p "${log_dir}/control"
 echo "log_dir=${log_dir}"
 SCENARIO="${1:-all}"
-# Inventory blockers: TD-A3 TD-A5 TD-B3 TD-B4 TD-C1 TD-C2 TD-C3 TD-C4
+# Runtime verification inventory (source compile is no longer blocked):
+# TD-A3 TD-A5 TD-B3 TD-B4 TD-C1 TD-C2 TD-C3 TD-C4
 # TD-C5 TD-D1 TD-D2 TD-D3 TD-D4 TD-D5 TD-D6 TD-E1 TD-E2A TD-F1 TD-F2
 # TD-F3 TD-F4 TD-F5 TD-F5A TD-F6 TD-G1. Kotlin's current fixture does not
 # expose the common execution-turn process matrix.

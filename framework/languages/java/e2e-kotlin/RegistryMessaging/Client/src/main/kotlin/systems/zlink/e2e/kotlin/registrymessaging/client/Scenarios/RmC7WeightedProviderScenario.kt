@@ -13,8 +13,6 @@ object RmC7WeightedProviderScenario {
             val providerB = cluster.startProvider("api-b-weighted", "api-b", weight = 25)
             val consumer = cluster.startConsumer("weighted-consumer")
             val requester = HttpJson(consumer.httpUrl)
-            cluster.waitPeerEndpoint(requester, providerA.routingId)
-            cluster.waitPeerEndpoint(requester, providerB.routingId)
             cluster.waitPeerCount(requester, 2)
 
             val providerAHttp = HttpJson(providerA.httpUrl)

@@ -3,8 +3,8 @@ plugins {
 }
 
 dependencies {
-    api("systems.zlink:zlink-framework-core:0.9.0")
-    api("systems.zlink:zlink-framework-kotlin:0.9.0")
+    api("systems.zlink:zlink-framework-core:0.10.0")
+    api("systems.zlink:zlink-framework-kotlin:0.10.0")
     api("com.fasterxml.jackson.module:jackson-module-kotlin:2.17.2")
 }
 

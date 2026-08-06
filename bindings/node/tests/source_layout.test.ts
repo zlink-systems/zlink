@@ -78,7 +78,7 @@ test('package exports expose only the public root', () => {
   assert.deepEqual(forbiddenPackageExports(packageJson.exports), []);
 });
 
-test('bindings samples stay on the Core 0.9.0 raw socket boundary', () => {
+test('bindings samples stay on the Core 0.10.0 raw socket boundary', () => {
   const sampleRoots = [
     path.resolve(__dirname, '../../samples'),
     path.resolve(__dirname, '../../../javascript/samples')

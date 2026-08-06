@@ -170,6 +170,18 @@ void zlink::socket_base_t::release_completion_poller ()
         resume_completion_processing_if_needed ();
 }
 
+bool zlink::socket_base_t::acquire_poller_registration ()
+{
+    return lifecycle_coordinator ().acquire_poller_registration ();
+}
+
+void zlink::socket_base_t::release_poller_registration ()
+{
+    const bool has_remaining_refs = lifecycle_coordinator ().release_poller_registration ();
+    if (!has_remaining_refs && lifecycle_coordinator ().is_destroy_pending ())
+        finalize_destroy ();
+}
+
 void zlink::socket_base_t::notify_request_completion ()
 {
     _request_completion_pending.store (true, std::memory_order_release);

@@ -489,6 +489,92 @@ test('raw monitor ignores a late disconnect from the superseded physical connect
   assert.equal(internal.connectionIds.get('peer'), currentConnection);
 });
 
+test('raw monitor fences paired transport lanes and ignores ready-count snapshots', () => {
+  const runtime = new RawServiceMeshRuntime({ descriptor: descriptor('local') });
+  const peer = { ...descriptor('peer-paired'), state: 'serving' as const };
+  const internal = runtime as unknown as {
+    connectionCandidates: Map<string, Map<string, { connectionId: string }>>;
+    monitorEvents: Array<{
+      event: number;
+      value: number;
+      routingId: string;
+      localAddress: string;
+      remoteAddress: string;
+      connectionId?: bigint;
+      transportPairId?: bigint;
+      transportPairGeneration?: bigint;
+      transportLane?: number;
+      flags?: number;
+    }>;
+  };
+  const pairId = 41n;
+  const pairGeneration = 3n;
+  internal.monitorEvents.push(
+    {
+      event: 0x1000,
+      value: 1,
+      routingId: peer.nodeRoutingId,
+      localAddress: 'tcp://local:41001',
+      remoteAddress: peer.advertisedEndpoint,
+      connectionId: 101n,
+      transportPairId: pairId,
+      transportPairGeneration: pairGeneration,
+      transportLane: 1,
+      flags: 1
+    },
+    {
+      event: 0x1000,
+      value: 2,
+      routingId: peer.nodeRoutingId,
+      localAddress: 'tcp://local:41001',
+      remoteAddress: peer.advertisedEndpoint,
+      connectionId: 102n,
+      transportPairId: pairId,
+      transportPairGeneration: pairGeneration,
+      transportLane: 0,
+      flags: 0
+    }
+  );
+
+  assert.equal(runtime.drainMonitorEvents(), 2);
+  assert.equal(internal.connectionCandidates.get(peer.nodeRoutingId)?.size, 1);
+  const connectionId = [...internal.connectionCandidates.get(peer.nodeRoutingId)!.keys()][0]!;
+  assert.equal(
+    runtime.topology.admit(peer, connectionId),
+    'admitted'
+  );
+
+  internal.monitorEvents.push({
+    event: 0x0200,
+    value: 3,
+    routingId: peer.nodeRoutingId,
+    localAddress: 'tcp://completion-local:51001',
+    remoteAddress: 'tcp://completion-remote:52001',
+    connectionId: 104n,
+    transportPairId: pairId,
+    transportPairGeneration: pairGeneration,
+    transportLane: 1,
+    flags: 0
+  });
+  assert.equal(runtime.drainMonitorEvents(), 1);
+  assert.equal(runtime.topology.peer(peer.nodeRoutingId), undefined);
+
+  internal.monitorEvents.push({
+    event: 0x0200,
+    value: 4,
+    routingId: peer.nodeRoutingId,
+    localAddress: 'tcp://different-local:51001',
+    remoteAddress: 'tcp://different-remote:52001',
+    connectionId: 103n,
+    transportPairId: pairId,
+    transportPairGeneration: pairGeneration,
+    transportLane: 0,
+    flags: 0
+  });
+  assert.equal(runtime.drainMonitorEvents(), 1);
+  assert.equal(runtime.topology.peer(peer.nodeRoutingId), undefined);
+});
+
 test('raw disconnect fences a late lifecycle generation after peer replacement', () => {
   const endpoint = `ipc:///tmp/zlink-m6a-generation-fence-${process.pid}-${Date.now()}.sock`;
   const runtime = new RawServiceMeshRuntime({

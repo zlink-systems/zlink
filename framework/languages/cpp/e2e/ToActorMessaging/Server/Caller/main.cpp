@@ -106,33 +106,18 @@ e2e::actor_call_response_t failed (const e2e::actor_call_request_t &request,
     return {request.scenario, request.actor_id, error.what (), kind_name (error.kind ())};
 }
 
-zlink::framework::task_t<zlink::framework::actor_ref_t>
-candidate_actor_ref (zlink::framework::actor_directory_t &directory,
-                     const e2e::caller_configuration_t &configuration,
-                     const std::string &actor_id)
-{
-    if (auto located = co_await directory.find (actor_id)) {
-        co_return *located;
-    }
-    co_return zlink::framework::actor_ref_t (
-      zlink::framework::actor_id_t (actor_id), 1, e2e::spot_mesh_name,
-      zlink::framework::node_rid_t::from_string (configuration.actor_rid));
-}
-
 class send_handler_t
 {
   public:
     using dependency_types =
       zlink::framework::dependency_list_t<zlink::framework::actor_client_t,
-                                          zlink::framework::actor_directory_t,
-                                          e2e::caller_configuration_t>;
+                                          zlink::framework::actor_directory_t>;
     using request_type = e2e::actor_call_request_t;
     using reply_type = e2e::actor_call_response_t;
 
     send_handler_t (zlink::framework::actor_client_t &actors,
-                    zlink::framework::actor_directory_t &directory,
-                    e2e::caller_configuration_t &configuration) :
-        _actors (actors), _directory (directory), _configuration (configuration)
+                    zlink::framework::actor_directory_t &directory) :
+        _actors (actors), _directory (directory)
     {
     }
 
@@ -140,8 +125,12 @@ class send_handler_t
     handle (const e2e::actor_call_request_t &request)
     {
         try {
+            if (!(co_await _directory.find (request.actor_id)))
+                co_return e2e::actor_call_response_t{
+                  request.scenario, request.actor_id, "", "actor_route_not_found"};
             e2e::actor_notify_t notify{request.scenario, request.actor_id, request.value};
-            _actors.send (zlink::framework::actor_id_t (request.actor_id), notify)
+            co_await _actors
+              .send (zlink::framework::actor_id_t (request.actor_id), notify)
               .submit ();
             co_return e2e::actor_call_response_t{request.scenario, request.actor_id, "sent", ""};
         }
@@ -153,7 +142,6 @@ class send_handler_t
   private:
     zlink::framework::actor_client_t &_actors;
     zlink::framework::actor_directory_t &_directory;
-    e2e::caller_configuration_t &_configuration;
 };
 
 class request_handler_t
@@ -161,15 +149,13 @@ class request_handler_t
   public:
     using dependency_types =
       zlink::framework::dependency_list_t<zlink::framework::actor_client_t,
-                                          zlink::framework::actor_directory_t,
-                                          e2e::caller_configuration_t>;
+                                          zlink::framework::actor_directory_t>;
     using request_type = e2e::actor_call_request_t;
     using reply_type = e2e::actor_call_response_t;
 
     request_handler_t (zlink::framework::actor_client_t &actors,
-                       zlink::framework::actor_directory_t &directory,
-                       e2e::caller_configuration_t &configuration) :
-        _actors (actors), _directory (directory), _configuration (configuration)
+                       zlink::framework::actor_directory_t &directory) :
+        _actors (actors), _directory (directory)
     {
     }
 
@@ -177,6 +163,9 @@ class request_handler_t
     handle (const e2e::actor_call_request_t &request)
     {
         try {
+            if (!(co_await _directory.find (request.actor_id)))
+                co_return e2e::actor_call_response_t{
+                  request.scenario, request.actor_id, "", "actor_route_not_found"};
             e2e::actor_ask_t ask{request.scenario, request.actor_id, request.value};
             auto reply = co_await _actors.request (zlink::framework::actor_id_t (request.actor_id), ask)
                            .timeout (std::chrono::seconds (5))
@@ -192,7 +181,6 @@ class request_handler_t
   private:
     zlink::framework::actor_client_t &_actors;
     zlink::framework::actor_directory_t &_directory;
-    e2e::caller_configuration_t &_configuration;
 };
 
 class location_handler_t

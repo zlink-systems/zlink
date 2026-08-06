@@ -160,6 +160,8 @@ class socket_base_t : public own_t,
     int connect (const char *endpoint_uri_);
     int term_endpoint (const char *endpoint_uri_);
     int term_peer_rid (const zlink_routing_id_t *peer_rid_);
+    int term_transport_pair (uint64_t transport_pair_id_,
+                             uint64_t transport_pair_generation_);
     int send (zlink::msg_t *msg_, int flags_);
     // Internal helper for logical multipart wrappers that already hold the
     // public send scope for the whole transaction.
@@ -221,6 +223,8 @@ class socket_base_t : public own_t,
     void release_completion_processing ();
     void acquire_completion_poller ();
     void release_completion_poller ();
+    bool acquire_poller_registration ();
+    void release_poller_registration ();
 
     //  True when the calling thread has taken ownership of this socket's
     //  completion processing, which is the only place a registered reply
@@ -313,13 +317,19 @@ class socket_base_t : public own_t,
     void event_disconnected (const endpoint_uri_pair_t &endpoint_uri_pair_,
                              uint64_t reason_,
                              const unsigned char *routing_id_,
-                             size_t routing_id_size_);
+                             size_t routing_id_size_,
+                             transport_lane_t transport_lane_ = transport_lane_application,
+                             uint64_t transport_pair_id_ = 0,
+                             uint64_t transport_pair_generation_ = 0);
     void event_handshake_failed_no_detail (const endpoint_uri_pair_t &endpoint_uri_pair_, int err_);
     void event_handshake_failed_protocol (const endpoint_uri_pair_t &endpoint_uri_pair_, int err_);
     void event_handshake_failed_auth (const endpoint_uri_pair_t &endpoint_uri_pair_, int err_);
     void event_connection_ready_changed (const endpoint_uri_pair_t &endpoint_uri_pair_,
                                          const unsigned char *routing_id_,
-                                         size_t routing_id_size_);
+                                         size_t routing_id_size_,
+                                         transport_lane_t transport_lane_ = transport_lane_application,
+                                         uint64_t transport_pair_id_ = 0,
+                                         uint64_t transport_pair_generation_ = 0);
     void event_transport_pair_lane_ready (
       const endpoint_uri_pair_t &endpoint_uri_pair_,
       const unsigned char *routing_id_,
@@ -419,6 +429,8 @@ class socket_base_t : public own_t,
                               uint64_t *connection_id_out_,
                               zlink::pipe_t **source_pipe_out_ = NULL);
     virtual int xterm_peer_rid (const zlink_routing_id_t *peer_rid_);
+    int xterm_transport_pair (uint64_t transport_pair_id_,
+                              uint64_t transport_pair_generation_);
     virtual int xsocket_msg_dispatch (zlink::msg_t *msg_, zlink::pipe_t *pipe_);
     virtual int xstream_dispatch_msg (zlink::msg_t *msg_, zlink::pipe_t *pipe_);
     virtual int xpeer_command (zlink::msg_t *msg_, zlink::pipe_t *pipe_);
@@ -491,7 +503,10 @@ class socket_base_t : public own_t,
     bool has_attached_pipes () const;
 
   private:
+    friend class socket_poller_t;
     friend struct multipart_send_facade_t;
+
+    int get_events_for_poller (int events_, uint32_t *out_);
 
     // Direct public send currently shares one scope between single-part and
     // logical multipart wrappers. Keep the admission/sync decision and the
@@ -542,10 +557,13 @@ class socket_base_t : public own_t,
     void event (const endpoint_uri_pair_t &endpoint_uri_pair_,
                 const unsigned char *routing_id_,
                 size_t routing_id_size_,
-                uint64_t values_[],
-                uint64_t values_count_,
-                uint64_t type_,
-                uint32_t internal_flags_ = 0);
+                 uint64_t values_[],
+                 uint64_t values_count_,
+                 uint64_t type_,
+                 uint32_t internal_flags_ = 0,
+                 transport_lane_t transport_lane_ = transport_lane_application,
+                 uint64_t transport_pair_id_ = 0,
+                 uint64_t transport_pair_generation_ = 0);
 
     zlink_send_ready_handler_fn socket_send_ready_handler () const;
     void *socket_msg_handler_subject () const;

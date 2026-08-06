@@ -16,7 +16,7 @@ public final class AwaitTimeoutMsgHandler
     public CompletionStage<Void> handle(
         ProbeSpot spot,
         Contracts.AwaitTimeoutMsg command) {
-        String value = "spot=" + spot.context().spotRid() + ";node=" + spot.context().nodeRid();
+        String value = "spot=" + spot.context().spotId() + ";node=" + spot.context().nodeRid();
         evidence.record(command.requestId(), "timeout-await-started", value);
         evidence.record(command.requestId(), "timeout-await-released", value);
         return spot.context().outbound()
@@ -35,3 +35,4 @@ public final class AwaitTimeoutMsgHandler
             });
     }
 }
+

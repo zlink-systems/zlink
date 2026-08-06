@@ -76,13 +76,13 @@ if [[ "$language" == "java" ]]; then
     cat > "$consumer_dir/build.gradle.kts" <<'EOF'
 plugins { application }
 dependencies {
-    implementation("systems.zlink:zlink-framework-core:0.9.0")
-    implementation("systems.zlink:zlink-framework-spring-boot-starter:0.9.0")
-    implementation("systems.zlink:zlink-framework-locations-redis:0.9.0")
-    implementation("systems.zlink:zlink-stream-connector:0.9.0")
+    implementation("systems.zlink:zlink-framework-core:0.10.0")
+    implementation("systems.zlink:zlink-framework-spring-boot-starter:0.10.0")
+    implementation("systems.zlink:zlink-framework-locations-redis:0.10.0")
+    implementation("systems.zlink:zlink-stream-connector:0.10.0")
     implementation("systems.zlink:zlink-http-client:HTTP_CLIENT_VERSION")
-    implementation("systems.zlink:zlink-framework-codec-protobuf:0.9.0")
-    implementation("systems.zlink:zlink-framework-codec-msgpack:0.9.0")
+    implementation("systems.zlink:zlink-framework-codec-protobuf:0.10.0")
+    implementation("systems.zlink:zlink-framework-codec-msgpack:0.10.0")
 }
 application { mainClass.set("contract.PackagedContractConsumer") }
 java { toolchain { languageVersion.set(JavaLanguageVersion.of(22)) } }
@@ -132,13 +132,13 @@ plugins {
     kotlin("jvm") version "2.2.21"
 }
 dependencies {
-    implementation("systems.zlink:zlink-framework-kotlin:0.9.0")
-    implementation("systems.zlink:zlink-framework-spring-boot-starter:0.9.0")
-    implementation("systems.zlink:zlink-framework-locations-redis:0.9.0")
-    implementation("systems.zlink:zlink-stream-connector:0.9.0")
+    implementation("systems.zlink:zlink-framework-kotlin:0.10.0")
+    implementation("systems.zlink:zlink-framework-spring-boot-starter:0.10.0")
+    implementation("systems.zlink:zlink-framework-locations-redis:0.10.0")
+    implementation("systems.zlink:zlink-stream-connector:0.10.0")
     implementation("systems.zlink:zlink-http-client-kotlin:HTTP_CLIENT_VERSION")
-    implementation("systems.zlink:zlink-framework-codec-protobuf:0.9.0")
-    implementation("systems.zlink:zlink-framework-codec-msgpack:0.9.0")
+    implementation("systems.zlink:zlink-framework-codec-protobuf:0.10.0")
+    implementation("systems.zlink:zlink-framework-codec-msgpack:0.10.0")
 }
 application { mainClass.set("contract.PackagedContractConsumerKt") }
 kotlin { jvmToolchain(22) }

@@ -75,6 +75,28 @@ export interface ZLinkLocationRuntimeQuery {
     page?: ZLinkPageRequest,
     signal?: AbortSignal
   ): Promise<ZLinkLocationPage<ZLinkLocationServiceSummary>>;
+  listObjectLocations(
+    filter: ZLinkLocationObjectFilter,
+    page?: ZLinkPageRequest,
+    signal?: AbortSignal
+  ): Promise<ZLinkLocationPage<ZLinkLocationObjectEntry>>;
+}
+
+export type ZLinkLocationObjectState = 'creating' | 'ready';
+
+export interface ZLinkLocationObjectEntry {
+  readonly globalId: string;
+  readonly objectGeneration: bigint;
+  readonly meshName: string;
+  readonly nodeRid: RoutingId;
+  readonly state: ZLinkLocationObjectState;
+  readonly stableType: string;
+}
+
+export interface ZLinkLocationObjectFilter {
+  readonly objectKind: 'actor' | 'user_spot' | 'instance_spot';
+  readonly stableType?: string;
+  readonly meshName?: string;
 }
 
 export interface ZLinkLocationTopologyFilter {
@@ -115,10 +137,11 @@ export interface ZLinkLocationReadiness {
 }
 ```
 
-Spot/Actor/route storage row queries, storage keys,
-`ZLinkLocationAutoConnectType`, watch store, and change stamp are
-runtime-internal contracts. The application queries aggregate topology
-and service summary.
+Spot and Actor location queries are public operations for operational tools.
+They take a filter and a page, and return at most `1..1000` items per page.
+The result is not an application-message target list or a placement input.
+Route storage row queries, storage keys, `ZLinkLocationAutoConnectType`, watch
+store, and change stamps remain runtime-internal contracts.
 
 ## 3. Runtime Status And Structured Log
 

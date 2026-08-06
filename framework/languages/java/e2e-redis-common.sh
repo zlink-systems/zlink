@@ -68,6 +68,33 @@ zlink_redis_host_port() {
   printf '%s\n' "${host_port}"
 }
 
+zlink_redis_wait_host_ready() {
+  local host_port="$1"
+  local timeout_seconds="${ZLINK_REDIS_HOST_READY_TIMEOUT_SECONDS:-10}"
+  local deadline=$((SECONDS + timeout_seconds))
+
+  while (( SECONDS < deadline )); do
+    if python3 - "${host_port}" <<'PY'
+import socket
+import sys
+
+try:
+    with socket.create_connection(("127.0.0.1", int(sys.argv[1])), timeout=1):
+        pass
+except OSError:
+    raise SystemExit(1)
+raise SystemExit(0)
+PY
+    then
+      return 0
+    fi
+    sleep 0.1
+  done
+
+  printf 'Timed out waiting for Redis host port %s\n' "${host_port}" >&2
+  return 1
+}
+
 zlink_redis_endpoint() {
   local container_id="$1"
   local host_port
@@ -85,6 +112,10 @@ zlink_redis_start_scoped_assign() {
     return 1
   fi
   if ! host_port="$(zlink_redis_host_port "${container_id}")"; then
+    docker rm -fv "${container_id}" >/dev/null 2>&1 || true
+    return 1
+  fi
+  if ! zlink_redis_wait_host_ready "${host_port}"; then
     docker rm -fv "${container_id}" >/dev/null 2>&1 || true
     return 1
   fi

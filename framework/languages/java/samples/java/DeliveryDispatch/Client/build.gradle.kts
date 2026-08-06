@@ -16,9 +16,9 @@ fun sampleRootPath(): String {
 dependencies {
     implementation(sampleProject("Shared"))
     implementation(sampleProject("Server:Configuration"))
-    implementation("systems.zlink:zlink-framework-core:0.9.0")
-    implementation("systems.zlink:zlink-http-client:0.9.0")
-    implementation("systems.zlink:zlink-stream-connector:0.9.0")
+    implementation("systems.zlink:zlink-framework-core:0.10.0")
+    implementation("systems.zlink:zlink-http-client:0.10.0")
+    implementation("systems.zlink:zlink-stream-connector:0.10.0")
     implementation(zlinkLibs.zlink.bindings)
     implementation("io.netty:netty-buffer:4.1.100.Final")
 }

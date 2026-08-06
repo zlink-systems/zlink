@@ -77,7 +77,7 @@ public final class ProbeSpot implements ZLinkSpot<ProbeActor> {
         return CompletableFuture.completedFuture(
             ZLinkSpotActorJoinResult.accept(new Contracts.ActorJoinRes(
                 actorId,
-                context.spotRid().toString(),
+                context.spotId().toString(),
                 "joined:" + join.value())));
     }
 
@@ -115,7 +115,7 @@ public final class ProbeSpot implements ZLinkSpot<ProbeActor> {
 
     private Contracts.ProbeRes reply(Contracts.ProbeReq request, String value) {
         return new Contracts.ProbeRes(
-            context.spotRid().toString(),
+            context.spotId().toString(),
             context.nodeRid().toString(),
             request.op(),
             value);
@@ -167,3 +167,4 @@ public final class ProbeSpot implements ZLinkSpot<ProbeActor> {
     record TimerScenario(String requestId, String mode, long delayMillis) {
     }
 }
+

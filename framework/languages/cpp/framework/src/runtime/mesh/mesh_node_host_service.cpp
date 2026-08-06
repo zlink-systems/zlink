@@ -621,8 +621,8 @@ mesh_node_host_service_t::create_actor (
           reserve_conflict
           && std::holds_alternative<authority_missing_t> (
             reserve_conflict->current);
-        if (std::holds_alternative<
-              object_placement_capacity_exhausted_t> (reserved)
+        if (std::holds_alternative<object_placement_capacity_exhausted_t> (
+              reserved)
             || target_unavailable) {
             candidates.erase (
               std::remove_if (
@@ -836,6 +836,32 @@ mesh_node_host_service_t::create_actor (
                         completed.error ()
                           ? completed.error ()->what ()
                           : "Actor creation completion failed"));
+                if (const auto *done = std::get_if<
+                      object_creation_completed_result_t> (&completed.value ())) {
+                    if (!done->ready
+                        || done->ready->allocation.state
+                             != placement_allocation_state_t::active)
+                        return task_t<actor_create_result_t> (
+                          result_t<actor_create_result_t>::failure (
+                            framework_error_kind_t::unavailable,
+                            "Actor creation did not reach active state"));
+                } else if (const auto *already = std::get_if<
+                             object_creation_already_completed_result_t> (
+                             &completed.value ())) {
+                    return task_t<actor_create_result_t> (
+                      result_t<actor_create_result_t>::success (
+                        actor_result_from_terminal (
+                          already->terminal,
+                          [this] (zlink::message_t raw) {
+                              return message_t::from_raw (
+                                std::move (raw), _serializers);
+                          })));
+                } else {
+                    return task_t<actor_create_result_t> (
+                      result_t<actor_create_result_t>::failure (
+                        framework_error_kind_t::unavailable,
+                        "Actor creation completion was fenced"));
+                }
                 return task_t<actor_create_result_t> (
                   result_t<actor_create_result_t>::success (
                     actor_create_created_t{created, std::move (reply)}));
@@ -950,6 +976,32 @@ mesh_node_host_service_t::create_actor (
                     completed.error ()
                       ? completed.error ()->what ()
                       : "Actor creation completion failed"));
+            if (const auto *done = std::get_if<
+                  object_creation_completed_result_t> (&completed.value ())) {
+                if (!done->ready
+                    || done->ready->allocation.state
+                         != placement_allocation_state_t::active)
+                    return task_t<actor_create_result_t> (
+                      result_t<actor_create_result_t>::failure (
+                        framework_error_kind_t::unavailable,
+                        "Actor creation did not reach active state"));
+            } else if (const auto *already = std::get_if<
+                         object_creation_already_completed_result_t> (
+                         &completed.value ())) {
+                return task_t<actor_create_result_t> (
+                  result_t<actor_create_result_t>::success (
+                    actor_result_from_terminal (
+                      already->terminal,
+                      [this] (zlink::message_t raw) {
+                          return message_t::from_raw (
+                            std::move (raw), _serializers);
+                      })));
+            } else {
+                return task_t<actor_create_result_t> (
+                  result_t<actor_create_result_t>::failure (
+                    framework_error_kind_t::unavailable,
+                    "Actor creation completion was fenced"));
+            }
             if (accepted)
                 return task_t<actor_create_result_t> (
                   result_t<actor_create_result_t>::success (
@@ -1111,6 +1163,18 @@ result_t<void> mesh_node_host_service_t::finalize_local_actor_destroy (
             (void) actor_resolver->get ().invalidate_actor_address_if_matches (
               actor.actor_id ().value (), expected);
         }
+    }
+
+    const auto node = std::find_if (
+      _nodes.begin (), _nodes.end (), [&actor] (const auto &candidate) {
+          const auto routing_id = candidate ? candidate->routing_id () : std::nullopt;
+          return routing_id
+                 && routing_id->to_string () == actor.node_rid ().value ();
+      });
+    if (node != _nodes.end ()) {
+        const auto cleaned = (*node)->cleanup_application_actor_stateful (actor);
+        if (!cleaned)
+            return cleaned;
     }
 
     if (_services) {
@@ -1429,8 +1493,8 @@ mesh_node_host_service_t::create_user_spot (
           conflict
           && std::holds_alternative<authority_missing_t> (
             conflict->current);
-        if (!std::holds_alternative<
-              object_placement_capacity_exhausted_t> (reserved)
+        if (!std::holds_alternative<object_placement_capacity_exhausted_t> (
+              reserved)
             && !target_unavailable)
             break;
         candidates.erase (
@@ -1794,6 +1858,7 @@ void mesh_node_host_service_t::start (service_provider_t &services)
     }
     auto &location_runtime =
       services.get_required<location_runtime_t> ();
+    _location_runtime = &location_runtime;
     _location_owner = location_runtime.current_owner_token ();
     if (!_location_owner)
         throw framework_exception_t (
@@ -2250,6 +2315,11 @@ void mesh_node_host_service_t::start (service_provider_t &services)
         const auto &registration = _registrations[index];
         const auto status = node->status ();
         mesh_node_descriptor_t descriptor;
+        const auto owner = current_location_owner ();
+        if (!owner)
+            throw framework_exception_t (
+              framework_error_kind_t::not_configured,
+              "MeshNode publication requires an active Location owner lease");
         descriptor.mesh_name = node->mesh_name ();
         descriptor.rid = status.routing_id ();
         descriptor.lifecycle_generation =
@@ -2274,9 +2344,8 @@ void mesh_node_host_service_t::start (service_provider_t &services)
           node->activation_concurrency_limit ();
         descriptor.state = framework_runtime_state_t::serving;
         descriptor.security_identity = "default";
-        descriptor.owner_id = _location_owner->owner_id;
-        descriptor.lease_generation =
-          _location_owner->lease_generation;
+        descriptor.owner_id = owner->owner_id;
+        descriptor.lease_generation = owner->lease_generation;
         for (const auto &stable_type :
              registration->spot_state->snapshot.actor_types) {
             const auto configured =
@@ -2416,12 +2485,15 @@ void mesh_node_host_service_t::start (service_provider_t &services)
                          int placement_weight,
                          std::uint64_t descriptor_revision) {
               std::lock_guard lock (_descriptor_publish_mutex);
-              if (!_location_store || !_location_owner
+              const auto owner = current_location_owner ();
+              if (!_location_store || !owner
                   || index >= _published_mesh_descriptors.size ())
                   throw framework_exception_t (
                     framework_error_kind_t::protocol_error,
                     "MeshNode Location descriptor publisher is not active");
               auto descriptor = _published_mesh_descriptors[index];
+              descriptor.owner_id = owner->owner_id;
+              descriptor.lease_generation = owner->lease_generation;
               descriptor.channel_weights = channel_weights;
               descriptor.placement_weight = placement_weight;
               descriptor.descriptor_revision = descriptor_revision;
@@ -2761,7 +2833,8 @@ bool mesh_node_host_service_t::publish_descriptor_state (
   framework_runtime_state_t state) noexcept
 {
     std::lock_guard lock (_descriptor_publish_mutex);
-    if (!_location_store || !_location_owner) {
+    const auto owner = current_location_owner ();
+    if (!_location_store || !owner) {
         return _published_mesh_descriptors.empty ();
     }
     try {
@@ -2781,11 +2854,7 @@ bool mesh_node_host_service_t::publish_descriptor_state (
                       return candidate.rid.to_hex ()
                                == current.rid.to_hex ()
                              && candidate.lifecycle_generation
-                                  == current.lifecycle_generation
-                             && candidate.owner_id
-                                  == _location_owner->owner_id
-                             && candidate.lease_generation
-                                  == _location_owner->lease_generation;
+                                  == current.lifecycle_generation;
                   });
                 if (stored != listed.items.end ()) {
                     current = *stored;
@@ -2820,6 +2889,8 @@ bool mesh_node_host_service_t::publish_descriptor_state (
                 return false;
             }
             current.state = state;
+            current.owner_id = owner->owner_id;
+            current.lease_generation = owner->lease_generation;
             ++current.descriptor_revision;
             const auto written = _location_store
                                    ->update_mesh_node (
@@ -2843,13 +2914,16 @@ bool mesh_node_host_service_t::publish_descriptor_state (
 bool mesh_node_host_service_t::republish_after_store_recovery () noexcept
 {
     std::lock_guard lock (_descriptor_publish_mutex);
-    if (!_location_store || !_location_owner)
+    const auto owner = current_location_owner ();
+    if (!_location_store || !owner)
         return _published_mesh_descriptors.empty ();
     try {
         for (std::size_t index = 0;
              index < _published_mesh_descriptors.size ();
              ++index) {
             auto descriptor = _published_mesh_descriptors[index];
+            descriptor.owner_id = owner->owner_id;
+            descriptor.lease_generation = owner->lease_generation;
             if (descriptor.descriptor_revision
                 == std::numeric_limits<std::uint64_t>::max ()) {
                 return false;
@@ -2889,11 +2963,12 @@ void mesh_node_host_service_t::stop () noexcept
     _threads.clear ();
     for (auto &node : _nodes)
         node->bind_descriptor_publisher ({});
-    if (_location_store && _location_owner) {
+    const auto owner = current_location_owner ();
+    if (_location_store && owner) {
         for (const auto &key : _published_mesh_nodes) {
             try {
                 const auto removed = _location_store
-                                       ->remove_mesh_node (key, *_location_owner)
+                                       ->remove_mesh_node (key, *owner)
                                        .result ()
                                        .value ();
                 const char *trace = std::getenv ("ZLINK_CPP_HOST_STOP_TRACE");
@@ -2909,6 +2984,7 @@ void mesh_node_host_service_t::stop () noexcept
     _published_mesh_nodes.clear ();
     _published_mesh_descriptors.clear ();
     _location_owner.reset ();
+    _location_runtime = nullptr;
     for (auto &node : _nodes) {
         trace_mesh_host_stop ("node-stop-begin");
         node->stop ();
@@ -2917,6 +2993,14 @@ void mesh_node_host_service_t::stop () noexcept
               listener_kind_t::route_mesh, node->mesh_name ());
         trace_mesh_host_stop ("node-stop-end");
     }
+}
+
+std::optional<location_owner_token_t>
+mesh_node_host_service_t::current_location_owner () const
+{
+    if (!_location_runtime)
+        return std::nullopt;
+    return _location_runtime->current_owner_token ();
 }
 
 std::vector<std::shared_ptr<detail::mesh_node_runtime_t>>

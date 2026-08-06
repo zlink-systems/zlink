@@ -7,6 +7,7 @@
 #include <zlink/stream_connector.hpp>
 
 #include <chrono>
+#include <algorithm>
 #include <future>
 #include <iostream>
 #include <memory>
@@ -177,6 +178,24 @@ std::vector<e2e::actor_evidence_t> session_evidence (zlink::http_client::client_
     return session.get ("/evidence").submit<std::vector<e2e::actor_evidence_t>> ().result ().value ().body;
 }
 
+std::vector<e2e::actor_evidence_t> actor_evidence (
+  zlink::http_client::client_t &actor,
+  zlink::http_client::client_t &actor_b)
+{
+    auto evidence = actor.get ("/evidence")
+                      .submit<std::vector<e2e::actor_evidence_t>> ()
+                      .result ()
+                      .value ()
+                      .body;
+    auto secondary = actor_b.get ("/evidence")
+                       .submit<std::vector<e2e::actor_evidence_t>> ()
+                       .result ()
+                       .value ()
+                       .body;
+    evidence.insert (evidence.end (), secondary.begin (), secondary.end ());
+    return evidence;
+}
+
 void wait_session_evidence (zlink::http_client::client_t &session,
                             const std::string &scenario,
                             const std::string &actor_id,
@@ -262,6 +281,30 @@ void ensure_ready (zlink::http_client::client_t &actor,
 {
     ensure_actor (actor, scenario, actor_id);
     wait_until_ready (caller, scenario + "-ready", actor_id);
+}
+
+void recreate_ready (zlink::http_client::client_t &actor,
+                     zlink::http_client::client_t &caller,
+                     const std::string &scenario,
+                     const std::string &actor_id)
+{
+    const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (20);
+    e2e::actor_call_response_t ensure_response;
+    e2e::actor_call_response_t ready_response;
+    while (std::chrono::steady_clock::now () < deadline) {
+        ensure_response = actor.post ("/ensure")
+                            .body (e2e::actor_call_request_t{scenario, actor_id, "ensure"})
+                            .submit<e2e::actor_call_response_t> ().result ().value ().body;
+        if (ensure_response.error_kind.empty ()) {
+            ready_response = call (caller, "/request", scenario + "-ready", actor_id, "ready");
+            if (ready_response.error_kind.empty () && ready_response.result == "reply:ready") {
+                return;
+            }
+        }
+        std::this_thread::sleep_for (std::chrono::milliseconds (100));
+    }
+    throw std::runtime_error (scenario + " recreation failed: " + ensure_response.error_kind
+                              + " ready=" + ready_response.error_kind);
 }
 
 void assert_call (zlink::http_client::client_t &caller,

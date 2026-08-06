@@ -31,6 +31,12 @@ CANDIDATE_SHA256=""
 pids=()
 TARGET_PID=""
 
+if [[ "$SCENARIO" == all ]]; then
+  echo "SubmitAdmission all is incomplete; implemented selectors are: ${implemented[*]}" >&2
+  echo "Run an individual implemented selector to avoid treating a partial suite as complete." >&2
+  exit 3
+fi
+
 contains() {
   local expected="$1"
   shift
@@ -51,7 +57,7 @@ resolve_candidate() {
     return 1
   fi
   if [[ -z "${ZLINK_CORE_PACKAGE_PREFIX:-}" || -z "${ZLINK_CORE_PACKAGE_EVIDENCE:-}" ]]; then
-    echo "ZLINK_CORE_PACKAGE_PREFIX and ZLINK_CORE_PACKAGE_EVIDENCE must identify the Core 0.9.0 package" >&2
+    echo "ZLINK_CORE_PACKAGE_PREFIX and ZLINK_CORE_PACKAGE_EVIDENCE must identify the Core 0.10.0 package" >&2
     return 1
   fi
   [[ -d "$ZLINK_CORE_PACKAGE_PREFIX" ]] || {
@@ -300,6 +306,20 @@ wait_counts() {
   return 1
 }
 
+wait_operation() {
+  local url="$1" operation_id="$2" expected="$3"
+  local actual
+  for _ in $(seq 1 100); do
+    actual="$(curl -fsS "$url/operation?operationId=$operation_id")"
+    if [[ "$actual" == "$expected" ]]; then
+      return 0
+    fi
+    sleep 0.05
+  done
+  echo "expected operation=$operation_id status=$expected actual=$actual" >&2
+  return 1
+}
+
 run_process_scenarios() {
   local selectors=("$@")
   local caller_http target_http publisher_http subscriber_http caller_mesh target_mesh fanout_port
@@ -350,6 +370,39 @@ run_process_scenarios() {
       "$caller_url/send-channel?operationId=fast-channel&sequence=2"
     target_expected=$((target_expected + 2))
     echo '{"scenarioId":"SA-E2E-01","status":"PASS","publicSubmitCount":2,"terminal":"Submitted"}' \
+      >>"$EVIDENCE_FILE"
+  fi
+
+  if contains SA-E2E-02 "${selectors[@]}"; then
+    local blocker_operation pending_operation pending_file
+    # The serialized Probe must cross the 1024-byte application budget. The
+    # operation id is the public test payload; no test-only transport field is
+    # added to the Framework contract.
+    blocker_operation="handler-gate-blocker-$(printf 'x%.0s' {1..1400})"
+    pending_operation="pending-after-recovery-$(printf 'y%.0s' {1..1400})"
+    pending_file="$TEMP_DIR/sa-e2e-02-pending.status"
+
+    expect_status Submitted \
+      "$caller_url/send-node?targetRid=submit-target&operationId=$blocker_operation&sequence=21"
+    target_expected=$((target_expected + 1))
+    wait_counts "$target_url" "$target_expected" "$((target_expected - 1))"
+    expect_status 'hwm=1024,paused=true' "$target_url/inbound-status"
+
+    local start_status
+    start_status="$(curl --max-time 5 -sS -o "$pending_file" -w '%{http_code}' \
+      "$caller_url/start-node?targetRid=submit-target&operationId=$pending_operation&sequence=22")"
+    [[ "$start_status" == 202 ]] || {
+      echo "SA-E2E-02 start-node did not return 202 status=$start_status body=$(<"$pending_file")" >&2
+      return 1
+    }
+    wait_operation "$caller_url" "$pending_operation" RUNNING
+
+    touch "$gate"
+    wait_operation "$caller_url" "$pending_operation" Submitted
+    target_expected=$((target_expected + 1))
+    wait_counts "$target_url" "$target_expected" "$target_expected"
+    expect_status 'hwm=1024,paused=false' "$target_url/inbound-status"
+    echo '{"scenarioId":"SA-E2E-02","status":"PASS","pendingSubmitCount":1,"handlerCount":1,"recovery":"ApplicationHwm"}' \
       >>"$EVIDENCE_FILE"
   fi
 

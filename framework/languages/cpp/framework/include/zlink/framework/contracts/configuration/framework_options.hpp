@@ -152,6 +152,7 @@ class handler_options_builder_t
         add_serializers<request_type> ();
         add_serializers<reply_type> ();
         auto route_group_name = group_name;
+        auto mesh_group_name = route_group_name;
         _state->add_installer (std::move (group_name), detail::handler_group_kind_t::request,
                                [handlers, topic_name] (const std::string &channel_name) {
                                    handlers->on_request<THandler, request_type, reply_type> (
@@ -170,6 +171,12 @@ class handler_options_builder_t
                     static_cast<reply_type (THandler::*) (const request_type &)> (
                       &THandler::handle));
               });
+            _state->add_mesh_installer (
+              std::move (mesh_group_name), detail::handler_group_kind_t::request,
+              [] (mesh_channel_server_builder_t &channel) {
+                  channel.add_request_handler<THandler, request_type, reply_type> (
+                    detail::message_name<request_type> ());
+              });
         } else if constexpr (requires {
                                  static_cast<task_t<reply_type> (THandler::*) (
                                    const request_type &)> (&THandler::handle);
@@ -181,6 +188,12 @@ class handler_options_builder_t
                     detail::message_name<request_type> (),
                     static_cast<task_t<reply_type> (THandler::*) (const request_type &)> (
                       &THandler::handle));
+              });
+            _state->add_mesh_installer (
+              std::move (mesh_group_name), detail::handler_group_kind_t::request,
+              [] (mesh_channel_server_builder_t &channel) {
+                  channel.add_request_handler<THandler, request_type, reply_type> (
+                    detail::message_name<request_type> ());
               });
         } else if constexpr (requires {
                                  static_cast<reply_type (THandler::*) (
@@ -195,6 +208,12 @@ class handler_options_builder_t
                     static_cast<reply_type (THandler::*) (
                       const request_type &, const route_message_context_t &)> (&THandler::handle));
               });
+            _state->add_mesh_installer (
+              std::move (mesh_group_name), detail::handler_group_kind_t::request,
+              [] (mesh_channel_server_builder_t &channel) {
+                  channel.add_request_handler<THandler, request_type, reply_type> (
+                    detail::message_name<request_type> ());
+              });
         } else if constexpr (requires {
                                  static_cast<task_t<reply_type> (THandler::*) (
                                    const request_type &, const route_message_context_t &)> (
@@ -207,6 +226,12 @@ class handler_options_builder_t
                     detail::message_name<request_type> (),
                     static_cast<task_t<reply_type> (THandler::*) (
                       const request_type &, const route_message_context_t &)> (&THandler::handle));
+              });
+            _state->add_mesh_installer (
+              std::move (mesh_group_name), detail::handler_group_kind_t::request,
+              [] (mesh_channel_server_builder_t &channel) {
+                  channel.add_request_handler<THandler, request_type, reply_type> (
+                    detail::message_name<request_type> ());
               });
         }
     }
@@ -230,6 +255,7 @@ class handler_options_builder_t
         auto *handlers = _handlers;
         add_serializers<message_type> ();
         auto route_group_name = group_name;
+        auto mesh_group_name = route_group_name;
         _state->add_installer (std::move (group_name), detail::handler_group_kind_t::send,
                                [handlers, topic_name] (const std::string &channel_name) {
                                    handlers->on_send<THandler, message_type> (
@@ -247,6 +273,12 @@ class handler_options_builder_t
                     detail::message_name<message_type> (),
                     static_cast<void (THandler::*) (const message_type &)> (&THandler::handle));
               });
+            _state->add_mesh_installer (
+              std::move (mesh_group_name), detail::handler_group_kind_t::send,
+              [] (mesh_channel_server_builder_t &channel) {
+                  channel.add_send_handler<THandler, message_type> (
+                    detail::message_name<message_type> ());
+              });
         } else if constexpr (requires {
                                  static_cast<task_t<void> (THandler::*) (const message_type &)> (
                                    &THandler::handle);
@@ -258,6 +290,12 @@ class handler_options_builder_t
                     detail::message_name<message_type> (),
                     static_cast<task_t<void> (THandler::*) (const message_type &)> (
                       &THandler::handle));
+              });
+            _state->add_mesh_installer (
+              std::move (mesh_group_name), detail::handler_group_kind_t::send,
+              [] (mesh_channel_server_builder_t &channel) {
+                  channel.add_send_handler<THandler, message_type> (
+                    detail::message_name<message_type> ());
               });
         } else if constexpr (requires {
                                  static_cast<void (THandler::*) (const message_type &,
@@ -272,6 +310,12 @@ class handler_options_builder_t
                     static_cast<void (THandler::*) (
                       const message_type &, const route_message_context_t &)> (&THandler::handle));
               });
+            _state->add_mesh_installer (
+              std::move (mesh_group_name), detail::handler_group_kind_t::send,
+              [] (mesh_channel_server_builder_t &channel) {
+                  channel.add_send_handler<THandler, message_type> (
+                    detail::message_name<message_type> ());
+              });
         } else if constexpr (requires {
                                  static_cast<task_t<void> (THandler::*) (
                                    const message_type &, const route_message_context_t &)> (
@@ -284,6 +328,12 @@ class handler_options_builder_t
                     detail::message_name<message_type> (),
                     static_cast<task_t<void> (THandler::*) (
                       const message_type &, const route_message_context_t &)> (&THandler::handle));
+              });
+            _state->add_mesh_installer (
+              std::move (mesh_group_name), detail::handler_group_kind_t::send,
+              [] (mesh_channel_server_builder_t &channel) {
+                  channel.add_send_handler<THandler, message_type> (
+                    detail::message_name<message_type> ());
               });
         }
     }

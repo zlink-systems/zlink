@@ -6,7 +6,7 @@ import os
 
 class ZlinkStreamConnectorConan(ConanFile):
     name = "zlink-stream-connector"
-    version = "0.9.0"
+    version = "0.10.0"
     license = "MPL-2.0"
     url = "https://github.com/zlink-systems/zlink"
     description = "ZLink C++ Stream Connector core library"

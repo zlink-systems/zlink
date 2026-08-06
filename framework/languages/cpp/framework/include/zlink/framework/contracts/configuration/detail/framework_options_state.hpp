@@ -34,6 +34,8 @@
 namespace zlink::framework
 {
 
+class mesh_channel_server_builder_t;
+
 enum class application_hwm_profile_t
 {
     compact = 0,
@@ -44,6 +46,8 @@ enum class application_hwm_profile_t
 
 namespace detail
 {
+
+class mesh_node_builder_state_t;
 
 inline bool is_blank (const std::string &value)
 {
@@ -182,6 +186,7 @@ struct handler_group_options_state_t
 {
     using installer_t = std::function<void (const std::string &)>;
     using route_installer_t = std::function<void (route_channel_builder_t &)>;
+    using mesh_installer_t = std::function<void (mesh_channel_server_builder_t &)>;
     using serializer_installer_t = std::function<void ()>;
 
     struct channel_binding_t
@@ -203,9 +208,17 @@ struct handler_group_options_state_t
         route_installer_t installer;
     };
 
+    struct mesh_installer_binding_t
+    {
+        handler_group_kind_t kind;
+        mesh_installer_t installer;
+    };
+
     std::map<std::string, std::vector<channel_binding_t>> channels_by_group;
+    std::map<std::string, std::vector<channel_binding_t>> mesh_channels_by_group;
     std::map<std::string, std::vector<installer_binding_t>> installers_by_group;
     std::map<std::string, std::vector<route_installer_binding_t>> route_installers_by_group;
+    std::map<std::string, std::vector<mesh_installer_binding_t>> mesh_installers_by_group;
     std::map<std::string, std::set<std::tuple<handler_group_kind_t, std::string, std::string>>>
       handler_packets_by_group;
     void add_channel (const std::string &group_name,
@@ -267,6 +280,50 @@ struct handler_group_options_state_t
 
         auto &installers = route_installers_by_group[group_name];
         installers.push_back (route_installer_binding_t{kind, std::move (installer)});
+    }
+
+    void add_mesh_channel (const std::string &group_name,
+                           const std::string &channel_name,
+                           std::set<handler_group_kind_t> allowed_kinds,
+                           std::string surface_name)
+    {
+        require_non_blank (group_name, "handler group name is required");
+        auto binding =
+          channel_binding_t{channel_name, std::move (allowed_kinds), std::move (surface_name)};
+        const auto installers = mesh_installers_by_group.find (group_name);
+        if (installers != mesh_installers_by_group.end ()) {
+            for (const auto &installer : installers->second) {
+                validate_compatible (group_name, binding, installer.kind);
+            }
+        }
+        mesh_channels_by_group[group_name].push_back (std::move (binding));
+    }
+
+    void add_mesh_installer (std::string group_name,
+                             handler_group_kind_t kind,
+                             mesh_installer_t installer)
+    {
+        require_non_blank (group_name, "handler group name is required");
+        const auto channels = mesh_channels_by_group.find (group_name);
+        if (channels != mesh_channels_by_group.end ()) {
+            for (const auto &channel : channels->second) {
+                validate_compatible (group_name, channel, kind);
+            }
+        }
+        mesh_installers_by_group[group_name].push_back (
+          mesh_installer_binding_t{kind, std::move (installer)});
+    }
+
+    void install_mesh_handlers (const std::string &group_name,
+                                mesh_channel_server_builder_t &channel) const
+    {
+        const auto installers = mesh_installers_by_group.find (group_name);
+        if (installers == mesh_installers_by_group.end ()) {
+            return;
+        }
+        for (const auto &installer : installers->second) {
+            installer.installer (channel);
+        }
     }
 
     void install_route_handlers (zlink_builder_t &zlink) const

@@ -554,7 +554,7 @@ test('auto-connect reconciler publishes local row diffs handover and stays fail-
     runtime,
     peerResolver: resolver,
     executor: executor(calls),
-    options: { ownerLeaseRenewIntervalMs: 1000 },
+    options: { ownerLeaseRenewIntervalMs: 1000, ownerLeaseTtlMs: 1000 },
     monotonicNowMs: () => 0
   });
 
@@ -620,7 +620,7 @@ test('auto-connect reconciler does not mark a target active when executor skips 
         calls.push(`disconnect:${target.endpoint}:${target.ownerId}`);
       }
     },
-    options: { ownerLeaseRenewIntervalMs: 1000 },
+    options: { ownerLeaseRenewIntervalMs: 1000, ownerLeaseTtlMs: 1000 },
     monotonicNowMs: () => 0
   });
 
@@ -739,8 +739,8 @@ test('auto-connect reconciler removes a disconnected endpoint until a fresh stor
   assert.equal(reconciler.activeTargets.length, 1);
 });
 
-test('auto-connect reconciler defers stale-peer pruning after an empty candidate scan', async () => {
-  let nowMs = 0;
+test('auto-connect reconciler treats a successful empty candidate scan as authoritative', async () => {
+  const nowMs = 0;
   let rows = [peer(
     'owner-remote',
     internal.ZLinkLocationAutoConnectType.RouteMesh,
@@ -774,7 +774,7 @@ test('auto-connect reconciler defers stale-peer pruning after an empty candidate
         calls.push(`stale:${targets.length}`);
       }
     },
-    options: { ownerLeaseRenewIntervalMs: 1000 },
+    options: { ownerLeaseRenewIntervalMs: 1000, ownerLeaseTtlMs: 1000 },
     monotonicNowMs: () => nowMs
   });
 
@@ -782,11 +782,6 @@ test('auto-connect reconciler defers stale-peer pruning after an empty candidate
   assert.deepEqual(calls, ['connect:tcp://remote', 'stale:1']);
 
   rows = [];
-  await reconciler.tick();
-  assert.deepEqual(calls, ['connect:tcp://remote', 'stale:1']);
-  assert.equal(reconciler.activeTargets.length, 1);
-
-  nowMs = 1000;
   await reconciler.tick();
   assert.deepEqual(calls, [
     'connect:tcp://remote',
@@ -920,6 +915,7 @@ test('auto-connect reconciler retains an existing draining peer without dialing 
 test('auto-connect loop skips unchanged change stamp until live owner set changes', async () => {
   const reconciler = {
     storeFailed: false,
+    localPublicationReady: true,
     ticks: 0,
     async tick() {
       this.ticks++;

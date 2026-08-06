@@ -7,23 +7,26 @@ import systems.zlink.e2e.kotlin.registrymessaging.client.Support.HttpJson
 import systems.zlink.e2e.kotlin.registrymessaging.client.Support.ScenarioAssert
 import systems.zlink.e2e.kotlin.registrymessaging.shared.PayloadRes
 import systems.zlink.e2e.kotlin.registrymessaging.shared.PayloadReq
-import systems.zlink.e2e.kotlin.registrymessaging.shared.ProfileRes
-import systems.zlink.e2e.kotlin.registrymessaging.shared.ProfileReq
+import systems.zlink.e2e.kotlin.registrymessaging.shared.ScenarioRoutePingReq
+import systems.zlink.e2e.kotlin.registrymessaging.shared.ScenarioRoutePingRes
 
 object RmC8PayloadRoundTripScenario {
-    fun run(singleConsumer: HttpJson, providerA: HttpJson, providerB: HttpJson) {
+    fun run(providerA: HttpJson, providerB: HttpJson) {
         val markers = mutableListOf<String>()
         for (size in listOf(1, 4096, 256 * 1024, 1024 * 1024)) {
             val marker = "rm-c8-$size-${UUID.randomUUID().toString().replace("-", "")}"
             markers += marker
             val payload = buildPayload(size)
-            val reply = singleConsumer.post<PayloadRes>("/profile/payload", PayloadReq(marker, payload))
+            val reply = providerA.post<PayloadRes>("/profile/route/payload", PayloadReq(marker, payload))
             ScenarioAssert.that(reply.marker == marker, "RM-C8 marker mismatch.")
             ScenarioAssert.that(reply.length == payload.length, "RM-C8 payload length mismatch.")
             ScenarioAssert.that(reply.sha256 == hash(payload), "RM-C8 payload hash mismatch.")
         }
-        val followUp = singleConsumer.post<ProfileRes>("/profile/request", ProfileReq("rm-c8-after"))
-        ScenarioAssert.that(followUp.value == "profile:rm-c8-after", "RM-C8 follow-up request failed.")
+        val followUp = providerA.post<ScenarioRoutePingRes>(
+            "/profile/route/request",
+            ScenarioRoutePingReq("rm-c8-after"),
+        )
+        ScenarioAssert.that(followUp.value == "route:rm-c8-after", "RM-C8 follow-up request failed.")
         val evidence = providerA.get<List<String>>("/evidence") + providerB.get<List<String>>("/evidence")
         ScenarioAssert.that(
             markers.all { marker -> evidence.any { it.contains("payload-request") && it.contains(marker) } },

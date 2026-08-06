@@ -1,6 +1,6 @@
 {
   "name": "@zlink-systems/e2e-resilience-lifecycle-client",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "private": true,
   "main": "dist/Client/main.js",
   "scripts": {

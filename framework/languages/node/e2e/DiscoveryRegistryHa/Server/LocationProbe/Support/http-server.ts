@@ -3,7 +3,7 @@ import http from 'node:http';
 export interface HttpRoute {
   readonly method: string;
   readonly path: string;
-  readonly handle: (body: unknown) => unknown | Promise<unknown>;
+  readonly handle: (body: unknown, requestUrl?: string) => unknown | Promise<unknown>;
 }
 
 export async function startHttpServer(urlText: string, routes: readonly HttpRoute[]): Promise<http.Server> {
@@ -16,7 +16,7 @@ export async function startHttpServer(urlText: string, routes: readonly HttpRout
     }
     try {
       const body = await readJson(request);
-      const result = await route.handle(body);
+      const result = await route.handle(body, request.url);
       const payload = JSON.stringify(result ?? {}, jsonReplacer);
       response.writeHead(200, { 'content-type': 'application/json' });
       response.end(payload);

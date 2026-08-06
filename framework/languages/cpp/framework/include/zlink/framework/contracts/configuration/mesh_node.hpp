@@ -43,6 +43,26 @@ struct mesh_handler_registration_t
     std::type_index reply_type{typeid (void)};
     mesh_handler_invoker_t invoke;
 };
+
+void bind_mesh_handler_services (std::shared_ptr<mesh_node_builder_state_t> state,
+                                 service_collection_t &services);
+void register_mesh_handler_service (
+  std::shared_ptr<mesh_node_builder_state_t> state,
+  std::function<void (service_collection_t &)> registrar);
+
+template <typename THandler>
+void register_mesh_handler_service_for (
+  std::shared_ptr<mesh_node_builder_state_t> state)
+{
+    register_mesh_handler_service (
+      std::move (state), [] (service_collection_t &services) {
+          if (services.contains (std::type_index (typeid (THandler)))) {
+              return;
+          }
+          injected_handler_registrar_t<
+            THandler, typename handler_dependencies_t<THandler>::type>::add (services);
+      });
+}
 } // namespace detail
 
 struct mesh_peer_connection_t
@@ -112,6 +132,7 @@ class mesh_channel_server_builder_t
   private:
     friend class mesh_channel_builder_t;
     friend class mesh_node_builder_t;
+    friend class detail::mesh_node_runtime_t;
     mesh_channel_server_builder_t (
       std::shared_ptr<detail::mesh_node_builder_state_t> state,
       std::string channel_name);
@@ -257,6 +278,7 @@ mesh_channel_server_builder_t &
 mesh_channel_server_builder_t::add_handler (bool request, std::string packet_name)
 {
     static_assert (!std::is_same_v<TMessage, void>);
+    detail::register_mesh_handler_service_for<THandler> (_state);
     return add_handler_registration (detail::mesh_handler_registration_t{
       request,
       _channel_name,
@@ -281,10 +303,25 @@ mesh_channel_server_builder_t::add_handler (bool request, std::string packet_nam
                     const TMessage &, const route_message_context_t &)> (&THandler::handle)) (
                     payload, context);
                   co_return result_t<zlink::message_t>::success (zlink::message_t{});
-              } else {
+              } else if constexpr (requires {
+                                       static_cast<task_t<void> (THandler::*) (
+                                         const TMessage &,
+                                         const route_message_context_t &)> (&THandler::handle);
+                                   }) {
                   co_await (owner.*static_cast<task_t<void> (THandler::*) (
                     const TMessage &, const route_message_context_t &)> (&THandler::handle)) (
                     payload, context);
+                  co_return result_t<zlink::message_t>::success (zlink::message_t{});
+              } else if constexpr (requires {
+                                       static_cast<void (THandler::*) (const TMessage &)>(
+                                         &THandler::handle);
+                                   }) {
+                  (owner.*static_cast<void (THandler::*) (const TMessage &)>(
+                    &THandler::handle)) (payload);
+                  co_return result_t<zlink::message_t>::success (zlink::message_t{});
+              } else {
+                  co_await (owner.*static_cast<task_t<void> (THandler::*) (const TMessage &)>(
+                    &THandler::handle)) (payload);
                   co_return result_t<zlink::message_t>::success (zlink::message_t{});
               }
           }
@@ -299,6 +336,7 @@ template <typename THandler, typename TRequest, typename TReply>
 mesh_channel_server_builder_t &
 mesh_channel_server_builder_t::add_handler (bool request, std::string packet_name)
 {
+    detail::register_mesh_handler_service_for<THandler> (_state);
     return add_handler_registration (detail::mesh_handler_registration_t{
       request,
       _channel_name,
@@ -325,10 +363,29 @@ mesh_channel_server_builder_t::add_handler (bool request, std::string packet_nam
                   co_return result_t<zlink::message_t>::success (
                     detail::encoded_payload_to_raw (
                       serializers.get<TReply> ().serialize (reply)));
-              } else {
+              } else if constexpr (requires {
+                                       static_cast<task_t<TReply> (THandler::*) (
+                                         const TRequest &,
+                                         const route_message_context_t &)> (&THandler::handle);
+                                   }) {
                   auto reply = co_await (owner.*static_cast<task_t<TReply> (THandler::*) (
                     const TRequest &, const route_message_context_t &)> (&THandler::handle)) (
                     payload, context);
+                  co_return result_t<zlink::message_t>::success (
+                    detail::encoded_payload_to_raw (
+                      serializers.get<TReply> ().serialize (reply)));
+              } else if constexpr (requires {
+                                       static_cast<TReply (THandler::*) (const TRequest &)>(
+                                         &THandler::handle);
+                                   }) {
+                  auto reply = (owner.*static_cast<TReply (THandler::*) (const TRequest &)>(
+                    &THandler::handle)) (payload);
+                  co_return result_t<zlink::message_t>::success (
+                    detail::encoded_payload_to_raw (
+                      serializers.get<TReply> ().serialize (reply)));
+              } else {
+                  auto reply = co_await (owner.*static_cast<task_t<TReply> (THandler::*) (
+                    const TRequest &)> (&THandler::handle)) (payload);
                   co_return result_t<zlink::message_t>::success (
                     detail::encoded_payload_to_raw (
                       serializers.get<TReply> ().serialize (reply)));

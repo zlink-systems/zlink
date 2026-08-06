@@ -5,7 +5,7 @@ import java.util.concurrent.CompletionStage;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.actors.ActorRef;
 import systems.zlink.framework.actors.ZLinkActorManager;
-import systems.zlink.framework.channels.ZLinkRouteRequestContext;
+import systems.zlink.framework.channels.ZLinkRouteMessageContext;
 import systems.zlink.framework.channels.ZLinkRouteRequestHandler;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.spots.ZLinkSpotManager;
@@ -28,24 +28,30 @@ public final class PlayBindActorsHandler
     @Override
     public CompletionStage<Contracts.BindActorsRes> handle(
         Contracts.BindActorsReq request,
-        ZLinkRouteRequestContext context) {
-        return spots.getOrCreate(
-                ProbeSpot.class,
-                RoutingId.from(request.spotRid()),
-                ZLinkMessage.of("bind"))
+        ZLinkRouteMessageContext context) {
+        return spots.getOrCreate(request.spotRid(), "probe")
+            .request(ZLinkMessage.of("bind"))
+            .submit()
             .thenCompose(ignored -> bind(request.spotRid(), request.actorA())
-                .thenCombine(
-                    bind(request.spotRid(), request.actorB()),
-                    (actorA, actorB) -> new Contracts.BindActorsRes(
+                .thenCompose(actorA -> bind(request.spotRid(), request.actorB())
+                    .thenApply(actorB -> new Contracts.BindActorsRes(
                         request.spotRid(),
                         request.actorA(),
                         request.actorB(),
-                        List.of(binding(actorA), binding(actorB)))));
+                        List.of(binding(actorA), binding(actorB))))));
     }
 
     private CompletionStage<ActorRef> bind(String spotRid, String actorId) {
         return actors.getOrCreate(actorId, "probe")
-            .thenApply(actor -> {
+            .request(ZLinkMessage.of("bind"))
+            .submit()
+            .thenApply(result -> {
+                ActorRef actor = switch (result) {
+                    case systems.zlink.framework.actors.ZLinkActorCreateResult.Existing existing -> existing.actor();
+                    case systems.zlink.framework.actors.ZLinkActorCreateResult.Created created -> created.actor();
+                    case systems.zlink.framework.actors.ZLinkActorCreateResult.Rejected rejected ->
+                        throw new IllegalStateException("actor creation rejected");
+                };
                 evidence.record("bind-actors", "bind-actor", "spot=" + spotRid
                     + ";actor=" + actor.actorId()
                     + ";node=" + actor.nodeRid());
@@ -57,6 +63,6 @@ public final class PlayBindActorsHandler
         return new Contracts.ActorBinding(
             actor.actorId(),
             actor.nodeRid().toString(),
-            actor.generation());
+            actor.objectGeneration());
     }
 }

@@ -49,13 +49,27 @@ suspend fun ZLinkLocationRuntimeQuery.listServiceSummaries(
     page: ZLinkPageRequest = ZLinkPageRequest.firstPage(),
 ): ZLinkLocationPage<ZLinkLocationServiceSummary>
 
+suspend fun ZLinkLocationRuntimeQuery.findActorLocation(
+    actorId: String,
+): ZLinkLocationObjectEntry?
+
+suspend fun ZLinkLocationRuntimeQuery.findSpotLocation(
+    spotId: String,
+): ZLinkLocationObjectEntry?
+
+suspend fun ZLinkLocationRuntimeQuery.listObjectLocations(
+    filter: ZLinkLocationObjectFilter,
+    page: ZLinkPageRequest = ZLinkPageRequest.firstPage(),
+): ZLinkLocationPage<ZLinkLocationObjectEntry>
+
 fun ZLinkLocationRuntimeQuery.topology(
     filter: ZLinkLocationTopologyFilter,
     pageSize: Int = 100,
 ): Flow<ZLinkLocationTopologyEntry>
 ```
 
-조회 projection은 bounded page와 Java result type을 유지한다. Raw Spot·Actor authority row, Store key,
+조회 projection은 bounded page와 Java result type을 유지한다. Object query는 kind와 stable type별로
+조회하며 page size는 `1..1000`, encoded page는 4 MiB 이하이다. Raw Spot·Actor authority row, Store key,
 provider version과 scan cursor를 application 조회 결과에 추가하지 않는다.
 
 ## Redis extension

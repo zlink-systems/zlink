@@ -4,6 +4,7 @@
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/mesh/route_mesh_connection_policy.hpp"
 #include "runtime/diagnostics/runtime_observation.hpp"
+#include "runtime/diagnostics/monitoring_runtime.hpp"
 
 #include <zlink/framework/contracts/errors/error.hpp>
 
@@ -115,6 +116,7 @@ struct route_mesh_runtime_service_t::state_t :
         std::chrono::steady_clock::time_point next_location_poll{};
         std::chrono::steady_clock::time_point next_descriptor_poll{};
         bool descriptor_baseline_initialized = false;
+        std::vector<mesh_node_descriptor_t> location_descriptors;
         std::map<std::string, std::pair<std::uint64_t, std::uint64_t>>
           descriptor_versions;
         std::atomic_bool stopped{false};
@@ -124,6 +126,7 @@ struct route_mesh_runtime_service_t::state_t :
     std::map<std::string, std::shared_ptr<hub_t>> hubs;
     location_runtime_query_t *location_runtime = nullptr;
     location_repository_t *location_store = nullptr;
+    std::shared_ptr<detail::monitoring_runtime_state_t> monitoring;
     mutable std::mutex sequence_mutex;
     mutable std::map<std::string, std::uint64_t> sequences;
     mutable std::mutex drain_mutex;
@@ -232,14 +235,16 @@ struct route_mesh_runtime_service_t::state_t :
         }
         std::string state = "degraded";
         std::optional<std::chrono::system_clock::time_point> last_success;
+        std::optional<location_runtime_status_t> status_for_log;
         bool failed = true;
         try {
             auto query = location_runtime->get_status ();
             const auto &result = query.result ();
             if (result) {
-                state = result.value ().store_healthy ? "ready" : "degraded";
-                last_success = result.value ().last_refresh_at;
-                failed = result.value ().last_error.has_value ();
+                status_for_log = result.value ();
+                state = status_for_log->store_healthy ? "ready" : "degraded";
+                last_success = status_for_log->last_refresh_at;
+                failed = status_for_log->last_error.has_value ();
             }
         }
         catch (...) {
@@ -256,6 +261,11 @@ struct route_mesh_runtime_service_t::state_t :
         }
         if (!changed)
             return;
+        if (status_for_log)
+            detail::monitoring_runtime_t (monitoring)
+              .publish_location_changes (
+                hub.node->mesh_name (), std::move (*status_for_log), true,
+                std::nullopt, std::nullopt);
         publish_current_snapshot (hub);
     }
 
@@ -272,8 +282,8 @@ struct route_mesh_runtime_service_t::state_t :
               now + std::chrono::milliseconds (100);
         }
 
-        std::map<std::string, std::pair<std::uint64_t, std::uint64_t>>
-          versions;
+        std::vector<mesh_node_descriptor_t> descriptors;
+        std::map<std::string, std::pair<std::uint64_t, std::uint64_t>> versions;
         try {
             location_page_request_t page;
             for (;;) {
@@ -283,6 +293,9 @@ struct route_mesh_runtime_service_t::state_t :
                 const auto &result = listed.result ();
                 if (!result)
                     return;
+                descriptors.insert (descriptors.end (),
+                                    result.value ().items.begin (),
+                                    result.value ().items.end ());
                 for (const auto &descriptor : result.value ().items) {
                     versions.emplace (
                       descriptor.rid.to_hex (),
@@ -306,11 +319,14 @@ struct route_mesh_runtime_service_t::state_t :
             if (!hub.descriptor_baseline_initialized) {
                 hub.descriptor_baseline_initialized = true;
                 hub.descriptor_versions = std::move (versions);
+                hub.location_descriptors = std::move (descriptors);
                 return;
             }
             changed = hub.descriptor_versions != versions;
-            if (changed)
+            if (changed) {
                 hub.descriptor_versions = std::move (versions);
+                hub.location_descriptors = std::move (descriptors);
+            }
         }
         if (changed)
             publish_snapshot_change (hub);
@@ -348,11 +364,13 @@ class observation_t final : public mesh_runtime_observation_t
 route_mesh_runtime_service_t::route_mesh_runtime_service_t (
   std::vector<std::shared_ptr<detail::mesh_node_runtime_t>> nodes,
   location_runtime_query_t *location_runtime,
-  location_repository_t *location_store) :
+  location_repository_t *location_store,
+  std::shared_ptr<detail::monitoring_runtime_state_t> monitoring) :
     _state (std::make_shared<state_t> ())
 {
     _state->location_runtime = location_runtime;
     _state->location_store = location_store;
+    _state->monitoring = std::move (monitoring);
     for (auto &node : nodes)
         _state->hubs.emplace (node->mesh_name (),
                               std::make_shared<state_t::hub_t> (node));
@@ -382,6 +400,10 @@ void route_mesh_runtime_service_t::start ()
           });
         hub->stopped.store (false, std::memory_order_release);
         const auto state = _state;
+        // Prime the descriptor cache before exposing the runtime. Snapshot
+        // callers must see the initial local placement data without forcing a
+        // Store read on every query.
+        state->poll_location_descriptors (*hub);
         hub->pump = std::thread ([state, hub] {
             while (!hub->stopped.load (std::memory_order_acquire)) {
                 state->publish_application_claim_change (*hub);
@@ -467,26 +489,9 @@ build_snapshot (
     const auto transport_state = map_state (status.state);
 
     std::vector<mesh_node_descriptor_t> location_descriptors;
-    if (state->location_store != nullptr) {
-        try {
-            location_page_request_t page;
-            for (;;) {
-                auto listed =
-                  state->location_store->list_mesh_nodes (mesh_name, page);
-                const auto &result = listed.result ();
-                if (!result)
-                    break;
-                const auto &value = result.value ();
-                location_descriptors.insert (
-                  location_descriptors.end (),
-                  value.items.begin (), value.items.end ());
-                if (!value.continuation_token)
-                    break;
-                page.continuation_token = value.continuation_token;
-            }
-        }
-        catch (...) {
-        }
+    {
+        std::lock_guard lock (hub->mutex);
+        location_descriptors = hub->location_descriptors;
     }
 
     std::vector<mesh_peer_snapshot_t> peer_snapshots;
@@ -498,7 +503,12 @@ build_snapshot (
     bool location_is_healthy = false;
     {
         std::lock_guard lock (hub->mutex);
-        location_is_healthy = hub->location_state == "ready";
+        // A runtime query is optional for the in-process projection. When no
+        // query service is wired, the caller supplied location descriptors are
+        // the complete source and must not be downgraded to degraded merely
+        // because the optional health cache has no entry.
+        location_is_healthy = state->location_runtime == nullptr
+                              || hub->location_state == "ready";
     }
     peer_snapshots.reserve (
       peers.size () + not_required_peers.size ()
@@ -513,6 +523,8 @@ build_snapshot (
                 || location->second->lifecycle_generation
                      != peer.descriptor.lifecycle_generation)) {
             classified_peer_ids.insert (peer_rid.to_hex ());
+            if (location == location_by_rid.end ())
+                continue;
             const bool draining =
               location != location_by_rid.end ()
               && location->second->state == framework_runtime_state_t::draining;
@@ -527,13 +539,18 @@ build_snapshot (
                                           topology_reason_t::no_ready_peer}});
             continue;
         }
-        std::vector<std::string> channel_names;
-        for (const auto &channel : peer.descriptor.channels) {
-            channel_names.push_back (channel.name);
-            if (channel.weight > 0)
-                ++ready_remote_members[channel.name];
+        if (location_is_healthy && location != location_by_rid.end ()) {
+            for (const auto &[channel_name, weight] :
+                 location->second->channel_weights) {
+                if (weight > 0)
+                    ++ready_remote_members[channel_name];
+            }
+        } else {
+            for (const auto &channel : peer.descriptor.channels) {
+                if (channel.weight > 0)
+                    ++ready_remote_members[channel.name];
+            }
         }
-        std::sort (channel_names.begin (), channel_names.end ());
         classified_peer_ids.insert (peer_rid.to_hex ());
         peer_snapshots.push_back (mesh_peer_snapshot_t{
           .node_rid = peer_rid,
@@ -553,6 +570,9 @@ build_snapshot (
         const auto rid =
           zlink::routing_id_t::from (peer.node_routing_id);
         if (!classified_peer_ids.insert (rid.to_hex ()).second)
+            continue;
+        if (location_is_healthy
+            && location_by_rid.find (rid.to_hex ()) == location_by_rid.end ())
             continue;
         peer_snapshots.push_back (mesh_peer_snapshot_t{
           .node_rid = rid,
@@ -581,15 +601,9 @@ build_snapshot (
             : descriptor.object_role == mesh::service_object_role_t::server
                 ? object_role_t::server
                 : object_role_t::none;
-    const auto local_channels =
-      local_location != location_descriptors.end ()
-        ? local_location->channel_weights
-        : [&descriptor] {
-              std::map<std::string, int> weights;
-              for (const auto &channel : descriptor.channels)
-                  weights.emplace (channel.name, channel.weight);
-              return weights;
-          } ();
+    std::map<std::string, int> local_channels;
+    for (const auto &channel : descriptor.channels)
+        local_channels.emplace (channel.name, channel.weight);
     for (const auto &remote : location_descriptors) {
         if (remote.rid == status.routing_id ()
             || remote.state == framework_runtime_state_t::relocated
@@ -669,9 +683,11 @@ build_snapshot (
             return peer.state == peer_state_t::connecting
                    || peer.state == peer_state_t::not_connected;
         });
+    const bool location_unavailable =
+      state->location_store != nullptr && !location_is_healthy;
     const auto public_state =
       mapped_state == mesh_node_state_t::ready
-          && required_peer_unavailable
+          && (required_peer_unavailable || location_unavailable)
         ? mesh_node_state_t::degraded
         : mapped_state;
     if (public_state != mesh_node_state_t::ready) {

@@ -50,6 +50,11 @@ export interface SocketNativeBinding {
   socketConnect: (socket: NativeHandle, endpoint: string) => void;
   socketDisconnect: (socket: NativeHandle, endpoint: string) => void;
   socketDisconnectRid: (socket: NativeHandle, routingId: Buffer) => void;
+  socketDisconnectTransportPair: (
+    socket: NativeHandle,
+    transportPairId: bigint,
+    transportPairGeneration: bigint
+  ) => void;
   socketGetOpt: (socket: NativeHandle, option: number) => Buffer;
   socketNew: (ctx: NativeHandle, type: number) => NativeHandle;
   socketPublish: (

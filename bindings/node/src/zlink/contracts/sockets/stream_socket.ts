@@ -39,4 +39,6 @@ export interface StreamSocket extends Socket {
   getRoutingId(): RoutingId;
   /** Disconnect the peer identified by `routingId`. */
   disconnectRid(routingId: RoutingId): void;
+  /** Disconnect only the transport pair identified by a monitor event. */
+  disconnectTransportPair(transportPairId: bigint, transportPairGeneration: bigint): void;
 }

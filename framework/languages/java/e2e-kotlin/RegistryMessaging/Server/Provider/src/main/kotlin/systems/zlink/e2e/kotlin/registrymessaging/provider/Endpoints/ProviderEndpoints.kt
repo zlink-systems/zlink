@@ -21,6 +21,8 @@ import systems.zlink.e2e.kotlin.registrymessaging.shared.EvidenceWaitReq
 import systems.zlink.e2e.kotlin.registrymessaging.shared.ProfileMsg
 import systems.zlink.e2e.kotlin.registrymessaging.shared.ProfileRes
 import systems.zlink.e2e.kotlin.registrymessaging.shared.ProfileReq
+import systems.zlink.e2e.kotlin.registrymessaging.shared.PayloadReq
+import systems.zlink.e2e.kotlin.registrymessaging.shared.PayloadRes
 import systems.zlink.e2e.kotlin.registrymessaging.shared.RouteMissingRes
 import systems.zlink.e2e.kotlin.registrymessaging.shared.ScenarioRoutePingReq
 import systems.zlink.e2e.kotlin.registrymessaging.shared.ScenarioRoutePingRes
@@ -88,6 +90,10 @@ class ProviderEndpoints(
             val request = exchange.readJson<ScenarioRoutePingReq>()
             exchange.writeJson(requestRoute(RoutingId.from("api-b"), request))
         }
+        server.createContext("/profile/route/payload") { exchange ->
+            val request = exchange.readJson<PayloadReq>()
+            exchange.writeJson(requestRoutePayload(RoutingId.from("api-b"), request))
+        }
         server.createContext("/profile/route/missing") { exchange ->
             val request = exchange.readJson<ScenarioRoutePingReq>()
             exchange.writeJson(
@@ -140,6 +146,27 @@ class ProviderEndpoints(
         .submit(ScenarioRoutePingRes::class.java)
         .handle { reply, error -> retryOrComplete(reply, error, deadline) {
             requestRoute(target, request, deadline)
+        } }
+        .thenCompose { it }
+
+    private fun requestRoutePayload(
+        target: RoutingId,
+        request: PayloadReq,
+    ): CompletionStage<PayloadRes> = requestRoutePayload(
+        target,
+        request,
+        System.nanoTime() + Duration.ofSeconds(30).toNanos(),
+    )
+
+    private fun requestRoutePayload(
+        target: RoutingId,
+        request: PayloadReq,
+        deadline: Long,
+    ): CompletionStage<PayloadRes> = routes.requestToNode(Contracts.PROFILE_ROUTE_CHANNEL, target, request)
+        .timeout(Duration.ofSeconds(5))
+        .submit(PayloadRes::class.java)
+        .handle { reply, error -> retryOrComplete(reply, error, deadline) {
+            requestRoutePayload(target, request, deadline)
         } }
         .thenCompose { it }
 

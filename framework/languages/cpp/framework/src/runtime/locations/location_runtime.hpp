@@ -210,6 +210,7 @@ class location_runtime_t
                   std::chrono::duration<double> (started_at - *due_at).count ());
             }
         }
+        bool stale_token = false;
         try {
             const auto token = current_owner_token ();
             if (!token)
@@ -223,9 +224,11 @@ class location_runtime_t
                 .value ();
             const auto *renewed =
               std::get_if<owner_lease_renewed_t> (&result);
-            if (renewed == nullptr)
+            if (renewed == nullptr) {
+                stale_token = true;
                 throw std::runtime_error (
                   "owner lease token is stale");
+            }
             if (const char *trace = std::getenv ("ZLINK_CPP_AUTO_CONNECT_TRACE");
                 trace != nullptr && *trace != '\0') {
                 const auto completed_at = std::chrono::steady_clock::now ();
@@ -250,6 +253,29 @@ class location_runtime_t
         catch (const std::exception &error) {
             if (metrics_enabled) {
                 metrics.counter ("zlink.location.owner_lease.renew.failures", "{failure}", 1);
+            }
+            if (stale_token) {
+                try {
+                    const auto claim =
+                      _store
+                        ->claim_owner_lease (
+                          _owner_id, _options.owner_lease_ttl)
+                        .result ()
+                        .value ();
+                    if (const auto *claimed =
+                          std::get_if<owner_lease_claimed_t> (&claim)) {
+                        std::lock_guard lock (_state_gate);
+                        _owner_token = claimed->token;
+                        _owner_lease_healthy = true;
+                        _owner_lease_renewed_at = claimed->store_now;
+                        _last_error.reset ();
+                        return owner_lease_renew_result_t{
+                          owner_lease_renewed_t{
+                            claimed->lease_expires_at, claimed->store_now}};
+                    }
+                }
+                catch (...) {
+                }
             }
             record_failure (error.what ());
             return owner_lease_renew_result_t{

@@ -607,17 +607,15 @@ stateful_error_t stateful_object_runtime_t::destroy_actor (
         || record->state == object_state_t::recovering) {
         return stateful_error_t::moving;
     }
-    if (record->membership.rfind ("entry:", 0) != 0) {
+    auto candidate = std::find_if (
+      _candidates.begin (), _candidates.end (), [&] (const auto &value) {
+          return value.mesh_name == record->reference.mesh_name
+                 && value.node_id == record->reference.node_id;
+      });
+    if (candidate == _candidates.end () || candidate->active_count == 0) {
         return stateful_error_t::conflict;
     }
-    for (auto &candidate : _candidates) {
-        if (candidate.mesh_name == record->reference.mesh_name
-            && candidate.node_id == record->reference.node_id
-            && candidate.active_count != 0) {
-            --candidate.active_count;
-            break;
-        }
-    }
+    --candidate->active_count;
     _objects.erase (key_for (actor));
     return stateful_error_t::none;
 }

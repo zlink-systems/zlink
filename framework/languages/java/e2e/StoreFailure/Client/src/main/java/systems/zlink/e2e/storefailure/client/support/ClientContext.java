@@ -188,6 +188,86 @@ public final class ClientContext implements AutoCloseable {
         }
     }
 
+    public void createObjectLocationFixture(String scenarioName, int count) {
+        for (int index = 0; index < count; index++) {
+            String spotId = "sf-c5-object-" + index;
+            Contracts.InstanceOutcome outcome = null;
+            RuntimeException lastError = null;
+            for (int attempt = 0; attempt < 20; attempt++) {
+                try {
+                    outcome = instanceRequest(new Contracts.InstanceReq(spotId, scenarioName + "-" + index));
+                    if (outcome.succeeded()) {
+                        break;
+                    }
+                } catch (RuntimeException error) {
+                    lastError = error;
+                }
+                Wait.sleep(Duration.ofMillis(100));
+            }
+            ScenarioAssert.that(outcome != null && outcome.succeeded(),
+                scenarioName + " object fixture request failed at " + index
+                    + ": " + (outcome == null ? lastError : outcome.errorMessage()));
+            ScenarioAssert.that(spotId.equals(outcome.reply().spotId()),
+                scenarioName + " object fixture returned the wrong spot id at " + index);
+            ScenarioAssert.that(outcome.reply().objectGeneration() > 0,
+                scenarioName + " object fixture returned a non-positive generation at " + index);
+        }
+    }
+
+    public void assertObjectLocationPaging(String scenarioName, int expectedCount) {
+        for (int pageSize : List.of(1, 100, 1_000)) {
+            Set<String> observed = Wait.until(
+                Duration.ofSeconds(30),
+                scenarioName + " did not publish all object locations for page size " + pageSize,
+                () -> {
+                    try {
+                        Set<String> pageResult = readObjectLocationIds(pageSize, expectedCount);
+                        return pageResult.size() == expectedCount ? pageResult : null;
+                    } catch (RuntimeException error) {
+                        return null;
+                    }
+                });
+            ScenarioAssert.that(observed.size() == expectedCount,
+                scenarioName + " object page count mismatch for page size " + pageSize);
+        }
+    }
+
+    private Set<String> readObjectLocationIds(int pageSize, int expectedCount) {
+        Set<String> observed = new HashSet<>();
+        String continuation = null;
+        int pages = 0;
+        do {
+            String body = http.postJson(
+                "/locations/objects",
+                new Contracts.ObjectLocationQueryReq(pageSize, continuation));
+            try {
+                JsonNode root = JSON.readTree(body);
+                JsonNode items = root.path("items");
+                ScenarioAssert.that(items.isArray(), "SF-C5 object query did not return an item array");
+                ScenarioAssert.that(items.size() <= pageSize,
+                    "SF-C5 page exceeded requested page size " + pageSize);
+                for (JsonNode item : items) {
+                    String globalId = item.path("globalId").asText("");
+                    ScenarioAssert.that(!globalId.isBlank(), "SF-C5 returned an object without globalId");
+                    ScenarioAssert.that(item.path("objectGeneration").asLong(0) > 0,
+                        "SF-C5 returned a non-positive object generation");
+                    ScenarioAssert.that(Contracts.LEASE_PROBE_SPOT_TYPE.equals(item.path("stableType").asText()),
+                        "SF-C5 returned an object with the wrong stable type");
+                    ScenarioAssert.that(observed.add(globalId),
+                        "SF-C5 returned a duplicate object " + globalId);
+                }
+                continuation = root.path("continuationToken").asText("");
+                continuation = continuation.isBlank() ? null : continuation;
+            } catch (Exception error) {
+                throw new IllegalStateException("SF-C5 object query response was invalid", error);
+            }
+            pages++;
+            ScenarioAssert.that(pages <= expectedCount,
+                "SF-C5 object query did not terminate");
+        } while (continuation != null);
+        return observed;
+    }
+
     public long measureStoreRead() {
         Instant started = Instant.now();
         waitForLivePeerRows();

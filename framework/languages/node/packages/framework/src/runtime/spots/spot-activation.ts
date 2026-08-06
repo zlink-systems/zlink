@@ -122,6 +122,7 @@ export interface ZLinkSpotActivationLifecycleOptions {
   readonly actorHandoffRuntime?: ZLinkSpotActorHandoffRuntime;
   readonly detachedTaskRunner?: ZLinkDetachedTaskRunner;
   readonly admission?: ZLinkRuntimeAdmissionGate;
+  readonly statefulExecutionAllowed?: () => boolean;
   readonly leaveActor: (
     spotId: RoutingId,
     actor: ZLinkActor,
@@ -196,7 +197,9 @@ export class ZLinkSpotActivationLifecycle {
     );
     const timers = new ZLinkSpotTimerRegistry(
       this.options.metrics,
-      () => this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true
+      () => this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true,
+      undefined,
+      this.options.statefulExecutionAllowed
     );
     const outbound = new DefaultZLinkSpotOutbound(
       serial,
@@ -329,7 +332,9 @@ export class ZLinkSpotActivationLifecycle {
     });
     const timers = new ZLinkSpotTimerRegistry(
       this.options.metrics,
-      () => this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true
+      () => this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true,
+      undefined,
+      this.options.statefulExecutionAllowed
     );
     const outbound = new DefaultZLinkSpotOutbound(
       serial,
@@ -484,7 +489,8 @@ export class ZLinkSpotActivationLifecycle {
           timerSerials.set(name, timerSerial);
         }
         return timerSerial;
-      }
+      },
+      this.options.statefulExecutionAllowed
     );
     let nativeSpot: ZLinkBackendSpot | undefined;
     const outbound = new DefaultZLinkSpotOutbound(

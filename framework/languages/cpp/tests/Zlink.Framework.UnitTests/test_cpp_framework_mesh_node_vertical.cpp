@@ -864,10 +864,7 @@ void verify_public_runtime_surface ()
           std::unique_lock lock (event_mutex);
           return event_ready.wait_for (
             lock, 2s,
-            [&] {
-                return std::any_of (
-                  received.begin (), received.end (), predicate);
-            });
+            [&] { return !received.empty () && predicate (received.back ()); });
       };
     {
         std::unique_lock lock (event_mutex);

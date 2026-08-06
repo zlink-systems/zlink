@@ -1416,7 +1416,11 @@ void zlink::asio_ws_engine_t::error (error_reason_t reason_)
 
     if (_socket) {
         _socket->event_disconnected (_endpoint_uri_pair, disconnect_reason, routing_id_data,
-                                     routing_id_size);
+                                     routing_id_size,
+                                     _session ? _session->transport_lane ()
+                                              : transport_lane_application,
+                                     _session ? _session->transport_pair_id () : 0,
+                                     _session ? _session->transport_pair_generation () : 0);
     }
 
     if (_session) {

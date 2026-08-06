@@ -1236,6 +1236,65 @@ size_t count_extra_ready_events (void *monitor_)
     return extra;
 }
 
+//  A caller compiled with the pre-identity event layout supplies only the
+//  stable prefix.  The legacy entry point must not write the fields appended
+//  by the current header.
+void test_monitor_legacy_recv_does_not_overwrite_following_storage ()
+{
+    struct legacy_monitor_event_t
+    {
+        uint64_t event;
+        uint64_t value;
+        zlink_routing_id_t routing_id;
+        char local_addr[256];
+        char remote_addr[256];
+    };
+
+    struct legacy_probe_t
+    {
+        legacy_monitor_event_t event;
+        uint64_t canary;
+    };
+
+    static_assert (offsetof (zlink_monitor_event_t, connection_id)
+                     == offsetof (legacy_probe_t, canary),
+                   "legacy monitor prefix must remain ABI-compatible");
+
+    void *server = test_context_socket (ZLINK_SOCKET_PAIR);
+    void *client = test_context_socket (ZLINK_SOCKET_PAIR);
+    TEST_ASSERT_NOT_NULL (server);
+    TEST_ASSERT_NOT_NULL (client);
+    configure_pair_socket (server);
+    configure_pair_socket (client);
+
+    zlink_socket_monitor_open_options_t monitor_opts;
+    memset (&monitor_opts, 0, sizeof (monitor_opts));
+    monitor_opts.events = ZLINK_EVENT_CONNECTION_READY;
+    void *monitor = zlink_socket_monitor_open (server, &monitor_opts);
+    TEST_ASSERT_NOT_NULL (monitor);
+    configure_pair_socket (monitor);
+
+    char endpoint[MAX_SOCKET_STRING];
+    bind_loopback_ipv4 (server, endpoint, sizeof (endpoint));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (client, endpoint));
+
+    zlink_pollitem_t item = {monitor, 0, ZLINK_POLLIN, 0};
+    TEST_ASSERT_GREATER_THAN_INT (0, zlink_poll (&item, 1, 3000, NULL));
+    TEST_ASSERT_TRUE ((item.revents & ZLINK_POLLIN) != 0);
+
+    legacy_probe_t probe;
+    memset (&probe, 0, sizeof (probe));
+    probe.canary = UINT64_C (0x9e3779b97f4a7c15);
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_socket_monitor_recv (
+      monitor, reinterpret_cast<zlink_monitor_event_t *> (&probe.event),
+      static_cast<zlink_recv_flags_t> (ZLINK_DONTWAIT)));
+    TEST_ASSERT_EQUAL_UINT64 (UINT64_C (0x9e3779b97f4a7c15), probe.canary);
+
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_monitor_close (&monitor));
+    test_context_socket_close_zero_linger (client);
+    test_context_socket_close_zero_linger (server);
+}
+
 //  inproc has no engine handshake, so a paired transport reports its
 //  Application and Completion lane readiness from the socket itself. Both
 //  sockets must observe exactly one ready event per connection, whichever of
@@ -1791,6 +1850,7 @@ int main ()
     RUN_TEST (test_pubsub_delivery_ready_reaches_1000_subscribers);
     RUN_TEST (test_stream_ready_with_monitor_recv_and_socket_recv);
     RUN_TEST (test_stream_ready_with_monitor_recv_and_socket_callback);
+    RUN_TEST (test_monitor_legacy_recv_does_not_overwrite_following_storage);
     RUN_TEST (test_monitor_handler_attach_with_queued_events_and_self_close);
     return UNITY_END ();
 }

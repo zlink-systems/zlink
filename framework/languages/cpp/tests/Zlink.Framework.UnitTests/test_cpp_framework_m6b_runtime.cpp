@@ -779,6 +779,26 @@ void verify_global_identity_remote_create_and_generation_fence ()
             == original.object_generation + 1);
     assert (runtime.destroy_actor (original)
             == stateful::stateful_error_t::generation_stale);
+
+    // Application actors created from a globally reserved reference use the
+    // same local placement capacity as actors created through begin_create.
+    // Destroying that actor must release the capacity before the next
+    // incarnation is reserved.
+    const stateful::object_ref_t reserved_actor{
+      stateful::object_kind_t::actor, "reserved-actor", 1, 1, "mesh-a", "node-a"};
+    const auto reserved_create = runtime.begin_reserved_object (
+      reserved_actor, "player", {});
+    assert (reserved_create.status == stateful::create_status_t::reserved);
+    assert (runtime.commit_create (reserved_create.attempt)
+            == stateful::stateful_error_t::none);
+    assert (runtime.destroy_actor (reserved_actor)
+            == stateful::stateful_error_t::none);
+    const auto reserved_recreated = create_ready (
+      runtime,
+      {stateful::object_kind_t::actor, "reserved-actor", "player",
+       std::string ("mesh-a"), {}, false, false});
+    assert (reserved_recreated.object_generation
+            == reserved_actor.object_generation + 1);
 }
 
 void verify_membership_turns_and_independent_infrastructure ()

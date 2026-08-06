@@ -1,6 +1,6 @@
 {
   "name": "@zlink-systems/sample-gamequest-ts",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "private": true,
   "main": "dist/Client/main.js",
   "scripts": {

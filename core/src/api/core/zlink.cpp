@@ -222,9 +222,15 @@ zlink_close_result_t zlink_close (void *s_)
 zlink_config_result_t
 zlink_poller_add (void *poller_, void *socket_, void *user_data_, short events_)
 {
-    poller_handle_t *poller = as_poller_handle (poller_);
+    poller_api_guard_t guard (poller_);
+    poller_handle_t *poller = guard.get ();
     if (!poller)
         return ZLINK_CONFIG_INVALID_HANDLE;
+    std::lock_guard<std::mutex> operation_lock (poller->operation_sync);
+    if (poller->wait_active) {
+        errno = EBUSY;
+        return ZLINK_CONFIG_BUSY;
+    }
     const zlink::option_target_t target = zlink::resolve_option_target (socket_);
     if (target.kind != zlink::option_target_socket) {
         errno = EFAULT;
@@ -257,9 +263,15 @@ zlink_poller_add (void *poller_, void *socket_, void *user_data_, short events_)
 
 zlink_config_result_t zlink_poller_modify (void *poller_, void *socket_, short events_)
 {
-    poller_handle_t *poller = as_poller_handle (poller_);
+    poller_api_guard_t guard (poller_);
+    poller_handle_t *poller = guard.get ();
     if (!poller)
         return ZLINK_CONFIG_INVALID_HANDLE;
+    std::lock_guard<std::mutex> operation_lock (poller->operation_sync);
+    if (poller->wait_active) {
+        errno = EBUSY;
+        return ZLINK_CONFIG_BUSY;
+    }
     //  Completion registrations own the socket's completion processing, which
     //  is acquired when the registration is added. Modify has no matching
     //  ownership transfer, so the flag is rejected here and a caller changes
@@ -294,13 +306,27 @@ zlink_config_result_t zlink_poller_modify (void *poller_, void *socket_, short e
 
 zlink_config_result_t zlink_poller_remove (void *poller_, void *socket_)
 {
-    poller_handle_t *poller = as_poller_handle (poller_);
+    poller_api_guard_t guard (poller_);
+    poller_handle_t *poller = guard.get ();
     if (!poller)
         return ZLINK_CONFIG_INVALID_HANDLE;
-    const zlink::option_target_t target = zlink::resolve_option_target (socket_);
-    if (target.kind != zlink::option_target_socket) {
-        errno = EFAULT;
-        return ZLINK_CONFIG_INVALID_HANDLE;
+    std::lock_guard<std::mutex> operation_lock (poller->operation_sync);
+    if (poller->wait_active) {
+        errno = EBUSY;
+        return ZLINK_CONFIG_BUSY;
+    }
+    // A socket may have completed its public close while its poller
+    // registration still owns the lifetime pin. In that state the public
+    // handle registry no longer accepts the raw pointer, but removal is
+    // still valid because the poller registration table is the authority.
+    // Only use the raw pointer after finding the exact registered subject;
+    // arbitrary invalid pointers still go through normal handle validation.
+    if (poller_find_registration_index (poller, socket_, poller_subject_none) < 0) {
+        const zlink::option_target_t target = zlink::resolve_option_target (socket_);
+        if (target.kind != zlink::option_target_socket) {
+            errno = EFAULT;
+            return ZLINK_CONFIG_INVALID_HANDLE;
+        }
     }
     return zlink::config_result_internal::from_rc (
       poller_remove_all_registrations_for_subject (poller, socket_));

@@ -21,6 +21,7 @@
 #include <stop_token>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -480,6 +481,40 @@ class provider_location_repository_t final : public location_repository_t
     task_t<object_reserve_result_t> reserve (object_reserve_request_t request,
                                              std::stop_token cancellation = {}) override
     {
+        constexpr unsigned max_cas_retries = 3;
+        for (unsigned attempt = 0; ; ++attempt) {
+            auto result = reserve_once (request, cancellation).result ();
+            if (!result)
+                return task_t<object_reserve_result_t> (std::move (result));
+
+            const auto *conflict =
+              std::get_if<object_reserve_conflict_t> (&result.value ());
+            const bool authority_missing =
+              conflict
+              && std::holds_alternative<authority_missing_t> (
+                conflict->current);
+            if (!authority_missing || attempt >= max_cas_retries)
+                return task_t<object_reserve_result_t> (std::move (result));
+
+            // Re-read the target and owner before retrying. A valid target
+            // with a live owner indicates that the missing authority was a
+            // competing conditional write, not a placement candidate that
+            // should be discarded by the caller.
+            const auto target = read_target_descriptor (request.target);
+            if (!target
+                || !target_accepts (target->descriptor, request.key.kind,
+                                     request.intent.stable_type)
+                || !owner_is_live (request.target.owner))
+                return task_t<object_reserve_result_t> (std::move (result));
+            std::this_thread::yield ();
+        }
+    }
+
+  private:
+    task_t<object_reserve_result_t> reserve_once (
+      object_reserve_request_t request,
+      std::stop_token cancellation = {})
+    {
         if (cancellation.stop_requested ())
             return cancelled<object_reserve_result_t> ();
         if (request.creating_payload.size () > 1024u * 1024u
@@ -580,6 +615,7 @@ class provider_location_repository_t final : public location_repository_t
           object_reserve_result_t{object_reserved_t{std::move (fence), std::move (creating)}});
     }
 
+  public:
     task_t<object_complete_creation_result_t>
     complete_creation (object_complete_creation_request_t request,
                        std::stop_token cancellation = {}) override

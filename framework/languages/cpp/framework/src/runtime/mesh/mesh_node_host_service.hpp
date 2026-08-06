@@ -29,6 +29,8 @@ class route_handler_registry_t;
 namespace zlink::framework::runtime
 {
 
+class location_runtime_t;
+
 class mesh_node_host_service_t final : public hosted_service_t,
                                        public hosted_service_lifecycle_t
 {
@@ -105,6 +107,7 @@ class mesh_node_host_service_t final : public hosted_service_t,
     dispatch_options_t _dispatch_options;
     service_provider_t *_services = nullptr;
     std::shared_ptr<location_repository_t> _location_store;
+    location_runtime_t *_location_runtime = nullptr;
     std::optional<location_owner_token_t> _location_owner;
     std::vector<mesh_node_descriptor_key_t> _published_mesh_nodes;
     std::vector<mesh_node_descriptor_t> _published_mesh_descriptors;
@@ -120,6 +123,8 @@ class mesh_node_host_service_t final : public hosted_service_t,
     std::shared_ptr<listener_status_registry_t> _listener_statuses;
     std::vector<std::shared_ptr<detail::mesh_node_runtime_t>> _nodes;
     std::vector<std::thread> _threads;
+
+    std::optional<location_owner_token_t> current_location_owner () const;
 };
 
 } // namespace zlink::framework::runtime

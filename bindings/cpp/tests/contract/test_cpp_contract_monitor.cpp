@@ -44,6 +44,12 @@ static_assert (
 static_assert (
   std::is_same<decltype (zlink::monitor_status_t ().snd_bytes_in_flight), uint64_t>::value,
   "monitor in-flight bytes must be uint64_t");
+static_assert (
+  std::is_same<decltype (zlink::monitor_event_t ().value), std::uint64_t>::value,
+  "monitor event value must preserve the native uint64_t value");
+static_assert (
+  std::is_same<decltype (zlink::monitor_event_t ().connection_id), std::uint64_t>::value,
+  "monitor event must expose the physical connection id");
 
 template <typename T> class has_on_event_t
 {
@@ -227,6 +233,37 @@ void test_socket_monitor_open_recv_snapshot ()
     (void) snapshot.auto_hwm_deferred_rcvhwm_valid;
     (void) snapshot.snd_bytes_in_flight;
     (void) snapshot.rcv_bytes_in_flight;
+}
+
+void test_socket_monitor_exposes_connection_identity ()
+{
+    zlink::context_t ctx;
+    zlink::pair_socket_t server (ctx);
+    zlink::pair_socket_t client (ctx);
+    zlink::socket_monitor_t monitor = server.monitor_open ();
+
+    server.bind ("tcp://127.0.0.1:*");
+    const auto endpoint = server.options ().last_endpoint ();
+    client.connect (endpoint);
+
+    const auto deadline =
+      std::chrono::steady_clock::now () + std::chrono::seconds (2);
+    bool observed_ready = false;
+    while (std::chrono::steady_clock::now () < deadline) {
+        const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds> (
+          deadline - std::chrono::steady_clock::now ());
+        if (!zlink_cpp_contract::wait_for_monitor_readable (
+              monitor, static_cast<int> (remaining.count ())))
+            continue;
+        const auto event = monitor.recv (zlink::recv_flags_t::dontwait);
+        if (!event
+            || event->event != zlink::monitor_event::connection_ready)
+            continue;
+        assert (event->connection_id != 0);
+        observed_ready = true;
+        break;
+    }
+    assert (observed_ready);
 }
 
 void test_socket_monitor_ignore_event_and_poller_size ()
@@ -485,6 +522,9 @@ void test_socket_monitor_on_event_callback ()
     monitor.on_event ([&callback_state] (const zlink::monitor_event_t &event) {
         socket_monitor_callback (callback_state, event);
     });
+    // Registration must survive a move; Core userdata cannot point at the
+    // moved-from socket_monitor_t object.
+    zlink::socket_monitor_t moved_monitor = std::move (monitor);
 
     server.bind ("tcp://127.0.0.1:*");
     std::string endpoint;
@@ -503,7 +543,7 @@ void test_socket_monitor_on_event_callback ()
     const std::chrono::steady_clock::time_point monitor_status_deadline =
       std::chrono::steady_clock::now () + std::chrono::milliseconds (500);
     while (std::chrono::steady_clock::now () < monitor_status_deadline) {
-        const zlink::monitor_status_t snapshot = monitor.status ();
+        const zlink::monitor_status_t snapshot = moved_monitor.status ();
         if (snapshot.is_ready ()
             || (snapshot.state_flags & static_cast<uint32_t> (zlink::monitor_state::closed))
                  != 0u) {
@@ -520,6 +560,7 @@ void test_socket_monitor_on_event_callback ()
 int main ()
 {
     test_socket_monitor_open_recv_snapshot ();
+    test_socket_monitor_exposes_connection_identity ();
     test_socket_monitor_ignore_event_and_poller_size ();
     test_poller_wait_buffer_returns_slot ();
     test_socket_only_poller_modify_rebuilds_cached_items ();

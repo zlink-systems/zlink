@@ -1,6 +1,6 @@
 {
   "name": "@zlink-systems/sample-zoneworld",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "private": true,
   "scripts": {
     "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && node ../../node_modules/typescript/bin/tsc -p tsconfig.json && node ../../scripts/bundle-node-sample-clients.mjs . Client/main.ts Client/special.ts",

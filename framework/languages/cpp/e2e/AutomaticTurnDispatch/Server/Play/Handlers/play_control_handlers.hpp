@@ -14,7 +14,10 @@ inline zlink::framework::spot_create_result_t
 ensure_probe_spot (zlink::framework::spot_manager_t &spots,
                    zlink::framework::spot_id_t spot_id)
 {
-    auto created = spots.get_or_create (std::move (spot_id), probe_spot_name).submit ().result ();
+    auto created = spots.get_or_create (std::move (spot_id), probe_spot_name)
+                     .in_mesh (spot_channel)
+                     .submit ()
+                     .result ();
     if (!created) {
         throw zlink::framework::framework_exception_t (
           created.error_kind (),
@@ -70,14 +73,16 @@ class bind_await_actors_handler_t
     using dependency_types =
       zlink::framework::dependency_list_t<evidence_store_t,
                                           zlink::framework::spot_manager_t,
+                                          zlink::framework::actor_manager_t,
                                           zlink::framework::session_actor_manager_t>;
     using request_type = bind_await_actors_req_t;
     using reply_type = bind_await_actors_res_t;
 
     bind_await_actors_handler_t (evidence_store_t &evidence,
                                  zlink::framework::spot_manager_t &spots,
+                                 zlink::framework::actor_manager_t &actor_manager,
                                  zlink::framework::session_actor_manager_t &actors) :
-        _evidence (evidence), _spots (spots), _actors (actors)
+        _evidence (evidence), _spots (spots), _actor_manager (actor_manager), _actors (actors)
     {
     }
 
@@ -91,13 +96,31 @@ class bind_await_actors_handler_t
                        + "|actors=" + std::to_string (request.actor_ids.size ()));
         bind_await_actors_res_t reply{.spot_id = request.spot_id};
         for (const auto &actor_id : request.actor_ids) {
-            auto actor = _actors.get_or_create (actor_type, actor_id);
-            if (!actor) {
+            const auto created = _actor_manager
+              .get_or_create (zlink::framework::actor_id_t (actor_id), actor_type)
+              .in_mesh (spot_channel)
+              .timeout (std::chrono::milliseconds (15000))
+              .submit ()
+              .result ();
+            if (!created) {
                 throw zlink::framework::framework_exception_t (
-                  actor.error_kind (),
-                  actor.error () ? actor.error ()->what () : "actor get or create failed");
+                  created.error_kind (),
+                  created.error () ? created.error ()->what () : "actor get or create failed");
             }
-            auto bound = _actors.bind_or_get (actor.value ().ref ()).submit ().result ();
+            const auto actor_ref = std::visit (
+              [] (const auto &result) -> zlink::framework::actor_ref_t {
+                  using result_type = std::decay_t<decltype (result)>;
+                  if constexpr (std::is_same_v<result_type,
+                                               zlink::framework::actor_create_rejected_t>) {
+                      throw zlink::framework::framework_exception_t (
+                        zlink::framework::framework_error_kind_t::rejected,
+                        "actor creation was rejected");
+                  } else {
+                      return result.actor;
+                  }
+              },
+              created.value ());
+            auto bound = _actors.bind_or_get (actor_ref).submit ().result ();
             if (!bound) {
                 throw zlink::framework::framework_exception_t (
                   bound.error_kind (),
@@ -111,14 +134,14 @@ class bind_await_actors_handler_t
                                       .marker = "bind"})
               .timeout (std::chrono::milliseconds (3000))
               .defer ();
-            auto actor_ref = bound.value ().ref ();
+            const auto bound_ref = bound.value ().ref ();
             _evidence.add ("bind-actor|rid=" + _evidence.node_rid + "|spot="
-                           + request.spot_id + "|actor=" + actor_id + "|generation="
-                           + std::to_string (actor_ref.object_generation ()));
+                          + request.spot_id + "|actor=" + actor_id + "|generation="
+                           + std::to_string (bound_ref.object_generation ()));
             reply.actors.push_back (
               {.actor_id = actor_id,
-               .node_rid = std::string (actor_ref.node_rid ().value ()),
-               .generation = actor_ref.object_generation ()});
+               .node_rid = std::string (bound_ref.node_rid ().value ()),
+               .generation = bound_ref.object_generation ()});
         }
         return reply;
     }
@@ -126,6 +149,7 @@ class bind_await_actors_handler_t
   private:
     evidence_store_t &_evidence;
     zlink::framework::spot_manager_t &_spots;
+    zlink::framework::actor_manager_t &_actor_manager;
     zlink::framework::session_actor_manager_t &_actors;
 };
 
