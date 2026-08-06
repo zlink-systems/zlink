@@ -61,9 +61,10 @@ cleanup() {
       kill "${pid}" >/dev/null 2>&1 || true
     done
     local any_alive=1
-    # Spring's framework lifecycle allows up to 25 seconds for actor handoff and
-    # ownership cleanup. Keep the runner order-neutral and wait for that contract.
-    for _ in $(seq 1 "${ZLINK_SAMPLE_CLEANUP_WAIT_ATTEMPTS:-300}"); do
+    # Runtime drain uses the public 30-second deadline and may then finish its
+    # bounded owner/resource cleanup. Keep the runner order-neutral and allow
+    # enough time to observe that cleanup before using SIGKILL.
+    for _ in $(seq 1 "${ZLINK_SAMPLE_CLEANUP_WAIT_ATTEMPTS:-900}"); do
       any_alive=0
       for pid in "${zlink_sample_pids[@]}"; do
         if kill -0 "${pid}" >/dev/null 2>&1; then
@@ -119,6 +120,9 @@ cleanup() {
   fi
   if [[ "${status}" != "0" ]]; then
     return "${status}"
+  fi
+  if [[ "${cleanup_status}" != "0" ]]; then
+    exit "${cleanup_status}"
   fi
   return "${cleanup_status}"
 }

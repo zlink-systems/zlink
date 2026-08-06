@@ -38,11 +38,15 @@ It does not reuse an external Redis endpoint. The runner also supplies a unique
 Redis key prefix for each execution so parallel sample runs do not share
 location-store keys.
 
-Run the roles manually:
+The executable documented path is the sample runner. It creates the per-run
+endpoint and Redis configuration, starts the API and Play processes, runs the
+client, checks the stream and flow markers, and removes the resources it
+created:
 
 ```bash
-gradle :Server:installDist
-Server/build/install/Server/bin/tictactoe-play --config ./application.properties
-Server/build/install/Server/bin/Server --config ./application.properties
-gradle :Client:run
+./run_sample.sh
 ```
+
+The sample does not provide a checked-in `application.properties`; a manual
+role launch without the runner would not have the required endpoint and Redis
+settings.

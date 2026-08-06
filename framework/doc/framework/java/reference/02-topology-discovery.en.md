@@ -253,6 +253,12 @@ are Object Clients and neither has RouteMesh Channel Server membership, this con
 stays in the list but never becomes a ready peer. If either side has any Channel Server
 membership, ordinary peer admission/liveness rules apply even if the weight is `0`.
 
+The endpoint and optional expected RID supplied by the caller are connection intent. The application
+doesn't supply a lifecycle generation or security identity. When the runtime matches this endpoint to
+a Location Store descriptor to complete an object peer, it passes the descriptor's RID, positive
+lifecycle generation, and security identity as the internal handshake expected values. The caller
+therefore does not assemble this fence or call raw transport APIs.
+
 **When to use.** Use this to configure RouteMesh with a fixed peer list, without automatic
 discovery (a Location Store).
 

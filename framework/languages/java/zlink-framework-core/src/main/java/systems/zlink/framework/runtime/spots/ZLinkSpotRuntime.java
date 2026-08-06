@@ -1096,7 +1096,11 @@ public final class ZLinkSpotRuntime
                 && peer.endpoint().equals(target.endpoint()));
         if (configured
             && manualRouterPeerNodeRids.add(target.rid())) {
-            source.connectPeer(target.endpoint(), target.rid());
+            source.connectPeer(
+                target.endpoint(),
+                target.rid(),
+                target.lifecycleGeneration(),
+                target.securityIdentity());
         }
     }
 

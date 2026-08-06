@@ -47,6 +47,22 @@ title: "6. target 선택과 route cache"
 | owner의 수락 기한 | 이 시간이 지나면 그 owner는 더 이상 수락하지 않는다 |
 | [Message Follow 기간](../spec/01-glossary.ko.md#message-follow-duration)보다 **최소 5초 짧게** | 우회 경로가 닫히기 전에 캐시가 먼저 만료되어야 한다 ([`18:143-145`](../spec/18-object-routing.ko.md), [`21:693-695`](../spec/21-location-runtime.ko.md)) |
 
+## 1.1 수동 object peer에서도 admission fence를 보존한다
+
+Location Store가 반환한 object peer descriptor에는 endpoint, RID, lifecycle generation과
+security identity가 함께 있다. 수동 endpoint는 연결 의도만 제공하지만, runtime이 그 endpoint를
+descriptor와 매칭해 object peer를 보강하는 순간에는 이 네 값 중 handshake에 필요한 값을
+transport로 모두 전달해야 한다. 정식 계약은 [RouteMesh topology](../spec/07-channel-topology.ko.md)의
+peer handshake가 소유한다.
+
+현재 JVM 경로에서 `ZLinkFrameworkRuntime.connectManualObjectPeers`와
+`ZLinkSpotRuntime.ensureManualObjectPeer`가 descriptor를 찾은 뒤
+`connectPeer(endpoint, rid, lifecycleGeneration, securityIdentity)`를 호출한다.
+`ZLinkJavaRawMeshNode`는 이 값을 `PeerIntent`에 보관해 admission에서 비교한다.
+이전의 endpoint·RID 두 인자 경로는 lifecycle generation을 `0`으로, security identity를
+RID 문자열로 대체하므로 descriptor 기반 연결에 사용할 수 없다. 호출자가 generation이나
+security identity를 직접 설정하는 우회는 허용하지 않는다.
+
 ## 2. 이동과 캐시가 만나는 지점 — 성능 절벽
 
 객체가 다른 node로 옮겨 가면 캐시에 남은 경로는 옛 owner를 가리킨다. 이때 두 가지가

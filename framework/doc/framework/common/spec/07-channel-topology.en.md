@@ -526,6 +526,14 @@ reconnect for the same endpoint and configuration generation. If endpoint,
 expected RID, or configuration generation changes, it can be re-checked
 once with a new intent.
 
+An endpoint remains only a connection intent when a manual endpoint is used with a Location Store
+descriptor for an object peer. When the Framework matches the endpoint to a descriptor, it puts the
+descriptor's RID, positive lifecycle generation, and security identity into the handshake's expected
+values together. A fallback that passes only the endpoint and RID, using generation `0` or treating
+the RID as the security identity, is not used for a descriptor-backed connection. If no descriptor is
+available, the manual connection follows only the registered endpoint and the handshake result; it
+doesn't claim descriptor-backed placement.
+
 Even for Automatic, if a duplicate candidate arises due to connection
 contention or a stale discovery snapshot, the same admission rule applies.
 This safeguard doesn't substitute for automatic-initiator selection and

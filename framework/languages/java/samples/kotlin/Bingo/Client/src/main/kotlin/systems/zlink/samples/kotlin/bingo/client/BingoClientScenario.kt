@@ -64,8 +64,10 @@ class BingoClientScenario {
 
         val client1SawClient2Join = client1.waitFor<PlayerJoinedNotify>()
             .where { message -> message.payload().actorId == "player-2" }
-            .let { wait -> async { wait.await() } }
-        val client1Started = async { client1.waitFor<BingoGameStartedNotify>().await() }
+            .let { wait -> async(start = CoroutineStart.UNDISPATCHED) { wait.await() } }
+        val client1Started = async(start = CoroutineStart.UNDISPATCHED) {
+            client1.waitFor<BingoGameStartedNotify>().await()
+        }
 
         val client2Auth = client2.request(AuthenticateReq("player-2")).awaitReply<AuthenticateRes>()
         ensure(client2Auth.actorId == "player-2")
@@ -99,19 +101,23 @@ class BingoClientScenario {
 
         val rewardAnnounced = observer.waitFor<BingoRewardAnnouncedNotify>()
             .where { message -> message.payload().roomId == client1Match.roomId }
-            .let { wait -> async { wait.await() } }
-        val client1Ended = async { client1.waitFor<BingoGameEndedNotify>().await() }
-        val client2Ended = async { client2.waitFor<BingoGameEndedNotify>().await() }
+            .let { wait -> async(start = CoroutineStart.UNDISPATCHED) { wait.await() } }
+        val client1Ended = async(start = CoroutineStart.UNDISPATCHED) {
+            client1.waitFor<BingoGameEndedNotify>().await()
+        }
+        val client2Ended = async(start = CoroutineStart.UNDISPATCHED) {
+            client2.waitFor<BingoGameEndedNotify>().await()
+        }
 
         val client1Draws = (1..15).map { expectedDrawSeq ->
-            async {
+            async(start = CoroutineStart.UNDISPATCHED) {
                 client1.waitFor<BingoNumberDrawnNotify>()
                     .where { message -> message.payload().drawSeq == expectedDrawSeq }
                     .await()
             }
         }
         val client2Draws = (1..15).map { expectedDrawSeq ->
-            async {
+            async(start = CoroutineStart.UNDISPATCHED) {
                 client2.waitFor<BingoNumberDrawnNotify>()
                     .where { message -> message.payload().drawSeq == expectedDrawSeq }
                     .await()

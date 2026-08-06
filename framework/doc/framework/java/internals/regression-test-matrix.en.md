@@ -45,6 +45,9 @@ implemented twice.
   phase write.
 - A `missing` relocation payload and an idempotent delete are treated as a closed result.
 - A 24-hour retention orphan is not mistaken for an active authority.
+- A manual object peer enriched from a Location Store descriptor carries the endpoint, RID, lifecycle
+  generation, and security identity as one admission fence, and does not become ready through a
+  generation-`0` or RID-based security-identity fallback.
 
 ## 4. Transport Liveness
 

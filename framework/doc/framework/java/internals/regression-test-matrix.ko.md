@@ -32,6 +32,9 @@ Java와 Kotlin은 JVM service runtime 하나를 검증한다. Java public ABI와
 - Stale owner, coordinator와 lifecycle generation은 message, reply, timer와 phase write를 통과하지 못한다.
 - Relocation payload `missing`과 idempotent delete가 닫힌 결과로 처리된다.
 - 24시간 retention orphan이 active authority로 오인되지 않는다.
+- Location Store descriptor로 보강한 manual object peer는 endpoint, RID, lifecycle generation과
+  security identity를 같은 admission fence로 전달하며, generation `0` 또는 RID 기반 security
+  identity fallback으로 ready 상태가 되지 않는다.
 
 ## 4. Transport liveness
 

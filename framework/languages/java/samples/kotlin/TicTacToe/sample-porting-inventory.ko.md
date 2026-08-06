@@ -73,9 +73,10 @@
 
 ## 검증 기록
 
-- 2026-07-07 현재 checkout에서 `nice -n 10 timeout 600s ./run_sample.sh` 통과.
-- runner 출력에서 `PASS TicTacToe.Kotlin`을 확인했다.
-- runner는 Gradle 호출에 `--no-parallel --max-workers=1`을 사용한다.
-- 증거 파일은 `logs/flow-api-50479.log`, `logs/flow-play-node-1.log`, `logs/flow-play-node-2.log`이다.
-- flow log에서 `PlayerWinMilestoneMsg` pub/sub fan-out과 양쪽 stream의 `LeaveGameReq` dispatch를 확인했다.
-- `rg -n "HANDLER_MISSING|ERROR" framework/languages/java/samples/kotlin/TicTacToe/logs -g '*.log'`는 no-hit이다.
+- Java aggregate 완료 후 `cd framework/languages/java/samples && ZLINK_SAMPLE_LANGUAGES=kotlin timeout 1800s ./run_samples.sh`를 실행했다.
+- runner 출력에서 `PASS TicTacToe.Kotlin`을 확인했고, Bingo, DeliveryDispatch, GameQuest,
+  ShoppingMall, SupportChat을 포함한 Kotlin 6개 실제 process self-check가 모두 완료됐다.
+- Kotlin `Bingo` 단독 runner도 수정 후 두 번 반복해 각각 exit `0`으로 완료했다. event 대기 등록이
+  event 도착보다 늦어지지 않도록 사전 등록 wait를 `CoroutineStart.UNDISPATCHED`로 시작한다.
+- runner는 각 실행의 임시 role log에서 `message flow`와 observer/milestone marker를 확인한
+  뒤 자신이 만든 process와 Redis를 정리한다.

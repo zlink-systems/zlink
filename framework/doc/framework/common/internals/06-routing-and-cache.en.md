@@ -57,6 +57,22 @@ The cache lifetime never exceeds the shortest of three values.
 | The owner's acceptance deadline | After this time, that owner no longer accepts |
 | **At least 5 seconds shorter** than the [Message Follow duration](../spec/01-glossary.en.md#message-follow-duration) | The cache must expire before the detour path closes ([`18:143-145`](../spec/18-object-routing.en.md), [`21:693-695`](../spec/21-location-runtime.en.md)) |
 
+## 1.1 Preserve The Admission Fence For Manual Object Peers
+
+A Location Store object-peer descriptor carries the endpoint, RID, lifecycle generation, and
+security identity together. A manual endpoint supplies only connection intent, but when the runtime
+matches that endpoint to a descriptor to complete an object peer, it must pass all handshake values
+provided by the descriptor to the transport. The formal contract is owned by the peer handshake in
+[RouteMesh topology](../spec/07-channel-topology.en.md).
+
+In the current JVM path, `ZLinkFrameworkRuntime.connectManualObjectPeers` and
+`ZLinkSpotRuntime.ensureManualObjectPeer` find the descriptor and call
+`connectPeer(endpoint, rid, lifecycleGeneration, securityIdentity)`.
+`ZLinkJavaRawMeshNode` stores those values in `PeerIntent` and compares them during admission.
+The former two-argument endpoint/RID path substitutes generation `0` and the RID string for the
+security identity, so it cannot be used for a descriptor-backed connection. The caller is not
+allowed to set the generation or security identity as a workaround.
+
 ## 2. Where A Move Meets The Cache — A Performance Cliff
 
 When an object moves to a different node, the route left in the cache

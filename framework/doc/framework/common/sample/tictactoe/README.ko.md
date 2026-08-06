@@ -29,6 +29,11 @@ LeaveGameMsg를 보내는 시점까지를 범위로 한다. 다음 기능은 제
 수동 endpoint는 object placement를 정하는 값이 아니다. API가 특정 Play process나 NodeRid를
 선택하지 않고, Framework가 Location Store에서 RoomId current owner를 resolve한다.
 
+수동 endpoint는 연결 의도만 제공한다. Framework가 endpoint를 Location Store descriptor와
+매칭해 object peer를 보강할 때는 descriptor의 RID, lifecycle generation과 security identity를
+handshake expected 값으로 함께 전달한다. endpoint와 RID만 전달해 generation `0`을 사용하거나
+RID를 security identity처럼 사용하는 경로는 허용하지 않는다.
+
 ## 2. 요구사항
 
 ### 2.1 기능 요구사항

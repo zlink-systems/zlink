@@ -27,10 +27,10 @@ Content the spec already decided isn't repeated — only a link is put.
 
 The spot where the current implementation deviates from this decision,
 and an item not yet verified, is managed separately in the
-repository's work document, which includes an implementation gap
-list. That list isn't the canonical document that replaces this
-document's design — it's a temporary document recording each
-runtime's confirmation status and the next verification condition.
+[implementation gap record](../spec/30-implementation-gap.en.md). That
+record isn't the canonical document that replaces this document's design;
+it is a supporting document recording each runtime's confirmation status
+and the next verification condition.
 
 ## Component And Responsible Chapter
 

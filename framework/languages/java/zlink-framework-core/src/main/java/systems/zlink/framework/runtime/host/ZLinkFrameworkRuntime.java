@@ -520,7 +520,10 @@ public final class ZLinkFrameworkRuntime
                                 source.status().routingId()))
                             .findFirst()
                             .ifPresent(target -> source.connectPeer(
-                                target.endpoint(), target.rid()));
+                                target.endpoint(),
+                                target.rid(),
+                                target.lifecycleGeneration(),
+                                target.securityIdentity()));
                     }
                 }).toCompletableFuture());
         }

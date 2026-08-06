@@ -46,6 +46,12 @@ TicTacToe is the only sample that configures MeshNode peers manually. Every
 other sample uses the Redis location store to resolve Spot and Actor locations
 and establish MeshNode peers.
 
+For TicTacToe, a manual endpoint is only connection intent. When the runtime
+matches that endpoint to a Redis Location Store descriptor for an object peer,
+it carries the descriptor's RID, lifecycle generation, and security identity
+through the admission handshake. The sample does not configure those values
+or call raw transport APIs.
+
 ## MeshNode And Channel Names
 
 Each physical mesh has one MeshNode per process. A ChannelName is logical
@@ -92,7 +98,10 @@ Pass language and sample paths to run a subset in the given order.
 
 Each sample runner starts role-specific Spring processes, waits for readiness,
 runs the probe or client scenario, and removes the processes and Redis
-container it created. Application role code starts only its own role.
+container it created. Application role code starts only its own role. After the
+probe completes, the runner allows up to 90 seconds to observe the runtime's
+30-second drain deadline and its bounded owner/resource cleanup before using
+SIGKILL.
 
 Framework hosts bind endpoint, Redis, routing ID, timeout, and logging values
 from role-specific Spring configuration files. Application code does not read

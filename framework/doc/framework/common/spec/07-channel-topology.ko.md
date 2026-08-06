@@ -479,6 +479,13 @@ Framework는 handshake에서 양쪽 Object role이 모두 `Client`임을 확인�
 Endpoint, expected RID 또는 configuration generation이 바뀌면 새 intent로 한 번
 다시 확인할 수 있다.
 
+수동 endpoint를 Location Store descriptor와 함께 사용하는 object peer 경로에서도 endpoint는
+연결 의도만 제공한다. Framework가 endpoint와 일치하는 descriptor를 찾으면 handshake의
+expected 값에 descriptor의 RID, 양수 lifecycle generation과 security identity를 함께 넣는다.
+endpoint와 RID만 전달해 generation `0`을 사용하거나 RID를 security identity처럼 사용하는
+fallback은 descriptor 기반 연결에 사용하지 않는다. descriptor를 찾지 못한 수동 연결은
+descriptor 기반 placement를 주장하지 않고 등록된 endpoint와 handshake 결과만 따른다.
+
 Automatic에서도 연결 경합이나 오래된 discovery snapshot 때문에 중복 후보가 생기면
 같은 admission 규칙을 적용한다. 이 안전장치는 automatic initiator 선택을 대신하지
 않으며 application이 관찰하는 메시징 의미를 바꾸지 않는다.

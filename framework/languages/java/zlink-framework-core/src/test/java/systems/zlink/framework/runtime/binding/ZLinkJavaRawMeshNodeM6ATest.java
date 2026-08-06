@@ -2,6 +2,7 @@ package systems.zlink.framework.runtime.binding;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -344,6 +345,48 @@ final class ZLinkJavaRawMeshNodeM6ATest {
             assertEquals(
                 ZLinkOneWayCalls.TARGET_NOT_FOUND,
                 local.classifyChannelTarget("game.api").orElseThrow());
+        }
+    }
+
+    @Test
+    void descriptorBackedPeerIntentRequiresLifecycleAndSecurityFence()
+        throws Exception {
+        RoutingId localRid = RoutingId.from("jvm-descriptor-fence-local");
+        RoutingId peerRid = RoutingId.from("jvm-descriptor-fence-peer");
+        String localEndpoint = "inproc://jvm-descriptor-fence-local-"
+            + System.nanoTime();
+        String peerEndpoint = "inproc://jvm-descriptor-fence-peer-"
+            + System.nanoTime();
+        try (var context = Zlink.createContext();
+             var local = new ZLinkJavaRawMeshNode(context, "mesh");
+             var peer = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            local.setRoutingId(localRid);
+            local.setBind(localEndpoint);
+            peer.setRoutingId(peerRid);
+            peer.setBind(peerEndpoint);
+            local.start();
+            peer.start();
+
+            long wrongIntent = local.connectPeer(
+                peerEndpoint,
+                peerRid,
+                peer.status().lifecycleGeneration() + 1,
+                "wrong-security-identity");
+            Thread.sleep(100);
+            assertFalse(local.peers().stream().anyMatch(peerEntry ->
+                peerEntry.state() == MeshPeerState.ADMITTED));
+            try {
+                local.removePeerConnection(wrongIntent);
+            } catch (RuntimeException alreadyRejected) {
+                // Admission rejection may close the transport before cleanup.
+            }
+
+            local.connectPeer(
+                peerEndpoint,
+                peerRid,
+                peer.status().lifecycleGeneration(),
+                peerRid.toString());
+            awaitState(local, MeshPeerState.ADMITTED);
         }
     }
 

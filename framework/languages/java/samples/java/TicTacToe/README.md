@@ -33,11 +33,15 @@ On Windows:
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\run_sample.ps1
 ```
 
-Run the roles manually:
+The executable documented path is the sample runner. It creates the per-run
+endpoint and Redis configuration, starts the API and Play processes, runs the
+client, checks the stream and flow markers, and removes the resources it
+created:
 
 ```bash
-gradle :Server:installDist
-Server/build/install/Server/bin/tictactoe-play --config ./application.properties
-Server/build/install/Server/bin/Server --config ./application.properties
-gradle :Client:run
+./run_sample.sh
 ```
+
+The sample does not provide a checked-in `application.properties`; a manual
+role launch without the runner would not have the required endpoint and Redis
+settings.

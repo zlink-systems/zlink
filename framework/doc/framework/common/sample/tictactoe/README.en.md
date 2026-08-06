@@ -31,6 +31,11 @@ The manual endpoint isn't a value that decides object placement. The API doesn't
 Play process or NodeRid — the Framework resolves the RoomId's current owner from the Location
 Store.
 
+The manual endpoint supplies only connection intent. When the Framework matches that endpoint to a
+Location Store descriptor to complete an object peer, it carries the descriptor's RID, lifecycle
+generation, and security identity into the handshake's expected values. A path that passes only the
+endpoint and RID, using generation `0` or treating the RID as the security identity, is not allowed.
+
 ## 2. Requirements
 
 ### 2.1 Functional Requirements

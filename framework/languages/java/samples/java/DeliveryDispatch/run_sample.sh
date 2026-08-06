@@ -88,7 +88,9 @@ deliverydispatch_cleanup() {
     kill "${pids[$i]}" >/dev/null 2>&1 || true
   done
 
-  for _ in $(seq 1 300); do
+  # Runtime drain uses the public 30-second deadline and may then finish its
+  # bounded owner/resource cleanup before the process exits.
+  for _ in $(seq 1 900); do
     local running=0
     for pid in "${pids[@]}"; do
       local state

@@ -242,6 +242,12 @@ RouteMesh Channel Server membership이 없으면 이 연결 intent는 목록에 
 않는다. 어느 한쪽에라도 Channel Server membership이 있으면 weight가 `0`이어도 일반 peer
 admission·liveness 규칙을 적용한다.
 
+호출자가 전달하는 endpoint와 선택적 expected RID는 연결 의도다. Application은 lifecycle
+generation이나 security identity를 전달하지 않는다. Runtime이 이 endpoint를 Location Store
+descriptor와 매칭해 object peer를 보강하면 descriptor의 RID, 양수 lifecycle generation과
+security identity를 내부 handshake expected 값으로 전달한다. 따라서 caller가 이 fence를
+직접 조립하거나 raw transport를 호출할 필요가 없다.
+
 **선택 기준.** Automatic discovery(Location Store)를 쓰지 않고 고정된 peer 목록으로 RouteMesh를
 구성할 때 쓴다.
 
