@@ -38,7 +38,7 @@
 | RL-F1 | 미구현 | Preflight·admission seal capacity 경쟁 |
 | RL-F2 | 미구현 | Actor owner ABA fence |
 | RL-F3 | 미구현 | 언어 간 terminal failure 해석 |
-| RL-F4 | 미구현 | ClientServer topology·direction command 격리 |
+| RL-F4 | 구현 | Server-only process의 ClientServer outbound 호출이 `NotFound`로 끝나고 handler evidence가 변하지 않는지 확인한 뒤, 별도 Client role process의 정상 호출이 선택된 provider에서 한 번 처리되는지 확인했다(`logs/20260806-172727-3192643`). 구현 세부는 `framework/doc/framework/dotnet/internals/resilience-f4-client-server-role-e2e.ko.md`에 기록했다. |
 | RL-F5 | 미구현 | Activated seal과 Completed 공개 경계 |
 | RL-F6 | 미구현 | Admitted descriptor update fence |
 | RL-F7 | 미구현 | Relocated request reply ACK barrier |

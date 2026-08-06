@@ -24,7 +24,7 @@ if [[ "$SCENARIO" == "all" ]]; then
     RL-A1 RL-A2 RL-A3 RL-A4 RL-A5
     RL-B1 RL-B2 RL-B3 RL-B4 RL-B5 RL-B6
     RL-C1 RL-C2 RL-C3 RL-C4
-    RL-D1 RL-D2 RL-D3 RL-D4 RL-D5 RL-E1 RL-E2 RL-E3 RL-E4 RL-E5
+    RL-D1 RL-D2 RL-D3 RL-D4 RL-D5 RL-E1 RL-E2 RL-E3 RL-E4 RL-E5 RL-F4
   )
   for index in "${!scenarios[@]}"; do
     "$0" "${scenarios[$index]}"
@@ -369,7 +369,7 @@ zlink_redis_start_scoped_assign \
 zlink_redis_wait_ready "$REDIS_CONTAINER" "$REDIS_READINESS_TIMEOUT_SECONDS"
 REDIS_KEY_PREFIX="resilience-e2e:$$:"
 
-if [[ "$SCENARIO" == "RL-E2" || "$SCENARIO" == "RL-E5" ]]; then
+if [[ "$SCENARIO" == "RL-E2" || "$SCENARIO" == "RL-E5" || "$SCENARIO" == "RL-F4" ]]; then
   RUN_SCENARIO="$SCENARIO"
   run_rl_e2
   exit 0

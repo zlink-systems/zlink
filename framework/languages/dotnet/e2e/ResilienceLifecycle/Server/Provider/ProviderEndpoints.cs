@@ -3,6 +3,7 @@ using Microsoft.Extensions.Hosting;
 using ResilienceLifecycle.Shared;
 using Zlink.Framework.Contracts.Channels;
 using Zlink.Framework.Contracts.Configuration;
+using Zlink.Framework.Contracts.Errors;
 
 namespace ResilienceLifecycle.Server.Provider;
 
@@ -37,6 +38,24 @@ internal static class ProviderEndpoints
         {
             lifetime.StopApplication();
             return Results.Ok(new { status = "stopping" });
+        });
+        app.MapPost("/profile/clientserver/request", async (
+            ProfileReq request,
+            [FromServices] IZLinkRouteClient channel) =>
+        {
+            try
+            {
+                var reply = await channel.RequestToChannel(
+                        ResilienceLifecycleNames.ClientServerChannel,
+                        request)
+                    .Timeout(TimeSpan.FromSeconds(5))
+                    .Async<ProfileRes>();
+                return Results.Ok(new ServerOnlyRequestRes(true, reply, null));
+            }
+            catch (ZLinkFrameworkException error)
+            {
+                return Results.Ok(new ServerOnlyRequestRes(false, null, error.Kind.ToString()));
+            }
         });
         app.MapPost("/admin/fault/{mode}", (
             string mode,
