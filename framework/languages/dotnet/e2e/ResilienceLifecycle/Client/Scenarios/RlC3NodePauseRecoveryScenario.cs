@@ -18,7 +18,7 @@ internal static class RlC3NodePauseRecoveryScenario
         var oldRows = (await registry.Post("/topology/wait")
             .Body(new TopologyWaitReq("api-b", "Ready", 1))
             .Async<TopologyEntryRes[]>()).Body;
-        var oldGeneration = oldRows.Single().Generation;
+        var oldRoutingId = oldRows.Single().RoutingId;
 
         await processes.StopProviderBWithSigtermAsync();
         await registry.Post("/topology/wait")
@@ -41,8 +41,12 @@ internal static class RlC3NodePauseRecoveryScenario
             .Body(new TopologyWaitReq("api-b", "Ready", 1))
             .Async<TopologyEntryRes[]>()).Body;
         ZlinkStreamAssert.Ensure(
-            recoveredRows.Length == 1 && recoveredRows[0].Generation != oldGeneration,
-            "RL-C3 did not converge to exactly one new owner generation.");
+            recoveredRows.Length == 1
+                && recoveredRows[0].Endpoint == restarted.Endpoint
+                && !string.Equals(recoveredRows[0].RoutingId, oldRoutingId, StringComparison.Ordinal),
+            $"RL-C3 did not converge to the replacement RID "
+            + $"(old={oldRoutingId}, current={recoveredRows[0].RoutingId}, "
+            + $"endpoint={recoveredRows[0].Endpoint}).");
         await consumer.Post("/connections/wait")
             .Body(new ConnectionWaitReq(
                 ["kind=ConnectionReady", $"remote={restarted.Endpoint}"], connectionCount))

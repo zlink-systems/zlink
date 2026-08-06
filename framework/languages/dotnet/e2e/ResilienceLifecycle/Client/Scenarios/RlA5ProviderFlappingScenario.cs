@@ -15,9 +15,9 @@ internal static class RlA5ProviderFlappingScenario
         ZLinkHttpClient providerA,
         ZLinkHttpClient providerB)
     {
-        var previousGeneration = (await registry.Post("/topology/wait")
+        var previousRoutingId = (await registry.Post("/topology/wait")
             .Body(new TopologyWaitReq("api-b", "Ready", 1))
-            .Async<TopologyEntryRes[]>()).Body.Single().Generation;
+            .Async<TopologyEntryRes[]>()).Body.Single().RoutingId;
 
         for (var cycle = 0; cycle < 5; cycle++)
         {
@@ -69,9 +69,13 @@ internal static class RlA5ProviderFlappingScenario
                 .Body(new TopologyWaitReq("api-b", "Ready", 1))
                 .Async<TopologyEntryRes[]>()).Body;
             ZlinkStreamAssert.Ensure(
-                rows.Length == 1 && rows[0].Generation != previousGeneration,
-                "RL-A5 did not converge to exactly one new api-b owner generation.");
-            previousGeneration = rows[0].Generation;
+                rows.Length == 1 && rows[0].Endpoint == restarted.Endpoint
+                    && !string.Equals(rows[0].RoutingId, previousRoutingId, StringComparison.Ordinal),
+                $"RL-A5 did not converge to exactly the current api-b endpoint "
+                + $"(rows={rows.Length}, previous={previousRoutingId}, "
+                + $"current={string.Join(',', rows.Select(row => row.Endpoint))}, "
+                + $"expected={restarted.Endpoint}, currentRid={rows[0].RoutingId}).");
+            previousRoutingId = rows[0].RoutingId;
             await consumer.Post("/connections/wait")
                 .Body(new ConnectionWaitReq(
                     ["kind=ConnectionReady", $"remote={restarted.Endpoint}"], connectionCount))

@@ -20,7 +20,6 @@ internal static class RlA2ProviderEndpointRemapScenario
         var oldRows = (await registry.Post("/topology/wait")
             .Body(new TopologyWaitReq("api-b", "Ready", 1))
             .Async<TopologyEntryRes[]>()).Body;
-        var oldGeneration = oldRows.Single().Generation;
         var oldRoutingId = oldRows.Single().RoutingId;
 
         var marker = $"rl-a2-inflight-{Guid.NewGuid():N}";
@@ -56,8 +55,7 @@ internal static class RlA2ProviderEndpointRemapScenario
             && !string.Equals(replacementRow.RoutingId, oldRoutingId, StringComparison.Ordinal),
             $"RL-A2 replacement row mismatch: endpoint={replacementRow.Endpoint}, "
             + $"expectedEndpoint={replacement.Endpoint}, routingId={replacementRow.RoutingId}, "
-            + $"oldRoutingId={oldRoutingId}, oldObservation={oldGeneration}, "
-            + $"newObservation={replacementRow.Generation}.");
+            + $"oldRoutingId={oldRoutingId}.");
         await consumer.Post("/connections/wait")
             .Body(new ConnectionWaitReq(
                 ["kind=ConnectionReady", $"remote={replacement.Endpoint}"], replacementConnectionCount))

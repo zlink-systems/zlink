@@ -305,7 +305,7 @@ internal sealed record ProviderStartResult(string Rid, string Status, string Url
 
 internal sealed class ManagedProcess(Process process, string healthUrl)
 {
-    private static readonly TimeSpan ReadinessTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan ReadinessTimeout = TimeSpan.FromSeconds(3);
     private static readonly TimeSpan ShutdownTimeout = TimeSpan.FromSeconds(45);
     private static readonly TimeSpan ReadinessPollInterval = TimeSpan.FromMilliseconds(100);
     private bool _disposed;

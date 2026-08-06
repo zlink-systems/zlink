@@ -135,7 +135,6 @@ internal static class ConsumerHostFactory
                             peer.Endpoint,
                             peer.State.ToString(),
                             0,
-                            peer.UpdatedAt.UtcTicks,
                             peer.Draining))
                         .ToArray());
 
@@ -271,7 +270,6 @@ internal sealed record TopologyEntryRes(
     string Endpoint,
     string State,
     uint Weight,
-    long Generation,
     bool Draining);
 
 internal sealed class ConnectionEvidence

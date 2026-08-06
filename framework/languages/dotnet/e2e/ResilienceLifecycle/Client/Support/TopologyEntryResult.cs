@@ -5,5 +5,4 @@ internal sealed record TopologyEntryRes(
     string Endpoint,
     string State,
     uint Weight,
-    long Generation,
     bool Draining);

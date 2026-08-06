@@ -19,7 +19,7 @@ internal sealed class StormClientProcessFleet : IAsyncDisposable
 {
     private const int ClientCount = 100;
     private const int StartupBatchSize = 4;
-    private const int StartupAttempts = 3;
+    private const int StartupAttempts = 8;
     // Worker processes are terminated after scenario assertions; batching keeps
     // teardown bounded without entering native graceful shutdown concurrently.
     private const int ShutdownBatchSize = 8;
@@ -48,7 +48,7 @@ internal sealed class StormClientProcessFleet : IAsyncDisposable
                      index < Math.Min(firstIndex + StartupBatchSize, ClientCount);
                      index++)
                 {
-                    startTasks.Add(StartWorkerWithRetryAsync(
+                    startTasks.Add(StartWorkerAsync(
                         assemblyPath, options, index, cancellationToken));
                 }
 
@@ -66,7 +66,7 @@ internal sealed class StormClientProcessFleet : IAsyncDisposable
         }
     }
 
-    private static async Task<StormProcess> StartWorkerWithRetryAsync(
+    private static async Task<StormProcess> StartWorkerAsync(
         string assemblyPath,
         ClientOptions options,
         int index,
@@ -85,14 +85,35 @@ internal sealed class StormClientProcessFleet : IAsyncDisposable
                 await worker.WaitStartedAsync(cancellationToken);
                 return worker;
             }
-            catch when (attempt < StartupAttempts)
+            catch (Exception error) when (
+                attempt < StartupAttempts
+                && IsTransientStartupFailure(error))
             {
                 await worker.DisposeAsync();
-                await Task.Delay(TimeSpan.FromMilliseconds(250 * attempt), cancellationToken);
+                await Task.Delay(
+                    TimeSpan.FromMilliseconds(Math.Min(2_000, 250 * attempt)),
+                    cancellationToken);
             }
         }
 
         throw new InvalidOperationException($"Storm client {index} did not start.");
+    }
+
+    private static bool IsTransientStartupFailure(Exception error)
+    {
+        if (error is AggregateException aggregate)
+            return aggregate.Flatten().InnerExceptions.Any(IsTransientStartupFailure);
+
+        if (error.Message.Contains(
+                "could not enter Serving state",
+                StringComparison.OrdinalIgnoreCase)
+            || error.Message.Contains(
+                "claimed MeshNode descriptor",
+                StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        return error.InnerException is not null
+               && IsTransientStartupFailure(error.InnerException);
     }
 
     public async Task<ProfileRes[]> RequestAllAsync(
