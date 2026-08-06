@@ -24,7 +24,7 @@ if [[ "$SCENARIO" == "all" ]]; then
     RL-A1 RL-A2 RL-A3 RL-A4 RL-A5
     RL-B1 RL-B2 RL-B3 RL-B4 RL-B5 RL-B6
     RL-C1 RL-C2 RL-C3 RL-C4
-    RL-D1 RL-D2 RL-D3 RL-D4 RL-D5 RL-E1 RL-E2 RL-E3 RL-E4
+    RL-D1 RL-D2 RL-D3 RL-D4 RL-D5 RL-E1 RL-E2 RL-E3 RL-E4 RL-E5
   )
   for index in "${!scenarios[@]}"; do
     "$0" "${scenarios[$index]}"
@@ -247,6 +247,7 @@ run_rl_e2() {
     --client-server-enabled true --log-dir "$LOG_DIR" \
     --route-endpoint "tcp://127.0.0.2:$CONSUMER_ROUTE_PORT" \
     --route-bind-host 127.0.0.2 --route-advertise-host 127.0.0.1
+  CONSUMER_PID="${pids[$((${#pids[@]} - 1))]}"
   wait_health "http://127.0.0.1:$CONSUMER_HTTP_PORT" consumer
 
   python3 "$ROOT_DIR/../write_role_config.py" "$CONFIG_DIR/client.json" -- \
@@ -261,10 +262,11 @@ run_rl_e2() {
     --provider-b-remap-url "$API_B_REMAP_URL" --provider-b-remap-endpoint "$API_B_REMAP" \
     --provider-b-green-url "$API_B_GREEN_URL" --provider-b-green-endpoint "$API_B_GREEN" \
     --provider-project "$PROVIDER_PROJECT" --log-dir "$LOG_DIR" \
+    --consumer-process-id "$CONSUMER_PID" \
     --route-proxy-control-url "$ROUTE_PROXY_CONTROL_URL" \
     --client-server-proxy-control-url "$CLIENT_SERVER_PROXY_CONTROL_URL" \
     --consumer-route-proxy-control-url "$CONSUMER_ROUTE_PROXY_CONTROL_URL" \
-    --scenario RL-E2
+    --scenario "${RUN_SCENARIO:-RL-E2}"
   CLIENT_APPLICATION="$ROOT_DIR/Client/bin/Debug/net8.0/ResilienceLifecycle.Client.dll"
   dotnet "$CLIENT_APPLICATION" --config "$CONFIG_DIR/client.json" \
     >"$LOG_DIR/client.stdout.log" 2>"$LOG_DIR/client.stderr.log"
@@ -367,7 +369,8 @@ zlink_redis_start_scoped_assign \
 zlink_redis_wait_ready "$REDIS_CONTAINER" "$REDIS_READINESS_TIMEOUT_SECONDS"
 REDIS_KEY_PREFIX="resilience-e2e:$$:"
 
-if [[ "$SCENARIO" == "RL-E2" ]]; then
+if [[ "$SCENARIO" == "RL-E2" || "$SCENARIO" == "RL-E5" ]]; then
+  RUN_SCENARIO="$SCENARIO"
   run_rl_e2
   exit 0
 fi

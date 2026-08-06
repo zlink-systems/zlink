@@ -103,6 +103,12 @@ internal sealed class ResilienceProcessManager(ClientOptions options) : IAsyncDi
         await WaitProcessExitedAsync(options.ProviderAProcessId);
     }
 
+    public async Task WaitConsumerExitedAsync()
+    {
+        if (options.ConsumerProcessId > 0)
+            await WaitProcessExitedAsync(options.ConsumerProcessId);
+    }
+
     private static async Task WaitProcessExitedAsync(int processId)
     {
         Process process;

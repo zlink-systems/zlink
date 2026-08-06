@@ -34,7 +34,7 @@
 | RL-E2 | 구현 | RouteMesh와 ClientServer의 양방향 physical connection을 routing identity 기반 directional proxy로 격리하고, blackhole 중 affected target의 reverse reply, liveness deadline 내 not-ready 전환, surviving target request 성공을 확인했다(`logs/20260806-164652-2539767`). |
 | RL-E3 | 구현 | old request를 application gate에 보류한 뒤 old ephemeral connection을 닫고 replacement connection에서 새 marker의 reply를 받은 다음 old gate를 해제해 stale reply가 새 operation을 완료하지 않음을 확인했다(`logs/20260806-154109-2297086`). |
 | RL-E4 | 구현 | admission 전, handler 진입 직후, reply 직전의 세 connection-loss race variant에서 public terminal이 정확히 하나이고 같은 marker의 handler completion이 한 번 이하임을 확인했다(`logs/20260806-155645-473165`). |
-| RL-E5 | 미구현 | Store 독립과 liveness cleanup |
+| RL-E5 | 구현 | Redis pause 뒤 provider B의 RouteMesh 양방향 connection을 차단하고 affected target의 public not-ready 전환을 확인했다. Store가 pause된 상태에서도 consumer shutdown이 terminal로 완료되었고 shutdown 뒤 새 provider handler evidence가 생성되지 않았다(`logs/20260806-171802-1911880`). 구현 세부는 `framework/doc/framework/dotnet/internals/resilience-e5-store-liveness-e2e.ko.md`에 기록했다. |
 | RL-F1 | 미구현 | Preflight·admission seal capacity 경쟁 |
 | RL-F2 | 미구현 | Actor owner ABA fence |
 | RL-F3 | 미구현 | 언어 간 terminal failure 해석 |

@@ -23,6 +23,7 @@ internal sealed record ClientOptions(
     string ConfigDir,
     string LogDir,
     string Scenario,
+    int ConsumerProcessId = 0,
     string? RouteProxyControlUrl = null,
     string? ClientServerProxyControlUrl = null,
     string? ConsumerRouteProxyControlUrl = null,

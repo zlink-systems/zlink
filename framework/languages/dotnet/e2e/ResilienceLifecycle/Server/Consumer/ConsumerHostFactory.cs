@@ -68,6 +68,11 @@ internal static class ConsumerHostFactory
 
         var app = builder.Build();
         app.MapGet("/health", () => Results.Ok(new { status = "ready" }));
+        app.MapPost("/shutdown", (IHostApplicationLifetime lifetime) =>
+        {
+            lifetime.StopApplication();
+            return Results.Ok(new { status = "stopping" });
+        });
         app.MapGet("/connections", (ConnectionEvidence evidence) => Results.Ok(evidence.Snapshot()));
         app.MapPost("/connections/wait", async (
             ConnectionWaitReq request,
