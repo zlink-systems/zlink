@@ -303,11 +303,16 @@ framework/languages/cpp/.cache/
 /CMakeFiles/
 
 # 로컬 sync가 채우는 native 산출물 (릴리스 입력이 아닌 언어)
-# dotnet/go/python/rust의 native/는 릴리스 입력이라 추적을 유지한다.
+# binding native/prebuild 출력은 패키지 생성 단계에서 다시 만든다.
 bindings/cpp/native/
 bindings/java/native/
 bindings/java/src/main/resources/native/
 bindings/node/native/
+bindings/dotnet/native/
+bindings/go/native/
+bindings/node/prebuilds/
+bindings/python/src/zlink/native/
+bindings/rust/native/
 
 # Python 빌드 산출물
 bindings/python/src/*.egg-info/
