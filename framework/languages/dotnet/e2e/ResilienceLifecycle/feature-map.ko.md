@@ -9,7 +9,7 @@
 | RL-A3 | 구현 | reconnect storm 이후 request 흐름 복구를 확인했다(`logs/20260720-033130-1962758`). |
 | RL-A4 | 구현 | drain 뒤 green endpoint 전환과 요청 복구를 확인했다(`logs/20260720-033205-1968652`). |
 | RL-A5 | 구현 | 반복 provider flap 뒤 정상 요청 복구를 확인했다(`logs/20260720-033235-1970076`). |
-| RL-B1 | 구현 | timeout·cancellation 정리와 후속 요청 성공을 확인했다(`logs/20260720-033325-1971852`). |
+| RL-B1 | 구현 | Provider handler gate 진입 뒤 caller cancellation, 후속 request의 정상 reply, gate 해제 뒤 늦은 첫 reply의 correlation 분리를 확인했다(`logs/20260806-173546-401329`). 구현 세부는 `framework/doc/framework/dotnet/internals/resilience-b1-cancellation-cleanup-e2e.ko.md`에 기록했다. |
 | RL-B2 | 구현 | in-flight request 중 crash의 종단 결과와 생존 provider·replacement 복구를 확인했다(`logs/20260720-033345-1973712`). |
 | RL-B3 | 구현 | graceful shutdown과 topology·traffic 복구를 확인했다(`logs/20260720-033415-1975874`). |
 | RL-B4 | 구현 | runtime drain의 신규 요청 차단과 종료 상태를 확인했다(`logs/20260720-033439-1977677`). |

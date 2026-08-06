@@ -13,11 +13,29 @@ internal static class RlB1CancellationCleanupScenario
         ZLinkHttpClient providerA,
         ZLinkHttpClient providerB)
     {
-        var slowMarker = $"rl-b1-slow-{Guid.NewGuid():N}";
-        var timeout = await consumer.Post("/profile/request/timeout/100")
-            .Body(new ProfileReq("slow", slowMarker))
-            .AsyncRaw();
-        ZlinkStreamAssert.Ensure(timeout.Status == 408, "RL-B1 expected the slow request to time out.");
+        var firstMarker = $"rl-b1-first-{Guid.NewGuid():N}";
+        await providerA.Post($"/admin/profile/hold/{firstMarker}").AsyncRaw();
+        await providerB.Post($"/admin/profile/hold/{firstMarker}").AsyncRaw();
+
+        using var firstCancellation = new CancellationTokenSource();
+        using var evidenceTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var firstTask = consumer.Post("/profile/request")
+            .Body(new ProfileReq("first", firstMarker))
+            .Async<ProfileRes>(firstCancellation.Token)
+            .AsTask();
+        var waitA = providerA.Post("/evidence/wait")
+            .Body(new EvidenceWaitReq([$"profile-start|rid=api-a|marker={firstMarker}"], []))
+            .Async<string[]>(evidenceTimeout.Token)
+            .AsTask();
+        var waitB = providerB.Post("/evidence/wait")
+            .Body(new EvidenceWaitReq([$"profile-start|rid=api-b|marker={firstMarker}"], []))
+            .Async<string[]>(evidenceTimeout.Token)
+            .AsTask();
+        var completedEvidence = await Task.WhenAny(waitA, waitB);
+        await completedEvidence;
+
+        firstCancellation.Cancel();
+        await AssertCanceledAsync(firstTask);
 
         var followUpMarker = $"rl-b1-follow-up-{Guid.NewGuid():N}";
         var followUp = (await consumer.Post("/profile/request")
@@ -25,20 +43,23 @@ internal static class RlB1CancellationCleanupScenario
             .Async<ProfileRes>()).Body;
         ZlinkStreamAssert.Ensure(followUp.Value == "profile:fast", "RL-B1 follow-up request failed after timeout.");
 
-        using (var evidenceTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(15)))
+        await providerA.Post($"/admin/profile/release/{firstMarker}").AsyncRaw();
+        await providerB.Post($"/admin/profile/release/{firstMarker}").AsyncRaw();
+        evidenceTimeout.Cancel();
+
+        using (var lateReplyTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(15)))
         {
-            var waitA = providerA.Post("/evidence/wait")
-                .Body(new EvidenceWaitReq(["profile-request|", $"marker={slowMarker}"], []))
-                .Async<string[]>(evidenceTimeout.Token).AsTask();
-            var waitB = providerB.Post("/evidence/wait")
-                .Body(new EvidenceWaitReq(["profile-request|", $"marker={slowMarker}"], []))
-                .Async<string[]>(evidenceTimeout.Token).AsTask();
-            var completed = await Task.WhenAny(waitA, waitB);
+            var lateWaitA = providerA.Post("/evidence/wait")
+                .Body(new EvidenceWaitReq(["profile-request|", $"marker={firstMarker}"], []))
+                .Async<string[]>(lateReplyTimeout.Token).AsTask();
+            var lateWaitB = providerB.Post("/evidence/wait")
+                .Body(new EvidenceWaitReq(["profile-request|", $"marker={firstMarker}"], []))
+                .Async<string[]>(lateReplyTimeout.Token).AsTask();
+            var completed = await Task.WhenAny(lateWaitA, lateWaitB);
             var evidence = (await completed).Body;
-            evidenceTimeout.Cancel();
             ZlinkStreamAssert.Ensure(
-                evidence.Any(line => line.Contains($"marker={slowMarker}", StringComparison.Ordinal)),
-                "RL-B1 slow request completion evidence missing.");
+                evidence.Any(line => line.Contains($"marker={firstMarker}", StringComparison.Ordinal)),
+                "RL-B1 first request completion evidence missing after gate release.");
         }
 
         var later = (await consumer.Post("/profile/request")
@@ -47,5 +68,19 @@ internal static class RlB1CancellationCleanupScenario
         ZlinkStreamAssert.Ensure(later.Value == "profile:fast", "RL-B1 later request failed after slow completion.");
 
         Console.WriteLine("scenario RL-B1 passed");
+    }
+
+    private static async Task AssertCanceledAsync(Task firstTask)
+    {
+        try
+        {
+            await firstTask;
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+
+        throw new InvalidOperationException("RL-B1 first request was not canceled.");
     }
 }
