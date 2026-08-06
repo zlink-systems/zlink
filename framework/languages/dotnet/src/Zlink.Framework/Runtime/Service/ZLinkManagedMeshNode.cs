@@ -269,7 +269,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
                 socketMonitor = socket.MonitorOpen(
                     SocketEvent.Disconnected | SocketEvent.Closed);
-                socketMonitor.OnEvent(OnSocketMonitorEvent);
 
                 poller = Systems.Zlink.Zlink.CreatePoller();
                 // One poller owns both inbound frames and request completion.
@@ -6264,6 +6263,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
     private void ProcessInfrastructure(long now)
     {
+        DrainSocketMonitorEvents();
         FlushPendingInfrastructureCompletions();
         DrainTransportDisconnects(now);
         Peer[] peers;
@@ -6345,6 +6345,25 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         // Monitor callbacks run on the binding dispatch thread. Only enqueue
         // the identity here; peer state remains owned by ReceiveLoop.
         _transportDisconnects.Enqueue(routingId);
+    }
+
+    private void DrainSocketMonitorEvents()
+    {
+        ISocketMonitor? monitor;
+        lock (_socketGate)
+            monitor = _socketMonitor;
+        if (monitor is null)
+            return;
+
+        for (var index = 0; index < ReceiveBatchSize; index++)
+        {
+            MonitorEvent? value;
+            lock (_socketGate)
+                value = monitor.Recv(RecvFlags.DontWait);
+            if (value is null)
+                return;
+            OnSocketMonitorEvent(value);
+        }
     }
 
     private void DrainTransportDisconnects(long now)
