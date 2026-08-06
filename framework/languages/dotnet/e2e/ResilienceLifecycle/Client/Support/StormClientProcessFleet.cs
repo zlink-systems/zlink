@@ -189,8 +189,18 @@ internal sealed class StormClientProcessFleet : IAsyncDisposable
         {
             _index = index;
             _process = process;
-            _stderr = process.StandardError.ReadToEndAsync();
+            _stderr = CaptureStderrAsync(process.StandardError, stderrLogPath);
             _stderrLogPath = stderrLogPath;
+        }
+
+        private static async Task<string> CaptureStderrAsync(
+            StreamReader reader,
+            string logPath)
+        {
+            var stderr = await reader.ReadToEndAsync();
+            if (!string.IsNullOrEmpty(stderr))
+                await File.WriteAllTextAsync(logPath, stderr);
+            return stderr;
         }
 
         public static StormProcess Start(
