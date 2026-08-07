@@ -252,7 +252,7 @@ admitted 피어의 애플리케이션 레코드가 대상 owner의 mailbox 예�
 | ID | 분류 | 요약 |
 |---|---|---|
 | CPP-OBS-001 | PARTIAL·검증 중 | 구현 checkpoint `b3094a2a13`에서 Instance-Spot activation trace context를 diagnostics mode gate 뒤에서만 만들고, `message_flow_event_t`와 문자열은 tracer의 lazy builder 안에서 생성하도록 수정했다. Request의 async terminal event는 최초 mode가 `off`가 아닐 때만 필요한 context를 한 번 snapshot한다. `test_cpp_framework_app_host`, `test_cpp_framework_message_flow`, `test_cpp_framework_target_contract`이 통과했다. Allocation 계측과 process observability E2E가 남아 있어 아직 종결하지 않는다. |
-| CPP-OBS-002 | PARTIAL·하 | §5 "레벨 변경은 다음 메시지부터" 위반: 레벨이 이벤트마다 live로 재독되어 메시지 처리 중 변경 시 "메시지 절반의 기록"이 남을 수 있음(flow-id 캡처만 스냅샷됨). 증거: `cpp/include/zlink/framework/contracts/dispatch/execution.hpp:64-69`, `cpp/src/runtime/diagnostics/message_flow_tracer.hpp:41-57` |
+| CPP-OBS-002 | PARTIAL·검증 중 | 구현 checkpoint `68460a5d9f`에서 diagnostics level을 message entry의 ambient context에 snapshot하고, 모든 후속 tracer와 async continuation이 같은 값을 사용하도록 수정했다. `off`로 시작한 메시지는 flow ID를 할당하지 않지만 빈 flow 값과 level을 보존하므로 처리 중 level이 켜져도 일부 event만 기록하지 않는다. 반대 방향도 같은 규칙을 적용한다. `key_transitions→off`와 `off→key_transitions` 회귀를 포함한 전체 `test_cpp_framework_message_flow`, `test_cpp_framework_messaging`, `test_cpp_framework_channel_messaging`, `test_cpp_framework_execution`, `test_cpp_framework_target_contract`가 통과했다. 설치 package와 실제 장시간 handler 중 runtime level 변경 process 검증이 남아 있어 아직 종결하지 않는다. |
 
 만족 항목(요약): 5s/15s 단일 표준, 비즈니스 메시지의 기한 비연장, 체크 신호 앱 미도달, accept-and-fail-per-call과 7-state 폐쇄 집합은 확인했다. Diagnostics public surface는 CPP-CONTRACT-DIAG-001/002 때문에 만족 항목에서 제외한다.
 
