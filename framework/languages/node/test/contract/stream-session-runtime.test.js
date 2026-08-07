@@ -360,6 +360,59 @@ test('stream session runtime sends heartbeat ping and consumes pong outside appl
   await runtime.dispose();
 });
 
+test('stream heartbeat control bypasses a blocked application handler', async () => {
+  const socket = new FakeStreamSocket();
+  const clock = new FakeLivenessClock();
+  let handlerStarted;
+  let releaseHandler;
+  const started = new Promise(resolve => { handlerStarted = resolve; });
+  const release = new Promise(resolve => { releaseHandler = resolve; });
+  const runtime = createStreamRuntime({
+    socket,
+    livenessClock: clock,
+    sessionFactory(context) {
+      return {
+        context,
+        async onDispatch() {
+          handlerStarted();
+          await release;
+        }
+      };
+    }
+  });
+
+  runtime.start();
+  runtime.markConnected('heartbeat-blocked-handler');
+  await clock.flush();
+  await clock.advance(1000);
+  assert.equal(controlHeader(socket.sent[0]).name, '$zlink.heartbeat.ping');
+
+  socket.emitPacket('heartbeat-blocked-handler', fakeHeader({ name: 'SlowWork' }), fakeMessage(''));
+  await started;
+  socket.emitPacket('heartbeat-blocked-handler', fakeHeader({
+    kind: connector.ZlinkStreamMessageKind.Control,
+    codec: connector.ZlinkStreamCodec.Raw,
+    flags: connector.ZlinkStreamHeaderFlags.None,
+    name: '$zlink.heartbeat.pong'
+  }), fakeMessage(''));
+  await waitForReceive(socket);
+  socket.emitPacket('heartbeat-blocked-handler', fakeHeader({
+    kind: connector.ZlinkStreamMessageKind.Control,
+    codec: connector.ZlinkStreamCodec.Raw,
+    flags: connector.ZlinkStreamHeaderFlags.None,
+    name: '$zlink.heartbeat.ping'
+  }), fakeMessage(''));
+  await waitForReceive(socket);
+  assert.equal(controlHeader(socket.sent.at(-1)).name, '$zlink.heartbeat.pong');
+  await clock.advance(5000);
+  releaseHandler();
+  await clock.flush();
+
+  assert.deepEqual(socket.disconnects, []);
+  assert.equal(controlHeader(socket.sent.at(-1)).name, '$zlink.heartbeat.ping');
+  await runtime.dispose();
+});
+
 test('stream control frames do not consume the application HWM budget', async () => {
   const socket = new FakeStreamSocket();
   const budget = new framework.ZLinkInboundDispatchBudget(1n);

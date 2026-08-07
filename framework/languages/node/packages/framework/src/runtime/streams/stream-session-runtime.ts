@@ -276,11 +276,38 @@ export class ZLinkStreamSessionRuntime {
     decodedHeader: ZLinkStreamFrameHeader,
     dispatchClaim?: ZLinkApplicationWorkClaim
   ): void {
-    // Control frames are runtime traffic, not application payload, so they do
-    // not contribute to the application dispatch budget.
-    const payloadBytes = decodedHeader.kind === ZLinkStreamMessageKind.Control
-      ? 0n
-      : BigInt(payload.size());
+    if (decodedHeader.kind === ZLinkStreamMessageKind.Control) {
+      if (messageToBytes(payload).length === 0) {
+        if (decodedHeader.name === ZLINK_STREAM_HEARTBEAT_PONG) {
+          this.awaitingPongSince = undefined;
+          payload.close();
+          dispatchClaim?.close();
+          return;
+        }
+        if (
+          decodedHeader.name === ZLINK_STREAM_HEARTBEAT_PING
+          && this.stream.writeControl(ZLINK_STREAM_HEARTBEAT_PONG)
+        ) {
+          payload.close();
+          dispatchClaim?.close();
+          return;
+        }
+      }
+      this.enqueue(async () => {
+        try {
+          await this.dispatchPacket(payload, decodedHeader);
+        } finally {
+          dispatchClaim?.close();
+        }
+      }, () => {
+        payload.close();
+        dispatchClaim?.close();
+      });
+      return;
+    }
+    // Application frames reserve both the host budget and the session lane
+    // before their payload reaches user dispatch.
+    const payloadBytes = BigInt(payload.size());
     let budgetEnqueued = false;
     try {
       this.options.inboundDispatchBudget?.enqueue(payloadBytes);
