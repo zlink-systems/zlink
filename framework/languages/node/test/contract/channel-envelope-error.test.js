@@ -6,6 +6,8 @@ const test = require('node:test');
 const framework = require('../../packages/framework/dist/internal');
 const envelope = require('../../packages/framework/dist/runtime/channels/channel-envelope');
 const payloadCodec = require('../../packages/framework/dist/runtime/messaging/payload-codec');
+const encodedPayloadStorage = require('../../packages/framework/dist/contracts/Common/encoded-payload-storage');
+const { ZLinkBufferMessage } = require('../../packages/framework/dist/runtime/backend/runtime-message');
 const { Message } = require('@zlink-systems/zlink');
 
 function readable(parts) {
@@ -13,6 +15,29 @@ function readable(parts) {
     ? part
     : { data: () => Buffer.from(part) });
 }
+
+test('lazy framework payload adopts runtime-owned bytes and JSON decode avoids data copies', () => {
+  const bytes = Buffer.from('{"value":1}');
+  const message = ZLinkBufferMessage.fromOwned(bytes);
+  const wrapped = payloadCodec.wrapFrameworkPayloadMessage(message);
+  const encoded = wrapped.toEncodedPayload();
+
+  assert.equal(encodedPayloadStorage.borrowEncodedPayload(encoded), bytes);
+  encoded.data = () => { throw new Error('JSON decode must not request a defensive byte copy'); };
+  assert.deepEqual(wrapped.decode(), { value: 1 });
+});
+
+test('public encoded payload keeps defensive input and output copies', () => {
+  const source = Buffer.from('stable');
+  const payload = framework.ZLinkEncodedPayload.from(source);
+  source.fill(0);
+
+  const exposed = payload.data();
+  exposed.fill(0);
+
+  assert.equal(payload.getString(), 'stable');
+  assert.equal(Buffer.from(payload.toBytes()).toString(), 'stable');
+});
 
 test('selective application serializer leaves framework payload encoding on JSON', () => {
   class FrameworkPayload {}

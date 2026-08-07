@@ -1,10 +1,8 @@
-import { storeEncodedPayload } from './encoded-payload-storage';
+import { borrowEncodedPayload, storeEncodedPayload } from './encoded-payload-storage';
 
 export class ZLinkEncodedPayload {
-  private readonly payload: Buffer;
-
   private constructor(bytes: Uint8Array) {
-    this.payload = storeEncodedPayload(this, bytes);
+    storeEncodedPayload(this, bytes);
   }
 
   static from(bytes: Uint8Array): ZLinkEncodedPayload {
@@ -12,7 +10,7 @@ export class ZLinkEncodedPayload {
   }
 
   data(): Uint8Array {
-    return new Uint8Array(this.payload);
+    return new Uint8Array(this.stored());
   }
 
   toBytes(): Uint8Array {
@@ -20,22 +18,30 @@ export class ZLinkEncodedPayload {
   }
 
   copy(): ZLinkEncodedPayload {
-    return ZLinkEncodedPayload.from(this.payload);
+    return ZLinkEncodedPayload.from(this.stored());
   }
 
   size(): number {
-    return this.payload.length;
+    return this.stored().length;
   }
 
   isEmpty(): boolean {
-    return this.payload.length === 0;
+    return this.stored().length === 0;
   }
 
   getString(encoding: BufferEncoding = 'utf8'): string {
-    return this.payload.toString(encoding);
+    return this.stored().toString(encoding);
   }
 
   close(): void {
     // ZLinkEncodedPayload owns managed memory only; this mirrors Message-like readers.
+  }
+
+  private stored(): Buffer {
+    const payload = borrowEncodedPayload(this);
+    if (payload === undefined) {
+      throw new Error('ZLink encoded payload storage is unavailable.');
+    }
+    return payload;
   }
 }

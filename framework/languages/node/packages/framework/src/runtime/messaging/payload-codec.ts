@@ -9,7 +9,7 @@ import {
 } from '../../contracts';
 import type { Message } from '../../contracts/Common/Message';
 import { createZLinkMessageFromEncoded } from '../../contracts/Common/ZLinkMessage';
-import { borrowEncodedPayload } from '../../contracts/Common/encoded-payload-storage';
+import { adoptEncodedPayload, borrowEncodedPayload } from '../../contracts/Common/encoded-payload-storage';
 import { ZLinkConfigurationException } from '../configuration';
 
 export interface ZLinkSerializerRegistryLike {
@@ -90,7 +90,7 @@ function decodeFrameworkPayload<T>(
   type: Type<T> | undefined,
   rejectInvalidJson: boolean
 ): T {
-  if (message.data().length === 0) {
+  if (message.isEmpty()) {
     return undefined as T;
   }
 
@@ -106,7 +106,7 @@ function decodeFrameworkPayload<T>(
       }
     }
     return serializer.deserialize(
-      ZLinkEncodedPayload.from(message.data()),
+      encodedPayloadFromOwned(message.data()),
       (type ?? Object) as Type<T>
     );
   }
@@ -131,9 +131,34 @@ export function wrapFrameworkPayloadMessage(
   message: Message,
   registry?: ZLinkSerializerRegistryLike | ReadonlyMap<string, ZLinkMessageSerializer>
 ): ZLinkMessage {
-  const payload = ZLinkEncodedPayload.from(message.data());
+  const payload = encodedPayloadFromOwned(message.data());
   return createZLinkMessageFromEncoded(payload, <T>(type?: Type<T>) =>
-    decodeFrameworkPayload(message, registry, type, false));
+    decodeFrameworkEncodedPayload(payload, registry, type));
+}
+
+function decodeFrameworkEncodedPayload<T>(
+  payload: ZLinkEncodedPayload,
+  registry: ZLinkSerializerRegistryLike | ReadonlyMap<string, ZLinkMessageSerializer> | undefined,
+  type: Type<T> | undefined
+): T {
+  if (payload.isEmpty()) return undefined as T;
+  const serializer = selectDefaultSerializer(registry);
+  if (serializer !== undefined) {
+    if (isSelectableSerializer(serializer) && looksLikeJson(payload.data())) {
+      try {
+        return JSON.parse(payload.getString('utf8')) as T;
+      } catch {
+        // JSON-shaped extension payloads fall through to their registered decoder.
+      }
+    }
+    return serializer.deserialize(payload, (type ?? Object) as Type<T>);
+  }
+  const text = payload.getString('utf8');
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    return text as T;
+  }
 }
 
 export function selectDefaultSerializer(
@@ -310,4 +335,10 @@ function toRuntimeMessage(payload: ZLinkEncodedPayload): Message {
   return owned === undefined
     ? RuntimeMessage.from(payload.data())
     : RuntimeMessage.fromOwned(owned);
+}
+
+function encodedPayloadFromOwned(bytes: Buffer): ZLinkEncodedPayload {
+  const payload = ZLinkEncodedPayload.from(Buffer.alloc(0));
+  adoptEncodedPayload(payload, bytes);
+  return payload;
 }

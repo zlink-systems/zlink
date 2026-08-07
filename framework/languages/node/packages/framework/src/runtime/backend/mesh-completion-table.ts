@@ -100,7 +100,7 @@ function copyCompletion(record: ReceiveRecord): ZLinkMeshCompletion {
     failureErrno: record.failureErrno,
     operationKind: record.operationKind,
     kindData: record.kindData,
-    parts: record.parts.map((part) => Message.from(Buffer.from(part.data())))
+    parts: record.parts.map((part) => Message.fromOwned(Buffer.from(part.data())))
   };
 }
 

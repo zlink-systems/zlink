@@ -55,7 +55,10 @@ export function createProtobufMessageSerializer(): ZLinkMessageSerializer {
       return ZLinkEncodedPayload.from(encodeDynamicValue(value));
     },
     deserialize<T>(payload: ZLinkEncodedPayload): T {
-      return decodeDynamicValue(Buffer.from(payload.data())) as T;
+      const bytes = payload.data();
+      return decodeDynamicValue(
+        Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+      ) as T;
     }
   };
 }
