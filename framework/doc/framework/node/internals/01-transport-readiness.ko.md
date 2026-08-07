@@ -158,6 +158,28 @@ process도 같은 semantic routing id를 사용할 수 있으므로 routing id�
 process lifecycle을 판정하지 않는다. 따라서 public readiness와 old-process
 evidence 불변 조건을 함께 사용한다.
 
+## Node 실행 queue의 실제 기본 한도
+
+Node의 Spot·Actor serial scheduler는 application callback과 lifecycle callback을
+같은 owner 순서 안에서 처리하지만, 각 lane의 admission 예산은 따로 계산한다.
+현재 구현의 기본값은 다음과 같다.
+
+| 항목 | 기본값 |
+|---|---:|
+| Application 대기·실행 message | 4,096건 |
+| Application 대기·실행 byte | 16 MiB |
+| Lifecycle 대기·실행 message | 1,024건 |
+| Lifecycle 대기·실행 byte | 4 MiB |
+| 작업 하나의 고정 byte 비용 | 256 bytes |
+| Owner가 연속으로 실행할 수 있는 시간 | 50 ms |
+| Application에 실행 기회를 주기 전 lifecycle 연속 실행 | 8건 |
+
+Byte 예산에는 payload와 metadata에 작업당 고정 비용을 더한다. Scheduler는 작업을
+queue에서 꺼낸 시점이 아니라 callback이 끝난 뒤에 건수와 byte를 반환한다. 따라서
+실행 중인 callback도 한도를 계속 사용한다. 이 값은 Node 내부 기본값이며 public
+configuration contract가 아니다. 공통 internals의 수치는 구현 비교를 위한 참조값이므로
+Node의 실제 기본값으로 해석하지 않는다.
+
 ## Raw transport 요청의 terminal 보장과 monitor queue
 
 transport pair를 지정한 raw request가 동기적으로 거부되면, Framework는 이미 등록한

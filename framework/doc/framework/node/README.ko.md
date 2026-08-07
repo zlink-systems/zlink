@@ -50,6 +50,7 @@ API만 설명한다.
 | 문서 | 범위 |
 |------|------|
 | [backend-dependency-policy](internals/backend-dependency-policy.ko.md) | backend 교체 가능성, public surface 격리 |
+| [transport-readiness](internals/01-transport-readiness.ko.md) | transport readiness, liveness, 실행 queue 기본 한도 |
 | [공통 내부 구조](../common/internals/README.ko.md) | 네 언어가 공유하는 runtime 아키텍처 결정 |
 | [regression-test-matrix](internals/regression-test-matrix.ko.md) | 회귀 테스트 기준 |
 
