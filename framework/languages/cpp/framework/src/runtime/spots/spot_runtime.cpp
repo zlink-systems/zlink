@@ -1152,10 +1152,13 @@ bool spot_context_state_t::try_post_serial (
   std::function<void ()> work,
   runtime::serial_work_options_t options)
 {
-    if (admission_blocked ()) {
+    // Close and idle-eviction sealing cannot cross the queue admission point.
+    std::unique_lock admission_lock (callback_mutex);
+    if (callback_admission_closed || idle_eviction_in_progress) {
         return false;
     }
     if (!serial_queue) {
+        admission_lock.unlock ();
         work ();
         return true;
     }
@@ -1168,10 +1171,12 @@ bool spot_context_state_t::try_post_serial_after_current_turn (
   std::function<void ()> work,
   runtime::serial_work_options_t options)
 {
-    if (admission_blocked ()) {
+    std::unique_lock admission_lock (callback_mutex);
+    if (callback_admission_closed || idle_eviction_in_progress) {
         return false;
     }
     if (!serial_queue) {
+        admission_lock.unlock ();
         work ();
         return true;
     }
@@ -1194,10 +1199,12 @@ bool spot_context_state_t::try_post_serial_async (
   runtime::serial_execution_queue_t::async_work_t work,
   runtime::serial_work_options_t options)
 {
-    if (admission_blocked ()) {
+    std::unique_lock admission_lock (callback_mutex);
+    if (callback_admission_closed || idle_eviction_in_progress) {
         return false;
     }
     if (!serial_queue) {
+        admission_lock.unlock ();
         work ([] (std::function<void ()> completion) {
             if (completion) {
                 completion ();

@@ -1731,6 +1731,21 @@ int main ()
       "CPP-DISP-004",
       "logical multicast failures after dequeue are not observable");
 
+    /* CPP-DISP-006 — close and idle-eviction admission remain locked until
+     * the per-Spot serial queue has accepted or rejected the work item. */
+    gate.require (
+      spot_runtime.find (
+        "std::unique_lock admission_lock (callback_mutex)")
+          != std::string::npos
+        && spot_runtime.find (
+             "if (callback_admission_closed || idle_eviction_in_progress)")
+             != std::string::npos
+        && spot_runtime.find (
+             "return serial_queue->try_post_async")
+             != std::string::npos,
+      "CPP-DISP-006",
+      "Spot admission and serial enqueue use separate lock spans");
+
     /* CPP-ROUTE-002 — the direct-store fallback uses the same owner
      * admission deadline as the shared location resolver and never extends
      * it while converting store time to a steady-clock cache deadline. */
