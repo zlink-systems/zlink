@@ -19,6 +19,13 @@ test('public root exports raw capabilities without service projections', () => {
   }
 });
 
+test('ESM wrapper preserves runtime contract values exported from the CJS barrel', async () => {
+  const esm = await import('../dist/index.mjs');
+  for (const name of ['Message', 'Received', 'TopicMessage', 'SubscriptionEvent']) {
+    assert.equal(typeof esm[name], 'function', name);
+  }
+});
+
 test('package exports block internal addon and runtime modules', () => {
   assert.throws(
     () => require('@zlink-systems/zlink/dist/zlink/runtime/native/native'),

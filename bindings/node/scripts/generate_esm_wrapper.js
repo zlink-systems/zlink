@@ -22,7 +22,27 @@ if (!source || !moduleSymbol) {
   throw new Error('Unable to inspect the public TypeScript entry point');
 }
 const names = checker.getExportsOfModule(moduleSymbol)
-  .filter((symbol) => (symbol.flags & ts.SymbolFlags.Value) !== 0)
+  // `export *` exposes declarations from the contracts barrel as aliases.
+  // Check the aliased declaration as well; otherwise runtime classes such as
+  // Message and Received disappear from the ESM wrapper even though the
+  // CommonJS entry point exports them.
+  .filter((symbol) => {
+    // A named `export type { ... }` is represented by the same aliased
+    // declaration as its runtime counterpart. Keep the type-only alias out
+    // of the value destructuring even when the target also has a value.
+    if ((symbol.declarations ?? []).some((declaration) => {
+      let current = declaration;
+      while (current) {
+        if (ts.isExportDeclaration(current) && current.isTypeOnly) return true;
+        current = current.parent;
+      }
+      return false;
+    })) return false;
+    const resolved = (symbol.flags & ts.SymbolFlags.Alias) !== 0
+      ? checker.getAliasedSymbol(symbol)
+      : symbol;
+    return (resolved.flags & ts.SymbolFlags.Value) !== 0;
+  })
   .map((symbol) => symbol.getName())
   .filter((name) => /^[$A-Z_a-z][$\w]*$/.test(name) && name !== 'default')
   .sort((left, right) => left.localeCompare(right, 'en'));
