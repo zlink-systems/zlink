@@ -236,6 +236,7 @@ export class ZLinkFrameworkRuntimeHost implements
   private runtimeRelocationResult?: ZLinkFrameworkRelocationResult;
   private runtimeTerminationResult?: ZLinkFrameworkTerminationResult;
   private relocationOperation?: Promise<ZLinkFrameworkRelocationResult>;
+  private relocationStopStarting?: AbortController;
   private relocationOperationKey?: string;
   private relocationOperationStartedAt?: number;
   private shutdownOperation?: Promise<ZLinkFrameworkTerminationResult>;
@@ -702,7 +703,8 @@ export class ZLinkFrameworkRuntimeHost implements
       publishDraining: (meshName, signal) =>
         this.publishMeshDraining(meshName, signal),
       publishHostDraining: (signal) => this.publishHostDraining(signal),
-      drainResources: (meshName, signal) => this.performMeshDrain(meshName, signal),
+      drainResources: (meshName, signal, stopStartingSignal) =>
+        this.performMeshDrain(meshName, signal, stopStartingSignal),
       shutdownResources: (meshName, signal) => this.performMeshShutdown(meshName, signal),
       cleanupHostResources: (signal) => this.cleanupOwnerForDrain(signal),
       forceStopResources: (meshName) => this.forceStopMesh(meshName)
@@ -793,10 +795,12 @@ export class ZLinkFrameworkRuntimeHost implements
     this.relocationTargetApplicationVersion = effectiveTargetApplicationVersion;
     this.relocationOperationKey = operationKey;
     this.relocationOperationStartedAt = performance.now();
+    this.relocationStopStarting = new AbortController();
     this.relocationOperation = this.runRelocation(
       options.mode,
       effectiveTargetApplicationVersion,
-      deadlineMs
+      deadlineMs,
+      this.relocationStopStarting.signal
     );
     return waitForRuntimeOperation(this.relocationOperation, options.signal);
   }
@@ -808,6 +812,7 @@ export class ZLinkFrameworkRuntimeHost implements
     }
     this.runtimeDeadline = new Date(Date.now() + deadlineMs);
     if (this.shutdownOperation === undefined) {
+      this.relocationStopStarting?.abort(new Error('Shutdown requested.'));
       this.shutdownOperationStartedAt = performance.now();
       this.shutdownOperation = this.runShutdown(deadlineMs);
     }
@@ -817,7 +822,8 @@ export class ZLinkFrameworkRuntimeHost implements
   private async runRelocation(
     mode: ZLinkFrameworkRelocationMode,
     effectiveTargetApplicationVersion: bigint,
-    deadlineMs: number
+    deadlineMs: number,
+    stopStartingSignal: AbortSignal
   ): Promise<ZLinkFrameworkRelocationResult> {
     if (!this.isStarted) {
       return this.completeRelocation(blockedRelocation(
@@ -858,12 +864,17 @@ export class ZLinkFrameworkRuntimeHost implements
         ));
       }
       this.setRuntimeState(ZLinkFrameworkRuntimeState.Relocating);
-      const drained = await this.routeMeshCoordinator.relocateHost(remainingDeadlineMs());
+      const drained = await this.routeMeshCoordinator.relocateHost(
+        remainingDeadlineMs(),
+        stopStartingSignal
+      );
       if (drained.kind === 'forceStopped') {
         return this.resetBlockedRelocation(blockedRelocation(
           mode,
           effectiveTargetApplicationVersion,
-          relocationReason(drained.reason)
+          stopStartingSignal.aborted
+            ? ZLinkFrameworkRelocationReason.ShutdownRequested
+            : relocationReason(drained.reason)
         ));
       }
       await this.publishHostRelocated();
@@ -877,7 +888,9 @@ export class ZLinkFrameworkRuntimeHost implements
       const result = blockedRelocation(
         mode,
         effectiveTargetApplicationVersion,
-        isDeadlineExceededError(error)
+        stopStartingSignal.aborted
+          ? ZLinkFrameworkRelocationReason.ShutdownRequested
+          : isDeadlineExceededError(error)
           ? ZLinkFrameworkRelocationReason.DeadlineExceeded
           : error instanceof ZLinkRelocationStateIncompatibleError
             ? ZLinkFrameworkRelocationReason.StateIncompatible
@@ -891,17 +904,17 @@ export class ZLinkFrameworkRuntimeHost implements
 
   private async runShutdown(deadlineMs: number): Promise<ZLinkFrameworkTerminationResult> {
     try {
+      this.admission.close();
+      this.setRuntimeState(ZLinkFrameworkRuntimeState.Draining);
       if (this.relocationOperation !== undefined
-        && this.runtimeState === ZLinkFrameworkRuntimeState.Relocating) {
+        && this.relocationStopStarting?.signal.aborted === true) {
         await this.relocationOperation;
       }
       // Seal application admission before the public status reports that the
       // host no longer accepts work. This prevents status polling from racing
       // with the coordinator's synchronous seal step.
-      this.admission.close();
       const unscopedStreamDrain = this.streamRuntime?.notifyUnscopedServerDrain();
       const shutdown = this.routeMeshCoordinator.shutdownHost(deadlineMs);
-      this.setRuntimeState(ZLinkFrameworkRuntimeState.Draining);
       const drain = await shutdown;
       await unscopedStreamDrain;
       await this.stop();
@@ -937,6 +950,7 @@ export class ZLinkFrameworkRuntimeHost implements
     }
     this.runtimeDeadline = undefined;
     this.relocationTargetApplicationVersion = undefined;
+    this.relocationStopStarting = undefined;
     this.relocationOperation = undefined;
     this.relocationOperationKey = undefined;
     this.relocationOperationStartedAt = undefined;
@@ -1730,11 +1744,16 @@ export class ZLinkFrameworkRuntimeHost implements
     await this.stop();
   }
 
-  private async performMeshDrain(meshName: string, signal: AbortSignal): Promise<void> {
+  private async performMeshDrain(
+    meshName: string,
+    signal: AbortSignal,
+    stopStartingSignal?: AbortSignal
+  ): Promise<void> {
     await this.serviceRelocation.relocateMesh(
       meshName,
       this.relocationTargetApplicationVersion,
-      signal
+      signal,
+      stopStartingSignal
     );
   }
 

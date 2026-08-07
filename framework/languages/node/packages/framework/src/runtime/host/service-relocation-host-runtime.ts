@@ -344,7 +344,8 @@ export class ZLinkHostServiceRelocationRuntime {
   async relocateMesh(
     meshName: string,
     targetApplicationVersion?: bigint,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    stopStartingSignal?: AbortSignal
   ): Promise<void> {
     const spotManager = this.options.spotManager();
     const actorManager = this.options.actorManager();
@@ -456,7 +457,10 @@ export class ZLinkHostServiceRelocationRuntime {
     }
     const operationSignal = signal ?? new AbortController().signal;
     const deadlineMs = signal === undefined ? 30_000 : 24 * 60 * 60 * 1000;
-    const result = await raceAbort(maintenance.start('retire', deadlineMs), operationSignal);
+    const result = await raceAbort(
+      maintenance.start('retire', deadlineMs, stopStartingSignal),
+      operationSignal
+    );
     if (result.state !== 'completed') {
       throw result.terminalError ?? new Error(`Host relocation ended in '${result.state}'.`);
     }

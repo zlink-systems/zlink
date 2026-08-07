@@ -592,6 +592,72 @@ test('Successful relocation leaves infrastructure started until explicit shutdow
   assert.equal(host.isStarted, true);
 });
 
+test('Shutdown stops new relocation units and waits only for admitted work to commit', async () => {
+  const host = new internal.ZLinkFrameworkRuntimeHost({
+    registration: internal.createFrameworkRegistration()
+  });
+  host.executionState = {};
+  host.runtimeState = framework.ZLinkFrameworkRuntimeState.Serving;
+  let relocationStarted;
+  let releaseAdmitted;
+  const started = new Promise(resolve => { relocationStarted = resolve; });
+  const admitted = new Promise(resolve => { releaseAdmitted = resolve; });
+  const events = [];
+  host.routeMeshCoordinator = {
+    async prepareHostRetire() { return 'prepared'; },
+    async relocateHost(_deadlineMs, stopStartingSignal) {
+      events.push('relocation:start');
+      relocationStarted();
+      await new Promise(resolve => stopStartingSignal.addEventListener(
+        'abort',
+        resolve,
+        { once: true }
+      ));
+      events.push('relocation:shutdown-observed');
+      await admitted;
+      events.push('relocation:admitted-committed');
+      return { kind: 'forceStopped', reason: 'teardown_failed' };
+    },
+    async shutdownHost() {
+      events.push('shutdown:drain');
+      return { kind: 'drained' };
+    }
+  };
+  host.stop = async () => { events.push('shutdown:stop'); };
+
+  const relocation = host.relocate({
+    mode: framework.ZLinkFrameworkRelocationMode.PlannedMaintenance
+  });
+  await started;
+  const shutdown = host.shutdown({ deadlineMs: 1_000 });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(host.status.state, framework.ZLinkFrameworkRuntimeState.Draining);
+  assert.equal(host.status.acceptingWork, false);
+  assert.deepEqual(events, [
+    'relocation:start',
+    'relocation:shutdown-observed'
+  ]);
+
+  releaseAdmitted();
+  assert.deepEqual(await relocation, {
+    mode: framework.ZLinkFrameworkRelocationMode.PlannedMaintenance,
+    effectiveTargetApplicationVersion: 0n,
+    outcome: framework.ZLinkFrameworkRelocationOutcome.Blocked,
+    reason: framework.ZLinkFrameworkRelocationReason.ShutdownRequested
+  });
+  assert.equal(
+    (await shutdown).outcome,
+    framework.ZLinkFrameworkTerminationOutcome.Stopped
+  );
+  assert.deepEqual(events, [
+    'relocation:start',
+    'relocation:shutdown-observed',
+    'relocation:admitted-committed',
+    'shutdown:drain',
+    'shutdown:stop'
+  ]);
+});
+
 test('concurrent Relocate shares identical options and rejects a different operation', async () => {
   const host = new internal.ZLinkFrameworkRuntimeHost({
     registration: internal.createFrameworkRegistration({ applicationVersion: 3n })

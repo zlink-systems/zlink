@@ -1044,6 +1044,53 @@ test('Retire preflight precedes publication and ready units use bounded permits'
   assert.deepEqual(events.slice(0, 3), ['preflight', 'retiring', 'draining']);
 });
 
+test('shutdown intent lets admitted relocation finish without starting a queued unit', async () => {
+  const stopStarting = new AbortController();
+  let releaseActive!: () => void;
+  let activeStarted!: () => void;
+  const active = new Promise<void>(resolve => { releaseActive = resolve; });
+  const started = new Promise<void>(resolve => { activeStarted = resolve; });
+  const events: string[] = [];
+  const runtime = new ServiceMaintenanceRuntime({
+    maxOutbound: 1,
+    preflight: async () => true,
+    publishState: () => undefined,
+    forceStop: () => {
+      events.push('stopped');
+    }
+  });
+  runtime.enqueue({
+    id: 'active',
+    encodedUpperBound: 1,
+    ready: () => true,
+    relocate: async () => {
+      events.push('active:start');
+      activeStarted();
+      await active;
+      events.push('active:commit');
+    }
+  });
+  runtime.enqueue({
+    id: 'queued',
+    encodedUpperBound: 1,
+    ready: () => true,
+    relocate: async () => {
+      events.push('queued:start');
+    }
+  });
+
+  const operation = runtime.start('retire', 2_000, stopStarting.signal);
+  await started;
+  stopStarting.abort(new Error('Shutdown requested.'));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(events, ['active:start']);
+  releaseActive();
+
+  const terminal = await operation;
+  assert.equal(terminal.state, 'forceStopped');
+  assert.deepEqual(events, ['active:start', 'active:commit', 'stopped']);
+});
+
 test('first maintenance intent wins and blocked preflight keeps admission uncommitted', async () => {
   const runtime = new ServiceMaintenanceRuntime({
     preflight: async () => false,
