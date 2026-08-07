@@ -172,6 +172,7 @@ export class ZLinkStreamSessionRuntime {
   private readonly serial = new ZLinkStreamSessionSerialExecutor();
   private connected = false;
   private disconnected = false;
+  private disconnectQueued = false;
   private disposed = false;
   private closeReason = 'client_close';
   private metricsClosed = false;
@@ -222,7 +223,7 @@ export class ZLinkStreamSessionRuntime {
   }
 
   get isDisconnected(): boolean {
-    return this.disconnected;
+    return this.disconnected || this.disconnectQueued;
   }
 
   private requireProvidedContext(session: ZLinkSession): ZLinkSession {
@@ -353,25 +354,17 @@ export class ZLinkStreamSessionRuntime {
   }
 
   enqueueDisconnected(error?: unknown): void {
-    if (this.disconnected) {
-      return;
-    }
-    this.stream.markTransportClosed();
-    this.disconnected = true;
-    this.stopLivenessChecks();
-    this.enqueue(async () => this.complete(error, true));
+    this.queueDisconnect(error);
   }
 
   async close(signal?: AbortSignal): Promise<void> {
     throwIfAborted(signal);
     this.stream.markTransportClosed();
     await this.stream.close(signal);
-    if (this.disconnected) {
+    if (this.disconnected || this.disconnectQueued) {
       return;
     }
-    this.disconnected = true;
-    this.stopLivenessChecks();
-    this.enqueue(async () => this.complete(undefined, true));
+    this.queueDisconnect(undefined);
   }
 
   async dispose(): Promise<void> {
@@ -379,9 +372,9 @@ export class ZLinkStreamSessionRuntime {
       return;
     }
     this.disposed = true;
-    this.stream.markTransportClosed();
     this.stopLivenessChecks();
     await this.serial.dispose();
+    this.stream.markTransportClosed();
     if (!this.disconnected) {
       this.disconnected = true;
       const session = await this.requireSession();
@@ -642,21 +635,39 @@ export class ZLinkStreamSessionRuntime {
   }
 
   private async complete(error: unknown, notifyDisconnected: boolean): Promise<void> {
-    if (error !== undefined && this.closeReason !== 'server_drain') {
-      this.closeReason = 'transport_error';
+    try {
+      if (error !== undefined && this.closeReason !== 'server_drain') {
+        this.closeReason = 'transport_error';
+      }
+      if (error !== undefined) {
+        const session = await this.requireSession();
+        await session.onError?.(this.context, {
+          error: 'transportError' as never,
+          message: error instanceof Error ? error.message : String(error)
+        });
+      }
+      if (notifyDisconnected) {
+        const session = await this.requireSession();
+        await session.onDisconnected?.(this.context);
+      }
+    } finally {
+      await this.cleanup();
     }
-    if (error !== undefined) {
-      const session = await this.requireSession();
-      await session.onError?.(this.context, {
-        error: 'transportError' as never,
-        message: error instanceof Error ? error.message : String(error)
-      });
-    }
-    if (notifyDisconnected) {
-      const session = await this.requireSession();
-      await session.onDisconnected?.(this.context);
-    }
-    await this.cleanup();
+  }
+
+  private queueDisconnect(error: unknown): void {
+    if (this.disconnected || this.disconnectQueued) return;
+    this.disconnectQueued = true;
+    this.stopLivenessChecks();
+    this.enqueue(async () => {
+      this.disconnectQueued = false;
+      if (this.disconnected) return;
+      this.stream.markTransportClosed();
+      this.disconnected = true;
+      await this.complete(error, true);
+    }, () => {
+      this.disconnectQueued = false;
+    });
   }
 
   private async cleanup(): Promise<void> {
