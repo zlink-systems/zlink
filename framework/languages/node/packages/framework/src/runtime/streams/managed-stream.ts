@@ -119,10 +119,15 @@ export class ZLinkManagedStream implements ZLinkStream {
     return this.socket.send(this.backendRoutingId(), payload, flags ?? 0);
   }
 
-  async submitRaw(payload: Message, signal?: AbortSignal): Promise<ZLinkSubmitResult> {
+  async submitRaw(
+    payload: Message,
+    signal?: AbortSignal,
+    timeoutMs?: number
+  ): Promise<ZLinkSubmitResult> {
     return this.submitOperation(
       () => this.socket.send(this.backendRoutingId(), payload, ZLINK_SEND_DONT_WAIT),
-      signal
+      signal,
+      timeoutMs
     );
   }
 
@@ -139,10 +144,19 @@ export class ZLinkManagedStream implements ZLinkStream {
 
   private async submitOperation(
     attempt: () => boolean,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    timeoutMs?: number
   ): Promise<ZLinkSubmitResult> {
     try {
-      await this.submitter.submitCommand(attempt, signal);
+      const socketTimeoutMs = this.socket.sendTimeoutMs > 0
+        ? this.socket.sendTimeoutMs
+        : undefined;
+      const admissionTimeoutMs = timeoutMs === undefined
+        ? undefined
+        : socketTimeoutMs === undefined
+          ? timeoutMs
+          : Math.min(timeoutMs, socketTimeoutMs);
+      await this.submitter.submitCommand(attempt, signal, undefined, admissionTimeoutMs);
       return { status: ZLinkSubmitStatus.Submitted };
     } catch (error) {
       if (error instanceof ZLinkFrameworkException) {

@@ -43,7 +43,7 @@ import { ZLinkSessionLocalActorBindings } from './session-local-actors';
 
 export interface ZLinkSessionContextStream extends ZLinkStream {
   writeRaw(payload: Message, flags?: number): boolean;
-  submitRaw(payload: Message, signal?: AbortSignal): Promise<ZLinkSubmitResult>;
+  submitRaw(payload: Message, signal?: AbortSignal, timeoutMs?: number): Promise<ZLinkSubmitResult>;
 }
 
 interface ZLinkSessionContextRuntime {

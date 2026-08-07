@@ -199,6 +199,43 @@ test('managed stream treats an actor-destroy stale unbind as idempotent cleanup'
   await assert.doesNotReject(() => stream.unbindActor('actor-destroy', 1000));
 });
 
+test('managed stream bounds a call timeout by the socket admission timeout', async () => {
+  const observed = [];
+  const socket = {
+    sendTimeoutMs: 10,
+    sendHighWaterMark: 16,
+    onSendReady() {},
+    send() { return true; },
+    disconnectPeer() {},
+    recv() { return undefined; }
+  };
+  const submitter = {
+    async submitCommand(_attempt, _signal, _onDiscard, timeoutMs) {
+      observed.push(timeoutMs);
+    }
+  };
+  const stream = new framework.ZLinkManagedStream(
+    socket,
+    'session-timeout-bound',
+    undefined,
+    undefined,
+    undefined,
+    submitter
+  );
+  const message = zlink.Message.from('payload');
+  try {
+    assert.deepEqual(await stream.submitRaw(message, undefined, 25), {
+      status: ZLinkSubmitStatus.Submitted
+    });
+    assert.deepEqual(await stream.submitRaw(message, undefined, 4), {
+      status: ZLinkSubmitStatus.Submitted
+    });
+  } finally {
+    message.close();
+  }
+  assert.deepEqual(observed, [10, 4]);
+});
+
 test('managed stream skips native unbind after transport teardown', async () => {
   const operations = new Map();
   let nextOperation = 1n;
@@ -3990,6 +4027,29 @@ test('stream send validation and duplicate state win over pre-aborted signals', 
     return true;
   });
   assert.equal(attempts, 1);
+});
+
+test('session send validates and forwards its per-call admission timeout', async () => {
+  const observedTimeouts = [];
+  const runtime = new framework.ZLinkStreamBindingRuntime({ messageFactory: binaryMessageFactory() });
+  const context = runtime.createSessionContext({
+    ...fakeStream('session-send-timeout', 'rid-send-timeout'),
+    async submitRaw(_message, _signal, timeoutMs) {
+      observedTimeouts.push(timeoutMs);
+      return { status: ZLinkSubmitStatus.Submitted };
+    }
+  });
+
+  for (const invalid of [0, -1, 1.5, Number.POSITIVE_INFINITY, 2_147_483_648]) {
+    assert.throws(
+      () => context.client.send({ value: invalid }).packetName('Notice').timeout(invalid),
+      /integer from 1 through 2147483647/
+    );
+  }
+  await context.client.send({ value: 'short' }).packetName('Notice').timeout(25).submit();
+  await context.client.send({ value: 'default' }).packetName('Notice').submit();
+
+  assert.deepEqual(observedTimeouts, [25, undefined]);
 });
 
 test('session client reply uses configured stream payload codec', async () => {
