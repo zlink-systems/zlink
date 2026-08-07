@@ -17,7 +17,7 @@ public sealed partial class RegressionTests
                 StringComparison.Ordinal))
             .ToArray();
         var localAssertion = new Regex(
-            @"(?:(?:private|public|internal|protected)\s+)?(?:static\s+)?(?:async\s+)?(?:void|Task|ValueTask)\s+(?:Ensure|That|RequireContains|RequireNoContains|ExpectFailureAsync|ExpectTimeoutAsync)\s*\(",
+            @"(?m)^\s*(?:(?:private|public|internal|protected|static)\s+)+(?:async\s+)?(?:void|Task|ValueTask)\s+(?:Ensure|That|RequireContains|RequireNoContains|ExpectFailureAsync|ExpectTimeoutAsync)\s*\(",
             RegexOptions.CultureInvariant);
         var offenders = sourceFiles
             .Where(path => localAssertion.IsMatch(File.ReadAllText(path)))

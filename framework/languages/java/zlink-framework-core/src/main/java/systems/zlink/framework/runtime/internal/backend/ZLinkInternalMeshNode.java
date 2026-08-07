@@ -94,6 +94,18 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
         return connectPeer(endpoint, expectedRoutingId);
     }
 
+    default long replacePeerConnection(
+        String endpoint,
+        RoutingId expectedRoutingId,
+        long expectedLifecycleGeneration,
+        String expectedSecurityIdentity) {
+        return connectPeer(
+            endpoint,
+            expectedRoutingId,
+            expectedLifecycleGeneration,
+            expectedSecurityIdentity);
+    }
+
     default void observePeerAdmissionExpectation(
         RoutingId peerRid,
         String endpoint,
@@ -108,6 +120,12 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
 
     default void removePeerConnection(long connectionIntentId) {
         // Optional for alternate and test backends that do not retain connection intents.
+    }
+
+    default boolean isPeerConnectionClosing(long connectionIntentId) {
+        // Optional for alternate and test backends that do not expose the
+        // connection-intent close state.
+        return false;
     }
 
     default void markPeerConnectionNotRequired(

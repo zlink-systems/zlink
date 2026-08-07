@@ -17,9 +17,29 @@ const flags = [...schema.flags].sort((a, b) => a.bit - b.bit);
 const numericBounds = schema.bounds.filter((entry) => Number.isSafeInteger(entry.value));
 const frameworkErrors = [...schema.types.find((entry) => entry.name === "framework-error-code").values]
   .sort((a, b) => a.value - b.value);
+const requestTerminalResults = [
+  ...schema.types.find((entry) => entry.name === "request-terminal-result").values,
+].sort((a, b) => a.value - b.value);
 const terminalFailureIntegrity = schema.semanticConstraints.find(
   (entry) => entry.kind === "terminal-failure-integrity",
 );
+const frameworkErrorsByTerminal = new Map();
+for (const [failure, terminal] of Object.entries(
+  terminalFailureIntegrity.typedFrameworkFailure.exactResultByFailureCode,
+)) {
+  const failures = frameworkErrorsByTerminal.get(terminal) ?? [];
+  failures.push(failure);
+  frameworkErrorsByTerminal.set(terminal, failures);
+}
+const cppTypedTerminalCases = [...frameworkErrorsByTerminal.entries()]
+  .map(([terminal, failures]) => `${failures
+    .map((failure) => `        case framework_error_code::${failure}:`)
+    .join("\n")}
+            return terminal == static_cast<std::uint32_t>(request_terminal_result::${terminal});`)
+  .join("\n");
+const cppBoundaryTerminalCases = terminalFailureIntegrity.boundaryFailure.terminalResults
+  .map((terminal) => `        case request_terminal_result::${terminal}:`)
+  .join("\n");
 const frameworkMultipartV1Profile = schema.frameworkMultipartV1Profile;
 
 function head(command, flagsValue = 0) {
@@ -83,7 +103,7 @@ const fixtures = {
   },
 };
 
-const cpp = `// Generated from service-wire-v1.schema.json. Do not edit.\n#pragma once\n\n#include <cstddef>\n#include <cstdint>\n\nnamespace zlink::framework::runtime::protocol {\ninline constexpr std::uint8_t magic[] = {${schema.protocol.magic.join(", ")}};\ninline constexpr std::uint8_t wire_major = ${schema.protocol.wireMajor};\ninline constexpr const char required_capability[] = "${schema.protocol.requiredCapability}";\ninline constexpr const char framework_multipart_packet_name[] = "${frameworkMultipartV1Profile.packetName}";\ninline constexpr const char framework_multipart_content_type[] = "${frameworkMultipartV1Profile.contentType}";\nenum class command : std::uint8_t {\n${commands.map((entry) => `    ${entry.name} = ${entry.id},`).join("\n")}\n};\nenum class flag : std::uint8_t {\n${flags.map((entry) => `    ${entry.name} = ${entry.bit},`).join("\n")}\n};\nenum class framework_error_code : std::uint32_t {\n${frameworkErrors.map((entry) => `    ${entry.name} = ${entry.value},`).join("\n")}\n};\n${numericBounds.map((entry) => `inline constexpr std::uint64_t ${entry.name} = ${entry.value}ULL;`).join("\n")}\n} // namespace zlink::framework::runtime::protocol\n`;
+const cpp = `// Generated from service-wire-v1.schema.json. Do not edit.\n#pragma once\n\n#include <cstddef>\n#include <cstdint>\n\nnamespace zlink::framework::runtime::protocol {\ninline constexpr std::uint8_t magic[] = {${schema.protocol.magic.join(", ")}};\ninline constexpr std::uint8_t wire_major = ${schema.protocol.wireMajor};\ninline constexpr const char required_capability[] = "${schema.protocol.requiredCapability}";\ninline constexpr const char framework_multipart_packet_name[] = "${frameworkMultipartV1Profile.packetName}";\ninline constexpr const char framework_multipart_content_type[] = "${frameworkMultipartV1Profile.contentType}";\nenum class command : std::uint8_t {\n${commands.map((entry) => `    ${entry.name} = ${entry.id},`).join("\n")}\n};\nenum class flag : std::uint8_t {\n${flags.map((entry) => `    ${entry.name} = ${entry.bit},`).join("\n")}\n};\nenum class framework_error_code : std::uint32_t {\n${frameworkErrors.map((entry) => `    ${entry.name} = ${entry.value},`).join("\n")}\n};\nenum class request_terminal_result : std::uint32_t {\n${requestTerminalResults.map((entry) => `    ${entry.name} = ${entry.value},`).join("\n")}\n};\ninline constexpr bool valid_terminal_failure(\n  std::uint32_t terminal, framework_error_code failure) noexcept\n{\n    const auto result = static_cast<request_terminal_result>(terminal);\n    if (result == request_terminal_result::ok)\n        return failure == framework_error_code::none;\n    switch (result) {\n${cppBoundaryTerminalCases}\n            return failure == framework_error_code::none;\n        default:\n            break;\n    }\n    if (failure == framework_error_code::none)\n        return false;\n    switch (failure) {\n${cppTypedTerminalCases}\n        default:\n            return false;\n    }\n}\n${numericBounds.map((entry) => `inline constexpr std::uint64_t ${entry.name} = ${entry.value}ULL;`).join("\n")}\n} // namespace zlink::framework::runtime::protocol\n`;
 
 const dotnet = `// Generated from service-wire-v1.schema.json. Do not edit.\nnamespace Systems.Zlink.Framework.Runtime.Protocol;\n\ninternal static class ServiceWireConstants\n{\n    internal const byte Magic0 = ${schema.protocol.magic[0]};\n    internal const byte Magic1 = ${schema.protocol.magic[1]};\n    internal const byte WireMajor = ${schema.protocol.wireMajor};\n    internal const string RequiredCapability = "${schema.protocol.requiredCapability}";\n    internal const string FrameworkMultipartPacketName = "${frameworkMultipartV1Profile.packetName}";\n    internal const string FrameworkMultipartContentType = "${frameworkMultipartV1Profile.contentType}";\n    internal enum Command : byte\n    {\n${commands.map((entry) => `        ${pascal(entry.name)} = ${entry.id},`).join("\n")}\n    }\n    [System.Flags]\n    internal enum Flag : byte\n    {\n        None = 0,\n${flags.map((entry) => `        ${pascal(entry.name)} = ${entry.bit},`).join("\n")}\n    }\n    internal enum FrameworkErrorCode : uint\n    {\n${frameworkErrors.map((entry) => `        ${pascal(entry.name)} = ${entry.value},`).join("\n")}\n    }\n}\n`;
 

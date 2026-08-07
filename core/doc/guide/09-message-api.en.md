@@ -1,4 +1,4 @@
-[한국어](09-message-api.ko.md)
+[한국어](09-message-api.en.md)
 
 # Message API and ownership
 

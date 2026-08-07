@@ -62,6 +62,14 @@ Java `TicTacToe`의 자동 등록 구현과 전체 runner가 완료됐다. `Samp
 
 ## 검증
 
-- `nice -n 15 timeout 600s ./run_sample.sh` 통과: `PASS TicTacToe.Java`
+- `cd framework/languages/java/samples && ZLINK_SAMPLE_LANGUAGES=java timeout 1800s ./run_samples.sh` 통과.
+  preflight 뒤 실제 Java process runner가 TicTacToe, Bingo, DeliveryDispatch, GameQuest,
+  ShoppingMall, SupportChat을 순서대로 실행했고, `PASS TicTacToe.Java`와 각 sample의
+  client/server self-check marker를 확인했다.
+- `cd framework/languages/java/samples/java/TicTacToe && timeout 600s ./run_sample.sh` 경로도
+  같은 standalone Gradle settings와 role 실행 구성을 사용한다.
 - runner가 host·guest·observer의 `stream-inbound sample=TicTacToe` marker와 RESPONSE·SEND 수신을 확인했다.
 - `SampleReleaseGateContractTest`는 16개 모두 통과했다.
+- Location Store descriptor를 사용하는 object peer에서도 sample은 endpoint만 전달하고,
+  runtime이 descriptor의 RID, lifecycle generation과 security identity를 admission fence로
+  전달한다. sample이 이 값을 조립하거나 raw transport를 호출하지 않는다.

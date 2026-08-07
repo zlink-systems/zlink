@@ -25,8 +25,8 @@ public final class ZLinkObjectServerDescriptorPublisher {
     private final ZLinkFrameworkRegistration registration;
     private final java.util.Map<String, ZLinkInternalMeshNode> nodes;
     private final AtomicLong revision = new AtomicLong(1);
-    private final java.util.concurrent.atomic.AtomicBoolean published =
-        new java.util.concurrent.atomic.AtomicBoolean();
+    private final AtomicLong lastPublishedLeaseGeneration =
+        new AtomicLong(-1L);
 
     public ZLinkObjectServerDescriptorPublisher(
         ZLinkLocationRepository store,
@@ -41,7 +41,9 @@ public final class ZLinkObjectServerDescriptorPublisher {
 
     public CompletionStage<Void> publish(ZLinkFrameworkRuntimeState state) {
         ZLinkLocationOwnerToken owner = runtime.currentOwnerToken();
-        ZLinkLocationWriteIntent intent = published.get()
+        long currentLeaseGeneration = owner.leaseGeneration();
+        long previousLeaseGeneration = lastPublishedLeaseGeneration.get();
+        ZLinkLocationWriteIntent intent = previousLeaseGeneration == currentLeaseGeneration
             ? ZLinkLocationWriteIntent.RENEW
             : ZLinkLocationWriteIntent.NEW_CLAIM;
         List<CompletionStage<?>> writes = new ArrayList<>();
@@ -63,7 +65,30 @@ public final class ZLinkObjectServerDescriptorPublisher {
                     }
                 }));
         }
-        return all(writes).thenRun(() -> published.set(true));
+        return all(writes).thenRun(() ->
+            lastPublishedLeaseGeneration.compareAndSet(
+                previousLeaseGeneration,
+                currentLeaseGeneration));
+    }
+
+    public CompletionStage<Void> recoverAfterOwnerLease(
+        ZLinkFrameworkRuntimeState state,
+        ZLinkLocationOwnerToken previousOwner) {
+        if (previousOwner == null) {
+            return publish(state);
+        }
+        List<CompletionStage<?>> removals = new ArrayList<>();
+        for (MeshNodeRegistration configured : registration.meshNodes()) {
+            ZLinkInternalMeshNode node = nodes.get(configured.meshName());
+            if (node != null) {
+                removals.add(store.removeMeshNode(
+                    new ZLinkMeshNodeDescriptorKey(
+                        configured.meshName(),
+                        node.status().routingId()),
+                    previousOwner));
+            }
+        }
+        return all(removals).thenCompose(ignored -> publish(state));
     }
 
     public CompletionStage<Void> remove() {

@@ -78,6 +78,7 @@ remove an internal Framework surface that only forwards the same input.
 | monitor adapter | `MonitorEvent`, `ISocketMonitor.Recv` | Native events, timeout, and results are converted to Framework monitor events. | It owns monitor disposal and callback lifetime. | Monitor array and nonblocking poll storage are reused. | Keep semantic adapter. |
 | socket poller | Public `IPoller.Wait(Span<PollEvent>, TimeSpan)` mapped to `ZLinkBackendSocketReadiness` | Binding event flags become a Framework readiness contract. | The owner disposes the poller and event array together. | One binding `PollEvent[1]` is reused for the lifecycle. | Keep semantic port; binding flags stop at the .NET adapter. |
 | `ZLinkBackendSpotNodeWrapper` / `ZLinkBackendSpotWrapper` | `IMeshNode`, `ISpot`, and dispatch callbacks | A binding mesh object becomes Spot, Actor, completion, and lifecycle meaning. | It owns completion tables, dispatch pump, and Spot/Actor lifetime. | Only required semantic translation is performed. | Keep semantic adapter. |
+| `ZLinkSpotNodeInitializer` → `ZLinkBackendSpotNodeWrapper` → `ZLinkManagedMeshNode` | `MaxMessageSize`, directional HWM, mailbox caps, and directional timeouts | Converts the Framework `IZLinkMeshNodeSocketConfig` into managed ROUTER socket options without merging directions. | Values reach the node before startup bind and are applied when the socket is created. | Startup-only path; no message hot-path work. | Keep the semantic adapter path; keep send and receive values separate. |
 | `ZLinkBackendStreamSocketWrapper` | `IStreamSocket`, `IStreamSessionService` | Raw frames and bound-actor sessions become one Framework Stream meaning. | It owns session/socket shutdown order and shared MeshNode ownership. | `_sendGate` preserves session submit order. | Keep semantic adapter. |
 | `ZLinkRawRouterServicePort` / `ZLinkManagedMeshNode` raw receive | Public `IRouterSocket.Recv(Received, ...)` | This path handles service wire directly without another Framework application envelope. | One receive owner holds storage; the binding resets it on the next receive. Async request completion remains with the binding progress pump. | Caller-provided `Received` and reusable event arrays; the receive poller does not also claim `PollCompletion`. | Direct public binding call inside backend integration. |
 | `SetChannelName` on backend sockets | None | Channel name is a Framework domain/config value and had no binding socket meaning. | It stored no value and changed no lifecycle. | It added a call, validation, and fake method only. | Remove pass-through. |
@@ -96,6 +97,19 @@ without allocating a second Framework envelope, while the binding adapter maps i
 `ISubSocket.Subscribe` operation. The `TopicMessage` parameter is binding caller-owned storage,
 not a Framework public/domain type.
 `ISubSocket` never crosses the semantic backend contract.
+
+### 2.1 MeshNode ROUTER option handoff
+
+`ZLinkSpotNodeInitializer` passes the topology's `IZLinkMeshNodeSocketConfig` to the backend
+node once. `ZLinkBackendSpotNodeWrapper` moves it into directional `IMeshNode` properties,
+and `ZLinkManagedMeshNode` applies `SendHighWaterMark`, `ReceiveHighWaterMark`, `SendTimeout`,
+and `ReceiveTimeout` to their corresponding binding options when it creates the ROUTER socket.
+Copying the send high-water mark into the receive option or dropping the receive timeout would
+change the common topology contract.
+
+`BackendAdapterFactoryTests.SpotNode_Router_Send_Config_RoundTrips_Through_Binding` checks that
+the send and receive high-water marks and both timeouts remain separate. The test pins the
+source-level mapping; package and Windows process verification are separate evidence.
 
 ## 3. Comparing a direct call with an adapter
 
@@ -230,6 +244,7 @@ The following tests pin the decisions in this document:
 | Test | Pass criteria |
 |---|---|
 | `BackendAdapterFactoryTests.BackendFactory_Creates_Backend_Resources_Through_Runtime_Context` | The backend factory creates sockets, Spot, and Stream resources through one generation-scoped semantic context port; the binding context stays inside the .NET integration boundary. |
+| `BackendAdapterFactoryTests.SpotNode_Router_Send_Config_RoundTrips_Through_Binding` | MeshNode topology's MaxMessageSize, directional high-water marks, mailbox caps, and directional timeouts reach the managed ROUTER socket options without losing their direction. |
 | `ClientServerChannelRuntimeTests.BackendWrappers_DeliverUnsolicitedLivenessProbe` | A caller-provided `Received` envelope is reused for control receive and is not retained by the application queue. |
 | `InboundDispatchBudgetTests.Dispatch_queue_rejects_when_full_without_blocking_receive_loop` | A full application queue rejects its owned envelope and keeps the control receive loop nonblocking. |
 | `test_pubsub.pubsub_topic_message_can_be_released_for_reuse` | The binding public reuse operation clears received parts while allowing the same topic envelope to receive the next publish. |

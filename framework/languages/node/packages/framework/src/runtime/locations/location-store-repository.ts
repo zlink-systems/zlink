@@ -3645,10 +3645,12 @@ function capacityAvailable(
         candidate.objectKind === spotType.objectKind
         && candidate.stableType === spotType.stableType);
   const typeKey = spotType === undefined ? undefined : capacityTypeKey(spotType);
-  return capacity.active.actors + capacity.pending.actors + requested.actors
-      <= descriptor.populationCapacity.actors.limit
-    && capacity.active.spots + capacity.pending.spots + requested.spots
-      <= descriptor.populationCapacity.spots.limit
+  return (descriptor.populationCapacity.actors.limit === 0
+      || capacity.active.actors + capacity.pending.actors + requested.actors
+        <= descriptor.populationCapacity.actors.limit)
+    && (descriptor.populationCapacity.spots.limit === 0
+      || capacity.active.spots + capacity.pending.spots + requested.spots
+        <= descriptor.populationCapacity.spots.limit)
     && (spotType === undefined
       || typeCapacity !== undefined
         && (typeCapacity.limit === 0

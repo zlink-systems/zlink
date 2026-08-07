@@ -4,7 +4,7 @@ title: "Framework Error Model"
 
 # Framework Error Model
 
-[Spec index](README.ko.md) · [Previous: Failure handling and failover scope](31-failure-failover-policy.ko.md)
+[Spec index](README.en.md) · [Previous: Failure handling and failover scope](31-failure-failover-policy.en.md)
 
 > **What this chapter defines** — the shared error delivered to an
 > Application when `Send`, `Request`, or a lifecycle operation fails.
@@ -104,8 +104,8 @@ following `ErrorKind`s.
 - This distinction applies **only to a queue**. When a target node's
   placement capacity is insufficient, that's an admission decision, not
   a queue, so `CapacityExceeded` is correct
-  ([Spot Actor](15-spot-actor.ko.md),
-  [Spot address messaging](16-spot-address-messaging.ko.md)).
+  ([Spot Actor](15-spot-actor.en.md),
+  [Spot address messaging](16-spot-address-messaging.en.md)).
 - **The Message Follow relay queue is an exception, and is
   `CapacityExceeded`.** This queue is physically on the previous owner
   node, but the runtime responsible for the relay owns it as its own
@@ -113,8 +113,8 @@ following `ErrorKind`s.
   messages, 16 MiB). To the caller, this means not "the other node
   can't receive" but "the fixed capacity of the relocation path was
   exceeded," so the retry judgment differs
-  ([Spot Actor](15-spot-actor.ko.md),
-  [Location runtime](21-location-runtime.ko.md)). This kind **applies
+  ([Spot Actor](15-spot-actor.en.md),
+  [Location runtime](21-location-runtime.en.md)). This kind **applies
   only to `Request`** — the result of an already-completed one-way call
   never changes because of a relay failure (§4), and exceeding the relay
   bound is recorded only in metrics/logs/traces.

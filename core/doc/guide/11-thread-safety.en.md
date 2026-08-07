@@ -1,4 +1,4 @@
-[한국어](11-thread-safety.ko.md)
+[한국어](11-thread-safety.en.md)
 
 # Thread safety
 

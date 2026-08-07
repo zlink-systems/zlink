@@ -2,6 +2,7 @@ using SpotService.Shared;
 using SpotService.Server.Play.Spots;
 using Systems.Zlink;
 using Zlink.Framework.Contracts.Errors;
+using Zlink.Framework.Contracts.Locations;
 using Zlink.Framework.Contracts.Spots;
 
 namespace SpotService.Server.Play.Endpoints;
@@ -10,6 +11,23 @@ internal static class InstanceSpotEndpoints
 {
     public static void MapInstanceSpotEndpoints(WebApplication app)
     {
+        app.MapPost("/instance/location", async (
+            IZLinkLocationRuntimeQuery locations,
+            InstanceLocationReq request,
+            CancellationToken cancellationToken) =>
+        {
+            var entry = await locations.FindSpotLocationAsync(
+                request.SpotId,
+                cancellationToken);
+            return Results.Ok(entry is null
+                ? new InstanceLocationRes(false, "Missing", string.Empty, 0)
+                : new InstanceLocationRes(
+                    true,
+                    entry.State.ToString(),
+                    entry.NodeRid.ToString(),
+                    entry.ObjectGeneration));
+        });
+
         app.MapPost("/instance/cold-request", async (
             IZLinkSpotClient spots,
             InstanceColdRequestReq request,

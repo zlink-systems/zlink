@@ -3,7 +3,7 @@ title: "11. Monitoring — Status Observation And Diagnostics · Java"
 ---
 
 <!-- framework-adapter-nav:start -->
-[Guide Home](../../../index.ko.md) | [Previous: Location](10-location.en.md) | [Next: Operations — metrics · drain · readiness](12-operations.en.md)
+[Guide Home](../../../index.en.md) | [Previous: Location](10-location.en.md) | [Next: Operations — metrics · drain · readiness](12-operations.en.md)
 <!-- framework-adapter-nav:end -->
 
 # 11. Monitoring — Status Observation And Diagnostics
@@ -97,9 +97,9 @@ sets the level.
 ZLinkFrameworkConfigurer zlink(PlaySettings settings) {
     return options -> {
         options.configureDispatch()
-            .messageFlow(ZLinkMessageFlowLogMode.ERRORS_ONLY) // Default -- failures and backpressure only.
-            .traceLogFile(settings.logDir() + "/flow.jsonl")  // Written separately from app logs.
-            .traceLabel(settings.instanceName());             // Marks which instance the record is from.
+            .messageFlow(ZLinkMessageFlowLogMode.ERRORS) // Default -- failures and backpressure only.
+            .traceSampleRate(1.0)
+            .includeMessageSizes(true);
     };
 }
 ```
@@ -107,23 +107,17 @@ ZLinkFrameworkConfigurer zlink(PlaySettings settings) {
 | Level | Recording scope |
 | --- | --- |
 | `OFF` | Records nothing |
-| `ERRORS_ONLY` (default) | Dispatch failures and backpressure |
-| `KEY_TRANSITIONS` | The above + major transitions like receive/dispatch/complete |
-| `VERBOSE` | The above + a record for every individual message |
-| `DIAGNOSTIC` | The above + diagnostic detail |
+| `ERRORS` (default) | Dispatch failures and backpressure |
+| `NORMAL` | The above + major transitions like receive/dispatch/complete |
+| `DETAILED` | The above + detailed diagnostics for individual messages |
 
-**Keep operations at `ERRORS_ONLY` and raise it only when needed.** `VERBOSE` and above
+**Keep operations at `ERRORS` and raise it only when needed.** `DETAILED`
 record something for every message, so on high-throughput paths it becomes a load in itself.
 
-To receive records in your program, register an observer.
-
-```java
-options.configureDispatch().setMessageFlowObserver(error -> {
-    // Runs on the runtime thread -- don't block or call back into a framework surface here.
-    auditSink.append(error);
-    return CompletableFuture.completedFuture(null);
-});
-```
+The Framework writes structured records to the standard logger, trace, and metric providers
+configured by the application. A message-flow callback observer, runtime error sink, raw event DTO,
+and diagnostics file path aren't public APIs. A provider failure is isolated from the original
+message operation's terminal result.
 
 The behavior for a dispatch with no handler is set by `unhandled()` — per branch with
 `setRequest` / `setSend` / `setPublish`, and the recording level with `setSendLogLevel` /
@@ -144,7 +138,7 @@ ZLinkMetricsCustomizer zlinkMetrics(PlaySettings settings) {
 ```
 
 Instrument names start with `zlink.`. The exact names, kinds, units, and labels are owned
-by [Runtime Metrics And Aggregation Rules](../../../common/spec/25-runtime-metrics.ko.md).
+by [Runtime Metrics And Aggregation Rules](../../../common/spec/25-runtime-metrics.en.md).
 
 > **The Java runtime currently emits only part of the contract.** Of the 47 the contract
 > defines, only 14 are emitted, and the three request-related ones come out as
@@ -180,10 +174,8 @@ blips.
   `Subscription.request(n)`.
 - **Some state transitions are missing** → `observe(...)`'s capacity was exceeded and they
   got skipped. Raise the capacity and make the subscriber consume faster.
-- **There's a deadlock inside the observer** → it runs on the runtime thread. Don't
-  block-wait or call back into a framework surface inside it.
-- **The flow record is empty** → the default level is `ERRORS_ONLY`, so normal flow isn't
-  recorded. Raise it to `KEY_TRANSITIONS` or above.
+- **The flow record is empty** → the default level is `ERRORS`, so normal flow isn't
+  recorded. Raise it to `NORMAL` or above.
 - **Metrics aren't showing up** → check that Actuator and the registry are in the context.
   The framework only publishes instruments to the registry — it doesn't create the registry
   itself.
@@ -195,4 +187,4 @@ blips.
 - The formal contract: [Java monitoring public interface](../../../common/spec/server/languages/java/interfaces/monitoring.en.md)
 - Metrics and drain/readiness operations: [12. Operations](12-operations.en.md)
 - Diagnostics option list: [16. Options](16-options.en.md) §4
-- Instrument naming convention: [Runtime Metrics And Aggregation Rules](../../../common/spec/25-runtime-metrics.ko.md)
+- Instrument naming convention: [Runtime Metrics And Aggregation Rules](../../../common/spec/25-runtime-metrics.en.md)

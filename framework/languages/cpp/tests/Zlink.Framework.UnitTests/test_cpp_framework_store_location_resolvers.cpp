@@ -1763,12 +1763,20 @@ TEST (ZLinkFrameworkStoreLocationResolvers, ResolvesActorAddress)
         cached->authority_owner_generation,
         cached->owner,
         cached->node_generation + 1}));
+    auto wire_fence = *cached;
+    wire_fence.owner.owner_id.clear ();
     EXPECT_TRUE (resolvers.invalidate_actor_address_if_matches (
-      "actor-b", *cached));
+      "actor-b", wire_fence));
+    const auto after_wire_invalidation =
+      resolvers.resolve_actor_address ("actor-b").result ().value ();
+    ASSERT_TRUE (after_wire_invalidation.has_value ());
+    EXPECT_EQ (2u, store.resolve_actor_count.load ());
+    EXPECT_TRUE (resolvers.invalidate_actor_address_if_matches (
+      "actor-b", *after_wire_invalidation));
     const auto reloaded = resolvers.resolve_actor_address ("actor-b").result ().value ();
     ASSERT_TRUE (reloaded.has_value ());
     EXPECT_EQ (cached->object_generation, reloaded->object_generation);
-    EXPECT_EQ (2u, store.resolve_actor_count.load ());
+    EXPECT_EQ (3u, store.resolve_actor_count.load ());
 
     /* Destroy removes the authority, so a cached route must be discarded even
      * when the replacement incarnation can reuse the same generation. */
@@ -1776,7 +1784,7 @@ TEST (ZLinkFrameworkStoreLocationResolvers, ResolvesActorAddress)
     const auto after_destroy =
       resolvers.resolve_actor_address ("actor-b").result ().value ();
     ASSERT_TRUE (after_destroy.has_value ());
-    EXPECT_EQ (3u, store.resolve_actor_count.load ());
+    EXPECT_EQ (4u, store.resolve_actor_count.load ());
 
     const auto missing = resolvers.resolve_actor_address ("nobody").result ().value ();
     EXPECT_FALSE (missing.has_value ());

@@ -51,6 +51,58 @@ export class RouterSocket extends RoutedMessageSocket {
       this.requestDirect(peerRid, parts, cbOrTimeout, opFlags, opTimeout)
     );
   }
+  requestTransportPair(
+    peerRid: RoutingId,
+    transportPairId: bigint,
+    transportPairGeneration: bigint
+  ): RequestOperation {
+    return new RuntimeRequestOperation((parts, cbOrTimeout, opFlags, opTimeout) => {
+      const peer = normalizeRoutingId(peerRid, 'peerRid');
+      const nativeHandle = getNativeHandle(this);
+      return executeNativeRequest({
+        callbackOrTimeout: cbOrTimeout,
+        flagsOrTimeout: opFlags,
+        maybeTimeout: opTimeout,
+        startProgress: () => startRequestProgress(nativeHandle),
+        invoke: (callback, flags, timeoutMs) => {
+          native.routerRequestTransportPair(
+            nativeHandle,
+            peer,
+            transportPairId,
+            transportPairGeneration,
+            parts,
+            callback,
+            flags | 0,
+            timeoutMs | 0
+          );
+        },
+        submitErrorMessage: 'transport-pair request failed',
+        requestErrorMessage: 'transport-pair request failed'
+      });
+    });
+  }
+  sendTransportPair(
+    peerRid: RoutingId,
+    transportPairId: bigint,
+    transportPairGeneration: bigint,
+    payloadOrParts: MessageLike | readonly MessageLike[],
+    flags: SendFlags = SendFlags.None
+  ): void {
+    const peer = normalizeRoutingId(peerRid, 'peerRid');
+    const parts = normalizeOperationPayload(payloadOrParts);
+    try {
+      native.routerSendTransportPair(
+        getNativeHandle(this),
+        peer,
+        transportPairId,
+        transportPairGeneration,
+        parts,
+        flags | 0
+      );
+    } catch (error) {
+      throw submitNativeError(error, flags, 'transport-pair send failed');
+    }
+  }
   private requestDirect(
     peerRid: RoutingId,
     payloadOrParts: MessageLike | readonly MessageLike[],
@@ -97,6 +149,26 @@ export class RouterSocket extends RoutedMessageSocket {
       );
     } catch (error) {
       throw submitNativeError(error, SendFlags.None, 'completion control failed');
+    }
+  }
+  trySendCompletionControlTransportPair(
+    peerRid: RoutingId,
+    transportPairId: bigint,
+    transportPairGeneration: bigint,
+    payloadOrParts: readonly MessageLike[]
+  ): boolean {
+    const peer = normalizeRoutingId(peerRid, 'peerRid');
+    const parts = normalizeOperationPayload(payloadOrParts);
+    try {
+      return native.routerTrySendCompletionControlTransportPair(
+        getNativeHandle(this),
+        peer,
+        transportPairId,
+        transportPairGeneration,
+        parts
+      );
+    } catch (error) {
+      throw submitNativeError(error, SendFlags.None, 'transport-pair completion control failed');
     }
   }
   setCompletionControlHandler(

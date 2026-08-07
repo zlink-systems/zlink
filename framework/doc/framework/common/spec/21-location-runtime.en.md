@@ -4,7 +4,7 @@ title: "Location Runtime"
 
 # Location Runtime
 
-[Spec table of contents](README.en.md) · [Previous: Session-Actor Dispatch](20-session-actor-dispatch.ko.md) · [Next: Location Store Provider SPI And The Official Redis Implementation](22-location-store-redis.ko.md)
+[Spec table of contents](README.en.md) · [Previous: Session-Actor Dispatch](20-session-actor-dispatch.en.md) · [Next: Location Store Provider SPI And The Official Redis Implementation](22-location-store-redis.en.md)
 
 > **What this chapter defines** — how the framework locates an application object's
 > current position and moves it to another node.
@@ -34,8 +34,8 @@ is called the [Location Store](01-glossary.en.md#location-store). The store hold
 actual restore data is called the Relocation Store.
 
 The exact functions a store implementer must provide are defined by the
-[Location Store provider](22-location-store-redis.ko.md) and
-[Relocation Store provider](23-relocation-store-redis.ko.md) documents. This document
+[Location Store provider](22-location-store-redis.en.md) and
+[Relocation Store provider](23-relocation-store-redis.en.md) documents. This document
 explains the order in which the framework uses the two Stores and the state it must keep
 on failure.
 
@@ -90,7 +90,7 @@ identity, generation, membership, and the change to apply during relocation. Her
 generation is the generation number distinguishing an object re-created under the same ID
 from a previous owner's belated request. Actor state and message payload aren't included.
 The actual application state/queue/incomplete-work record is stored separately in the
-[Relocation Store](23-relocation-store-redis.ko.md#3-reference와-저장-크기).
+[Relocation Store](23-relocation-store-redis.en.md#3-reference-and-storage-size).
 
 For example, if a User Spot has 10,000 Actors, roughly 10 list pages are created. The
 last page holds only the remaining entries.
@@ -744,17 +744,36 @@ Operational tools can query the current location by ActorId or SpotId. A list pe
 kind and stable type can also be read by page. This result is for checking operational
 status and isn't used as an application message's target list or placement condition.
 
+- Exact lookup distinguishes Actor and Spot. A missing record returns empty and does not build
+  a `Missing` entry.
+- A paged list requires object kind as a filter, and accepts stable type and MeshName as optional
+  filters.
 - One page returns `1..1000` entries.
-- Stored size is at most 4 MiB.
+- One encoded page is at most 4 MiB. If adding the next entry would cross the limit, that entry
+  begins the next continuation page. Existing field-length limits keep one entry within this
+  bound.
 - Each entry has the global ID, `ObjectGeneration`, `MeshName`, Node RID, state, and
   stable type.
+- The continuation token is opaque and is neither interpreted nor modified by the application.
+  One page cycle does not return a duplicate ID; a change completed during a cycle may first
+  appear in the next cycle.
 - A function returning the whole set at once with no limit isn't provided.
 - `Missing`, `Creating`, and Store errors aren't cached as "the object doesn't exist."
+
+Query results use the following states.
+
+| Stored state | Exact lookup | Paged list |
+|---|---|---|
+| No record | Empty | No entry |
+| `Creating` | A `Creating` entry | Includes a `Creating` entry |
+| `Ready` | A `Ready` entry | Includes a `Ready` entry |
+| Current owner unavailable after commit | An `Unavailable` entry | Includes an `Unavailable` entry |
+| Store query failure | An `Unavailable` framework error | Ends the whole page as an error and returns no partial successful entries |
 
 Topology enumeration only targets MeshNode descriptors. Since ClientServer channel and
 classic fanout channel aren't MeshNodes, they don't appear in this list — their state is
 checked via topology status in
-[50 Runtime Monitoring](24-runtime-monitoring.ko.md) §2.2. Object location lookup is
+[50 Runtime Monitoring](24-runtime-monitoring.en.md) §2.2. Object location lookup is
 separate from this enumeration and answers only by ActorId/SpotId.
 
 ## 7. Moving An Actor Or User Spot To Another Node
@@ -764,7 +783,7 @@ Actor, or a `SpotWide` User Spot aggregate from a source node to a target node. 
 where the runtime is proceeding with shutdown and not accepting new work is called
 [`Shutdown`](01-glossary.en.md#shutdown). Host-wide target selection and the completion
 conditions for `Relocate` and `Shutdown` are defined by
-[Host Relocation And Shutdown](28-graceful-drain-handoff.ko.md).
+[Host Relocation And Shutdown](28-graceful-drain-handoff.en.md).
 
 The framework follows this order for each relocation target.
 
@@ -889,15 +908,15 @@ rejected before storing state.
 
 Target factory and `Restore` finish before recording `Prepared`. The exact order of
 callback and queue is defined by
-[Host Relocation](28-graceful-drain-handoff.ko.md#8-unit-하나를-이전하는-순서).
+[Host Relocation](28-graceful-drain-handoff.en.md#8-the-order-for-relocating-one-unit).
 
 ### 7.3 When Stored Restore Data Becomes The Official Data
 
 Queue stopping, concurrent move count, payload composition, and timer/Session handling
 are defined by
-[Host Relocation §§7-9](28-graceful-drain-handoff.ko.md#7-relocation-unit과-실행량-제한).
+[Host Relocation §§7-9](28-graceful-drain-handoff.en.md#7-relocation-units-and-concurrency-limits).
 Payload size, splitting, and retention are defined by
-[Relocation Store](23-relocation-store-redis.ko.md#3-reference와-저장-크기). This
+[Relocation Store](23-relocation-store-redis.en.md#3-reference-and-storage-size). This
 section only defines which data the Location Store recognizes as the basis for restore.
 
 | Stage | Value recorded in the Location Store | Condition for next stage |
@@ -1043,8 +1062,8 @@ work before `Aborted` is recorded.
 If the framework doesn't receive the result of a Store request, it doesn't guess success
 or failure. It re-checks the Store with the same key and first-read version. The exact
 return values and input limits of provider functions are defined by
-[Location Store](22-location-store-redis.ko.md) and
-[Relocation Store](23-relocation-store-redis.ko.md).
+[Location Store](22-location-store-redis.en.md) and
+[Relocation Store](23-relocation-store-redis.en.md).
 
 During `StoreFailureGrace`, the last fully-read descriptor list is kept. Connection
 status judgment for already-established transport connections continues, but no new
@@ -1085,7 +1104,7 @@ source, or guess and use a different payload.
 ## 9. Cleaning Up Store Records When A Host Shuts Down
 
 The state and final result of host commands are defined by
-[Host Relocation And Shutdown](28-graceful-drain-handoff.ko.md). This section only
+[Host Relocation And Shutdown](28-graceful-drain-handoff.en.md). This section only
 defines the order in which the Location runtime cleans up Store records and in-process
 resources.
 
@@ -1129,4 +1148,4 @@ framework owns.
 | Store failure | During the grace period, only new discovery connections are blocked — the owner deadline isn't extended. A Store request whose result wasn't received is re-checked with the same key and version. |
 
 Permit, queue, timer, Session handoff, and host final-result verification are defined by
-[Host Relocation contract test](28-graceful-drain-handoff.ko.md#14-contract-test-검증-요구).
+[Host Relocation contract test](28-graceful-drain-handoff.en.md#14-contract-test-verification-requirements).

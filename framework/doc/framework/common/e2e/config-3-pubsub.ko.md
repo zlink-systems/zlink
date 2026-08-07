@@ -326,7 +326,7 @@ Endpoint가 없는 automatic subscriber는 publisher discovery에 Location Store
 - 시작 조건: Negative host가 endpoint 없는 subscriber만 등록하고 Location Store를 등록하지 않는다.
 - 절차: Runner가 host를 시작하여 process terminal과 health를 확인한다.
 - 검증: Host는 listener와 ready status를 공개하지 않고 public configuration error로 종료된다.
-- 세부 동작: [Framework API §7](../spec/06-framework-api.ko.md)의 prerequisite를
+- 세부 동작: [Framework API의 Classic fanout](../spec/06-framework-api.ko.md#11-classic-fanout)의 automatic Store prerequisite를
   검증한다.
 
 #### PS-E2B Automatic과 manual mode를 한 registration에 섞으면 거부한다
@@ -439,7 +439,7 @@ Subscriber가 특정 topic의 Application event를 처리하지 않아도 Framew
 **검증 질문:** 구독하지 않은 topic만 계속 publish해도 publisher가 peer deadline을 넘겨 Ready를
 유지하는가.
 
-- 시작 조건: Subscriber는 `events.b`만 구독하고 publisher는 ready다.
+- 시작 조건: Subscriber는 ChannelName에 연결되어 `events.b` handler만 등록하고 publisher는 ready다.
 - 절차: Publisher가 `events.a` event를 peer deadline보다 긴 검증 구간 동안 주기적으로 보낸다. 검증
   구간은 fixed 15초 deadline에 runner tolerance를 더한 값으로 계산한다.
 - 검증: `events.a` handler evidence는 없지만 publisher status는 ready를 유지한다. 이후 `events.b` marker를
@@ -456,20 +456,24 @@ Subscriber가 특정 topic의 Application event를 처리하지 않아도 Framew
 Subscriber에 packet handler가 없으면 그 event를 Application handler에 전달할 수 없다. 다른 정상 packet의
 dispatch는 계속되어야 한다.
 
-**검증 질문:** Handler 없는 packet은 public observer에서 `no_handler/drop`으로 보이고 다음 정상 event는
+**검증 질문:** Handler 없는 packet은 application logger provider에서 `no_handler/drop`으로 보이고 다음 정상 event는
 처리되는가.
 
-- 시작 조건: Subscriber가 normal packet handler와 public message-flow observer를 등록하고 publisher가
+- 시작 조건: Subscriber가 normal packet handler와 application logger provider를 등록하고 publisher가
   ready다.
 - 절차: Handler가 없는 packet name을 publish한 뒤 normal packet을 publish한다.
-- 검증: 첫 event는 handler evidence가 없고 public observer가 `no_handler/drop`을 한 번 제공한다. Normal
+- 검증: 첫 event는 handler evidence가 없고 logger provider가 `surface=classic_fanout`,
+  `message_kind=send`, `outcome=failed`, `reason=no_handler`, `action=drop`인
+  `zlink.dispatch_error`를 한 번 제공한다. Record에는 `channel_route_kind`가 없으며 publisher delivery
+  result가 아니라 subscriber-local dispatch 결과다. Normal
   event는 handler에서 한 번 처리된다.
 - 세부 동작: [Framework API §11](../spec/06-framework-api.ko.md)과
   [Message flow tracing §2.2](../spec/26-message-flow-tracing.ko.md)을 검증한다.
 
 ## 5. 완료 기준
 
-- 모든 scenario는 public fanout publish, status·observer와 역할 server의 application evidence만 사용한다.
+- 모든 scenario는 public fanout publish, status·application logger provider와 역할 server의 application
+  evidence만 사용한다.
 - Raw frame, private descriptor, socket monitor와 protocol-negative publisher를 E2E assertion에 사용하지 않는다.
 - Ready와 reconnect는 public status를 bounded polling하고 실제 event 수신으로 대조한다. 모든 중간 state가
   관찰된다고 가정하지 않는다.

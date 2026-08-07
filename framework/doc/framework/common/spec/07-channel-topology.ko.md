@@ -77,7 +77,10 @@ public interface IZLinkNetworkOptions
 
 public interface IZLinkMeshNodeSocketConfig
 {
-    // RouteMesh SS에는 Framework-level message-size setting이 없다.
+    ulong SendHighWaterMark { get; set; }
+    ulong ReceiveHighWaterMark { get; set; }
+    ulong MailboxMessageBudget { get; set; }
+    ulong MailboxByteBudget { get; set; }
     TimeSpan? ReceiveTimeout { get; set; }
     TimeSpan? SendTimeout { get; set; }
 }
@@ -479,6 +482,18 @@ Framework는 handshake에서 양쪽 Object role이 모두 `Client`임을 확인�
 Endpoint, expected RID 또는 configuration generation이 바뀌면 새 intent로 한 번
 다시 확인할 수 있다.
 
+수동 endpoint를 Location Store descriptor와 함께 사용하는 object peer 경로에서도 endpoint는
+연결 의도만 제공한다. Framework가 endpoint와 일치하는 descriptor를 찾으면 handshake의
+expected 값에 descriptor의 RID, 양수 lifecycle generation과 security identity를 함께 넣는다.
+endpoint와 RID만 전달해 generation `0`을 사용하거나 RID를 security identity처럼 사용하는
+fallback은 descriptor 기반 연결에 사용하지 않는다. descriptor를 찾지 못한 수동 연결은
+descriptor 기반 placement를 주장하지 않고 등록된 endpoint와 handshake 결과만 따른다.
+Object role이 활성화된 MeshNode도 descriptor가 아직 없을 때 endpoint-only intent를 먼저 등록한다.
+이후 Location Store에 일치하는 descriptor가 나타나면 host·Spot runtime이 그 intent를 새 descriptor
+값으로 교체할 수 있다. 교체는 endpoint, RID, 양수 lifecycle generation과 security identity를 모두
+전달하며, 이전 endpoint intent가 liveness close로 닫히기 전에는 새 intent를 설치하지 않는다.
+descriptor가 없는 동안에는 이 경로도 placement owner라고 주장하지 않는다.
+
 Automatic에서도 연결 경합이나 오래된 discovery snapshot 때문에 중복 후보가 생기면
 같은 admission 규칙을 적용한다. 이 안전장치는 automatic initiator 선택을 대신하지
 않으며 application이 관찰하는 메시징 의미를 바꾸지 않는다.
@@ -592,22 +607,30 @@ Drain을 시작한 MeshNode는 새로운 ChannelName 선택과 Logical Multicast
 target에서 제외한다. 이미 제출한 작업과 RID direct의 종료 규칙은
 [Graceful drain](28-graceful-drain-handoff.ko.md)이 정의한다.
 
-## 8. RouteMesh SS message 크기
+## 8. RouteMesh SS message 크기와 mailbox 상한
 
 RouteMesh MeshNode의 startup 설정에는 Framework-level `MaxMessageSize`가 없다. RouteMesh의
 ServerServer(SS) transport는 listener message-size setter를 제공하지 않으며, Framework-level
 `MaxMessageSize`를 이유로 complete message를 별도로 거부하지 않는다.
 
-메시지는 transport와 service-wire protocol의 표현 한계, 그리고 process가 사용할 수 있는
-메모리 한계를 계속 따른다. 이 하위 한계에서 message가 거부되면 payload 일부를 handler에
-전달하지 않고, request는 [오류 모델](32-framework-error-model.ko.md)에 정의된 terminal
-결과로 끝난다. Application handler가 payload 크기를 검사하여 이 하위 한계를 대신하지
-않는다.
+`ConfigureRouterSocket()`의 `SendHighWaterMark`와 `ReceiveHighWaterMark`, `SendTimeout`과
+`ReceiveTimeout`은 서로 다른 방향의 socket option으로 적용한다.
+
+`MailboxMessageBudget`과 `MailboxByteBudget`은 socket HWM과 별개로 owner별 application
+mailbox에 적용하는 message 수와 byte 합계 상한이다. Socket이 수신할 수 있는 양과 owner가
+실행을 위해 보관할 수 있는 양을 같은 설정으로 해석하지 않는다. 두 byte 회계 규칙은
+[Framework API §8.2](06-framework-api.ko.md#82-handler-실행-객체와-dependency-수명)가
+정의한다.
+
+메시지는 transport와 service-wire protocol의 표현 한계, 그리고 process memory 한계를 계속
+따른다. 이 하위 한계에서 message가 거부되면 payload 일부를 handler에 전달하지 않고 request는
+[오류 모델](32-framework-error-model.ko.md)에 정의된 terminal 결과로 끝난다. Application handler가
+payload 크기를 검사하여 이 하위 한계를 대신하지 않는다.
 
 ClientServer는 [Framework API §6](06-framework-api.ko.md)가 정의하는 일반 application
 listener의 `MaxMessageSize` 계약을 유지한다. StreamNode의 `64 KiB` 기본값이나 Core STREAM의
-방향별 규칙을 ClientServer에 적용하지 않는다. 이 절에서 추가하지 않는 것은 RouteMesh SS의
-별도 listener 설정이며, StreamNode의 Core STREAM inbound 상한은 [STREAM session §4](19-stream-session.ko.md#4-stream-socket-message-size)가
+방향별 규칙을 ClientServer에 적용하지 않는다. RouteMesh SS에는 별도 listener message-size 설정이
+없으며, StreamNode의 Core STREAM inbound 상한은 [STREAM session §7](19-stream-session.ko.md#7-등록-모델)가
 정의한다.
 
 ## 9. Classic fanout과의 경계

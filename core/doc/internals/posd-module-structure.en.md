@@ -1,4 +1,4 @@
-[한국어](posd-module-structure.ko.md) | English
+[한국어](https://zlink-systems.github.io/zlink/ko/internals/posd-module-structure/) | English
 
 # Core POSD Module Structure
 

@@ -9,7 +9,7 @@ parity-reference lane), and each entry was written by cross-checking the Node.js
 > The exact-interface document linked below stays Korean-only. Following that link lands on
 > Korean content.
 
-- [Node.js exact interface](../../common/spec/server/languages/node/interfaces/README.ko.md) —
+- [Node.js exact interface](../../common/spec/server/languages/node/interfaces/README.en.md) —
   the document that owns the contract text itself.
 - **This reference** — collects only "what you must know to complete this one call."
 

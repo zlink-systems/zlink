@@ -26,10 +26,15 @@ import { throwIfAborted } from '../abort';
 import { ZLinkRouteDisconnectedError } from './route-disconnected-error';
 import { attachEndpointConnections } from '../../contracts/Configuration/RuntimeEndpointConnections';
 import { ZLinkRouteMemberSnapshot } from './route-member-snapshot';
+import {
+  ZLinkFrameworkInternalErrorKind,
+  createInternalFrameworkException
+} from '../framework-errors-internal';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { ZLinkBufferMessage as RuntimeMessage } from '../backend/runtime-message';
 import type { Message } from '../../contracts/Common/Message';
 import { ServiceDiscoveryRegistry } from '../foundation/service-discovery-registry';
+import { ServiceWireProtocolError } from '../foundation/service-wire-m6a-codec';
 import {
   decodeClientServerControl,
   encodeClientServerAdmit,
@@ -159,9 +164,13 @@ export class ZLinkChannelSocketRegistry {
   ) {}
 
   async dispose(): Promise<void> {
+    const clientServerConnections = [...new Set(this.clientServerConnections.values())];
+    const clientServerPollers = clientServerConnections.map(
+      (connection) => connection.readablePoller
+    );
     const sockets = [
       ...this.clientDealers.values(),
-      ...[...new Set(this.clientServerConnections.values())].map(value => value.dealer),
+      ...clientServerConnections.map(value => value.dealer),
       ...[...this.fanoutConnections.values()].map(value => value.subscriber),
       ...this.channelRouters.values(),
       ...this.publishers.values(),
@@ -192,6 +201,7 @@ export class ZLinkChannelSocketRegistry {
     const monitors = [...this.ownedMonitors];
     this.ownedMonitors.clear();
     const cleanup = await Promise.allSettled([
+      ...clientServerPollers.map((poller) => poller.dispose()),
       ...monitors.map((monitor) => monitor.dispose()),
       ...sockets.map((socket) => socket.dispose())
     ]);
@@ -606,7 +616,10 @@ export class ZLinkChannelSocketRegistry {
   clientDealerForOutbound(channelName: string): ZLinkBackendDealerSocket | undefined {
     const channel = this.registration.channels.get(channelName);
     if (channel?.client === undefined) {
-      throw new ZLinkConfigurationException(`Channel client '${channelName}' is not registered.`);
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.InvalidConfiguration,
+        `Channel client role '${channelName}' is not configured.`
+      );
     }
     return this.selectClientServerDealer(channelName);
   }
@@ -800,11 +813,17 @@ export class ZLinkChannelSocketRegistry {
       } else if (record.kind === 'livenessAck'
         && received.parts.length === 1
         && received.requestSeq === null) {
-        this.acceptClientServerServerLivenessAck(
+        if (!this.acceptClientServerServerLivenessAck(
           channelName,
           String(received.routingId),
           record.probeId
-        );
+        )) {
+          this.reportStaleClientServerLivenessAck(
+            channelName,
+            String(received.routingId),
+            record.probeId
+          );
+        }
         return true;
       } else if (record.kind !== 'hello'
         || received.parts.length !== 1
@@ -1305,10 +1324,19 @@ export class ZLinkChannelSocketRegistry {
       );
     }
     const candidate = admissionToDiscoveryDescriptor(admission);
-    if (candidate.descriptorRevision < current.descriptorRevision) return;
+    if (candidate.effectiveMaxMessageBytes !== current.effectiveMaxMessageBytes) {
+      throw new ServiceWireProtocolError(
+        `ClientServer '${connection.channelName}' descriptor update changed the admitted message bound.`
+      );
+    }
+    if (candidate.descriptorRevision < current.descriptorRevision) {
+      throw new ServiceWireProtocolError(
+        `ClientServer '${connection.channelName}' descriptor revision is stale.`
+      );
+    }
     if (candidate.descriptorRevision === current.descriptorRevision) {
       if (!sameClientServerDiscoveryDescriptor(candidate, current)) {
-        throw new ZLinkConfigurationException(
+        throw new ServiceWireProtocolError(
           `ClientServer '${connection.channelName}' descriptor revision conflicts.`
         );
       }
@@ -1353,6 +1381,7 @@ export class ZLinkChannelSocketRegistry {
   private requestClientServerLiveness(
     connectionId: string,
     connection: {
+      readonly channelName: string;
       readonly dealer: ZLinkBackendDealerSocket;
       readonly physicalConnectionId: symbol;
       outstandingProbeId?: bigint;
@@ -1366,11 +1395,18 @@ export class ZLinkChannelSocketRegistry {
         const current = this.clientServerConnections.get(connectionId);
         if (current === undefined
           || current.physicalConnectionId !== connection.physicalConnectionId
-          || current.outstandingProbeId !== probeId
           || result !== 0
           || parts.length !== 1) return;
         const record = decodeClientServerControl(parts[0]!.data());
-        if (record.kind !== 'livenessAck' || record.probeId !== probeId) return;
+        if (record.kind !== 'livenessAck') return;
+        if (current.outstandingProbeId !== probeId || record.probeId !== probeId) {
+          this.reportStaleClientServerLivenessAck(
+            connection.channelName,
+            connectionId,
+            record.probeId
+          );
+          return;
+        }
         current.outstandingProbeId = undefined;
         current.deadlineAt = performance.now() + CLIENT_SERVER_PEER_DEADLINE_MS;
       } finally {
@@ -1425,13 +1461,26 @@ export class ZLinkChannelSocketRegistry {
     channelName: string,
     routingId: RoutingId,
     probeId: bigint
-  ): void {
+  ): boolean {
     const peer = this.clientServerServerPeers.get(
       clientServerServerPeerKey(channelName, routingId)
     );
-    if (peer === undefined || peer.outstandingProbeId !== probeId) return;
+    if (peer === undefined || peer.outstandingProbeId !== probeId) return false;
     peer.outstandingProbeId = undefined;
     peer.deadlineAt = performance.now() + CLIENT_SERVER_PEER_DEADLINE_MS;
+    return true;
+  }
+
+  private reportStaleClientServerLivenessAck(
+    channelName: string,
+    peer: string,
+    probeId: bigint
+  ): void {
+    this.oneWayFailureSink?.(createInternalFrameworkException(
+      ZLinkFrameworkInternalErrorKind.RequestProtocolError,
+      `ClientServer '${channelName}' ignored stale or duplicate liveness ACK '${probeId}' from '${peer}'.`,
+      false
+    ));
   }
 
   private pushClientServerDescriptorUpdate(

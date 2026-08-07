@@ -49,6 +49,9 @@ struct service_options_t
     std::string log_dir;
     std::string mesh_endpoint;
     std::vector<std::string> mesh_peer_endpoints;
+    std::int32_t placement_weight = 100;
+    std::int32_t actor_limit = 2;
+    std::int32_t spot_limit = 2;
 
     static service_options_t bind (const configuration_section_t &section)
     {
@@ -70,7 +73,11 @@ struct service_options_t
                 .monitor_profile = section.require ("monitorProfile"),
                 .log_dir = section.require ("logDir"),
                 .mesh_endpoint = section.require ("meshEndpoint"),
-                .mesh_peer_endpoints = std::move (mesh_peers)};
+                .mesh_peer_endpoints = std::move (mesh_peers),
+                .placement_weight = std::stoi (
+                  section.get ("placementWeight").value_or ("100")),
+                .actor_limit = std::stoi (section.get ("actorLimit").value_or ("2")),
+                .spot_limit = std::stoi (section.get ("spotLimit").value_or ("2"))};
     }
 };
 

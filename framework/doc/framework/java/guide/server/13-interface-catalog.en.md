@@ -3,13 +3,13 @@ title: "13. Key Type Usage Index · Java"
 ---
 
 <!-- framework-adapter-nav:start -->
-[Guide Home](../../../index.ko.md) | [Previous: Operations — metrics · drain · readiness](12-operations.en.md) | [Next: Picking A Sample](14-samples.en.md)
+[Guide Home](../../../index.en.md) | [Previous: Operations — metrics · drain · readiness](12-operations.en.md) | [Next: Picking A Sample](14-samples.en.md)
 <!-- framework-adapter-nav:end -->
 
 # 13. Key Type Usage Index
 
 > **The document that owns this chapter's contract** —
-> the [Java exact interface table of contents](../../../common/spec/server/languages/java/interfaces/README.ko.md)
+> the [Java exact interface table of contents](../../../common/spec/server/languages/java/interfaces/README.en.md)
 > owns the exact signatures. This chapter is a guide to finding the public interfaces an
 > application uses often, organized by feature.
 
@@ -178,7 +178,7 @@ Implementing a store yourself is rare. You'll only look at the `ZLinkStore*` /
 | `ZLinkClientServerRuntime` · `ZLinkFanoutRuntime` | That channel's status |
 | `ZLinkMeshNodeSnapshot` · `ZLinkMeshPeerSnapshot` · `ZLinkMeshChannelSnapshot` | Snapshot records |
 | `ZLinkDispatchOptions` · `ZLinkDiagnosticsOptions` | Diagnostics level |
-| `ZLinkMessageFlowObserver` · `ZLinkMessageFlowEvent` | Message flow records |
+| Application logger/telemetry provider | Receives message-flow and dispatch-error structured records |
 | `ZLinkMetricsCustomizer` | Adjusting the Micrometer registry |
 
 ## 8. Failure Types
@@ -208,7 +208,7 @@ constructor arguments get injected from the Spring container ([2. Getting Starte
 
 ## 10. Related Documents
 
-- Exact signatures: [Java exact interface table of contents](../../../common/spec/server/languages/java/interfaces/README.ko.md)
+- Exact signatures: [Java exact interface table of contents](../../../common/spec/server/languages/java/interfaces/README.en.md)
 - Registration entry point: [2. Getting Started](02-getting-started.en.md)
 - Options and defaults: [16. Options](16-options.en.md)
 - Observation surfaces: [11. Monitoring](11-monitoring.en.md)

@@ -619,6 +619,18 @@ stop_pid() {
   fi
 }
 
+forget_pid() {
+  local target="$1"
+  local retained=()
+  local pid
+  for pid in "${PIDS[@]:-}"; do
+    if [[ "$pid" != "$target" ]]; then
+      retained+=("$pid")
+    fi
+  done
+  PIDS=("${retained[@]}")
+}
+
 wait_marker() {
   local file="$1"
   for _ in $(seq 1 "$LOCAL_READINESS_ATTEMPTS"); do
@@ -669,7 +681,7 @@ PY
 
 if [[ "$SCENARIO" == "all" ]]; then
   CHILD_LOG_MANIFEST="$LOG_DIR/child-runs.log"
-  for scenario in RM-A1 RM-A2 RM-A3 RM-A4 RM-A6 RM-B1 RM-B2 RM-C1 RM-C2 RM-C3 RM-C4 RM-C5 RM-C7 RM-C8 RM-C9; do
+  for scenario in RM-A1 RM-A2 RM-A3 RM-A4 RM-A6 RM-B1 RM-B2 RM-B3 RM-C1 RM-C2 RM-C3 RM-C4 RM-C5 RM-C7 RM-C8 RM-C9; do
     echo "running $scenario"
     child_output="$LOG_DIR/child-$scenario.output.log"
     "$0" "$scenario" --redis-endpoint="$REDIS_ENDPOINT" \
@@ -686,7 +698,7 @@ if [[ "$SCENARIO" == "all" ]]; then
 fi
 
 case "$SCENARIO" in
-  RM-A1|rm-a1|RM-A2|rm-a2|RM-A3|rm-a3|RM-A4|rm-a4|RM-A6|rm-a6|RM-B1|rm-b1|RM-B2|rm-b2|RM-C1|rm-c1|RM-C2|rm-c2|RM-C3|rm-c3|RM-C4|rm-c4|RM-C5|rm-c5|RM-C7|rm-c7|RM-C8|rm-c8|RM-C9|rm-c9)
+  RM-A1|rm-a1|RM-A2|rm-a2|RM-A3|rm-a3|RM-A4|rm-a4|RM-A6|rm-a6|RM-B1|rm-b1|RM-B2|rm-b2|RM-B3|rm-b3|RM-C1|rm-c1|RM-C2|rm-c2|RM-C3|rm-c3|RM-C4|rm-c4|RM-C5|rm-c5|RM-C7|rm-c7|RM-C8|rm-c8|RM-C9|rm-c9)
     ;;
   *)
     echo "Unknown RegistryMessaging scenario: $SCENARIO" >&2
@@ -905,6 +917,29 @@ if [[ "$SCENARIO" == "RM-B2" || "$SCENARIO" == "rm-b2" ]]; then
   touch "$CONTINUE"
   wait "$B2_CLIENT_PID"
   cat "$LOG_DIR/client-rm-b2.stdout.log"
+  exit 0
+fi
+
+if [[ "$SCENARIO" == "RM-B3" || "$SCENARIO" == "rm-b3" ]]; then
+  start_provider api-a "$API_A" "$ROUTE_A" "$HTTP_A"
+  API_A_PID="$LAST_PID"
+  start_consumer store-consumer "$HTTP_STORE_CONSUMER" "" "$REDIS_ENDPOINT"
+  STORE_CONSUMER_PID="$LAST_PID"
+  READY="$LOG_DIR/rm-b3-ready"
+  CONTINUE="$LOG_DIR/rm-b3-continue"
+  run_client rm-b3 rm-b3 \
+    readyFile="$READY" \
+    continueFile="$CONTINUE" &
+  B3_CLIENT_PID="$!"
+  wait_marker "$READY"
+  start_provider api-b "$API_B" "$ROUTE_B" "$HTTP_B"
+  API_B_PID="$LAST_PID"
+  wait_client_server_ready_targets "$HTTP_STORE_CONSUMER" registry.messaging.api 2 30
+  kill -9 "$API_A_PID" >/dev/null 2>&1 || true
+  forget_pid "$API_A_PID"
+  touch "$CONTINUE"
+  wait "$B3_CLIENT_PID"
+  cat "$LOG_DIR/client-rm-b3.stdout.log"
   exit 0
 fi
 

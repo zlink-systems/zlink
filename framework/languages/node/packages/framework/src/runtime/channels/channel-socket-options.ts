@@ -62,14 +62,6 @@ class ZLinkLiveSocketConfig implements ZLinkSocketConfig {
     this.socket.sendTimeoutMs = value;
   }
 
-  get maxMessageSize(): number {
-    return this.socket.maxMessageSize;
-  }
-
-  set maxMessageSize(value: number) {
-    validateMaxMessageSize(value);
-    this.socket.maxMessageSize = value;
-  }
 }
 
 class ZLinkServerRuntimeOptions {
@@ -158,10 +150,4 @@ function validateHighWaterMark(value: number, label: string): void {
 
 function validateSendTimeout(value: number): void {
   requireValidSendTimeoutMs('sendTimeoutMs', value);
-}
-
-function validateMaxMessageSize(value: number): void {
-  if (!Number.isInteger(value) || value < 0) {
-    throw new ZLinkConfigurationException('maxMessageSize must be a non-negative integer.');
-  }
 }

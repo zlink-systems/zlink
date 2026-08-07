@@ -351,10 +351,21 @@ global ActorId again or auto-bind to a fresh incarnation. `find(...)`
 only looks up an Actor already bound to that STREAM session — it isn't
 the global Actor directory.
 
+`notify_disconnected()` is a logical disconnect that doesn't close the
+physical connection. It runs the exact binding's Spot callback at most once,
+then commits the binding as a tombstone and removes it after terminal. The
+physical STREAM connection and Actor/Spot membership are kept, and no new
+public unbind API is provided. Rebind doesn't reuse an old exact binding
+identity for another Actor or generation. It registers the new identity first,
+then runs the old callback at most once and tombstones the old binding. Callback
+failure is recorded as diagnostics, but doesn't remove the new binding or
+restore the old one.
+
 Once Actor relocation commits, `session_actor_t::ref()` returns a
 current location snapshot with the same ActorId/ObjectGeneration and
 the target MeshName/NodeRid, and the stored binding route is also
-updated at the same point. A previous `actor_ref_t` value the caller
+updated at the same point. This same-generation route update isn't a rebind
+and doesn't run the disconnect callback. A previous `actor_ref_t` value the caller
 copied and kept doesn't change. The application doesn't call
 `bind(...)` again to learn about relocation.
 

@@ -1,4 +1,4 @@
-[한국어](01-context.ko.md) | English
+[한국어](https://zlink-systems.github.io/zlink/ko/reference/01-context/) | English
 
 [Reference index](README.en.md)
 

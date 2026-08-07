@@ -106,6 +106,15 @@ export interface ZLinkActorRouteInvalidationFence {
   readonly ownerLeaseGeneration: bigint;
 }
 
+export interface ZLinkSpotRouteInvalidationFence {
+  readonly spotId: string;
+  readonly objectGeneration: bigint;
+  readonly targetNodeRid: string;
+  readonly targetNodeGeneration: bigint;
+  readonly authorityOwnerGeneration: bigint;
+  readonly ownerLeaseGeneration: bigint;
+}
+
 export class ZLinkStoreLocationResolvers implements
   ZLinkPeerLocationResolver,
   ZLinkSpotHandleResolver,
@@ -572,6 +581,12 @@ export class ZLinkStoreLocationResolvers implements
       this.directActorRoutes.delete(fence.actorId);
       invalidated = true;
     }
+    for (const [key, cached] of this.actorRoutes) {
+      if (legacyActorRouteMatchesFence(cached.row, fence)) {
+        this.actorRoutes.delete(key);
+        invalidated = true;
+      }
+    }
     return invalidated;
   }
 
@@ -589,6 +604,29 @@ export class ZLinkStoreLocationResolvers implements
         && (meshName === undefined || cached.row.meshName === meshName)
       ) this.actorRoutes.delete(key);
     }
+  }
+
+  invalidateSpotRouteIfMatches(fence: ZLinkSpotRouteInvalidationFence): boolean {
+    let invalidated = false;
+    for (const [key, cached] of this.spotRoutes) {
+      if (spotRouteMatchesFence(cached.row, fence)) {
+        this.spotRoutes.delete(key);
+        invalidated = true;
+      }
+    }
+    for (const [key, cached] of this.actorRoutes) {
+      if (actorEnclosingSpotMatchesFence(cached.row, fence)) {
+        this.actorRoutes.delete(key);
+        invalidated = true;
+      }
+    }
+    for (const [key, cached] of this.directActorRoutes) {
+      if (resolvedActorEnclosingSpotMatchesFence(cached.row, fence)) {
+        this.directActorRoutes.delete(key);
+        invalidated = true;
+      }
+    }
+    return invalidated;
   }
 
   private getCached<TRow>(
@@ -636,6 +674,53 @@ function directActorRouteMatchesFence(
     && route.ownerNodeGeneration === fence.targetNodeGeneration
     && route.authorityOwnerGeneration === fence.authorityOwnerGeneration
     && route.ownerLeaseGeneration === fence.ownerLeaseGeneration;
+}
+
+function legacyActorRouteMatchesFence(
+  route: ZLinkActorLocation,
+  fence: ZLinkActorRouteInvalidationFence
+): boolean {
+  return route.actorId === fence.actorId
+    && route.actorRef.objectGeneration === fence.objectGeneration
+    && routingIdsEqual(route.actorRef.nodeRid, fence.targetNodeRid)
+    && route.ownerNodeGeneration === fence.targetNodeGeneration
+    && route.leaseGeneration === fence.ownerLeaseGeneration;
+}
+
+function spotRouteMatchesFence(
+  route: ZLinkSpotLocation,
+  fence: ZLinkSpotRouteInvalidationFence
+): boolean {
+  return route.spotId === fence.spotId
+    && route.spotGeneration === fence.objectGeneration
+    && routingIdsEqual(route.ownerNodeRid, fence.targetNodeRid)
+    && route.ownerNodeGeneration === fence.targetNodeGeneration
+    && route.leaseGeneration === fence.ownerLeaseGeneration;
+}
+
+function actorEnclosingSpotMatchesFence(
+  route: ZLinkActorLocation,
+  fence: ZLinkSpotRouteInvalidationFence
+): boolean {
+  return route.spotId === fence.spotId
+    && route.spotGeneration === fence.objectGeneration
+    && routingIdsEqual(route.ownerNodeRid, fence.targetNodeRid)
+    && route.ownerNodeGeneration === fence.targetNodeGeneration
+    && route.leaseGeneration === fence.ownerLeaseGeneration;
+}
+
+function resolvedActorEnclosingSpotMatchesFence(
+  route: ZLinkResolvedActorRoute,
+  fence: ZLinkSpotRouteInvalidationFence
+): boolean {
+  const enclosing = route.enclosingSpotRoute;
+  return enclosing !== undefined
+    && enclosing.spotId === fence.spotId
+    && enclosing.targetSpotGeneration === fence.objectGeneration
+    && routingIdsEqual(enclosing.targetNodeRid, fence.targetNodeRid)
+    && enclosing.targetNodeGeneration === fence.targetNodeGeneration
+    && enclosing.authorityOwnerGeneration === fence.authorityOwnerGeneration
+    && enclosing.ownerLeaseGeneration === fence.ownerLeaseGeneration;
 }
 
 export class DefaultZLinkLocationReadiness implements ZLinkLocationReadiness {

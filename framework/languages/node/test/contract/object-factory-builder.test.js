@@ -87,8 +87,14 @@ test('factory builder is sealed after the configure callback returns', () => {
   );
 });
 
-test('explicit stable type limits must be positive signed 32-bit integers', () => {
-  for (const limit of [0, -1, 2_147_483_648]) {
+test('explicit stable type limits accept zero and reject values outside signed 32-bit range', () => {
+  configureFramework((server) => {
+    server.addSpotFactory('unlimited', RoomSpot, (factory) => {
+      factory.stableTypeLimit(0);
+      factory.disableRelocation();
+    });
+  });
+  for (const limit of [-1, 2_147_483_648]) {
     assert.throws(
       () => configureFramework((server) => {
         server.addSpotFactory('limited', RoomSpot, (factory) => {
@@ -96,9 +102,17 @@ test('explicit stable type limits must be positive signed 32-bit integers', () =
           factory.disableRelocation();
         });
       }),
-      /integer from 1 through 2147483647/
+      /integer from 0 through 2147483647/
     );
   }
+});
+
+test('RouteMesh actor and Spot limits accept zero as unlimited', () => {
+  const options = framework.createFrameworkOptions((configuration) => {
+    configuration.addRouteMesh('game').setActorLimit(0).setSpotLimit(0);
+  });
+  assert.equal(options.spotNodes.game.actorLimit, 0);
+  assert.equal(options.spotNodes.game.spotLimit, 0);
 });
 
 test('NestJS factory builder applies the same callback contract', () => {

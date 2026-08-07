@@ -9,6 +9,10 @@ import { ZLinkSpotActivation } from '../../packages/framework/src/runtime/spots/
 import { ZLinkSpotSerialExecutor } from '../../packages/framework/src/runtime/spots/spot-serial-executor';
 import { ZLinkSpotTimerRegistry } from '../../packages/framework/src/runtime/spots/spot-timer';
 import { DefaultZLinkWorkerCall } from '../../packages/framework/src/runtime/workers';
+import {
+  createRandomOperationIdentity,
+  operationIdentityKey
+} from '../../packages/framework/src/runtime/foundation/operation-identity';
 
 interface Deferred<T> {
   readonly promise: Promise<T>;
@@ -39,6 +43,20 @@ function activation(
     handlers: {} as never
   });
 }
+
+test('128-bit operation identity retries zero entropy and has one canonical key', () => {
+  let calls = 0;
+  const operationId = createRandomOperationIdentity(() => {
+    calls += 1;
+    const bytes = Buffer.alloc(16);
+    if (calls === 2) bytes.writeBigUInt64BE(1n, 8);
+    return bytes;
+  });
+
+  assert.equal(calls, 2);
+  assert.deepEqual(operationId, { high: 0n, low: 1n });
+  assert.equal(operationIdentityKey(operationId), '0:1');
+});
 
 test('SpotWide Yield releases the Spot gate but retains the Actor claim', async () => {
   const serial = new ZLinkSpotSerialExecutor(true);
@@ -239,7 +257,7 @@ test('Spot execution includes metadata bytes in the same atomic reservation', as
   await first;
 });
 
-test('Spot lifecycle lane is selected before application and scheduler yields at its time budget', async () => {
+test('Spot barrier turns remain in application FIFO order and scheduler yields at its time budget', async () => {
   const serial = new ZLinkSpotSerialExecutor(false, undefined, {
     applicationMessageCapacity: 256,
     applicationByteCapacity: 256 * 256,
@@ -251,9 +269,9 @@ test('Spot lifecycle lane is selected before application and scheduler yields at
   });
   const events: string[] = [];
   const application = serial.execute(() => events.push('application'));
-  const lifecycle = serial.postBarrierTurn(() => events.push('lifecycle'));
-  await Promise.all([application, lifecycle]);
-  assert.deepEqual(events.slice(0, 2), ['lifecycle', 'application']);
+  const barrier = serial.postBarrierTurn(() => events.push('barrier'));
+  await Promise.all([application, barrier]);
+  assert.deepEqual(events.slice(0, 2), ['application', 'barrier']);
 
   let timerRan = false;
   const timer = new Promise<void>((resolve) => {
@@ -266,4 +284,39 @@ test('Spot lifecycle lane is selected before application and scheduler yields at
   await timer;
   await Promise.all(jobs);
   assert.equal(timerRan, true);
+});
+
+test('yield continuation re-enters behind earlier application turns', async () => {
+  const serial = new ZLinkSpotSerialExecutor(true);
+  const response = deferred<void>();
+  const blockerStarted = deferred<void>();
+  const blockerFinished = deferred<void>();
+  const events: string[] = [];
+
+  const yielded = serial.execute(async () => {
+    events.push('yielded:start');
+    await serial.yieldPromise(response.promise);
+    events.push('yielded:complete');
+  });
+  const blocker = serial.execute(async () => {
+    events.push('blocker:start');
+    blockerStarted.resolve();
+    await blockerFinished.promise;
+    events.push('blocker:complete');
+  });
+  await blockerStarted.promise;
+  const queued = serial.execute(() => events.push('queued'));
+
+  response.resolve();
+  await Promise.resolve();
+  blockerFinished.resolve();
+  await Promise.all([yielded, blocker, queued]);
+
+  assert.deepEqual(events, [
+    'yielded:start',
+    'blocker:start',
+    'blocker:complete',
+    'queued',
+    'yielded:complete'
+  ]);
 });

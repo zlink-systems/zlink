@@ -209,6 +209,16 @@ Remote endpoint와 identity를 찾도록 Store에 게시하는 정보를
   승인해 기존 physical connection을 교체했다.
 - Host가 `Draining`, `Stopped` 또는 `Error`가 되어 새 target 선택을 허용하지 않는다.
 
+Connection replacement는 현재 descriptor가 제시한 node RID, security identity와
+lifecycle generation을 admission fence로 사용한다. 완전한 descriptor 기대값이
+있으면 generation이 0인 endpoint-only manual intent가 이 검사를 완화하지 못한다.
+기존 connection은 monitor event에서 얻은 같은 `transportPairId`와
+`transportPairGeneration`으로 physical pair 종료를 요청한 뒤, 그 pair의 close
+snapshot 또는 disconnect event를 관찰했을 때만 교체한다. Pair identity를 얻을 수
+없는 초기 연결은 endpoint-level disconnect를 사용할 수 있지만, 호출이
+성공했다는 사실만으로 physical close가 완료된 것으로 판정하지 않는다. 같은
+endpoint에 대한 새 connection은 close 관찰 뒤에 만든다.
+
 Orderly close와 transport disconnect는 15초를 기다리지 않는다. 이전 physical
 connection에서 늦게 도착한 ACK나 frame은 새 connection의 상태를 바꾸지 못한다.
 

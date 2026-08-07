@@ -445,7 +445,7 @@ app.add_zlink_framework ([&](zlink::framework::zlink_framework_options_t &option
 
     // sets the message-flow observation level used at startup.
     options.configure_dispatch().message_flow(
-      zlink::framework::message_flow_log_mode_t::errors_only);
+      zlink::framework::message_flow_log_mode_t::errors);
 
     options.handlers()
       .group("api")
@@ -596,8 +596,6 @@ public:
     http_options_builder_t &map_health(std::string path);
     http_options_builder_t &map_readiness(std::string path);
     http_options_builder_t &map_liveness(std::string path);
-    const http_options_snapshot_t &snapshot() const noexcept;
-    void validate() const;
 };
 
 struct http_context_t {
@@ -725,6 +723,10 @@ public:
 } // namespace zlink::framework
 ```
 
+Building an `http_options_builder_t` snapshot and running validation are
+internal host-startup responsibilities, not public interfaces. An
+application configures HTTP only through the builder methods above.
+
 An application using location runtime registers exactly one Location
 Store with `add_location_store(...)`. If there's even one
 `RecreateOnRelocation` or `PreserveStateWith` factory, or even one
@@ -777,24 +779,10 @@ app.add_zlink_framework([&](auto &options) {
 });
 ```
 
-An HTTP handler uses the same type alias convention as a message
-handler.
-
-```cpp
-class create_game_http_handler_t {
-public:
-    using request_type = create_game_http_req_t;
-    using reply_type = create_game_http_res_t;
-    using dependency_types =
-      dependency_list_t<request_client_t, logger_t<create_game_http_handler_t>>;
-
-    explicit create_game_http_handler_t(
-      request_client_t &client,
-      logger_t<create_game_http_handler_t> &logger);
-
-    task_t<create_game_http_res_t> handle(const create_game_http_req_t &request);
-};
-```
+The [C++ HTTP Hosting handler signature forms](../60-http-hosting.en.md#3-handler-signature-forms)
+are the canonical declaration of an HTTP handler's type aliases, DI
+constructor, and `handle(...)` shapes. This exact-interface document does not
+redeclare the same application handler class.
 
 `map_get<THandler>(...)`, `map_post<THandler>(...)`,
 `map_put<THandler>(...)`, `map_delete<THandler>(...)` register the
@@ -804,48 +792,11 @@ builds a DI scope per request and resolves the handler. The DTO the
 handler returns becomes the JSON response body, defaulting to
 `200 OK`.
 
-An HTTP handler supports all of the following shapes.
-
-- typed DTO: `reply_type handle(const request_type &request)`
-- typed DTO async: `task_t<reply_type> handle(const request_type &request)`
-- typed DTO + context:
-  `reply_type handle(const request_type &request, http_context_t &context)`
-- typed DTO + context async:
-  `task_t<reply_type> handle(const request_type &request, http_context_t &context)`
-- typed DTO + request:
-  `reply_type handle(const request_type &request, const http_request_t &http)`
-- typed DTO + request async:
-  `task_t<reply_type> handle(const request_type &request, const http_request_t &http)`
-- typed DTO + request + context:
-  `reply_type handle(const request_type &request, const http_request_t &http, http_context_t &context)`
-- typed DTO + request + context async:
-  `task_t<reply_type> handle(const request_type &request, const http_request_t &http, http_context_t &context)`
-- typed response: `http_response_t handle(const request_type &request)`
-- typed response + context:
-  `http_response_t handle(const request_type &request, http_context_t &context)`
-- typed response async: `task_t<http_response_t> handle(const request_type &request)`
-- typed response + context async:
-  `task_t<http_response_t> handle(const request_type &request, http_context_t &context)`
-- typed response + request:
-  `http_response_t handle(const request_type &request, const http_request_t &http)`
-- typed response + request async:
-  `task_t<http_response_t> handle(const request_type &request, const http_request_t &http)`
-- typed response + request + context:
-  `http_response_t handle(const request_type &request, const http_request_t &http, http_context_t &context)`
-- typed response + request + context async:
-  `task_t<http_response_t> handle(const request_type &request, const http_request_t &http, http_context_t &context)`
-- raw HTTP request: `http_response_t handle(const http_request_t &request)`
-- raw HTTP request async: `task_t<http_response_t> handle(const http_request_t &request)`
-
 `http_request_t` and `http_response_t` are framework public types. A
 raw HTTP handler also doesn't receive a `Boost.Beast` request, socket,
 or SSL stream. `map_*<THandler>(...)` determines the handler shape at
-compile time. For a typed route with multiple overloads, argument shape
-is checked before return type. The shape receiving both
-`http_request_t` and `http_context_t` is selected first, then
-`http_request_t`, `http_context_t`, and DTO-only shape in that order.
-Providing both a typed route and a raw route shape on one handler at
-once must fail via static assertion or startup validation.
+compile time and applies the canonical invocation priority and failure
+conditions without modification.
 
 A route parameter and query string bind to the `request_type` DTO. For
 example, a value from `/games/{gameId}/moves?actorId=p1` merges with
@@ -1119,42 +1070,34 @@ ID, or an internal authority field as a label.
 
 ### 5.2 Message-Flow Dispatch Error Event
 
-An unregistered message and dispatch failure observation is handled
-through the message flow observer's `event_id=zlink.dispatch_error`,
-`outcome=failed` event.
-Per-channel or per-spot observer registration isn't a public contract
+An unregistered message and dispatch failure is recorded through the standard
+logger or telemetry provider configured by the application as a structured record
+with `event_id=zlink.dispatch_error` and `outcome=failed`.
+Per-channel or per-spot diagnostics-provider registration isn't a public contract
 of this version. A request failure ends as an error reply if it has a
 reply path, and a path with no reply frame, such as a local actor call,
 completes the `task_t` or pending operation with a framework error. A
-one-way failure is dropped but leaves a default log, counter, and
-message-flow event.
+one-way failure is dropped but leaves a default structured log and counter.
 
 The exact dispatch option declaration is owned by the
 [Monitoring interface](08-monitoring.en.md).
 
-`message_flow_event_t`'s dispatch error event is a snapshot carrying
-`surface`, `message_kind`, `reason`, `action`, `packet_name`,
-`channel_name`, `topic`, `spot_id`, `instance_spot_type`,
-`activation_state`, `actor_id`, `source_rid`, `correlation_id`. It
-doesn't include native message ownership or a frame reference.
+The Framework records dispatch errors and message flow as structured
+records through the standard logger/trace/metric providers configured by
+the application. It doesn't expose a callback observer, runtime error
+sink, or raw event DTO. A provider failure is isolated as separate
+diagnostics and doesn't change the original dispatch result or terminal
+completion.
 
 The default mode before start is decided by
 `configure_dispatch().message_flow(...)`. Only
 `app_t::set_message_flow_mode(...)` owns the runtime mode change, and
 a per-channel or per-Spot toggle isn't provided.
 
-```cpp
-app.add_zlink_framework([](auto &options) {
-  options.configure_dispatch()
-    .set_message_flow_observer(
-      std::make_shared<my_message_flow_observer>());
-});
-```
-
 ## 6. HTTP Route And Middleware
 
 **The HTTP hosting scenario is owned by
-[60](../60-http-hosting.ko.md) · [61](../61-embedded-http-server.ko.md).**
+[60](../60-http-hosting.en.md) · [61](../61-embedded-http-server.en.md).**
 Only the public type is fixed here.
 
 ```cpp

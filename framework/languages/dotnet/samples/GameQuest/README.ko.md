@@ -23,7 +23,8 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\run_sample.ps1
 ## 구성
 
 - `Shared/`는 클라이언트와 서버가 함께 쓰는 요청, 응답, 알림 계약을 담는다.
-- `Client/`는 두 플레이어의 stream connector를 열고 self-check 시나리오를 실행한다.
+- `Client/`는 두 플레이어의 direct `tcp://` stream connector를 열고 self-check 시나리오를
+  실행한다. GameApi가 WebSocket bridge를 제공하거나 Client가 raw frame을 해석하지 않는다.
 - `Server/GameApi/`는 플레이어 session과 게임 이벤트를 처리한 뒤 Player ID를 global SpotId로
   사용해 `PlayerQuestSpot`에 직접 메시지를 보낸다. 첫 메시지는
   `InstanceSpot("gamequest.player-quest")`를 명시하며, Framework가 owner node를 선택한다.
@@ -42,9 +43,11 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\run_sample.ps1
 
 ## 성공 조건
 
-클라이언트 시나리오는 `JoinSessionReq` 이후 같은 stream으로 첫 사냥, 경매 개방, gameplay action,
-진행 push, 멱등성, projection rebuild, owner spot close 뒤 재활성, 두 번째 플레이어 진행 동기화를
-검증한다. projection delete/rebuild, owner 메시징 없이 누락된 gameplay fact를 만드는 보정 hook,
-server assertion은 검증용 HTTP endpoint로 남긴다. 클라이언트 self-check가 실패하면 runner가 중단된다.
+클라이언트 시나리오는 `JoinSessionReq` 이후 같은 direct stream으로 첫 사냥, 경매 개방, gameplay
+action, 진행 push, 멱등성, projection rebuild, owner spot close 뒤 재활성, 두 번째 플레이어 진행
+동기화를 검증한다. projection delete/rebuild, owner 메시징 없이 누락된 gameplay fact를 만드는
+보정 hook과 server assertion은 업무 API가 아닌 sample self-check용 HTTP endpoint를 사용한다.
+이 endpoint는 public GameQuest message contract에 포함되지 않으며, raw WebSocket bridge나 raw
+frame 처리를 대신하지 않는다. 클라이언트 self-check가 실패하면 runner가 중단된다.
 서버 evidence 확인이 끝나면 runner가
 `gamequest-server-evidence=completed`를 출력한다.

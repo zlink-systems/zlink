@@ -28,7 +28,7 @@ At start, the following conditions are assumed.
 
 - The coordinate range and the IDs of the four zones are fixed.
 - Gateway, two ZoneNodes, and Ops have completed readiness.
-- A Location Store and a maintenance store are prepared per run.
+- A Location Store, Relocation Store, and maintenance store are prepared per run.
 - Four X-patrol bots and four Y-patrol bots are generated with a deterministic seed.
 
 The scope covers joining, movement, border sync, relocation, bots, node observation,
@@ -124,6 +124,7 @@ flowchart LR
 | Resource | Responsibility | Preparation |
 |---|---|---|
 | Location Store | Peer descriptor, ZoneId Spot authority, and Actor location | Shared Redis, per run |
+| Relocation Store | Player Actor relocation payloads and operation recovery records | A per-run Redis keyspace with a provider and key prefix separate from the Location Store |
 | Maintenance store | Desired state per NodeId | Shared Redis keyspace, per run |
 | Zone state | Actor coordinate copy, border snapshot, and tick | Zone Spot |
 | Player actor state | Coordinates, zone, and bot direction | Player Actor relocation adapter |
@@ -158,9 +159,11 @@ auto-issued by the Framework as a prefix plus a UUID; no fixed RID is configured
 | Keep the actor connection alive. | Bound STREAM session | Keeps the same connection during relocation, only updating the binding location. [Failure policy §6](../../spec/31-failure-failover-policy.en.md#6-session-and-binding) |
 | Avoid RID collisions. | `SetRoutingIdPrefix` zn | Separates the application NodeId/ZoneId from transport identity. [MeshNode spec](../../spec/13-mesh-node.en.md) |
 
-The Player Actor factory registers a `PreserveStateWith` relocation adapter. The Capture/Restore
-payload is opaque state managed by the Application, and doesn't include NodeRid, endpoint, or
-private runtime values.
+The Player Actor factory registers a `PreserveStateWith` relocation adapter. Its Capture/Restore
+payload preserves only Application-owned state such as coordinates, ZoneId, bot direction, and the
+last applied movement ID. It doesn't include the queue, accepted journal, logical timer,
+membership, or owner fence preserved by the Framework. Zone Spot factories that don't move select
+`DisableRelocation`.
 
 ## 6. Message Contract
 
@@ -652,7 +655,8 @@ registration method and doesn't change the message or processing responsibility.
 
 ## 10. Smoke Run
 
-1. Prepare a per-run Location Store and maintenance store.
+1. Prepare a per-run Location Store, Relocation Store, and maintenance store. The two Framework
+   stores may use the same Redis deployment, but their providers and key prefixes stay separate.
 2. Start Ops and confirm control STREAM readiness.
 3. Start ZoneNode A/B and confirm zone capability, mesh peer, and fanout readiness.
 4. Start Gateway and confirm game STREAM readiness.

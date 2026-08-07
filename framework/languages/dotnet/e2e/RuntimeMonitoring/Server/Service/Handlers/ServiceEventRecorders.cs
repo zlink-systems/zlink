@@ -21,10 +21,26 @@ internal sealed class MeshEventRecorder(
         var previousPeers = new HashSet<string>(StringComparer.Ordinal);
         var previousChannels = new Dictionary<string, (bool Ready, int Targets)>(
             StringComparer.Ordinal);
+        string? previousState = null;
         await foreach (var status in meshRuntime
                            .ObserveAsync(meshName, cancellationToken)
                            .ConfigureAwait(false))
         {
+            var currentState = status.Status.State.ToString();
+            if (previousState is not null
+                && !string.Equals(previousState, currentState, StringComparison.Ordinal)
+                && currentState is "Ready" or "Degraded")
+            {
+                // The public observer exposes the complete status, while the
+                // structured identifier is projected here for the E2E evidence.
+                evidence.Add(
+                    "monitor-mesh|source=location-runtime"
+                    + "|identifier=zlink.runtime.location.store_changed"
+                    + $"|reason={currentState.ToLowerInvariant()}"
+                    + $"|state={currentState}");
+            }
+            previousState = currentState;
+
             var currentPeers = status.Status.Peers
                 .Where(static peer =>
                     peer.State == Zlink.Framework.Contracts.Configuration.ZLinkPeerState.Ready)

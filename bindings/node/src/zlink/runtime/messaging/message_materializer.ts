@@ -30,6 +30,8 @@ export interface NativeReceivedRaw {
   parts: MessageSnapshot[];
   routingId?: Buffer | null;
   requestSeq?: bigint | null;
+  transportPairId?: bigint;
+  transportPairGeneration?: bigint;
 }
 
 export interface NativeTopicMessageRaw {
@@ -139,6 +141,12 @@ export function materializeReceivedInto(
         }
       : null
   );
+  const targetInternal = target as Received & {
+    transportPairId?: bigint;
+    transportPairGeneration?: bigint;
+  };
+  targetInternal.transportPairId = raw.transportPairId;
+  targetInternal.transportPairGeneration = raw.transportPairGeneration;
 }
 
 export function materializeTopicMessage(raw: NativeTopicMessageRaw): TopicMessage {

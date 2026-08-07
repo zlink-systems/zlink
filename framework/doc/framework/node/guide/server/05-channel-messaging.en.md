@@ -17,9 +17,9 @@ View in another language — [C#/.NET](../../../dotnet/guide/server/05-channel-m
 
 # 5. Channel Messaging — request · send · pub/sub
 
-> **The document that owns this chapter's contract** — [Channel Messaging](../../../common/spec/08-channel-messaging.ko.md)
-> and [ClientServer Channel](../../../common/spec/09-client-server-channel.ko.md) own the
-> behavior, and the [per-language channel messaging public contract](../../../common/spec/server/languages/README.ko.md)
+> **The document that owns this chapter's contract** — [Channel Messaging](../../../common/spec/08-channel-messaging.en.md)
+> and [ClientServer Channel](../../../common/spec/09-client-server-channel.en.md) own the
+> behavior, and the [per-language channel messaging public contract](../../../common/spec/server/languages/README.en.md)
 > owns the surface. This chapter covers how to actually register and call that surface,
 > focused on usage.
 
@@ -336,7 +336,7 @@ export class CacheRefreshedEventHandler implements ZLinkFanoutHandler<CacheRefre
 - Context is where you read that dispatch's message info (ChannelName, packet name,
   metadata, etc.). **Cancellation is owned by a separate cancellation argument, not
   context.** Per-path context types and the full field list are covered by the
-  [per-language channel messaging public contract](../../../common/spec/server/languages/README.ko.md).
+  [per-language channel messaging public contract](../../../common/spec/server/languages/README.en.md).
 - A handler class is a **code organization unit**, not a dispatch key. Grouping methods
   topically in one class, or giving each packet its own class, both work the same.
 - An interface-based handler has the strongest compile-time type checking. If
@@ -841,7 +841,7 @@ builder.codecs().use(new AvroCodecExtension());
 ```
 
 After registration, high-level calls still exchange business objects as-is, and
-serialization is handled by Avro. See the [framework-api §9](../../../common/spec/06-framework-api.ko.md#9-codec)
+serialization is handled by Avro. See the [framework-api §9](../../../common/spec/06-framework-api.en.md#9-codec)
 table for registration surfaces in other languages.
 
 ## 8. Scaling A ChannelName Horizontally
@@ -1027,8 +1027,8 @@ export class AppModule {}
 - **`ZLink` vs `Zlink`** → every server framework type is `ZLink` (capital L).
 - **Sending to a packet with no handler (at runtime)** → **request fails with an error
   reply** (the client gets it as an exception), while **send is silently dropped.** Dropped
-  means the caller gets no reply -- it doesn't mean there's no observable trace: with
-  message flow logging/observer enabled, the dispatch failure is recorded as a marker
+  means the caller gets no reply -- it doesn't mean there is no observable record. The
+  application-configured logger/telemetry provider receives a structured dispatch-error marker
   (`no_handler` / `reply_error`/`drop`) (chapter `11. Monitoring`).
 
 ## 12. Related Documents
@@ -1036,7 +1036,7 @@ export class AppModule {}
 - Runnable verification examples for this chapter's contract (client/handler/filter/codec):
   chapter `13. Interface Catalog` §1
 - The full interface and handler context:
-  [per-language channel messaging public contract](../../../common/spec/server/languages/README.ko.md)
+  [per-language channel messaging public contract](../../../common/spec/server/languages/README.en.md)
 - Topology and handler registration:
-  [per-language topology public contract](../../../common/spec/server/languages/README.ko.md)
+  [per-language topology public contract](../../../common/spec/server/languages/README.en.md)
 - The full scenario: [common samples](../../../common/sample/README.en.md)

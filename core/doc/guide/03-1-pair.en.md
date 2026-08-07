@@ -1,4 +1,4 @@
-[English](03-1-pair.en.md) | [한국어](03-1-pair.ko.md)
+[English](03-1-pair.en.md) | [한국어](03-1-pair.en.md)
 
 <!-- zlink-nav:start -->
 [← Socket Patterns](03-0-socket-patterns.en.md) | [PUB/SUB →](03-2-pubsub.en.md)

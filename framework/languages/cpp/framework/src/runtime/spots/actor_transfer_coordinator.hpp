@@ -37,9 +37,16 @@ struct pending_actor_admission_t
     std::chrono::steady_clock::time_point deadline;
     std::uint64_t completion_operation_id_high = 0;
     std::uint64_t completion_operation_id_low = 0;
+    std::optional<message_t> admission_reply;
     std::optional<message_t> completion_reply;
     std::string completion_root_reference;
     std::uint32_t completion_root_checksum = 0;
+
+    bool matches_prepare (const actor_ref_t &actor,
+                          const spot_id_t &source_spot,
+                          const spot_id_t &target_spot,
+                          std::uint64_t operation_high,
+                          std::uint64_t operation_low) const;
 };
 
 struct expired_actor_admission_t

@@ -143,6 +143,28 @@ test('ZLinkChannelClient rejects calls to channels without client capability', a
   );
 });
 
+test('ZLinkChannelClient reports NotConfigured when only the Server role exists', async () => {
+  const client = new framework.DefaultZLinkChannelClient(framework.createFrameworkRegistration({
+    channels: {
+      api: {
+        server: { bind: 'inproc://api' },
+        sendHandlers: [{ packetName: 'Notice', handler: { handle() {} } }]
+      }
+    }
+  }));
+
+  for (const submit of [
+    () => client.sendToChannel('api', { ok: true }).submit(),
+    () => client.requestToChannel('api', { ok: true }).submit()
+  ]) {
+    await assert.rejects(
+      submit,
+      (error) => error instanceof framework.ZLinkFrameworkException
+        && error.kind === framework.ZLinkFrameworkErrorKind.NotConfigured
+    );
+  }
+});
+
 test('ZLinkSendCall snapshots metadata and reports asynchronous admission once', async () => {
   const calls = [];
   const registration = meshChannelRegistration('mesh', 'api');
@@ -920,16 +942,20 @@ test('ZLinkChannelClient request/reply round-trips through public binding socket
   const router = zlink.createRouterSocket(ctx);
   const dealer = zlink.createDealerSocket(ctx);
   const endpoint = `tcp://127.0.0.1:${await reservePort()}`;
+  let routerMonitor;
+  let dealerMonitor;
 
   try {
-    const routerMonitor = router.monitorOpen([zlink.MonitorEventType.ConnectionReady]);
-    const dealerMonitor = dealer.monitorOpen([zlink.MonitorEventType.ConnectionReady]);
+    routerMonitor = router.monitorOpen([zlink.MonitorEventType.ConnectionReady]);
+    dealerMonitor = dealer.monitorOpen([zlink.MonitorEventType.ConnectionReady]);
     router.bind(endpoint);
     dealer.connect(endpoint);
-    routerMonitor.recv();
-    dealerMonitor.recv();
+    await waitForMonitorConnectionReady(routerMonitor, 'channel client router connection', router);
+    await waitForMonitorConnectionReady(dealerMonitor, 'channel client dealer connection', router);
     routerMonitor.close();
+    routerMonitor = null;
     dealerMonitor.close();
+    dealerMonitor = null;
 
     const registration = framework.createFrameworkRegistration({
       channels: { api: { client: { manualConnections: [endpoint] } } }
@@ -963,6 +989,8 @@ test('ZLinkChannelClient request/reply round-trips through public binding socket
     assert.deepEqual(reply, { value: 'pong' });
     request.close();
   } finally {
+    dealerMonitor?.close();
+    routerMonitor?.close();
     dealer.close();
     router.close();
     ctx.close();
@@ -3467,16 +3495,20 @@ test('ZLinkChannelRequestDispatcher invokes request handler and replies through 
   const dealer = zlink.createDealerSocket(ctx);
   const endpoint = `tcp://127.0.0.1:${await reservePort()}`;
   const filterEvents = [];
+  let routerMonitor;
+  let dealerMonitor;
 
   try {
-    const routerMonitor = router.monitorOpen([zlink.MonitorEventType.ConnectionReady]);
-    const dealerMonitor = dealer.monitorOpen([zlink.MonitorEventType.ConnectionReady]);
+    routerMonitor = router.monitorOpen([zlink.MonitorEventType.ConnectionReady]);
+    dealerMonitor = dealer.monitorOpen([zlink.MonitorEventType.ConnectionReady]);
     router.bind(endpoint);
     dealer.connect(endpoint);
-    routerMonitor.recv();
-    dealerMonitor.recv();
+    await waitForMonitorConnectionReady(routerMonitor, 'channel dispatcher router connection', router);
+    await waitForMonitorConnectionReady(dealerMonitor, 'channel dispatcher dealer connection', router);
     routerMonitor.close();
+    routerMonitor = null;
     dealerMonitor.close();
+    dealerMonitor = null;
 
     const registration = framework.createFrameworkRegistration({
       channels: { api: { client: { manualConnections: [endpoint] } } }
@@ -3515,6 +3547,8 @@ test('ZLinkChannelRequestDispatcher invokes request handler and replies through 
     assert.deepEqual(filterEvents, ['before', 'after']);
     received.close();
   } finally {
+    dealerMonitor?.close();
+    routerMonitor?.close();
     dealer.close();
     router.close();
     ctx.close();
@@ -4963,6 +4997,32 @@ async function waitFor(predicate, label) {
       return;
     }
     await new Promise((resolve) => setImmediate(resolve));
+  }
+  assert.fail(`${label} did not complete`);
+}
+
+async function waitForMonitorConnectionReady(monitor, label, activitySocket) {
+  const poller = zlink.createPoller();
+  const events = zlink.createPollEvents(1);
+  poller.add(activitySocket, [zlink.PollEventFlag.PollIn], 0);
+  const deadline = Date.now() + 1000;
+  try {
+    while (Date.now() < deadline) {
+      try {
+        const event = monitor.recv(zlink.RecvFlags.DontWait);
+        if (event?.event === zlink.MonitorEventType.ConnectionReady) {
+          return;
+        }
+      } catch (error) {
+        if (!(error instanceof zlink.RecvError && error.result === zlink.RecvResult.NoData)) {
+          throw error;
+        }
+      }
+      poller.wait(events, Math.min(10, deadline - Date.now()));
+    }
+  } finally {
+    events.close();
+    poller.close();
   }
   assert.fail(`${label} did not complete`);
 }

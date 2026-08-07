@@ -250,7 +250,8 @@ public interface IZLinkStreamNodeBuilder
     IZLinkStreamNodeBuilder Bind(int port = 0);
     IZLinkStreamNodeBuilder SetBindHost(string bindHost);
     IZLinkStreamNodeBuilder SetAdvertiseHost(string advertiseHost);
-    IZLinkSocketConfig ConfigureSocket();
+    IZLinkStreamNodeBuilder MaxMessageSize(long bytes);
+    IZLinkStreamSocketConfig ConfigureSocket();
     IZLinkStreamNodeBuilder EnableActorDispatch();
     IZLinkStreamNodeBuilder SetTlsServer(
         string certificatePath,
@@ -276,7 +277,7 @@ public interface IZLinkMetadataPolicyBuilder
 
 ```
 
-`IZLinkStreamNodeBuilder.ConfigureSocket().MaxMessageSize`의 기본값은 `64 KiB`다. 이 값은
+`IZLinkStreamNodeBuilder.MaxMessageSize(long bytes)`의 기본값은 `64 KiB`다. 이 값은
 StreamNode의 Core STREAM inbound에서 client→server complete message를 검사할 때만 사용하며,
 6-byte prefix를 제외한 header와 payload의 합으로 계산한다. `0`은 Core `-1`로 변환되어
 Framework 상한을 사용하지 않고, 음수는 startup configuration error다. 상한을 넘은 message는
@@ -521,8 +522,10 @@ handler는 MeshNode builder에 등록하며 source RID를 제공하는 route han
 중복 등록은 startup 오류이고, 서로 다른 channel이나 route family에 같은 packet name을 등록할 수 있다.
 
 `AddHandlerGroup(groupName)`은 scan으로 찾은 handler 중 같은 `ZLinkHandlerGroupAttribute` 값을 가진
-send/request handler를 해당 ChannelName에 노출한다. TicTacToe처럼 수동 등록을 보여 주는 경우에만
-typed `AddSendHandler(...)`·`AddRequestHandler(...)`를 직접 사용한다.
+send/request handler를 해당 ChannelName에 노출한다. TicTacToe의 수동 topology는 handler를
+수동 등록한다는 뜻이 아니다. .NET 샘플은 assembly scan과 `AddHandlerGroup(...)`으로 handler를
+노출하며, typed `AddSendHandler(...)`·`AddRequestHandler(...)`는 별도의 직접 등록 계약을
+보여 주는 경우에만 사용한다.
 
 `IZLinkMeshChannelServerBuilder`와 `IZLinkClientServerChannelServerBuilder`의 weight는 0부터 10000까지이고
 기본값은 100이다. 범위 밖 값은 startup 설정과 runtime 변경에서 `ZLinkConfigurationException`이다.
@@ -565,6 +568,22 @@ public interface IZLinkSocketConfig
     int Weight { get; set; }
 }
 
+public interface IZLinkStreamSocketConfig
+{
+    ulong SendHighWaterMark { get; set; }
+    ulong ReceiveHighWaterMark { get; set; }
+    int SendBufferSize { get; set; }
+    int ReceiveBufferSize { get; set; }
+    TimeSpan? Linger { get; set; }
+    TimeSpan? ReceiveTimeout { get; set; }
+    TimeSpan? SendTimeout { get; set; }
+    TimeSpan? ConnectTimeout { get; set; }
+    TimeSpan? HandshakeInterval { get; set; }
+    bool IPv6 { get; set; }
+    bool TcpNoDelay { get; set; }
+    bool Immediate { get; set; }
+}
+
 public interface IZLinkRouteConfig
 {
     bool RequireKnownPeer { get; set; }
@@ -596,7 +615,6 @@ public interface IZLinkMeshChannelRuntimeOptions
 
 public interface IZLinkMeshNodeSocketConfig
 {
-    long MaxMessageSize { get; set; }
     ulong SendHighWaterMark { get; set; }
     ulong ReceiveHighWaterMark { get; set; }
     ulong MailboxMessageBudget { get; set; }
@@ -606,9 +624,9 @@ public interface IZLinkMeshNodeSocketConfig
 }
 ```
 
-Application listener의 `MaxMessageSize` 기본값은 `16 MiB`다. Application HWM을 Auto 또는 양수로
-사용할 때 `0`을 명시하면 startup configuration error다. `ApplicationHwmBytes = 0`일 때만
-`MaxMessageSize = 0`을 사용할 수 있다.
+ClientServer application listener의 `MaxMessageSize` 기본값은 `16 MiB`다. Application HWM을 Auto 또는
+양수로 사용할 때 `0`을 명시하면 startup configuration error다. `ApplicationHwmBytes = 0`일 때만
+`MaxMessageSize = 0`을 사용할 수 있다. 이 설정은 RouteMesh ServerServer에 적용하지 않는다.
 
 `ConfigureSpotPublisher()`는 publish 전용 전달 정책 option을 제공하지 않는다. [Logical Multicast](../../../../01-glossary.ko.md#logical-multicast)는
 source-local 실행 용량을 send timeout 안에 확보하면 시작하고 결과값 없이 정상 완료한다. Target별
@@ -631,10 +649,9 @@ mailbox의 메시지 수와 byte 합계 상한이다. Byte 회계는 payload 크
 ChannelName은 local RouteMesh 또는 ClientServer Server 등록을 유일하게 고른다. HWM과 timeout은
 `ConfigureRouterSocket()`에서 startup 전에 설정한다.
 
-`MaxMessageSize`는 startup 전에만 설정하며 실행 중 setter를 제공하지 않는다. `0`은 Framework가 지원하는
-최대 complete message 크기를 사용한다. 양수는 public protocol의 표현 한계를 넘을 수 없으며 넘으면
-`ZLinkConfigurationException`으로 startup을 실패시킨다. Peer마다 두 endpoint가 허용한 값 중 작은 값을
-적용한다. Framework application listener의 기본값은 `16_777_216` bytes다.
+`IZLinkMeshNodeSocketConfig`는 RouteMesh ServerServer의 `MaxMessageSize`를 제공하지 않는다. SS sender와
+receiver는 Framework-level complete-message 상한으로 message를 거절하지 않는다. HWM, mailbox byte budget과
+service-wire 표현 한계는 별도 자원·wire guard로 유지한다.
 
 `ConfigureInboundDispatch()`는 host 전체 inbound 설정 하나를 반환한다. `ApplicationHwmBytes`의 기본값은
 `null`이며 Auto mode를 뜻한다. `0`은 제한 없음, 양수는 정확한 byte 상한이다.

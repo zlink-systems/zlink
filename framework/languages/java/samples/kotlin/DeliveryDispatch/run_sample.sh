@@ -58,6 +58,7 @@ ZLINK_SAMPLE_GRADLE_SETTINGS_ARGS=(--settings-file standalone.settings.gradle.kt
 pids=()
 redis_container_id=""
 log_dir="build/sample-logs"
+ZLINK_SAMPLE_FRAMEWORK_ROLE_LOGS="tracking.log customer-gateway.log courier-session.log courier-node1.log courier-node2.log dispatch.log"
 state_dir="$(pwd)/build/sample-state"
 flow_log_dir="$(pwd)/logs"
 config_dir="build/sample-config"

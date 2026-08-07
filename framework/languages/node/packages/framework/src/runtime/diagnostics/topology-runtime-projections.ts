@@ -349,7 +349,7 @@ export class RuntimeEventQueue<T>
   seal(value: T): void {
     if (this.closed) return;
     if (this.sealed) {
-      this.discardedTerminalCount = saturatingIncrement(this.discardedTerminalCount);
+      this.replacePendingTerminal(value, false);
       return;
     }
     this.sealed = true;
@@ -366,7 +366,7 @@ export class RuntimeEventQueue<T>
   complete(value: T): void {
     if (this.closed) return;
     if (this.sealed) {
-      this.discardedTerminalCount = saturatingIncrement(this.discardedTerminalCount);
+      this.replacePendingTerminal(value, true);
       return;
     }
     this.sealed = true;
@@ -404,6 +404,13 @@ export class RuntimeEventQueue<T>
     while ((waiter = this.takeWaiter()) !== undefined) {
       waiter({ done: true, value: undefined });
     }
+  }
+
+  private replacePendingTerminal(value: T, completesStream: boolean): void {
+    this.discardedTerminalCount = saturatingIncrement(this.discardedTerminalCount);
+    if (this.terminal === undefined) return;
+    this.terminal = value;
+    if (completesStream) this.completeAfterTerminal = true;
   }
 
   private detachSource(): void {

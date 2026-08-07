@@ -113,7 +113,7 @@ case "$SCENARIO_SET" in
   sm-g3|sm-g4)
     NEED_PLAY_B=0
     ;;
-  instance-track-a)
+  instance-track-a|instance-owner-loss|instance-queue-owner-loss|instance-creating-join)
     NEED_SESSION_NODES=0
     NEED_PLAY_B=1
     ;;
@@ -818,6 +818,12 @@ start_named_server() {
       if [[ "$SCENARIO_SET" == "instance-idle" ]]; then
         PLAY_A_ARGS+=(--instance-spot-idle-timeout-milliseconds 100)
       fi
+      if [[ "$SCENARIO_SET" == "instance-queue-owner-loss" ]]; then
+        PLAY_A_ARGS+=(--instance-handler-gate-file "$LOG_DIR/instance-handler-release")
+      fi
+      if [[ "$SCENARIO_SET" == "instance-creating-join" ]]; then
+        PLAY_A_ARGS+=(--instance-initialization-gate-file "$LOG_DIR/instance-initialization-release")
+      fi
       if [[ "$SCENARIO_SET" == "sm-a9" ]]; then
         PLAY_A_ARGS+=(--spot-initialization-gate-file "$LOG_DIR/sm-a9-play-a-gate")
       fi
@@ -861,6 +867,12 @@ start_named_server() {
           --application-hwm-bytes 1048576
           --backpressure-gate-file "$LOG_DIR/sm-c6-play-b-gate"
         )
+      fi
+      if [[ "$SCENARIO_SET" == "instance-queue-owner-loss" ]]; then
+        PLAY_B_ARGS+=(--instance-handler-gate-file "$LOG_DIR/instance-handler-release")
+      fi
+      if [[ "$SCENARIO_SET" == "instance-creating-join" ]]; then
+        PLAY_B_ARGS+=(--instance-initialization-gate-file "$LOG_DIR/instance-initialization-release")
       fi
       start_server play-b "$PLAY_DLL" "${PLAY_B_ARGS[@]}"
       ;;
@@ -1129,12 +1141,12 @@ wait_for_log_in_either_after() {
   return 1
 }
 
-crash_play_a() {
-  local wrapper_pid child_pid
-  wrapper_pid="$(pid_for_role play-a)"
+crash_named_role() {
+  local role="$1" wrapper_pid child_pid
+  wrapper_pid="$(pid_for_role "$role")"
   child_pid="$(pgrep -P "$wrapper_pid" -n || true)"
   if [[ -z "$child_pid" ]]; then
-    echo "play-a dotnet child was not found under wrapper pid=$wrapper_pid" >&2
+    echo "$role dotnet child was not found under wrapper pid=$wrapper_pid" >&2
     return 1
   fi
   kill -KILL "$child_pid"
@@ -1142,25 +1154,33 @@ crash_play_a() {
     kill -0 "$wrapper_pid" 2>/dev/null || break
     sleep "$LOCAL_READINESS_POLL_SECONDS"
   done
-  assert_expected_server_exit play-a 137 "SIGKILL"
+  assert_expected_server_exit "$role" 137 "SIGKILL"
 }
 
-restart_play_a() {
-  local index new_pid last_index
+crash_play_a() {
+  crash_named_role play-a
+}
+
+restart_named_role() {
+  local role="$1" index new_pid last_index
   for index in "${!ORDERED_SERVER_ROLES[@]}"; do
-    if [[ "${ORDERED_SERVER_ROLES[$index]}" == "play-a" ]]; then
-      rm -f "$LOG_DIR/play-a.exit.log"
-      start_named_server play-a
+    if [[ "${ORDERED_SERVER_ROLES[$index]}" == "$role" ]]; then
+      rm -f "$LOG_DIR/$role.exit.log"
+      start_named_server "$role"
       last_index=$((${#PIDS[@]} - 1))
       new_pid="${PIDS[$last_index]}"
       PIDS[$index]="$new_pid"
       unset "PIDS[$last_index]"
-      wait_named_server play-a
+      wait_named_server "$role"
       return 0
     fi
   done
-  echo "play-a role index was not found for restart" >&2
+  echo "$role role index was not found for restart" >&2
   return 1
+}
+
+restart_play_a() {
+  restart_named_role play-a
 }
 
 stop_play_a() {
@@ -1201,8 +1221,122 @@ run_client() {
     --play-a-transport-proxy-admin "$PLAY_A_TRANSPORT_PROXY_ADMIN" \
     --play-b-transport-proxy-admin "$PLAY_B_TRANSPORT_PROXY_ADMIN" \
     --session-a-transport-proxy-admin "$SESSION_A_TRANSPORT_PROXY_ADMIN" \
+    --instance-owner-loss-crash-ack-file "$LOG_DIR/instance-owner-loss-crashed" \
+    --instance-owner-loss-restart-ack-file "$LOG_DIR/instance-owner-loss-restarted" \
+    --instance-creating-release-ack-file "$LOG_DIR/instance-initialization-release" \
     --operation-group "$operation_group"
-  if [[ "$operation_group" == "sm-g1" ]]; then
+  if [[ "$operation_group" == "instance-creating-join" ]]; then
+    local first_line client_pid client_status marker spot initialize_count first_count follow_up_count
+    first_line=$(($(wc -l <"$LOG_DIR/client.stdout.log") + 1))
+    timeout "${CLIENT_PROCESS_TIMEOUT_SECONDS}s" dotnet "$CLIENT_DLL" --config "$config" \
+      2> >(tee -a "$LOG_DIR/client.stderr.log" >&2) \
+      | tee -a "$LOG_DIR/client.stdout.log" &
+    client_pid=$!
+    wait_for_log_after client.stdout "instance-creating-join release-ready" "$first_line" 300
+    marker="$(tail -n +"$first_line" "$LOG_DIR/client.stdout.log" \
+      | grep "instance-creating-join release-ready" | tail -1)"
+    spot="$(sed -n 's/.*|spot=\([^|]*\).*/\1/p' <<<"$marker")"
+    [[ -n "$spot" ]] || {
+      echo "Instance creating marker has no spot id: $marker" >&2
+      wait "$client_pid" || true
+      return 1
+    }
+    touch "$LOG_DIR/instance-initialization-release"
+    set +e
+    wait "$client_pid"
+    client_status=$?
+    set -e
+    [[ "$client_status" -eq 0 ]] || return "$client_status"
+    initialize_count="$(grep -h "instance-initialize.*spot=$spot" \
+      "$LOG_DIR/play-a.evidence.log" "$LOG_DIR/play-b.evidence.log" \
+      | grep -v "instance-initialize-gate" | wc -l)"
+    first_count="$(grep -h "instance-request.*spot=$spot.*operation=creating-first" \
+      "$LOG_DIR/play-a.evidence.log" "$LOG_DIR/play-b.evidence.log" | wc -l)"
+    follow_up_count="$(grep -h "instance-request.*spot=$spot.*operation=creating-follow-up" \
+      "$LOG_DIR/play-a.evidence.log" "$LOG_DIR/play-b.evidence.log" | wc -l)"
+    [[ "$initialize_count" -eq 1 && "$first_count" -eq 1 && "$follow_up_count" -eq 1 ]] || {
+      echo "Creating join evidence mismatch: initialize=$initialize_count first=$first_count follow_up=$follow_up_count" >&2
+      return 1
+    }
+  elif [[ "$operation_group" == "instance-queue-owner-loss" ]]; then
+    local first_line client_pid client_status marker owner spot initialize_count
+    first_line=$(($(wc -l <"$LOG_DIR/client.stdout.log") + 1))
+    timeout "${CLIENT_PROCESS_TIMEOUT_SECONDS}s" dotnet "$CLIENT_DLL" --config "$config" \
+      2> >(tee -a "$LOG_DIR/client.stderr.log" >&2) \
+      | tee -a "$LOG_DIR/client.stdout.log" &
+    client_pid=$!
+    wait_for_log_after client.stdout "instance-queue-owner-loss crash-ready" "$first_line" 300
+    marker="$(tail -n +"$first_line" "$LOG_DIR/client.stdout.log" \
+      | grep "instance-queue-owner-loss crash-ready" | tail -1)"
+    owner="$(sed -n 's/.*|owner=\([^|]*\).*/\1/p' <<<"$marker")"
+    spot="$(sed -n 's/.*|spot=\([^|]*\).*/\1/p' <<<"$marker")"
+    [[ "$owner" == "play-a" || "$owner" == "play-b" ]] || {
+      echo "Instance queue owner-loss marker has invalid owner: $marker" >&2
+      wait "$client_pid" || true
+      return 1
+    }
+    crash_named_role "$owner"
+    touch "$LOG_DIR/instance-owner-loss-crashed"
+    wait_for_log_after client.stdout "instance-queue-owner-loss restart-ready" "$first_line" 300
+    restart_named_role "$owner"
+    touch "$LOG_DIR/instance-owner-loss-restarted"
+    set +e
+    wait "$client_pid"
+    client_status=$?
+    set -e
+    [[ "$client_status" -eq 0 ]] || return "$client_status"
+    if grep -h -E "operation=(queued-first|queued-follow-up|after-owner-restart)" \
+      "$LOG_DIR/play-a.evidence.log" "$LOG_DIR/play-b.evidence.log" | grep -q .; then
+      echo "IS-E2E-35 replay or post-restart handler evidence was created" >&2
+      return 1
+    fi
+    initialize_count="$(grep -h "instance-initialize.*spot=$spot" \
+      "$LOG_DIR/play-a.evidence.log" "$LOG_DIR/play-b.evidence.log" | wc -l)"
+    [[ "$initialize_count" -eq 1 ]] || {
+      echo "IS-E2E-35 expected one factory initialization, got $initialize_count" >&2
+      return 1
+    }
+  elif [[ "$operation_group" == "instance-owner-loss" ]]; then
+    local first_line client_pid client_status marker owner spot initialize_count
+    first_line=$(($(wc -l <"$LOG_DIR/client.stdout.log") + 1))
+    timeout "${CLIENT_PROCESS_TIMEOUT_SECONDS}s" dotnet "$CLIENT_DLL" --config "$config" \
+      2> >(tee -a "$LOG_DIR/client.stderr.log" >&2) \
+      | tee -a "$LOG_DIR/client.stdout.log" &
+    client_pid=$!
+    wait_for_log_after client.stdout "instance-owner-loss crash-ready" "$first_line" 300
+    marker="$(tail -n +"$first_line" "$LOG_DIR/client.stdout.log" \
+      | grep "instance-owner-loss crash-ready" | tail -1)"
+    owner="$(sed -n 's/.*|owner=\([^|]*\).*/\1/p' <<<"$marker")"
+    spot="$(sed -n 's/.*|spot=\([^|]*\).*/\1/p' <<<"$marker")"
+    [[ "$owner" == "play-a" || "$owner" == "play-b" ]] || {
+      echo "Instance owner-loss marker has invalid owner: $marker" >&2
+      wait "$client_pid" || true
+      return 1
+    }
+    [[ -n "$spot" ]] || {
+      echo "Instance owner-loss marker has no spot id: $marker" >&2
+      wait "$client_pid" || true
+      return 1
+    }
+    crash_named_role "$owner"
+    touch "$LOG_DIR/instance-owner-loss-crashed"
+    set +e
+    wait "$client_pid"
+    client_status=$?
+    set -e
+    [[ "$client_status" -eq 0 ]] || return "$client_status"
+    if grep -h "operation=after-ready-crash" \
+      "$LOG_DIR/play-a.evidence.log" "$LOG_DIR/play-b.evidence.log" | grep -q .; then
+      echo "IS-E2E-05 post-crash handler evidence was created" >&2
+      return 1
+    fi
+    initialize_count="$(grep -h "instance-initialize.*spot=$spot" \
+      "$LOG_DIR/play-a.evidence.log" "$LOG_DIR/play-b.evidence.log" | wc -l)"
+    [[ "$initialize_count" -eq 1 ]] || {
+      echo "IS-E2E-05 expected one factory initialization, got $initialize_count" >&2
+      return 1
+    }
+  elif [[ "$operation_group" == "sm-g1" ]]; then
     local first_line client_pid client_status next_line
     first_line=$(($(wc -l <"$LOG_DIR/client.stdout.log") + 1))
     timeout "${CLIENT_PROCESS_TIMEOUT_SECONDS}s" dotnet "$CLIENT_DLL" --config "$config" \
@@ -1353,7 +1487,8 @@ run_client() {
       2> >(tee -a "$LOG_DIR/client.stderr.log" >&2) \
       | tee -a "$LOG_DIR/client.stdout.log"
   fi
-  if [[ "$operation_group" == "sm-g1" ]]; then
+  if [[ "$operation_group" == "sm-g1" || "$operation_group" == "instance-owner-loss" \
+    || "$operation_group" == "instance-queue-owner-loss" ]]; then
     : # Both expected SIGKILL exits are asserted at their deterministic gates.
   else
     assert_servers_alive "client ${operation_group} completion"

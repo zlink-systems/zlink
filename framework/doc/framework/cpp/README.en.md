@@ -4,12 +4,12 @@ The documentation hub for the `zlink::framework` C++ artifact.
 
 | Document | Scope |
 |------|------|
-| [01 System Structure](../common/spec/server/languages/cpp/01-system-structure.ko.md) | Packages/build targets, application host, **DI container**, configuration, **logging**, HTTP scope/middleware order, feature registration |
-| [Exact Interface Per Feature](../common/spec/server/languages/cpp/interfaces/README.ko.md) | App/Host, builder, messaging, Spot, Actor, STREAM, Location, and monitoring's exact public contract |
+| [01 System Structure](../common/spec/server/languages/cpp/01-system-structure.en.md) | Packages/build targets, application host, **DI container**, configuration, **logging**, HTTP scope/middleware order, feature registration |
+| [Exact Interface Per Feature](../common/spec/server/languages/cpp/interfaces/README.en.md) | App/Host, builder, messaging, Spot, Actor, STREAM, Location, and monitoring's exact public contract |
 | [60 HTTP Hosting](../common/spec/server/languages/cpp/60-http-hosting.en.md) | The HTTP hosting contract |
 | [61 Embedded HTTP Server](../common/spec/server/languages/cpp/61-embedded-http-server.en.md) | The embedded server |
 
-**The meaning and behavioral rules of a feature are owned by the [common spec](../common/spec/README.ko.md).**
+**The meaning and behavioral rules of a feature are owned by the [common spec](../common/spec/README.en.md).**
 The C++ documents fix the **exact public surface** that meaning takes in C++.
 
 Sample and E2E JSON config files, the ban on environment variables, and typed-binding
@@ -23,8 +23,8 @@ framework provides host, DI, configuration, logging, and HTTP directly.**
 
 | Artifact | Documentation |
 |--------|------|
-| HTTP client (`zlink::http_client`) | [Guide](guide/http-client/README.ko.md) · [Spec](../common/spec/http-client/languages/cpp/cpp-http-client.en.md) |
-| Stream connector (`zlink::stream_connector`) | [User guide](guide/stream-connector/INDEX.ko.md) |
+| HTTP client (`zlink::http_client`) | [Guide](guide/http-client/README.en.md) · [Spec](../common/spec/http-client/languages/cpp/cpp-http-client.en.md) |
+| Stream connector (`zlink::stream_connector`) | [User guide](guide/stream-connector/INDEX.en.md) |
 
 ## Internals List
 

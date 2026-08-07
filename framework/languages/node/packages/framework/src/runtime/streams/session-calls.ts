@@ -10,6 +10,7 @@ import {
 } from '../messaging/submission-result';
 import type { Message } from '../../contracts/Common/Message';
 import { throwIfAborted } from '../abort';
+import { ZLinkConfigurationException } from '../configuration';
 import {
   ensureSingleSubmit,
   resolvePacketName,
@@ -31,7 +32,11 @@ export interface ZLinkBoundSessionSendRuntime {
 export interface ZLinkSessionCallContext {
   readonly stream: {
     writeRaw(payload: Message): boolean;
-    submitRaw(payload: Message, signal?: AbortSignal): Promise<ZLinkSubmitResult>;
+    submitRaw(
+      payload: Message,
+      signal?: AbortSignal,
+      timeoutMs?: number
+    ): Promise<ZLinkSubmitResult>;
   };
   readonly dispatchHeader: ZLinkStreamFrameHeader | undefined;
   createJsonFrameMessage(
@@ -98,6 +103,7 @@ export class DefaultZLinkSessionSendCall implements ZLinkSessionSendCall {
   private selectedPacketName: string | undefined;
   private readonly selectedMetadata = new Map<string, string>();
   private compressionEnabled = false;
+  private selectedTimeoutMs: number | undefined;
   private executed = false;
 
   constructor(
@@ -120,6 +126,16 @@ export class DefaultZLinkSessionSendCall implements ZLinkSessionSendCall {
     return this;
   }
 
+  timeout(timeoutMs: number): this {
+    if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 2_147_483_647) {
+      throw new ZLinkConfigurationException(
+        'STREAM session send timeout must be an integer from 1 through 2147483647 milliseconds.'
+      );
+    }
+    this.selectedTimeoutMs = timeoutMs;
+    return this;
+  }
+
   async submit(signal?: AbortSignal): Promise<void> {
     ensureSingleSubmit(this.executed);
     const packetName = resolvePacketName(this.message, this.selectedPacketName);
@@ -134,7 +150,11 @@ export class DefaultZLinkSessionSendCall implements ZLinkSessionSendCall {
       this.message
     );
     try {
-      const result = await this.context.stream.submitRaw(message, signal);
+      const result = await this.context.stream.submitRaw(
+        message,
+        signal,
+        this.selectedTimeoutMs
+      );
       requireOneWayCompletion(result, 'STREAM session send');
     } finally {
       message.close();

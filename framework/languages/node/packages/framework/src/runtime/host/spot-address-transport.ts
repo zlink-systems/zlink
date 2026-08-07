@@ -408,106 +408,58 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
       );
     }
     const selected = this.selectMissingTarget(spotId, call);
+    if (selected.kind === 'capacity') {
+      throw missingInstancePlacementCapacity(spotId, call.instanceSpotType);
+    }
     if (selected.kind === 'unsupported') {
       const error = createInternalFrameworkException(
         ZLinkFrameworkInternalErrorKind.RequestTargetNotFound,
         `No eligible Instance Spot target serves '${String(spotId)}'.`
       );
-      this.reportInstanceRequestError(
-        spotId,
-        request,
-        error,
-        call.initialMeshName,
-        undefined,
-        call.instanceSpotType,
-        ZLinkDispatchErrorReason.StaleTarget
-      );
+      this.reportInstanceRequestError(spotId, request, error, call.initialMeshName,
+        undefined, call.instanceSpotType, ZLinkDispatchErrorReason.StaleTarget);
       throw error;
-    }
-    if (selected.kind === 'capacity') {
-      throw missingInstancePlacementCapacity(spotId, call.instanceSpotType);
     }
     if (selected.kind === 'unavailable') {
       const error = missingInstancePlacementUnavailable(spotId, call.instanceSpotType);
-      this.reportInstanceRequestError(
-        spotId,
-        request,
-        error,
-        call.initialMeshName,
-        undefined,
-        call.instanceSpotType,
-        ZLinkDispatchErrorReason.StaleTarget
-      );
+      this.reportInstanceRequestError(spotId, request, error, call.initialMeshName,
+        undefined, call.instanceSpotType, ZLinkDispatchErrorReason.StaleTarget);
       throw error;
     }
-
     const deadlineUnixMs = BigInt(deadline.deadlineMs);
-    const encoded = this.encodeAtDeadline(
-      ZLinkChannelMessageKind.Request,
-      selected.meshName,
-      request,
-      deadline.deadlineMs
-    );
+    const encoded = this.encodeAtDeadline(ZLinkChannelMessageKind.Request,
+      selected.meshName, request, deadline.deadlineMs);
     deadline.requireRemaining();
-    let operation: ReturnType<ZLinkBackendMeshNode['requestToMissingInstanceSpot']>;
+    const table = this.options.completions(selected.meshName);
+    if (table === undefined) throw new Error(`MeshNode '${selected.meshName}' completion table is not started.`);
+    let completionPromise: ReturnType<ZLinkMeshCompletionTable['submit']>;
     try {
-      operation = selected.node.requestToMissingInstanceSpot(
-        selected.target,
-        encoded,
-        deadlineUnixMs,
-        call.sourceSpot === undefined ? undefined : String(call.sourceSpot.routingId),
-        call.metadata
+      completionPromise = table.submit(
+        () => selected.node.requestToMissingInstanceSpot(selected.target, encoded,
+          deadlineUnixMs, call.sourceSpot === undefined ? undefined : String(call.sourceSpot.routingId),
+          call.metadata),
+        deadline.signal
       );
     } catch (error) {
-      if (
-        error instanceof ZLinkFrameworkException
-        && internalFrameworkErrorKind(error) === ZLinkFrameworkInternalErrorKind.RequestTargetNotFound
-      ) {
+      if (error instanceof ZLinkFrameworkException
+        && internalFrameworkErrorKind(error) === ZLinkFrameworkInternalErrorKind.RequestTargetNotFound) {
         PRE_ADMISSION_MISSING_INSTANCE_ERRORS.add(error);
       }
       throw error;
     }
-    this.traceInstanceAddress(
-      ZLinkMessageFlowOutcome.Sent,
-      ZLinkDispatchMessageKind.Request,
-      spotId,
-      request,
-      selected.meshName,
-      selected.target.stableType,
-      selected.target.targetNodeRid
-    );
-    const table = this.options.completions(selected.meshName);
-    if (table === undefined) {
-      throw new Error(`MeshNode '${selected.meshName}' completion table is not started.`);
-    }
-    const completion = await awaitWithAbort(table.wait(operation, deadline.signal), deadline.signal);
+    this.traceInstanceAddress(ZLinkMessageFlowOutcome.Sent, ZLinkDispatchMessageKind.Request,
+      spotId, request, selected.meshName, selected.target.stableType, selected.target.targetNodeRid);
+    const completion = await awaitWithAbort(completionPromise, deadline.signal);
     try {
       if (completion.terminalResult !== 0 || completion.failureErrno !== 0) {
-        const error = missingInstanceRequestFailure(
-          completion.terminalResult,
-          completion.failureErrno
-        );
-        this.reportInstanceRequestError(
-          spotId,
-          request,
-          error,
-          selected.meshName,
-          selected.target.targetNodeRid,
-          selected.target.stableType,
-          addressedInstanceErrorReason(error)
-        );
+        const error = missingInstanceRequestFailure(completion.terminalResult, completion.failureErrno);
+        this.reportInstanceRequestError(spotId, request, error, selected.meshName,
+          selected.target.targetNodeRid, selected.target.stableType, addressedInstanceErrorReason(error));
         throw error;
       }
       const reply = decodeChannelReply<TReply>(completion.parts, this.options.codecs);
-      this.traceInstanceAddress(
-        ZLinkMessageFlowOutcome.ReplyReceived,
-        ZLinkDispatchMessageKind.Request,
-        spotId,
-        request,
-        selected.meshName,
-        selected.target.stableType,
-        selected.target.targetNodeRid
-      );
+      this.traceInstanceAddress(ZLinkMessageFlowOutcome.ReplyReceived, ZLinkDispatchMessageKind.Request,
+        spotId, request, selected.meshName, selected.target.stableType, selected.target.targetNodeRid);
       return reply;
     } finally {
       closeMeshCompletion(completion);
@@ -774,14 +726,15 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
 
 function isInstanceRouteStaleError(error: unknown): error is ZLinkFrameworkException {
   if (!(error instanceof ZLinkFrameworkException)) return false;
-  if ((error as ZLinkFrameworkException & { readonly physicalSubmission?: boolean })
-    .physicalSubmission === true) return false;
   const kind = internalFrameworkErrorKind(error);
   // RequestTargetNotFound from an existing route is a pre-admission route
-  // lookup failure. ActorLocationStale can be reported after the routed
-  // request has crossed the transport boundary, so resubmitting the same
-  // application operation could execute it twice.
-  return kind === ZLinkFrameworkInternalErrorKind.RequestTargetNotFound;
+  // lookup failure. A stale owner result is terminal for this application
+  // operation: the routed request may already have crossed the transport
+  // boundary, so refreshing the route and resubmitting it could execute the
+  // same operation twice. Instance cold activation is selected only when the
+  // authority resolver itself reports that the Ready route is absent.
+  if (kind === ZLinkFrameworkInternalErrorKind.RequestTargetNotFound) return true;
+  return false;
 }
 
 function isMissingInstanceRetryError(error: unknown): error is ZLinkFrameworkException {

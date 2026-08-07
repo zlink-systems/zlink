@@ -305,9 +305,17 @@ Bind는 caller가 제출한 exact ActorRef 위치로 한 번만 control request�
 ActorId를 다시 lookup하거나 fresh incarnation으로 자동 bind하지 않는다. `find(...)`는 해당 STREAM session에
 이미 bind된 Actor만 조회하며 global Actor directory가 아니다.
 
+`notify_disconnected()`는 physical connection을 닫지 않는 logical disconnect다. Exact binding의 Spot
+callback을 최대 한 번 실행하고 terminal 뒤 binding을 tombstone으로 확정하여 제거한다. Physical STREAM
+connection과 Actor·Spot membership은 유지하며 새 public unbind API는 제공하지 않는다. Rebind는 이전 exact
+binding identity를 다른 Actor나 generation에 재사용하지 않는다. 새 identity를 먼저 등록한 뒤 이전 callback을
+최대 한 번 실행하고 이전 binding을 tombstone으로 만든다. Callback 실패는 진단으로 기록하지만 새 binding을
+제거하거나 이전 binding을 복원하지 않는다.
+
 Actor relocation이 commit되면 `session_actor_t::ref()`는 같은 ActorId·ObjectGeneration과 target
 MeshName·NodeRid를 가진 current location snapshot을 반환하고, 저장된 binding route도 같은 시점에
-갱신된다. Caller가 복사해 보관한 이전 `actor_ref_t` 값은 변경하지 않는다. Application은 relocation을
+갱신된다. 같은 generation의 이 route update는 rebind가 아니며 disconnect callback을 실행하지 않는다.
+Caller가 복사해 보관한 이전 `actor_ref_t` 값은 변경하지 않는다. Application은 relocation을
 알기 위해 `bind(...)`를 다시 호출하지 않는다.
 
 현재 STREAM binding을 통한 one-way push는 connection-bound operation이다. 유효한 binding이 없거나 connection

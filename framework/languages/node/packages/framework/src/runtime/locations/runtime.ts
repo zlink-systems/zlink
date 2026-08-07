@@ -28,6 +28,7 @@ import {
   type ZLinkLocationTopologyEntry,
   type ZLinkLocationTopologyFilter,
   type ZLinkLocationWriteResult,
+  type ZLinkAuthoritySnapshot,
   type ZLinkPageRequest,
   type ZLinkPeerLocation,
   type ZLinkPeerLocationFilter,
@@ -44,7 +45,7 @@ import type {
   ZLinkLocationObjectFilter
 } from '../../contracts/Locations/RuntimeQuery';
 import { ZLinkAuthorityScanCursor as PublicAuthorityScanCursor } from '../../contracts/Locations/Authority';
-import { decodeAuthorityKey } from './authority-key-codec';
+import { decodeAuthorityKey, encodeAuthorityKey } from './authority-key-codec';
 import type {
   ZLinkActorLocationStore,
   ZLinkActorLocationQueryStore,
@@ -180,7 +181,8 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     this.clearTimer = runtimeOptions.clearTimer ?? ((handle) => clearTimeout(handle as NodeJS.Timeout));
     const leaseTracker = runtimeOptions.leaseTracker ?? new ZLinkOwnerLeaseTracker({
       store: this.stores.ownerLeaseStore,
-      options: this.options
+      options: this.options,
+      monotonicNowMs: this.monotonicNowMs
     });
     this.liveRows = new ZLinkLiveRowFilter(leaseTracker);
   }
@@ -787,26 +789,19 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
       if (result.kind === 'scanExpired') {
         throw new Error('The authority query snapshot expired.');
       }
-      const liveEntries = await this.liveRows.filter(
-        result.items,
-        (entry) => entry.snapshot.ownerId,
-        signal
-      );
-      for (const entry of liveEntries) {
+      for (const entry of result.items) {
         const identity = decodeAuthorityKey(entry.key);
         const allocation = entry.snapshot.allocation;
         if (allocation.objectKind !== filter.objectKind
           || (filter.stableType !== undefined && allocation.stableType !== filter.stableType)
           || (filter.meshName !== undefined && allocation.descriptor.meshName !== filter.meshName)
           ) continue;
-        items.push({
-          globalId: identity.globalId,
-          objectGeneration: entry.snapshot.objectGeneration,
-          meshName: allocation.descriptor.meshName,
-          nodeRid: allocation.descriptor.rid,
-          state: allocation.state === 'reserved' ? 'creating' : 'ready',
-          stableType: allocation.stableType
-        });
+        const live = await this.liveRows.resolve(
+          entry,
+          (candidate) => candidate.snapshot.ownerId,
+          signal
+        ) !== undefined;
+        items.push(this.objectLocationEntry(identity.globalId, entry.snapshot, live));
         if (items.length >= pageSize) break;
       }
       const nextCursor = result.nextCursor;
@@ -818,6 +813,60 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
       }
       cursor = nextCursor;
     }
+  }
+
+  async findActorLocation(
+    actorId: import('../../contracts').ActorId,
+    signal?: AbortSignal
+  ): Promise<ZLinkLocationObjectEntry | undefined> {
+    return await this.findObjectLocation('actor', String(actorId), signal);
+  }
+
+  async findSpotLocation(
+    spotId: import('../../contracts').SpotId,
+    signal?: AbortSignal
+  ): Promise<ZLinkLocationObjectEntry | undefined> {
+    const found = await this.stores.authorityStore.readAuthority(
+      encodeAuthorityKey('user_spot', String(spotId)),
+      signal
+    );
+    if (found.kind === 'missing' || found.allocation.objectKind === 'actor') return undefined;
+    const live = await this.liveRows.resolve(found, (snapshot) => snapshot.ownerId, signal)
+      !== undefined;
+    return this.objectLocationEntry(String(spotId), found, live);
+  }
+
+  private async findObjectLocation(
+    kind: 'actor' | 'user_spot',
+    globalId: string,
+    signal?: AbortSignal
+  ): Promise<ZLinkLocationObjectEntry | undefined> {
+    const found = await this.stores.authorityStore.readAuthority(
+      encodeAuthorityKey(kind, globalId),
+      signal
+    );
+    if (found.kind === 'missing' || found.allocation.objectKind !== kind) return undefined;
+    const live = await this.liveRows.resolve(found, (snapshot) => snapshot.ownerId, signal)
+      !== undefined;
+    return this.objectLocationEntry(globalId, found, live);
+  }
+
+  private objectLocationEntry(
+    globalId: string,
+    snapshot: ZLinkAuthoritySnapshot,
+    ownerLive: boolean
+  ): ZLinkLocationObjectEntry {
+    const allocation = snapshot.allocation;
+    return {
+      globalId,
+      objectGeneration: snapshot.objectGeneration,
+      meshName: allocation.descriptor.meshName,
+      nodeRid: allocation.descriptor.rid,
+      state: allocation.state === 'reserved'
+        ? 'creating'
+        : ownerLive ? 'ready' : 'unavailable',
+      stableType: allocation.stableType
+    };
   }
 
   async listRouteLocations(

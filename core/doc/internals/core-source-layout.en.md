@@ -1,4 +1,4 @@
-[한국어](core-source-layout.ko.md)
+[한국어](core-source-layout.en.md)
 
 # Core Source Layout
 

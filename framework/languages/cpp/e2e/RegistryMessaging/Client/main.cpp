@@ -6,6 +6,7 @@
 #include "Scenarios/rm_a6_multiple_channels_scenario.hpp"
 #include "Scenarios/rm_b1_scale_out_scenario.hpp"
 #include "Scenarios/rm_b2_scale_in_scenario.hpp"
+#include "Scenarios/rm_b3_provider_crash_scenario.hpp"
 #include "Scenarios/rm_c1_request_send_scenario.hpp"
 #include "Scenarios/rm_c2_targeted_route_scenario.hpp"
 #include "Scenarios/rm_c3_multi_provider_distribution_scenario.hpp"
@@ -55,6 +56,8 @@ int main (int argc, char **argv)
         rm_client::run_rm_b1_scale_out_scenario (options);
     } else if (scenario == "rm-b2" || scenario == "scale-in") {
         rm_client::run_rm_b2_scale_in_scenario (options);
+    } else if (scenario == "rm-b3" || scenario == "provider-crash") {
+        rm_client::run_rm_b3_provider_crash_scenario (options);
     } else if (scenario == "rm-a4" || scenario == "failover") {
         rm_client::run_rm_a4_same_rid_failover_scenario (options);
     } else if (scenario == "rm-c7" || scenario == "weighted") {

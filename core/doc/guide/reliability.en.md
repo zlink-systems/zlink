@@ -1,4 +1,4 @@
-[한국어](reliability.ko.md)
+[한국어](reliability.en.md)
 
 # Raw Messaging Reliability
 

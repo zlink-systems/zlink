@@ -114,10 +114,34 @@ internal sealed class ZLinkMeshPeerAdmission
     {
         ArgumentNullException.ThrowIfNull(peersByIntent);
         ArgumentNullException.ThrowIfNull(candidate);
-        return peersByIntent.FirstOrDefault(existingPeer =>
+        var peers = peersByIntent
+            .Where(existingPeer =>
             !ReferenceEquals(existingPeer, candidate)
             && existingPeer.State == MeshPeerState.NotRequired
-            && existingPeer.RoutingId == sourceRid);
+            && (existingPeer.RoutingId == sourceRid
+                || existingPeer.ExpectedRid == sourceRid
+                || existingPeer.PhysicalRoutingId == sourceRid))
+            .ToArray();
+        if (peers.Length != 0)
+            return peers[0];
+
+        // A client-to-client connection can expose a transport routing id for
+        // the inbound half while the configured outbound intent retains the
+        // logical peer id. When both halves describe the same endpoint, keep
+        // the configured intent only when that endpoint has one unambiguous
+        // NotRequired peer; otherwise an ambiguous endpoint must not merge
+        // two independent connection intents.
+        var sameEndpoint = peersByIntent
+            .Where(existingPeer =>
+                !ReferenceEquals(existingPeer, candidate)
+                && existingPeer.State == MeshPeerState.NotRequired
+                && existingPeer.Direction != candidate.Direction
+                && string.Equals(
+                    existingPeer.Endpoint,
+                    candidate.Endpoint,
+                    StringComparison.Ordinal))
+            .ToArray();
+        return sameEndpoint.Length == 1 ? sameEndpoint[0] : null;
     }
 }
 

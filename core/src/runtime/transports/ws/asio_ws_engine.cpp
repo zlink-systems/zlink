@@ -579,15 +579,17 @@ void zlink::asio_ws_engine_t::on_read_complete (const boost::system::error_code 
             }
         }
 
-        //  Notify the socket only after both transport lanes are ready.
+        //  Unpaired transports and paired non-Router sockets are ready after
+        //  the engine handshake. Router readiness is published after its
+        //  Framework RID route is registered by router_t::adopt_peer_routing_id.
         if (_socket && !paired_transport ()) {
             _socket->event_connection_ready_changed (_endpoint_uri_pair, _peer_routing_id,
                                                      _peer_routing_id_size);
-        } else if (_socket) {
+        } else if (_socket && _socket->socket_type () != ZLINK_CORE_SOCKET_ROUTER) {
             _socket->event_transport_pair_lane_ready (
               _endpoint_uri_pair, _peer_routing_id, _peer_routing_id_size,
-              _negotiated_transport_lane, _negotiated_transport_pair_id,
-              _negotiated_transport_pair_generation);
+              _session->transport_lane (), _session->transport_pair_id (),
+              _session->transport_pair_generation ());
         }
 
         //  Trigger output to start sending any pending messages

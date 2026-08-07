@@ -15,6 +15,15 @@ export type ZLinkStreamFrameReadResult =
 const STREAM_FRAME_PREFIX_BYTES = 6;
 const EMPTY_BUFFER = Buffer.alloc(0);
 
+export class ZLinkStreamMessageSizeError extends Error {
+  readonly code = 'EMSGSIZE';
+
+  constructor() {
+    super('STREAM frame exceeds MaxMessageSize.');
+    this.name = 'ZLinkStreamMessageSizeError';
+  }
+}
+
 /**
  * Retains raw STREAM bytes until one complete length-prefixed frame is
  * available. A complete frame in an otherwise empty raw part is exposed as
@@ -82,7 +91,7 @@ export class ZLinkStreamFrameReassembler {
     ) {
       return {
         kind: 'malformed',
-        error: new Error('STREAM frame exceeds MaxMessageSize.')
+        error: new ZLinkStreamMessageSizeError()
       };
     }
     if (available < totalSize) {
@@ -137,7 +146,7 @@ export class ZLinkStreamFrameReassembler {
     ) {
       return {
         kind: 'malformed',
-        error: new Error('STREAM frame exceeds MaxMessageSize.')
+        error: new ZLinkStreamMessageSizeError()
       };
     }
     if (bytes.length < totalSize) {

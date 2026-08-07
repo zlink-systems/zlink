@@ -78,8 +78,10 @@ public interface IZLinkNetworkOptions
 
 public interface IZLinkMeshNodeSocketConfig
 {
-    // the cap on the size of a complete transport message that can be received.
-    long MaxMessageSize { get; set; }
+    ulong SendHighWaterMark { get; set; }
+    ulong ReceiveHighWaterMark { get; set; }
+    ulong MailboxMessageBudget { get; set; }
+    ulong MailboxByteBudget { get; set; }
     TimeSpan? ReceiveTimeout { get; set; }
     TimeSpan? SendTimeout { get; set; }
 }
@@ -526,6 +528,19 @@ reconnect for the same endpoint and configuration generation. If endpoint,
 expected RID, or configuration generation changes, it can be re-checked
 once with a new intent.
 
+An endpoint remains only a connection intent when a manual endpoint is used with a Location Store
+descriptor for an object peer. When the Framework matches the endpoint to a descriptor, it puts the
+descriptor's RID, positive lifecycle generation, and security identity into the handshake's expected
+values together. A fallback that passes only the endpoint and RID, using generation `0` or treating
+the RID as the security identity, is not used for a descriptor-backed connection. If no descriptor is
+available, the manual connection follows only the registered endpoint and the handshake result; it
+doesn't claim descriptor-backed placement. An Object-enabled MeshNode registers the endpoint-only
+intent even when the descriptor is not available yet. If a matching descriptor appears later in the
+Location Store, the host and Spot runtimes may replace that intent with the descriptor values. The
+replacement passes the endpoint, RID, positive lifecycle generation, and security identity together,
+and does not install the new intent until liveness has closed the previous endpoint intent. While the
+descriptor is absent, this path also makes no placement-owner claim.
+
 Even for Automatic, if a duplicate candidate arises due to connection
 contention or a stale discovery snapshot, the same admission rule applies.
 This safeguard doesn't substitute for automatic-initiator selection and
@@ -662,27 +677,35 @@ Multicast remote targets. The termination rule for already-submitted work
 and RID direct is defined by
 [Graceful Drain](28-graceful-drain-handoff.en.md).
 
-## 8. RouteMesh SS Message Size
+## 8. RouteMesh SS Message Size And Mailbox Caps
 
-A RouteMesh MeshNode has no Framework-level `MaxMessageSize` setting. The
-RouteMesh ServerServer (SS) transport doesn't expose a listener message-size
-setter, and the Framework doesn't reject a complete message solely because
-of a Framework-level `MaxMessageSize`.
+A RouteMesh MeshNode has no Framework-level `MaxMessageSize` startup setting.
+The RouteMesh ServerServer (SS) transport doesn't expose a listener
+message-size setter, and the Framework doesn't reject a complete message
+solely because of a Framework-level `MaxMessageSize`.
 
-Messages still follow the representation limits of the transport and the
-service-wire protocol, as well as the memory available to the process. If
-one of those lower-level limits rejects a message, the framework doesn't
-deliver a partial payload to the handler and the request ends with the
-terminal result defined by the [error model](32-framework-error-model.en.md).
-An application handler checking the decoded payload length doesn't replace
-those lower-level limits.
+`ConfigureRouterSocket()` applies `SendHighWaterMark` and
+`ReceiveHighWaterMark`, and `SendTimeout` and `ReceiveTimeout`, to separate
+socket directions.
+
+`MailboxMessageBudget` and `MailboxByteBudget` are separate from socket HWM.
+They cap the message count and total bytes held by each owner's application
+mailbox. The amount a socket can receive and the amount an owner can retain
+for execution are not the same setting. Their byte-accounting rule is defined
+by [Framework API §8.2](06-framework-api.en.md#82-handler-execution-object-and-dependency-lifetime).
+
+Messages still follow the transport and service-wire representation limits
+and the process-memory limit. If one of those lower-level limits rejects a
+message, the Framework doesn't deliver a partial payload to a handler, and the
+request ends with the terminal result defined by the
+[error model](32-framework-error-model.en.md). An application handler checking
+decoded payload length doesn't replace those lower-level limits.
 
 ClientServer keeps the regular application-listener `MaxMessageSize` contract
 defined by [Framework API §6](06-framework-api.en.md). It doesn't inherit the
-StreamNode's `64 KiB` default or its Core STREAM direction rule. The only
-Framework message-size rule added by this section is that RouteMesh SS has no
-separate listener setting; the StreamNode Core STREAM inbound limit is defined
-by [STREAM session §4](19-stream-session.en.md#4-stream-socket-message-size).
+StreamNode's `64 KiB` default or its Core STREAM direction rule. RouteMesh SS
+has no separate listener message-size setting; the StreamNode Core STREAM inbound limit is defined
+by [STREAM session §7](19-stream-session.en.md#7-registration-model).
 
 ## 9. The Boundary With Classic Fanout
 
@@ -730,7 +753,7 @@ make it impossible to distinguish which publisher's receive activity and
 timeout belong to which publisher.
 
 Fanout connection ready and liveness are defined by
-[Transport Liveness](29-transport-liveness.ko.md).
+[Transport Liveness](29-transport-liveness.en.md).
 
 ## 10. Verification Requirements
 

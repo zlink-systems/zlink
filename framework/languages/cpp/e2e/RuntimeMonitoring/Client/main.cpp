@@ -5,6 +5,7 @@
 #include "Scenarios/mon_a3_spot_events_scenario.hpp"
 #include "Scenarios/mon_a4_availability_transition_scenario.hpp"
 #include "Scenarios/mon_a5_fixed_kinds_scenario.hpp"
+#include "Scenarios/mon_a6_placement_capacity_scenario.hpp"
 #include "Scenarios/mon_b_publish_monitoring_absence_scenario.hpp"
 #include "Scenarios/mon_c1_dispatch_failure_scenario.hpp"
 #include "Scenarios/mon_d1_failure_recovery_scenario.hpp"
@@ -44,6 +45,9 @@ int run_scenarios (const client_options_t &client_options)
         if (wants ("mon-a5")) {
             rm_client::run_mon_a5_fixed_kinds_scenario (client_options);
         }
+        if (wants ("mon-a6")) {
+            rm_client::run_mon_a6_placement_capacity_scenario (client_options);
+        }
         if (wants ("mon-b1")) {
             rm_client::run_mon_b1_publish_monitoring_absence_scenario (client_options);
         }
@@ -57,6 +61,7 @@ int run_scenarios (const client_options_t &client_options)
             rm_client::run_mon_c1_dispatch_failure_scenario (client_options);
         }
         if (!wants ("mon-a1") && !wants ("mon-a2") && !wants ("mon-a3") && !wants ("mon-a5")
+            && !wants ("mon-a6")
             && !wants ("mon-a4") && !wants ("mon-a4a") && !wants ("mon-a4b")
             && !wants ("mon-b1") && !wants ("mon-b2")
             && !wants ("mon-c1")) {

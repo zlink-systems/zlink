@@ -7,6 +7,7 @@ export interface ConsumerOptions {
   readonly redisKeyPrefix: string;
   readonly storeResponseGate: boolean;
   readonly traceLabel: string;
+  readonly multiRole: boolean;
 }
 
 export function validateConsumerOptions(value: unknown): ConsumerOptions {
@@ -17,6 +18,7 @@ export function validateConsumerOptions(value: unknown): ConsumerOptions {
     redisEndpoint: requiredString(values, 'redisEndpoint'),
     redisKeyPrefix: requiredString(values, 'redisKeyPrefix'),
     storeResponseGate: optionalString(values, 'storeResponseGate') === 'enabled',
-    traceLabel: optionalString(values, 'traceLabel') ?? 'consumer'
+    traceLabel: optionalString(values, 'traceLabel') ?? 'consumer',
+    multiRole: optionalString(values, 'multiRole') === 'enabled'
   };
 }

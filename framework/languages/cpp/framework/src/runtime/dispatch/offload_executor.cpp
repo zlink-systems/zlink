@@ -3,11 +3,6 @@
 #include "runtime/dispatch/offload_executor.hpp"
 
 #include <algorithm>
-#ifdef __linux__
-#include <pthread.h>
-#include <sys/syscall.h>
-#include <unistd.h>
-#endif
 #include <cstdlib>
 #include <iostream>
 #include <stdexcept>
@@ -189,27 +184,18 @@ void offload_executor_t::start_worker_locked ()
 
 void offload_executor_t::worker_loop ()
 {
-#ifdef __linux__
-    pthread_setname_np (pthread_self (), _thread_name.substr (0, 15).c_str ());
-#endif
     const char *trace_value = std::getenv ("ZLINK_CPP_HOST_STOP_TRACE");
     const bool trace_enabled = trace_value != nullptr && std::string_view (trace_value) != "0"
                                && std::string_view (trace_value) != "";
     if (trace_enabled) {
         std::cerr << "zlink-cpp-host-stop stage=offload-worker-start name="
                   << _thread_name << " executor=" << this
-#ifdef __linux__
-                  << " tid=" << static_cast<long> (::syscall (SYS_gettid))
-#endif
                   << std::endl;
     }
     auto trace_exit = [this, trace_enabled] {
         if (trace_enabled) {
             std::cerr << "zlink-cpp-host-stop stage=offload-worker-exit name="
                       << _thread_name << " executor=" << this
-#ifdef __linux__
-                      << " tid=" << static_cast<long> (::syscall (SYS_gettid))
-#endif
                       << std::endl;
         }
     };

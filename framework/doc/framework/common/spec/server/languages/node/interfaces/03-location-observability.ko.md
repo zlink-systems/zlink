@@ -67,6 +67,14 @@ export interface ZLinkLocationRuntimeQuery {
     page?: ZLinkPageRequest,
     signal?: AbortSignal
   ): Promise<ZLinkLocationPage<ZLinkLocationServiceSummary>>;
+  findActorLocation(
+    actorId: ActorId,
+    signal?: AbortSignal
+  ): Promise<ZLinkLocationObjectEntry | undefined>;
+  findSpotLocation(
+    spotId: SpotId,
+    signal?: AbortSignal
+  ): Promise<ZLinkLocationObjectEntry | undefined>;
   listObjectLocations(
     filter: ZLinkLocationObjectFilter,
     page?: ZLinkPageRequest,
@@ -74,7 +82,7 @@ export interface ZLinkLocationRuntimeQuery {
   ): Promise<ZLinkLocationPage<ZLinkLocationObjectEntry>>;
 }
 
-export type ZLinkLocationObjectState = 'creating' | 'ready';
+export type ZLinkLocationObjectState = 'creating' | 'ready' | 'unavailable';
 
 export interface ZLinkLocationObjectEntry {
   readonly globalId: string;
@@ -129,8 +137,13 @@ export interface ZLinkLocationReadiness {
 }
 ```
 
-Spot·Actor 위치 조회는 운영 도구가 현재 object 위치를 확인하기 위한 공개 query다. 이 query는
-filter와 page를 함께 사용하며, 한 번에 반환하는 항목 수는 `1..1000` 범위로 제한한다. 반환된
+Spot·Actor 위치 조회는 운영 도구가 현재 object 위치를 확인하기 위한 공개 query다. Exact lookup은
+Missing이면 `undefined`, Creating이면 `creating`, Ready이면 `ready`, commit 뒤 current owner를 사용할 수
+없으면 `unavailable` entry를 반환한다. Spot exact lookup은 User Spot과 Instance Spot을 같은 Spot ID 조회
+계약으로 다룬다. List query는 `objectKind`를 필수로 받고 `stableType`과 `meshName`을 선택 filter로 받는다.
+한 번에 반환하는 항목 수는 `1..1000`, encoded page는 최대 4 MiB로 제한하고 continuation token은 query가
+발급한 opaque 값이다. Store 조회 실패는 `ZLinkFrameworkErrorKind.Unavailable`로 operation 전체를 reject하며
+page 일부를 반환하지 않는다. 반환된
 위치를 application message의 target 목록이나 배치 조건으로 사용하지 않는다. route 저장 행 query,
 저장 key, `ZLinkLocationAutoConnectType`, watch store와 change stamp는 runtime 내부 계약이다.
 
@@ -253,11 +266,16 @@ export interface ZLinkInboundDispatchStatus {
 
 export interface ZLinkFrameworkRuntime {
   readonly status: ZLinkFrameworkRuntimeStatus;
+  diagnosticsLevel: ZLinkMessageFlowLogMode;
   observe(signal?: AbortSignal): AsyncIterable<ZLinkObservedStatus<ZLinkFrameworkRuntimeStatus>>;
   relocate(options: ZLinkFrameworkRelocationOptions): Promise<ZLinkFrameworkRelocationResult>;
   shutdown(options?: ZLinkFrameworkLifecycleOptions): Promise<ZLinkFrameworkTerminationResult>;
 }
 ```
+
+`diagnosticsLevel`을 읽으면 process의 현재 진단 수준을 반환하고 값을 바꾸면 이후 message processing
+boundary부터 새 수준을 적용한다. 변경은 message 처리를 기다리지 않는 원자적 상태 변경이며 이미 telemetry
+queue에 들어간 record를 소급해서 바꾸지 않는다.
 
 `relocate(options)`가 성공하면 runtime은 `Relocated` 상태가 되고 process와 infrastructure connection은 유지된다.
 호출자는 결과가 `Relocated`인지 확인한 뒤 `shutdown()`을 호출할 수 있으며, relocation이 필요하지 않으면

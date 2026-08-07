@@ -620,7 +620,11 @@ export class ZLinkChannelRuntimeLifecycle {
           subscriber
         ),
         this.options.inboundDispatchBudget,
-        this.receiveRoundRobin
+        this.receiveRoundRobin,
+        error => taskRunner.errorSink.reportRuntimeTaskException(
+          `subscriber:${state.channelName}:manual:${state.index}:dispatch`,
+          error
+        )
       );
       state.openingToken = undefined;
       state.active = { token, loop };
@@ -718,7 +722,12 @@ export class ZLinkChannelRuntimeLifecycle {
         message,
         subscriber
       ),
-      this.options.inboundDispatchBudget
+      this.options.inboundDispatchBudget,
+      undefined,
+      error => taskRunner.errorSink.reportRuntimeTaskException(
+        `subscriber:${channelName}:automatic:${connectionId}:dispatch`,
+        error
+      )
     );
     this.subscriberReceiveLoops.push(loop);
     void taskRunner.run(
@@ -775,7 +784,11 @@ export class ZLinkChannelRuntimeLifecycle {
         dispatcher,
         this.options.inboundDispatchBudget,
         this.options.adapter.createReadablePoller(router),
-        this.receiveRoundRobin
+        this.receiveRoundRobin,
+        error => taskRunner.errorSink.reportRuntimeTaskException(
+          `route:${routeChannel.routerChannelId}:dispatch`,
+          error
+        )
       );
       this.routeReceiveLoops.push(loop);
       tasks.push(taskRunner.run(`route:${routeChannel.routerChannelId}`, (signal) => loop.run(signal)));

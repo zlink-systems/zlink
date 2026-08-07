@@ -1,4 +1,4 @@
-[한국어](threading-model.ko.md) | English
+[한국어](https://zlink-systems.github.io/zlink/ko/internals/threading-model/) | English
 
 # Core Threading Model
 

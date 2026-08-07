@@ -43,6 +43,7 @@ export class ZLinkSpotActivationRegistry {
   private readonly emptyWaiters = new Set<() => void>();
   private readonly meshEmptyWaiters = new Map<string, Set<() => void>>();
   private readonly lifecycleMetrics: ZLinkSpotLifecycleMetrics;
+  private activeScan: Iterator<ZLinkSpotActivation> | undefined;
 
   constructor(metrics?: import('../diagnostics').ZLinkRuntimeMetrics) {
     this.lifecycleMetrics = new ZLinkSpotLifecycleMetrics(metrics);
@@ -104,6 +105,30 @@ export class ZLinkSpotActivationRegistry {
 
   activeActivations(): readonly ZLinkSpotActivation[] {
     return [...this.activations.values()];
+  }
+
+  hasActiveActivations(): boolean {
+    return this.activations.size > 0;
+  }
+
+  nextActiveActivationBatch(limit = 64): readonly ZLinkSpotActivation[] {
+    if (!Number.isInteger(limit) || limit <= 0) throw new RangeError('Activation scan limit must be positive.');
+    if (this.activations.size === 0) {
+      this.activeScan = undefined;
+      return [];
+    }
+    this.activeScan ??= this.activations.values();
+    const batch: ZLinkSpotActivation[] = [];
+    while (batch.length < limit) {
+      const next = this.activeScan.next();
+      if (next.done !== true) {
+        batch.push(next.value);
+        continue;
+      }
+      this.activeScan = this.activations.values();
+      break;
+    }
+    return batch;
   }
 
   closingOperation(meshName: string, spotId: RoutingId): ZLinkSpotCloseOperation | undefined {

@@ -7,7 +7,7 @@
 [![Build](https://github.com/zlink-systems/zlink/actions/workflows/build.yml/badge.svg)](https://github.com/zlink-systems/zlink/actions/workflows/build.yml)
 [![License: MPL-2.0 / FSL-1.1 / Apache-2.0](https://img.shields.io/badge/License-multiple-blue.svg)](./doc/license/README.ko.md)
 
-[공식 사이트](https://zlink-systems.github.io/zlink/) · [사용자 가이드](./doc/guide/01-overview.ko.md) · [스펙](./doc/spec/README.ko.md) · [바인딩](doc/bindings/overview.ko.md) · [내부 구조](./doc/internals/architecture.ko.md) · [빌드](./doc/building/build-guide.ko.md)
+[공식 사이트](https://zlink-systems.github.io/zlink/ko/) · [사용자 가이드](./doc/guide/01-overview.ko.md) · [스펙](./doc/spec/README.ko.md) · [바인딩](doc/bindings/overview.ko.md) · [내부 구조](./doc/internals/architecture.ko.md) · [빌드](./doc/building/build-guide.ko.md)
 
 ---
 

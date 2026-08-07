@@ -36,6 +36,7 @@ internal abstract class ZLinkSessionStreamCallBase<TMessage>(
 
     protected async ValueTask<ZLinkOneWaySubmitResult> ExecuteAsync(
         CancellationToken cancellationToken,
+        TimeSpan? admissionTimeout = null,
         bool validateBeforeCancellation = false,
         bool isReply = false)
     {
@@ -53,7 +54,12 @@ internal abstract class ZLinkSessionStreamCallBase<TMessage>(
             frame.Dispose();
             cancellationToken.ThrowIfCancellationRequested();
         }
-        var result = await context.SubmitAsync(frame, cancellationToken, isReply).ConfigureAwait(false);
+        var result = await context.SubmitAsync(
+                frame,
+                cancellationToken,
+                isReply,
+                admissionTimeout)
+            .ConfigureAwait(false);
         if (result.Status == ZLinkOneWaySubmitStatus.Submitted) context.TraceWritten(header);
         return result;
     }
@@ -71,6 +77,8 @@ internal sealed class ZLinkSessionSendCall<TMessage>(
     TMessage message)
     : ZLinkSessionStreamCallBase<TMessage>(context, message), IZLinkSessionSendCall
 {
+    private TimeSpan? _admissionTimeout;
+
     IZLinkSessionSendCall IZLinkMetadataCall<IZLinkSessionSendCall>.Metadata(
         string key,
         string value)
@@ -89,11 +97,24 @@ internal sealed class ZLinkSessionSendCall<TMessage>(
         return (IZLinkSessionSendCall)Compress();
     }
 
+    public IZLinkSessionSendCall Timeout(TimeSpan timeout)
+    {
+        _admissionTimeout = NormalizeAdmissionTimeout(timeout);
+        return this;
+    }
+
+    internal static TimeSpan NormalizeAdmissionTimeout(TimeSpan timeout)
+    {
+        return ZLinkSocketConfig.NormalizeSendTimeout(timeout)
+               ?? throw new ZLinkConfigurationException("timeout is required.");
+    }
+
     public ValueTask Async(
         CancellationToken cancellationToken = default)
     {
         ClaimSubmission();
-        return ExecuteAsync(cancellationToken).EnsureAcceptedAsync("Session send");
+        return ExecuteAsync(cancellationToken, _admissionTimeout)
+            .EnsureAcceptedAsync("Session send");
     }
 
     protected override ZlinkStreamHeader CreateHeader(
@@ -131,6 +152,7 @@ internal sealed class ZLinkSessionReplyCall<TMessage>(
         ClaimSubmission();
         return ExecuteAsync(
                 cancellationToken,
+                admissionTimeout: null,
                 validateBeforeCancellation: true,
                 isReply: true)
             .EnsureAcceptedAsync("Session reply");

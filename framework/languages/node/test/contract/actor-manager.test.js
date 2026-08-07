@@ -320,7 +320,8 @@ test('transferred actor materialization creates a fresh actor before restoring s
     actorFactories: new Map([['transfer', TransferFactory]]),
     nativeActorNode: node,
     nativeActorCompletionTableProvider: () => ({
-      async wait() {
+      async submit(operation) {
+        operation();
         return {
           terminalResult: 0,
           failureErrno: 0,
@@ -391,7 +392,8 @@ test('transferred actor rollback keeps a dispatch-disabled tombstone until nativ
       }
     }),
     nativeActorCompletionTableProvider: () => ({
-      async wait() {
+      async submit(operation) {
+        operation();
         return {
           terminalResult: 0,
           failureErrno: 0,
@@ -2895,17 +2897,18 @@ test('ZLinkActorNativeJoinCoordinator uses formal transfer when replacement proc
     }
   });
   const sourceTerminalOperation = { high: 0n, low: 900n };
-  const originalWait = node.completionTable.wait;
+  const originalSubmit = node.completionTable.submit.bind(node.completionTable);
   node.requestToNode = (_targetNodeRid, payload) => {
     const terminal = JSON.parse(Buffer.from(payload).toString());
     events.push(`sourceTerminal:${terminal.succeeded}`);
     return sourceTerminalOperation;
   };
-  node.completionTable.wait = async (operationId, signal) => {
+  node.completionTable.submit = async (operation, signal) => {
+    const operationId = operation();
     if (operationId.low === sourceTerminalOperation.low) {
       return { terminalResult: 0, failureErrno: 0, operationKind: 7, kindData: null, parts: [] };
     }
-    return await originalWait(operationId, signal);
+    return await originalSubmit(() => operationId, signal);
   };
   const manager = createActorManager({
     actorFactories: new Map([['player', PlayerFactory]]),
@@ -3951,6 +3954,58 @@ test('spot actor dispatch rejects a missing handler before payload deserializati
   payload.close();
 });
 
+test('spot actor dispatch selects the decoder from the packet codec header', async () => {
+  const received = [];
+  let deserializeCalls = 0;
+  class PlayerActor {
+    constructor(actorId) {
+      this.actorId = actorId;
+    }
+  }
+  class PackedHandler {
+    async handle(_spot, _actor, _context, request) {
+      received.push(request);
+    }
+  }
+  const registry = new framework.ZLinkSpotActorHandlerRegistryRuntime().addPacket({
+    kind: framework.ZLinkActorPacketKind.Send,
+    packetName: 'Packed',
+    actorType: PlayerActor,
+    handlerType: PackedHandler
+  });
+  const dispatch = new ZLinkSpotActorPacketDispatch({
+    spot: { context: { meshName: 'play' } },
+    spotId: () => 'room-1',
+    registry,
+    resolveActor: () => new PlayerActor('alice'),
+    onDisconnectActor: async () => {},
+    messageSerializers: new Map([['application/x-msgpack', {
+      serialize() {
+        throw new Error('serialize must not be called');
+      },
+      deserialize(payload) {
+        deserializeCalls += 1;
+        return { packed: Buffer.from(payload.data()).toString('utf8') };
+      }
+    }]])
+  });
+  const header = zlink.Message.from(Buffer.from(framework.encodeStreamHeader({
+    kind: framework.ZLinkStreamMessageKind.Send,
+    codec: framework.ZLinkStreamCodec.MessagePack,
+    flags: framework.ZLinkStreamHeaderFlags.None,
+    name: 'Packed',
+    metadata: new Map()
+  })));
+  const payload = zlink.Message.from(Buffer.from('not-json'));
+
+  await dispatch.dispatch('alice', [header, payload]);
+
+  assert.equal(deserializeCalls, 1);
+  assert.deepEqual(received, [{ packed: 'not-json' }]);
+  header.close();
+  payload.close();
+});
+
 test('ZLinkSpotActorHandlerRegistryRuntime resolves actor packets registered without actor type', async () => {
   const events = [];
   class PlayerActor {
@@ -4002,12 +4057,12 @@ test('ZLinkSpotActorDispatcher commits actor join only when onActorJoin accepts'
     }
   });
 
-  const acceptedRequest = zlink.Message.from('accept');
+  const acceptedRequest = zlink.Message.from('"accept"');
   const accepted = await dispatcher.admitActorJoin(actor, acceptedRequest, () => {
     events.push('commit:accept');
   });
   accept = false;
-  const rejectedRequest = zlink.Message.from('reject');
+  const rejectedRequest = zlink.Message.from('"reject"');
   const rejected = await dispatcher.admitActorJoin(actor, rejectedRequest, () => {
     events.push('commit:reject');
   });
@@ -4263,7 +4318,8 @@ function createMockSpotNode(overrides) {
     ...overrides
   };
   node.completionTable = {
-    async wait(operationId) {
+    async submit(operation) {
+      const operationId = operation();
       const completion = completions.get(operationId.low);
       if (completion === undefined) throw new Error(`missing completion ${operationId.low}`);
       completions.delete(operationId.low);

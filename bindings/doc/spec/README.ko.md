@@ -1596,7 +1596,7 @@ surface 배치는 아래 `Actor Dispatch Policy` 절을 따른다.
 - 바인딩은 이 코드를 언어별 에러 타입의 `int code` 에 포함시킨다
   (exception 언어는 예외 객체, return-based 언어는 반환 에러 값).
 - 전체 enum 정의는
-  [errno-map.md](https://zlink-systems.github.io/zlink/en/spec/core/04-errno-map/) 를 참조한다.
+  [errno-map.md](https://zlink-systems.github.io/zlink/ko/spec/core/04-errno-map/) 를 참조한다.
 
 #### 함수별 에러 타입 계층
 
@@ -1841,7 +1841,7 @@ builder의 callback submit 메서드 (`submit(callback)`).
 #### 공통
 
 - `zlink_request_result_t` 전체 정의는
-  [errno-map.md](https://zlink-systems.github.io/zlink/en/spec/core/04-errno-map/) 를 참조한다.
+  [errno-map.md](https://zlink-systems.github.io/zlink/ko/spec/core/04-errno-map/) 를 참조한다.
 - Go / Rust 는 exception 이 없으므로 callback request 의 submit 실패도
   return-based 로 처리한다 (Go: `*SubmitError` 반환, Rust:
   `Result<_, SubmitError>` 반환).
@@ -3866,7 +3866,7 @@ zlink 에서 사용하는 코드와 의미. 바인딩은 이 코드를 언어별
 
 1. **Public result enum 코드 (0–706)** — 공개 C API 함수의 반환 enum 값.
    바인딩이 직접 마주하고 언어별 에러 타입으로 노출해야 하는 값이다.
-   전체 정의는 [core/errno-map.md](https://zlink-systems.github.io/zlink/en/spec/core/04-errno-map/) 참조.
+   전체 정의는 [core/errno-map.md](https://zlink-systems.github.io/zlink/ko/spec/core/04-errno-map/) 참조.
 2. **Internal errno** — `zlink_errno()` 로 조회되는 내부 raw errno.
    `INTERNAL_ERROR` 같은 coarse bucket 의 상세 원인 조회용. 바인딩은 이 값을
    `internalErrno` / `internal_errno` 필드로 노출한다 (디버깅 전용).
@@ -4638,7 +4638,7 @@ ownership 관리, native loader, package boundary, hot path 최적화를 함께 
   우회 방지는 Review Checklist에서 검증한다. 자동화 테스트 항목이 아니다.
 
 ## 샘플 정책
-- 샘플 제작 규칙은 [`doc/spec/sample/SAMPLE_POLICY.md`](https://zlink-systems.github.io/zlink/en/spec/sample/SAMPLE_POLICY/)
+- 샘플 제작 규칙은 [`doc/spec/sample/SAMPLE_POLICY.md`](https://zlink-systems.github.io/zlink/ko/spec/sample/SAMPLE_POLICY/)
   를 단일 기준 문서로 사용한다.
 - 이 문서는 `core/samples/`와 `bindings/*/samples/`를 함께 포괄한다.
 - 바인딩 샘플을 추가, 수정, 리뷰할 때는 위 문서를 기준으로 판단한다.
@@ -4676,14 +4676,14 @@ perf 정책은 [`doc/perf/PERF_POLICY.md`](../../../doc/perf/PERF_POLICY.md)에�
 
 | 바인딩 | API Spec |
 |--------|----------|
-| C | [`c/README.md`](c/README.en.md) |
-| C++ | [`cpp/README.md`](cpp/README.en.md) |
-| Java | [`java/README.md`](java/README.en.md) |
-| .NET | [`dotnet/README.md`](dotnet/README.en.md) |
-| Node.js | [`node/README.md`](node/README.en.md) |
-| Python | [`python/README.md`](python/README.en.md) |
-| Go | [`go/README.md`](go/README.en.md) |
-| Rust | [`rust/README.md`](rust/README.en.md) |
+| C | [`c/README.md`](c/README.ko.md) |
+| C++ | [`cpp/README.md`](cpp/README.ko.md) |
+| Java | [`java/README.md`](java/README.ko.md) |
+| .NET | [`dotnet/README.md`](dotnet/README.ko.md) |
+| Node.js | [`node/README.md`](node/README.ko.md) |
+| Python | [`python/README.md`](python/README.ko.md) |
+| Go | [`go/README.md`](go/README.ko.md) |
+| Rust | [`rust/README.md`](rust/README.ko.md) |
 
 ### Perf 리뷰 체크리스트
 

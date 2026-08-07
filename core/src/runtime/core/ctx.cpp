@@ -110,6 +110,11 @@ zlink::control_runtime_t *zlink::ctx_t::control_runtime ()
     return ensure_control_runtime ();
 }
 
+zlink::control_runtime_t *zlink::ctx_t::control_runtime_if_started ()
+{
+    return _runtime_resources.control_runtime ();
+}
+
 void zlink::ctx_t::start_thread (thread_t &thread_,
                                  thread_fn *tfn_,
                                  void *arg_,

@@ -1,4 +1,4 @@
-English | [한국어](io-thread.ko.md)
+English | [한국어](https://zlink-systems.github.io/zlink/ko/internals/io-thread/)
 
 # I/O Thread Internals
 

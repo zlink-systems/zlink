@@ -238,6 +238,11 @@ int recv_router_message_direct (socket_handle_t handle_,
         return -1;
     }
 
+    router_recv_metadata_tls_t &metadata = router_recv_metadata_tls ();
+    metadata.transport_pair_id = source_pipe ? source_pipe->get_transport_pair_id () : 0;
+    metadata.transport_pair_generation =
+      source_pipe ? source_pipe->get_transport_pair_generation () : 0;
+
     if ((current.flags () & zlink::msg_t::more) == 0) {
         zlink_msg_t *first_slot = NULL;
         if (zlink::recv_tls_view::begin_with_first_slot (parts_out_, part_count_out_, &first_slot)
@@ -258,7 +263,6 @@ int recv_router_message_direct (socket_handle_t handle_,
             return -1;
         }
 
-        router_recv_metadata_tls_t &metadata = router_recv_metadata_tls ();
         assign_routing_id_compact (&metadata.source_rid, source_rid);
         *source_node_rid_out_ = &metadata.source_rid;
         *request_seq_out_ = 0;
@@ -336,7 +340,6 @@ int recv_router_message_direct (socket_handle_t handle_,
     } else
         *request_seq_out_ = 0;
 
-    router_recv_metadata_tls_t &metadata = router_recv_metadata_tls ();
     metadata.source_rid = source_rid;
     *source_node_rid_out_ = &metadata.source_rid;
     return export_router_payload_parts (raw_parts.data (), raw_parts.size (), start_index,
@@ -600,6 +603,52 @@ int send_completion_frames (zlink::socket_base_t *socket_,
             socket_->arm_send_ready_after_backpressure ();
             zlink::request_reply::consume_send_frames_from (
               parts_, i, part_count_);
+            errno = saved_errno;
+            return -1;
+        }
+        const int init_rc = zlink_msg_init (&parts_[i]);
+        errno_assert (init_rc == 0);
+    }
+    errno = 0;
+    return 0;
+}
+
+int send_completion_frames_for_transport_pair (
+  zlink::socket_base_t *socket_,
+  uint64_t transport_pair_id_,
+  uint64_t transport_pair_generation_,
+  zlink_msg_t *parts_,
+  size_t part_count_)
+{
+    if (!socket_ || !parts_ || part_count_ == 0
+        || transport_pair_id_ == 0 || transport_pair_generation_ == 0) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (socket_->process_submit_commands () != 0)
+        return -1;
+    zlink::pipe_t *completion = socket_->completion_pipe_for_transport_pair (
+      transport_pair_id_, transport_pair_generation_);
+    if (!completion) {
+        socket_->arm_send_ready_after_backpressure ();
+        zlink::request_reply::consume_send_frames_from (parts_, 0, part_count_);
+        errno = EAGAIN;
+        return -1;
+    }
+    for (size_t i = 0; i < part_count_; ++i) {
+        zlink::msg_t *msg = reinterpret_cast<zlink::msg_t *> (&parts_[i]);
+        if (i + 1 < part_count_)
+            msg->set_flags (zlink::msg_t::more);
+        else
+            msg->reset_flags (zlink::msg_t::more);
+        msg->set_transport_connection_id (completion->get_transport_connection_id ());
+        const bool written = i + 1 < part_count_ ? completion->write (msg)
+                                                 : completion->write_and_flush (msg);
+        if (!written) {
+            const int saved_errno = errno ? errno : EAGAIN;
+            completion->rollback ();
+            socket_->arm_send_ready_after_backpressure ();
+            zlink::request_reply::consume_send_frames_from (parts_, i, part_count_);
             errno = saved_errno;
             return -1;
         }

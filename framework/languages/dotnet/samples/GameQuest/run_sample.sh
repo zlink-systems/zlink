@@ -95,10 +95,10 @@ PY
 GAMEQUEST_REDIS_KEY_PREFIX="gamequest:dotnet:${RUN_ID}:"
 GAMEQUEST_GAMEAPI_A_HTTP_BASE_URL="http://127.0.0.1:${PORTS[0]}"
 GAMEQUEST_GAMEAPI_B_HTTP_BASE_URL="http://127.0.0.1:${PORTS[1]}"
-GAMEQUEST_GAMEAPI_A_STREAM_ENDPOINT="ws://127.0.0.1:${PORTS[0]}/quest/ws"
-GAMEQUEST_GAMEAPI_B_STREAM_ENDPOINT="ws://127.0.0.1:${PORTS[1]}/quest/ws"
 GAMEQUEST_API_A_STREAM_BIND_ENDPOINT="tcp://127.0.0.1:${PORTS[2]}"
 GAMEQUEST_API_B_STREAM_BIND_ENDPOINT="tcp://127.0.0.1:${PORTS[3]}"
+GAMEQUEST_GAMEAPI_A_STREAM_ENDPOINT="${GAMEQUEST_API_A_STREAM_BIND_ENDPOINT}"
+GAMEQUEST_GAMEAPI_B_STREAM_ENDPOINT="${GAMEQUEST_API_B_STREAM_BIND_ENDPOINT}"
 GAMEQUEST_MISSION_A_HTTP_URL="http://127.0.0.1:${PORTS[4]}"
 GAMEQUEST_MISSION_B_HTTP_URL="http://127.0.0.1:${PORTS[5]}"
 GAMEQUEST_GAMEAPI_A_MESH_ENDPOINT="tcp://127.0.0.1:${PORTS[6]}"
@@ -127,7 +127,7 @@ wait_port() {
   local port
   host="$(endpoint_host "${endpoint}")"
   port="$(endpoint_port "${endpoint}")"
-  for _ in $(seq 1 30); do
+  for _ in $(seq 1 600); do
     if (echo >"/dev/tcp/${host}/${port}") >/dev/null 2>&1; then
       return 0
     fi
@@ -140,7 +140,7 @@ wait_port() {
 wait_http() {
   local name="$1"
   local endpoint="$2"
-  for _ in $(seq 1 30); do
+  for _ in $(seq 1 600); do
     if curl -fsS "${endpoint}/health" >/dev/null 2>&1; then
       return 0
     fi

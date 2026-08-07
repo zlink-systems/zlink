@@ -14,8 +14,8 @@
 | IS-E2E-02 | 검증 완료 | `framework/languages/dotnet/e2e/SpotService/logs/20260804-150030-587658/`에 cold send와 `instance-initialize` 1회가 기록됐다. Client assertion은 send 수락 결과를 확인했다. |
 | IS-E2E-03 | 검증 완료 | `framework/languages/dotnet/e2e/SpotService/logs/20260804-150104-591087/`에 동일 Spot의 `instance-initialize` 1회와 서로 다른 두 operation의 `instance-request`가 기록됐다. Client assertion은 두 응답이 같은 owner를 가리키는지 확인했다. |
 | IS-E2E-04 | 미구현 | 서로 다른 Instance Spot의 execution queue 독립성을 검증하는 runner가 없다. |
-| IS-E2E-05 | 미구현 | Ready owner crash 뒤 자동 takeover가 없는지 검증하는 runner가 없다. |
-| IS-E2E-06 | 미구현 | creating owner crash의 recovery 경계를 검증하는 runner가 없다. |
+| IS-E2E-05 | 검증 완료 | `SpotService/logs/20260807-202307-1312454/`에서 public Ready owner `play-b`를 SIGKILL한 뒤 같은 generation의 location이 `Unavailable`이 되고, 후속 request도 `Unavailable`로 끝났다. 다른 owner의 factory·handler evidence는 0건이다. |
+| IS-E2E-06 | 부분 구현 | `SpotService/logs/20260807-202813-1625005/`에서 initialization gate로 Creating을 유지한 같은 target·generation에 두 번째 request가 합류하고, gate 해제 뒤 initialization 1회와 두 handler가 각각 한 번 실행됐다. Creating owner crash와 취소 분기는 아직 실행 경로가 없다. |
 | IS-E2E-07 | 미구현 | 정상 relocation 뒤 identity와 state 보존을 검증하는 runner가 없다. |
 | IS-E2E-08 | 검증 완료 | `framework/languages/dotnet/e2e/SpotService/logs/20260804-165721-1053531/`에 `IdleEvicted` 종료 뒤 같은 Spot ID의 두 번째 cold request와 `instance-initialize` 2회가 기록됐다. `instance-idle` process runner가 두 request의 성공과 새 instance 생성을 확인했다. |
 | IS-E2E-09 | 미구현 | owner crash 뒤 concurrent request의 bounded failure를 검증하는 runner가 없다. |
@@ -44,9 +44,10 @@
 | IS-E2E-32 | 미구현 | activation crash boundary를 검증하는 runner가 없다. |
 | IS-E2E-33 | 미구현 | cold activation failure release를 검증하는 runner가 없다. |
 | IS-E2E-34 | 미구현 | unpublished activation cleanup을 검증하는 runner가 없다. |
-| IS-E2E-35 | 미구현 | Ready owner crash 뒤 queue 자동 복구 금지를 검증하는 runner가 없다. |
+| IS-E2E-35 | 검증 완료 | `SpotService/logs/20260807-202604-1475569/`에서 Ready owner의 first handler gate와 follow-up queue를 만든 뒤 owner를 SIGKILL하고 restart했다. 두 caller는 각각 `ShuttingDown`과 `DeadlineExceeded` terminal을 받았고 replay handler는 0건이었다. Restart 뒤 같은 generation은 `Unavailable`, 후속 request도 `Unavailable`, 추가 factory는 0건이었다. |
 | IS-E2E-36 | 미구현 | first handler terminal recovery를 검증하는 runner가 없다. |
 
-Track A와 IS-E2E-08의 실행 진입점은 `framework/languages/dotnet/e2e/InstanceSpot/run_e2e.sh`에
-등록되어 있다. `run_e2e_all.sh`에서 Config 14 전체를 성공으로 보고하지 않는 이유는
-나머지 32개 시나리오에 아직 독립적인 process 검증 경로가 없기 때문이다.
+Track A, IS-E2E-05, IS-E2E-08, IS-E2E-35와 Creating join positive case의 실행 진입점은
+`framework/languages/dotnet/e2e/InstanceSpot/run_e2e.sh`에 등록되어 있다. `run_e2e_all.sh`에서
+Config 14 전체를 성공으로 보고하지 않는 이유는 나머지 scenario에 아직 독립적인 process 검증 경로가
+없기 때문이다.

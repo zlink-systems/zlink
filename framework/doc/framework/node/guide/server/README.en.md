@@ -37,6 +37,6 @@ above.
 
 ## Related Documents
 
-- Public contract: [Node.js public contract](../../../common/spec/server/languages/node/README.ko.md)
-- Language-neutral meaning: [Common spec](../../../common/README.ko.md)
-- Client library: [HTTP client](../http-client/README.ko.md) · [Stream connector](../stream-connector/README.ko.md)
+- Public contract: [Node.js public contract](../../../common/spec/server/languages/node/README.en.md)
+- Language-neutral meaning: [Common spec](../../../common/README.en.md)
+- Client library: [HTTP client](../http-client/README.en.md) · [Stream connector](../stream-connector/README.en.md)

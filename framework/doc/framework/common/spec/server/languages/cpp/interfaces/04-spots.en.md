@@ -429,17 +429,11 @@ doesn't cancel a previously accepted transmission. Spot/Actor
 registration belongs to the
 [owner](../../../../01-glossary.en.md#owner) `mesh_node_builder_t`.
 
-`mesh_node_socket_config_t::max_message_size` is set only before
-startup, and no runtime setter is provided. `0` is normalized to the
-maximum complete message size the binding or transport can receive.
-If the transport is unlimited, it uses the value obtained by
-subtracting envelope overhead from the service wire's `uint32`
-representation limit. A positive value can't exceed that
-representation limit, and exceeding it is rejected as a startup
-configuration error. The peer exchanges the normalized value through
-an internal handshake, and the sender and receiver each apply the
-smaller effective bound of the two before complete-message allocation.
-A public option for this negotiation isn't provided.
+`mesh_node_socket_config_t` doesn't provide a Framework-level message-size
+setting for RouteMesh SS. A sender or receiver doesn't reject a message because
+of a Framework-level complete-message cap. Transport and service-wire
+representation bounds, HWM, and mailbox budgets remain separate resource and
+wire guards.
 If `send_timeout` isn't specified, the framework default of 1 second
 is used. If `receive_timeout` isn't specified, there's no separate
 bound on receive waiting. HWM must be 0 or greater.
@@ -691,9 +685,12 @@ distinct type.
 A one-way call heading to a Cold Instance includes resolve,
 reservation, activation, and outbound admission in the same send
 deadline, and completes at the admission result. A request waits
-through activation, handler, and terminal reply. After owner loss, the
-same instance is reactivated using the creation intent stored in
-authority.
+through activation, handler, and terminal reply. A stored creation
+intent is used only to resume the first cold activation on the same
+target node and lifecycle before its terminal completion is recorded.
+Termination or lease expiry of an owner that had reached steady `Ready`
+doesn't become `Missing` or cold activation on another node; the call
+ends as `unavailable`.
 
 `spot_ref_t` is an immutable location snapshot holding the global
 SpotId, an ObjectGeneration in the `1..9223372036854775807` range, and
@@ -1009,6 +1006,13 @@ public:
     void cancel() noexcept;
 };
 ```
+
+When timer options are omitted, `overrun_policy` defaults to
+`skip_late_ticks` and `max_catch_up_ticks` defaults to `1`.
+`max_catch_up_ticks` is used and validated in `1..INT_MAX` only when
+`overrun_policy == catch_up_bounded`. Other policies do not use or validate
+this value against that range. This rule interprets the existing
+`timer_options_t` fields and adds no public member.
 
 Timer registration validation is owned by
 [stage-wrapper §4.1](../../../../17-stage-wrapper-on-spot.en.md).

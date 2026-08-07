@@ -13,6 +13,7 @@ package, organized per feature. Common behavior is owned by the
 - [Actor](actors.en.md)
 - [STREAM Session](stream-session.en.md)
 - [Location And Maintenance](location-maintenance.en.md)
+- [Location Object Query Types](location-objects.en.md)
 - [Monitoring](monitoring.en.md)
 
 Java and Kotlin share one JVM service runtime. A Kotlin coroutine

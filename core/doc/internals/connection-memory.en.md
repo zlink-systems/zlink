@@ -1,4 +1,4 @@
-[한국어](connection-memory.ko.md)
+[한국어](connection-memory.en.md)
 
 # Per-connection memory
 

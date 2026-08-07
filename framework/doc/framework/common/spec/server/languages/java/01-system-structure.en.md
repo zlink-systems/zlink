@@ -1,11 +1,11 @@
 # Java System Structure Document Location
 
 Java server public signatures are provided per feature in the
-[exact interface table of contents](interfaces/README.ko.md).
+[exact interface table of contents](interfaces/README.en.md).
 
 - [Common Runtime](interfaces/common-runtime.en.md)
-- [Configuration And Host](interfaces/configuration-host.ko.md)
-- [Channel Messaging](interfaces/channel-messaging.ko.md)
+- [Configuration And Host](interfaces/configuration-host.en.md)
+- [Channel Messaging](interfaces/channel-messaging.en.md)
 - [Monitoring](interfaces/monitoring.en.md)
 
 Object relocation is requested with `Relocate`, and host shutdown with

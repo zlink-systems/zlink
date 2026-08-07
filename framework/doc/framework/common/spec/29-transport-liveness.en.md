@@ -4,7 +4,7 @@ title: "Transport Connection Liveness"
 
 # Transport Connection Liveness
 
-[Spec table of contents](README.en.md) · [Previous: Host Relocate And Shutdown](28-graceful-drain-handoff.en.md) · [Next: Failure Handling And Failover Scope](31-failure-failover-policy.ko.md)
+[Spec table of contents](README.en.md) · [Previous: Host Relocate And Shutdown](28-graceful-drain-handoff.en.md) · [Next: Failure Handling And Failover Scope](31-failure-failover-policy.en.md)
 
 > **What this chapter defines** — how the framework continuously checks
 > whether a remote service connection is usable, and reconnects if it drops.
@@ -240,6 +240,18 @@ confirming any of the following.
   connection.
 - The host became `Draining`, `Stopped`, or `Error` and no longer allows
   new target selection.
+
+Connection replacement uses the node RID, security identity, and lifecycle
+generation supplied by the current descriptor as the admission fence. Once
+these descriptor expectations are complete, an endpoint-only manual intent
+with generation 0 cannot weaken the check. The runtime requests physical-pair
+termination with the same `transportPairId` and `transportPairGeneration`
+obtained from the monitor event, and replaces the connection only after it
+observes that pair's close snapshot or disconnect event. An endpoint-level
+disconnect may be used for an initial connection whose pair identity is not
+available, but a successful call alone is not proof that the physical close
+has completed. A new connection for the same endpoint is created only after
+the close has been observed.
 
 Orderly close and transport disconnect don't wait 15 seconds. A
 late-arriving ACK or frame from a previous physical connection can't

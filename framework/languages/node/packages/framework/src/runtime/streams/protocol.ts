@@ -25,6 +25,26 @@ export enum ZLinkStreamCodec {
   Protobuf = 3
 }
 
+export function streamCodecContentType(codec: ZLinkStreamCodec): string {
+  switch (codec) {
+    case ZLinkStreamCodec.Json: return 'application/json';
+    case ZLinkStreamCodec.MessagePack: return 'application/x-msgpack';
+    case ZLinkStreamCodec.Protobuf: return 'application/x-protobuf';
+    case ZLinkStreamCodec.Raw: return 'application/octet-stream';
+  }
+  throw new TypeError(`Unsupported STREAM codec '${codec}'.`);
+}
+
+export function streamCodecForContentType(contentType: string): ZLinkStreamCodec {
+  switch (contentType) {
+    case 'application/json': return ZLinkStreamCodec.Json;
+    case 'application/x-msgpack': return ZLinkStreamCodec.MessagePack;
+    case 'application/x-protobuf': return ZLinkStreamCodec.Protobuf;
+    case 'application/octet-stream': return ZLinkStreamCodec.Raw;
+  }
+  throw new TypeError(`Unsupported STREAM content type '${contentType}'.`);
+}
+
 export enum ZLinkStreamMessageKind {
   Send = 1,
   Request = 2,

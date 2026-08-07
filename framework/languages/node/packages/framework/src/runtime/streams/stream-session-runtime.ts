@@ -35,6 +35,7 @@ import type { StreamSessionService } from '../foundation/service-runtime-contrac
 import {
   decodeStreamHeader,
   messageToBytes,
+  streamCodecContentType,
   type ZLinkStreamFrameHeader,
   ZLINK_STREAM_HEARTBEAT_PING,
   ZLINK_STREAM_HEARTBEAT_PONG,
@@ -172,6 +173,7 @@ export class ZLinkStreamSessionRuntime {
   private readonly serial = new ZLinkStreamSessionSerialExecutor();
   private connected = false;
   private disconnected = false;
+  private disconnectQueued = false;
   private disposed = false;
   private closeReason = 'client_close';
   private metricsClosed = false;
@@ -222,7 +224,7 @@ export class ZLinkStreamSessionRuntime {
   }
 
   get isDisconnected(): boolean {
-    return this.disconnected;
+    return this.disconnected || this.disconnectQueued;
   }
 
   private requireProvidedContext(session: ZLinkSession): ZLinkSession {
@@ -276,11 +278,38 @@ export class ZLinkStreamSessionRuntime {
     decodedHeader: ZLinkStreamFrameHeader,
     dispatchClaim?: ZLinkApplicationWorkClaim
   ): void {
-    // Control frames are runtime traffic, not application payload, so they do
-    // not contribute to the application dispatch budget.
-    const payloadBytes = decodedHeader.kind === ZLinkStreamMessageKind.Control
-      ? 0n
-      : BigInt(payload.size());
+    if (decodedHeader.kind === ZLinkStreamMessageKind.Control) {
+      if (messageToBytes(payload).length === 0) {
+        if (decodedHeader.name === ZLINK_STREAM_HEARTBEAT_PONG) {
+          this.awaitingPongSince = undefined;
+          payload.close();
+          dispatchClaim?.close();
+          return;
+        }
+        if (
+          decodedHeader.name === ZLINK_STREAM_HEARTBEAT_PING
+          && this.stream.writeControl(ZLINK_STREAM_HEARTBEAT_PONG)
+        ) {
+          payload.close();
+          dispatchClaim?.close();
+          return;
+        }
+      }
+      this.enqueue(async () => {
+        try {
+          await this.dispatchPacket(payload, decodedHeader);
+        } finally {
+          dispatchClaim?.close();
+        }
+      }, () => {
+        payload.close();
+        dispatchClaim?.close();
+      });
+      return;
+    }
+    // Application frames reserve both the host budget and the session lane
+    // before their payload reaches user dispatch.
+    const payloadBytes = BigInt(payload.size());
     let budgetEnqueued = false;
     try {
       this.options.inboundDispatchBudget?.enqueue(payloadBytes);
@@ -326,25 +355,17 @@ export class ZLinkStreamSessionRuntime {
   }
 
   enqueueDisconnected(error?: unknown): void {
-    if (this.disconnected) {
-      return;
-    }
-    this.stream.markTransportClosed();
-    this.disconnected = true;
-    this.stopLivenessChecks();
-    this.enqueue(async () => this.complete(error, true));
+    this.queueDisconnect(error);
   }
 
   async close(signal?: AbortSignal): Promise<void> {
     throwIfAborted(signal);
     this.stream.markTransportClosed();
     await this.stream.close(signal);
-    if (this.disconnected) {
+    if (this.disconnected || this.disconnectQueued) {
       return;
     }
-    this.disconnected = true;
-    this.stopLivenessChecks();
-    this.enqueue(async () => this.complete(undefined, true));
+    this.queueDisconnect(undefined);
   }
 
   async dispose(): Promise<void> {
@@ -352,9 +373,9 @@ export class ZLinkStreamSessionRuntime {
       return;
     }
     this.disposed = true;
-    this.stream.markTransportClosed();
     this.stopLivenessChecks();
     await this.serial.dispose();
+    this.stream.markTransportClosed();
     if (!this.disconnected) {
       this.disconnected = true;
       const session = await this.requireSession();
@@ -430,7 +451,11 @@ export class ZLinkStreamSessionRuntime {
         });
         await session.onDispatch?.(
           createDispatchContext(inboundHeader),
-          wrapFrameworkPayloadMessage(dispatchPayload, this.options.messageSerializers)
+          wrapFrameworkPayloadMessage(
+            dispatchPayload,
+            this.options.messageSerializers,
+            streamCodecContentType(inboundHeader.codec)
+          )
         );
         flowIfEnabled(this.options.dispatchErrors?.flow, ZLinkMessageFlowOutcome.Dispatched)?.trace({
           outcome: ZLinkMessageFlowOutcome.Dispatched,
@@ -615,21 +640,39 @@ export class ZLinkStreamSessionRuntime {
   }
 
   private async complete(error: unknown, notifyDisconnected: boolean): Promise<void> {
-    if (error !== undefined && this.closeReason !== 'server_drain') {
-      this.closeReason = 'transport_error';
+    try {
+      if (error !== undefined && this.closeReason !== 'server_drain') {
+        this.closeReason = 'transport_error';
+      }
+      if (error !== undefined) {
+        const session = await this.requireSession();
+        await session.onError?.(this.context, {
+          error: 'transportError' as never,
+          message: error instanceof Error ? error.message : String(error)
+        });
+      }
+      if (notifyDisconnected) {
+        const session = await this.requireSession();
+        await session.onDisconnected?.(this.context);
+      }
+    } finally {
+      await this.cleanup();
     }
-    if (error !== undefined) {
-      const session = await this.requireSession();
-      await session.onError?.(this.context, {
-        error: 'transportError' as never,
-        message: error instanceof Error ? error.message : String(error)
-      });
-    }
-    if (notifyDisconnected) {
-      const session = await this.requireSession();
-      await session.onDisconnected?.(this.context);
-    }
-    await this.cleanup();
+  }
+
+  private queueDisconnect(error: unknown): void {
+    if (this.disconnected || this.disconnectQueued) return;
+    this.disconnectQueued = true;
+    this.stopLivenessChecks();
+    this.enqueue(async () => {
+      this.disconnectQueued = false;
+      if (this.disconnected) return;
+      this.stream.markTransportClosed();
+      this.disconnected = true;
+      await this.complete(error, true);
+    }, () => {
+      this.disconnectQueued = false;
+    });
   }
 
   private async cleanup(): Promise<void> {
@@ -1056,6 +1099,7 @@ export class ZLinkStreamSessionNodeRuntime {
 
   private handleMalformedFrame(state: ZLinkStreamReceiveState, error: Error): void {
     this.removeReceiveState(state.session.stream.sessionId);
+    this.options.onError?.(error);
     try {
       this.options.socket.disconnectPeer(state.routingId as RoutingId);
     } catch (disconnectError) {

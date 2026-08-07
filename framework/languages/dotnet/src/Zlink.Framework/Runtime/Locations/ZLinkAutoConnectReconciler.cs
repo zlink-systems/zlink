@@ -48,7 +48,10 @@ internal sealed class ZLinkAutoConnectReconciler
     private bool _storeFailed;
     private long? _storeFailureStartedAt;
     private long _recoveryDeferUntil;
-    private bool _ownerCleanupStarted;
+    // Set before waiting for the reconcile gate. The shutdown barrier must
+    // prevent a queued or in-flight tick from starting another owner write
+    // while the barrier waits for the current tick to finish.
+    private int _ownerCleanupStarted;
     private long _discoveredPeerCount;
     private long _pendingLocalWeight = -1;
     private long _pendingPlacementWeight = -1;
@@ -213,6 +216,8 @@ internal sealed class ZLinkAutoConnectReconciler
         await _reconcileGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            if (Volatile.Read(ref _ownerCleanupStarted) != 0)
+                return false;
             if (_localRow is null) return true;
             // Weight and drain changes increment the descriptor revision so
             // readers on the same lifecycle generation apply the newest
@@ -239,15 +244,16 @@ internal sealed class ZLinkAutoConnectReconciler
 
     internal async ValueTask FreezeOwnerWritesAsync(CancellationToken cancellationToken)
     {
-        await _reconcileGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        Volatile.Write(ref _ownerCleanupStarted, 1);
         try
         {
-            _ownerCleanupStarted = true;
+            await _reconcileGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         }
-        finally
+        catch (OperationCanceledException)
         {
-            _reconcileGate.Release();
+            throw;
         }
+        _reconcileGate.Release();
     }
 
     internal async ValueTask TickAsync(CancellationToken cancellationToken = default)
@@ -279,7 +285,7 @@ internal sealed class ZLinkAutoConnectReconciler
 
     private async ValueTask TickCoreAsync(CancellationToken cancellationToken)
     {
-        if (_ownerCleanupStarted) return;
+        if (Volatile.Read(ref _ownerCleanupStarted) != 0) return;
         // A read that began before a store outage can complete after Redis
         // resumes without ever throwing. The owner heartbeat is the shared
         // recovery authority: while it is unhealthy, even a successful list
@@ -351,12 +357,15 @@ internal sealed class ZLinkAutoConnectReconciler
             using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             deadline.CancelAfter(_options.OwnerLeaseRenewTimeout);
             await PublishLocalAsync(deadline.Token).ConfigureAwait(false);
+            if (Volatile.Read(ref _ownerCleanupStarted) != 0) return;
             rows = await _peers.ListLiveMeshNodesAsync(_local.MeshName, deadline.Token)
                 .ConfigureAwait(false);
             ZLinkFrameworkDebugLog.SpotDiscovery(
                 $"autoconnect_snapshot local={_local.NodeRid?.ToString() ?? "<unknown>"} "
                 + $"mesh={_local.MeshName} rows={rows.Count} "
                 + $"rids={string.Join(',', rows.Select(static row => row.Rid.ToString()))}");
+            if (Volatile.Read(ref _ownerCleanupStarted) != 0)
+                return;
             if (!_runtime.GetHealthSnapshot().Healthy)
             {
                 EnterStoreFailure();
@@ -460,6 +469,8 @@ internal sealed class ZLinkAutoConnectReconciler
 
         foreach (var (key, target) in connectableDesired)
         {
+            if (Volatile.Read(ref _ownerCleanupStarted) != 0)
+                return;
             if (!_active.TryGetValue(key, out var current))
             {
                 // A draining descriptor is not selected for new connections.
@@ -480,6 +491,8 @@ internal sealed class ZLinkAutoConnectReconciler
             if (RequiresConnectionHandover(current, target))
             {
                 // An endpoint change needs a new transport connection.
+                if (Volatile.Read(ref _ownerCleanupStarted) != 0)
+                    return;
                 var disconnected = _executor.Disconnect(current);
                 ZLinkFrameworkDebugLog.SpotDiscovery(
                     $"autoconnect_handover local={_local.NodeRid?.ToString() ?? "<unknown>"} "
@@ -487,6 +500,8 @@ internal sealed class ZLinkAutoConnectReconciler
                     + $"disconnect={disconnected}");
                 if (!disconnected) continue;
                 _active.Remove(key);
+                if (Volatile.Read(ref _ownerCleanupStarted) != 0)
+                    return;
                 var connected = _executor.Connect(target);
                 if (connected)
                 {
@@ -514,6 +529,8 @@ internal sealed class ZLinkAutoConnectReconciler
                 .ToArray();
             foreach (var key in toRemove)
             {
+                if (Volatile.Read(ref _ownerCleanupStarted) != 0)
+                    return;
                 var target = _active[key];
                 var disconnected = _executor.Disconnect(target);
                 ZLinkFrameworkDebugLog.SpotDiscovery(
@@ -552,6 +569,8 @@ internal sealed class ZLinkAutoConnectReconciler
 
         foreach (var (key, current) in conflicts)
         {
+            if (Volatile.Read(ref _ownerCleanupStarted) != 0)
+                return false;
             var disconnected = _executor.Disconnect(current);
             ZLinkFrameworkDebugLog.SpotDiscovery(
                 $"autoconnect_endpoint_handover local={_local.NodeRid?.ToString() ?? "<unknown>"} "
@@ -682,6 +701,8 @@ internal sealed class ZLinkAutoConnectReconciler
 
         foreach (var (key, target) in _lastDesired)
         {
+            if (Volatile.Read(ref _ownerCleanupStarted) != 0)
+                return;
             if (_active.ContainsKey(key) || target.Draining) continue;
             if (_executor.Connect(target)) _active[key] = target;
         }

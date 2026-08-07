@@ -7,7 +7,6 @@ using Zlink.Framework.Runtime.Streams;
 
 namespace Zlink.Framework.UnitTests;
 
-[Collection(RuntimeMetricsCollection.Name)]
 public sealed class SessionActorCoordinatorTests
 {
     [Fact]

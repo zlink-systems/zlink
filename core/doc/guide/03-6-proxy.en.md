@@ -1,4 +1,4 @@
-[English](03-6-proxy.en.md) | [한국어](03-6-proxy.ko.md)
+[English](03-6-proxy.en.md) | [한국어](03-6-proxy.en.md)
 
 <!-- zlink-nav:start -->
 [← STREAM](03-5-stream.en.md) | [Transport →](04-transports.en.md)

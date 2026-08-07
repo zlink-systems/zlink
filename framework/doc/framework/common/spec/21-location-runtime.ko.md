@@ -713,12 +713,27 @@ Message Follow라고 하며, 기간인 `MessageFollowDuration`의 기본값은 3
 stable type별 목록도 페이지로 읽을 수 있다. 이 결과는 운영 상태를 확인하기 위한
 것이며 application message의 target 목록이나 배치 조건으로 사용하지 않는다.
 
+- ID별 조회는 Actor와 Spot을 구분한다. Record가 없으면 empty를 반환하며 `Missing` entry를 만들지 않는다.
+- Paged list는 object kind를 필수 filter로 받고 stable type과 MeshName을 선택 filter로 받는다.
 - 한 페이지에는 `1..1000`개를 반환한다.
-- 저장 크기는 최대 4 MiB다.
+- Encoding된 한 page의 크기는 최대 4 MiB다. 다음 항목을 더하면 상한을 넘는 경우 그 항목부터 다음
+  continuation page로 넘긴다. Entry field의 기존 길이 제한은 단일 항목이 이 상한 안에 들어오도록 유지한다.
 - 각 항목에는 전역 ID, `ObjectGeneration`, `MeshName`, Node RID, 상태와 stable
   type이 들어간다.
+- Continuation token은 opaque이며 application이 해석하거나 수정하지 않는다. 같은 page cycle에서는 ID를
+  중복해서 반환하지 않고, cycle 중 끝난 변경은 다음 cycle부터 보일 수 있다.
 - 전체를 제한 없이 한 번에 반환하는 함수는 제공하지 않는다.
 - `Missing`, `Creating`과 Store 오류를 “없는 object”로 cache하지 않는다.
+
+조회 결과는 다음 상태를 사용한다.
+
+| 저장 상태 | ID별 조회 | Paged list |
+|---|---|---|
+| Record 없음 | empty | 항목 없음 |
+| `Creating` | `Creating` entry | `Creating` entry 포함 |
+| `Ready` | `Ready` entry | `Ready` entry 포함 |
+| Commit 뒤 current owner를 사용할 수 없음 | `Unavailable` entry | `Unavailable` entry 포함 |
+| Store 조회 실패 | `Unavailable` Framework error | Page 전체를 error로 끝내고 일부 항목을 성공으로 반환하지 않음 |
 
 Topology 열거는 MeshNode descriptor만 대상으로 한다. ClientServer channel과 classic
 fanout channel은 MeshNode가 아니므로 이 목록에 나타나지 않으며, 그것들의 상태는

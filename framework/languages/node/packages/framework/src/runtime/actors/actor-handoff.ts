@@ -671,9 +671,6 @@ export class ZLinkActorHandoffCoordinator {
     }
     if (replyRouteId === undefined) {
       this.nextReplyRouteId += 1n;
-      if (this.nextReplyRouteId <= 0n) {
-        throw new Error('Actor handoff ReplyRouteId is exhausted.');
-      }
       replyRouteId = this.nextReplyRouteId.toString();
     }
     return {
@@ -822,10 +819,11 @@ export class ZLinkActorHandoffCoordinator {
     request: boolean,
     actorRef?: ActorRef
   ): void {
-    if ((actorRef !== undefined
-          && context.objectGeneration !== actorRef.objectGeneration.toString())
-        || context.objectGeneration === '0'
-        || context.request !== request) {
+    if (actorRef !== undefined
+        && context.objectGeneration !== actorRef.objectGeneration.toString()) {
+      throw actorGenerationStale(actorId);
+    }
+    if (context.objectGeneration === '0' || context.request !== request) {
       throw actorLocationStale(actorId);
     }
     if (context.deadlineUnixMs !== undefined
@@ -864,7 +862,7 @@ export class ZLinkActorHandoffCoordinator {
     try {
       this.admitBounded(entry.queuedMessages, entry.queuedBytes, packet);
       if (entry.operations.size >= MAX_MESSAGE_FOLLOW_MESSAGES) {
-        throw actorLocationStale(actorId);
+        throw messageFollowCapacityExceeded(actorId);
       }
     } catch (error) {
       this.options.onMarker?.('message_follow_rejected', actorId);
@@ -907,7 +905,7 @@ export class ZLinkActorHandoffCoordinator {
       messageCount >= MAX_MESSAGE_FOLLOW_MESSAGES
       || byteCount + packetBytes(packet) > MAX_MESSAGE_FOLLOW_BYTES
     ) {
-      throw actorLocationStale('message-follow-bound');
+      throw messageFollowCapacityExceeded('message-follow-bound');
     }
   }
 
@@ -1203,6 +1201,20 @@ function actorLocationStale(actorId: string): ZLinkFrameworkException {
   return createInternalFrameworkException(
     ZLinkFrameworkInternalErrorKind.ActorLocationStale,
     `Actor route '${actorId}' is stale after the Message Follow duration.`
+  );
+}
+
+function actorGenerationStale(actorId: string): ZLinkFrameworkException {
+  return createInternalFrameworkException(
+    ZLinkFrameworkInternalErrorKind.ActorGenerationStale,
+    `Actor route '${actorId}' carries a different object generation.`
+  );
+}
+
+function messageFollowCapacityExceeded(actorId: string): ZLinkFrameworkException {
+  return createInternalFrameworkException(
+    ZLinkFrameworkInternalErrorKind.WorkerQueueFull,
+    `Actor route '${actorId}' exhausted the Message Follow capacity.`
   );
 }
 

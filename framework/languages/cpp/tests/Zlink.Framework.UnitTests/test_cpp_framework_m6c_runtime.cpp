@@ -502,7 +502,7 @@ void test_relocation_ready_completion_runs_once_on_spot_turn (
       std::make_shared<runtime::serial_execution_queue_t> (
         *state->serial_executor, 64,
         runtime::serial_execution_queue_t::error_handler_t{},
-        true);
+        runtime::serial_lane_policy_t::spot_wide ());
     state->node =
       std::make_shared<detail::spot_node_builder_state_t> (
         "relocation-ready-node");
@@ -674,7 +674,8 @@ void test_actor_leave_after_relocation_defer_runs_lifecycle_callbacks (
         state->serial_queue =
           std::make_shared<runtime::serial_execution_queue_t> (
             *state->serial_executor, 64,
-            runtime::serial_execution_queue_t::error_handler_t{}, true);
+            runtime::serial_execution_queue_t::error_handler_t{},
+            runtime::serial_lane_policy_t::spot_wide ());
         state->spot_instance = std::make_shared<int> (1);
         return state;
     };
@@ -790,7 +791,8 @@ void test_temporary_channel_request_yield_owns_call_state (
       2, 64, "temporary-channel-call");
     state->serial_queue = std::make_shared<runtime::serial_execution_queue_t> (
       *state->serial_executor, 64,
-      runtime::serial_execution_queue_t::error_handler_t{}, true);
+      runtime::serial_execution_queue_t::error_handler_t{},
+      runtime::serial_lane_policy_t::spot_wide ());
 
     auto reply_source =
       std::make_shared<detail::task_completion_source_t<zlink::message_t>> ();
@@ -4086,7 +4088,7 @@ void test_application_relocation_remote_production_path (
     target_descriptor.owner_id = "target-owner";
     target_descriptor.lease_generation = 9;
 
-    zlink::framework::runtime::host::operation_id_t replay_operation;
+    zlink::framework::runtime::host::call_id_t replay_operation;
     test.require (
       target.request_to_actor (
         actor,
@@ -4589,6 +4591,35 @@ void test_stateful_application_reservation_includes_active_work (
         byte_actor, turn_domain_t::application, {2, {}})
         == stateful_error_t::none,
       "application byte budget must admit work after terminal completion");
+
+    stateful_object_runtime_t multipart_accounting (
+      2, 1, fixed + 4, limits::control_mailbox_bytes);
+    const auto multipart_actor = create_actor (
+      multipart_accounting, "multipart-accounting-actor");
+    test.require (
+      multipart_accounting.enqueue (
+        multipart_actor, turn_domain_t::application,
+        {1, std::vector<std::uint8_t> (128, 0x43), 4})
+        == stateful_error_t::none,
+      "application HWM must exclude the canonical multipart envelope");
+    const auto [multipart_claim_error, multipart_claim] =
+      multipart_accounting.try_claim (
+        multipart_actor, turn_domain_t::application);
+    test.require (
+      multipart_claim_error == stateful_error_t::none && multipart_claim,
+      "multipart accounting test must claim the admitted application turn");
+    test.require (
+      multipart_accounting.enqueue (
+        multipart_actor, turn_domain_t::application, {2, {}})
+        == stateful_error_t::backpressured,
+      "application HWM must retain the payload-part reservation while active");
+    if (multipart_claim) {
+        test.require (
+          multipart_accounting.complete_claim (
+            multipart_actor, turn_domain_t::application)
+            == stateful_error_t::none,
+          "multipart payload reservation must release at completion");
+    }
 
     stateful_object_runtime_t restore_limited (
       2, 1, fixed + 4, limits::control_mailbox_bytes);

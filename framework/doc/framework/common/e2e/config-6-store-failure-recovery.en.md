@@ -68,7 +68,8 @@ processed by either?
 - Procedure: The consumer's public RouteMesh status is read, and 20 distinct requests are sent.
 - Verification: Status reports a ready-target count of 2, and each of the 20 requests receives one
   reply. The combined handler count is 20.
-- Detailed behavior: verifies [Location Runtime §2](../spec/21-location-runtime.en.md#2-values-distinguishing-re-creation-of-the-same-id-from-an-owner-change).
+- Detailed behavior: verifies [Normal Processing Order](../spec/21-location-runtime.en.md#14-normal-processing-order)
+  and [Read And CAS](../spec/21-location-runtime.en.md#51-read-and-cas).
 
 #### SF-A2 Reflect Provider Changes Through Polling Without A Watch
 
@@ -142,7 +143,8 @@ while the transport is kept?
 - Verification: The RouteMesh peer can have normal transport liveness, but the new stateful request
   ends in a formal unavailable result. The timer callback evidence also does not increase past the
   lease deadline.
-- Detailed behavior: verifies [Failover Policy §5](../spec/31-failure-failover-policy.en.md#5-host-relocation-failure).
+- Detailed behavior: verifies [Object Routing And Creation Recovery](../spec/31-failure-failover-policy.en.md#4-object-routing-and-creation-recovery)
+  and [Store Failure](../spec/31-failure-failover-policy.en.md#7-store-failure).
 
 ### Track C — Distinguish A Stale Provider From Its Lifecycle
 
@@ -161,7 +163,7 @@ follow-up requests handled only by A?
   target set. 20 follow-up requests are sent.
 - Verification: B does not appear in status's ready peers/targets, and A processes all 20. Repeated
   timeouts against B's endpoint are not treated as success.
-- Detailed behavior: verifies [Location Runtime §5](../spec/21-location-runtime.en.md#5-reading-and-changing-the-current-location-record).
+- Detailed behavior: verifies [Finding Running Nodes And Their Capabilities](../spec/21-location-runtime.en.md#3-finding-running-nodes-and-their-capabilities).
 
 #### SF-C2 An Orderly Shutdown Does Not Wait For Lease Expiry
 
@@ -231,7 +233,27 @@ no duplicates or gaps?
   continuation ends.
 - Verification: Each page's item count never exceeds the requested cap, and the total logical IDs are
   exactly 1,001. The continuation token is not interpreted or modified by the client.
-- Detailed behavior: verifies [Location Runtime §7](../spec/21-location-runtime.en.md#7-moving-an-actor-or-user-spot-to-another-node).
+- Detailed behavior: verifies [Location Runtime — Querying The Current Location From Operational Tools](../spec/21-location-runtime.en.md#64-querying-the-current-location-from-operational-tools).
+
+#### SF-C5A Distinguish Object States In ID And Page Queries
+
+Priority: `P0`
+
+For public object queries, a missing exact lookup is empty and no page item is returned. Only existing
+objects return `Creating`, `Ready`, or `Unavailable` entries. A Store query failure must not return a
+partial page as normal.
+
+**Verification question:** Is Missing empty/absent while the three object states agree as entries,
+with Store failure returning a whole-page error?
+
+- Starting condition: Prepare a missing ID, an object held at a creation gate, a Ready object, and an
+  Unavailable object after owner loss.
+- Procedure: Query every ID and a bounded page containing the same objects. On a fresh fixture, fail
+  the Store request and repeat the page query.
+- Verification: The missing exact lookup is empty and no page item exists for its ID. `Creating`,
+  `Ready`, and `Unavailable` objects return matching state entries in ID and page queries. The
+  Store-failure variant is a whole-page error with no items or continuation token.
+- Detailed behavior: verifies [Location Runtime — Querying The Current Location From Operational Tools](../spec/21-location-runtime.en.md#64-querying-the-current-location-from-operational-tools).
 
 ### Track D — Converge On Current Topology After Store Recovery
 
@@ -250,7 +272,7 @@ outage?
   kept running until status recovers to ready.
 - Verification: Every request receives one terminal result each, and the current provider set stays
   A and B. There is no unnecessary re-registration call in application evidence.
-- Detailed behavior: verifies [Location Runtime §6](../spec/21-location-runtime.en.md#6-creating-an-actor-or-user-spot).
+- Detailed behavior: verifies [Blocking A Previous Owner's New Work When The Store Connection Drops](../spec/21-location-runtime.en.md#4-blocking-a-previous-owners-new-work-when-the-store-connection-drops).
 
 #### SF-D2 Keep Only The Re-Registered Provider After A Long Outage
 
@@ -268,7 +290,8 @@ crashed B is excluded?
   time. The Store is restarted, and A's requests are sent until consumer status converges.
 - Verification: A's requests keep succeeding in the periods it can, and after recovery there is one
   ready target, A. B is not auto-created as a replacement or sent to along the old route.
-- Detailed behavior: verifies [Location Runtime §6](../spec/21-location-runtime.en.md#6-creating-an-actor-or-user-spot).
+- Detailed behavior: verifies [The Store-Connection Fence](../spec/21-location-runtime.en.md#4-blocking-a-previous-owners-new-work-when-the-store-connection-drops)
+  and [Normal Processing Order](../spec/21-location-runtime.en.md#14-normal-processing-order).
 
 #### SF-D3 Public Status Converges As Ready → Degraded → Ready
 
@@ -306,7 +329,7 @@ is waiting on the response gate?
   released.
 - Verification: The Channel requests each receive a reply before the Store gate is released. The
   Store operation also returns a formal terminal once released.
-- Detailed behavior: verifies I/O isolation in [Async Execution Policy §2](../spec/05-async-execution-policy.en.md#2-request-completion).
+- Detailed behavior: verifies I/O-wait isolation in [Worker Offload](../spec/05-async-execution-policy.en.md#12-worker-offload).
 
 ### Track F — Verify Public Results Of Relocation And Owner Recovery
 
@@ -363,7 +386,7 @@ requests?
   a source request is sent, and after the Store recovers, a new Relocate is called.
 - Verification: The first call is a Store-unavailable result, and the source request succeeds. The
   second call restores state at the target, without auto-resuming the first operation.
-- Detailed behavior: verifies [Relocation Store §7](../spec/23-relocation-store-redis.en.md#7-registration-and-provider-instance-lifetime).
+- Detailed behavior: verifies [Relocation Store Cancellation, Errors, And Result Reconstruction](../spec/23-relocation-store-redis.en.md#5-cancellation-errors-and-result-reconstruction).
 
 #### SF-F4 Distinguish ObjectGeneration And Owner Replacement Through The Public Ref
 
@@ -419,25 +442,24 @@ pages and unique IDs?
   read to the end. A new scan is then started.
 - Verification: IDs within a single scan have no duplicates and respect the page cap. The second scan
   reflects the mutations completed by that point. The client does not modify the continuation token.
-- Detailed behavior: verifies [Location Runtime §7](../spec/21-location-runtime.en.md#7-moving-an-actor-or-user-spot-to-another-node).
+- Detailed behavior: verifies [Location Runtime — Querying The Current Location From Operational Tools](../spec/21-location-runtime.en.md#64-querying-the-current-location-from-operational-tools).
 
 #### SF-F7 Large-State Relocation Restores Within The Public Size Limit
 
 Priority: `P0`
 
-Even if application state is larger than one Store record, the Framework must preserve the payload
-within the formal relocation limit and restore it at the target.
+The Framework preserves and restores encoded participant state at or below the 64 MiB limit.
 
-**Verification question:** Does an object with state larger than 64 MiB return the same checksum and
-logical length after relocation?
+**Verification question:** Is the 64 MiB boundary restored while one byte over keeps source authority?
 
-- Starting condition: A deterministic large state is built through the public application API. Its
-  total size is smaller than the spec's logical relocation maximum.
+- Starting condition: Separate fixtures contain deterministic encoded participant state of exactly
+  64 MiB and one byte over.
 - Procedure: The object is relocated to a target node, and its state checksum/length are queried
   through a public request. A separate oversize fixture exceeds the maximum.
-- Verification: The normal state has the same checksum/length at the target and processes requests.
-  The oversize operation ends in `Blocked/StateIncompatible`, keeping the source.
-- Detailed behavior: verifies [Relocation Store §4](../spec/23-relocation-store-redis.en.md#4-result-per-operation).
+- Verification: The 64 MiB state has the same checksum/logical length at the target and processes
+  requests. The one-byte-over operation keeps source authority and ends in exactly one
+  `Blocked/StateIncompatible` terminal.
+- Detailed behavior: verifies [Relocation Units And Concurrency Limits](../spec/28-graceful-drain-handoff.en.md#7-relocation-units-and-concurrency-limits).
 
 #### SF-F8 The Source Is Kept If The Target Owner's Lease Expires
 
@@ -494,22 +516,24 @@ operation get exactly one terminal?
   The Relocate terminal is also single, and the follow-up is processed once at the current target.
 - Detailed behavior: verifies [Host Maintenance §7](../spec/28-graceful-drain-handoff.en.md#7-relocation-units-and-concurrency-limits).
 
-#### SF-F11 Preserve Payload Values After Cancellation And Response Loss
+#### SF-F11 Preserve Payload Values After Waiter Termination And Response Loss
 
 Priority: `P0`
 
-Even if a Store call waiter is canceled or its response is lost, a mutable application payload must
-not be reused for a different operation's value.
+Even if a Store response is lost or a supported language cancels its relocation waiter, a mutable
+application payload must not be reused for another operation. The cancellation variant runs only
+where the exact interface supports it.
 
-**Verification question:** After a canceled operation, does a new relocation restore only its own
-payload checksum at the target?
+**Verification question:** After common response loss and supported-language cancellation, does a
+new relocation restore only its own payload checksum at the target?
 
 - Starting condition: Two fresh objects with distinct deterministic payloads A and B are prepared.
-- Procedure: A's relocation waiter is canceled while the Store response is pending. The Store is
-  normalized, and B's relocation is run.
-- Verification: A's awaitable keeps its cancellation result. B's target-state checksum exactly
+- Procedure: The common variant loses A's Store response; supported languages additionally cancel a
+  pending waiter. The Store is normalized, and B's relocation is run.
+- Verification: A's awaitable keeps its response-loss or supported cancellation result. B's target-state checksum exactly
   matches B, with no mixing of A's bytes. Each operation has exactly one terminal.
-- Detailed behavior: verifies [Relocation Store §6](../spec/23-relocation-store-redis.en.md#6-payload-publication-and-cleanup).
+- Detailed behavior: verifies [Cancellation, Errors, And Result Reconstruction](../spec/23-relocation-store-redis.en.md#5-cancellation-errors-and-result-reconstruction)
+  and [Payload Publication And Cleanup](../spec/23-relocation-store-redis.en.md#6-payload-publication-and-cleanup).
 
 ### Track G — Verify Capacity Results Through Public Create/Relocation
 

@@ -111,6 +111,6 @@ checking targets the Python 3.9 target `pyrightconfig.json` specifies, and
 
 ## Related documents
 
-- Usage follows the [Python guide](../../guide/python/index.ko.md).
+- Usage follows the [Python guide](../../guide/python/index.en.md).
 - The reference for Core functions and layout is the repository's `core/include/zlink.h` and the Core spec.
 - Implementation detail and callback/native lifetime explanations belong to the internals documents, not this one.

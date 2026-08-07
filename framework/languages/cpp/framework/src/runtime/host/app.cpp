@@ -663,11 +663,33 @@ bool host_stop_trace_enabled ()
     return value != nullptr && std::string_view (value) != "0" && std::string_view (value) != "";
 }
 
-std::string instance_spot_activation_correlation (
+struct instance_spot_activation_trace_context_t
+{
+    std::string packet_name;
+    std::string mesh_name;
+    zlink::routing_id_t target_node;
+    zlink::framework::spot_id_t spot_id;
+    std::string correlation_id;
+};
+
+std::optional<instance_spot_activation_trace_context_t>
+make_instance_spot_activation_trace_context (
+  bool may_emit,
+  std::string_view packet_name,
+  std::string_view mesh_name,
+  const zlink::routing_id_t &target_node,
+  const zlink::framework::spot_id_t &spot_id,
   const zlink::framework::runtime::protocol::instance_spot_activation_header_t &header)
 {
-    return std::to_string (header.operation.high) + ":"
-           + std::to_string (header.operation.low);
+    if (!may_emit)
+        return std::nullopt;
+    return instance_spot_activation_trace_context_t{
+      std::string (packet_name),
+      std::string (mesh_name),
+      target_node,
+      spot_id,
+      std::to_string (header.operation.high) + ":"
+        + std::to_string (header.operation.low)};
 }
 
 void trace_instance_spot_activation (
@@ -675,34 +697,33 @@ void trace_instance_spot_activation (
   const std::optional<zlink::framework::runtime::flow_value_t> &flow,
   zlink::framework::message_flow_outcome_t outcome,
   zlink::framework::dispatch_message_kind_t message_kind,
-  std::string packet_name,
-  std::string mesh_name,
-  const zlink::routing_id_t &target_node,
-  const zlink::framework::spot_id_t &spot_id,
-  std::string correlation_id)
+  const instance_spot_activation_trace_context_t &context)
 {
-    zlink::framework::message_flow_event_t event{
-      outcome,
-      zlink::framework::dispatch_error_surface_t::spot_route,
-      message_kind,
-      std::move (packet_name),
-      std::move (mesh_name),
-      std::nullopt,
-      std::move (correlation_id),
-      target_node.to_string (),
-      std::string (spot_id),
-      std::nullopt,
-      std::nullopt,
-      std::nullopt,
-      std::nullopt,
-      std::exception_ptr{},
-      std::nullopt,
-      std::nullopt};
-    if (flow) {
-        event.flow_id = flow->flow_id;
-        event.flow_origin = flow->origin;
-    }
-    zlink::framework::detail::message_flow_tracer_t (dispatch).trace (std::move (event));
+    zlink::framework::detail::message_flow_tracer_t (dispatch).trace (
+      outcome, [&] {
+          zlink::framework::message_flow_event_t event{
+            outcome,
+            zlink::framework::dispatch_error_surface_t::spot_route,
+            message_kind,
+            context.packet_name,
+            context.mesh_name,
+            std::nullopt,
+            context.correlation_id,
+            context.target_node.to_string (),
+            std::string (context.spot_id),
+            std::nullopt,
+            std::nullopt,
+            std::nullopt,
+            std::nullopt,
+            std::exception_ptr{},
+            std::nullopt,
+            std::nullopt};
+          if (flow && !flow->flow_id.empty ()) {
+              event.flow_id = flow->flow_id;
+              event.flow_origin = flow->origin;
+          }
+          return event;
+      });
 }
 
 std::optional<std::uint64_t> read_finite_memory_limit (
@@ -1752,7 +1773,7 @@ app_t &app_t::add_zlink_framework (std::function<void (zlink_framework_options_t
               const std::map<std::string, std::string> &metadata) {
               auto flow_scope = runtime::flow_context_t::enter_current_or_create (
                 flow_origin_t::application,
-                detail::message_flow_tracer_t (dispatch).capture_enabled ());
+                detail::message_flow_tracer_t (dispatch).mode ());
               const auto flow = runtime::flow_context_t::current ();
               auto selected = select_instance_target (spot_id, intent);
               const auto deadline = std::chrono::steady_clock::now ()
@@ -1788,16 +1809,21 @@ app_t &app_t::add_zlink_framework (std::function<void (zlink_framework_options_t
                 packet_name,
                 serializers->content_type (message_type),
                 payload.to_bytes ()};
-              if (flow) {
+              if (flow && !flow->flow_id.empty ()) {
                   application_payload.flow_id = flow->flow_id;
                   application_payload.flow_origin = flow->origin;
               }
-              const auto correlation_id = instance_spot_activation_correlation (header);
-              trace_instance_spot_activation (
-                dispatch, flow, message_flow_outcome_t::sent,
-                dispatch_message_kind_t::send, packet_name,
-                selected.value ().target.mesh_name, selected.value ().target.rid, spot_id,
-                correlation_id);
+              const auto trace_context =
+                make_instance_spot_activation_trace_context (
+                  detail::message_flow_tracer_t (dispatch).enabled_for (
+                    message_flow_outcome_t::sent),
+                  packet_name, selected.value ().target.mesh_name,
+                  selected.value ().target.rid, spot_id, header);
+              if (trace_context) {
+                  trace_instance_spot_activation (
+                    dispatch, flow, message_flow_outcome_t::sent,
+                    dispatch_message_kind_t::send, *trace_context);
+              }
               const auto submitted = selected.value ().source
                 ->send_instance_spot_activation_remote (
                   selected.value ().target.rid, std::move (header),
@@ -1825,7 +1851,7 @@ app_t &app_t::add_zlink_framework (std::function<void (zlink_framework_options_t
             -> task_t<zlink::message_t> {
               auto flow_scope = runtime::flow_context_t::enter_current_or_create (
                 flow_origin_t::application,
-                detail::message_flow_tracer_t (dispatch).capture_enabled ());
+                detail::message_flow_tracer_t (dispatch).mode ());
               const auto flow = runtime::flow_context_t::current ();
               auto selected = select_instance_target (spot_id, intent);
               const auto deadline = std::chrono::steady_clock::now () + timeout;
@@ -1863,19 +1889,20 @@ app_t &app_t::add_zlink_framework (std::function<void (zlink_framework_options_t
                 packet_name,
                 serializers->content_type (request_type),
                 payload.to_bytes ()};
-              if (flow) {
+              if (flow && !flow->flow_id.empty ()) {
                   application_payload.flow_id = flow->flow_id;
                   application_payload.flow_origin = flow->origin;
               }
-              const auto correlation_id = instance_spot_activation_correlation (header);
-              const auto trace_mesh_name = selected.value ().target.mesh_name;
-              const auto trace_target_node = selected.value ().target.rid;
-              const auto trace_spot_id = spot_id;
-              const auto trace_packet_name = packet_name;
-              trace_instance_spot_activation (
-                dispatch, flow, message_flow_outcome_t::sent,
-                dispatch_message_kind_t::request, trace_packet_name, trace_mesh_name,
-                trace_target_node, trace_spot_id, correlation_id);
+              const auto trace_context =
+                make_instance_spot_activation_trace_context (
+                  detail::message_flow_tracer_t (dispatch).capture_enabled (),
+                  packet_name, selected.value ().target.mesh_name,
+                  selected.value ().target.rid, spot_id, header);
+              if (trace_context) {
+                  trace_instance_spot_activation (
+                    dispatch, flow, message_flow_outcome_t::sent,
+                    dispatch_message_kind_t::request, *trace_context);
+              }
               auto completion = std::make_shared<
                 detail::task_completion_source_t<zlink::message_t>> ();
               auto output = completion->task ();
@@ -1886,19 +1913,18 @@ app_t &app_t::add_zlink_framework (std::function<void (zlink_framework_options_t
                     ? std::optional<std::vector<std::uint8_t>>{}
                     : std::make_optional (std::move (metadata_frame)),
                   std::move (application_payload), timeout,
-                  [completion, dispatch, flow, trace_packet_name, trace_mesh_name,
-                   trace_target_node, trace_spot_id, correlation_id] (
+                  [completion, dispatch, flow, trace_context] (
                     runtime::foundation::operation_terminal_t terminal,
                     runtime::protocol::reply_header_t reply,
                     std::optional<runtime::protocol::application_payload_t>
                       application_reply) {
                       if (terminal
                           != runtime::foundation::operation_terminal_t::completed) {
-                          trace_instance_spot_activation (
-                            dispatch, flow, message_flow_outcome_t::error,
-                            dispatch_message_kind_t::request, trace_packet_name,
-                            trace_mesh_name, trace_target_node, trace_spot_id,
-                            correlation_id);
+                          if (trace_context) {
+                              trace_instance_spot_activation (
+                                dispatch, flow, message_flow_outcome_t::error,
+                                dispatch_message_kind_t::request, *trace_context);
+                          }
                           completion->complete (
                             result_t<zlink::message_t>::failure (
                               framework_error_kind_t::unavailable,
@@ -1906,11 +1932,11 @@ app_t &app_t::add_zlink_framework (std::function<void (zlink_framework_options_t
                           return;
                       }
                       if (reply.terminal_result != 0) {
-                          trace_instance_spot_activation (
-                            dispatch, flow, message_flow_outcome_t::error,
-                            dispatch_message_kind_t::request, trace_packet_name,
-                            trace_mesh_name, trace_target_node, trace_spot_id,
-                            correlation_id);
+                          if (trace_context) {
+                              trace_instance_spot_activation (
+                                dispatch, flow, message_flow_outcome_t::error,
+                                dispatch_message_kind_t::request, *trace_context);
+                          }
                           completion->complete (
                             detail::result_access_t::failure<zlink::message_t> (
                               runtime::messaging::request_failure_mapper_t{}
@@ -1921,22 +1947,23 @@ app_t &app_t::add_zlink_framework (std::function<void (zlink_framework_options_t
                           return;
                       }
                       if (!application_reply) {
-                          trace_instance_spot_activation (
-                            dispatch, flow, message_flow_outcome_t::error,
-                            dispatch_message_kind_t::request, trace_packet_name,
-                            trace_mesh_name, trace_target_node, trace_spot_id,
-                            correlation_id);
+                          if (trace_context) {
+                              trace_instance_spot_activation (
+                                dispatch, flow, message_flow_outcome_t::error,
+                                dispatch_message_kind_t::request, *trace_context);
+                          }
                           completion->complete (
                             result_t<zlink::message_t>::failure (
                               framework_error_kind_t::protocol_error,
                               "Instance Spot activation reply payload is missing"));
                           return;
                       }
-                      trace_instance_spot_activation (
-                        dispatch, flow, message_flow_outcome_t::reply_received,
-                        dispatch_message_kind_t::response, trace_packet_name,
-                        trace_mesh_name, trace_target_node, trace_spot_id,
-                        correlation_id);
+                      if (trace_context) {
+                          trace_instance_spot_activation (
+                            dispatch, flow,
+                            message_flow_outcome_t::reply_received,
+                            dispatch_message_kind_t::response, *trace_context);
+                      }
                       completion->complete (
                         result_t<zlink::message_t>::success (
                           zlink::message_t::from (
@@ -1945,10 +1972,11 @@ app_t &app_t::add_zlink_framework (std::function<void (zlink_framework_options_t
                   });
               if (!submitted)
               {
-                  trace_instance_spot_activation (
-                    dispatch, flow, message_flow_outcome_t::error,
-                    dispatch_message_kind_t::request, trace_packet_name, trace_mesh_name,
-                    trace_target_node, trace_spot_id, correlation_id);
+                  if (trace_context) {
+                      trace_instance_spot_activation (
+                        dispatch, flow, message_flow_outcome_t::error,
+                        dispatch_message_kind_t::request, *trace_context);
+                  }
                   completion->complete (
                     result_t<zlink::message_t>::failure (
                       framework_error_kind_t::unavailable,
@@ -1976,7 +2004,7 @@ app_t &app_t::add_zlink_framework (std::function<void (zlink_framework_options_t
             std::uint64_t target_spot_generation,
             runtime::messaging::message_parts_t parts,
             std::chrono::milliseconds timeout) {
-              detail::host::operation_id_t operation;
+              detail::host::call_id_t operation;
               const auto submitted = mesh->request_to_spot (
                 source_spot_id, target_node, target_spot, target_spot_generation,
                 parts.items (), operation, timeout);
@@ -2040,7 +2068,7 @@ app_t &app_t::add_zlink_framework (std::function<void (zlink_framework_options_t
           [mesh] (const zlink::routing_id_t &target,
                   runtime::messaging::message_parts_t parts,
                   std::chrono::milliseconds timeout) {
-              detail::host::operation_id_t operation;
+              detail::host::call_id_t operation;
               const auto submitted =
                 mesh->request_to_node (target, parts.items (), operation, timeout);
               if (submitted != zlink::submit_result_t::ok) {
@@ -2088,7 +2116,7 @@ app_t &app_t::add_zlink_framework (std::function<void (zlink_framework_options_t
               },
               [mesh, channel_name] (runtime::messaging::message_parts_t parts,
                                     std::chrono::milliseconds timeout) {
-                  detail::host::operation_id_t operation;
+                  detail::host::call_id_t operation;
                   const auto submitted = mesh->request_to_channel (
                     channel_name, parts.items (), operation, timeout);
                   if (submitted != zlink::submit_result_t::ok) {
@@ -2310,10 +2338,12 @@ app_t &app_t::add_zlink_framework (std::function<void (zlink_framework_options_t
         _state->services.add_factory<actor_client_t> (
           [mesh_nodes, actor_location_observer,
            location_options = options.location_options ()] (service_provider_t &provider) mutable {
+              auto route_runtime = provider.get<route_mesh_runtime_t> ();
               return runtime::make_actor_client (
                 provider.get_required<runtime::live_location_reader_t> (),
                 provider.get_required<serializer_registry_t> (), mesh_nodes,
-                actor_location_observer, location_options);
+                actor_location_observer, location_options,
+                route_runtime ? &route_runtime->get () : nullptr);
           },
           service_lifetime_t::singleton);
     }
@@ -2815,6 +2845,18 @@ task_t<relocation_result_t> app_t::relocate (
         throw std::invalid_argument ("relocation deadline must be greater than zero");
     options.deadline = deadline;
 
+    auto &operation = _state->relocation_operation;
+    std::thread completed_worker;
+    {
+        std::lock_guard lock (operation.mutex);
+        if (!operation.started && operation.worker.joinable ()) {
+            completed_worker = std::move (operation.worker);
+        }
+    }
+    if (completed_worker.joinable ()) {
+        completed_worker.join ();
+    }
+
     relocation_preflight_t preflight;
     if (runtime_state () != framework_runtime_state_t::serving) {
         preflight.blocker = relocation_reason_t::runtime_not_ready;
@@ -2829,7 +2871,6 @@ task_t<relocation_result_t> app_t::relocate (
         }
     }
 
-    auto &operation = _state->relocation_operation;
     std::shared_ptr<detail::app_state_t::relocation_waiter_t> waiter;
     task_t<relocation_result_t> task (
       result_t<relocation_result_t>::success ({}));
@@ -2954,7 +2995,13 @@ void app_t::run_shared_relocation (
 
         std::vector<std::shared_ptr<detail::app_state_t::relocation_waiter_t>>
           waiters;
-        operation.terminal = true;
+        operation.terminal =
+          result.outcome == relocation_outcome_t::relocated;
+        operation.started = operation.terminal;
+        if (!operation.terminal) {
+            operation.shutdown_requested = false;
+            operation.deadline_at.reset ();
+        }
         operation.result = result;
         waiters = std::move (operation.waiters);
         operation.waiters.clear ();
@@ -3755,6 +3802,8 @@ void app_t::run_shared_shutdown (
         terminal.outcome = termination_outcome_t::force_stopped;
         terminal.reason = termination_reason_t::deadline_exceeded;
     }
+    if (state.completion_admission)
+        state.completion_admission->stop ();
     std::vector<std::shared_ptr<detail::app_state_t::termination_waiter_t>>
       waiters;
     {
@@ -3769,8 +3818,6 @@ void app_t::run_shared_shutdown (
     for (auto &waiter : waiters) {
         waiter->complete (terminal);
     }
-    if (state.completion_admission)
-        state.completion_admission->stop ();
     state.runtime_state.store (
       framework_runtime_state_t::stopped, std::memory_order_release);
 }

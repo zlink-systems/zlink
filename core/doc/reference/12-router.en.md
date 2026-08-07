@@ -1,4 +1,4 @@
-[한국어](12-router.ko.md) | English
+[한국어](https://zlink-systems.github.io/zlink/ko/reference/12-router/) | English
 
 [Reference index](README.en.md)
 

@@ -2,7 +2,7 @@
 title: "Message API와 ownership"
 ---
 
-[English](09-message-api.en.md)
+[English](09-message-api.ko.md)
 
 <!-- zlink-nav:start -->
 [가이드 목록](README.ko.md) | [이전: 설계 근거](design-rationale.ko.md) | [다음: Thread safety](11-thread-safety.ko.md)

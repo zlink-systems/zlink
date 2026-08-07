@@ -73,7 +73,7 @@ public SPI either.
 
 The following .NET excerpt shows the minimal shape of the common SPI. The
 formal declaration is in the
-[.NET Exact Interface](server/languages/dotnet/interfaces/08-authority-relocation.ko.md).
+[.NET Exact Interface](server/languages/dotnet/interfaces/08-authority-relocation.en.md).
 
 ```csharp
 public interface IZLinkRelocationStore

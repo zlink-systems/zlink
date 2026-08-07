@@ -59,13 +59,17 @@ export class ServiceMaintenanceRuntime {
     return () => this.observers.delete(observer);
   }
 
-  start(kind: ServiceMaintenanceKind, deadlineMs: number): Promise<ServiceMaintenanceSnapshot> {
+  start(
+    kind: ServiceMaintenanceKind,
+    deadlineMs: number,
+    stopStartingSignal?: AbortSignal
+  ): Promise<ServiceMaintenanceSnapshot> {
     if (this.operation !== undefined) return this.operation;
     if (!Number.isFinite(deadlineMs) || deadlineMs < 0) {
       throw new RangeError('Maintenance deadline must be non-negative and finite.');
     }
     this.kind = kind;
-    this.operation = this.run(kind, deadlineMs);
+    this.operation = this.run(kind, deadlineMs, stopStartingSignal);
     return this.operation;
   }
 
@@ -80,7 +84,11 @@ export class ServiceMaintenanceRuntime {
     };
   }
 
-  private async run(kind: ServiceMaintenanceKind, deadlineMs: number): Promise<ServiceMaintenanceSnapshot> {
+  private async run(
+    kind: ServiceMaintenanceKind,
+    deadlineMs: number,
+    stopStartingSignal?: AbortSignal
+  ): Promise<ServiceMaintenanceSnapshot> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(new Error('Maintenance deadline exceeded.')), deadlineMs);
     try {
@@ -92,7 +100,7 @@ export class ServiceMaintenanceRuntime {
       if (kind === 'retire') {
         this.options.publishState('retiring');
         this.transition('retiring');
-        await this.runUnits(controller.signal);
+        await this.runUnits(controller.signal, stopStartingSignal);
       }
       this.options.publishState('draining');
       this.transition('draining');
@@ -112,14 +120,22 @@ export class ServiceMaintenanceRuntime {
     }
   }
 
-  private async runUnits(signal: AbortSignal): Promise<void> {
+  private async runUnits(
+    signal: AbortSignal,
+    stopStartingSignal?: AbortSignal
+  ): Promise<void> {
     const maxOutbound = this.options.maxOutbound ?? 64;
     const maxBytes = this.options.maxInFlightBytes ?? 256 * 1024 * 1024;
     const pending = new Set<Promise<void>>();
     while (this.units.length > 0 || pending.size > 0) {
       signal.throwIfAborted();
+      if (stopStartingSignal?.aborted) {
+        await Promise.allSettled(pending);
+        stopStartingSignal.throwIfAborted();
+      }
       let admitted = false;
       for (let index = 0; index < this.units.length && this.activeOutbound < maxOutbound;) {
+        if (stopStartingSignal?.aborted) break;
         const unit = this.units[index]!;
         const oversizedExclusive = unit.allowOversizedExclusive === true
           && unit.encodedUpperBound > maxBytes

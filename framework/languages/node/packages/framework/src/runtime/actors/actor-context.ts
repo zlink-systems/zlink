@@ -34,7 +34,7 @@ import {
   ZLINK_ACTOR_LIFECYCLE_SNAPSHOT,
   type ZLinkActorLifecycleSnapshotSource
 } from './actor-lifecycle-snapshot';
-import { randomBytes } from 'node:crypto';
+import { createRandomOperationIdentity } from '../foundation/operation-identity';
 import { performance } from 'node:perf_hooks';
 import { deferActorJoin } from './actor-join-deferred-scope';
 import { captureZLinkSpotSerialTurn } from '../execution';
@@ -467,11 +467,7 @@ function remainingJoinTimeout(deadline: number): number {
 }
 
 function createJoinOperationId(): { readonly high: bigint; readonly low: bigint } {
-  const bytes = randomBytes(16);
-  return {
-    high: bytes.readBigUInt64BE(0),
-    low: bytes.readBigUInt64BE(8)
-  };
+  return createRandomOperationIdentity();
 }
 
 async function notifyJoinCompletion(

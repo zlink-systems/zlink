@@ -85,7 +85,7 @@ function Invoke-ManifestSamples {
         if (Test-Path $script) {
             Invoke-SampleWithRetry $script
         } else {
-            Write-Output "sample runner missing; skipped $Language/$sample"
+            throw "sample runner missing: $Language/$sample ($script)"
         }
     }
 }

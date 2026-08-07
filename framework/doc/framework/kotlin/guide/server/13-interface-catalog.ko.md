@@ -65,7 +65,7 @@ wrapper가 없는 자리는 확장 함수가 메운다.
 | `ZLinkMeshNodeBuilder.channelName(name) { ... }` | channel 등록을 블록으로 |
 | `ZLinkMeshPeerConnections.connect(...)` | 여러 endpoint를 한 번에 |
 | `ZLinkFrameworkOptions.configureDispatch { ... }` | 진단 설정을 블록으로 |
-| `ZLinkDispatchOptions.onMessageFlow { ... }` | observer를 람다로 |
+| Application logger/telemetry provider | 메시지 흐름과 dispatch error structured record 수신 |
 | `ZLinkMessage.decode<T>()` · `messageOf(...)` | reified decode와 생성 |
 | `ZLinkStreamConnector.kotlin()` · `.messages()` · `.errors()` | connector를 suspend · `Flow`로 |
 | `ZLinkStreamConnectorOptions.withLz4StreamCompression()` 외 | 압축 설정 |

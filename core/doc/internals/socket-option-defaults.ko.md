@@ -2,7 +2,7 @@
 title: "Socket option 기본값"
 ---
 
-[English](socket-option-defaults.en.md)
+[English](socket-option-defaults.ko.md)
 
 <!-- zlink-nav:start -->
 [가이드 목차](../guide/README.ko.md) | [이전: STREAM 소켓 최적화](stream-socket.ko.md) | [다음: Connection별 memory](connection-memory.ko.md)

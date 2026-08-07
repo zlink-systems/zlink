@@ -68,11 +68,15 @@ co_await stream
 | `.metadata(key, value)` | None | Key-value to pass to the client |
 | `.packet_name(name)` | The `packet_name` of the payload type | Explicitly specifies this packet's name |
 | `.compress()` | Uncompressed | Compresses the payload with the registered stream compression codec |
+| `.timeout(value)` | STREAM socket send timeout | Shortens this send's admission wait |
 | `.submit()` | Required terminal | Waits only until source-local admission |
 
 **Completion result.** The same one-way completion kinds as the messaging-execution category —
 waits until the socket send timeout and, if still not admitted, completes as a
-`framework_exception_t` with `deadline_exceeded`; a connection disconnect is `unavailable`.
+`framework_exception_t` with `deadline_exceeded`; a connection disconnect is `unavailable`. The
+per-call timeout never extends the socket timeout; the earlier deadline wins. Its value, rounded up
+to milliseconds, must be in `1..INT_MAX`, and there is no late admission or replay after the deadline.
+This modifier does not apply to a reply.
 
 **When to use.** Use this for a server-initiated push message, not a client-sent request. Use
 `reply_packet` to answer a client's request.
@@ -151,7 +155,10 @@ an overload that takes a `session_message_context_t`.
 source-local admission is accepted. `notify_disconnected` is a notification that signals a
 logical disconnect while the connection remains open, and waits until the callback's terminal.
 Because a physical disconnect is automatically notified by the Framework to every current
-binding, this call is not a substitute path for that.
+binding, this call is not a substitute path for that. The exact-binding callback runs at most once
+and leaves a tombstone after terminal. Rebind registers the new binding first; failure of the old
+callback neither removes the new binding nor restores the old one. A same-generation relocation
+route update is not a rebind and does not run the disconnect callback.
 
 **When to use.** Use this from Actor-side code to deliver directly to a specific bound client. A
 reply to a request is handled by `reply_packet` on the Session side.

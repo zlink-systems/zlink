@@ -3,7 +3,7 @@ title: "13. Key Type Usage Index · Kotlin"
 ---
 
 <!-- framework-adapter-nav:start -->
-[Guide Home](../../../index.ko.md) | [Previous: Operations — metrics · drain · readiness](12-operations.en.md) | [Next: Picking A Sample](14-samples.en.md)
+[Guide Home](../../../index.en.md) | [Previous: Operations — metrics · drain · readiness](12-operations.en.md) | [Next: Picking A Sample](14-samples.en.md)
 <!-- framework-adapter-nav:end -->
 
 # 13. Key Type Usage Index
@@ -67,7 +67,7 @@ Extension functions fill in the slots where there's no wrapper.
 | `ZLinkMeshNodeBuilder.channelName(name) { ... }` | Channel registration as a block |
 | `ZLinkMeshPeerConnections.connect(...)` | Multiple endpoints at once |
 | `ZLinkFrameworkOptions.configureDispatch { ... }` | Diagnostics configuration as a block |
-| `ZLinkDispatchOptions.onMessageFlow { ... }` | An observer as a lambda |
+| Application logger/telemetry provider | Receives message-flow and dispatch-error structured records |
 | `ZLinkMessage.decode<T>()` · `messageOf(...)` | Reified decode and construction |
 | `ZLinkStreamConnector.kotlin()` · `.messages()` · `.errors()` | The connector as suspend / `Flow` |
 | `ZLinkStreamConnectorOptions.withLz4StreamCompression()` and others | Compression settings |
@@ -89,5 +89,5 @@ import systems.zlink.framework.kotlin.await   // The turn-aware one
 
 - The interface index by feature: [Java 13. Key Interface Usage Index](../../../java/guide/server/13-interface-catalog.en.md)
 - Kotlin layer overview: [1. Overview](01-overview.en.md) §2
-- The Kotlin-specific contract: [Kotlin public contract](../../../common/spec/server/languages/kotlin/README.ko.md)
-- The shared contract: [Java exact interface table of contents](../../../common/spec/server/languages/java/interfaces/README.ko.md)
+- The Kotlin-specific contract: [Kotlin public contract](../../../common/spec/server/languages/kotlin/README.en.md)
+- The shared contract: [Java exact interface table of contents](../../../common/spec/server/languages/java/interfaces/README.en.md)

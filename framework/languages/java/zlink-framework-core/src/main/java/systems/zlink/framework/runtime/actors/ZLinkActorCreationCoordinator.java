@@ -135,7 +135,7 @@ public final class ZLinkActorCreationCoordinator
                     return completedResult(found.terminal());
                 }
                 if (System.currentTimeMillis() >= deadline) {
-                    return failed("Actor create deadline expired");
+                    return deadlineFailed("Actor create deadline expired");
                 }
                 return selectTarget(
                         actorType, deadline, excludedTargets)
@@ -176,7 +176,8 @@ public final class ZLinkActorCreationCoordinator
                 + " target=" + target.rid()
                 + " generation=" + target.lifecycleGeneration());
             if (System.currentTimeMillis() >= deadline) {
-                return failed("Actor placement target is no longer ready");
+                return deadlineFailed(
+                    "Actor placement target is no longer ready");
             }
             return awaitConflict().thenCompose(ignored ->
                 resumeOrCreate(
@@ -711,6 +712,10 @@ public final class ZLinkActorCreationCoordinator
         Set<ZLinkMeshNodeDescriptorKey> excludedTargets) {
         return locations.listMeshNodes(
                 meshName, ZLinkPageRequest.firstPage())
+            .toCompletableFuture()
+            .orTimeout(
+                Math.max(1L, deadline - System.currentTimeMillis()),
+                TimeUnit.MILLISECONDS)
             .thenCompose(page -> {
                 MeshNodeStatus localStatus = node.status();
                 List<MeshPeerEntry> peerSnapshot = node.peers();
@@ -744,12 +749,33 @@ public final class ZLinkActorCreationCoordinator
                             + "@" + candidate.lifecycleGeneration())
                         .toList());
                 if (candidates.isEmpty()) {
+                    boolean capacityKnown = page.items().stream()
+                        .filter(candidate ->
+                            candidate.state()
+                                == systems.zlink.framework.runtime.host
+                                    .ZLinkFrameworkRuntimeState.SERVING
+                            && candidate.objectRole()
+                                == ZLinkMeshNodeObjectRole.SERVER
+                            && candidate.placementWeight() > 0
+                            && isExactReadyTarget(
+                                candidate, localStatus, peerSnapshot))
+                        .flatMap(candidate -> candidate.objectCapabilities().stream())
+                        .anyMatch(capability ->
+                            capability.objectKind() == ZLinkPlacementObjectKind.ACTOR
+                            && capability.stableType().equals(actorType));
+                    if (capacityKnown) {
+                        return CompletableFuture.failedFuture(
+                            frameworkFailure(
+                                ZLinkFrameworkErrorKind.CAPACITY_EXCEEDED,
+                                "Actor capacity exceeded"));
+                    }
                     if (System.currentTimeMillis() >= deadline) {
-                        return failed("No Ready Actor placement target");
+                        return deadlineFailed(
+                            "No Ready Actor placement target");
                     }
                     return awaitConflict().thenCompose(
                         ignored -> selectTarget(
-                            actorType, deadline, Set.of()));
+                            actorType, deadline, excludedTargets));
                 }
                 Optional<ZLinkMeshNodeDescriptor> localTarget =
                     localCandidate(candidates, node.status().routingId());
@@ -992,6 +1018,13 @@ public final class ZLinkActorCreationCoordinator
 
     private static <T> CompletionStage<T> failed(String message) {
         return CompletableFuture.failedFuture(stale(message));
+    }
+
+    private static <T> CompletionStage<T> deadlineFailed(String message) {
+        return CompletableFuture.failedFuture(
+            frameworkFailure(
+                ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                message));
     }
 
     private static Throwable unwrap(Throwable failure) {

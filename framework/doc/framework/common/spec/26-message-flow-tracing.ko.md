@@ -108,7 +108,7 @@ Message가 send, request, response, error 또는 control 중 어떤 처리 방�
 
 | Attribute | 허용 값 |
 |---|---|
-| `surface` | `node`, `channel`, `spot`, `instance_spot`, `actor`, `stream`, `actor_relocation` |
+| `surface` | `node`, `channel`, `spot`, `instance_spot`, `actor`, `stream`, `actor_relocation`, `classic_fanout` |
 | `message_kind` | `send`, `request`, `response`, `error`, `control` |
 | `outcome` | `succeeded`, `failed`, `backpressured`, `dropped`, `cancelled`, `shutdown` |
 | `channel_route_kind` | `route_mesh`, `client_server` |
@@ -151,7 +151,7 @@ lease fencing은 `target_closed`로 기록한다.
 | `reason` | 실패, backpressure 또는 drop 원인이 있을 때 포함한다. |
 | `action` | `zlink.dispatch_error`에 포함한다. |
 | `channel_name` | 논리 Channel 주소가 있을 때 포함한다. |
-| `channel_route_kind` | Channel surface에 포함한다. |
+| `channel_route_kind` | `surface=channel`에만 포함한다. `classic_fanout`에는 포함하지 않는다. |
 | `mesh_name` | Node direct 또는 RouteMesh 범위가 있을 때 포함한다. |
 | `server_rid` | ClientServer target을 선택했을 때 포함한다. |
 | `source_rid`, `target_rid` | Routed hop에 해당 identity가 있을 때 포함한다. |
@@ -160,7 +160,7 @@ lease fencing은 `target_closed`로 기록한다.
 | `instance_spot_type`, `activation_state` | Instance Spot 처리에 해당 값이 있을 때 포함한다. |
 | `correlation_id` | Request와 terminal reply를 연결할 때 포함한다. |
 | `flow_id`, `flow_origin` | 같은 원인에서 이어진 message 흐름을 기록할 때 두 값을 함께 포함한다. |
-| `message_size_bytes` | `detailed` level에서 message size 기록을 켰을 때만 포함한다. |
+| `message_size_bytes` | `Detailed` level에서 message size 기록을 켰을 때만 포함한다. |
 | `duration_seconds` | Operation 또는 handler의 terminal 기록에서 경과 시간을 제공할 때 포함한다. |
 
 `channel_route_kind`, `mesh_name`과 `server_rid`는 handler를 찾거나 target을 선택하는
@@ -176,18 +176,24 @@ Structured log를 대신 제공하는 구현은 `zlink flow:` prefix와 다음 k
 `target_rid`, `server_rid`, `packet`, `topic`, `spot`, `instance_type`,
 `activation_state`, `actor`, `corr`, `flow`, `origin`, `outcome`, `reason`, `size`.
 
+Logical Multicast와 Classic fanout의 정상 publish·subscriber delivery는
+`zlink.message_flow`를 만들지 않는다. Classic fanout subscriber의 local dispatch에서 handler가 없으면
+`surface=classic_fanout`, `message_kind=send`, `outcome=failed`, `reason=no_handler`, `action=drop`인
+`zlink.dispatch_error`를 subscriber process의 logger provider에 기록한다. 이 record에는
+`channel_route_kind`를 넣지 않고 publisher별 delivery 결과로 되돌리지 않는다.
+
 ## 4. Application은 기록 범위를 어떻게 정하는가
 
 Application은 diagnostics level을 다음 네 값 중 하나로 설정한다.
 
 | Level | Framework가 기록하는 범위 |
 |---|---|
-| `off` | Message flow와 dispatch error를 기록하지 않는다. |
-| `errors` | Dispatch error, backpressure와 drop만 기록한다. |
-| `normal` | Error와 §2.1의 주요 단계를 기록한다. |
-| `detailed` | `normal` 기록에 message byte 크기와 terminal 경과 시간을 추가할 수 있다. |
+| `Off` | Message flow와 dispatch error를 기록하지 않는다. |
+| `Errors` | Dispatch error, backpressure와 drop만 기록한다. |
+| `Normal` | Error와 §2.1의 주요 단계를 기록한다. |
+| `Detailed` | `Normal` 기록에 message byte 크기와 terminal 경과 시간을 추가할 수 있다. |
 
-기본값은 `errors`다. Message size 설정은 payload 내용이 아니라 byte 크기만 추가한다.
+기본값은 `Errors`다. Message size 설정은 payload 내용이 아니라 byte 크기만 추가한다.
 Diagnostics level은 metric 기록을 끄지 않는다.
 
 Sampling rate는 정상 흐름 중 기록할 비율이며 `0.0..1.0` 범위다. 범위를 벗어난 값은
@@ -235,7 +241,7 @@ runtime control을 제공해야 한다.
 들어간 기록은 전달하거나 버릴 수 있다. Level을 다시 켜도 이전 처리 단계의 기록을
 나중에 만들지 않는다.
 
-`off`에서는 현재 level을 확인하는 읽기와 분기 외에 trace 전용 작업을 하지 않는다.
+`Off`에서는 현재 level을 확인하는 읽기와 분기 외에 trace 전용 작업을 하지 않는다.
 
 - Event 객체와 attribute collection을 만들지 않는다.
 - 문자열을 조합하거나 timestamp와 경과 시간을 수집하지 않는다.
@@ -245,7 +251,7 @@ runtime control을 제공해야 한다.
 - Telemetry queue item 또는 내부 전달 message를 만들거나 queue에 넣지 않는다.
 - Logger, observer, exporter와 telemetry provider를 호출하지 않는다.
 
-따라서 log provider에서 출력만 막는 구현은 `off` 계약을 만족하지 않는다. Provider
+따라서 log provider에서 출력만 막는 구현은 `Off` 계약을 만족하지 않는다. Provider
 호출 직전이 아니라 message hot path의 첫 trace 분기에서 종료해야 한다.
 
 ## 5. 완료, 실패와 수명
@@ -265,6 +271,9 @@ Provider failure를 log로 남기는 구현은 같은 오류의 기록 횟수를
 provider를 호출하여 이 log의 trace를 다시 만들지 않는다. Provider가 없으면
 trace만을 위한 allocation을 피한다.
 
+Provider failure 자체를 기록할 때는 실패한 provider가 아닌 application의 fallback logger 또는 process
+stderr를 사용한다. 이 fallback 기록의 실패도 message operation 결과, dispatch와 lifecycle을 바꾸지 않는다.
+
 Trace attribute에는 진단에 필요한 식별자만 넣으며 message 처리가 끝난 뒤 caller
 buffer나 runtime object를 참조하지 않는다. `correlation_id`, `flow_id`와
 `flow_origin`의 소유권과 수명은
@@ -275,9 +284,9 @@ buffer나 runtime object를 참조하지 않는다. `correlation_id`, `flow_id`�
 
 - 모든 언어가 같은 `event_id`, phase, surface, message kind, outcome, reason, action과
   attribute key를 사용하는지 확인한다.
-- 실행 중 level을 `off`와 다른 값 사이에서 바꾸면 변경 뒤의 처리 지점부터 새
+- 실행 중 level을 `Off`와 다른 값 사이에서 바꾸면 변경 뒤의 처리 지점부터 새
   level을 적용하는지 확인한다.
-- `off` 경로가 level read와 branch 뒤 즉시 끝나며 event·attribute·log message,
+- `Off` 경로가 level read와 branch 뒤 즉시 끝나며 event·attribute·log message,
   timestamp·duration, sampling hash, trace 전용 flow context와 telemetry queue
   item을 만들지 않는지 allocation과 queue 계측으로 확인한다.
 - Level이나 sampling으로 기록하지 않는 경로가 payload·metadata를 복사하거나 raw
@@ -287,6 +296,8 @@ buffer나 runtime object를 참조하지 않는다. `correlation_id`, `flow_id`�
 - Payload와 application metadata 값이 trace나 structured log에 나타나지 않는지
   확인한다.
 - Logical Multicast와 Classic fanout이 message-flow trace를 만들지 않는지 확인한다.
+- Classic fanout의 subscriber-local handler 누락이 `surface=classic_fanout`, `reason=no_handler`,
+  `action=drop`인 dispatch error를 만들고 `channel_route_kind`를 포함하지 않는지 확인한다.
 - 각 request surface가 terminal trace를 정확히 한 번 기록하는지 확인한다.
 - Instance Spot의 one-way 생성 실패를 `surface=instance_spot`, `phase=dropped`로
   정확히 한 번 기록하고, 숨은 request나 replay를 만들지 않는지 확인한다.

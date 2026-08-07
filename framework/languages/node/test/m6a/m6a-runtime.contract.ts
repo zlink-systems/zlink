@@ -48,6 +48,7 @@ import {
   decodeRouteMeshAdmission,
   decodeReplyHeader,
   encodeApplicationPayload,
+  encodeNodeRequestHeader,
   encodeReplyHeader,
   encodeRouteMeshAdmission
 } from '../../packages/framework/src/runtime/foundation/service-wire-m6a-codec';
@@ -68,7 +69,6 @@ function descriptor(
     ],
     state: 'preparing',
     securityIdentity: 'default',
-    effectiveMaxMessageBytes: 4 * 1024 * 1024,
     applicationVersion: 1n,
     protocolCapabilities: ['framework-service-v11'],
     objectRole: 'server',
@@ -90,7 +90,7 @@ function runtimeStateWireValue(frame: Uint8Array): number {
 
   offset += 1 + bytes[offset]!;
   offset += 1 + bytes[offset]!;
-  offset += 4 + 8 + 8;
+  offset += 8 + 8;
   const endpointLength = bytes.readUInt16BE(offset);
   offset += 2 + endpointLength;
   const channelCount = bytes.readUInt16BE(offset);
@@ -161,6 +161,41 @@ test('RouteMesh runtime state uses the shared service wire values', () => {
   );
 });
 
+test('RouteMesh admission preserves an optional maintenance wave across updates', () => {
+  const initial = {
+    ...descriptor('wave-peer'),
+    maintenanceWave: 'rolling-a'
+  };
+  const frame = encodeRouteMeshAdmission(M6aServiceWireCommand.update, initial);
+  assert.equal(
+    decodeRouteMeshAdmission(frame, M6aServiceWireCommand.update, initial.nodeRoutingId)
+      .maintenanceWave,
+    'rolling-a'
+  );
+
+  const topology = new ServiceTopologyRegistry(descriptor('wave-local'));
+  assert.equal(topology.admit(initial, 'connection-a'), 'admitted');
+  assert.equal(topology.admit({
+    ...initial,
+    descriptorRevision: 2n,
+    maintenanceWave: 'rolling-b'
+  }, 'connection-a'), 'admitted');
+  assert.equal(topology.peer(initial.nodeRoutingId)?.descriptor.maintenanceWave, 'rolling-b');
+
+  const backend = new ZLinkNodeRawMeshBackend('wave-mesh', 'wave-node');
+  backend.configureObjectPlacement({
+    role: 'server',
+    placementWeight: 100,
+    activeCapacityLimit: 10,
+    pendingCapacityLimit: 2,
+    objectCapabilities: ['object-type:player'],
+    maintenanceWave: 'rolling-a'
+  });
+  const created = (backend as unknown as { createDescriptor(): ServiceNodeDescriptor })
+    .createDescriptor();
+  assert.equal(created.maintenanceWave, 'rolling-a');
+});
+
 test('reply header preserves the schema tail length field', () => {
   const empty = encodeReplyHeader(7n);
   assert.equal(empty.byteLength, 23);
@@ -214,6 +249,38 @@ test('topology snapshots fence reconnect and exclude retiring placement targets'
   assert.equal(topology.disconnect('peer', 'connection-a'), false);
   assert.equal(topology.selectChannel('alpha'), undefined);
   assert.equal(topology.selectPlacement(), undefined);
+});
+
+test('RouteMesh admission classifies stale and conflicting descriptor revisions as protocol errors', () => {
+  const runtime = new RawServiceMeshRuntime({ descriptor: descriptor('local') });
+  const current = {
+    ...descriptor('peer'),
+    descriptorRevision: 2n,
+    state: 'serving' as const
+  };
+  assert.equal(runtime.topology.admit(current, 'connection-a'), 'admitted');
+  const processReceived = (runtime as unknown as {
+    processReceived(record: {
+      sourceRid: string;
+      parts: readonly Buffer[];
+    }, nowMs: number, completionControl: boolean): string;
+  }).processReceived.bind(runtime);
+
+  assert.equal(processReceived({
+    sourceRid: current.nodeRoutingId,
+    parts: [encodeRouteMeshAdmission(M6aServiceWireCommand.update, {
+      ...current,
+      descriptorRevision: 1n
+    })]
+  }, performance.now(), false), 'protocolError');
+  assert.equal(processReceived({
+    sourceRid: current.nodeRoutingId,
+    parts: [encodeRouteMeshAdmission(M6aServiceWireCommand.update, {
+      ...current,
+      channels: [{ name: 'alpha', weight: 99 }]
+    })]
+  }, performance.now(), false), 'protocolError');
+  assert.equal(runtime.topology.peer(current.nodeRoutingId)?.descriptor.descriptorRevision, 2n);
 });
 
 test('channel selection excludes admitted peers until the caller confirms readiness', () => {
@@ -319,11 +386,6 @@ test('topology admission fences expected identity, immutable revisions, duplicat
     objectRole: 'client'
   }, 'pipe-z'), 'invalidDescriptor');
   const immutableRevisions: ServiceNodeDescriptor[] = [
-    {
-      ...peer,
-      descriptorRevision: 2n,
-      effectiveMaxMessageBytes: peer.effectiveMaxMessageBytes + 1
-    },
     {
       ...peer,
       descriptorRevision: 2n,
@@ -871,12 +933,118 @@ test('mailbox domains remain bounded and infrastructure claims progress independ
 
   const application = mailbox.tryClaim('application', 1, 8)!;
   assert.equal(mailbox.tryClaim('application', 1, 8), undefined);
+  mailbox.releaseClaimedPayload(application.records[0]!);
+  assert.equal(application.records[0]!.parts.length, 0);
   const infrastructure = mailbox.tryClaim('infrastructure', 1, 8)!;
   assert.equal(infrastructure.records.length, 1);
   assert.equal(mailbox.release(infrastructure), true);
   assert.equal(mailbox.release(infrastructure), false);
   assert.equal(mailbox.release(application), true);
   assert.equal(mailbox.tryClaim('application', 1, 8)?.records.length, 1);
+});
+
+test('remote request receives CapacityExceeded when bounded mailbox admission fails', () => {
+  const runtime = new RawServiceMeshRuntime({
+    descriptor: descriptor('local'),
+    mailbox: { applicationMessages: 1, applicationBytes: 4_096 }
+  });
+  assert.equal(runtime.topology.admit({
+    ...descriptor('peer'),
+    state: 'serving'
+  }, 'peer-connection'), 'admitted');
+  assert.equal(runtime.mailbox.tryEnqueue({
+    owner: 'node:occupied',
+    domain: 'application',
+    parts: [Buffer.from('occupied')]
+  }), true);
+  let reply: readonly Uint8Array[] | undefined;
+  const internals = runtime as unknown as {
+    processReceived(
+      received: {
+        sourceRid: string;
+        requestSeq: bigint;
+        parts: readonly Buffer[];
+        reply(parts: readonly Uint8Array[]): void;
+      },
+      nowMs: number,
+      completionControl: boolean
+    ): string;
+  };
+  const result = internals.processReceived({
+    sourceRid: 'peer',
+    requestSeq: 19n,
+    parts: [
+      encodeNodeRequestHeader(7n),
+      encodeApplicationPayload({
+        packetName: 'Blocked',
+        contentType: 'application/octet-stream',
+        payload: Buffer.from('payload')
+      })
+    ],
+    reply(parts) { reply = parts; }
+  }, 0, false);
+
+  assert.equal(result, 'infrastructure');
+  assert.ok(reply);
+  assert.deepEqual(decodeReplyHeader(reply[0]!), {
+    correlation: 7n,
+    terminalResult: 106,
+    failureCode: 18,
+    tail: Buffer.alloc(0)
+  });
+  runtime.close();
+});
+
+test('raw protocol errors reply when correlation is recoverable and always report diagnostics', () => {
+  const observed: Array<{
+    sourceRoutingId: string;
+    request: boolean;
+    replied: boolean;
+    command?: number;
+  }> = [];
+  const runtime = new RawServiceMeshRuntime({
+    descriptor: descriptor('local'),
+    onProtocolError: record => observed.push(record)
+  });
+  runtime.start();
+  let reply: readonly Uint8Array[] | undefined;
+  const internals = runtime as unknown as {
+    reportProtocolError(received: {
+      sourceRid: string;
+      requestSeq?: bigint;
+      parts: readonly Buffer[];
+      reply?(parts: readonly Uint8Array[]): void;
+    }): void;
+  };
+
+  internals.reportProtocolError({
+    sourceRid: 'peer-request',
+    requestSeq: 41n,
+    parts: [encodeNodeRequestHeader(9n)],
+    reply(parts) { reply = parts; }
+  });
+  assert.ok(reply);
+  assert.deepEqual(decodeReplyHeader(reply[0]!), {
+    correlation: 9n,
+    terminalResult: 104,
+    failureCode: 16,
+    tail: Buffer.alloc(0)
+  });
+
+  internals.reportProtocolError({
+    sourceRid: 'peer-send',
+    parts: [Buffer.from([0xff])]
+  });
+  assert.deepEqual(observed, [
+    {
+      sourceRoutingId: 'peer-request',
+      request: true,
+      replied: true,
+      command: M6aServiceWireCommand.nodeRequest
+    },
+    { sourceRoutingId: 'peer-send', request: false, replied: false }
+  ]);
+  runtime.close();
 });
 
 test('liveness uses 5s/15s defaults, reuses outstanding probes, and fences old connections', () => {
@@ -1058,7 +1226,17 @@ test('raw runtime admits peers and completes node/channel requests once', async 
       contentType: 'application/json',
       payload: Buffer.from('notice')
     }), true);
-    await pollUntil(() => right.pumpOne() === 'application');
+    let observedSourceRoutingId: string | undefined;
+    let observedByteCount = 0;
+    await pollUntil(() => right.pumpOne(
+      performance.now(),
+      (sourceRoutingId, byteCount) => {
+        observedSourceRoutingId = sourceRoutingId;
+        observedByteCount = byteCount;
+      }
+    ) === 'application');
+    assert.equal(observedSourceRoutingId, 'm6a-left');
+    assert.ok(observedByteCount > Buffer.byteLength('notice'));
     const sent = right.mailbox.tryClaim('application', 1, 4096)!;
     assert.equal(sent.owner, 'channel:alpha');
     assert.equal(right.mailbox.release(sent), true);

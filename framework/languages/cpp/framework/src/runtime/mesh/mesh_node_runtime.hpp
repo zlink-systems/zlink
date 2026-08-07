@@ -74,6 +74,8 @@ struct mesh_node_builder_state_t
     std::function<void (const std::string &)> channel_name_observer;
     route_handler_registry_t handlers;
     std::vector<mesh_peer_connection_t> peer_connections;
+    std::function<void (const mesh_peer_connection_t &)> runtime_peer_connect;
+    std::function<void (const mesh_peer_connection_t &)> runtime_peer_disconnect;
     mesh_node_socket_config_t socket;
     std::chrono::milliseconds default_request_timeout{std::chrono::seconds (30)};
     zlink::auto_hwm_profile auto_hwm_profile =
@@ -112,7 +114,9 @@ class mesh_node_runtime_t
       host::user_spot_materializer_t materializer);
     void configure_spot_route_fence_resolver (
       host::spot_route_fence_resolver_t resolver,
-      std::chrono::milliseconds route_cache_max_age);
+      std::chrono::milliseconds route_cache_max_age,
+      std::chrono::milliseconds owner_lease_fencing_margin =
+        std::chrono::seconds (5));
     void configure_actor_route_resolver (
       std::function<std::optional<runtime::spot_address_t> (
         const actor_ref_t &)> resolver,
@@ -171,6 +175,8 @@ class mesh_node_runtime_t
                        const std::string &endpoint,
                        std::uint64_t expected_lifecycle_generation = 0,
                        std::string security_identity = "default");
+    void connect_peer (const std::string &endpoint,
+                       std::string security_identity = "default");
     void expect_peer (const zlink::routing_id_t &expected_routing_id,
                       const std::string &endpoint,
                       std::uint64_t expected_lifecycle_generation,
@@ -194,13 +200,13 @@ class mesh_node_runtime_t
     zlink::submit_result_t request_to_node (
       const zlink::routing_id_t &target,
       const std::vector<zlink::message_t> &parts,
-      host::operation_id_t &operation_id,
+      host::call_id_t &operation_id,
       std::chrono::milliseconds timeout,
       std::vector<std::uint8_t> metadata = {});
     zlink::submit_result_t request_to_node (
       const zlink::routing_id_t &target,
       const std::vector<zlink::message_t> &parts,
-      host::operation_id_t &operation_id,
+      host::call_id_t &operation_id,
       std::chrono::milliseconds timeout,
       const std::map<std::string, std::string> &metadata);
     zlink::submit_result_t send_to_channel (const std::string &channel_name,
@@ -213,13 +219,13 @@ class mesh_node_runtime_t
     zlink::submit_result_t request_to_channel (
       const std::string &channel_name,
       const std::vector<zlink::message_t> &parts,
-      host::operation_id_t &operation_id,
+      host::call_id_t &operation_id,
       std::chrono::milliseconds timeout,
       std::vector<std::uint8_t> metadata = {});
     zlink::submit_result_t request_to_channel (
       const std::string &channel_name,
       const std::vector<zlink::message_t> &parts,
-      host::operation_id_t &operation_id,
+      host::call_id_t &operation_id,
       std::chrono::milliseconds timeout,
       const std::map<std::string, std::string> &metadata);
     host::spot_handle_t get_or_create_spot (std::string spot_id);
@@ -236,7 +242,7 @@ class mesh_node_runtime_t
       const std::string &target_spot_id,
       std::uint64_t target_spot_generation,
       const std::vector<zlink::message_t> &parts,
-      host::operation_id_t &operation_id,
+      host::call_id_t &operation_id,
       std::chrono::milliseconds timeout,
       std::vector<std::uint8_t> metadata = {});
     host::actor_handle_t create_actor (
@@ -253,7 +259,7 @@ class mesh_node_runtime_t
     zlink::submit_result_t request_to_actor (
       const actor_ref_t &target,
       const std::vector<zlink::message_t> &parts,
-      host::operation_id_t &operation_id,
+      host::call_id_t &operation_id,
       std::chrono::milliseconds timeout,
       std::vector<std::uint8_t> metadata = {},
       std::uint64_t authority_owner_generation = 0,
@@ -336,8 +342,9 @@ class mesh_node_runtime_t
       std::chrono::milliseconds timeout);
     std::optional<actor_ref_t> follow_relocated_actor (const actor_ref_t &actor);
     result_t<operation_completion_t> wait_for_completion (
-      const host::operation_id_t &operation,
-      std::chrono::milliseconds timeout);
+      const host::call_id_t &operation,
+      std::chrono::milliseconds timeout,
+      std::optional<zlink::routing_id_t> target = std::nullopt);
     std::size_t dispatch_ready (
       const std::function<void (const host::ready_record_t &,
                                 const host::receive_record_t &,
@@ -351,6 +358,7 @@ class mesh_node_runtime_t
     std::size_t admitted_peer_count () const;
     bool has_admitted_peer (const zlink::routing_id_t &peer_rid,
                             std::uint64_t lifecycle_generation) const;
+    bool has_admitted_peer (const zlink::routing_id_t &peer_rid) const;
     std::string mesh_name () const;
     std::optional<zlink::routing_id_t> routing_id () const;
     std::string listen_endpoint () const;
@@ -378,12 +386,20 @@ class mesh_node_runtime_t
     registrations (zlink_builder_t &builder);
 
   private:
+    struct peer_callback_gate_t
+    {
+        std::mutex mutex;
+        std::condition_variable changed;
+        bool stopping = false;
+        std::size_t active = 0;
+    };
+
     result_t<actor_join_reply_t> actor_join_reply_from_completion (
       const host::receive_record_t &record,
       const std::vector<zlink::message_t> &parts,
       const actor_ref_t &actor);
     result_t<actor_join_reply_t> wait_for_join_completion (
-      const host::operation_id_t &operation,
+      const host::call_id_t &operation,
       const actor_ref_t &actor,
       std::chrono::milliseconds timeout);
     std::optional<zlink::submit_result_t>
@@ -399,6 +415,7 @@ class mesh_node_runtime_t
     std::function<void (const runtime::protocol::actor_route_fence_t &)>
       _actor_route_invalidator;
     std::chrono::milliseconds _route_cache_max_age{15'000};
+    std::chrono::milliseconds _owner_lease_fencing_margin{5'000};
     host::actor_create_operation_target_t _actor_create_target;
     host::instance_spot_activation_materializer_t
       _instance_spot_materializer;
@@ -419,6 +436,8 @@ class mesh_node_runtime_t
                         int,
                         std::uint64_t)> _descriptor_publisher;
     std::shared_ptr<host::public_host_runtime_t> _node;
+    std::shared_ptr<peer_callback_gate_t> _peer_callback_gate =
+      std::make_shared<peer_callback_gate_t> ();
     std::mutex _message_follow_mutex;
     std::function<void (const runtime::protocol::message_follow_notice_t &)>
       _message_follow_handler;
@@ -432,18 +451,18 @@ class mesh_node_runtime_t
     std::condition_variable _completion_ready;
     std::atomic_bool _stopping{false};
     zlink::framework::runtime::exactly_once_table_t<
-      host::operation_id_t,
+      host::call_id_t,
       operation_completion_t,
-      zlink::framework::runtime::operation_id_hash_t>
+      zlink::framework::runtime::call_id_hash_t>
       _completed_operations;
     struct actor_join_continuation_t
     {
         actor_ref_t actor;
         actor_join_completion_t completion;
     };
-    std::unordered_map<host::operation_id_t,
+    std::unordered_map<host::call_id_t,
                        actor_join_continuation_t,
-                       zlink::framework::runtime::operation_id_hash_t>
+                       zlink::framework::runtime::call_id_hash_t>
       _actor_join_continuations;
 };
 

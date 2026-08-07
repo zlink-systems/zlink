@@ -252,7 +252,8 @@ public interface IZLinkStreamNodeBuilder
     IZLinkStreamNodeBuilder Bind(int port = 0);
     IZLinkStreamNodeBuilder SetBindHost(string bindHost);
     IZLinkStreamNodeBuilder SetAdvertiseHost(string advertiseHost);
-    IZLinkSocketConfig ConfigureSocket();
+    IZLinkStreamNodeBuilder MaxMessageSize(long bytes);
+    IZLinkStreamSocketConfig ConfigureSocket();
     IZLinkStreamNodeBuilder EnableActorDispatch();
     IZLinkStreamNodeBuilder SetTlsServer(
         string certificatePath,
@@ -278,7 +279,7 @@ public interface IZLinkMetadataPolicyBuilder
 
 ```
 
-`IZLinkStreamNodeBuilder.ConfigureSocket().MaxMessageSize` defaults to
+`IZLinkStreamNodeBuilder.MaxMessageSize(long bytes)` defaults to
 `64 KiB`. It is used only when a StreamNode's Core STREAM inbound path checks
 a complete client-to-server message, measured as header bytes plus payload
 bytes and excluding the 6-byte prefix. `0` maps to Core `-1`, so Framework
@@ -290,7 +291,7 @@ limit doesn't apply to server-to-client outbound messages. ClientServer and
 RouteMesh SS don't gain this setting.
 
 The exact declaration of `IZLinkCodecRegistryBuilder` and the codec
-extension is owned by [Serialization](11-serialization.ko.md).
+extension is owned by [Serialization](11-serialization.en.md).
 
 `AddRouteMesh(meshName)` registers one process-local
 [MeshNode](../../../../01-glossary.en.md#meshnode). Registering the same
@@ -413,7 +414,7 @@ automatic subscriber's discovery results aren't changed by this handle.
 `AddHandlersFromAssemblyOf(...)` and `AddHandlersFromAssembly(...)` only
 add the specified assembly to the handler scan scope. The exact
 declaration of the method, group, and packet attributes used for the
-scan is owned by [Common Runtime](01-common-runtime.ko.md).
+scan is owned by [Common Runtime](01-common-runtime.en.md).
 
 `EnableActorDispatch()` only activates a STREAM node's Actor dispatch
 capability. If the same host has no Mesh whose object role is `Client`
@@ -626,9 +627,11 @@ families.
 
 `AddHandlerGroup(groupName)` exposes, on that ChannelName, the send/
 request handlers found by scanning that have the same
-`ZLinkHandlerGroupAttribute` value. Use typed `AddSendHandler(...)`/
-`AddRequestHandler(...)` directly only for a case that demonstrates
-manual registration, like TicTacToe.
+`ZLinkHandlerGroupAttribute` value. TicTacToe's manual topology does not mean
+manual handler registration. The .NET sample exposes its handlers through
+assembly scanning and `AddHandlerGroup(...)`; use typed
+`AddSendHandler(...)`/`AddRequestHandler(...)` directly only for a separate
+example that intentionally demonstrates direct registration.
 
 The weight of `IZLinkMeshChannelServerBuilder` and
 `IZLinkClientServerChannelServerBuilder` is 0 to 10000, defaulting to
@@ -674,6 +677,22 @@ public interface IZLinkSocketConfig
     int Weight { get; set; }
 }
 
+public interface IZLinkStreamSocketConfig
+{
+    ulong SendHighWaterMark { get; set; }
+    ulong ReceiveHighWaterMark { get; set; }
+    int SendBufferSize { get; set; }
+    int ReceiveBufferSize { get; set; }
+    TimeSpan? Linger { get; set; }
+    TimeSpan? ReceiveTimeout { get; set; }
+    TimeSpan? SendTimeout { get; set; }
+    TimeSpan? ConnectTimeout { get; set; }
+    TimeSpan? HandshakeInterval { get; set; }
+    bool IPv6 { get; set; }
+    bool TcpNoDelay { get; set; }
+    bool Immediate { get; set; }
+}
+
 public interface IZLinkRouteConfig
 {
     bool RequireKnownPeer { get; set; }
@@ -705,7 +724,6 @@ public interface IZLinkMeshChannelRuntimeOptions
 
 public interface IZLinkMeshNodeSocketConfig
 {
-    long MaxMessageSize { get; set; }
     ulong SendHighWaterMark { get; set; }
     ulong ReceiveHighWaterMark { get; set; }
     ulong MailboxMessageBudget { get; set; }
@@ -715,10 +733,11 @@ public interface IZLinkMeshNodeSocketConfig
 }
 ```
 
-The application listener's default `MaxMessageSize` is `16 MiB`.
+The ClientServer application listener's default `MaxMessageSize` is `16 MiB`.
 Specifying `0` while using Application HWM as Auto or a positive value is
 a startup configuration error. `MaxMessageSize = 0` can only be used when
-`ApplicationHwmBytes = 0`.
+`ApplicationHwmBytes = 0`. This setting doesn't apply to RouteMesh
+ServerServer.
 
 `ConfigureSpotPublisher()` doesn't provide a publish-only delivery
 policy option. [Logical Multicast](../../../../01-glossary.en.md#logical-multicast)
@@ -750,13 +769,10 @@ create/relocation target selection. ChannelName uniquely selects a local
 RouteMesh or ClientServer Server registration. HWM and timeout are set
 before startup in `ConfigureRouterSocket()`.
 
-`MaxMessageSize` is only set before startup, and a runtime setter isn't
-provided. `0` uses the maximum complete message size the framework
-supports. A positive value can't exceed the public protocol's
-representation limit — exceeding it fails startup with
-`ZLinkConfigurationException`. The smaller of the two endpoints'
-allowed values applies per peer. The Framework application listener's
-default is `16_777_216` bytes.
+`IZLinkMeshNodeSocketConfig` doesn't provide a RouteMesh ServerServer
+`MaxMessageSize`. An SS sender or receiver doesn't reject a message because
+of a Framework-level complete-message cap. HWM, mailbox byte budgets, and
+service-wire representation bounds remain separate resource and wire guards.
 
 `ConfigureInboundDispatch()` returns one host-wide inbound setting.
 `ApplicationHwmBytes`'s default is `null`, meaning Auto mode. `0` means

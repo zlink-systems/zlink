@@ -202,7 +202,8 @@ options.AddStreamNode("public-gateway")
 | --- | --- | --- |
 | `.Bind(endpoint)` / `.Bind(port)` | port 생략 시 `0`(automatic discovery에서는 port 생략·`0` 모두 자동 bind) | 이 STREAM listener의 수신 port. `Bind(string endpoint)` overload도 있다 |
 | `.SetBindHost(string)` / `.SetAdvertiseHost(string)` | root `ConfigureNetwork()` 기본값을 따름 | 이 listener에만 적용하는 bind·advertise host |
-| `.ConfigureSocket()` | socket 기본값 | `MaxMessageSize`·HWM·buffer·timeout 등 이 listener 소켓의 세부 조정(`IZLinkSocketConfig`) |
+| `.MaxMessageSize(bytes)` | `64 KiB` | Client에서 Server로 들어오는 complete STREAM message 상한. `0`은 Framework 상한 없음 |
+| `.ConfigureSocket()` | socket 기본값 | HWM·buffer·timeout 등 이 listener 소켓의 나머지 세부 조정(`IZLinkStreamSocketConfig`) |
 | `.EnableActorDispatch()` | 비활성 | 수신 message를 Session에 연결된 Actor로 dispatch |
 | `.SetTlsServer(certPath, keyPath, requireClientCertificate?)` | TLS 없음 | TLS 서버 인증서·키, 상호 인증 여부 |
 | `.AddSession<TSession>()` | 없음 | 연결마다 생성할 Session 타입 등록 |

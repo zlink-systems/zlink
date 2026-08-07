@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Zlink.Framework.Runtime.Backend.Contracts;
@@ -11,7 +12,7 @@ public sealed class SpotRouteDispatcherTests
     [Fact]
     public async Task MalformedSendPayload_IsDropped_WithoutBlockingTheNextMessage()
     {
-        var activities = new List<Activity>();
+        var activities = new ConcurrentBag<Activity>();
         using var listener = new ActivityListener
         {
             ShouldListenTo = source =>
@@ -60,11 +61,13 @@ public sealed class SpotRouteDispatcherTests
         }
 
         Assert.Equal(["next"], probe.Values);
-        var spotTraces = activities.Where(activity =>
-            activity.OperationName == "zlink.message_flow"
-            && Equals(
-                activity.GetTagItem("surface")?.ToString(),
-                "SpotRoute"));
+        var spotTraces = activities
+            .Where(activity =>
+                activity.OperationName == "zlink.message_flow"
+                && Equals(
+                    activity.GetTagItem("surface")?.ToString(),
+                    "SpotRoute"))
+            .ToArray();
         Assert.NotEmpty(spotTraces);
         Assert.All(spotTraces, activity =>
             Assert.Equal(

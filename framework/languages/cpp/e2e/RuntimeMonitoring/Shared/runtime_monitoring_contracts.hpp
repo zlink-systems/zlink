@@ -21,6 +21,7 @@ inline constexpr const char *handler_group = "runtime-monitoring";
 inline constexpr const char *route_mesh_name = "runtime.monitoring.mesh";
 inline constexpr const char *route_mesh_channel = route_mesh_name;
 inline constexpr const char *monitoring_subject_spot = "monitoring-subject";
+inline constexpr const char *monitoring_actor_type = "monitoring-actor";
 
 struct profile_req_t
 {

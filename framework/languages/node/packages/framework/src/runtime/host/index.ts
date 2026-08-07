@@ -200,7 +200,10 @@ import {
   encodeFrameworkPayloadMessage
 } from '../messaging/payload-codec';
 import { DefaultZLinkRouteMeshRuntimeOptions } from './route-mesh-runtime-options';
-import { ZLinkHostServiceRelocationRuntime } from './service-relocation-host-runtime';
+import {
+  ZLinkHostServiceRelocationRuntime,
+  ZLinkRelocationStateIncompatibleError
+} from './service-relocation-host-runtime';
 import {
   ZLinkInboundDispatchBudget,
   resolveApplicationHwm
@@ -233,6 +236,7 @@ export class ZLinkFrameworkRuntimeHost implements
   private runtimeRelocationResult?: ZLinkFrameworkRelocationResult;
   private runtimeTerminationResult?: ZLinkFrameworkTerminationResult;
   private relocationOperation?: Promise<ZLinkFrameworkRelocationResult>;
+  private relocationStopStarting?: AbortController;
   private relocationOperationKey?: string;
   private relocationOperationStartedAt?: number;
   private shutdownOperation?: Promise<ZLinkFrameworkTerminationResult>;
@@ -699,7 +703,8 @@ export class ZLinkFrameworkRuntimeHost implements
       publishDraining: (meshName, signal) =>
         this.publishMeshDraining(meshName, signal),
       publishHostDraining: (signal) => this.publishHostDraining(signal),
-      drainResources: (meshName, signal) => this.performMeshDrain(meshName, signal),
+      drainResources: (meshName, signal, stopStartingSignal) =>
+        this.performMeshDrain(meshName, signal, stopStartingSignal),
       shutdownResources: (meshName, signal) => this.performMeshShutdown(meshName, signal),
       cleanupHostResources: (signal) => this.cleanupOwnerForDrain(signal),
       forceStopResources: (meshName) => this.forceStopMesh(meshName)
@@ -790,10 +795,12 @@ export class ZLinkFrameworkRuntimeHost implements
     this.relocationTargetApplicationVersion = effectiveTargetApplicationVersion;
     this.relocationOperationKey = operationKey;
     this.relocationOperationStartedAt = performance.now();
+    this.relocationStopStarting = new AbortController();
     this.relocationOperation = this.runRelocation(
       options.mode,
       effectiveTargetApplicationVersion,
-      deadlineMs
+      deadlineMs,
+      this.relocationStopStarting.signal
     );
     return waitForRuntimeOperation(this.relocationOperation, options.signal);
   }
@@ -805,6 +812,7 @@ export class ZLinkFrameworkRuntimeHost implements
     }
     this.runtimeDeadline = new Date(Date.now() + deadlineMs);
     if (this.shutdownOperation === undefined) {
+      this.relocationStopStarting?.abort(new Error('Shutdown requested.'));
       this.shutdownOperationStartedAt = performance.now();
       this.shutdownOperation = this.runShutdown(deadlineMs);
     }
@@ -814,7 +822,8 @@ export class ZLinkFrameworkRuntimeHost implements
   private async runRelocation(
     mode: ZLinkFrameworkRelocationMode,
     effectiveTargetApplicationVersion: bigint,
-    deadlineMs: number
+    deadlineMs: number,
+    stopStartingSignal: AbortSignal
   ): Promise<ZLinkFrameworkRelocationResult> {
     if (!this.isStarted) {
       return this.completeRelocation(blockedRelocation(
@@ -855,12 +864,17 @@ export class ZLinkFrameworkRuntimeHost implements
         ));
       }
       this.setRuntimeState(ZLinkFrameworkRuntimeState.Relocating);
-      const drained = await this.routeMeshCoordinator.relocateHost(remainingDeadlineMs());
+      const drained = await this.routeMeshCoordinator.relocateHost(
+        remainingDeadlineMs(),
+        stopStartingSignal
+      );
       if (drained.kind === 'forceStopped') {
         return this.resetBlockedRelocation(blockedRelocation(
           mode,
           effectiveTargetApplicationVersion,
-          relocationReason(drained.reason)
+          stopStartingSignal.aborted
+            ? ZLinkFrameworkRelocationReason.ShutdownRequested
+            : relocationReason(drained.reason)
         ));
       }
       await this.publishHostRelocated();
@@ -874,9 +888,13 @@ export class ZLinkFrameworkRuntimeHost implements
       const result = blockedRelocation(
         mode,
         effectiveTargetApplicationVersion,
-        isDeadlineExceededError(error)
+        stopStartingSignal.aborted
+          ? ZLinkFrameworkRelocationReason.ShutdownRequested
+          : isDeadlineExceededError(error)
           ? ZLinkFrameworkRelocationReason.DeadlineExceeded
-          : ZLinkFrameworkRelocationReason.RelocationFailed
+          : error instanceof ZLinkRelocationStateIncompatibleError
+            ? ZLinkFrameworkRelocationReason.StateIncompatible
+            : ZLinkFrameworkRelocationReason.RelocationFailed
       );
       return error instanceof ZLinkRetiringRollbackError
         ? this.completeRelocation(result)
@@ -886,17 +904,17 @@ export class ZLinkFrameworkRuntimeHost implements
 
   private async runShutdown(deadlineMs: number): Promise<ZLinkFrameworkTerminationResult> {
     try {
+      this.admission.close();
+      this.setRuntimeState(ZLinkFrameworkRuntimeState.Draining);
       if (this.relocationOperation !== undefined
-        && this.runtimeState === ZLinkFrameworkRuntimeState.Relocating) {
+        && this.relocationStopStarting?.signal.aborted === true) {
         await this.relocationOperation;
       }
       // Seal application admission before the public status reports that the
       // host no longer accepts work. This prevents status polling from racing
       // with the coordinator's synchronous seal step.
-      this.admission.close();
       const unscopedStreamDrain = this.streamRuntime?.notifyUnscopedServerDrain();
       const shutdown = this.routeMeshCoordinator.shutdownHost(deadlineMs);
-      this.setRuntimeState(ZLinkFrameworkRuntimeState.Draining);
       const drain = await shutdown;
       await unscopedStreamDrain;
       await this.stop();
@@ -932,6 +950,7 @@ export class ZLinkFrameworkRuntimeHost implements
     }
     this.runtimeDeadline = undefined;
     this.relocationTargetApplicationVersion = undefined;
+    this.relocationStopStarting = undefined;
     this.relocationOperation = undefined;
     this.relocationOperationKey = undefined;
     this.relocationOperationStartedAt = undefined;
@@ -1589,14 +1608,11 @@ export class ZLinkFrameworkRuntimeHost implements
     const failureHandler = () => {
       recoveryRequired = true;
       if (runtime.ownerLeaseUsable) return;
-      transportFence = transportFence
-        .then(() => spotNodeRuntime.fenceLocationAutoConnect())
-        .catch(error => {
-          this.runtimeOrPreStartErrorSink.reportRuntimeTaskException(
-            'owner lease transport fencing',
-            error
-          );
-        });
+      // A Store failure invalidates new ownership and discovery work, but it
+      // must not tear down transports that were already established. The
+      // auto-connect reconciler applies storeFailureGraceMs to the last
+      // complete descriptor set; fencing here would bypass that contract and
+      // make existing requests fail during the grace window.
       const routes = this.statefulAuthorityRoutes;
       if (routes === undefined) return;
       this.statefulAuthorityRoutes = undefined;
@@ -1728,11 +1744,16 @@ export class ZLinkFrameworkRuntimeHost implements
     await this.stop();
   }
 
-  private async performMeshDrain(meshName: string, signal: AbortSignal): Promise<void> {
+  private async performMeshDrain(
+    meshName: string,
+    signal: AbortSignal,
+    stopStartingSignal?: AbortSignal
+  ): Promise<void> {
     await this.serviceRelocation.relocateMesh(
       meshName,
       this.relocationTargetApplicationVersion,
-      signal
+      signal,
+      stopStartingSignal
     );
   }
 
@@ -2048,7 +2069,8 @@ export class ZLinkFrameworkRuntimeHost implements
 
   createSpotManagerOptions(): Partial<ZLinkSpotManagerOptions> {
     this.ensureLocationRuntime();
-    return new ZLinkSpotRuntimeOptionsFactory({
+    return {
+      ...new ZLinkSpotRuntimeOptionsFactory({
       registration: this.options.registration,
       channelTransport: this.channelTransport,
       routeTransport: this.routeTransport,
@@ -2079,9 +2101,25 @@ export class ZLinkFrameworkRuntimeHost implements
       detachedTaskRunner: this.detachedTaskRunner(),
       metrics: this.metrics,
       admission: this.admission,
-      statefulExecutionAllowed: () =>
-        this.locationOwner.currentRuntime?.ownerLeaseUsable ?? true
-    }).create(this.actorTransferRuntime);
+      statefulExecutionAllowed: () => {
+        const locationRuntime = this.locationOwner.currentRuntime;
+        if (locationRuntime !== undefined) return locationRuntime.ownerLeaseUsable;
+        // A host configured with a Location Store must not execute stateful
+        // timers while its lease runtime is unavailable. Hosts without a
+        // Location Store have no owner lease to fence.
+        return this.locationOwner.currentStores?.locationStore === undefined;
+      }
+    }).create(this.actorTransferRuntime),
+      activationConcurrencyLimitProvider: (meshName: string) =>
+        this.options.registration.spotNodes.get(meshName)?.activationConcurrencyLimit ?? 128,
+      onInstanceActivationConcurrencyChanged: (meshName: string) => {
+        void this.spotNodeRuntime?.publishMeshNodeState(
+          this.runtimeState,
+          this.executionState?.abortController.signal,
+          meshName
+        ).catch(() => undefined);
+      }
+    };
   }
 
   createPublicSpotManager(local: DefaultZLinkSpotManager): import('../../contracts').ZLinkSpotManager {
@@ -2257,7 +2295,7 @@ export class ZLinkFrameworkRuntimeHost implements
               && descriptor.objectRole === 'server'
               && descriptor.placementWeight > 0
               && excludedNodeRids?.has(String(descriptor.rid)) !== true
-              && spots.active + spots.reserved < spots.limit
+              && (spots.limit === 0 || spots.active + spots.reserved < spots.limit)
               && capability !== undefined
               && (spotTypeCapacity === undefined
                 || spotTypeCapacity.limit === 0
@@ -2626,7 +2664,7 @@ export class ZLinkFrameworkRuntimeHost implements
       inboundDispatchBudget: this.inboundDispatchBudget,
       oneWayFailureSink: (error) =>
         this.runtimeOrPreStartErrorSink.reportRuntimeTaskException('channel one-way submit', error)
-    }).create();
+      }).create();
   }
 
   private createSpotNodeRuntimeOptions(
@@ -2655,10 +2693,20 @@ export class ZLinkFrameworkRuntimeHost implements
       ...options,
       inboundDispatchBudget: this.inboundDispatchBudget,
       messageFollowReceiver: (record: ServiceMessageFollowRecord) => {
-        if (record.source.kind !== 'actor') return;
-        this.actorClientLocationResolver?.invalidateActorRouteIfMatches({
-          actorId: record.source.actor.actorId,
-          objectGeneration: record.source.actor.generation,
+        if (record.source.kind === 'actor') {
+          this.actorClientLocationResolver?.invalidateActorRouteIfMatches({
+            actorId: record.source.actor.actorId,
+            objectGeneration: record.source.actor.generation,
+            targetNodeRid: record.source.targetNodeRid,
+            targetNodeGeneration: record.source.targetNodeGeneration,
+            authorityOwnerGeneration: record.source.authorityOwnerGeneration,
+            ownerLeaseGeneration: record.source.ownerLeaseGeneration
+          });
+          return;
+        }
+        this.actorClientLocationResolver?.invalidateSpotRouteIfMatches({
+          spotId: record.source.spot.spotId,
+          objectGeneration: record.source.spot.generation,
           targetNodeRid: record.source.targetNodeRid,
           targetNodeGeneration: record.source.targetNodeGeneration,
           authorityOwnerGeneration: record.source.authorityOwnerGeneration,
@@ -2666,7 +2714,11 @@ export class ZLinkFrameworkRuntimeHost implements
         });
       },
       meshRecordDispatcher: (meshName: string, owner: ReadyRecord, record: ReceiveRecord) =>
-        this.dispatchMeshRecord(meshName, owner, record, this.executionState?.abortController.signal)
+        this.dispatchMeshRecord(meshName, owner, record, this.executionState?.abortController.signal),
+      instanceActivationConcurrencyProvider: (meshName: string) => {
+        return this.spotManager?.instanceActivationConcurrency(meshName)
+          ?? { active: 0, limit: this.options.registration.spotNodes.get(meshName)?.activationConcurrencyLimit ?? 128 };
+      }
     };
   }
 
@@ -3109,6 +3161,9 @@ export {
   ZLinkRetiringRollbackError,
   ZLinkRouteMeshRuntimeCoordinator
 } from './route-mesh-runtime';
+export {
+  ZLinkRelocationStateIncompatibleError
+} from './service-relocation-host-runtime';
 export {
   ZLinkHostSpotAddressTransport,
   type ZLinkHostSpotAddressTransportOptions

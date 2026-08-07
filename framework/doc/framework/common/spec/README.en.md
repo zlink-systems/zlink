@@ -4,6 +4,13 @@ The documents in this directory describe the Framework's common public
 contract. Each document self-contains the inputs, state, normal flow, and
 failure/completion conditions its implementation and contract tests need.
 
+This directory and the per-language exact interfaces are the single authority
+for the Framework public contract. [Common internals](../internals/README.en.md)
+describe the state and component structure that implement that contract and
+don't add public behavior. The two document sets link to each other so they can
+be read together, but remain separate so implementation detail isn't mistaken
+for a user guarantee.
+
 ## Authoring Standards And Shared Terms
 
 - [Spec writing guide](../../../../../doc/principal/documentation/spec-writing-guide.ko.md)
@@ -63,11 +70,11 @@ failure/completion conditions its implementation and contract tests need.
 The exact public types, signatures, and async representation each language
 uses for the common server contract are owned by the following documents.
 
-- [C++](server/languages/cpp/README.ko.md)
-- [.NET](server/languages/dotnet/README.ko.md)
-- [Java](server/languages/java/README.ko.md)
-- [Kotlin](server/languages/kotlin/README.ko.md)
-- [Node.js](server/languages/node/README.ko.md)
+- [C++](server/languages/cpp/README.en.md)
+- [.NET](server/languages/dotnet/README.en.md)
+- [Java](server/languages/java/README.en.md)
+- [Kotlin](server/languages/kotlin/README.en.md)
+- [Node.js](server/languages/node/README.en.md)
 
 ## HTTP Client
 

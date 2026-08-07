@@ -61,7 +61,11 @@ final class ZLinkStreamInboundObserverDispatcher implements AutoCloseable {
         while (!closed || !queue.isEmpty()) {
             try {
                 ZLinkStreamInboundObservation observation = queue.take();
-                for (ZLinkStreamInboundObserver observer : List.copyOf(observers)) {
+                // CopyOnWriteArrayList iteration already uses a stable snapshot;
+                // Keep the membership check so observers absent at the check
+                // are skipped without allocating another list. The check and
+                // invocation are intentionally not an atomic operation.
+                for (ZLinkStreamInboundObserver observer : observers) {
                     if (!observers.contains(observer)) {
                         continue;
                     }

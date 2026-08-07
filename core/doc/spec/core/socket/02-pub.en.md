@@ -1,4 +1,4 @@
-[한국어](02-pub.ko.md) | English
+[한국어](https://zlink-systems.github.io/zlink/ko/spec/core/socket/02-pub/) | English
 
 [Spec Index](../../README.en.md) · [Core Index](../README.en.md) · [Socket Common](README.en.md)
 

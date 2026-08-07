@@ -452,7 +452,7 @@ Framework는 다음 message의 크기를 미리 알 수 없으므로 **byte를 �
 ```cpp
 // C++은 수준을 message flow log mode로 지정한다.
 options.configure_dispatch ()
-  .message_flow (message_flow_log_mode_t::errors_only); // 기본값 — error와 backpressure를 기록한다.
+  .message_flow (message_flow_log_mode_t::errors); // 기본값 — error와 backpressure를 기록한다.
 ```
 
 message flow 기록에 `backpressured`가 남았다면 보낼 자리를 기다리는 일이 실제로 일어났다는
@@ -519,5 +519,5 @@ message flow 기록에 `backpressured`가 남았다면 보낼 자리를 기다�
 - one-way submit과 완료 경계의 정식 계약:
   [비동기 실행 정책](../../../common/spec/05-async-execution-policy.ko.md)
 - 소켓 설정 표면: [언어별 topology 공개 계약](../../../common/spec/server/languages/README.ko.md)
-- socket option의 byte 단위 계약: [core guide의 socket option](https://zlink-systems.github.io/zlink/guide/12-socket-options/)
+- socket option의 byte 단위 계약: [core guide의 socket option](https://zlink-systems.github.io/zlink/ko/guide/12-socket-options/)
 - 다음 축: [05-channel-messaging](05-channel-messaging.ko.md)

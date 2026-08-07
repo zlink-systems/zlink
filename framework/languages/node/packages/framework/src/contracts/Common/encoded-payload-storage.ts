@@ -6,6 +6,11 @@ export function storeEncodedPayload(owner: object, bytes: Uint8Array): Buffer {
   return stored;
 }
 
+export function adoptEncodedPayload(owner: object, bytes: Buffer): Buffer {
+  encodedPayloadStorage.set(owner, bytes);
+  return bytes;
+}
+
 export function borrowEncodedPayload(owner: object): Buffer | undefined {
   return encodedPayloadStorage.get(owner);
 }

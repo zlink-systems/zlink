@@ -1,4 +1,4 @@
-[한국어](08-utilities.ko.md) | English
+[한국어](https://zlink-systems.github.io/zlink/ko/spec/core/08-utilities/) | English
 
 [Spec Index](../README.en.md) · [Core Index](README.en.md)
 

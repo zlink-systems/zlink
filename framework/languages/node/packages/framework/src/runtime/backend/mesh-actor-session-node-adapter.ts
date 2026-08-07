@@ -42,12 +42,14 @@ export function meshActorSessionNodeAdapter(
       if (completions === undefined) {
         throw new Error('MeshNode completion runtime is not started.');
       }
-      const operationId = node.closeActorBoundSession(
-        actor,
-        expectedBindingGeneration,
-        timeoutMs
+      const completion = await completions.submit(
+        () => node.closeActorBoundSession(
+          actor,
+          expectedBindingGeneration,
+          timeoutMs
+        ),
+        signal
       );
-      const completion = await completions.wait(operationId, signal);
       try {
         if (completion.terminalResult !== 0 || completion.failureErrno !== 0) {
           throw new Error(

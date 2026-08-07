@@ -73,6 +73,8 @@ class mesh_node_host_service_t final : public hosted_service_t,
     inbound_dispatch_snapshot_t inbound_dispatch_snapshot () const noexcept;
 
   private:
+    struct actor_destroy_callback_gate_t;
+
     task_t<spot_create_result_t> create_user_spot (
       const std::shared_ptr<detail::mesh_node_runtime_t> &source,
       bool exclusive,
@@ -121,6 +123,7 @@ class mesh_node_host_service_t final : public hosted_service_t,
     std::shared_ptr<inbound_dispatch_budget_t> _inbound_budget;
     std::shared_ptr<completion_admission_owner_t> _completion_admission;
     std::shared_ptr<listener_status_registry_t> _listener_statuses;
+    std::shared_ptr<actor_destroy_callback_gate_t> _actor_destroy_gate;
     std::vector<std::shared_ptr<detail::mesh_node_runtime_t>> _nodes;
     std::vector<std::thread> _threads;
 

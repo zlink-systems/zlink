@@ -76,7 +76,7 @@ internal static class StA1LocalAcceptScenario
             item.Scenario == "ST-A1"
             && item.Kind == "success_reply"
             && item.Value == spotId);
-        //  30-implementation-gap §"location authority가 commit 순서를 소유한다"
+        //  common/spec/15-spot-actor §4 "Actor join과 commit 순서"
         //  puts the CAS commit before the target OnJoinedActor and the source
         //  OnLeaveActor after it, so joined precedes leave.
         ZlinkStreamAssert.Ensure(

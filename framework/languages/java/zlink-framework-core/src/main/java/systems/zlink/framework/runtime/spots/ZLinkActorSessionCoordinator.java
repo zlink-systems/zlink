@@ -260,22 +260,19 @@ final class ZLinkActorSessionCoordinator {
         ZLinkActor actor = localActor.get();
         Optional<String> joinedSpotId = runtime.spotId(actor);
         CompletableFuture<Optional<Message>> result = new CompletableFuture<>();
-        return runtime.submitActorDispatch(
-                actor.context().actorId(),
-                acceptedJournalRecord,
-                () -> {
-                    if (!runtime.claimAcceptedHandoffOperation(
-                            actor,
-                            accepted.operationHigh(),
-                            accepted.operationLow())) {
-                        result.complete(Optional.empty());
-                        return CompletableFuture.completedFuture(null);
-                    }
-                    return invokeLocalDispatch(
-                        localDispatch,
-                        new LocalDispatch(actor, joinedSpotId),
-                        result);
-                })
+        // The target-side transfer commit already owns the actor's serialized
+        // turn. Enqueuing the replay behind that turn would wait for the
+        // commit to finish while the commit waits for this replay.
+        if (!runtime.claimAcceptedHandoffOperation(
+            actor,
+            accepted.operationHigh(),
+            accepted.operationLow())) {
+            return CompletableFuture.completedFuture(Optional.empty());
+        }
+        return invokeLocalDispatch(
+            localDispatch,
+            new LocalDispatch(actor, joinedSpotId),
+            result)
             .thenCompose(ignored -> result);
     }
 
@@ -308,6 +305,18 @@ final class ZLinkActorSessionCoordinator {
                     localDispatch));
         }
         Optional<String> joinedSpotId = runtime.spotId(actor);
+        Optional<ZLinkBackendActorRef> messageFollowTarget =
+            runtime.messageFollowTargetActorRef(actor);
+        if (messageFollowTarget.isPresent()) {
+            // Source cleanup clears membership before the Session owner has
+            // switched its route. The committed Message Follow target is the
+            // only valid dispatch surface during that bounded interval.
+            return runtime.dispatchRemoteJoinedActor(
+                messageFollowTarget.orElseThrow(),
+                null,
+                header,
+                payload);
+        }
         if (joinedSpotId.isPresent()
             && currentSpotSurface(actor) == null
             && !isLocalSpot.test(joinedSpotId.get())

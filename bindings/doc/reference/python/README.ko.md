@@ -1,4 +1,4 @@
-한국어 | [English](README.en.md)
+한국어 | [English](https://zlink-systems.github.io/zlink/bindings/reference/python/)
 
 [Python 바인딩 스펙](../../spec/python/README.ko.md) · [Python 바인딩 가이드](../../guide/python/index.ko.md)
 

@@ -48,7 +48,8 @@ enum class failure_origin_t
 {
     none,
     payload_encode,
-    payload_decode
+    payload_decode,
+    actor_transfer_in_progress
 };
 
 inline std::error_code boundary_error_code (boundary_error_t state) noexcept

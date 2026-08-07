@@ -59,28 +59,21 @@ query.topology(ZLinkLocationTopologyFilter("play"), pageSize = 100)
 `pageSize`는 기본 100이다. **페이지 경계는 여전히 존재한다** — `Flow`가 감췄을 뿐
 한 번에 다 가져오지 않는다.
 
-## 3. message flow observer를 람다로 등록
+## 3. message flow diagnostics 설정
 
-Java는 `ZLinkMessageFlowObserver`를 구현해 넘긴다. Kotlin은 확장 함수로 람다를 준다.
-
-```kotlin
-options.configureDispatch().onMessageFlow { event ->
-    // runtime 스레드에서 실행된다 — blocking하거나 framework 표면을 다시 부르지 않는다.
-    auditSink.append(event)
-}
-```
-
-`onMessageFlow`는 `setMessageFlowObserver`를 감싼 것이라 동작이 같다. **suspend 람다가
-아니다** — 안에서 코루틴을 기다리려면 별도 scope로 넘긴다.
-
-등록 자체를 블록으로 묶는 확장도 있다.
+Kotlin은 Java와 같은 네 수준을 receiver DSL로 설정한다.
 
 ```kotlin
 options.configureDispatch {
-    messageFlow(ZLinkMessageFlowLogMode.ERRORS_ONLY)
-    traceLabel(settings.instanceName)
+    messageFlow(ZLinkMessageFlowLogMode.ERRORS) // 기본값: 실패와 backpressure만 기록한다.
+    traceSampleRate(1.0)
+    includeMessageSizes(true)
 }
 ```
+
+Level은 `OFF`, `ERRORS`, `NORMAL`, `DETAILED`다. Framework는 application이 구성한 standard
+logger·trace·metric provider에 structured record를 기록한다. Message-flow observer나 runtime
+error sink를 Kotlin 람다로 등록하는 public API는 없다. Provider 실패는 원래 operation과 격리한다.
 
 ## 4. 자주 발생하는 문제
 
@@ -88,8 +81,6 @@ options.configureDispatch {
   `systems.zlink.framework.kotlin` import를 확인한다.
 - **`Flow` 수집을 멈췄는데 구독이 남는다** → 수집 코루틴이 취소되면 구독도 끝난다.
   scope를 살려 둔 채 수집만 중단하지 않았는지 본다.
-- **`onMessageFlow` 안에서 suspend 함수를 부를 수 없다** → 일반 람다다. 코루틴이
-  필요하면 이벤트를 채널에 넣고 별도 scope에서 처리한다.
 - **나머지 증상** → [Java 11. Monitoring](../../../java/guide/server/11-monitoring.ko.md) §6을 본다.
 
 ## 5. 관련 문서

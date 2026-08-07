@@ -159,6 +159,12 @@ export interface ZLinkWorkerOptions {
 }
 ```
 
+Timer option을 생략하면 `overrunPolicy`는 `ZLinkTimerOverrunPolicy.SkipLateTicks`,
+`maxCatchUpTicks`는 `1`이다. `maxCatchUpTicks`는
+`overrunPolicy === ZLinkTimerOverrunPolicy.CatchUpBounded`일 때만 사용하고 정수
+`1..2_147_483_647` 범위인지 검증한다. 다른 policy에서는 이 값을 사용하지 않으며 이 범위로 validation하지
+않는다. 이 설명은 기존 optional property public surface를 바꾸지 않는다.
+
 Request의 result-bearing `submit()`은 terminal reply가 나올 때까지 현재 owner turn을 유지한다.
 Actor Join은 별도의 `defer()`로 등록하고 현재 handler가 정상 종료한 뒤 실행한다.
 Worker call의 `submit()`도 Worker 결과가 나올 때까지 현재 turn을 유지한다. `yield()`는 `SpotWide` User Spot

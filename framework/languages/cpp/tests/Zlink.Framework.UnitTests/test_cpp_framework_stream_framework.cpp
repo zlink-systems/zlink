@@ -5,6 +5,7 @@
 
 #include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
+#include "runtime/messaging/async_submit_runtime.hpp"
 #include "runtime/streams/stream_host_service.hpp"
 #include "runtime/streams/stream_runtime.hpp"
 
@@ -15,6 +16,7 @@
 #include <condition_variable>
 #include <deque>
 #include <future>
+#include <limits>
 #include <netinet/in.h>
 #include <memory>
 #include <mutex>
@@ -996,6 +998,95 @@ int main ()
         || runtime.written_payloads (fluent_stream)[0].to_string () == "send-payload") {
         return 23;
     }
+
+    auto timeout_stream = runtime.open_session ("client-stream");
+    int timeout_owner = 0;
+    std::atomic_size_t timeout_attempts{0};
+    zlink::framework::runtime::messaging::reset_async_submit_runtime_for_tests ();
+    runtime.attach_transport_writer (
+      timeout_stream,
+      [&] (const auto &, const auto &) {
+          ++timeout_attempts;
+          zlink::framework::runtime::messaging::note_submit_attempt (
+            "stream:timeout", &timeout_owner, std::chrono::seconds (1), 1);
+          return zlink::framework::result_t<void>::failure (
+            framework_error_kind_t::capacity_exceeded,
+            "test STREAM writer is backpressured");
+      });
+    const auto timeout_started = std::chrono::steady_clock::now ();
+    const auto timeout_result =
+      timeout_stream.write_packet (zlink::message_t::from (std::string ("bounded")))
+        .timeout (std::chrono::milliseconds (20))
+        .submit ()
+        .result ();
+    const auto timeout_elapsed = std::chrono::steady_clock::now () - timeout_started;
+    if (timeout_result
+        || timeout_result.error_kind () != framework_error_kind_t::deadline_exceeded
+        || timeout_attempts != 1
+        || timeout_elapsed >= std::chrono::milliseconds (500)) {
+        return 239;
+    }
+    std::this_thread::sleep_for (std::chrono::milliseconds (30));
+    if (timeout_attempts != 1
+        || zlink::framework::runtime::messaging::pending_submit_count_for_tests () != 0) {
+        return 240;
+    }
+
+    auto retry_stream = runtime.open_session ("client-stream");
+    int retry_owner = 0;
+    std::atomic_size_t retry_attempts{0};
+    runtime.attach_transport_writer (
+      retry_stream,
+      [&] (const auto &, const auto &) {
+          const auto attempt = ++retry_attempts;
+          zlink::framework::runtime::messaging::note_submit_attempt (
+            "stream:retry", &retry_owner, std::chrono::seconds (1), 1);
+          return attempt == 1
+                   ? zlink::framework::result_t<void>::failure (
+                       framework_error_kind_t::capacity_exceeded,
+                       "test STREAM writer is initially backpressured")
+                   : zlink::framework::result_t<void>::success ();
+      });
+    auto retry_task =
+      retry_stream.write_packet (zlink::message_t::from (std::string ("retry-on-ready")))
+        .timeout (std::chrono::milliseconds (200))
+        .submit ();
+    if (retry_attempts != 1
+        || zlink::framework::runtime::messaging::pending_submit_count_for_tests () != 1) {
+        return 242;
+    }
+    zlink::framework::runtime::messaging::notify_submit_ready (
+      "stream:retry", &retry_owner);
+    if (!retry_task.result () || retry_attempts != 2) {
+        return 243;
+    }
+    zlink::framework::runtime::messaging::notify_submit_ready (
+      "stream:retry", &retry_owner);
+    std::this_thread::sleep_for (std::chrono::milliseconds (10));
+    if (retry_attempts != 2
+        || zlink::framework::runtime::messaging::pending_submit_count_for_tests () != 0) {
+        return 244;
+    }
+
+    const auto rejects_stream_timeout = [&] (std::chrono::milliseconds timeout) {
+        try {
+            (void) timeout_stream
+              .write_packet (zlink::message_t::from (std::string ("invalid-timeout")))
+              .timeout (timeout);
+            return false;
+        }
+        catch (const zlink::framework::framework_exception_t &error) {
+            return error.kind () == framework_error_kind_t::not_configured;
+        }
+    };
+    if (!rejects_stream_timeout (std::chrono::milliseconds::zero ())
+        || !rejects_stream_timeout (std::chrono::milliseconds (-1))
+        || !rejects_stream_timeout (std::chrono::milliseconds (
+          static_cast<std::int64_t> (std::numeric_limits<int>::max ()) + 1))) {
+        return 241;
+    }
+    zlink::framework::runtime::messaging::reset_async_submit_runtime_for_tests ();
+
     const auto close_result = fluent_stream.close ().result ();
     const auto write_rejected_disconnected = [] (auto &&write_fn) {
         try {

@@ -496,6 +496,11 @@ public readonly record struct ZLinkTimerTick(
     ulong SkippedTicks);
 ```
 
+Timer option을 생략하면 `OverrunPolicy`는 `SkipLateTicks`, `MaxCatchUpTicks`는 `1`이다.
+`MaxCatchUpTicks`는 `OverrunPolicy == CatchUpBounded`일 때만 사용하고 `1..Int32.MaxValue` 범위인지
+검증한다. 다른 policy에서는 이 값을 사용하지 않으며 이 범위로 validation하지 않는다. 이 설명은 기존
+`ZLinkTimerOptions` public surface를 바꾸지 않는다.
+
 Framework timer는 owner Actor·Spot에 속한 logical registration이다. Cross-node relocation에서는 timer 이름,
 handler type, period, `ZLinkTimerOptions`, scheduling cursor와 seal 시점의 pending tick을 relocation payload에
 자동으로 포함한다. Application의 relocation adapter는 timer를 capture·restore하거나 target에서 다시 등록하지
@@ -654,8 +659,10 @@ User Spot stable type의 Ready Spot을 `Existing`으로 반환한다. Creating�
 reference와 hash로 보관한다.
 
 Missing authority에 대한 첫 `InstanceSpot(...)` call이 kind, stable type과 initial Mesh를 creation intent에
-기록한다. Ready authority에 대한 message는 SpotId만으로 current owner를 resolve한다. Owner loss 뒤
-reactivation은 authority에 저장한 intent를 사용하며 marker가 없는 Missing call은 새 intent를 만들지
+기록한다. Ready authority에 대한 message는 SpotId만으로 current owner를 resolve한다. 저장한 intent는
+최초 cold activation이 terminal completion을 기록하기 전에 같은 target node·lifecycle에서 재개할 때만
+사용한다. Steady `Ready` owner process 종료나 lease 만료는 `Missing`으로 바꾸거나 다른 node의 cold
+activation으로 복구하지 않고 `Unavailable`로 끝낸다. Marker가 없는 Missing call은 새 intent를 만들지
 않는다. Public activation driver, address, handle, resolver와 unbounded list는 제공하지 않는다. 운영 조회는
 Location runtime의 page size 1..1000, encoded page 4 MiB 이하인 paged query가 소유한다.
 

@@ -3,7 +3,7 @@
 [Reference index](README.en.md)
 
 Completion kinds, capacity/timeout rules, and relocation ordering are exactly the same as
-[Java reference 05. Actor relocation](../../java/reference/05-actor-relocation.ko.md)
+[Java reference 05. Actor relocation](../../java/reference/05-actor-relocation.en.md)
 (Korean-only). What Kotlin adds is a suspending Actor base class, and
 `ZLinkKotlinActorManager`/`ZLinkKotlinActorClient`, which wrap the same fluent state in
 coroutines. The exact signatures are owned by the
@@ -140,5 +140,5 @@ adds no reified helper or overload that omits the policy.
 See the
 [Kotlin Actor exact interface](../../common/spec/server/languages/kotlin/interfaces/actors.en.md)
 and
-[Java reference 05. Actor relocation](../../java/reference/05-actor-relocation.ko.md)
+[Java reference 05. Actor relocation](../../java/reference/05-actor-relocation.en.md)
 (Korean-only) for the full rationale.

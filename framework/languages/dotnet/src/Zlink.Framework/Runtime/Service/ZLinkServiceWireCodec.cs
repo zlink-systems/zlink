@@ -74,7 +74,6 @@ internal static partial class ZLinkServiceWireCodec
     internal readonly record struct AdmissionRecord(
         string MeshName,
         string SecurityIdentity,
-        uint EffectiveMaxMessageBytes,
         string AdvertisedEndpoint,
         ulong LifecycleGeneration,
         ulong DescriptorRevision,
@@ -1478,8 +1477,7 @@ internal static partial class ZLinkServiceWireCodec
         //  것으로 둔다. 기본값 serving을 유지해야 golden fixture가 바이트
         //  동일하게 남는다.
         byte runtimeState = 1,
-        string securityIdentity = "none",
-        uint effectiveMaxMessageBytes = uint.MaxValue)
+        string securityIdentity = "none")
     {
         if (command is not (ServiceWireConstants.Command.Hello
             or ServiceWireConstants.Command.Admit
@@ -1492,14 +1490,11 @@ internal static partial class ZLinkServiceWireCodec
         if (objectRole > (byte)ZLinkMeshNodeObjectRole.Server)
             throw new ArgumentOutOfRangeException(nameof(objectRole));
         ArgumentException.ThrowIfNullOrWhiteSpace(securityIdentity);
-        if (effectiveMaxMessageBytes == 0)
-            throw new ArgumentOutOfRangeException(nameof(effectiveMaxMessageBytes));
         ArgumentNullException.ThrowIfNull(channels);
 
         var body = new WireWriter();
         body.Text8(meshName);
         body.Text8(securityIdentity);
-        body.U32(effectiveMaxMessageBytes);
         body.U64(lifecycleGeneration);
         body.U64(descriptorRevision);
         body.Text16(advertisedEndpoint, requireNonEmpty: true);
@@ -1561,8 +1556,6 @@ internal static partial class ZLinkServiceWireCodec
         }
         if (!reader.TryText8(out var meshName)
             || !reader.TryText8(out var securityIdentity)
-            || !reader.TryU32(out var maxMessageBytes)
-            || maxMessageBytes == 0
             || !reader.TryU64(out var lifecycleGeneration)
             || lifecycleGeneration == 0
             || !reader.TryU64(out var descriptorRevision)
@@ -1617,7 +1610,6 @@ internal static partial class ZLinkServiceWireCodec
         admission = new AdmissionRecord(
             meshName,
             securityIdentity,
-            maxMessageBytes,
             endpoint,
             lifecycleGeneration,
             descriptorRevision,

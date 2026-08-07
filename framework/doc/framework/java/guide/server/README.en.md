@@ -37,6 +37,6 @@ above.
 
 ## Related Documents
 
-- Public contract: [Java public contract](../../../common/spec/server/languages/java/README.ko.md)
-- Language-neutral meaning: [Common spec](../../../common/README.ko.md)
-- Client library: [HTTP client](../http-client/README.ko.md) · [Stream connector](../stream-connector/README.ko.md)
+- Public contract: [Java public contract](../../../common/spec/server/languages/java/README.en.md)
+- Language-neutral meaning: [Common spec](../../../common/README.en.md)
+- Client library: [HTTP client](../http-client/README.en.md) · [Stream connector](../stream-connector/README.en.md)

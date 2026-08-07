@@ -397,6 +397,11 @@ public sealed class StreamContracts
             return this;
         }
 
+        public IZLinkSessionSendCall Timeout(TimeSpan timeout)
+        {
+            return this;
+        }
+
         public ValueTask Async(
             CancellationToken cancellationToken = default) =>
             ValueTask.CompletedTask;

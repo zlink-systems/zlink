@@ -124,6 +124,7 @@ import {
 } from '../../packages/framework/src/contracts';
 import {
   createInternalFrameworkException,
+  internalFrameworkErrorCode,
   ZLinkFrameworkInternalErrorKind,
   internalFrameworkErrorKind
 } from '../../packages/framework/src/runtime/framework-errors-internal';
@@ -1391,6 +1392,78 @@ test('outbound stateful routes use resolved authority generations and never obje
   runtime.close();
 });
 
+test('general Actor messages resolve the current incarnation while exact controls keep generation fences', () => {
+  const raw = {
+    setServiceIngress: () => {}
+  } as unknown as RawServiceMeshRuntime;
+  const runtime = new ServiceStatefulRuntime(raw, 'node-a', 3n);
+  const previous = runtime.createActor('actor-a');
+  runtime.discardRelocatedActor(previous.ref);
+  const current = runtime.createActor('actor-a');
+  const previousFence = {
+    actor: previous.ref,
+    targetNodeGeneration: 3n,
+    authorityOwnerGeneration: previous.authorityOwnerGeneration
+  };
+  const internals = runtime as unknown as {
+    validateActorMessageFence(fence: typeof previousFence): typeof current;
+    validateActorFence(fence: typeof previousFence): typeof current;
+  };
+
+  assert.equal(internals.validateActorMessageFence(previousFence).ref.generation, current.ref.generation);
+  assert.throws(() => internals.validateActorFence(previousFence), ServiceStaleGenerationError);
+  runtime.close();
+});
+
+test('remote Actor request receives CapacityExceeded when mailbox admission fails', () => {
+  let ingress:
+    ((record: import('../../packages/framework/src/runtime/foundation/raw-service-mesh-runtime')
+      .RawServiceIngressRecord) => unknown) | undefined;
+  const replies: Buffer[][] = [];
+  const raw = {
+    mailbox: { tryEnqueue: () => false },
+    topology: {
+      peer: () => ({ descriptor: { lifecycleGeneration: 7n } })
+    },
+    setServiceIngress(handler: typeof ingress) {
+      ingress = handler;
+    },
+    replyService(_record: unknown, parts: readonly Buffer[]) {
+      replies.push([...parts]);
+    }
+  } as unknown as RawServiceMeshRuntime;
+  const runtime = new ServiceStatefulRuntime(raw, 'node-a', 3n);
+  const actor = runtime.createActor('actor-capacity');
+  const payload = encodeApplicationPayload({
+    packetName: 'Blocked',
+    contentType: 'application/octet-stream',
+    payload: Buffer.from('payload')
+  });
+
+  assert.equal(ingress?.({
+    command: M6bServiceWireCommand.actorRequest,
+    flags: 0,
+    sourceRoutingId: 'caller',
+    sourceRoute: Buffer.from('reply-route'),
+    requestSequence: 17n,
+    parts: [
+      encodeActorHeader('actorRequest', {
+        actor: actor.ref,
+        targetNodeGeneration: 3n,
+        authorityOwnerGeneration: actor.authorityOwnerGeneration
+      }, 91n),
+      payload
+    ]
+  }), 'infrastructure');
+  assert.equal(replies.length, 1);
+  assert.deepEqual(decodeStatefulReply(replies[0]![0]!, 91n, 'actorRequest'), {
+    correlation: 91n,
+    terminalResult: RequestResult.Rejected,
+    failureCode: 18
+  });
+  runtime.close();
+});
+
 test('a new Instance incarnation outranks a reset authority owner generation', () => {
   const raw = {
     topology: { peer: () => undefined },
@@ -1983,6 +2056,63 @@ test('Spot Message Follow holds ingress, relays with the committed fence, and re
   }), 'application');
   assert.equal(runtime.abortSpotMessageFollowIngress(abortSeal), true);
   assert.equal(restored.length, 2);
+  runtime.close();
+});
+
+test('Spot Message Follow reports bounded admission exhaustion as CapacityExceeded', () => {
+  let ingress:
+    ((record: import('../../packages/framework/src/runtime/foundation/raw-service-mesh-runtime')
+      .RawServiceIngressRecord) => unknown) | undefined;
+  const replies: Buffer[][] = [];
+  const raw = {
+    setServiceIngress(handler: typeof ingress) {
+      ingress = handler;
+    },
+    replyService(_record: unknown, parts: readonly Buffer[]) {
+      replies.push([...parts]);
+    }
+  } as unknown as RawServiceMeshRuntime;
+  const runtime = new ServiceStatefulRuntime(raw, 'node-a', 3n);
+  runtime.restoreSpotAuthority('room', 'user_spot', 'Room', 5n, 7n);
+  const source = {
+    spot: { spotId: 'room', generation: 5n },
+    targetNodeRid: 'node-a',
+    targetNodeGeneration: 3n,
+    authorityOwnerGeneration: 7n,
+    ownerLeaseGeneration: 3n,
+    storeVersion: 'source-v1'
+  };
+  runtime.rememberSpotRoute(source);
+  assert.ok(runtime.sealSpotMessageFollowIngress(source));
+  const internals = runtime as unknown as {
+    spotMessageFollow: Map<string, { queuedCount: number }>;
+  };
+  const state = [...internals.spotMessageFollow.values()][0];
+  assert.ok(state);
+  state.queuedCount = 1_024;
+  const payload = encodeApplicationPayload({
+    packetName: 'Overflow',
+    contentType: 'application/octet-stream',
+    payload: Buffer.from('payload')
+  });
+
+  assert.equal(ingress?.({
+    command: M6bServiceWireCommand.spotRequest,
+    flags: 0,
+    sourceRoutingId: 'caller',
+    sourceRoute: Buffer.from('reply-route'),
+    requestSequence: 17n,
+    parts: [encodeSpotHeader('spotRequest', 'source-spot', source, 91n), payload]
+  }), 'infrastructure');
+  assert.equal(replies.length, 1);
+  assert.deepEqual(decodeStatefulReply(replies[0]![0]!, 91n, 'spotRequest'), {
+    correlation: 91n,
+    terminalResult: RequestResult.Rejected,
+    failureCode: internalFrameworkErrorCode(createInternalFrameworkException(
+      ZLinkFrameworkInternalErrorKind.WorkerQueueFull,
+      'expected'
+    )) + 1
+  });
   runtime.close();
 });
 
@@ -3398,9 +3528,12 @@ test('Instance application factory initializes before the first recovered handle
 
 test('direct Spot route rematerializes an Instance Spot before dispatch', async () => {
   const events: string[] = [];
+  let handlerCompleted!: () => void;
+  const handled = new Promise<void>(resolve => { handlerCompleted = resolve; });
   class FirstMessageHandler implements ZLinkSpotPacketHandler<ZLinkInstanceSpot, { value: number }> {
     async handle(_spot: ZLinkInstanceSpot, message: { value: number }): Promise<void> {
       events.push(`handle:${message.value}`);
+      handlerCompleted();
     }
   }
   class TenantInstance implements ZLinkInstanceSpot {
@@ -3463,6 +3596,7 @@ test('direct Spot route rematerializes an Instance Spot before dispatch', async 
   } finally {
     for (const part of parts) part.close();
   }
+  await handled;
   assert.deepEqual(events, ['configure', 'initialize', 'handle:8']);
 });
 
@@ -3643,6 +3777,43 @@ test('bound session transition wire format fences the binding generation', () =>
     sessionRid: 'session-a',
     binding: { state: 'tombstone', retiredGeneration: 9n }
   });
+});
+
+test('mailbox saturation reports dropped actor binding control records', () => {
+  let ingress: ((record: RawServiceIngressRecord) => string | undefined) | undefined;
+  const dropped: Array<{ readonly kind: string; readonly owner: string }> = [];
+  const replies: Buffer[][] = [];
+  const raw = {
+    mailbox: { tryEnqueue: () => false },
+    setServiceIngress(handler: typeof ingress) { ingress = handler; },
+    replyService(_record: RawServiceIngressRecord, parts: readonly Buffer[]) {
+      replies.push([...parts]);
+    }
+  } as unknown as RawServiceMeshRuntime;
+  const runtime = new ServiceStatefulRuntime(raw, 'actor-node', 3n);
+  runtime.setMailboxDropHandler((record) => dropped.push(record));
+  const actor = runtime.createActor('actor-control-drop');
+  const header = encodeBoundSessionBindHeader(
+    41n,
+    {
+      actor: actor.ref,
+      targetNodeGeneration: 3n,
+      authorityOwnerGeneration: actor.authorityOwnerGeneration
+    },
+    'session-a',
+    { state: 'active', generation: 9n }
+  );
+
+  assert.equal(ingress?.({
+    command: M6bServiceWireCommand.boundSessionBind,
+    flags: 0,
+    sourceRoutingId: 'session-node',
+    requestSequence: 7n,
+    parts: [header]
+  }), 'infrastructure');
+  assert.deepEqual(dropped, [{ kind: 'actor_binding', owner: actor.ref.actorId }]);
+  assert.equal(replies.length, 1);
+  runtime.close();
 });
 
 test('authority reconciliation exact-reads complete scans and publishes only Ready mesh-local routes', async () => {
@@ -4649,7 +4820,8 @@ test('public SpotId call reaches production host Missing Instance placement with
     meshNames: () => ['mesh'],
     meshNode: () => node,
     completions: () => ({
-      async wait() {
+      async submit(operation: () => { readonly high: bigint; readonly low: bigint }) {
+        operation();
         return {
           terminalResult: 0,
           failureErrno: 0,
@@ -4827,7 +4999,8 @@ test('Missing Instance placement capacity fails without polling or retaining a c
     meshNames: () => ['mesh'],
     meshNode: () => node,
     completions: () => ({
-      async wait() {
+      async submit(operation: () => { readonly high: bigint; readonly low: bigint }) {
+        operation();
         return {
           terminalResult: 0,
           failureErrno: 0,
@@ -4907,7 +5080,8 @@ test('Missing Instance request preserves target-not-found terminal results', asy
     meshNames: () => ['mesh'],
     meshNode: () => node,
     completions: () => ({
-      async wait() {
+      async submit(operation: () => { readonly high: bigint; readonly low: bigint }) {
+        operation();
         return {
           terminalResult: RequestResult.NotFound,
           failureErrno: 21,
@@ -5077,7 +5251,8 @@ test('Instance target-not-found refreshes a Missing authority into one cold acti
     meshNames: () => ['mesh'],
     meshNode: () => node,
     completions: () => ({
-      async wait() {
+      async submit(operation: () => { readonly high: bigint; readonly low: bigint }) {
+        operation();
         return {
           terminalResult: RequestResult.Ok,
           failureErrno: 0,
@@ -5361,7 +5536,8 @@ test('Ready Instance routes use command 39 with the complete authority fence', a
     () => ({
       meshNode: () => node,
       meshCompletionTable: () => ({
-        async wait() {
+        async submit(operation: () => { readonly high: bigint; readonly low: bigint }) {
+          operation();
           return {
             terminalResult: 0,
             failureErrno: 0,
@@ -5434,7 +5610,8 @@ test('stateful request failure codes preserve typed Instance route errors', asyn
       () => ({
         meshNode: () => node,
         meshCompletionTable: () => ({
-          async wait() {
+          async submit(operation: () => { readonly high: bigint; readonly low: bigint }) {
+            operation();
             return {
               terminalResult: RequestResult.Conflict,
               failureErrno: failureCode,

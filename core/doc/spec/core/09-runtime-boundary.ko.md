@@ -2,7 +2,7 @@
 title: "Core runtime 경계"
 ---
 
-[English](09-runtime-boundary.en.md) | 한국어
+[English](https://zlink-systems.github.io/zlink/spec/core/09-runtime-boundary/) | 한국어
 
 <!-- zlink-nav:start -->
 [Core 스펙 목차](README.ko.md) | [이전: Utilities](08-utilities.ko.md) | [다음: 소켓 개요](socket/README.ko.md)

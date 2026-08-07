@@ -100,7 +100,6 @@ export interface ZLinkMeshChannelServerBuilder {
 }
 
 export interface ZLinkMeshNodeSocketConfig {
-  maxMessageSize: number;
   sendHighWaterMark: number;
   receiveHighWaterMark: number;
   mailboxMessageBudget: number;

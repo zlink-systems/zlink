@@ -128,14 +128,15 @@ public sealed partial class RegressionTests
         Assert.Contains("/self-check/workflow/inventory-reserved", commerceApi, StringComparison.Ordinal);
         Assert.DoesNotContain("/self-check/workflow/inventory-reserved", workflowHostFactory,
             StringComparison.Ordinal);
-        Assert.Contains("/self-check/workflow/{orderId}/continue", commerceApi, StringComparison.Ordinal);
+        Assert.Contains("/orders/{orderId}/continue", commerceApi, StringComparison.Ordinal);
+        Assert.Contains("/orders/{orderId}/rebuild", commerceApi, StringComparison.Ordinal);
         Assert.Contains("PrepareInventoryReservedOrderUseCase", commerceApi, StringComparison.Ordinal);
         Assert.Contains("IOrderWorkflowRouter", commerceWorkflowPorts, StringComparison.Ordinal);
         Assert.Contains("PrepareInventoryReservedCheckpointReq", commerceWorkflowRouter, StringComparison.Ordinal);
         Assert.DoesNotContain("ZLinkHttpClient", commerceWorkflowRouter, StringComparison.Ordinal);
         Assert.DoesNotContain("var cart = await commerce.GetCartAsync", commerceApi, StringComparison.Ordinal);
         Assert.DoesNotContain("ReserveIdempotencyAsync", commerceApi, StringComparison.Ordinal);
-        Assert.Contains("evidence.StartedIdempotencyCount == 7", commerceApi, StringComparison.Ordinal);
+        Assert.Contains("evidence.StartedIdempotencyCount == 8", commerceApi, StringComparison.Ordinal);
         Assert.DoesNotContain("ForOrderId", commerceApi, StringComparison.Ordinal);
         Assert.DoesNotContain("ownersDiffer", commerceApi, StringComparison.Ordinal);
         Assert.DoesNotContain("OwnerInstanceId", clientScenario, StringComparison.Ordinal);
@@ -145,8 +146,13 @@ public sealed partial class RegressionTests
         Assert.Contains("record StartOrderRes", messages, StringComparison.Ordinal);
         Assert.Contains("public sealed record StartOrderRes(\n    string OrderId,\n    OrderState State);",
             messages, StringComparison.Ordinal);
+        Assert.Contains("string SourceCommandId,", messages, StringComparison.Ordinal);
+        Assert.Contains("public sealed record ContinueOrderWorkflowReq(\n    string OrderId,\n    string SourceCommandId);",
+            messages, StringComparison.Ordinal);
+        Assert.Contains("public sealed record RebuildOrderProjectionReq(\n    string OrderId,\n    string SourceCommandId);",
+            messages, StringComparison.Ordinal);
         Assert.Contains("internal sealed record ServerAssertionReq", commerceApi, StringComparison.Ordinal);
-        Assert.Contains("internal sealed record ServerAssertionReq", clientScenario, StringComparison.Ordinal);
+        Assert.DoesNotContain("ServerAssertionReq", clientScenario, StringComparison.Ordinal);
         Assert.DoesNotContain("StartOrderWorkflowToInventoryReq", messages, StringComparison.Ordinal);
         Assert.DoesNotContain("StartOrderWorkflowToInventoryRes", messages, StringComparison.Ordinal);
         Assert.DoesNotContain("StartOrderWorkflowToInventoryRouteHandler", commerceWorkflowRouter,
@@ -178,17 +184,13 @@ public sealed partial class RegressionTests
         Assert.Contains("Task.WhenAll(concurrentA, concurrentB)", clientScenario, StringComparison.Ordinal);
         Assert.Contains("concurrentAResult.OrderId == concurrentBResult.OrderId", clientScenario,
             StringComparison.Ordinal);
-        Assert.Contains("/self-check/workflow/inventory-reserved", clientScenario, StringComparison.Ordinal);
-        Assert.Contains($"/self-check/workflow/{{inventoryReserved.OrderId}}/continue", clientScenario,
-            StringComparison.Ordinal);
-        Assert.Contains("resumed.State.ReservationId == $\"reservation-{inventoryReserved.OrderId}\"",
+        Assert.Contains("/orders/order-resume-001/continue", clientScenario, StringComparison.Ordinal);
+        Assert.Contains("resumed.State.ReservationId == \"reservation-order-resume-001\"",
             clientScenario, StringComparison.Ordinal);
-        Assert.Contains("resumed.State.PaymentId == $\"payment-{inventoryReserved.OrderId}\"",
+        Assert.Contains("resumed.State.PaymentId == \"payment-order-resume-001\"",
             clientScenario, StringComparison.Ordinal);
-        Assert.Contains($"/self-check/workflow/{{success.OrderId}}/continue", clientScenario,
-            StringComparison.Ordinal);
-        Assert.Contains("healedByContinue.State.Status == OrderStatuses.Confirmed", clientScenario,
-            StringComparison.Ordinal);
+        Assert.Contains("/orders/order-repair-001/rebuild", clientScenario, StringComparison.Ordinal);
+        Assert.DoesNotContain("/self-check/", clientScenario, StringComparison.Ordinal);
         Assert.Contains("OrderStatuses.InventoryReserved", clientScenario, StringComparison.Ordinal);
         Assert.Contains("OrderStatuses.PaymentAuthorized", clientScenario, StringComparison.Ordinal);
         Assert.Contains("SaveProjectionFromEventsAsync(stored, cancellationToken)", workflowService,
@@ -199,7 +201,7 @@ public sealed partial class RegressionTests
         Assert.Contains("ContinueWorkflowInBackgroundAsync", workflowService, StringComparison.Ordinal);
         Assert.Contains("catch (OrderStreamVersionConflictException)", workflowService, StringComparison.Ordinal);
         Assert.Contains("throw new OrderStreamVersionConflictException", stores, StringComparison.Ordinal);
-        Assert.Contains("if (aggregate.HasProcessedMsg(command.IdempotencyKey))", workflowService,
+        Assert.Contains("if (aggregate.HasProcessedSourceCommand(command.SourceCommandId))", workflowService,
             StringComparison.Ordinal);
         Assert.Contains("await commerce.MarkIdempotencyStartedAsync(command.IdempotencyKey, cancellationToken);",
             workflowService, StringComparison.Ordinal);
@@ -232,7 +234,7 @@ public sealed partial class RegressionTests
         Assert.Contains("외부 Redis endpoint 재사용 mode는 제공하지 않는다", readme, StringComparison.Ordinal);
         Assert.Contains("동시에 실행되는 다른 테스트와 섞이지 않는다", readme, StringComparison.Ordinal);
         Assert.Contains("같은 멱등 키의 동시 시작 경쟁", readme, StringComparison.Ordinal);
-        Assert.Contains("`InventoryReserved` 이후 명시 재개", readme, StringComparison.Ordinal);
+        Assert.Contains("`InventoryReserved` 이후 public resume", readme, StringComparison.Ordinal);
     }
 
     [Fact]

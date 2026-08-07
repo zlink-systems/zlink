@@ -243,35 +243,12 @@ Raw route는 `request_type`, `reply_type` alias를 요구하지 않는다. raw r
 ## 4. Route Builder
 
 지원 범위는 typed JSON route와 raw HTTP route다. `GET`, `POST`, `PUT`, `DELETE`를 같은
-규칙으로 등록할 수 있어야 한다.
+규칙으로 등록할 수 있어야 한다. `http_options_builder_t`의 exact declaration은
+[C++ configuration과 host interface](interfaces/02-configuration-host.ko.md#41-http-hosting)가
+단독으로 소유한다. 이 절은 route builder의 사용 의미와 HTTP request/response 계약을 정의한다.
 
 ```cpp
 namespace zlink::framework {
-
-class http_options_builder_t {
-public:
-    http_options_builder_t &listen(std::string endpoint);
-    http_options_builder_t &configure_tls(
-      std::function<void(http_tls_options_builder_t &)> configure);
-    http_options_builder_t &configure_server(
-      std::function<void(http_server_options_builder_t &)> configure);
-
-    template <typename THandler>
-    http_options_builder_t &map_get(std::string path);
-    template <typename THandler>
-    http_options_builder_t &map_post(std::string path);
-    template <typename THandler>
-    http_options_builder_t &map_put(std::string path);
-    template <typename THandler>
-    http_options_builder_t &map_delete(std::string path);
-
-    template <typename TMiddleware>
-    http_options_builder_t &use();
-
-    http_options_builder_t &map_health(std::string path);
-    http_options_builder_t &map_readiness(std::string path);
-    http_options_builder_t &map_liveness(std::string path);
-};
 
 struct http_context_t {
     http_method_t method;

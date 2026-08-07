@@ -159,6 +159,7 @@ edge이고, Framework object message의 RouteMesh topology와 분리한다.
 | Resource | 소유 책임 | topology에서의 표현 |
 |---|---|---|
 | `Location Store` | Mesh capability, Instance authority, owner와 generation | 공유 Framework resource. Workflow owner를 caller가 고르지 않게 한다. |
+| `Relocation Store` | 최초 Instance activation envelope와 planned relocation operation record | Location Store와 분리한 provider·key prefix를 사용한다. 같은 Redis deployment를 사용할 수 있지만 keyspace는 공유하지 않는다. |
 | `OrderEventStore` | `OrderId`별 event stream, version과 replay | Workflow가 사용하는 durable Application resource |
 | `OrderReadModelStore` | 현재 주문 조회 모델 | event replay로 재생성할 수 있는 파생 resource |
 | `CommerceStateStore` | cart snapshot, idempotency mapping, 재고·결제 결과 | API와 Workflow가 공유하는 Application resource |
@@ -180,6 +181,11 @@ diagram은 §2.3에 둘 수 있지만, sample의 기본 topology에는 Client와
 | `OrderReadModelStore` | shared resource | Client 상태 조회와 projection rebuild 결과 | event stream에서 다시 만들 수 있는 파생 상태다. |
 | `CommerceStateStore` | shared resource | cart snapshot, idempotency mapping, reservation·payment 결과 | external effect의 결정적 ID와 최초 결과를 저장한다. |
 | Inventory / Payment module | seeded module | 예약·해제와 결제 승인 결과 제공 | 같은 결정적 ID 재요청에 최초 결과를 반환해야 한다. |
+
+`OrderWorkflowSpot` factory는 `RecreateOnRelocation`을 선택한다. Application state를 relocation
+payload로 복제하지 않고 target에서 `OrderEventStore`를 replay해 aggregate를 다시 구성한다. Queue,
+accepted journal과 owner fence는 Framework가 보존하며 event stream에 Framework 내부 상태를 기록하지
+않는다.
 
 `OrderWorkflowSpot`은 주문 하나의 state transition을 소유하지만, 외부 module과 store가 제공하는
 결과까지 Framework가 보장한다는 뜻은 아니다. `CommerceApi`는 `OrderId`, `NodeRid` 또는 endpoint로
@@ -554,7 +560,7 @@ sequenceDiagram
     participant State as Commerce State
     participant Workflow as OrderWorkflow / Order Spot
     participant Events as Order Event Store
-    participant Inventory
+    participant Payment
 
     par Concurrent start with the same key
         ClientA->>APIA: StartOrderReq(same IdempotencyKey)
@@ -574,9 +580,9 @@ sequenceDiagram
     Note over Workflow,Events: Recovery replays the stream before choosing the next step
     Workflow->>Events: Replay OrderId stream
     Events-->>Workflow: InventoryReserved state
-    Workflow->>Inventory: ReserveInventoryReq(same ReservationId)
-    Inventory-->>Workflow: First reservation result
-    Workflow->>Events: Append next event with expected version
+    Workflow->>Payment: AuthorizePaymentReq(existing PaymentId)
+    Payment-->>Workflow: Authorization result
+    Workflow->>Events: Append Payment event with expected version
 ```
 
 동시 시작에서는 `CommerceStateStore`의 mapping reservation에서 먼저 성공한 요청이 `OrderId`를
@@ -588,6 +594,18 @@ stream에 있으면 Workflow는 event를 다시 기록하지 않고 fold 결과�
 module은 같은 `ReservationId` 또는 `PaymentId`에 최초 결과를 반환하고, event 기록은 expected
 version을 확인한다. 이 규칙은 명시적 `ContinueOrderWorkflowReq`와 planned relocation 뒤 재개에
 적용된다.
+
+#### Planned relocation fixture
+
+Runner는 `InventoryReservedEvent`가 expected version으로 기록된 직후 background continuation을
+gate에서 정지한다. Source host에 public planned relocation operation을 실행하고 target owner가 같은
+`OrderId`와 `ObjectGeneration`으로 Ready가 된 뒤 gate를 해제한다. Target은 event stream을 replay해
+`InventoryReserved`를 확인하고 `AuthorizePaymentReq`부터 진행한다.
+
+Server-side evidence는 relocation 전후 `ObjectGeneration`, owner identity, factory 실행과 external
+module call을 기록한다. Assertion은 `ReserveInventoryReq`가 한 번뿐이고 기존 `ReservationId`가
+유지되며, target에서 `AuthorizePaymentReq`가 시작되는지 확인한다. 최종 event 순서와 projection은
+relocation이 없는 성공 분기와 같아야 한다. 이 흐름은 crash failover나 owner-loss recovery가 아니다.
 
 ### 7.4 조회와 projection 재생성
 
@@ -697,7 +715,7 @@ ShoppingMall
 | Logical component | 모든 언어에서 유지할 책임 |
 |---|---|
 | `Client/Program` | 설정을 읽고 client scenario 실행 진입점을 구성한다. |
-| `Client/Scenario` | Start, polling, duplicate, failure, rebuild와 resume assertion 순서를 소유한다. |
+| `Client/Scenario` | public order API의 Start, polling, duplicate, failure, rebuild와 resume assertion 순서를 소유한다. runner-only fixture와 server evidence hook은 Client path 밖에 둔다. |
 | `Shared/JSON Contracts` | 같은 message 이름, field, optional 값과 status를 소유한다. |
 | `Server/CommerceApi` | 입력 검증, idempotency mapping, workflow request와 read model query를 소유한다. |
 | `Server/OrderWorkflow/Domain` | 상태 전이, event 생성, 보상 규칙과 deterministic ID 계산을 소유한다. |
@@ -717,9 +735,11 @@ builder로 같은 handler 집합을 명시 등록한다. 이 차이는 등록 �
 
 ## 9. Client self-check
 
-Runner는 server readiness를 확인한 뒤 Client scenario를 한 번 실행한다. 고정 sleep이나 log 문자열을
-성공 기준으로 사용하지 않고 response, read model, event stream과 external effect의 관찰 가능한 결과를
-assertion으로 확인한다.
+Runner는 server readiness를 확인한 뒤 Client scenario를 한 번 실행한다. Client가 호출하는 endpoint는
+CommerceApi의 public order API로 제한한다. pending mapping, 중단 fixture 준비와 server evidence 확인에
+필요한 runner-only hook은 Client process code path 밖에서만 호출한다. 고정 sleep이나 log 문자열을
+성공 기준으로 사용하지 않고 public response와 read model의 관찰 가능한 결과를 Client assertion으로
+확인하며, event stream과 external effect는 runner observation hook에서 별도로 확인한다.
 
 ### 9.1 정상·실패 결과
 
@@ -737,24 +757,28 @@ assertion으로 확인한다.
 
 6. 같은 `IdempotencyKey`를 두 API process에 동시에 보내 두 응답의 `OrderId`가 같고
    `OrderStartedEvent`가 한 번만 기록되는지 확인한다.
-7. background continuation이 `InventoryReserved`에서 중단된 fixture를 만든 뒤
-   `ContinueOrderWorkflowReq`를 보내 결제부터 재개되는지 확인한다.
-8. 종료 event 기록 뒤 projection update를 중단한 fixture에서 재개 명령이 read model을 terminal fold와
-   일치시키는지 확인한다.
-9. `OrderReadModelStore`의 한 주문 projection을 삭제한 뒤 `RebuildOrderProjectionReq`로 stream만
-   재생해 같은 `OrderState`를 만드는지 확인한다.
+7. Runner가 background continuation이 `InventoryReserved`에서 중단된 fixture를 준비한 뒤
+   Client가 public `ContinueOrderWorkflowReq` endpoint를 호출해 결제부터 재개되는지 확인한다.
+8. Runner가 종료 event 기록 뒤 projection update를 중단한 fixture를 준비한 뒤 Client가 public
+   continue endpoint를 호출해 read model이 terminal fold와 일치하는지 확인한다.
+9. Runner가 `OrderReadModelStore`의 한 주문 projection을 삭제한 뒤 Client가 public
+   `RebuildOrderProjectionReq` endpoint를 호출해 stream만 재생하고 같은 `OrderState`를 만드는지
+   확인한다.
 10. 종료 또는 idle 조건 뒤 valid command가 같은 `OrderId`의 새 generation을 활성화할 수 있는지
     확인한다. 이 경우는 explicit close가 authority release까지 완료된 뒤에만 수행한다.
+11. `InventoryReservedEvent` 직후 continuation을 정지하고 planned relocation을 실행한다. 같은
+    `ObjectGeneration`의 target owner가 stream을 replay한 뒤 `AuthorizePaymentReq`부터 진행하는지,
+    `ReserveInventoryReq`가 반복되지 않는지 확인한다.
 
 ### 9.3 routing과 failure 경계
 
-11. `CommerceApi x2`와 `OrderWorkflow x2`에서 서로 다른 주문을 동시에 처리하고, 어느 API에서
+12. `CommerceApi x2`와 `OrderWorkflow x2`에서 서로 다른 주문을 동시에 처리하고, 어느 API에서
     조회해도 각 주문의 state와 event stream이 같은지 확인한다.
-12. 이미 Ready인 owner process를 종료한 뒤 같은 주문 command가 다른 node에서 자동으로 생성되지 않고
+13. 이미 Ready인 owner process를 종료한 뒤 같은 주문 command가 다른 node에서 자동으로 생성되지 않고
     `Unavailable`로 끝나는지 확인한다.
-13. runtime Instance와 event stream이 모두 없는 `OrderId`에 continue 또는 rebuild를 보내 빈 주문과
+14. runtime Instance와 event stream이 모두 없는 `OrderId`에 continue 또는 rebuild를 보내 빈 주문과
     `OrderStartedEvent`가 생성되지 않는지 확인한다.
-14. caller 설정, message field와 reservation에 owner `NodeRid`, physical endpoint 또는 fixed node
+15. caller 설정, message field와 reservation에 owner `NodeRid`, physical endpoint 또는 fixed node
     선택이 들어 있지 않은지 확인한다.
 
 재고·결제 seed는 `CommerceStateStore`에 runner가 넣는다. 성공 seed, 재고 부족 seed와 결제 거절
@@ -767,17 +791,19 @@ seed는 서로 다른 test data를 사용하고, 같은 `ReservationId`·`Paymen
 소유하며, 업무 결과와 실행 순서는 이 공통 sample이 소유한다.
 
 1. `CommerceApi`와 `OrderWorkflow` package를 build한다.
-2. `Location Store`, `OrderEventStore`, `OrderReadModelStore`와 `CommerceStateStore`의 test instance를
+2. `Location Store`, `Relocation Store`, `OrderEventStore`, `OrderReadModelStore`와 `CommerceStateStore`의 test instance를
    시작하고 seed data를 준비한다.
 3. `CommerceApi` 두 process와 `OrderWorkflow` 두 process를 시작한다.
 4. public readiness가 HTTP edge와 RouteMesh object capability를 확인할 때까지 bounded wait를 수행한다.
-5. Client self-check를 실행하고 response, state, event와 external effect evidence를 저장한다.
+5. Client self-check를 실행하고 public response와 state assertion을 저장한다. Runner-only observation
+   hook으로 event와 external effect evidence를 별도로 수집한다.
 6. 모든 assertion이 통과하면 `shoppingmall=completed`와 runner placement marker를 출력한다.
 7. 실패 시 성공 marker를 출력하지 않고, 원인과 마지막 확인 상태를 남긴다.
 
 Smoke runner는 server internal endpoint, store direct query와 test-only adapter를 Client path에 넣지
-않는다. Server-side evidence가 필요한 경우 runner의 관찰 hook에서 수집하지만, Client assertion을
-대신하지 않는다.
+않는다. Fixture 준비와 server-side evidence가 필요한 경우에만 runner가 해당 self-check hook을
+호출하며, 이 호출은 Client process code path가 아니다. Runner observation은 public response와
+state에 대한 Client assertion을 대신하지 않는다.
 
 ## 11. 완료 기준
 
@@ -791,7 +817,9 @@ Smoke runner는 server internal endpoint, store direct query와 test-only adapte
 - [ ] 정상 시작, 실패·보상, duplicate·resume, projection rebuild와 lifecycle 경계가 sequence 또는
       산문으로 설명되어 있다.
 - [ ] `Missing` cold activation과 `Ready` owner 장애의 `Unavailable` 결과를 구분한다.
+- [ ] planned relocation이 같은 `ObjectGeneration`을 유지하고 event replay 뒤 다음 단계부터 진행하며 이미 완료한 외부 효과를 반복하지 않는다.
 - [ ] 모든 지원 언어에서 같은 logical component와 JSON field 의미를 찾을 수 있다.
-- [ ] Client self-check가 response, state, event, external effect와 금지 결과를 직접 확인한다.
+- [ ] Client self-check가 public response와 state, 금지 결과를 직접 확인하고 runner observation hook가
+      event와 external effect를 별도로 확인한다.
 - [ ] sample code가 public Framework API와 기본 typed JSON codec만 사용한다.
 - [ ] smoke 실행이 readiness를 bounded wait로 확인하고 성공 marker를 조건부로 출력한다.

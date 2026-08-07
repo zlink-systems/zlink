@@ -1,4 +1,4 @@
-[한국어](05-xsub.ko.md) | English
+[한국어](https://zlink-systems.github.io/zlink/ko/spec/core/socket/05-xsub/) | English
 
 [Spec Index](../../README.en.md) · [Core Index](../README.en.md) · [Socket Common](README.en.md)
 

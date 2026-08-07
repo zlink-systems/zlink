@@ -1,6 +1,10 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { ZLinkConfigurationException } from '../configuration';
 import { isAbortError } from '../abort';
+import {
+  ZLinkFrameworkInternalErrorKind,
+  createInternalFrameworkException
+} from '../framework-errors-internal';
 
 export interface ZLinkRuntimeTaskFailure {
   readonly taskName: string;
@@ -20,6 +24,30 @@ interface ZLinkSpotSerialExecutorLike {
 
 const spotSerialTurnStorage = new AsyncLocalStorage<ZLinkSpotSerialTurnContext>();
 
+export type ZLinkExecutionArea = 'application' | 'infrastructure';
+
+const executionAreaStorage = new AsyncLocalStorage<ZLinkExecutionArea>();
+
+export function runZLinkExecutionArea<T>(
+  area: ZLinkExecutionArea,
+  operation: () => T
+): T {
+  return executionAreaStorage.run(area, operation);
+}
+
+export function currentZLinkExecutionArea(): ZLinkExecutionArea | undefined {
+  return executionAreaStorage.getStore();
+}
+
+export function requireZLinkInfrastructureExecutionArea(): void {
+  if (currentZLinkExecutionArea() !== 'infrastructure') {
+    throw createInternalFrameworkException(
+      ZLinkFrameworkInternalErrorKind.InvalidOperation,
+      'Infrastructure-only work requires the infrastructure execution area.'
+    );
+  }
+}
+
 export class ZLinkSpotSerialTurn {
   private suspendedResolve: (() => void) | undefined;
   private suspendedPromise: Promise<void> | undefined;
@@ -33,8 +61,21 @@ export class ZLinkSpotSerialTurn {
       resume: () => void,
       reject: (reason: unknown) => void
     ) => boolean,
+    private executionClaim: ZLinkExecutionBarrierClaim | undefined,
     readonly yieldAllowed: boolean
   ) {}
+
+  bindExecutionClaim(claim: ZLinkExecutionBarrierClaim | undefined): void {
+    if (this.executionClaim !== undefined) {
+      throw new Error('ZLink Spot serial turn already owns an execution claim.');
+    }
+    this.executionClaim = claim;
+  }
+
+  releaseBoundExecutionClaim(): void {
+    this.executionClaim?.release();
+    this.executionClaim = undefined;
+  }
 
   get suspended(): Promise<void> {
     if (this.suspendSignaled) {
@@ -96,6 +137,7 @@ export class ZLinkSpotSerialTurn {
       return;
     }
     this.suspendSignaled = true;
+    this.releaseBoundExecutionClaim();
     this.suspendedResolve?.();
   }
 
@@ -114,9 +156,12 @@ export function runZLinkSpotSerialTurn<T>(
   turn: ZLinkSpotSerialTurn,
   operation: () => Promise<T> | T
 ): Promise<T> {
-  return spotSerialTurnStorage.run(
-    { executor, turnId, turn },
-    async () => operation()
+  return runZLinkExecutionArea(
+    'application',
+    () => spotSerialTurnStorage.run(
+      { executor, turnId, turn },
+      async () => operation()
+    )
   );
 }
 
@@ -202,6 +247,18 @@ export class ZLinkExecutionBarrier {
       return await new Promise<ZLinkExecutionBarrierClaim>((resolve, reject) => {
         this.admissionWaiters.push({ resolve, reject });
       });
+    }
+    return this.createClaim();
+  }
+
+  /**
+   * Re-enters a previously yielded application turn only while admission is
+   * open. A continuation must fail instead of waiting behind a relocation
+   * seal that already won the turn-boundary race.
+   */
+  tryEnter(): ZLinkExecutionBarrierClaim | undefined {
+    if (this.committed || this.currentSeal !== undefined) {
+      return undefined;
     }
     return this.createClaim();
   }

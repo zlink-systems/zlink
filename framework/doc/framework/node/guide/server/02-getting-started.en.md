@@ -38,16 +38,16 @@ Packages to add when you need them:
 
 | Package | When to add it |
 | --- | --- |
-| `@zlink-systems/framework-locations-redis` | When using the Redis location store for auto-connect ([10-location](10-location.ko.md)) |
-| `@zlink-systems/framework-codec-protobuf` · `-codec-msgpack` | To use instead of the default JSON codec ([05-channel-messaging §7](05-channel-messaging.ko.md#7-직렬화-codec)) |
-| `@zlink-systems/stream-connector` | When building an external client (a game client, mobile) ([09-stream](09-stream.ko.md)) |
-| `@zlink-systems/http-client` | When the server calls out over HTTP ([HTTP Client guide](../http-client/README.ko.md)) |
+| `@zlink-systems/framework-locations-redis` | When using the Redis location store for auto-connect ([10-location](10-location.en.md)) |
+| `@zlink-systems/framework-codec-protobuf` · `-codec-msgpack` | To use instead of the default JSON codec ([05-channel-messaging §7](05-channel-messaging.en.md#7-serialization-codec)) |
+| `@zlink-systems/stream-connector` | When building an external client (a game client, mobile) ([09-stream](09-stream.en.md)) |
+| `@zlink-systems/http-client` | When the server calls out over HTTP ([HTTP Client guide](../http-client/README.en.md)) |
 
 Node.js 20 or later is required.
 
 The license differs by layer — core/binding is MPL-2.0, framework is FSL-1.1-ALv2, and
 `@zlink-systems/http-client` is Apache-2.0. There's no cost to building and selling a
-service ([17-alternative §7](17-alternative.ko.md#7-라이선스--쓰는-데-드는-비용)).
+service ([17-alternative §7](17-alternative.en.md#7-license--the-cost-of-using-it)).
 
 ## 2. A Minimal Example — Two Processes Calling Each Other
 
@@ -130,7 +130,7 @@ Three things are confirmed here — the package is wired up, the two processes a
 through the mesh, and the call was routed by logical name (`greeting`) alone. This example
 has no Redis and no location store. For the calling code to stay the same as servers scale
 up and down, you need auto-connect, which is covered by
-[10-location](10-location.ko.md).
+[10-location](10-location.en.md).
 
 ## 3. TicTacToe — The Flow Of Creating One Room
 

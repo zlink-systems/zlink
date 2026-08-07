@@ -778,23 +778,28 @@ internal sealed class ZLinkActorMessageFollower
         ZLinkActorMessageFollower owner,
         MessageFollowKey key)
     {
-        private readonly System.Collections.Concurrent.ConcurrentQueue<MessageFollowFrame> _frames = new();
         private readonly object _lifecycleGate = new();
-        private int _draining;
+        private readonly ZLinkSerialExecutionQueue _queue =
+            new(
+                new ZLinkRuntimeTaskRunner(
+                    owner._runtime.ErrorSink,
+                    owner._runtime.ShutdownToken,
+                    owner._runtime.ExecutionOwner),
+                owner._runtime.ErrorSink,
+                owner._runtime.ShutdownToken,
+                RouteMessageCapacity,
+                RouteByteCapacity);
         private bool _retired;
-        private int _count;
-        private long _bytes;
+        private bool _retirementScheduled;
 
         internal uint SnapshotQueuedMessages()
         {
-            lock (_lifecycleGate)
-                return checked((uint)_count);
+            return checked((uint)_queue.ApplicationPendingCount);
         }
 
         internal uint SnapshotQueuedBytes()
         {
-            lock (_lifecycleGate)
-                return checked((uint)_bytes);
+            return checked((uint)_queue.ApplicationPendingRetainedBytes);
         }
 
         public bool TryEnqueue(MessageFollowFrame frame)
@@ -802,89 +807,49 @@ internal sealed class ZLinkActorMessageFollower
             lock (_lifecycleGate)
             {
                 if (_retired) return false;
-                if (_count >= RouteMessageCapacity
-                    || frame.EncodedSize > RouteByteCapacity - _bytes)
+                var admission = _queue.TryPostApplicationWithAdmission(
+                    frame.EncodedSize,
+                    cancellationToken => owner.FollowAsync(
+                        this,
+                        frame,
+                        cancellationToken),
+                    out _);
+                if (admission == ZLinkSerialPostAdmission.Accepted)
+                {
+                    if (!_retirementScheduled)
+                    {
+                        _retirementScheduled = true;
+                        _ = RetireWhenDrainedAsync();
+                    }
+                    return true;
+                }
+                if (admission == ZLinkSerialPostAdmission.QueueFull)
                     throw new ZLinkFrameworkException(
                         ZLinkFrameworkErrorKind.Unavailable,
                         $"Actor ref '{key.ActorId}' could not use Message Follow because "
                         + "its Message Follow route reached the 1,024 message or 16 MiB bound.");
-                _count++;
-                _bytes += frame.EncodedSize;
-                _frames.Enqueue(frame);
-                StartDrain();
-                return true;
-            }
-        }
-
-        private void StartDrain()
-        {
-            if (Interlocked.CompareExchange(ref _draining, 1, 0) != 0) return;
-            if (!owner._runtime.TryRunDetached(
-                    "actor-message-follow",
-                    DrainAsync))
-            {
-                while (_frames.TryDequeue(out var frame))
-                {
-                    ReleaseRouteAdmission(frame);
-                    frame.Complete(false);
-                    frame.ReleaseAdmission();
-                }
                 _retired = true;
-                Interlocked.Exchange(ref _draining, 0);
-                owner._queues.TryRemove(
-                    new KeyValuePair<MessageFollowKey, ActorQueue>(key, this));
+                return false;
             }
         }
 
-        private async ValueTask DrainAsync(CancellationToken cancellationToken)
+        private async Task RetireWhenDrainedAsync()
         {
-            try
+            while (true)
             {
-                while (_frames.TryDequeue(out var frame))
-                {
-                    try
-                    {
-                        await owner.FollowAsync(this, frame, cancellationToken)
-                            .ConfigureAwait(false);
-                    }
-                    finally
-                    {
-                        ReleaseRouteAdmission(frame);
-                    }
-                }
-            }
-            finally
-            {
+                await _queue.ApplicationDrained.ConfigureAwait(false);
                 lock (_lifecycleGate)
                 {
-                    Interlocked.Exchange(ref _draining, 0);
-                    if (_frames.IsEmpty || cancellationToken.IsCancellationRequested)
-                    {
-                        while (_frames.TryDequeue(out var frame))
-                        {
-                            ReleaseRouteAdmission(frame);
-                            frame.Complete(false);
-                            frame.ReleaseAdmission();
-                        }
-                        _retired = true;
-                        owner._queues.TryRemove(
-                            new KeyValuePair<MessageFollowKey, ActorQueue>(key, this));
-                    }
-                    else
-                    {
-                        StartDrain();
-                    }
+                    if (_retired) return;
+                    if (_queue.ApplicationPendingCount != 0)
+                        continue;
+                    _retired = true;
+                    owner._queues.TryRemove(
+                        new KeyValuePair<MessageFollowKey, ActorQueue>(key, this));
+                    break;
                 }
             }
-        }
-
-        private void ReleaseRouteAdmission(MessageFollowFrame frame)
-        {
-            lock (_lifecycleGate)
-            {
-                _count--;
-                _bytes -= frame.EncodedSize;
-            }
+            await _queue.DisposeAsync().ConfigureAwait(false);
         }
     }
 

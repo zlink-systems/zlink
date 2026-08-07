@@ -257,7 +257,6 @@ export function encodeRouteMeshAdmission(
   const routeParts: Buffer[] = [
     encodeText8(descriptor.meshName, 'meshName'),
     encodeText8(descriptor.securityIdentity, 'securityIdentity'),
-    encodeU32(descriptor.effectiveMaxMessageBytes),
     encodeU64(descriptor.lifecycleGeneration),
     encodeU64(descriptor.descriptorRevision),
     encodeText16(descriptor.advertisedEndpoint, 'advertisedEndpoint'),
@@ -278,7 +277,10 @@ export function encodeRouteMeshAdmission(
     tlv(9, encodeU32(descriptor.activeCapacityLimit)),
     tlv(10, encodeU32(descriptor.pendingCapacityLimit)),
     tlv(11, encodeU32(descriptor.activeCapacityUsed)),
-    tlv(12, encodeU32(descriptor.pendingCapacityUsed))
+    tlv(12, encodeU32(descriptor.pendingCapacityUsed)),
+    ...(descriptor.maintenanceWave === undefined
+      ? []
+      : [tlv(13, encodeText8(descriptor.maintenanceWave, 'maintenanceWave'))])
   );
   const route = concat(...routeParts, encodeU32(extension.byteLength), extension);
   return concat(prefix(command), Buffer.of(1), encodeU32(route.byteLength), route);
@@ -298,7 +300,6 @@ export function decodeRouteMeshAdmission(
   if (routeLength !== reader.remaining) fail('RouteMesh admission length mismatch.');
   const meshName = reader.text8('meshName');
   const securityIdentity = reader.text8('securityIdentity');
-  const effectiveMaxMessageBytes = reader.u32('effectiveMaxMessageBytes');
   const lifecycleGeneration = reader.nonZeroU64('lifecycleGeneration');
   const descriptorRevision = reader.nonZeroU64('descriptorRevision');
   const advertisedEndpoint = reader.text16('advertisedEndpoint');
@@ -315,6 +316,7 @@ export function decodeRouteMeshAdmission(
   let applicationVersion: bigint | undefined;
   let protocolCapabilities: string[] | undefined;
   let objectRole: ServiceObjectRole | undefined;
+  let maintenanceWave: string | undefined;
   const capacities = new Map<number, number>();
   let previousId = 0;
   while (reader.offset < extensionEnd) {
@@ -348,6 +350,9 @@ export function decodeRouteMeshAdmission(
       case 12:
         capacities.set(id, value.u32('capacity'));
         break;
+      case 13:
+        maintenanceWave = value.text8('maintenanceWave');
+        break;
       default:
         value.skipRemaining();
         break;
@@ -373,8 +378,8 @@ export function decodeRouteMeshAdmission(
     channels,
     state,
     securityIdentity,
-    effectiveMaxMessageBytes,
     applicationVersion,
+    ...(maintenanceWave === undefined ? {} : { maintenanceWave }),
     protocolCapabilities,
     objectRole,
     placementWeight: capacities.get(8)!,

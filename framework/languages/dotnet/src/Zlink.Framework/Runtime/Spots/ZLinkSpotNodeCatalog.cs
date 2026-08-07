@@ -339,9 +339,7 @@ internal sealed class ZLinkSpotNodeCatalog(
                 await activation.DisposeAsync().ConfigureAwait(false);
                 ZLinkRuntimeMetrics.RecordSpotClosed(
                     activation.MeshName,
-                    activation.Spot is IZLinkInstanceSpot
-                        ? "instance"
-                        : "user");
+                    activation.KindName);
             }
         }
 
@@ -643,7 +641,7 @@ internal sealed class ZLinkSpotNodeCatalog(
     private bool IsIdleInstanceCandidate(ZLinkSpotActivation activation)
     {
         if (_instanceSpotIdleTimeout <= TimeSpan.Zero
-            || activation.Spot is not IZLinkInstanceSpot
+            || !activation.SupportsIdleEviction
             || activation.JoinedActorCount != 0
             || activation.HasIdleRelocationParticipation
             || activation.HasPendingApplicationWork)
@@ -1135,9 +1133,6 @@ internal sealed class ZLinkSpotNodeCatalog(
         CancellationToken cancellationToken)
     {
         var activation = prepared.Activation;
-        var kind = activation.Spot is IZLinkInstanceSpot
-            ? ZLinkSpotKind.Instance
-            : ZLinkSpotKind.User;
         var status = await lifecycle!.SpotLocations.TrackRelocatedAsync(
                 spotChannelName,
                 activation.SpotId,
@@ -1146,7 +1141,7 @@ internal sealed class ZLinkSpotNodeCatalog(
                 stableType,
                 node.RoutingId,
                 node.MeshStatus().LifecycleGeneration,
-                kind,
+                activation.SpotKind,
                 deactivate: async ct =>
                     _ = await CloseAsync(activation.SpotId, ct)
                         .ConfigureAwait(false),
@@ -1170,7 +1165,7 @@ internal sealed class ZLinkSpotNodeCatalog(
                     $"SPOT '{prepared.Activation.SpotId}' became visible before relocation publication.");
             _preparedSpotTypes.Remove(prepared.Activation.SpotId);
             _spots.Add(prepared.Activation.SpotId, prepared.Activation);
-            if (prepared.Activation.Spot is IZLinkInstanceSpot)
+            if (prepared.InstanceStableType is not null)
                 _instanceSpotTypes.Add(
                     prepared.Activation.SpotId,
                     prepared.InstanceStableType
@@ -1179,9 +1174,7 @@ internal sealed class ZLinkSpotNodeCatalog(
         }
         ZLinkRuntimeMetrics.RecordSpotCreated(
             registration.SpotNodeName,
-            prepared.Activation.Spot is IZLinkInstanceSpot
-                ? "instance"
-                : "user");
+            prepared.Activation.KindName);
     }
 
     internal async ValueTask PublishInstanceReservedAsync(
@@ -1226,7 +1219,8 @@ internal sealed class ZLinkSpotNodeCatalog(
         {
             if (!_closing.ContainsKey(spotId)
                 && _spots.TryGetValue(spotId, out var existing)
-                && existing.Spot is IZLinkInstanceSpot
+                && _instanceSpotTypes.TryGetValue(spotId, out var existingStableType)
+                && string.Equals(existingStableType, stableType, StringComparison.Ordinal)
                 && existing.NativeSpot.LifecycleGeneration == objectGeneration
                 && registration.InstanceSpotFactories.TryGetValue(
                     stableType,
@@ -1254,7 +1248,6 @@ internal sealed class ZLinkSpotNodeCatalog(
         {
             if (!_closing.ContainsKey(spotId)
                 && _spots.TryGetValue(spotId, out var existing)
-                && existing.Spot is not IZLinkInstanceSpot
                 && existing.ExecutionMode == ZLinkUserSpotExecutionMode.PerActor
                 && existing.ObjectGeneration == objectGeneration
                 && existing.NodeRid == nodeRid
@@ -1548,7 +1541,7 @@ internal sealed class ZLinkSpotNodeCatalog(
         }
         ZLinkRuntimeMetrics.RecordSpotClosed(
             registration.SpotNodeName,
-            activation.Spot is IZLinkInstanceSpot ? "instance" : "user");
+            activation.KindName);
 
         transaction.TrySetResult(true);
         return true;
@@ -1581,7 +1574,7 @@ internal sealed class ZLinkSpotNodeCatalog(
         }
         ZLinkRuntimeMetrics.RecordSpotClosed(
             registration.SpotNodeName,
-            activation.Spot is IZLinkInstanceSpot ? "instance" : "user");
+            activation.KindName);
         failures.ThrowIfAny();
     }
 

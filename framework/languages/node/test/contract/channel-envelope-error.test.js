@@ -6,6 +6,8 @@ const test = require('node:test');
 const framework = require('../../packages/framework/dist/internal');
 const envelope = require('../../packages/framework/dist/runtime/channels/channel-envelope');
 const payloadCodec = require('../../packages/framework/dist/runtime/messaging/payload-codec');
+const encodedPayloadStorage = require('../../packages/framework/dist/contracts/Common/encoded-payload-storage');
+const { ZLinkBufferMessage } = require('../../packages/framework/dist/runtime/backend/runtime-message');
 const { Message } = require('@zlink-systems/zlink');
 
 function readable(parts) {
@@ -14,10 +16,37 @@ function readable(parts) {
     : { data: () => Buffer.from(part) });
 }
 
+test('lazy framework payload adopts runtime-owned bytes and JSON decode avoids data copies', () => {
+  const bytes = Buffer.from('{"value":1}');
+  const message = ZLinkBufferMessage.fromOwned(bytes);
+  const wrapped = payloadCodec.wrapFrameworkPayloadMessage(message);
+  const encoded = wrapped.toEncodedPayload();
+
+  assert.equal(encodedPayloadStorage.borrowEncodedPayload(encoded), bytes);
+  encoded.data = () => { throw new Error('JSON decode must not request a defensive byte copy'); };
+  assert.deepEqual(wrapped.decode(), { value: 1 });
+});
+
+test('public encoded payload keeps defensive input and output copies', () => {
+  const source = Buffer.from('stable');
+  const payload = framework.ZLinkEncodedPayload.from(source);
+  source.fill(0);
+
+  const exposed = payload.data();
+  exposed.fill(0);
+
+  assert.equal(payload.getString(), 'stable');
+  assert.equal(Buffer.from(payload.toBytes()).toString(), 'stable');
+});
+
 test('selective application serializer leaves framework payload encoding on JSON', () => {
+  class FrameworkPayload {}
+  class ApplicationPayload {}
+  let selectionCalls = 0;
   const serializer = {
     canSerialize(value) {
-      return value?.kind === 'application';
+      selectionCalls += 1;
+      return value instanceof ApplicationPayload;
     },
     serialize() {
       throw new Error('serializer must not encode framework-owned payloads');
@@ -28,12 +57,15 @@ test('selective application serializer leaves framework payload encoding on JSON
   };
   const registry = new Map([['application/x-test', serializer]]);
 
-  assert.equal(payloadCodec.selectSerializer({ kind: 'framework' }, registry), undefined);
-  assert.equal(payloadCodec.selectSerializer({ kind: 'application' }, registry), serializer);
+  assert.equal(payloadCodec.selectSerializer(new FrameworkPayload(), registry), undefined);
+  assert.equal(payloadCodec.selectSerializer(new FrameworkPayload(), registry), undefined);
+  assert.equal(payloadCodec.selectSerializer(new ApplicationPayload(), registry), serializer);
+  assert.equal(payloadCodec.selectSerializer(new ApplicationPayload(), registry), serializer);
+  assert.equal(selectionCalls, 2);
   assert.equal(payloadCodec.selectDefaultSerializer(registry), serializer);
 });
 
-test('selective application serializer decodes its wire payload and JSON fallback separately', () => {
+test('wire content type selects the exact serializer without parsing payload bytes', () => {
   let deserializeCalls = 0;
   const serializer = {
     canSerialize(value) {
@@ -57,10 +89,24 @@ test('selective application serializer decodes its wire payload and JSON fallbac
       { kind: 'framework' }
     );
     assert.deepEqual(
-      payloadCodec.decodeFrameworkPayloadMessage(applicationMessage, registry),
+      payloadCodec.decodeFrameworkPayloadMessage(
+        applicationMessage,
+        registry,
+        undefined,
+        'application/x-test'
+      ),
       { kind: 'application', decoded: true }
     );
     assert.equal(deserializeCalls, 1);
+    assert.throws(
+      () => payloadCodec.decodeFrameworkPayloadMessage(
+        applicationMessage,
+        registry,
+        undefined,
+        'application/x-unknown'
+      ),
+      /PayloadDecodeFailed: unsupported framework content type/
+    );
   } finally {
     jsonMessage.close();
     applicationMessage.close();

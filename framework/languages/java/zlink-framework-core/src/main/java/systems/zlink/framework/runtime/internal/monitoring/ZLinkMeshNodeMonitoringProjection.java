@@ -56,6 +56,34 @@ public record ZLinkMeshNodeMonitoringProjection(
             Optional.empty());
     }
 
+    public ZLinkMeshNodeMonitoringProjection withActiveObjectCounts(
+        int activeActors,
+        int activeSpots) {
+        if (activeActors < 0 || activeSpots < 0) {
+            throw new IllegalArgumentException(
+                "active object counts must be non-negative");
+        }
+        ZLinkPlacementCapacity capacity = objectCapacity;
+        return new ZLinkMeshNodeMonitoringProjection(
+            descriptorRevision,
+            objectRole,
+            placementWeight,
+            new ZLinkPlacementCapacity(
+                new ZLinkCapacityUsage(
+                    activeActors,
+                    0,
+                    capacity.actors().limit()),
+                new ZLinkCapacityUsage(
+                    activeSpots,
+                    0,
+                    capacity.spots().limit()),
+                capacity.spotTypes()),
+            activationConcurrency,
+            objectCapabilities,
+            placementReservationFailureCount,
+            lastPlacementReservationFailure);
+    }
+
     public static ZLinkMeshNodeMonitoringProjection fromRegistration(
         MeshNodeRegistration registration,
         long descriptorRevision,

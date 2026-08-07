@@ -16,7 +16,7 @@ Framework 내부 queue, location record와 private route 정보는 판정에 사
 
 - Session에 bind된 Actor와 bind되지 않은 Actor의 direct send·request
 - Direct message와 이후 Session bind 사이의 독립성
-- Session unbind 뒤 유지되는 Actor와 Actor 제거 뒤의 결과
+- Session logical disconnect 뒤 유지되는 Actor와 Actor 제거 뒤의 결과
 - 존재하지 않는 Actor와 연결할 수 없는 owner의 오류 구분
 - 같은 `ActorId`로 다시 만든 Actor에 대한 ID-only message와 이전 `ActorRef` lifecycle operation의 차이
 
@@ -26,7 +26,7 @@ Framework 내부 queue, location record와 private route 정보는 판정에 사
 |---|---:|---|
 | Location Store | 1 | 두 Actor node, Session gateway와 caller server가 같은 global Actor 위치를 조회하도록 한다. 실행마다 전용 namespace를 사용한다. |
 | Actor node | 2 | `to-actor.probe` Actor를 생성하고 direct send·request handler를 실행한다. 두 번째 node는 owner route를 사용할 수 없는 조건을 만드는 데 사용한다. |
-| Session gateway | 2 | Stream Session을 수용하고 public binding API로 Actor를 bind·unbind한다. Actor가 보낸 bound-session push를 client에게 전달한다. |
+| Session gateway | 2 | Stream Session을 수용하고 public API로 Actor를 bind하며 logical disconnect를 처리한다. Actor가 보낸 bound-session push를 client에게 전달한다. |
 | Caller server | 1 | Client의 HTTP 요청을 받아 public Actor client API로 global `ActorId` send·request를 시작한다. Session을 생성하거나 Actor를 bind하지 않는다. |
 | E2E client | 1 | 역할 server의 public application endpoint와 Stream endpoint만 사용한다. Framework 내부 API를 직접 호출하지 않는다. |
 
@@ -107,24 +107,27 @@ Bind되지 않은 Actor가 direct message를 먼저 처리해도 Application은 
 - 세부 동작: [Session Actor dispatch §2](../spec/20-session-actor-dispatch.ko.md)의
   explicit bind와 direct message의 독립성을 검증한다.
 
-#### TA-A4 Unbind 뒤에는 direct message가 계속되고 Actor 제거 뒤에는 실패한다
+#### TA-A4 Logical disconnect 뒤에는 direct message가 계속되고 Actor 제거 뒤에는 실패한다
 
 우선순위: `P0`
 
-Session binding과 Actor lifecycle은 별개다. Binding만 해제했다면 Actor가 유지되는 동안 direct message는
-계속 처리되어야 하고, Actor를 명시적으로 제거한 뒤에는 같은 호출이 성공해서는 안 된다.
+기존 public logical disconnect operation이 exact current binding을 해제해도 Actor lifecycle과 Spot
+membership은 유지된다. Physical STREAM connection도 유지될 수 있다. Actor를 명시적으로 제거한 뒤에는
+같은 direct 호출이 성공해서는 안 된다.
 
-**검증 질문:** Unbind 뒤에는 direct message가 성공하고 Actor를 제거한 뒤에는 `NotFound`로 끝나는가.
+**검증 질문:** Logical disconnect 뒤에는 direct message가 성공하고 Actor를 제거한 뒤에는 `NotFound`로 끝나는가.
 
 - 시작 조건: `actor-unbound-lifecycle`을 생성하여 Session에 bind한다. 이 scenario의 Application lifecycle
-  정책은 unbind 때 Actor를 제거하지 않는다.
-- 절차: Session gateway의 public API로 Actor를 unbind하고 binding이 없음을 확인한다. Caller server가
+  정책은 logical disconnect 때 Actor를 제거하지 않는다.
+- 절차: Session gateway의 기존 logical disconnect operation을 exact binding에 호출하고 tombstone을
+  확인한다. Caller server가
   send와 request를 각각 한 번 보낸다. 이후 public Actor lifecycle API로 Actor를 제거하고 같은
   `ActorId`로 새 request를 보낸다.
-- 검증: Unbind 뒤의 두 message는 Actor handler에서 각각 한 번 처리된다. Actor 제거 뒤의 request는
+- 검증: Disconnect callback은 최대 한 번 실행되고 callback failure도 binding을 복원하지 않는다. Physical
+  connection과 Actor membership은 유지된다. 두 direct message는 각각 한 번 처리된다. Actor 제거 뒤의 request는
   `NotFound`로 끝나며 handler evidence가 추가되지 않는다.
-- 세부 동작: [Actor model §2.3](../spec/14-actor-model.ko.md)과
-  [오류 모델 §2](../spec/32-framework-error-model.ko.md)의 lifecycle 분리를 검증한다.
+- 세부 동작: [Connection disconnect를 Actor에 알리는 방법](../spec/20-session-actor-dispatch.ko.md#41-connection-disconnect를-actor에-알리는-방법)과
+  [Session의 Actor route 보관](../spec/20-session-actor-dispatch.ko.md#4-session이-actor-route를-보관하는-방법)을 검증한다.
 
 ### Track B — Logical target과 실패 결과를 구분
 

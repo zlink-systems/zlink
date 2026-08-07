@@ -321,7 +321,7 @@ export class ZLinkSubscriberReceiveLoop {
     return this.stoppedFlag;
   }
   private running?: Promise<void>;
-  private readonly inFlight = new ZLinkReceiveTaskTracker();
+  private readonly inFlight: ZLinkReceiveTaskTracker;
   private readonly receiveOwner: symbol;
 
   constructor(
@@ -332,8 +332,13 @@ export class ZLinkSubscriberReceiveLoop {
       topicMessage: ReturnType<ZLinkChannelBackendAdapter['createTopicMessage']>
     ) => boolean | ZLinkSubscriberInfrastructureResult,
     private readonly inboundDispatchBudget?: ZLinkInboundDispatchBudget,
-    private readonly roundRobin?: ZLinkReceiveRoundRobinCoordinator
+    private readonly roundRobin?: ZLinkReceiveRoundRobinCoordinator,
+    reportError?: ZLinkReceiveTaskErrorReporter
   ) {
+    this.inFlight = new ZLinkReceiveTaskTracker(
+      ZLINK_MAX_CONCURRENT_CHANNEL_DISPATCHES,
+      reportError
+    );
     this.poller = adapter.createReadablePoller(subscriber);
     this.receiveOwner = roundRobin?.register() ?? Symbol('subscriber-receive-owner');
   }
@@ -362,6 +367,11 @@ export class ZLinkSubscriberReceiveLoop {
         await this.inboundDispatchBudget.waitUntilResumed(signal);
       }
       if (this.isStopped() || signalAborted(signal)) break;
+      const capacityWait = this.inFlight.waitForCapacity(signal, () => this.isStopped());
+      if (capacityWait !== undefined) {
+        await capacityWait;
+      }
+      if (this.isStopped() || signalAborted(signal)) break;
       if (!this.poller.wait(0)) {
         this.roundRobin?.setReady(this.receiveOwner, false);
         this.roundRobin?.release(this.receiveOwner);
@@ -385,12 +395,7 @@ export class ZLinkSubscriberReceiveLoop {
       }
       const receivedBytes = messageBytes(topicMessage.parts as readonly Message[]);
       const task = this.dispatchAndClose(topicMessage, signal);
-      this.inFlight.track(task, false);
-      try {
-        await task;
-      } finally {
-        this.inFlight.delete(task);
-      }
+      this.inFlight.track(task);
       if (batch.record(receivedBytes)) {
         this.roundRobin?.release(this.receiveOwner);
         await batch.yieldAndReset();
@@ -455,7 +460,7 @@ export class ZLinkRouteReceiveLoop {
     return this.stoppedFlag;
   }
   private running?: Promise<void>;
-  private readonly inFlight = new ZLinkReceiveTaskTracker();
+  private readonly inFlight: ZLinkReceiveTaskTracker;
   private readonly receiveOwner: symbol;
 
   constructor(
@@ -465,8 +470,13 @@ export class ZLinkRouteReceiveLoop {
     private readonly dispatcher: ZLinkRoutePacketDispatchLoop,
     private readonly inboundDispatchBudget: ZLinkInboundDispatchBudget | undefined,
     private readonly poller: ZLinkBackendReadablePoller,
-    private readonly roundRobin?: ZLinkReceiveRoundRobinCoordinator
+    private readonly roundRobin?: ZLinkReceiveRoundRobinCoordinator,
+    reportError?: ZLinkReceiveTaskErrorReporter
   ) {
+    this.inFlight = new ZLinkReceiveTaskTracker(
+      ZLINK_MAX_CONCURRENT_CHANNEL_DISPATCHES,
+      reportError
+    );
     this.receiveOwner = roundRobin?.register() ?? Symbol('route-receive-owner');
   }
 
@@ -492,6 +502,11 @@ export class ZLinkRouteReceiveLoop {
         await this.inboundDispatchBudget.waitUntilResumed(signal);
       }
       if (this.isStopped() || signalAborted(signal)) break;
+      const capacityWait = this.inFlight.waitForCapacity(signal, () => this.isStopped());
+      if (capacityWait !== undefined) {
+        await capacityWait;
+      }
+      if (this.isStopped() || signalAborted(signal)) break;
       if (!this.poller.wait(0)) {
         this.roundRobin?.setReady(this.receiveOwner, false);
         this.roundRobin?.release(this.receiveOwner);
@@ -514,12 +529,7 @@ export class ZLinkRouteReceiveLoop {
       }
       const receivedBytes = messageBytes(received.parts);
       const task = this.dispatchAndClose(received, signal);
-      this.inFlight.track(task, false);
-      try {
-        await task;
-      } finally {
-        this.inFlight.delete(task);
-      }
+      this.inFlight.track(task);
       if (batch.record(receivedBytes)) {
         this.roundRobin?.release(this.receiveOwner);
         await batch.yieldAndReset();
@@ -631,7 +641,10 @@ class ZLinkSharedIdleWaiter {
   }
 }
 
-const receiveLoopIdleWaiter = new ZLinkSharedIdleWaiter(5);
+const CHANNEL_RECEIVE_IDLE_POLL_INTERVAL_MS = 5;
+const receiveLoopIdleWaiter = new ZLinkSharedIdleWaiter(
+  CHANNEL_RECEIVE_IDLE_POLL_INTERVAL_MS
+);
 
 function waitReceiveLoopIdle(): Promise<void> {
   return receiveLoopIdleWaiter.wait();

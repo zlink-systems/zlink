@@ -5,7 +5,7 @@
 Host registration (`@EnableZLinkFramework` + `ZLinkFrameworkConfigurer` bean) and
 `ZLinkFrameworkRuntime` (`relocate`/`shutdown`/`status`/`observe`) use the Java types as-is — the
 exact signature and options table follow
-[Java reference 01. Host lifecycle](../../java/reference/01-host-lifecycle.ko.md) (Korean-only)
+[Java reference 01. Host lifecycle](../../java/reference/01-host-lifecycle.en.md) (Korean-only)
 directly. The only thing Kotlin adds is a single bridge connecting `CompletionStage<T>` to
 coroutines. The exact signature is owned by the
 [Kotlin common runtime exact interface](../../common/spec/server/languages/kotlin/interfaces/common-runtime.en.md)
@@ -73,5 +73,5 @@ conversion to use it naturally from coroutine code.
 See the
 [Kotlin common runtime exact interface](../../common/spec/server/languages/kotlin/interfaces/common-runtime.en.md)
 and
-[Java reference 01. Host lifecycle](../../java/reference/01-host-lifecycle.ko.md) (Korean-only)
+[Java reference 01. Host lifecycle](../../java/reference/01-host-lifecycle.en.md) (Korean-only)
 for the full rationale.

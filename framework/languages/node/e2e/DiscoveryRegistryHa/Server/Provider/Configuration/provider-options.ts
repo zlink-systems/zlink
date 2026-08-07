@@ -7,6 +7,9 @@ export interface ProviderOptions {
   readonly redisEndpoint: string;
   readonly redisKeyPrefix: string;
   readonly channelEndpoint: string;
+  readonly fanoutEndpoint?: string;
+  readonly multiRole: boolean;
+  readonly capacityProfile: string;
   readonly evidenceFile?: string;
 }
 
@@ -19,6 +22,9 @@ export function validateProviderOptions(value: unknown): ProviderOptions {
     redisEndpoint: requiredString(values, 'redisEndpoint'),
     redisKeyPrefix: requiredString(values, 'redisKeyPrefix'),
     channelEndpoint: requiredString(values, 'channelEndpoint'),
+    fanoutEndpoint: optionalString(values, 'fanoutEndpoint'),
+    multiRole: optionalString(values, 'multiRole') === 'enabled',
+    capacityProfile: optionalString(values, 'capacityProfile') ?? 'default',
     evidenceFile: optionalString(values, 'evidenceFile')
   };
 }

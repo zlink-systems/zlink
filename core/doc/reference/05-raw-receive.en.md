@@ -1,4 +1,4 @@
-[한국어](05-raw-receive.ko.md) | English
+[한국어](https://zlink-systems.github.io/zlink/ko/reference/05-raw-receive/) | English
 
 [Reference index](README.en.md)
 

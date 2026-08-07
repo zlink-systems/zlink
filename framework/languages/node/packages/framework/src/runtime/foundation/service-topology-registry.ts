@@ -25,8 +25,8 @@ export interface ServiceNodeDescriptor {
   readonly channels: readonly ServiceChannelDescriptor[];
   readonly state: ServiceNodeState;
   readonly securityIdentity: string;
-  readonly effectiveMaxMessageBytes: number;
   readonly applicationVersion: bigint;
+  readonly maintenanceWave?: string;
   readonly protocolCapabilities: readonly string[];
   readonly objectRole: ServiceObjectRole;
   readonly placementWeight: number;
@@ -157,7 +157,7 @@ export class ServiceTopologyRegistry {
         current.descriptor.descriptorRevision > descriptor.descriptorRevision
         || (
           current.descriptor.descriptorRevision === descriptor.descriptorRevision
-          && !sameDescriptor(current.descriptor, descriptor)
+          && !sameServiceNodeDescriptor(current.descriptor, descriptor)
         )
       )
     ) {
@@ -167,7 +167,7 @@ export class ServiceTopologyRegistry {
       current !== undefined
       && current.descriptor.lifecycleGeneration === descriptor.lifecycleGeneration
       && current.descriptor.descriptorRevision === descriptor.descriptorRevision
-      && sameDescriptor(current.descriptor, descriptor)
+      && sameServiceNodeDescriptor(current.descriptor, descriptor)
       && current.connectionId !== connectionId
       // A fallback candidate is only a logical placeholder. Once the
       // monitor reports the physical connection, its evidence supersedes
@@ -213,13 +213,13 @@ export class ServiceTopologyRegistry {
 
   peers(): readonly AdmittedServicePeer[] {
     return [...this.peersByRid.values()]
-      .sort((left, right) => left.descriptor.nodeRoutingId.localeCompare(right.descriptor.nodeRoutingId))
+      .sort((left, right) => compareOrdinal(left.descriptor.nodeRoutingId, right.descriptor.nodeRoutingId))
       .map(clonePeer);
   }
 
   notRequiredPeers(): readonly ServiceNodeDescriptor[] {
     return [...this.notRequiredByRid.values()]
-      .sort((left, right) => left.nodeRoutingId.localeCompare(right.nodeRoutingId))
+      .sort((left, right) => compareOrdinal(left.nodeRoutingId, right.nodeRoutingId))
       .map(cloneDescriptor);
   }
 
@@ -311,7 +311,10 @@ export class ServiceTopologyRegistry {
       },
       value => value.channel.weight,
       value => value.peer.descriptor.nodeRoutingId,
-      (left, right) => left.peer.descriptor.nodeRoutingId.localeCompare(right.peer.descriptor.nodeRoutingId),
+      (left, right) => compareOrdinal(
+        left.peer.descriptor.nodeRoutingId,
+        right.peer.descriptor.nodeRoutingId
+      ),
       value => isReady(value.peer)
     )?.peer;
   }
@@ -331,7 +334,7 @@ export class ServiceTopologyRegistry {
       }).map(clonePeer),
       peer => peer.descriptor.placementWeight,
       peer => peer.descriptor.nodeRoutingId,
-      (left, right) => left.descriptor.nodeRoutingId.localeCompare(right.descriptor.nodeRoutingId),
+      (left, right) => compareOrdinal(left.descriptor.nodeRoutingId, right.descriptor.nodeRoutingId),
       isReady
     );
   }
@@ -358,7 +361,7 @@ export class ServiceTopologyRegistry {
       },
       descriptor => descriptor.placementWeight,
       descriptor => descriptor.nodeRoutingId,
-      (left, right) => left.nodeRoutingId.localeCompare(right.nodeRoutingId),
+      (left, right) => compareOrdinal(left.nodeRoutingId, right.nodeRoutingId),
       isReady
     );
   }
@@ -439,11 +442,15 @@ export function validateDescriptor(descriptor: ServiceNodeDescriptor): void {
     throw new RangeError('Lifecycle generation and descriptor revision must be non-zero.');
   }
   if (
-    !Number.isSafeInteger(descriptor.effectiveMaxMessageBytes)
-    || descriptor.effectiveMaxMessageBytes <= 0
-    || descriptor.applicationVersion < 0n
+    descriptor.applicationVersion < 0n
   ) {
-    throw new RangeError('Descriptor message bound or application version is invalid.');
+    throw new RangeError('Descriptor application version is invalid.');
+  }
+  if (descriptor.maintenanceWave !== undefined) {
+    requireText(descriptor.maintenanceWave, 'maintenanceWave');
+    if (Buffer.byteLength(descriptor.maintenanceWave, 'utf8') > 255) {
+      throw new RangeError('maintenanceWave must not exceed 255 UTF-8 bytes.');
+    }
   }
   validatePublicWeight(descriptor.placementWeight, 'placementWeight');
   validateCapacity(descriptor.activeCapacityLimit, false, 'activeCapacityLimit');
@@ -534,7 +541,7 @@ function clonePeer(peer: AdmittedServicePeer): AdmittedServicePeer {
   };
 }
 
-function sameDescriptor(left: ServiceNodeDescriptor, right: ServiceNodeDescriptor): boolean {
+export function sameServiceNodeDescriptor(left: ServiceNodeDescriptor, right: ServiceNodeDescriptor): boolean {
   return JSON.stringify(toComparable(left)) === JSON.stringify(toComparable(right));
 }
 
@@ -544,7 +551,6 @@ function sameImmutableDescriptor(
 ): boolean {
   return left.advertisedEndpoint === right.advertisedEndpoint
     && left.securityIdentity === right.securityIdentity
-    && left.effectiveMaxMessageBytes === right.effectiveMaxMessageBytes
     && left.applicationVersion === right.applicationVersion
     && arraysEqual(left.protocolCapabilities, right.protocolCapabilities)
     && left.objectRole === right.objectRole
@@ -570,8 +576,12 @@ function compareConnectionCandidate(
   rightDiscriminator: string,
   rightId: string
 ): number {
-  const discriminator = leftDiscriminator.localeCompare(rightDiscriminator);
-  return discriminator === 0 ? leftId.localeCompare(rightId) : discriminator;
+  const discriminator = compareOrdinal(leftDiscriminator, rightDiscriminator);
+  return discriminator === 0 ? compareOrdinal(leftId, rightId) : discriminator;
+}
+
+function compareOrdinal(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 function toComparable(descriptor: ServiceNodeDescriptor): unknown {

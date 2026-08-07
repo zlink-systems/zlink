@@ -420,6 +420,9 @@ timeout으로 끝나도 이미 시작된 remote handler의 실행은 취소되�
 
 마지막 줄이 특히 헷갈리는 자리다. **reply에는 호출자가 지정한 request timeout을 쓰지
 않는다.** client가 5초를 기다리기로 했다고 해서 서버의 reply 제출이 5초를 기다리지 않는다.
+STREAM one-way send는 call별 timeout modifier로 이 대기를 더 짧게 제한할 수 있다. Socket timeout을
+연장하지 않고 둘 중 먼저 도달하는 deadline을 사용하며, deadline 뒤에는 late admission이나 replay가 없다.
+이 modifier는 reply에 적용하지 않는다.
 
 지정하지 않으면 각 경로가 1초를 쓴다. 값은 millisecond로 올림해 `1` 이상이어야 하며,
 `0` · 음수 · 무한대는 **host 시작에서 거부한다** — 조용히 기본값으로 바뀌지 않는다.
@@ -612,7 +615,7 @@ Framework는 다음 message의 크기를 미리 알 수 없으므로 **byte를 �
     ```cpp
     // C++은 수준을 message flow log mode로 지정한다.
     options.configure_dispatch ()
-      .message_flow (message_flow_log_mode_t::errors_only); // 기본값 — error와 backpressure를 기록한다.
+      .message_flow (message_flow_log_mode_t::errors); // 기본값 — error와 backpressure를 기록한다.
     ```
 
 === "Java"
@@ -620,7 +623,7 @@ Framework는 다음 message의 크기를 미리 알 수 없으므로 **byte를 �
     ```java
     // Java는 수준을 message flow log mode로 지정한다.
     options.configureDispatch()
-        .messageFlow(ZLinkMessageFlowLogMode.ERRORS_ONLY); // 기본값 — error와 backpressure를 기록한다.
+        .messageFlow(ZLinkMessageFlowLogMode.ERRORS); // 기본값 — error와 backpressure를 기록한다.
     ```
 
 === "Kotlin"
@@ -628,7 +631,7 @@ Framework는 다음 message의 크기를 미리 알 수 없으므로 **byte를 �
     ```kotlin
     // Kotlin은 Java 표면을 그대로 쓴다.
     options.configureDispatch()
-        .messageFlow(ZLinkMessageFlowLogMode.ERRORS_ONLY) // 기본값 — error와 backpressure를 기록한다.
+        .messageFlow(ZLinkMessageFlowLogMode.ERRORS) // 기본값 — error와 backpressure를 기록한다.
     ```
 
 === "Node/TypeScript"
@@ -636,7 +639,7 @@ Framework는 다음 message의 크기를 미리 알 수 없으므로 **byte를 �
     ```typescript
     // Node는 수준을 message flow log mode로 지정한다.
     builder.configureDispatch()
-      .messageFlow(ZLinkMessageFlowLogMode.ErrorsOnly); // 기본값 — error와 backpressure를 기록한다.
+      .messageFlow("errors"); // 기본값 — error와 backpressure를 기록한다.
     ```
 
 
@@ -704,5 +707,5 @@ message flow 기록에 `backpressured`가 남았다면 보낼 자리를 기다�
 - one-way submit과 완료 경계의 정식 계약:
   [비동기 실행 정책](../../../common/spec/05-async-execution-policy.ko.md)
 - 소켓 설정 표면: [언어별 topology 공개 계약](../../../common/spec/server/languages/README.ko.md)
-- socket option의 byte 단위 계약: [core guide의 socket option](https://zlink-systems.github.io/zlink/guide/12-socket-options/)
+- socket option의 byte 단위 계약: [core guide의 socket option](https://zlink-systems.github.io/zlink/ko/guide/12-socket-options/)
 - 다음 축: [05-channel-messaging](05-channel-messaging.ko.md)

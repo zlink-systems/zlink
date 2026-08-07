@@ -133,7 +133,6 @@ internal static class ZLinkServiceAdmissionGuard
                 existing.SecurityIdentity,
                 incoming.SecurityIdentity,
                 StringComparison.Ordinal)
-            || existing.EffectiveMaxMessageBytes != incoming.EffectiveMaxMessageBytes
             || !string.Equals(
                 existing.AdvertisedEndpoint,
                 incoming.AdvertisedEndpoint,

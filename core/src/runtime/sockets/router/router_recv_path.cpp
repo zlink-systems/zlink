@@ -111,8 +111,12 @@ void zlink::router_t::xattach_pipe (pipe_t *pipe_, bool subscribe_to_all_, bool 
     socket_msg_dispatch_lock_t dispatch_lock = lock_socket_msg_dispatch ();
     const bool routing_id_ok = identify_peer (pipe_, locally_initiated_);
     if (router_debug_enabled ()) {
-        fprintf (stderr, "router xattach_pipe: pipe=%p local=%d routing_id_ok=%d\n",
-                 static_cast<void *> (pipe_), locally_initiated_ ? 1 : 0, routing_id_ok ? 1 : 0);
+        fprintf (stderr, "router xattach_pipe: pipe=%p local=%d routing_id_ok=%d lane=%d pair=%llu/%llu\n",
+                 static_cast<void *> (pipe_), locally_initiated_ ? 1 : 0,
+                 routing_id_ok ? 1 : 0,
+                 static_cast<int> (pipe_->get_transport_lane ()),
+                 static_cast<unsigned long long> (pipe_->get_transport_pair_id ()),
+                 static_cast<unsigned long long> (pipe_->get_transport_pair_generation ()));
     }
     if (routing_id_ok) {
         _fq.attach (pipe_);
@@ -145,8 +149,11 @@ void zlink::router_t::xread_activated (pipe_t *pipe_)
     if (router_debug_enabled ()) {
         char rid_text[160];
         format_blob_routing_id_debug (pipe_->get_routing_id (), rid_text, sizeof (rid_text));
-        fprintf (stderr, "router xread_activated: pipe=%p anonymous=%d pipe_rid=%s\n",
-                 static_cast<void *> (pipe_), it != _anonymous_pipes.end () ? 1 : 0, rid_text);
+        fprintf (stderr, "router xread_activated: pipe=%p anonymous=%d pipe_rid=%s lane=%d pair=%llu/%llu\n",
+                 static_cast<void *> (pipe_), it != _anonymous_pipes.end () ? 1 : 0, rid_text,
+                 static_cast<int> (pipe_->get_transport_lane ()),
+                 static_cast<unsigned long long> (pipe_->get_transport_pair_id ()),
+                 static_cast<unsigned long long> (pipe_->get_transport_pair_generation ()));
     }
     if (it == _anonymous_pipes.end ())
         _fq.activated (pipe_);

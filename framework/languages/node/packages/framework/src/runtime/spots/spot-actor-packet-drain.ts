@@ -21,11 +21,11 @@ import {
   decodeStreamHeader,
   encodeStreamFrame,
   messageToBytes,
-  ZLinkStreamCodec,
+  streamCodecForContentType,
   ZLinkStreamHeaderFlags,
   ZLinkStreamMessageKind
 } from '../streams/protocol';
-import { encodeFrameworkPayloadMessage } from '../messaging/payload-codec';
+import { encodeFrameworkPayload } from '../messaging/payload-codec';
 
 export interface ZLinkActorDispatchPart {
   readonly info: {
@@ -227,19 +227,19 @@ export class ZLinkSpotActorPacketDrain {
     payload: unknown
   ): Message {
     const requestHeader = decodeStreamHeader(messageToBytes(requestHeaderPart));
-    const payloadMessage = encodeFrameworkPayloadMessage(payload, this.options.messageSerializers);
+    const encoded = encodeFrameworkPayload(payload, this.options.messageSerializers);
     try {
       return RuntimeMessage.from(Buffer.from(encodeStreamFrame({
         kind,
-        codec: ZLinkStreamCodec.Json,
+        codec: streamCodecForContentType(encoded.contentType),
         flags: ZLinkStreamHeaderFlags.None,
         requestSeq: requestHeader.requestSeq,
         name: '',
         metadata: new Map(),
         correlationId: requestHeader.correlationId
-      }, payloadMessage.data()))) as Message;
+      }, encoded.message.data()))) as Message;
     } finally {
-      payloadMessage.close();
+      encoded.message.close();
     }
   }
 

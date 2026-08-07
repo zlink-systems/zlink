@@ -24,6 +24,7 @@ ZLINK_SAMPLE_GRADLE_SETTINGS_ARGS=(--settings-file standalone.settings.gradle.kt
 pids=()
 redis_container_id=""
 log_dir="build/sample-logs"
+ZLINK_SAMPLE_FRAMEWORK_ROLE_LOGS="session-a.log session-b.log matchmaking.log api-a.log api-b.log play-a.log play-b.log"
 flow_log_dir="$(pwd)/logs"
 config_dir="build/sample-config"
 export ZLINK_JAVA_STREAM_TRACE="${ZLINK_JAVA_STREAM_TRACE:-1}"

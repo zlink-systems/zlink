@@ -28,7 +28,16 @@ use the per-Actor stored route and don't query the Location Store per
 message. A physical disconnect has the framework perform an automatic
 all-settled notification to every current binding, running the Spot
 callback at most once per exact binding identity. A relocation route
-update is only allowed on the same ObjectGeneration. After the target
+update is only allowed on the same ObjectGeneration. A logical notification
+also runs the exact binding callback at most once, then commits the binding as
+a tombstone and removes it after terminal. The physical STREAM connection and
+Actor/Spot membership are kept, and no new public Unbind API is provided.
+Rebind doesn't reuse an old exact binding identity for another Actor or
+generation. It registers the new identity first, then runs the old callback at
+most once and tombstones the old binding. Callback failure is recorded as
+diagnostics but doesn't remove the new binding or restore the old one. A
+same-generation relocation route update isn't a rebind and doesn't run the
+disconnect callback. After the target
 Actor is restored and starts message processing, the target runtime
 sends `sessionActorLocationUpdateReqMsg` and changes that Actor's route
 and the bound-session's current `ActorRef` location snapshot Java's
@@ -85,6 +94,7 @@ suspend fun ZLinkSessionActors.bindOrGetActor(
 interface ZLinkKotlinSessionSendCall {
     fun metadata(key: String, value: String): ZLinkKotlinSessionSendCall
     fun compress(): ZLinkKotlinSessionSendCall
+    fun timeout(timeout: Duration): ZLinkKotlinSessionSendCall
     suspend fun await()
 }
 
@@ -133,6 +143,7 @@ public final class systems.zlink.framework.kotlin.ZLinkFrameworkExtensionsKt {
 public interface systems.zlink.framework.kotlin.ZLinkKotlinSessionSendCall {
   public abstract systems.zlink.framework.kotlin.ZLinkKotlinSessionSendCall metadata(java.lang.String, java.lang.String);
   public abstract systems.zlink.framework.kotlin.ZLinkKotlinSessionSendCall compress();
+  public abstract systems.zlink.framework.kotlin.ZLinkKotlinSessionSendCall timeout-LRDsOJo(long);
   public abstract java.lang.Object await(kotlin.coroutines.Continuation<? super kotlin.Unit>);
 }
 public interface systems.zlink.framework.kotlin.ZLinkKotlinSessionReplyCall {
@@ -151,3 +162,12 @@ public interface systems.zlink.framework.kotlin.ZLinkKotlinBoundSession {
   public abstract systems.zlink.framework.kotlin.ZLinkKotlinMessageSendCall send(java.lang.Object);
 }
 ```
+
+`ZLinkKotlinSessionSendCall.timeout(...)` only shortens this send's admission
+wait. Omission uses Java's STREAM socket send timeout; specifying it uses the
+shorter of the two, so it cannot extend the socket timeout. The duration is
+positive and must round up into `1..Int.MAX_VALUE` milliseconds. Expiry
+completes terminal-once as `ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED` and does
+not start later admission or replay. Coroutine cancellation keeps the existing
+Kotlin wait-cancellation meaning, and the reply call doesn't provide this
+modifier.

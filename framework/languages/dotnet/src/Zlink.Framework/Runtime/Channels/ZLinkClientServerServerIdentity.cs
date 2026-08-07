@@ -143,14 +143,33 @@ internal sealed class ZLinkClientServerServerIdentity(
         }
     }
 
-    internal void AdmitPeer(RoutingId routingId)
+    internal void AdmitPeer(
+        RoutingId routingId,
+        uint normalizedEffectiveMaxMessageBytes)
     {
         var now = DateTimeOffset.UtcNow;
         lock (_gate)
             _peers[routingId.ToHex()] = new Peer(
                 routingId,
+                normalizedEffectiveMaxMessageBytes,
                 now + ProbeInterval,
                 now + PeerDeadline);
+    }
+
+    internal bool TryGetAdmittedMaximumMessageBytes(
+        RoutingId routingId,
+        out uint maximumMessageBytes)
+    {
+        lock (_gate)
+        {
+            if (_peers.TryGetValue(routingId.ToHex(), out var peer))
+            {
+                maximumMessageBytes = peer.NormalizedEffectiveMaxMessageBytes;
+                return true;
+            }
+        }
+        maximumMessageBytes = 0;
+        return false;
     }
 
     internal void AcceptLivenessAck(
@@ -216,12 +235,14 @@ internal sealed class ZLinkClientServerServerIdentity(
     private void PushUpdate(Snapshot snapshot)
     {
         IZLinkBackendRouterSocket? router;
-        RoutingId[] peers;
+        (RoutingId RoutingId, uint MaximumMessageBytes)[] peers;
         lock (_gate)
         {
             router = _router;
             peers = _peers.Values
-                .Select(static peer => peer.RoutingId)
+                .Select(static peer => (
+                    peer.RoutingId,
+                    peer.NormalizedEffectiveMaxMessageBytes))
                 .ToArray();
         }
         if (router is null)
@@ -229,9 +250,13 @@ internal sealed class ZLinkClientServerServerIdentity(
         foreach (var peer in peers)
             _ = TrySend(
                 router,
-                peer,
+                peer.RoutingId,
                 ZLinkClientServerControlProtocol.EncodeUpdate(
-                    ToAdmission(snapshot)));
+                    ToAdmission(snapshot) with
+                    {
+                        NormalizedEffectiveMaxMessageBytes =
+                            peer.MaximumMessageBytes
+                    }));
     }
 
     internal ZLinkClientServerControlProtocol.Admission ToAdmission(
@@ -280,10 +305,13 @@ internal sealed class ZLinkClientServerServerIdentity(
 
     private sealed class Peer(
         RoutingId routingId,
+        uint normalizedEffectiveMaxMessageBytes,
         DateTimeOffset nextProbe,
         DateTimeOffset deadline)
     {
         internal RoutingId RoutingId { get; } = routingId;
+        internal uint NormalizedEffectiveMaxMessageBytes { get; } =
+            normalizedEffectiveMaxMessageBytes;
         internal DateTimeOffset NextProbe { get; set; } = nextProbe;
         internal DateTimeOffset Deadline { get; set; } = deadline;
         internal ulong? OutstandingProbeId { get; set; }

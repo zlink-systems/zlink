@@ -264,6 +264,7 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
     {
         var signal = ClassifyInboundLiveness(header, payload);
         var admission = _serial.EnqueueApplication(
+            RetainedPacketBytes(header, payload),
             cancellationToken => DispatchPacketAsync(
                 header,
                 payload,
@@ -273,6 +274,9 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
             ApplyInboundLiveness(signal);
         return admission;
     }
+
+    internal static long RetainedPacketBytes(Message header, Message payload) =>
+        checked((long)header.Size + payload.Size);
 
     public ZLinkSerialPostAdmission TryEnqueueControlPacket(
         Message header,

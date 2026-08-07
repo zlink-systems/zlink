@@ -17,9 +17,6 @@ public sealed class RegressionTests
         "05-route-mesh.ko.md",
         "06-location-store.ko.md",
         "dotnet-http-client.ko.md",
-        "regression-test-matrix.ko.md",
-        "backend-dependency-policy.ko.md",
-        "runtime-integration-and-ownership.ko.md",
     ];
 
     /// <summary>
@@ -68,6 +65,10 @@ public sealed class RegressionTests
         var excludedRoots = new[]
         {
             Path.Combine(directory, "guide"),
+            // Internals documents record implementation decisions and E2E
+            // evidence; they are not public contract documents and do not
+            // carry the contract regression-section requirement.
+            Path.Combine(directory, "internals"),
             // The reference tree is an unlisted preview and is not part of the
             // public contract document set until its ownership and nav entry are
             // finalized.

@@ -4,7 +4,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 [[ "${ZLINK_CORE_PACKAGE_PREFIX:-}" = /* ]] || {
-  echo "ZLINK_CORE_PACKAGE_PREFIX must name the approved Core 0.10.0 install prefix" >&2
+  echo "ZLINK_CORE_PACKAGE_PREFIX must name the approved Core 0.10.1 install prefix" >&2
   exit 2
 }
 TASKS=(

@@ -175,8 +175,9 @@ duplicate-executing a message being processed.
 **Verification question:** After public Relocate completion, does a follow-up request use the state
 restored at the target?
 
-- Starting condition: The Spot is Ready on A, and the state version can be queried.
-- Procedure: A public host relocation to B is started, the terminal success is awaited, and a state
+- Starting condition: The Spot is Ready on A, the state version can be queried, and B is the sole
+  eligible target.
+- Procedure: A public host relocation with no target argument is started, the terminal success is awaited, and a state
   request is sent.
 - Verification: The follow-up handler runs only on B, and the Spot identity and state version are
   preserved. An operation ID accepted before the relocation is also processed exactly once across
@@ -356,8 +357,8 @@ execution count never exceed 1, with each request having a bounded terminal?
 - Verification: The concurrently running factory/initialize count in application evidence is always
   at most 1, and each request ends in either a reply or a formal failure. The requests' admission
   order or internal waiter count is not judged.
-- Contract basis: [Framework API §5](../spec/06-framework-api.en.md) and
-  [Async Execution Policy](../spec/05-async-execution-policy.en.md)
+- Contract basis: [Framework API RouteMesh Activation Admission](../spec/06-framework-api.en.md#3-routemesh-registration) and
+  [Object Placement And Activation](../spec/05-async-execution-policy.en.md#object-placement-and-activation)
 
 #### IS-E2E-18 Cross-Language
 
@@ -560,8 +561,8 @@ in one owner's queue.
 **Verification question:** Do Relocate and a concurrent request each end in exactly one terminal, with
 no duplication?
 
-- Starting condition: The Spot is Ready on Mesh A, and Mesh B provides a compatible target.
-- Procedure: A Relocate to B is started, and a request with a unique operation ID is sent
+- Starting condition: The Spot is Ready on Mesh A, and Mesh B is the sole compatible eligible target.
+- Procedure: A host Relocate with no target argument is started, and a request with a unique operation ID is sent
   concurrently.
 - Verification: Relocate and the request each end in exactly one terminal, and the request handler
   runs exactly once, on either A or B alone.
@@ -572,17 +573,19 @@ no duplication?
 
 Priority: `P1`
 
-Requests trying to move the same Spot to different targets at the same time must not produce two
-owners.
+Concurrent host Relocate calls for the same Spot must not produce two owners.
 
-**Verification question:** After concurrent Relocate operations, does the public lookup return
-exactly one owner?
+**Verification question:** Do same-option waiters join while an incompatible concurrent call ends in
+`Blocked/OperationInProgress`, preserving one owner?
 
-- Starting condition: The source and two compatible targets are Ready.
-- Procedure: Relocate operations specifying different targets are started concurrently.
-- Verification: Each operation receives exactly one terminal, and the final public lookup shows one
-  Ready owner. The follow-up request handler also runs only on that owner.
-- Contract basis: [Location Runtime](../spec/21-location-runtime.en.md)
+- Starting condition: The source and compatible eligible targets are Ready; same-effective-option
+  and incompatible-option fixtures are separate.
+- Procedure: Fresh variant A starts host Relocate waiters with the same effective option and no target
+  argument. Fresh variant B starts an incompatible-option call while the first operation is pending.
+- Verification: Variant A callers join the shared operation and receive the same terminal. Variant B
+  ends the incompatible call once in `Blocked/OperationInProgress` without changing the first option.
+  Both variants finish with one Ready owner, and the follow-up request runs only there.
+- Contract basis: [Graceful Drain — Concurrent Calls And Cancellation](../spec/28-graceful-drain-handoff.en.md#6-concurrent-calls-and-cancellation)
 
 #### IS-E2E-31 Remote Selection Loser
 

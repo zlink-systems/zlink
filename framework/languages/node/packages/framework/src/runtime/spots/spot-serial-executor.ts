@@ -11,6 +11,7 @@ import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException
 } from '../framework-errors-internal';
+import { createAbortError } from '../abort';
 import {
   ZLinkBoundedSerialScheduler,
   type ZLinkSerialSchedulerOptions,
@@ -106,6 +107,48 @@ export class ZLinkSpotSerialExecutor {
   }
 
   /**
+   * Admits a one-way turn and returns after the bounded queue owns it. Handler
+   * completion is reported through `onError` and never blocks the sender turn.
+   */
+  async postOneWay(
+    operation: () => Promise<unknown> | unknown,
+    onError: (error: unknown) => void,
+    workOptions: ZLinkSerialWorkOptions = {},
+    admission: {
+      readonly timeoutMs?: number;
+      readonly signal?: AbortSignal;
+    } = {}
+  ): Promise<void> {
+    this.lastActivityAtMs = Date.now();
+    let barrierClaim: ZLinkExecutionBarrierClaim | undefined;
+    try {
+      barrierClaim = await this.executionBarrier?.enter();
+      await this.scheduler.waitAndSubmitDetached(
+        operation,
+        onError,
+        {
+          ...workOptions,
+          lane: workOptions.lane ?? 'application'
+        },
+        barrierClaim,
+        {
+          timeoutMs: admission.timeoutMs ?? 1_000,
+          signal: admission.signal,
+          timeoutError: () => createInternalFrameworkException(
+            ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
+            'Spot one-way admission timed out while waiting for execution queue capacity.',
+            true
+          ),
+          abortError: createAbortError
+        }
+      );
+    } catch (error) {
+      barrierClaim?.release();
+      throw error;
+    }
+  }
+
+  /**
    * Enqueues the framework-owned turn that completes a boundary while normal
    * application admission remains sealed. Callers must release the matching
    * barrier seal after this turn finishes.
@@ -119,26 +162,31 @@ export class ZLinkSpotSerialExecutor {
 
   private enqueue<T>(
     operation: () => Promise<T> | T,
-    resumeExistingClaim: boolean,
+    bypassBarrierAdmission: boolean,
     workOptions: ZLinkSerialWorkOptions = {}
   ): Promise<T> {
-    return this.scheduleQueuedTurn(operation, resumeExistingClaim, workOptions);
+    return this.scheduleQueuedTurn(operation, bypassBarrierAdmission, workOptions);
   }
 
   private async scheduleQueuedTurn<T>(
     operation: () => Promise<T> | T,
-    resumeExistingClaim: boolean,
+    bypassBarrierAdmission: boolean,
     workOptions: ZLinkSerialWorkOptions
   ): Promise<T> {
     this.lastActivityAtMs = Date.now();
     let barrierClaim: ZLinkExecutionBarrierClaim | undefined;
     try {
-      if (!resumeExistingClaim) {
+      if (!bypassBarrierAdmission) {
         barrierClaim = await this.executionBarrier?.enter();
+      } else {
+        // Normal application admission crosses the async barrier boundary
+        // before it reaches the scheduler. Give already-admitted records that
+        // same boundary so a framework-owned turn cannot overtake them.
+        await Promise.resolve();
       }
       return await this.scheduler.submit(operation, {
         ...workOptions,
-        lane: resumeExistingClaim ? 'lifecycle' : workOptions.lane ?? 'application'
+        lane: workOptions.lane ?? 'application'
       }, barrierClaim);
     } catch (error) {
       barrierClaim?.release();
@@ -173,6 +221,7 @@ export class ZLinkSpotSerialExecutor {
   ): Promise<void> {
     const turn = new ZLinkSpotSerialTurn(
       (resumeTurn, resume, resumeReject) => this.postResume(resumeTurn, resume, resumeReject),
+      barrierClaim,
       this.yieldAllowed
     );
     const wrapped = async () => {
@@ -192,11 +241,11 @@ export class ZLinkSpotSerialExecutor {
     turn.bindOwner(owner);
     owner.then(
       () => {
-        barrierClaim?.release();
+        turn.releaseBoundExecutionClaim();
         release?.();
       },
       () => {
-        barrierClaim?.release();
+        turn.releaseBoundExecutionClaim();
         release?.();
       }
     );
@@ -212,11 +261,24 @@ export class ZLinkSpotSerialExecutor {
     resume: () => void,
     reject: (reason: unknown) => void
   ): boolean {
+    const barrier = this.executionBarrier;
+    const resumeClaim = barrier?.tryEnter();
+    if (barrier !== undefined && resumeClaim === undefined) {
+      reject(createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.SpotMoving,
+        'The yielded Spot turn cannot resume after its execution unit was sealed.'
+      ));
+      return true;
+    }
+    turn.bindExecutionClaim(resumeClaim);
     void this.enqueue(async () => {
       turn.resetSuspension();
       resume();
       await turn.resumeOwnerUntilNextYield();
-    }, true).catch(reject);
+    }, true).catch((error) => {
+      turn.releaseBoundExecutionClaim();
+      reject(error);
+    });
     return true;
   }
 }

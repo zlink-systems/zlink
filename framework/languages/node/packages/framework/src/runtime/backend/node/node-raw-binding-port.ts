@@ -30,6 +30,8 @@ export interface ZLinkRawReceivedRecord {
   readonly sourceRid: string;
   readonly sourceRoute: Uint8Array;
   readonly requestSeq?: bigint;
+  readonly transportPairId?: bigint;
+  readonly transportPairGeneration?: bigint;
   readonly reply?: (parts: readonly Uint8Array[]) => void;
   readonly parts: readonly Buffer[];
 }
@@ -70,8 +72,22 @@ export interface ZLinkRawRouterPort extends ZLinkRawSocketPort {
   setRoutingId(routingId: string): void;
   connectToRoutingId(routingId: string, endpoint: string): void;
   send(targetRid: string, parts: readonly Uint8Array[], dontWait?: boolean): boolean;
+  sendTransportPair(
+    targetRid: string,
+    transportPairId: bigint,
+    transportPairGeneration: bigint,
+    parts: readonly Uint8Array[],
+    dontWait?: boolean
+  ): boolean;
   request(
     targetRid: string,
+    parts: readonly Uint8Array[],
+    timeoutMs: number
+  ): Promise<readonly Buffer[]>;
+  requestTransportPair(
+    targetRid: string,
+    transportPairId: bigint,
+    transportPairGeneration: bigint,
     parts: readonly Uint8Array[],
     timeoutMs: number
   ): Promise<readonly Buffer[]>;
@@ -87,6 +103,12 @@ export interface ZLinkRawRouterPort extends ZLinkRawSocketPort {
    */
   trySendCompletionControl?(
     targetRid: string,
+    parts: readonly Uint8Array[]
+  ): boolean;
+  trySendCompletionControlTransportPair?(
+    targetRid: string,
+    transportPairId: bigint,
+    transportPairGeneration: bigint,
     parts: readonly Uint8Array[]
   ): boolean;
   /**
@@ -377,6 +399,24 @@ class NodeRawRouterPort extends NodeRawSocketPort<RouterSocket> implements ZLink
       .submit();
   }
 
+  sendTransportPair(
+    targetRid: string,
+    transportPairId: bigint,
+    transportPairGeneration: bigint,
+    parts: readonly Uint8Array[],
+    dontWait = false
+  ): boolean {
+    this.requireOpen();
+    this.socket.sendTransportPair(
+      bindingRoutingId(targetRid),
+      transportPairId,
+      transportPairGeneration,
+      parts,
+      dontWait ? SendFlags.DontWait : SendFlags.None
+    );
+    return true;
+  }
+
   async request(
     targetRid: string,
     parts: readonly Uint8Array[],
@@ -386,6 +426,25 @@ class NodeRawRouterPort extends NodeRawSocketPort<RouterSocket> implements ZLink
     const replies = await appendRequestParts(this.socket.request(bindingRoutingId(targetRid)), parts)
       .timeout(timeoutMs)
       .submit();
+    return copyAndClose(replies);
+  }
+
+  async requestTransportPair(
+    targetRid: string,
+    transportPairId: bigint,
+    transportPairGeneration: bigint,
+    parts: readonly Uint8Array[],
+    timeoutMs: number
+  ): Promise<readonly Buffer[]> {
+    this.requireOpen();
+    const replies = await appendRequestParts(
+      this.socket.requestTransportPair(
+        bindingRoutingId(targetRid),
+        transportPairId,
+        transportPairGeneration
+      ),
+      parts
+    ).timeout(timeoutMs).submit();
     return copyAndClose(replies);
   }
 
@@ -416,6 +475,21 @@ class NodeRawRouterPort extends NodeRawSocketPort<RouterSocket> implements ZLink
     // handoff itself. Do not create a temporary Message for every control
     // part; the input is explicitly non-consuming.
     return this.socket.trySendCompletionControl(bindingRoutingId(targetRid), parts);
+  }
+
+  trySendCompletionControlTransportPair(
+    targetRid: string,
+    transportPairId: bigint,
+    transportPairGeneration: bigint,
+    parts: readonly Uint8Array[]
+  ): boolean {
+    this.requireOpen();
+    return this.socket.trySendCompletionControlTransportPair(
+      bindingRoutingId(targetRid),
+      transportPairId,
+      transportPairGeneration,
+      parts
+    );
   }
 
   setCompletionControlHandler(
@@ -610,6 +684,8 @@ function receiveRecord(
     const sourceRid = received.routingId?.toString() ?? '';
     const sourceRoute = received.routingId?.toBytes() ?? Buffer.alloc(0);
     const requestSeq = received.requestSeq;
+    const transportPairId = received.transportPairId;
+    const transportPairGeneration = received.transportPairGeneration;
     const receivedReply = requestSeq === null
       ? undefined
       : reply === undefined
@@ -621,6 +697,8 @@ function receiveRecord(
       sourceRid,
       sourceRoute,
       ...(requestSeq === null ? {} : { requestSeq }),
+      ...(transportPairId === undefined ? {} : { transportPairId }),
+      ...(transportPairGeneration === undefined ? {} : { transportPairGeneration }),
       ...(receivedReply === undefined
         ? {}
         : {

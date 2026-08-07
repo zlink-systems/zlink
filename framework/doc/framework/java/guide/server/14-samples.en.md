@@ -93,8 +93,8 @@ it got from `Api`. When the move count reaches 100, the room Spot publishes a mi
 Logical Multicast, and an observer handler registered on another Play server's Entry Spot
 receives it and pushes it to spectating clients.
 
-- Paired chapters: [05-channel-messaging](05-channel-messaging.ko.md) (ClientServer channel),
-  [06-spot](06-spot.ko.md) (creating a User Spot), [09-stream](09-stream.ko.md)
+- Paired chapters: [05-channel-messaging](05-channel-messaging.en.md) (ClientServer channel),
+  [06-spot](06-spot.en.md) (creating a User Spot), [09-stream](09-stream.en.md)
 - Scenario: [TicTacToe](../../../common/sample/tictactoe/README.en.md) · payload JSON
 - The [02. Getting Started](02-getting-started.en.md) follows this sample. If this is your first read, start
   here.
@@ -156,9 +156,9 @@ This is the only sample where the payload is Protobuf. Because it's a gateway-sh
 with many roles and contracts, the schema is used as the anchor so each language's sample
 keeps the same field and wire names.
 
-- Paired chapters: [06-spot](06-spot.ko.md) (all three Spot kinds appear),
-  [07-actor-spot](07-actor-spot.ko.md), [08-actor-session](08-actor-session.ko.md),
-  [10-location](10-location.ko.md)
+- Paired chapters: [06-spot](06-spot.en.md) (all three Spot kinds appear),
+  [07-actor-spot](07-actor-spot.en.md), [08-actor-session](08-actor-session.en.md),
+  [10-location](10-location.en.md)
 - Scenario: [Bingo](../../../common/sample/bingo/README.en.md) · payload Protobuf
 - The registration-code examples in chapters 06 and 07 come from this sample.
 
@@ -220,8 +220,8 @@ for a while, a Spot timer moves the conversation into its closing flow.
 This shape isn't specific to support. **Any system where one user participates in several
 rooms/tasks at once** ends up in the same shape.
 
-- Paired chapters: [08-actor-session](08-actor-session.ko.md), [06-spot](06-spot.ko.md)
-  (timer), [09-stream](09-stream.ko.md)
+- Paired chapters: [08-actor-session](08-actor-session.en.md), [06-spot](06-spot.en.md)
+  (timer), [09-stream](09-stream.en.md)
 - Scenario: [SupportChat](../../../common/sample/supportchat/README.en.md) · payload JSON
 
 ## 5. DeliveryDispatch — Building A Dispatch System
@@ -261,8 +261,8 @@ stands in for it, and courier selection and reassignment are owned by the dispat
 and the courier actor route. The client scenario verifies both the normal-dispatch and the
 timeout-reassignment flows.
 
-- Paired chapters: [05-channel-messaging](05-channel-messaging.ko.md),
-  [07-actor-spot](07-actor-spot.ko.md), [09-stream](09-stream.ko.md)
+- Paired chapters: [05-channel-messaging](05-channel-messaging.en.md),
+  [07-actor-spot](07-actor-spot.en.md), [09-stream](09-stream.en.md)
 - Scenario: [DeliveryDispatch](../../../common/sample/deliverydispatch/README.en.md) · payload JSON
 
 ## 6. ShoppingMall — Building An Order-Processing System
@@ -301,7 +301,7 @@ event stream. Duplicate clicks are handled with an idempotency key, a moment whe
 previous owner is still lingering with an expected version, and a stalled order with an
 explicit resume command. If the read model breaks, it's rebuilt by replaying the events.
 
-- Paired chapters: [06-spot](06-spot.ko.md), [12-operations](12-operations.ko.md)
+- Paired chapters: [06-spot](06-spot.en.md), [12-operations](12-operations.en.md)
 - Scenario: [ShoppingMall](../../../common/sample/event/shoppingmall.en.md) · payload JSON
 - Event sourcing itself isn't a framework feature — it's a shape the application builds on
   top of a Spot.
@@ -341,7 +341,7 @@ owner or requiring an explicit resume — a gap is absorbed by snapshot-based co
 instead. Anything that genuinely needs zero loss, like an actual currency payout, is split
 into a separate tier.
 
-- Paired chapters: [06-spot](06-spot.ko.md), [08-actor-session](08-actor-session.ko.md)
+- Paired chapters: [06-spot](06-spot.en.md), [08-actor-session](08-actor-session.en.md)
 - Scenario: [GameQuest](../../../common/sample/event/gamequest.en.md) · payload JSON
 
 ## 8. ZoneWorld — Building A Zone-Sharded MMORPG And Ops Control
@@ -396,8 +396,8 @@ topic were shared by several zones, unrelated players would receive it too, so t
 name carries both the sending and receiving zone. It's **the only sample with a browser
 UI**, so you can watch the boundary crossing and node maintenance-mode switch happen visually.
 
-- Paired chapters: [07-actor-spot](07-actor-spot.ko.md) (relocation),
-  [11. Monitoring](11-monitoring.en.md), [12-operations](12-operations.ko.md)
+- Paired chapters: [07-actor-spot](07-actor-spot.en.md) (relocation),
+  [11. Monitoring](11-monitoring.en.md), [12-operations](12-operations.en.md)
 - Scenario: [ZoneWorld](../../../common/sample/zoneworld/README.en.md) · payload JSON
 - The server is provided in multiple languages sharing one browser client.
 
@@ -424,5 +424,5 @@ separately via `ZoneWorld/run_sample.sh`.
 - Each sample's language-neutral scenario and verification criteria:
   [Common sample](../../../common/sample/README.en.md)
 - Per-language sample directory layout: the `README` at each language's sample root
-- Per-feature usage: [05-channel-messaging](05-channel-messaging.ko.md) through
-  [12-operations](12-operations.ko.md)
+- Per-feature usage: [05-channel-messaging](05-channel-messaging.en.md) through
+  [12-operations](12-operations.en.md)

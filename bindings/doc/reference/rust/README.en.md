@@ -1,4 +1,4 @@
-[한국어](README.ko.md) | English
+[한국어](https://zlink-systems.github.io/zlink/ko/bindings/reference/rust/) | English
 
 [Rust binding spec](../../spec/rust/README.en.md) · [Rust binding guide](../../guide/rust/index.en.md)
 

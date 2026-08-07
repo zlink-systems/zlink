@@ -1,17 +1,21 @@
 import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
+import { ZLINK_ROUTE_MESH_RUNTIME } from '@zlink-systems/nestjs';
+import type { ZLinkRouteMeshRuntime } from '@zlink-systems/framework';
 import { createDispatchCenterModule } from '../DispatchCenter/dispatch-center-module';
 import { startDispatchApi } from '../DispatchApi/dispatch-api-server';
 import { EvidenceStore } from '../Configuration/evidence-store';
 import { DELIVERYDISPATCH_SAMPLE_CONFIG } from '../Configuration/sample-config';
-import { closeNestRuntime, waitForShutdown } from '../runtime-support';
+import { closeNestRuntime, observeDeliveryRouteReadiness, waitForShutdown } from '../runtime-support';
 import type { DeliveryDispatchServerConfig } from '../Configuration/sample-config';
+import { SampleNames } from '../../Shared/Configuration/sample-names';
 
 async function bootstrap(): Promise<void> {
   const center = await NestFactory.createApplicationContext(createDispatchCenterModule(), {
     logger: false,
     abortOnError: false
   });
+  observeDeliveryRouteReadiness(center.get<ZLinkRouteMeshRuntime>(ZLINK_ROUTE_MESH_RUNTIME), SampleNames.courierMeshName, 'dispatch');
   const config = center.get<DeliveryDispatchServerConfig>(DELIVERYDISPATCH_SAMPLE_CONFIG);
   const server = await startDispatchApi(center, config, new EvidenceStore(config.workDir));
   process.stdout.write(`${JSON.stringify({ event: 'ready', role: 'dispatch' })}\n`);

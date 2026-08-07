@@ -556,6 +556,7 @@ test('ClientServer liveness ACK is fenced to the current probe and application t
   const requests = [];
   const inbound = [];
   const sent = [];
+  const diagnostics = [];
   dealer.recv = () => inbound.shift();
   dealer.send = message => {
     sent.push(Buffer.from(message.data()));
@@ -576,7 +577,8 @@ test('ClientServer liveness ACK is fenced to the current probe and application t
       openSocketMonitor() {
         return { nativeInstance: {}, onEvent() {}, async dispose() {} };
       }
-    }
+    },
+    error => diagnostics.push(error)
   );
   sockets.openClientServerConnection(
     'orders',
@@ -602,12 +604,14 @@ test('ClientServer liveness ACK is fenced to the current probe and application t
   requests[0].callback(0, [
     zlink.Message.from(clientServerWire.encodeClientServerLivenessAck(probe.probeId + 1n))
   ]);
+  assert.equal(diagnostics.length, 1);
+  assert.match(diagnostics[0].message, /stale or duplicate liveness ACK/);
   sockets.tickClientServerLiveness(base + 15_001);
   assert.equal(sockets.clientDealerForOutbound('orders'), undefined);
   await sockets.dispose();
 });
 
-test('ClientServer pushed descriptor updates accept only current higher revision', async () => {
+test('ClientServer pushed descriptor updates reject stale and conflicting revisions as protocol errors', async () => {
   const registration = internal.createFrameworkRegistration({
     channels: { orders: { client: { manualConnections: [] } } },
     locations: { useInMemoryStores: true }
@@ -644,23 +648,42 @@ test('ClientServer pushed descriptor updates accept only current higher revision
   sockets.tickClientServerLiveness();
   assert.equal(sockets.clientServerActiveTargets('orders')[0].weight, 25);
 
-  inbound.push(receivedControl(clientServerWire.encodeClientServerUpdate({
+  const connection = sockets.clientServerConnections.get('connection-a');
+  assert.throws(() => sockets.applyClientServerDescriptorUpdate(
+    'connection-a',
+    connection,
+    clientServerWire.decodeClientServerControl(clientServerWire.encodeClientServerUpdate({
+      ...descriptor({ token: { ownerId: 'owner', leaseGeneration: 1n } }),
+      descriptorRevision: 3n,
+      weight: 25,
+      securityIdentity: 'cluster-a'
+    }, 2048)).admission
+  ), error => error.name === 'ServiceWireProtocolError' && /message bound/.test(error.message));
+  assert.equal(sockets.clientServerActiveTargets('orders')[0].weight, 25);
+
+  assert.throws(() => sockets.applyClientServerDescriptorUpdate(
+    'connection-a',
+    connection,
+    clientServerWire.decodeClientServerControl(clientServerWire.encodeClientServerUpdate({
     ...descriptor({ token: { ownerId: 'owner', leaseGeneration: 1n } }),
     descriptorRevision: 1n,
     weight: 100,
     securityIdentity: 'cluster-a'
-  }, 1024)));
-  sockets.tickClientServerLiveness();
+    }, 1024)).admission
+  ), error => error.name === 'ServiceWireProtocolError' && /stale/.test(error.message));
   assert.equal(sockets.clientServerActiveTargets('orders')[0].weight, 25);
 
-  inbound.push(receivedControl(clientServerWire.encodeClientServerUpdate({
+  assert.throws(() => sockets.applyClientServerDescriptorUpdate(
+    'connection-a',
+    connection,
+    clientServerWire.decodeClientServerControl(clientServerWire.encodeClientServerUpdate({
     ...descriptor({ token: { ownerId: 'owner', leaseGeneration: 1n } }),
     descriptorRevision: 2n,
     weight: 50,
     securityIdentity: 'cluster-a'
-  }, 1024)));
-  sockets.tickClientServerLiveness();
-  assert.equal(sockets.clientDealerForOutbound('orders'), undefined);
+    }, 1024)).admission
+  ), error => error.name === 'ServiceWireProtocolError' && /conflicts/.test(error.message));
+  assert.equal(sockets.clientServerActiveTargets('orders')[0].weight, 25);
   await sockets.dispose();
 });
 
@@ -743,6 +766,7 @@ test('ClientServer server probes each admitted client and fences ACK by routing 
   });
   const sent = [];
   const disconnected = [];
+  const diagnostics = [];
   let acceptSend = true;
   const router = {
     nativeInstance: {},
@@ -770,7 +794,9 @@ test('ClientServer server probes each admitted client and fences ACK by routing 
       createRouterSocket() { return router; },
       createReadablePoller() { return readyPoller(); }
     },
-    {}
+    {},
+    undefined,
+    error => diagnostics.push(error)
   );
   sockets.clientServerServerIdentity('orders');
   const server = {
@@ -808,6 +834,8 @@ test('ClientServer server probes each admitted client and fences ACK by routing 
     routingId: 'client-b'
   }, router), true);
   wrongAck.close();
+  assert.equal(diagnostics.length, 1);
+  assert.match(diagnostics[0].message, /stale or duplicate liveness ACK/);
   sockets.tickClientServerLiveness(base + 15_001);
   assert.deepEqual(disconnected, ['client-a']);
 
@@ -1233,6 +1261,39 @@ test('ClientServer outbound reports no selectable target as RequestTargetNotFoun
       // The kind carries retry policy; RequestTargetNotFound is not retriable by default in any
       // lane, and the reference throws omit the flag exactly as this one does.
       && !('isRetriable' in error)
+  );
+  await manager.dispose();
+});
+
+test('ClientServer outbound reports a missing Client role as NotConfigured', async () => {
+  const registration = internal.createFrameworkRegistration({
+    channels: {
+      orders: {
+        server: { bind: 'inproc://orders' },
+        sendHandlers: [{ packetName: 'Notice', handler: { handle() {} } }]
+      }
+    }
+  });
+  const manager = new internal.ZLinkChannelRuntimeManager(
+    registration,
+    {},
+    { nativeInstance: {}, shutdown() {}, async dispose() {} }
+  );
+
+  assert.throws(
+    () => manager.trySend('orders', 'Notice', { id: 1 }),
+    (error) => error instanceof framework.ZLinkFrameworkException
+      && error.kind === framework.ZLinkFrameworkErrorKind.NotConfigured
+  );
+  await assert.rejects(
+    () => manager.send('orders', 'Notice', { id: 1 }),
+    (error) => error instanceof framework.ZLinkFrameworkException
+      && error.kind === framework.ZLinkFrameworkErrorKind.NotConfigured
+  );
+  await assert.rejects(
+    () => manager.request('orders', 'Lookup', { id: 1 }, 60),
+    (error) => error instanceof framework.ZLinkFrameworkException
+      && error.kind === framework.ZLinkFrameworkErrorKind.NotConfigured
   );
   await manager.dispose();
 });

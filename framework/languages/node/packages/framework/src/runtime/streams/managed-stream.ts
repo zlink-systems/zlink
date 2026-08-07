@@ -23,11 +23,12 @@ import type {
   ZLinkBackendSendFlags,
   ZLinkBackendStreamSocket
 } from '../backend/contracts';
-import { RequestResult } from '../backend/runtime-values';
+import { RequestResult, isBackendNotConnectedError } from '../backend/runtime-values';
 import { ZLinkBufferMessage as NativeMessage } from '../backend/runtime-message';
 import type { StreamSessionService } from '../foundation/service-runtime-contracts';
 import {
   closeMeshCompletion,
+  type ZLinkMeshCompletion,
   type ZLinkMeshCompletionTable
 } from '../backend/mesh-completion-table';
 import {
@@ -118,10 +119,15 @@ export class ZLinkManagedStream implements ZLinkStream {
     return this.socket.send(this.backendRoutingId(), payload, flags ?? 0);
   }
 
-  async submitRaw(payload: Message, signal?: AbortSignal): Promise<ZLinkSubmitResult> {
+  async submitRaw(
+    payload: Message,
+    signal?: AbortSignal,
+    timeoutMs?: number
+  ): Promise<ZLinkSubmitResult> {
     return this.submitOperation(
       () => this.socket.send(this.backendRoutingId(), payload, ZLINK_SEND_DONT_WAIT),
-      signal
+      signal,
+      timeoutMs
     );
   }
 
@@ -138,10 +144,19 @@ export class ZLinkManagedStream implements ZLinkStream {
 
   private async submitOperation(
     attempt: () => boolean,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    timeoutMs?: number
   ): Promise<ZLinkSubmitResult> {
     try {
-      await this.submitter.submitCommand(attempt, signal);
+      const socketTimeoutMs = this.socket.sendTimeoutMs > 0
+        ? this.socket.sendTimeoutMs
+        : undefined;
+      const admissionTimeoutMs = timeoutMs === undefined
+        ? undefined
+        : socketTimeoutMs === undefined
+          ? timeoutMs
+          : Math.min(timeoutMs, socketTimeoutMs);
+      await this.submitter.submitCommand(attempt, signal, undefined, admissionTimeoutMs);
       return { status: ZLinkSubmitStatus.Submitted };
     } catch (error) {
       if (error instanceof ZLinkFrameworkException) {
@@ -209,12 +224,15 @@ export class ZLinkManagedStream implements ZLinkStream {
       }
       const nativeActor = toNativeActorRef(actor);
       await this.ensureNativeActorRoute(route, actor, timeoutMs, signal);
-      const operation = await this.submitNativeSessionBind(route.service, nativeActor, timeoutMs, signal);
       await this.requireSuccessfulCompletion(
-        route.completions,
-        operation,
+        this.submitNativeSessionBind(
+          route.service,
+          route.completions,
+          nativeActor,
+          timeoutMs,
+          signal
+        ),
         `Actor '${actor.actorId}' native session bind`,
-        signal
       );
       const binding = route.service.bindings(this.backendRoutingId())
         .find((candidate) =>
@@ -242,12 +260,10 @@ export class ZLinkManagedStream implements ZLinkStream {
     timeoutMs: number,
     signal?: AbortSignal
   ): Promise<void> {
-    const operation = route.service.lookupActor(
-      actor.nodeRid,
-      actor.actorId,
-      timeoutMs
+    const completion = await route.completions.submit(
+      () => route.service.lookupActor(actor.nodeRid, actor.actorId, timeoutMs),
+      signal
     );
-    const completion = await route.completions.wait(operation, signal);
     try {
       const resolved = completion.kindData?.kind === 'actorLookupCompletion'
         ? completion.kindData.location.actor
@@ -283,22 +299,23 @@ export class ZLinkManagedStream implements ZLinkStream {
     }
     const binding = this.nativeActorBindings.get(actorId);
     if (binding?.route !== undefined) {
-      if (!this.hasNativeBinding(binding.route, actorId, binding.bindingGeneration)) {
+      const route = binding.route;
+      if (!this.hasNativeBinding(route, actorId, binding.bindingGeneration)) {
         this.nativeActorBindings.delete(actorId);
         return;
       }
-      const operation = binding.route.service.unbindActor(
-        this.backendRoutingId(),
-        binding.actor as never,
-        binding.bindingGeneration,
-        timeoutMs
-      );
       try {
         await this.requireSuccessfulCompletion(
-          binding.route.completions,
-          operation,
+          route.completions.submit(
+            () => route.service.unbindActor(
+              this.backendRoutingId(),
+              binding.actor as never,
+              binding.bindingGeneration,
+              timeoutMs
+            ),
+            signal
+          ),
           `Actor '${actorId}' native session unbind`,
-          signal,
           // Destroy can remove the actor registry entry before the old
           // session owner processes its cleanup. Both a disconnected route and
           // that stale actor route are idempotent unbind outcomes.
@@ -309,7 +326,7 @@ export class ZLinkManagedStream implements ZLinkStream {
         // tombstone. A transport teardown can therefore report an internal
         // completion after the exact binding is already gone. Treat only that
         // exact missing binding as stale cleanup; preserve other failures.
-        if (this.hasNativeBinding(binding.route, actorId, binding.bindingGeneration)) {
+        if (this.hasNativeBinding(route, actorId, binding.bindingGeneration)) {
           throw error;
         }
       }
@@ -322,7 +339,7 @@ export class ZLinkManagedStream implements ZLinkStream {
   sendBoundActor(actorId: string, parts: readonly Message[], flags?: ZLinkBackendSendFlags): boolean {
     const binding = this.nativeActorBindings.get(actorId);
     if (binding?.route !== undefined) {
-      const nativeParts = parts.map((part) => NativeMessage.from(Buffer.from(part.data())));
+      const nativeParts = parts.map((part) => NativeMessage.from(part.data()));
       try {
         return binding.route.service.sendToActor(
           this.backendRoutingId(),
@@ -370,13 +387,11 @@ export class ZLinkManagedStream implements ZLinkStream {
   }
 
   private async requireSuccessfulCompletion(
-    completions: ZLinkMeshCompletionTable,
-    operation: { readonly high: bigint; readonly low: bigint },
+    completionPromise: Promise<ZLinkMeshCompletion>,
     operationName: string,
-    signal?: AbortSignal,
     acceptedTerminalResults: ReadonlySet<number> = NO_ACCEPTED_TERMINAL_RESULTS
   ): Promise<void> {
-    const completion = await completions.wait(operation, signal);
+    const completion = await completionPromise;
     try {
       if (
         completion.terminalResult !== 0
@@ -394,24 +409,25 @@ export class ZLinkManagedStream implements ZLinkStream {
 
   private async submitNativeSessionBind(
     service: StreamSessionService,
+    completions: ZLinkMeshCompletionTable,
     actor: ZLinkBackendActorRef,
     timeoutMs: number,
     signal?: AbortSignal
-  ): Promise<{ readonly high: bigint; readonly low: bigint }> {
+  ): Promise<ZLinkMeshCompletion> {
     const deadline = Date.now() + timeoutMs;
     for (;;) {
       throwIfAborted(signal);
       try {
-        return service.bindActor(
-          this.backendRoutingId(),
-          actor,
-          Math.max(0, deadline - Date.now())
+        return completions.submit(
+          () => service.bindActor(
+            this.backendRoutingId(),
+            actor,
+            Math.max(0, deadline - Date.now())
+          ),
+          signal
         );
       } catch (error) {
-        if (
-          nativeErrno(error) !== 107
-          && (!(error instanceof Error) || !error.message.includes('Transport endpoint is not connected'))
-        ) {
+        if (!isBackendNotConnectedError(error)) {
           throw error;
         }
         if (Date.now() >= deadline) {
@@ -480,14 +496,6 @@ function toNativeActorRef(actor: ActorRef): ZLinkBackendActorRef {
     actorId: actor.actorId,
     generation: actor.objectGeneration
   };
-}
-
-function nativeErrno(error: unknown): number | undefined {
-  if (typeof error !== 'object' || error === null || !('nativeErrno' in error)) {
-    return undefined;
-  }
-  const value = error.nativeErrno;
-  return typeof value === 'number' ? value : undefined;
 }
 
 function waitForSessionAdmission(signal?: AbortSignal): Promise<void> {

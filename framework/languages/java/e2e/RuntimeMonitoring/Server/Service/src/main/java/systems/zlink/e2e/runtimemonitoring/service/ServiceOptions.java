@@ -8,7 +8,8 @@ public record ServiceOptions(
     String meshEndpoint, String meshPeerEndpoint, String httpEndpoint,
     boolean enableHandshake, boolean enableSpot,
     String redisLocationEndpoint, String locationKeyPrefix, String logDirectory,
-    int actorCapacity, int spotCapacity) {
+    int actorCapacity, int spotCapacity, boolean disableBootstrapSpot,
+    boolean registerPlacementObjects) {
     public ServiceOptions {
         required(routingId, "routing-id"); required(apiEndpoint, "api-endpoint");
         required(httpEndpoint, "http-endpoint"); required(redisLocationEndpoint, "redis-location-endpoint");

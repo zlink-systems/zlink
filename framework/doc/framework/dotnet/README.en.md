@@ -2,9 +2,9 @@
 [Guide Home](../index.en.md) | [Next: ZLink Framework for .NET — Overview](guide/server/01-overview.en.md)
 <!-- framework-adapter-nav:end -->
 
-[Guide Home](../index.en.md) | [Common Spec](../common/README.ko.md)
+[Guide Home](../index.en.md) | [Common Spec](../common/README.en.md)
 
-[Common Spec](../common/README.ko.md) | [Async Execution](../common/spec/05-async-execution-policy.ko.md) | [Exact Interface](../common/spec/server/languages/dotnet/interfaces/README.ko.md) | [Stream Connector](../common/spec/stream-connector/languages/dotnet/03-stream-connector.en.md) | [Unity Guide](guide/stream-connector/02-unity.ko.md) | [Common Internals](../common/internals/README.en.md) | [Regression Matrix](internals/regression-test-matrix.en.md) | [Backend Policy](internals/backend-dependency-policy.en.md) | [Runtime Integration](internals/runtime-integration-and-ownership.en.md)
+[Common Spec](../common/README.en.md) | [Async Execution](../common/spec/05-async-execution-policy.en.md) | [Exact Interface](../common/spec/server/languages/dotnet/interfaces/README.en.md) | [Stream Connector](../common/spec/stream-connector/languages/dotnet/03-stream-connector.en.md) | [Unity Guide](guide/stream-connector/02-unity.en.md) | [Common Internals](../common/internals/README.en.md) | [Regression Matrix](internals/regression-test-matrix.en.md) | [Backend Policy](internals/backend-dependency-policy.en.md) | [Runtime Integration](internals/runtime-integration-and-ownership.en.md)
 
 # ZLink Framework for .NET
 
@@ -15,12 +15,12 @@
 > | Directory | What |
 > |---|---|
 > | [`guide/server/`](guide/server/01-overview.en.md) | The **framework (server)** usage guide |
-> | [`guide/http-client/`](guide/http-client/README.ko.md) | The **HTTP client** usage guide |
-> | [`guide/stream-connector/`](guide/stream-connector/README.ko.md) | The **Stream connector** usage guide (including Unity/Godot) |
+> | [`guide/http-client/`](guide/http-client/README.en.md) | The **HTTP client** usage guide |
+> | [`guide/stream-connector/`](guide/stream-connector/README.en.md) | The **Stream connector** usage guide (including Unity/Godot) |
 > | [`internals/`](internals/regression-test-matrix.en.md) | Implementation and verification criteria |
 >
-> **The public contract doesn't live here.** It's owned by the [spec tree](../common/spec/README.ko.md) —
-> [server/languages/dotnet](../common/spec/server/languages/dotnet/README.ko.md),
+> **The public contract doesn't live here.** It's owned by the [spec tree](../common/spec/README.en.md) —
+> [server/languages/dotnet](../common/spec/server/languages/dotnet/README.en.md),
 > [http-client/languages/dotnet](../common/spec/http-client/languages/dotnet/dotnet-http-client.en.md),
 > [stream-connector/languages/dotnet](../common/spec/stream-connector/languages/dotnet/03-stream-connector.en.md).
 > Where the guide and the contract diverge, **the contract wins.**
@@ -84,14 +84,14 @@ all six platforms above as their baseline condition.
 ## 1.2 Common Policy Application
 
 Every document in this directory follows the
-[Framework Adapter Policy](../common/README.ko.md) and its subordinate documents as-is.
+[Framework Adapter Policy](../common/README.en.md) and its subordinate documents as-is.
 In other words, the `.NET`-specific documents never define new common meaning — they only
 cover how already-fixed meaning takes concrete shape on the `.NET`/`ASP.NET Core` surface.
 
 In particular, the following items apply uniformly across this whole directory.
 
 - The naming convention follows the `Naming Policy` in
-  [Common Spec README §6.2.1](../common/README.ko.md#621-네이밍-규칙) as-is. In `.NET`,
+  [Common Spec README §6.2.1](../common/README.en.md#621-naming-convention) as-is. In `.NET`,
   the entire public API is written in `PascalCase`, and word composition itself is never
   changed arbitrarily.
 - The casing intent behind `Zlink` and `ZLink` is as follows.
@@ -157,7 +157,7 @@ Reading order and per-chapter content are laid out by
 
 | Document | Role |
 |------|------|
-| [interfaces/README.ko.md](../common/spec/server/languages/dotnet/interfaces/README.ko.md) | The formal table of contents splitting the public interface into common runtime, host, channel, Spot, Actor, STREAM, location, maintenance, and monitoring |
+| [interfaces/README.ko.md](../common/spec/server/languages/dotnet/interfaces/README.en.md) | The formal table of contents splitting the public interface into common runtime, host, channel, Spot, Actor, STREAM, location, maintenance, and monitoring |
 
 ### 2.2 Topic Documents (Programming Model)
 
@@ -167,12 +167,12 @@ exact interface table of contents.
 
 | Document | Scope |
 |------|------------|
-| [configuration-host.ko.md](../common/spec/server/languages/dotnet/interfaces/02-configuration-host.ko.md) | ASP.NET Core host registration, bootstrap, DI, lifecycle, and startup validation |
-| [interfaces/README.ko.md](../common/spec/server/languages/dotnet/interfaces/README.ko.md) | The full table of contents for public interfaces/contexts/handlers/clients/providers/observation categories |
+| [configuration-host.ko.md](../common/spec/server/languages/dotnet/interfaces/02-configuration-host.en.md) | ASP.NET Core host registration, bootstrap, DI, lifecycle, and startup validation |
+| [interfaces/README.ko.md](../common/spec/server/languages/dotnet/interfaces/README.en.md) | The full table of contents for public interfaces/contexts/handlers/clients/providers/observation categories |
 | [32-stream-connector.ko.md](../common/spec/stream-connector/languages/dotnet/03-stream-connector.en.md) | The separate client connector's lifecycle, dispatch, codec, transport, and termination reasons |
-| [Public contract](../common/spec/server/languages/dotnet/README.ko.md) | The documentation contract and the exact verification procedure against actual assembly/NuGet artifacts |
+| [Public contract](../common/spec/server/languages/dotnet/README.en.md) | The documentation contract and the exact verification procedure against actual assembly/NuGet artifacts |
 
-**The meaning and behavioral rules of a feature are owned by the [common spec](../common/spec/README.ko.md).**
+**The meaning and behavioral rules of a feature are owned by the [common spec](../common/spec/README.en.md).**
 Language-specific documents only fix what shape that meaning takes in `.NET`.
 
 ### 2.3 Maintenance Documents
@@ -203,12 +203,12 @@ registration/execution flow of the common canonical scenarios.
 
 | Concept | Covered here | In other documents |
 |------|----------|---------------|
-| The full definition of interfaces, attributes, and contexts | [Exact interface](../common/spec/server/languages/dotnet/interfaces/README.ko.md) | Cross-reference only |
-| Channel registration (AddZLinkFramework), lifecycle | [Configuration and host](../common/spec/server/languages/dotnet/interfaces/02-configuration-host.ko.md) | Link only, when needed |
+| The full definition of interfaces, attributes, and contexts | [Exact interface](../common/spec/server/languages/dotnet/interfaces/README.en.md) | Cross-reference only |
+| Channel registration (AddZLinkFramework), lifecycle | [Configuration and host](../common/spec/server/languages/dotnet/interfaces/02-configuration-host.en.md) | Link only, when needed |
 | Handler/client usage examples, dispatch flow | aspnet-core-channel-messaging, samples | |
 | SPOT concepts, registration, lifecycle | [Spots](../common/spec/server/languages/dotnet/interfaces/05-spots.en.md) | Link only, when needed |
-| Actor lifecycle, session bind, user Spot join, session actor dispatch | [Actors](../common/spec/server/languages/dotnet/interfaces/06-actors.ko.md) | Link only, when needed |
-| Location store registration, auto-connect, operational queries | [Location](../common/spec/server/languages/dotnet/interfaces/08-location-maintenance.ko.md) | Link only, when needed |
+| Actor lifecycle, session bind, user Spot join, session actor dispatch | [Actors](../common/spec/server/languages/dotnet/interfaces/06-actors.en.md) | Link only, when needed |
+| Location store registration, auto-connect, operational queries | [Location](../common/spec/server/languages/dotnet/interfaces/08-location-maintenance.en.md) | Link only, when needed |
 
 ## 3. Core Direction
 

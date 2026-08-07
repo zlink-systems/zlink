@@ -19,16 +19,27 @@ title: "Framework 공개 계약 관리"
 
 공개 계약은 공통 의미와 언어별 표현으로 나눈다.
 
-| 위치 | 소유하는 계약 |
+| 위치 | 소유하는 내용 |
 |---|---|
 | 이 디렉토리와 package별 공통 스펙 | 언어와 무관한 기능, 상태, 완료 조건, 오류 의미 |
 | package의 `languages/<lang>/` | 실제 public 타입, 메서드 시그니처, generic·nullable 규칙, 언어별 비동기 표현 |
 | Core 정식 spec | context, message, raw socket, transport, poller와 generic monitoring 계약 |
-| Framework internals | 언어별 service runtime의 배선, 상태 기계, protocol 처리와 thread·executor 구조 |
+| Framework internals | 공개 계약을 만족시키는 언어별 service runtime의 배선, 상태 기계, protocol 처리와 thread·executor 구조. 새 공개 계약은 소유하지 않는다. |
 
 공통 스펙은 특정 언어의 문법을 표준으로 삼지 않는다. 각 언어는 같은 기능과 관찰 가능한 결과를
 자기 언어의 관례로 표현한다. .NET RouteMesh·MeshNode의 정확한 시그니처는
 [.NET RouteMesh·MeshNode 인터페이스](server/languages/dotnet/interfaces/03-configuration-topology.ko.md)가 소유한다.
+
+### 공개 계약 정본과 internals의 결합 규칙
+
+사용자가 관찰하는 동작은 이 디렉토리의 공통 spec과 언어별 exact interface에 한 번만 정의한다.
+Internals는 해당 spec을 링크한 뒤 그 동작을 만드는 상태 표현, component 책임과 불변 조건만 설명한다.
+같은 공개 동작을 internals에서 다시 규정하거나 더 강한 보장으로 확장하지 않는다.
+
+두 문서의 문구가 충돌하면 공개 동작과 public API는 spec이 우선한다. Internals의 구조 결정은 구현을
+맞추는 기준이지만 public API, 오류 의미나 failover 범위를 새로 만들 수 없다. 구현이 구조 결정을
+따르기 어려워 공개 동작을 바꿔야 한다면 internals만 고치지 않고 이 절의 공개 계약 절차를 다시 따른다.
+Gap report는 공개 계약 차이, 내부 구조 차이와 검증 증거 부족을 구분해 기록한다.
 
 ### 2.1 Production source owner
 
@@ -56,7 +67,7 @@ Layout 변경은 public API snapshot, package consumer build와 owner gate를 �
 필요하면 대상 declaration과 dependency 이유를 개별적으로 기록하며 directory나 assembly 전체를
 포괄하는 예외를 두지 않는다.
 
-이 경계는 [bindings public/internal 경계](../../../../../bindings/doc/spec/README.en.md#public-vs-internal-api-boundary)와
+이 경계는 [bindings public/internal 경계](../../../../../bindings/doc/spec/README.ko.md#공개-vs-내부-api-경계)와
 같은 방향을 사용한다. Framework와 bindings는 서로 다른 배포 package이므로 source root는 각각의
 spec이 소유하지만, public contract가 runtime 구현에 역으로 의존하지 않는다는 원칙은 동일하다.
 
@@ -153,8 +164,9 @@ Node.js와 C++에 동일하게 적용한다.
 
 ## 8. 11.0 spec-first 정본 규칙
 
-11.0의 Core service 이관과 service runtime 재구성은 정식 spec과 internals를 목표 상태의 정본으로 먼저
-확정한다. 계획 문서, draft, 현재 구현과 다른 언어의 구현은 계약의 출처가 아니다. 구현은 승인된 정본과의
+11.0의 Core service 이관과 service runtime 재구성은 정식 spec을 목표 공개 계약의 정본으로,
+internals를 목표 구현 구조의 기준으로 먼저 확정한다. 계획 문서, draft, 현재 구현과 다른 언어의 구현은
+계약의 출처가 아니다. 구현은 승인된 두 기준과의
 차이를 채우며, 구현 과정에서 계약을 바꿔야 할 제약이 확인되면 source를 우회하지 않고 영향을 받는 spec과
 internals를 다시 검토해 함께 수정한다.
 

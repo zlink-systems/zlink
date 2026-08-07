@@ -43,6 +43,16 @@ export async function runSample(ctx) {
     await ctx.waitTcp(ready);
   }
   await ctx.waitHttp(sample.dispatchApiHttpUrl);
+  for (const role of [
+    'tracking',
+    'customer-gateway',
+    'courier-session',
+    'courier-spot-node1',
+    'courier-spot-node2',
+    'dispatch'
+  ]) {
+    await ctx.waitLog(role, `deliverydispatch-route-ready role=${role}`);
+  }
   ctx.runBrowser({
     timeoutMs: 90_000,
     config: {

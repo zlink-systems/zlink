@@ -1,4 +1,4 @@
-[한국어](08-stream.ko.md) | English
+[한국어](https://zlink-systems.github.io/zlink/ko/spec/core/socket/08-stream/) | English
 
 [Specification Index](../../README.en.md) · [Core Index](../README.en.md) · [Socket Common](README.en.md) · [Errno Map](../04-errno-map.en.md)
 

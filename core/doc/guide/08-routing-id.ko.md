@@ -2,7 +2,7 @@
 title: "Routing ID"
 ---
 
-[English](08-routing-id.en.md)
+[English](08-routing-id.ko.md)
 
 <!-- zlink-nav:start -->
 [가이드 목록](README.ko.md) | [이전: Thread safety](11-thread-safety.ko.md) | [다음: PAIR 소켓](03-1-pair.ko.md)

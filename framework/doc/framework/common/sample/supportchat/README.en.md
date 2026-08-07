@@ -27,6 +27,7 @@ close, and reconnect verification. The following are excluded.
 - A message history store and full-text search
 - A real authentication provider and an external ticket system
 - Automatic crash failover after a Ready owner failure
+- Planned relocation of Actors and the Conversation Spot
 - UI design and agent-assignment optimization
 
 When there's no agent available, the result isn't an error — it returns WaitingForAgent. After the
@@ -122,6 +123,10 @@ An agent has one roster actor at the SupportEntrySpot and a conversation actor p
 Since one actor can only hold membership in one Spot at a time, handling multiple rooms means
 separating the actor per room. The Customer doesn't create a separate conversation actor — it uses
 the customer identity actor as the ConversationSpot participant.
+
+Every identity, roster, and conversation Actor factory registered by Support, and the Conversation
+Spot factory, selects `DisableRelocation`. Planned relocation isn't a completion criterion, so no
+Relocation Store is registered.
 
 ## 5. Framework Elements Used And Why
 
@@ -427,6 +432,13 @@ After the domain idle deadline passes since the last message, ConversationSpot t
 WaitingForClose and sends `ConversationIdleNotify` to both sides. If a message arrives within the
 grace timeout, it returns to Active; otherwise it sends Closed and `ConversationClosedNotify`. An
 explicit close transitions directly to Closed.
+
+Preparation and reconnect assertions across several processes can take longer than the domain
+idle deadline. In that case, the runner may send a normal typed `SendChatMessageReq` before the
+idle assertion and verify its response and new `MessageSeq` to renew valid application traffic.
+This message is not a heartbeat or transport keepalive; a control packet, arbitrary sleep, or log
+line must not replace it. The actual idle and grace behavior is checked with a separate bounded
+wait.
 
 ```mermaid
 sequenceDiagram

@@ -57,6 +57,23 @@ internal sealed class ZLinkChannelReceiveLoop(
                         ReplyClientServerControl(router, received, identity);
                         continue;
                     }
+                    if (received.RoutingId is not { } applicationSource
+                        || !identity.TryGetAdmittedMaximumMessageBytes(
+                            applicationSource,
+                            out var admittedMaximumMessageBytes))
+                        continue;
+                    if (!ZLinkClientServerMessageBound.Fits(
+                            received.Parts,
+                            admittedMaximumMessageBytes))
+                    {
+                        clientServerDispatcher.RejectMessageTooLarge(
+                            channelName,
+                            router,
+                            received,
+                            applicationDispatch.ReplyGate,
+                            admittedMaximumMessageBytes);
+                        continue;
+                    }
                     var owned = received;
                     var payloadBytes = MeasurePayloadBytes(owned.Parts);
                     var overageReservation = inboundDispatchBudget.Received(
@@ -70,7 +87,8 @@ internal sealed class ZLinkChannelReceiveLoop(
                                 router,
                                 owned,
                                 receiveStoragePool,
-                                applicationDispatch.ReplyGate),
+                                applicationDispatch.ReplyGate,
+                                admittedMaximumMessageBytes),
                             inboundDispatchBudget,
                             payloadBytes,
                             cancellationToken,
@@ -119,7 +137,8 @@ internal sealed class ZLinkChannelReceiveLoop(
                 work.ChannelName,
                 work.Router,
                 work.Received,
-                work.ReplyGate);
+                work.ReplyGate,
+                work.MaximumMessageBytes);
         }
         finally
         {
@@ -138,6 +157,7 @@ internal sealed class ZLinkChannelReceiveLoop(
                     work.Router,
                     work.Received,
                     work.ReplyGate,
+                    work.MaximumMessageBytes,
                     cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -186,18 +206,21 @@ internal sealed class ZLinkChannelReceiveLoop(
             && StringComparer.Ordinal.Equals(
                 hello.SecurityIdentity,
                 identity.SecurityIdentity);
+        var negotiatedMaximumMessageBytes = accepted
+            ? Math.Min(
+                hello!.NormalizedEffectiveMaxMessageBytes,
+                identity.NormalizedEffectiveMaxMessageBytes)
+            : 0;
         var reply = accepted
             ? ZLinkClientServerControlProtocol.EncodeAdmission(
                 identity.ToAdmission(snapshot) with
                 {
-                    NormalizedEffectiveMaxMessageBytes = Math.Min(
-                        hello!.NormalizedEffectiveMaxMessageBytes,
-                        identity.NormalizedEffectiveMaxMessageBytes)
+                    NormalizedEffectiveMaxMessageBytes = negotiatedMaximumMessageBytes
                 })
             : ZLinkClientServerControlProtocol.EncodeReject(reason: 1);
         if (ReplyOwned(router, sourceRid, received.RequestSeq, reply)
             && accepted)
-            identity.AdmitPeer(sourceRid);
+            identity.AdmitPeer(sourceRid, negotiatedMaximumMessageBytes);
     }
 
     private static bool ReplyOwned(
@@ -479,7 +502,8 @@ internal sealed class ZLinkChannelReceiveLoop(
         IZLinkBackendRouterSocket Router,
         Received Received,
         ZLinkReceivedStoragePool ReceiveStoragePool,
-        ZLinkChannelReplyGate ReplyGate);
+        ZLinkChannelReplyGate ReplyGate,
+        uint MaximumMessageBytes);
 
     private readonly record struct FanoutDispatchWork(
         string ChannelName,

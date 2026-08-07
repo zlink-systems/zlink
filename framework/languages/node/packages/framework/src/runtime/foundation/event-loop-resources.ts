@@ -1,3 +1,5 @@
+import { runZLinkExecutionArea } from '../execution';
+
 export interface CloseableResource {
   close(): void | Promise<void>;
 }
@@ -89,7 +91,7 @@ export class EventLoopWorkQueues {
     const task = this.takeInfrastructure();
     if (task === undefined) return;
     try {
-      const result = task();
+      const result = runZLinkExecutionArea('infrastructure', task);
       if (result instanceof Promise) void result.catch(() => undefined);
     } finally {
       if (this.infrastructureCount > 0) this.scheduleInfrastructure();
@@ -105,7 +107,9 @@ export class EventLoopWorkQueues {
   private async drainApplication(): Promise<void> {
     try {
       const task = this.takeApplication();
-      if (task !== undefined) await task();
+      if (task !== undefined) {
+        await runZLinkExecutionArea('application', task);
+      }
     } catch {
       // Handler failure is reported by the dispatch owner; it does not stop this queue.
     } finally {

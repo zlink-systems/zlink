@@ -10,7 +10,7 @@
 |--------|----------------|----------------|-----------|
 | core connector | `zlink-stream-connector` | `zlink-stream-connector` | CMake, vcpkg, Conan |
 | e2e client | `zlink-stream-e2e-client` | `zlink-stream-e2e-client` | CMake, vcpkg, Conan |
-| Unreal plugin | — | — | source plugin |
+| Unreal plugin | — | — | source plugin + generated ThirdParty package |
 | Godot adapter | — | — | source GDExtension |
 | Axmol adapter | — | — | source package |
 
@@ -62,7 +62,7 @@ target_link_libraries(my_game PRIVATE zlink::stream_connector)
 
 ```ini
 [requires]
-zlink-stream-connector/0.9.0
+zlink-stream-connector/0.10.0
 
 [options]
 zlink-stream-connector/*:with_tls=True
@@ -76,7 +76,7 @@ zlink-stream-connector/*:with_lz4=True
 from conan import ConanFile
 
 class MyGameConan(ConanFile):
-    requires = "zlink-stream-connector/0.9.0"
+    requires = "zlink-stream-connector/0.10.0"
     options = {"zlink-stream-connector/*:with_tls": True,
                "zlink-stream-connector/*:with_websocket": True}
 ```
@@ -120,7 +120,7 @@ target_link_libraries(my_game PRIVATE zlink::stream_connector)
 | `ZLINK_STREAM_CONNECTOR_WITH_TLS` | `ON` | TLS/WSS transport |
 | `ZLINK_STREAM_CONNECTOR_WITH_WEBSOCKET` | `ON` | WebSocket/WSS transport |
 | `ZLINK_STREAM_CONNECTOR_WITH_LZ4` | `ON` | LZ4 compression |
-| `ZLINK_STREAM_CONNECTOR_BUILD_UNREAL` | `OFF` | builds the Unreal adapter |
+| `ZLINK_STREAM_CONNECTOR_BUILD_UNREAL` | `ON` | builds the Unreal adapter |
 | `ZLINK_STREAM_CONNECTOR_BUILD_GODOT` | `OFF` | builds the Godot adapter |
 | `ZLINK_STREAM_CONNECTOR_BUILD_AXMOL` | `OFF` | builds the Axmol adapter |
 
@@ -144,12 +144,43 @@ The Unreal, Godot, and Axmol adapters are distributed as source packages, not th
 
 | Adapter | Distribution Method | Description |
 |--------|---------|------|
-| Unreal | source plugin (`.uplugin`) | placed under `Plugins/ZLinkStreamConnector/` |
+| Unreal | source plugin (`.uplugin`) + generated native package | placed under `Plugins/ZLinkStreamConnector/` with `ThirdParty/ZLink/` |
 | Godot | source GDExtension | placed under `addons/zlink_stream_connector/` |
 | Axmol | CMake source | `third_party/` or FetchContent |
 
 Each adapter either includes the core connector as an internal ThirdParty or references an installed
 CMake package. A user of an adapter package doesn't need to install the server framework package.
+
+Unreal Build Tool cannot consume the CMake target graph directly, so
+`Tools/package-third-party.cmake` creates a native package from a configured CMake build.
+The command below stages the Unreal adapter, C++ binding, Core runtime and Core CMake package,
+selected OpenSSL/LZ4 libraries, and a relative manifest under `ThirdParty/ZLink/`.
+
+```bash
+cmake \
+  -DZLINK_UNREAL_BUILD_DIR=/absolute/path/to/framework/languages/cpp/build \
+  -DZLINK_UNREAL_OUTPUT_DIR=/absolute/path/to/ThirdParty/ZLink \
+  -DZLINK_UNREAL_CONFIGURATION=Release \
+  -P framework/languages/cpp/connector/engines/unreal/Tools/package-third-party.cmake
+```
+
+`ZLinkStreamConnector.Build.cs` reads the manifest, validates the include paths,
+link libraries, runtime files, and system libraries, and registers them with the Unreal module.
+Set `ZLINK_UNREAL_THIRDPARTY_ROOT` to use a package outside the plugin directory. Windows
+system libraries such as `ws2_32` and `mswsock`, together with the TLS system dependencies,
+are recorded in the manifest. This supplies build/package dependencies without adding
+platform branches to the Asio transport runtime. The script installs only the
+`StreamConnector` CMake component, records platform/architecture/configuration/compiler
+metadata, and rejects a package whose target does not match the Unreal build. The installed
+CMake export uses package-relative dependency paths and includes the Windows Core import
+library, so a clean consumer does not depend on the producer's build directory.
+
+Before invoking Unreal Build Tool, set `ZLINK_UNREAL_COMPILER_ID` and
+`ZLINK_UNREAL_COMPILER_VERSION` to the actual compiler values selected by the Unreal target.
+Both values must match the manifest. They are required so a package built with a different
+compiler or CRT is rejected instead of being linked silently.
+The module uses the `ReadOnlyTargetRules` `Platform`, `Architecture`, and `Configuration`
+properties; run the package through the Unreal version's actual UBT to verify that API surface.
 
 ---
 

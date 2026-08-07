@@ -34,11 +34,11 @@ internal interface IZLinkBackendSpotNode : IAsyncDisposable
 
     void PublishDraining();
 
-    // Applies the Core MeshNode receive cap. Framework 0 means no limit and
-    // is translated by the backend to Core's -1 sentinel.
-    void SetMaxMessageSize(long value);
-
     void SetRouterHighWaterMark(ulong value);
+
+    void SetRouterReceiveHighWaterMark(ulong value) { }
+
+    void SetRouterReceiveTimeout(TimeSpan? value) { }
 
     void SetRouterSendTimeout(TimeSpan? value);
 

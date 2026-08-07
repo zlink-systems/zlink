@@ -232,7 +232,11 @@ export class ZLinkSpotRoutedActorAdmission {
     request: Message
   ): Promise<ZLinkSpotActorJoinResult> {
     const target = this.options.getTarget();
-    const joinPayload = wrapFrameworkPayloadMessage(request, this.options.messageSerializers);
+    const joinPayload = wrapFrameworkPayloadMessage(
+      request,
+      this.options.messageSerializers,
+      decoded.requestContentType
+    );
     const actorRef = decoded.actorRef;
     if (actorRef === undefined) {
       // The commit half of the routed transfer materializes the Actor from this
@@ -327,7 +331,7 @@ export class ZLinkSpotRoutedActorAdmission {
         }
         return decodeRemoteActorJoinPayload(
           header,
-          RuntimeMessage.from(Buffer.from(parts[1].data())),
+          RuntimeMessage.fromOwned(Buffer.from(parts[1].data())),
           received,
           true
         );

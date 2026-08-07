@@ -95,6 +95,13 @@ int zlink::socket_base_t::xterm_transport_pair (
         if (!pipe || pipe->get_transport_pair_id () != transport_pair_id_
             || pipe->get_transport_pair_generation () != transport_pair_generation_)
             continue;
+        const std::string endpoint = pipe->get_endpoint_pair ().identifier ();
+        const std::pair<endpoints_t::iterator, endpoints_t::iterator> range =
+          endpoint_runtime ().endpoints.equal_range (endpoint);
+        for (endpoints_t::iterator it = range.first; it != range.second; ++it) {
+            if (it->second.transport_pair_state)
+                it->second.transport_pair_state->disable_reconnect ();
+        }
         pipe->terminate (false);
         ++match_count;
     }
@@ -187,9 +194,26 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
             static_cast<mailbox_t *> (_mailbox)->signal ();
         }
     }
+    if (ready_application && socket_type () == ZLINK_CORE_SOCKET_ROUTER)
+        emit_transport_pair_ready (ready_application);
     if (ready_application
         && ready_application->release_writes_for_transport_pair ())
         write_activated (ready_application);
+    if (ready_application && socket_type () != ZLINK_CORE_SOCKET_ROUTER) {
+        // A Router may still be waiting for RID adoption after pair
+        // validation. Publish here only when the Application pipe already
+        // has its peer RID; router_t::adopt_peer_routing_id publishes the
+        // complementary case after route registration.
+        endpoint_uri_pair_t endpoint_pair =
+          ready_application->get_endpoint_pair ();
+        endpoint_pair.connection_id =
+          ready_application->get_transport_connection_id ();
+        const blob_t &routing_id = ready_application->get_routing_id ();
+        if (routing_id.size () > 0)
+            event_connection_ready_changed (
+              endpoint_pair, routing_id.data (), routing_id.size (),
+              transport_lane_application, pair_key.first, pair_key.second);
+    }
     if (ready_completion) {
         if (ready_completion->check_read ()) {
             if (completion_drain_permitted ())
@@ -690,12 +714,17 @@ void zlink::socket_base_t::pipe_terminated (pipe_t *pipe_)
 
     uint32_t ready_count = 0;
     bool ready_changed = false;
+    bool ready_changed_by_endpoint = false;
     {
         scoped_lock_t lock (monitor_runtime ().sync);
         endpoint_runtime ().detach_pipe (pipe_);
         ready_changed = monitor_runtime ().erase_ready_connection (
           endpoint_pair, routing_id_data, routing_id_size, &ready_count,
           pair_id, pair_generation);
+        if (!ready_changed)
+            ready_changed_by_endpoint = monitor_runtime ().erase_ready_connection_for_endpoint (
+              endpoint_pair, &ready_count, pair_id, pair_generation);
+        ready_changed = ready_changed || ready_changed_by_endpoint;
     }
     if (ready_changed) {
         uint64_t values[1] = {ready_count};
@@ -795,6 +824,19 @@ zlink::socket_base_t::completion_pipe_for_peer (const zlink_routing_id_t *peer_r
     return selected;
 }
 
+zlink::pipe_t *zlink::socket_base_t::completion_pipe_for_transport_pair (
+  uint64_t transport_pair_id_, uint64_t transport_pair_generation_) const
+{
+    if (transport_pair_id_ == 0 || transport_pair_generation_ == 0)
+        return NULL;
+    scoped_lock_t lock (_transport_pairs_sync);
+    const transport_pair_key_t key (transport_pair_id_, transport_pair_generation_);
+    transport_pairs_t::const_iterator it = _transport_pairs.find (key);
+    return it == _transport_pairs.end () || !it->second.ready
+             ? NULL
+             : it->second.completion;
+}
+
 int zlink::socket_base_t::socket_id () const
 {
     return options.socket_id;
@@ -803,4 +845,9 @@ int zlink::socket_base_t::socket_id () const
 bool zlink::socket_base_t::is_ctx_terminated () const
 {
     return _ctx_terminated.load (std::memory_order_acquire);
+}
+
+void zlink::socket_base_t::notify_transport_pair_ready (pipe_t *pipe_)
+{
+    (void) emit_transport_pair_ready (pipe_);
 }

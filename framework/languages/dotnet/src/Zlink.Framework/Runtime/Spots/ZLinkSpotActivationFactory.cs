@@ -54,12 +54,12 @@ internal sealed class ZLinkSpotActivationFactory(
     {
         AsyncServiceScope spotScope = default;
         var scopeCreated = false;
-        ZLinkSpotActivation? activation = null;
+        ZLinkUserSpotActivation? activation = null;
         try
         {
             spotScope = services.CreateAsyncScope();
             scopeCreated = true;
-            activation = new ZLinkSpotActivation(
+            activation = new ZLinkUserSpotActivation(
                 runtime,
                 spotScope,
                 nativeSpot,
@@ -129,12 +129,12 @@ internal sealed class ZLinkSpotActivationFactory(
     {
         AsyncServiceScope spotScope = default;
         var scopeCreated = false;
-        ZLinkSpotActivation? activation = null;
+        ZLinkInstanceSpotActivation? activation = null;
         try
         {
             spotScope = services.CreateAsyncScope();
             scopeCreated = true;
-            activation = new ZLinkSpotActivation(
+            activation = new ZLinkInstanceSpotActivation(
                 runtime,
                 spotScope,
                 nativeSpot,
@@ -158,7 +158,7 @@ internal sealed class ZLinkSpotActivationFactory(
                     .ConfigureAwait(false);
             spot.Configure();
             await activation.BindDescriptorsAsync(cancellationToken).ConfigureAwait(false);
-            await activation.InitializeInstanceAsync(cancellationToken).ConfigureAwait(false);
+            await activation.InitializeAsync(cancellationToken).ConfigureAwait(false);
             return activation;
         }
         catch (Exception initializationFailure)

@@ -12,6 +12,7 @@ import { ServiceLivenessRegistry, type ServiceLivenessTick } from './service-liv
 import { ServiceMailbox, type ServiceMailboxLimits, type ServiceMailboxRecord } from './service-mailbox';
 import {
   ServiceTopologyRegistry,
+  sameServiceNodeDescriptor,
   type AdmittedServicePeer,
   type PeerAdmissionResult,
   type ServiceNodeDescriptor
@@ -38,12 +39,19 @@ import {
   ServiceWireProtocolError
 } from './service-wire-m6a-codec';
 import { createServiceWireCodec } from './service-wire-codec';
+import { ServiceWireFrameworkErrorCode } from './service-wire-constants.generated';
 
 export type RawServicePumpResult =
   | 'noData'
   | 'infrastructure'
   | 'application'
+  | 'dropped'
   | 'protocolError';
+
+export type RawServicePumpObserver = (
+  sourceRoutingId: string,
+  byteCount: number
+) => void;
 
 export interface RawServiceRequestResult {
   readonly terminalResult: number;
@@ -75,11 +83,22 @@ export interface RawServiceMeshRuntimeOptions {
     nodeRoutingId: string,
     endpoint: string
   ) => void;
+  readonly onPeerDisconnected?: (
+    nodeRoutingId: string,
+    endpoint: string,
+    lifecycleGeneration: bigint
+  ) => void;
   readonly onInboundMessageDropped?: (
     surface: 'node' | 'channel',
     messageKind: 'send',
     reason: 'backpressure'
   ) => void;
+  readonly onProtocolError?: (record: {
+    readonly sourceRoutingId: string;
+    readonly request: boolean;
+    readonly replied: boolean;
+    readonly command?: number;
+  }) => void;
 }
 
 const DEFAULT_MAILBOX_LIMITS: ServiceMailboxLimits = {
@@ -94,6 +113,8 @@ const MONITOR_CONNECTION_READY_EDGE = 1;
 // Framework error code 13 (RequestTargetNotFound) is encoded as 14 on a
 // RequestResult.NotFound reply. Boundary transport results keep failureCode 0.
 const REQUEST_TARGET_NOT_FOUND_FAILURE_CODE = 14;
+// Framework error code 17 (WorkerQueueFull) uses the wire offset convention.
+const WORKER_QUEUE_FULL_FAILURE_CODE = 18;
 const MAX_COMPLETION_CONTROL_BYTES = 64 * 1024;
 const COMPLETION_CONTROL_COMMANDS = new Set<number>([
   M6aServiceWireCommand.hello,
@@ -127,6 +148,9 @@ const livenessCodec = createServiceWireCodec({
   commands: M6aServiceWireCommand
 });
 
+const MAX_PENDING_MONITOR_EVENTS = 8192;
+const MAX_UNRESOLVED_CONNECTION_CANDIDATES = 4096;
+
 /**
  * RouteMesh M6A runtime built only on the public raw binding package.
  * It owns protocol, admission, mailbox, completion and liveness state.
@@ -158,9 +182,12 @@ export class RawServiceMeshRuntime {
    */
   private readonly monitorConnectionStates = new Map<string, string | null>();
   private monitorEvents: ZLinkRawMonitorRecord[] = [];
+  private monitorDrainBuffer: ZLinkRawMonitorRecord[] = [];
   private readonly bindingPort: { createHost(): ZLinkRawHostPort };
   private readonly onPeerNotRequired?: RawServiceMeshRuntimeOptions['onPeerNotRequired'];
+  private readonly onPeerDisconnected?: RawServiceMeshRuntimeOptions['onPeerDisconnected'];
   private readonly onInboundMessageDropped?: RawServiceMeshRuntimeOptions['onInboundMessageDropped'];
+  private readonly onProtocolError?: RawServiceMeshRuntimeOptions['onProtocolError'];
   private descriptor: ServiceNodeDescriptor;
   private host?: ZLinkRawHostPort;
   private router?: ZLinkRawRouterPort;
@@ -176,7 +203,9 @@ export class RawServiceMeshRuntime {
     this.liveness = new ServiceLivenessRegistry(options.probeIntervalMs, options.peerTimeoutMs);
     this.bindingPort = options.bindingPort ?? new ZLinkNodeRawBindingPort();
     this.onPeerNotRequired = options.onPeerNotRequired;
+    this.onPeerDisconnected = options.onPeerDisconnected;
     this.onInboundMessageDropped = options.onInboundMessageDropped;
+    this.onProtocolError = options.onProtocolError;
   }
 
   start(): void {
@@ -197,7 +226,26 @@ export class RawServiceMeshRuntime {
       this.descriptor = next;
       this.monitor = router.monitor(event => {
         this.observeMonitorEvent(event);
-        this.monitorEvents.push(event);
+        if (this.monitorEvents.length < MAX_PENDING_MONITOR_EVENTS) {
+          this.monitorEvents.push(event);
+        } else {
+          // Keep one latest transition per physical connection when the
+          // normal drain is delayed. This bounds storage without replacing an
+          // unrelated connection's transition.
+          const existingIndex = this.monitorEvents.findIndex(candidate =>
+            sameMonitorConnection(candidate, event)
+          );
+          if (existingIndex >= 0) {
+            this.monitorEvents[existingIndex] = event;
+          } else {
+            // Preserve the newest lifecycle edge when unrelated connections
+            // saturate the bounded queue; stale edges are less useful than
+            // the current edge and will be reconciled by the next monitor
+            // drain.
+            this.monitorEvents.shift();
+            this.monitorEvents.push(event);
+          }
+        }
       });
       router.setCompletionControlHandler?.((sourceRid, parts) => {
         // The binding callback owns Completion progress independently of
@@ -250,7 +298,6 @@ export class RawServiceMeshRuntime {
     securityIdentity?: string,
     lifecycleGeneration?: bigint
   ): void {
-    this.disconnectStalePeerCandidates(nodeRoutingId, endpoint);
     this.expectedPeers.set(nodeRoutingId, {
       meshName: this.topology.localDescriptor().meshName,
       nodeRoutingId,
@@ -569,11 +616,68 @@ export class RawServiceMeshRuntime {
     );
   }
 
-  pumpOne(nowMs = performance.now()): RawServicePumpResult {
+  pumpOne(
+    nowMs = performance.now(),
+    observe?: RawServicePumpObserver
+  ): RawServicePumpResult {
     const router = this.requireStarted();
     const received = router.receive(true);
     if (received === undefined) return 'noData';
-    return this.processReceived(received, nowMs, false);
+    const result = this.processReceived(received, nowMs, false);
+    if (result === 'protocolError') {
+      this.reportProtocolError(received);
+    }
+    observe?.(
+      received.sourceRid,
+      received.parts.reduce((sum, part) => sum + part.byteLength, 0)
+    );
+    return result;
+  }
+
+  private reportProtocolError(
+    received: import('../backend/node/node-raw-binding-port').ZLinkRawReceivedRecord
+  ): void {
+    const request = received.requestSeq !== undefined;
+    const replied = request && this.replyGenericProtocolError(received);
+    this.onProtocolError?.({
+      sourceRoutingId: received.sourceRid,
+      request,
+      replied,
+      ...protocolCommand(received.parts)
+    });
+  }
+
+  private replyGenericProtocolError(
+    received: import('../backend/node/node-raw-binding-port').ZLinkRawReceivedRecord
+  ): boolean {
+    if (received.requestSeq === undefined || received.parts.length === 0) return false;
+    try {
+      const header = decodeHeader(received.parts[0]!);
+      const correlation = header.command === M6aServiceWireCommand.nodeRequest
+        ? decodeNodeRequestHeader(received.parts[0]!)
+        : header.command === M6aServiceWireCommand.channelRequest
+          ? decodeChannelRequestHeader(received.parts[0]!).correlation
+          : undefined;
+      if (correlation === undefined) return false;
+      const reply = [encodeReplyHeader(
+        correlation,
+        RequestResult.ProtocolError,
+        ServiceWireFrameworkErrorCode.requestProtocolError
+      )];
+      if (received.reply !== undefined) {
+        received.reply(reply);
+      } else {
+        this.requireStarted().reply(
+          received.sourceRoute ?? received.sourceRid,
+          received.requestSeq,
+          reply
+        );
+      }
+      return true;
+    } catch (error) {
+      if (error instanceof ServiceWireProtocolError) return false;
+      throw error;
+    }
   }
 
   /**
@@ -604,7 +708,7 @@ export class RawServiceMeshRuntime {
         [encodeRouteMeshAdmission(M6aServiceWireCommand.hello, this.topology.localDescriptor())]
       )
         ? 'infrastructure'
-        : 'protocolError';
+        : 'dropped';
     }
     try {
       const header = decodeHeader(received.parts[0]!);
@@ -632,7 +736,9 @@ export class RawServiceMeshRuntime {
         }
         const connection = this.currentConnectionCandidate(
           received.sourceRid,
-          descriptor.advertisedEndpoint
+          descriptor.advertisedEndpoint,
+          received.transportPairId,
+          received.transportPairGeneration
         );
         const result = this.admitPeer(
           descriptor,
@@ -666,7 +772,7 @@ export class RawServiceMeshRuntime {
         // not carry that candidate's connection id. Keep an already admitted
         // peer: bilateral manual connect can reject the duplicate after the
         // other candidate has become Ready.
-        if (reason === 4) {
+        if (reason === 4 && this.topology.peer(received.sourceRid) === undefined) {
           const expected = this.expectedPeers.get(received.sourceRid);
           const local = this.topology.localDescriptor();
           this.topology.markNotRequired({
@@ -696,10 +802,15 @@ export class RawServiceMeshRuntime {
             peer.connectionId,
             record.probeId
           );
-          const sent = ack !== undefined && this.trySend(received.sourceRid, [livenessCodec.encodeLivenessRecord({
+          const sent = ack !== undefined && this.trySend(
+            received.sourceRid,
+            [livenessCodec.encodeLivenessRecord({
               command: M6aServiceWireCommand.livenessAck,
               probeId: record.probeId
-            })]);
+            })],
+            received.transportPairId,
+            received.transportPairGeneration
+          );
           if (!sent) {
             return 'protocolError';
           }
@@ -773,7 +884,22 @@ export class RawServiceMeshRuntime {
       } else if (header.command === M6aServiceWireCommand.channelSend) {
         this.onInboundMessageDropped?.('channel', 'send', 'backpressure');
       }
-      return 'protocolError';
+      if (correlation !== undefined && received.requestSeq !== undefined) {
+        this.replyService({
+          sourceRoutingId: received.sourceRid,
+          sourceRoute: received.sourceRoute,
+          requestSequence: received.requestSeq,
+          ...(received.reply === undefined ? {} : { reply: received.reply })
+        }, [
+          encodeReplyHeader(
+            correlation,
+            RequestResult.Rejected,
+            WORKER_QUEUE_FULL_FAILURE_CODE
+          )
+        ]);
+        return 'infrastructure';
+      }
+      return 'dropped';
     } catch (error) {
       if (error instanceof ServiceWireProtocolError) return 'protocolError';
       throw error;
@@ -801,7 +927,12 @@ export class RawServiceMeshRuntime {
     }
     for (const nodeRoutingId of result.timedOutNodes) {
       const peer = this.topology.peer(nodeRoutingId);
-      if (peer !== undefined) this.topology.disconnect(nodeRoutingId, peer.connectionId);
+      if (peer === undefined) continue;
+      // Liveness timeout is a semantic peer removal.  Route topology,
+      // physical candidate state, and auto-connect intent must be retired by
+      // the same owner so a failed endpoint cannot be selected again.
+      this.removeConnectionCandidate(nodeRoutingId, peer.connectionId);
+      this.removePeer(peer);
     }
     return result;
   }
@@ -811,59 +942,102 @@ export class RawServiceMeshRuntime {
     // Detach the current batch so monitor callbacks that run while an event is
     // being handled append to the next batch without copying or reindexing it.
     const events = this.monitorEvents;
-    this.monitorEvents = [];
+    this.monitorEvents = this.monitorDrainBuffer;
+    this.monitorDrainBuffer = events;
+    this.monitorEvents.length = 0;
     for (const event of events) {
       handled++;
       const nodeRoutingId = event.routingId
         ?? this.expectedPeerRoutingId(event.remoteAddress);
       if (event.event === MONITOR_CONNECTION_READY && isConnectionReadyEdge(event)) {
         if (nodeRoutingId === undefined) {
-          this.unresolvedConnectionCandidates.push(
-            this.createUnresolvedConnectionCandidate(event)
+          const candidate = this.createUnresolvedConnectionCandidate(event);
+          const alreadyQueued = this.unresolvedConnectionCandidates.some(
+            value => value.connectionId === candidate.connectionId
           );
+          if (!alreadyQueued && this.unresolvedConnectionCandidates.length < MAX_UNRESOLVED_CONNECTION_CANDIDATES) {
+            this.unresolvedConnectionCandidates.push(candidate);
+          }
           continue;
         }
         if (!this.acceptsExpectedMonitorEndpoint(nodeRoutingId, event)) {
+          this.disconnectUnexpectedMonitorPair(event);
           continue;
         }
         const candidate = this.createConnectionCandidate(nodeRoutingId, event);
+        const existingPeer = this.topology.peer(nodeRoutingId);
+        if (existingPeer !== undefined && existingPeer.connectionId === candidate.connectionId) {
+          this.monitorConnectionStates.set(nodeRoutingId, candidate.connectionId);
+          continue;
+        }
+        if (existingPeer !== undefined) {
+          if (this.liveness.isReady(nodeRoutingId, existingPeer.connectionId)) {
+            const existingCandidate = this.connectionCandidates
+              .get(nodeRoutingId)?.get(existingPeer.connectionId);
+            if (existingPeer.connectionId.startsWith('unmonitored:')
+              && candidate.transportPairId !== undefined
+              && candidate.transportPairGeneration !== undefined) {
+              // The fallback endpoint admission can precede the physical
+              // pair READY edge. Retain the pair as provisional evidence and
+              // announce over that pair so the peer descriptor admission can
+              // promote the semantic route before an application request.
+              let provisionalCandidates = this.connectionCandidates.get(nodeRoutingId);
+              if (provisionalCandidates === undefined) {
+                provisionalCandidates = new Map();
+                this.connectionCandidates.set(nodeRoutingId, provisionalCandidates);
+              }
+              provisionalCandidates.set(candidate.connectionId, candidate);
+              this.announcePeer(nodeRoutingId);
+              continue;
+            }
+            const sameTransportPair = existingCandidate !== undefined
+              && candidate.transportPairId !== undefined
+              && candidate.transportPairGeneration !== undefined
+              && existingCandidate.transportPairId === candidate.transportPairId
+              && existingCandidate.transportPairGeneration === candidate.transportPairGeneration;
+            if (sameTransportPair) {
+              this.removeConnectionCandidate(nodeRoutingId, candidate.connectionId);
+              this.monitorConnectionStates.set(nodeRoutingId, existingPeer.connectionId);
+              continue;
+            }
+            // A ready route is the current semantic owner. A second physical
+            // candidate may be admitted only after the current lease expires;
+            // this also prevents a late old-process reconnect from replacing
+            // the ready replacement by arrival order.
+            this.disconnectUnexpectedMonitorPair(candidate);
+            continue;
+          }
+          // Keep the physical candidate until the wire descriptor decides
+          // whether it is the current logical peer. READY events can race
+          // with DISCONNECTED events during reconnect; rejecting the READY
+          // here can terminate the replacement before admission evaluates its
+          // lifecycle generation.
+          let provisionalCandidates = this.connectionCandidates.get(nodeRoutingId);
+          if (provisionalCandidates === undefined) {
+            provisionalCandidates = new Map();
+            this.connectionCandidates.set(nodeRoutingId, provisionalCandidates);
+          }
+          provisionalCandidates.set(candidate.connectionId, candidate);
+          this.connectionIds.set(nodeRoutingId, candidate.connectionId);
+          this.announcePeer(nodeRoutingId);
+          continue;
+        }
         let candidates = this.connectionCandidates.get(nodeRoutingId);
         if (candidates === undefined) {
           candidates = new Map();
           this.connectionCandidates.set(nodeRoutingId, candidates);
         }
         candidates.set(candidate.connectionId, candidate);
-        const observedConnection = this.monitorConnectionStates.get(nodeRoutingId);
-        if (
-          observedConnection === undefined
-          || (
-            observedConnection !== null
-            && observedConnection !== candidate.connectionId
-          )
-        ) {
-          this.monitorConnectionStates.set(nodeRoutingId, candidate.connectionId);
-        }
-        // Before admission the monitor candidate is the only physical route
-        // evidence available to the wire-level admission message. Keep it as
-        // the provisional selection; admitPeer() replaces it only after the
-        // descriptor and candidate fence succeed.
+        // Before wire admission the monitor candidate is the only physical
+        // route evidence available to the admission message.
         this.connectionIds.set(nodeRoutingId, candidate.connectionId);
-        const admitted = this.topology.peer(nodeRoutingId);
-        if (admitted !== undefined) {
-          this.admitPeer(
-            admitted.descriptor,
-            candidate,
-            nowMs,
-            this.expectedPeers.get(nodeRoutingId)
-          );
-        }
         this.announcePeer(nodeRoutingId);
       } else if (
         event.event === MONITOR_DISCONNECTED
         && nodeRoutingId !== undefined
       ) {
         const peer = this.topology.peer(nodeRoutingId);
-        const disconnectedId = monitorConnectionId(event);
+        const disconnectedId = monitorConnectionId(event, nodeRoutingId);
         this.removeConnectionCandidate(nodeRoutingId, disconnectedId);
         if (peer !== undefined && peer.connectionId === disconnectedId) {
           this.removePeer(peer);
@@ -878,6 +1052,7 @@ export class RawServiceMeshRuntime {
         if (index >= 0) this.unresolvedConnectionCandidates.splice(index, 1);
       }
     }
+    this.monitorDrainBuffer.length = 0;
     void nowMs;
     return handled;
   }
@@ -902,11 +1077,12 @@ export class RawServiceMeshRuntime {
     timeoutMs: number,
     channelName?: string
   ): PendingOperation<RawServiceRequestResult> {
-    const pending = this.operations.reserve(timeoutMs);
     const correlation = this.nextCorrelation++;
     const header = channelName === undefined
       ? encodeNodeRequestHeader(correlation)
       : encodeChannelRequestHeader(correlation, channelName);
+    const encodedPayload = encodeApplicationPayload(payload);
+    const pending = this.operations.reserve(timeoutMs);
     let selectedTargetNodeRoutingId = targetNodeRoutingId;
     if (
       selectedTargetNodeRoutingId !== this.descriptor.nodeRoutingId
@@ -941,7 +1117,7 @@ export class RawServiceMeshRuntime {
       }
     }
     if (selectedTargetNodeRoutingId === this.descriptor.nodeRoutingId) {
-      const parts = [header, encodeApplicationPayload(payload)];
+      const parts = [header, encodedPayload];
       const accepted = this.mailbox.tryEnqueue({
         owner: channelName === undefined
           ? `node:${this.descriptor.nodeRoutingId}`
@@ -980,7 +1156,8 @@ export class RawServiceMeshRuntime {
       });
       return pending;
     }
-    const parts = [header, encodeApplicationPayload(payload)];
+    const parts = [header, encodedPayload];
+    const selectedPair = this.currentTransportPair(selectedTargetNodeRoutingId);
     debugRoute('request-native', {
       meshName: this.descriptor.meshName,
       targetNodeRoutingId: selectedTargetNodeRoutingId,
@@ -988,23 +1165,39 @@ export class RawServiceMeshRuntime {
       targetConnectionDiscriminator: this.topology.peer(selectedTargetNodeRoutingId)?.connectionDiscriminator,
       targetRouteReady: this.isPeerRouteReady(selectedTargetNodeRoutingId)
     });
-    void this.requireStarted().request(
-      selectedTargetNodeRoutingId,
-      parts,
-      timeoutMs
-    ).then(
-      parts => {
+    let router: ZLinkRawRouterPort;
+    let request: Promise<readonly Uint8Array[]>;
+    try {
+      router = this.requireStarted();
+      request = selectedPair?.transportPairId !== undefined
+        && selectedPair.transportPairGeneration !== undefined
+        ? router.requestTransportPair(
+            selectedTargetNodeRoutingId,
+            selectedPair.transportPairId,
+            selectedPair.transportPairGeneration,
+            parts,
+            timeoutMs
+          )
+        : router.request(selectedTargetNodeRoutingId, parts, timeoutMs);
+    } catch (error) {
+      this.operations.fail(pending.id, error);
+      return pending;
+    }
+    void request.then(
+      replyParts => {
         try {
-          if (parts.length < 1 || parts.length > 2) throw new ServiceWireProtocolError('Invalid reply parts.');
-          const reply = decodeReplyHeader(parts[0]!);
+          if (replyParts.length < 1 || replyParts.length > 2) {
+            throw new ServiceWireProtocolError('Invalid reply parts.');
+          }
+          const reply = decodeReplyHeader(replyParts[0]!);
           if (reply.correlation !== correlation) throw new ServiceWireProtocolError('Reply correlation mismatch.');
           if (reply.tail.byteLength !== 0) {
             throw new ServiceWireProtocolError('Generic node/channel reply carries an operation-specific tail.');
           }
-          if (reply.terminalResult === 0 && parts.length !== 2) {
+          if (reply.terminalResult === 0 && replyParts.length !== 2) {
             throw new ServiceWireProtocolError('Successful reply omits its payload.');
           }
-          if (reply.terminalResult !== 0 && parts.length !== 1) {
+          if (reply.terminalResult !== 0 && replyParts.length !== 1) {
             throw new ServiceWireProtocolError('Failed reply carries a payload.');
           }
           const result: RawServiceRequestResult = {
@@ -1014,7 +1207,7 @@ export class RawServiceMeshRuntime {
           this.operations.complete(
             pending.id,
             reply.terminalResult === 0
-              ? { ...result, payload: decodeApplicationPayload(parts[1]!) }
+              ? { ...result, payload: decodeApplicationPayload(replyParts[1]!) }
               : result
           );
         } catch (error) {
@@ -1046,6 +1239,21 @@ export class RawServiceMeshRuntime {
     }
   ): PeerAdmissionResult {
     const previous = this.topology.peer(descriptor.nodeRoutingId);
+    if (
+      previous !== undefined
+      && previous.descriptor.lifecycleGeneration === descriptor.lifecycleGeneration
+      && (
+        descriptor.descriptorRevision < previous.descriptor.descriptorRevision
+        || (
+          descriptor.descriptorRevision === previous.descriptor.descriptorRevision
+          && !sameServiceNodeDescriptor(previous.descriptor, descriptor)
+        )
+      )
+    ) {
+      throw new ServiceWireProtocolError(
+        `RouteMesh peer '${descriptor.nodeRoutingId}' descriptor revision is stale or conflicting.`
+      );
+    }
     const result = this.topology.admit(
       descriptor,
       connection.connectionId,
@@ -1072,6 +1280,28 @@ export class RawServiceMeshRuntime {
         connection.connectionId,
         nowMs
       );
+      if (connection.transportPairId !== undefined
+        && connection.transportPairGeneration !== undefined) {
+        this.monitorConnectionStates.set(
+          descriptor.nodeRoutingId,
+          connection.connectionId
+        );
+      }
+      if (previous !== undefined && previous.connectionId !== connection.connectionId) {
+        const previousCandidate = this.connectionCandidates
+          .get(descriptor.nodeRoutingId)?.get(previous.connectionId);
+        if (previousCandidate !== undefined) {
+          const sameTransportPair = connection.transportPairId !== undefined
+            && connection.transportPairGeneration !== undefined
+            && previousCandidate.transportPairId === connection.transportPairId
+            && previousCandidate.transportPairGeneration === connection.transportPairGeneration;
+          if (!sameTransportPair) this.disconnectUnexpectedMonitorPair(previousCandidate);
+          this.removeConnectionCandidate(
+            descriptor.nodeRoutingId,
+            previousCandidate.connectionId
+          );
+        }
+      }
     } else if (result === 'notRequired' && previous !== undefined) {
       this.liveness.disconnect(
         descriptor.nodeRoutingId,
@@ -1082,14 +1312,60 @@ export class RawServiceMeshRuntime {
         descriptor.nodeRoutingId,
         previous.connectionId
       );
+      if (connection.connectionId !== previous.connectionId) {
+        this.disconnectUnexpectedMonitorPair(connection);
+        this.removeConnectionCandidate(
+          descriptor.nodeRoutingId,
+          connection.connectionId
+        );
+      }
     }
     return result;
   }
 
   private currentConnectionCandidate(
     nodeRoutingId: string,
-    advertisedEndpoint: string
+    advertisedEndpoint: string,
+    transportPairId?: bigint,
+    transportPairGeneration?: bigint
   ): PhysicalConnectionCandidate {
+    if (transportPairId !== undefined
+      && transportPairGeneration !== undefined
+      && transportPairId !== 0n
+      && transportPairGeneration !== 0n) {
+      const candidates = this.connectionCandidates.get(nodeRoutingId);
+      const exactId = JSON.stringify([
+        nodeRoutingId,
+        'transport-pair',
+        transportPairId.toString(),
+        transportPairGeneration.toString()
+      ]);
+      const exact = candidates?.get(exactId);
+      if (exact !== undefined) return exact;
+      const localRid = this.topology.localDescriptor().nodeRoutingId;
+      const endpointOnly = this.endpointOnlyPeers.has(advertisedEndpoint);
+      const direction: PhysicalConnectionDirection = this.expectedPeers.has(nodeRoutingId)
+        ? 'outbound'
+        : endpointOnly
+          ? localRid.localeCompare(nodeRoutingId) <= 0 ? 'outbound' : 'inbound'
+          : 'inbound';
+      const initiator = endpointOnly && localRid.localeCompare(nodeRoutingId) > 0
+        ? nodeRoutingId
+        : direction === 'outbound' ? localRid : nodeRoutingId;
+      const candidate: PhysicalConnectionCandidate = {
+        connectionId: exactId,
+        direction,
+        discriminator: `initiator:${initiator}`,
+        localAddress: '',
+        remoteAddress: advertisedEndpoint,
+        transportPairId,
+        transportPairGeneration
+      };
+      const exactCandidates = candidates ?? new Map<string, PhysicalConnectionCandidate>();
+      if (candidates === undefined) this.connectionCandidates.set(nodeRoutingId, exactCandidates);
+      exactCandidates.set(exactId, candidate);
+      return candidate;
+    }
     let connectionId = this.connectionIds.get(nodeRoutingId);
     let candidate = connectionId === undefined
       ? undefined
@@ -1167,10 +1443,10 @@ export class RawServiceMeshRuntime {
         ? nodeRoutingId
         : undefined;
     return {
-      connectionId: monitorConnectionId(event),
+      connectionId: monitorConnectionId(event, nodeRoutingId),
       direction,
       discriminator: initiator === undefined
-        ? `unknown:${monitorConnectionId(event)}`
+        ? `unknown:${monitorConnectionId(event, nodeRoutingId)}`
         : `initiator:${initiator}`,
       localAddress: event.localAddress,
       remoteAddress: event.remoteAddress,
@@ -1200,37 +1476,6 @@ export class RawServiceMeshRuntime {
       transportPairId: event.transportPairId,
       transportPairGeneration: event.transportPairGeneration
     };
-  }
-
-  private disconnectStalePeerCandidates(
-    nodeRoutingId: string,
-    expectedEndpoint: string
-  ): void {
-    const candidates = this.connectionCandidates.get(nodeRoutingId);
-    const router = this.router;
-    if (candidates === undefined || router?.disconnectTransportPair === undefined) return;
-    for (const candidate of candidates.values()) {
-      if (
-        candidate.remoteAddress === ''
-        || candidate.remoteAddress === expectedEndpoint
-        || candidate.transportPairId === undefined
-        || candidate.transportPairGeneration === undefined
-        || candidate.transportPairId === 0n
-        || candidate.transportPairGeneration === 0n
-      ) continue;
-      try {
-        router.disconnectTransportPair(
-          candidate.transportPairId,
-          candidate.transportPairGeneration
-        );
-      } catch (error) {
-        if (!isAlreadyDisconnectedError(error)) throw error;
-      }
-      this.removeConnectionCandidate(nodeRoutingId, candidate.connectionId);
-      if (this.monitorConnectionStates.get(nodeRoutingId) === candidate.connectionId) {
-        this.monitorConnectionStates.set(nodeRoutingId, null);
-      }
-    }
   }
 
   private promoteUnresolvedConnectionCandidate(
@@ -1295,11 +1540,37 @@ export class RawServiceMeshRuntime {
 
   private acceptsExpectedMonitorEndpoint(
     nodeRoutingId: string,
-    event: Pick<ZLinkRawMonitorRecord, 'remoteAddress'>
+    event: Pick<ZLinkRawMonitorRecord, 'remoteAddress' | 'routingId'>
   ): boolean {
+    // A monitor address is the physical socket address, which may be an
+    // ephemeral port. Once Core has resolved the peer routing ID, that ID is
+    // the semantic identity; comparing the physical address with the
+    // discovery advertised endpoint would reject valid READY events.
+    if (event.routingId === nodeRoutingId) return true;
     const expected = this.expectedPeers.get(nodeRoutingId);
     return expected === undefined || expected.endpoint === undefined
       || expected.endpoint === event.remoteAddress;
+  }
+
+  private disconnectUnexpectedMonitorPair(
+    event: Pick<ZLinkRawMonitorRecord, 'transportPairId' | 'transportPairGeneration'>
+  ): void {
+    const router = this.router;
+    if (
+      router?.disconnectTransportPair === undefined
+      || typeof event.transportPairId !== 'bigint'
+      || typeof event.transportPairGeneration !== 'bigint'
+      || event.transportPairId === 0n
+      || event.transportPairGeneration === 0n
+    ) return;
+    try {
+      router.disconnectTransportPair(
+        event.transportPairId,
+        event.transportPairGeneration
+      );
+    } catch (error) {
+      if (!isAlreadyDisconnectedError(error)) throw error;
+    }
   }
 
   private retireNotRequiredExpectedPeer(
@@ -1342,23 +1613,31 @@ export class RawServiceMeshRuntime {
     }
     this.topology.disconnect(peer.descriptor.nodeRoutingId, peer.connectionId);
     this.liveness.disconnect(peer.descriptor.nodeRoutingId, peer.connectionId);
+    this.onPeerDisconnected?.(
+      peer.descriptor.nodeRoutingId,
+      peer.descriptor.advertisedEndpoint,
+      peer.descriptor.lifecycleGeneration
+    );
   }
 
   private observeMonitorEvent(event: ZLinkRawMonitorRecord): void {
     const nodeRoutingId = event.routingId
       ?? this.expectedPeerRoutingId(event.remoteAddress);
     if (nodeRoutingId === undefined) return;
-    const connectionId = monitorConnectionId(event);
+    const connectionId = monitorConnectionId(event, nodeRoutingId);
     if (event.event === MONITOR_CONNECTION_READY && isConnectionReadyEdge(event)) {
       if (!this.acceptsExpectedMonitorEndpoint(nodeRoutingId, event)) return;
-      // For a paired transport the Core emits one edge only after both lanes
-      // are ready. The lane field identifies the lane that completed last;
-      // it does not mean that the other lane is unready.
-      this.monitorConnectionStates.set(nodeRoutingId, connectionId);
+      // The event is queued for admission. Updating monitor state here would
+      // allow a late stale READY to overwrite the admitted replacement.
       return;
     }
     if (event.event === MONITOR_DISCONNECTED
-      && this.monitorConnectionStates.get(nodeRoutingId) === connectionId) {
+      && this.monitorConnectionStates.get(nodeRoutingId) === connectionId
+      && this.topology.peer(nodeRoutingId)?.connectionId === connectionId
+      && (event.transportPairId === undefined
+        || event.transportPairGeneration === undefined
+        || event.transportPairId === 0n
+        || event.transportPairGeneration === 0n)) {
       this.monitorConnectionStates.set(nodeRoutingId, null);
     }
   }
@@ -1368,22 +1647,94 @@ export class RawServiceMeshRuntime {
     return this.router;
   }
 
-  private trySend(targetNodeRoutingId: string, parts: readonly Uint8Array[]): boolean {
+  private trySend(
+    targetNodeRoutingId: string,
+    parts: readonly Uint8Array[],
+    transportPairId?: bigint,
+    transportPairGeneration?: bigint
+  ): boolean {
     try {
       const router = this.requireStarted();
+      const candidate = this.currentTransportPair(targetNodeRoutingId);
+      const pairId = transportPairId ?? candidate?.transportPairId;
+      const pairGeneration = transportPairGeneration ?? candidate?.transportPairGeneration;
       const command = completionControlCommand(parts);
       if (
         command !== undefined
         && command >= M6aServiceWireCommand.livenessProbe
         && command <= M6aServiceWireCommand.livenessAck
-        && router.trySendCompletionControl !== undefined
       ) {
+        if (
+          pairId !== undefined
+          && pairGeneration !== undefined
+          && router.trySendCompletionControlTransportPair !== undefined
+        ) {
+          return router.trySendCompletionControlTransportPair(
+            targetNodeRoutingId,
+            pairId,
+            pairGeneration,
+            parts
+          );
+        }
+        if (router.trySendCompletionControl === undefined) return false;
         return router.trySendCompletionControl(targetNodeRoutingId, parts);
+      }
+      if (
+        pairId !== undefined
+        && pairGeneration !== undefined
+      ) {
+        return router.sendTransportPair(
+          targetNodeRoutingId,
+          pairId,
+          pairGeneration,
+          parts,
+          true
+        );
       }
       return router.send(targetNodeRoutingId, parts, true);
     } catch {
       return false;
     }
+  }
+
+  private currentTransportPair(nodeRoutingId: string): PhysicalConnectionCandidate | undefined {
+    const peer = this.topology.peer(nodeRoutingId);
+    // The topology owns semantic route selection. Monitor candidates may
+    // represent a provisional or stale physical connection with the same RID.
+    const connectionId = peer?.connectionId ?? this.connectionIds.get(nodeRoutingId);
+    const candidates = this.connectionCandidates.get(nodeRoutingId);
+    if (connectionId !== undefined) {
+      const selected = candidates?.get(connectionId);
+      if (selected?.transportPairId !== undefined
+        && selected.transportPairGeneration !== undefined) {
+        return selected;
+      }
+    }
+    if (peer !== undefined && peer.connectionId.startsWith('unmonitored:')) {
+      // A monitor pair can become ready immediately after the fallback
+      // endpoint admission. Use its physical pair for the next operation;
+      // otherwise Core may already have replaced the fallback pipe while the
+      // semantic descriptor still names the same peer.
+      let latest: PhysicalConnectionCandidate | undefined;
+      for (const candidate of candidates?.values() ?? []) {
+        if (candidate.transportPairId !== undefined
+          && candidate.transportPairGeneration !== undefined) {
+          latest = candidate;
+        }
+      }
+      return latest;
+    }
+    return undefined;
+  }
+
+}
+
+function protocolCommand(parts: readonly Uint8Array[]): { readonly command?: number } {
+  if (parts.length === 0) return {};
+  try {
+    return { command: decodeHeader(parts[0]!).command };
+  } catch {
+    return {};
   }
 }
 
@@ -1439,7 +1790,10 @@ function completionControlCommand(
   }
 }
 
-function monitorConnectionId(event: ZLinkRawMonitorRecord): string {
+function monitorConnectionId(
+  event: ZLinkRawMonitorRecord,
+  resolvedNodeRoutingId = event.routingId ?? ''
+): string {
   if (
     event.transportPairId !== undefined
     && event.transportPairGeneration !== undefined
@@ -1447,7 +1801,7 @@ function monitorConnectionId(event: ZLinkRawMonitorRecord): string {
     && event.transportPairGeneration !== 0n
   ) {
     return JSON.stringify([
-      event.routingId ?? '',
+      resolvedNodeRoutingId,
       'transport-pair',
       event.transportPairId.toString(),
       event.transportPairGeneration.toString()
@@ -1455,7 +1809,7 @@ function monitorConnectionId(event: ZLinkRawMonitorRecord): string {
   }
   if (event.connectionId !== undefined && event.connectionId !== 0n) {
     return JSON.stringify([
-      event.routingId ?? '',
+      resolvedNodeRoutingId,
       'connection',
       event.connectionId.toString()
     ]);
@@ -1465,10 +1819,18 @@ function monitorConnectionId(event: ZLinkRawMonitorRecord): string {
     // socket's ready count and DISCONNECTED reports its reason. It is not a
     // connection identity. The public monitor record has no native
     // connection id, so use the stable routing and endpoint tuple instead.
-    event.routingId ?? '',
+    resolvedNodeRoutingId,
     event.localAddress,
     event.remoteAddress
   ]);
+}
+
+function sameMonitorConnection(
+  left: ZLinkRawMonitorRecord,
+  right: ZLinkRawMonitorRecord
+): boolean {
+  return monitorConnectionId(left) === monitorConnectionId(right)
+    && left.remoteAddress === right.remoteAddress;
 }
 
 function isConnectionReadyEdge(event: ZLinkRawMonitorRecord): boolean {

@@ -23,6 +23,9 @@
 namespace zlink::framework
 {
 
+class app_t;
+class zlink_framework_options_t;
+
 namespace runtime
 {
 class http_route_invoker_access_t;
@@ -342,6 +345,10 @@ class http_options_builder_t
         return *this;
     }
 
+  private:
+    friend class app_t;
+    friend class zlink_framework_options_t;
+
     const http_options_snapshot_t &snapshot () const noexcept { return _snapshot; }
 
     void validate () const
@@ -383,9 +390,6 @@ class http_options_builder_t
             }
         }
     }
-
-  private:
-    friend class zlink_framework_options_t;
 
     void bind_services (service_collection_t &services, serializer_registry_t &serializers) noexcept
     {

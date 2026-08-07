@@ -15,7 +15,7 @@ public sealed class ServiceRuntimeFoundationTests
     [Theory]
     [InlineData(1024)]
     [InlineData(17 * 1024 * 1024)]
-    public void FrameworkMultipart_ComputesCompleteEnvelopeLengthBeforeAllocation(
+    public void FrameworkMultipart_Encodes_Without_A_RouteMesh_Message_Bound(
         int partLength)
     {
         var parts = new ReadOnlyMemory<byte>[] { new byte[partLength] };
@@ -24,7 +24,7 @@ public sealed class ServiceRuntimeFoundationTests
             ZLinkApplicationPayloadEnvelopeCodec.GetFrameworkMultipartEncodedLength(
                 parts);
         var encoded = ZLinkApplicationPayloadEnvelopeCodec
-            .EncodeFrameworkMultipart(parts, expectedLength);
+            .EncodeFrameworkMultipart(parts);
 
         Assert.Equal(expectedLength, encoded.LongLength);
         Assert.True(
@@ -39,11 +39,6 @@ public sealed class ServiceRuntimeFoundationTests
         {
             ZLinkMessageParts.DisposeAll(decoded);
         }
-
-        Assert.Throws<ZLinkFrameworkException>(() =>
-            ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(
-                parts,
-                expectedLength - 1));
     }
 
     [Fact]
@@ -317,6 +312,13 @@ public sealed class ServiceRuntimeFoundationTests
             23,
             channels);
 
+        var lifecycleOffset = 10
+            + 1 + "orders"u8.Length
+            + 1 + "none"u8.Length;
+        Assert.Equal(
+            17UL,
+            BinaryPrimitives.ReadUInt64BigEndian(encoded.AsSpan(lifecycleOffset)));
+
         Assert.True(ZLinkServiceWireCodec.TryDecodeRouteAdmission(
             encoded,
             out var command,
@@ -331,7 +333,6 @@ public sealed class ServiceRuntimeFoundationTests
         Assert.Equal(0U, admission.Channels["admin"]);
         Assert.Equal(75U, admission.Channels["worker"]);
         Assert.Equal("none", admission.SecurityIdentity);
-        Assert.Equal(uint.MaxValue, admission.EffectiveMaxMessageBytes);
         Assert.Equal(1, admission.RuntimeState);
         Assert.Equal(0, admission.ApplicationVersion);
         Assert.Equal(0, admission.ObjectRole);
@@ -343,6 +344,18 @@ public sealed class ServiceRuntimeFoundationTests
         Assert.Equal(
             new byte[] { 1, 2, 6, 7, 8, 9, 10, 11, 12 },
             admission.ExtensionFields.Keys);
+        Assert.Equal(
+            encoded,
+            ZLinkServiceWireCodec.EncodeRouteAdmission(
+                command,
+                admission.MeshName,
+                admission.AdvertisedEndpoint,
+                admission.LifecycleGeneration,
+                admission.DescriptorRevision,
+                admission.Channels,
+                admission.ObjectRole,
+                admission.RuntimeState,
+                admission.SecurityIdentity));
     }
 
     [Fact]
@@ -924,9 +937,12 @@ public sealed class ServiceRuntimeFoundationTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task ManagedNodes_RemoteNodeAndChannelRequestsUseNativeReplyCompletion(bool channelRequest)
+    [InlineData(false, 4)]
+    [InlineData(true, 4)]
+    [InlineData(true, 17 * 1024 * 1024)]
+    public async Task ManagedNodes_RemoteNodeAndChannelRequestsUseNativeReplyCompletion(
+        bool channelRequest,
+        int payloadLength)
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
         await using var source = new ZLinkManagedMeshNode(context, "orders");
@@ -950,7 +966,10 @@ public sealed class ServiceRuntimeFoundationTests
         await WaitUntilAsync(() => source.Status().AdmittedPeerCount == 1
                                    && target.Status().AdmittedPeerCount == 1);
 
-        using var requestPart = Message.From(new byte[] { 1, 2, 3, 4 });
+        var requestPayload = Enumerable.Range(0, payloadLength)
+            .Select(static index => checked((byte)(index % 251)))
+            .ToArray();
+        using var requestPart = Message.From(requestPayload);
         MeshOperationId operationId;
         var submit = channelRequest
             ? source.EntrySpot().RequestToChannel("worker", [requestPart], out operationId, TimeSpan.FromSeconds(3))
@@ -978,7 +997,7 @@ public sealed class ServiceRuntimeFoundationTests
         try
         {
             Assert.Single(receivedRequestParts);
-            Assert.Equal(new byte[] { 1, 2, 3, 4 }, receivedRequestParts[0].ToArray());
+            Assert.Equal(requestPayload, receivedRequestParts[0].ToArray());
         }
         finally
         {
@@ -1158,12 +1177,16 @@ public sealed class ServiceRuntimeFoundationTests
             {
                 if (remote is not null)
                 {
-                    await remote.DisposeAsync();
-                    remote = null;
-
                     // The auto-connect owner removes the old intent before it
                     // installs the new RID at the same endpoint.
                     localBackend.DisconnectPeer(remoteEndpoint);
+                    await WaitUntilAsync(() => !local.Peers().Any(peer =>
+                        string.Equals(
+                            peer.Endpoint,
+                            remoteEndpoint,
+                            StringComparison.Ordinal)));
+                    await remote.DisposeAsync();
+                    remote = null;
                 }
 
                 var remoteRid = RoutingId.From(
@@ -1636,7 +1659,7 @@ public sealed class ServiceRuntimeFoundationTests
     }
 
     [Fact]
-    public void CompletionTable_OverflowBeyondRetentionIsObservable()
+    public void CompletionTable_OverflowBeyondRetentionFailsLateRegistration()
     {
         var table = new ZLinkMeshCompletionTable(
             earlyCompletionCount: 1,
@@ -1644,11 +1667,50 @@ public sealed class ServiceRuntimeFoundationTests
             tombstoneCount: 1,
             tombstoneBytes: 32);
 
-        table.Complete(Completion(new MeshOperationId(0, 20)), []);
-        table.Complete(Completion(new MeshOperationId(0, 21)), []);
-        table.Complete(Completion(new MeshOperationId(0, 22)), []);
+        var retained = new MeshOperationId(0, 20);
+        var tombstoned = new MeshOperationId(0, 21);
+        var overflow = new MeshOperationId(0, 22);
+        table.Complete(Completion(retained), []);
+        table.Complete(Completion(tombstoned), []);
+        table.Complete(Completion(overflow), []);
 
         Assert.Equal(1, table.OverflowCount);
+
+        RequestResult? result = null;
+        Assert.True(table.RegisterRequest(
+            overflow,
+            (completed, reply) =>
+            {
+                result = completed;
+                Assert.Empty(reply);
+            }));
+        Assert.Equal(RequestResult.Backpressured, result);
+    }
+
+    [Fact]
+    public void CompletionTable_OverflowFailsPendingAndFutureOperations()
+    {
+        var table = new ZLinkMeshCompletionTable(
+            earlyCompletionCount: 1,
+            earlyCompletionBytes: 64,
+            tombstoneCount: 1,
+            tombstoneBytes: 32);
+        var pending = new MeshOperationId(0, 30);
+        var pendingResults = new List<RequestResult>();
+        Assert.True(table.RegisterRequest(
+            pending,
+            (completed, _) => pendingResults.Add(completed)));
+
+        table.Complete(Completion(new MeshOperationId(0, 31)), []);
+        table.Complete(Completion(new MeshOperationId(0, 32)), []);
+        table.Complete(Completion(new MeshOperationId(0, 33)), []);
+
+        Assert.Equal([RequestResult.Backpressured], pendingResults);
+        RequestResult? future = null;
+        Assert.True(table.RegisterRequest(
+            new MeshOperationId(0, 34),
+            (completed, _) => future = completed));
+        Assert.Equal(RequestResult.Backpressured, future);
     }
 
     [Fact]
@@ -1846,7 +1908,7 @@ public sealed class ServiceRuntimeFoundationTests
         var offset = 10;
         offset += 1 + encoded[offset];
         offset += 1 + encoded[offset];
-        offset += sizeof(uint) + sizeof(ulong) + sizeof(ulong);
+        offset += sizeof(ulong) + sizeof(ulong);
         var endpointLength = BinaryPrimitives.ReadUInt16BigEndian(encoded.AsSpan(offset));
         offset += sizeof(ushort) + endpointLength;
         var channelCount = BinaryPrimitives.ReadUInt16BigEndian(encoded.AsSpan(offset));

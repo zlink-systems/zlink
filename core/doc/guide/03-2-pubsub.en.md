@@ -1,4 +1,4 @@
-[English](03-2-pubsub.en.md) | [한국어](03-2-pubsub.ko.md)
+[English](03-2-pubsub.en.md) | [한국어](03-2-pubsub.en.md)
 
 <!-- zlink-nav:start -->
 [← PAIR](03-1-pair.en.md) | [DEALER →](03-3-dealer.en.md)

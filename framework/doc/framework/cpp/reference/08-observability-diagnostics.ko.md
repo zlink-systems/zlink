@@ -3,8 +3,7 @@
 [레퍼런스 목차](README.ko.md)
 
 이 category는 trace·metric·log 기록 수준을 구성하는 `dispatch_options_t`/
-`dispatch_diagnostics_options_t`, host·topology 상태를 읽는 `framework_runtime_t`, structured
-logging을 구성하는 `logging_builder_t`, 그리고 모든 category의 실패를 판단하는
+`dispatch_diagnostics_options_t`, host·topology 상태를 읽는 `framework_runtime_t`, 그리고 모든 category의 실패를 판단하는
 `framework_error_kind_t` 대응표를 다룬다. 정확한 signature는
 [Monitoring exact interface](../../common/spec/server/languages/cpp/interfaces/08-monitoring.ko.md)와
 [Channel messaging exact interface](../../common/spec/server/languages/cpp/interfaces/03-channel-messaging.ko.md)가
@@ -18,7 +17,7 @@ Trace·metric 기록 수준과 sampling을 설정한다.
 
 ```cpp
 options.configure_dispatch()
-  .message_flow(zlink::framework::message_flow_log_mode_t::key_transitions)
+  .message_flow(zlink::framework::message_flow_log_mode_t::normal)
   .trace_sample_rate(0.1)
   .include_message_sizes(true);
 ```
@@ -27,17 +26,16 @@ options.configure_dispatch()
 
 | Modifier | 기본값 | 의미 |
 | --- | --- | --- |
-| `.message_flow(message_flow_log_mode_t)` | `off` | `off`/`errors_only`/`key_transitions`/`verbose`/`diagnostic` 중 기록할 상세도 |
+| `.message_flow(message_flow_log_mode_t)` | `errors` | `off`/`errors`/`normal`/`detailed` 중 기록할 상세도 |
 | `.trace_sample_rate(double)` | 구현 기본값 | `0.0`..`1.0`. NaN이거나 범위를 벗어나면 configuration error |
 | `.include_message_sizes(bool)` | `false` | Payload 크기 분포를 telemetry에 포함할지 여부. Payload 내용 자체는 절대 기록하지 않는다 |
-| `.trace_log_file(path)` | 없음 | Diagnostics 기록을 남길 파일 경로 |
-| `.trace_label(id)` | 없음 | Diagnostics 기록에 붙일 label |
-| `.set_message_flow_observer(shared_ptr<message_flow_observer_t>)` / `.set_message_flow_observer(function<void(const message_flow_event_t&)>)` | 없음 | `message_flow_event_t`(§2)를 받는 observer 등록 |
-| `.message_flow_live(shared_ptr<atomic<message_flow_log_mode_t>>)` | 없음 | 실행 중 mode 변경을 위한 공유 atomic 연결. `app_t::set_message_flow_mode(...)`가 이 값을 갱신한다 |
 
 각 modifier는 `dispatch_options_t`를 반환하는 동기 fluent 호출이다 — 반환값 없는 등록이 아니다.
 
-**완료 결과.** Trace·metric·log 기록 대상(exporter, 원격 backend)은 application이 별도로 구성한다.
+**완료 결과.** Framework는 application이 구성한 standard logger·trace·metric provider에
+structured record를 기록한다. Provider 호출 실패는 원래 message operation의 terminal
+결과를 바꾸지 않고 별도 진단으로 격리한다. Dispatch option은 file path, callback
+observer, runtime error sink나 raw event DTO를 노출하지 않는다.
 `send`와 `publish`는 reply path가 없으므로 unhandled 정책에 `reply_error`를 쓸 수 없다.
 
 **선택 기준.** Startup 시점에 기본 기록 수준을 정할 때 쓴다. 실행 중 level만 바꾸려면
@@ -70,36 +68,6 @@ application HWM 사용량과 backpressure 상태를 확인한다.
 
 **선택 기준.** Host 전체의 lifecycle 상태나 inbound backpressure를 진단할 때 쓴다. 특정
 MeshName·ChannelName의 가용성은 topology-discovery category의 상태 조회 항목을 쓴다.
-
----
-
-## Logging 구성 (`app_t::logging()`, 구성 시점)
-
-Structured logging provider(console, file, callback sink)를 구성한다.
-
-```cpp
-app.logging()
-  .use_console()
-  .use_rotating_file("logs/app.log")
-  .set_min_level(zlink::framework::log_level_t::info)
-  .use_async();
-```
-
-**옵션.** 자주 쓰는 modifier는 다음과 같다.
-
-| Modifier | 기본값 | 의미 |
-| --- | --- | --- |
-| `.use_console()` | 비활성 | 표준 출력에 로그 기록 |
-| `.use_file(path)` / `.use_rotating_file(path, options)` | 없음 | 파일에 로그 기록. Rotating 옵션은 `max_file_size`/`max_files` |
-| `.use_callback_sink(sink)` / `.use_provider(name, sink)` | 없음 | Application이 제공한 sink로 로그 전달 |
-| `.use_async(options)` | 동기 | Async queue(용량·overflow 정책)를 통해 로그 기록 |
-| `.set_min_level(log_level_t)` | 구현 기본값 | 이 레벨 미만은 기록하지 않는다 |
-
-**완료 결과.** 반환값 없이 동기로 등록된다. Handler는 `logger_t<THandler>`를 dependency로 선언해
-category logger를 DI로 주입받는다 — 별도 service 등록이 필요 없다.
-
-**선택 기준.** 표준 logging provider와 health 표면을 구성할 때 쓴다. Handler별 custom category가
-필요하면 `logger_factory_t`를 dependency로 받아 만든다.
 
 ---
 

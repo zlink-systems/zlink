@@ -469,14 +469,21 @@ final class ZLinkActorSpotAdmission {
                     primaryNode);
                 runtime.traceActorTransferMarker(
                     "target_session_bound", actor.context().actorId(), request.transferId());
-                startBoundSessionRouteUpdate(
+                CompletionStage<Void> boundSessionRoute = startBoundSessionRouteUpdate(
                     request,
                     primaryNode,
                     committed.authorityOwnerGeneration());
-                return systems.zlink.framework.execution.ZLinkAsyncSerialQueue
-                    .yieldCurrent(
-                        CompletableFuture.completedFuture(null)
-                            .thenRun(() -> completeRemoteMove(runtime, prepared)))
+                return boundSessionRoute
+                    // Command 45 is the terminal route-switch acknowledgement. It
+                    // is emitted only after the source Session has rebound its
+                    // actor and the target has accepted the remote binding. Do
+                    // not invoke user Join completion before that barrier: the
+                    // callback is allowed to send through the bound Session.
+                    .thenCompose(ignored ->
+                        systems.zlink.framework.execution.ZLinkAsyncSerialQueue
+                            .yieldCurrent(
+                                CompletableFuture.completedFuture(null)
+                                    .thenRun(() -> completeRemoteMove(runtime, prepared))))
                     .thenCompose(ignored -> {
                         boolean entryTarget = spotSurface instanceof systems.zlink.framework.spots.ZLinkEntrySpot<?>;
                         if (!entryTarget) {
@@ -549,11 +556,12 @@ final class ZLinkActorSpotAdmission {
     }
 
     /**
-     * Route publication is post-commit control work.  It starts as soon as
-     * the target authority is committed, but its ACK cannot gate target
-     * lifecycle, Join completion, or replay of the temporary queue.
+     * The route-switch acknowledgement is the target-side readiness barrier.
+     * It confirms that the source Session has rebound the actor and that the
+     * target has installed the remote bound-session binding before user Join
+     * completion or backlog replay can send through that binding.
      */
-    private void startBoundSessionRouteUpdate(
+    private CompletionStage<Void> startBoundSessionRouteUpdate(
         ZLinkActorSpotRoutePackets.TransferRequest request,
         ZLinkInternalSpotNode primaryNode,
         long authorityOwnerGeneration) {
@@ -565,9 +573,9 @@ final class ZLinkActorSpotAdmission {
                 authorityOwnerGeneration);
         } catch (Throwable failure) {
             reportBoundSessionRouteUpdateFailure(request, failure);
-            return;
+            return CompletableFuture.failedFuture(failure);
         }
-        update.whenComplete((ignored, failure) -> {
+        return update.whenComplete((ignored, failure) -> {
             if (failure != null) {
                 reportBoundSessionRouteUpdateFailure(request, failure);
             }

@@ -2,24 +2,25 @@
 
 This is the standalone sample client for `TicTacToe`.
 
-Start the server roles first:
+Run the complete sample from the TicTacToe project root:
 
 ```bash
-Server/build/install/Server/bin/tictactoe-play --config ./application.properties
-Server/build/install/Server/bin/Server --config ./application.properties
+./run_sample.sh
 ```
 
-Then run the client:
-
-```bash
-gradle :Client:run
-```
+The runner creates the endpoint and Redis configuration for the server roles,
+starts them, runs this client, checks the result, and removes the resources it
+created. There is no checked-in `application.properties` for an independent
+role launch.
 
 Options:
 
 ```bash
-gradle :Client:run --args='--api-url http://127.0.0.1:18081 --game-name tictactoe-game --x-actor-id player-x --o-actor-id player-o'
+../../gradlew --settings-file standalone.settings.gradle.kts :Client:run --args='--api-url http://127.0.0.1:18081 --game-name tictactoe-game --x-actor-id player-x --o-actor-id player-o'
 ```
+
+The options command assumes that the server roles were started with matching
+settings; the runner command above is the supported self-contained execution.
 
 Each actor id is sent as the sample authentication token. The client calls the
 API role over HTTP, opens two STREAM connections to the Play role, authenticates

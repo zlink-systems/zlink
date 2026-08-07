@@ -47,7 +47,7 @@ internal sealed class ZLinkSessionStreamTransport(
             ZlinkStreamHeaderFlags.None,
             requestSeq,
             ZlinkStreamMetadata.Empty);
-        var payload = ZLinkEnvelopeCodec.EncodeJsonBytes(
+        var payload = ZLinkEnvelopeCodec.EncodeProtocolJsonBytes(
             ZLinkStreamWireError.FromException(exception));
         var frame = ZLinkStreamFrameCodec.Encode(
             ZLinkStreamProtocolDefaults.EncodeHeader(header).Span,

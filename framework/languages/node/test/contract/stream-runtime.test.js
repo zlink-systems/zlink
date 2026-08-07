@@ -8,7 +8,8 @@ const {
   ZLinkSubmitStatus
 } = require('../../packages/framework/dist/runtime/messaging/submission-result');
 const {
-  RequestResult
+  RequestResult,
+  SubmitResult
 } = require('../../packages/framework/dist/runtime/backend/runtime-values');
 const streamProtocol = require('../../packages/framework/dist/runtime/streams/protocol');
 const {
@@ -40,6 +41,7 @@ test('managed stream binds Session Actors through the Framework service without 
   };
   const operations = new Map();
   const bindings = [];
+  let bindAttempts = 0;
   let nextOperation = 1n;
   const operation = (kind) => {
     const id = { high: 0n, low: nextOperation++ };
@@ -63,6 +65,12 @@ test('managed stream binds Session Actors through the Framework service without 
     },
     lookupActor() { return operation('lookup'); },
     bindActor(sessionRid, value) {
+      bindAttempts += 1;
+      if (bindAttempts === 1) {
+        throw Object.assign(new Error('diagnostic text is not part of classification'), {
+          result: SubmitResult.NotConnected
+        });
+      }
       bindings.push({
         sessionRid,
         actor: value,
@@ -76,9 +84,10 @@ test('managed stream binds Session Actors through the Framework service without 
     sendToActor() { return 0; }
   };
   const completions = {
-    async wait(id) {
+    submit(operation) {
+      const id = operation();
       const kind = operations.get(id.low);
-      return {
+      return Promise.resolve({
         terminalResult: 0,
         failureErrno: 0,
         operationKind: 0,
@@ -86,7 +95,7 @@ test('managed stream binds Session Actors through the Framework service without 
           ? { kind: 'actorLookupCompletion', location: { actor } }
           : null,
         parts: []
-      };
+      });
     }
   };
   const rawStreamSocket = {
@@ -113,6 +122,7 @@ test('managed stream binds Session Actors through the Framework service without 
   }, 1000);
 
   assert.equal(bindings.length, 1);
+  assert.equal(bindAttempts, 2);
   assert.equal(typeof rawStreamSocket.bindActor, 'undefined');
   assert.equal(typeof rawStreamSocket.unbindActor, 'undefined');
   assert.equal(typeof rawStreamSocket.sendBoundActor, 'undefined');
@@ -148,7 +158,8 @@ test('managed stream treats an actor-destroy stale unbind as idempotent cleanup'
     sendToActor() { return 0; }
   };
   const completions = {
-    async wait(id) {
+    async submit(operation) {
+      const id = operation();
       const kind = operations.get(id.low);
       return {
         terminalResult: kind === 'unbind' ? RequestResult.NotFound : RequestResult.Ok,
@@ -186,6 +197,43 @@ test('managed stream treats an actor-destroy stale unbind as idempotent cleanup'
     nodeRid: 'node-a'
   }, 1000);
   await assert.doesNotReject(() => stream.unbindActor('actor-destroy', 1000));
+});
+
+test('managed stream bounds a call timeout by the socket admission timeout', async () => {
+  const observed = [];
+  const socket = {
+    sendTimeoutMs: 10,
+    sendHighWaterMark: 16,
+    onSendReady() {},
+    send() { return true; },
+    disconnectPeer() {},
+    recv() { return undefined; }
+  };
+  const submitter = {
+    async submitCommand(_attempt, _signal, _onDiscard, timeoutMs) {
+      observed.push(timeoutMs);
+    }
+  };
+  const stream = new framework.ZLinkManagedStream(
+    socket,
+    'session-timeout-bound',
+    undefined,
+    undefined,
+    undefined,
+    submitter
+  );
+  const message = zlink.Message.from('payload');
+  try {
+    assert.deepEqual(await stream.submitRaw(message, undefined, 25), {
+      status: ZLinkSubmitStatus.Submitted
+    });
+    assert.deepEqual(await stream.submitRaw(message, undefined, 4), {
+      status: ZLinkSubmitStatus.Submitted
+    });
+  } finally {
+    message.close();
+  }
+  assert.deepEqual(observed, [10, 4]);
 });
 
 test('managed stream skips native unbind after transport teardown', async () => {
@@ -226,7 +274,8 @@ test('managed stream skips native unbind after transport teardown', async () => 
     sendToActor() { return 0; }
   };
   const completions = {
-    async wait(id) {
+    async submit(operation) {
+      const id = operation();
       const kind = operations.get(id.low);
       return {
         terminalResult: 0,
@@ -318,7 +367,8 @@ test('managed stream accepts an internal unbind result after the exact delivery 
     sendToActor() { return 0; }
   };
   const completions = {
-    async wait(id) {
+    async submit(operation) {
+      const id = operation();
       const kind = operations.get(id.low);
       return {
         terminalResult: kind === 'unbind' ? RequestResult.InternalError : 0,
@@ -2528,7 +2578,8 @@ test('runtime host local spot join uses the formal MeshNode completion contract 
       }
     },
     primaryMeshCompletions: {
-      async wait(actualOperationId) {
+      async submit(operation) {
+        const actualOperationId = operation();
         assert.deepEqual(actualOperationId, operationId);
         return {
           terminalResult: 0,
@@ -3519,7 +3570,7 @@ test('stream session actors bindOrGet preserves a handle only within the same ob
   assert.deepEqual(same.ref, firstRef);
 });
 
-test('stream session actor changed-ref bind failure restores the previous native and logical binding', async () => {
+test('stream session actor changed-ref bind failure preserves the previous native and logical binding', async () => {
   const operations = [];
   let nativeRef;
   const socket = {
@@ -3558,13 +3609,11 @@ test('stream session actor changed-ref bind failure restores the previous native
   assert.equal(nativeRef.generation, 1n);
   assert.deepEqual(operations, [
     'bind:node-a:1',
-    'unbind:actor-rollback',
-    'bind:node-b:2',
-    'bind:node-a:1'
+    'bind:node-b:2'
   ]);
 });
 
-test('stream session cross-context bind failure restores the previous session transaction', async () => {
+test('stream session cross-context bind failure preserves the previous session transaction', async () => {
   const operations = [];
   let boundSessionRid;
   const socket = {
@@ -3596,13 +3645,11 @@ test('stream session cross-context bind failure restores the previous session tr
   assert.equal(runtime.find(actorRef.actorId), actor);
   assert.deepEqual(operations, [
     'bind:session-old',
-    'unbind:session-old',
-    'bind:session-new',
-    'bind:session-old'
+    'bind:session-new'
   ]);
 });
 
-test('stream session actor reconnect unbinds the previous native session before binding the new session', async () => {
+test('stream session actor reconnect atomically replaces the native session binding', async () => {
   const operations = [];
   let boundSessionRid;
   const socket = {
@@ -3611,7 +3658,6 @@ test('stream session actor reconnect unbinds the previous native session before 
     recv() { return undefined; },
     async bindActor(sessionRid) {
       operations.push(`bind:${sessionRid}`);
-      if (boundSessionRid !== undefined) throw new Error('Binding request failed with result 108.');
       boundSessionRid = sessionRid;
     },
     async unbindActor(sessionRid) {
@@ -3626,13 +3672,59 @@ test('stream session actor reconnect unbinds the previous native session before 
   const second = runtime.createSessionContext(new framework.ZLinkManagedStream(socket, 'session-new'));
   const actorRef = { nodeRid: 'node-a', actorId: 'actor-reconnect', generation: 1n };
 
-  const firstActor = await first.actors.bindOrGet(actorRef);
-  await firstActor.notifyDisconnected();
+  await first.actors.bindOrGet(actorRef);
   await second.actors.bindOrGet(actorRef);
 
-  assert.deepEqual(operations, ['bind:session-old', 'unbind:session-old', 'bind:session-new']);
+  assert.deepEqual(operations, ['bind:session-old', 'bind:session-new']);
   assert.equal(first.actors.find(actorRef.actorId), undefined);
   assert.equal(second.actors.find(actorRef.actorId)?.actorId, actorRef.actorId);
+});
+
+test('stream session replacement confirmation failure restores the previous binding', async () => {
+  const operations = [];
+  let boundSessionRid;
+  const socket = {
+    send() { return true; },
+    disconnectPeer() {},
+    recv() { return undefined; },
+    async bindActor(sessionRid) {
+      operations.push(`bind:${sessionRid}`);
+      boundSessionRid = sessionRid;
+    },
+    async unbindActor(sessionRid) {
+      operations.push(`unbind:${sessionRid}`);
+      assert.equal(boundSessionRid, sessionRid);
+      boundSessionRid = undefined;
+    },
+    sendBoundActor() { return true; }
+  };
+  let confirmationCount = 0;
+  const runtime = new framework.ZLinkStreamBindingRuntime({
+    async confirmRemoteActorSessionBinding() {
+      confirmationCount += 1;
+      if (confirmationCount === 2) throw new Error('replacement confirmation failed');
+    }
+  });
+  const previous = runtime.createSessionContext(new framework.ZLinkManagedStream(socket, 'session-old'));
+  const replacement = runtime.createSessionContext(new framework.ZLinkManagedStream(socket, 'session-new'));
+  const actorRef = { nodeRid: 'node-a', actorId: 'actor-confirm-rollback', generation: 1n };
+  const actor = await previous.actors.bindOrGet(actorRef);
+
+  await assert.rejects(
+    () => replacement.actors.bindOrGet(actorRef),
+    /replacement confirmation failed/
+  );
+
+  assert.equal(boundSessionRid, 'session-old');
+  assert.equal(previous.actors.find(actorRef.actorId), actor);
+  assert.equal(replacement.actors.find(actorRef.actorId), undefined);
+  assert.equal(runtime.find(actorRef.actorId), actor);
+  assert.deepEqual(operations, [
+    'bind:session-old',
+    'bind:session-new',
+    'unbind:session-new',
+    'bind:session-old'
+  ]);
 });
 
 test('bound session without binding is a retriable framework error', async () => {
@@ -3935,6 +4027,29 @@ test('stream send validation and duplicate state win over pre-aborted signals', 
     return true;
   });
   assert.equal(attempts, 1);
+});
+
+test('session send validates and forwards its per-call admission timeout', async () => {
+  const observedTimeouts = [];
+  const runtime = new framework.ZLinkStreamBindingRuntime({ messageFactory: binaryMessageFactory() });
+  const context = runtime.createSessionContext({
+    ...fakeStream('session-send-timeout', 'rid-send-timeout'),
+    async submitRaw(_message, _signal, timeoutMs) {
+      observedTimeouts.push(timeoutMs);
+      return { status: ZLinkSubmitStatus.Submitted };
+    }
+  });
+
+  for (const invalid of [0, -1, 1.5, Number.POSITIVE_INFINITY, 2_147_483_648]) {
+    assert.throws(
+      () => context.client.send({ value: invalid }).packetName('Notice').timeout(invalid),
+      /integer from 1 through 2147483647/
+    );
+  }
+  await context.client.send({ value: 'short' }).packetName('Notice').timeout(25).submit();
+  await context.client.send({ value: 'default' }).packetName('Notice').submit();
+
+  assert.deepEqual(observedTimeouts, [25, undefined]);
 });
 
 test('session client reply uses configured stream payload codec', async () => {

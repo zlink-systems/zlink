@@ -3,7 +3,7 @@ title: "16. Options — Setting List And Defaults · C++"
 ---
 
 <!-- framework-adapter-nav:start -->
-[Guide Home](../../../index.ko.md) | [Previous: E2E Testing](15-e2e-testing.ko.md) | [Next: Where To Use ZLink](17-alternative.en.md)
+[Guide Home](../../../index.en.md) | [Previous: E2E Testing](15-e2e-testing.en.md) | [Next: Where To Use ZLink](17-alternative.en.md)
 <!-- framework-adapter-nav:end -->
 
 # 16. Options — Setting List And Defaults
@@ -12,7 +12,7 @@ title: "16. Options — Setting List And Defaults · C++"
 > [C++ configuration and host public contract](../../../common/spec/server/languages/cpp/interfaces/02-configuration-host.en.md).
 > This chapter organizes that surface as a list, showing what you can set and what happens
 > when you don't. Reading values from a config file is covered by
-> [19. Configuration](19-configuration.ko.md).
+> [19. Configuration](19-configuration.en.md).
 
 This chapter gathers **what you can set and what happens if you don't.** What each option
 changes is explained by that feature's own chapter — here we look at where it lives and its
@@ -57,11 +57,11 @@ until the first call — it's **blocked by an exception at startup.**
 | `set_message_follow_duration (...)` | How long a message keeps following a target that's relocating | 30 seconds |
 | `handlers ()` | Handler group registration | — |
 | `metadata ()` | Metadata propagation policy | — |
-| `configure_dispatch ()` | Diagnostics level and message flow (§4) | `errors_only` |
+| `configure_dispatch ()` | Diagnostics level and message flow (§4) | `errors` |
 | `configure_inbound_dispatch ()` | Host-wide receive cap (§3.2) | Auto-calculated |
 | `configure_locations ()` | Location store behavior (§5) | The §5 table |
 | `add_location_store (...)` | The location-resolution store | Single-node configuration if omitted |
-| `services ()` | DI registration ([18. DI Container](18-di-container.ko.md)) | — |
+| `services ()` | DI registration ([18. DI Container](18-di-container.en.md)) | — |
 
 `set_default_request_timeout` **rejects anything at or below 0.** An invalid value throws
 `framework_exception_t` at startup.
@@ -128,13 +128,11 @@ The surface `configure_dispatch ()` returns.
 
 | Option | What it sets | Default |
 | --- | --- | --- |
-| `message_flow (...)` | Recording level | `errors_only` |
+| `message_flow (...)` | Recording level | `errors` |
 | `trace_sample_rate (double)` | Sampling ratio | 1.0 |
 | `include_message_sizes (bool)` | Whether to record payload byte size too | Not recorded |
-| `trace_log_file (path)` | A file written separately from app logs | Not separated |
-| `set_message_flow_observer (...)` | Receiving records in your program | None |
 
-What's recorded per level, and how to use an observer, is covered in
+The recording scope per level and standard provider integration are covered in
 [11. Monitoring](11-monitoring.en.md).
 
 ## 5. Location Options
@@ -222,6 +220,6 @@ These have no default, so startup fails if you don't specify them.
 ## 10. Related Documents
 
 - The formal contract: [C++ configuration and host public contract](../../../common/spec/server/languages/cpp/interfaces/02-configuration-host.en.md)
-- Reading values from a config file: [19. Configuration](19-configuration.ko.md)
+- Reading values from a config file: [19. Configuration](19-configuration.en.md)
 - What each cap changes: [4. Backpressure](04-backpressure.en.md)
 - The procedure for draining traffic with weights: [12. Operations](12-operations.en.md)

@@ -18,6 +18,7 @@
 #include <exception>
 #include <functional>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <queue>
@@ -25,6 +26,7 @@
 #include <stop_token>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <vector>
 
 namespace
@@ -209,6 +211,62 @@ bool verify_timer_handler_activation_lifetime ()
                       << static_cast<int> (second_result.error_kind ()) << '\n';
             return false;
         }
+        zlink::framework::timer_options_t catch_up_options;
+        catch_up_options.overrun_policy =
+          zlink::framework::timer_overrun_policy_t::catch_up_bounded;
+        catch_up_options.max_catch_up_ticks = 3;
+        auto catch_up =
+          context.add_timer<timer_activation_handler_t> (
+            "catch-up", std::chrono::hours (24), catch_up_options);
+        std::vector<zlink::framework::timer_tick_t> caught_up;
+        const auto catch_up_result = timer_runtime.dispatch_fire_count (
+          catch_up, 5,
+          [&] (const zlink::framework::timer_tick_t &tick) {
+              caught_up.push_back (tick);
+          });
+        if (!catch_up_result || caught_up.size () != 3
+            || caught_up[0].scheduled_index != 3
+            || caught_up[0].skipped_ticks != 2
+            || caught_up[1].scheduled_index != 4
+            || caught_up[2].scheduled_index != 5) {
+            std::cerr << "bounded timer catch-up mismatch\n";
+            return false;
+        }
+        for (int index = 0; index < 300; ++index) {
+            if (!timer_runtime.dispatch_fire_count (catch_up, 1)) {
+                return false;
+            }
+        }
+        const auto tick_history =
+          timer_runtime.delivered_ticks (catch_up);
+        if (tick_history.size ()
+              != zlink::framework::detail::timer_state_t::
+                   observation_history_limit
+            || tick_history.back ().scheduled_index != 305) {
+            std::cerr << "timer observation history must stay bounded\n";
+            return false;
+        }
+
+        bool oversized_catch_up_rejected = false;
+        try {
+            auto invalid_options = catch_up_options;
+            invalid_options.max_catch_up_ticks =
+              static_cast<std::uint64_t> (
+                std::numeric_limits<int>::max ())
+              + 1;
+            (void) context.add_timer<timer_activation_handler_t> (
+              "invalid-catch-up", std::chrono::hours (24),
+              invalid_options);
+        }
+        catch (const zlink::framework::framework_exception_t &error) {
+            oversized_catch_up_rejected =
+              error.kind ()
+              == zlink::framework::framework_error_kind_t::protocol_error;
+        }
+        if (!oversized_catch_up_rejected) {
+            std::cerr << "oversized timer catch-up count must be rejected\n";
+            return false;
+        }
         const auto reused =
           timer_activation_handler_t::created.load ()
               == handlers_before + 1
@@ -385,7 +443,7 @@ bool verify_request_turn_mode (bool release_turn, const std::vector<int> &expect
     zlink::framework::runtime::serial_execution_queue_t queue (
       executor, 4,
       zlink::framework::runtime::serial_execution_queue_t::error_handler_t{},
-      true);
+      zlink::framework::runtime::serial_lane_policy_t::spot_wide ());
     auto reply = std::make_shared<zlink::framework::detail::task_completion_source_t<int>> ();
     auto order = std::make_shared<std::vector<int>> ();
     auto order_gate = std::make_shared<std::mutex> ();
@@ -449,7 +507,8 @@ bool verify_serial_resume_capacity_failure_is_terminal_and_deferred ()
     options.application_byte_capacity = serial_execution_queue_t::fixed_work_byte_cost;
     options.lifecycle_message_capacity = 1;
     options.lifecycle_byte_capacity = serial_execution_queue_t::fixed_work_byte_cost;
-    serial_execution_queue_t queue (executor, options, {}, true);
+    serial_execution_queue_t queue (
+      executor, options, {}, serial_lane_policy_t::spot_wide ());
 
     auto reply = std::make_shared<detail::task_completion_source_t<int>> ();
     auto task_finished = std::make_shared<std::atomic_bool> (false);
@@ -739,6 +798,48 @@ bool verify_common_dispatch_limits ()
                 == dispatch_limits::receive_batch_time;
 }
 
+bool verify_serial_lane_policies ()
+{
+    using namespace zlink::framework::runtime;
+    const auto entry = serial_lane_policy_t::entry_spot ();
+    const auto spot_wide = serial_lane_policy_t::spot_wide ();
+    const auto per_actor = serial_lane_policy_t::per_actor_spot ();
+    const auto session = serial_lane_policy_t::session ();
+    const auto actor_delivery = serial_lane_policy_t::actor_delivery ();
+
+    const auto *entry_spot = std::get_if<spot_lane_policy_t> (&entry.value ());
+    const auto *wide_spot = std::get_if<spot_lane_policy_t> (&spot_wide.value ());
+    const auto *actor_spot = std::get_if<spot_lane_policy_t> (&per_actor.value ());
+    return entry_spot
+           && entry_spot->execution == spot_lane_execution_t::entry
+           && entry_spot->lifecycle == spot_lane_lifecycle_t::active
+           && wide_spot
+           && wide_spot->execution == spot_lane_execution_t::spot_wide
+           && wide_spot->lifecycle == spot_lane_lifecycle_t::active
+           && actor_spot
+           && actor_spot->execution == spot_lane_execution_t::per_actor
+           && actor_spot->lifecycle == spot_lane_lifecycle_t::active
+           && std::holds_alternative<session_lane_policy_t> (session.value ())
+           && std::holds_alternative<actor_delivery_lane_policy_t> (
+             actor_delivery.value ())
+           && !entry.allows_turn_yield ()
+           && spot_wide.allows_turn_yield ()
+           && !per_actor.allows_turn_yield ()
+           && !session.allows_turn_yield ()
+           && !actor_delivery.allows_turn_yield ()
+           && std::is_constructible_v<spot_lane_policy_t,
+                                      spot_lane_execution_t,
+                                      spot_lane_lifecycle_t>
+           && std::is_constructible_v<session_lane_policy_t,
+                                      session_lane_lifecycle_t>
+           && !std::is_constructible_v<session_lane_policy_t,
+                                       spot_lane_lifecycle_t>
+           && !std::is_constructible_v<actor_delivery_lane_policy_t,
+                                       spot_lane_lifecycle_t>
+           && !std::is_constructible_v<actor_delivery_lane_policy_t,
+                                       session_lane_lifecycle_t>;
+}
+
 bool verify_runtime_observation_loss_and_terminal_retention ()
 {
     struct probe_status_t
@@ -765,6 +866,7 @@ bool verify_runtime_observation_loss_and_terminal_retention ()
           }
           changed.notify_all ();
       });
+    observer->start ();
     observer->enqueue (probe_status_t{1});
     {
         std::unique_lock lock (gate);
@@ -815,6 +917,7 @@ bool verify_runtime_observation_loss_and_terminal_retention ()
           }
           terminal_changed.notify_all ();
       });
+    terminal_observer->start ();
     terminal_observer->enqueue (probe_status_t{10});
     {
         std::unique_lock lock (terminal_gate);
@@ -853,7 +956,7 @@ bool verify_idle_instance_spot_eviction_closes_local_context ()
     using namespace zlink::framework::detail;
 
     auto node = std::make_shared<spot_node_builder_state_t> ("idle-node");
-    node->instance_spot_idle_timeout = std::chrono::hours (1);
+    node->instance_spot_idle_timeout = std::chrono::seconds (1);
 
     auto executor = std::make_shared<runtime::offload_executor_t> (1);
     auto context = std::make_shared<spot_context_state_t> ();
@@ -867,7 +970,7 @@ bool verify_idle_instance_spot_eviction_closes_local_context ()
     context->serial_executor = executor;
     context->serial_queue = std::make_shared<runtime::serial_execution_queue_t> (
       *executor, runtime::serial_execution_queue_options_t{});
-    const auto set_last_application_work = [&context] (std::chrono::seconds age) {
+    const auto set_last_application_work = [&context] (auto age) {
         context->last_application_work_completed_ns.store (
           std::chrono::duration_cast<std::chrono::nanoseconds> (
             std::chrono::steady_clock::now ().time_since_epoch ())
@@ -880,15 +983,20 @@ bool verify_idle_instance_spot_eviction_closes_local_context ()
         std::chrono::steady_clock::now ().time_since_epoch ())
         .count ()
         - std::chrono::duration_cast<std::chrono::nanoseconds> (
-          std::chrono::seconds (1))
+          std::chrono::milliseconds (100))
             .count (),
       std::memory_order_relaxed);
 
     bool closing_called = false;
+    bool location_visible_while_closing = false;
     spot_close_reason_t closing_reason = spot_close_reason_t::explicit_close;
     context->lifecycle.on_closing = [&] (
       void *, const spot_closing_context_t &closing, std::stop_token) {
         closing_called = true;
+        location_visible_while_closing =
+          node->spot_contexts_by_id.contains (context->spot_id)
+          && node->spot_names_by_id.contains (context->spot_id)
+          && context->node == node;
         closing_reason = closing.reason;
     };
 
@@ -915,48 +1023,140 @@ bool verify_idle_instance_spot_eviction_closes_local_context ()
     };
 
     spot_node_runtime_t runtime (node);
-    set_last_application_work (std::chrono::seconds (0));
+    set_last_application_work (std::chrono::milliseconds (100));
     runtime.evict_idle_spots ();
     if (admission_called || context->idle_eviction_in_progress) {
         return false;
     }
-    set_last_application_work (std::chrono::hours (2));
-    std::cerr << "idle eviction precheck: timeout="
-              << node->instance_spot_idle_timeout.count ()
-              << " kind=" << static_cast<int> (context->kind)
-              << " idle=" << context->idle_quiescent ()
-              << " last=" << context->last_application_work_completed_ns.load ()
-              << " callbacks=" << context->callback_depth
-              << " stopped=" << node->stopping.load () << '\\n';
+    set_last_application_work (std::chrono::seconds (2));
     runtime.evict_idle_spots ();
     executor->drain ();
 
     const bool result = admission_called && late_application_post_rejected && closing_called
+                        && location_visible_while_closing
                         && closing_reason == spot_close_reason_t::idle_evicted
                         && context->closed && !context->node
                         && !context->spot_instance
                         && node->spot_contexts_by_id.empty ()
                         && node->spot_ids_by_name.empty ()
                         && node->spot_names_by_id.empty ();
-    if (!result) {
-        std::cerr << "idle eviction mismatch: admission=" << admission_called
-                  << " late_post_rejected=" << late_application_post_rejected
-                  << " closing=" << closing_called
-                  << " reason=" << static_cast<int> (closing_reason)
-                  << " closed=" << context->closed
-                  << " node=" << static_cast<bool> (context->node)
-                  << " instance=" << static_cast<bool> (context->spot_instance)
-                  << " contexts=" << node->spot_contexts_by_id.size ()
-                  << " names=" << node->spot_ids_by_name.size () << "/"
-                  << node->spot_names_by_id.size () << '\\n';
-    }
     return result;
+}
+
+bool verify_remote_actor_prepare_is_idempotent ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+    namespace runtime = zlink::framework::runtime;
+
+    serializer_registry_t serializers;
+    auto node = std::make_shared<spot_node_builder_state_t> (
+      "actor-prepare-idempotency-node");
+    auto target = std::make_shared<spot_context_state_t> ();
+    target->node = node;
+    target->node_rid = node_rid_t::from_string (
+      "actor-prepare-idempotency-node");
+    target->spot_id = spot_id_t ("target-spot");
+    target->spot_name = "target";
+    target->spot_instance = std::make_shared<int> (1);
+    target->channel_runtime =
+      std::make_shared<channel_runtime_state_t> ();
+    target->channel_runtime->serializers = &serializers;
+    target->serial_executor =
+      std::make_shared<runtime::offload_executor_t> (
+        2, 64, "actor-prepare-idempotency");
+    target->serial_queue =
+      std::make_shared<runtime::serial_execution_queue_t> (
+        *target->serial_executor, 64,
+        runtime::serial_execution_queue_t::error_handler_t{},
+        runtime::serial_lane_policy_t::spot_wide ());
+    node->spot_contexts_by_id.emplace (
+      target->spot_id, spot_context_access_t::create (target));
+
+    spot_node_builder_state_t::actor_factory_registration_t factory;
+    factory.actor_type = std::type_index (typeid (int));
+    node->actor_factories.emplace ("player", std::move (factory));
+    int admission_calls = 0;
+    spot_actor_admission_callbacks_t callbacks;
+    callbacks.join = [&] (void *, std::string_view,
+                          const zlink::message_t &,
+                          serializer_registry_t &) {
+        ++admission_calls;
+        return spot_actor_join_result_t::accept (
+          message_t::from (std::string ("accepted")));
+    };
+    target->actor_admissions.emplace (
+      std::type_index (typeid (int)), std::move (callbacks));
+
+    spot_node_runtime_t owner (node);
+    const auto actor = actor_ref_access_t::make (
+      node_rid_t::from_string ("source-node"),
+      "player", "actor-1", 7);
+    const auto request = zlink::message_t::from (std::string ("prepare"));
+    const auto first = owner.admit_remote_actor_to_spot (
+      "transfer-1", actor, spot_id_t ("source-spot"),
+      target->spot_id, request, 11, 13);
+    const auto repeated = owner.admit_remote_actor_to_spot (
+      "transfer-1", actor, spot_id_t ("source-spot"),
+      target->spot_id, request, 11, 13);
+    const auto conflicting = owner.admit_remote_actor_to_spot (
+      "transfer-1", actor, spot_id_t ("source-spot"),
+      target->spot_id, request, 11, 17);
+
+    target->serial_queue->close ();
+    target->serial_queue->drain ();
+    target->serial_executor->drain ();
+    return first && repeated && first.value ().accepted
+           && repeated.value ().accepted
+           && first.value ().reply && repeated.value ().reply
+           && first.value ().reply->decode<std::string> () == "accepted"
+           && repeated.value ().reply->decode<std::string> () == "accepted"
+           && !conflicting
+           && conflicting.error_kind () == framework_error_kind_t::protocol_error
+           && admission_calls == 1;
 }
 
 } // namespace
 
 int main ()
 {
+    {
+        auto state = std::make_shared<
+          zlink::framework::detail::spot_node_builder_state_t> (
+          "logical-multicast-observation");
+        std::atomic_bool observed{false};
+        state->dispatch.set_message_flow_observer (
+          [&] (const zlink::framework::message_flow_event_t &event) {
+              if (event.outcome
+                    == zlink::framework::message_flow_outcome_t::error
+                  && event.surface
+                    == zlink::framework::dispatch_error_surface_t::route_mesh_channel
+                  && event.message_kind
+                    == zlink::framework::dispatch_message_kind_t::publish
+                  && event.error_reason
+                    == zlink::framework::dispatch_error_reason_t::handler_exception
+                  && event.error_action
+                    == zlink::framework::dispatch_error_action_t::drop
+                  && event.packet_name
+                  && *event.packet_name == "PlayerMoved"
+                  && event.channel_name
+                  && *event.channel_name == "world"
+                  && event.topic && *event.topic == "players") {
+                  observed.store (true, std::memory_order_release);
+              }
+          });
+        const zlink::framework::framework_exception_t failure (
+          zlink::framework::framework_error_kind_t::capacity_exceeded,
+          "logical multicast source queue is full");
+        zlink::framework::detail::report_logical_multicast_failure (
+          state, "world", "players", "PlayerMoved", failure);
+        if (!wait_until ([&] {
+              return observed.load (std::memory_order_acquire);
+            })) {
+            return 90;
+        }
+    }
+
     zlink::framework::worker_options_t worker_options;
     if (worker_options.min_threads () > worker_options.max_threads ()
         || worker_options.max_threads () == 0
@@ -1002,6 +1202,46 @@ int main ()
         return 45;
     }
 
+    {
+        zlink::framework::runtime::offload_executor_t saturated_executor (
+          1, 1, 1, std::chrono::milliseconds (0));
+        std::mutex state_mutex;
+        std::condition_variable state_changed;
+        bool entered = false;
+        bool release = false;
+        std::atomic_int queued_runs = 0;
+        if (!saturated_executor.try_submit ([&] {
+                std::unique_lock lock (state_mutex);
+                entered = true;
+                state_changed.notify_all ();
+                state_changed.wait (lock, [&] { return release; });
+            })) {
+            return 54;
+        }
+        {
+            std::unique_lock lock (state_mutex);
+            if (!state_changed.wait_for (
+                  lock, std::chrono::seconds (1), [&] { return entered; })) {
+                return 55;
+            }
+        }
+        if (!saturated_executor.try_submit ([&] { ++queued_runs; })) {
+            return 56;
+        }
+        if (saturated_executor.try_submit ([] {})) {
+            return 57;
+        }
+        {
+            std::lock_guard lock (state_mutex);
+            release = true;
+        }
+        state_changed.notify_all ();
+        saturated_executor.drain ();
+        if (queued_runs.load () != 1) {
+            return 58;
+        }
+    }
+
     if (!verify_timer_handler_activation_lifetime ()) {
         return 40;
     }
@@ -1030,11 +1270,17 @@ int main ()
     if (!verify_common_dispatch_limits ()) {
         return 55;
     }
+    if (!verify_serial_lane_policies ()) {
+        return 57;
+    }
     if (!verify_runtime_observation_loss_and_terminal_retention ()) {
         return 52;
     }
     if (!verify_idle_instance_spot_eviction_closes_local_context ()) {
         return 53;
+    }
+    if (!verify_remote_actor_prepare_is_idempotent ()) {
+        return 58;
     }
 
     std::atomic_int unsupported_submit_count = 0;
@@ -1766,7 +2012,7 @@ int main ()
             std::cerr << "bounded executor final drain mismatch: drained="
                       << bounded_executor.drained ()
                       << " live=" << bounded_executor.live_worker_count ()
-                      << '\\n';
+                      << '\n';
             return 53;
         }
     }

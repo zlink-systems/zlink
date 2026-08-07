@@ -89,6 +89,15 @@ Actor join, send, publish, timer 등록, close와 destroy에는 제공하지 않
 ### 1.2 Worker offload
 
 - CPU 작업과 비동기 I/O 작업은 Framework가 소유한 bounded worker scheduler에 제출한다.
+- CPU execution slot은 application CPU callback이 실제로 실행되는 동안만 점유한다. 비동기 I/O가
+  operating system, transport 또는 Store completion을 기다리는 동안에는 CPU execution slot을
+  점유하지 않는다.
+- I/O admission과 completion bookkeeping도 bounded resource를 사용하지만, CPU worker queue가 가득 찼다는
+  이유만으로 이미 제출된 I/O completion을 `CapacityExceeded`로 바꾸지 않는다.
+- CPU worker의 configured thread 수보다 많은 I/O operation이 completion을 기다릴 수 있다. 이 개수는 CPU
+  execution slot이나 CPU queue length가 아니라 Framework 내부의 별도 bounded I/O admission이 제한한다.
+- 이 격리 계약은 별도의 public I/O thread-count 또는 queue 설정을 요구하지 않는다. 언어 runtime은 native
+  async I/O, event loop 또는 completion executor로 구현할 수 있다.
 - Worker call이 계산한 application 결과 type은 유지하고, 허용된 `SpotWide`·Instance 문맥에서는 같은 결과를 `Yield`로 기다릴 수 있다.
 - Queue가 가득 차면 `CapacityExceeded`, [deadline](01-glossary.ko.md#deadline)을 넘으면 `DeadlineExceeded`, 작업이 실패하면 `InternalFailure`로 완료한다.
 - Timeout이나 cancellation 뒤 늦게 끝난 작업은 두 번째 terminal 결과를 만들지 않는다.
@@ -180,6 +189,21 @@ Framework public send timeout의 값 규칙은 다음과 같다.
 - 값이 지정되지 않으면 해당 family의 1초 기본값을 선택한다.
 - 기존 public root fallback이 있으면 같은 의미로 적용하지만, 다른 언어에 같은 root option을 새로 추가해야 한다는 뜻은 아니다.
 - Runtime setter가 있는 경우 잘못된 값은 setter 호출에서 즉시 거부한다.
+
+#### STREAM send call별 timeout
+
+STREAM one-way send call은 선택적인 호출별 admission timeout modifier를 제공한다. 이 값은 reply를 기다리는
+시간이 아니라 해당 send가 STREAM transport queue의 수락을 기다릴 수 있는 최대 시간이다.
+
+- Modifier를 생략하면 해당 STREAM socket의 send timeout을 사용한다.
+- Modifier를 지정하면 socket timeout과 호출별 timeout 중 먼저 도달하는 deadline을 사용한다. 호출별 값으로
+  socket timeout을 연장하지 않는다.
+- 값 검증과 millisecond 올림은 위 `1..INT_MAX` 규칙을 그대로 사용한다.
+- Deadline이 먼저 끝나면 `DeadlineExceeded`로 한 번 완료하고, 이후 capacity가 생겨도 해당 send를
+  admission하거나 replay하지 않는다.
+- 이 modifier는 STREAM reply call에는 적용하지 않는다. Reply는 socket send timeout과 one-shot token
+  계약을 사용한다.
+- 언어별 cancellation이 별도로 있는 경우 timeout과 경쟁해 먼저 확정된 terminal 하나만 결과가 된다.
 
 #### STREAM reply token
 
@@ -302,8 +326,9 @@ Object placement와 activation의 처리 규칙은 다음과 같다.
 
 ### 오류 처리
 
-Handler가 예외를 반환하면 send handler는 오류 observer와 metric에 기록한다. Request handler는 같은
-request의 framework 오류 reply를 생성한다. 오류 observer의 실패는 원래 dispatch 결과를 바꾸지 않는다.
+Handler가 예외를 반환하면 send handler는 application logger·telemetry provider와 metric에 기록한다.
+Request handler는 같은 request의 framework 오류 reply를 생성한다. Provider failure는 원래 dispatch 결과를
+바꾸지 않으며 별도 public error observer를 제공하지 않는다.
 
 ### 3.1 Actor Join의 deferred terminal
 
@@ -424,6 +449,31 @@ callback을 실행하지 않는다. cancel은 해당 generation 이후 callback�
 | 이전 generation의 queue record | callback 실행 안 함 |
 | cancel | 해당 generation 이후 callback 시작 차단 (이미 시작한 callback은 중단하지 않음) |
 | 반복 timer가 handler보다 빠르게 만료 | 같은 key의 callback을 동시 실행하지 않음, 중복 만료를 pending record 1개로 병합 가능 |
+
+반복 timer는 다음 세 overrun policy 중 하나를 사용한다. 기본값은 `SkipLateTicks`다.
+
+| Policy | Handler가 늦게 끝났을 때 다음 callback |
+|---|---|
+| `SkipLateTicks` | 이미 지난 nominal tick을 건너뛰고 관찰 시점의 최신 due tick 하나만 전달한다. |
+| `CatchUpBounded` | 지나간 nominal tick을 순서대로 전달하되 한 catch-up 구간에서 최대 `MaxCatchUpTicks`개만 전달하고 더 오래된 tick은 건너뛴다. |
+| `DelayNextTick` | Handler terminal 뒤 period를 다시 계산해 다음 tick을 예약하며 missed tick을 catch-up하지 않는다. |
+
+`MaxCatchUpTicks`의 기본값은 `1`이다. `CatchUpBounded`에서는 `1..INT_MAX`여야 하며 다른 policy에서는
+동작에 영향을 주지 않는다. Relocation encoding은 무시되는 값을 그대로 public 의미로 만들지 않고 유효한
+기본값으로 normalize할 수 있다.
+
+Callback은 다음 tick 정보를 받는다.
+
+| Field | 의미 |
+|---|---|
+| `DeliveryIndex` | 이 timer generation에서 실제로 시작한 callback의 1부터 시작하는 연속 번호 |
+| `ScheduledIndex` | 최초 nominal due time을 1로 하는, 이번 callback이 대표하는 nominal tick 번호 |
+| `SkippedTicks` | 이전에 전달한 `ScheduledIndex`와 이번 값 사이에서 callback을 만들지 않은 nominal tick 수 |
+
+`DeliveryIndex`는 callback마다 정확히 1 증가한다. `ScheduledIndex`는 감소하지 않고
+`ScheduledIndex >= DeliveryIndex`다. `SkippedTicks`는 첫 callback에서는 `ScheduledIndex - 1`, 이후에는
+`current ScheduledIndex - previous ScheduledIndex - 1`이다. Scheduler wall-clock 오차나 exact
+nanosecond는 public 결과가 아니다.
 
 ### Owner lease와 admission
 

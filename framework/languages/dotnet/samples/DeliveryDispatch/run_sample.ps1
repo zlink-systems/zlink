@@ -121,7 +121,7 @@ finally {
     if ($RedisContainer) {
         Remove-SampleRedisContainer $RedisContainer
     }
-    if (-not $RunSucceeded -or $DELIVERYDISPATCH_KEEP_RUN_DIR -eq "1") {
+    if (-not $RunSucceeded -or $env:DELIVERYDISPATCH_KEEP_RUN_DIR -eq "1") {
         Write-Host "runDir=$RunDir"
     }
     else {

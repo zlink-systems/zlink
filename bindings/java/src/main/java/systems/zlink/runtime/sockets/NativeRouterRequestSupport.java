@@ -38,7 +38,20 @@ final class NativeRouterRequestSupport {
             List<Message> parts,
             SendFlags flags,
             Duration timeout) {
-        return request(socket, routingId, parts, flags, timeout)
+        return request(socket, routingId, 0L, 0L, parts, flags, timeout)
+            .thenApply(RequestReplySupport::takeReceivedParts);
+    }
+
+    public static CompletableFuture<List<Message>> requestStage(
+            RouterSocket socket,
+            RoutingId routingId,
+            long transportPairId,
+            long transportPairGeneration,
+            List<Message> parts,
+            SendFlags flags,
+            Duration timeout) {
+        return request(socket, routingId, transportPairId,
+                       transportPairGeneration, parts, flags, timeout)
             .thenApply(RequestReplySupport::takeReceivedParts);
     }
 
@@ -57,7 +70,28 @@ final class NativeRouterRequestSupport {
             InternalAccess.socketHandle(socket),
             "zlink-router-request-progress", flags, callback::onComplete,
             (handler, userData) -> submitRequest(socket, routingId, parts,
-                timeoutMs, flags, handler, userData));
+                0L, 0L, timeoutMs, flags, handler, userData));
+    }
+
+    public static boolean requestCallback(RouterSocket socket,
+                                          RoutingId routingId,
+                                          long transportPairId,
+                                          long transportPairGeneration,
+                                          List<Message> parts,
+                                          RequestCallback callback,
+                                          SendFlags flags,
+                                          Duration timeout) {
+        Objects.requireNonNull(callback, "callback");
+        Objects.requireNonNull(socket, "socket");
+        Objects.requireNonNull(routingId, "routingId");
+        Objects.requireNonNull(parts, "parts");
+        long timeoutMs = RequestReplySupport.timeoutMillis(timeout);
+        return RequestSubmitLoop.submitCallback(timeoutMs,
+            InternalAccess.socketHandle(socket),
+            "zlink-router-request-progress", flags, callback::onComplete,
+            (handler, userData) -> submitRequest(socket, routingId, parts,
+                transportPairId, transportPairGeneration, timeoutMs, flags,
+                handler, userData));
     }
 
     public static void reply(RouterSocket socket,
@@ -76,6 +110,8 @@ final class NativeRouterRequestSupport {
     private static CompletableFuture<Received> request(
             RouterSocket socket,
             RoutingId routingId,
+            long transportPairId,
+            long transportPairGeneration,
             List<Message> parts,
             SendFlags flags,
             Duration timeout) {
@@ -87,12 +123,15 @@ final class NativeRouterRequestSupport {
             InternalAccess.socketHandle(socket),
             "zlink-router-request-progress",
             (handler, userData) -> submitRequest(socket, routingId, parts,
-                timeoutMs, flags, handler, userData));
+                transportPairId, transportPairGeneration, timeoutMs, flags,
+                handler, userData));
     }
 
     private static void submitRequest(RouterSocket socket,
                                       RoutingId routingId,
                                       List<Message> payload,
+                                      long transportPairId,
+                                      long transportPairGeneration,
                                       long timeoutMs,
                                       SendFlags flags,
                                       MemorySegment handler,
@@ -101,12 +140,15 @@ final class NativeRouterRequestSupport {
         int timeout = RequestReplySupport.toTimeoutInt(timeoutMs);
         RequestSubmitLoop.submitResultParts(payload,
             (part, partFlag) -> routerRequestPartOnce(socket, routingId, part,
-                nativeFlags, partFlag, timeout, handler, userData));
+                transportPairId, transportPairGeneration, nativeFlags,
+                partFlag, timeout, handler, userData));
     }
 
     private static int routerRequestPartOnce(RouterSocket socket,
                                              RoutingId routingId,
                                              Message part,
+                                             long transportPairId,
+                                             long transportPairGeneration,
                                              int flags,
                                              int partFlag,
                                              int timeoutMs,
@@ -116,6 +158,12 @@ final class NativeRouterRequestSupport {
             MemorySegment nativeRid = nativeRoutingId(arena, routingId);
             MemorySegment nativeMsg = arena.allocate(NativeLayouts.MESSAGE_LAYOUT);
             InternalAccess.messageCopyTo(part, nativeMsg);
+            if (transportPairId != 0 && transportPairGeneration != 0) {
+                return Native.routerRequestTransportPairPart(
+                    InternalAccess.socketHandle(socket), nativeRid,
+                    transportPairId, transportPairGeneration, nativeMsg,
+                    flags, partFlag, timeoutMs, handler, userData);
+            }
             return Native.routerRequestPart(
                 InternalAccess.socketHandle(socket), nativeRid, nativeMsg,
                 flags, partFlag, timeoutMs, handler, userData);

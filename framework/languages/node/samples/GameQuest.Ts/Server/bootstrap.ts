@@ -25,12 +25,10 @@ async function bootstrapGameQuest(role: GameQuestRole): Promise<void> {
     abortOnError: true
   });
   const config = app.get<GameQuestServerConfig>(GAMEQUEST_SAMPLE_CONFIG);
-  if (!isApi) {
-    await waitForRouteMeshReady(
-      app.get<ZLinkRouteMeshRuntime>(ZLINK_ROUTE_MESH_RUNTIME),
-      SampleNames.playerQuestSpotMesh
-    );
-  }
+  await waitForRouteMeshReady(
+    app.get<ZLinkRouteMeshRuntime>(ZLINK_ROUTE_MESH_RUNTIME),
+    SampleNames.playerQuestSpotMesh
+  );
   const httpServer = isApi
     ? await startGameApiServer(app, config, role)
     : await startMissionSelfCheckServer(config, role, app.get(PlayerQuestSpotProvisioner));

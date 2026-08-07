@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "runtime/stateful/public_host_runtime.hpp"
+#include "runtime/locations/live_location_reader.hpp"
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/stateful/raw_stateful_dispatch.hpp"
 #include "runtime/locations/pending_creation_projection.hpp"
@@ -175,14 +176,22 @@ std::vector<zlink::message_t> decode_parts (
     return parts;
 }
 
-std::optional<std::pair<std::uint64_t, std::uint64_t>>
+struct route_owner_fence_read_t
+{
+    host::route_fence_t fence;
+    std::optional<std::chrono::steady_clock::duration> admission_lifetime;
+};
+
+std::optional<route_owner_fence_read_t>
 read_route_owner_fence (
   const std::shared_ptr<zlink::framework::location_repository_t> &store,
   char object_kind,
   std::string_view object_id,
   std::uint64_t object_generation,
   std::uint64_t authority_owner_generation = 0,
-  std::uint64_t owner_lease_generation = 0)
+  std::uint64_t owner_lease_generation = 0,
+  std::chrono::milliseconds owner_lease_fencing_margin =
+    std::chrono::seconds (5))
 {
     if (object_id.empty () || object_generation == 0)
         return std::nullopt;
@@ -191,8 +200,8 @@ read_route_owner_fence (
         if (authority_owner_generation == 0
             || owner_lease_generation == 0)
             return std::nullopt;
-        return std::pair{authority_owner_generation,
-                         owner_lease_generation};
+        return route_owner_fence_read_t{
+          {authority_owner_generation, owner_lease_generation}, std::nullopt};
     }
     if (!store)
         return std::nullopt;
@@ -209,9 +218,18 @@ read_route_owner_fence (
             || snapshot->authority_owner_generation == 0
             || snapshot->owner.lease_generation <= 0)
             return std::nullopt;
-        return std::pair{
-          snapshot->authority_owner_generation,
-          static_cast<std::uint64_t> (snapshot->owner.lease_generation)};
+        location_options_t location_options;
+        location_options.owner_lease_fencing_margin =
+          owner_lease_fencing_margin;
+        live_location_reader_t live (*store, std::move (location_options));
+        const auto admission_lifetime =
+          live.owner_admission_lifetime (snapshot->owner);
+        if (!admission_lifetime)
+            return std::nullopt;
+        return route_owner_fence_read_t{
+          {snapshot->authority_owner_generation,
+           static_cast<std::uint64_t> (snapshot->owner.lease_generation)},
+          admission_lifetime};
     }
     catch (...) {
         return std::nullopt;
@@ -673,7 +691,7 @@ zlink::submit_result_t spot_handle_t::request_to_spot (
   const std::string &target_spot_id,
   std::uint64_t target_spot_generation,
   const std::vector<zlink::message_t> &parts,
-  operation_id_t &operation,
+  call_id_t &operation,
   zlink::send_flags_t,
   std::chrono::milliseconds timeout,
   std::span<const std::uint8_t> metadata,
@@ -797,6 +815,7 @@ zlink::submit_result_t spot_handle_t::publish (
           public_host_runtime_t::local_application_dispatch_t{
             std::move (owner), std::move (local), parts});
     }
+    _host->_transport->signal_activity ();
     for (const auto &target : targets) {
         (void) _host->transport ().send_to_node (
           target.descriptor.node_routing_id,
@@ -842,7 +861,7 @@ const actor_ref_t &actor_handle_t::ref () const noexcept
 zlink::submit_result_t actor_handle_t::join_entry_spot (
   const zlink::routing_id_t &target_node_rid,
   const std::vector<zlink::message_t> &parts,
-  operation_id_t &operation,
+  call_id_t &operation,
   std::chrono::milliseconds timeout)
 {
     if (!_host) {
@@ -859,7 +878,7 @@ zlink::submit_result_t actor_handle_t::join_spot (
   const std::string &target_spot_id,
   std::uint64_t target_spot_generation,
   const std::vector<zlink::message_t> &parts,
-  operation_id_t &operation,
+  call_id_t &operation,
   std::chrono::milliseconds)
 {
     if (!_host) {
@@ -886,7 +905,7 @@ zlink::submit_result_t actor_handle_t::send_to (
 zlink::submit_result_t actor_handle_t::request_to (
   const actor_ref_t &target,
   const std::vector<zlink::message_t> &parts,
-  operation_id_t &operation,
+  call_id_t &operation,
   zlink::send_flags_t,
   std::chrono::milliseconds timeout,
   std::span<const std::uint8_t> metadata)
@@ -1221,6 +1240,13 @@ void public_host_runtime_t::configure_spot_route_fence_resolver (
     _spot_route_fence_resolver = std::move (resolver);
     std::lock_guard route_cache_lock (_route_cache_mutex);
     _spot_route_fences.clear ();
+}
+
+void public_host_runtime_t::configure_peer_readiness_resolver (
+  peer_readiness_resolver_t resolver)
+{
+    std::lock_guard lock (_mutex);
+    _peer_readiness_resolver = std::move (resolver);
 }
 
 void public_host_runtime_t::configure_actor_create_operations (
@@ -2269,19 +2295,29 @@ public_host_runtime_t::resolve_spot_route_fence (
         }
     }
 
-    const auto fence = read_route_owner_fence (
-      store, '2', target_spot_id, target_spot_generation);
-    if (fence && _options.route_cache_max_age
-                     > std::chrono::milliseconds::zero ()) {
+    const auto measured_at = std::chrono::steady_clock::now ();
+    const auto read = read_route_owner_fence (
+      store, '2', target_spot_id, target_spot_generation, 0, 0,
+      _options.owner_lease_fencing_margin);
+    if (read && read->admission_lifetime) {
+        const auto admission_expires_at =
+          measured_at + *read->admission_lifetime;
+        if (std::chrono::steady_clock::now () >= admission_expires_at)
+            return std::nullopt;
+        if (_options.route_cache_max_age
+            <= std::chrono::milliseconds::zero ())
+            return read->fence;
+        const auto lifetime = std::min (
+          std::chrono::duration_cast<std::chrono::steady_clock::duration> (
+            _options.route_cache_max_age),
+          *read->admission_lifetime);
         std::lock_guard lock (_route_cache_mutex);
         _spot_route_fences.insert_or_assign (
           key,
           cached_spot_route_fence_t{
-            *fence,
-            std::chrono::steady_clock::now ()
-              + _options.route_cache_max_age});
+            read->fence, measured_at + lifetime});
     }
-    return fence;
+    return read ? std::optional<route_fence_t> (read->fence) : std::nullopt;
 }
 
 void public_host_runtime_t::invalidate_spot_route_fence (
@@ -2327,9 +2363,25 @@ zlink::submit_result_t public_host_runtime_t::send_to_actor (
     }
     const auto peer = _transport->topology ().peer (
       target_routing_id.to_bytes ());
+    if (!peer) {
+        return zlink::submit_result_t::not_connected;
+    }
+    peer_readiness_resolver_t readiness_resolver;
+    {
+        std::lock_guard lock (_mutex);
+        readiness_resolver = _peer_readiness_resolver;
+    }
+    if (readiness_resolver && !readiness_resolver (target_routing_id)) {
+        return zlink::submit_result_t::not_connected;
+    }
     const auto node_generation =
-      peer ? peer->descriptor.lifecycle_generation
-           : status ().lifecycle_generation ();
+      peer->descriptor.lifecycle_generation;
+    const auto current_peer = _transport->topology ().peer (
+      target_routing_id.to_bytes ());
+    if (!current_peer
+        || current_peer->descriptor.lifecycle_generation != node_generation) {
+        return zlink::submit_result_t::not_connected;
+    }
     const auto object = resolve_actor (target);
     const auto authority_generation = authority_owner_generation != 0
       ? authority_owner_generation
@@ -2337,7 +2389,7 @@ zlink::submit_result_t public_host_runtime_t::send_to_actor (
     const auto route_fence = read_route_owner_fence (
       _user_spot_store, '1', target.actor_id ().value (), target.object_generation (),
       authority_generation, owner_lease_generation);
-    if (!route_fence || route_fence->first != authority_generation)
+    if (!route_fence || route_fence->fence.first != authority_generation)
         return zlink::submit_result_t::not_found;
     return submitted (_transport->send_to_actor (
       zlink::routing_id_t::from (
@@ -2349,14 +2401,14 @@ zlink::submit_result_t public_host_runtime_t::send_to_actor (
           std::string (target.node_rid ().value ())).to_bytes (),
         node_generation,
         authority_generation,
-        route_fence->second},
+        route_fence->fence.second},
       encode_application (parts, metadata)));
 }
 
 zlink::submit_result_t public_host_runtime_t::request_to_actor (
   const actor_ref_t &target,
   const std::vector<zlink::message_t> &parts,
-  operation_id_t &operation,
+  call_id_t &operation,
   std::chrono::milliseconds timeout,
   std::span<const std::uint8_t> metadata,
   std::uint64_t authority_owner_generation,
@@ -2379,9 +2431,28 @@ zlink::submit_result_t public_host_runtime_t::request_to_actor (
     }
     const auto peer = _transport->topology ().peer (
       target_routing_id.to_bytes ());
+    if (!peer) {
+        release_completion (operation);
+        return zlink::submit_result_t::not_connected;
+    }
+    peer_readiness_resolver_t readiness_resolver;
+    {
+        std::lock_guard lock (_mutex);
+        readiness_resolver = _peer_readiness_resolver;
+    }
+    if (readiness_resolver && !readiness_resolver (target_routing_id)) {
+        release_completion (operation);
+        return zlink::submit_result_t::not_connected;
+    }
     const auto node_generation =
-      peer ? peer->descriptor.lifecycle_generation
-           : status ().lifecycle_generation ();
+      peer->descriptor.lifecycle_generation;
+    const auto current_peer = _transport->topology ().peer (
+      target_routing_id.to_bytes ());
+    if (!current_peer
+        || current_peer->descriptor.lifecycle_generation != node_generation) {
+        release_completion (operation);
+        return zlink::submit_result_t::not_connected;
+    }
     const auto object = resolve_actor (target);
     const auto authority_generation = authority_owner_generation != 0
       ? authority_owner_generation
@@ -2389,7 +2460,7 @@ zlink::submit_result_t public_host_runtime_t::request_to_actor (
     const auto route_fence = read_route_owner_fence (
       _user_spot_store, '1', target.actor_id ().value (), target.object_generation (),
       authority_generation, owner_lease_generation);
-    if (!route_fence || route_fence->first != authority_generation) {
+    if (!route_fence || route_fence->fence.first != authority_generation) {
         release_completion (operation);
         return zlink::submit_result_t::not_found;
     }
@@ -2404,7 +2475,7 @@ zlink::submit_result_t public_host_runtime_t::request_to_actor (
           std::string (target.node_rid ().value ())).to_bytes (),
         node_generation,
         authority_generation,
-        route_fence->second},
+        route_fence->fence.second},
       encode_application (parts, metadata), timeout,
       [host, operation] (foundation::operation_terminal_t terminal,
                          std::vector<std::uint8_t> payload) mutable {
@@ -2432,7 +2503,7 @@ zlink::submit_result_t public_host_runtime_t::send_to_node (
 zlink::submit_result_t public_host_runtime_t::request_to_node (
   const zlink::routing_id_t &target,
   const std::vector<zlink::message_t> &parts,
-  operation_id_t &operation,
+  call_id_t &operation,
   std::chrono::milliseconds timeout)
 {
     operation = next_operation ();
@@ -2463,7 +2534,7 @@ zlink::submit_result_t public_host_runtime_t::send_to_channel (
 zlink::submit_result_t public_host_runtime_t::request_to_channel (
   const std::string &channel_name,
   const std::vector<zlink::message_t> &parts,
-  operation_id_t &operation,
+  call_id_t &operation,
   std::chrono::milliseconds timeout)
 {
     operation = next_operation ();
@@ -5110,6 +5181,7 @@ std::size_t public_host_runtime_t::dispatch_ready (
     (void) _relocation_wire->retry_source_replays (now);
     (void) _relocation_wire->retry_terminal_relays (now);
     (void) _relocation_wire->reap_terminal_tombstones (now);
+    (void) _transport->tick_liveness (now);
     (void) _transport->drain_monitor_events (now);
     std::size_t count = 0;
     receive_batch_budget_t budget;
@@ -5238,7 +5310,7 @@ std::size_t public_host_runtime_t::dispatch_ready (
                 record.source_node_rid =
                   zlink::routing_id_t::from (
                     frozen.source.node_routing_id);
-                record.operation_id = operation_id_t{
+                record.operation_id = call_id_t{
                   frozen.operation.high, frozen.operation.low};
                 switch (frozen.kind) {
                 case protocol::frozen_record_kind_t::actor_send:
@@ -5620,7 +5692,7 @@ actor_ref_t public_host_runtime_t::framework_actor_ref (
       object.object_generation);
 }
 
-operation_id_t public_host_runtime_t::next_operation ()
+call_id_t public_host_runtime_t::next_operation ()
 {
     std::lock_guard lock (_mutex);
     const auto low = _next_operation++;
@@ -5633,19 +5705,19 @@ operation_id_t public_host_runtime_t::next_operation ()
 }
 
 bool public_host_runtime_t::try_reserve_completion (
-  operation_id_t operation)
+  call_id_t operation)
 {
     return _completions.reserve (operation);
 }
 
 void public_host_runtime_t::release_completion (
-  operation_id_t operation) noexcept
+  call_id_t operation) noexcept
 {
     (void) _completions.erase (operation);
 }
 
 bool public_host_runtime_t::enqueue_completion (
-  operation_id_t operation,
+  call_id_t operation,
   receive_record_t record,
   std::vector<zlink::message_t> parts)
 {
@@ -5669,7 +5741,7 @@ zlink::submit_result_t public_host_runtime_t::begin_local_actor_join (
   const std::string &target_spot_id,
   std::uint64_t target_spot_generation,
   const std::vector<zlink::message_t> &parts,
-  operation_id_t &operation)
+  call_id_t &operation)
 {
     operation = next_operation ();
     if (!try_reserve_completion (operation))
@@ -5729,11 +5801,12 @@ zlink::submit_result_t public_host_runtime_t::begin_local_actor_join (
           local_application_dispatch_t{
             std::move (owner), std::move (record), parts});
     }
+    _transport->signal_activity ();
     return zlink::submit_result_t::ok;
 }
 
 bool public_host_runtime_t::complete_local_actor_join (
-  operation_id_t operation,
+  call_id_t operation,
   std::string actor_type,
   stateful::membership_token_t membership,
   actor_join_result_t result,
@@ -5781,7 +5854,7 @@ bool public_host_runtime_t::enqueue_local_actor_message (
   const actor_ref_t &target,
   record_kind_t kind,
   const std::vector<zlink::message_t> &parts,
-  std::optional<operation_id_t> operation)
+  std::optional<call_id_t> operation)
 {
     if (kind != record_kind_t::actor_send
         && kind != record_kind_t::actor_request) {
@@ -5819,13 +5892,14 @@ bool public_host_runtime_t::enqueue_local_actor_message (
     _local_application_dispatches.push_back (
       local_application_dispatch_t{
         std::move (owner), std::move (record), parts});
+    _transport->signal_activity ();
     return true;
 }
 
 zlink::submit_result_t public_host_runtime_t::enqueue_local_spot_request (
   const protocol::spot_route_fence_t &target,
   const std::vector<zlink::message_t> &parts,
-  operation_id_t operation,
+  call_id_t operation,
   std::chrono::milliseconds timeout,
   std::span<const std::uint8_t> metadata,
   spot_request_completion_t completion)
@@ -5916,6 +5990,7 @@ zlink::submit_result_t public_host_runtime_t::enqueue_local_spot_request (
         _local_application_dispatches.push_back (
           local_application_dispatch_t{
             std::move (owner), std::move (record), parts});
+        _transport->signal_activity ();
     }
     catch (...) {
         if (bytes_reserved)
@@ -5930,7 +6005,7 @@ zlink::submit_result_t public_host_runtime_t::enqueue_local_spot_request (
 }
 
 bool public_host_runtime_t::finish_local_spot_request (
-  operation_id_t operation,
+  call_id_t operation,
   foundation::operation_terminal_t terminal,
   result_t<std::vector<zlink::message_t>> result) noexcept
 {
@@ -5997,7 +6072,7 @@ void public_host_runtime_t::expire_local_spot_requests () noexcept
 {
     try {
         for (;;) {
-            std::optional<operation_id_t> expired;
+            std::optional<call_id_t> expired;
             {
                 std::lock_guard lock (_mutex);
                 const auto now = std::chrono::steady_clock::now ();
@@ -6026,7 +6101,7 @@ void public_host_runtime_t::terminate_local_spot_requests (
 {
     try {
         for (;;) {
-            std::optional<operation_id_t> pending_operation;
+            std::optional<call_id_t> pending_operation;
             {
                 std::lock_guard lock (_mutex);
                 for (const auto &[operation, pending] : _local_spot_requests) {
@@ -6063,7 +6138,7 @@ public_host_runtime_t::next_local_spot_request_deadline () const
 }
 
 bool public_host_runtime_t::complete_local_request (
-  operation_id_t operation,
+  call_id_t operation,
   const std::vector<zlink::message_t> &parts)
 {
     receive_record_t completion;
@@ -6076,7 +6151,7 @@ bool public_host_runtime_t::complete_local_request (
 }
 
 void public_host_runtime_t::complete_operation (
-  operation_id_t operation,
+  call_id_t operation,
   operation_kind_t kind,
   foundation::operation_terminal_t terminal,
   std::vector<std::uint8_t> payload)

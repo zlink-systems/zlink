@@ -446,7 +446,7 @@ The framework completes a handler/decode failure, for a request whose reply
 route can be restored, with a structured error reply. Not being able to
 restore the reply route doesn't mean it bypasses this by finding the
 requester's Spot/Actor ID or a new owner in the Location Store. That failure
-follows the drop, log, metric, and observer event contract set by the
+follows the drop, structured-log, and metric contract set by the
 [Interaction Model](03-interaction-model.en.md#10-handler-failure).
 
 Even after a route error, timeout, cancellation, or a failure whose

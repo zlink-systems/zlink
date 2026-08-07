@@ -190,60 +190,21 @@ Important rules:
 
 ## 7. Binding And Handler Integration
 
-The HTTP server doesn't build a new handler model — it uses
-[C++ HTTP Hosting](60-http-hosting.en.md)'s handler signature as is.
+The HTTP server does not build a new handler model. The
+[C++ HTTP Hosting handler signature forms](60-http-hosting.en.md#3-handler-signature-forms)
+solely own the exact handler declarations and invocation priority. The
+embedded server applies the same four-stage execution flow to typed and
+raw routes.
 
-```cpp
-class create_game_http_handler_t {
-  public:
-    using request_type = create_game_http_req_t;
-    using reply_type = create_game_http_res_t;
-    using dependency_types =
-      zlink::framework::dependency_list_t<
-        zlink::framework::request_client_t,
-        zlink::framework::logger_t<create_game_http_handler_t>>;
-
-    task_t<create_game_http_res_t> handle (const create_game_http_req_t &request);
-};
-```
-
-The server runtime handles the following work for a typed route.
-
-- Merges route path and query into the request binding input.
-- Deserializes the JSON body to the request DTO.
-- Builds a request DI scope.
-- Resolves the handler from framework DI.
-- Serializes the handler result DTO to the JSON body.
-
-The server runtime handles the following work for a raw route.
-
-- Builds `http_request_t`.
-- Copies method, path, target, route value, query value, header, body,
-  content type, and remote endpoint into the public framework type.
-- Resolves the handler from framework DI.
-- Writes the status, header, content type, body of the `http_response_t`
-  the handler returned as the HTTP response.
-
-Handler signatures that must be supported:
-
-- `reply_type handle(const request_type &request)`
-- `task_t<reply_type> handle(const request_type &request)`
-- `reply_type handle(const request_type &request, http_context_t &context)`
-- `task_t<reply_type> handle(const request_type &request, http_context_t &context)`
-- `reply_type handle(const request_type &request, const http_request_t &http)`
-- `task_t<reply_type> handle(const request_type &request, const http_request_t &http)`
-- `reply_type handle(const request_type &request, const http_request_t &http, http_context_t &context)`
-- `task_t<reply_type> handle(const request_type &request, const http_request_t &http, http_context_t &context)`
-- `http_response_t handle(const request_type &request)`
-- `http_response_t handle(const request_type &request, http_context_t &context)`
-- `task_t<http_response_t> handle(const request_type &request)`
-- `task_t<http_response_t> handle(const request_type &request, http_context_t &context)`
-- `http_response_t handle(const request_type &request, const http_request_t &http)`
-- `task_t<http_response_t> handle(const request_type &request, const http_request_t &http)`
-- `http_response_t handle(const request_type &request, const http_request_t &http, http_context_t &context)`
-- `task_t<http_response_t> handle(const request_type &request, const http_request_t &http, http_context_t &context)`
-- `http_response_t handle(const http_request_t &request)`
-- `task_t<http_response_t> handle(const http_request_t &request)`
+1. Build a per-request DI scope. For a typed route, bind route path,
+   query, and JSON body into the request DTO. For a raw route, build an
+   `http_request_t` from HTTP metadata and body.
+2. Resolve the handler and its declared dependencies from that scope.
+3. Invoke the `handle(...)` selected by C++ HTTP Hosting's priority
+   exactly once.
+4. Serialize a typed DTO result into a JSON body, or convert an
+   `http_response_t` result directly into HTTP status, headers, content
+   type, and body.
 
 A handler must not know socket, HTTP parser, Beast request, or TLS
 stream. If HTTP detail is needed, use `http_request_t`; if direct
@@ -294,7 +255,9 @@ The public option and default value are below.
 | `graceful_shutdown_timeout` | 5s | Time to wait for an in-progress request to end on shutdown |
 | `max_keep_alive_requests` | 100 | Per-connection request count limit |
 
-The public builder name is fixed as below.
+The public TLS/server option builder names are fixed below. The
+[C++ configuration and host interface](interfaces/02-configuration-host.en.md#41-http-hosting)
+solely owns the exact `http_options_builder_t` declaration.
 
 ```cpp
 namespace zlink::framework {
@@ -322,15 +285,6 @@ public:
       std::chrono::milliseconds value);
     http_server_options_builder_t &set_max_keep_alive_requests(
       std::size_t value);
-};
-
-class http_options_builder_t {
-public:
-    http_options_builder_t &configure_tls(
-      std::function<void(http_tls_options_builder_t &)> configure);
-
-    http_options_builder_t &configure_server(
-      std::function<void(http_server_options_builder_t &)> configure);
 };
 
 } // namespace zlink::framework

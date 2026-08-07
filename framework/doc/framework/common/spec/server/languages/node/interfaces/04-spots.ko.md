@@ -361,6 +361,11 @@ subscription을 등록할 수 없으며 direct packet과 timer만 처리한다. 
 context `close(...)`를 호출해 종료한다. 일반 message는 missing RID에 새 intent를 만들거나 factory를 직접
 시작하지 않는다.
 
+저장한 creation intent는 최초 cold activation이 terminal completion을 기록하기 전에 같은 target
+node·lifecycle에서 재개할 때만 사용한다. Steady `Ready` owner process 종료나 lease 만료는 `Missing`으로
+바꾸거나 다른 node의 cold activation으로 복구하지 않고 `Unavailable`로 끝낸다. Marker가 없는 Missing
+call은 새 intent를 만들지 않는다.
+
 다음 예제에서 `spotClient`는 `ZLinkSpotOutbound`이고 `cartId`는 호출할 global SpotId다. Instance
 intent를 명시했으므로 Spot이 없을 때만 cold activation에 필요한 stable type과 최초 Mesh를 사용한다.
 

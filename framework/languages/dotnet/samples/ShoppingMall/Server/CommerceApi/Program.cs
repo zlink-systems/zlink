@@ -101,6 +101,26 @@ internal static class Program
             var response = await useCase.ExecuteAsync(new GetOrderStateReq(orderId), cancellationToken);
             return Results.Ok(response);
         });
+        app.MapPost("/orders/{orderId}/continue", async (
+            string orderId,
+            IOrderWorkflowRouter workflows,
+            CancellationToken cancellationToken) =>
+        {
+            var state = await workflows.ContinueAsync(
+                new ContinueOrderWorkflowReq(orderId, $"continue:{orderId}"),
+                cancellationToken);
+            return Results.Ok(new ContinueOrderWorkflowRes(state));
+        });
+        app.MapPost("/orders/{orderId}/rebuild", async (
+            string orderId,
+            IOrderWorkflowRouter workflows,
+            CancellationToken cancellationToken) =>
+        {
+            var state = await workflows.RebuildProjectionAsync(
+                new RebuildOrderProjectionReq(orderId, $"rebuild:{orderId}"),
+                cancellationToken);
+            return Results.Ok(new RebuildOrderProjectionRes(state));
+        });
         app.MapPost("/self-check/projection/{orderId}/delete", async (
             string orderId,
             IOrderReadModelStore readModels,
@@ -108,22 +128,6 @@ internal static class Program
         {
             await readModels.DeleteAsync(orderId, cancellationToken);
             return Results.Ok();
-        });
-        app.MapPost("/self-check/projection/{orderId}/rebuild", async (
-            string orderId,
-            IOrderWorkflowRouter workflows,
-            ILoggerFactory loggerFactory,
-            CancellationToken cancellationToken) =>
-        {
-            var state = await workflows.RebuildProjectionAsync(
-                new RebuildOrderProjectionReq(orderId),
-                cancellationToken);
-            loggerFactory.CreateLogger("ShoppingMall.Server.CommerceApi")
-                .LogInformation(
-                    "shoppingmall projection: rebuilt order={OrderId} status={Status}",
-                    state.OrderId,
-                    state.Status);
-            return Results.Ok(new RebuildOrderProjectionRes(state));
         });
         app.MapPost("/self-check/idempotency/pending", async (
             PendingMappingHttpReq request,
@@ -143,14 +147,6 @@ internal static class Program
         {
             return Results.Ok(await useCase.ExecuteAsync(request, cancellationToken));
         });
-        app.MapPost("/self-check/workflow/{orderId}/continue", async (
-            string orderId,
-            IOrderWorkflowRouter workflows,
-            CancellationToken cancellationToken) =>
-        {
-            var state = await workflows.ContinueAsync(new ContinueOrderWorkflowReq(orderId), cancellationToken);
-            return Results.Ok(new ContinueOrderWorkflowRes(state));
-        });
         app.MapPost("/self-check/assert", async (
             ServerAssertionReq request,
             RedisCommerceStores stores,
@@ -165,7 +161,8 @@ internal static class Program
                     request.ResumedOrderId,
                     request.InventoryFailureOrderId,
                     request.PaymentFailureOrderId,
-                    request.ScaleOutOrderId
+                    request.ScaleOutOrderId,
+                    request.RepairOrderId
                 ],
                 cancellationToken);
             var lines = evidence.EventsByOrder
@@ -210,9 +207,14 @@ internal static class Program
                     nameof(InventoryReservedEvent),
                     nameof(PaymentAuthorizedEvent),
                     nameof(OrderConfirmedEvent))
+                && HasSequence(evidence, request.RepairOrderId,
+                    nameof(OrderStartedEvent),
+                    nameof(InventoryReservedEvent),
+                    nameof(PaymentAuthorizedEvent),
+                    nameof(OrderConfirmedEvent))
                 && evidence.ReleasedReservationCount >= 1
                 && evidence.PaymentFailureCount >= 1
-                && evidence.StartedIdempotencyCount == 7;
+                && evidence.StartedIdempotencyCount == 8;
             loggerFactory.CreateLogger("ShoppingMall.Server.CommerceApi")
                 .LogInformation("shoppingmall evidence: {Evidence}", string.Join("; ", lines));
             return Results.Ok(new ServerAssertionRes(passed, lines));
@@ -252,7 +254,8 @@ internal sealed record ServerAssertionReq(
     string ResumedOrderId,
     string InventoryFailureOrderId,
     string PaymentFailureOrderId,
-    string ScaleOutOrderId);
+    string ScaleOutOrderId,
+    string RepairOrderId);
 
 internal sealed record ServerAssertionRes(
     bool Passed,

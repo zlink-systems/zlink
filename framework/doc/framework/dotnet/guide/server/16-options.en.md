@@ -11,7 +11,7 @@ title: "16. Options — Configuration List And Defaults · C#/.NET"
 > **The documents that own this chapter's contract** —
 > [Topology public interfaces](../../../common/spec/server/languages/dotnet/interfaces/03-configuration-topology.en.md)
 > and
-> [Host configuration interfaces](../../../common/spec/server/languages/dotnet/interfaces/02-configuration-host.ko.md)
+> [Host configuration interfaces](../../../common/spec/server/languages/dotnet/interfaces/02-configuration-host.en.md)
 > define the exact signatures and value ranges. This chapter helps you **list that surface
 > out and judge when to change it.**
 
@@ -91,16 +91,16 @@ Values applied across the whole process.
 | `MaintenanceWave` | The maintenance group name this process belongs to | None | Grouping nodes to maintain/replace in sequence |
 | `Worker` | The thread pool heavy work is handed off to | Max `processor count × 2` (min 2) · 30s idle · 1024 queue | Handing off a lot of slow computation/I/O to a worker |
 
-- Choosing a codec and registering your own serializer: [05-channel-messaging](05-channel-messaging.ko.md#7-직렬화-codec)
-- The difference between discovering and exposing a handler: [05-channel-messaging](05-channel-messaging.ko.md#3-handler를-channel에-노출하기)
-- The scope a filter applies to: [05-channel-messaging](05-channel-messaging.ko.md#5-filter--공통-처리)
-- Worker calls: [06-spot](06-spot.ko.md#6-timer와-worker)
-- The deployment flow that uses version/maintenance groups: [12-operations](12-operations.ko.md)
+- Choosing a codec and registering your own serializer: [05-channel-messaging](05-channel-messaging.en.md#7-serialization-codec)
+- The difference between discovering and exposing a handler: [05-channel-messaging](05-channel-messaging.en.md#3-exposing-a-handler-on-a-channel)
+- The scope a filter applies to: [05-channel-messaging](05-channel-messaging.en.md#5-filter--common-processing)
+- Worker calls: [06-spot](06-spot.en.md#6-timer-and-worker)
+- The deployment flow that uses version/maintenance groups: [12-operations](12-operations.en.md)
 
 `AddLocationStore(...)` and `AddRelocationStore(...)` are also registered at the root. The
 auto-connect that finds a peer by logical name is covered by
-[10-location](10-location.ko.md); the store used when moving state to another node is
-covered by [07-actor-spot](07-actor-spot.ko.md).
+[10-location](10-location.en.md); the store used when moving state to another node is
+covered by [07-actor-spot](07-actor-spot.en.md).
 
 > **Metadata only lets through a key you've opened.** Unless you specify per-direction
 > allowed keys with `AllowSessionToActor` and `AllowActorToSession`, no value passes at all.
@@ -109,7 +109,7 @@ covered by [07-actor-spot](07-actor-spot.ko.md).
 
 ## 3. MeshNode Options
 
-A [MeshNode](03-concepts.ko.md#1-channel--서버-간-연결) is the basic unit of a connection
+A [MeshNode](03-concepts.en.md#1-channel--a-connection-between-servers) is the basic unit of a connection
 between servers, and one process creates one per mesh. The following are specified on the
 builder `AddRouteMesh(name)` returns, and apply only to that one node.
 
@@ -127,9 +127,9 @@ builder `AddRouteMesh(name)` returns, and apply only to that one node.
 | `PeerConnections.Connect(endpoint)` | A peer endpoint to connect to manually | None | A setup that doesn't use auto-connect |
 
 The registrations done in `Objects().Server()` and `Channel(name).Server()` (stable type,
-relocation policy, channel weight) are covered by [06-spot](06-spot.ko.md) and
-[05-channel-messaging](05-channel-messaging.ko.md). Manual connection is covered by
-[05-channel-messaging](05-channel-messaging.ko.md#6-연결-제어).
+relocation policy, channel weight) are covered by [06-spot](06-spot.en.md) and
+[05-channel-messaging](05-channel-messaging.en.md). Manual connection is covered by
+[05-channel-messaging](05-channel-messaging.en.md#6-connection-control).
 
 ### 3.1 Backpressure — Send-Wait Behavior
 
@@ -146,7 +146,7 @@ await client.SendToChannel("profile", command).Async(ct);
 ```
 
 Why the peer's delay becomes this side's wait, and when the ceiling locks and unlocks, is
-covered by [04-backpressure](04-backpressure.ko.md). This section and the next only cover
+covered by [04-backpressure](04-backpressure.en.md). This section and the next only cover
 the options that set values within that behavior. Flow control itself is owned by Core, and
 the exact contract is covered by [the core guide's socket option](https://zlink-systems.github.io/zlink/guide/12-socket-options/).
 
@@ -162,10 +162,10 @@ unspecified, the backend default is used — an unspecified socket gets the valu
 computes based on connection count. At the default profile, if there are 64 or fewer
 connections, it's `1,048,576 bytes` (1 MiB) per direction per peer, and the per-connection
 value shrinks as connections grow
-([04-backpressure §4.1](04-backpressure.ko.md#41-auto-hwm--미지정-socket의-자동-계산)).
+([04-backpressure §4.1](04-backpressure.en.md#41-auto-hwm--automatic-calculation-for-an-unspecified-socket)).
 **Both high-water marks limit the bytes the queue holds, not the message count, and apply
 per connection** — check whether the value multiplied by your target peer count fits your
-process memory budget ([04-backpressure](04-backpressure.ko.md#4-영향을-주는-옵션)).
+process memory budget ([04-backpressure](04-backpressure.en.md#4-options-that-affect-this)).
 
 | Setting | What it sets | Raising it | Lowering it |
 | --- | --- | --- | --- |
@@ -180,7 +180,7 @@ The two ceilings differ only in direction, not in character. Each sets **how man
 own node will hold**, and that ceiling carries through to the peer's flow. Replacing the
 per-execution-unit ceiling with a single host-wide byte budget is a settled design; its
 applied status is disclosed by
-[04-backpressure §6](04-backpressure.ko.md#6-framework-runtime-적용-범위).
+[04-backpressure §6](04-backpressure.en.md#6-framework-runtime-coverage).
 
 **Raising the high-water mark isn't the default response.** A larger ceiling absorbs
 congestion into memory, which makes `DeadlineExceeded` show up later — and that delays
@@ -224,15 +224,15 @@ dispatch.Diagnostics
 | `SetSampleRate(double)` | The fraction to record | When traffic is heavy enough that recording everything is a burden |
 | `IncludeMessageSizes(bool)` | Whether to record message size | Need to check payload size |
 
-How to read the record left here is covered by [11-monitoring](11-monitoring.ko.md).
+How to read the record left here is covered by [11-monitoring](11-monitoring.en.md).
 
 ## 5. Location Options
 
 `ConfigureLocations()` sets the interval and validity period for refreshing location
 information, and the number of
-[relocations](03-concepts.ko.md#5-relocation--다른-node로-옮겨가기) — an actor or Spot
+[relocations](03-concepts.en.md#5-relocation--moving-to-another-node) — an actor or Spot
 moving to another node — that can proceed at once. How to register it, and its behavior,
-are covered by [10-location](10-location.ko.md).
+are covered by [10-location](10-location.en.md).
 
 | Setting | What it sets | Default | When to change it |
 | --- | --- | --- | --- |
@@ -250,16 +250,16 @@ are covered by [10-location](10-location.ko.md).
 
 ## 6. STREAM Options
 
-[STREAM](03-concepts.ko.md#4-stream--외부-client-연결) is a connection-oriented channel to
+[STREAM](03-concepts.en.md#4-stream--external-client-connections) is a connection-oriented channel to
 an external client like mobile or a game. Specify the following on the node that receives
-that connection. Usage is covered by [09-stream](09-stream.ko.md).
+that connection. Usage is covered by [09-stream](09-stream.en.md).
 
 | Setting | What it sets | Default | When to change it |
 | --- | --- | --- | --- |
 | `AddStreamNode(name).Bind(...)` | The endpoint a client connects to | None | Always needed |
 | `SetBindHost` · `SetAdvertiseHost` | The bind/advertise address | The root `ConfigureNetwork()` value | Container deployment |
 | `SetTlsServer(cert, key, requireClientCertificate)` | The server certificate and whether a client certificate is required | Off | Exposing this directly to the outside |
-| `EnableActorDispatch()` | Hands an incoming packet to the bound actor | Off | A setup that ties the connection to an actor ([08-actor-session](08-actor-session.ko.md)) |
+| `EnableActorDispatch()` | Hands an incoming packet to the bound actor | Off | A setup that ties the connection to an actor ([08-actor-session](08-actor-session.en.md)) |
 | `AddSession<T>()` | The session implementation that handles connection lifetime | None | Handling connect/authenticate/disconnect directly |
 | `ConfigureStreamCompression()` | Compression for payload exchanged with the client | LZ4 | Turning it off with `Disable()`, or swapping in your own codec |
 
@@ -275,8 +275,8 @@ are:
 | Diagnostics level | `IZLinkDiagnosticsRuntime` | `Level` — raise to `Detailed` only while tracing a cause, then revert |
 
 A weight value ranges `0..10000`, with a default of `100`. The operational flow is covered by
-[05-channel-messaging](05-channel-messaging.ko.md#운영-drain--restore-런타임) and
-[12-operations](12-operations.ko.md).
+[05-channel-messaging](05-channel-messaging.en.md#operational-drain--restore-runtime) and
+[12-operations](12-operations.en.md).
 
 ## 8. What You Must Set
 
@@ -315,13 +315,13 @@ Everything else starts from its default.
 ## 10. Related Documents
 
 - The interface index for the registration surface:
-  [13-interface-catalog §2 Topology Registration](13-interface-catalog.ko.md#2-topology-등록)
+  [13-interface-catalog §2 Topology Registration](13-interface-catalog.en.md#2-topology-registration)
   — the verification class `BuilderContracts`
 - The exact signatures and value ranges:
   [Topology public interfaces](../../../common/spec/server/languages/dotnet/interfaces/03-configuration-topology.en.md) ·
-  [Host configuration interfaces](../../../common/spec/server/languages/dotnet/interfaces/02-configuration-host.ko.md)
-- Registration points and layering: [01-overview](01-overview.ko.md#아키텍처--계층-구조와-등록-지점)
-- Runtime observation and operations: [11-monitoring](11-monitoring.ko.md) · [12-operations](12-operations.ko.md)
+  [Host configuration interfaces](../../../common/spec/server/languages/dotnet/interfaces/02-configuration-host.en.md)
+- Registration points and layering: [01-overview](01-overview.en.md#architecture--layering-and-registration-points)
+- Runtime observation and operations: [11-monitoring](11-monitoring.en.md) · [12-operations](12-operations.en.md)
 
 ---
 <!-- framework-adapter-nav:bottom:start -->

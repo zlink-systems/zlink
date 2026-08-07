@@ -3,6 +3,10 @@ import { test } from 'node:test';
 
 import { ZLinkUserSpotExecutionMode } from '../../packages/framework/src/contracts/Configuration/ObjectRoles';
 import { ZLinkExecutionBarrier } from '../../packages/framework/src/runtime/execution';
+import {
+  ZLinkFrameworkInternalErrorKind,
+  internalFrameworkErrorKind
+} from '../../packages/framework/src/runtime/framework-errors-internal';
 import { ZLinkSpotActivationLifecycle } from '../../packages/framework/src/runtime/spots/spot-activation';
 import { ZLinkSpotActivation } from '../../packages/framework/src/runtime/spots/spot-activation-state';
 import { ZLinkSpotSerialExecutor } from '../../packages/framework/src/runtime/spots/spot-serial-executor';
@@ -39,7 +43,7 @@ function activation(
   });
 }
 
-test('lifecycle seal waits for a yielded Promise continuation and holds later Spot turns', async () => {
+test('lifecycle seal quiesces a yielded turn and rejects its late continuation', async () => {
   const barrier = new ZLinkExecutionBarrier();
   const serial = new ZLinkSpotSerialExecutor(true);
   serial.setExecutionBarrier(barrier);
@@ -53,6 +57,10 @@ test('lifecycle seal waits for a yielded Promise continuation and holds later Sp
     await serial.yieldPromise(response.promise);
     events.push('yielded:complete');
   });
+  const yieldedError = yielded.then(
+    () => undefined,
+    (error: unknown) => error
+  );
   await started.promise;
   await serial.execute(() => events.push('before-seal'));
 
@@ -62,22 +70,23 @@ test('lifecycle seal waits for a yielded Promise continuation and holds later Sp
   const waiting = barrier.waitForQuiescence(seal).then(() => {
     quiescent = true;
   });
-  await Promise.resolve();
-  assert.equal(quiescent, false);
+  await waiting;
+  assert.equal(quiescent, true);
   assert.deepEqual(events, ['yielded:start', 'before-seal']);
 
   response.resolve();
-  await yielded;
-  await waiting;
-  assert.equal(quiescent, true);
-  assert.deepEqual(events, ['yielded:start', 'before-seal', 'yielded:complete']);
+  const error = await yieldedError;
+  assert.equal(
+    internalFrameworkErrorKind(error as never),
+    ZLinkFrameworkInternalErrorKind.SpotMoving
+  );
+  assert.deepEqual(events, ['yielded:start', 'before-seal']);
 
   assert.equal(barrier.abort(seal), true);
   await held;
   assert.deepEqual(events, [
     'yielded:start',
     'before-seal',
-    'yielded:complete',
     'after-abort'
   ]);
 });

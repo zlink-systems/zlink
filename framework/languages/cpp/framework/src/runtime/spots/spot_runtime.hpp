@@ -203,7 +203,6 @@ class spot_node_builder_state_t
      * a freed instance can at worst leave an entry that no longer resolves
      * to a live registration. */
     std::map<const void *, std::pair<std::string, std::string>> actor_instance_index;
-    std::map<std::string, std::shared_ptr<std::mutex>> actor_mailboxes;
     std::map<std::string,
              std::shared_ptr<runtime::serial_execution_queue_t>>
       actor_execution_queues;
@@ -241,6 +240,13 @@ struct spot_create_call_state_t
 };
 
 void drain_spot_node_executors (spot_node_builder_state_t &node);
+
+void report_logical_multicast_failure (
+  const std::shared_ptr<spot_node_builder_state_t> &state,
+  std::string_view channel_name,
+  std::string_view topic,
+  std::string_view packet_name,
+  const framework_exception_t &error) noexcept;
 
 /* actor_instance_index maintenance (caller holds the node mutex). A record
  * replaces any prior address for the same actor, so a re-registered actor
@@ -340,22 +346,8 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
             close_requested = false;
             closed = true;
         }
-        const auto rid = std::string (spot_id);
-        if (owner->location_lifecycle) {
-            (void) owner->location_lifecycle->release_spot (
-              spot_location_key_t{rid});
-        }
-        owner->spot_contexts_by_id.erase (rid);
-        owner->spot_names_by_id.erase (rid);
-        owner->native_spots_by_id.erase (rid);
-        for (auto iterator = owner->spot_ids_by_name.begin ();
-             iterator != owner->spot_ids_by_name.end (); ++iterator) {
-            if (iterator->second == rid) {
-                owner->spot_ids_by_name.erase (iterator);
-                break;
-            }
-        }
-        detach_application_instance (true);
+        close_application_then_release_location (
+          owner, spot_close_reason_t::explicit_close);
         return true;
     }
 
@@ -498,6 +490,27 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
             callback_admission_closed = true;
             closed = true;
         }
+        close_application_then_release_location (
+          owner, spot_close_reason_t::idle_evicted);
+        return true;
+    }
+
+  private:
+    void close_application_then_release_location (
+      const std::shared_ptr<spot_node_builder_state_t> &owner,
+      spot_close_reason_t reason)
+    {
+        std::exception_ptr closing_error;
+        try {
+            // The location remains published until OnClosing has completed, so
+            // another node cannot create a competing incarnation while the
+            // application is still preserving its final state.
+            detach_application_instance (true, reason);
+        }
+        catch (...) {
+            closing_error = std::current_exception ();
+        }
+
         const auto rid = std::string (spot_id);
         if (owner->location_lifecycle) {
             (void) owner->location_lifecycle->release_spot (
@@ -513,8 +526,8 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
                 break;
             }
         }
-        detach_application_instance (true, spot_close_reason_t::idle_evicted);
-        return true;
+        if (closing_error)
+            std::rethrow_exception (closing_error);
     }
 };
 

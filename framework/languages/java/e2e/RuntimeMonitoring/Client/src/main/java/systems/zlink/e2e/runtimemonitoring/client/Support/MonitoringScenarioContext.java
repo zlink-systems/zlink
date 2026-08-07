@@ -149,13 +149,19 @@ public final class MonitoringScenarioContext implements AutoCloseable {
     }
 
     public Contracts.RuntimeSnapshot runtimeSnapshot(String baseUrl) {
-        return ZLinkHttpClient.create(baseUrl)
-            .timeout(Duration.ofSeconds(3))
-            .get("/runtime/snapshot")
-            .submit(Contracts.RuntimeSnapshot.class)
-            .toCompletableFuture()
-            .join()
-            .body();
+        try {
+            return ZLinkHttpClient.create(baseUrl)
+                .timeout(Duration.ofSeconds(5))
+                .get("/runtime/snapshot")
+                .submit(Contracts.RuntimeSnapshot.class)
+                .toCompletableFuture()
+                .join()
+                .body();
+        } catch (RuntimeException error) {
+            throw new IllegalStateException(
+                "runtime snapshot request failed: " + baseUrl,
+                error);
+        }
     }
 
     public Contracts.ObserverIsolationStatus observer(String baseUrl, String action) {

@@ -17,4 +17,27 @@ function waitForShutdown(): Promise<void> {
   });
 }
 
-export { closeNestRuntime, waitForShutdown };
+async function waitForRouteMeshReady(
+  runtime: ZLinkRouteMeshRuntime,
+  meshName: string,
+  requiresPlacement = false
+): Promise<void> {
+  const signal = AbortSignal.timeout(30_000);
+  const ready = (): boolean => {
+    const status = runtime.snapshot(meshName);
+    return status.isReady && (!requiresPlacement || status.placement.isAvailable);
+  };
+  if (ready()) return;
+  try {
+    for await (const observed of runtime.observe(meshName, 64, signal)) {
+      if (observed.status.isReady
+        && (!requiresPlacement || observed.status.placement.isAvailable)) return;
+    }
+  } catch (error: unknown) {
+    if (!signal.aborted) throw error;
+  }
+  throw new Error(`TicTacToe RouteMesh '${meshName}' did not become ready before startup deadline.`);
+}
+
+export { closeNestRuntime, waitForRouteMeshReady, waitForShutdown };
+import type { ZLinkRouteMeshRuntime } from '@zlink-systems/framework';

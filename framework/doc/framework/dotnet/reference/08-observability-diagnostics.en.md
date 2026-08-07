@@ -7,7 +7,7 @@ trace·metric·log recording levels, and the `ZLinkFrameworkErrorKind` lookup ta
 uses to judge failures. The exact signatures are owned by the
 [Topology monitoring exact interface](../../common/spec/server/languages/dotnet/interfaces/10-topology-monitoring.en.md)
 and the
-[Framework error exact interface](../../common/spec/server/languages/dotnet/interfaces/10-monitoring-errors.ko.md)
+[Framework error exact interface](../../common/spec/server/languages/dotnet/interfaces/10-monitoring-errors.en.md)
 (both Korean-only).
 
 ---
@@ -105,5 +105,5 @@ section and decide how to respond.
 
 The full basis is the
 [Topology monitoring exact interface](../../common/spec/server/languages/dotnet/interfaces/10-topology-monitoring.en.md) and the
-[Framework error exact interface](../../common/spec/server/languages/dotnet/interfaces/10-monitoring-errors.ko.md)
+[Framework error exact interface](../../common/spec/server/languages/dotnet/interfaces/10-monitoring-errors.en.md)
 (both Korean-only).

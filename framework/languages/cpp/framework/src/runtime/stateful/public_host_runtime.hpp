@@ -9,7 +9,7 @@
 #include "runtime/stateful/stateful_object_runtime.hpp"
 #include "runtime/stateful/stream_session_registry.hpp"
 #include "runtime/operations/exactly_once_table.hpp"
-#include "runtime/operations/operation_id.hpp"
+#include "runtime/operations/call_id.hpp"
 
 #include <zlink/Contracts/Core/routing_id.hpp>
 #include <zlink/Contracts/Messaging/message.hpp>
@@ -47,7 +47,7 @@ class raw_relocation_replay_coordinator_t;
 namespace zlink::framework::runtime::host
 {
 
-using operation_id_t = runtime::operation_id_t;
+using call_id_t = runtime::call_id_t;
 
 using spot_request_completion_t = std::function<void (
   foundation::operation_terminal_t,
@@ -159,7 +159,7 @@ struct receive_record_t
 {
     record_kind_t kind = record_kind_t::node_send;
     ready_domain_t domain = ready_domain_t::application;
-    operation_id_t operation_id;
+    call_id_t operation_id;
     operation_kind_t operation_kind = operation_kind_t::none;
     zlink::routing_id_t source_node_rid =
       zlink::routing_id_t::from (std::uint32_t{0});
@@ -231,6 +231,7 @@ struct host_options_t
     std::string entry_spot_name = "entry";
     std::set<std::string> object_stable_types;
     std::chrono::milliseconds route_cache_max_age{15'000};
+    std::chrono::milliseconds owner_lease_fencing_margin{5'000};
     std::size_t user_spot_operation_capacity = 65'536;
     std::chrono::milliseconds user_spot_operation_replay_retention =
       std::chrono::minutes (5);
@@ -385,7 +386,7 @@ class spot_handle_t
       const std::string &target_spot_id,
       std::uint64_t target_spot_generation,
       const std::vector<zlink::message_t> &parts,
-      operation_id_t &operation,
+      call_id_t &operation,
       zlink::send_flags_t flags,
       std::chrono::milliseconds timeout,
       std::span<const std::uint8_t> metadata = {},
@@ -419,14 +420,14 @@ class actor_handle_t
     zlink::submit_result_t join_entry_spot (
       const zlink::routing_id_t &target_node_rid,
       const std::vector<zlink::message_t> &parts,
-      operation_id_t &operation,
+      call_id_t &operation,
       std::chrono::milliseconds timeout);
     zlink::submit_result_t join_spot (
       const zlink::routing_id_t &target_node_rid,
       const std::string &target_spot_id,
       std::uint64_t target_spot_generation,
       const std::vector<zlink::message_t> &parts,
-      operation_id_t &operation,
+      call_id_t &operation,
       std::chrono::milliseconds timeout);
     zlink::submit_result_t send_to (
       const actor_ref_t &target,
@@ -436,7 +437,7 @@ class actor_handle_t
     zlink::submit_result_t request_to (
       const actor_ref_t &target,
       const std::vector<zlink::message_t> &parts,
-      operation_id_t &operation,
+      call_id_t &operation,
       zlink::send_flags_t flags,
       std::chrono::milliseconds timeout,
       std::span<const std::uint8_t> metadata = {});
@@ -506,6 +507,10 @@ class public_host_runtime_t :
       user_spot_materializer_t materializer);
     void configure_spot_route_fence_resolver (
       spot_route_fence_resolver_t resolver);
+    using peer_readiness_resolver_t =
+      std::function<bool (const zlink::routing_id_t &)>;
+    void configure_peer_readiness_resolver (
+      peer_readiness_resolver_t resolver);
     void configure_actor_create_operations (
       actor_create_operation_target_t target);
     void configure_instance_spot_operations (
@@ -604,7 +609,7 @@ class public_host_runtime_t :
     zlink::submit_result_t request_to_actor (
       const actor_ref_t &target,
       const std::vector<zlink::message_t> &parts,
-      operation_id_t &operation,
+      call_id_t &operation,
       std::chrono::milliseconds timeout,
       std::span<const std::uint8_t> metadata = {},
       std::uint64_t authority_owner_generation = 0,
@@ -615,7 +620,7 @@ class public_host_runtime_t :
     zlink::submit_result_t request_to_node (
       const zlink::routing_id_t &target,
       const std::vector<zlink::message_t> &parts,
-      operation_id_t &operation,
+      call_id_t &operation,
       std::chrono::milliseconds timeout);
     zlink::submit_result_t send_to_channel (
       const std::string &channel_name,
@@ -623,7 +628,7 @@ class public_host_runtime_t :
     zlink::submit_result_t request_to_channel (
       const std::string &channel_name,
       const std::vector<zlink::message_t> &parts,
-      operation_id_t &operation,
+      call_id_t &operation,
       std::chrono::milliseconds timeout);
     std::size_t dispatch_ready (
       const std::function<void (const ready_record_t &,
@@ -667,11 +672,11 @@ class public_host_runtime_t :
     actor_ref_t framework_actor_ref (
       const stateful::object_ref_t &object,
       std::string actor_type) const;
-    operation_id_t next_operation ();
-    bool try_reserve_completion (operation_id_t operation);
-    void release_completion (operation_id_t operation) noexcept;
+    call_id_t next_operation ();
+    bool try_reserve_completion (call_id_t operation);
+    void release_completion (call_id_t operation) noexcept;
     bool enqueue_completion (
-      operation_id_t operation,
+      call_id_t operation,
       receive_record_t record,
       std::vector<zlink::message_t> parts);
     zlink::submit_result_t begin_local_actor_join (
@@ -679,9 +684,9 @@ class public_host_runtime_t :
       const std::string &target_spot_id,
       std::uint64_t target_spot_generation,
       const std::vector<zlink::message_t> &parts,
-      operation_id_t &operation);
+      call_id_t &operation);
     bool complete_local_actor_join (
-      operation_id_t operation,
+      call_id_t operation,
       std::string actor_type,
       stateful::membership_token_t membership,
       actor_join_result_t result,
@@ -690,11 +695,11 @@ class public_host_runtime_t :
       const actor_ref_t &target,
       record_kind_t kind,
       const std::vector<zlink::message_t> &parts,
-      std::optional<operation_id_t> operation = std::nullopt);
+      std::optional<call_id_t> operation = std::nullopt);
     zlink::submit_result_t enqueue_local_spot_request (
       const protocol::spot_route_fence_t &target,
       const std::vector<zlink::message_t> &parts,
-      operation_id_t operation,
+      call_id_t operation,
       std::chrono::milliseconds timeout,
       std::span<const std::uint8_t> metadata,
       spot_request_completion_t completion = {});
@@ -702,7 +707,7 @@ class public_host_runtime_t :
     void terminate_local_spot_requests (
       foundation::operation_terminal_t terminal) noexcept;
     bool finish_local_spot_request (
-      operation_id_t operation,
+      call_id_t operation,
       foundation::operation_terminal_t terminal,
       result_t<std::vector<zlink::message_t>> result) noexcept;
     std::optional<std::chrono::steady_clock::time_point>
@@ -714,9 +719,9 @@ class public_host_runtime_t :
     void invalidate_spot_route_fence (
       const protocol::message_follow_notice_t &notice);
     bool complete_local_request (
-      operation_id_t operation,
+      call_id_t operation,
       const std::vector<zlink::message_t> &parts);
-    void complete_operation (operation_id_t operation,
+    void complete_operation (call_id_t operation,
                              operation_kind_t kind,
                              foundation::operation_terminal_t terminal,
                              std::vector<std::uint8_t> payload);
@@ -737,6 +742,7 @@ class public_host_runtime_t :
       _user_spot_store;
     user_spot_materializer_t _user_spot_materializer;
     spot_route_fence_resolver_t _spot_route_fence_resolver;
+    peer_readiness_resolver_t _peer_readiness_resolver;
     struct cached_spot_route_fence_t
     {
         route_fence_t fence;
@@ -840,12 +846,12 @@ class public_host_runtime_t :
     using completion_value_t =
       std::pair<receive_record_t, std::vector<zlink::message_t>>;
     zlink::framework::runtime::exactly_once_table_t<
-      operation_id_t,
+      call_id_t,
       completion_value_t,
-      zlink::framework::runtime::operation_id_hash_t>
+      zlink::framework::runtime::call_id_hash_t>
       _completions{completion_capacity};
     using local_spot_deadline_index_t =
-      std::multimap<std::chrono::steady_clock::time_point, operation_id_t>;
+      std::multimap<std::chrono::steady_clock::time_point, call_id_t>;
     struct local_spot_request_state_t
     {
         std::chrono::steady_clock::time_point deadline;
@@ -856,9 +862,9 @@ class public_host_runtime_t :
         bool terminal_claimed = false;
     };
     std::unordered_map<
-      operation_id_t,
+      call_id_t,
       local_spot_request_state_t,
-      zlink::framework::runtime::operation_id_hash_t>
+      zlink::framework::runtime::call_id_hash_t>
       _local_spot_requests;
     local_spot_deadline_index_t _local_spot_request_deadlines;
     std::size_t _local_spot_request_bytes = 0;

@@ -17,6 +17,20 @@ public sealed class ActorClientTests
     }
 
     [Fact]
+    public void ActorCreationDeadline_MapsProviderTimeoutToRetryableFrameworkError()
+    {
+        var providerTimeout = new TimeoutException("provider operation timed out");
+
+        var error = ZLinkActorManagerService.CreateActorCreationDeadlineException(
+            "actor-1",
+            providerTimeout);
+
+        Assert.Equal(ZLinkFrameworkErrorKind.DeadlineExceeded, error.Kind);
+        Assert.Contains("actor-1", error.Message, StringComparison.Ordinal);
+        Assert.Same(providerTimeout, error.InnerException);
+    }
+
+    [Fact]
     public void ActorReplyDecoder_MapsMalformedFrameToProtocolError()
     {
         using var malformed = Message.From("not-an-actor-frame");

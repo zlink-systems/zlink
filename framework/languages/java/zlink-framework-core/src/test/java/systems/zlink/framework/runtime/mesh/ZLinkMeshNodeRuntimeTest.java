@@ -48,6 +48,7 @@ class ZLinkMeshNodeRuntimeTest {
         registration.setRoutingIdPrefix("game-1");
         registration.setPlacementWeight(300);
         registration.listen("inproc://game-1");
+        registration.objects().client();
         registration.channelName("orders").server().setWeight(2);
         registration.peerConnections().connect(
             RoutingId.from("game-2"),

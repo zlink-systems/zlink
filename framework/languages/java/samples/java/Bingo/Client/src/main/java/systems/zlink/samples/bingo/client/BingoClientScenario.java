@@ -47,6 +47,12 @@ public final class BingoClientScenario {
             .request(BingoMessages.observeBingoEventsReq(client1Match.getRoomId()))
             .submit(Messages.ObserveBingoEventsRes.class).toCompletableFuture().join();
         ensure(observed.getSubscribed());
+        // Register the observer wait before the second player can start the draw loop.
+        var rewardAnnounced = observer.waitFor(SampleNames.RewardAnnouncedPacket)
+            .where(
+                Messages.BingoRewardAnnouncedNotify.class,
+                message -> message.payload().getRoomId().equals(client1Match.getRoomId()))
+            .submit(Messages.BingoRewardAnnouncedNotify.class);
 
         var client1SawClient2Join =
             client1.waitFor(SampleNames.PlayerJoinedPacket).submit(Messages.PlayerJoinedNotify.class);
@@ -85,12 +91,6 @@ public final class BingoClientScenario {
         ensure(client2Card.getState().getPlayersList().stream()
             .anyMatch(player -> player.getActorId().equals(client2Auth.getActorId())
                 && player.getCardCount() == 9));
-        var rewardAnnounced = observer.waitFor(SampleNames.RewardAnnouncedPacket)
-            .where(
-                Messages.BingoRewardAnnouncedNotify.class,
-                message -> message.payload().getRoomId().equals(client1Match.getRoomId()))
-            .submit(Messages.BingoRewardAnnouncedNotify.class);
-
         var client1Ended =
             client1.waitFor(SampleNames.GameEndedPacket).submit(Messages.BingoGameEndedNotify.class);
         var client2Ended =

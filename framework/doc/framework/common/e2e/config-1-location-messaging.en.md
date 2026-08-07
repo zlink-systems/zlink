@@ -85,7 +85,7 @@ consumer reports the needed peer and Channel target as `ready` in
 public RouteMesh status. A state change is confirmed via the status
 stream or a bounded evidence wait, not substituted with a fixed sleep.
 The default wait time follows
-[E2E README §2.1](README.en.md#21-local-e2e-wait-standard).
+[E2E README — Local E2E Wait Standard](README.en.md#21-local-e2e-wait-standard).
 
 The client starts a message by calling the consumer's business
 endpoint. Success is judged using the following evidence together.
@@ -489,9 +489,8 @@ Priority: `P0`
 If a provider has no handler for a packet, a request caller must
 receive a result saying the target business can't be processed. A
 send may already have completed normally once the source queue
-accepted it, so the provider records the dispatch result it received
-via the public message-flow observer callback into application
-evidence.
+accepted it, so the provider's application logger provider records the
+dispatch result into application evidence.
 
 **Verification question:** Does a request for an unregistered packet
 end in `NotFound`, and does a send not run an application handler?
@@ -502,8 +501,8 @@ end in `NotFound`, and does a send not run an application handler?
   endpoint, then one unknown send with a different marker. Then it
   sends a normal profile request.
 - Verification: The unknown request ends exactly once in `NotFound`,
-  and observer evidence records `no_handler` and `reply_error`. The
-  unknown send ends with no reply payload, and observer evidence
+  and logger evidence records `no_handler` and `reply_error`. The
+  unknown send ends with no reply payload, and logger evidence
   records `no_handler` and `drop`. Both messages have `0` application
   handler executions. The normal request is unaffected and receives a
   reply.
@@ -561,10 +560,10 @@ sizes without a separate Framework message-size setting?
   with the provider handler running once for each request. The final normal
   request also receives a reply, and no evidence shows a partial payload.
 - Detailed behavior: verifies the SS boundary in
-  [RouteMesh Topology §8](../spec/07-channel-topology.en.md#8-routemesh-ss-message-size),
+  [RouteMesh Topology §8](../spec/07-channel-topology.en.md#8-routemesh-ss-message-size-and-mailbox-caps),
   where Framework doesn't provide a message-size setting. The StreamNode
   ceiling is defined separately in
-  [STREAM Session §4](../spec/19-stream-session.en.md#4-stream-socket-message-size).
+  [STREAM Session — internal recv loop and application surface](../spec/19-stream-session.en.md#4-the-frameworks-internal-recv-loop-and-the-application-surface).
 
 #### RM-C9 Resume Receiving After Hitting Application HWM
 

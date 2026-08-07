@@ -13,6 +13,10 @@ const {
 } = require('../../packages/framework/dist/runtime/messaging/submission-result');
 const channelEnvelope = require('../../packages/framework/dist/runtime/channels/channel-envelope');
 const { isPollerInterruptedError } = require('../../packages/framework/dist/runtime/backend/node/node-backend-adapter-support');
+const {
+  ZLinkMeshCompletionTable,
+  closeMeshCompletion
+} = require('../../packages/framework/dist/runtime/backend/mesh-completion-table');
 
 const removedSpotAdapterContracts = new Set([
   'backend adapter unwraps SpotNode when attaching stream SessionRelay',
@@ -421,6 +425,126 @@ test('backend mesh dispatch pump yields between continuous receive batches', asy
   }
 });
 
+test('backend mesh dispatch pump yields when elapsed receive time wins before the count limit', async () => {
+  const totalBatches = 4;
+  let readyHandler;
+  let receivedBatches = 0;
+  let timerObservedAt;
+  let nowMs = 0;
+  let complete;
+  const completed = new Promise((resolve) => { complete = resolve; });
+  const claim = {
+    recvBatch() {
+      if (receivedBatches >= totalBatches) return { ok: false, records: [] };
+      receivedBatches += 1;
+      return { ok: true, records: [{ parts: [] }] };
+    },
+    release() {}
+  };
+  const node = {
+    setReadyHandler(handler) { readyHandler = handler; },
+    createReadyBatch() {
+      return {
+        reset() {},
+        takeClaim() { return claim; },
+        close() {}
+      };
+    },
+    createReceiveBatch() {
+      return { reset() {}, close() {} };
+    },
+    drainReady() {
+      return {
+        ok: true,
+        hasResidue: false,
+        records: [{ ownerKind: framework.ReadyOwnerKind.Node }]
+      };
+    }
+  };
+  const pump = new backend.ZLinkMeshDispatchPump(node, {
+    monotonicNowMs: () => {
+      nowMs += 3;
+      return nowMs;
+    },
+    dispatch() {
+      if (receivedBatches === totalBatches) complete();
+    }
+  });
+
+  try {
+    pump.start();
+    setTimeout(() => { timerObservedAt = receivedBatches; }, 0);
+    readyHandler(framework.ReadyDomain.Application);
+    await completed;
+    assert.ok(timerObservedAt < totalBatches, `timer ran after ${timerObservedAt} batches`);
+  } finally {
+    await pump.dispose();
+  }
+});
+
+test('backend mesh dispatch pump marks application and infrastructure execution areas', async () => {
+  let readyHandler;
+  let currentDomain;
+  const pending = new Set([
+    framework.ReadyDomain.Infrastructure,
+    framework.ReadyDomain.Application
+  ]);
+  const observed = [];
+  let complete;
+  const completed = new Promise((resolve) => { complete = resolve; });
+  const node = {
+    setReadyHandler(handler) { readyHandler = handler; },
+    createReadyBatch() {
+      return {
+        reset() {},
+        takeClaim() {
+          let consumed = false;
+          const domain = currentDomain;
+          return {
+            recvBatch() {
+              if (consumed) return { ok: false, records: [] };
+              consumed = true;
+              return { ok: true, records: [{ domain, parts: [] }] };
+            },
+            release() {}
+          };
+        },
+        close() {}
+      };
+    },
+    createReceiveBatch() {
+      return { reset() {}, close() {} };
+    },
+    drainReady(domain) {
+      currentDomain = domain;
+      if (!pending.delete(domain)) return { ok: false, hasResidue: false, records: [] };
+      return {
+        ok: true,
+        hasResidue: false,
+        records: [{ ownerKind: framework.ReadyOwnerKind.Node, domain }]
+      };
+    }
+  };
+  const pump = new backend.ZLinkMeshDispatchPump(node, {
+    dispatch(_owner, record) {
+      observed.push([record.domain, framework.currentZLinkExecutionArea()]);
+      if (observed.length === 2) complete();
+    }
+  });
+
+  try {
+    pump.start();
+    readyHandler(framework.ReadyDomain.Infrastructure | framework.ReadyDomain.Application);
+    await completed;
+    assert.deepEqual(observed, [
+      [framework.ReadyDomain.Infrastructure, 'infrastructure'],
+      [framework.ReadyDomain.Application, 'application']
+    ]);
+  } finally {
+    await pump.dispose();
+  }
+});
+
 test('backend mesh dispatch pump yields between continuous ready batches without messages', async () => {
   const totalBatches = 32;
   let readyHandler;
@@ -698,6 +822,126 @@ test('backend mesh dispatch pump drains ready work queued before an async handle
   }
 });
 
+test('backend mesh dispatch pump does not claim unrelated owners behind a slow handler', async () => {
+  let readyHandler;
+  const owners = ['slow-owner', 'fast-owner'];
+  let releaseSlow;
+  const slowReleased = new Promise((resolve) => { releaseSlow = resolve; });
+  let fastDispatched;
+  const fastCompleted = new Promise((resolve) => { fastDispatched = resolve; });
+  const node = {
+    setReadyHandler(handler) { readyHandler = handler; },
+    createReadyBatch(capacity) {
+      assert.equal(capacity, 1);
+      return {
+        records: [],
+        claims: [],
+        reset() {
+          this.records.length = 0;
+          this.claims.length = 0;
+        },
+        takeClaim(index) { return this.claims[index]; },
+        close() {}
+      };
+    },
+    createReceiveBatch() {
+      return { reset() {}, close() {} };
+    },
+    drainReady(_domain, batch) {
+      const owner = owners.shift();
+      if (owner === undefined) return { ok: true, hasResidue: false, records: [] };
+      let received = false;
+      batch.records.push({ ownerKind: framework.ReadyOwnerKind.Spot, owner });
+      batch.claims.push({
+        recvBatch() {
+          if (received) return { ok: false, records: [] };
+          received = true;
+          return { ok: true, records: [{ parts: [], owner }] };
+        },
+        release() {}
+      });
+      return { ok: true, hasResidue: owners.length > 0, records: batch.records };
+    }
+  };
+  const pump = new backend.ZLinkMeshDispatchPump(node, {
+    async dispatch(_owner, record) {
+      if (record.owner === 'slow-owner') {
+        await slowReleased;
+      } else {
+        fastDispatched();
+      }
+    }
+  });
+
+  try {
+    pump.start();
+    readyHandler(framework.ReadyDomain.Application);
+    await Promise.race([
+      fastCompleted,
+      new Promise((_, reject) => setTimeout(
+        () => reject(new Error('Unrelated owner remained blocked behind the slow handler.')),
+        1_000
+      ))
+    ]);
+  } finally {
+    releaseSlow();
+    await pump.dispose();
+  }
+});
+
+test('mesh completion submission registers before a completion can arrive', async () => {
+  const table = new ZLinkMeshCompletionTable();
+  const complete = (low, text) => {
+    const part = zlink.Message.from(Buffer.from(text));
+    try {
+      table.complete({
+        operationId: { high: 1n, low },
+        terminalResult: 0,
+        failureErrno: 0,
+        operationKind: 0,
+        kindData: null,
+        parts: [part]
+      });
+    } finally {
+      part.close();
+    }
+  };
+
+  const completion = table.submit(() => {
+    queueMicrotask(() => complete(1n, 'first'));
+    return { high: 1n, low: 1n };
+  });
+  const retained = await completion;
+  try {
+    assert.equal(retained.parts[0].data().toString(), 'first');
+  } finally {
+    closeMeshCompletion(retained);
+  }
+  complete(1n, 'late-duplicate');
+  table.dispose();
+});
+
+test('backend not-connected classification uses typed results instead of error text', () => {
+  assert.equal(
+    backend.isBackendNotConnectedError({
+      result: backend.SubmitResult.NotConnected,
+      message: 'arbitrary localized diagnostic'
+    }),
+    true
+  );
+  assert.equal(
+    backend.isBackendNotConnectedError({
+      result: backend.RequestResult.NotConnected,
+      message: 'another diagnostic'
+    }),
+    true
+  );
+  assert.equal(
+    backend.isBackendNotConnectedError(new Error('Transport endpoint is not connected')),
+    false
+  );
+});
+
 test('backend mesh record dispatcher routes node, spot, actor, and infrastructure records', async () => {
   const routed = [];
   const dispatcher = new backend.ZLinkMeshRecordDispatcher({
@@ -714,9 +958,11 @@ test('backend mesh record dispatcher routes node, spot, actor, and infrastructur
   await dispatcher.dispatch(owner(framework.ReadyOwnerKind.Node), record(framework.ReceiveKind.ChannelRequest));
   await dispatcher.dispatch(owner(framework.ReadyOwnerKind.Spot), record(framework.ReceiveKind.SpotControl));
   await dispatcher.dispatch(owner(framework.ReadyOwnerKind.Actor), record(framework.ReceiveKind.ActorSend));
-  await dispatcher.dispatch(owner(framework.ReadyOwnerKind.Node), record(framework.ReceiveKind.Completion));
-  await dispatcher.dispatch(owner(framework.ReadyOwnerKind.Node), record(framework.ReceiveKind.SendReady));
-  await dispatcher.dispatch(owner(framework.ReadyOwnerKind.Node), record(framework.ReceiveKind.TransferControl));
+  await framework.runZLinkExecutionArea('infrastructure', async () => {
+    await dispatcher.dispatch(owner(framework.ReadyOwnerKind.Node), record(framework.ReceiveKind.Completion));
+    await dispatcher.dispatch(owner(framework.ReadyOwnerKind.Node), record(framework.ReceiveKind.SendReady));
+    await dispatcher.dispatch(owner(framework.ReadyOwnerKind.Node), record(framework.ReceiveKind.TransferControl));
+  });
 
   assert.deepEqual(routed, [
     ['node', framework.ReceiveKind.ChannelRequest],
@@ -729,6 +975,13 @@ test('backend mesh record dispatcher routes node, spot, actor, and infrastructur
   assert.throws(
     () => dispatcher.dispatch(owner(framework.ReadyOwnerKind.Spot), record(framework.ReceiveKind.ChannelSend)),
     /requires owner kind/
+  );
+  assert.throws(
+    () => framework.runZLinkExecutionArea(
+      'application',
+      () => dispatcher.dispatch(owner(framework.ReadyOwnerKind.Node), record(framework.ReceiveKind.Completion))
+    ),
+    (error) => error.kind === framework.ZLinkFrameworkErrorKind.InvalidOperation
   );
 });
 
@@ -1607,3 +1860,67 @@ test('subscriber receive loop never blocks the Node event loop while polling', a
   assert.ok(waits.length > 0);
   assert.deepEqual([...new Set(waits)], [0]);
 });
+
+test('subscriber receive loop keeps receiving while an earlier handler is awaiting', async () => {
+  const queued = [messageRecord('first'), messageRecord('second')];
+  let releaseFirst;
+  const firstPending = new Promise((resolve) => { releaseFirst = resolve; });
+  let observeSecond;
+  const secondObserved = new Promise((resolve) => { observeSecond = resolve; });
+  const loop = new framework.ZLinkSubscriberReceiveLoop(
+    {
+      createReadablePoller() {
+        return {
+          wait() { return queued.length > 0; },
+          dispose() {}
+        };
+      },
+      createTopicMessage() { return { topic: '', parts: [] }; }
+    },
+    {
+      subscribe(target) {
+        const next = queued.shift();
+        if (next === undefined) return false;
+        target.topic = next.topic;
+        target.parts = next.parts;
+        return true;
+      }
+    },
+    {
+      async dispatch(topicMessage) {
+        if (topicMessage.topic === 'first') await firstPending;
+        if (topicMessage.topic === 'second') observeSecond();
+      }
+    }
+  );
+
+  const running = loop.run();
+  try {
+    await Promise.race([
+      secondObserved,
+      new Promise((_, reject) => setTimeout(
+        () => reject(new Error('Second subscriber record waited for the first handler.')),
+        1_000
+      ))
+    ]);
+  } finally {
+    releaseFirst();
+    await loop.stop();
+    await running;
+  }
+});
+
+function messageRecord(topic) {
+  return {
+    topic,
+    parts: [{
+      size() { return 0; },
+      data() { return Buffer.alloc(0); },
+      close() {}
+    }, {
+      size() { return 0; },
+      data() { return Buffer.alloc(0); },
+      close() {}
+    }]
+  };
+}

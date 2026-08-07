@@ -284,6 +284,6 @@ changes per chapter.
 ## Related Documents
 
 - The HTTP **client** (the side that sends requests) is a separate deliverable —
-  [zlink::http_client user guide](../http-client/README.ko.md)
-- The design contract (draft) lives in [doc/spec/](../../README.ko.md). When it conflicts
+  [zlink::http_client user guide](../http-client/README.en.md)
+- The design contract (draft) lives in [doc/spec/](../../README.en.md). When it conflicts
   with the guide, the code and the spec are authoritative.

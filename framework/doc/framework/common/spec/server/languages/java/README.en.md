@@ -6,7 +6,7 @@ contract.
 
 Where Kotlin uses the Java contract as-is, this document is followed;
 the Kotlin-only `suspend` and `Flow` surface is fixed separately by the
-[Kotlin Public Contract](../kotlin/README.ko.md).
+[Kotlin Public Contract](../kotlin/README.en.md).
 
 A Channel call only uses a process-local ChannelName. `Relocate`, which
 specifies mode and target application version, is the authority for
@@ -19,7 +19,7 @@ reference.
 
 | Document | Scope |
 |---|---|
-| [Per-Feature Interfaces](interfaces/README.ko.md) | Exact signature for runtime, configuration, Channel, Spot, Actor, STREAM, Location/maintenance, and monitoring |
+| [Per-Feature Interfaces](interfaces/README.en.md) | Exact signature for runtime, configuration, Channel, Spot, Actor, STREAM, Location/maintenance, and monitoring |
 | [Stream Connector](../../../stream-connector/languages/java/03-stream-connector.en.md) | The client connector's public surface |
 
 **The meaning and behavioral rules of a feature are owned by the

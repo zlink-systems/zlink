@@ -8,6 +8,7 @@ ZLINK_SAMPLE_GRADLE_SETTINGS_ARGS=(--settings-file standalone.settings.gradle.kt
 
 RUN_DIR="$(mktemp -d)"
 LOG_DIR="$RUN_DIR/logs"
+ZLINK_SAMPLE_FRAMEWORK_ROLE_LOGS="mission-a.log mission-b.log api-a.log api-b.log"
 BUILD_LOG="$LOG_DIR/build.log"
 mkdir -p "$LOG_DIR"
 

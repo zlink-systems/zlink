@@ -6,15 +6,22 @@ namespace SpotService.Server.Play.Spots;
 
 internal sealed class ScenarioInstanceSpot(
     IZLinkInstanceSpotContext context,
-    EvidenceStore evidence) : IZLinkInstanceSpot
+    EvidenceStore evidence,
+    InstanceInitializationGate initializationGate) : IZLinkInstanceSpot
 {
     public IZLinkInstanceSpotContext Context { get; } = context;
 
-    public ValueTask OnInitializeAsync(CancellationToken cancellationToken)
+    public async ValueTask OnInitializeAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        if (initializationGate.Enabled)
+        {
+            evidence.Add(
+                $"instance-initialize-gate|rid={evidence.Rid}|spot={Context.SpotId}"
+                + $"|generation={Context.ObjectGeneration}");
+            await initializationGate.WaitForMessageAsync(cancellationToken);
+        }
         evidence.Add($"instance-initialize|rid={evidence.Rid}|spot={Context.SpotId}");
-        return ValueTask.CompletedTask;
     }
 
     public ValueTask OnClosingAsync(
@@ -48,22 +55,31 @@ internal sealed class ScenarioInstanceStateHandler(EvidenceStore evidence)
 }
 
 [ZLinkSpotRequestHandler("InstanceColdRequest")]
-internal sealed class ScenarioInstanceColdRequestHandler(EvidenceStore evidence)
+internal sealed class ScenarioInstanceColdRequestHandler(
+    EvidenceStore evidence,
+    InstanceHandlerGate handlerGate)
     : IZLinkSpotRequestHandler<ScenarioInstanceSpot, InstanceColdRequest, InstanceColdRequestReply>
 {
-    public ValueTask<InstanceColdRequestReply> HandleAsync(
+    public async ValueTask<InstanceColdRequestReply> HandleAsync(
         ScenarioInstanceSpot spot,
         InstanceColdRequest request,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        if (request.OperationId.StartsWith("queued-", StringComparison.Ordinal))
+        {
+            evidence.Add(
+                $"instance-handler-gate|rid={evidence.Rid}|spot={spot.Context.SpotId}"
+                + $"|operation={request.OperationId}");
+            await handlerGate.WaitForMessageAsync(cancellationToken);
+        }
         evidence.Add(
             $"instance-request|rid={evidence.Rid}|spot={spot.Context.SpotId}"
             + $"|operation={request.OperationId}");
-        return ValueTask.FromResult(new InstanceColdRequestReply(
+        return new InstanceColdRequestReply(
             spot.Context.SpotId,
             request.OperationId,
-            spot.Context.NodeRid.ToString()));
+            spot.Context.NodeRid.ToString());
     }
 }
 

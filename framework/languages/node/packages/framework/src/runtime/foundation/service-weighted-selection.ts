@@ -5,49 +5,75 @@ export interface ServiceWeightedSelectionCandidate<T> {
 }
 
 interface SelectionCycle<T> {
+  readonly kind: 'cycle';
   readonly values: readonly T[];
   readonly states: readonly ReadonlyMap<string, bigint>[];
   readonly cycleStart: number;
   cursor: number;
 }
 
+interface DirectSelection<T> {
+  readonly kind: 'direct';
+  readonly candidates: readonly WeightedCandidate<T>[];
+}
+
+interface WeightedCandidate<T> {
+  readonly value: T;
+  readonly id: string;
+  readonly weight: bigint;
+}
+
+type SelectionPlan<T> = SelectionCycle<T> | DirectSelection<T>;
+
+const MAX_CYCLE_SEARCH_STEPS = 4_096;
+const MAX_CYCLE_SEARCH_MS = 10;
+
 /** Owns cumulative smooth-weighted selection state without exposing it to topology callers. */
 export class SmoothWeightedSelection<T> {
   private readonly current = new Map<string, bigint>();
-  private cycle: SelectionCycle<T>;
+  private plan: SelectionPlan<T>;
 
   constructor(
     private readonly candidateProvider: () => readonly ServiceWeightedSelectionCandidate<T>[]
   ) {
-    this.cycle = emptyCycle();
+    this.plan = emptyCycle();
     this.rebuild();
   }
 
   rebuild(): void {
-    this.cycle = buildCycle(this.candidateProvider(), this.current);
+    if (this.plan.kind === 'cycle' && this.plan.values.length > 0) {
+      replaceState(this.current, this.plan.states[this.plan.cursor]!);
+    }
+    this.plan = buildSelectionPlan(this.candidateProvider(), this.current);
   }
 
   select(accept: (value: T) => boolean = () => true): T | undefined {
-    if (this.cycle.values.length === 0) return undefined;
-    for (let attempts = 0; attempts < this.cycle.values.length; attempts += 1) {
-      const cursor = this.cycle.cursor;
-      const selected = this.cycle.values[cursor]!;
-      const nextCursor = cursor + 1 < this.cycle.values.length
+    if (this.plan.kind === 'direct') {
+      for (let attempts = 0; attempts < this.plan.candidates.length; attempts += 1) {
+        const selected = selectDirect(this.plan.candidates, this.current);
+        if (selected !== undefined && accept(selected)) return selected;
+      }
+      return undefined;
+    }
+    if (this.plan.values.length === 0) return undefined;
+    for (let attempts = 0; attempts < this.plan.values.length; attempts += 1) {
+      const cursor = this.plan.cursor;
+      const selected = this.plan.values[cursor]!;
+      const nextCursor = cursor + 1 < this.plan.values.length
         ? cursor + 1
-        : this.cycle.cycleStart;
-      replaceState(this.current, this.cycle.states[nextCursor]!);
-      this.cycle.cursor = nextCursor;
+        : this.plan.cycleStart;
+      this.plan.cursor = nextCursor;
       if (accept(selected)) return selected;
     }
     return undefined;
   }
 }
 
-function buildCycle<T>(
+function buildSelectionPlan<T>(
   eligible: readonly ServiceWeightedSelectionCandidate<T>[],
   current: Map<string, bigint>
-): SelectionCycle<T> {
-  const candidates = eligible.map(candidate => ({
+): SelectionPlan<T> {
+  const candidates: readonly WeightedCandidate<T>[] = eligible.map(candidate => ({
     ...candidate,
     weight: BigInt(candidate.weight)
   }));
@@ -65,13 +91,19 @@ function buildCycle<T>(
   const states: ReadonlyMap<string, bigint>[] = [];
   const seen = new Map<string, number>();
   const working = new Map(current);
+  const startedAt = performance.now();
   for (;;) {
+    if (values.length >= MAX_CYCLE_SEARCH_STEPS
+      || performance.now() - startedAt >= MAX_CYCLE_SEARCH_MS) {
+      return { kind: 'direct', candidates };
+    }
     const stateKey = candidates
       .map(candidate => `${candidate.id}\u0000${working.get(candidate.id) ?? 0n}`)
       .join('\u0001');
     const cycleStart = seen.get(stateKey);
     if (cycleStart !== undefined) {
       return {
+        kind: 'cycle',
         values: Object.freeze(values),
         states: Object.freeze(states),
         cycleStart,
@@ -97,11 +129,32 @@ function buildCycle<T>(
 
 function emptyCycle<T>(): SelectionCycle<T> {
   return {
+    kind: 'cycle',
     values: Object.freeze([]),
     states: Object.freeze([]),
     cycleStart: 0,
     cursor: 0
   };
+}
+
+function selectDirect<T>(
+  candidates: readonly WeightedCandidate<T>[],
+  current: Map<string, bigint>
+): T | undefined {
+  if (candidates.length === 0) return undefined;
+  const total = candidates.reduce((sum, candidate) => sum + candidate.weight, 0n);
+  let selected = candidates[0]!;
+  let selectedCurrent = current.get(selected.id)! + selected.weight;
+  for (const candidate of candidates) {
+    const next = current.get(candidate.id)! + candidate.weight;
+    current.set(candidate.id, next);
+    if (next > selectedCurrent) {
+      selected = candidate;
+      selectedCurrent = next;
+    }
+  }
+  current.set(selected.id, current.get(selected.id)! - total);
+  return selected.value;
 }
 
 function replaceState(

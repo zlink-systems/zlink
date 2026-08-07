@@ -5,6 +5,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
@@ -13,12 +14,14 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.contracts.errors.ZlinkRequestException;
 import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.contracts.eventing.MonitorEventType;
 import systems.zlink.contracts.eventing.SocketMonitor;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.messaging.Received;
 import systems.zlink.contracts.sockets.RecvFlags;
+import systems.zlink.contracts.sockets.RequestResult;
 import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.contracts.sockets.Socket;
 import systems.zlink.contracts.sockets.StreamSocket;
@@ -365,6 +368,21 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
                         key.sessionRid(),
                         binding,
                         Duration.ofMillis(250))
+                        .<Void>handle((ignored, failure) -> {
+                            if (failure != null
+                                && !isStaleBinding(failure)
+                                && !isRemoteRouteUnavailable(failure)) {
+                                Throwable cause = unwrapFailure(failure);
+                                if (cause instanceof RuntimeException runtime) {
+                                    throw runtime;
+                                }
+                                if (cause instanceof Error error) {
+                                    throw error;
+                                }
+                                throw new CompletionException(cause);
+                            }
+                            return null;
+                        })
                         .toCompletableFuture());
                 } catch (RuntimeException | Error failure) {
                     cleanup.add(
@@ -473,6 +491,37 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
                 binding.actor(),
                 binding.generation(),
                 timeout);
+    }
+
+    private static boolean isStaleBinding(Throwable failure) {
+        Throwable current = unwrapFailure(failure);
+        return current instanceof IllegalStateException
+            && "STREAM session binding is stale".equals(current.getMessage());
+    }
+
+    private static boolean isRemoteRouteUnavailable(Throwable failure) {
+        Throwable current = unwrapFailure(failure);
+        if (current instanceof ZlinkRequestException request) {
+            return request.getResult() == RequestResult.NOT_CONNECTED
+                || request.getResult() == RequestResult.NOT_FOUND
+                || request.getResult() == RequestResult.TERMINATED;
+        }
+        if (current instanceof ZlinkSubmitException submit) {
+            return submit.getResult() == SubmitResult.NOT_CONNECTED
+                || submit.getResult() == SubmitResult.NOT_FOUND
+                || submit.getResult() == SubmitResult.TERMINATED
+                || submit.getResult() == SubmitResult.NOT_ADMITTED;
+        }
+        return false;
+    }
+
+    private static Throwable unwrapFailure(Throwable failure) {
+        Throwable current = failure;
+        while (current instanceof CompletionException
+            || current instanceof ExecutionException) {
+            current = current.getCause();
+        }
+        return current;
     }
 
     private void requireSessionRuntime() {

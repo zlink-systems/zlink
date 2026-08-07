@@ -113,17 +113,16 @@ internal static class InstanceSpotTrackAScenario
             $"|spot={spotId}",
             $"|operation={operationId}"
         };
-        var response = await playA.Post("/evidence/wait")
-            .Body(new EvidenceWaitReq(expected))
-            .Async<string[]>();
-        if (!response.Body.Any(line => expected.All(line.Contains)))
+        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(10);
+        while (DateTimeOffset.UtcNow < deadline)
         {
-            response = await playB.Post("/evidence/wait")
-                .Body(new EvidenceWaitReq(expected))
-                .Async<string[]>();
+            var evidence = await ReadEvidenceAsync(playA, playB);
+            if (evidence.Any(line => expected.All(line.Contains)))
+                return;
+            await Task.Delay(TimeSpan.FromMilliseconds(100));
         }
 
-        ZlinkStreamAssert.Ensure(response.Body.Any(line => expected.All(line.Contains)),
+        throw new TimeoutException(
             $"Evidence did not arrive for {kind} and operation {operationId}.");
     }
 

@@ -2,7 +2,7 @@
 #pragma once
 
 #include "runtime/mesh/service_topology_registry.hpp"
-#include "runtime/operations/operation_id.hpp"
+#include "runtime/operations/call_id.hpp"
 
 #include <service_wire_constants.hpp>
 
@@ -78,7 +78,14 @@ struct actor_route_fence_t
                             const actor_route_fence_t &) = default;
 };
 
-using wire_operation_id_t = operation_id_t;
+struct wire_operation_id_t
+{
+    std::uint64_t high = 0;
+    std::uint64_t low = 0;
+
+    friend bool operator== (const wire_operation_id_t &,
+                            const wire_operation_id_t &) = default;
+};
 
 using message_follow_route_t =
   std::variant<actor_route_fence_t, spot_route_fence_t>;
@@ -897,6 +904,8 @@ std::vector<std::uint8_t>
 encode_application_payload (const application_payload_t &payload);
 application_payload_t
 decode_application_payload (std::span<const std::uint8_t> bytes);
+std::size_t
+application_payload_hwm_bytes (const application_payload_t &payload);
 std::vector<std::uint8_t>
 encode_route_mesh_admission (command kind,
                              const mesh::service_node_descriptor_t &descriptor);

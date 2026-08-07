@@ -59,10 +59,12 @@ std::size_t stateful_object_runtime_t::retained_bytes (
   const turn_record_t &record) noexcept
 {
     constexpr auto fixed = dispatch_limits::fixed_work_byte_cost;
-    if (record.payload.size ()
+    const auto payload_bytes =
+      record.application_payload_bytes.value_or (record.payload.size ());
+    if (payload_bytes
         > std::numeric_limits<std::size_t>::max () - fixed)
         return std::numeric_limits<std::size_t>::max ();
-    return fixed + record.payload.size ();
+    return fixed + payload_bytes;
 }
 
 void stateful_object_runtime_t::move_held_application_locked (

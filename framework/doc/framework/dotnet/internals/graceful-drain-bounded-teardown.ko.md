@@ -88,3 +88,30 @@ E2E startup 중 Redis owner lease가 local readiness window 안에 확보되지 
 실패는 시나리오 assertion과 분리하여 판단한다. 이 경우 로그의 store
 operation과 process readiness를 먼저 확인하고, 시나리오가 요구하는 격리
 실행 조건을 변경하지 않는다.
+
+## 6. 같은 endpoint의 peer 교체
+
+Auto-connect가 같은 endpoint에 다른 routing identity를 등록하면 이전 peer의
+Framework intent와 physical transport를 함께 정리해야 한다. 이전 peer가 아직
+admission을 완료하지 않았더라도 `Connecting` transport가 남으면 다음 control
+retry가 이전 identity로 `Hello`를 다시 전송할 수 있다. 그러면 replacement가
+`Ready`여도 public topology에 이전 peer가 `Connecting`으로 다시 나타나
+Framework 상태가 `Degraded`로 유지된다.
+
+replacement가 이미 같은 endpoint를 사용 중이면 endpoint 전체를 해제하지
+않는다. 이 경우 physical routing identity가 있는 이전 peer에 exact
+`DisconnectRid`를 적용한다. replacement가 없는 일반 제거에서는 endpoint
+기반 `Disconnect`를 사용하여 binding의 reconnect intent도 취소한다. physical
+identity가 없는 intent 역시 endpoint 기반 해제를 사용한다. 이 규칙은 endpoint
+재사용 중 새 연결을 끊는 오류와 이전 control retry가 재생성되는 오류를
+함께 막는다.
+
+또한 admission matcher가 기존 intent를 찾지 못한 `Admit` 또는 `Update`는
+stale transport 메시지로 폐기한다. 이를 새 inbound peer로 만들지 않아, 제거된
+peer가 public topology에 다시 나타나지 않도록 한다. inbound transport의
+disconnect는 local outbound retry로 바꾸지 않고 peer intent를 제거한다.
+
+RL-A3 검증에서 이 조건을 확인했다. Provider B의 정상 종료 후 replacement
+RID가 `Ready`가 되고, 이전 RID가 public status에 남지 않은 상태에서 100개
+worker의 unique request가 모두 완료되어야 한다. 통과 로그는
+`logs/20260806-191757-1446836`이다.

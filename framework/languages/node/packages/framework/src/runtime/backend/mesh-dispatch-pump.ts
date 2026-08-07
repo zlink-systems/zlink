@@ -7,8 +7,10 @@ import {
 } from '../foundation/service-runtime-contracts';
 import type { ZLinkBackendMeshNode } from './contracts';
 import type { ZLinkInboundDispatchBudget } from '../dispatch/inbound-dispatch-budget';
+import { runZLinkExecutionArea } from '../execution';
 
 const MESH_DISPATCH_TIMER_YIELD_BATCHES = 16;
+const MESH_DISPATCH_TIMER_YIELD_INTERVAL_MS = 2;
 const MESH_DISPATCH_LIFECYCLE_CLAIM_BUDGET = 4;
 
 //  The pump awaits between the two reads and the budget can pause in that gap.
@@ -27,6 +29,7 @@ export interface ZLinkMeshDispatchPumpOptions {
   readonly dispatch: (owner: ReadyRecord, record: ReceiveRecord) => void | Promise<void>;
   readonly inboundDispatchBudget?: ZLinkInboundDispatchBudget;
   readonly reportError?: (error: unknown) => void;
+  readonly monotonicNowMs?: () => number;
 }
 
 export class ZLinkMeshDispatchPump {
@@ -125,9 +128,11 @@ export class ZLinkMeshDispatchPump {
       ? this.options.inboundDispatchBudget
       : undefined;
     if (budgetPaused(applicationBudget)) return false;
-    const readyCapacity = claimBudget === undefined
-      ? (this.options.readyCapacity ?? 32)
-      : Math.min(this.options.readyCapacity ?? 32, claimBudget);
+    const readyCapacity = domain === ReadyDomain.Application
+      ? 1
+      : claimBudget === undefined
+        ? (this.options.readyCapacity ?? 32)
+        : Math.min(this.options.readyCapacity ?? 32, claimBudget);
     const readyBatch = this.node.createReadyBatch(readyCapacity);
     const receiveBatch = this.node.createReceiveBatch(
       applicationBudget === undefined ? (this.options.messageCapacity ?? 64) : 1,
@@ -135,6 +140,7 @@ export class ZLinkMeshDispatchPump {
       this.options.byteCapacity ?? (1 << 20)
     );
     let receiveBatchesSinceTimerYield = 0;
+    let timerYieldStartedAtMs = this.nowMs();
     let claimsDrained = 0;
     try {
       for (;;) {
@@ -147,6 +153,9 @@ export class ZLinkMeshDispatchPump {
         const drained = this.node.drainReady(domain, readyBatch, ZLINK_BACKEND_RECV_DONT_WAIT);
         if (!drained.ok || drained.records.length === 0) {
           return false;
+        }
+        if (domain === ReadyDomain.Application && drained.hasResidue) {
+          this.pendingDomains |= ReadyDomain.Application;
         }
         for (let index = 0; index < drained.records.length; index += 1) {
           const claim = readyBatch.takeClaim(index);
@@ -181,8 +190,13 @@ export class ZLinkMeshDispatchPump {
                   }
                   applicationBudget?.start(payloadBytes);
                   started = true;
-                  await this.options.dispatch(drained.records[index], record);
-                  await record.onTerminalCompletion?.();
+                  await runZLinkExecutionArea(
+                    domain === ReadyDomain.Infrastructure ? 'infrastructure' : 'application',
+                    async () => {
+                      await this.options.dispatch(drained.records[index], record);
+                      await record.onTerminalCompletion?.();
+                    }
+                  );
                 } finally {
                   releaseCompletion?.();
                   if (started) {
@@ -199,9 +213,13 @@ export class ZLinkMeshDispatchPump {
               // from running, but a timer turn for every single record adds a
               // Promise, closure, and timer allocation to the hot path.
               receiveBatchesSinceTimerYield += 1;
-              if (receiveBatchesSinceTimerYield >= MESH_DISPATCH_TIMER_YIELD_BATCHES) {
+              if (
+                receiveBatchesSinceTimerYield >= MESH_DISPATCH_TIMER_YIELD_BATCHES
+                || this.nowMs() - timerYieldStartedAtMs >= MESH_DISPATCH_TIMER_YIELD_INTERVAL_MS
+              ) {
                 receiveBatchesSinceTimerYield = 0;
                 await yieldToTimers();
+                timerYieldStartedAtMs = this.nowMs();
               }
               receiveBatch.reset();
             }
@@ -211,6 +229,7 @@ export class ZLinkMeshDispatchPump {
         }
         await yieldToTimers();
         receiveBatchesSinceTimerYield = 0;
+        timerYieldStartedAtMs = this.nowMs();
         if (!drained.hasResidue) {
           return false;
         }
@@ -219,6 +238,10 @@ export class ZLinkMeshDispatchPump {
       receiveBatch.close();
       readyBatch.close();
     }
+  }
+
+  private nowMs(): number {
+    return this.options.monotonicNowMs?.() ?? performance.now();
   }
 }
 

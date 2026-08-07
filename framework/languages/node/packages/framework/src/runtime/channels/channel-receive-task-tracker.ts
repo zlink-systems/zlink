@@ -35,10 +35,6 @@ export class ZLinkReceiveTaskTracker {
     );
   }
 
-  delete(task: Promise<void>): void {
-    this.complete(task);
-  }
-
   waitForCapacity(
     signal: AbortSignal | undefined,
     stopped: () => boolean

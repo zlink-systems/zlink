@@ -353,8 +353,10 @@ membership과 local instance가 유효한 상태에서 callback을 실행하고 
 Standalone Actor relocation은 Entry Spot을 닫지 않으므로 이 callback을 호출하지 않는다.
 
 일반 message는 Ready owner를 resolve한다. Missing RID에서는 위 Instance marker가 있는 call만 target-owned
-[activation envelope](../../../../01-glossary.ko.md#activation-envelope)를 만든다. Owner loss 뒤 Instance reactivation은 authority에 저장된 stable type과 initial
-Mesh를 사용한다.
+[activation envelope](../../../../01-glossary.ko.md#activation-envelope)를 만든다. 저장한 envelope와
+stable type·initial Mesh는 최초 cold activation이 terminal completion을 기록하기 전에 같은 target
+node·lifecycle에서 재개할 때만 사용한다. Steady `Ready` owner process 종료나 lease 만료는 `Missing`으로
+바꾸거나 다른 node의 cold activation으로 복구하지 않고 `UNAVAILABLE`로 끝낸다.
 
 Cold Instance factory·initialize가 실패하면 durable public `FAILED` state를 게시하지 않는다. Runtime은 local
 failed barrier를 유지하고 exact authority fence로 delete한 뒤 read해 reconcile한다. Delete 확인 전 같은 address
@@ -673,6 +675,11 @@ public interface systems.zlink.framework.spots.ZLinkWorkerTask<T> {
   public abstract T run(systems.zlink.framework.spots.ZLinkWorkerCancellation) throws java.lang.Exception;
 }
 ```
+
+Timer option을 생략하면 `overrunPolicy`는 `SKIP_LATE_TICKS`, `maxCatchUpTicks`는 `1`이다.
+`maxCatchUpTicks`는 `overrunPolicy == CATCH_UP_BOUNDED`일 때만 사용하고 `1..Integer.MAX_VALUE` 범위인지
+검증한다. 다른 policy에서는 이 값을 사용하지 않으며 이 범위로 validation하지 않는다. 이 설명은 기존
+`ZLinkTimerOptions` record signature를 바꾸지 않는다.
 
 ## Spot lifecycle result public signature
 

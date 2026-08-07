@@ -134,6 +134,25 @@ test('Nest RouteMesh builder keeps the formal scheduler limits in build output',
   assert.equal(built.spotNodes.api.activationConcurrencyLimit, 33);
 });
 
+test('RouteMesh public socket and registration contracts exclude message-size limits', () => {
+  const frameworkDeclarations = readTree(declarationsRoot);
+  const nestDeclarations = readTree(path.join(workspaceRoot, 'packages', 'nestjs', 'dist'));
+
+  for (const name of [
+    'ZLinkMeshNodeSocketConfig',
+    'ZLinkSocketConfig',
+    'ZLinkRouteMeshChannelOptions',
+    'ZLinkRouteChannelOptions',
+    'ZLinkSpotRouterCapabilityOptions'
+  ]) {
+    assert.doesNotMatch(declarationBody(frameworkDeclarations, name), /maxMessageSize/);
+  }
+  assert.doesNotMatch(
+    declarationBody(nestDeclarations, 'ZLinkRouteMeshChannelOptions'),
+    /maxMessageSize/
+  );
+});
+
 test('Node public contract snapshot pins the binding package version', () => {
   const binding = require('../../node_modules/@zlink-systems/zlink/package.json');
   assert.equal(binding.version, publicContractSnapshot.bindingVersion);
@@ -702,7 +721,10 @@ test('location contract exposes only opaque provider primitives and aggregate op
   assert.match(runtimeQuery, /listTopology\(/);
   assert.match(runtimeQuery, /listServiceSummaries\(/);
   assert.match(runtimeQuery, /Promise<ZLinkLocationPage<ZLinkLocationServiceSummary>>/);
+  assert.match(runtimeQuery, /findActorLocation\(/);
+  assert.match(runtimeQuery, /findSpotLocation\(/);
   assert.match(runtimeQuery, /listObjectLocations\(/);
+  assert.match(declarations, /ZLinkLocationObjectState = 'creating' \| 'ready' \| 'unavailable'/);
   assert.match(topologyFilter, /readonly meshName\?: string/);
   assert.match(topologyFilter, /readonly nodeRid\?: RoutingId/);
   assert.match(topologyFilter, /readonly state\?: ZLinkLocationTopologyState/);

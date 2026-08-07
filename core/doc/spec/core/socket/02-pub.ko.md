@@ -2,7 +2,7 @@
 title: "소켓 — PUB"
 ---
 
-[English](02-pub.en.md) | 한국어
+[English](https://zlink-systems.github.io/zlink/spec/core/socket/02-pub/) | 한국어
 
 <!-- zlink-nav:start -->
 [소켓 목차](README.ko.md) | [이전: PAIR](01-pair.ko.md) | [다음: SUB](03-sub.ko.md)

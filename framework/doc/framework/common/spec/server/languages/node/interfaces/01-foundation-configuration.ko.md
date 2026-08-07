@@ -78,6 +78,8 @@ export declare class ZLinkFrameworkException extends Error {
 
 export declare function isZLinkMessage(value: unknown): value is ZLinkMessage;
 
+export type ZLinkMessageFlowLogMode = "off" | "errors" | "normal" | "detailed";
+
 export declare const MESSAGE_FLOW_MODE_RANK: Record<ZLinkMessageFlowLogMode, number>;
 
 export type RoutingId = string;
@@ -163,7 +165,6 @@ export interface ZLinkMeshChannelServerBuilder {
 }
 
 export interface ZLinkMeshNodeSocketConfig {
-    maxMessageSize: number;
     sendHighWaterMark: bigint;
     receiveHighWaterMark: bigint;
     mailboxMessageBudget: number;
@@ -431,26 +432,7 @@ export interface ZLinkDiagnosticsOptions {
     messageFlow: ZLinkMessageFlowLogMode;
     sampleRate: number;
     includeMessageSizes: boolean;
-
-    logFile?: string;
-
-    label?: string;
 }
-
-export type ZLinkMessageSurface =
-    | "node" | "channel" | "spot" | "instance_spot" | "logical_multicast"
-    | "actor" | "stream" | "classic_fanout" | "actor_relocation";
-export type ZLinkMessageKind =
-    | "send" | "request" | "response" | "error" | "publish" | "control";
-export type ZLinkMessageFlowOutcome =
-    | "succeeded" | "failed" | "backpressured" | "dropped" | "cancelled" | "shutdown";
-export type ZLinkMessageFlowReason =
-    | "backpressure" | "stale_target" | "target_closed" | "shutdown"
-    | "location_unavailable" | "activation_rejected" | "activation_timeout";
-export type ZLinkDispatchErrorReason =
-    | "no_handler" | "decode_error" | "handler_exception" | "invalid_frame"
-    | "reply_path_missing" | "unexpected_reply" | "backpressure" | "stale_target" | "shutdown";
-export type ZLinkDispatchErrorAction = "reply_error" | "fail_caller" | "drop";
 
 export interface ZLinkDispatchOptions {
     readonly unhandled: ZLinkUnhandledDispatchOptions;
@@ -458,16 +440,16 @@ export interface ZLinkDispatchOptions {
 }
 
 export interface ZLinkDispatchOptionsBuilder {
-    setMessageFlowObserver(observerType: Type<ZLinkMessageFlowObserver>): this;
-    setRuntimeErrorSink(sinkType: Type<ZLinkRuntimeErrorSink>): this;
-
     messageFlow(mode: ZLinkMessageFlowLogMode): this;
     traceSampleRate(rate: number): this;
     includeMessageSizes(include: boolean): this;
-
-    traceLogFile(path: string): this;
-
-    traceLabel(label: string): this;
 }
 
 ```
+
+네 진단 수준은 비활성화, 오류만 기록, 주요 전이 기록, 상세 진단을 각각 뜻한다. Startup에서 지정하지 않은
+diagnostics level의 기본값은 `"errors"`다. Dispatch configuration은 level, sampling rate와 message size 포함
+여부만 제공하며 file path, label, exporter lifecycle 또는 provider
+sink를 받지 않는다. Framework는 application이 구성한 표준 logger·trace·metric provider에 structured
+record를 기록한다. Message-flow observer callback, runtime error sink와 raw event DTO는 public contract가
+아니다. Provider 호출 실패는 원래 message operation의 terminal 결과를 바꾸지 않으며 별도 진단으로 격리한다.

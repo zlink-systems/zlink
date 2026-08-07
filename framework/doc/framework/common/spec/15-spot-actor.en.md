@@ -4,7 +4,7 @@ title: "Spot And Actor Membership"
 
 # Spot And Actor Membership
 
-[Spec table of contents](README.en.md) · [Previous: Actor Model](14-actor-model.ko.md) · [Next: Spot Address Messaging](16-spot-address-messaging.ko.md)
+[Spec table of contents](README.en.md) · [Previous: Actor Model](14-actor-model.en.md) · [Next: Spot Address Messaging](16-spot-address-messaging.en.md)
 
 > **What this chapter defines** — Actor creation, Spot membership, relocation, and
 > aggregate relocation. Automatic failover is out of scope.
@@ -192,7 +192,7 @@ barrier in the same lifecycle, without calling `OnActorJoin` or `OnJoinedActor`.
 
 The three Spot kinds' creation methods and functional differences, and the Entry
 Spot's overall role, are defined by
-[19 Spot Model](11-spot-model.ko.md). This section only defines the order in which
+[19 Spot Model](11-spot-model.en.md). This section only defines the order in which
 Entry/User Spot handles Actor membership.
 
 An Entry Spot's Actor uses a per-Actor execution gate. In a User Spot's default
@@ -256,7 +256,7 @@ configuration and authority.
 The following C# excerpt is a .NET expression to help understand the common join
 behavior. It doesn't require the same signature in other languages; the exact full
 contract is defined by the
-[.NET Actor interface](server/languages/dotnet/interfaces/06-actors.ko.md).
+[.NET Actor interface](server/languages/dotnet/interfaces/06-actors.en.md).
 
 ```csharp
 public interface IZLinkActorContext

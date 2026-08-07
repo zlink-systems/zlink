@@ -45,6 +45,11 @@ implemented twice.
   phase write.
 - A `missing` relocation payload and an idempotent delete are treated as a closed result.
 - A 24-hour retention orphan is not mistaken for an active authority.
+- An Object-enabled MeshNode registers the endpoint-only manual intent at startup. Host and Spot
+  descriptor enrichment passes the endpoint, RID, lifecycle generation, and security identity through
+  `replacePeerConnection`. The raw-binding regression independently rejects a wrong generation and a
+  wrong security identity, rejects replacement while the previous intent is live, and admits the new
+  generation after the previous intent is closed.
 
 ## 4. Transport Liveness
 

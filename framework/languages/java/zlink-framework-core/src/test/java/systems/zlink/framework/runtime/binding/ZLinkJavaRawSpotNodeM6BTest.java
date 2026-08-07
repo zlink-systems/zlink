@@ -1,6 +1,7 @@
 package systems.zlink.framework.runtime.binding;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -19,8 +20,12 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.core.Zlink;
+import systems.zlink.contracts.errors.ZlinkRequestException;
+import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.contracts.messaging.Message;
+import systems.zlink.contracts.sockets.RequestResult;
 import systems.zlink.contracts.sockets.SendFlags;
+import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorLifecycleEventKind;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdmissionKey;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRecvMode;
@@ -1447,6 +1452,106 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             assertTrue(elapsedMillis >= 25);
             assertTrue(elapsedMillis < 500);
             stream.close();
+        }
+    }
+
+    @Test
+    void streamCloseCompletesWhenRemoteBindingRouteIsAlreadyGone()
+        throws Exception {
+        try (var context = Zlink.createContext();
+             var node = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            node.setRoutingId(RoutingId.from("disconnected-close-node"));
+            ZLinkJavaStreamSocket.BoundSessionLifecycle lifecycle =
+                new ZLinkJavaStreamSocket.BoundSessionLifecycle() {
+                    @Override
+                    public CompletionStage<Void> bind(
+                        RoutingId sessionRid,
+                        systems.zlink.framework.runtime.internal.backend
+                            .ZLinkBackendActorRef actor,
+                        long bindingGeneration,
+                        Duration timeout) {
+                        return CompletableFuture.completedFuture(null);
+                    }
+
+                    @Override
+                    public CompletionStage<Void> unbind(
+                        RoutingId sessionRid,
+                        systems.zlink.framework.runtime.internal.backend
+                            .ZLinkBackendActorRef actor,
+                        long bindingGeneration,
+                        Duration timeout) {
+                        return CompletableFuture.failedFuture(
+                            new ZlinkRequestException(
+                                RequestResult.NOT_CONNECTED));
+                    }
+                };
+            var stream = new ZLinkJavaStreamSocket(
+                context.createStreamSocket(),
+                node,
+                null,
+                lifecycle);
+            stream.startSessionService();
+            stream.bindActor(
+                    RoutingId.from("disconnected-close-session"),
+                    new systems.zlink.framework.runtime.internal.backend
+                        .ZLinkBackendActorRef(
+                            RoutingId.from("disconnected-close-actor-node"),
+                            "disconnected-close-actor",
+                            1))
+                .submit(Duration.ofSeconds(1)).toCompletableFuture()
+                .get(1, TimeUnit.SECONDS);
+
+            assertDoesNotThrow(stream::close);
+        }
+    }
+
+    @Test
+    void streamCloseCompletesWhenRemoteBindingAdmissionIsGone()
+        throws Exception {
+        try (var context = Zlink.createContext();
+             var node = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            node.setRoutingId(RoutingId.from("not-admitted-close-node"));
+            ZLinkJavaStreamSocket.BoundSessionLifecycle lifecycle =
+                new ZLinkJavaStreamSocket.BoundSessionLifecycle() {
+                    @Override
+                    public CompletionStage<Void> bind(
+                        RoutingId sessionRid,
+                        systems.zlink.framework.runtime.internal.backend
+                            .ZLinkBackendActorRef actor,
+                        long bindingGeneration,
+                        Duration timeout) {
+                        return CompletableFuture.completedFuture(null);
+                    }
+
+                    @Override
+                    public CompletionStage<Void> unbind(
+                        RoutingId sessionRid,
+                        systems.zlink.framework.runtime.internal.backend
+                            .ZLinkBackendActorRef actor,
+                        long bindingGeneration,
+                        Duration timeout) {
+                        return CompletableFuture.failedFuture(
+                            new ZlinkSubmitException(
+                                SubmitResult.NOT_ADMITTED));
+                    }
+                };
+            var stream = new ZLinkJavaStreamSocket(
+                context.createStreamSocket(),
+                node,
+                null,
+                lifecycle);
+            stream.startSessionService();
+            stream.bindActor(
+                    RoutingId.from("not-admitted-close-session"),
+                    new systems.zlink.framework.runtime.internal.backend
+                        .ZLinkBackendActorRef(
+                            RoutingId.from("not-admitted-close-actor-node"),
+                            "not-admitted-close-actor",
+                            1))
+                .submit(Duration.ofSeconds(1)).toCompletableFuture()
+                .get(1, TimeUnit.SECONDS);
+
+            assertDoesNotThrow(stream::close);
         }
     }
 

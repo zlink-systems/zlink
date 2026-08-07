@@ -501,28 +501,29 @@ A `SpotWide` relocation must fit the Spot and all its Actors, as a single unit, 
 **Verification question:** If capacity is short, is the source kept instead of moving only some
 Actors?
 
-- Starting condition: The Spot has several Actors, and target capacity is insufficient for the full
-  move.
-- Procedure: SpotWide Relocate is called, and after the terminal, a state request is sent to each
+- Starting condition: The source Host contains the SpotWide unit, and every other candidate lacks
+  capacity for the full aggregate, leaving no eligible target.
+- Procedure: Public Host Relocate is called without a target argument, and after the terminal, a state request is sent to each
   Actor.
 - Verification: Relocate ends in a capacity failure, and every Actor request returns existing state
   at the source.
-- Contract basis: [Spot Actor](../spec/15-spot-actor.en.md)
+- Contract basis: [Relocation Units And Concurrency Limits](../spec/28-graceful-drain-handoff.en.md#7-relocation-units-and-concurrency-limits)
 
-#### ST-G3 PerActor Spot Relocation
+#### ST-G3 Host Relocation With A PerActor Spot
 
 Priority: `P0`
 
 In `PerActor` mode, the Spot and its Actors can have different current locations, and each Actor's
 route must update independently.
 
-**Verification question:** Does only the selected Actor move to the target, with the rest processed
-at the source?
+**Verification question:** After host relocation, do PerActor Actors preserve independent routes or
+explicit membership?
 
-- Starting condition: Actors A and B are in the same PerActor Spot.
-- Procedure: Only A is relocated to the target, then requests are sent to A and B.
-- Verification: A's handler runs at the target and B's at the source, and both Actors' identity and
-  state are preserved.
+- Starting condition: Actors A and B in the same PerActor Spot have distinct current locations or
+  explicit membership.
+- Procedure: Run public host relocation, letting the Framework select the target, then request A and B.
+- Verification: Each request is processed on exactly one current route, preserving identity, state,
+  and membership. No Actor-scoped Relocate or caller-specified target is used.
 - Contract basis: [Spot Actor](../spec/15-spot-actor.en.md)
 
 #### ST-G4 A ToActor Message During A Spot Move
@@ -535,10 +536,12 @@ A message sent by Actor ID during a SpotWide relocation must also follow that Ac
 during a Spot move?
 
 - Starting condition: A SpotWide Spot has several Actors and a sequence handler.
-- Procedure: Unique sequence messages are sent to each Actor during the Spot Relocate.
+- Procedure: Unique sequence messages are sent to each Actor during the source Host's public
+  Relocate call, which has no target argument.
 - Verification: The successful sequence order is preserved per Actor, and the same operation ID does
   not duplicate across source and target.
-- Contract basis: [Spot Actor](../spec/15-spot-actor.en.md)
+- Contract basis: [SpotWide User Spot Handoff](../spec/28-graceful-drain-handoff.en.md#85-spotwide-user-spot)
+  and [Moving Pending Messages](../spec/28-graceful-drain-handoff.en.md#9-moving-pending-messages-timers-and-sessions)
 
 #### ST-G5 Relocation Interruption Measurement
 
@@ -568,11 +571,11 @@ after target preparation finishes.
 and target?
 
 - Starting condition: The Spot handler waits on an application gate.
-- Procedure: After handler entry, SpotWide Relocate and a follow-up request are started, then the
+- Procedure: After handler entry, public Host Relocate without a target argument and a follow-up request are started, then the
   gate is opened.
 - Verification: The existing handler finishes at the source, and the follow-up runs exactly once at
   the target. The combined active count never exceeds 1.
-- Contract basis: [Spot Actor](../spec/15-spot-actor.en.md)
+- Contract basis: [SpotWide User Spot Handoff](../spec/28-graceful-drain-handoff.en.md#85-spotwide-user-spot)
 
 ### Track H — Deferred Join And Handler Context
 

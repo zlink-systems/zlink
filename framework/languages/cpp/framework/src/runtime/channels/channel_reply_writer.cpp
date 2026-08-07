@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "runtime/channels/channel_reply_writer.hpp"
+#include "runtime/messaging/failure_origin_wire.hpp"
 
 #include <utility>
 
@@ -68,6 +69,7 @@ channel_reply_writer_t::create_error_header (std::string channel_name,
                                        std::move (channel_name), request);
     header.error_code = error_code_name (error.kind ());
     header.error_message = error.what ();
+    runtime::messaging::write_failure_origin (header, error);
     return header;
 }
 

@@ -462,13 +462,30 @@ test('Message Follow route rejects a queue above 1024 messages and emits its rej
       undefined,
       contextRef(overflow, { operationId: 'ffffffffffffffffffffffffffffffff' })
     ),
-    (error) => error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
+    (error) => error.kind === framework.ZLinkFrameworkErrorKind.CapacityExceeded
   );
   overflow.forEach((part) => part.close());
   assert.equal(
     markers.some((entry) => entry.marker === 'message_follow_rejected'),
     true
   );
+});
+
+test('Message Follow rejects an ActorRef generation mismatch as InvalidOperation', async () => {
+  const { coordinator } = harness();
+  coordinator.begin('actor-1', 1n);
+  const parts = frame('generation-mismatch');
+  const mismatched = contextRef(parts, {
+    objectGeneration: 2n,
+    actorRef: actorRef(1n)
+  });
+
+  await assert.rejects(
+    coordinator.capture('actor-1', parts, false, undefined, mismatched),
+    (error) => error.kind === framework.ZLinkFrameworkErrorKind.InvalidOperation
+  );
+  parts.forEach((part) => part.close());
+  coordinator.cancel('actor-1');
 });
 
 test('packets captured after the commit snapshot use Message Follow after backlog completion', async () => {

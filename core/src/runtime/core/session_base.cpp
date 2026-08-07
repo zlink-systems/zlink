@@ -382,11 +382,16 @@ void zlink::session_base_t::engine_ready ()
     if (_pipe)
         _pipe->set_transport_connection_id (
           _engine->get_endpoint ().connection_id);
+    if (_socket_pipe)
+        _socket_pipe->set_transport_connection_id (
+          _engine->get_endpoint ().connection_id);
     if (is_active_transport_pair ()) {
         options.transport_pair_state->mark_ready (
           _transport_lane, _transport_pair_generation);
         _transport_pair_reconnect_in_progress = false;
     }
+    if (_socket)
+        _socket->notify_transport_pair_ready (_socket_pipe ? _socket_pipe : _pipe);
 }
 
 void zlink::session_base_t::engine_error (bool handshaked_, zlink::i_engine::error_reason_t reason_)

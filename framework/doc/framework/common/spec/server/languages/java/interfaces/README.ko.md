@@ -12,6 +12,7 @@
 - [Actor](actors.ko.md)
 - [STREAM session](stream-session.ko.md)
 - [Location과 maintenance](location-maintenance.ko.md)
+- [Location object query type](location-objects.ko.md)
 - [Monitoring](monitoring.ko.md)
 
 Java와 Kotlin은 JVM service runtime 하나를 공유한다. Java 계약에는 Kotlin coroutine wrapper를 넣지 않으며,

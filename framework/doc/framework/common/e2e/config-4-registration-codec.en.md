@@ -120,7 +120,7 @@ process a request and send with the specified packet name?
   annotation helper is added.
 - Detailed behavior: verifies the per-language expression and common
   dispatch semantics from
-  [Public Contract Governance](../spec/00-public-contract-governance.ko.md).
+  [Public Contract Governance](../spec/00-public-contract-governance.en.md).
 
 #### RC-A3 Register A Handler Explicitly
 

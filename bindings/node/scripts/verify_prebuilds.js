@@ -18,7 +18,7 @@ const provenance = fs.existsSync(provenancePath)
   : undefined;
 const coreVersion = process.env.ZLINK_CORE_VERSION || provenance?.version;
 if (!coreVersion || !/^\d+\.\d+\.\d+$/.test(coreVersion)) {
-  throw new Error('Core 0.10.0 package provenance or ZLINK_CORE_VERSION=X.Y.Z is required');
+  throw new Error('Core 0.10.1 package provenance or ZLINK_CORE_VERSION=X.Y.Z is required');
 }
 if (process.env.ZLINK_CORE_VERSION && provenance?.version &&
     process.env.ZLINK_CORE_VERSION !== provenance.version) {

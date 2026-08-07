@@ -47,6 +47,26 @@ created, and store failure are **not positive results, so they aren't
 kept.** Caching them would turn a brief failure into an outage lasting
 as long as the cache lifetime.
 
+### Preserve Spec States In The Resolver Result Type
+
+The public behavior is defined by
+[Failure Handling And Failover Scope §4.4](../spec/31-failure-failover-policy.en.md#44-distinguishing-instance-spot-cold-activation-from-owner-failure).
+The resolver passes that contract as a closed `ReadyRoute`, `Missing`,
+`Unavailable`, or `StoreFailure` result so neither the terminal mapper nor
+the activation coordinator has to infer it again.
+
+| Resolver Result | Information Preserved | Receiving Component |
+|---|---|---|
+| `ReadyRoute` | Route and authority/owner-lease fences | Route admission |
+| `Missing` | No authority record exists | Creation coordinator |
+| `Unavailable` | Authority remains but the current owner can't be used | Terminal completion mapper |
+| `StoreFailure` | Authority presence couldn't be determined | Store retry/reconciliation |
+
+These four results aren't collapsed into `null` or one `absent` value.
+Only `ReadyRoute` enters the positive route cache, and only `Missing` is
+passed to the activation coordinator. The resolver returns `Missing` only
+after the lifecycle component that owns authority release completes it.
+
 ### What Decides The Lifetime
 
 The cache lifetime never exceeds the shortest of three values.
@@ -56,6 +76,24 @@ The cache lifetime never exceeds the shortest of three values.
 | `RouteCacheMaxAge` | The cache's own maximum retention time |
 | The owner's acceptance deadline | After this time, that owner no longer accepts |
 | **At least 5 seconds shorter** than the [Message Follow duration](../spec/01-glossary.en.md#message-follow-duration) | The cache must expire before the detour path closes ([`18:143-145`](../spec/18-object-routing.en.md), [`21:693-695`](../spec/21-location-runtime.en.md)) |
+
+## 1.1 Preserve The Admission Fence For Manual Object Peers
+
+A Location Store object-peer descriptor carries the endpoint, RID, lifecycle generation, and
+security identity together. A manual endpoint supplies only connection intent, but when the runtime
+matches that endpoint to a descriptor to complete an object peer, it must pass all handshake values
+provided by the descriptor to the transport. The formal contract is owned by the peer handshake in
+[RouteMesh topology](../spec/07-channel-topology.en.md).
+
+In the current JVM path, MeshNode startup registers the manual endpoint-only intent regardless of the
+Object role. When `ZLinkFrameworkRuntime.connectManualObjectPeers`,
+`ZLinkLocationAutoConnectHost.MeshNodeExecutor`, or `ZLinkSpotRuntime.ensureManualObjectPeer` finds
+a descriptor, it calls `replacePeerConnection(endpoint, rid, lifecycleGeneration,
+securityIdentity)`. The replacement path does not install a new intent until transport liveness has
+closed the previous intent. `ZLinkJavaRawMeshNode` records each intent, the observed peer routing ID,
+and its close state while processing the admission fence and liveness events. An endpoint-only intent
+without a descriptor makes no placement claim. The caller is not allowed to set the generation or
+security identity as a workaround.
 
 ## 2. Where A Move Meets The Cache — A Performance Cliff
 
@@ -105,7 +143,7 @@ invalidation. Each runtime must check the source route's
 object/authority generation and target node, down to the condition
 that a newer cache entry isn't cleared.
 
-**Design candidates — undecided, and don't constrain implementation.**
+**Duplicate-suppression implementation examples — not a common completion condition.**
 
 - Send only once per `(sending runtime, object, owner generation)`
   combination. Attaching a notification to every message on an object
@@ -113,8 +151,6 @@ that a newer cache entry isn't cleared.
   notification record count as much as the business message count.
 - If the same notification is already in flight, merge additional
   notifications.
-- For a call that has a response, carry it on that response instead of
-  making a separate record.
 - The notification isn't guaranteed to be resent if lost — it expires
   naturally once the cache lifetime ends.
 - Put the duplicate-suppression marker into the existing cache entry
@@ -122,9 +158,12 @@ that a newer cache entry isn't cleared.
   entry disappears. A separate set would keep growing state
   proportional to the number of moved objects.
 
-This is why the spec ties the cache lifetime to the Message Follow
-period — even if the notification is lost, the cache naturally expires
-once that period passes.
+An implementation can use a different suppression structure. The common
+conditions are to invalidate only a cache entry pointing at the same
+object/authority generation and target node, never erase a newer route,
+expire a stale route after the cache lifetime even if the notification is
+lost, and never let duplicate state change the original operation's terminal
+result.
 
 ## 3. Don't Build The Candidate List Per Call
 
@@ -441,10 +480,14 @@ instead of publish.
   per call.
 - Object-absent, being-created, and store-failure states aren't left
   in the cache.
+- The resolver result type preserves `Missing` and `Unavailable` as
+  distinct tags.
+- Only `Missing` is wired to the activation coordinator; `Unavailable`
+  is wired to the terminal mapper.
 - The cache lifetime doesn't exceed the Message Follow period.
-- After a call that went through the detour path following a move, the
-  sending side's cache is refreshed, so the next call goes directly to
-  the new owner.
+- After a move, a valid `messageFollow` received on the detour path immediately invalidates the
+  sending side's cache so the next lookup uses the new owner. If the notification is lost, the
+  runtime looks up the new owner after the existing cache lifetime expires.
 - While peer state doesn't change, candidate filtering doesn't run on
   the call path.
 - Targets with the same weight alternate across consecutive calls.

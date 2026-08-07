@@ -6,12 +6,14 @@
 #include "runtime/actors/actor_manager_access.hpp"
 #include "runtime/execution/actor_execution_context.hpp"
 #include "runtime/messaging/client_call_codec.hpp"
+#include "runtime/messaging/failure_origin_wire.hpp"
 #include "runtime/messaging/request_failure_mapper.hpp"
 #include "runtime/messaging/submit_result_mapper.hpp"
 #include "runtime/locations/store_location_resolvers.hpp"
 #include "runtime/locations/actor_authority_payload.hpp"
 
 #include <zlink/framework/contracts/locations/stores.hpp>
+#include <zlink/framework/contracts/monitoring/route_mesh_runtime.hpp>
 
 #include <atomic>
 #include <chrono>
@@ -20,6 +22,7 @@
 #include <map>
 #include <mutex>
 #include <string>
+#include <system_error>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -315,7 +318,7 @@ task_t<message_t> actor_request_call_t::start (bool release_turn)
                                             separator + 1);
         if (current_actor_id == _actor_id.value ()) {
             return task_t<message_t> (result_t<message_t>::failure (
-              framework_error_kind_t::not_configured,
+              framework_error_kind_t::invalid_operation,
               "awaited request to the current Actor cannot complete while its FIFO claim is held"));
         }
     }
@@ -343,21 +346,61 @@ namespace
 
 result_t<messaging::message_parts_t> wait_for_actor_completion (
   detail::mesh_node_runtime_t &node,
-  const detail::host::operation_id_t &operation_id,
+  const detail::host::call_id_t &operation_id,
+  const zlink::routing_id_t &target_rid,
+  live_location_reader_t &locations,
+  const location_owner_token_t &owner,
+  route_mesh_runtime_t *route_runtime,
+  const std::string &mesh_name,
   std::chrono::milliseconds timeout)
 {
+    const auto target_is_unavailable = [&] {
+        const auto owner_lifetime = locations.owner_admission_lifetime (owner);
+        bool public_route_ready = true;
+        if (route_runtime) {
+            try {
+                const auto snapshot = route_runtime->snapshot (mesh_name);
+                const auto peer = std::find_if (
+                  snapshot.peers.begin (), snapshot.peers.end (),
+                  [&target_rid] (const auto &candidate) {
+                      return candidate.node_rid == target_rid;
+                  });
+                public_route_ready = peer != snapshot.peers.end ()
+                                     && peer->state == peer_state_t::ready;
+            }
+            catch (...) {
+                public_route_ready = true;
+            }
+        }
+        return !node.has_admitted_peer (target_rid) || !owner_lifetime
+               || !public_route_ready;
+    };
     auto completion = node.wait_for_completion (operation_id, timeout);
     if (!completion) {
+        if (completion.error_kind () == framework_error_kind_t::deadline_exceeded
+            && target_is_unavailable ()) {
+            return result_t<messaging::message_parts_t>::failure (
+              framework_error_kind_t::unavailable,
+              "actor request target RouteMesh peer became unavailable");
+        }
         return detail::propagate_failure<messaging::message_parts_t> (
           completion, "actor request timed out");
     }
-    if (completion.value ().record.terminal_result != 0) {
+    if (completion.value ().record.terminal_result
+        == static_cast<int> (zlink::request_result_t::timed_out)
+        && target_is_unavailable ()) {
         return result_t<messaging::message_parts_t>::failure (
-          framework_error_kind_t::internal_failure,
-          "actor request completed with terminal result "
-            + std::to_string (completion.value ().record.terminal_result)
-            + " (errno "
-            + std::to_string (completion.value ().record.failure_errno) + ")");
+          framework_error_kind_t::unavailable,
+          "actor request target RouteMesh peer became unavailable");
+    }
+    if (completion.value ().record.terminal_result != 0) {
+        runtime::messaging::request_failure_mapper_t failure_mapper;
+        const auto mapped = failure_mapper.reply_header_exception (
+          static_cast<std::uint32_t> (completion.value ().record.terminal_result),
+          static_cast<std::uint32_t> (completion.value ().record.failure_errno),
+          "Actor request");
+        return detail::result_access_t::failure<messaging::message_parts_t> (
+          mapped);
     }
     return result_t<messaging::message_parts_t>::success (
       messaging::message_parts_t (std::move (completion.value ().parts)));
@@ -372,12 +415,13 @@ class actor_client_impl_t final : public actor_client_t
                          serializer_registry_t &serializers,
                          std::vector<std::shared_ptr<detail::mesh_node_runtime_t>> mesh_nodes,
                          std::shared_ptr<actor_location_observer_t> actor_locations,
-                         location_options_t options) :
+                         location_options_t options,
+                         route_mesh_runtime_t *route_runtime) :
         _store (&store),
         _serializers (&serializers),
         _mesh_nodes (std::move (mesh_nodes)),
         _actor_locations (std::move (actor_locations)),
-        _location_options (std::move (options))
+        _location_options (std::move (options)), _route_runtime (route_runtime)
     {
         for (const auto &mesh_node : _mesh_nodes) {
             if (!mesh_node)
@@ -434,7 +478,7 @@ class actor_client_impl_t final : public actor_client_t
                 && target.value ().spot_id
                      == runtime::current_actor_execution.spot_id) {
                 co_return result_t<message_t>::failure (
-                  framework_error_kind_t::not_configured,
+                  framework_error_kind_t::invalid_operation,
                   "awaited request requires the current Spot execution gate");
             }
         }
@@ -453,7 +497,7 @@ class actor_client_impl_t final : public actor_client_t
         auto policy = stale_policy_t::route_not_found;
         result_t<message_t> last = result_t<message_t>::failure (
           framework_error_kind_t::unavailable, "actor location is stale");
-        // The loop only ever retries a "transfer is in progress" stale (the actor
+        // The loop only ever retries a typed moving stale (the actor
         // is mid-move and re-resolving will land the committed location). If such
         // a request never lands within the budget it reports a plain timeout —
         // the actor was reachable, just still moving (config-10 ST-F6). Any other
@@ -466,16 +510,15 @@ class actor_client_impl_t final : public actor_client_t
         // terminally wrong record (e.g. the generation does not match, config-9
         // TA-B2) re-resolves to the same answer, so it is returned immediately as
         // actor_location_stale rather than spun on until the deadline. The moving
-        // stale is the only one whose message says "transfer is in progress" — the
-        // retriable flag does not survive the actor-mesh reply.
+        // stale carries its failure origin through the actor-mesh reply.
         const auto is_moving_stale = [] (const result_t<message_t> &result) {
             if (result || !is_stale_actor_error (result.error_kind ())) {
                 return false;
             }
             const auto *error = result.error ();
-            return error != nullptr && error->what () != nullptr
-                   && std::string_view (error->what ()).find ("transfer is in progress")
-                        != std::string_view::npos;
+            return error != nullptr
+                   && detail::failure_origin (*error)
+                        == detail::failure_origin_t::actor_transfer_in_progress;
         };
         while (true) {
             auto actor = resolve_actor (actor_id_value, policy);
@@ -523,6 +566,7 @@ class actor_client_impl_t final : public actor_client_t
         std::string mesh_name;
         std::uint64_t authority_owner_generation = 0;
         std::uint64_t owner_lease_generation = 0;
+        location_owner_token_t owner;
     };
 
     result_t<resolved_actor_t> resolve_actor (const std::string &actor_id, stale_policy_t policy)
@@ -576,8 +620,8 @@ class actor_client_impl_t final : public actor_client_t
           projection->spot_id,
           snapshot->allocation.target.mesh_name,
           snapshot->authority_owner_generation,
-          static_cast<std::uint64_t> (
-            snapshot->owner.lease_generation)};
+          static_cast<std::uint64_t> (snapshot->owner.lease_generation),
+          snapshot->owner};
         const auto lease_lifetime = _store->owner_admission_lifetime (snapshot->owner);
         if (_location_options.route_cache_max_age > std::chrono::milliseconds::zero ()
             && lease_lifetime) {
@@ -700,7 +744,7 @@ class actor_client_impl_t final : public actor_client_t
                 }
                 return result_t<std::optional<zlink::message_t>>::success (std::nullopt);
             }
-            detail::host::operation_id_t operation_id;
+            detail::host::call_id_t operation_id;
             const auto submit =
               runtime.request_to_actor (actor.native_ref, copied, operation_id, timeout, {},
                                         actor.authority_owner_generation,
@@ -715,7 +759,16 @@ class actor_client_impl_t final : public actor_client_t
                   runtime::messaging::map_submit_result_error_kind (submit),
                       "actor request was not accepted");
             }
-            auto reply = wait_for_actor_completion (runtime, operation_id, timeout);
+            auto reply = wait_for_actor_completion (
+              runtime,
+              operation_id,
+              zlink::routing_id_t::from (
+                std::string (actor.native_ref.node_rid ().value ())),
+              *_store,
+              actor.owner,
+              _route_runtime,
+              actor.mesh_name,
+              timeout);
             if (!reply) {
                 return detail::propagate_failure<std::optional<zlink::message_t>> (
                   reply,
@@ -735,17 +788,23 @@ class actor_client_impl_t final : public actor_client_t
                 const auto message =
                   reply_header.value ().error_message.value_or ("actor mesh request failed");
                 runtime::messaging::request_failure_mapper_t failure_mapper;
-                const auto mapped = failure_mapper.error_header_exception (
+                auto mapped = failure_mapper.error_header_exception (
                   reply_header.value ().error_code.value_or ("request_failed"), message,
                   "actor mesh request");
-                return result_t<std::optional<zlink::message_t>>::failure (
-                  map_actor_route_reply_error (mapped.kind (), message), message);
+                mapped = runtime::messaging::restore_failure_origin (
+                  reply_header.value (), std::move (mapped));
+                return detail::result_access_t::failure<
+                  std::optional<zlink::message_t>> (mapped);
             }
             auto body = reply_codec.decode_body (reply.value ());
             if (!body)
                 return result_t<std::optional<zlink::message_t>>::success (std::nullopt);
             return result_t<std::optional<zlink::message_t>>::success (
               std::make_optional (std::move (body.value ())));
+        }
+        catch (const framework_exception_t &error) {
+            return result_t<std::optional<zlink::message_t>>::failure (
+              error.kind (), error.what ());
         }
         catch (const std::exception &error) {
             return map_native_exception<std::optional<zlink::message_t>> (
@@ -758,8 +817,7 @@ class actor_client_impl_t final : public actor_client_t
                                            framework_error_kind_t kind)
     {
         if (kind != framework_error_kind_t::unavailable
-            && kind != framework_error_kind_t::not_found
-            && kind != framework_error_kind_t::unavailable) {
+            && kind != framework_error_kind_t::not_found) {
             return;
         }
         std::lock_guard lock (_route_cache_gate);
@@ -823,46 +881,21 @@ class actor_client_impl_t final : public actor_client_t
                || kind == framework_error_kind_t::unavailable;
     }
 
-    static framework_error_kind_t map_actor_route_reply_error (framework_error_kind_t kind,
-                                                               const std::string &message)
-    {
-        if (message.find ("stale") != std::string::npos
-            || message.find ("conflict") != std::string::npos
-            || message.find ("transfer is in progress") != std::string::npos) {
-            return framework_error_kind_t::unavailable;
-        }
-        if (message.find ("not found") != std::string::npos
-            || message.find ("not joined") != std::string::npos) {
-            return framework_error_kind_t::not_found;
-        }
-        if (message.find ("not connected") != std::string::npos
-            || message.find ("No such file or directory") != std::string::npos
-            || message.find ("errno=113") != std::string::npos) {
-            return framework_error_kind_t::unavailable;
-        }
-        return kind;
-    }
-
     template <typename TResult>
     static result_t<TResult> map_native_exception (const std::exception &error,
                                                   const char *fallback)
     {
-        const std::string message = error.what () && *error.what () ? error.what () : fallback;
-        if (message.find ("not connected") != std::string::npos
-            || message.find ("NotConnected") != std::string::npos
-            || message.find ("No such file or directory") != std::string::npos
-            || message.find ("errno=113") != std::string::npos) {
-            return result_t<TResult>::failure (framework_error_kind_t::unavailable,
-                                               message);
-        }
-        if (message.find ("not found") != std::string::npos
-            || message.find ("NotFound") != std::string::npos) {
-            return result_t<TResult>::failure (framework_error_kind_t::not_found,
-                                               message);
-        }
-        if (message.find ("conflict") != std::string::npos
-            || message.find ("stale") != std::string::npos
-            || message.find ("transfer is in progress") != std::string::npos) {
+        const std::string message =
+          error.what () && *error.what () ? error.what () : fallback;
+        const auto *system = dynamic_cast<const std::system_error *> (&error);
+        if (system
+            && (system->code () == std::errc::not_connected
+                || system->code () == std::errc::network_unreachable
+                || system->code () == std::errc::host_unreachable
+                || system->code () == std::errc::connection_refused
+                || system->code () == std::errc::connection_reset
+                || system->code () == std::errc::connection_aborted
+                || system->code () == std::errc::no_such_file_or_directory)) {
             return result_t<TResult>::failure (framework_error_kind_t::unavailable,
                                                message);
         }
@@ -874,6 +907,7 @@ class actor_client_impl_t final : public actor_client_t
     std::vector<std::shared_ptr<detail::mesh_node_runtime_t>> _mesh_nodes;
     std::shared_ptr<actor_location_observer_t> _actor_locations;
     location_options_t _location_options;
+    route_mesh_runtime_t *_route_runtime = nullptr;
     struct cached_actor_t
     {
         resolved_actor_t actor;
@@ -892,11 +926,12 @@ make_actor_client (live_location_reader_t &store,
                    serializer_registry_t &serializers,
                    std::vector<std::shared_ptr<detail::mesh_node_runtime_t>> mesh_nodes,
                    std::shared_ptr<actor_location_observer_t> actor_locations,
-                   location_options_t options)
+                   location_options_t options,
+                   route_mesh_runtime_t *route_runtime = nullptr)
 {
     return std::make_shared<actor_client_impl_t> (
       store, serializers, std::move (mesh_nodes), std::move (actor_locations),
-      std::move (options));
+      std::move (options), route_runtime);
 }
 
 } // namespace zlink::framework::runtime

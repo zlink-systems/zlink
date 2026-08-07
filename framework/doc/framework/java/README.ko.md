@@ -24,8 +24,8 @@ Sample과 E2E의 설정 파일, 환경 변수 금지와 `@ConfigurationPropertie
 
 ## 2. 공개 계약 spec
 
-정식 spec은 Framework 목표 public contract를 먼저 고정한다. 현재 Java/Kotlin 구현과의 차이는
-`90-implementation-gap.ko.md`만 기록한다. 모든 framework 언어의 공개 계약은
+정식 spec은 Framework 목표 public contract를 먼저 고정한다. 현재 Java/Kotlin 구현의 진행 상태는
+공개 계약 문서에 기록하지 않는다. 모든 framework 언어의 공개 계약은
 `spec/<package>/languages/` 아래에서 함께 관리한다.
 
 | 문서 | 범위 |
@@ -46,6 +46,10 @@ Sample과 E2E의 설정 파일, 환경 변수 금지와 `@ConfigurationPropertie
 | [backend-dependency-policy](internals/backend-dependency-policy.ko.md) | Java binding 의존 격리 |
 | [공통 내부 구조](../common/internals/README.ko.md) | 네 언어가 공유하는 runtime 아키텍처 결정 |
 | [regression-test-matrix](internals/regression-test-matrix.ko.md) | JVM contract, E2E와 performance smoke 기준 |
+| [stream-dispatch-hot-path](internals/stream-dispatch-hot-path.ko.md) | Stream 수신 dispatch의 ownership과 allocation 경계 |
+| [runtime-monitoring-placement-usage](internals/runtime-monitoring-placement-usage.ko.md) | Placement limit과 live object count의 결합 경계 |
+| [runtime-monitoring-store-boundary](internals/runtime-monitoring-store-boundary.ko.md) | Monitoring Store 조회 timeout과 fallback 경계 |
+| [provider-authority-capacity-ledger](internals/provider-authority-capacity-ledger.ko.md) | Opaque provider authority의 원자적 capacity 전이 |
 
 ## 4. 샘플
 

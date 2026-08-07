@@ -35,9 +35,40 @@
 namespace zlink::framework::runtime
 {
 
+struct mesh_node_host_service_t::actor_destroy_callback_gate_t
+{
+    std::mutex mutex;
+    std::condition_variable changed;
+    bool stopping = false;
+    std::size_t active = 0;
+
+    bool try_enter ()
+    {
+        std::lock_guard lock (mutex);
+        if (stopping)
+            return false;
+        ++active;
+        return true;
+    }
+
+    void leave ()
+    {
+        std::lock_guard lock (mutex);
+        --active;
+        if (active == 0)
+            changed.notify_all ();
+    }
+
+    void stop_and_wait () noexcept
+    {
+        std::unique_lock lock (mutex);
+        stopping = true;
+        changed.wait (lock, [this] { return active == 0; });
+    }
+};
+
 namespace
 {
-
 std::atomic_uint64_t next_user_spot_operation{1};
 
 class terminal_callback_guard_t final
@@ -182,14 +213,15 @@ std::vector<std::byte> actor_terminal_envelope (
                    : std::string_view{});
     append_text (actor ? actor->actor_id ().value () : std::string_view{});
     append_u64 (actor ? actor->object_generation () : 0);
-    std::vector<std::uint8_t> reply_bytes;
-    if (reply)
-        reply_bytes =
-          detail::message_to_raw (*reply, serializers).to_bytes ();
-    append_u32 (
-      static_cast<std::uint32_t> (reply_bytes.size ()));
-    for (const auto byte : reply_bytes)
-        result.push_back (static_cast<std::byte> (byte));
+    if (reply) {
+        const auto raw = detail::message_to_raw (*reply, serializers);
+        const auto bytes = raw.bytes ();
+        append_u32 (static_cast<std::uint32_t> (bytes.size ()));
+        result.insert (result.end (), bytes.begin (), bytes.end ());
+    }
+    else {
+        append_u32 (0);
+    }
     return result;
 }
 
@@ -299,7 +331,9 @@ void trace_mesh_application (std::string_view stage,
 
 void reject_application_request (
   const host::receive_record_t &record,
-                                 std::vector<zlink::message_t> parts)
+  std::vector<zlink::message_t> parts,
+  framework_error_kind_t error_kind,
+  std::string message)
 {
     const bool request = record.kind == host::record_kind_t::node_request
                          || record.kind == host::record_kind_t::channel_request
@@ -316,8 +350,7 @@ void reject_application_request (
     auto reply = replies.reply_raw_envelope (
       replies.create_error_header (
         header.value ().channel_name, header.value (),
-        framework_exception_t (framework_error_kind_t::rejected,
-                               "MeshNode is draining and rejects new application work")),
+        framework_exception_t (error_kind, std::move (message))),
       zlink::message_t::from (""));
     (void) host::reply (record.reply_token, reply.items ());
 }
@@ -561,13 +594,9 @@ mesh_node_host_service_t::create_actor (
 
     std::vector<std::byte> request_bytes;
     if (request) {
-        const auto raw =
-          detail::message_to_raw (*request, *_serializers)
-            .to_bytes ();
-        request_bytes.reserve (raw.size ());
-        for (const auto byte : raw)
-            request_bytes.push_back (
-              static_cast<std::byte> (byte));
+        const auto raw = detail::message_to_raw (*request, *_serializers);
+        const auto bytes = raw.bytes ();
+        request_bytes.assign (bytes.begin (), bytes.end ());
     }
     object_reserve_request_t reserve{
       .key = {placement_object_kind_t::actor, std::string (actor_id.value ())},
@@ -1106,6 +1135,18 @@ result_t<void> mesh_node_host_service_t::finalize_local_actor_destroy (
           "Actor destroy requires an exact ActorRef");
     }
 
+    const auto node = std::find_if (
+      _nodes.begin (), _nodes.end (), [&actor] (const auto &candidate) {
+          const auto routing_id = candidate ? candidate->routing_id () : std::nullopt;
+          return routing_id
+                 && routing_id->to_string () == actor.node_rid ().value ();
+      });
+    if (node != _nodes.end ()) {
+        const auto cleaned = (*node)->cleanup_application_actor_stateful (actor);
+        if (!cleaned)
+            return cleaned;
+    }
+
     std::optional<authority_snapshot_t> removed_snapshot;
     if (_location_store) {
         const authority_key_t key{"1:" + std::string (actor.actor_id ().value ())};
@@ -1138,6 +1179,10 @@ result_t<void> mesh_node_host_service_t::finalize_local_actor_destroy (
                 if (std::holds_alternative<authority_deleted_t> (
                       removed.value ())) {
                     removed_snapshot = *snapshot;
+                } else {
+                    return result_t<void>::failure (
+                      framework_error_kind_t::unavailable,
+                      "Actor destroy authority changed before deletion");
                 }
             }
         }
@@ -1163,18 +1208,6 @@ result_t<void> mesh_node_host_service_t::finalize_local_actor_destroy (
             (void) actor_resolver->get ().invalidate_actor_address_if_matches (
               actor.actor_id ().value (), expected);
         }
-    }
-
-    const auto node = std::find_if (
-      _nodes.begin (), _nodes.end (), [&actor] (const auto &candidate) {
-          const auto routing_id = candidate ? candidate->routing_id () : std::nullopt;
-          return routing_id
-                 && routing_id->to_string () == actor.node_rid ().value ();
-      });
-    if (node != _nodes.end ()) {
-        const auto cleaned = (*node)->cleanup_application_actor_stateful (actor);
-        if (!cleaned)
-            return cleaned;
     }
 
     if (_services) {
@@ -1233,6 +1266,24 @@ task_t<bool> mesh_node_host_service_t::destroy_actor (
                   framework_error_kind_t::unavailable,
                   "Actor transfer is in progress"));
             }
+
+            /* The local Spot owns the first destructive step. Its cleanup
+             * callback runs after local state is detached and only then
+             * removes Location authority. This keeps a failed local cleanup
+             * from leaving a deleted authority with retained capacity. */
+            const auto local_destroyed =
+              (*node)->destroy_application_actor (actor);
+            if (!local_destroyed) {
+                return task_t<bool> (result_t<bool>::failure (
+                  local_destroyed.error_kind (),
+                  local_destroyed.error ()
+                    ? local_destroyed.error ()->what ()
+                    : "Actor runtime cleanup failed"));
+            }
+            /* The Spot destroy callback owns the authority and gateway
+             * finalization for a local Actor. Keep this outer operation as
+             * the result boundary so the finalizer runs exactly once. */
+            return task_t<bool> (result_t<bool>::success (true));
         }
 
         const auto removed = _location_store
@@ -1284,16 +1335,6 @@ task_t<bool> mesh_node_host_service_t::destroy_actor (
             }
         }
 
-        if (node != _nodes.end ()) {
-            auto local_destroyed = (*node)->destroy_application_actor (actor);
-            if (!local_destroyed) {
-                return task_t<bool> (result_t<bool>::failure (
-                  local_destroyed.error_kind (),
-                  local_destroyed.error ()
-                    ? local_destroyed.error ()->what ()
-                    : "Actor runtime cleanup failed"));
-            }
-        }
         const auto finalized = finalize_local_actor_destroy (actor);
         if (!finalized) {
             return task_t<bool> (detail::result_access_t::failure<bool> (
@@ -1436,16 +1477,13 @@ mesh_node_host_service_t::create_user_spot (
     std::vector<std::byte> application_bytes;
     if (request) {
         const auto raw = detail::message_to_raw (*request, *_serializers);
-        const auto bytes = raw.to_bytes ();
+        const auto bytes = raw.bytes ();
         if (bytes.size () > 1024u * 1024u)
             return task_t<spot_create_result_t> (
               result_t<spot_create_result_t>::failure (
                 framework_error_kind_t::not_configured,
                 "User Spot creation request exceeds 1 MiB"));
-        application_bytes.reserve (bytes.size ());
-        for (const auto value : bytes)
-            application_bytes.push_back (
-              static_cast<std::byte> (value));
+        application_bytes.assign (bytes.begin (), bytes.end ());
     }
     const object_creation_key_t key{
       placement_object_kind_t::user_spot,
@@ -1844,6 +1882,8 @@ void mesh_node_host_service_t::start (service_provider_t &services)
     }
     _stop.store (false, std::memory_order_release);
     _accept_application_dispatch.store (true, std::memory_order_release);
+    _actor_destroy_gate =
+      std::make_shared<actor_destroy_callback_gate_t> ();
     auto store = std::shared_ptr<location_repository_t> (
       &services.get_required<location_repository_t> (),
       [] (location_repository_t *) noexcept {});
@@ -1851,9 +1891,22 @@ void mesh_node_host_service_t::start (service_provider_t &services)
     for (const auto &registration : _registrations) {
         if (!registration || !registration->spot_state)
             continue;
+        const auto gate = _actor_destroy_gate;
         detail::spot_node_runtime_t (registration->spot_state)
-          .on_destroy_actor ([this] (const actor_ref_t &actor) {
-              return finalize_local_actor_destroy (actor);
+          .on_destroy_actor ([this, gate] (const actor_ref_t &actor) {
+              if (!gate->try_enter ())
+                  return result_t<void>::failure (
+                    framework_error_kind_t::shutting_down,
+                    "Actor destroy cleanup was rejected during Mesh shutdown");
+              try {
+                  auto result = finalize_local_actor_destroy (actor);
+                  gate->leave ();
+                  return result;
+              }
+              catch (...) {
+                  gate->leave ();
+                  throw;
+              }
           });
     }
     auto &location_runtime =
@@ -2102,6 +2155,8 @@ void mesh_node_host_service_t::start (service_provider_t &services)
     auto &actor_resolver =
       services.get_required<actor_address_resolver_t> ();
     const auto route_cache_max_age = location_runtime.options ().route_cache_max_age;
+    const auto owner_lease_fencing_margin =
+      location_runtime.options ().owner_lease_fencing_margin;
     for (std::size_t index = 0; index < _nodes.size (); ++index) {
         const auto &node = _nodes[index];
         const auto registration = _registrations[index];
@@ -2135,7 +2190,7 @@ void mesh_node_host_service_t::start (service_provider_t &services)
                   return std::nullopt;
               }
           },
-          route_cache_max_age);
+          route_cache_max_age, owner_lease_fencing_margin);
         node->configure_actor_route_resolver (
           [&actor_resolver] (const actor_ref_t &actor)
             -> std::optional<spot_address_t> {
@@ -2633,7 +2688,10 @@ void mesh_node_host_service_t::start (service_provider_t &services)
                               }
                           }
                           if (!accepted) {
-                              reject_application_request (record, std::move (parts));
+                              reject_application_request (
+                                record, std::move (parts),
+                                framework_error_kind_t::rejected,
+                                "MeshNode is draining and rejects new application work");
                               _inbound_budget->completed (
                                 application_payload_bytes, false);
                               release_mailbox ();
@@ -2644,17 +2702,21 @@ void mesh_node_host_service_t::start (service_provider_t &services)
                           if (retain_mailbox_reservation) {
                               retain_mailbox_reservation ();
                           }
-                          try {
-                              _application_dispatch->submit (
+                          auto dispatch_parts =
+                            std::make_shared<std::vector<zlink::message_t>> (
+                              std::move (parts));
+                          const auto submitted =
+                            _application_dispatch->try_submit (
                                 [this, node, registration, owner, record,
                                  application_payload_bytes,
                                  release_mailbox_reservation,
                                  complete_stateful_dispatch,
-                                 parts = std::move (parts)] () mutable {
+                                 dispatch_parts] () mutable {
                                     terminal_callback_guard_t release_guard (
                                       release_mailbox_reservation);
                                     terminal_callback_guard_t stateful_guard (
                                       complete_stateful_dispatch);
+                                    auto parts = std::move (*dispatch_parts);
                                     trace_mesh_application (
                                       "start", record, parts.size ());
                                     auto completion_permit =
@@ -2742,15 +2804,21 @@ void mesh_node_host_service_t::start (service_provider_t &services)
                                         release_mailbox_reservation ();
                                     }
                                 });
-                          }
-                          catch (...) {
+                          if (!submitted) {
+                              trace_mesh_application (
+                                "reject", record, dispatch_parts->size (),
+                                "application executor capacity exceeded");
+                              reject_application_request (
+                                record, std::move (*dispatch_parts),
+                                framework_error_kind_t::capacity_exceeded,
+                                "MeshNode application executor capacity is exceeded");
                               node->application_work_started ();
                               node->application_work_finished ();
                               _inbound_budget->completed (
                                 application_payload_bytes, false);
                               _dispatch_gate_changed.notify_all ();
                               release_mailbox ();
-                              throw;
+                              return;
                           }
                           stateful_guard.dismiss ();
                           release_guard.dismiss ();
@@ -2949,6 +3017,8 @@ bool mesh_node_host_service_t::republish_after_store_recovery () noexcept
 
 void mesh_node_host_service_t::stop () noexcept
 {
+    if (_actor_destroy_gate)
+        _actor_destroy_gate->stop_and_wait ();
     request_stop ();
     if (_application_dispatch)
         _application_dispatch->drain ();
@@ -2993,6 +3063,7 @@ void mesh_node_host_service_t::stop () noexcept
               listener_kind_t::route_mesh, node->mesh_name ());
         trace_mesh_host_stop ("node-stop-end");
     }
+    _actor_destroy_gate.reset ();
 }
 
 std::optional<location_owner_token_t>
@@ -3033,8 +3104,7 @@ zlink::submit_result_t mesh_node_host_service_t::submit_local_node_send (
         node->application_work_enqueued ();
     }
 
-    try {
-        _application_dispatch->submit (
+    const auto submitted = _application_dispatch->try_submit (
           [this, node, registration, source_rid,
            parts = std::move (parts)] () mutable {
               node->application_work_started ();
@@ -3056,8 +3126,7 @@ zlink::submit_result_t mesh_node_host_service_t::submit_local_node_send (
               node->local_application_work_finished ();
               _dispatch_gate_changed.notify_all ();
           });
-    }
-    catch (...) {
+    if (!submitted) {
         node->application_work_started ();
         node->local_application_work_finished ();
         _dispatch_gate_changed.notify_all ();

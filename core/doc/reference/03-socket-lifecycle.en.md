@@ -1,4 +1,4 @@
-[한국어](03-socket-lifecycle.ko.md) | English
+[한국어](https://zlink-systems.github.io/zlink/ko/reference/03-socket-lifecycle/) | English
 
 [Reference index](README.en.md)
 

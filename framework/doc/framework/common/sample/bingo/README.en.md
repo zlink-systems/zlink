@@ -109,6 +109,7 @@ prefix, and the API request server is registered as an independent ClientServer 
 | Session | 2 | STREAM connection, pre-auth packet handling, Actor binding and relay | Separates connection and binding lifetime from game logic. The Session owner keeps the binding route. |
 | Play | 2 | Player Actor, room state, timer, push, and reward publish | `BingoRoom` owns player, card, draw, and winner state. |
 | Location Store | 1 logical store | Peer discovery, Actor/Spot authority, and generation | Keeps the Application from selecting a physical node or guessing the current owner. |
+| Relocation Store | 1 logical store | Instance activation envelopes and room/Actor relocation payloads | Uses a provider and key prefix separate from the Location Store. It doesn't share a keyspace even when both use the same Redis deployment. |
 | Reservation Redis | 1 isolated instance | Waiting room and reserved Actor ID | Shares matching decisions even if the Matchmaker process changes. Doesn't store object-owner information. |
 
 Session doesn't interpret game rules. Matchmaking doesn't select the Play node. Play doesn't handle
@@ -641,6 +642,12 @@ no result value.
 
 ### 7.6 Planned Relocation And Failure
 
+The Matchmaker Instance Spot factory selects `RecreateOnRelocation`, rebuilding its state from the
+Redis reservation. The Room Spot and stateful Player Actor factories select `PreserveStateWith`.
+The Room adapter preserves cards, draw position, winner, and round state; the Player adapter
+preserves card marks, applied reward IDs, and player progress. Adapter payloads don't duplicate the
+queue, accepted journal, logical timer, or owner fence preserved by the Framework.
+
 The Room uses `SpotWide` and application-signaled readiness. Readiness is signaled in a safe turn
 after the game result and reward publish are done. The room the Framework selects moves the member
 Actors, unexecuted messages, and logical timer as one relocation unit. The Application adapter only
@@ -775,7 +782,7 @@ prerequisites are recorded in that language's sample README.
 
 1. Build the server and client packages.
 2. Start a pinned Redis container with a run-unique name and port.
-3. Set different key prefixes for the Location Store and reservations.
+3. Configure separate providers and key prefixes for the Location Store, Relocation Store, and reservations.
 4. Start the Matchmaking and Play processes and confirm Framework readiness.
 5. Start the API and Session processes and confirm STREAM endpoint readiness.
 6. Run the client scenario, verifying the response, push, state, and marker.

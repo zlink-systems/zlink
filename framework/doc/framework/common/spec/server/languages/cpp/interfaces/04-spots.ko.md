@@ -417,12 +417,9 @@ subscription만 검사한다. 각 remote ROUTER와 local mailbox는 대상별로
 실패가 앞에서 수락된 전송을 취소하지 않는다. Spot·Actor 등록은 [owner](../../../../01-glossary.ko.md#owner)
 `mesh_node_builder_t`에 속한다.
 
-`mesh_node_socket_config_t::max_message_size`는 startup 전에만 설정하며 실행 중 setter를 제공하지 않는다.
-`0`은 binding 또는 transport가 수신할 수 있는 최대 complete message 크기로 정규화한다. Transport가
-unlimited이면 service wire의 `uint32` 표현 한계에서 envelope overhead를 뺀 값을 사용한다. 양수는 그
-표현 한계를 넘을 수 없으며 넘으면 startup 설정 오류로 거부한다. Peer는 정규화한 값을 내부 handshake로
-교환하고 sender와 receiver는 두 값 중 작은 effective bound를 complete message allocation 전에 적용한다.
-이 negotiation을 위한 public option은 제공하지 않는다.
+`mesh_node_socket_config_t`는 RouteMesh SS의 Framework-level message-size 설정을 제공하지 않는다.
+Sender와 receiver는 Framework-level complete-message 상한으로 message를 거부하지 않는다. Transport와
+service-wire 표현 한계, HWM과 mailbox budget은 별도 자원·wire guard로 유지한다.
 `send_timeout`을 지정하지 않으면 framework 기본값 1초를 사용한다. `receive_timeout`을 지정하지 않으면
 수신 대기 상한을 따로 두지 않는다. HWM은 0 이상이어야 한다.
 
@@ -588,7 +585,9 @@ existing row의 type을 caller가 다시 전달할 필요는 없다.
 
 Cold Instance로 향하는 one-way call은 resolve, reservation, activation과 outbound admission까지 같은 send
 deadline에 포함하고 admission 결과에서 완료한다. Request는 activation, handler와 terminal reply까지 기다린다.
-Owner loss 뒤에는 authority에 저장된 creation intent를 사용해 같은 instance를 reactivation한다.
+저장한 creation intent는 최초 cold activation이 terminal completion을 기록하기 전에 같은 target
+node·lifecycle에서 재개할 때만 사용한다. 이미 steady `Ready`였던 owner의 process 종료나 lease 만료는
+`Missing`으로 바꾸거나 다른 node의 cold activation으로 복구하지 않으며 call은 `unavailable`로 끝난다.
 
 `spot_ref_t`는 global SpotId, `1..9223372036854775807` 범위의 ObjectGeneration과 조회 시점
 MeshName·NodeRid를 담은 immutable location snapshot이다. 일반 message target으로 사용하지 않으며 별도 handle,
@@ -845,6 +844,11 @@ public:
     void cancel() noexcept;
 };
 ```
+
+Timer option을 생략하면 `overrun_policy`는 `skip_late_ticks`, `max_catch_up_ticks`는 `1`이다.
+`max_catch_up_ticks`는 `overrun_policy == catch_up_bounded`일 때만 사용하고 `1..INT_MAX` 범위인지
+검증한다. 다른 policy에서는 이 값을 사용하지 않으며 이 범위로 validation하지 않는다. 이 규칙은 기존
+`timer_options_t` field를 해석하는 계약이며 새 public member를 추가하지 않는다.
 
 timer 등록 검증은 [stage-wrapper §4.1](../../../../17-stage-wrapper-on-spot.ko.md)이 소유한다.
 

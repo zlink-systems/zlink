@@ -4,7 +4,7 @@ title: "Request Correlation And Business Flow Identification"
 
 # Request Correlation And Business Flow Identification
 
-[Spec table of contents](README.en.md) · [Previous: Message Flow Tracing](26-message-flow-tracing.ko.md) · [Next: Host Relocate And Shutdown](28-graceful-drain-handoff.en.md)
+[Spec table of contents](README.en.md) · [Previous: Message Flow Tracing](26-message-flow-tracing.en.md) · [Next: Host Relocate And Shutdown](28-graceful-drain-handoff.en.md)
 
 > **What this chapter defines** — the contract linking a request and terminal
 > reply, and identifying several messages continuing from the same cause as
@@ -30,7 +30,7 @@ lifetime of these three fields. The ownership and size of metadata the
 application sends with a message is defined by
 [Message Model](04-message-model.en.md). The condition for including a field
 in trace and sampling are defined by
-[Message Flow Tracing](26-message-flow-tracing.ko.md). The three fields are
+[Message Flow Tracing](26-message-flow-tracing.en.md). The three fields are
 framework-managed context — not an application metadata key.
 
 ## 2. The Role Of The Two Identifiers
@@ -95,25 +95,25 @@ and builds the values.
 - The first outbound operation started by application code outside a
   framework callback
 
-If the diagnostics level is `off`, every observation-only flow-handling step
+If the diagnostics level is `Off`, every observation-only flow-handling step
 is skipped. A new `flow_id` isn't built, and an inbound message's flow field
 isn't turned into flow context or copied to the next message. The two fields
 also aren't added to an outbound envelope. An outbound request the client
 connector starts follows the same rule.
 
 `correlation_id` is protocol information linking a request and terminal
-reply. Even if the diagnostics level is `off`, it's built per request and
+reply. Even if the diagnostics level is `Off`, it's built per request and
 preserved through the reply. This value can't be removed by turning off
 tracing.
 
 The framework sets the current flow context when starting callback
 execution. It restores the pre-execution context at the callback's terminal
-completion. If tracing is `off`, this context isn't built or put into
+completion. If tracing is `Off`, this context isn't built or put into
 async-local storage.
 
 The rule for changing diagnostics level at runtime follows
-[Message Flow Tracing](26-message-flow-tracing.ko.md#41-실행-중에-기록-수준-변경).
-Once each processing point confirms `off`, it doesn't build a flow ID,
+[Message Flow Tracing](26-message-flow-tracing.en.md#41-changing-the-record-level-at-runtime).
+Once each processing point confirms `Off`, it doesn't build a flow ID,
 validate, capture context, add an envelope field, or build an internal
 propagation message. A change isn't retroactively applied to an
 already-built outbound frame.
@@ -122,7 +122,7 @@ already-built outbound frame.
 
 While message-flow tracing is on, the framework delivers `flow_id` and
 `flow_origin` together for as long as cause and effect continue in one piece
-of work. When `off`, the §4 omission rule applies.
+of work. When `Off`, the §4 omission rule applies.
 
 | Processing boundary | Scope where the two flow fields are preserved |
 |---|---|
@@ -197,7 +197,7 @@ contract.
 
 Tracing records `correlation_id`, `flow_id`, and `flow_origin`. The exact
 inclusion condition and structured-log key are defined by
-[Message Flow Tracing](26-message-flow-tracing.ko.md#32-attribute-포함-조건).
+[Message Flow Tracing](26-message-flow-tracing.en.md#32-attribute-inclusion-conditions).
 None of the three values is used in a metric label.
 
 The three fields don't encode user ID, Actor ID, Spot ID, endpoint, payload,

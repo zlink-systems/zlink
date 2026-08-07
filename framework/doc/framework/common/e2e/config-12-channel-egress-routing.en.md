@@ -333,14 +333,14 @@ server connection and send path. A process with only a Server role
 must not call the same name and directly execute the local handler.
 
 **Verification question:** Does a ClientServer request from a process
-registered with only a Server role end in `NotFound`?
+registered with only a Server role end in `NotConfigured`?
 
 - Start condition: The negative Workflow process registers only the
   `workflow.command` Server role. A separate normal caller is ready
   with a Client role.
 - Procedure: The negative process and the normal caller each start one
   request.
-- Verification: The negative process's request is `NotFound` and the
+- Verification: The negative process's request is `NotConfigured` and the
   handler doesn't run. The normal caller's request is processed once
   by the Workflow handler.
 - Detailed behavior: verifies role responsibility from

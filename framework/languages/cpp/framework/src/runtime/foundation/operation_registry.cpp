@@ -35,7 +35,7 @@ void notify (operation_registry_t::callback_t &callback,
 }
 }
 
-bool operation_registry_t::register_operation (operation_id_t id,
+bool operation_registry_t::register_operation (call_id_t id,
                                                clock_t::time_point deadline,
                                                callback_t callback)
 {
@@ -49,7 +49,7 @@ bool operation_registry_t::register_operation (operation_id_t id,
     return _pending.emplace (std::move (id), pending_t{deadline, std::move (callback)}).second;
 }
 
-bool operation_registry_t::take (const operation_id_t &id, callback_t &callback)
+bool operation_registry_t::take (const call_id_t &id, callback_t &callback)
 {
     std::lock_guard lock (_mutex);
     const auto found = _pending.find (id);
@@ -61,7 +61,7 @@ bool operation_registry_t::take (const operation_id_t &id, callback_t &callback)
     return true;
 }
 
-bool operation_registry_t::complete (const operation_id_t &id,
+bool operation_registry_t::complete (const call_id_t &id,
                                      std::vector<std::uint8_t> payload)
 {
     callback_t callback;
@@ -72,7 +72,7 @@ bool operation_registry_t::complete (const operation_id_t &id,
     return true;
 }
 
-bool operation_registry_t::cancel (const operation_id_t &id)
+bool operation_registry_t::cancel (const call_id_t &id)
 {
     callback_t callback;
     if (!take (id, callback)) {
@@ -83,7 +83,7 @@ bool operation_registry_t::cancel (const operation_id_t &id)
 }
 
 bool operation_registry_t::fail (
-  const operation_id_t &id,
+  const call_id_t &id,
   operation_terminal_t terminal)
 {
     if (terminal == operation_terminal_t::completed) {

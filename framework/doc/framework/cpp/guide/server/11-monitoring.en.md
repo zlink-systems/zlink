@@ -3,7 +3,7 @@ title: "11. Monitoring — Status Observation And Diagnostics · C++"
 ---
 
 <!-- framework-adapter-nav:start -->
-[Guide Home](../../../index.ko.md) | [Previous: Location](10-location.en.md) | [Next: Operations — metrics · drain · readiness](12-operations.en.md)
+[Guide Home](../../../index.en.md) | [Previous: Location](10-location.en.md) | [Next: Operations — metrics · drain · readiness](12-operations.en.md)
 <!-- framework-adapter-nav:end -->
 
 # 11. Monitoring — Status Observation And Diagnostics
@@ -81,47 +81,29 @@ sets the level.
 
 ```cpp
 options.configure_dispatch ()
-  .message_flow (message_flow_log_mode_t::errors_only) // Default -- errors and backpressure only.
-  .trace_sample_rate (1.0)                            // Sampling ratio.
-  .include_message_sizes (true)                       // Also records payload byte size.
-  .trace_log_file ("logs/flow.jsonl");                // Written separately from app logs.
+  .message_flow (message_flow_log_mode_t::errors) // Default -- errors and backpressure only.
+  .trace_sample_rate (1.0)                       // Sampling ratio.
+  .include_message_sizes (true);                 // Also records payload byte size.
 ```
 
 | Level | Recording scope |
 | --- | --- |
 | `off` | Records nothing |
-| `errors_only` (default) | Dispatch failures and backpressure |
-| `key_transitions` | The above + major transitions like receive/dispatch/complete |
-| `verbose` | The above + a record for every individual message |
+| `errors` (default) | Dispatch failures and backpressure |
+| `normal` | The above + major transitions like receive/dispatch/complete |
+| `detailed` | The above + detailed diagnostics for individual messages |
 
-**Keep operations at `errors_only` and raise it only when needed.** `verbose` records
+**Keep operations at `errors` and raise it only when needed.** `detailed` records
 something for every message, so on high-throughput paths it becomes a load in itself.
 
-To receive records in your program, register an observer.
-
-```cpp
-class flow_recorder_t : public message_flow_observer_t
-{
-  public:
-    void on_message_flow (const message_flow_event_t &event) override
-    {
-        // Hand outcome / surface / packet_name / flow_id, etc. to your own storage.
-        // This callback also runs on the runtime thread -- no blocking.
-        _sink.append (event.outcome, event.packet_name.value_or ("-"));
-    }
-};
-
-options.configure_dispatch ().set_message_flow_observer (
-  std::make_shared<flow_recorder_t> (sink));
-
-// For a short record, you can pass a single function instead of a class.
-options.configure_dispatch ().set_message_flow_observer (
-  [&sink] (const message_flow_event_t &event) { sink.append (event.outcome); });
-```
+The Framework writes structured records to the standard logger, trace, and metric providers
+configured by the application. It exposes no message-flow callback observer, runtime error sink,
+raw event DTO, or diagnostics file-path registration API. A provider failure is isolated as
+separate diagnostics and does not change the original message operation's terminal result.
 
 `flow_id` and `flow_origin` are the identifiers that tie together the pieces of one
 request as it crosses multiple nodes. The correlation rules are owned by
-[Flow Correlation](../../../common/spec/27-flow-correlation.ko.md).
+[Flow Correlation](../../../common/spec/27-flow-correlation.en.md).
 
 ## 4. Health Check
 
@@ -149,7 +131,7 @@ orchestrator kills the process the moment the store blips.
 ## 5. Structured Logging
 
 Runtime state changes and diagnostics go out through the standard logging provider.
-Provider configuration is covered in [19. Configuration](19-configuration.ko.md).
+Provider configuration is covered in [19. Configuration](19-configuration.en.md).
 
 Some things are **not** part of the public contract. Don't write code that consumes these
 directly.
@@ -160,7 +142,7 @@ directly.
 - Exporter lifecycle, registry, and provider internal state
 
 Metric names, kinds, units, and labels are owned by
-[Runtime Metrics And Aggregation Rules](../../../common/spec/25-runtime-metrics.ko.md).
+[Runtime Metrics And Aggregation Rules](../../../common/spec/25-runtime-metrics.en.md).
 
 ## 6. Common Problems
 
@@ -172,8 +154,8 @@ Metric names, kinds, units, and labels are owned by
 - **Some state transitions are missing** → `observe(...)`'s capacity was exceeded and they
   got skipped. If you need every transition, raise the capacity and make the callback
   return faster.
-- **The flow record is empty** → the default level is `errors_only`, so normal flow isn't
-  recorded. Raise it to `key_transitions` or above.
+- **The flow record is empty** → the default level is `errors`, so normal flow isn't
+  recorded. Raise it to `normal` or above.
 - **The store blipped briefly but the process restarted** → the store dependency is in
   liveness. Move it to readiness.
 
@@ -181,5 +163,4 @@ Metric names, kinds, units, and labels are owned by
 
 - The formal contract: [C++ monitoring public contract](../../../common/spec/server/languages/cpp/interfaces/08-monitoring.en.md)
 - Metrics and drain/readiness operations: [12. Operations](12-operations.en.md)
-- Logging provider configuration: [19. Configuration](19-configuration.ko.md)
-- HTTP endpoint registration: [20. HTTP Hosting](20-http-hosting.ko.md)
+- HTTP endpoint registration: [20. HTTP Hosting](20-http-hosting.en.md)

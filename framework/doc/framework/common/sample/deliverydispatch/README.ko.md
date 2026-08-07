@@ -32,8 +32,8 @@ Framework 조합의 경계를 확인하는 데 필요하지 않아 제외한다.
 - Ready owner process 장애 뒤 다른 node에 Actor를 자동으로 다시 만드는 crash failover
 - Actor relocation과 Message Follow
 
-Actor failure와 planned relocation은 서로 다른 정책이다. 이 sample의 Actor factory는
-relocation을 사용하지 않도록 설정하며, Ready owner 장애의 terminal 결과는 공통 failure spec의
+Actor failure와 planned relocation은 서로 다른 정책이다. 이 sample의 Courier와 Customer Actor
+factory는 모두 `DisableRelocation`을 선택하며, Ready owner 장애의 terminal 결과는 공통 failure spec의
 Unavailable 경계를 따른다.
 
 ## 2. 요구사항
@@ -180,7 +180,7 @@ Dispatch는 고객과 배송원의 session을 직접 보관하지 않는다. Cou
 | one-way 제안·결정 전송 | Actor send | send admission은 handler 실행 완료나 상대 수신을 보장하지 않는다. [Send와 request §4](../../spec/03-interaction-model.ko.md#4-send와-request) |
 | owner 장애 경계 | failure/failover policy | Ready owner 장애는 자동 cold activation이나 다른 owner 선택으로 바뀌지 않는다. [Failure policy §4.4](../../spec/31-failure-failover-policy.ko.md#44-instance-spot-cold-activation과-owner-장애를-구분한다) |
 
-Courier와 Customer Actor factory는 sample 범위에서 relocation을 사용하지 않는다. planned
+Courier와 Customer Actor factory는 sample 범위에서 `DisableRelocation`을 사용한다. planned
 relocation을 추가하더라도 같은 Actor identity와 binding 갱신을 검증해야 하며, Ready owner
 crash를 failover로 해석하지 않는다.
 

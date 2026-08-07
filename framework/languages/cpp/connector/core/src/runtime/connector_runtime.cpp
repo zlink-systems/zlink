@@ -1094,6 +1094,14 @@ result_t<void> close_state (std::shared_ptr<detail::connector_state_t> state)
     std::vector<std::function<void ()>> closed_request_callbacks;
     std::vector<std::function<void ()>> closed_wait_callbacks;
     std::shared_ptr<detail::stream_connection_t> connection;
+    auto active_write_callback = detail::take_active_write_callback (state);
+    if (active_write_callback) {
+        closed_write_callbacks.push_back (
+          [callback = std::move (active_write_callback)] () mutable {
+              callback (result_t<void>::failure (
+                error_code_t::closed, "stream connector is closed"));
+          });
+    }
     {
         std::lock_guard<std::mutex> lock (state->transport_mutex);
         connection = state->connection;

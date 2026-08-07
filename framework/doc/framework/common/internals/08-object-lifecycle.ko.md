@@ -9,7 +9,8 @@ title: "8. 객체 종류와 활성화"
 > **이 장이 답하는 것** — Spot 세 종류를 어떻게 구분하고, 없는 객체를 언제 만들며, 낡은 owner로 온 message를 어떻게 거르는가.
 >
 > **계약 소유** — Spot 종류와 종료 사유는 [Spot 모델](../spec/11-spot-model.ko.md)이,
-> generation을 쓰는 자리는 [Spot·Actor routing](../spec/18-object-routing.ko.md)이 소유한다.
+> generation을 쓰는 자리는 [Spot·Actor routing](../spec/18-object-routing.ko.md)이,
+> owner 장애 뒤 결과는 [Failure와 failover policy](../spec/31-failure-failover-policy.ko.md)가 소유한다.
 > 이 장은 그 계약을 만족시키는 **구조**와, 네 구현에서 관찰된 어긋남을 다룬다.
 
 Actor와 handler를 담는 실행 단위인 [Spot](../spec/01-glossary.ko.md#spot) 세 종류를 코드에서
@@ -51,6 +52,26 @@ Actor들은 node가 내려갈 때 사라진다.
 **일반 message는 없는 객체를 만들지 않는다.** 만들겠다는 의사를 명시한 Spot 전용
 호출만 새로 만들 수 있고, 일반 message와 조회 호출은 이미 준비된 객체만 대상으로 한다
 ([Spot·Actor routing 「2.2 최근 Ready route를 사용하는 조건」](../spec/18-object-routing.ko.md#22-최근-ready-route를-사용하는-조건)).
+
+### Spec 상태를 activation state machine에 전달한다
+
+공개 동작은 [장애 대응과 failover 범위 §4.4](../spec/31-failure-failover-policy.ko.md#44-instance-spot-cold-activation과-owner-장애를-구분한다)가
+정의한다. Activation state machine은 resolver 결과를 다음 내부 상태로 받아 각 책임 component에
+한 번만 전달한다.
+
+| 내부 상태 | 보존하는 fence | 다음 component |
+|---|---|---|
+| `Missing` | authority가 없다는 조회 version | creation coordinator |
+| `Creating` | attempt와 reservation fence | 같은 attempt의 waiter |
+| `Ready` | route와 authority·owner lease fence | route admission |
+| `Unavailable` | authority와 무효 owner evidence | terminal completion adapter |
+
+`Unavailable`에서 `Missing`으로 가는 activation 전이는 두지 않는다. Explicit `Close`, `IdleEvicted`
+cleanup 또는 다른 정식 lifecycle operation이 authority release를 완료한 뒤 resolver가 새 `Missing`
+입력을 만들 수 있다.
+
+Stored creation intent는 같은 target node·lifecycle에서 끝나지 않은 최초 cold activation operation만
+재개한다. Steady `Ready` owner 장애의 takeover나 queue recovery에 사용하지 않는다.
 
 이 구분이 없으면 오타 하나가 객체를 만든다. 잘못된 ID로 보낸 message가 그 ID의 객체를
 새로 만들어 버리고, 그 객체는 아무도 정리하지 않는다.
@@ -168,11 +189,15 @@ serial quiescence를 다시 확인한 뒤 `IdleEvicted` 사유로 closing callba
 activation을 dispose하며, Location Store의 Spot location을 release한다. 따라서 callback
 실행 중에 새 작업을 받지 않으며, callback이 끝나기 전에 location을 지우지 않는다.
 
-이 과정에서 location row가 아직 release 중인데 Instance intent request가 이전 route를
-사용하면 .NET runtime은 route를 무효화하고 location이 Missing 또는 새 Ready 상태가
-될 때까지 다시 읽는다. 이 동작은 이미 수락된 application request를 재전송하는 retry가
-아니라, cold activation을 결정하기 위한 owner route 갱신이다. 일반 Spot의 stale route
-오류에는 이 동작을 적용하지 않는다.
+이 과정에서 location row가 아직 release 중인데 Instance intent request가 이전 route를 사용하면
+runtime은 route를 무효화하고 close transaction이 authority release를 끝내 `Missing`이 되거나 current
+`Ready` route가 확인될 때까지 다시 읽을 수 있다. 이 동작은 이미 수락된 application request를
+재전송하는 retry가 아니라, explicit idle cleanup 결과를 확인하는 owner route 갱신이다.
+
+Resolver는 idle cleanup이 authority release를 완료한 결과와 owner availability evidence만 바뀐 결과를
+서로 다른 tag로 activation state machine에 전달한다. Creation coordinator는 전자의 tag만 입력으로
+받고, 후자는 terminal completion adapter에 연결한다. 이미 수락된 request의 재제출 금지는
+[장애 대응과 failover 범위 §2](../spec/31-failure-failover-policy.ko.md#2-공통-판단-기준)가 정의한다.
 
 다른 Framework 언어의 유휴 정리 상태와 공통 process 검증 결과는 이 .NET 구조 설명만으로
 완료로 간주하지 않는다. 각 언어는 같은 종료 조건과 process evidence를 별도로 확인해야
@@ -281,6 +306,9 @@ process 단위 회계가 이미 byte로 되어 있다(§6 첫 문단). 같은 �
 - 여러 caller가 동시에 같은 객체 생성을 요청해도 factory가 한 번만 실행된다.
 - "만드는 중" 상태가 위치 캐시에 남지 않는다.
 - 만들다 실패한 기록이 시작 시점에 정리된다.
+- Owner availability evidence 변경이 authority release transition을 호출하지 않는다.
+- `Unavailable` resolver tag가 terminal completion adapter로만 전달된다.
+- Activation recovery root와 scan key가 authority의 target node·lifecycle을 포함한다.
 - 객체가 다시 만들어진 직후에도 일반 message가 세대 불일치로 거절되지 않는다.
 - 낡은 owner로 보낸 호출이 자동 재시도 없이 오류로 끝난다.
 - 활성 객체 수가 상한에 도달하면 그 node에서 활성화가 거절된다.

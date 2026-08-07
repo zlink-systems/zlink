@@ -146,7 +146,10 @@ class conversation_t
                 _idle_deadline_unix_ms};
     }
 
-    static constexpr std::int64_t idle_timeout_ms = 3000;
+    /* The sample validates a real multi-process reconnect before the idle
+     * transition. Keep enough time for the second-room and re-authentication
+     * requests to complete without changing the domain state machine. */
+    static constexpr std::int64_t idle_timeout_ms = 10000;
     static constexpr std::int64_t close_grace_ms = 2000;
 
   private:

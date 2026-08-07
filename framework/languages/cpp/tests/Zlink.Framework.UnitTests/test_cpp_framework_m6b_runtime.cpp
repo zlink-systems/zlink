@@ -16,6 +16,12 @@
 #include "runtime/stateful/stream_session_registry.hpp"
 #include "runtime/spots/actor_transfer_coordinator.hpp"
 
+#include <zlink/Contracts/Core/context.hpp>
+#include <zlink/Contracts/Core/routing_id.hpp>
+#include <zlink/Contracts/Messaging/message.hpp>
+#include <zlink/Contracts/Messaging/operation_contracts.hpp>
+#include <zlink/Contracts/Sockets/message_socket_contracts.hpp>
+
 #include <atomic>
 #include <cassert>
 #include <chrono>
@@ -41,6 +47,8 @@ using namespace std::chrono_literals;
 
 namespace
 {
+
+mesh::service_node_descriptor_t descriptor (std::string rid);
 
 void verify_mesh_node_role_is_available_before_local_descriptor_publish ()
 {
@@ -279,6 +287,100 @@ void verify_spot_route_fence_admission_precedes_body_decode ()
                                          std::optional<zlink::framework::location_owner_token_t>{}));
 }
 
+void verify_public_host_route_cache_stops_at_owner_admission_deadline ()
+{
+    using namespace zlink::framework;
+    auto store = std::make_shared<runtime::in_memory_location_repository_t> ();
+    const auto owner = std::get<owner_lease_claimed_t> (
+      store->claim_owner_lease ("route-cache-owner", 5s)
+        .result ().value ()).token;
+    mesh_node_descriptor_t location{
+      .mesh_name = "m6b-mesh",
+      .rid = zlink::routing_id_t::from ("route-cache-target"),
+      .lifecycle_generation = 1,
+      .descriptor_revision = 1,
+      .endpoint = "tcp://127.0.0.1:1",
+      .application_version = 1,
+      .object_capabilities =
+        {{.object_kind = placement_object_kind_t::user_spot,
+          .stable_type = "room"}},
+      .object_role = object_role_t::server,
+      .capacity = {.spots = {.limit = 8}},
+      .state = framework_runtime_state_t::serving,
+      .security_identity = "route-cache-test",
+      .owner_id = owner.owner_id,
+      .lease_generation = owner.lease_generation};
+    assert (store->update_mesh_node (
+              location, location_write_intent_t::new_claim)
+              .result ().value ().status
+            == location_write_status_t::stored);
+    const object_reserve_request_t reserve{
+      .key = {placement_object_kind_t::user_spot, "route-cache-spot"},
+      .intent = {.stable_type = "room"},
+      .target = {.mesh_name = location.mesh_name,
+                 .node_rid = node_rid_t::from_string (
+                   location.rid.to_string ()),
+                 .node_lifecycle_generation = location.lifecycle_generation,
+                 .owner = owner},
+      .capacity_bundle = {
+        .spot_slots = 1,
+        .spot_type = spot_type_capacity_delta_t{
+          placement_object_kind_t::user_spot, "room", 1}}};
+    const auto reserved = std::get<object_reserved_t> (
+      store->reserve (reserve).result ().value ());
+    const auto committed = std::get<object_committed_t> (
+      store->commit ({reserve.key, reserved.fence, {std::byte{1}}})
+        .result ().value ());
+
+    host::host_options_t source_options{
+      mesh::raw_mesh_node_options_t{descriptor ("route-cache-source")}};
+    source_options.object_stable_types.insert ("framework.spot");
+    source_options.route_cache_max_age = 10s;
+    source_options.owner_lease_fencing_margin = 3s;
+    auto source = std::make_shared<host::public_host_runtime_t> (
+      std::move (source_options));
+    auto target = std::make_shared<host::public_host_runtime_t> (
+      host::host_options_t{mesh::raw_mesh_node_options_t{
+        descriptor ("route-cache-target")}});
+    source->configure_user_spot_operations (
+      store,
+      [] (const stateful::object_ref_t &, const std::string &,
+          const std::vector<std::byte> &) {
+          return host::user_spot_materialize_result_t{true, std::nullopt};
+      });
+    source->start ();
+    target->start ();
+    assert (source->connect_peer (
+      target->status ().local_endpoint (), target->status ().routing_id ()));
+    const auto noop_dispatch = [] (const host::ready_record_t &,
+                                   const host::receive_record_t &,
+                                   std::vector<zlink::message_t>) {};
+    const auto connect_deadline = std::chrono::steady_clock::now () + 5s;
+    while (!source->transport ().topology ().peer (
+             target->status ().routing_id ().to_bytes ())
+           && std::chrono::steady_clock::now () < connect_deadline) {
+        (void) source->dispatch_ready (noop_dispatch);
+        (void) target->dispatch_ready (noop_dispatch);
+        std::this_thread::sleep_for (1ms);
+    }
+    assert (source->transport ().topology ().peer (
+      target->status ().routing_id ().to_bytes ()));
+
+    auto caller = source->entry_spot ();
+    const auto send = [&] {
+        return caller.send_to_spot (
+          target->status ().routing_id (), reserve.key.global_id,
+          committed.ready.object_generation,
+          {zlink::message_t::from (std::string ("payload"))});
+    };
+    assert (send () == zlink::submit_result_t::ok);
+    std::this_thread::sleep_for (3s);
+    assert (send () == zlink::submit_result_t::not_found);
+
+    source->close ();
+    target->close ();
+}
+
 void verify_entry_spot_identity_claim_is_global_and_fenced ()
 {
     using namespace zlink::framework;
@@ -483,7 +585,7 @@ void verify_self_actor_request_rejected_before_submission ()
     assert (!result);
     assert (
       result.error_kind ()
-      == framework_error_kind_t::not_configured);
+      == framework_error_kind_t::invalid_operation);
     assert (actor_client.request_submissions.load () == 0);
 }
 
@@ -500,7 +602,7 @@ void verify_same_gate_request_rejected_before_submission ()
       },
       [] (bool) {
           return result_t<void>::failure (
-            framework_error_kind_t::not_configured,
+            framework_error_kind_t::invalid_operation,
             "awaited request requires the current Spot execution gate");
       });
 
@@ -508,7 +610,7 @@ void verify_same_gate_request_rejected_before_submission ()
     assert (!result);
     assert (
       result.error_kind ()
-      == framework_error_kind_t::not_configured);
+      == framework_error_kind_t::invalid_operation);
     assert (submissions.load () == 0);
 }
 
@@ -1029,7 +1131,7 @@ void verify_session_binding_and_terminal_once ()
     assert (!sessions.is_current (second_binding));
 
     foundation::operation_registry_t operations (1);
-    foundation::operation_id_t id{};
+    foundation::call_id_t id{};
     id.low = 1;
     std::size_t terminal_count = 0;
     assert (operations.register_operation (
@@ -1252,6 +1354,34 @@ void verify_public_host_dispatches_one_application_record_per_turn ()
     assert (target->transport ().mailbox ().pending_messages (
               mesh::service_mailbox_domain_t::application)
             == 0);
+}
+
+void verify_local_application_enqueue_wakes_dispatch_wait ()
+{
+    auto host = std::make_shared<host::public_host_runtime_t> (
+      host::host_options_t{
+        mesh::raw_mesh_node_options_t{
+          descriptor ("local-dispatch-wake")},
+        "entry", {"framework.spot"}});
+    auto entry = host->entry_spot ();
+    host->start ();
+
+    std::promise<void> waiting_started;
+    auto waiting = waiting_started.get_future ();
+    auto awakened = std::async (std::launch::async, [&] {
+        waiting_started.set_value ();
+        return host->wait_for_dispatch_activity (5s, true);
+    });
+    waiting.wait ();
+    std::this_thread::sleep_for (20ms);
+    assert (entry.publish (
+              "local", "wake",
+              {zlink::message_t::from (std::string ("payload"))})
+            == zlink::submit_result_t::ok);
+    assert (awakened.wait_for (500ms) == std::future_status::ready);
+    assert (awakened.get ());
+
+    host->close ();
 }
 
 void verify_remote_session_route_ack_and_atomic_switch ()
@@ -2157,7 +2287,7 @@ void verify_relocated_source_reply_failure_keeps_terminal_record ()
     target.close ();
 }
 
-void verify_raw_request_survives_remote_admission_race ()
+void verify_node_request_requires_remote_admission ()
 {
     mesh::raw_mesh_node_owner_t source (
       mesh::raw_mesh_node_options_t{descriptor ("request-source")});
@@ -2172,18 +2302,28 @@ void verify_raw_request_survives_remote_admission_race ()
 
     const auto deadline =
       mesh::service_liveness_registry_t::clock_t::now () + 5s;
-    while (!source.topology ().peer (target_descriptor.node_routing_id)
-           && mesh::service_liveness_registry_t::clock_t::now ()
-                < deadline) {
+    // Transport readiness is not service admission. A Node direct request is
+    // rejected until the remote descriptor has completed service admission.
+    assert (!source.request_to_node (
+      target_descriptor.node_routing_id,
+      {"DeferredRequest", "application/json", bytes ("request")}, 2s,
+      [] (foundation::operation_terminal_t,
+          std::vector<std::uint8_t>) {}));
+
+    while ((!source.topology ().peer (target_descriptor.node_routing_id)
+             || !target.topology ().peer (source_descriptor.node_routing_id))
+           && mesh::service_liveness_registry_t::clock_t::now () < deadline) {
         const auto now = mesh::service_liveness_registry_t::clock_t::now ();
         (void) source.drain_monitor_events (now);
         (void) target.drain_monitor_events (now);
-        const auto pumped = source.pump_one (now);
-        assert (pumped != mesh::raw_mesh_pump_result_t::protocol_error);
+        const auto source_pump = source.pump_one (now);
+        const auto target_pump = target.pump_one (now);
+        assert (source_pump != mesh::raw_mesh_pump_result_t::protocol_error);
+        assert (target_pump != mesh::raw_mesh_pump_result_t::protocol_error);
         std::this_thread::sleep_for (1ms);
     }
     assert (source.topology ().peer (target_descriptor.node_routing_id));
-    assert (!target.topology ().peer (source_descriptor.node_routing_id));
+    assert (target.topology ().peer (source_descriptor.node_routing_id));
 
     using request_result_t =
       std::pair<foundation::operation_terminal_t,
@@ -2239,6 +2379,61 @@ void verify_raw_request_survives_remote_admission_race ()
     assert (protocol::decode_application_payload (result.second).payload
             == bytes ("reply"));
     source.close ();
+    target.close ();
+}
+
+void verify_unadmitted_request_queue_overflow_replies_immediately ()
+{
+    mesh::raw_mesh_node_owner_t target (
+      mesh::raw_mesh_node_options_t{descriptor ("overflow-target")});
+    target.start ();
+
+    zlink::context_t context;
+    zlink::dealer_socket_t source (context);
+    source.set_routing_id (zlink::routing_id_t::from ("overflow-source"));
+    source.connect (target.endpoint ());
+    std::this_thread::sleep_for (50ms);
+
+    using native_reply_t = std::vector<zlink::message_t>;
+    std::vector<zlink::async_result_t<native_reply_t>> requests;
+    requests.reserve (1025);
+    const auto payload = protocol::encode_application_payload (
+      {"DeferredRequest", "application/json", bytes ("request")});
+    for (std::uint64_t correlation = 1; correlation <= 1025; ++correlation) {
+        auto header = zlink::message_t::from (
+          protocol::encode_node_request_header (correlation));
+        auto body = zlink::message_t::from (payload);
+        requests.emplace_back (
+          std::move (source.request ().message (header).message (body))
+            .timeout (5s)
+            .async ());
+
+        mesh::raw_mesh_pump_result_t pumped =
+          mesh::raw_mesh_pump_result_t::no_data;
+        const auto deadline = std::chrono::steady_clock::now () + 2s;
+        while (pumped == mesh::raw_mesh_pump_result_t::no_data
+               && std::chrono::steady_clock::now () < deadline) {
+            (void) target.drain_monitor_events (
+              mesh::service_liveness_registry_t::clock_t::now ());
+            pumped = target.pump_one (
+              mesh::service_liveness_registry_t::clock_t::now ());
+        }
+        assert (pumped
+                == (correlation <= 1024
+                      ? mesh::raw_mesh_pump_result_t::application
+                      : mesh::raw_mesh_pump_result_t::backpressured));
+    }
+
+    auto overflow_reply = requests.back ().get ();
+    assert (overflow_reply.size () == 1);
+    const auto reply = protocol::decode_reply_header (
+      overflow_reply.front ().to_bytes ());
+    assert (reply.correlation == 1025);
+    assert (reply.terminal_result == 106);
+    assert (
+      reply.failure_code
+      == static_cast<std::uint32_t> (
+        protocol::framework_error_code::workerQueueFull));
     target.close ();
 }
 
@@ -3832,6 +4027,7 @@ int main ()
     verify_mesh_node_zero_mailbox_budget_uses_framework_defaults ();
     verify_spot_id_contract ();
     verify_spot_route_fence_admission_precedes_body_decode ();
+    verify_public_host_route_cache_stops_at_owner_admission_deadline ();
     verify_entry_spot_identity_claim_is_global_and_fenced ();
     verify_user_spot_execution_mode_registration ();
     verify_self_actor_request_rejected_before_submission ();
@@ -3846,11 +4042,13 @@ int main ()
     verify_bounded_message_follow ();
     verify_bounded_actor_handoff_backlog ();
     verify_public_host_dispatches_one_application_record_per_turn ();
+    verify_local_application_enqueue_wakes_dispatch_wait ();
     verify_remote_session_route_ack_and_atomic_switch ();
     verify_location_store_accepted_record_authority ();
     verify_raw_spot_and_actor_routing ();
     verify_relocated_source_reply_failure_keeps_terminal_record ();
-    verify_raw_request_survives_remote_admission_race ();
+    verify_node_request_requires_remote_admission ();
+    verify_unadmitted_request_queue_overflow_replies_immediately ();
     verify_raw_relocation_replay_and_monotonic_ack ();
     verify_raw_reply_relay_and_exact_source_ack ();
     verify_durable_reply_relay_single_winner ();

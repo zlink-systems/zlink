@@ -26,8 +26,8 @@ export ZLINK_KOTLIN_E2E_LOCATION_HEARTBEAT_MS="${ZLINK_KOTLIN_E2E_LOCATION_HEART
 export ZLINK_KOTLIN_E2E_LOCATION_LEASE_TTL_MS="${ZLINK_KOTLIN_E2E_LOCATION_LEASE_TTL_MS:-3000}"
 export ZLINK_KOTLIN_E2E_LOCATION_POLLING_MS="${ZLINK_KOTLIN_E2E_LOCATION_POLLING_MS:-500}"
 export ZLINK_KOTLIN_E2E_LOCATION_STORE_FAILURE_GRACE_MS="${ZLINK_KOTLIN_E2E_LOCATION_STORE_FAILURE_GRACE_MS:-6000}"
-LOCAL_READINESS_ATTEMPTS=30
-LOCAL_READINESS_POLL_SECONDS=0.1
+LOCAL_READINESS_ATTEMPTS="${ZLINK_KOTLIN_E2E_LOCAL_READINESS_ATTEMPTS:-30}"
+LOCAL_READINESS_POLL_SECONDS="${ZLINK_KOTLIN_E2E_LOCAL_READINESS_POLL_SECONDS:-0.1}"
 
 print_logs() {
   local status="$1"
@@ -380,13 +380,17 @@ start_redis_container
 read -r AH BH CH A B <<<"$(reserve_ports 5)"
 API_A="$(tcp "${A}")"; API_B="$(tcp "${B}")"; CONSUMER_HTTP="$(http "${CH}")"
 start_provider api-a "${API_A}" api-a "$(http "${AH}")"
-start_provider api-b "${API_B}" api-b "$(http "${BH}")"
 start_consumer "consumer-SF-B2" "${CONSUMER_HTTP}"
-sleep 2
-run_client SF-A1 "${CONSUMER_HTTP}" "api-a,api-b" SF-B2-baseline
+run_client SF-A1 "${CONSUMER_HTTP}" "api-a" SF-B2-baseline
 pause_redis_container
-run_client SF-B2 "${CONSUMER_HTTP}" "api-a,api-b"
+sleep "$(( (ZLINK_KOTLIN_E2E_LOCATION_STORE_FAILURE_GRACE_MS + ZLINK_KOTLIN_E2E_LOCATION_HEARTBEAT_MS * 2 + 999) / 1000 ))"
+set +e
+start_provider api-b "${API_B}" api-b "$(http "${BH}")"
+set -e
+API_B_PID="${LAST_PID}"
+run_client SF-B2 "${CONSUMER_HTTP}" "api-a" SF-B2 api-b api-b
 unpause_redis_container
+sleep "$(( (ZLINK_KOTLIN_E2E_LOCATION_HEARTBEAT_MS * 2 + 999) / 1000 ))"
 run_client SF-B2-RECOVERED "${CONSUMER_HTTP}" "api-a,api-b" SF-B2-recovered
 stop_all
 stop_redis_container

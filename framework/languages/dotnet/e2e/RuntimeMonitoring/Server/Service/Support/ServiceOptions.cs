@@ -1,3 +1,5 @@
+using RuntimeMonitoring.Shared;
+
 namespace RuntimeMonitoring.Server.Service.Support;
 
 using Zlink.Framework.E2E.Configuration;
@@ -12,7 +14,10 @@ internal sealed record ServerOptions(
     string? RedisKeyPrefix = null,
     string? ChannelEndpoint = null,
     string? SpotRouterEndpoint = null,
-    string? SpotPubEndpoint = null)
+    string? SpotPubEndpoint = null,
+    string SubjectSpotType = RuntimeMonitoringNames.SubjectSpotType,
+    int SpotLimit = 1,
+    ulong? ApplicationHwmBytes = null)
 {
     public static ServerOptions Parse(string[] args, string defaultRole)
         => E2eConfiguration.Load<ServerOptions>(args) with { Role = defaultRole };

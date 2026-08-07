@@ -517,7 +517,7 @@ async Task AssertServerOnlyProcessCannotRequestAsync()
         "workflow-server-only",
         ChannelEgressNames.Workflow,
         "server-only-request");
-    Require(!serverOnly.Succeeded && serverOnly.Error == "NotFound",
+    Require(!serverOnly.Succeeded && serverOnly.Error == "NotConfigured",
         $"Server-only process unexpectedly started a ClientServer request: {serverOnly.Error}.");
 
     var normal = await InvokeRequestAsync(

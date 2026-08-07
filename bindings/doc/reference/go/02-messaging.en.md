@@ -1,4 +1,4 @@
-[한국어](02-messaging.ko.md) | English
+[한국어](https://zlink-systems.github.io/zlink/ko/bindings/reference/go/02-messaging/) | English
 
 [Reference index](README.en.md)
 

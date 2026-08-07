@@ -47,7 +47,9 @@ inline void run_mon_d1_failure_recovery_scenario (const client_options_t &option
                 "MON-D1 event sequence missing");
         const auto sequence =
           std::stoull (entry.substr (marker + std::string ("|sequence=").size ()));
-        ensure (sequence >= previous,
+        if (sequence == previous)
+            continue; // One observed snapshot can produce several peer records.
+        ensure (sequence > previous,
                 "MON-D1 event sequence moved backwards");
         previous = sequence;
         ++checked;

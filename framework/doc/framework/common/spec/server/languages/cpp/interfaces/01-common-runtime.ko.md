@@ -24,7 +24,7 @@ callback, RAII ownership에 맞게 표현만 바꾼다.
 
 binding 기준은 아래 문서를 따른다.
 
-- [C++ Binding Specification](../../../../../../../../../bindings/doc/spec/cpp/README.en.md)
+- [C++ Binding Specification](../../../../../../../../../bindings/doc/spec/cpp/README.ko.md)
 - [C++ Codec Extension Specification](../../../../../../../../../bindings/doc/spec/cpp/codec.en.md)
 
 framework public API는 `zlink::framework` namespace 아래에 둔다. 설치되는 public header에는
@@ -299,15 +299,15 @@ logical timer registration과 callback metadata만 사용한다.
 
 ### 7.1 Dispatch 오류 계약
 
-Dispatch 실패는 별도 event type을 만들지 않고 [Monitoring §2](08-monitoring.ko.md#2-메시지-흐름-관측)의
-`message_flow_event_t`로
-표현한다. `surface`, `message_kind`, `reason`, `action`의 닫힌 값과 조건부 field 규칙은
-[메시지 흐름 추적 §3~§4](../../../../26-message-flow-tracing.ko.md)이 소유한다.
+Dispatch 실패는 public event type으로 표현하지 않는다. Framework는 application이 구성한 표준 provider에
+structured log·trace·metric을 기록하며 callback observer, error sink와 raw event DTO를 공개하지 않는다.
+Provider 실패는 원래 dispatch 결과를 바꾸지 않는다. 진단 수준의 exact declaration은
+[Monitoring §2](08-monitoring.ko.md#2-메시지-흐름-진단)가 소유한다.
 
 ### 7.2 Dispatch 실행 정책
 
-`handler_execution_t`는 handler 실행 방식을 구분한다. Dispatch 진단, message-flow과 error
-event의 exact declaration은 [Monitoring interface](08-monitoring.ko.md)가 소유한다.
+`handler_execution_t`는 handler 실행 방식을 구분한다. Dispatch와 message-flow 진단 수준의 exact
+declaration은 [Monitoring interface](08-monitoring.ko.md)가 소유한다.
 
 ### 7.3 Worker
 

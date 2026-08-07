@@ -1,29 +1,29 @@
 namespace Zlink.Framework.Runtime.Spots;
 
-internal sealed partial class ZLinkSpotActivation
+internal abstract partial class ZLinkSpotActivation
 {
-    public void AddPacket<THandler>()
+    protected void AddPacketCore<THandler>()
         where THandler : class
     {
         EnsureConfigurationOpen();
         _packets.Add(typeof(THandler));
     }
 
-    public void AddSubscribe<THandler>(string channelName, string topic)
+    protected void AddSubscribeCore<THandler>(string channelName, string topic)
         where THandler : class
     {
         EnsureConfigurationOpen();
         _subscriptions.Add(channelName, topic, typeof(THandler));
     }
 
-    public void AddHandler<THandler>()
+    protected void AddHandlerCore<THandler>()
         where THandler : class
     {
         EnsureConfigurationOpen();
         RequireActorHandlers().AddHandler(typeof(THandler), null);
     }
 
-    public void AddHandler<THandler>(string packetName)
+    protected void AddHandlerCore<THandler>(string packetName)
         where THandler : class
     {
         if (string.IsNullOrWhiteSpace(packetName))
@@ -33,24 +33,24 @@ internal sealed partial class ZLinkSpotActivation
         RequireActorHandlers().AddHandler(typeof(THandler), packetName);
     }
 
-    public void AddActorPacket<THandler, TActor>()
+    protected void AddActorPacketCore<THandler, TActor>()
         where THandler : class
         where TActor : IZLinkActor
     {
-        AddActorPacketCore<THandler, TActor>(null);
+        AddActorPacketRegistrationCore<THandler, TActor>(null);
     }
 
-    public void AddActorPacket<THandler, TActor>(string packetName)
+    protected void AddActorPacketCore<THandler, TActor>(string packetName)
         where THandler : class
         where TActor : IZLinkActor
     {
         if (string.IsNullOrWhiteSpace(packetName))
             throw new InvalidOperationException("Actor packet name must not be empty.");
 
-        AddActorPacketCore<THandler, TActor>(packetName);
+        AddActorPacketRegistrationCore<THandler, TActor>(packetName);
     }
 
-    public void AttachSpot(IZLinkSpot spot)
+    protected void AttachUserSpotCore(IZLinkSpot spot)
     {
         ArgumentNullException.ThrowIfNull(spot);
         if (_spot is not null) throw new InvalidOperationException("SPOT has already been attached to this context.");
@@ -73,7 +73,7 @@ internal sealed partial class ZLinkSpotActivation
             ResolveActorHandlerInstances);
     }
 
-    public void AttachInstanceSpot(IZLinkInstanceSpot spot)
+    protected void AttachInstanceSpotCore(IZLinkInstanceSpot spot)
     {
         ArgumentNullException.ThrowIfNull(spot);
         if (_spot is not null)
@@ -98,17 +98,23 @@ internal sealed partial class ZLinkSpotActivation
         _configurationOpen = false;
 
         _packets.Bind(Spot);
-        if (Spot is IZLinkSpot)
-        {
-            await _subscriptions.BindAsync(
-                    Spot,
-                    NativeSpot,
-                    DefaultRequestTimeout,
-                    cancellationToken)
-                .ConfigureAwait(false);
-            _actorJoins.Bind(Spot);
-            _actorHandlers?.Bind();
-        }
+        await BindKindDescriptorsAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    protected abstract ValueTask BindKindDescriptorsAsync(
+        CancellationToken cancellationToken);
+
+    protected async ValueTask BindUserDescriptorsAsync(
+        CancellationToken cancellationToken)
+    {
+        await _subscriptions.BindAsync(
+                Spot,
+                NativeSpot,
+                DefaultRequestTimeout,
+                cancellationToken)
+            .ConfigureAwait(false);
+        _actorJoins.Bind(Spot);
+        _actorHandlers?.Bind();
     }
 
     internal async ValueTask ApplyScannedHandlerAsync(
@@ -118,15 +124,13 @@ internal sealed partial class ZLinkSpotActivation
         if (handler.SpotType != Spot.GetType()) return;
 
         EnsureConfigurationOpen();
+        ValidateScannedHandlerKind(handler.Kind);
         switch (handler.Kind)
         {
             case ZLinkScannedSpotHandlerKind.Packet:
                 _packets.Add(handler);
                 return;
             case ZLinkScannedSpotHandlerKind.Subscription:
-                if (Spot is IZLinkInstanceSpot)
-                    throw new ZLinkConfigurationException(
-                        $"Instance Spot '{Spot.GetType()}' cannot register subscription handlers.");
                 if (handler.SpotNodeName is not null
                     && !string.Equals(handler.SpotNodeName, SpotNodeName, StringComparison.Ordinal)) return;
                 var topic = handler.Topic
@@ -141,9 +145,6 @@ internal sealed partial class ZLinkSpotActivation
                 return;
             case ZLinkScannedSpotHandlerKind.ActorSend:
             case ZLinkScannedSpotHandlerKind.ActorRequest:
-                if (Spot is IZLinkInstanceSpot)
-                    throw new ZLinkConfigurationException(
-                        $"Instance Spot '{Spot.GetType()}' cannot register Actor handlers.");
                 RequireActorHandlers().AddPacket(
                     handler.HandlerType,
                     handler.ActorType ??
@@ -167,7 +168,10 @@ internal sealed partial class ZLinkSpotActivation
         }
     }
 
-    private void AddActorPacketCore<THandler, TActor>(string? packetName)
+    protected abstract void ValidateScannedHandlerKind(
+        ZLinkScannedSpotHandlerKind kind);
+
+    private void AddActorPacketRegistrationCore<THandler, TActor>(string? packetName)
         where THandler : class
         where TActor : IZLinkActor
     {

@@ -20,7 +20,7 @@ test-only dispatch hooks.
 - Execution-lane separation between I/O workers and CPU workers
 - Combinations of `SpotWide`, `PerActor`, and Actor FIFO
 - Deferred Actor Join registered from a handler
-- Remote topology, Session relay, and timeout/cancellation/Shutdown results
+- Remote topology, Session relay, common timeout/Shutdown, and cancellation only where the exact interface supports it
 - The execution meaning that must be preserved even when the public representation differs per language
 
 ## 2. Deployment Configuration
@@ -198,7 +198,8 @@ the first handler was Yielding?
   delay reply is released, resuming the first continuation.
 - Verification: The first continuation re-reads the current value, 20, and processes based on that
   value. It does not go on using the 10 it read before the Yield.
-- Detailed behavior: verifies [Async Execution Policy §4](../spec/05-async-execution-policy.en.md).
+- Detailed behavior: verifies [Handler Turn And Claim](../spec/05-async-execution-policy.en.md#3-handler-turn-and-claim)
+  and [Gate And Claim On `Yield`](../spec/05-async-execution-policy.en.md#gate-and-claim-on-yield).
 
 #### TD-B4 A Timer Callback Runs While Yield Is Waiting
 
@@ -235,7 +236,7 @@ after them, while waiting on the External API?
   call with Yield. Probe and timer completion are confirmed, then the HTTP reply is released.
 - Verification: The probe and timer finish before the I/O continuation, and the HTTP result is
   included in the original handler's reply.
-- Detailed behavior: verifies the I/O worker in [Async Execution Policy §6](../spec/05-async-execution-policy.en.md).
+- Detailed behavior: verifies the I/O worker in [Worker Offload](../spec/05-async-execution-policy.en.md#12-worker-offload).
 
 #### TD-C2 Waiting On An I/O Worker With Async Keeps The Turn
 
@@ -252,7 +253,7 @@ Async?
   Spot. The HTTP reply is released.
 - Verification: The probe starts only after the I/O handler finishes. It is the worker call's
   terminator, not the External API request itself, that decides the turn.
-- Detailed behavior: verifies [Async Execution Policy §6](../spec/05-async-execution-policy.en.md).
+- Detailed behavior: verifies [Worker Offload](../spec/05-async-execution-policy.en.md#12-worker-offload).
 
 #### TD-C3 Waiting On I/O Does Not Use CPU Worker Capacity
 
@@ -270,7 +271,7 @@ would produce unnecessary capacity errors.
   reached the remote API, the replies are released.
 - Verification: Every operation receives a normal reply, and there is no `CapacityExceeded`. Another
   Spot's probe also completes during the wait.
-- Detailed behavior: verifies worker pool separation in [Async Execution Policy §6](../spec/05-async-execution-policy.en.md).
+- Detailed behavior: verifies CPU execution-slot and I/O-wait separation in [Worker Offload](../spec/05-async-execution-policy.en.md#12-worker-offload).
 
 #### TD-C4 The CPU Worker And The Terminator Role Stay Separate
 
@@ -288,7 +289,7 @@ worker result the same, with only the Spot callback order differing?
 - Verification: The computation result is the same in both variants. In Async, the probe runs after
   the worker handler; in Yield, the probe finishes before the worker continuation. A separate batch
   exceeding the pool limit ends in a bounded, public `CapacityExceeded`.
-- Detailed behavior: verifies [Async Execution Policy §6](../spec/05-async-execution-policy.en.md).
+- Detailed behavior: verifies [Worker Offload](../spec/05-async-execution-policy.en.md#12-worker-offload).
 
 #### TD-C5 CPU Worker Saturation Does Not Block An I/O Worker
 
@@ -305,7 +306,7 @@ pool capacity?
   an I/O worker. The I/O reply is confirmed, then the CPU gate is released.
 - Verification: The I/O operation finishes normally before the CPU gate is released. The CPU
   operations, once the gate is released, each return exactly one terminal.
-- Detailed behavior: verifies execution-resource separation in [Async Execution Policy §6](../spec/05-async-execution-policy.en.md).
+- Detailed behavior: verifies execution-resource separation in [Worker Offload](../spec/05-async-execution-policy.en.md#12-worker-offload).
 
 ### Track D — Distinguish SpotWide From PerActor Lanes
 
@@ -325,7 +326,7 @@ Yield-held?
   Once all finish, A's reply is released.
 - Verification: The B, Spot, and timer evidence all appear before A's continuation, and the callback
   active count within the shared gate never exceeds 1.
-- Detailed behavior: verifies [Async Execution Policy §7](../spec/05-async-execution-policy.en.md).
+- Detailed behavior: verifies [Handler Turn And Claim](../spec/05-async-execution-policy.en.md#3-handler-turn-and-claim).
 
 #### TD-D2 The Same Actor's Next Record Runs After The Yield Continuation
 
@@ -341,7 +342,7 @@ continuation and handler finish?
 - Procedure: A second request is sent to the same Actor, then the first delay reply is released.
 - Verification: The evidence order is `job1-start, job1-yield, job1-resume, job1-end, job2-start`, and
   the Actor handler's active count never exceeds 1.
-- Detailed behavior: verifies [Async Execution Policy §7](../spec/05-async-execution-policy.en.md).
+- Detailed behavior: verifies [Handler Turn And Claim](../spec/05-async-execution-policy.en.md#3-handler-turn-and-claim).
 
 #### TD-D3 Callbacks Do Not Overlap During A Timer Overrun
 
@@ -383,7 +384,7 @@ next request waiting?
   B and timer evidence are confirmed, then A's reply is released.
 - Verification: B and the timers finish before A, and A's second request starts only after the first
   A handler. The active count of the same lane never exceeds 1.
-- Detailed behavior: verifies [Async Execution Policy §8](../spec/05-async-execution-policy.en.md).
+- Detailed behavior: verifies [Handler Turn And Claim](../spec/05-async-execution-policy.en.md#3-handler-turn-and-claim).
 
 #### TD-D5 Reject Yield In An Unsupported Context Before The Operation Is Submitted
 
@@ -418,7 +419,7 @@ structurally complete. The Framework rejects it before submission, without waiti
   variant, are run. For contrast, a self one-way send is also run.
 - Verification: The awaited requests are `InvalidOperation`, with no target handler evidence. The
   one-way send is accepted into the FIFO and processed exactly once, after the current handler.
-- Detailed behavior: verifies [Async Execution Policy §9](../spec/05-async-execution-policy.en.md).
+- Detailed behavior: verifies [Waiting Within The Same Turn](../spec/05-async-execution-policy.en.md#waiting-within-the-same-turn).
 
 ### Track E — Start An Actor Join Registered By A Handler Only After The Terminal
 
@@ -466,19 +467,21 @@ terminal?
 Priority: `P0`
 
 Even if one handler deferred Joins for multiple Actors, if the handler ends in an exception or
-cancellation, every intent that hasn't yet been activated must be discarded.
+an exception, every intent that hasn't yet been activated must be discarded. Languages exposing
+handler cancellation run that variant too.
 
 **Verification question:** Do neither of the two Joins deferred by a failed handler start, keeping
 existing membership?
 
 - Starting condition: Actors A and B are in the source Spot, and the handler defers both Joins in
   turn.
-- Procedure: An exception variant and a cancellation variant are each run on a fresh fixture. After
+- Procedure: Run an exception variant, and run cancellation on a fresh fixture only in languages
+  exposing handler cancellation. After
   the handler terminal, a source Spot request is sent to both Actors.
 - Verification: There is no target/source Join lifecycle callback and no Actor completion callback.
   The public current Spot for both Actors is the source, and follow-up requests are processed
   normally.
-- Detailed behavior: verifies the handler terminal in [Async Execution Policy §10](../spec/05-async-execution-policy.en.md).
+- Detailed behavior: verifies the handler terminal in [Actor Join's Deferred Terminal](../spec/05-async-execution-policy.en.md#31-actor-joins-deferred-terminal).
 
 #### TD-E3 Two Opposite-Direction Local Joins Progress Together
 
@@ -549,8 +552,8 @@ by a bound Session?
   packet and an Actor B packet on the same Session. The delay reply is released.
 - Verification: The B packet is processed during the Yield window, and A's next packet is processed
   after the first A handler finishes.
-- Detailed behavior: verifies [Session Actor Dispatch §6](../spec/20-session-actor-dispatch.en.md#6-failure-handling)
-  and [Async Execution Policy §7](../spec/05-async-execution-policy.en.md).
+- Detailed behavior: verifies [Session Actor Execution And Lifecycle](../spec/20-session-actor-dispatch.en.md#7-execution-and-lifecycle)
+  and [Handler Turn And Claim](../spec/05-async-execution-policy.en.md#3-handler-turn-and-claim).
 
 #### TD-F4 The Spot Turn Is Returned After A Timeout
 
@@ -568,7 +571,7 @@ Even if an awaited request times out, the current turn or shared gate must not r
   a normal reply.
 - Detailed behavior: verifies [Error Model §5](../spec/32-framework-error-model.en.md).
 
-#### TD-F5 The Owner Keeps Being Usable After Waiter Cancellation
+#### TD-F5 The Owner Keeps Being Usable After Waiter Termination
 
 Priority: `P1`
 
@@ -579,11 +582,12 @@ owner's lifecycle.
 cancellation?
 
 - Starting condition: A remote handler accepts a delay request and holds the reply.
-- Procedure: An Async or Yield waiter is ended with a public cancellation, then a new request is sent
+- Procedure: The common variant ends an Async or Yield waiter by deadline or Shutdown; supporting
+  languages additionally use public cancellation. Then a new request is sent
   to the same owner. The remote reply is released last.
-- Verification: The first awaitable returns one language-specific cancellation result. The follow-up
+- Verification: The first awaitable returns exactly one variant terminal. The follow-up
   request receives a normal reply, and the late reply does not complete a new operation.
-- Detailed behavior: verifies [Async Execution Policy §3](../spec/05-async-execution-policy.en.md).
+- Detailed behavior: verifies [Cancellation And Shutdown](../spec/05-async-execution-policy.en.md#4-cancellation-and-shutdown).
 
 #### TD-F5A Start A Host Shutdown While Awaiting
 
@@ -600,7 +604,8 @@ await end in exactly one terminal?
   accepting new work, a new request is sent to the same owner, and the delay reply is released.
 - Verification: The new request is `ShuttingDown`. The existing await ends exactly once, in either a
   reply or a shutdown-deadline result, and the host reaches a bounded terminal state.
-- Detailed behavior: verifies [Graceful Drain §5](../spec/28-graceful-drain-handoff.en.md).
+- Detailed behavior: verifies [Cancellation And Shutdown](../spec/05-async-execution-policy.en.md#4-cancellation-and-shutdown)
+  and [The Race Between Shutdown And Relocate](../spec/28-graceful-drain-handoff.en.md#11-the-race-between-shutdown-and-relocate).
 
 #### TD-F6 Reject A Wait-For Cycle Before The Timeout
 
@@ -617,7 +622,7 @@ request succeeding?
   A.
 - Verification: The self-request is `InvalidOperation`, with no nested target handler evidence. The
   probe receives a normal reply.
-- Detailed behavior: verifies [Async Execution Policy §9](../spec/05-async-execution-policy.en.md).
+- Detailed behavior: verifies [Waiting Within The Same Turn](../spec/05-async-execution-policy.en.md#waiting-within-the-same-turn).
 
 ### Track G — Confirm The Same Execution Meaning Across Languages
 

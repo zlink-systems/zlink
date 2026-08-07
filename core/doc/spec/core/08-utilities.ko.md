@@ -2,7 +2,7 @@
 title: "유틸리티"
 ---
 
-[English](08-utilities.en.md) | 한국어
+[English](https://zlink-systems.github.io/zlink/spec/core/08-utilities/) | 한국어
 
 <!-- zlink-nav:start -->
 [Core 스펙 목차](README.ko.md) | [이전: Monitoring](07-monitoring.ko.md) | [다음: Runtime Boundary](09-runtime-boundary.ko.md)

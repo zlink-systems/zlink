@@ -35,8 +35,9 @@ internal sealed class ZLinkSpotNodeInitializer(
             var hasRouterBind = routerEndpoint is { Length: > 0 };
             if (spotNodeRegistration.Router is { } router)
             {
-                node.SetMaxMessageSize(router.SocketConfig.MaxMessageSize);
                 node.SetRouterHighWaterMark(router.SocketConfig.SendHighWaterMark);
+                node.SetRouterReceiveHighWaterMark(router.SocketConfig.ReceiveHighWaterMark);
+                node.SetRouterReceiveTimeout(router.SocketConfig.ReceiveTimeout);
                 node.SetRouterSendTimeout(
                     router.SocketConfig.SendTimeout
                     ?? registration.DefaultSocketSendTimeout);

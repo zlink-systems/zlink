@@ -47,6 +47,9 @@ internal static class PlayHostFactory
         builder.Services.AddSingleton(new SpotInitializationGate(options.SpotInitializationGateFile));
         builder.Services.AddSingleton(new ActorFactoryGate(options.ActorFactoryGateFile));
         builder.Services.AddSingleton(new ActorCreationRaceGate(options.ActorCreationRaceGateFile));
+        builder.Services.AddSingleton(new InstanceHandlerGate(options.InstanceHandlerGateFile));
+        builder.Services.AddSingleton(
+            new InstanceInitializationGate(options.InstanceInitializationGateFile));
         builder.Services.AddSingleton<EntryIdentity>();
         builder.Services.AddSingleton(new NodeOptions(options.Rid));
         builder.Services.AddSingleton<ApplicationJoinCoordinator>();

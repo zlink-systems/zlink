@@ -56,13 +56,19 @@ and example together.
 
 The exact .NET signature is defined by
 [.NET Topology Public Interface](server/languages/dotnet/interfaces/03-configuration-topology.en.md) and
-[.NET Channel Messaging Public Interface](server/languages/dotnet/interfaces/04-channel-messaging.ko.md).
+[.NET Channel Messaging Public Interface](server/languages/dotnet/interfaces/04-channel-messaging.en.md).
 
 ## 3. Client And Server Roles
 
 One process can register `Client`, `Server`, or both roles on the same
 ClientServer `ChannelName`. The registration key is `(ChannelName, Role)`, and
 `Client` and `Server` are each registered at most once per role.
+
+A ClientServer send or request can start only when the local process registered the Client
+role for that `ChannelName`. Even if the ChannelName and a Server role exist, absence of the
+Client role ends the call with a `NotConfigured` framework error and never directly invokes a
+local handler. `NotFound` is reserved for a missing ChannelName or for the absence of any
+selectable target.
 
 ### 3.1 Role Registration Interface And Example
 

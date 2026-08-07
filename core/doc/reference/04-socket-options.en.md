@@ -1,4 +1,4 @@
-[한국어](04-socket-options.ko.md) | English
+[한국어](https://zlink-systems.github.io/zlink/ko/reference/04-socket-options/) | English
 
 [Reference index](README.en.md)
 

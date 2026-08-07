@@ -222,6 +222,11 @@ template <typename T> concept has_packet_name = requires (T value)
     value.packet_name ("packet");
 };
 
+template <typename T> concept has_timeout = requires (T value)
+{
+    value.timeout (std::chrono::milliseconds (1));
+};
+
 template <typename T> concept has_callback_submit = requires (T value)
 {
     value.submit (std::declval<std::function<
@@ -350,6 +355,10 @@ static_assert (
 static_assert (
   std::is_same_v<decltype (std::declval<zlink::framework::stream_send_call_t &> ().submit ()),
                  zlink::framework::task_t<void>>);
+static_assert (
+  std::is_same_v<decltype (std::declval<zlink::framework::stream_send_call_t &> ().timeout (
+                   std::chrono::milliseconds (1))),
+                 zlink::framework::stream_send_call_t &>);
 static_assert (
   std::is_same_v<decltype (std::declval<zlink::framework::stream_write_call_t &> ().submit ()),
                  zlink::framework::task_t<void>>);
@@ -1067,6 +1076,8 @@ static_assert (std::is_same_v<decltype (std::declval<zlink::framework::stream_wr
 
 static_assert (!has_packet_name<zlink::framework::stream_write_call_t>);
 static_assert (has_packet_name<zlink::framework::stream_send_call_t>);
+static_assert (!has_timeout<zlink::framework::stream_write_call_t>);
+static_assert (has_timeout<zlink::framework::stream_send_call_t>);
 
 static_assert (
   std::is_same_v<decltype (std::declval<zlink::framework::stream_write_call_t &> ().compress ()),
@@ -1215,6 +1226,15 @@ static_assert (
     decltype (std::declval<zlink::framework::http_options_builder_t &> ().configure_server (
       std::declval<std::function<void (zlink::framework::http_server_options_builder_t &)>> ())),
     zlink::framework::http_options_builder_t &>);
+
+template <typename T>
+concept exposes_http_snapshot = requires (T &builder) { builder.snapshot (); };
+
+template <typename T>
+concept exposes_http_validation = requires (T &builder) { builder.validate (); };
+
+static_assert (!exposes_http_snapshot<zlink::framework::http_options_builder_t>);
+static_assert (!exposes_http_validation<zlink::framework::http_options_builder_t>);
 
 static_assert (
   std::is_same_v<decltype (std::declval<zlink::framework::http_server_options_builder_t &> ()

@@ -2,7 +2,7 @@
 
 Kotlin coroutine handlers, call extensions, and generated JVM signatures
 are provided per feature in the
-[exact interface table of contents](interfaces/README.ko.md).
+[exact interface table of contents](interfaces/README.en.md).
 
 - [Channel Messaging](interfaces/channel-messaging.en.md)
 - [Spot](interfaces/spots.en.md)

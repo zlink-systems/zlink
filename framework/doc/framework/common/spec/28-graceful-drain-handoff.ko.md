@@ -881,6 +881,12 @@ descriptor를 `Serving`으로 되돌린다. 모든 변경 취소를 확인해야
 6. Deadline 안에 끝나면 `Stopped/None`, 끝나지 않으면 bounded teardown 뒤
    `ForceStopped/DeadlineExceeded` 또는 `ForceStopped/TeardownFailed`로 끝난다.
 
+Listener와 transport를 정리할 때는 이미 수락한 transport callback과 진행 중인 read·write
+operation을 먼저 완료하거나 취소한다. 특히 TLS·WebSocket resource와 per-connection write
+queue를 파괴하기 전에 소유한 transport 실행 문맥에서 cancellation completion을 관찰해야
+한다. 늦은 callback이 파괴된 resource를 참조하거나 accepted operation을 두 번 terminal로
+만드는 경우는 정상적인 bounded teardown이 아니다.
+
 | 먼저 확정된 operation | 처리 |
 |---|---|
 | `Shutdown`의 admission seal | Target에 확보한 수용 공간을 반환하고 기다리던 Relocate 호출을 `Blocked/ShutdownRequested`로 끝낸다. |

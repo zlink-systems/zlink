@@ -161,7 +161,7 @@ class raw_client_server_client_t
       foundation::operation_registry_t::clock_t::time_point now);
 
   private:
-    static foundation::operation_id_t operation_id (
+    static foundation::call_id_t operation_id (
       std::uint64_t lifecycle_generation,
       std::uint64_t correlation);
 

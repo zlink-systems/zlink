@@ -47,7 +47,11 @@ export interface ZLinkRouteMeshRuntimeCoordinatorOptions {
   readonly rollbackRetiring: (meshName: string, signal: AbortSignal) => Promise<void>;
   readonly publishDraining: (meshName: string, signal: AbortSignal) => Promise<void>;
   readonly publishHostDraining: (signal: AbortSignal) => Promise<void>;
-  readonly drainResources: (meshName: string, signal: AbortSignal) => Promise<void>;
+  readonly drainResources: (
+    meshName: string,
+    signal: AbortSignal,
+    stopStartingSignal?: AbortSignal
+  ) => Promise<void>;
   readonly shutdownResources?: (meshName: string, signal: AbortSignal) => Promise<void>;
   readonly cleanupHostResources: (signal: AbortSignal) => Promise<void>;
   readonly forceStopResources: (meshName: string) => Promise<void>;
@@ -387,7 +391,10 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
    * Relocates stateful resources without closing application transport.
    * Shutdown owns admission sealing, peer/listener teardown and owner cleanup.
    */
-  async relocateHost(deadlineMs: number): Promise<ZLinkMeshDrainResult> {
+  async relocateHost(
+    deadlineMs: number,
+    stopStartingSignal?: AbortSignal
+  ): Promise<ZLinkMeshDrainResult> {
     if (!Number.isFinite(deadlineMs) || deadlineMs <= 0) {
       throw new TypeError('Relocation deadlineMs must be greater than zero.');
     }
@@ -399,7 +406,7 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
     );
     try {
       await Promise.all(entries.map(([meshName]) =>
-        this.options.drainResources(meshName, deadline.signal)));
+        this.options.drainResources(meshName, deadline.signal, stopStartingSignal)));
       this.hostRetiringPrepared = false;
       return { kind: 'drained' };
     } catch (error) {

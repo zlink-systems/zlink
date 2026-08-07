@@ -4,7 +4,7 @@ title: "STREAM Server Session"
 
 # STREAM Server Session
 
-[Spec table of contents](README.en.md) · [Previous: Spot/Actor Routing](18-object-routing.ko.md) · [Next: Session-Actor Dispatch](20-session-actor-dispatch.en.md)
+[Spec table of contents](README.en.md) · [Previous: Spot/Actor Routing](18-object-routing.en.md) · [Next: Session-Actor Dispatch](20-session-actor-dispatch.en.md)
 
 > **What this chapter defines** — the public contract for a server-side STREAM
 > session, the execution unit keeping packet processing and request correlation
@@ -19,7 +19,7 @@ codec, and error boundary. The client-side contract is defined by the
 [Stream Connector Common Spec](stream-connector/32-stream-connector.en.md), and
 the two documents share the same wire contract. Per-language types and
 signatures are fixed by the STREAM documents in the
-[per-language Server interface table of contents](server/languages/README.ko.md).
+[per-language Server interface table of contents](server/languages/README.en.md).
 
 ## 1. Purpose
 
@@ -125,6 +125,16 @@ so it doesn't satisfy the framework contract. The framework doesn't read a new
 packet while queue admission is failing, doesn't drop an already-received
 packet, and doesn't redeliver the same packet to the callback.
 
+### 4.1 Transport Operation Teardown Boundary
+
+When a physical stream starts closing, the framework stops new packet admission
+and completes or cancels in-flight read and write operations on their owning
+transport execution context. That completion or cancellation must be observed
+before destroying the TCP, TLS, or WebSocket socket, stream, or session
+resources. A late transport callback must not access a resource that has
+already been cleaned up, complete one operation twice, or start the next
+operation twice.
+
 ## 5. Codec Layer Separation
 
 The framework's basic surface only provides session, session context, stream,
@@ -179,7 +189,8 @@ public interface IZLinkStreamNodeBuilder
     IZLinkStreamNodeBuilder Bind(int port = 0);
     IZLinkStreamNodeBuilder SetBindHost(string bindHost);
     IZLinkStreamNodeBuilder SetAdvertiseHost(string advertiseHost);
-    IZLinkSocketConfig ConfigureSocket();
+    IZLinkStreamNodeBuilder MaxMessageSize(long bytes);
+    IZLinkStreamSocketConfig ConfigureSocket();
     IZLinkStreamNodeBuilder SetTlsServer(
         string certificatePath,
         string keyPath,
@@ -195,7 +206,7 @@ options
     .Bind(7400)
     .SetBindHost("0.0.0.0")
     .SetAdvertiseHost("node-a.example.net")
-    .ConfigureSocket().MaxMessageSize = 64 * 1024; // default cap for complete STREAM messages received from client to server.
+    .MaxMessageSize(64 * 1024) // default cap for complete STREAM messages received from client to server.
     .SetTlsServer(
         "server.crt",
         "server.key",
@@ -203,7 +214,7 @@ options
     .AddSession<GatewaySession>(); // registers the single session type this node uses.
 ```
 
-`ConfigureSocket().MaxMessageSize` is this StreamNode's Core STREAM inbound option. Its
+`MaxMessageSize(long bytes)` is this StreamNode's Core STREAM inbound option. Its
 default is `64 KiB`; a complete message is measured as header bytes plus payload bytes,
 excluding the 6-byte prefix. The cap applies only to messages received from client to
 server, not to messages sent from server to client. `0` maps to Core `-1`, meaning no

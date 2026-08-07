@@ -22,15 +22,14 @@ export class ZLinkMessage<TValue = unknown> {
     if (this.encoded === undefined) {
       return this.value as T;
     }
-    const encoded = this.encoded.data();
-    if (encoded.length === 0) {
+    if (this.encoded.isEmpty()) {
       return undefined as T;
     }
     const decoder = runtimeDecoders.get(this);
     if (decoder !== undefined) {
       return decoder(type);
     }
-    const text = Buffer.from(encoded).toString('utf8');
+    const text = this.encoded.getString('utf8');
     try {
       return JSON.parse(text) as T;
     } catch {

@@ -19,7 +19,7 @@ evidence로 검증한다. Scheduler thread ID, private queue와 test-only dispat
 - I/O worker와 CPU worker의 execution lane 분리
 - `SpotWide`, `PerActor`와 Actor FIFO의 조합
 - Handler에서 등록한 deferred Actor Join
-- Remote topology, Session relay, timeout·cancellation·Shutdown 결과
+- Remote topology, Session relay, 공통 timeout·Shutdown과 exact interface가 지원하는 cancellation 결과
 - 언어별 public 표현이 달라도 유지해야 하는 실행 의미
 
 ## 2. 배포 구성
@@ -183,7 +183,8 @@ Yield 전에 읽은 Spot 상태는 다른 callback이 바꿀 수 있다. “Lost
   continuation을 재개한다.
 - 검증: 첫 continuation은 current value 20을 다시 읽고 그 값을 기준으로 처리한다. Yield 전에 읽은 10을
   그대로 쓰지 않는다.
-- 세부 동작: [비동기 실행 정책 §4](../spec/05-async-execution-policy.ko.md)을
+- 세부 동작: [Handler turn과 claim](../spec/05-async-execution-policy.ko.md#3-handler-turn과-claim)과
+  [`Yield` 시 gate와 claim](../spec/05-async-execution-policy.ko.md#yield-시-gate와-claim)을
   검증한다.
 
 #### TD-B4 Yield 대기 중 timer callback을 실행한다
@@ -216,7 +217,7 @@ Yield는 shared Spot gate를 반납하므로 due timer가 remote request 대기 
 - 절차: Spot handler가 `RunIoWorker`에서 HTTP request를 시작하고 worker call을 Yield로 기다린다. Probe와
   timer 완료를 확인한 뒤 HTTP reply를 해제한다.
 - 검증: Probe와 timer가 I/O continuation보다 먼저 완료되고 HTTP 결과가 원래 handler reply에 포함된다.
-- 세부 동작: [비동기 실행 정책 §6](../spec/05-async-execution-policy.ko.md)의 I/O worker를
+- 세부 동작: [Worker offload](../spec/05-async-execution-policy.ko.md#12-worker-offload)의 I/O worker를
   검증한다.
 
 #### TD-C2 I/O worker를 Async로 기다리면 turn을 유지한다
@@ -233,7 +234,7 @@ Worker 종류가 turn 의미를 자동으로 정하지 않는다. 같은 I/O wor
   해제한다.
 - 검증: I/O handler가 완료된 뒤 probe가 시작된다. External API request 자체가 아니라 worker call의
   terminator가 turn을 결정한다.
-- 세부 동작: [비동기 실행 정책 §6](../spec/05-async-execution-policy.ko.md)를 검증한다.
+- 세부 동작: [Worker offload](../spec/05-async-execution-policy.ko.md#12-worker-offload)를 검증한다.
 
 #### TD-C3 I/O 대기가 CPU worker capacity를 사용하지 않는다
 
@@ -250,7 +251,7 @@ Worker 종류가 turn 의미를 자동으로 정하지 않는다. 같은 I/O wor
   확인한 뒤 reply를 해제한다.
 - 검증: 모든 operation이 정상 reply를 하나씩 받고 `CapacityExceeded`가 없다. 다른 Spot probe도 대기
   중에 완료된다.
-- 세부 동작: [비동기 실행 정책 §6](../spec/05-async-execution-policy.ko.md)의 worker pool 분리를
+- 세부 동작: [Worker offload](../spec/05-async-execution-policy.ko.md#12-worker-offload)의 CPU execution slot과 I/O wait 분리를
   검증한다.
 
 #### TD-C4 CPU worker와 terminator 역할을 분리한다
@@ -267,7 +268,7 @@ CPU worker는 계산을 bounded pool로 옮기지만 같은 Spot의 진행 여�
 - 검증: 두 variant의 계산 결과는 같다. Async에서는 worker handler 뒤 probe가 실행되고 Yield에서는
   probe가 worker continuation보다 먼저 완료된다. Pool limit을 넘긴 별도 batch는 public
   `CapacityExceeded`로 bounded하게 끝난다.
-- 세부 동작: [비동기 실행 정책 §6](../spec/05-async-execution-policy.ko.md)를 검증한다.
+- 세부 동작: [Worker offload](../spec/05-async-execution-policy.ko.md#12-worker-offload)를 검증한다.
 
 #### TD-C5 CPU worker saturation이 I/O worker를 막지 않는다
 
@@ -282,7 +283,7 @@ CPU pool과 비동기 I/O 실행이 같은 제한을 공유하면 CPU 계산이 
   I/O reply를 확인한 후 CPU gate를 해제한다.
 - 검증: I/O operation은 CPU gate 해제 전에 정상 완료한다. CPU operation도 gate 해제 뒤 각자 terminal을
   하나만 반환한다.
-- 세부 동작: [비동기 실행 정책 §6](../spec/05-async-execution-policy.ko.md)의 실행 자원 분리를
+- 세부 동작: [Worker offload](../spec/05-async-execution-policy.ko.md#12-worker-offload)의 실행 자원 분리를
   검증한다.
 
 ### Track D — SpotWide와 PerActor lane을 구분
@@ -301,7 +302,7 @@ Member Actor의 Yield는 User Spot의 shared gate만 반납한다. 따라서 다
   reply를 해제한다.
 - 검증: B, Spot과 timer evidence가 A continuation보다 먼저 나타나며 callback active count는 shared gate
   안에서 1을 넘지 않는다.
-- 세부 동작: [비동기 실행 정책 §7](../spec/05-async-execution-policy.ko.md)을
+- 세부 동작: [Handler turn과 claim](../spec/05-async-execution-policy.ko.md#3-handler-turn과-claim)을
   검증한다.
 
 #### TD-D2 같은 Actor의 다음 record는 Yield continuation 뒤 실행한다
@@ -317,7 +318,7 @@ Actor가 Yield해도 자기 FIFO claim은 유지한다. 같은 Actor의 다음 m
 - 절차: 같은 Actor로 두 번째 request를 보낸 뒤 첫 delay reply를 해제한다.
 - 검증: Evidence는 `job1-start, job1-yield, job1-resume, job1-end, job2-start` 순서이며 Actor handler
   active count는 1을 넘지 않는다.
-- 세부 동작: [비동기 실행 정책 §7](../spec/05-async-execution-policy.ko.md)을
+- 세부 동작: [Handler turn과 claim](../spec/05-async-execution-policy.ko.md#3-handler-turn과-claim)을
   검증한다.
 
 #### TD-D3 Timer overrun 중 callback을 겹쳐 실행하지 않는다
@@ -356,7 +357,7 @@ timer lane은 진행해야 한다.
   B와 timer evidence를 확인한 뒤 A reply를 해제한다.
 - 검증: B와 timers는 A보다 먼저 완료되고 A의 두 번째 request는 첫 A handler 뒤 시작한다. 같은 lane의
   active count는 1을 넘지 않는다.
-- 세부 동작: [비동기 실행 정책 §8](../spec/05-async-execution-policy.ko.md)을
+- 세부 동작: [Handler turn과 claim](../spec/05-async-execution-policy.ko.md#3-handler-turn과-claim)을
   검증한다.
 
 #### TD-D5 지원하지 않는 문맥의 Yield를 operation 제출 전에 거부한다
@@ -389,7 +390,7 @@ Yield는 shared gate를 반납할 수 있는 `SpotWide` User Spot과 Instance Sp
   one-way send도 실행한다.
 - 검증: Awaited requests는 `InvalidOperation`이고 target handler evidence가 없다. One-way send는 FIFO에
   수락되어 current handler 뒤 한 번 처리된다.
-- 세부 동작: [비동기 실행 정책 §9](../spec/05-async-execution-policy.ko.md)를
+- 세부 동작: [같은 turn에서의 대기](../spec/05-async-execution-policy.ko.md#같은-turn에서의-대기)를
   검증한다.
 
 ### Track E — Handler가 등록한 Actor Join을 terminal 뒤 시작
@@ -433,17 +434,17 @@ Source Spot의 execution mode가 달라도 Defer는 handler terminal까지 Actor
 
 우선순위: `P0`
 
-한 handler가 여러 Actor의 Join을 defer했더라도 handler가 exception 또는 cancellation으로 끝나면 아직
+한 handler가 여러 Actor의 Join을 defer했더라도 handler가 exception으로 끝나면 아직
 활성화하지 않은 intent를 모두 버려야 한다.
 
 **검증 질문:** 실패한 handler가 defer한 두 Join이 모두 시작되지 않고 기존 membership을 유지하는가.
 
 - 시작 조건: Source Spot에 Actor A와 B가 있고 handler가 두 Join을 차례로 defer한다.
-- 절차: Exception variant와 cancellation variant를 각각 fresh fixture에서 실행한다. Handler terminal 뒤
+- 절차: Exception variant를 실행하고, handler cancellation 표면이 있는 언어만 cancellation variant를 fresh fixture에서 실행한다. Handler terminal 뒤
   두 Actor에게 source Spot request를 보낸다.
 - 검증: Target·source Join lifecycle callback과 Actor completion callback이 없다. Public current Spot은
   두 Actor 모두 source이며 후속 request를 정상 처리한다.
-- 세부 동작: [비동기 실행 정책 §10](../spec/05-async-execution-policy.ko.md)의
+- 세부 동작: [Actor Join의 deferred terminal](../spec/05-async-execution-policy.ko.md#31-actor-join의-deferred-terminal)의
   handler terminal을 검증한다.
 
 #### TD-E3 반대 방향 local Join 두 개를 함께 진행한다
@@ -506,8 +507,8 @@ Actor packet이 Stream Session relay로 들어와도 Actor mailbox와 Spot gate 
 - 절차: Client가 relay packet을 보내 A handler를 Yield-held로 만든 뒤 같은 Session에서 A의 다음 packet과
   Actor B packet을 보낸다. Delay reply를 해제한다.
 - 검증: B packet은 Yield 구간에 처리되고 A의 다음 packet은 첫 A handler 완료 뒤 처리된다.
-- 세부 동작: [Session Actor dispatch §6](../spec/20-session-actor-dispatch.ko.md)와
-  [비동기 실행 정책 §7](../spec/05-async-execution-policy.ko.md)을 검증한다.
+- 세부 동작: [Session Actor execution과 lifecycle](../spec/20-session-actor-dispatch.ko.md#7-execution과-lifecycle)과
+  [Handler turn과 claim](../spec/05-async-execution-policy.ko.md#3-handler-turn과-claim)을 검증한다.
 
 #### TD-F4 Timeout 뒤 Spot turn을 반환한다
 
@@ -523,7 +524,7 @@ Awaited request가 timeout되어도 현재 turn이나 shared gate가 계속 잠�
 - 검증: 두 variant는 `DeadlineExceeded` terminal 하나로 끝나고 probe는 정상 reply를 받는다.
 - 세부 동작: [오류 모델 §5](../spec/32-framework-error-model.ko.md)를 검증한다.
 
-#### TD-F5 Waiter cancellation 뒤 owner를 계속 사용한다
+#### TD-F5 Waiter 종료 뒤 owner를 계속 사용한다
 
 우선순위: `P1`
 
@@ -533,11 +534,12 @@ Caller가 await를 취소하는 것은 이미 remote에 수락된 operation이�
 **검증 질문:** Waiter cancellation 뒤 같은 Spot·Actor의 새 request가 정상 처리되는가.
 
 - 시작 조건: Remote handler가 delay request를 수락하고 reply를 보류한다.
-- 절차: Async 또는 Yield waiter를 public cancellation으로 끝낸 뒤 같은 owner에 새 request를 보낸다.
+- 절차: 공통 variant는 deadline 또는 Shutdown으로 waiter를 끝내고, 지원 언어만 public cancellation을
+  별도 실행한 뒤 같은 owner에 새 request를 보낸다.
   마지막으로 remote reply를 해제한다.
-- 검증: 첫 awaitable은 언어별 cancellation 결과 하나를 반환한다. Follow-up request는 정상 reply를 받고
+- 검증: 첫 awaitable은 variant의 terminal 하나를 반환한다. Follow-up request는 정상 reply를 받고
   late reply가 새 operation을 완료하지 않는다.
-- 세부 동작: [비동기 실행 정책 §3](../spec/05-async-execution-policy.ko.md)을
+- 세부 동작: [Cancellation과 shutdown](../spec/05-async-execution-policy.ko.md#4-cancellation과-shutdown)을
   검증한다.
 
 #### TD-F5A Await 중 Host Shutdown을 시작한다
@@ -553,7 +555,8 @@ Shutdown은 신규 admission을 닫고 이미 수락한 callback을 host deadlin
   owner에 새 request를 보내고 delay reply를 해제한다.
 - 검증: 신규 request는 `ShuttingDown`이다. 기존 await는 reply 또는 shutdown deadline 결과 중 하나로 한
   번만 끝나며 Host는 bounded terminal state가 된다.
-- 세부 동작: [Graceful drain §5](../spec/28-graceful-drain-handoff.ko.md)을 검증한다.
+- 세부 동작: [Cancellation과 shutdown](../spec/05-async-execution-policy.ko.md#4-cancellation과-shutdown)과
+  [Shutdown과 Relocate의 경쟁](../spec/28-graceful-drain-handoff.ko.md#11-shutdown과-relocate의-경쟁)을 검증한다.
 
 #### TD-F6 Wait-for cycle을 timeout 전에 거부한다
 
@@ -567,7 +570,7 @@ Shutdown은 신규 admission을 닫고 이미 수락한 callback을 host deadlin
 - 절차: Self-request Async variant를 실행한 뒤 별도 caller가 A에 probe request를 보낸다.
 - 검증: Self-request는 `InvalidOperation`이고 nested target handler evidence가 없다. Probe는 정상 reply를
   받는다.
-- 세부 동작: [비동기 실행 정책 §9](../spec/05-async-execution-policy.ko.md)를
+- 세부 동작: [같은 turn에서의 대기](../spec/05-async-execution-policy.ko.md#같은-turn에서의-대기)를
   검증한다.
 
 ### Track G — 언어 사이에서 같은 실행 의미를 확인

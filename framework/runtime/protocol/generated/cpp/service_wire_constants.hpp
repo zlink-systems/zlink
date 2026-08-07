@@ -87,6 +87,78 @@ enum class framework_error_code : std::uint32_t {
     spotMoving = 34,
     relocationDataLost = 35,
 };
+enum class request_terminal_result : std::uint32_t {
+    ok = 0,
+    timedOut = 101,
+    notFound = 102,
+    terminated = 103,
+    protocolError = 104,
+    internalError = 105,
+    rejected = 106,
+    conflict = 107,
+    busy = 108,
+    notConnected = 109,
+    invalidArgument = 110,
+    invalidState = 111,
+    notSupported = 112,
+    backpressured = 113,
+};
+inline constexpr bool valid_terminal_failure(
+  std::uint32_t terminal, framework_error_code failure) noexcept
+{
+    const auto result = static_cast<request_terminal_result>(terminal);
+    if (result == request_terminal_result::ok)
+        return failure == framework_error_code::none;
+    switch (result) {
+        case request_terminal_result::timedOut:
+        case request_terminal_result::terminated:
+        case request_terminal_result::busy:
+        case request_terminal_result::notConnected:
+        case request_terminal_result::invalidArgument:
+        case request_terminal_result::invalidState:
+        case request_terminal_result::notSupported:
+        case request_terminal_result::backpressured:
+            return failure == framework_error_code::none;
+        default:
+            break;
+    }
+    if (failure == framework_error_code::none)
+        return false;
+    switch (failure) {
+        case framework_error_code::actorRouteNotFound:
+        case framework_error_code::spotRouteNotFound:
+        case framework_error_code::actorSessionNotBound:
+        case framework_error_code::handlerNotFound:
+        case framework_error_code::routeHandlerNotFound:
+        case framework_error_code::actorDispatchHandlerNotFound:
+        case framework_error_code::requestTargetNotFound:
+            return terminal == static_cast<std::uint32_t>(request_terminal_result::notFound);
+        case framework_error_code::actorCreateFailed:
+        case framework_error_code::spotCreateFailed:
+        case framework_error_code::routeNotConnected:
+        case framework_error_code::requestFailed:
+        case framework_error_code::workerTimedOut:
+        case framework_error_code::workerFailed:
+        case framework_error_code::relocationDataLost:
+            return terminal == static_cast<std::uint32_t>(request_terminal_result::internalError);
+        case framework_error_code::actorAlreadyExists:
+        case framework_error_code::actorTypeMismatch:
+        case framework_error_code::spotTypeMismatch:
+        case framework_error_code::actorLocationStale:
+        case framework_error_code::spotGenerationStale:
+        case framework_error_code::spotMoving:
+            return terminal == static_cast<std::uint32_t>(request_terminal_result::conflict);
+        case framework_error_code::payloadDecodeFailed:
+        case framework_error_code::requestProtocolError:
+            return terminal == static_cast<std::uint32_t>(request_terminal_result::protocolError);
+        case framework_error_code::requestRejected:
+        case framework_error_code::workerQueueFull:
+        case framework_error_code::actorCreateRejected:
+            return terminal == static_cast<std::uint32_t>(request_terminal_result::rejected);
+        default:
+            return false;
+    }
+}
 inline constexpr std::uint64_t ridBytes = 255ULL;
 inline constexpr std::uint64_t shortTextBytes = 255ULL;
 inline constexpr std::uint64_t endpointBytes = 4096ULL;

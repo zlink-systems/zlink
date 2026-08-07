@@ -122,7 +122,7 @@ topic이다.
 | `ZLinkFrameworkRuntime` · `ZLinkFrameworkRuntimeStatus` | host 상태 |
 | `ZLinkRouteMeshRuntime` · `ZLinkRouteMeshStatus` | MeshNode 상태 |
 | `ZLinkDispatchOptionsBuilder` · `ZLinkMessageFlowLogMode` | 진단 수준 |
-| `ZLinkMessageFlowObserver` | 흐름 기록 |
+| Application logger/telemetry provider | 메시지 흐름과 dispatch error structured record 수신 |
 | `ZLinkFrameworkException` | 실패. `kind` · `isRetriable` |
 | `ZLinkFrameworkErrorKind` | 실패 갈래 |
 

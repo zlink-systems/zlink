@@ -7,7 +7,7 @@
 #include "runtime/dispatch/receive_batch_budget.hpp"
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/client_server/raw_client_server_owner.hpp"
-#include "runtime/eventing/runtime_wake_pipe.hpp"
+#include "runtime/eventing/runtime_wake_timer.hpp"
 #include "runtime/locations/location_runtime.hpp"
 
 #include <zlink/framework/contracts/channels/channel.hpp>
@@ -153,7 +153,7 @@ class client_server_location_runtime_t final : public client_server_runtime_t
     std::vector<server_entry_t *> _server_pump_snapshot;
     std::vector<std::shared_ptr<raw_client_server_client_t>> _client_pump_snapshot;
     std::unique_ptr<zlink::poller_t> _transport_poller;
-    eventing::runtime_wake_pipe_t _wake_pipe;
+    eventing::runtime_wake_timer_t _wake_timer;
     std::atomic_bool _stop{false};
     std::mutex _descriptor_publish_mutex;
     std::condition_variable _descriptor_publish_changed;

@@ -1,4 +1,4 @@
-[한국어](10-xsub.ko.md) | English
+[한국어](https://zlink-systems.github.io/zlink/ko/reference/10-xsub/) | English
 
 [Reference index](README.en.md)
 

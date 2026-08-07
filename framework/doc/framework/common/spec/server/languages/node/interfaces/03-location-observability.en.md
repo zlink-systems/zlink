@@ -75,6 +75,14 @@ export interface ZLinkLocationRuntimeQuery {
     page?: ZLinkPageRequest,
     signal?: AbortSignal
   ): Promise<ZLinkLocationPage<ZLinkLocationServiceSummary>>;
+  findActorLocation(
+    actorId: ActorId,
+    signal?: AbortSignal
+  ): Promise<ZLinkLocationObjectEntry | undefined>;
+  findSpotLocation(
+    spotId: SpotId,
+    signal?: AbortSignal
+  ): Promise<ZLinkLocationObjectEntry | undefined>;
   listObjectLocations(
     filter: ZLinkLocationObjectFilter,
     page?: ZLinkPageRequest,
@@ -82,7 +90,7 @@ export interface ZLinkLocationRuntimeQuery {
   ): Promise<ZLinkLocationPage<ZLinkLocationObjectEntry>>;
 }
 
-export type ZLinkLocationObjectState = 'creating' | 'ready';
+export type ZLinkLocationObjectState = 'creating' | 'ready' | 'unavailable';
 
 export interface ZLinkLocationObjectEntry {
   readonly globalId: string;
@@ -138,7 +146,14 @@ export interface ZLinkLocationReadiness {
 ```
 
 Spot and Actor location queries are public operations for operational tools.
-They take a filter and a page, and return at most `1..1000` items per page.
+An exact lookup returns `undefined` for Missing, a `creating` entry for Creating,
+a `ready` entry for Ready, and an `unavailable` entry when the current owner is
+unavailable after commit. Spot exact lookup treats User Spot and Instance Spot
+under the same Spot-ID lookup contract. A list requires `objectKind`, and takes
+`stableType` and `meshName` as optional filters. A page contains `1..1000` items,
+its encoded size is at most 4 MiB, and its continuation token is an opaque value
+issued by the query. A Store query failure rejects the whole operation with
+`ZLinkFrameworkErrorKind.Unavailable` and does not return a partial page.
 The result is not an application-message target list or a placement input.
 Route storage row queries, storage keys, `ZLinkLocationAutoConnectType`, watch
 store, and change stamps remain runtime-internal contracts.
@@ -265,11 +280,17 @@ export interface ZLinkInboundDispatchStatus {
 
 export interface ZLinkFrameworkRuntime {
   readonly status: ZLinkFrameworkRuntimeStatus;
+  diagnosticsLevel: ZLinkMessageFlowLogMode;
   observe(signal?: AbortSignal): AsyncIterable<ZLinkObservedStatus<ZLinkFrameworkRuntimeStatus>>;
   relocate(options: ZLinkFrameworkRelocationOptions): Promise<ZLinkFrameworkRelocationResult>;
   shutdown(options?: ZLinkFrameworkLifecycleOptions): Promise<ZLinkFrameworkTerminationResult>;
 }
 ```
+
+Reading `diagnosticsLevel` returns the process's current diagnostics level;
+changing it applies the new level starting at later message-processing
+boundaries. The change is atomic and does not wait for message processing or
+retroactively change records already in the telemetry queue.
 
 If `relocate(options)` succeeds, the runtime becomes `Relocated` state,
 and process and infrastructure connections are kept. The caller can

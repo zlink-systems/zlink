@@ -1,4 +1,4 @@
-[한국어](04-errno-map.ko.md) | English
+[한국어](https://zlink-systems.github.io/zlink/ko/spec/core/04-errno-map/) | English
 
 [Specification index](../README.en.md) · [Core index](README.en.md) · [Errors and result enums](03-errors.en.md)
 

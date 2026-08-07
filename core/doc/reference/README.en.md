@@ -1,4 +1,4 @@
-[한국어](README.ko.md) | English
+[한국어](https://zlink-systems.github.io/zlink/ko/reference/) | English
 
 [Core specification](../spec/core/README.en.md) · [Core guide](../guide/01-overview.en.md)
 

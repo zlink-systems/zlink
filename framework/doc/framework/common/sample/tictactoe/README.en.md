@@ -25,11 +25,20 @@ confirms the Wins 100 milestone, and it sends `LeaveGameMsg`. The following feat
 - Automatic peer discovery and a service registry
 - A feature that lets a spectator change game state
 - Automatic crash failover after a room owner failure
+- Planned relocation of the Player Actor and Room Spot
 - A global leaderboard across multiple rooms
+
+Both the Player Actor and Room Spot factories select `DisableRelocation`. Planned relocation isn't
+a completion criterion, so no Relocation Store is registered.
 
 The manual endpoint isn't a value that decides object placement. The API doesn't choose a specific
 Play process or NodeRid — the Framework resolves the RoomId's current owner from the Location
 Store.
+
+The manual endpoint supplies only connection intent. When the Framework matches that endpoint to a
+Location Store descriptor to complete an object peer, it carries the descriptor's RID, lifecycle
+generation, and security identity into the handshake's expected values. A path that passes only the
+endpoint and RID, using generation `0` or treating the RID as the security identity, is not allowed.
 
 ## 2. Requirements
 
@@ -426,7 +435,8 @@ announcing an already-decided value.
 ### 7.4 Disconnect And Destroy
 
 A STREAM disconnect cleans up the current binding but doesn't immediately destroy the Actor and Room
-membership. Once the client confirms the final GameState and sends `LeaveGameMsg`, the Room Spot
+membership. The client opens a new STREAM connection, authenticates, looks up the existing Actor,
+binds its exact ActorRef, and confirms the existing GameState. It then sends `LeaveGameMsg`; the Room Spot
 moves the actor to the Entry Spot and calls `destroyActor` on the Entry Spot context. This call
 leaves destroy evidence. `destroyActor` doesn't call `onLeaveActor` or another lifecycle callback —
 it cleans up the native actor ref, framework registry, and bound session binding. Destroy is
@@ -441,6 +451,11 @@ sequenceDiagram
 
     C->>P: STREAM disconnect
     P->>P: framework binding cleanup
+    C->>P: new STREAM connection
+    C->>P: authenticate
+    P->>P: lookup existing Actor
+    P->>P: bind exact ActorRef
+    P-->>C: confirm existing GameState
     C->>P: LeaveGameMsg
     P->>R: leave actor
     R->>E: actor joins Entry Spot
@@ -535,9 +550,9 @@ responsibility.
 7. After the host wins at Wins=99, confirm the observer's `WinMilestoneNotify` has Wins=100, RoomId,
    and ActorId.
 8. Confirm a wrong turn, an occupied cell, and a request to a finished room end in an error.
-9. Confirm the actor isn't immediately destroyed after a stream disconnect, and re-authenticating
-   uses the same state.
-10. After the final state, send `LeaveGameMsg` and confirm Entry Spot destroy evidence.
+9. Confirm the actor isn't immediately destroyed after a stream disconnect.
+10. Open a new STREAM connection, authenticate, bind the existing Actor's exact ActorRef, and confirm
+    the same GameState. Then send `LeaveGameMsg` and confirm Entry Spot destroy evidence.
 11. Confirm the response and push contain no NodeRid, ActorRef, or endpoint route.
 12. Waiting for a push uses the connector's public wait interface and a bounded timeout.
 

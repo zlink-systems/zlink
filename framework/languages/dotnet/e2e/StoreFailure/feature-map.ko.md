@@ -25,6 +25,7 @@
 | SF-C3 | 미구현 | Stale owner lease token과 generation fencing |
 | SF-C4 | 미구현 | Host lease와 여러 routing slot |
 | SF-C5 | 미구현 | Bounded descriptor reconcile |
+| SF-C5A | 미구현 | Object 상태를 구분하는 ID·page query와 Store 조회 실패 처리 |
 | SF-F1 | 미구현 | 언어 간 authority key·payload interop |
 | SF-F2 | 미구현 | Current relocation renew과 orphan 정리 |
 | SF-F3 | 미구현 | Relocation recovery horizon 초과 |

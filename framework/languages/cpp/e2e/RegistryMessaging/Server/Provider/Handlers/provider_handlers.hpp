@@ -22,6 +22,10 @@ class profile_request_handler_t
 
     profile_res_t handle (const profile_req_t &request)
     {
+        if (request.value == "rm-b3-inflight") {
+            _state.record ("ProfileReqStarted", request.value);
+            std::this_thread::sleep_for (std::chrono::seconds (10));
+        }
         if (request.value == "slow") {
             std::this_thread::sleep_for (std::chrono::seconds (1));
         } else if (request.value == "very-slow") {

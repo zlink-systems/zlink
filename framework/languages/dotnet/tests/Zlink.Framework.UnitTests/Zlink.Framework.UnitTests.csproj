@@ -70,7 +70,6 @@
         <Compile Include="Runtime/ClientServerChannelRuntimeTests.cs"/>
         <Compile Include="Runtime/CapacityMonitoringProjectionTests.cs"/>
         <Compile Include="Runtime/CustomSerializerEnvelopeTests.cs"/>
-        <Compile Include="Runtime/DiagnosticsIsolationCollection.cs"/>
         <Compile Include="Runtime/DrainCoordinatorTests.cs"/>
         <Compile Include="Runtime/Dispatch/InboundDispatchBudgetTests.cs"/>
         <Compile Include="Runtime/Dispatch/CompletionAdmissionOwnerTests.cs"/>
@@ -84,6 +83,7 @@
         <Compile Include="Runtime/ExactMessageFlowRuntimeTests.cs"/>
         <Compile Include="Runtime/FlowCorrelationTests.cs"/>
         <Compile Include="Runtime/GeneratedNodeIdentityTests.cs"/>
+        <Compile Include="Runtime/FrameworkJsonProfileTests.cs"/>
         <Compile Include="Runtime/HandlerResultAwaiterTests.cs"/>
         <Compile Include="Runtime/HttpExecutionSchedulerTests.cs"/>
         <Compile Include="Runtime/InMemoryLocationStoreTests.cs"/>

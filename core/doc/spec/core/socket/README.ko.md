@@ -2,7 +2,7 @@
 title: "소켓 — 공통 명세"
 ---
 
-[English](README.en.md) | 한국어
+[English](https://zlink-systems.github.io/zlink/spec/core/socket/) | 한국어
 
 <!-- zlink-nav:start -->
 [Core 스펙 목차](../README.ko.md) | [이전: Runtime Boundary](../09-runtime-boundary.ko.md) | [다음: PAIR](01-pair.ko.md)

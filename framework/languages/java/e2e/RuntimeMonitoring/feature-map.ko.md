@@ -19,7 +19,7 @@ operation은 Trigger와 Service role이 실행한다.
 | MON-B1 | 부분 구현 | zero-target publish를 실제로 시작한 뒤 public snapshot·event에 publish 전용 필드가 없고, public record와 runtime class file에 제거한 type·metric·event 이름이 없음을 검사한다. | 막힌 remote target이 있어도 시작 뒤 정상 완료하며 rollback·자동 재시도가 없음을 process E2E에서 추가로 확인한다. |
 | MON-B2 | 부분 구현 | local subscriber를 만든 뒤 publish하고 public snapshot·event에 publish 전용 관측값이 없음을 검사한다. | subscriber handler의 단일 처리와 막힌 local target, message-flow trace의 target별 결과 부재를 추가로 확인한다. |
 | MON-C1 | 구현 | `logs/20260806-013629-2464166/`에서 느린 observer callback을 해제하지 않은 동안 `svc-b` 재기동과 별도 Channel request를 완료하고, normal observer 진행(`normal-events=5`)과 public snapshot resync(`sequence=994`)를 확인했다. | 없음 |
-| MON-A6 | 차단 | `logs/20260806-013551-2459907/client.stderr.log`에서 public `ZLinkSpotManager` create endpoint가 반환한 뒤, `ZLinkRouteMeshRuntime.snapshot(...).placement.activeSpotCount`가 생성 전후 모두 `0`이어서 중단됐다. | current public placement projection이 live actor/Spot count를 publish해야 한다. 최신 작업 범위는 core/runtime 수정 금지이므로 Java fixture에서 count를 만들 수 없다. |
+| MON-A6 | 구현 | public placement projection이 Location Store descriptor의 초기 `active=0`만 반환하던 gap을 확인했다. Java runtime projection이 descriptor limit과 runtime owner의 live Actor·User Spot count를 결합하도록 수정했고, opaque provider authority에 pending·active capacity ledger와 조건부 전이를 추가했다. Actor selector의 capacity exhaustion 결과도 public `CAPACITY_EXCEEDED`로 수렴하도록 수정했다. | `./run_e2e.sh MON-A6` 통과: active count, Spot·Actor limit 초과, 두 capacity 해제 뒤 availability 회복, replacement와 cleanup을 확인했다. |
 | MON-D1A | 구현 | 등록하지 않은 MeshName 조회가 public runtime endpoint에서 configuration error로 끝나고 기존 Mesh 상태에는 영향을 주지 않는다. | 없음 |
 | MON-D1B | 구현 | 동일 observer에서 peer crash와 restart를 세 번 반복하고 각 cycle의 ready 수렴과 replacement request를 확인한다. | 없음 |
 
@@ -39,6 +39,6 @@ MON-B1·MON-B2 실행 결과는 제거된 target별 publish 집계를 검증했�
 사용하지 않는다. 표에서 `부분 구현`, `10.0.0 전환 대상` 또는 `11.0.0 전환 대상`으로 남긴
 항목은 공통 Config7의 세부 gate를 모두 단언하지 않으므로 완료 증거로 사용하지 않는다.
 
-## 공통 scenario parity gap — 2026-08-06
+## 공통 scenario parity 확인 — 2026-08-06
 
-- `MON-A6`은 Java public manager로 실제 생성까지 실행했지만 public placement snapshot의 count가 갱신되지 않아 차단됐다. 위 실행 로그가 현재 구현과 공통 계약의 차이를 기록한다.
+- `MON-A6`은 Java public manager로 실제 생성·초과·삭제·replacement를 실행했고, active count와 `IsAvailable`이 공통 계약과 일치하는 것을 확인했다.

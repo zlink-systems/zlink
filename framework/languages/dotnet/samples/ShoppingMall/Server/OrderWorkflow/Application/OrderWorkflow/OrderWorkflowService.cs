@@ -17,7 +17,7 @@ internal sealed class OrderWorkflowService(
     {
         var stored = await events.ReadAsync(command.OrderId, cancellationToken);
         var aggregate = OrderAggregate.Rehydrate(stored.Select(static item => item.Decode()));
-        if (aggregate.HasProcessedMsg(command.IdempotencyKey))
+        if (aggregate.HasProcessedSourceCommand(command.SourceCommandId))
         {
             await commerce.MarkIdempotencyStartedAsync(command.IdempotencyKey, cancellationToken);
             return OrderContractMapper.ToContract(
@@ -26,7 +26,7 @@ internal sealed class OrderWorkflowService(
 
         var now = NowUnixMs();
         var started = aggregate.Start(
-            command.IdempotencyKey,
+            command.SourceCommandId,
             command.OrderId,
             command.CartId,
             command.ShippingAddressId,
@@ -64,7 +64,9 @@ internal sealed class OrderWorkflowService(
         {
             try
             {
-                await ContinueAsync(new ContinueOrderWorkflowReq(orderId), CancellationToken.None)
+                await ContinueAsync(
+                        new ContinueOrderWorkflowReq(orderId, $"continue:{orderId}"),
+                        CancellationToken.None)
                     .ConfigureAwait(false);
                 return;
             }
@@ -74,7 +76,9 @@ internal sealed class OrderWorkflowService(
             }
         }
 
-        await ContinueAsync(new ContinueOrderWorkflowReq(orderId), CancellationToken.None)
+        await ContinueAsync(
+                new ContinueOrderWorkflowReq(orderId, $"continue:{orderId}"),
+                CancellationToken.None)
             .ConfigureAwait(false);
     }
 

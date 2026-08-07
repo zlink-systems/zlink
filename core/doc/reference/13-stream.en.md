@@ -1,4 +1,4 @@
-[한국어](13-stream.ko.md) | English
+[한국어](https://zlink-systems.github.io/zlink/ko/reference/13-stream/) | English
 
 [Reference index](README.en.md)
 

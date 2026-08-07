@@ -334,14 +334,16 @@ export class ZLinkChannelRuntimeManager {
     packetName: string | undefined,
     message: unknown,
     signal?: AbortSignal,
-    metadata?: ReadonlyMap<string, string>
+    metadata?: ReadonlyMap<string, string>,
+    timeoutMs?: number
   ): Promise<void> {
     return this.spotRoutes.routeSendToSpot(
       spotRouteTarget,
       packetName,
       message,
       signal,
-      metadata
+      metadata,
+      timeoutMs
     );
   }
 

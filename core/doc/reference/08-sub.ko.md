@@ -1,4 +1,4 @@
-한국어 | [English](08-sub.en.md)
+한국어 | [English](https://zlink-systems.github.io/zlink/reference/08-sub/)
 
 [레퍼런스 목차](README.ko.md)
 

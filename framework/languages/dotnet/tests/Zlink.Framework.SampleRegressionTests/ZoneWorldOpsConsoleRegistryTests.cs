@@ -167,6 +167,7 @@ public sealed class ZoneWorldOpsConsoleRegistryTests
         public IZLinkSessionSendCall Metadata(string key, string value) => this;
         public IZLinkSessionSendCall Metadata(ZLinkMessageMetadata metadata) => this;
         public IZLinkSessionSendCall Compress() => this;
+        public IZLinkSessionSendCall Timeout(TimeSpan timeout) => this;
         public ValueTask Async(CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();

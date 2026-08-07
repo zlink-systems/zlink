@@ -208,7 +208,7 @@ wait_port session-object-route "$(port_of "$SUPPORTCHAT_SESSION_SPOT_ROUTER")"
 wait_port support-object-route "$(port_of "$SUPPORTCHAT_SUPPORT_SPOT_ROUTER")"
 wait_port support-http "$(port_of "$SUPPORTCHAT_SUPPORT_HTTP_URL")"
 
-"$BIN_DIR/sample_cpp_framework_supportchat_client" --stream-endpoint "$SUPPORTCHAT_SESSION_STREAM" >"$LOG_DIR/client.log" 2>&1 || {
+"$BIN_DIR/sample_cpp_framework_supportchat_client" --stream-endpoint "$SUPPORTCHAT_SESSION_STREAM" --support-http-url "$SUPPORTCHAT_SUPPORT_HTTP_URL" >"$LOG_DIR/client.log" 2>&1 || {
   dump_logs
   exit 1
 }
@@ -217,7 +217,9 @@ grep -q "supportchat authentication=verified" "$LOG_DIR/client.log"
 grep -q "supportchat conversation-assignment=verified" "$LOG_DIR/client.log"
 grep -q "supportchat bound-push=verified" "$LOG_DIR/client.log"
 grep -q "supportchat reconnect=verified" "$LOG_DIR/client.log"
+grep -q "supportchat idle-resume=verified" "$LOG_DIR/client.log"
 grep -q "supportchat idle-close=verified" "$LOG_DIR/client.log"
+grep -q "supportchat closed-typing-ignore=verified" "$LOG_DIR/client.log"
 grep -q "supportchat=completed" "$LOG_DIR/client.log"
 grep -Rq "message flow" "$FLOW_LOG_DIR"
 grep -q "message flow" "$FLOW_LOG_DIR/flow-api.log"

@@ -21,7 +21,7 @@ import {
   type ZLinkRuntimeMessageFlowEvent
 } from '../../contracts/Dispatch/ZLinkDispatchOptions';
 import type { ZLinkDispatchErrorSink } from './dispatch-error-port';
-import { currentOrCreateFlow } from './flow-context';
+import { currentFlowContext, currentOrCreateFlow } from './flow-context';
 import {
   getDispatchObserverType,
   getRuntimeErrorSinkType
@@ -116,6 +116,7 @@ export class ZLinkMessageFlowTracer {
   private observerRunning = false;
   private readonly observerQueue: ZLinkMessageFlowEvent[] = [];
   private observerQueueHead = 0;
+  private readonly modeByFlow = new WeakMap<object, ZLinkMessageFlowLogMode>();
 
   constructor(
     private readonly ctx: ZLinkDiagnosticsContext,
@@ -125,7 +126,11 @@ export class ZLinkMessageFlowTracer {
   ) {}
 
   enabled(outcome: ZLinkMessageFlowOutcome): boolean {
-    return MESSAGE_FLOW_MODE_RANK[effectiveMessageFlow(this.ctx)] >= MESSAGE_FLOW_MODE_RANK[requiredMode(outcome)];
+    const ambient = currentFlowContext();
+    const mode = ambient === undefined
+      ? effectiveMessageFlow(this.ctx)
+      : this.modeByFlow.get(ambient) ?? effectiveMessageFlow(this.ctx);
+    return MESSAGE_FLOW_MODE_RANK[mode] >= MESSAGE_FLOW_MODE_RANK[requiredMode(outcome)];
   }
 
   accepts(outcome: ZLinkMessageFlowOutcome): boolean {
@@ -141,7 +146,15 @@ export class ZLinkMessageFlowTracer {
     readonly flowId?: string;
     readonly flowOrigin?: import('../../contracts').ZLinkFlowOrigin;
   }, defaultLogLevel: 'error' | 'warn' | 'debug' = 'error'): void {
-    const traceEnabled = this.enabled(flowInput.outcome);
+    const ambient = currentFlowContext();
+    const effectiveMode = flowInput.effectiveMode
+      ?? (ambient === undefined ? undefined : this.modeByFlow.get(ambient))
+      ?? effectiveMessageFlow(this.ctx);
+    if (ambient !== undefined && !this.modeByFlow.has(ambient)) {
+      this.modeByFlow.set(ambient, effectiveMode);
+    }
+    const traceEnabled = MESSAGE_FLOW_MODE_RANK[effectiveMode]
+      >= MESSAGE_FLOW_MODE_RANK[requiredMode(flowInput.outcome)];
     if (!traceEnabled && this.ctx.messageFlowObserverType === undefined) {
       return;
     }
@@ -151,7 +164,7 @@ export class ZLinkMessageFlowTracer {
     const flow: ZLinkRuntimeMessageFlowEvent = {
       ...flowInput,
       ...root,
-      effectiveMode: flowInput.effectiveMode ?? effectiveMessageFlow(this.ctx)
+      effectiveMode
     };
     if (traceEnabled && (
       flow.outcome === ZLinkMessageFlowOutcome.Dropped

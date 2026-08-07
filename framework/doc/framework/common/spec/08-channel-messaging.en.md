@@ -4,7 +4,7 @@ title: "Channel Messaging"
 
 # Channel Messaging
 
-[Spec table of contents](README.en.md) · [Previous: RouteMesh Topology](07-channel-topology.ko.md) · [Next: ClientServer Channel](09-client-server-channel.ko.md)
+[Spec table of contents](README.en.md) · [Previous: RouteMesh Topology](07-channel-topology.en.md) · [Next: ClientServer Channel](09-client-server-channel.en.md)
 
 > **What this chapter defines** — the common contract for Node direct, which sends
 > to a specific MeshNode, and Channel messaging, which selects one Server by
@@ -29,7 +29,7 @@ ChannelName isn't a socket or endpoint name. It's a logical address for finding
 one RouteMesh or ClientServer send path registered in the current process.
 
 Physical connection and [membership](01-glossary.en.md#membership) are defined by
-[Channel Topology](07-channel-topology.ko.md); payload and metadata by
+[Channel Topology](07-channel-topology.en.md); payload and metadata by
 [Message Model](04-message-model.en.md); completion and execution order by
 [Async Execution Policy](05-async-execution-policy.en.md).
 
@@ -39,7 +39,7 @@ The C# code below is a reference showing how the common contract appears in the
 .NET public API. It doesn't require the same signature in other languages.
 
 The exact .NET signature is defined by
-[.NET Channel Messaging Public Interface](server/languages/dotnet/interfaces/04-channel-messaging.ko.md).
+[.NET Channel Messaging Public Interface](server/languages/dotnet/interfaces/04-channel-messaging.en.md).
 
 ```csharp
 public interface IZLinkRouteClient
@@ -165,7 +165,7 @@ selections from piling onto one candidate.** With two candidates A and B at
 weight `100` and `300`, four consecutive calls give `B, A, B, B` (assuming A's
 identifier comes first) — not a pile-up like `A, B, B, B`. Candidates with equal
 weight are selected alternately, so this also satisfies
-[ClientServer Channel](09-client-server-channel.ko.md)'s rotation requirement.
+[ClientServer Channel](09-client-server-channel.en.md)'s rotation requirement.
 
 The same candidate list and accumulator state always produce the same order. The
 application can rely on this reproducibility.
@@ -184,7 +184,7 @@ timeout, correlation, and reply handling isn't provided.
 This local-candidate rule only applies to a ClientServer path. On a RouteMesh
 path, the sending MeshNode itself isn't a candidate even if it registered the
 Server role for the same ChannelName. This is because a RouteMesh candidate is
-the Server membership [10 Channel Topology](07-channel-topology.ko.md) §4.2
+the Server membership [10 Channel Topology](07-channel-topology.en.md) §4.2
 publishes to the descriptor, and that set only represents membership that can be
 a remote target — a MeshNode doesn't form a peer connection with itself.
 Selection sends to the chosen target over the existing RouteMesh peer connection
@@ -331,7 +331,7 @@ runs `BillingHandler`. Sending the same packet name via Node direct runs
 
 The code above is a .NET expression showing the contract for readability. The
 exact full signature is defined by
-[.NET Channel Messaging Interface](server/languages/dotnet/interfaces/04-channel-messaging.ko.md) and
+[.NET Channel Messaging Interface](server/languages/dotnet/interfaces/04-channel-messaging.en.md) and
 [.NET Configuration Interface](server/languages/dotnet/interfaces/03-configuration-topology.en.md).
 
 ### 5.1 Information Provided To The Handler Context
@@ -427,7 +427,7 @@ handler isn't run, and it isn't published to message-flow observation, which
 records application message delivery flow either. The byte format of this
 [liveness beacon](01-glossary.en.md#liveness-beacon) and the time criterion for
 judging a connection lost are defined by
-[Transport Liveness](29-transport-liveness.ko.md).
+[Transport Liveness](29-transport-liveness.en.md).
 
 A Spot's Channel-scoped [Logical Multicast](01-glossary.en.md#logical-multicast)
 is defined by [20 Spot Messaging](12-spot-messaging.en.md).
@@ -497,7 +497,7 @@ setter. So this document's Node direct/ChannelName application metadata
 contract doesn't apply to Classic fanout publish.
 
 The exact full signature is defined by
-[.NET Channel Messaging Interface](server/languages/dotnet/interfaces/04-channel-messaging.ko.md) and
+[.NET Channel Messaging Interface](server/languages/dotnet/interfaces/04-channel-messaging.en.md) and
 [.NET Configuration Interface](server/languages/dotnet/interfaces/03-configuration-topology.en.md).
 
 ## 7. Failure And Termination
@@ -617,7 +617,7 @@ frame. Detailed ownership and delivery rules are defined by
 [Message Model](04-message-model.en.md).
 
 The exact .NET signature is defined by
-[.NET Common Runtime Interface](server/languages/dotnet/interfaces/01-common-runtime.ko.md) and
+[.NET Common Runtime Interface](server/languages/dotnet/interfaces/01-common-runtime.en.md) and
 [.NET Configuration Interface](server/languages/dotnet/interfaces/03-configuration-topology.en.md).
 
 ### 8.2 Observability Information

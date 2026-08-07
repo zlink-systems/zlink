@@ -9,9 +9,9 @@ directly.
 > The interface catalog and exact-interface documents linked below stay Korean-only. Following
 > those links lands on Korean content.
 
-- [Guide 13. Key-type usage index](../guide/server/13-interface-catalog.ko.md) — the tutorial
+- [Guide 13. Key-type usage index](../guide/server/13-interface-catalog.en.md) — the tutorial
   angle.
-- [C++ exact interface](../../common/spec/server/languages/cpp/interfaces/README.ko.md) —
+- [C++ exact interface](../../common/spec/server/languages/cpp/interfaces/README.en.md) —
   the document that owns the contract text itself.
 - **This reference** — collects only "what you must know to complete this one call."
 

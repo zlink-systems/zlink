@@ -1620,7 +1620,7 @@ server는 `EMSGSIZE`를 기록하고 연결을 종료한다. raw client에는 �
 | 항목 | 내용 |
 |---|---|
 | 형태 | Byte-size configuration limit |
-| .NET 표기 | 일반 socket은 `long MaxMessageSize`, StreamNode는 `ConfigureSocket().MaxMessageSize`다. |
+| .NET 표기 | 일반 socket은 `long MaxMessageSize`, StreamNode builder는 `MaxMessageSize(long bytes)`다. |
 | 공개 구성 | Listener가 소유한 socket의 complete message에 적용한다. 일반 socket의 `0`은 binding 또는 transport 기본값을 사용하고, StreamNode의 `0`은 Core `-1`로 변환한다. |
 | 생성·관리 | Application이 startup 전에 해당 listener 또는 StreamNode socket option에 지정한다. |
 | 수명 | Listener lifecycle 동안 고정되며 StreamNode 값은 startup 뒤 바뀌지 않는다. StreamNode 전용 상한은 ClientServer listener와 RouteMesh SS transport에 추가하지 않으며, ClientServer는 일반 application listener 규칙을 유지한다. |

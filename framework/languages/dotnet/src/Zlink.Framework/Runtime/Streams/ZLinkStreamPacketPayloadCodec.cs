@@ -1,5 +1,4 @@
 using System.Text;
-using System.Text.Json;
 
 namespace Zlink.Framework.Runtime.Streams;
 
@@ -51,7 +50,7 @@ internal static class ZLinkStreamPacketPayloadCodec
         }
 
         if (header.Codec == ZlinkStreamCodec.Json)
-            return JsonSerializer.Deserialize(payload.Span, messageType, ZLinkJsonSerializerOptions.Default);
+            return ZLinkFrameworkJsonPayloadCodec.Deserialize(payload.Span, messageType);
 
         if (codecs.TryResolveStreamContentType(header.Codec, out var contentType))
         {

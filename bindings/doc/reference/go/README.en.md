@@ -1,4 +1,4 @@
-[한국어](README.ko.md) | English
+[한국어](https://zlink-systems.github.io/zlink/ko/bindings/reference/go/) | English
 
 [Go binding spec](../../spec/go/README.en.md) · [Go binding guide](../../guide/go/index.en.md)
 

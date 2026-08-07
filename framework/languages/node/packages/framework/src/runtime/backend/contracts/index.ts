@@ -80,6 +80,16 @@ export interface ZLinkBackendMeshNode {
     messageKind: 'send',
     reason: 'backpressure'
   ) => void): void;
+  setMailboxRecordDroppedHandler?(handler: (record: {
+    readonly kind: 'spot_multicast' | 'actor_control' | 'actor_binding';
+    readonly owner: string;
+  }) => void): void;
+  setProtocolErrorHandler?(handler: (record: {
+    readonly sourceNodeRid: string;
+    readonly request: boolean;
+    readonly replied: boolean;
+    readonly command?: number;
+  }) => void): void;
   setMessageFollowHandler?(handler: (
     record: import('../../foundation/service-stateful-wire-codec').ServiceMessageFollowRecord
   ) => void): void;
@@ -101,6 +111,7 @@ export interface ZLinkBackendMeshNode {
     readonly activeCapacityLimit: number;
     readonly pendingCapacityLimit: number;
     readonly objectCapabilities: readonly string[];
+    readonly maintenanceWave?: string;
   }): void;
   selectObjectPlacement(stableType: string): ZLinkBackendObjectPlacement;
   instanceSpotPlacementTypes?(): readonly string[];
@@ -187,6 +198,7 @@ export interface ZLinkBackendMeshNode {
     readonly descriptorRevision: bigint;
     readonly endpoint: string;
   }[]): void;
+  onPeerDisconnected?(handler: (endpoint: string) => void): void;
   expectPeer?(peer: {
     readonly nodeRoutingId: string;
     readonly endpoint: string;

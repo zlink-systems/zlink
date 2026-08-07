@@ -407,9 +407,11 @@ internal static class StormClientWorker
         IZLinkRouteMeshRuntime runtime)
     {
         var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(30);
+        ZLinkRouteMeshStatus? lastStatus = null;
         while (DateTimeOffset.UtcNow < deadline)
         {
             var status = runtime.GetStatus(ResilienceLifecycleNames.Channel);
+            lastStatus = status;
             var channel = status.Channels.FirstOrDefault(static candidate =>
                 candidate.ChannelName == ResilienceLifecycleNames.Channel);
             var peer = status.Peers
@@ -427,7 +429,19 @@ internal static class StormClientWorker
             await Task.Delay(100);
         }
 
-        throw new TimeoutException("Storm worker did not observe provider api-b ready.");
+        var lastChannel = lastStatus?.Channels.FirstOrDefault(static candidate =>
+            candidate.ChannelName == ResilienceLifecycleNames.Channel);
+        var providerPeers = lastStatus is null
+            ? "<none>"
+            : string.Join(",", lastStatus.Peers
+                .Where(static candidate => IsProviderRid(candidate.NodeRid))
+                .Select(static candidate => $"{candidate.NodeRid}:{candidate.State}"));
+        throw new TimeoutException(
+            $"Storm worker did not observe provider api-b ready. "
+            + $"statusState={lastStatus?.State},statusReady={lastStatus?.IsReady},"
+            + $"statusSequence={lastStatus?.Sequence},readyPeers={lastStatus?.ReadyPeerCount},"
+            + $"providerPeers={providerPeers},channelReady={lastChannel?.IsReady},"
+            + $"channelReadyTargets={lastChannel?.ReadyTargetCount}");
     }
 
     private static bool IsProviderRid(RoutingId nodeRid)

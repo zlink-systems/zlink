@@ -177,6 +177,8 @@ internal class FileReleaseGate(string? releaseFile)
         new(TaskCreationOptions.RunContinuationsAsynchronously);
     private int _monitorStarted;
 
+    internal bool Enabled => !string.IsNullOrWhiteSpace(releaseFile);
+
     public ValueTask WaitForMessageAsync(CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(releaseFile))
@@ -205,6 +207,10 @@ internal sealed class BackpressureGate(string? releaseFile) : FileReleaseGate(re
 internal sealed class SpotInitializationGate(string? releaseFile) : FileReleaseGate(releaseFile);
 
 internal sealed class ActorFactoryGate(string? releaseFile) : FileReleaseGate(releaseFile);
+
+internal sealed class InstanceHandlerGate(string? releaseFile) : FileReleaseGate(releaseFile);
+
+internal sealed class InstanceInitializationGate(string? releaseFile) : FileReleaseGate(releaseFile);
 
 internal sealed class ActorCreationRaceGate(string? gateFile)
 {
@@ -258,6 +264,8 @@ internal sealed record ServerOptions(
     string? SpotInitializationGateFile = null,
     string? ActorFactoryGateFile = null,
     string? ActorCreationRaceGateFile = null,
+    string? InstanceHandlerGateFile = null,
+    string? InstanceInitializationGateFile = null,
     string? B10Mode = null)
 {
     public static ServerOptions Parse(string[] args, string defaultRole)

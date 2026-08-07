@@ -376,7 +376,7 @@ app.add_zlink_framework ([&](zlink::framework::zlink_framework_options_t &option
 
     // 시작 시 사용할 message-flow 관측 수준을 설정한다.
     options.configure_dispatch().message_flow(
-      zlink::framework::message_flow_log_mode_t::errors_only);
+      zlink::framework::message_flow_log_mode_t::errors);
 
     options.handlers()
       .group("api")
@@ -499,8 +499,6 @@ public:
     http_options_builder_t &map_health(std::string path);
     http_options_builder_t &map_readiness(std::string path);
     http_options_builder_t &map_liveness(std::string path);
-    const http_options_snapshot_t &snapshot() const noexcept;
-    void validate() const;
 };
 
 struct http_context_t {
@@ -628,6 +626,9 @@ public:
 } // namespace zlink::framework
 ```
 
+`http_options_builder_t`의 snapshot 생성과 validation 실행은 host startup 내부 책임이며 public
+interface가 아니다. application은 위 builder method로만 HTTP 설정을 구성한다.
+
 Location runtime을 사용하는 application은 `add_location_store(...)`로 Location Store를 정확히 하나 등록한다.
 `RecreateOnRelocation` 또는 `PreserveStateWith` factory가 하나라도 있거나 Instance Spot factory가 하나라도 있으면
 `add_relocation_store(...)`로 Relocation Store도 정확히 하나 등록한다. [Instance Spot](../../../../01-glossary.ko.md#entry-spot-user-spot과-instance-spot) factory가 없고
@@ -668,23 +669,9 @@ app.add_zlink_framework([&](auto &options) {
 });
 ```
 
-HTTP handler는 message handler와 같은 type alias 규칙을 사용한다.
-
-```cpp
-class create_game_http_handler_t {
-public:
-    using request_type = create_game_http_req_t;
-    using reply_type = create_game_http_res_t;
-    using dependency_types =
-      dependency_list_t<request_client_t, logger_t<create_game_http_handler_t>>;
-
-    explicit create_game_http_handler_t(
-      request_client_t &client,
-      logger_t<create_game_http_handler_t> &logger);
-
-    task_t<create_game_http_res_t> handle(const create_game_http_req_t &request);
-};
-```
+HTTP handler의 type alias, DI constructor와 `handle(...)` shape declaration은
+[C++ HTTP hosting의 Handler signature 형식](../60-http-hosting.ko.md#3-handler-signature-형식)이
+정본이다. 이 exact interface 문서는 같은 application handler class를 다시 선언하지 않는다.
 
 `map_get<THandler>(...)`, `map_post<THandler>(...)`, `map_put<THandler>(...)`,
 `map_delete<THandler>(...)`는 handler type을 DI에 등록하고, `request_type`과
@@ -692,46 +679,9 @@ public:
 연결한다. request마다 DI scope를 만들고 handler를 resolve한다. handler가 반환한 DTO는
 JSON response body가 되고, 기본 status는 `200 OK`다.
 
-HTTP handler는 아래 shape를 모두 지원한다.
-
-- typed DTO: `reply_type handle(const request_type &request)`
-- typed DTO async: `task_t<reply_type> handle(const request_type &request)`
-- typed DTO + context:
-  `reply_type handle(const request_type &request, http_context_t &context)`
-- typed DTO + context async:
-  `task_t<reply_type> handle(const request_type &request, http_context_t &context)`
-- typed DTO + request:
-  `reply_type handle(const request_type &request, const http_request_t &http)`
-- typed DTO + request async:
-  `task_t<reply_type> handle(const request_type &request, const http_request_t &http)`
-- typed DTO + request + context:
-  `reply_type handle(const request_type &request, const http_request_t &http, http_context_t &context)`
-- typed DTO + request + context async:
-  `task_t<reply_type> handle(const request_type &request, const http_request_t &http, http_context_t &context)`
-- typed response: `http_response_t handle(const request_type &request)`
-- typed response + context:
-  `http_response_t handle(const request_type &request, http_context_t &context)`
-- typed response async: `task_t<http_response_t> handle(const request_type &request)`
-- typed response + context async:
-  `task_t<http_response_t> handle(const request_type &request, http_context_t &context)`
-- typed response + request:
-  `http_response_t handle(const request_type &request, const http_request_t &http)`
-- typed response + request async:
-  `task_t<http_response_t> handle(const request_type &request, const http_request_t &http)`
-- typed response + request + context:
-  `http_response_t handle(const request_type &request, const http_request_t &http, http_context_t &context)`
-- typed response + request + context async:
-  `task_t<http_response_t> handle(const request_type &request, const http_request_t &http, http_context_t &context)`
-- raw HTTP request: `http_response_t handle(const http_request_t &request)`
-- raw HTTP request async: `task_t<http_response_t> handle(const http_request_t &request)`
-
 `http_request_t`와 `http_response_t`는 framework public type이다. Raw HTTP handler도
 `Boost.Beast` request, socket, SSL stream을 받지 않는다. `map_*<THandler>(...)`는 handler
-shape를 compile-time으로 판별한다. typed route에서 여러 overload가 있으면 반환 타입보다
-인자 shape를 먼저 본다. `http_request_t`와 `http_context_t`를 모두 받는 shape가 가장 먼저
-선택되고, 그 다음 `http_request_t`, `http_context_t`, DTO-only shape 순서로 선택된다.
-typed route와 raw route shape를 한 handler에 동시에 제공하면 static assertion 또는 startup
-validation으로 실패해야 한다.
+shape를 compile-time으로 판별하며 정본이 정한 호출 우선순위와 실패 조건을 그대로 적용한다.
 
 route parameter와 query string은 `request_type` DTO에 binding한다. 예를 들어
 `/games/{gameId}/moves?actorId=p1`로 들어온 값은 body DTO와 합쳐 handler request가 된다.
@@ -984,28 +934,20 @@ One-way activation 실패는 별도 계기를 만들지 않고 `zlink.mesh_node.
 
 ### 5.2 message-flow dispatch error event
 
-미등록 메시지와 dispatch 실패 관측은 메시지 흐름 observer의 `event_id=zlink.dispatch_error`,
-`outcome=failed` event로 처리한다.
-channel 별, spot 별 observer 등록은 이 버전의 공개 계약이 아니다. request 실패는 reply path 가 있으면
+미등록 메시지와 dispatch 실패는 application이 구성한 표준 logger·telemetry provider에
+`event_id=zlink.dispatch_error`, `outcome=failed`인 structured record로 기록한다.
+Channel별, Spot별 진단 provider 등록은 이 버전의 공개 계약이 아니다. request 실패는 reply path가 있으면
 error reply 로 끝나고, local actor call 처럼 reply frame 이 없는 경로는 `task_t` 또는 pending operation
-을 framework error 로 완료한다. one-way 실패는 drop 되지만 기본 로그, counter, message-flow event 를 남긴다.
+을 Framework error로 완료한다. one-way 실패는 drop되지만 기본 structured log와 counter를 남긴다.
 
 Exact dispatch option declaration은 [Monitoring interface](08-monitoring.ko.md)가 소유한다.
 
-`message_flow_event_t`의 dispatch error event는 `surface`, `message_kind`, `reason`, `action`,
-`packet_name`, `channel_name`, `topic`, `spot_id`, `instance_spot_type`, `activation_state`, `actor_id`, `source_rid`,
-`correlation_id`를 담는 snapshot이다. native message 소유권과 frame 참조는 포함하지 않는다.
+Framework는 dispatch 오류와 message flow를 application이 구성한 표준 logger·trace·metric provider에
+structured record로 기록한다. Callback observer, runtime error sink와 raw event DTO는 공개하지 않는다.
+Provider 실패는 원래 dispatch 결과와 terminal completion을 바꾸지 않고 별도 진단으로 격리한다.
 
 시작 전 기본 mode는 `configure_dispatch().message_flow(...)`에서 정한다. 실행 중 mode 변경은
 `app_t::set_message_flow_mode(...)`만 소유하며, channel이나 Spot별 toggle은 제공하지 않는다.
-
-```cpp
-app.add_zlink_framework([](auto &options) {
-  options.configure_dispatch()
-    .set_message_flow_observer(
-      std::make_shared<my_message_flow_observer>());
-});
-```
 
 ## 6. HTTP route와 middleware
 

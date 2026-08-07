@@ -288,12 +288,14 @@ bool zlink::asio_zmp_engine_t::handshake ()
     if (!paired_transport ()) {
         socket ()->event_connection_ready_changed (
           _endpoint_uri_pair, _peer_routing_id, _peer_routing_id_size);
-    } else {
+    } else if (socket ()->socket_type () != ZLINK_CORE_SOCKET_ROUTER) {
         socket ()->event_transport_pair_lane_ready (
           _endpoint_uri_pair, _peer_routing_id, _peer_routing_id_size,
           _negotiated_transport_lane, _negotiated_transport_pair_id,
           _negotiated_transport_pair_generation);
     }
+    // Router readiness is published after its Framework RID route is
+    // registered by router_t::adopt_peer_routing_id.
 
     if (_output_stopped)
         restart_output ();

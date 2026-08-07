@@ -32,6 +32,7 @@ import systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers;
 import systems.zlink.framework.runtime.locations.ZLinkStatefulAuthorityRouteRuntime;
 import systems.zlink.framework.runtime.messaging.ZLinkJsonMessageSerializer;
 import systems.zlink.framework.runtime.mesh.ZLinkMeshNodesRuntime;
+import systems.zlink.framework.runtime.mesh.MeshNodeRegistration;
 import systems.zlink.framework.runtime.spots.ZLinkSpotRuntime;
 import systems.zlink.framework.runtime.streams.ZLinkStreamRuntime;
 import systems.zlink.framework.spots.ZLinkSpotOutbound;
@@ -47,6 +48,8 @@ import java.util.concurrent.TimeUnit;
 public final class ZLinkFrameworkRuntime
     implements AutoCloseable,
         systems.zlink.framework.configuration.ZLinkMessageFlowControl {
+    private static final boolean RUNTIME_TRACE =
+        "1".equals(System.getenv("ZLINK_JAVA_RUNTIME_TRACE"));
     public static final java.time.Duration DEFAULT_TERMINATION_DEADLINE =
         java.time.Duration.ofSeconds(30);
     private final ZLinkChannelRuntime channels;
@@ -285,6 +288,12 @@ public final class ZLinkFrameworkRuntime
                         this.registration,
                         this.meshNodes.nodesByName())
                 : null;
+        if (this.locationRuntime != null && this.objectDescriptors != null) {
+            this.locationRuntime.setOwnerLeaseRecoveryListener(() ->
+                this.objectDescriptors.recoverAfterOwnerLease(
+                    this.runtimeState.get(),
+                    this.locationRuntime.recoveryPreviousOwnerToken()));
+        }
         this.routeMeshRuntimeOptions =
             new systems.zlink.framework.runtime.channels
                 .ZLinkRouteMeshRuntimeOptionsRuntime(
@@ -505,21 +514,47 @@ public final class ZLinkFrameworkRuntime
                     registration.meshName(),
                     new systems.zlink.framework.locations
                         .ZLinkPageRequest(1000, null))
-                .thenAccept(page -> {
-                    for (var peer : unresolved) {
-                        page.items().stream()
-                            .filter(target -> target.endpoint().equals(
-                                peer.endpoint()))
-                            .filter(target -> !target.rid().equals(
-                                source.status().routingId()))
-                            .findFirst()
-                            .ifPresent(target -> source.connectPeer(
-                                target.endpoint(), target.rid()));
-                    }
-                }).toCompletableFuture());
+                        .thenAccept(page -> {
+                            for (var peer : unresolved) {
+                                connectManualObjectPeer(
+                                    source,
+                                    peer,
+                                    page.items());
+                            }
+                        }).toCompletableFuture());
         }
         return java.util.concurrent.CompletableFuture.allOf(
             tasks.toArray(java.util.concurrent.CompletableFuture[]::new));
+    }
+
+    static boolean connectManualObjectPeer(
+        systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode source,
+        MeshNodeRegistration.Peer peer,
+        java.util.List<systems.zlink.framework.runtime.internal.locations
+            .ZLinkMeshNodeDescriptor> descriptors) {
+        if (peer.expectedRoutingId() != null) {
+            return false;
+        }
+        return descriptors.stream()
+            .filter(target -> target.endpoint().equals(peer.endpoint()))
+            .filter(target -> !target.rid().equals(source.status().routingId()))
+            .findFirst()
+            .map(target -> {
+                try {
+                    source.replacePeerConnection(
+                        target.endpoint(),
+                        target.rid(),
+                        target.lifecycleGeneration(),
+                        target.securityIdentity());
+                    return true;
+                } catch (IllegalStateException previousConnectionStillOpen) {
+                    // The endpoint-only startup intent remains authoritative.
+                    // The Location auto-connect loop retries this descriptor
+                    // after the raw binding reports the liveness close.
+                    return false;
+                }
+            })
+            .orElse(false);
     }
 
     static ZLinkFrameworkRuntime start(
@@ -711,19 +746,35 @@ public final class ZLinkFrameworkRuntime
         if (locationStores != null) {
             var store = locationStores.unifiedStore();
             try {
+                long storeDeadlineNanos = System.nanoTime()
+                    + java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(500);
                 String continuation = null;
                 do {
+                    long remainingMillis = java.util.concurrent.TimeUnit.NANOSECONDS
+                        .toMillis(storeDeadlineNanos - System.nanoTime());
+                    if (remainingMillis <= 0) {
+                        throw new java.util.concurrent.CompletionException(
+                            new java.util.concurrent.TimeoutException(
+                                "Runtime monitoring Store query deadline exceeded"));
+                    }
                     var page = store.listMeshNodes(
                             meshName,
                             new systems.zlink.framework.locations.ZLinkPageRequest(
                                 128,
                                 continuation))
                         .toCompletableFuture()
+                        .orTimeout(
+                            remainingMillis,
+                            java.util.concurrent.TimeUnit.MILLISECONDS)
                         .join();
                     for (var descriptor : page.items()) {
                         if (descriptor.rid().equals(rid)) {
                             return systems.zlink.framework.runtime.internal.monitoring
-                                .ZLinkMeshNodeMonitoringProjection.fromDescriptor(descriptor);
+                                .ZLinkMeshNodeMonitoringProjection.fromDescriptor(
+                                    descriptor)
+                                .withActiveObjectCounts(
+                                    activeActorCount(),
+                                    activeSpotCount());
                         }
                     }
                     continuation = page.continuationToken();
@@ -738,6 +789,16 @@ public final class ZLinkFrameworkRuntime
                 configured,
                 node.status().descriptorRevision(),
                 node.placementWeight());
+    }
+
+    public int activeActorCount() {
+        return actors == null ? 0 : actors.activeActorIds().size();
+    }
+
+    public int activeSpotCount() {
+        return spots == null
+            ? 0
+            : spots.activeUserSpotCount() + spots.activeInstanceSpotCount();
     }
 
     public java.util.List<String> monitoringMeshNodeChannelNames(String meshName) {
@@ -1325,6 +1386,7 @@ public final class ZLinkFrameworkRuntime
         java.time.Duration deadline,
         ZLinkTerminationReason forcedReason) {
         drain(deadline).whenComplete((result, failure) -> {
+            runtimeTrace("termination-complete result=" + result, failure);
             if (completion.isDone()) {
                 return;
             }
@@ -1350,6 +1412,13 @@ public final class ZLinkFrameworkRuntime
                     intent,
                     ZLinkTerminationOutcome.STOPPED,
                     ZLinkTerminationReason.NONE);
+            } else if (result instanceof InternalForceStopped forced) {
+                terminal = new ZLinkTerminationResult(
+                    intent,
+                    ZLinkTerminationOutcome.FORCE_STOPPED,
+                    forced.reason() == InternalDrainForceReason.DEADLINE_EXCEEDED
+                        ? ZLinkTerminationReason.DEADLINE_EXCEEDED
+                        : ZLinkTerminationReason.TEARDOWN_FAILED);
             } else {
                 terminal = new ZLinkTerminationResult(
                     intent,
@@ -1760,36 +1829,58 @@ public final class ZLinkFrameworkRuntime
             : locationAutoConnectHost.markDraining();
         markerPublished.whenComplete((ignored, publishFailure) -> {
             if (publishFailure != null) {
+                runtimeTrace("drain-state-publish-failed", publishFailure);
                 forceStop(InternalDrainForceReason.DRAINING_STATE_PUBLISH_FAILED);
                 return;
             }
-            java.util.concurrent.CompletionStage<Void> applicationBarrier =
+            java.util.concurrent.CompletionStage<Void> meshBarrier =
                 meshDrains.awaitAllZero();
-            if (spots != null) {
-                applicationBarrier = applicationBarrier.thenCompose(
-                    acceptedIgnored -> spots.awaitDrainBarrier());
+            java.util.concurrent.CompletionStage<Void> spotBarrier = spots == null
+                ? java.util.concurrent.CompletableFuture.completedFuture(null)
+                : spots.awaitDrainBarrier();
+            java.util.concurrent.CompletionStage<Void> actorBarrier = actors == null
+                ? java.util.concurrent.CompletableFuture.completedFuture(null)
+                : actors.awaitDrainBarrier();
+            java.util.concurrent.CompletionStage<Void> initialStreamBarrier = streams == null
+                ? java.util.concurrent.CompletableFuture.completedFuture(null)
+                : streams.awaitDrainBarrier();
+            java.util.concurrent.CompletionStage<Void> applicationBarrier =
+                meshBarrier
+                    .thenCompose(barrierStep -> spotBarrier)
+                    .thenCompose(barrierStep -> actorBarrier)
+                    .thenCompose(barrierStep -> initialStreamBarrier);
+            if (RUNTIME_TRACE) {
+                java.util.concurrent.CompletableFuture.delayedExecutor(
+                    5, java.util.concurrent.TimeUnit.SECONDS)
+                    .execute(() -> runtimeTrace(
+                        "drain-barriers mesh=" + isDone(meshBarrier)
+                            + " spots=" + isDone(spotBarrier)
+                            + " actors=" + isDone(actorBarrier)
+                            + " streams=" + isDone(initialStreamBarrier),
+                        null));
+                java.util.concurrent.CompletableFuture.delayedExecutor(
+                    20, java.util.concurrent.TimeUnit.SECONDS)
+                    .execute(() -> runtimeTrace(
+                        "drain-barriers mesh=" + isDone(meshBarrier)
+                            + " spots=" + isDone(spotBarrier)
+                            + " actors=" + isDone(actorBarrier)
+                            + " streams=" + isDone(initialStreamBarrier),
+                        null));
             }
-            if (actors != null) {
-                applicationBarrier = applicationBarrier.thenCompose(
-                    acceptedIgnored -> actors.awaitDrainBarrier());
-            }
-            if (streams != null) {
-                applicationBarrier = applicationBarrier.thenCompose(
-                    acceptedIgnored -> streams.awaitDrainBarrier());
-            }
-            applicationBarrier
+                applicationBarrier
                 .whenComplete((barrierIgnored, barrierFailure) -> {
                 if (barrierFailure != null) {
+                    runtimeTrace("drain-application-barrier-failed", barrierFailure);
                     forceStop(
                         InternalDrainForceReason.TEARDOWN_FAILED);
                     return;
                 }
-                java.util.concurrent.CompletionStage<Void> streamBarrier = streams == null
+                java.util.concurrent.CompletionStage<Void> serverStreamBarrier = streams == null
                     ? java.util.concurrent.CompletableFuture.completedFuture(null)
                     : streams.awaitDrainBarrier()
                         .thenCompose(streamIgnored -> streams.notifyServerDrain());
                 java.util.concurrent.CompletionStage<Void> actorShutdown =
-                    streamBarrier.thenCompose(streamIgnored ->
+                    serverStreamBarrier.thenCompose(streamIgnored ->
                         actors == null
                             ? java.util.concurrent.CompletableFuture
                                 .completedFuture(null)
@@ -1806,6 +1897,7 @@ public final class ZLinkFrameworkRuntime
                 spotDrain.thenCompose(spotIgnored -> awaitWorkloadsDrained())
                     .whenComplete((workloadsIgnored, workloadFailure) -> {
                 if (workloadFailure != null) {
+                    runtimeTrace("drain-workload-barrier-failed", workloadFailure);
                     forceStop(InternalDrainForceReason.TEARDOWN_FAILED);
                     return;
                 }
@@ -1914,6 +2006,7 @@ public final class ZLinkFrameworkRuntime
                 if (failure == null) {
                     drained.complete(new InternalDrained());
                 } else {
+                    runtimeTrace("drain-close-failed", failure);
                     completeForcedStop(
                         InternalDrainForceReason.OWNER_CLEANUP_FAILED);
                 }
@@ -1941,9 +2034,12 @@ public final class ZLinkFrameworkRuntime
         InternalDrainForceReason requestedReason = reason;
         notification.handle((ignored, failure) -> null)
             .thenCompose(ignored -> closeAsync())
-            .whenComplete((ignored, failure) -> completeForcedStop(failure == null
-                ? requestedReason
-                : InternalDrainForceReason.TEARDOWN_FAILED));
+            .whenComplete((ignored, failure) -> {
+                runtimeTrace("force-stop-close-complete", failure);
+                completeForcedStop(failure == null
+                    ? requestedReason
+                    : InternalDrainForceReason.TEARDOWN_FAILED);
+            });
     }
 
     private void completeForcedStop(
@@ -2011,6 +2107,21 @@ public final class ZLinkFrameworkRuntime
             throw new ZLinkConfigurationException(
                 "failed to close serial executor", ex);
         }
+    }
+
+    private static void runtimeTrace(String message, Throwable failure) {
+        if (!RUNTIME_TRACE) {
+            return;
+        }
+        System.err.println("[zlink-runtime-trace] " + message);
+        if (failure != null) {
+            failure.printStackTrace(System.err);
+        }
+    }
+
+    private static boolean isDone(
+        java.util.concurrent.CompletionStage<?> stage) {
+        return stage.toCompletableFuture().isDone();
     }
 
     private sealed interface InternalDrainResult

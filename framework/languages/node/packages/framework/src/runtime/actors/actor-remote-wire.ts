@@ -4,6 +4,7 @@ import type { ZLinkBackendActorRef } from '../backend/contracts';
 import type { ZLinkRemoteBoundSessionTarget } from './actor-runtime-state';
 import type { ZLinkActorHandoffPacket, ZLinkActorHandoffResult } from './actor-handoff';
 import { decodeRoutingId, routingIdWireHex } from '../routing-id';
+import { frameworkPayloadContentType } from '../messaging/payload-codec';
 
 export const ZLINK_REMOTE_ACTOR_JOIN_PACKET = '__zlink.actor.join_spot.request';
 export const ZLINK_REMOTE_ACTOR_SOURCE_LEAVE_TERMINAL =
@@ -82,6 +83,7 @@ export interface ZLinkRemoteActorJoinWirePayload {
   readonly boundSessionAcceptedJournalReference?: unknown;
   readonly boundSessionAcceptedJournalChecksumCrc32c?: unknown;
   readonly request?: unknown;
+  readonly requestContentType?: unknown;
   readonly handoffBacklog?: unknown;
   readonly completionOperationHigh?: unknown;
   readonly completionOperationLow?: unknown;
@@ -162,6 +164,7 @@ export interface ZLinkRemoteActorJoinRequestPayload {
   readonly boundSessionAcceptedJournalReference?: string;
   readonly boundSessionAcceptedJournalChecksumCrc32c?: number;
   readonly request?: string;
+  readonly requestContentType?: string;
   readonly handoffBacklog?: readonly ZLinkActorHandoffPacket[];
   readonly completionOperationHigh?: string;
   readonly completionOperationLow?: string;
@@ -175,6 +178,7 @@ interface ZLinkRemoteActorJoinRequestPayloadOptions {
   readonly actorEntryNodeRid?: RoutingId;
   readonly actorCreateRequest?: Buffer;
   readonly request?: Message;
+  readonly requestContentType?: string;
   readonly targetSpotId?: SpotId;
   readonly routerChannelId?: string;
   readonly sourceSpotId?: SpotId;
@@ -252,7 +256,10 @@ export function buildRemoteActorJoinRequestPayload(
     boundSessionRelocationSealId: boundSessionTarget?.relocationSealId,
     boundSessionAcceptedJournalReference: boundSessionTarget?.acceptedJournalReference,
     boundSessionAcceptedJournalChecksumCrc32c: boundSessionTarget?.acceptedJournalChecksumCrc32c,
-    request: options.request === undefined ? undefined : options.request.data().toString('base64')
+    request: options.request === undefined ? undefined : options.request.data().toString('base64'),
+    requestContentType: options.request === undefined
+      ? undefined
+      : options.requestContentType ?? frameworkPayloadContentType(options.request)
   };
 }
 
@@ -268,6 +275,7 @@ export function decodeRemoteActorJoinPayload(payload: unknown): {
   readonly boundSessionTargetNodeRid?: RoutingId;
   readonly boundSessionSpotId?: SpotId;
   readonly request: string;
+  readonly requestContentType: string;
 } {
   if (
     typeof payload !== 'object' ||
@@ -300,7 +308,8 @@ export function decodeRemoteActorJoinPayload(payload: unknown): {
       'boundSessionTargetNodeRidHex'
     ),
     boundSessionSpotId: optionalSpotId(payload, 'boundSessionSpotId'),
-    request: (payload as { request: string }).request
+    request: (payload as { request: string }).request,
+    requestContentType: optionalString(payload, 'requestContentType') ?? 'application/json'
   };
 }
 

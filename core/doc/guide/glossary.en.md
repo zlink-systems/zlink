@@ -1,4 +1,4 @@
-[한국어](glossary.ko.md)
+[한국어](glossary.en.md)
 
 # Core Glossary
 

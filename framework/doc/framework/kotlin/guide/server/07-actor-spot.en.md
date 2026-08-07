@@ -18,10 +18,10 @@ View in another language — [C#/.NET](../../../dotnet/guide/server/07-actor-spo
 # 7. Actor And Spot
 
 > **The documents that own this chapter's contract** —
-> [Actor Model](../../../common/spec/14-actor-model.ko.md) and
-> [Spot And Actor Membership](../../../common/spec/15-spot-actor.ko.md) own the behavior,
+> [Actor Model](../../../common/spec/14-actor-model.en.md) and
+> [Spot And Actor Membership](../../../common/spec/15-spot-actor.en.md) own the behavior,
 > and the
-> [per-language Actor/Spot public contract](../../../common/spec/server/languages/README.ko.md)
+> [per-language Actor/Spot public contract](../../../common/spec/server/languages/README.en.md)
 > owns the exact signatures.
 
 An Actor is a stateful object found by a global string `ActorId`. Right after creation, it
@@ -30,7 +30,7 @@ moves to a User Spot.
 
 An Actor's location and its client session binding are separate pieces of state. An Actor's
 and Spot's membership persists even when no client is connected. Session binding is covered
-in [the next document](08-actor-session.ko.md).
+in [the next document](08-actor-session.en.md).
 
 ## 1. Registration
 
@@ -262,7 +262,7 @@ the completion callback. That Actor's ordinary processing waits until the join f
 
 Schedule the join from an Actor handler. The handler is a separate class that receives a
 one-way packet addressed to a member Actor
-([06-spot §4.1](06-spot.ko.md#41-handler-종류와-구현할-interface)), registered as an actor
+([06-spot §4.1](06-spot.en.md#41-handler-kinds-and-the-interface-to-implement)), registered as an actor
 packet during the configuration phase. After `defer()`, there's nothing left to do except
 let this handler end normally.
 
@@ -391,9 +391,9 @@ The application never tracks `NodeRid`.
 **A request sent during the move also completes back at the original caller.** The reply
 the target produced is correlated back to the original caller, the timeout follows the
 caller's existing path as-is, and a reply that arrives late is dropped
-([spot-actor spec §10.5](../../../common/spec/15-spot-actor.ko.md)). The number of requests
+([spot-actor spec §10.5](../../../common/spec/15-spot-actor.en.md)). The number of requests
 waiting on a reply during a move is observed through the `surface=actor` value of
-`zlink.mesh_node.requests.inflight` ([12-operations](12-operations.ko.md#1-런타임-메트릭)).
+`zlink.mesh_node.requests.inflight` ([12-operations](12-operations.en.md#1-runtime-metrics)).
 
 ## 7. Relocation State Adapter
 
@@ -429,6 +429,6 @@ retry-safe, and must copy the payload memory if it's kept around outside the cal
 
 - Runnable verification examples for this chapter's contract: `13. Interface Catalog`
   chapter §4 — the verification class `ActorContracts`
-- Session and Actor binding: [Session Actor Dispatch](08-actor-session.ko.md)
-- The STREAM server and client: [STREAM](09-stream.ko.md)
-- The Actor/Spot address resolution rule: [Object routing](../../../common/spec/18-object-routing.ko.md)
+- Session and Actor binding: [Session Actor Dispatch](08-actor-session.en.md)
+- The STREAM server and client: [STREAM](09-stream.en.md)
+- The Actor/Spot address resolution rule: [Object routing](../../../common/spec/18-object-routing.en.md)

@@ -27,7 +27,7 @@ headless runner는 server별 self-check를 실행하며, 브라우저 client는 
 
 - 좌표 범위와 네 zone의 ID가 고정되어 있다.
 - Gateway, ZoneNode 두 개와 Ops의 readiness가 완료되어 있다.
-- Location Store와 maintenance store가 실행별로 준비되어 있다.
+- Location Store, Relocation Store와 maintenance store가 실행별로 준비되어 있다.
 - X 순찰 bot 네 마리와 Y 순찰 bot 네 마리가 deterministic seed로 생성된다.
 
 범위는 입장, 이동, 경계 동기화, relocation, bot, node 관찰, 전 node 공지와 점검 변경까지다.
@@ -118,6 +118,7 @@ flowchart LR
 | Resource | 책임 | 준비 |
 |---|---|---|
 | Location Store | peer descriptor, ZoneId Spot authority와 Actor location | 실행별 공유 Redis |
+| Relocation Store | Player Actor relocation payload와 operation recovery record | Location Store와 분리한 provider·key prefix를 사용하는 실행별 Redis keyspace |
 | Maintenance store | NodeId별 desired state | 실행별 공유 Redis keyspace |
 | Zone state | actor 좌표 사본, border snapshot과 tick | Zone Spot |
 | Player actor state | 좌표, zone, bot 방향 | Player Actor relocation adapter |
@@ -152,8 +153,10 @@ Framework가 자동 발급하며 고정 RID를 설정하지 않는다.
 | actor 연결을 유지한다. | bound STREAM session | relocation 중 같은 connection을 유지하고 binding 위치만 갱신한다. [Failure policy §6](../../spec/31-failure-failover-policy.ko.md#6-session과-binding) |
 | RID 충돌을 피한다. | SetRoutingIdPrefix zn | application NodeId나 ZoneId와 transport identity를 분리한다. [MeshNode spec](../../spec/13-mesh-node.ko.md) |
 
-Player Actor factory는 PreserveStateWith relocation adapter를 등록한다. Capture/Restore payload는
-Application이 관리하는 opaque state이며 NodeRid, endpoint와 private runtime 값을 포함하지 않는다.
+Player Actor factory는 `PreserveStateWith` relocation adapter를 등록한다. Capture/Restore payload는
+좌표, ZoneId, bot 방향과 마지막 적용 movement ID처럼 Application이 소유하는 state만 보존한다.
+Framework가 보존하는 queue, accepted journal, logical timer, membership과 owner fence는 포함하지 않는다.
+이동하지 않는 Zone Spot factory는 `DisableRelocation`을 선택한다.
 
 ## 6. Message 계약
 
@@ -636,7 +639,8 @@ builder로 같은 handler 집합을 명시 등록한다. 이 차이는 등록 �
 
 ## 10. Smoke 실행
 
-1. 실행별 Location Store와 maintenance store를 준비한다.
+1. 실행별 Location Store, Relocation Store와 maintenance store를 준비한다. 두 Framework store는 같은
+   Redis deployment를 사용할 수 있지만 provider와 key prefix를 분리한다.
 2. Ops를 시작하고 control STREAM readiness를 확인한다.
 3. ZoneNode A/B를 시작하고 zone capability, mesh peer와 fanout readiness를 확인한다.
 4. Gateway를 시작하고 game STREAM readiness를 확인한다.

@@ -44,7 +44,7 @@ internal static class ZLinkActorReplyDecoder
 
         try
         {
-            return JsonSerializer.Deserialize<TReply>(payload, ZLinkJsonSerializerOptions.Default)
+            return ZLinkFrameworkJsonPayloadCodec.Deserialize<TReply>(payload)
                    ?? throw PayloadDecodeFailed("Actor request reply payload is null.");
         }
         catch (Exception error) when (error is not OperationCanceledException

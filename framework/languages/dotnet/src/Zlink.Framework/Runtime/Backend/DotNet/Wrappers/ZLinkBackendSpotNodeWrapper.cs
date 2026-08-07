@@ -200,14 +200,19 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
         _node.PublishDraining();
     }
 
-    public void SetMaxMessageSize(long value)
-    {
-        _node.MaxMessageSize = value == 0 ? -1 : value;
-    }
-
     public void SetRouterHighWaterMark(ulong value)
     {
         _node.RouterHighWaterMark = value;
+    }
+
+    public void SetRouterReceiveHighWaterMark(ulong value)
+    {
+        _node.RouterReceiveHighWaterMark = value;
+    }
+
+    public void SetRouterReceiveTimeout(TimeSpan? value)
+    {
+        _node.ReceiveTimeout = value;
     }
 
     public void SetRouterSendTimeout(TimeSpan? value)
@@ -667,32 +672,24 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
 
     public void DisconnectPeer(string endpoint)
     {
-        if (_peerIntents.TryRemove(endpoint, out var intent))
-        {
-            try
-            {
-                _node.RemovePeerConnection(intent);
-                return;
-            }
-            catch (ZlinkException)
-            {
-                // Intent removal covers unadmitted intents only; an admitted
-                // lifetime takes the exact RID+generation disconnect below.
-            }
-        }
+        _peerIntents.TryRemove(endpoint, out _);
 
         foreach (var peer in _node.Peers())
         {
             if (!string.Equals(peer.Endpoint, endpoint, StringComparison.Ordinal)
-                || peer.State is not (MeshPeerState.Admitted or MeshPeerState.Draining))
+                || peer.State == MeshPeerState.Closed)
                 continue;
             try
             {
-                _node.DisconnectPeer(peer.RoutingId, peer.LifecycleGeneration);
+                // An endpoint can retain more than one intent during a RID
+                // replacement. Remove every matching lifetime so the next
+                // connection cannot inherit a stale native transport.
+                _node.RemovePeerConnection(peer.ConnectionIntentId);
             }
             catch (ZlinkException)
             {
-                // Core may have retired the lifetime with the transport.
+                // Core may have retired the lifetime while this snapshot was
+                // being walked.
             }
         }
     }

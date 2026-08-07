@@ -2,15 +2,19 @@
 
 #include "runtime/messaging/pending_submit.hpp"
 #include "runtime/messaging/async_submit_runtime.hpp"
+#include "runtime/channels/channel_reply_writer.hpp"
 #include "runtime/messaging/client_call_codec.hpp"
 #include "runtime/diagnostics/flow_context.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
+#include "runtime/messaging/failure_origin_wire.hpp"
 #include "runtime/messaging/request_failure_mapper.hpp"
 #include "runtime/messaging/submit_result_mapper.hpp"
 #include "runtime/messaging/submit_queue.hpp"
 #include "runtime/spots/spot_route_packets.hpp"
 
 #include <service_wire_constants.hpp>
+
+#include <nlohmann/json.hpp>
 
 #include <zlink/framework/contracts/detail/call_facade.hpp>
 #include <zlink/framework/contracts/errors/result.hpp>
@@ -48,9 +52,57 @@ struct envelope_payload_t
 int main ()
 {
     {
+        zlink::framework::runtime::messaging::envelope_header_t request;
+        request.message_name = "ActorRequest";
+        const auto moving = zlink::framework::detail::make_origin_exception (
+          zlink::framework::framework_error_kind_t::unavailable,
+          zlink::framework::detail::failure_origin_t::actor_transfer_in_progress,
+          "wording is not part of retry classification");
+        const auto header =
+          zlink::framework::detail::channel_reply_writer_t{}
+            .create_error_header ("actor", request, moving);
+        const auto restored =
+          zlink::framework::runtime::messaging::restore_failure_origin (
+            header,
+            zlink::framework::framework_exception_t (
+              zlink::framework::framework_error_kind_t::unavailable,
+              "translated text"));
+        if (zlink::framework::detail::failure_origin (restored)
+            != zlink::framework::detail::failure_origin_t::
+                 actor_transfer_in_progress) {
+            return 106;
+        }
+    }
+
+    {
         zlink::framework::serializer_registry_t serializers;
         zlink::framework::detail::
           register_spot_route_packet_serializers (serializers);
+        const auto packet_serializer =
+          serializers.get<zlink::framework::detail::
+                            spot_actor_packet_route_request_t> ();
+        const auto packet_wire = packet_serializer.serialize (
+          zlink::framework::detail::spot_actor_packet_route_request_t{
+            .payload = {0, 1, 2, 253, 254, 255}});
+        const auto packet_json = nlohmann::json::parse (packet_wire.to_string ());
+        if (!packet_json.at ("payload").is_string ()
+            || packet_json.at ("payload").get<std::string> () != "AAEC/f7/"
+            || packet_serializer.deserialize (packet_wire).payload
+                 != std::vector<std::uint8_t> ({0, 1, 2, 253, 254, 255})) {
+            return 154;
+        }
+        for (const auto *invalid_payload : {"AQ=", "A===", "AB==", "AQ=A"}) {
+            auto invalid_json = packet_json;
+            invalid_json["payload"] = invalid_payload;
+            try {
+                (void) packet_serializer.deserialize (
+                  zlink::framework::encoded_payload_t::from_string (
+                    invalid_json.dump ()));
+                return 155;
+            }
+            catch (const std::exception &) {
+            }
+        }
         const auto admission_root =
           serializers
             .get<zlink::framework::detail::
@@ -857,6 +909,20 @@ int main ()
         if (!duplicate_multicast_rejected || multicast_calls.load () != 1) {
             return 80;
         }
+        const auto failures_before =
+          msg::multicast_post_completion_failure_count_for_tests ();
+        zlink::framework::publish_call_t failed_after_completion (
+          [] (const zlink::framework::publish_call_t::metadata_map_t &) {
+              return zlink::framework::result_t<void>::failure (
+                zlink::framework::framework_error_kind_t::capacity_exceeded,
+                "logical multicast observation probe");
+          });
+        failed_after_completion.submit ().result ().value ();
+        msg::wait_for_idle_multicast_executor_for_tests ();
+        if (msg::multicast_post_completion_failure_count_for_tests ()
+            != failures_before + 1) {
+            return 81;
+        }
         /* Logical Multicast uses direct worker handoff. Saturation must not
          * retain an unbounded queue of publish payloads.
          *
@@ -1014,7 +1080,8 @@ int main ()
 
         {
             auto scope = rt::flow_context_t::enter (created, zlink::framework::flow_origin_t::inbound,
-                                                    false, zlink::framework::flow_origin_t::inbound);
+                                                    zlink::framework::message_flow_log_mode_t::off,
+                                                    zlink::framework::flow_origin_t::inbound);
             const auto stamped = codec.decode_header (codec.encode_header (header));
             if (!stamped || stamped.value ().flow_id != created
                 || stamped.value ().flow_origin != zlink::framework::flow_origin_t::inbound) {
@@ -1030,7 +1097,9 @@ int main ()
          * unconditional). */
         {
             auto scope =
-              rt::flow_context_t::enter (std::nullopt, std::nullopt, true,
+              rt::flow_context_t::enter (
+                std::nullopt, std::nullopt,
+                zlink::framework::message_flow_log_mode_t::key_transitions,
                                          zlink::framework::flow_origin_t::inbound);
             if (!rt::flow_context_t::current ()
                 || !rt::flow_id_t::is_valid (rt::flow_context_t::current ()->flow_id)) {
@@ -1039,7 +1108,8 @@ int main ()
         }
         {
             auto scope = rt::flow_context_t::enter (created, zlink::framework::flow_origin_t::timer,
-                                                    false, zlink::framework::flow_origin_t::inbound);
+                                                    zlink::framework::message_flow_log_mode_t::off,
+                                                    zlink::framework::flow_origin_t::inbound);
             if (!rt::flow_context_t::current ()
                 || rt::flow_context_t::current ()->flow_id != created
                 || rt::flow_context_t::current ()->origin
@@ -1049,9 +1119,14 @@ int main ()
         }
         {
             auto scope =
-              rt::flow_context_t::enter (std::nullopt, std::nullopt, false,
+              rt::flow_context_t::enter (
+                std::nullopt, std::nullopt,
+                zlink::framework::message_flow_log_mode_t::off,
                                          zlink::framework::flow_origin_t::inbound);
-            if (rt::flow_context_t::current ()) {
+            if (!rt::flow_context_t::current ()
+                || !rt::flow_context_t::current ()->flow_id.empty ()
+                || rt::flow_context_t::current ()->diagnostics_mode
+                     != zlink::framework::message_flow_log_mode_t::off) {
                 return 48;
             }
         }
@@ -1083,7 +1158,8 @@ int main ()
             {
                 auto scope =
                   rt::flow_context_t::enter (created, zlink::framework::flow_origin_t::inbound,
-                                             false, zlink::framework::flow_origin_t::inbound);
+                                             zlink::framework::message_flow_log_mode_t::off,
+                                             zlink::framework::flow_origin_t::inbound);
                 auto task = source.task ();
                 zlink::framework::detail::observe_task_completion (
                   task, [&observed_in_callback] (const zlink::framework::result_t<int> &) {

@@ -19,7 +19,7 @@ Sets the trace/metric recording level and sampling.
 
 ```java
 options.configureDispatch()
-    .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
+    .messageFlow(ZLinkMessageFlowLogMode.NORMAL)
     .traceSampleRate(0.1)
     .includeMessageSizes(true);
 ```
@@ -28,21 +28,20 @@ options.configureDispatch()
 
 | Modifier | Default | Meaning |
 | --- | --- | --- |
-| `.messageFlow(ZLinkMessageFlowLogMode)` | Implementation default | The detail level to record: one of `OFF`/`ERRORS_ONLY`/`KEY_TRANSITIONS`/`VERBOSE`/`DIAGNOSTIC` |
+| `.messageFlow(ZLinkMessageFlowLogMode)` | `ERRORS` | The detail level to record: one of `OFF`/`ERRORS`/`NORMAL`/`DETAILED` |
 | `.traceSampleRate(double)` | Implementation default | `0.0`..`1.0`. Out of range is a configuration error |
 | `.includeMessageSizes(boolean)` | `false` | Whether to include the payload size distribution in telemetry. The payload content itself is never recorded |
-| `.traceLogFile(path)` | None | The file path to leave diagnostics records in |
-| `.traceLabel(id)` | None | The label to attach to diagnostics records |
-| `.setMessageFlowObserver(observerType)` / `.setMessageFlowObserver(ZLinkMessageFlowObserver)` | None | Registers an observer that receives `ZLinkMessageFlowEvent` |
 
 Each modifier is a synchronous fluent call returning `ZLinkDispatchOptions` — not a registration
 with no return value. `ZLinkUnhandledDispatchOptions`, which `unhandled()` returns, also
 configures the handling policy for a request/send/publish with no handler
 (`REPLY_ERROR`/`LOG_AND_DROP`/`DROP`/`THROW`) on this same builder.
 
-**Completion result.** The application configures the trace/metric/log recording destination
-(exporter, remote backend) separately (e.g. a `ZLinkMetricsCustomizer` bean that configures a
-Micrometer `MeterRegistry`).
+**Completion result.** The Framework writes structured records to the standard logger, trace, and
+metric providers configured by the application (e.g. a `ZLinkMetricsCustomizer` bean that
+configures a Micrometer `MeterRegistry`). A provider failure is isolated as separate diagnostics
+and does not change the original message operation's terminal result. Dispatch options expose no
+file path, callback observer, runtime error sink, or raw event DTO.
 
 **When to use.** Use this to set the default recording level at startup.
 

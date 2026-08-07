@@ -15,6 +15,7 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace zlink::framework::runtime
@@ -26,6 +27,90 @@ enum class serial_work_lane_t
 {
     application,
     lifecycle
+};
+
+enum class spot_lane_execution_t
+{
+    entry,
+    spot_wide,
+    per_actor
+};
+
+enum class spot_lane_lifecycle_t
+{
+    active,
+    return_wait,
+    relocation_sealed
+};
+
+struct spot_lane_policy_t
+{
+    spot_lane_execution_t execution = spot_lane_execution_t::entry;
+    spot_lane_lifecycle_t lifecycle = spot_lane_lifecycle_t::active;
+};
+
+enum class session_lane_lifecycle_t
+{
+    open,
+    connection_closed
+};
+
+struct session_lane_policy_t
+{
+    session_lane_lifecycle_t lifecycle = session_lane_lifecycle_t::open;
+};
+
+struct actor_delivery_lane_policy_t
+{
+};
+
+class serial_lane_policy_t
+{
+  public:
+    using value_t = std::variant<spot_lane_policy_t,
+                                 session_lane_policy_t,
+                                 actor_delivery_lane_policy_t>;
+
+    static serial_lane_policy_t entry_spot ()
+    {
+        return serial_lane_policy_t (
+          spot_lane_policy_t{spot_lane_execution_t::entry});
+    }
+    static serial_lane_policy_t spot_wide ()
+    {
+        return serial_lane_policy_t (
+          spot_lane_policy_t{spot_lane_execution_t::spot_wide});
+    }
+    static serial_lane_policy_t per_actor_spot ()
+    {
+        return serial_lane_policy_t (
+          spot_lane_policy_t{spot_lane_execution_t::per_actor});
+    }
+    static serial_lane_policy_t session ()
+    {
+        return serial_lane_policy_t (session_lane_policy_t{});
+    }
+    static serial_lane_policy_t actor_delivery ()
+    {
+        return serial_lane_policy_t (actor_delivery_lane_policy_t{});
+    }
+
+    bool allows_turn_yield () const noexcept
+    {
+        const auto *spot = std::get_if<spot_lane_policy_t> (&_value);
+        return spot
+               && spot->execution == spot_lane_execution_t::spot_wide;
+    }
+
+    const value_t &value () const noexcept { return _value; }
+
+  private:
+    template<typename Policy>
+    explicit serial_lane_policy_t (Policy policy) : _value (policy)
+    {
+    }
+
+    value_t _value;
 };
 
 struct serial_execution_queue_options_t
@@ -65,11 +150,13 @@ class serial_execution_queue_t
                                        std::size_t capacity =
                                          dispatch_limits::application_mailbox_messages,
                                        error_handler_t error_handler = {},
-                                       bool allow_yield = false);
+                                       serial_lane_policy_t policy =
+                                         serial_lane_policy_t::actor_delivery ());
     serial_execution_queue_t (offload_executor_t &executor,
                               serial_execution_queue_options_t options,
                               error_handler_t error_handler = {},
-                              bool allow_yield = false);
+                              serial_lane_policy_t policy =
+                                serial_lane_policy_t::actor_delivery ());
     ~serial_execution_queue_t ();
 
     serial_execution_queue_t (const serial_execution_queue_t &) = delete;
@@ -110,7 +197,10 @@ class serial_execution_queue_t
     std::size_t pending_count (serial_work_lane_t lane) const;
     std::size_t pending_bytes () const;
     bool closed () const;
-    bool allows_yield () const noexcept { return _allow_yield; }
+    bool allows_yield () const noexcept
+    {
+        return _lane_policy.allows_turn_yield ();
+    }
 
   private:
     friend class serial_turn_handle_impl_t;
@@ -164,7 +254,7 @@ class serial_execution_queue_t
 
     offload_executor_t &_executor;
     const serial_execution_queue_options_t _options;
-    const bool _allow_yield;
+    const serial_lane_policy_t _lane_policy;
     error_handler_t _error_handler;
     mutable std::mutex _mutex;
     std::condition_variable _empty;

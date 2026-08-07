@@ -53,7 +53,7 @@ Spring 컨텍스트가 시작된 뒤에 builder를 다시 호출하는 표면은
 | `setDefaultRequestTimeout(Duration)` | request reply 대기 상한 | 30초 |
 | `addHandlersFromPackageOf(Class)` | handler 탐색 시작점 | 탐색하지 않음 |
 | `configureMetadata()` | metadata 전달 정책 | — |
-| `configureDispatch()` | 진단 수준과 message flow(§4) | `ERRORS_ONLY` |
+| `configureDispatch()` | 진단 수준과 message flow(§4) | `ERRORS` |
 | `configureInboundDispatch()` | host 전체 수신 상한(§3.3) | 자동 계산 |
 | `configureLocations()` | location store 동작(§5) | §5 표 |
 | `configureNetwork()` | listener의 bind · advertise host 기본값 | bind `0.0.0.0` |
@@ -149,10 +149,9 @@ profile은 `COMPACT` · `LOW_LATENCY` · `BALANCED` · `THROUGHPUT` 넷이다.
 
 | 옵션 | 무엇을 정하나 | 기본값 |
 | --- | --- | --- |
-| `messageFlow(ZLinkMessageFlowLogMode)` | 기록 수준 | `ERRORS_ONLY` |
-| `traceLogFile(String)` | 앱 로그와 분리해 쓸 파일 | 분리하지 않음 |
-| `traceLabel(String)` | 기록에 붙일 instance 이름 | 없음 |
-| `setMessageFlowObserver(...)` | 기록을 프로그램으로 받기 | 없음 |
+| `messageFlow(ZLinkMessageFlowLogMode)` | 기록 수준 | `ERRORS` |
+| `traceSampleRate(double)` | 표본 비율 | 1.0 |
+| `includeMessageSizes(boolean)` | payload byte를 함께 남길지 | 남기지 않음 |
 | `unhandled()` | 처리기가 없는 dispatch의 동작 | 아래 |
 
 `unhandled()`는 `setRequest` · `setSend` · `setPublish`로 갈래마다 동작을 정하고,

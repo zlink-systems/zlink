@@ -2,7 +2,6 @@
 
 #include "runtime/fanout/fanout_location_runtime.hpp"
 #include "runtime/transport/listener_identity.hpp"
-#include "runtime/eventing/runtime_wake_pipe.hpp"
 #include "runtime/diagnostics/dispatch_error_reporter.hpp"
 #include "runtime/messaging/async_submit_runtime.hpp"
 #include <runtime/locations/location_repository.hpp>
@@ -169,12 +168,7 @@ void fanout_location_runtime_t::start ()
     _stop.store (false, std::memory_order_release);
     try {
         _subscriber_poller = std::make_unique<zlink::poller_t> ();
-        if (!_wake_pipe.open ())
-            throw std::runtime_error ("fanout runtime wake pipe creation failed");
-        _subscriber_poller->add_fd (
-          _wake_pipe.read_fd (),
-          zlink::poll_event_flag_t::pollin,
-          std::numeric_limits<std::uintptr_t>::max ());
+        _wake_timer.attach (*_subscriber_poller);
         for (const auto &channel : _channels) {
             if (channel.publisher.enabled
                 && channel.publisher.discovery)
@@ -310,14 +304,11 @@ void fanout_location_runtime_t::wait_for_activity (
 {
     if (!_subscriber_poller || timeout <= std::chrono::milliseconds::zero ())
         return;
-        try {
-            zlink::poll_event_t readiness;
-            const auto count =
-              _subscriber_poller->wait (&readiness, 1, timeout);
-            if (count == 1
-                && readiness.source_kind == zlink::poll_source_kind_t::fd
-                && readiness.fd == _wake_pipe.read_fd ())
-                _wake_pipe.drain ();
+    try {
+        zlink::poll_event_t readiness;
+        const auto count = _subscriber_poller->wait (&readiness, 1, timeout);
+        if (count == 1 && _wake_timer.is_event (readiness))
+            _wake_timer.consume ();
     }
     catch (...) {
     }
@@ -768,9 +759,10 @@ void fanout_location_runtime_t::stop () noexcept
 {
     const bool was_stopped =
       _stop.exchange (true, std::memory_order_acq_rel);
-    _wake_pipe.signal ();
+    _wake_timer.signal ();
     if (_thread.joinable ())
         _thread.join ();
+    _wake_timer.detach ();
     std::vector<std::string> publisher_channels;
     bool has_publishers = false;
     bool has_subscribers = false;
@@ -791,14 +783,6 @@ void fanout_location_runtime_t::stop () noexcept
      * fall through to the manual publisher during shutdown. */
     for (const auto &channel_name : publisher_channels)
         _channel_runtime.unbind_fanout_transport (channel_name);
-    if (_subscriber_poller && _wake_pipe.read_fd () >= 0) {
-        try {
-            _subscriber_poller->remove_fd (_wake_pipe.read_fd ());
-        }
-        catch (...) {
-        }
-    }
-    _wake_pipe.close ();
     if (_subscriber_poller) {
         try {
             _subscriber_poller->close ();

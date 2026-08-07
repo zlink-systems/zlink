@@ -29,6 +29,7 @@ import type { ZLinkDispatchErrorReporter } from '../channels';
 import {
   decodeStreamHeader,
   messageToBytes,
+  streamCodecContentType,
   ZLinkStreamMessageKind
 } from '../streams/protocol';
 import { decodeFrameworkTypedPayloadMessage } from '../messaging/payload-codec';
@@ -163,7 +164,7 @@ export class ZLinkSpotActorPacketDispatch {
         await this.options.onDisconnectActor(actor);
         return undefined;
       }
-      const decodePayload = this.createPayloadDecoder(parts[1]);
+      const decodePayload = this.createPayloadDecoder(parts[1], header);
       return this.dispatchActorPacket(
         actor,
         actorId,
@@ -224,8 +225,16 @@ export class ZLinkSpotActorPacketDispatch {
     throw missingActorError;
   }
 
-  private createPayloadDecoder(message: Message): () => unknown {
-    return () => decodeFrameworkTypedPayloadMessage(message, this.options.messageSerializers);
+  private createPayloadDecoder(
+    message: Message,
+    header: ReturnType<typeof decodeStreamHeader>
+  ): () => unknown {
+    return () => decodeFrameworkTypedPayloadMessage(
+      message,
+      this.options.messageSerializers,
+      undefined,
+      streamCodecContentType(header.codec)
+    );
   }
 
   private async dispatchActorPacket(

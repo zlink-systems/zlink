@@ -6,10 +6,16 @@
 #include <cassert>
 #include <cstdint>
 #include <string_view>
+#include <type_traits>
 #include <vector>
 
 namespace protocol = zlink::framework::runtime::protocol;
 namespace mesh = zlink::framework::runtime::mesh;
+
+static_assert (!std::is_same_v<zlink::framework::runtime::call_id_t,
+                               protocol::wire_operation_id_t>);
+static_assert (!std::is_convertible_v<zlink::framework::runtime::call_id_t,
+                                      protocol::wire_operation_id_t>);
 
 namespace
 {
@@ -184,6 +190,27 @@ int main ()
       protocol::encode_application_payload (application);
     assert (protocol::decode_application_payload (application_wire)
             == application);
+    assert (protocol::application_payload_hwm_bytes (application) == 3);
+    const protocol::application_payload_t multipart_application{
+      protocol::framework_multipart_packet_name,
+      protocol::framework_multipart_content_type,
+      {0, 0, 0, 2,
+       0, 0, 0, 3, 1, 2, 3,
+       0, 0, 0, 4, 4, 5, 6, 7}};
+    assert (protocol::application_payload_hwm_bytes (
+              multipart_application)
+            == 4);
+    auto truncated_multipart = multipart_application;
+    truncated_multipart.payload.pop_back ();
+    bool truncated_multipart_rejected = false;
+    try {
+        (void) protocol::application_payload_hwm_bytes (
+          truncated_multipart);
+    }
+    catch (const protocol::service_wire_error_t &) {
+        truncated_multipart_rejected = true;
+    }
+    assert (truncated_multipart_rejected);
     const protocol::application_payload_t traced_application{
       "Probe", "application/json", {4, 5, 6},
       "019fc5b9-9df3-786b-bb69-d55358f6d48b",
@@ -248,38 +275,48 @@ int main ()
     // Every ClientServer framework error mapping must be a canonical reply
     // header pair accepted by every language's service-wire decoder.
     const std::vector<std::pair<
-      std::uint32_t, protocol::framework_error_code>>
+      protocol::request_terminal_result, protocol::framework_error_code>>
       client_server_failure_pairs{
-        {102, protocol::framework_error_code::handlerNotFound},
-        {104, protocol::framework_error_code::payloadDecodeFailed},
-        {105, protocol::framework_error_code::routeNotConnected},
-        {102, protocol::framework_error_code::requestTargetNotFound},
-        {106, protocol::framework_error_code::requestRejected},
-        {104, protocol::framework_error_code::requestProtocolError},
-        {105, protocol::framework_error_code::requestFailed}};
+        {protocol::request_terminal_result::notFound,
+         protocol::framework_error_code::handlerNotFound},
+        {protocol::request_terminal_result::protocolError,
+         protocol::framework_error_code::payloadDecodeFailed},
+        {protocol::request_terminal_result::internalError,
+         protocol::framework_error_code::routeNotConnected},
+        {protocol::request_terminal_result::notFound,
+         protocol::framework_error_code::requestTargetNotFound},
+        {protocol::request_terminal_result::rejected,
+         protocol::framework_error_code::requestRejected},
+        {protocol::request_terminal_result::protocolError,
+         protocol::framework_error_code::requestProtocolError},
+        {protocol::request_terminal_result::internalError,
+         protocol::framework_error_code::requestFailed}};
     for (const auto &[terminal_result, failure_code] :
          client_server_failure_pairs) {
         const auto mapped = protocol::decode_reply_header (
           protocol::encode_reply_header (
-            correlation, terminal_result,
+            correlation, static_cast<std::uint32_t> (terminal_result),
             static_cast<std::uint32_t> (failure_code)));
-        assert (mapped.terminal_result == terminal_result);
+        assert (mapped.terminal_result
+                == static_cast<std::uint32_t> (terminal_result));
         assert (
           mapped.failure_code
           == static_cast<std::uint32_t> (failure_code));
     }
 
     const std::vector<std::pair<
-      std::uint32_t, protocol::framework_error_code>>
+      protocol::request_terminal_result, protocol::framework_error_code>>
       mismatched_reply_pairs{
-        {102, protocol::framework_error_code::requestRejected},
-        {106, protocol::framework_error_code::handlerNotFound}};
+        {protocol::request_terminal_result::notFound,
+         protocol::framework_error_code::requestRejected},
+        {protocol::request_terminal_result::rejected,
+         protocol::framework_error_code::handlerNotFound}};
     for (const auto &[terminal_result, failure_code] :
          mismatched_reply_pairs) {
         bool encode_rejected = false;
         try {
             static_cast<void> (protocol::encode_reply_header (
-              correlation, terminal_result,
+              correlation, static_cast<std::uint32_t> (terminal_result),
               static_cast<std::uint32_t> (failure_code)));
         }
         catch (const protocol::service_wire_error_t &) {
@@ -303,7 +340,8 @@ int main ()
           static_cast<std::uint32_t> (
             protocol::framework_error_code::requestRejected));
         overwrite_u32 (
-          malformed, malformed.size () - 8, terminal_result);
+          malformed, malformed.size () - 8,
+          static_cast<std::uint32_t> (terminal_result));
         overwrite_u32 (
           malformed, malformed.size () - 4,
           static_cast<std::uint32_t> (failure_code));

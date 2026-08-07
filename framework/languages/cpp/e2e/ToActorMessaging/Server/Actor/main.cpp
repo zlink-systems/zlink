@@ -205,7 +205,8 @@ class ensure_actor_handler_t
                 throw *created.error ();
             if (std::holds_alternative<zlink::framework::actor_create_rejected_t> (
                   created.value ()))
-                throw std::runtime_error ("Actor creation was rejected");
+                return {request.scenario, request.actor_id, "",
+                        "rejected:Actor creation was rejected"};
             return {request.scenario, request.actor_id, "ensured", ""};
         }
         catch (const zlink::framework::framework_exception_t &error) {

@@ -38,8 +38,11 @@ Fanout ready 의미도 Java 계약을 그대로 사용한다. Publisher 전용 S
 record 또는 liveness beacon까지 받아야 한다. 15초 inbound timeout은 해당 publisher의 peer state를
 `NOT_CONNECTED`로 바꾼다.
 
-Runtime 내부 callback이나 observer에서 발생한 오류는 Framework가 structured log로 기록한다.
-Kotlin application이 구현하거나 등록하는 error sink와 raw event DTO는 public contract가 아니다.
+Runtime 내부 callback이나 provider에서 발생한 오류는 Framework가 structured log로 기록한다.
+Kotlin application이 구현하거나 등록하는 message-flow observer, error sink와 raw event DTO는 public
+contract가 아니다. Kotlin은 Java의 `OFF`, `ERRORS`, `NORMAL`, `DETAILED` 네 진단 수준을 그대로 사용한다.
+Application이 구성한 표준 logger·trace·metric provider 실패는 원래 message operation의 terminal 결과를
+바꾸지 않으며 별도 진단으로 격리한다.
 
 [RouteMesh](../../../../01-glossary.ko.md#routemesh) placement status는 새 object 수락 가능 여부와
 현재 process의 active Actor·Spot 수만 제공한다. Node-wide placement weight, stable type별 capacity,
@@ -73,16 +76,7 @@ Remote framework error는 `ZLinkFrameworkException`으로 전달한다. Public a
 `IllegalArgumentException`, startup 구성 충돌은 `ZLinkConfigurationException`을 사용한다.
 Public exception은 재시도 여부를 제공하지 않는다.
 
-## Kotlin source signature
-
-```kotlin
-fun ZLinkDispatchOptions.onMessageFlow(
-    observer: (ZLinkMessageFlowEvent) -> Unit,
-): ZLinkDispatchOptions
-```
-
 Java `Publisher` status stream을 Kotlin `Flow`로 읽을 때는
 [Location과 maintenance](location-maintenance.ko.md)가 소유하는 공통 `asFlow()` bridge를 사용한다.
 이 bridge의 cancellation은 해당 subscriber 등록만 해제한다. 공유 runtime, monitoring publisher
-또는 이미 시작한 host operation을 취소하지 않는다. `onMessageFlow` generated JVM member는
-[구성과 host](configuration-host.ko.md)의 multifile class inventory에 포함한다.
+또는 이미 시작한 host operation을 취소하지 않는다.

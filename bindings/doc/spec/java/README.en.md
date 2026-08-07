@@ -628,7 +628,8 @@ socket type:
 
 - `PairSocket`: send and recv.
 - `DealerSocket`: send, recv, request.
-- `RouterSocket`: routed send, routed recv, request, reply, SPOT routing.
+- `RouterSocket`: routed send, routed recv, request, reply, SPOT routing, and
+  exact transport-pair termination from a monitor event.
 - `PubSocket`: publish.
 - `SubSocket`: subscribe and subscription event receive.
 - `XPubSocket`: publish plus subscription event receive.
@@ -657,6 +658,13 @@ Builder start methods take only the target identity:
 - `requestToSpot(nodeRid, spotRid)`
 - `replyToSpot(nodeRid, spotRid, requestSequence)`
 - `sendBoundActor(sessionRid, actorId)`
+
+`RouterSocket.disconnectTransportPair(transportPairId, transportPairGeneration)`
+marks only the physical transport pair identified by the same monitor event's
+non-zero pair identity and generation for termination. It does not affect
+another pair using the same peer routing id. This operation is used for
+runtime connection control such as Framework connection replacement; callers
+must not invent a pair identity.
 
 Payload, flags, timeout, callback, and async behavior are builder steps.
 Representative terminal methods:

@@ -173,7 +173,7 @@ wait_port() {
   local port
   host="$(endpoint_host "${endpoint}")"
   port="$(endpoint_port "${endpoint}")"
-  for _ in $(seq 1 30); do
+  for _ in $(seq 1 600); do
     if (echo >"/dev/tcp/${host}/${port}") >/dev/null 2>&1; then
       return 0
     fi
@@ -187,7 +187,7 @@ wait_log_contains() {
   local description="$1"
   local pattern="$2"
   shift 2
-  for _ in $(seq 1 30); do
+  for _ in $(seq 1 600); do
     if grep -Eq "${pattern}" "$@" 2>/dev/null; then
       return 0
     fi

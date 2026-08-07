@@ -8,7 +8,7 @@ BUILD_DIR="${ZLINK_CPP_E2E_BUILD_DIR:-${ZLINK_CPP_BUILD_DIR:-$FRAMEWORK_DIR/buil
 SCENARIO="${1:-all}"
 SCENARIO_LOWER="$(printf '%s' "$SCENARIO" | tr '[:upper:]' '[:lower:]')"
 case "$SCENARIO_LOWER" in
-  all|mon-a[1-5]|mon-a4a|mon-a4b|mon-b[1-2]|mon-c1|mon-d1|mon-d1a|mon-d1b) ;;
+  all|mon-a[1-6]|mon-a4a|mon-a4b|mon-b[1-2]|mon-c1|mon-d1|mon-d1a|mon-d1b) ;;
   *)
     echo "Unsupported RuntimeMonitoring scenario: $SCENARIO" >&2
     exit 2
@@ -136,7 +136,8 @@ write_service_config() {
   local mesh_peer_endpoints="${10}"
   python3 - "$path" "$rid" "$http_endpoint" "$REDIS_ENDPOINT" "$REDIS_KEY_PREFIX" \
     "$channel_endpoint" "$router_endpoint" "$pub_endpoint" "$evidence_file" \
-    "$monitor_profile" "$LOG_DIR" "$mesh_endpoint" "$mesh_peer_endpoints" <<'PY'
+    "$monitor_profile" "$LOG_DIR" "$mesh_endpoint" "$mesh_peer_endpoints" \
+    "$SCENARIO_LOWER" <<'PY'
 import json
 import os
 import stat
@@ -144,7 +145,14 @@ import sys
 
 (path, rid, http_endpoint, redis_endpoint, redis_key_prefix, channel_endpoint,
  router_endpoint, pub_endpoint, evidence_file, monitor_profile, log_dir,
- mesh_endpoint, mesh_peer_endpoints) = sys.argv[1:]
+ mesh_endpoint, mesh_peer_endpoints, scenario) = sys.argv[1:]
+placement_weight = 100
+actor_limit = 2
+spot_limit = 2
+if scenario == "mon-a6":
+    placement_weight = 1000 if rid == "svc-a" else 1
+    actor_limit = 2 if rid == "svc-a" else 1
+    spot_limit = 2 if rid == "svc-a" else 1
 with open(path, "w", encoding="utf-8") as file:
     json.dump({"e2e": {"rid": rid, "httpEndpoint": http_endpoint,
                        "redis": {"endpoint": redis_endpoint, "keyPrefix": redis_key_prefix},
@@ -155,7 +163,10 @@ with open(path, "w", encoding="utf-8") as file:
                        "monitorProfile": monitor_profile,
                        "logDir": log_dir,
                        "meshEndpoint": mesh_endpoint,
-                       "meshPeerEndpoints": mesh_peer_endpoints}}, file, indent=2)
+                       "meshPeerEndpoints": mesh_peer_endpoints,
+                       "placementWeight": str(placement_weight),
+                       "actorLimit": str(actor_limit),
+                       "spotLimit": str(spot_limit)}}, file, indent=2)
 os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
 PY
 }
@@ -495,7 +506,7 @@ if [[ "$SCENARIO_LOWER" == "all" ]]; then
   # Run the ordinary monitoring scenarios before the destructive replacement
   # and Store-failure phases. The previous all branch skipped these scenarios
   # and only printed a passing result for A4, D1, and A5.
-  for scenario in mon-a1 mon-a2 mon-a3 mon-b1 mon-b2 mon-c1; do
+  for scenario in mon-a1 mon-a2 mon-a3 mon-a6 mon-b1 mon-b2 mon-c1; do
     run_monitor_client "$scenario"
   done
 elif [[ "$SCENARIO_LOWER" != "mon-a4" && "$SCENARIO_LOWER" != "mon-a4a" && "$SCENARIO_LOWER" != "mon-a4b" \

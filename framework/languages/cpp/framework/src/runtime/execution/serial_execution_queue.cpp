@@ -320,9 +320,9 @@ class serial_turn_handle_impl_t final : public detail::serial_turn_t,
 serial_execution_queue_t::serial_execution_queue_t (offload_executor_t &executor,
                                                     std::size_t capacity,
                                                     error_handler_t error_handler,
-                                                    bool allow_yield) :
+                                                    serial_lane_policy_t policy) :
     serial_execution_queue_t (executor, legacy_options (capacity),
-                              std::move (error_handler), allow_yield)
+                              std::move (error_handler), std::move (policy))
 {
 }
 
@@ -330,8 +330,9 @@ serial_execution_queue_t::serial_execution_queue_t (
   offload_executor_t &executor,
   serial_execution_queue_options_t options,
   error_handler_t error_handler,
-  bool allow_yield) :
-    _executor (executor), _options (options), _allow_yield (allow_yield),
+  serial_lane_policy_t policy) :
+    _executor (executor), _options (options),
+    _lane_policy (std::move (policy)),
     _error_handler (std::move (error_handler)),
     _application {{}, {}, 0, 0, options.application_message_capacity,
                   options.application_byte_capacity},

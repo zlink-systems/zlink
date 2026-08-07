@@ -55,7 +55,7 @@ return app.run (argc, argv);
 | `set_message_follow_duration (...)` | 이동 중인 대상으로 온 message를 따라 보내는 기간 | 30초 |
 | `handlers ()` | handler group 등록 | — |
 | `metadata ()` | metadata 전달 정책 | — |
-| `configure_dispatch ()` | 진단 수준과 message flow(§4) | `errors_only` |
+| `configure_dispatch ()` | 진단 수준과 message flow(§4) | `errors` |
 | `configure_inbound_dispatch ()` | host 전체 수신 상한(§3.2) | 자동 계산 |
 | `configure_locations ()` | location store 동작(§5) | §5 표 |
 | `add_location_store (...)` | 위치 결정 store | 없으면 단일 node 구성 |
@@ -124,13 +124,11 @@ return app.run (argc, argv);
 
 | 옵션 | 무엇을 정하나 | 기본값 |
 | --- | --- | --- |
-| `message_flow (...)` | 기록 수준 | `errors_only` |
+| `message_flow (...)` | 기록 수준 | `errors` |
 | `trace_sample_rate (double)` | 표본 비율 | 1.0 |
 | `include_message_sizes (bool)` | payload byte를 함께 남길지 | 남기지 않음 |
-| `trace_log_file (path)` | 앱 로그와 분리해 쓸 파일 | 분리하지 않음 |
-| `set_message_flow_observer (...)` | 기록을 프로그램으로 받기 | 없음 |
 
-수준별로 무엇이 남는지와 observer 사용법은 [11. Monitoring](11-monitoring.ko.md)이 다룬다.
+수준별 기록 범위와 standard provider 연동은 [11. Monitoring](11-monitoring.ko.md)이 다룬다.
 
 ## 5. Location 옵션
 

@@ -431,15 +431,13 @@ echo "==> zone nodes"
 # prefix-based RID, while the application NodeId remains unchanged.
 if scenario_selected ZW-G2 && [[ "$G4_CHILD" == "0" ]]; then
   start zone-node-2 "$SERVER_BIN" --config "$CONFIG_DIR/zone-node-2.json"
-  wait_for_log zone-node-2 "topology=ready"
   start zone-node-1 "$SERVER_BIN" --config "$CONFIG_DIR/zone-node-1.json"
-  wait_for_log zone-node-1 "topology=ready"
 else
   start zone-node-1 "$SERVER_BIN" --config "$CONFIG_DIR/zone-node-1.json"
-  wait_for_log zone-node-1 "topology=ready"
   start zone-node-2 "$SERVER_BIN" --config "$CONFIG_DIR/zone-node-2.json"
-  wait_for_log zone-node-2 "topology=ready"
 fi
+wait_for_log zone-node-1 "topology=ready"
+wait_for_log zone-node-2 "topology=ready"
 wait_for_log ops "node status observed. node=zone-node-1, rid=zn-"
 wait_for_log ops "node status observed. node=zone-node-2, rid=zn-"
 

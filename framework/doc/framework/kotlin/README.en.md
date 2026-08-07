@@ -3,23 +3,23 @@
 > This set is the ZLink Framework documentation for `Kotlin` (Spring Boot) users.
 > `zlink-framework-kotlin` is a thin coroutine-idiom layer that reuses the Java
 > `zlink-framework` runtime as-is. The Java surface follows the
-> [Java spec](../common/spec/server/languages/java/README.ko.md), and the Kotlin-specific
-> public contract is fixed in the [Kotlin spec](../common/spec/server/languages/kotlin/README.ko.md).
+> [Java spec](../common/spec/server/languages/java/README.en.md), and the Kotlin-specific
+> public contract is fixed in the [Kotlin spec](../common/spec/server/languages/kotlin/README.en.md).
 > Internal criteria are shared with the [Java/Kotlin documentation](../java/README.en.md).
 > The Kotlin usage guide will be rewritten as Kotlin-specific once the 11.0 public
 > interface and samples are finalized. Common meaning follows the
-> [common spec](../common/README.ko.md).
+> [common spec](../common/README.en.md).
 
 The common meaning of async execution, `CompletionStage`, and the Kotlin coroutine wrapper
-follows the [Async Execution And Coroutine Policy](../common/spec/05-async-execution-policy.ko.md).
+follows the [Async Execution And Coroutine Policy](../common/spec/05-async-execution-policy.en.md).
 
 Sample and E2E config files, the ban on environment variables, and
 `@ConfigurationProperties`-binding criteria follow the
 [Sample/E2E Configuration Policy](../common/sample-e2e-configuration-policy.en.md).
 
 Coroutine usage for the client libraries used separately from the server framework is
-found in the [HTTP client guide](guide/http-client/README.ko.md) and the
-[Stream connector guide](guide/stream-connector/README.ko.md).
+found in the [HTTP client guide](guide/http-client/README.en.md) and the
+[Stream connector guide](guide/stream-connector/README.en.md).
 
 ## 0. The Kotlin Surface At A Glance
 
@@ -46,10 +46,10 @@ Kotlin follow the Kotlin spec.
 
 | Document | Scope |
 |------|------|
-| [Kotlin spec table of contents](../common/spec/server/languages/kotlin/README.ko.md) | The list of Kotlin-specific public-contract documents |
-| [Kotlin interfaces](../common/spec/server/languages/kotlin/interfaces/README.ko.md) | The exact public signature for coroutines/DSL |
-| [Java spec table of contents](../common/spec/server/languages/java/README.ko.md) | The Java public contract Kotlin uses as-is |
-| [Java interfaces](../common/spec/server/languages/java/interfaces/README.ko.md) | The canonical Java types and builders Kotlin reuses |
+| [Kotlin spec table of contents](../common/spec/server/languages/kotlin/README.en.md) | The list of Kotlin-specific public-contract documents |
+| [Kotlin interfaces](../common/spec/server/languages/kotlin/interfaces/README.en.md) | The exact public signature for coroutines/DSL |
+| [Java spec table of contents](../common/spec/server/languages/java/README.en.md) | The Java public contract Kotlin uses as-is |
+| [Java interfaces](../common/spec/server/languages/java/interfaces/README.en.md) | The canonical Java types and builders Kotlin reuses |
 | [Channel messaging](../common/spec/server/languages/java/interfaces/channel-messaging.en.md) | Channel registration, the outbound client, and dispatch |
 | [Spot](../common/spec/server/languages/java/interfaces/spots.en.md) | Spot lifecycle and factory |
 | [Actor](../common/spec/server/languages/java/interfaces/actors.en.md) | The actor factory, relocation adapter, and bound session |

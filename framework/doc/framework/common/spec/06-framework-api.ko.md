@@ -103,8 +103,9 @@ Auto mode의 계산 결과가 양수가 아니면 socket bind 전에 configurati
 않은 것 자체는 오류가 아니다. 선택한 profile은 Framework가 만드는 Core context의 Auto HWM profile에도 적용하지만,
 Application HWM byte를 connection별 Core HWM으로 복사하거나 connection 수로 나누지 않는다.
 
-`ApplicationHwmBytes`가 양수이면 모든 application listener의 `MaxMessageSize`도 유한한 양수여야 한다.
-Auto mode도 같은 조건을 적용한다. 명시적인 `ApplicationHwmBytes = 0`만 이 검사를 생략한다.
+`MaxMessageSize`를 제공하는 application listener에서는 `ApplicationHwmBytes`가 양수이면 그 값도 유한한
+양수여야 한다. Auto mode도 같은 조건을 적용한다. 명시적인 `ApplicationHwmBytes = 0`만 이 검사를
+생략한다. RouteMesh SS에는 `MaxMessageSize` 설정이 없으므로 이 조합 검사를 적용하지 않는다.
 HWM이 `MaxMessageSize`보다 작아도 유효하다. Pending byte가 HWM보다 작을 때 시작한 complete message는
 끝까지 받고, 그 결과 HWM을 넘으면 다음 수신을 멈춘다. 따라서 비어 있는 host는 HWM보다 크고
 `MaxMessageSize` 이하인 message 한 건을 처리할 수 있다.
@@ -228,11 +229,14 @@ Framework의 `MaxMessageSize = 0`은 Framework가 transport 기본값보다 작�
 뜻이다. 양수는 같은 byte 상한으로 적용하고 음수 값은 설정 오류다. Binding option 표현과 변환은
 언어별 internals가 소유하며 application public API에 노출하지 않는다.
 
-Framework application listener의 `MaxMessageSize` 기본값은 `16,777,216` bytes(16 MiB)다. 따라서
+ClientServer application listener의 `MaxMessageSize` 기본값은 `16,777,216` bytes(16 MiB)다. 따라서
 기본 Auto Application HWM 구성은 유한한 단일 message 상한을 가진다. Application이 이를 명시적으로
 `0`으로 바꾸면 별도 상한을 두지 않는 기존 의미를 유지하지만, Application HWM이 Auto 또는 양수이면
 startup validation에서 거부한다. 무제한 message와 무제한 pending payload가 모두 필요한 경우에만
 `MaxMessageSize = 0`과 `ApplicationHwmBytes = 0`을 함께 명시한다.
+
+이 일반 application listener 규칙은 ClientServer에 적용하고 RouteMesh ServerServer에는 적용하지 않는다.
+RouteMesh SS는 Framework-level message-size 설정이나 상한을 제공하지 않는다.
 
 StreamNode의 Core STREAM inbound 상한은 이 일반 application listener 규칙과 별도로 `64 KiB`를
 기본값으로 사용한다. client→server complete message의 header와 payload 합을 검사하고 6-byte prefix는
@@ -778,7 +782,7 @@ result로 완료한다. 다른 owner로 자동 재제출하지 않는다.
 이 request 실패는 확인 시점과 관계없이 해당 error kind로 한 번만 완료한다. One-way send는 source의 local
 outbound admission 전에 실패를 확인했을 때만 위 kind의 exceptional completion을 반환할 수 있다. Source가
 record를 수락해 반환 데이터 없이 완료한 뒤 remote activation이나 admission 실패를 확인한 경우에는 이미
-완료된 call을 바꾸지 않는다. 이 실패는 drop metric과 message-flow event로 관측하며 error reply를 만들거나 다른
+완료된 call을 바꾸지 않는다. 이 실패는 drop metric과 structured message-flow record로 관측하며 error reply를 만들거나 다른
 owner에게 replay하지 않는다.
 
 Request admission 뒤에는 typed reply, typed Framework error, timeout, cancellation, shutdown 또는 protocol
@@ -789,10 +793,10 @@ capacity 부족은 admission 오류다. Framework는 이 결과를 이유로 다
 
 ### 13.2 Dispatch 실패 action owner
 
-Dispatch 실패 observer의 reason, action과 caller 결과 대응은
+Dispatch 실패 structured record의 reason, action과 caller 결과 대응은
 [Message Flow Tracing §3](26-message-flow-tracing.ko.md#3-공통-attribute)가 단일 owner다.
-언어별 exact interface는 그 닫힌 값을 해당 언어의 enum 또는 문자열로 투영하며 값을 추가하거나 줄이지
-않는다.
+언어별 logger·telemetry provider integration은 그 닫힌 값을 같은 문자열로 기록하며 값을 추가하거나
+줄이지 않는다. 이 값 집합을 위한 public event DTO나 observer enum은 제공하지 않는다.
 
 ## 14. Startup validation
 

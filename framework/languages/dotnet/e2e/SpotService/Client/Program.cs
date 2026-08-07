@@ -152,6 +152,27 @@ await (options.OperationGroup switch
     "sm-a12-a13" => RunA12A13Async(playA),
     "instance-track-a" => InstanceSpotTrackAScenario.RunAsync(playA, playB),
     "instance-idle" => InstanceSpotIdleEvictionScenario.RunAsync(playA),
+    "instance-owner-loss" => InstanceSpotOwnerLossScenario.RunAsync(
+        playA,
+        playB,
+        options.InstanceOwnerLossCrashAckFile
+        ?? throw new InvalidOperationException(
+            "Instance owner-loss crash acknowledgement file is required.")),
+    "instance-queue-owner-loss" => InstanceSpotQueueOwnerLossScenario.RunAsync(
+        playA,
+        playB,
+        options.InstanceOwnerLossCrashAckFile
+        ?? throw new InvalidOperationException(
+            "Instance queue owner-loss crash acknowledgement file is required."),
+        options.InstanceOwnerLossRestartAckFile
+        ?? throw new InvalidOperationException(
+            "Instance queue owner-loss restart acknowledgement file is required.")),
+    "instance-creating-join" => InstanceSpotCreatingJoinScenario.RunAsync(
+        playA,
+        playB,
+        options.InstanceCreatingReleaseAckFile
+        ?? throw new InvalidOperationException(
+            "Instance creating release acknowledgement file is required.")),
     _ => throw new InvalidOperationException($"Unsupported SpotService operation group '{options.OperationGroup}'.")
 });
 

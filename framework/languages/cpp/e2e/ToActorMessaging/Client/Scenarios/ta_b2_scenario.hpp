@@ -32,8 +32,8 @@ inline void run_ta_b2_scenario (zlink::http_client::client_t &actor_a,
     // owner; the contract only requires a new incarnation on the same Mesh,
     // not a caller-selected node.
     recreate_ready (*owner, caller, "TA-B2-owner-recreated", "ta-b2-stale");
-    assert_captured_failure (caller, "TA-B2-stale-location", "ta-b2-stale",
-                             "actor_location_stale");
+    assert_captured_destroy_failure (caller, "TA-B2-stale-location", "ta-b2-stale",
+                                     "invalid_operation");
     assert_call (caller, "TA-B2-current-ref", "ta-b2-stale", "current", "reply:current", false);
 
     const auto evidence = actor_evidence (actor_a, actor_b);

@@ -56,10 +56,14 @@ application record or liveness beacon must also be received on the same
 socket. The 15-second inbound timeout changes that publisher's peer
 state to `NOT_CONNECTED`.
 
-An error occurring in an internal runtime callback or observer is
-recorded by the framework as a structured log. An error sink and raw
-event DTO the Kotlin application implements or registers aren't the
-public contract.
+An error occurring in an internal runtime callback or provider is
+recorded by the framework as a structured log. A message-flow observer,
+error sink, and raw event DTO the Kotlin application implements or
+registers aren't the public contract. Kotlin uses Java's four diagnostic
+levels `OFF`, `ERRORS`, `NORMAL`, and `DETAILED` unchanged. A failure in a
+standard logger/trace/metric provider configured by the application does
+not change the original message operation's terminal result and is
+isolated as separate diagnostics.
 
 [RouteMesh](../../../../01-glossary.en.md#routemesh) placement status
 only provides whether new objects can be accepted and the current
@@ -99,20 +103,9 @@ Public argument validation uses the JVM standard
 `ZLinkConfigurationException`. The public exception doesn't provide
 whether it's retryable.
 
-## Kotlin Source Signature
-
-```kotlin
-fun ZLinkDispatchOptions.onMessageFlow(
-    observer: (ZLinkMessageFlowEvent) -> Unit,
-): ZLinkDispatchOptions
-```
-
 When reading the Java `Publisher` status stream as a Kotlin `Flow`, the
 common `asFlow()` bridge owned by
 [Location And Maintenance](location-maintenance.en.md) is used. This
 bridge's cancellation only releases that subscriber registration. It
 doesn't cancel the shared runtime, monitoring publisher, or an
-already-started host operation. The `onMessageFlow` generated JVM
-member is included in
-[Configuration And Host](configuration-host.en.md)'s multifile class
-inventory.
+already-started host operation.

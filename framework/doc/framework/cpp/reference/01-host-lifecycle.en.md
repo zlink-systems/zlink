@@ -145,7 +145,7 @@ Checks whether the host is ready, and changes the message-flow diagnostics mode 
 
 ```cpp
 bool ready = app.is_ready();
-app.set_message_flow_mode(zlink::framework::message_flow_log_mode_t::verbose);
+app.set_message_flow_mode(zlink::framework::message_flow_log_mode_t::detailed);
 ```
 
 **Options.** This entry point has two independent properties.

@@ -25,7 +25,9 @@ public final class ZLinkProviderLocationRepository
         this.provider = Objects.requireNonNull(provider, "provider");
         this.owners = new ZLinkProviderOwnerLeaseRepository(provider);
         this.descriptors = new ZLinkProviderDescriptorRepository(provider);
-        this.authority = new ZLinkProviderAuthorityRepository(provider);
+        this.authority = new ZLinkProviderAuthorityRepository(
+            provider,
+            this.descriptors);
     }
 
     @Override

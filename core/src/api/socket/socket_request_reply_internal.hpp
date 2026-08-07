@@ -83,6 +83,8 @@ struct socket_request_reply_state_t : public zlink::request_reply_runtime::seque
 struct router_recv_metadata_tls_t
 {
     zlink_routing_id_t source_rid;
+    uint64_t transport_pair_id;
+    uint64_t transport_pair_generation;
 };
 
 router_recv_metadata_tls_t &router_recv_metadata_tls ();
@@ -133,6 +135,11 @@ int send_completion_frames (zlink::socket_base_t *socket_,
                             const zlink_routing_id_t *peer_rid_,
                             zlink_msg_t *parts_,
                             size_t part_count_);
+int send_completion_frames_for_transport_pair (zlink::socket_base_t *socket_,
+                                                uint64_t transport_pair_id_,
+                                                uint64_t transport_pair_generation_,
+                                                zlink_msg_t *parts_,
+                                                size_t part_count_);
 std::shared_ptr<socket_request_reply_state_t>
 find_or_create_request_reply_state (socket_handle_t handle_);
 std::shared_ptr<socket_request_reply_state_t> find_request_reply_state (socket_handle_t handle_);

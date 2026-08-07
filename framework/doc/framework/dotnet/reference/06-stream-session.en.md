@@ -6,9 +6,9 @@ This category covers the entry points used inside STREAM session code
 (`IZLinkSessionClient`, `IZLinkSessionActors`, `IZLinkSessionActor`, `IZLinkStream`) and the
 entry points used inside Actor code for a bound session (`IZLinkBoundSession`). The exact
 signatures are owned by the
-[STREAM session exact interface](../../common/spec/server/languages/dotnet/interfaces/07-stream-session.ko.md)
+[STREAM session exact interface](../../common/spec/server/languages/dotnet/interfaces/07-stream-session.en.md)
 and the
-[Bound STREAM session exact interface](../../common/spec/server/languages/dotnet/interfaces/07-bound-stream-session.ko.md)
+[Bound STREAM session exact interface](../../common/spec/server/languages/dotnet/interfaces/07-bound-stream-session.en.md)
 (both Korean-only).
 
 ---
@@ -227,6 +227,6 @@ needs to be kept. To disconnect from the Session side directly, use the `CloseAs
 ---
 
 The full basis is the
-[STREAM session exact interface](../../common/spec/server/languages/dotnet/interfaces/07-stream-session.ko.md) and the
-[Bound STREAM session exact interface](../../common/spec/server/languages/dotnet/interfaces/07-bound-stream-session.ko.md)
+[STREAM session exact interface](../../common/spec/server/languages/dotnet/interfaces/07-stream-session.en.md) and the
+[Bound STREAM session exact interface](../../common/spec/server/languages/dotnet/interfaces/07-bound-stream-session.en.md)
 (both Korean-only).

@@ -18,7 +18,7 @@ Trace·metric 기록 수준과 sampling을 설정한다.
 
 ```java
 options.configureDispatch()
-    .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
+    .messageFlow(ZLinkMessageFlowLogMode.NORMAL)
     .traceSampleRate(0.1)
     .includeMessageSizes(true);
 ```
@@ -27,19 +27,19 @@ options.configureDispatch()
 
 | Modifier | 기본값 | 의미 |
 | --- | --- | --- |
-| `.messageFlow(ZLinkMessageFlowLogMode)` | 구현 기본값 | `OFF`/`ERRORS_ONLY`/`KEY_TRANSITIONS`/`VERBOSE`/`DIAGNOSTIC` 중 기록할 상세도 |
+| `.messageFlow(ZLinkMessageFlowLogMode)` | `ERRORS` | `OFF`/`ERRORS`/`NORMAL`/`DETAILED` 중 기록할 상세도 |
 | `.traceSampleRate(double)` | 구현 기본값 | `0.0`..`1.0`. 범위를 벗어나면 configuration error |
 | `.includeMessageSizes(boolean)` | `false` | Payload 크기 분포를 telemetry에 포함할지 여부. Payload 내용 자체는 절대 기록하지 않는다 |
-| `.traceLogFile(path)` | 없음 | Diagnostics 기록을 남길 파일 경로 |
-| `.traceLabel(id)` | 없음 | Diagnostics 기록에 붙일 label |
-| `.setMessageFlowObserver(observerType)` / `.setMessageFlowObserver(ZLinkMessageFlowObserver)` | 없음 | `ZLinkMessageFlowEvent`를 받는 observer 등록 |
 
 각 modifier는 `ZLinkDispatchOptions`를 반환하는 동기 fluent 호출이다 — 반환값 없는 등록이 아니다.
 `unhandled()`가 반환하는 `ZLinkUnhandledDispatchOptions`로 handler가 없는 request/send/publish의
 처리 방식(`REPLY_ERROR`/`LOG_AND_DROP`/`DROP`/`THROW`)도 이 builder에서 함께 설정한다.
 
-**완료 결과.** Trace·metric·log 기록 대상(exporter, 원격 backend)은 application이 별도로 구성한다
-(예: Micrometer `MeterRegistry`를 구성하는 `ZLinkMetricsCustomizer` bean).
+**완료 결과.** Framework는 application이 구성한 standard logger·trace·metric provider에
+structured record를 기록한다(예: Micrometer `MeterRegistry`를 구성하는
+`ZLinkMetricsCustomizer` bean). Provider 호출 실패는 원래 message operation의 terminal 결과를
+바꾸지 않고 별도 진단으로 격리한다. Dispatch option은 file path, callback observer,
+runtime error sink나 raw event DTO를 노출하지 않는다.
 
 **선택 기준.** Startup 시점에 기본 기록 수준을 정할 때 쓴다.
 

@@ -83,6 +83,128 @@ public sealed class LocationRuntimeQueryTests
     }
 
     [Fact]
+    public async Task Object_Exact_Query_Projects_Missing_Creating_Ready_And_Unavailable()
+    {
+        var fixture = await FixtureAsync();
+        await AuthorityLocationTestFixture.PublishActorAsync(
+            fixture.Store,
+            ActorLocation(LiveOwner, "1", "actor-ready"));
+        await AuthorityLocationTestFixture.PublishSpotAsync(
+            fixture.Store,
+            InMemoryLocationStoreTests.Spot(LiveOwner, "spot-ready") with
+            {
+                OwnerNodeRid = RoutingId.From("node-1"),
+                OwnerNodeGeneration = 1,
+                SpotGeneration = 1
+            });
+        await ReserveCreatingActorAsync(fixture.Store, "actor-creating");
+        await AuthorityLocationTestFixture.PublishActorAsync(
+            fixture.Store,
+            ActorLocation(DeadOwner, "2", "actor-unavailable"));
+        fixture.Time.Advance(ShortLease + TimeSpan.FromSeconds(1));
+
+        Assert.Null(await fixture.Query.FindActorLocationAsync("actor-missing"));
+        Assert.Null(await fixture.Query.FindSpotLocationAsync("spot-missing"));
+        Assert.Equal(
+            ZLinkLocationObjectState.Creating,
+            (await fixture.Query.FindActorLocationAsync("actor-creating"))!.State);
+        Assert.Equal(
+            ZLinkLocationObjectState.Ready,
+            (await fixture.Query.FindActorLocationAsync("actor-ready"))!.State);
+        Assert.Equal(
+            ZLinkLocationObjectState.Ready,
+            (await fixture.Query.FindSpotLocationAsync("spot-ready"))!.State);
+        Assert.Equal(
+            ZLinkLocationObjectState.Unavailable,
+            (await fixture.Query.FindActorLocationAsync("actor-unavailable"))!.State);
+    }
+
+    [Fact]
+    public async Task Object_List_Uses_Kind_Filter_And_Opaque_Continuation()
+    {
+        var fixture = await FixtureAsync();
+        await AuthorityLocationTestFixture.PublishActorAsync(
+            fixture.Store,
+            ActorLocation(LiveOwner, "1", "actor-a"));
+        await AuthorityLocationTestFixture.PublishActorAsync(
+            fixture.Store,
+            ActorLocation(LiveOwner, "1", "actor-b"));
+        await AuthorityLocationTestFixture.PublishSpotAsync(
+            fixture.Store,
+            InMemoryLocationStoreTests.Spot(LiveOwner, "spot-a") with
+            {
+                OwnerNodeRid = RoutingId.From("node-1"),
+                OwnerNodeGeneration = 1,
+                SpotGeneration = 1
+            });
+
+        var first = await fixture.Query.ListObjectLocationsAsync(
+            new ZLinkLocationObjectFilter(ZLinkLocationObjectKind.Actor),
+            new ZLinkPageRequest(1));
+        var second = await fixture.Query.ListObjectLocationsAsync(
+            new ZLinkLocationObjectFilter(ZLinkLocationObjectKind.Actor),
+            new ZLinkPageRequest(1, first.ContinuationToken));
+        var spots = await fixture.Query.ListObjectLocationsAsync(
+            new ZLinkLocationObjectFilter(
+                ZLinkLocationObjectKind.UserSpot,
+                MeshName: "play"));
+
+        Assert.NotNull(first.ContinuationToken);
+        Assert.Single(first.Items);
+        Assert.Single(second.Items);
+        Assert.NotEqual(first.Items[0].GlobalId, second.Items[0].GlobalId);
+        Assert.Equal("spot-a", Assert.Single(spots.Items).GlobalId);
+    }
+
+    [Fact]
+    public async Task Object_Query_Maps_Store_Failure_To_Unavailable()
+    {
+        var store = new FailingObjectQueryStore();
+        var options = new ZLinkLocationOptions();
+        var tracker = new ZLinkOwnerLeaseTracker(store, options);
+        var runtime = new ZLinkLocationRuntime(options, store);
+        var query = new ZLinkLocationRuntimeQueryService(
+            options,
+            store,
+            RegisteredMeshes,
+            tracker,
+            runtime,
+            new ZLinkObservedLocationGenerations());
+
+        var exact = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
+            query.FindActorLocationAsync("actor").AsTask());
+        var list = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
+            query.ListObjectLocationsAsync(
+                    new ZLinkLocationObjectFilter(ZLinkLocationObjectKind.Actor))
+                .AsTask());
+
+        Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, exact.Kind);
+        Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, list.Kind);
+    }
+
+    [Fact]
+    public async Task Object_List_Rejects_An_Encoded_Page_Larger_Than_Four_Mebibytes()
+    {
+        var store = new OversizedObjectPageStore();
+        var options = new ZLinkLocationOptions();
+        var query = new ZLinkLocationRuntimeQueryService(
+            options,
+            store,
+            RegisteredMeshes,
+            new ZLinkOwnerLeaseTracker(store, options),
+            new ZLinkLocationRuntime(options, store),
+            new ZLinkObservedLocationGenerations());
+
+        var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
+            query.ListObjectLocationsAsync(
+                    new ZLinkLocationObjectFilter(ZLinkLocationObjectKind.Actor))
+                .AsTask());
+
+        Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, error.Kind);
+        Assert.Equal(ZLinkRetryAdvice.RetryAfterBackoff, error.RetryAdvice);
+    }
+
+    [Fact]
     public async Task Actor_Resolve_Drops_Views_Older_Than_An_Observed_Membership_Epoch()
     {
         var time = new ManualTimeProvider();
@@ -303,6 +425,58 @@ public sealed class LocationRuntimeQueryTests
 
     }
 
+    private sealed class FailingObjectQueryStore : ZLinkLocationStoreTestDouble
+    {
+        public override ValueTask<ZLinkAuthorityReadResult> ReadAuthorityAsync(
+            ZLinkAuthorityKey key,
+            CancellationToken cancellationToken = default) =>
+            ValueTask.FromException<ZLinkAuthorityReadResult>(
+                new InvalidOperationException("store unavailable"));
+
+        public override ValueTask<ZLinkAuthorityScanResult> ListAuthoritiesAsync(
+            string prefix,
+            ZLinkAuthorityScanCursor? cursor,
+            int limit,
+            CancellationToken cancellationToken = default) =>
+            ValueTask.FromException<ZLinkAuthorityScanResult>(
+                new InvalidOperationException("store unavailable"));
+    }
+
+    private sealed class OversizedObjectPageStore : ZLinkLocationStoreTestDouble
+    {
+        public override ValueTask<ZLinkAuthorityScanResult> ListAuthoritiesAsync(
+            string prefix,
+            ZLinkAuthorityScanCursor? cursor,
+            int limit,
+            CancellationToken cancellationToken = default)
+        {
+            var allocation = new ZLinkPlacementAllocation(
+                ZLinkPlacementAllocationState.Reserved,
+                ZLinkPlacementObjectKind.Actor,
+                new string('t', 800_000),
+                new ZLinkMeshNodeDescriptorKey("play", RoutingId.From("node-1")),
+                1,
+                new ZLinkCapacityVector(1, 0, null));
+            var snapshot = new ZLinkAuthoritySnapshot(
+                "v1",
+                ReadOnlyMemory<byte>.Empty,
+                1,
+                1,
+                LiveOwner,
+                1,
+                allocation,
+                null,
+                DateTimeOffset.UtcNow);
+            return ValueTask.FromResult<ZLinkAuthorityScanResult>(
+                new ZLinkAuthorityScanResult.Page(
+                    new ZLinkAuthorityPage(
+                        [new ZLinkAuthorityEntry(
+                            ZLinkActorAuthorityPayloadCodec.AuthorityKey("actor"),
+                            snapshot)],
+                        null)));
+        }
+    }
+
     private sealed class FailingRuntimeQuery : IZLinkLocationRuntimeQuery
     {
         public ValueTask<ZLinkLocationRuntimeStatus> GetStatusAsync(
@@ -321,6 +495,23 @@ public sealed class LocationRuntimeQueryTests
             ZLinkPageRequest page = default,
             CancellationToken cancellationToken = default) =>
             throw new InvalidOperationException("store unavailable");
+
+        public ValueTask<ZLinkLocationObjectEntry?> FindActorLocationAsync(
+            string actorId,
+            CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("store unavailable");
+
+        public ValueTask<ZLinkLocationObjectEntry?> FindSpotLocationAsync(
+            string spotId,
+            CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("store unavailable");
+
+        public ValueTask<ZLinkLocationPage<ZLinkLocationObjectEntry>>
+            ListObjectLocationsAsync(
+                ZLinkLocationObjectFilter filter,
+                ZLinkPageRequest page = default,
+                CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("store unavailable");
     }
 
     private static async Task SeedRowsAsync(ZLinkInMemoryLocationStore store, string owner, string suffix)
@@ -336,6 +527,45 @@ public sealed class LocationRuntimeQueryTests
         await AuthorityLocationTestFixture.PublishActorAsync(
             store,
             ActorLocation(owner, suffix, $"actor-{suffix}"));
+    }
+
+    private static async Task ReserveCreatingActorAsync(
+        ZLinkInMemoryLocationStore store,
+        string actorId)
+    {
+        var owner = Assert.IsType<ZLinkOwnerLeaseReadResult.Found>(
+            await store.ReadOwnerLeaseAsync(LiveOwner)).Token;
+        var descriptor = InMemoryLocationStoreTests.MeshNode(LiveOwner) with
+        {
+            ObjectRole = ZLinkMeshNodeObjectRole.Server,
+            EntrySpotId = "play-entry-00000000-0000-4000-a000-000000000001",
+            ObjectCapabilities =
+            [
+                new ZLinkObjectCapability(
+                    ZLinkPlacementObjectKind.Actor,
+                    "player",
+                    ZLinkObjectMaintenancePolicyKind.Disabled,
+                    false,
+                    0)
+            ]
+        };
+        await store.UpdateMeshNodeAsync(
+            descriptor,
+            ZLinkLocationWriteIntent.NewClaim);
+        var intent = System.Text.Encoding.UTF8.GetBytes($"create:{actorId}");
+        Assert.IsType<ZLinkObjectReserveResult.Reserved>(await store.ReserveAsync(
+            new ZLinkObjectReservationRequest(
+                ZLinkPlacementObjectKind.Actor,
+                ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId),
+                "player",
+                $"inline:{actorId}",
+                System.Security.Cryptography.SHA256.HashData(intent),
+                intent.Length,
+                new ZLinkMeshNodeDescriptorKey("play", descriptor.Rid),
+                descriptor.LifecycleGeneration,
+                owner,
+                new byte[] { 0x10 },
+                new ZLinkCapacityVector(1, 0, null))));
     }
 
     private static ZLinkResolvedActorLocation ActorLocation(

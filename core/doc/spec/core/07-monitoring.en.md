@@ -1,4 +1,4 @@
-[한국어](07-monitoring.ko.md) | English
+[한국어](https://zlink-systems.github.io/zlink/ko/spec/core/07-monitoring/) | English
 
 [Specification index](../README.en.md) · [Core index](README.en.md) · [Events](05-events.en.md) · [errno map](04-errno-map.en.md)
 

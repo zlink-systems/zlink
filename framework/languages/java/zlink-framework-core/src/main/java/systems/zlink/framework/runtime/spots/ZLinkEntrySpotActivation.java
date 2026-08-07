@@ -312,7 +312,12 @@ final class EntrySpotActivation
             handleRoutedActorPacketParts(received.parts())
                 .thenAccept(reply -> {
                     if (received.requestSeq().isPresent()) {
-                        reply.ifPresent(message -> received.reply(List.of(message)));
+                        // A routed one-way Actor packet has no application
+                        // reply, but the route request still needs a
+                        // transport acknowledgement so the sender can retire
+                        // the handoff packet.
+                        received.reply(List.of(reply.orElseGet(
+                            ZLinkActorSpotRoutePackets::createHandoffDirectReplyAck)));
                     } else {
                         reply.ifPresent(Message::close);
                     }

@@ -169,7 +169,6 @@ store를 직접 구현할 일은 드물다. `store_*` · `blob_*` 계열은 그�
 | `route_mesh_runtime_t` | MeshNode 상태 snapshot과 observation |
 | `route_mesh_runtime_options_t` | 실행 중 가중치 조정 |
 | `client_server_runtime_t` · `fanout_runtime_t` | 해당 channel의 상태 |
-| `message_flow_observer_t` | 메시지 흐름 기록 수신 |
 | `framework_exception_t` | 실패. `kind ()` · `is_retriable ()` |
 | `logger_t<TOwner>` | DI로 받는 로거 |
 

@@ -1,4 +1,4 @@
-[English](README.en.md) | 한국어
+[English](https://zlink-systems.github.io/zlink/spec/) | 한국어
 
 # ZLink 공개 스펙
 

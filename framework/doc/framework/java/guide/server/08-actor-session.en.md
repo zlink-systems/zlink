@@ -18,9 +18,9 @@ View in another language — [C#/.NET](../../../dotnet/guide/server/08-actor-ses
 # 8. Session And Actor Binding
 
 > **The documents that own this chapter's contract** —
-> [Session Actor dispatch](../../../common/spec/20-session-actor-dispatch.ko.md) owns the
+> [Session Actor dispatch](../../../common/spec/20-session-actor-dispatch.en.md) owns the
 > behavior, and the
-> [per-language STREAM session / bound session public contract](../../../common/spec/server/languages/README.ko.md)
+> [per-language STREAM session / bound session public contract](../../../common/spec/server/languages/README.en.md)
 > owns the exact signatures.
 
 Session binding connects a client STREAM session to an exact Actor incarnation. After
@@ -181,5 +181,5 @@ the actor manager's lookup call.
 
 - Runnable verification examples for this chapter's contract: `13. Interface Catalog`
   chapter §5 — the verification class `StreamContracts`
-- The STREAM node and session lifecycle: [STREAM](09-stream.ko.md)
-- Actor creation and Spot join: [Actor And Spot](07-actor-spot.ko.md)
+- The STREAM node and session lifecycle: [STREAM](09-stream.en.md)
+- Actor creation and Spot join: [Actor And Spot](07-actor-spot.en.md)

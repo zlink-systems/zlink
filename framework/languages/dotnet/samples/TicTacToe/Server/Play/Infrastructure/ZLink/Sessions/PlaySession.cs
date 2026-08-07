@@ -1,6 +1,5 @@
 using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.Contracts.Streams;
-using TicTacToe.Server.Play.Infrastructure.ZLink.Sessions.Handlers;
 
 namespace TicTacToe.Server.Play.Infrastructure.ZLink.Sessions;
 
@@ -12,10 +11,7 @@ internal sealed class PlaySession(
 {
     public IZLinkSessionContext Context { get; } = context;
 
-    public void Configure()
-    {
-        Context.Handlers.AddHandler<AuthenticatePlaySessionHandler>();
-    }
+    public void Configure() { }
 
     public ValueTask OnConnectedAsync(CancellationToken cancellationToken)
     {

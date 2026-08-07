@@ -1,27 +1,48 @@
 import {
   ZLinkFrameworkRuntimeState,
+  type ZLinkClientServerRuntime,
+  type ZLinkChannelClient,
+  type ZLinkFanoutRuntime,
   type ZLinkLocationRuntimeQuery,
   type ZLinkRouteMeshRuntime,
   type ZLinkRouteClient,
   type ZLinkSpotOutbound
 } from '@zlink-systems/framework';
-import { ObjectReq, ObjectSpotType, ProfileReq, type ObjectRes, type ProfileRes } from '../../../Shared/messages';
+import {
+  ClientServerReq,
+  ObjectReq,
+  ObjectSpotType,
+  ProfileReq,
+  SecondaryReq,
+  type ClientServerRes,
+  type ObjectRes,
+  type ProfileRes,
+  type SecondaryRes
+} from '../../../Shared/messages';
 import { ChannelNames } from '../../../Shared/messages';
 import type { StoreResponseGate } from '../../../Shared/location-store';
 import type { HttpRoute } from '../Support/http-server';
+import { EvidenceStore } from '../../../evidence-store';
 
 export function createConsumerEndpoints(
   channel: ZLinkRouteClient,
+  channelClient: ZLinkChannelClient,
   spotOutbound: ZLinkSpotOutbound,
   locationQuery: ZLinkLocationRuntimeQuery,
   routeRuntime: ZLinkRouteMeshRuntime,
+  clientServerRuntime: ZLinkClientServerRuntime,
+  fanoutRuntime: ZLinkFanoutRuntime,
+  evidence: EvidenceStore,
   storeResponseGate: StoreResponseGate | undefined,
   stop: () => void
 ): readonly HttpRoute[] {
   const routes: HttpRoute[] = [
     { method: 'GET', path: '/health', handle: () => ({ status: 'ready', role: 'consumer' }) },
+    { method: 'GET', path: '/evidence', handle: () => evidence.snapshot() },
     { method: 'POST', path: '/profile/request', handle: (body) => requestProfile(channel, toProfileReq(body)) },
     { method: 'POST', path: '/profile/request-once', handle: (body) => requestProfileOnce(channel, toProfileReq(body)) },
+    { method: 'POST', path: '/c4/secondary', handle: (body) => requestSecondary(channel, body as { value: string; marker?: string }) },
+    { method: 'POST', path: '/c4/client-server', handle: (body) => requestClientServer(channelClient, body as { value: string; marker?: string }) },
     { method: 'POST', path: '/object/request', handle: (body) => requestObject(spotOutbound, body as { spotId: string; operationId: string; payload: string }) },
     { method: 'GET', path: '/location/status', handle: () => locationQuery.getStatus() },
     {
@@ -94,6 +115,18 @@ export function createConsumerEndpoints(
       path: '/route/status',
       handle: () => routeRuntime.snapshot(ChannelNames.profile)
     },
+    {
+      method: 'GET',
+      path: '/c4/status',
+      handle: () => ({
+        routes: [
+          routeRuntime.snapshot(ChannelNames.profile),
+          routeRuntime.snapshot(ChannelNames.secondary)
+        ],
+        clientServer: clientServerRuntime.snapshot(ChannelNames.clientServer),
+        fanout: fanoutRuntime.snapshot(ChannelNames.fanout)
+      })
+    },
     { method: 'POST', path: '/shutdown', handle: () => { stop(); return { status: 'stopping' }; } }
   ];
   if (storeResponseGate !== undefined) {
@@ -132,6 +165,26 @@ async function requestProfileOnce(channel: ZLinkRouteClient, request: ProfileReq
     .requestToChannel(ChannelNames.profile, request)
     .timeout(1000)
     .submit<ProfileRes>();
+}
+
+async function requestSecondary(
+  channel: ZLinkChannelClient,
+  request: { readonly value: string; readonly marker?: string }
+): Promise<SecondaryRes> {
+  return await channel
+    .requestToChannel(ChannelNames.secondary, new SecondaryReq(request.value, request.marker))
+    .timeout(5000)
+    .submit<SecondaryRes>();
+}
+
+async function requestClientServer(
+  channel: ZLinkChannelClient,
+  request: { readonly value: string; readonly marker?: string }
+): Promise<ClientServerRes> {
+  return await channel
+    .requestToChannel(ChannelNames.clientServer, new ClientServerReq(request.value, request.marker))
+    .timeout(5000)
+    .submit<ClientServerRes>();
 }
 
 async function requestObject(

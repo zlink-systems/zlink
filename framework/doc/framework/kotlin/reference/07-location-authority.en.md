@@ -5,7 +5,7 @@
 Store registration (`addLocationStore`/`addRelocationStore`), `configureLocations()`, and
 `isPeerReady` use the Java types and builders directly — the exact signature and options table
 follow
-[Java reference 07. Location authority](../../java/reference/07-location-authority.ko.md)
+[Java reference 07. Location authority](../../java/reference/07-location-authority.en.md)
 (Korean-only) directly. The only things Kotlin adds are suspend extensions and `Flow`
 projections over the operational query (`ZLinkLocationRuntimeQuery`). Even when implementing a
 provider directly, it implements the Java `CompletionStage` SPI as-is — there is no separately
@@ -64,5 +64,5 @@ no raw Spot/Actor authority row, Store key, provider version, or scan cursor.
 See the
 [Kotlin Location/Relocation exact interface](../../common/spec/server/languages/kotlin/interfaces/location-maintenance.en.md)
 and
-[Java reference 07. Location authority](../../java/reference/07-location-authority.ko.md)
+[Java reference 07. Location authority](../../java/reference/07-location-authority.en.md)
 (Korean-only) for the full rationale.

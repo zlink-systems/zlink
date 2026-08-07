@@ -20,7 +20,13 @@ Java `ZLinkSessionActor.notifyDisconnected()`는 connection이 유지된 상태�
 사용한다. Bind 뒤 relay·disconnect는 Actor별 저장 route를 사용하며 message마다 Location Store를 조회하지
 않는다. Physical disconnect는 Framework가 current binding 전체에 automatic all-settled 통지를 수행하고
 exact binding identity마다 Spot callback을 최대 한 번 실행한다. Relocation route update는 같은
-ObjectGeneration에만 허용한다. Target Actor가 복원되어 message 처리를 시작한 뒤 target
+ObjectGeneration에만 허용한다. Logical notification도 exact binding callback을 최대 한 번 실행하고 terminal
+뒤 binding을 tombstone으로 확정하여 제거한다. Physical STREAM connection과 Actor·Spot membership은
+유지하며 새 public Unbind API는 제공하지 않는다. Rebind는 이전 exact binding identity를 다른 Actor나
+generation에 재사용하지 않는다. 새 identity를 먼저 등록한 뒤 이전 callback을 최대 한 번 실행하여 이전
+binding을 tombstone으로 만든다. Callback 실패는 진단으로 기록하지만 새 binding을 제거하거나 이전 binding을
+복원하지 않는다. 같은 generation의 relocation route update는 rebind가 아니므로 disconnect callback을
+실행하지 않는다. Target Actor가 복원되어 message 처리를 시작한 뒤 target
 runtime이 `sessionActorLocationUpdateReqMsg`를 send하여 해당 Actor route와 Java
 `ZLinkSessionActor.ref()`가 반환하는 bound-session의 current `ActorRef` location snapshot을
 함께 바꾼다. Snapshot은 같은 ActorId·ObjectGeneration과 target MeshName·NodeRid를 반영한다.
@@ -69,6 +75,7 @@ suspend fun ZLinkSessionActors.bindOrGetActor(
 interface ZLinkKotlinSessionSendCall {
     fun metadata(key: String, value: String): ZLinkKotlinSessionSendCall
     fun compress(): ZLinkKotlinSessionSendCall
+    fun timeout(timeout: Duration): ZLinkKotlinSessionSendCall
     suspend fun await()
 }
 
@@ -117,6 +124,7 @@ public final class systems.zlink.framework.kotlin.ZLinkFrameworkExtensionsKt {
 public interface systems.zlink.framework.kotlin.ZLinkKotlinSessionSendCall {
   public abstract systems.zlink.framework.kotlin.ZLinkKotlinSessionSendCall metadata(java.lang.String, java.lang.String);
   public abstract systems.zlink.framework.kotlin.ZLinkKotlinSessionSendCall compress();
+  public abstract systems.zlink.framework.kotlin.ZLinkKotlinSessionSendCall timeout-LRDsOJo(long);
   public abstract java.lang.Object await(kotlin.coroutines.Continuation<? super kotlin.Unit>);
 }
 public interface systems.zlink.framework.kotlin.ZLinkKotlinSessionReplyCall {
@@ -135,3 +143,10 @@ public interface systems.zlink.framework.kotlin.ZLinkKotlinBoundSession {
   public abstract systems.zlink.framework.kotlin.ZLinkKotlinMessageSendCall send(java.lang.Object);
 }
 ```
+
+`ZLinkKotlinSessionSendCall.timeout(...)`은 이 send의 admission 대기만 줄인다. 생략하면 Java STREAM socket
+send timeout을 사용하고 지정하면 두 값 중 짧은 값을 사용하므로 socket timeout을 늘릴 수 없다. Duration은
+양수이며 milliseconds로 올림한 값이 `1..Int.MAX_VALUE` 범위여야 한다. 만료되면
+`ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED`로 terminal-once 완료하고 이후 admission이나 replay를 시작하지
+않는다. Coroutine cancellation은 기존 Kotlin wait cancellation 의미를 유지하며 reply call에는 이 modifier를
+제공하지 않는다.

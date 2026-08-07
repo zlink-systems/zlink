@@ -1,14 +1,26 @@
 namespace Zlink.Framework.Runtime.Actors;
 
+// Actor lifecycle policy over the runtime's common serial execution engine.
+// Ordinary dispatch uses the application lane. A deferred Join barrier uses
+// the lifecycle lane so it runs before already queued ordinary work, while a
+// terminal barrier closes admission and joins the application lane after all
+// work accepted before the close.
 internal sealed class ZLinkActorDispatchMailbox
 {
     private readonly object _sync = new();
-    private readonly Queue<Waiter> _barrierWaiters = new();
-    private readonly Queue<Waiter> _waiters = new();
+    private readonly ZLinkSerialExecutionQueue _queue;
     private bool _admissionClosed;
-    private bool _busy;
-    private int _pendingMessages;
+    private int _acceptedWaiters;
     private int _pendingRequests;
+
+    public ZLinkActorDispatchMailbox()
+    {
+        var reporter = MailboxFailureReporter.Instance;
+        _queue = new ZLinkSerialExecutionQueue(
+            new ZLinkRuntimeTaskRunner(reporter, CancellationToken.None, this),
+            reporter,
+            CancellationToken.None);
+    }
 
     public int PendingRequestCount
     {
@@ -20,42 +32,28 @@ internal sealed class ZLinkActorDispatchMailbox
 
     public ValueTask<Turn> EnterAsync(
         CancellationToken cancellationToken,
-        bool countAsPendingMessage = false,
         bool countAsPendingRequest = false)
     {
         cancellationToken.ThrowIfCancellationRequested();
-
+        Waiter waiter;
         lock (_sync)
         {
             if (_admissionClosed)
                 throw new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.NotFound,
                     "Actor dispatch admission is closed for a terminal lifecycle transition.");
-
-            if (!_busy)
-            {
-                _busy = true;
-                return ValueTask.FromResult(new Turn(this));
-            }
-
-            var waiter = new Waiter(
+            waiter = PostWaiterUnderLock(
+                ZLinkSerialWorkLane.Application,
                 cancellationToken,
-                countAsPendingMessage,
                 countAsPendingRequest);
-            _waiters.Enqueue(waiter);
-            if (countAsPendingMessage)
-            {
-                _pendingMessages++;
-            }
-            if (countAsPendingRequest) _pendingRequests++;
-            return AwaitTurnAsync(waiter);
         }
+        return AwaitTurnAsync(waiter);
     }
 
     public BarrierReservation ReserveBarrier()
     {
         var cancellation = new CancellationTokenSource();
-        ValueTask<Turn> turn;
+        Waiter waiter;
         lock (_sync)
         {
             if (_admissionClosed)
@@ -65,27 +63,18 @@ internal sealed class ZLinkActorDispatchMailbox
                     ZLinkFrameworkErrorKind.Unavailable,
                     "Actor lifecycle admission is closed for a terminal transition.");
             }
-
-            if (!_busy)
-            {
-                _busy = true;
-                turn = ValueTask.FromResult(new Turn(this));
-            }
-            else
-            {
-                var waiter = new Waiter(cancellation.Token, false, false);
-                _barrierWaiters.Enqueue(waiter);
-                turn = AwaitTurnAsync(waiter);
-            }
+            waiter = PostWaiterUnderLock(
+                ZLinkSerialWorkLane.Lifecycle,
+                cancellation.Token,
+                countAsPendingRequest: false);
         }
-
-        return new BarrierReservation(turn.AsTask(), cancellation);
+        return new BarrierReservation(waiter, cancellation);
     }
 
     public BarrierReservation CloseAdmissionAndReserveLifecycleBarrier()
     {
         var cancellation = new CancellationTokenSource();
-        ValueTask<Turn> turn;
+        Waiter waiter;
         lock (_sync)
         {
             if (_admissionClosed)
@@ -96,23 +85,23 @@ internal sealed class ZLinkActorDispatchMailbox
             }
 
             _admissionClosed = true;
-            if (!_busy)
+            try
             {
-                _busy = true;
-                turn = ValueTask.FromResult(new Turn(this));
+                // Terminal cleanup must remain behind every ordinary turn that
+                // was accepted before admission closed.
+                waiter = PostWaiterUnderLock(
+                    ZLinkSerialWorkLane.Application,
+                    cancellation.Token,
+                    countAsPendingRequest: false);
             }
-            else
+            catch
             {
-                // Terminal cleanup must run after every turn accepted before
-                // admission closed. Unlike a deferred Join barrier, it never
-                // overtakes ordinary waiters that are already queued.
-                var waiter = new Waiter(cancellation.Token, false, false);
-                _waiters.Enqueue(waiter);
-                turn = AwaitTurnAsync(waiter);
+                _admissionClosed = false;
+                cancellation.Dispose();
+                throw;
             }
         }
-
-        return new BarrierReservation(turn.AsTask(), cancellation);
+        return new BarrierReservation(waiter, cancellation);
     }
 
     /// <summary>
@@ -127,8 +116,7 @@ internal sealed class ZLinkActorDispatchMailbox
         lock (_sync)
         {
             if (!_admissionClosed) return true;
-            if (_busy || _barrierWaiters.Count != 0 || _waiters.Count != 0)
-                return false;
+            if (_acceptedWaiters != 0) return false;
             _admissionClosed = false;
             return true;
         }
@@ -138,10 +126,58 @@ internal sealed class ZLinkActorDispatchMailbox
     {
         lock (_sync)
         {
-            if (_busy || _barrierWaiters.Count != 0 || _waiters.Count != 0)
+            if (_acceptedWaiters != 0)
                 throw new InvalidOperationException(
                     "Actor dispatch admission cannot reopen while a previous lifecycle turn remains.");
             _admissionClosed = false;
+        }
+    }
+
+    private Waiter PostWaiterUnderLock(
+        ZLinkSerialWorkLane lane,
+        CancellationToken cancellationToken,
+        bool countAsPendingRequest)
+    {
+        var waiter = new Waiter(
+            this,
+            cancellationToken,
+            countAsPendingRequest);
+        if (countAsPendingRequest) _pendingRequests++;
+        var admission = lane == ZLinkSerialWorkLane.Lifecycle
+            ? _queue.TryPostNextWithAdmission(waiter.RunAsync, out _)
+            : _queue.TryPostApplicationWithAdmission(waiter.RunAsync, out _);
+        if (admission == ZLinkSerialPostAdmission.Accepted)
+        {
+            waiter.MarkAccepted();
+            _acceptedWaiters++;
+            return waiter;
+        }
+
+        if (countAsPendingRequest) _pendingRequests--;
+        waiter.Dispose();
+        throw new ZLinkFrameworkException(
+            admission == ZLinkSerialPostAdmission.Closed
+                ? ZLinkFrameworkErrorKind.ShuttingDown
+                : ZLinkFrameworkErrorKind.CapacityExceeded,
+            admission == ZLinkSerialPostAdmission.Closed
+                ? "Actor dispatch queue is closed."
+                : "Actor dispatch queue reached its count or byte bound.");
+    }
+
+    private void OnWaiterStarted(Waiter waiter)
+    {
+        lock (_sync)
+        {
+            if (waiter.CountsAsPendingRequest) _pendingRequests--;
+        }
+    }
+
+    private void OnWaiterFinished(Waiter waiter)
+    {
+        lock (_sync)
+        {
+            if (!waiter.TryFinishAccepted()) return;
+            _acceptedWaiters--;
         }
     }
 
@@ -149,57 +185,16 @@ internal sealed class ZLinkActorDispatchMailbox
     {
         try
         {
-            await waiter.Task.ConfigureAwait(false);
-            return new Turn(waiter.Owner!);
+            return await waiter.Task.ConfigureAwait(false);
         }
         finally
         {
-            waiter.Dispose();
-        }
-    }
-
-    private void Release()
-    {
-        while (true)
-        {
-            Waiter? next = null;
-            lock (_sync)
-            {
-                while (_barrierWaiters.Count > 0 || _waiters.Count > 0)
-                {
-                    next = _barrierWaiters.Count > 0
-                        ? _barrierWaiters.Dequeue()
-                        : _waiters.Dequeue();
-                    if (next.CountsAsPendingMessage)
-                    {
-                        _pendingMessages--;
-                    }
-                    if (next.CountsAsPendingRequest) _pendingRequests--;
-                    if (!next.IsCanceled)
-                    {
-                        next.Owner = this;
-                        break;
-                    }
-
-                    next.Dispose();
-                    next = null;
-                }
-
-                if (next is null)
-                {
-                    _busy = false;
-                    return;
-                }
-            }
-
-            if (next.TrySetReady()) return;
-
-            next.Dispose();
+            waiter.DisposeCancellationRegistration();
         }
     }
 
     public sealed class BarrierReservation(
-        Task<Turn> turn,
+        Waiter waiter,
         CancellationTokenSource cancellation)
     {
         private int _claimed;
@@ -207,33 +202,27 @@ internal sealed class ZLinkActorDispatchMailbox
         public async ValueTask<Turn> ClaimAsync()
         {
             if (Interlocked.Exchange(ref _claimed, 1) != 0)
-                throw new InvalidOperationException("Actor barrier reservation was already consumed.");
+                throw new InvalidOperationException(
+                    "Actor barrier reservation was already consumed.");
 
             cancellation.Dispose();
-            return await turn.ConfigureAwait(false);
+            return await AwaitTurnAsync(waiter).ConfigureAwait(false);
         }
 
         public void Discard()
         {
             if (Interlocked.Exchange(ref _claimed, 1) != 0) return;
-
-            if (turn.IsCompletedSuccessfully)
-            {
-                cancellation.Dispose();
-                turn.Result.Dispose();
-                return;
-            }
-
             cancellation.Cancel();
             cancellation.Dispose();
-            _ = ObserveCancellationAsync(turn);
+            _ = ReleaseIfAcquiredAsync(waiter);
         }
 
-        private static async Task ObserveCancellationAsync(Task<Turn> pending)
+        private static async Task ReleaseIfAcquiredAsync(Waiter pending)
         {
             try
             {
-                using var turn = await pending.ConfigureAwait(false);
+                using var turn = await AwaitTurnAsync(pending)
+                    .ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -243,33 +232,36 @@ internal sealed class ZLinkActorDispatchMailbox
 
     public readonly struct Turn : IDisposable
     {
-        private readonly ZLinkActorDispatchMailbox? _mailbox;
+        private readonly Waiter? _waiter;
 
-        internal Turn(ZLinkActorDispatchMailbox mailbox)
+        internal Turn(Waiter waiter)
         {
-            _mailbox = mailbox;
+            _waiter = waiter;
         }
 
-        public void Dispose()
-        {
-            _mailbox?.Release();
-        }
+        public void Dispose() => _waiter?.Release();
     }
 
-    private sealed class Waiter : IDisposable
+    internal sealed class Waiter : IDisposable
     {
-        private readonly TaskCompletionSource _ready =
+        private readonly ZLinkActorDispatchMailbox _owner;
+        private readonly CancellationToken _cancellationToken;
+        private readonly TaskCompletionSource<Turn> _ready =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
-
+        private readonly TaskCompletionSource _released =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly CancellationTokenRegistration _registration;
-        private int _canceled;
+        private int _accepted;
+        private int _finished;
+        private int _releasedOnce;
 
-        public Waiter(
+        internal Waiter(
+            ZLinkActorDispatchMailbox owner,
             CancellationToken cancellationToken,
-            bool countsAsPendingMessage,
             bool countsAsPendingRequest)
         {
-            CountsAsPendingMessage = countsAsPendingMessage;
+            _owner = owner;
+            _cancellationToken = cancellationToken;
             CountsAsPendingRequest = countsAsPendingRequest;
             if (cancellationToken.CanBeCanceled)
                 _registration = cancellationToken.Register(
@@ -277,32 +269,72 @@ internal sealed class ZLinkActorDispatchMailbox
                     this);
         }
 
-        public ZLinkActorDispatchMailbox? Owner { get; set; }
+        internal Task<Turn> Task => _ready.Task;
+        internal bool CountsAsPendingRequest { get; }
 
-        public Task Task => _ready.Task;
+        internal void MarkAccepted() => Volatile.Write(ref _accepted, 1);
 
-        public bool IsCanceled => Volatile.Read(ref _canceled) != 0;
+        internal bool TryFinishAccepted() =>
+            Volatile.Read(ref _accepted) != 0
+            && Interlocked.Exchange(ref _finished, 1) == 0;
 
-        public bool CountsAsPendingMessage { get; }
+        internal async ValueTask RunAsync(CancellationToken _)
+        {
+            _owner.OnWaiterStarted(this);
+            if (_cancellationToken.IsCancellationRequested
+                || !_ready.TrySetResult(new Turn(this)))
+            {
+                _owner.OnWaiterFinished(this);
+                return;
+            }
+            await _released.Task.ConfigureAwait(false);
+        }
 
-        public bool CountsAsPendingRequest { get; }
+        internal void Release()
+        {
+            if (Interlocked.Exchange(ref _releasedOnce, 1) == 0)
+            {
+                _owner.OnWaiterFinished(this);
+                _released.TrySetResult();
+            }
+        }
+
+        internal void DisposeCancellationRegistration() =>
+            _registration.Dispose();
 
         public void Dispose()
         {
-            _registration.Dispose();
+            DisposeCancellationRegistration();
+            Release();
         }
 
-        public bool TrySetReady()
-        {
-            if (IsCanceled) return false;
+        private void Cancel() =>
+            _ready.TrySetException(new OperationCanceledException());
+    }
 
-            Dispose();
-            return _ready.TrySetResult();
+    private sealed class MailboxFailureReporter : IZLinkRuntimeFailureReporter
+    {
+        internal static readonly MailboxFailureReporter Instance = new();
+
+        public void ReportHandlerException(Exception exception)
+        {
+            ZLinkFrameworkDebugLog.TaskFailure(
+                "actor-dispatch-mailbox-handler",
+                exception);
         }
 
-        private void Cancel()
+        public void ReportUnhandledCallbackException(Exception exception)
         {
-            if (Interlocked.Exchange(ref _canceled, 1) == 0) _ready.TrySetException(new OperationCanceledException());
+            ZLinkFrameworkDebugLog.TaskFailure(
+                "actor-dispatch-mailbox-callback",
+                exception);
+        }
+
+        public void ReportRuntimeTaskException(
+            string taskName,
+            Exception exception)
+        {
+            ZLinkFrameworkDebugLog.TaskFailure(taskName, exception);
         }
     }
 }

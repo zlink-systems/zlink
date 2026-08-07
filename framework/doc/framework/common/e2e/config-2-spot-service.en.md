@@ -74,7 +74,8 @@ of reply order?
 - Procedure: N increment requests with unique operation IDs are sent with bounded concurrency.
 - Verification: Every request receives exactly one reply, and the final state is N. The handler
   active count never exceeds 1.
-- Detailed behavior: verifies [Spot Messaging §7](../spec/12-spot-messaging.en.md).
+- Detailed behavior: verifies [Work Put On The Spot Application Queue](../spec/12-spot-messaging.en.md#53-work-put-on-the-spot-application-queue)
+  and [Spot Turn And Callback Order](../spec/12-spot-messaging.en.md#54-spot-turn-and-callback-order).
 
 #### SM-A3 A Global SpotId Reaches The Correct Spot
 
@@ -138,7 +139,8 @@ close calls `OnClosing(ExplicitClose)` exactly once.
   the same current ref.
 - Verification: The first close is false, and the callback/membership are kept. The second is true,
   and the closing callback runs exactly once.
-- Detailed behavior: verifies [Spot Actor §7](../spec/15-spot-actor.en.md).
+- Detailed behavior: verifies [Actor Membership](../spec/15-spot-actor.en.md#3-actor-membership-for-entry-spot-and-user-spot)
+  and [Spot Termination](../spec/12-spot-messaging.en.md#62-spot-termination).
 
 #### SM-A7 Reject A Stable-Type Conflict For The Same SpotId
 
@@ -169,7 +171,8 @@ result reflected in Spot state exactly once?
   the worker is released.
 - Verification: The probe finishes before the continuation, and the final state reflects the worker
   result exactly once.
-- Detailed behavior: verifies [Async Execution Policy §6](../spec/05-async-execution-policy.en.md).
+- Detailed behavior: verifies [Worker Offload](../spec/05-async-execution-policy.en.md#12-worker-offload)
+  and [Handler Turn And Claim](../spec/05-async-execution-policy.en.md#3-handler-turn-and-claim).
 
 #### SM-A9 A User Spot Is Published As Ready Only After Initialize Completes
 
@@ -360,7 +363,7 @@ receiving the reply?
   matching reply.
 - Detailed behavior: verifies [Actor Model §5](../spec/14-actor-model.en.md).
 
-#### SM-B5 Observe An Actor Request With No Handler
+#### SM-B5 Record An Actor Request With No Handler
 
 Priority: `P0`
 
@@ -368,11 +371,11 @@ If the Actor exists but has no packet handler, that's a dispatch failure distinc
 target.
 
 **Verification question:** Does a missing-handler request leave a public error and
-`no_handler/reply_error` flow evidence?
+`no_handler/reply_error` logger evidence?
 
-- Starting condition: The Actor is ready, and a public message-flow observer is registered.
+- Starting condition: The Actor is ready, and an application logger provider is configured.
 - Procedure: An unregistered packet name's request is sent, then a normal request is sent.
-- Verification: The first is a formal error terminal with observer evidence exactly once. The normal
+- Verification: The first is a formal error terminal with one `zlink.dispatch_error` logger record. The normal
   request succeeds.
 - Detailed behavior: verifies [Message Flow Tracing §2.2](../spec/26-message-flow-tracing.en.md).
 
@@ -649,18 +652,21 @@ Once an Actor is rebound to Session B, Session A's old binding identity is no lo
 **Verification question:** Does Session A's late relay/disconnect not change Session B's binding and
 Actor state?
 
-- Starting condition: Actor X is bound to A, then explicitly rebound to B.
-- Procedure: A relay and disconnect held on A's network gate are delivered after B's bind completes,
-  then a normal relay/push is run on B.
-- Verification: The old operations end in a stale result with no handler evidence. B's relay/push
-  each succeed exactly once, and the current binding is B.
+- Starting condition: Actor X is bound to A. Normal callback and callback failure use fresh fixtures.
+- Procedure: In each fixture, explicitly rebind to B, submitting logical disconnect for A's exact
+  old binding. After callback terminal and tombstone, deliver A's gated relay and late disconnect
+  result, then run a normal relay/push on B.
+- Verification: In both fixtures the old binding's callback runs at most once and is not repeated
+  after its terminal tombstone. Failure neither restores the old binding nor removes B's binding.
+  Late old operations end stale with no handler evidence. B's relay/push each succeed exactly once.
 - Detailed behavior: verifies [Session Actor Dispatch §4](../spec/20-session-actor-dispatch.en.md).
 
 #### SM-D4B Use Message Follow On The Stored Binding Route After Relocation
 
 Priority: `P0`
 
-Session binding stores a validated route. After Actor relocation, if there's an active Message
+Session binding stores a validated route. Relocation of the same ObjectGeneration is not rebind and
+does not run a disconnect callback. If there's an active Message
 Follow, a relay on the old route is delivered to the current owner exactly once; if there's no
 mapping, it's `Unavailable`.
 
@@ -671,8 +677,8 @@ return `Unavailable`?
 - Procedure: A relay is sent within the active follow window, and on a fresh fixture, a relay is
   sent after the window expires.
 - Verification: The active marker is processed exactly once at the target Actor. The expired request
-  is `Unavailable`, with no handler evidence. This applies only to a same-incarnation relocation the
-  Application did not rebind.
+  is `Unavailable`, with no handler evidence. Both variants have zero disconnect callbacks and keep
+  the binding identity and ObjectGeneration.
 - Detailed behavior: verifies [Session Actor Dispatch §5](../spec/20-session-actor-dispatch.en.md).
 
 #### SM-D5 Notify All Current Bindings Of A Physical Disconnect
@@ -721,20 +727,22 @@ An Actor push targets exactly one current binding — it is not broadcast to unb
 - Verification: A receives the marker exactly once, and B does not.
 - Detailed behavior: verifies [Session Actor Dispatch §5](../spec/20-session-actor-dispatch.en.md).
 
-#### SM-D7 Allow Packet Dispatch After Stream Auth
+#### SM-D7 Reject Pre-Auth Requests In The Application Session Callback
 
 Priority: `P0`
 
-An unauthenticated connection does not dispatch business packets — the Session handler runs only
-after a successful auth.
+The Framework does not own STREAM application authentication policy. The Application session
+callback checks credentials, rejects pre-auth business requests, and stores successful auth in
+application session state.
 
 **Verification question:** Does a request succeed after valid auth, while an invalid-auth connection
 gets a formal close/error?
 
 - Starting condition: Valid and invalid credentials are prepared.
-- Procedure: Separate connectors authenticate, then send the same packet.
-- Verification: Only the valid connector receives a reply, with handler evidence. The invalid
-  connector receives a public auth error or close reason, with the handler not running.
+- Procedure: Separate connectors send a credential packet and the same business packet.
+- Verification: Only the connector whose credentials the Application callback accepts receives a
+  reply. The invalid connector receives the Application-defined error or close reason, with no
+  business-handler execution.
 - Detailed behavior: verifies [Stream Session §3](../spec/19-stream-session.en.md).
 
 #### SM-D8 A Stream Reconnect Requires A New Auth/Bind
@@ -754,20 +762,22 @@ succeeding only after explicit auth/rebind on reconnect?
   is processed exactly once at the Actor.
 - Detailed behavior: verifies [Failover Policy §6](../spec/31-failure-failover-policy.en.md).
 
-#### SM-D9 A Public Inbound Observer Records A Stream Packet
+#### SM-D9 A Logger Provider Records STREAM Message-Flow Results
 
 Priority: `P1`
 
-Inbound observability provides packet kind/name/sequence as formal fields, without duplicating the
-payload as a success condition.
+The application logger provider receives correlation ID, packet name, and message kind as formal
+fields without copying payload or wire-internal sequence into the success condition.
 
-**Verification question:** Do the inbound observer evidence and handler evidence carry the same
-packet identity?
+**Verification question:** Do logger and handler evidence carry the same correlation ID, packet
+name, and message kind?
 
-- Starting condition: A public inbound observer and a handler are registered.
+- Starting condition: An application logger provider and a handler are registered.
 - Procedure: A request and a one-way packet are each sent once.
-- Verification: The observer records both identities exactly once, matching the handler results.
-- Detailed behavior: verifies [Stream Session §8](../spec/19-stream-session.en.md).
+- Verification: The logger provider records the formal fields for both messages exactly once,
+  matching the handler results.
+- Detailed behavior: verifies [Message Flow Tracing — Common Attributes](../spec/26-message-flow-tracing.en.md#3-common-attributes)
+  and [Flow Correlation — Propagation Rule](../spec/27-flow-correlation.en.md#5-propagation-rule).
 
 #### SM-D10 Isolate Stream Backpressure Per Session
 
@@ -786,7 +796,8 @@ public HWM?
   request/push are run. A's gate is released.
 - Verification: B's results complete before A's gate is released. A's operations each have exactly
   one success or deadline terminal, with Session state not corrupted.
-- Detailed behavior: verifies [Stream Session §7](../spec/19-stream-session.en.md).
+- Detailed behavior: verifies [The STREAM Recv Loop And Application Surface](../spec/19-stream-session.en.md#4-the-frameworks-internal-recv-loop-and-the-application-surface)
+  and [Admission Deadline](../spec/05-async-execution-policy.en.md#14-admission-deadline).
 
 #### SM-D11 Separate Stream And Channel Requests On The Same Client
 
@@ -836,7 +847,8 @@ Actors' callbacks observed?
   deadline plus tolerance.
 - Verification: The connector is Disconnected, and the current bound Actors each receive the
   disconnect callback at most once.
-- Detailed behavior: verifies [Stream Session §6](../spec/19-stream-session.en.md).
+- Detailed behavior: verifies [Connection Loss And Reconnect](../spec/29-transport-liveness.en.md#6-connection-loss-and-reconnect)
+  and [The STREAM Error Boundary](../spec/19-stream-session.en.md#6-error-boundary).
 
 #### SM-D14 Perform Auth/Relay/Push On A TLS Stream
 
@@ -851,7 +863,8 @@ certificate is rejected before auth?
 - Procedure: TLS connectors connect to both endpoints.
 - Verification: The valid connection completes auth/bind/relay/push. The invalid connection ends in a
   public TLS error, with the Session handler not running.
-- Detailed behavior: verifies [Stream Session §10](../spec/19-stream-session.en.md).
+- Detailed behavior: verifies [STREAM TLS](../spec/19-stream-session.en.md#71-tls)
+  and [From Session To Actor](../spec/19-stream-session.en.md#8-from-session-to-actor).
 
 #### SM-D15 Complete A Channel→Actor→Bound-Session Push Chain
 
@@ -870,19 +883,19 @@ Channel, direct Actor, and bound push.
 
 ### Track E — Confirm Negative Dispatch And Timer
 
-#### SM-E1 Observe A Spot Request With No Handler
+#### SM-E1 Record A Spot Request With No Handler
 
 Priority: `P0`
 
-If a ready Spot has no packet handler, the caller and observer must be able to confirm the dispatch
-error.
+If a ready Spot has no packet handler, the caller and application logger provider must be able to
+confirm the dispatch error.
 
 **Verification question:** Does a missing Spot handler produce an error reply and
 `no_handler/reply_error` evidence?
 
-- Starting condition: The Spot and a public message-flow observer are ready.
+- Starting condition: The Spot and an application logger provider are ready.
 - Procedure: A missing-packet request and a normal-packet request are sent.
-- Verification: The first returns a formal error with observer evidence; the second returns a normal
+- Verification: The first returns a formal error with `zlink.dispatch_error` logger evidence; the second returns a normal
   reply exactly once.
 - Detailed behavior: verifies [Message Flow Tracing §2.2](../spec/26-message-flow-tracing.en.md).
 
@@ -900,7 +913,7 @@ exactly once?
   polled with a bounded wait.
 - Verification: The callback count and counter delta are both 1, and the client push is also exactly
   one.
-- Detailed behavior: verifies [Spot Messaging §6](../spec/12-spot-messaging.en.md).
+- Detailed behavior: verifies [Async Execution Policy — Spot Timer](../spec/05-async-execution-policy.en.md#5-spot-timer).
 
 #### SM-E3 An Idle Timer Starts An Explicit Close
 
@@ -917,7 +930,8 @@ Spot is kept?
   collected.
 - Verification: Only the idle-empty Spot is closed, with a callback reason of ExplicitClose. The
   other two keep processing requests.
-- Detailed behavior: verifies [Spot Actor §7](../spec/15-spot-actor.en.md).
+- Detailed behavior: verifies [Spot Timer](../spec/05-async-execution-policy.en.md#5-spot-timer)
+  and [Spot Termination](../spec/12-spot-messaging.en.md#62-spot-termination).
 
 #### SM-E4 Confirm Observable Sequences Per Timer Overrun Policy
 
@@ -926,16 +940,18 @@ Priority: `P1`
 When a handler takes longer than the interval, `SkipLateTicks`, `CatchUpBounded`, and
 `DelayNextTick` produce different callback sequences.
 
-**Verification question:** After an application-gate-induced overrun, do the callback count/spacing
-match the configured policy?
+**Verification question:** After an application-gate-induced overrun, do the tick fields match the
+configured policy?
 
 - Starting condition: Fresh timers with the same interval are made per policy, with the first
   callback held on a gate.
-- Procedure: After several due boundaries pass, the gate is released, and callback timestamps in a
-  bounded observation window are collected.
-- Verification: Each policy follows the spec's skip, bounded catch-up, or delayed-next rule. Exact
+- Procedure: After several due boundaries pass, the gate is released, and `DeliveryIndex`,
+  `ScheduledIndex`, and `SkippedTicks` are collected in a bounded observation window.
+- Verification: `DeliveryIndex` increases in actual callback order. `SkipLateTicks` reports skipped
+  due ticks in `SkippedTicks`; `CatchUpBounded` delivers consecutively only up to
+  `MaxCatchUpTicks`; and `DelayNextTick` schedules the next tick after callback completion. Exact
   scheduler nanoseconds and thread timing are not compared.
-- Detailed behavior: verifies [Spot Messaging §6](../spec/12-spot-messaging.en.md).
+- Detailed behavior: verifies [Spot-Timer Overrun Policy And Tick Fields](../spec/05-async-execution-policy.en.md#5-spot-timer).
 
 ### Track F — Channel/Node/Spot Routes Coexist On The Same MeshNode Transport
 
@@ -1139,7 +1155,7 @@ eligible A?
 
 ## 4. Completion Criteria
 
-- Every scenario uses only the public Framework API, public status/observer, and application
+- Every scenario uses only the public Framework API, public status/application logger provider, and application
   evidence.
 - Factory and handler ordering is controlled by application signals; internal CAS/queue/Store rows
   are not read.

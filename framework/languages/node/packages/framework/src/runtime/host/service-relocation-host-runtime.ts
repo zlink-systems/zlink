@@ -130,6 +130,13 @@ import {
   type ServiceWireRelocationParticipant
 } from '../foundation/service-stateful-wire-codec';
 
+export class ZLinkRelocationStateIncompatibleError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ZLinkRelocationStateIncompatibleError';
+  }
+}
+
 const RELOCATION_MESSAGE_ESTIMATE_PER_UNIT = 64n;
 const RELOCATION_STRIPE_BYTES = 64 * 1024 * 1024;
 const RELOCATION_INGRESS_HOLD_BYTES = 16 * 1024 * 1024;
@@ -337,7 +344,8 @@ export class ZLinkHostServiceRelocationRuntime {
   async relocateMesh(
     meshName: string,
     targetApplicationVersion?: bigint,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    stopStartingSignal?: AbortSignal
   ): Promise<void> {
     const spotManager = this.options.spotManager();
     const actorManager = this.options.actorManager();
@@ -449,7 +457,10 @@ export class ZLinkHostServiceRelocationRuntime {
     }
     const operationSignal = signal ?? new AbortController().signal;
     const deadlineMs = signal === undefined ? 30_000 : 24 * 60 * 60 * 1000;
-    const result = await raceAbort(maintenance.start('retire', deadlineMs), operationSignal);
+    const result = await raceAbort(
+      maintenance.start('retire', deadlineMs, stopStartingSignal),
+      operationSignal
+    );
     if (result.state !== 'completed') {
       throw result.terminalError ?? new Error(`Host relocation ended in '${result.state}'.`);
     }
@@ -689,15 +700,24 @@ export class ZLinkHostServiceRelocationRuntime {
           spotAuthority,
           activation
         );
-        for (const state of actorStates) {
-          sessions.push({
+        // captureRelocation seals synchronously before its first await. Invoke
+        // it in the same event-loop turn as the wire ingress seal so no
+        // accepted direct message can enter between the two boundaries.
+        const spotCaptureOperation = activation.captureRelocation(captureSignal);
+        const preparedSessions = Promise.all(actorStates.map(async state => ({
             state,
             actor: state.actor!,
             prepared: await this.options.actorTransfer.prepareMaintenanceSession(
               state.actor!, state, captureSignal, false)
-          });
-        }
-        spotCapture = await activation.captureRelocation(captureSignal);
+          })));
+        const preparedSessionsOutcome = preparedSessions.then(
+          value => ({ value }),
+          error => ({ error })
+        );
+        spotCapture = await spotCaptureOperation;
+        const preparation = await preparedSessionsOutcome;
+        if ('error' in preparation) throw preparation.error;
+        sessions.push(...preparation.value);
         return {
           acceptedJournal: Buffer.alloc(0),
           queuedMessages: [],
@@ -2823,7 +2843,9 @@ export class ZLinkHostServiceRelocationRuntime {
       await adapter.capture(value as never, signal ?? new AbortController().signal)
     );
     if (captured.byteLength > RELOCATION_STRIPE_BYTES) {
-      throw new Error('Relocation application state exceeds the 64 MiB participant limit.');
+      throw new ZLinkRelocationStateIncompatibleError(
+        'Relocation application state exceeds the 64 MiB participant limit.'
+      );
     }
     return captured;
   }
@@ -3758,7 +3780,8 @@ function relocationTargetSupports(
   descriptor: ZLinkMeshNodeDescriptor,
   requirements: readonly RelocationTargetRequirement[]
 ): boolean {
-  if (descriptor.activationConcurrency.active >= descriptor.activationConcurrency.limit) {
+  if (descriptor.activationConcurrency.limit !== 0
+      && descriptor.activationConcurrency.active >= descriptor.activationConcurrency.limit) {
     return false;
   }
   const actorCount = requirements
@@ -3767,12 +3790,14 @@ function relocationTargetSupports(
   const spotCount = requirements
     .filter(value => value.objectKind !== 'actor')
     .reduce((sum, value) => sum + value.count, 0);
-  if (descriptor.populationCapacity.actors.active
+  if ((descriptor.populationCapacity.actors.limit !== 0
+      && descriptor.populationCapacity.actors.active
       + descriptor.populationCapacity.actors.reserved
       + actorCount > descriptor.populationCapacity.actors.limit
-    || descriptor.populationCapacity.spots.active
+    ) || (descriptor.populationCapacity.spots.limit !== 0
+      && descriptor.populationCapacity.spots.active
       + descriptor.populationCapacity.spots.reserved
-      + spotCount > descriptor.populationCapacity.spots.limit) {
+      + spotCount > descriptor.populationCapacity.spots.limit)) {
     return false;
   }
   for (const requirement of requirements) {
@@ -3787,7 +3812,8 @@ function relocationTargetSupports(
         value.objectKind === requirement.objectKind
         && value.stableType === requirement.stableType);
       if (capacity === undefined
-        || capacity.active + capacity.reserved + requirement.count > capacity.limit) {
+        || (capacity.limit !== 0
+          && capacity.active + capacity.reserved + requirement.count > capacity.limit)) {
         return false;
       }
     }

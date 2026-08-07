@@ -7,7 +7,7 @@ contract tests must follow this contract.
 | No. | Document | Scope |
 |---|------|------|
 | `01` | [System Structure](01-system-structure.en.md) | Package structure/deployment, NestJS module registration, DI, lifecycle including Instance Spot, and startup validation |
-| `interfaces` | [Public Interface Table Of Contents](interfaces/README.ko.md) | Per-category TypeScript declarations, Location Store, maintenance, and automatic routing ID allocation |
+| `interfaces` | [Public Interface Table Of Contents](interfaces/README.en.md) | Per-category TypeScript declarations, Location Store, maintenance, and automatic routing ID allocation |
 
 **The meaning and behavioral rules of a feature are owned by the
 [common spec](../../../README.en.md).** This directory only fixes the

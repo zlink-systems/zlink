@@ -5,7 +5,6 @@
 #include "runtime/diagnostics/dispatch_error_reporter.hpp"
 #include "runtime/diagnostics/flow_context.hpp"
 #include "runtime/diagnostics/message_flow_tracer.hpp"
-#include "runtime/eventing/runtime_wake_pipe.hpp"
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/client_server/weighted_selector.hpp"
 #include "runtime/configuration/service_scope.hpp"
@@ -560,12 +559,7 @@ void client_server_location_runtime_t::start ()
     _stop.store (false, std::memory_order_release);
     try {
         _transport_poller = std::make_unique<zlink::poller_t> ();
-        if (!_wake_pipe.open ())
-            throw std::runtime_error ("ClientServer runtime wake pipe creation failed");
-        _transport_poller->add_fd (
-          _wake_pipe.read_fd (),
-          zlink::poll_event_flag_t::pollin,
-          next_transport_poller_slot ());
+        _wake_timer.attach (*_transport_poller);
         for (const auto &channel : _channels) {
             if (channel.server.enabled
                 && !channel.server.bind_endpoints.empty ())
@@ -690,15 +684,8 @@ bool client_server_location_runtime_t::publish_descriptor_state (
         _descriptor_publish_result = false;
         _descriptor_publish_pending = true;
     }
-    try {
-        _wake_pipe.signal ();
-    }
-    catch (...) {
-        std::lock_guard lock (_descriptor_publish_mutex);
-        _descriptor_publish_pending = false;
-        _descriptor_publish_changed.notify_all ();
-        return false;
-    }
+    _descriptor_publish_changed.notify_all ();
+    _wake_timer.signal ();
 
     std::unique_lock lock (_descriptor_publish_mutex);
     if (!_descriptor_publish_changed.wait_for (
@@ -790,11 +777,8 @@ void client_server_location_runtime_t::run ()
               1,
               std::chrono::duration_cast<std::chrono::milliseconds> (
                 wake_at - after_pump));
-            if (count == 1
-                && readiness.slot != 0
-                && readiness.source_kind == zlink::poll_source_kind_t::fd
-                && readiness.fd == _wake_pipe.read_fd ())
-                _wake_pipe.drain ();
+            if (count == 1 && _wake_timer.is_event (readiness))
+                _wake_timer.consume ();
         }
         catch (...) {
             if (!_stop.load (std::memory_order_acquire))
@@ -1130,7 +1114,7 @@ void client_server_location_runtime_t::dispatch_server (
                 auto flow_scope = runtime::flow_context_t::enter (
                   payload.flow_id,
                   payload.flow_origin,
-                  flow.capture_enabled (),
+                  flow.mode (),
                   flow_origin_t::inbound);
                 flow.trace (message_flow_outcome_t::received, [&] {
                     return message_flow_event_t{
@@ -1404,6 +1388,11 @@ client_server_location_runtime_t::select_ready (
   std::chrono::steady_clock::time_point deadline)
 {
     std::unique_lock lock (_gate);
+    if (!_clients.contains (channel_name)) {
+        return result_t<std::shared_ptr<raw_client_server_client_t>>::failure (
+          framework_error_kind_t::not_configured,
+          "ClientServer Client role is not registered for this channel");
+    }
     const auto available = [&] {
         const auto found = _clients.find (channel_name);
         if (found == _clients.end ())
@@ -1427,8 +1416,8 @@ client_server_location_runtime_t::select_ready (
         const auto found = _clients.find (channel_name);
         if (found == _clients.end ()) {
             return result_t<std::shared_ptr<raw_client_server_client_t>>::failure (
-              framework_error_kind_t::not_found,
-              "ClientServer channel is not registered");
+              framework_error_kind_t::not_configured,
+              "ClientServer Client role is not registered for this channel");
         }
         return result_t<std::shared_ptr<raw_client_server_client_t>>::failure (
           framework_error_kind_t::not_found,
@@ -1437,8 +1426,8 @@ client_server_location_runtime_t::select_ready (
     const auto channel_it = _clients.find (channel_name);
     if (channel_it == _clients.end ()) {
         return result_t<std::shared_ptr<raw_client_server_client_t>>::failure (
-          framework_error_kind_t::not_found,
-          "ClientServer channel is not registered");
+          framework_error_kind_t::not_configured,
+          "ClientServer Client role is not registered for this channel");
     }
     auto &channel = *channel_it->second;
     if (channel.selector_dirty) {
@@ -1486,10 +1475,11 @@ void client_server_location_runtime_t::stop () noexcept
         _descriptor_publish_pending = false;
     }
     _descriptor_publish_changed.notify_all ();
+    _wake_timer.signal ();
     _ready.notify_all ();
-    _wake_pipe.signal ();
     if (_thread.joinable ())
         _thread.join ();
+    _wake_timer.detach ();
     std::vector<std::string> client_channels;
     bool has_servers = false;
     bool has_clients = false;
@@ -1507,14 +1497,6 @@ void client_server_location_runtime_t::stop () noexcept
     }
     for (const auto &channel_name : client_channels)
         _channel_runtime.unbind_client_server_transport (channel_name);
-    if (_transport_poller && _wake_pipe.read_fd () >= 0) {
-        try {
-            _transport_poller->remove_fd (_wake_pipe.read_fd ());
-        }
-        catch (...) {
-        }
-    }
-    _wake_pipe.close ();
     if (_transport_poller) {
         try {
             _transport_poller->close ();

@@ -9,16 +9,16 @@
 namespace foundation = zlink::framework::runtime::foundation;
 namespace runtime = zlink::framework::runtime;
 
-foundation::operation_id_t id (std::uint8_t value)
+foundation::call_id_t id (std::uint8_t value)
 {
-    return foundation::operation_id_t{0, value};
+    return foundation::call_id_t{0, value};
 }
 
 int main ()
 {
-    runtime::exactly_once_table_t<foundation::operation_id_t,
+    runtime::exactly_once_table_t<foundation::call_id_t,
                                   int,
-                                  runtime::operation_id_hash_t>
+                                  runtime::call_id_hash_t>
       completions (2);
     assert (completions.reserve (id (10)));
     assert (completions.claim (id (10)).state

@@ -247,18 +247,24 @@ client_config="${config_dir}/client.properties"
 
 create_configs() {
   local service_capacity_args=()
+  local bootstrap_spot_args=()
+  local filtered_spot_args=("enable-spot=true" "register-placement-objects=true")
   if [[ "${SCENARIO}" == "MON-A6" || "${SCENARIO}" == "all" ]]; then
     service_capacity_args=("actor-capacity=1" "spot-capacity=2")
+    bootstrap_spot_args=("disable-bootstrap-spot=true")
+    # Config-7 exercises one bounded placement provider. The filtered service
+    # remains a process fixture but must not add a second placement capacity.
+    filtered_spot_args=("enable-spot=true" "register-placement-objects=false")
   fi
   write_role_config "${service_config}" \
     "routing-id=svc-a" "api-endpoint=${API_ENDPOINT}" \
     "handshake-endpoint=${HANDSHAKE_ENDPOINT}" "mesh-endpoint=${MESH_ENDPOINT}" \
     "http-endpoint=${SERVICE_HTTP}" \
-    "enable-handshake=true" "enable-spot=true" "${service_capacity_args[@]}"
+    "enable-handshake=true" "enable-spot=true" "register-placement-objects=true" "${service_capacity_args[@]}" "${bootstrap_spot_args[@]}"
   write_role_config "${filtered_service_config}" \
     "routing-id=svc-b" "api-endpoint=${FILTER_API_ENDPOINT}" \
     "mesh-endpoint=${MESH_B_ENDPOINT}" "mesh-peer-endpoint=${MESH_ENDPOINT}" \
-    "http-endpoint=${FILTER_HTTP}" "enable-handshake=false" "enable-spot=true"
+    "http-endpoint=${FILTER_HTTP}" "enable-handshake=false" "${filtered_spot_args[@]}"
   write_role_config "${throwing_service_config}" \
     "routing-id=svc-throw" "api-endpoint=${THROW_API_ENDPOINT}" \
     "http-endpoint=${THROW_HTTP}" "enable-handshake=false" "enable-spot=false"

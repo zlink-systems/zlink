@@ -22,6 +22,7 @@ ZLINK_SAMPLE_GRADLE_SETTINGS_ARGS=(--settings-file standalone.settings.gradle.kt
 pids=()
 redis_container_id=""
 log_dir="build/sample-logs"
+ZLINK_SAMPLE_FRAMEWORK_ROLE_LOGS="workflow-a.log workflow-b.log api-a.log api-b.log"
 store_dir="build/sample-store"
 config_dir="build/sample-config"
 export SHOPPINGMALL_LOG_DIR="${SHOPPINGMALL_LOG_DIR:-$(pwd)/logs}"

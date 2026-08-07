@@ -37,6 +37,13 @@ export interface SocketNativeBinding {
     peerRid: Buffer,
     parts: unknown
   ) => boolean;
+  routerTrySendCompletionControlTransportPair: (
+    socket: NativeHandle,
+    peerRid: Buffer,
+    transportPairId: bigint,
+    transportPairGeneration: bigint,
+    parts: unknown
+  ) => boolean;
   routerRequest: (
     socket: NativeHandle,
     peerRid: Buffer,
@@ -44,6 +51,24 @@ export interface SocketNativeBinding {
     callback: NativeRequestCallback,
     flags: number,
     timeoutMs: number
+  ) => void;
+  routerRequestTransportPair: (
+    socket: NativeHandle,
+    peerRid: Buffer,
+    transportPairId: bigint,
+    transportPairGeneration: bigint,
+    parts: unknown,
+    callback: NativeRequestCallback,
+    flags: number,
+    timeoutMs: number
+  ) => void;
+  routerSendTransportPair: (
+    socket: NativeHandle,
+    peerRid: Buffer,
+    transportPairId: bigint,
+    transportPairGeneration: bigint,
+    parts: unknown,
+    flags: number
   ) => void;
   socketBind: (socket: NativeHandle, endpoint: string) => void;
   socketClose: (socket: NativeHandle) => void;

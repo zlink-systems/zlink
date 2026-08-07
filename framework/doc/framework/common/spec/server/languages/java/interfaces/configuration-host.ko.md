@@ -85,8 +85,6 @@ public interface ZLinkNetworkOptions {
 }
 
 public interface ZLinkMeshNodeSocketConfig {
-    long maxMessageSize();
-    void setMaxMessageSize(long value);
     long sendHighWaterMark();
     void setSendHighWaterMark(long value);
     long receiveHighWaterMark();
@@ -329,12 +327,9 @@ JVM service runtime의 고정 liveness profile이다. 다른 inbound frame은 [d
 Channel·handler·peer별 public option으로 노출하지 않는다. Location owner lease option은 별도 store 계약이며
 transport liveness를 대신하지 않는다.
 
-`maxMessageSize`는 startup 전에만 설정하며 runtime setter를 제공하지 않는다. `0`은 bindings 또는 transport가
-수신할 수 있는 최대 complete message 크기로 정규화한다. Transport가 unlimited이면 service wire의 `uint32`
-표현 한계에서 envelope overhead를 뺀 값을 사용한다. 양수는 그 표현 한계를 넘을 수 없으며 넘으면 startup
-설정 오류로 거부한다. Peer는 정규화한 값을 내부 handshake로 교환하고 sender와 receiver는 두 값 중 작은
-effective bound를 complete message allocation 전에 적용한다. 이 negotiation을 위한 public option은 제공하지
-않는다.
+`ZLinkMeshNodeSocketConfig`는 RouteMesh SS의 Framework-level message-size 설정을 제공하지 않는다.
+Sender와 receiver는 Framework-level complete-message 상한으로 message를 거부하지 않는다. Transport와
+service-wire 표현 한계, HWM과 mailbox budget은 별도 자원·wire guard로 유지한다.
 
 `mailboxMessageBudget`와 `mailboxByteBudget`은 owner별 application mailbox의 메시지 수와 byte 합계
 상한이다. Byte 회계는 payload 크기만 세지 않는다 — `payload 크기 + metadata 크기 + 작업당 고정 비용`을
@@ -411,21 +406,13 @@ public interface systems.zlink.framework.configuration.ZLinkDiagnosticsOptions {
   public abstract systems.zlink.framework.configuration.ZLinkMessageFlowLogMode messageFlow();
   public abstract double sampleRate();
   public abstract boolean includeMessageSizes();
-  public abstract boolean includeNativeDiagnostics();
-  public abstract java.lang.String logFile();
-  public abstract java.lang.String label();
-  public abstract systems.zlink.framework.configuration.ZLinkMessageFlowLogMode effectiveMessageFlow();
 }
 public interface systems.zlink.framework.configuration.ZLinkDispatchOptions {
   public abstract systems.zlink.framework.configuration.ZLinkUnhandledDispatchOptions unhandled();
   public abstract systems.zlink.framework.configuration.ZLinkDiagnosticsOptions diagnostics();
-  public abstract systems.zlink.framework.configuration.ZLinkDispatchOptions setMessageFlowObserver(java.lang.Class<? extends systems.zlink.framework.configuration.ZLinkMessageFlowObserver>);
-  public abstract systems.zlink.framework.configuration.ZLinkDispatchOptions setMessageFlowObserver(systems.zlink.framework.configuration.ZLinkMessageFlowObserver);
   public abstract systems.zlink.framework.configuration.ZLinkDispatchOptions messageFlow(systems.zlink.framework.configuration.ZLinkMessageFlowLogMode);
   public abstract systems.zlink.framework.configuration.ZLinkDispatchOptions traceSampleRate(double);
   public abstract systems.zlink.framework.configuration.ZLinkDispatchOptions includeMessageSizes(boolean);
-  public abstract systems.zlink.framework.configuration.ZLinkDispatchOptions traceLogFile(java.lang.String);
-  public abstract systems.zlink.framework.configuration.ZLinkDispatchOptions traceLabel(java.lang.String);
 }
 public interface systems.zlink.framework.configuration.ZLinkEndpointConnections {
   public abstract void connect(java.lang.String);
@@ -433,8 +420,6 @@ public interface systems.zlink.framework.configuration.ZLinkEndpointConnections 
   public abstract java.util.List<java.lang.String> listConnections();
 }
 public interface systems.zlink.framework.configuration.ZLinkMeshNodeSocketConfig {
-  public abstract long maxMessageSize();
-  public abstract void setMaxMessageSize(long);
   public abstract long sendHighWaterMark();
   public abstract void setSendHighWaterMark(long);
   public abstract long receiveHighWaterMark();
@@ -466,44 +451,14 @@ public interface systems.zlink.framework.configuration.ZLinkMessageFlowControl {
   public abstract void setMessageFlowMode(systems.zlink.framework.configuration.ZLinkMessageFlowLogMode);
   public abstract systems.zlink.framework.configuration.ZLinkMessageFlowLogMode messageFlowMode();
 }
-public final class systems.zlink.framework.configuration.ZLinkMessageFlowEvent extends java.lang.Record {
-  public systems.zlink.framework.configuration.ZLinkMessageFlowEvent(systems.zlink.framework.configuration.ZLinkMessageFlowOutcome, systems.zlink.framework.configuration.ZLinkDispatchErrorSurface, systems.zlink.framework.configuration.ZLinkDispatchMessageKind, java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.Long, systems.zlink.framework.configuration.ZLinkDispatchErrorReason, systems.zlink.framework.configuration.ZLinkDispatchErrorAction, java.lang.String, java.lang.String, java.lang.String, systems.zlink.framework.monitoring.ZLinkFlowOrigin);
-  public systems.zlink.framework.configuration.ZLinkMessageFlowEvent(systems.zlink.framework.configuration.ZLinkMessageFlowOutcome, systems.zlink.framework.configuration.ZLinkDispatchErrorSurface, systems.zlink.framework.configuration.ZLinkDispatchMessageKind, java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.Long, systems.zlink.framework.configuration.ZLinkDispatchErrorReason, systems.zlink.framework.configuration.ZLinkDispatchErrorAction, java.lang.String, java.lang.String);
-  public systems.zlink.framework.configuration.ZLinkMessageFlowEvent(systems.zlink.framework.configuration.ZLinkMessageFlowOutcome, systems.zlink.framework.configuration.ZLinkDispatchErrorSurface, systems.zlink.framework.configuration.ZLinkDispatchMessageKind, java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.Long);
-  public systems.zlink.framework.configuration.ZLinkMessageFlowEvent withFlow(java.lang.String, systems.zlink.framework.monitoring.ZLinkFlowOrigin);
-  public final java.lang.String toString();
-  public final int hashCode();
-  public final boolean equals(java.lang.Object);
-  public systems.zlink.framework.configuration.ZLinkMessageFlowOutcome outcome();
-  public systems.zlink.framework.configuration.ZLinkDispatchErrorSurface surface();
-  public systems.zlink.framework.configuration.ZLinkDispatchMessageKind messageKind();
-  public java.lang.String packetName();
-  public java.lang.String channelName();
-  public java.lang.String topic();
-  public java.lang.String correlationId();
-  public java.lang.String sourceRid();
-  public java.lang.String spotId();
-  public java.lang.String actorId();
-  public java.lang.Long messageSize();
-  public systems.zlink.framework.configuration.ZLinkDispatchErrorReason errorReason();
-  public systems.zlink.framework.configuration.ZLinkDispatchErrorAction errorAction();
-  public java.lang.String errorType();
-  public java.lang.String errorMessage();
-  public java.lang.String flowId();
-  public systems.zlink.framework.monitoring.ZLinkFlowOrigin flowOrigin();
-}
 public final class systems.zlink.framework.configuration.ZLinkMessageFlowLogMode extends java.lang.Enum<systems.zlink.framework.configuration.ZLinkMessageFlowLogMode> {
   public static final systems.zlink.framework.configuration.ZLinkMessageFlowLogMode OFF;
-  public static final systems.zlink.framework.configuration.ZLinkMessageFlowLogMode ERRORS_ONLY;
-  public static final systems.zlink.framework.configuration.ZLinkMessageFlowLogMode KEY_TRANSITIONS;
-  public static final systems.zlink.framework.configuration.ZLinkMessageFlowLogMode VERBOSE;
-  public static final systems.zlink.framework.configuration.ZLinkMessageFlowLogMode DIAGNOSTIC;
+  public static final systems.zlink.framework.configuration.ZLinkMessageFlowLogMode ERRORS;
+  public static final systems.zlink.framework.configuration.ZLinkMessageFlowLogMode NORMAL;
+  public static final systems.zlink.framework.configuration.ZLinkMessageFlowLogMode DETAILED;
   public static systems.zlink.framework.configuration.ZLinkMessageFlowLogMode[] values();
   public static systems.zlink.framework.configuration.ZLinkMessageFlowLogMode valueOf(java.lang.String);
   public int value();
-}
-public interface systems.zlink.framework.configuration.ZLinkMessageFlowObserver {
-  public abstract java.util.concurrent.CompletionStage<java.lang.Void> onMessageFlow(systems.zlink.framework.configuration.ZLinkMessageFlowEvent);
 }
 public interface systems.zlink.framework.configuration.ZLinkMetadataPolicyBuilder {
   public abstract systems.zlink.framework.configuration.ZLinkMetadataPolicyBuilder allowSessionToActor(java.lang.String);
@@ -564,6 +519,13 @@ public interface systems.zlink.framework.configuration.ZLinkWorkerOptions {
 }
 ```
 
+`ZLinkMessageFlowLogMode`의 네 값은 진단 비활성화, 오류만 기록, 주요 전이 기록, 상세 진단을 각각
+나타낸다. Startup에서 지정하지 않은 diagnostics level의 기본값은 `ERRORS`다. Framework는 application이
+구성한 표준 logger·trace·metric provider에 structured record를
+기록한다. Dispatch configuration은 level, sampling rate와 message size 포함 여부만 제공하며 file path,
+label, exporter lifecycle 또는 provider sink를 받지 않는다. Message-flow observer callback, runtime error sink와 raw event DTO는 public contract가 아니다.
+Provider 호출 실패는 원래 message operation의 terminal 결과를 바꾸지 않으며 별도 진단으로 격리한다.
+
 `ZLinkStreamNodeBuilder.configureSocket().setMaxMessageSize(...)`의 기본값은 `64 KiB`다. 이
 설정은 StreamNode의 Core STREAM inbound에서 client→server complete message를 검사할 때만
 사용하며, 크기는 6-byte prefix를 제외한 header와 payload의 합이다. `0`은 Core `-1`로
@@ -578,66 +540,6 @@ outbound에는 이 Framework 상한을 적용하지 않으며 ClientServer와 Ro
 binary signature 형식으로 고정한다.
 
 ```java
-public final class systems.zlink.framework.configuration.ZLinkDispatchErrorAction extends java.lang.Enum<systems.zlink.framework.configuration.ZLinkDispatchErrorAction> {
-  public static final systems.zlink.framework.configuration.ZLinkDispatchErrorAction REPLY_ERROR;
-  public static final systems.zlink.framework.configuration.ZLinkDispatchErrorAction DROP;
-  public static systems.zlink.framework.configuration.ZLinkDispatchErrorAction[] values();
-  public static systems.zlink.framework.configuration.ZLinkDispatchErrorAction valueOf(java.lang.String);
-  public int value();
-}
-public final class systems.zlink.framework.configuration.ZLinkDispatchErrorReason extends java.lang.Enum<systems.zlink.framework.configuration.ZLinkDispatchErrorReason> {
-  public static final systems.zlink.framework.configuration.ZLinkDispatchErrorReason HANDLER_MISSING;
-  public static final systems.zlink.framework.configuration.ZLinkDispatchErrorReason PAYLOAD_DECODE_FAILED;
-  public static final systems.zlink.framework.configuration.ZLinkDispatchErrorReason HANDLER_EXCEPTION;
-  public static final systems.zlink.framework.configuration.ZLinkDispatchErrorReason INVALID_FRAME;
-  public static final systems.zlink.framework.configuration.ZLinkDispatchErrorReason REPLY_PATH_MISSING;
-  public static final systems.zlink.framework.configuration.ZLinkDispatchErrorReason UNEXPECTED_REPLY;
-  public static systems.zlink.framework.configuration.ZLinkDispatchErrorReason[] values();
-  public static systems.zlink.framework.configuration.ZLinkDispatchErrorReason valueOf(java.lang.String);
-  public int value();
-}
-public final class systems.zlink.framework.configuration.ZLinkDispatchErrorSurface extends java.lang.Enum<systems.zlink.framework.configuration.ZLinkDispatchErrorSurface> {
-  public static final systems.zlink.framework.configuration.ZLinkDispatchErrorSurface CHANNEL;
-  public static final systems.zlink.framework.configuration.ZLinkDispatchErrorSurface ROUTE_MESH_CHANNEL;
-  public static final systems.zlink.framework.configuration.ZLinkDispatchErrorSurface SPOT_ROUTE;
-  public static final systems.zlink.framework.configuration.ZLinkDispatchErrorSurface SPOT_SUBSCRIPTION;
-  public static final systems.zlink.framework.configuration.ZLinkDispatchErrorSurface SPOT_ACTOR;
-  public static final systems.zlink.framework.configuration.ZLinkDispatchErrorSurface STREAM_SESSION;
-  public static systems.zlink.framework.configuration.ZLinkDispatchErrorSurface[] values();
-  public static systems.zlink.framework.configuration.ZLinkDispatchErrorSurface valueOf(java.lang.String);
-  public int value();
-}
-public final class systems.zlink.framework.configuration.ZLinkDispatchFailure extends java.lang.Record {
-  public systems.zlink.framework.configuration.ZLinkDispatchFailure(systems.zlink.framework.configuration.ZLinkDispatchErrorSurface, systems.zlink.framework.configuration.ZLinkDispatchMessageKind, systems.zlink.framework.configuration.ZLinkDispatchErrorReason, systems.zlink.framework.configuration.ZLinkDispatchErrorAction, java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String);
-  public final java.lang.String toString();
-  public final int hashCode();
-  public final boolean equals(java.lang.Object);
-  public systems.zlink.framework.configuration.ZLinkDispatchErrorSurface surface();
-  public systems.zlink.framework.configuration.ZLinkDispatchMessageKind messageKind();
-  public systems.zlink.framework.configuration.ZLinkDispatchErrorReason reason();
-  public systems.zlink.framework.configuration.ZLinkDispatchErrorAction action();
-  public java.lang.String packetName();
-  public java.lang.String channelName();
-  public java.lang.String topic();
-  public java.lang.String spotId();
-  public java.lang.String actorId();
-  public java.lang.String sourceRid();
-  public java.lang.String correlationId();
-  public java.lang.String errorType();
-  public java.lang.String errorMessage();
-}
-public final class systems.zlink.framework.configuration.ZLinkDispatchMessageKind extends java.lang.Enum<systems.zlink.framework.configuration.ZLinkDispatchMessageKind> {
-  public static final systems.zlink.framework.configuration.ZLinkDispatchMessageKind REQUEST;
-  public static final systems.zlink.framework.configuration.ZLinkDispatchMessageKind SEND;
-  public static final systems.zlink.framework.configuration.ZLinkDispatchMessageKind PUBLISH;
-  public static final systems.zlink.framework.configuration.ZLinkDispatchMessageKind RESPONSE;
-  public static final systems.zlink.framework.configuration.ZLinkDispatchMessageKind ERROR;
-  public static final systems.zlink.framework.configuration.ZLinkDispatchMessageKind ACTOR_REQUEST;
-  public static final systems.zlink.framework.configuration.ZLinkDispatchMessageKind ACTOR_SEND;
-  public static systems.zlink.framework.configuration.ZLinkDispatchMessageKind[] values();
-  public static systems.zlink.framework.configuration.ZLinkDispatchMessageKind valueOf(java.lang.String);
-  public int value();
-}
 public interface systems.zlink.framework.configuration.ZLinkFrameworkOptions {
   public abstract java.time.Duration defaultRequestTimeout();
   public abstract void setDefaultRequestTimeout(java.time.Duration);
@@ -766,18 +668,6 @@ public interface systems.zlink.framework.configuration.ZLinkInstanceSpotFactoryB
   public abstract void disableRelocation();
   public abstract void recreateOnRelocation();
   public abstract void preserveStateWith(java.lang.Class<? extends systems.zlink.framework.spots.ZLinkSpotRelocationAdapter<TSpot>>);
-}
-public final class systems.zlink.framework.configuration.ZLinkMessageFlowOutcome extends java.lang.Enum<systems.zlink.framework.configuration.ZLinkMessageFlowOutcome> {
-  public static final systems.zlink.framework.configuration.ZLinkMessageFlowOutcome RECEIVED;
-  public static final systems.zlink.framework.configuration.ZLinkMessageFlowOutcome DISPATCHED;
-  public static final systems.zlink.framework.configuration.ZLinkMessageFlowOutcome REPLIED;
-  public static final systems.zlink.framework.configuration.ZLinkMessageFlowOutcome DROPPED;
-  public static final systems.zlink.framework.configuration.ZLinkMessageFlowOutcome SENT;
-  public static final systems.zlink.framework.configuration.ZLinkMessageFlowOutcome REPLY_RECEIVED;
-  public static final systems.zlink.framework.configuration.ZLinkMessageFlowOutcome ERROR;
-  public static systems.zlink.framework.configuration.ZLinkMessageFlowOutcome[] values();
-  public static systems.zlink.framework.configuration.ZLinkMessageFlowOutcome valueOf(java.lang.String);
-  public int value();
 }
 public interface systems.zlink.framework.spring.EnableZLinkFramework extends java.lang.annotation.Annotation {
 }

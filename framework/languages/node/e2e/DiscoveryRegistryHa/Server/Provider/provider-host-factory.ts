@@ -3,12 +3,15 @@ import { Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import {
   ZLinkMessageFlowLogMode,
+  type ZLinkFanoutClient,
   type ZLinkRouteMeshRuntimeOptions,
   type ZLinkFrameworkRuntime
 } from '@zlink-systems/framework';
 import {
   ZLINK_ROUTE_MESH_RUNTIME_OPTIONS,
   ZLINK_FRAMEWORK_RUNTIME,
+  ZLINK_FANOUT_CLIENT,
+  ZLINK_LOCATION_RUNTIME_QUERY,
   ZLinkModule,
   zlinkFramework
 } from '@zlink-systems/nestjs';
@@ -23,7 +26,17 @@ import type { ProviderOptions } from './Configuration/provider-options';
 import { DISCOVERY_OPTIONS, createDiscoveryConfigurationModule } from '../../configuration';
 import { createProviderEndpoints } from './Endpoints/provider-endpoints';
 import { ProfileRequestHandler } from './Handlers/profile-request-handler';
-import { Config6InstanceSpot, configureObjectEvidence, ObjectRequestHandler } from './Handlers/object-request-handler';
+import {
+  Config6InstanceSpot,
+  Config6InstanceTimer,
+  configureObjectEvidence,
+  configureObjectActivationDelay,
+  ObjectRequestHandler
+} from './Handlers/object-request-handler';
+import {
+  ClientServerRequestHandler,
+  SecondaryRequestHandler
+} from './Handlers/multi-role-handlers';
 import { EvidenceStore } from './Infrastructure/evidence-store';
 import { closeHttpServer, startHttpServer } from './Support/http-server';
 
@@ -35,11 +48,14 @@ export async function startProviderHost(): Promise<void> {
   const options = app.get(DISCOVERY_OPTIONS, { strict: false }) as ProviderOptions;
   const evidence = app.get(EvidenceStore, { strict: false });
   configureObjectEvidence(evidence);
+  configureObjectActivationDelay(options.capacityProfile === 'sf-g2' ? 40 : 0);
   const runtimeOptions = app.get(ZLINK_ROUTE_MESH_RUNTIME_OPTIONS, { strict: false }) as ZLinkRouteMeshRuntimeOptions;
   const frameworkRuntime = app.get(ZLINK_FRAMEWORK_RUNTIME, { strict: false }) as ZLinkFrameworkRuntime;
+  const fanout = app.get(ZLINK_FANOUT_CLIENT, { strict: false }) as ZLinkFanoutClient;
+  const locationQuery = app.get(ZLINK_LOCATION_RUNTIME_QUERY, { strict: false }) as import('@zlink-systems/framework').ZLinkLocationRuntimeQuery;
   const server = await startHttpServer(
     options.httpUrl,
-    createProviderEndpoints(evidence, runtimeOptions, frameworkRuntime, () => { stopping = true; })
+    createProviderEndpoints(evidence, runtimeOptions, frameworkRuntime, locationQuery, fanout, () => { stopping = true; })
   );
   while (!stopping) {
     await new Promise((resolve) => setTimeout(resolve, 100));
@@ -67,6 +83,8 @@ function createProviderModule(): {
         imports: [configuration], inject: [DISCOVERY_OPTIONS],
         useFactory: (value: unknown) => {
           const options = value as ProviderOptions;
+          const unlimitedPopulation = options.capacityProfile === 'sf-g2';
+          const atomicCapacity = options.capacityProfile === 'sf-g1';
           fs.mkdirSync(options.logDir, { recursive: true });
           const builder = zlinkFramework();
           builder
@@ -85,16 +103,31 @@ function createProviderModule(): {
           const profile = builder.addRouteMesh(ChannelNames.profile)
             .listen(options.channelEndpoint)
             .routingId(options.rid)
-            .setSpotLimit(2000)
-            .setActivationConcurrency(64);
+            .setActorLimit(unlimitedPopulation || atomicCapacity ? 0 : 10_000)
+            .setSpotLimit(unlimitedPopulation ? 0 : atomicCapacity ? 4 : 2000)
+            .setActivationConcurrency(unlimitedPopulation ? 2 : atomicCapacity ? 4 : 64);
           profile.channel(ChannelNames.profile).server()
             .addRequestHandler(PacketNames.profileReq, ProfileRequestHandler);
+          if (options.multiRole) {
+            const secondary = builder.addRouteMesh(ChannelNames.secondary)
+              .listen(0)
+              .setRoutingIdPrefix(`${options.rid}-secondary`);
+            secondary.channel(ChannelNames.secondary).server()
+              .addRequestHandler(PacketNames.secondaryReq, SecondaryRequestHandler);
+            builder.addClientServerChannel(ChannelNames.clientServer).server()
+              .listen(0)
+              .addRequestHandler(PacketNames.clientServerReq, ClientServerRequestHandler);
+            const fanout = builder.addFanoutChannel(ChannelNames.fanout);
+            if (options.fanoutEndpoint !== undefined) fanout.enablePublisher(options.fanoutEndpoint);
+            else fanout.enablePublisher(0);
+            fanout.setRoutingIdPrefix(`${options.rid}-fanout`);
+          }
           profile.objects().server().addInstanceSpotFactory(
             ObjectSpotType,
             Config6InstanceSpot,
             (factory) => {
               factory.disableRelocation();
-              factory.stableTypeLimit(2000);
+              factory.stableTypeLimit(unlimitedPopulation ? 0 : atomicCapacity ? 2 : 2000);
             }
           );
           return builder.build();
@@ -106,12 +139,15 @@ function createProviderModule(): {
         const options = value as ProviderOptions; return new EvidenceStore(options.rid, options.evidenceFile);
       } },
       ProfileRequestHandler,
+      SecondaryRequestHandler,
+      ClientServerRequestHandler,
       ObjectRequestHandler,
-      Config6InstanceSpot
+      Config6InstanceSpot,
+      Config6InstanceTimer
     ]
   })(ProviderModule);
   return {
-    moduleType: ProviderModule,
+      moduleType: ProviderModule,
     disposeLocationStore: async () => {
       await locationStore?.dispose();
       locationStore = undefined;

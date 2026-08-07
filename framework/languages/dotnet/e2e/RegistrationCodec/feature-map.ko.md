@@ -15,4 +15,4 @@
 | RC-B3 | 구현 | MessagePack codec marker가 있다. |
 | RC-B4 | 구현 | codec coexistence marker가 있다. |
 | RC-B5 | 구현 | JSON-only peer에 Protobuf request를 보내 실패를 확인하고, 이후 JSON request가 정상 처리되는지 검증한다. |
-| RC-B6 | process 통과 | `logs/20260805-082254-674634/`에서 별도 `scenario-requester` process가 `JsonGoldenReq`를 Main server로 보내고, 기본 `application/json` 응답의 int64·bytes·nullable field를 client assertion으로 확인했다. requester에는 메시지별 codec 등록이 없다. |
+| RC-B6 | process 통과 | `logs/20260807-175928-2425161/`에서 별도 `scenario-requester` process가 `JsonGoldenReq`를 Main server로 보내고, 기본 `application/json` 응답의 int64·bytes·nullable field를 client assertion으로 확인했다. requester에는 메시지별 codec 등록이 없다. |

@@ -41,7 +41,7 @@ internal sealed class ZLinkActorReply(
         return new ZLinkActorReply(
             ZlinkStreamMessageKind.Error,
             ZlinkStreamCodec.Json,
-            ZLinkEnvelopeCodec.EncodeJsonBytes(
+            ZLinkEnvelopeCodec.EncodeProtocolJsonBytes(
                 ZLinkStreamWireError.FromException(exception)),
             ZlinkStreamHeaderFlags.None,
             ZlinkStreamMetadata.Empty);

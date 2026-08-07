@@ -42,9 +42,9 @@ set(ZLINK_FRAMEWORK_CPP_REPO_ROOT "${ZLINK_FRAMEWORK_CPP_DIR}/../../.." CACHE PA
   "Path to the zlink repository root")
 set(ZLINK_FRAMEWORK_CPP_LOCAL_PACKAGE_ROOT "$ENV{ZLINK_LOCAL_PACKAGE_ROOT}" CACHE PATH
   "Root directory containing local package outputs")
-set(ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION "0.10.0" CACHE STRING
+set(ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION "0.10.1" CACHE STRING
   "Exact local zlink_cpp package version consumed by the C++ framework")
-set(ZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION "0.10.0" CACHE STRING
+set(ZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION "0.10.1" CACHE STRING
   "Exact local zlink Core package version embedded by zlink_cpp")
 if(NOT ZLINK_FRAMEWORK_CPP_LOCAL_PACKAGE_ROOT)
   if(WIN32 AND EXISTS "${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/.artifacts/windows/install/zlink-cpp/${ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION}")
@@ -260,7 +260,19 @@ function(zlink_framework_cpp_add_boost_headers target_name)
       "or make sure core/external/boost exists in the repository checkout.")
   endif()
 endfunction()
+
+# Boost.Asio owns the socket implementation and keeps the runtime free of
+# platform-specific transport branches. Windows still requires the Winsock
+# libraries at final link time, including when a static connector is consumed
+# by an engine module.
+function(zlink_framework_cpp_add_asio_system_libraries target_name)
+  if(WIN32)
+    target_link_libraries(${target_name} PRIVATE ws2_32 mswsock)
+  endif()
+endfunction()
+
 zlink_framework_cpp_add_boost_headers(zlink_framework)
+zlink_framework_cpp_add_asio_system_libraries(zlink_framework)
 find_package(nlohmann_json QUIET)
 if(NOT nlohmann_json_FOUND)
   FetchContent_Declare(
@@ -308,6 +320,7 @@ target_link_libraries(zlink_http_client PRIVATE Threads::Threads)
 # behavior at the ABI level, so the http client uses the shared helper instead
 # of its own include wiring.
 zlink_framework_cpp_add_boost_headers(zlink_http_client)
+zlink_framework_cpp_add_asio_system_libraries(zlink_http_client)
 if(OpenSSL_FOUND)
   target_compile_definitions(zlink_http_client PRIVATE
     ZLINK_HTTP_CLIENT_WITH_OPENSSL)
@@ -368,6 +381,7 @@ target_include_directories(zlink_stream_connector PUBLIC
 target_include_directories(zlink_stream_connector PRIVATE
   ${ZLINK_FRAMEWORK_CPP_DIR}/connector/core/src)
 zlink_framework_cpp_add_boost_headers(zlink_stream_connector)
+zlink_framework_cpp_add_asio_system_libraries(zlink_stream_connector)
 target_link_libraries(zlink_stream_connector PUBLIC zlink::cpp)
 target_link_libraries(zlink_stream_connector PRIVATE Threads::Threads nlohmann_json::nlohmann_json)
 if(ZLINK_STREAM_CONNECTOR_WITH_TLS AND OpenSSL_FOUND)
@@ -389,15 +403,32 @@ if(ZLINK_STREAM_CONNECTOR_WITH_LZ4 OR ZLINK_FRAMEWORK_CPP_STREAM_WITH_LZ4)
   find_path(ZLINK_LZ4_INCLUDE_DIR lz4.h)
   find_library(ZLINK_LZ4_LIBRARY NAMES lz4 liblz4)
   if(ZLINK_LZ4_INCLUDE_DIR AND ZLINK_LZ4_LIBRARY)
+    get_filename_component(ZLINK_LZ4_LIBRARY_NAME
+      "${ZLINK_LZ4_LIBRARY}" NAME)
+    add_library(zlink_framework_cpp_lz4 INTERFACE)
+    add_library(zlink::framework_cpp_lz4 ALIAS zlink_framework_cpp_lz4)
+    set_target_properties(zlink_framework_cpp_lz4 PROPERTIES
+      EXPORT_NAME framework_cpp_lz4)
+    add_library(zlink_stream_connector_cpp_lz4 INTERFACE)
+    add_library(zlink::stream_connector_cpp_lz4 ALIAS zlink_stream_connector_cpp_lz4)
+    set_target_properties(zlink_stream_connector_cpp_lz4 PROPERTIES
+      EXPORT_NAME stream_connector_cpp_lz4)
+    foreach(lz4_target IN ITEMS
+        zlink_framework_cpp_lz4 zlink_stream_connector_cpp_lz4)
+      target_link_libraries(${lz4_target} INTERFACE
+        "$<BUILD_INTERFACE:${ZLINK_LZ4_LIBRARY}>")
+    endforeach()
     if(ZLINK_STREAM_CONNECTOR_WITH_LZ4)
       target_include_directories(zlink_stream_connector PRIVATE
         ${ZLINK_LZ4_INCLUDE_DIR})
-      target_link_libraries(zlink_stream_connector PRIVATE ${ZLINK_LZ4_LIBRARY})
+      target_link_libraries(zlink_stream_connector PRIVATE
+        zlink_stream_connector_cpp_lz4)
     endif()
     if(ZLINK_FRAMEWORK_CPP_STREAM_WITH_LZ4)
       target_include_directories(zlink_framework PRIVATE
         ${ZLINK_LZ4_INCLUDE_DIR})
-      target_link_libraries(zlink_framework PRIVATE ${ZLINK_LZ4_LIBRARY})
+      target_link_libraries(zlink_framework PRIVATE
+        zlink_framework_cpp_lz4)
     endif()
   else()
     FetchContent_Declare(
@@ -473,12 +504,13 @@ if(ZLINK_STREAM_CONNECTOR_BUILD_UNREAL)
   target_link_libraries(zlink_unreal_stream_connector PRIVATE
     zlink::stream_connector
     zlink::stream_connector_codecs)
+  zlink_framework_cpp_add_asio_system_libraries(zlink_unreal_stream_connector)
   if(ZLINK_STREAM_CONNECTOR_WITH_LZ4)
     if(ZLINK_LZ4_INCLUDE_DIR AND ZLINK_LZ4_LIBRARY)
       target_include_directories(zlink_unreal_stream_connector PRIVATE
         ${ZLINK_LZ4_INCLUDE_DIR})
       target_link_libraries(zlink_unreal_stream_connector PRIVATE
-        ${ZLINK_LZ4_LIBRARY})
+        zlink_stream_connector_cpp_lz4)
     else()
       target_sources(zlink_unreal_stream_connector PRIVATE
         ${zlink_lz4_SOURCE_DIR}/lib/lz4.c)
@@ -647,6 +679,14 @@ if(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK)
     zlink_http_client
     EXPORT zlink_http_client_cppTargets
     COMPONENT HttpClient)
+  if(TARGET zlink_framework_cpp_lz4)
+    install(TARGETS zlink_framework_cpp_lz4
+      EXPORT zlink_framework_cppTargets
+      COMPONENT Framework)
+    install(FILES "${ZLINK_LZ4_LIBRARY}"
+      DESTINATION ${CMAKE_INSTALL_LIBDIR}
+      COMPONENT Framework)
+  endif()
 endif()
 install(TARGETS
   zlink_stream_connector
@@ -654,6 +694,14 @@ install(TARGETS
   zlink_stream_connector_throwing
   EXPORT zlink_stream_connector_cppTargets
   COMPONENT StreamConnector)
+if(TARGET zlink_stream_connector_cpp_lz4)
+  install(TARGETS zlink_stream_connector_cpp_lz4
+    EXPORT zlink_stream_connector_cppTargets
+    COMPONENT StreamConnector)
+  install(FILES "${ZLINK_LZ4_LIBRARY}"
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    COMPONENT StreamConnector)
+endif()
 if(TARGET zlink_unreal_stream_connector)
   install(TARGETS
     zlink_unreal_stream_connector
@@ -666,17 +714,52 @@ if(ZLINK_STREAM_CONNECTOR_BUILD_E2E_CLIENT)
     EXPORT zlink_stream_connector_cppTargets
     COMPONENT StreamConnector)
 endif()
-if(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK)
+# The stream connector and Unreal adapter both consume the C++ binding. Keep
+# this dependency in the connector package even when the server framework is
+# not installed.
+if(TARGET zlink_stream_connector)
   install(DIRECTORY "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX}/include/"
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
-    COMPONENT FrameworkDependency
+    COMPONENT StreamConnector
     FILES_MATCHING PATTERN "*.hpp" PATTERN "*.h")
-  install(FILES "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX}/lib/libzlink_cpp.a"
+  file(GLOB ZLINK_FRAMEWORK_CPP_BINDING_LIBRARIES
+    "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX}/lib/libzlink_cpp.a"
+    "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX}/lib/zlink_cpp.lib"
+    "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX}/lib/libzlink_cpp.lib"
+    "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX}/lib/libzlink_cpp.dll.a")
+  if(NOT ZLINK_FRAMEWORK_CPP_BINDING_LIBRARIES)
+    message(FATAL_ERROR
+      "The installed zlink_cpp package has no link library under "
+      "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX}/lib")
+  endif()
+  install(FILES ${ZLINK_FRAMEWORK_CPP_BINDING_LIBRARIES}
     DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    COMPONENT FrameworkDependency)
+    COMPONENT StreamConnector)
   install(DIRECTORY "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX}/lib/cmake/zlink_cpp"
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake
-    COMPONENT FrameworkDependency)
+    COMPONENT StreamConnector)
+  if(NOT EXISTS
+      "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}/lib/cmake/zlink")
+    message(FATAL_ERROR
+      "The installed Core package has no CMake config under "
+      "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}/lib/cmake/zlink")
+  endif()
+  install(DIRECTORY
+    "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}/lib/cmake/zlink"
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake
+    COMPONENT StreamConnector)
+  if(WIN32)
+    file(GLOB ZLINK_FRAMEWORK_CPP_NATIVE_IMPORT_LIBRARIES
+      "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX}/lib/*.lib"
+      "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX}/lib/*.dll.a")
+    if(ZLINK_FRAMEWORK_CPP_NATIVE_IMPORT_LIBRARIES)
+      install(FILES ${ZLINK_FRAMEWORK_CPP_NATIVE_IMPORT_LIBRARIES}
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        COMPONENT StreamConnector)
+    endif()
+  endif()
+endif()
+if(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK)
   install(DIRECTORY framework/include/
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
     COMPONENT Framework
@@ -724,7 +807,17 @@ if(ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME AND EXISTS "${ZLINK_FRAMEWORK_CPP_NATIVE_R
   if(WIN32)
     install(FILES "${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME}"
       DESTINATION ${CMAKE_INSTALL_BINDIR}
-      COMPONENT FrameworkDependency)
+      COMPONENT StreamConnector)
+    get_filename_component(ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME_DIR
+      "${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME}" DIRECTORY)
+    file(GLOB ZLINK_FRAMEWORK_CPP_NATIVE_IMPORT_LIBRARIES
+      "${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME_DIR}/../lib/*.lib"
+      "${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME_DIR}/*.lib")
+    if(ZLINK_FRAMEWORK_CPP_NATIVE_IMPORT_LIBRARIES)
+      install(FILES ${ZLINK_FRAMEWORK_CPP_NATIVE_IMPORT_LIBRARIES}
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        COMPONENT StreamConnector)
+    endif()
   elseif(UNIX AND NOT APPLE)
     get_filename_component(
       ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME_DIR
@@ -734,11 +827,11 @@ if(ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME AND EXISTS "${ZLINK_FRAMEWORK_CPP_NATIVE_R
       "${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME_DIR}/libzlink.so*")
     install(FILES ${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME_FILES}
       DESTINATION ${CMAKE_INSTALL_LIBDIR}
-      COMPONENT FrameworkDependency)
+      COMPONENT StreamConnector)
   else()
     install(FILES "${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME}"
       DESTINATION ${CMAKE_INSTALL_LIBDIR}
-      COMPONENT FrameworkDependency)
+      COMPONENT StreamConnector)
   endif()
 endif()
 if(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK)
@@ -1404,6 +1497,17 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   set_tests_properties(test_cpp_framework_install_consumer PROPERTIES
     LABELS "framework-package;framework-regression;connector-package"
     TIMEOUT 120)
+  add_test(NAME test_cpp_stream_connector_install_consumer
+    COMMAND
+      ${CMAKE_COMMAND}
+      -DZLINK_FRAMEWORK_CPP_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}
+      "-DZLINK_FRAMEWORK_CPP_DEPENDENCY_PREFIX_PATH=${ZLINK_FRAMEWORK_CPP_PACKAGE_DEPENDENCY_PREFIX_PATH}"
+      -DZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX=${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}
+      -P ${CMAKE_CURRENT_LIST_DIR}/tests/Zlink.Framework.PackageTests/stream_connector_consumer.cmake)
+  set_tests_properties(test_cpp_stream_connector_install_consumer PROPERTIES
+    LABELS "connector-package;connector-regression"
+    RESOURCE_LOCK zlink_cpp_package
+    TIMEOUT 120)
   add_zlink_connector_test(
     test_cpp_stream_connector
     tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_connector.cpp
@@ -1495,6 +1599,22 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     LABELS "connector-unreal-contract;connector-unreal-compile;connector-unreal-smoke"
     RESOURCE_LOCK zlink_cpp_heavy_runtime
     TIMEOUT 30)
+
+  set(ZLINK_UNREAL_PACKAGE_CONFIGURATION "${CMAKE_BUILD_TYPE}")
+  if(NOT ZLINK_UNREAL_PACKAGE_CONFIGURATION)
+    set(ZLINK_UNREAL_PACKAGE_CONFIGURATION Release)
+  endif()
+  add_test(NAME test_unreal_stream_connector_package_contract
+    COMMAND
+      ${CMAKE_COMMAND}
+      -DZLINK_UNREAL_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}
+      -DZLINK_UNREAL_OUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/unreal-package-contract
+      -DZLINK_UNREAL_CONFIGURATION=${ZLINK_UNREAL_PACKAGE_CONFIGURATION}
+      -P ${CMAKE_CURRENT_LIST_DIR}/connector/engines/unreal/Tools/package-third-party.cmake)
+  set_tests_properties(test_unreal_stream_connector_package_contract PROPERTIES
+    LABELS "connector-unreal-contract;connector-package"
+    RESOURCE_LOCK zlink_cpp_package
+    TIMEOUT 120)
 endif()
 
 if(ZLINK_FRAMEWORK_CPP_BUILD_E2E)
@@ -1557,6 +1677,15 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_E2E)
     zlink::framework_locations_redis
     OpenSSL::Crypto)
   target_include_directories(zlink_cpp_e2e_registry_messaging_object_client PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
+
+  add_executable(zlink_cpp_e2e_registry_messaging_global_object_node
+    e2e/RegistryMessaging/Server/GlobalObjectNode/main.cpp)
+  target_link_libraries(zlink_cpp_e2e_registry_messaging_global_object_node PRIVATE
+    zlink::framework
+    zlink::framework_locations_redis
+    OpenSSL::Crypto)
+  target_include_directories(zlink_cpp_e2e_registry_messaging_global_object_node PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
 
   add_executable(zlink_cpp_e2e_registry_messaging_client
@@ -2150,6 +2279,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_SAMPLES)
     set_tests_properties(sample_smoke_sample_cpp_framework_${sample_name} PROPERTIES
       LABELS "${labels};framework-sample-smoke"
       RESOURCE_LOCK "zlink-cpp-sample-runtime"
+      ENVIRONMENT "ZLINK_CPP_BUILD_DIR=${CMAKE_BINARY_DIR}"
       TIMEOUT ${timeout_seconds})
   endfunction()
 

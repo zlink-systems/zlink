@@ -19,7 +19,7 @@ relocation manifest, Core peer table과 private counter는 판정에 사용하�
 - 실패, fanout, timer와 runtime tracing level 변경
 - Stream connection, relocation, request와 owner lease metric
 - Actor·User Spot handoff, rolling update와 planned maintenance
-- Relocate blocker, concurrent call, cancellation과 Shutdown 경쟁
+- Relocate blocker, concurrent call, Shutdown 경쟁과 지원 언어의 waiter cancellation
 
 ## 2. 배포 구성
 
@@ -59,7 +59,7 @@ Client action이 Session gateway, Actor와 room Spot을 차례로 지나도 하�
 **검증 질문:** 한 Stream request의 connector·Session·Actor·Spot trace가 같은 flow ID를 가지는가.
 
 - 시작 조건: Client Session이 Player Actor에 bind되어 있고 Actor는 room Spot에 존재한다. 모든 역할의
-  tracing level은 `key_transitions`다.
+  diagnostics level은 `Normal`이다.
 - 절차: Client가 고유 marker의 game action을 Stream으로 한 번 보낸다.
 - 검증: Connector outbound, Session inbound, Actor relay와 room Spot dispatch record가 같은 flow ID와
   marker를 가진다. 각 hop의 application handler는 한 번 실행된다.
@@ -88,27 +88,30 @@ inbound message에서 새 flow를 시작한다.
 
 **검증 질문:** Enabled→off→enabled 경로에서 마지막 node가 앞선 flow와 다른 새 ID를 사용하는가.
 
-- 시작 조건: Source와 target은 `key_transitions`, 중간 node는 `off`다.
+- 시작 조건: Source와 target은 `Normal`, 중간 node는 `Off`다.
 - 절차: 세 node를 지나는 고유 marker의 message를 한 번 보낸다.
 - 검증: Source record에는 flow가 있고 off node에는 flow trace가 없다. Target은 source와 다른 새 flow ID를
   만들며 application payload는 정상 처리한다.
 - 세부 동작: [Flow correlation §4](../spec/27-flow-correlation.ko.md)을 검증한다.
 
-#### OBS-A4 Fanout branch는 flow를 공유하고 timer는 새 flow를 만든다
+#### OBS-A4 Fanout payload를 전달하고 timer는 새 flow를 만든다
 
 우선순위: `P1`
 
-한 publish에서 갈라진 subscriber record는 원래 flow를 공유한다. 반대로 기존 inbound operation이 없는 timer
-callback은 새 timer-origin flow를 시작한다.
+Classic fanout 정상 delivery는 message-flow trace를 만들지 않는다. Subscriber는 application payload로
+propagation을 확인하고, subscriber-local missing handler variant만 정식 dispatch-error record를 사용한다.
+기존 inbound operation이 없는 timer callback은 새 timer-origin flow를 시작한다.
 
-**검증 질문:** Fanout subscribers는 같은 flow를 받고 timer callback은 별도 timer-origin flow를 가지는가.
+**검증 질문:** Fanout payload가 subscribers에 전달되고 local dispatch error와 timer flow가 정식 경계를 지키는가.
 
-- 시작 조건: Order workflow와 subscriber N개가 ready이고 room timer가 등록되어 있다.
+- 시작 조건: Order workflow, 정상 handler subscriber와 missing-handler subscriber가 ready이고 room timer가 등록되어 있다.
 - 절차: Workflow handler에서 projection event를 publish하고 별도로 one-shot room timer를 실행한다.
-- 검증: N subscriber trace가 publish flow ID를 공유한다. Timer trace는 다른 flow ID와 `origin=timer`를
-  가지며 timer handler가 한 번 실행된다.
-- 세부 동작: [Flow correlation §4](../spec/27-flow-correlation.ko.md)와
-  [§5](../spec/27-flow-correlation.ko.md)을 검증한다.
+- 검증: 정상 subscriber는 application payload marker를 한 번 처리하며 정상 fanout message-flow trace는 없다.
+  Missing-handler subscriber의 local record는 `surface=classic_fanout`의 `no_handler` dispatch error이고
+  `channel_route_kind`를 포함하지 않는다. Timer trace는 별도 flow ID와 `flow_origin=timer`를 가지며 timer
+  handler가 한 번 실행된다.
+- 세부 동작: [Message flow tracing — attribute 포함 조건](../spec/26-message-flow-tracing.ko.md#32-attribute-포함-조건)과
+  [Flow correlation — Flow를 만드는 시점](../spec/27-flow-correlation.ko.md#4-flow를-만드는-시점)을 검증한다.
 
 #### OBS-A5 실행 중 tracing level 변경을 적용한다
 
@@ -116,14 +119,14 @@ callback은 새 timer-origin flow를 시작한다.
 
 Tracing level 변경은 업무 처리를 멈추지 않고 변경 완료 뒤 시작한 message부터 적용되어야 한다.
 
-**검증 질문:** `key_transitions→off→errors_only→key_transitions` 전환 중 모든 request가 처리되고 각
+**검증 질문:** `Normal→Off→Errors→Normal` 전환 중 모든 request가 처리되고 각
 marker의 trace 범위가 level과 일치하는가.
 
 - 시작 조건: Public diagnostics control을 제공하는 역할 server와 정상·error packet을 준비한다.
 - 절차: 각 level 변경 awaitable이 완료된 직후 서로 다른 marker의 정상 또는 error request를 보낸다.
-- 검증: 모든 request는 정식 application 결과를 가진다. Off marker에는 flow trace가 없고 errors-only에는
+- 검증: 모든 request는 정식 application 결과를 가진다. Off marker에는 flow trace가 없고 Errors marker에는
   error record만 있으며 마지막 marker부터 새 flow trace가 다시 생긴다.
-- 세부 동작: [Flow correlation §8](../spec/27-flow-correlation.ko.md)을 검증한다.
+- 세부 동작: [Message-flow tracing — 실행 중에 기록 수준 변경](../spec/26-message-flow-tracing.ko.md#41-실행-중에-기록-수준-변경)을 검증한다.
 
 ### Track B — Runtime metric과 실제 사건 대조
 
@@ -158,7 +161,8 @@ relocation 실패로 바꾸지는 않는다.
 - 검증: Completed counter delta는 1이고 `object_kind=actor`다. Duration과 interruption sample이 각각
   하나 추가되며 public 이동 결과가 성공이면 interruption 시간이 목표를 넘더라도 completed outcome을
   실패로 바꾸지 않는다.
-- 세부 동작: [Runtime metrics §5](../spec/25-runtime-metrics.ko.md)을 검증한다.
+- 세부 동작: [Object와 STREAM metric](../spec/25-runtime-metrics.ko.md#4-object와-stream)과
+  [Host relocation과 shutdown metric](../spec/25-runtime-metrics.ko.md#5-host-relocation과-shutdown)을 검증한다.
 
 #### OBS-B3 Publish metric 부재와 owner lease lateness를 확인한다
 
@@ -227,8 +231,8 @@ Actor가 다른 node로 이동하면 Framework가 bound Session의 Actor 위치�
   client가 relay request를 보내고 Actor가 post-relocation push를 보낸다.
 - 검증: Public current Actor location은 `play-b`이고 request handler evidence도 B에 있다. Client는 push를
   한 번 받으며 binding count와 Actor identity는 유지된다.
-- 세부 동작: [Host maintenance §8.3](../spec/28-graceful-drain-handoff.ko.md)과
-  [Session Actor dispatch §7](../spec/20-session-actor-dispatch.ko.md)을
+- 세부 동작: [Actor와 Spot의 공통 handoff 순서](../spec/28-graceful-drain-handoff.ko.md#82-모든-actor와-spot이-따르는-공통-순서)와
+  [Session Actor relocation route barrier](../spec/20-session-actor-dispatch.ko.md#5-actor-relocation-route-barrier)를
   검증한다.
 
 #### OBS-C3 User Spot aggregate와 member Actor를 함께 이동한다
@@ -266,7 +270,7 @@ active Session을 정식 close reason으로 종료한 뒤 Host를 멈춘다.
 - 검증: 각 Spot callback은 `HostShutdown` reason으로 한 번 실행되고 callback 시점에 application state를
   읽을 수 있다. Client는 정식 server-drain close reason을 받고 Host result는 `Stopped/None`이다. Target
   node에 새 object가 생기지 않는다.
-- 세부 동작: [Host maintenance §10](../spec/28-graceful-drain-handoff.ko.md)을 검증한다.
+- 세부 동작: [Shutdown과 Relocate의 경쟁](../spec/28-graceful-drain-handoff.ko.md#11-shutdown과-relocate의-경쟁)을 검증한다.
 
 #### OBS-C5 Eligible target이 없으면 source를 유지한다
 
@@ -284,7 +288,8 @@ Relocation을 받을 compatible target이 없으면 source object를 변경하�
   request를 보낸다.
 - 검증: Relocate는 정식 `Blocked` outcome과 blocker reason으로 끝난다. Source Host는 Serving이고 public
   location과 generation이 유지되며 follow-up request가 성공한다. Shutdown을 자동 시작하지 않는다.
-- 세부 동작: [Host maintenance §6](../spec/28-graceful-drain-handoff.ko.md)을 검증한다.
+- 세부 동작: [Target 선택 전 조건](../spec/28-graceful-drain-handoff.ko.md#4-target을-선택하기-전에-확인하는-조건)과
+  [Mode에 맞는 target 선택](../spec/28-graceful-drain-handoff.ko.md#5-mode에-맞는-target을-선택한다)을 검증한다.
 
 #### OBS-C6 Rolling update로 exact 새 version에 이동한다
 
@@ -333,7 +338,7 @@ Spot closing callback이 끝나지 않아도 Shutdown은 host deadline을 넘겨
 - 검증: Callback이 받은 absolute deadline은 Host deadline과 같다. Host result는
   `ForceStopped/DeadlineExceeded`이고 forced-shutdown metric delta는 1이다. Late callback completion이 Host
   terminal을 바꾸지 않는다.
-- 세부 동작: [Host maintenance §10](../spec/28-graceful-drain-handoff.ko.md)을 검증한다.
+- 세부 동작: [Shutdown과 Relocate의 경쟁](../spec/28-graceful-drain-handoff.ko.md#11-shutdown과-relocate의-경쟁)을 검증한다.
 
 #### OBS-C9A Automatic topology는 target ready 뒤 relocation을 시작한다
 
@@ -350,7 +355,8 @@ topology status에서 ready가 된 뒤 workload를 이동해야 한다.
   ready를 확인한다.
 - 검증: Not-ready 구간에 source request가 정상 처리되고 current location은 source다. Target ready 뒤
   Relocate가 성공하고 후속 request는 target에서 처리된다.
-- 세부 동작: [Host maintenance §6](../spec/28-graceful-drain-handoff.ko.md)을 검증한다.
+- 세부 동작: [Target 선택 전 조건](../spec/28-graceful-drain-handoff.ko.md#4-target을-선택하기-전에-확인하는-조건)과
+  [Mode에 맞는 target 선택](../spec/28-graceful-drain-handoff.ko.md#5-mode에-맞는-target을-선택한다)을 검증한다.
 
 #### OBS-C9B Manual topology는 Relocate를 preflight에서 막는다
 
@@ -366,7 +372,8 @@ Framework가 replacement readiness를 증명할 수 없는 manual connection은 
   호출한다.
 - 검증: Relocate는 blocked reason `ManualTopologyUnsupported`이며 source request가 성공한다. Shutdown은
   manual topology를 blocker로 사용하지 않고 bounded terminal로 끝난다.
-- 세부 동작: [Host maintenance §6](../spec/28-graceful-drain-handoff.ko.md)을 검증한다.
+- 세부 동작: [Target 선택 전 조건](../spec/28-graceful-drain-handoff.ko.md#4-target을-선택하기-전에-확인하는-조건)과
+  [Mode에 맞는 target 선택](../spec/28-graceful-drain-handoff.ko.md#5-mode에-맞는-target을-선택한다)을 검증한다.
 
 #### OBS-C10 Relocation mode가 정한 exact version만 선택한다
 
@@ -397,24 +404,27 @@ operation의 target이나 deadline을 바꾸면 안 된다.
   시작한다. Target gate를 해제한다.
 - 검증: 같은 option의 두 waiter는 동일한 terminal result를 받고 relocation은 한 번 수행된다. 다른 두
   calls는 `Blocked/OperationInProgress`이며 first operation의 effective version과 deadline을 바꾸지 않는다.
-- 세부 동작: [Host maintenance §11](../spec/28-graceful-drain-handoff.ko.md)을
+- 세부 동작: [Concurrent 호출과 cancellation](../spec/28-graceful-drain-handoff.ko.md#6-concurrent-호출과-cancellation)을
   검증한다.
 
-#### OBS-C12 Relocate waiter cancellation과 Shutdown 경쟁을 구분한다
+#### OBS-C12 Relocate waiter와 Shutdown 경쟁을 구분한다
 
 우선순위: `P0`
 
-한 caller의 await cancellation은 shared Host operation을 취소하지 않는다. Concurrent Shutdown은 정식
+Waiter cancellation을 지원하는 언어에서 한 caller의 await cancellation은 shared Host operation을 취소하지
+않는다. 나머지 언어는 concurrent call과 Shutdown의 terminal-once를 검증한다. Concurrent Shutdown은 정식
 경쟁 규칙에 따라 Relocate와 각각 terminal 결과를 가져야 한다.
 
-**검증 질문:** Joined waiter만 취소되고 Relocate·Shutdown operation은 terminal 하나씩 반환하는가.
+**검증 질문:** 지원 언어의 joined waiter cancellation과 공통 concurrent call·Shutdown variant가 shared
+operation과 terminal-once를 유지하는가.
 
-- 시작 조건: PlannedMaintenance target restore를 application gate에서 보류한다.
-- 절차: 첫 Relocate와 같은 option의 두 번째 waiter를 시작하고 두 번째 waiter만 취소한다. Shutdown을
-  시작한 뒤 target gate를 해제한다.
-- 검증: 두 번째 caller만 cancellation이고 첫 Relocate waiter는 spec의 `ShutdownRequested` 경쟁 결과 또는
-  이미 확정된 relocation result를 받는다. Shutdown은 `Stopped` 또는 `ForceStopped`로 한 번 끝나며 반복
-  status 조회에서도 terminal 값이 바뀌지 않는다.
+- 시작 조건: Variant별 fresh fixture에서 PlannedMaintenance target restore를 application gate에 보류한다.
+- 절차: 공통 variant는 같은 option의 concurrent Relocate caller와 Shutdown을 시작한다. Waiter cancellation을
+  지원하는 언어는 별도 fixture에서 두 번째 joined waiter만 취소한다. 각 target gate를 해제한다.
+- 검증: 공통 variant의 Relocate callers는 shared result를 받고 Shutdown과 각각 terminal 하나를 가진다.
+  지원 언어 variant에서는 두 번째 waiter만 cancellation이고 shared operation은 계속된다. 첫 waiter는
+  `ShutdownRequested` 경쟁 결과 또는 이미 확정된 relocation result를 받는다. Shutdown terminal은 반복
+  status 조회에서도 바뀌지 않는다.
 - 세부 동작: [Host maintenance §11](../spec/28-graceful-drain-handoff.ko.md)을
   검증한다.
 

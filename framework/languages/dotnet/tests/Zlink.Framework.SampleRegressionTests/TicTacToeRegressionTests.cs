@@ -5,7 +5,7 @@ namespace Zlink.Framework.SampleRegressionTests;
 public sealed partial class RegressionTests
 {
     [Fact]
-    public void TicTacToeUsesExplicitHandlerRegistrationWithoutAssemblyScanning()
+    public void TicTacToeUsesAttributeHandlerScanning()
     {
         var sampleRoot = ResolveSampleRoot("TicTacToe");
         var sourceFiles = Directory.GetFiles(sampleRoot, "*.cs", SearchOption.AllDirectories)
@@ -13,16 +13,16 @@ public sealed partial class RegressionTests
             .Select(File.ReadAllText)
             .ToArray();
 
-        Assert.All(sourceFiles, static source =>
-            Assert.DoesNotContain("AddHandlersFromAssembly", source, StringComparison.Ordinal));
         Assert.Contains(sourceFiles, static source =>
-            source.Contains("AddRequestHandler<AuthenticatePlayerHandler", StringComparison.Ordinal));
+            source.Contains("AddHandlersFromAssemblyOf(typeof(ApiServer))", StringComparison.Ordinal));
         Assert.Contains(sourceFiles, static source =>
-            source.Contains("AddActorPacket<PlayActorJoinGameHandler", StringComparison.Ordinal));
+            source.Contains("AddHandlersFromAssemblyOf(typeof(PlayServer))", StringComparison.Ordinal));
         Assert.Contains(sourceFiles, static source =>
-            source.Contains("AddHandler<AuthenticatePlaySessionHandler>", StringComparison.Ordinal));
-        Assert.Equal(2, sourceFiles.Count(static source =>
-            source.Contains("DisableImplicitHandlerAutoRegistration()", StringComparison.Ordinal)));
+            source.Contains("AddHandlerGroup(\"api\")", StringComparison.Ordinal));
+        Assert.DoesNotContain(sourceFiles, static source =>
+            source.Contains("DisableImplicitHandlerAutoRegistration()", StringComparison.Ordinal));
+        Assert.DoesNotContain(sourceFiles, static source =>
+            source.Contains("Context.Handlers.Add", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -53,7 +53,7 @@ public sealed partial class RegressionTests
 
         Assert.Contains("AddClientServerChannel(SampleChannels.Api)", apiServer, StringComparison.Ordinal);
         Assert.Contains(".Server()", apiServer, StringComparison.Ordinal);
-        Assert.Contains("AddRequestHandler<AuthenticatePlayerHandler", apiServer, StringComparison.Ordinal);
+        Assert.Contains("AddHandlerGroup(\"api\")", apiServer, StringComparison.Ordinal);
         Assert.Contains("AddClientServerChannel(SampleChannels.Api)", playServer, StringComparison.Ordinal);
         Assert.Contains(".Client()", playServer, StringComparison.Ordinal);
 

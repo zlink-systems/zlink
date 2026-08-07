@@ -97,6 +97,25 @@ struct route_mesh_runtime_service_t::state_t :
 
     struct hub_t
     {
+        struct descriptor_signature_t
+        {
+            std::uint64_t lifecycle_generation = 0;
+            std::uint64_t descriptor_revision = 0;
+            framework_runtime_state_t state = framework_runtime_state_t::preparing;
+            std::int32_t placement_weight = 0;
+            std::uint64_t actor_active = 0;
+            std::uint64_t actor_reserved = 0;
+            std::int32_t actor_limit = 0;
+            std::uint64_t spot_active = 0;
+            std::uint64_t spot_reserved = 0;
+            std::int32_t spot_limit = 0;
+            std::uint32_t activation_active = 0;
+            std::int32_t activation_limit = 0;
+            std::map<std::string, int> channel_weights;
+
+            bool operator== (const descriptor_signature_t &) const = default;
+        };
+
         explicit hub_t (std::shared_ptr<detail::mesh_node_runtime_t> node_) :
             node (std::move (node_))
         {
@@ -117,7 +136,7 @@ struct route_mesh_runtime_service_t::state_t :
         std::chrono::steady_clock::time_point next_descriptor_poll{};
         bool descriptor_baseline_initialized = false;
         std::vector<mesh_node_descriptor_t> location_descriptors;
-        std::map<std::string, std::pair<std::uint64_t, std::uint64_t>>
+        std::map<std::string, descriptor_signature_t>
           descriptor_versions;
         std::atomic_bool stopped{false};
         std::thread pump;
@@ -283,7 +302,7 @@ struct route_mesh_runtime_service_t::state_t :
         }
 
         std::vector<mesh_node_descriptor_t> descriptors;
-        std::map<std::string, std::pair<std::uint64_t, std::uint64_t>> versions;
+        std::map<std::string, hub_t::descriptor_signature_t> versions;
         try {
             location_page_request_t page;
             for (;;) {
@@ -299,9 +318,20 @@ struct route_mesh_runtime_service_t::state_t :
                 for (const auto &descriptor : result.value ().items) {
                     versions.emplace (
                       descriptor.rid.to_hex (),
-                      std::pair{
-                        descriptor.lifecycle_generation,
-                        descriptor.descriptor_revision});
+                      hub_t::descriptor_signature_t{
+                        .lifecycle_generation = descriptor.lifecycle_generation,
+                        .descriptor_revision = descriptor.descriptor_revision,
+                        .state = descriptor.state,
+                        .placement_weight = descriptor.placement_weight,
+                        .actor_active = descriptor.capacity.actors.active,
+                        .actor_reserved = descriptor.capacity.actors.reserved,
+                        .actor_limit = descriptor.capacity.actors.limit,
+                        .spot_active = descriptor.capacity.spots.active,
+                        .spot_reserved = descriptor.capacity.spots.reserved,
+                        .spot_limit = descriptor.capacity.spots.limit,
+                        .activation_active = descriptor.activation_concurrency.active,
+                        .activation_limit = descriptor.activation_concurrency.limit,
+                        .channel_weights = descriptor.channel_weights});
                 }
                 if (!result.value ().continuation_token)
                     break;
@@ -335,6 +365,33 @@ struct route_mesh_runtime_service_t::state_t :
 
 namespace
 {
+
+bool route_peer_is_ready (
+  const std::shared_ptr<route_mesh_runtime_service_t::state_t> &state,
+  const std::string &mesh_name,
+  const zlink::routing_id_t &target)
+{
+    const auto hub = state->require_hub (mesh_name);
+    const auto peer = hub->node->native_node ().transport ().topology ().peer (
+      target.to_bytes ());
+    if (!peer || peer->descriptor.state == mesh::service_node_state_t::draining)
+        return false;
+
+    std::lock_guard lock (hub->mutex);
+    if (state->location_runtime == nullptr)
+        return true;
+    if (hub->location_state != "ready")
+        return false;
+    const auto found = std::find_if (
+      hub->location_descriptors.begin (), hub->location_descriptors.end (),
+      [&target] (const mesh_node_descriptor_t &location) {
+          return location.rid == target;
+      });
+    return found != hub->location_descriptors.end ()
+           && found->state == framework_runtime_state_t::serving
+           && found->lifecycle_generation
+                == peer->descriptor.lifecycle_generation;
+}
 
 class observation_t final : public mesh_runtime_observation_t
 {
@@ -372,8 +429,8 @@ route_mesh_runtime_service_t::route_mesh_runtime_service_t (
     _state->location_store = location_store;
     _state->monitoring = std::move (monitoring);
     for (auto &node : nodes)
-        _state->hubs.emplace (node->mesh_name (),
-                              std::make_shared<state_t::hub_t> (node));
+        _state->hubs.emplace (
+          node->mesh_name (), std::make_shared<state_t::hub_t> (node));
 }
 
 route_mesh_runtime_service_t::~route_mesh_runtime_service_t ()
@@ -389,6 +446,19 @@ void route_mesh_runtime_service_t::start ()
             continue;
         std::weak_ptr<state_t> weak_state = _state;
         std::weak_ptr<state_t::hub_t> weak_hub = hub;
+        const auto mesh_name = hub->node->mesh_name ();
+        hub->node->native_node ().configure_peer_readiness_resolver (
+          [weak_state, mesh_name] (const zlink::routing_id_t &target) {
+              const auto state = weak_state.lock ();
+              if (!state || state->stopped.load (std::memory_order_acquire))
+                  return false;
+              try {
+                  return route_peer_is_ready (state, mesh_name, target);
+              }
+              catch (...) {
+                  return false;
+              }
+          });
         hub->node->native_node ().transport ().topology ()
           .set_change_handler ([weak_state, weak_hub] {
               const auto state = weak_state.lock ();
@@ -421,6 +491,13 @@ void route_mesh_runtime_service_t::stop () noexcept
         return;
     for (const auto &[_, hub] : _state->hubs)
         hub->stopped.store (true, std::memory_order_release);
+    for (const auto &[_, hub] : _state->hubs) {
+        try {
+            hub->node->native_node ().configure_peer_readiness_resolver ({});
+        }
+        catch (...) {
+        }
+    }
     for (const auto &[_, hub] : _state->hubs) {
         if (hub->pump.joinable ())
             hub->node->native_node ().transport ().topology ()

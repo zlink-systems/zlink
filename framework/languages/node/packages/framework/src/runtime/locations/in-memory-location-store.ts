@@ -1168,8 +1168,6 @@ function validateMeshNodeDescriptor(descriptor: ZLinkMeshNodeDescriptor): void {
     || capacities.some(capacity =>
       capacity.active + capacity.reserved > capacity.limit
       && capacity.limit !== 0)
-    || descriptor.populationCapacity.actors.limit === 0
-    || descriptor.populationCapacity.spots.limit === 0
     || !Number.isSafeInteger(descriptor.activationConcurrency.active)
     || descriptor.activationConcurrency.active < 0
     || !Number.isSafeInteger(descriptor.activationConcurrency.limit)

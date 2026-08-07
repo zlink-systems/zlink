@@ -59,6 +59,7 @@ fi
 pids=()
 redis_container_id=""
 log_dir="build/sample-logs"
+ZLINK_SAMPLE_FRAMEWORK_ROLE_LOGS="tracking.log customer-gateway.log courier-session.log courier-node1.log courier-node2.log dispatch.log"
 flow_log_dir="$(pwd)/logs"
 config_dir="$(mktemp -d)"
 chmod 0700 "${config_dir}"
@@ -88,7 +89,9 @@ deliverydispatch_cleanup() {
     kill "${pids[$i]}" >/dev/null 2>&1 || true
   done
 
-  for _ in $(seq 1 300); do
+  # Runtime drain uses the public 30-second deadline and may then finish its
+  # bounded owner/resource cleanup. Observe it for 90 seconds before SIGKILL.
+  for _ in $(seq 1 900); do
     local running=0
     for pid in "${pids[@]}"; do
       local state
@@ -119,6 +122,9 @@ deliverydispatch_cleanup() {
 
   if [[ -n "${redis_container_id}" ]]; then
     zlink_redis_remove_by_id "${redis_container_id}" || cleanup_failed=1
+  fi
+  if [[ "${status}" == "0" && "${cleanup_failed}" == "0" ]]; then
+    zlink_sample_verify_framework_termination "${log_dir}" || cleanup_failed=1
   fi
   rm -rf "${config_dir}"
   if [[ "${status}" != "0" ]]; then

@@ -4,38 +4,37 @@
 
 The diagnostics option values, host status fields, and the `ZLinkFrameworkErrorKind`
 correspondence table are exactly the same as
-[Java reference 08. Observability diagnostics](../../java/reference/08-observability-diagnostics.ko.md)
+[Java reference 08. Observability diagnostics](../../java/reference/08-observability-diagnostics.en.md)
 (Korean-only) — Kotlin uses Java's `ZLinkFrameworkErrorKind`/`ZLinkFrameworkException` directly
-and adds no separate enum or exception hierarchy. The only thing Kotlin adds is a single
-extension function wrapping message-flow observer registration in a receiver lambda. The exact
-signature is owned by the
+and adds no separate enum or exception hierarchy. The exact signature is owned by the
 [Kotlin monitoring exact interface](../../common/spec/server/languages/kotlin/interfaces/monitoring.en.md)
 (Korean-only).
 
 ---
 
-## `onMessageFlow { }` (configuration time, DSL)
+## `configureDispatch { }` (configuration time, DSL)
 
-An extension function that wraps `ZLinkDispatchOptions.setMessageFlowObserver(...)` in a lambda.
+Configures the Java `ZLinkDispatchOptions` diagnostics level and sampling in receiver form.
 
 ```kotlin
 options.configureDispatch {
-    onMessageFlow { event: ZLinkMessageFlowEvent ->
-        logger.info("flow: ${event.outcome()} ${event.packetName()}")
-    }
+    messageFlow(ZLinkMessageFlowLogMode.NORMAL) // Records major transitions as structured records.
+    traceSampleRate(0.1)
+    includeMessageSizes(true)
 }
 ```
 
-**Options.** Takes `observer: (ZLinkMessageFlowEvent) -> Unit`. Returns `ZLinkDispatchOptions`,
-so it can be chained with other modifiers inside the `configureDispatch { }` DSL
-(topology-discovery category).
+**Options.** The levels are the same four Java values: `OFF`, `ERRORS`, `NORMAL`, and `DETAILED`.
+`ERRORS` is the default. The same DSL also configures the sampling rate and whether to include
+message sizes.
 
-**Completion result.** Has exactly the same effect as registering a Java
-`ZLinkMessageFlowObserver` — registers synchronously with no return value.
+**Completion result.** The Framework writes structured records to the standard logger, trace, and
+metric providers configured by the application. A provider failure is isolated as separate
+diagnostics and does not change the original message operation's terminal result. Kotlin adds no
+message-flow observer, runtime error sink, file path, or raw event DTO.
 
-**When to use.** Use this extension function in the same situation as the
-`configureDispatch().diagnostics()` entry in the Java reference's document 08, when you want to
-use a lambda directly instead of making the observer a separate class.
+**When to use.** Use this to group startup diagnostics level and sampling settings in Kotlin DSL
+form.
 
 ---
 
@@ -44,7 +43,7 @@ use a lambda directly instead of making the observer a separate class.
 Host status (`ZLinkFrameworkRuntimeStatus`, `ZLinkInboundDispatchStatus`) and the
 `ZLinkFrameworkErrorKind` correspondence table use the Java types directly — no Kotlin-only data
 class or enum is added. See
-[the Java reference's document 08](../../java/reference/08-observability-diagnostics.ko.md)
+[the Java reference's document 08](../../java/reference/08-observability-diagnostics.en.md)
 (Korean-only) for the field meaning and correspondence table of both entries.
 
 ---
@@ -52,5 +51,5 @@ class or enum is added. See
 See the
 [Kotlin monitoring exact interface](../../common/spec/server/languages/kotlin/interfaces/monitoring.en.md)
 and
-[Java reference 08. Observability diagnostics](../../java/reference/08-observability-diagnostics.ko.md)
+[Java reference 08. Observability diagnostics](../../java/reference/08-observability-diagnostics.en.md)
 (Korean-only) for the full rationale.

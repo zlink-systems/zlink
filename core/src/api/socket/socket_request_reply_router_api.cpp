@@ -17,6 +17,8 @@ namespace
 struct router_recv_part_metadata_tls_t
 {
     zlink_routing_id_t source_node_rid;
+    uint64_t transport_pair_id;
+    uint64_t transport_pair_generation;
 };
 
 router_recv_part_metadata_tls_t &router_recv_part_metadata_tls ()
@@ -28,16 +30,26 @@ router_recv_part_metadata_tls_t &router_recv_part_metadata_tls ()
 void export_router_recv_part_metadata_view (const zlink_routing_id_t *source_node_rid_,
                                             uint64_t request_seq_,
                                             const zlink_routing_id_t **source_node_rid_out_,
-                                            uint64_t *request_seq_out_)
+                                            uint64_t *request_seq_out_,
+                                            uint64_t *transport_pair_id_out_ = NULL,
+                                            uint64_t *transport_pair_generation_out_ = NULL)
 {
     router_recv_part_metadata_tls_t &metadata = router_recv_part_metadata_tls ();
     zlink::part_helper_internal::copy_routing_id (source_node_rid_, &metadata.source_node_rid);
+    const reqrep::router_recv_metadata_tls_t &source_metadata =
+      reqrep::router_recv_metadata_tls ();
+    metadata.transport_pair_id = source_metadata.transport_pair_id;
+    metadata.transport_pair_generation = source_metadata.transport_pair_generation;
 
     if (source_node_rid_out_) {
         *source_node_rid_out_ = source_node_rid_ ? &metadata.source_node_rid : NULL;
     }
     if (request_seq_out_)
         *request_seq_out_ = request_seq_;
+    if (transport_pair_id_out_)
+        *transport_pair_id_out_ = metadata.transport_pair_id;
+    if (transport_pair_generation_out_)
+        *transport_pair_generation_out_ = metadata.transport_pair_generation;
 }
 
 }
@@ -119,6 +131,11 @@ zlink_recv_result_t zlink_router_recv_part (void *router_,
           helper_state, zlink::part_helper_internal::recv_family_router,
           handle.socket, source_node_rid, request_seq, parts, part_count,
           std::this_thread::get_id ());
+        const reqrep::router_recv_metadata_tls_t &recv_metadata =
+          reqrep::router_recv_metadata_tls ();
+        zlink::part_helper_internal::set_recv_transport_pair (
+          helper_state ? &helper_state->recv : NULL,
+          recv_metadata.transport_pair_id, recv_metadata.transport_pair_generation);
         zlink_multipart_close (parts, part_count);
         if (stage_rc != 0) {
             zlink::part_helper_internal::abort_recv_step (helper_state);
@@ -186,6 +203,11 @@ zlink_recv_result_t zlink_router_recv_part (void *router_,
           helper_state, zlink::part_helper_internal::recv_family_router, source_socket,
           source_node_rid, request_seq, parts, part_count,
           std::this_thread::get_id ());
+        const reqrep::router_recv_metadata_tls_t &recv_metadata =
+          reqrep::router_recv_metadata_tls ();
+        zlink::part_helper_internal::set_recv_transport_pair (
+          helper_state ? &helper_state->recv : NULL,
+          recv_metadata.transport_pair_id, recv_metadata.transport_pair_generation);
         zlink_multipart_close (parts, part_count);
         if (stage_rc != 0) {
             zlink::part_helper_internal::abort_recv_step (helper_state);
@@ -213,6 +235,32 @@ zlink_recv_result_t zlink_router_recv_part (void *router_,
                                                        request_seq_out_);
     zlink::part_helper_internal::complete_recv_step (helper_state, *has_more_out_);
     return ZLINK_RECV_OK;
+}
+
+zlink_recv_result_t zlink_router_recv_part_v2 (
+  void *router_,
+  const zlink_routing_id_t **source_node_rid_out_,
+  uint64_t *request_seq_out_,
+  uint64_t *transport_pair_id_out_,
+  uint64_t *transport_pair_generation_out_,
+  zlink_msg_t *part_out_,
+  zlink_part_flag_t *has_more_out_,
+  zlink_recv_flags_t flags_)
+{
+    if (!transport_pair_id_out_ || !transport_pair_generation_out_) {
+        errno = EFAULT;
+        return zlink::recv_result_internal::from_errno (errno);
+    }
+    *transport_pair_id_out_ = 0;
+    *transport_pair_generation_out_ = 0;
+    const zlink_recv_result_t result = zlink_router_recv_part (
+      router_, source_node_rid_out_, request_seq_out_, part_out_, has_more_out_, flags_);
+    if (result == ZLINK_RECV_OK) {
+        const router_recv_part_metadata_tls_t &metadata = router_recv_part_metadata_tls ();
+        *transport_pair_id_out_ = metadata.transport_pair_id;
+        *transport_pair_generation_out_ = metadata.transport_pair_generation;
+    }
+    return result;
 }
 
 zlink_recv_result_t zlink_dealer_recv_part (void *dealer_,

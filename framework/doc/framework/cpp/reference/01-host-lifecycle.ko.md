@@ -138,7 +138,7 @@ Host가 준비됐는지 확인하고, 실행 중 message-flow diagnostics mode�
 
 ```cpp
 bool ready = app.is_ready();
-app.set_message_flow_mode(zlink::framework::message_flow_log_mode_t::verbose);
+app.set_message_flow_mode(zlink::framework::message_flow_log_mode_t::detailed);
 ```
 
 **옵션.** 이 진입점에는 두 개의 독립된 property가 있다.

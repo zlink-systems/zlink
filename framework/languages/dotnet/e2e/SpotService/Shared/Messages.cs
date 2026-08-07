@@ -91,6 +91,14 @@ public sealed record InstanceColdRequest(string OperationId);
 
 public sealed record InstanceColdSend(string OperationId);
 
+public sealed record InstanceLocationReq(string SpotId);
+
+public sealed record InstanceLocationRes(
+    bool Found,
+    string State,
+    string NodeRid,
+    ulong ObjectGeneration);
+
 public sealed record ReservedSpotIdProbeReq(string SpotId);
 
 public sealed record ReservedSpotIdProbeRes(

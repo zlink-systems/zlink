@@ -17,6 +17,9 @@ internal sealed record ClientOptions(
     string PlayBTransportProxyAdmin,
     string SessionATransportProxyAdmin,
     string OperationGroup,
+    string? InstanceOwnerLossCrashAckFile = null,
+    string? InstanceOwnerLossRestartAckFile = null,
+    string? InstanceCreatingReleaseAckFile = null,
     string? B10ControlEndpoint = null,
     string? B10ControlRid = null)
 {

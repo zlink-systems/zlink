@@ -154,6 +154,17 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
         List<byte[]> frames,
         Duration timeout,
         BiConsumer<RequestResult, List<byte[]>> completion) {
+        return request(router, target, 0L, 0L, frames, timeout, completion);
+    }
+
+    synchronized boolean request(
+        RouterSocket router,
+        RoutingId target,
+        long transportPairId,
+        long transportPairGeneration,
+        List<byte[]> frames,
+        Duration timeout,
+        BiConsumer<RequestResult, List<byte[]>> completion) {
         ensureOwned(router);
         Objects.requireNonNull(target, "target");
         Objects.requireNonNull(timeout, "timeout");
@@ -166,7 +177,11 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
             .toList();
         boolean submitted = false;
         try {
-            var submit = router.request(target).message(messages.getFirst());
+            var request = transportPairId == 0 || transportPairGeneration == 0
+                ? router.request(target)
+                : router.request(target, transportPairId,
+                    transportPairGeneration);
+            var submit = request.message(messages.getFirst());
             for (int index = 1; index < messages.size(); index++) {
                 submit.message(messages.get(index));
             }

@@ -1,6 +1,10 @@
-import { ZLinkFrameworkInternalErrorKind, createInternalFrameworkException  } from '../framework-errors-internal';
+import {
+  ZLinkFrameworkInternalErrorKind,
+  createInternalFrameworkException,
+  internalFrameworkErrorKind
+} from '../framework-errors-internal';
 import { randomUUID } from 'node:crypto';
-import { RequestResult } from '../backend/runtime-values';
+import { RequestResult, isBackendNotConnectedError } from '../backend/runtime-values';
 import type {
   ActorRef,
   RoutingId,
@@ -8,6 +12,7 @@ import type {
   ZLinkActorJoinOperationId,
   ZLinkMessageSerializer,
 } from '../../contracts';
+import { ZLinkFrameworkException } from '../../contracts';
 import type { ZLinkActorJoinRuntimeResult } from './actor-runtime-contracts';
 import type { Message } from '../../contracts/Common/Message';
 import type {
@@ -31,6 +36,7 @@ import type { ZLinkPostCommitActorBinder } from './post-commit-actor-binder';
 import type { ZLinkPostCommitActorLocation } from './post-commit-actor-location';
 import { toBackendRoutingId as toBackendRoutingId } from '../routing-id';
 import { routingIdsEqual } from '../routing-id';
+import { operationIdentityKey } from '../foundation/operation-identity';
 import type {
   ZLinkActorSourceTransfer,
   ZLinkPreparedActorSource
@@ -179,7 +185,7 @@ export class ZLinkLocalNativeActorJoin {
           'core',
           completionOperationId === undefined
             ? undefined
-            : deferredOperationKey(completionOperationId)
+            : operationIdentityKey(completionOperationId)
         );
         await prepared.reserveTarget(target, signal);
         requestPayload = Buffer.from(JSON.stringify(buildRemoteActorJoinRequestPayload({
@@ -509,7 +515,7 @@ export class ZLinkLocalNativeActorJoin {
           'core',
           completionOperationId === undefined
             ? undefined
-            : deferredOperationKey(completionOperationId)
+            : operationIdentityKey(completionOperationId)
         );
         await prepared.reserveTarget(spotRouteTarget, signal);
         requestPayload = Buffer.from(JSON.stringify(buildRemoteActorJoinRequestPayload({
@@ -699,11 +705,14 @@ export class ZLinkLocalNativeActorJoin {
     timeoutMs: number | undefined,
     signal: AbortSignal | undefined
   ): Promise<ZLinkMeshCompletion> {
-    const operationId = await submitJoinWhenConnected(submit, timeoutMs, signal);
     // The operation ID identifies one Core request. Once it is submitted, a
     // NotConnected completion is terminal for that request; resubmitting it
     // could execute the target lifecycle twice after a delayed reply.
-    return completions.wait(operationId, signal);
+    return submitJoinWhenConnected(
+      () => completions.submit(submit, signal),
+      timeoutMs,
+      signal
+    );
   }
 
   private async abortRemoteAdmission(
@@ -737,26 +746,25 @@ export class ZLinkLocalNativeActorJoin {
         phase: REMOTE_ACTOR_JOIN_ABORT,
         transferId
       })));
-      const operationId = await submitJoinWhenConnected(
-        () => entrySpot
+      const completion = await submitJoinWhenConnected(
+        () => completions.submit(() => entrySpot
           ? node.joinActorEntrySpot(
-              actorRef,
-              toBackendRoutingId(target.targetNodeRid),
-              payload,
-              timeoutMs
-            )
+            actorRef,
+            toBackendRoutingId(target.targetNodeRid),
+            payload,
+            timeoutMs
+          )
           : node.joinActorSpot(
-              actorRef,
-              toBackendRoutingId(target.targetNodeRid),
-              toBackendRoutingId(target.spotId),
-              target.targetSpotGeneration!,
-              payload,
-              timeoutMs
-            ),
+            actorRef,
+            toBackendRoutingId(target.targetNodeRid),
+            toBackendRoutingId(target.spotId),
+            target.targetSpotGeneration!,
+            payload,
+            timeoutMs
+          ), signal),
         timeoutMs,
         signal
       );
-      const completion = await completions.wait(operationId, signal);
       closeMeshCompletion(completion);
     } catch {
       // Admission cleanup is best effort. The target registry also expires
@@ -797,12 +805,14 @@ export class ZLinkLocalNativeActorJoin {
       const remainingMs = Math.max(1, deadline - Date.now());
       let completion;
       try {
-        const operationId = node.requestToNode(
-          toBackendRoutingId(targetNodeRid),
-          payload,
-          { timeoutMs: remainingMs }
+        completion = await completions.submit(
+          () => node.requestToNode(
+            toBackendRoutingId(targetNodeRid),
+            payload,
+            { timeoutMs: remainingMs }
+          ),
+          signal
         );
-        completion = await completions.wait(operationId, signal);
       } catch (error) {
         if (!isRetryableTerminalRouteFailure(error) || Date.now() >= deadline) {
           throw error;
@@ -858,10 +868,11 @@ function enrichBoundSessionTransferTarget(state: ZLinkActorRuntimeState): ZLinkR
 }
 
 function isRetryableTerminalRouteFailure(error: unknown): boolean {
-  return error instanceof Error && (
-    error.message.includes('target route is not connected')
-    || error.message.includes('Transport endpoint is not connected')
-  );
+  return isBackendNotConnectedError(error)
+    || (
+      error instanceof ZLinkFrameworkException
+      && internalFrameworkErrorKind(error) === ZLinkFrameworkInternalErrorKind.RouteNotConnected
+    );
 }
 
 function requireTransferId(transferId: string | undefined): string {
@@ -896,11 +907,7 @@ async function submitJoinWhenConnected<T>(
     try {
       return submit();
     } catch (error) {
-      if (
-        !(error instanceof Error) ||
-        !error.message.includes('Transport endpoint is not connected') ||
-        Date.now() >= deadline
-      ) {
+      if (!isBackendNotConnectedError(error) || Date.now() >= deadline) {
         throw error;
       }
       await new Promise<void>((resolve) => setTimeout(resolve, 10));
@@ -925,10 +932,4 @@ function disposeParts(parts: readonly Message[]): void {
   for (const part of parts) {
     part.close();
   }
-}
-
-function deferredOperationKey(
-  operationId: ZLinkActorJoinOperationId
-): string {
-  return `${operationId.high.toString(16)}:${operationId.low.toString(16)}`;
 }

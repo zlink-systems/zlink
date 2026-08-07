@@ -1,4 +1,4 @@
-[English](protocol-raw.en.md) | [한국어](protocol-raw.ko.md)
+[English](protocol-raw.en.md) | [한국어](protocol-raw.en.md)
 
 # RAW (STREAM) Protocol Details
 

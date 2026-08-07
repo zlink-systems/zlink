@@ -247,6 +247,9 @@ Framework가 수락 전 target을 다시 선택하거나 Store 결과를 재확�
 - Actor를 제거한 뒤 같은 ActorId로 다시 만들어도 이전 Session binding을 다시 사용하지 않는다.
 - Instance Spot은 `Missing`일 때만 cold activation을 시작한다. `Ready` owner process 종료나 owner lease
   만료를 `Missing`으로 바꾸거나 cold activation으로 복구하지 않는다.
+- `Ready` authority에 activation recovery pointer가 남아 있더라도 최초 cold activation의 미완료
+  operation을 authority가 지정한 동일 target node·lifecycle에서 재개하는 데만 사용한다. Steady
+  `Ready` owner 장애 뒤 다른 target을 선택하는 근거로 사용하지 않는다.
 - Instance Spot cold activation recovery를 Actor, User Spot, 이미 `Ready`인 Instance Spot이나 host
   relocation에 사용하지 않는다.
 - Relocation commit 전 failure는 source를 유지하고, commit 뒤 failure는 source로 rollback하지 않는다.
@@ -254,3 +257,17 @@ Framework가 수락 전 target을 다시 선택하거나 Store 결과를 재확�
   않는다.
 - Store 결과가 불분명하면 authority를 다시 읽기 전까지 source admission과 target dispatch를 열지 않는다.
 - Session owner process 종료 뒤 Session과 binding을 다른 process에서 복원하지 않는다.
+
+## 10. 관련 내부 구조
+
+이 문서가 공개 장애 동작의 정본이다. 구현 구조는 다음 internals 문서에서 이어서 설명하며, 해당
+문서는 이 장의 오류 의미나 failover 범위를 다시 정의하지 않는다.
+
+- [6. target 선택과 route cache](../internals/06-routing-and-cache.ko.md)는 `Missing`과
+  `Unavailable`을 resolver 결과 타입에서 보존하는 방법을 설명한다.
+- [8. 객체 종류와 활성화](../internals/08-object-lifecycle.ko.md)는 resolver 결과를 activation state
+  machine의 서로 다른 입력으로 전달하는 방법을 설명한다.
+- [10. Liveness와 상태 공개](../internals/10-liveness-and-state.ko.md)는 availability evidence와
+  authority release의 소유자를 분리한다.
+- [12. Service wire protocol](../internals/12-service-wire-protocol.ko.md#8-instance-spot-cold-activation-recovery)은
+  같은 target의 최초 activation recovery에만 사용하는 durable root와 scan을 설명한다.

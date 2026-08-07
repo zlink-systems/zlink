@@ -26,7 +26,7 @@ Java 바인딩은 .NET 바인딩과 동일한 architecture map을 사용할 때�
 - 테스트, 샘플, perf, 애플리케이션은 public contract 패키지만 import한다.
 
 Java public contract 분류는
-[.NET 바인딩 청사진](../dotnet/README.en.md)을 기준선으로 따른다. Java의 public 타입
+[.NET 바인딩 청사진](../dotnet/README.ko.md)을 기준선으로 따른다. Java의 public 타입
 규칙 때문에 어색해지는 경우 모든 C# 파일을 문자 그대로 복사할 필요는 없다.
 다만 동일한 카테고리 소유권, resource 경계, operation/model 그룹은 보존해야
 한다.
@@ -65,7 +65,7 @@ deprecated wrapper, 중복 생성 경로, public runtime alias, direct construct
 
 의미적 진실의 원천은 `core/include/zlink.h`이다. 공유되는 바인딩 정책은
 `doc/spec/bindings/README.md`이다. .NET 투영은
-[.NET 바인딩 청사진](../dotnet/README.en.md)이며, Java는 그 설계를 따르되 Java 패키지
+[.NET 바인딩 청사진](../dotnet/README.ko.md)이며, Java는 그 설계를 따르되 Java 패키지
 이름과 Java 네이밍 컨벤션을 사용한다.
 
 Java 저장소의 소유권 경계는 다음과 같다:
@@ -255,7 +255,7 @@ bindings/java/
 
 ### Public Contract Layout
 
-이 트리는 [.NET 바인딩 청사진](../dotnet/README.en.md)이 정의한 contract 카테고리의
+이 트리는 [.NET 바인딩 청사진](../dotnet/README.ko.md)이 정의한 contract 카테고리의
 Java 투영이다. 아래 그룹 디렉터리는 Java 트리를 .NET과 유사한 수준으로 읽기
 쉽게 만들기 위한 물리 source-file 그룹이다. 추가 public Java package 이름을
 만들지는 않는다. 예를 들어 `contracts/sockets/SocketEnums/SendResult.java`는
@@ -324,7 +324,7 @@ export되지 않고 애플리케이션용 API가 아니므로 의도적으로 `c
 둔다.
 
 그룹 디렉터리는 임의의 기능 묶음이 아니다.
-[.NET 바인딩 청사진](../dotnet/README.en.md)이 정의한 contract 그룹의 Java source
+[.NET 바인딩 청사진](../dotnet/README.ko.md)이 정의한 contract 그룹의 Java source
 file 그룹이다. 새 public contract 파일은 그 개념을 소유하는 가장 작은 그룹에
 둔다.
 
@@ -608,7 +608,8 @@ Typed socket contract는 해당 socket 타입에 의미 있는 기능만 더한�
 
 - `PairSocket`: send와 recv.
 - `DealerSocket`: send, recv, request.
-- `RouterSocket`: routed send, routed recv, request, reply, SPOT routing.
+- `RouterSocket`: routed send, routed recv, request, reply, SPOT routing와
+  monitor event의 exact transport pair 종료.
 - `PubSocket`: publish.
 - `SubSocket`: subscribe와 subscription event 수신.
 - `XPubSocket`: publish와 subscription event 수신.
@@ -636,6 +637,13 @@ Builder 시작 메서드는 대상 식별자만 받는다:
 - `requestToSpot(nodeRid, spotRid)`
 - `replyToSpot(nodeRid, spotRid, requestSequence)`
 - `sendBoundActor(sessionRid, actorId)`
+
+`RouterSocket.disconnectTransportPair(transportPairId, transportPairGeneration)`은
+같은 monitor event에서 얻은 non-zero pair identity와 generation에 해당하는
+physical transport pair만 종료 대상으로 지정한다. 같은 peer routing id를
+사용하는 다른 pair에는 영향을 주지 않는다. 이 메서드는 transport pair
+identity가 필요한 Framework connection replacement와 같은 runtime 제어에
+사용하며, 임의의 pair identity를 새로 만들어 전달하지 않는다.
 
 payload, flag, timeout, callback, async 동작은 builder 단계다. 대표적인 terminal
 메서드:

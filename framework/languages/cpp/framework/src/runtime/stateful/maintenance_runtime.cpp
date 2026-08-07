@@ -1915,8 +1915,22 @@ try
             || *sequence <= previous_sequence || !bytes)
             return std::nullopt;
         previous_sequence = *sequence;
+        std::optional<std::size_t> application_payload_bytes;
+        try {
+            const auto application =
+              protocol::decode_frozen_record (*bytes).application;
+            if (application)
+                application_payload_bytes =
+                  protocol::application_payload_hwm_bytes (*application);
+        }
+        catch (const protocol::service_wire_error_t &) {
+            // Legacy relocation records did not require a canonical
+            // application envelope. They retain the previous full-record
+            // accounting fallback until rewritten by the current runtime.
+        }
         frozen.pending_application.push_back (
-          turn_record_t{*sequence, std::move (*bytes)});
+          turn_record_t{*sequence, std::move (*bytes),
+                        application_payload_bytes});
     }
     const auto timer_count = reader.u32 ();
     if (!timer_count || *timer_count > max_logical_timers

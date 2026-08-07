@@ -433,8 +433,11 @@ doesn't close the Entry Spot, so it doesn't call this callback.
 A regular message resolves the Ready owner. On a Missing RID, only a
 call with the Instance marker above creates a target-owned
 [activation envelope](../../../../01-glossary.en.md#activation-envelope).
-Instance reactivation after owner loss uses the stable type and initial
-Mesh stored in authority.
+The stored envelope, stable type, and initial Mesh are used only to
+resume the first cold activation on the same target node and lifecycle
+before its terminal completion is recorded. Termination or lease expiry
+of a steady `Ready` owner doesn't become Missing or cold activation on
+another node; it ends as `UNAVAILABLE`.
 
 If a cold Instance factory/initialize fails, a durable public `FAILED`
 state isn't published. The runtime keeps a local failed barrier, deletes
@@ -761,6 +764,13 @@ public interface systems.zlink.framework.spots.ZLinkWorkerTask<T> {
   public abstract T run(systems.zlink.framework.spots.ZLinkWorkerCancellation) throws java.lang.Exception;
 }
 ```
+
+When timer options are omitted, `overrunPolicy` defaults to
+`SKIP_LATE_TICKS` and `maxCatchUpTicks` defaults to `1`. `maxCatchUpTicks` is
+used and validated in `1..Integer.MAX_VALUE` only when
+`overrunPolicy == CATCH_UP_BOUNDED`. Other policies do not use or validate
+this value against that range. This prose does not change the existing
+`ZLinkTimerOptions` record signature.
 
 ## Spot Lifecycle Result Public Signature
 

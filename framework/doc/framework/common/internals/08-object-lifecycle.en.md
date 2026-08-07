@@ -13,7 +13,9 @@ title: "8. Object Kind And Activation"
 > **Contract ownership** — the Spot kinds and shutdown reasons are
 > owned by [the Spot Model](../spec/11-spot-model.en.md), and where
 > generation is used by
-> [Spot · Actor Routing](../spec/18-object-routing.en.md). This
+> [Spot · Actor Routing](../spec/18-object-routing.en.md). The result
+> after owner failure is owned by
+> [Failure And Failover Policy](../spec/31-failure-failover-policy.en.md). This
 > chapter covers the **structure** that satisfies that contract, and
 > the mismatches actually observed across the four implementations.
 
@@ -68,6 +70,29 @@ Spot-dedicated call that explicitly declares intent to create can
 build a new one; an ordinary message and a lookup call only target an
 already-ready object
 ([Spot · Actor Routing 「2.2 The Condition For Using A Recent Ready Route」](../spec/18-object-routing.en.md#22-the-condition-for-using-a-recent-ready-route)).
+
+### Pass Spec States Into The Activation State Machine
+
+The public behavior is defined by
+[Failure Handling And Failover Scope §4.4](../spec/31-failure-failover-policy.en.md#44-distinguishing-instance-spot-cold-activation-from-owner-failure).
+The activation state machine receives the resolver result as one of the
+following internal states and passes it once to the responsible component.
+
+| Internal State | Fence Preserved | Next Component |
+|---|---|---|
+| `Missing` | Lookup version proving authority absence | Creation coordinator |
+| `Creating` | Attempt and reservation fence | Waiter for the same attempt |
+| `Ready` | Route and authority/owner-lease fences | Route admission |
+| `Unavailable` | Authority and invalid-owner evidence | Terminal completion adapter |
+
+There is no activation transition from `Unavailable` to `Missing`. An
+explicit `Close`, `IdleEvicted` cleanup, or another formal lifecycle
+operation can complete authority release, after which the resolver can
+produce a new `Missing` input.
+
+Stored creation intent resumes only an incomplete first cold-activation
+operation on the same target node and lifecycle. It isn't used for
+takeover or queue recovery after a steady `Ready` owner failure.
 
 Without this distinction, one typo builds an object. A message sent
 with a wrong ID would create a new object for that ID, and no one
@@ -207,13 +232,20 @@ disposes the activation, and releases the Spot location in the
 Location Store. So no new work is accepted while the callback is
 running, and the location isn't cleared before the callback finishes.
 
-If, during this process, the location row is still being released
-while an Instance intent request uses the previous route, the .NET
-runtime invalidates the route and re-reads until the location becomes
-Missing or newly Ready. This behavior isn't a retry resending an
-already-accepted application request — it's an owner-route refresh to
-decide cold activation. This behavior isn't applied to a normal Spot's
-stale-route error.
+If an Instance-intent request uses the previous route while the
+location row is still being released, the runtime may invalidate the
+route and re-read until the close transaction finishes authority
+release as `Missing`, or until a current `Ready` route is confirmed.
+This isn't a retry that resends an already-accepted application
+request; it's an owner-route refresh that confirms the result of
+explicit idle cleanup.
+
+The resolver passes the result of completed idle-cleanup authority release
+and a change in owner-availability evidence as different tags into the
+activation state machine. The creation coordinator receives only the former
+tag, while the latter is wired to the terminal completion adapter. The rule
+against resubmitting an accepted request is defined by
+[Failure Handling And Failover Scope §2](../spec/31-failure-failover-policy.en.md#2-common-judgment-criteria).
 
 The idle-cleanup state of other Framework languages, and the common
 process-verification result, aren't treated as complete just from this
@@ -356,6 +388,9 @@ followed as-is
   time, the factory runs only once.
 - The "being created" state doesn't stay in the location cache.
 - A record from a failed creation is cleaned up at startup.
+- A change in owner-availability evidence doesn't invoke the authority-release transition.
+- An `Unavailable` resolver tag is passed only to the terminal completion adapter.
+- The activation-recovery root and scan key contain authority's target node and lifecycle.
 - Even right after an object is recreated, ordinary messages aren't
   rejected for generation mismatch.
 - A call sent to a stale owner ends in an error without automatic

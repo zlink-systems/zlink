@@ -5,6 +5,9 @@ const test = require('node:test');
 
 const zlink = require('@zlink-systems/zlink');
 const framework = require('../../packages/framework/dist/internal');
+const {
+  ZLinkRoutedSpotPacketDispatch
+} = require('../../packages/framework/dist/runtime/spots/spot-routed-spot-packet-dispatch');
 
 class PlayerActor {
   constructor(context) {
@@ -399,6 +402,137 @@ test('same-Spot awaited requests fail before transport while self-send remains F
 
   await outbound.sendToSpot('same-spot', { requestId: 'send', marker: 'self-send' }).submit();
   assert.deepEqual(submissions.map(({ kind }) => kind), ['send']);
+});
+
+test('routed local self-send queues behind the current turn while self-request fails before dispatch', async () => {
+  const events = [];
+  let completeSelf;
+  const selfCompleted = new Promise((resolve) => { completeSelf = resolve; });
+  class SelfPacketHandler {
+    async handle(_spot, message) {
+      events.push(`handler:${message.kind}`);
+      completeSelf();
+      return 'reply';
+    }
+  }
+  const serial = new framework.ZLinkSpotSerialExecutor(true, 'same-spot');
+  const spot = {};
+  const dispatch = new ZLinkRoutedSpotPacketDispatch({
+    resolveActivation: () => ({
+      spotId: 'same-spot',
+      spot,
+      serial,
+      handlers: {
+        snapshot: () => [{
+          kind: 'packet',
+          packetName: 'SelfPacket',
+          handlerType: SelfPacketHandler
+        }]
+      }
+    })
+  });
+  let earlier;
+  await serial.execute(async () => {
+    events.push('turn:start');
+    earlier = serial.post(() => events.push('queued:earlier'));
+    await dispatch.send('same-spot', 'SelfPacket', { kind: 'send' }, {
+      channelName: 'test'
+    });
+    events.push('turn:send-admitted');
+    await assert.rejects(
+      dispatch.request('same-spot', 'SelfPacket', { kind: 'request' }, {
+        channelName: 'test'
+      }),
+      (error) => error instanceof framework.ZLinkFrameworkException
+        && error.kind === framework.ZLinkFrameworkErrorKind.InvalidOperation
+    );
+    events.push('turn:request-rejected');
+  });
+  await earlier;
+  await Promise.race([
+    selfCompleted,
+    new Promise((_, reject) => setTimeout(
+      () => reject(new Error('FIFO self-send was not dispatched.')),
+      1_000
+    ))
+  ]);
+
+  assert.deepEqual(events, [
+    'turn:start',
+    'turn:send-admitted',
+    'turn:request-rejected',
+    'queued:earlier',
+    'handler:send'
+  ]);
+});
+
+test('routed local one-way waits for bounded capacity and completes at admission', async () => {
+  let releaseCurrent;
+  let currentStarted;
+  let releaseHandler;
+  let handlerStarted;
+  let handlerFinished = false;
+  const current = new Promise(resolve => { releaseCurrent = resolve; });
+  const currentDidStart = new Promise(resolve => { currentStarted = resolve; });
+  const handler = new Promise(resolve => { releaseHandler = resolve; });
+  const handlerDidStart = new Promise(resolve => { handlerStarted = resolve; });
+  let finishHandler;
+  const handlerDidFinish = new Promise(resolve => { finishHandler = resolve; });
+  class SlowHandler {
+    async handle() {
+      handlerStarted();
+      await handler;
+      handlerFinished = true;
+      finishHandler();
+    }
+  }
+  const serial = new framework.ZLinkSpotSerialExecutor(true, 'capacity-target', {
+    applicationMessageCapacity: 1
+  });
+  const dispatch = new ZLinkRoutedSpotPacketDispatch({
+    resolveActivation: () => ({
+      spotId: 'capacity-target',
+      spot: {},
+      serial,
+      handlers: {
+        snapshot: () => [{
+          kind: 'packet',
+          packetName: 'SlowPacket',
+          handlerType: SlowHandler
+        }]
+      }
+    })
+  });
+  const running = serial.execute(async () => {
+    currentStarted();
+    await current;
+  });
+  await currentDidStart;
+
+  let admitted = false;
+  const first = dispatch.send('capacity-target', 'SlowPacket', {}, {
+    channelName: 'test',
+    admissionTimeoutMs: 1_000
+  }).then(() => { admitted = true; });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(admitted, false);
+  await assert.rejects(
+    dispatch.send('capacity-target', 'SlowPacket', {}, {
+      channelName: 'test',
+      admissionTimeoutMs: 1_000
+    }),
+    (error) => error instanceof framework.ZLinkFrameworkException
+      && error.kind === framework.ZLinkFrameworkErrorKind.DeadlineExceeded
+  );
+
+  releaseCurrent();
+  await running;
+  await first;
+  await handlerDidStart;
+  assert.equal(handlerFinished, false);
+  releaseHandler();
+  await handlerDidFinish;
+  assert.equal(handlerFinished, true);
 });
 
 test('yield request from an entry turn is rejected because Entry forbids Yield', async () => {

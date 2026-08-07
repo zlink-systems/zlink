@@ -103,6 +103,33 @@ public sealed record ZLinkLocationServiceSummary(
     uint StoppedCount,
     DateTimeOffset LastUpdatedAt);
 
+public enum ZLinkLocationObjectKind
+{
+    Actor = 0,
+    UserSpot = 1,
+    InstanceSpot = 2
+}
+
+public enum ZLinkLocationObjectState
+{
+    Creating = 0,
+    Ready = 1,
+    Unavailable = 2
+}
+
+public sealed record ZLinkLocationObjectEntry(
+    string GlobalId,
+    ulong ObjectGeneration,
+    string MeshName,
+    RoutingId NodeRid,
+    ZLinkLocationObjectState State,
+    string StableType);
+
+public sealed record ZLinkLocationObjectFilter(
+    ZLinkLocationObjectKind ObjectKind,
+    string? StableType = null,
+    string? MeshName = null);
+
 public readonly record struct ZLinkPageRequest(
     int PageSize = 100,
     string? ContinuationToken = null);
@@ -135,6 +162,20 @@ public interface IZLinkLocationRuntimeQuery
             ZLinkLocationServiceSummaryFilter filter,
             ZLinkPageRequest page = default,
             CancellationToken cancellationToken = default);
+
+    ValueTask<ZLinkLocationObjectEntry?> FindActorLocationAsync(
+        string actorId,
+        CancellationToken cancellationToken = default);
+
+    ValueTask<ZLinkLocationObjectEntry?> FindSpotLocationAsync(
+        string spotId,
+        CancellationToken cancellationToken = default);
+
+    ValueTask<ZLinkLocationPage<ZLinkLocationObjectEntry>>
+        ListObjectLocationsAsync(
+            ZLinkLocationObjectFilter filter,
+            ZLinkPageRequest page = default,
+            CancellationToken cancellationToken = default);
 }
 
 public enum ZLinkLocationRole : ushort
@@ -148,12 +189,18 @@ public enum ZLinkLocationRole : ushort
 }
 ```
 
-운영 query는 사람이 이해할 수 있는 health·topology·service summary만 반환한다. Store key·version,
+운영 query는 사람이 이해할 수 있는 health·topology·service summary와 object location을 반환한다. Store key·version,
 owner lease generation, descriptor payload와 protocol envelope는 반환하지 않는다. `NodeRid`는 실제 transport
 routing identity이므로 public `RoutingId`로 유지한다.
 
 Page size는 `1..1000`이고 continuation token은 해당 query가 발급한 opaque value다. Application은 token을
 해석하거나 다른 query에 사용하지 않는다.
+
+Actor ID와 Spot ID의 exact lookup은 각각 현재 object location 하나를 조회한다. Missing이면 `null`,
+Creating이면 `Creating`, Ready이면 `Ready`, commit 뒤 current owner를 사용할 수 없으면 `Unavailable`
+entry를 반환한다. Spot exact lookup은 User Spot과 Instance Spot을 같은 Spot ID 조회 계약으로 다룬다.
+List query의 `ObjectKind`는 필수이며 `StableType`과 `MeshName`은 선택 filter다. Encoded page는 최대
+4 MiB다. Store 조회 실패는 `ZLinkFrameworkErrorKind.Unavailable`이며 page 일부를 반환하지 않는다.
 
 ## 4. Host maintenance
 

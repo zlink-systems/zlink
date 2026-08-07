@@ -186,9 +186,11 @@ starter module에만 qualified export한다. Testkit은 test source에만 같은
 
 Runtime은 각 listener의 현재 advertised endpoint를 조회하는 public member도 제공한다. `kind`는
 RouteMesh, ClientServer, Fanout 또는 STREAM을 지정하고 `name`은 해당 registration name을 지정한다.
-registration이 없거나 role이 endpoint를 제공하지 않으면 public error로 완료한다. 반환된 status의
-`observedAt`은 조회 시각이며 endpoint 문자열은 wildcard bind 주소가 아니라 peer가 사용할 advertised
-주소를 나타낸다.
+Listener bind가 성공한 뒤에만 status를 반환한다. Port `0`을 구성했다면 OS가 실제로 할당한 port와
+advertise host를 조합한 endpoint를 반환한다. Endpoint 문자열은 wildcard bind 주소가 아니라 peer가
+사용할 advertised 주소다. Registration이 없거나 아직 bind되지 않았거나 해당 role이 endpoint를 제공하지
+않으면 `ZLinkFrameworkErrorKind.NOT_CONFIGURED`로 실패한다. 반환된 status의 `observedAt`은 query 결과를
+만든 시각이다.
 
 ```java
 public enum ZLinkListenerKind {

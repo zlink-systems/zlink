@@ -414,6 +414,51 @@ public sealed class SerialExecutorTests
     }
 
     [Fact]
+    public async Task StreamSessionSerialExecutor_ReservesRetainedApplicationBytes()
+    {
+        using var errorSink = new ZLinkRuntimeErrorSink();
+        await using var executor = new ZLinkStreamSessionSerialExecutor(
+            new object(),
+            errorSink,
+            capacity: 8,
+            applicationByteCapacity:
+                ZLinkSerialExecutionQueue.WorkItemFixedCostBytes + 4);
+        var started = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        Assert.Equal(
+            ZLinkSerialPostAdmission.Accepted,
+            executor.EnqueueApplication(
+                retainedBytes: 4,
+                async _ =>
+                {
+                    started.TrySetResult();
+                    await release.Task.ConfigureAwait(false);
+                }));
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(
+            ZLinkSerialPostAdmission.QueueFull,
+            executor.EnqueueApplication(
+                retainedBytes: 1,
+                static _ => ValueTask.CompletedTask));
+
+        release.TrySetResult();
+    }
+
+    [Fact]
+    public void StreamSessionExecutionAccountingIncludesHeaderAndPayload()
+    {
+        using var header = Message.From(new byte[] { 1, 2, 3 });
+        using var payload = Message.From(new byte[] { 4, 5, 6, 7, 8 });
+
+        Assert.Equal(
+            8,
+            ZLinkStreamSessionRuntime.RetainedPacketBytes(header, payload));
+    }
+
+    [Fact]
     public async Task SerialExecutionQueue_FinalTurn_BypassesCapacity_AndSealsAdmission()
     {
         await using var queue = CreateQueue(CancellationToken.None, capacity: 1);
@@ -835,6 +880,75 @@ public sealed class SerialExecutorTests
                 static () => { },
                 out var next));
         await next.Completion.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
+    public async Task SerialExecutionQueue_ApplicationAdmissionCountsRetainedBytes()
+    {
+        await using var queue = new ZLinkSerialExecutionQueue(
+            new ZLinkRuntimeTaskRunner(
+                new ZLinkRuntimeErrorSink(),
+                CancellationToken.None),
+            new ZLinkRuntimeErrorSink(),
+            CancellationToken.None,
+            capacity: 8,
+            applicationByteCapacity:
+                ZLinkSerialExecutionQueue.WorkItemFixedCostBytes + 4);
+        var release = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        Assert.Equal(
+            ZLinkSerialPostAdmission.Accepted,
+            queue.TryPostApplicationWithAdmission(
+                retainedBytes: 4,
+                async _ => await release.Task.ConfigureAwait(false),
+                out var accepted));
+        Assert.Equal(
+            ZLinkSerialPostAdmission.QueueFull,
+            queue.TryPostApplicationWithAdmission(
+                retainedBytes: 1,
+                static _ => ValueTask.CompletedTask,
+                out _));
+
+        release.TrySetResult();
+        await accepted.Completion.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(
+            ZLinkSerialPostAdmission.Accepted,
+            queue.TryPostApplicationWithAdmission(
+                retainedBytes: 4,
+                static _ => ValueTask.CompletedTask,
+                out var next));
+        await next.Completion.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
+    public async Task SerialExecutionQueue_ApplicationDrainedTracksEachBusyInterval()
+    {
+        await using var queue = CreateQueue(CancellationToken.None);
+        var firstRelease = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        Assert.True(queue.TryPostApplication(
+            async _ => await firstRelease.Task.ConfigureAwait(false),
+            out var first));
+        var firstDrained = queue.ApplicationDrained;
+        Assert.False(firstDrained.IsCompleted);
+
+        firstRelease.TrySetResult();
+        await first.Completion.WaitAsync(TimeSpan.FromSeconds(5));
+        await firstDrained.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var secondRelease = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        Assert.True(queue.TryPostApplication(
+            async _ => await secondRelease.Task.ConfigureAwait(false),
+            out var second));
+        var secondDrained = queue.ApplicationDrained;
+        Assert.NotSame(firstDrained, secondDrained);
+        Assert.False(secondDrained.IsCompleted);
+
+        secondRelease.TrySetResult();
+        await second.Completion.WaitAsync(TimeSpan.FromSeconds(5));
+        await secondDrained.WaitAsync(TimeSpan.FromSeconds(5));
     }
 
     [Fact]

@@ -25,6 +25,7 @@ void note_submit_attempt (std::string target,
                           const void *owner,
                           std::chrono::milliseconds timeout = std::chrono::seconds (1),
                           std::size_t capacity = 1024);
+void limit_submit_attempt_timeout (std::chrono::milliseconds timeout);
 
 void notify_submit_ready (const std::string &target, const void *owner);
 void notify_submit_ready (const void *owner);
@@ -40,6 +41,7 @@ void reset_async_submit_runtime_for_tests ();
  * tests therefore cannot derive slot state from caller-visible completions and
  * ask the executor directly. */
 std::size_t multicast_worker_count_for_tests ();
+std::size_t multicast_post_completion_failure_count_for_tests ();
 void wait_for_idle_multicast_executor_for_tests ();
 
 } // namespace zlink::framework::runtime::messaging

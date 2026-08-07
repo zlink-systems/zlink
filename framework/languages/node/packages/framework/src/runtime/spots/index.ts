@@ -79,6 +79,7 @@ import {
 } from '../actors';
 import type { ZLinkLocationLifecycle } from '../locations';
 import {
+  encodeFrameworkPayload,
   encodeFrameworkPayloadMessage,
   wrapFrameworkPayloadMessage
 } from '../messaging/payload-codec';
@@ -91,7 +92,7 @@ import {
 import {
   decodeStreamHeader,
   encodeStreamHeader,
-  ZLinkStreamCodec,
+  streamCodecForContentType,
   ZLinkStreamHeaderFlags,
   ZLinkStreamMessageKind
 } from '../streams/protocol';
@@ -283,6 +284,8 @@ export interface ZLinkSpotManagerOptions {
   readonly metrics?: import('../diagnostics').ZLinkRuntimeMetrics;
   readonly admission?: ZLinkRuntimeAdmissionGate;
   readonly statefulExecutionAllowed?: () => boolean;
+  readonly activationConcurrencyLimitProvider?: (meshName: string) => number;
+  readonly onInstanceActivationConcurrencyChanged?: (meshName: string) => void;
 }
 
 export class DefaultZLinkSpotManager {
@@ -299,6 +302,17 @@ export class DefaultZLinkSpotManager {
     string,
     Promise<ZLinkSpotActivation>
   >();
+  private readonly instanceActivationGates = new Map<string, {
+    readonly meshName: string;
+    readonly limit: number;
+    active: number;
+    readonly waiters: Array<{
+      resolve: (release: () => void) => void;
+      reject: (error: unknown) => void;
+      signal?: AbortSignal;
+      abort?: () => void;
+    }>;
+  }>();
   private readonly pendingInstanceCloses = new Map<string, Promise<boolean>>();
   private readonly pendingInstanceTerminals = new Map<string, number>();
   private readonly pendingInstanceTerminalGenerations = new Map<string, Map<string, number>>();
@@ -429,6 +443,11 @@ export class DefaultZLinkSpotManager {
     return this.activations.list(meshName).length;
   }
 
+  instanceActivationConcurrency(meshName: string): { readonly active: number; readonly limit: number } {
+    const limit = this.options.activationConcurrencyLimitProvider?.(meshName) ?? 128;
+    return { active: this.instanceActivationGates.get(meshName)?.active ?? 0, limit };
+  }
+
   resolveRelocationActivation(
     meshName: string,
     spotId: RoutingId
@@ -487,6 +506,28 @@ export class DefaultZLinkSpotManager {
   }
 
   async materializeInstance(
+    meshName: string,
+    instanceType: string,
+    spotId: RoutingId,
+    objectGeneration: bigint,
+    signal?: AbortSignal
+  ): Promise<void> {
+    const existing = this.pendingInstanceMaterializations.get(
+      instanceMaterializationKey(meshName, spotId, objectGeneration)
+    );
+    if (existing !== undefined) {
+      await awaitWithAbort(existing, signal);
+      return;
+    }
+    const release = await this.acquireInstanceActivation(meshName, signal);
+    try {
+      await this.materializeInstanceCore(meshName, instanceType, spotId, objectGeneration, signal);
+    } finally {
+      release();
+    }
+  }
+
+  private async materializeInstanceCore(
     meshName: string,
     instanceType: string,
     spotId: RoutingId,
@@ -587,6 +628,59 @@ export class DefaultZLinkSpotManager {
       await pending;
       return;
     }
+  }
+
+  private async acquireInstanceActivation(
+    meshName: string,
+    signal?: AbortSignal
+  ): Promise<() => void> {
+    let gate = this.instanceActivationGates.get(meshName);
+    if (gate === undefined) {
+      gate = {
+        meshName,
+        limit: this.options.activationConcurrencyLimitProvider?.(meshName) ?? 128,
+        active: 0,
+        waiters: []
+      };
+      this.instanceActivationGates.set(meshName, gate);
+    }
+    if (signal?.aborted === true) throw signal.reason;
+    if (gate.active < gate.limit) {
+      gate.active += 1;
+      this.options.onInstanceActivationConcurrencyChanged?.(meshName);
+      return () => this.releaseInstanceActivation(gate!);
+    }
+    return new Promise<() => void>((resolve, reject) => {
+      const waiter = { resolve, reject, signal, abort: undefined as (() => void) | undefined };
+      waiter.abort = () => {
+        const index = gate!.waiters.indexOf(waiter);
+        if (index >= 0) gate!.waiters.splice(index, 1);
+        reject(signal?.reason);
+      };
+      signal?.addEventListener('abort', waiter.abort, { once: true });
+      gate!.waiters.push(waiter);
+    });
+  }
+
+  private releaseInstanceActivation(gate: {
+    readonly meshName: string;
+    readonly limit: number;
+    active: number;
+    readonly waiters: Array<{
+      resolve: (release: () => void) => void;
+      reject: (error: unknown) => void;
+      signal?: AbortSignal;
+      abort?: () => void;
+    }>;
+  }): void {
+    const waiter = gate.waiters.shift();
+    if (waiter !== undefined) {
+      if (waiter.abort !== undefined) waiter.signal?.removeEventListener('abort', waiter.abort);
+      waiter.resolve(() => this.releaseInstanceActivation(gate));
+      return;
+    }
+    gate.active -= 1;
+    this.options.onInstanceActivationConcurrencyChanged?.(gate.meshName);
   }
 
   isInstanceMaterialized(
@@ -771,10 +865,7 @@ export class DefaultZLinkSpotManager {
   }
 
   private hasIdleSweepTarget(): boolean {
-    return this.activations.activeActivations().some((activation) =>
-      (this.options.instanceSpotIdleTimeoutMs?.get(activation.meshName) ?? 0) > 0
-      && this.isInstanceFactory(activation.meshName, activation.spotType)
-    );
+    return this.activations.hasActiveActivations();
   }
 
   private async runIdleSweep(): Promise<void> {
@@ -782,7 +873,7 @@ export class DefaultZLinkSpotManager {
     this.idleSweepRunning = true;
     try {
       const now = Date.now();
-      for (const activation of this.activations.activeActivations()) {
+      for (const activation of this.activations.nextActiveActivationBatch()) {
         const timeoutMs = this.options.instanceSpotIdleTimeoutMs?.get(activation.meshName) ?? 0;
         if (
           timeoutMs <= 0
@@ -1144,7 +1235,8 @@ export class DefaultZLinkSpotManager {
     request: Message,
     commit: (spot: ZLinkSpot) => Promise<ZLinkActorJoinRollback | void> | ZLinkActorJoinRollback | void,
     signal?: AbortSignal,
-    leaveSource?: () => Promise<void>
+    leaveSource?: () => Promise<void>,
+    contentType = 'application/json'
   ): Promise<ZLinkSpotActorJoinResult> {
     const meshName = this.activations.resolveUnique(spotId)?.meshName;
     this.options.admission?.requireRequest('Actor join admission', meshName);
@@ -1154,7 +1246,8 @@ export class DefaultZLinkSpotManager {
       request,
       commit,
       signal,
-      leaveSource
+      leaveSource,
+      contentType
     );
   }
 
@@ -1251,6 +1344,8 @@ export class DefaultZLinkSpotManager {
       readonly channelName: string;
       readonly contentType?: string;
       readonly workOptions?: import('../execution/serial-scheduler').ZLinkSerialWorkOptions;
+      readonly admissionTimeoutMs?: number;
+      readonly signal?: AbortSignal;
     }
   ): Promise<void> {
     await this.routedSpotPackets.send(spotId, packetName, message, context);
@@ -1264,6 +1359,8 @@ export class DefaultZLinkSpotManager {
       readonly channelName: string;
       readonly contentType?: string;
       readonly workOptions?: import('../execution/serial-scheduler').ZLinkSerialWorkOptions;
+      readonly admissionTimeoutMs?: number;
+      readonly signal?: AbortSignal;
     }
   ): Promise<TReply> {
     return await this.routedSpotPackets.request<TReply>(spotId, packetName, request, context);
@@ -1637,6 +1734,7 @@ export class DefaultZLinkSpotManager {
       throw new ZLinkConfigurationException('MeshNode Actor join record is missing its Spot or Actor owner.');
     }
     const entrySpotId = this.options.entryNodeRidProvider?.() ?? this.options.entryNodeRid;
+    const requestContentType = record.contentType ?? 'application/json';
     const targetsEntrySpot = entrySpotId !== undefined
       && String(spotId) === String(entrySpotId);
     const activation = this.activations.resolve(meshName, spotId);
@@ -1755,7 +1853,11 @@ export class DefaultZLinkSpotManager {
               const response: ZLinkSpotActorJoinResult = await activation.serial.execute(async () =>
                 activation.spot.onActorJoin(
                   actorRef.actorId,
-                  wrapFrameworkPayloadMessage(ownedCallbackRequest!, this.options.messageSerializers)
+                  wrapFrameworkPayloadMessage(
+                    ownedCallbackRequest!,
+                    this.options.messageSerializers,
+                    transferRequest.requestContentType
+                  )
                 )
               );
               let encodedReply: Message | undefined;
@@ -1891,7 +1993,11 @@ export class DefaultZLinkSpotManager {
         const response: ZLinkSpotActorJoinResult = await activation.serial.execute(async () =>
           activation.spot.onActorJoin(
             actorRef.actorId,
-            wrapFrameworkPayloadMessage(request, this.options.messageSerializers)
+            wrapFrameworkPayloadMessage(
+              request,
+              this.options.messageSerializers,
+              transferRequest?.requestContentType ?? requestContentType
+            )
           )
         );
         if (!actorJoinIsCurrent()) return;
@@ -2514,22 +2620,22 @@ export class DefaultZLinkSpotManager {
     payload: unknown
   ): readonly Buffer[] {
     const requestHeader = decodeStreamHeader(requestHeaderPart.data());
-    const payloadPart = encodeFrameworkPayloadMessage(payload, this.options.messageSerializers);
+    const encoded = encodeFrameworkPayload(payload, this.options.messageSerializers);
     try {
       return [
         Buffer.from(encodeStreamHeader({
           kind,
-          codec: ZLinkStreamCodec.Json,
+          codec: streamCodecForContentType(encoded.contentType),
           flags: ZLinkStreamHeaderFlags.None,
           requestSeq: requestHeader.requestSeq,
           name: '',
           metadata: new Map(),
           correlationId: requestHeader.correlationId
         })),
-        Buffer.from(payloadPart.data())
+        Buffer.from(encoded.message.data())
       ];
     } finally {
-      payloadPart.close();
+      encoded.message.close();
     }
   }
 
@@ -2635,6 +2741,7 @@ interface ZLinkFormalRemoteTransferRequest {
   readonly transferStateReference?: string;
   readonly transferStateChecksumCrc32c?: number;
   readonly request: string;
+  readonly requestContentType: string;
   readonly actorEntryNodeRid?: RoutingId;
   readonly actorRef?: ActorRef;
   readonly remoteBoundSessionTarget?: ZLinkRemoteBoundSessionTarget;
@@ -2708,6 +2815,9 @@ function decodeFormalRemoteTransferRequestBytes(
       ? payload.transferStateChecksumCrc32c
       : undefined,
     request: payload.request,
+    requestContentType: typeof payload.requestContentType === 'string'
+      ? payload.requestContentType
+      : 'application/json',
     actorEntryNodeRid: typeof payload.actorEntryNodeRid === 'string'
       ? decodeRoutingId(payload.actorEntryNodeRid, payload.actorEntryNodeRidHex)
       : undefined,

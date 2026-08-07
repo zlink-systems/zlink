@@ -4,6 +4,11 @@
 contract test에 필요한 입력, 상태, 정상 흐름, 실패와 완료 조건을 자체적으로
 정의한다.
 
+이 디렉토리와 언어별 exact interface가 Framework 공개 계약의 단일 정본이다.
+[공통 internals](../internals/README.ko.md)는 이 계약을 구현하는 상태와 component 구조를 설명하며,
+새 공개 동작을 추가하지 않는다. 계약과 구조를 함께 읽을 수 있도록 문서는 연결하되, 구현 상세가
+사용자 보장으로 해석되지 않도록 두 문서 묶음은 분리해 유지한다.
+
 ## 작성 기준과 공통 용어
 
 - [스펙 문서 작성 가이드](../../../../../doc/principal/documentation/spec-writing-guide.ko.md)

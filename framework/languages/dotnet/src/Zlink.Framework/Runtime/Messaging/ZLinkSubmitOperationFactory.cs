@@ -15,15 +15,27 @@ internal sealed class ZLinkSubmitOperationFactory(
     public PendingSubmit CreateCommand(
         IReadOnlyList<Message> parts,
         Func<IReadOnlyList<Message>, bool> trySubmit,
-        string operationId)
+        string operationId,
+        TimeSpan? operationTimeout = null)
     {
         return PendingSubmit.CreateCommand(
             parts,
             trySubmit,
-            ResolveDeadlineOrThrow(parts),
+            ResolveDeadlineOrThrow(parts, ResolveDeadline(operationTimeout)),
             admissionGate,
             wake,
             operationId);
+    }
+
+    private DateTimeOffset? ResolveDeadline(TimeSpan? operationTimeout)
+    {
+        var socketDeadline = ResolveDeadline();
+        if (operationTimeout is null) return socketDeadline;
+
+        var operationDeadline = DateTimeOffset.UtcNow.Add(operationTimeout.Value);
+        return socketDeadline is { } configuredDeadline && configuredDeadline < operationDeadline
+            ? configuredDeadline
+            : operationDeadline;
     }
 
     public PendingSubmit CreateRequest<T>(

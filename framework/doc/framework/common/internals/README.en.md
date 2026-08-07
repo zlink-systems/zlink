@@ -25,12 +25,17 @@ answers what can't be known just by reading the spec.
 
 Content the spec already decided isn't repeated — only a link is put.
 
-The spot where the current implementation deviates from this decision,
-and an item not yet verified, is managed separately in the
-repository's work document, which includes an implementation gap
-list. That list isn't the canonical document that replaces this
-document's design — it's a temporary document recording each
-runtime's confirmation status and the next verification condition.
+A `Decision` in this document set is not a public contract; it is an internal
+structure decision for satisfying that contract. A `Result To Confirm` checks
+the spec's public result and internal invariants in an implementation and does
+not create a new user guarantee. If public behavior, error meaning, or failover
+scope differs from the spec, the spec prevails. Internals are then aligned to
+the spec, or, if the public contract itself must change, the
+[public-contract procedure](../spec/00-public-contract-governance.en.md#4-public-contract-procedure)
+is followed first.
+
+Current implementation deviations and unverified progress are not recorded in this public
+internals document. This document describes only implementation structure and decisions.
 
 ## Component And Responsible Chapter
 
@@ -118,13 +123,13 @@ connection easy to miss when reading a chapter separately.
 | [3. Application And Infrastructure Execution Separation](03-progress-isolation.en.md) | What must still progress even while a handler is stuck. Why it's a region separation, not a reserved section |
 | [4. Operation Completion Confirmation](04-completion.en.md) | How to make only one win when multiple paths try to finish at once. How not to lose a response |
 | [5. Message Continuity During A Move](05-relocation-continuity.en.md) | Where a message goes while an object is moving |
-| [6. Target Selection And Route Cache](06-routing-and-cache.en.md) | How often location is looked up. What slows down if the cache doesn't die after a move |
+| [6. Target Selection And Route Cache](06-routing-and-cache.en.md) | How often location is looked up. How `Missing` differs from a `Ready` owner that can't be used |
 | [7. Receive And Dispatch Loop](07-dispatch-loop.en.md) | Whether to wake per message or batch-process. What wakes it |
-| [8. Object Kind And Activation](08-object-lifecycle.en.md) | How the three Spot kinds are distinguished. When a missing object is built |
+| [8. Object Kind And Activation](08-object-lifecycle.en.md) | How the three Spot kinds are distinguished. When a missing object is built and how Ready owner failure is handled |
 | [9. Session And Actor Binding](09-session-binding.en.md) | How to keep two places from pointing at the same Actor while a connection is swapped |
-| [10. Liveness And Status Publication](10-liveness-and-state.en.md) | How to judge whether the peer is alive. From when a call is accepted |
+| [10. Liveness And Status Publication](10-liveness-and-state.en.md) | How to judge whether the peer is alive without letting that judgment change authority |
 | [11. Payload Ownership And Copy](11-message-ownership.en.md) | How many times a byte is copied from socket to handler. When deserialization happens |
-| [12. Service Wire Protocol](12-service-wire-protocol.ko.md) | The byte format and command exchanged between nodes |
+| [12. Service Wire Protocol](12-service-wire-protocol.en.md) | The byte format and command exchanged between nodes |
 
 A performance-critical decision is gathered in
 [11](11-message-ownership.en.md)'s copy count,
@@ -133,14 +138,14 @@ A performance-critical decision is gathered in
 [2](02-serialization.en.md)'s execution resource constraint, and
 [8](08-object-lifecycle.en.md)'s memory accounting.
 
-## A Decision With The Canonical Document In Multiple Places
+## Structure Decisions That Span Chapters
 
-There's a spot where multiple documents cover the same topic. If they
-disagree, the one below is treated as canonical.
+Some topics are covered by multiple documents. The spec is authoritative for
+public behavior; align internal structure to the following documents.
 
-| Topic | Canonical |
+| Topic | Reference Document |
 |---|---|
-| The result when the queue saturates | The family × location table in [2. Spot · Actor Execution Serialization 「2. The Pitfall When Building Execution Authority」](02-serialization.en.md#2-the-pitfall-when-building-execution-authority) |
+| The public result when a queue saturates | The family × location table in [Spot Messaging 「5.3 Work Put On The Spot Application Queue」](../spec/12-spot-messaging.en.md#53-work-put-on-the-spot-application-queue) |
 | The owner-occupancy bound and the lifecycle continuous-execution bound | [Actor Model 「3. Actor Queue」](../spec/14-actor-model.en.md#3-actor-queue) |
 | The target-selection procedure and tiebreak | [Channel Messaging 「Selection Order」](../spec/08-channel-messaging.en.md#selection-order) |
 | Observer merging and loss | [Runtime Status And Operational Diagnostics](../spec/24-runtime-monitoring.en.md) |

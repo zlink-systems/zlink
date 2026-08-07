@@ -208,6 +208,21 @@ first value to check when comparing performance.
 **Decision.** Whichever method is chosen, §1's last rule is the
 same — always recheck the ready-owner set after waking up.
 
+### MeshNode socket options stay directional
+
+RouteMesh MeshNode socket configuration does not collapse send and receive into
+one HWM or timeout. `SendHighWaterMark` applies to the send queue, while
+`ReceiveHighWaterMark` applies to the receive queue. `SendTimeout` and
+`ReceiveTimeout` follow the same directional rule for their respective socket
+options. The two mailbox caps are separate settings. RouteMesh SS doesn't add
+a Framework-level `MaxMessageSize` setting or complete-message cap.
+
+These values are fixed before the MeshNode starts and are handed to the bind
+path. The runtime must not infer the receive HWM from the send HWM or treat the
+receive timeout as an alias for the send timeout. This preserves the public
+configuration at the runtime boundary defined by [RouteMesh topology](../spec/07-channel-topology.en.md)
+and [MeshNode startup](../spec/13-mesh-node.en.md).
+
 ## 6. Read Multiple Items At Once From A Socket
 
 §3 was about batch-processing after taking ownership. The step
@@ -235,7 +250,7 @@ delayed even with a ceiling in place.
 
 This rule applies to **every multi-connection receive path** —
 fanout, as well as
-[RouteMesh](../spec/01-glossary.ko.md#routemesh) where multiple nodes
+[RouteMesh](../spec/01-glossary.en.md#routemesh) where multiple nodes
 find each other by name, ClientServer, service connection, and STREAM
 are all targets
 ([Transport Liveness](../spec/29-transport-liveness.en.md)).

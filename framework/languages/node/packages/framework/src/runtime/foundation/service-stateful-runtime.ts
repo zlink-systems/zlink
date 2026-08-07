@@ -332,6 +332,10 @@ export class ServiceStatefulRuntime {
   private messageFollowHandler?: (
     record: import('./service-stateful-wire-codec').ServiceMessageFollowRecord
   ) => void;
+  private mailboxDropHandler?: (record: {
+    readonly kind: 'spot_multicast' | 'actor_control' | 'actor_binding';
+    readonly owner: string;
+  }) => void;
   private readonly admittedUserSpotOperations = new Map<string, {
     readonly request: string;
     readonly deadlineUnixMs: bigint;
@@ -352,6 +356,13 @@ export class ServiceStatefulRuntime {
     this.registry = new ServiceStatefulRegistry(nodeRid, nodeGeneration);
     this.registry.createEntrySpot(nodeRid);
     raw.setServiceIngress(record => this.ingress(record));
+  }
+
+  setMailboxDropHandler(handler: (record: {
+    readonly kind: 'spot_multicast' | 'actor_control' | 'actor_binding';
+    readonly owner: string;
+  }) => void): void {
+    this.mailboxDropHandler = handler;
   }
 
   createSpot(routingId?: string, kind: 'user' | 'instance' = 'user', stableType = kind): ServiceSpotState {
@@ -1829,7 +1840,9 @@ export class ServiceStatefulRuntime {
       }
       case 'actorSend':
       case 'actorRequest': {
-        this.validateActorFence(record.target);
+        const actor = record.boundSession === undefined
+          ? this.validateActorMessageFence(record.target)
+          : this.validateActorFence(record.target);
         if (record.boundSession !== undefined) {
           const binding = this.registry.validateBoundSession(
             record.target.actor,
@@ -1844,7 +1857,7 @@ export class ServiceStatefulRuntime {
         }
         return this.enqueueApplicationFrame(
           ingress,
-          `actor:${record.target.actor.actorId}\0${record.target.actor.generation}`,
+          `actor:${actor.ref.actorId}\0${actor.ref.generation}`,
           payloadFrame!,
           {
             receiveKind: record.kind === 'actorSend' ? ReceiveKind.ActorSend : ReceiveKind.ActorRequest,
@@ -1856,7 +1869,7 @@ export class ServiceStatefulRuntime {
             ...(record.boundSession === undefined
               ? {}
               : { sourceBindingGeneration: record.boundSession.bindingGeneration }),
-            targetActor: record.target.actor,
+            targetActor: actor.ref,
             messageFollowOrigin: {
               sourceNodeRid: ingress.sourceRoutingId,
               originalOperation: {
@@ -2146,14 +2159,19 @@ export class ServiceStatefulRuntime {
         route.objectGeneration
       );
       if (this.closed) return;
-      const spot = this.requireInstanceActivation(ingress, record);
+      const latestRoute = this.instanceIntents.get(record.route.targetSpotId)?.route;
+      const refreshedRecord = latestRoute !== undefined
+        && sameInstanceApplicationOwner(latestRoute, record.route)
+        ? { ...record, route: latestRoute }
+        : record;
+      const spot = this.requireInstanceActivation(ingress, refreshedRecord);
       const admitted = this.enqueueActivatedInstanceSpot(
         ingress,
-        record,
+        refreshedRecord,
         payloadFrame,
         spot,
         undefined,
-        this.instanceApplicationTerminalCompletion(this.instanceApplicationTarget(record)),
+        this.instanceApplicationTerminalCompletion(this.instanceApplicationTarget(refreshedRecord)),
         metadataFrame
       );
       if (admitted !== 'application') {
@@ -3007,7 +3025,7 @@ export class ServiceStatefulRuntime {
     payloadFrame: Buffer,
     stateful: ServiceStatefulMailboxData
   ): RawServicePumpResult {
-    return this.raw.mailbox.tryEnqueue({
+    const accepted = this.raw.mailbox.tryEnqueue({
       owner,
       domain,
       parts: [ingress.parts[0]!, payloadFrame],
@@ -3017,9 +3035,17 @@ export class ServiceStatefulRuntime {
       ...(ingress.requestSequence === undefined ? {} : { requestSequence: ingress.requestSequence }),
       ...(stateful.correlation === undefined ? {} : { correlation: stateful.correlation }),
       stateful
-    })
-      ? domain
-      : 'protocolError';
+    });
+    if (accepted) return domain;
+    if (stateful.reply !== undefined) {
+      const result = failure(createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.WorkerQueueFull,
+        `Mailbox owner '${owner}' exhausted its bounded admission capacity.`
+      ));
+      stateful.reply(result.terminalResult, result.failureCode);
+      return 'infrastructure';
+    }
+    return 'protocolError';
   }
 
   private enqueueLogicalMulticast(
@@ -3056,7 +3082,7 @@ export class ServiceStatefulRuntime {
     for (const spotId of targets) {
       const spot = this.registry.spot(spotId);
       if (spot === undefined) continue;
-      this.raw.mailbox.tryEnqueue({
+      const accepted = this.raw.mailbox.tryEnqueue({
         owner: `spot:${spotId}`,
         domain: 'application',
         parts: [
@@ -3073,12 +3099,13 @@ export class ServiceStatefulRuntime {
           targetSpot: spot.ref
         } satisfies ServiceStatefulMailboxData
       });
+      if (!accepted) this.mailboxDropHandler?.({ kind: 'spot_multicast', owner: spotId });
     }
   }
 
   private enqueueActorControl(spotId: string, control: ActorControlPayload): void {
     const header = Buffer.from([0x5a, 0x4d, 1, M6bServiceWireCommand.actorJoined, 0]);
-    this.raw.mailbox.tryEnqueue({
+    const accepted = this.raw.mailbox.tryEnqueue({
       owner: `spot:${spotId}`,
       domain: 'infrastructure',
       parts: [header],
@@ -3090,6 +3117,7 @@ export class ServiceStatefulRuntime {
         kindData: control
       } satisfies ServiceStatefulMailboxData
     });
+    if (!accepted) this.mailboxDropHandler?.({ kind: 'actor_control', owner: spotId });
   }
 
   private enqueueActorBindingControl(
@@ -3097,7 +3125,7 @@ export class ServiceStatefulRuntime {
   ): void {
     const actor = binding.actor;
     const header = Buffer.from([0x5a, 0x4d, 1, M6bServiceWireCommand.boundSessionBind, 0]);
-    this.raw.mailbox.tryEnqueue({
+    const accepted = this.raw.mailbox.tryEnqueue({
       owner: `actor:${actor.actorId}\0${actor.generation}`,
       domain: 'infrastructure',
       parts: [header],
@@ -3115,6 +3143,7 @@ export class ServiceStatefulRuntime {
         }
       } satisfies ServiceStatefulMailboxData
     });
+    if (!accepted) this.mailboxDropHandler?.({ kind: 'actor_binding', owner: actor.actorId });
   }
 
   private replyPort(
@@ -3563,16 +3592,18 @@ export class ServiceStatefulRuntime {
       return;
     }
     if (decoded.kind === 'actorRequest') {
-      this.validateActorFence(decoded.target);
+      const current = decoded.boundSession === undefined
+        ? this.validateActorMessageFence(decoded.target)
+        : this.validateActorFence(decoded.target);
       this.enqueueApplicationFrame(
         ingress,
-        `actor:${decoded.target.actor.actorId}\0${decoded.target.actor.generation}`,
+        `actor:${current.ref.actorId}\0${current.ref.generation}`,
         payloadFrame!,
         {
           receiveKind: ReceiveKind.ActorRequest,
           operationKind: OperationKind.ActorRequest,
           correlation: decoded.correlation,
-          targetActor: decoded.target.actor,
+          targetActor: current.ref,
           ...(decoded.sourceActor === undefined ? {} : { sourceActor: decoded.sourceActor }),
           ...(decoded.boundSession === undefined
             ? {}
@@ -3844,6 +3875,20 @@ export class ServiceStatefulRuntime {
     return actor;
   }
 
+  private validateActorMessageFence(fence: ServiceActorRouteFence): ServiceActorState {
+    if (fence.actor.nodeRid !== this.nodeRid || fence.targetNodeGeneration !== this.nodeGeneration) {
+      throw new ServiceStaleGenerationError('actor', fence.actor.actorId);
+    }
+    const actor = this.registry.actor(fence.actor.actorId);
+    if (actor === undefined) {
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.RequestTargetNotFound,
+        `Actor '${fence.actor.actorId}' has no current Ready authority.`
+      );
+    }
+    return actor;
+  }
+
   private validateSpotFence(fence: ServiceSpotRouteFence): ServiceSpotState {
     if (fence.targetNodeRid !== this.nodeRid || fence.targetNodeGeneration !== this.nodeGeneration) {
       throw new ServiceStaleGenerationError('spot', fence.spot.spotId);
@@ -3931,7 +3976,10 @@ export class ServiceStatefulRuntime {
       || bytes > MESSAGE_FOLLOW_BYTE_LIMIT - state.queuedBytes
     ) {
       if (wire.kind === 'spotRequest') {
-        const result = failure(new ServiceStaleGenerationError('spot', wire.target.spot.spotId));
+        const result = failure(createInternalFrameworkException(
+          ZLinkFrameworkInternalErrorKind.WorkerQueueFull,
+          `Spot '${wire.target.spot.spotId}' exhausted the Message Follow capacity.`
+        ));
         this.replyWire(ingress, wire.correlation!, result.terminalResult, result.failureCode);
       }
       return 'infrastructure';
@@ -4375,6 +4423,12 @@ function failure(error: unknown): ServiceStatefulResult {
     if (kind === ZLinkFrameworkInternalErrorKind.RequestTargetNotFound) {
       return {
         terminalResult: RequestResult.NotFound,
+        failureCode: internalFrameworkErrorCode(error) + 1
+      };
+    }
+    if (kind === ZLinkFrameworkInternalErrorKind.WorkerQueueFull) {
+      return {
+        terminalResult: RequestResult.Rejected,
         failureCode: internalFrameworkErrorCode(error) + 1
       };
     }

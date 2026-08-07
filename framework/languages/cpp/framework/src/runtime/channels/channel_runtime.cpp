@@ -1266,7 +1266,8 @@ route_client_t::submit_send_erased (const std::shared_ptr<detail::route_client_s
     auto submit_flow = runtime::flow_context_t::enter_current_or_create (
       flow_origin_t::application,
       state && state->runtime
-        && detail::message_flow_tracer_t (state->runtime->dispatch).capture_enabled ());
+        ? detail::message_flow_tracer_t (state->runtime->dispatch).mode ()
+        : message_flow_log_mode_t::off);
     if (!state || !state->runtime || state->serializers == nullptr) {
         return result_t<void>::failure (framework_error_kind_t::protocol_error,
                                         "route client is not configured");
@@ -1333,7 +1334,8 @@ result_t<void> route_client_t::submit_channel_send_erased (
     auto submit_flow = runtime::flow_context_t::enter_current_or_create (
       flow_origin_t::application,
       state && state->runtime
-        && detail::message_flow_tracer_t (state->runtime->dispatch).capture_enabled ());
+        ? detail::message_flow_tracer_t (state->runtime->dispatch).mode ()
+        : message_flow_log_mode_t::off);
     if (!state || !state->runtime || state->serializers == nullptr) {
         return result_t<void>::failure (framework_error_kind_t::protocol_error,
                                         "route client is not configured");
@@ -1389,7 +1391,8 @@ route_client_t::submit_request_erased (const std::shared_ptr<detail::route_clien
     auto submit_flow = runtime::flow_context_t::enter_current_or_create (
       flow_origin_t::application,
       state && state->runtime
-        && detail::message_flow_tracer_t (state->runtime->dispatch).capture_enabled ());
+        ? detail::message_flow_tracer_t (state->runtime->dispatch).mode ()
+        : message_flow_log_mode_t::off);
     if (!state || !state->runtime || state->serializers == nullptr) {
         return task_t<std::uint64_t> (result_t<std::uint64_t>::failure (
           framework_error_kind_t::protocol_error, "route client is not configured"));
@@ -1456,7 +1459,8 @@ route_client_t::submit_spot_send_erased (const std::shared_ptr<detail::route_cli
     auto submit_flow = runtime::flow_context_t::enter_current_or_create (
       flow_origin_t::application,
       state && state->runtime
-        && detail::message_flow_tracer_t (state->runtime->dispatch).capture_enabled ());
+        ? detail::message_flow_tracer_t (state->runtime->dispatch).mode ()
+        : message_flow_log_mode_t::off);
     if (!state || !state->runtime || state->serializers == nullptr) {
         return result_t<void>::failure (framework_error_kind_t::protocol_error,
                                         "route client is not configured");
@@ -1528,7 +1532,8 @@ task_t<std::uint64_t> route_client_t::submit_spot_request_erased (
     auto submit_flow = runtime::flow_context_t::enter_current_or_create (
       flow_origin_t::application,
       state && state->runtime
-        && detail::message_flow_tracer_t (state->runtime->dispatch).capture_enabled ());
+        ? detail::message_flow_tracer_t (state->runtime->dispatch).mode ()
+        : message_flow_log_mode_t::off);
     if (!state || !state->runtime || state->serializers == nullptr) {
         return task_t<std::uint64_t> (result_t<std::uint64_t>::failure (
           framework_error_kind_t::protocol_error, "route client is not configured"));
@@ -1595,7 +1600,8 @@ task_t<zlink::message_t> route_client_t::submit_request_reply_message_erased (
     auto submit_flow = runtime::flow_context_t::enter_current_or_create (
       flow_origin_t::application,
       state && state->runtime
-        && detail::message_flow_tracer_t (state->runtime->dispatch).capture_enabled ());
+        ? detail::message_flow_tracer_t (state->runtime->dispatch).mode ()
+        : message_flow_log_mode_t::off);
     const auto ambient_context = detail::capture_ambient_context ();
     if (!state || !state->runtime || state->serializers == nullptr) {
         return task_t<zlink::message_t> (result_t<zlink::message_t>::failure (
@@ -1748,7 +1754,8 @@ task_t<zlink::message_t> route_client_t::submit_channel_request_reply_message_er
     auto submit_flow = runtime::flow_context_t::enter_current_or_create (
       flow_origin_t::application,
       state && state->runtime
-        && detail::message_flow_tracer_t (state->runtime->dispatch).capture_enabled ());
+        ? detail::message_flow_tracer_t (state->runtime->dispatch).mode ()
+        : message_flow_log_mode_t::off);
     const auto ambient_context = detail::capture_ambient_context ();
     if (!state || !state->runtime || state->serializers == nullptr) {
         return task_t<zlink::message_t> (result_t<zlink::message_t>::failure (
@@ -1892,7 +1899,8 @@ task_t<zlink::message_t> route_client_t::submit_spot_request_reply_message_erase
     auto submit_flow = runtime::flow_context_t::enter_current_or_create (
       flow_origin_t::application,
       state && state->runtime
-        && detail::message_flow_tracer_t (state->runtime->dispatch).capture_enabled ());
+        ? detail::message_flow_tracer_t (state->runtime->dispatch).mode ()
+        : message_flow_log_mode_t::off);
     const auto ambient_context = detail::capture_ambient_context ();
     if (!state || !state->runtime || state->serializers == nullptr) {
         return task_t<zlink::message_t> (result_t<zlink::message_t>::failure (

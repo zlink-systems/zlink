@@ -54,6 +54,45 @@ done. Under the current plan, the platforms that must pass are:
 - macOS x64
 - macOS ARM64
 
+## 3.1 Current Gap-Closure Status
+
+The table below separates gaps found by comparing the common spec with the .NET
+implementation. Passing `source/unit` means that the code boundary and unit verification
+match; it does not replace package, real-process, or Windows PowerShell runner verification.
+
+| Contract gap | Current source and regression evidence | Current status | Remaining evidence |
+|---|---|---|---|
+| Do MeshNode ROUTER send/receive high-water marks and send/receive timeouts keep their directions? | `ZLinkSpotNodeInitializer` → `ZLinkBackendSpotNodeWrapper` → `ZLinkManagedMeshNode`, `BackendAdapterFactoryTests.SpotNode_Router_Send_Config_RoundTrips_Through_Binding` | Reflected in source/unit; targeted 10/10 and the fixed package verifier passed | Windows PowerShell runner |
+| Does the ShoppingMall Client use only public order APIs while fixtures and server-evidence hooks stay in the runner? | `ShoppingMallClientScenario`, `CommerceApi/Program.cs`, `ShoppingMallRegressionTests` | Source/regression 18/18; build and `shoppingmall-server-evidence=completed` passed | Windows PowerShell runner |
+| Does the GameQuest Client use the public Stream connector without a raw WebSocket bridge? | `GameApi/Program.cs`, `run_sample.sh`, `run_sample.ps1`, `GameQuest/README.ko.md` | Source/build and `gamequest-server-evidence=completed` passed | Windows PowerShell runner |
+| Does TicTacToe keep manual topology separate from handler registration? | Assembly-scan configuration and `TicTacToeRegressionTests` | Source/regression, sample process, and Linux aggregate passed | Windows PowerShell runner |
+| Do ShoppingMall workflow messages carry `sourceCommandId` as required by the common sample contract? | `Shared/Contracts/Messages.cs`, `StartOrderUseCase`, public continue/rebuild routes, and `ShoppingMallRegressionTests` | Source/regression 18/18; sample build and process evidence passed | Windows PowerShell runner |
+
+After this change, the fixed mode of `verify_packaged_contract.sh` passed all nine NuGet packages,
+assembly manifests, the source/package public-API comparison, the clean package consumer, and the
+standalone HTTP package consumer. The `Zlink.Framework` XML documentation fixed snapshot was updated to
+the current artifact hash because the runtime handoff change adds no public API. No package gap remains.
+
+On Linux, a sequential `run_samples.sh` execution passed the build and process evidence for TicTacToe,
+Bingo, SupportChat, ShoppingMall, DeliveryDispatch, and GameQuest, and every ZoneWorld client and runner
+phase passed. ZoneWorld also passed `ZW-F1` resident-bot validation, `ZW-F1-population`, `ZW-F2`, `ZW-F3`,
+and `ZW-F4`, producing the `zoneworld=completed` marker. The Linux source, package, and real-process
+aggregate gaps are therefore closed. The PowerShell scripts were not run on Linux because their requested
+validation environment is Windows; the Windows PowerShell runner result remains separate platform evidence.
+
+## 3.2 UnitTest Execution Boundary
+
+UnitTest explicitly disables xUnit test parallelization for the whole assembly. This is intentional: the
+suite contains native socket/context/message handles, process-wide diagnostics, static runtime state,
+ephemeral port allocation, and managed fakes whose lifetime can cross an asynchronous continuation. A
+class-by-class parallelization allowlist would make the isolation contract depend on an incomplete list
+of shared resources.
+
+This policy does not reduce execution time by deleting tests. All test cases remain in place, and the
+stable baseline is a full serial run of 1,548 passed tests. A parallel execution change is acceptable
+only after repeated full runs prove that it introduces no test-order dependence or cross-test
+interference; a shorter single run is not sufficient evidence.
+
 ## 4. Channel Regression Items
 
 | Item | Layer | Pass Criteria |
@@ -64,6 +103,7 @@ done. Under the current plan, the platforms that must pass are:
 | a subscriber with a location store specifying a manual endpoint | `unit` | that subscriber uses the manual connection, without affecting another role's automatic connection |
 | no bind endpoint on a publisher role | `unit` | startup validation exception |
 | publisher-only channel | `integration-single-process` | publish submit succeeds |
+| MeshNode ROUTER directional socket options | `unit`, `integration-single-process` | `ConfigureRouterSocket()` preserves MaxMessageSize, directional high-water marks, mailbox caps, and directional timeouts through the managed ROUTER boundary; the .NET targeted unit passed 10/10 |
 | subscriber location-store attach | `integration-multi-process` | remote publish is received |
 | handler group mapping | `unit` | `AddZLinkHandlers...()` alone doesn't become a global dispatch target — only handlers of a group mapped by `channel.AddHandlerGroup("...")` are dispatched on that channel |
 | empty fanout subscriber validation | `unit` | a fanout subscriber with no publish handler exposure isn't allowed as an empty receiver — it's a startup validation error |
@@ -87,14 +127,14 @@ done. Under the current plan, the platforms that must pass are:
 | channel wire multipart[^wire-multipart] | `integration-single-process` | server-to-server channel send/request/reply sends `header` and `payload` as separate message parts, and handler dispatch selects the packet by looking only at the header part |
 | publish wire multipart | `integration-single-process` | `PUB/SUB` publish also keeps the framework header and payload as separate parts, and only the typed payload is delivered to the subscriber handler |
 
-## 4.1 Dispatch Error Observer Regression Items
+## 4.1 Dispatch Error Structured Record Regression Items
 
 | ID | Layer | Test Location | Pass Criteria |
 |----|------|-------------|-----------|
-| DERR-001, DERR-007, DERR-011, DERR-014 | `unit` | `Zlink.Framework.UnitTests/Runtime/UnhandledDispatchPolicyTests.cs` | A missing channel request handler ends in an error reply plus observer event, a missing channel send handler ends in a drop plus observer event, and an observer exception doesn't break the original dispatch result |
-| DERR-002, DERR-008 | `unit` | `Zlink.Framework.UnitTests/Runtime/UnhandledDispatchPolicyTests.cs` | A missing route request handler ends in an error reply; a missing route send handler ends in a drop, with an observer event left behind |
-| DERR-003, DERR-004, DERR-009, DERR-010, DERR-016 | `unit` | `Zlink.Framework.UnitTests/Runtime/UnhandledDispatchPolicyTests.cs` | A SPOT route, subscription, or actor dispatch failure ends in an error reply or caller-visible error for a request, or a drop plus observer event for one-way |
-| DERR-005, DERR-006, DERR-013, DERR-015 | `unit` | `Zlink.Framework.UnitTests/Runtime/UnhandledDispatchPolicyTests.cs` | Decode failures and handler exceptions end in an error reply or an observable drop, with the default log and metric still recorded even without an observer registered |
+| DERR-001, DERR-007, DERR-011, DERR-014 | `unit` | `Zlink.Framework.UnitTests/Runtime/UnhandledDispatchPolicyTests.cs` | No public observer surface exists; a missing channel request handler ends in an error reply plus `zlink.dispatch_error`, a missing channel send handler ends in a drop plus `zlink.dispatch_error`, and a provider failure doesn't change the original dispatch result |
+| DERR-002, DERR-008 | `unit` | `Zlink.Framework.UnitTests/Runtime/UnhandledDispatchPolicyTests.cs` | A missing route request handler ends in an error reply; a missing route send handler ends in a drop, while the application logger/telemetry provider receives a structured record |
+| DERR-003, DERR-004, DERR-009, DERR-010, DERR-016 | `unit` | `Zlink.Framework.UnitTests/Runtime/UnhandledDispatchPolicyTests.cs` | A SPOT route, subscription, or actor dispatch failure ends in an error reply or caller-visible error for a request, or a drop plus a structured dispatch-error record for one-way |
+| DERR-005, DERR-006, DERR-013, DERR-015 | `unit` | `Zlink.Framework.UnitTests/Runtime/UnhandledDispatchPolicyTests.cs` | Decode failures and handler exceptions end in an error reply or an observable drop, with the default record and metric emitted through the application logger/telemetry provider |
 
 ## 4.2 DI Capability Regression Items
 
@@ -151,7 +191,7 @@ done. Under the current plan, the platforms that must pass are:
 | Entry Spot actor mailbox dispatch | `EntrySpotActorDispatchTests.EntrySpotActorDispatch_ConcurrentActors_StartsOutsideEntrySpotSerialLine_AndKeepsSameActorOrdering` | Entry Spot actor packets preserve per-actor input order, and different actors' handler starts are not blocked by the Entry Spot execution queue |
 | local actor mailbox dispatch | `integration-single-process` | actor packets that didn't enter a user Spot also follow per-actor mailbox order |
 | user Spot actor dispatch serialization | `integration-single-process` | multiple actor packets within the same user Spot are processed in order on the Spot execution queue, protecting Spot state |
-| runtime task exception observation | `unit` | exceptions from a detached runtime task or a fire-and-forget handler are observed by the runtime error sink or logger instead of being buried as an unobserved exception |
+| runtime task exception observation | `unit` | exceptions from a detached runtime task or a fire-and-forget handler are observed by the application logger provider instead of being buried as an unobserved exception |
 | execution queue cancellation semantics | `unit` | queue enqueue/wait cancellation doesn't break the order of, or remove mid-stream, a work item already in the queue |
 | Spot message follow | `integration-multi-process` | during relocation, a Spot/Actor message arriving at the previous owner is relayed to the current owner, without exposing a stale route to the application |
 | actor manager creation duplicate/type conflict | `integration-single-process` | duplicate creation via `IZLinkActorManager.Create(actorId, actorType).Async(...)` and a type conflict in `GetOrCreate(actorId, actorType).Async(...)` respect the public result/typed error contract |

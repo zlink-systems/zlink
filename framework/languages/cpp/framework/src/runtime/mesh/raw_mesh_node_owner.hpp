@@ -98,8 +98,13 @@ class raw_mesh_connection_candidates_t
     std::optional<std::vector<std::uint8_t>> disconnect_by_connection_id (
       const std::vector<std::uint8_t> &connection_id,
       std::string_view remote_endpoint = {});
+    std::vector<std::pair<std::vector<std::uint8_t>,
+                          std::vector<std::uint8_t>>>
+    disconnect_by_endpoint (std::string_view remote_endpoint);
     std::size_t size (
       const std::vector<std::uint8_t> &node_routing_id) const;
+    bool contains (const std::vector<std::uint8_t> &node_routing_id,
+                   const std::vector<std::uint8_t> &connection_id) const;
 
   private:
     std::map<
@@ -281,6 +286,7 @@ class raw_mesh_node_owner_t
      * turning an idle node into a timed polling loop. */
     bool wait_for_activity (std::chrono::milliseconds timeout,
                             bool accept_application_receive = true) noexcept;
+    void signal_activity () noexcept;
     std::size_t last_pump_bytes () const noexcept
     {
         return _last_pump_bytes;
@@ -310,7 +316,7 @@ class raw_mesh_node_owner_t
     };
 
     static std::string owner_key (const std::vector<std::uint8_t> &routing_id);
-    static foundation::operation_id_t operation_id (
+    static foundation::call_id_t operation_id (
       std::uint64_t lifecycle_generation,
       std::uint64_t correlation);
     std::uint64_t next_operation_sequence ();
@@ -344,7 +350,7 @@ class raw_mesh_node_owner_t
     {
         std::vector<std::uint8_t> target_routing_id;
         detail::backend::raw_message_t wire;
-        foundation::operation_id_t operation;
+        foundation::call_id_t operation;
         std::uint64_t correlation = 0;
     };
     bool submit_request (
@@ -357,6 +363,8 @@ class raw_mesh_node_owner_t
       protocol::command command,
       peer_admission_result_t result);
     void discard_pending_unadmitted_applications (
+      const std::vector<std::uint8_t> &node_routing_id);
+    void discard_pending_unadmitted_applications_locked (
       const std::vector<std::uint8_t> &node_routing_id);
     bool reply_infrastructure (
       const service_mailbox_record_t &request,

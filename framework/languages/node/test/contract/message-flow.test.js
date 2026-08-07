@@ -214,6 +214,24 @@ test('MFLOW-009 live-mode cell toggles every reader without rebuilding the trace
   assert.equal(tracer.enabled(ZLinkMessageFlowOutcome.Received), false);
 });
 
+test('MFLOW-009 snapshots live mode for every transition in one ambient flow', () => {
+  const { tracer, cell } = makeTracer(diagnostics(ZLinkMessageFlowLogMode.KeyTransitions));
+  const inbound = {
+    flowId: '018f2b63-9d4a-7abc-8def-0123456789ab',
+    flowOrigin: 'Inbound'
+  };
+
+  flowContext.runWithFlow(inbound, () => {
+    tracer.trace(receivedEvent());
+    cell.mode = ZLinkMessageFlowLogMode.Off;
+    assert.equal(tracer.enabled(ZLinkMessageFlowOutcome.Dispatched), true);
+    tracer.trace({ ...receivedEvent(), outcome: ZLinkMessageFlowOutcome.Dispatched });
+  });
+
+  assert.equal(tracer.tracedCount, 2);
+  assert.equal(tracer.enabled(ZLinkMessageFlowOutcome.Dispatched), false);
+});
+
 test('MFLOW-EXT flow sampling keeps or drops every event in one flow together', async () => {
   const events = [];
   class FlowObserver {
@@ -376,6 +394,27 @@ test('MFLOW-EXT Off host preserves an inbound ambient flow on outbound wire', ()
     } finally {
       channelEnvelope.closeMessages(parts);
     }
+  });
+});
+
+test('MFLOW-EXT absent disabled flow does not create an ambient context', () => {
+  const absent = flowContext.createInboundFlow(undefined, undefined, false);
+  assert.equal(absent, undefined);
+  flowContext.runWithFlow(absent, () => {
+    assert.equal(flowContext.currentOrCreateFlow('Application', false), undefined);
+  });
+});
+
+test('MFLOW-EXT explicit absent flow still suppresses a parent ambient context', () => {
+  const inbound = {
+    flowId: '018f2b63-9d4a-7abc-8def-0123456789ab',
+    flowOrigin: 'Inbound'
+  };
+  flowContext.runWithFlow(inbound, () => {
+    flowContext.runWithFlow(undefined, () => {
+      assert.equal(flowContext.currentOrCreateFlow('Application', false), undefined);
+    });
+    assert.equal(flowContext.currentOrCreateFlow('Application', false), inbound);
   });
 });
 

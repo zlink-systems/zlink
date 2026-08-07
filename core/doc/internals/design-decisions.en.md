@@ -1,4 +1,4 @@
-[한국어](design-decisions.ko.md)
+[한국어](design-decisions.en.md)
 
 # Core design decisions
 

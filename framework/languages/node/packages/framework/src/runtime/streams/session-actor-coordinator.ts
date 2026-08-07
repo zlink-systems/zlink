@@ -106,9 +106,6 @@ export class ZLinkSessionActorCoordinator {
       previous?.context === context && sameIncarnation ? previous.actor : undefined;
     const previousRef = previous?.actor.ref;
     const replacesSameNativeBinding = previous?.context === context && sameIncarnation;
-    if (previous !== undefined && !replacesSameNativeBinding) {
-      await this.unbindNativeActor(previous.context, actorRef.actorId, signal);
-    }
     let replacementBound = false;
     try {
       await this.bindNativeActor(context, actorRef, signal);
@@ -129,7 +126,8 @@ export class ZLinkSessionActorCoordinator {
         });
       }
       if (
-        previous !== undefined
+        replacementBound
+        && previous !== undefined
         && previousRef !== undefined
       ) {
         try {

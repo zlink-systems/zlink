@@ -3,7 +3,7 @@ title: "16. Options — Setting List And Defaults · Node/TypeScript"
 ---
 
 <!-- framework-adapter-nav:start -->
-[Guide Home](../../../index.ko.md) | [Previous: E2E Testing](15-e2e-testing.ko.md) | [Next: Where To Use ZLink](17-alternative.en.md)
+[Guide Home](../../../index.en.md) | [Previous: E2E Testing](15-e2e-testing.en.md) | [Next: Where To Use ZLink](17-alternative.en.md)
 <!-- framework-adapter-nav:end -->
 
 # 16. Options — Setting List And Defaults
@@ -59,7 +59,7 @@ deferred until the first call — it's **blocked by an exception at initializati
 | `configureNetwork()` | Listener bind/advertise host defaults | bind `0.0.0.0` |
 | `configureWorker(options)` | The CPU worker pool (§3.2) | The §3.2 table |
 | `configureInboundDispatch()` | Host-wide receive cap (§3.3) | Auto-calculated |
-| `configureDispatch()` | Diagnostics level and message flow (§4) | `ErrorsOnly` |
+| `configureDispatch()` | Diagnostics level and message flow (§4) | `"errors"` |
 | `configureLocations()` | Location store behavior (§5) | The §5 table |
 | `configureStreamCompression()` | STREAM compression | No compression |
 | `addLocationStore` · `addRelocationStore` | The location-resolution and relocation stores | Single-node configuration if omitted |
@@ -136,13 +136,11 @@ The surface `configureDispatch()` returns.
 
 | Option | What it sets | Default |
 | --- | --- | --- |
-| `messageFlow(ZLinkMessageFlowLogMode)` | Recording level | `ErrorsOnly` |
-| `traceLogFile(path)` | A file written separately from app logs | Not separated |
-| `traceLabel(name)` | The instance name attached to records | None |
-| `setMessageFlowObserver(...)` | Receiving records in your program | None |
+| `messageFlow(mode)` | Recording level | `"errors"` |
+| `traceSampleRate(rate)` | Sampling ratio | 1.0 |
+| `includeMessageSizes(include)` | Whether to include payload byte size | Not recorded |
 
-There are four levels: `Off`, `ErrorsOnly`, `KeyTransitions`, `Verbose`. **They're
-PascalCase values**, unlike the SCREAMING_SNAKE of the other languages.
+There are four string-union levels: `"off"`, `"errors"`, `"normal"`, and `"detailed"`.
 
 ## 5. Location Options
 
@@ -218,8 +216,7 @@ alive as-is.
   If you mistake it for seconds and pass `3`, that's 3 milliseconds.
 - **`setApplicationVersion` throws a type error** → it takes a `bigint`. Write it as `12n`.
 - **I left it at `0` and memory keeps growing** → `0` on a high-water mark means unlimited.
-- **The enum value doesn't match** → Node uses PascalCase (`ErrorsOnly`). Don't copy the
-  SCREAMING_SNAKE straight over from another language's docs.
+- **The level value doesn't match** → Node uses a lowercase string (`"errors"`).
 - **I passed a class to `registerSession` and it doesn't work** → it takes a factory.
 - **I set weight to 0 and thought it dropped existing connections** → weight blocks **only
   new assignments.**

@@ -4,7 +4,7 @@ title: "Runtime Metrics And Aggregation Rules"
 
 # Runtime Metrics And Aggregation Rules
 
-[Spec table of contents](README.en.md) · [Previous: Runtime Status Query And Operational Diagnostics](24-runtime-monitoring.en.md) · [Next: Message Flow Tracing](26-message-flow-tracing.ko.md)
+[Spec table of contents](README.en.md) · [Previous: Runtime Status Query And Operational Diagnostics](24-runtime-monitoring.en.md) · [Next: Message Flow Tracing](26-message-flow-tracing.en.md)
 
 > **What this chapter defines** — the name, kind, unit, and label of the metrics
 > aggregating throughput, wait, failure, and current counts.
@@ -20,7 +20,7 @@ shared.
 The current complete state of runtime and topology is owned by
 [Runtime Status And Operational Diagnostics](24-runtime-monitoring.en.md); the
 progress record of one message is owned by
-[Message Flow Tracing](26-message-flow-tracing.ko.md); individual host operation
+[Message Flow Tracing](26-message-flow-tracing.en.md); individual host operation
 results are owned by
 [Host Relocation And Shutdown](28-graceful-drain-handoff.en.md).
 
@@ -263,7 +263,7 @@ identities — including a Spot's global logical address,
 `MeshName`, `ChannelName`, and `scope_name` are only used when closed to host
 registration values. A label isn't built from payload.
 Individual Actor/Spot/message flows are checked via
-[Message Flow Tracing](26-message-flow-tracing.ko.md), not a metric.
+[Message Flow Tracing](26-message-flow-tracing.en.md), not a metric.
 
 ## 8. Collection Boundary
 

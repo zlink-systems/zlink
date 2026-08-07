@@ -1,4 +1,4 @@
-[한국어](11-dealer.ko.md) | English
+[한국어](https://zlink-systems.github.io/zlink/ko/reference/11-dealer/) | English
 
 [Reference index](README.en.md)
 

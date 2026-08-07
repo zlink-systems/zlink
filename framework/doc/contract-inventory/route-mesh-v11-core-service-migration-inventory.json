@@ -23504,56 +23504,8 @@
       "finalGate": "V11-M9-PKG-JVM"
     },
     {
-      "id": "file:framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaMeshNode.java",
-      "file": "framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaMeshNode.java",
-      "scope": "framework-consumer",
-      "language": "java",
-      "category": "framework-service-consumer-source",
-      "disposition": "target-contract",
-      "action": "retain-framework-owned-service-runtime",
-      "targetOwners": [
-        "framework/doc/framework/common/spec/server/languages/java/interfaces/README.ko.md",
-        "framework/doc/framework/common/spec/server/languages/kotlin/interfaces/README.ko.md",
-        "framework/doc/framework/common/internals/README.ko.md"
-      ],
-      "removalGate": "V11-M8-CLEAN-JVM",
-      "finalGate": "V11-M9-PKG-JVM"
-    },
-    {
       "id": "file:framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaMeshOperationTracker.java",
       "file": "framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaMeshOperationTracker.java",
-      "scope": "framework-consumer",
-      "language": "java",
-      "category": "framework-service-consumer-source",
-      "disposition": "target-contract",
-      "action": "retain-framework-owned-service-runtime",
-      "targetOwners": [
-        "framework/doc/framework/common/spec/server/languages/java/interfaces/README.ko.md",
-        "framework/doc/framework/common/spec/server/languages/kotlin/interfaces/README.ko.md",
-        "framework/doc/framework/common/internals/README.ko.md"
-      ],
-      "removalGate": "V11-M8-CLEAN-JVM",
-      "finalGate": "V11-M9-PKG-JVM"
-    },
-    {
-      "id": "file:framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaMeshSpot.java",
-      "file": "framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaMeshSpot.java",
-      "scope": "framework-consumer",
-      "language": "java",
-      "category": "framework-service-consumer-source",
-      "disposition": "target-contract",
-      "action": "retain-framework-owned-service-runtime",
-      "targetOwners": [
-        "framework/doc/framework/common/spec/server/languages/java/interfaces/README.ko.md",
-        "framework/doc/framework/common/spec/server/languages/kotlin/interfaces/README.ko.md",
-        "framework/doc/framework/common/internals/README.ko.md"
-      ],
-      "removalGate": "V11-M8-CLEAN-JVM",
-      "finalGate": "V11-M9-PKG-JVM"
-    },
-    {
-      "id": "file:framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaMeshSpotNode.java",
-      "file": "framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaMeshSpotNode.java",
       "scope": "framework-consumer",
       "language": "java",
       "category": "framework-service-consumer-source",

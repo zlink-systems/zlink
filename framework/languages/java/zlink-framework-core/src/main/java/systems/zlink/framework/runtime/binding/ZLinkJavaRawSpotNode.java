@@ -657,7 +657,14 @@ final class ZLinkJavaRawSpotNode
         actors.remove(actor.actorId());
         actorSpots.remove(actor.actorId());
         actorMembershipEpochs.remove(actor.actorId());
-        streamBindings.remove(actor.actorId());
+        StreamBinding binding = streamBindings.remove(actor.actorId());
+        if (binding != null) {
+            discardStreamSession(
+                binding.sessionRid(),
+                binding.actor(),
+                binding.bindingGeneration(),
+                binding.stream());
+        }
         streamBindingSequences.remove(actor.actorId());
         remoteStreamBindings.remove(actor.actorId());
         remoteStreamSequences.remove(actor.actorId());
@@ -1124,7 +1131,14 @@ final class ZLinkJavaRawSpotNode
         if (!isCurrentActor(actor)) {
             throw new IllegalStateException("actor is not local");
         }
-        streamBindings.remove(actor.actorId());
+        StreamBinding binding = streamBindings.remove(actor.actorId());
+        if (binding != null) {
+            discardStreamSession(
+                binding.sessionRid(),
+                binding.actor(),
+                binding.bindingGeneration(),
+                binding.stream());
+        }
         streamBindingSequences.remove(actor.actorId());
         remoteStreamBindings.remove(actor.actorId());
         remoteStreamSequences.remove(actor.actorId());

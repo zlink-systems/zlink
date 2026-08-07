@@ -385,6 +385,33 @@ struct location_service_summary_t {
     std::chrono::system_clock::time_point last_updated_at{};
 };
 
+enum class location_object_kind_t {
+    actor = 0,
+    user_spot = 1,
+    instance_spot = 2
+};
+
+enum class location_object_state_t {
+    creating = 0,
+    ready = 1,
+    unavailable = 2
+};
+
+struct location_object_entry_t {
+    std::string global_id;
+    std::uint64_t object_generation = 0;
+    std::string mesh_name;
+    zlink::routing_id_t node_rid;
+    location_object_state_t state = location_object_state_t::creating;
+    std::string stable_type;
+};
+
+struct location_object_filter_t {
+    location_object_kind_t object_kind;
+    std::optional<std::string> stable_type;
+    std::optional<std::string> mesh_name;
+};
+
 class location_runtime_query_t {
 public:
     virtual ~location_runtime_query_t() = default;
@@ -396,6 +423,14 @@ public:
       list_service_summaries(
         location_service_summary_filter_t filter,
         location_page_request_t page = {}) = 0;
+    virtual task_t<std::optional<location_object_entry_t>>
+      find_actor_location(actor_id_t actor_id) = 0;
+    virtual task_t<std::optional<location_object_entry_t>>
+      find_spot_location(spot_id_t spot_id) = 0;
+    virtual task_t<location_page_t<location_object_entry_t>>
+      list_object_locations(
+        location_object_filter_t filter,
+        location_page_request_t page = {}) = 0;
 };
 
 } // namespace zlink::framework
@@ -404,6 +439,17 @@ public:
 NodeRid is a transport routing identity, so it keeps the public
 `zlink::routing_id_t`. Store version, private owner token, and provider
 clock aren't exposed in the operational query.
+
+Exact lookup by Actor ID and Spot ID each queries one current object
+location. Missing returns an empty `std::optional`; Creating returns a
+`creating` entry; Ready returns a `ready` entry; and an unavailable
+current owner after commit returns an `unavailable` entry. Spot exact
+lookup treats User Spot and Instance Spot under the same Spot-ID lookup
+contract. A list requires `object_kind`, and takes stable type and
+MeshName as optional filters. Page size is `1..1000`, the encoded page is
+at most 4 MiB, and the continuation token is an opaque value issued by
+the query. A Store query failure fails the whole operation with
+`framework_error_kind_t::unavailable` and does not return a partial page.
 
 ## 6. Redis Extension
 

@@ -133,14 +133,14 @@ done. Under the current plan, the platforms that must pass are:
 `submit()` for one-way send and publish asynchronously returns a bounded admission result, but does
 not wait for remote receipt or handler execution completion.
 
-## 4.1 Dispatch Error Observer Regression Items
+## 4.1 Dispatch Error Structured Record Regression Items
 
 | ID | Layer | Test Location | Pass Criteria |
 |----|------|-------------|-----------|
-| DERR-001, DERR-007, DERR-011, DERR-014 | `unit` | `test/contract/channel-client.test.js` | A missing channel request handler ends in an error reply plus observer event, a missing channel send handler ends in a drop plus observer event, and an observer exception doesn't break the original dispatch result |
-| DERR-002, DERR-008 | `unit`, `integration-single-process` | `test/contract/channel-client.test.js` | A missing route request handler ends in an error reply; a missing route send handler ends in a drop plus observer event |
-| DERR-003, DERR-004, DERR-009, DERR-010, DERR-016 | `unit`, `integration-single-process` | `test/contract/spot-manager.test.js`, `test/contract/actor-manager.test.js` | A SPOT route, subscription, or actor dispatch failure ends in an error reply or caller-visible rejection for a request, or a drop plus observer event for one-way |
-| DERR-005, DERR-006, DERR-013, DERR-015 | `unit`, `integration-single-process` | `test/contract/channel-client.test.js`, `test/contract/spot-manager.test.js` | Decode failures and handler exceptions end in an error reply or an observable drop, with the default log and counter still recorded even without an observer registered |
+| DERR-001, DERR-007, DERR-011, DERR-014 | `unit` | `test/contract/channel-client.test.js` | No public observer surface exists; a missing channel request handler ends in an error reply plus `zlink.dispatch_error`, a missing channel send handler ends in a drop plus `zlink.dispatch_error`, and a provider failure doesn't change the original dispatch result |
+| DERR-002, DERR-008 | `unit`, `integration-single-process` | `test/contract/channel-client.test.js` | A missing route request handler ends in an error reply; a missing route send handler ends in a drop, while the application logger/telemetry provider receives a structured record |
+| DERR-003, DERR-004, DERR-009, DERR-010, DERR-016 | `unit`, `integration-single-process` | `test/contract/spot-manager.test.js`, `test/contract/actor-manager.test.js` | A SPOT route, subscription, or actor dispatch failure ends in an error reply or caller-visible rejection for a request, or a drop plus a structured dispatch-error record for one-way |
+| DERR-005, DERR-006, DERR-013, DERR-015 | `unit`, `integration-single-process` | `test/contract/channel-client.test.js`, `test/contract/spot-manager.test.js` | Decode failures and handler exceptions end in an error reply or an observable drop, with the default record and counter emitted through the application logger/telemetry provider |
 
 ## 4.2 DI Capability Regression Items
 
@@ -207,7 +207,7 @@ not wait for remote receipt or handler execution completion.
 | Entry Spot actor dispatch serialization | `integration-single-process` | Entry Spot actor packets preserve per-actor input order, then are processed in order on the Entry Spot execution queue |
 | local actor mailbox dispatch | `integration-single-process` | actor packets that didn't enter a user Spot also follow per-actor mailbox order |
 | user Spot actor dispatch serialization | `integration-single-process` | multiple actor packets within the same user Spot are processed in order on the Spot execution queue, protecting Spot state |
-| runtime task exception observation | `unit` | exceptions from a detached runtime task or a fire-and-forget handler are observed by the runtime error sink or logger instead of being buried as an unhandled rejection |
+| runtime task exception observation | `unit` | exceptions from a detached runtime task or a fire-and-forget handler are observed by the application logger provider instead of being buried as an unhandled rejection |
 | execution queue cancellation semantics | `unit` | queue enqueue/wait cancellation doesn't break the order of, or remove mid-stream, a work item already in the queue |
 | Spot handle route path | `integration-single-process` | a routed Spot call verifies the `SpotHandle`'s MeshName, owner RID, and generation before sending the routed message |
 | actor manager creation duplicate/type conflict | `integration-single-process` | duplicate `ZLinkActorManager.create(...)` fails with `ActorAlreadyExists`, and an actor type conflict in `getOrCreate(...)` fails with `ActorTypeMismatch` |
@@ -445,11 +445,10 @@ this section. The contract's meaning is owned by the common spec.
 | `spot monitoring source publishes status peers and subjects snapshot changes` | delivers Spot's status/peer/subject snapshot changes as typed events. |
 | `spot timer reports handler failure immediately through runtime publisher` | delivers timer handler exceptions immediately through the runtime publisher. |
 | Common Concept | Node Type / Member |
-| Log Mode | `ZLinkMessageFlowLogMode` { `Off`, `ErrorsOnly` (default), `KeyTransitions`, `Verbose` } |
-| outcome | `ZLinkMessageFlowOutcome` { `succeeded`, `failed`, `backpressured`, `dropped`, `cancelled`, `shutdown` } |
-| event | `ZLinkMessageFlowEvent`: `eventId`, `outcome`, `surface`, `messageKind`, `phase?`, `packetName?`, `meshName?`, `channelName?`, `topic?`, `correlationId?`, `sourceRid?`, `targetRid?`, `spotRid?`, `actorId?`, `messageSizeBytes?` |
-| observer | `ZLinkMessageFlowObserver.onMessageFlow(flow): Promise<void> \| void` |
-| diagnostic options | `ZLinkDiagnosticsOptions` { `messageFlow`, `sampleRate`, `includeMessageSizes`, `logFile?`, `label?` } |
+| Log Mode | `ZLinkMessageFlowLogMode` { `"off"`, `"errors"` (default), `"normal"`, `"detailed"` } |
+| outcome | Structured-record `outcome`: `succeeded`, `failed`, `backpressured`, `dropped`, `cancelled`, `shutdown` |
+| record path | The application-configured standard logger/telemetry provider receives `zlink.message_flow` and `zlink.dispatch_error`. |
+| diagnostic options | `ZLinkDiagnosticsOptions` { `messageFlow`, `sampleRate`, `includeMessageSizes` } |
 | runtime toggle | host `ZLinkMessageFlowControl.setMessageFlowMode(mode)` / `messageFlowMode()` |
 | Common Concept | Node.js |
 | meter name (constant) | `ZLinkMeters.Framework` = `'zlink.framework'` |
@@ -458,7 +457,7 @@ this section. The contract's meaning is owned by the common spec.
 | custom (optional) | inject a provider with `ZLinkModule.forRoot(zlinkFramework().options({ metrics: { meterProvider } }).build())` |
 | Common Concept | Node.js |
 | creation gate | uses the existing `configureDispatch().messageFlow(...)` setting as-is. There's no separate flow id setting. |
-| event field (added) | `readonly flowId: string`, `readonly flowOrigin: ZLinkFlowOrigin` — the same root value even on error events |
+| record fields | `flow_id`, `flow_origin` — dispatch-error records carry the same root values |
 | Common Concept | Node.js |
 | automatic termination (default) | the framework joins an in-progress host shutdown or starts `Shutdown` in `onApplicationShutdown()` |
 | `Shutdown` order | block new application acceptance → complete already-accepted execution turns and requests → confirm in-progress relocation/STREAM barrier → clean up local object/ownership/peer resources → forced termination within a bound, if needed |

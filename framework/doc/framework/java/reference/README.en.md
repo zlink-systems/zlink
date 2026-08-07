@@ -9,8 +9,8 @@ parity-reference lane), and each entry was written by cross-checking the Java ex
 > The guide and exact-interface documents linked below stay Korean-only. Following those links
 > lands on Korean content.
 
-- [Guide](../guide/server/README.ko.md) — the Spring Boot tutorial angle.
-- [Java exact interface](../../common/spec/server/languages/java/interfaces/README.ko.md) —
+- [Guide](../guide/server/README.en.md) — the Spring Boot tutorial angle.
+- [Java exact interface](../../common/spec/server/languages/java/interfaces/README.en.md) —
   the document that owns the contract text itself.
 - **This reference** — collects only "what you must know to complete this one call."
 

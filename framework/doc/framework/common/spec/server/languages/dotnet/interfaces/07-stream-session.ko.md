@@ -68,6 +68,7 @@ public interface IZLinkSessionSendCall
     : IZLinkMetadataCall<IZLinkSessionSendCall>
 {
     IZLinkSessionSendCall Compress();
+    IZLinkSessionSendCall Timeout(TimeSpan timeout);
     ValueTask Async(
         CancellationToken cancellationToken = default);
 }
@@ -133,10 +134,22 @@ terminator는 transport를 시작하기 전에 token을 원자적으로 claim하
 timeout만 admission deadline으로 사용한다. Caller request timeout은 wire로 전달되지 않으므로 reply [deadline](../../../../01-glossary.ko.md#deadline)으로
 사용하지 않으며, timeout이나 cancellation 뒤에는 late reply를 보내지 않는다.
 
+`IZLinkSessionSendCall.Timeout(...)`은 이 send의 admission 대기만 줄인다. 생략하면 STREAM socket
+`SendTimeout`을 사용하고 지정하면 두 값 중 짧은 값을 사용하므로 socket timeout을 늘릴 수 없다. 양수
+`1..Int32.MaxValue` milliseconds 범위로 올림한 값만 허용한다. 만료되면 `DeadlineExceeded`로 terminal-once
+완료하고 이후 admission이나 replay를 시작하지 않는다. `CancellationToken`은 기존 .NET cancellation
+계약을 유지하며 reply call에는 이 modifier를 제공하지 않는다.
+
 Bind 뒤 `RelayAsync(...)`와 `NotifyDisconnectedAsync(...)`는 Actor별 binding을 사용한다. Physical disconnect는
 Framework가 current binding 전체에 통지하고 exact binding identity마다 Spot callback을 최대 한 번 실행한다.
 `NotifyDisconnectedAsync(...)`는 connection이 유지된 상태의 logical notification이며 callback terminal까지
-기다린다. Relocation은 같은 ObjectGeneration을 유지하며 해당 Actor의 binding만 갱신한다. 같은 Session의
+기다린다. Exact binding callback은 최대 한 번 실행하고 terminal 뒤 해당 binding을 tombstone으로
+확정하여 제거한다. Physical STREAM connection과 Actor·Spot membership은 유지한다. 새 public Unbind API는
+제공하지 않는다. Rebind는 이전 exact binding identity를 다른 Actor나 generation에 재사용하지 않고 새
+identity를 먼저 등록한 뒤 이전 callback을 최대 한 번 실행하여 이전 binding을 tombstone으로 만든다.
+Callback 실패는 진단으로 기록하지만 새 binding을 제거하거나 이전 binding을 복원하지 않는다.
+Relocation은 같은 ObjectGeneration을 유지하며 해당 Actor의 binding route만 갱신하는 동작이므로 rebind가
+아니고 disconnect callback을 실행하지 않는다. 같은 Session의
 다른 Actor binding과 physical STREAM connection은 변경하지 않는다.
 
 `RelayAsync(...)`는 Actor relay가 source-local admission을 수락하면 정상 완료하는 one-way operation이다.

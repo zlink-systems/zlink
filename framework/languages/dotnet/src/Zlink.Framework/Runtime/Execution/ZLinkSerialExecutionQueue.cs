@@ -24,6 +24,7 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
 
     private readonly TaskCompletionSource _drained =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private TaskCompletionSource _applicationDrained = CompletedSignal();
 
     private readonly SemaphoreSlim _drainGate = new(1, 1);
     private readonly IZLinkRuntimeFailureReporter _errorSink;
@@ -52,6 +53,33 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
     private TaskCompletionSource<ZLinkSerialRelocationSeal>? _sealRequest;
     private Func<int>? _sealRequestReservation;
     private bool _relocated;
+
+    internal int ApplicationPendingCount
+    {
+        get
+        {
+            lock (_admissionGate) return _applicationPendingCount;
+        }
+    }
+
+    internal long ApplicationPendingRetainedBytes
+    {
+        get
+        {
+            lock (_admissionGate)
+                return checked(
+                    _applicationPendingBytes
+                    - _applicationPendingCount * WorkItemFixedCostBytes);
+        }
+    }
+
+    internal Task ApplicationDrained
+    {
+        get
+        {
+            lock (_admissionGate) return _applicationDrained.Task;
+        }
+    }
 
     public ZLinkSerialExecutionQueue(
         ZLinkRuntimeTaskRunner taskRunner,
@@ -178,8 +206,18 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
 
     internal ZLinkSerialPostAdmission TryPostApplicationWithAdmission(
         Func<CancellationToken, ValueTask> callback,
+        out ZLinkSerialWorkItem item) =>
+        TryPostApplicationWithAdmission(0, callback, out item);
+
+    internal ZLinkSerialPostAdmission TryPostApplicationWithAdmission(
+        long retainedBytes,
+        Func<CancellationToken, ValueTask> callback,
         out ZLinkSerialWorkItem item)
     {
+        ArgumentNullException.ThrowIfNull(callback);
+        if (retainedBytes < 0)
+            throw new ArgumentOutOfRangeException(nameof(retainedBytes));
+        var accountingBytes = checked(WorkItemFixedCostBytes + retainedBytes);
         lock (_admissionGate)
         {
             if (Volatile.Read(ref _completed) != 0)
@@ -189,7 +227,7 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
             }
             if (!TryReserveSlot(
                     ZLinkSerialWorkLane.Application,
-                    WorkItemFixedCostBytes,
+                    accountingBytes,
                     _applicationCapacity,
                     _applicationByteCapacity))
             {
@@ -200,7 +238,7 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
             item = new ZLinkSerialWorkItem(
                 callback,
                 lane: ZLinkSerialWorkLane.Application,
-                accountingBytes: WorkItemFixedCostBytes);
+                accountingBytes: accountingBytes);
             _applicationQueue.Enqueue(item);
             ScheduleDrain();
             return ZLinkSerialPostAdmission.Accepted;
@@ -672,6 +710,9 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
             || accountingBytes > byteLimit - pendingBytes)
             return false;
 
+        if (lane == ZLinkSerialWorkLane.Application && pendingCount == 0)
+            _applicationDrained = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
         pendingCount++;
         pendingBytes += accountingBytes;
         _pendingCount++;
@@ -687,6 +728,8 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         pendingCount--;
         pendingBytes -= accountingBytes;
         _pendingCount--;
+        if (lane == ZLinkSerialWorkLane.Application && pendingCount == 0)
+            _applicationDrained.TrySetResult();
     }
 
     private ref int PendingCount(ZLinkSerialWorkLane lane)
@@ -701,6 +744,14 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         if (lane == ZLinkSerialWorkLane.Application)
             return ref _applicationPendingBytes;
         return ref _lifecyclePendingBytes;
+    }
+
+    private static TaskCompletionSource CompletedSignal()
+    {
+        var signal = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        signal.TrySetResult();
+        return signal;
     }
 
     public async ValueTask RunAsync(

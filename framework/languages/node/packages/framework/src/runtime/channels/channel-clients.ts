@@ -87,10 +87,17 @@ export class DefaultZLinkChannelClient implements ZLinkChannelClient {
   }
 
   private requireChannel(channelName: string): void {
-    if (!this.registration.channelClients.has(channelName)) {
+    const channel = this.registration.channels.get(channelName);
+    if (channel === undefined) {
       throw createInternalFrameworkException(
         ZLinkFrameworkInternalErrorKind.RequestTargetNotFound,
         `Channel client '${channelName}' is not registered.`
+      );
+    }
+    if (channel.client === undefined) {
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.InvalidConfiguration,
+        `Channel client role '${channelName}' is not configured.`
       );
     }
   }

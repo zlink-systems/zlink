@@ -1,7 +1,7 @@
 # Java Location Store Document Location
 
 The Java Location Store and maintenance public signature is provided in
-[Location And Maintenance](interfaces/location-maintenance.ko.md).
+[Location And Maintenance](interfaces/location-maintenance.en.md).
 Common behavior follows
 [Location Runtime](../../../21-location-runtime.en.md) and
 [Redis Location Store](../../../22-location-store-redis.en.md). The

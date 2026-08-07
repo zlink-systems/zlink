@@ -209,8 +209,8 @@ int main ()
         }
     }
 
-    // live_mode (runtime toggle) overrides the static mode and is read live, so an
-    // operator can turn tracing on/off without restart.
+    // live_mode changes apply when the next message enters the runtime. Every
+    // transition for a message already in progress uses its entry snapshot.
     {
         auto options = options_with_mode (message_flow_log_mode_t::off);
         auto live = std::make_shared<std::atomic<message_flow_log_mode_t>> (
@@ -234,13 +234,59 @@ int main ()
             return 16;
         }
 
-        // Flip back to off -> silent again.
+        // Capture key_transitions for one message, then turn diagnostics off
+        // before its transition. The in-progress message remains complete.
+        out = capture_clog ([&] {
+            auto message_scope =
+              runtime::flow_context_t::enter_current_or_create (
+                flow_origin_t::application,
+                message_flow_tracer_t (options).mode ());
+            live->store (message_flow_log_mode_t::off);
+            message_flow_tracer_t (options).trace (
+              flow_event (message_flow_outcome_t::received));
+        });
+        if (!contains (out, "phase=received")) {
+            return 29;
+        }
+
+        // The next message sees off and is silent.
         live->store (message_flow_log_mode_t::off);
         out = capture_clog ([&] {
-            message_flow_tracer_t (options).trace (flow_event (message_flow_outcome_t::received));
+            auto message_scope =
+              runtime::flow_context_t::enter_current_or_create (
+                flow_origin_t::application,
+                message_flow_tracer_t (options).mode ());
+            message_flow_tracer_t (options).trace (
+              flow_event (message_flow_outcome_t::received));
         });
         if (!out.empty ()) {
-            return 17;
+            return 30;
+        }
+
+        // A message that entered while off stays silent even if diagnostics
+        // turns on before a later transition. The following message sees on.
+        out = capture_clog ([&] {
+            auto message_scope =
+              runtime::flow_context_t::enter_current_or_create (
+                flow_origin_t::application,
+                message_flow_tracer_t (options).mode ());
+            live->store (message_flow_log_mode_t::key_transitions);
+            message_flow_tracer_t (options).trace (
+              flow_event (message_flow_outcome_t::received));
+        });
+        if (!out.empty ()) {
+            return 31;
+        }
+        out = capture_clog ([&] {
+            auto message_scope =
+              runtime::flow_context_t::enter_current_or_create (
+                flow_origin_t::application,
+                message_flow_tracer_t (options).mode ());
+            message_flow_tracer_t (options).trace (
+              flow_event (message_flow_outcome_t::received));
+        });
+        if (!contains (out, "phase=received")) {
+            return 32;
         }
     }
 

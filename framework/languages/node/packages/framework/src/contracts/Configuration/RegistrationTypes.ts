@@ -197,7 +197,6 @@ export interface ZLinkRouteMeshChannelOptions {
   readonly sendHighWaterMark?: number;
   readonly receiveHighWaterMark?: number;
   readonly sendTimeoutMs?: number;
-  readonly maxMessageSize?: number;
   readonly sendHandlers?: readonly ZLinkRouteChannelSendHandlerRegistration[];
   readonly requestHandlers?: readonly ZLinkRouteChannelRequestHandlerRegistration[];
   readonly handlers?: readonly ZLinkRouteChannelHandlerOptions[];
@@ -214,7 +213,6 @@ export interface ZLinkRouteChannelOptions {
   readonly sendHighWaterMark?: number;
   readonly receiveHighWaterMark?: number;
   readonly sendTimeoutMs?: number;
-  readonly maxMessageSize?: number;
   readonly sendHandlers?: readonly ZLinkRouteChannelSendHandlerRegistration[];
   readonly requestHandlers?: readonly ZLinkRouteChannelRequestHandlerRegistration[];
   readonly handlers?: readonly ZLinkRouteChannelHandlerOptions[];
@@ -413,7 +411,6 @@ export interface ZLinkSpotRouterCapabilityOptions {
   readonly sendHighWaterMark?: number;
   readonly receiveHighWaterMark?: number;
   readonly sendTimeoutMs?: number;
-  readonly maxMessageSize?: number;
 }
 
 export interface ZLinkSpotRouterPeerConnectionOptions {

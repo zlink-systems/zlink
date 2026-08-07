@@ -6,7 +6,7 @@ Topology registration (`addRouteMesh`/`addClientServerChannel`/`addFanoutChannel
 `addStreamNode`, Object role/factory registration, Manual peer connections, `useFilter`, other
 host-wide options, runtime weight query/change, topology status query/observation) calls the Java
 builders directly as-is — the exact signature and options table follow
-[Java reference 02. Topology discovery](../../java/reference/02-topology-discovery.ko.md)
+[Java reference 02. Topology discovery](../../java/reference/02-topology-discovery.en.md)
 (Korean-only) directly. The only things Kotlin adds are the receiver-lambda DSL and handler
 dispatcher selection. The exact signatures are owned by the
 [Kotlin configuration and host exact interface](../../common/spec/server/languages/kotlin/interfaces/configuration-host.en.md)
@@ -104,7 +104,7 @@ DSLs that each take `ZLinkDispatchOptions`/`ZLinkStreamCompressionBuilder` as th
 
 ```kotlin
 options.configureDispatch {
-    messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
+    messageFlow(ZLinkMessageFlowLogMode.NORMAL)
 }
 
 options.configureStreamCompression {
@@ -138,5 +138,5 @@ See the
 [Kotlin configuration and host exact interface](../../common/spec/server/languages/kotlin/interfaces/configuration-host.en.md),
 [Kotlin channel messaging exact interface](../../common/spec/server/languages/kotlin/interfaces/channel-messaging.en.md),
 and
-[Java reference 02. Topology discovery](../../java/reference/02-topology-discovery.ko.md)
+[Java reference 02. Topology discovery](../../java/reference/02-topology-discovery.en.md)
 (Korean-only) for the full rationale.

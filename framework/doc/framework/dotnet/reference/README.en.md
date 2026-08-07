@@ -10,9 +10,9 @@ tree.
 
 This document plays a different role from two existing documents.
 
-- [Guide 13. Interface catalog](../guide/server/13-interface-catalog.ko.md) — introduces
+- [Guide 13. Interface catalog](../guide/server/13-interface-catalog.en.md) — introduces
   frequently used interfaces from a tutorial angle.
-- [.NET exact interface](../../common/spec/server/languages/dotnet/interfaces/README.ko.md) —
+- [.NET exact interface](../../common/spec/server/languages/dotnet/interfaces/README.en.md) —
   the contract-owning document. It carries the full interface, signature for signature.
 - **This reference** — collects only "what you need to know to complete this one call."
   It does not duplicate the contract text; it cites the exact interface instead.

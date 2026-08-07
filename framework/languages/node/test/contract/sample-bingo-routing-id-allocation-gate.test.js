@@ -27,7 +27,8 @@ test('Bingo rolling replacement uses readiness and drain evidence', () => {
   assert.match(runner, /play-replacement/);
   assert.match(runner, /SIGUSR2/);
   assert.match(runner, /bingo-drain result=drained/);
-  assert.match(runner, /bingo-room-status state=1 readyPeers=/);
+  assert.match(runner, /marker = 'bingo-room-status'/);
+  assert.match(runner, /\$\{marker\} state=1 readyPeers=/);
   assert.match(read('samples/Bingo.Ts/Server/Configuration/room-router-readiness-handler.ts'), /placement=\$\{status\.placement\.isAvailable\}/);
   assert.doesNotMatch(runner, /bingo-room-peer ConnectionReady remote=/);
   assert.doesNotMatch(runner, /WaitingForSlot|routing allocation|slot=|generation=/);

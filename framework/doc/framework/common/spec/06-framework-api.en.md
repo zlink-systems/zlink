@@ -4,7 +4,7 @@ title: "ZLink Framework API"
 
 # ZLink Framework API
 
-[Spec table of contents](README.en.md) · [Previous: Async Execution And The Handler Turn](05-async-execution-policy.en.md) · [Next: RouteMesh Topology](07-channel-topology.ko.md)
+[Spec table of contents](README.en.md) · [Previous: Async Execution And The Handler Turn](05-async-execution-policy.en.md) · [Next: RouteMesh Topology](07-channel-topology.en.md)
 
 > **What this chapter defines** — the language-neutral public API family and registration rules.
 
@@ -60,13 +60,13 @@ moves to an exact version, greater than the source's, that the caller specifies.
 provide a drain operation per MeshName, ChannelName, or node RID.
 State, per-mode target selection, terminal result, default deadline, repeated calls, and
 cancellation contract are owned by
-[54 Host Relocate, Shutdown & Handoff](28-graceful-drain-handoff.ko.md).
+[54 Host Relocate, Shutdown & Handoff](28-graceful-drain-handoff.en.md).
 
 The framework builder doesn't expose the service liveness interval and
 [deadline](01-glossary.en.md#deadline). The service runtime applies a common profile
 internally and distinguishes orderly disconnect from half-open failure. The fixed values,
 service liveness message, and reconnect contract are owned by
-[55 Transport Liveness](29-transport-liveness.ko.md).
+[55 Transport Liveness](29-transport-liveness.en.md).
 
 ### 2.1 Keeping Received Payload From Growing Memory Indefinitely
 
@@ -115,9 +115,11 @@ socket bind. Not setting a cap at all isn't itself an error. The selected profil
 applies to the Auto HWM profile of the Core context the framework creates, but Application
 HWM bytes aren't copied into a per-connection Core HWM or divided by connection count.
 
-If `ApplicationHwmBytes` is positive, every application listener's `MaxMessageSize` must
-also be a finite positive value. Auto mode applies the same condition. Only an explicit
-`ApplicationHwmBytes = 0` skips this check. It's still valid for HWM to be smaller than
+On an application listener that provides `MaxMessageSize`, a positive
+`ApplicationHwmBytes` requires that value to be finite and positive too. Auto mode applies
+the same condition. Only an explicit `ApplicationHwmBytes = 0` skips this check. RouteMesh
+SS has no `MaxMessageSize` setting, so this combination check doesn't apply to it. It's
+still valid for HWM to be smaller than
 `MaxMessageSize`. A complete message that started while pending bytes were below HWM is
 received to completion, and if that pushes the total over HWM, subsequent receiving stops.
 So an empty host can process one message larger than HWM but no larger than
@@ -273,12 +275,15 @@ smaller than the transport default. A positive value applies as the same byte ca
 negative value is a configuration error. Binding-option representation and conversion are
 owned by each language's internals and aren't exposed in the application public API.
 
-The framework application listener's `MaxMessageSize` default is `16,777,216` bytes
+The ClientServer application listener's `MaxMessageSize` default is `16,777,216` bytes
 (16 MiB). So the default Auto Application HWM configuration has a finite single-message
 cap. If the application explicitly changes this to `0`, it keeps the original meaning of no
 separate cap, but this is rejected at startup validation if Application HWM is Auto or
 positive. Only when both unlimited messages and unlimited pending payload are needed should
 `MaxMessageSize = 0` and `ApplicationHwmBytes = 0` be specified.
+
+This regular application-listener rule applies to ClientServer, not RouteMesh ServerServer.
+RouteMesh SS provides no Framework-level message-size setting or cap.
 
 The StreamNode Core STREAM inbound cap is separate from this regular application-listener
 rule. It defaults to `64 KiB`, checks the complete client-to-server message as header plus
@@ -588,10 +593,10 @@ interfaces.
 
 | Language | server root registration | Stream Connector registration | exact interface owner |
 |---|---|---|---|
-| `.NET` | `Codecs.Use(extension)` | `ZlinkStreamConnectorOptions.PayloadCodec` | [server](server/languages/dotnet/interfaces/11-serialization.ko.md), [connector](stream-connector/languages/dotnet/03-stream-connector.en.md) |
-| Java | `codecs().use(extension)` | connector's `typedCodec` option | [server](server/languages/java/interfaces/README.ko.md), [connector](stream-connector/languages/java/03-stream-connector.en.md) |
-| Kotlin | `codecs().use(extension)` | connector's `typedCodec` option | [server](server/languages/kotlin/interfaces/README.ko.md), [Java/Kotlin connector](stream-connector/languages/java/03-stream-connector.en.md) |
-| Node.js | `codecs().use(extension)` | connector's `codec` option | [server](server/languages/node/interfaces/README.ko.md), [connector](stream-connector/languages/typescript/03-stream-connector.en.md) |
+| `.NET` | `Codecs.Use(extension)` | `ZlinkStreamConnectorOptions.PayloadCodec` | [server](server/languages/dotnet/interfaces/11-serialization.en.md), [connector](stream-connector/languages/dotnet/03-stream-connector.en.md) |
+| Java | `codecs().use(extension)` | connector's `typedCodec` option | [server](server/languages/java/interfaces/README.en.md), [connector](stream-connector/languages/java/03-stream-connector.en.md) |
+| Kotlin | `codecs().use(extension)` | connector's `typedCodec` option | [server](server/languages/kotlin/interfaces/README.en.md), [Java/Kotlin connector](stream-connector/languages/java/03-stream-connector.en.md) |
+| Node.js | `codecs().use(extension)` | connector's `codec` option | [server](server/languages/node/interfaces/README.en.md), [connector](stream-connector/languages/typescript/03-stream-connector.en.md) |
 | C++ | `codecs().use(extension)` | `connector_options_t::typed_codec` | [server](server/languages/cpp/interfaces/01-common-runtime.en.md), [connector](stream-connector/languages/cpp/03-stream-connector.en.md) |
 
 Both registration surfaces project the same typed-payload contract, but that doesn't mean
@@ -608,7 +613,7 @@ The application builds a Redis store instance and passes it to the root's genera
 location-store registration API. A dedicated Redis registration function isn't provided.
 
 Redis connection and key prefix are configured when the store instance is built. The
-detailed contract is owned by [Redis Location Store](22-location-store-redis.ko.md). A
+detailed contract is owned by [Redis Location Store](22-location-store-redis.en.md). A
 process-local in-memory store can only be used in contract tests within one process.
 
 A host with object role `None` that only uses manual peer can configure a MeshNode without
@@ -625,9 +630,9 @@ generic placement reservation/aggregate commit, and store clock capability, or t
 Relocation Store is missing or duplicated, it fails as a startup configuration error before
 socket bind. A dedicated API to register both Stores together, or to register a Redis
 implementation directly, isn't provided. The official Redis Relocation Store and cross-store
-rules are owned by [Redis Relocation Store](23-relocation-store-redis.ko.md); the Store
+rules are owned by [Redis Relocation Store](23-relocation-store-redis.en.md); the Store
 interface and per-operation usage conditions are owned by
-[40 Location Runtime](21-location-runtime.ko.md).
+[40 Location Runtime](21-location-runtime.en.md).
 
 The Location Store interface and Relocation Store interface don't inherit from each other.
 The root independently provides two registration operations, each taking its own generic
@@ -676,7 +681,7 @@ The framework reserves the exact topic bytes `01 5A 4C 46 31`, used for fanout l
 internal use. Passing this topic to a public fanout publish is a call-argument error. This
 topic's beacon isn't delivered to handlers or application observers. Beacon and
 per-publisher ready determination are owned by
-[Transport Liveness](29-transport-liveness.ko.md).
+[Transport Liveness](29-transport-liveness.en.md).
 
 The endpoint set a manual subscriber builder registers is also provided as a common
 endpoint connection handle. The application can use this handle to connect/disconnect
@@ -686,7 +691,7 @@ and doesn't switch the same channel into automatic mode.
 
 The current connection intent and ready state of an automatic subscriber registered without
 an endpoint is observed only through
-[Runtime Monitoring](24-runtime-monitoring.ko.md)'s fanout runtime snapshot and events. A
+[Runtime Monitoring](24-runtime-monitoring.en.md)'s fanout runtime snapshot and events. A
 publisher-changed event requires a publisher entry, and a location-changed event requires a
 Location snapshot — the two payloads aren't mixed into nullable fields. This surface is
 read-only and doesn't provide endpoint connect/disconnect operations. A manual endpoint
@@ -694,7 +699,7 @@ connection handle can't change an entry in the automatic snapshot or event.
 
 Fanout publish completion means the local publisher transport accepted the event. It doesn't
 confirm subscriber receipt or handler completion. The detailed delivery contract is owned by
-[Channel Messaging](08-channel-messaging.ko.md#6-classic-fanout과의-경계).
+[Channel Messaging](08-channel-messaging.en.md#6-the-boundary-with-classic-fanout).
 
 Classic fanout publish's common inputs are ChannelName, topic, and typed event. Each
 language's exact interface provides both a call that specifies topic and a typed convenience
@@ -919,7 +924,7 @@ detected. A one-way send can only return an exceptional completion of the kinds 
 the failure is confirmed before the source's local outbound admission. Once the source
 accepts the record and completes with no return data, a remote activation or admission
 failure confirmed afterward doesn't change the already-completed call. This failure is
-observed via drop metrics and message-flow events, and doesn't build an error reply or
+observed via drop metrics and structured message-flow records, and doesn't build an error reply or
 replay to a different owner.
 
 After request admission, exactly one of a typed reply, typed framework error, timeout,
@@ -931,11 +936,12 @@ after cancellation cleans up correlation but doesn't create a second terminal re
 
 ### 13.2 Dispatch Failure Action Owner
 
-The single owner for how a dispatch-failure observer's reason and action map to the caller's
+The single owner for how a dispatch-failure structured record's reason and action map to the caller's
 result is
-[Message Flow Tracing §3](26-message-flow-tracing.ko.md#3-공통-attribute).
-Each language's exact interface projects that closed value into that language's enum or
-string, without adding to or reducing the values.
+[Message Flow Tracing §3](26-message-flow-tracing.en.md#3-common-attributes).
+Each language's logger/telemetry-provider integration records those closed values with the
+same strings, without adding to or reducing the values. No public event DTO or observer enum
+is provided for this value set.
 
 ## 14. Startup Validation
 

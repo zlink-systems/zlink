@@ -133,23 +133,19 @@ public sealed class InboundDispatchOptionsTests
     }
 
     [Fact]
-    public void Memory_Limited_Mode_Requires_A_Finite_Listener_Maximum()
+    public void Memory_Limited_Mode_Does_Not_Require_A_RouteMesh_Message_Maximum()
     {
         var services = new ServiceCollection();
 
         services.AddZLinkFramework(options =>
         {
             options.ConfigureInboundDispatch().ProcessMemoryLimitBytes = 1_000_000;
-            options.AddRouteMesh("mesh").Listen()
-                .ConfigureRouterSocket().MaxMessageSize = 0;
+            options.AddRouteMesh("mesh").Listen();
         });
         using var provider = services.BuildServiceProvider();
 
-        var error = Assert.Throws<ZLinkConfigurationException>(() =>
-            ZLinkFrameworkRegistrationValidator.ValidateInboundDispatch(
-                provider.GetRequiredService<ZLinkFrameworkRegistration>()));
-
-        Assert.Contains("MaxMessageSize", error.Message, StringComparison.Ordinal);
+        ZLinkFrameworkRegistrationValidator.ValidateInboundDispatch(
+            provider.GetRequiredService<ZLinkFrameworkRegistration>());
     }
 
     [Fact]
@@ -163,8 +159,7 @@ public sealed class InboundDispatchOptionsTests
             options.AddStreamNode("stream")
                 .Bind(0)
                 .AddSession<TestSession>()
-                .ConfigureSocket()
-                .MaxMessageSize = 0;
+                .MaxMessageSize(0);
         });
         using var provider = services.BuildServiceProvider();
 
@@ -195,9 +190,9 @@ public sealed class InboundDispatchOptionsTests
     }
 
     [Fact]
-    public void Application_Listener_Default_Is_A_Finite_Sixteen_Mebibytes()
+    public void RouteMesh_Does_Not_Expose_A_Message_Size_Setting()
     {
-        Assert.Equal(16L * 1024L * 1024L, new ZLinkSocketConfig().MaxMessageSize);
+        Assert.Null(typeof(IZLinkMeshNodeSocketConfig).GetProperty("MaxMessageSize"));
 
         var services = new ServiceCollection();
         services.AddZLinkFramework(options =>
@@ -212,8 +207,6 @@ public sealed class InboundDispatchOptionsTests
 
         Assert.Equal(10_000_000UL,
             registration.InboundDispatchOptions.EffectiveApplicationHwmBytes);
-        Assert.Equal(16L * 1024L * 1024L,
-            registration.SpotNodes["mesh"].Router!.SocketConfig.MaxMessageSize);
     }
 
     [Fact]

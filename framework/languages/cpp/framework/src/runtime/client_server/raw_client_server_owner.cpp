@@ -1215,12 +1215,12 @@ std::size_t raw_client_server_client_t::expire_requests (
     return _operations->expire (now);
 }
 
-foundation::operation_id_t
+foundation::call_id_t
 raw_client_server_client_t::operation_id (
   std::uint64_t lifecycle_generation,
   std::uint64_t correlation)
 {
-    return foundation::operation_id_t{lifecycle_generation, correlation};
+    return foundation::call_id_t{lifecycle_generation, correlation};
 }
 
 } // namespace zlink::framework::runtime::client_server

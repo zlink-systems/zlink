@@ -59,7 +59,9 @@ zlink::part_helper_internal::send_sequence_spec_t::send_sequence_spec_t () :
     has_rid2 (false),
     has_text1 (false),
     has_text2 (false),
-    request_like (false)
+    request_like (false),
+    transport_pair_id (0),
+    transport_pair_generation (0)
 {
     memset (&rid1, 0, sizeof (rid1));
     memset (&rid2, 0, sizeof (rid2));
@@ -77,6 +79,8 @@ zlink::part_helper_internal::recv_sequence_state_t::recv_sequence_state_t () :
     owner_thread (),
     return_source_rid_as_null (true),
     request_seq (0),
+    transport_pair_id (0),
+    transport_pair_generation (0),
     message_type (0),
     next_part_index (0)
 {
@@ -174,7 +178,9 @@ bool zlink::part_helper_internal::send_spec_equals (const send_sequence_spec_t &
         || lhs_.request_seq != rhs_.request_seq || lhs_.handler != rhs_.handler
         || lhs_.userdata != rhs_.userdata || lhs_.has_rid1 != rhs_.has_rid1
         || lhs_.has_rid2 != rhs_.has_rid2 || lhs_.has_text1 != rhs_.has_text1
-        || lhs_.has_text2 != rhs_.has_text2 || lhs_.request_like != rhs_.request_like) {
+        || lhs_.has_text2 != rhs_.has_text2 || lhs_.request_like != rhs_.request_like
+        || lhs_.transport_pair_id != rhs_.transport_pair_id
+        || lhs_.transport_pair_generation != rhs_.transport_pair_generation) {
         return false;
     }
 
@@ -251,6 +257,15 @@ void zlink::part_helper_internal::set_recv_metadata (recv_sequence_state_t *recv
     recv_->message_type = 0;
 }
 
+void zlink::part_helper_internal::set_recv_transport_pair (
+  recv_sequence_state_t *recv_, uint64_t transport_pair_id_, uint64_t transport_pair_generation_)
+{
+    if (!recv_)
+        return;
+    recv_->transport_pair_id = transport_pair_id_;
+    recv_->transport_pair_generation = transport_pair_generation_;
+}
+
 int zlink::part_helper_internal::buffer_recv_parts (recv_sequence_state_t *recv_,
                                                     zlink_msg_t *parts_,
                                                     size_t part_count_)
@@ -324,6 +339,20 @@ void zlink::part_helper_internal::export_recv_metadata (
     }
     if (request_seq_out_)
         *request_seq_out_ = state_->recv.request_seq;
+}
+
+void zlink::part_helper_internal::export_recv_transport_pair (
+  const std::shared_ptr<handle_state_t> &state_,
+  uint64_t *transport_pair_id_out_,
+  uint64_t *transport_pair_generation_out_)
+{
+    if (!state_)
+        return;
+    std::lock_guard<std::mutex> lock (state_->mutex);
+    if (transport_pair_id_out_)
+        *transport_pair_id_out_ = state_->recv.transport_pair_id;
+    if (transport_pair_generation_out_)
+        *transport_pair_generation_out_ = state_->recv.transport_pair_generation;
 }
 
 void zlink::part_helper_internal::reset_send_sequence (send_sequence_state_t *state_)
@@ -575,6 +604,8 @@ int zlink::part_helper_internal::prepare_recv_step (
         state->recv.owner_thread = current_thread;
         state->recv.return_source_rid_as_null = true;
         state->recv.request_seq = 0;
+        state->recv.transport_pair_id = 0;
+        state->recv.transport_pair_generation = 0;
         state->recv.topic_id.clear ();
         memset (&state->recv.source_node_rid, 0, sizeof (state->recv.source_node_rid));
         *first_part_out_ = true;

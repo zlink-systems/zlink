@@ -1075,7 +1075,7 @@ channel_outbound_exchange_t::submit_request (std::string channel_name,
 {
     auto submit_flow = runtime::flow_context_t::enter_current_or_create (
       flow_origin_t::application,
-      detail::message_flow_tracer_t (_state->dispatch).capture_enabled ());
+      detail::message_flow_tracer_t (_state->dispatch).mode ());
     channel_runtime_t runtime (_state);
     const auto *client = client_capability (*_state, channel_name);
     const auto call_packet_name = std::move (packet_name);
@@ -1308,7 +1308,7 @@ channel_outbound_exchange_t::submit_send (std::string channel_name,
 {
     auto submit_flow = runtime::flow_context_t::enter_current_or_create (
       flow_origin_t::application,
-      detail::message_flow_tracer_t (_state->dispatch).capture_enabled ());
+      detail::message_flow_tracer_t (_state->dispatch).mode ());
     const auto call_packet_name = std::move (packet_name);
     {
         std::lock_guard lock (_state->mutex);
@@ -1422,7 +1422,7 @@ channel_outbound_exchange_t::submit_publish (std::string channel_name,
 {
     auto submit_flow = runtime::flow_context_t::enter_current_or_create (
       flow_origin_t::application,
-      detail::message_flow_tracer_t (_state->dispatch).capture_enabled ());
+      detail::message_flow_tracer_t (_state->dispatch).mode ());
     const auto call_packet_name = std::move (packet_name);
     {
         std::lock_guard lock (_state->mutex);

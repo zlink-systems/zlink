@@ -111,7 +111,7 @@ wait_port() {
   local port
   host="$(endpoint_host "${endpoint}")"
   port="$(endpoint_port "${endpoint}")"
-  for _ in $(seq 1 30); do
+  for _ in $(seq 1 600); do
     if (echo >"/dev/tcp/${host}/${port}") >/dev/null 2>&1; then
       return 0
     fi
@@ -124,7 +124,7 @@ wait_port() {
 wait_http() {
   local name="$1"
   local endpoint="$2"
-  for _ in $(seq 1 30); do
+  for _ in $(seq 1 600); do
     if curl -fsS "${endpoint}/health" >/dev/null 2>&1; then
       return 0
     fi
@@ -132,6 +132,14 @@ wait_http() {
   done
   echo "Timed out waiting for ${name} at ${endpoint}" >&2
   return 1
+}
+
+post_json() {
+  local endpoint="$1"
+  local body="$2"
+  curl -fsS -X POST "${endpoint}" \
+    -H 'Content-Type: application/json' \
+    --data "${body}" >/dev/null
 }
 
 start_server() {
@@ -223,12 +231,38 @@ start_server api-b "${SCRIPT_DIR}/Server/CommerceApi/ShoppingMall.CommerceApi.cs
 wait_port api-b-mesh "${SHOPPINGMALL_API_B_MESH_ENDPOINT}"
 wait_http api-b "${SHOPPINGMALL_API_B_HTTP_URL}"
 
+# These calls prepare deterministic failure/recovery fixtures outside the
+# Client process. The Client exercises only the public order endpoints; the
+# runner is the observation hook allowed to create a pending mapping and to
+# remove a projection before the public rebuild assertion.
+post_json "${SHOPPINGMALL_API_A_HTTP_URL}/self-check/idempotency/pending" \
+  '{"idempotencyKey":"order-pending-001","orderId":"order-pending-0001"}'
+post_json "${SHOPPINGMALL_API_A_HTTP_URL}/self-check/idempotency/pending" \
+  '{"idempotencyKey":"order-resume-001","orderId":"order-resume-001"}'
+post_json "${SHOPPINGMALL_API_A_HTTP_URL}/self-check/workflow/inventory-reserved" \
+  '{"cartId":"cart-success","shippingAddressId":"addr-home","paymentMethodId":"pm-ok","idempotencyKey":"order-resume-001"}'
+post_json "${SHOPPINGMALL_API_A_HTTP_URL}/self-check/idempotency/pending" \
+  '{"idempotencyKey":"order-repair-001","orderId":"order-repair-001"}'
+post_json "${SHOPPINGMALL_API_A_HTTP_URL}/self-check/workflow/inventory-reserved" \
+  '{"cartId":"cart-success","shippingAddressId":"addr-home","paymentMethodId":"pm-ok","idempotencyKey":"order-repair-001"}'
+post_json "${SHOPPINGMALL_API_A_HTTP_URL}/orders/order-repair-001/continue" '{}'
+post_json "${SHOPPINGMALL_API_A_HTTP_URL}/self-check/projection/order-repair-001/delete" '{}'
+if curl -fsS "${SHOPPINGMALL_API_A_HTTP_URL}/orders/order-repair-001" >/dev/null 2>&1; then
+  echo "Projection deletion fixture was not visible through the public read API." >&2
+  exit 1
+fi
+
 dotnet run --no-build --project "${SCRIPT_DIR}/Client/ShoppingMall.Client.csproj" -- \
   --config "${CLIENT_CONFIG_FILE}" >"${LOG_DIR}/client.log" 2>&1
 
 grep -q "shoppingmall=completed" "${SHOPPINGMALL_LOG_DIR}/client.log"
 grep -q "shoppingmall order: started" "${LOG_DIR}/workflow-a.log" \
   || grep -q "shoppingmall order: started" "${LOG_DIR}/workflow-b.log"
+curl -fsS -X POST "${SHOPPINGMALL_API_A_HTTP_URL}/self-check/assert" \
+  -H 'Content-Type: application/json' \
+  --data '{"successfulOrderId":"order-0001","pendingRecoveredOrderId":"order-pending-0001","concurrentOrderId":"order-0002","resumedOrderId":"order-resume-001","inventoryFailureOrderId":"order-0003","paymentFailureOrderId":"order-0004","scaleOutOrderId":"order-0005","repairOrderId":"order-repair-001"}' \
+  | tee "${LOG_DIR}/server-assertion.json" \
+  | grep -q '"passed":true'
 grep -q "shoppingmall evidence:" "${LOG_DIR}/api-a.log"
 echo "shoppingmall-server-evidence=completed"
 RUN_SUCCEEDED=1

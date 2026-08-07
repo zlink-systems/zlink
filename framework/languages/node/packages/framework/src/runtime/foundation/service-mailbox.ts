@@ -3,7 +3,7 @@ export type ServiceMailboxDomain = 'application' | 'infrastructure';
 export interface ServiceMailboxRecord {
   readonly owner: string;
   readonly domain: ServiceMailboxDomain;
-  readonly parts: readonly Uint8Array[];
+  parts: readonly Uint8Array[];
   readonly sourceRoutingId?: string;
   readonly sourceRoute?: Uint8Array;
   readonly requestSequence?: bigint;
@@ -79,6 +79,10 @@ export class ServiceMailbox {
   constructor(limits: ServiceMailboxLimits) {
     this.application = createDomain(limits.applicationMessages, limits.applicationBytes);
     this.infrastructure = createDomain(limits.infrastructureMessages, limits.infrastructureBytes);
+  }
+
+  releaseClaimedPayload(record: ServiceMailboxRecord): void {
+    record.parts = [];
   }
 
   tryEnqueue(record: ServiceMailboxRecord): boolean {

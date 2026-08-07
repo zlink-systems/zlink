@@ -60,6 +60,38 @@ internal sealed class ZLinkActorInboundPipeline(
         }
     }
 
+    internal async ValueTask RejectAsync(
+        ZLinkSpotActorFrameBatch frames,
+        ZLinkFrameworkException error,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(error);
+        try
+        {
+            for (var index = 0; index < frames.Count; index++)
+            {
+                var frame = frames[index];
+                await ZLinkActorBoundSessionRelay.ReplyStaleActorAsync(
+                        runtime,
+                        frame.Actor,
+                        frame.SourceNodeRid,
+                        frame.SourceSessionRid,
+                        frame.RequestId,
+                        frame.Flags,
+                        frame.RouteContext.ReplyCapability,
+                        frame.Header,
+                        error,
+                        cancellationToken,
+                        frame.DirectReply)
+                    .ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            frames.Dispose();
+        }
+    }
+
     public async ValueTask DispatchAsync(
         ZLinkSpotActorFrameBatch frames,
         ZLinkSpotSerialExecutor executor,

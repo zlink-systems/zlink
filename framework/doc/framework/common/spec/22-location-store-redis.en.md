@@ -4,7 +4,7 @@ title: "Location Store Provider SPI And The Official Redis Implementation"
 
 # Location Store Provider SPI And The Official Redis Implementation
 
-[Spec table of contents](README.en.md) · [Previous: Location Runtime](21-location-runtime.en.md) · [Next: Relocation Store Provider SPI And The Official Redis Implementation](23-relocation-store-redis.ko.md)
+[Spec table of contents](README.en.md) · [Previous: Location Runtime](21-location-runtime.en.md) · [Next: Relocation Store Provider SPI And The Official Redis Implementation](23-relocation-store-redis.en.md)
 
 > **What this chapter defines** — the public SPI a Location Store provider must
 > follow (conditional commit, page-bounded snapshot).
@@ -49,7 +49,7 @@ in the public SPI.
 
 The following .NET excerpt shows the minimal shape of the common SPI. The
 formal declaration is in the
-[.NET exact interface](server/languages/dotnet/interfaces/08-authority-relocation.ko.md).
+[.NET exact interface](server/languages/dotnet/interfaces/08-authority-relocation.en.md).
 
 ```csharp
 public interface IZLinkLocationStore

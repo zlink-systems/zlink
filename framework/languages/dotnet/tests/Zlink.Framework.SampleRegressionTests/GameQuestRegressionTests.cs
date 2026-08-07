@@ -230,7 +230,7 @@ public sealed partial class RegressionTests
 
         Assert.Contains("외부 Redis endpoint", readme, StringComparison.Ordinal);
         Assert.Contains("재사용 mode는 제공하지 않는다", readme, StringComparison.Ordinal);
-        Assert.Contains("같은 stream으로", readme, StringComparison.Ordinal);
+        Assert.Contains("같은 direct stream으로", readme, StringComparison.Ordinal);
     }
 
     [Fact]

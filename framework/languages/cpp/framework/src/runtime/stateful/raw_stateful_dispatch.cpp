@@ -419,7 +419,10 @@ stateful_error_t raw_stateful_dispatch_t::ingest (
         _pending_condition.notify_all ();
     };
     std::vector<std::uint8_t> canonical;
+    std::size_t application_payload_bytes = 0;
     try {
+        application_payload_bytes =
+          protocol::application_payload_hwm_bytes (payload);
         canonical =
           protocol::encode_frozen_application_record (frozen).canonical_bytes;
     }
@@ -431,7 +434,7 @@ stateful_error_t raw_stateful_dispatch_t::ingest (
     try {
         enqueued = _objects->enqueue (
           owner, turn_domain_t::application,
-          {sequence, std::move (canonical)});
+          {sequence, std::move (canonical), application_payload_bytes});
     }
     catch (...) {
         clear_reservation ();
@@ -573,6 +576,8 @@ stateful_error_t raw_stateful_dispatch_t::stage_relocated (
         if (!frozen.application)
             return stateful_error_t::invalid;
         payload = *frozen.application;
+        turn.application_payload_bytes =
+          protocol::application_payload_hwm_bytes (payload);
     }
     catch (...) {
         return stateful_error_t::invalid;

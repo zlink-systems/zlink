@@ -109,6 +109,9 @@ class ctx_t ZLINK_FINAL
 
     bool valid () const;
     control_runtime_t *control_runtime ();
+    // Returns the already-started control runtime without bootstrapping it.
+    // Teardown paths use this after termination admission has closed startup.
+    control_runtime_t *control_runtime_if_started ();
     void
     start_thread (thread_t &thread_, thread_fn *tfn_, void *arg_, const char *name_ = NULL) const;
     const thread_ctx_t &thread_context () const;

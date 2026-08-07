@@ -2,7 +2,7 @@
 title: "PAIR 소켓"
 ---
 
-[English](03-1-pair.en.md)
+[English](03-1-pair.ko.md)
 
 <!-- zlink-nav:start -->
 [가이드 목록](README.ko.md) | [이전: Routing ID](08-routing-id.ko.md) | [다음: PUB/SUB](03-2-pubsub.ko.md)

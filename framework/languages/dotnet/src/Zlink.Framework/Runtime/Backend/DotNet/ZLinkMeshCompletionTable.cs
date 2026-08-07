@@ -35,6 +35,7 @@ internal sealed class ZLinkMeshCompletionTable
     private long _earlyBytes;
     private long _tombstoneBytes;
     private long _overflowCount;
+    private bool _retentionFailed;
 
     internal ZLinkMeshCompletionTable(
         int earlyCompletionCount = DefaultEarlyCompletionCount,
@@ -96,6 +97,10 @@ internal sealed class ZLinkMeshCompletionTable
                         RequestResult.Backpressured),
                     Array.Empty<Message>());
             }
+            else if (_retentionFailed)
+            {
+                dispatch = CapacityExceeded(operationId, handler);
+            }
             else
             {
                 _pending[operationId] = handler;
@@ -119,10 +124,16 @@ internal sealed class ZLinkMeshCompletionTable
     {
         CompletionDispatch? dispatch = null;
         var dispose = false;
+        List<CompletionDispatch>? failedPending = null;
+        List<IReadOnlyList<Message>>? retainedPartsToDispose = null;
         var bytes = EstimateBytes(parts);
         lock (_gate)
         {
-            if (_pending.Remove(record.OperationId, out var handler))
+            if (_retentionFailed)
+            {
+                dispose = true;
+            }
+            else if (_pending.Remove(record.OperationId, out var handler))
             {
                 dispatch = new CompletionDispatch(handler, record, parts);
             }
@@ -158,23 +169,42 @@ internal sealed class ZLinkMeshCompletionTable
             }
             else
             {
-                // The pump still owns these parts at this point. Release them
-                // when neither the result nor a failure marker can be retained.
-                // The counter and metric are the observable CapacityExceeded
-                // outcome for the bounded completion-retention resource.
+                // There is no bounded way to remember every operation that can
+                // arrive after both retention stores fill. Fail the table as a
+                // single owned resource: all current and later registrations
+                // receive CapacityExceeded instead of losing one operation and
+                // turning its terminal into a timeout.
+                _retentionFailed = true;
                 Interlocked.Increment(ref _overflowCount);
                 ZLinkRuntimeMetrics.RecordMessageDropped(
                     _meshName,
                     "completion",
                     "reply",
                     "capacity_exceeded");
+                failedPending = _pending
+                    .Select(entry => CapacityExceeded(entry.Key, entry.Value))
+                    .ToList();
+                _pending.Clear();
+                retainedPartsToDispose = _early.Values
+                    .Select(static early => early.Parts)
+                    .ToList();
+                _early.Clear();
+                _tombstones.Clear();
+                _earlyBytes = 0;
+                _tombstoneBytes = 0;
                 dispose = true;
             }
         }
 
         if (dispose)
             ZLinkMessageParts.DisposeAll(parts);
+        if (retainedPartsToDispose is not null)
+            foreach (var retainedParts in retainedPartsToDispose)
+                ZLinkMessageParts.DisposeAll(retainedParts);
         dispatch?.Invoke();
+        if (failedPending is not null)
+            foreach (var failed in failedPending)
+                failed.Invoke();
     }
 
     public void FailAll(RequestResult result)
@@ -207,6 +237,16 @@ internal sealed class ZLinkMeshCompletionTable
 
     private static bool CanRetain(long current, long bytes, long limit) =>
         bytes >= 0 && current <= limit - bytes;
+
+    private static CompletionDispatch CapacityExceeded(
+        MeshOperationId operationId,
+        CompletionHandler handler) =>
+        new(
+            handler,
+            MeshReceiveRecord.CompletionFailure(
+                operationId,
+                RequestResult.Backpressured),
+            Array.Empty<Message>());
 
     private static long EstimateBytes(IReadOnlyList<Message> parts)
     {

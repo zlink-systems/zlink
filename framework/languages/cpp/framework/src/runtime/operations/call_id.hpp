@@ -7,20 +7,20 @@
 namespace zlink::framework::runtime
 {
 
-// Framework completion, transport, location and wire paths use one runtime
-// identity. The aliases in the owning subsystems are naming views, not
-// separate two-word representations.
-struct operation_id_t
+// Identifies an in-flight runtime call until its terminal result is claimed.
+// Public Actor Join OperationId values use a separate wire type even though
+// both identifiers currently use two 64-bit words.
+struct call_id_t
 {
     std::uint64_t high = 0;
     std::uint64_t low = 0;
 
-    friend bool operator== (const operation_id_t &, const operation_id_t &) = default;
+    friend bool operator== (const call_id_t &, const call_id_t &) = default;
 };
 
-struct operation_id_hash_t
+struct call_id_hash_t
 {
-    std::size_t operator() (const operation_id_t &id) const noexcept
+    std::size_t operator() (const call_id_t &id) const noexcept
     {
         std::size_t value = 1469598103934665603ULL;
         value ^= static_cast<std::size_t> (id.high);

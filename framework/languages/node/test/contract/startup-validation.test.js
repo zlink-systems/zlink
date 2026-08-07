@@ -27,6 +27,20 @@ test('Application HWM rejects an unbounded Application listener', () => {
   );
 });
 
+test('Application HWM does not depend on the removed RouteMesh message bound', () => {
+  assert.doesNotThrow(() => framework.createFrameworkRegistration({
+    inboundDispatch: { applicationHwmBytes: 1024n },
+    channels: {
+      route: {
+        routeMesh: {
+          bind: 'tcp://127.0.0.1:0',
+          maxMessageSize: 0
+        }
+      }
+    }
+  }));
+});
+
 test('Node registration rejects subscriber capability without matching handlers', () => {
   assert.throws(
     () => framework.createFrameworkRegistration(framework.createFrameworkOptions((builder) => {
@@ -391,7 +405,23 @@ test('Node registration rejects invalid Spot timer options before startup', () =
     })),
     /overrun policy is not supported/
   );
-  assert.throws(
+  for (const maxCatchUpTicks of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 2_147_483_648]) {
+    assert.throws(
+      () => framework.createFrameworkRegistration(registrationWithTimer('spotTimerHandlers', {
+        spotType: GameSpot,
+        handlerType: TimerHandler,
+        name: 'tick',
+        periodMs: 100,
+        options: {
+          overrunPolicy: framework.ZLinkTimerOverrunPolicy.CatchUpBounded,
+          maxCatchUpTicks
+        }
+      })),
+      /MaxCatchUpTicks must be an integer from 1 through 2,147,483,647/
+    );
+  }
+
+  assert.doesNotThrow(
     () => framework.createFrameworkRegistration(registrationWithTimer('spotTimerHandlers', {
       spotType: GameSpot,
       handlerType: TimerHandler,
@@ -399,10 +429,9 @@ test('Node registration rejects invalid Spot timer options before startup', () =
       periodMs: 100,
       options: {
         overrunPolicy: framework.ZLinkTimerOverrunPolicy.CatchUpBounded,
-        maxCatchUpTicks: 0
+        maxCatchUpTicks: 2_147_483_647
       }
-    })),
-    /MaxCatchUpTicks must be greater than zero/
+    }))
   );
 });
 

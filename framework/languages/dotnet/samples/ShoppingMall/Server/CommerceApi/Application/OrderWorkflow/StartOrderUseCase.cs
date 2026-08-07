@@ -79,6 +79,7 @@ internal sealed class OrderStartPreparation(ICommerceStateStore commerce)
             request.ShippingAddressId,
             request.PaymentMethodId,
             request.IdempotencyKey,
+            $"start:{request.IdempotencyKey}",
             cart.Lines,
             cart.Amount,
             cart.Currency);

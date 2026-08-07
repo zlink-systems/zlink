@@ -99,6 +99,31 @@ const MULTIPART_PACKET_NAME = SERVICE_FRAMEWORK_MULTIPART_PACKET_NAME;
 const MULTIPART_CONTENT_TYPE = SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE;
 const FATAL_UTF8 = new TextDecoder('utf-8', { fatal: true });
 const MAX_DRAIN_RECORDS = 64;
+const MESH_BACKEND_POLL_INTERVAL_MS = 1;
+const MESH_RECEIVE_BATCH_BYTE_LIMIT = 4 * 1024 * 1024;
+const MESH_RECEIVE_BATCH_TIME_LIMIT_MS = 2;
+
+class ZLinkMeshReceiveBatchBudget {
+  private readonly peerMessages = new Map<string, number>();
+  private readonly peerBytes = new Map<string, number>();
+  private startedAtMs = 0;
+
+  reset(nowMs: number): void {
+    this.peerMessages.clear();
+    this.peerBytes.clear();
+    this.startedAtMs = nowMs;
+  }
+
+  record(peer: string, byteCount: number, nowMs: number): boolean {
+    const messages = (this.peerMessages.get(peer) ?? 0) + 1;
+    const bytes = (this.peerBytes.get(peer) ?? 0) + byteCount;
+    this.peerMessages.set(peer, messages);
+    this.peerBytes.set(peer, bytes);
+    return messages >= MAX_DRAIN_RECORDS
+      || bytes >= MESH_RECEIVE_BATCH_BYTE_LIMIT
+      || nowMs - this.startedAtMs >= MESH_RECEIVE_BATCH_TIME_LIMIT_MS;
+  }
+}
 
 /**
  * M6A MeshNode backend. Stateful Spot/Actor entry points stay explicit until
@@ -131,14 +156,33 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   private activeCapacityLimit = 10_000;
   private pendingCapacityLimit = 128;
   private objectCapabilities: readonly string[] = [];
+  private maintenanceWave?: string;
   private inboundMessageDropped?: (
     surface: 'node' | 'channel',
     messageKind: 'send',
     reason: 'backpressure'
   ) => void;
+  private mailboxRecordDropped?: (record: {
+    readonly kind: 'spot_multicast' | 'actor_control' | 'actor_binding';
+    readonly owner: string;
+  }) => void;
+  private protocolError?: (record: {
+    readonly sourceNodeRid: string;
+    readonly request: boolean;
+    readonly replied: boolean;
+    readonly command?: number;
+  }) => void;
   private messageFollowHandler?: (
     record: import('../../foundation/service-stateful-wire-codec').ServiceMessageFollowRecord
   ) => void;
+  private readonly peerDisconnectedHandlers = new Set<(endpoint: string) => void>();
+  private readonly receiveBatchBudget = new ZLinkMeshReceiveBatchBudget();
+  private observedPumpSourceRoutingId?: string;
+  private observedPumpByteCount = 0;
+  private readonly observePump = (sourceRoutingId: string, byteCount: number): void => {
+    this.observedPumpSourceRoutingId = sourceRoutingId;
+    this.observedPumpByteCount = byteCount;
+  };
 
   constructor(
     private readonly meshName: string,
@@ -159,6 +203,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     readonly activeCapacityLimit: number;
     readonly pendingCapacityLimit: number;
     readonly objectCapabilities: readonly string[];
+    readonly maintenanceWave?: string;
   }): void {
     this.requireNotStarted();
     this.objectRole = options.role;
@@ -175,6 +220,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       'pendingCapacityLimit'
     );
     this.objectCapabilities = [...new Set(options.objectCapabilities)].sort();
+    this.maintenanceWave = options.maintenanceWave;
   }
 
   setInboundMessageDroppedHandler(handler: (
@@ -183,6 +229,27 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     reason: 'backpressure'
   ) => void): void {
     this.inboundMessageDropped = handler;
+  }
+
+  setMailboxRecordDroppedHandler(handler: (record: {
+    readonly kind: 'spot_multicast' | 'actor_control' | 'actor_binding';
+    readonly owner: string;
+  }) => void): void {
+    this.mailboxRecordDropped = handler;
+    this.stateful?.setMailboxDropHandler(handler);
+  }
+
+  setProtocolErrorHandler(handler: (record: {
+    readonly sourceNodeRid: string;
+    readonly request: boolean;
+    readonly replied: boolean;
+    readonly command?: number;
+  }) => void): void {
+    this.protocolError = handler;
+  }
+
+  onPeerDisconnected(handler: (endpoint: string) => void): void {
+    this.peerDisconnectedHandlers.add(handler);
   }
 
   selectObjectPlacement(stableType: string): ZLinkBackendObjectPlacement {
@@ -290,6 +357,12 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       bindingPort: this.bindingPort,
       onInboundMessageDropped: (surface, messageKind, reason) =>
         this.inboundMessageDropped?.(surface, messageKind, reason),
+      onProtocolError: (record) => this.protocolError?.({
+        sourceNodeRid: record.sourceRoutingId,
+        request: record.request,
+        replied: record.replied,
+        ...(record.command === undefined ? {} : { command: record.command })
+      }),
       onPeerNotRequired: (nodeRoutingId, endpoint) => {
         for (const [intent, peer] of this.peerIntents) {
           if (
@@ -302,6 +375,17 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
             this.peerIntents.delete(intent);
           }
         }
+      },
+      onPeerDisconnected: (nodeRoutingId, endpoint) => {
+        for (const [intentId, peer] of this.peerIntents) {
+          if (
+            peer.endpoint === endpoint
+            && (peer.nodeRoutingId === undefined || peer.nodeRoutingId === nodeRoutingId)
+          ) {
+            this.peerIntents.delete(intentId);
+          }
+        }
+        for (const handler of this.peerDisconnectedHandlers) handler(endpoint);
       }
     });
     runtime.start();
@@ -310,6 +394,9 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       descriptor.nodeRoutingId,
       descriptor.lifecycleGeneration
     );
+    if (this.mailboxRecordDropped !== undefined) {
+      this.stateful.setMailboxDropHandler(this.mailboxRecordDropped);
+    }
     this.stateful.setMessageFollowHandler((record) => this.messageFollowHandler?.(record));
     this.runtime = runtime;
     this.schedulePoll();
@@ -1276,8 +1363,8 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       state: 'preparing',
       // Plaintext RouteMesh peers use the shared default admission identity.
       securityIdentity: 'default',
-      effectiveMaxMessageBytes: 4 * 1024 * 1024,
       applicationVersion: 0n,
+      ...(this.maintenanceWave === undefined ? {} : { maintenanceWave: this.maintenanceWave }),
       protocolCapabilities: [
         'framework-service-v11',
         ...this.objectCapabilities
@@ -1300,7 +1387,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       } finally {
         this.schedulePoll();
       }
-    }, 1);
+    }, MESH_BACKEND_POLL_INTERVAL_MS);
     this.pollTimer.unref();
   }
 
@@ -1311,10 +1398,23 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     // Completion progress is independent from Application receive. A future
     // Application HWM pause may skip pumpOne(), but must keep this call.
     runtime.progressCompletion();
-    for (let index = 0; index < MAX_DRAIN_RECORDS; index++) {
-      const result = runtime.pumpOne();
+    this.receiveBatchBudget.reset(performance.now());
+    for (;;) {
+      this.observedPumpSourceRoutingId = undefined;
+      const result = runtime.pumpOne(performance.now(), this.observePump);
       if (result === 'noData') break;
       if (result === 'application') this.readyHandler?.(ReadyDomain.Application);
+      const sourceRoutingId = this.observedPumpSourceRoutingId;
+      // Core ROUTER advances its fair-queue cursor after each complete
+      // multipart message, so the next poll resumes from the following pipe.
+      if (
+        sourceRoutingId !== undefined
+        && this.receiveBatchBudget.record(
+          sourceRoutingId,
+          this.observedPumpByteCount,
+          performance.now()
+        )
+      ) break;
     }
     runtime.announceExpectedPeers();
     runtime.tickLiveness();
@@ -1870,7 +1970,10 @@ class MailboxClaim implements RawClaim {
       try {
         decoded = decodeMultipartRecord(this.runtime, record);
       } catch (error) {
-        if (error instanceof ServiceWireProtocolError) continue;
+        if (error instanceof ServiceWireProtocolError) {
+          this.runtime.mailbox.releaseClaimedPayload(record);
+          continue;
+        }
         throw error;
       }
       const nextParts = decoded.parts.length;
@@ -1887,6 +1990,7 @@ class MailboxClaim implements RawClaim {
       parts += nextParts;
       bytes += nextBytes;
       records.push(decoded);
+      this.runtime.mailbox.releaseClaimedPayload(record);
     }
     return { ok: records.length > 0, records };
   }

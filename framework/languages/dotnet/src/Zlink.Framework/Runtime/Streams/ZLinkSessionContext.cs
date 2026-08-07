@@ -156,7 +156,8 @@ internal sealed class ZLinkSessionContext : IZLinkSessionContext
     internal async ValueTask<ZLinkOneWaySubmitResult> SubmitAsync(
         Message payload,
         CancellationToken cancellationToken,
-        bool isReply = false)
+        bool isReply = false,
+        TimeSpan? admissionTimeout = null)
     {
         var completionPermit = isReply ? _currentCompletionPermit : null;
         if (completionPermit is not null)
@@ -187,7 +188,8 @@ internal sealed class ZLinkSessionContext : IZLinkSessionContext
                 result = await _sendSubmitter.SubmitSingleAsync(
                         payload,
                         pending => Write(pending),
-                        cancellationToken)
+                        cancellationToken,
+                        admissionTimeout)
                     .ConfigureAwait(false);
             }
 

@@ -3,7 +3,7 @@
 [C++ exact interface table of contents](README.en.md)
 
 <!-- framework-adapter-nav:start -->
-[Spec table of contents](README.en.md) | [Previous: C++ System Structure](../01-system-structure.en.md) | [Next: C++ HTTP Hosting](../60-http-hosting.ko.md)
+[Spec table of contents](README.en.md) | [Previous: C++ System Structure](../01-system-structure.en.md) | [Next: C++ HTTP Hosting](../60-http-hosting.en.md)
 <!-- framework-adapter-nav:end -->
 
 [Spec table of contents](../../../../../README.en.md)
@@ -342,17 +342,18 @@ state** and isn't a public contract.
 
 ### 7.1 Dispatch Error Contract
 
-A dispatch failure doesn't make a separate event type — it's expressed
-as [Monitoring §2](08-monitoring.en.md#2-message-flow-observation)'s
-`message_flow_event_t`. The closed value and conditional field rule of
-`surface`, `message_kind`, `reason`, `action` is owned by
-[Message Flow Tracing §3-§4](../../../../26-message-flow-tracing.en.md).
+A dispatch failure isn't expressed as a public event type. The Framework
+writes structured log/trace/metric records to standard providers the
+application configured, and doesn't expose a callback observer, error
+sink, or raw event DTO. A provider failure doesn't change the original
+dispatch result. The exact declaration of diagnostic levels is owned by
+[Monitoring §2](08-monitoring.en.md#2-message-flow-diagnostics).
 
 ### 7.2 Dispatch Execution Policy
 
 `handler_execution_t` distinguishes how a handler executes. The exact
-declaration of dispatch diagnostics, message-flow, and error event is
-owned by the [Monitoring interface](08-monitoring.en.md).
+declaration of dispatch and message-flow diagnostic levels is owned by
+the [Monitoring interface](08-monitoring.en.md).
 
 ### 7.3 Worker
 
@@ -415,5 +416,5 @@ are owned by
 
 ---
 <!-- framework-adapter-nav:bottom:start -->
-[Spec table of contents](README.en.md) | [Previous: C++ System Structure](../01-system-structure.en.md) | [Next: C++ HTTP Hosting](../60-http-hosting.ko.md)
+[Spec table of contents](README.en.md) | [Previous: C++ System Structure](../01-system-structure.en.md) | [Next: C++ HTTP Hosting](../60-http-hosting.en.md)
 <!-- framework-adapter-nav:bottom:end -->

@@ -65,7 +65,7 @@ process, connection이나 Store record를 다음 실행에서 재사용하지 �
 Runner는 process의 port가 열렸다는 사실만으로 messaging 준비가 끝났다고 판단하지 않는다. Consumer가
 공개 RouteMesh status에서 필요한 peer와 Channel target을 `ready`로 보고한 뒤에 client scenario를
 시작한다. 상태 변경은 status stream이나 bounded evidence wait로 확인하며 고정 sleep으로 대신하지
-않는다. 기본 대기 시간은 [E2E README §2.1](README.ko.md#21-로컬-e2e-대기-기준)을 따른다.
+않는다. 기본 대기 시간은 [E2E README — 로컬 E2E 대기 기준](README.ko.md#21-로컬-e2e-대기-기준)을 따른다.
 
 Client는 consumer의 업무 endpoint를 호출하여 message를 시작한다. 성공 여부는 다음 evidence를 함께
 사용해 판정한다.
@@ -349,8 +349,8 @@ reply를 다음 request의 결과로 사용하거나 끝난 request를 두 번�
 우선순위: `P0`
 
 Provider에 packet handler가 없으면 request caller는 대상 업무를 처리할 수 없다는 결과를 받아야 한다.
-Send는 source queue가 수락한 뒤에는 이미 정상 완료될 수 있으므로, provider가 public message-flow
-observer callback으로 받은 dispatch 결과를 application evidence에 기록한다.
+Send는 source queue가 수락한 뒤에는 이미 정상 완료될 수 있으므로, provider의 application logger
+provider가 받은 dispatch 결과를 application evidence에 기록한다.
 
 **검증 질문:** 미등록 packet의 request는 `NotFound`로 끝나고 send는 application handler를 실행하지
 않는가.
@@ -358,8 +358,8 @@ observer callback으로 받은 dispatch 결과를 application evidence에 기록
 - 시작 조건: Provider에는 scenario에서 사용할 unknown packet identity의 handler가 없다.
 - 절차: Client가 consumer endpoint를 통해 unknown request를 한 번 보내고, 다른 marker의 unknown send를
   한 번 보낸다. 이어서 정상 profile request를 보낸다.
-- 검증: Unknown request는 `NotFound`로 한 번만 끝나고 observer evidence에는 `no_handler`와
-  `reply_error`가 기록된다. Unknown send는 reply payload 없이 끝나며 observer evidence에는
+- 검증: Unknown request는 `NotFound`로 한 번만 끝나고 logger evidence에는 `no_handler`와
+  `reply_error`가 기록된다. Unknown send는 reply payload 없이 끝나며 logger evidence에는
   `no_handler`와 `drop`이 기록된다. 두 message 모두 application handler 실행은 `0`건이다. 정상
   request는 영향 없이 reply를 받는다.
 - 세부 동작: [Channel messaging §5](../spec/08-channel-messaging.ko.md),
@@ -405,8 +405,8 @@ scenario는 SS transport에 listener 상한을 추가하지 않고, 여러 크�
   request를 한 번 더 보낸다.
 - 검증: 각 payload request는 입력과 같은 길이와 checksum의 reply를 받고 provider handler가 한 번
   실행된다. 마지막 정상 request도 reply를 받으며, payload 일부만 전달된 evidence가 없다.
-- 세부 동작: [RouteMesh topology §8](../spec/07-channel-topology.ko.md)의 SS 경계를 확인한다.
-  StreamNode 상한은 [STREAM session §4](../spec/19-stream-session.ko.md#4-stream-socket-message-size)에서
+- 세부 동작: [RouteMesh SS message 크기와 mailbox 상한](../spec/07-channel-topology.ko.md#8-routemesh-ss-message-크기와-mailbox-상한)의 SS 경계를 확인한다.
+  StreamNode 상한은 [STREAM session — Framework 내부 recv loop와 application 표면](../spec/19-stream-session.ko.md#4-framework-내부-recv-loop와-application-표면)에서
   별도로 정의한다.
 
 #### RM-C9 Application HWM 도달 뒤 수신을 재개한다

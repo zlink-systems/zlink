@@ -6,6 +6,7 @@
 #include <zlink/framework.hpp>
 #include <zlink/locations/redis.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <map>
 #include <memory>
@@ -13,6 +14,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <utility>
 
 namespace e2e = zlink::e2e::to_actor_messaging;
 
@@ -61,10 +63,14 @@ class actor_route_connections_t
   public:
     actor_route_connections_t (zlink::framework::mesh_peer_connections_t connections,
                                std::string actor_endpoint,
-                               std::string actor_b_endpoint) :
+                               std::string actor_b_endpoint,
+                               zlink::routing_id_t actor_rid,
+                               zlink::routing_id_t actor_b_rid) :
         _connections (std::move (connections)),
         _actor_endpoint (std::move (actor_endpoint)),
-        _actor_b_endpoint (std::move (actor_b_endpoint))
+        _actor_b_endpoint (std::move (actor_b_endpoint)),
+        _actor_rid (std::move (actor_rid)),
+        _actor_b_rid (std::move (actor_b_rid))
     {
     }
 
@@ -76,14 +82,16 @@ class actor_route_connections_t
 
     void reconnect ()
     {
-        _connections.connect (_actor_endpoint);
-        _connections.connect (_actor_b_endpoint);
+        _connections.connect (_actor_rid, _actor_endpoint);
+        _connections.connect (_actor_b_rid, _actor_b_endpoint);
     }
 
   private:
     zlink::framework::mesh_peer_connections_t _connections;
     std::string _actor_endpoint;
     std::string _actor_b_endpoint;
+    zlink::routing_id_t _actor_rid;
+    zlink::routing_id_t _actor_b_rid;
 };
 
 std::string kind_name (zlink::framework::framework_error_kind_t kind)
@@ -92,7 +100,9 @@ std::string kind_name (zlink::framework::framework_error_kind_t kind)
         case zlink::framework::framework_error_kind_t::not_found:
             return "actor_route_not_found";
         case zlink::framework::framework_error_kind_t::unavailable:
-            return "actor_location_stale";
+            return "unavailable";
+        case zlink::framework::framework_error_kind_t::invalid_operation:
+            return "invalid_operation";
         case zlink::framework::framework_error_kind_t::internal_failure:
             return "request_failed";
         default:
@@ -109,15 +119,11 @@ e2e::actor_call_response_t failed (const e2e::actor_call_request_t &request,
 class send_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<zlink::framework::actor_client_t,
-                                          zlink::framework::actor_directory_t>;
+    using dependency_types = zlink::framework::dependency_list_t<zlink::framework::actor_client_t>;
     using request_type = e2e::actor_call_request_t;
     using reply_type = e2e::actor_call_response_t;
 
-    send_handler_t (zlink::framework::actor_client_t &actors,
-                    zlink::framework::actor_directory_t &directory) :
-        _actors (actors), _directory (directory)
+    explicit send_handler_t (zlink::framework::actor_client_t &actors) : _actors (actors)
     {
     }
 
@@ -125,9 +131,6 @@ class send_handler_t
     handle (const e2e::actor_call_request_t &request)
     {
         try {
-            if (!(co_await _directory.find (request.actor_id)))
-                co_return e2e::actor_call_response_t{
-                  request.scenario, request.actor_id, "", "actor_route_not_found"};
             e2e::actor_notify_t notify{request.scenario, request.actor_id, request.value};
             co_await _actors
               .send (zlink::framework::actor_id_t (request.actor_id), notify)
@@ -141,21 +144,16 @@ class send_handler_t
 
   private:
     zlink::framework::actor_client_t &_actors;
-    zlink::framework::actor_directory_t &_directory;
 };
 
 class request_handler_t
 {
   public:
-    using dependency_types =
-      zlink::framework::dependency_list_t<zlink::framework::actor_client_t,
-                                          zlink::framework::actor_directory_t>;
+    using dependency_types = zlink::framework::dependency_list_t<zlink::framework::actor_client_t>;
     using request_type = e2e::actor_call_request_t;
     using reply_type = e2e::actor_call_response_t;
 
-    request_handler_t (zlink::framework::actor_client_t &actors,
-                       zlink::framework::actor_directory_t &directory) :
-        _actors (actors), _directory (directory)
+    explicit request_handler_t (zlink::framework::actor_client_t &actors) : _actors (actors)
     {
     }
 
@@ -163,9 +161,6 @@ class request_handler_t
     handle (const e2e::actor_call_request_t &request)
     {
         try {
-            if (!(co_await _directory.find (request.actor_id)))
-                co_return e2e::actor_call_response_t{
-                  request.scenario, request.actor_id, "", "actor_route_not_found"};
             e2e::actor_ask_t ask{request.scenario, request.actor_id, request.value};
             auto reply = co_await _actors.request (zlink::framework::actor_id_t (request.actor_id), ask)
                            .timeout (std::chrono::seconds (5))
@@ -180,7 +175,6 @@ class request_handler_t
 
   private:
     zlink::framework::actor_client_t &_actors;
-    zlink::framework::actor_directory_t &_directory;
 };
 
 class location_handler_t
@@ -283,6 +277,43 @@ class request_captured_handler_t
     captured_actor_refs_t &_captured;
 };
 
+class destroy_captured_handler_t
+{
+  public:
+    using dependency_types =
+      zlink::framework::dependency_list_t<zlink::framework::actor_manager_t,
+                                          captured_actor_refs_t>;
+    using request_type = e2e::actor_call_request_t;
+    using reply_type = e2e::actor_call_response_t;
+
+    destroy_captured_handler_t (zlink::framework::actor_manager_t &actors,
+                                captured_actor_refs_t &captured) :
+        _actors (actors), _captured (captured)
+    {
+    }
+
+    zlink::framework::task_t<e2e::actor_call_response_t>
+    handle (const e2e::actor_call_request_t &request)
+    {
+        const auto actor_ref = _captured.find (request.actor_id);
+        if (!actor_ref)
+            co_return e2e::actor_call_response_t{request.scenario, request.actor_id, "",
+                                                 "actor_route_not_found"};
+        try {
+            const auto destroyed = co_await _actors.destroy (*actor_ref);
+            co_return e2e::actor_call_response_t{
+              request.scenario, request.actor_id, destroyed ? "destroyed" : "", ""};
+        }
+        catch (const zlink::framework::framework_exception_t &error) {
+            co_return failed (request, error);
+        }
+    }
+
+  private:
+    zlink::framework::actor_manager_t &_actors;
+    captured_actor_refs_t &_captured;
+};
+
 class disconnect_routes_handler_t
 {
   public:
@@ -329,6 +360,41 @@ class reconnect_routes_handler_t
     actor_route_connections_t &_routes;
 };
 
+class route_status_handler_t
+{
+  public:
+    using dependency_types =
+      zlink::framework::dependency_list_t<e2e::caller_configuration_t,
+                                          zlink::framework::route_mesh_runtime_t>;
+
+    route_status_handler_t (const e2e::caller_configuration_t &configuration,
+                            zlink::framework::route_mesh_runtime_t &runtime) :
+        _configuration (configuration), _runtime (runtime)
+    {
+    }
+
+    zlink::framework::http_response_t handle (
+      const zlink::framework::http_request_t &)
+    {
+        const auto snapshot = _runtime.snapshot (e2e::spot_mesh_name);
+        const auto target = zlink::routing_id_t::from (_configuration.actor_b_rid);
+        const auto found = std::find_if (
+          snapshot.peers.begin (), snapshot.peers.end (), [&] (const auto &peer) {
+              return peer.node_rid == target;
+          });
+        zlink::framework::http_response_t response;
+        response.body = found != snapshot.peers.end ()
+                          && found->state == zlink::framework::peer_state_t::ready
+                        ? "ready"
+                        : "not_ready";
+        return response;
+    }
+
+  private:
+    const e2e::caller_configuration_t &_configuration;
+    zlink::framework::route_mesh_runtime_t &_runtime;
+};
+
 } // namespace
 
 int main (int argc, char **argv)
@@ -364,7 +430,9 @@ int main (int argc, char **argv)
         framework.services ().add_singleton<actor_route_connections_t> (
           std::make_unique<actor_route_connections_t> (
             mesh.peer_connections (), configuration.actor_spot_endpoint,
-            configuration.actor_b_spot_endpoint));
+            configuration.actor_b_spot_endpoint,
+            zlink::routing_id_t::from (configuration.actor_rid),
+            zlink::routing_id_t::from (configuration.actor_b_rid)));
         framework.http ()
           .listen (configuration.http_endpoint)
           .map_health ("/health")
@@ -373,8 +441,10 @@ int main (int argc, char **argv)
           .map_post<location_handler_t> ("/location")
           .map_post<capture_ref_handler_t> ("/capture-ref")
           .map_post<request_captured_handler_t> ("/request-captured")
+          .map_post<destroy_captured_handler_t> ("/destroy-captured")
           .map_post<disconnect_routes_handler_t> ("/route/disconnect")
-          .map_post<reconnect_routes_handler_t> ("/route/reconnect");
+          .map_post<reconnect_routes_handler_t> ("/route/reconnect")
+          .map_post<route_status_handler_t> ("/route/status");
     });
     return app.run (argc, argv);
 }

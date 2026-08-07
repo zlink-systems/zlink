@@ -80,9 +80,10 @@ customer actor 위치를 먼저 조회하고, 없을 때만 `getOrCreate(...)`�
 - `timeout 300s ./run_sample.sh` 통과: `deliverydispatch-reassignment=completed`,
   `deliverydispatch-server-evidence=completed`, `deliverydispatch=completed`,
   `deliverydispatch full client/server self-check completed` marker를 확인했다.
-- runner cleanup은 각 server role의 종료 코드를 검사하며 정상 종료 또는 SIGTERM 종료 외의
-  SIGABRT, SIGKILL과 timeout을 실패로 판정한다. 30초 bounded grace의 clean 재실행에서 모든 role이
-  허용 종료 코드로 끝났다.
+- runner cleanup은 각 server role의 종료 코드와 Framework의 최종
+  `ZLINK_FRAMEWORK_TERMINATION outcome=STOPPED reason=NONE` marker를 검사한다. marker가 없거나
+  `FORCE_STOPPED`, deadline 초과, SIGKILL, cleanup 실패가 발생하면 성공으로 판정하지 않는다. public
+  30초 drain deadline 뒤의 bounded cleanup은 최대 90초 동안 관찰한다.
 - `nice -n 15 timeout 600s ./run_sample.sh` 통과: `deliverydispatch full client/server self-check completed`
 - `System.getProperty`·`System.getenv` 애플리케이션 코드 금지 gate와 JVM system property 주입 부재 검사를 통과했다.
 - TicTacToe에만 허용된 endpoint 인자 `enableClient`, `connectRouter`, `connectPeerPub` 금지 gate와 전체 runner를 통과했다.

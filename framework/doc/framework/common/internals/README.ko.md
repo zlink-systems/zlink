@@ -21,9 +21,14 @@ C++·.NET·JVM·Node.js service runtime이 **서로 다른 언어로 구현되�
 
 spec이 이미 정한 내용은 다시 적지 않고 링크만 둔다.
 
-현재 구현이 이 결정과 어긋나는 자리와 아직 검증하지 못한 항목은 구현 갭 목록을 포함한
-저장소의 작업 문서에서 별도로 관리한다. 그 목록은 이 문서의 설계를 대신하는 정본이
-아니라, 각 runtime의 확인 상태와 다음 검증 조건을 기록하는 임시 문서다.
+이 문서 묶음의 `결정`은 공개 계약이 아니라 그 계약을 만족시키는 내부 구조 결정이다. `확인할 결과`는
+spec의 공개 결과와 내부 불변 조건을 구현에서 확인하는 기준이며 새 사용자 보장을 만들지 않는다.
+공개 동작, 오류 의미나 failover 범위가 spec과 다르면 spec이 우선한다. 이 경우 internals를 spec에
+맞추거나, 공개 계약 자체를 바꿔야 하면 [공개 계약 절차](../spec/00-public-contract-governance.ko.md#4-공개-계약-절차)를
+먼저 따른다.
+
+현재 구현이 이 결정과 어긋나는 자리와 아직 검증하지 못한 항목은 이 공개 internals 문서에
+진행 상태로 기록하지 않는다. 이 문서는 구현 구조와 결정만 설명한다.
 
 ## Component와 담당 장
 
@@ -102,11 +107,11 @@ process가 각각 조회하고 기록한다. 한 묶음 안에 넣으면 그 pro
 | [3. application과 infrastructure 실행 분리](03-progress-isolation.ko.md) | handler가 멈춰 있어도 무엇이 진행해야 하는가. 왜 예약 구획이 아니라 영역 분리인가 |
 | [4. operation 완료 확정](04-completion.ko.md) | 여러 경로가 동시에 끝내려 할 때 하나만 이기게 만드는 법. 응답을 잃지 않는 법 |
 | [5. 이동 중 message 연속성](05-relocation-continuity.ko.md) | 객체가 옮겨 가는 동안 message는 어디로 가는가 |
-| [6. target 선택과 route cache](06-routing-and-cache.ko.md) | 위치 조회를 얼마나 자주 하는가. 이동 뒤 캐시가 안 죽으면 무엇이 느려지는가 |
+| [6. target 선택과 route cache](06-routing-and-cache.ko.md) | 위치 조회를 얼마나 자주 하는가. `Missing`과 owner를 사용할 수 없는 `Ready`를 어떻게 구분하는가 |
 | [7. 수신과 dispatch 루프](07-dispatch-loop.ko.md) | message마다 깨울 것인가 모아서 처리할 것인가. 무엇으로 깨우는가 |
-| [8. 객체 종류와 활성화](08-object-lifecycle.ko.md) | 세 Spot 종류를 어떻게 구분하는가. 없는 객체를 언제 만드는가 |
+| [8. 객체 종류와 활성화](08-object-lifecycle.ko.md) | 세 Spot 종류를 어떻게 구분하는가. 없는 객체를 언제 만들고 Ready owner 장애를 어떻게 처리하는가 |
 | [9. Session과 Actor 연결](09-session-binding.ko.md) | 연결을 교체하는 동안 두 곳이 같은 Actor를 가리키지 않게 하는 법 |
-| [10. Liveness와 상태 공개](10-liveness-and-state.ko.md) | 상대가 살아 있는지 어떻게 판단하는가. 언제부터 호출을 받는가 |
+| [10. Liveness와 상태 공개](10-liveness-and-state.ko.md) | 상대가 살아 있는지 어떻게 판단하는가. 그 판정이 authority를 변경하지 않게 하는 방법 |
 | [11. Payload 소유권과 복사](11-message-ownership.ko.md) | socket에서 handler까지 byte를 몇 번 복사하는가. 역직렬화는 언제 하는가 |
 | [12. Service wire protocol](12-service-wire-protocol.ko.md) | node 사이에 오가는 byte 형식과 command |
 
@@ -114,13 +119,14 @@ process가 각각 조회하고 기록한다. 한 묶음 안에 넣으면 그 pro
 위치 캐시, [7](07-dispatch-loop.ko.md)의 모아서 처리하기·깨우는 방식·timer 자원,
 [2](02-serialization.ko.md)의 실행 자원 제약, [8](08-object-lifecycle.ko.md)의 메모리 회계에 모여 있다.
 
-## 정본이 여러 곳에 있는 결정
+## 여러 장이 연결되는 구조 결정
 
-같은 주제를 여러 문서가 다루는 자리가 있다. 어긋나면 아래를 정본으로 삼는다.
+같은 주제를 여러 문서가 다루는 자리가 있다. 공개 동작은 spec을 정본으로 삼고, 내부 구조는 아래
+문서를 기준으로 맞춘다.
 
-| 주제 | 정본 |
+| 주제 | 기준 문서 |
 |---|---|
-| 대기열 포화 시 결과 | [2. Spot·Actor 실행 직렬화 「2. 실행 권한을 만들 때의 함정」](02-serialization.ko.md#2-실행-권한을-만들-때의-함정)의 계열×위치 표 |
+| 대기열 포화 시 공개 결과 | [Spot 메시징 「5.3 Spot application queue에 들어가는 작업」](../spec/12-spot-messaging.ko.md#53-spot-application-queue에-들어가는-작업)의 계열×위치 표 |
 | owner 점유 상한과 lifecycle 연속 실행 상한 | [Actor 모델 「3. Actor queue」](../spec/14-actor-model.ko.md#3-actor-queue) |
 | 대상 선택 절차와 tiebreak | [Channel 메시징 「선택 순서」](../spec/08-channel-messaging.ko.md#선택-순서) |
 | 관찰자 합치기와 유실 | [Runtime 상태와 운영 진단](../spec/24-runtime-monitoring.ko.md) |
@@ -177,7 +183,7 @@ mkdocs build --strict   # doc/site에서 실행
 |---|---|
 | Application이 호출하는 API의 이름과 signature | [언어별 공개 계약](../spec/server/languages/README.ko.md) |
 | 공개 동작의 의미와 완료 조건 | [정식 spec](../spec/README.ko.md) |
-| Core가 제공하는 raw socket·transport 내부 | [Core raw runtime 내부 경계](https://zlink-systems.github.io/zlink/internals/runtime-boundary/) |
+| Core가 제공하는 raw socket·transport 내부 | [Core raw runtime 내부 경계](https://zlink-systems.github.io/zlink/ko/internals/runtime-boundary/) |
 
 네 runtime은 이 문서의 의미를 구현하지만 source나 공통 native binary를 공유하지 않는다.
 

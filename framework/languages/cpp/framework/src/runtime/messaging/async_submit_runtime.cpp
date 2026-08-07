@@ -4,9 +4,11 @@
 #include "runtime/dispatch/offload_executor.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
+#include <iostream>
 #include <iterator>
 #include <map>
 #include <mutex>
@@ -19,6 +21,21 @@ namespace zlink::framework::runtime::messaging
 {
 namespace
 {
+
+std::atomic<std::size_t> logical_multicast_post_completion_failures{0};
+
+void observe_logical_multicast_post_completion_failure (
+  const char *message) noexcept
+{
+    logical_multicast_post_completion_failures.fetch_add (
+      1, std::memory_order_relaxed);
+    try {
+        std::clog << "zlink logical multicast failed after caller completion: "
+                  << (message != nullptr ? message : "unknown failure") << '\n';
+    }
+    catch (...) {
+    }
+}
 
 zlink::framework::runtime::offload_executor_t &blocking_call_executor ()
 {
@@ -711,13 +728,24 @@ class logical_multicast_executor_t
             // after this handoff and cannot change the caller's completed result.
             job.completion->complete (result_t<void>::success ());
             try {
-                (void) job.work ();
+                const auto result = job.work ();
+                if (!result) {
+                    const auto *error = result.error ();
+                    observe_logical_multicast_post_completion_failure (
+                      error != nullptr ? error->what () : "publisher returned failure");
+                }
             }
-            catch (const framework_exception_t &) {
+            catch (const framework_exception_t &error) {
+                observe_logical_multicast_post_completion_failure (
+                  error.what ());
             }
-            catch (const std::exception &) {
+            catch (const std::exception &error) {
+                observe_logical_multicast_post_completion_failure (
+                  error.what ());
             }
             catch (...) {
+                observe_logical_multicast_post_completion_failure (
+                  "publisher threw a non-standard exception");
             }
             release_slot ();
         }
@@ -804,6 +832,18 @@ void note_submit_attempt (std::string target,
     has_attempt_context = true;
 }
 
+void limit_submit_attempt_timeout (std::chrono::milliseconds timeout)
+{
+    if (!has_attempt_context) {
+        last_attempt_context = {
+          "*", nullptr, 0,
+          std::min (std::chrono::milliseconds (1000), timeout), 1024};
+        has_attempt_context = true;
+        return;
+    }
+    last_attempt_context.timeout = std::min (last_attempt_context.timeout, timeout);
+}
+
 void notify_submit_ready (const std::string &target, const void *owner)
 {
     runtime ().notify (target, owner);
@@ -842,6 +882,12 @@ void reset_async_submit_runtime_for_tests ()
 std::size_t multicast_worker_count_for_tests ()
 {
     return multicast_executor ().worker_count ();
+}
+
+std::size_t multicast_post_completion_failure_count_for_tests ()
+{
+    return logical_multicast_post_completion_failures.load (
+      std::memory_order_relaxed);
 }
 
 void wait_for_idle_multicast_executor_for_tests ()

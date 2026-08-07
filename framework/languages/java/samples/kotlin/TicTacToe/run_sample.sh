@@ -27,6 +27,8 @@ redis_container_id=""
 redis_key_prefix="zlink:tictactoe-kotlin:${RANDOM}:$$:room:"
 run_dir="$(mktemp -d)"
 log_dir="${run_dir}/logs"
+ZLINK_SAMPLE_FRAMEWORK_ROLE_LOGS="play-a.log play-b.log api-a.log api-b.log"
+ZLINK_SAMPLE_FAILURE_LOG_PREFIX="tictactoe-kotlin"
 mkdir -p "${log_dir}"
 
 cleanup_sample() {
@@ -35,12 +37,6 @@ cleanup_sample() {
   set +e
   cleanup
   local cleanup_status="$?"
-  if [[ "${status}" != "0" && -n "${ZLINK_SAMPLE_FAILURE_LOG_ROOT:-}" ]]; then
-    local preserved_dir="${ZLINK_SAMPLE_FAILURE_LOG_ROOT}/tictactoe-kotlin-$(date +%Y%m%d-%H%M%S)-$$"
-    mkdir -p "${preserved_dir}"
-    cp -a "${log_dir}/." "${preserved_dir}/"
-    echo "TicTacToe Kotlin failure logs: ${preserved_dir}" >&2
-  fi
   rm -rf "${run_dir}"
   if [[ "${status}" != "0" ]]; then
     exit "${status}"
@@ -211,10 +207,11 @@ wait_endpoint api-a-http "http://127.0.0.1:${api_a_http_port}"
 pids+=("$!")
 wait_log_contains "${log_dir}/api-b.log" "Started ApiProgram"
 wait_endpoint api-b-http "http://127.0.0.1:${api_b_http_port}"
+wait_framework_ready_logs "${log_dir}"
 
 # The Play ports can accept traffic before the peer Route Mesh connection has
 # converged. Let the process topology settle before the first actor request.
-topology_settle_seconds="${ZLINK_SAMPLE_TOPOLOGY_SETTLE_SECONDS:-10}"
+topology_settle_seconds="${ZLINK_SAMPLE_TOPOLOGY_SETTLE_SECONDS:-30}"
 sleep "${topology_settle_seconds}"
 
 "$(app_bin Client Client)" --api-url "http://127.0.0.1:${api_a_http_port}" >"${log_dir}/client.log" 2>&1

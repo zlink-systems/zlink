@@ -1,4 +1,4 @@
-[한국어](04-eventing.ko.md) | English
+[한국어](https://zlink-systems.github.io/zlink/ko/bindings/reference/java/04-eventing/) | English
 
 [Reference index](README.en.md)
 

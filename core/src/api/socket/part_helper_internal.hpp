@@ -61,6 +61,8 @@ struct send_sequence_spec_t
     bool has_text1;
     bool has_text2;
     bool request_like;
+    uint64_t transport_pair_id;
+    uint64_t transport_pair_generation;
 };
 
 struct send_sequence_state_t
@@ -86,6 +88,8 @@ struct recv_sequence_state_t
     bool return_source_rid_as_null;
     zlink_routing_id_t source_node_rid;
     uint64_t request_seq;
+    uint64_t transport_pair_id;
+    uint64_t transport_pair_generation;
     uint8_t message_type;
     std::string topic_id;
     std::vector<zlink_msg_t> buffered_parts;
@@ -127,6 +131,9 @@ int stage_recv_sequence (const std::shared_ptr<handle_state_t> &state_,
 void set_recv_metadata (recv_sequence_state_t *recv_,
                         const zlink_routing_id_t *source_node_rid_,
                         uint64_t request_seq_);
+void set_recv_transport_pair (recv_sequence_state_t *recv_,
+                               uint64_t transport_pair_id_,
+                               uint64_t transport_pair_generation_);
 int buffer_recv_parts (recv_sequence_state_t *recv_, zlink_msg_t *parts_, size_t part_count_);
 int take_recv_part (recv_sequence_state_t *recv_,
                     zlink_msg_t *part_out_,
@@ -137,6 +144,9 @@ int take_recv_part (const std::shared_ptr<handle_state_t> &state_,
 void export_recv_metadata (const std::shared_ptr<handle_state_t> &state_,
                            const zlink_routing_id_t **source_node_rid_out_,
                            uint64_t *request_seq_out_);
+void export_recv_transport_pair (const std::shared_ptr<handle_state_t> &state_,
+                                  uint64_t *transport_pair_id_out_,
+                                  uint64_t *transport_pair_generation_out_);
 void reset_send_sequence (send_sequence_state_t *state_);
 void reset_recv_sequence (recv_sequence_state_t *state_);
 bool aggregate_send_mode_active ();

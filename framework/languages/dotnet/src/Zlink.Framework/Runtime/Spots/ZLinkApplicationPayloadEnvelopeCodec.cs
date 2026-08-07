@@ -120,30 +120,14 @@ internal static class ZLinkApplicationPayloadEnvelopeCodec
         IReadOnlyList<Message> parts)
     {
         ArgumentNullException.ThrowIfNull(parts);
-        return EncodeFrameworkMultipartCore(parts, null);
-    }
-
-    internal static byte[] EncodeFrameworkMultipart(
-        IReadOnlyList<Message> parts,
-        long maximumEncodedBytes)
-    {
-        ArgumentNullException.ThrowIfNull(parts);
-        return EncodeFrameworkMultipartCore(parts, maximumEncodedBytes);
+        return EncodeFrameworkMultipartCore(parts);
     }
 
     internal static byte[] EncodeFrameworkMultipart(
         IReadOnlyList<ReadOnlyMemory<byte>> parts)
     {
         ArgumentNullException.ThrowIfNull(parts);
-        return EncodeFrameworkMultipartCore(parts, null);
-    }
-
-    internal static byte[] EncodeFrameworkMultipart(
-        IReadOnlyList<ReadOnlyMemory<byte>> parts,
-        long maximumEncodedBytes)
-    {
-        ArgumentNullException.ThrowIfNull(parts);
-        return EncodeFrameworkMultipartCore(parts, maximumEncodedBytes);
+        return EncodeFrameworkMultipartCore(parts);
     }
 
     internal static long GetFrameworkMultipartEncodedLength(
@@ -180,22 +164,20 @@ internal static class ZLinkApplicationPayloadEnvelopeCodec
     }
 
     private static byte[] EncodeFrameworkMultipartCore(
-        IReadOnlyList<Message> parts,
-        long? maximumEncodedBytes)
+        IReadOnlyList<Message> parts)
     {
         var encodedLength = GetFrameworkMultipartEncodedLength(parts);
-        EnsureEncodedLengthWithinBound(encodedLength, maximumEncodedBytes);
+        EnsureRepresentableEncodedLength(encodedLength);
         var result = new byte[checked((int)encodedLength)];
         WriteFrameworkMultipartEnvelope(result, parts, encodedLength);
         return result;
     }
 
     private static byte[] EncodeFrameworkMultipartCore(
-        IReadOnlyList<ReadOnlyMemory<byte>> parts,
-        long? maximumEncodedBytes)
+        IReadOnlyList<ReadOnlyMemory<byte>> parts)
     {
         var encodedLength = GetFrameworkMultipartEncodedLength(parts);
-        EnsureEncodedLengthWithinBound(encodedLength, maximumEncodedBytes);
+        EnsureRepresentableEncodedLength(encodedLength);
         var result = new byte[checked((int)encodedLength)];
         WriteFrameworkMultipartEnvelope(result, parts, encodedLength);
         return result;
@@ -238,19 +220,12 @@ internal static class ZLinkApplicationPayloadEnvelopeCodec
                 nameof(parts));
     }
 
-    private static void EnsureEncodedLengthWithinBound(
-        long encodedLength,
-        long? maximumEncodedBytes)
+    private static void EnsureRepresentableEncodedLength(long encodedLength)
     {
         if (encodedLength > int.MaxValue)
             throw new ArgumentOutOfRangeException(
                 "parts",
                 "Framework multipart payload cannot be represented by one .NET byte array.");
-        if (maximumEncodedBytes is { } maximum
-            && (maximum < 0 || encodedLength > maximum))
-            throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.CapacityExceeded,
-                "The complete application message exceeds the negotiated message bound.");
     }
 
     private static void WriteFrameworkMultipartEnvelope(

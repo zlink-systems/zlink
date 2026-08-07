@@ -55,6 +55,45 @@ runtime RID 를 기준으로 한다. framework CI gate[^ci-gate] 도 같은 범�
 - macOS x64
 - macOS ARM64
 
+## 3.1 현재 gap closure 상태
+
+아래 표는 공통 spec과 .NET 구현을 대조할 때 확인한 gap의 현재 상태를 구분한다.
+`source/unit` 통과는 코드 경계와 단위 검증이 맞는다는 뜻이며, package·실제 process·Windows
+PowerShell runner 검증을 대신하지 않는다.
+
+| Contract gap | 현재 source와 regression 근거 | 현재 상태 | 남은 evidence |
+|---|---|---|---|
+| MeshNode ROUTER의 send·receive HWM과 send·receive timeout이 방향을 유지하는가 | `ZLinkSpotNodeInitializer` → `ZLinkBackendSpotNodeWrapper` → `ZLinkManagedMeshNode`, `BackendAdapterFactoryTests.SpotNode_Router_Send_Config_RoundTrips_Through_Binding` | source/unit 반영, targeted 10/10과 fixed package verifier 통과 | Windows PowerShell runner |
+| ShoppingMall Client가 public order API만 사용하고 fixture·server evidence hook을 runner에 남기는가 | `ShoppingMallClientScenario`, `CommerceApi/Program.cs`, `ShoppingMallRegressionTests` | source/regression 18/18, build와 `shoppingmall-server-evidence=completed` 통과 | Windows PowerShell runner |
+| GameQuest Client가 raw WebSocket bridge 없이 public Stream connector를 사용하는가 | `GameApi/Program.cs`, `run_sample.sh`, `run_sample.ps1`, `GameQuest/README.ko.md` | source/build와 `gamequest-server-evidence=completed` 통과 | Windows PowerShell runner |
+| TicTacToe가 manual topology와 handler 등록을 분리하는가 | assembly scan 설정과 `TicTacToeRegressionTests` | source/regression, sample process와 Linux aggregate 통과 | Windows PowerShell runner |
+| ShoppingMall workflow message가 `sourceCommandId`를 공통 sample contract와 같이 전달하는가 | `Shared/Contracts/Messages.cs`, `StartOrderUseCase`, public continue/rebuild route와 `ShoppingMallRegressionTests` | source/regression 18/18, sample build와 process evidence 통과 | Windows PowerShell runner |
+
+이번 변경 후 `verify_packaged_contract.sh`의 fixed mode가 9개 NuGet package, assembly manifest,
+source/package public API, clean package consumer와 standalone HTTP package consumer를 모두
+통과했다. `Zlink.Framework` XML documentation은 public API 변경이 없는 runtime handoff 수정의
+현재 산출물 hash로 fixed snapshot을 갱신했으며, package gap은 남아 있지 않다.
+
+Linux에서 `run_samples.sh`를 순차 실행했을 때 TicTacToe, Bingo, SupportChat, ShoppingMall,
+DeliveryDispatch, GameQuest의 build·process evidence와 ZoneWorld의 모든 client/runner phase가
+통과했다. ZoneWorld에서도 `ZW-F1`의 resident bot 판정과 `ZW-F1-population`, `ZW-F2`, `ZW-F3`,
+`ZW-F4`를 포함해 `zoneworld=completed` marker가 기록됐다. 따라서 Linux source, package와
+실제 process aggregate gap은 닫혔다. PowerShell script는 요청한 검증 환경이 Windows이므로 Linux에서
+실행하지 않았으며, Windows PowerShell runner 결과는 별도 플랫폼 evidence로 남는다.
+
+## 3.2 UnitTest 실행 경계
+
+UnitTest assembly는 xUnit test parallelization을 전체적으로 비활성화한다. 이는 native
+socket·context·message handle, process-wide diagnostics, static runtime state, 임시 port 할당과
+비동기 continuation을 거쳐 수명이 이어질 수 있는 managed fake가 같은 suite에 함께 있기
+때문이다. class별 병렬화 allowlist는 공유 자원의 전체 범위를 항상 정확히 표현한다는 보장이
+없으므로 isolation 기준으로 사용하지 않는다.
+
+이 정책은 테스트를 삭제해 실행 시간을 줄이는 방식이 아니다. 모든 test case를 유지하며, 현재
+안정성 기준선은 전체 1,548개 test가 통과하는 직렬 실행이다. 병렬 실행 변경은 짧은 1회 실행이
+빠르다는 이유만으로 적용하지 않고, 반복된 전체 실행에서 test order 의존과 테스트 간섭이
+없다는 증거를 얻은 뒤에만 검토한다.
+
 ## 4. Channel Regression 항목
 
 | 항목 | 계층 | 통과 기준 |
@@ -65,6 +104,7 @@ runtime RID 를 기준으로 한다. framework CI gate[^ci-gate] 도 같은 범�
 | location store가 있는 subscriber에 manual endpoint 명시 | `unit` | 해당 subscriber는 manual 연결을 사용하고 다른 역할의 자동 연결에는 영향을 주지 않는다 |
 | publisher 역할에 bind endpoint 없음 | `unit` | startup validation 예외 |
 | publisher 전용 channel | `integration-single-process` | publish submit 성공 |
+| MeshNode ROUTER directional socket options | `unit`, `integration-single-process` | `ConfigureRouterSocket()`의 MaxMessageSize, send·receive HWM, mailbox budget과 send·receive timeout이 managed ROUTER에 방향을 유지해 전달된다. .NET targeted unit 10/10 통과 |
 | subscriber location-store attach | `integration-multi-process` | 원격 publish 수신 |
 | handler group mapping | `unit` | `AddZLinkHandlers...()`만으로는 전역 dispatch 대상이 되지 않고, `channel.AddHandlerGroup("...")`로 매핑한 그룹의 handler만 해당 채널에서 dispatch된다 |
 | empty fanout subscriber validation | `unit` | publish handler exposure 없는 fanout subscriber 는 빈 수신자로 허용하지 않고 startup validation 오류다 |
@@ -88,14 +128,14 @@ runtime RID 를 기준으로 한다. framework CI gate[^ci-gate] 도 같은 범�
 | channel wire multipart[^wire-multipart] | `integration-single-process` | 서버 간 channel send/request/reply가 `header`와 `payload`를 별도 message part로 보내고, handler dispatch는 header part만 보고 packet을 고른다 |
 | publish wire multipart | `integration-single-process` | `PUB/SUB` publish도 framework header와 payload를 별도 part로 유지하고, subscriber handler에는 typed payload만 전달된다 |
 
-## 4.1 Dispatch Error Observer Regression 항목
+## 4.1 Dispatch Error Structured Record Regression 항목
 
 | ID | 계층 | 테스트 위치 | 통과 기준 |
 |----|------|-------------|-----------|
-| DERR-001, DERR-007, DERR-011, DERR-014 | `unit` | `Zlink.Framework.UnitTests/Runtime/UnhandledDispatchPolicyTests.cs` | channel request handler 없음은 error reply와 observer event, channel send handler 없음은 drop과 observer event, observer 예외는 원래 dispatch 결과를 깨지 않음 |
-| DERR-002, DERR-008 | `unit` | `Zlink.Framework.UnitTests/Runtime/UnhandledDispatchPolicyTests.cs` | route request handler 없음은 error reply, route send handler 없음은 drop으로 끝나며 observer event가 남음 |
-| DERR-003, DERR-004, DERR-009, DERR-010, DERR-016 | `unit` | `Zlink.Framework.UnitTests/Runtime/UnhandledDispatchPolicyTests.cs` | SPOT route, subscription, actor dispatch 실패가 request면 error reply 또는 caller-visible error, one-way면 drop과 observer event로 끝남 |
-| DERR-005, DERR-006, DERR-013, DERR-015 | `unit` | `Zlink.Framework.UnitTests/Runtime/UnhandledDispatchPolicyTests.cs` | decode 실패와 handler 예외는 error reply 또는 관측 가능한 drop으로 끝나며, observer 미등록 시에도 기본 로그와 metric이 남음 |
+| DERR-001, DERR-007, DERR-011, DERR-014 | `unit` | `Zlink.Framework.UnitTests/Runtime/UnhandledDispatchPolicyTests.cs` | Public observer 표면이 없고, channel request handler 없음은 error reply와 `zlink.dispatch_error`, channel send handler 없음은 drop과 `zlink.dispatch_error`로 끝나며 provider 실패는 원래 dispatch 결과를 바꾸지 않음 |
+| DERR-002, DERR-008 | `unit` | `Zlink.Framework.UnitTests/Runtime/UnhandledDispatchPolicyTests.cs` | route request handler 없음은 error reply, route send handler 없음은 drop으로 끝나며 application logger/telemetry provider가 structured record를 받음 |
+| DERR-003, DERR-004, DERR-009, DERR-010, DERR-016 | `unit` | `Zlink.Framework.UnitTests/Runtime/UnhandledDispatchPolicyTests.cs` | SPOT route, subscription, actor dispatch 실패가 request면 error reply 또는 caller-visible error, one-way면 drop과 structured dispatch-error record로 끝남 |
+| DERR-005, DERR-006, DERR-013, DERR-015 | `unit` | `Zlink.Framework.UnitTests/Runtime/UnhandledDispatchPolicyTests.cs` | Decode 실패와 handler 예외는 error reply 또는 관측 가능한 drop으로 끝나며 application logger/telemetry provider에 기본 record와 metric이 남음 |
 
 ## 4.2 DI Capability Regression 항목
 
@@ -152,7 +192,7 @@ runtime RID 를 기준으로 한다. framework CI gate[^ci-gate] 도 같은 범�
 | Entry Spot actor mailbox dispatch | `EntrySpotActorDispatchTests.EntrySpotActorDispatch_ConcurrentActors_StartsOutsideEntrySpotSerialLine_AndKeepsSameActorOrdering` | Entry Spot actor packet이 actor별 입력 순서를 보존하고, 서로 다른 actor handler 시작은 Entry Spot 실행 queue에 막히지 않는다 |
 | local actor mailbox dispatch | `integration-single-process` | user Spot에 들어가지 않은 actor packet도 actor별 mailbox 순서를 따른다 |
 | user Spot actor dispatch serialization | `integration-single-process` | 같은 user Spot 안의 여러 actor packet이 Spot 실행 queue에서 순서대로 처리되어 Spot 상태가 보호된다 |
-| runtime task exception observation | `unit` | detached runtime task와 fire-and-forget handler에서 발생한 예외가 unobserved exception으로 묻히지 않고 runtime error sink 또는 logger로 관찰된다 |
+| runtime task exception observation | `unit` | detached runtime task와 fire-and-forget handler에서 발생한 예외가 unobserved exception으로 묻히지 않고 application logger provider에서 관찰된다 |
 | execution queue cancellation semantics | `unit` | queue enqueue/wait cancellation이 이미 queue에 들어간 work item의 순서를 깨거나 중간에 제거하지 않는다 |
 | Spot message follow | `integration-multi-process` | relocation 중 이전 owner에 도착한 Spot·Actor message를 current owner로 relay하고 stale route를 application에 노출하지 않는다 |
 | actor manager 생성 중복/타입 충돌 | `integration-single-process` | `IZLinkActorManager.Create(actorId, actorType).Async(...)` 중복 생성과 `GetOrCreate(actorId, actorType).Async(...)` type 충돌이 public result·typed error 계약을 지킨다 |

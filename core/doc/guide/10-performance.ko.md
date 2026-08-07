@@ -2,7 +2,7 @@
 title: "Core 성능"
 ---
 
-[English](10-performance.en.md)
+[English](10-performance.ko.md)
 
 <!-- zlink-nav:start -->
 [가이드 목록](README.ko.md) | [이전: Raw socket monitoring](06-monitoring.ko.md) | [다음: Core C API](02-core-api.ko.md)

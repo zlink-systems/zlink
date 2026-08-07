@@ -1,8 +1,13 @@
 namespace Zlink.Framework.Runtime.Spots;
 
-internal interface IZLinkSpotHandlerRegistrySink
+internal interface IZLinkInstanceSpotHandlerRegistrySink
 {
     void AddPacket<THandler>() where THandler : class;
+}
+
+internal interface IZLinkSpotHandlerRegistrySink :
+    IZLinkInstanceSpotHandlerRegistrySink
+{
 
     void AddSubscribe<THandler>(string channelName, string topic) where THandler : class;
 
@@ -59,7 +64,7 @@ internal sealed class ZLinkSpotHandlerRegistrySurface(IZLinkSpotHandlerRegistryS
 }
 
 internal sealed class ZLinkInstanceSpotHandlerRegistrySurface(
-    IZLinkSpotHandlerRegistrySink activation) : IZLinkInstanceSpotHandlerRegistry
+    IZLinkInstanceSpotHandlerRegistrySink activation) : IZLinkInstanceSpotHandlerRegistry
 {
     public void AddPacket<THandler>() where THandler : class
     {

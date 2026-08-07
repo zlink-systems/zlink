@@ -1454,6 +1454,7 @@ test('production host inventory relocates User Spot aggregate Instance Spot and 
   const targetActorStates = new Map<string, {
     spotId?: string;
     setJoinedSpot(spotId: string): void;
+    clearJoinedSpot(): void;
     setLocationGeneration(generation: bigint): void;
     setOwnerLeaseGeneration(generation: bigint): void;
     setRemoteBoundSessionTarget(target: unknown): void;
@@ -1557,6 +1558,9 @@ test('production host inventory relocates User Spot aggregate Instance Spot and 
           spotId: undefined as string | undefined,
           setJoinedSpot(spotId: string) {
             state.spotId = String(spotId);
+          },
+          clearJoinedSpot() {
+            state.spotId = undefined;
           },
           setLocationGeneration(generation: bigint) {
             events.push(`generation-published:${actorId}:${generation}`);
@@ -1678,6 +1682,10 @@ test('production host inventory relocates User Spot aggregate Instance Spot and 
   assert.ok(events.includes('restore:matchmaker-a'));
   assert.ok(events.includes('restore:room-actor'));
   assert.ok(events.includes('restore:standalone-actor'));
+  assert.ok(
+    events.indexOf('source-spot-sealed:room-a')
+      < events.indexOf('source-session-sealed:room-actor')
+  );
   assert.ok(events.includes('membership-restored:room-actor:room-a'));
   assert.ok(events.includes('queue-replayed:room-actor'));
   assert.ok(events.includes('timer-restored:room-a:1'));

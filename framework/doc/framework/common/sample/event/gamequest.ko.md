@@ -21,8 +21,8 @@ idempotency와 reset/reconcile 정책을 소유한다. GameplayStateStore는 진
 시작할 때 PlayerId, quest definition과 gameplay fact store가 준비되어 있다고 가정한다.
 Client가 join한 뒤 KillMonster action 세 건을 보내고 progress와 completion notify를 확인하면
 기본 흐름이 끝난다. 실제 room/field 전투, reward 재화 지급, Kafka 또는 Redis Streams durable
-ingest, cross-player 집계는 제외한다. Ready owner process 장애 뒤 자동 crash failover도
-제외한다.
+ingest, cross-player 집계와 planned relocation은 제외한다. Ready owner process 장애 뒤 자동 crash
+failover도 제외한다.
 
 진행 tier의 owner message는 best-effort다. 유실된 진행은 GameplayStateStore fact를 기준으로
 SyncQuestProgressReq를 실행해 보정한다. reward처럼 유실이 허용되지 않는 업무는 별도 durable
@@ -128,6 +128,7 @@ Spot direct message를 전달한다.
 | Resource | 책임 | 준비 |
 |---|---|---|
 | Location Store | peer discovery, Spot authority와 generation | 실행별 공유 Redis |
+| Relocation Store | 최초 Instance activation envelope | Location Store와 분리한 provider·key prefix를 사용하는 실행별 Redis keyspace |
 | QuestEventStore | (PlayerId, QuestId) event stream과 replay | shared durable store |
 | QuestReadModelStore | progress와 completion projection | event replay로 재생성 |
 | GameplayStateStore | kill, inventory와 mission fact | GameApi application storage |
@@ -148,6 +149,11 @@ Spot direct message를 전달한다.
 GameApi는 PlayerQuestSpot state를 직접 변경하지 않는다. QuestMission은 client session을
 종단하지 않는다. 다른 GameApi에 재접속해도 owner Spot은 logical ID로 해결되고 binding만
 현재 session으로 교체된다.
+
+`PlayerQuestSpot` factory는 `DisableRelocation`을 선택한다. 이 sample은 Missing 상태의 cold
+activation과 explicit close 뒤 새 generation만 다루며 state handoff나 planned relocation을 완료 조건으로
+두지 않는다. Relocation Store는 relocation 시연을 위해서가 아니라 최초 Instance activation record를
+보존하기 위해 등록한다.
 
 ## 5. 사용하는 Framework 요소와 선택 이유
 
@@ -507,7 +513,8 @@ sleep을 성공 기준으로 사용하지 않는다.
 
 ## 10. Smoke 실행
 
-1. 실행별 Location Store, QuestEventStore, QuestReadModelStore와 GameplayStateStore를 준비한다.
+1. 실행별 Location Store, Relocation Store, QuestEventStore, QuestReadModelStore와 GameplayStateStore를
+   준비한다. 두 Framework store는 provider와 key prefix를 분리한다.
 2. QuestMission 1·2를 시작하고 Instance factory readiness를 확인한다.
 3. GameApi 1·2를 시작하고 STREAM readiness를 확인한다.
 4. Client가 join, progress, completion, duplicate, reconnect와 reconcile scenario를 실행한다.

@@ -3,7 +3,7 @@ title: "18. DI Container · C++"
 ---
 
 <!-- framework-adapter-nav:start -->
-[Guide Home](../../../index.en.md) | [Previous: 3. Core Concepts](03-concepts.en.md) | [Next: 19. Configuration](19-configuration.ko.md)
+[Guide Home](../../../index.en.md) | [Previous: 3. Core Concepts](03-concepts.en.md) | [Next: 19. Configuration](19-configuration.en.md)
 <!-- framework-adapter-nav:end -->
 
 # 18. DI Container
@@ -253,5 +253,5 @@ only `const` methods.
 ## 9. Related Documents
 
 - The formal contract: [C++ configuration and host public contract](../../../common/spec/server/languages/cpp/interfaces/02-configuration-host.en.md)
-- Reading config values: [19. Configuration](19-configuration.ko.md)
+- Reading config values: [19. Configuration](19-configuration.en.md)
 - The list of injectable types: [13. Key Type Usage Index](13-interface-catalog.en.md)

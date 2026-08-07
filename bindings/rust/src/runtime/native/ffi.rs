@@ -1,4 +1,4 @@
-//! Raw FFI declarations for the Core 0.10.0 public header set.
+//! Raw FFI declarations for the Core 0.10.1 public header set.
 //!
 //! This module is crate-private. The declarations intentionally contain only
 //! symbols present in the candidate `zlink.h` headers copied into this crate;
@@ -369,7 +369,7 @@ pub type zlink_timer_handler_fn =
     unsafe extern "C" fn(timer: *mut c_void, fire_count: u64, userdata: *mut c_void);
 
 // ---------------------------------------------------------------------------
-// Functions exported by the candidate Core 0.10.0 headers
+// Functions exported by the candidate Core 0.10.1 headers
 // ---------------------------------------------------------------------------
 
 unsafe extern "C" {

@@ -1,8 +1,43 @@
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const test = require('node:test');
 const zlink = require('@zlink-systems/zlink');
 const framework = require('../../packages/framework/dist');
 const internal = require('../../packages/framework/dist/internal');
+const authorityKeys = require(
+  '../../packages/framework/dist/runtime/locations/authority-key-codec'
+);
+
+test('authority key codec consumes the shared fixture and rejects non-canonical input', () => {
+  const fixture = JSON.parse(fs.readFileSync(path.resolve(
+    __dirname,
+    '../../../../runtime/protocol/golden/authority-key-v1.json'
+  ), 'utf8'));
+  for (const item of fixture.cases) {
+    const globalId = Buffer.from(item.identityHex, 'hex').toString('utf8');
+    const kind = item.objectKind === 'actor' ? 'actor' : 'user_spot';
+    assert.equal(authorityKeys.encodeAuthorityKey(kind, globalId).value, item.encoded);
+    assert.deepEqual(authorityKeys.decodeAuthorityKey({ value: item.encoded }), {
+      kind,
+      globalId
+    });
+  }
+
+  const maximum = authorityKeys.encodeAuthorityKey('actor', '\0'.repeat(255));
+  assert.equal(Buffer.byteLength(maximum.value), 776);
+  assert.equal(authorityKeys.decodeAuthorityKey(maximum).globalId.length, 255);
+  for (const value of [
+    'zla1:a:01:A',
+    'zla1:a:256:' + '%00'.repeat(256),
+    'zla1:a:1:%41',
+    'zla1:a:1:%c3',
+    'zla1:a:1::',
+    'zla1:a:1:%FF'
+  ]) {
+    assert.throws(() => authorityKeys.decodeAuthorityKey({ value }), TypeError);
+  }
+});
 
 test('location runtime renews owner lease, records store failure, and recovers', async () => {
   const store = new internal.ZLinkInMemoryLocationStore(() => new Date(Date.UTC(2026, 6, 3, 0, 0, 0)));
@@ -48,6 +83,70 @@ test('location runtime reclaims immediately after the Store rejects a stale owne
   assert.notDeepEqual(runtime.currentOwnerToken, previous);
   assert.equal(runtime.ownerLeaseHealthy, true);
   assert.equal(runtime.lastError, undefined);
+});
+
+test('location runtime exact object queries preserve Ready rows as unavailable after owner loss', async () => {
+  const store = new internal.ZLinkInMemoryLocationStore();
+  const authorityStore = new internal.ZLinkInMemoryAuthorityStore({
+    isTargetLive: () => true
+  });
+  let monotonicMs = 0;
+  const runtime = runtimeFor(store, {
+    ownerId: 'owner-query',
+    authorityStore,
+    monotonicNowMs: () => monotonicMs
+  });
+  await runtime.start(rid('node-query'));
+  const target = {
+    meshName: 'play',
+    nodeRid: rid('node-query'),
+    nodeLifecycleGeneration: 1n,
+    owner: runtime.currentOwnerToken
+  };
+  const reserved = await authorityStore.reserve({
+    key: { kind: 'user_spot', globalId: 'spot-query' },
+    intent: {
+      stableType: 'player',
+      requestContentReference: 'request:spot-query',
+      requestSha256: Buffer.alloc(32, 1),
+      requestEncodedSize: 1n
+    },
+    target,
+    creatingPayload: Buffer.from('creating'),
+    capacity: {
+      actors: 0,
+      spots: 1,
+      spotType: { objectKind: 'user_spot', stableType: 'player', count: 1 }
+    }
+  });
+  assert.equal(reserved.kind, 'reserved');
+  const committed = await authorityStore.commit({
+    key: { kind: 'user_spot', globalId: 'spot-query' },
+    reservationId: reserved.reservationId,
+    expectedStoreVersion: reserved.creating.storeVersion.value,
+    target,
+    readyPayload: Buffer.from('ready')
+  });
+  assert.equal(committed.kind, 'committed');
+
+  assert.deepEqual(await runtime.findSpotLocation('spot-query'), {
+    globalId: 'spot-query',
+    objectGeneration: committed.ready.objectGeneration,
+    meshName: 'play',
+    nodeRid: rid('node-query'),
+    state: 'ready',
+    stableType: 'player'
+  });
+  assert.equal(await runtime.findActorLocation('missing'), undefined);
+
+  await store.releaseOwnerLease(runtime.currentOwnerToken);
+  monotonicMs = 6_000;
+  const unavailable = await runtime.findSpotLocation('spot-query');
+  assert.equal(unavailable.state, 'unavailable');
+  const page = await runtime.listObjectLocations({ objectKind: 'user_spot' });
+  assert.deepEqual(page.items.map((entry) => [entry.globalId, entry.state]), [
+    ['spot-query', 'unavailable']
+  ]);
 });
 
 test('location lifecycle reclaims tracked Spot and Actor rows after an owner lease generation change', async () => {
@@ -1077,6 +1176,88 @@ test('actor resolver rejects a stale membership when the same SPOT RID is recrea
   assert.equal(current.objectGeneration, 6n);
 });
 
+test('Spot Message Follow invalidates only resolver entries for the source owner fence', () => {
+  const resolvers = resolversFor(new internal.ZLinkInMemoryLocationStore());
+  const fence = {
+    spotId: 'spot-follow',
+    objectGeneration: 7n,
+    targetNodeRid: 'node-a',
+    targetNodeGeneration: 3n,
+    authorityOwnerGeneration: 11n,
+    ownerLeaseGeneration: 5n
+  };
+  const spotRow = {
+    meshName: 'play',
+    spotId: fence.spotId,
+    spotGeneration: fence.objectGeneration,
+    spotType: 'game',
+    ownerNodeRid: fence.targetNodeRid,
+    ownerNodeGeneration: fence.targetNodeGeneration,
+    spotKind: framework.ZLinkSpotKind.User,
+    ownerId: 'owner-a',
+    leaseGeneration: fence.ownerLeaseGeneration,
+    updatedAt: new Date(0)
+  };
+  const actorRow = {
+    meshName: 'play',
+    actorId: 'actor-follow',
+    actorType: 'player',
+    actorRef: {
+      nodeRid: fence.targetNodeRid,
+      actorId: 'actor-follow',
+      objectGeneration: 2n,
+      meshName: 'play'
+    },
+    ownerNodeRid: fence.targetNodeRid,
+    ownerNodeGeneration: fence.targetNodeGeneration,
+    spotKind: framework.ZLinkSpotKind.User,
+    spotId: fence.spotId,
+    spotGeneration: fence.objectGeneration,
+    membershipEpoch: 4n,
+    ownerId: 'owner-a',
+    leaseGeneration: fence.ownerLeaseGeneration,
+    updatedAt: new Date(0)
+  };
+  const directActorRoute = {
+    meshName: 'play',
+    actorRef: actorRow.actorRef,
+    actorType: actorRow.actorType,
+    ownerNodeGeneration: fence.targetNodeGeneration,
+    ownerId: 'owner-a',
+    ownerLeaseGeneration: fence.ownerLeaseGeneration,
+    authorityOwnerGeneration: 9n,
+    authorityStoreVersion: 'actor-version',
+    enclosingSpotRoute: {
+      routerChannelId: 'play',
+      targetNodeRid: fence.targetNodeRid,
+      spotId: fence.spotId,
+      spotKind: framework.ZLinkSpotKind.User,
+      targetSpotGeneration: fence.objectGeneration,
+      targetNodeGeneration: fence.targetNodeGeneration,
+      authorityOwnerGeneration: fence.authorityOwnerGeneration,
+      targetOwnerId: 'owner-a',
+      ownerLeaseGeneration: fence.ownerLeaseGeneration,
+      authorityStoreVersion: 'spot-version'
+    }
+  };
+  resolvers.spotRoutes.set('play\0spot-follow', { row: spotRow, expiresAtMs: Infinity });
+  resolvers.actorRoutes.set('play\0actor-follow', { row: actorRow, expiresAtMs: Infinity });
+  resolvers.directActorRoutes.set('actor-follow', { row: directActorRoute, expiresAtMs: Infinity });
+
+  assert.equal(resolvers.invalidateSpotRouteIfMatches({
+    ...fence,
+    objectGeneration: 6n
+  }), false);
+  assert.equal(resolvers.spotRoutes.size, 1);
+  assert.equal(resolvers.actorRoutes.size, 1);
+  assert.equal(resolvers.directActorRoutes.size, 1);
+
+  assert.equal(resolvers.invalidateSpotRouteIfMatches(fence), true);
+  assert.equal(resolvers.spotRoutes.size, 0);
+  assert.equal(resolvers.actorRoutes.size, 0);
+  assert.equal(resolvers.directActorRoutes.size, 0);
+});
+
 test('store location resolver returns a live remote ActorRef', async () => {
   const store = new internal.ZLinkInMemoryLocationStore();
   const runtime = runtimeFor(store, { ownerId: 'owner-a' });
@@ -1124,6 +1305,17 @@ test('Actor Message Follow invalidation preserves a newer cached owner fence', (
     expiresAtMs: Number.MAX_SAFE_INTEGER,
     storeVersion: 'v2'
   });
+  resolver.actorRoutes.set('play\0alice', {
+    row: {
+      ...actor('owner-new', 9n),
+      actorId: 'alice',
+      actorRef: route.actorRef,
+      ownerNodeRid: route.actorRef.nodeRid,
+      ownerNodeGeneration: 11n,
+      leaseGeneration: 13n
+    },
+    expiresAtMs: Number.MAX_SAFE_INTEGER
+  });
 
   assert.equal(resolver.invalidateActorRouteIfMatches({
     actorId: 'alice',
@@ -1134,6 +1326,7 @@ test('Actor Message Follow invalidation preserves a newer cached owner fence', (
     ownerLeaseGeneration: 3n
   }), false);
   assert.equal(resolver.directActorRoutes.has('alice'), true);
+  assert.equal(resolver.actorRoutes.has('play\0alice'), true);
 
   assert.equal(resolver.invalidateActorRouteIfMatches({
     actorId: 'alice',
@@ -1144,6 +1337,7 @@ test('Actor Message Follow invalidation preserves a newer cached owner fence', (
     ownerLeaseGeneration: 13n
   }), true);
   assert.equal(resolver.directActorRoutes.has('alice'), false);
+  assert.equal(resolver.actorRoutes.has('play\0alice'), false);
 });
 
 test('location spot route resolver bridges internal routed transport', async () => {
@@ -1683,7 +1877,7 @@ function runtimeFor(store, options = {}) {
   return new internal.ZLinkLocationRuntime({
     stores: {
       locationStore: options.locationStore ?? store,
-      authorityStore: store,
+      authorityStore: options.authorityStore ?? store,
       peerStore: store,
       spotStore: store,
       actorStore: store,
@@ -1693,6 +1887,7 @@ function runtimeFor(store, options = {}) {
     ownerId: options.ownerId,
     events: options.events,
     options: options.locationOptions,
+    monotonicNowMs: options.monotonicNowMs,
     now: () => new Date(Date.UTC(2026, 6, 3, 0, 0, 0)),
     setTimer(callback, delayMs) {
       timers.push({ callback, delayMs });

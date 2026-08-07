@@ -1,4 +1,4 @@
-한국어 | [English](README.en.md)
+한국어 | [English](https://zlink-systems.github.io/zlink/bindings/reference/node/)
 
 [Node 바인딩 스펙](../../spec/node/README.ko.md) · [Node 바인딩 가이드](../../guide/node/index.ko.md)
 

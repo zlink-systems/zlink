@@ -62,7 +62,8 @@ class dispatch_diagnostics_options_t
     }
 
     // The mode actually in effect: the live (runtime-mutable) override if installed,
-    // else the configured mode. Read live on every dispatch (relaxed atomic load).
+    // else the configured mode. Runtime entry points snapshot this value once so
+    // a change applies to the next message rather than halfway through one message.
     message_flow_log_mode_t effective_message_flow () const noexcept
     {
         return _live_mode ? _live_mode->load (std::memory_order_relaxed) : _message_flow;

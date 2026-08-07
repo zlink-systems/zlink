@@ -1,4 +1,4 @@
-한국어 | [English](03-sockets.en.md)
+한국어 | [English](https://zlink-systems.github.io/zlink/bindings/reference/python/03-sockets/)
 
 [레퍼런스 목차](README.ko.md)
 

@@ -506,6 +506,7 @@ class stream_send_call_t
     stream_send_call_t &metadata (std::string key, std::string value);
     stream_send_call_t &packet_name (std::string packet_name);
     stream_send_call_t &compress ();
+    stream_send_call_t &timeout (std::chrono::milliseconds timeout);
     task_t<void> submit ();
 
   private:

@@ -26,6 +26,7 @@ public sealed class BuilderContracts
         typeof(IZLinkMetadataPolicyBuilder),
         typeof(IZLinkEndpointConnections),
         typeof(IZLinkSocketConfig),
+        typeof(IZLinkStreamSocketConfig),
         typeof(IZLinkRouteConfig),
         typeof(IZLinkOutboundRouteConfig),
         typeof(IZLinkSpotPublisherConfig),

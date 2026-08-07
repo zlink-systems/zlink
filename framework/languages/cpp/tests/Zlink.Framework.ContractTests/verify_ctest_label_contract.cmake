@@ -41,6 +41,7 @@ set(required_labels
   connector-typed
   connector-timeout
   connector-package
+  connector-regression
   connector-perf-smoke
   connector-perf-scale
   connector-unreal-contract

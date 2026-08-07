@@ -1,6 +1,6 @@
 # ZLink Java And Kotlin Samples
 
-This directory contains Java and Kotlin samples for the public 10.0.0 framework
+This directory contains Java and Kotlin samples for the public 0.10.0 framework
 contract. Java samples are under `java/`, Kotlin samples are under `kotlin/`,
 and both languages implement the same six sample scenarios defined by the
 [common sample documents](../../../doc/framework/common/sample/README.ko.md).
@@ -45,6 +45,12 @@ change the supported sample inventory.
 TicTacToe is the only sample that configures MeshNode peers manually. Every
 other sample uses the Redis location store to resolve Spot and Actor locations
 and establish MeshNode peers.
+
+For TicTacToe, a manual endpoint is only connection intent. When the runtime
+matches that endpoint to a Redis Location Store descriptor for an object peer,
+it carries the descriptor's RID, lifecycle generation, and security identity
+through the admission handshake. The sample does not configure those values
+or call raw transport APIs.
 
 ## MeshNode And Channel Names
 
@@ -92,7 +98,13 @@ Pass language and sample paths to run a subset in the given order.
 
 Each sample runner starts role-specific Spring processes, waits for readiness,
 runs the probe or client scenario, and removes the processes and Redis
-container it created. Application role code starts only its own role.
+container it created. Application role code starts only its own role. After the
+probe completes, the runner allows up to 90 seconds to observe the runtime's
+30-second drain deadline and its bounded owner/resource cleanup before using
+SIGKILL. A Framework process that reached `ZLINK_FRAMEWORK_READY` must also
+write `ZLINK_FRAMEWORK_TERMINATION outcome=STOPPED reason=NONE`; a missing
+marker, a non-`STOPPED/NONE` result, a force kill, or cleanup failure makes the
+sample fail.
 
 Framework hosts bind endpoint, Redis, routing ID, timeout, and logging values
 from role-specific Spring configuration files. Application code does not read

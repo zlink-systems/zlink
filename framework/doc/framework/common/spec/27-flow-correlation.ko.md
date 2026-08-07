@@ -84,29 +84,29 @@ Inbound message에 형식이 올바른 `flow_id`와 `flow_origin`이 있으면 �
 - Timer callback과 lifecycle callback
 - Framework callback 밖의 application code가 시작한 첫 outbound operation
 
-Diagnostics level이 `off`이면 관측 전용 flow 처리를 모두 생략한다. 새
+Diagnostics level이 `Off`이면 관측 전용 flow 처리를 모두 생략한다. 새
 `flow_id`를 만들지 않고 inbound message의 flow field를 flow context로 만들거나
 다음 message에 복사하지 않는다. Outbound envelope에도 두 field를 추가하지 않는다.
 Client connector가 시작한 outbound request도 같은 규칙을 따른다.
 
 `correlation_id`는 request와 terminal reply를 연결하는 protocol 정보다. Diagnostics
-level이 `off`여도 request마다 만들고 reply까지 보존한다. 이 값은 tracing을 끌 때
+level이 `Off`여도 request마다 만들고 reply까지 보존한다. 이 값은 tracing을 끌 때
 제거할 수 없다.
 
 Framework는 callback 실행을 시작할 때 현재 flow context를 설정한다. Callback의
 terminal completion에서는 실행 전에 있던 context로 복원한다. Tracing이
-`off`이면 이 context를 만들거나 async-local storage에 넣지 않는다.
+`Off`이면 이 context를 만들거나 async-local storage에 넣지 않는다.
 
 실행 중 diagnostics level을 바꾸는 규칙은
 [Message flow tracing](26-message-flow-tracing.ko.md#41-실행-중에-기록-수준-변경)을
-따른다. 각 처리 지점이 `off`를 확인한 뒤에는 flow ID 생성, validation, context
+따른다. 각 처리 지점이 `Off`를 확인한 뒤에는 flow ID 생성, validation, context
 capture, envelope field 추가와 전파용 내부 message 생성을 하지 않는다. 이미
 만들어진 outbound frame에는 변경을 소급 적용하지 않는다.
 
 ## 5. 전파 규칙
 
 Message-flow tracing이 켜져 있으면 Framework는 한 작업에서 원인과 결과가 이어지는
-동안 `flow_id`와 `flow_origin`을 함께 전달한다. `off`일 때는 §4의 생략 규칙을
+동안 `flow_id`와 `flow_origin`을 함께 전달한다. `Off`일 때는 §4의 생략 규칙을
 적용한다.
 
 | 처리 경계 | 두 flow field를 보존하는 범위 |

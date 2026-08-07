@@ -17,7 +17,7 @@ trigger-only marker나 message-flow trace로 빈 runtime field를 대신하지 �
 | MON-A4A | 구현 | 기존 replacement 흐름에서 정상 종료 후 새 generation 하나만 ready이고 channel request가 복구되는지 확인한다. | 없음 |
 | MON-A4B | 구현 | 기존 replacement 흐름에서 `SIGKILL` 후 stale peer가 제거되고 새 generation 하나만 ready인지 확인한다. | 없음 |
 | MON-A5 | 구현 | Redis pause·복구에서 `zlink.runtime.location.store_changed`, degraded·ready snapshot, 성공·실패 시각과 기존 peer·request 지속을 확인한다. | 없음 |
-| MON-A6 | 구현 | public `/spot/create`로 User Spot을 만들고 placement snapshot의 active spot count와 capacity 상태를 실제 생성 결과와 대조한다. | actor count의 별도 public fixture는 현재 공통 실행에서 사용하지 않는다. |
+| MON-A6 | 구현 | `20260806-202500-3124751` 실행에서 svc-a의 Actor·Spot placement, provider별 capacity 고갈, typed `CapacityExceeded`, 삭제 후 availability 복구와 재생성을 확인했다. | 없음 |
 | MON-B1 | 부분 구현 | compile-time public member 부재 검사와 zero-target publish 뒤 snapshot·event의 publish 전용 관측값 부재 검사를 runner에 추가했다. | RuntimeMonitoring Service의 기존 SpotId·ClientServer API drift를 고친 뒤 process 실행 증거를 만들고, 막힌 remote target의 rollback·자동 재시도 부재를 추가로 확인한다. |
 | MON-B2 | 부분 구현 | local subscriber를 만든 뒤 publish하고 snapshot·event에 publish 전용 관측값이 없는지 검사하는 runner를 추가했다. | 기존 Service API drift를 고친 뒤 handler 단일 처리, 막힌 local target과 message-flow trace의 target별 결과 부재를 추가로 확인한다. |
 | MON-C1 | 구현 | RouteMesh application gate 중 request completion, claim event, 정상·느린·예외 observer 격리, sequence gap과 snapshot resync를 확인한다. | 없음 |

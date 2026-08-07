@@ -1,4 +1,4 @@
-[한국어](12-socket-options.ko.md)
+[한국어](12-socket-options.en.md)
 
 # Socket options
 
