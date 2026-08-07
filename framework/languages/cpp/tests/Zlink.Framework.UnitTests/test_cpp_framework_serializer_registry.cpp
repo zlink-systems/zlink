@@ -5,6 +5,7 @@
 #include "runtime/messaging/envelope_codec.hpp"
 
 #include <memory>
+#include <limits>
 #include <stdexcept>
 #include <string>
 
@@ -132,6 +133,37 @@ int main ()
     }
     if (!json_decode_failed) {
         return 13;
+    }
+
+    for (const auto &invalid_json : {
+           std::string ("\xef\xbb\xbf{\"value\":1}"),
+           std::string (R"({"value":1,"value":2})"),
+           std::string (R"({"nested":{"value":1,"value":2},"value":3})")}) {
+        bool profile_rejected = false;
+        try {
+            (void) serializers.get<json_payload_t> ().deserialize (
+              zlink::framework::encoded_payload_t::from_string (invalid_json));
+        }
+        catch (const zlink::framework::framework_exception_t &error) {
+            profile_rejected =
+              error.kind () == zlink::framework::framework_error_kind_t::protocol_error;
+        }
+        if (!profile_rejected) {
+            return 14;
+        }
+    }
+
+    bool non_finite_rejected = false;
+    try {
+        (void) serializers.get<double> ().serialize (
+          std::numeric_limits<double>::infinity ());
+    }
+    catch (const zlink::framework::framework_exception_t &error) {
+        non_finite_rejected =
+          error.kind () == zlink::framework::framework_error_kind_t::protocol_error;
+    }
+    if (!non_finite_rejected) {
+        return 15;
     }
 
     // Application codec configuration uses extensions. The extension registrar

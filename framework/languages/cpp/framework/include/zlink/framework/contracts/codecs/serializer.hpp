@@ -224,7 +224,8 @@ class serializer_registry_t
             if constexpr (detail::is_json_serializer_compatible_v<T>) {
                 return serializer_t<T> (
                   [] (const T &value) {
-                      const auto text = nlohmann::json (value).dump ();
+                      const auto text = codecs::json::detail::dump_profile (
+                        nlohmann::json (value));
                       return encoded_payload_t::from_bytes (
                         std::as_bytes (std::span<const char> (
                           text.data (), text.size ())));
@@ -236,7 +237,7 @@ class serializer_registry_t
                       const auto *end = begin == nullptr
                                           ? begin
                                           : begin + bytes.size ();
-                      return nlohmann::json::parse (begin, end)
+                      return codecs::json::detail::parse_profile (begin, end)
                         .template get<T> ();
                   });
             } else {

@@ -147,6 +147,8 @@ int main ()
       include_root / "zlink/framework/contracts/messaging/message.hpp");
     const auto serializer_header = read_file (
       include_root / "zlink/framework/contracts/codecs/serializer.hpp");
+    const auto framework_json_header = read_file (
+      include_root / "zlink/framework/codecs/json.hpp");
     const auto raw_fanout_owner =
       read_file (root / "framework/src/runtime/fanout/raw_fanout_owner.cpp");
     const auto raw_mesh_node_owner =
@@ -789,6 +791,21 @@ int main ()
         == std::string::npos,
       "CPP-WIRE-002",
       "RouteMesh topology still negotiates a framework message-size limit");
+
+    /* CPP-WIRE-003 — every default typed JSON entry uses the strict profile parser. */
+    for (const std::string required : {
+           "framework-json-v1 rejects a UTF-8 BOM",
+           "framework-json-v1 rejects duplicate properties",
+           "framework-json-v1 rejects non-finite numbers"}) {
+        gate.require (framework_json_header.find (required) != std::string::npos,
+                      "CPP-WIRE-003",
+                      "framework-json-v1 validation is missing: " + required);
+    }
+    for (const std::string required : {"detail::dump_profile", "detail::parse_profile"}) {
+        gate.require (serializer_header.find (required) != std::string::npos,
+                      "CPP-WIRE-003",
+                      "default typed serializer bypasses the JSON profile: " + required);
+    }
 
     /* CPP-G0-STREAM-001 — typed session handler surface. */
     gate.require (tree_contains (include_root, "typed_session_packet_handler"),
@@ -2032,8 +2049,10 @@ int main ()
     /* CPP-OWN-004 — the default JSON serializer writes and reads the encoded
      * payload directly instead of round-tripping through a binding message. */
     gate.require (
-      serializer_header.find ("nlohmann::json (value).dump ()")
+      serializer_header.find ("codecs::json::detail::dump_profile (")
           != std::string::npos
+        && serializer_header.find ("nlohmann::json (value)")
+             != std::string::npos
         && serializer_header.find (
              "payload.to_raw ().template parse_json")
              == std::string::npos
