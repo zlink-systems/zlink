@@ -281,6 +281,19 @@ Internals는 실행 owner의 각 lane이 count와 byte를 모두 예약하고 pa
 
 Application packet과 session-creation ingress 모두 complete retained bytes를 넘겨 예약하고 handler terminal에서 반납해야 한다. 작은 packet count 포화와 큰 packet byte 포화를 따로 재현하는 test가 필요하다.
 
+구현과 검증을 완료했다. `ZLinkSerialExecutionQueue`의 application admission이 retained byte를 받아 작업당
+고정비 256 byte와 함께 count·byte를 한 번에 예약하며, 기존 work item completion 경로에서 같은
+`AccountingBytes`를 반납한다. 기존 STREAM session과 session 생성 ingress는 모두 header와 payload 크기의
+합을 공통 계산 함수로 구한 뒤 이 admission에 전달한다. Host-wide inbound lease와 session execution
+reservation의 책임은 합치지 않았으며 각 owner가 자신의 수명 동안 독립적으로 byte를 보유한다.
+
+Byte exact-boundary, active work 중 byte 포화, completion 뒤 재수락과 STREAM cleanup을 포함한 focused test
+25건과 전체 .NET unit suite 1,580건이 통과했다. Packaged contract와 standalone HTTP clean consumer도
+통과했고 public API snapshot hash는
+`c1987f4b98e4fac7a30b7d038a56ee0d20e1272d00e79bdc88d3271e3c3ab958`로 유지되었다. 실제 STREAM
+연결·request를 포함하는 `ChannelEgressRouting` `CH-REG-02`는
+`logs/20260807-191555-1965910/`에서 통과했다. 이 checkpoint는 `fdca4650c2`로 `main`에 push했다.
+
 ### DOTNET-EXEC-002 — 직렬 실행 engine이 공통 기관 하나로 수렴하지 않음
 
 Internals는 Spot, session과 Actor 전달의 순서·수락·준비 집합을 다루는 실행 engine을 하나만 두고, 자리별 차이는 별도 engine이 아니라 유효 상태만 표현하는 lane policy type으로 모델링하도록 정한다(`common/internals/09-session-binding.ko.md:33-59`). 확인 기준에도 “직렬 실행 원시 타입이 runtime 안에서 하나”라고 명시한다(`:115-124`).
