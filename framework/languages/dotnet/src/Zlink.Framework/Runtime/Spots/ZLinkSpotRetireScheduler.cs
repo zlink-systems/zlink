@@ -1280,9 +1280,7 @@ internal sealed class ZLinkSpotRetireScheduler(
         var capturedJobs = await capturedJobsTask.ConfigureAwait(false);
         var actorAuthorities = await actorAuthoritiesTask
             .ConfigureAwait(false);
-        var spotKind = activation.Spot is IZLinkInstanceSpot
-            ? ZLinkPlacementObjectKind.InstanceSpot
-            : ZLinkPlacementObjectKind.UserSpot;
+        var spotKind = activation.PlacementKind;
         var spotStableType = spotKind == ZLinkPlacementObjectKind.InstanceSpot
             ? ZLinkInstanceSpotAuthorityPayloadCodec.TryDecode(
                     spot.Payload.Span, out var instanceAuthority)

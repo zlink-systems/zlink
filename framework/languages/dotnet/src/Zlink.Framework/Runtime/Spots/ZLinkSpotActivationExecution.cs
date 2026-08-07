@@ -11,7 +11,7 @@ internal sealed record ZLinkSpotRelocationApplicationState(
     ReadOnlyMemory<byte> SpotState,
     IReadOnlyDictionary<string, ReadOnlyMemory<byte>> ActorStates);
 
-internal sealed partial class ZLinkSpotActivation
+internal abstract partial class ZLinkSpotActivation
 {
     private const int MaxConcurrentRelocationAdapterCallbacks = 8;
     private readonly object _relocationReadyGate = new();
@@ -307,13 +307,7 @@ internal sealed partial class ZLinkSpotActivation
                 TaskCreationOptions.RunContinuationsAsynchronously);
     }
 
-    ValueTask<bool> IZLinkSpotContext.CloseAsync(CancellationToken cancellationToken)
-    {
-        EnsureContextOperationAllowed();
-        return _runtime.CloseCurrentSpotAsync(SpotId, cancellationToken);
-    }
-
-    ValueTask<bool> IZLinkInstanceSpotContext.CloseAsync(CancellationToken cancellationToken)
+    protected ValueTask<bool> CloseFromContextAsync(CancellationToken cancellationToken)
     {
         EnsureContextOperationAllowed();
         return _runtime.CloseCurrentSpotAsync(SpotId, cancellationToken);
@@ -436,14 +430,12 @@ internal sealed partial class ZLinkSpotActivation
         return create.Response;
     }
 
-    internal ValueTask InitializeInstanceAsync(CancellationToken cancellationToken)
+    protected ValueTask InitializeInstanceCoreAsync(CancellationToken cancellationToken)
     {
-        if (Spot is not IZLinkInstanceSpot instance)
-            throw new InvalidOperationException("The current activation is not an Instance Spot.");
         AttachNativeDispatch();
         return ExecuteSerializedAsync(
             static (activation, state, ct) => state.OnInitializeAsync(ct),
-            instance,
+            InstanceSpot,
             cancellationToken);
     }
 
@@ -779,23 +771,9 @@ internal sealed partial class ZLinkSpotActivation
     internal long LastApplicationWorkCompletedAt =>
         _serial.LastApplicationWorkCompletedAt;
 
-    private ValueTask InvokeClosingAsync(
+    protected abstract ValueTask InvokeClosingAsync(
         ZLinkSpotCloseReason reason,
-        DateTimeOffset deadline)
-    {
-        return Spot switch
-        {
-            IZLinkSpot user => ZLinkSpotClosingInvocation.InvokeAsync(
-                user.OnClosingAsync,
-                reason,
-                deadline),
-            IZLinkInstanceSpot instance => ZLinkSpotClosingInvocation.InvokeAsync(
-                instance.OnClosingAsync,
-                reason,
-                deadline),
-            _ => throw new InvalidOperationException("The SPOT lifecycle is not attached.")
-        };
-    }
+        DateTimeOffset deadline);
 
     private ValueTask ExecuteSerializedAsync(
         Func<ZLinkSpotActivation, CancellationToken, ValueTask> operation,

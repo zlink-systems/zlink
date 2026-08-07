@@ -1,10 +1,10 @@
 namespace Zlink.Framework.Runtime.Spots;
 
-internal sealed partial class ZLinkSpotActivation
+internal abstract partial class ZLinkSpotActivation
 {
     private readonly HashSet<string> _actorsLeavingForEntrySpot = new(StringComparer.Ordinal);
 
-    public ValueTask LeaveActorAsync(
+    protected internal ValueTask LeaveActorFromContextAsync(
         IZLinkActor actor,
         CancellationToken cancellationToken = default)
     {
@@ -195,7 +195,6 @@ internal sealed partial class ZLinkSpotActivation
         ArgumentNullException.ThrowIfNull(actor);
         ArgumentNullException.ThrowIfNull(actorState);
         if (ExecutionMode != ZLinkUserSpotExecutionMode.PerActor
-            || Spot is IZLinkInstanceSpot
             || actor.Context.ActorId != actorState.ActorId)
             throw new InvalidOperationException(
                 "A relocated Actor can attach only to its exact PerActor User Spot shell.");

@@ -26,6 +26,31 @@ namespace Zlink.Framework.UnitTests.Runtime;
 public sealed partial class EntrySpotActorDispatchTests
 {
     [Fact]
+    public void SpotActivationTypes_ExposeOnlyTheirLifecycleContext()
+    {
+        Assert.True(typeof(ZLinkSpotActivation).IsAbstract);
+        Assert.True(typeof(IZLinkSpotContext).IsAssignableFrom(
+            typeof(ZLinkUserSpotActivation)));
+        Assert.False(typeof(IZLinkInstanceSpotContext).IsAssignableFrom(
+            typeof(ZLinkUserSpotActivation)));
+        Assert.True(typeof(IZLinkInstanceSpotContext).IsAssignableFrom(
+            typeof(ZLinkInstanceSpotActivation)));
+        Assert.False(typeof(IZLinkSpotContext).IsAssignableFrom(
+            typeof(ZLinkInstanceSpotActivation)));
+        Assert.True(typeof(IZLinkSpotHandlerRegistrySink).IsAssignableFrom(
+            typeof(ZLinkUserSpotActivation)));
+        Assert.False(typeof(IZLinkSpotHandlerRegistrySink).IsAssignableFrom(
+            typeof(ZLinkInstanceSpotActivation)));
+
+        Assert.Contains(
+            typeof(ZLinkUserSpotActivation).GetMethods(),
+            static method => method.Name == nameof(IZLinkSpotContext.RelocationReady));
+        Assert.DoesNotContain(
+            typeof(ZLinkInstanceSpotActivation).GetMethods(),
+            static method => method.Name == nameof(IZLinkSpotContext.RelocationReady));
+    }
+
+    [Fact]
     public async Task EntrySpot_Identity_Is_FrameworkIssued_After_Node_Bind()
     {
         var services = new ServiceCollection().BuildServiceProvider();
@@ -2698,7 +2723,7 @@ public sealed partial class EntrySpotActorDispatchTests
             new ZLinkHandlerDispatcher(
                 services.GetRequiredService<IServiceScopeFactory>(),
                 registration));
-        var activation = new ZLinkSpotActivation(
+        var activation = new ZLinkUserSpotActivation(
             runtime,
             services.CreateAsyncScope(),
             new CapturingSpot(),
@@ -2756,7 +2781,7 @@ public sealed partial class EntrySpotActorDispatchTests
             new ZLinkHandlerDispatcher(
                 services.GetRequiredService<IServiceScopeFactory>(),
                 registration));
-        var activation = new ZLinkSpotActivation(
+        var activation = new ZLinkUserSpotActivation(
             runtime,
             services.CreateAsyncScope(),
             new CapturingSpot(),
@@ -2808,7 +2833,7 @@ public sealed partial class EntrySpotActorDispatchTests
             new ZLinkHandlerDispatcher(
                 services.GetRequiredService<IServiceScopeFactory>(),
                 registration));
-        var activation = new ZLinkSpotActivation(
+        var activation = new ZLinkUserSpotActivation(
             runtime,
             services.CreateAsyncScope(),
             new CapturingSpot(),
@@ -2868,7 +2893,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 await releaseCleanup.Task.ConfigureAwait(false);
             }
         };
-        var activation = new ZLinkSpotActivation(
+        var activation = new ZLinkUserSpotActivation(
             runtime,
             services.CreateAsyncScope(),
             nativeSpot,
@@ -2904,7 +2929,7 @@ public sealed partial class EntrySpotActorDispatchTests
             new ZLinkHandlerDispatcher(
                 services.GetRequiredService<IServiceScopeFactory>(),
                 registration));
-        var activation = new ZLinkSpotActivation(
+        var activation = new ZLinkUserSpotActivation(
             runtime,
             services.CreateAsyncScope(),
             new CapturingSpot(),
@@ -2939,7 +2964,7 @@ public sealed partial class EntrySpotActorDispatchTests
             new ZLinkHandlerDispatcher(
                 services.GetRequiredService<IServiceScopeFactory>(),
                 registration));
-        var activation = new ZLinkSpotActivation(
+        var activation = new ZLinkUserSpotActivation(
             runtime,
             services.CreateAsyncScope(),
             new CapturingSpot(),
@@ -3013,7 +3038,7 @@ public sealed partial class EntrySpotActorDispatchTests
             new ZLinkHandlerDispatcher(
                 services.GetRequiredService<IServiceScopeFactory>(),
                 registration));
-        var activation = new ZLinkSpotActivation(
+        var activation = new ZLinkUserSpotActivation(
             runtime,
             services.CreateAsyncScope(),
             new CapturingSpot(),
@@ -3087,7 +3112,7 @@ public sealed partial class EntrySpotActorDispatchTests
             new ZLinkHandlerDispatcher(
                 services.GetRequiredService<IServiceScopeFactory>(),
                 registration));
-        var activation = new ZLinkSpotActivation(
+        var activation = new ZLinkUserSpotActivation(
             runtime,
             scope,
             new CapturingSpot(),
@@ -3154,7 +3179,7 @@ public sealed partial class EntrySpotActorDispatchTests
             new ZLinkHandlerDispatcher(
                 services.GetRequiredService<IServiceScopeFactory>(),
                 registration));
-        var activation = new ZLinkSpotActivation(
+        var activation = new ZLinkUserSpotActivation(
             runtime,
             scope,
             new CapturingSpot(),
@@ -7296,7 +7321,7 @@ public sealed partial class EntrySpotActorDispatchTests
     }
 
     private sealed class RelocationReadyProbeSpot(
-        ZLinkSpotActivation activation,
+        ZLinkUserSpotActivation activation,
         bool failFirstRelocatedCallback = false) : IZLinkSpot
     {
         private int _relocatedCallbackCount;
