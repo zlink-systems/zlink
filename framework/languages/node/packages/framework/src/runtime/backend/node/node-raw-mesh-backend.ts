@@ -165,6 +165,12 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     readonly kind: 'spot_multicast' | 'actor_control' | 'actor_binding';
     readonly owner: string;
   }) => void;
+  private protocolError?: (record: {
+    readonly sourceNodeRid: string;
+    readonly request: boolean;
+    readonly replied: boolean;
+    readonly command?: number;
+  }) => void;
   private messageFollowHandler?: (
     record: import('../../foundation/service-stateful-wire-codec').ServiceMessageFollowRecord
   ) => void;
@@ -228,6 +234,15 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   }) => void): void {
     this.mailboxRecordDropped = handler;
     this.stateful?.setMailboxDropHandler(handler);
+  }
+
+  setProtocolErrorHandler(handler: (record: {
+    readonly sourceNodeRid: string;
+    readonly request: boolean;
+    readonly replied: boolean;
+    readonly command?: number;
+  }) => void): void {
+    this.protocolError = handler;
   }
 
   onPeerDisconnected(handler: (endpoint: string) => void): void {
@@ -339,6 +354,12 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       bindingPort: this.bindingPort,
       onInboundMessageDropped: (surface, messageKind, reason) =>
         this.inboundMessageDropped?.(surface, messageKind, reason),
+      onProtocolError: (record) => this.protocolError?.({
+        sourceNodeRid: record.sourceRoutingId,
+        request: record.request,
+        replied: record.replied,
+        ...(record.command === undefined ? {} : { command: record.command })
+      }),
       onPeerNotRequired: (nodeRoutingId, endpoint) => {
         for (const [intent, peer] of this.peerIntents) {
           if (

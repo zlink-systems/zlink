@@ -932,6 +932,58 @@ test('remote request receives CapacityExceeded when bounded mailbox admission fa
   runtime.close();
 });
 
+test('raw protocol errors reply when correlation is recoverable and always report diagnostics', () => {
+  const observed: Array<{
+    sourceRoutingId: string;
+    request: boolean;
+    replied: boolean;
+    command?: number;
+  }> = [];
+  const runtime = new RawServiceMeshRuntime({
+    descriptor: descriptor('local'),
+    onProtocolError: record => observed.push(record)
+  });
+  runtime.start();
+  let reply: readonly Uint8Array[] | undefined;
+  const internals = runtime as unknown as {
+    reportProtocolError(received: {
+      sourceRid: string;
+      requestSeq?: bigint;
+      parts: readonly Buffer[];
+      reply?(parts: readonly Uint8Array[]): void;
+    }): void;
+  };
+
+  internals.reportProtocolError({
+    sourceRid: 'peer-request',
+    requestSeq: 41n,
+    parts: [encodeNodeRequestHeader(9n)],
+    reply(parts) { reply = parts; }
+  });
+  assert.ok(reply);
+  assert.deepEqual(decodeReplyHeader(reply[0]!), {
+    correlation: 9n,
+    terminalResult: 104,
+    failureCode: 16,
+    tail: Buffer.alloc(0)
+  });
+
+  internals.reportProtocolError({
+    sourceRid: 'peer-send',
+    parts: [Buffer.from([0xff])]
+  });
+  assert.deepEqual(observed, [
+    {
+      sourceRoutingId: 'peer-request',
+      request: true,
+      replied: true,
+      command: M6aServiceWireCommand.nodeRequest
+    },
+    { sourceRoutingId: 'peer-send', request: false, replied: false }
+  ]);
+  runtime.close();
+});
+
 test('liveness uses 5s/15s defaults, reuses outstanding probes, and fences old connections', () => {
   const liveness = new ServiceLivenessRegistry();
   liveness.admit('peer', 'connection-a', 0);

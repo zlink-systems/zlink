@@ -38,11 +38,13 @@ import {
   ServiceWireProtocolError
 } from './service-wire-m6a-codec';
 import { createServiceWireCodec } from './service-wire-codec';
+import { ServiceWireFrameworkErrorCode } from './service-wire-constants.generated';
 
 export type RawServicePumpResult =
   | 'noData'
   | 'infrastructure'
   | 'application'
+  | 'dropped'
   | 'protocolError';
 
 export type RawServicePumpObserver = (
@@ -90,6 +92,12 @@ export interface RawServiceMeshRuntimeOptions {
     messageKind: 'send',
     reason: 'backpressure'
   ) => void;
+  readonly onProtocolError?: (record: {
+    readonly sourceRoutingId: string;
+    readonly request: boolean;
+    readonly replied: boolean;
+    readonly command?: number;
+  }) => void;
 }
 
 const DEFAULT_MAILBOX_LIMITS: ServiceMailboxLimits = {
@@ -178,6 +186,7 @@ export class RawServiceMeshRuntime {
   private readonly onPeerNotRequired?: RawServiceMeshRuntimeOptions['onPeerNotRequired'];
   private readonly onPeerDisconnected?: RawServiceMeshRuntimeOptions['onPeerDisconnected'];
   private readonly onInboundMessageDropped?: RawServiceMeshRuntimeOptions['onInboundMessageDropped'];
+  private readonly onProtocolError?: RawServiceMeshRuntimeOptions['onProtocolError'];
   private descriptor: ServiceNodeDescriptor;
   private host?: ZLinkRawHostPort;
   private router?: ZLinkRawRouterPort;
@@ -195,6 +204,7 @@ export class RawServiceMeshRuntime {
     this.onPeerNotRequired = options.onPeerNotRequired;
     this.onPeerDisconnected = options.onPeerDisconnected;
     this.onInboundMessageDropped = options.onInboundMessageDropped;
+    this.onProtocolError = options.onProtocolError;
   }
 
   start(): void {
@@ -613,11 +623,60 @@ export class RawServiceMeshRuntime {
     const received = router.receive(true);
     if (received === undefined) return 'noData';
     const result = this.processReceived(received, nowMs, false);
+    if (result === 'protocolError') {
+      this.reportProtocolError(received);
+    }
     observe?.(
       received.sourceRid,
       received.parts.reduce((sum, part) => sum + part.byteLength, 0)
     );
     return result;
+  }
+
+  private reportProtocolError(
+    received: import('../backend/node/node-raw-binding-port').ZLinkRawReceivedRecord
+  ): void {
+    const request = received.requestSeq !== undefined;
+    const replied = request && this.replyGenericProtocolError(received);
+    this.onProtocolError?.({
+      sourceRoutingId: received.sourceRid,
+      request,
+      replied,
+      ...protocolCommand(received.parts)
+    });
+  }
+
+  private replyGenericProtocolError(
+    received: import('../backend/node/node-raw-binding-port').ZLinkRawReceivedRecord
+  ): boolean {
+    if (received.requestSeq === undefined || received.parts.length === 0) return false;
+    try {
+      const header = decodeHeader(received.parts[0]!);
+      const correlation = header.command === M6aServiceWireCommand.nodeRequest
+        ? decodeNodeRequestHeader(received.parts[0]!)
+        : header.command === M6aServiceWireCommand.channelRequest
+          ? decodeChannelRequestHeader(received.parts[0]!).correlation
+          : undefined;
+      if (correlation === undefined) return false;
+      const reply = [encodeReplyHeader(
+        correlation,
+        RequestResult.ProtocolError,
+        ServiceWireFrameworkErrorCode.requestProtocolError
+      )];
+      if (received.reply !== undefined) {
+        received.reply(reply);
+      } else {
+        this.requireStarted().reply(
+          received.sourceRoute ?? received.sourceRid,
+          received.requestSeq,
+          reply
+        );
+      }
+      return true;
+    } catch (error) {
+      if (error instanceof ServiceWireProtocolError) return false;
+      throw error;
+    }
   }
 
   /**
@@ -648,7 +707,7 @@ export class RawServiceMeshRuntime {
         [encodeRouteMeshAdmission(M6aServiceWireCommand.hello, this.topology.localDescriptor())]
       )
         ? 'infrastructure'
-        : 'protocolError';
+        : 'dropped';
     }
     try {
       const header = decodeHeader(received.parts[0]!);
@@ -839,7 +898,7 @@ export class RawServiceMeshRuntime {
         ]);
         return 'infrastructure';
       }
-      return 'protocolError';
+      return 'dropped';
     } catch (error) {
       if (error instanceof ServiceWireProtocolError) return 'protocolError';
       throw error;
@@ -1652,6 +1711,15 @@ export class RawServiceMeshRuntime {
     return undefined;
   }
 
+}
+
+function protocolCommand(parts: readonly Uint8Array[]): { readonly command?: number } {
+  if (parts.length === 0) return {};
+  try {
+    return { command: decodeHeader(parts[0]!).command };
+  } catch {
+    return {};
+  }
 }
 
 function validCompletionControlRecord(parts: readonly Uint8Array[]): boolean {

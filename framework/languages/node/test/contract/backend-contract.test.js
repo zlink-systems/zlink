@@ -1860,3 +1860,67 @@ test('subscriber receive loop never blocks the Node event loop while polling', a
   assert.ok(waits.length > 0);
   assert.deepEqual([...new Set(waits)], [0]);
 });
+
+test('subscriber receive loop keeps receiving while an earlier handler is awaiting', async () => {
+  const queued = [messageRecord('first'), messageRecord('second')];
+  let releaseFirst;
+  const firstPending = new Promise((resolve) => { releaseFirst = resolve; });
+  let observeSecond;
+  const secondObserved = new Promise((resolve) => { observeSecond = resolve; });
+  const loop = new framework.ZLinkSubscriberReceiveLoop(
+    {
+      createReadablePoller() {
+        return {
+          wait() { return queued.length > 0; },
+          dispose() {}
+        };
+      },
+      createTopicMessage() { return { topic: '', parts: [] }; }
+    },
+    {
+      subscribe(target) {
+        const next = queued.shift();
+        if (next === undefined) return false;
+        target.topic = next.topic;
+        target.parts = next.parts;
+        return true;
+      }
+    },
+    {
+      async dispatch(topicMessage) {
+        if (topicMessage.topic === 'first') await firstPending;
+        if (topicMessage.topic === 'second') observeSecond();
+      }
+    }
+  );
+
+  const running = loop.run();
+  try {
+    await Promise.race([
+      secondObserved,
+      new Promise((_, reject) => setTimeout(
+        () => reject(new Error('Second subscriber record waited for the first handler.')),
+        1_000
+      ))
+    ]);
+  } finally {
+    releaseFirst();
+    await loop.stop();
+    await running;
+  }
+});
+
+function messageRecord(topic) {
+  return {
+    topic,
+    parts: [{
+      size() { return 0; },
+      data() { return Buffer.alloc(0); },
+      close() {}
+    }, {
+      size() { return 0; },
+      data() { return Buffer.alloc(0); },
+      close() {}
+    }]
+  };
+}

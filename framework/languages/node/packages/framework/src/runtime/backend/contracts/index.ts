@@ -84,6 +84,12 @@ export interface ZLinkBackendMeshNode {
     readonly kind: 'spot_multicast' | 'actor_control' | 'actor_binding';
     readonly owner: string;
   }) => void): void;
+  setProtocolErrorHandler?(handler: (record: {
+    readonly sourceNodeRid: string;
+    readonly request: boolean;
+    readonly replied: boolean;
+    readonly command?: number;
+  }) => void): void;
   setMessageFollowHandler?(handler: (
     record: import('../../foundation/service-stateful-wire-codec').ServiceMessageFollowRecord
   ) => void): void;

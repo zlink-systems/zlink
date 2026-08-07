@@ -283,6 +283,23 @@ export class ZLinkSpotNodeRuntimeManager {
             `MeshNode '${spotNodeName}' dropped ${record.kind} for '${record.owner}' because its mailbox is full.`
           )
         }));
+      node.setProtocolErrorHandler?.((record) =>
+        this.options.dispatchErrors?.report({
+          surface: ZLinkDispatchErrorSurface.RouteMeshChannel,
+          messageKind: record.request
+            ? ZLinkDispatchMessageKind.Request
+            : ZLinkDispatchMessageKind.Send,
+          reason: ZLinkDispatchErrorReason.InvalidFrame,
+          action: record.replied
+            ? ZLinkDispatchErrorAction.ReplyError
+            : ZLinkDispatchErrorAction.Drop,
+          channelName: spotNodeName,
+          sourceRid: record.sourceNodeRid,
+          error: new Error(
+            `MeshNode '${spotNodeName}' rejected an invalid service wire record from '${record.sourceNodeRid}'`
+            + (record.command === undefined ? '.' : ` (command ${record.command}).`)
+          )
+        }));
       let pump: ZLinkMeshDispatchPump | undefined;
       const completions = new ZLinkMeshCompletionTable();
       try {
