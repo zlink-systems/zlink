@@ -16,6 +16,12 @@
 #include "runtime/stateful/stream_session_registry.hpp"
 #include "runtime/spots/actor_transfer_coordinator.hpp"
 
+#include <zlink/Contracts/Core/context.hpp>
+#include <zlink/Contracts/Core/routing_id.hpp>
+#include <zlink/Contracts/Messaging/message.hpp>
+#include <zlink/Contracts/Messaging/operation_contracts.hpp>
+#include <zlink/Contracts/Sockets/message_socket_contracts.hpp>
+
 #include <atomic>
 #include <cassert>
 #include <chrono>
@@ -2376,6 +2382,61 @@ void verify_node_request_requires_remote_admission ()
     target.close ();
 }
 
+void verify_unadmitted_request_queue_overflow_replies_immediately ()
+{
+    mesh::raw_mesh_node_owner_t target (
+      mesh::raw_mesh_node_options_t{descriptor ("overflow-target")});
+    target.start ();
+
+    zlink::context_t context;
+    zlink::dealer_socket_t source (context);
+    source.set_routing_id (zlink::routing_id_t::from ("overflow-source"));
+    source.connect (target.endpoint ());
+    std::this_thread::sleep_for (50ms);
+
+    using native_reply_t = std::vector<zlink::message_t>;
+    std::vector<zlink::async_result_t<native_reply_t>> requests;
+    requests.reserve (1025);
+    const auto payload = protocol::encode_application_payload (
+      {"DeferredRequest", "application/json", bytes ("request")});
+    for (std::uint64_t correlation = 1; correlation <= 1025; ++correlation) {
+        auto header = zlink::message_t::from (
+          protocol::encode_node_request_header (correlation));
+        auto body = zlink::message_t::from (payload);
+        requests.emplace_back (
+          std::move (source.request ().message (header).message (body))
+            .timeout (5s)
+            .async ());
+
+        mesh::raw_mesh_pump_result_t pumped =
+          mesh::raw_mesh_pump_result_t::no_data;
+        const auto deadline = std::chrono::steady_clock::now () + 2s;
+        while (pumped == mesh::raw_mesh_pump_result_t::no_data
+               && std::chrono::steady_clock::now () < deadline) {
+            (void) target.drain_monitor_events (
+              mesh::service_liveness_registry_t::clock_t::now ());
+            pumped = target.pump_one (
+              mesh::service_liveness_registry_t::clock_t::now ());
+        }
+        assert (pumped
+                == (correlation <= 1024
+                      ? mesh::raw_mesh_pump_result_t::application
+                      : mesh::raw_mesh_pump_result_t::backpressured));
+    }
+
+    auto overflow_reply = requests.back ().get ();
+    assert (overflow_reply.size () == 1);
+    const auto reply = protocol::decode_reply_header (
+      overflow_reply.front ().to_bytes ());
+    assert (reply.correlation == 1025);
+    assert (reply.terminal_result == 106);
+    assert (
+      reply.failure_code
+      == static_cast<std::uint32_t> (
+        protocol::framework_error_code::workerQueueFull));
+    target.close ();
+}
+
 void verify_raw_relocation_replay_and_monotonic_ack ()
 {
     mesh::raw_mesh_node_owner_t source (
@@ -3987,6 +4048,7 @@ int main ()
     verify_raw_spot_and_actor_routing ();
     verify_relocated_source_reply_failure_keeps_terminal_record ();
     verify_node_request_requires_remote_admission ();
+    verify_unadmitted_request_queue_overflow_replies_immediately ();
     verify_raw_relocation_replay_and_monotonic_ack ();
     verify_raw_reply_relay_and_exact_source_ack ();
     verify_durable_reply_relay_single_winner ();

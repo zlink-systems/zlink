@@ -125,6 +125,23 @@ bool application_command (protocol::command kind) noexcept
     }
 }
 
+std::optional<std::uint64_t> application_request_correlation (
+  protocol::command kind, std::span<const std::uint8_t> header)
+{
+    switch (kind) {
+        case protocol::command::nodeRequest:
+            return protocol::decode_node_request_header (header);
+        case protocol::command::channelRequest:
+            return protocol::decode_channel_request_header (header).correlation;
+        case protocol::command::spotRequest:
+            return protocol::decode_spot_message_header (header, kind).correlation;
+        case protocol::command::actorRequest:
+            return protocol::decode_actor_message_header (header, kind).correlation;
+        default:
+            return std::nullopt;
+    }
+}
+
 std::size_t raw_received_bytes (
   const detail::backend::raw_received_t &received) noexcept
 {
@@ -2229,27 +2246,44 @@ raw_mesh_pump_result_t raw_mesh_node_owner_t::pump_one (
                 && header.flags == 0
                 && received->parts.size () == 2) {
                 const auto bytes = raw_received_bytes (*received);
-                std::lock_guard lifecycle_lock (_lifecycle_mutex);
-                if (bytes <= max_pending_unadmitted_application_bytes
-                    && _pending_unadmitted_applications.size ()
-                         < max_pending_unadmitted_applications
-                    && bytes <= max_pending_unadmitted_application_bytes
-                         - _pending_unadmitted_application_bytes) {
-                    _pending_unadmitted_application_bytes += bytes;
-                    _pending_unadmitted_applications.push_back (
-                      pending_unadmitted_application_t{
-                        std::move (*received), bytes});
-                    trace_mesh (
-                      "application-deferred reason=peer-not-admitted kind="
-                        + std::to_string (static_cast<int> (header.kind))
-                        + " pending="
-                        + std::to_string (
-                          _pending_unadmitted_applications.size ()));
-                    return raw_mesh_pump_result_t::application;
+                {
+                    std::lock_guard lifecycle_lock (_lifecycle_mutex);
+                    if (bytes <= max_pending_unadmitted_application_bytes
+                        && _pending_unadmitted_applications.size ()
+                             < max_pending_unadmitted_applications
+                        && bytes <= max_pending_unadmitted_application_bytes
+                             - _pending_unadmitted_application_bytes) {
+                        _pending_unadmitted_application_bytes += bytes;
+                        _pending_unadmitted_applications.push_back (
+                          pending_unadmitted_application_t{
+                            std::move (*received), bytes});
+                        trace_mesh (
+                          "application-deferred reason=peer-not-admitted kind="
+                            + std::to_string (static_cast<int> (header.kind))
+                            + " pending="
+                            + std::to_string (
+                              _pending_unadmitted_applications.size ()));
+                        return raw_mesh_pump_result_t::application;
+                    }
                 }
+                const auto correlation = application_request_correlation (
+                  header.kind, received->parts.front ());
+                const auto request_rejected =
+                  correlation && received->request_sequence
+                  && port->reply (
+                    detail::backend::raw_received_t{
+                      received->source_routing_id,
+                      received->request_sequence, {}},
+                    {protocol::encode_reply_header (
+                      *correlation, 106,
+                      static_cast<std::uint32_t> (
+                        protocol::framework_error_code::workerQueueFull))});
                 trace_mesh (
                   "application-drop reason=unadmitted-queue-full kind="
-                    + std::to_string (static_cast<int> (header.kind)));
+                    + std::to_string (static_cast<int> (header.kind))
+                    + " action="
+                    + (request_rejected ? "reply-worker-queue-full"
+                                        : "drop"));
                 return raw_mesh_pump_result_t::backpressured;
             }
             trace_mesh (

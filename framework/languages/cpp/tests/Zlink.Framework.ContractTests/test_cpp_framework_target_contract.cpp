@@ -118,6 +118,8 @@ int main ()
       read_file (root / "framework/src/runtime/mesh/mesh_node_runtime.cpp");
     const auto mesh_node_host_service =
       read_file (root / "framework/src/runtime/mesh/mesh_node_host_service.cpp");
+    const auto raw_mesh_node_owner =
+      read_file (root / "framework/src/runtime/mesh/raw_mesh_node_owner.cpp");
     const auto public_host_runtime =
       read_file (root / "framework/src/runtime/stateful/public_host_runtime.cpp");
     const auto monitoring_unit =
@@ -1718,6 +1720,22 @@ int main ()
           != std::string::npos,
       "CPP-DISP-005",
       "local application enqueue does not signal the MeshNode activity poll");
+
+    /* CPP-DISP-003 — a Request that cannot enter the bounded pre-admission
+     * queue receives an existing typed terminal reply instead of waiting for
+     * its transport timeout. */
+    gate.require (
+      raw_mesh_node_owner.find (
+        "application_request_correlation")
+          != std::string::npos
+        && raw_mesh_node_owner.find (
+             "protocol::framework_error_code::workerQueueFull")
+             != std::string::npos
+        && raw_mesh_node_owner.find (
+             "reply-worker-queue-full")
+             != std::string::npos,
+      "CPP-DISP-003",
+      "pre-admission Request overflow does not send a terminal capacity reply");
 
     /* CPP-DISP-004 — dequeue remains the public completion boundary, while
      * every later publisher failure reaches either the Spot structured
