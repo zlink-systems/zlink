@@ -939,8 +939,12 @@ test('stream session node runtime rejects MaxMessageSize violations on direct an
     const socket = new FakeStreamSocket();
     socket.maxMessageSize = 512;
     const events = [];
+    const errors = [];
     const runtime = createStreamRuntime({
       socket,
+      onError(error) {
+        errors.push(error);
+      },
       headerDecoder: (header) => ({ name: header.getString() }),
       sessionFactory(context) {
         return {
@@ -966,6 +970,8 @@ test('stream session node runtime rejects MaxMessageSize violations on direct an
     }
     await waitForCondition(() => socket.disconnects.length === 1, 'MaxMessageSize rejection');
     assert.deepEqual(events, []);
+    assert.equal(errors.length, 1);
+    assert.equal(errors[0].code, 'EMSGSIZE');
     await runtime.dispose();
   }
 });

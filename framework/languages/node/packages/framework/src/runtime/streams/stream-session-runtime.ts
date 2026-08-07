@@ -1056,6 +1056,7 @@ export class ZLinkStreamSessionNodeRuntime {
 
   private handleMalformedFrame(state: ZLinkStreamReceiveState, error: Error): void {
     this.removeReceiveState(state.session.stream.sessionId);
+    this.options.onError?.(error);
     try {
       this.options.socket.disconnectPeer(state.routingId as RoutingId);
     } catch (disconnectError) {
