@@ -3,6 +3,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <map>
@@ -22,6 +23,14 @@ inline constexpr const char *client_server_handler_group =
 struct admission_message_t
 {
     static constexpr const char *packet_name = "admission";
+    std::string operation_id;
+    std::uint64_t sequence = 0;
+    std::string payload;
+};
+
+struct saturation_prime_message_t
+{
+    static constexpr const char *packet_name = "saturation-prime";
     std::string operation_id;
     std::uint64_t sequence = 0;
     std::string payload;
@@ -70,6 +79,22 @@ inline void to_json (nlohmann::json &json, const admission_message_t &value)
 }
 
 inline void from_json (const nlohmann::json &json, admission_message_t &value)
+{
+    json.at ("operationId").get_to (value.operation_id);
+    json.at ("sequence").get_to (value.sequence);
+    json.at ("payload").get_to (value.payload);
+}
+
+inline void to_json (nlohmann::json &json,
+                     const saturation_prime_message_t &value)
+{
+    json = nlohmann::json{{"operationId", value.operation_id},
+                          {"sequence", value.sequence},
+                          {"payload", value.payload}};
+}
+
+inline void from_json (const nlohmann::json &json,
+                       saturation_prime_message_t &value)
 {
     json.at ("operationId").get_to (value.operation_id);
     json.at ("sequence").get_to (value.sequence);
@@ -159,6 +184,12 @@ class handler_gate_t
     {
         std::unique_lock lock (_mutex);
         _changed.wait (lock, [&] { return _open; });
+    }
+
+    bool wait_for (std::chrono::milliseconds timeout)
+    {
+        std::unique_lock lock (_mutex);
+        return _changed.wait_for (lock, timeout, [&] { return _open; });
     }
 
   private:

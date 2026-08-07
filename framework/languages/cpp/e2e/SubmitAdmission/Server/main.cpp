@@ -6,6 +6,7 @@
 #include <zlink/stream_connector.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <barrier>
 #include <chrono>
 #include <cstdint>
@@ -40,6 +41,7 @@ struct role_options_t
     std::string redis_endpoint;
     std::string redis_key_prefix;
     std::string log_dir;
+    std::uint64_t saturation_channel_count = 0;
 
     static role_options_t bind (const zlink::framework::configuration_section_t &section)
     {
@@ -59,7 +61,9 @@ struct role_options_t
                 .stream_endpoint = section.get ("streamEndpoint").value_or (""),
                 .redis_endpoint = section.require ("redis.endpoint"),
                 .redis_key_prefix = section.require ("redis.keyPrefix"),
-                .log_dir = section.require ("logDir")};
+                .log_dir = section.require ("logDir"),
+                .saturation_channel_count = static_cast<std::uint64_t> (
+                  std::stoull (section.get ("saturationChannelCount").value_or ("0")))};
     }
 };
 
@@ -156,6 +160,253 @@ class admission_handler_t
   private:
     sa::handler_gate_t &_gate;
     sa::evidence_store_t &_evidence;
+};
+
+std::string saturation_channel_name (std::uint64_t index)
+{
+    return index == 0 ? std::string (sa::channel_name)
+                      : "submit.admission.saturation." + std::to_string (index);
+}
+
+class saturation_probe_state_t
+{
+  public:
+    explicit saturation_probe_state_t (std::uint64_t request_count) :
+        request_count (request_count)
+    {
+    }
+
+    void retain (zlink::framework::task_t<void> observer)
+    {
+        std::lock_guard lock (_mutex);
+        _observers.push_back (std::move (observer));
+    }
+
+    void note_launched () noexcept { ++launched; }
+    void note_entered () noexcept { ++entered; }
+    void note_completed () noexcept { ++completed; }
+    void note_capacity_exceeded () noexcept { ++capacity_exceeded; }
+    void note_deadline_exceeded () noexcept { ++deadline_exceeded; }
+    void note_other_error () noexcept { ++other_errors; }
+
+    const std::uint64_t request_count;
+    std::atomic_uint64_t launched{0};
+    std::atomic_uint64_t entered{0};
+    std::atomic_uint64_t completed{0};
+    std::atomic_uint64_t capacity_exceeded{0};
+    std::atomic_uint64_t deadline_exceeded{0};
+    std::atomic_uint64_t other_errors{0};
+
+  private:
+    std::mutex _mutex;
+    std::vector<zlink::framework::task_t<void>> _observers;
+};
+
+zlink::framework::task_t<void> observe_saturation_request (
+  zlink::framework::task_t<sa::submit_response_t> request,
+  saturation_probe_state_t &state)
+{
+    try {
+        (void) co_await request;
+        state.note_completed ();
+    }
+    catch (const zlink::framework::framework_exception_t &error) {
+        if (error.kind ()
+            == zlink::framework::framework_error_kind_t::capacity_exceeded) {
+            state.note_capacity_exceeded ();
+        } else if (error.kind ()
+                   == zlink::framework::framework_error_kind_t::deadline_exceeded) {
+            state.note_deadline_exceeded ();
+        } else {
+            state.note_other_error ();
+        }
+    }
+    catch (const std::system_error &error) {
+        if (error.code () == std::errc::timed_out) {
+            state.note_deadline_exceeded ();
+        } else {
+            state.note_other_error ();
+        }
+    }
+    catch (...) {
+        state.note_other_error ();
+    }
+}
+
+zlink::framework::task_t<void> observe_saturation_send (
+  zlink::framework::task_t<void> submission,
+  saturation_probe_state_t &state)
+{
+    try {
+        co_await submission;
+        state.note_completed ();
+    }
+    catch (...) {
+        state.note_other_error ();
+    }
+}
+
+class saturation_send_handler_t
+{
+  public:
+    using dependency_types =
+      zlink::framework::dependency_list_t<sa::handler_gate_t,
+                                           saturation_probe_state_t>;
+
+    saturation_send_handler_t (sa::handler_gate_t &gate,
+                               saturation_probe_state_t &state) :
+        _gate (gate), _state (state)
+    {
+    }
+
+    void handle (const sa::saturation_prime_message_t &,
+                 const zlink::framework::route_message_context_t &)
+    {
+        _state.note_entered ();
+        if (!_gate.wait_for (std::chrono::seconds (60))) {
+            _gate.open ();
+        }
+        _state.note_completed ();
+    }
+
+  private:
+    sa::handler_gate_t &_gate;
+    saturation_probe_state_t &_state;
+};
+
+class saturation_request_handler_t
+{
+  public:
+    using dependency_types =
+      zlink::framework::dependency_list_t<sa::handler_gate_t,
+                                           saturation_probe_state_t>;
+
+    saturation_request_handler_t (sa::handler_gate_t &gate,
+                                  saturation_probe_state_t &state) :
+        _gate (gate), _state (state)
+    {
+    }
+
+    sa::submit_response_t handle (
+      const sa::admission_message_t &message,
+      const zlink::framework::route_message_context_t &)
+    {
+        _state.note_entered ();
+        if (!_gate.wait_for (std::chrono::seconds (60))) {
+            _gate.open ();
+        }
+        _state.note_completed ();
+        return {.operation_id = message.operation_id,
+                .status = "Handled",
+                .public_invocation_count = 1,
+                .terminal_count = 1};
+    }
+
+  private:
+    sa::handler_gate_t &_gate;
+    saturation_probe_state_t &_state;
+};
+
+class saturation_start_handler_t
+{
+  public:
+    using dependency_types =
+      zlink::framework::dependency_list_t<zlink::framework::route_client_t,
+                                           saturation_probe_state_t>;
+
+    saturation_start_handler_t (zlink::framework::route_client_t &routes,
+                                saturation_probe_state_t &state) :
+        _routes (routes), _state (state)
+    {
+    }
+
+    zlink::framework::http_response_t handle (
+      const zlink::framework::http_request_t &request)
+    {
+        const auto parse = [&request] (std::string_view name,
+                                       std::uint64_t fallback) {
+            const auto found = request.query_values.find (std::string (name));
+            return found == request.query_values.end ()
+                     ? fallback
+                     : static_cast<std::uint64_t> (std::stoull (found->second));
+        };
+        const auto start_index = parse ("startIndex", 0);
+        const auto count = parse ("count", _state.request_count);
+        const auto timeout_ms = parse ("timeoutMs", 30000);
+        const auto mode = request.query_values.find ("mode");
+        const bool send_mode =
+          mode != request.query_values.end () && mode->second == "send";
+        if (count == 0 || start_index > _state.request_count
+            || count > _state.request_count - start_index || timeout_ms == 0
+            || timeout_ms > 60000) {
+            return {.status = 400,
+                    .body = R"({"error":"saturation range is invalid"})"};
+        }
+        for (std::uint64_t offset = 0; offset < count; ++offset) {
+            const auto index = start_index + offset;
+            auto message = sa::admission_message_t{
+              .operation_id = "saturation-" + std::to_string (index),
+              .sequence = index,
+              .payload = "x"};
+            if (send_mode) {
+                auto prime = sa::saturation_prime_message_t{
+                  .operation_id = std::move (message.operation_id),
+                  .sequence = message.sequence,
+                  .payload = std::move (message.payload)};
+                auto submission =
+                  _routes.send_to_channel (
+                    saturation_channel_name (index), std::move (prime))
+                    .submit ();
+                _state.note_launched ();
+                _state.retain (observe_saturation_send (
+                  std::move (submission), _state));
+                continue;
+            }
+            auto request_task =
+              _routes
+                .request_to_channel (
+                  saturation_channel_name (index),
+                  std::move (message))
+                .timeout (std::chrono::milliseconds (timeout_ms))
+                .submit<sa::submit_response_t> ();
+            _state.note_launched ();
+            _state.retain (observe_saturation_request (
+              std::move (request_task), _state));
+        }
+        return {.body = nlohmann::json{{"launched", _state.launched.load ()}}
+                          .dump ()};
+    }
+
+  private:
+    zlink::framework::route_client_t &_routes;
+    saturation_probe_state_t &_state;
+};
+
+class saturation_status_handler_t
+{
+  public:
+    using dependency_types =
+      zlink::framework::dependency_list_t<saturation_probe_state_t>;
+    explicit saturation_status_handler_t (saturation_probe_state_t &state) :
+        _state (state)
+    {
+    }
+
+    zlink::framework::http_response_t handle (
+      const zlink::framework::http_request_t &)
+    {
+        return {.body = nlohmann::json{
+                  {"launched", _state.launched.load ()},
+                  {"entered", _state.entered.load ()},
+                  {"completed", _state.completed.load ()},
+                  {"capacityExceeded", _state.capacity_exceeded.load ()},
+                  {"deadlineExceeded", _state.deadline_exceeded.load ()},
+                  {"otherErrors", _state.other_errors.load ()}}
+                          .dump ()};
+    }
+
+  private:
+    saturation_probe_state_t &_state;
 };
 
 class node_submit_handler_t
@@ -1142,7 +1393,6 @@ void configure_mesh_role (zlink::framework::zlink_framework_options_t &framework
     if (!options.peer_endpoint.empty ()) {
         mesh.peer_connections ().connect (options.peer_endpoint);
     }
-
     auto &http = framework.http ();
     http.listen (options.http_endpoint).map_health ("/health");
     http.map_get<evidence_handler_t> ("/evidence")
@@ -1152,6 +1402,59 @@ void configure_mesh_role (zlink::framework::zlink_framework_options_t &framework
     if (options.role == "caller") {
         http.map_post<node_submit_handler_t> ("/submit/node")
           .map_post<channel_submit_handler_t> ("/submit/channel");
+    }
+}
+
+void configure_saturation_role (
+  zlink::framework::zlink_framework_options_t &framework,
+  const role_options_t &options)
+{
+    if (options.saturation_channel_count == 0) {
+        throw std::runtime_error (
+          "saturation role requires saturationChannelCount");
+    }
+    framework.add_location_store (
+      std::make_shared<zlink::framework::redis::redis_location_store_t> (
+        zlink::framework::redis::redis_location_options_t{
+          .connection_string = options.redis_endpoint,
+          .key_prefix = options.redis_key_prefix}));
+    framework.services ().add_singleton<sa::handler_gate_t> ();
+    framework.services ().add_singleton<saturation_probe_state_t> (
+      std::make_unique<saturation_probe_state_t> (
+        options.saturation_channel_count));
+
+    auto mesh = framework.add_route_mesh (sa::mesh_name);
+    mesh.listen (options.mesh_endpoint)
+      .set_routing_id (zlink::routing_id_t::from (options.rid))
+      .set_object_role (zlink::framework::object_role_t::server);
+    if (!options.peer_endpoint.empty ()) {
+        mesh.peer_connections ().connect (options.peer_endpoint);
+    }
+    for (std::uint64_t index = 0;
+         index < options.saturation_channel_count; ++index) {
+        auto channel = mesh.channel_name (saturation_channel_name (index));
+        if (options.role == "saturation-target") {
+            channel.server ()
+              .set_weight (100)
+              .add_send_handler<saturation_send_handler_t,
+                                 sa::saturation_prime_message_t> ()
+              .add_request_handler<saturation_request_handler_t,
+                                    sa::admission_message_t,
+                                    sa::submit_response_t> ();
+        } else {
+            channel.client ();
+        }
+    }
+    auto &http = framework.http ();
+    http.listen (options.http_endpoint)
+      .map_health ("/health")
+      .map_get<ready_handler_t> ("/ready")
+      .map_get<saturation_status_handler_t> ("/saturation/status");
+    if (options.role == "saturation-target") {
+        http.map_post<gate_close_handler_t> ("/gate/close")
+          .map_post<gate_open_handler_t> ("/gate/open");
+    } else {
+        http.map_post<saturation_start_handler_t> ("/saturation/start");
     }
 }
 
@@ -1358,6 +1661,9 @@ int main (int argc, char **argv)
         app.add_zlink_framework ([&] (zlink::framework::zlink_framework_options_t &framework) {
             if (options.role == "caller" || options.role == "target") {
                 configure_mesh_role (framework, options);
+            } else if (options.role == "saturation-caller"
+                       || options.role == "saturation-target") {
+                configure_saturation_role (framework, options);
             } else if (options.role == "object-client") {
                 configure_object_client_role (framework, options);
             } else if (options.role == "publisher") {

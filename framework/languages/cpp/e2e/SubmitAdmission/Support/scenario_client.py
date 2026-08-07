@@ -731,6 +731,130 @@ class Driver:
                 lambda value: value.get("handlerCompletedCount") == 1,
             )
             self.record(scenario, {"submit": result, "before": before, "after": after})
+        elif scenario == "CPP-DISP-001":
+            request_json("POST", f"{self.arguments.saturation_target_url}/gate/close")
+            with concurrent.futures.ThreadPoolExecutor(max_workers=64) as executor:
+                priming_futures = [
+                    executor.submit(
+                        request_json,
+                        "POST",
+                        f"{caller_url}/saturation/start"
+                        f"?startIndex={index * 1024 + chunk * 64}&count=64"
+                        "&timeoutMs=60000&mode=send",
+                        None,
+                        30.0,
+                    )
+                    for index, caller_url in enumerate(
+                        self.arguments.saturation_caller_url[:4]
+                    )
+                    for chunk in range(16)
+                ]
+                priming_futures.append(
+                    executor.submit(
+                        request_json,
+                        "POST",
+                        f"{self.arguments.saturation_caller_url[4]}/saturation/start"
+                        "?startIndex=4096&count=64&timeoutMs=60000&mode=send",
+                        None,
+                        30.0,
+                    )
+                )
+                priming = [future.result() for future in priming_futures]
+            request_json("GET", f"{self.arguments.saturation_target_url}/health")
+            priming_statuses = [
+                request_json("GET", f"{caller_url}/saturation/status")
+                for caller_url in self.arguments.saturation_caller_url
+            ]
+            if any(status.get("otherErrors") != 0 for status in priming_statuses):
+                raise RuntimeError(f"pump priming returned another error: {priming_statuses}")
+
+            probe_url = self.arguments.saturation_caller_url[4]
+            probe = request_json(
+                "POST",
+                f"{probe_url}/saturation/start"
+                "?startIndex=4160&count=1&timeoutMs=60000",
+            )
+            deadline = time.monotonic() + 15.0
+            while time.monotonic() < deadline:
+                request_json("GET", f"{self.arguments.saturation_target_url}/health")
+                caller_statuses = [
+                    request_json("GET", f"{caller_url}/saturation/status")
+                    for caller_url in self.arguments.saturation_caller_url
+                ]
+                if sum(
+                    status.get("capacityExceeded", 0) for status in caller_statuses
+                ) > 0:
+                    break
+                time.sleep(0.05)
+            if sum(
+                status.get("capacityExceeded", 0) for status in caller_statuses
+            ) == 0:
+                raise RuntimeError(
+                    "pump saturation did not return CapacityExceeded: "
+                    f"callers={caller_statuses}"
+                )
+            if any(status.get("otherErrors") != 0 for status in caller_statuses):
+                raise RuntimeError(
+                    f"pump saturation returned another error: {caller_statuses}"
+                )
+
+            deadline = time.monotonic() + 60.0
+            while time.monotonic() < deadline:
+                try:
+                    caller_statuses = [
+                        request_json("GET", f"{caller_url}/saturation/status")
+                        for caller_url in self.arguments.saturation_caller_url
+                    ]
+                    target_status = request_json(
+                        "GET", f"{self.arguments.saturation_target_url}/saturation/status"
+                    )
+                except TimeoutError:
+                    time.sleep(0.05)
+                    continue
+                if (
+                    all(
+                        status.get("completed", 0)
+                        + status.get("capacityExceeded", 0)
+                        + status.get("deadlineExceeded", 0)
+                        == status.get("launched", 0)
+                        for status in caller_statuses
+                    )
+                    and target_status.get("completed") == target_status.get("entered")
+                ):
+                    break
+                time.sleep(0.05)
+            else:
+                raise RuntimeError(
+                    f"saturated pump did not drain: callers={caller_statuses} target={target_status}"
+                )
+
+            recovery_before = caller_statuses[4]["completed"]
+            request_json(
+                "POST",
+                f"{probe_url}/saturation/start?startIndex=0&count=1",
+            )
+            deadline = time.monotonic() + 5.0
+            while time.monotonic() < deadline:
+                request_json("GET", f"{self.arguments.saturation_target_url}/health")
+                recovery = request_json(
+                    "GET", f"{probe_url}/saturation/status"
+                )
+                if recovery.get("completed", 0) == recovery_before + 1:
+                    break
+                time.sleep(0.025)
+            else:
+                raise RuntimeError(f"pump did not recover after saturation: {recovery}")
+            self.record(
+                scenario,
+                {
+                    "primingCallCount": len(priming),
+                    "primingStatuses": priming_statuses,
+                    "probe": probe,
+                    "saturatedCallers": caller_statuses,
+                    "saturatedTarget": target_status,
+                    "recovery": recovery,
+                },
+            )
         else:
             raise RuntimeError(
                 f"{scenario} is not implemented by the C++ Config 13 runner; "
@@ -758,11 +882,15 @@ def main():
     parser.add_argument("--actor-target-url", required=True)
     parser.add_argument("--stream-gateway-rid", required=True)
     parser.add_argument("--actor-target-rid", required=True)
+    parser.add_argument("--saturation-caller-url", action="append", required=True)
+    parser.add_argument("--saturation-target-url", required=True)
     parser.add_argument("--collector-url", required=True)
     parser.add_argument("--socket-buffer-manifest", required=True)
     parser.add_argument("--evidence", required=True)
     parser.add_argument("scenarios", nargs="+")
     arguments = parser.parse_args()
+    if len(arguments.saturation_caller_url) != 5:
+        parser.error("exactly five --saturation-caller-url values are required")
     driver = Driver(arguments)
     for scenario in arguments.scenarios:
         driver.run(scenario)

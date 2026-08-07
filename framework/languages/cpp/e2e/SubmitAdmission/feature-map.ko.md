@@ -43,6 +43,7 @@ runner는 성공으로 건너뛰지 않고 종료 코드 3을 반환한다.
 | SA-REG-03 | 해당 없음 | Kotlin 전용 result 보존 scenario다. Runner는 C++ public 계약에 따른 N/A evidence를 남긴다. |
 | SA-REG-04 | 미구현 | Focused unit fixture는 timeout·shutdown·retry terminal 뒤 waiter reservation이 0인지 확인한다. Process disposal과 send-ready event를 같은 barrier에서 발생시키고 waiter·reservation·callback 수를 확인할 observer는 아직 없다. |
 | CPP-CONTRACT-STREAM-001 | 구현 | Server STREAM과 connector peer 사이의 TCP gate를 닫아 Core send queue를 포화한다. 32 KiB packet 57건이 수락된 뒤 58번째 호출이 설정한 20 ms에 `DeadlineExceeded`로 끝나며, gate가 닫힌 동안 읽은 byte가 0인지 확인한다. Gate를 다시 연 뒤 byte forwarding과 public submit이 복구되는지도 검증한다. 이 항목은 SA-E2E-04 전체 완료를 뜻하지 않는다. |
+| CPP-DISP-001 | 구현 | 다섯 caller process가 서로 다른 4,160개 ChannelName에 public one-way send를 제출해 target MeshNode application executor를 포화한다. 4,161번째 독립 ChannelName의 Request가 `CapacityExceeded`를 받고, 포화 중 target health가 응답하며, gate 자동 해제 뒤 accepted handler drain과 같은 public request 경로의 복구를 확인한다. |
 
 ## 실행
 
@@ -55,6 +56,9 @@ runner는 성공으로 건너뛰지 않고 종료 코드 3을 반환한다.
 
 # STREAM 호출별 timeout contract만 실제 Core backpressure에서 검증한다.
 ./framework/languages/cpp/e2e/SubmitAdmission/run_e2e.sh CPP-CONTRACT-STREAM-001
+
+# MeshNode application executor 포화 거부와 process 생존·복구를 검증한다.
+./framework/languages/cpp/e2e/SubmitAdmission/run_e2e.sh CPP-DISP-001
 ```
 
 `all`은 위 표에서 실제 assertion과 evidence가 있는 항목만 실행한다. 공통 완료 gate는 `SA-E2E-01~20`과
