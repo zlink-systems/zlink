@@ -1,4 +1,4 @@
-// SF-F5: Creating owner crash 뒤 pending과 follow-up request가 각각 한 terminal을 얻는지 검증한다.
+// SF-F5: Creating owner crash 뒤 public request가 bounded recovery 결과를 얻는다 시나리오를 검증한다.
 import { postJsonWithin } from '../../../http-client';
 import type { ClientOptions } from '../Support/client-options';
 import { ensure } from '../Support/scenario-assert';

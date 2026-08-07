@@ -1,4 +1,4 @@
-// SF-F4: relocation과 explicit recreate의 ObjectGeneration 의미를 검증한다.
+// SF-F4: ObjectGeneration과 owner replacement를 public ref로 구분한다 시나리오를 검증한다.
 import { getJson, postJson, postJsonWithin } from '../../../http-client';
 import type { ClientOptions } from '../Support/client-options';
 import { ensure } from '../Support/scenario-assert';

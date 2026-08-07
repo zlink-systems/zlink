@@ -1,3 +1,4 @@
+// SF-F7: Large state relocation은 public size limit 안에서 복원한다 시나리오를 검증한다.
 import type { ClientOptions } from '../Support/client-options';
 import { getJson, postJson, postJsonWithin } from '../../../http-client';
 import { ensure } from '../Support/scenario-assert';
@@ -23,7 +24,7 @@ interface LocationResult {
 
 export async function runSFF7(options: ClientOptions): Promise<void> {
   ensure(options.providerBUrl !== undefined, 'SF-F7 provider B URL is required.');
-  const variant = process.env.F7_VARIANT;
+  const variant = options.variant;
   ensure(variant === 'boundary' || variant === 'oversize', 'SF-F7 variant is required.');
   const suffix = `${Date.now()}-${process.pid}`;
   const spotId = `sf-f7-spot-${suffix}`;

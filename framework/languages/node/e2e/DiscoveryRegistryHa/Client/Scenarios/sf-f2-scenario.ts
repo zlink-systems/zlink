@@ -1,4 +1,4 @@
-// SF-F2: 장기 capture와 Store failure 뒤 명시적으로 시작한 새 relocation을 검증한다.
+// SF-F2: 장기 relocation은 Store lease를 유지하고 실패 뒤 새 call을 허용한다 시나리오를 검증한다.
 import type { ClientOptions } from '../Support/client-options';
 import { ensure } from '../Support/scenario-assert';
 import {
@@ -13,8 +13,8 @@ import {
 
 export async function runSFF2(options: ClientOptions): Promise<void> {
   ensure(options.providerBUrl !== undefined, 'SF-F2 provider B URL is required.');
-  const variant = process.env.SF_F2_VARIANT ?? 'long';
-  const phase = process.env.SF_F2_PHASE ?? 'setup';
+  const variant = options.variant ?? 'long';
+  const phase = options.phase ?? 'setup';
   const identity = {
     actorId: `sf-f2-${variant}-actor`,
     spotId: `sf-f2-${variant}-spot`,

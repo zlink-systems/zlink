@@ -367,12 +367,14 @@ run_client() {
   local scenario="$1"
   local stdout="$2"
   local stderr="$3"
+  shift 3
   local client_config="$CONFIG_DIR/client-${scenario}.config.json"
   local -a config_args=(
     --topology-url "$LOCATION_PROBE_URL" --consumer-url "$CONSUMER_URL"
     --provider-a-url "$PROVIDER_A_URL" --scenario "$scenario"
   )
   [[ -z "$PROVIDER_B_URL" ]] || config_args+=(--provider-b-url "$PROVIDER_B_URL")
+  config_args+=("$@")
   node "$ROOT_DIR/write-config.mjs" "$client_config" "${config_args[@]}"
   if ! node "$CLIENT_MAIN" \
     --config "$client_config" \
@@ -617,9 +619,8 @@ run_sf_g3() {
 
 run_sf_f7_case() {
   local client_pid variant="${F7_VARIANT:?F7_VARIANT is required}"
-  export F7_VARIANT="$variant"
   start_topology no disabled disabled "sf-f7-$variant"
-  run_client SF-F7 "$LOG_DIR/client.stdout.log" "$LOG_DIR/client.stderr.log" &
+  run_client SF-F7 "$LOG_DIR/client.stdout.log" "$LOG_DIR/client.stderr.log" --variant "$variant" &
   client_pid="$!"
   wait_file_contains "$LOG_DIR/client.stdout.log" "scenario-control SF-F7 start-provider-b" \
     "SF-F7 client did not finish source state setup" "$client_pid" 120
@@ -658,12 +659,12 @@ run_sf_f4() {
 run_sf_f2_case() {
   local variant="$1" client_pid
   start_topology no disabled disabled sf-f2
-  SF_F2_VARIANT="$variant" SF_F2_PHASE=setup \
-    run_client SF-F2 "$LOG_DIR/client-setup.stdout.log" "$LOG_DIR/client-setup.stderr.log"
+  run_client SF-F2 "$LOG_DIR/client-setup.stdout.log" "$LOG_DIR/client-setup.stderr.log" \
+    --variant "$variant" --phase setup
   start_provider_b
   if [[ "$variant" == "long" ]]; then
-    SF_F2_VARIANT="$variant" SF_F2_PHASE=relocate \
-      run_client SF-F2 "$LOG_DIR/client.stdout.log" "$LOG_DIR/client.stderr.log" &
+    run_client SF-F2 "$LOG_DIR/client.stdout.log" "$LOG_DIR/client.stderr.log" \
+      --variant "$variant" --phase relocate &
     client_pid="$!"
     wait_file_contains "$LOG_DIR/api-a.evidence.log" "scenario-gate-held|gate=capture" \
       "SF-F2 capture did not enter the application gate" "$client_pid" 120
@@ -673,11 +674,11 @@ run_sf_f2_case() {
     wait "$client_pid"
   else
     stop_relocation_redis
-    SF_F2_VARIANT="$variant" SF_F2_PHASE=failure \
-      run_client SF-F2 "$LOG_DIR/client-failure.stdout.log" "$LOG_DIR/client-failure.stderr.log"
+    run_client SF-F2 "$LOG_DIR/client-failure.stdout.log" "$LOG_DIR/client-failure.stderr.log" \
+      --variant "$variant" --phase failure
     start_empty_relocation_redis
-    SF_F2_VARIANT="$variant" SF_F2_PHASE=recovery \
-      run_client SF-F2 "$LOG_DIR/client.stdout.log" "$LOG_DIR/client.stderr.log"
+    run_client SF-F2 "$LOG_DIR/client.stdout.log" "$LOG_DIR/client.stderr.log" \
+      --variant "$variant" --phase recovery
   fi
   cat "$LOG_DIR/client.stdout.log"
 }
@@ -690,12 +691,12 @@ run_sf_f2() {
 
 run_sf_f3() {
   start_topology no disabled disabled sf-f3
-  SF_F3_PHASE=setup run_client SF-F3 "$LOG_DIR/client-setup.stdout.log" "$LOG_DIR/client-setup.stderr.log"
+  run_client SF-F3 "$LOG_DIR/client-setup.stdout.log" "$LOG_DIR/client-setup.stderr.log" --phase setup
   start_provider_b
   stop_relocation_redis
-  SF_F3_PHASE=failure run_client SF-F3 "$LOG_DIR/client-failure.stdout.log" "$LOG_DIR/client-failure.stderr.log"
+  run_client SF-F3 "$LOG_DIR/client-failure.stdout.log" "$LOG_DIR/client-failure.stderr.log" --phase failure
   start_empty_relocation_redis
-  SF_F3_PHASE=recovery run_client SF-F3 "$LOG_DIR/client.stdout.log" "$LOG_DIR/client.stderr.log"
+  run_client SF-F3 "$LOG_DIR/client.stdout.log" "$LOG_DIR/client.stderr.log" --phase recovery
   cat "$LOG_DIR/client.stdout.log"
 }
 
@@ -729,11 +730,11 @@ run_sf_f5() {
 run_sf_f8() {
   local client_pid
   start_topology no disabled disabled sf-f8
-  SF_F8_PHASE=setup run_client SF-F8 "$LOG_DIR/client-setup.stdout.log" "$LOG_DIR/client-setup.stderr.log"
+  run_client SF-F8 "$LOG_DIR/client-setup.stdout.log" "$LOG_DIR/client-setup.stderr.log" --phase setup
   start_provider_b
   curl -fsS -X POST -H 'content-type: application/json' \
     --data '{"name":"restore"}' "$PROVIDER_B_URL/scenario-gate/close" >/dev/null
-  SF_F8_PHASE=relocate run_client SF-F8 "$LOG_DIR/client.stdout.log" "$LOG_DIR/client.stderr.log" &
+  run_client SF-F8 "$LOG_DIR/client.stdout.log" "$LOG_DIR/client.stderr.log" --phase relocate &
   client_pid="$!"
   wait_file_contains "$LOG_DIR/api-b.evidence.log" "scenario-gate-held|gate=restore" \
     "SF-F8 target restore did not enter the application gate" "$client_pid" 120
@@ -776,9 +777,9 @@ run_sf_f10() {
 run_sf_f11() {
   local client_pid
   start_topology no disabled disabled sf-f11
-  SF_F11_PHASE=setup run_client SF-F11 "$LOG_DIR/client-setup.stdout.log" "$LOG_DIR/client-setup.stderr.log"
+  run_client SF-F11 "$LOG_DIR/client-setup.stdout.log" "$LOG_DIR/client-setup.stderr.log" --phase setup
   start_provider_b
-  SF_F11_PHASE=failure run_client SF-F11 "$LOG_DIR/client-failure.stdout.log" "$LOG_DIR/client-failure.stderr.log" &
+  run_client SF-F11 "$LOG_DIR/client-failure.stdout.log" "$LOG_DIR/client-failure.stderr.log" --phase failure &
   client_pid="$!"
   wait_file_contains "$LOG_DIR/api-a.evidence.log" "scenario-gate-held|gate=capture" \
     "SF-F11 capture did not enter the application gate" "$client_pid" 120
@@ -786,9 +787,9 @@ run_sf_f11() {
   curl -fsS -X POST -H 'content-type: application/json' \
     --data '{"name":"capture"}' "$PROVIDER_A_URL/scenario-gate/open" >/dev/null
   wait "$client_pid"
-  SF_F11_PHASE=prepare-b run_client SF-F11 "$LOG_DIR/client-prepare.stdout.log" "$LOG_DIR/client-prepare.stderr.log"
+  run_client SF-F11 "$LOG_DIR/client-prepare.stdout.log" "$LOG_DIR/client-prepare.stderr.log" --phase prepare-b
   start_empty_relocation_redis
-  SF_F11_PHASE=recovery run_client SF-F11 "$LOG_DIR/client.stdout.log" "$LOG_DIR/client.stderr.log"
+  run_client SF-F11 "$LOG_DIR/client.stdout.log" "$LOG_DIR/client.stderr.log" --phase recovery
   cat "$LOG_DIR/client.stdout.log"
 }
 

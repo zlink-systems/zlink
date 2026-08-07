@@ -1,4 +1,4 @@
-// SF-F11: response loss 뒤 다음 relocation이 이전 operation payload를 재사용하지 않는지 검증한다.
+// SF-F11: Waiter 종료와 response loss 뒤 payload 값을 보존한다 시나리오를 검증한다.
 import { postJson } from '../../../http-client';
 import type { ClientOptions } from '../Support/client-options';
 import { ensure } from '../Support/scenario-assert';
@@ -27,7 +27,7 @@ const second = {
 
 export async function runSFF11(options: ClientOptions): Promise<void> {
   ensure(options.providerBUrl !== undefined, 'SF-F11 provider B URL is required.');
-  const phase = process.env.SF_F11_PHASE ?? 'setup';
+  const phase = options.phase ?? 'setup';
   if (phase === 'setup') {
     await createAggregate(options.providerAUrl, first.actorId, first.spotId, first.state);
     await setScenarioGate(options.providerAUrl, 'capture', true);

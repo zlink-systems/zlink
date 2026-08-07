@@ -1,4 +1,4 @@
-// SF-F3: Relocation Store 장애가 source workload와 Location Store를 변경하지 않는지 검증한다.
+// SF-F3: Relocation Store 장애는 새 relocation만 막는다 시나리오를 검증한다.
 import type { ClientOptions } from '../Support/client-options';
 import { ensure } from '../Support/scenario-assert';
 import {
@@ -16,7 +16,7 @@ const state = 'sf-f3-state';
 
 export async function runSFF3(options: ClientOptions): Promise<void> {
   ensure(options.providerBUrl !== undefined, 'SF-F3 provider B URL is required.');
-  const phase = process.env.SF_F3_PHASE ?? 'setup';
+  const phase = options.phase ?? 'setup';
   const identity = { actorId, spotId, state, actorGeneration: '' };
   if (phase === 'setup') {
     await createAggregate(options.providerAUrl, actorId, spotId, state);

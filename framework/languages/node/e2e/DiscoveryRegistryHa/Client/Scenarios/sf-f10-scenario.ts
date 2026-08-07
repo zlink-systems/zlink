@@ -1,4 +1,4 @@
-// SF-F10: accepted requests와 relocation completion이 각각 한 terminal로 끝나는지 검증한다.
+// SF-F10: 많은 accepted requests와 relocation completion을 함께 처리한다 시나리오를 검증한다.
 import { getJson, postJson } from '../../../http-client';
 import type { ClientOptions } from '../Support/client-options';
 import { ensure } from '../Support/scenario-assert';
