@@ -75,12 +75,6 @@ internal sealed class ZLinkFrameworkRegistration
                     channel.Subscriber.SocketConfig.MaxMessageSize);
         }
 
-        foreach (var node in SpotNodes.Values)
-            if (node.Router is not null)
-                maximum = Math.Max(
-                    maximum,
-                    node.Router.SocketConfig.MaxMessageSize);
-
         foreach (var streamNode in StreamNodes.Values)
             maximum = Math.Max(
                 maximum,

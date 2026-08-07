@@ -25,8 +25,6 @@ public interface IZLinkMeshPeerConnections
 // IZLinkRouteMeshRuntimeOptions.
 public interface IZLinkMeshNodeSocketConfig
 {
-    long MaxMessageSize { get; set; }
-
     ulong SendHighWaterMark { get; set; }
 
     ulong ReceiveHighWaterMark { get; set; }

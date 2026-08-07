@@ -606,7 +606,6 @@ internal interface IMeshNode : IDisposable, IAsyncDisposable
     ValueTask ForceStopAsync(CancellationToken cancellationToken);
     RoutingId RoutingId { get; }
     MeshOperationId AllocateOperationId();
-    long MaxMessageSize { get; set; }
     ulong RouterHighWaterMark { get; set; }
     ulong RouterReceiveHighWaterMark { get; set; }
     ulong MailboxMessageBudget { get; set; }

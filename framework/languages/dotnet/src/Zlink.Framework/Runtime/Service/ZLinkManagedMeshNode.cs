@@ -137,7 +137,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private int _disposed;
     private bool _inboundOperationAdmissionClosed;
     private ulong _activeSocketGeneration;
-    private uint _localEffectiveMaxMessageBytes = uint.MaxValue;
     private ZLinkInboundDispatchBudget? _inboundDispatchBudget;
 
     internal ZLinkManagedMeshNode(
@@ -171,7 +170,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
     public RoutingId RoutingId => _routingId;
     internal string MeshName => _meshName;
-    public long MaxMessageSize { get; set; } = -1;
     public ulong RouterHighWaterMark { get; set; } = 4_096_000;
     public ulong RouterReceiveHighWaterMark { get; set; } = 4_096_000;
     public ulong MailboxMessageBudget { get; set; } = 10_000;
@@ -247,13 +245,13 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             IPoller? poller = null;
             try
             {
-                _localEffectiveMaxMessageBytes =
-                    ZLinkClientServerControlProtocol.NormalizeMaximumMessageBytes(
-                        MaxMessageSize);
                 socket.Options.Mandatory = true;
                 socket.Options.Handover = true;
                 socket.Options.Linger = TimeSpan.Zero;
-                socket.Options.MaxMessageSize = MaxMessageSize;
+                // RouteMesh has no Framework message-size contract. Explicitly
+                // disable the native inbound cap instead of relying on the
+                // binding or Core default.
+                socket.Options.MaxMessageSize = -1;
                 socket.Options.SendHighWaterMark = RouterHighWaterMark;
                 socket.Options.ReceiveHighWaterMark = RouterReceiveHighWaterMark;
                 if (ReceiveTimeout is { } receiveTimeout)
@@ -666,10 +664,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 ZLinkServiceWireCodec.EncodeReplyRelay(relay)
             };
             if (payload.Count != 0)
-                wire.Add(EncodeFrameworkMultipartForSend(
-                    peer.PhysicalRoutingId,
-                    payload,
-                    wire[0].Length));
+                wire.Add(ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(payload));
             if (!TrySend(peer.PhysicalRoutingId, wire, SendFlags.None))
                 throw new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.Rejected,
@@ -1206,10 +1201,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         var wireParts = new List<ReadOnlyMemory<byte>>(3) { head };
         if (!metadata.IsEmpty)
             wireParts.Add(metadata);
-        wireParts.Add(EncodeFrameworkMultipartForSend(
-            peer.PhysicalRoutingId,
-            parts,
-            checked(head.Length + metadata.Length)));
+        wireParts.Add(ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(parts));
         if (!TrySend(peer.PhysicalRoutingId, wireParts, flags))
         {
             Publish(MeshMonitorEventKind.Backpressured, peerRid: peer.RoutingId);
@@ -2079,10 +2071,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             };
             if (!metadata.IsEmpty)
                 wireParts.Add(metadata);
-            wireParts.Add(EncodeFrameworkMultipartForSend(
-                peer.PhysicalRoutingId,
-                parts,
-                checked(head.Length + metadata.Length)));
+            wireParts.Add(ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(parts));
             // Publish has crossed its admission boundary. The bounded socket send
             // timeout provides a terminal submission result without exposing a
             // per-target delivery report to the caller.
@@ -3035,10 +3024,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         var wireParts = new List<ReadOnlyMemory<byte>>(3) { head };
         if (!metadata.IsEmpty)
             wireParts.Add(metadata);
-        wireParts.Add(EncodeFrameworkMultipartForSend(
-            peer.PhysicalRoutingId,
-            parts,
-            checked(head.Length + metadata.Length)));
+        wireParts.Add(ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(parts));
         if (!TrySend(peer.PhysicalRoutingId, wireParts, flags))
         {
             Publish(MeshMonitorEventKind.Backpressured, peerRid: peer.RoutingId);
@@ -3063,11 +3049,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             wire[created++] = Message.From(head);
             if (!metadata.IsEmpty)
                 wire[created++] = Message.From(metadata);
-            wire[created++] = Message.From(
-                EncodeFrameworkMultipartForSend(
-                    peer.PhysicalRoutingId,
-                    parts,
-                    checked(head.Length + metadata.Length)));
+            wire[created++] = Message.From(ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(parts));
 
             var remainingMilliseconds = pending.DeadlineUnixMs
                 - Math.Min(
@@ -3144,11 +3126,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             wire[created++] = Message.From(head);
             if (metadata is { IsEmpty: false } value)
                 wire[created++] = Message.From(value);
-            wire[created++] = Message.From(
-                EncodeFrameworkMultipartForSend(
-                    peer.PhysicalRoutingId,
-                    parts,
-                    checked(head.Length + (metadata?.Length ?? 0))));
+            wire[created++] = Message.From(ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(parts));
 
             var remainingMilliseconds = operation.DeadlineUnixMs
                 - Math.Min(
@@ -3745,10 +3723,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     {
         try
         {
-            if (!FitsCompleteMessageBound(
-                    parts,
-                    Volatile.Read(ref _localEffectiveMaxMessageBytes))
-                || !IsAllowedCompletionControl(parts, out var command)
+            if (!IsAllowedCompletionControl(parts, out var command)
                 || !HasCurrentCompletionControlSource(sourceRid, command)
                 || !ProcessInfrastructureControl(
                     sourceRid,
@@ -3889,9 +3864,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         ServiceWireConstants.Command command) =>
         command is ServiceWireConstants.Command.Reply
             or ServiceWireConstants.Command.ReplyRelay
-            // RelocationData is one infrastructure record, but its frozen
-            // relocation payload is governed by the negotiated complete
-            // message bound rather than the small control-record bound.
+            // RelocationData carries a frozen application payload and uses
+            // the structural envelope limit rather than the small
+            // infrastructure-control limit.
             or ServiceWireConstants.Command.RelocationData;
 
     private static bool IsCompletionControlFrameShape(
@@ -4083,14 +4058,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         if (received.RoutingId is not { } sourceRid || received.Parts.Count == 0)
         {
             Publish(MeshMonitorEventKind.ProtocolError);
-            return;
-        }
-
-        if (!FitsCompleteMessageBound(
-                received.Parts,
-                Volatile.Read(ref _localEffectiveMaxMessageBytes)))
-        {
-            Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceRid);
             return;
         }
 
@@ -5375,10 +5342,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             correlation);
         var wire = new List<ReadOnlyMemory<byte>>(replyParts.Count == 0 ? 1 : 2) { head };
         if (replyParts.Count != 0)
-            wire.Add(EncodeFrameworkMultipartForSend(
-                sourceRid,
-                replyParts,
-                head.Length));
+            wire.Add(ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(replyParts));
         await SendServiceTerminalAsync(sourceRid, wire).ConfigureAwait(false);
         _ = ExpireRemoteUserSpotOperationAsync(key, invocation);
     }
@@ -5917,10 +5881,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         var replyParts = terminal.ReplyParts ?? Array.Empty<ReadOnlyMemory<byte>>();
         var wire = new List<ReadOnlyMemory<byte>>(replyParts.Count == 0 ? 1 : 2) { head };
         if (replyParts.Count != 0)
-            wire.Add(EncodeFrameworkMultipartForSend(
-                sourceRid,
-                replyParts,
-                head.Length));
+            wire.Add(ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(replyParts));
         await SendServiceTerminalAsync(sourceRid, wire).ConfigureAwait(false);
         _ = ExpireRemoteActorCreateOperationAsync(key, invocation);
     }
@@ -6561,11 +6522,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 wire[created] = Message.From(metadata);
                 created++;
             }
-            wire[created] = Message.From(
-                EncodeFrameworkMultipartForSend(
-                    peer.PhysicalRoutingId,
-                    parts,
-                    checked(head.Length + metadata.Length)));
+            wire[created] = Message.From(ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(parts));
             created++;
 
             bool submitted;
@@ -6606,20 +6563,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             return NormalizeNativeSubmitFailure(
                 exception.Result,
                 AcceptsApplicationOperations);
-        }
-        catch (ZLinkFrameworkException exception) when (
-            exception.Kind == ZLinkFrameworkErrorKind.CapacityExceeded)
-        {
-            // The complete application message is known to exceed the
-            // admitted transport bound before Core can receive its header.
-            // Complete the request through the normal terminal path so the
-            // caller observes the public protocol error and no handler runs.
-            CompleteManagedOperation(
-                pending,
-                RequestResult.ProtocolError,
-                (int)ServiceWireConstants.FrameworkErrorCode.RequestProtocolError,
-                Array.Empty<Message>());
-            return SubmitResult.Ok;
         }
         catch (ZlinkException)
         {
@@ -6866,10 +6809,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         var wireParts = new List<ReadOnlyMemory<byte>>(3) { head };
         if (!metadata.IsEmpty)
             wireParts.Add(metadata);
-        wireParts.Add(EncodeFrameworkMultipartForSend(
-            peer.PhysicalRoutingId,
-            parts,
-            checked(head.Length + metadata.Length)));
+        wireParts.Add(ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(parts));
         var sent = TrySend(peer.PhysicalRoutingId, wireParts, flags);
         if (!sent)
         {
@@ -6928,11 +6868,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     (int)result,
                     failureCode));
             if (parts.Count != 0)
-                wire[created++] = Message.From(
-                    EncodeFrameworkMultipartForSend(
-                        targetRid,
-                        parts,
-                        wire[0].Size));
+                wire[created++] = Message.From(ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(parts));
             return (reply.Messages(wire), wire);
         }
         catch
@@ -6991,11 +6927,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     (int)result,
                     failureCode));
             if (parts.Count != 0)
-                wire[created++] = Message.From(
-                    EncodeFrameworkMultipartForSend(
-                        targetRid,
-                        parts,
-                        wire[0].Size));
+                wire[created++] = Message.From(ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(parts));
 
             lock (_socketGate)
             {
@@ -7045,11 +6977,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             ZLinkServiceWireCodec.EncodeReply(correlation, (int)result, failureCode)
         };
         if (parts.Count != 0)
-            wireParts.Add(
-                EncodeFrameworkMultipartForSend(
-                    targetRid,
-                    parts,
-                    wireParts[0].Length));
+            wireParts.Add(ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(parts));
         return TrySend(targetRid, wireParts, flags)
             ? SubmitResult.Ok
             : SubmitResult.Backpressured;
@@ -7910,12 +7838,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         ulong descriptorRevision;
         Dictionary<string, uint> channels;
         byte runtimeState;
-        uint effectiveMaxMessageBytes;
         lock (_gate)
         {
             descriptorRevision = _descriptorRevision;
             channels = new Dictionary<string, uint>(_channels, StringComparer.Ordinal);
-            effectiveMaxMessageBytes = _localEffectiveMaxMessageBytes;
             //  Spec 28 §567: draining node는 그 사실을 descriptor로 알려 새
             //  selection과 placement에서 빠진다. runtime-state.draining = 2.
             runtimeState = _state == MeshNodeState.Draining ? (byte)2 : (byte)1;
@@ -7929,8 +7855,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             channels,
             (byte)_objectRole,
             runtimeState,
-            DefaultInboundSecurityIdentity,
-            effectiveMaxMessageBytes);
+            DefaultInboundSecurityIdentity);
         ZLinkFrameworkDebugLog.SpotDiscovery(
             $"mesh_peer_admission_sent local={_routingId} target={peer.RoutingId} "
             + $"command={command} endpoint={_advertisedEndpoint} "
@@ -8045,38 +7970,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         PermanentFailure
     }
 
-    private byte[] EncodeFrameworkMultipartForSend(
-        RoutingId target,
-        IReadOnlyList<Message> parts,
-        int otherPartBytes)
-    {
-        var maximumEncodedBytes = checked(
-            (long)GetEffectiveSendMessageBound(target) - otherPartBytes);
-        return ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(
-            parts,
-            maximumEncodedBytes);
-    }
-
-    private byte[] EncodeFrameworkMultipartForSend(
-        RoutingId target,
-        IReadOnlyList<ReadOnlyMemory<byte>> parts,
-        int otherPartBytes)
-    {
-        var maximumEncodedBytes = checked(
-            (long)GetEffectiveSendMessageBound(target) - otherPartBytes);
-        return ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(
-            parts,
-            maximumEncodedBytes);
-    }
-
     private MeshSendOutcome TrySendOutcome(
         RoutingId target,
         IReadOnlyList<ReadOnlyMemory<byte>> parts,
         SendFlags flags)
     {
-        var messageBound = GetEffectiveSendMessageBound(target);
-        if (!FitsCompleteMessageBound(parts, messageBound))
-            return MeshSendOutcome.PermanentFailure;
         if (TryGetCompletionControlCommand(parts, out var completionCommand)
             && (parts.Count > MaxCompletionControlParts
                 || !IsCompletionControlFrameShape(completionCommand, parts.Count)
@@ -8127,53 +8025,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             for (var index = 0; index < created; index++)
                 messages[index].Dispose();
         }
-    }
-
-    private uint GetEffectiveSendMessageBound(RoutingId target)
-    {
-        lock (_gate)
-        {
-            var local = _localEffectiveMaxMessageBytes;
-            var peer = _peersByIntent.Values.FirstOrDefault(candidate =>
-                candidate.Admitted
-                && (candidate.PhysicalRoutingId == target
-                    || candidate.RoutingId == target));
-            return peer?.Admission is { } admission
-                ? Math.Min(local, admission.EffectiveMaxMessageBytes)
-                : local;
-        }
-    }
-
-    private static bool FitsCompleteMessageBound(
-        IReadOnlyList<ReadOnlyMemory<byte>> parts,
-        uint bound)
-    {
-        if (bound == 0)
-            return false;
-        long total = 0;
-        foreach (var part in parts)
-        {
-            total = checked(total + part.Length);
-            if (total > bound)
-                return false;
-        }
-        return true;
-    }
-
-    private static bool FitsCompleteMessageBound(
-        IReadOnlyList<Message> parts,
-        uint bound)
-    {
-        if (bound == 0)
-            return false;
-        long total = 0;
-        foreach (var part in parts)
-        {
-            total = checked(total + part.Size);
-            if (total > bound)
-                return false;
-        }
-        return true;
     }
 
     private void RetireDuplicatePeer(

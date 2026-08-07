@@ -397,7 +397,6 @@ assembly Zlink.Framework
   type interface Zlink.Framework.Contracts.Configuration.IZLinkMeshNodeSocketConfig
     property System.UInt64 MailboxByteBudget { get; set; } [nullability=read:not-null,write:not-null]
     property System.UInt64 MailboxMessageBudget { get; set; } [nullability=read:not-null,write:not-null]
-    property System.Int64 MaxMessageSize { get; set; } [nullability=read:not-null,write:not-null]
     property System.UInt64 ReceiveHighWaterMark { get; set; } [nullability=read:not-null,write:not-null]
     property System.Nullable<System.TimeSpan> ReceiveTimeout { get; set; } [nullability=read:nullable,write:nullable]
     property System.UInt64 SendHighWaterMark { get; set; } [nullability=read:not-null,write:not-null]

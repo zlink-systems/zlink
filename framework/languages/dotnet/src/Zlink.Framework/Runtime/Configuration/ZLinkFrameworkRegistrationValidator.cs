@@ -97,11 +97,6 @@ internal static partial class ZLinkFrameworkRegistrationValidator
                     channel.Subscriber.SocketConfig.MaxMessageSize);
         }
 
-        foreach (var node in registration.SpotNodes.Values)
-            if (node.Router is not null)
-                yield return ($"RouteMesh:{node.SpotNodeName}",
-                    node.Router.SocketConfig.MaxMessageSize);
-
         foreach (var streamNode in registration.StreamNodes.Values)
             yield return ($"STREAM:{streamNode.StreamNodeName}",
                 streamNode.SocketConfig.MaxMessageSize);

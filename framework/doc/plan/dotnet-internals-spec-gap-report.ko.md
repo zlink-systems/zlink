@@ -204,6 +204,27 @@ standalone HTTP clean consumer가 통과했으며 public API snapshot hash는
 
 완료 조건은 RouteMesh public `MaxMessageSize` 설정과 admission field, native receive cap 및 sender-side complete-message check를 제거하는 것이다. HWM/mailbox byte budget과 protocol 표현 한계는 별도 자원·wire guard로 유지한다. 회귀 검증은 임의의 새 payload 상한을 암시하지 않도록 public API snapshot, admission wire fixture와 일반 payload 무결성 E2E로 구성한다.
 
+구현과 검증을 완료했다. `IZLinkMeshNodeSocketConfig`에서 `MaxMessageSize`를 제거했고 RouteMesh
+admission descriptor에서도 해당 field를 제거해 공통 schema의 field 순서와 맞췄다. Managed RouteMesh
+socket은 native inbound cap을 `-1`로 명시해 binding이나 Core 기본값에 의존하지 않으며, sender와 receiver의
+complete-message 비교는 제거했다. HWM, mailbox byte budget, control frame 개수와 .NET byte array 표현 한계는
+서로 다른 자원·wire guard로 유지했다.
+
+RouteMesh admission round trip은 lifecycle generation이 security identity 바로 뒤에서 시작하는 정확한 byte
+위치와 재인코딩 byte 일치를 검증한다. 1 byte와 기존 기본값을 넘는 17 MiB payload는 실제 managed node
+request/reply production socket 경로에서 hash가 아니라 전체 byte 일치로 통과했다. 관련 focused test 23건과
+전체 .NET unit suite 1,573건이 통과했다. Packaged contract와 standalone HTTP clean consumer가 통과했으며
+public API snapshot hash는
+`c1987f4b98e4fac7a30b7d038a56ee0d20e1272d00e79bdc88d3271e3c3ab958`이다. 실제 process
+`ToActorMessaging` `TA-A1`도 `logs/20260807-183121-3907372/`에서 RouteMesh request/reply와 owner handler
+evidence를 확인하고 통과했다.
+
+별도 `LocationMessaging` `RM-C8`은 `logs/20260807-183255-3962502/`에서 첫 1-byte Channel request가
+provider handler에 도달하지 않고 timeout되어 payload 크기 검증 전 실패했다. 같은 실행의 connection admission은
+Ready였고 17 MiB owner-layer 회귀는 통과하므로 이 log를 SIZE-001 완료 근거로 사용하지 않았다. 이
+multi-provider Channel routing 실패는 SIZE-001에서 제거한 message-size 정책과 구분해 후속 process 회귀
+조사 입력으로 남긴다.
+
 ### DOTNET-WIRE-002 — ClientServer negotiated complete-message 상한 미강제
 
 스펙은 sender가 local/remote `normalizedEffectiveMaxMessageBytes`의 작은 값을 admitted connection lifetime 동안 고정해 submit 전에 적용하도록 정한다(`common/internals/12-service-wire-protocol.ko.md:99-110`). ClientServer admission은 이 값을 보존하고 update가 바꾸지 못하게 막는다(`Runtime/Channels/ZLinkClientServerClientRuntime.cs:1454-1493`). 그러나 실제 send는 선택한 socket에 parts를 그대로 넘기고(`:136-151`), request도 같은 방식으로 `ZLinkRawRequestSubmitter`에 넘긴다(`:154-190`). Connection의 `_normalizedEffectiveMaxMessageBytes`는 hello/admit 검증에만 쓰이고 application submit 크기 검사에는 쓰이지 않는다. Server reply도 `Socket.Reply(...)`를 직접 호출한다(`:1511-1523`).
