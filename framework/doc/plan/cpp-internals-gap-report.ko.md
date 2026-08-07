@@ -180,7 +180,7 @@ admitted 피어의 애플리케이션 레코드가 대상 owner의 mailbox 예�
 | CPP-DISP-002 | GAP·상 | §2 참조 — HOL 블로킹 + Request 즉시 실패 미구현 |
 | CPP-DISP-001 | GAP·검증 중 | §2 참조 — source와 owner-layer saturation 회귀 및 전체 `test_cpp_framework_execution`은 통과했고 실제 pump 포화 process E2E가 남아 있음 |
 | CPP-DISP-003 | PARTIAL·중 | 미admit 피어 보류 큐 포화 시 이미 수신한 메시지를 trace 한 줄만 남기고 폐기 — Request가 조용히 소실되어 송신자는 타임아웃까지 대기. 핸드셰이크 경합 창에 한정되나 관찰 결과가 trace뿐. 증거: `cpp/src/runtime/mesh/raw_mesh_node_owner.cpp:2226-2253` |
-| CPP-DISP-004 | PARTIAL·하 | logical multicast가 완료 후 publish 결과를 `(void)`로 버리고 예외를 빈 catch로 삼킴 — "완료 이후 실패는 관찰로 남긴다"의 관찰이 이 경계엔 없음. 증거: `cpp/src/runtime/messaging/async_submit_runtime.cpp:710-723` |
+| CPP-DISP-004 | PARTIAL·검증 중 | 구현 checkpoint `7f2bf358fe`에서 caller task가 worker dequeue 시점에 성공으로 끝나는 기존 경계는 유지하되, 이후 publisher 반환 실패와 모든 예외를 fallback log와 누적 counter로 남기도록 executor를 수정했다. 표준 Spot publish는 fallback과 중복 기록하지 않고 `route_mesh_channel/publish/drop` structured event에 packet·channel·topic과 예외를 기록한다. Generic `publish_call_t`의 완료 후 실패 counter 회귀, structured observer 필드 회귀, 전체 `test_cpp_framework_messaging`, `test_cpp_framework_execution`, `test_cpp_framework_target_contract`가 통과했다. 설치 package와 실제 RouteMesh publish 실패를 사용하는 process 검증이 남아 있어 아직 종결하지 않는다. |
 
 만족 항목(요약): 실행 영역 2분할(펌프 스레드/앱 executor), 2도메인 mailbox, 3중 한도 공존, 관찰 비차단, send 계열 backpressure 절차, 수신 HWM의 앱 한정 정지 등은 충실.
 
