@@ -3,7 +3,10 @@ namespace Zlink.Framework.Runtime.Configuration;
 // Also surfaces the MeshNode ROUTER option subset from the common .NET interface
 // contract (server/languages/dotnet/interfaces/03-configuration-topology). Every
 // member exposed by that mesh-node interface is kept in this configuration object.
-internal sealed class ZLinkSocketConfig : IZLinkSocketConfig, IZLinkMeshNodeSocketConfig
+internal sealed class ZLinkSocketConfig
+    : IZLinkSocketConfig,
+      IZLinkStreamSocketConfig,
+      IZLinkMeshNodeSocketConfig
 {
     internal const long DefaultMaxMessageSize = 16L * 1024L * 1024L;
     internal const long DefaultStreamMaxMessageSize = 64L * 1024L;

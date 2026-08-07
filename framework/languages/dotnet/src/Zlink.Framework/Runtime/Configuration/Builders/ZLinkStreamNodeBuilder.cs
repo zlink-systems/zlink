@@ -38,7 +38,13 @@ internal sealed class ZLinkStreamNodeBuilder(ZLinkStreamNodeRegistration registr
         return this;
     }
 
-    public IZLinkSocketConfig ConfigureSocket() => registration.SocketConfig;
+    public IZLinkStreamNodeBuilder MaxMessageSize(long bytes)
+    {
+        registration.SocketConfig.MaxMessageSize = bytes;
+        return this;
+    }
+
+    public IZLinkStreamSocketConfig ConfigureSocket() => registration.SocketConfig;
 
     public IZLinkStreamNodeBuilder EnableActorDispatch()
     {

@@ -61,7 +61,7 @@ Gap 하나 또는 서로 강하게 연결된 작은 작업 묶음의 동작과 �
 |---|---|---|---|
 | DOTNET-API-001 | 상 | STREAM session send | 완료 — per-call admission timeout을 public surface와 기존 submit admission owner에 연결했다 |
 | DOTNET-API-002 | 상 | Location 운영 query | object location type과 exact/list query 전체가 없다 |
-| DOTNET-API-003 | 상 | StreamNode message-size API | fluent `MaxMessageSize(bytes)` 대신 `ConfigureSocket().MaxMessageSize` property setter를 노출한다 |
+| DOTNET-API-003 | 상 | StreamNode message-size API | 완료 — fluent `MaxMessageSize(bytes)`와 전용 socket config surface를 제공한다 |
 | DOTNET-ROLE-001 | 상 | ClientServer role error | Server role만 등록된 Channel send/request가 `NotConfigured` 대신 RouteMesh fallback 뒤 `NotFound`로 끝난다 |
 | DOTNET-WIRE-001 | 상 | `framework-json-v1` | strict cross-language JSON profile 대신 `JsonSerializerDefaults.Web` 의미를 사용한다 |
 | DOTNET-SIZE-001 | 상 | RouteMesh SS message size | 제한이 없어야 하지만 public 설정과 runtime이 기본 16 MiB를 receiver·sender에 적용한다 |
@@ -104,7 +104,7 @@ Exact interface는 `IZLinkSessionSendCall.Timeout(TimeSpan)`을 요구하고, �
 검증은 .NET 8에서 `ZLinkAsyncSubmitterTests` 32건과 `StreamContracts` 4건이 통과했다. 별도의 source
 package를 만든 뒤 실행한 `verify_packaged_contract.sh --generate-snapshot`도 packaged contract와 standalone
 HTTP clean consumer를 모두 통과했다. 고정 public API snapshot과 package XML hash를 같은 source 결과로
-갱신했다.
+갱신했다. 이 checkpoint는 `b2ecdc54c3`으로 `main`에 push했다.
 
 ### DOTNET-API-002 — object location 운영 query 누락
 
@@ -114,11 +114,21 @@ Exact interface는 object kind/state/entry/filter와 `FindActorLocationAsync`, `
 
 ### DOTNET-API-003 — StreamNode message-size fluent API 불일치
 
+**판정: 완료**
+
 Exact interface는 StreamNode builder가 `MaxMessageSize(long bytes)`를 직접 제공하고 builder를 반환해 `.Bind(...).MaxMessageSize(64 * 1024).AddSession<...>()` 형태로 연결하도록 정한다(`interfaces/03-configuration-topology.ko.md:247-286`). `ConfigureSocket()`은 HWM·buffer·timeout용 `IZLinkStreamSocketConfig`를 반환하며 message-size property를 노출하지 않는다.
 
 실제 public builder는 `ConfigureSocket()`만 제공하고 `IZLinkSocketConfig`를 반환한다(`Contracts/Configuration/Builders.cs`, `Runtime/Configuration/Builders/ZLinkStreamNodeBuilder.cs:41`). Application은 반환 객체의 mutable `MaxMessageSize` property에 대입해야 하므로 exact fluent call을 컴파일할 수 있고 없는지 여부가 반대로 되어 있다. 기본 64 KiB와 C→S 전용 runtime 적용 자체는 맞지만 public 호출 표면은 스펙과 다르다.
 
 완료 조건은 `IZLinkStreamNodeBuilder.MaxMessageSize(long bytes)`를 추가해 같은 builder를 반환하고, StreamNode의 `ConfigureSocket()` 반환형에서 message-size property를 제거하는 것이다. 64 KiB 기본값, 양수·0·음수 검증과 fluent chaining을 public contract test와 clean consumer에서 확인해야 한다.
+
+`IZLinkStreamNodeBuilder.MaxMessageSize(long bytes)`를 추가하고 `ConfigureSocket()`은 message-size property가
+없는 `IZLinkStreamSocketConfig`를 반환하도록 분리했다. 기존 내부 config는 값을 한 곳에서 소유하므로 inbound
+runtime 경로와 startup validator에는 별도 복제 상태를 만들지 않았다.
+
+`.NET 8`의 `TopologyExactSurfaceTests` 4건, 관련 inbound validation 1건과 `BuilderContracts` 5건이
+통과했다. Source package를 사용한 packaged contract와 standalone HTTP clean consumer도 통과했으며, 생성한
+public API snapshot hash는 `68b461cb8de2ff286232a3d17ecc1e30fbd5c540b392dbbc2ba2c5e8b2da680f`다.
 
 ### DOTNET-ROLE-001 — Server-only ClientServer Channel의 오류 kind가 틀림
 

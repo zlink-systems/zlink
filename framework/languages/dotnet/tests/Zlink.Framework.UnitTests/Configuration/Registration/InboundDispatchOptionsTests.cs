@@ -163,8 +163,7 @@ public sealed class InboundDispatchOptionsTests
             options.AddStreamNode("stream")
                 .Bind(0)
                 .AddSession<TestSession>()
-                .ConfigureSocket()
-                .MaxMessageSize = 0;
+                .MaxMessageSize(0);
         });
         using var provider = services.BuildServiceProvider();
 

@@ -23,7 +23,9 @@ public interface IZLinkStreamNodeBuilder
 
     IZLinkStreamNodeBuilder SetAdvertiseHost(string advertiseHost);
 
-    IZLinkSocketConfig ConfigureSocket();
+    IZLinkStreamNodeBuilder MaxMessageSize(long bytes);
+
+    IZLinkStreamSocketConfig ConfigureSocket();
 
     IZLinkStreamNodeBuilder EnableActorDispatch();
 

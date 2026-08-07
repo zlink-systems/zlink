@@ -35,7 +35,13 @@ public sealed class TopologyExactSurfaceTests
         Assert.Empty(actorDispatch.GetParameters());
         Assert.Contains(streamMethods, static method =>
             method.Name == nameof(IZLinkStreamNodeBuilder.ConfigureSocket)
-            && method.ReturnType == typeof(IZLinkSocketConfig));
+            && method.ReturnType == typeof(IZLinkStreamSocketConfig));
+        Assert.Contains(streamMethods, static method =>
+            method.Name == nameof(IZLinkStreamNodeBuilder.MaxMessageSize)
+            && method.ReturnType == typeof(IZLinkStreamNodeBuilder)
+            && method.GetParameters() is [{ ParameterType: var type }]
+            && type == typeof(long));
+        Assert.Null(typeof(IZLinkStreamSocketConfig).GetProperty("MaxMessageSize"));
     }
 
     [Fact]
@@ -55,9 +61,9 @@ public sealed class TopologyExactSurfaceTests
             var stream = options.AddStreamNode("stream")
                 .Bind()
                 .SetBindHost("127.0.0.3")
-                .SetAdvertiseHost("stream.example.net");
-            stream.ConfigureSocket().MaxMessageSize = 4096;
-            stream.AddSession<TestSession>();
+                .SetAdvertiseHost("stream.example.net")
+                .MaxMessageSize(4096)
+                .AddSession<TestSession>();
         });
 
         using var provider = services.BuildServiceProvider();
@@ -75,6 +81,44 @@ public sealed class TopologyExactSurfaceTests
         Assert.Equal("127.0.0.3", stream.BindHost);
         Assert.Equal("stream.example.net", stream.AdvertiseHost);
         Assert.Equal(4096, stream.SocketConfig.MaxMessageSize);
+    }
+
+    [Fact]
+    public void Stream_message_size_defaults_to_64_KiB_and_allows_unlimited_zero()
+    {
+        var services = new ServiceCollection();
+        services.AddZLinkFramework(options =>
+            options.AddStreamNode("stream")
+                .Bind()
+                .MaxMessageSize(0)
+                .AddSession<TestSession>());
+
+        using var provider = services.BuildServiceProvider();
+        var registration = provider.GetRequiredService<ZLinkFrameworkRegistration>();
+        Assert.Equal(0, registration.StreamNodes["stream"].SocketConfig.MaxMessageSize);
+
+        var defaults = new ZLinkFrameworkRegistration();
+        new ZLinkFrameworkOptionsBuilder(defaults)
+            .AddStreamNode("default")
+            .Bind()
+            .AddSession<TestSession>();
+        Assert.Equal(
+            64L * 1024L,
+            defaults.StreamNodes["default"].SocketConfig.MaxMessageSize);
+    }
+
+    [Fact]
+    public void Stream_message_size_rejects_negative_value_at_startup_validation()
+    {
+        var services = new ServiceCollection();
+        var error = Assert.Throws<ZLinkConfigurationException>(() =>
+            services.AddZLinkFramework(options =>
+                options.AddStreamNode("stream")
+                    .Bind()
+                    .MaxMessageSize(-1)
+                    .AddSession<TestSession>()));
+
+        Assert.Contains("MaxMessageSize", error.Message, StringComparison.Ordinal);
     }
 
     private static HashSet<string> MethodNames<T>() =>

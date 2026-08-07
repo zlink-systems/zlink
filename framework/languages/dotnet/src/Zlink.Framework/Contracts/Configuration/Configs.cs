@@ -39,6 +39,33 @@ public interface IZLinkSocketConfig
     int Weight { get; set; }
 }
 
+public interface IZLinkStreamSocketConfig
+{
+    ulong SendHighWaterMark { get; set; }
+
+    ulong ReceiveHighWaterMark { get; set; }
+
+    int SendBufferSize { get; set; }
+
+    int ReceiveBufferSize { get; set; }
+
+    TimeSpan? Linger { get; set; }
+
+    TimeSpan? ReceiveTimeout { get; set; }
+
+    TimeSpan? SendTimeout { get; set; }
+
+    TimeSpan? ConnectTimeout { get; set; }
+
+    TimeSpan? HandshakeInterval { get; set; }
+
+    bool IPv6 { get; set; }
+
+    bool TcpNoDelay { get; set; }
+
+    bool Immediate { get; set; }
+}
+
 public interface IZLinkRouteConfig
 {
     bool RequireKnownPeer { get; set; }

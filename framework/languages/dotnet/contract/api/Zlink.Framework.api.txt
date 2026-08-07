@@ -481,11 +481,25 @@ assembly Zlink.Framework
       where TSession : class, Zlink.Framework.Contracts.Streams.IZLinkSession
     method abstract Zlink.Framework.Contracts.Configuration.IZLinkStreamNodeBuilder Bind(System.Int32 port = 0 [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
     method abstract Zlink.Framework.Contracts.Configuration.IZLinkStreamNodeBuilder Bind(System.String endpoint [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
-    method abstract Zlink.Framework.Contracts.Configuration.IZLinkSocketConfig ConfigureSocket() [return=read:not-null,write:not-null]
+    method abstract Zlink.Framework.Contracts.Configuration.IZLinkStreamSocketConfig ConfigureSocket() [return=read:not-null,write:not-null]
     method abstract Zlink.Framework.Contracts.Configuration.IZLinkStreamNodeBuilder EnableActorDispatch() [return=read:not-null,write:not-null]
+    method abstract Zlink.Framework.Contracts.Configuration.IZLinkStreamNodeBuilder MaxMessageSize(System.Int64 bytes [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
     method abstract Zlink.Framework.Contracts.Configuration.IZLinkStreamNodeBuilder SetAdvertiseHost(System.String advertiseHost [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
     method abstract Zlink.Framework.Contracts.Configuration.IZLinkStreamNodeBuilder SetBindHost(System.String bindHost [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
     method abstract Zlink.Framework.Contracts.Configuration.IZLinkStreamNodeBuilder SetTlsServer(System.String certificatePath [nullability=read:not-null,write:not-null], System.String keyPath [nullability=read:not-null,write:not-null], System.Boolean requireClientCertificate = false [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+  type interface Zlink.Framework.Contracts.Configuration.IZLinkStreamSocketConfig
+    property System.Nullable<System.TimeSpan> ConnectTimeout { get; set; } [nullability=read:nullable,write:nullable]
+    property System.Nullable<System.TimeSpan> HandshakeInterval { get; set; } [nullability=read:nullable,write:nullable]
+    property System.Boolean IPv6 { get; set; } [nullability=read:not-null,write:not-null]
+    property System.Boolean Immediate { get; set; } [nullability=read:not-null,write:not-null]
+    property System.Nullable<System.TimeSpan> Linger { get; set; } [nullability=read:nullable,write:nullable]
+    property System.Int32 ReceiveBufferSize { get; set; } [nullability=read:not-null,write:not-null]
+    property System.UInt64 ReceiveHighWaterMark { get; set; } [nullability=read:not-null,write:not-null]
+    property System.Nullable<System.TimeSpan> ReceiveTimeout { get; set; } [nullability=read:nullable,write:nullable]
+    property System.Int32 SendBufferSize { get; set; } [nullability=read:not-null,write:not-null]
+    property System.UInt64 SendHighWaterMark { get; set; } [nullability=read:not-null,write:not-null]
+    property System.Nullable<System.TimeSpan> SendTimeout { get; set; } [nullability=read:nullable,write:nullable]
+    property System.Boolean TcpNoDelay { get; set; } [nullability=read:not-null,write:not-null]
   type interface Zlink.Framework.Contracts.Configuration.IZLinkUserSpotFactoryBuilder<TSpot>
     generic TSpot variance=invariant nullable=unspecified
     where TSpot : class, Zlink.Framework.Contracts.Spots.IZLinkSpot
