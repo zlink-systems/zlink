@@ -1301,8 +1301,9 @@ function requireText(value: unknown, label: string): string {
 
 function canonicalUuid(value: unknown, label: string): string {
   const text = requireText(value, label);
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(text)) {
-    throw new TypeError(`${label} must be a lowercase canonical UUID.`);
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(text)
+    || /^0{8}-0{4}-0{4}-0{4}-0{12}$/u.test(text)) {
+    throw new TypeError(`${label} must be a lowercase non-zero 128-bit identity.`);
   }
   return text;
 }

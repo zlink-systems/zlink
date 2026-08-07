@@ -15,7 +15,10 @@ import {
   ZLinkTimerOverrunPolicy,
   ZLinkUserSpotExecutionMode
 } from '../../packages/framework/src/contracts';
-import { ZLinkHostServiceRelocationRuntime } from '../../packages/framework/src/runtime/host/service-relocation-host-runtime';
+import {
+  createServiceRelocationId,
+  ZLinkHostServiceRelocationRuntime
+} from '../../packages/framework/src/runtime/host/service-relocation-host-runtime';
 import {
   type ZLinkServiceRelocationControlRequest,
   type ZLinkServiceRelocationControlResponse
@@ -58,6 +61,31 @@ const acceptedOperation = {
   high: 0x1111111111111111n,
   low: 0x1111111111111111n
 };
+
+test('relocation identity retries zero and local collisions with all 128 entropy bits', () => {
+  const zero = Buffer.alloc(16);
+  const collision = Buffer.from('00112233445566778899aabbccddeeff', 'hex');
+  const accepted = Buffer.from('ffeeddccbbaa99887766554433221100', 'hex');
+  const entropy = [zero, collision, accepted];
+  const observed: string[] = [];
+  const collisionId = '00112233-4455-6677-8899-aabbccddeeff';
+  const acceptedId = 'ffeeddcc-bbaa-9988-7766-554433221100';
+
+  const id = createServiceRelocationId(
+    candidate => {
+      observed.push(candidate);
+      return candidate === collisionId;
+    },
+    size => {
+      assert.equal(size, 16);
+      return entropy.shift()!;
+    }
+  );
+
+  assert.equal(id, acceptedId);
+  assert.deepEqual(observed, [collisionId, acceptedId]);
+  assert.equal(entropy.length, 0);
+});
 
 test('two host owners exchange canonical relocation reservation publish replay and seal commands', async () => {
   const events: string[] = [];

@@ -178,8 +178,9 @@ function validateAndEncodeParticipants(
 }
 
 function aggregateIdentity(value: string): ZLinkAggregateId {
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value)) {
-    throw new TypeError('Relocation aggregate id must be a lowercase canonical UUID v4.');
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value)
+    || /^0{8}-0{4}-0{4}-0{4}-0{12}$/.test(value)) {
+    throw new TypeError('Relocation aggregate id must be a lowercase non-zero 128-bit identity.');
   }
   return { value } as ZLinkAggregateId;
 }

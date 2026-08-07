@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import { SubmitResult } from '../backend/runtime-values';
 import type {
   RoutingId,
@@ -295,6 +295,7 @@ export class ZLinkHostServiceRelocationRuntime {
   private readonly relocationAuthorityKeys = new Map<string, string>();
   private readonly pendingControls = new Map<string, PendingRelocationControl>();
   private readonly pendingReplyRelays = new Map<string, PendingRelocationReplyRelay>();
+  private readonly sourceRelocationIds = new Set<string>();
   private readonly codec = new ServiceRelocationAuthorityPayloadCodec();
   private readonly recoveredPublications = new Set<string>();
 
@@ -789,7 +790,7 @@ export class ZLinkHostServiceRelocationRuntime {
       spotObjectGeneration: spotAuthority.objectGeneration,
       membershipEpoch: state.spotMembershipEpoch > 0n ? state.spotMembershipEpoch : 1n
     }));
-    const aggregateId = randomUUID();
+    const aggregateId = this.reserveRelocationId();
     const units = [spotUnit, ...actorUnits];
     const preReservation = await this.preReserveRemote(
       meshName,
@@ -843,8 +844,9 @@ export class ZLinkHostServiceRelocationRuntime {
       }
       throw error;
     } finally {
-      await relocationStorePort(this.requireRelocationStore())
+      const deletion = await relocationStorePort(this.requireRelocationStore())
         .delete(preReservation.manifestRoot, signal).catch(() => undefined);
+      if (deletion !== undefined) this.sourceRelocationIds.delete(aggregateId);
       if (interruptionStartedAt !== undefined) {
         this.recordRelocationInterruption(
           meshName,
@@ -911,7 +913,7 @@ export class ZLinkHostServiceRelocationRuntime {
         targetMembership?.spotObjectGeneration ?? target.lifecycleGeneration,
       membershipEpoch: state.spotMembershipEpoch > 0n ? state.spotMembershipEpoch : 1n
     };
-    const aggregateId = randomUUID();
+    const aggregateId = this.reserveRelocationId();
     let interruptionStartedAt: number | undefined;
     const measuredUnit: ServiceRelocationCaptureUnit = {
       ...unit,
@@ -949,8 +951,9 @@ export class ZLinkHostServiceRelocationRuntime {
       await preReservation.owner.abortPreReservation().catch(() => undefined);
       throw error;
     } finally {
-      await relocationStorePort(this.requireRelocationStore())
+      const deletion = await relocationStorePort(this.requireRelocationStore())
         .delete(preReservation.manifestRoot, signal).catch(() => undefined);
+      if (deletion !== undefined) this.sourceRelocationIds.delete(aggregateId);
       if (interruptionStartedAt !== undefined) {
         this.recordRelocationInterruption(
           meshName,
@@ -1052,7 +1055,7 @@ export class ZLinkHostServiceRelocationRuntime {
         }
       }
     };
-    const aggregateId = randomUUID();
+    const aggregateId = this.reserveRelocationId();
     const preReservation = await this.preReserveRemote(
       meshName,
       target,
@@ -1088,8 +1091,9 @@ export class ZLinkHostServiceRelocationRuntime {
       await preReservation.owner.abortPreReservation().catch(() => undefined);
       throw error;
     } finally {
-      await relocationStorePort(this.requireRelocationStore())
+      const deletion = await relocationStorePort(this.requireRelocationStore())
         .delete(preReservation.manifestRoot, signal).catch(() => undefined);
+      if (deletion !== undefined) this.sourceRelocationIds.delete(aggregateId);
       if (interruptionStartedAt !== undefined) {
         this.recordRelocationInterruption(
           meshName,
@@ -1177,47 +1181,63 @@ export class ZLinkHostServiceRelocationRuntime {
     expectedBytes: number,
     signal?: AbortSignal
   ): Promise<RemotePreReservation> {
-    const localStatus = this.requireMeshNode(meshName).status();
-    const deadlineAtMs = Date.now() + 30_000;
-    const owner = new RemoteRestoreOwner(
-      meshName,
-      String(target.rid),
-      {
-        ownerId: primary.ownerId,
-        leaseGeneration: primary.ownerLeaseGeneration,
-        nodeRid: String(localStatus.routingId),
-        nodeGeneration: localStatus.lifecycleGeneration,
-        expectedAuthorityStoreVersion: primary.storeVersion.value
-      },
-      {
-        nodeRid: String(target.rid),
-        nodeGeneration: target.lifecycleGeneration,
-        ownerId: target.ownerId,
-        ownerLeaseGeneration: target.leaseGeneration
-      },
-      target.applicationVersion,
-      request => this.sendControl(
-        meshName,
-        target.rid,
-        request,
-        signal,
-        deadlineAtMs
-      )
-    );
-    const encoded = encodeServiceRelocationEnvelope(manifest);
-    const stored = await relocationStorePort(this.requireRelocationStore())
-      .put(encoded, 60_000, signal);
+    let stored: Awaited<ReturnType<ServiceRelocationStorePort['put']>> | undefined;
     try {
+      const localStatus = this.requireMeshNode(meshName).status();
+      const deadlineAtMs = Date.now() + 30_000;
+      const owner = new RemoteRestoreOwner(
+        meshName,
+        String(target.rid),
+        {
+          ownerId: primary.ownerId,
+          leaseGeneration: primary.ownerLeaseGeneration,
+          nodeRid: String(localStatus.routingId),
+          nodeGeneration: localStatus.lifecycleGeneration,
+          expectedAuthorityStoreVersion: primary.storeVersion.value
+        },
+        {
+          nodeRid: String(target.rid),
+          nodeGeneration: target.lifecycleGeneration,
+          ownerId: target.ownerId,
+          ownerLeaseGeneration: target.leaseGeneration
+        },
+        target.applicationVersion,
+        request => this.sendControl(
+          meshName,
+          target.rid,
+          request,
+          signal,
+          deadlineAtMs
+        )
+      );
+      const encoded = encodeServiceRelocationEnvelope(manifest);
+      stored = await relocationStorePort(this.requireRelocationStore())
+        .put(encoded, 60_000, signal);
       await owner.preReserve(manifest, {
         reference: stored.reference,
         checksumCrc32c: stored.checksumCrc32c
       }, expectedBytes);
       return { owner, manifestRoot: stored.reference };
     } catch (error) {
-      await relocationStorePort(this.requireRelocationStore())
-        .delete(stored.reference, signal).catch(() => undefined);
+      const deletion = stored === undefined
+        ? 'missing'
+        : await relocationStorePort(this.requireRelocationStore())
+          .delete(stored.reference, signal).catch(() => undefined);
+      if (deletion !== undefined) this.sourceRelocationIds.delete(manifest.aggregateId);
       throw error;
     }
+  }
+
+  private reserveRelocationId(): string {
+    const id = createServiceRelocationId(candidate => {
+      if (this.sourceRelocationIds.has(candidate)) return true;
+      const wire = relocationWireId(candidate);
+      const prefix = `${wire.high}:${wire.low}:`;
+      return [this.targetOffers, this.targetStages, this.targetAborts, this.completedTargets]
+        .some(records => [...records.keys()].some(key => key.startsWith(prefix)));
+    });
+    this.sourceRelocationIds.add(id);
+    return id;
   }
 
   private async runCoordinator(
@@ -3953,6 +3973,30 @@ function relocationWireId(value: string): { readonly high: bigint; readonly low:
     throw new Error('Relocation identity must not be zero.');
   }
   return result;
+}
+
+export function createServiceRelocationId(
+  isInUse: (candidate: string) => boolean,
+  entropy: (size: number) => Uint8Array = randomBytes
+): string {
+  for (;;) {
+    const bytes = entropy(16);
+    if (bytes.byteLength !== 16) {
+      throw new Error('Relocation identity entropy must return exactly 16 bytes.');
+    }
+    let nonZero = false;
+    for (const byte of bytes) {
+      if (byte !== 0) {
+        nonZero = true;
+        break;
+      }
+    }
+    if (!nonZero) continue;
+    const hex = Buffer.from(bytes).toString('hex');
+    const candidate = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-`
+      + `${hex.slice(16, 20)}-${hex.slice(20)}`;
+    if (!isInUse(candidate)) return candidate;
+  }
 }
 
 function operationWireId(value: string): { readonly high: bigint; readonly low: bigint } {
