@@ -167,7 +167,7 @@ admitted 피어의 애플리케이션 레코드가 대상 owner의 mailbox 예�
 | ID | 분류 | 요약 |
 |---|---|---|
 | CPP-EXEC-001 | GAP·중 | §4 "SpotWide 메시지 1건 처리 시 락 2회 미만" 위반: 노드 `recursive_mutex` + actor 큐 mutex(enqueue) + offload executor mutex + spot 큐 mutex + `complete_one` 내 큐 mutex 2회×2큐 + per-actor `actor_mailboxes` mutex — 스펙이 경고한 메시지당 이중 락 처리량 한계의 배수 형태. 증거: `cpp/src/runtime/spots/spot_runtime.cpp:2549, 5646`, `cpp/src/runtime/execution/serial_execution_queue.cpp:393, 793, 841` |
-| CPP-EXEC-002 | GAP·중 | Pitfall 5: self-wait을 제출 전에 거부하는 것은 맞으나 오류 종류가 스펙의 `InvalidOperation`이 아닌 `not_configured` — 타 언어 런타임과 공개 오류 종류가 달라짐. 3개 지점. 증거: `cpp/src/runtime/actors/actor_client.cpp:318-320, 478-480`, `cpp/src/runtime/spots/spot_runtime.cpp:2408-2414` |
+| CPP-EXEC-002 | GAP·검증 중 | 구현 checkpoint `fdb5173042`에서 Actor self-request와 같은 Spot execution gate를 기다리는 Actor·Spot request의 오류를 모두 `InvalidOperation`으로 통일했다. 제출 횟수가 0인지와 정확한 오류 kind를 확인하는 `test_cpp_framework_m6b_runtime`이 통과했다. Cross-language process E2E의 오류 kind assertion이 남아 있어 아직 종결하지 않는다. |
 | CPP-EXEC-003 | PARTIAL·상 | self-wait 가드가 `thread_local`로 핸들러 turn의 동기 구간에만 성립 — `co_await` 재개 후에는 자기-요청이 탐지되지 않아 거부 대신 타임아웃까지 데드락. 별건으로 `try_create_actor`의 `caller_owns_source_turn` 분기가 소스 Spot과 대상 Spot이 다를 때 대상(Entry) Spot의 gate를 우회한 채 `on_create_actor`를 인라인 실행. 증거: `cpp/src/runtime/execution/serial_execution_queue.cpp:153-166`, `cpp/src/runtime/spots/spot_runtime.cpp:3477-3500` |
 | CPP-EXEC-004 | PARTIAL·중 | Pitfall 2 큐 포화 계열 분리 미완: send/one-way의 "같은 런타임은 send 타임아웃까지 대기 후 `DeadlineExceeded`" 행이 Spot/Actor 대상에 미구현 — `actor_send`가 `actor_request`와 동일하게 즉시 `capacity_exceeded`. 증거: `cpp/src/runtime/spots/spot_runtime.cpp:2663-2673, 2765-2768` |
 
