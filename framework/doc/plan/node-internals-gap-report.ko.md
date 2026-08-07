@@ -132,6 +132,8 @@ Gap 하나 또는 서로 강하게 연결된 작은 작업 묶음의 동작과 �
 | `NODE-LIFE-003` | `8ced7e2d5f` | `npm run build`, `npm run verify:m6b-runtime` 85/85 PASS. 일반 Actor send/request는 `ActorId`로 현재 incarnation을 resolve하고, session binding과 exact control은 기존 generation fence를 유지한다. | packed package와 실제 이전 generation `ActorRef` process E2E에서 현재 Actor handler 도달 확인 |
 | `NODE-WIRE-008` | `6dd490f8f8` | `npm run build`, `location-runtime.test.js` 40/40 PASS. Actor Message Follow fence가 일치할 때 direct authority cache와 legacy Actor location cache를 함께 무효화하고, 이전 fence이면 두 cache를 모두 보존한다. | packed package와 Actor relocation process E2E에서 stale route 재오염이 없는지 확인 |
 | `NODE-FOLLOW-001`, `NODE-FOLLOW-002` | `256869dee0` | `npm run build`, `actor-handoff.test.js` 22/22, `npm run verify:m6b-runtime` 86/86 PASS. Message Follow queue 한도는 `CapacityExceeded`, Actor generation 불일치는 `InvalidOperation`으로 분류하고 Spot request wire reply도 같은 typed capacity failure를 보존한다. | packed package와 Actor·Spot relocation process E2E에서 caller terminal과 one-way 진단 확인 |
+| `NODE-WIRE-005` | `6947cc8adb` | `npm run build`, `location-runtime.test.js` 41/41 PASS. Shared `authority-key-v1.json` fixture 전 항목을 소비하고 decoder가 1..255-byte identity, leading-zero 없는 길이, canonical escape, valid UTF-8와 776-byte encoded cap을 검증한다. | packed package와 다른 언어가 기록한 authority key의 Store 상호운용 확인 |
+| `NODE-ROUTE-006` | `88ccb7005e` | `npm run build`, `service-selection.test.js` 6/6 PASS. Cycle plan은 `select()`마다 cumulative state Map을 복사하지 않고 candidate rebuild 직전에 현재 cursor state를 materialize한다. 분포와 membership 변경 후 credit 보존은 유지한다. | packed package benchmark에서 candidate 수 증가에 따른 select latency와 allocation 확인 |
 
 ---
 
