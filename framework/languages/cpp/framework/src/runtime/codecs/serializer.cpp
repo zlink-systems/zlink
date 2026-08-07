@@ -112,6 +112,16 @@ void serializer_registry_t::invalidate_cached_serializer (
                                 std::memory_order_release);
 }
 
+std::optional<serializer_registry_t::erased_serializer_t>
+serializer_registry_t::erased_serializer (std::type_index type) const
+{
+    const auto found = _state->serializers.find (type);
+    if (found == _state->serializers.end ())
+        return std::nullopt;
+    return erased_serializer_t{
+      found->second.serialize, found->second.deserialize};
+}
+
 encoded_payload_t serializer_registry_t::serialize (std::type_index type, const void *value) const
 {
     const auto found = _state->serializers.find (type);

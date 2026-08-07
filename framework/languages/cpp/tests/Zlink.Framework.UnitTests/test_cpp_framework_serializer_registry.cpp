@@ -162,5 +162,26 @@ int main ()
         return 12;
     }
 
+    // A resolved serializer owns the erased functions it invokes. Moving the
+    // registry must not leave the cached serializer pointing at the old object.
+    zlink::framework::serializer_registry_t movable_serializers;
+    movable_serializers.add<payload_t> (
+      [] (const payload_t &payload) {
+          return zlink::framework::encoded_payload_t::from_string (
+            std::to_string (payload.value));
+      },
+      [] (const zlink::framework::encoded_payload_t &payload) {
+          return payload_t{std::stoi (payload.to_string ())};
+      });
+    const auto retained_serializer = movable_serializers.get<payload_t> ();
+    auto moved_serializers = std::move (movable_serializers);
+    const auto retained_payload = retained_serializer.serialize ({31});
+    if (retained_payload.to_string () != "31"
+        || retained_serializer.deserialize (retained_payload).value != 31
+        || moved_serializers.get<payload_t> ().deserialize (retained_payload).value
+             != 31) {
+        return 14;
+    }
+
     return 0;
 }

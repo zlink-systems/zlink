@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <type_traits>
@@ -218,7 +219,8 @@ class serializer_registry_t
         }
 
         serializer_t<T> selected = [&] {
-            if (!contains (type)) {
+            auto registered = erased_serializer (type);
+            if (!registered) {
             if constexpr (detail::is_json_serializer_compatible_v<T>) {
                 return serializer_t<T> (
                   [] (const T &value) {
@@ -251,11 +253,16 @@ class serializer_registry_t
                   });
             }
             }
+            auto serialize = std::move (registered->serialize);
+            auto deserialize = std::move (registered->deserialize);
             return serializer_t<T> (
-              [this, type] (const T &value) { return serialize (type, &value); },
-              [this, type] (const encoded_payload_t &payload) {
+              [serialize = std::move (serialize)] (const T &value) {
+                  return serialize (&value);
+              },
+              [deserialize = std::move (deserialize)] (
+                const encoded_payload_t &payload) {
                   T value{};
-                  deserialize (type, payload, &value);
+                  deserialize (payload, &value);
                   return value;
               });
         } ();
@@ -271,6 +278,14 @@ class serializer_registry_t
     std::string content_type (std::type_index type) const;
 
   private:
+    struct erased_serializer_t
+    {
+        serialize_any_fn_t serialize;
+        deserialize_any_fn_t deserialize;
+    };
+
+    std::optional<erased_serializer_t>
+    erased_serializer (std::type_index type) const;
     std::shared_ptr<const void>
     cached_serializer (std::type_index type) const noexcept;
     std::shared_ptr<const void>

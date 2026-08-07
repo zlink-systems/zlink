@@ -1954,6 +1954,16 @@ int main ()
       "CPP-OWN-004",
       "default JSON serialization still round-trips through a binding message");
 
+    /* CPP-OWN-008 — a resolved custom serializer owns its erased functions;
+     * hot-path encode/decode no longer re-enters the registry map. */
+    gate.require (
+      serializer_header.find (
+        "[serialize = std::move (serialize)]")
+          != std::string::npos
+        && serializer_header.find ("[this, type]") == std::string::npos,
+      "CPP-OWN-008",
+      "cached custom serializers still look up erased functions per message");
+
     /* CPP-FOLLOW-001 — Message Follow admission preserves the contract error
      * categories and rejects a revisited node before the hop ceiling. */
     for (const std::string required : {
