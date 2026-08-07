@@ -28,6 +28,11 @@ interface ZLinkSerializerSelectionPlan {
   contentTypeOf(serializer: ZLinkMessageSerializer): string | undefined;
 }
 
+const noSerializer = Symbol('noSerializer');
+const nullPayloadType = Object.freeze({ kind: 'null' });
+const undefinedPayloadType = Object.freeze({ kind: 'undefined' });
+const objectWithoutConstructorType = Object.freeze({ kind: 'objectWithoutConstructor' });
+
 // Registration maps are created during host configuration and are immutable
 // for the runtime lifetime. Compile the candidate list and reverse content
 // type lookup once per map so the message path does not allocate arrays or
@@ -174,6 +179,7 @@ function serializerSelectionPlanOf(
     contentTypes.set(serializer, contentType);
   }
   const frozenEntries = Object.freeze(entries);
+  const outboundByBusinessType = new WeakMap<object, ZLinkMessageSerializer | typeof noSerializer>();
   const defaultSerializer = frozenEntries.length === 1
     ? frozenEntries[0]
     : selectSerializerFromEntries(frozenEntries, undefined);
@@ -181,11 +187,40 @@ function serializerSelectionPlanOf(
     serializers: frozenEntries,
     contentTypes,
     defaultSerializer,
-    select: (value) => selectSerializerFromEntries(frozenEntries, value),
+    select: (value) => {
+      const businessType = outboundBusinessType(value);
+      const cached = outboundByBusinessType.get(businessType);
+      if (cached !== undefined) {
+        return cached === noSerializer ? undefined : cached;
+      }
+      const selected = selectSerializerFromEntries(frozenEntries, value);
+      outboundByBusinessType.set(businessType, selected ?? noSerializer);
+      return selected;
+    },
     contentTypeOf: (serializer) => contentTypes.get(serializer)
   };
   serializerSelectionPlans.set(key, plan);
   return plan;
+}
+
+function outboundBusinessType(value: unknown): object {
+  if (value === null) return nullPayloadType;
+  if (value === undefined) return undefinedPayloadType;
+  switch (typeof value) {
+    case 'string': return String;
+    case 'number': return Number;
+    case 'boolean': return Boolean;
+    case 'bigint': return BigInt;
+    case 'symbol': return Symbol;
+    case 'function': return value;
+    case 'object': {
+      const constructor = (value as { constructor?: unknown }).constructor;
+      return typeof constructor === 'function'
+        ? constructor
+        : objectWithoutConstructorType;
+    }
+  }
+  throw new TypeError('Unsupported payload type.');
 }
 
 function selectSerializerFromEntries(

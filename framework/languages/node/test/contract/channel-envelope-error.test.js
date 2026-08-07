@@ -15,9 +15,13 @@ function readable(parts) {
 }
 
 test('selective application serializer leaves framework payload encoding on JSON', () => {
+  class FrameworkPayload {}
+  class ApplicationPayload {}
+  let selectionCalls = 0;
   const serializer = {
     canSerialize(value) {
-      return value?.kind === 'application';
+      selectionCalls += 1;
+      return value instanceof ApplicationPayload;
     },
     serialize() {
       throw new Error('serializer must not encode framework-owned payloads');
@@ -28,8 +32,11 @@ test('selective application serializer leaves framework payload encoding on JSON
   };
   const registry = new Map([['application/x-test', serializer]]);
 
-  assert.equal(payloadCodec.selectSerializer({ kind: 'framework' }, registry), undefined);
-  assert.equal(payloadCodec.selectSerializer({ kind: 'application' }, registry), serializer);
+  assert.equal(payloadCodec.selectSerializer(new FrameworkPayload(), registry), undefined);
+  assert.equal(payloadCodec.selectSerializer(new FrameworkPayload(), registry), undefined);
+  assert.equal(payloadCodec.selectSerializer(new ApplicationPayload(), registry), serializer);
+  assert.equal(payloadCodec.selectSerializer(new ApplicationPayload(), registry), serializer);
+  assert.equal(selectionCalls, 2);
   assert.equal(payloadCodec.selectDefaultSerializer(registry), serializer);
 });
 
