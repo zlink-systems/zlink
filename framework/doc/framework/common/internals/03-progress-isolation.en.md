@@ -281,6 +281,18 @@ There's one observation standard — with an application handler
 artificially kept waiting, do the call timeout, the shutdown
 procedure, and peer connection handling still progress.
 
+### The Boundary In C++ STREAM
+
+C++ STREAM submits the session callback to runtime async dispatch instead
+of running it directly inside the transport read callback. On disconnect,
+it submits the disconnect dispatch, calls `drain_async_dispatch` to confirm
+pending application dispatch completion, and then closes the transport.
+External TCP, TLS, and WebSocket writes are serialized by a per-connection
+queue, and the synchronous call returns only after write completion or
+cancellation is observed. This is the current C++ implementation boundary
+that keeps an application handler's wait from blocking infrastructure receive,
+send, or shutdown progress.
+
 ## 8. Result To Confirm
 
 - With an application handler kept waiting, that call's timeout fires.

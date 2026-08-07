@@ -738,7 +738,7 @@ ShoppingMall
 | Logical Component | Responsibility Kept In Every Language |
 |---|---|
 | `Client/Program` | Reads configuration and builds the client scenario's execution entry point. |
-| `Client/Scenario` | Owns the order of Start, polling, duplicate, failure, rebuild, and resume assertions. |
+| `Client/Scenario` | Owns the order of Start, polling, duplicate, failure, rebuild, and resume assertions through the public order API. Runner-only fixtures and server-evidence hooks stay outside the Client path. |
 | `Shared/JSON Contracts` | Owns the same message names, fields, optional values, and statuses. |
 | `Server/CommerceApi` | Owns input validation, idempotency mapping, workflow requests, and read model queries. |
 | `Server/OrderWorkflow/Domain` | Owns state transitions, event creation, compensation rules, and deterministic ID computation. |
@@ -759,9 +759,11 @@ responsibility.
 
 ## 9. Client Self-Check
 
-The runner confirms server readiness, then runs the client scenario once. Instead of a fixed sleep
-or log string as the success criterion, it confirms observable results of the response, read model,
-event stream, and external effects as assertions.
+The runner confirms server readiness, then runs the client scenario once. The Client calls only the
+CommerceApi public order API. Runner-only hooks for pending mappings, interrupted fixtures, and
+server evidence stay outside the Client process code path. Instead of a fixed sleep or log string as
+the success criterion, the Client asserts observable public responses and read-model results; the
+runner separately observes the event stream and external effects.
 
 ### 9.1 Normal/Failure Results
 
@@ -780,12 +782,15 @@ event stream, and external effects as assertions.
 
 6. Send the same `IdempotencyKey` to two API processes at the same time and confirm both responses'
    `OrderId` match and the `OrderStartedEvent` is recorded exactly once.
-7. Build a fixture interrupted at `InventoryReserved` during the background continuation, then send
-   `ContinueOrderWorkflowReq` and confirm it resumes from payment.
-8. In a fixture that interrupted the projection update after the terminal event was recorded,
-   confirm the resume command syncs the read model with the terminal fold.
-9. Delete one order's projection from `OrderReadModelStore`, then confirm `RebuildOrderProjectionReq`
-   replays only the stream to produce the same `OrderState`.
+7. Have the runner prepare a fixture interrupted at `InventoryReserved` during the background
+   continuation, then have the Client call the public `ContinueOrderWorkflowReq` endpoint and confirm
+   that it resumes from payment.
+8. Have the runner prepare a fixture that interrupted the projection update after the terminal event
+   was recorded, then have the Client call the public continue endpoint and confirm that the read model
+   matches the terminal fold.
+9. Have the runner delete one order's projection from `OrderReadModelStore`, then have the Client call
+   the public `RebuildOrderProjectionReq` endpoint and confirm that only the stream is replayed to
+   produce the same `OrderState`.
 10. Confirm that after termination or an idle condition, a valid command can activate a new
     generation of the same `OrderId`. This is performed only after an explicit close has completed
     authority release.
@@ -821,13 +826,15 @@ owned by this common sample.
 3. Start two `CommerceApi` processes and two `OrderWorkflow` processes.
 4. Perform a bounded wait until public readiness confirms the HTTP edge and RouteMesh object
    capability.
-5. Run the Client self-check, saving response, state, event, and external-effect evidence.
+5. Run the Client self-check, saving public response and state assertions. Collect event and
+   external-effect evidence separately through runner-only observation hooks.
 6. If every assertion passes, print `shoppingmall=completed` and the runner placement marker.
 7. On failure, don't print the success marker — leave the cause and the last confirmed state.
 
-The smoke runner doesn't put a server-internal endpoint, a direct store query, or a test-only
-adapter into the Client path. If server-side evidence is needed, it's collected through the runner's
-observation hook, but doesn't substitute for a Client assertion.
+The smoke runner doesn't put a server-internal endpoint, a direct store query, or a test-only adapter
+into the Client path. The runner calls self-check hooks only to prepare fixtures or collect
+server-side evidence; those calls are outside the Client process code path. Runner observation does
+not substitute for a Client assertion of public responses and state.
 
 ## 11. Completion Criteria
 
@@ -848,8 +855,8 @@ observation hook, but doesn't substitute for a Client assertion.
       distinguished.
 - [ ] Planned relocation keeps the same `ObjectGeneration`, resumes from the next step after event replay, and doesn't repeat a completed external effect.
 - [ ] The same logical components and JSON field meaning can be found in every supported language.
-- [ ] The Client self-check directly confirms the response, state, event, external effects, and
-      forbidden results.
+- [ ] The Client self-check directly confirms public responses, state, and forbidden results, while
+      runner observation separately confirms events and external effects.
 - [ ] The sample code uses only the public Framework API and the default typed JSON codec.
 - [ ] The smoke run confirms readiness with a bounded wait and prints the success marker
       conditionally.

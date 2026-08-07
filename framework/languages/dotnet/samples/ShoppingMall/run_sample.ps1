@@ -78,6 +78,37 @@ try {
     Wait-SampleTcpEndpoint "api-b-mesh" $SHOPPINGMALL_API_B_MESH_ENDPOINT -Attempts 30
     Wait-SampleHttpHealth "api-b" $SHOPPINGMALL_API_B_HTTP_URL -Attempts 30
 
+    # Prepare deterministic recovery fixtures outside the Client process. The
+    # Client uses only public order endpoints; these self-check routes are the
+    # runner's server observation/setup hook.
+    $jsonHeaders = @{ "Content-Type" = "application/json" }
+    $pendingBody = @{ idempotencyKey = "order-pending-001"; orderId = "order-pending-0001" } | ConvertTo-Json -Compress
+    Invoke-RestMethod -Method Post -Uri "$SHOPPINGMALL_API_A_HTTP_URL/self-check/idempotency/pending" -Headers $jsonHeaders -Body $pendingBody | Out-Null
+    $resumeMappingBody = @{ idempotencyKey = "order-resume-001"; orderId = "order-resume-001" } | ConvertTo-Json -Compress
+    Invoke-RestMethod -Method Post -Uri "$SHOPPINGMALL_API_A_HTTP_URL/self-check/idempotency/pending" -Headers $jsonHeaders -Body $resumeMappingBody | Out-Null
+    $resumeBody = @{
+        cartId = "cart-success"; shippingAddressId = "addr-home"; paymentMethodId = "pm-ok"; idempotencyKey = "order-resume-001"
+    } | ConvertTo-Json -Compress
+    Invoke-RestMethod -Method Post -Uri "$SHOPPINGMALL_API_A_HTTP_URL/self-check/workflow/inventory-reserved" -Headers $jsonHeaders -Body $resumeBody | Out-Null
+    $repairMappingBody = @{ idempotencyKey = "order-repair-001"; orderId = "order-repair-001" } | ConvertTo-Json -Compress
+    Invoke-RestMethod -Method Post -Uri "$SHOPPINGMALL_API_A_HTTP_URL/self-check/idempotency/pending" -Headers $jsonHeaders -Body $repairMappingBody | Out-Null
+    $repairBody = @{
+        cartId = "cart-success"; shippingAddressId = "addr-home"; paymentMethodId = "pm-ok"; idempotencyKey = "order-repair-001"
+    } | ConvertTo-Json -Compress
+    Invoke-RestMethod -Method Post -Uri "$SHOPPINGMALL_API_A_HTTP_URL/self-check/workflow/inventory-reserved" -Headers $jsonHeaders -Body $repairBody | Out-Null
+    Invoke-RestMethod -Method Post -Uri "$SHOPPINGMALL_API_A_HTTP_URL/orders/order-repair-001/continue" -Headers $jsonHeaders -Body "{}" | Out-Null
+    Invoke-RestMethod -Method Post -Uri "$SHOPPINGMALL_API_A_HTTP_URL/self-check/projection/order-repair-001/delete" -Headers $jsonHeaders -Body "{}" | Out-Null
+    $projectionStillExists = $false
+    try {
+        Invoke-WebRequest -Method Get -Uri "$SHOPPINGMALL_API_A_HTTP_URL/orders/order-repair-001" -UseBasicParsing | Out-Null
+        $projectionStillExists = $true
+    }
+    catch {
+    }
+    if ($projectionStillExists) {
+        throw "Projection deletion fixture was not visible through the public read API."
+    }
+
     Invoke-SampleDotnetRun -Project (Join-Path $ScriptDir "Client/ShoppingMall.Client.csproj") -Arguments @("--config", $configFiles["client"])
 
     Assert-SampleLogContains -LogDirectory $SampleLogDir -Pattern "shoppingmall=completed"
@@ -86,6 +117,15 @@ try {
         (Select-String -Path (Join-Path $LogDir "workflow-b.out.log") -SimpleMatch "shoppingmall order: started" -Quiet)
     if (-not $workflowStarted) {
         throw "No workflow instance recorded a shoppingmall order start."
+    }
+    $assertionBody = @{
+        successfulOrderId = "order-0001"; pendingRecoveredOrderId = "order-pending-0001"; concurrentOrderId = "order-0002"
+        resumedOrderId = "order-resume-001"; inventoryFailureOrderId = "order-0003"; paymentFailureOrderId = "order-0004"
+        scaleOutOrderId = "order-0005"; repairOrderId = "order-repair-001"
+    } | ConvertTo-Json -Compress
+    $assertion = Invoke-RestMethod -Method Post -Uri "$SHOPPINGMALL_API_A_HTTP_URL/self-check/assert" -Headers $jsonHeaders -Body $assertionBody
+    if (-not $assertion.Passed) {
+        throw "ShoppingMall server evidence assertion failed."
     }
     Assert-SampleLogContains -LogDirectory $LogDir -Pattern "shoppingmall evidence:"
     Write-Host "shoppingmall-server-evidence=completed"
@@ -97,7 +137,7 @@ finally {
     if ($RedisContainer) {
         Remove-SampleRedisContainer $RedisContainer
     }
-    if (-not $RunSucceeded -or $SHOPPINGMALL_KEEP_RUN_DIR -eq "1") {
+    if (-not $RunSucceeded -or $env:SHOPPINGMALL_KEEP_RUN_DIR -eq "1") {
         Write-Host "runDir=$RunDir"
     }
     else {

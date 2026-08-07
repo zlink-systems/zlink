@@ -382,11 +382,13 @@ internal sealed partial class ZLinkSpotActivation
     {
         if (ZLinkSpotActivationDispatcher.IsInfrastructureRoute(received))
         {
-            QueueSerialized(
-                static (activation, state, ct) =>
-                    activation._dispatcher.DispatchRouteAsync(state, ct),
-                received,
-                received.Dispose);
+            // Infrastructure routes can wait for provider I/O and remote
+            // lifecycle callbacks. Keep that wait off the native route drain
+            // so a slow handoff cannot delay the next admission or commit.
+            if (!_serial.TryRunDetached(
+                    "user-spot-infrastructure-route",
+                    ct => _dispatcher.DispatchRouteAsync(received, ct)))
+                received.Dispose();
             return;
         }
 

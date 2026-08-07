@@ -78,6 +78,7 @@ binding-facing runtime integration에서 `Systems.Zlink` public API를 바로 �
 | monitor adapter | `MonitorEvent`, `ISocketMonitor.Recv` | native event·timeout·result를 Framework monitor event로 변환한다. | monitor dispose와 event callback 수명을 관리한다. | monitor array와 nonblocking poll storage를 재사용한다. | semantic adapter 유지 |
 | socket poller | public `IPoller.Wait(Span<PollEvent>, TimeSpan)`를 `ZLinkBackendSocketReadiness`로 변환 | binding event flag를 Framework readiness contract로 바꾼다. | poller와 event array를 owner가 함께 dispose한다. | binding `PollEvent[1]`을 lifecycle 동안 재사용한다. | semantic port 유지; binding flag는 .NET adapter에서 끝난다. |
 | `ZLinkBackendSpotNodeWrapper` / `ZLinkBackendSpotWrapper` | `IMeshNode`, `ISpot` 및 dispatch callback | binding mesh object를 Spot, Actor, completion, lifecycle 의미로 결합한다. | completion table, dispatch pump, actor/spot 수명을 관리한다. | application operation에 필요한 변환만 수행한다. | semantic adapter 유지 |
+| `ZLinkSpotNodeInitializer` → `ZLinkBackendSpotNodeWrapper` → `ZLinkManagedMeshNode` | `MaxMessageSize`, 송·수신 HWM, mailbox budget, 송·수신 timeout | Framework의 `IZLinkMeshNodeSocketConfig`를 managed ROUTER socket option으로 방향별 변환한다. | 값은 startup bind 전에 node에 전달되고 socket이 생성될 때 적용된다. | startup 경로만 사용하며 message hot path에는 없다. | semantic adapter 경로 유지; send와 receive 값을 합치지 않는다. |
 | `ZLinkBackendStreamSocketWrapper` | `IStreamSocket`, `IStreamSessionService` | raw frame과 bound actor session을 Framework Stream 의미로 결합한다. | session service와 socket의 종료 순서, shared MeshNode ownership을 관리한다. | `_sendGate`로 session submit 순서를 보장한다. | semantic adapter 유지 |
 | `ZLinkRawRouterServicePort` / `ZLinkManagedMeshNode` raw receive | public `IRouterSocket.Recv(Received, ...)` | 이 경로는 Framework application message를 다시 감싸지 않고 service wire를 직접 처리한다. | 한 receive owner가 storage를 보유하고 처리 후 다음 receive에서 binding이 reset한다. 비동기 request 완료는 binding progress pump가 담당한다. | caller-provided `Received`와 재사용 event array를 사용하며 receive poller는 `PollCompletion`까지 소유하지 않는다. | backend integration 내부에서 binding public API 직접 호출 |
 | `SetChannelName` on backend socket | 없음 | channel name은 Framework domain/config 값이며 binding socket에 전달할 의미가 없었다. | socket에 저장하거나 lifecycle을 바꾸지 않았다. | 호출·검증·fake method만 추가했다. | pass-through 제거 |
@@ -95,6 +96,19 @@ adapter도 같은 기준을 따른다. 설정과 readiness는 semantic port에 �
 소유권이 같은 `TryReceive(TopicMessage)`를 제공한다. binding adapter는 이 operation을
 public `ISubSocket.Subscribe` 호출로 변환한다. `ISubSocket`은 semantic backend contract를
 통과하지 않는다.
+
+### 2.1 MeshNode ROUTER option handoff
+
+`ZLinkSpotNodeInitializer`는 topology의 `IZLinkMeshNodeSocketConfig`를 backend node에
+한 번 전달한다. `ZLinkBackendSpotNodeWrapper`는 이를 `IMeshNode`의 방향별 property로
+옮기고, `ZLinkManagedMeshNode`는 ROUTER socket을 만들 때 `SendHighWaterMark`,
+`ReceiveHighWaterMark`, `SendTimeout`, `ReceiveTimeout`을 각각의 binding option에
+적용한다. `ReceiveHighWaterMark`를 send 값에서 복사하거나 receive timeout을 생략하면
+공통 topology contract의 의미가 바뀐다.
+
+이 경로는 `BackendAdapterFactoryTests.SpotNode_Router_Send_Config_RoundTrips_Through_Binding`
+에서 send·receive HWM과 두 timeout의 분리를 확인한다. 테스트는 source-level mapping을
+고정하며, 실제 package와 Windows process 검증은 별도 evidence로 판정한다.
 
 ## 3. Direct call과 Adapter를 비교하는 방법
 
@@ -232,6 +246,7 @@ fanout, stream concurrency와 receive dispatch budget test를 함께 실행한�
 | Test | 통과 기준 |
 |---|---|
 | `BackendAdapterFactoryTests.BackendFactory_Creates_Backend_Resources_Through_Runtime_Context` | backend factory가 하나의 generation-scoped semantic context port를 통해 socket·Spot·Stream resource를 만들며 binding context는 .NET integration 경계 안에 남는다. |
+| `BackendAdapterFactoryTests.SpotNode_Router_Send_Config_RoundTrips_Through_Binding` | MeshNode topology의 MaxMessageSize, send·receive HWM, mailbox budget과 send·receive timeout이 방향을 잃지 않고 managed ROUTER socket 설정까지 전달된다. |
 | `ClientServerChannelRuntimeTests.BackendWrappers_DeliverUnsolicitedLivenessProbe` | caller-provided `Received` envelope를 control receive에서 재사용하고 application queue가 이를 보관하지 않는다. |
 | `InboundDispatchBudgetTests.Dispatch_queue_rejects_when_full_without_blocking_receive_loop` | application queue가 가득 차면 소유한 envelope를 reject 경로에서 반환하고 control receive loop를 block하지 않는다. |
 | `test_pubsub.pubsub_topic_message_can_be_released_for_reuse` | binding public reuse API가 수신 parts를 정리하고 같은 topic envelope가 다음 publish를 받을 수 있게 한다. |

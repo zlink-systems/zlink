@@ -149,7 +149,7 @@ finally {
     if ($redisContainerId) {
         Remove-SampleRedisContainer $redisContainerId
     }
-    if (-not $RunSucceeded -or $TICTACTOE_KEEP_RUN_DIR -eq "1") {
+    if (-not $RunSucceeded -or $env:TICTACTOE_KEEP_RUN_DIR -eq "1") {
         Write-Host "runDir=$RunDir"
     }
     else {

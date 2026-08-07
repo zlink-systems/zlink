@@ -168,6 +168,33 @@ owner가 바뀌어, 더 이상 owner가 아닌 node의 대기열에 message가 �
 **결정.** 어느 방식을 고르든 §1의 마지막 규칙은 같다 — 깨어난 뒤에는 항상 준비된 owner
 집합을 다시 확인한다.
 
+### C++ Framework의 STREAM 구현 경계
+
+C++ Framework의 외부 TCP·TLS·WebSocket STREAM은 Asio `io_context`의 비동기 accept,
+read, write completion을 사용한다. Framework가 OS descriptor를 직접 다루거나 운영체제별
+수신 분기를 두지 않으므로, 연결 도착과 write completion은 해당 connection의 Asio 실행
+문맥에서 즉시 다음 작업을 깨운다. 여러 connection의 수신은 공용 turn scheduler가
+순서를 정하고, 각 connection은 건수·byte·경과 시간 한도 안에서 처리한다.
+
+Core 기반 STREAM은 Core socket과 Core timer를 같은 `poller_t`에 등록한다. listener의
+stop 요청은 timer를 one-shot wake event로 signal하고, poller는 고정 주기의 stop polling
+없이 이 event를 받는다. 따라서 `poller_t`가 운영체제별 close wake를 보장하지 않는다는
+제약을 Framework의 운영체제별 코드로 우회하지 않는다. 이 경계는 C++ runtime의 현재
+구현이며, 공통 계약을 완화하는 예외가 아니다.
+
+### MeshNode socket option은 송·수신 방향을 따로 전달한다
+
+RouteMesh MeshNode의 socket 설정은 하나의 HWM이나 timeout으로 합치지 않는다.
+`SendHighWaterMark`는 송신 queue에, `ReceiveHighWaterMark`는 수신 queue에 적용한다.
+`SendTimeout`과 `ReceiveTimeout`도 같은 방향 규칙으로 각각의 socket option에 전달한다.
+`MaxMessageSize`와 mailbox 두 상한은 이 방향별 socket option과 별도의 설정이다.
+
+이 값들은 MeshNode가 시작되기 전에 확정되어 bind 경로에 전달된다. 따라서 수신 HWM을
+송신 HWM에서 추론하거나 수신 timeout을 send timeout의 별칭으로 처리하면 안 된다. 이
+구조는 [RouteMesh topology](../spec/07-channel-topology.ko.md)와
+[MeshNode startup](../spec/13-mesh-node.ko.md)이 정한 public 설정을 runtime 경계에서
+보존하기 위한 것이다.
+
 ## 6. 소켓에서 한 번에 여러 건을 읽는다
 
 §3은 owner를 가져온 뒤 모아서 처리하는 이야기였다. 그 앞 단계 — **소켓에서 꺼내는

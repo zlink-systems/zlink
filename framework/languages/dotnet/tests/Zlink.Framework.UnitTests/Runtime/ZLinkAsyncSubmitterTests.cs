@@ -3,7 +3,6 @@ using System.Diagnostics;
 
 namespace Zlink.Framework.UnitTests;
 
-[Collection(DiagnosticsIsolationCollection.Name)]
 public sealed class ZLinkAsyncSubmitterTests : IDisposable
 {
     public ZLinkAsyncSubmitterTests() =>

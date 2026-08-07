@@ -79,6 +79,10 @@ public interface IZLinkNetworkOptions
 public interface IZLinkMeshNodeSocketConfig
 {
     // RouteMesh SS has no Framework-level message-size setting.
+    ulong SendHighWaterMark { get; set; }
+    ulong ReceiveHighWaterMark { get; set; }
+    ulong MailboxMessageBudget { get; set; }
+    ulong MailboxByteBudget { get; set; }
     TimeSpan? ReceiveTimeout { get; set; }
     TimeSpan? SendTimeout { get; set; }
 }
@@ -674,20 +678,25 @@ Multicast remote targets. The termination rule for already-submitted work
 and RID direct is defined by
 [Graceful Drain](28-graceful-drain-handoff.en.md).
 
-## 8. RouteMesh SS Message Size
+## 8. RouteMesh SS Message Size And Mailbox Caps
 
-A RouteMesh MeshNode has no Framework-level `MaxMessageSize` setting. The
-RouteMesh ServerServer (SS) transport doesn't expose a listener message-size
-setter, and the Framework doesn't reject a complete message solely because
-of a Framework-level `MaxMessageSize`.
+`ConfigureRouterSocket()` sets the complete service-wire message
+`MaxMessageSize` for a RouteMesh MeshNode before startup. It is the maximum
+size of one message accepted by the ROUTER socket; application handlers don't
+replace it by checking the decoded payload themselves. `SendHighWaterMark`
+and `ReceiveHighWaterMark`, and `SendTimeout` and `ReceiveTimeout`, apply to
+separate socket directions.
 
-Messages still follow the representation limits of the transport and the
-service-wire protocol, as well as the memory available to the process. If
-one of those lower-level limits rejects a message, the framework doesn't
-deliver a partial payload to the handler and the request ends with the
-terminal result defined by the [error model](32-framework-error-model.en.md).
-An application handler checking the decoded payload length doesn't replace
-those lower-level limits.
+`MailboxMessageBudget` and `MailboxByteBudget` are separate from socket HWM.
+They cap the message count and total bytes held by each owner's application
+mailbox. The amount a socket can receive and the amount an owner can retain
+for execution are not the same setting. Their byte-accounting rule is defined
+by [Framework API §8.2](06-framework-api.en.md#82-handler-execution-objects-and-dependency-lifetime).
+
+A complete message over the cap isn't partially delivered to a handler, and
+the request ends with the terminal result defined by the [error model](32-framework-error-model.en.md).
+The transport and service-wire representation limits and process-memory limit
+also apply.
 
 ClientServer keeps the regular application-listener `MaxMessageSize` contract
 defined by [Framework API §6](06-framework-api.en.md). It doesn't inherit the

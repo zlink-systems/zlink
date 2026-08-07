@@ -87,7 +87,8 @@ internal sealed class ZoneNodeBootstrap(
                 return;
             }
             catch (ZLinkFrameworkException exception)
-                when (exception.Kind == ZLinkFrameworkErrorKind.Unavailable
+                when (exception.Kind is (ZLinkFrameworkErrorKind.Unavailable
+                          or ZLinkFrameworkErrorKind.DeadlineExceeded)
                       && attempt + 1 < StartupRetryAttempts)
             {
                 await Task.Delay(StartupRetryDelay, cancellationToken);

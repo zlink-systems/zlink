@@ -1158,12 +1158,16 @@ public sealed class ServiceRuntimeFoundationTests
             {
                 if (remote is not null)
                 {
-                    await remote.DisposeAsync();
-                    remote = null;
-
                     // The auto-connect owner removes the old intent before it
                     // installs the new RID at the same endpoint.
                     localBackend.DisconnectPeer(remoteEndpoint);
+                    await WaitUntilAsync(() => !local.Peers().Any(peer =>
+                        string.Equals(
+                            peer.Endpoint,
+                            remoteEndpoint,
+                            StringComparison.Ordinal)));
+                    await remote.DisposeAsync();
+                    remote = null;
                 }
 
                 var remoteRid = RoutingId.From(

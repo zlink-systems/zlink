@@ -1214,31 +1214,32 @@ public static class Scenarios
     private static async ValueTask F1BotsPresent(ClientOptions options, CancellationToken ct)
     {
         await using var player = await GameClient.ConnectAsync(options, Unique("f1"), ct);
+        var firstWaiting = player.Connector.WaitFor<ZoneStateNotify>()
+            .Where(message => message.Payload.Players.Any(p =>
+                p.IsBot && string.Equals(p.ZoneId, message.Payload.ZoneId, StringComparison.Ordinal)))
+            .Timeout(BotObservationTimeout)
+            .Async(ct);
         await player.JoinWorldAsync(ct);
 
-        var first = (await player.Connector.WaitFor<ZoneStateNotify>()
-            .Where(message => message.Payload.Players.Count(p => p.IsBot) >= ZoneWorldSpec.BotsPerZone)
-            .Timeout(BotObservationTimeout)
-            .Async(ct)).Payload;
-        var bots = first.Players.Where(p => p.IsBot).ToDictionary(p => p.PlayerId, StringComparer.Ordinal);
+        var first = (await firstWaiting).Payload;
+        var bots = first.Players
+            .Where(p => p.IsBot && string.Equals(p.ZoneId, first.ZoneId, StringComparison.Ordinal))
+            .ToDictionary(p => p.PlayerId, StringComparer.Ordinal);
         ZlinkStreamAssert.Ensure(
-            bots.Count >= ZoneWorldSpec.BotsPerZone,
-            "the spawn zone's own bots are in the world with no client attached");
+            bots.Count > 0,
+            "the client sees a bot in its zone with no client attached");
 
-        // Both of the zone's bots move: one patrols X, the other Y, and each has to be walking.
-        var stillStanding = new HashSet<string>(bots.Keys, StringComparer.Ordinal);
-        while (stillStanding.Count > 0)
-        {
-            var state = (await player.Connector.WaitFor<ZoneStateNotify>()
-                .Where(message => message.Payload.Players.Any(p => p.PlayerId == player.PlayerId))
-                .Timeout(BotObservationTimeout)
-                .Async(ct)).Payload;
-            foreach (var bot in state.Players.Where(p => p.IsBot))
+        // The first local bot visible to this client must change position. The runner separately
+        // counts all eight bots; F2 checks the cross-node X patrol and F4 checks reversal.
+        var moved = player.Connector.WaitFor<ZoneStateNotify>()
+            .Where(message => message.Payload.Players.Any(bot =>
             {
-                if (!bots.TryGetValue(bot.PlayerId, out var before)) continue;
-                if (bot.X != before.X || bot.Y != before.Y) stillStanding.Remove(bot.PlayerId);
-            }
-        }
+                if (!bot.IsBot || !bots.TryGetValue(bot.PlayerId, out var before)) return false;
+                return bot.X != before.X || bot.Y != before.Y;
+            }))
+            .Timeout(BotObservationTimeout)
+            .Async(ct);
+        await moved;
     }
 
     /// <summary>

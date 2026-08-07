@@ -427,6 +427,12 @@ Closed 상태의 SendChatMessageReq는 오류 response를 반환하고, Closed �
 돌아가고, 그렇지 않으면 Closed와 ConversationClosedNotify를 보낸다. explicit close는 바로
 Closed로 전환한다.
 
+여러 process의 준비·재연결 검증이 domain idle deadline보다 오래 걸릴 수 있다. 이 경우
+runner는 idle 판정 전에 일반 typed `SendChatMessageReq`를 보내고, response와 새
+`MessageSeq`를 확인해 application traffic이 계속 유효함을 갱신할 수 있다. 이 message는
+heartbeat나 transport keepalive가 아니며, control packet·임의의 sleep·log line으로 idle
+deadline을 대신 늘려서는 안 된다. 실제 idle과 grace 동작은 별도의 bounded wait로 확인한다.
+
 ```mermaid
 sequenceDiagram
     participant C as Customer Client

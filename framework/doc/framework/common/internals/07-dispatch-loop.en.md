@@ -208,6 +208,38 @@ first value to check when comparing performance.
 **Decision.** Whichever method is chosen, §1's last rule is the
 same — always recheck the ready-owner set after waking up.
 
+### C++ Framework STREAM Boundary
+
+The C++ Framework's external TCP, TLS, and WebSocket STREAM paths use Asio
+`io_context` asynchronous accept, read, and write completions. The Framework
+doesn't handle OS descriptors directly or branch the receive path by operating
+system, so connection arrivals and write completions wake the next operation on
+the connection's Asio execution context. A shared turn scheduler orders receive
+turns across connections, and each connection is processed within count, byte,
+and elapsed-time bounds.
+
+Core-backed STREAM registers the Core socket and a Core timer in the same
+`poller_t`. A listener stop request signals the timer as a one-shot wake event,
+and the poller receives that event without fixed-period stop polling. Thus the
+Framework doesn't work around the constraint that `poller_t` has no
+cross-platform close-wake guarantee with operating-system-specific code. This
+is the current C++ runtime implementation boundary, not an exception that
+weakens the common contract.
+
+### MeshNode socket options stay directional
+
+RouteMesh MeshNode socket configuration does not collapse send and receive into
+one HWM or timeout. `SendHighWaterMark` applies to the send queue, while
+`ReceiveHighWaterMark` applies to the receive queue. `SendTimeout` and
+`ReceiveTimeout` follow the same directional rule for their respective socket
+options. `MaxMessageSize` and the two mailbox caps are separate settings.
+
+These values are fixed before the MeshNode starts and are handed to the bind
+path. The runtime must not infer the receive HWM from the send HWM or treat the
+receive timeout as an alias for the send timeout. This preserves the public
+configuration at the runtime boundary defined by [RouteMesh topology](../spec/07-channel-topology.en.md)
+and [MeshNode startup](../spec/13-mesh-node.en.md).
+
 ## 6. Read Multiple Items At Once From A Socket
 
 §3 was about batch-processing after taking ownership. The step

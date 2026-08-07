@@ -3,7 +3,6 @@ using Microsoft.Extensions.Logging;
 
 namespace Zlink.Framework.UnitTests;
 
-[Collection(RuntimeMetricsCollection.Name)]
 public sealed class RuntimeMetricsTests
 {
     [Fact]
@@ -803,10 +802,4 @@ public sealed class RuntimeMetricsTests
         T value,
         ReadOnlySpan<KeyValuePair<string, object?>> tags)
         where T : struct;
-}
-
-[CollectionDefinition(Name, DisableParallelization = true)]
-public sealed class RuntimeMetricsCollection
-{
-    public const string Name = "Runtime metrics isolation";
 }

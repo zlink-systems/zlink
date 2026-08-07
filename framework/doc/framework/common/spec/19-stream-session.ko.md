@@ -106,6 +106,14 @@ Core receive pipe의 HWM이 application queue를 제한하지 못하므로 Frame
 만족하지 못한다. Framework는 queue admission이 실패한 동안 새 packet을 읽지 않으며,
 이미 받은 packet을 버리거나 같은 packet을 callback으로 재전달하지 않는다.
 
+### 4.1 transport operation 종료 경계
+
+Physical stream을 닫기 시작하면 Framework는 새 packet admission을 막고, 진행 중인 read와
+write operation을 소유한 transport 실행 문맥에서 완료하거나 취소한다. TCP, TLS 또는
+WebSocket socket·stream·session resource를 파괴하기 전에 이 completion 또는 cancellation이
+관찰되어야 한다. 늦게 도착한 transport callback은 이미 정리된 resource를 참조하지 않으며,
+하나의 operation을 두 번 완료하거나 다음 operation을 중복 시작하지 않는다.
+
 ## 5. Codec 계층 분리
 
 Framework 기본 표면은 session, session context, stream과 message까지만 제공한다.

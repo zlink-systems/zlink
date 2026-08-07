@@ -27,7 +27,7 @@ internal sealed class PlayServer(SampleSettings settings)
         builder.Services.AddSingleton(settings);
         builder.Services.AddZLinkFramework(options =>
         {
-            options.DisableImplicitHandlerAutoRegistration();
+            options.AddHandlersFromAssemblyOf(typeof(PlayServer));
             options.DefaultRequestTimeout = TimeSpan.FromSeconds(15);
             var locations = options.ConfigureLocations();
             locations.RouteCacheMaxAge = TimeSpan.Zero;

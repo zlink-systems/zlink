@@ -194,6 +194,37 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
         TimeSpan timeout,
         CancellationToken cancellationToken)
     {
+        try
+        {
+            return await SubmitCoreAsync(
+                    actorId,
+                    actorType,
+                    createOnly,
+                    meshName,
+                    createRequest,
+                    timeout,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw CreateActorCreationDeadlineException(actorId);
+        }
+        catch (TimeoutException error) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw CreateActorCreationDeadlineException(actorId, error);
+        }
+    }
+
+    private async ValueTask<ZLinkActorCreateResult> SubmitCoreAsync(
+        string actorId,
+        string actorType,
+        bool createOnly,
+        string? meshName,
+        ZLinkMessage createRequest,
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
+    {
         var deadlineAt = DateTimeOffset.UtcNow.Add(timeout);
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         deadline.CancelAfter(timeout);
@@ -451,6 +482,18 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
                     .ConfigureAwait(false);
                 throw;
             }
+            catch (OperationCanceledException)
+            {
+                await store.AbortAsync(reservation, CancellationToken.None)
+                    .ConfigureAwait(false);
+                throw;
+            }
+            catch (TimeoutException)
+            {
+                await store.AbortAsync(reservation, CancellationToken.None)
+                    .ConfigureAwait(false);
+                throw;
+            }
             catch (ZLinkFrameworkException exception)
             {
                 await store.AbortAsync(reservation, CancellationToken.None)
@@ -482,6 +525,15 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
             }
         }
     }
+
+    internal static ZLinkFrameworkException CreateActorCreationDeadlineException(
+        string actorId,
+        Exception? innerException = null) =>
+        new(
+            ZLinkFrameworkErrorKind.DeadlineExceeded,
+            $"Actor '{actorId}' creation deadline elapsed.",
+            ZLinkRetryAdvice.RetryAfterBackoff,
+            innerException);
 
     internal static bool IsEligibleCandidate(
         ZLinkMeshNodeDescriptor candidate,

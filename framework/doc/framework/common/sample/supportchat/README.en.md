@@ -433,6 +433,13 @@ WaitingForClose and sends `ConversationIdleNotify` to both sides. If a message a
 grace timeout, it returns to Active; otherwise it sends Closed and `ConversationClosedNotify`. An
 explicit close transitions directly to Closed.
 
+Preparation and reconnect assertions across several processes can take longer than the domain
+idle deadline. In that case, the runner may send a normal typed `SendChatMessageReq` before the
+idle assertion and verify its response and new `MessageSeq` to renew valid application traffic.
+This message is not a heartbeat or transport keepalive; a control packet, arbitrary sleep, or log
+line must not replace it. The actual idle and grace behavior is checked with a separate bounded
+wait.
+
 ```mermaid
 sequenceDiagram
     participant C as Customer Client

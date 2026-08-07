@@ -9,10 +9,10 @@ internal sealed class ShoppingMallClientScenario
     // End-to-end client story:
     // 1. Start a successful order on API A and wait until the workflow confirms it.
     // 2. Repeat the same idempotency key through API B and verify it returns the same order.
-    // 3. Exercise a pending idempotency record that another API instance can resume.
+    // 3. Resume a pending idempotency record prepared by the smoke runner.
     // 4. Run inventory and payment failure paths and verify the stored failure reasons.
-    // 5. Delete and rebuild a read projection, then compare delayed reads across API instances.
-    // 6. Start a scale-out order and ask the server to verify all expected workflow evidence.
+    // 5. Rebuild a projection prepared by the smoke runner through the public order API.
+    // 6. Start a scale-out order and leave server evidence to the runner observation hook.
     public async ValueTask RunAsync(
         ZLinkHttpClient apiA,
         ZLinkHttpClient apiB,
@@ -64,14 +64,6 @@ internal sealed class ShoppingMallClientScenario
             "addr-office",
             "pm-ok",
             "order-pending-001");
-        var pendingHook = await apiA.Post("/self-check/idempotency/pending")
-            .Body(new
-            {
-                pendingReq.IdempotencyKey,
-                OrderId = "order-pending-0001"
-            })
-            .AsyncRaw(cancellationToken);
-        ZlinkStreamAssert.Ensure(pendingHook.Status is >= 200 and < 300, "Assertion failed: pendingHook.Status is >= 200 and < 300");
         var pending = await apiB.Post("/orders/start").Body(pendingReq)
             .Fetch<StartOrderRes>(cancellationToken);
         ZlinkStreamAssert.Ensure(pending.OrderId == "order-pending-0001", "Assertion failed: pending.OrderId == \"order-pending-0001\"");
@@ -80,20 +72,11 @@ internal sealed class ShoppingMallClientScenario
         ZlinkStreamAssert.Ensure(IsStartedOrConfirmed(pendingCreated), "Assertion failed: IsStartedOrConfirmed(pendingCreated)");
         ZlinkStreamAssert.Ensure(pendingCreated.ShippingAddressId == pendingReq.ShippingAddressId, "Assertion failed: pendingCreated.ShippingAddressId == pendingReq.ShippingAddressId");
 
-        var resumeReq = new StartOrderReq(
-            "cart-success",
-            "addr-home",
-            "pm-ok",
-            "order-resume-001");
-        var inventoryReserved = await apiA.Post("/self-check/workflow/inventory-reserved")
-            .Body(resumeReq)
-            .Fetch<StartOrderRes>(cancellationToken);
-        ZlinkStreamAssert.Ensure(inventoryReserved.State.Status == OrderStatuses.InventoryReserved, "Assertion failed: inventoryReserved.State.Status == OrderStatuses.InventoryReserved");
-        var resumed = await apiB.Post($"/self-check/workflow/{inventoryReserved.OrderId}/continue")
+        var resumed = await apiB.Post("/orders/order-resume-001/continue")
             .Fetch<ContinueOrderWorkflowRes>(cancellationToken);
         ZlinkStreamAssert.Ensure(resumed.State.Status == OrderStatuses.Confirmed, "Assertion failed: resumed.State.Status == OrderStatuses.Confirmed");
-        ZlinkStreamAssert.Ensure(resumed.State.ReservationId == $"reservation-{inventoryReserved.OrderId}", "Assertion failed: resumed.State.ReservationId == $\"reservation-{inventoryReserved.OrderId}\"");
-        ZlinkStreamAssert.Ensure(resumed.State.PaymentId == $"payment-{inventoryReserved.OrderId}", "Assertion failed: resumed.State.PaymentId == $\"payment-{inventoryReserved.OrderId}\"");
+        ZlinkStreamAssert.Ensure(resumed.State.ReservationId == "reservation-order-resume-001", "Assertion failed: resumed.State.ReservationId == \"reservation-order-resume-001\"");
+        ZlinkStreamAssert.Ensure(resumed.State.PaymentId == "payment-order-resume-001", "Assertion failed: resumed.State.PaymentId == \"payment-order-resume-001\"");
 
         var inventoryReq = new StartOrderReq(
             "cart-inventory-fail",
@@ -118,20 +101,10 @@ internal sealed class ShoppingMallClientScenario
         ZlinkStreamAssert.Ensure(paymentFailed.ReservationId is not null, "Assertion failed: paymentFailed.ReservationId is not null");
         ZlinkStreamAssert.Ensure(paymentFailed.Reason?.Contains("payment", StringComparison.OrdinalIgnoreCase) == true, "Assertion failed: paymentFailed.Reason?.Contains(\"payment\", StringComparison.OrdinalIgnoreCase) == true");
 
-        var deleteProjection = await apiA.Post($"/self-check/projection/{success.OrderId}/delete")
-            .AsyncRaw(cancellationToken);
-        ZlinkStreamAssert.Ensure(deleteProjection.Status is >= 200 and < 300, "Assertion failed: deleteProjection.Status is >= 200 and < 300");
-        var healedByContinue = await apiB.Post($"/self-check/workflow/{success.OrderId}/continue")
-            .Fetch<ContinueOrderWorkflowRes>(cancellationToken);
-        ZlinkStreamAssert.Ensure(healedByContinue.State.Status == OrderStatuses.Confirmed, "Assertion failed: healedByContinue.State.Status == OrderStatuses.Confirmed");
-
-        var deleteProjectionAgain = await apiA.Post($"/self-check/projection/{success.OrderId}/delete")
-            .AsyncRaw(cancellationToken);
-        ZlinkStreamAssert.Ensure(deleteProjectionAgain.Status is >= 200 and < 300, "Assertion failed: deleteProjectionAgain.Status is >= 200 and < 300");
-        var rebuilt = await apiA.Post($"/self-check/projection/{success.OrderId}/rebuild")
+        var rebuilt = await apiA.Post("/orders/order-repair-001/rebuild")
             .Fetch<RebuildOrderProjectionRes>(cancellationToken);
         ZlinkStreamAssert.Ensure(rebuilt.State.Status == OrderStatuses.Confirmed, "Assertion failed: rebuilt.State.Status == OrderStatuses.Confirmed");
-        var rebuiltRead = await GetOrderAsync(apiB, success.OrderId, cancellationToken);
+        var rebuiltRead = await GetOrderAsync(apiB, "order-repair-001", cancellationToken);
         ZlinkStreamAssert.Ensure(rebuiltRead.Status == OrderStatuses.Confirmed, "Assertion failed: rebuiltRead.Status == OrderStatuses.Confirmed");
 
         var delayedFirst = await GetOrderAsync(apiB, paymentStarted.OrderId, cancellationToken);
@@ -149,17 +122,6 @@ internal sealed class ShoppingMallClientScenario
         var scaleConfirmed = await WaitForStatusAsync(apiA, scale.OrderId, OrderStatuses.Confirmed, cancellationToken);
         ZlinkStreamAssert.Ensure(scaleConfirmed.Status == OrderStatuses.Confirmed, "Assertion failed: scaleConfirmed.Status == OrderStatuses.Confirmed");
 
-        var assertion = await apiA.Post("/self-check/assert")
-            .Body(new ServerAssertionReq(
-                success.OrderId,
-                pending.OrderId,
-                concurrentAResult.OrderId,
-                inventoryReserved.OrderId,
-                inventoryStarted.OrderId,
-                paymentStarted.OrderId,
-                scale.OrderId))
-            .Fetch<ServerAssertionRes>(cancellationToken);
-        ZlinkStreamAssert.Ensure(assertion.Passed, "Assertion failed: assertion.Passed");
     }
 
     private static async ValueTask<OrderState> GetOrderAsync(
@@ -199,16 +161,3 @@ internal sealed class ShoppingMallClientScenario
                || state.Status == OrderStatuses.Confirmed;
     }
 }
-
-internal sealed record ServerAssertionReq(
-    string SuccessfulOrderId,
-    string PendingRecoveredOrderId,
-    string ConcurrentOrderId,
-    string ResumedOrderId,
-    string InventoryFailureOrderId,
-    string PaymentFailureOrderId,
-    string ScaleOutOrderId);
-
-internal sealed record ServerAssertionRes(
-    bool Passed,
-    string[] Evidence);

@@ -627,9 +627,11 @@ families.
 
 `AddHandlerGroup(groupName)` exposes, on that ChannelName, the send/
 request handlers found by scanning that have the same
-`ZLinkHandlerGroupAttribute` value. Use typed `AddSendHandler(...)`/
-`AddRequestHandler(...)` directly only for a case that demonstrates
-manual registration, like TicTacToe.
+`ZLinkHandlerGroupAttribute` value. TicTacToe's manual topology does not mean
+manual handler registration. The .NET sample exposes its handlers through
+assembly scanning and `AddHandlerGroup(...)`; use typed
+`AddSendHandler(...)`/`AddRequestHandler(...)` directly only for a separate
+example that intentionally demonstrates direct registration.
 
 The weight of `IZLinkMeshChannelServerBuilder` and
 `IZLinkClientServerChannelServerBuilder` is 0 to 10000, defaulting to

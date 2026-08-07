@@ -23,7 +23,7 @@ internal sealed class ApiServer(SampleSettings settings)
         builder.Services.AddSingleton(settings);
         builder.Services.AddZLinkFramework(options =>
         {
-            options.DisableImplicitHandlerAutoRegistration();
+            options.AddHandlersFromAssemblyOf(typeof(ApiServer));
             options.AddLocationStore(new ZLinkRedisLocationStore(redis =>
             {
                 redis.ConnectionString = settings.RedisEndpoint;
@@ -34,7 +34,7 @@ internal sealed class ApiServer(SampleSettings settings)
             options.AddClientServerChannel(SampleChannels.Api)
                 .Server()
                 .Listen()
-                .AddRequestHandler<AuthenticatePlayerHandler, AuthenticatePlayerReq, AuthenticatePlayerRes>();
+                .AddHandlerGroup("api");
 
             var mesh = options.AddRouteMesh(SampleNodes.Mesh)
                 .Listen(settings.MeshEndpoint);

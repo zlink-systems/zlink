@@ -54,6 +54,45 @@ done. Under the current plan, the platforms that must pass are:
 - macOS x64
 - macOS ARM64
 
+## 3.1 Current Gap-Closure Status
+
+The table below separates gaps found by comparing the common spec with the .NET
+implementation. Passing `source/unit` means that the code boundary and unit verification
+match; it does not replace package, real-process, or Windows PowerShell runner verification.
+
+| Contract gap | Current source and regression evidence | Current status | Remaining evidence |
+|---|---|---|---|
+| Do MeshNode ROUTER send/receive high-water marks and send/receive timeouts keep their directions? | `ZLinkSpotNodeInitializer` → `ZLinkBackendSpotNodeWrapper` → `ZLinkManagedMeshNode`, `BackendAdapterFactoryTests.SpotNode_Router_Send_Config_RoundTrips_Through_Binding` | Reflected in source/unit; targeted 10/10 and the fixed package verifier passed | Windows PowerShell runner |
+| Does the ShoppingMall Client use only public order APIs while fixtures and server-evidence hooks stay in the runner? | `ShoppingMallClientScenario`, `CommerceApi/Program.cs`, `ShoppingMallRegressionTests` | Source/regression 18/18; build and `shoppingmall-server-evidence=completed` passed | Windows PowerShell runner |
+| Does the GameQuest Client use the public Stream connector without a raw WebSocket bridge? | `GameApi/Program.cs`, `run_sample.sh`, `run_sample.ps1`, `GameQuest/README.ko.md` | Source/build and `gamequest-server-evidence=completed` passed | Windows PowerShell runner |
+| Does TicTacToe keep manual topology separate from handler registration? | Assembly-scan configuration and `TicTacToeRegressionTests` | Source/regression, sample process, and Linux aggregate passed | Windows PowerShell runner |
+| Do ShoppingMall workflow messages carry `sourceCommandId` as required by the common sample contract? | `Shared/Contracts/Messages.cs`, `StartOrderUseCase`, public continue/rebuild routes, and `ShoppingMallRegressionTests` | Source/regression 18/18; sample build and process evidence passed | Windows PowerShell runner |
+
+After this change, the fixed mode of `verify_packaged_contract.sh` passed all nine NuGet packages,
+assembly manifests, the source/package public-API comparison, the clean package consumer, and the
+standalone HTTP package consumer. The `Zlink.Framework` XML documentation fixed snapshot was updated to
+the current artifact hash because the runtime handoff change adds no public API. No package gap remains.
+
+On Linux, a sequential `run_samples.sh` execution passed the build and process evidence for TicTacToe,
+Bingo, SupportChat, ShoppingMall, DeliveryDispatch, and GameQuest, and every ZoneWorld client and runner
+phase passed. ZoneWorld also passed `ZW-F1` resident-bot validation, `ZW-F1-population`, `ZW-F2`, `ZW-F3`,
+and `ZW-F4`, producing the `zoneworld=completed` marker. The Linux source, package, and real-process
+aggregate gaps are therefore closed. The PowerShell scripts were not run on Linux because their requested
+validation environment is Windows; the Windows PowerShell runner result remains separate platform evidence.
+
+## 3.2 UnitTest Execution Boundary
+
+UnitTest explicitly disables xUnit test parallelization for the whole assembly. This is intentional: the
+suite contains native socket/context/message handles, process-wide diagnostics, static runtime state,
+ephemeral port allocation, and managed fakes whose lifetime can cross an asynchronous continuation. A
+class-by-class parallelization allowlist would make the isolation contract depend on an incomplete list
+of shared resources.
+
+This policy does not reduce execution time by deleting tests. All test cases remain in place, and the
+stable baseline is a full serial run of 1,548 passed tests. A parallel execution change is acceptable
+only after repeated full runs prove that it introduces no test-order dependence or cross-test
+interference; a shorter single run is not sufficient evidence.
+
 ## 4. Channel Regression Items
 
 | Item | Layer | Pass Criteria |
@@ -64,6 +103,7 @@ done. Under the current plan, the platforms that must pass are:
 | a subscriber with a location store specifying a manual endpoint | `unit` | that subscriber uses the manual connection, without affecting another role's automatic connection |
 | no bind endpoint on a publisher role | `unit` | startup validation exception |
 | publisher-only channel | `integration-single-process` | publish submit succeeds |
+| MeshNode ROUTER directional socket options | `unit`, `integration-single-process` | `ConfigureRouterSocket()` preserves MaxMessageSize, directional high-water marks, mailbox caps, and directional timeouts through the managed ROUTER boundary; the .NET targeted unit passed 10/10 |
 | subscriber location-store attach | `integration-multi-process` | remote publish is received |
 | handler group mapping | `unit` | `AddZLinkHandlers...()` alone doesn't become a global dispatch target — only handlers of a group mapped by `channel.AddHandlerGroup("...")` are dispatched on that channel |
 | empty fanout subscriber validation | `unit` | a fanout subscriber with no publish handler exposure isn't allowed as an empty receiver — it's a startup validation error |

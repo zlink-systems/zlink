@@ -715,7 +715,7 @@ ShoppingMall
 | Logical component | 모든 언어에서 유지할 책임 |
 |---|---|
 | `Client/Program` | 설정을 읽고 client scenario 실행 진입점을 구성한다. |
-| `Client/Scenario` | Start, polling, duplicate, failure, rebuild와 resume assertion 순서를 소유한다. |
+| `Client/Scenario` | public order API의 Start, polling, duplicate, failure, rebuild와 resume assertion 순서를 소유한다. runner-only fixture와 server evidence hook은 Client path 밖에 둔다. |
 | `Shared/JSON Contracts` | 같은 message 이름, field, optional 값과 status를 소유한다. |
 | `Server/CommerceApi` | 입력 검증, idempotency mapping, workflow request와 read model query를 소유한다. |
 | `Server/OrderWorkflow/Domain` | 상태 전이, event 생성, 보상 규칙과 deterministic ID 계산을 소유한다. |
@@ -735,9 +735,11 @@ builder로 같은 handler 집합을 명시 등록한다. 이 차이는 등록 �
 
 ## 9. Client self-check
 
-Runner는 server readiness를 확인한 뒤 Client scenario를 한 번 실행한다. 고정 sleep이나 log 문자열을
-성공 기준으로 사용하지 않고 response, read model, event stream과 external effect의 관찰 가능한 결과를
-assertion으로 확인한다.
+Runner는 server readiness를 확인한 뒤 Client scenario를 한 번 실행한다. Client가 호출하는 endpoint는
+CommerceApi의 public order API로 제한한다. pending mapping, 중단 fixture 준비와 server evidence 확인에
+필요한 runner-only hook은 Client process code path 밖에서만 호출한다. 고정 sleep이나 log 문자열을
+성공 기준으로 사용하지 않고 public response와 read model의 관찰 가능한 결과를 Client assertion으로
+확인하며, event stream과 external effect는 runner observation hook에서 별도로 확인한다.
 
 ### 9.1 정상·실패 결과
 
@@ -755,12 +757,13 @@ assertion으로 확인한다.
 
 6. 같은 `IdempotencyKey`를 두 API process에 동시에 보내 두 응답의 `OrderId`가 같고
    `OrderStartedEvent`가 한 번만 기록되는지 확인한다.
-7. background continuation이 `InventoryReserved`에서 중단된 fixture를 만든 뒤
-   `ContinueOrderWorkflowReq`를 보내 결제부터 재개되는지 확인한다.
-8. 종료 event 기록 뒤 projection update를 중단한 fixture에서 재개 명령이 read model을 terminal fold와
-   일치시키는지 확인한다.
-9. `OrderReadModelStore`의 한 주문 projection을 삭제한 뒤 `RebuildOrderProjectionReq`로 stream만
-   재생해 같은 `OrderState`를 만드는지 확인한다.
+7. Runner가 background continuation이 `InventoryReserved`에서 중단된 fixture를 준비한 뒤
+   Client가 public `ContinueOrderWorkflowReq` endpoint를 호출해 결제부터 재개되는지 확인한다.
+8. Runner가 종료 event 기록 뒤 projection update를 중단한 fixture를 준비한 뒤 Client가 public
+   continue endpoint를 호출해 read model이 terminal fold와 일치하는지 확인한다.
+9. Runner가 `OrderReadModelStore`의 한 주문 projection을 삭제한 뒤 Client가 public
+   `RebuildOrderProjectionReq` endpoint를 호출해 stream만 재생하고 같은 `OrderState`를 만드는지
+   확인한다.
 10. 종료 또는 idle 조건 뒤 valid command가 같은 `OrderId`의 새 generation을 활성화할 수 있는지
     확인한다. 이 경우는 explicit close가 authority release까지 완료된 뒤에만 수행한다.
 11. `InventoryReservedEvent` 직후 continuation을 정지하고 planned relocation을 실행한다. 같은
@@ -792,13 +795,15 @@ seed는 서로 다른 test data를 사용하고, 같은 `ReservationId`·`Paymen
    시작하고 seed data를 준비한다.
 3. `CommerceApi` 두 process와 `OrderWorkflow` 두 process를 시작한다.
 4. public readiness가 HTTP edge와 RouteMesh object capability를 확인할 때까지 bounded wait를 수행한다.
-5. Client self-check를 실행하고 response, state, event와 external effect evidence를 저장한다.
+5. Client self-check를 실행하고 public response와 state assertion을 저장한다. Runner-only observation
+   hook으로 event와 external effect evidence를 별도로 수집한다.
 6. 모든 assertion이 통과하면 `shoppingmall=completed`와 runner placement marker를 출력한다.
 7. 실패 시 성공 marker를 출력하지 않고, 원인과 마지막 확인 상태를 남긴다.
 
 Smoke runner는 server internal endpoint, store direct query와 test-only adapter를 Client path에 넣지
-않는다. Server-side evidence가 필요한 경우 runner의 관찰 hook에서 수집하지만, Client assertion을
-대신하지 않는다.
+않는다. Fixture 준비와 server-side evidence가 필요한 경우에만 runner가 해당 self-check hook을
+호출하며, 이 호출은 Client process code path가 아니다. Runner observation은 public response와
+state에 대한 Client assertion을 대신하지 않는다.
 
 ## 11. 완료 기준
 
@@ -814,6 +819,7 @@ Smoke runner는 server internal endpoint, store direct query와 test-only adapte
 - [ ] `Missing` cold activation과 `Ready` owner 장애의 `Unavailable` 결과를 구분한다.
 - [ ] planned relocation이 같은 `ObjectGeneration`을 유지하고 event replay 뒤 다음 단계부터 진행하며 이미 완료한 외부 효과를 반복하지 않는다.
 - [ ] 모든 지원 언어에서 같은 logical component와 JSON field 의미를 찾을 수 있다.
-- [ ] Client self-check가 response, state, event, external effect와 금지 결과를 직접 확인한다.
+- [ ] Client self-check가 public response와 state, 금지 결과를 직접 확인하고 runner observation hook가
+      event와 external effect를 별도로 확인한다.
 - [ ] sample code가 public Framework API와 기본 typed JSON codec만 사용한다.
 - [ ] smoke 실행이 readiness를 bounded wait로 확인하고 성공 marker를 조건부로 출력한다.

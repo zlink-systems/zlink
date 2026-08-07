@@ -6,7 +6,6 @@ using ShoppingMall.Server.OrderWorkflow.Application.SelfCheck;
 using ShoppingMall.Server.OrderWorkflow.Infrastructure.ZLink.Spots.OrderWorkflowSpot;
 using ShoppingMall.Server.Shared.Ports.Outbound;
 using ShoppingMall.Server.Shared.Store;
-using ShoppingMall.Shared.Contracts;
 using Systems.Zlink;
 using Zlink.Framework.AspNetCore;
 using Zlink.Framework.Contracts.Actors;
@@ -14,7 +13,6 @@ using Zlink.Framework.Contracts.Channels;
 using Zlink.Framework.Contracts.Configuration;
 using Zlink.Framework.Contracts.Dispatch;
 using Zlink.Framework.Contracts.Locations;
-using Zlink.Framework.Contracts.Spots;
 using Zlink.Framework.Locations.Redis;
 using Zlink.Samples.Logging;
 
@@ -92,26 +90,6 @@ public static class OrderWorkflowServerHostFactory
             }
         });
         app.MapGet("/health", () => Results.Ok(new { ready = true, instance = instance.InstanceId }));
-        app.MapPost("/self-check/projection/{orderId}/delete", async (
-            string orderId,
-            IOrderReadModelStore readModels,
-            CancellationToken cancellationToken) =>
-        {
-            await readModels.DeleteAsync(orderId, cancellationToken);
-            return Results.Ok();
-        });
-        app.MapPost("/self-check/projection/{orderId}/rebuild", async (
-            string orderId,
-            IZLinkSpotClient routes,
-            CancellationToken cancellationToken) =>
-        {
-            var response = await routes
-                .RequestToSpot(orderId, new RebuildOrderProjectionReq(orderId))
-                .InstanceSpot(SampleNames.OrderWorkflowSpotType)
-                .InMesh(SampleNames.MeshName)
-                .Async<RebuildOrderProjectionRes>(cancellationToken);
-            return Results.Ok(response);
-        });
         return app;
     }
 }

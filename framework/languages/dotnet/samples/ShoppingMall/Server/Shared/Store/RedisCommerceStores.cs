@@ -308,8 +308,11 @@ public sealed class RedisCommerceStores :
                 64.00m,
                 "USD"));
 
-            state.Inventory.TryAdd("sku-keyboard", 5);
-            state.Inventory.TryAdd("sku-mouse", 5);
+            // The runner prepares two InventoryReserved fixtures before the Client
+            // starts. Keep enough stock for those fixtures and the four successful
+            // Client paths without changing the failure seed.
+            state.Inventory.TryAdd("sku-keyboard", 6);
+            state.Inventory.TryAdd("sku-mouse", 6);
             state.Inventory.TryAdd("sku-headset", 3);
             state.Inventory.TryAdd("sku-soldout", 1);
 

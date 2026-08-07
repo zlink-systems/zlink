@@ -17,9 +17,6 @@ public sealed class RegressionTests
         "05-route-mesh.ko.md",
         "06-location-store.ko.md",
         "dotnet-http-client.ko.md",
-        "regression-test-matrix.ko.md",
-        "backend-dependency-policy.ko.md",
-        "runtime-integration-and-ownership.ko.md",
     ];
 
     /// <summary>

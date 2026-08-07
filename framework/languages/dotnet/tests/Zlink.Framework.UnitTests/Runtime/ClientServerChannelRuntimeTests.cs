@@ -1236,14 +1236,29 @@ public sealed class ClientServerChannelRuntimeTests
                     .Flags(SendFlags.DontWait)
                     .Submit());
 
-            using var secondHello = await PollReceivedAsync(
-                storage => TryReceive(router, storage),
-                TimeSpan.FromSeconds(5));
-            Assert.True(
-                ZLinkClientServerControlProtocol.TryDecodeHello(
-                    secondHello.Parts,
-                    out _));
-            ReplyAdmission(router, secondHello, endpoint);
+            Received secondHello;
+            try
+            {
+                secondHello = await PollReceivedAsync(
+                    storage => TryReceive(router, storage),
+                    TimeSpan.FromSeconds(5));
+            }
+            catch (TimeoutException exception)
+            {
+                throw new TimeoutException(
+                    $"{exception.Message} diagnostics={transport.AdmissionDiagnostics}; "
+                    + $"physical={transport.PhysicalConnectionCount}; "
+                    + $"ready={transport.ReadyCount}",
+                    exception);
+            }
+            using (secondHello)
+            {
+                Assert.True(
+                    ZLinkClientServerControlProtocol.TryDecodeHello(
+                        secondHello.Parts,
+                        out _));
+                ReplyAdmission(router, secondHello, endpoint);
+            }
             await WaitUntilAsync(
                 () => transport.ReadyCount == 1,
                 TimeSpan.FromSeconds(5));

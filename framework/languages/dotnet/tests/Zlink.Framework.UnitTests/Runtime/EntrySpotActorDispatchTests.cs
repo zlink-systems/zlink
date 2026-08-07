@@ -23,7 +23,6 @@ using Zlink.Framework.Runtime.Streams;
 
 namespace Zlink.Framework.UnitTests.Runtime;
 
-[Collection(RuntimeMetricsCollection.Name)]
 public sealed partial class EntrySpotActorDispatchTests
 {
     [Fact]

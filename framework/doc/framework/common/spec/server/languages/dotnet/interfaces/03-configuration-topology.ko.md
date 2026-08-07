@@ -522,8 +522,10 @@ handler는 MeshNode builder에 등록하며 source RID를 제공하는 route han
 중복 등록은 startup 오류이고, 서로 다른 channel이나 route family에 같은 packet name을 등록할 수 있다.
 
 `AddHandlerGroup(groupName)`은 scan으로 찾은 handler 중 같은 `ZLinkHandlerGroupAttribute` 값을 가진
-send/request handler를 해당 ChannelName에 노출한다. TicTacToe처럼 수동 등록을 보여 주는 경우에만
-typed `AddSendHandler(...)`·`AddRequestHandler(...)`를 직접 사용한다.
+send/request handler를 해당 ChannelName에 노출한다. TicTacToe의 수동 topology는 handler를
+수동 등록한다는 뜻이 아니다. .NET 샘플은 assembly scan과 `AddHandlerGroup(...)`으로 handler를
+노출하며, typed `AddSendHandler(...)`·`AddRequestHandler(...)`는 별도의 직접 등록 계약을
+보여 주는 경우에만 사용한다.
 
 `IZLinkMeshChannelServerBuilder`와 `IZLinkClientServerChannelServerBuilder`의 weight는 0부터 10000까지이고
 기본값은 100이다. 범위 밖 값은 startup 설정과 runtime 변경에서 `ZLinkConfigurationException`이다.

@@ -21,7 +21,7 @@
 | 배차 시스템 | [DeliveryDispatch](#5-deliverydispatch--배차-시스템-구축) | 요청 생성 → 수행자 선택 → 무응답 시 재배정 → 당사자에게 전달 |
 | 주문 처리 시스템 | [ShoppingMall](#6-shoppingmall--주문-처리-시스템-구축) | 조율 계층 없이 순차 코드로 쓰는 무손실 event sourcing |
 | 퀘스트·미션 진행 시스템 | [GameQuest](#7-gamequest--퀘스트-진행-시스템-구축) | 유실을 허용하는 대신 실시간성을 얻는 owner 처리 |
-| zone 분할 MMORPG와 운영 관제 | [ZoneWorld](#8-zoneworld--zone-분할-mmorpg와-운영-관제-구축) — `.NET`과 Node.js만 제공한다 | 여러 노드에 무언가를 할 때 어떤 표면을 고르는가 |
+| zone 분할 MMORPG와 운영 관제 | [ZoneWorld](#8-zoneworld--zone-분할-mmorpg와-운영-관제-구축) — 모든 언어의 공통 목표 sample | 여러 노드에 무언가를 할 때 어떤 표면을 고르는가 |
 
 기능 쪽에서 거꾸로 고르려면 `01. Overview` 장의 도입 순서를
 먼저 본다.
@@ -305,9 +305,10 @@ ShoppingMall과 나란히 놓으면 선택 기준이 드러난다. 게임 진행
 
 ## 8. ZoneWorld — zone 분할 MMORPG와 운영 관제 구축
 
-> 앞의 일곱 샘플과 달리 ZoneWorld는 `.NET`과 Node.js에만 있다. 나머지 여섯은 다섯 언어
-> 공통이다. 다른 언어에서 같은 주제를 보려면 이 장의 설명과 공통 시나리오 문서를 읽고
-> 코드는 두 언어 중 하나를 참고한다.
+> ZoneWorld는 모든 framework 언어가 도달해야 하는 공통 sample target이다. 현재 server
+> implementation은 `.NET`과 Node.js에 있고, C++, Java, Kotlin은 implementation gap으로
+> 남아 있다. 다른 언어에서 같은 주제를 보려면 이 장의 설명과 공통 시나리오 문서를
+> 기준으로 삼고, 구현된 언어의 코드를 참고한다.
 
 월드를 구역으로 나눠 `ZoneNode` 여러 대가 나눠 맡고, 어느 노드가 어느 구역을 맡는지는
 Location Store와 framework가 정한다. 플레이어가 경계를 넘으면 actor가 인접 zone Spot에
@@ -355,7 +356,9 @@ flowchart TD
 - 짝이 되는 장: [07-actor-spot](07-actor-spot.ko.md)(relocation),
   `11. Monitoring` 장, [12-operations](12-operations.ko.md)
 - 시나리오: [ZoneWorld](../../../common/sample/zoneworld/README.ko.md) · payload JSON
-- server는 여러 언어가 제공하고 브라우저 client 하나를 공유한다.
+- server와 runner는 언어별 구현 범위에 따라 제공하고 브라우저 client 하나를 공유한다. 공통
+  sample target에는 ZoneWorld도 포함되며, 현재 ZoneWorld server는 .NET과 Node.js에 구현되어 있다.
+  C++와 Java/Kotlin은 ZoneWorld implementation gap으로 남아 있다.
 
 ## 9. 실행
 
@@ -412,8 +415,10 @@ flowchart TD
     framework/languages/node/samples/run_samples.sh TicTacToe Bingo
     ```
 
-`run_samples.sh`는 서버 샘플 6개를 다룬다. 브라우저 UI가 필요한 ZoneWorld는
-`ZoneWorld/run_sample.sh`로 따로 실행한다.
+공통 sample target에는 브라우저 UI를 포함한 ZoneWorld도 포함된다. .NET과 Node.js의
+`run_samples.sh`는 ZoneWorld를 포함한 7개 샘플을 다루고, C++는 현재 구현된 6개를 다룬다.
+Java/Kotlin은 ZoneWorld implementation gap이므로 해당 언어의 통합 runner 결과에 포함하지 않는다.
+ZoneWorld만 실행하려면 구현된 언어에서 `ZoneWorld/run_sample.sh`를 호출한다.
 
 ## 10. 관련 문서
 

@@ -925,6 +925,13 @@ within a fixed time, in this order.
    `ForceStopped/DeadlineExceeded` or `ForceStopped/TeardownFailed` after bounded
    teardown.
 
+When a listener and transport are cleaned up, already-accepted transport
+callbacks and in-flight read/write operations are completed or cancelled first.
+In particular, TLS/WebSocket resources and a per-connection write queue are
+not destroyed until cancellation completion has been observed on the owning
+transport execution context. A late callback accessing a destroyed resource or
+turning an accepted operation terminal twice is not a valid bounded teardown.
+
 | Operation confirmed first | Handling |
 |---|---|
 | `Shutdown`'s admission seal | Returns capacity secured on the target, and ends a pending Relocate call with `Blocked/ShutdownRequested`. |

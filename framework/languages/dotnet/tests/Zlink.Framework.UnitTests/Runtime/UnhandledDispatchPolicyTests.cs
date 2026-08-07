@@ -16,7 +16,6 @@ using Zlink.Framework.Runtime.Messaging;
 
 namespace Zlink.Framework.UnitTests;
 
-[Collection(RuntimeMetricsCollection.Name)]
 public sealed partial class UnhandledDispatchPolicyTests
 {
     [Fact]

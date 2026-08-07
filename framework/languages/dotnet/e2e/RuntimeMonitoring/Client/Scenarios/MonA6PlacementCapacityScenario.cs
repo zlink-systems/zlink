@@ -16,42 +16,42 @@ internal static class MonA6PlacementCapacityScenario
 
         await WaitForPlacementAsync(service, 0, 0);
 
-        await ExpectSuccessAsync(
-            service,
-            "/admin/actor/create/monitor-actor-a",
+        var actorA = await service.Post("/admin/actor/create/monitor-actor-a").AsyncRaw();
+        ZlinkStreamAssert.Ensure(
+            actorA.Status is >= 200 and < 300,
             "MON-A6 actor create did not succeed.");
-        await ExpectSuccessAsync(
-            service,
-            "/admin/subject/create/monitor-subject-a",
+        var subjectA = await service.Post("/admin/subject/create/monitor-subject-a").AsyncRaw();
+        ZlinkStreamAssert.Ensure(
+            subjectA.Status is >= 200 and < 300,
             "MON-A6 spot create did not succeed.");
         await WaitForPlacementAsync(service, 1, 1);
 
-        await ExpectFailureAsync(
-            service,
-            "/admin/actor/create/monitor-actor-b",
+        var actorBRejected = await service.Post("/admin/actor/create/monitor-actor-b").AsyncRaw();
+        ZlinkStreamAssert.Ensure(
+            actorBRejected.Status >= 400,
             "MON-A6 actor capacity overflow was accepted.");
-        await ExpectFailureAsync(
-            service,
-            "/admin/subject/create/monitor-subject-b",
+        var subjectBRejected = await service.Post("/admin/subject/create/monitor-subject-b").AsyncRaw();
+        ZlinkStreamAssert.Ensure(
+            subjectBRejected.Status >= 400,
             "MON-A6 spot capacity overflow was accepted.");
 
-        await ExpectSuccessAsync(
-            service,
-            "/admin/actor/close/monitor-actor-a",
+        var actorAClosed = await service.Post("/admin/actor/close/monitor-actor-a").AsyncRaw();
+        ZlinkStreamAssert.Ensure(
+            actorAClosed.Status is >= 200 and < 300,
             "MON-A6 actor close did not succeed.");
-        await ExpectSuccessAsync(
-            service,
-            "/admin/subject/close/monitor-subject-a",
+        var subjectAClosed = await service.Post("/admin/subject/close/monitor-subject-a").AsyncRaw();
+        ZlinkStreamAssert.Ensure(
+            subjectAClosed.Status is >= 200 and < 300,
             "MON-A6 spot close did not succeed.");
         await WaitForPlacementAsync(service, 0, 0);
 
-        await ExpectSuccessAsync(
-            service,
-            "/admin/actor/create/monitor-actor-b",
+        var actorB = await service.Post("/admin/actor/create/monitor-actor-b").AsyncRaw();
+        ZlinkStreamAssert.Ensure(
+            actorB.Status is >= 200 and < 300,
             "MON-A6 actor placement did not become available after close.");
-        await ExpectSuccessAsync(
-            service,
-            "/admin/subject/create/monitor-subject-b",
+        var subjectB = await service.Post("/admin/subject/create/monitor-subject-b").AsyncRaw();
+        ZlinkStreamAssert.Ensure(
+            subjectB.Status is >= 200 and < 300,
             "MON-A6 spot placement did not become available after close.");
         var final = await WaitForPlacementAsync(service, 1, 1);
         ZlinkStreamAssert.Ensure(
@@ -59,24 +59,6 @@ internal static class MonA6PlacementCapacityScenario
             "MON-A6 placement remained unavailable after capacity was released.");
 
         Console.WriteLine("scenario MON-A6 passed");
-    }
-
-    private static async Task ExpectSuccessAsync(
-        ZLinkHttpClient service,
-        string path,
-        string message)
-    {
-        var response = await service.Post(path).AsyncRaw();
-        ZlinkStreamAssert.Ensure(response.Status is >= 200 and < 300, message);
-    }
-
-    private static async Task ExpectFailureAsync(
-        ZLinkHttpClient service,
-        string path,
-        string message)
-    {
-        var response = await service.Post(path).AsyncRaw();
-        ZlinkStreamAssert.Ensure(response.Status >= 400, message);
     }
 
     private static async Task<MeshRuntimeSnapshotRes> WaitForPlacementAsync(

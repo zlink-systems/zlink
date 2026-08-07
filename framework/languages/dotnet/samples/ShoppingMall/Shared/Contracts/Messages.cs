@@ -50,17 +50,22 @@ public sealed record StartOrderWorkflowReq(
     string ShippingAddressId,
     string PaymentMethodId,
     string IdempotencyKey,
+    string SourceCommandId,
     OrderLineInput[] Lines,
     decimal Amount,
     string Currency);
 
 public sealed record StartOrderWorkflowRes(OrderState State);
 
-public sealed record ContinueOrderWorkflowReq(string OrderId);
+public sealed record ContinueOrderWorkflowReq(
+    string OrderId,
+    string SourceCommandId);
 
 public sealed record ContinueOrderWorkflowRes(OrderState State);
 
-public sealed record RebuildOrderProjectionReq(string OrderId);
+public sealed record RebuildOrderProjectionReq(
+    string OrderId,
+    string SourceCommandId);
 
 public sealed record RebuildOrderProjectionRes(OrderState State);
 

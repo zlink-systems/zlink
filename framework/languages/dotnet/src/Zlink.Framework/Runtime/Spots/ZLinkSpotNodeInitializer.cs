@@ -37,6 +37,8 @@ internal sealed class ZLinkSpotNodeInitializer(
             {
                 node.SetMaxMessageSize(router.SocketConfig.MaxMessageSize);
                 node.SetRouterHighWaterMark(router.SocketConfig.SendHighWaterMark);
+                node.SetRouterReceiveHighWaterMark(router.SocketConfig.ReceiveHighWaterMark);
+                node.SetRouterReceiveTimeout(router.SocketConfig.ReceiveTimeout);
                 node.SetRouterSendTimeout(
                     router.SocketConfig.SendTimeout
                     ?? registration.DefaultSocketSendTimeout);

@@ -18,10 +18,10 @@ try {
     $GAMEQUEST_REDIS_KEY_PREFIX = "gamequest:dotnet:${RunId}:"
     $GAMEQUEST_GAMEAPI_A_HTTP_BASE_URL = "http://127.0.0.1:$($ports[0])"
     $GAMEQUEST_GAMEAPI_B_HTTP_BASE_URL = "http://127.0.0.1:$($ports[1])"
-    $GAMEQUEST_GAMEAPI_A_STREAM_ENDPOINT = "ws://127.0.0.1:$($ports[0])/quest/ws"
-    $GAMEQUEST_GAMEAPI_B_STREAM_ENDPOINT = "ws://127.0.0.1:$($ports[1])/quest/ws"
     $GAMEQUEST_API_A_STREAM_BIND_ENDPOINT = "tcp://127.0.0.1:$($ports[2])"
     $GAMEQUEST_API_B_STREAM_BIND_ENDPOINT = "tcp://127.0.0.1:$($ports[3])"
+    $GAMEQUEST_GAMEAPI_A_STREAM_ENDPOINT = $GAMEQUEST_API_A_STREAM_BIND_ENDPOINT
+    $GAMEQUEST_GAMEAPI_B_STREAM_ENDPOINT = $GAMEQUEST_API_B_STREAM_BIND_ENDPOINT
     $GAMEQUEST_MISSION_A_HTTP_URL = "http://127.0.0.1:$($ports[4])"
     $GAMEQUEST_MISSION_B_HTTP_URL = "http://127.0.0.1:$($ports[5])"
     $GAMEQUEST_GAMEAPI_A_MESH_ENDPOINT = "tcp://127.0.0.1:$($ports[6])"
@@ -106,7 +106,7 @@ finally {
     if ($RedisContainer) {
         Remove-SampleRedisContainer $RedisContainer
     }
-    if (-not $RunSucceeded -or $GAMEQUEST_KEEP_RUN_DIR -eq "1") {
+    if (-not $RunSucceeded -or $env:GAMEQUEST_KEEP_RUN_DIR -eq "1") {
         Write-Host "runDir=$RunDir"
     }
     else {

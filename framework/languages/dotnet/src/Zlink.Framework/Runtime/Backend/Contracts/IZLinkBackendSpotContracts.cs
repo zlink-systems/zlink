@@ -40,6 +40,10 @@ internal interface IZLinkBackendSpotNode : IAsyncDisposable
 
     void SetRouterHighWaterMark(ulong value);
 
+    void SetRouterReceiveHighWaterMark(ulong value) { }
+
+    void SetRouterReceiveTimeout(TimeSpan? value) { }
+
     void SetRouterSendTimeout(TimeSpan? value);
 
     void SetMailboxBudgets(ulong messageBudget, ulong byteBudget);

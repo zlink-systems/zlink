@@ -31,6 +31,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private static readonly TimeSpan DefaultRemoteUserSpotTerminalRetention =
         TimeSpan.FromMinutes(5);
     private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(100);
+    private static readonly TimeSpan TransportShutdownGrace = PollInterval + PollInterval;
     private static readonly TimeSpan AdmissionRetryInterval = TimeSpan.FromMilliseconds(500);
     private static readonly TimeSpan RelocationAckRetryInterval =
         TimeSpan.FromMilliseconds(100);
@@ -172,8 +173,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     internal string MeshName => _meshName;
     public long MaxMessageSize { get; set; } = -1;
     public ulong RouterHighWaterMark { get; set; } = 4_096_000;
+    public ulong RouterReceiveHighWaterMark { get; set; } = 4_096_000;
     public ulong MailboxMessageBudget { get; set; } = 10_000;
     public ulong MailboxByteBudget { get; set; } = 64 * 1024 * 1024;
+    public TimeSpan? ReceiveTimeout { get; set; }
     public TimeSpan? SendTimeout { get; set; }
 
     public void SetInboundDispatchBudget(ZLinkInboundDispatchBudget budget)
@@ -252,7 +255,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 socket.Options.Linger = TimeSpan.Zero;
                 socket.Options.MaxMessageSize = MaxMessageSize;
                 socket.Options.SendHighWaterMark = RouterHighWaterMark;
-                socket.Options.ReceiveHighWaterMark = RouterHighWaterMark;
+                socket.Options.ReceiveHighWaterMark = RouterReceiveHighWaterMark;
+                if (ReceiveTimeout is { } receiveTimeout)
+                    socket.Options.ReceiveTimeout = receiveTimeout;
                 if (SendTimeout is { } timeout)
                     socket.Options.SendTimeout = timeout;
                 socket.SetRoutingId(_routingId);
@@ -2213,6 +2218,23 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             {
                 // Force-stop must continue to release the socket and poller
                 // even when the receive loop does not observe cancellation.
+            }
+
+        // The native poller wait is bounded by PollInterval, but the caller's
+        // shutdown token can be shorter than that wait. Give the loop one
+        // final bounded window to leave the poller before its owner is closed;
+        // otherwise poller destruction reports ZLINK_CLOSE_BUSY (401) even
+        // though the loop is already on its way out.
+        if (receiveLoop is not null && !receiveLoop.IsCompleted)
+            try
+            {
+                await receiveLoop.WaitAsync(TransportShutdownGrace).ConfigureAwait(false);
+            }
+            catch (TimeoutException)
+            {
+                // The existing shutdown bound still controls the caller-facing
+                // operation. Resource cleanup continues through the normal
+                // owner disposal path below.
             }
 
         await CloseInboundOperationAdmissionAsync(shutdownToken).ConfigureAwait(false);
@@ -6110,13 +6132,13 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                         == ZLinkServiceConnectionDirection.Outbound
                         && peer.Direction == ZLinkServiceConnectionDirection.Inbound)
                     {
-                        RetireDuplicatePeer(peer);
+                        RetireDuplicatePeer(peer, notRequiredDuplicate, sourceRid);
                         keepPeer = notRequiredDuplicate;
                         publishNotRequired = false;
                     }
                     else
                     {
-                        RetireDuplicatePeer(notRequiredDuplicate);
+                        RetireDuplicatePeer(notRequiredDuplicate, peer, sourceRid);
                     }
                 }
                 if (keepPeer.State == MeshPeerState.NotRequired
@@ -6160,7 +6182,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 if (duplicateDecision
                     == ZLinkServiceDuplicateConnectionDecision.KeepCurrent)
                 {
-                    RetireDuplicatePeer(peer);
+                    RetireDuplicatePeer(peer, duplicate, sourceRid);
                     if (command == ServiceWireConstants.Command.Hello
                         && duplicate.Admitted)
                         SendAdmission(
@@ -6173,7 +6195,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 }
                 if (duplicateDecision
                     == ZLinkServiceDuplicateConnectionDecision.UseIncoming)
-                    RetireDuplicatePeer(duplicate);
+                    RetireDuplicatePeer(duplicate, peer, sourceRid);
             }
 
             decision = ZLinkServiceAdmissionGuard.Evaluate(
@@ -8154,10 +8176,17 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         return true;
     }
 
-    private void RetireDuplicatePeer(Peer peer)
+    private void RetireDuplicatePeer(
+        Peer peer,
+        Peer survivor,
+        RoutingId logicalRoutingId)
     {
         var wasAdmitted = peer.Admitted;
         var physicalRoutingId = peer.PhysicalRoutingId;
+        var nativeHandoverOwnsRoute = SharesNativeHandoverRoute(
+            peer,
+            survivor,
+            logicalRoutingId);
         if (peer.Admitted
             || peer.State != MeshPeerState.Configured
             || _peersByIntent.ContainsKey(peer.Intent))
@@ -8174,13 +8203,34 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         peer.State = MeshPeerState.Closed;
         RebuildChannelSelectionPlansUnderLock();
         if (peer.Direction == ZLinkServiceConnectionDirection.Outbound
-            && _socket is not null)
+            && _socket is not null
+            && !nativeHandoverOwnsRoute)
             DisconnectTransport(
                 peer,
                 wasAdmitted,
                 physicalRoutingId);
+        else if (nativeHandoverOwnsRoute)
+            ZLinkFrameworkDebugLog.SpotDiscovery(
+                $"mesh_peer_duplicate_retire_skip_transport local={_routingId} "
+                + $"peer={peer.RoutingId} logical={logicalRoutingId} "
+                + $"survivor={survivor.RoutingId}");
         _peerControlRetry.RemoveTarget(peer.PhysicalRoutingId);
     }
+
+    // Core's ROUTER handover keeps the losing reciprocal pipe as a standby
+    // route. DisconnectRid addresses the logical RID selected by that
+    // handover, so using it here would close the survivor rather than the
+    // retired Framework intent.
+    private static bool SharesNativeHandoverRoute(
+        Peer retired,
+        Peer survivor,
+        RoutingId logicalRoutingId) =>
+        !logicalRoutingId.IsEmpty
+        && (retired.RoutingId == logicalRoutingId
+            || retired.PhysicalRoutingId == logicalRoutingId)
+        && (survivor.RoutingId == logicalRoutingId
+            || survivor.ExpectedRid == logicalRoutingId
+            || survivor.PhysicalRoutingId == logicalRoutingId);
 
     private ulong ResolvePeerGeneration(RoutingId sourceRid)
     {

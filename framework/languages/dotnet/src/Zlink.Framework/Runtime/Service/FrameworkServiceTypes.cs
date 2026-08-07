@@ -608,8 +608,10 @@ internal interface IMeshNode : IDisposable, IAsyncDisposable
     MeshOperationId AllocateOperationId();
     long MaxMessageSize { get; set; }
     ulong RouterHighWaterMark { get; set; }
+    ulong RouterReceiveHighWaterMark { get; set; }
     ulong MailboxMessageBudget { get; set; }
     ulong MailboxByteBudget { get; set; }
+    TimeSpan? ReceiveTimeout { get; set; }
     TimeSpan? SendTimeout { get; set; }
     void SetRoutingId(RoutingId routingId);
     void SetObjectRole(ZLinkMeshNodeObjectRole objectRole);

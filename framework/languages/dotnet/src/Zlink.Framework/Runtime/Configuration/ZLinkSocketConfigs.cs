@@ -1,8 +1,8 @@
 namespace Zlink.Framework.Runtime.Configuration;
 
-// Also surfaces the MeshNode ROUTER build-time option subset via
-// IZLinkMeshNodeSocketConfig (spec 05-route-mesh §5). Every member the mesh-node
-// interface exposes (MaxMessageSize/HWM/timeouts) already lives here.
+// Also surfaces the MeshNode ROUTER option subset from the common .NET interface
+// contract (server/languages/dotnet/interfaces/03-configuration-topology). Every
+// member exposed by that mesh-node interface is kept in this configuration object.
 internal sealed class ZLinkSocketConfig : IZLinkSocketConfig, IZLinkMeshNodeSocketConfig
 {
     internal const long DefaultMaxMessageSize = 16L * 1024L * 1024L;

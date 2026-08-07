@@ -2,7 +2,6 @@ using Zlink.Framework.Runtime.Configuration;
 
 namespace Zlink.Framework.UnitTests;
 
-[Collection(NativeRuntimeCollection.Name)]
 public sealed class EndpointConnectionsTests
 {
     [Fact]

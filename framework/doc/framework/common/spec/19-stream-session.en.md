@@ -125,6 +125,16 @@ so it doesn't satisfy the framework contract. The framework doesn't read a new
 packet while queue admission is failing, doesn't drop an already-received
 packet, and doesn't redeliver the same packet to the callback.
 
+### 4.1 Transport Operation Teardown Boundary
+
+When a physical stream starts closing, the framework stops new packet admission
+and completes or cancels in-flight read and write operations on their owning
+transport execution context. That completion or cancellation must be observed
+before destroying the TCP, TLS, or WebSocket socket, stream, or session
+resources. A late transport callback must not access a resource that has
+already been cleaned up, complete one operation twice, or start the next
+operation twice.
+
 ## 5. Codec Layer Separation
 
 The framework's basic surface only provides session, session context, stream,

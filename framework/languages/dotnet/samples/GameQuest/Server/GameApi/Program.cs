@@ -1,8 +1,5 @@
 using Microsoft.Extensions.Configuration;
 
-using System.Buffers.Binary;
-using System.Net.Sockets;
-using System.Net.WebSockets;
 using GameQuest.GameApi.Application;
 using GameQuest.GameApi.Infrastructure.Store;
 using GameQuest.GameApi.Infrastructure.ZLink;
@@ -25,7 +22,6 @@ internal static class Program
         var configuration = GameQuestTopology.LoadGameApi(args);
         var topology = configuration.Topology;
         var apiName = configuration.InstanceName;
-        var streamEndpoint = configuration.StreamBindEndpoint;
         var builder = WebApplication.CreateBuilder(args);
         builder.Configuration.Sources.Clear();
         builder.Configuration.AddInMemoryCollection();
@@ -73,27 +69,14 @@ internal static class Program
                 .AddActorFactory<PlayerSessionActor, PlayerSessionActorFactory>(
                     SampleNames.SessionActorType, factory => factory.RecreateOnRelocation());
             options.AddStreamNode(SampleNames.StreamNode)
-                .Bind(streamEndpoint)
+                .Bind(configuration.StreamBindEndpoint)
                 .EnableActorDispatch()
                 .AddSession<GameQuestSession>();
         });
 
         var app = builder.Build();
 
-        app.UseWebSockets();
-
         app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
-
-        app.Map("/quest/ws", async context =>
-        {
-            if (!context.WebSockets.IsWebSocketRequest)
-            {
-                context.Response.StatusCode = StatusCodes.Status400BadRequest;
-                return;
-            }
-
-            await BridgeWebSocketToStreamAsync(context, streamEndpoint);
-        });
 
         app.MapGet("/quest/progress/{playerId}", async (
             string playerId,
@@ -207,23 +190,6 @@ internal static class Program
         await app.RunAsync();
     }
 
-    private static async Task BridgeWebSocketToStreamAsync(HttpContext context, string streamEndpoint)
-    {
-        var target = new Uri(streamEndpoint);
-        using var tcp = new TcpClient();
-        await tcp.ConnectAsync(target.Host, target.Port, context.RequestAborted);
-        await using var stream = tcp.GetStream();
-        using var webSocket = await context.WebSockets.AcceptWebSocketAsync();
-
-        var webSocketToStream = CopyWebSocketToStreamAsync(webSocket, stream, context.RequestAborted);
-        var streamToWebSocket = CopyStreamFramesToWebSocketAsync(stream, webSocket, context.RequestAborted);
-        await Task.WhenAny(webSocketToStream, streamToWebSocket);
-
-        tcp.Close();
-        if (webSocket.State is WebSocketState.Open or WebSocketState.CloseReceived)
-            await webSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "closed", CancellationToken.None);
-    }
-
     private static int Count(
         IEnumerable<StoredQuestEvent> events,
         string playerId,
@@ -236,62 +202,4 @@ internal static class Program
             && e.Type == eventType);
     }
 
-    private static async Task CopyWebSocketToStreamAsync(
-        WebSocket webSocket,
-        NetworkStream stream,
-        CancellationToken cancellationToken)
-    {
-        var buffer = new byte[8192];
-        while (!cancellationToken.IsCancellationRequested && webSocket.State == WebSocketState.Open)
-        {
-            var result = await webSocket.ReceiveAsync(buffer, cancellationToken);
-            if (result.MessageType == WebSocketMessageType.Close) return;
-
-            if (result.MessageType != WebSocketMessageType.Binary)
-            {
-                await webSocket.CloseAsync(WebSocketCloseStatus.InvalidMessageType, "binary frames only",
-                    cancellationToken);
-                return;
-            }
-
-            if (result.Count > 0) await stream.WriteAsync(buffer.AsMemory(0, result.Count), cancellationToken);
-        }
-    }
-
-    private static async Task CopyStreamFramesToWebSocketAsync(
-        NetworkStream stream,
-        WebSocket webSocket,
-        CancellationToken cancellationToken)
-    {
-        var prefix = new byte[6];
-        while (!cancellationToken.IsCancellationRequested && webSocket.State == WebSocketState.Open)
-        {
-            if (!await ReadExactOrCloseAsync(stream, prefix, cancellationToken)) return;
-
-            var headerLength = BinaryPrimitives.ReadUInt16BigEndian(prefix.AsSpan(0, 2));
-            var payloadLength = BinaryPrimitives.ReadUInt32BigEndian(prefix.AsSpan(2, 4));
-            var frame = new byte[checked(6 + headerLength + payloadLength)];
-            prefix.CopyTo(frame.AsSpan(0, 6));
-            if (!await ReadExactOrCloseAsync(stream, frame.AsMemory(6), cancellationToken)) return;
-
-            await webSocket.SendAsync(frame, WebSocketMessageType.Binary, true, cancellationToken);
-        }
-    }
-
-    private static async ValueTask<bool> ReadExactOrCloseAsync(
-        NetworkStream stream,
-        Memory<byte> buffer,
-        CancellationToken cancellationToken)
-    {
-        var offset = 0;
-        while (offset < buffer.Length)
-        {
-            var count = await stream.ReadAsync(buffer[offset..], cancellationToken);
-            if (count == 0) return false;
-
-            offset += count;
-        }
-
-        return true;
-    }
 }

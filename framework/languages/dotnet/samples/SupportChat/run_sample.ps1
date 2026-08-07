@@ -86,7 +86,7 @@ finally {
     if ($RedisContainer) {
         Remove-SampleRedisContainer $RedisContainer
     }
-    if (-not $RunSucceeded -or $SUPPORTCHAT_KEEP_RUN_DIR -eq "1") {
+    if (-not $RunSucceeded -or $env:SUPPORTCHAT_KEEP_RUN_DIR -eq "1") {
         Write-Host "runDir=$RunDir"
     }
     else {

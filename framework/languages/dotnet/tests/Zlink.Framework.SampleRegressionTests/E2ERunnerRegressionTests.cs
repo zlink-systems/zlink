@@ -8,6 +8,13 @@ public sealed partial class RegressionTests
     [Fact]
     public void E2E_Runners_Default_Local_Readiness_To_Three_Seconds()
     {
+        var expectedTimeoutSeconds = new Dictionary<string, int>(StringComparer.Ordinal)
+        {
+            // Replacement startup creates a new process and waits for the
+            // restored topology, so this runner intentionally uses a wider
+            // local readiness window than the ordinary E2E runners.
+            ["ResilienceLifecycle/run_e2e.sh"] = 10
+        };
         var runners = Directory.EnumerateFiles(ResolveE2eRoot(), "run_e2e.sh", SearchOption.AllDirectories)
             .Order(StringComparer.Ordinal)
             .ToArray();
@@ -16,9 +23,21 @@ public sealed partial class RegressionTests
         foreach (var runner in runners)
         {
             var text = File.ReadAllText(runner);
-            Assert.Contains("LOCAL_READINESS_TIMEOUT_SECONDS=3", text, StringComparison.Ordinal);
+            var relativePath = NormalizeRelativePath(Path.GetRelativePath(ResolveE2eRoot(), runner));
+            var timeoutSeconds = expectedTimeoutSeconds.GetValueOrDefault(relativePath, 3);
+            Assert.Contains(
+                $"LOCAL_READINESS_TIMEOUT_SECONDS={timeoutSeconds}",
+                text,
+                StringComparison.Ordinal);
             Assert.Contains("LOCAL_READINESS_POLL_SECONDS=0.1", text, StringComparison.Ordinal);
         }
+
+        Assert.Equal(
+            expectedTimeoutSeconds.Keys.Order(StringComparer.Ordinal),
+            runners
+                .Select(runner => NormalizeRelativePath(Path.GetRelativePath(ResolveE2eRoot(), runner)))
+                .Where(expectedTimeoutSeconds.ContainsKey)
+                .Order(StringComparer.Ordinal));
     }
 
     [Fact]
