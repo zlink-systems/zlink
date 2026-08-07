@@ -59,7 +59,8 @@ func runRouterRouter(cfg benchmarkConfig) perfcommon.Result {
 	perfcommon.ApplySingleBenchmarkSocketOptions(server, cfg.transport)
 	perfcommon.ApplySingleBenchmarkSocketOptions(client, cfg.transport)
 	debugf("router/router wait connected")
-	perfcommon.WaitConnectedWithTimeout(perfcommon.SingleReadyTimeout(), serverMon, clientMon)
+	perfcommon.WaitConnectedWithActivity(
+		perfcommon.SingleReadyTimeout(), server, serverMon, clientMon)
 	debugf("router/router wait route ready")
 	targetID := waitRouterRouterRouteReady(server, client, serverID)
 

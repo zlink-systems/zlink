@@ -54,6 +54,14 @@ func WaitConnectedWithTimeout(timeout time.Duration, monitors ...*zlink.SocketMo
 	}
 }
 
+func WaitConnectedWithActivity(
+	timeout time.Duration,
+	activity zlink.SocketTarget,
+	monitors ...*zlink.SocketMonitor,
+) {
+	Must(waitMonitorReadyWithActivity(activity, monitors, timeout))
+}
+
 func maxReadyEvents(minEvents int) int {
 	if minEvents > 0 {
 		return minEvents

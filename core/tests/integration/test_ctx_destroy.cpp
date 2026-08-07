@@ -12,6 +12,8 @@
 
 #include <unity.h>
 
+#include <string.h>
+
 namespace zlink
 {
 class ctx_termination_test_access_t
@@ -292,6 +294,71 @@ void test_ctx_term_with_open_socket_monitors ()
     TEST_ASSERT_SUCCESS_ERRNO (zlink_ctx_term (ctx));
 }
 
+void test_router_router_connection_ready ()
+{
+    void *ctx = zlink_ctx_new ();
+    TEST_ASSERT_NOT_NULL (ctx);
+
+    void *server = zlink_socket (ctx, ZLINK_SOCKET_ROUTER);
+    void *client = zlink_socket (ctx, ZLINK_SOCKET_ROUTER);
+    TEST_ASSERT_NOT_NULL (server);
+    TEST_ASSERT_NOT_NULL (client);
+
+    const int zero = 0;
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (server, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (client, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
+
+    const char server_id[] = "SRV01";
+    const char client_id[] = "CLT01";
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_routing_id (server, server_id, sizeof (server_id) - 1));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_routing_id (client, client_id, sizeof (client_id) - 1));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_router_option (
+      client, ZLINK_ROUTER_OPT_CONNECT_ROUTING_ID, server_id,
+      sizeof (server_id) - 1));
+
+    zlink_socket_monitor_open_options_t monitor_options;
+    memset (&monitor_options, 0, sizeof (monitor_options));
+    monitor_options.events = ZLINK_EVENT_CONNECTION_READY;
+    void *monitor = zlink_socket_monitor_open (server, &monitor_options);
+    TEST_ASSERT_NOT_NULL (monitor);
+
+    char endpoint[MAX_SOCKET_STRING];
+    bind_loopback_ipv4 (server, endpoint, sizeof (endpoint));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (client, endpoint));
+
+    bool ready = false;
+    zlink_monitor_event_t event;
+    for (int attempt = 0; attempt < 30 && !ready; ++attempt) {
+        zlink_pollitem_t items[] = {
+          {monitor, 0, ZLINK_POLLIN, 0}, {server, 0, ZLINK_POLLIN, 0}};
+        if (zlink_poll (items, 2, 100, NULL) <= 0
+            || (items[0].revents & ZLINK_POLLIN) == 0)
+            continue;
+
+        while (zlink_socket_monitor_recv (
+                 monitor, &event, ZLINK_RECV_FLAGS_DONTWAIT)
+               == ZLINK_RECV_OK) {
+            if (event.event == ZLINK_EVENT_CONNECTION_READY) {
+                ready = true;
+                break;
+            }
+        }
+    }
+
+    TEST_ASSERT_TRUE (ready);
+    TEST_ASSERT_EQUAL_UINT64 (sizeof (client_id) - 1, event.routing_id.size);
+    TEST_ASSERT_EQUAL_MEMORY (client_id, event.routing_id.data, event.routing_id.size);
+
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_monitor_close (&monitor));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_close (client));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_close (server));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_ctx_term (ctx));
+}
+
 void test_ctx_shutdown ()
 {
     //  Set up our context and sockets
@@ -537,6 +604,7 @@ int main (void)
     RUN_TEST (test_pipe_lifetime_state_assigns_one_delete_owner);
     RUN_TEST (test_ctx_destroy);
     RUN_TEST (test_ctx_term_with_open_socket_monitors);
+    RUN_TEST (test_router_router_connection_ready);
     RUN_TEST (test_ctx_shutdown);
     RUN_TEST (test_ctx_shutdown_socket_opened_after);
     RUN_TEST (test_ctx_shutdown_only_socket_opened_after);
