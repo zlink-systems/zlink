@@ -64,16 +64,16 @@ Gap 하나 또는 서로 강하게 연결된 작은 작업 묶음의 동작과 �
 | DOTNET-API-003 | 상 | StreamNode message-size API | 완료 — fluent `MaxMessageSize(bytes)`와 전용 socket config surface를 제공한다 |
 | DOTNET-ROLE-001 | 상 | ClientServer role error | 완료 — Server role만 등록된 Channel send/request가 `NotConfigured`로 끝난다 |
 | DOTNET-WIRE-001 | 상 | `framework-json-v1` | 완료 — application payload 전용 strict codec이 canonical golden profile을 강제한다 |
-| DOTNET-SIZE-001 | 상 | RouteMesh SS message size | 제한이 없어야 하지만 public 설정과 runtime이 기본 16 MiB를 receiver·sender에 적용한다 |
-| DOTNET-WIRE-002 | 상 | ClientServer message bound | admission에서 정한 complete-message 상한을 send/request/reply 제출 전에 강제하지 않는다 |
-| DOTNET-COMP-001 | 상 | completion overflow | early result와 tombstone이 모두 차면 caller terminal 없이 payload를 버리고 metric만 올린다 |
-| DOTNET-EXEC-001 | 상 | STREAM session queue | queue의 byte 축이 payload 크기를 세지 않아 count 한도까지 큰 payload가 쌓일 수 있다 |
-| DOTNET-EXEC-002 | 중 | serial execution engine | Spot/session 공통 queue와 별도로 Actor mailbox·전달 queue가 순서·수락·준비 집합을 다시 구현한다 |
+| DOTNET-SIZE-001 | 상 | RouteMesh SS message size | 완료 — public·admission·native receive·sender 상한을 제거하고 HWM과 wire guard만 유지한다 |
+| DOTNET-WIRE-002 | 상 | ClientServer message bound | 완료 — negotiated complete-message 상한을 send/request/inbound/reply에 같은 계산으로 적용한다 |
+| DOTNET-COMP-001 | 상 | completion overflow | 완료 — retention 포화가 pending과 이후 caller에게 `CapacityExceeded` terminal로 전달된다 |
+| DOTNET-EXEC-001 | 상 | STREAM session queue | 완료 — session과 생성 ingress queue가 retained payload byte와 고정 비용을 함께 예약한다 |
+| DOTNET-EXEC-002 | 중 | serial execution engine | 완료 — Spot/session/Actor 전달이 공통 serial engine의 lane policy로 수렴했다 |
 | DOTNET-EXEC-003 | 상 | Entry Actor ingress HWM | 완료 — process-wide ingress와 Actor별 공통 serial lane이 count·retained byte를 제한한다 |
 | DOTNET-LIFE-001 | 중 | Spot type model | 완료 — 공통 resource base 위에 User와 Instance activation type과 context surface를 분리했다 |
 | DOTNET-LIFE-002 | 중 | Ready Instance owner loss | 완료 — 실제 owner crash·restart 뒤 `Unavailable`과 queue replay 부재를 process에서 검증했다 |
 | DOTNET-COMP-002 | 중 | completion ordering | 완료 — sender가 응답 상관 값을 먼저 할당하고 waiter 등록 뒤 submit한다 |
-| DOTNET-LAYER-001 | 중 | binding 경계·POSDDD | 의미를 숨기지 않는 일대일 `IBackend*`/`*Wrapper` 계층이 production hot path에 남아 있다 |
+| DOTNET-LAYER-001 | 중 | binding 경계·POSDDD | 완료 — 일반 socket은 binding public API를 직접 쓰고 의미 변환 adapter만 유지한다 |
 | DOTNET-LAYER-002 | 상 | runtime/package ownership | relocate·shutdown 의미와 public runtime 구현이 ASP.NET Core 통합 package에 있다 |
 | DOTNET-LAYER-003 | 중 | identifier type | mesh·channel·Actor·Spot ID를 내부 경계에서도 모두 `string`으로 섞어 쓴다 |
 | DOTNET-LAYER-004 | 중 | STREAM protocol ownership | client connector와 Framework server가 같은 STREAM codec·pending·lifecycle stack을 별도로 구현한다 |
@@ -459,9 +459,35 @@ ToActor `TA-A1`을 `ToActorMessaging/logs/20260807-205106-2541281/`에서, Insta
 
 ### DOTNET-LAYER-001 — 의미 없는 binding pass-through 계층
 
-Internals의 POSDDD 관문은 binding API를 그대로 복제하는 adapter와 test fake만을 이유로 둔 단일 구현 `IBackend*`를 금지한다(`common/internals/01-layering.ko.md:80-124`). 현재 publisher wrapper는 bind, socket option, send-ready, publish와 dispose를 같은 인자·결과로 전달할 뿐 Framework 의미를 숨기지 않는다(`Runtime/Backend/DotNet/Wrappers/ZLinkBackendPublisherSocketWrapper.cs:3-61`). Router wrapper도 option과 send/recv 대부분을 동일하게 전달한다(`Runtime/Backend/DotNet/Wrappers/ZLinkBackendRouterSocketWrapper.cs:3-167`). 대응 `IZLinkBackend*` interface는 binding surface를 다시 선언한다(`Runtime/Backend/Contracts/IZLinkBackendSocketContracts.cs:9-176`). Production 구현은 각각 이 wrapper 하나뿐이다.
+**판정: 완료**
+
+Internals의 POSDDD 관문은 binding API를 그대로 복제하는 adapter와 test fake만을 이유로 둔 단일 구현 `IBackend*`를 금지한다(`common/internals/01-layering.ko.md:80-124`). 조사 당시 publisher wrapper는 bind, socket option, send-ready, publish와 dispose를 같은 인자·결과로 전달할 뿐 Framework 의미를 숨기지 않았다(`Runtime/Backend/DotNet/Wrappers/ZLinkBackendPublisherSocketWrapper.cs:3-61`). Router wrapper도 option과 send/recv 대부분을 동일하게 전달했다(`Runtime/Backend/DotNet/Wrappers/ZLinkBackendRouterSocketWrapper.cs:3-167`). 대응 `IZLinkBackend*` interface는 binding surface를 다시 선언했고(`Runtime/Backend/Contracts/IZLinkBackendSocketContracts.cs:9-176`), production 구현은 각각 이 wrapper 하나뿐이었다.
 
 MeshNode/Spot/Stream처럼 ownership, pull-dispatch, completion과 fencing을 결합하는 adapter까지 제거하라는 뜻은 아니다. Socket별 pass-through interface/wrapper를 직접 binding public API 사용으로 바꾸고, 실제 의미 변환만 좁은 adapter에 남겨야 한다. 변경 전후 throughput, p99, allocation과 lock contention을 측정해야 이 구조 gap을 완료할 수 있다.
+
+일반 DEALER, ROUTER, PUB, SUB의 `IZLinkBackend*Socket`과 단일 production wrapper를 제거했다. Runtime
+context와 Channel 실행 경로는 binding의 public socket interface를 직접 사용한다. Socket option 변환,
+poller와 monitor 연결은 Framework 정책을 적용하는 좁은 adapter로 유지했고, MeshNode·Spot·STREAM adapter는
+ownership, completion과 lifecycle 의미를 결합하므로 유지했다. Channel bundle은 socket interface를 다시
+선언하지 않고 dispose와 manual connection ownership만 관리하며, 사용되지 않던 automatic connection
+bookkeeping도 제거했다. Test는 binding surface를 복제한 fake 대신 실제 socket과 runtime이 기록하는
+socket 생성 횟수·monitoring 상태를 사용한다.
+
+같은 host에서 1 KiB payload, request window 100, warmup 1,000회, active 30초 조건으로 변경 전
+`40255cd707`과 변경 뒤를 차례로 측정했다. Throughput은 23.05 KOPS에서 27.08 KOPS로 17.49% 증가했고,
+mean latency는 3.673 ms에서 3.337 ms로, p99는 101.018 ms에서 99.790 ms로 낮아졌다. `System.Runtime`
+counter의 server allocation은 초당 613,769,509 byte에서 676,926,534 byte로, monitor lock contention은
+초당 9,761.625회에서 10,812.538회로 늘었다. 처리량 차이를 반영해 완료 1건당 환산하면 allocation은
+26,625.74 byte에서 24,994.55 byte로 6.13%, contention은 0.423466회에서 0.399238회로 5.72% 감소했다.
+Counter 표본은 변경 전 8개, 변경 뒤 13개이며 throughput·latency와 같은 active 구간에서 수집했다.
+
+관련 owner-layer test 85건과 전체 .NET unit suite 1,582건이 통과했다. Packaged contract와 standalone
+HTTP clean consumer가 통과했고
+public API snapshot hash는
+`c1987f4b98e4fac7a30b7d038a56ee0d20e1272d00e79bdc88d3271e3c3ab958`로 유지되었다. 실제 process는
+PubSub `PS-A1`을 `PubSub/logs/20260807-211921-3611470/`에서, ChannelEgressRouting `CH-E2E-01`을
+`ChannelEgressRouting/logs/20260807-211942-3612322/`에서 통과했다. 구현 checkpoint는
+`8ad6e969cc`로 `main`에 push했다.
 
 ### DOTNET-LAYER-002 — runtime 종료 의미가 ASP.NET Core 통합 package에 있음
 
