@@ -194,6 +194,7 @@ standalone HTTP clean consumer가 통과했으며 public API snapshot hash는
 `917792ee8f6a4f645f03b1b683041b819d7501bd0ec54807c728c4fd8ab164e1`이다. 실제 process `RegistrationCodec`
 `RC-B6`도 `logs/20260807-175928-2425161/`에서 int64·bytes·nullable typed JSON round trip과 handler evidence를
 확인하고 통과했다.
+이 checkpoint는 `14b720a2d1`으로 `main`에 push했다.
 
 ### DOTNET-SIZE-001 — RouteMesh ServerServer에 없어야 할 16 MiB 상한이 있음
 
