@@ -705,23 +705,31 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
             }
 
             var queuedLease = lease;
-            var ingressAdmission = _sessionIngress.EnqueueApplication(async cancellationToken =>
-            {
-                var ownershipTransferred = false;
-                try
+            var retainedBytes = ZLinkStreamSessionRuntime.RetainedPacketBytes(
+                header,
+                payload);
+            var ingressAdmission = _sessionIngress.EnqueueApplication(
+                retainedBytes,
+                async cancellationToken =>
                 {
-                    var session = await _sessions.GetOrCreateAsync(routingId)
-                        .ConfigureAwait(false);
-                    if (session is not null)
-                        ownershipTransferred = session.TryEnqueuePacket(header, payload, queuedLease)
-                            == ZLinkSerialPostAdmission.Accepted;
-                }
-                finally
-                {
-                    if (!ownershipTransferred)
-                        DisposeRejectedPacket(header, payload, queuedLease);
-                }
-            });
+                    var ownershipTransferred = false;
+                    try
+                    {
+                        var session = await _sessions.GetOrCreateAsync(routingId)
+                            .ConfigureAwait(false);
+                        if (session is not null)
+                            ownershipTransferred = session.TryEnqueuePacket(
+                                    header,
+                                    payload,
+                                    queuedLease)
+                                == ZLinkSerialPostAdmission.Accepted;
+                    }
+                    finally
+                    {
+                        if (!ownershipTransferred)
+                            DisposeRejectedPacket(header, payload, queuedLease);
+                    }
+                });
             if (ingressAdmission == ZLinkSerialPostAdmission.Accepted)
             {
                 lease = null;

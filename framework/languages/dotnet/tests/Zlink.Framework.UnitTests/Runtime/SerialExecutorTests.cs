@@ -414,6 +414,51 @@ public sealed class SerialExecutorTests
     }
 
     [Fact]
+    public async Task StreamSessionSerialExecutor_ReservesRetainedApplicationBytes()
+    {
+        using var errorSink = new ZLinkRuntimeErrorSink();
+        await using var executor = new ZLinkStreamSessionSerialExecutor(
+            new object(),
+            errorSink,
+            capacity: 8,
+            applicationByteCapacity:
+                ZLinkSerialExecutionQueue.WorkItemFixedCostBytes + 4);
+        var started = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        Assert.Equal(
+            ZLinkSerialPostAdmission.Accepted,
+            executor.EnqueueApplication(
+                retainedBytes: 4,
+                async _ =>
+                {
+                    started.TrySetResult();
+                    await release.Task.ConfigureAwait(false);
+                }));
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(
+            ZLinkSerialPostAdmission.QueueFull,
+            executor.EnqueueApplication(
+                retainedBytes: 1,
+                static _ => ValueTask.CompletedTask));
+
+        release.TrySetResult();
+    }
+
+    [Fact]
+    public void StreamSessionExecutionAccountingIncludesHeaderAndPayload()
+    {
+        using var header = Message.From(new byte[] { 1, 2, 3 });
+        using var payload = Message.From(new byte[] { 4, 5, 6, 7, 8 });
+
+        Assert.Equal(
+            8,
+            ZLinkStreamSessionRuntime.RetainedPacketBytes(header, payload));
+    }
+
+    [Fact]
     public async Task SerialExecutionQueue_FinalTurn_BypassesCapacity_AndSealsAdmission()
     {
         await using var queue = CreateQueue(CancellationToken.None, capacity: 1);
@@ -833,6 +878,45 @@ public sealed class SerialExecutorTests
                 ReadOnlyMemory<byte>.Empty,
                 static _ => ValueTask.CompletedTask,
                 static () => { },
+                out var next));
+        await next.Completion.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
+    public async Task SerialExecutionQueue_ApplicationAdmissionCountsRetainedBytes()
+    {
+        await using var queue = new ZLinkSerialExecutionQueue(
+            new ZLinkRuntimeTaskRunner(
+                new ZLinkRuntimeErrorSink(),
+                CancellationToken.None),
+            new ZLinkRuntimeErrorSink(),
+            CancellationToken.None,
+            capacity: 8,
+            applicationByteCapacity:
+                ZLinkSerialExecutionQueue.WorkItemFixedCostBytes + 4);
+        var release = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        Assert.Equal(
+            ZLinkSerialPostAdmission.Accepted,
+            queue.TryPostApplicationWithAdmission(
+                retainedBytes: 4,
+                async _ => await release.Task.ConfigureAwait(false),
+                out var accepted));
+        Assert.Equal(
+            ZLinkSerialPostAdmission.QueueFull,
+            queue.TryPostApplicationWithAdmission(
+                retainedBytes: 1,
+                static _ => ValueTask.CompletedTask,
+                out _));
+
+        release.TrySetResult();
+        await accepted.Completion.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(
+            ZLinkSerialPostAdmission.Accepted,
+            queue.TryPostApplicationWithAdmission(
+                retainedBytes: 4,
+                static _ => ValueTask.CompletedTask,
                 out var next));
         await next.Completion.WaitAsync(TimeSpan.FromSeconds(5));
     }

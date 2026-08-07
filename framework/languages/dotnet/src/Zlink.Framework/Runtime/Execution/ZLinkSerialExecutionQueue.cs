@@ -178,8 +178,18 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
 
     internal ZLinkSerialPostAdmission TryPostApplicationWithAdmission(
         Func<CancellationToken, ValueTask> callback,
+        out ZLinkSerialWorkItem item) =>
+        TryPostApplicationWithAdmission(0, callback, out item);
+
+    internal ZLinkSerialPostAdmission TryPostApplicationWithAdmission(
+        long retainedBytes,
+        Func<CancellationToken, ValueTask> callback,
         out ZLinkSerialWorkItem item)
     {
+        ArgumentNullException.ThrowIfNull(callback);
+        if (retainedBytes < 0)
+            throw new ArgumentOutOfRangeException(nameof(retainedBytes));
+        var accountingBytes = checked(WorkItemFixedCostBytes + retainedBytes);
         lock (_admissionGate)
         {
             if (Volatile.Read(ref _completed) != 0)
@@ -189,7 +199,7 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
             }
             if (!TryReserveSlot(
                     ZLinkSerialWorkLane.Application,
-                    WorkItemFixedCostBytes,
+                    accountingBytes,
                     _applicationCapacity,
                     _applicationByteCapacity))
             {
@@ -200,7 +210,7 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
             item = new ZLinkSerialWorkItem(
                 callback,
                 lane: ZLinkSerialWorkLane.Application,
-                accountingBytes: WorkItemFixedCostBytes);
+                accountingBytes: accountingBytes);
             _applicationQueue.Enqueue(item);
             ScheduleDrain();
             return ZLinkSerialPostAdmission.Accepted;
