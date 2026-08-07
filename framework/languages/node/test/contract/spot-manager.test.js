@@ -22,6 +22,31 @@ const json = connector;
 const msgpack = require('../../packages/framework-codec-msgpack/dist/server/framework.cjs');
 const protobuf = require('../../packages/framework-codec-protobuf/dist/server/framework.cjs');
 const flowContext = require('../../packages/framework/dist/runtime/diagnostics/flow-context');
+const { ZLinkSpotActivationRegistry } = require(
+  '../../packages/framework/dist/runtime/spots/spot-activation-registry'
+);
+
+test('Spot activation idle scan visits at most 64 entries and resumes from its cursor', () => {
+  const registry = new ZLinkSpotActivationRegistry();
+  for (let index = 0; index < 130; index += 1) {
+    registry.register({
+      meshName: 'test.mesh',
+      spotId: `spot-${index}`,
+      spotType: class TestSpot {}
+    });
+  }
+
+  const first = registry.nextActiveActivationBatch();
+  const second = registry.nextActiveActivationBatch();
+  const third = registry.nextActiveActivationBatch();
+  assert.equal(first.length, 64);
+  assert.equal(second.length, 64);
+  assert.equal(third.length, 2);
+  assert.deepEqual(first.map(value => value.spotId), Array.from({ length: 64 }, (_, index) => `spot-${index}`));
+  assert.deepEqual(second.map(value => value.spotId), Array.from({ length: 64 }, (_, index) => `spot-${index + 64}`));
+  assert.deepEqual(third.slice(0, 2).map(value => value.spotId), ['spot-128', 'spot-129']);
+  assert.equal(registry.nextActiveActivationBatch()[0].spotId, 'spot-0');
+});
 const {
   ZLinkRoutedSpotPacketDispatch
 } = require('../../packages/framework/dist/runtime/spots/spot-routed-spot-packet-dispatch');

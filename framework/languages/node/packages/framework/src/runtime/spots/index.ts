@@ -864,10 +864,7 @@ export class DefaultZLinkSpotManager {
   }
 
   private hasIdleSweepTarget(): boolean {
-    return this.activations.activeActivations().some((activation) =>
-      (this.options.instanceSpotIdleTimeoutMs?.get(activation.meshName) ?? 0) > 0
-      && this.isInstanceFactory(activation.meshName, activation.spotType)
-    );
+    return this.activations.hasActiveActivations();
   }
 
   private async runIdleSweep(): Promise<void> {
@@ -875,7 +872,7 @@ export class DefaultZLinkSpotManager {
     this.idleSweepRunning = true;
     try {
       const now = Date.now();
-      for (const activation of this.activations.activeActivations()) {
+      for (const activation of this.activations.nextActiveActivationBatch()) {
         const timeoutMs = this.options.instanceSpotIdleTimeoutMs?.get(activation.meshName) ?? 0;
         if (
           timeoutMs <= 0
