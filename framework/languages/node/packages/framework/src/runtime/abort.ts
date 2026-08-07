@@ -36,8 +36,59 @@ export function throwIfAborted(signal: AbortSignal | undefined): void {
   }
 }
 
-export function awaitWithAbort<T>(operation: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
-  throwIfAborted(signal);
+export class ZLinkDeferredCompletion<T> {
+  private settled = false;
+  private readonly resolvePromise: (value: T) => void;
+  private readonly rejectPromise: (error: unknown) => void;
+  readonly promise: Promise<T>;
+
+  constructor() {
+    let resolvePromise!: (value: T) => void;
+    let rejectPromise!: (error: unknown) => void;
+    this.promise = new Promise<T>((resolve, reject) => {
+      resolvePromise = resolve;
+      rejectPromise = reject;
+    });
+    this.resolvePromise = resolvePromise;
+    this.rejectPromise = rejectPromise;
+  }
+
+  resolve(value: T): boolean {
+    if (!this.claim()) return false;
+    this.resolvePromise(value);
+    return true;
+  }
+
+  reject(error: unknown): boolean {
+    if (!this.claim()) return false;
+    this.rejectPromise(error);
+    return true;
+  }
+
+  wait(signal?: AbortSignal): Promise<T> {
+    return awaitWithAbort(
+      this.promise,
+      signal,
+      () => this.reject(createAbortError())
+    );
+  }
+
+  private claim(): boolean {
+    if (this.settled) return false;
+    this.settled = true;
+    return true;
+  }
+}
+
+export function awaitWithAbort<T>(
+  operation: Promise<T>,
+  signal: AbortSignal | undefined,
+  abortOperation?: () => void
+): Promise<T> {
+  if (signal?.aborted === true) {
+    abortOperation?.();
+    throw createAbortError();
+  }
   if (signal === undefined) {
     return operation;
   }
@@ -50,7 +101,9 @@ export function awaitWithAbort<T>(operation: Promise<T>, signal: AbortSignal | u
       return true;
     };
     const abort = () => {
-      if (settle()) reject(createAbortError());
+      if (!settle()) return;
+      abortOperation?.();
+      reject(createAbortError());
     };
     signal.addEventListener('abort', abort, { once: true });
     operation.then(

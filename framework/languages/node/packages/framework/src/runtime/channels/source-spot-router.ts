@@ -1,7 +1,7 @@
 import type { Message } from '../../contracts/Common/Message';
 import type { ZLinkBackendSpot } from '../backend/contracts';
 import type { ZLinkSpotRouteTarget } from '../spots/spot-routing-internal';
-import { createAbortError, throwIfAborted } from '../abort';
+import { throwIfAborted, ZLinkDeferredCompletion } from '../abort';
 import { ZLinkConfigurationException } from '../configuration';
 import { closeMessages, ZLinkChannelMessageKind } from './channel-envelope';
 import { decodeSpotDirectReply, encodeSpotDirectEnvelope } from './spot-direct-envelope';
@@ -25,53 +25,33 @@ export class ZLinkSourceSpotRouter {
       packetName,
       request
     )] as readonly Message[];
-    return new Promise<TReply>((resolve, reject) => {
-      let settled = false;
-      const cleanup = () => signal?.removeEventListener('abort', onAbort);
-      const complete = (value: TReply) => {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        resolve(value);
-      };
-      const fail = (error: unknown) => {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        reject(error);
-      };
-      const onAbort = () => fail(createAbortError());
-      signal?.addEventListener('abort', onAbort, { once: true });
-      try {
-        void this.submitWhenReady(
-          (remainingMs) => sourceSpot.requestToSpot(
-            target.targetNodeRid,
-            target.spotId,
-            parts,
-            (result, replyParts) => {
-              try {
-                if (result !== 0) {
-                  fail(this.requestFailure(target.routerChannelId, result));
-                  return;
-                }
-                complete(decodeSpotDirectReply<TReply>(replyParts as readonly Message[]));
-              } catch (error) {
-                fail(error);
-              } finally {
-                closeMessages(replyParts as readonly Message[]);
-              }
-            },
-            0,
-            remainingMs
-          ),
-          timeoutMs,
-          signal,
-          this.notReady(target.routerChannelId, 'request')
-        ).catch(fail);
-      } catch (error) {
-        fail(error);
-      }
-    }).finally(() => closeMessages(parts));
+    const completion = new ZLinkDeferredCompletion<TReply>();
+    void this.submitWhenReady(
+      (remainingMs) => sourceSpot.requestToSpot(
+        target.targetNodeRid,
+        target.spotId,
+        parts,
+        (result, replyParts) => {
+          try {
+            if (result !== 0) {
+              completion.reject(this.requestFailure(target.routerChannelId, result));
+              return;
+            }
+            completion.resolve(decodeSpotDirectReply<TReply>(replyParts as readonly Message[]));
+          } catch (error) {
+            completion.reject(error);
+          } finally {
+            closeMessages(replyParts as readonly Message[]);
+          }
+        },
+        0,
+        remainingMs
+      ),
+      timeoutMs,
+      signal,
+      this.notReady(target.routerChannelId, 'request')
+    ).catch((error) => completion.reject(error));
+    return completion.wait(signal).finally(() => closeMessages(parts));
   }
 
   async send(
@@ -111,51 +91,30 @@ export class ZLinkSourceSpotRouter {
     signal?: AbortSignal
   ): Promise<readonly Message[]> {
     throwIfAborted(signal);
-    return new Promise<readonly Message[]>((resolve, reject) => {
-      let settled = false;
-      const cleanup = () => signal?.removeEventListener('abort', onAbort);
-      const complete = (value: readonly Message[]): boolean => {
-        if (settled) return false;
-        settled = true;
-        cleanup();
-        resolve(value);
-        return true;
-      };
-      const fail = (error: unknown) => {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        reject(error);
-      };
-      const onAbort = () => fail(createAbortError());
-      signal?.addEventListener('abort', onAbort, { once: true });
-      try {
-        void this.submitWhenReady(
-          (remainingMs) => sourceSpot.requestToSpot(
-            target.targetNodeRid,
-            target.spotId,
-            request,
-            (result, replyParts) => {
-              if (result !== 0) {
-                closeMessages(replyParts as readonly Message[]);
-                fail(this.requestFailure(target.routerChannelId, result));
-                return;
-              }
-              if (!complete(replyParts as readonly Message[])) {
-                closeMessages(replyParts as readonly Message[]);
-              }
-            },
-            0,
-            remainingMs
-          ),
-          timeoutMs,
-          signal,
-          this.notReady(target.routerChannelId, 'request')
-        ).catch(fail);
-      } catch (error) {
-        fail(error);
-      }
-    });
+    const completion = new ZLinkDeferredCompletion<readonly Message[]>();
+    void this.submitWhenReady(
+      (remainingMs) => sourceSpot.requestToSpot(
+        target.targetNodeRid,
+        target.spotId,
+        request,
+        (result, replyParts) => {
+          if (result !== 0) {
+            closeMessages(replyParts as readonly Message[]);
+            completion.reject(this.requestFailure(target.routerChannelId, result));
+            return;
+          }
+          if (!completion.resolve(replyParts as readonly Message[])) {
+            closeMessages(replyParts as readonly Message[]);
+          }
+        },
+        0,
+        remainingMs
+      ),
+      timeoutMs,
+      signal,
+      this.notReady(target.routerChannelId, 'request')
+    ).catch((error) => completion.reject(error));
+    return completion.wait(signal);
   }
 
   private async submitWhenReady(
