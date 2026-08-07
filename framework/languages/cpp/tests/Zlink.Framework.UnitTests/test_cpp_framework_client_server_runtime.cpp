@@ -210,6 +210,16 @@ void verify_public_listener_status_reports_bound_endpoint ()
     assert (status->endpoint.rfind ("tcp://", 0) == 0);
     assert (status->endpoint.find (":0") == std::string::npos);
 
+    auto &channels =
+      provider.get_required<zlink::framework::channel_client_t> ();
+    const auto server_only_send =
+      channels.send ("listener-status", network_probe_message_t{})
+        .submit ()
+        .result ();
+    assert (!server_only_send);
+    assert (server_only_send.error_kind ()
+            == zlink::framework::framework_error_kind_t::not_configured);
+
     app.request_stop ();
     app_thread.join ();
     assert (exit_code.load (std::memory_order_acquire) == 0);

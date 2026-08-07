@@ -1388,6 +1388,11 @@ client_server_location_runtime_t::select_ready (
   std::chrono::steady_clock::time_point deadline)
 {
     std::unique_lock lock (_gate);
+    if (!_clients.contains (channel_name)) {
+        return result_t<std::shared_ptr<raw_client_server_client_t>>::failure (
+          framework_error_kind_t::not_configured,
+          "ClientServer Client role is not registered for this channel");
+    }
     const auto available = [&] {
         const auto found = _clients.find (channel_name);
         if (found == _clients.end ())
@@ -1411,8 +1416,8 @@ client_server_location_runtime_t::select_ready (
         const auto found = _clients.find (channel_name);
         if (found == _clients.end ()) {
             return result_t<std::shared_ptr<raw_client_server_client_t>>::failure (
-              framework_error_kind_t::not_found,
-              "ClientServer channel is not registered");
+              framework_error_kind_t::not_configured,
+              "ClientServer Client role is not registered for this channel");
         }
         return result_t<std::shared_ptr<raw_client_server_client_t>>::failure (
           framework_error_kind_t::not_found,
@@ -1421,8 +1426,8 @@ client_server_location_runtime_t::select_ready (
     const auto channel_it = _clients.find (channel_name);
     if (channel_it == _clients.end ()) {
         return result_t<std::shared_ptr<raw_client_server_client_t>>::failure (
-          framework_error_kind_t::not_found,
-          "ClientServer channel is not registered");
+          framework_error_kind_t::not_configured,
+          "ClientServer Client role is not registered for this channel");
     }
     auto &channel = *channel_it->second;
     if (channel.selector_dirty) {

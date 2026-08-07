@@ -1698,6 +1698,17 @@ int main ()
       "CPP-OBS-001",
       "Instance Spot activation tracing is not gated before event allocation");
 
+    /* CPP-CONTRACT-ROLE-001 — a missing local Client role is a local
+     * configuration error, distinct from a configured Client with no target. */
+    gate.require (
+      client_server_location_runtime.find (
+        "framework_error_kind_t::not_configured") != std::string::npos
+        && client_server_location_runtime.find (
+             "ClientServer Client role is not registered for this channel")
+             != std::string::npos,
+      "CPP-CONTRACT-ROLE-001",
+      "ClientServer calls do not distinguish a missing Client role from a missing target");
+
     /* TH-CP-01 — the C++ connector helper surface has a language contract. */
     const auto connector_contract_path =
       root
