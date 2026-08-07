@@ -5,6 +5,9 @@ const {
   ServiceDiscoveryRegistry,
   ServiceTopologyRegistry
 } = require('../../packages/framework/dist/internal');
+const {
+  SmoothWeightedSelection
+} = require('../../packages/framework/dist/runtime/foundation/service-weighted-selection');
 
 function serviceNode(nodeRoutingId, weight) {
   return {
@@ -68,6 +71,25 @@ test('weighted selection keeps its cumulative state across descriptor updates', 
     activeCapacityUsed: 1
   });
   assert.equal(topology.selectChannel('orders').descriptor.nodeRoutingId, 'node-b');
+});
+
+test('cycle selection materializes cumulative state only when candidates rebuild', () => {
+  const candidates = [
+    { id: 'A', value: 'A', weight: 5 },
+    { id: 'B', value: 'B', weight: 1 }
+  ];
+  const selection = new SmoothWeightedSelection(() => candidates);
+  let clears = 0;
+  const originalClear = selection.current.clear.bind(selection.current);
+  selection.current.clear = () => {
+    clears += 1;
+    originalClear();
+  };
+
+  Array.from({ length: 12 }, () => selection.select());
+  assert.equal(clears, 0);
+  selection.rebuild();
+  assert.equal(clears, 2);
 });
 
 test('ClientServer selection invalidates its cached eligible set on disconnect', () => {

@@ -41,6 +41,9 @@ export class SmoothWeightedSelection<T> {
   }
 
   rebuild(): void {
+    if (this.plan.kind === 'cycle' && this.plan.values.length > 0) {
+      replaceState(this.current, this.plan.states[this.plan.cursor]!);
+    }
     this.plan = buildSelectionPlan(this.candidateProvider(), this.current);
   }
 
@@ -59,7 +62,6 @@ export class SmoothWeightedSelection<T> {
       const nextCursor = cursor + 1 < this.plan.values.length
         ? cursor + 1
         : this.plan.cycleStart;
-      replaceState(this.current, this.plan.states[nextCursor]!);
       this.plan.cursor = nextCursor;
       if (accept(selected)) return selected;
     }
