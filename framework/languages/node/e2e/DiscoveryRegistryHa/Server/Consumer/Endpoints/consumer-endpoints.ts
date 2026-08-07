@@ -47,6 +47,37 @@ export function createConsumerEndpoints(
     { method: 'GET', path: '/location/status', handle: () => locationQuery.getStatus() },
     {
       method: 'GET',
+      path: '/location/object',
+      handle: async (_body, requestUrl) => {
+        const query = new URL(requestUrl ?? '/', 'http://127.0.0.1').searchParams;
+        const objectId = query.get('id');
+        if (objectId === null || objectId.length === 0) {
+          throw new RangeError('Object ID is required.');
+        }
+        const kind = query.get('kind');
+        const row = kind === 'actor'
+          ? await locationQuery.findActorLocation(objectId)
+          : kind === 'spot'
+            ? await locationQuery.findSpotLocation(objectId)
+            : undefined;
+        if (kind !== 'actor' && kind !== 'spot') {
+          throw new RangeError("Object kind must be 'actor' or 'spot'.");
+        }
+        return row === undefined
+          ? { found: false }
+          : {
+              found: true,
+              objectId: row.globalId,
+              stableType: row.stableType,
+              meshName: row.meshName,
+              ownerNodeRid: String(row.nodeRid),
+              objectGeneration: row.objectGeneration.toString(),
+              state: row.state
+            };
+      }
+    },
+    {
+      method: 'GET',
       path: '/location/objects',
       handle: async (_body, requestUrl) => {
         const query = new URL(requestUrl ?? '/', 'http://127.0.0.1').searchParams;

@@ -27,6 +27,7 @@ SCENARIOS=(
   SF-C3
   SF-C4
   SF-C5
+  SF-C5A
   SF-D1
   SF-D2
   SF-D3
@@ -430,6 +431,23 @@ run_sf_c2() {
   fi
 }
 
+run_sf_c5a() {
+  local client_pid
+  start_topology no disabled disabled sf-c5a
+  run_client SF-C5A "$LOG_DIR/client.stdout.log" "$LOG_DIR/client.stderr.log" &
+  client_pid="$!"
+  wait_file_contains "$LOG_DIR/client.stdout.log" "scenario-control SF-C5A kill-provider-a" \
+    "SF-C5A client did not request provider A termination" "$client_pid" 120
+  kill_pid "$API_A_PID"
+  wait_file_contains "$LOG_DIR/client.stdout.log" "scenario-control SF-C5A start-provider-b" \
+    "SF-C5A client did not observe Unavailable" "$client_pid" 120
+  start_provider_b
+  wait_file_contains "$LOG_DIR/client.stdout.log" "scenario-control SF-C5A stop-redis" \
+    "SF-C5A client did not verify object states" "$client_pid" 600
+  stop_redis
+  wait "$client_pid"
+}
+
 run_sf_d1() {
   local client_pid
   start_topology
@@ -612,6 +630,10 @@ case "$SCENARIO" in
     PROVIDER_B_URL=""
     wait_for_peer_endpoint "$PROVIDER_A_CHANNEL_ENDPOINT"
     run_client SF-C5 "$LOG_DIR/client.stdout.log" "$LOG_DIR/client.stderr.log"
+    cat "$LOG_DIR/client.stdout.log"
+    ;;
+  SF-C5A)
+    run_sf_c5a
     cat "$LOG_DIR/client.stdout.log"
     ;;
   SF-F1|SF-F2|SF-F3|SF-F4|SF-F5|SF-F7|SF-F8|SF-F10|SF-F11|SF-G3)

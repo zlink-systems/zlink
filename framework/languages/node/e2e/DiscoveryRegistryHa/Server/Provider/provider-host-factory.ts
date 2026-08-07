@@ -47,7 +47,13 @@ export async function startProviderHost(): Promise<void> {
   const options = app.get(DISCOVERY_OPTIONS, { strict: false }) as ProviderOptions;
   const evidence = app.get(EvidenceStore, { strict: false });
   configureObjectEvidence(evidence);
-  configureObjectActivationDelay(options.capacityProfile === 'sf-g2' ? 40 : 0);
+  configureObjectActivationDelay(
+    options.capacityProfile === 'sf-c5a'
+      ? 3_000
+      : options.capacityProfile === 'sf-g2'
+        ? 40
+        : 0
+  );
   const runtimeOptions = app.get(ZLINK_ROUTE_MESH_RUNTIME_OPTIONS, { strict: false }) as ZLinkRouteMeshRuntimeOptions;
   const frameworkRuntime = app.get(ZLINK_FRAMEWORK_RUNTIME, { strict: false }) as ZLinkFrameworkRuntime;
   const fanout = app.get(ZLINK_FANOUT_CLIENT, { strict: false }) as ZLinkFanoutClient;

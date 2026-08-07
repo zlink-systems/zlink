@@ -17,7 +17,8 @@
 | SF-B3 | 구현 | Instance Spot에 public `addTimer`를 등록하고 provider의 public location status에서 owner lease 만료를 확인한 뒤, 같은 Spot request가 실패하고 만료 시점 이후 timer evidence가 증가하지 않는지 검증한다. |
 | SF-C3 | 구현 | 동일 RID replacement와 old lifecycle pause를 구성한다. Core의 same-side duplicate RID connection은 기존 current pipe를 유지하고 새 연결을 standby로 둔다. old process 재개 뒤에도 replacement가 current ready peer와 request 처리 주체로 유지되며 old evidence가 증가하지 않는지 검증한다. |
 | SF-C4 | 구현 | SF-C4에서만 multi-role profile을 활성화해 한 host의 RouteMesh 2개, ClientServer와 fanout을 구성한다. host replacement 뒤 public readiness를 확인하고, 각 역할의 marker가 replacement provider 또는 consumer subscriber에서 정확히 한 번 처리되며 old provider evidence가 증가하지 않는지 검증한다. |
-| SF-C5 | 미구현 | page size와 누락·중복은 검증하지만, 현재 fixture는 만료된 owner lease record를 만들지 않아 owner lease filtering을 실제로 판정하지 못한다. stale owner fixture와 public query exclusion assertion이 필요하다. |
+| SF-C5 | 구현 | 1,001개 Instance Spot을 대상으로 page size 1/100/1,000, continuation scan의 누락·중복 방지와 만료된 owner lease 제외를 public object query로 검증한다. |
+| SF-C5A | 구현 | ID 조회와 page 조회에서 `Ready`, `Creating`, `Unavailable`을 구분하고 `Missing`을 성공 응답에 포함하지 않는지 검증한다. Redis 중단 뒤 page 조회 전체가 오류로 끝나는지도 확인한다. |
 | SF-F1 | 미구현 | 실제 cross-language object/state process fixture가 필요하다. Node-only smoke는 계약 증거가 아니다. |
 | SF-F2 | 미구현 | 장기 capture/restore lease와 독립 Relocation Store 장애를 구성해야 한다. |
 | SF-F3 | 미구현 | Location Store와 Relocation Store를 분리한 장애 fixture가 필요하다. |
@@ -71,3 +72,6 @@
 - `./e2e/DiscoveryRegistryHa/run_e2e.sh SF-C5`
   - 로그: `log/20260806-141516-386731`
   - 결과: 1,001개 Instance Spot과 page size 1/100/1,000의 public object query, owner lease filtering을 확인했으며 `scenario SF-C5 passed`, `store-failure-recovery scenario result=passed`
+- `./e2e/DiscoveryRegistryHa/run_e2e.sh SF-C5A`
+  - 로그: `log/20260807-222447-2593297`
+  - 결과: 이전 owner 종료 후 `Unavailable`, 새 owner의 `Ready`와 초기화 중 `Creating`을 ID 조회와 page 조회에서 확인했다. `Missing`은 성공 page에 나타나지 않았고 Redis 중단 뒤 page 조회는 전체 오류로 끝났다. `scenario SF-C5A passed`, `store-failure-recovery scenario result=passed`
