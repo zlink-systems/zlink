@@ -77,16 +77,27 @@ process.on('message', (message) => {
   }
 });
 
-void runtime.start().then(
-  () => process.send?.({ type: 'ready' }),
-  error => {
+void runtime.start()
+  .then(async () => {
+    await waitForMeshReady();
+    process.send?.({ type: 'ready' });
+  })
+  .catch(error => {
     process.send?.({
       type: 'error',
       message: error instanceof Error ? error.stack ?? error.message : String(error)
     });
     void runtime.stop().finally(() => process.exit(1));
+  });
+
+async function waitForMeshReady() {
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    if (runtime.routeMeshRuntime.isReady('mesh')) return;
+    await new Promise(resolve => setImmediate(resolve));
   }
-);
+  throw new Error('RouteMesh peer did not become ready.');
+}
 
 async function runClient(mode) {
   if (mode === 'direct') {

@@ -2999,18 +2999,22 @@ test('ZLinkModule route client uses runtime host route transport after bootstrap
   const module = nestjs.ZLinkModule.forRoot(builder.build());
   const container = await resolveModuleProviders(module, [
     nestjs.ZLINK_FRAMEWORK_RUNTIME,
+    nestjs.ZLINK_ROUTE_MESH_RUNTIME,
     nestjs.ZLINK_ROUTE_CLIENT
   ]);
   const runtime = container.get(nestjs.ZLINK_FRAMEWORK_RUNTIME);
+  const routeMeshRuntime = container.get(nestjs.ZLINK_ROUTE_MESH_RUNTIME);
   const routeClient = container.get(nestjs.ZLINK_ROUTE_CLIENT);
   let remote;
 
   try {
     await runtime.start();
     remote = await startRouteMeshPeer('server-direct', remoteEndpoint, localEndpoint);
-    const reply = await submitWhenReachable(() =>
-      routeClient.requestToNode('mesh', 'node-b', typedPacket('RoutePing', { value: 'ping' })).timeout(1000).submit()
-    );
+    await waitUntil(() => routeMeshRuntime.isReady('mesh'), 10_000);
+    const reply = await routeClient
+      .requestToNode('mesh', 'node-b', typedPacket('RoutePing', { value: 'ping' }))
+      .timeout(1000)
+      .submit();
     assert.deepEqual(reply, { value: 'pong' });
 
     routeClient.sendToNode('mesh', 'node-b', typedPacket('RouteNotice', { value: 'one-way' })).submit();
