@@ -150,61 +150,61 @@ func (e *SubmitError) internalErrno() int {
 	if e == nil {
 		return 0
 	}
-	return e.nativeErrno
+	return normalizeNativeErrno(e.nativeErrno)
 }
 
 func (e *RequestError) internalErrno() int {
 	if e == nil {
 		return 0
 	}
-	return e.nativeErrno
+	return normalizeNativeErrno(e.nativeErrno)
 }
 
 func (e *RecvError) internalErrno() int {
 	if e == nil {
 		return 0
 	}
-	return e.nativeErrno
+	return normalizeNativeErrno(e.nativeErrno)
 }
 
 func (e *HandlerError) internalErrno() int {
 	if e == nil {
 		return 0
 	}
-	return e.nativeErrno
+	return normalizeNativeErrno(e.nativeErrno)
 }
 
 func (e *CloseError) internalErrno() int {
 	if e == nil {
 		return 0
 	}
-	return e.nativeErrno
+	return normalizeNativeErrno(e.nativeErrno)
 }
 
 func (e *BindError) internalErrno() int {
 	if e == nil {
 		return 0
 	}
-	return e.nativeErrno
+	return normalizeNativeErrno(e.nativeErrno)
 }
 
 func (e *ConnectError) internalErrno() int {
 	if e == nil {
 		return 0
 	}
-	return e.nativeErrno
+	return normalizeNativeErrno(e.nativeErrno)
 }
 
 func (e *ConfigError) internalErrno() int {
 	if e == nil {
 		return 0
 	}
-	return e.nativeErrno
+	return normalizeNativeErrno(e.nativeErrno)
 }
 
 func formatError(kind string, code int, nativeErrno int) string {
 	if nativeErrno != 0 {
-		return fmt.Sprintf("%s error (%d): %s", kind, code, C.GoString(C.zlink_strerror(C.int(nativeErrno))))
+		return fmt.Sprintf("%s error (%d): %s", kind, code, C.GoString(C.zlink_strerror(C.int(denormalizeNativeErrno(nativeErrno)))))
 	}
 	return fmt.Sprintf("%s error (%d)", kind, code)
 }
@@ -213,7 +213,7 @@ func errnoToError(errno int) error {
 	if errno == 0 {
 		return nil
 	}
-	return syscall.Errno(errno)
+	return syscall.Errno(normalizeNativeErrno(errno))
 }
 
 func currentErrno() int {

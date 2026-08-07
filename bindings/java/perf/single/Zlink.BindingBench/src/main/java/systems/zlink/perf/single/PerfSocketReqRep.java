@@ -14,8 +14,13 @@ import systems.zlink.contracts.sockets.RouterSocket;
 import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.contracts.sockets.Socket;
 import systems.zlink.contracts.sockets.SubmitResult;
+import systems.zlink.contracts.eventing.PollEventFlags;
+import systems.zlink.contracts.errors.ZlinkException;
+import systems.zlink.contracts.errors.ZlinkRecvException;
 import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.perf.PerfStopToken;
+import systems.zlink.perf.PerfErrno;
+import systems.zlink.perf.PerfSocketPollSet;
 import systems.zlink.perf.PerfUtil;
 
 import java.nio.charset.StandardCharsets;
@@ -87,6 +92,8 @@ final class PerfSocketReqRep {
 
             long activeEnd = System.nanoTime()
                 + config.durationSeconds() * 1_000_000_000L;
+            int maxInFlight = Math.max(1,
+                Math.min(64, 768 * 1024 / Math.max(1, config.size())));
             Duration requestTimeout = Duration.ofMillis(
                 Math.max(1, config.recvTimeoutMs()));
             RequestCallback callback = (result, parts) -> {
@@ -118,7 +125,9 @@ final class PerfSocketReqRep {
 
             while (System.nanoTime() < activeEnd && failure.get() == null) {
                     boolean submitted = false;
-                    for (int i = 0; i < 64 && System.nanoTime() < activeEnd; i++) {
+                    for (int i = 0; i < 64
+                        && outstanding.get() < maxInFlight
+                        && System.nanoTime() < activeEnd; i++) {
                         try (Message request = PerfUtil.payload(config.size(),
                                  (byte) PerfUtil.PHASE_ACTIVE, System.nanoTime())) {
                             outstanding.incrementAndGet();
@@ -182,7 +191,19 @@ final class PerfSocketReqRep {
                                   AtomicReference<Throwable> failure) {
         try (Received received = new Received()) {
             while (true) {
-                server.recv(received, RecvFlags.NONE);
+                try {
+                    server.recv(received, RecvFlags.NONE);
+                } catch (ZlinkRecvException ex) {
+                    if (PerfErrno.isRetryableRecv(ex.getNativeErrno())) {
+                        continue;
+                    }
+                    throw ex;
+                } catch (ZlinkException ex) {
+                    if (PerfErrno.isRetryableRecv(ex.getNativeErrno())) {
+                        continue;
+                    }
+                    throw ex;
+                }
                 if (PerfStopToken.isStopTokenMessage(received.firstPart())) {
                     stopped.set(true);
                     return;
@@ -201,15 +222,38 @@ final class PerfSocketReqRep {
     }
 
     private static void sendStop(Socket client, boolean routedClient) {
-        PerfStopToken.sendWithRetry(() -> {
-            try (Message stop = PerfStopToken.newMessage()) {
-                if (routedClient) {
-                    return ((RouterSocket) client).send(SERVER_RID)
-                        .message(stop).flags(SendFlags.NONE).submit();
-                }
-                return ((DealerSocket) client).send()
-                    .message(stop).flags(SendFlags.NONE).submit();
+        try (PerfSocketPollSet writable = PerfSocketPollSet.fromSockets(
+                 List.of(client), PollEventFlags.POLLOUT)) {
+            writable.setEvents(0);
+            PerfStopToken.sendWithRetry(
+                () -> trySendStop(client, routedClient),
+                () -> {
+                    writable.setEvents(0, PollEventFlags.POLLOUT);
+                    writable.poll(-1);
+                },
+                "socket reqrep");
+        }
+    }
+
+    private static boolean trySendStop(Socket client, boolean routedClient) {
+        try (Message stop = PerfStopToken.newMessage()) {
+            if (routedClient) {
+                return ((RouterSocket) client).send(SERVER_RID)
+                    .message(stop).flags(SendFlags.DONT_WAIT).submit();
             }
-        }, "socket reqrep");
+            return ((DealerSocket) client).send()
+                .message(stop).flags(SendFlags.DONT_WAIT).submit();
+        } catch (ZlinkSubmitException ex) {
+            if (ex.getResult() == SubmitResult.BACKPRESSURED
+                || ex.getResult() == SubmitResult.NOT_CONNECTED) {
+                return false;
+            }
+            throw ex;
+        } catch (ZlinkException ex) {
+            if (PerfErrno.isRetryableSend(ex.getNativeErrno())) {
+                return false;
+            }
+            throw ex;
+        }
     }
 }

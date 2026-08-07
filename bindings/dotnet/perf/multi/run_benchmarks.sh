@@ -9,7 +9,7 @@ PROJECT="${DOTNET_DIR}/perf/multi/Zlink.BindingBench.Multi/Zlink.BindingBench.Mu
 PROJECT_DIR="${DOTNET_DIR}/perf/multi/Zlink.BindingBench.Multi"
 REPO_DIR="$(cd "${DOTNET_DIR}/../.." && pwd)"
 source "${REPO_DIR}/bindings/tools/local_core_runtime.sh"
-STREAM_CLIENT="${REPO_DIR}/bindings/c/build/perf/perf_stream_client"
+STREAM_CLIENT="${PERF_STREAM_CLIENT:-${REPO_DIR}/bindings/c/build/perf/perf_stream_client}"
 STREAM_BUILD_DIR="${REPO_DIR}/bindings/c/build"
 CORE_LIB="${ZLINK_LOCAL_CORE_RUNTIME}"
 RESULTS_ROOT="${DOTNET_DIR}/perf/results"
@@ -691,6 +691,10 @@ shutdown_timeout_seconds() {
 write_control_line() {
   local fd="$1"
   shift
+  if [[ -n "${PERF_MULTI_CONTROL_FILE:-}" ]]; then
+    printf "$@" > "${PERF_MULTI_CONTROL_FILE}" 2>/dev/null || true
+    return
+  fi
   printf "$@" >&${fd} 2>/dev/null || true
 }
 
@@ -1599,6 +1603,9 @@ run_multi_process() {
     "DOTNET_TC_QuickJitForLoops=1"
     "DOTNET_ReadyToRun=1"
   )
+  if [[ -n "${PERF_MULTI_CONTROL_FILE:-}" ]]; then
+    env_prefix+=("PERF_MULTI_CONTROL_FILE=${PERF_MULTI_CONTROL_FILE}")
+  fi
   if [[ -n "${CONNECT_CONCURRENCY}" ]]; then
     env_prefix+=("PERF_MULTI_CONNECT_CONCURRENCY=${CONNECT_CONCURRENCY}")
   fi
@@ -1711,8 +1718,10 @@ run_spot_clean_latency_pass() {
   mkfifo "${cl_server_fifo}"
   run_multi_process "server" "${cl_server_log}" "" "${cl_server_fifo}" 1
   cl_server_pid=$!
-  exec {cl_server_fd}>"${cl_server_fifo}"
-  rm -f "${cl_server_fifo}"
+    exec {cl_server_fd}>"${cl_server_fifo}"
+  if [[ "$(normalize_platform)" != "windows" ]]; then
+    rm -f "${cl_server_fifo}"
+  fi
 
   if cl_server_ep="$(wait_for_ready_endpoint "${cl_server_log}" "${SERVER_READY_TIMEOUT_MS}")" \
      && cl_control_ep="$(wait_for_control_ready_endpoint "${cl_server_log}" "${SERVER_READY_TIMEOUT_MS}")"; then
@@ -1720,7 +1729,9 @@ run_spot_clean_latency_pass() {
     run_multi_process "client" "${cl_client_log}" "${cl_server_ep}" "${cl_client_fifo}" 1 "--control-endpoint" "${cl_control_ep}"
     cl_client_pid=$!
     exec {cl_client_fd}>"${cl_client_fifo}"
-    rm -f "${cl_client_fifo}"
+    if [[ "$(normalize_platform)" != "windows" ]]; then
+      rm -f "${cl_client_fifo}"
+    fi
 
     if cl_client_ctrl_ep="$(wait_for_client_control_endpoint "${cl_client_log}" "${SPOT_READY_TIMEOUT_MS}")"; then
       write_control_line "${cl_server_fd}" 'CONNECT_CONTROL,%s\n' "${cl_client_ctrl_ep}"
@@ -1937,12 +1948,33 @@ for (( run_index=1; run_index<=RUNS; run_index++ )); do
         server_endpoint=''
         server_pid=0
         server_started=0
+        native_control_mode=0
+        native_control_file="${RESULTS_ROOT}/multi/tmp/${pattern,,}_${transport}_${size}_run${run_index}.control"
+        unset PERF_MULTI_CONTROL_FILE
+        if [[ "$(normalize_platform)" == "windows" \
+              && ("${pattern}" == "MULTI_DEALER_DEALER" \
+                  || "${pattern}" == "MULTI_PUBSUB" \
+                  || "${pattern}" == "MULTI_STREAM") ]]; then
+          native_control_mode=1
+          : > "${native_control_file}"
+          export PERF_MULTI_CONTROL_FILE="${native_control_file}"
+        fi
         if pattern_uses_control_pipe "${pattern}"; then
-          mkfifo "${server_control_fifo}"
-          run_multi_process "server" "${server_log}" "" "${server_control_fifo}" 1
+          if [[ "${native_control_mode}" -eq 1 ]]; then
+            run_multi_process "server" "${server_log}" "" "" 1
+          else
+            mkfifo "${server_control_fifo}"
+            run_multi_process "server" "${server_log}" "" "${server_control_fifo}" 1
+          fi
           server_pid=$!
-          exec {server_control_fd}>"${server_control_fifo}"
-          rm -f "${server_control_fifo}"
+          if [[ "${native_control_mode}" -eq 1 ]]; then
+            exec {server_control_fd}>/dev/null
+          else
+            exec {server_control_fd}>"${server_control_fifo}"
+            if [[ "$(normalize_platform)" != "windows" ]]; then
+              rm -f "${server_control_fifo}"
+            fi
+          fi
         else
           run_multi_process "server" "${server_log}" "" "" 1
           server_pid=$!
@@ -2037,7 +2069,6 @@ for (( run_index=1; run_index<=RUNS; run_index++ )); do
           run_multi_process "client" "${client_log}" "${server_endpoint}" "${client_control_fifo}" 1 "--control-endpoint" "${control_endpoint}"
           client_pid=$!
           exec {client_control_fd}>"${client_control_fifo}"
-          rm -f "${client_control_fifo}"
 
           client_ctrl_ep=''
           if ! client_ctrl_ep="$(wait_for_client_control_endpoint "${client_log}" "${SPOT_READY_TIMEOUT_MS}")"; then
@@ -2170,11 +2201,21 @@ for (( run_index=1; run_index<=RUNS; run_index++ )); do
           exec {server_control_fd}>&-
           exec {client_control_fd}>&-
         elif [[ "${pattern}" == "MULTI_DEALER_DEALER" || "${pattern}" == "MULTI_PUBSUB" ]]; then
-          mkfifo "${client_control_fifo}"
-          run_multi_process "client" "${client_log}" "${server_endpoint}" "${client_control_fifo}" 1
+          if [[ "${native_control_mode}" -eq 1 ]]; then
+            run_multi_process "client" "${client_log}" "${server_endpoint}" "" 1
+          else
+            mkfifo "${client_control_fifo}"
+            run_multi_process "client" "${client_log}" "${server_endpoint}" "${client_control_fifo}" 1
+          fi
           client_pid=$!
-          exec {client_control_fd}>"${client_control_fifo}"
-          rm -f "${client_control_fifo}"
+          if [[ "${native_control_mode}" -eq 1 ]]; then
+            exec {client_control_fd}>/dev/null
+          else
+            exec {client_control_fd}>"${client_control_fifo}"
+            if [[ "$(normalize_platform)" != "windows" ]]; then
+              rm -f "${client_control_fifo}"
+            fi
+          fi
 
           if ! wait_for_client_ready_line "${client_log}" "${READY_TIMEOUT_MS}"; then
             if unsupported_line="$(extract_unsupported_line "${pattern}" "${transport}" "${client_log}" "${server_log}" 2>/dev/null)"; then

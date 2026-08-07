@@ -1,5 +1,6 @@
 #ifndef PERF_MULTI_POLL_HPP
 #define PERF_MULTI_POLL_HPP
+#include <zlink.h>
 
 #if !defined(_WIN32)
 #include <arpa/inet.h>
@@ -8,6 +9,9 @@
 #include <dlfcn.h>
 #include <poll.h>
 #else
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
@@ -18,12 +22,6 @@
 
 #include <climits>
 #include <cerrno>
-
-#if defined(_WIN32)
-typedef unsigned int zlink_fd_t;
-#else
-typedef int zlink_fd_t;
-#endif
 
 #ifndef ZLINK_POLLIN
 #define ZLINK_POLLIN 1
@@ -38,16 +36,6 @@ typedef int zlink_fd_t;
 #define ZLINK_POLLPRI 8
 #endif
 
-#ifndef ZLINK_HAVE_POLLER
-typedef struct zlink_pollitem_t
-{
-    void *socket;
-    zlink_fd_t fd;
-    short events;
-    short revents;
-} zlink_pollitem_t;
-#endif
-
 static const long PERF_AUX_POLL_WAIT_MS = 100;
 
 inline int perf_idle_wait_ms (long timeout_)
@@ -56,8 +44,9 @@ inline int perf_idle_wait_ms (long timeout_)
         return 0;
 
 #if defined(_WIN32)
-    const DWORD wait_ms =
-      static_cast<DWORD> (timeout_ > static_cast<long> (DWORD (-1)) ? DWORD (-1) : timeout_);
+    // A positive Windows long always fits in DWORD. Casting DWORD(-1) to
+    // long first would turn it into -1 on LLP64 and cause Sleep(INFINITE).
+    const DWORD wait_ms = static_cast<DWORD> (timeout_);
     ::Sleep (wait_ms);
     return 0;
 #else

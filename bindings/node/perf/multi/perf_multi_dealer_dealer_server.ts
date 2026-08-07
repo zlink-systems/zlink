@@ -96,7 +96,7 @@ async function main() {
       // the stop count).
       const received = new zlink.Received();
       while (currentEpochNs() < activeStopNs) {
-        const ready = waitPollerOne(poller, pollBuffer, -1);
+        const ready = waitPollerOne(poller, pollBuffer, process.platform === 'win32' ? 50 : -1);
         if (!ready || !pollEventHas(ready, POLLIN)) {
           continue;
         }

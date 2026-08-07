@@ -894,10 +894,37 @@ bind_server_endpoint (void *server_, const std::string &transport_, const std::s
         return std::string ();
     }
 
+    // Stream clients may distribute loopback source addresses across 127/8
+    // when the default connection count exceeds one local ephemeral-port
+    // range. Bind the multi server to all IPv4 interfaces so those loopback
+    // source addresses reach the same listener. The resolved endpoint is
+    // normalized back to the loopback host before it is advertised.
+    if (transport_ == "tcp" || transport_ == "tls" || transport_ == "ws"
+        || transport_ == "wss") {
+        const std::string scheme_end = "://";
+        const std::string::size_type host_begin = endpoint.find (scheme_end);
+        if (host_begin != std::string::npos) {
+            const std::string::size_type host_start = host_begin + scheme_end.size ();
+            const std::string::size_type port_start = endpoint.find (':', host_start);
+            if (port_start != std::string::npos)
+                endpoint.replace (host_start, port_start - host_start, "0.0.0.0");
+        }
+    }
+
     endpoint =
       perf_bind_endpoint_once (server_, endpoint, transport_, &perf_bind_socket_endpoint, true);
     if (endpoint.empty ())
         return std::string ();
+
+    // The TLS/WSS listener uses an IPv4 socket for this benchmark. Do not
+    // advertise localhost here: Windows may resolve it to ::1 first, while
+    // the listener has no IPv6 socket.
+    if (transport_ == "tls" || transport_ == "wss") {
+        const std::string localhost = "://localhost:";
+        const std::string::size_type host_pos = endpoint.find (localhost);
+        if (host_pos != std::string::npos)
+            endpoint.replace (host_pos, localhost.size (), "://127.0.0.1:");
+    }
     apply_debug_timeouts (server_, transport_);
     return endpoint;
 }

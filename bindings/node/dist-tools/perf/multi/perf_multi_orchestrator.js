@@ -306,7 +306,7 @@ async function terminateProcessTree(processRef, timeoutMs = 5000) {
         return;
     }
     try {
-        process.kill(-processRef.pid, 'SIGTERM');
+        process.platform === 'win32' ? processRef.kill('SIGTERM') : process.kill(-processRef.pid, 'SIGTERM');
     }
     catch (error) {
         if (!error || error.code !== 'ESRCH') {
@@ -322,7 +322,7 @@ async function terminateProcessTree(processRef, timeoutMs = 5000) {
         return;
     }
     try {
-        process.kill(-processRef.pid, 'SIGKILL');
+        process.platform === 'win32' ? processRef.kill('SIGKILL') : process.kill(-processRef.pid, 'SIGKILL');
     }
     catch (error) {
         if (!error || error.code !== 'ESRCH') {
@@ -347,7 +347,7 @@ async function stopServer(server, label, timeoutMs = 5000) {
             return;
         }
         try {
-            process.kill(-server.pid, 'SIGTERM');
+            process.platform === 'win32' ? server.kill('SIGTERM') : process.kill(-server.pid, 'SIGTERM');
         }
         catch (error) {
             if (!error || error.code !== 'ESRCH') {
@@ -362,7 +362,7 @@ async function stopServer(server, label, timeoutMs = 5000) {
             return;
         }
         try {
-            process.kill(-server.pid, 'SIGKILL');
+            process.platform === 'win32' ? server.kill('SIGKILL') : process.kill(-server.pid, 'SIGKILL');
         }
         catch (error) {
             if (!error || error.code !== 'ESRCH') {

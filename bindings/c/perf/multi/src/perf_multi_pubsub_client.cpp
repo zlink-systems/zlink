@@ -154,8 +154,19 @@ bool run_recv_duration (const std::vector<void *> &sockets,
 
     bool phase_done = false;
     while (!phase_done) {
+        const auto now_before_poll = std::chrono::steady_clock::now ();
+        if (now_before_poll >= active_deadline)
+            break;
+        const long long remaining_ms = std::chrono::duration_cast<std::chrono::milliseconds> (
+                                         active_deadline - now_before_poll)
+                                         .count ();
+        const int poll_timeout_ms = static_cast<int> (
+          std::max<long long> (1, std::min<long long> (100, remaining_ms)));
         const int poll_rc = zlink_poller_wait (poller, events.empty () ? NULL : &events[0],
-                                               static_cast<int> (events.size ()), -1, NULL);
+                                               static_cast<int> (events.size ()), poll_timeout_ms,
+                                               NULL);
+        if (poll_rc == 0)
+            continue;
         if (poll_rc < 0) {
             const int err = zlink_errno ();
             if (err == EINTR || err == EAGAIN)
@@ -167,11 +178,21 @@ bool run_recv_duration (const std::vector<void *> &sockets,
         }
 
         for (int i = 0; i < poll_rc; ++i) {
+            if (phase_done)
+                break;
             if ((events[i].events & ZLINK_POLLIN) == 0)
                 continue;
 
             void *socket = events[i].socket;
             while (socket) {
+                // Do not drain an unbounded backlog after the active window.
+                // The stop token can be queued behind millions of large
+                // PUB/SUB messages, so the active deadline is the lifecycle
+                // boundary for this phase.
+                if (std::chrono::steady_clock::now () >= active_deadline) {
+                    phase_done = true;
+                    break;
+                }
                 perf_multi_metric::header_t header;
                 std::memset (&header, 0, sizeof (header));
                 double sample_ns = 0.0;
@@ -189,12 +210,12 @@ bool run_recv_duration (const std::vector<void *> &sockets,
                     break;
                 if (recv_rc == pubsub_recv_stop) {
                     phase_done = true;
-                    continue;
+                    break;
                 }
 
                 if (header.phase == static_cast<uint8_t> (perf_multi_metric::phase_cooldown)) {
                     phase_done = true;
-                    continue;
+                    break;
                 }
                 if (header.phase != static_cast<uint8_t> (perf_multi_metric::phase_active)
                     || std::chrono::steady_clock::now () >= active_deadline) {

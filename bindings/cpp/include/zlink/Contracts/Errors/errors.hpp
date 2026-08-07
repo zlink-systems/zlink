@@ -8,6 +8,7 @@
 #include "results.hpp"
 
 #include <cerrno>
+#include <zlink_errno.h>
 #include <sstream>
 
 namespace zlink

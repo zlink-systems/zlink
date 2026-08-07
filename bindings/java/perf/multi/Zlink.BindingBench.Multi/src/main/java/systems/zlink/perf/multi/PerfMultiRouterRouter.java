@@ -49,9 +49,11 @@ final class PerfMultiRouterRouter {
             PerfUtil.configureServerTls(server, config.transport());
             server.bind(config.endpoint());
             PerfControl.emitReady(config.endpoint());
-            PerfUtil.waitForMonitorEvent(monitor, READY_EVENT, config.clients(),
-                Duration.ofMillis(config.connectReadyTimeoutMs()),
-                "router/router server ready");
+            // The routed receive loop admits connections while it waits for
+            // traffic. An aggregate CONNECTION_READY monitor count is not a
+            // reliable Windows barrier for many sockets, so the loop itself
+            // provides readiness and the stop-token count still covers every
+            // client.
             PerfUtil.recalculateAutoHwm(ctx);
             PerfUtil.printMultiMonitorAutoHwm(config, monitor, "server",
                 "server", SocketType.ROUTER);
@@ -164,13 +166,8 @@ final class PerfMultiRouterRouter {
                     clients.add(client);
                     monitors.add(monitor);
                 }
-                for (int i = 0; i < clientCount; i++) {
-                    PerfUtil.waitForMonitorEvent(monitors.get(i), READY_EVENT, 1,
-                        Duration.ofMillis(config.connectReadyTimeoutMs()),
-                        "router/router client ready[" + i + "]");
-                }
-                for (int i = 0; i < clientCount; i++) {
-                }
+                // The server-side routed loop is the readiness barrier for
+                // this phase; client monitor events are telemetry only.
                 PerfUtil.recalculateAutoHwm(ctx);
                 for (int i = 0; i < clientCount; i++) {
                     PerfUtil.printMultiMonitorAutoHwm(config, monitors.get(i),

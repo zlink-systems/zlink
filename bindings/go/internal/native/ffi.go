@@ -8,6 +8,7 @@ package native
 #cgo linux,arm64 LDFLAGS: -L${SRCDIR}/../../native/linux-aarch64 -lzlink -Wl,-rpath,${SRCDIR}/../../native/linux-aarch64
 #cgo darwin,amd64 LDFLAGS: -L${SRCDIR}/../../native/darwin-x86_64 -lzlink -Wl,-rpath,${SRCDIR}/../../native/darwin-x86_64
 #cgo darwin,arm64 LDFLAGS: -L${SRCDIR}/../../native/darwin-aarch64 -lzlink -Wl,-rpath,${SRCDIR}/../../native/darwin-aarch64
+#cgo windows,amd64 LDFLAGS: -L${SRCDIR}/../../native/windows-x86_64 -lzlink
 #include <errno.h>
 #include <stdint.h>
 #include <stdlib.h>

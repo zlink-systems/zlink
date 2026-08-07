@@ -2,14 +2,14 @@
   "schema": 1,
   "coreVersion": "0.10.0",
   "headers": [
-    {"path": "include/zlink.h", "sha256": "4f98ec84cc0876da39522adaa70ece282be8e76e64050f85c0c07e3b8d34032c"},
-    {"path": "include/zlink/common.h", "sha256": "9a5b9a162e630483e6677a43ed7591ce065c0d3e5e1a4999ffc39178a61a3d14"},
-    {"path": "include/zlink/core/api.h", "sha256": "1c1b9fb319d0212b11393446d887d7aca1ceda2db3097d7a1ca4b916ddf34c00"},
-    {"path": "include/zlink/eventing/api.h", "sha256": "841fcd846eb6918b31fb9d053ebec2c9caa04687667d350496ea508364c2fe8e"},
-    {"path": "include/zlink/message/api.h", "sha256": "4b7c7aef0877c96bcd81f98a807d0e7933b3aee0e806c4f80e1ddade296e4d72"},
-    {"path": "include/zlink/socket/api.h", "sha256": "80e224c3cdce42629ac5fa8676faff9649bcee25e76ab8dac9ab73af9b0ec419"},
-    {"path": "include/zlink_enum.h", "sha256": "d64d3d0f5dff327e7924e1bb40d18e3b81f807f175b4c65cb909b9b0d9363d7b"},
-    {"path": "include/zlink_errno.h", "sha256": "1672abe3532871e8ce722a3bf7e1bff822d508aff66a24bde29784b3a52f33fd"}
+    {"path": "include/zlink.h", "sha256": "8a41ddec8e26fcba35fba08a387f99f026239d6503e806cc73bf125f59e88c1b"},
+    {"path": "include/zlink/common.h", "sha256": "e214b7ea4f78d0c035c6978b120a817459c90286b33a9e455871b12db32c1c28"},
+    {"path": "include/zlink/core/api.h", "sha256": "dbe85717b053bfac647a1ede7b4a279c6e54276e931a1d258c6538310e548ed6"},
+    {"path": "include/zlink/eventing/api.h", "sha256": "1e4949d72a7406ba27fc399198167a03415238dba59075370ba9c1cdb8b9b15e"},
+    {"path": "include/zlink/message/api.h", "sha256": "7cbde196fbf0f154eff01281484cd58556c404c4c269f4153e25e68b17938aa3"},
+    {"path": "include/zlink/socket/api.h", "sha256": "87548c44a8e97daa2f5fa64894b5c5b93e926947cd51d85f009772bf7db3437a"},
+    {"path": "include/zlink_enum.h", "sha256": "2c8740518564c136293d4527cbe22322291c886b7e543100cfbfefa0d054d651"},
+    {"path": "include/zlink_errno.h", "sha256": "b130da536f065e3db3ccc6040dcc9d547be89564b25b3cfe03a97ecdc046f0f4"}
   ],
   "publicSymbols": [
     "zlink_atomic_counter_dec",

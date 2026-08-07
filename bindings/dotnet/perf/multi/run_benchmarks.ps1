@@ -1,10 +1,18 @@
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ShellRunner = Join-Path $ScriptDir "run_benchmarks.sh"
+$NativeBashCandidates = @(
+    (Join-Path ${env:ProgramFiles} "Git\bin\bash.exe"),
+    (Join-Path ${env:LOCALAPPDATA} "Programs\Git\bin\bash.exe")
+)
+$NativeBash = $NativeBashCandidates |
+    Where-Object { Test-Path -LiteralPath $_ } |
+    Select-Object -First 1
+$BashRunner = "/$($ShellRunner.Substring(0, 1).ToLowerInvariant())$($ShellRunner.Substring(2).Replace('\\', '/'))"
 
-if (Get-Command bash -ErrorAction SilentlyContinue) {
-    & bash $ShellRunner @Args
+if ($NativeBash) {
+    & $NativeBash $BashRunner @Args
     exit $LASTEXITCODE
 }
 
-Write-Error "bash is required to run bindings/dotnet/perf multi benchmarks."
+Write-Error "Native Git Bash is required to run bindings/dotnet/perf multi benchmarks."
 exit 1

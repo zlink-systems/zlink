@@ -53,6 +53,30 @@ core/builds/android/prefix
 .vscode/
 ## Local assistant settings
 .claude/
+
+## Common local and tool-generated files
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.swp
+*.swo
+*.tmp
+*.bak
+.env
+.env.*
+!.env.example
+.coverage
+coverage/
+htmlcov/
+.nyc_output/
+.eslintcache
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.venv/
+**/target/
+
 ## other results-like folders
 bin/
 lib/
@@ -189,6 +213,7 @@ core/builds/instance-asan/
 
 # bindings (language wrappers)
 ## Node.js
+/node_modules/
 bindings/**/node_modules/
 bindings/**/npm-debug.log*
 bindings/**/yarn-debug.log*
@@ -199,6 +224,10 @@ bindings/**/.yarn/cache/
 bindings/**/.yarn/unplugged/
 bindings/**/.yarn/build-state.yml
 bindings/**/.pnp.cjs
+
+## Local benchmark debug output
+bindings/**/perf/single/debug-*.out.txt
+bindings/**/perf/single/debug-*.err.txt
 
 ## Binding perf/build outputs
 bindings/**/perf/build/

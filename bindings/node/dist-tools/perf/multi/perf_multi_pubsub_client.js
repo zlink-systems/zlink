@@ -75,7 +75,7 @@ async function main() {
                     // run_active_until_stop_token ~239-246).
                     let stopReceived = false;
                     while (!stopReceived) {
-                        const readyCount = poller.wait(pollBuffer, -1);
+                        const readyCount = poller.wait(pollBuffer, process.platform === 'win32' ? 50 : -1);
                         if (readyCount === 0) {
                             continue;
                         }

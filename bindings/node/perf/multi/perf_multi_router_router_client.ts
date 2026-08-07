@@ -116,7 +116,10 @@ async function main() {
       }
 
       // PERF_MULTI_TEST_POLICY § 1.3.1: signal-driven `-1` wait.
-      const readyCount = poller.wait(pollBuffer, -1);
+      const readyCount = poller.wait(
+        pollBuffer,
+        process.platform === 'win32' ? 50 : -1
+      );
       if (readyCount === 0) {
         continue;
       }

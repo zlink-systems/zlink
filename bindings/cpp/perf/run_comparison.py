@@ -75,11 +75,11 @@ def report_runner_warning(context, exc):
 SINGLE_ECHO_PATTERNS = set()
 ALLOW_MULTI = os.environ.get("PERF_ALLOW_MULTI", "0") == "1"
 SINGLE_COMPARISONS = [
-    ("perf_pair", "PAIR"),
-    ("perf_pubsub", "PUBSUB"),
-    ("perf_dealer_dealer", "DEALER_DEALER"),
-    ("perf_dealer_router", "DEALER_ROUTER"),
-    ("perf_router_router", "ROUTER_ROUTER"),
+    ("cpp_perf_pair", "PAIR"),
+    ("cpp_perf_pubsub", "PUBSUB"),
+    ("cpp_perf_dealer_dealer", "DEALER_DEALER"),
+    ("cpp_perf_dealer_router", "DEALER_ROUTER"),
+    ("cpp_perf_router_router", "ROUTER_ROUTER"),
 ]
 MULTI_COMPARISONS = [
     ("cpp_comp_src_dealer_dealer_client", "DEALER_DEALER"),

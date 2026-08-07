@@ -254,5 +254,15 @@ int main (int argc, char **argv)
         return 1;
     if (!multi_perf_validate_recv_mode_for_pattern (k_pattern))
         return 1;
+#if defined(_WIN32)
+    // The client side uses a POSIX fork-and-pipe topology. Report the same
+    // platform limitation from the server before opening a listening socket;
+    // otherwise the runner starts a server that waits for a START command
+    // from a client that has already reported UNSUPPORTED and exits the
+    // server as a false failure.
+    std::cout << "UNSUPPORTED," << argv[1] << "," << k_pattern << "," << argv[2]
+              << ",peer_process_topology_requires_posix" << std::endl;
+    return 0;
+#endif
     return run_server (argv[1], argv[2]);
 }

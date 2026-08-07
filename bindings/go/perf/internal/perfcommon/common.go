@@ -552,6 +552,10 @@ func newContextWithIOThreads(defaultThreads int, envNames ...string) (*zlink.Con
 	if err != nil {
 		return nil, err
 	}
+	if err := ctx.Options().SetBlocky(false); err != nil {
+		_ = ctx.Close()
+		return nil, err
+	}
 	ioThreads := defaultThreads
 	for _, name := range envNames {
 		if value := resolveIntEnv(name, 0); value > 0 {

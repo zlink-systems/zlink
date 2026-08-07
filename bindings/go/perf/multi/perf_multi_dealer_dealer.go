@@ -200,9 +200,13 @@ func runMultiDealerDealerClient(cfg multiConfig, endpoint string) {
 		perfcommon.Must(perfcommon.ConfigureTLSClient(client, cfg.transport))
 		perfcommon.ApplyMultiHWM(client, cfg.pattern)
 		perfcommon.ApplyMultiBenchmarkSocketOptions(client, cfg.transport)
+		rid := zlink.NewRoutingID([]byte(fmt.Sprintf("dealer-%06d", i)))
+		perfcommon.Must(client.SetRoutingID(rid))
 		perfcommon.Must(client.Connect(endpoint))
-		perfcommon.WaitConnectedWithTimeout(perfcommon.MultiReadyTimeout(), clientMon)
 		clients = append(clients, dealerDealerClient{ctx: clientCtx, socket: client, mon: clientMon})
+	}
+	for _, client := range clients {
+		perfcommon.WaitConnectedWithTimeout(perfcommon.MultiReadyTimeout(), client.mon)
 	}
 	defer func() {
 		for _, client := range clients {
@@ -344,7 +348,7 @@ func useMultiDealerDealerMoveMessage(transport string, msgSize int) bool {
 func sendMultiDealerStopToken(socket *zlink.DealerSocket) {
 	for attempt := 0; attempt < perfcommon.StopTokenSendAttempts; attempt++ {
 		sent, err := perfcommon.SubmitPayload(perfcommon.StopToken, func(message *zlink.Message) (bool, error) {
-			return socket.Send().MoveMessage(message).Submit(context.Background())
+			return socket.Send().MoveMessage(message).Flags(zlink.SendFlagsDontWait).Submit(context.Background())
 		})
 		if err == nil && sent {
 			return

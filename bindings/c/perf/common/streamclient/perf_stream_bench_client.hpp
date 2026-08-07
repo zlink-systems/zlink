@@ -77,10 +77,23 @@ inline boost::asio::ip::address_v4 make_loopback_shard_addr (size_t idx)
     return boost::asio::ip::address_v4 (bytes);
 }
 
+inline size_t loopback_shard_offset_for_transport (const std::string &transport)
+{
+    const std::string normalized = perf_stream_common::lower_copy (transport);
+    if (normalized == "tls")
+        return 256;
+    if (normalized == "ws")
+        return 512;
+    if (normalized == "wss")
+        return 768;
+    return 0;
+}
+
 // Compute source-address sharding plan.
 // shards = ceil(ccu / usable_ephemeral_ports). Returns empty plan for non-loopback.
 inline loopback_bind_plan_t make_loopback_bind_plan (const boost::asio::ip::tcp::endpoint &endpoint,
-                                                     int ccu)
+                                                     int ccu,
+                                                     size_t shard_offset = 0)
 {
     loopback_bind_plan_t plan;
     if (ccu <= 0)
@@ -91,6 +104,14 @@ inline loopback_bind_plan_t make_loopback_bind_plan (const boost::asio::ip::tcp:
         return plan;
 
     plan.port_capacity = read_ipv4_ephemeral_port_capacity ();
+#if defined(_WIN32)
+    // Windows does not expose the dynamic TCP port range through the POSIX
+    // procfs path above. Reserve a conservative per-source-address budget so
+    // the 10,000-client default is spread across the 127/8 loopback range
+    // instead of exhausting one local address.
+    if (plan.port_capacity == 0)
+        plan.port_capacity = 4096;
+#endif
     if (plan.port_capacity == 0)
         return plan;
 
@@ -107,7 +128,7 @@ inline loopback_bind_plan_t make_loopback_bind_plan (const boost::asio::ip::tcp:
 
     plan.source_addrs.reserve (required);
     for (size_t i = 0; i < required; ++i)
-        plan.source_addrs.push_back (make_loopback_shard_addr (i));
+        plan.source_addrs.push_back (make_loopback_shard_addr (shard_offset + i));
     return plan;
 }
 
@@ -161,7 +182,8 @@ class bench_client_t : public bench_client_iface_t
         endpoint (resolve_stream_target_endpoint (io, opt.host, opt.port)),
         loopback_bind_plan ()
     {
-        loopback_bind_plan = make_loopback_bind_plan (endpoint, opt.ccu);
+        loopback_bind_plan = make_loopback_bind_plan (
+          endpoint, opt.ccu, loopback_shard_offset_for_transport (opt.transport));
     }
 
     // Main entry: connect all sessions, run benchmarks per size, then shutdown.
@@ -377,8 +399,16 @@ class bench_client_t : public bench_client_iface_t
         }
 
         const std::string transport = perf_stream_common::lower_copy (opt.transport);
+#if defined(_WIN32)
+        // Keep the default connection burst bounded on Windows. A large
+        // burst can overrun the listener accept queue before the server
+        // thread drains it, even though the loopback port budget is enough.
+        if (transport == "tcp")
+            return std::min (k_connect_batch, 128);
+#else
         if (transport == "tcp")
             return k_connect_batch;
+#endif
         return std::min (k_connect_batch, 128);
     }
 

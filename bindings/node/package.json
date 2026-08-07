@@ -37,8 +37,8 @@
   "gypfile": true,
   "scripts": {
     "install": "node scripts/install.js",
-    "clean": "rm -rf dist dist-tools",
-    "build": "npm run clean && tsc -p tsconfig.json && node scripts/generate_esm_wrapper.js && tsc -p tsconfig.tools.json && ln -sfn ../dist dist-tools/dist",
+    "clean": "node scripts/clean.js",
+    "build": "npm run clean && tsc -p tsconfig.json && node scripts/generate_esm_wrapper.js && tsc -p tsconfig.tools.json && node scripts/link_dist_tools.js",
     "verify:prebuilds": "node scripts/verify_prebuilds.js",
     "rebuild-native": "node-gyp configure build",
     "perf:single": "./perf/single/run_benchmarks.sh",

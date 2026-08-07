@@ -38,6 +38,15 @@ func startMultiStreamEchoServer(server *zlink.StreamSocket) {
 		_ = header.Close()
 		_ = body.Close()
 		_, sendErr := server.SendTo(source).Message(packet).Submit(context.Background())
-		perfcommon.Must(sendErr)
+		if sendErr != nil {
+			// The shared C client sends its stop token and closes the route
+			// immediately after the final result. A late echo for that route
+			// therefore reports SubmitNotConnected, which is normal teardown.
+			_ = packet.Close()
+			if perfcommon.IsSubmitNotConnected(sendErr) {
+				return
+			}
+			perfcommon.Must(sendErr)
+		}
 	}))
 }

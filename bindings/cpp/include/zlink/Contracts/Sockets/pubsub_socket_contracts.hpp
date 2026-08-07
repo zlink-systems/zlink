@@ -94,7 +94,9 @@ class sub_socket_t : public subscriber_socket_t
     subscription_filter_t subscription_at (size_t index_)
     {
         subscription_filter_t filter;
-        subscription_at (index_, filter.filter, &filter.is_pattern);
+        (this->*static_cast<void (sub_socket_t::*)(
+          size_t, std::string &, bool *)>(&sub_socket_t::subscription_at))(
+          index_, filter.filter, &filter.is_pattern);
         return filter;
     }
 
@@ -116,9 +118,7 @@ class sub_socket_t : public subscriber_socket_t
     sub_socket_options_t options () { return sub_socket_options_t (*this); }
 
   private:
-    using subscriber_socket_t::set_subscription;
     using subscriber_socket_t::subscription_at;
-    using subscriber_socket_t::unset_subscription;
 };
 
 } // namespace zlink
@@ -168,7 +168,9 @@ class xsub_socket_t : public subscriber_socket_t
     subscription_filter_t subscription_at (size_t index_)
     {
         subscription_filter_t filter;
-        subscription_at (index_, filter.filter, &filter.is_pattern);
+        (this->*static_cast<void (xsub_socket_t::*)(
+          size_t, std::string &, bool *)>(&xsub_socket_t::subscription_at))(
+          index_, filter.filter, &filter.is_pattern);
         return filter;
     }
 

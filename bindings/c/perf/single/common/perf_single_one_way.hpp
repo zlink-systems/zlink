@@ -168,8 +168,10 @@ inline bool send_active_samples (void *sender_,
         const send_step_t send_step = send_step_fn_ (sender_, payload_, state_, seq);
         if (send_step == send_step_fatal)
             return false;
-        if (send_step == send_step_retry)
+        if (send_step == send_step_retry) {
+            std::this_thread::sleep_for (std::chrono::milliseconds (1));
             continue;
+        }
 
         sent_count_->fetch_add (1, std::memory_order_release);
         ++seq;
@@ -185,7 +187,10 @@ inline bool send_active_samples (void *sender_,
 template <typename SendStopFn>
 inline bool send_stop_token_with_retry (void *sender_, SendStopFn send_stop_fn_)
 {
-    for (int retry = 0; retry < 100; ++retry) {
+    const auto deadline =
+      std::chrono::steady_clock::now ()
+      + std::chrono::milliseconds (resolve_single_stop_retry_timeout_ms ());
+    while (std::chrono::steady_clock::now () < deadline) {
         const int rc = send_stop_fn_ (sender_);
         if (rc == 0)
             return true;
@@ -252,12 +257,18 @@ inline bool run_active_phase (void *sender_,
     // cycling), but the loop only exits on stop-token receipt or error.
     (void) recv_timeout_ms_;
 
+#ifdef _WIN32
+    const int recv_flags = ZLINK_RECV_FLAGS_DONTWAIT;
+#else
+    const int recv_flags = 0;
+#endif
+
     std::thread receiver_thread ([&] () {
         while (true) {
             perf_single_metric::header_t header;
             bool header_ok = false;
             const int recv_rc =
-              recv_header_fn_ (receiver_, state_->payload_size, 0, &header, &header_ok);
+              recv_header_fn_ (receiver_, state_->payload_size, recv_flags, &header, &header_ok);
             if (recv_rc == recv_result_payload) {
                 if (header_ok && single_header_matches_run (*state_, header)
                     && std::chrono::steady_clock::now () < deadline) {
@@ -289,8 +300,12 @@ inline bool run_active_phase (void *sender_,
                 continue;
             }
 
-            if (recv_rc == recv_result_again)
+            if (recv_rc == recv_result_again) {
+#ifdef _WIN32
+                perf_idle_wait_ms (1);
+#endif
                 continue;
+            }
             if (recv_rc == recv_result_stop)
                 return;
 

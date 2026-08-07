@@ -4,12 +4,9 @@
 #include <Python.h>
 
 #include <errno.h>
-#include <pthread.h>
-#include <sched.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
 
 #include <zlink.h>
 

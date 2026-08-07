@@ -140,5 +140,4 @@ func printMultiResult(cfg multiConfig, result perfcommon.Result) {
 
 func flushControlLine(format string, args ...interface{}) {
 	fmt.Printf(format+"\n", args...)
-	_ = os.Stdout.Sync()
 }

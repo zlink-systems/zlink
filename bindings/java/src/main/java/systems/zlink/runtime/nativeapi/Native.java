@@ -102,11 +102,6 @@ public final class Native {
                             ValueLayout.ADDRESS, ValueLayout.ADDRESS,
                             ValueLayout.ADDRESS, ValueLayout.JAVA_INT,
                             ValueLayout.JAVA_INT));
-    private static final MethodHandle MH_JAVA_SEND_U32 = downcall(
-            "zlink_java_send_u32",
-            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
-                    ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
-                    ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT));
     private static final MethodHandle MH_RECV_PART = downcall("zlink_recv_part",
             FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
                     ValueLayout.ADDRESS, ValueLayout.ADDRESS,
@@ -641,11 +636,25 @@ public final class Native {
     public static int sendMultipartU32(MemorySegment socket, int routingId,
                                        MemorySegment parts, long partCount,
                                        int flags) {
-        try {
-            return (int) MH_JAVA_SEND_U32.invokeExact(socket, routingId, parts,
-                partCount, flags);
-        } catch (Throwable t) {
-            throw new RuntimeException("zlink_java_send_u32 failed", t);
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment nativeRoutingId = arena.allocate(
+                NativeLayouts.ROUTING_ID_LAYOUT);
+            nativeRoutingId.set(ValueLayout.JAVA_BYTE,
+                NativeLayouts.ROUTING_ID_SIZE_OFFSET, (byte) 4);
+            nativeRoutingId.set(ValueLayout.JAVA_BYTE,
+                NativeLayouts.ROUTING_ID_DATA_OFFSET,
+                (byte) (routingId >>> 24));
+            nativeRoutingId.set(ValueLayout.JAVA_BYTE,
+                NativeLayouts.ROUTING_ID_DATA_OFFSET + 1,
+                (byte) (routingId >>> 16));
+            nativeRoutingId.set(ValueLayout.JAVA_BYTE,
+                NativeLayouts.ROUTING_ID_DATA_OFFSET + 2,
+                (byte) (routingId >>> 8));
+            nativeRoutingId.set(ValueLayout.JAVA_BYTE,
+                NativeLayouts.ROUTING_ID_DATA_OFFSET + 3,
+                (byte) routingId);
+            return sendMultipart(socket, nativeRoutingId, parts, partCount,
+                flags);
         }
     }
 

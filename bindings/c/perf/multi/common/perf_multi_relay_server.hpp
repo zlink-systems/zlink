@@ -11,6 +11,7 @@
 #include <deque>
 #include <iomanip>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -302,7 +303,10 @@ inline bool run_server_loop (const relay_server_config_t &config,
         if (!pending.empty ())
             item.events |= ZLINK_POLLOUT;
         item.revents = 0;
-        const int poll_rc = perf_socket_poll (&item, 1, -1);
+        // The stdin watcher sets perf_stop_requested(), but it cannot wake a
+        // socket poll that waits forever. Use the common auxiliary wait so a
+        // STOP command is observed promptly after the last client message.
+        const int poll_rc = perf_socket_poll (&item, 1, perf_aux_poll_wait_ms ());
         if (poll_rc < 0) {
             if (zlink_errno () == EINTR)
                 continue;

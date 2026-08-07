@@ -36,13 +36,13 @@ DEFAULT_PATTERNS = [
 ]
 
 PATTERN_TO_BINARY = {
-    "PAIR": "perf_pair",
-    "PUBSUB": "perf_pubsub",
-    "DEALER_DEALER": "perf_dealer_dealer",
-    "DEALER_ROUTER": "perf_dealer_router",
-    "DEALER_ROUTER_REQREP": "perf_dealer_router_reqrep",
-    "ROUTER_ROUTER": "perf_router_router",
-    "ROUTER_ROUTER_REQREP": "perf_router_router_reqrep",
+    "PAIR": "cpp_perf_pair",
+    "PUBSUB": "cpp_perf_pubsub",
+    "DEALER_DEALER": "cpp_perf_dealer_dealer",
+    "DEALER_ROUTER": "cpp_perf_dealer_router",
+    "DEALER_ROUTER_REQREP": "cpp_perf_dealer_router_reqrep",
+    "ROUTER_ROUTER": "cpp_perf_router_router",
+    "ROUTER_ROUTER_REQREP": "cpp_perf_router_router_reqrep",
 }
 
 SINGLE_RECV_MODE = "recv"

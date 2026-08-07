@@ -3,11 +3,11 @@
 use std::fs;
 use std::io;
 use std::path::Path;
-use std::sync::mpsc;
+use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use zlink::{
     Context, DealerSocket, Message, PairSocket, PollEvent, Poller, PubSocket, RouterSocket,
-    SocketMonitor, StreamSocket, SubSocket, ZlinkError,
+    RecvFlags, SocketMonitor, StreamSocket, SubSocket, ZlinkError,
 };
 
 pub const STOP_TOKEN: &[u8] = b"__zlink_perf_stop__";
@@ -430,23 +430,26 @@ pub fn print_ready(endpoint: &str) {
 }
 
 pub fn wait_monitor_ready(mon: &mut SocketMonitor, timeout: Duration, name: &str) {
-    let (tx, rx) = mpsc::sync_channel::<()>(1);
-    mon.on_event(move |event| {
-        if event.is_connection_ready() {
-            let _ = tx.send(());
+    // The perf clients open the monitor before connect and wait after all
+    // sockets have been connected. Install-time callbacks do not replay an
+    // event already queued by Core, so consume the monitor queue directly and
+    // also consult the public status snapshot for an event observed before the
+    // first non-blocking receive.
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        match mon.recv_with_flags(RecvFlags::DONT_WAIT) {
+            Ok(Some(event)) if event.is_connection_ready() => return,
+            Ok(Some(_)) | Ok(None) => {}
+            Err(error) => panic!("{name} monitor receive failed: {error}"),
         }
-    })
-    .unwrap_or_else(|err| panic!("{name} monitor handler install failed: {err}"));
-
-    match rx.recv_timeout(timeout) {
-        Ok(()) => {}
-        Err(mpsc::RecvTimeoutError::Timeout) => {
-            panic!("{name} connection-ready wait timed out after {:?}", timeout);
+        if let Ok(status) = mon.status() {
+            if status.is_ready() {
+                return;
+            }
         }
-        Err(mpsc::RecvTimeoutError::Disconnected) => {
-            panic!("{name} monitor channel disconnected before connection-ready");
-        }
+        thread::yield_now();
     }
+    panic!("{name} connection-ready wait timed out after {:?}", timeout);
 }
 
 pub fn poll_idle_until(deadline: Instant, max_wait: Duration) {
@@ -509,10 +512,13 @@ pub fn resolve_server_bind_endpoint(pattern: &str, transport: &str) -> Option<St
         .and_then(|value| value.parse::<u16>().ok())
         .unwrap_or(0);
     match transport {
-        "tcp" => Some(format!("tcp://0.0.0.0:{port}")),
-        "tls" => Some(format!("tls://0.0.0.0:{port}")),
-        "ws" => Some(format!("ws://0.0.0.0:{port}")),
-        "wss" => Some(format!("wss://0.0.0.0:{port}")),
+        // C/Go multi runners bind locally and normalize the resolved client
+        // endpoint to loopback. Keep the same endpoint contract on Windows;
+        // handing a wildcard address to a DEALER client causes reconnects.
+        "tcp" => Some(format!("tcp://127.0.0.1:{port}")),
+        "tls" => Some(format!("tls://127.0.0.1:{port}")),
+        "ws" => Some(format!("ws://127.0.0.1:{port}")),
+        "wss" => Some(format!("wss://127.0.0.1:{port}")),
         _ => {
             emit_unsupported(pattern, transport, "unsupported_transport");
             None

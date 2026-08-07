@@ -18,4 +18,11 @@ public final class PerfErrno {
             || errno == EINTR
             || errno == EWOULDBLOCK_WIN;
     }
+
+    public static boolean isRetryableRecv(int errno) {
+        return errno == EAGAIN
+            || errno == EINTR
+            || errno == ETIMEDOUT
+            || errno == EWOULDBLOCK_WIN;
+    }
 }

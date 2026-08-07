@@ -6,7 +6,8 @@ mod common;
 use std::io::{self, BufRead, Write};
 use std::time::{Duration, Instant};
 use zlink::{
-    DealerSocket, Message, POLLOUT, PollEvent, Poller, SendFlags, SocketMonitor, SubmitResult,
+    DealerSocket, Message, PollEvent, Poller, RoutingId, SendFlags, SocketMonitor, SubmitResult,
+    POLLOUT,
 };
 
 fn main() {
@@ -18,10 +19,12 @@ fn main() {
     let mut sockets: Vec<DealerSocket> = Vec::with_capacity(settings.clients);
     let mut monitors: Vec<SocketMonitor> = Vec::with_capacity(settings.clients);
 
-    for _ in 0..settings.clients {
+    for index in 0..settings.clients {
         let sock = ctx.dealer_socket().expect("dealer");
         // C parity: numeric HWM remains behind the manual-override gate.
         common::apply_multi_hwm(&sock, &settings);
+        let routing_id = RoutingId::from(format!("client_{index}").as_bytes());
+        sock.set_routing_id(&routing_id).expect("routing id");
         sock.common_options()
             .set_receive_timeout(Duration::from_millis(settings.receive_timeout_ms))
             .expect("rcvtimeo");
@@ -120,7 +123,14 @@ fn main() {
             }
         }
         if !progressed {
-            match poller.wait(&mut poll_events, -1) {
+            if Instant::now() >= deadline {
+                break;
+            }
+            let remaining_ms = deadline
+                .saturating_duration_since(Instant::now())
+                .as_millis()
+                .max(1) as i64;
+            match poller.wait(&mut poll_events, remaining_ms) {
                 Ok(event_count) => {
                     for event in &poll_events[..event_count] {
                         if event.revents & POLLOUT != 0 && event.slot < send_pending.len() {
@@ -143,6 +153,7 @@ fn main() {
             match socket
                 .send()
                 .message(Message::try_from(common::STOP_TOKEN).expect("stop token"))
+                .flags(SendFlags::DONT_WAIT)
                 .submit()
             {
                 Ok(_) => {

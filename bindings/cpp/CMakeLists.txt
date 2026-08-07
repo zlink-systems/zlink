@@ -71,6 +71,23 @@ function(zlink_cpp_ensure_core_target out_target_var out_runtime_dir_var)
           IMPORTED_LOCATION "${_core_build_lib}"
           INTERFACE_INCLUDE_DIRECTORIES "${ZLINK_CORE_DIR}/include"
         )
+        if(WIN32)
+          find_file(_core_implib
+            NAMES zlink.lib libzlink.lib
+            PATHS
+              "${ZLINK_CPP_CORE_BUILD_DIR}/lib"
+              "${ZLINK_CPP_CORE_BUILD_DIR}/lib/Release"
+              "${ZLINK_CPP_CORE_BUILD_DIR}/../lib"
+              "${ZLINK_CPP_CORE_BUILD_DIR}/../lib/Release"
+              "${_core_build_dir}/../lib"
+              "${_core_build_dir}/../lib/Release"
+            NO_DEFAULT_PATH)
+          if(_core_implib)
+            set_target_properties(zlink-core-build-runtime PROPERTIES
+              IMPORTED_IMPLIB "${_core_implib}"
+            )
+          endif()
+        endif()
       endif()
       set(${out_target_var} zlink-core-build-runtime PARENT_SCOPE)
       set(${out_runtime_dir_var} "${_core_build_dir}" PARENT_SCOPE)
@@ -103,6 +120,23 @@ function(zlink_cpp_ensure_core_target out_target_var out_runtime_dir_var)
         IMPORTED_LOCATION "${_core_build_lib}"
         INTERFACE_INCLUDE_DIRECTORIES "${ZLINK_CORE_DIR}/include"
       )
+      if(WIN32)
+        find_file(_core_implib
+          NAMES zlink.lib libzlink.lib
+          PATHS
+            "${ZLINK_CPP_CORE_BUILD_DIR}/lib"
+            "${ZLINK_CPP_CORE_BUILD_DIR}/lib/Release"
+            "${ZLINK_CPP_CORE_BUILD_DIR}/../lib"
+            "${ZLINK_CPP_CORE_BUILD_DIR}/../lib/Release"
+            "${_core_build_dir}/../lib"
+            "${_core_build_dir}/../lib/Release"
+          NO_DEFAULT_PATH)
+        if(_core_implib)
+          set_target_properties(zlink-core-build-runtime PROPERTIES
+            IMPORTED_IMPLIB "${_core_implib}"
+          )
+        endif()
+      endif()
     endif()
     set(${out_target_var} zlink-core-build-runtime PARENT_SCOPE)
     set(${out_runtime_dir_var} "${_core_build_dir}" PARENT_SCOPE)
@@ -223,9 +257,11 @@ if(ZLINK_CPP_STANDALONE AND ZLINK_CPP_REGISTER_CTEST)
 endif()
 
 if(ZLINK_CPP_BUILD_TESTS OR ZLINK_CPP_BUILD_SAMPLES)
+  find_package(Boost CONFIG REQUIRED COMPONENTS asio)
+
   function(add_cpp_binding_executable target_name source_file)
     add_executable(${target_name} ${source_file})
-    target_link_libraries(${target_name} PRIVATE zlink_cpp)
+    target_link_libraries(${target_name} PRIVATE zlink_cpp Boost::asio)
     if(UNIX AND NOT APPLE)
       set_target_properties(${target_name} PROPERTIES
         BUILD_RPATH "${ZLINK_CPP_RUNTIME_DIR}"

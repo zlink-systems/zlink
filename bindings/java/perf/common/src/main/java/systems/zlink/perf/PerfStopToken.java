@@ -57,8 +57,10 @@ public final class PerfStopToken {
      * Bounded retry of a non-blocking stop-token send through transient
      * backpressure, mirroring the C reference
      * {@code perf_single_one_way.hpp::send_stop_token_with_retry}
-     * (~200-215): up to 100 attempts with a 1ms sleep between transient
-     * failures so the receiver always observes the wire-level terminator.
+     * (~188-205): a 10-second default deadline with a 1ms sleep between
+     * transient failures so the receiver always observes the wire-level
+     * terminator. The deadline is configurable for diagnostics with
+     * {@code PERF_STOP_RETRY_TIMEOUT_MS}.
      *
      * <p>A single blocking submit is NOT equivalent: under load a ROUTER
      * peer drops on a missing route (EHOSTUNREACH) and a send-timeout-bound
@@ -72,10 +74,7 @@ public final class PerfStopToken {
      */
     public static void sendWithRetry(java.util.function.BooleanSupplier attempt,
                                      String label) {
-        for (int retry = 0; retry < 100; retry++) {
-            if (attempt.getAsBoolean()) {
-                return;
-            }
+        sendWithRetry(attempt, () -> {
             try {
                 Thread.sleep(1L);
             } catch (InterruptedException ex) {
@@ -83,8 +82,27 @@ public final class PerfStopToken {
                 throw new IllegalStateException(
                     label + " stop-token send interrupted", ex);
             }
+        }, label);
+    }
+
+    /**
+     * Retries a non-blocking stop-token send after a caller-supplied readiness
+     * wait. Socket callers should use a POLLOUT poller here so the retry does
+     * not turn backpressure into a timer-based hot loop.
+     */
+    public static void sendWithRetry(java.util.function.BooleanSupplier attempt,
+                                     Runnable waitForRetry,
+                                     String label) {
+        int timeoutMs = Math.max(1,
+            PerfUtil.intEnv("PERF_STOP_RETRY_TIMEOUT_MS", 10_000));
+        long deadline = System.nanoTime() + timeoutMs * 1_000_000L;
+        while (System.nanoTime() < deadline) {
+            if (attempt.getAsBoolean()) {
+                return;
+            }
+            waitForRetry.run();
         }
         throw new IllegalStateException(
-            label + " stop-token send exhausted retry budget");
+            label + " stop-token send exceeded " + timeoutMs + "ms retry deadline");
     }
 }

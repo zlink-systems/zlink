@@ -86,12 +86,27 @@ export function preparePrebuiltRuntimePath(prebuiltDir: string): void {
   }
   prependPathEntries([
     prebuiltDir,
+    windowsRuntimePath(process.env.ZLINK_LIBRARY_PATH),
+    process.env.ZLINK_CORE_PREFIX
+      ? path.join(process.env.ZLINK_CORE_PREFIX, 'bin')
+      : undefined,
+    process.env.ZLINK_CORE_PREFIX,
     process.env.ZLINK_OPENSSL_BIN,
     process.env.OPENSSL_BIN,
     'C:\\Program Files\\OpenSSL-Win64\\bin',
     'C:\\Program Files\\Git\\mingw64\\bin',
     'C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\Common7\\IDE\\CommonExtensions\\Microsoft\\TeamFoundation\\Team Explorer\\Git\\mingw64\\bin'
   ]);
+}
+
+function windowsRuntimePath(entry: string | undefined): string | undefined {
+  if (!entry) return undefined;
+  try {
+    if (fs.statSync(entry).isFile()) return path.dirname(entry);
+  } catch {
+    // Let the native loader report a missing runtime with its normal error.
+  }
+  return entry;
 }
 
 export function requireNativeAt(target: string): NativeBinding {

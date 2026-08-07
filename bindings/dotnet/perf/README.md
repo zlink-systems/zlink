@@ -35,7 +35,7 @@ from `bindings/README.md` for CLI names, defaults, result file naming, and the
 `## Effective Options (start)` report header.
 
 - single:
-  - patterns: `PAIR`, `PUBSUB`, `DEALER_DEALER`, `DEALER_ROUTER`, `ROUTER_ROUTER`
+  - patterns: `PAIR`, `PUBSUB`, `DEALER_DEALER`, `DEALER_ROUTER`, `DEALER_ROUTER_REQREP`, `ROUTER_ROUTER`, `ROUTER_ROUTER_REQREP`
   - public receive surface: `recv`
   - default transports: `tcp,tls,ws,wss,inproc,ipc` on Linux and `tcp,tls,ws,wss,inproc` on Windows
   - default sizes: `64,256,1024,65536,131072,262144`

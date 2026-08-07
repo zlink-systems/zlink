@@ -513,7 +513,9 @@ class socket_t
             using socket_type_t = typename std::decay<decltype (socket_)>::type;
             if constexpr (std::is_same<socket_type_t, sub_socket_t>::value) {
                 try {
-                    socket_.set_subscription (filter_);
+                    (socket_.*static_cast<void (sub_socket_t::*)(
+                      const std::string &)>(&sub_socket_t::set_subscription))(
+                      filter_);
                     return 0;
                 }
                 catch (const binding_error_t &err) {

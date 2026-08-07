@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Threading;
 using Systems.Zlink;
 
@@ -192,6 +193,7 @@ internal static partial class PerfRunner
         private readonly ManualResetEventSlim _startSignal = new(false);
         private readonly ManualResetEventSlim _controlConnectedSignal = new(false);
         private readonly Thread _readerThread;
+        private readonly string _controlFile;
         private int _startRequested;
         private int _stopRequested;
         private Action<string>? _connectControlCallback;
@@ -201,8 +203,13 @@ internal static partial class PerfRunner
         internal RunnerControlState(int msgSize)
         {
             _msgSize = msgSize;
+            _controlFile = PerfEnv.ReadString("PERF_MULTI_CONTROL_FILE",
+                string.Empty);
 
-            _readerThread = new Thread(ReadLoop)
+            ThreadStart reader = string.IsNullOrWhiteSpace(_controlFile)
+                ? ReadLoop
+                : ReadControlFileLoop;
+            _readerThread = new Thread(reader)
             {
                 IsBackground = true,
             };
@@ -245,10 +252,6 @@ internal static partial class PerfRunner
 
         private void ReadLoop()
         {
-            string expectedStart = $"START,{_msgSize}";
-            const string connectControlPrefix = "CONNECT_CONTROL,";
-            const string controlConnectedPrefix = "CONTROL_CONNECTED,";
-
             while (true)
             {
                 string? line = Console.ReadLine();
@@ -260,50 +263,99 @@ internal static partial class PerfRunner
                     return;
                 }
 
-                string command = line.Trim();
-                if (_debug)
-                    Console.Error.WriteLine($"control_debug:stdin:{command}");
-                if (string.IsNullOrEmpty(command))
-                    continue;
-
-                if (string.Equals(command, "STOP",
-                        StringComparison.OrdinalIgnoreCase)
-                    || string.Equals(command, "QUIT",
-                        StringComparison.OrdinalIgnoreCase))
-                {
-                    Volatile.Write(ref _stopRequested, 1);
-                    TrySet(_startSignal);
-                    TrySet(_controlConnectedSignal);
+                if (!HandleCommand(line))
                     return;
-                }
-
-                if (command.StartsWith(connectControlPrefix,
-                        StringComparison.Ordinal))
-                {
-                    string ep = command.Substring(connectControlPrefix.Length)
-                        .Trim();
-                    if (_debug)
-                        Console.Error.WriteLine($"control_debug:connect:{ep}");
-                    _connectControlCallback?.Invoke(ep);
-                    continue;
-                }
-
-                if (command.StartsWith(controlConnectedPrefix,
-                        StringComparison.Ordinal))
-                {
-                    TrySet(_controlConnectedSignal);
-                    continue;
-                }
-
-                if (string.Equals(command, expectedStart,
-                        StringComparison.Ordinal))
-                {
-                    if (_debug)
-                        Console.Error.WriteLine($"control_debug:start:{command}");
-                    Volatile.Write(ref _startRequested, 1);
-                    TrySet(_startSignal);
-                }
             }
+        }
+
+        private void ReadControlFileLoop()
+        {
+            string previous = string.Empty;
+            while (Volatile.Read(ref _stopRequested) == 0)
+            {
+                try
+                {
+                    if (File.Exists(_controlFile))
+                    {
+                        string contents = File.ReadAllText(_controlFile);
+                        if (!string.Equals(contents, previous,
+                                StringComparison.Ordinal))
+                        {
+                            previous = contents;
+                            string[] lines = contents.Split(
+                                new[] { '\r', '\n' },
+                                StringSplitOptions.RemoveEmptyEntries);
+                            foreach (string line in lines)
+                            {
+                                if (!HandleCommand(line))
+                                    return;
+                            }
+                        }
+                    }
+                }
+                catch (IOException)
+                {
+                    // The runner may replace the marker file between cases.
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    // Retry until the runner has published the file.
+                }
+
+                Thread.Sleep(10);
+            }
+        }
+
+        private bool HandleCommand(string rawLine)
+        {
+            string expectedStart = $"START,{_msgSize}";
+            const string connectControlPrefix = "CONNECT_CONTROL,";
+            const string controlConnectedPrefix = "CONTROL_CONNECTED,";
+            string command = rawLine.Trim();
+            if (_debug)
+                Console.Error.WriteLine($"control_debug:command:{command}");
+            if (string.IsNullOrEmpty(command))
+                return true;
+
+            if (string.Equals(command, "STOP",
+                    StringComparison.OrdinalIgnoreCase)
+                || string.Equals(command, "QUIT",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                Volatile.Write(ref _stopRequested, 1);
+                TrySet(_startSignal);
+                TrySet(_controlConnectedSignal);
+                return false;
+            }
+
+            if (command.StartsWith(connectControlPrefix,
+                    StringComparison.Ordinal))
+            {
+                string ep = command.Substring(connectControlPrefix.Length)
+                    .Trim();
+                if (_debug)
+                    Console.Error.WriteLine($"control_debug:connect:{ep}");
+                _connectControlCallback?.Invoke(ep);
+                return true;
+            }
+
+            if (command.StartsWith(controlConnectedPrefix,
+                    StringComparison.Ordinal))
+            {
+                TrySet(_controlConnectedSignal);
+                return true;
+            }
+
+            if (string.Equals(command, expectedStart,
+                    StringComparison.Ordinal))
+            {
+                if (_debug)
+                    Console.Error.WriteLine($"control_debug:start:{command}");
+                Volatile.Write(ref _startRequested, 1);
+                TrySet(_startSignal);
+            }
+
+            return true;
         }
 
         private static void TrySet(ManualResetEventSlim signal)

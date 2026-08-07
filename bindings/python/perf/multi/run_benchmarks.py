@@ -34,11 +34,27 @@ DEFAULT_PYTHONPATH = ROOT.parent.parent / "src"
 # measured surface stays the Python STREAM server (see PERF_MULTI_TEST_POLICY).
 STREAM_CLIENT_DIR = REPO_ROOT / "bindings" / "c" / "perf" / "common" / "streamclient"
 STREAM_CLIENT_BIN = STREAM_CLIENT_DIR / "build" / "perf_stream_client"
+WINDOWS_STREAM_CLIENT_BIN = (
+    REPO_ROOT / "bindings" / "c" / "build-windows" / "perf" / "Release" / "perf_stream_client.exe"
+)
 
 
 def _ensure_stream_client():
-    if STREAM_CLIENT_BIN.exists() and os.access(STREAM_CLIENT_BIN, os.X_OK):
-        return STREAM_CLIENT_BIN
+    configured = os.environ.get("PERF_STREAM_CLIENT_BIN")
+    candidates = []
+    if configured:
+        candidates.append(Path(configured))
+    if os.name == "nt":
+        candidates.append(WINDOWS_STREAM_CLIENT_BIN)
+    candidates.append(STREAM_CLIENT_BIN)
+    for candidate in candidates:
+        if candidate.exists() and (os.name == "nt" or os.access(candidate, os.X_OK)):
+            return candidate
+    if os.name == "nt":
+        raise SystemExit(
+            "Windows MULTI_STREAM requires the native C perf_stream_client.exe. "
+            "Build bindings/c/perf with CMake or set PERF_STREAM_CLIENT_BIN."
+        )
     subprocess.run(
         ["bash", str(STREAM_CLIENT_DIR / "build.sh")],
         check=True,

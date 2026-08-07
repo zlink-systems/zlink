@@ -450,6 +450,21 @@ def resolve_linux_paths() -> Tuple[str, str]:
     return build_dir, lib_dir
 
 
+def read_cmake_cache_value(cmake_root: str, key: str) -> str:
+    cache_path = os.path.join(cmake_root, "CMakeCache.txt")
+    if not os.path.isfile(cache_path):
+        return ""
+    prefix = f"{key}:"
+    try:
+        with open(cache_path, "r", encoding="utf-8", errors="ignore") as cache_file:
+            for line in cache_file:
+                if line.startswith(prefix) and "=" in line:
+                    return line.split("=", 1)[1].strip()
+    except OSError:
+        pass
+    return ""
+
+
 def normalize_build_dir(path: str) -> str:
     if not path:
         return path
@@ -463,6 +478,11 @@ def normalize_build_dir(path: str) -> str:
 
     perf_dir = os.path.join(abs_path, "perf")
     if os.path.isdir(perf_dir):
+        if IS_WINDOWS:
+            for config_name in BUILD_CONFIG_DIRS:
+                config_dir = os.path.join(perf_dir, config_name)
+                if os.path.isdir(config_dir):
+                    return config_dir
         return perf_dir
 
     base = os.path.basename(abs_path)
@@ -488,7 +508,36 @@ def normalize_build_dir(path: str) -> str:
 
 
 def derive_current_lib_dir(build_dir: str) -> str:
-    build_root = build_dir
+    build_root = derive_cmake_build_dir(build_dir) or os.path.abspath(build_dir)
+
+    core_build_root = read_cmake_cache_value(
+        build_root,
+        "ZLINK_C_CORE_BUILD_DIR",
+    )
+    if core_build_root:
+        core_candidates = []
+        if IS_WINDOWS:
+            for config_name in BUILD_CONFIG_DIRS:
+                core_candidates.extend(
+                    [
+                        os.path.join(core_build_root, "bin", config_name),
+                        os.path.join(core_build_root, "lib", config_name),
+                    ]
+                )
+        core_candidates.extend(
+            [
+                os.path.join(core_build_root, "bin"),
+                os.path.join(core_build_root, "lib"),
+            ]
+        )
+        for candidate in core_candidates:
+            if os.path.isfile(os.path.join(candidate, "zlink.dll")):
+                return os.path.abspath(candidate)
+            if os.path.isfile(os.path.join(candidate, "libzlink.so")):
+                return os.path.abspath(candidate)
+            if os.path.isfile(os.path.join(candidate, "libzlink.dylib")):
+                return os.path.abspath(candidate)
+
     base = os.path.basename(build_root)
     if base in BUILD_CONFIG_DIRS:
         bin_root = os.path.dirname(build_root)
@@ -516,8 +565,14 @@ def derive_cmake_build_dir(runtime_build_dir: str) -> str:
     abs_path = os.path.abspath(runtime_build_dir)
     if not os.path.isdir(abs_path):
         return ""
-    if has_cmake_cache(abs_path):
-        return abs_path
+    current = abs_path
+    while True:
+        if has_cmake_cache(current):
+            return current
+        parent = os.path.dirname(current)
+        if parent == current:
+            break
+        current = parent
 
     base = os.path.basename(abs_path)
     if base in BUILD_CONFIG_DIRS:

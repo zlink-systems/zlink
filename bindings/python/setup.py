@@ -11,19 +11,22 @@ from setuptools import Extension, setup
 
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
-SUPPORTED_PLATFORM = "linux-x86_64"
+SUPPORTED_PLATFORM = None
 
 
 def _supported_platform() -> str:
     machine = platform.machine().lower()
-    if not sys.platform.startswith("linux") or machine not in {"x86_64", "amd64"}:
-        raise RuntimeError(
-            "zlink Python Core 0.9.0 wheels currently support Linux x86_64 only"
-        )
-    return SUPPORTED_PLATFORM
+    if sys.platform.startswith("linux") and machine in {"x86_64", "amd64"}:
+        return "linux-x86_64"
+    if sys.platform == "win32" and machine in {"x86_64", "amd64"}:
+        return "windows-x86_64"
+    raise RuntimeError(
+        "zlink Python Core 0.10.0 supports Linux x86_64 and Windows x86_64"
+    )
 
 
 TARGET_PLATFORM = _supported_platform()
+SUPPORTED_PLATFORM = TARGET_PLATFORM
 
 
 def _core_prefix() -> Path:
@@ -48,7 +51,7 @@ def _core_prefix() -> Path:
 
 CORE_PREFIX = _core_prefix()
 CORE_INCLUDE = CORE_PREFIX / "include"
-CORE_LIBRARY = CORE_PREFIX / ("bin" if sys.platform == "win32" else "lib")
+CORE_LIBRARY = CORE_PREFIX / "lib"
 
 
 def _runtime_library_dirs() -> list[str]:
@@ -56,10 +59,14 @@ def _runtime_library_dirs() -> list[str]:
     # lives under zlink/native/<platform>. Keep runtime lookup package-relative
     # so built wheels do not embed source-tree paths.
     _supported_platform()
+    if sys.platform == "win32":
+        return []
     return [f"$ORIGIN/../native/{SUPPORTED_PLATFORM}"]
 
 
 def _compile_args() -> list[str]:
+    if sys.platform == "win32":
+        return ["/O2"]
     return ["-O3", "-pthread"]
 
 
@@ -72,7 +79,7 @@ def _native_extension(name: str, source: str) -> Extension:
         libraries=["zlink"],
         runtime_library_dirs=_runtime_library_dirs(),
         extra_compile_args=_compile_args(),
-        extra_link_args=["-pthread"],
+        extra_link_args=[] if sys.platform == "win32" else ["-pthread"],
     )
 
 
@@ -93,12 +100,17 @@ def _native_package_data() -> dict[str, list[str]]:
     major, minor, patch = _core_version()
     abi_major = 0
     version = f"{major}.{minor}.{patch}"
-    expected_names = {
-        "libzlink.so",
-        f"libzlink.so.{abi_major}",
-        f"libzlink.so.{version}",
-    }
-    if not (payload_dir / f"libzlink.so.{version}").is_file():
+    if sys.platform == "win32":
+        expected_names = {"zlink.dll"}
+        runtime_name = "zlink.dll"
+    else:
+        expected_names = {
+            "libzlink.so",
+            f"libzlink.so.{abi_major}",
+            f"libzlink.so.{version}",
+        }
+        runtime_name = f"libzlink.so.{version}"
+    if not (payload_dir / runtime_name).is_file():
         raise RuntimeError(f"Core runtime payload is missing from {payload_dir}")
     payload_names = {
         path.name
@@ -113,8 +125,10 @@ def _native_package_data() -> dict[str, list[str]]:
             "Unsupported or stale Core payload remains in "
             f"{payload_dir}: {', '.join(unexpected)}"
         )
-    if not (payload_dir / "libzlink.so").is_symlink():
+    if sys.platform != "win32" and not (payload_dir / "libzlink.so").is_symlink():
         raise RuntimeError(f"Core runtime loader link is missing from {payload_dir}")
+    if sys.platform == "win32":
+        return {"zlink": ["py.typed", f"native/{SUPPORTED_PLATFORM}/zlink.dll"]}
     return {
         "zlink": [
             "py.typed",

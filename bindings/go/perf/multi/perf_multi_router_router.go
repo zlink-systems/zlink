@@ -38,10 +38,14 @@ func runMultiRouterRouterServer(cfg multiConfig) {
 	flushControlLine("READY,%s", endpoint)
 
 	serverDone := make(chan struct{})
-	go startMultiRouterRouterEchoServer(server, serverDone)
+	stopSignal := waitForStopAsync()
+	go startMultiRouterRouterEchoServer(server, stopSignal, serverDone)
 	select {
 	case <-serverDone:
-	case <-waitForStopAsync():
+	case <-stopSignal:
+		// The echo loop observes the same control signal and leaves its poller
+		// before the deferred socket/context close runs.
+		<-serverDone
 	}
 }
 
@@ -65,8 +69,10 @@ func runMultiRouterRouterClientRole(cfg multiConfig, endpoint string) perfcommon
 		perfcommon.Must(client.SetRoutingID(clientID))
 		perfcommon.Must(client.SetConnectRoutingID(serverID))
 		perfcommon.Must(client.Connect(endpoint))
-		perfcommon.WaitConnectedWithTimeout(perfcommon.MultiReadyTimeout(), clientMon)
 		clients = append(clients, multiRouterClient{socket: client, monitor: clientMon})
+	}
+	for _, client := range clients {
+		perfcommon.WaitConnectedWithTimeout(perfcommon.MultiReadyTimeout(), client.monitor)
 	}
 	defer func() {
 		for _, client := range clients {
@@ -233,7 +239,11 @@ func validateMultiRouterRoutes(serverID zlink.RoutingID, clients []multiRouterCl
 // main goroutine. PERF_MULTI_TEST_POLICY § 1.3.1: poller waits with -1
 // (signal-driven) and the loop exits on stop token, not on a stop
 // channel.
-func startMultiRouterRouterEchoServer(server *zlink.RouterSocket, done chan<- struct{}) {
+func startMultiRouterRouterEchoServer(
+	server *zlink.RouterSocket,
+	stop <-chan struct{},
+	done chan<- struct{},
+) {
 	defer close(done)
 
 	poller := perfcommon.NewSocketPoller(server, perfcommon.ZLinkPollIn)
@@ -245,6 +255,12 @@ func startMultiRouterRouterEchoServer(server *zlink.RouterSocket, done chan<- st
 	activeEvents := perfcommon.ZLinkPollIn
 
 	for !stopRequested {
+		select {
+		case <-stop:
+			return
+		default:
+		}
+
 		events := perfcommon.ZLinkPollIn
 		if len(pending) > 0 {
 			events |= perfcommon.ZLinkPollOut
@@ -256,7 +272,10 @@ func startMultiRouterRouterEchoServer(server *zlink.RouterSocket, done chan<- st
 			activeEvents = events
 		}
 
-		event, err := perfcommon.WaitPollerOne(poller, waitEvents, -1*time.Millisecond)
+		// The data path remains event driven. The bounded wait only lets the
+		// role-control signal terminate a quiet server without relying on
+		// closing a socket from another goroutine to wake the native poller.
+		event, err := perfcommon.WaitPollerOne(poller, waitEvents, 100*time.Millisecond)
 		if err != nil {
 			if perfcommon.IsTransient(err) {
 				continue
@@ -332,7 +351,7 @@ func startMultiRouterRouterEchoServer(server *zlink.RouterSocket, done chan<- st
 func sendMultiRouterStopToken(socket *zlink.RouterSocket, serverID zlink.RoutingID) {
 	for attempt := 0; attempt < perfcommon.StopTokenSendAttempts; attempt++ {
 		sent, err := perfcommon.SubmitPayload(perfcommon.StopToken, func(message *zlink.Message) (bool, error) {
-			return socket.SendTo(serverID).MoveMessage(message).Submit(context.Background())
+			return socket.SendTo(serverID).MoveMessage(message).Flags(zlink.SendFlagsDontWait).Submit(context.Background())
 		})
 		if err == nil && sent {
 			return

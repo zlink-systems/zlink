@@ -96,6 +96,9 @@ endfunction()
         Threads::Threads
         OpenSSL::SSL
         OpenSSL::Crypto)
+if(WIN32)
+    target_link_libraries(perf_stream_client PRIVATE Crypt32)
+endif()
     target_include_directories(
         perf_stream_client PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/common/streamclient
@@ -150,5 +153,6 @@ endfunction()
     endif()
     add_current_bench_multi(comp_src_stream_server
                            multi/src/perf_multi_stream_server.cpp)
+target_compile_features(comp_src_stream_server PRIVATE cxx_std_17)
 target_compile_definitions(comp_src_stream_server PRIVATE
                            PERF_MULTI_STREAM_PATTERN_NAME="MULTI_STREAM")

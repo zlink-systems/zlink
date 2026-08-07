@@ -17,7 +17,7 @@
 #include <string>
 #include <vector>
 
-#if defined(ZLINK_HAVE_WINDOWS)
+#if defined(_WIN32)
 #include <process.h>
 #else
 #include <unistd.h>
@@ -43,7 +43,7 @@ inline std::string unique_ipc (const char *base_)
 {
     static unsigned counter = 0;
     const unsigned pid =
-#if defined(ZLINK_HAVE_WINDOWS)
+#if defined(_WIN32)
       static_cast<unsigned> (_getpid ());
 #else
       static_cast<unsigned> (getpid ());

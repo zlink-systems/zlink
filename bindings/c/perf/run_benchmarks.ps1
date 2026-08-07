@@ -3,7 +3,9 @@ param(
     [string]$BuildDir = "",
     [string]$OutputFile = "",
     [int]$Runs = 1,
+    [Alias("CleanBuild")]
     [switch]$Build,
+    [switch]$ReuseBuild,
     [string]$ResultsDir = "",
     [string]$ResultsTag = "",
     [string]$Duration = "",
@@ -14,6 +16,7 @@ param(
     [string]$Sndtimeo = "",
     [Alias("RecvTimeoutMs")]
     [string]$Rcvtimeo = "",
+    [string]$AutoHwmProfile = "",
     [string]$IoThreads = "",
     [string]$MsgSizes = "",
     [string]$Transports = "",
@@ -32,14 +35,15 @@ Measure current zlink single-pattern performance.
 Options:
   -Help                        Show this help.
   -Pattern NAME                Pattern list (comma-separated) or ALL.
-  -BuildDir PATH               Build directory (default: core\build\windows-x64).
-  -Build                       Force clean build (default is reuse-build).
+  -BuildDir PATH               Official build directory (default: bindings\c\build).
+  -Build, -CleanBuild          Remove the build directory and do a clean build.
+  -ReuseBuild                  Reuse the existing build directory without building.
   -OutputFile PATH             Tee console logs to a file.
   -ResultsDir PATH             Override result root directory.
   -ResultsTag NAME             Optional tag in saved result filename.
   -Runs N                      Iterations per pattern/transport/size (default: 1).
   -Duration N                  Override single duration seconds (default: 5).
-  -Hwm N                       Override PERF_SINGLE_HWM (default: 1000 in binary).
+  -Hwm N                       Debug-only PERF_SINGLE_HWM byte override.
   -SendHwm N                   Override PERF_SINGLE_SNDHWM (fallback: -Hwm).
   -RecvHwm N                   Override PERF_SINGLE_RCVHWM (fallback: -Hwm).
   -Sndtimeo N                  Override PERF_SINGLE_SNDTIMEO_MS (default: 200).
@@ -47,11 +51,12 @@ Options:
   -IoThreads N                 Set PERF_IO_THREADS.
   -MsgSizes LIST               Comma-separated message sizes.
   -Transports LIST             Comma-separated transports.
+  -AutoHwmProfile NAME         Set compact, low_latency, balanced, or throughput.
   -PinCpu                      Enable PERF_TASKSET=1.
 
 Notes:
   - result is saved under results\single\report\.
-  - reuse-build is always enabled unless -Build is provided.
+  - default build mode is incremental (configure/build without deleting the build directory).
   - -OutputFile and report output can be used together.
   - run_benchmarks.ps1 is single-only; use run_benchmarks_multi.ps1 for multi mode.
 "@
@@ -62,7 +67,11 @@ if ($Help) {
     exit 0
 }
 
-$UseReuseBuild = -not $Build.IsPresent
+if ($Build.IsPresent -and $ReuseBuild.IsPresent) {
+    throw "-Build/-CleanBuild and -ReuseBuild are mutually exclusive."
+}
+$BuildMode = if ($ReuseBuild.IsPresent) { "reuse" } elseif ($Build.IsPresent) { "clean" } else { "incremental" }
+$FullMatrixRequest = $Pattern.Trim().ToUpperInvariant() -eq "ALL"
 if ($IoThreads -and $IoThreads -notmatch '^\d+$') {
     throw "IoThreads must be a non-negative integer."
 }
@@ -93,13 +102,41 @@ if ($MsgSizes -and $MsgSizes -notmatch '^\d+(,\d+)*$') {
 if ($Transports -and $Transports -notmatch '^[a-z]+(,[a-z]+)*$') {
     throw "Transports must be a comma-separated list of names."
 }
+$CtxAutoHwmEnable = if ($env:PERF_CTX_AUTO_HWM_ENABLE) {
+    $env:PERF_CTX_AUTO_HWM_ENABLE
+} else {
+    "1"
+}
+if ($CtxAutoHwmEnable -notin @("0", "1")) {
+    throw "PERF_CTX_AUTO_HWM_ENABLE must be 0 or 1."
+}
+if (-not $AutoHwmProfile) {
+    $AutoHwmProfile = $env:PERF_SINGLE_CTX_AUTO_HWM_PROFILE
+}
+if (-not $AutoHwmProfile) {
+    $AutoHwmProfile = $env:PERF_CTX_AUTO_HWM_PROFILE
+}
+if (-not $AutoHwmProfile) {
+    $AutoHwmProfile = "balanced"
+}
+if ($AutoHwmProfile -notin @("compact", "low_latency", "low-latency", "balanced", "throughput")) {
+    throw "AutoHwmProfile must be compact, low_latency, balanced, or throughput."
+}
 if (-not $ResultsTag) {
     $ResultsTag = $env:PERF_RESULTS_TAG
 }
 if ($env:PERF_ALLOW_MULTI -eq "1") {
     throw "multi benchmarks are handled by bindings\\c\\perf\\run_benchmarks_multi.ps1."
 }
-$SinglePatterns = @("PAIR", "PUBSUB", "DEALER_DEALER", "DEALER_ROUTER", "ROUTER_ROUTER")
+$SinglePatterns = @(
+    "PAIR",
+    "PUBSUB",
+    "DEALER_DEALER",
+    "DEALER_ROUTER",
+    "DEALER_ROUTER_REQREP",
+    "ROUTER_ROUTER",
+    "ROUTER_ROUTER_REQREP"
+)
 $SinglePatternSet = @{}
 foreach ($name in $SinglePatterns) { $SinglePatternSet[$name] = $true }
 
@@ -107,7 +144,7 @@ if ($Runs -lt 1) {
     throw "Runs must be >= 1."
 }
 
-$ScriptDir = $PSScriptRoot
+$ScriptDir = [System.IO.Path]::GetFullPath($PSScriptRoot)
 $RootDir = $null
 $ProbeDir = $ScriptDir
 while ($ProbeDir) {
@@ -124,12 +161,14 @@ if (-not $RootDir) {
 }
 $RootDir = [System.IO.Path]::GetFullPath($RootDir)
 
+$CMakeSourceDir = Join-Path $RootDir "bindings\c"
+$OfficialBuildDir = Join-Path $CMakeSourceDir "build"
 if (-not $BuildDir) {
-    $BuildDir = Join-Path $RootDir "core\build\windows-x64"
+    $BuildDir = $OfficialBuildDir
 }
 $BuildDir = [System.IO.Path]::GetFullPath($BuildDir)
-if (-not $BuildDir.StartsWith($RootDir, [System.StringComparison]::OrdinalIgnoreCase)) {
-    throw "Build directory must be inside repo root: $RootDir"
+if (-not $BuildDir.Equals($OfficialBuildDir, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "Build directory must be exactly: $OfficialBuildDir"
 }
 
 $BenchComparisonScript = Join-Path $ScriptDir "single\run_comparison.py"
@@ -143,7 +182,7 @@ if (-not $Pattern) {
 }
 
 $PatternList = @()
-if ($Pattern.Trim().ToUpperInvariant() -eq "ALL") {
+if ($FullMatrixRequest) {
     $PatternList = @($SinglePatterns)
     $Pattern = ($PatternList -join ",")
 } else {
@@ -159,8 +198,10 @@ if ($Pattern.Trim().ToUpperInvariant() -eq "ALL") {
     $Pattern = ($PatternList -join ",")
 }
 
-$NeedResultsDir = $true
-if ($NeedResultsDir -and -not $ResultsDir) {
+if (-not $ResultsDir) {
+    $ResultsDir = $env:PERF_RESULTS_DIR
+}
+if (-not $ResultsDir) {
     $ResultsDir = Join-Path $ScriptDir "results"
 }
 if ($ResultsDir) {
@@ -225,75 +266,192 @@ if ($ResultsDir) {
     Cleanup-OldResultDirs -RootPath $ResultsDir
 }
 
-function Resolve-BenchmarkBinDir {
+function Resolve-ConfiguredCoreBuildDir {
     param([string]$BuildRoot)
 
-    $Candidates = @(
-        (Join-Path $BuildRoot "bin\Release"),
-        (Join-Path $BuildRoot "bin\Debug"),
-        (Join-Path $BuildRoot "bin"),
-        $BuildRoot
-    )
-
-    foreach ($Candidate in $Candidates) {
-        if (Test-Path (Join-Path $Candidate "perf_pair.exe")) {
-            return $Candidate
+    $Configured = ""
+    $CacheFile = Join-Path $BuildRoot "CMakeCache.txt"
+    if (Test-Path $CacheFile) {
+        $Line = Get-Content -LiteralPath $CacheFile |
+            Select-String -Pattern '^ZLINK_C_CORE_BUILD_DIR:[^=]*=' |
+            Select-Object -Last 1
+        if ($Line) {
+            $Configured = $Line.Line.Substring($Line.Line.IndexOf('=') + 1).Trim()
         }
     }
-    return $Candidates[0]
+    if (-not $Configured) {
+        $Configured = Join-Path $RootDir "core\build"
+    }
+    return [System.IO.Path]::GetFullPath($Configured)
 }
 
-$NeedConfigureBuild = -not $UseReuseBuild
-if ($UseReuseBuild) {
-    $BenchBinDir = Resolve-BenchmarkBinDir -BuildRoot $BuildDir
-    $HasSingle = Test-Path (Join-Path $BenchBinDir "perf_pair.exe")
-    $HasMulti = Test-Path (Join-Path $BenchBinDir "comp_src_dealer_dealer_client.exe")
-    if ((Test-Path $BuildDir) -and ($HasSingle -or $HasMulti)) {
-        Write-Host "Reusing build directory: $BuildDir"
-    } else {
-        Write-Host "Reusable build not found. Configuring/building: $BuildDir"
-        $NeedConfigureBuild = $true
-        $UseReuseBuild = $false
+function Resolve-CoreRuntime {
+    param([string]$CoreRoot)
+
+    $Candidates = @(
+        (Join-Path $CoreRoot "bin\Release\zlink.dll"),
+        (Join-Path $CoreRoot "lib\Release\zlink.dll"),
+        (Join-Path $CoreRoot "bin\zlink.dll"),
+        (Join-Path $CoreRoot "lib\zlink.dll")
+    )
+    foreach ($Candidate in $Candidates) {
+        if (Test-Path $Candidate) {
+            return [System.IO.Path]::GetFullPath($Candidate)
+        }
     }
+    return $null
 }
 
-if ($NeedConfigureBuild) {
-    Write-Host "Cleaning build directory: $BuildDir"
-    if (Test-Path $BuildDir) {
-        Remove-Item -Recurse -Force $BuildDir
-    }
+function Invoke-CoreRuntimeBuild {
+    param([string]$CoreRoot)
 
+    $CoreCache = Join-Path $CoreRoot "CMakeCache.txt"
     $CMakeGenerator = if ($env:CMAKE_GENERATOR) { $env:CMAKE_GENERATOR } else { "Visual Studio 17 2022" }
     $CMakeArch = if ($env:CMAKE_ARCH) { $env:CMAKE_ARCH } else { "x64" }
+    if (-not (Test-Path $CoreCache)) {
+        New-Item -ItemType Directory -Force -Path $CoreRoot | Out-Null
+        $ConfigureArgs = @(
+            "-S", (Join-Path $RootDir "core"),
+            "-B", $CoreRoot,
+            "-G", $CMakeGenerator,
+            "-DCMAKE_BUILD_TYPE=Release",
+            "-DBUILD_TESTS=OFF",
+            "-DWITH_DOCS=OFF",
+            "-DWITH_TLS=ON",
+            "-DBUILD_BENCHMARKS=ON",
+            "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON"
+        )
+        if ($CMakeGenerator -like "Visual Studio*") {
+            $ConfigureArgs += @("-A", $CMakeArch)
+        }
+        Write-Host "Configuring core runtime: $CoreRoot"
+        & cmake @ConfigureArgs
+        if ($LASTEXITCODE -ne 0) {
+            throw "Core CMake configuration failed."
+        }
+    }
 
-    Write-Host "Configuring CMake..."
+    Write-Host "Building core runtime: $CoreRoot"
+    & cmake --build $CoreRoot --config Release
+    if ($LASTEXITCODE -ne 0) {
+        throw "Core runtime build failed."
+    }
+}
 
+function Prepare-CoreRuntime {
+    param([string]$CoreRoot)
+
+    $Runtime = Resolve-CoreRuntime -CoreRoot $CoreRoot
+    $NeedsBuild = -not $Runtime
+    if ($Runtime) {
+        $RuntimeItem = Get-Item -LiteralPath $Runtime
+        $NewerSource = Get-ChildItem -Path (Join-Path $RootDir "core\src"), (Join-Path $RootDir "core\include") -Recurse -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.LastWriteTimeUtc -gt $RuntimeItem.LastWriteTimeUtc } |
+            Select-Object -First 1
+        if ($NewerSource) {
+            $NeedsBuild = $true
+            Write-Host "Core runtime is older than source: $($NewerSource.FullName)"
+        }
+    }
+    if ($NeedsBuild) {
+        Invoke-CoreRuntimeBuild -CoreRoot $CoreRoot
+        $Runtime = Resolve-CoreRuntime -CoreRoot $CoreRoot
+        if (-not $Runtime) {
+            throw "Core runtime zlink.dll was not found after build: $CoreRoot"
+        }
+    }
+    Write-Host "Perf core build dir: $CoreRoot"
+    Write-Host "Perf runtime zlink.dll: $Runtime"
+    return $Runtime
+}
+
+function Resolve-SingleBuildTargets {
+    param([string[]]$Patterns)
+
+    $TargetMap = @{
+        "PAIR" = @("perf_pair")
+        "PUBSUB" = @("perf_pubsub")
+        "DEALER_DEALER" = @("perf_dealer_dealer")
+        "DEALER_ROUTER" = @("perf_dealer_router")
+        "DEALER_ROUTER_REQREP" = @("perf_dealer_router_reqrep")
+        "ROUTER_ROUTER" = @("perf_router_router")
+        "ROUTER_ROUTER_REQREP" = @("perf_router_router_reqrep")
+    }
+    $Targets = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($PatternName in $Patterns) {
+        foreach ($TargetName in $TargetMap[$PatternName]) {
+            if (-not $Targets.Contains($TargetName)) {
+                $Targets.Add($TargetName)
+            }
+        }
+    }
+    return @($Targets.ToArray())
+}
+
+$CoreBuildDir = Resolve-ConfiguredCoreBuildDir -BuildRoot $BuildDir
+Prepare-CoreRuntime -CoreRoot $CoreBuildDir | Out-Null
+
+if ($BuildMode -eq "clean" -and (Test-Path $BuildDir)) {
+    Write-Host "Cleaning build directory: $BuildDir"
+    Remove-Item -LiteralPath $BuildDir -Recurse -Force
+}
+
+if ($BuildMode -ne "reuse") {
+    $CacheFile = Join-Path $BuildDir "CMakeCache.txt"
+    if (Test-Path $CacheFile) {
+        $CacheSource = Get-Content -LiteralPath $CacheFile |
+            Select-String -Pattern '^CMAKE_HOME_DIRECTORY:INTERNAL=' |
+            Select-Object -First 1
+        if ($CacheSource) {
+            $ConfiguredSource = [System.IO.Path]::GetFullPath(
+                $CacheSource.Line.Substring($CacheSource.Line.IndexOf('=') + 1).Trim()
+            )
+            if (-not $ConfiguredSource.Equals($CMakeSourceDir, [System.StringComparison]::OrdinalIgnoreCase)) {
+                Write-Host "Build cache source mismatch detected; resetting: $BuildDir"
+                Remove-Item -LiteralPath $BuildDir -Recurse -Force
+            }
+        }
+    }
+
+    New-Item -ItemType Directory -Force -Path $BuildDir | Out-Null
+    $CMakeGenerator = if ($env:CMAKE_GENERATOR) { $env:CMAKE_GENERATOR } else { "Visual Studio 17 2022" }
+    $CMakeArch = if ($env:CMAKE_ARCH) { $env:CMAKE_ARCH } else { "x64" }
     $CMakeArgs = @(
-        "-S", "$RootDir",
-        "-B", "$BuildDir",
-        "-G", "$CMakeGenerator",
-        "-A", "$CMakeArch",
+        "-S", $CMakeSourceDir,
+        "-B", $BuildDir,
+        "-G", $CMakeGenerator,
         "-DCMAKE_BUILD_TYPE=Release",
-        "-DBUILD_BENCHMARKS=ON",
-        "-DZLINK_BUILD_TESTS=OFF",
-        "-DZLINK_BUILD_BENCH_ZMQ=OFF",
-        "-DZLINK_BUILD_BENCH_ZLINK=ON",
-        "-DZLINK_BUILD_BENCH_BEAST=OFF",
-        "-DZLINK_BUILD_BENCH_STREAMCOMPARE=OFF",
-        "-DZLINK_BUILD_BENCH_ROUTER_COMPARE=OFF",
-        "-DZLINK_CXX_STANDARD=17"
+        "-DENABLE_LTO=OFF",
+        "-DZLINK_CORE_DIR=$RootDir\core",
+        "-DZLINK_C_CORE_BUILD_DIR=$CoreBuildDir",
+        "-DZLINK_C_BUILD_BENCHMARKS=ON",
+        "-DZLINK_C_BUILD_SAMPLES=OFF"
     )
+    if ($env:OPENSSL_ROOT_DIR) {
+        $CMakeArgs += @("-DOPENSSL_ROOT_DIR=$env:OPENSSL_ROOT_DIR", "-DCMAKE_PREFIX_PATH=$env:OPENSSL_ROOT_DIR")
+    }
+    if ($CMakeGenerator -like "Visual Studio*") {
+        $CMakeArgs += @("-A", $CMakeArch)
+    }
 
+    Write-Host "Using CMake source directory: $CMakeSourceDir"
+    Write-Host "Using core build directory: $CoreBuildDir"
     & cmake @CMakeArgs
     if ($LASTEXITCODE -ne 0) {
-        throw "CMake configuration failed"
+        throw "CMake configuration failed."
     }
 
-    Write-Host "Building..."
-    & cmake --build $BuildDir --config Release
-    if ($LASTEXITCODE -ne 0) {
-        throw "Build failed"
+    $BuildTargets = @(Resolve-SingleBuildTargets -Patterns $PatternList)
+    if ($BuildTargets.Count -eq 0) {
+        throw "No benchmark build targets resolved for the selected patterns."
     }
+    Write-Host ("Building benchmark targets: " + ($BuildTargets -join ", "))
+    & cmake --build $BuildDir --config Release --target $BuildTargets
+    if ($LASTEXITCODE -ne 0) {
+        throw "Benchmark build failed."
+    }
+} else {
+    Write-Host "Reusing build directory: $BuildDir"
 }
 
 function Resolve-PythonExecutable {
@@ -374,6 +532,16 @@ if ($Sndtimeo -notmatch '^\d+$' -or [int]$Sndtimeo -lt 1) {
 if ($Rcvtimeo -notmatch '^\d+$' -or [int]$Rcvtimeo -lt 1) {
     throw "Rcvtimeo must be a positive integer."
 }
+$AllowManualSocketOverrides = if ($env:PERF_SINGLE_ALLOW_MANUAL_SOCKET_OVERRIDES) {
+    $env:PERF_SINGLE_ALLOW_MANUAL_SOCKET_OVERRIDES
+} elseif ($env:PERF_ALLOW_MANUAL_SOCKET_OVERRIDES) {
+    $env:PERF_ALLOW_MANUAL_SOCKET_OVERRIDES
+} else {
+    "0"
+}
+if (($Hwm -or $SendHwm -or $RecvHwm) -and $AllowManualSocketOverrides -ne "1") {
+    throw "manual HWM overrides are debug-only. Set PERF_SINGLE_ALLOW_MANUAL_SOCKET_OVERRIDES=1 first."
+}
 
 if ($IoThreads) {
     $RunEnv["PERF_IO_THREADS"] = $IoThreads
@@ -402,11 +570,20 @@ if ($RecvHwm) {
 }
 $RunEnv["PERF_SINGLE_SNDTIMEO_MS"] = $Sndtimeo
 $RunEnv["PERF_SINGLE_RCVTIMEO_MS"] = $Rcvtimeo
+$RunEnv["PERF_CTX_AUTO_HWM_ENABLE"] = $CtxAutoHwmEnable
+$RunEnv["PERF_CTX_AUTO_HWM_PROFILE"] = $AutoHwmProfile
+$RunEnv["PYTHONUNBUFFERED"] = "1"
+if ($AllowManualSocketOverrides -eq "1") {
+    $RunEnv["PERF_SINGLE_ALLOW_MANUAL_SOCKET_OVERRIDES"] = "1"
+}
 if ($PinCpu) {
     $RunEnv["PERF_TASKSET"] = "1"
 }
-if ($UseReuseBuild) {
+if ($BuildMode -eq "reuse") {
     $RunEnv["PERF_NO_AUTOBUILD"] = "1"
+}
+if ($FullMatrixRequest) {
+    $RunEnv["PERF_FULL_MATRIX"] = "1"
 }
 
 function Get-ValueOrDefault {
@@ -428,7 +605,6 @@ function Show-EffectiveOption {
     Write-Host ("- {0}: {1}" -f $Key, $Value)
 }
 
-$BuildMode = if ($UseReuseBuild) { "reuse" } else { "clean" }
 $EffectiveSendHwm = if ($SendHwm) { $SendHwm } elseif ($Hwm) { $Hwm } else { "" }
 $EffectiveRecvHwm = if ($RecvHwm) { $RecvHwm } elseif ($Hwm) { $Hwm } else { "" }
 $EffectiveIoThreads = if ($IoThreads) { $IoThreads } else { "default(binary=1)" }
@@ -438,8 +614,8 @@ Write-Host "## Effective Options (runner)"
 Show-EffectiveOption "pattern" $Pattern
 Show-EffectiveOption "build_dir" $BuildDir
 Show-EffectiveOption "build_mode" $BuildMode
-Show-EffectiveOption "reuse_build" $(if ($UseReuseBuild) { "1" } else { "0" })
-Show-EffectiveOption "clean_build" $(if ($UseReuseBuild) { "0" } else { "1" })
+Show-EffectiveOption "reuse_build" $(if ($BuildMode -eq "reuse") { "1" } else { "0" })
+Show-EffectiveOption "clean_build" $(if ($BuildMode -eq "clean") { "1" } else { "0" })
 Show-EffectiveOption "runs" $Runs.ToString()
 Show-EffectiveOption "duration_seconds" $Duration
 Show-EffectiveOption "hwm" (Get-ValueOrDefault -Value $Hwm -DefaultValue "default(binary)")
@@ -466,8 +642,10 @@ Write-Host ""
 Write-Host "Running benchmarks..."
 Write-Host ""
 
+$PreviousEnv = @{}
 foreach ($key in $RunEnv.Keys) {
-    Set-Item -Path "env:$key" -Value $RunEnv[$key]
+    $PreviousEnv[$key] = [Environment]::GetEnvironmentVariable($key, "Process")
+    [Environment]::SetEnvironmentVariable($key, $RunEnv[$key], "Process")
 }
 
 try {
@@ -483,7 +661,7 @@ try {
     $ExitCode = $LASTEXITCODE
 } finally {
     foreach ($key in $RunEnv.Keys) {
-        Remove-Item -Path "env:$key" -ErrorAction SilentlyContinue
+        [Environment]::SetEnvironmentVariable($key, $PreviousEnv[$key], "Process")
     }
 }
 

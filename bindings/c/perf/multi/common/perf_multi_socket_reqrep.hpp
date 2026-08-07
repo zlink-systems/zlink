@@ -542,7 +542,10 @@ inline bool run_server_loop (void *server,
     size_t active_msg_size = 0;
     while (!perf_stop_requested ().load (std::memory_order_acquire)) {
         zlink_pollitem_t item = {server, 0, ZLINK_POLLIN, 0};
-        const int poll_rc = perf_socket_poll (&item, 1, -1);
+        // The stdin watcher sets perf_stop_requested(), but a forever poll
+        // would not observe that flag after the last request is complete.
+        // Use the common auxiliary wait so STOP can finish the server cleanly.
+        const int poll_rc = perf_socket_poll (&item, 1, perf_aux_poll_wait_ms ());
         if (poll_rc < 0) {
             if (zlink_errno () == EINTR)
                 continue;

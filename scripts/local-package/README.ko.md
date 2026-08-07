@@ -56,6 +56,41 @@ Go의 public module path는 `zlink.systems/zlink`이며, release version과
 import path를 분리한다. 모든 binding package는 Core provenance에 기록된
 `0.10.0` runtime과 public header를 사용한다.
 
+## Windows native 검증
+
+`build-wsl.sh`와 그 아래의 `build-*.sh`는 기존 Linux local package 생성 경로이며
+Windows PowerShell에서 실행하는 통합 build script가 아니다. Windows native 성능 검증은
+`core/build/windows-x64/install/`에 설치한 MSVC Core runtime을 기준으로 각 binding의
+Windows package 입력과 public consumer를 확인한다. Windows 작업에서 WSL 출력과
+Windows 출력을 서로 바꾸어 사용하지 않는다.
+
+공통 Windows Core build 조건은 `.github/workflows/build.yml`의 Windows x64 job과 맞춘다.
+즉 Visual Studio 17 2022 x64 generator에서 `Release`, `BUILD_SHARED=ON`,
+`BUILD_STATIC=ON`, `BUILD_TESTS=OFF`, C++17을 사용하고, `ENABLE_LTO`는 기본값을
+유지한다. 이 조건의 표준 runtime은 MSVC dynamic CRT(`/MD`)이며, 결과는
+`core/build/windows-x64/install/`에 설치한다.
+
+Java 22 FFM에서 JDK가 먼저 로드한 `msvcp140.dll`과 `/MD` Core의 C++ runtime이
+충돌하는 환경에서는 Java 검증용 `/MT` Core를 별도 build directory로 만든다. 이
+variant를 공통 CI runtime이나 다른 binding의 staged runtime과 섞지 않으며, Java
+계획 문서에서 별도 증적으로 기록한다.
+
+Windows package 입력과 결과는 다음 경로를 사용한다.
+
+- .NET: `ZLinkWindowsX64NativeRoot=core/build/windows-x64/install/bin`, 결과는
+  `.artifacts/windows/dotnet/package/`
+- C++: `core/build/windows-x64/install/`와 CMake install 결과
+  `.artifacts/windows/cpp/package/`
+- Go: `bindings/go/native/windows-x86_64/`, 결과는 `.artifacts/windows/go/package/`
+- Java: `core/build/windows-x64/install/bin/zlink.dll`을 사용하는 version-only consumer
+- Node.js: `bindings/node/prebuilds/win32-x64/`, 결과는 `.artifacts/windows/node/package/`
+- Python: wheel의 `native/windows-x86_64/zlink.dll`, 결과는 `.artifacts/windows/python/wheel/`
+- Rust: crate의 `native/windows-x86_64/`, 결과는 `.artifacts/windows/rust/`
+
+Windows native package 생성 절차를 통합할 때는 이 경로와 언어별 version pinning을 함께
+갱신한다. 현재 Windows 성능 실행 결과의 상태와 실패 원인은
+`doc/perf/perf/core-0.10.0/` 아래의 개별 measurement sheet와 `log/`가 소유한다.
+
 ## Core runtime 동기화
 
 `native/sync-local-core-libs.sh`는 `core/build/lib`의 현재 `0.10.0` runtime과

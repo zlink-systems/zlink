@@ -334,12 +334,15 @@ bool send_router_stop_token (void *sender_, const zlink_routing_id_t *target_rid
 {
     if (!sender_ || !target_rid_)
         return false;
-    for (int retry = 0; retry < 100; ++retry) {
+    const auto deadline =
+      std::chrono::steady_clock::now ()
+      + std::chrono::milliseconds (resolve_single_stop_retry_timeout_ms ());
+    while (std::chrono::steady_clock::now () < deadline) {
         zlink_msg_t part;
         if (zlink_msg_init_size (&part, std::strlen (k_stop_token)) != 0)
             return false;
         std::memcpy (zlink_msg_data (&part), k_stop_token, std::strlen (k_stop_token));
-        if (perf_zlink_send_rid_parts (sender_, target_rid_, &part, 1, ZLINK_SEND_FLAGS_NONE) == 0)
+        if (perf_zlink_send_rid_parts (sender_, target_rid_, &part, 1, ZLINK_DONTWAIT) == 0)
             return true;
         const int err = zlink_errno ();
         zlink_msg_close (&part);
@@ -378,14 +381,17 @@ bool send_router_samples (void *sender_,
             std::memcpy (zlink_msg_data (&part), payload_->data (), payload_->size ());
 
         if (perf_zlink_send_rid_parts (sender_, &state_->target_rid, &part, 1,
-                                       ZLINK_SEND_FLAGS_NONE)
+                                       ZLINK_DONTWAIT)
             != 0) {
             const int err = zlink_errno ();
             if (bench_debug_enabled ()) {
                 std::cerr << "[perf-router-router] send failed err=" << err << std::endl;
             }
-            if (err == EINTR || err == EAGAIN || err == EHOSTUNREACH || err == ENOTCONN)
+            if (err == EINTR || err == EAGAIN || err == EWOULDBLOCK || err == ETIMEDOUT
+                || err == EHOSTUNREACH || err == ENOTCONN) {
+                std::this_thread::sleep_for (std::chrono::milliseconds (1));
                 continue;
+            }
             return false;
         }
 
@@ -512,11 +518,18 @@ bool run_active_phase (void *sender_,
         sender_ok.store (active_ok && stop_ok, std::memory_order_release);
     });
 
+#ifdef _WIN32
+      // Keep the Windows receive path nonblocking so timeout handling does not
+      // leave the receiver stuck after the sender has emitted the stop token.
+      const int recv_flags = ZLINK_RECV_FLAGS_DONTWAIT;
+#else
+      const int recv_flags = 0;
+#endif
     while (true) {
         perf_single_metric::header_t header;
         bool header_ok = false;
         const int recv_rc =
-          recv_router_router_header_flags (receiver_, state_->payload_size, 0, &header, &header_ok);
+          recv_router_router_header_flags (receiver_, state_->payload_size, recv_flags, &header, &header_ok);
         if (recv_rc == 1) {
             if (header_ok && single_header_matches_run (*state_, header)) {
                 ++received;
@@ -524,8 +537,12 @@ bool run_active_phase (void *sender_,
             }
             continue;
         }
-        if (recv_rc == 0)
+        if (recv_rc == 0) {
+#ifdef _WIN32
+            perf_idle_wait_ms (1);
+#endif
             continue;
+        }
         if (recv_rc == 2)
             break;
         sender_ok.store (false, std::memory_order_release);

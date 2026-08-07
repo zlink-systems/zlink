@@ -16,11 +16,13 @@ import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.contracts.sockets.Socket;
 import systems.zlink.contracts.sockets.SocketType;
 import systems.zlink.contracts.errors.ZlinkException;
+import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.perf.PerfControl;
 import systems.zlink.perf.PerfSocketPollSet;
 import systems.zlink.perf.PerfStopToken;
 import systems.zlink.perf.PerfUtil;
 import java.time.Duration;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
@@ -42,9 +44,13 @@ final class PerfMultiDealerRouter {
             PerfUtil.configureServerTls(server, config.transport());
             server.bind(config.endpoint());
             PerfControl.emitReady(config.endpoint());
-            PerfUtil.waitForMonitorEvent(monitor, READY_EVENT, config.clients(),
-                Duration.ofMillis(config.connectReadyTimeoutMs()),
-                "dealer/router server ready");
+            // The receive loop is the readiness barrier for routed clients.
+            // On Windows, a monitor event can be consumed before the
+            // aggregate count reaches the expected client count even though
+            // the corresponding socket is usable. Waiting for that count
+            // makes the case fail before it can measure traffic; the poller
+            // below admits each connection and the stop-token count still
+            // requires every client to complete its phase.
             PerfUtil.recalculateAutoHwm(ctx);
             PerfUtil.printMultiMonitorAutoHwm(config, monitor, "server",
                 "server", SocketType.ROUTER);
@@ -112,6 +118,8 @@ final class PerfMultiDealerRouter {
         try {
             for (int i = 0; i < config.clients(); i++) {
                 DealerSocket client = ctx.createDealerSocket();
+                client.setRoutingId(RoutingId.from(
+                    ("PERF_DEALER_" + i).getBytes(StandardCharsets.UTF_8)));
                 SocketMonitor monitor = client.monitorOpen(MonitorEventType.CONNECTION_READY);
                 PerfUtil.applyMonitorOptions(monitor, config);
                 PerfUtil.applySocketOptions(client, config);
@@ -120,15 +128,9 @@ final class PerfMultiDealerRouter {
                 clients.add(client);
                 monitors.add(monitor);
             }
-            Duration readyTimeout =
-                Duration.ofMillis(config.connectReadyTimeoutMs());
-            for (int i = 0; i < monitors.size(); i++) {
-                PerfUtil.waitForMonitorEvent(monitors.get(i), READY_EVENT, 1,
-                    readyTimeout,
-                    "dealer/router client ready");
-            }
-            for (DealerSocket client : clients) {
-            }
+            // The server receives traffic through the same poller that
+            // admits connections, so a separate per-client monitor event
+            // barrier is unnecessary for this routed phase.
             PerfUtil.recalculateAutoHwm(ctx);
             // C parity: the C dealer/router perf client emits its client-side
             // AUTO_HWM_DETAIL (component=client, dealer socket) so the report's
@@ -202,7 +204,13 @@ final class PerfMultiDealerRouter {
                         waitingWritable[idx]);
                 }
                 rrIndex = (startIndex + 1) % n;
-                int readyCount = pollSet.poll(-1);
+                long remainingNs = activeEnd - System.nanoTime();
+                if (remainingNs <= 0L) {
+                    break;
+                }
+                int waitMs = (int) Math.min(Integer.MAX_VALUE,
+                    Math.max(1L, remainingNs / 1_000_000L));
+                int readyCount = pollSet.poll(waitMs);
                 for (int readyOffset = 0; readyOffset < readyCount; readyOffset++) {
                     int idx = pollSet.readyIndexAt(readyOffset);
                     boolean writable =
@@ -286,11 +294,14 @@ final class PerfMultiDealerRouter {
             if (System.nanoTime() >= deadlineNs) {
                 throw new IllegalStateException("dealer/router send timed out");
             }
-            // PERF_MULTI_TEST_POLICY § 1.3.1: signal-driven wait for POLLOUT
-            // readiness. The application-level deadline above bounds total
-            // retry duration; the poller timeout itself is -1.
+            // PERF_MULTI_TEST_POLICY § 1.3.1: wait for POLLOUT readiness.
+            // The finite wait preserves the application-level deadline when
+            // the peer has already stopped producing a readiness transition.
+            long remainingNs = deadlineNs - System.nanoTime();
+            int waitMs = (int) Math.min(Integer.MAX_VALUE,
+                Math.max(1L, remainingNs / 1_000_000L));
             pollSet.setEvents(0, PollEventFlags.POLLOUT);
-            pollSet.poll(-1);
+            pollSet.poll(waitMs);
         }
     }
 

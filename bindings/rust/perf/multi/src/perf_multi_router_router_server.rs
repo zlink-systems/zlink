@@ -90,7 +90,9 @@ fn main() {
                 .expect("poller modify");
             want_pollout = !pending.is_empty();
         }
-        match poller.wait(&mut events, -1) {
+        // Bound the idle wait so the control thread's STOP/QUIT request can
+        // terminate the server even when no request is queued.
+        match poller.wait(&mut events, 100) {
             Ok(_) => {}
             Err(err) => panic!("poller wait failed: {err}"),
         }

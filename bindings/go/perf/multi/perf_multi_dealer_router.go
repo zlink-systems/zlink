@@ -31,10 +31,14 @@ func runMultiDealerRouterServer(cfg multiConfig) {
 	flushControlLine("READY,%s", endpoint)
 
 	serverDone := make(chan struct{})
-	go startMultiRouterRouterEchoServer(router, serverDone)
+	stopSignal := waitForStopAsync()
+	go startMultiRouterRouterEchoServer(router, stopSignal, serverDone)
 	select {
 	case <-serverDone:
-	case <-waitForStopAsync():
+	case <-stopSignal:
+		// The echo loop observes the same control signal and leaves its poller
+		// before the deferred socket/context close runs.
+		<-serverDone
 	}
 }
 
@@ -63,8 +67,10 @@ func runMultiDealerRouterClient(cfg multiConfig, endpoint string) perfcommon.Res
 		rid := zlink.NewRoutingID([]byte(fmt.Sprintf("dealer-%06d", i)))
 		perfcommon.Must(dealer.SetRoutingID(rid))
 		perfcommon.Must(dealer.Connect(endpoint))
-		perfcommon.WaitConnectedWithTimeout(perfcommon.MultiReadyTimeout(), dealerMon)
 		dealers = append(dealers, dealerRouterClient{socket: dealer, monitor: dealerMon})
+	}
+	for _, dealer := range dealers {
+		perfcommon.WaitConnectedWithTimeout(perfcommon.MultiReadyTimeout(), dealer.monitor)
 	}
 	defer func() {
 		for _, dealer := range dealers {

@@ -1,4 +1,5 @@
 import ctypes
+import os
 from pathlib import Path
 
 from zlink._native import _zlink_native
@@ -22,7 +23,8 @@ def test_ffi_layouts_are_the_core_11_layouts():
     assert (ctypes.sizeof(ZlinkRoutingId), ctypes.alignment(ZlinkRoutingId)) == (256, 1)
     assert (ctypes.sizeof(ZlinkMonitorStatus), ctypes.alignment(ZlinkMonitorStatus)) == (232, 8)
     assert (ctypes.sizeof(ZlinkSocketMonitorOpenOptions), ctypes.alignment(ZlinkSocketMonitorOpenOptions)) == (4, 4)
-    assert (ctypes.sizeof(ZlinkPollItem), ctypes.alignment(ZlinkPollItem)) == (16, 8)
+    expected_poll_item = (24, 8) if os.name == "nt" else (16, 8)
+    assert (ctypes.sizeof(ZlinkPollItem), ctypes.alignment(ZlinkPollItem)) == expected_poll_item
     assert (ctypes.sizeof(ZlinkPollerEvent), ctypes.alignment(ZlinkPollerEvent)) == (48, 8)
 
 
@@ -76,27 +78,31 @@ def test_native_source_contains_no_service_ffi_or_repository_fallback():
     )
 
 
-def test_package_platform_policy_is_explicit_linux_x86_64_only():
+def test_package_platform_policy_is_explicit_for_supported_native_targets():
     setup_text = (ROOT / "setup.py").read_text(encoding="utf-8")
     loader_text = (SRC / "_native" / "_native_loader.py").read_text(encoding="utf-8")
-    assert 'SUPPORTED_PLATFORM = "linux-x86_64"' in setup_text
-    assert 'SUPPORTED_PLATFORM = "linux-x86_64"' in loader_text
-    assert "windows-x86_64" not in setup_text
+    assert "linux-x86_64" in setup_text
+    assert "windows-x86_64" in setup_text
+    assert "linux-x86_64" in loader_text
+    assert "windows-x86_64" in loader_text
     assert "darwin-x86_64" not in setup_text
     assert "linux-aarch64" not in setup_text
-    assert "_prepare_windows_runtime" not in loader_text
     assert "libzlink.dylib" not in loader_text
     assert 'f"native/{platform_dir}/*"' not in setup_text
     native_root = SRC / "native"
-    assert {
+    payloads = {
         path.relative_to(native_root).as_posix()
         for path in native_root.rglob("*")
         if path.is_file() or path.is_symlink()
-    } == {
-        "linux-x86_64/libzlink.so",
-        "linux-x86_64/libzlink.so.0",
-        "linux-x86_64/libzlink.so.0.10.0",
     }
+    if os.name == "nt":
+        assert "windows-x86_64/zlink.dll" in payloads
+    else:
+        assert {
+            "linux-x86_64/libzlink.so",
+            "linux-x86_64/libzlink.so.0",
+            "linux-x86_64/libzlink.so.0.10.0",
+        }.issubset(payloads)
 
 
 def test_raw_core_symbol_binding_is_present_and_removed_symbols_are_absent():

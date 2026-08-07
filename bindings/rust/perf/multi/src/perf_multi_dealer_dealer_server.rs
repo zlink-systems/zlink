@@ -82,9 +82,14 @@ fn main() {
     };
 
     'outer: loop {
-        match poller.wait(&mut events, -1) {
+        let remaining_ms = deadline
+            .saturating_duration_since(Instant::now())
+            .as_millis()
+            .max(1) as i64;
+        match poller.wait(&mut events, remaining_ms) {
             Ok(n) if n > 0 && events[0].is_readable() => {}
-            Ok(_) => continue,
+            Ok(_) if Instant::now() < deadline => continue,
+            Ok(_) => break 'outer,
             Err(err) => panic!("poller wait failed: {err}"),
         }
         // Drain everything currently queued without blocking.

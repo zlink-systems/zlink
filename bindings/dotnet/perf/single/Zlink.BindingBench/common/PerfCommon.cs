@@ -218,18 +218,23 @@ internal static partial class PerfRunner
         }
     }
 
-    // PERF_SINGLE_TEST_POLICY § 1.4: send the wire-level stop token with a
-    // bounded retry through transient backpressure so the receiver exits when
-    // it observes the token.
+    // PERF_SINGLE_TEST_POLICY § 1.4: send the wire-level stop token through
+    // the socket's writable signal. The stop path must not turn a full queue
+    // into an unbounded blocking native call after the active window ends.
     internal static bool SendStopTokenBlocking(IMessageSocket sender, string tag)
     {
-        for (int retry = 0; retry < 100; retry++)
+        using var poller = Zlink.CreatePoller();
+        var events = new PollEvent[1];
+        poller.Add(sender, PollEventFlags.PollOut, 0);
+        long deadlineTicks = DeadlineTicksFromMilliseconds(
+            ResolveStopTokenTimeoutMs());
+
+        while (Stopwatch.GetTimestamp() < deadlineTicks)
         {
             try
             {
-                sender.Options.SendTimeout = null;
                 if (PerfSocketIo.Send(sender, StopToken.Bytes,
-                        SendFlags.None) > 0)
+                        SendFlags.DontWait) > 0)
                     return true;
             }
             catch (ZlinkException ex)
@@ -244,7 +249,19 @@ internal static partial class PerfRunner
                 return false;
             }
 
-            Thread.Sleep(1);
+            int waitMs = RemainingMilliseconds(deadlineTicks);
+            if (waitMs <= 0)
+                break;
+            try
+            {
+                _ = poller.Wait(events, TimeSpan.FromMilliseconds(waitMs));
+            }
+            catch (ZlinkException ex)
+                when (PerfShared.IsTransientBackpressure(ex.NativeErrno)
+                      || PerfShared.IsTransientNetworkError(ex.NativeErrno)
+                      || IsInterrupted(ex.NativeErrno))
+            {
+            }
         }
 
         Console.Error.WriteLine($"{tag} stop-token send failed");
@@ -254,17 +271,23 @@ internal static partial class PerfRunner
     internal static bool SendRoutedStopTokenBlocking(IRoutedMessageSocket sender,
         RoutingId routingId, string tag)
     {
-        for (int retry = 0; retry < 5000; retry++)
+        using var poller = Zlink.CreatePoller();
+        var events = new PollEvent[1];
+        poller.Add(sender, PollEventFlags.PollOut, 0);
+        long deadlineTicks = DeadlineTicksFromMilliseconds(
+            ResolveStopTokenTimeoutMs());
+
+        while (Stopwatch.GetTimestamp() < deadlineTicks)
         {
             try
             {
-                sender.Options.SendTimeout = null;
                 if (PerfSocketIo.Send(sender, routingId, StopToken.Bytes,
-                        SendFlags.None) > 0)
+                        SendFlags.DontWait) > 0)
                     return true;
             }
             catch (ZlinkException ex)
-                when (PerfShared.IsTransientBackpressure(ex.NativeErrno))
+                when (PerfShared.IsTransientBackpressure(ex.NativeErrno)
+                      || PerfShared.IsTransientNetworkError(ex.NativeErrno))
             {
             }
             catch (Exception ex)
@@ -274,11 +297,39 @@ internal static partial class PerfRunner
                 return false;
             }
 
-            Thread.Sleep(1);
+            int waitMs = RemainingMilliseconds(deadlineTicks);
+            if (waitMs <= 0)
+                break;
+            try
+            {
+                _ = poller.Wait(events, TimeSpan.FromMilliseconds(waitMs));
+            }
+            catch (ZlinkException ex)
+                when (PerfShared.IsTransientBackpressure(ex.NativeErrno)
+                      || PerfShared.IsTransientNetworkError(ex.NativeErrno)
+                      || IsInterrupted(ex.NativeErrno))
+            {
+            }
         }
 
         Console.Error.WriteLine($"{tag} stop-token send failed");
         return false;
+    }
+
+    private static int ResolveStopTokenTimeoutMs()
+    {
+        return PerfEnv.ReadPositive("PERF_SINGLE_STOP_TIMEOUT_MS", 10000);
+    }
+
+    private static int RemainingMilliseconds(long deadlineTicks)
+    {
+        long remainingTicks = deadlineTicks - Stopwatch.GetTimestamp();
+        if (remainingTicks <= 0)
+            return 0;
+
+        long remainingMs = (remainingTicks * 1000L
+            + Stopwatch.Frequency - 1) / Stopwatch.Frequency;
+        return remainingMs > int.MaxValue ? int.MaxValue : (int)remainingMs;
     }
 
     internal static void PublishStopTokenBlocking(IPublisherSocket sender,

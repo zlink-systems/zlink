@@ -1,0 +1,5 @@
+{
+  "dependencies": {
+    "@zlink-systems/zlink": "file:.artifacts/windows/node/package/zlink-systems-zlink-0.10.0.tgz"
+  }
+}

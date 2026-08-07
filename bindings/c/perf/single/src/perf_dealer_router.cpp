@@ -154,7 +154,10 @@ int recv_router_header_flags (void *router_,
 // through transient backpressure.
 bool send_dealer_stop_token (void *sender_)
 {
-    for (int retry = 0; retry < 100; ++retry) {
+    const auto deadline =
+      std::chrono::steady_clock::now ()
+      + std::chrono::milliseconds (resolve_single_stop_retry_timeout_ms ());
+    while (std::chrono::steady_clock::now () < deadline) {
         zlink_msg_t part;
         if (zlink_msg_init_size (&part, std::strlen (k_stop_token)) != 0)
             return false;
@@ -201,8 +204,10 @@ bool send_dealer_samples (void *sender_,
             if (bench_debug_enabled ()) {
                 std::cerr << "[perf-dealer-router] send failed err=" << err << std::endl;
             }
-            if (err == EINTR || err == EAGAIN)
+            if (err == EINTR || err == EAGAIN || err == EWOULDBLOCK || err == ETIMEDOUT) {
+                std::this_thread::sleep_for (std::chrono::milliseconds (1));
                 continue;
+            }
             return false;
         }
 
@@ -327,11 +332,18 @@ bool run_active_phase (void *sender_,
     // Receiver: blocking recv, exit on stop-token receipt. Socket
     // recv_timeout still bounds individual recv calls; phase end is
     // signaled purely by the stop token arriving on the wire.
+#ifdef _WIN32
+      // Avoid the Windows blocking receive timeout path; the nonblocking loop
+      // still drains the socket and observes the wire stop token.
+      const int recv_flags = ZLINK_RECV_FLAGS_DONTWAIT;
+#else
+      const int recv_flags = 0;
+#endif
     while (true) {
         perf_single_metric::header_t header;
         bool header_ok = false;
         const int recv_rc =
-          recv_router_header_flags (receiver_, state_->payload_size, 0, &header, &header_ok);
+          recv_router_header_flags (receiver_, state_->payload_size, recv_flags, &header, &header_ok);
         if (recv_rc == 1) {
             if (header_ok && single_header_matches_run (*state_, header)) {
                 ++received;
@@ -339,8 +351,12 @@ bool run_active_phase (void *sender_,
             }
             continue;
         }
-        if (recv_rc == 0)
+        if (recv_rc == 0) {
+#ifdef _WIN32
+            perf_idle_wait_ms (1);
+#endif
             continue;
+        }
         if (recv_rc == 2)
             break;
         sender_ok.store (false, std::memory_order_release);

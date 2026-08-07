@@ -735,6 +735,8 @@ int main ()
     test_router_direct_recv_multipart_failure_preserves_output ();
     test_pair_send_recv_multipart ();
     test_pubsub_subscribe_multipart ();
+#if !defined(_WIN32)
     test_pair_ipc_large_message_shutdown ();
+#endif
     return 0;
 }

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Threading;
 using Systems.Zlink;
 using static PerfRunner;
@@ -117,8 +118,53 @@ internal static class PerfMultiStreamServer
 
     private static void StartControlWatcher(ControlState control)
     {
+        string controlFile = PerfEnv.ReadString("PERF_MULTI_CONTROL_FILE",
+            string.Empty);
         Thread watcher = new(() =>
         {
+            if (!string.IsNullOrWhiteSpace(controlFile))
+            {
+                string previous = string.Empty;
+                while (Volatile.Read(ref control.StopRequested) == 0)
+                {
+                    try
+                    {
+                        if (File.Exists(controlFile))
+                        {
+                            string contents = File.ReadAllText(controlFile);
+                            if (!string.Equals(contents, previous,
+                                    StringComparison.Ordinal))
+                            {
+                                previous = contents;
+                                foreach (string line in contents.Split(
+                                    new[] { '\r', '\n' },
+                                    StringSplitOptions.RemoveEmptyEntries))
+                                {
+                                    if (line.Trim().Equals("STOP",
+                                            StringComparison.OrdinalIgnoreCase)
+                                        || line.Trim().Equals("QUIT",
+                                            StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        Interlocked.Exchange(
+                                            ref control.StopRequested, 1);
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    catch (IOException)
+                    {
+                    }
+                    catch (UnauthorizedAccessException)
+                    {
+                    }
+
+                    Thread.Sleep(10);
+                }
+                return;
+            }
+
             try
             {
                 string? line;

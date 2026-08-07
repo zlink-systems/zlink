@@ -31,9 +31,24 @@ function(zlink_c_resolve_core_build_layout out_dir_var out_lib_var)
     return()
   endif()
 
-  set(_candidate_dirs
+  set(_candidate_dirs)
+  if(CMAKE_BUILD_TYPE)
+    list(APPEND _candidate_dirs
+      "${ZLINK_C_CORE_BUILD_DIR}/bin/${CMAKE_BUILD_TYPE}"
+      "${ZLINK_C_CORE_BUILD_DIR}/lib/${CMAKE_BUILD_TYPE}")
+  endif()
+  if(WIN32)
+    list(APPEND _candidate_dirs
+      "${ZLINK_C_CORE_BUILD_DIR}/bin/Release"
+      "${ZLINK_C_CORE_BUILD_DIR}/lib/Release")
+  endif()
+  list(APPEND _candidate_dirs
     "${ZLINK_C_CORE_BUILD_DIR}/lib"
     "${ZLINK_C_CORE_BUILD_DIR}/bin")
+  list(REMOVE_DUPLICATES _candidate_dirs)
+
+  unset(_core_lib CACHE)
+  unset(_core_lib)
   find_file(_core_lib
     NAMES "${_libname}"
     PATHS ${_candidate_dirs}
@@ -63,6 +78,29 @@ function(zlink_c_ensure_core_target out_target_var out_runtime_dir_var)
       set_target_properties(zlink-core-build-runtime PROPERTIES
         IMPORTED_LOCATION "${_core_lib}"
       )
+      if(WIN32)
+        set(_core_implib_dirs
+          "${ZLINK_C_CORE_BUILD_DIR}/lib/Release"
+          "${ZLINK_C_CORE_BUILD_DIR}/lib"
+          "${_core_dir}"
+          "${_core_dir}/../lib")
+        if(CMAKE_BUILD_TYPE)
+          list(INSERT _core_implib_dirs 0
+            "${ZLINK_C_CORE_BUILD_DIR}/lib/${CMAKE_BUILD_TYPE}")
+        endif()
+        list(REMOVE_DUPLICATES _core_implib_dirs)
+        unset(_core_implib CACHE)
+        unset(_core_implib)
+        find_file(_core_implib
+          NAMES zlink.lib libzlink.lib
+          PATHS ${_core_implib_dirs}
+          NO_DEFAULT_PATH)
+        if(_core_implib)
+          set_target_properties(zlink-core-build-runtime PROPERTIES
+            IMPORTED_IMPLIB "${_core_implib}"
+          )
+        endif()
+      endif()
     endif()
     set(${out_target_var} zlink-core-build-runtime PARENT_SCOPE)
     set(${out_runtime_dir_var} "${_core_dir}" PARENT_SCOPE)

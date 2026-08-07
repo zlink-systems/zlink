@@ -66,7 +66,7 @@ async function main() {
         await readyBarrier;
         while (!stop) {
             poller.modify(router, pollEvents(POLLIN | POLLOUT));
-            const ready = waitPollerOne(poller, pollBuffer, -1);
+            const ready = waitPollerOne(poller, pollBuffer, process.platform === 'win32' ? 50 : -1);
             if (!ready) {
                 continue;
             }

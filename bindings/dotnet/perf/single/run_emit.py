@@ -52,7 +52,6 @@ DEFAULT_PATTERNS = [
     "DEALER_ROUTER_REQREP",
     "ROUTER_ROUTER",
     "ROUTER_ROUTER_REQREP",
-    "SPOT",
 ]
 
 PATTERN_TO_BINARY = {
@@ -63,7 +62,6 @@ PATTERN_TO_BINARY = {
     "DEALER_ROUTER_REQREP": "Zlink.BindingBench",
     "ROUTER_ROUTER": "Zlink.BindingBench",
     "ROUTER_ROUTER_REQREP": "Zlink.BindingBench",
-    "SPOT": "Zlink.BindingBench",
 }
 
 DEFAULT_MSG_SIZES_STANDARD = [64, 256, 1024, 65536, 131072, 262144]
@@ -71,8 +69,7 @@ DEFAULT_MSG_SIZES_STREAM = [64, 256, 1024, 65536]
 DEFAULT_SOCKET_TRANSPORTS = ["tcp", "tls", "ws", "wss", "inproc"]
 if not IS_WINDOWS:
     DEFAULT_SOCKET_TRANSPORTS.append("ipc")
-DEFAULT_SPOT_TRANSPORTS = ["tcp", "tls", "ws", "wss"]
-STREAM_TRANSPORT_PATTERNS = {"SPOT"}
+STREAM_TRANSPORT_PATTERNS = set()
 STREAM_SIZE_PATTERNS = set()
 
 DEFAULT_RESULTS_DIR = os.path.join(PERF_DIR, "results")
@@ -871,11 +868,6 @@ def main() -> int:
         30,
         parse_env_int("PERF_SINGLE_DURATION_SECONDS", 5) * 6 + 15,
     )
-    if "SPOT" in patterns:
-        default_timeout_sec = max(
-            default_timeout_sec,
-            parse_env_int("PERF_SINGLE_DURATION_SECONDS", 5) * 12 + 60,
-        )
     timeout_sec = max(
         1,
         parse_env_int("PERF_SINGLE_TIMEOUT_SECONDS", default_timeout_sec),

@@ -104,7 +104,7 @@ async function main() {
                 await sleepMillis(50);
                 continue;
             }
-            const ready = waitPollerOne(poller, pollBuffer, -1);
+            const ready = waitPollerOne(poller, pollBuffer, process.platform === 'win32' ? 50 : -1);
             if (ready && pollEventHas(ready, POLLOUT)) {
                 drainPending(stream, pending);
             }

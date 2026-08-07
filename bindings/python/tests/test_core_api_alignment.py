@@ -1,5 +1,6 @@
 import ctypes
 import importlib.util
+import os
 import queue
 import time
 import unittest
@@ -217,8 +218,10 @@ class CoreApiAlignmentTests(unittest.TestCase):
             ),
             (4, 4),
         )
+        expected_poll_item = (24, 8) if os.name == "nt" else (16, 8)
         self.assertEqual(
-            (ctypes.sizeof(ZlinkPollItem), ctypes.alignment(ZlinkPollItem)), (16, 8)
+            (ctypes.sizeof(ZlinkPollItem), ctypes.alignment(ZlinkPollItem)),
+            expected_poll_item,
         )
         self.assertEqual(
             (ctypes.sizeof(ZlinkPollerEvent), ctypes.alignment(ZlinkPollerEvent)),

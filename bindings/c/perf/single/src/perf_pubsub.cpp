@@ -140,7 +140,7 @@ int send_pubsub_stop_token (void *publisher_)
     if (zlink_msg_init_size (&part, stop_token_size ()) != 0)
         return -1;
     std::memcpy (zlink_msg_data (&part), k_stop_token, stop_token_size ());
-    if (perf_zlink_publish_parts (publisher_, k_pubsub_topic, &part, 1, ZLINK_SEND_FLAGS_NONE) == 0)
+    if (perf_zlink_publish_parts (publisher_, k_pubsub_topic, &part, 1, ZLINK_DONTWAIT) == 0)
         return 0;
     const int err = zlink_errno ();
     zlink_msg_close (&part);
@@ -205,17 +205,17 @@ void run_pubsub (const std::string &transport, size_t msg_size, const std::strin
                                                                   active_state, seq)) {
                   return perf_single_one_way::send_step_fatal;
               }
-              // Single one-way uses blocking send and lets the socket HWM
-              // provide backpressure, as required by PERF_SINGLE_TEST_POLICY.
+              // Windows uses nonblocking send retries so the receiver can make progress
+              // while preserving the one-way workload and HWM backpressure policy.
               if (perf_zlink_publish_parts (publisher, k_pubsub_topic, &part, 1,
-                                            ZLINK_SEND_FLAGS_NONE)
+                                            ZLINK_DONTWAIT)
                   == 0) {
                   return perf_single_one_way::send_step_sent;
               }
 
               const int err = zlink_errno ();
               zlink_msg_close (&part);
-              if (err == EINTR)
+              if (err == EINTR || err == EAGAIN || err == EWOULDBLOCK || err == ETIMEDOUT)
                   return perf_single_one_way::send_step_retry;
               if (bench_debug_enabled ()) {
                   std::cerr << "[perf-pubsub] publish failed err=" << err << std::endl;

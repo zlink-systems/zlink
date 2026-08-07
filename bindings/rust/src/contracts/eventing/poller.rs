@@ -1,5 +1,8 @@
 use std::any::Any;
+#[cfg(unix)]
 use std::os::fd::RawFd;
+#[cfg(windows)]
+use std::os::windows::io::RawSocket as RawFd;
 use std::sync::Arc;
 
 use crate::error::{ConfigError, HandlerError, RecvError};

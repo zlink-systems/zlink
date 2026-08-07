@@ -1,5 +1,8 @@
 use std::ffi::c_void;
+#[cfg(unix)]
 use std::os::fd::RawFd;
+#[cfg(windows)]
+use std::os::windows::io::RawSocket as RawFd;
 use std::sync::{Arc, Weak};
 
 use crate::error::{ConfigError, HandlerError, RecvError};

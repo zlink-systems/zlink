@@ -109,15 +109,31 @@ static const char *server_key_pem =
 
 inline std::string write_temp_cert (const char *content, const std::string &suffix)
 {
-    std::string path = "/tmp/bench_" + suffix + ".pem";
 #if defined(_WIN32)
-    std::ofstream ofs (path.c_str ());
-    if (ofs) {
-        ofs << content;
-        ofs.close ();
-    }
+    char temp_dir[MAX_PATH] = {};
+    const DWORD temp_dir_length = GetTempPathA (sizeof (temp_dir), temp_dir);
+    if (temp_dir_length == 0 || temp_dir_length >= sizeof (temp_dir))
+        return std::string ();
+
+    std::string path (temp_dir, temp_dir_length);
+    if (!path.empty () && path[path.size () - 1] != '\\'
+        && path[path.size () - 1] != '/')
+        path += '\\';
+
+    // Each benchmark process owns its certificate file. This avoids a second
+    // process observing a partially rewritten PEM file during a multi run.
+    path += "zlink_perf_" + suffix + "_"
+            + std::to_string (static_cast<unsigned long> (GetCurrentProcessId ())) + ".pem";
+
+    std::ofstream ofs (path.c_str (), std::ios::out | std::ios::binary | std::ios::trunc);
+    if (!ofs)
+        return std::string ();
+    ofs << content;
+    if (!ofs)
+        return std::string ();
     return path;
 #else
+    std::string path = "/tmp/bench_" + suffix + ".pem";
     // Fork-based benchmarks prepare the same certificate in many child
     // processes. Publish a complete file atomically so a peer never reads a
     // path while another child has truncated it and is still writing.
@@ -175,6 +191,12 @@ inline bool setup_tls_server (void *socket, const std::string &transport)
     static std::string cert_path = write_temp_cert (perf_tls_certs::server_cert_pem, "server_cert");
     static std::string key_path = write_temp_cert (perf_tls_certs::server_key_pem, "server_key");
 
+    if (cert_path.empty () || key_path.empty ()) {
+        if (bench_debug_enabled ())
+            std::cerr << "Failed to write TLS server certificate files" << std::endl;
+        return false;
+    }
+
     if (zlink_set_tls_server (socket, cert_path.c_str (), key_path.c_str (), 0)
         == ZLINK_CONFIG_OK) {
         return true;
@@ -199,6 +221,12 @@ inline bool setup_tls_client (void *socket, const std::string &transport)
 
     static std::string ca_path = write_temp_cert (perf_tls_certs::ca_cert_pem, "ca_cert");
     static const char *hostname = "localhost";
+
+    if (ca_path.empty ()) {
+        if (bench_debug_enabled ())
+            std::cerr << "Failed to write TLS client CA file" << std::endl;
+        return false;
+    }
 
     if (zlink_set_tls_client (socket, ca_path.c_str (), hostname, 0) == ZLINK_CONFIG_OK)
         return true;

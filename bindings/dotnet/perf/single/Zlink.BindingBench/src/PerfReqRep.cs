@@ -490,7 +490,7 @@ internal static class PerfReqRep
                 if (++submittedSinceProgress >= 64)
                 {
                     submittedSinceProgress = 0;
-                    _ = progressPoller.Wait(events, TimeSpan.Zero);
+                    WaitForCompletion(progressPoller, events, 0);
                 }
             }
 
@@ -500,13 +500,13 @@ internal static class PerfReqRep
                 continue;
             }
 
-            _ = progressPoller.Wait(events, TimeSpan.FromMilliseconds(50));
+            WaitForCompletion(progressPoller, events, 50);
         }
 
         long drainStartTicks = Stopwatch.GetTimestamp();
         while (Volatile.Read(ref inFlight) > 0 && !HasCallbackError())
         {
-            _ = progressPoller.Wait(events, TimeSpan.FromMilliseconds(50));
+            WaitForCompletion(progressPoller, events, 50);
             if (Stopwatch.GetElapsedTime(drainStartTicks) > drainTimeout)
             {
                 DebugLog(
@@ -521,6 +521,23 @@ internal static class PerfReqRep
                 throw callbackError;
         }
         return (Volatile.Read(ref completed), samples);
+    }
+
+    private static void WaitForCompletion(IPoller poller,
+        Span<PollEvent> events, int timeoutMs)
+    {
+        // The Windows native completion poller can remain blocked after a
+        // completion notification race. Match the C perf workaround: poll
+        // without blocking, then yield briefly so the callback progresses.
+        if (OperatingSystem.IsWindows())
+        {
+            _ = poller.Wait(events, TimeSpan.Zero);
+            if (timeoutMs > 0)
+                Thread.Sleep(1);
+            return;
+        }
+
+        _ = poller.Wait(events, TimeSpan.FromMilliseconds(timeoutMs));
     }
 
     private static void RunReplyLoop(IRouterSocket server, ManualResetEventSlim stop,

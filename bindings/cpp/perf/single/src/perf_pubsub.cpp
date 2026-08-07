@@ -75,7 +75,10 @@ bool run_pattern_pubsub (const std::string &transport, size_t msg_size, const st
     }
 
     publisher.options ().no_drop (true);
-    (void) subscriber.set_subscription (std::string ());
+    const auto set_subscription =
+        static_cast<void (zlink::sub_socket_t::*)(
+            const std::string &)>(&zlink::sub_socket_t::set_subscription);
+    (subscriber.*set_subscription) (std::string ());
     if (!perf::single::apply_single_auto_hwm_msg_unit (ctx, msg_size)
         || !perf::single::recalculate_single_auto_hwm (ctx)) {
         if (perf_debug_enabled ())
