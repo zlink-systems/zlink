@@ -350,9 +350,16 @@ raw_fanout_subscriber_t::try_receive (
         }
         const auto &parts = _received.parts ();
         if (_received.topic () == raw_fanout_publisher_t::reserved_topic ()) {
+            const auto payload = parts.empty ()
+                                   ? std::span<const std::byte>{}
+                                   : parts.front ().bytes ();
+            const auto &expected = raw_fanout_publisher_t::beacon_payload ();
             if (parts.size () != 1
-                || parts.front ().to_bytes ()
-                     != raw_fanout_publisher_t::beacon_payload ()) {
+                || payload.size () != expected.size ()
+                || !std::equal (payload.begin (), payload.end (), expected.begin (),
+                                [] (std::byte left, std::uint8_t right) {
+                                    return static_cast<std::uint8_t> (left) == right;
+                                })) {
                 reopen_locked (connection);
                 _received.close ();
                 return {fanout_receive_status_t::protocol_error, std::nullopt};
@@ -369,8 +376,10 @@ raw_fanout_subscriber_t::try_receive (
             return {fanout_receive_status_t::protocol_error, std::nullopt};
         }
         try {
-            auto payload =
-              protocol::decode_application_payload (parts.front ().to_bytes ());
+            const auto bytes = parts.front ().bytes ();
+            auto payload = protocol::decode_application_payload (
+              std::span<const std::uint8_t> (
+                reinterpret_cast<const std::uint8_t *> (bytes.data ()), bytes.size ()));
             connection.ready = true;
             connection.reconnecting = false;
             connection.deadline = now + fanout_receive_deadline;

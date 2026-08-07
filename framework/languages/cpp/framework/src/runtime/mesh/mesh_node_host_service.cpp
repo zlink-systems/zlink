@@ -213,14 +213,15 @@ std::vector<std::byte> actor_terminal_envelope (
                    : std::string_view{});
     append_text (actor ? actor->actor_id ().value () : std::string_view{});
     append_u64 (actor ? actor->object_generation () : 0);
-    std::vector<std::uint8_t> reply_bytes;
-    if (reply)
-        reply_bytes =
-          detail::message_to_raw (*reply, serializers).to_bytes ();
-    append_u32 (
-      static_cast<std::uint32_t> (reply_bytes.size ()));
-    for (const auto byte : reply_bytes)
-        result.push_back (static_cast<std::byte> (byte));
+    if (reply) {
+        const auto raw = detail::message_to_raw (*reply, serializers);
+        const auto bytes = raw.bytes ();
+        append_u32 (static_cast<std::uint32_t> (bytes.size ()));
+        result.insert (result.end (), bytes.begin (), bytes.end ());
+    }
+    else {
+        append_u32 (0);
+    }
     return result;
 }
 
@@ -593,13 +594,9 @@ mesh_node_host_service_t::create_actor (
 
     std::vector<std::byte> request_bytes;
     if (request) {
-        const auto raw =
-          detail::message_to_raw (*request, *_serializers)
-            .to_bytes ();
-        request_bytes.reserve (raw.size ());
-        for (const auto byte : raw)
-            request_bytes.push_back (
-              static_cast<std::byte> (byte));
+        const auto raw = detail::message_to_raw (*request, *_serializers);
+        const auto bytes = raw.bytes ();
+        request_bytes.assign (bytes.begin (), bytes.end ());
     }
     object_reserve_request_t reserve{
       .key = {placement_object_kind_t::actor, std::string (actor_id.value ())},
@@ -1480,16 +1477,13 @@ mesh_node_host_service_t::create_user_spot (
     std::vector<std::byte> application_bytes;
     if (request) {
         const auto raw = detail::message_to_raw (*request, *_serializers);
-        const auto bytes = raw.to_bytes ();
+        const auto bytes = raw.bytes ();
         if (bytes.size () > 1024u * 1024u)
             return task_t<spot_create_result_t> (
               result_t<spot_create_result_t>::failure (
                 framework_error_kind_t::not_configured,
                 "User Spot creation request exceeds 1 MiB"));
-        application_bytes.reserve (bytes.size ());
-        for (const auto value : bytes)
-            application_bytes.push_back (
-              static_cast<std::byte> (value));
+        application_bytes.assign (bytes.begin (), bytes.end ());
     }
     const object_creation_key_t key{
       placement_object_kind_t::user_spot,

@@ -86,7 +86,7 @@ std::size_t message_follow_payload_bytes (
   const runtime::messaging::envelope_header_t &header,
   const zlink::message_t &payload)
 {
-    auto total = payload.to_bytes ().size () + header.message_name.size ()
+    auto total = payload.bytes ().size () + header.message_name.size ()
                  + header.content_type.size ();
     for (const auto &[key, value] : header.metadata)
         total += key.size () + value.size ();

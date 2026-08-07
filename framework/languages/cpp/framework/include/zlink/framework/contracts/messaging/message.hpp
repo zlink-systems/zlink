@@ -69,7 +69,12 @@ class message_t
         if (_value && _type == std::type_index (typeid (value_type))) {
             return *static_cast<const value_type *> (_value.get ());
         }
-        return require_serializers ().template get<value_type> ().deserialize (to_encoded ());
+        const auto &serializers = require_serializers ();
+        return with_encoded_payload (
+          serializers,
+          [&] (const encoded_payload_t &payload) {
+              return serializers.template get<value_type> ().deserialize (payload);
+          });
     }
 
     template <typename TValue> TValue decode (const serializer_registry_t &serializers) const
@@ -78,7 +83,11 @@ class message_t
         if (_value && _type == std::type_index (typeid (value_type))) {
             return *static_cast<const value_type *> (_value.get ());
         }
-        return serializers.template get<value_type> ().deserialize (to_encoded (serializers));
+        return with_encoded_payload (
+          serializers,
+          [&] (const encoded_payload_t &payload) {
+              return serializers.template get<value_type> ().deserialize (payload);
+          });
     }
 
     bool encoded () const noexcept { return _encoded.has_value (); }
@@ -120,33 +129,44 @@ class message_t
         return wrapped;
     }
 
-    zlink::message_t to_raw () const { return to_encoded ().to_raw (); }
+    template <typename TVisitor>
+    auto with_encoded_payload (const serializer_registry_t &serializers,
+                               TVisitor &&visitor) const
+      -> std::invoke_result_t<TVisitor, const encoded_payload_t &>
+    {
+        using result_type =
+          std::invoke_result_t<TVisitor, const encoded_payload_t &>;
+        static_assert (!std::is_reference_v<result_type>,
+                       "encoded payload visitor result must own its value");
+        if (_encoded) {
+            return std::forward<TVisitor> (visitor) (*_encoded);
+        }
+        encoded_payload_t encoded;
+        if (!_value) {
+            return std::forward<TVisitor> (visitor) (encoded);
+        }
+        if (_encoder) {
+            encoded = _encoder (serializers);
+        }
+        else {
+            encoded = serializers.serialize (_type, _value.get ());
+        }
+        return std::forward<TVisitor> (visitor) (encoded);
+    }
+
+    zlink::message_t to_raw () const
+    {
+        const auto &serializers = require_serializers ();
+        return with_encoded_payload (
+          serializers,
+          [] (const encoded_payload_t &payload) { return payload.to_raw (); });
+    }
 
     zlink::message_t to_raw (const serializer_registry_t &serializers) const
     {
-        return to_encoded (serializers).to_raw ();
-    }
-
-    encoded_payload_t to_encoded () const
-    {
-        if (_encoded) {
-            return *_encoded;
-        }
-        return to_encoded (require_serializers ());
-    }
-
-    encoded_payload_t to_encoded (const serializer_registry_t &serializers) const
-    {
-        if (_encoded) {
-            return *_encoded;
-        }
-        if (!_value) {
-            return {};
-        }
-        if (_encoder) {
-            return _encoder (serializers);
-        }
-        return serializers.serialize (_type, _value.get ());
+        return with_encoded_payload (
+          serializers,
+          [] (const encoded_payload_t &payload) { return payload.to_raw (); });
     }
 
     std::optional<encoded_payload_t> _encoded;

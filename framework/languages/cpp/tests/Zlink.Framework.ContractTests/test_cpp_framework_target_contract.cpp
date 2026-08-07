@@ -126,6 +126,10 @@ int main ()
       read_file (root / "framework/src/runtime/mesh/mesh_node_runtime.cpp");
     const auto mesh_node_host_service =
       read_file (root / "framework/src/runtime/mesh/mesh_node_host_service.cpp");
+    const auto framework_message = read_file (
+      include_root / "zlink/framework/contracts/messaging/message.hpp");
+    const auto raw_fanout_owner =
+      read_file (root / "framework/src/runtime/fanout/raw_fanout_owner.cpp");
     const auto raw_mesh_node_owner =
       read_file (root / "framework/src/runtime/mesh/raw_mesh_node_owner.cpp");
     const auto service_wire_codec =
@@ -1915,6 +1919,22 @@ int main ()
                          "using wire_operation_id_t") == std::string::npos,
                   "CPP-LAYER-002",
                   "Actor Join OperationId is not a distinct wire type");
+
+    /* CPP-OWN-006 — encoded payloads already owned by framework message_t are
+     * visited by reference. Runtime inspection uses the binding byte view and
+     * only copies at boundaries that require new ownership. */
+    gate.require (
+      framework_message.find ("with_encoded_payload") != std::string::npos
+        && framework_message.find ("return *_encoded;") == std::string::npos,
+      "CPP-OWN-006",
+      "framework message access still copies an already encoded payload");
+    gate.require (
+      mesh_node_runtime.find ("payload.to_bytes ().size ()")
+          == std::string::npos
+        && raw_fanout_owner.find ("parts.front ().to_bytes ()")
+             == std::string::npos,
+      "CPP-OWN-006",
+      "runtime payload inspection still materializes a byte-vector copy");
 
     /* CPP-SESS-003 — each serial owner selects a closed lane-policy type.
      * Yield behavior is derived from the Spot alternative; callers cannot
