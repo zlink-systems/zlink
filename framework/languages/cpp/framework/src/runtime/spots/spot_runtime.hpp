@@ -340,22 +340,8 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
             close_requested = false;
             closed = true;
         }
-        const auto rid = std::string (spot_id);
-        if (owner->location_lifecycle) {
-            (void) owner->location_lifecycle->release_spot (
-              spot_location_key_t{rid});
-        }
-        owner->spot_contexts_by_id.erase (rid);
-        owner->spot_names_by_id.erase (rid);
-        owner->native_spots_by_id.erase (rid);
-        for (auto iterator = owner->spot_ids_by_name.begin ();
-             iterator != owner->spot_ids_by_name.end (); ++iterator) {
-            if (iterator->second == rid) {
-                owner->spot_ids_by_name.erase (iterator);
-                break;
-            }
-        }
-        detach_application_instance (true);
+        close_application_then_release_location (
+          owner, spot_close_reason_t::explicit_close);
         return true;
     }
 
@@ -498,6 +484,27 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
             callback_admission_closed = true;
             closed = true;
         }
+        close_application_then_release_location (
+          owner, spot_close_reason_t::idle_evicted);
+        return true;
+    }
+
+  private:
+    void close_application_then_release_location (
+      const std::shared_ptr<spot_node_builder_state_t> &owner,
+      spot_close_reason_t reason)
+    {
+        std::exception_ptr closing_error;
+        try {
+            // The location remains published until OnClosing has completed, so
+            // another node cannot create a competing incarnation while the
+            // application is still preserving its final state.
+            detach_application_instance (true, reason);
+        }
+        catch (...) {
+            closing_error = std::current_exception ();
+        }
+
         const auto rid = std::string (spot_id);
         if (owner->location_lifecycle) {
             (void) owner->location_lifecycle->release_spot (
@@ -513,8 +520,8 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
                 break;
             }
         }
-        detach_application_instance (true, spot_close_reason_t::idle_evicted);
-        return true;
+        if (closing_error)
+            std::rethrow_exception (closing_error);
     }
 };
 

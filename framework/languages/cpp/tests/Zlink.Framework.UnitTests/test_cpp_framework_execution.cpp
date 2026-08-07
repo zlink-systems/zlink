@@ -912,7 +912,7 @@ bool verify_idle_instance_spot_eviction_closes_local_context ()
     using namespace zlink::framework::detail;
 
     auto node = std::make_shared<spot_node_builder_state_t> ("idle-node");
-    node->instance_spot_idle_timeout = std::chrono::hours (1);
+    node->instance_spot_idle_timeout = std::chrono::seconds (1);
 
     auto executor = std::make_shared<runtime::offload_executor_t> (1);
     auto context = std::make_shared<spot_context_state_t> ();
@@ -926,7 +926,7 @@ bool verify_idle_instance_spot_eviction_closes_local_context ()
     context->serial_executor = executor;
     context->serial_queue = std::make_shared<runtime::serial_execution_queue_t> (
       *executor, runtime::serial_execution_queue_options_t{});
-    const auto set_last_application_work = [&context] (std::chrono::seconds age) {
+    const auto set_last_application_work = [&context] (auto age) {
         context->last_application_work_completed_ns.store (
           std::chrono::duration_cast<std::chrono::nanoseconds> (
             std::chrono::steady_clock::now ().time_since_epoch ())
@@ -939,15 +939,20 @@ bool verify_idle_instance_spot_eviction_closes_local_context ()
         std::chrono::steady_clock::now ().time_since_epoch ())
         .count ()
         - std::chrono::duration_cast<std::chrono::nanoseconds> (
-          std::chrono::seconds (1))
+          std::chrono::milliseconds (100))
             .count (),
       std::memory_order_relaxed);
 
     bool closing_called = false;
+    bool location_visible_while_closing = false;
     spot_close_reason_t closing_reason = spot_close_reason_t::explicit_close;
     context->lifecycle.on_closing = [&] (
       void *, const spot_closing_context_t &closing, std::stop_token) {
         closing_called = true;
+        location_visible_while_closing =
+          node->spot_contexts_by_id.contains (context->spot_id)
+          && node->spot_names_by_id.contains (context->spot_id)
+          && context->node == node;
         closing_reason = closing.reason;
     };
 
@@ -974,41 +979,23 @@ bool verify_idle_instance_spot_eviction_closes_local_context ()
     };
 
     spot_node_runtime_t runtime (node);
-    set_last_application_work (std::chrono::seconds (0));
+    set_last_application_work (std::chrono::milliseconds (100));
     runtime.evict_idle_spots ();
     if (admission_called || context->idle_eviction_in_progress) {
         return false;
     }
-    set_last_application_work (std::chrono::hours (2));
-    std::cerr << "idle eviction precheck: timeout="
-              << node->instance_spot_idle_timeout.count ()
-              << " kind=" << static_cast<int> (context->kind)
-              << " idle=" << context->idle_quiescent ()
-              << " last=" << context->last_application_work_completed_ns.load ()
-              << " callbacks=" << context->callback_depth
-              << " stopped=" << node->stopping.load () << '\\n';
+    set_last_application_work (std::chrono::seconds (2));
     runtime.evict_idle_spots ();
     executor->drain ();
 
     const bool result = admission_called && late_application_post_rejected && closing_called
+                        && location_visible_while_closing
                         && closing_reason == spot_close_reason_t::idle_evicted
                         && context->closed && !context->node
                         && !context->spot_instance
                         && node->spot_contexts_by_id.empty ()
                         && node->spot_ids_by_name.empty ()
                         && node->spot_names_by_id.empty ();
-    if (!result) {
-        std::cerr << "idle eviction mismatch: admission=" << admission_called
-                  << " late_post_rejected=" << late_application_post_rejected
-                  << " closing=" << closing_called
-                  << " reason=" << static_cast<int> (closing_reason)
-                  << " closed=" << context->closed
-                  << " node=" << static_cast<bool> (context->node)
-                  << " instance=" << static_cast<bool> (context->spot_instance)
-                  << " contexts=" << node->spot_contexts_by_id.size ()
-                  << " names=" << node->spot_ids_by_name.size () << "/"
-                  << node->spot_names_by_id.size () << '\\n';
-    }
     return result;
 }
 
@@ -1865,7 +1852,7 @@ int main ()
             std::cerr << "bounded executor final drain mismatch: drained="
                       << bounded_executor.drained ()
                       << " live=" << bounded_executor.live_worker_count ()
-                      << '\\n';
+                      << '\n';
             return 53;
         }
     }
