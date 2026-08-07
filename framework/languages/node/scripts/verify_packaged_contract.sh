@@ -155,6 +155,44 @@ if (options === undefined || wire.ZlinkStreamCodec.Protobuf !== 3) {
 JS
 node index.cjs
 
+cat > contract.ts <<'TS'
+import {
+  ZLinkFrameworkErrorKind,
+  type ZLinkLocationRuntimeQuery,
+  type ZLinkMessageFlowLogMode,
+  type ZLinkSessionSendCall
+} from '@zlink-systems/framework';
+
+const diagnosticsLevels: readonly ZLinkMessageFlowLogMode[] = [
+  'off',
+  'errors',
+  'normal',
+  'detailed'
+];
+declare const locations: ZLinkLocationRuntimeQuery;
+declare const send: ZLinkSessionSendCall;
+
+void diagnosticsLevels;
+void locations.findActorLocation('actor-a');
+void locations.findSpotLocation('spot-a');
+void send.timeout(1);
+void ZLinkFrameworkErrorKind.NotConfigured;
+TS
+cat > tsconfig.json <<'JSON'
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "Node16",
+    "moduleResolution": "Node16",
+    "strict": true,
+    "skipLibCheck": false,
+    "noEmit": true
+  },
+  "include": ["contract.ts"]
+}
+JSON
+"$ROOT_DIR/node_modules/.bin/tsc" -p tsconfig.json
+
 node - "$BROWSER_DIR/node_modules/@zlink-systems/stream-wire" <<'NODE'
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
