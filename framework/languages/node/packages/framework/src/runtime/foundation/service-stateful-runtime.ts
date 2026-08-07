@@ -1829,7 +1829,9 @@ export class ServiceStatefulRuntime {
       }
       case 'actorSend':
       case 'actorRequest': {
-        this.validateActorFence(record.target);
+        const actor = record.boundSession === undefined
+          ? this.validateActorMessageFence(record.target)
+          : this.validateActorFence(record.target);
         if (record.boundSession !== undefined) {
           const binding = this.registry.validateBoundSession(
             record.target.actor,
@@ -1844,7 +1846,7 @@ export class ServiceStatefulRuntime {
         }
         return this.enqueueApplicationFrame(
           ingress,
-          `actor:${record.target.actor.actorId}\0${record.target.actor.generation}`,
+          `actor:${actor.ref.actorId}\0${actor.ref.generation}`,
           payloadFrame!,
           {
             receiveKind: record.kind === 'actorSend' ? ReceiveKind.ActorSend : ReceiveKind.ActorRequest,
@@ -1856,7 +1858,7 @@ export class ServiceStatefulRuntime {
             ...(record.boundSession === undefined
               ? {}
               : { sourceBindingGeneration: record.boundSession.bindingGeneration }),
-            targetActor: record.target.actor,
+            targetActor: actor.ref,
             messageFollowOrigin: {
               sourceNodeRid: ingress.sourceRoutingId,
               originalOperation: {
@@ -3568,16 +3570,18 @@ export class ServiceStatefulRuntime {
       return;
     }
     if (decoded.kind === 'actorRequest') {
-      this.validateActorFence(decoded.target);
+      const current = decoded.boundSession === undefined
+        ? this.validateActorMessageFence(decoded.target)
+        : this.validateActorFence(decoded.target);
       this.enqueueApplicationFrame(
         ingress,
-        `actor:${decoded.target.actor.actorId}\0${decoded.target.actor.generation}`,
+        `actor:${current.ref.actorId}\0${current.ref.generation}`,
         payloadFrame!,
         {
           receiveKind: ReceiveKind.ActorRequest,
           operationKind: OperationKind.ActorRequest,
           correlation: decoded.correlation,
-          targetActor: decoded.target.actor,
+          targetActor: current.ref,
           ...(decoded.sourceActor === undefined ? {} : { sourceActor: decoded.sourceActor }),
           ...(decoded.boundSession === undefined
             ? {}
@@ -3845,6 +3849,20 @@ export class ServiceStatefulRuntime {
     const actor = this.registry.requireActor(fence.actor);
     if (actor.authorityOwnerGeneration !== fence.authorityOwnerGeneration) {
       throw new ServiceStaleGenerationError('actor', fence.actor.actorId);
+    }
+    return actor;
+  }
+
+  private validateActorMessageFence(fence: ServiceActorRouteFence): ServiceActorState {
+    if (fence.actor.nodeRid !== this.nodeRid || fence.targetNodeGeneration !== this.nodeGeneration) {
+      throw new ServiceStaleGenerationError('actor', fence.actor.actorId);
+    }
+    const actor = this.registry.actor(fence.actor.actorId);
+    if (actor === undefined) {
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.RequestTargetNotFound,
+        `Actor '${fence.actor.actorId}' has no current Ready authority.`
+      );
     }
     return actor;
   }

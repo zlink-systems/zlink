@@ -1391,6 +1391,29 @@ test('outbound stateful routes use resolved authority generations and never obje
   runtime.close();
 });
 
+test('general Actor messages resolve the current incarnation while exact controls keep generation fences', () => {
+  const raw = {
+    setServiceIngress: () => {}
+  } as unknown as RawServiceMeshRuntime;
+  const runtime = new ServiceStatefulRuntime(raw, 'node-a', 3n);
+  const previous = runtime.createActor('actor-a');
+  runtime.discardRelocatedActor(previous.ref);
+  const current = runtime.createActor('actor-a');
+  const previousFence = {
+    actor: previous.ref,
+    targetNodeGeneration: 3n,
+    authorityOwnerGeneration: previous.authorityOwnerGeneration
+  };
+  const internals = runtime as unknown as {
+    validateActorMessageFence(fence: typeof previousFence): typeof current;
+    validateActorFence(fence: typeof previousFence): typeof current;
+  };
+
+  assert.equal(internals.validateActorMessageFence(previousFence).ref.generation, current.ref.generation);
+  assert.throws(() => internals.validateActorFence(previousFence), ServiceStaleGenerationError);
+  runtime.close();
+});
+
 test('a new Instance incarnation outranks a reset authority owner generation', () => {
   const raw = {
     topology: { peer: () => undefined },
