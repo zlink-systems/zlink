@@ -124,6 +124,8 @@ int main ()
     const auto app_runtime = read_file (root / "framework/src/runtime/host/app.cpp");
     const auto mesh_node_runtime =
       read_file (root / "framework/src/runtime/mesh/mesh_node_runtime.cpp");
+    const auto actor_transfer_coordinator = read_file (
+      root / "framework/src/runtime/spots/actor_transfer_coordinator.cpp");
     const auto mesh_node_host_service =
       read_file (root / "framework/src/runtime/mesh/mesh_node_host_service.cpp");
     const auto framework_message = read_file (
@@ -1935,6 +1937,35 @@ int main ()
              == std::string::npos,
       "CPP-OWN-006",
       "runtime payload inspection still materializes a byte-vector copy");
+
+    /* CPP-FOLLOW-001 — Message Follow admission preserves the contract error
+     * categories and rejects a revisited node before the hop ceiling. */
+    for (const std::string required : {
+           "framework_error_kind_t::invalid_operation",
+           "framework_error_kind_t::capacity_exceeded",
+           "framework_error_kind_t::unavailable"}) {
+        gate.require (
+          actor_transfer_coordinator.find (required) != std::string::npos,
+          "CPP-FOLLOW-001",
+          "Message Follow admission omits typed failure: " + required);
+    }
+    gate.require (
+      mesh_node_runtime.find ("__zlink.messageFollowVisitedNodes")
+          != std::string::npos
+        && mesh_node_runtime.find (
+             "follow_path.value ().visited.contains")
+             != std::string::npos,
+      "CPP-FOLLOW-001",
+      "Message Follow still relies only on the hop ceiling for loop detection");
+    gate.require (
+      spot_runtime.find (
+        "route.object_generation != actor.object_generation ()")
+          != std::string::npos
+        && spot_runtime.find (
+             "framework_error_kind_t::invalid_operation")
+             != std::string::npos,
+      "CPP-FOLLOW-001",
+      "stale Actor generation is not exposed as InvalidOperation");
 
     /* CPP-SESS-003 — each serial owner selects a closed lane-policy type.
      * Yield behavior is derived from the Spot alternative; callers cannot

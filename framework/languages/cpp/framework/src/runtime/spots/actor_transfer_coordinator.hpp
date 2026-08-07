@@ -2,6 +2,7 @@
 #pragma once
 
 #include <zlink/framework/contracts/actors/actor.hpp>
+#include <zlink/framework/contracts/errors/result.hpp>
 
 #include "runtime/actors/actor_ref_access.hpp"
 
@@ -173,7 +174,7 @@ class actor_transfer_coordinator_t
                                       std::uint64_t generation) const;
     std::optional<actor_message_follow_target_t>
     message_follow_target (const std::string &actor_key, std::uint64_t generation) const;
-    std::optional<actor_message_follow_target_t>
+    result_t<std::optional<actor_message_follow_target_t>>
     try_acquire_message_follow (const std::string &actor_key,
                                 std::uint64_t generation,
                                 std::size_t payload_bytes,

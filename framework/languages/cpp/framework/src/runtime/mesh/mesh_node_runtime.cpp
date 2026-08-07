@@ -93,6 +93,69 @@ std::size_t message_follow_payload_bytes (
     return total;
 }
 
+inline constexpr std::string_view message_follow_path_key =
+  "__zlink.messageFollowVisitedNodes";
+
+struct message_follow_path_t
+{
+    std::string encoded;
+    std::set<std::string> visited;
+};
+
+result_t<message_follow_path_t> advance_message_follow_path (
+  const std::map<std::string, std::string> &metadata,
+  std::string local_node)
+{
+    message_follow_path_t path;
+    if (const auto found = metadata.find (std::string (message_follow_path_key));
+        found != metadata.end ()) {
+        path.encoded = found->second;
+        if (path.encoded.empty ()) {
+            return result_t<message_follow_path_t>::failure (
+              framework_error_kind_t::protocol_error,
+              "Actor Message Follow visited-node path is empty");
+        }
+        std::size_t offset = 0;
+        while (offset < path.encoded.size ()) {
+            const auto separator = path.encoded.find (',', offset);
+            const auto token = path.encoded.substr (
+              offset, separator == std::string::npos
+                        ? std::string::npos
+                        : separator - offset);
+            if (token.empty () || token.size () > 128) {
+                return result_t<message_follow_path_t>::failure (
+                  framework_error_kind_t::protocol_error,
+                  "Actor Message Follow visited-node path is malformed");
+            }
+            if (!path.visited.insert (token).second) {
+                return result_t<message_follow_path_t>::failure (
+                  framework_error_kind_t::unavailable,
+                  "Actor Message Follow route contains a loop");
+            }
+            if (separator == std::string::npos)
+                break;
+            offset = separator + 1;
+            if (offset == path.encoded.size ()) {
+                return result_t<message_follow_path_t>::failure (
+                  framework_error_kind_t::protocol_error,
+                  "Actor Message Follow visited-node path has an empty entry");
+            }
+        }
+    }
+    if (path.visited.size ()
+        >= runtime::protocol::messageFollowHopCount
+        || path.visited.contains (local_node)) {
+        return result_t<message_follow_path_t>::failure (
+          framework_error_kind_t::unavailable,
+          "Actor Message Follow returned to a visited node");
+    }
+    path.visited.insert (local_node);
+    if (!path.encoded.empty ())
+        path.encoded.push_back (',');
+    path.encoded += local_node;
+    return result_t<message_follow_path_t>::success (std::move (path));
+}
+
 class actor_message_follow_lease_t
 {
   public:
@@ -2236,26 +2299,54 @@ mesh_node_runtime_t::relay_application_actor (
 {
     try {
         spot_node_runtime_t spot_runtime (_state->spot_state);
-        if (spot_runtime.actor_message_follow_target (actor)) {
-            const auto payload_bytes =
-              message_follow_payload_bytes (header, payload);
-            const auto follow_target =
-              spot_runtime.try_acquire_actor_message_follow (
-                actor, payload_bytes, incoming_hop_count);
-            if (!follow_target) {
-                return result_t<std::optional<zlink::message_t>>::failure (
-                  framework_error_kind_t::unavailable,
-                  "Actor Message Follow bound was exceeded");
-            }
+        const auto local_routing_id = routing_id ();
+        if (!local_routing_id) {
+            return result_t<std::optional<zlink::message_t>>::failure (
+              framework_error_kind_t::internal_failure,
+              "Actor Message Follow requires a local routing identity");
+        }
+        const auto local_node = local_routing_id->to_hex ();
+        auto payload_bytes = message_follow_payload_bytes (header, payload);
+        payload_bytes += local_node.size ()
+                         + (header.metadata.contains (
+                              std::string (message_follow_path_key))
+                              ? 1
+                              : message_follow_path_key.size ());
+        auto acquired_follow =
+          spot_runtime.try_acquire_actor_message_follow (
+            actor, payload_bytes, incoming_hop_count);
+        if (!acquired_follow) {
+            return detail::propagate_failure<std::optional<zlink::message_t>> (
+              acquired_follow, "Actor Message Follow admission failed");
+        }
+        if (acquired_follow.value ()) {
+            const auto follow_target = std::move (*acquired_follow.value ());
             actor_message_follow_lease_t lease (
               spot_runtime, actor, payload_bytes);
+            auto follow_path = advance_message_follow_path (
+              header.metadata, local_node);
+            if (!follow_path) {
+                return detail::propagate_failure<
+                  std::optional<zlink::message_t>> (
+                    follow_path, "Actor Message Follow loop detection failed");
+            }
+            const auto target_node = zlink::routing_id_t::from (
+              std::string (follow_target.route.node_rid.value ()));
+            if (follow_path.value ().visited.contains (
+                  target_node.to_hex ())) {
+                return result_t<std::optional<zlink::message_t>>::failure (
+                  framework_error_kind_t::unavailable,
+                  "Actor Message Follow target was already visited");
+            }
             spot_runtime.emit_actor_transfer_marker (
               "message_follow_relay", actor, {},
-              follow_target->route.spot_id,
-              follow_target->route.node_rid);
+              follow_target.route.spot_id,
+              follow_target.route.node_rid);
             spot_inbound_message_t metadata;
             metadata.content_type = header.content_type;
             metadata.values = header.metadata;
+            metadata.values[std::string (message_follow_path_key)] =
+              std::move (follow_path.value ().encoded);
             metadata.values["__zlink.messageFollowHopCount"] =
               std::to_string (static_cast<unsigned int> (
                 incoming_hop_count + 1));
@@ -2268,15 +2359,13 @@ mesh_node_runtime_t::relay_application_actor (
               spot_actor_packet_route_request_t::packet_name,
               timeout);
             auto request = make_spot_actor_packet_route_request (
-              follow_target->actor, follow_target->route.spot_id,
+              follow_target.actor, follow_target.route.spot_id,
               header.message_name, payload, metadata);
             auto request_parts = codec.encode_envelope_parts (
               request_header, request, *_serializers);
-            const auto target_node = zlink::routing_id_t::from (
-              std::string (follow_target->route.node_rid.value ()));
             const auto target_generation =
               spot_runtime.resolve_spot_generation (
-                target_node, follow_target->route.spot_id);
+                target_node, follow_target.route.spot_id);
             if (!target_generation) {
                 return result_t<std::optional<zlink::message_t>>::failure (
                   framework_error_kind_t::not_found,
@@ -2286,7 +2375,7 @@ mesh_node_runtime_t::relay_application_actor (
               "__zlink-route-origin-" + routing_id ()->to_hex ());
             host::call_id_t operation;
             const auto submitted = origin.request_to_spot (
-              target_node, follow_target->route.spot_id,
+              target_node, follow_target.route.spot_id,
               *target_generation, request_parts.items (), operation,
               zlink::send_flags_t::none, timeout);
             if (submitted != zlink::submit_result_t::ok) {
@@ -2323,13 +2412,14 @@ mesh_node_runtime_t::relay_application_actor (
                 const auto authority = _user_spot_store
                   ->read_authority (authority_key_t{
                     "1:" + std::string (
-                      follow_target->actor.actor_id ().value ())})
+                      follow_target.actor.actor_id ().value ())})
                   .result ();
                 if (authority) {
                     if (const auto *snapshot =
                           std::get_if<authority_snapshot_t> (
-                            &authority.value ()))
+                            &authority.value ())) {
                         target_snapshot = *snapshot;
+                    }
                 }
             }
             const auto target_peer = _node->transport ().topology ().peer (
@@ -2348,15 +2438,15 @@ mesh_node_runtime_t::relay_application_actor (
                 && stale_route.owner_lease_generation != 0
                 && target_snapshot
                 && target_snapshot->object_generation
-                     == follow_target->actor.object_generation ()
+                     == follow_target.actor.object_generation ()
                 && target_snapshot->authority_owner_generation != 0
                 && target_snapshot->owner.lease_generation > 0
                 && target_node_generation != 0
                 && spot_runtime.mark_actor_message_follow_notified (
                      actor, source_node)) {
                 runtime::protocol::actor_route_fence_t target_route{
-                  std::string (follow_target->actor.actor_id ().value ()),
-                  follow_target->actor.object_generation (),
+                  std::string (follow_target.actor.actor_id ().value ()),
+                  follow_target.actor.object_generation (),
                   target_node.to_bytes (),
                   target_node_generation,
                   target_snapshot->authority_owner_generation,

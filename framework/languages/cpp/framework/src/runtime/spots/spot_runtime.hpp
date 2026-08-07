@@ -644,7 +644,7 @@ class spot_node_runtime_t
     std::optional<spot_route_t> actor_route (const actor_ref_t &actor_ref) const;
     std::optional<actor_message_follow_target_t>
     actor_message_follow_target (const actor_ref_t &actor_ref) const;
-    std::optional<actor_message_follow_target_t>
+    result_t<std::optional<actor_message_follow_target_t>>
     try_acquire_actor_message_follow (
       const actor_ref_t &actor_ref,
       std::size_t payload_bytes,

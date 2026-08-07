@@ -255,7 +255,7 @@ actor_transfer_coordinator_t::message_follow_target (const std::string &actor_ke
       found->second.target_actor, found->second.target_route};
 }
 
-std::optional<actor_message_follow_target_t>
+result_t<std::optional<actor_message_follow_target_t>>
 actor_transfer_coordinator_t::try_acquire_message_follow (
   const std::string &actor_key,
   std::uint64_t generation,
@@ -270,19 +270,37 @@ actor_transfer_coordinator_t::try_acquire_message_follow (
       zlink::framework::runtime::protocol::messageFollowHopCount;
     std::lock_guard lock (_mutex);
     const auto found = _message_follow_routes.find (actor_key);
-    if (found == _message_follow_routes.end ()
-        || found->second.old_generation != generation
-        || found->second.remove_at <= std::chrono::steady_clock::now ()
-        || hop_count >= max_hops
-        || payload_bytes > max_bytes
+    if (found == _message_follow_routes.end ()) {
+        return result_t<std::optional<actor_message_follow_target_t>>::success (
+          std::nullopt);
+    }
+    if (found->second.old_generation != generation) {
+        return result_t<std::optional<actor_message_follow_target_t>>::failure (
+          framework_error_kind_t::invalid_operation,
+          "Actor Message Follow generation does not match the committed source");
+    }
+    if (found->second.remove_at <= std::chrono::steady_clock::now ()) {
+        return result_t<std::optional<actor_message_follow_target_t>>::failure (
+          framework_error_kind_t::unavailable,
+          "Actor Message Follow route has expired");
+    }
+    if (hop_count >= max_hops) {
+        return result_t<std::optional<actor_message_follow_target_t>>::failure (
+          framework_error_kind_t::unavailable,
+          "Actor Message Follow hop bound was exceeded");
+    }
+    if (payload_bytes > max_bytes
         || found->second.in_flight_messages >= max_messages
         || found->second.in_flight_bytes > max_bytes - payload_bytes) {
-        return std::nullopt;
+        return result_t<std::optional<actor_message_follow_target_t>>::failure (
+          framework_error_kind_t::capacity_exceeded,
+          "Actor Message Follow volume bound was exceeded");
     }
     ++found->second.in_flight_messages;
     found->second.in_flight_bytes += payload_bytes;
-    return actor_message_follow_target_t{
-      found->second.target_actor, found->second.target_route};
+    return result_t<std::optional<actor_message_follow_target_t>>::success (
+      actor_message_follow_target_t{
+        found->second.target_actor, found->second.target_route});
 }
 
 void actor_transfer_coordinator_t::release_message_follow (

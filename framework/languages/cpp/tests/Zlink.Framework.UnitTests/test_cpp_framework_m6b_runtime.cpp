@@ -1199,22 +1199,50 @@ void verify_bounded_message_follow ()
     coordinator.activate_message_follow (
       "player:actor-message-follow", 7, target, route, expires, "relocation-1");
 
-    assert (!coordinator.try_acquire_message_follow (
-      "player:actor-message-follow", 7, 1, 8));
-    assert (!coordinator.try_acquire_message_follow (
-      "player:actor-message-follow", 7, 16u * 1024u * 1024u + 1u, 0));
+    const auto missing = coordinator.try_acquire_message_follow (
+      "player:missing", 7, 1, 0);
+    assert (missing && !missing.value ());
+    const auto stale_generation = coordinator.try_acquire_message_follow (
+      "player:actor-message-follow", 8, 1, 0);
+    assert (!stale_generation
+            && stale_generation.error_kind ()
+                 == framework_error_kind_t::invalid_operation);
+    const auto hop_bound = coordinator.try_acquire_message_follow (
+      "player:actor-message-follow", 7, 1, 8);
+    assert (!hop_bound
+            && hop_bound.error_kind ()
+                 == framework_error_kind_t::unavailable);
+    const auto byte_bound = coordinator.try_acquire_message_follow (
+      "player:actor-message-follow", 7, 16u * 1024u * 1024u + 1u, 0);
+    assert (!byte_bound
+            && byte_bound.error_kind ()
+                 == framework_error_kind_t::capacity_exceeded);
     for (std::size_t index = 0; index != 1024; ++index) {
-        assert (coordinator.try_acquire_message_follow (
-          "player:actor-message-follow", 7, 1, 0));
+        const auto acquired = coordinator.try_acquire_message_follow (
+          "player:actor-message-follow", 7, 1, 0);
+        assert (acquired && acquired.value ());
     }
-    assert (!coordinator.try_acquire_message_follow (
-      "player:actor-message-follow", 7, 1, 0));
+    const auto message_bound = coordinator.try_acquire_message_follow (
+      "player:actor-message-follow", 7, 1, 0);
+    assert (!message_bound
+            && message_bound.error_kind ()
+                 == framework_error_kind_t::capacity_exceeded);
     coordinator.release_message_follow ("player:actor-message-follow", 7, 1);
-    assert (coordinator.try_acquire_message_follow (
-      "player:actor-message-follow", 7, 1, 0));
+    const auto after_release = coordinator.try_acquire_message_follow (
+      "player:actor-message-follow", 7, 1, 0);
+    assert (after_release && after_release.value ());
     coordinator.release_message_follow ("player:actor-message-follow", 7, 1);
     for (std::size_t index = 1; index != 1024; ++index)
         coordinator.release_message_follow ("player:actor-message-follow", 7, 1);
+
+    coordinator.activate_message_follow (
+      "player:expired-message-follow", 7, target, route,
+      std::chrono::steady_clock::now () - 1ms, "relocation-expired");
+    const auto expired = coordinator.try_acquire_message_follow (
+      "player:expired-message-follow", 7, 1, 0);
+    assert (!expired
+            && expired.error_kind ()
+                 == framework_error_kind_t::unavailable);
 }
 
 void verify_bounded_actor_handoff_backlog ()

@@ -6546,7 +6546,7 @@ spot_node_runtime_t::actor_message_follow_target (const actor_ref_t &actor_ref) 
       actor_key (actor_ref), actor_ref.object_generation ());
 }
 
-std::optional<actor_message_follow_target_t>
+result_t<std::optional<actor_message_follow_target_t>>
 spot_node_runtime_t::try_acquire_actor_message_follow (
   const actor_ref_t &actor_ref,
   std::size_t payload_bytes,
@@ -7461,12 +7461,14 @@ bool spot_node_runtime_t::dispatch_mesh_record (
             const auto local = native
                                  ? native->status ()
                                  : runtime::host::node_status_t{};
-            const bool targets_local_node =
+            const bool targets_local_actor =
               native
               && route.actor_id == actor.actor_id ().value ()
-              && route.object_generation == actor.object_generation ()
               && route.target_node_routing_id == local.routing_id ().to_bytes ()
               && route.target_node_generation == local.lifecycle_generation ();
+            const bool targets_local_node =
+              targets_local_actor
+              && route.object_generation == actor.object_generation ();
             const bool follows_committed_source =
               targets_local_node
               && actor_message_follow_target (actor).has_value ();
@@ -7477,8 +7479,14 @@ bool spot_node_runtime_t::dispatch_mesh_record (
                       && _state->actor_route_admission (route)));
             if (!admitted) {
                 reply_error (framework_exception_t (
-                  framework_error_kind_t::unavailable,
-                  "Actor route fence is stale or not admitted"));
+                  targets_local_actor
+                      && route.object_generation != actor.object_generation ()
+                    ? framework_error_kind_t::invalid_operation
+                    : framework_error_kind_t::unavailable,
+                  targets_local_actor
+                      && route.object_generation != actor.object_generation ()
+                    ? "Actor route object generation does not match"
+                    : "Actor route fence is stale or not admitted"));
                 return true;
             }
         }
