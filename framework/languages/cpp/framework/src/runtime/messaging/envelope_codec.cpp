@@ -100,7 +100,8 @@ zlink::message_t envelope_codec_t::encode_header (const envelope_header_t &heade
 {
     auto stamped = header;
     if (!stamped.flow_id) {
-        if (const auto &flow = flow_context_t::current ()) {
+        if (const auto &flow = flow_context_t::current ();
+            flow && !flow->flow_id.empty ()) {
             stamped.flow_id = flow->flow_id;
             stamped.flow_origin = flow->origin;
         }

@@ -103,6 +103,10 @@ int main ()
       read_file (root / "framework/src/runtime/messaging/async_submit_runtime.cpp");
     const auto failure_origin_wire =
       read_file (root / "framework/src/runtime/messaging/failure_origin_wire.hpp");
+    const auto flow_context =
+      read_file (root / "framework/src/runtime/diagnostics/flow_context.hpp");
+    const auto message_flow_tracer =
+      read_file (root / "framework/src/runtime/diagnostics/message_flow_tracer.hpp");
     const auto channel_reply_writer =
       read_file (root / "framework/src/runtime/channels/channel_reply_writer.cpp");
     const auto location_auto_connect =
@@ -1823,6 +1827,22 @@ int main ()
              != std::string::npos,
       "CPP-OBS-001",
       "Instance Spot activation tracing is not gated before event allocation");
+
+    /* CPP-OBS-002 — diagnostics mode is part of the ambient message context,
+     * including the off case where no flow id is allocated. */
+    gate.require (
+      flow_context.find ("diagnostics_mode") != std::string::npos
+        && flow_context.find (
+             "{}, default_origin, diagnostics_mode")
+             != std::string::npos
+        && message_flow_tracer.find (
+             "current->diagnostics_mode")
+             != std::string::npos
+        && message_flow_tracer.find (
+             "effective_message_flow ()")
+             != std::string::npos,
+      "CPP-OBS-002",
+      "message-flow diagnostics level is not snapshotted at message entry");
 
     /* CPP-CONTRACT-ROLE-001 — a missing local Client role is a local
      * configuration error, distinct from a configured Client with no target. */

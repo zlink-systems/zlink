@@ -34,14 +34,17 @@ class dispatch_error_reporter_t
         }
         if (!event.flow_id) {
             if (const auto &flow = runtime::flow_context_t::current ()) {
-                event.flow_id = flow->flow_id;
-                event.flow_origin = flow->origin;
+                if (!flow->flow_id.empty ()) {
+                    event.flow_id = flow->flow_id;
+                    event.flow_origin = flow->origin;
+                }
             }
         }
         // off silences the default error log; every other mode keeps reporting
         // errors (errors_only is the default). A registered observer still fires
         // regardless of mode — it is an explicit, separate subscription.
-        if (_options.diagnostics.effective_message_flow () != message_flow_log_mode_t::off) {
+        if (message_flow_tracer_t (_options).mode ()
+            != message_flow_log_mode_t::off) {
             log_default (event);
         }
         message_flow_tracer_t (_options).trace (message_flow_event_t{

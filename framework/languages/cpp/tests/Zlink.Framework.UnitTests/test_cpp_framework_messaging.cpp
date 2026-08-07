@@ -1080,7 +1080,8 @@ int main ()
 
         {
             auto scope = rt::flow_context_t::enter (created, zlink::framework::flow_origin_t::inbound,
-                                                    false, zlink::framework::flow_origin_t::inbound);
+                                                    zlink::framework::message_flow_log_mode_t::off,
+                                                    zlink::framework::flow_origin_t::inbound);
             const auto stamped = codec.decode_header (codec.encode_header (header));
             if (!stamped || stamped.value ().flow_id != created
                 || stamped.value ().flow_origin != zlink::framework::flow_origin_t::inbound) {
@@ -1096,7 +1097,9 @@ int main ()
          * unconditional). */
         {
             auto scope =
-              rt::flow_context_t::enter (std::nullopt, std::nullopt, true,
+              rt::flow_context_t::enter (
+                std::nullopt, std::nullopt,
+                zlink::framework::message_flow_log_mode_t::key_transitions,
                                          zlink::framework::flow_origin_t::inbound);
             if (!rt::flow_context_t::current ()
                 || !rt::flow_id_t::is_valid (rt::flow_context_t::current ()->flow_id)) {
@@ -1105,7 +1108,8 @@ int main ()
         }
         {
             auto scope = rt::flow_context_t::enter (created, zlink::framework::flow_origin_t::timer,
-                                                    false, zlink::framework::flow_origin_t::inbound);
+                                                    zlink::framework::message_flow_log_mode_t::off,
+                                                    zlink::framework::flow_origin_t::inbound);
             if (!rt::flow_context_t::current ()
                 || rt::flow_context_t::current ()->flow_id != created
                 || rt::flow_context_t::current ()->origin
@@ -1115,9 +1119,14 @@ int main ()
         }
         {
             auto scope =
-              rt::flow_context_t::enter (std::nullopt, std::nullopt, false,
+              rt::flow_context_t::enter (
+                std::nullopt, std::nullopt,
+                zlink::framework::message_flow_log_mode_t::off,
                                          zlink::framework::flow_origin_t::inbound);
-            if (rt::flow_context_t::current ()) {
+            if (!rt::flow_context_t::current ()
+                || !rt::flow_context_t::current ()->flow_id.empty ()
+                || rt::flow_context_t::current ()->diagnostics_mode
+                     != zlink::framework::message_flow_log_mode_t::off) {
                 return 48;
             }
         }
@@ -1149,7 +1158,8 @@ int main ()
             {
                 auto scope =
                   rt::flow_context_t::enter (created, zlink::framework::flow_origin_t::inbound,
-                                             false, zlink::framework::flow_origin_t::inbound);
+                                             zlink::framework::message_flow_log_mode_t::off,
+                                             zlink::framework::flow_origin_t::inbound);
                 auto task = source.task ();
                 zlink::framework::detail::observe_task_completion (
                   task, [&observed_in_callback] (const zlink::framework::result_t<int> &) {

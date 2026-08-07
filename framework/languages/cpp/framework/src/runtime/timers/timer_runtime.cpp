@@ -360,7 +360,7 @@ task_t<timer_tick_t> timer_runtime_t::dispatch_fire_count_async (timer_t &timer,
          * origin=timer when tracing capture is enabled (flow-correlation §4.2). */
         auto timer_flow = framework::runtime::flow_context_t::enter_current_or_create (
           flow_origin_t::timer,
-          message_flow_tracer_t (context->channel_runtime->dispatch).capture_enabled ());
+          message_flow_tracer_t (context->channel_runtime->dispatch).mode ());
         auto handler_instance = state->handler_instance.lock ();
         if (!handler_instance) {
             throw framework_exception_t (

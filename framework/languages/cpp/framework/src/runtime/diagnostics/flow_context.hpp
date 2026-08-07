@@ -30,6 +30,8 @@ struct flow_value_t
 {
     std::string flow_id;
     flow_origin_t origin = flow_origin_t::inbound;
+    message_flow_log_mode_t diagnostics_mode =
+      message_flow_log_mode_t::off;
 };
 
 /* Ambient flow of the framework-invoked callback currently running on this
@@ -74,7 +76,7 @@ class flow_context_t
      * capture is enabled. Both fields must be present together. */
     static scope_t enter (std::optional<std::string> flow_id,
                           std::optional<flow_origin_t> origin,
-                          bool create_if_absent,
+                          message_flow_log_mode_t diagnostics_mode,
                           flow_origin_t default_origin)
     {
         if (flow_id.has_value () != origin.has_value ()) {
@@ -86,24 +88,31 @@ class flow_context_t
                 throw framework_exception_t (framework_error_kind_t::protocol_error,
                                              "flow id must be UUIDv7");
             }
-            return scope_t (flow_value_t{std::move (*flow_id), *origin});
+            return scope_t (flow_value_t{
+              std::move (*flow_id), *origin, diagnostics_mode});
         }
-        if (create_if_absent) {
-            return scope_t (flow_value_t{flow_id_t::create (), default_origin});
+        if (diagnostics_mode != message_flow_log_mode_t::off) {
+            return scope_t (flow_value_t{
+              flow_id_t::create (), default_origin, diagnostics_mode});
         }
-        return scope_t (std::nullopt);
+        // Preserve the off snapshot across async continuations without
+        // allocating a flow id. Runtime changes apply to the next message.
+        return scope_t (flow_value_t{
+          {}, default_origin, diagnostics_mode});
     }
 
-    static scope_t enter_current_or_create (flow_origin_t origin, bool create_if_absent)
+    static scope_t enter_current_or_create (
+      flow_origin_t origin, message_flow_log_mode_t diagnostics_mode)
     {
         const auto &value = current ();
         if (value) {
             return scope_t (*value);
         }
-        if (create_if_absent) {
-            return scope_t (flow_value_t{flow_id_t::create (), origin});
+        if (diagnostics_mode != message_flow_log_mode_t::off) {
+            return scope_t (flow_value_t{
+              flow_id_t::create (), origin, diagnostics_mode});
         }
-        return scope_t (std::nullopt);
+        return scope_t (flow_value_t{{}, origin, diagnostics_mode});
     }
 
   private:

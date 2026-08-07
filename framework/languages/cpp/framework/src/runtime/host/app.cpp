@@ -718,7 +718,7 @@ void trace_instance_spot_activation (
             std::exception_ptr{},
             std::nullopt,
             std::nullopt};
-          if (flow) {
+          if (flow && !flow->flow_id.empty ()) {
               event.flow_id = flow->flow_id;
               event.flow_origin = flow->origin;
           }
@@ -1773,7 +1773,7 @@ app_t &app_t::add_zlink_framework (std::function<void (zlink_framework_options_t
               const std::map<std::string, std::string> &metadata) {
               auto flow_scope = runtime::flow_context_t::enter_current_or_create (
                 flow_origin_t::application,
-                detail::message_flow_tracer_t (dispatch).capture_enabled ());
+                detail::message_flow_tracer_t (dispatch).mode ());
               const auto flow = runtime::flow_context_t::current ();
               auto selected = select_instance_target (spot_id, intent);
               const auto deadline = std::chrono::steady_clock::now ()
@@ -1809,7 +1809,7 @@ app_t &app_t::add_zlink_framework (std::function<void (zlink_framework_options_t
                 packet_name,
                 serializers->content_type (message_type),
                 payload.to_bytes ()};
-              if (flow) {
+              if (flow && !flow->flow_id.empty ()) {
                   application_payload.flow_id = flow->flow_id;
                   application_payload.flow_origin = flow->origin;
               }
@@ -1851,7 +1851,7 @@ app_t &app_t::add_zlink_framework (std::function<void (zlink_framework_options_t
             -> task_t<zlink::message_t> {
               auto flow_scope = runtime::flow_context_t::enter_current_or_create (
                 flow_origin_t::application,
-                detail::message_flow_tracer_t (dispatch).capture_enabled ());
+                detail::message_flow_tracer_t (dispatch).mode ());
               const auto flow = runtime::flow_context_t::current ();
               auto selected = select_instance_target (spot_id, intent);
               const auto deadline = std::chrono::steady_clock::now () + timeout;
@@ -1889,7 +1889,7 @@ app_t &app_t::add_zlink_framework (std::function<void (zlink_framework_options_t
                 packet_name,
                 serializers->content_type (request_type),
                 payload.to_bytes ()};
-              if (flow) {
+              if (flow && !flow->flow_id.empty ()) {
                   application_payload.flow_id = flow->flow_id;
                   application_payload.flow_origin = flow->origin;
               }

@@ -2157,11 +2157,13 @@ send_call_t spot_context_t::publish_erased (std::string topic,
                    * ZLinkSpotPublishEnvelope 동형): the header carries the
                    * ambient flow pair so every subscriber line shares one
                    * flow id across the tree. */
-                  const bool capture_enabled =
+                  const auto diagnostics_mode =
                     state->node
-                    && detail::message_flow_tracer_t (state->node->dispatch).capture_enabled ();
+                      ? detail::message_flow_tracer_t (
+                          state->node->dispatch).mode ()
+                      : message_flow_log_mode_t::off;
                   auto flow_scope = runtime::flow_context_t::enter_current_or_create (
-                    flow_origin_t::application, capture_enabled);
+                    flow_origin_t::application, diagnostics_mode);
                   /* Self-delimited single frame: ['Z''L''F''E'][u32 BE
                    * header_len][header JSON][body]. The node-attached fanout
                    * path does not keep multipart boundaries end to end, so
@@ -3338,8 +3340,8 @@ publish_call_t spot_publisher_client_t::publish_raw (std::string channel_name,
           "logical multicast route mesh is not connected"));
     }
 
-    const bool capture_enabled =
-      detail::message_flow_tracer_t (_manager._state->dispatch).capture_enabled ();
+    const auto diagnostics_mode =
+      detail::message_flow_tracer_t (_manager._state->dispatch).mode ();
     auto frame = encode_spot_publish_frame (
       channel_name, packet_name, topic, payload);
     return publish_call_t (
@@ -3347,7 +3349,7 @@ publish_call_t spot_publisher_client_t::publish_raw (std::string channel_name,
        state = _manager._state,
        channel_name = std::move (channel_name),
        topic = std::move (topic), packet_name = std::move (packet_name),
-       frame = std::move (frame), capture_enabled] (
+       frame = std::move (frame), diagnostics_mode] (
         const publish_call_t::metadata_map_t &metadata) {
           const auto fail = [&] (framework_exception_t error) {
               detail::report_logical_multicast_failure (
@@ -3356,7 +3358,7 @@ publish_call_t spot_publisher_client_t::publish_raw (std::string channel_name,
           };
           try {
               auto flow_scope = runtime::flow_context_t::enter_current_or_create (
-                flow_origin_t::application, capture_enabled);
+                flow_origin_t::application, diagnostics_mode);
               std::vector<zlink::message_t> parts{frame};
               auto publisher = native_node->entry_spot ();
               const auto encoded_metadata =
@@ -6189,14 +6191,11 @@ task_t<zlink::message_t> spot_node_runtime_t::dispatch_instance_activation (
      * handler completion, and a reply in one file. The activation payload
      * carries the framework-owned flow pair when tracing is enabled; a target
      * creates a new inbound flow only when the source did not carry one. */
-    const auto capture_flow =
-      detail::message_flow_tracer_t (_state->dispatch).capture_enabled ();
-    auto flow_scope = capture_flow
-                        ? runtime::flow_context_t::enter (
-                            std::move (flow_id), flow_origin, true,
-                            flow_origin_t::inbound)
-                        : runtime::flow_context_t::enter_current_or_create (
-                            flow_origin_t::inbound, false);
+    const auto diagnostics_mode =
+      detail::message_flow_tracer_t (_state->dispatch).mode ();
+    auto flow_scope = runtime::flow_context_t::enter (
+      std::move (flow_id), flow_origin, diagnostics_mode,
+      flow_origin_t::inbound);
     auto context = find_context (spot_id);
     if (!context || !context->_state->spot_instance
         || std::find (_state->snapshot.instance_spot_names.begin (),
@@ -7199,7 +7198,7 @@ bool spot_node_runtime_t::dispatch_mesh_record (
          * STREAM/session request. */
         auto flow_scope = runtime::flow_context_t::enter (
           header.value ().flow_id, header.value ().flow_origin,
-          detail::message_flow_tracer_t (_state->dispatch).capture_enabled (),
+          detail::message_flow_tracer_t (_state->dispatch).mode (),
           flow_origin_t::inbound);
 
         auto &actor_gateway = services.get_required<actor_gateway_runtime_t> ();
@@ -7867,10 +7866,10 @@ spot_node_runtime_t::dispatch_subscription (const spot_context_t &context,
           std::nullopt, topic, std::string (context._state->spot_id));
         return result_t<void>::success ();
     }
-    const bool capture_enabled =
-      detail::message_flow_tracer_t (_state->dispatch).capture_enabled ();
+    const auto diagnostics_mode =
+      detail::message_flow_tracer_t (_state->dispatch).mode ();
     auto flow_scope = runtime::flow_context_t::enter (std::move (flow_id), flow_origin,
-                                                      capture_enabled, flow_origin_t::inbound);
+                                                      diagnostics_mode, flow_origin_t::inbound);
     const auto &message = body;
     report_spot_dispatch_trace (
       _state, message_flow_outcome_t::received, dispatch_error_surface_t::spot_subscription,

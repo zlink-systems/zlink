@@ -66,7 +66,7 @@ result_t<runtime::messaging::message_parts_t> channel_packet_dispatcher_t::dispa
     }();
     message_flow_tracer_t flow (_runtime.dispatch_options_ref ());
     auto flow_scope = runtime::flow_context_t::enter (
-      header.value ().flow_id, header.value ().flow_origin, flow.capture_enabled (),
+      header.value ().flow_id, header.value ().flow_origin, flow.mode (),
       flow_origin_t::inbound);
     if (inbound_kind != dispatch_message_kind_t::publish) {
         flow.trace (message_flow_outcome_t::received, [&] {

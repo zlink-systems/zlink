@@ -19,7 +19,8 @@ namespace zlink::framework::detail
 {
 
 // Emits success-path message-flow transitions, gated by the diagnostics mode
-// (live/runtime-mutable). It is the success-path twin of dispatch_error_reporter_t,
+// captured when the current message entered the runtime. It is the success-path
+// twin of dispatch_error_reporter_t,
 // sharing the logger + offloaded-observer fan-out so errors and healthy transitions
 // read as one correlation-id-keyed stream.
 //
@@ -36,12 +37,18 @@ namespace zlink::framework::detail
 class message_flow_tracer_t
 {
   public:
-    explicit message_flow_tracer_t (const dispatch_options_t &options) : _options (&options) {}
+    explicit message_flow_tracer_t (const dispatch_options_t &options) :
+        _options (&options),
+        _mode (capture_mode (options))
+    {
+    }
 
     bool enabled (message_flow_log_mode_t min_mode) const noexcept
     {
-        return rank (_options->diagnostics.effective_message_flow ()) >= rank (min_mode);
+        return rank (_mode) >= rank (min_mode);
     }
+
+    message_flow_log_mode_t mode () const noexcept { return _mode; }
 
     static message_flow_log_mode_t required_mode (message_flow_outcome_t outcome) noexcept
     {
@@ -143,6 +150,14 @@ class message_flow_tracer_t
     }
 
   private:
+    static message_flow_log_mode_t capture_mode (
+      const dispatch_options_t &options) noexcept
+    {
+        const auto &current = runtime::flow_context_t::current ();
+        return current ? current->diagnostics_mode
+                       : options.diagnostics.effective_message_flow ();
+    }
+
     static int rank (message_flow_log_mode_t mode) noexcept { return static_cast<int> (mode); }
 
     static const char *flow_origin_name (flow_origin_t origin) noexcept
@@ -183,8 +198,10 @@ class message_flow_tracer_t
         }
         if (!event.flow_id) {
             if (const auto &flow = runtime::flow_context_t::current ()) {
-                event.flow_id = flow->flow_id;
-                event.flow_origin = flow->origin;
+                if (!flow->flow_id.empty ()) {
+                    event.flow_id = flow->flow_id;
+                    event.flow_origin = flow->origin;
+                }
             }
         }
     }
@@ -303,6 +320,7 @@ class message_flow_tracer_t
     }
 
     const dispatch_options_t *_options;
+    message_flow_log_mode_t _mode;
 };
 
 } // namespace zlink::framework::detail

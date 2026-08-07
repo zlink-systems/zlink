@@ -696,7 +696,8 @@ stream_write_call_t stream_t::write_packet_with_header (detail::stream_header_t 
     /* Stream writes propagate the ambient flow (flow-correlation §3.2);
      * control packets never carry the pair. */
     if (!header.flow_id () && header.kind () != stream_message_kind_t::control) {
-        if (const auto &flow = runtime::flow_context_t::current ()) {
+        if (const auto &flow = runtime::flow_context_t::current ();
+            flow && !flow->flow_id.empty ()) {
             header.with_flow (flow->flow_id, flow->origin);
         }
     }
@@ -1424,7 +1425,7 @@ result_t<void> stream_runtime_t::dispatch_packet (packet_stream_session_t &sessi
     }
     auto flow_scope = runtime::flow_context_t::enter (
       std::move (inbound_flow_id), header.flow_origin (),
-      detail::message_flow_tracer_t (_state->dispatch).capture_enabled (),
+      detail::message_flow_tracer_t (_state->dispatch).mode (),
       flow_origin_t::inbound);
     detail::message_flow_tracer_t (_state->dispatch).trace (message_flow_outcome_t::received, [&] {
         std::optional<std::string> correlation;
@@ -1506,7 +1507,7 @@ result_t<void> stream_runtime_t::dispatch_packet_async (
     }
     auto flow_scope = runtime::flow_context_t::enter (
       std::move (inbound_flow_id), header.flow_origin (),
-      detail::message_flow_tracer_t (_state->dispatch).capture_enabled (),
+      detail::message_flow_tracer_t (_state->dispatch).mode (),
       flow_origin_t::inbound);
     detail::message_flow_tracer_t (_state->dispatch).trace (
       message_flow_outcome_t::received, [&] {

@@ -1114,7 +1114,7 @@ void client_server_location_runtime_t::dispatch_server (
                 auto flow_scope = runtime::flow_context_t::enter (
                   payload.flow_id,
                   payload.flow_origin,
-                  flow.capture_enabled (),
+                  flow.mode (),
                   flow_origin_t::inbound);
                 flow.trace (message_flow_outcome_t::received, [&] {
                     return message_flow_event_t{
