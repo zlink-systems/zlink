@@ -454,7 +454,6 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
       const std::optional<location_owner_token_t> &owner_token) const noexcept
     {
         return target.spot_id == spot_id
-               && target.object_generation == object_generation
                && target.authority_owner_generation
                     == authority_owner_generation
                && owner_token

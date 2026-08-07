@@ -2244,8 +2244,6 @@ void mesh_node_host_service_t::start (service_provider_t &services)
                              route.target_node_routing_id)
                          && address.node_generation
                               == route.target_node_generation
-                         && address.object_generation
-                              == route.object_generation
                          && address.authority_owner_generation
                               == route.authority_owner_generation
                          && address.owner.lease_generation > 0

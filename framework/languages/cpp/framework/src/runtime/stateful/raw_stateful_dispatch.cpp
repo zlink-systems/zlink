@@ -255,12 +255,8 @@ stateful_error_t raw_stateful_dispatch_t::ingest (
             else {
                 const auto actor = protocol::decode_actor_message_header (
                   record.parts.front (), header.kind);
-                if (!exact_fence (owner, actor.target)) {
-                    validation =
-                      owner.object_generation
-                          != actor.target.object_generation
-                        ? stateful_error_t::generation_stale
-                        : stateful_error_t::conflict;
+                if (!matches_application_route (owner, actor.target)) {
+                    validation = stateful_error_t::conflict;
                 }
                 else {
                     query.target_node_routing_id =
@@ -272,7 +268,9 @@ stateful_error_t raw_stateful_dispatch_t::ingest (
                       : protocol::frozen_source_kind_t::node;
                     query.source_actor = actor.source_actor;
                     const auto authority = _authority_resolver (query);
-                    if (!authority) {
+                    if (!authority
+                        || actor.target.owner_lease_generation
+                             != authority->target_owner_lease_generation) {
                         validation = stateful_error_t::conflict;
                     }
                     else {
@@ -291,6 +289,8 @@ stateful_error_t raw_stateful_dispatch_t::ingest (
                             ? 4u : 0u;
                         frozen.reply_route_id = actor.correlation;
                         auto accepted_target = actor.target;
+                        accepted_target.object_generation =
+                          owner.object_generation;
                         accepted_target.owner_lease_generation =
                           authority->target_owner_lease_generation;
                         frozen.body =
@@ -308,12 +308,8 @@ stateful_error_t raw_stateful_dispatch_t::ingest (
             else {
                 const auto spot = protocol::decode_spot_message_header (
                   record.parts.front (), header.kind);
-                if (!exact_fence (owner, spot.target)) {
-                    validation =
-                      owner.object_generation
-                          != spot.target.object_generation
-                        ? stateful_error_t::generation_stale
-                        : stateful_error_t::conflict;
+                if (!matches_application_route (owner, spot.target)) {
+                    validation = stateful_error_t::conflict;
                 }
                 else {
                     query.target_node_routing_id =
@@ -326,7 +322,9 @@ stateful_error_t raw_stateful_dispatch_t::ingest (
                     if (!spot.source_spot_id.empty ())
                         query.source_spot_id = spot.source_spot_id;
                     const auto authority = _authority_resolver (query);
-                    if (!authority) {
+                    if (!authority
+                        || spot.target.owner_lease_generation
+                             != authority->target_owner_lease_generation) {
                         validation = stateful_error_t::conflict;
                     }
                     else {
@@ -344,9 +342,12 @@ stateful_error_t raw_stateful_dispatch_t::ingest (
                           header.kind == protocol::command::spotRequest
                             ? 3u : 0u;
                         frozen.reply_route_id = spot.correlation;
+                        auto accepted_target = spot.target;
+                        accepted_target.object_generation =
+                          owner.object_generation;
                         frozen.body =
                           protocol::frozen_spot_application_body_t{
-                            spot.target,
+                            std::move (accepted_target),
                             authority->target_owner_lease_generation,
                             payload};
                     }
@@ -870,26 +871,24 @@ std::string raw_stateful_dispatch_t::mailbox_owner (
     return "spot:" + owner.key;
 }
 
-bool raw_stateful_dispatch_t::exact_fence (
+bool raw_stateful_dispatch_t::matches_application_route (
   const object_ref_t &owner,
-  const protocol::actor_route_fence_t &fence)
+  const protocol::actor_route_fence_t &route)
 {
     return owner.kind == object_kind_t::actor
-           && owner.key == fence.actor_id
-           && owner.object_generation == fence.object_generation
+           && owner.key == route.actor_id
            && owner.authority_owner_generation
-                == fence.authority_owner_generation;
+                == route.authority_owner_generation;
 }
 
-bool raw_stateful_dispatch_t::exact_fence (
+bool raw_stateful_dispatch_t::matches_application_route (
   const object_ref_t &owner,
-  const protocol::spot_route_fence_t &fence)
+  const protocol::spot_route_fence_t &route)
 {
     return owner.kind != object_kind_t::actor
-           && owner.key == fence.spot_id
-           && owner.object_generation == fence.object_generation
+           && owner.key == route.spot_id
            && owner.authority_owner_generation
-                == fence.authority_owner_generation;
+                == route.authority_owner_generation;
 }
 
 raw_stateful_dispatch_t::delivery_key_t

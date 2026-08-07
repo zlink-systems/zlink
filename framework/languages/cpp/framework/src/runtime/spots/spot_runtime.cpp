@@ -7466,27 +7466,35 @@ bool spot_node_runtime_t::dispatch_mesh_record (
               && route.actor_id == actor.actor_id ().value ()
               && route.target_node_routing_id == local.routing_id ().to_bytes ()
               && route.target_node_generation == local.lifecycle_generation ();
-            const bool targets_local_node =
+            const bool targets_exact_incarnation =
               targets_local_actor
               && route.object_generation == actor.object_generation ();
             const bool follows_committed_source =
-              targets_local_node
+              targets_exact_incarnation
               && actor_message_follow_target (actor).has_value ();
+            const bool requires_exact_incarnation =
+              header.value ().message_name
+                  == actor_bound_session_bind_route_request_t::packet_name
+              || header.value ().message_name
+                  == actor_bound_session_route_request_t::packet_name;
             const bool admitted =
-              targets_local_node
+              targets_local_actor
+              && (!requires_exact_incarnation
+                  || targets_exact_incarnation)
               && (follows_committed_source
                   || (_state->actor_route_admission
                       && _state->actor_route_admission (route)));
             if (!admitted) {
+                const bool exact_generation_mismatch =
+                  requires_exact_incarnation && targets_local_actor
+                  && !targets_exact_incarnation;
                 reply_error (framework_exception_t (
-                  targets_local_actor
-                      && route.object_generation != actor.object_generation ()
+                  exact_generation_mismatch
                     ? framework_error_kind_t::invalid_operation
                     : framework_error_kind_t::unavailable,
-                  targets_local_actor
-                      && route.object_generation != actor.object_generation ()
-                    ? "Actor route object generation does not match"
-                    : "Actor route fence is stale or not admitted"));
+                  exact_generation_mismatch
+                    ? "Bound session route Actor generation does not match"
+                    : "Actor route owner identity is stale or not admitted"));
                 return true;
             }
         }

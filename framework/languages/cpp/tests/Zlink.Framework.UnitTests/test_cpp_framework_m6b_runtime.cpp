@@ -273,7 +273,9 @@ void verify_spot_route_fence_admission_precedes_body_decode ()
 
     auto stale = valid;
     stale.object_generation++;
-    assert (!state->accepts_route_fence (stale, owner));
+    // General Spot messages address the logical Spot. Recreating the Spot on
+    // the same live owner must not turn an already-routed message stale.
+    assert (state->accepts_route_fence (stale, owner));
     stale = valid;
     stale.authority_owner_generation++;
     assert (!state->accepts_route_fence (stale, owner));
@@ -2046,7 +2048,7 @@ void verify_raw_spot_and_actor_routing ()
             {"source-owner", 17,
              source_descriptor.node_routing_id,
              source_descriptor.lifecycle_generation},
-            23};
+            query.target.kind == stateful::object_kind_t::actor ? 37u : 31u};
       });
 
     const protocol::spot_route_fence_t spot_fence{
@@ -2197,6 +2199,24 @@ void verify_raw_spot_and_actor_routing ()
             == stateful::stateful_error_t::conflict);
     authority_live = true;
 
+    auto stale_owner_lease_fence = actor_fence;
+    ++stale_owner_lease_fence.owner_lease_generation;
+    assert (source.send_to_actor (
+      target_descriptor.node_routing_id, std::nullopt,
+      stale_owner_lease_fence,
+      {"ActorPacket", "application/json", bytes ("stale-lease")}));
+    stale_owner_pump = mesh::raw_mesh_pump_result_t::no_data;
+    while (stale_owner_pump != mesh::raw_mesh_pump_result_t::application
+           && mesh::service_liveness_registry_t::clock_t::now ()
+                < deadline) {
+        stale_owner_pump = target.pump_one (
+          mesh::service_liveness_registry_t::clock_t::now ());
+    }
+    assert (stale_owner_pump
+            == mesh::raw_mesh_pump_result_t::application);
+    assert (dispatch.ingest (actor)
+            == stateful::stateful_error_t::conflict);
+
     auto stale_fence = actor_fence;
     ++stale_fence.object_generation;
     std::promise<request_result_t> stale_promise;
@@ -2224,7 +2244,21 @@ void verify_raw_spot_and_actor_routing ()
     }
     assert (actor_pump == mesh::raw_mesh_pump_result_t::application);
     assert (dispatch.ingest (actor)
-            == stateful::stateful_error_t::generation_stale);
+            == stateful::stateful_error_t::none);
+    const auto [recreated_delivery_error, recreated_delivery] =
+      dispatch.try_claim (actor);
+    assert (recreated_delivery_error == stateful::stateful_error_t::none);
+    assert (recreated_delivery && recreated_delivery->request);
+    const auto recreated_frozen = protocol::decode_frozen_record (
+      recreated_delivery->turn.payload);
+    assert (recreated_frozen.target);
+    assert (recreated_frozen.target->object_generation
+            == actor.object_generation);
+    assert (dispatch.complete (
+              *recreated_delivery,
+              protocol::application_payload_t{
+                "ActorReply", "application/json", bytes ("recreated")})
+            == stateful::stateful_error_t::none);
     while (stale_future.wait_for (0ms) != std::future_status::ready
            && mesh::service_liveness_registry_t::clock_t::now ()
                 < deadline) {
@@ -2235,8 +2269,12 @@ void verify_raw_spot_and_actor_routing ()
     }
     assert (stale_future.wait_for (0ms)
             == std::future_status::ready);
-    assert (stale_future.get ().first
-            == foundation::operation_terminal_t::transport_failed);
+    const auto recreated_result = stale_future.get ();
+    assert (recreated_result.first
+            == foundation::operation_terminal_t::completed);
+    assert (protocol::decode_application_payload (
+              recreated_result.second).payload
+            == bytes ("recreated"));
     assert (stale_terminal_count == 1);
     source.close ();
     target.close ();

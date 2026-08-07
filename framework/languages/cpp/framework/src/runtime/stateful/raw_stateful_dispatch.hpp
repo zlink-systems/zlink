@@ -117,10 +117,12 @@ class raw_stateful_dispatch_t
     };
 
     static std::string mailbox_owner (const object_ref_t &owner);
-    static bool exact_fence (const object_ref_t &owner,
-                             const protocol::actor_route_fence_t &fence);
-    static bool exact_fence (const object_ref_t &owner,
-                             const protocol::spot_route_fence_t &fence);
+    static bool matches_application_route (
+      const object_ref_t &owner,
+      const protocol::actor_route_fence_t &route);
+    static bool matches_application_route (
+      const object_ref_t &owner,
+      const protocol::spot_route_fence_t &route);
     static delivery_key_t delivery_key (
       const object_ref_t &owner,
       std::uint64_t sequence);

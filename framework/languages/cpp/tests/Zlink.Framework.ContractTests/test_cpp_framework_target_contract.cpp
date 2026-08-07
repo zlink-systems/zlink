@@ -1997,14 +1997,43 @@ int main ()
       "CPP-FOLLOW-001",
       "Message Follow still relies only on the hop ceiling for loop detection");
     gate.require (
-      spot_runtime.find (
-        "route.object_generation != actor.object_generation ()")
+      actor_transfer_coordinator.find (
+        "found->second.old_generation != generation")
+          != std::string::npos,
+      "CPP-FOLLOW-001",
+      "Message Follow does not preserve its exact Actor generation fence");
+
+    /* CPP-LIFE-001 — a general message addresses the logical Actor or Spot.
+     * Owner authority and lease remain fences, while ObjectGeneration is
+     * normalized to the current incarnation after admission. */
+    gate.require (
+      raw_stateful_dispatch.find ("matches_application_route")
           != std::string::npos
+        && raw_stateful_dispatch.find (
+             "accepted_target.object_generation =")
+             != std::string::npos
+        && raw_stateful_dispatch.find (
+             "actor.target.owner_lease_generation")
+             != std::string::npos
+        && raw_stateful_dispatch.find (
+             "spot.target.owner_lease_generation")
+             != std::string::npos,
+      "CPP-LIFE-001",
+      "general application admission does not normalize generation or fence the current owner lease");
+    gate.require (
+      spot_runtime.find (
+        "const bool admitted =\n              targets_local_actor")
+          != std::string::npos
+        && spot_runtime.find (
+             "const bool targets_exact_incarnation =\n              targets_local_actor")
+             != std::string::npos
+        && spot_runtime.find ("requires_exact_incarnation")
+             != std::string::npos
         && spot_runtime.find (
              "framework_error_kind_t::invalid_operation")
              != std::string::npos,
-      "CPP-FOLLOW-001",
-      "stale Actor generation is not exposed as InvalidOperation");
+      "CPP-LIFE-001",
+      "Actor dispatch does not separate general-message admission from exact Message Follow and bound-session admission");
 
     /* CPP-SESS-003 — each serial owner selects a closed lane-policy type.
      * Yield behavior is derived from the Spot alternative; callers cannot
