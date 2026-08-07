@@ -162,6 +162,41 @@ test('RouteMesh runtime state uses the shared service wire values', () => {
   );
 });
 
+test('RouteMesh admission preserves an optional maintenance wave across updates', () => {
+  const initial = {
+    ...descriptor('wave-peer'),
+    maintenanceWave: 'rolling-a'
+  };
+  const frame = encodeRouteMeshAdmission(M6aServiceWireCommand.update, initial);
+  assert.equal(
+    decodeRouteMeshAdmission(frame, M6aServiceWireCommand.update, initial.nodeRoutingId)
+      .maintenanceWave,
+    'rolling-a'
+  );
+
+  const topology = new ServiceTopologyRegistry(descriptor('wave-local'));
+  assert.equal(topology.admit(initial, 'connection-a'), 'admitted');
+  assert.equal(topology.admit({
+    ...initial,
+    descriptorRevision: 2n,
+    maintenanceWave: 'rolling-b'
+  }, 'connection-a'), 'admitted');
+  assert.equal(topology.peer(initial.nodeRoutingId)?.descriptor.maintenanceWave, 'rolling-b');
+
+  const backend = new ZLinkNodeRawMeshBackend('wave-mesh', 'wave-node');
+  backend.configureObjectPlacement({
+    role: 'server',
+    placementWeight: 100,
+    activeCapacityLimit: 10,
+    pendingCapacityLimit: 2,
+    objectCapabilities: ['object-type:player'],
+    maintenanceWave: 'rolling-a'
+  });
+  const created = (backend as unknown as { createDescriptor(): ServiceNodeDescriptor })
+    .createDescriptor();
+  assert.equal(created.maintenanceWave, 'rolling-a');
+});
+
 test('reply header preserves the schema tail length field', () => {
   const empty = encodeReplyHeader(7n);
   assert.equal(empty.byteLength, 23);

@@ -27,6 +27,7 @@ export interface ServiceNodeDescriptor {
   readonly securityIdentity: string;
   readonly effectiveMaxMessageBytes: number;
   readonly applicationVersion: bigint;
+  readonly maintenanceWave?: string;
   readonly protocolCapabilities: readonly string[];
   readonly objectRole: ServiceObjectRole;
   readonly placementWeight: number;
@@ -447,6 +448,12 @@ export function validateDescriptor(descriptor: ServiceNodeDescriptor): void {
     || descriptor.applicationVersion < 0n
   ) {
     throw new RangeError('Descriptor message bound or application version is invalid.');
+  }
+  if (descriptor.maintenanceWave !== undefined) {
+    requireText(descriptor.maintenanceWave, 'maintenanceWave');
+    if (Buffer.byteLength(descriptor.maintenanceWave, 'utf8') > 255) {
+      throw new RangeError('maintenanceWave must not exceed 255 UTF-8 bytes.');
+    }
   }
   validatePublicWeight(descriptor.placementWeight, 'placementWeight');
   validateCapacity(descriptor.activeCapacityLimit, false, 'activeCapacityLimit');

@@ -111,6 +111,7 @@ export interface ZLinkBackendMeshNode {
     readonly activeCapacityLimit: number;
     readonly pendingCapacityLimit: number;
     readonly objectCapabilities: readonly string[];
+    readonly maintenanceWave?: string;
   }): void;
   selectObjectPlacement(stableType: string): ZLinkBackendObjectPlacement;
   instanceSpotPlacementTypes?(): readonly string[];

@@ -156,6 +156,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   private activeCapacityLimit = 10_000;
   private pendingCapacityLimit = 128;
   private objectCapabilities: readonly string[] = [];
+  private maintenanceWave?: string;
   private inboundMessageDropped?: (
     surface: 'node' | 'channel',
     messageKind: 'send',
@@ -202,6 +203,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     readonly activeCapacityLimit: number;
     readonly pendingCapacityLimit: number;
     readonly objectCapabilities: readonly string[];
+    readonly maintenanceWave?: string;
   }): void {
     this.requireNotStarted();
     this.objectRole = options.role;
@@ -218,6 +220,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       'pendingCapacityLimit'
     );
     this.objectCapabilities = [...new Set(options.objectCapabilities)].sort();
+    this.maintenanceWave = options.maintenanceWave;
   }
 
   setInboundMessageDroppedHandler(handler: (
@@ -1362,6 +1365,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       securityIdentity: 'default',
       effectiveMaxMessageBytes: 4 * 1024 * 1024,
       applicationVersion: 0n,
+      ...(this.maintenanceWave === undefined ? {} : { maintenanceWave: this.maintenanceWave }),
       protocolCapabilities: [
         'framework-service-v11',
         ...this.objectCapabilities

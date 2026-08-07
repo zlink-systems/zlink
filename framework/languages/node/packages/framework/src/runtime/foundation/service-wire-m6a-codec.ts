@@ -278,7 +278,10 @@ export function encodeRouteMeshAdmission(
     tlv(9, encodeU32(descriptor.activeCapacityLimit)),
     tlv(10, encodeU32(descriptor.pendingCapacityLimit)),
     tlv(11, encodeU32(descriptor.activeCapacityUsed)),
-    tlv(12, encodeU32(descriptor.pendingCapacityUsed))
+    tlv(12, encodeU32(descriptor.pendingCapacityUsed)),
+    ...(descriptor.maintenanceWave === undefined
+      ? []
+      : [tlv(13, encodeText8(descriptor.maintenanceWave, 'maintenanceWave'))])
   );
   const route = concat(...routeParts, encodeU32(extension.byteLength), extension);
   return concat(prefix(command), Buffer.of(1), encodeU32(route.byteLength), route);
@@ -315,6 +318,7 @@ export function decodeRouteMeshAdmission(
   let applicationVersion: bigint | undefined;
   let protocolCapabilities: string[] | undefined;
   let objectRole: ServiceObjectRole | undefined;
+  let maintenanceWave: string | undefined;
   const capacities = new Map<number, number>();
   let previousId = 0;
   while (reader.offset < extensionEnd) {
@@ -348,6 +352,9 @@ export function decodeRouteMeshAdmission(
       case 12:
         capacities.set(id, value.u32('capacity'));
         break;
+      case 13:
+        maintenanceWave = value.text8('maintenanceWave');
+        break;
       default:
         value.skipRemaining();
         break;
@@ -375,6 +382,7 @@ export function decodeRouteMeshAdmission(
     securityIdentity,
     effectiveMaxMessageBytes,
     applicationVersion,
+    ...(maintenanceWave === undefined ? {} : { maintenanceWave }),
     protocolCapabilities,
     objectRole,
     placementWeight: capacities.get(8)!,

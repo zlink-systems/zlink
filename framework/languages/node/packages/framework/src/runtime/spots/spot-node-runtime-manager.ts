@@ -333,7 +333,10 @@ export class ZLinkSpotNodeRuntimeManager {
           objectCapabilities: [
             ...stableTypes.map(type => `object-type:${type}`),
             ...instanceSpotTypes.map(type => `instance-spot-type:${type}`)
-          ]
+          ],
+          ...(this.options.registration.maintenanceWave === undefined
+            ? {}
+            : { maintenanceWave: this.options.registration.maintenanceWave })
         });
         for (const [channelName, channel] of Object.entries(spotNode.meshChannels ?? {})) {
           if (channel.server !== true) {
