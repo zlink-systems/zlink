@@ -507,7 +507,7 @@ raw_stateful_dispatch_t::try_claim (const object_ref_t &owner)
         return {error, std::nullopt};
     }
     std::lock_guard lock (_mutex);
-    const auto pending =
+    auto pending =
       _pending.find (delivery_key (owner, turn->sequence));
     if (pending == _pending.end ()) {
         (void) _objects->complete_claim (
@@ -517,7 +517,7 @@ raw_stateful_dispatch_t::try_claim (const object_ref_t &owner)
     return {
       stateful_error_t::none,
       stateful_delivery_t{
-        owner, *turn, pending->second.payload,
+        owner, std::move (*turn), std::move (pending->second.payload),
         pending->second.request}};
 }
 

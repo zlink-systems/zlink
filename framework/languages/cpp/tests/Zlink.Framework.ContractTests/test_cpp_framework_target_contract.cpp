@@ -144,6 +144,8 @@ int main ()
       root / "../../runtime/protocol/generated/cpp/service_wire_constants.hpp");
     const auto public_host_runtime =
       read_file (root / "framework/src/runtime/stateful/public_host_runtime.cpp");
+    const auto raw_stateful_dispatch = read_file (
+      root / "framework/src/runtime/stateful/raw_stateful_dispatch.cpp");
     const auto monitoring_unit =
       read_file (root / "tests/Zlink.Framework.UnitTests/test_cpp_framework_monitoring.cpp");
     const auto actor_gateway_unit =
@@ -1963,6 +1965,17 @@ int main ()
         && serializer_header.find ("[this, type]") == std::string::npos,
       "CPP-OWN-008",
       "cached custom serializers still look up erased functions per message");
+
+    /* CPP-OWN-003 — claiming a queued stateful turn transfers the two owned
+     * buffers instead of rebuilding delivery copies. */
+    gate.require (
+      raw_stateful_dispatch.find (
+        "std::move (pending->second.payload)")
+          != std::string::npos
+        && raw_stateful_dispatch.find ("owner, *turn,")
+             == std::string::npos,
+      "CPP-OWN-003",
+      "stateful claim still copies pending payload or canonical turn buffers");
 
     /* CPP-FOLLOW-001 — Message Follow admission preserves the contract error
      * categories and rejects a revisited node before the hop ceiling. */
