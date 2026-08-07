@@ -425,6 +425,63 @@ test('backend mesh dispatch pump yields between continuous receive batches', asy
   }
 });
 
+test('backend mesh dispatch pump yields when elapsed receive time wins before the count limit', async () => {
+  const totalBatches = 4;
+  let readyHandler;
+  let receivedBatches = 0;
+  let timerObservedAt;
+  let nowMs = 0;
+  let complete;
+  const completed = new Promise((resolve) => { complete = resolve; });
+  const claim = {
+    recvBatch() {
+      if (receivedBatches >= totalBatches) return { ok: false, records: [] };
+      receivedBatches += 1;
+      return { ok: true, records: [{ parts: [] }] };
+    },
+    release() {}
+  };
+  const node = {
+    setReadyHandler(handler) { readyHandler = handler; },
+    createReadyBatch() {
+      return {
+        reset() {},
+        takeClaim() { return claim; },
+        close() {}
+      };
+    },
+    createReceiveBatch() {
+      return { reset() {}, close() {} };
+    },
+    drainReady() {
+      return {
+        ok: true,
+        hasResidue: false,
+        records: [{ ownerKind: framework.ReadyOwnerKind.Node }]
+      };
+    }
+  };
+  const pump = new backend.ZLinkMeshDispatchPump(node, {
+    monotonicNowMs: () => {
+      nowMs += 3;
+      return nowMs;
+    },
+    dispatch() {
+      if (receivedBatches === totalBatches) complete();
+    }
+  });
+
+  try {
+    pump.start();
+    setTimeout(() => { timerObservedAt = receivedBatches; }, 0);
+    readyHandler(framework.ReadyDomain.Application);
+    await completed;
+    assert.ok(timerObservedAt < totalBatches, `timer ran after ${timerObservedAt} batches`);
+  } finally {
+    await pump.dispose();
+  }
+});
+
 test('backend mesh dispatch pump marks application and infrastructure execution areas', async () => {
   let readyHandler;
   let currentDomain;

@@ -1111,7 +1111,17 @@ test('raw runtime admits peers and completes node/channel requests once', async 
       contentType: 'application/json',
       payload: Buffer.from('notice')
     }), true);
-    await pollUntil(() => right.pumpOne() === 'application');
+    let observedSourceRoutingId: string | undefined;
+    let observedByteCount = 0;
+    await pollUntil(() => right.pumpOne(
+      performance.now(),
+      (sourceRoutingId, byteCount) => {
+        observedSourceRoutingId = sourceRoutingId;
+        observedByteCount = byteCount;
+      }
+    ) === 'application');
+    assert.equal(observedSourceRoutingId, 'm6a-left');
+    assert.ok(observedByteCount > Buffer.byteLength('notice'));
     const sent = right.mailbox.tryClaim('application', 1, 4096)!;
     assert.equal(sent.owner, 'channel:alpha');
     assert.equal(right.mailbox.release(sent), true);

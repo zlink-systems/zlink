@@ -100,6 +100,30 @@ const MULTIPART_CONTENT_TYPE = SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE;
 const FATAL_UTF8 = new TextDecoder('utf-8', { fatal: true });
 const MAX_DRAIN_RECORDS = 64;
 const MESH_BACKEND_POLL_INTERVAL_MS = 1;
+const MESH_RECEIVE_BATCH_BYTE_LIMIT = 4 * 1024 * 1024;
+const MESH_RECEIVE_BATCH_TIME_LIMIT_MS = 2;
+
+class ZLinkMeshReceiveBatchBudget {
+  private readonly peerMessages = new Map<string, number>();
+  private readonly peerBytes = new Map<string, number>();
+  private startedAtMs = 0;
+
+  reset(nowMs: number): void {
+    this.peerMessages.clear();
+    this.peerBytes.clear();
+    this.startedAtMs = nowMs;
+  }
+
+  record(peer: string, byteCount: number, nowMs: number): boolean {
+    const messages = (this.peerMessages.get(peer) ?? 0) + 1;
+    const bytes = (this.peerBytes.get(peer) ?? 0) + byteCount;
+    this.peerMessages.set(peer, messages);
+    this.peerBytes.set(peer, bytes);
+    return messages >= MAX_DRAIN_RECORDS
+      || bytes >= MESH_RECEIVE_BATCH_BYTE_LIMIT
+      || nowMs - this.startedAtMs >= MESH_RECEIVE_BATCH_TIME_LIMIT_MS;
+  }
+}
 
 /**
  * M6A MeshNode backend. Stateful Spot/Actor entry points stay explicit until
@@ -145,6 +169,13 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     record: import('../../foundation/service-stateful-wire-codec').ServiceMessageFollowRecord
   ) => void;
   private readonly peerDisconnectedHandlers = new Set<(endpoint: string) => void>();
+  private readonly receiveBatchBudget = new ZLinkMeshReceiveBatchBudget();
+  private observedPumpSourceRoutingId?: string;
+  private observedPumpByteCount = 0;
+  private readonly observePump = (sourceRoutingId: string, byteCount: number): void => {
+    this.observedPumpSourceRoutingId = sourceRoutingId;
+    this.observedPumpByteCount = byteCount;
+  };
 
   constructor(
     private readonly meshName: string,
@@ -1343,10 +1374,23 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     // Completion progress is independent from Application receive. A future
     // Application HWM pause may skip pumpOne(), but must keep this call.
     runtime.progressCompletion();
-    for (let index = 0; index < MAX_DRAIN_RECORDS; index++) {
-      const result = runtime.pumpOne();
+    this.receiveBatchBudget.reset(performance.now());
+    for (;;) {
+      this.observedPumpSourceRoutingId = undefined;
+      const result = runtime.pumpOne(performance.now(), this.observePump);
       if (result === 'noData') break;
       if (result === 'application') this.readyHandler?.(ReadyDomain.Application);
+      const sourceRoutingId = this.observedPumpSourceRoutingId;
+      // Core ROUTER advances its fair-queue cursor after each complete
+      // multipart message, so the next poll resumes from the following pipe.
+      if (
+        sourceRoutingId !== undefined
+        && this.receiveBatchBudget.record(
+          sourceRoutingId,
+          this.observedPumpByteCount,
+          performance.now()
+        )
+      ) break;
     }
     runtime.announceExpectedPeers();
     runtime.tickLiveness();

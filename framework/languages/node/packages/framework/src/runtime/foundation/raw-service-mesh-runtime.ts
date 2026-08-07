@@ -45,6 +45,11 @@ export type RawServicePumpResult =
   | 'application'
   | 'protocolError';
 
+export type RawServicePumpObserver = (
+  sourceRoutingId: string,
+  byteCount: number
+) => void;
+
 export interface RawServiceRequestResult {
   readonly terminalResult: number;
   readonly failureCode: number;
@@ -600,11 +605,19 @@ export class RawServiceMeshRuntime {
     );
   }
 
-  pumpOne(nowMs = performance.now()): RawServicePumpResult {
+  pumpOne(
+    nowMs = performance.now(),
+    observe?: RawServicePumpObserver
+  ): RawServicePumpResult {
     const router = this.requireStarted();
     const received = router.receive(true);
     if (received === undefined) return 'noData';
-    return this.processReceived(received, nowMs, false);
+    const result = this.processReceived(received, nowMs, false);
+    observe?.(
+      received.sourceRid,
+      received.parts.reduce((sum, part) => sum + part.byteLength, 0)
+    );
+    return result;
   }
 
   /**
