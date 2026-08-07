@@ -9,6 +9,24 @@
 namespace zlink::framework::detail
 {
 
+bool pending_actor_admission_t::matches_prepare (
+  const actor_ref_t &actor,
+  const spot_id_t &source_spot,
+  const spot_id_t &target_spot,
+  std::uint64_t operation_high,
+  std::uint64_t operation_low) const
+{
+    return source_actor.actor_id () == actor.actor_id ()
+           && actor_ref_access_t::actor_type (source_actor)
+                == actor_ref_access_t::actor_type (actor)
+           && source_actor.object_generation () == actor.object_generation ()
+           && source_actor.node_rid ().value () == actor.node_rid ().value ()
+           && source_spot_id == source_spot
+           && target_spot_id == target_spot
+           && completion_operation_id_high == operation_high
+           && completion_operation_id_low == operation_low;
+}
+
 namespace
 {
 

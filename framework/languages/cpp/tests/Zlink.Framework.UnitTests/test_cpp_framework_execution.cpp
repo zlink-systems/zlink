@@ -1043,6 +1043,79 @@ bool verify_idle_instance_spot_eviction_closes_local_context ()
     return result;
 }
 
+bool verify_remote_actor_prepare_is_idempotent ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+    namespace runtime = zlink::framework::runtime;
+
+    serializer_registry_t serializers;
+    auto node = std::make_shared<spot_node_builder_state_t> (
+      "actor-prepare-idempotency-node");
+    auto target = std::make_shared<spot_context_state_t> ();
+    target->node = node;
+    target->node_rid = node_rid_t::from_string (
+      "actor-prepare-idempotency-node");
+    target->spot_id = spot_id_t ("target-spot");
+    target->spot_name = "target";
+    target->spot_instance = std::make_shared<int> (1);
+    target->channel_runtime =
+      std::make_shared<channel_runtime_state_t> ();
+    target->channel_runtime->serializers = &serializers;
+    target->serial_executor =
+      std::make_shared<runtime::offload_executor_t> (
+        2, 64, "actor-prepare-idempotency");
+    target->serial_queue =
+      std::make_shared<runtime::serial_execution_queue_t> (
+        *target->serial_executor, 64,
+        runtime::serial_execution_queue_t::error_handler_t{},
+        runtime::serial_lane_policy_t::spot_wide ());
+    node->spot_contexts_by_id.emplace (
+      target->spot_id, spot_context_access_t::create (target));
+
+    spot_node_builder_state_t::actor_factory_registration_t factory;
+    factory.actor_type = std::type_index (typeid (int));
+    node->actor_factories.emplace ("player", std::move (factory));
+    int admission_calls = 0;
+    spot_actor_admission_callbacks_t callbacks;
+    callbacks.join = [&] (void *, std::string_view,
+                          const zlink::message_t &,
+                          serializer_registry_t &) {
+        ++admission_calls;
+        return spot_actor_join_result_t::accept (
+          message_t::from (std::string ("accepted")));
+    };
+    target->actor_admissions.emplace (
+      std::type_index (typeid (int)), std::move (callbacks));
+
+    spot_node_runtime_t owner (node);
+    const auto actor = actor_ref_access_t::make (
+      node_rid_t::from_string ("source-node"),
+      "player", "actor-1", 7);
+    const auto request = zlink::message_t::from (std::string ("prepare"));
+    const auto first = owner.admit_remote_actor_to_spot (
+      "transfer-1", actor, spot_id_t ("source-spot"),
+      target->spot_id, request, 11, 13);
+    const auto repeated = owner.admit_remote_actor_to_spot (
+      "transfer-1", actor, spot_id_t ("source-spot"),
+      target->spot_id, request, 11, 13);
+    const auto conflicting = owner.admit_remote_actor_to_spot (
+      "transfer-1", actor, spot_id_t ("source-spot"),
+      target->spot_id, request, 11, 17);
+
+    target->serial_queue->close ();
+    target->serial_queue->drain ();
+    target->serial_executor->drain ();
+    return first && repeated && first.value ().accepted
+           && repeated.value ().accepted
+           && first.value ().reply && repeated.value ().reply
+           && first.value ().reply->decode<std::string> () == "accepted"
+           && repeated.value ().reply->decode<std::string> () == "accepted"
+           && !conflicting
+           && conflicting.error_kind () == framework_error_kind_t::protocol_error
+           && admission_calls == 1;
+}
+
 } // namespace
 
 int main ()
@@ -1205,6 +1278,9 @@ int main ()
     }
     if (!verify_idle_instance_spot_eviction_closes_local_context ()) {
         return 53;
+    }
+    if (!verify_remote_actor_prepare_is_idempotent ()) {
+        return 58;
     }
 
     std::atomic_int unsupported_submit_count = 0;

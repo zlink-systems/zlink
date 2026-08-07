@@ -4427,35 +4427,59 @@ spot_node_runtime_t::admit_remote_actor_to_spot (std::string transfer_id,
     auto &target = *context.value ()._state;
     auto &serializers = *target.channel_runtime->serializers;
     spot_actor_join_result_t response;
+    bool admission_conflict = false;
+    const auto admission_timeout =
+      _state->channel_runtime
+        ? _state->channel_runtime->default_request_timeout
+        : std::chrono::duration_cast<std::chrono::milliseconds> (
+            std::chrono::seconds (30));
     // The admission callback is user code on the spot serial queue. It may call back
     // into the framework (sends, joins) that need the node mutex from the serial
     // thread, so the node mutex must not be held across this wait.
     node_lock.unlock ();
     if (!target.run_serial_sync ("spot-actor-admission", [&] {
+            const auto existing =
+              _state->actor_transfer_coordinator.admission (transfer_id);
+            if (existing) {
+                if (!existing->matches_prepare (
+                      actor_ref, source_spot_id, target_spot_id,
+                      completion_operation_id_high,
+                      completion_operation_id_low)) {
+                    admission_conflict = true;
+                    return;
+                }
+                response = spot_actor_join_result_t{
+                  true, existing->admission_reply};
+                return;
+            }
             response = admission.value ().get ().join (target.spot_instance.get (),
                                                        actor_ref.actor_id ().value (),
                                                        request, serializers);
+            if (response.accepted
+                && !_state->actor_transfer_coordinator.try_add_admission (
+                  transfer_id,
+                  pending_actor_admission_t{
+                    .actor_key = actor_key (actor_ref),
+                    .source_actor = actor_ref,
+                    .source_spot_id = source_spot_id,
+                    .target_spot_id = target_spot_id,
+                    .deadline = std::chrono::steady_clock::now ()
+                                + admission_timeout,
+                    .completion_operation_id_high =
+                      completion_operation_id_high,
+                    .completion_operation_id_low =
+                      completion_operation_id_low,
+                    .admission_reply = response.reply})) {
+                admission_conflict = true;
+            }
         })) {
         return result_t<spot_actor_join_result_t>::failure (
           framework_error_kind_t::capacity_exceeded, "spot serial queue is full");
     }
-    node_lock.lock ();
-    if (response.accepted) {
-        const auto timeout =
-          _state->channel_runtime
-            ? _state->channel_runtime->default_request_timeout
-            : std::chrono::duration_cast<std::chrono::milliseconds> (std::chrono::seconds (30));
-        if (!_state->actor_transfer_coordinator.try_add_admission (
-              std::move (transfer_id),
-              pending_actor_admission_t{actor_key (actor_ref), actor_ref,
-                                        std::move (source_spot_id), std::move (target_spot_id),
-                                        std::chrono::steady_clock::now () + timeout,
-                                        completion_operation_id_high,
-                                        completion_operation_id_low})) {
-            return result_t<spot_actor_join_result_t>::failure (
-              framework_error_kind_t::protocol_error,
-              "remote actor admission is already pending");
-        }
+    if (admission_conflict) {
+        return result_t<spot_actor_join_result_t>::failure (
+          framework_error_kind_t::protocol_error,
+          "remote actor admission conflicts with the pending prepare");
     }
     return result_t<spot_actor_join_result_t>::success (std::move (response));
 }
