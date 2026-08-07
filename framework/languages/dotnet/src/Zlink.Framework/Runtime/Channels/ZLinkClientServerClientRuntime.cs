@@ -144,6 +144,14 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             ZLinkMessageParts.DisposeAll(parts);
             return new ZLinkOneWaySubmitResult(ZLinkOneWaySubmitStatus.TargetNotFound);
         }
+        if (!ZLinkClientServerMessageBound.Fits(
+                parts,
+                target.AdmittedMaximumMessageBytes))
+        {
+            ZLinkMessageParts.DisposeAll(parts);
+            throw ZLinkClientServerMessageBound.CreateExceededException(
+                target.AdmittedMaximumMessageBytes);
+        }
         return await target.Submitter.SubmitAsync(
                 parts,
                 pending => target.Socket.Send(pending, SendFlags.DontWait),
@@ -174,6 +182,14 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                 ZLinkMessageParts.DisposeAll(parts);
                 throw ZLinkRequestFailureMapper.CreateTimedOutRequestException(
                     $"ClientServer channel '{_channelName}' had no ready server before the request deadline.");
+            }
+            if (!ZLinkClientServerMessageBound.Fits(
+                    parts,
+                    target.AdmittedMaximumMessageBytes))
+            {
+                ZLinkMessageParts.DisposeAll(parts);
+                throw ZLinkClientServerMessageBound.CreateExceededException(
+                    target.AdmittedMaximumMessageBytes);
             }
             var remaining = deadline - DateTime.UtcNow;
             if (remaining <= TimeSpan.Zero)
@@ -624,6 +640,15 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         internal IZLinkBackendDealerSocket Socket { get; }
         internal ZLinkAsyncSubmitter Submitter { get; }
         internal bool Ready { get { lock (_gate) return _ready && !_disposed; } }
+        internal uint AdmittedMaximumMessageBytes
+        {
+            get
+            {
+                lock (_gate)
+                    return _currentAdmission?.NormalizedEffectiveMaxMessageBytes
+                           ?? _normalizedEffectiveMaxMessageBytes;
+            }
+        }
         internal bool AdmissionCompleted
         {
             get { lock (_gate) return _admissionCompleted; }

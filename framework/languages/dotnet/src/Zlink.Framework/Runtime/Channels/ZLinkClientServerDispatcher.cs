@@ -10,6 +10,7 @@ internal sealed class ZLinkClientServerDispatcher(
         IZLinkBackendRouterSocket router,
         Received received,
         ZLinkChannelReplyGate replyGate,
+        uint maximumMessageBytes,
         CancellationToken cancellationToken)
     {
         ZLinkEnvelopeHeader header;
@@ -30,7 +31,8 @@ internal sealed class ZLinkClientServerDispatcher(
                 received,
                 replyGate,
                 protocolError.Header,
-                protocolError.Message);
+                protocolError.Message,
+                maximumMessageBytes);
             return;
         }
 
@@ -51,12 +53,28 @@ internal sealed class ZLinkClientServerDispatcher(
                         header,
                         (replyHeader, reply, replyType) =>
                         {
-                            Reply(replyGate, router, received, replyHeader, reply, replyType);
+                            Reply(
+                                replyGate,
+                                router,
+                                received,
+                                header,
+                                replyHeader,
+                                reply,
+                                replyType,
+                                maximumMessageBytes);
                             return ValueTask.CompletedTask;
                         },
                         errorHeader =>
                         {
-                            Reply(replyGate, router, received, errorHeader, null, null);
+                            Reply(
+                                replyGate,
+                                router,
+                                received,
+                                header,
+                                errorHeader,
+                                null,
+                                null,
+                                maximumMessageBytes);
                             return ValueTask.CompletedTask;
                         },
                         cancellationToken)
@@ -69,7 +87,8 @@ internal sealed class ZLinkClientServerDispatcher(
                     received,
                     replyGate,
                     header,
-                    $"ClientServer server cannot accept '{header.Kind}' envelopes.");
+                    $"ClientServer server cannot accept '{header.Kind}' envelopes.",
+                    maximumMessageBytes);
                 break;
         }
     }
@@ -78,7 +97,8 @@ internal sealed class ZLinkClientServerDispatcher(
         string channelName,
         IZLinkBackendRouterSocket router,
         Received received,
-        ZLinkChannelReplyGate replyGate)
+        ZLinkChannelReplyGate replyGate,
+        uint maximumMessageBytes)
     {
         try
         {
@@ -90,6 +110,7 @@ internal sealed class ZLinkClientServerDispatcher(
                 replyGate,
                 router,
                 received,
+                header,
                 ZLinkChannelReplyWriter.CreateErrorHeader(
                     channelName,
                     header,
@@ -98,7 +119,8 @@ internal sealed class ZLinkClientServerDispatcher(
                         $"ClientServer channel '{channelName}' application queue is full.",
                         retryAdvice: ZLinkRetryAdvice.RetryAfterBackoff)),
                 null,
-                null);
+                null,
+                maximumMessageBytes);
         }
         catch (ZLinkEnvelopeProtocolException)
         {
@@ -111,7 +133,8 @@ internal sealed class ZLinkClientServerDispatcher(
         Received received,
         ZLinkChannelReplyGate replyGate,
         ZLinkEnvelopeHeader request,
-        string message)
+        string message,
+        uint maximumMessageBytes)
     {
         if (!ZLinkEnvelopeCodec.CanCorrelateReply(request))
             return;
@@ -119,21 +142,57 @@ internal sealed class ZLinkClientServerDispatcher(
             replyGate,
             router,
             received,
+            request,
             ZLinkChannelReplyWriter.CreateProtocolErrorHeader(
                 channelName,
                 request,
                 message),
             null,
-            null);
+            null,
+            maximumMessageBytes);
+    }
+
+    internal void RejectMessageTooLarge(
+        string channelName,
+        IZLinkBackendRouterSocket router,
+        Received received,
+        ZLinkChannelReplyGate replyGate,
+        uint maximumMessageBytes)
+    {
+        try
+        {
+            var request = ZLinkEnvelopeCodec.DecodeHeader(received.Parts);
+            if (request.Kind != ZLinkMessageKind.Request
+                || !StringComparer.Ordinal.Equals(request.ChannelName, channelName))
+                return;
+            Reply(
+                replyGate,
+                router,
+                received,
+                request,
+                ZLinkChannelReplyWriter.CreateErrorHeader(
+                    channelName,
+                    request,
+                    ZLinkClientServerMessageBound.CreateExceededException(
+                        maximumMessageBytes)),
+                null,
+                null,
+                maximumMessageBytes);
+        }
+        catch (ZLinkEnvelopeProtocolException)
+        {
+        }
     }
 
     private void Reply(
         ZLinkChannelReplyGate replyGate,
         IZLinkBackendRouterSocket router,
         Received received,
-        ZLinkEnvelopeHeader header,
+        ZLinkEnvelopeHeader requestHeader,
+        ZLinkEnvelopeHeader replyHeader,
         object? body,
-        Type? bodyType)
+        Type? bodyType,
+        uint maximumMessageBytes)
     {
         replyGate.TryInvoke(() =>
         {
@@ -142,10 +201,32 @@ internal sealed class ZLinkClientServerDispatcher(
                 return;
 
             var reply = ZLinkEnvelopeCodec.EncodeParts(
-                header,
+                replyHeader,
                 body,
                 bodyType,
                 codecs);
+            if (!ZLinkClientServerMessageBound.Fits(
+                    reply,
+                    maximumMessageBytes))
+            {
+                ZLinkMessageParts.DisposeAll(reply);
+                reply = ZLinkEnvelopeCodec.EncodeParts(
+                    ZLinkChannelReplyWriter.CreateErrorHeader(
+                        requestHeader.ChannelName,
+                        requestHeader,
+                        ZLinkClientServerMessageBound.CreateExceededException(
+                            maximumMessageBytes)),
+                    null,
+                    null,
+                    codecs);
+                if (!ZLinkClientServerMessageBound.Fits(
+                        reply,
+                        maximumMessageBytes))
+                {
+                    ZLinkMessageParts.DisposeAll(reply);
+                    return;
+                }
+            }
             try
             {
                 router.Reply(sourceRid, requestSeq, reply);

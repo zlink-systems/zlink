@@ -230,7 +230,24 @@ multi-provider Channel routing 실패는 SIZE-001에서 제거한 message-size �
 
 스펙은 sender가 local/remote `normalizedEffectiveMaxMessageBytes`의 작은 값을 admitted connection lifetime 동안 고정해 submit 전에 적용하도록 정한다(`common/internals/12-service-wire-protocol.ko.md:99-110`). ClientServer admission은 이 값을 보존하고 update가 바꾸지 못하게 막는다(`Runtime/Channels/ZLinkClientServerClientRuntime.cs:1454-1493`). 그러나 실제 send는 선택한 socket에 parts를 그대로 넘기고(`:136-151`), request도 같은 방식으로 `ZLinkRawRequestSubmitter`에 넘긴다(`:154-190`). Connection의 `_normalizedEffectiveMaxMessageBytes`는 hello/admit 검증에만 쓰이고 application submit 크기 검사에는 쓰이지 않는다. Server reply도 `Socket.Reply(...)`를 직접 호출한다(`:1511-1523`).
 
-RouteMesh의 `ZLinkManagedMeshNode.TrySendOutcome`에는 complete-message 합계 검사가 있으므로(`Runtime/Service/ZLinkManagedMeshNode.cs:8050-8057`) 두 topology의 의미가 반대로 어긋나 있다. ClientServer send/request/reply 각각에 exact admitted bound를 적용하고, remote 한도가 더 작은 경우와 negotiated complete-message 경계의 바로 아래·위 사례를 production socket test로 검증해야 한다.
+조사 당시 RouteMesh에는 반대로 complete-message 합계 검사가 있었지만 SIZE-001에서 제거했다. ClientServer에는
+send/request/reply 각각에 exact admitted bound를 적용하고, remote 한도가 더 작은 경우와 negotiated
+complete-message 경계의 바로 아래·위 사례를 production socket test로 검증해야 했다.
+
+구현과 검증을 완료했다. Client connection은 admission이 반환한
+`NormalizedEffectiveMaxMessageBytes`를 admitted lifetime의 불변값으로 읽고, send와 request를 native submit하기
+전에 complete message의 모든 part byte를 합산한다. Server는 Hello에서 local·remote 중 작은 값을 peer별로
+보관하고 inbound application message와 reply에 같은 값을 적용한다. Handler reply가 상한을 넘으면 원래
+payload를 보내지 않고 같은 correlation의 `CapacityExceeded` error terminal을 상한 안에서 반환한다.
+
+공통 `ZLinkClientServerMessageBound`가 send, request, receiver와 reply의 계산을 한 곳에서 소유한다. 512-byte
+remote와 4 KiB local 조합에서 oversized send/request가 handler 실행 전에 `CapacityExceeded`로 끝나고,
+oversized server reply도 caller가 같은 terminal을 관찰했다. 512 byte exact boundary는 허용하고 513 byte는
+거절하는 회귀를 포함해 ClientServer 30건과 전체 .NET unit suite 1,576건이 통과했다. Packaged contract와
+standalone HTTP clean consumer도 통과했으며 public API snapshot hash는
+`c1987f4b98e4fac7a30b7d038a56ee0d20e1272d00e79bdc88d3271e3c3ab958`이다. 실제 process
+`ChannelEgressRouting` `CH-REG-06`은 `logs/20260807-184635-466543/`에서 RouteMesh와 ClientServer request가
+application retry 없이 각각 1초 안에 완료되는 것을 확인하고 통과했다.
 
 ### DOTNET-COMP-001 — completion retention 전체 포화 시 caller terminal 유실
 

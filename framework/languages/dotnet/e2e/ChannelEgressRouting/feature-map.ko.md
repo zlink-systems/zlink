@@ -30,7 +30,7 @@
 | CH-REG-03 | actual 통과 | Logical Multicast의 remote subscribed Spot delivery와 classic Pub/Sub remote delivery를 각각 exactly-once로 검증한다. 증거: `logs/20260729-004432-4150890` |
 | CH-REG-04 | 부분 구현·실행 대기 | 32개 병렬 request correlation·terminal uniqueness 구현. timeout·cancellation·disconnect·Spot shutdown은 미구현 |
 | CH-REG-05 | 부분 actual | 같은 ClientServer endpoint에서 WorkflowServer를 종료·재시작하고 새 RID 선택, 이전 RID 제거와 request 완료를 검증했다. lifecycle generation public evidence와 이전 generation late reply 경쟁은 아직 미구현이다. 증거: `logs/20260729-004432-4150890` |
-| CH-REG-06 | actual 통과 | 정상 RouteMesh와 ClientServer request가 application retry 없이 각각 1초 안에 완료된다. 증거: `logs/20260729-045757-1462397` |
+| CH-REG-06 | actual 통과 | 정상 RouteMesh와 ClientServer request가 application retry 없이 각각 1초 안에 완료된다. WIRE-002 변경 뒤 fresh process 증거는 `logs/20260807-184635-466543/`이다. |
 | CH-REG-07 | actual 통과 | 공통 fixture의 일곱 sample·RouteMesh·ChannelName과 .NET sample source 일치. `logs/20260729-050208-1671604` |
 | CH-REG-08 | actual 통과 | `logs/20260805-105355-1244199/`에서 Session·Play·Api의 GameMesh peer snapshot과 Location Store를 비교해 physical peer RID와 listener endpoint 중복이 없음을 확인했다. |
 | CH-REG-09 | actual 통과 | sample source에 `PreferredNodeRid`·`PreferredRoutingId`가 없는지 검증. `logs/20260729-050242-1677966` |
