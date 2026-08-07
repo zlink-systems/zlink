@@ -10,6 +10,7 @@
 #include "runtime/diagnostics/message_flow_tracer.hpp"
 #include "runtime/dispatch/offload_executor.hpp"
 #include "runtime/execution/serial_execution_queue.hpp"
+#include "runtime/messaging/async_submit_runtime.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -89,6 +90,8 @@ class stream_write_call_state_t
 
     void compress () { _compressed = true; }
 
+    void timeout (std::chrono::milliseconds timeout) { _timeout = timeout; }
+
     void reply_submission (std::shared_ptr<submit_once_t> submission)
     {
         _reply_submission = std::move (submission);
@@ -147,7 +150,11 @@ class stream_write_call_state_t
         if (auto correlation = _header->correlation_id ()) {
             header.with_correlation_id (std::string (*correlation));
         }
-        return _submit (header, payload);
+        auto result = _submit (header, payload);
+        if (_timeout) {
+            runtime::messaging::limit_submit_attempt_timeout (*_timeout);
+        }
+        return result;
     }
 
   private:
@@ -158,6 +165,7 @@ class stream_write_call_state_t
     std::shared_ptr<const stream_compression_codec_t> _compression_codec;
     std::map<std::string, std::string> _metadata;
     std::string _packet_name;
+    std::optional<std::chrono::milliseconds> _timeout;
     bool _compressed = false;
     submit_once_t _submission;
     std::shared_ptr<submit_once_t> _reply_submission;
@@ -430,6 +438,18 @@ stream_send_call_t &stream_send_call_t::packet_name (std::string packet_name)
 stream_send_call_t &stream_send_call_t::compress ()
 {
     _state->compress ();
+    return *this;
+}
+
+stream_send_call_t &stream_send_call_t::timeout (std::chrono::milliseconds timeout)
+{
+    if (timeout.count () < 1
+        || timeout.count () > std::numeric_limits<int>::max ()) {
+        throw framework_exception_t (
+          framework_error_kind_t::not_configured,
+          "STREAM send timeout must be from 1 through INT_MAX milliseconds");
+    }
+    _state->timeout (timeout);
     return *this;
 }
 

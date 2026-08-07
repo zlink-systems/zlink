@@ -25,6 +25,7 @@ void note_submit_attempt (std::string target,
                           const void *owner,
                           std::chrono::milliseconds timeout = std::chrono::seconds (1),
                           std::size_t capacity = 1024);
+void limit_submit_attempt_timeout (std::chrono::milliseconds timeout);
 
 void notify_submit_ready (const std::string &target, const void *owner);
 void notify_submit_ready (const void *owner);

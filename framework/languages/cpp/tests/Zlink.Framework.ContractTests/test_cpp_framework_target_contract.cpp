@@ -95,6 +95,12 @@ int main ()
     const auto spot_runtime = read_file (root / "framework/src/runtime/spots/spot_runtime.cpp");
     const auto stream_host =
       read_file (root / "framework/src/runtime/streams/stream_host_service.cpp");
+    const auto call_hpp =
+      read_file (include_root / "zlink/framework/contracts/channels/call.hpp");
+    const auto stream_runtime =
+      read_file (root / "framework/src/runtime/streams/stream_runtime.cpp");
+    const auto async_submit_runtime =
+      read_file (root / "framework/src/runtime/messaging/async_submit_runtime.cpp");
     const auto location_auto_connect =
       read_file (root / "framework/src/runtime/locations/location_auto_connect_host_service.hpp");
     const auto client_server_location_runtime =
@@ -1708,6 +1714,21 @@ int main ()
              != std::string::npos,
       "CPP-CONTRACT-ROLE-001",
       "ClientServer calls do not distinguish a missing Client role from a missing target");
+
+    /* CPP-CONTRACT-STREAM-001 — STREAM send alone exposes the per-call
+     * admission bound and narrows the existing socket admission context. */
+    gate.require (
+      call_hpp.find (
+        "stream_send_call_t &timeout (std::chrono::milliseconds timeout)")
+          != std::string::npos
+        && stream_runtime.find (
+             "runtime::messaging::limit_submit_attempt_timeout (*_timeout)")
+             != std::string::npos
+        && async_submit_runtime.find (
+             "last_attempt_context.timeout = std::min")
+             != std::string::npos,
+      "CPP-CONTRACT-STREAM-001",
+      "STREAM send does not bound existing socket admission with its per-call timeout");
 
     /* TH-CP-01 — the C++ connector helper surface has a language contract. */
     const auto connector_contract_path =

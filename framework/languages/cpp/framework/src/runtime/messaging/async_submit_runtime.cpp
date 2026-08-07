@@ -804,6 +804,18 @@ void note_submit_attempt (std::string target,
     has_attempt_context = true;
 }
 
+void limit_submit_attempt_timeout (std::chrono::milliseconds timeout)
+{
+    if (!has_attempt_context) {
+        last_attempt_context = {
+          "*", nullptr, 0,
+          std::min (std::chrono::milliseconds (1000), timeout), 1024};
+        has_attempt_context = true;
+        return;
+    }
+    last_attempt_context.timeout = std::min (last_attempt_context.timeout, timeout);
+}
+
 void notify_submit_ready (const std::string &target, const void *owner)
 {
     runtime ().notify (target, owner);
