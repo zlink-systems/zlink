@@ -155,6 +155,7 @@ Gap 하나 또는 서로 강하게 연결된 작은 작업 묶음의 동작과 �
 | `NODE-COMP-004` | `116e27ad68` | `npm run build`, `backend-contract.test.js` 44/44, `npm run verify:m6b-runtime` 87/87, `npm run verify:m6c-runtime` 80/80 PASS. Actor join과 STREAM bind 재시도는 `result=NotConnected` 또는 Framework `RouteNotConnected` kind로만 분류한다. Error message가 같은 일반 오류는 재시도하지 않고, 진단 문구가 달라도 typed result가 같으면 재시도한다. STREAM 관련 test는 기존 disconnect callback 두 항목을 제외한 148/150이 통과했다. | packed package와 실제 peer reconnect process에서 OS별 진단 문구와 무관한 재시도, deadline과 중복 submit 부재 확인 |
 | `NODE-COMP-003` | `3ba9ad6e29` | `npm run build`, `npm run verify:m6b-runtime` 87/87 PASS. Source Spot callback의 typed request와 raw request는 공통 `ZLinkDeferredCompletion`이 terminal claim, abort와 late value 소유권을 한 번만 확정한다. `channel-client.test.js`의 abort 뒤 late raw reply close를 포함한 focused 2/2와 재실행 100/100이 통과했다. 첫 전체 실행은 별도 bootstrap route가 `NotFound`여서 99/100이었고 같은 두 항목 focused 및 전체 재실행에서는 재현되지 않았다. | packed package와 실제 callback transport에서 abort·reply 경합을 반복해 exactly-once terminal과 late `Message` 해제를 확인 |
 | `NODE-SESS-002` | `4eb9dad69c`, `570617f5d1` | `npm run build`, `stream-session-runtime.test.js` 53/53과 관련 STREAM test 150/150 PASS. 유효한 PING/PONG은 application claim과 session application FIFO를 거치지 않고 transport callback의 runtime 경로에서 처리한다. Disconnect와 dispose는 먼저 큐에 들어온 lifecycle turn이 끝난 뒤 transport를 닫고, callback 실패 여부와 무관하게 binding cleanup을 실행한다. | packed package와 실제 peer의 handler 지연·heartbeat·disconnect process에서 false timeout 부재, callback 순서와 Actor binding cleanup 확인 |
+| `NODE-SESS-004` | `7508ec2dcf` | `npm run build`, `npm run typecheck`, Actor·STREAM contract test 177/177 PASS. Replacement bind를 먼저 제출하므로 bind가 실패하면 기존 native·logical binding을 그대로 유지한다. Bind가 성공한 뒤 remote confirmation이 실패하면 새 binding을 해제하고 이전 binding과 confirmation을 복원한다. 성공한 replacement의 terminal 뒤에만 logical route owner를 바꾼다. | packed package와 실제 reconnect process에서 replacement 진행 중 기존 route 사용, 성공 뒤 원자 전환과 stale disconnect fencing 확인 |
 
 ---
 
@@ -348,7 +349,7 @@ mesh/actor/spot/stream 수신 계열은 와이어 content-type(및 stream 헤더
 | NODE-SESS-001 | GAP·상 | §2 참조 — 크로스 노드 스왑 tombstone 부재 |
 | NODE-SESS-002 | GAP·상 | §2 참조 — 하트비트가 애플리케이션 레인에 |
 | NODE-SESS-003 | SATISFIED·하 | 세 primitive는 같은 serial queue의 중복 구현이 아니다. `ServiceMailbox`는 owner claim·relocation seal·byte admission을, `EventLoopWorkQueues`는 process infrastructure/application 진행 분리를, `RouterOperationQueue`는 native request slot release 순서를 소유한다. 공통 base는 세 aggregate의 상태와 시간 규칙을 한 interface에 노출하는 얕은 abstraction이 되므로 추가하지 않는다. |
-| NODE-SESS-004 | PARTIAL·중 | 로컬 스왑 순서 역전: 이전 바인딩 unbind를 **먼저** await한 뒤 새 bind — 스펙은 bind 완료 응답까지 기존 라우트 사용 유지 후 원자 전환. 스왑 중 어느 라우트도 없는 창이 생겨 그 사이 메시지가 stale-binding 오류로 실패(fail-closed라 이중 라우트보다는 경미). 증거: `node/runtime/streams/session-actor-coordinator.ts:100-186` |
+| NODE-SESS-004 | PARTIAL·중 | 새 bind가 terminal이 될 때까지 기존 native·logical binding을 유지하고, 성공 뒤 route owner를 원자 교체한다. 새 bind 실패는 기존 binding을 변경하지 않으며, bind 성공 뒤 remote confirmation 실패는 새 binding을 제거하고 이전 binding과 confirmation을 복원한다. Packed package와 실제 reconnect process gate가 남아 있다. |
 
 만족(요약): 세션별 직렬 executor(동일 연결 콜백 비동시), 연결 identity 3요소 쌍, generation fence 필터, 재연결 fresh(복원 경로 없음), 이동 시 연결 유지·라우트만 in-place 갱신.
 
