@@ -6,6 +6,8 @@ const DECIMAL_FACTOR = 10n ** DECIMAL_SCALE;
 const MAX_DECIMAL_MINOR_UNITS = ((2n ** 45n) * DECIMAL_FACTOR) - 1n;
 
 type DecimalAmountInput = DecimalAmount | number;
+declare const decimalWireNumberBrand: unique symbol;
+type DecimalWireNumber = number & { readonly [decimalWireNumberBrand]: 'DecimalWireNumber' };
 
 class DecimalAmount {
   private constructor(private readonly minorUnits: bigint) {}
@@ -40,10 +42,10 @@ class DecimalAmount {
     return DecimalAmount.fromWire(value).minorUnits === this.minorUnits;
   }
 
-  toWireNumber(): number {
-    return Number(this.minorUnits) / Number(DECIMAL_FACTOR);
+  toWireNumber(): DecimalWireNumber {
+    return (Number(this.minorUnits) / Number(DECIMAL_FACTOR)) as DecimalWireNumber;
   }
 }
 
 export { DecimalAmount, MAX_DECIMAL_MINOR_UNITS };
-export type { DecimalAmountInput };
+export type { DecimalAmountInput, DecimalWireNumber };

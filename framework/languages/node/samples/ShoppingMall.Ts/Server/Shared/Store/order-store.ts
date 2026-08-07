@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { DecimalAmount, StartOrderWorkflowReq } from '../../../Shared/Contracts/messages';
 import type {
+  DecimalWireNumber,
   OrderLineInput,
   OrderState,
   ServerAssertionReq,
@@ -14,7 +15,7 @@ import { OrderAggregate } from '../../OrderWorkflow/Domain/ShoppingMall/order-do
 
 type MappingStatus = 'pending' | 'started';
 
-interface CartSeed { lines: readonly OrderLineInput[]; amount: number; currency: string; }
+interface CartSeed { lines: readonly OrderLineInput[]; amount: DecimalWireNumber; currency: string; }
 interface PaymentSeed { shouldAuthorize: boolean; failureReason?: string; }
 interface EffectResult { accepted: boolean; reason?: string; attempts: number; }
 

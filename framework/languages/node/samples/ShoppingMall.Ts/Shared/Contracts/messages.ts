@@ -1,6 +1,6 @@
 import { ZLinkPacket } from '@zlink-systems/framework';
 import { DecimalAmount } from './decimal-amount';
-import type { DecimalAmountInput } from './decimal-amount';
+import type { DecimalAmountInput, DecimalWireNumber } from './decimal-amount';
 
 const PacketNames = {
   startOrderWorkflowReq: 'StartOrderWorkflowReq',
@@ -22,7 +22,7 @@ interface StartOrderReq {
 
 @ZLinkPacket(PacketNames.startOrderWorkflowReq)
 class StartOrderWorkflowReq {
-  readonly amount: number;
+  readonly amount: DecimalWireNumber;
 
   constructor(
     readonly orderId: string,
@@ -63,7 +63,7 @@ interface OrderState {
   reservationId?: string;
   paymentId?: string;
   reason?: string;
-  amount?: number;
+  amount?: DecimalWireNumber;
   currency?: string;
   updatedAtUnixMs: number;
 }
@@ -106,6 +106,7 @@ export {
 };
 export type {
   ContinueOrderWorkflowRes,
+  DecimalWireNumber,
   GetOrderStateRes,
   OrderLineInput,
   OrderStatus,

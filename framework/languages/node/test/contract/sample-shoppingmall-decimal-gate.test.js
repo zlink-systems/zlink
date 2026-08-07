@@ -20,13 +20,16 @@ test('ShoppingMall decimal amount preserves two fractional digits in the JSON nu
   const { DecimalAmount, MAX_DECIMAL_MINOR_UNITS } = module.exports;
 
   const amount = DecimalAmount.fromMinorUnits(1234567890123456n);
-  const wire = JSON.stringify({ amount });
+  const wire = JSON.stringify({ amount: amount.toWireNumber() });
   assert.equal(wire, '{"amount":12345678901234.56}');
   assert.equal(
     DecimalAmount.fromWire(JSON.parse(wire).amount).toMinorUnits(),
     1234567890123456n
   );
-  assert.equal(JSON.stringify({ amount: DecimalAmount.fromMinorUnits(12_000n) }), '{"amount":120}');
+  assert.equal(
+    JSON.stringify({ amount: DecimalAmount.fromMinorUnits(12_000n).toWireNumber() }),
+    '{"amount":120}'
+  );
   assert.equal(
     DecimalAmount.fromWire(Number(MAX_DECIMAL_MINOR_UNITS) / 100).toMinorUnits(),
     MAX_DECIMAL_MINOR_UNITS
@@ -49,7 +52,7 @@ test('ShoppingMall decimal amount rejects excess scale and unsafe JSON number va
   );
 });
 
-test('ShoppingMall wire contracts do not expose amount as an unbounded JavaScript number', () => {
+test('ShoppingMall wire contracts expose only validated branded JSON numbers', () => {
   const contracts = fs.readFileSync(path.join(
     nodeRoot,
     'samples/ShoppingMall.Ts/Shared/Contracts/messages.ts'
@@ -57,6 +60,7 @@ test('ShoppingMall wire contracts do not expose amount as an unbounded JavaScrip
 
   assert.doesNotMatch(contracts, /readonly amount: number/);
   assert.doesNotMatch(contracts, /amount\?: number/);
-  assert.match(contracts, /readonly amount: DecimalAmount/);
-  assert.match(contracts, /amount\?: DecimalAmount/);
+  assert.match(contracts, /readonly amount: DecimalWireNumber/);
+  assert.match(contracts, /amount\?: DecimalWireNumber/);
+  assert.doesNotMatch(fs.readFileSync(amountSourcePath, 'utf8'), /toJSON\s*\(/);
 });
