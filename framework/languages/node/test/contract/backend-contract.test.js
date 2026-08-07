@@ -13,6 +13,10 @@ const {
 } = require('../../packages/framework/dist/runtime/messaging/submission-result');
 const channelEnvelope = require('../../packages/framework/dist/runtime/channels/channel-envelope');
 const { isPollerInterruptedError } = require('../../packages/framework/dist/runtime/backend/node/node-backend-adapter-support');
+const {
+  ZLinkMeshCompletionTable,
+  closeMeshCompletion
+} = require('../../packages/framework/dist/runtime/backend/mesh-completion-table');
 
 const removedSpotAdapterContracts = new Set([
   'backend adapter unwraps SpotNode when attaching stream SessionRelay',
@@ -763,6 +767,38 @@ test('backend mesh dispatch pump does not claim unrelated owners behind a slow h
     releaseSlow();
     await pump.dispose();
   }
+});
+
+test('mesh completion submission registers before a completion can arrive', async () => {
+  const table = new ZLinkMeshCompletionTable();
+  const complete = (low, text) => {
+    const part = zlink.Message.from(Buffer.from(text));
+    try {
+      table.complete({
+        operationId: { high: 1n, low },
+        terminalResult: 0,
+        failureErrno: 0,
+        operationKind: 0,
+        kindData: null,
+        parts: [part]
+      });
+    } finally {
+      part.close();
+    }
+  };
+
+  const completion = table.submit(() => {
+    queueMicrotask(() => complete(1n, 'first'));
+    return { high: 1n, low: 1n };
+  });
+  const retained = await completion;
+  try {
+    assert.equal(retained.parts[0].data().toString(), 'first');
+  } finally {
+    closeMeshCompletion(retained);
+  }
+  complete(1n, 'late-duplicate');
+  table.dispose();
 });
 
 test('backend mesh record dispatcher routes node, spot, actor, and infrastructure records', async () => {

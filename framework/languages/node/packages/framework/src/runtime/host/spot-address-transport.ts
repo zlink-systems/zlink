@@ -430,11 +430,16 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
     const encoded = this.encodeAtDeadline(ZLinkChannelMessageKind.Request,
       selected.meshName, request, deadline.deadlineMs);
     deadline.requireRemaining();
-    let operation: ReturnType<ZLinkBackendMeshNode['requestToMissingInstanceSpot']>;
+    const table = this.options.completions(selected.meshName);
+    if (table === undefined) throw new Error(`MeshNode '${selected.meshName}' completion table is not started.`);
+    let completionPromise: ReturnType<ZLinkMeshCompletionTable['submit']>;
     try {
-      operation = selected.node.requestToMissingInstanceSpot(selected.target, encoded,
-        deadlineUnixMs, call.sourceSpot === undefined ? undefined : String(call.sourceSpot.routingId),
-        call.metadata);
+      completionPromise = table.submit(
+        () => selected.node.requestToMissingInstanceSpot(selected.target, encoded,
+          deadlineUnixMs, call.sourceSpot === undefined ? undefined : String(call.sourceSpot.routingId),
+          call.metadata),
+        deadline.signal
+      );
     } catch (error) {
       if (error instanceof ZLinkFrameworkException
         && internalFrameworkErrorKind(error) === ZLinkFrameworkInternalErrorKind.RequestTargetNotFound) {
@@ -444,9 +449,7 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
     }
     this.traceInstanceAddress(ZLinkMessageFlowOutcome.Sent, ZLinkDispatchMessageKind.Request,
       spotId, request, selected.meshName, selected.target.stableType, selected.target.targetNodeRid);
-    const table = this.options.completions(selected.meshName);
-    if (table === undefined) throw new Error(`MeshNode '${selected.meshName}' completion table is not started.`);
-    const completion = await awaitWithAbort(table.wait(operation, deadline.signal), deadline.signal);
+    const completion = await awaitWithAbort(completionPromise, deadline.signal);
     try {
       if (completion.terminalResult !== 0 || completion.failureErrno !== 0) {
         const error = missingInstanceRequestFailure(completion.terminalResult, completion.failureErrno);

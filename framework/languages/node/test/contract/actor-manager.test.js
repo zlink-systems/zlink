@@ -320,7 +320,8 @@ test('transferred actor materialization creates a fresh actor before restoring s
     actorFactories: new Map([['transfer', TransferFactory]]),
     nativeActorNode: node,
     nativeActorCompletionTableProvider: () => ({
-      async wait() {
+      async submit(operation) {
+        operation();
         return {
           terminalResult: 0,
           failureErrno: 0,
@@ -391,7 +392,8 @@ test('transferred actor rollback keeps a dispatch-disabled tombstone until nativ
       }
     }),
     nativeActorCompletionTableProvider: () => ({
-      async wait() {
+      async submit(operation) {
+        operation();
         return {
           terminalResult: 0,
           failureErrno: 0,
@@ -2895,17 +2897,18 @@ test('ZLinkActorNativeJoinCoordinator uses formal transfer when replacement proc
     }
   });
   const sourceTerminalOperation = { high: 0n, low: 900n };
-  const originalWait = node.completionTable.wait;
+  const originalSubmit = node.completionTable.submit.bind(node.completionTable);
   node.requestToNode = (_targetNodeRid, payload) => {
     const terminal = JSON.parse(Buffer.from(payload).toString());
     events.push(`sourceTerminal:${terminal.succeeded}`);
     return sourceTerminalOperation;
   };
-  node.completionTable.wait = async (operationId, signal) => {
+  node.completionTable.submit = async (operation, signal) => {
+    const operationId = operation();
     if (operationId.low === sourceTerminalOperation.low) {
       return { terminalResult: 0, failureErrno: 0, operationKind: 7, kindData: null, parts: [] };
     }
-    return await originalWait(operationId, signal);
+    return await originalSubmit(() => operationId, signal);
   };
   const manager = createActorManager({
     actorFactories: new Map([['player', PlayerFactory]]),
@@ -4263,7 +4266,8 @@ function createMockSpotNode(overrides) {
     ...overrides
   };
   node.completionTable = {
-    async wait(operationId) {
+    async submit(operation) {
+      const operationId = operation();
       const completion = completions.get(operationId.low);
       if (completion === undefined) throw new Error(`missing completion ${operationId.low}`);
       completions.delete(operationId.low);

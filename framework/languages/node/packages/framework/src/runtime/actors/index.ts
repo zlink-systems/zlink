@@ -220,8 +220,10 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
     if (node === undefined || completions === undefined) return false;
     const destroyTask = state.getOrStartDestroy(entryNodeRid, async (nativeRef) => {
       if (nativeRef !== undefined) {
-        const operationId = node.destroyActor(nativeRef, 0);
-        const completion = await completions.wait(operationId, signal);
+        const completion = await completions.submit(
+          () => node.destroyActor(nativeRef, 0),
+          signal
+        );
         try {
           if (completion.terminalResult !== 0 || completion.failureErrno !== 0) {
             throw createInternalFrameworkException(

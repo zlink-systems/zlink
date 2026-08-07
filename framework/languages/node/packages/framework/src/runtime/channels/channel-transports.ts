@@ -36,6 +36,7 @@ import { throwIfAborted } from '../abort';
 import type { ZLinkRuntimeMetrics } from '../diagnostics';
 import {
   closeMeshCompletion,
+  type ZLinkMeshCompletion,
   type ZLinkMeshCompletionTable
 } from '../backend/mesh-completion-table';
 import { routingIdsEqual, toBackendRoutingId as toBackendRoutingId } from '../routing-id';
@@ -557,7 +558,7 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
       timeoutMs ?? 30_000,
       metadata
     );
-    const operationId = await this.submitRequestOperation(
+    const completion = await this.submitRequestOperation(
       meshName,
       timeoutMs,
       signal,
@@ -568,7 +569,7 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
         { flags: 1, timeoutMs: remainingTimeoutMs }
       )
     );
-    return this.waitForMeshReply(meshName, operationId, signal);
+    return this.decodeMeshReply(meshName, completion);
   }
 
   trySubmitToChannel(
@@ -650,7 +651,7 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
     );
     const metric = this.metrics?.startRequest(meshName, 'channel');
     try {
-      const operationId = await this.submitRequestOperation(
+      const completion = await this.submitRequestOperation(
         meshName,
         timeoutMs,
         signal,
@@ -661,7 +662,7 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
           { flags: 1, timeoutMs: remainingTimeoutMs }
         )
       );
-      const reply = await this.waitForMeshReply<TReply>(meshName, operationId, signal);
+      const reply = this.decodeMeshReply<TReply>(meshName, completion);
       metric?.complete('completed');
       return reply;
     } catch (error) {
@@ -674,9 +675,9 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
   }
 
   /**
-   * Admits only the native request submission through the MeshNode SEND_READY
-   * queue. The completion wait runs after admission and therefore does not
-   * block the next request from obtaining a native operation id.
+   * Registers the completion in the same turn that submits the native request.
+   * The SEND_READY queue releases after admission and does not wait for the
+   * terminal completion.
    */
   private async submitRequestOperation(
     meshName: string,
@@ -685,11 +686,11 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
     operation: string,
     attempt: (
       remainingTimeoutMs: number
-    ) => Parameters<ZLinkMeshCompletionTable['wait']>[0]
-  ): Promise<Parameters<ZLinkMeshCompletionTable['wait']>[0]> {
+    ) => ReturnType<Parameters<ZLinkMeshCompletionTable['submit']>[0]>
+  ): Promise<ZLinkMeshCompletion> {
     const effectiveTimeoutMs = Math.max(1, timeoutMs ?? 30_000);
     const deadlineMs = Date.now() + effectiveTimeoutMs;
-    let operationId: Parameters<ZLinkMeshCompletionTable['wait']>[0] | undefined;
+    let completionPromise: Promise<ZLinkMeshCompletion> | undefined;
     const result = await this.requireMeshSubmitters().submit(
       meshName,
       () => {
@@ -698,7 +699,10 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
           return { status: ZLinkSubmitStatus.TimedOut };
         }
         try {
-          operationId = attempt(Math.max(1, remainingTimeoutMs));
+          completionPromise = this.completionTable(meshName).submit(
+            () => attempt(Math.max(1, remainingTimeoutMs)),
+            signal
+          );
           return { status: ZLinkSubmitStatus.Submitted };
         } catch (error) {
           throw mapMeshSubmissionError(error, operation);
@@ -708,13 +712,13 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
       effectiveTimeoutMs
     );
     requireOneWayCompletion(result, operation);
-    if (operationId === undefined) {
+    if (completionPromise === undefined) {
       throw createInternalFrameworkException(
         ZLinkFrameworkInternalErrorKind.RequestFailed,
-        `${operation} did not return a native operation id.`
+        `${operation} did not register a native completion.`
       );
     }
-    return operationId;
+    return completionPromise;
   }
 
   async sendToSpot(
@@ -833,7 +837,7 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
       );
     }
     throwIfAborted(options.signal);
-    let operationId;
+    let completionPromise: Promise<ZLinkMeshCompletion>;
     try {
       const encoded = this.encodeMessage(
         ZLinkChannelMessageKind.Request,
@@ -843,33 +847,34 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
         options.timeoutMs,
         options.metadata
       );
-      operationId = spotRouteTarget.spotKind === ZLinkSpotKind.Instance
-        ? node.requestInstanceSpot(
-            instanceSpotRouteFence(spotRouteTarget),
-            encoded,
-            options.timeoutMs,
-            undefined,
-            options.metadata
-          )
-        : node.entrySpot().requestToSpot(
-            toBackendRoutingId(spotRouteTarget.targetNodeRid),
-            toBackendRoutingId(spotRouteTarget.spotId),
-            spotRouteTarget.targetSpotGeneration ?? 0n,
-            encoded,
-            {
-              flags: 1,
-              timeoutMs: options.timeoutMs,
-              routeFence: directSpotRouteFence(spotRouteTarget),
-              entrySpot: spotRouteTarget.spotKind === ZLinkSpotKind.Entry
-            }
-          );
+      completionPromise = this.completionTable(meshName).submit(() =>
+        spotRouteTarget.spotKind === ZLinkSpotKind.Instance
+          ? node.requestInstanceSpot(
+              instanceSpotRouteFence(spotRouteTarget),
+              encoded,
+              options.timeoutMs,
+              undefined,
+              options.metadata
+            )
+          : node.entrySpot().requestToSpot(
+              toBackendRoutingId(spotRouteTarget.targetNodeRid),
+              toBackendRoutingId(spotRouteTarget.spotId),
+              spotRouteTarget.targetSpotGeneration ?? 0n,
+              encoded,
+              {
+                flags: 1,
+                timeoutMs: options.timeoutMs,
+                routeFence: directSpotRouteFence(spotRouteTarget),
+                entrySpot: spotRouteTarget.spotKind === ZLinkSpotKind.Entry
+              }
+            ), options.signal);
     } catch (error) {
       throw mapMeshSubmissionError(
         error,
         `MeshNode '${meshName}' request to Spot '${spotRouteTarget.spotId}'`
       );
     }
-    return this.waitForMeshReply<TReply>(meshName, operationId, options.signal);
+    return this.waitForMeshReply<TReply>(meshName, completionPromise);
   }
 
   async requestFromSpotToSpot<TReply = unknown>(
@@ -923,19 +928,22 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
         payload,
         options.timeoutMs
       );
-      let operationId;
+      let completionPromise: Promise<ZLinkMeshCompletion>;
       try {
-        operationId = node.entrySpot().requestToSpot(
-          toBackendRoutingId(spotRouteTarget.targetNodeRid),
-          toBackendRoutingId(spotRouteTarget.spotId),
-          spotRouteTarget.targetSpotGeneration ?? 0n,
-          parts,
-          {
-            flags: 1,
-            timeoutMs: options.timeoutMs,
-            routeFence: directSpotRouteFence(spotRouteTarget),
-            entrySpot: spotRouteTarget.spotKind === ZLinkSpotKind.Entry
-          }
+        completionPromise = this.completionTable(meshName).submit(
+          () => node.entrySpot().requestToSpot(
+            toBackendRoutingId(spotRouteTarget.targetNodeRid),
+            toBackendRoutingId(spotRouteTarget.spotId),
+            spotRouteTarget.targetSpotGeneration ?? 0n,
+            parts,
+            {
+              flags: 1,
+              timeoutMs: options.timeoutMs,
+              routeFence: directSpotRouteFence(spotRouteTarget),
+              entrySpot: spotRouteTarget.spotKind === ZLinkSpotKind.Entry
+            }
+          ),
+          options.signal
         );
       } catch (error) {
         throw mapMeshSubmissionError(
@@ -943,7 +951,7 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
           `MeshNode '${meshName}' raw request to Spot '${spotRouteTarget.spotId}'`
         );
       }
-      const completion = await this.completionTable(meshName).wait(operationId, options.signal);
+      const completion = await completionPromise;
       if (completion.terminalResult !== 0 || completion.failureErrno !== 0) {
         try {
           throw meshRequestFailure(meshName, completion.terminalResult, completion.failureErrno);
@@ -1055,10 +1063,13 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
 
   private async waitForMeshReply<TReply>(
     meshName: string,
-    operationId: Parameters<ZLinkMeshCompletionTable['wait']>[0],
-    signal?: AbortSignal
+    completionPromise: Promise<ZLinkMeshCompletion>
   ): Promise<TReply> {
-    const completion = await this.completionTable(meshName).wait(operationId, signal);
+    const completion = await completionPromise;
+    return this.decodeMeshReply<TReply>(meshName, completion);
+  }
+
+  private decodeMeshReply<TReply>(meshName: string, completion: ZLinkMeshCompletion): TReply {
     try {
       if (completion.terminalResult !== 0 || completion.failureErrno !== 0) {
         throw meshRequestFailure(meshName, completion.terminalResult, completion.failureErrno);

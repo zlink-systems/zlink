@@ -4783,7 +4783,8 @@ test('public SpotId call reaches production host Missing Instance placement with
     meshNames: () => ['mesh'],
     meshNode: () => node,
     completions: () => ({
-      async wait() {
+      async submit(operation: () => { readonly high: bigint; readonly low: bigint }) {
+        operation();
         return {
           terminalResult: 0,
           failureErrno: 0,
@@ -4961,7 +4962,8 @@ test('Missing Instance placement capacity fails without polling or retaining a c
     meshNames: () => ['mesh'],
     meshNode: () => node,
     completions: () => ({
-      async wait() {
+      async submit(operation: () => { readonly high: bigint; readonly low: bigint }) {
+        operation();
         return {
           terminalResult: 0,
           failureErrno: 0,
@@ -5041,7 +5043,8 @@ test('Missing Instance request preserves target-not-found terminal results', asy
     meshNames: () => ['mesh'],
     meshNode: () => node,
     completions: () => ({
-      async wait() {
+      async submit(operation: () => { readonly high: bigint; readonly low: bigint }) {
+        operation();
         return {
           terminalResult: RequestResult.NotFound,
           failureErrno: 21,
@@ -5211,7 +5214,8 @@ test('Instance target-not-found refreshes a Missing authority into one cold acti
     meshNames: () => ['mesh'],
     meshNode: () => node,
     completions: () => ({
-      async wait() {
+      async submit(operation: () => { readonly high: bigint; readonly low: bigint }) {
+        operation();
         return {
           terminalResult: RequestResult.Ok,
           failureErrno: 0,
@@ -5495,7 +5499,8 @@ test('Ready Instance routes use command 39 with the complete authority fence', a
     () => ({
       meshNode: () => node,
       meshCompletionTable: () => ({
-        async wait() {
+        async submit(operation: () => { readonly high: bigint; readonly low: bigint }) {
+          operation();
           return {
             terminalResult: 0,
             failureErrno: 0,
@@ -5568,7 +5573,8 @@ test('stateful request failure codes preserve typed Instance route errors', asyn
       () => ({
         meshNode: () => node,
         meshCompletionTable: () => ({
-          async wait() {
+          async submit(operation: () => { readonly high: bigint; readonly low: bigint }) {
+            operation();
             return {
               terminalResult: RequestResult.Conflict,
               failureErrno: failureCode,

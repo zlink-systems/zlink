@@ -76,7 +76,8 @@ test('managed stream binds Session Actors through the Framework service without 
     sendToActor() { return 0; }
   };
   const completions = {
-    async wait(id) {
+    async submit(operation) {
+      const id = operation();
       const kind = operations.get(id.low);
       return {
         terminalResult: 0,
@@ -148,7 +149,8 @@ test('managed stream treats an actor-destroy stale unbind as idempotent cleanup'
     sendToActor() { return 0; }
   };
   const completions = {
-    async wait(id) {
+    async submit(operation) {
+      const id = operation();
       const kind = operations.get(id.low);
       return {
         terminalResult: kind === 'unbind' ? RequestResult.NotFound : RequestResult.Ok,
@@ -226,7 +228,8 @@ test('managed stream skips native unbind after transport teardown', async () => 
     sendToActor() { return 0; }
   };
   const completions = {
-    async wait(id) {
+    async submit(operation) {
+      const id = operation();
       const kind = operations.get(id.low);
       return {
         terminalResult: 0,
@@ -318,7 +321,8 @@ test('managed stream accepts an internal unbind result after the exact delivery 
     sendToActor() { return 0; }
   };
   const completions = {
-    async wait(id) {
+    async submit(operation) {
+      const id = operation();
       const kind = operations.get(id.low);
       return {
         terminalResult: kind === 'unbind' ? RequestResult.InternalError : 0,
@@ -2528,7 +2532,8 @@ test('runtime host local spot join uses the formal MeshNode completion contract 
       }
     },
     primaryMeshCompletions: {
-      async wait(actualOperationId) {
+      async submit(operation) {
+        const actualOperationId = operation();
         assert.deepEqual(actualOperationId, operationId);
         return {
           terminalResult: 0,

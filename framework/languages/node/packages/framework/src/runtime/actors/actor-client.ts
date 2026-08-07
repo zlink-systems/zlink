@@ -443,11 +443,13 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
     if (completions === undefined) {
       throw routeNotConnected('Actor request requires a running MeshNode completion table.');
     }
-    const operationId = node.requestToActor(actor, toMessageLikeParts(parts), {
-      flags: ZLINK_BACKEND_SEND_NONE,
-      timeoutMs
-    });
-    const completion = await completions.wait(operationId, signal);
+    const completion = await completions.submit(
+      () => node.requestToActor(actor, toMessageLikeParts(parts), {
+        flags: ZLINK_BACKEND_SEND_NONE,
+        timeoutMs
+      }),
+      signal
+    );
     if (completion.terminalResult !== RequestResult.Ok) {
       closeMeshCompletion(completion);
       throw mapRequestResult(completion.terminalResult, 'Actor request');
@@ -586,11 +588,10 @@ export async function forwardEncodedActorPacket(
     }
     return undefined;
   }
-  const operationId = node.requestToActor(target, parts, {
+  const completion = await completions.submit(() => node.requestToActor(target, parts, {
     flags: ZLINK_BACKEND_SEND_NONE,
     timeoutMs
-  });
-  const completion = await completions.wait(operationId);
+  }));
   if (completion.terminalResult !== RequestResult.Ok) {
     closeMeshCompletion(completion);
     throw mapRequestResult(completion.terminalResult, 'Actor handoff request');

@@ -21,19 +21,31 @@ interface PendingCompletion {
 
 export class ZLinkMeshCompletionTable {
   private readonly pending = new Map<string, PendingCompletion>();
-  private readonly arrived = new Map<string, ZLinkMeshCompletion>();
   private disposed = false;
 
-  wait(operationId: MeshOperationId, signal?: AbortSignal): Promise<ZLinkMeshCompletion> {
-    const key = operationKey(operationId);
-    const arrived = this.arrived.get(key);
-    if (arrived !== undefined) {
-      this.arrived.delete(key);
-      return Promise.resolve(arrived);
-    }
+  /**
+   * Submits and registers without yielding control to the event loop. Mesh
+   * completion dispatch is asynchronous, so a completion cannot overtake the
+   * registration. The table therefore does not need to retain responses that
+   * arrived before their waiter.
+   */
+  submit(
+    operation: () => MeshOperationId,
+    signal?: AbortSignal
+  ): Promise<ZLinkMeshCompletion> {
     if (this.disposed) {
       return Promise.reject(new Error('Mesh completion table is disposed.'));
     }
+    if (signal?.aborted === true) {
+      return Promise.reject(
+        signal.reason ?? new DOMException('The operation was aborted.', 'AbortError')
+      );
+    }
+    const operationId = operation();
+    if (this.disposed) {
+      return Promise.reject(new Error('Mesh completion table is disposed.'));
+    }
+    const key = operationKey(operationId);
     if (this.pending.has(key)) {
       return Promise.reject(new Error(`Mesh operation '${key}' is already pending.`));
     }
@@ -58,19 +70,11 @@ export class ZLinkMeshCompletionTable {
   }
 
   complete(record: ReceiveRecord): void {
+    if (this.disposed) return;
     const key = operationKey(record.operationId);
-    const completion: ZLinkMeshCompletion = {
-      terminalResult: record.terminalResult,
-      failureErrno: record.failureErrno,
-      operationKind: record.operationKind,
-      kindData: record.kindData,
-      parts: record.parts.map((part) => Message.from(Buffer.from(part.data())))
-    };
     const pending = this.pending.get(key);
-    if (pending === undefined) {
-      this.arrived.set(key, completion);
-      return;
-    }
+    if (pending === undefined) return;
+    const completion = copyCompletion(record);
     this.pending.delete(key);
     pending.removeAbort?.();
     pending.resolve(completion);
@@ -81,16 +85,22 @@ export class ZLinkMeshCompletionTable {
       return;
     }
     this.disposed = true;
-    for (const completion of this.arrived.values()) {
-      closeParts(completion.parts);
-    }
-    this.arrived.clear();
     for (const pending of this.pending.values()) {
       pending.removeAbort?.();
       pending.reject(reason);
     }
     this.pending.clear();
   }
+}
+
+function copyCompletion(record: ReceiveRecord): ZLinkMeshCompletion {
+  return {
+    terminalResult: record.terminalResult,
+    failureErrno: record.failureErrno,
+    operationKind: record.operationKind,
+    kindData: record.kindData,
+    parts: record.parts.map((part) => Message.from(Buffer.from(part.data())))
+  };
 }
 
 function operationKey(operationId: MeshOperationId): string {

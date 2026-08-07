@@ -699,11 +699,14 @@ export class ZLinkLocalNativeActorJoin {
     timeoutMs: number | undefined,
     signal: AbortSignal | undefined
   ): Promise<ZLinkMeshCompletion> {
-    const operationId = await submitJoinWhenConnected(submit, timeoutMs, signal);
     // The operation ID identifies one Core request. Once it is submitted, a
     // NotConnected completion is terminal for that request; resubmitting it
     // could execute the target lifecycle twice after a delayed reply.
-    return completions.wait(operationId, signal);
+    return submitJoinWhenConnected(
+      () => completions.submit(submit, signal),
+      timeoutMs,
+      signal
+    );
   }
 
   private async abortRemoteAdmission(
@@ -737,26 +740,25 @@ export class ZLinkLocalNativeActorJoin {
         phase: REMOTE_ACTOR_JOIN_ABORT,
         transferId
       })));
-      const operationId = await submitJoinWhenConnected(
-        () => entrySpot
+      const completion = await submitJoinWhenConnected(
+        () => completions.submit(() => entrySpot
           ? node.joinActorEntrySpot(
-              actorRef,
-              toBackendRoutingId(target.targetNodeRid),
-              payload,
-              timeoutMs
-            )
+            actorRef,
+            toBackendRoutingId(target.targetNodeRid),
+            payload,
+            timeoutMs
+          )
           : node.joinActorSpot(
-              actorRef,
-              toBackendRoutingId(target.targetNodeRid),
-              toBackendRoutingId(target.spotId),
-              target.targetSpotGeneration!,
-              payload,
-              timeoutMs
-            ),
+            actorRef,
+            toBackendRoutingId(target.targetNodeRid),
+            toBackendRoutingId(target.spotId),
+            target.targetSpotGeneration!,
+            payload,
+            timeoutMs
+          ), signal),
         timeoutMs,
         signal
       );
-      const completion = await completions.wait(operationId, signal);
       closeMeshCompletion(completion);
     } catch {
       // Admission cleanup is best effort. The target registry also expires
@@ -797,12 +799,14 @@ export class ZLinkLocalNativeActorJoin {
       const remainingMs = Math.max(1, deadline - Date.now());
       let completion;
       try {
-        const operationId = node.requestToNode(
-          toBackendRoutingId(targetNodeRid),
-          payload,
-          { timeoutMs: remainingMs }
+        completion = await completions.submit(
+          () => node.requestToNode(
+            toBackendRoutingId(targetNodeRid),
+            payload,
+            { timeoutMs: remainingMs }
+          ),
+          signal
         );
-        completion = await completions.wait(operationId, signal);
       } catch (error) {
         if (!isRetryableTerminalRouteFailure(error) || Date.now() >= deadline) {
           throw error;

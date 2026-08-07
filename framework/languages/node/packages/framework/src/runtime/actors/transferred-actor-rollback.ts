@@ -95,12 +95,11 @@ export class ZLinkTransferredActorRollbackCoordinator {
     if (completions === undefined) {
       throw new Error('Actor rollback requires a running MeshNode completion table.');
     }
-    const operationId = node.destroyActor({
+    const completion = await completions.submit(() => node.destroyActor({
       nodeRid: actorRef.nodeRid,
       actorId: actorRef.actorId,
       generation: actorRef.generation
-    });
-    const completion = await completions.wait(operationId, signal);
+    }), signal);
     try {
       if (completion.terminalResult !== RequestResult.Ok) {
         throw new Error(
