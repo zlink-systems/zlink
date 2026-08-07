@@ -1835,6 +1835,19 @@ raw_mesh_pump_result_t raw_mesh_node_owner_t::enqueue_received_or_retain (
     if (_mailbox.try_enqueue (std::move (record))) {
         return accepted_result;
     }
+    if (record.domain == service_mailbox_domain_t::application) {
+        const auto request_rejected =
+          record.correlation && record.request_sequence
+          && reply_failure (
+            record, 106,
+            static_cast<std::uint32_t> (
+              protocol::framework_error_code::workerQueueFull));
+        trace_mesh (
+          "application-drop reason=owner-mailbox-full action="
+            + std::string (request_rejected ? "reply-worker-queue-full"
+                                            : "drop"));
+        return raw_mesh_pump_result_t::backpressured;
+    }
     if (_pending_received) {
         throw std::logic_error (
           "raw mesh owner already retains a received mailbox record");

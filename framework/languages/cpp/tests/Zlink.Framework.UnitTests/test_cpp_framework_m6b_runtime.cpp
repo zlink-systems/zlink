@@ -2505,6 +2505,119 @@ void verify_unadmitted_request_queue_overflow_replies_immediately ()
     target.close ();
 }
 
+void verify_full_owner_rejects_request_without_blocking_other_owner ()
+{
+    auto target_descriptor = descriptor ("owner-capacity-target");
+    target_descriptor.channels.push_back ({"independent-channel", 100});
+    mesh::raw_mesh_node_owner_t source (
+      mesh::raw_mesh_node_options_t{descriptor ("owner-capacity-source")});
+    mesh::raw_mesh_node_owner_t target (
+      mesh::raw_mesh_node_options_t{
+        .descriptor = target_descriptor,
+        .application_message_budget = 1});
+    source.start ();
+    target.start ();
+    const auto source_descriptor = source.topology ().local_descriptor ();
+    const auto published_target = target.topology ().local_descriptor ();
+    const auto deadline =
+      mesh::service_liveness_registry_t::clock_t::now () + 5s;
+    assert (source.connect_peer (target.endpoint (), published_target));
+    while ((!source.topology ().peer (published_target.node_routing_id)
+             || !target.topology ().peer (source_descriptor.node_routing_id))
+           && mesh::service_liveness_registry_t::clock_t::now () < deadline) {
+        const auto now = mesh::service_liveness_registry_t::clock_t::now ();
+        (void) source.drain_monitor_events (now);
+        (void) target.drain_monitor_events (now);
+        assert (source.pump_one (now)
+                != mesh::raw_mesh_pump_result_t::protocol_error);
+        assert (target.pump_one (now)
+                != mesh::raw_mesh_pump_result_t::protocol_error);
+        std::this_thread::sleep_for (1ms);
+    }
+    assert (source.topology ().peer (published_target.node_routing_id));
+    assert (target.topology ().peer (source_descriptor.node_routing_id));
+
+    const protocol::application_payload_t payload{
+      "OwnerCapacity", "application/json", bytes ("request")};
+    assert (source.send_to_node (published_target.node_routing_id, payload));
+    mesh::raw_mesh_pump_result_t first =
+      mesh::raw_mesh_pump_result_t::no_data;
+    while (first != mesh::raw_mesh_pump_result_t::application
+           && mesh::service_liveness_registry_t::clock_t::now () < deadline) {
+        first = target.pump_one (
+          mesh::service_liveness_registry_t::clock_t::now ());
+        assert (first != mesh::raw_mesh_pump_result_t::protocol_error);
+    }
+    assert (first == mesh::raw_mesh_pump_result_t::application);
+
+    std::promise<foundation::operation_terminal_t> rejected_promise;
+    auto rejected = rejected_promise.get_future ();
+    assert (source.request_to_node (
+      published_target.node_routing_id, payload, 5s,
+      [&rejected_promise] (foundation::operation_terminal_t terminal,
+                           std::vector<std::uint8_t>) {
+          rejected_promise.set_value (terminal);
+      }));
+    mesh::raw_mesh_pump_result_t overflow =
+      mesh::raw_mesh_pump_result_t::no_data;
+    while (overflow != mesh::raw_mesh_pump_result_t::backpressured
+           && mesh::service_liveness_registry_t::clock_t::now () < deadline) {
+        overflow = target.pump_one (
+          mesh::service_liveness_registry_t::clock_t::now ());
+        assert (overflow != mesh::raw_mesh_pump_result_t::protocol_error);
+    }
+    assert (overflow == mesh::raw_mesh_pump_result_t::backpressured);
+    while (rejected.wait_for (0ms) != std::future_status::ready
+           && mesh::service_liveness_registry_t::clock_t::now () < deadline) {
+        assert (source.pump_one (
+                  mesh::service_liveness_registry_t::clock_t::now ())
+                != mesh::raw_mesh_pump_result_t::protocol_error);
+        std::this_thread::sleep_for (1ms);
+    }
+    assert (rejected.wait_for (0ms) == std::future_status::ready);
+    assert (rejected.get ()
+            == foundation::operation_terminal_t::transport_failed);
+
+    std::promise<foundation::operation_terminal_t> independent_promise;
+    auto independent = independent_promise.get_future ();
+    assert (source.request_to_channel (
+      "independent-channel", payload, 5s,
+      [&independent_promise] (foundation::operation_terminal_t terminal,
+                              std::vector<std::uint8_t>) {
+          independent_promise.set_value (terminal);
+      }));
+    mesh::raw_mesh_pump_result_t independent_pump =
+      mesh::raw_mesh_pump_result_t::no_data;
+    while (independent_pump != mesh::raw_mesh_pump_result_t::application
+           && mesh::service_liveness_registry_t::clock_t::now () < deadline) {
+        independent_pump = target.pump_one (
+          mesh::service_liveness_registry_t::clock_t::now ());
+        assert (independent_pump
+                != mesh::raw_mesh_pump_result_t::protocol_error);
+    }
+    assert (independent_pump == mesh::raw_mesh_pump_result_t::application);
+    auto claim = target.mailbox ().try_claim_owner (
+      mesh::service_mailbox_domain_t::application,
+      "channel:independent-channel", 1, 1024);
+    assert (claim && claim->records.size () == 1);
+    assert (target.reply (claim->records.front (),
+                          {"OwnerCapacityReply", "application/json",
+                           bytes ("reply")}));
+    assert (target.mailbox ().release (*claim));
+    while (independent.wait_for (0ms) != std::future_status::ready
+           && mesh::service_liveness_registry_t::clock_t::now () < deadline) {
+        assert (source.pump_one (
+                  mesh::service_liveness_registry_t::clock_t::now ())
+                != mesh::raw_mesh_pump_result_t::protocol_error);
+        std::this_thread::sleep_for (1ms);
+    }
+    assert (independent.wait_for (0ms) == std::future_status::ready);
+    assert (independent.get ()
+            == foundation::operation_terminal_t::completed);
+    source.close ();
+    target.close ();
+}
+
 void verify_raw_relocation_replay_and_monotonic_ack ()
 {
     mesh::raw_mesh_node_owner_t source (
@@ -4135,6 +4248,7 @@ int main ()
     verify_relocated_source_reply_failure_keeps_terminal_record ();
     verify_node_request_requires_remote_admission ();
     verify_unadmitted_request_queue_overflow_replies_immediately ();
+    verify_full_owner_rejects_request_without_blocking_other_owner ();
     verify_raw_relocation_replay_and_monotonic_ack ();
     verify_raw_reply_relay_and_exact_source_ack ();
     verify_durable_reply_relay_single_winner ();
