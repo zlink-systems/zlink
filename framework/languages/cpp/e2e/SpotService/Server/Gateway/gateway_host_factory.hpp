@@ -220,13 +220,12 @@ inline int run_gateway_server (int argc, char **argv)
 
     app.logging ()
       .use_file (log_dir + "/" + node_rid + ".log")
+      .use_file (log_dir + "/" + node_rid + "-flow.log")
       .set_min_level (zlink::framework::log_level_t::debug);
     app.add_zlink_framework ([&] (zlink::framework::zlink_framework_options_t &options) {
         auto state = std::make_unique<scenario_state_t> (node_rid);
         options.configure_dispatch ()
-          .message_flow (zlink::framework::message_flow_log_mode_t::normal)
-          .trace_log_file (log_dir + "/" + node_rid + "-flow.log")
-          .trace_label ("cpp-sm-" + node_rid);
+          .message_flow (zlink::framework::message_flow_log_mode_t::normal);
         options.services ()
           .add_singleton<scenario_state_t> (std::move (state))
           .add_transient<gateway_evidence_handler_t, scenario_state_t> ()

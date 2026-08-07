@@ -33,12 +33,11 @@ class api_server_host_factory_t
 
     static app_t &configure (app_t &app, const sample_topology_t &topology, bool auto_stop = true)
     {
+        app.logging ().use_file (
+          flow_log_path (topology.log_dir, "api-" + topology.api_node));
         app.add_zlink_framework ([&] (zlink_framework_options_t &options) {
             options.configure_dispatch ()
-              .message_flow (message_flow_log_mode_t::normal)
-              .trace_log_file (
-                flow_log_path (topology.log_dir, "api-" + topology.api_node))
-              .trace_label ("tictactoe-api-" + topology.api_node);
+              .message_flow (message_flow_log_mode_t::normal);
 
             add_sample_location_store (options, topology);
             options.services ().add_singleton<sample_topology_t> (

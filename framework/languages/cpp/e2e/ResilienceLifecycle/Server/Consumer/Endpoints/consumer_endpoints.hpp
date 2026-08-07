@@ -533,13 +533,13 @@ inline profile_res_t request_profile_with_new_client_host (const consumer_option
     auto app = zlink::framework::app_t::create ();
     auto result = std::make_shared<transient_profile_request_service_t::result_state_t> ();
     auto service = std::make_unique<transient_profile_request_service_t> (app, request, result);
+    app.logging ().use_file (
+      options.log_dir + "/storm-" + trace_id + "-flow.log");
     app.add_zlink_framework ([&] (zlink::framework::zlink_framework_options_t &framework) {
         server::add_redis_location_store (framework, options.redis_endpoint,
                                           options.redis_key_prefix);
         framework.configure_dispatch ()
-          .message_flow (zlink::framework::message_flow_log_mode_t::normal)
-          .trace_log_file (options.log_dir + "/storm-" + trace_id + "-flow.log")
-          .trace_label ("storm-" + trace_id);
+          .message_flow (zlink::framework::message_flow_log_mode_t::normal);
         framework.add_client_server_channel (api_channel).client ();
     });
     app.add_hosted_service (std::move (service));

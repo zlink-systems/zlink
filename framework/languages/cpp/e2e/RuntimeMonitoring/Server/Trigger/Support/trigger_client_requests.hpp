@@ -87,15 +87,17 @@ inline profile_res_t request_with_transient_host (const trigger_options_t &optio
     auto service = std::make_unique<transient_request_service_t> (app, std::move (request),
                                                                   trace_label);
     auto *service_result = service.get ();
+    if (!options.log_dir.empty ()) {
+        app.logging ().use_file (
+          options.log_dir + "/" + trace_label + "-flow.log");
+    }
     app.add_zlink_framework ([&] (zlink::framework::zlink_framework_options_t &framework) {
         framework.add_client_server_channel (profile_channel)
           .client ()
           .connect (channel_endpoint);
         if (!options.log_dir.empty ()) {
             framework.configure_dispatch ()
-              .message_flow (zlink::framework::message_flow_log_mode_t::normal)
-              .trace_label (trace_label)
-              .trace_log_file (options.log_dir + "/" + trace_label + "-flow.log");
+              .message_flow (zlink::framework::message_flow_log_mode_t::normal);
         }
     });
     app.add_hosted_service (std::move (service));

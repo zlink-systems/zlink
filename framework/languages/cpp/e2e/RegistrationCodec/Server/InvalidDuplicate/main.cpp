@@ -16,6 +16,7 @@ int main (int argc, char **argv)
         auto app = zlink::framework::app_t::create ();
         const auto server = rc_server::read_server_options (app, argc, argv, "invalid server");
         app.logging ().use_file (server.log_dir + "/invalid.log")
+          .use_file (server.log_dir + "/server-flow.log")
           .set_min_level (zlink::framework::log_level_t::debug);
         app.add_zlink_framework ([&] (zlink::framework::zlink_framework_options_t &options) {
             rc_server::configure_framework (options, server);

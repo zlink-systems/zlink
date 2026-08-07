@@ -146,7 +146,7 @@ class message_flow_tracer_t
     {
         const auto &current = runtime::flow_context_t::current ();
         return current ? current->diagnostics_mode
-                       : options.diagnostics.effective_message_flow ();
+                       : dispatch_options_access_t::effective_message_flow (options);
     }
 
     static int rank (message_flow_log_mode_t mode) noexcept { return static_cast<int> (mode); }
@@ -234,9 +234,6 @@ class message_flow_tracer_t
             add ("outcome", terminal_outcome_name (event.outcome));
             add ("surface", std::string (enum_name (event.surface)));
             add ("kind", std::string (enum_name (event.message_kind)));
-            if (_options->diagnostics.label ()) {
-                add ("label", *_options->diagnostics.label ());
-            }
             if (event.packet_name) {
                 add ("packet", *event.packet_name);
             }

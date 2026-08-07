@@ -279,16 +279,15 @@ int main (int argc, char **argv)
     auto app = zlink::framework::app_t::create ();
     const auto configuration =
       e2e::load_role_configuration<e2e::actor_configuration_t> (app, argc, argv);
-    app.logging ().use_file (configuration.log_dir + "/actor.log").set_min_level (
+    app.logging ().use_file (configuration.log_dir + "/actor.log")
+      .use_file (configuration.log_dir + "/actor-flow.log").set_min_level (
       zlink::framework::log_level_t::debug);
     app.add_zlink_framework ([configuration] (
                               zlink::framework::zlink_framework_options_t &framework) {
         auto evidence = std::make_unique<evidence_store_t> ();
         auto *evidence_ptr = evidence.get ();
         framework.configure_dispatch ()
-          .message_flow (zlink::framework::message_flow_log_mode_t::normal)
-          .trace_log_file (configuration.log_dir + "/actor-flow.log")
-          .trace_label ("cpp-to-actor-actor");
+          .message_flow (zlink::framework::message_flow_log_mode_t::normal);
         framework.services ().add_singleton<evidence_store_t> (std::move (evidence));
         framework.services ().add_singleton<e2e::actor_configuration_t> (
           std::make_unique<e2e::actor_configuration_t> (configuration));

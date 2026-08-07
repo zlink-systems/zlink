@@ -312,6 +312,7 @@ int main (int argc, char **argv)
     auto instance = topology.for_api_instance (configuration.role.name);
     redis_state_store_t store{topology};
     store.seed_defaults ();
+    app.logging ().use_file (configuration.flow_log_path ());
     app.add_zlink_framework ([&] (zlink_framework_options_t &options) {
         options.services ().add_singleton<sample_topology_t> (
           std::make_unique<sample_topology_t> (topology));
@@ -324,9 +325,7 @@ int main (int argc, char **argv)
                          redis_state_store_t> ();
         add_shoppingmall_location_store (options, topology);
         options.configure_dispatch ()
-          .message_flow (message_flow_log_mode_t::normal)
-          .trace_log_file (configuration.flow_log_path ())
-          .trace_label (instance.instance_id);
+          .message_flow (message_flow_log_mode_t::normal);
         /* 공통 sample spec §16: 서버 발견은 registry 프로세스 없이 공유 location store가 맡는다.
          * endpoint를 코드에 박지 않는다. */
         auto workflow = options.add_route_mesh (sample_names_t::order_workflow_channel);

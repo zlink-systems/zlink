@@ -402,14 +402,13 @@ int main (int argc, char **argv)
     auto app = zlink::framework::app_t::create ();
     const auto configuration =
       e2e::load_role_configuration<e2e::caller_configuration_t> (app, argc, argv);
-    app.logging ().use_file (configuration.log_dir + "/caller.log").set_min_level (
+    app.logging ().use_file (configuration.log_dir + "/caller.log")
+      .use_file (configuration.log_dir + "/caller-flow.log").set_min_level (
       zlink::framework::log_level_t::debug);
     app.add_zlink_framework ([configuration] (
                               zlink::framework::zlink_framework_options_t &framework) {
         framework.configure_dispatch ()
-          .message_flow (zlink::framework::message_flow_log_mode_t::normal)
-          .trace_log_file (configuration.log_dir + "/caller-flow.log")
-          .trace_label ("cpp-to-actor-caller");
+          .message_flow (zlink::framework::message_flow_log_mode_t::normal);
         framework.services ().add_singleton<e2e::caller_configuration_t> (
           std::make_unique<e2e::caller_configuration_t> (configuration));
         framework.services ().add_singleton<captured_actor_refs_t> ();

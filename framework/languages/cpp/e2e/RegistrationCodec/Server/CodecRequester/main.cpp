@@ -14,12 +14,11 @@ int main (int argc, char **argv)
     const auto &http_endpoint = configured.http_endpoint;
     const auto &log_dir = configured.log_dir;
     app.logging ().use_file (log_dir + "/codec-requester.log")
+      .use_file (log_dir + "/codec-requester-flow.log")
       .set_min_level (zlink::framework::log_level_t::debug);
     app.add_zlink_framework ([&] (zlink::framework::zlink_framework_options_t &options) {
         options.configure_dispatch ()
-          .message_flow (zlink::framework::message_flow_log_mode_t::normal)
-          .trace_log_file (log_dir + "/codec-requester-flow.log")
-          .trace_label ("cpp-rc-codec-requester");
+          .message_flow (zlink::framework::message_flow_log_mode_t::normal);
         rc_server::add_binary_codecs (options.codecs ());
         rc_server::add_custom_codecs (options.codecs ());
         options.add_client_server_channel (

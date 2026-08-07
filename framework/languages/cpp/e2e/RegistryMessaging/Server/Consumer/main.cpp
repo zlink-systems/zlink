@@ -25,12 +25,11 @@ int main (int argc, char **argv)
     const auto options = app.config ().bind_required<rm_consumer::consumer_options_t> ("e2e");
     app.logging ()
       .use_file (options.log_dir + "/" + options.trace_label + ".log")
+      .use_file (options.log_dir + "/" + options.trace_label + "-flow.log")
       .set_min_level (zlink::framework::log_level_t::debug);
     app.add_zlink_framework ([&] (zlink::framework::zlink_framework_options_t &framework) {
         framework.configure_dispatch ()
-          .message_flow (zlink::framework::message_flow_log_mode_t::normal)
-          .trace_log_file (options.log_dir + "/" + options.trace_label + "-flow.log")
-          .trace_label (options.trace_label);
+          .message_flow (zlink::framework::message_flow_log_mode_t::normal);
         auto channel = framework.add_client_server_channel (rm::api_channel);
         auto client = channel.client ();
         framework.add_client_server_channel (rm::workflow_channel)

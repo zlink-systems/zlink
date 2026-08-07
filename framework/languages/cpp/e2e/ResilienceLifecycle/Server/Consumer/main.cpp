@@ -15,7 +15,7 @@ int main (int argc, char **argv)
       .use_file (options.log_dir + "/consumer.log")
       .set_min_level (zlink::framework::log_level_t::debug);
     app.add_zlink_framework ([&] (zlink::framework::zlink_framework_options_t &framework) {
-        rl_consumer::configure_consumer_host (framework, options);
+        rl_consumer::configure_consumer_host (framework, app.logging (), options);
     });
     return app.run (argc, argv);
 }

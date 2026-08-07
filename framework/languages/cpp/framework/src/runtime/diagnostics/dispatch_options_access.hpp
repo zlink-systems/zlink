@@ -28,6 +28,21 @@ class dispatch_options_access_t
         options._diagnostics_logger = std::move (logger);
     }
 
+    static void set_live_mode (
+      dispatch_options_t &options,
+      std::shared_ptr<std::atomic<message_flow_log_mode_t>> live)
+    {
+        options._live_mode = std::move (live);
+    }
+
+    static message_flow_log_mode_t effective_message_flow (
+      const dispatch_options_t &options) noexcept
+    {
+        return options._live_mode
+          ? options._live_mode->load (std::memory_order_relaxed)
+          : options.diagnostics.message_flow ();
+    }
+
     static void set_observer_for_tests (
       dispatch_options_t &options,
       std::function<void (const message_flow_event_t &)> observer)

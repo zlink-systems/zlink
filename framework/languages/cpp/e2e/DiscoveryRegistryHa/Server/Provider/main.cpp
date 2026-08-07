@@ -39,12 +39,11 @@ int main (int argc, char **argv)
       std::make_unique<sf_provider::provider_lifecycle_control_t> (app);
     app.logging ()
       .use_file (options.log_dir + "/" + options.log_name + ".log")
+      .use_file (options.log_dir + "/" + options.log_name + "-flow.log")
       .set_min_level (zlink::framework::log_level_t::debug);
     app.add_zlink_framework ([&] (zlink::framework::zlink_framework_options_t &framework) {
         framework.configure_dispatch ()
-          .message_flow (zlink::framework::message_flow_log_mode_t::normal)
-          .trace_log_file (options.log_dir + "/" + options.log_name + "-flow.log")
-          .trace_label ("cpp-store-failure-" + options.log_name);
+          .message_flow (zlink::framework::message_flow_log_mode_t::normal);
         sf::server::add_redis_location_store (framework, options);
         framework.services ().add_singleton<sf_provider::provider_evidence_store_t> (
           std::make_unique<sf_provider::provider_evidence_store_t> (options.rid));

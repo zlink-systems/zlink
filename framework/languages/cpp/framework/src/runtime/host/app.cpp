@@ -1080,14 +1080,8 @@ app_t &app_t::add_zlink_framework (std::function<void (zlink_framework_options_t
     if (configure) {
         configure (options);
     }
-    // Route message-flow tracing and dispatch errors to a logger. The user picks:
-    //  - diagnostics.log_file set  -> SEPARATED: a dedicated file logger, so tracing
-    //    never mixes with application logs. (Its logging state stays alive through
-    //    the logger_t copies carried in the propagated dispatch options.)
-    //  - otherwise, if an app logging sink is configured -> MERGED: the shared
-    //    application logger captures both app and tracing logs together.
-    //  - otherwise -> left unset, std::clog fallback (and no unbounded in-memory
-    //    record buffering for high-volume traffic).
+    // Route message-flow records through the application's standard logging
+    // provider. With no configured sink the diagnostics runtime uses std::clog.
     // Install the shared, runtime-mutable message-flow mode so set_message_flow_mode
     // can flip tracing on/off live. Seeded from the configured mode; shared across
     // all surfaces because dispatch options copy the shared_ptr.
@@ -1096,15 +1090,9 @@ app_t &app_t::add_zlink_framework (std::function<void (zlink_framework_options_t
     // so runtime set_message_flow_mode races only on the atomic (safe).
     _state->message_flow_mode->store (options.configure_dispatch ().diagnostics.message_flow (),
                                       std::memory_order_relaxed);
-    options.configure_dispatch ().message_flow_live (_state->message_flow_mode);
-    if (const auto &diagnostics_log_file = options.configure_dispatch ().diagnostics.log_file ();
-        diagnostics_log_file) {
-        logging_builder_t flow_logging;
-        flow_logging.use_file (*diagnostics_log_file);
-        detail::dispatch_options_access_t::set_logger (
-          options.configure_dispatch (),
-          flow_logging.factory ().create ("zlink.framework.dispatch"));
-    } else if (_state->logging.has_output_sink ()) {
+    detail::dispatch_options_access_t::set_live_mode (
+      options.configure_dispatch (), _state->message_flow_mode);
+    if (_state->logging.has_output_sink ()) {
         detail::dispatch_options_access_t::set_logger (
           options.configure_dispatch (),
           _state->logging.factory ().create ("zlink.framework.dispatch"));

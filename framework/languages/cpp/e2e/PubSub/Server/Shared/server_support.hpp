@@ -26,14 +26,10 @@ inline void configure_codecs (zlink::framework::codec_options_builder_t codecs)
 {
 }
 
-inline void configure_flow (zlink::framework::zlink_framework_options_t &options,
-                            const std::string &log_dir,
-                            const std::string &label)
+inline void configure_flow (zlink::framework::zlink_framework_options_t &options)
 {
     options.configure_dispatch ()
-      .message_flow (zlink::framework::message_flow_log_mode_t::normal)
-      .trace_log_file (log_dir + "/" + label + "-flow.log")
-      .trace_label ("cpp-ps-" + label);
+      .message_flow (zlink::framework::message_flow_log_mode_t::normal);
 }
 
 class operational_evidence_store_t

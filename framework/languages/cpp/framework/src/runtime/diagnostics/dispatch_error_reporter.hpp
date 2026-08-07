@@ -104,9 +104,6 @@ class dispatch_error_reporter_t
             add ("kind", std::string (enum_name (event.message_kind)));
             add ("reason", std::string (enum_name (event.reason)));
             add ("action", std::string (enum_name (event.action)));
-            if (_options.diagnostics.label ()) {
-                add ("label", *_options.diagnostics.label ());
-            }
             if (event.packet_name) {
                 add ("packet", *event.packet_name);
             }

@@ -13,12 +13,12 @@ namespace zlink::framework::e2e::resilience_lifecycle::consumer
 {
 
 inline void configure_consumer_host (zlink::framework::zlink_framework_options_t &framework,
+                                     zlink::framework::logging_builder_t &logging,
                                      const consumer_options_t &options)
 {
+    logging.use_file (options.log_dir + "/consumer-flow.log");
     framework.configure_dispatch ()
-      .message_flow (zlink::framework::message_flow_log_mode_t::normal)
-      .trace_log_file (options.log_dir + "/consumer-flow.log")
-      .trace_label ("consumer");
+      .message_flow (zlink::framework::message_flow_log_mode_t::normal);
     server::add_redis_location_store (framework, options.redis_endpoint, options.redis_key_prefix);
     framework.services ().add_singleton<consumer_options_t> (
       std::make_unique<consumer_options_t> (options));

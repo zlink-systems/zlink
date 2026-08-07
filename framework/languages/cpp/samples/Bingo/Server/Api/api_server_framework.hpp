@@ -19,11 +19,11 @@ using namespace framework;
 
 inline app_t &add_bingo_api_server (app_t &app, const sample_topology_t &topology)
 {
+    app.logging ().use_file (
+      flow_log_path (topology.log_dir, "api-" + topology.api_node));
     app.add_zlink_framework ([&] (zlink_framework_options_t &options) {
         options.configure_dispatch ()
-          .message_flow (message_flow_log_mode_t::normal)
-          .trace_log_file (flow_log_path (topology.log_dir, "api-" + topology.api_node))
-          .trace_label ("api-" + topology.api_node);
+          .message_flow (message_flow_log_mode_t::normal);
         use_default_bingo_codecs (options.codecs ());
         add_sample_location_store (options, topology);
         options.services ().add_singleton<bingo_player_record_store_t> ();

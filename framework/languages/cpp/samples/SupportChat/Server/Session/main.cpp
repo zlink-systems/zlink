@@ -183,11 +183,10 @@ int main (int argc, char **argv)
     const auto &topology = configuration.topology;
     std::filesystem::create_directories (configuration.role.log_dir);
 
+    app.logging ().use_file (configuration.flow_log_path ());
     app.add_zlink_framework ([&] (zlink_framework_options_t &options) {
         options.configure_dispatch ()
-          .message_flow (message_flow_log_mode_t::normal)
-          .trace_log_file (configuration.flow_log_path ())
-          .trace_label ("supportchat-session");
+          .message_flow (message_flow_log_mode_t::normal);
         add_supportchat_location_store (options, topology);
         options.add_client_server_channel ("supportchat.support").client ();
         options.add_client_server_channel ("supportchat.api").client ();

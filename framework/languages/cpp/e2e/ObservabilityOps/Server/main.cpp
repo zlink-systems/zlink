@@ -691,6 +691,8 @@ int zlink::framework::e2e::observability_ops::server::run_host (host_role_t role
                                          / "workflow-events",
                                        options.node_rid)
                                    : std::shared_ptr<workflow_event_store_t>{};
+    app.logging ().use_file (
+      options.log_dir + "/" + options.node_rid + "-flow.log");
 
     app.add_zlink_framework ([&] (fw::zlink_framework_options_t &framework) {
         framework.services ().add_singleton<server_options_t> (
@@ -715,9 +717,7 @@ int zlink::framework::e2e::observability_ops::server::run_host (host_role_t role
          * the received pair to the next hop. */
         framework.configure_dispatch ()
           .message_flow (options.trace_mode == "off" ? fw::message_flow_log_mode_t::off
-                                                     : fw::message_flow_log_mode_t::normal)
-          .trace_log_file (options.log_dir + "/" + options.node_rid + "-flow.log")
-          .trace_label ("cpp-obs-" + options.node_rid);
+                                                     : fw::message_flow_log_mode_t::normal);
 
         if (role == host_role_t::session) {
             auto spot = framework.add_route_mesh (obs::spot_mesh);

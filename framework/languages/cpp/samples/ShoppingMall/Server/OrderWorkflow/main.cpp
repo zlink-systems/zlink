@@ -160,6 +160,7 @@ int main (int argc, char **argv)
     auto instance = topology.for_workflow_instance (configuration.role.name);
     redis_state_store_t store{topology};
     store.seed_defaults ();
+    app.logging ().use_file (configuration.flow_log_path ());
     app.add_zlink_framework ([&] (zlink_framework_options_t &options) {
         options.services ()
           .add_singleton<sample_topology_t> (std::make_unique<sample_topology_t> (topology))
@@ -168,9 +169,7 @@ int main (int argc, char **argv)
           .add_singleton<redis_state_store_t, sample_topology_t> ();
         add_shoppingmall_location_store (options, topology);
         options.configure_dispatch ()
-          .message_flow (message_flow_log_mode_t::normal)
-          .trace_log_file (configuration.flow_log_path ())
-          .trace_label (instance.instance_id);
+          .message_flow (message_flow_log_mode_t::normal);
         const auto workflow_channel = sample_names_t::order_workflow_channel;
         auto workflow_route = options.add_route_mesh (workflow_channel);
         workflow_route

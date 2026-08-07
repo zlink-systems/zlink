@@ -845,7 +845,10 @@ int main ()
      * event representation behind the installed header boundary. */
     for (const std::string removed : {
            "message_flow_event_t", "message_dispatch_error_event_t",
-           "message_flow_observer_t", "set_message_flow_observer"}) {
+           "message_flow_observer_t", "set_message_flow_observer",
+           "trace_log_file", "trace_label", "message_flow_live",
+           "effective_message_flow", "live_mode ()", "log_file ()",
+           "label ()"}) {
         gate.require (
           execution_hpp.find (removed) == std::string::npos,
           "CPP-CONTRACT-DIAG-002",
@@ -1957,7 +1960,7 @@ int main ()
              "current->diagnostics_mode")
              != std::string::npos
         && message_flow_tracer.find (
-             "effective_message_flow ()")
+             "effective_message_flow (")
              != std::string::npos,
       "CPP-OBS-002",
       "message-flow diagnostics level is not snapshotted at message entry");

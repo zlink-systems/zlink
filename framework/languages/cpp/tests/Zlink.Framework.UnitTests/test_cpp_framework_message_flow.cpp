@@ -216,7 +216,8 @@ int main ()
         auto options = options_with_mode (message_flow_log_mode_t::off);
         auto live = std::make_shared<std::atomic<message_flow_log_mode_t>> (
           message_flow_log_mode_t::off);
-        options.message_flow_live (live);
+        zlink::framework::detail::dispatch_options_access_t::set_live_mode (
+          options, live);
 
         // Static says off, live says off -> nothing.
         auto out = capture_clog ([&] {

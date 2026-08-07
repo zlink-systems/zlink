@@ -105,14 +105,13 @@ class matchmaking_server_host_factory_t
               std::make_unique<stop_after_start_service_t> (app));
         }
         app.logging ().use_console ().set_min_level (log_level_t::info);
+        app.logging ().use_file (
+          flow_log_path (topology.log_dir, "matchmaking"));
         observe_runtime_metrics (
           app, topology.log_dir, "matchmaking");
         app.add_zlink_framework ([&] (zlink_framework_options_t &options) {
             options.configure_dispatch ()
-              .message_flow (message_flow_log_mode_t::normal)
-              .trace_log_file (
-                flow_log_path (topology.log_dir, "matchmaking"))
-              .trace_label ("matchmaking");
+              .message_flow (message_flow_log_mode_t::normal);
             use_default_bingo_codecs (options.codecs ());
             add_sample_location_store (options, topology);
 
