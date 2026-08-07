@@ -922,6 +922,36 @@ public sealed class SerialExecutorTests
     }
 
     [Fact]
+    public async Task SerialExecutionQueue_ApplicationDrainedTracksEachBusyInterval()
+    {
+        await using var queue = CreateQueue(CancellationToken.None);
+        var firstRelease = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        Assert.True(queue.TryPostApplication(
+            async _ => await firstRelease.Task.ConfigureAwait(false),
+            out var first));
+        var firstDrained = queue.ApplicationDrained;
+        Assert.False(firstDrained.IsCompleted);
+
+        firstRelease.TrySetResult();
+        await first.Completion.WaitAsync(TimeSpan.FromSeconds(5));
+        await firstDrained.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var secondRelease = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        Assert.True(queue.TryPostApplication(
+            async _ => await secondRelease.Task.ConfigureAwait(false),
+            out var second));
+        var secondDrained = queue.ApplicationDrained;
+        Assert.NotSame(firstDrained, secondDrained);
+        Assert.False(secondDrained.IsCompleted);
+
+        secondRelease.TrySetResult();
+        await second.Completion.WaitAsync(TimeSpan.FromSeconds(5));
+        await secondDrained.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
     public async Task SerialExecutionQueue_Selects_Lifecycle_Before_Ready_Application()
     {
         await using var queue = CreateQueue(CancellationToken.None);

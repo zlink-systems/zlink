@@ -24,6 +24,7 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
 
     private readonly TaskCompletionSource _drained =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private TaskCompletionSource _applicationDrained = CompletedSignal();
 
     private readonly SemaphoreSlim _drainGate = new(1, 1);
     private readonly IZLinkRuntimeFailureReporter _errorSink;
@@ -52,6 +53,33 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
     private TaskCompletionSource<ZLinkSerialRelocationSeal>? _sealRequest;
     private Func<int>? _sealRequestReservation;
     private bool _relocated;
+
+    internal int ApplicationPendingCount
+    {
+        get
+        {
+            lock (_admissionGate) return _applicationPendingCount;
+        }
+    }
+
+    internal long ApplicationPendingRetainedBytes
+    {
+        get
+        {
+            lock (_admissionGate)
+                return checked(
+                    _applicationPendingBytes
+                    - _applicationPendingCount * WorkItemFixedCostBytes);
+        }
+    }
+
+    internal Task ApplicationDrained
+    {
+        get
+        {
+            lock (_admissionGate) return _applicationDrained.Task;
+        }
+    }
 
     public ZLinkSerialExecutionQueue(
         ZLinkRuntimeTaskRunner taskRunner,
@@ -682,6 +710,9 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
             || accountingBytes > byteLimit - pendingBytes)
             return false;
 
+        if (lane == ZLinkSerialWorkLane.Application && pendingCount == 0)
+            _applicationDrained = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
         pendingCount++;
         pendingBytes += accountingBytes;
         _pendingCount++;
@@ -697,6 +728,8 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         pendingCount--;
         pendingBytes -= accountingBytes;
         _pendingCount--;
+        if (lane == ZLinkSerialWorkLane.Application && pendingCount == 0)
+            _applicationDrained.TrySetResult();
     }
 
     private ref int PendingCount(ZLinkSerialWorkLane lane)
@@ -711,6 +744,14 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         if (lane == ZLinkSerialWorkLane.Application)
             return ref _applicationPendingBytes;
         return ref _lifecyclePendingBytes;
+    }
+
+    private static TaskCompletionSource CompletedSignal()
+    {
+        var signal = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        signal.TrySetResult();
+        return signal;
     }
 
     public async ValueTask RunAsync(

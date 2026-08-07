@@ -1531,8 +1531,7 @@ internal sealed class ZLinkActorRuntimeState(
         CancellationToken cancellationToken)
     {
         using var turn = await _dispatchMailbox.EnterAsync(
-                cancellationToken,
-                countAsPendingMessage: true)
+                cancellationToken)
             .ConfigureAwait(false);
         EnsureDispatchAvailable();
         using var dispatch = EnterDispatch(header);
@@ -1548,7 +1547,6 @@ internal sealed class ZLinkActorRuntimeState(
     {
         using var turn = await _dispatchMailbox.EnterAsync(
                 cancellationToken,
-                countAsPendingMessage: true,
                 countAsPendingRequest)
             .ConfigureAwait(false);
         EnsureDispatchAvailable(allowRelocationReplay);

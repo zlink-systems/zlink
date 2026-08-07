@@ -307,12 +307,10 @@ public sealed class RuntimeMetricsTests
         var mailbox = new ZLinkActorDispatchMailbox();
         var active = await mailbox.EnterAsync(CancellationToken.None);
         var pendingSend = mailbox.EnterAsync(
-                CancellationToken.None,
-                countAsPendingMessage: true)
+                CancellationToken.None)
             .AsTask();
         var pendingRequest = mailbox.EnterAsync(
                 CancellationToken.None,
-                countAsPendingMessage: true,
                 countAsPendingRequest: true)
             .AsTask();
 
