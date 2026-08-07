@@ -36,7 +36,10 @@ import type {
   ZLinkActorSpotHandleResolver,
   ZLinkSpotHandleResolver
 } from '../spots/spot-handle';
-import { ZLinkFrameworkException } from '../../contracts/Errors';
+import {
+  ZLinkFrameworkErrorKind,
+  ZLinkFrameworkException
+} from '../../contracts/Errors';
 import type {
   ZLinkSpotRouteResolver,
   ZLinkSpotRouteTarget
@@ -850,6 +853,18 @@ export class ZLinkAuthoritySpotRouteResolver implements ZLinkSpotRouteResolver {
           && decoded.ownerId === current.ownerId
           && decoded.ownerLeaseGeneration === current.ownerLeaseGeneration
         ) {
+          const remainingLeaseMs = this.leaseTracker === undefined
+            ? undefined
+            : await this.leaseTracker.remainingOwnerTokenLeaseMs({
+                ownerId: current.ownerId,
+                leaseGeneration: current.ownerLeaseGeneration
+              }, signal);
+          if (remainingLeaseMs !== undefined && remainingLeaseMs <= 0) {
+            throw new ZLinkFrameworkException(
+              ZLinkFrameworkErrorKind.Unavailable,
+              `SPOT '${spotId}' Ready authority owner lease is unavailable.`
+            );
+          }
           const target: ZLinkSpotRouteTarget = {
             routerChannelId: this.routerChannelIdForMesh(decoded.ownerMeshName),
             targetNodeRid: decoded.ownerNodeRid,
@@ -872,13 +887,7 @@ export class ZLinkAuthoritySpotRouteResolver implements ZLinkSpotRouteResolver {
             )
           };
           if (this.routeCacheMaxAgeMs > 0 && this.currentEpoch(key) === epoch) {
-            const remainingLeaseMs = this.leaseTracker === undefined
-              ? 0
-              : await this.leaseTracker.remainingOwnerTokenLeaseMs({
-                  ownerId: current.ownerId,
-                  leaseGeneration: current.ownerLeaseGeneration
-                }, signal);
-            const lifetimeMs = Math.min(this.routeCacheMaxAgeMs, remainingLeaseMs);
+            const lifetimeMs = Math.min(this.routeCacheMaxAgeMs, remainingLeaseMs ?? 0);
             if (lifetimeMs > 0 && this.currentEpoch(key) === epoch) {
               this.cache.set(key, {
                 row: target,

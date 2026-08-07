@@ -174,8 +174,8 @@ test('spot runtime owner resolver converts backend actor generation to objectGen
     }),
     locationLifecycle: () => undefined,
     releaseInstanceAuthority: async () => {},
-    beginInstanceIdleClosingAuthority: async () => false,
-    beginInstanceClosingAuthority: async () => false,
+    beginInstanceIdleClosingAuthority: async () => undefined,
+    beginInstanceClosingAuthority: async () => undefined,
     createLocationSpotRouteResolver: () => undefined,
     boundSessionRelay: { boundSessions: {} },
     actorHandoff: {},
@@ -724,7 +724,7 @@ test('ZLinkSpotManager establishes the durable Closing fence before explicit Ins
       assert.equal(meshName, 'test.mesh');
       assert.equal(String(candidateSpotId), String(spotId));
       order.push('durable-closing');
-      return true;
+      return { restoreReady: async () => { throw new Error('unexpected restore'); } };
     }
   });
 
@@ -754,7 +754,7 @@ test('ZLinkSpotManager defers an Instance context close until activation complet
     async beginInstanceClosingAuthority() {
       durableCloseCalls++;
       events.push('durable-closing');
-      return true;
+      return { restoreReady: async () => { throw new Error('unexpected restore'); } };
     }
   });
 
@@ -795,7 +795,7 @@ test('ZLinkSpotManager leaves an explicit Instance intact when the durable Closi
       'test.mesh',
       new Map([['explicit', CasLosingInstanceSpot]])
     ]]),
-    beginInstanceClosingAuthority: async () => false
+    beginInstanceClosingAuthority: async () => undefined
   });
 
   await manager.materializeInstance('test.mesh', 'explicit', spotId, 1n);
@@ -830,7 +830,9 @@ test('ZLinkSpotManager blocks Instance rematerialization while durable close CAS
   await Promise.resolve();
   assert.equal(initialized, 1);
   assert.equal(manager.isInstanceClosing('test.mesh', spotId), true);
-  releaseClosing.resolve(true);
+  releaseClosing.resolve({
+    restoreReady: async () => { throw new Error('unexpected restore'); }
+  });
   assert.equal(await close, true);
   await rematerialize;
   assert.equal(initialized, 2);
@@ -883,7 +885,7 @@ test('ZLinkSpotManager cancels idle eviction when the durable Closing fence lose
       new Map([['idle', IdleInstanceSpot]])
     ]]),
     instanceSpotIdleTimeoutMs: new Map([['test.mesh', 5]]),
-    beginInstanceIdleClosingAuthority: async () => false
+    beginInstanceIdleClosingAuthority: async () => undefined
   });
 
   await manager.materializeInstance('test.mesh', 'idle', spotId, 1n);
@@ -891,6 +893,41 @@ test('ZLinkSpotManager cancels idle eviction when the durable Closing fence lose
 
   assert.equal(closingCalls, 0);
   assert.notEqual(await manager.find('test.mesh', spotId), null);
+  await manager.close('test.mesh', spotId);
+});
+
+test('ZLinkSpotManager restores Ready authority when idle eviction loses local occupancy', async () => {
+  let actorCount = 0;
+  let restoreCalls = 0;
+  let authorityCalls = 0;
+  let quiescenceCalls = 0;
+  class OccupiedIdleInstanceSpot {}
+  const spotId = zlink.RoutingId.from('idle-instance-occupied');
+  const manager = new framework.DefaultZLinkSpotManager({
+    spotFactories: [],
+    instanceSpotFactories: new Map([[
+      'test.mesh',
+      new Map([['idle', OccupiedIdleInstanceSpot]])
+    ]]),
+    instanceSpotIdleTimeoutMs: new Map([['test.mesh', 5]]),
+    actorCountProvider: () => actorCount,
+    instanceSpotApplicationQuiescenceProvider: async () => {
+      quiescenceCalls++;
+      actorCount = 1;
+    },
+    async beginInstanceIdleClosingAuthority() {
+      authorityCalls++;
+      return { restoreReady: async () => { restoreCalls++; } };
+    }
+  });
+
+  await manager.materializeInstance('test.mesh', 'idle', spotId, 1n);
+  await waitFor(() => restoreCalls === 1);
+
+  assert.equal(authorityCalls, 1);
+  assert.equal(quiescenceCalls, 1);
+  assert.notEqual(await manager.find('test.mesh', spotId), null);
+  actorCount = 0;
   await manager.close('test.mesh', spotId);
 });
 

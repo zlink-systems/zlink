@@ -56,11 +56,11 @@ export interface ZLinkSpotRuntimeOptionsFactoryOptions {
   readonly beginInstanceIdleClosingAuthority: (
     meshName: string,
     spotId: string
-  ) => Promise<boolean>;
+  ) => Promise<{ restoreReady(): Promise<void> } | undefined>;
   readonly beginInstanceClosingAuthority: (
     meshName: string,
     spotId: string
-  ) => Promise<boolean>;
+  ) => Promise<{ restoreReady(): Promise<void> } | undefined>;
   readonly createLocationSpotRouteResolver: () => ZLinkSpotRouteResolver | undefined;
   readonly boundSessionRelay: ZLinkBoundSessionRelay;
   readonly actorHandoff: ZLinkActorHandoffCoordinator;

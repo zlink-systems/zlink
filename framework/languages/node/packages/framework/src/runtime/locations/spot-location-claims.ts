@@ -123,21 +123,24 @@ export class ZLinkSpotLocationClaims {
     this.invalidateSpotRoute?.(tracked.spotId);
   }
 
-  async beginInstanceClosing(meshName: string, spotId: RoutingId): Promise<boolean> {
+  async beginInstanceClosing(
+    meshName: string,
+    spotId: RoutingId
+  ): Promise<ZLinkInstanceClosingAuthority | undefined> {
     const canonical = ZLinkLocationKeyCodec.encodeSpotKey({ meshName, spotId });
     const tracked = this.spots.get(canonical);
     const store = this.authorityStore;
     if (tracked?.kind !== 'authority' || store === undefined) {
-      return false;
+      return undefined;
     }
     const key = encodeAuthorityKey('instance_spot', String(spotId));
     const current = await store.readAuthority(key);
     if (current.kind !== 'snapshot' || !matchesTrackedAuthority(current, tracked)) {
-      return false;
+      return undefined;
     }
     const decoded = decodeServiceInstanceAuthorityPayload(current.payload);
     if (decoded?.state !== 'ready' || decoded.activationRecovery !== undefined) {
-      return false;
+      return undefined;
     }
     const result = await store.compareExchangeAuthority(
       key,
@@ -158,11 +161,44 @@ export class ZLinkSpotLocationClaims {
       }
     );
     if (result.kind !== 'stored') {
-      return false;
+      return undefined;
     }
     tracked.storeVersion = result.storeVersion.value;
     this.invalidateSpotRoute?.(tracked.spotId);
-    return true;
+    let restored = false;
+    return {
+      restoreReady: async () => {
+        if (restored) return;
+        const restore = await store.compareExchangeAuthority(
+          key,
+          result.storeVersion,
+          {
+            kind: 'put',
+            generationTransition: 'preserve',
+            payload: encodeServiceInstanceAuthorityPayload({
+              state: 'ready',
+              stableType: decoded.stableType,
+              spotId: decoded.spotId,
+              ownerId: decoded.ownerId,
+              ownerLeaseGeneration: decoded.ownerLeaseGeneration,
+              ownerMeshName: decoded.ownerMeshName,
+              ownerNodeRid: decoded.ownerNodeRid,
+              ownerNodeGeneration: decoded.ownerNodeGeneration
+            })
+          }
+        );
+        if (restore.kind !== 'stored') {
+          throw createInternalFrameworkException(
+            ZLinkFrameworkInternalErrorKind.SpotMoving,
+            `Instance Spot '${String(spotId)}' Ready authority could not be restored after idle eviction was declined.`,
+            true
+          );
+        }
+        restored = true;
+        tracked.storeVersion = restore.storeVersion.value;
+        this.invalidateSpotRoute?.(tracked.spotId);
+      }
+    };
   }
 
   onOwnershipLost(event: ZLinkOwnershipLostEvent): void {
@@ -327,6 +363,10 @@ export interface ZLinkTrackedInstanceAuthority {
   ownerLeaseGeneration: bigint;
   storeVersion: string;
   readonly deactivate?: () => Promise<void>;
+}
+
+export interface ZLinkInstanceClosingAuthority {
+  restoreReady(): Promise<void>;
 }
 
 interface TrackedLegacySpot {

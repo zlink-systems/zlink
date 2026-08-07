@@ -2089,10 +2089,10 @@ export class ZLinkFrameworkRuntimeHost implements
         ?? Promise.resolve(),
       beginInstanceIdleClosingAuthority: (meshName, spotId) =>
         this.locationOwner.currentLifecycle?.beginInstanceSpotClosing(meshName, spotId)
-        ?? Promise.resolve(false),
+        ?? Promise.resolve(undefined),
       beginInstanceClosingAuthority: (meshName, spotId) =>
         this.locationOwner.currentLifecycle?.beginInstanceSpotClosing(meshName, spotId)
-        ?? Promise.resolve(false),
+        ?? Promise.resolve(undefined),
       createLocationSpotRouteResolver: () => this.createLocationSpotRouteResolver(),
       boundSessionRelay: this.boundSessionRelay,
       actorHandoff: this.actorHandoff,

@@ -385,7 +385,7 @@ export class ZLinkSpotActivationLifecycle {
       timers,
       actorHandlers,
       handlers,
-      externalActorCount: () => 0,
+      externalActorCount: () => this.options.actorCountProvider?.(spotId) ?? 0,
       closeWhenReady: (reason) => this.scheduleDrainClose(meshName, spotId, reason)
     });
     try {

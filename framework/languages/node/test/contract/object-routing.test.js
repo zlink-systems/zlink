@@ -135,6 +135,54 @@ test('authority-backed Spot resolution uses the same positive-only cache boundar
   assert.equal(reads, 2);
 });
 
+test('Ready Instance authority with an expired owner remains unavailable instead of missing', async () => {
+  const authority = {
+    async readAuthority() {
+      return {
+        kind: 'snapshot',
+        storeVersion: { value: '1' },
+        payload: internal.encodeServiceInstanceAuthorityPayload({
+          state: 'ready',
+          stableType: 'Room',
+          spotId: 'room-owner-lost',
+          ownerId: 'owner-a',
+          ownerLeaseGeneration: 2n,
+          ownerMeshName: 'play',
+          ownerNodeRid: 'node-a',
+          ownerNodeGeneration: 3n
+        }),
+        objectGeneration: 4n,
+        authorityOwnerGeneration: 5n,
+        ownerId: 'owner-a',
+        ownerLeaseGeneration: 2n,
+        allocation: {
+          state: 'active',
+          objectKind: 'instance_spot',
+          stableType: 'Room',
+          descriptor: { meshName: 'play', nodeRid: 'node-a' },
+          descriptorLifecycleGeneration: 3n,
+          capacity: { actors: 0, spots: 1 }
+        },
+        storeNow: new Date()
+      };
+    }
+  };
+  const resolver = new internal.ZLinkAuthoritySpotRouteResolver(
+    authority,
+    (meshName) => meshName,
+    undefined,
+    { remainingOwnerTokenLeaseMs: async () => 0 },
+    15_000,
+    () => 0
+  );
+
+  await assert.rejects(
+    () => resolver.resolve('room-owner-lost'),
+    (error) => error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
+      && internal.internalFrameworkErrorKind(error) === undefined
+  );
+});
+
 test('authority Spot resolution does not re-cache a route invalidated during the read', async () => {
   let reads = 0;
   let nodeRid = 'node-a';
@@ -685,6 +733,52 @@ test('Missing Instance terminal NotFound is not resubmitted after completion', a
   }), /Instance Spot request failed with result 102/);
   assert.equal(invalidated, 0);
   assert.equal(missingRequests, 1);
+});
+
+test('Ready Instance owner loss does not enter cold activation', async () => {
+  class Lookup {}
+  let coldActivations = 0;
+  const addressTransport = new internal.ZLinkHostSpotAddressTransport({
+    resolver: () => ({
+      async resolve() {
+        throw new framework.ZLinkFrameworkException(
+          framework.ZLinkFrameworkErrorKind.Unavailable,
+          'Ready authority owner lease is unavailable.'
+        );
+      }
+    }),
+    routed: {
+      async sendToSpot() { throw new Error('Ready route must not be used.'); },
+      async requestToSpot() { throw new Error('Ready route must not be used.'); }
+    },
+    meshNames: () => ['play'],
+    meshNode: () => ({
+      instanceSpotPlacementTypes: () => ['chat-room'],
+      selectObjectPlacement: () => ({
+        kind: 'selected',
+        target: {
+          targetNodeRid: 'node-b',
+          targetNodeGeneration: 2n,
+          descriptorVersion: '2'
+        }
+      }),
+      requestToMissingInstanceSpot: () => {
+        coldActivations += 1;
+        return { high: 1n, low: 1n };
+      }
+    }),
+    completions: () => undefined,
+    defaultRequestTimeoutMs: 1_000
+  });
+
+  await assert.rejects(
+    () => addressTransport.requestToSpotAddress('spot-owner-lost', new Lookup(), {
+      instanceSpot: true,
+      instanceSpotType: 'chat-room'
+    }),
+    (error) => error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
+  );
+  assert.equal(coldActivations, 0);
 });
 
 test('Spot address deadline includes authority resolution and prevents a late submit', async () => {
