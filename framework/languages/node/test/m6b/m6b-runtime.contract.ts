@@ -124,6 +124,7 @@ import {
 } from '../../packages/framework/src/contracts';
 import {
   createInternalFrameworkException,
+  internalFrameworkErrorCode,
   ZLinkFrameworkInternalErrorKind,
   internalFrameworkErrorKind
 } from '../../packages/framework/src/runtime/framework-errors-internal';
@@ -2006,6 +2007,63 @@ test('Spot Message Follow holds ingress, relays with the committed fence, and re
   }), 'application');
   assert.equal(runtime.abortSpotMessageFollowIngress(abortSeal), true);
   assert.equal(restored.length, 2);
+  runtime.close();
+});
+
+test('Spot Message Follow reports bounded admission exhaustion as CapacityExceeded', () => {
+  let ingress:
+    ((record: import('../../packages/framework/src/runtime/foundation/raw-service-mesh-runtime')
+      .RawServiceIngressRecord) => unknown) | undefined;
+  const replies: Buffer[][] = [];
+  const raw = {
+    setServiceIngress(handler: typeof ingress) {
+      ingress = handler;
+    },
+    replyService(_record: unknown, parts: readonly Buffer[]) {
+      replies.push([...parts]);
+    }
+  } as unknown as RawServiceMeshRuntime;
+  const runtime = new ServiceStatefulRuntime(raw, 'node-a', 3n);
+  runtime.restoreSpotAuthority('room', 'user_spot', 'Room', 5n, 7n);
+  const source = {
+    spot: { spotId: 'room', generation: 5n },
+    targetNodeRid: 'node-a',
+    targetNodeGeneration: 3n,
+    authorityOwnerGeneration: 7n,
+    ownerLeaseGeneration: 3n,
+    storeVersion: 'source-v1'
+  };
+  runtime.rememberSpotRoute(source);
+  assert.ok(runtime.sealSpotMessageFollowIngress(source));
+  const internals = runtime as unknown as {
+    spotMessageFollow: Map<string, { queuedCount: number }>;
+  };
+  const state = [...internals.spotMessageFollow.values()][0];
+  assert.ok(state);
+  state.queuedCount = 1_024;
+  const payload = encodeApplicationPayload({
+    packetName: 'Overflow',
+    contentType: 'application/octet-stream',
+    payload: Buffer.from('payload')
+  });
+
+  assert.equal(ingress?.({
+    command: M6bServiceWireCommand.spotRequest,
+    flags: 0,
+    sourceRoutingId: 'caller',
+    sourceRoute: Buffer.from('reply-route'),
+    requestSequence: 17n,
+    parts: [encodeSpotHeader('spotRequest', 'source-spot', source, 91n), payload]
+  }), 'infrastructure');
+  assert.equal(replies.length, 1);
+  assert.deepEqual(decodeStatefulReply(replies[0]![0]!, 91n, 'spotRequest'), {
+    correlation: 91n,
+    terminalResult: RequestResult.Rejected,
+    failureCode: internalFrameworkErrorCode(createInternalFrameworkException(
+      ZLinkFrameworkInternalErrorKind.WorkerQueueFull,
+      'expected'
+    )) + 1
+  });
   runtime.close();
 });
 

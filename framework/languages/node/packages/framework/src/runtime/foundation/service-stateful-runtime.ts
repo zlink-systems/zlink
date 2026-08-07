@@ -3954,7 +3954,10 @@ export class ServiceStatefulRuntime {
       || bytes > MESSAGE_FOLLOW_BYTE_LIMIT - state.queuedBytes
     ) {
       if (wire.kind === 'spotRequest') {
-        const result = failure(new ServiceStaleGenerationError('spot', wire.target.spot.spotId));
+        const result = failure(createInternalFrameworkException(
+          ZLinkFrameworkInternalErrorKind.WorkerQueueFull,
+          `Spot '${wire.target.spot.spotId}' exhausted the Message Follow capacity.`
+        ));
         this.replyWire(ingress, wire.correlation!, result.terminalResult, result.failureCode);
       }
       return 'infrastructure';
@@ -4398,6 +4401,12 @@ function failure(error: unknown): ServiceStatefulResult {
     if (kind === ZLinkFrameworkInternalErrorKind.RequestTargetNotFound) {
       return {
         terminalResult: RequestResult.NotFound,
+        failureCode: internalFrameworkErrorCode(error) + 1
+      };
+    }
+    if (kind === ZLinkFrameworkInternalErrorKind.WorkerQueueFull) {
+      return {
+        terminalResult: RequestResult.Rejected,
         failureCode: internalFrameworkErrorCode(error) + 1
       };
     }
