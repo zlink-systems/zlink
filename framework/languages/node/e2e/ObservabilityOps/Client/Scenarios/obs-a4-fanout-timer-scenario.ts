@@ -1,4 +1,4 @@
-// OBS-A4: Fanout branch는 flow를 공유하고 timer는 새 flow를 만든다 시나리오를 검증한다.
+// OBS-A4: Fanout payload를 전달하고 timer는 새 flow를 만든다 시나리오를 검증한다.
 import { post, require, unique, workflowA, workflowB } from '../Support/scenario-support.js';
 import { readFlowRecords, waitFor, waitForFlow } from '../Support/observability-support.js';
 import type { ActorEvidence, WorkflowApplyRes } from '../../Shared/messages.js';

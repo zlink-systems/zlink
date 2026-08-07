@@ -1,4 +1,4 @@
-// RL-D3: Public logging sink에서 dispatch error를 확인한다 시나리오를 검증한다.
+// RL-D3: Application logger provider에서 dispatch error를 확인한다 시나리오를 검증한다.
 import type { RequestFailureRes } from '../../Shared/messages';
 import type { ClientOptions } from '../Support/client-options';
 import { postJson } from '../../../http-client';

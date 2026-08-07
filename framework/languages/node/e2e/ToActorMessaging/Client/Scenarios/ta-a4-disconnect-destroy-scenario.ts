@@ -1,4 +1,4 @@
-// TA-A4: Unbind 뒤에는 direct message가 계속되고 Actor 제거 뒤에는 실패한다 시나리오를 검증한다.
+// TA-A4: Logical disconnect 뒤에는 direct message가 계속되고 Actor 제거 뒤에는 실패한다 시나리오를 검증한다.
 import type { ClientOptions } from '../Support/client-options';
 import { getJson, postJson } from '../../../http-client';
 import {

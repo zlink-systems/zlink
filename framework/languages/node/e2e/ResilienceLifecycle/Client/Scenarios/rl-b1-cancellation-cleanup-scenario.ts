@@ -1,4 +1,4 @@
-// RL-B1: Client cancellation 뒤 후속 request를 처리한다 시나리오를 검증한다.
+// RL-B1: Waiter 종료 뒤 후속 request를 처리한다 시나리오를 검증한다.
 import type { ProfileRes, TimeoutRes } from '../../Shared/messages';
 import type { ClientOptions } from '../Support/client-options';
 import { postJson } from '../../../http-client';

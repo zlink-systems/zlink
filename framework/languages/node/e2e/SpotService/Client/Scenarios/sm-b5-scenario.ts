@@ -1,4 +1,4 @@
-// SM-B5: Handler 없는 Actor request를 관찰한다 시나리오를 검증한다.
+// SM-B5: Handler 없는 Actor request를 기록한다 시나리오를 검증한다.
 import {
   zlinkStreamConnectorFactory,
   zlinkStreamJsonCodec,
