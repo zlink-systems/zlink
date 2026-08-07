@@ -72,7 +72,7 @@ Gap 하나 또는 서로 강하게 연결된 작은 작업 묶음의 동작과 �
 | DOTNET-EXEC-003 | 상 | Entry Actor ingress HWM | 완료 — process-wide ingress와 Actor별 공통 serial lane이 count·retained byte를 제한한다 |
 | DOTNET-LIFE-001 | 중 | Spot type model | 완료 — 공통 resource base 위에 User와 Instance activation type과 context surface를 분리했다 |
 | DOTNET-LIFE-002 | 중 | Ready Instance owner loss | 완료 — 실제 owner crash·restart 뒤 `Unavailable`과 queue replay 부재를 process에서 검증했다 |
-| DOTNET-COMP-002 | 중 | completion ordering | 응답 상관 값을 submit 출력으로 받은 뒤 waiter를 등록해 early-result table을 상시 필요로 한다 |
+| DOTNET-COMP-002 | 중 | completion ordering | 완료 — sender가 응답 상관 값을 먼저 할당하고 waiter 등록 뒤 submit한다 |
 | DOTNET-LAYER-001 | 중 | binding 경계·POSDDD | 의미를 숨기지 않는 일대일 `IBackend*`/`*Wrapper` 계층이 production hot path에 남아 있다 |
 | DOTNET-LAYER-002 | 상 | runtime/package ownership | relocate·shutdown 의미와 public runtime 구현이 ASP.NET Core 통합 package에 있다 |
 | DOTNET-LAYER-003 | 중 | identifier type | mesh·channel·Actor·Spot ID를 내부 경계에서도 모두 `string`으로 섞어 쓴다 |
@@ -438,6 +438,24 @@ Internals는 응답 상관 값을 sender가 먼저 만들고 waiter를 등록한
 `.NET` wrapper는 `_spot.RequestToSpot(..., out var operationId, ...)`를 먼저 호출한 다음 `_completions.RegisterRequest(...)`를 호출한다(`Runtime/Backend/DotNet/Wrappers/ZLinkBackendSpotWrapper.cs:217-231`). `ZLinkMeshCompletionTable` 주석과 `_early` map도 이 경쟁을 정상 구조로 전제한다(`Runtime/Backend/DotNet/ZLinkMeshCompletionTable.cs:6-13,69-72`). DOTNET-COMP-001은 이 구조가 만든 유한 보관 자원에서 실제 terminal 유실로 이어진다.
 
 완료 조건은 Framework가 correlation ID를 먼저 할당해 input으로 전달하는 binding/public surface와 register-before-submit 회귀 test다. Early store 크기를 늘리는 것은 gap을 닫지 않는다.
+
+구현과 검증을 완료했다. Framework backend는 node가 만든 응답 상관 값을 completion table에 먼저
+등록한 뒤 managed submit의 입력으로 전달한다. Spot·Message Follow·Actor request와 join·Instance Spot
+activation·remote object operation·STREAM bind/unbind가 같은 `RegisterBeforeSubmit` 경로를 사용한다.
+동기 submit이 거절되거나 예외를 던지면 같은 경계에서 waiter를 제거한다. 따라서 dispatch pump가
+등록되지 않은 terminal을 먼저 받는 정상 경로가 사라졌고, early payload store와 tombstone store도
+제거했다.
+
+회귀 test는 submit callback 안에서 completion을 동기 발생시켜 waiter가 이미 실행 가능한 상태인지
+확인하고, submit 거절 뒤 늦게 도착한 payload는 handler에 연결하지 않고 dispose하는지 확인한다.
+Completion table focused test 4건과 전체 .NET unit suite 1,582건이 통과했다. 관련 test 묶음에서
+`RemoteUserSpotTerminalReplaysAfterDeadlineAndExpiresWithoutReexecution`이 한 번 실패했지만 같은 test의
+단독 재실행과 전체 suite 재실행은 통과했다. Packaged contract와 standalone HTTP clean consumer도
+통과했으며 public API snapshot hash는
+`c1987f4b98e4fac7a30b7d038a56ee0d20e1272d00e79bdc88d3271e3c3ab958`로 유지되었다. 실제 process는
+ToActor `TA-A1`을 `ToActorMessaging/logs/20260807-205106-2541281/`에서, Instance Spot Track A를
+`SpotService/logs/20260807-205128-2543009/`에서 통과했다. 구현 checkpoint는 `4005fe5c8e`로
+`main`에 push했다.
 
 ### DOTNET-LAYER-001 — 의미 없는 binding pass-through 계층
 
