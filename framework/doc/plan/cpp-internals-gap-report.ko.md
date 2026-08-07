@@ -211,7 +211,7 @@ admitted 피어의 애플리케이션 레코드가 대상 owner의 mailbox 예�
 |---|---|---|
 | CPP-TOPO-001 | GAP·상 | §2 참조 — 수동 피어 fence 미설치 |
 | CPP-ROUTE-001 | PARTIAL·검증 중 | Wire fence가 제공하지 않는 `owner_id`는 빈 값일 때 비교하지 않고, 제공되는 node·object·authority owner generation과 owner lease generation은 계속 정확히 비교하도록 수정했다. Wire fence와 같은 입력으로 actor route cache가 무효화되고 다음 조회가 store를 다시 읽는 owner-layer 회귀 test도 추가했다. 구현 checkpoint `5e31808ad3`; `test_cpp_framework_store_location_resolvers` 33/33 통과. 실제 Message Follow notice가 spot·actor call site를 거쳐 cache를 무효화하는 process E2E가 남아 있어 아직 종결하지 않는다. |
-| CPP-ROUTE-002 | PARTIAL·하 | §1 수명 상한: public-host fence 캐시가 owner lease로 clamp되지 않고 flat `route_cache_max_age`로 저장 — owner 수락 기한을 넘겨 살아남은 fence가 대상에서 거부(불필요한 실패 hop 1회). 증거: `cpp/src/runtime/stateful/public_host_runtime.cpp:2281-2289` |
+| CPP-ROUTE-002 | PARTIAL·검증 중 | 구현 checkpoint `343a9c831b`에서 direct-store fallback도 공통 `live_location_reader_t`로 authority의 owner lease와 fencing margin을 확인하고, cache 수명을 `route_cache_max_age`와 owner admission lifetime 중 짧은 값으로 제한했다. Store 시각을 읽기 전의 `steady_clock` 시각으로 절대 만료 시각을 고정하므로 변환 과정에서 lease deadline을 연장하지 않는다. 10초 cache를 설정한 두 host 회귀에서 owner admission deadline 전 첫 전송은 `ok`, deadline 뒤 두 번째 전송은 `not_found`인지 확인했고 전체 `test_cpp_framework_m6b_runtime`과 `test_cpp_framework_target_contract`가 통과했다. 설치 package와 실제 Location Store를 사용하는 process 검증이 남아 있어 아직 종결하지 않는다. |
 
 만족 항목(요약): positive 캐시+전체 fence, 미존재/생성중/스토어 실패 비캐시, 수명 검증, follow 와이어 레코드, smooth WRR+tiebreak, 사전 계산 사이클, 직접 지정 대상 불변, publish 스냅샷 등은 충실.
 
