@@ -1237,6 +1237,39 @@ test('ClientServer outbound reports no selectable target as RequestTargetNotFoun
   await manager.dispose();
 });
 
+test('ClientServer outbound reports a missing Client role as NotConfigured', async () => {
+  const registration = internal.createFrameworkRegistration({
+    channels: {
+      orders: {
+        server: { bind: 'inproc://orders' },
+        sendHandlers: [{ packetName: 'Notice', handler: { handle() {} } }]
+      }
+    }
+  });
+  const manager = new internal.ZLinkChannelRuntimeManager(
+    registration,
+    {},
+    { nativeInstance: {}, shutdown() {}, async dispose() {} }
+  );
+
+  assert.throws(
+    () => manager.trySend('orders', 'Notice', { id: 1 }),
+    (error) => error instanceof framework.ZLinkFrameworkException
+      && error.kind === framework.ZLinkFrameworkErrorKind.NotConfigured
+  );
+  await assert.rejects(
+    () => manager.send('orders', 'Notice', { id: 1 }),
+    (error) => error instanceof framework.ZLinkFrameworkException
+      && error.kind === framework.ZLinkFrameworkErrorKind.NotConfigured
+  );
+  await assert.rejects(
+    () => manager.request('orders', 'Lookup', { id: 1 }, 60),
+    (error) => error instanceof framework.ZLinkFrameworkException
+      && error.kind === framework.ZLinkFrameworkErrorKind.NotConfigured
+  );
+  await manager.dispose();
+});
+
 function automaticClientServerSockets() {
   const connections = new Map();
   const history = new Map();

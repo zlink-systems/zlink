@@ -143,6 +143,28 @@ test('ZLinkChannelClient rejects calls to channels without client capability', a
   );
 });
 
+test('ZLinkChannelClient reports NotConfigured when only the Server role exists', async () => {
+  const client = new framework.DefaultZLinkChannelClient(framework.createFrameworkRegistration({
+    channels: {
+      api: {
+        server: { bind: 'inproc://api' },
+        sendHandlers: [{ packetName: 'Notice', handler: { handle() {} } }]
+      }
+    }
+  }));
+
+  for (const submit of [
+    () => client.sendToChannel('api', { ok: true }).submit(),
+    () => client.requestToChannel('api', { ok: true }).submit()
+  ]) {
+    await assert.rejects(
+      submit,
+      (error) => error instanceof framework.ZLinkFrameworkException
+        && error.kind === framework.ZLinkFrameworkErrorKind.NotConfigured
+    );
+  }
+});
+
 test('ZLinkSendCall snapshots metadata and reports asynchronous admission once', async () => {
   const calls = [];
   const registration = meshChannelRegistration('mesh', 'api');

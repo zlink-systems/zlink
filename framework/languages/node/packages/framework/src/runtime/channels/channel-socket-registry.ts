@@ -26,6 +26,10 @@ import { throwIfAborted } from '../abort';
 import { ZLinkRouteDisconnectedError } from './route-disconnected-error';
 import { attachEndpointConnections } from '../../contracts/Configuration/RuntimeEndpointConnections';
 import { ZLinkRouteMemberSnapshot } from './route-member-snapshot';
+import {
+  ZLinkFrameworkInternalErrorKind,
+  createInternalFrameworkException
+} from '../framework-errors-internal';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { ZLinkBufferMessage as RuntimeMessage } from '../backend/runtime-message';
 import type { Message } from '../../contracts/Common/Message';
@@ -611,7 +615,10 @@ export class ZLinkChannelSocketRegistry {
   clientDealerForOutbound(channelName: string): ZLinkBackendDealerSocket | undefined {
     const channel = this.registration.channels.get(channelName);
     if (channel?.client === undefined) {
-      throw new ZLinkConfigurationException(`Channel client '${channelName}' is not registered.`);
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.InvalidConfiguration,
+        `Channel client role '${channelName}' is not configured.`
+      );
     }
     return this.selectClientServerDealer(channelName);
   }
