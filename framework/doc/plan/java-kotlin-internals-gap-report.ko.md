@@ -38,9 +38,9 @@ session과 Message Follow 항목의 오류 의미도 바로잡았다.
 
 ## 병렬 구현 세션 주의 사항
 
-이 보고서는 다른 언어의 gap 작업과 동시에 진행할 수 있지만, 세션끼리 같은 Git checkout과 index를
-공유해서는 안 된다. 각 세션은 이 문서가 포함된 기준 commit에서 별도 `git worktree`와 전용 branch를
-만들고, 시작 SHA를 작업 기록에 남긴다.
+이 보고서는 다른 언어의 gap 작업과 동시에 진행할 수 있지만, 모든 작업은 현재 `main` checkout에서
+수행한다. 별도 `git worktree`나 작업용 branch를 만들지 않으며, 작업 시작 시점의 `main` commit SHA를
+작업 기록에 남긴다.
 
 - 이 세션은 해당 언어의 production source·test·package 자료와 이 gap 문서만 수정한다. 다른 언어
   디렉터리, 다른 언어 gap 문서와 공통 spec·internals는 수정하지 않는다.
@@ -51,8 +51,27 @@ session과 Message Follow 항목의 오류 의미도 바로잡았다.
   `git add -A`를 사용하지 않는다.
 - Gap 종결은 source 수정만으로 판단하지 않는다. Owner-layer regression, public API/exact snapshot,
   package 또는 clean-consumer, 관련 process E2E 증거를 각각 기록하고 통과한 항목만 종결한다.
-- 언어별 branch를 합친 뒤 통합 담당자가 cross-language contract, service-wire fixture, 전체 문서 검사와
-  process E2E를 다시 실행한다. 병합 전 개별 성공을 전체 종결로 승격하지 않는다.
+- 언어별 작업이 `main`에 반영된 뒤 통합 담당자가 cross-language contract, service-wire fixture, 전체 문서
+  검사와 process E2E를 다시 실행한다. 개별 성공을 전체 종결로 승격하지 않는다.
+
+### 구현 중 리팩터링·checkpoint 규칙
+
+Gap 하나 또는 서로 강하게 연결된 작은 작업 묶음의 동작과 회귀 test가 통과하면 다음 Gap으로 넘어가기
+전에 리팩터링 checkpoint를 둔다. 마지막에 한꺼번에 정리하지 않는다.
+
+- Production code는 POSD 관점에서 deep module과 information hiding을 강화하고, 의미 없이 인자를 전달하는
+  pass-through 계층, 호출 순서에 의존하는 temporal decomposition과 중복 helper를 제거한다. DDD 관점에서는
+  lifecycle·ownership·state transition·terminal error invariant를 해당 domain owner가 책임하게 정리한다.
+- 같은 checkpoint에서 unit test도 POSD/DDD 관점으로 리팩터링한다. 반복 setup은 의도를 드러내는 fixture나
+  builder 안에 숨기고, test 이름과 helper는 domain 용어와 observable behavior를 표현하게 한다. Production
+  내부 구조를 그대로 복제하거나 실행 순서와 private 구현에 결합된 test는 제거하거나 계약 중심으로 바꾼다.
+- 리팩터링 뒤 dead code, 사용하지 않는 wrapper·alias·fixture·dependency를 제거하고, hot path의 불필요한
+  allocation·copy와 lock·queue contention도 함께 점검한다. 동작 변경이 있으면 owner-layer regression을
+  먼저 추가하고 관련 unit test를 다시 실행한다.
+- 관련 test가 통과한 의미 있는 checkpoint마다 해당 언어 경로와 이 문서만 path-limited staging하여
+  commit하고 `main`에 push한다. Commit에는 닫은 Gap ID와 실행한 test를 남기고, 검증되지 않은 변경이나
+  다른 언어의 변경을 섞지 않는다. Push한 commit SHA와 gate 결과를 이 문서의 해당 항목에 기록한 뒤
+  다음 작업으로 진행한다.
 
 ## 2. 검토 범위와 판정 방법
 
