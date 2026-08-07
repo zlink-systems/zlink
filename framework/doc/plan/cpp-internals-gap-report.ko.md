@@ -75,8 +75,8 @@ Gap 하나 또는 서로 강하게 연결된 작은 작업 묶음의 동작과 �
 | 11-message-ownership | 5 | 3 | 복사/보관 규율 전반 미준수. `CPP-OWN-005` 종결 |
 | 12-service-wire-protocol | 5 | 2 | 스토어 키 포맷, json-v1 프로파일 |
 | **internals 소계** | **24** | **28** | `CPP-OWN-005`, `CPP-OBS-002` 종결 |
-| C++ exact public interface | 3 | 0 | diagnostics 2건과 HTTP builder 종결 |
-| **합계** | **27** | **28** | 종결 5건은 GAP·PARTIAL 집계에서 제외 |
+| C++ exact public interface | 2 | 0 | diagnostics 2건, object query와 HTTP builder 종결 |
+| **합계** | **26** | **28** | 종결 6건은 GAP·PARTIAL 집계에서 제외 |
 
 ---
 
@@ -92,7 +92,6 @@ Gap 하나 또는 서로 강하게 연결된 작은 작업 묶음의 동작과 �
 | CPP-WIRE-001 | Location Store 권한 키를 `zla1:…` 포맷으로 통합했으며 package와 cross-language Store 검증 진행 중 | 12 §1 |
 | CPP-RELOC-001 | relocation의 blocked/target_unavailable 결과가 terminal로 영구 저장되어, 일시 실패 후 재시도가 프로세스 재시작 전까지 불가능 | 01 §3 |
 | CPP-TOPO-001 | 수동 설정 피어에 Location Store descriptor의 admission fence(generation/보안 identity)가 설치되지 않음 — 이미 종결된 `JVM-TOPO-001`과 동일 계열 결함의 C++ 판 | 06 §1.1 |
-| CPP-CONTRACT-QUERY-001 | Actor·Spot exact lookup과 bounded object page public surface가 없음 | C++ interface 07 |
 | CPP-CONTRACT-STREAM-001 | STREAM one-way send timeout 구현 완료, package·process 검증 진행 중 | C++ interface 03 |
 
 ### CPP-DISP-001 — executor 포화 → `std::terminate`
@@ -130,7 +129,7 @@ admitted 피어의 애플리케이션 레코드가 대상 owner의 mailbox 예�
 |---|---|---|
 | CPP-CONTRACT-DIAG-001 | CLOSED | 구현 checkpoint `23812b9030`에서 public `message_flow_log_mode_t`를 exact interface의 `off=0`, `errors=1`, `normal=2`, `detailed=3` 네 값으로 교체하고 runtime, sample과 E2E 설정을 같은 이름으로 갱신했다. Legacy 다섯 값의 재노출을 막는 target contract와 exact numeric static assertion을 추가했다. Public header 의존 object 132개를 다시 만든 뒤 관련 unit·runtime test가 통과했고, package checkpoint `113e6a46b0`의 0.10.1 clean consumer도 네 값과 숫자를 compile-time으로 확인했다. Process checkpoint `476a630d32`에서 실제 RouteMesh handler가 대기하는 동안 `normal→off`와 `off→normal`을 바꿨다. 첫 request는 terminal `replied`까지 기록됐고 두 번째 request는 중간 변경 뒤에도 flow record를 만들지 않았으며, Redis 기반 다섯 process `MON-C1`이 두 번 통과했다. |
 | CPP-CONTRACT-DIAG-002 | CLOSED | 선행 checkpoint `ca9683fd26`에서 RuntimeMonitoring `MON-C1`이 application logging provider로 structured `zlink.message_flow` record를 받고, `svc-throw` provider가 예외를 던져도 원래 Mesh request와 후속 observation이 성공하는 process 회귀를 추가했다. 구현 checkpoint `de592aa66f`에서는 raw flow/error DTO와 observer callback을 installed public header에서 제거하고 runtime 전용 `dispatch_events.hpp`로 옮겼다. 구현 checkpoint `c187ba3c79`에서는 `trace_log_file`·`trace_label`과 runtime 전용 live-mode getter·builder를 public header에서 제거했다. 진단 출력은 application logging provider가 소유하며, 기존 sample과 E2E의 별도 evidence file도 같은 logging 설정으로 유지한다. Public header 의존 object 132개를 다시 만든 뒤 관련 unit·runtime·cross-process 검증과 Redis 기반 `MON-C1`이 통과했다. Package checkpoint `113e6a46b0`에서 Core·C++ binding 0.10.1로 Framework를 clean configure·build했으며, 설치 header에서 제거 대상 export가 없는지 확인한 뒤 out-of-tree consumer를 compile하고 실행했다. |
-| CPP-CONTRACT-QUERY-001 | GAP·상 | exact interface의 Actor·Spot exact lookup, object state와 bounded object page 타입·method가 public header에 없다. 기존 status/topology/service summary 조회는 이 계약을 대신하지 않는다. 증거: `common/spec/server/languages/cpp/interfaces/07-location-store.ko.md:360-419`, `cpp/include/zlink/framework/contracts/locations/runtime_query.hpp:10-20` |
+| CPP-CONTRACT-QUERY-001 | CLOSED | 구현 checkpoint `3bd461e22b`에서 exact interface의 object kind·state·entry·filter 타입과 Actor·Spot exact lookup, bounded object page method를 public header와 Store-backed runtime에 추가했다. Missing은 빈 `optional`, reserved authority는 `creating`, active authority는 owner lease에 따라 `ready` 또는 `unavailable`을 반환하며 Store 실패는 전체 operation의 `Unavailable`로 보존한다. Page size `1..1000`, opaque continuation과 encoded page 4 MiB 상한을 적용하고, raw Store page가 filter와 맞지 않아 비어 있어도 다음 cursor를 읽어 요청한 수만큼 채운다. Owner-layer 회귀 36건, contract headers, target contract, app host, execution, M6B와 M6C가 통과했다. Redis 기반 multi-process `MON-A6`은 실제로 생성한 Actor·Spot의 exact 상태와 stable type을 조회하고 `pageSize=1` Actor 목록의 continuation을 다음 page로 이어 갔다. Core·C++ binding 0.10.1을 사용하는 clean Framework package에서 `verify_packaged_contract.sh`와 전체 install consumer가 새 public signature를 compile·link·실행했으며, archive SHA-256은 `7257d1f3d59a6b99e9bf8e1d0c97286d53cbb6db6f0e8f3695d576496033a61f`다. |
 | CPP-CONTRACT-STREAM-001 | GAP·검증 중 | 구현 checkpoint `eefcda189d`에서 `stream_send_call_t::timeout(...)`을 추가하고, Core STREAM writer가 기록한 socket admission timeout을 호출별 값으로 더 짧게 제한하도록 연결했다. `1..INT_MAX` 범위를 벗어난 값은 modifier에서 거부한다. Owner-layer 회귀는 20 ms 제한이 1초 socket 기본값을 줄이는지, 만료 뒤 재시도하지 않는지, send-ready 신호 뒤 거부된 시도만 한 번 재제출하고 성공 뒤 추가 신호로 replay하지 않는지 확인한다. `test_cpp_framework_contract_headers`, `test_cpp_framework_stream_framework`, `test_cpp_framework_target_contract`가 통과했다. Package checkpoint `113e6a46b0`의 0.10.1 clean consumer도 timeout modifier를 compile했다. 실제 Core STREAM backpressure process E2E가 남아 있어 아직 종결하지 않는다. |
 | CPP-CONTRACT-ROLE-001 | GAP·검증 중 | 구현 checkpoint `4b741bc692`에서 Client runtime record가 없으면 target 대기 전에 `NotConfigured`를 반환하고, Client role은 있지만 ready target이 없는 경우만 `NotFound`를 유지하도록 분리했다. Server-only host의 public `channel_client_t::send()`가 정확한 오류 kind를 반환하는 회귀와 `test_cpp_framework_target_contract`가 통과했다. Cross-language process E2E의 오류 kind assertion이 남아 있어 아직 종결하지 않는다. |
 | CPP-CONTRACT-HTTP-001 | CLOSED | 구현 checkpoint `14c5f04f03`에서 `http_options_builder_t::snapshot()`과 `validate()`를 private으로 옮기고 host의 `app_t`와 `zlink_framework_options_t`만 접근하도록 제한했다. Application surface에서 두 method가 보이지 않는 negative compile assertion을 추가했고 `test_cpp_framework_contract_headers`, `test_cpp_framework_app_host`가 통과했다. Package checkpoint `113e6a46b0`에서는 0.10.1 install tree만 참조하는 consumer에 같은 negative compile assertion을 넣고 framework·HTTP client·stream connector와 함께 compile·link·실행했다. |
@@ -322,10 +321,10 @@ RouteMesh에 남은 금지 상한 surface·field, JSON 프로파일에 집중한
 
 ## 5. 권고
 
-1. **이 보고서에서 unique ID 관리** — 정식 spec에 구현 진행 기록을 다시 넣지 않고, 이 plan 문서가 남은 27 GAP과 28 PARTIAL 및 종결 5건의 증거를 소유한다. 특히 CPP-TOPO-001은 종결된 `JVM-TOPO-001`, CPP-COMP-001은 종결된 `NODE-ROUTE-001`과 비교하되 다른 언어의 종결을 C++ 완료 증거로 사용하지 않는다.
+1. **이 보고서에서 unique ID 관리** — 정식 spec에 구현 진행 기록을 다시 넣지 않고, 이 plan 문서가 남은 26 GAP과 28 PARTIAL 및 종결 6건의 증거를 소유한다. 특히 CPP-TOPO-001은 종결된 `JVM-TOPO-001`, CPP-COMP-001은 종결된 `NODE-ROUTE-001`과 비교하되 다른 언어의 종결을 C++ 완료 증거로 사용하지 않는다.
 2. **수정 순서 제안**:
    - 1차 (안정성·정합성): CPP-DISP-001(terminate), CPP-DISP-002(HOL), CPP-RELOC-001(영구 차단), CPP-SESS-001(이중 소유), CPP-TOPO-001(fence), CPP-ROUTE-001(dead 매처 — 한 줄급 수정), CPP-LIFE-003(Ready owner loss와 Missing 분리)
-   - 2차 (public 계약·상호운용): CPP-CONTRACT-QUERY-001, CPP-CONTRACT-STREAM-001, CPP-CONTRACT-ROLE-001, CPP-WIRE-001(키 포맷 — 마이그레이션 계획 필요), CPP-WIRE-002(RouteMesh 금지 상한 surface·wire field 제거), CPP-WIRE-003(json-v1), CPP-OWN-001(content-type 검증), CPP-COMP-001(문자열 분류 → 구조화 오류 코드)
+   - 2차 (public 계약·상호운용): CPP-CONTRACT-STREAM-001, CPP-CONTRACT-ROLE-001, CPP-WIRE-001(키 포맷 — 마이그레이션 계획 필요), CPP-WIRE-002(RouteMesh 금지 상한 surface·wire field 제거), CPP-WIRE-003(json-v1), CPP-OWN-001(content-type 검증), CPP-COMP-001(문자열 분류 → 구조화 오류 코드)
    - 3차 (자원·성능): CPP-TIMER-001(무한 누적), CPP-COMP-004(고아 엔트리 누수), CPP-TIMER-003(fdpair), CPP-EXEC-001/CPP-OWN-002~004(복사·락 절감), CPP-DISP-005(100 ms wake)
    - 4차 (구조·명명): 나머지 PARTIAL
 3. **오류 종류 정합은 계약 테스트로 고정** — CPP-EXEC-002, CPP-FOLLOW-001과 CPP-CONTRACT-ROLE-001은 공개 오류 kind가 계약과 달라지는 계열이므로, 수정과 함께 source contract test와 cross-language process E2E에 오류 kind assertion을 추가한다. CPP-LIFE-001은 오류 이름 문제가 아니라 일반 message admission fence 자체의 의미 차이다.
@@ -345,4 +344,4 @@ RouteMesh에 남은 금지 상한 surface·field, JSON 프로파일에 집중한
 - `test_cpp_framework_location_runtime`
 - `test_cpp_framework_http_integration`
 
-이 결과는 기존 test가 현재 구현을 회귀시키지 않았다는 증거다. 이후 checkpoint의 항목별 source test 결과는 각 행에 기록했다. Package checkpoint `113e6a46b0`에서는 Core와 C++ binding 0.10.1을 사용해 Framework를 clean configure·build하고, `verify_packaged_contract.sh`와 전체 install consumer를 실행했다. Framework archive SHA-256은 `28ded388fde1f9519151276a43130b3545ff9e9e24ad48896894cde0d115bbb3`, 설치 header 수는 112개였다. Cross-language process E2E가 필요한 항목은 각 행에 계속 남겨 둔다.
+이 결과는 기존 test가 현재 구현을 회귀시키지 않았다는 증거다. 이후 checkpoint의 항목별 source test 결과는 각 행에 기록했다. Package checkpoint `113e6a46b0`에서는 Core와 C++ binding 0.10.1을 사용해 Framework를 clean configure·build하고, `verify_packaged_contract.sh`와 전체 install consumer를 실행했다. Object query checkpoint `3bd461e22b` 뒤 같은 clean package를 다시 만들었으며 Framework archive SHA-256은 `7257d1f3d59a6b99e9bf8e1d0c97286d53cbb6db6f0e8f3695d576496033a61f`, 설치 header 수는 112개였다. Cross-language process E2E가 필요한 항목은 각 행에 계속 남겨 둔다.
