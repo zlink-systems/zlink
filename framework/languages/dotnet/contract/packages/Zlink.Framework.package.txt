@@ -6,7 +6,7 @@ entry _rels/.rels
 entry lib/net8.0/Zlink.Framework.dll
 entry lib/net8.0/Zlink.Framework.xml
 entry package/services/metadata/core-properties/{CORE_PROPERTIES}.psmdcp
-content-sha256 lib/net8.0/Zlink.Framework.xml=3a7f8cba8bf612a86145ee37624c999418574d2228df80b283692579f32371b2
+content-sha256 lib/net8.0/Zlink.Framework.xml=d022c5663d533e84e91c36256f66af9c59693ea3bd172217d155620e92b07e46
 metadata authors=Zlink.Framework
 metadata description=ZLink framework core abstractions and runtime for .NET.
 metadata id=Zlink.Framework

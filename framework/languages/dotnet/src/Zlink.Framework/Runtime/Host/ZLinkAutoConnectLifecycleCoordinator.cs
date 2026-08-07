@@ -1,4 +1,4 @@
-namespace Zlink.Framework.AspNetCore;
+namespace Zlink.Framework.Runtime.Host;
 
 /// <summary>
 /// Owns auto-connect generation start and stop.

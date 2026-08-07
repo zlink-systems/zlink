@@ -1,7 +1,7 @@
 using Microsoft.Extensions.Logging;
 using Zlink.Framework.Runtime.Host;
 
-namespace Zlink.Framework.AspNetCore;
+namespace Zlink.Framework.Runtime.Host;
 
 internal enum ZLinkFrameworkLifecycleIntent
 {

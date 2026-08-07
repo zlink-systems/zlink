@@ -1,6 +1,6 @@
 using Microsoft.Extensions.Logging;
 
-namespace Zlink.Framework.AspNetCore;
+namespace Zlink.Framework.Runtime.Host;
 
 internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
 {

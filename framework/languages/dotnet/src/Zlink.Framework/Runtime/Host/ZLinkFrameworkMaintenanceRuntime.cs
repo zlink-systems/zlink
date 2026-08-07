@@ -3,7 +3,7 @@ using Microsoft.Extensions.Logging;
 
 using Zlink.Framework.Runtime.Diagnostics;
 
-namespace Zlink.Framework.AspNetCore;
+namespace Zlink.Framework.Runtime.Host;
 
 internal sealed class ZLinkFrameworkMaintenanceRuntime :
     IZLinkFrameworkRuntime,
