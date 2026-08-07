@@ -9,6 +9,10 @@ export interface ZLinkFlowContextValue {
 
 const flowStorage = new AsyncLocalStorage<ZLinkFlowContextValue | undefined>();
 
+export function currentFlowContext(): ZLinkFlowContextValue | undefined {
+  return flowStorage.getStore();
+}
+
 export function currentOrCreateFlow(origin?: ZLinkFlowOrigin, createIfAbsent?: true): ZLinkFlowContextValue;
 export function currentOrCreateFlow(origin: ZLinkFlowOrigin, createIfAbsent: false): ZLinkFlowContextValue | undefined;
 export function currentOrCreateFlow(origin: ZLinkFlowOrigin, createIfAbsent: boolean): ZLinkFlowContextValue | undefined;
@@ -16,7 +20,7 @@ export function currentOrCreateFlow(
   origin: ZLinkFlowOrigin = 'Application',
   createIfAbsent = true
 ): ZLinkFlowContextValue | undefined {
-  const current = flowStorage.getStore();
+  const current = currentFlowContext();
   if (current !== undefined) {
     return current;
   }
@@ -29,7 +33,7 @@ export function currentOrCreateFlow(
 }
 
 export function runWithFlow<T>(flow: ZLinkFlowContextValue | undefined, callback: () => T): T {
-  if (flow === undefined && flowStorage.getStore() === undefined) {
+  if (flow === undefined && currentFlowContext() === undefined) {
     return callback();
   }
   return flowStorage.run(flow, callback);
