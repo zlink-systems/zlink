@@ -1686,6 +1686,18 @@ int main ()
       "CPP-RELOC-001",
       "blocked relocation results are still retained as terminal state");
 
+    /* CPP-OBS-001 — Instance Spot activation must not allocate its trace DTO
+     * or correlation strings while message-flow diagnostics are off. */
+    gate.require (
+      app_runtime.find ("make_instance_spot_activation_trace_context")
+          != std::string::npos
+        && app_runtime.find ("if (!may_emit)\n        return std::nullopt;")
+             != std::string::npos
+        && app_runtime.find ("message_flow_tracer_t (dispatch).trace (\n      outcome")
+             != std::string::npos,
+      "CPP-OBS-001",
+      "Instance Spot activation tracing is not gated before event allocation");
+
     /* TH-CP-01 — the C++ connector helper surface has a language contract. */
     const auto connector_contract_path =
       root
