@@ -442,6 +442,9 @@ test('canonical frozen-record closed union validates all 14 bodies and bound-ses
   assert.equal(boundRequest.sourceSessionSequence, 11n);
   assert.equal(boundRequest.replyRouteId, 12n);
   assert.throws(() => encodeServiceWireFrozenRecord({ ...boundRequest, operationKind: 2 }));
+  assert.throws(() =>
+    decodeServiceWireFrozenRecord(frozenRecord(2, 4, 1, 0n, 12n, payload, true))
+  );
 
   const control = relocationControlFixtureValues()[1] as ServiceMaintenanceRelocationControlData;
   const encodedData = encodeMaintenanceRelocationControl({
