@@ -379,6 +379,27 @@ test('MFLOW-EXT Off host preserves an inbound ambient flow on outbound wire', ()
   });
 });
 
+test('MFLOW-EXT absent disabled flow does not create an ambient context', () => {
+  const absent = flowContext.createInboundFlow(undefined, undefined, false);
+  assert.equal(absent, undefined);
+  flowContext.runWithFlow(absent, () => {
+    assert.equal(flowContext.currentOrCreateFlow('Application', false), undefined);
+  });
+});
+
+test('MFLOW-EXT explicit absent flow still suppresses a parent ambient context', () => {
+  const inbound = {
+    flowId: '018f2b63-9d4a-7abc-8def-0123456789ab',
+    flowOrigin: 'Inbound'
+  };
+  flowContext.runWithFlow(inbound, () => {
+    flowContext.runWithFlow(undefined, () => {
+      assert.equal(flowContext.currentOrCreateFlow('Application', false), undefined);
+    });
+    assert.equal(flowContext.currentOrCreateFlow('Application', false), inbound);
+  });
+});
+
 test('MFLOW-010 stream correlation_id round-trips byte-identically across framework and connector codecs', () => {
   const correlationId = '1a2b';
   const requestSeq = 7n;

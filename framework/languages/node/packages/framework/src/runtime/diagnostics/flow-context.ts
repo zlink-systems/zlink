@@ -29,6 +29,9 @@ export function currentOrCreateFlow(
 }
 
 export function runWithFlow<T>(flow: ZLinkFlowContextValue | undefined, callback: () => T): T {
+  if (flow === undefined && flowStorage.getStore() === undefined) {
+    return callback();
+  }
   return flowStorage.run(flow, callback);
 }
 
