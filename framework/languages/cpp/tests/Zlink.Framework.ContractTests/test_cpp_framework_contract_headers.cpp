@@ -1984,6 +1984,7 @@ int main ()
     }
     options.use_filter<named_filter_t> ();
     options.handlers ().group ("sample").add<alias_registered_handler_t> ();
+    options.handlers ().group ("sample-reuse").add<alias_registered_handler_t> ();
     options.apply ();
     bool sealed = false;
     try {

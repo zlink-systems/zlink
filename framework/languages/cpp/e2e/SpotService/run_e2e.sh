@@ -3646,7 +3646,7 @@ fi
 
 if [[ "$SCENARIO" == "SM-E4" || "$SCENARIO" == "sm-e4" ]]; then
   ensure_location_store
-  start_play play-a "$ROUTE_A" "$SPOT_A" "$PUB_A" "$HTTP_A"
+  start_play play-a "$ROUTE_A" "$SPOT_A" "$PUB_A" "$HTTP_A" routeMeshEnabled=false
   settle_scenario
   ensure_servers_started_and_ready
   run_client_from_options \

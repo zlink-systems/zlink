@@ -224,6 +224,7 @@ inline int run_play_server (int argc, char **argv)
 
         if (route_mesh_enabled) {
             auto route = options.add_route_mesh (e2e::route_channel);
+            route.channel_name (e2e::route_channel).server ();
             route.listen (route_endpoint)
               .set_routing_id (zlink::routing_id_t::from (node_rid))
               .channel_name (e2e::route_channel);
@@ -257,9 +258,12 @@ inline int run_play_server (int argc, char **argv)
         }
         if (!publisher_endpoint.empty ()) {
             options.add_fanout_channel (e2e::publisher_channel)
+              .set_routing_id (zlink::routing_id_t::from (
+                node_rid + "-publisher"))
               .enable_publisher (publisher_endpoint);
         }
         auto spot = options.add_route_mesh (e2e::spot_mesh);
+        spot.channel_name (e2e::spot_mesh).server ();
         spot.listen (spot_router_endpoint)
           .set_routing_id (zlink::routing_id_t::from (node_rid))
           .channel_name (e2e::spot_mesh);

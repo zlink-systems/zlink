@@ -147,13 +147,34 @@ void timer_runtime_t::post_fire_count (const std::shared_ptr<spot_context_state_
                                        const std::shared_ptr<timer_state_t> &state,
                                        std::uint64_t fire_count)
 {
-    if (!context || !state || state->disposed) {
+    if (!context || !state) {
         return;
     }
-    auto work = [context, state, fire_count] (auto complete) mutable {
+    {
+        std::lock_guard lock (state->mutex);
+        if (state->disposed) {
+            return;
+        }
+        const auto available =
+          std::numeric_limits<std::uint64_t>::max () - state->pending_fire_count;
+        state->pending_fire_count += std::min (fire_count, available);
+        if (state->pending_fire || state->running) {
+            state->pending_fire = true;
+            return;
+        }
+        state->pending_fire = true;
+    }
+    auto work = [context, state] (auto complete) mutable {
+          std::uint64_t pending_fire_count = 0;
+          {
+              std::lock_guard lock (state->mutex);
+              pending_fire_count = state->pending_fire_count;
+              state->pending_fire = false;
+              state->pending_fire_count = 0;
+          }
           framework::timer_t timer (state);
           auto runtime = timer_runtime_t (context);
-          auto task = runtime.dispatch_fire_count_async (timer, fire_count);
+          auto task = runtime.dispatch_fire_count_async (timer, pending_fire_count);
           detail::observe_task_completion (
             task, [complete] (const result_t<timer_tick_t> &) mutable { complete ([] {}); });
       };
@@ -166,8 +187,7 @@ void timer_runtime_t::post_fire_count (const std::shared_ptr<spot_context_state_
     if (!posted) {
         std::lock_guard lock (state->mutex);
         if (!state->disposed) {
-            state->pending_fire = true;
-            state->pending_fire_count = fire_count;
+            state->pending_fire = false;
         }
     }
 }
@@ -315,7 +335,9 @@ task_t<timer_tick_t> timer_runtime_t::dispatch_fire_count_async (timer_t &timer,
         std::lock_guard lock (state->mutex);
         if (state->running) {
             state->pending_fire = true;
-            state->pending_fire_count = fire_count;
+            const auto available =
+              std::numeric_limits<std::uint64_t>::max () - state->pending_fire_count;
+            state->pending_fire_count += std::min (fire_count, available);
             co_return result_t<timer_tick_t>::failure (framework_error_kind_t::rejected,
                                                        "SPOT timer callback is already running");
         }
