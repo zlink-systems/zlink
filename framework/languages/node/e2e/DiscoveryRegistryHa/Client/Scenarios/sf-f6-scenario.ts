@@ -1,4 +1,4 @@
-// SF-F6: Paged query 중 concurrent mutation 결과를 검증한다.
+// SF-F6: Operational query 중 concurrent 변경을 다음 page cycle에 반영한다 시나리오를 검증한다.
 import type { ClientOptions } from '../Support/client-options';
 import { getJson, postJson } from '../../../http-client';
 import { ensure } from '../Support/scenario-assert';

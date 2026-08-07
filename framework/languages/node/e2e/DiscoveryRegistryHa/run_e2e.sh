@@ -12,7 +12,7 @@ SCENARIO="${1:-all}"
 LOCAL_READINESS_TIMEOUT_SECONDS=3
 LOCAL_READINESS_POLL_SECONDS=0.1
 LOCAL_READINESS_ATTEMPTS=30
-ROUTE_SETTLE_TIMEOUT_SECONDS=15
+ROUTE_SETTLE_TIMEOUT_SECONDS=5
 SCENARIO_SETTLE_TIMEOUT_SECONDS=3
 HTTP_PROBE_TIMEOUT_SECONDS=3
 LONG_OUTAGE_SECONDS=4
@@ -383,12 +383,14 @@ run_sf_b1() {
 }
 
 run_sf_b2() {
-  # The common scenario starts with A only. B must be introduced after the
-  # Store outage so the test can prove that discovery grace rejects it.
-  start_topology no
+  # Keep B as an existing provider first, then restart it while the Store is
+  # unavailable. A's ready transport must continue serving requests while
+  # the replacement B is rejected by the discovery grace policy.
+  start_topology
   wait_for_profile_ready
   stop_redis
   wait_location_unhealthy "$CONSUMER_URL" consumer
+  kill_pid "$API_B_PID"
   start_provider_b
   run_client SF-B2 "$LOG_DIR/client.stdout.log" "$LOG_DIR/client.stderr.log"
 }
