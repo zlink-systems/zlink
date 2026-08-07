@@ -71,12 +71,12 @@ Gap 하나 또는 서로 강하게 연결된 작은 작업 묶음의 동작과 �
 | 07-dispatch-loop | 2 | 3 | tick 통계 무한 누적, timer 계약 불일치 |
 | 08-object-lifecycle | 1 | 2 | generation 필터링과 Ready owner loss 판정 |
 | 09-session-binding | 1 | 2 | 세션 스왑 핸드셰이크 부재 |
-| 10-liveness-and-state | 0 | 2 | 대체로 충실 |
+| 10-liveness-and-state | 0 | 1 | `CPP-OBS-002` 종결 |
 | 11-message-ownership | 5 | 3 | 복사/보관 규율 전반 미준수. `CPP-OWN-005` 종결 |
 | 12-service-wire-protocol | 5 | 2 | 스토어 키 포맷, json-v1 프로파일 |
-| **internals 소계** | **24** | **29** | `CPP-OWN-005` 1건 종결 |
-| C++ exact public interface | 4 | 0 | diagnostics export와 HTTP builder 2건 종결 |
-| **합계** | **28** | **29** | 종결 3건은 GAP·PARTIAL 집계에서 제외 |
+| **internals 소계** | **24** | **28** | `CPP-OWN-005`, `CPP-OBS-002` 종결 |
+| C++ exact public interface | 3 | 0 | diagnostics 2건과 HTTP builder 종결 |
+| **합계** | **27** | **28** | 종결 5건은 GAP·PARTIAL 집계에서 제외 |
 
 ---
 
@@ -92,7 +92,6 @@ Gap 하나 또는 서로 강하게 연결된 작은 작업 묶음의 동작과 �
 | CPP-WIRE-001 | Location Store 권한 키를 `zla1:…` 포맷으로 통합했으며 package와 cross-language Store 검증 진행 중 | 12 §1 |
 | CPP-RELOC-001 | relocation의 blocked/target_unavailable 결과가 terminal로 영구 저장되어, 일시 실패 후 재시도가 프로세스 재시작 전까지 불가능 | 01 §3 |
 | CPP-TOPO-001 | 수동 설정 피어에 Location Store descriptor의 admission fence(generation/보안 identity)가 설치되지 않음 — 이미 종결된 `JVM-TOPO-001`과 동일 계열 결함의 C++ 판 | 06 §1.1 |
-| CPP-CONTRACT-DIAG-001 | runtime level 변경을 실제 장시간 handler가 실행되는 process에서 아직 검증하지 않음 | C++ interface 08 |
 | CPP-CONTRACT-QUERY-001 | Actor·Spot exact lookup과 bounded object page public surface가 없음 | C++ interface 07 |
 | CPP-CONTRACT-STREAM-001 | STREAM one-way send timeout 구현 완료, package·process 검증 진행 중 | C++ interface 03 |
 
@@ -129,7 +128,7 @@ admitted 피어의 애플리케이션 레코드가 대상 owner의 mailbox 예�
 
 | ID | 분류 | 계약과 현재 구현의 차이 |
 |---|---|---|
-| CPP-CONTRACT-DIAG-001 | PARTIAL·검증 중 | 구현 checkpoint `23812b9030`에서 public `message_flow_log_mode_t`를 exact interface의 `off=0`, `errors=1`, `normal=2`, `detailed=3` 네 값으로 교체하고 runtime, sample과 E2E 설정을 같은 이름으로 갱신했다. Legacy 다섯 값의 재노출을 막는 target contract와 exact numeric static assertion을 추가했다. Public header 의존 object 132개를 다시 만든 뒤 message flow, contract headers, target contract, messaging, channel messaging, execution, app host, cross-process Mesh vertical, M6B와 M6C가 통과했다. Package checkpoint `113e6a46b0`의 0.10.1 clean consumer도 네 값과 숫자를 compile-time으로 확인했다. 실제 장시간 handler 실행 중 runtime level 변경 process E2E가 남아 있어 아직 종결하지 않는다. |
+| CPP-CONTRACT-DIAG-001 | CLOSED | 구현 checkpoint `23812b9030`에서 public `message_flow_log_mode_t`를 exact interface의 `off=0`, `errors=1`, `normal=2`, `detailed=3` 네 값으로 교체하고 runtime, sample과 E2E 설정을 같은 이름으로 갱신했다. Legacy 다섯 값의 재노출을 막는 target contract와 exact numeric static assertion을 추가했다. Public header 의존 object 132개를 다시 만든 뒤 관련 unit·runtime test가 통과했고, package checkpoint `113e6a46b0`의 0.10.1 clean consumer도 네 값과 숫자를 compile-time으로 확인했다. Process checkpoint `476a630d32`에서 실제 RouteMesh handler가 대기하는 동안 `normal→off`와 `off→normal`을 바꿨다. 첫 request는 terminal `replied`까지 기록됐고 두 번째 request는 중간 변경 뒤에도 flow record를 만들지 않았으며, Redis 기반 다섯 process `MON-C1`이 두 번 통과했다. |
 | CPP-CONTRACT-DIAG-002 | CLOSED | 선행 checkpoint `ca9683fd26`에서 RuntimeMonitoring `MON-C1`이 application logging provider로 structured `zlink.message_flow` record를 받고, `svc-throw` provider가 예외를 던져도 원래 Mesh request와 후속 observation이 성공하는 process 회귀를 추가했다. 구현 checkpoint `de592aa66f`에서는 raw flow/error DTO와 observer callback을 installed public header에서 제거하고 runtime 전용 `dispatch_events.hpp`로 옮겼다. 구현 checkpoint `c187ba3c79`에서는 `trace_log_file`·`trace_label`과 runtime 전용 live-mode getter·builder를 public header에서 제거했다. 진단 출력은 application logging provider가 소유하며, 기존 sample과 E2E의 별도 evidence file도 같은 logging 설정으로 유지한다. Public header 의존 object 132개를 다시 만든 뒤 관련 unit·runtime·cross-process 검증과 Redis 기반 `MON-C1`이 통과했다. Package checkpoint `113e6a46b0`에서 Core·C++ binding 0.10.1로 Framework를 clean configure·build했으며, 설치 header에서 제거 대상 export가 없는지 확인한 뒤 out-of-tree consumer를 compile하고 실행했다. |
 | CPP-CONTRACT-QUERY-001 | GAP·상 | exact interface의 Actor·Spot exact lookup, object state와 bounded object page 타입·method가 public header에 없다. 기존 status/topology/service summary 조회는 이 계약을 대신하지 않는다. 증거: `common/spec/server/languages/cpp/interfaces/07-location-store.ko.md:360-419`, `cpp/include/zlink/framework/contracts/locations/runtime_query.hpp:10-20` |
 | CPP-CONTRACT-STREAM-001 | GAP·검증 중 | 구현 checkpoint `eefcda189d`에서 `stream_send_call_t::timeout(...)`을 추가하고, Core STREAM writer가 기록한 socket admission timeout을 호출별 값으로 더 짧게 제한하도록 연결했다. `1..INT_MAX` 범위를 벗어난 값은 modifier에서 거부한다. Owner-layer 회귀는 20 ms 제한이 1초 socket 기본값을 줄이는지, 만료 뒤 재시도하지 않는지, send-ready 신호 뒤 거부된 시도만 한 번 재제출하고 성공 뒤 추가 신호로 replay하지 않는지 확인한다. `test_cpp_framework_contract_headers`, `test_cpp_framework_stream_framework`, `test_cpp_framework_target_contract`가 통과했다. Package checkpoint `113e6a46b0`의 0.10.1 clean consumer도 timeout modifier를 compile했다. 실제 Core STREAM backpressure process E2E가 남아 있어 아직 종결하지 않는다. |
@@ -253,9 +252,9 @@ admitted 피어의 애플리케이션 레코드가 대상 owner의 mailbox 예�
 | ID | 분류 | 요약 |
 |---|---|---|
 | CPP-OBS-001 | PARTIAL·검증 중 | 구현 checkpoint `b3094a2a13`에서 Instance-Spot activation trace context를 diagnostics mode gate 뒤에서만 만들고, `message_flow_event_t`와 문자열은 tracer의 lazy builder 안에서 생성하도록 수정했다. Request의 async terminal event는 최초 mode가 `off`가 아닐 때만 필요한 context를 한 번 snapshot한다. `test_cpp_framework_app_host`, `test_cpp_framework_message_flow`, `test_cpp_framework_target_contract`이 통과했다. Allocation 계측과 process observability E2E가 남아 있어 아직 종결하지 않는다. |
-| CPP-OBS-002 | PARTIAL·검증 중 | 구현 checkpoint `68460a5d9f`에서 diagnostics level을 message entry의 ambient context에 snapshot하고, 모든 후속 tracer와 async continuation이 같은 값을 사용하도록 수정했다. `off`로 시작한 메시지는 flow ID를 할당하지 않지만 빈 flow 값과 level을 보존하므로 처리 중 level이 켜져도 일부 event만 기록하지 않는다. 반대 방향도 같은 규칙을 적용한다. Checkpoint `23812b9030`에서 level 이름을 exact interface와 맞췄으며 `normal→off`와 `off→normal` 회귀를 포함한 전체 `test_cpp_framework_message_flow`, `test_cpp_framework_messaging`, `test_cpp_framework_channel_messaging`, `test_cpp_framework_execution`, `test_cpp_framework_target_contract`가 통과했다. 설치 package와 실제 장시간 handler 중 runtime level 변경 process 검증이 남아 있어 아직 종결하지 않는다. |
+| CPP-OBS-002 | CLOSED | 구현 checkpoint `68460a5d9f`에서 diagnostics level을 message entry의 ambient context에 snapshot하고, 모든 후속 tracer와 async continuation이 같은 값을 사용하도록 수정했다. `off`로 시작한 메시지는 flow ID를 할당하지 않지만 빈 flow 값과 level을 보존하므로 처리 중 level이 켜져도 일부 event만 기록하지 않는다. 반대 방향도 같은 규칙을 적용한다. Checkpoint `23812b9030`에서 level 이름을 exact interface와 맞췄으며 `normal→off`와 `off→normal` owner-layer 회귀를 포함한 관련 test가 통과했다. Package checkpoint `113e6a46b0` 뒤 process checkpoint `476a630d32`의 `MON-C1`은 실제로 block된 RouteMesh handler마다 correlation을 기록하고, handler 실행 중 level 변경이 message entry snapshot을 바꾸지 않는지 양방향으로 확인했다. |
 
-만족 항목(요약): 5s/15s 단일 표준, 비즈니스 메시지의 기한 비연장, 체크 신호 앱 미도달, accept-and-fail-per-call과 7-state 폐쇄 집합은 확인했다. Diagnostics public surface는 CPP-CONTRACT-DIAG-001/002 때문에 만족 항목에서 제외한다.
+만족 항목(요약): 5s/15s 단일 표준, 비즈니스 메시지의 기한 비연장, 체크 신호 앱 미도달, accept-and-fail-per-call과 7-state 폐쇄 집합을 확인했다. Diagnostics public surface와 message entry level snapshot도 package·process 검증을 마쳤다.
 
 ### 3.11 11-message-ownership (페이로드 소유권과 복사)
 
@@ -313,7 +312,6 @@ RouteMesh에 남은 금지 상한 surface·field, JSON 프로파일에 집중한
 | 스토어 §7–§11 순서 불변식 (12) | `maintenance_runtime`/`public_host_runtime` 전용 후속 감사 + M6 회귀 스위트 |
 | liveness 토큰 CSPRNG 여부 (`std::random_device` 플랫폼 보증) (12 §5) | 플랫폼 보증 결정 필요 |
 | 느린 관찰자에도 처리 속도 유지 (10) | 관찰자 지연 주입 벤치마크 |
-| logger provider 실패가 원래 operation 결과를 바꾸지 않는지 (DEC-01) | provider가 throw하는 dispatch-error process E2E를 먼저 통과한 뒤 observer·raw DTO export 제거 |
 | participant state 64 MiB 경계 (DEC-17) | 64 MiB 성공과 64 MiB 초과 `StateIncompatible` process E2E |
 | Ready Instance owner loss (08, CPP-LIFE-003) | owner process 종료와 lease 만료 뒤 다른 factory·handler가 실행되지 않고 모든 call이 bounded `Unavailable`로 끝나는지 검증. 미완료 initial cold activation의 same-target recovery와 별도 scenario로 실행 |
 | 스키마 validator가 C++ 빌드를 실제 gate하는지 (12 §1) | 빌드 시스템 실행 확인 |
@@ -324,10 +322,10 @@ RouteMesh에 남은 금지 상한 surface·field, JSON 프로파일에 집중한
 
 ## 5. 권고
 
-1. **이 보고서에서 unique ID 관리** — 정식 spec에 구현 진행 기록을 다시 넣지 않고, 이 plan 문서가 남은 28 GAP과 29 PARTIAL 및 종결 3건의 증거를 소유한다. 특히 CPP-TOPO-001은 종결된 `JVM-TOPO-001`, CPP-COMP-001은 종결된 `NODE-ROUTE-001`과 비교하되 다른 언어의 종결을 C++ 완료 증거로 사용하지 않는다.
+1. **이 보고서에서 unique ID 관리** — 정식 spec에 구현 진행 기록을 다시 넣지 않고, 이 plan 문서가 남은 27 GAP과 28 PARTIAL 및 종결 5건의 증거를 소유한다. 특히 CPP-TOPO-001은 종결된 `JVM-TOPO-001`, CPP-COMP-001은 종결된 `NODE-ROUTE-001`과 비교하되 다른 언어의 종결을 C++ 완료 증거로 사용하지 않는다.
 2. **수정 순서 제안**:
    - 1차 (안정성·정합성): CPP-DISP-001(terminate), CPP-DISP-002(HOL), CPP-RELOC-001(영구 차단), CPP-SESS-001(이중 소유), CPP-TOPO-001(fence), CPP-ROUTE-001(dead 매처 — 한 줄급 수정), CPP-LIFE-003(Ready owner loss와 Missing 분리)
-   - 2차 (public 계약·상호운용): CPP-CONTRACT-DIAG-001, CPP-CONTRACT-QUERY-001, CPP-CONTRACT-STREAM-001, CPP-CONTRACT-ROLE-001, CPP-WIRE-001(키 포맷 — 마이그레이션 계획 필요), CPP-WIRE-002(RouteMesh 금지 상한 surface·wire field 제거), CPP-WIRE-003(json-v1), CPP-OWN-001(content-type 검증), CPP-COMP-001(문자열 분류 → 구조화 오류 코드)
+   - 2차 (public 계약·상호운용): CPP-CONTRACT-QUERY-001, CPP-CONTRACT-STREAM-001, CPP-CONTRACT-ROLE-001, CPP-WIRE-001(키 포맷 — 마이그레이션 계획 필요), CPP-WIRE-002(RouteMesh 금지 상한 surface·wire field 제거), CPP-WIRE-003(json-v1), CPP-OWN-001(content-type 검증), CPP-COMP-001(문자열 분류 → 구조화 오류 코드)
    - 3차 (자원·성능): CPP-TIMER-001(무한 누적), CPP-COMP-004(고아 엔트리 누수), CPP-TIMER-003(fdpair), CPP-EXEC-001/CPP-OWN-002~004(복사·락 절감), CPP-DISP-005(100 ms wake)
    - 4차 (구조·명명): 나머지 PARTIAL
 3. **오류 종류 정합은 계약 테스트로 고정** — CPP-EXEC-002, CPP-FOLLOW-001과 CPP-CONTRACT-ROLE-001은 공개 오류 kind가 계약과 달라지는 계열이므로, 수정과 함께 source contract test와 cross-language process E2E에 오류 kind assertion을 추가한다. CPP-LIFE-001은 오류 이름 문제가 아니라 일반 message admission fence 자체의 의미 차이다.
