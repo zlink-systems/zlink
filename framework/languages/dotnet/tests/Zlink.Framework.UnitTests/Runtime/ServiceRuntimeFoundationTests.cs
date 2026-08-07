@@ -1632,98 +1632,50 @@ public sealed class ServiceRuntimeFoundationTests
     }
 
     [Fact]
-    public void CompletionTable_OverflowRetainsFailureTombstoneForLateRegister()
-    {
-        var table = new ZLinkMeshCompletionTable(
-            earlyCompletionCount: 1,
-            earlyCompletionBytes: 64,
-            tombstoneCount: 1,
-            tombstoneBytes: 32);
-        var retained = new MeshOperationId(0, 10);
-        var overflow = new MeshOperationId(0, 11);
-        table.Complete(Completion(retained), Array.Empty<Message>());
-
-        using var parts = Message.From(new byte[] { 1, 2, 3 });
-        table.Complete(Completion(overflow), [parts]);
-        Assert.Throws<ObjectDisposedException>(() => _ = parts.Size);
-
-        RequestResult? result = null;
-        Assert.True(table.RegisterRequest(
-            overflow,
-            (completed, reply) =>
-            {
-                result = completed;
-                Assert.Empty(reply);
-            }));
-        Assert.Equal(RequestResult.Backpressured, result);
-    }
-
-    [Fact]
-    public void CompletionTable_OverflowBeyondRetentionFailsLateRegistration()
-    {
-        var table = new ZLinkMeshCompletionTable(
-            earlyCompletionCount: 1,
-            earlyCompletionBytes: 64,
-            tombstoneCount: 1,
-            tombstoneBytes: 32);
-
-        var retained = new MeshOperationId(0, 20);
-        var tombstoned = new MeshOperationId(0, 21);
-        var overflow = new MeshOperationId(0, 22);
-        table.Complete(Completion(retained), []);
-        table.Complete(Completion(tombstoned), []);
-        table.Complete(Completion(overflow), []);
-
-        Assert.Equal(1, table.OverflowCount);
-
-        RequestResult? result = null;
-        Assert.True(table.RegisterRequest(
-            overflow,
-            (completed, reply) =>
-            {
-                result = completed;
-                Assert.Empty(reply);
-            }));
-        Assert.Equal(RequestResult.Backpressured, result);
-    }
-
-    [Fact]
-    public void CompletionTable_OverflowFailsPendingAndFutureOperations()
-    {
-        var table = new ZLinkMeshCompletionTable(
-            earlyCompletionCount: 1,
-            earlyCompletionBytes: 64,
-            tombstoneCount: 1,
-            tombstoneBytes: 32);
-        var pending = new MeshOperationId(0, 30);
-        var pendingResults = new List<RequestResult>();
-        Assert.True(table.RegisterRequest(
-            pending,
-            (completed, _) => pendingResults.Add(completed)));
-
-        table.Complete(Completion(new MeshOperationId(0, 31)), []);
-        table.Complete(Completion(new MeshOperationId(0, 32)), []);
-        table.Complete(Completion(new MeshOperationId(0, 33)), []);
-
-        Assert.Equal([RequestResult.Backpressured], pendingResults);
-        RequestResult? future = null;
-        Assert.True(table.RegisterRequest(
-            new MeshOperationId(0, 34),
-            (completed, _) => future = completed));
-        Assert.Equal(RequestResult.Backpressured, future);
-    }
-
-    [Fact]
-    public void CompletionTable_RegisterAndCompleteRaceInvokesOneHandler()
+    public void CompletionTable_RegisterBeforeSubmitHandlesSynchronousCompletion()
     {
         var table = new ZLinkMeshCompletionTable();
-        var operation = new MeshOperationId(0, 12);
-        var calls = 0;
-        Parallel.Invoke(
-            () => table.Register(operation, (_, _) => Interlocked.Increment(ref calls)),
-            () => table.Complete(Completion(operation), Array.Empty<Message>()));
+        var correlation = new MeshOperationId(7, 10);
+        var completedDuringSubmit = false;
 
-        Assert.Equal(1, calls);
+        var submit = table.RegisterRequestBeforeSubmit(
+            correlation,
+            (result, reply) =>
+            {
+                Assert.Equal(RequestResult.Ok, result);
+                Assert.Empty(reply);
+                completedDuringSubmit = true;
+            },
+            id =>
+            {
+                Assert.Equal(correlation, id);
+                table.Complete(Completion(id), Array.Empty<Message>());
+                Assert.True(completedDuringSubmit);
+                return SubmitResult.Ok;
+            });
+
+        Assert.Equal(SubmitResult.Ok, submit);
+        Assert.True(completedDuringSubmit);
+    }
+
+    [Fact]
+    public void CompletionTable_SubmitRejectionRemovesWaiter()
+    {
+        var table = new ZLinkMeshCompletionTable();
+        var correlation = new MeshOperationId(7, 11);
+        var calls = 0;
+        Assert.Equal(
+            SubmitResult.Backpressured,
+            table.RegisterBeforeSubmit(
+                correlation,
+                (_, _) => calls++,
+                _ => SubmitResult.Backpressured));
+
+        using var late = Message.From(new byte[] { 1 });
+        table.Complete(Completion(correlation), [late]);
+
+        Assert.Equal(0, calls);
+        Assert.Throws<ObjectDisposedException>(() => _ = late.Size);
     }
 
     [Fact]

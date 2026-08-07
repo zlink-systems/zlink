@@ -119,12 +119,17 @@ internal sealed class ZLinkBackendStreamSocketWrapper : IZLinkBackendStreamSocke
                        + (timeout > TimeSpan.Zero ? timeout : TimeSpan.FromSeconds(5));
         while (true)
         {
-            var submit = Session().BindActor(
-                sessionRid, ToNativeActor(actor), out var operationId, timeout);
+            var submit = await SubmitAndAwaitOperationAsync(
+                    id => Session().BindActor(
+                        sessionRid,
+                        ToNativeActor(actor),
+                        id,
+                        timeout),
+                    cancellationToken)
+                .ConfigureAwait(false);
             if (submit != SubmitResult.NotConnected || DateTime.UtcNow >= deadline)
             {
-                await AwaitOperationAsync(submit, operationId, cancellationToken)
-                    .ConfigureAwait(false);
+                ThrowIfSubmitFailed(submit);
                 return;
             }
 
@@ -152,10 +157,12 @@ internal sealed class ZLinkBackendStreamSocketWrapper : IZLinkBackendStreamSocke
         foreach (var binding in session.Bindings(sessionRid))
             if (string.Equals(binding.Actor.ActorId, actorId, StringComparison.Ordinal))
             {
-                var submit = session.UnbindActor(
-                    sessionRid, binding.Actor, binding.BindingGeneration,
-                    out var operationId, timeout);
-                return AwaitOperationAsync(submit, operationId, cancellationToken);
+                return UnbindAndAwaitAsync(
+                    session,
+                    sessionRid,
+                    binding,
+                    timeout,
+                    cancellationToken);
             }
 
         return ValueTask.CompletedTask;
@@ -166,31 +173,62 @@ internal sealed class ZLinkBackendStreamSocketWrapper : IZLinkBackendStreamSocke
     // observably complete (spec 31 §7 — binding update runs on the infrastructure
     // claim). When no shared completion table is available (standalone minted
     // node) the submit result is the only signal and the operation is not awaited.
-    private async ValueTask AwaitOperationAsync(
-        SubmitResult submit,
-        MeshOperationId operationId,
+    private async ValueTask UnbindAndAwaitAsync(
+        IStreamSessionService session,
+        RoutingId sessionRid,
+        StreamSessionBinding binding,
+        TimeSpan timeout,
         CancellationToken cancellationToken)
     {
-        if (submit != SubmitResult.Ok)
-            throw new ZlinkSubmitException((ZlinkSubmitException.ErrorCode)(int)submit);
-        if (_completions is null || operationId == default) return;
+        var submit = await SubmitAndAwaitOperationAsync(
+                id => session.UnbindActor(
+                    sessionRid,
+                    binding.Actor,
+                    binding.BindingGeneration,
+                    id,
+                    timeout),
+                cancellationToken)
+            .ConfigureAwait(false);
+        ThrowIfSubmitFailed(submit);
+    }
+
+    private async ValueTask<SubmitResult> SubmitAndAwaitOperationAsync(
+        Func<MeshOperationId, SubmitResult> submitOperation,
+        CancellationToken cancellationToken)
+    {
+        var correlationId = _node.AllocateOperationId();
+        if (_completions is null)
+            return submitOperation(correlationId);
 
         var completion = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
-        _completions.Register(operationId, (record, parts) =>
-        {
-            ZLinkMessageParts.DisposeAll(parts);
-            var result = ZLinkMeshCompletionTable.MapResult(
-                record.TerminalResult, record.FailureErrno);
-            if (result == RequestResult.Ok)
-                completion.TrySetResult();
-            else
-                completion.TrySetException(
-                    new ZlinkRequestException((ZlinkRequestException.ErrorCode)(int)result));
-        });
+        var submit = _completions.RegisterBeforeSubmit(
+            correlationId,
+            (record, parts) =>
+            {
+                ZLinkMessageParts.DisposeAll(parts);
+                var result = ZLinkMeshCompletionTable.MapResult(
+                    record.TerminalResult, record.FailureErrno);
+                if (result == RequestResult.Ok)
+                    completion.TrySetResult();
+                else
+                    completion.TrySetException(
+                        new ZlinkRequestException(
+                            (ZlinkRequestException.ErrorCode)(int)result));
+            },
+            submitOperation);
+        if (submit != SubmitResult.Ok)
+            return submit;
         await using (cancellationToken.Register(() => completion.TrySetCanceled())
                          .ConfigureAwait(false))
             await completion.Task.ConfigureAwait(false);
+        return SubmitResult.Ok;
+    }
+
+    private static void ThrowIfSubmitFailed(SubmitResult submit)
+    {
+        if (submit != SubmitResult.Ok)
+            throw new ZlinkSubmitException((ZlinkSubmitException.ErrorCode)(int)submit);
     }
 
     public bool SendBoundActor(

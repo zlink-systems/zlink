@@ -6,10 +6,10 @@ using Systems.Zlink.Framework.Runtime.Protocol;
 namespace Zlink.Framework.Runtime.Backend.DotNet.Wrappers;
 
 // RouteMesh 10.0.0 MeshNode-backed implementation of the framework SpotNode seam.
-// The 9.x SpotNode fluent+callback surface is bridged onto IMeshNode: requests
-// return an out MeshOperationId whose reply is resolved by the node dispatch pump
-// through the completion table, and pull dispatch replaces the per-spot receiver
-// loops.
+// The SpotNode callback surface is bridged onto IMeshNode by allocating the
+// reply correlation and registering its waiter before managed submit. The node
+// dispatch pump resolves that waiter, and pull dispatch replaces the per-spot
+// receiver loops.
 internal sealed class ZLinkBackendSpotNodeWrapper :
     IZLinkBackendSpotNode,
     IZLinkBackendRelocationReplyRelay,
@@ -42,8 +42,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
     public ZLinkBackendSpotNodeWrapper(IMeshNode node)
     {
         _node = node;
-        _completions = new ZLinkMeshCompletionTable(
-            meshName: (node as ZLinkManagedMeshNode)?.MeshName);
+        _completions = new ZLinkMeshCompletionTable();
         _pump = new ZLinkMeshDispatchPump(node, _completions);
         _node.SetCompletionOverflowHandler(
             (record, parts) => _completions.Complete(record, parts));
@@ -370,40 +369,56 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
         CancellationToken cancellationToken)
     {
         EnsureStarted();
-        var submit = RequireManagedNode().ActivateInstanceSpot(
-            target,
-            sourceSpotId,
-            parts,
-            request,
-            out var operationId,
-            deadlineUnixMs,
-            timeout,
-            SendFlags.None,
-            metadata);
-        if (submit != SubmitResult.Ok)
-            throw new ZlinkSubmitException(
-                (ZlinkSubmitException.ErrorCode)(int)submit);
-        if (!request) return Array.Empty<Message>();
+        if (!request)
+        {
+            var oneWaySubmit = RequireManagedNode().ActivateInstanceSpot(
+                target,
+                sourceSpotId,
+                parts,
+                false,
+                out _,
+                deadlineUnixMs,
+                timeout,
+                SendFlags.None,
+                metadata);
+            if (oneWaySubmit != SubmitResult.Ok)
+                throw new ZlinkSubmitException(
+                    (ZlinkSubmitException.ErrorCode)(int)oneWaySubmit);
+            return Array.Empty<Message>();
+        }
 
         var terminal = new TaskCompletionSource<IReadOnlyList<Message>>(
             TaskCreationOptions.RunContinuationsAsynchronously);
-        if (!_completions.Register(operationId, (record, reply) =>
-        {
-            if (record.TerminalResult == (int)RequestResult.Ok)
-                terminal.TrySetResult(reply);
-            else
+        var correlationId = _node.AllocateOperationId();
+        var submit = _completions.RegisterBeforeSubmit(
+            correlationId,
+            (record, reply) =>
             {
-                ZLinkMessageParts.DisposeAll(reply);
-                terminal.TrySetException(new ZLinkFrameworkException(
-                    record.FailureErrno
-                    == (int)ServiceWireConstants.FrameworkErrorCode.SpotGenerationStale
-                        ? ZLinkFrameworkErrorKind.InvalidOperation
-                        : ZLinkFrameworkErrorKind.InternalFailure,
-                    "Remote Instance Spot activation failed."));
-            }
-        }))
-            throw new InvalidOperationException(
-                "Remote Instance Spot activation did not return an operation id.");
+                if (record.TerminalResult == (int)RequestResult.Ok)
+                    terminal.TrySetResult(reply);
+                else
+                {
+                    ZLinkMessageParts.DisposeAll(reply);
+                    terminal.TrySetException(new ZLinkFrameworkException(
+                        record.FailureErrno
+                        == (int)ServiceWireConstants.FrameworkErrorCode.SpotGenerationStale
+                            ? ZLinkFrameworkErrorKind.InvalidOperation
+                            : ZLinkFrameworkErrorKind.InternalFailure,
+                        "Remote Instance Spot activation failed."));
+                }
+            },
+            id => RequireManagedNode().ActivateInstanceSpot(
+                target,
+                sourceSpotId,
+                parts,
+                id,
+                deadlineUnixMs,
+                timeout,
+                SendFlags.None,
+                metadata));
+        if (submit != SubmitResult.Ok)
+            throw new ZlinkSubmitException(
+                (ZlinkSubmitException.ErrorCode)(int)submit);
         await using (cancellationToken.Register(
                          () => terminal.TrySetCanceled(cancellationToken))
                      .ConfigureAwait(false))
@@ -436,33 +451,39 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
         CancellationToken cancellationToken)
     {
         EnsureStarted();
-        var submit = RequireManagedNode().CreateUserSpot(
-            targetNodeRid, spotId, stableType, reservation,
-            deadlineUnixMs, out var operationId, timeout);
-        if (submit != SubmitResult.Ok)
-            throw new ZlinkSubmitException(
-                (ZlinkSubmitException.ErrorCode)(int)submit);
         var terminal = new TaskCompletionSource<(
             UserSpotCreateCompletion, IReadOnlyList<Message>)>(
             TaskCreationOptions.RunContinuationsAsynchronously);
-        if (!_completions.Register(operationId, (record, parts) =>
-        {
-            if (record.TerminalResult == (int)RequestResult.Ok
-                && record.UserSpotCreateCompletion is { } completion)
-                terminal.TrySetResult((completion, parts));
-            else
+        var correlationId = _node.AllocateOperationId();
+        var submit = _completions.RegisterBeforeSubmit(
+            correlationId,
+            (record, parts) =>
             {
-                ZLinkMessageParts.DisposeAll(parts);
-                terminal.TrySetException(new ZLinkFrameworkException(
-                    record.FailureErrno
-                    == (int)ServiceWireConstants.FrameworkErrorCode.SpotGenerationStale
-                        ? ZLinkFrameworkErrorKind.InvalidOperation
-                        : ZLinkFrameworkErrorKind.Unavailable,
-                    "Remote User Spot create failed."));
-            }
-        }))
-            throw new InvalidOperationException(
-                "Remote User Spot create did not return an operation id.");
+                if (record.TerminalResult == (int)RequestResult.Ok
+                    && record.UserSpotCreateCompletion is { } completion)
+                    terminal.TrySetResult((completion, parts));
+                else
+                {
+                    ZLinkMessageParts.DisposeAll(parts);
+                    terminal.TrySetException(new ZLinkFrameworkException(
+                        record.FailureErrno
+                        == (int)ServiceWireConstants.FrameworkErrorCode.SpotGenerationStale
+                            ? ZLinkFrameworkErrorKind.InvalidOperation
+                            : ZLinkFrameworkErrorKind.Unavailable,
+                        "Remote User Spot create failed."));
+                }
+            },
+            id => RequireManagedNode().CreateUserSpot(
+                targetNodeRid,
+                spotId,
+                stableType,
+                reservation,
+                deadlineUnixMs,
+                id,
+                timeout));
+        if (submit != SubmitResult.Ok)
+            throw new ZlinkSubmitException(
+                (ZlinkSubmitException.ErrorCode)(int)submit);
         await using (cancellationToken.Register(
                          () => terminal.TrySetCanceled(cancellationToken))
                      .ConfigureAwait(false))
@@ -481,16 +502,13 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
         CancellationToken cancellationToken)
     {
         EnsureStarted();
-        var submit = RequireManagedNode().CreateActorRemote(
-            targetNodeRid, actorId, stableType, reservation,
-            deadlineUnixMs, out var operationId, timeout);
-        if (submit != SubmitResult.Ok)
-            throw new ZlinkSubmitException(
-                (ZlinkSubmitException.ErrorCode)(int)submit);
         var terminal = new TaskCompletionSource<(
             ActorCreateCompletion, IReadOnlyList<Message>)>(
             TaskCreationOptions.RunContinuationsAsynchronously);
-        if (!_completions.Register(operationId, (record, parts) =>
+        var correlationId = _node.AllocateOperationId();
+        var submit = _completions.RegisterBeforeSubmit(
+            correlationId,
+            (record, parts) =>
         {
             if (record.TerminalResult == (int)RequestResult.Ok
                 && record.ActorCreateCompletion is { } completion)
@@ -539,9 +557,18 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
                     + $"failure={failure}.",
                     retryAdvice));
             }
-        }))
-            throw new InvalidOperationException(
-                "Remote Actor create did not return an operation id.");
+        },
+            id => RequireManagedNode().CreateActorRemote(
+                targetNodeRid,
+                actorId,
+                stableType,
+                reservation,
+                deadlineUnixMs,
+                id,
+                timeout));
+        if (submit != SubmitResult.Ok)
+            throw new ZlinkSubmitException(
+                (ZlinkSubmitException.ErrorCode)(int)submit);
         await using (cancellationToken.Register(
                          () => terminal.TrySetCanceled(cancellationToken))
                      .ConfigureAwait(false))
@@ -556,19 +583,12 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
         CancellationToken cancellationToken)
     {
         EnsureStarted();
-        var submit = RequireManagedNode().DestroyActorRemote(
-            ToNativeActor(actor),
-            targetNodeGeneration,
-            authorityOwnerGeneration,
-            out var operationId,
-            timeout);
-        if (submit != SubmitResult.Ok)
-            throw new ZlinkSubmitException(
-                (ZlinkSubmitException.ErrorCode)(int)submit);
-
         var terminal = new TaskCompletionSource<bool>(
             TaskCreationOptions.RunContinuationsAsynchronously);
-        if (!_completions.Register(operationId, (record, parts) =>
+        var correlationId = _node.AllocateOperationId();
+        var submit = _completions.RegisterBeforeSubmit(
+            correlationId,
+            (record, parts) =>
         {
             ZLinkMessageParts.DisposeAll(parts);
             if (record.TerminalResult == (int)RequestResult.Ok
@@ -587,9 +607,16 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
                 != (int)ServiceWireConstants.FrameworkErrorCode.ActorRouteNotFound
                     ? ZLinkRetryAdvice.RetryAfterBackoff
                     : ZLinkRetryAdvice.DoNotRetry));
-        }))
-            throw new InvalidOperationException(
-                "Remote Actor destroy did not return an operation id.");
+        },
+            id => RequireManagedNode().DestroyActorRemote(
+                ToNativeActor(actor),
+                targetNodeGeneration,
+                authorityOwnerGeneration,
+                id,
+                timeout));
+        if (submit != SubmitResult.Ok)
+            throw new ZlinkSubmitException(
+                (ZlinkSubmitException.ErrorCode)(int)submit);
         await using (cancellationToken.Register(
                          () => terminal.TrySetCanceled(cancellationToken))
                      .ConfigureAwait(false))
@@ -604,15 +631,12 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
         CancellationToken cancellationToken)
     {
         EnsureStarted();
-        var submit = RequireManagedNode().CloseUserSpot(
-            targetNodeRid, target, deadlineUnixMs,
-            out var operationId, timeout);
-        if (submit != SubmitResult.Ok)
-            throw new ZlinkSubmitException(
-                (ZlinkSubmitException.ErrorCode)(int)submit);
         var terminal = new TaskCompletionSource<UserSpotCloseCompletion>(
             TaskCreationOptions.RunContinuationsAsynchronously);
-        if (!_completions.Register(operationId, (record, parts) =>
+        var correlationId = _node.AllocateOperationId();
+        var submit = _completions.RegisterBeforeSubmit(
+            correlationId,
+            (record, parts) =>
         {
             ZLinkMessageParts.DisposeAll(parts);
             if (record.TerminalResult == (int)RequestResult.Ok
@@ -631,9 +655,16 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
                     == (int)ServiceWireConstants.FrameworkErrorCode.SpotMoving
                         ? ZLinkRetryAdvice.RetryAfterBackoff
                         : ZLinkRetryAdvice.DoNotRetry));
-        }))
-            throw new InvalidOperationException(
-                "Remote User Spot close did not return an operation id.");
+        },
+            id => RequireManagedNode().CloseUserSpot(
+                targetNodeRid,
+                target,
+                deadlineUnixMs,
+                id,
+                timeout));
+        if (submit != SubmitResult.Ok)
+            throw new ZlinkSubmitException(
+                (ZlinkSubmitException.ErrorCode)(int)submit);
         await using (cancellationToken.Register(
                          () => terminal.TrySetCanceled(cancellationToken))
                      .ConfigureAwait(false))
@@ -927,10 +958,23 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
         RequestCallback callback,
         TimeSpan? timeout)
     {
-        var operationId = _node.JoinSpot(
-            ToNativeActor(actor), destNodeRid, destSpotId, 0, new[] { message },
-            timeout ?? default);
-        return _completions.RegisterRequest(operationId, callback);
+        var correlationId = _node.AllocateOperationId();
+        var submit = _completions.RegisterRequestBeforeSubmit(
+            correlationId,
+            callback,
+            id =>
+            {
+                RequireManagedNode().JoinSpot(
+                    ToNativeActor(actor),
+                    destNodeRid,
+                    destSpotId,
+                    0,
+                    new[] { message },
+                    id,
+                    timeout ?? default);
+                return SubmitResult.Ok;
+            });
+        return submit == SubmitResult.Ok;
     }
 
     public bool JoinActor(
@@ -941,10 +985,24 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
         ActorJoinCallback callback,
         TimeSpan? timeout)
     {
-        var operationId = _node.JoinSpot(
-            ToNativeActor(actor), destNodeRid, destSpotId, 0, parts, timeout ?? default);
-        return _completions.Register(operationId, (record, replyParts) =>
-            callback(BuildJoinResult(record, actor), replyParts));
+        var correlationId = _node.AllocateOperationId();
+        var submit = _completions.RegisterBeforeSubmit(
+            correlationId,
+            (record, replyParts) =>
+                callback(BuildJoinResult(record, actor), replyParts),
+            id =>
+            {
+                RequireManagedNode().JoinSpot(
+                    ToNativeActor(actor),
+                    destNodeRid,
+                    destSpotId,
+                    0,
+                    parts,
+                    id,
+                    timeout ?? default);
+                return SubmitResult.Ok;
+            });
+        return submit == SubmitResult.Ok;
     }
 
     public bool JoinActorEntrySpot(
@@ -954,10 +1012,22 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
         ActorJoinEntrySpotCallback callback,
         TimeSpan? timeout)
     {
-        var operationId = _node.JoinEntrySpot(
-            ToNativeActor(actor), destNodeRid, new[] { request }, timeout ?? default);
-        return _completions.Register(operationId, (record, replyParts) =>
-            callback(BuildEntrySpotJoinResult(record, actor, destNodeRid), replyParts));
+        var correlationId = _node.AllocateOperationId();
+        var submit = _completions.RegisterBeforeSubmit(
+            correlationId,
+            (record, replyParts) =>
+                callback(BuildEntrySpotJoinResult(record, actor, destNodeRid), replyParts),
+            id =>
+            {
+                RequireManagedNode().JoinEntrySpot(
+                    ToNativeActor(actor),
+                    destNodeRid,
+                    new[] { request },
+                    id,
+                    timeout ?? default);
+                return SubmitResult.Ok;
+            });
+        return submit == SubmitResult.Ok;
     }
 
     private static ZLinkBackendActorJoinResult BuildJoinResult(
@@ -992,16 +1062,21 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
         TimeSpan timeout,
         CancellationToken cancellationToken)
     {
-        var operationId = _node.DestroyActor(ToNativeActor(actor), timeout);
-        if (operationId == default) return;
-
         var completion = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
-        _completions.Register(operationId, (_, parts) =>
-        {
-            ZLinkMessageParts.DisposeAll(parts);
-            completion.TrySetResult();
-        });
+        var correlationId = _node.AllocateOperationId();
+        _completions.RegisterBeforeSubmit(
+            correlationId,
+            (_, parts) =>
+            {
+                ZLinkMessageParts.DisposeAll(parts);
+                completion.TrySetResult();
+            },
+            id =>
+            {
+                RequireManagedNode().DestroyActor(ToNativeActor(actor), id, timeout);
+                return SubmitResult.Ok;
+            });
         await using (cancellationToken.Register(() => completion.TrySetCanceled())
                          .ConfigureAwait(false))
             await completion.Task.ConfigureAwait(false);
@@ -1068,27 +1143,29 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
         TimeSpan? timeout,
         CancellationToken cancellationToken)
     {
-        var submit = _node.RequestToActor(
-            ToNativeActor(actor), parts, out var operationId, timeout ?? default);
-        if (submit != SubmitResult.Ok)
-            throw new ZlinkSubmitException((ZlinkSubmitException.ErrorCode)(int)submit);
-
         var completion = new TaskCompletionSource<IReadOnlyList<Message>>(
             TaskCreationOptions.RunContinuationsAsynchronously);
-        _completions.Register(operationId, (record, replyParts) =>
-        {
-            var result = ZLinkMeshCompletionTable.MapResult(
-                record.TerminalResult, record.FailureErrno);
-            if (result == RequestResult.Ok)
+        var correlationId = _node.AllocateOperationId();
+        var submit = _completions.RegisterBeforeSubmit(
+            correlationId,
+            (record, replyParts) =>
             {
-                completion.TrySetResult(replyParts);
-                return;
-            }
+                var result = ZLinkMeshCompletionTable.MapResult(
+                    record.TerminalResult, record.FailureErrno);
+                if (result == RequestResult.Ok)
+                {
+                    completion.TrySetResult(replyParts);
+                    return;
+                }
 
-            ZLinkMessageParts.DisposeAll(replyParts);
-            completion.TrySetException(
-                new ZlinkRequestException((ZlinkRequestException.ErrorCode)(int)result));
-        });
+                ZLinkMessageParts.DisposeAll(replyParts);
+                completion.TrySetException(
+                    new ZlinkRequestException((ZlinkRequestException.ErrorCode)(int)result));
+            },
+            id => RequireManagedNode().RequestToActor(
+                ToNativeActor(actor), parts, id, timeout ?? default));
+        if (submit != SubmitResult.Ok)
+            throw new ZlinkSubmitException((ZlinkSubmitException.ErrorCode)(int)submit);
         await using (cancellationToken.Register(() => completion.TrySetCanceled())
                          .ConfigureAwait(false))
             return await completion.Task.ConfigureAwait(false);
