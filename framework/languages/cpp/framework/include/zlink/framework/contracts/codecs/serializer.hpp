@@ -222,10 +222,20 @@ class serializer_registry_t
             if constexpr (detail::is_json_serializer_compatible_v<T>) {
                 return serializer_t<T> (
                   [] (const T &value) {
-                      return encoded_payload_t::from_raw (zlink::message_t::from_json (value));
+                      const auto text = nlohmann::json (value).dump ();
+                      return encoded_payload_t::from_bytes (
+                        std::as_bytes (std::span<const char> (
+                          text.data (), text.size ())));
                   },
                   [] (const encoded_payload_t &payload) {
-                      return payload.to_raw ().template parse_json<T> ();
+                      const auto bytes = payload.bytes ();
+                      const auto *begin = reinterpret_cast<const char *> (
+                        bytes.data ());
+                      const auto *end = begin == nullptr
+                                          ? begin
+                                          : begin + bytes.size ();
+                      return nlohmann::json::parse (begin, end)
+                        .template get<T> ();
                   });
             } else {
                 return serializer_t<T> (

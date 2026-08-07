@@ -82,7 +82,8 @@ int main ()
     }
     const auto json_encoded = serializers.get<json_payload_t> ().serialize ({77});
     const auto json_decoded = serializers.get<json_payload_t> ().deserialize (json_encoded);
-    if (json_decoded.value != 77) {
+    if (json_encoded.to_string () != R"({"value":77})"
+        || json_decoded.value != 77) {
         return 3;
     }
     if (serializers.content_type (std::type_index (typeid (json_payload_t)))

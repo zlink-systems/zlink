@@ -130,6 +130,8 @@ int main ()
       read_file (root / "framework/src/runtime/mesh/mesh_node_host_service.cpp");
     const auto framework_message = read_file (
       include_root / "zlink/framework/contracts/messaging/message.hpp");
+    const auto serializer_header = read_file (
+      include_root / "zlink/framework/contracts/codecs/serializer.hpp");
     const auto raw_fanout_owner =
       read_file (root / "framework/src/runtime/fanout/raw_fanout_owner.cpp");
     const auto raw_mesh_node_owner =
@@ -1937,6 +1939,20 @@ int main ()
              == std::string::npos,
       "CPP-OWN-006",
       "runtime payload inspection still materializes a byte-vector copy");
+
+    /* CPP-OWN-004 — the default JSON serializer writes and reads the encoded
+     * payload directly instead of round-tripping through a binding message. */
+    gate.require (
+      serializer_header.find ("nlohmann::json (value).dump ()")
+          != std::string::npos
+        && serializer_header.find (
+             "payload.to_raw ().template parse_json")
+             == std::string::npos
+        && serializer_header.find (
+             "zlink::message_t::from_json (value)")
+             == std::string::npos,
+      "CPP-OWN-004",
+      "default JSON serialization still round-trips through a binding message");
 
     /* CPP-FOLLOW-001 — Message Follow admission preserves the contract error
      * categories and rejects a revisited node before the hop ceiling. */
