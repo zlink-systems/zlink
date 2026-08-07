@@ -115,6 +115,19 @@ Gap 하나 또는 서로 강하게 연결된 작은 작업 묶음의 동작과 �
 - DEC-13은 `messageFollow` suppression 방법을 구현 선택으로 남겼다. 중복 억제
   marker·수명이 없다는 이유만으로 gap을 만들지 않았다.
 
+### 1.3 구현 checkpoint
+
+아래 항목은 owner-layer source와 회귀 test까지 반영했지만 package·process gate를 아직 실행하지 않았다.
+따라서 집계에서는 GAP 또는 PARTIAL을 유지한다. Package와 실제 process evidence가 통과한 뒤에만 종결한다.
+
+| ID | Source checkpoint | 현재 evidence | 남은 evidence |
+|---|---|---|---|
+| `NODE-CONTRACT-TIMER-001` | `160e7f2c23` | `npm run build`, `startup-validation.test.js` 23/23 PASS. `CatchUpBounded`에서만 정수 `1..2_147_483_647`을 허용하며 경계값과 소수·무한대·상한 초과를 검증한다. | packed package·clean consumer에서 같은 startup rejection 확인 |
+| `NODE-CONTRACT-CLIENTSERVER-001` | `d8ef6fc15c` | Public `ZLinkChannelClient`와 runtime-manager 회귀 test PASS. Server role만 있는 Channel의 send/request가 `NotConfigured`로 끝난다. | Server-only 실제 host process에서 local handler 미실행과 send/request terminal 확인 |
+| `NODE-CONTRACT-RELOC-001` | `b4c79be5c1` | `npm run build`와 focused relocation regression PASS. 64 MiB 초과를 typed internal failure로 보존하고 host 결과를 `Blocked/StateIncompatible`로 분류한다. | 64 MiB 경계·64 MiB+1 byte Store/process E2E와 source authority 유지 확인 |
+| `NODE-ROUTE-002`, `NODE-ROUTE-003`, `NODE-ROUTE-005` | `69c7c7614c` | `npm run build`, `npm run typecheck`, `service-selection.test.js` 5/5 PASS. ClientServer도 공통 smooth weighted selector를 사용하고 누적값을 보존한다. Cycle 탐색은 4,096 step 또는 10 ms 뒤 exact direct 계산으로 전환하며 두 topology가 ordinal RID 비교를 사용한다. | packed package 회귀, 실제 multi-process 분포와 크로스 언어 `B,A,B,B` 수렴 확인 |
+| `NODE-OBS-001` | `d51de2ac08` | `npm run build`와 focused `topology-runtime-projection.test.js` PASS. Terminal 보관 자리가 찼을 때 가장 오래된 status를 버리고 최신 status와 관찰자별 `discardedTerminalCount`를 전달한다. | 느린 관찰자 process/benchmark와 aggregate runtime gate 확인 |
+
 ---
 
 ## 2. 우선 대응 항목 (심각도 상)
