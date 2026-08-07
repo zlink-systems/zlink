@@ -38,7 +38,7 @@ inline void configure_play_host (zlink::framework::app_t &app,
             play_options.log_dir + "/" + play_options.node_rid + ".evidence.log");
         auto *evidence_ptr = evidence.get ();
         options.configure_dispatch ()
-          .message_flow (zlink::framework::message_flow_log_mode_t::key_transitions)
+          .message_flow (zlink::framework::message_flow_log_mode_t::normal)
           .trace_log_file (play_options.log_dir + "/" + play_options.node_rid + "-flow.log")
           .trace_label ("cpp-atd-" + play_options.node_rid);
         options.services ()

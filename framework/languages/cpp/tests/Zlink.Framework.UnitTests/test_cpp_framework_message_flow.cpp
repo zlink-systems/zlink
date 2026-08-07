@@ -109,10 +109,10 @@ int main ()
         }
     }
 
-    // errors_only emits the drop decision but not healthy transitions.
+    // errors emits the drop decision but not healthy transitions.
     {
         const auto out = capture_clog ([] {
-            const auto opts = options_with_mode (message_flow_log_mode_t::errors_only);
+            const auto opts = options_with_mode (message_flow_log_mode_t::errors);
             message_flow_tracer_t tracer (opts);
             tracer.trace (flow_event (message_flow_outcome_t::received));
             tracer.trace (flow_event (message_flow_outcome_t::dropped));
@@ -125,10 +125,10 @@ int main ()
         }
     }
 
-    // key_transitions emits the lifecycle, keyed by correlation id; no sizes yet.
+    // normal emits the lifecycle, keyed by correlation id; no sizes yet.
     {
         const auto out = capture_clog ([] {
-            const auto opts = options_with_mode (message_flow_log_mode_t::key_transitions);
+            const auto opts = options_with_mode (message_flow_log_mode_t::normal);
             message_flow_tracer_t tracer (opts);
             tracer.trace (flow_event (message_flow_outcome_t::received));
             tracer.trace (flow_event (message_flow_outcome_t::replied));
@@ -152,10 +152,10 @@ int main ()
         }
     }
 
-    // verbose appends the message size...
+    // detailed appends the message size...
     {
         const auto out = capture_clog ([] {
-            message_flow_tracer_t (options_with_mode (message_flow_log_mode_t::verbose))
+            message_flow_tracer_t (options_with_mode (message_flow_log_mode_t::detailed))
               .trace (flow_event (message_flow_outcome_t::received));
         });
         if (!contains (out, "size=42")) {
@@ -165,7 +165,7 @@ int main ()
 
     // ...unless include_message_sizes opts out.
     {
-        auto options = options_with_mode (message_flow_log_mode_t::verbose);
+        auto options = options_with_mode (message_flow_log_mode_t::detailed);
         options.include_message_sizes (false);
         const auto out = capture_clog ([&] {
             message_flow_tracer_t (options).trace (flow_event (message_flow_outcome_t::received));
@@ -186,10 +186,10 @@ int main ()
         }
     }
 
-    // ...while errors_only (the default) keeps reporting errors.
+    // ...while errors (the default) keeps reporting errors.
     {
         const auto out = capture_clog ([] {
-            dispatch_error_reporter_t (options_with_mode (message_flow_log_mode_t::errors_only))
+            dispatch_error_reporter_t (options_with_mode (message_flow_log_mode_t::errors))
               .report (error_event ());
         });
         if (!contains (out, "dispatch error")) {
@@ -225,8 +225,8 @@ int main ()
             return 15;
         }
 
-        // Flip live to key_transitions at runtime -> now it traces, despite static off.
-        live->store (message_flow_log_mode_t::key_transitions);
+        // Flip live to normal at runtime -> now it traces, despite static off.
+        live->store (message_flow_log_mode_t::normal);
         out = capture_clog ([&] {
             message_flow_tracer_t (options).trace (flow_event (message_flow_outcome_t::received));
         });
@@ -234,7 +234,7 @@ int main ()
             return 16;
         }
 
-        // Capture key_transitions for one message, then turn diagnostics off
+        // Capture normal for one message, then turn diagnostics off
         // before its transition. The in-progress message remains complete.
         out = capture_clog ([&] {
             auto message_scope =
@@ -270,7 +270,7 @@ int main ()
               runtime::flow_context_t::enter_current_or_create (
                 flow_origin_t::application,
                 message_flow_tracer_t (options).mode ());
-            live->store (message_flow_log_mode_t::key_transitions);
+            live->store (message_flow_log_mode_t::normal);
             message_flow_tracer_t (options).trace (
               flow_event (message_flow_outcome_t::received));
         });
@@ -292,7 +292,7 @@ int main ()
 
     // sample_rate gates healthy transitions but never drops error transitions.
     {
-        auto options = options_with_mode (message_flow_log_mode_t::key_transitions);
+        auto options = options_with_mode (message_flow_log_mode_t::normal);
         options.trace_sample_rate (0.0);
         const auto out = capture_clog ([&] {
             message_flow_tracer_t tracer (options);
@@ -309,7 +309,7 @@ int main ()
 
     // observer callbacks are delivered asynchronously and see the same event fields.
     {
-        auto options = options_with_mode (message_flow_log_mode_t::key_transitions);
+        auto options = options_with_mode (message_flow_log_mode_t::normal);
         std::atomic_int observed{0};
         std::atomic_bool saw_packet{false};
         options.set_message_flow_observer ([&] (const message_flow_event_t &event) {
@@ -333,7 +333,7 @@ int main ()
     // must still be observable as publish/handler_missing/drop so the runtime
     // owner can preserve the public negative-dispatch contract.
     {
-        auto options = options_with_mode (message_flow_log_mode_t::key_transitions);
+        auto options = options_with_mode (message_flow_log_mode_t::normal);
         std::atomic_bool saw_fanout_failure{false};
         options.set_message_flow_observer ([&] (const message_flow_event_t &event) {
             if (event.outcome == message_flow_outcome_t::error

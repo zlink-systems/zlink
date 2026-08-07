@@ -94,7 +94,7 @@ inline int run_play_server (int argc, char **argv)
         auto state = std::make_unique<scenario_state_t> (node_rid);
         auto *state_ptr = state.get ();
         options.configure_dispatch ()
-          .message_flow (zlink::framework::message_flow_log_mode_t::key_transitions)
+          .message_flow (zlink::framework::message_flow_log_mode_t::normal)
           .trace_log_file (log_dir + "/" + node_rid + "-flow.log")
           .trace_label ("cpp-sm-" + node_rid)
           .set_message_flow_observer (

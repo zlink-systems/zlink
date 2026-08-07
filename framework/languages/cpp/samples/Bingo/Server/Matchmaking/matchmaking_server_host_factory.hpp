@@ -109,7 +109,7 @@ class matchmaking_server_host_factory_t
           app, topology.log_dir, "matchmaking");
         app.add_zlink_framework ([&] (zlink_framework_options_t &options) {
             options.configure_dispatch ()
-              .message_flow (message_flow_log_mode_t::key_transitions)
+              .message_flow (message_flow_log_mode_t::normal)
               .trace_log_file (
                 flow_log_path (topology.log_dir, "matchmaking"))
               .trace_label ("matchmaking");

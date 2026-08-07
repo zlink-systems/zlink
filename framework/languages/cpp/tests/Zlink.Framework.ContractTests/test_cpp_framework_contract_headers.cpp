@@ -95,6 +95,15 @@
 struct contract_actor_t;
 struct contract_http_client_name_t;
 
+static_assert (
+  static_cast<int> (zlink::framework::message_flow_log_mode_t::off) == 0);
+static_assert (
+  static_cast<int> (zlink::framework::message_flow_log_mode_t::errors) == 1);
+static_assert (
+  static_cast<int> (zlink::framework::message_flow_log_mode_t::normal) == 2);
+static_assert (
+  static_cast<int> (zlink::framework::message_flow_log_mode_t::detailed) == 3);
+
 template <typename TContext>
 concept has_destroy_actor = requires (TContext & context, contract_actor_t &actor)
 {

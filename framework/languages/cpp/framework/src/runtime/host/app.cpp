@@ -371,7 +371,7 @@ class app_state_t
     // once here (never reassigned) so concurrent set/apply only touch the atomic,
     // not the shared_ptr. Installed into dispatch options at apply.
     std::shared_ptr<std::atomic<message_flow_log_mode_t>> message_flow_mode =
-      std::make_shared<std::atomic<message_flow_log_mode_t>> (message_flow_log_mode_t::errors_only);
+      std::make_shared<std::atomic<message_flow_log_mode_t>> (message_flow_log_mode_t::errors);
 };
 
 namespace

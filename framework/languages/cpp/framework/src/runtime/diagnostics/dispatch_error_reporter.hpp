@@ -41,7 +41,7 @@ class dispatch_error_reporter_t
             }
         }
         // off silences the default error log; every other mode keeps reporting
-        // errors (errors_only is the default). A registered observer still fires
+        // errors (errors is the default). A registered observer still fires
         // regardless of mode — it is an explicit, separate subscription.
         if (message_flow_tracer_t (_options).mode ()
             != message_flow_log_mode_t::off) {

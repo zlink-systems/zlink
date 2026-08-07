@@ -64,7 +64,7 @@ inline void configure_flow (zlink::framework::zlink_framework_options_t &options
                             const std::string &label)
 {
     options.configure_dispatch ()
-      .message_flow (zlink::framework::message_flow_log_mode_t::key_transitions)
+      .message_flow (zlink::framework::message_flow_log_mode_t::normal)
       .trace_log_file (log_dir + "/" + label + "-flow.log")
       .trace_label ("cpp-ps-" + label);
 }

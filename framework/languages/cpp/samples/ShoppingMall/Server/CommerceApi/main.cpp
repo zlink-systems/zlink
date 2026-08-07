@@ -324,7 +324,7 @@ int main (int argc, char **argv)
                          redis_state_store_t> ();
         add_shoppingmall_location_store (options, topology);
         options.configure_dispatch ()
-          .message_flow (message_flow_log_mode_t::key_transitions)
+          .message_flow (message_flow_log_mode_t::normal)
           .trace_log_file (configuration.flow_log_path ())
           .trace_label (instance.instance_id);
         /* 공통 sample spec §16: 서버 발견은 registry 프로세스 없이 공유 location store가 맡는다.

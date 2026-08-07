@@ -168,7 +168,7 @@ int main (int argc, char **argv)
           .add_singleton<redis_state_store_t, sample_topology_t> ();
         add_shoppingmall_location_store (options, topology);
         options.configure_dispatch ()
-          .message_flow (message_flow_log_mode_t::key_transitions)
+          .message_flow (message_flow_log_mode_t::normal)
           .trace_log_file (configuration.flow_log_path ())
           .trace_label (instance.instance_id);
         const auto workflow_channel = sample_names_t::order_workflow_channel;

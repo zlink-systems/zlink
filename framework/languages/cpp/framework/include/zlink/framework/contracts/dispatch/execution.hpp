@@ -25,10 +25,9 @@ enum class handler_execution_t
 enum class message_flow_log_mode_t
 {
     off = 0,
-    errors_only = 1,
-    key_transitions = 2,
-    verbose = 3,
-    diagnostic = 4
+    errors = 1,
+    normal = 2,
+    detailed = 3
 };
 
 // A transition or error result in a message's lifecycle. It lets healthy traffic
@@ -73,7 +72,7 @@ class dispatch_diagnostics_options_t
     // Only the dispatch options builder writes these (enforces builder-only config).
     friend struct dispatch_options_t;
 
-    message_flow_log_mode_t _message_flow = message_flow_log_mode_t::errors_only;
+    message_flow_log_mode_t _message_flow = message_flow_log_mode_t::errors;
     double _sample_rate = 1.0;
     bool _include_message_sizes = true;
     // When set, tracing/error logs go to this dedicated file (separated from app

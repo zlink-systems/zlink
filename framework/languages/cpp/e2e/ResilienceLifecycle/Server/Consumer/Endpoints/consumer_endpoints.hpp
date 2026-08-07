@@ -537,7 +537,7 @@ inline profile_res_t request_profile_with_new_client_host (const consumer_option
         server::add_redis_location_store (framework, options.redis_endpoint,
                                           options.redis_key_prefix);
         framework.configure_dispatch ()
-          .message_flow (zlink::framework::message_flow_log_mode_t::key_transitions)
+          .message_flow (zlink::framework::message_flow_log_mode_t::normal)
           .trace_log_file (options.log_dir + "/storm-" + trace_id + "-flow.log")
           .trace_label ("storm-" + trace_id);
         framework.add_client_server_channel (api_channel).client ();

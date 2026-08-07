@@ -44,7 +44,7 @@ inline int run_service_host (int argc, char **argv)
           .add_handler_group (handler_group);
         if (!options.log_dir.empty ()) {
             framework.configure_dispatch ()
-              .message_flow (zlink::framework::message_flow_log_mode_t::key_transitions)
+              .message_flow (zlink::framework::message_flow_log_mode_t::normal)
               .trace_log_file (options.log_dir + "/" + options.rid + "-flow.log")
               .trace_label ("cpp-mon-" + options.rid);
         }

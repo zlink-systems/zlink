@@ -286,7 +286,7 @@ int main (int argc, char **argv)
         auto evidence = std::make_unique<evidence_store_t> ();
         auto *evidence_ptr = evidence.get ();
         framework.configure_dispatch ()
-          .message_flow (zlink::framework::message_flow_log_mode_t::key_transitions)
+          .message_flow (zlink::framework::message_flow_log_mode_t::normal)
           .trace_log_file (configuration.log_dir + "/actor-flow.log")
           .trace_label ("cpp-to-actor-actor");
         framework.services ().add_singleton<evidence_store_t> (std::move (evidence));

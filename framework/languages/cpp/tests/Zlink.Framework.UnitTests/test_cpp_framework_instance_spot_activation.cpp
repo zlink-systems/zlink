@@ -350,7 +350,7 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
     std::condition_variable events_changed;
     std::vector<zlink::framework::message_flow_event_t> events;
     zlink::framework::dispatch_options_t dispatch;
-    dispatch.message_flow (zlink::framework::message_flow_log_mode_t::key_transitions)
+    dispatch.message_flow (zlink::framework::message_flow_log_mode_t::normal)
       .set_message_flow_observer (
         [&] (const zlink::framework::message_flow_event_t &event) {
             {

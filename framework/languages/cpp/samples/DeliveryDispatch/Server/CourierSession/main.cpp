@@ -103,7 +103,7 @@ int main (int argc, char **argv)
     const auto &topology = configuration.topology;
     app.add_zlink_framework ([&] (zlink_framework_options_t &options) {
         options.configure_dispatch ()
-          .message_flow (message_flow_log_mode_t::key_transitions)
+          .message_flow (message_flow_log_mode_t::normal)
           .trace_log_file (configuration.flow_log_path ())
           .trace_label ("deliverydispatch-courier-session");
         add_deliverydispatch_json_codecs (options.codecs ());

@@ -1363,7 +1363,7 @@ int run_host_impl (transfer_host_role_t host_role, int argc, char **argv)
         framework.set_default_request_timeout (std::chrono::seconds (3));
 
         framework.configure_dispatch ()
-          .message_flow (fw::message_flow_log_mode_t::key_transitions)
+          .message_flow (fw::message_flow_log_mode_t::normal)
           .set_message_flow_observer (
             [] (const fw::message_flow_event_t &event) { g_evidence->add_flow (event); });
 

@@ -830,6 +830,22 @@ int main ()
                     || tree_contains (root / "framework/src", "0xf2"),
                   "CPP-G0-FLOW-001", "0xF2 envelope format marker is not encoded");
 
+    /* CPP-CONTRACT-DIAG-001 — diagnostics exports the four exact levels. */
+    for (const std::string required : {
+           "\n    off = 0", "\n    errors = 1", "\n    normal = 2",
+           "\n    detailed = 3"}) {
+        gate.require (execution_hpp.find (required) != std::string::npos,
+                      "CPP-CONTRACT-DIAG-001",
+                      "diagnostics level is missing: " + required);
+    }
+    for (const std::string forbidden : {
+           "\n    errors_only =", "\n    key_transitions =", "\n    verbose =",
+           "\n    diagnostic ="}) {
+        gate.require (execution_hpp.find (forbidden) == std::string::npos,
+                      "CPP-CONTRACT-DIAG-001",
+                      "legacy diagnostics level remains public: " + forbidden);
+    }
+
     /* CPP-G0-METRIC-001 — raw runtime event and metric DTOs stay private. */
     gate.require (
       !std::filesystem::exists (

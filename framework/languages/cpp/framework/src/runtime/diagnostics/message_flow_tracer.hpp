@@ -29,11 +29,10 @@ namespace zlink::framework::detail
 // behind `enabled(...)` (or use the lazy trace overload) so that when tracing is
 // off there is ZERO allocation on the dispatch hot path.
 //
-// Mode gating (modes are ordered off < errors_only < key_transitions < verbose
-// < diagnostic):
-//   * received / dispatched / replied / sent / reply_received require key_transitions+.
-//   * dropped / error require errors_only or higher.
-//   * message sizes are appended only at verbose+ when include_message_sizes.
+// Mode gating (modes are ordered off < errors < normal < detailed):
+//   * received / dispatched / replied / sent / reply_received require normal+.
+//   * dropped / error require errors or higher.
+//   * message sizes are appended only at detailed when include_message_sizes.
 class message_flow_tracer_t
 {
   public:
@@ -54,8 +53,8 @@ class message_flow_tracer_t
     {
         return (outcome == message_flow_outcome_t::dropped
                 || outcome == message_flow_outcome_t::error)
-                 ? message_flow_log_mode_t::errors_only
-                 : message_flow_log_mode_t::key_transitions;
+                 ? message_flow_log_mode_t::errors
+                 : message_flow_log_mode_t::normal;
     }
 
     bool enabled_for (message_flow_outcome_t outcome) const noexcept
@@ -67,7 +66,7 @@ class message_flow_tracer_t
      * tracing is not fully off; propagation of inbound ids is unconditional. */
     bool capture_enabled () const noexcept
     {
-        return enabled (message_flow_log_mode_t::errors_only);
+        return enabled (message_flow_log_mode_t::errors);
     }
 
     // Lazy form: the event (and its string fields) is built only after the cheap
@@ -279,7 +278,7 @@ class message_flow_tracer_t
             if (event.error_action) {
                 add ("action", std::string (enum_name (*event.error_action)));
             }
-            if (event.message_size && enabled (message_flow_log_mode_t::verbose)
+            if (event.message_size && enabled (message_flow_log_mode_t::detailed)
                 && _options->diagnostics.include_message_sizes ()) {
                 add ("size", std::to_string (*event.message_size));
             }

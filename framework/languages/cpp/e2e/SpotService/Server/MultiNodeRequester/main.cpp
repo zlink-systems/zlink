@@ -94,7 +94,7 @@ int main (int argc, char **argv)
     app.add_zlink_framework ([&] (zlink::framework::zlink_framework_options_t &options) {
         auto state = std::make_unique<scenario_state_t> (node_rid);
         options.configure_dispatch ()
-          .message_flow (zlink::framework::message_flow_log_mode_t::key_transitions)
+          .message_flow (zlink::framework::message_flow_log_mode_t::normal)
           .trace_log_file (log_dir + "/" + node_rid + "-requester-flow.log")
           .trace_label ("cpp-sm-" + node_rid + "-requester");
         options.services ()

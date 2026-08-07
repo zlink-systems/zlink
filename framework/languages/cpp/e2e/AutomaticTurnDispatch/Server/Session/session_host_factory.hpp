@@ -21,7 +21,7 @@ inline void configure_session_host (zlink::framework::app_t &app,
       .set_min_level (zlink::framework::log_level_t::debug);
     app.add_zlink_framework ([=] (zlink::framework::zlink_framework_options_t &framework_options) {
         framework_options.configure_dispatch ()
-          .message_flow (zlink::framework::message_flow_log_mode_t::key_transitions)
+          .message_flow (zlink::framework::message_flow_log_mode_t::normal)
           .trace_log_file (session_options.log_dir + "/" + session_options.node_rid + "-flow.log")
           .trace_label ("cpp-atd-" + session_options.node_rid);
         server::configure_codecs (framework_options.codecs ());

@@ -25,7 +25,7 @@ int main (int argc, char **argv)
         framework.services ().add_singleton<sf_consumer::socket_evidence_store_t> (
           std::move (socket_evidence));
         framework.configure_dispatch ()
-          .message_flow (zlink::framework::message_flow_log_mode_t::key_transitions)
+          .message_flow (zlink::framework::message_flow_log_mode_t::normal)
           .trace_log_file (options.log_dir + "/" + options.rid + "-flow.log")
           .trace_label ("cpp-store-failure-" + options.rid);
         sf::server::add_redis_location_store (framework, options);

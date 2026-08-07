@@ -21,7 +21,7 @@ inline app_t &add_bingo_api_server (app_t &app, const sample_topology_t &topolog
 {
     app.add_zlink_framework ([&] (zlink_framework_options_t &options) {
         options.configure_dispatch ()
-          .message_flow (message_flow_log_mode_t::key_transitions)
+          .message_flow (message_flow_log_mode_t::normal)
           .trace_log_file (flow_log_path (topology.log_dir, "api-" + topology.api_node))
           .trace_label ("api-" + topology.api_node);
         use_default_bingo_codecs (options.codecs ());

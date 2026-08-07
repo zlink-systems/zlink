@@ -1099,7 +1099,7 @@ int main ()
             auto scope =
               rt::flow_context_t::enter (
                 std::nullopt, std::nullopt,
-                zlink::framework::message_flow_log_mode_t::key_transitions,
+                zlink::framework::message_flow_log_mode_t::normal,
                                          zlink::framework::flow_origin_t::inbound);
             if (!rt::flow_context_t::current ()
                 || !rt::flow_id_t::is_valid (rt::flow_context_t::current ()->flow_id)) {

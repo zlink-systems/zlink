@@ -93,7 +93,7 @@ inline profile_res_t request_with_transient_host (const trigger_options_t &optio
           .connect (channel_endpoint);
         if (!options.log_dir.empty ()) {
             framework.configure_dispatch ()
-              .message_flow (zlink::framework::message_flow_log_mode_t::key_transitions)
+              .message_flow (zlink::framework::message_flow_log_mode_t::normal)
               .trace_label (trace_label)
               .trace_log_file (options.log_dir + "/" + trace_label + "-flow.log");
         }

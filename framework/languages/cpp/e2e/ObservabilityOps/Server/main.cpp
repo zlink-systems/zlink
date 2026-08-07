@@ -59,7 +59,7 @@ struct server_options_t
                 .spot_pub_endpoint = section.get ("spotPubEndpoint").value_or (""),
                 .stream_endpoint = section.get ("streamEndpoint").value_or (""),
                 .log_dir = section.require ("logDir"),
-                .trace_mode = section.get ("traceMode").value_or ("key_transitions"),
+                .trace_mode = section.get ("traceMode").value_or ("normal"),
                 .metrics_enabled = section.get ("metrics").value_or ("on") != "off",
                 .room_timer_enabled = section.get ("roomTimer").value_or ("off") == "on"};
     }
@@ -715,7 +715,7 @@ int zlink::framework::e2e::observability_ops::server::run_host (host_role_t role
          * the received pair to the next hop. */
         framework.configure_dispatch ()
           .message_flow (options.trace_mode == "off" ? fw::message_flow_log_mode_t::off
-                                                     : fw::message_flow_log_mode_t::key_transitions)
+                                                     : fw::message_flow_log_mode_t::normal)
           .trace_log_file (options.log_dir + "/" + options.node_rid + "-flow.log")
           .trace_label ("cpp-obs-" + options.node_rid);
 

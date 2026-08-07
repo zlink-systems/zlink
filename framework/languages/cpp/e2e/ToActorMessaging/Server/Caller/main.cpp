@@ -407,7 +407,7 @@ int main (int argc, char **argv)
     app.add_zlink_framework ([configuration] (
                               zlink::framework::zlink_framework_options_t &framework) {
         framework.configure_dispatch ()
-          .message_flow (zlink::framework::message_flow_log_mode_t::key_transitions)
+          .message_flow (zlink::framework::message_flow_log_mode_t::normal)
           .trace_log_file (configuration.log_dir + "/caller-flow.log")
           .trace_label ("cpp-to-actor-caller");
         framework.services ().add_singleton<e2e::caller_configuration_t> (

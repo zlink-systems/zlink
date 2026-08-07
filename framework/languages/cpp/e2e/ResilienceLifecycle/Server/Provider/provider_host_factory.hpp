@@ -49,7 +49,7 @@ inline void configure_provider_host (zlink::framework::zlink_framework_options_t
                                      const provider_options_t &options)
 {
     framework.configure_dispatch ()
-      .message_flow (zlink::framework::message_flow_log_mode_t::key_transitions)
+      .message_flow (zlink::framework::message_flow_log_mode_t::normal)
       .trace_log_file (options.log_dir + "/" + options.rid + "-flow.log")
       .trace_label ("cpp-rl-" + options.rid);
     server::add_redis_location_store (framework, options.redis_endpoint, options.redis_key_prefix);
