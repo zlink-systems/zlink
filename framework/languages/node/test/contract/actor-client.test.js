@@ -70,7 +70,8 @@ const operationId = Object.freeze({ high: 1n, low: 2n });
 
 function completionTable(terminalResult, parts = []) {
   return {
-    async wait(actualOperationId) {
+    async submit(operation) {
+      const actualOperationId = operation();
       assert.deepEqual(actualOperationId, operationId);
       return {
         terminalResult,
@@ -188,7 +189,8 @@ test('actor client selects the MeshNode and completion table from the current Ac
   ]);
   const completions = new Map([
     ['mesh-a', {
-      async wait() {
+      async submit(operation) {
+        assert.deepEqual(operation(), operationId);
         selected.push('completion:mesh-a');
         return {
           terminalResult: RequestResult.Ok,
@@ -200,7 +202,8 @@ test('actor client selects the MeshNode and completion table from the current Ac
       }
     }],
     ['mesh-b', {
-      async wait() {
+      async submit(operation) {
+        assert.deepEqual(operation(), operationId);
         selected.push('completion:mesh-b');
         return {
           terminalResult: RequestResult.Ok,
