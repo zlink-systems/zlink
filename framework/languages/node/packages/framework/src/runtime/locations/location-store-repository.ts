@@ -336,7 +336,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         return { kind: 'stored', ...withoutKind };
       }
       if (mutation.kind === 'put' && mutation.generationTransition === 'newOwner') {
-        return await this.commitRelocationAuthority(
+        const committed = await this.commitRelocationAuthority(
           rowKey,
           current,
           record,
@@ -344,6 +344,8 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           mutation as NewOwnerAuthorityMutation,
           signal
         );
+        if (committed.kind === 'retry') continue;
+        return committed;
       }
       if (
         mutation.kind === 'restore'
@@ -553,7 +555,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     snapshot: ZLinkAuthoritySnapshot,
     mutation: NewOwnerAuthorityMutation,
     signal?: AbortSignal
-  ): Promise<ZLinkAuthorityCompareExchangeResult> {
+  ): Promise<ZLinkAuthorityCompareExchangeResult | { readonly kind: 'retry' }> {
     const targetOwner = mutation.targetOwner;
     const fence = mutation.relocationCapacityFence;
     if (targetOwner === undefined || fence === undefined) {
@@ -677,6 +679,15 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     }, signal);
     if (result.kind === 'conflict') {
       const latest = await this.readAuthority(request.authorityKey, signal);
+      if (
+        latest.kind === 'snapshot'
+        && latest.storeVersion.value === current.value.version.value
+      ) {
+        // Another relocation can update a shared capacity row without changing
+        // this authority. Re-read every dependency and retry that transaction;
+        // the caller should observe conflict only when this authority changed.
+        return { kind: 'retry' };
+      }
       return { kind: 'conflict', current: latest };
     }
     const storeVersion = result.putVersions.find(entry =>
