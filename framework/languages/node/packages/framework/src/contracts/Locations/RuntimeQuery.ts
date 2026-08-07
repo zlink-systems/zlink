@@ -10,7 +10,7 @@ import type {
 } from './Models';
 import type { ZLinkPlacementObjectKind } from './Authority';
 
-export type ZLinkLocationObjectState = 'creating' | 'ready';
+export type ZLinkLocationObjectState = 'creating' | 'ready' | 'unavailable';
 
 export interface ZLinkLocationObjectEntry {
   readonly globalId: string;
@@ -44,5 +44,13 @@ export interface ZLinkLocationRuntimeQuery {
     page?: ZLinkPageRequest,
     signal?: AbortSignal
   ): Promise<ZLinkLocationPage<ZLinkLocationServiceSummary>>;
+  findActorLocation(
+    actorId: import('../Common').ActorId,
+    signal?: AbortSignal
+  ): Promise<ZLinkLocationObjectEntry | undefined>;
+  findSpotLocation(
+    spotId: import('../Common').SpotId,
+    signal?: AbortSignal
+  ): Promise<ZLinkLocationObjectEntry | undefined>;
   listObjectLocations(filter: ZLinkLocationObjectFilter, page?: ZLinkPageRequest, signal?: AbortSignal): Promise<ZLinkLocationPage<ZLinkLocationObjectEntry>>;
 }

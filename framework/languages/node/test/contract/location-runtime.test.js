@@ -85,6 +85,70 @@ test('location runtime reclaims immediately after the Store rejects a stale owne
   assert.equal(runtime.lastError, undefined);
 });
 
+test('location runtime exact object queries preserve Ready rows as unavailable after owner loss', async () => {
+  const store = new internal.ZLinkInMemoryLocationStore();
+  const authorityStore = new internal.ZLinkInMemoryAuthorityStore({
+    isTargetLive: () => true
+  });
+  let monotonicMs = 0;
+  const runtime = runtimeFor(store, {
+    ownerId: 'owner-query',
+    authorityStore,
+    monotonicNowMs: () => monotonicMs
+  });
+  await runtime.start(rid('node-query'));
+  const target = {
+    meshName: 'play',
+    nodeRid: rid('node-query'),
+    nodeLifecycleGeneration: 1n,
+    owner: runtime.currentOwnerToken
+  };
+  const reserved = await authorityStore.reserve({
+    key: { kind: 'user_spot', globalId: 'spot-query' },
+    intent: {
+      stableType: 'player',
+      requestContentReference: 'request:spot-query',
+      requestSha256: Buffer.alloc(32, 1),
+      requestEncodedSize: 1n
+    },
+    target,
+    creatingPayload: Buffer.from('creating'),
+    capacity: {
+      actors: 0,
+      spots: 1,
+      spotType: { objectKind: 'user_spot', stableType: 'player', count: 1 }
+    }
+  });
+  assert.equal(reserved.kind, 'reserved');
+  const committed = await authorityStore.commit({
+    key: { kind: 'user_spot', globalId: 'spot-query' },
+    reservationId: reserved.reservationId,
+    expectedStoreVersion: reserved.creating.storeVersion.value,
+    target,
+    readyPayload: Buffer.from('ready')
+  });
+  assert.equal(committed.kind, 'committed');
+
+  assert.deepEqual(await runtime.findSpotLocation('spot-query'), {
+    globalId: 'spot-query',
+    objectGeneration: committed.ready.objectGeneration,
+    meshName: 'play',
+    nodeRid: rid('node-query'),
+    state: 'ready',
+    stableType: 'player'
+  });
+  assert.equal(await runtime.findActorLocation('missing'), undefined);
+
+  await store.releaseOwnerLease(runtime.currentOwnerToken);
+  monotonicMs = 6_000;
+  const unavailable = await runtime.findSpotLocation('spot-query');
+  assert.equal(unavailable.state, 'unavailable');
+  const page = await runtime.listObjectLocations({ objectKind: 'user_spot' });
+  assert.deepEqual(page.items.map((entry) => [entry.globalId, entry.state]), [
+    ['spot-query', 'unavailable']
+  ]);
+});
+
 test('location lifecycle reclaims tracked Spot and Actor rows after an owner lease generation change', async () => {
   const store = new internal.ZLinkInMemoryLocationStore();
   const runtime = runtimeFor(store, { ownerId: 'owner-a' });
@@ -1813,7 +1877,7 @@ function runtimeFor(store, options = {}) {
   return new internal.ZLinkLocationRuntime({
     stores: {
       locationStore: options.locationStore ?? store,
-      authorityStore: store,
+      authorityStore: options.authorityStore ?? store,
       peerStore: store,
       spotStore: store,
       actorStore: store,
@@ -1823,6 +1887,7 @@ function runtimeFor(store, options = {}) {
     ownerId: options.ownerId,
     events: options.events,
     options: options.locationOptions,
+    monotonicNowMs: options.monotonicNowMs,
     now: () => new Date(Date.UTC(2026, 6, 3, 0, 0, 0)),
     setTimer(callback, delayMs) {
       timers.push({ callback, delayMs });
