@@ -168,7 +168,8 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
             || cached.object_generation != expected.object_generation
             || cached.authority_owner_generation
                  != expected.authority_owner_generation
-            || cached.owner.owner_id != expected.owner.owner_id
+            || (!expected.owner.owner_id.empty ()
+                && cached.owner.owner_id != expected.owner.owner_id)
             || cached.owner.lease_generation
                  != expected.owner.lease_generation)
             return false;
@@ -247,7 +248,8 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
             || cached.object_generation != expected.object_generation
             || cached.authority_owner_generation
                  != expected.authority_owner_generation
-            || cached.owner.owner_id != expected.owner.owner_id
+            || (!expected.owner.owner_id.empty ()
+                && cached.owner.owner_id != expected.owner.owner_id)
             || cached.owner.lease_generation
                  != expected.owner.lease_generation)
             return false;
