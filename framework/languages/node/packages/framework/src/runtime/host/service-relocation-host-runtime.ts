@@ -130,6 +130,13 @@ import {
   type ServiceWireRelocationParticipant
 } from '../foundation/service-stateful-wire-codec';
 
+export class ZLinkRelocationStateIncompatibleError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ZLinkRelocationStateIncompatibleError';
+  }
+}
+
 const RELOCATION_MESSAGE_ESTIMATE_PER_UNIT = 64n;
 const RELOCATION_STRIPE_BYTES = 64 * 1024 * 1024;
 const RELOCATION_INGRESS_HOLD_BYTES = 16 * 1024 * 1024;
@@ -2823,7 +2830,9 @@ export class ZLinkHostServiceRelocationRuntime {
       await adapter.capture(value as never, signal ?? new AbortController().signal)
     );
     if (captured.byteLength > RELOCATION_STRIPE_BYTES) {
-      throw new Error('Relocation application state exceeds the 64 MiB participant limit.');
+      throw new ZLinkRelocationStateIncompatibleError(
+        'Relocation application state exceeds the 64 MiB participant limit.'
+      );
     }
     return captured;
   }

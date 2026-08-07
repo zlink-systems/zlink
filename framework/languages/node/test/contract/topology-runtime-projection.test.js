@@ -443,6 +443,30 @@ test('Relocate reports an irreversible descriptor rollback failure without claim
   assert.equal(host.status.state, framework.ZLinkFrameworkRuntimeState.Error);
 });
 
+test('Relocate preserves an incompatible participant state as StateIncompatible', async () => {
+  const host = new internal.ZLinkFrameworkRuntimeHost({
+    registration: internal.createFrameworkRegistration()
+  });
+  host.executionState = {};
+  host.runtimeState = framework.ZLinkFrameworkRuntimeState.Serving;
+  host.routeMeshCoordinator = {
+    async prepareHostRetire() { return 'prepared'; },
+    async relocateHost() {
+      throw new internal.ZLinkRelocationStateIncompatibleError(
+        'Relocation application state exceeds the 64 MiB participant limit.'
+      );
+    },
+    async restoreHostServing() {}
+  };
+
+  const result = await host.relocate({
+    mode: framework.ZLinkFrameworkRelocationMode.PlannedMaintenance
+  });
+  assert.equal(result.outcome, framework.ZLinkFrameworkRelocationOutcome.Blocked);
+  assert.equal(result.reason, framework.ZLinkFrameworkRelocationReason.StateIncompatible);
+  assert.equal(host.status.state, framework.ZLinkFrameworkRuntimeState.Serving);
+});
+
 test('Relocate spends one absolute deadline across preflight publication and resource movement', async () => {
   const host = new internal.ZLinkFrameworkRuntimeHost({
     registration: internal.createFrameworkRegistration()

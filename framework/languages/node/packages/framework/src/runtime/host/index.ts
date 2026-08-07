@@ -200,7 +200,10 @@ import {
   encodeFrameworkPayloadMessage
 } from '../messaging/payload-codec';
 import { DefaultZLinkRouteMeshRuntimeOptions } from './route-mesh-runtime-options';
-import { ZLinkHostServiceRelocationRuntime } from './service-relocation-host-runtime';
+import {
+  ZLinkHostServiceRelocationRuntime,
+  ZLinkRelocationStateIncompatibleError
+} from './service-relocation-host-runtime';
 import {
   ZLinkInboundDispatchBudget,
   resolveApplicationHwm
@@ -876,7 +879,9 @@ export class ZLinkFrameworkRuntimeHost implements
         effectiveTargetApplicationVersion,
         isDeadlineExceededError(error)
           ? ZLinkFrameworkRelocationReason.DeadlineExceeded
-          : ZLinkFrameworkRelocationReason.RelocationFailed
+          : error instanceof ZLinkRelocationStateIncompatibleError
+            ? ZLinkFrameworkRelocationReason.StateIncompatible
+            : ZLinkFrameworkRelocationReason.RelocationFailed
       );
       return error instanceof ZLinkRetiringRollbackError
         ? this.completeRelocation(result)
@@ -3127,6 +3132,9 @@ export {
   ZLinkRetiringRollbackError,
   ZLinkRouteMeshRuntimeCoordinator
 } from './route-mesh-runtime';
+export {
+  ZLinkRelocationStateIncompatibleError
+} from './service-relocation-host-runtime';
 export {
   ZLinkHostSpotAddressTransport,
   type ZLinkHostSpotAddressTransportOptions
