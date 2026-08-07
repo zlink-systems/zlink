@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src" / "zlink"
 
 
-def test_ffi_layouts_are_the_core_11_layouts():
+def test_ffi_layouts_are_the_core_0_10_1_layouts():
     assert (ctypes.sizeof(ZlinkMsg), ctypes.alignment(ZlinkMsg)) == (64, 8)
     assert (ctypes.sizeof(ZlinkRoutingId), ctypes.alignment(ZlinkRoutingId)) == (256, 1)
     assert (ctypes.sizeof(ZlinkMonitorStatus), ctypes.alignment(ZlinkMonitorStatus)) == (232, 8)
@@ -95,7 +95,7 @@ def test_package_platform_policy_is_explicit_linux_x86_64_only():
     } == {
         "linux-x86_64/libzlink.so",
         "linux-x86_64/libzlink.so.0",
-        "linux-x86_64/libzlink.so.0.11.0",
+        "linux-x86_64/libzlink.so.0.10.1",
     }
 
 

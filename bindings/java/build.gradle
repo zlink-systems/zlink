@@ -4,7 +4,7 @@ plugins {
 }
 
 group = 'systems.zlink'
-version = '0.11.0'
+version = '0.10.1'
 description = 'zlink Java bindings — high-performance async messaging library'
 
 java {
@@ -40,7 +40,7 @@ def bridgeOutputDir = layout.buildDirectory.dir(
 ['apiElements', 'runtimeElements'].each { configurationName ->
     configurations.named(configurationName) {
         attributes {
-            attribute(Attribute.of('systems.zlink.core.version', String), '0.11.0')
+            attribute(Attribute.of('systems.zlink.core.version', String), '0.10.1')
             attribute(Attribute.of('systems.zlink.core.soname', String),
                 'libzlink.so.0')
             attribute(Attribute.of('systems.zlink.core.provenance-sha256', String),
@@ -91,7 +91,7 @@ tasks.register('buildZlinkJavaBridge', Exec) {
     doFirst {
         if (corePackagePrefix == null || !corePackagePrefix.isAbsolute()) {
             throw new GradleException(
-                'ZLINK_CORE_PACKAGE_PREFIX must name an absolute Core 0.11.0 install prefix')
+                'ZLINK_CORE_PACKAGE_PREFIX must name an absolute Core 0.10.1 install prefix')
         }
         def includeDir = new File(corePackagePrefix, 'include')
         def linkDir = new File(corePackagePrefix, 'lib')
@@ -117,11 +117,11 @@ tasks.register('buildZlinkJavaBridge', Exec) {
             .digest(manifest.bytes).encodeHex().toString()
         def runtimeSha256 = java.security.MessageDigest.getInstance('SHA-256')
             .digest(runtime.bytes).encodeHex().toString()
-        if (metadata.version != '0.11.0') {
-            throw new GradleException('Core package must report version 0.11.0')
+        if (metadata.version != '0.10.1') {
+            throw new GradleException('Core package must report version 0.10.1')
         }
         def approved = approvedCorePackage
-        if (approved != null && (approved.version != '0.11.0'
+        if (approved != null && (approved.version != '0.10.1'
             || approved.prefix != corePackagePrefix.canonicalPath
             || approved.provenanceSha256 != manifestSha256
             || approved.runtime.sha256 != runtimeSha256
@@ -249,7 +249,7 @@ publishing {
                     }
                 }
                 properties = [
-                    'zlink.core.version': '0.11.0',
+                    'zlink.core.version': '0.10.1',
                     'zlink.core.soname': 'libzlink.so.0',
                     'zlink.core.abi-major': '0',
                     'zlink.core.provenance-sha256':

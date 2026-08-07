@@ -10,7 +10,7 @@ usage() {
   cat <<'EOF'
 Usage: build-wsl.sh [--core-prefix ABSOLUTE_DIR]
 
-Publishes systems.zlink:zlink:0.11.0 to the local Maven repository.
+Publishes systems.zlink:zlink:0.10.1 to the local Maven repository.
 EOF
 }
 

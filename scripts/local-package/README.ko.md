@@ -1,7 +1,7 @@
 # Local package
 
 이 디렉터리는 외부 registry에 publish하지 않고 Core와 first-party binding을
-같은 `0.11.0` source 기준으로 빌드하는 경로다. 기본 출력은
+같은 `0.10.1` source 기준으로 빌드하는 경로다. 기본 출력은
 `.artifacts/wsl/` 아래에 생성된다.
 
 ## 전체 빌드
@@ -29,36 +29,36 @@ scripts/local-package/core/build-wsl.sh \
 Core local package는 다음 구조를 사용한다.
 
 ```text
-.artifacts/wsl/install/zlink-core/0.11.0/
+.artifacts/wsl/install/zlink-core/0.10.1/
   include/
   lib/libzlink.so
   lib/libzlink.so.0
-  lib/libzlink.so.0.11.0
+  lib/libzlink.so.0.10.1
   share/zlink/core-package-provenance.json
 ```
 
-`0.11.0`은 release/package version이다. native runtime의 SONAME도 같은
+`0.10.1`은 release/package version이다. native runtime의 SONAME도 같은
 release line에 맞춰 `libzlink.so.0`으로 생성한다. 외부 dependency의 버전은
 이 정책의 대상이 아니다.
 
 ## binding별 출력
 
-- C: `.artifacts/wsl/c/zlink-c-0.11.0.tar.gz`
-- C++: `.artifacts/wsl/install/zlink-cpp/0.11.0/`
-- .NET: `.artifacts/wsl/nuget/Systems.Zlink.0.11.0.nupkg`
-- Go: `.artifacts/wsl/go/zlink-go-0.11.0.tar.gz`
-- Java: `.artifacts/wsl/maven/systems/zlink/zlink/0.11.0/`
-- Node.js: `.artifacts/wsl/npm/zlink-systems-zlink-0.11.0.tgz`
-- Python: `.artifacts/wsl/python/zlink-0.11.0-*.whl` 및 source archive
-- Rust: `.artifacts/wsl/rust/zlink-0.11.0.crate`
+- C: `.artifacts/wsl/c/zlink-c-0.10.1.tar.gz`
+- C++: `.artifacts/wsl/install/zlink-cpp/0.10.1/`
+- .NET: `.artifacts/wsl/nuget/Systems.Zlink.0.10.1.nupkg`
+- Go: `.artifacts/wsl/go/zlink-go-0.10.1.tar.gz`
+- Java: `.artifacts/wsl/maven/systems/zlink/zlink/0.10.1/`
+- Node.js: `.artifacts/wsl/npm/zlink-systems-zlink-0.10.1.tgz`
+- Python: `.artifacts/wsl/python/zlink-0.10.1-*.whl` 및 source archive
+- Rust: `.artifacts/wsl/rust/zlink-0.10.1.crate`
 
 Go의 public module path는 `zlink.systems/zlink`이며, release version과
 import path를 분리한다. 모든 binding package는 Core provenance에 기록된
-`0.11.0` runtime과 public header를 사용한다.
+`0.10.1` runtime과 public header를 사용한다.
 
 ## Core runtime 동기화
 
-`native/sync-local-core-libs.sh`는 `core/build/lib`의 현재 `0.11.0` runtime과
+`native/sync-local-core-libs.sh`는 `core/build/lib`의 현재 `0.10.1` runtime과
 `core/include`를 binding 작업 디렉터리에 복사한다.
 
 ```bash

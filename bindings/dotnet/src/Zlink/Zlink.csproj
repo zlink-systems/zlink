@@ -4,7 +4,7 @@
         <Nullable>enable</Nullable>
         <ImplicitUsings>enable</ImplicitUsings>
         <GenerateDocumentationFile>true</GenerateDocumentationFile>
-        <Version>0.11.0</Version>
+        <Version>0.10.1</Version>
         <AssemblyName>Systems.Zlink</AssemblyName>
         <PackageId>Systems.Zlink</PackageId>
         <RootNamespace>Systems.Zlink</RootNamespace>
@@ -28,16 +28,16 @@
     </ItemGroup>
     <Target Name="ValidateCorePackageInput" BeforeTargets="Pack">
         <Error Condition="'$(ZLinkLinuxX64NativeRoot)' == ''"
-               Text="ZLinkLinuxX64NativeRoot must identify the approved Core 0.11.0 package lib directory." />
+               Text="ZLinkLinuxX64NativeRoot must identify the approved Core 0.10.1 package lib directory." />
         <Error Condition="'$(ZLinkCoreVersion)' == ''"
-               Text="ZLinkCoreVersion must identify the approved Core 0.11.0 package version." />
+               Text="ZLinkCoreVersion must identify the approved Core 0.10.1 package version." />
         <Error Condition="'$(ZLinkCoreProvenancePath)' == '' Or !Exists('$(ZLinkCoreProvenancePath)')"
-               Text="ZLinkCoreProvenancePath must identify the approved Core 0.11.0 package provenance." />
+               Text="ZLinkCoreProvenancePath must identify the approved Core 0.10.1 package provenance." />
         <Error Condition="!Exists('$(ZLinkLinuxX64NativeRoot)\libzlink.so')"
-               Text="The approved Core 0.11.0 package is missing libzlink.so." />
+               Text="The approved Core 0.10.1 package is missing libzlink.so." />
         <Error Condition="!Exists('$(ZLinkLinuxX64NativeRoot)\libzlink.so.0')"
-               Text="The approved Core 0.11.0 package is missing libzlink.so.0." />
+               Text="The approved Core 0.10.1 package is missing libzlink.so.0." />
         <Error Condition="!Exists('$(ZLinkLinuxX64NativeRoot)\libzlink.so.$(ZLinkCoreVersion)')"
-               Text="The approved Core 0.11.0 package is missing its exact versioned runtime." />
+               Text="The approved Core 0.10.1 package is missing its exact versioned runtime." />
     </Target>
 </Project>

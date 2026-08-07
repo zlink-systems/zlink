@@ -11,7 +11,7 @@ usage() {
   cat <<'EOF'
 Usage: build-wsl.sh [--core-prefix ABSOLUTE_DIR]
 
-Builds and packs @zlink-systems/zlink@0.11.0 with the Core 0.11.0 native
+Builds and packs @zlink-systems/zlink@0.10.1 with the Core 0.10.1 native
 runtime. The native ABI SONAME is libzlink.so.0.
 EOF
 }

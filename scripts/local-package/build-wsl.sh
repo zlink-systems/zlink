@@ -12,7 +12,7 @@ usage() {
 Usage: build-wsl.sh [core] [c] [cpp] [dotnet] [go] [java] [node] [python] [rust]
 
 With no language arguments, builds Core and all eight first-party bindings at
-version 0.11.0 into .artifacts/wsl. External package registries are not used.
+version 0.10.1 into .artifacts/wsl. External package registries are not used.
 EOF
 }
 

@@ -13,6 +13,6 @@
   "dependencies": {
     "@opentelemetry/api": "^1.9.1",
     "@zlink-systems/stream-wire": "0.10.0",
-    "@zlink-systems/zlink": "0.11.0"
+    "@zlink-systems/zlink": "0.10.1"
   }
 }
