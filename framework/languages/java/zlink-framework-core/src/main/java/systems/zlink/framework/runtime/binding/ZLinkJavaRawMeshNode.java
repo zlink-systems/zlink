@@ -122,6 +122,14 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         ConcurrentHashMap.newKeySet();
     private final java.util.Set<RoutingId> disconnectedPeers =
         ConcurrentHashMap.newKeySet();
+    private final java.util.Set<RoutingId> rejectedPeers =
+        ConcurrentHashMap.newKeySet();
+    private final java.util.Set<Long> closedPeerIntents =
+        ConcurrentHashMap.newKeySet();
+    private final java.util.Set<Long> livePeerIntents =
+        ConcurrentHashMap.newKeySet();
+    private final Map<Long, RoutingId> peerIntentRoutingIds =
+        new ConcurrentHashMap<>();
     private final Map<RoutingId, AutomaticNotRequiredPeer>
         automaticNotRequiredPeers = new ConcurrentHashMap<>();
     private final AtomicLong nextIntent = new AtomicLong(1);
@@ -762,21 +770,90 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 expectedLifecycleGeneration,
                 expectedSecurityIdentity,
                 System.currentTimeMillis()));
+        closedPeerIntents.remove(intent);
+        livePeerIntents.remove(intent);
+        peerIntentRoutingIds.remove(intent);
         if (expectedRoutingId != null) {
+            rejectedPeers.remove(expectedRoutingId);
             nextAnnouncementNanos.put(expectedRoutingId, 0L);
         }
         return intent;
     }
 
     @Override
+    public long replacePeerConnection(
+        String endpoint,
+        RoutingId expectedRoutingId,
+        long expectedLifecycleGeneration,
+        String expectedSecurityIdentity) {
+        requireStarted();
+        if (endpoint == null || endpoint.isBlank()) {
+            throw new IllegalArgumentException("peer endpoint is required");
+        }
+        if (expectedLifecycleGeneration < 0) {
+            throw new IllegalArgumentException(
+                "expected lifecycle generation must not be negative");
+        }
+        List<Long> staleIntentIds = peerIntents.entrySet().stream()
+            .filter(entry -> endpoint.equals(entry.getValue().endpoint()))
+            .map(Map.Entry::getKey)
+            .toList();
+        for (long staleIntentId : staleIntentIds) {
+            if (!peerIntentIsClosed(staleIntentId)) {
+                requestPeerIntentClose(staleIntentId);
+                throw new IllegalStateException(
+                    "previous peer connection has not completed liveness close");
+            }
+        }
+        staleIntentIds.forEach(this::removePeerConnection);
+        return connectPeer(
+            endpoint,
+            expectedRoutingId,
+            expectedLifecycleGeneration,
+            expectedSecurityIdentity);
+    }
+
+    private boolean peerIntentIsClosed(long connectionIntentId) {
+        PeerIntent intent = peerIntents.get(connectionIntentId);
+        return intent == null
+            || closedPeerIntents.contains(connectionIntentId)
+            || !livePeerIntents.contains(connectionIntentId);
+    }
+
+    boolean hasLivePeerIntent(String endpoint) {
+        return peerIntents.entrySet().stream()
+            .filter(entry -> endpoint.equals(entry.getValue().endpoint()))
+            .anyMatch(entry -> livePeerIntents.contains(entry.getKey()));
+    }
+
+    private void requestPeerIntentClose(long connectionIntentId) {
+        PeerIntent intent = peerIntents.get(connectionIntentId);
+        RouterSocket current = router;
+        if (intent == null || current == null) {
+            return;
+        }
+        try {
+            current.disconnect(intent.endpoint());
+            closedPeerIntents.add(connectionIntentId);
+            livePeerIntents.remove(connectionIntentId);
+        } catch (RuntimeException ignored) {
+            // The monitor event remains the authoritative liveness close.
+        }
+    }
+
+    @Override
     public void removePeerConnection(long connectionIntentId) {
         PeerIntent removed = peerIntents.remove(connectionIntentId);
+        closedPeerIntents.remove(connectionIntentId);
+        livePeerIntents.remove(connectionIntentId);
+        peerIntentRoutingIds.remove(connectionIntentId);
         if (removed != null && router != null) {
             if (removed.expectedRoutingId() != null) {
                 admittedPeerChannels.remove(removed.expectedRoutingId());
                 admittedPeerObjectRoles.remove(removed.expectedRoutingId());
                 notRequiredPeers.remove(removed.expectedRoutingId());
                 disconnectedPeers.remove(removed.expectedRoutingId());
+                rejectedPeers.remove(removed.expectedRoutingId());
                 nextAnnouncementNanos.remove(removed.expectedRoutingId());
                 String connectionId =
                     connectionIds.remove(removed.expectedRoutingId());
@@ -865,6 +942,9 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                     : notRequiredPeers.contains(
                         entry.getValue().expectedRoutingId())
                         ? MeshPeerState.NOT_REQUIRED
+                        : rejectedPeers.contains(
+                            entry.getValue().expectedRoutingId())
+                        ? MeshPeerState.ERROR
                         : disconnectedPeers.contains(
                             entry.getValue().expectedRoutingId())
                             ? MeshPeerState.CLOSED
@@ -5298,6 +5378,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             PeerIntent expected = findExpectedPeer(
                 inbound.source(),
                 descriptor.advertisedEndpoint());
+            rememberPeerIntentRoutingId(expected, inbound.source());
             PeerAdmissionExpectation observed =
                 peerAdmissionExpectations.get(inbound.source());
             boolean manualExpectation = expected != null
@@ -5322,6 +5403,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                     expectedSecurityIdentity,
                     expectedLifecycleGeneration,
                     descriptor)) {
+                rejectedPeers.add(inbound.source());
                 trySendAdmissionControl(
                     inbound.source(),
                     List.of(wire.encodeReject(3)),
@@ -5375,6 +5457,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             if (admitted
                 == ZLinkServiceTopologyRegistry.AdmissionResult
                     .DUPLICATE_REJECTED) {
+                rejectedPeers.add(inbound.source());
                 trySendAdmissionControl(
                     inbound.source(),
                     List.of(wire.encodeReject(3)),
@@ -5383,6 +5466,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             }
             if (admitted
                 != ZLinkServiceTopologyRegistry.AdmissionResult.ADMITTED) {
+                rejectedPeers.add(inbound.source());
                 trySendAdmissionControl(
                     inbound.source(),
                     List.of(wire.encodeReject(3)),
@@ -5390,6 +5474,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 return;
             }
             pendingAdmissionControls.removeTarget(inbound.source());
+            rejectedPeers.remove(inbound.source());
             if (command != ServiceWireConstants.COMMAND_UPDATE
                 || !connectionId.equals(previousConnectionId)) {
                 admissionControlReadyConnections.remove(inbound.source());
@@ -5664,6 +5749,10 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         while ((event = monitorEvents.poll()) != null) {
             Optional<RoutingId> peer = event.routingId();
             if (peer.isEmpty()) {
+                if (event.event() == MonitorEventType.DISCONNECTED
+                    || event.event() == MonitorEventType.CLOSED) {
+                    markPeerIntentsClosed(event, null);
+                }
                 continue;
             }
             streamTrace("transport-event event=" + event.event()
@@ -5677,6 +5766,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 + " remote=" + event.remoteAddr());
             if (event.event() == MonitorEventType.CONNECTION_READY) {
                 RoutingId peerRid = peer.orElseThrow();
+                markPeerIntentsActive(event, peerRid);
                 ZLinkServiceAdmissionGuard.ConnectionDirection direction =
                     monitorConnectionDirection(event, peerRid);
                 String registeredId =
@@ -5694,6 +5784,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 nextAnnouncementNanos.put(peer.orElseThrow(), 0L);
             } else if (event.event() == MonitorEventType.DISCONNECTED
                 || event.event() == MonitorEventType.CLOSED) {
+                markPeerIntentsClosed(event, peer.orElseThrow());
                 String disconnectedId = removeTransportConnection(event);
                 discardPendingConnectionId(disconnectedId);
                 if (disconnectedId == null) {
@@ -5708,6 +5799,64 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 nextAnnouncementNanos.put(peer.orElseThrow(), 0L);
             }
         }
+    }
+
+    private void markPeerIntentsActive(
+        MonitorEvent event,
+        RoutingId peerRid) {
+        peerIntents.forEach((intentId, intent) -> {
+            if (matchesMonitorPeer(intentId, intent, event, peerRid)) {
+                closedPeerIntents.remove(intentId);
+                livePeerIntents.add(intentId);
+            }
+        });
+    }
+
+    private void markPeerIntentsClosed(
+        MonitorEvent event,
+        RoutingId peerRid) {
+        peerIntents.forEach((intentId, intent) -> {
+            if (matchesMonitorPeer(intentId, intent, event, peerRid)) {
+                closedPeerIntents.add(intentId);
+                livePeerIntents.remove(intentId);
+            }
+        });
+    }
+
+    private void rememberPeerIntentRoutingId(
+        PeerIntent expected,
+        RoutingId peerRid) {
+        if (expected == null) {
+            return;
+        }
+        peerIntents.forEach((intentId, intent) -> {
+            if (intent == expected) {
+                peerIntentRoutingIds.put(intentId, peerRid);
+                livePeerIntents.add(intentId);
+            }
+        });
+    }
+
+    private boolean matchesMonitorPeer(
+        long intentId,
+        PeerIntent intent,
+        MonitorEvent event,
+        RoutingId peerRid) {
+        if (peerRid != null
+            && (peerRid.equals(intent.expectedRoutingId())
+                || peerRid.equals(peerIntentRoutingIds.get(intentId)))) {
+            return true;
+        }
+        if (!event.remoteAddr().isBlank()
+            && event.remoteAddr().equals(intent.endpoint())) {
+            return true;
+        }
+        return event.localAddr().isBlank()
+            && event.remoteAddr().isBlank()
+            && intent.expectedRoutingId() == null
+            && peerIntents.values().stream()
+                .filter(candidate -> candidate.expectedRoutingId() == null)
+                .count() == 1;
     }
 
     private void announceExpectedPeers(long nowNanos) {

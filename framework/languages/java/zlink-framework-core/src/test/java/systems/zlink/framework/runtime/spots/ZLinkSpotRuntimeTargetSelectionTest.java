@@ -1,12 +1,15 @@
 package systems.zlink.framework.runtime.spots;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Consumer;
 import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.locations.ZLinkActivationConcurrency;
@@ -17,6 +20,11 @@ import systems.zlink.framework.locations.ZLinkObjectMaintenancePolicyKind;
 import systems.zlink.framework.locations.ZLinkPlacementCapacity;
 import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
+import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
+import systems.zlink.framework.runtime.internal.binding.spot.MeshNodeState;
+import systems.zlink.framework.runtime.internal.binding.spot.MeshNodeStatus;
+import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerEntry;
+import systems.zlink.framework.runtime.internal.backend.ZLinkMeshDispatchRecord;
 import systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptor;
 
 final class ZLinkSpotRuntimeTargetSelectionTest {
@@ -53,6 +61,26 @@ final class ZLinkSpotRuntimeTargetSelectionTest {
         assertEquals(candidates, selected);
     }
 
+    @Test
+    void manualObjectPeerReplacementCarriesTheDescriptorFence() {
+        ZLinkMeshNodeDescriptor target = descriptor(CONNECTED, 1);
+        RecordingMeshNode source = new RecordingMeshNode();
+
+        ZLinkSpotRuntime.ManualObjectPeerIntent intent =
+            ZLinkSpotRuntime.ensureManualObjectPeerIntent(
+                source,
+                target,
+                null)
+                .orElseThrow();
+
+        assertTrue(source.replaced);
+        assertEquals(target.endpoint(), source.endpoint);
+        assertEquals(target.rid(), source.routingId);
+        assertEquals(target.lifecycleGeneration(), source.lifecycleGeneration);
+        assertEquals(target.securityIdentity(), source.securityIdentity);
+        assertEquals(source.intentId, intent.connectionIntentId());
+    }
+
     private static ZLinkMeshNodeDescriptor descriptor(
         RoutingId rid,
         int placementWeight) {
@@ -84,5 +112,61 @@ final class ZLinkSpotRuntimeTargetSelectionTest {
             "owner",
             1,
             NOW);
+    }
+
+    private static final class RecordingMeshNode implements ZLinkInternalMeshNode {
+        private final RoutingId localRid = RoutingId.from("source-node");
+        private String endpoint;
+        private RoutingId routingId;
+        private long lifecycleGeneration;
+        private String securityIdentity;
+        private long intentId;
+        private boolean replaced;
+
+        @Override public String name() { return "source"; }
+        @Override public void setBind(String value) { }
+        @Override public void addChannel(String value) { }
+        @Override public void setChannelWeight(String value, int weight) { }
+        @Override public void setRoutingId(RoutingId value) { }
+        @Override public void start() { }
+        @Override public long connectPeer(String value) { return 1L; }
+        @Override public long connectPeer(String value, RoutingId expected) {
+            return 1L;
+        }
+        @Override public long replacePeerConnection(
+            String value,
+            RoutingId expected,
+            long generation,
+            String security) {
+            endpoint = value;
+            routingId = expected;
+            lifecycleGeneration = generation;
+            securityIdentity = security;
+            intentId = 11L;
+            replaced = true;
+            return intentId;
+        }
+        @Override public MeshNodeStatus status() {
+            return new MeshNodeStatus(
+                MeshNodeState.READY,
+                localRid,
+                "mesh",
+                "inproc://source",
+                1L,
+                1L,
+                1,
+                1,
+                1,
+                0,
+                0L,
+                0L,
+                0L,
+                0,
+                0L);
+        }
+        @Override public List<MeshPeerEntry> peers() { return List.of(); }
+        @Override public List<Long> connectionIntentIds() { return List.of(); }
+        @Override public void startDispatch(Consumer<ZLinkMeshDispatchRecord> receiver) { }
+        @Override public void close() { }
     }
 }

@@ -39,6 +39,40 @@ zlink_sample_print_logs() {
   fi
 }
 
+zlink_sample_verify_framework_termination() {
+  local log_dir="$1"
+  [[ -n "${log_dir}" ]] || return 0
+  local found_log=0
+  local failed=0
+  for log_file in "${log_dir}"/*.log; do
+    [[ -f "${log_file}" ]] || continue
+    case "$(basename "${log_file}")" in
+      build.log|client.log|*-client.log|api.log|play.log|flow-*.log)
+        continue
+        ;;
+    esac
+    if ! grep -q 'ZLINK_FRAMEWORK_READY' "${log_file}"; then
+      continue
+    fi
+    found_log=1
+    if ! grep -q \
+        'ZLINK_FRAMEWORK_TERMINATION outcome=STOPPED reason=NONE' \
+        "${log_file}"; then
+      echo "Framework termination did not complete cleanly: ${log_file}" >&2
+      rg 'ZLINK_FRAMEWORK_TERMINATION' "${log_file}" || true
+      failed=1
+    fi
+  done
+  if [[ "${found_log}" == "0" ]]; then
+    echo "No Framework READY log was found; termination marker is missing: ${log_dir}" >&2
+    return 1
+  fi
+  if [[ "${failed}" != "0" ]]; then
+    return 1
+  fi
+  return 0
+}
+
 cleanup() {
   local status="$?"
   local cleanup_status=0
@@ -62,8 +96,8 @@ cleanup() {
     done
     local any_alive=1
     # Runtime drain uses the public 30-second deadline and may then finish its
-    # bounded owner/resource cleanup. Keep the runner order-neutral and allow
-    # enough time to observe that cleanup before using SIGKILL.
+    # bounded owner/resource cleanup. The default 90-second observation window
+    # must complete before the runner uses SIGKILL.
     for _ in $(seq 1 "${ZLINK_SAMPLE_CLEANUP_WAIT_ATTEMPTS:-900}"); do
       any_alive=0
       for pid in "${zlink_sample_pids[@]}"; do
@@ -111,6 +145,11 @@ cleanup() {
     if [[ "${force_killed}" == "1" && "${cleanup_status}" == "0" ]]; then
       echo "Sample cleanup exceeded the graceful shutdown deadline." >&2
       cleanup_status=1
+    fi
+    if [[ "${status}" == "0" && "${cleanup_status}" == "0" ]]; then
+      if ! zlink_sample_verify_framework_termination "${log_dir:-}"; then
+        cleanup_status=1
+      fi
     fi
   fi
   if [[ -n "${redis_container_id:-}" ]]; then

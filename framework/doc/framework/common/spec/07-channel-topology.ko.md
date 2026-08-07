@@ -485,6 +485,11 @@ expected 값에 descriptor의 RID, 양수 lifecycle generation과 security ident
 endpoint와 RID만 전달해 generation `0`을 사용하거나 RID를 security identity처럼 사용하는
 fallback은 descriptor 기반 연결에 사용하지 않는다. descriptor를 찾지 못한 수동 연결은
 descriptor 기반 placement를 주장하지 않고 등록된 endpoint와 handshake 결과만 따른다.
+Object role이 활성화된 MeshNode도 descriptor가 아직 없을 때 endpoint-only intent를 먼저 등록한다.
+이후 Location Store에 일치하는 descriptor가 나타나면 host·Spot runtime이 그 intent를 새 descriptor
+값으로 교체할 수 있다. 교체는 endpoint, RID, 양수 lifecycle generation과 security identity를 모두
+전달하며, 이전 endpoint intent가 liveness close로 닫히기 전에는 새 intent를 설치하지 않는다.
+descriptor가 없는 동안에는 이 경로도 placement owner라고 주장하지 않는다.
 
 Automatic에서도 연결 경합이나 오래된 discovery snapshot 때문에 중복 후보가 생기면
 같은 admission 규칙을 적용한다. 이 안전장치는 automatic initiator 선택을 대신하지

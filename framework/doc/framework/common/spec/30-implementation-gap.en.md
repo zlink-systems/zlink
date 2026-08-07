@@ -10,16 +10,17 @@ interface; this document alone does not mark another feature complete.
 
 ## 1. Review scope
 
-This record covers the JVM Java/Kotlin Framework's Location Store-backed object-peer
+The JVM section above covers the Java/Kotlin Framework's Location Store-backed object-peer
 connection and the TicTacToe sample execution path. A manual endpoint is connection intent;
 the lifecycle generation and security identity supplied by a descriptor must be carried as
-the runtime admission fence.
+the runtime admission fence. The Node.js section below is an independent review record and is not
+part of the JVM conclusion or the JVM gap-closure scope.
 
 ## 2. Closed implementation difference
 
 | Item | Target | Previous implementation | Result | Status |
 |---|---|---|---|---|
-| `JVM-TOPO-001` | The peer handshake in `07-channel-topology` and the Java/Kotlin runtime | `connectManualObjectPeers` and `ensureManualObjectPeer` passed only the endpoint and RID, so they used lifecycle generation `0` and an RID-based security-identity fallback. | Both owner-layer paths pass the descriptor's endpoint, RID, lifecycle generation, and security identity to extended `connectPeer`. | closed |
+| `JVM-TOPO-001` | The peer handshake in `07-channel-topology` and the Java/Kotlin runtime | The Object-role paths did not manage the endpoint-only intent before a descriptor appeared and the closure of the previous connection when a descriptor returned as one lifecycle. | MeshNode startup creates the endpoint-only intent; host, auto-connect, and Spot paths pass the descriptor's endpoint, RID, lifecycle generation, and security identity through `replacePeerConnection`. Replacement is withheld until the previous intent is closed by liveness. | closed |
 
 The change does not add fence values to sample call sites. The application keeps using the
 existing public manual-endpoint API, while the runtime owns the match between the descriptor
@@ -27,9 +28,11 @@ and the transport.
 
 ## 3. Verification evidence
 
-- The Java raw-binding regression confirms that a peer intent with the wrong lifecycle
-  generation/security identity is not admitted, and that reconnecting with the descriptor
-  values is admitted.
+- The Java raw-binding regression independently rejects a wrong lifecycle generation and a wrong
+  security identity, rejects replacement while the endpoint-only intent is live, and admits the
+  descriptor values after the previous node closes. `ZLinkMeshNodeRuntimeTest`, the host manual-peer
+  test, and the Spot descriptor-fence test verify that the three owner paths call the same replacement
+  contract.
 - The Java raw regression passed with:
   `cd framework/languages/java && ./gradlew --no-daemon --no-parallel :zlink-framework-core:test --tests '*ZLinkJavaRawMeshNodeM6ATest' --tests '*ZLinkActorCreationCoordinatorTargetSelectionTest'`.
 - The Java aggregate passed with the following command. After the preflight gates, the real
@@ -47,13 +50,13 @@ and the transport.
 ## 4. Runtime shutdown and the sample-runner boundary
 
 The common shutdown spec applies the public 30-second drain deadline first and allows bounded
-teardown after that deadline. The current JVM host runtime follows that order for resource
-cleanup, so a sample runner that force-stops a process at 30 seconds can confuse sample results
-with runtime teardown results. The common runner and the Java `DeliveryDispatch` runner now
-observe this bounded cleanup for up to 90 seconds before using `SIGKILL`. A forced kill or cleanup
-failure is returned as non-zero instead of being hidden as a successful sample. The 90 seconds is
-the sample runner's observation limit; it is not a change to the Framework public shutdown
-deadline.
+teardown after that deadline. A successful JVM lifecycle records
+`ZLINK_FRAMEWORK_TERMINATION outcome=STOPPED reason=NONE`. If a Framework log contains the READY
+marker but lacks this final marker, or records `FORCE_STOPPED`, a deadline overrun, or teardown
+failure, the common runner and the Java `DeliveryDispatch` runner do not treat the sample as
+successful. Both runners observe bounded cleanup for up to 90 seconds before using `SIGKILL`. The
+90 seconds is the sample runner's observation limit; it is not a change to the Framework public
+shutdown deadline.
 
 ## 5. Boundary of this decision
 

@@ -55,13 +55,15 @@ descriptor와 매칭해 object peer를 보강하는 순간에는 이 네 값 중
 transport로 모두 전달해야 한다. 정식 계약은 [RouteMesh topology](../spec/07-channel-topology.ko.md)의
 peer handshake가 소유한다.
 
-현재 JVM 경로에서 `ZLinkFrameworkRuntime.connectManualObjectPeers`와
-`ZLinkSpotRuntime.ensureManualObjectPeer`가 descriptor를 찾은 뒤
-`connectPeer(endpoint, rid, lifecycleGeneration, securityIdentity)`를 호출한다.
-`ZLinkJavaRawMeshNode`는 이 값을 `PeerIntent`에 보관해 admission에서 비교한다.
-이전의 endpoint·RID 두 인자 경로는 lifecycle generation을 `0`으로, security identity를
-RID 문자열로 대체하므로 descriptor 기반 연결에 사용할 수 없다. 호출자가 generation이나
-security identity를 직접 설정하는 우회는 허용하지 않는다.
+현재 JVM 경로는 MeshNode 시작 시 object role과 관계없이 manual endpoint-only intent를 먼저
+등록한다. `ZLinkFrameworkRuntime.connectManualObjectPeers`,
+`ZLinkLocationAutoConnectHost.MeshNodeExecutor`와 `ZLinkSpotRuntime.ensureManualObjectPeer`가
+descriptor를 찾으면 `replacePeerConnection(endpoint, rid, lifecycleGeneration,
+securityIdentity)`를 호출한다. 교체 경로는 이전 intent의 transport liveness close를 확인할 때까지
+새 intent를 설치하지 않는다. `ZLinkJavaRawMeshNode`는 각 intent와 실제 peer routing ID, close
+상태를 보관하고 admission fence와 liveness event를 함께 처리한다. descriptor를 찾지 못한
+endpoint-only intent는 placement를 주장하지 않는다. 호출자가 generation이나 security identity를
+직접 설정하는 우회는 허용하지 않는다.
 
 ## 2. 이동과 캐시가 만나는 지점 — 성능 절벽
 

@@ -160,6 +160,8 @@ public final class ZLinkSpotRuntime
     private final ZLinkChannelRuntime channels;
     private final List<ChannelRegistration> routeMeshChannels = new ArrayList<>();
     private final Set<RoutingId> manualRouterPeerNodeRids = ConcurrentHashMap.newKeySet();
+    private final Map<RoutingId, ManualObjectPeerIntent> manualObjectPeerIntents =
+        new ConcurrentHashMap<>();
     private final Set<RoutingId> autoConnectedRouterPeerNodeRids = ConcurrentHashMap.newKeySet();
     private final Map<String, ZLinkInstanceSpotActivation>
         instanceSpotActivations = new ConcurrentHashMap<>();
@@ -1094,13 +1096,49 @@ public final class ZLinkSpotRuntime
             .flatMap(node -> node.peers().stream())
             .anyMatch(peer -> peer.expectedRoutingId() == null
                 && peer.endpoint().equals(target.endpoint()));
-        if (configured
-            && manualRouterPeerNodeRids.add(target.rid())) {
-            source.connectPeer(
+        if (!configured) {
+            return;
+        }
+        ManualObjectPeerIntent current = manualObjectPeerIntents.get(target.rid());
+        ManualObjectPeerIntent ensured = ensureManualObjectPeerIntent(
+            source,
+            target,
+            current)
+            .orElseThrow(() -> new IllegalStateException(
+                "previous manual object peer connection is closing"));
+        manualObjectPeerIntents.put(target.rid(), ensured);
+    }
+
+    static java.util.Optional<ManualObjectPeerIntent>
+    ensureManualObjectPeerIntent(
+        ZLinkInternalMeshNode source,
+        systems.zlink.framework.runtime.internal.locations
+            .ZLinkMeshNodeDescriptor target,
+        ManualObjectPeerIntent current) {
+        if (current != null
+            && current.matches(target)
+            && source.peers().stream().anyMatch(peer ->
+                peer.connectionIntentId() == current.connectionIntentId()
+                    && (peer.state() == MeshPeerState.ADMITTED
+                        || peer.state() == MeshPeerState.CONNECTING
+                        || peer.state() == MeshPeerState.NOT_REQUIRED))) {
+            return java.util.Optional.of(current);
+        }
+        try {
+            long intent = source.replacePeerConnection(
                 target.endpoint(),
                 target.rid(),
                 target.lifecycleGeneration(),
                 target.securityIdentity());
+            return java.util.Optional.of(new ManualObjectPeerIntent(
+                target.endpoint(),
+                target.lifecycleGeneration(),
+                target.securityIdentity(),
+                intent));
+        } catch (IllegalStateException previousConnectionStillOpen) {
+            // Liveness must close the previous fixed-RID connection before
+            // this descriptor generation can replace its admission fence.
+            return java.util.Optional.empty();
         }
     }
 
@@ -1897,6 +1935,7 @@ public final class ZLinkSpotRuntime
             }
         }
         return manualRouterPeerNodeRids.contains(nodeRid)
+            || manualObjectPeerIntents.containsKey(nodeRid)
             || autoConnectedRouterPeerNodeRids.contains(nodeRid);
     }
 
@@ -1914,6 +1953,19 @@ public final class ZLinkSpotRuntime
 
     private static boolean hasRoutingId(RoutingId routingId) {
         return routingId != null && routingId.size() > 0;
+    }
+
+    static record ManualObjectPeerIntent(
+        String endpoint,
+        long lifecycleGeneration,
+        String securityIdentity,
+        long connectionIntentId) {
+        boolean matches(
+            systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptor target) {
+            return endpoint.equals(target.endpoint())
+                && lifecycleGeneration == target.lifecycleGeneration()
+                && securityIdentity.equals(target.securityIdentity());
+        }
     }
 
     public ZLinkSpotOutbound outbound() {

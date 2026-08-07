@@ -246,7 +246,10 @@ admission·liveness 규칙을 적용한다.
 generation이나 security identity를 전달하지 않는다. Runtime이 이 endpoint를 Location Store
 descriptor와 매칭해 object peer를 보강하면 descriptor의 RID, 양수 lifecycle generation과
 security identity를 내부 handshake expected 값으로 전달한다. 따라서 caller가 이 fence를
-직접 조립하거나 raw transport를 호출할 필요가 없다.
+직접 조립하거나 raw transport를 호출할 필요가 없다. descriptor가 아직 없을 때에도 runtime은
+endpoint-only intent를 유지하며, 나중에 descriptor가 나타나면 이전 intent의 liveness close 뒤에
+같은 endpoint를 descriptor 값으로 교체한다. descriptor가 없는 동안에는 placement owner로
+간주하지 않는다.
 
 **선택 기준.** Automatic discovery(Location Store)를 쓰지 않고 고정된 peer 목록으로 RouteMesh를
 구성할 때 쓴다.

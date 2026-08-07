@@ -32,6 +32,7 @@ import systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers;
 import systems.zlink.framework.runtime.locations.ZLinkStatefulAuthorityRouteRuntime;
 import systems.zlink.framework.runtime.messaging.ZLinkJsonMessageSerializer;
 import systems.zlink.framework.runtime.mesh.ZLinkMeshNodesRuntime;
+import systems.zlink.framework.runtime.mesh.MeshNodeRegistration;
 import systems.zlink.framework.runtime.spots.ZLinkSpotRuntime;
 import systems.zlink.framework.runtime.streams.ZLinkStreamRuntime;
 import systems.zlink.framework.spots.ZLinkSpotOutbound;
@@ -511,24 +512,40 @@ public final class ZLinkFrameworkRuntime
                     registration.meshName(),
                     new systems.zlink.framework.locations
                         .ZLinkPageRequest(1000, null))
-                .thenAccept(page -> {
-                    for (var peer : unresolved) {
-                        page.items().stream()
-                            .filter(target -> target.endpoint().equals(
-                                peer.endpoint()))
-                            .filter(target -> !target.rid().equals(
-                                source.status().routingId()))
-                            .findFirst()
-                            .ifPresent(target -> source.connectPeer(
-                                target.endpoint(),
-                                target.rid(),
-                                target.lifecycleGeneration(),
-                                target.securityIdentity()));
-                    }
-                }).toCompletableFuture());
+                        .thenAccept(page -> {
+                            for (var peer : unresolved) {
+                                connectManualObjectPeer(
+                                    source,
+                                    peer,
+                                    page.items());
+                            }
+                        }).toCompletableFuture());
         }
         return java.util.concurrent.CompletableFuture.allOf(
             tasks.toArray(java.util.concurrent.CompletableFuture[]::new));
+    }
+
+    static boolean connectManualObjectPeer(
+        systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode source,
+        MeshNodeRegistration.Peer peer,
+        java.util.List<systems.zlink.framework.runtime.internal.locations
+            .ZLinkMeshNodeDescriptor> descriptors) {
+        if (peer.expectedRoutingId() != null) {
+            return false;
+        }
+        return descriptors.stream()
+            .filter(target -> target.endpoint().equals(peer.endpoint()))
+            .filter(target -> !target.rid().equals(source.status().routingId()))
+            .findFirst()
+            .map(target -> {
+                source.replacePeerConnection(
+                    target.endpoint(),
+                    target.rid(),
+                    target.lifecycleGeneration(),
+                    target.securityIdentity());
+                return true;
+            })
+            .orElse(false);
     }
 
     static ZLinkFrameworkRuntime start(

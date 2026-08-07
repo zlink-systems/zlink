@@ -367,16 +367,30 @@ final class ZLinkJavaRawMeshNodeM6ATest {
             local.start();
             peer.start();
 
-            long wrongIntent = local.connectPeer(
+            long wrongGenerationIntent = local.connectPeer(
                 peerEndpoint,
                 peerRid,
                 peer.status().lifecycleGeneration() + 1,
-                "wrong-security-identity");
-            Thread.sleep(100);
+                peerRid.toString());
+            awaitState(local, MeshPeerState.ERROR);
             assertFalse(local.peers().stream().anyMatch(peerEntry ->
                 peerEntry.state() == MeshPeerState.ADMITTED));
             try {
-                local.removePeerConnection(wrongIntent);
+                local.removePeerConnection(wrongGenerationIntent);
+            } catch (RuntimeException alreadyRejected) {
+                // Admission rejection may close the transport before cleanup.
+            }
+
+            long wrongSecurityIntent = local.connectPeer(
+                peerEndpoint,
+                peerRid,
+                peer.status().lifecycleGeneration(),
+                "wrong-security-identity");
+            awaitState(local, MeshPeerState.ERROR);
+            assertFalse(local.peers().stream().anyMatch(peerEntry ->
+                peerEntry.state() == MeshPeerState.ADMITTED));
+            try {
+                local.removePeerConnection(wrongSecurityIntent);
             } catch (RuntimeException alreadyRejected) {
                 // Admission rejection may close the transport before cleanup.
             }
@@ -387,6 +401,67 @@ final class ZLinkJavaRawMeshNodeM6ATest {
                 peer.status().lifecycleGeneration(),
                 peerRid.toString());
             awaitState(local, MeshPeerState.ADMITTED);
+        }
+    }
+
+    @Test
+    void descriptorFenceReplacesEndpointOnlyIntent() throws Exception {
+        RoutingId localRid = RoutingId.from("jvm-descriptor-replace-local");
+        RoutingId peerRid = RoutingId.from("jvm-descriptor-replace-peer");
+        String localEndpoint = "inproc://jvm-descriptor-replace-local-"
+            + System.nanoTime();
+        String peerEndpoint = "inproc://jvm-descriptor-replace-peer-"
+            + System.nanoTime();
+        try (var context = Zlink.createContext();
+             var local = new ZLinkJavaRawMeshNode(context, "mesh");
+             var peer = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            local.setRoutingId(localRid);
+            local.setBind(localEndpoint);
+            peer.setRoutingId(peerRid);
+            peer.setBind(peerEndpoint);
+            local.start();
+            peer.start();
+
+            local.connectPeer(peerEndpoint);
+            awaitTransport(local, peerEndpoint);
+            assertThrows(
+                IllegalStateException.class,
+                () -> local.replacePeerConnection(
+                    peerEndpoint,
+                    peerRid,
+                    peer.status().lifecycleGeneration(),
+                    peerRid.toString()));
+
+            peer.close();
+            try (var replacementPeer = new ZLinkJavaRawMeshNode(
+                     context, "mesh")) {
+                replacementPeer.setRoutingId(peerRid);
+                replacementPeer.setBind(peerEndpoint);
+                replacementPeer.start();
+                long fencedIntent = awaitReplacement(
+                    local,
+                    peerEndpoint,
+                    peerRid,
+                    replacementPeer.status().lifecycleGeneration(),
+                    peerRid.toString());
+
+                awaitState(local, MeshPeerState.ADMITTED);
+                var admitted = local.peers().stream()
+                    .filter(entry -> entry.state() == MeshPeerState.ADMITTED)
+                    .findFirst()
+                    .orElseThrow();
+                assertEquals(fencedIntent, admitted.connectionIntentId());
+                assertEquals(
+                    replacementPeer.status().lifecycleGeneration(),
+                    admitted.lifecycleGeneration());
+                assertThrows(
+                    IllegalStateException.class,
+                    () -> local.replacePeerConnection(
+                        peerEndpoint,
+                        peerRid,
+                        replacementPeer.status().lifecycleGeneration() + 1,
+                        peerRid.toString()));
+            }
         }
     }
 
@@ -1069,5 +1144,43 @@ final class ZLinkJavaRawMeshNodeM6ATest {
         }
         assertTrue(node.peers().stream().anyMatch(
             peer -> peer.state() == state));
+    }
+
+    private static long awaitReplacement(
+        ZLinkJavaRawMeshNode node,
+        String endpoint,
+        RoutingId expectedRoutingId,
+        long expectedLifecycleGeneration,
+        String expectedSecurityIdentity)
+        throws InterruptedException {
+        long deadline = System.nanoTime() + Duration.ofSeconds(2).toNanos();
+        RuntimeException last = null;
+        while (System.nanoTime() < deadline) {
+            try {
+                return node.replacePeerConnection(
+                    endpoint,
+                    expectedRoutingId,
+                    expectedLifecycleGeneration,
+                    expectedSecurityIdentity);
+            } catch (RuntimeException retryableFailure) {
+                last = retryableFailure;
+                Thread.onSpinWait();
+            }
+        }
+        if (last != null) {
+            throw last;
+        }
+        throw new AssertionError("peer replacement did not run");
+    }
+
+    private static void awaitTransport(
+        ZLinkJavaRawMeshNode node,
+        String endpoint) throws InterruptedException {
+        long deadline = System.nanoTime() + Duration.ofSeconds(2).toNanos();
+        while (!node.hasLivePeerIntent(endpoint)
+            && System.nanoTime() < deadline) {
+            Thread.onSpinWait();
+        }
+        assertTrue(node.hasLivePeerIntent(endpoint));
     }
 }

@@ -9,24 +9,26 @@
 
 ## 1. 이번 검토 범위
 
-이번 기록은 JVM Java/Kotlin Framework의 Location Store 기반 object peer 연결과
-TicTacToe sample의 실행 경로를 대상으로 한다. Manual endpoint는 connection intent이고,
-descriptor가 제공하는 lifecycle generation과 security identity는 runtime admission fence로
-전달되어야 한다.
+앞의 JVM 절은 Java/Kotlin Framework의 Location Store 기반 object peer 연결과 TicTacToe sample의
+실행 경로를 대상으로 한다. Manual endpoint는 connection intent이고, descriptor가 제공하는
+lifecycle generation과 security identity는 runtime admission fence로 전달되어야 한다. 아래 Node.js
+절은 별도의 검토 기록이며 JVM 판정이나 JVM 범위의 gap closure에 포함하지 않는다.
 
 ## 2. 닫은 구현 차이
 
 | 항목 | 대상 | 이전 구현 | 수정 결과 | 상태 |
 |---|---|---|---|---|
-| `JVM-TOPO-001` | `07-channel-topology`의 peer handshake와 Java/Kotlin runtime | `connectManualObjectPeers`와 `ensureManualObjectPeer`가 endpoint와 RID만 전달해 lifecycle generation `0`과 RID 기반 security identity fallback을 사용했다. | 두 owner-layer 경로가 descriptor의 endpoint, RID, lifecycle generation과 security identity를 extended `connectPeer`에 함께 전달한다. | closed |
+| `JVM-TOPO-001` | `07-channel-topology`의 peer handshake와 Java/Kotlin runtime | Object role 경로가 descriptor가 없는 시점의 endpoint-only intent와 descriptor 재등장 시의 이전 연결 정리를 같은 lifecycle로 관리하지 않았다. | MeshNode 시작은 endpoint-only intent를 만들고, host·auto-connect·Spot 경로는 descriptor의 endpoint, RID, lifecycle generation과 security identity를 `replacePeerConnection`으로 전달한다. 이전 intent가 liveness close되기 전에는 교체하지 않는다. | closed |
 
 이 수정은 sample 호출부에 fence 값을 추가하지 않는다. Application은 기존 public manual
 endpoint API를 그대로 사용하고, descriptor와 transport 사이의 매칭은 runtime이 담당한다.
 
 ## 3. 검증 근거
 
-- Java raw binding regression은 잘못된 lifecycle generation/security identity를 가진 peer
-  intent가 admission되지 않고, descriptor 값으로 다시 연결하면 admitted 되는지를 확인한다.
+- Java raw binding regression은 잘못된 lifecycle generation과 security identity를 각각 독립적으로
+  거부하고, live endpoint-only intent의 교체를 한 번 거부한 뒤 이전 node가 닫힌 후 descriptor 값으로
+  다시 연결하면 admitted 되는지를 확인한다. `ZLinkMeshNodeRuntimeTest`, host manual-peer test와
+  Spot descriptor-fence test는 세 owner 경로가 같은 replacement contract를 호출하는지 확인한다.
 - Java raw regression은 다음 명령으로 통과했다.
   `cd framework/languages/java && ./gradlew --no-daemon --no-parallel :zlink-framework-core:test --tests '*ZLinkJavaRawMeshNodeM6ATest' --tests '*ZLinkActorCreationCoordinatorTargetSelectionTest'`
 - Java aggregate는 다음 명령으로 통과했다. preflight 뒤 TicTacToe, Bingo, DeliveryDispatch,
@@ -44,11 +46,11 @@ endpoint API를 그대로 사용하고, descriptor와 transport 사이의 매칭
 ## 4. Runtime shutdown과 sample runner의 경계
 
 공통 shutdown spec은 먼저 public 30초 drain deadline을 적용하고, deadline 뒤에도 bounded
-teardown을 수행할 수 있다고 정의한다. 현재 JVM host runtime의 resource cleanup은 이 순서를
-따르므로 sample runner가 30초에서 즉시 process를 강제 종료하면 sample 결과와 runtime
-teardown 결과를 혼동할 수 있다. 공통 runner와 Java `DeliveryDispatch` runner는 이제 최대
-90초 동안 이 bounded cleanup을 관찰한 뒤에만 `SIGKILL`을 사용한다. 강제 종료가 발생하거나
-cleanup이 실패하면 runner는 성공으로 숨기지 않고 non-zero로 종료한다. 이 90초는 sample
+teardown을 수행할 수 있다고 정의한다. JVM lifecycle은 성공 시
+`ZLINK_FRAMEWORK_TERMINATION outcome=STOPPED reason=NONE`을 기록한다. READY marker가 있는
+Framework log에서 이 최종 marker가 없거나 `FORCE_STOPPED`, deadline 초과, teardown failure가
+관찰되면 공통 runner와 Java `DeliveryDispatch` runner는 성공으로 판정하지 않는다. 두 runner는
+최대 90초 동안 bounded cleanup을 관찰한 뒤에만 `SIGKILL`을 사용한다. 이 90초는 sample
 runner의 관찰 상한이며 Framework public shutdown deadline을 변경한 값이 아니다.
 
 ## 5. 판정 경계

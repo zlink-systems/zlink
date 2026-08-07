@@ -532,7 +532,12 @@ descriptor's RID, positive lifecycle generation, and security identity into the 
 values together. A fallback that passes only the endpoint and RID, using generation `0` or treating
 the RID as the security identity, is not used for a descriptor-backed connection. If no descriptor is
 available, the manual connection follows only the registered endpoint and the handshake result; it
-doesn't claim descriptor-backed placement.
+doesn't claim descriptor-backed placement. An Object-enabled MeshNode registers the endpoint-only
+intent even when the descriptor is not available yet. If a matching descriptor appears later in the
+Location Store, the host and Spot runtimes may replace that intent with the descriptor values. The
+replacement passes the endpoint, RID, positive lifecycle generation, and security identity together,
+and does not install the new intent until liveness has closed the previous endpoint intent. While the
+descriptor is absent, this path also makes no placement-owner claim.
 
 Even for Automatic, if a duplicate candidate arises due to connection
 contention or a stale discovery snapshot, the same admission rule applies.

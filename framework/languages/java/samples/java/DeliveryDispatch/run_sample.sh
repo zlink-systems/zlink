@@ -89,7 +89,7 @@ deliverydispatch_cleanup() {
   done
 
   # Runtime drain uses the public 30-second deadline and may then finish its
-  # bounded owner/resource cleanup before the process exits.
+  # bounded owner/resource cleanup. Observe it for 90 seconds before SIGKILL.
   for _ in $(seq 1 900); do
     local running=0
     for pid in "${pids[@]}"; do
@@ -121,6 +121,9 @@ deliverydispatch_cleanup() {
 
   if [[ -n "${redis_container_id}" ]]; then
     zlink_redis_remove_by_id "${redis_container_id}" || cleanup_failed=1
+  fi
+  if [[ "${status}" == "0" && "${cleanup_failed}" == "0" ]]; then
+    zlink_sample_verify_framework_termination "${log_dir}" || cleanup_failed=1
   fi
   rm -rf "${config_dir}"
   if [[ "${status}" != "0" ]]; then

@@ -257,7 +257,10 @@ The endpoint and optional expected RID supplied by the caller are connection int
 doesn't supply a lifecycle generation or security identity. When the runtime matches this endpoint to
 a Location Store descriptor to complete an object peer, it passes the descriptor's RID, positive
 lifecycle generation, and security identity as the internal handshake expected values. The caller
-therefore does not assemble this fence or call raw transport APIs.
+therefore does not assemble this fence or call raw transport APIs. If the descriptor is not available
+yet, the runtime keeps the endpoint-only intent; when the descriptor appears later, it replaces the
+intent with the descriptor values only after liveness closes the previous intent. While no descriptor
+is available, the peer is not treated as a placement owner.
 
 **When to use.** Use this to configure RouteMesh with a fixed peer list, without automatic
 discovery (a Location Store).

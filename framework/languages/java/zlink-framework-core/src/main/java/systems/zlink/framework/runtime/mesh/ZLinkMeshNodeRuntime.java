@@ -75,9 +75,7 @@ public final class ZLinkMeshNodeRuntime implements AutoCloseable {
             node.start();
             for (MeshNodeRegistration.Peer peer : registration.peers()) {
                 if (peer.expectedRoutingId() == null) {
-                    if (!registration.objectRoleEnabled()) {
-                        node.connectPeer(peer.endpoint());
-                    }
+                    node.connectPeer(peer.endpoint());
                 } else {
                     node.connectPeer(peer.endpoint(), peer.expectedRoutingId());
                 }

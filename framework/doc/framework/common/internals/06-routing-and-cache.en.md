@@ -65,13 +65,15 @@ matches that endpoint to a descriptor to complete an object peer, it must pass a
 provided by the descriptor to the transport. The formal contract is owned by the peer handshake in
 [RouteMesh topology](../spec/07-channel-topology.en.md).
 
-In the current JVM path, `ZLinkFrameworkRuntime.connectManualObjectPeers` and
-`ZLinkSpotRuntime.ensureManualObjectPeer` find the descriptor and call
-`connectPeer(endpoint, rid, lifecycleGeneration, securityIdentity)`.
-`ZLinkJavaRawMeshNode` stores those values in `PeerIntent` and compares them during admission.
-The former two-argument endpoint/RID path substitutes generation `0` and the RID string for the
-security identity, so it cannot be used for a descriptor-backed connection. The caller is not
-allowed to set the generation or security identity as a workaround.
+In the current JVM path, MeshNode startup registers the manual endpoint-only intent regardless of the
+Object role. When `ZLinkFrameworkRuntime.connectManualObjectPeers`,
+`ZLinkLocationAutoConnectHost.MeshNodeExecutor`, or `ZLinkSpotRuntime.ensureManualObjectPeer` finds
+a descriptor, it calls `replacePeerConnection(endpoint, rid, lifecycleGeneration,
+securityIdentity)`. The replacement path does not install a new intent until transport liveness has
+closed the previous intent. `ZLinkJavaRawMeshNode` records each intent, the observed peer routing ID,
+and its close state while processing the admission fence and liveness events. An endpoint-only intent
+without a descriptor makes no placement claim. The caller is not allowed to set the generation or
+security identity as a workaround.
 
 ## 2. Where A Move Meets The Cache — A Performance Cliff
 

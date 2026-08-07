@@ -94,6 +94,18 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
         return connectPeer(endpoint, expectedRoutingId);
     }
 
+    default long replacePeerConnection(
+        String endpoint,
+        RoutingId expectedRoutingId,
+        long expectedLifecycleGeneration,
+        String expectedSecurityIdentity) {
+        return connectPeer(
+            endpoint,
+            expectedRoutingId,
+            expectedLifecycleGeneration,
+            expectedSecurityIdentity);
+    }
+
     default void observePeerAdmissionExpectation(
         RoutingId peerRid,
         String endpoint,

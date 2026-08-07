@@ -4,6 +4,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.logging.Logger;
 import org.springframework.context.SmartLifecycle;
 import systems.zlink.framework.actors.ZLinkActorClient;
 import systems.zlink.framework.actors.ZLinkActorDirectory;
@@ -40,6 +41,8 @@ public final class ZLinkFrameworkLifecycle
         systems.zlink.framework.configuration.ZLinkMessageFlowControl {
     public static final int PHASE = 0;
     private static final Duration SPRING_SHUTDOWN_DRAIN_DEADLINE = Duration.ofSeconds(30);
+    private static final Logger LOGGER =
+        Logger.getLogger(ZLinkFrameworkLifecycle.class.getName());
 
     private final DefaultZLinkFrameworkOptions options;
     private final ZLinkBackendAdapterProvider backendAdapterFactory;
@@ -147,6 +150,7 @@ public final class ZLinkFrameworkLifecycle
             return;
         }
         current.shutdown(SPRING_SHUTDOWN_DRAIN_DEADLINE).whenComplete((result, failure) -> {
+            logTermination(result, failure);
             synchronized (ZLinkFrameworkLifecycle.this) {
                 if (runtime == current) {
                     runtime = null;
@@ -168,12 +172,27 @@ public final class ZLinkFrameworkLifecycle
         }
         // Spring shutdown must not start maintenance relocation.
         current.shutdown(SPRING_SHUTDOWN_DRAIN_DEADLINE).whenComplete((result, failure) -> {
+            logTermination(result, failure);
             synchronized (ZLinkFrameworkLifecycle.this) {
                 runtime = null;
                 running = false;
             }
             callback.run();
         });
+    }
+
+    private static void logTermination(
+        ZLinkFrameworkTerminationResult result,
+        Throwable failure) {
+        if (failure != null || result == null) {
+            LOGGER.warning(
+                "ZLINK_FRAMEWORK_TERMINATION outcome=FORCE_STOPPED "
+                    + "reason=TEARDOWN_FAILED");
+            return;
+        }
+        LOGGER.info(
+            "ZLINK_FRAMEWORK_TERMINATION outcome=" + result.outcome()
+                + " reason=" + result.reason());
     }
 
     @Override
