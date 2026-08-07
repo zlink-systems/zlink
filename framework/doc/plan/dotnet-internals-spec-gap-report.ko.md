@@ -76,7 +76,7 @@ Gap 하나 또는 서로 강하게 연결된 작은 작업 묶음의 동작과 �
 | DOTNET-LAYER-001 | 중 | binding 경계·POSDDD | 완료 — 일반 socket은 binding public API를 직접 쓰고 의미 변환 adapter만 유지한다 |
 | DOTNET-LAYER-002 | 상 | runtime/package ownership | 완료 — lifecycle state machine과 resource close 순서를 Core package가 소유한다 |
 | DOTNET-LAYER-003 | 중 | identifier type | 완료 — runtime state와 registry key가 식별자별 value type을 사용한다 |
-| DOTNET-LAYER-004 | 중 | STREAM protocol ownership | client connector와 Framework server가 같은 STREAM codec·pending·lifecycle stack을 별도로 구현한다 |
+| DOTNET-LAYER-004 | 중 | STREAM protocol ownership | 완료 — connector protocol 구현을 client와 Framework server가 함께 사용한다 |
 | DOTNET-OWN-001 | 중 | payload ownership/copy | 이미 소유한 managed payload를 public copying factory에 다시 통과시켜 full-buffer copy를 추가한다 |
 | SPEC-TIMER-001 | 보류 | timer relocation contract | language spec은 non-catch-up 값을 검증하지 않지만 canonical schema는 `nonzero-u64`만 허용해 정본끼리 충돌한다 |
 
@@ -546,11 +546,28 @@ Actor·Spot·mesh route가 유지됨을 확인했다. 구현 checkpoint는 `95c9
 
 ### DOTNET-LAYER-004 — STREAM client와 server가 같은 protocol stack을 중복 구현
 
+**판정: 완료**
+
 Internals는 client 접속 library와 Framework가 같은 protocol을 별도 구현하지 않고 protocol 처리 한 곳을 양쪽이 사용하도록 정한다(`common/internals/01-layering.ko.md:175-181`). 이는 public client/server API를 합치라는 뜻이 아니라 wire header, correlation, pending request, lifecycle/close 같은 공통 protocol mechanism의 정본을 하나로 두라는 결정이다.
 
 현재 `Systems.Zlink.Stream.Connector`는 자체 `ZlinkStreamHeaderCodec`, metadata/closing codec, correlation, pending-request table, receive loop와 lifecycle을 구현한다(`Systems.Zlink.Stream.Connector/Runtime/Protocol/`, `Runtime/ZlinkStreamPendingRequests.cs`, `Runtime/ZlinkStreamConnectorLifecycle.cs`). Framework server에는 별도의 `ZLinkStreamHeaderCodec`, `ZLinkStreamSessionClosingCodec`, frame reader/writer, session liveness와 request/reply 경로가 있다(`Zlink.Framework/Runtime/Streams/`). 실제로 같은 request sequence·header validation·closing record를 양쪽 소스에서 각각 유지하므로 한쪽 수정이 다른 쪽에 자동 반영되지 않는다.
 
 완료 조건은 transport와 client/server orchestration은 분리하되 공통 wire codec, frozen validation과 correlation primitives를 shared internal protocol package로 옮기는 것이다. 기존 client-server golden/negative fixture를 shared codec에 한 번 적용하고 connector와 Framework 양쪽 clean consumer가 그 package를 사용하는지 확인해야 한다.
+
+재검토 시 header와 frame codec, correlation ID 생성은 이미
+`Systems.Zlink.Stream.Connector.Runtime.Protocol`의 internal 구현을 Framework가 참조하고 있었다. Client의
+pending request table과 server의 inbound request/session table은 역할과 상태 전이가 달라 같은 primitive의
+중복이 아니었다. 실제로 별도 구현이 남아 있던 `session-closing` encode를 connector protocol codec으로
+옮기고 Framework codec 파일을 삭제했다. 이제 client decode와 server encode가 같은 version, reason,
+diagnostic length와 strict UTF-8 validation을 사용한다.
+
+Shared codec golden·negative 10건, Framework wire/drain 13건과 Connector 전체 147건이 통과했다. Framework
+전체 unit suite는 1,586/1,587건이 통과했고, 실패한 기존 timing-sensitive test는 단독 재실행에서
+통과했다. Packaged contract와 standalone HTTP clean consumer도 통과했고 public API snapshot hash는
+`c1987f4b98e4fac7a30b7d038a56ee0d20e1272d00e79bdc88d3271e3c3ab958`로 유지되었다. 실제 process는
+ResilienceLifecycle `RL-B4`를 `ResilienceLifecycle/logs/20260807-222236-2437559/`에서 통과해 server drain
+closing reason이 connector client까지 전달되는 경로를 확인했다. 구현 checkpoint는 `93d889336d`로
+`main`에 push했다.
 
 ### DOTNET-OWN-001 — 소유한 payload를 public copying factory로 다시 복사
 
