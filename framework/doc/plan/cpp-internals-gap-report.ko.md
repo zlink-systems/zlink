@@ -62,7 +62,7 @@ Gap 하나 또는 서로 강하게 연결된 작은 작업 묶음의 동작과 �
 
 | 문서 | GAP | PARTIAL | 비고 |
 |---|---:|---:|---|
-| 01-layering | 2 | 5 | relocation 재시도 불가가 핵심 |
+| 01-layering | 1 | 4 | relocation 재시도와 target propagation wait 종결 |
 | 02-serialization | 2 | 2 | 락 횟수, self-wait 오류 종류 |
 | 03-progress-isolation | 2 | 2 | HOL 블로킹, `std::terminate` |
 | 04-completion | 2 | 2 | 문자열 분류, 완료 방식 난립 |
@@ -74,9 +74,9 @@ Gap 하나 또는 서로 강하게 연결된 작은 작업 묶음의 동작과 �
 | 10-liveness-and-state | 0 | 1 | `CPP-OBS-002` 종결 |
 | 11-message-ownership | 5 | 3 | 복사/보관 규율 전반 미준수. `CPP-OWN-005` 종결 |
 | 12-service-wire-protocol | 5 | 2 | 스토어 키 포맷, json-v1 프로파일 |
-| **internals 소계** | **24** | **28** | `CPP-OWN-005`, `CPP-OBS-002` 종결 |
+| **internals 소계** | **23** | **27** | relocation 2건, `CPP-OWN-005`, `CPP-OBS-002` 종결 |
 | C++ exact public interface | 0 | 0 | diagnostics 2건, object query, STREAM timeout, Client role 오류와 HTTP builder 종결 |
-| **합계** | **24** | **28** | 종결 8건은 GAP·PARTIAL 집계에서 제외 |
+| **합계** | **23** | **27** | 종결 10건은 GAP·PARTIAL 집계에서 제외 |
 
 ---
 
@@ -90,9 +90,7 @@ Gap 하나 또는 서로 강하게 연결된 작은 작업 묶음의 동작과 �
 | CPP-DISP-002 | 한 Spot 큐 포화가 노드 전체 애플리케이션 수신을 head-of-line 블로킹, Request가 즉시 실패하지 않고 타임아웃까지 대기 | 03 §5 |
 | CPP-SESS-001 | 원격 세션 bind 시 이전 소유자 통지·정리 확인 절차가 없어 두 노드가 동시에 같은 Actor의 세션을 소유 가능 | 09 §3 |
 | CPP-WIRE-001 | Location Store 권한 키를 `zla1:…` 포맷으로 통합했으며 package와 cross-language Store 검증 진행 중 | 12 §1 |
-| CPP-RELOC-001 | relocation의 blocked/target_unavailable 결과가 terminal로 영구 저장되어, 일시 실패 후 재시도가 프로세스 재시작 전까지 불가능 | 01 §3 |
 | CPP-TOPO-001 | 수동 설정 피어에 Location Store descriptor의 admission fence(generation/보안 identity)가 설치되지 않음 — 이미 종결된 `JVM-TOPO-001`과 동일 계열 결함의 C++ 판 | 06 §1.1 |
-| CPP-CONTRACT-STREAM-001 | STREAM one-way send timeout 구현과 package·process 검증 완료 | C++ interface 03 |
 
 ### CPP-DISP-001 — executor 포화 → `std::terminate`
 mesh 디스패치 스레드는 throwing `submit`으로 애플리케이션 작업을 넘기는데, `offload_executor_t::submit`은 내부 큐(4096) 포화 시 `std::runtime_error`를 던진다. 둘러싼 `catch (...)`는 정리 후 재던지고, pump 스레드 람다에는 try/catch가 없어 `std::thread` 본체를 탈출한 예외가 `std::terminate`를 호출한다. 서로 다른 owner의 in-flight 디스패치가 4096개를 넘는 순간 재현 가능하다. 스펙 03 §6은 "한도 초과를 조용히(또는 파괴적으로) 처리하지 말고 관찰 가능한 거부 결과를 내라"고 결정했다.
@@ -112,11 +110,12 @@ admitted 피어의 애플리케이션 레코드가 대상 owner의 mailbox 예�
 - 증거: `cpp/src/runtime/stateful/public_store_adapters.hpp:345-351` (쓰기), `cpp/src/runtime/locations/store_location_resolvers.hpp:369-397` (3종 probe), `cpp/src/runtime/host/app.cpp:99`, `cpp/src/runtime/mesh/mesh_node_host_service.cpp:109, 1111`, `cpp/src/runtime/actors/actor_client.cpp:589`
 
 ### CPP-RELOC-001 — relocation 영구 차단
-`run_shared_relocation`의 `complete()`는 `blocked/target_unavailable`을 포함한 **모든** 결과에 `operation.terminal = true`를 설정하고, `relocation_operation`은 어디에서도 리셋되지 않는다. 이후 `relocate()` 호출은 저장된 blocked 결과를 영원히 반환한다. 스펙 01 §3은 "거부된 결과는 저장하지 않으며, 재요청 시 처음부터 다시 검사한다"고 결정했다. 연관 gap: preflight와 worker 모두 대상 조회를 1회만 수행해(스펙이 요구하는 "설정된 시간까지 대상 정보 전파 대기" 없음) 전파 경합 중의 relocation이 스퓨리어스하게 거부되고, 위 문제와 결합되면 영구 거부가 된다(→ CPP-RELOC-002, §3.1).
+초기 audit에서는 `run_shared_relocation`의 `complete()`가 `blocked/target_unavailable`을 포함한 모든 결과에 `operation.terminal = true`를 설정하고, `relocation_operation`을 다시 시작 가능한 상태로 되돌리지 않았다. 이후 `relocate()` 호출은 저장된 blocked 결과를 계속 반환했다. 스펙 01 §3은 "거부된 결과는 저장하지 않으며, 재요청 시 처음부터 다시 검사한다"고 결정한다. 연관 gap으로 preflight와 worker가 대상 조회를 한 번만 수행해, target descriptor와 peer admission 전파 중 relocation이 즉시 거부됐다(→ CPP-RELOC-002, §3.1).
 - 증거: `cpp/src/runtime/host/app.cpp:2852-2854, 2959-2960` (terminal 저장), `2741-2758, 3072-3077, 3291-3296` (단발 조회)
 - 구현 checkpoint `9fc3179a68`: `relocated` 결과만 terminal로 보존하고, `blocked` 결과는 waiter 완료 뒤 operation을 다시 시작 가능한 상태로 되돌린다. 다음 호출은 이전 worker thread를 join한 뒤 preflight부터 다시 실행한다. `test_cpp_framework_target_contract`와 기본 `test_cpp_framework_host_lifecycle`는 통과했다. 실제 재시도 process 회귀를 추가해 실행하는 과정에서 기존 optional fixture가 readiness payload를 보내기 전에 `No serializer is registered for this payload type`으로 실패했으므로, serializer owner gap을 우회하지 않고 재시도 process 증거를 보류한다.
 - 구현 checkpoint `258a9aefcc`: preflight와 workload unit별 target 선택이 첫 descriptor snapshot만으로 `target_unavailable`을 확정하지 않는다. 기존 Location polling interval로 Store descriptor와 Core peer admission을 shared deadline까지 다시 확인하고, deadline이 끝나면 `Blocked/TargetUnavailable`을 유지한다. Source가 첫 empty snapshot을 읽은 뒤 100 ms 후 replacement host를 시작하는 회귀에서 descriptor 게시와 peer admission 뒤 relocation이 완료됐으며, target이 계속 없을 때 deadline만큼 기다리는 회귀도 통과했다. 전체 `test_cpp_framework_host_lifecycle`, `test_cpp_framework_contract_headers`, `test_cpp_framework_execution`, `test_cpp_framework_app_host`, `test_cpp_framework_m6b_runtime`, `test_cpp_framework_m6c_runtime`, `test_cpp_framework_target_contract`가 통과했다. 설치 package를 사용하는 별도 process 검증이 남아 있어 아직 종결하지 않는다.
 - 검증 checkpoint `b07b20d318`: public `app_t::relocate()`를 같은 source host에서 두 번 호출하는 owner 회귀를 기본 test에 추가했다. Replacement가 없는 첫 호출은 100 ms 뒤 `Blocked/TargetUnavailable`로 끝나고 source는 `Serving`을 유지한다. Replacement host가 게시된 뒤 두 번째 호출은 이전 결과를 재사용하지 않고 preflight를 다시 실행해 `Relocated/None`으로 완료됐다. `test_cpp_framework_host_lifecycle`과 `test_cpp_framework_target_contract`가 통과했다. 설치 package를 사용하는 별도 process 검증은 계속 남아 있다.
+- process checkpoint `1f4395bb9d`, `dce17f2d44`: Framework package를 빈 prefix에 설치하고 source tree include를 사용하지 않는 out-of-tree consumer를 build했다. Redis Store를 공유하는 source와 replacement를 별도 OS process로 실행했다. Source의 첫 호출은 `outcome=1 reason=1`(`Blocked/TargetUnavailable`)을 반환한 뒤 같은 process에서 `Serving`을 유지했다. 두 번째 호출은 replacement를 시작하기 전에 먼저 실행했으며, Store descriptor와 peer admission이 전파된 뒤 `outcome=0 reason=0`(`Relocated/None`)으로 완료됐다. 강화한 runner가 연속 두 번 통과했으며 최신 log는 `framework/languages/cpp/e2e/RelocationRetry/logs/20260808-015358-1174433`이다. 설치 Framework archive SHA-256은 `a54926a4d8518d2646a0757530d803a66c68abafbf5a604cf2d2e850e1a27384`, header 수는 112개다.
 
 ### CPP-TOPO-001 — 수동 피어 admission fence 미설치
 자동 연결 루프는 descriptor의 `lifecycle_generation`/`security_identity`를 `expect_peer`/`connect_peer`로 설치하지만, **수동 연결 목록에 있는 엔드포인트의 descriptor는 명시적으로 건너뛴다**. 수동 피어 등록 경로는 endpoint + 선택적 RID만 받으므로 fence가 설치될 길이 없다. 해당 엔드포인트의 스테일/대체 노드가 descriptor fence로 거부되지 않는다. 이는 JVM에서 이미 수정·종결된 `JVM-TOPO-001`과 동일 계열 결함이다.
@@ -152,8 +151,8 @@ admitted 피어의 애플리케이션 레코드가 대상 owner의 mailbox 예�
 
 | ID | 분류 | 요약 |
 |---|---|---|
-| CPP-RELOC-001 | GAP·검증 중 | §2 참조 — terminal state와 worker 회수는 수정됐고 재시도 process 증거가 남아 있음 |
-| CPP-RELOC-002 | PARTIAL·검증 중 | 구현 checkpoint `258a9aefcc`에서 preflight와 unit별 target 조회를 Location polling interval과 shared deadline으로 묶었다. 첫 조회 뒤 replacement가 게시되고 admitted되는 회귀와 deadline 종료 회귀를 포함한 전체 host lifecycle, contract headers, execution, app host, M6B, M6C, target contract가 통과했다. 설치 package의 별도 process 검증이 남아 있어 아직 종결하지 않는다. |
+| CPP-RELOC-001 | CLOSED | §2 참조 — blocked 결과 뒤 같은 source process의 재시도가 owner 회귀와 설치 package 기반 별도 process에서 `Relocated/None`으로 완료됐다. |
+| CPP-RELOC-002 | CLOSED | 구현 checkpoint `258a9aefcc`에서 preflight와 unit별 target 조회를 Location polling interval과 shared deadline으로 묶었다. 첫 조회 뒤 replacement가 게시되고 admitted되는 owner 회귀와 deadline 종료 회귀를 포함한 전체 host lifecycle, contract headers, execution, app host, M6B, M6C, target contract가 통과했다. Process checkpoint `dce17f2d44`에서는 설치 package source가 두 번째 relocation을 먼저 시작하고 replacement process를 나중에 시작했으며, descriptor와 peer admission 전파 뒤 shared deadline 안에 `Relocated/None`으로 완료됐다. |
 | CPP-LAYER-001 | PARTIAL·하 | 식별자 타입화가 절반만: `node_rid_t`/`actor_id_t`만 전용 타입이고 `spot_id_t`는 `std::string` alias, mesh/채널 이름은 평문 문자열 — 스펙이 명명한 안티패턴 그대로. 증거: `cpp/include/zlink/framework/contracts/spots/spot_identity.hpp:24` |
 | CPP-LAYER-002 | PARTIAL·검증 중 | 구현 checkpoint `c2bc713c99`에서 진행 중 runtime call 식별자를 `call_id_t`로 바꾸고 내부 파일도 `call_id.hpp`로 옮겼다. 공개 Actor Join `OperationId`를 운반하는 `wire_operation_id_t`는 별도 strong type으로 정의해 같은 128-bit 표현을 쓰더라도 call ID와 암시적으로 대입되지 않는다. Foundation registry, host completion, mesh·ClientServer transport와 creation call site는 call 용어로 통일했고 compile-time assertion과 target source gate로 두 타입의 재결합을 막았다. 전체 `test_cpp_framework_operation_registry`, `test_cpp_framework_service_wire_codec`, `test_cpp_framework_m6a_runtime`, `test_cpp_framework_m6b_runtime`, `test_cpp_framework_m6c_runtime`, `zlink_cpp_framework_mesh_node_vertical_test`, `test_cpp_framework_target_contract`가 통과했다. 설치 package와 cross-process Actor Join completion 검증이 남아 있어 아직 종결하지 않는다. |
 | CPP-LAYER-003 | PARTIAL·중 | 구현 checkpoint `ad335148f0`에서 handler와 deferred Join completion을 이미 직렬화하는 `actor_execution_queues`를 단일 owner로 유지하고, handler 실행 전체를 다시 잠그던 `actor_mailboxes` map·per-Actor mutex·수명 정리 코드를 제거했다. Deferred barrier ordering 회귀를 포함한 전체 `test_cpp_framework_execution`, `test_cpp_framework_m6b_runtime` 2회, `test_cpp_framework_target_contract`가 통과했다. 메시지당 work-name 문자열 연결, turn당 `shared_ptr` 다수와 중첩 `std::function` 캡처는 남아 있으므로 이 항목은 아직 종결하지 않는다. |
@@ -322,9 +321,9 @@ RouteMesh에 남은 금지 상한 surface·field, JSON 프로파일에 집중한
 
 ## 5. 권고
 
-1. **이 보고서에서 unique ID 관리** — 정식 spec에 구현 진행 기록을 다시 넣지 않고, 이 plan 문서가 남은 24 GAP과 28 PARTIAL 및 종결 8건의 증거를 소유한다. 특히 CPP-TOPO-001은 종결된 `JVM-TOPO-001`, CPP-COMP-001은 종결된 `NODE-ROUTE-001`과 비교하되 다른 언어의 종결을 C++ 완료 증거로 사용하지 않는다.
+1. **이 보고서에서 unique ID 관리** — 정식 spec에 구현 진행 기록을 다시 넣지 않고, 이 plan 문서가 남은 23 GAP과 27 PARTIAL 및 종결 10건의 증거를 소유한다. 특히 CPP-TOPO-001은 종결된 `JVM-TOPO-001`, CPP-COMP-001은 종결된 `NODE-ROUTE-001`과 비교하되 다른 언어의 종결을 C++ 완료 증거로 사용하지 않는다.
 2. **수정 순서 제안**:
-   - 1차 (안정성·정합성): CPP-DISP-001(terminate), CPP-DISP-002(HOL), CPP-RELOC-001(영구 차단), CPP-SESS-001(이중 소유), CPP-TOPO-001(fence), CPP-ROUTE-001(dead 매처 — 한 줄급 수정), CPP-LIFE-003(Ready owner loss와 Missing 분리)
+   - 1차 (안정성·정합성): CPP-DISP-001(terminate), CPP-DISP-002(HOL), CPP-SESS-001(이중 소유), CPP-TOPO-001(fence), CPP-ROUTE-001(dead 매처 — 한 줄급 수정), CPP-LIFE-003(Ready owner loss와 Missing 분리)
    - 2차 (public 계약·상호운용): CPP-WIRE-001(키 포맷 — 마이그레이션 계획 필요), CPP-WIRE-002(RouteMesh 금지 상한 surface·wire field 제거), CPP-WIRE-003(json-v1), CPP-OWN-001(content-type 검증), CPP-COMP-001(문자열 분류 → 구조화 오류 코드)
    - 3차 (자원·성능): CPP-TIMER-001(무한 누적), CPP-COMP-004(고아 엔트리 누수), CPP-TIMER-003(fdpair), CPP-EXEC-001/CPP-OWN-002~004(복사·락 절감), CPP-DISP-005(100 ms wake)
    - 4차 (구조·명명): 나머지 PARTIAL
