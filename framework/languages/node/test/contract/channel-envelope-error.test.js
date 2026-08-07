@@ -6,6 +6,7 @@ const test = require('node:test');
 const framework = require('../../packages/framework/dist/internal');
 const envelope = require('../../packages/framework/dist/runtime/channels/channel-envelope');
 const payloadCodec = require('../../packages/framework/dist/runtime/messaging/payload-codec');
+const creationPayloadCodec = require('../../packages/framework/dist/runtime/messaging/creation-payload-codec');
 const frameworkJson = require('../../packages/framework/dist/runtime/messaging/framework-json-v1');
 const streamProtocol = require('../../packages/framework/dist/runtime/streams/protocol');
 const { ZLinkStreamFrameMessageFactory } = require('../../packages/framework/dist/runtime/streams/stream-frame-factory');
@@ -210,6 +211,35 @@ test('wire content type selects the exact serializer without parsing payload byt
     jsonMessage.close();
     applicationMessage.close();
   }
+});
+
+test('creation payload preserves the selected serializer across the durable envelope', () => {
+  const serializer = {
+    canSerialize(value) {
+      return value?.kind === 'application';
+    },
+    serialize(value) {
+      return framework.ZLinkEncodedPayload.from(Buffer.from(`wire:${value.kind}`));
+    },
+    deserialize(payload) {
+      assert.equal(payload.getString('utf8'), 'wire:application');
+      return { kind: 'application', decoded: true };
+    }
+  };
+  const registry = new Map([['application/x-test', serializer]]);
+  const encoded = creationPayloadCodec.encodeFrameworkCreationPayload(
+    { kind: 'application' },
+    registry
+  );
+
+  assert.deepEqual(
+    creationPayloadCodec.decodeFrameworkCreationPayload(encoded, registry),
+    { kind: 'application', decoded: true }
+  );
+  assert.throws(
+    () => creationPayloadCodec.decodeFrameworkCreationPayload(Buffer.from('invalid'), registry),
+    (error) => error.kind === framework.ZLinkFrameworkErrorKind.ProtocolError
+  );
 });
 
 test('channel correlation follows the request versus one-way contract', () => {

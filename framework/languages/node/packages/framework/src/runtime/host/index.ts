@@ -199,6 +199,10 @@ import {
   decodeFrameworkPayloadMessage,
   encodeFrameworkPayloadMessage
 } from '../messaging/payload-codec';
+import {
+  decodeFrameworkCreationPayload,
+  encodeFrameworkCreationPayload
+} from '../messaging/creation-payload-codec';
 import { DefaultZLinkRouteMeshRuntimeOptions } from './route-mesh-runtime-options';
 import {
   ZLinkHostServiceRelocationRuntime,
@@ -2034,23 +2038,19 @@ export class ZLinkFrameworkRuntimeHost implements
             'Actor placement runtime is not initialized.'
           );
         }
-        const message = encodeFrameworkPayloadMessage(
+        const requestPayload = encodeFrameworkCreationPayload(
           call.request,
           this.options.registration.messageSerializers
         );
-        try {
-          return await placement.create(
-            actorId,
-            actorType,
-            createOnly,
-            call.meshName,
-            Buffer.from(message.data()),
-            call.timeoutMs,
-            signal
-          );
-        } finally {
-          message.close();
-        }
+        return await placement.create(
+          actorId,
+          actorType,
+          createOnly,
+          call.meshName,
+          requestPayload,
+          call.timeoutMs,
+          signal
+        );
       }
     };
   }
@@ -2340,16 +2340,10 @@ export class ZLinkFrameworkRuntimeHost implements
                   `User Spot factory '${record.stableType}' is not registered on RouteMesh '${meshName}'.`
                 );
               }
-              const message = RuntimeMessage.from(requestPayload);
-              let request: unknown;
-              try {
-                request = decodeFrameworkPayloadMessage(
-                  message,
-                  this.options.registration.messageSerializers
-                );
-              } finally {
-                message.close();
-              }
+              const request = decodeFrameworkCreationPayload(
+                requestPayload,
+                this.options.registration.messageSerializers
+              );
               local.beginUserSpotPublication(meshName, record.spotId as never);
               try {
                 const result = await local.getOrCreateWithAuthority(
@@ -2428,16 +2422,10 @@ export class ZLinkFrameworkRuntimeHost implements
           return await actorPlacement.handleRemoteCreate(
             record,
             async (requestPayload, authority, createSignal) => {
-              const message = RuntimeMessage.from(requestPayload);
-              let request: unknown;
-              try {
-                request = decodeFrameworkPayloadMessage(
-                  message,
-                  this.options.registration.messageSerializers
-                );
-              } finally {
-                message.close();
-              }
+              const request = decodeFrameworkCreationPayload(
+                requestPayload,
+                this.options.registration.messageSerializers
+              );
               const entrySpot = node.entrySpot().status();
               const nativeActorRef = node.restoreActorAuthority?.(
                 record.actorId,

@@ -47,6 +47,7 @@ import { disposeLifecycleHandlers } from '../handlers/handler-instance-scope';
 import {
   decodeFrameworkPayloadMessage,
   encodeFrameworkPayloadMessage,
+  frameworkPayloadContentType,
   wrapFrameworkPayloadMessage
 } from '../messaging/payload-codec';
 import { createFreshProviderInstance } from './spot-provider';
@@ -813,7 +814,11 @@ export class ZLinkSpotActivationLifecycle {
       let createResponse: ZLinkSpotCreateResponse | undefined;
       await activation.serial.execute(async () => {
         createResponse = await activation.spot.onCreate?.(
-          wrapFrameworkPayloadMessage(request, this.options.messageSerializers)
+          wrapFrameworkPayloadMessage(
+            request,
+            this.options.messageSerializers,
+            frameworkPayloadContentType(request)
+          )
         );
         if (createResponse?.accepted === false) {
           return;
@@ -926,7 +931,12 @@ export class ZLinkSpotActivationLifecycle {
     }
     const message = encodeFrameworkPayloadMessage(reply, this.options.messageSerializers);
     try {
-      return decodeFrameworkPayloadMessage(message, this.options.messageSerializers);
+      return decodeFrameworkPayloadMessage(
+        message,
+        this.options.messageSerializers,
+        undefined,
+        frameworkPayloadContentType(message)
+      );
     } finally {
       message.close();
     }

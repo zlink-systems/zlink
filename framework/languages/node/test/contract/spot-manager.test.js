@@ -95,6 +95,22 @@ function customTextSerializer(prefix = 'custom:') {
   };
 }
 
+function customBinarySerializer() {
+  return {
+    serialize(value) {
+      return zlink.Message.from(Buffer.concat([
+        Buffer.from([0]),
+        Buffer.from(value.text, 'utf8')
+      ]));
+    },
+    deserialize(message) {
+      const bytes = Buffer.from(message.toBytes());
+      assert.equal(bytes[0], 0);
+      return { text: bytes.subarray(1).toString('utf8') };
+    }
+  };
+}
+
 function createActorRequestParts(packetName, payload, requestSeq = 1n) {
   return [
     zlink.Message.from(Buffer.from(streamProtocol.encodeStreamHeader({
@@ -1231,6 +1247,26 @@ test('ZLinkSpotManager create request uses configured custom serializer without 
   assert.deepEqual(created.reply, { text: 'created' });
 });
 
+test('ZLinkSpotManager preserves binary serializer content type through onCreate', async () => {
+  const decoded = [];
+  class CodecSpot {
+    async onCreate(request) {
+      decoded.push(request.decode());
+      return { accepted: true };
+    }
+  }
+
+  const manager = new framework.DefaultZLinkSpotManager({
+    spotFactories: [CodecSpot],
+    messageSerializers: new Map([['application/x-custom-binary', customBinarySerializer()]])
+  });
+
+  const created = await manager.create('test.mesh', CodecSpot, { text: 'open' });
+
+  assert.equal(created.state, framework.ZLinkSpotCreateState.Created);
+  assert.deepEqual(decoded, [{ text: 'open' }]);
+});
+
 test('ZLinkSpotManager create request uses binary codec extensions without raw request code', async () => {
   const cases = [
     ['messagepack', msgpack.createMessagePackSerializer()],
@@ -2120,7 +2156,7 @@ test('spot manager local actor join awaits entry leave before commit and joined 
       }
     }
   };
-  const request = zlink.Message.from('hello');
+  const request = zlink.Message.from(JSON.stringify('hello'));
   const pending = manager.admitActorJoin('stage-1', actor, request, () => {
     events.push('commit');
   });

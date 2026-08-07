@@ -157,7 +157,8 @@ export class ZLinkActorPlacementCoordinator {
         ) {
           throw createInternalFrameworkException(
             ZLinkFrameworkInternalErrorKind.ActorCreateFailed,
-            `Remote Actor '${actorId}' creation failed.`,
+            `Remote Actor '${actorId}' creation failed with result ${remote.terminalResult}, `
+              + `failure code ${remote.failureCode}, and tail ${remote.tail?.kind ?? 'none'}.`,
             remote.terminalResult !== RequestResult.InvalidState
           );
         }
