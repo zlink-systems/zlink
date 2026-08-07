@@ -213,13 +213,13 @@ export class ServiceTopologyRegistry {
 
   peers(): readonly AdmittedServicePeer[] {
     return [...this.peersByRid.values()]
-      .sort((left, right) => left.descriptor.nodeRoutingId.localeCompare(right.descriptor.nodeRoutingId))
+      .sort((left, right) => compareOrdinal(left.descriptor.nodeRoutingId, right.descriptor.nodeRoutingId))
       .map(clonePeer);
   }
 
   notRequiredPeers(): readonly ServiceNodeDescriptor[] {
     return [...this.notRequiredByRid.values()]
-      .sort((left, right) => left.nodeRoutingId.localeCompare(right.nodeRoutingId))
+      .sort((left, right) => compareOrdinal(left.nodeRoutingId, right.nodeRoutingId))
       .map(cloneDescriptor);
   }
 
@@ -311,7 +311,10 @@ export class ServiceTopologyRegistry {
       },
       value => value.channel.weight,
       value => value.peer.descriptor.nodeRoutingId,
-      (left, right) => left.peer.descriptor.nodeRoutingId.localeCompare(right.peer.descriptor.nodeRoutingId),
+      (left, right) => compareOrdinal(
+        left.peer.descriptor.nodeRoutingId,
+        right.peer.descriptor.nodeRoutingId
+      ),
       value => isReady(value.peer)
     )?.peer;
   }
@@ -331,7 +334,7 @@ export class ServiceTopologyRegistry {
       }).map(clonePeer),
       peer => peer.descriptor.placementWeight,
       peer => peer.descriptor.nodeRoutingId,
-      (left, right) => left.descriptor.nodeRoutingId.localeCompare(right.descriptor.nodeRoutingId),
+      (left, right) => compareOrdinal(left.descriptor.nodeRoutingId, right.descriptor.nodeRoutingId),
       isReady
     );
   }
@@ -358,7 +361,7 @@ export class ServiceTopologyRegistry {
       },
       descriptor => descriptor.placementWeight,
       descriptor => descriptor.nodeRoutingId,
-      (left, right) => left.nodeRoutingId.localeCompare(right.nodeRoutingId),
+      (left, right) => compareOrdinal(left.nodeRoutingId, right.nodeRoutingId),
       isReady
     );
   }
@@ -570,8 +573,12 @@ function compareConnectionCandidate(
   rightDiscriminator: string,
   rightId: string
 ): number {
-  const discriminator = leftDiscriminator.localeCompare(rightDiscriminator);
-  return discriminator === 0 ? leftId.localeCompare(rightId) : discriminator;
+  const discriminator = compareOrdinal(leftDiscriminator, rightDiscriminator);
+  return discriminator === 0 ? compareOrdinal(leftId, rightId) : discriminator;
+}
+
+function compareOrdinal(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 function toComparable(descriptor: ServiceNodeDescriptor): unknown {

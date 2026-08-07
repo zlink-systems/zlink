@@ -24,11 +24,6 @@ interface Current<T> {
   readonly connectionId: string;
 }
 
-interface ClientServerSelectionCycle {
-  readonly values: readonly SelectedClientServer[];
-  cursor: number;
-}
-
 export interface SelectedClientServer {
   readonly descriptor: ClientServerDescriptor;
   readonly connectionId: string;
@@ -38,7 +33,7 @@ export interface SelectedClientServer {
 export class ServiceDiscoveryRegistry {
   private readonly clientServers = new Map<string, Current<ClientServerDescriptor>>();
   private readonly fanoutPublishers = new Map<string, Current<FanoutPublisherDescriptor>>();
-  private readonly clientServerSelections = new Map<string, ClientServerSelectionCycle>();
+  private readonly clientServerSelections = new Map<string, SmoothWeightedSelection<SelectedClientServer>>();
 
   admitClientServer(descriptor: ClientServerDescriptor, connectionId: string): boolean {
     validateClientServer(descriptor);
@@ -89,22 +84,19 @@ export class ServiceDiscoveryRegistry {
   }
 
   selectClientServerConnection(channelName: string): SelectedClientServer | undefined {
-    let cycle = this.clientServerSelections.get(channelName);
-    if (cycle === undefined) {
-      cycle = this.buildClientServerSelection(channelName);
-      this.clientServerSelections.set(channelName, cycle);
+    let selection = this.clientServerSelections.get(channelName);
+    if (selection === undefined) {
+      selection = new SmoothWeightedSelection(() => this.clientServerCandidates(channelName));
+      this.clientServerSelections.set(channelName, selection);
     }
-    if (cycle.values.length === 0) return undefined;
-    const selected = cycle.values[cycle.cursor]!;
-    cycle.cursor = (cycle.cursor + 1) % cycle.values.length;
-    return selected;
+    return selection.select();
   }
 
   clientServerDescriptors(channelName: string): readonly ClientServerDescriptor[] {
     return [...this.clientServers.values()]
       .map(value => value.descriptor)
       .filter(value => value.channelName === channelName)
-      .sort((left, right) => left.serverRoutingId.localeCompare(right.serverRoutingId))
+      .sort((left, right) => compareOrdinal(left.serverRoutingId, right.serverRoutingId))
       .map(value => ({ ...value }));
   }
 
@@ -165,40 +157,31 @@ export class ServiceDiscoveryRegistry {
 
   private invalidateClientServerCandidates(channelName: string): void {
     if (this.clientServerSelections.has(channelName)) {
-      this.clientServerSelections.set(channelName, this.buildClientServerSelection(channelName));
+      this.clientServerSelections.get(channelName)!.rebuild();
     }
   }
 
-  private buildClientServerSelection(channelName: string): ClientServerSelectionCycle {
-    const candidates = [...this.clientServers.values()]
+  private clientServerCandidates(channelName: string) {
+    return [...this.clientServers.values()]
       .filter(value =>
         value.descriptor.channelName === channelName
         && value.descriptor.state === 'serving'
         && value.descriptor.weight > 0)
       .sort((left, right) =>
-        left.descriptor.serverRoutingId.localeCompare(right.descriptor.serverRoutingId));
-    const total = candidates.reduce((sum, value) => sum + BigInt(value.descriptor.weight), 0n);
-    const weights = candidates.map(value => ({ value, current: 0n }));
-    const values: SelectedClientServer[] = [];
-    for (let index = 0n; index < total; index += 1n) {
-      let selected = weights[0];
-      for (const candidate of weights) {
-        candidate.current += BigInt(candidate.value.descriptor.weight);
-        if (candidate.current > selected.current
-            || (candidate.current === selected.current
-              && candidate.value.descriptor.serverRoutingId
-                < selected.value.descriptor.serverRoutingId)) {
-          selected = candidate;
-        }
-      }
-      selected.current -= total;
-      values.push(Object.freeze({
-        descriptor: Object.freeze({ ...selected.value.descriptor }),
-        connectionId: selected.value.connectionId
+        compareOrdinal(left.descriptor.serverRoutingId, right.descriptor.serverRoutingId))
+      .map(value => ({
+        id: value.descriptor.serverRoutingId,
+        weight: value.descriptor.weight,
+        value: Object.freeze({
+          descriptor: Object.freeze({ ...value.descriptor }),
+          connectionId: value.connectionId
+        })
       }));
-    }
-    return { values: Object.freeze(values), cursor: 0 };
   }
+}
+
+function compareOrdinal(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 function sameDescriptor<T extends { readonly lifecycleGeneration: bigint; readonly descriptorRevision: bigint }>(
@@ -273,3 +256,4 @@ function requireText(value: string, field: string): void {
     throw new TypeError(`${field} must be non-empty text without NUL.`);
   }
 }
+import { SmoothWeightedSelection } from './service-weighted-selection';

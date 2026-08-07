@@ -84,3 +84,23 @@ test('ClientServer selection invalidates its cached eligible set on disconnect',
     'server-a'
   );
 });
+
+test('ClientServer weighted selection preserves credit across membership changes', () => {
+  const discovery = new ServiceDiscoveryRegistry();
+  assert.equal(discovery.admitClientServer(clientServer('A', 100), 'connection-a'), true);
+  assert.equal(discovery.admitClientServer(clientServer('B', 300), 'connection-b'), true);
+
+  assert.equal(discovery.selectClientServerConnection('orders').descriptor.serverRoutingId, 'B');
+  assert.equal(discovery.admitClientServer(clientServer('C', 100), 'connection-c'), true);
+  assert.equal(discovery.selectClientServerConnection('orders').descriptor.serverRoutingId, 'A');
+});
+
+test('weighted selection falls back without precomputing a cycle proportional to large weights', () => {
+  const discovery = new ServiceDiscoveryRegistry();
+  assert.equal(discovery.admitClientServer(clientServer('A', 4_999), 'connection-a'), true);
+  assert.equal(discovery.admitClientServer(clientServer('B', 5_000), 'connection-b'), true);
+
+  const selected = Array.from({ length: 8 }, () =>
+    discovery.selectClientServerConnection('orders').descriptor.serverRoutingId);
+  assert.deepEqual(selected, ['B', 'A', 'B', 'A', 'B', 'A', 'B', 'A']);
+});
