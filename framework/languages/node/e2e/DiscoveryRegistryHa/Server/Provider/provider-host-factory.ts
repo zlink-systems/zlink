@@ -7,10 +7,12 @@ import {
   type ZLinkFrameworkRuntime
 } from '@zlink-systems/framework';
 import {
+  ZLINK_ACTOR_MANAGER,
   ZLINK_ROUTE_MESH_RUNTIME_OPTIONS,
   ZLINK_FRAMEWORK_RUNTIME,
   ZLINK_FANOUT_CLIENT,
   ZLINK_LOCATION_RUNTIME_QUERY,
+  ZLINK_SPOT_MANAGER,
   ZLinkModule,
   zlinkFramework
 } from '@zlink-systems/nestjs';
@@ -32,6 +34,13 @@ import {
   configureObjectActivationDelay,
   ObjectRequestHandler
 } from './Handlers/object-request-handler';
+import {
+  Config6ActorFactory,
+  Config6ActorType,
+  Config6EntrySpot,
+  Config6UserSpot,
+  Config6UserSpotType
+} from './Handlers/capacity-objects';
 import {
   ClientServerRequestHandler,
   SecondaryRequestHandler
@@ -58,9 +67,20 @@ export async function startProviderHost(): Promise<void> {
   const frameworkRuntime = app.get(ZLINK_FRAMEWORK_RUNTIME, { strict: false }) as ZLinkFrameworkRuntime;
   const fanout = app.get(ZLINK_FANOUT_CLIENT, { strict: false }) as ZLinkFanoutClient;
   const locationQuery = app.get(ZLINK_LOCATION_RUNTIME_QUERY, { strict: false }) as import('@zlink-systems/framework').ZLinkLocationRuntimeQuery;
+  const actorManager = app.get(ZLINK_ACTOR_MANAGER, { strict: false }) as import('@zlink-systems/framework').ZLinkActorManager;
+  const spotManager = app.get(ZLINK_SPOT_MANAGER, { strict: false }) as import('@zlink-systems/framework').ZLinkSpotManager;
   const server = await startHttpServer(
     options.httpUrl,
-    createProviderEndpoints(evidence, runtimeOptions, frameworkRuntime, locationQuery, fanout, () => { stopping = true; })
+    createProviderEndpoints(
+      evidence,
+      runtimeOptions,
+      frameworkRuntime,
+      locationQuery,
+      actorManager,
+      spotManager,
+      fanout,
+      () => { stopping = true; }
+    )
   );
   while (!stopping) {
     await new Promise((resolve) => setTimeout(resolve, 100));
@@ -106,7 +126,7 @@ function createProviderModule(): {
           const profile = builder.addRouteMesh(ChannelNames.profile)
             .listen(options.channelEndpoint)
             .routingId(options.rid)
-            .setActorLimit(unlimitedPopulation || atomicCapacity ? 0 : 10_000)
+            .setActorLimit(unlimitedPopulation ? 0 : atomicCapacity ? 3 : 10_000)
             .setSpotLimit(unlimitedPopulation ? 0 : atomicCapacity ? 4 : 2000)
             .setActivationConcurrency(unlimitedPopulation ? 2 : atomicCapacity ? 4 : 64);
           profile.channel(ChannelNames.profile).server()
@@ -125,7 +145,22 @@ function createProviderModule(): {
             else fanout.enablePublisher(0);
             fanout.setRoutingIdPrefix(`${options.rid}-fanout`);
           }
-          profile.objects().server().addInstanceSpotFactory(
+          const objects = profile.objects().server();
+          objects.addEntrySpot(Config6EntrySpot);
+          objects.addActorFactory(
+            Config6ActorType,
+            Config6ActorFactory,
+            (factory) => factory.disableRelocation()
+          );
+          objects.addSpotFactory(
+            Config6UserSpotType,
+            Config6UserSpot,
+            (factory) => {
+              factory.disableRelocation();
+              factory.stableTypeLimit(unlimitedPopulation ? 0 : atomicCapacity ? 3 : 2000);
+            }
+          );
+          objects.addInstanceSpotFactory(
             ObjectSpotType,
             Config6InstanceSpot,
             (factory) => {
@@ -146,7 +181,10 @@ function createProviderModule(): {
       ClientServerRequestHandler,
       ObjectRequestHandler,
       Config6InstanceSpot,
-      Config6InstanceTimer
+      Config6InstanceTimer,
+      Config6ActorFactory,
+      Config6EntrySpot,
+      Config6UserSpot
     ]
   })(ProviderModule);
   return {

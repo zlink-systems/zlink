@@ -1487,6 +1487,34 @@ test('actor manager fluent create reports factory failures', async () => {
   );
 });
 
+test('reserved Actor factory failure destroys native staging before capacity is reused', async () => {
+  const destroyed = [];
+  class FailingFactory {
+    create() {
+      throw new Error('injected reserved factory failure');
+    }
+  }
+  const manager = createActorManager({
+    actorFactories: new Map([['player', FailingFactory]]),
+    actorMeshNameProvider: () => 'play-mesh',
+    nativeActorNode: {
+      async destroyActor(actor) {
+        destroyed.push(actor);
+      }
+    }
+  });
+  const nativeRef = { nodeRid: zlink.RoutingId.from('node-a'), actorId: 'failed', generation: 7n };
+
+  await assert.rejects(
+    () => manager.createReservedActorResult('failed', 'player', {}, undefined, nativeRef),
+    (error) => error.kind === framework.ZLinkFrameworkErrorKind.InternalFailure
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(destroyed, [nativeRef]);
+  assert.equal(manager.activeActorCount('play-mesh'), 0);
+});
+
 test('ZLinkActorContext joinSpot uses configured custom serializer without raw request code', async () => {
   const calls = [];
   const replyMessage = zlink.Message.from('custom:joined');

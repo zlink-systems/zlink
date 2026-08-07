@@ -30,7 +30,7 @@
 | SF-F9 | 구현 | SF-C3와 동일한 public channel replacement fixture에서 old provider를 pause/resume하고, replacement가 계속 current ready target로 선택되며 old lifecycle 재개 뒤에도 replacement evidence만 증가하는지 SF-F9 marker로 검증한다. |
 | SF-F10 | 미구현 | 다수 accepted request와 relocation completion의 ID별 terminal을 함께 검증해야 한다. |
 | SF-F11 | 미구현 | cancellation/response loss 뒤 payload isolation과 단일 terminal을 검증해야 한다. |
-| SF-G1 | 미구현 | Actor·Spot·stable type의 양수 capacity, CapacityExceeded 결과, factory failure rollback과 cleanup 후 slot 재사용을 같은 fixture에서 검증해야 한다. |
+| SF-G1 | 구현 | Actor 총량 3, Spot 총량 4, User Spot stable type 3을 함께 설정한다. Actor와 User Spot factory failure 뒤 reservation이 반환되는지, 동시 create 초과가 `CapacityExceeded`인지, destroy·close 뒤 slot을 다시 사용하는지를 public create terminal과 MeshNode descriptor count로 검증한다. 실제 process 증거: `log/20260808-022838-1932368`. |
 | SF-G2 | 구현됨 | activation concurrency gate가 Instance factory 실행을 제한하고 public descriptor의 active projection을 갱신한다. 32개 valid create의 최종 성공과 관찰된 active 상한을 검증한다. |
 | SF-G3 | 미구현 | User Spot aggregate capacity의 all-or-none 결과를 검증해야 한다. |
 
