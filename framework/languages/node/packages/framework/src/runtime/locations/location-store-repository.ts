@@ -1993,9 +1993,47 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     if (result.kind === 'expired') {
       throw new Error('Location Store scan snapshot expired.');
     }
+    const items = await Promise.all(result.value.items.map(async item => {
+      const descriptor = reviveMeshDescriptor(
+        decodeJson<MeshRecord>(item.value.bytes).descriptor
+      );
+      const capacityRead = await this.provider.read(
+        capacityKey(descriptor.meshName, String(descriptor.rid)),
+        signal
+      );
+      const capacity = capacityRead.kind === 'missing'
+        ? emptyCapacityRecord()
+        : decodeJson<CapacityRecord>(capacityRead.value.bytes);
+      return {
+        ...descriptor,
+        populationCapacity: {
+          actors: {
+            ...descriptor.populationCapacity.actors,
+            active: capacity.active.actors,
+            reserved: capacity.pending.actors
+          },
+          spots: {
+            ...descriptor.populationCapacity.spots,
+            active: capacity.active.spots,
+            reserved: capacity.pending.spots
+          },
+          spotTypes: descriptor.populationCapacity.spotTypes.map(value => {
+            const key = capacityTypeKey({
+              objectKind: value.objectKind,
+              stableType: value.stableType,
+              count: 0
+            });
+            return {
+              ...value,
+              active: capacity.active.spotTypes[key] ?? 0,
+              reserved: capacity.pending.spotTypes[key] ?? 0
+            };
+          })
+        }
+      };
+    }));
     return {
-      items: result.value.items.map(item =>
-        reviveMeshDescriptor(decodeJson<MeshRecord>(item.value.bytes).descriptor)),
+      items,
       continuationToken: result.value.nextCursor?.value
     };
   }

@@ -331,6 +331,21 @@ test('redis-backed aggregate prepare commit and abort converge across repository
         sourceTarget
       ));
     }
+    const sourceDescriptor = (await source.listMeshNodes('play')).items.find(row =>
+      String(row.rid) === String(sourceTarget.nodeRid));
+    assert.ok(sourceDescriptor);
+    assert.deepEqual(sourceDescriptor.populationCapacity.spots, {
+      active: 12,
+      reserved: 0,
+      limit: 64
+    });
+    assert.deepEqual(sourceDescriptor.populationCapacity.spotTypes[0], {
+      objectKind: 'user_spot',
+      stableType: 'lobby',
+      active: 12,
+      reserved: 0,
+      limit: 64
+    });
     const aggregateId = { value: '44444444-4444-4444-8444-444444444444' };
     const request = aggregateRequest(
       aggregateId,

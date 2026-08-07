@@ -557,6 +557,33 @@ run_sf_c3() {
   cat "$LOG_DIR/client-resumed.stdout.log"
 }
 
+run_sf_g3_case() {
+  local client_pid variant="${G3_VARIANT:?G3_VARIANT is required}"
+  start_topology no disabled disabled "sf-g3-$variant"
+  run_client SF-G3 "$LOG_DIR/client.stdout.log" "$LOG_DIR/client.stderr.log" &
+  client_pid="$!"
+  wait_file_contains "$LOG_DIR/client.stdout.log" "scenario-control SF-G3 start-provider-b" \
+    "SF-G3 client did not finish source aggregate setup" "$client_pid" 120
+  local deadline=$((SECONDS + ROUTE_SETTLE_TIMEOUT_SECONDS))
+  while (( SECONDS < deadline )); do
+    if node -e "fetch(process.argv[1] + '/location/mesh').then(async (r) => { const rows=await r.json(); process.exit(rows.find((v) => v.rid === 'api-a')?.placementWeight === 0 ? 0 : 1); }).catch(() => process.exit(1));" "$CONSUMER_URL"; then
+      break
+    fi
+    sleep 0.1
+  done
+  start_provider_b
+  wait "$client_pid"
+  cat "$LOG_DIR/client.stdout.log"
+}
+
+run_sf_g3() {
+  local variant
+  for variant in short-spot short-actor short-type sufficient; do
+    G3_VARIANT="$variant" "$0" SF-G3-CASE
+  done
+  echo "scenario SF-G3 passed"
+}
+
 run_unimplemented_scenario() {
   echo "$SCENARIO is not implemented by the Config 6 Node fixture; refusing profile-only success." >&2
   exit 3
@@ -639,8 +666,14 @@ case "$SCENARIO" in
     run_sf_c5a
     cat "$LOG_DIR/client.stdout.log"
     ;;
-  SF-F1|SF-F2|SF-F3|SF-F4|SF-F5|SF-F7|SF-F8|SF-F10|SF-F11|SF-G3)
+  SF-F1|SF-F2|SF-F3|SF-F4|SF-F5|SF-F7|SF-F8|SF-F10|SF-F11)
     run_unimplemented_scenario
+    ;;
+  SF-G3)
+    run_sf_g3
+    ;;
+  SF-G3-CASE)
+    run_sf_g3_case
     ;;
   SF-G2)
     start_topology no disabled disabled sf-g2

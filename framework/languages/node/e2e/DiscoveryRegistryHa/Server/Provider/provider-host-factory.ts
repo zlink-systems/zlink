@@ -8,6 +8,7 @@ import {
 } from '@zlink-systems/framework';
 import {
   ZLINK_ACTOR_MANAGER,
+  ZLINK_ACTOR_CLIENT,
   ZLINK_ROUTE_MESH_RUNTIME_OPTIONS,
   ZLINK_FRAMEWORK_RUNTIME,
   ZLINK_FANOUT_CLIENT,
@@ -36,9 +37,13 @@ import {
 } from './Handlers/object-request-handler';
 import {
   Config6ActorFactory,
+  Config6ActorAdapter,
   Config6ActorType,
   Config6EntrySpot,
   Config6UserSpot,
+  Config6UserSpotAdapter,
+  Config6JoinHandler,
+  Config6ProbeHandler,
   Config6UserSpotType
 } from './Handlers/capacity-objects';
 import {
@@ -68,6 +73,7 @@ export async function startProviderHost(): Promise<void> {
   const fanout = app.get(ZLINK_FANOUT_CLIENT, { strict: false }) as ZLinkFanoutClient;
   const locationQuery = app.get(ZLINK_LOCATION_RUNTIME_QUERY, { strict: false }) as import('@zlink-systems/framework').ZLinkLocationRuntimeQuery;
   const actorManager = app.get(ZLINK_ACTOR_MANAGER, { strict: false }) as import('@zlink-systems/framework').ZLinkActorManager;
+  const actorClient = app.get(ZLINK_ACTOR_CLIENT, { strict: false }) as import('@zlink-systems/framework').ZLinkActorClient;
   const spotManager = app.get(ZLINK_SPOT_MANAGER, { strict: false }) as import('@zlink-systems/framework').ZLinkSpotManager;
   const server = await startHttpServer(
     options.httpUrl,
@@ -77,6 +83,7 @@ export async function startProviderHost(): Promise<void> {
       frameworkRuntime,
       locationQuery,
       actorManager,
+      actorClient,
       spotManager,
       fanout,
       () => { stopping = true; }
@@ -110,6 +117,17 @@ function createProviderModule(): {
           const options = value as ProviderOptions;
           const unlimitedPopulation = options.capacityProfile === 'sf-g2';
           const atomicCapacity = options.capacityProfile === 'sf-g1';
+          const aggregateCapacity = options.capacityProfile.startsWith('sf-g3-');
+          const aggregateTarget = aggregateCapacity && options.rid === 'api-b';
+          const actorLimit = aggregateCapacity
+            ? aggregateTarget && options.capacityProfile === 'sf-g3-short-actor' ? 1 : 8
+            : unlimitedPopulation ? 0 : atomicCapacity ? 3 : 10_000;
+          const spotLimit = aggregateCapacity
+            ? aggregateTarget && options.capacityProfile === 'sf-g3-short-spot' ? 1 : 8
+            : unlimitedPopulation ? 0 : atomicCapacity ? 4 : 2000;
+          const userSpotTypeLimit = aggregateCapacity
+            ? aggregateTarget && options.capacityProfile === 'sf-g3-short-type' ? 1 : 8
+            : unlimitedPopulation ? 0 : atomicCapacity ? 3 : 2000;
           fs.mkdirSync(options.logDir, { recursive: true });
           const builder = zlinkFramework();
           builder
@@ -126,8 +144,8 @@ function createProviderModule(): {
           const profile = builder.addRouteMesh(ChannelNames.profile)
             .listen(options.channelEndpoint)
             .routingId(options.rid)
-            .setActorLimit(unlimitedPopulation ? 0 : atomicCapacity ? 3 : 10_000)
-            .setSpotLimit(unlimitedPopulation ? 0 : atomicCapacity ? 4 : 2000)
+            .setActorLimit(actorLimit)
+            .setSpotLimit(spotLimit)
             .setActivationConcurrency(unlimitedPopulation ? 2 : atomicCapacity ? 4 : 64);
           profile.channel(ChannelNames.profile).server()
             .addRequestHandler(PacketNames.profileReq, ProfileRequestHandler);
@@ -150,14 +168,17 @@ function createProviderModule(): {
           objects.addActorFactory(
             Config6ActorType,
             Config6ActorFactory,
-            (factory) => factory.disableRelocation()
+            (factory) => aggregateCapacity
+              ? factory.preserveStateWith(Config6ActorAdapter)
+              : factory.disableRelocation()
           );
           objects.addSpotFactory(
             Config6UserSpotType,
             Config6UserSpot,
             (factory) => {
-              factory.disableRelocation();
-              factory.stableTypeLimit(unlimitedPopulation ? 0 : atomicCapacity ? 3 : 2000);
+              if (aggregateCapacity) factory.preserveStateWith(Config6UserSpotAdapter);
+              else factory.disableRelocation();
+              factory.stableTypeLimit(userSpotTypeLimit);
             }
           );
           objects.addInstanceSpotFactory(
@@ -183,8 +204,12 @@ function createProviderModule(): {
       Config6InstanceSpot,
       Config6InstanceTimer,
       Config6ActorFactory,
+      Config6ActorAdapter,
       Config6EntrySpot,
-      Config6UserSpot
+      Config6UserSpot,
+      Config6UserSpotAdapter,
+      Config6JoinHandler,
+      Config6ProbeHandler
     ]
   })(ProviderModule);
   return {

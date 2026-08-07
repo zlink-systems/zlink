@@ -391,6 +391,61 @@ test('transferred actor materialization creates a fresh actor before restoring s
   assert.deepEqual(lifecycle, ['factory', 'destroy:alice:2', 'cleanup:alice']);
 });
 
+test('relocation Actor materialization bypasses the new-Actor Entry Spot callback', async () => {
+  const events = [];
+  class RelocatedActor {
+    constructor(context) {
+      this.context = context;
+    }
+  }
+  class RelocatedFactory {
+    create(context) {
+      events.push(`factory:${context.actorId}`);
+      return new RelocatedActor(context);
+    }
+  }
+  const node = createMockSpotNode({
+    restoreActorAuthority(actorId, _stableType, generation) {
+      events.push(`native:${actorId}:${generation}`);
+      return { nodeRid: 'target-node', actorId, generation };
+    },
+    discardRelocatedActor(actor) {
+      events.push(`discard:${actor.actorId}`);
+    }
+  });
+  const manager = createActorManager({
+    actorFactories: new Map([['relocated', RelocatedFactory]]),
+    nativeActorNode: node,
+    async actorCreatedNotifier() {
+      events.push('onCreateActor');
+      throw new Error('relocation must not invoke the new-Actor callback');
+    }
+  });
+
+  const actor = await manager.prepareRelocationActor(
+    'relocated-actor',
+    'relocated',
+    7n,
+    11n,
+    'user-spot',
+    5n,
+    3n
+  );
+
+  assert.equal(actor.context.actorId, 'relocated-actor');
+  assert.equal(manager.getState('relocated-actor').spotId, 'user-spot');
+  assert.deepEqual(events, [
+    'native:relocated-actor:7',
+    'factory:relocated-actor'
+  ]);
+  await manager.abortRelocationActor('relocated-actor');
+  assert.deepEqual(events, [
+    'native:relocated-actor:7',
+    'factory:relocated-actor',
+    'discard:relocated-actor'
+  ]);
+});
+
 test('transferred actor rollback keeps a dispatch-disabled tombstone until native destroy retry succeeds', async () => {
   class TransferActor {
     constructor(actorId, context) {

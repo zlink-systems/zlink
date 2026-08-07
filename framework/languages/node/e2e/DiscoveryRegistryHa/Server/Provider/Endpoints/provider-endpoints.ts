@@ -1,15 +1,23 @@
 import {
   ZLinkFrameworkRelocationMode,
+  ZLinkFrameworkRelocationOutcome,
   ZLinkFrameworkErrorKind,
   type ZLinkFanoutClient,
   type ZLinkRouteMeshRuntimeOptions,
   type ZLinkFrameworkRuntime,
   type ZLinkLocationRuntimeQuery,
   type ZLinkActorManager,
+  type ZLinkActorClient,
   type ZLinkSpotManager
 } from '@zlink-systems/framework';
 import { ChannelNames, FanoutEvent, type EvidenceWaitReq } from '../../../Shared/messages';
-import { Config6ActorType, Config6UserSpotType } from '../Handlers/capacity-objects';
+import {
+  Config6ActorType,
+  Config6JoinReq,
+  Config6ProbeReq,
+  Config6UserSpotType,
+  type Config6ProbeRes
+} from '../Handlers/capacity-objects';
 import { EvidenceStore } from '../Infrastructure/evidence-store';
 import type { HttpRoute } from '../Support/http-server';
 
@@ -19,6 +27,7 @@ export function createProviderEndpoints(
   frameworkRuntime: ZLinkFrameworkRuntime,
   locationQuery: ZLinkLocationRuntimeQuery,
   actors: ZLinkActorManager,
+  actorClient: ZLinkActorClient,
   spots: ZLinkSpotManager,
   fanout: ZLinkFanoutClient,
   stop: () => void
@@ -29,13 +38,25 @@ export function createProviderEndpoints(
     { method: 'GET', path: '/location/status', handle: () => locationQuery.getStatus() },
     {
       method: 'POST',
+      path: '/placement/weight',
+      handle: (body) => {
+        const weight = Number((body as { weight: number }).weight);
+        if (!Number.isInteger(weight) || weight < 0 || weight > 1000) {
+          throw new RangeError('Placement weight must be an integer in 0..1000.');
+        }
+        runtimeOptions.mesh(ChannelNames.profile).placementWeight = weight;
+        return { weight };
+      }
+    },
+    {
+      method: 'POST',
       path: '/capacity/actors',
       handle: async (body) => {
         const request = body as { actorId: string };
         try {
           const result = await actors.create(request.actorId, Config6ActorType)
             .inMesh(ChannelNames.profile)
-            .request({})
+            .request({ state: (request as { state?: string }).state ?? '' })
             .timeout(5000)
             .submit();
           if (result.status === 'rejected') {
@@ -49,6 +70,26 @@ export function createProviderEndpoints(
         } catch (error) {
           return publicFailure(error);
         }
+      }
+    },
+    {
+      method: 'POST',
+      path: '/capacity/actors/join',
+      handle: async (body) => {
+        const request = body as { actorId: string; spotId: string };
+        return await actorClient.requestToActor(request.actorId, new Config6JoinReq(request.spotId))
+          .timeout(10_000)
+          .submit<{ accepted: true }>();
+      }
+    },
+    {
+      method: 'POST',
+      path: '/capacity/actors/probe',
+      handle: async (body) => {
+        const request = body as { actorId: string };
+        return await actorClient.requestToActor(request.actorId, new Config6ProbeReq())
+          .timeout(10_000)
+          .submit<Config6ProbeRes>();
       }
     },
     {
@@ -68,7 +109,10 @@ export function createProviderEndpoints(
         try {
           const result = await spots.getOrCreate(request.spotId, Config6UserSpotType)
             .inMesh(ChannelNames.profile)
-            .request({ failFactory: request.failFactory === true })
+            .request({
+              failFactory: request.failFactory === true,
+              state: (request as { state?: string }).state ?? ''
+            })
             .timeout(5000)
             .submit();
           return {
@@ -119,7 +163,7 @@ export function createProviderEndpoints(
         evidence.add(`drain-started|rid=${evidence.rid}|weight=0`);
         const result = await frameworkRuntime.relocate({ mode: ZLinkFrameworkRelocationMode.PlannedMaintenance, deadlineMs: 30_000 });
         evidence.add(`retire-finished|rid=${evidence.rid}|outcome=${result.outcome}|reason=${result.reason}`);
-        stop();
+        if (result.outcome === ZLinkFrameworkRelocationOutcome.Relocated) stop();
         return result;
       }
     },
