@@ -556,6 +556,7 @@ test('ClientServer liveness ACK is fenced to the current probe and application t
   const requests = [];
   const inbound = [];
   const sent = [];
+  const diagnostics = [];
   dealer.recv = () => inbound.shift();
   dealer.send = message => {
     sent.push(Buffer.from(message.data()));
@@ -576,7 +577,8 @@ test('ClientServer liveness ACK is fenced to the current probe and application t
       openSocketMonitor() {
         return { nativeInstance: {}, onEvent() {}, async dispose() {} };
       }
-    }
+    },
+    error => diagnostics.push(error)
   );
   sockets.openClientServerConnection(
     'orders',
@@ -602,6 +604,8 @@ test('ClientServer liveness ACK is fenced to the current probe and application t
   requests[0].callback(0, [
     zlink.Message.from(clientServerWire.encodeClientServerLivenessAck(probe.probeId + 1n))
   ]);
+  assert.equal(diagnostics.length, 1);
+  assert.match(diagnostics[0].message, /stale or duplicate liveness ACK/);
   sockets.tickClientServerLiveness(base + 15_001);
   assert.equal(sockets.clientDealerForOutbound('orders'), undefined);
   await sockets.dispose();
@@ -743,6 +747,7 @@ test('ClientServer server probes each admitted client and fences ACK by routing 
   });
   const sent = [];
   const disconnected = [];
+  const diagnostics = [];
   let acceptSend = true;
   const router = {
     nativeInstance: {},
@@ -770,7 +775,9 @@ test('ClientServer server probes each admitted client and fences ACK by routing 
       createRouterSocket() { return router; },
       createReadablePoller() { return readyPoller(); }
     },
-    {}
+    {},
+    undefined,
+    error => diagnostics.push(error)
   );
   sockets.clientServerServerIdentity('orders');
   const server = {
@@ -808,6 +815,8 @@ test('ClientServer server probes each admitted client and fences ACK by routing 
     routingId: 'client-b'
   }, router), true);
   wrongAck.close();
+  assert.equal(diagnostics.length, 1);
+  assert.match(diagnostics[0].message, /stale or duplicate liveness ACK/);
   sockets.tickClientServerLiveness(base + 15_001);
   assert.deepEqual(disconnected, ['client-a']);
 

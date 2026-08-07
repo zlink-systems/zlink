@@ -812,11 +812,17 @@ export class ZLinkChannelSocketRegistry {
       } else if (record.kind === 'livenessAck'
         && received.parts.length === 1
         && received.requestSeq === null) {
-        this.acceptClientServerServerLivenessAck(
+        if (!this.acceptClientServerServerLivenessAck(
           channelName,
           String(received.routingId),
           record.probeId
-        );
+        )) {
+          this.reportStaleClientServerLivenessAck(
+            channelName,
+            String(received.routingId),
+            record.probeId
+          );
+        }
         return true;
       } else if (record.kind !== 'hello'
         || received.parts.length !== 1
@@ -1365,6 +1371,7 @@ export class ZLinkChannelSocketRegistry {
   private requestClientServerLiveness(
     connectionId: string,
     connection: {
+      readonly channelName: string;
       readonly dealer: ZLinkBackendDealerSocket;
       readonly physicalConnectionId: symbol;
       outstandingProbeId?: bigint;
@@ -1378,11 +1385,18 @@ export class ZLinkChannelSocketRegistry {
         const current = this.clientServerConnections.get(connectionId);
         if (current === undefined
           || current.physicalConnectionId !== connection.physicalConnectionId
-          || current.outstandingProbeId !== probeId
           || result !== 0
           || parts.length !== 1) return;
         const record = decodeClientServerControl(parts[0]!.data());
-        if (record.kind !== 'livenessAck' || record.probeId !== probeId) return;
+        if (record.kind !== 'livenessAck') return;
+        if (current.outstandingProbeId !== probeId || record.probeId !== probeId) {
+          this.reportStaleClientServerLivenessAck(
+            connection.channelName,
+            connectionId,
+            record.probeId
+          );
+          return;
+        }
         current.outstandingProbeId = undefined;
         current.deadlineAt = performance.now() + CLIENT_SERVER_PEER_DEADLINE_MS;
       } finally {
@@ -1437,13 +1451,26 @@ export class ZLinkChannelSocketRegistry {
     channelName: string,
     routingId: RoutingId,
     probeId: bigint
-  ): void {
+  ): boolean {
     const peer = this.clientServerServerPeers.get(
       clientServerServerPeerKey(channelName, routingId)
     );
-    if (peer === undefined || peer.outstandingProbeId !== probeId) return;
+    if (peer === undefined || peer.outstandingProbeId !== probeId) return false;
     peer.outstandingProbeId = undefined;
     peer.deadlineAt = performance.now() + CLIENT_SERVER_PEER_DEADLINE_MS;
+    return true;
+  }
+
+  private reportStaleClientServerLivenessAck(
+    channelName: string,
+    peer: string,
+    probeId: bigint
+  ): void {
+    this.oneWayFailureSink?.(createInternalFrameworkException(
+      ZLinkFrameworkInternalErrorKind.RequestProtocolError,
+      `ClientServer '${channelName}' ignored stale or duplicate liveness ACK '${probeId}' from '${peer}'.`,
+      false
+    ));
   }
 
   private pushClientServerDescriptorUpdate(
