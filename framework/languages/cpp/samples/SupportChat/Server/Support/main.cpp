@@ -491,6 +491,9 @@ class conversation_spot_t : public spot_t<support_user_actor_t>
                              message_context_t &,
                              const set_typing_msg_t &request)
     {
+        if (require_conversation ().snapshot ().status == conversation_status_t::closed) {
+            co_return;
+        }
         auto typing = require_conversation ().set_typing (actor.participant_id,
                                                           request.is_typing);
         if (auto peer = peer_for (actor.participant_id)) {
@@ -523,12 +526,11 @@ class conversation_spot_t : public spot_t<support_user_actor_t>
         if (actor.role == role_t::agent) {
             auto joined = require_conversation ().join_agent (actor.participant_id,
                                                              actor.display_name);
-            co_await send_to_actor (
-              joined.state.customer_actor_id,
+            co_await broadcast (
               participant_joined_notify_t{joined.conversation_id,
-                                           actor.participant_id,
-                                           actor.role,
-                                           joined.state},
+                                          actor.participant_id,
+                                          actor.role,
+                                          joined.state},
               participant_joined_notify_t::packet_name);
             co_return join_conversation_res_t{false, joined.state};
         }
@@ -952,6 +954,21 @@ class supportchat_server_story_t
         require (rejoin.state.last_message_seq == 2, "reconnect state did not preserve messages");
         record ("reconnect-state=verified");
 
+        const auto room1_idle_deadline = room1.snapshot ().idle_deadline_unix_ms;
+        require (room1_idle_deadline.has_value (), "active conversation has no idle deadline");
+        const auto idle1 = room1.advance_time (*room1_idle_deadline);
+        const auto *idle_notify = std::get_if<conversation_idle_notify_t> (&idle1);
+        require (idle_notify != nullptr
+                   && idle_notify->state.status == conversation_status_t::waiting_for_close,
+                 "idle did not move to WaitingForClose");
+        const auto resumed = room1.send_message (
+          "customer-1", "The customer resumed the conversation.",
+          *room1_idle_deadline + 1);
+        require (resumed.message.message_seq == 3
+                   && resumed.state.status == conversation_status_t::active,
+                 "idle conversation did not resume within grace");
+        record ("idle-resume=verified");
+
         const auto closed2 = room2.close ();
         require (closed2.state.status == conversation_status_t::closed,
                  "explicit close did not close room2");
@@ -963,16 +980,16 @@ class supportchat_server_story_t
             duplicate_close_failed = true;
         }
         require (duplicate_close_failed, "closed room accepted a message");
+        (void) room2.set_typing ("customer-2", true);
+        record ("closed-typing-ignore=verified");
         record ("explicit-close=verified");
 
         const auto room1_state = room1.snapshot ();
         require (room1_state.idle_deadline_unix_ms.has_value (),
                  "active conversation has no idle deadline");
-        const auto idle1 = room1.advance_time (*room1_state.idle_deadline_unix_ms);
-        const auto *idle_notify = std::get_if<conversation_idle_notify_t> (&idle1);
-        require (idle_notify != nullptr
-                   && idle_notify->state.status == conversation_status_t::waiting_for_close,
-                 "idle did not move to WaitingForClose");
+        const auto idle_again = room1.advance_time (*room1_state.idle_deadline_unix_ms);
+        require (std::get_if<conversation_idle_notify_t> (&idle_again) != nullptr,
+                 "resumed conversation did not reach idle again");
         const auto closed1 = room1.advance_time (*room1_state.idle_deadline_unix_ms
                                                  + conversation_t::close_grace_ms);
         const auto *closed_notify = std::get_if<conversation_closed_notify_t> (&closed1);

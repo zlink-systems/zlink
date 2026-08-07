@@ -7,14 +7,14 @@ matrix다. 공통 시나리오는 새 public API의 근거가 아니며, 계약 
 
 ## 현재 조사 결과
 
-2026-08-06 기준 `verify_common_inventory.sh`가 확인한 범위는 14 configuration, 374
-scenario다. C++ 구현은 259개 inventory 조건이 열려 있다. 이 수치는 source가 없거나,
+2026-08-07 기준 `verify_common_inventory.sh`가 확인한 범위는 14 configuration, 374
+scenario다. C++ 구현은 258개 inventory 조건이 열려 있다. 이 수치는 source가 없거나,
 feature-map 상태가 incomplete/deferred가 아니거나, runner가 scenario를 실행하지 않는
 경우를 함께 포함한다.
 
 | Configuration | Common scenarios | Open condition | Decision |
 |---|---:|---:|---|
-| RegistryMessaging | 17 | 1 source | semantic E2E 구현 |
+| RegistryMessaging | 17 | 0 | 유지하고 regression 검증 |
 | SpotService | 66 | 26 | public contract와 fixture를 먼저 비교 |
 | PubSub | 24 | 27 | subscriber evidence와 reconnect 경로 구현 |
 | RegistrationCodec | 12 | 0 | 유지하고 regression 검증 |
@@ -100,3 +100,88 @@ RM-A7의 actual-process 검증에서는 Actor global create와 `Find`가 두 pro
 수정 뒤 `test_cpp_framework_m6b_runtime` build와 실행이 통과했다. 이 항목에는
 pre-admission request queue를 추가하지 않는다. 그런 동작이 필요하면 먼저
 readiness, ownership, error 결과를 공통 spec에 추가한 뒤 별도 설계로 구현해야 한다.
+
+## C++ SupportChat와 STREAM runtime 현재 판정 (2026-08-07)
+
+SupportChat의 C++ multi-process runner는 다음 명령으로 다시 build하고 실행했으며
+`PASS SupportChat.Cpp`와 `supportchat sample result=passed`를 출력했다.
+
+```bash
+ZLINK_CPP_BUILD_DIR=framework/languages/cpp/build/linux-ninja-vcpkg-debug \
+  timeout 300s bash framework/languages/cpp/samples/SupportChat/run_sample.sh
+```
+
+이 실행에서 Api, Session, Support와 Client process가 실제 public stream·HTTP·channel
+경로를 사용했다. authentication, assignment, deferred join, participant push, two-room
+MessageSeq, typing one-way, reconnect/re-auth/rejoin, explicit close, closed typing ignore,
+idle resume/close와 no-agent WaitingForAgent를 client assertion과 server flow log로 확인했다.
+SupportChat application gap은 이 실행 범위에서 닫혔다. 실행별 flow log는
+`framework/languages/cpp/samples/SupportChat/logs/flow-*.log`에 남는다.
+
+C++ STREAM runtime은 외부 TCP·TLS·WebSocket 경로를 Asio async operation으로 처리하고,
+Core STREAM은 Core socket과 `runtime_wake_timer_t`를 같은 `poller_t`에 등록한다. stop은
+fixed 100 ms polling이나 운영체제별 socket close에 의존하지 않고 timer event로 관찰한다.
+connection별 write queue는 active write에 부여한 `write_id`와 connection identity를
+completion에서 다시 확인한다. 따라서 late cancellation callback이 이미 끝난 write를
+다시 완료하거나 다음 write를 중복 시작하지 않는다. 이 내용은 공통
+runtime internals의 wake, progress isolation, session teardown 규칙과 일치하도록 반영했다.
+
+다음 항목은 여전히 별도 gap이다.
+
+- 공통 inventory 전체는 위의 2026-08-07 집계처럼 258개 open condition을 포함한다. 이번
+  SupportChat 결과를 전체 C++ E2E 완료로 확대하지 않는다.
+- C++ sample smoke target은 현재 Bingo, TicTacToe, DeliveryDispatch, GameQuest,
+  ShoppingMall, SupportChat의 6개다. C++ ZoneWorld target과 process runner는 원본
+  C++ sample에도 없으므로 구현 gap으로 유지한다.
+- 기본 `framework/languages/cpp/build` configure는 dependency prefix 또는 vcpkg
+  toolchain이 없으면 `protobufConfig.cmake`를 찾지 못할 수 있다. 명시된
+  `linux-ninja-vcpkg-debug` build는 통과했으므로, 남은 항목은 runtime 동작이 아니라
+  clean clone에서 dependency provenance를 자동으로 선택하는 build/package gap이다.
+
+## Unreal adapter와 Asio 검증 (2026-08-07)
+
+Unreal adapter가 사용하는 C++ core target은 `zlink_unreal_stream_connector`와 같은
+`zlink::stream_connector` static library다. 따라서 TCP·TLS·WebSocket의 socket 동작은
+Unreal API가 아니라 core 내부의 Boost.Asio가 소유한다. Unreal public header에는 Asio,
+Beast, OpenSSL 타입이 노출되지 않으며, callback은 `manual` dispatch queue를 거쳐
+Game Thread의 `Dispatch()`에서 delegate로 전달된다.
+
+Windows에서 필요한 Winsock system library는 runtime source branch가 아니라 CMake link
+dependency로 등록했다. `zlink_framework_cpp_add_asio_system_libraries()`가 connector,
+framework, HTTP client와 Unreal static target에 `ws2_32`와 `mswsock`을 연결한다.
+readable timeout은 socket 전체에 `cancel()`을 호출하지 않고 readiness
+`async_wait`에 연결한 `cancellation_signal`만 취소한다. timer와 socket completion은
+connection strand에서 직렬화되므로 진행 중인 read/write를 timeout이 취소하지 않는다.
+
+현재 Linux build에서 다음 CMake target과 CTest를 확인했다.
+
+```bash
+cmake --build framework/languages/cpp/build/linux-ninja-vcpkg-debug \
+  --parallel 2 --target zlink_stream_connector \
+  zlink_unreal_stream_connector test_unreal_stream_connector
+ctest --test-dir framework/languages/cpp/build/linux-ninja-vcpkg-debug \
+  --output-on-failure --parallel 2 \
+  -R '^(test_unreal_stream_connector|test_cpp_stream_connector)$'
+```
+
+두 test가 모두 통과했고, Unreal smoke는 세 번 반복해 모두 통과했다. 다만 이 CTest는
+`CoreMinimal.h`가 없는 standalone fallback wrapper를 compile하고 실행한다. 현재 환경에는
+`UnrealBuildTool`과 `UnrealEditor-Cmd`가 없어 UnrealHeaderTool, 실제 UBT link, Editor
+Automation Test까지는 실행하지 못했다. 따라서 Asio core의 Linux compile/smoke와
+Unreal wrapper contract는 확인했지만, Windows Unreal binary 실행까지 완료했다고 판정하지
+않는다.
+
+source plugin packaging은 `Tools/package-third-party.cmake`와
+`zlink-unreal-package.manifest` 경로로 정리했다. configured CMake build에서 이 script를
+실행하면 Unreal adapter, C++ binding, Core runtime과 선택된 native dependency가
+`ThirdParty/ZLink/`에 staging된다. script는 `StreamConnector` install component만
+사용하므로 server framework와 HTTP client 산출물을 섞지 않는다. manifest에는
+platform, architecture, configuration, compiler와 C++ standard도 기록하며,
+`ZLinkStreamConnector.Build.cs`는 이를 검증한 뒤 Unreal module에 include, link, runtime과
+system dependency를 등록한다. CMake export는 LZ4 경로를 package prefix 기준으로
+재작성하고 Windows Core import library도 함께 설치한다. 따라서 `.uplugin` source만
+복사하는 방식의 clean-consumer 누락은 수정했다.
+
+현재 환경에는 UnrealBuildTool, UnrealHeaderTool과 Windows toolchain이 없으므로 실제
+Windows Unreal binary와 Editor Automation Test 실행은 별도 검증 조건으로 남는다. 이는
+Asio runtime 또는 package manifest 계약의 실패가 아니라 해당 build 환경이 없는 상태다.

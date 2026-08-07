@@ -52,7 +52,9 @@ class user_directory_t
       {"customer",
        supportchat_user_t{"customer-1", "Customer One", std::string (role_t::customer)}},
       {"customer-2",
-       supportchat_user_t{"customer-2", "Customer Two", std::string (role_t::customer)}}};
+       supportchat_user_t{"customer-2", "Customer Two", std::string (role_t::customer)}},
+      {"customer-3",
+       supportchat_user_t{"customer-3", "Customer Three", std::string (role_t::customer)}}};
 };
 
 class authenticate_user_handler_t

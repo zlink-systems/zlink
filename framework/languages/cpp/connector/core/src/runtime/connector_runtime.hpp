@@ -38,6 +38,7 @@ struct pending_write_t
 {
     std::vector<std::uint8_t> frame;
     std::function<void (result_t<void>)> callback;
+    std::uint64_t write_id = 0;
 };
 
 struct pending_request_t
@@ -90,6 +91,7 @@ class connector_state_t : public std::enable_shared_from_this<connector_state_t>
     std::map<std::uint64_t, pending_wait_t> pending_waits;
     std::deque<pending_send_t> pending_sends;
     std::deque<pending_write_t> pending_writes;
+    std::optional<pending_write_t> active_write;
     std::vector<std::uint8_t> inbound_buffer;
     std::deque<packet_t> dispatch_queue;
     std::deque<std::function<void ()>> delivery_queue;
@@ -110,6 +112,7 @@ class connector_state_t : public std::enable_shared_from_this<connector_state_t>
     std::atomic_bool close_requested{false};
     bool send_in_progress = false;
     bool write_in_progress = false;
+    std::uint64_t next_write_id = 1;
     bool request_pump_scheduled = false;
     bool read_in_progress = false;
     std::optional<error_t> inbound_error;
@@ -171,6 +174,8 @@ void start_heartbeat_monitor (std::shared_ptr<connector_state_t> state);
 void stop_heartbeat_monitor (std::shared_ptr<connector_state_t> state);
 void schedule_reconnect (std::shared_ptr<connector_state_t> state);
 void resume_pending_writes_after_connect (std::shared_ptr<connector_state_t> state);
+std::function<void (result_t<void>)>
+take_active_write_callback (std::shared_ptr<connector_state_t> state);
 result_t<void> dispatch_pending (std::shared_ptr<connector_state_t> state);
 result_t<packet_t> receive_next (std::shared_ptr<connector_state_t> state,
                                  std::chrono::milliseconds timeout);

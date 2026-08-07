@@ -9,6 +9,7 @@
 #include "runtime/diagnostics/dispatch_error_reporter.hpp"
 #include "runtime/diagnostics/runtime_metrics.hpp"
 #include "runtime/actors/actor_gateway_runtime.hpp"
+#include "runtime/eventing/runtime_wake_timer.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
 
 #include <nlohmann/json.hpp>
@@ -18,6 +19,8 @@
 
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/post.hpp>
+#include <boost/asio/read.hpp>
+#include <boost/asio/steady_timer.hpp>
 #include <boost/asio/write.hpp>
 #include <boost/beast/core/flat_buffer.hpp>
 #include <boost/beast/websocket.hpp>
@@ -27,28 +30,24 @@
 
 #include <algorithm>
 #include <array>
-#include <arpa/inet.h>
 #include <cerrno>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
-#include <fcntl.h>
-#include <netinet/in.h>
-#include <netdb.h>
+#include <deque>
+#include <functional>
 #include <iostream>
 #include <limits>
 #include <mutex>
 #include <optional>
-#include <poll.h>
-#include <sys/socket.h>
-#include <unistd.h>
 #include <stdexcept>
 #include <span>
 #include <thread>
 #include <type_traits>
 #include <utility>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -109,21 +108,20 @@ class session_transport_failure_t final : public std::runtime_error
     int _native_code;
 };
 
-/* One listener-wide readiness scheduler owns the receive cursor for all
- * externally accepted STREAM connections. Native workers keep incomplete
- * frames in a per-connection buffer and release the lease before waiting for
- * more bytes, so one partial frame cannot block another connection. */
+/* One listener-wide turn scheduler owns the receive cursor for all externally
+ * accepted STREAM connections. Workers release the lease before a synchronous
+ * Asio read may wait for more bytes, so one partial frame cannot block another
+ * connection. The read itself remains the authority for EOF and transport
+ * errors; an availability-byte probe cannot represent an orderly close. */
 class stream_receive_scheduler_t final
 {
     struct slot_t
     {
-        slot_t (std::uint64_t sequence_, int fd_) : sequence (sequence_), fd (fd_) {}
+        explicit slot_t (std::uint64_t sequence_) : sequence (sequence_) {}
 
         std::uint64_t sequence;
-        int fd;
         bool granted = false;
         bool closed = false;
-        bool buffered_ready = false;
         std::condition_variable changed;
     };
 
@@ -178,13 +176,6 @@ class stream_receive_scheduler_t final
             }
         }
 
-        void set_buffered_ready (bool ready) const noexcept
-        {
-            if (_owner != nullptr && _slot != nullptr) {
-                _owner->set_buffered_ready (_slot, ready);
-            }
-        }
-
         void reset () noexcept
         {
             if (_owner != nullptr && _slot != nullptr) {
@@ -199,25 +190,9 @@ class stream_receive_scheduler_t final
         std::shared_ptr<slot_t> _slot;
     };
 
-    stream_receive_scheduler_t ()
-    {
-        if (::pipe (_wake_fds) != 0) {
-            throw std::runtime_error ("STREAM receive scheduler wake pipe creation failed");
-        }
-        set_nonblocking (_wake_fds[0]);
-        set_nonblocking (_wake_fds[1]);
-    }
+    stream_receive_scheduler_t () = default;
 
-    ~stream_receive_scheduler_t ()
-    {
-        stop ();
-        if (_wake_fds[0] >= 0) {
-            ::close (_wake_fds[0]);
-        }
-        if (_wake_fds[1] >= 0) {
-            ::close (_wake_fds[1]);
-        }
-    }
+    ~stream_receive_scheduler_t () { stop (); }
 
     stream_receive_scheduler_t (const stream_receive_scheduler_t &) = delete;
     stream_receive_scheduler_t &operator= (const stream_receive_scheduler_t &) = delete;
@@ -232,21 +207,18 @@ class stream_receive_scheduler_t final
         _thread = std::thread ([this] { run (); });
     }
 
-    lease_t register_connection (int fd)
+    lease_t register_connection ()
     {
-        if (fd < 0) {
-            return {};
-        }
         std::shared_ptr<slot_t> slot;
         {
             std::lock_guard lock (_mutex);
             if (_stopped) {
                 return {};
             }
-            slot = std::make_shared<slot_t> (_next_sequence++, fd);
+            slot = std::make_shared<slot_t> (_next_sequence++);
             _slots.push_back (slot);
         }
-        wake ();
+        _changed.notify_one ();
         return lease_t (this, std::move (slot));
     }
 
@@ -260,7 +232,7 @@ class stream_receive_scheduler_t final
                 slot->changed.notify_all ();
             }
         }
-        wake ();
+        _changed.notify_all ();
     }
 
     void stop () noexcept
@@ -272,31 +244,6 @@ class stream_receive_scheduler_t final
     }
 
   private:
-    static void set_nonblocking (int fd) noexcept
-    {
-        const int flags = ::fcntl (fd, F_GETFL, 0);
-        if (flags >= 0) {
-            (void) ::fcntl (fd, F_SETFL, flags | O_NONBLOCK);
-        }
-    }
-
-    void wake () noexcept
-    {
-        if (_wake_fds[1] < 0) {
-            return;
-        }
-        const std::uint8_t marker = 1;
-        const auto written = ::write (_wake_fds[1], &marker, sizeof (marker));
-        (void) written;
-    }
-
-    void drain_wake () noexcept
-    {
-        std::uint8_t markers[64];
-        while (::read (_wake_fds[0], markers, sizeof (markers)) > 0) {
-        }
-    }
-
     bool wait_for_turn (const std::shared_ptr<slot_t> &slot,
                         const std::function<bool ()> &stop_requested) const
     {
@@ -318,7 +265,7 @@ class stream_receive_scheduler_t final
             }
             slot->granted = false;
         }
-        wake ();
+        _changed.notify_one ();
     }
 
     void unregister_slot (const std::shared_ptr<slot_t> &slot) noexcept
@@ -330,58 +277,32 @@ class stream_receive_scheduler_t final
             slot->changed.notify_all ();
             _slots.erase (std::remove (_slots.begin (), _slots.end (), slot), _slots.end ());
         }
-        wake ();
-    }
-
-    void set_buffered_ready (const std::shared_ptr<slot_t> &slot, bool ready) noexcept
-    {
-        {
-            std::lock_guard lock (_mutex);
-            if (slot->closed) {
-                return;
-            }
-            slot->buffered_ready = ready;
-        }
-        wake ();
+        _changed.notify_one ();
     }
 
     void run () noexcept
     {
         for (;;) {
             std::vector<std::shared_ptr<slot_t>> candidates;
-            std::vector<pollfd> poll_fds;
-            bool has_buffered_ready = false;
             {
                 std::lock_guard lock (_mutex);
                 if (_stopped) {
                     break;
                 }
-                poll_fds.push_back (pollfd{_wake_fds[0], POLLIN, 0});
                 for (const auto &slot : _slots) {
-                    if (!slot->closed && !slot->granted && slot->fd >= 0) {
+                    if (!slot->closed && !slot->granted) {
                         candidates.push_back (slot);
-                        poll_fds.push_back (pollfd{slot->fd, POLLIN, 0});
-                        has_buffered_ready = has_buffered_ready || slot->buffered_ready;
                     }
                 }
             }
-
-            /* Keep kernel readiness in the same candidate snapshot as
-             * user-space buffered frames. A buffered frame must not suppress
-             * a newly readable connection from the round-robin set. */
-            const int ready = ::poll (
-              poll_fds.data (), poll_fds.size (), has_buffered_ready ? 0 : -1);
-            if (ready < 0) {
-                if (errno == EINTR) {
-                    continue;
-                }
-                break;
-            }
-            if (poll_fds[0].revents != 0) {
-                drain_wake ();
-            }
-
-            if (ready <= 0 && !has_buffered_ready) {
+            if (candidates.empty ()) {
+                std::unique_lock lock (_mutex);
+                _changed.wait (lock, [this] {
+                    return _stopped || std::any_of (
+                             _slots.begin (), _slots.end (), [] (const auto &slot) {
+                                 return !slot->closed && !slot->granted;
+                             });
+                });
                 continue;
             }
 
@@ -402,8 +323,7 @@ class stream_receive_scheduler_t final
                 for (std::size_t offset = 0; offset < candidates.size (); ++offset) {
                     const auto index = (start + offset) % candidates.size ();
                     const auto &slot = candidates[index];
-                    if ((!slot->buffered_ready && poll_fds[index + 1].revents == 0)
-                        || slot->closed || slot->granted) {
+                    if (slot->closed || slot->granted) {
                         continue;
                     }
                     selected = slot;
@@ -429,21 +349,10 @@ class stream_receive_scheduler_t final
     std::vector<std::shared_ptr<slot_t>> _slots;
     std::uint64_t _next_sequence = 1;
     std::uint64_t _cursor_sequence = 1;
-    int _wake_fds[2]{-1, -1};
     bool _stopped = false;
     std::thread _thread;
+    std::condition_variable _changed;
 };
-
-int stream_native_handle (tcp::socket &socket) noexcept
-{
-    return socket.native_handle ();
-}
-
-template <typename TStream>
-int stream_native_handle (TStream &stream) noexcept
-{
-    return stream.next_layer ().native_handle ();
-}
 
 bool is_expected_session_disconnect (const boost::system::error_code &error)
 {
@@ -612,42 +521,6 @@ std::optional<std::string> remote_endpoint_text (tcp::socket &socket)
     return error ? std::nullopt : socket_endpoint_text (endpoint);
 }
 
-std::optional<std::string> native_endpoint_text (const sockaddr_storage &address)
-{
-    char host[NI_MAXHOST]{};
-    char service[NI_MAXSERV]{};
-    const auto *sockaddr = reinterpret_cast<const struct sockaddr *> (&address);
-    const auto length = address.ss_family == AF_INET
-                          ? sizeof (sockaddr_in)
-                          : sizeof (sockaddr_in6);
-    if (::getnameinfo (sockaddr, length, host, sizeof (host), service, sizeof (service),
-                       NI_NUMERICHOST | NI_NUMERICSERV)
-        != 0) {
-        return std::nullopt;
-    }
-    return std::string (host) + ":" + service;
-}
-
-std::optional<std::string> native_local_endpoint_text (int fd)
-{
-    sockaddr_storage address{};
-    socklen_t length = sizeof (address);
-    if (::getsockname (fd, reinterpret_cast<sockaddr *> (&address), &length) != 0) {
-        return std::nullopt;
-    }
-    return native_endpoint_text (address);
-}
-
-std::optional<std::string> native_remote_endpoint_text (int fd)
-{
-    sockaddr_storage address{};
-    socklen_t length = sizeof (address);
-    if (::getpeername (fd, reinterpret_cast<sockaddr *> (&address), &length) != 0) {
-        return std::nullopt;
-    }
-    return native_endpoint_text (address);
-}
-
 template <typename TStream> tcp::socket &tcp_socket (TStream &stream)
 {
     if constexpr (std::is_same_v<TStream, tcp::socket>) {
@@ -745,18 +618,146 @@ void trace_stream_host (std::string_view stage,
     std::cerr << std::endl;
 }
 
-template <typename TStream> std::vector<std::uint8_t> read_exact (TStream &socket, std::size_t size)
+struct stream_async_operation_state_t : std::enable_shared_from_this<stream_async_operation_state_t>
+{
+    explicit stream_async_operation_state_t (asio::io_context &io) : timer (io) {}
+
+    asio::steady_timer timer;
+    std::function<void ()> cancel;
+    std::mutex error_mutex;
+    boost::system::error_code error;
+    std::atomic_bool completed{false};
+    std::atomic_bool cancel_requested{false};
+
+    void arm_timer (const std::atomic_bool &stop,
+                    const std::atomic_bool *connection_stop)
+    {
+        timer.expires_after (std::chrono::milliseconds (100));
+        const auto weak_state = weak_from_this ();
+        timer.async_wait ([weak_state, &stop, connection_stop] (
+                            const boost::system::error_code &timer_error) {
+            const auto state = weak_state.lock ();
+            if (!state || timer_error || state->completed.load (std::memory_order_acquire)) {
+                return;
+            }
+            const auto stopped = stop.load (std::memory_order_acquire)
+                                 || (connection_stop
+                                     && connection_stop->load (std::memory_order_acquire));
+            if (stopped) {
+                if (!state->cancel_requested.exchange (true, std::memory_order_acq_rel)) {
+                    state->cancel ();
+                }
+                return;
+            }
+            state->arm_timer (stop, connection_stop);
+        });
+    }
+
+    void complete (const boost::system::error_code &completion_error)
+    {
+        {
+            const std::lock_guard<std::mutex> lock (error_mutex);
+            error = completion_error;
+        }
+        completed.store (true, std::memory_order_release);
+        boost::system::error_code ignored;
+        timer.cancel (ignored);
+    }
+
+    boost::system::error_code result ()
+    {
+        const std::lock_guard<std::mutex> lock (error_mutex);
+        return error;
+    }
+};
+
+bool stream_stop_requested (const std::atomic_bool &stop,
+                            const std::atomic_bool *connection_stop) noexcept
+{
+    return stop.load (std::memory_order_acquire)
+           || (connection_stop && connection_stop->load (std::memory_order_acquire));
+}
+
+template <typename Start, typename Cancel>
+boost::system::error_code run_stream_async_operation (asio::io_context &io,
+                                                        const std::atomic_bool &stop,
+                                                        Start &&start,
+                                                        Cancel &&cancel,
+                                                        const std::atomic_bool *connection_stop = nullptr)
+{
+    if (stream_stop_requested (stop, connection_stop)) {
+        return asio::error::operation_aborted;
+    }
+    auto state = std::make_shared<stream_async_operation_state_t> (io);
+    state->cancel = std::forward<Cancel> (cancel);
+    state->arm_timer (stop, connection_stop);
+    std::forward<Start> (start) ([state] (const boost::system::error_code &error, std::size_t) {
+        state->complete (error);
+    });
+    io.restart ();
+    while (!state->completed.load (std::memory_order_acquire)) {
+        if (io.run_one () == 0) {
+            io.restart ();
+        }
+    }
+    return state->result ();
+}
+
+void cancel_stream (tcp::socket &socket) noexcept
+{
+    boost::system::error_code ignored;
+    socket.cancel (ignored);
+}
+
+void cancel_stream (websocket_stream_t &stream) noexcept
+{
+    cancel_stream (stream.next_layer ());
+}
+
+template <typename TStream> void cancel_stream (TStream &stream) noexcept
+{
+    boost::system::error_code ignored;
+    stream.lowest_layer ().cancel (ignored);
+}
+
+void close_stream (tcp::socket &socket) noexcept
+{
+    boost::system::error_code ignored;
+    socket.cancel (ignored);
+    socket.close (ignored);
+}
+
+void close_stream (websocket_stream_t &stream) noexcept
+{
+    close_stream (stream.next_layer ());
+}
+
+template <typename TStream> void close_stream (TStream &stream) noexcept
+{
+    close_stream (stream.lowest_layer ());
+}
+
+template <typename TStream>
+std::vector<std::uint8_t> read_exact (TStream &socket,
+                                      std::size_t size,
+                                      asio::io_context &io,
+                                      const std::atomic_bool &stop,
+                                      const std::atomic_bool *connection_stop)
 {
     std::vector<std::uint8_t> bytes (size);
-    std::size_t offset = 0;
-    while (offset < bytes.size ()) {
-        boost::system::error_code error;
-        const auto read =
-          socket.read_some (asio::buffer (bytes.data () + offset, bytes.size () - offset), error);
-        if (error) {
-            throw boost::system::system_error (error);
-        }
-        offset += read;
+    if (bytes.empty ()) {
+        return bytes;
+    }
+    const auto error = run_stream_async_operation (
+      io, stop,
+      [&] (auto completion) {
+          asio::async_read (socket, asio::buffer (bytes), asio::transfer_exactly (size),
+                            std::move (completion));
+      },
+      [&socket] { cancel_stream (socket); },
+      connection_stop);
+    if (error) {
+        throw boost::system::system_error (error);
     }
     return bytes;
 }
@@ -939,7 +940,8 @@ class stream_host_service_t::listener_t
         _monitoring (std::move (monitoring)),
         _mesh_node (std::move (mesh_node)),
         _inbound_budget (std::move (inbound_budget)),
-        _acceptor (_io)
+        _acceptor (_io),
+        _accept_retry_timer (_io)
     {
     }
 
@@ -1252,20 +1254,45 @@ class stream_host_service_t::listener_t
             run_core_stream ();
             return;
         }
-        if (!stream_uses_tls (_stream) && !stream_uses_websocket (_stream)) {
-            run_tcp_native_accept ();
-            return;
-        }
         if (stream_uses_tls (_stream)) {
             configure_tls_context ();
         }
         auto endpoint = parse_stream_endpoint (_stream);
         tcp::resolver resolver (_io);
-        const auto endpoints = resolver.resolve (endpoint.host, endpoint.port);
-        _acceptor.open (endpoints.begin ()->endpoint ().protocol ());
-        _acceptor.set_option (tcp::acceptor::reuse_address (true));
-        _acceptor.bind (endpoints.begin ()->endpoint ());
-        _acceptor.listen ();
+        boost::system::error_code error;
+        const auto wildcard = endpoint.host == "*";
+        const auto resolve_host = wildcard ? std::string () : endpoint.host;
+        const auto resolve_flags = wildcard ? tcp::resolver::flags::passive
+                                            : tcp::resolver::flags ();
+        const auto endpoints = resolver.resolve (resolve_host, endpoint.port, resolve_flags, error);
+        if (error || endpoints.begin () == endpoints.end ()) {
+            throw framework_exception_t (
+              framework_error_kind_t::internal_failure,
+              "STREAM endpoint address resolution failed: "
+                + (error ? error.message () : "no addresses"));
+        }
+        for (const auto &candidate : endpoints) {
+            _acceptor.open (candidate.endpoint ().protocol (), error);
+            if (!error) {
+                _acceptor.set_option (tcp::acceptor::reuse_address (true), error);
+            }
+            if (!error) {
+                _acceptor.bind (candidate.endpoint (), error);
+            }
+            if (!error) {
+                _acceptor.listen (asio::socket_base::max_listen_connections, error);
+            }
+            if (!error) {
+                break;
+            }
+            boost::system::error_code ignored;
+            _acceptor.close (ignored);
+        }
+        if (error) {
+            throw framework_exception_t (
+              framework_error_kind_t::internal_failure,
+              "STREAM endpoint bind/listen failed: " + error.message ());
+        }
         if (const auto endpoint = socket_endpoint_text (_acceptor.local_endpoint ()))
             _bound_endpoint = *endpoint;
         start_boost_accept ();
@@ -1317,56 +1344,31 @@ class stream_host_service_t::listener_t
 
     void request_stop () noexcept
     {
+        _core_wake_timer.signal ();
         _receive_scheduler.request_stop ();
         if (_inbound_budget) {
             _inbound_budget->wake_waiters ();
         }
-        if (!stream_uses_tls (_stream) && !stream_uses_websocket (_stream)) {
-            wake_native_accept ();
-            return;
-        }
         asio::post (_io, [this] {
             boost::system::error_code ignored;
             _acceptor.close (ignored);
+            _accept_retry_timer.cancel (ignored);
         });
-    }
-
-    void wake_native_accept () noexcept
-    {
-        int fd = -1;
-        {
-            const std::lock_guard<std::mutex> lock (_native_accept_mutex);
-            fd = _native_accept_fd;
-        }
-        if (fd < 0) {
-            return;
-        }
-        (void) ::shutdown (fd, SHUT_RDWR);
     }
 
     void stop_connections () noexcept
     {
         trace_stream_host ("stop-connections-begin", _stream);
-        boost::system::error_code ignored;
-        if (!stream_uses_tls (_stream) && !stream_uses_websocket (_stream)) {
-            wake_native_accept ();
-        }
+        std::vector<std::function<void ()>> cancellers;
         {
             const std::lock_guard<std::mutex> lock (_sockets_mutex);
-            for (auto *socket : _sockets) {
-                const std::lock_guard<std::mutex> io_lock (_io_mutex);
-                socket->shutdown (tcp::socket::shutdown_both, ignored);
-                socket->close (ignored);
+            cancellers.reserve (_sockets.size ());
+            for (const auto &entry : _sockets) {
+                cancellers.push_back (entry.second);
             }
-            for (auto it = _native_connections.begin (); it != _native_connections.end ();) {
-                auto connection = it->lock ();
-                if (!connection) {
-                    it = _native_connections.erase (it);
-                    continue;
-                }
-                close_connection (*connection);
-                ++it;
-            }
+        }
+        for (auto &cancel : cancellers) {
+            cancel ();
         }
         _receive_scheduler.stop ();
         {
@@ -1519,75 +1521,80 @@ class stream_host_service_t::listener_t
             mark_started ();
             zlink::poller_t poller;
             poller.add (*_core_socket, zlink::poll_event_flag_t::pollin, 1);
+            _core_wake_timer.attach (poller);
             zlink::received_t received;
-            while (!_stop->load (std::memory_order_acquire)) {
-                receive_batch_budget_t batch;
-                // Frames retained by an earlier batch are drained before
-                // waiting for another Core receive. This prevents a peer
-                // whose application HWM is full from retaining work that
-                // could otherwise be processed for another peer.
-                process_core_frames (batch);
-                if (batch.exhausted ()) {
-                    continue;
-                }
+            try {
+                while (!_stop->load (std::memory_order_acquire)) {
+                    receive_batch_budget_t batch;
+                    // Frames retained by an earlier batch are drained before
+                    // waiting for another Core receive. This prevents a peer
+                    // whose application HWM is full from retaining work that
+                    // could otherwise be processed for another peer.
+                    process_core_frames (batch);
+                    if (batch.exhausted ()) {
+                        continue;
+                    }
 
-                zlink::poll_event_t event;
-                /* Closing the Core socket from request_stop() is not a
-                 * cross-thread wake-up guarantee for the poller. Keep the
-                 * stop observation bounded so service stop can join this
-                 * listener without depending on platform-specific close
-                 * behavior. */
-                const size_t event_count =
-                  poller.wait (&event, 1, std::chrono::milliseconds{100});
-                if (_stop->load (std::memory_order_acquire))
-                    break;
-                if (event_count == 0)
-                    continue;
-
-                const short revents = static_cast<short> (event.revents);
-                const short pollin =
-                  static_cast<short> (zlink::poll_event_flag_t::pollin);
-                const short pollerr =
-                  static_cast<short> (zlink::poll_event_flag_t::pollerr);
-                if ((revents & pollerr) != 0 && (revents & pollin) == 0)
-                    break;
-
-                // POLLIN guarantees that a receive is worthwhile. DONTWAIT
-                // also makes a stale readiness event harmless: it yields
-                // ZLINK_RECV_NO_DATA and the loop re-arms the poller.
-                const int receive_result =
-                  _core_socket->recv (received, zlink::recv_flags_t::dontwait);
-                if (receive_result != 0) {
-                    const int receive_errno = errno;
-                    received.close ();
-                    if (_stop->load (std::memory_order_acquire)
-                        || receive_result
-                             == static_cast<int> (zlink::recv_result_t::terminated)) {
+                    zlink::poll_event_t event;
+                    /* The Core poller has no cross-thread close wake contract.
+                     * A Core-backed timer is registered in the same poller so
+                     * stop is delivered as an event instead of relying on a
+                     * platform-specific socket close side effect. */
+                    const size_t event_count =
+                      poller.wait (&event, 1, std::chrono::milliseconds{-1});
+                    if (_stop->load (std::memory_order_acquire))
                         break;
-                    }
-                    if (receive_result
-                        == static_cast<int> (zlink::recv_result_t::no_data)) {
+                    if (event_count == 0)
+                        continue;
+                    if (_core_wake_timer.is_event (event)) {
+                        _core_wake_timer.consume ();
                         continue;
                     }
-                    if (receive_result == -1 && receive_errno == EMSGSIZE) {
-                        trace_stream_host (
-                          "core-recv-size-rejected", _stream, std::nullopt,
-                          "errno=EMSGSIZE limit="
-                            + std::to_string (_stream.max_message_size));
-                        continue;
+
+                    const short revents = static_cast<short> (event.revents);
+                    const short pollin = static_cast<short> (zlink::poll_event_flag_t::pollin);
+                    const short pollerr = static_cast<short> (zlink::poll_event_flag_t::pollerr);
+                    if ((revents & pollerr) != 0 && (revents & pollin) == 0)
+                        break;
+
+                    // POLLIN guarantees that a receive is worthwhile. DONTWAIT
+                    // also makes a stale readiness event harmless: it yields
+                    // ZLINK_RECV_NO_DATA and the loop re-arms the poller.
+                    const int receive_result =
+                      _core_socket->recv (received, zlink::recv_flags_t::dontwait);
+                    if (receive_result != 0) {
+                        const int receive_errno = errno;
+                        received.close ();
+                        if (_stop->load (std::memory_order_acquire)
+                            || receive_result
+                                 == static_cast<int> (zlink::recv_result_t::terminated)) {
+                            break;
+                        }
+                        if (receive_result == static_cast<int> (zlink::recv_result_t::no_data)) {
+                            continue;
+                        }
+                        if (receive_result == -1 && receive_errno == EMSGSIZE) {
+                            trace_stream_host ("core-recv-size-rejected", _stream, std::nullopt,
+                                               "errno=EMSGSIZE limit="
+                                                 + std::to_string (_stream.max_message_size));
+                            continue;
+                        }
+                        throw std::runtime_error ("Framework STREAM recv failed");
                     }
-                    throw std::runtime_error ("Framework STREAM recv failed");
+                    process_core_received (received, batch);
+                    if (received.routing_id ()) {
+                        trace_stream_host ("core-recv", _stream, std::nullopt,
+                                           "rid=" + received.routing_id ()->to_hex () + " parts="
+                                             + std::to_string (received.parts ().size ()));
+                    }
+                    received.close ();
                 }
-                process_core_received (received, batch);
-                if (received.routing_id ()) {
-                    trace_stream_host (
-                      "core-recv", _stream, std::nullopt,
-                      "rid=" + received.routing_id ()->to_hex ()
-                        + " parts="
-                        + std::to_string (received.parts ().size ()));
-                }
-                received.close ();
             }
+            catch (...) {
+                _core_wake_timer.detach ();
+                throw;
+            }
+            _core_wake_timer.detach ();
         }
         catch (const std::exception &error) {
             mark_start_failed (error.what ());
@@ -2027,162 +2034,184 @@ class stream_host_service_t::listener_t
         }
     }
 
-    struct tcp_connection_t
+    struct stream_write_wait_state_t
+    {
+        std::mutex mutex;
+        std::condition_variable condition;
+        bool completed = false;
+        std::atomic_bool cancel_requested{false};
+        boost::system::error_code error;
+
+        void complete (const boost::system::error_code &completion_error)
+        {
+            {
+                const std::lock_guard<std::mutex> lock (mutex);
+                if (completed) {
+                    return;
+                }
+                error = completion_error;
+                completed = true;
+            }
+            condition.notify_all ();
+        }
+
+        boost::system::error_code result ()
+        {
+            const std::lock_guard<std::mutex> lock (mutex);
+            return error;
+        }
+    };
+
+    using stream_write_completion_t =
+      std::function<void (const boost::system::error_code &, std::size_t)>;
+    using stream_write_start_t = std::function<void (stream_write_completion_t)>;
+    using stream_write_cancel_t = std::function<void ()>;
+
+    struct stream_write_operation_t
+    {
+        std::shared_ptr<stream_write_wait_state_t> state;
+        stream_write_start_t start;
+        stream_write_cancel_t cancel;
+    };
+
+    struct stream_write_queue_t
+    {
+        std::mutex mutex;
+        std::deque<std::shared_ptr<stream_write_operation_t>> pending;
+        bool active = false;
+    };
+
+    struct tcp_connection_t : std::enable_shared_from_this<tcp_connection_t>
     {
         asio::io_context io;
         tcp::socket socket;
+        std::atomic_bool closing{false};
+        std::shared_ptr<stream_write_queue_t> write_queue;
 
-        tcp_connection_t () : socket (io) {}
+        tcp_connection_t () : socket (io), write_queue (std::make_shared<stream_write_queue_t> ())
+        {
+        }
     };
 
-    struct native_tcp_connection_t
+    void finish_stream_write (const std::shared_ptr<tcp_connection_t> &owner,
+                              const std::shared_ptr<stream_write_operation_t> &operation,
+                              const boost::system::error_code &error)
     {
-        explicit native_tcp_connection_t (int accepted) : fd (accepted) {}
+        bool start_next = false;
+        {
+            const std::lock_guard<std::mutex> lock (owner->write_queue->mutex);
+            /* A cancelled Asio operation can report its completion after the
+             * stop path has already finalized the queue entry. Only the
+             * front entry owns the queue transition; late callbacks must not
+             * start the following write twice. */
+            if (owner->write_queue->pending.empty ()
+                || owner->write_queue->pending.front () != operation) {
+                return;
+            }
+            owner->write_queue->pending.pop_front ();
+            if (owner->write_queue->pending.empty ()) {
+                owner->write_queue->active = false;
+            } else {
+                start_next = true;
+            }
+        }
+        operation->state->complete (error);
+        if (start_next) {
+            start_next_stream_write (owner);
+        }
+    }
 
-        std::mutex mutex;
-        int fd;
-        std::vector<std::uint8_t> receive_buffer;
-    };
+    void start_next_stream_write (const std::shared_ptr<tcp_connection_t> &owner)
+    {
+        std::shared_ptr<stream_write_operation_t> operation;
+        {
+            const std::lock_guard<std::mutex> lock (owner->write_queue->mutex);
+            if (owner->write_queue->pending.empty ()) {
+                owner->write_queue->active = false;
+                return;
+            }
+            operation = owner->write_queue->pending.front ();
+        }
+        if (stream_stop_requested (*_stop, &owner->closing)) {
+            if (!operation->state->cancel_requested.exchange (true, std::memory_order_acq_rel)) {
+                operation->cancel ();
+            }
+            finish_stream_write (owner, operation, asio::error::operation_aborted);
+            return;
+        }
+        const auto weak_owner = std::weak_ptr<tcp_connection_t> (owner);
+        operation->start ([this, weak_owner, operation] (
+                            const boost::system::error_code &error, std::size_t) {
+            if (const auto owner = weak_owner.lock ()) {
+                finish_stream_write (owner, operation, error);
+            } else {
+                operation->state->complete (asio::error::operation_aborted);
+            }
+        });
+    }
+
+    template <typename Start, typename Cancel>
+    boost::system::error_code run_stream_write_operation (
+      const std::shared_ptr<tcp_connection_t> &owner,
+      const std::atomic_bool &stop,
+      Start &&start,
+      Cancel &&cancel)
+    {
+        if (stream_stop_requested (stop, &owner->closing)) {
+            return asio::error::operation_aborted;
+        }
+        auto operation = std::make_shared<stream_write_operation_t> ();
+        operation->state = std::make_shared<stream_write_wait_state_t> ();
+        operation->start = std::forward<Start> (start);
+        operation->cancel = std::forward<Cancel> (cancel);
+        bool schedule = false;
+        {
+            const std::lock_guard<std::mutex> lock (owner->write_queue->mutex);
+            owner->write_queue->pending.push_back (operation);
+            if (!owner->write_queue->active) {
+                owner->write_queue->active = true;
+                schedule = true;
+            }
+        }
+        if (schedule) {
+            const auto weak_owner = std::weak_ptr<tcp_connection_t> (owner);
+            asio::post (owner->io, [this, weak_owner] {
+                if (const auto owner = weak_owner.lock ()) {
+                    start_next_stream_write (owner);
+                }
+            });
+        }
+
+        std::unique_lock<std::mutex> lock (operation->state->mutex);
+        while (!operation->state->completed) {
+            if (stream_stop_requested (stop, &owner->closing)
+                && !operation->state->cancel_requested.exchange (
+                  true, std::memory_order_acq_rel)) {
+                /* Cancellation is submitted to the connection's executor. The
+                 * same caller pumps that executor below, so a write that was
+                 * started by the session dispatch executor is drained before
+                 * this synchronous boundary returns. */
+                operation->cancel ();
+            }
+            lock.unlock ();
+            owner->io.restart ();
+            if (owner->io.run_one () == 0) {
+                lock.lock ();
+                operation->state->condition.wait_for (
+                  lock, std::chrono::milliseconds (100));
+            } else {
+                lock.lock ();
+            }
+        }
+        lock.unlock ();
+        return operation->state->result ();
+    }
 
     struct frame_t
     {
         stream_header_t header;
         zlink::message_t payload;
     };
-
-    static void set_nonblocking (int fd)
-    {
-        const int flags = ::fcntl (fd, F_GETFL, 0);
-        if (flags >= 0) {
-            (void) ::fcntl (fd, F_SETFL, flags | O_NONBLOCK);
-        }
-    }
-
-    void run_tcp_native_accept ()
-    {
-        const auto endpoint = parse_tcp_endpoint (_stream.bind_endpoint);
-        addrinfo hints{};
-        hints.ai_family = AF_UNSPEC;
-        hints.ai_socktype = SOCK_STREAM;
-        hints.ai_flags = AI_NUMERICSERV
-                         | (endpoint.host == "*" ? AI_PASSIVE : 0);
-        addrinfo *resolved = nullptr;
-        const char *host = endpoint.host == "*" ? nullptr : endpoint.host.c_str ();
-        const auto resolve_error = ::getaddrinfo (
-          host, endpoint.port.c_str (), &hints, &resolved);
-        if (resolve_error != 0) {
-            mark_start_failed (
-              "STREAM TCP listener address resolution failed: "
-              + std::string (::gai_strerror (resolve_error)));
-            return;
-        }
-
-        int server_fd = -1;
-        std::string last_error = "STREAM TCP listener bind failed";
-        for (auto *candidate = resolved; candidate != nullptr;
-             candidate = candidate->ai_next) {
-            server_fd = ::socket (candidate->ai_family,
-                                  candidate->ai_socktype,
-                                  candidate->ai_protocol);
-            if (server_fd < 0) {
-                last_error = std::string ("STREAM TCP socket create failed: ")
-                             + std::strerror (errno);
-                continue;
-            }
-            {
-                const std::lock_guard<std::mutex> lock (_native_accept_mutex);
-                _native_accept_fd = server_fd;
-            }
-            int reuse = 1;
-            (void) ::setsockopt (
-              server_fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof (reuse));
-            set_nonblocking (server_fd);
-            if (::bind (server_fd, candidate->ai_addr, candidate->ai_addrlen) == 0
-                && ::listen (server_fd, SOMAXCONN) == 0) {
-                break;
-            }
-            last_error = std::string ("STREAM TCP listener bind failed: ")
-                         + std::strerror (errno);
-            {
-                const std::lock_guard<std::mutex> lock (_native_accept_mutex);
-                ::close (server_fd);
-                _native_accept_fd = -1;
-            }
-            server_fd = -1;
-        }
-        ::freeaddrinfo (resolved);
-        if (server_fd < 0) {
-            mark_start_failed (last_error);
-            return;
-        }
-        if (const auto endpoint = native_local_endpoint_text (server_fd))
-            _bound_endpoint = *endpoint;
-        mark_started ();
-        while (!_stop->load (std::memory_order_acquire)) {
-            pollfd accept_poll{};
-            accept_poll.fd = server_fd;
-            accept_poll.events = POLLIN;
-            const int ready = ::poll (&accept_poll, 1, 100);
-            if (ready < 0) {
-                if (errno == EINTR) {
-                    continue;
-                }
-                if (_stop->load (std::memory_order_acquire)) {
-                    break;
-                }
-                std::this_thread::sleep_for (std::chrono::milliseconds (1));
-                continue;
-            }
-            if (ready == 0) {
-                continue;
-            }
-            if ((accept_poll.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
-                if (_stop->load (std::memory_order_acquire)) {
-                    break;
-                }
-                std::this_thread::sleep_for (std::chrono::milliseconds (1));
-                continue;
-            }
-            sockaddr_storage peer{};
-            socklen_t peer_len = sizeof (peer);
-            const int accepted =
-              ::accept (server_fd, reinterpret_cast<sockaddr *> (&peer), &peer_len);
-            if (accepted < 0) {
-                if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                    continue;
-                }
-                if (_stop->load (std::memory_order_acquire)) {
-                    break;
-                }
-                std::this_thread::sleep_for (std::chrono::milliseconds (1));
-                continue;
-            }
-            if (_stop->load (std::memory_order_acquire)) {
-                ::shutdown (accepted, SHUT_RDWR);
-                ::close (accepted);
-                break;
-            }
-            /* Keep accepted sockets blocking for writes. Native receives use
-             * MSG_DONTWAIT, so a partial frame still releases the scheduler
-             * turn without converting transient send backpressure into a
-             * transport failure. */
-            trace_stream_host ("accept", _stream);
-            auto connection = std::make_shared<native_tcp_connection_t> (accepted);
-            {
-                const std::lock_guard<std::mutex> lock (_sockets_mutex);
-                _native_connections.push_back (connection);
-            }
-            const std::lock_guard<std::mutex> lock (_workers_mutex);
-            _workers.emplace_back ([this, connection] { handle_native_connection (connection); });
-        }
-        {
-            const std::lock_guard<std::mutex> lock (_native_accept_mutex);
-            if (_native_accept_fd >= 0) {
-                ::close (_native_accept_fd);
-                _native_accept_fd = -1;
-            }
-        }
-    }
 
     void mark_started ()
     {
@@ -2244,7 +2273,12 @@ class stream_host_service_t::listener_t
     {
         if (error) {
             if (!_stop->load (std::memory_order_acquire)) {
-                start_boost_accept ();
+                _accept_retry_timer.expires_after (std::chrono::milliseconds (100));
+                _accept_retry_timer.async_wait ([this] (const boost::system::error_code &retry_error) {
+                    if (!retry_error) {
+                        start_boost_accept ();
+                    }
+                });
             }
             return;
         }
@@ -2253,18 +2287,15 @@ class stream_host_service_t::listener_t
             return;
         }
         trace_stream_host ("accept", _stream);
-        {
-            const std::lock_guard<std::mutex> lock (_sockets_mutex);
-            _sockets.insert (&connection->socket);
-        }
+        track_socket (connection);
         if (stream_uses_websocket (_stream)) {
             auto websocket_connection =
               std::make_shared<websocket_stream_t> (std::move (connection->socket));
             {
                 const std::lock_guard<std::mutex> lock (_sockets_mutex);
                 _sockets.erase (&connection->socket);
-                _sockets.insert (&websocket_connection->next_layer ());
             }
+            track_stream (connection, websocket_connection);
             {
                 const std::lock_guard<std::mutex> lock (_workers_mutex);
                 _workers.emplace_back ([this, connection, websocket_connection] {
@@ -2279,8 +2310,8 @@ class stream_host_service_t::listener_t
             {
                 const std::lock_guard<std::mutex> lock (_sockets_mutex);
                 _sockets.erase (&connection->socket);
-                _sockets.insert (&tls_connection->next_layer ());
             }
+            track_stream (connection, tls_connection);
             {
                 const std::lock_guard<std::mutex> lock (_workers_mutex);
                 _workers.emplace_back ([this, connection, tls_connection] {
@@ -2305,6 +2336,71 @@ class stream_host_service_t::listener_t
         socket.close (ignored);
     }
 
+    void track_socket (const std::shared_ptr<tcp_connection_t> &owner)
+    {
+        const std::lock_guard<std::mutex> lock (_sockets_mutex);
+        const auto weak_owner = std::weak_ptr<tcp_connection_t> (owner);
+        _sockets[&owner->socket] = [weak_owner] {
+            if (const auto owner = weak_owner.lock ()) {
+                owner->closing.store (true, std::memory_order_release);
+                /* A synchronous read must be interrupted from the stopping
+                 * thread; the completion and final close still run through
+                 * the connection worker's normal teardown. */
+                cancel_stream (owner->socket);
+                asio::post (owner->io, [weak_owner] {
+                    if (const auto owner = weak_owner.lock ())
+                        close_stream (owner->socket);
+                });
+            }
+        };
+    }
+
+    template <typename TStream>
+    void track_stream (const std::shared_ptr<tcp_connection_t> &owner,
+                       const std::shared_ptr<TStream> &stream)
+    {
+        const std::lock_guard<std::mutex> lock (_sockets_mutex);
+        const auto weak_owner = std::weak_ptr<tcp_connection_t> (owner);
+        const auto weak_stream = std::weak_ptr<TStream> (stream);
+        _sockets[&stream->next_layer ()] = [weak_owner, weak_stream] {
+            if (const auto owner = weak_owner.lock ()) {
+                owner->closing.store (true, std::memory_order_release);
+                if (const auto stream = weak_stream.lock ()) {
+                    /* Interrupt a synchronous read immediately. Pending
+                     * async writes observe owner->closing and drain their
+                     * completion on owner->io before teardown finishes. */
+                    cancel_stream (*stream);
+                }
+                asio::post (owner->io, [weak_stream] {
+                    if (const auto stream = weak_stream.lock ())
+                        close_stream (*stream);
+                });
+            }
+        };
+    }
+
+    void request_close (tcp::socket *socket) noexcept
+    {
+        std::function<void ()> cancel;
+        {
+            const std::lock_guard<std::mutex> lock (_sockets_mutex);
+            const auto found = _sockets.find (socket);
+            if (found != _sockets.end ()) {
+                cancel = found->second;
+            }
+        }
+        if (cancel) {
+            cancel ();
+        }
+    }
+
+    void request_close (tcp::socket &socket) noexcept { request_close (&socket); }
+
+    template <typename TStream> void request_close (TStream &stream) noexcept
+    {
+        request_close (&stream.next_layer ());
+    }
+
     void close_connection (tcp::socket &socket) noexcept { close_tcp_socket (socket); }
 
     void close_connection (websocket_stream_t &stream) noexcept
@@ -2319,20 +2415,6 @@ class stream_host_service_t::listener_t
         close_tcp_socket (stream.next_layer ());
     }
 
-    void close_connection (native_tcp_connection_t &connection) noexcept
-    {
-        int fd = -1;
-        {
-            const std::lock_guard<std::mutex> lock (connection.mutex);
-            fd = connection.fd;
-            connection.fd = -1;
-        }
-        if (fd < 0)
-            return;
-        ::shutdown (fd, SHUT_RDWR);
-        ::close (fd);
-    }
-
 #ifdef ZLINK_FRAMEWORK_STREAM_WITH_OPENSSL
     void close_connection (ssl::stream<tcp::socket> &stream) noexcept
     {
@@ -2343,16 +2425,18 @@ class stream_host_service_t::listener_t
     template <typename TStream>
     std::optional<frame_t>
     read_frame (TStream &socket,
-                const std::function<bool (const stream_header_t &)> &admit_payload)
+                const std::function<bool (const stream_header_t &)> &admit_payload,
+                asio::io_context &io,
+                const std::atomic_bool *connection_stop)
     {
-        auto prefix = read_exact (socket, 6);
+        auto prefix = read_exact (socket, 6, io, *_stop, connection_stop);
         const auto header_size = static_cast<std::size_t> ((prefix[0] << 8) | prefix[1]);
         const auto payload_size = (static_cast<std::size_t> (prefix[2]) << 24)
                                   | (static_cast<std::size_t> (prefix[3]) << 16)
                                   | (static_cast<std::size_t> (prefix[4]) << 8)
                                   | static_cast<std::size_t> (prefix[5]);
         validate_stream_frame_size (header_size, payload_size, _stream.max_message_size);
-        auto header_bytes = read_exact (socket, header_size);
+        auto header_bytes = read_exact (socket, header_size, io, *_stop, connection_stop);
         auto header = _runtime.decode_header (header_bytes);
         if (!header) {
             throw framework_exception_t (header.error_kind (), header.error ()
@@ -2364,7 +2448,7 @@ class stream_host_service_t::listener_t
             && admit_payload && !admit_payload (decoded_header)) {
             return std::nullopt;
         }
-        auto payload_bytes = read_exact (socket, payload_size);
+        auto payload_bytes = read_exact (socket, payload_size, io, *_stop, connection_stop);
         trace_stream_host ("read-frame", _stream, decoded_header,
                            "payload_bytes=" + std::to_string (payload_bytes.size ()));
         return frame_t{decoded_header, message_from_bytes (payload_bytes)};
@@ -2372,10 +2456,19 @@ class stream_host_service_t::listener_t
 
     std::optional<frame_t>
     read_frame (websocket_stream_t &socket,
-                const std::function<bool (const stream_header_t &)> &admit_payload)
+                const std::function<bool (const stream_header_t &)> &admit_payload,
+                asio::io_context &io,
+                const std::atomic_bool *connection_stop)
     {
         beast::flat_buffer buffer;
-        socket.read (buffer);
+        const auto error = run_stream_async_operation (
+          io, *_stop,
+          [&] (auto completion) { socket.async_read (buffer, std::move (completion)); },
+          [&socket] { cancel_stream (socket.next_layer ()); },
+          connection_stop);
+        if (error) {
+            throw boost::system::system_error (error);
+        }
         if (socket.got_text ()) {
             throw framework_exception_t (framework_error_kind_t::protocol_error,
                                          "STREAM WebSocket messages must be binary");
@@ -2418,7 +2511,10 @@ class stream_host_service_t::listener_t
 
     template <typename TStream>
     void
-    write_frame (TStream &socket, const stream_header_t &header, const zlink::message_t &payload)
+    write_frame (const std::shared_ptr<tcp_connection_t> &owner,
+                 const std::shared_ptr<TStream> &connection,
+                 const stream_header_t &header,
+                 const zlink::message_t &payload)
     {
         auto encoded_header = _runtime.encode_header (header);
         if (!encoded_header) {
@@ -2427,25 +2523,52 @@ class stream_host_service_t::listener_t
                                                                  : "STREAM header encode failed");
         }
         const auto payload_bytes = message_bytes (payload);
-        std::vector<std::uint8_t> frame;
-        frame.reserve (6 + encoded_header.value ().size () + payload_bytes.size ());
+        auto frame = std::make_shared<std::vector<std::uint8_t>> ();
+        frame->reserve (6 + encoded_header.value ().size () + payload_bytes.size ());
         const auto header_size = encoded_header.value ().size ();
-        frame.push_back (static_cast<std::uint8_t> ((header_size >> 8) & 0xff));
-        frame.push_back (static_cast<std::uint8_t> (header_size & 0xff));
-        frame.push_back (static_cast<std::uint8_t> ((payload_bytes.size () >> 24) & 0xff));
-        frame.push_back (static_cast<std::uint8_t> ((payload_bytes.size () >> 16) & 0xff));
-        frame.push_back (static_cast<std::uint8_t> ((payload_bytes.size () >> 8) & 0xff));
-        frame.push_back (static_cast<std::uint8_t> (payload_bytes.size () & 0xff));
-        frame.insert (frame.end (), encoded_header.value ().begin (),
+        frame->push_back (static_cast<std::uint8_t> ((header_size >> 8) & 0xff));
+        frame->push_back (static_cast<std::uint8_t> (header_size & 0xff));
+        frame->push_back (static_cast<std::uint8_t> ((payload_bytes.size () >> 24) & 0xff));
+        frame->push_back (static_cast<std::uint8_t> ((payload_bytes.size () >> 16) & 0xff));
+        frame->push_back (static_cast<std::uint8_t> ((payload_bytes.size () >> 8) & 0xff));
+        frame->push_back (static_cast<std::uint8_t> (payload_bytes.size () & 0xff));
+        frame->insert (frame->end (), encoded_header.value ().begin (),
                       encoded_header.value ().end ());
-        frame.insert (frame.end (), payload_bytes.begin (), payload_bytes.end ());
+        frame->insert (frame->end (), payload_bytes.begin (), payload_bytes.end ());
         trace_stream_host ("write-frame", _stream, header,
                            "payload_bytes=" + std::to_string (payload_bytes.size ()));
-        boost::asio::write (socket, boost::asio::buffer (frame));
+        const auto weak_connection = std::weak_ptr<TStream> (connection);
+        const auto error = run_stream_write_operation (
+          owner, *_stop,
+          [weak_connection, frame] (auto completion) mutable {
+              if (const auto connection = weak_connection.lock ()) {
+                  asio::async_write (*connection,
+                                     asio::buffer (*frame),
+                                     [frame, completion = std::move (completion)] (
+                                       const boost::system::error_code &write_error,
+                                       std::size_t bytes) mutable {
+                                         completion (write_error, bytes);
+                                     });
+              } else {
+                  completion (asio::error::operation_aborted, 0);
+              }
+          },
+          [weak_owner = std::weak_ptr<tcp_connection_t> (owner), weak_connection] {
+              if (const auto connection_owner = weak_owner.lock ()) {
+                  asio::post (connection_owner->io, [weak_connection] {
+                      if (const auto connection = weak_connection.lock ())
+                          cancel_stream (*connection);
+                  });
+              }
+          });
+        if (error) {
+            throw boost::system::system_error (error);
+        }
         trace_stream_host ("write-completion", _stream, header, "result=success");
     }
 
-    void write_frame (websocket_stream_t &socket,
+    void write_frame (const std::shared_ptr<tcp_connection_t> &owner,
+                      const std::shared_ptr<websocket_stream_t> &connection,
                       const stream_header_t &header,
                       const zlink::message_t &payload)
     {
@@ -2456,179 +2579,53 @@ class stream_host_service_t::listener_t
                                                                  : "STREAM header encode failed");
         }
         const auto payload_bytes = message_bytes (payload);
-        std::vector<std::uint8_t> frame;
-        frame.reserve (6 + encoded_header.value ().size () + payload_bytes.size ());
+        auto frame = std::make_shared<std::vector<std::uint8_t>> ();
+        frame->reserve (6 + encoded_header.value ().size () + payload_bytes.size ());
         const auto header_size = encoded_header.value ().size ();
-        frame.push_back (static_cast<std::uint8_t> ((header_size >> 8) & 0xff));
-        frame.push_back (static_cast<std::uint8_t> (header_size & 0xff));
-        frame.push_back (static_cast<std::uint8_t> ((payload_bytes.size () >> 24) & 0xff));
-        frame.push_back (static_cast<std::uint8_t> ((payload_bytes.size () >> 16) & 0xff));
-        frame.push_back (static_cast<std::uint8_t> ((payload_bytes.size () >> 8) & 0xff));
-        frame.push_back (static_cast<std::uint8_t> (payload_bytes.size () & 0xff));
-        frame.insert (frame.end (), encoded_header.value ().begin (),
+        frame->push_back (static_cast<std::uint8_t> ((header_size >> 8) & 0xff));
+        frame->push_back (static_cast<std::uint8_t> (header_size & 0xff));
+        frame->push_back (static_cast<std::uint8_t> ((payload_bytes.size () >> 24) & 0xff));
+        frame->push_back (static_cast<std::uint8_t> ((payload_bytes.size () >> 16) & 0xff));
+        frame->push_back (static_cast<std::uint8_t> ((payload_bytes.size () >> 8) & 0xff));
+        frame->push_back (static_cast<std::uint8_t> (payload_bytes.size () & 0xff));
+        frame->insert (frame->end (), encoded_header.value ().begin (),
                       encoded_header.value ().end ());
-        frame.insert (frame.end (), payload_bytes.begin (), payload_bytes.end ());
+        frame->insert (frame->end (), payload_bytes.begin (), payload_bytes.end ());
         trace_stream_host ("write-frame", _stream, header,
                            "payload_bytes=" + std::to_string (payload_bytes.size ()));
-        socket.binary (true);
-        socket.write (asio::buffer (frame));
-        trace_stream_host ("write-completion", _stream, header, "result=success");
-    }
-
-    bool native_buffer_has_complete_frame (const native_tcp_connection_t &connection) const
-    {
-        if (connection.receive_buffer.size () < 6) {
-            return false;
+        const auto weak_connection = std::weak_ptr<websocket_stream_t> (connection);
+        const auto error = run_stream_write_operation (
+          owner, *_stop,
+          [weak_connection, frame] (auto completion) mutable {
+              if (const auto connection = weak_connection.lock ()) {
+                  connection->binary (true);
+                  connection->async_write (
+                    asio::buffer (*frame),
+                    [frame, completion = std::move (completion)] (
+                      const boost::system::error_code &write_error, std::size_t bytes) mutable {
+                        completion (write_error, bytes);
+                    });
+              } else {
+                  completion (asio::error::operation_aborted, 0);
+              }
+          },
+          [weak_owner = std::weak_ptr<tcp_connection_t> (owner), weak_connection] {
+              if (const auto connection_owner = weak_owner.lock ()) {
+                  asio::post (connection_owner->io, [weak_connection] {
+                      if (const auto connection = weak_connection.lock ())
+                          cancel_stream (connection->next_layer ());
+                  });
+              }
+          });
+        if (error) {
+            throw boost::system::system_error (error);
         }
-        const auto &prefix = connection.receive_buffer;
-        const auto header_size = static_cast<std::size_t> ((prefix[0] << 8) | prefix[1]);
-        const auto payload_size = (static_cast<std::size_t> (prefix[2]) << 24)
-                                  | (static_cast<std::size_t> (prefix[3]) << 16)
-                                  | (static_cast<std::size_t> (prefix[4]) << 8)
-                                  | static_cast<std::size_t> (prefix[5]);
-        validate_stream_frame_size (header_size, payload_size, _stream.max_message_size);
-        return connection.receive_buffer.size () >= 6u + header_size + payload_size;
-    }
-
-    std::optional<frame_t>
-    read_frame_native (native_tcp_connection_t &connection,
-                       const std::function<bool (const stream_header_t &)> &admit_payload)
-    {
-        constexpr std::size_t receive_chunk_size = 64u * 1024u;
-        for (;;) {
-            if (connection.receive_buffer.size () >= 6) {
-                const auto &prefix = connection.receive_buffer;
-                const auto header_size = static_cast<std::size_t> (
-                  (prefix[0] << 8) | prefix[1]);
-                const auto payload_size = (static_cast<std::size_t> (prefix[2]) << 24)
-                                          | (static_cast<std::size_t> (prefix[3]) << 16)
-                                          | (static_cast<std::size_t> (prefix[4]) << 8)
-                                          | static_cast<std::size_t> (prefix[5]);
-                validate_stream_frame_size (header_size, payload_size, _stream.max_message_size);
-                const auto frame_size = 6u + header_size + payload_size;
-                if (connection.receive_buffer.size () >= frame_size) {
-                    std::vector<std::uint8_t> header_bytes (
-                      connection.receive_buffer.begin () + 6,
-                      connection.receive_buffer.begin () + 6 + header_size);
-                    auto header = _runtime.decode_header (header_bytes);
-                    if (!header) {
-                        throw framework_exception_t (
-                          header.error_kind (),
-                          header.error () ? header.error ()->what ()
-                                          : "STREAM header decode failed");
-                    }
-                    auto decoded_header = header.value ();
-                    if (decoded_header.kind () != stream_message_kind_t::control
-                        && admit_payload && !admit_payload (decoded_header)) {
-                        return std::nullopt;
-                    }
-                    std::vector<std::uint8_t> payload_bytes (
-                      connection.receive_buffer.begin () + 6 + header_size,
-                      connection.receive_buffer.begin () + frame_size);
-                    connection.receive_buffer.erase (
-                      connection.receive_buffer.begin (),
-                      connection.receive_buffer.begin () + frame_size);
-                    trace_stream_host ("read-frame", _stream, decoded_header,
-                                       "payload_bytes="
-                                         + std::to_string (payload_bytes.size ()));
-                    return frame_t{decoded_header, message_from_bytes (payload_bytes)};
-                }
-            }
-
-            int fd = -1;
-            {
-                const std::lock_guard<std::mutex> lock (connection.mutex);
-                fd = connection.fd;
-            }
-            if (fd < 0) {
-                throw detail::make_boundary_exception (
-                  detail::boundary_error_t::disconnected,
-                  "stream native socket closed");
-            }
-            std::array<std::uint8_t, receive_chunk_size> chunk{};
-            const auto received = ::recv (
-              fd, chunk.data (), chunk.size (), MSG_DONTWAIT);
-            const int received_errno = errno;
-            if (received < 0) {
-                if (received_errno == EINTR)
-                    continue;
-                if (received_errno == EAGAIN || received_errno == EWOULDBLOCK)
-                    return std::nullopt;
-                throw session_transport_failure_t (received_errno,
-                                                   std::strerror (received_errno));
-            }
-            if (received == 0) {
-                throw detail::make_boundary_exception (
-                  detail::boundary_error_t::disconnected,
-                  "STREAM TCP peer disconnected");
-            }
-            connection.receive_buffer.insert (
-              connection.receive_buffer.end (), chunk.begin (),
-              chunk.begin () + received);
-        }
-    }
-
-    void write_all_native (native_tcp_connection_t &connection,
-                           const std::vector<std::uint8_t> &bytes)
-    {
-        std::size_t offset = 0;
-        while (offset < bytes.size ()) {
-            int fd = -1;
-            {
-                const std::lock_guard<std::mutex> lock (connection.mutex);
-                fd = connection.fd;
-            }
-            if (fd < 0) {
-                throw detail::make_boundary_exception (detail::boundary_error_t::disconnected,
-                                             "stream native socket closed");
-            }
-            const auto sent = ::send (fd, bytes.data () + offset, bytes.size () - offset,
-                                      MSG_NOSIGNAL);
-            const int sent_errno = errno;
-            if (sent < 0) {
-                if (sent_errno == EINTR) {
-                    continue;
-                }
-                throw session_transport_failure_t (sent_errno, std::strerror (sent_errno));
-            }
-            if (sent == 0) {
-                throw session_transport_failure_t (0, "STREAM TCP write made no progress");
-            }
-            offset += static_cast<std::size_t> (sent);
-        }
-    }
-
-    void write_frame_native (native_tcp_connection_t &connection,
-                             const stream_header_t &header,
-                             const zlink::message_t &payload)
-    {
-        auto encoded_header = _runtime.encode_header (header);
-        if (!encoded_header) {
-            throw framework_exception_t (encoded_header.error_kind (),
-                                         encoded_header.error () ? encoded_header.error ()->what ()
-                                                                 : "STREAM header encode failed");
-        }
-        const auto payload_bytes = message_bytes (payload);
-        std::vector<std::uint8_t> frame;
-        frame.reserve (6 + encoded_header.value ().size () + payload_bytes.size ());
-        const auto header_size = encoded_header.value ().size ();
-        frame.push_back (static_cast<std::uint8_t> ((header_size >> 8) & 0xff));
-        frame.push_back (static_cast<std::uint8_t> (header_size & 0xff));
-        frame.push_back (static_cast<std::uint8_t> ((payload_bytes.size () >> 24) & 0xff));
-        frame.push_back (static_cast<std::uint8_t> ((payload_bytes.size () >> 16) & 0xff));
-        frame.push_back (static_cast<std::uint8_t> ((payload_bytes.size () >> 8) & 0xff));
-        frame.push_back (static_cast<std::uint8_t> (payload_bytes.size () & 0xff));
-        frame.insert (frame.end (), encoded_header.value ().begin (),
-                      encoded_header.value ().end ());
-        frame.insert (frame.end (), payload_bytes.begin (), payload_bytes.end ());
-        trace_stream_host ("write-frame", _stream, header,
-                           "payload_bytes=" + std::to_string (payload_bytes.size ()));
-        write_all_native (connection, frame);
         trace_stream_host ("write-completion", _stream, header, "result=success");
     }
 
     template <typename TStream>
-    void write_error_frame (TStream &socket,
+    void write_error_frame (const std::shared_ptr<tcp_connection_t> &owner,
+                            const std::shared_ptr<TStream> &connection,
                             const stream_header_t &request_header,
                             const result_t<void> &error)
     {
@@ -2643,54 +2640,29 @@ class stream_host_service_t::listener_t
         if (auto correlation = request_header.correlation_id ()) {
             error_header.with_correlation_id (std::string (*correlation));
         }
-        write_frame (socket, error_header, stream_error_payload (error));
-    }
-
-    void write_error_frame_native (native_tcp_connection_t &connection,
-                                   const stream_header_t &request_header,
-                                   const result_t<void> &error)
-    {
-        if (!request_header.request_seq ()) {
-            return;
-        }
-        stream_header_t error_header (stream_message_kind_t::error, stream_codec_t::json,
-                                      stream_header_flags_t::has_request_seq,
-                                      request_header.request_seq (), "", {});
-        if (auto correlation = request_header.correlation_id ()) {
-            error_header.with_correlation_id (std::string (*correlation));
-        }
-        write_frame_native (connection, error_header, stream_error_payload (error));
+        write_frame (owner, connection, error_header, stream_error_payload (error));
     }
 
     template <typename TStream>
     void
-    flush_writes (TStream &socket, stream_t &stream, std::size_t &flushed, std::mutex &write_mutex)
+    flush_writes (const std::shared_ptr<tcp_connection_t> &owner,
+                  const std::shared_ptr<TStream> &connection,
+                  stream_t &stream,
+                  std::size_t &flushed)
     {
         const auto headers = _runtime.written_headers (stream);
         const auto payloads = _runtime.written_payloads (stream);
-        const std::lock_guard<std::mutex> lock (write_mutex);
         for (; flushed < headers.size (); ++flushed) {
-            write_frame (socket, headers[flushed], payloads[flushed]);
-        }
-    }
-
-    void flush_writes_native (native_tcp_connection_t &connection,
-                              stream_t &stream,
-                              std::size_t &flushed,
-                              std::mutex &write_mutex)
-    {
-        const auto headers = _runtime.written_headers (stream);
-        const auto payloads = _runtime.written_payloads (stream);
-        const std::lock_guard<std::mutex> lock (write_mutex);
-        for (; flushed < headers.size (); ++flushed) {
-            write_frame_native (connection, headers[flushed], payloads[flushed]);
+            write_frame (owner, connection, headers[flushed], payloads[flushed]);
         }
     }
 
     template <typename TStream>
-    void handle_stream_connection (std::shared_ptr<TStream> connection,
+    void handle_stream_connection (std::shared_ptr<tcp_connection_t> owner,
+                                   std::shared_ptr<TStream> connection,
                                    tcp::socket *tracked_socket,
-                                   bool attach_immediate_writer)
+                                   bool attach_immediate_writer,
+                                   asio::io_context &io)
     {
         auto cleanup = std::unique_ptr<tcp::socket, std::function<void (tcp::socket *)>> (
           tracked_socket, [this] (tcp::socket *socket) {
@@ -2708,11 +2680,7 @@ class stream_host_service_t::listener_t
                                                  std::nullopt, "session-closing", {});
                 const auto closing_payload = zlink::message_t::from (
                   std::string (payload_bytes.begin (), payload_bytes.end ()));
-                if constexpr (std::is_same_v<TStream, native_tcp_connection_t>) {
-                    write_frame_native (*connection, closing, closing_payload);
-                } else {
-                    write_frame (*connection, closing, closing_payload);
-                }
+                write_frame (owner, connection, closing, closing_payload);
             }
             catch (...) {
             }
@@ -2730,15 +2698,13 @@ class stream_host_service_t::listener_t
         auto connection_state = std::make_shared<stream_connection_state_t> (
           std::move (scope), &session, std::move (stream_instance), &session_actors);
         auto &stream = connection_state->stream;
-        auto write_mutex = std::make_shared<std::mutex> ();
         if (attach_immediate_writer) {
             _runtime.attach_transport_writer (
               stream,
-              [this, connection, write_mutex] (const stream_header_t &header,
-                                               const zlink::message_t &payload) -> result_t<void> {
+              [this, owner, connection] (const stream_header_t &header,
+                                         const zlink::message_t &payload) -> result_t<void> {
                   try {
-                      const std::lock_guard<std::mutex> lock (*write_mutex);
-                      write_frame (*connection, header, payload);
+                      write_frame (owner, connection, header, payload);
                       return result_t<void>::success ();
                   }
                   catch (const framework_exception_t &error) {
@@ -2762,10 +2728,9 @@ class stream_host_service_t::listener_t
             record_connection_opened ();
             // close_connection owns the _io_mutex acquisition itself.
             register_active_stream (stream, liveness,
-                                    [this, connection] { close_connection (*connection); });
-            flush_writes (*connection, stream, flushed, *write_mutex);
-            auto receive_lease =
-              _receive_scheduler.register_connection (stream_native_handle (*connection));
+                                    [this, connection] { request_close (*connection); });
+            flush_writes (owner, connection, stream, flushed);
+            auto receive_lease = _receive_scheduler.register_connection ();
             while (!_stop->load (std::memory_order_acquire)) {
                 receive_batch_budget_t batch;
                 while (!_stop->load (std::memory_order_acquire) && batch.can_receive ()) {
@@ -2773,26 +2738,16 @@ class stream_host_service_t::listener_t
                           [this] { return _stop->load (std::memory_order_acquire); })) {
                         break;
                     }
-                    /* The synchronous TLS/WebSocket read may wait for the
-                     * remainder of a frame. Do not keep the listener-wide
-                     * receive lease while waiting; one partial connection
-                     * must not block the other connections. A new lease is
-                     * acquired for every frame, which also bounds a peer's
-                     * turn by the shared batch limits. */
-                    if constexpr (!std::is_same_v<TStream, tcp::socket>) {
-                        /* TLS and WebSocket implementations may retain
-                         * decrypted or frame bytes outside the kernel fd.
-                         * Keep this slot eligible for the next frame; the
-                         * blocking read still happens after the lease is
-                         * released. */
-                        receive_lease.set_buffered_ready (true);
-                    }
+                    /* The synchronous Asio read may wait for the remainder of
+                     * a frame. Do not keep the listener-wide receive lease
+                     * while waiting; one partial connection must not block
+                     * the other connections. */
                     receive_lease.release_turn ();
                     auto frame = read_frame (*connection, [this] (const stream_header_t &) {
                         return !_inbound_budget
                                || _inbound_budget->wait_for_application_capacity (
                                  [this] { return _stop->load (std::memory_order_acquire); });
-                    });
+                    }, io, &owner->closing);
                     if (!frame) {
                         break;
                     }
@@ -2806,8 +2761,7 @@ class stream_host_service_t::listener_t
                                                           stream_codec_t::raw,
                                                           stream_header_flags_t::none,
                                                           std::nullopt, "$zlink.heartbeat.pong", {});
-                            const std::lock_guard<std::mutex> lock (*write_mutex);
-                            write_frame (*connection, pong, zlink::message_t{});
+                            write_frame (owner, connection, pong, zlink::message_t{});
                           }
                         continue;
                       }
@@ -2823,7 +2777,7 @@ class stream_host_service_t::listener_t
                     trace_stream_host ("dispatch-submit", _stream, header);
                     auto dispatched = _runtime.dispatch_packet_async (
                       session, stream, header, received_frame.payload,
-                      [this, connection, connection_state, write_mutex, header, liveness,
+                      [this, owner, connection, connection_state, header, liveness,
                        handler_started, payload_bytes] (const result_t<void> &result) {
                           if (_inbound_budget) {
                               _inbound_budget->completed (
@@ -2837,8 +2791,7 @@ class stream_host_service_t::listener_t
                               report_packet_dispatch_error (header, result);
                               if (header.kind () == stream_message_kind_t::request) {
                                   try {
-                                      const std::lock_guard<std::mutex> lock (*write_mutex);
-                                      write_error_frame (*connection, header, result);
+                                      write_error_frame (owner, connection, header, result);
                                   }
                                   catch (...) {
                                   }
@@ -2862,14 +2815,13 @@ class stream_host_service_t::listener_t
                         report_packet_dispatch_error (header, dispatched);
                         if (header.kind () == stream_message_kind_t::request) {
                             try {
-                                const std::lock_guard<std::mutex> lock (*write_mutex);
-                                write_error_frame (*connection, header, dispatched);
+                                write_error_frame (owner, connection, header, dispatched);
                             }
                             catch (...) {
                             }
                       }
                     }
-                    flush_writes (*connection, stream, flushed, *write_mutex);
+                    flush_writes (owner, connection, stream, flushed);
                 }
             }
         }
@@ -2914,6 +2866,8 @@ class stream_host_service_t::listener_t
             }
         }
         if (connected_session) {
+            owner->closing.store (true, std::memory_order_release);
+            _runtime.mark_disconnected (stream);
             auto dispatch_disconnect = [this, &session, &stream, connection_state] {
                 auto completed = [this, connection_state] (const result_t<void> &) {
                     trace_stream_host ("dispatch-disconnected-end", _stream);
@@ -2926,7 +2880,6 @@ class stream_host_service_t::listener_t
                 }
             };
             if (_stop->load (std::memory_order_acquire)) {
-                _runtime.mark_disconnected (stream);
                 dispatch_disconnect ();
             } else {
                 trace_stream_host ("dispatch-disconnected-begin", _stream);
@@ -2940,262 +2893,7 @@ class stream_host_service_t::listener_t
                 }
                 dispatch_disconnect ();
             }
-            if (!_stop->load (std::memory_order_acquire)) {
-                try {
-                    flush_writes (*connection, stream, flushed, *write_mutex);
-                }
-                catch (...) {
-                }
-            }
-        }
-        close_connection (*connection);
-    }
-
-    void handle_native_connection (std::shared_ptr<native_tcp_connection_t> connection)
-    {
-        auto cleanup = std::unique_ptr<native_tcp_connection_t, std::function<void (native_tcp_connection_t *)>> (
-          connection.get (), [this] (native_tcp_connection_t *native_connection) {
-              const std::lock_guard<std::mutex> lock (_sockets_mutex);
-              for (auto it = _native_connections.begin (); it != _native_connections.end ();) {
-                  auto tracked = it->lock ();
-                  if (!tracked || tracked.get () == native_connection)
-                      it = _native_connections.erase (it);
-                  else
-                      ++it;
-              }
-          });
-        if (draining ()) {
-            /* graceful-drain-handoff §5: brand-new connections on a draining
-             * node receive session-closing(server_drain) and are closed. */
-            try {
-                const auto payload_bytes = detail::stream_runtime_t::encode_session_closing_payload (
-                  stream_close_reason_t::server_drain, "node is draining");
-                detail::stream_header_t closing (stream_message_kind_t::control,
-                                                 stream_codec_t::raw, stream_header_flags_t::none,
-                                                 std::nullopt, "session-closing", {});
-                const auto closing_payload = zlink::message_t::from (
-                  std::string (payload_bytes.begin (), payload_bytes.end ()));
-                write_frame_native (*connection, closing, closing_payload);
-            }
-            catch (...) {
-            }
-            return;
-        }
-        auto scope = detail::service_scope_t::create (
-          *_services, detail::service_scope_kind_t::stream_session);
-        auto &session = _session_factory (scope.provider ());
-        auto stream_instance = _runtime.open_session (_stream.name);
-        _runtime.set_session_identity (
-          stream_instance, std::nullopt, native_local_endpoint_text (connection->fd),
-          native_remote_endpoint_text (connection->fd));
-        auto &session_actors = scope.provider ().get_required<session_actor_manager_t> ();
-        detail::session_actor_manager_access_t::attach (session_actors, stream_instance);
-        auto connection_state = std::make_shared<stream_connection_state_t> (
-          std::move (scope), &session, std::move (stream_instance), &session_actors);
-        auto &stream = connection_state->stream;
-        auto write_mutex = std::make_shared<std::mutex> ();
-        _runtime.attach_transport_writer (
-          stream,
-          [this, connection, write_mutex] (const stream_header_t &header,
-                                           const zlink::message_t &payload) -> result_t<void> {
-              try {
-                  const std::lock_guard<std::mutex> lock (*write_mutex);
-                  write_frame_native (*connection, header, payload);
-                  return result_t<void>::success ();
-              }
-              catch (const framework_exception_t &error) {
-                  return detail::result_access_t::failure<void> (error);
-              }
-              catch (const std::exception &error) {
-                  return detail::boundary_failure<void> (detail::boundary_error_t::disconnected,
-                                                  error.what ());
-              }
-          });
-        std::size_t flushed = 0;
-        bool connected_session = false;
-        std::optional<stream_error_t> session_transport_error;
-        auto liveness = std::make_shared<session_liveness_t> ();
-        try {
-            if (auto connected = _runtime.dispatch_connected (session, stream); !connected) {
-                return;
-            }
-            connected_session = true;
-            record_connection_opened ();
-            register_active_stream (stream, liveness,
-                                    [this, connection] { close_connection (*connection); });
-            flush_writes_native (*connection, stream, flushed, *write_mutex);
-            int native_fd = -1;
-            {
-                const std::lock_guard<std::mutex> lock (connection->mutex);
-                native_fd = connection->fd;
-            }
-            auto receive_lease = _receive_scheduler.register_connection (native_fd);
-            while (!_stop->load (std::memory_order_acquire)) {
-                receive_batch_budget_t batch;
-                while (!_stop->load (std::memory_order_acquire) && batch.can_receive ()) {
-                    if (!receive_lease.wait_turn (
-                          [this] { return _stop->load (std::memory_order_acquire); })) {
-                        break;
-                    }
-                    bool application_capacity_blocked = false;
-                    auto frame = read_frame_native (*connection, [this, &application_capacity_blocked] (
-                                                                 const stream_header_t &) {
-                        if (!_inbound_budget
-                            || _inbound_budget->can_start_application_receive ()) {
-                            return true;
-                        }
-                        application_capacity_blocked = true;
-                        return false;
-                    });
-                    /* The native parser never waits for application HWM
-                     * capacity while it owns the listener-wide lease. A
-                     * complete frame remains in receive_buffer and the
-                     * connection waits below, after releasing the lease. */
-                    receive_lease.set_buffered_ready (
-                      !application_capacity_blocked
-                      && native_buffer_has_complete_frame (*connection));
-                    receive_lease.release_turn ();
-                    if (!frame) {
-                        if (application_capacity_blocked) {
-                            if (!_inbound_budget->wait_for_application_capacity (
-                                  [this] { return _stop->load (std::memory_order_acquire); })) {
-                                break;
-                            }
-                            receive_lease.set_buffered_ready (
-                              native_buffer_has_complete_frame (*connection));
-                            continue;
-                        }
-                        break;
-                    }
-                    auto received_frame = std::move (*frame);
-                    batch.account (received_frame.payload.size ());
-                    if (received_frame.header.kind () == stream_message_kind_t::control) {
-                        if (received_frame.header.packet_name () == "$zlink.heartbeat.pong") {
-                            liveness->record_pong ();
-                        } else if (received_frame.header.packet_name () == "$zlink.heartbeat.ping") {
-                            detail::stream_header_t pong (stream_message_kind_t::control,
-                                                          stream_codec_t::raw,
-                                                          stream_header_flags_t::none,
-                                                          std::nullopt, "$zlink.heartbeat.pong", {});
-                            const std::lock_guard<std::mutex> lock (*write_mutex);
-                            write_frame_native (*connection, pong, zlink::message_t{});
-                          }
-                        continue;
-                      }
-                    const auto payload_bytes = static_cast<std::uint64_t> (
-                      received_frame.payload.size ());
-                    if (_inbound_budget) {
-                        _inbound_budget->received (payload_bytes);
-                    }
-                    detail::session_actor_manager_access_t::set_codec (
-                      session_actors, received_frame.header.codec ());
-                    auto handler_started = std::make_shared<std::atomic_bool> (false);
-                    const auto header = received_frame.header;
-                    trace_stream_host ("dispatch-submit", _stream, header);
-                    auto dispatched = _runtime.dispatch_packet_async (
-                      session, stream, header, received_frame.payload,
-                      [this, connection, connection_state, write_mutex, header, liveness,
-                       handler_started, payload_bytes] (const result_t<void> &result) {
-                          if (_inbound_budget) {
-                              _inbound_budget->completed (
-                                payload_bytes,
-                                handler_started->load (std::memory_order_acquire));
-                          }
-                          trace_stream_host (
-                            "dispatch-complete", _stream, header,
-                            std::string ("result=") + (result ? "success" : "failure"));
-                          if (!result) {
-                              report_packet_dispatch_error (header, result);
-                              if (header.kind () == stream_message_kind_t::request) {
-                                  try {
-                                      const std::lock_guard<std::mutex> lock (*write_mutex);
-                                      write_error_frame_native (*connection, header, result);
-                                  }
-                                  catch (...) {
-                                  }
-                              }
-                          }
-                          (void) connection_state;
-                          (void) liveness;
-                      },
-                      [this, liveness, handler_started, payload_bytes] {
-                          handler_started->store (true, std::memory_order_release);
-                          if (_inbound_budget) {
-                              _inbound_budget->handler_started (payload_bytes);
-                          }
-                          liveness->record_application_inbound ();
-                      },
-                      [this] { return _stop->load (std::memory_order_acquire); });
-                    if (!dispatched) {
-                        if (_inbound_budget) {
-                            _inbound_budget->completed (payload_bytes, false);
-                        }
-                        report_packet_dispatch_error (header, dispatched);
-                        if (header.kind () == stream_message_kind_t::request) {
-                            try {
-                                const std::lock_guard<std::mutex> lock (*write_mutex);
-                                write_error_frame_native (*connection, header, dispatched);
-                            }
-                            catch (...) {
-                            }
-                      }
-                    }
-                    flush_writes_native (*connection, stream, flushed, *write_mutex);
-                }
-            }
-        }
-        catch (const session_transport_failure_t &error) {
-            if (connected_session && !_stop->load (std::memory_order_acquire)
-                && !liveness->forced ()) {
-                session_transport_error.emplace (stream_session_error_t::transport_error,
-                                                 error.what ());
-            }
-        }
-        catch (const stream_message_size_exceeded_t &error) {
-            trace_stream_host (
-              "message-size-rejected", _stream, std::nullopt,
-              "errno=EMSGSIZE limit=" + std::to_string (error.max_message_size ())
-                + " header_bytes=" + std::to_string (error.header_size ())
-                + " payload_bytes=" + std::to_string (error.payload_size ()));
-        }
-        catch (const framework_exception_t &) {
-        }
-        catch (...) {
-        }
-        if (connected_session) {
-            auto dispatch_disconnect = [this, &session, &stream, connection_state] {
-                auto completed = [this, connection_state] (const result_t<void> &) {
-                    trace_stream_host ("dispatch-disconnected-end", _stream);
-                    (void) connection_state;
-                };
-                auto submitted = _runtime.dispatch_disconnected_async (
-                  session, stream, completed);
-                if (!submitted) {
-                    completed (submitted);
-                }
-            };
-            if (_stop->load (std::memory_order_acquire)) {
-                _runtime.mark_disconnected (stream);
-                dispatch_disconnect ();
-            } else {
-                trace_stream_host ("dispatch-disconnected-begin", _stream);
-                unregister_active_stream (stream);
-                const auto forced = liveness->forced ();
-                record_connection_closed (
-                  forced ? liveness_close_label (*forced)
-                         : session_transport_error ? "transport_error" : "client_close");
-                if (session_transport_error && !forced) {
-                    (void) _runtime.dispatch_error (session, stream, *session_transport_error);
-                }
-                dispatch_disconnect ();
-            }
-            if (!_stop->load (std::memory_order_acquire)) {
-                try {
-                    flush_writes_native (*connection, stream, flushed, *write_mutex);
-                }
-                catch (...) {
-                }
-            }
+            _runtime.drain_async_dispatch (stream);
         }
         close_connection (*connection);
     }
@@ -3205,15 +2903,28 @@ class stream_host_service_t::listener_t
                                 std::shared_ptr<ssl::stream<tcp::socket>> connection)
     {
         try {
-            connection->handshake (ssl::stream_base::server);
+            const auto error = run_stream_async_operation (
+              owner->io, *_stop,
+              [&] (auto completion) {
+                  connection->async_handshake (
+                    ssl::stream_base::server,
+                    [completion = std::move (completion)] (
+                      const boost::system::error_code &handshake_error) mutable {
+                        completion (handshake_error, 0);
+                    });
+              },
+              [connection] { cancel_stream (connection->next_layer ()); },
+              &owner->closing);
+            if (error) {
+                throw boost::system::system_error (error);
+            }
         }
         catch (const boost::system::system_error &) {
             const std::lock_guard<std::mutex> lock (_sockets_mutex);
             _sockets.erase (&connection->next_layer ());
             return;
         }
-        (void) owner;
-        handle_stream_connection (connection, &connection->next_layer (), true);
+        handle_stream_connection (owner, connection, &connection->next_layer (), true, owner->io);
     }
 #endif
 
@@ -3221,7 +2932,20 @@ class stream_host_service_t::listener_t
                                       std::shared_ptr<websocket_stream_t> connection)
     {
         try {
-            connection->accept ();
+            const auto error = run_stream_async_operation (
+              owner->io, *_stop,
+              [&] (auto completion) {
+                  connection->async_accept (
+                    [completion = std::move (completion)] (
+                      const boost::system::error_code &accept_error) mutable {
+                        completion (accept_error, 0);
+                    });
+              },
+              [connection] { cancel_stream (connection->next_layer ()); },
+              &owner->closing);
+            if (error) {
+                throw boost::system::system_error (error);
+            }
             connection->binary (true);
         }
         catch (const boost::system::system_error &) {
@@ -3229,14 +2953,14 @@ class stream_host_service_t::listener_t
             _sockets.erase (&connection->next_layer ());
             return;
         }
-        (void) owner;
-        handle_stream_connection (connection, &connection->next_layer (), true);
+        handle_stream_connection (owner, connection, &connection->next_layer (), true, owner->io);
     }
 
     void handle_connection (std::shared_ptr<tcp_connection_t> connection)
     {
-        handle_stream_connection (std::shared_ptr<tcp::socket> (connection, &connection->socket),
-                                  &connection->socket, true);
+        handle_stream_connection (connection,
+                                  std::shared_ptr<tcp::socket> (connection, &connection->socket),
+                                  &connection->socket, true, connection->io);
     }
 
     detail::stream_runtime_t _runtime;
@@ -3254,17 +2978,16 @@ class stream_host_service_t::listener_t
     asio::io_context _io;
     std::mutex _io_mutex;
     tcp::acceptor _acceptor;
-    std::mutex _native_accept_mutex;
-    int _native_accept_fd = -1;
+    asio::steady_timer _accept_retry_timer;
 #ifdef ZLINK_FRAMEWORK_STREAM_WITH_OPENSSL
     std::optional<ssl::context> _tls_context;
 #endif
     std::mutex _sockets_mutex;
-    std::unordered_set<tcp::socket *> _sockets;
-    std::vector<std::weak_ptr<native_tcp_connection_t>> _native_connections;
+    std::unordered_map<tcp::socket *, std::function<void ()>> _sockets;
     std::mutex _core_socket_mutex;
     std::unique_ptr<zlink::stream_socket_t> _core_socket;
     std::unique_ptr<zlink::socket_monitor_t> _core_monitor;
+    eventing::runtime_wake_timer_t _core_wake_timer;
     std::mutex _core_sessions_mutex;
     std::map<std::string, std::shared_ptr<core_session_t>> _core_sessions;
     std::map<std::string, core_stream_frame_assembler_t> _core_frame_assemblers;

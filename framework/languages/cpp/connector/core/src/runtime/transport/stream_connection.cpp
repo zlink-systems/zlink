@@ -3,9 +3,12 @@
 #include "runtime/transport/stream_connection.hpp"
 
 #include <boost/asio/bind_executor.hpp>
+#include <boost/asio/bind_cancellation_slot.hpp>
+#include <boost/asio/cancellation_signal.hpp>
 #include <boost/asio/connect.hpp>
 #include <boost/asio/post.hpp>
 #include <boost/asio/strand.hpp>
+#include <boost/asio/steady_timer.hpp>
 #include <boost/asio/write.hpp>
 #ifdef ZLINK_STREAM_CONNECTOR_WITH_OPENSSL
 #include <boost/asio/ssl/host_name_verification.hpp>
@@ -13,14 +16,14 @@
 #include <openssl/ssl.h>
 #endif
 
-#ifndef _WIN32
-#include <poll.h>
-#endif
-
 #include <algorithm>
-#include <cerrno>
 #include <chrono>
+#include <condition_variable>
+#include <exception>
 #include <memory>
+#include <mutex>
+#include <thread>
+#include <tuple>
 #include <utility>
 
 namespace zlink::stream_connector::detail
@@ -29,40 +32,166 @@ namespace zlink::stream_connector::detail
 namespace
 {
 
-#ifndef _WIN32
-bool wait_native_socket_readable (int native_handle,
-                                  std::chrono::steady_clock::time_point deadline,
-                                  boost::system::error_code &error)
+class readable_wait_state_t final
 {
-    for (;;) {
-        const auto now = std::chrono::steady_clock::now ();
-        if (now >= deadline) {
-            error.clear ();
-            return false;
+  private:
+    enum class handler_kind_t
+    {
+        timer,
+        socket
+    };
+
+  public:
+    readable_wait_state_t (
+      boost::asio::io_context &io_context,
+      std::chrono::steady_clock::time_point deadline) :
+        timer (io_context), deadline (deadline)
+    {
+    }
+
+    void report_timer (boost::system::error_code error_, bool readable_) noexcept
+    {
+        report (handler_kind_t::timer, error_, readable_);
+    }
+
+    void report_socket (boost::system::error_code error_, bool readable_) noexcept
+    {
+        report (handler_kind_t::socket, error_, readable_);
+    }
+
+    void report (handler_kind_t handler,
+                 boost::system::error_code error_,
+                 bool readable_) noexcept
+    {
+        {
+            std::lock_guard<std::mutex> lock (mutex);
+            bool &reported = handler == handler_kind_t::timer ? timer_reported : socket_reported;
+            if (reported) {
+                return;
+            }
+            reported = true;
+            if (!result_ready) {
+                result_ready = true;
+                error = error_;
+                readable = readable_;
+            }
+            if (handlers_remaining > 0) {
+                --handlers_remaining;
+            }
+            if (handlers_remaining == 0) {
+                completed = true;
+            }
         }
-        const auto timeout =
-          static_cast<int> (std::chrono::duration_cast<std::chrono::milliseconds> (deadline - now)
-                              .count ());
-        pollfd descriptor{};
-        descriptor.fd = native_handle;
-        descriptor.events = POLLIN;
-        const auto ready = ::poll (&descriptor, 1, std::max (0, timeout));
-        if (ready > 0) {
-            error.clear ();
-            return true;
-        }
-        if (ready == 0) {
-            error.clear ();
-            return false;
-        }
-        if (errno == EINTR) {
-            continue;
-        }
-        error.assign (errno, boost::system::generic_category ());
+        condition.notify_all ();
+    }
+
+    std::tuple<boost::system::error_code, bool> wait ()
+    {
+        // Both handlers must report before returning because each handler
+        // captures the connection's socket by reference.
+        std::unique_lock<std::mutex> lock (mutex);
+        condition.wait (lock, [this] { return completed; });
+        return {error, readable};
+    }
+
+    boost::asio::steady_timer timer;
+    boost::asio::cancellation_signal wait_cancellation;
+    std::chrono::steady_clock::time_point deadline;
+
+  private:
+    std::mutex mutex;
+    std::condition_variable condition;
+    std::size_t handlers_remaining = 2;
+    bool timer_reported = false;
+    bool socket_reported = false;
+    bool result_ready = false;
+    bool completed = false;
+    bool readable = false;
+    boost::system::error_code error;
+};
+
+template <typename Socket, typename Strand>
+bool wait_readable_until_asio (boost::asio::io_context &io_context,
+                               Strand &strand,
+                               Socket &socket,
+                               std::chrono::steady_clock::time_point deadline,
+                               boost::system::error_code &error)
+{
+    if (io_context.stopped ()) {
+        error = boost::asio::error::operation_aborted;
         return false;
     }
+    if (std::chrono::steady_clock::now () >= deadline) {
+        error.clear ();
+        return false;
+    }
+
+    // A synchronous receive may be called from a callback already executing
+    // on this strand. Posting the wait and then blocking would prevent the
+    // posted handler from running. available() is the non-blocking Asio query
+    // for that context, so bounded polling preserves the synchronous API
+    // without introducing an operating-system-specific transport path.
+    if (strand.running_in_this_thread ()) {
+        for (;;) {
+            const auto now = std::chrono::steady_clock::now ();
+            if (now >= deadline) {
+                error.clear ();
+                return false;
+            }
+            const auto available = socket.available (error);
+            if (error || available != 0) {
+                return available != 0;
+            }
+            const auto remaining = deadline - now;
+            std::this_thread::sleep_for (
+              std::min<std::chrono::steady_clock::duration> (
+                remaining, std::chrono::milliseconds (1)));
+        }
+    }
+
+    auto state = std::make_shared<readable_wait_state_t> (io_context, deadline);
+    try {
+        boost::asio::post (strand, [state, &socket, &strand] {
+            state->timer.expires_at (state->deadline);
+            state->timer.async_wait (boost::asio::bind_executor (
+              strand, [state] (const boost::system::error_code &timer_error) {
+                  if (timer_error != boost::asio::error::operation_aborted) {
+                      // Cancel only this readiness wait. socket.cancel() would
+                      // also abort unrelated reads and writes on the same
+                      // connection.
+                      state->wait_cancellation.emit (
+                        boost::asio::cancellation_type::terminal);
+                  }
+                  state->report_timer (timer_error == boost::asio::error::operation_aborted
+                                         ? boost::system::error_code{}
+                                         : timer_error,
+                                       false);
+              }));
+            socket.async_wait (
+              boost::asio::ip::tcp::socket::wait_read,
+              boost::asio::bind_cancellation_slot (
+                state->wait_cancellation.slot (),
+                boost::asio::bind_executor (
+                  strand, [state] (const boost::system::error_code &socket_error) {
+                      boost::system::error_code ignored;
+                      state->timer.cancel (ignored);
+                      state->report_socket (socket_error, !socket_error);
+                  })));
+        });
+    }
+    catch (const boost::system::system_error &exception) {
+        error = exception.code ();
+        return false;
+    }
+    catch (const std::exception &) {
+        error = boost::asio::error::operation_aborted;
+        return false;
+    }
+
+    auto [wait_error, readable] = state->wait ();
+    error = wait_error;
+    return readable;
 }
-#endif
 
 class tcp_stream_connection_t final : public stream_connection_t
 {
@@ -119,17 +248,7 @@ class tcp_stream_connection_t final : public stream_connection_t
     bool wait_readable_until (std::chrono::steady_clock::time_point deadline,
                               boost::system::error_code &error) override
     {
-#ifdef _WIN32
-        (void) deadline;
-        error.clear ();
-        return true;
-#else
-        return run_serialized_sync (
-          _io_context, _strand,
-          [this, deadline, &error] {
-              return wait_native_socket_readable (_socket.native_handle (), deadline, error);
-          });
-#endif
+        return wait_readable_until_asio (_io_context, _strand, _socket, deadline, error);
     }
 
     void write (const std::vector<std::uint8_t> &bytes) override
@@ -258,18 +377,8 @@ class tls_stream_connection_t final : public stream_connection_t
     bool wait_readable_until (std::chrono::steady_clock::time_point deadline,
                               boost::system::error_code &error) override
     {
-#ifdef _WIN32
-        (void) deadline;
-        error.clear ();
-        return true;
-#else
-        return run_serialized_sync (
-          _io_context, _strand,
-          [this, deadline, &error] {
-              return wait_native_socket_readable (
-                _stream.next_layer ().native_handle (), deadline, error);
-          });
-#endif
+        return wait_readable_until_asio (
+          _io_context, _strand, _stream.next_layer (), deadline, error);
     }
 
     void write (const std::vector<std::uint8_t> &bytes) override
