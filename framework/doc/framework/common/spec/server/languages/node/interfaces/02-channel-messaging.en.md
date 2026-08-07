@@ -198,51 +198,8 @@ export interface ZLinkOutboundRouteConfig {
     endpoint: string;
 }
 
-export type ZLinkJsonSchema =
-    | { readonly type: "boolean" }
-    | { readonly type: "string" }
-    | { readonly type: "number" }
-    | { readonly type: "int32" }
-    | { readonly type: "uint32" }
-    | { readonly type: "int64" }
-    | { readonly type: "uint64" }
-    | { readonly type: "bytes" }
-    | { readonly type: "enum"; readonly names: readonly string[] }
-    | { readonly type: "nullable"; readonly value: ZLinkJsonSchema }
-    | { readonly type: "array"; readonly items: ZLinkJsonSchema }
-    | { readonly type: "record"; readonly values: ZLinkJsonSchema }
-    | {
-        readonly type: "object";
-        readonly properties: Readonly<Record<string, ZLinkJsonSchema>>;
-        readonly required: readonly string[];
-        readonly additionalProperties?: boolean;
-    };
-
-export interface ZLinkPacketJsonContract {
-    readonly payload: ZLinkJsonSchema;
-    readonly reply?: ZLinkJsonSchema;
-}
-
-export declare function ZLinkPacket(
-    packetName: string,
-    jsonContract?: ZLinkPacketJsonContract): ClassDecorator;
+export declare function ZLinkPacket(packetName: string): ClassDecorator;
 ```
-
-`jsonContract` is the packet field contract consumed by the default
-`framework-json-v1` serializer; it is not a per-message codec registration.
-`payload` applies to Send, Request, and Publish input, while `reply` applies to
-a successful Request response. Classes that use the same packet name in one
-process must declare the same JSON contract. The Framework copies and freezes
-the schema when the class is defined and immediately rejects malformed schemas
-and conflicting duplicate contracts.
-
-`int64` and `uint64` convert canonical decimal strings on the wire to Node
-`bigint`, and `bytes` converts padded base64 to `Uint8Array`. Object decoding
-checks `required` and ignores undeclared properties by default. Only a DTO with
-`additionalProperties: false` rejects undeclared properties. Use `record` for a
-map whose dynamic keys must be retained. The same schema applies to the default
-JSON path for Channel, Actor and Spot, and STREAM; it does not require a separate
-serializer or a handler-specific codec.
 
 The Node runtime also records Instance Spot observations with
 `ZLinkMeter`. The
