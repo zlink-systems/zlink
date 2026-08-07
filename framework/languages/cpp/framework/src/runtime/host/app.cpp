@@ -3802,6 +3802,8 @@ void app_t::run_shared_shutdown (
         terminal.outcome = termination_outcome_t::force_stopped;
         terminal.reason = termination_reason_t::deadline_exceeded;
     }
+    if (state.completion_admission)
+        state.completion_admission->stop ();
     std::vector<std::shared_ptr<detail::app_state_t::termination_waiter_t>>
       waiters;
     {
@@ -3816,8 +3818,6 @@ void app_t::run_shared_shutdown (
     for (auto &waiter : waiters) {
         waiter->complete (terminal);
     }
-    if (state.completion_admission)
-        state.completion_admission->stop ();
     state.runtime_state.store (
       framework_runtime_state_t::stopped, std::memory_order_release);
 }

@@ -1692,6 +1692,19 @@ int main ()
       "CPP-RELOC-001",
       "blocked relocation results are still retained as terminal state");
 
+    /* CPP-LAYER-005 — no new completion can be admitted after the shutdown
+     * result becomes visible to a termination waiter. */
+    const auto stop_completion_admission =
+      app_runtime.find ("state.completion_admission->stop ()");
+    const auto complete_termination_waiter =
+      app_runtime.find ("waiter->complete (terminal)");
+    gate.require (
+      stop_completion_admission != std::string::npos
+        && complete_termination_waiter != std::string::npos
+        && stop_completion_admission < complete_termination_waiter,
+      "CPP-LAYER-005",
+      "shutdown publishes its terminal result before closing completion admission");
+
     /* CPP-OBS-001 — Instance Spot activation must not allocate its trace DTO
      * or correlation strings while message-flow diagnostics are off. */
     gate.require (
