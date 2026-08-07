@@ -87,6 +87,11 @@ export type RoutingId = string;
 export type Type<T = unknown> = new (...args: never[]) => T;
 ```
 
+Node runtime은 multiplexed channel receive를 application message와 infrastructure message로
+분류하기 전에 host 전체에서 공유하는 raw receive reservation을 얻는다. 이 reservation 수 `R`은
+16이며 channel, subscriber와 route receive loop가 함께 사용한다. 이 값은 connection·peer·대기 message
+수와 무관하게 고정되므로 application HWM을 넘겨 수신할 수 있는 raw message 수도 host당 최대 16건이다.
+
 ## 2. 등록, topology와 relocation builder
 
 ```ts

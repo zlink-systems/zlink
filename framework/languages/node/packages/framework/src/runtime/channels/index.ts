@@ -23,6 +23,7 @@ export {
   DefaultZLinkSpotPublisherClient
 } from './channel-clients';
 export {
+  ZLINK_CHANNEL_RAW_RECEIVE_RESERVATION_LIMIT,
   ZLinkChannelReceiveLoop,
   ZLinkReceiveRoundRobinCoordinator,
   ZLinkRouteReceiveLoop,
