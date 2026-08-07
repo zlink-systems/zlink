@@ -3528,9 +3528,12 @@ test('Instance application factory initializes before the first recovered handle
 
 test('direct Spot route rematerializes an Instance Spot before dispatch', async () => {
   const events: string[] = [];
+  let handlerCompleted!: () => void;
+  const handled = new Promise<void>(resolve => { handlerCompleted = resolve; });
   class FirstMessageHandler implements ZLinkSpotPacketHandler<ZLinkInstanceSpot, { value: number }> {
     async handle(_spot: ZLinkInstanceSpot, message: { value: number }): Promise<void> {
       events.push(`handle:${message.value}`);
+      handlerCompleted();
     }
   }
   class TenantInstance implements ZLinkInstanceSpot {
@@ -3593,6 +3596,7 @@ test('direct Spot route rematerializes an Instance Spot before dispatch', async 
   } finally {
     for (const part of parts) part.close();
   }
+  await handled;
   assert.deepEqual(events, ['configure', 'initialize', 'handle:8']);
 });
 

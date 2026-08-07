@@ -1341,6 +1341,8 @@ export class DefaultZLinkSpotManager {
       readonly channelName: string;
       readonly contentType?: string;
       readonly workOptions?: import('../execution/serial-scheduler').ZLinkSerialWorkOptions;
+      readonly admissionTimeoutMs?: number;
+      readonly signal?: AbortSignal;
     }
   ): Promise<void> {
     await this.routedSpotPackets.send(spotId, packetName, message, context);
@@ -1354,6 +1356,8 @@ export class DefaultZLinkSpotManager {
       readonly channelName: string;
       readonly contentType?: string;
       readonly workOptions?: import('../execution/serial-scheduler').ZLinkSerialWorkOptions;
+      readonly admissionTimeoutMs?: number;
+      readonly signal?: AbortSignal;
     }
   ): Promise<TReply> {
     return await this.routedSpotPackets.request<TReply>(spotId, packetName, request, context);

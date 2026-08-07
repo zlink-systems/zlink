@@ -47,6 +47,8 @@ interface ZLinkRoutedSpotPacketContext {
   readonly channelName: string;
   readonly contentType?: string;
   readonly workOptions?: ZLinkSerialWorkOptions;
+  readonly admissionTimeoutMs?: number;
+  readonly signal?: AbortSignal;
 }
 
 export class ZLinkRoutedSpotPacketDispatch {
@@ -143,13 +145,7 @@ export class ZLinkRoutedSpotPacketDispatch {
       }
     };
     try {
-      if (activation.serial.isCurrentTurn) {
-        if (returnResponse) {
-          throw createInternalFrameworkException(
-            ZLinkFrameworkInternalErrorKind.InvalidOperation,
-            `Spot '${spotId}' cannot await a request to its current serial turn.`
-          );
-        }
+      if (!returnResponse) {
         detached = true;
         try {
           await activation.serial.postOneWay(
@@ -161,13 +157,23 @@ export class ZLinkRoutedSpotPacketDispatch {
               }
             },
             (error) => this.reportFailure(spotId, packetName, context, false, error),
-            context.workOptions
+            context.workOptions,
+            {
+              timeoutMs: context.admissionTimeoutMs,
+              signal: context.signal
+            }
           );
         } catch (error) {
           detached = false;
           throw error;
         }
       } else {
+        if (activation.serial.isCurrentTurn) {
+          throw createInternalFrameworkException(
+            ZLinkFrameworkInternalErrorKind.InvalidOperation,
+            `Spot '${spotId}' cannot await a request to its current serial turn.`
+          );
+        }
         await activation.serial.execute(runHandler, context.workOptions);
       }
     } catch (error) {
@@ -186,11 +192,14 @@ export class ZLinkRoutedSpotPacketDispatch {
     returnResponse: boolean,
     error: unknown
   ): void {
+    const frameworkErrorKind = error instanceof ZLinkFrameworkException
+      ? internalFrameworkErrorKind(error)
+      : undefined;
     this.options.dispatchErrors?.report({
       surface: ZLinkDispatchErrorSurface.SpotRoute,
       messageKind: returnResponse ? ZLinkDispatchMessageKind.Request : ZLinkDispatchMessageKind.Send,
-      reason: error instanceof ZLinkFrameworkException
-        && internalFrameworkErrorKind(error) === ZLinkFrameworkInternalErrorKind.WorkerQueueFull
+      reason: frameworkErrorKind === ZLinkFrameworkInternalErrorKind.WorkerQueueFull
+        || frameworkErrorKind === ZLinkFrameworkInternalErrorKind.DeadlineExceeded
         ? ZLinkDispatchErrorReason.Backpressure
         : ZLinkDispatchErrorReason.HandlerException,
       action: returnResponse ? ZLinkDispatchErrorAction.FailCaller : ZLinkDispatchErrorAction.Drop,

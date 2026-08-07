@@ -14,13 +14,15 @@ export class ZLinkLocalSpotRouteTransport {
     packetName: string | undefined,
     message: unknown,
     signal?: AbortSignal,
-    metadata?: ReadonlyMap<string, string>
+    metadata?: ReadonlyMap<string, string>,
+    timeoutMs?: number
   ): Promise<void> {
     if (this.dispatcher === undefined) {
       throw new ZLinkConfigurationException(`Route channel '${routerChannelId}' could not dispatch local SPOT send.`);
     }
     await this.dispatcher.send(spotId, packetName, message, {
       channelName: routerChannelId,
+      admissionTimeoutMs: timeoutMs ?? this.defaultRequestTimeoutMs,
       signal,
       metadata
     });

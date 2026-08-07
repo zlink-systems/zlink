@@ -33,10 +33,26 @@ const MAX_SAFE_INTEGER = Number.MAX_SAFE_INTEGER;
 
 interface SerialLaneState {
   readonly records: SerialWorkRecord<unknown>[];
+  readonly waiters: Array<SerialCapacityWaiter | undefined>;
   readonly messageCapacity: number;
   readonly byteCapacity: number;
+  readonly waiterCapacity: number;
   messageCount: number;
   byteCount: number;
+  waiterHead: number;
+  waiterCount: number;
+}
+
+interface SerialCapacityWaiter {
+  readonly byteCost: number;
+  admit(): void;
+}
+
+export interface ZLinkSerialAdmissionWaitOptions {
+  readonly timeoutMs: number;
+  readonly signal?: AbortSignal;
+  readonly timeoutError: () => unknown;
+  readonly abortError: () => unknown;
 }
 
 export interface ZLinkSerialWorkRecord<T> {
@@ -124,6 +140,70 @@ export class ZLinkBoundedSerialScheduler {
     void this.admit(operation, options, context).catch(onError);
   }
 
+  waitAndSubmitDetached<T>(
+    operation: () => Promise<T> | T,
+    onError: (error: unknown) => void,
+    options: ZLinkSerialWorkOptions,
+    context: unknown,
+    wait: ZLinkSerialAdmissionWaitOptions
+  ): Promise<void> {
+    if (!Number.isSafeInteger(wait.timeoutMs) || wait.timeoutMs < 1) {
+      return Promise.reject(new RangeError('Serial admission timeout must be a positive safe integer.'));
+    }
+    if (wait.signal?.aborted) return Promise.reject(wait.abortError());
+    const lane = options.lane ?? 'application';
+    const byteCost = this.byteCost(options);
+    const target = lane === 'application' ? this.application : this.lifecycle;
+    if (canReserve(target, byteCost)) {
+      void this.admit(operation, options, context).catch(onError);
+      return Promise.resolve();
+    }
+    if (target.waiterCount >= target.waiterCapacity) {
+      return Promise.reject(wait.timeoutError());
+    }
+
+    return new Promise<void>((resolve, reject) => {
+      let settled = false;
+      let index = -1;
+      const cleanup = () => {
+        clearTimeout(timer);
+        wait.signal?.removeEventListener('abort', onAbort);
+      };
+      const remove = () => {
+        if (index < target.waiterHead || target.waiters[index] === undefined) return;
+        target.waiters[index] = undefined;
+        target.waiterCount -= 1;
+        advanceWaiterHead(target);
+        compactWaiters(target);
+      };
+      const fail = (error: unknown) => {
+        if (settled) return;
+        settled = true;
+        remove();
+        this.promoteCapacityWaiter(target);
+        cleanup();
+        reject(error);
+      };
+      const onAbort = () => fail(wait.abortError());
+      const waiter: SerialCapacityWaiter = {
+        byteCost,
+        admit: () => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          void this.admit(operation, options, context).catch(onError);
+          resolve();
+        }
+      };
+      index = target.waiters.length;
+      target.waiters.push(waiter);
+      target.waiterCount += 1;
+      const timer = setTimeout(() => fail(wait.timeoutError()), wait.timeoutMs);
+      wait.signal?.addEventListener('abort', onAbort, { once: true });
+      if (wait.signal?.aborted) onAbort();
+    });
+  }
+
   private admit<T>(
     operation: () => Promise<T> | T,
     options: ZLinkSerialWorkOptions,
@@ -148,6 +228,7 @@ export class ZLinkBoundedSerialScheduler {
       if (released) return;
       released = true;
       releaseReservation(target, byteCost);
+      this.promoteCapacityWaiter(target);
       this.scheduleDrain();
     };
     const resolve = (value: T) => {
@@ -290,28 +371,65 @@ export class ZLinkBoundedSerialScheduler {
   private resolveIdleWaiters(): void {
     for (const resolve of this.idleWaiters.splice(0)) resolve();
   }
+
+  private promoteCapacityWaiter(lane: SerialLaneState): void {
+    advanceWaiterHead(lane);
+    const waiter = lane.waiters[lane.waiterHead];
+    if (waiter === undefined || !canReserve(lane, waiter.byteCost)) return;
+    lane.waiters[lane.waiterHead] = undefined;
+    lane.waiterHead += 1;
+    lane.waiterCount -= 1;
+    advanceWaiterHead(lane);
+    compactWaiters(lane);
+    waiter.admit();
+  }
 }
 
 function createLane(messageCapacity: number, byteCapacity: number): SerialLaneState {
   return {
     records: [],
+    waiters: [],
     messageCapacity,
     byteCapacity,
+    waiterCapacity: messageCapacity,
     messageCount: 0,
-    byteCount: 0
+    byteCount: 0,
+    waiterHead: 0,
+    waiterCount: 0
   };
 }
 
+function canReserve(lane: SerialLaneState, byteCost: number): boolean {
+  return lane.messageCount < lane.messageCapacity
+    && byteCost <= lane.byteCapacity - lane.byteCount;
+}
+
 function reserve(lane: SerialLaneState, byteCost: number): boolean {
-  if (
-    lane.messageCount >= lane.messageCapacity
-    || byteCost > lane.byteCapacity - lane.byteCount
-  ) {
-    return false;
-  }
+  if (!canReserve(lane, byteCost)) return false;
   lane.messageCount += 1;
   lane.byteCount += byteCost;
   return true;
+}
+
+function advanceWaiterHead(lane: SerialLaneState): void {
+  while (
+    lane.waiterHead < lane.waiters.length
+    && lane.waiters[lane.waiterHead] === undefined
+  ) {
+    lane.waiterHead += 1;
+  }
+}
+
+function compactWaiters(lane: SerialLaneState): void {
+  if (lane.waiterCount === 0) {
+    lane.waiters.length = 0;
+    lane.waiterHead = 0;
+    return;
+  }
+  if (lane.waiterHead >= 1024 && lane.waiterHead * 2 >= lane.waiters.length) {
+    lane.waiters.splice(0, lane.waiterHead);
+    lane.waiterHead = 0;
+  }
 }
 
 function releaseReservation(lane: SerialLaneState, byteCost: number): void {

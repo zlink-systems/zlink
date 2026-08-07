@@ -466,6 +466,75 @@ test('routed local self-send queues behind the current turn while self-request f
   ]);
 });
 
+test('routed local one-way waits for bounded capacity and completes at admission', async () => {
+  let releaseCurrent;
+  let currentStarted;
+  let releaseHandler;
+  let handlerStarted;
+  let handlerFinished = false;
+  const current = new Promise(resolve => { releaseCurrent = resolve; });
+  const currentDidStart = new Promise(resolve => { currentStarted = resolve; });
+  const handler = new Promise(resolve => { releaseHandler = resolve; });
+  const handlerDidStart = new Promise(resolve => { handlerStarted = resolve; });
+  let finishHandler;
+  const handlerDidFinish = new Promise(resolve => { finishHandler = resolve; });
+  class SlowHandler {
+    async handle() {
+      handlerStarted();
+      await handler;
+      handlerFinished = true;
+      finishHandler();
+    }
+  }
+  const serial = new framework.ZLinkSpotSerialExecutor(true, 'capacity-target', {
+    applicationMessageCapacity: 1
+  });
+  const dispatch = new ZLinkRoutedSpotPacketDispatch({
+    resolveActivation: () => ({
+      spotId: 'capacity-target',
+      spot: {},
+      serial,
+      handlers: {
+        snapshot: () => [{
+          kind: 'packet',
+          packetName: 'SlowPacket',
+          handlerType: SlowHandler
+        }]
+      }
+    })
+  });
+  const running = serial.execute(async () => {
+    currentStarted();
+    await current;
+  });
+  await currentDidStart;
+
+  let admitted = false;
+  const first = dispatch.send('capacity-target', 'SlowPacket', {}, {
+    channelName: 'test',
+    admissionTimeoutMs: 1_000
+  }).then(() => { admitted = true; });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(admitted, false);
+  await assert.rejects(
+    dispatch.send('capacity-target', 'SlowPacket', {}, {
+      channelName: 'test',
+      admissionTimeoutMs: 1_000
+    }),
+    (error) => error instanceof framework.ZLinkFrameworkException
+      && error.kind === framework.ZLinkFrameworkErrorKind.DeadlineExceeded
+  );
+
+  releaseCurrent();
+  await running;
+  await first;
+  await handlerDidStart;
+  assert.equal(handlerFinished, false);
+  releaseHandler();
+  await handlerDidFinish;
+  assert.equal(handlerFinished, true);
+});
+
 test('yield request from an entry turn is rejected because Entry forbids Yield', async () => {
   // 04-async-execution-policy.ko.md SS1.1: "PerActor와 Entry에서 Yield가
   // 금지되는 기존 규칙도 바뀌지 않는다." spot-entry-activation.ts

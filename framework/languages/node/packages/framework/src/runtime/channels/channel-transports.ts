@@ -252,7 +252,8 @@ interface ZLinkChannelTransportRuntime {
     packetName: string | undefined,
     message: unknown,
     signal?: AbortSignal,
-    metadata?: ReadonlyMap<string, string>
+    metadata?: ReadonlyMap<string, string>,
+    timeoutMs?: number
   ): Promise<void>;
   routeSendFromSpotToSpot(
     sourceSpot: ZLinkBackendSpot,
@@ -738,7 +739,8 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
         options.packetName,
         message,
         options.signal,
-        options.metadata
+        options.metadata,
+        options.timeoutMs
       );
       return { status: ZLinkSubmitStatus.Submitted };
     }

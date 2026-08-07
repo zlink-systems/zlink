@@ -28,6 +28,7 @@ export interface ZLinkLocalSpotRouteDispatcher {
     message: unknown,
     context: {
       readonly channelName: string;
+      readonly admissionTimeoutMs?: number;
       readonly signal?: AbortSignal;
       readonly metadata?: ReadonlyMap<string, string>;
     }
@@ -100,7 +101,8 @@ export class ZLinkSpotRouteDispatchStrategy {
     packetName: string | undefined,
     message: unknown,
     signal?: AbortSignal,
-    metadata?: ReadonlyMap<string, string>
+    metadata?: ReadonlyMap<string, string>,
+    timeoutMs?: number
   ): Promise<void> {
     throwIfAborted(signal);
     const localSpotRouteNode = this.targets.localRouteNode(spotRouteTarget);
@@ -111,7 +113,8 @@ export class ZLinkSpotRouteDispatchStrategy {
         packetName,
         message,
         signal,
-        metadata
+        metadata,
+        timeoutMs
       );
       return;
     }

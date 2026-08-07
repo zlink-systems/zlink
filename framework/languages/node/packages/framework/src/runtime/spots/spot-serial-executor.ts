@@ -11,6 +11,7 @@ import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException
 } from '../framework-errors-internal';
+import { createAbortError } from '../abort';
 import {
   ZLinkBoundedSerialScheduler,
   type ZLinkSerialSchedulerOptions,
@@ -112,16 +113,35 @@ export class ZLinkSpotSerialExecutor {
   async postOneWay(
     operation: () => Promise<unknown> | unknown,
     onError: (error: unknown) => void,
-    workOptions: ZLinkSerialWorkOptions = {}
+    workOptions: ZLinkSerialWorkOptions = {},
+    admission: {
+      readonly timeoutMs?: number;
+      readonly signal?: AbortSignal;
+    } = {}
   ): Promise<void> {
     this.lastActivityAtMs = Date.now();
     let barrierClaim: ZLinkExecutionBarrierClaim | undefined;
     try {
       barrierClaim = await this.executionBarrier?.enter();
-      this.scheduler.submitDetached(operation, onError, {
-        ...workOptions,
-        lane: workOptions.lane ?? 'application'
-      }, barrierClaim);
+      await this.scheduler.waitAndSubmitDetached(
+        operation,
+        onError,
+        {
+          ...workOptions,
+          lane: workOptions.lane ?? 'application'
+        },
+        barrierClaim,
+        {
+          timeoutMs: admission.timeoutMs ?? 1_000,
+          signal: admission.signal,
+          timeoutError: () => createInternalFrameworkException(
+            ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
+            'Spot one-way admission timed out while waiting for execution queue capacity.',
+            true
+          ),
+          abortError: createAbortError
+        }
+      );
     } catch (error) {
       barrierClaim?.release();
       throw error;
