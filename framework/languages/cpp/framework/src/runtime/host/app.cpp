@@ -2817,6 +2817,18 @@ task_t<relocation_result_t> app_t::relocate (
         throw std::invalid_argument ("relocation deadline must be greater than zero");
     options.deadline = deadline;
 
+    auto &operation = _state->relocation_operation;
+    std::thread completed_worker;
+    {
+        std::lock_guard lock (operation.mutex);
+        if (!operation.started && operation.worker.joinable ()) {
+            completed_worker = std::move (operation.worker);
+        }
+    }
+    if (completed_worker.joinable ()) {
+        completed_worker.join ();
+    }
+
     relocation_preflight_t preflight;
     if (runtime_state () != framework_runtime_state_t::serving) {
         preflight.blocker = relocation_reason_t::runtime_not_ready;
@@ -2831,7 +2843,6 @@ task_t<relocation_result_t> app_t::relocate (
         }
     }
 
-    auto &operation = _state->relocation_operation;
     std::shared_ptr<detail::app_state_t::relocation_waiter_t> waiter;
     task_t<relocation_result_t> task (
       result_t<relocation_result_t>::success ({}));
@@ -2956,7 +2967,13 @@ void app_t::run_shared_relocation (
 
         std::vector<std::shared_ptr<detail::app_state_t::relocation_waiter_t>>
           waiters;
-        operation.terminal = true;
+        operation.terminal =
+          result.outcome == relocation_outcome_t::relocated;
+        operation.started = operation.terminal;
+        if (!operation.terminal) {
+            operation.shutdown_requested = false;
+            operation.deadline_at.reset ();
+        }
         operation.result = result;
         waiters = std::move (operation.waiters);
         operation.waiters.clear ();

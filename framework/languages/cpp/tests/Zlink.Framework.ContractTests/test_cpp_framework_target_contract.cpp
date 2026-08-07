@@ -1673,6 +1673,19 @@ int main ()
       "CPP-DISP-001",
       "MeshNode application executor saturation is not handled as CapacityExceeded");
 
+    /* CPP-RELOC-001 — only a successful relocation is terminal. A blocked
+     * worker is joined and the next call starts a fresh preflight. */
+    gate.require (
+      app_runtime.find (
+        "result.outcome == relocation_outcome_t::relocated")
+          != std::string::npos
+        && app_runtime.find ("operation.started = operation.terminal")
+             != std::string::npos
+        && app_runtime.find ("completed_worker.join ()")
+             != std::string::npos,
+      "CPP-RELOC-001",
+      "blocked relocation results are still retained as terminal state");
+
     /* TH-CP-01 — the C++ connector helper surface has a language contract. */
     const auto connector_contract_path =
       root
