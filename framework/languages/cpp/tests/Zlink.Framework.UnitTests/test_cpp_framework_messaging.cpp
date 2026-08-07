@@ -2,9 +2,11 @@
 
 #include "runtime/messaging/pending_submit.hpp"
 #include "runtime/messaging/async_submit_runtime.hpp"
+#include "runtime/channels/channel_reply_writer.hpp"
 #include "runtime/messaging/client_call_codec.hpp"
 #include "runtime/diagnostics/flow_context.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
+#include "runtime/messaging/failure_origin_wire.hpp"
 #include "runtime/messaging/request_failure_mapper.hpp"
 #include "runtime/messaging/submit_result_mapper.hpp"
 #include "runtime/messaging/submit_queue.hpp"
@@ -49,6 +51,29 @@ struct envelope_payload_t
 
 int main ()
 {
+    {
+        zlink::framework::runtime::messaging::envelope_header_t request;
+        request.message_name = "ActorRequest";
+        const auto moving = zlink::framework::detail::make_origin_exception (
+          zlink::framework::framework_error_kind_t::unavailable,
+          zlink::framework::detail::failure_origin_t::actor_transfer_in_progress,
+          "wording is not part of retry classification");
+        const auto header =
+          zlink::framework::detail::channel_reply_writer_t{}
+            .create_error_header ("actor", request, moving);
+        const auto restored =
+          zlink::framework::runtime::messaging::restore_failure_origin (
+            header,
+            zlink::framework::framework_exception_t (
+              zlink::framework::framework_error_kind_t::unavailable,
+              "translated text"));
+        if (zlink::framework::detail::failure_origin (restored)
+            != zlink::framework::detail::failure_origin_t::
+                 actor_transfer_in_progress) {
+            return 106;
+        }
+    }
+
     {
         zlink::framework::serializer_registry_t serializers;
         zlink::framework::detail::

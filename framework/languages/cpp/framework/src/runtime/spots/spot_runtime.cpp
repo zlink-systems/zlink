@@ -5447,8 +5447,12 @@ spot_node_runtime_t::relay_actor_packet (const actor_ref_t &actor_ref,
         if (append_result == detail::handoff_append_result_t::capacity_exceeded && !is_request) {
             return result_t<std::optional<zlink::message_t>>::success (zlink::message_t{});
         }
-        return result_t<std::optional<zlink::message_t>>::failure (
-          framework_error_kind_t::unavailable, "actor transfer is in progress");
+        return detail::result_access_t::failure<
+          std::optional<zlink::message_t>> (
+          detail::make_origin_exception (
+            framework_error_kind_t::unavailable,
+            detail::failure_origin_t::actor_transfer_in_progress,
+            "actor transfer is in progress"));
     }
 
     const auto actor_type_key = std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (actor_ref));
@@ -7582,9 +7586,11 @@ bool spot_node_runtime_t::dispatch_mesh_record (
               std::move (relay_metadata));
         } ();
         if (!relayed) {
-            reply_error (framework_exception_t (
-              relayed.error_kind (),
-              relayed.error () ? relayed.error ()->what () : "Actor handler failed"));
+            reply_error (
+              relayed.error ()
+                ? *relayed.error ()
+                : framework_exception_t (
+                    relayed.error_kind (), "Actor handler failed"));
             return true;
         }
         if (record.kind == service::record_kind_t::actor_request && relayed.value ()) {

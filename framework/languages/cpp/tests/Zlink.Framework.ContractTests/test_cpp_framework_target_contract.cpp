@@ -101,6 +101,10 @@ int main ()
       read_file (root / "framework/src/runtime/streams/stream_runtime.cpp");
     const auto async_submit_runtime =
       read_file (root / "framework/src/runtime/messaging/async_submit_runtime.cpp");
+    const auto failure_origin_wire =
+      read_file (root / "framework/src/runtime/messaging/failure_origin_wire.hpp");
+    const auto channel_reply_writer =
+      read_file (root / "framework/src/runtime/channels/channel_reply_writer.cpp");
     const auto location_auto_connect =
       read_file (root / "framework/src/runtime/locations/location_auto_connect_host_service.hpp");
     const auto client_server_location_runtime =
@@ -1745,6 +1749,25 @@ int main ()
              != std::string::npos,
       "CPP-DISP-006",
       "Spot admission and serial enqueue use separate lock spans");
+
+    /* CPP-COMP-001 — moving retry state crosses the error envelope as a typed
+     * internal origin; exception wording never selects retry or error kind. */
+    gate.require (
+      failure_origin_wire.find ("actor_transfer_in_progress")
+          != std::string::npos
+        && channel_reply_writer.find (
+             "runtime::messaging::write_failure_origin (header, error)")
+             != std::string::npos
+        && actor_client_runtime.find (
+             "runtime::messaging::restore_failure_origin")
+             != std::string::npos
+        && actor_client_runtime.find (
+             ".find (\"transfer is in progress\")")
+             == std::string::npos
+        && actor_client_runtime.find ("message.find (")
+             == std::string::npos,
+      "CPP-COMP-001",
+      "Actor retry or native failure classification still depends on exception text");
 
     /* CPP-ROUTE-002 — the direct-store fallback uses the same owner
      * admission deadline as the shared location resolver and never extends
