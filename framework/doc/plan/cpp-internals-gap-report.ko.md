@@ -64,7 +64,7 @@ Gap 하나 또는 서로 강하게 연결된 작은 작업 묶음의 동작과 �
 |---|---:|---:|---|
 | 01-layering | 1 | 4 | relocation 재시도와 target propagation wait 종결 |
 | 02-serialization | 2 | 2 | 락 횟수, self-wait 오류 종류 |
-| 03-progress-isolation | 1 | 2 | HOL 블로킹. executor 포화 process 종료 결함 종결 |
+| 03-progress-isolation | 0 | 2 | owner HOL 블로킹과 executor 포화 process 종료 결함 종결 |
 | 04-completion | 2 | 2 | 문자열 분류, 완료 방식 난립 |
 | 05-relocation-continuity | 1 | 2 | 오류 종류 축약 |
 | 06-routing-and-cache | 1 | 2 | 수동 피어 fence (JVM-TOPO-001의 C++ 판) |
@@ -74,9 +74,9 @@ Gap 하나 또는 서로 강하게 연결된 작은 작업 묶음의 동작과 �
 | 10-liveness-and-state | 0 | 1 | `CPP-OBS-002` 종결 |
 | 11-message-ownership | 5 | 3 | 복사/보관 규율 전반 미준수. `CPP-OWN-005` 종결 |
 | 12-service-wire-protocol | 5 | 2 | 스토어 키 포맷, json-v1 프로파일 |
-| **internals 소계** | **20** | **27** | relocation·timer 각 2건, `CPP-DISP-001`, `CPP-OWN-005`, `CPP-OBS-002` 종결 |
+| **internals 소계** | **19** | **27** | relocation·timer 각 2건, `CPP-DISP-001`, `CPP-DISP-002`, `CPP-OWN-005`, `CPP-OBS-002` 종결 |
 | C++ exact public interface | 0 | 0 | diagnostics 2건, object query, STREAM timeout, Client role 오류와 HTTP builder 종결 |
-| **합계** | **20** | **27** | 종결 13건은 GAP·PARTIAL 집계에서 제외 |
+| **합계** | **19** | **27** | 종결 14건은 GAP·PARTIAL 집계에서 제외 |
 
 ---
 
@@ -86,7 +86,6 @@ Gap 하나 또는 서로 강하게 연결된 작은 작업 묶음의 동작과 �
 
 | ID | 요약 | 문서 |
 |---|---|---|
-| CPP-DISP-002 | 한 Spot 큐 포화가 노드 전체 애플리케이션 수신을 head-of-line 블로킹, Request가 즉시 실패하지 않고 타임아웃까지 대기 | 03 §5 |
 | CPP-SESS-001 | 원격 세션 bind 시 이전 소유자 통지·정리 확인 절차가 없어 두 노드가 동시에 같은 Actor의 세션을 소유 가능 | 09 §3 |
 | CPP-WIRE-001 | Location Store 권한 키를 `zla1:…` 포맷으로 통합했으며 package와 cross-language Store 검증 진행 중 | 12 §1 |
 | CPP-TOPO-001 | 수동 설정 피어에 Location Store descriptor의 admission fence(generation/보안 identity)가 설치되지 않음 — 이미 종결된 `JVM-TOPO-001`과 동일 계열 결함의 C++ 판 | 06 §1.1 |
@@ -100,6 +99,8 @@ mesh 디스패치 스레드는 throwing `submit`으로 애플리케이션 작업
 ### CPP-DISP-002 — 노드 전체 head-of-line 블로킹
 admitted 피어의 애플리케이션 레코드가 대상 owner의 mailbox 예산(1024건/64 MiB)에 들어가지 못하면 레코드를 `_pending_received` 단일 슬롯에 보관하고 `backpressured`를 반환하는데, 이 보관 레코드가 소진될 때까지 `pump_one`은 **노드 전체의 신규 애플리케이션 수신을 중단**한다. 결과적으로 (1) 포화된 Spot을 향한 원격 Request가 `Unavailable`/`CapacityExceeded`로 즉시 실패하지 않고 호출자 타임아웃까지 대기하고, (2) 느린 Spot 하나가 노드의 다른 모든 Spot 인바운드를 막는다. 스펙 03 §5는 Request 계열 즉시 실패를 요구하고, 수신 정지는 프로세스 전역 pending-byte HWM에만 허용한다.
 - 증거: `cpp/src/runtime/mesh/raw_mesh_node_owner.cpp:1814-1829, 1984-1996`, `cpp/src/runtime/mesh/service_mailbox.cpp:63-94`
+- 구현 checkpoint `bc748e9140`: application owner mailbox가 포화되면 record를 process-wide `_pending_received`에 보관하지 않는다. Request는 기존 reply 경로로 `workerQueueFull` terminal을 즉시 반환하고 one-way는 bounded drop으로 끝낸다. Infrastructure record의 bounded 보관은 유지한다. 한 node owner를 채운 뒤 같은 owner의 Request가 timeout 전에 실패하고 다른 ChannelName owner의 Request는 enqueue·reply되는 owner-layer 회귀를 추가했으며, 기존 one-way/liveness 회귀는 drop 뒤 payload가 다시 나타나지 않는 계약으로 갱신했다.
+- public 오류·process checkpoint `bf412d9141`: raw request registry가 실패 reply header를 버리지 않고 public host까지 전달하며, Node·Channel request가 `workerQueueFull`을 `CapacityExceeded`로 복원한다. `test_cpp_framework_operation_registry`, `test_cpp_framework_messaging`, `test_cpp_framework_m6a_runtime`, `test_cpp_framework_m6b_runtime`, `test_cpp_framework_target_contract`, `test_cpp_framework_host_lifecycle`가 통과했다. `SubmitAdmission/run_e2e.sh CPP-DISP-002`는 격리된 C++ binding 0.10.1 candidate에서 slow ChannelName owner를 정지한 뒤 같은 owner의 Request가 `CapacityExceeded`로 끝나는 동안 독립 owner의 Request가 약 301 ms에 `Handled`로 완료되고 target health가 응답함을 확인했다. Gate 자동 해제 뒤 target handler `2/2` drain과 slow owner recovery도 완료됐다. 실행 log는 `framework/languages/cpp/e2e/SubmitAdmission/logs/20260808-040604-3267173/`이고 candidate native SHA-256은 `29a14581e19579fa6f2126ce1f9a797a08fe38d5788d52abb7e87689203f877b`다. 따라서 이 항목은 **CLOSED**다.
 
 ### CPP-SESS-001 — 세션 스왑 핸드셰이크 부재
 스펙 09 §3의 결정: 이미 다른 곳에 연결된 Actor를 새 세션에 bind할 때, 새 소유자는 새 연결을 등록하고 → 이전 소유자에게 통지하고 → 이전 소유자의 정리 확인을 기다린 뒤 → bind 완료를 응답한다. C++ 원격 bind 경로는 이 중 아무것도 하지 않는다: `actor_bound_session_bind_route_request_t` 핸들러가 `replace_existing=true`로 게이트웨이 라우트를 덮어쓰고 즉시 `accepted=true`를 응답하며, 이전 세션 소유 노드에는 어떤 메시지도 보내지 않는다. 크로스 노드 스왑 시 이전 노드의 `stream_session_registry_t`에 살아있는 바인딩이 남아 두 세션 소유자가 동시에 같은 Actor로 인바운드를 admit할 수 있다(스테일 트래픽은 generation/fence 검사로 기회적으로만 걸러짐). 로컬 노드 스왑은 레지스트리가 원자적으로 교체하므로 안전하다.
@@ -176,7 +177,7 @@ admitted 피어의 애플리케이션 레코드가 대상 owner의 mailbox 예�
 
 | ID | 분류 | 요약 |
 |---|---|---|
-| CPP-DISP-002 | GAP·상 | §2 참조 — HOL 블로킹 + Request 즉시 실패 미구현 |
+| CPP-DISP-002 | CLOSED | §2 참조 — owner-layer HOL 제거, public `CapacityExceeded`, 독립 owner와 health 진행, drain과 recovery를 owner 회귀와 isolated-package process E2E에서 확인함 |
 | CPP-DISP-001 | CLOSED | §2 참조 — owner-layer 회귀와 isolated-package actual-pump saturation process E2E에서 `CapacityExceeded`, health 유지, drain과 recovery를 확인함 |
 | CPP-DISP-003 | PARTIAL·검증 중 | 구현 checkpoint `807a87896d`에서 미승인 peer의 bounded application queue가 포화되면 Request header의 correlation과 transport request sequence를 읽어 기존 reply 경로로 `workerQueueFull` terminal을 즉시 반환하도록 수정했다. one-way 메시지는 bounded drop을 유지하며 trace에서 terminal reply 성공과 drop을 구분한다. 실제 transport request 1,025개를 admission 전에 전송해 앞의 1,024개는 보류되고 마지막 Request는 timeout 전에 terminal reply를 받는 회귀를 추가했다. 전체 `test_cpp_framework_m6b_runtime` 2회와 `test_cpp_framework_target_contract`가 통과했다. 설치 package와 실제 양방향 handshake 경합 process 검증이 남아 있어 아직 종결하지 않는다. |
 | CPP-DISP-004 | PARTIAL·검증 중 | 구현 checkpoint `7f2bf358fe`에서 caller task가 worker dequeue 시점에 성공으로 끝나는 기존 경계는 유지하되, 이후 publisher 반환 실패와 모든 예외를 fallback log와 누적 counter로 남기도록 executor를 수정했다. 표준 Spot publish는 fallback과 중복 기록하지 않고 `route_mesh_channel/publish/drop` structured event에 packet·channel·topic과 예외를 기록한다. Generic `publish_call_t`의 완료 후 실패 counter 회귀, structured observer 필드 회귀, 전체 `test_cpp_framework_messaging`, `test_cpp_framework_execution`, `test_cpp_framework_target_contract`가 통과했다. 설치 package와 실제 RouteMesh publish 실패를 사용하는 process 검증이 남아 있어 아직 종결하지 않는다. |
@@ -321,9 +322,9 @@ RouteMesh에 남은 금지 상한 surface·field, JSON 프로파일에 집중한
 
 ## 5. 권고
 
-1. **이 보고서에서 unique ID 관리** — 정식 spec에 구현 진행 기록을 다시 넣지 않고, 이 plan 문서가 남은 20 GAP과 27 PARTIAL 및 종결 13건의 증거를 소유한다. 특히 CPP-TOPO-001은 종결된 `JVM-TOPO-001`, CPP-COMP-001은 종결된 `NODE-ROUTE-001`과 비교하되 다른 언어의 종결을 C++ 완료 증거로 사용하지 않는다.
+1. **이 보고서에서 unique ID 관리** — 정식 spec에 구현 진행 기록을 다시 넣지 않고, 이 plan 문서가 남은 19 GAP과 27 PARTIAL 및 종결 14건의 증거를 소유한다. 특히 CPP-TOPO-001은 종결된 `JVM-TOPO-001`, CPP-COMP-001은 종결된 `NODE-ROUTE-001`과 비교하되 다른 언어의 종결을 C++ 완료 증거로 사용하지 않는다.
 2. **수정 순서 제안**:
-   - 1차 (안정성·정합성): CPP-DISP-002(HOL), CPP-SESS-001(이중 소유), CPP-TOPO-001(fence), CPP-ROUTE-001(dead 매처 — 한 줄급 수정), CPP-LIFE-003(Ready owner loss와 Missing 분리)
+   - 1차 (안정성·정합성): CPP-SESS-001(이중 소유), CPP-TOPO-001(fence), CPP-ROUTE-001(dead 매처 — 한 줄급 수정), CPP-LIFE-003(Ready owner loss와 Missing 분리)
    - 2차 (public 계약·상호운용): CPP-WIRE-001(키 포맷 — 마이그레이션 계획 필요), CPP-WIRE-002(RouteMesh 금지 상한 surface·wire field 제거), CPP-WIRE-003(json-v1), CPP-OWN-001(content-type 검증), CPP-COMP-001(문자열 분류 → 구조화 오류 코드)
    - 3차 (자원·성능): CPP-COMP-004(고아 엔트리 누수), CPP-TIMER-003(fdpair), CPP-EXEC-001/CPP-OWN-002~004(복사·락 절감), CPP-DISP-005(100 ms wake)
    - 4차 (구조·명명): 나머지 PARTIAL
