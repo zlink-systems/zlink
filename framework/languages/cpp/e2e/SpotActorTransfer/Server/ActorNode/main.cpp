@@ -1380,7 +1380,7 @@ int run_host_impl (transfer_host_role_t host_role, int argc, char **argv)
         framework.configure_dispatch ()
           .message_flow (fw::message_flow_log_mode_t::normal);
 
-        framework.set_message_follow_duration (std::chrono::seconds (5));
+        framework.set_message_follow_duration (std::chrono::seconds (6));
         framework.add_location_store (
           std::make_shared<fw::redis::redis_location_store_t> (
             fw::redis::redis_location_options_t{.connection_string = redis_endpoint,
@@ -1401,7 +1401,9 @@ int run_host_impl (transfer_host_role_t host_role, int argc, char **argv)
         locations.owner_lease_renew_timeout =
           std::chrono::milliseconds (500);
         locations.polling_interval = std::chrono::milliseconds (500);
-        locations.route_cache_max_age = std::chrono::milliseconds::zero ();
+        /* Keep the source route briefly so the post-relocation packet enters
+         * the committed Message Follow path before the lease fence expires. */
+        locations.route_cache_max_age = std::chrono::seconds (1);
 
         auto mesh = framework.add_route_mesh (e2e::mesh_name);
         mesh.listen (router_endpoint).set_routing_id (zlink::routing_id_t::from (rid));

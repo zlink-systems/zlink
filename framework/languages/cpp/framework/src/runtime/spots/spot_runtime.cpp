@@ -7562,14 +7562,24 @@ bool spot_node_runtime_t::dispatch_mesh_record (
         auto actor_context = actor_gateway.actor_context (
           actor, record.source_binding_generation);
         auto relayed = [&] {
-            if ((record.kind == service::record_kind_t::actor_request
-                 || record.kind == service::record_kind_t::actor_send)
-                && record.actor_route
+            const bool actor_packet =
+              record.kind == service::record_kind_t::actor_request
+              || record.kind == service::record_kind_t::actor_send;
+            /* A packet submitted through a local native Actor route does not
+             * carry a wire route fence. Once that route has become a
+             * committed Message Follow source, consult the coordinator here
+             * rather than dispatching into the old local Spot. Remote packets
+             * retain their wire fence and continue through the same callback. */
+            const auto follows_committed_source =
+              actor_packet && actor_message_follow_target (actor).has_value ();
+            if (actor_packet
+                && (record.actor_route || follows_committed_source)
                 && _state->actor_message_follow_relay) {
                 return _state->actor_message_follow_relay (
                   actor, header.value (), body.value (),
                   std::chrono::seconds (30), record.source_node_rid,
-                  *record.actor_route,
+                  record.actor_route.value_or (
+                    runtime::protocol::actor_route_fence_t{}),
                   record.message_follow_hop_count,
                   runtime::protocol::wire_operation_id_t{
                     record.operation_id.high, record.operation_id.low},

@@ -384,6 +384,14 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
                 && expected_kind != placement_object_kind_t::instance_spot)) {
             return std::nullopt;
         }
+        /* An active authority with an expired owner is not Missing. Keep the
+         * row visible to the failure mapper as bounded Unavailable so callers
+         * do not start a cold activation on another node. */
+        if (!_store->owner_admission_lifetime (snapshot->owner)) {
+            throw framework_exception_t (
+              framework_error_kind_t::unavailable,
+              "Location authority owner lease is unavailable");
+        }
         return authority_projection_t{snapshot->store_version,
                                       snapshot->object_generation,
                                       snapshot->authority_owner_generation,

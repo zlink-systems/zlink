@@ -2347,7 +2347,10 @@ mesh_node_runtime_t::relay_application_actor (
                   "Actor Message Follow target was already visited");
             }
             spot_runtime.emit_actor_transfer_marker (
-              "message_follow_relay", actor, {},
+              "message_follow_relay", actor,
+              header.correlation_id.empty ()
+                ? std::string (actor.actor_id ().value ())
+                : header.correlation_id,
               follow_target.route.spot_id,
               follow_target.route.node_rid);
             spot_inbound_message_t metadata;

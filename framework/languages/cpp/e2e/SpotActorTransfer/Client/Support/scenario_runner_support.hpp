@@ -75,6 +75,12 @@ inline message_follow_setup_t scenario_runner_t::relocate_for_message_follow (
     require (join_actor (_nodes.a, actor.actor_id,
                          {scenario, spot.spot_id}).accepted,
              scenario + " transfer was rejected.");
+    /* Join commits the source-side Message Follow route asynchronously after
+     * the HTTP completion. Do not submit the stale-route packet before that
+     * registration is observable. */
+    wait_evidence (_nodes.a,
+                   {"message_flow|" + actor.actor_id
+                    + "|message_follow_registered|"});
     return {actor.actor_id, old_ref};
 }
 inline void scenario_runner_t::transfer_out_failure ()

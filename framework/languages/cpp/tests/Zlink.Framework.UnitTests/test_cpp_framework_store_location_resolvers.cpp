@@ -1839,6 +1839,41 @@ TEST (ZLinkFrameworkStoreLocationResolvers, ResolvesActorAddress)
     EXPECT_FALSE (missing.has_value ());
 }
 
+TEST (ZLinkFrameworkStoreLocationResolvers,
+      ReadyAuthorityWithExpiredOwnerIsUnavailable)
+{
+    test_location_repository_t store;
+    const auto owner = claim_test_owner (
+      store, "owner-expired-authority", std::chrono::milliseconds (20));
+    store.set_authority (
+      "zla1:s:12:expired-spot",
+      zlink::framework::authority_snapshot_t{
+        .store_version = "1",
+        .payload = user_spot_authority_payload ("expired-spot", 1),
+        .object_generation = 1,
+        .authority_owner_generation = 1,
+        .owner = owner,
+        .allocation = {
+          .state = zlink::framework::placement_allocation_state_t::active,
+          .object_kind = zlink::framework::placement_object_kind_t::instance_spot,
+          .stable_type = "play",
+          .target = {.mesh_name = "mesh-expired",
+                     .node_rid = zlink::framework::node_rid_t::from_string (
+                       "node-expired"),
+                     .node_lifecycle_generation = 1,
+                     .owner = owner}}});
+    std::this_thread::sleep_for (std::chrono::milliseconds (30));
+
+    store_location_resolvers_t resolvers (store);
+    try {
+        (void) resolvers.resolve_spot_address ({}, "expired-spot").result ();
+        FAIL () << "an expired authority owner must be unavailable";
+    } catch (const zlink::framework::framework_exception_t &error) {
+        EXPECT_EQ (zlink::framework::framework_error_kind_t::unavailable,
+                   error.kind ());
+    }
+}
+
 TEST (ZLinkFrameworkStoreLocationResolvers, RejectsMalformedActorAuthorityPayload)
 {
     test_location_repository_t store;

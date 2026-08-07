@@ -596,6 +596,15 @@ int main ()
     gate.require (location_auto_connect.find ("list_peers") == std::string::npos
                     && location_auto_connect.find ("update_peer") == std::string::npos,
                   "IMP-CP-05", "RouteMesh discovery still uses legacy peer rows");
+    gate.require (location_auto_connect.find ("const bool manual_endpoint")
+                    != std::string::npos
+                    && location_auto_connect.find (
+                         "Manual routes still use the discovered descriptor")
+                         != std::string::npos
+                    && location_auto_connect.find ("mesh_node->expect_peer")
+                         != std::string::npos,
+                  "CPP-TOPO-001",
+                  "manual RouteMesh endpoints do not install descriptor admission fences");
 
     /* IMP-CP-04 — incomplete and duplicate STREAM declarations fail validation. */
     for (const std::string required : {"stream_nodes_with_bind", "stream_nodes_with_session"}) {
