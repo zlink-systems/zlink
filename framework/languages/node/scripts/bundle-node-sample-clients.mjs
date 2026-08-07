@@ -19,7 +19,10 @@ await build({
   bundle: true,
   format: 'cjs',
   platform: 'node',
-  target: 'node22',
+  target: 'node20',
+  banner: {
+    js: "globalThis.WebSocket ??= require('undici').WebSocket;"
+  },
   plugins: [{
     name: 'sample-client-runtime-boundary',
     setup(context) {
