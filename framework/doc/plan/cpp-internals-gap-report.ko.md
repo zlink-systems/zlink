@@ -158,7 +158,7 @@ admitted 피어의 애플리케이션 레코드가 대상 owner의 mailbox 예�
 | CPP-LAYER-002 | PARTIAL·하 | 호출 진행 식별자가 `operation_id_t`라는 이름으로 Actor-Join 완료 dedup 값과 이름·값 공간을 공유 — 스펙은 내부 호출 식별자에 다른 이름을 요구. 포맷 자체는 단일이라 개념/명명 충돌에 그침. 증거: `cpp/src/runtime/operations/operation_id.hpp:13`, `cpp/src/runtime/spots/spot_runtime.cpp:4503` |
 | CPP-LAYER-003 | PARTIAL·중 | 일반 메시지 경로의 불필요 비용: 메시지당 work-name 문자열 연결, turn당 `shared_ptr` 다수, 중첩 `std::function` 캡처, 그리고 per-actor `serial_execution_queue_t`가 이미 소유한 직렬화를 `actor_mailboxes`의 per-actor mutex(핸들러 실행 전체 동안 유지)가 중복 — "두 번째 락을 더하지 말라" 위반. 증거: `cpp/src/runtime/spots/spot_runtime.cpp:5646-5653`, `cpp/src/runtime/execution/serial_execution_queue.cpp:727-750` |
 | CPP-LAYER-004 | PARTIAL·중 | 스트림 공개 계약에 core 바인딩 타입 누출: `stream.hpp`의 `compress/decompress/write_packet/reply_packet` 시그니처가 `zlink::message_t`를 노출 — 바인딩 메시지 타입 변경이 곧 공개 API 변경이 됨. 증거: `cpp/include/zlink/framework/contracts/streams/stream.hpp:103-104, 215-216` |
-| CPP-LAYER-005 | PARTIAL·중 | shutdown에서 terminal 결과를 waiter에 전달한 **뒤에** `completion_admission->stop()`이 실행되어, 최종 결과 공표 후에도 새 completion이 admit될 수 있는 창이 존재. 증거: `cpp/src/runtime/host/app.cpp:3771-3777` |
+| CPP-LAYER-005 | PARTIAL·검증 중 | 구현 checkpoint `9ffc2af6ab`에서 teardown 결과를 최종 확정한 직후 `completion_admission->stop()`을 먼저 실행하고, 그 다음 termination state와 waiter 결과를 공개하도록 순서를 바꿨다. 따라서 terminal 결과를 관측한 뒤 새 completion이 admit되는 창이 없다. 순서를 고정하는 `test_cpp_framework_target_contract`와 전체 `test_cpp_framework_app_host`가 통과했다. Package host와 shutdown 중 completion 경합 process 검증이 남아 있어 아직 종결하지 않는다. |
 
 만족 항목(요약): 책임 그래프/wrapper 금지/shutdown 순서·우선순위/동종 중복 작업 병합/등록 시점 검증/재시작 안전 호출 식별자 등은 충실. 성능 측정 항목은 PerfTests 실행 필요.
 
