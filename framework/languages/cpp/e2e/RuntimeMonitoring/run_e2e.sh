@@ -51,13 +51,15 @@ for s in sockets:
 PY
 )"
 
-cmake -S "$FRAMEWORK_DIR" -B "$BUILD_DIR" >/dev/null
-cmake --build "$BUILD_DIR" --target \
-  zlink_cpp_e2e_runtime_monitoring_service \
-  zlink_cpp_e2e_runtime_monitoring_filtered_service \
-  zlink_cpp_e2e_runtime_monitoring_throwing_service \
-  zlink_cpp_e2e_runtime_monitoring_trigger \
-  zlink_cpp_e2e_runtime_monitoring_client
+if [[ "${ZLINK_CPP_E2E_SKIP_BUILD:-0}" != "1" ]]; then
+  cmake -S "$FRAMEWORK_DIR" -B "$BUILD_DIR" >/dev/null
+  cmake --build "$BUILD_DIR" --target \
+    zlink_cpp_e2e_runtime_monitoring_service \
+    zlink_cpp_e2e_runtime_monitoring_filtered_service \
+    zlink_cpp_e2e_runtime_monitoring_throwing_service \
+    zlink_cpp_e2e_runtime_monitoring_trigger \
+    zlink_cpp_e2e_runtime_monitoring_client
+fi
 
 SERVICE="$BUILD_DIR/zlink_cpp_e2e_runtime_monitoring_service"
 FILTERED_SERVICE="$BUILD_DIR/zlink_cpp_e2e_runtime_monitoring_filtered_service"
@@ -77,6 +79,23 @@ cleanup() {
   for pid in "${PIDS[@]}"; do
     if kill -0 "$pid" >/dev/null 2>&1; then
       kill "$pid" >/dev/null 2>&1 || true
+    fi
+  done
+  for _ in $(seq 1 20); do
+    running=0
+    for pid in "${PIDS[@]}"; do
+      if kill -0 "$pid" >/dev/null 2>&1; then
+        running=1
+      fi
+    done
+    if [[ "$running" == "0" ]]; then
+      break
+    fi
+    sleep 0.1
+  done
+  for pid in "${PIDS[@]}"; do
+    if kill -0 "$pid" >/dev/null 2>&1; then
+      kill -KILL "$pid" >/dev/null 2>&1 || true
     fi
   done
   for pid in "${PIDS[@]}"; do

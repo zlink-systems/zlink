@@ -93,7 +93,15 @@ inline void run_mon_c1_dispatch_failure_scenario (const client_options_t &option
         ensure (
           request_reply.provider_rid == "svc-throw"
             && request_reply.value == "profile:claim-progress",
-          "MON-C1 MeshNode request did not complete while application was gated");
+          "MON-C1 MeshNode request did not survive the logging provider failure");
+        wait_evidence_contains (
+          options.throw_service_url,
+          "message-flow-provider-throw|event=zlink.message_flow",
+          std::chrono::seconds (5));
+        wait_evidence_contains (
+          options.filtered_service_url,
+          "message-flow-provider|event=zlink.message_flow",
+          std::chrono::seconds (5));
 
         for (int index = 0; index < 12; ++index) {
             const int weight = index % 2 == 0 ? 0 : 100;

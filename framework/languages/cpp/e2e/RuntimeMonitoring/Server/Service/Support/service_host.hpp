@@ -42,12 +42,8 @@ inline int run_service_host (int argc, char **argv)
           .set_advertise_host (channel_endpoint.host)
           .listen (channel_endpoint.port)
           .add_handler_group (handler_group);
-        if (!options.log_dir.empty ()) {
-            framework.configure_dispatch ()
-              .message_flow (zlink::framework::message_flow_log_mode_t::normal)
-              .trace_log_file (options.log_dir + "/" + options.rid + "-flow.log")
-              .trace_label ("cpp-mon-" + options.rid);
-        }
+        framework.configure_dispatch ()
+          .message_flow (zlink::framework::message_flow_log_mode_t::normal);
         framework.handlers ().group (handler_group).add<profile_request_handler_t> ();
         auto mesh = framework.add_route_mesh (route_mesh_name);
         mesh.listen (options.mesh_endpoint)
@@ -103,7 +99,8 @@ inline int run_service_host (int argc, char **argv)
           });
         for (const auto &endpoint : options.mesh_peer_endpoints)
             mesh.peer_connections ().connect (endpoint);
-        app.logging ().use_callback_sink (
+        app.logging ().use_provider (
+          "runtime-monitoring-evidence",
           [evidence_ptr, profile = options.monitor_profile] (
             const zlink::framework::log_record_t &record) {
               if (profile == "socket-filter"
@@ -114,7 +111,8 @@ inline int run_service_host (int argc, char **argv)
               server::record_runtime_log (*evidence_ptr, record);
           });
         if (options.monitor_profile == "throwing") {
-            app.logging ().use_callback_sink (
+            app.logging ().use_provider (
+              "runtime-monitoring-throwing",
               [evidence_ptr] (const zlink::framework::log_record_t &record) {
                   record_throwing_runtime_log (*evidence_ptr, record);
               });

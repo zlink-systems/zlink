@@ -36,6 +36,11 @@ inline void record_runtime_log (evidence_store_t &evidence,
     } else if (record.message == "zlink.runtime.spot.timer_failed") {
         evidence.add ("monitor-spot|source=" + log_field (record, "source_name")
                       + "|kind=TimerFailed|timer=" + log_field (record, "timer_name"));
+    } else if (record.message == "message flow") {
+        evidence.add ("message-flow-provider|event="
+                      + log_field (record, "event_id")
+                      + "|phase=" + log_field (record, "phase")
+                      + "|surface=" + log_field (record, "surface"));
     }
 }
 

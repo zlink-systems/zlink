@@ -14,12 +14,13 @@ namespace zlink::framework::e2e::runtime_monitoring::service
 inline void record_throwing_runtime_log (server::evidence_store_t &evidence,
                                          const zlink::framework::log_record_t &record)
 {
-    if (record.message != "zlink.runtime.transport.connection_changed") {
+    if (record.message != "message flow") {
         return;
     }
-    evidence.add ("monitor-throw|source=" + server::log_field (record, "source_name")
-                  + "|kind=" + server::log_field (record, "state"));
-    throw std::runtime_error ("monitoring dispatch failure for e2e");
+    evidence.add ("message-flow-provider-throw|event="
+                  + server::log_field (record, "event_id")
+                  + "|phase=" + server::log_field (record, "phase"));
+    throw std::runtime_error ("message-flow provider failure for e2e");
 }
 
 } // namespace zlink::framework::e2e::runtime_monitoring::service
