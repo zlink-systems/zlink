@@ -219,10 +219,10 @@ admitted 피어의 애플리케이션 레코드가 대상 owner의 mailbox 예�
 
 | ID | 분류 | 요약 |
 |---|---|---|
-| CPP-TIMER-001 | GAP·상 | §7 "tick 통계를 무한 누적하지 말라"의 **스펙이 명명한 반례 그 자체**: 모든 전달 tick이 `delivered_ticks`에, 모든 실패가 `failure_events`에 타이머 수명 내내 trimming 없이 append — 장수 주기 타이머의 무한 메모리 증가. 증거: `cpp/src/runtime/timers/timer_runtime.cpp:212, 223`, `cpp/src/runtime/timers/timer_runtime.hpp:40-41` |
+| CPP-TIMER-001 | GAP·검증 중 | 구현 checkpoint `80be9877f2`에서 전달 tick과 실패 기록을 각각 최근 256개로 제한했다. 300회 추가 dispatch 뒤 history 크기와 마지막 tick을 확인하는 owner-layer 회귀는 통과했다. 전체 execution gate의 기존 idle-eviction 실패가 남아 있어 아직 종결하지 않는다. |
 | CPP-DISP-005 | PARTIAL·중 | §5 wake 방식 단일화 위반: 소켓 도착은 즉시 wake되나 로컬 enqueue 애플리케이션 작업(`_local_application_dispatches`)은 wake 신호가 없어 100 ms poll 캡까지 대기 — 같은 런타임에 wake primitive(`runtime_wake_timer_t`)가 있으면서 미사용. 로컬 in-process 요청에 100 ms 지연 바닥. 증거: `cpp/src/runtime/stateful/public_host_runtime.cpp:5510-5542, 5769-5774, 5861-5866`, `cpp/src/runtime/mesh/mesh_node_host_service.cpp:2831-2834` |
 | CPP-DISP-006 | PARTIAL·하 | §2 admission 검사와 enqueue가 per-Spot 큐에서 두 락 스팬으로 분리(`admission_blocked()` → `try_post*`) — 이동 sealing과 경합 창 존재. 실행 시점 fence 재관찰로 결과는 방어되나 결정된 단일 스팬 구조는 미구현. 증거: `cpp/src/runtime/spots/spot_runtime.cpp:1150-1189` |
-| CPP-TIMER-002 | GAP·중 | 정식 exact interface가 고정한 `catch_up_bounded` 동작과 범위 검증을 충족하지 않는다. 구현은 한 dispatch에서 최대 연속 tick을 전달하지 않고 주기당 1 tick씩만 따라잡으며, `max_catch_up_ticks == 0`만 거부하고 `INT_MAX` 초과를 허용한다. 증거: `common/spec/server/languages/cpp/interfaces/04-spots.ko.md:849-861`, `cpp/src/runtime/timers/timer_runtime.cpp:70-74, 141-189` |
+| CPP-TIMER-002 | GAP·검증 중 | 구현 checkpoint `80be9877f2`에서 `catch_up_bounded`가 한 dispatch 안에서 최대 설정 개수까지 연속 tick을 전달하고, 오래된 누락분은 첫 tick의 `skipped_ticks`에 기록하도록 수정했다. `max_catch_up_ticks`는 `1..INT_MAX`만 허용한다. 5개 만료를 상한 3으로 dispatch해 index 3·4·5와 skip 2를 확인하는 회귀는 통과했다. 전체 execution gate의 기존 idle-eviction 실패가 남아 있어 아직 종결하지 않는다. |
 | CPP-TIMER-003 | PARTIAL·중 | §7 타이머 자원 비비례 위반: 스케줄링은 공유 표준형이나 등록당 `zlink::timer_t`가 signaler(OS fdpair)를 즉시 생성 — 10,000 Spot × 2 타이머 = 약 40,000 fd, 등록 수에 선형인 OS 자원. 증거: `cpp/src/runtime/timers/timer_runtime.cpp:116-121`, `core/src/api/monitoring/timer_api_internal.hpp:26-47`, `core/src/runtime/core/signaler.cpp:90-93` |
 
 만족 항목(요약): ready set 상태화, mailbox 단일 스팬(check+insert), claim serial 배타, 10 ms 시간예산 배칭, 배치 수신 3중 한도, 커넥션 rotation cursor, overrun 3정책 이름 일치 등은 충실.
