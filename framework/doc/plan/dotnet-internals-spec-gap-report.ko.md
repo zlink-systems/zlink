@@ -77,7 +77,7 @@ Gap 하나 또는 서로 강하게 연결된 작은 작업 묶음의 동작과 �
 | DOTNET-LAYER-002 | 상 | runtime/package ownership | 완료 — lifecycle state machine과 resource close 순서를 Core package가 소유한다 |
 | DOTNET-LAYER-003 | 중 | identifier type | 완료 — runtime state와 registry key가 식별자별 value type을 사용한다 |
 | DOTNET-LAYER-004 | 중 | STREAM protocol ownership | 완료 — connector protocol 구현을 client와 Framework server가 함께 사용한다 |
-| DOTNET-OWN-001 | 중 | payload ownership/copy | 이미 소유한 managed payload를 public copying factory에 다시 통과시켜 full-buffer copy를 추가한다 |
+| DOTNET-OWN-001 | 중 | payload ownership/copy | 완료 — public defensive copy는 유지하고 runtime-owned payload는 내부 ownership 이전 경로를 사용한다 |
 | SPEC-TIMER-001 | 보류 | timer relocation contract | language spec은 non-catch-up 값을 검증하지 않지만 canonical schema는 `nonzero-u64`만 허용해 정본끼리 충돌한다 |
 
 ## 2. 상세 발견 사항
@@ -571,11 +571,27 @@ closing reason이 connector client까지 전달되는 경로를 확인했다. �
 
 ### DOTNET-OWN-001 — 소유한 payload를 public copying factory로 다시 복사
 
+**판정: 완료**
+
 Internals는 binding이 강제하지 않은 framework full-buffer copy를 0으로 줄이고, public immutable payload의 안전성은 유지하되 runtime 내부 소유권 이전에는 복사하지 않는 경로를 별도로 두도록 정한다(`common/internals/11-message-ownership.ko.md:19-45,95-98`).
 
 `ZLinkEncodedPayload.From(...)`의 세 overload는 public caller buffer를 보호하기 위해 모두 `ToArray()`로 복사한다(`Zlink.Framework.Contracts/Codecs/ZLinkEncodedPayload.cs:10-31`). 이 public 동작 자체는 맞다. 문제는 runtime도 이미 자신이 소유한 memory에 같은 factory를 사용한다는 점이다. JSON 송신은 `SerializeToUtf8Bytes`가 새 배열을 만든 직후 `From(byte[])`으로 전체를 한 번 더 복사한다(`Runtime/Messaging/ZLinkMessageRuntime.cs:128-143`). Custom codec 수신도 runtime-owned `_payload`와 STREAM packet memory를 `From(span)`으로 다시 복사한 뒤 serializer에 넘긴다(`Runtime/Messaging/ZLinkMessageRuntime.cs:112-115`, `Runtime/Streams/ZLinkStreamPacketPayloadCodec.cs:56-60`). 이는 source에서 확인한 추가 full-buffer copy이며 실제 throughput/p99 영향 크기는 아직 benchmark하지 않았다.
 
 완료 조건은 public factory의 defensive copy는 유지하면서 friend/internal owned-memory factory 또는 ownership token을 추가하는 것이다. JSON encode와 custom serializer decode에서 payload 크기만큼의 추가 배열·copy가 사라졌음을 allocation/copy benchmark와 buffer lifetime test로 확인해야 한다.
+
+Public `From(...)`의 defensive copy 계약은 유지하고 friend assembly만 호출할 수 있는 `FromOwned(...)`를
+추가했다. Framework JSON encode, envelope와 STREAM custom serializer decode, HTTP client custom serializer
+decode는 runtime이 소유한 memory를 이 경로로 이전한다. `FromEncoded(...)`와 STREAM packet decode도 중간
+`ToArray()`를 제거해 payload lifetime을 `ZLinkMessage`가 직접 유지한다.
+
+16 KiB payload를 128회 전달한 allocation regression에서 owned 경로는 0 B, public copying 경로는
+2,100,224 B를 할당했다. 같은 test가 public factory의 caller mutation 격리와 owned factory의 동일 buffer
+retention도 검증한다. Framework 전체 unit suite 1,590건과 HTTP client unit 63건이 통과했다. Packaged
+contract와 standalone HTTP clean consumer가 통과했고 public API snapshot hash는
+`c1987f4b98e4fac7a30b7d038a56ee0d20e1272d00e79bdc88d3271e3c3ab958`로 유지되었다. 실제 process는
+RegistrationCodec `RC-B1`~`RC-B4`를 `RegistrationCodec/logs/20260807-223341-3019087/`에서 통과해 JSON,
+Protobuf, MessagePack과 codec coexistence 경로를 확인했다. 구현 checkpoint는 `07ab6afcce`로 `main`에
+push했다.
 
 ### SPEC-TIMER-001 — non-catch-up timer option 계약 충돌로 판정 보류
 
