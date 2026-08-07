@@ -1216,6 +1216,15 @@ static_assert (
       std::declval<std::function<void (zlink::framework::http_server_options_builder_t &)>> ())),
     zlink::framework::http_options_builder_t &>);
 
+template <typename T>
+concept exposes_http_snapshot = requires (T &builder) { builder.snapshot (); };
+
+template <typename T>
+concept exposes_http_validation = requires (T &builder) { builder.validate (); };
+
+static_assert (!exposes_http_snapshot<zlink::framework::http_options_builder_t>);
+static_assert (!exposes_http_validation<zlink::framework::http_options_builder_t>);
+
 static_assert (
   std::is_same_v<decltype (std::declval<zlink::framework::http_server_options_builder_t &> ()
                              .set_max_connections (4)),
