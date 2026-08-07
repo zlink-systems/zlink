@@ -4592,6 +4592,35 @@ void test_stateful_application_reservation_includes_active_work (
         == stateful_error_t::none,
       "application byte budget must admit work after terminal completion");
 
+    stateful_object_runtime_t multipart_accounting (
+      2, 1, fixed + 4, limits::control_mailbox_bytes);
+    const auto multipart_actor = create_actor (
+      multipart_accounting, "multipart-accounting-actor");
+    test.require (
+      multipart_accounting.enqueue (
+        multipart_actor, turn_domain_t::application,
+        {1, std::vector<std::uint8_t> (128, 0x43), 4})
+        == stateful_error_t::none,
+      "application HWM must exclude the canonical multipart envelope");
+    const auto [multipart_claim_error, multipart_claim] =
+      multipart_accounting.try_claim (
+        multipart_actor, turn_domain_t::application);
+    test.require (
+      multipart_claim_error == stateful_error_t::none && multipart_claim,
+      "multipart accounting test must claim the admitted application turn");
+    test.require (
+      multipart_accounting.enqueue (
+        multipart_actor, turn_domain_t::application, {2, {}})
+        == stateful_error_t::backpressured,
+      "application HWM must retain the payload-part reservation while active");
+    if (multipart_claim) {
+        test.require (
+          multipart_accounting.complete_claim (
+            multipart_actor, turn_domain_t::application)
+            == stateful_error_t::none,
+          "multipart payload reservation must release at completion");
+    }
+
     stateful_object_runtime_t restore_limited (
       2, 1, fixed + 4, limits::control_mailbox_bytes);
     const auto restore_source =

@@ -184,6 +184,27 @@ int main ()
       protocol::encode_application_payload (application);
     assert (protocol::decode_application_payload (application_wire)
             == application);
+    assert (protocol::application_payload_hwm_bytes (application) == 3);
+    const protocol::application_payload_t multipart_application{
+      protocol::framework_multipart_packet_name,
+      protocol::framework_multipart_content_type,
+      {0, 0, 0, 2,
+       0, 0, 0, 3, 1, 2, 3,
+       0, 0, 0, 4, 4, 5, 6, 7}};
+    assert (protocol::application_payload_hwm_bytes (
+              multipart_application)
+            == 4);
+    auto truncated_multipart = multipart_application;
+    truncated_multipart.payload.pop_back ();
+    bool truncated_multipart_rejected = false;
+    try {
+        (void) protocol::application_payload_hwm_bytes (
+          truncated_multipart);
+    }
+    catch (const protocol::service_wire_error_t &) {
+        truncated_multipart_rejected = true;
+    }
+    assert (truncated_multipart_rejected);
     const protocol::application_payload_t traced_application{
       "Probe", "application/json", {4, 5, 6},
       "019fc5b9-9df3-786b-bb69-d55358f6d48b",

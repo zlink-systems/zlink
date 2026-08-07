@@ -3725,6 +3725,39 @@ decode_application_payload (std::span<const std::uint8_t> bytes)
     return result;
 }
 
+std::size_t
+application_payload_hwm_bytes (const application_payload_t &payload)
+{
+    if (payload.packet_name != framework_multipart_packet_name
+        || payload.content_type != framework_multipart_content_type) {
+        return payload.payload.size ();
+    }
+    const std::span<const std::uint8_t> encoded (payload.payload);
+    std::size_t offset = 0;
+    const auto count = read_u32 (encoded, offset);
+    if (count == 0
+        || count > (encoded.size () - offset) / sizeof (std::uint32_t)) {
+        throw service_wire_error_t (
+          "framework multipart part count is invalid");
+    }
+    std::size_t application_bytes = 0;
+    for (std::uint32_t index = 0; index != count; ++index) {
+        const auto part_bytes = read_u32 (encoded, offset);
+        if (part_bytes > encoded.size () - offset) {
+            throw service_wire_error_t (
+              "framework multipart part is truncated");
+        }
+        if (index + 1 == count)
+            application_bytes = part_bytes;
+        offset += part_bytes;
+    }
+    if (offset != encoded.size ()) {
+        throw service_wire_error_t (
+          "framework multipart payload has trailing bytes");
+    }
+    return application_bytes;
+}
+
 std::vector<std::uint8_t> encode_route_mesh_admission (
   command kind,
   const mesh::service_node_descriptor_t &descriptor)

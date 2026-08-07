@@ -897,6 +897,8 @@ std::vector<std::uint8_t>
 encode_application_payload (const application_payload_t &payload);
 application_payload_t
 decode_application_payload (std::span<const std::uint8_t> bytes);
+std::size_t
+application_payload_hwm_bytes (const application_payload_t &payload);
 std::vector<std::uint8_t>
 encode_route_mesh_admission (command kind,
                              const mesh::service_node_descriptor_t &descriptor);

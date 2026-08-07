@@ -131,6 +131,9 @@ struct turn_record_t
 {
     std::uint64_t sequence = 0;
     std::vector<std::uint8_t> payload;
+    // Application HWM counts the application payload part, not the canonical
+    // relocation envelope retained by this queue.
+    std::optional<std::size_t> application_payload_bytes;
 
     friend bool operator== (const turn_record_t &, const turn_record_t &) = default;
 };
