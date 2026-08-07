@@ -127,6 +127,7 @@ filter·continuation, Store read 실패의 typed `Unavailable`, partial page 미
 `917792ee8f6a4f645f03b1b683041b819d7501bd0ec54807c728c4fd8ab164e1`이다. 전체 exact declaration
 검증에는 이 항목과 무관한 `DOTNET-SIZE-001`의 기존 RouteMesh `MaxMessageSize` property 한 건이 남아 있으며,
 해당 항목에서 제거한다.
+이 checkpoint는 `9e7628e61e`으로 `main`에 push했다.
 
 ### DOTNET-API-003 — StreamNode message-size fluent API 불일치
 
