@@ -115,16 +115,69 @@ inline bool wait_for_socket_monitor_event (zlink::socket_monitor_t &monitor_,
     return false;
 }
 
+inline bool wait_for_socket_monitor_event_with_activity (
+  zlink::socket_monitor_t &monitor_,
+  zlink::socket_t &activity_socket_,
+  uint64_t event_type_,
+  int timeout_ms_,
+  int64_t value_ = -1)
+{
+    zlink::poller_t poller;
+    if (!poller.valid ())
+        return false;
+    try {
+        poller.add (monitor_, zlink::poll_event_flag_t::pollin, 1);
+        poller.add (activity_socket_, zlink::poll_event_flag_t::pollin, 2);
+    }
+    catch (const zlink::binding_error_t &) {
+        return false;
+    }
+
+    const std::chrono::steady_clock::time_point deadline =
+      std::chrono::steady_clock::now () + std::chrono::milliseconds (timeout_ms_);
+    while (std::chrono::steady_clock::now () < deadline) {
+        const std::chrono::steady_clock::duration remaining =
+          deadline - std::chrono::steady_clock::now ();
+        const int remaining_ms = static_cast<int> (
+          std::chrono::duration_cast<std::chrono::milliseconds> (remaining).count ());
+        zlink::poll_event_t event;
+        if (poller.wait (&event, 1, std::chrono::milliseconds (remaining_ms)) != 1
+            || event.slot != 1)
+            continue;
+
+        const std::optional<zlink::monitor_event_t> monitor_event =
+          monitor_.recv (zlink::recv_flags_t::dontwait);
+        if (!monitor_event)
+            continue;
+        if (static_cast<uint64_t> (monitor_event->event) != event_type_)
+            continue;
+        if (value_ >= 0 && static_cast<int64_t> (monitor_event->value) != value_)
+            continue;
+        return true;
+    }
+
+    return false;
+}
+
 inline bool wait_connected (zlink::socket_monitor_t &server_monitor_,
                             zlink::socket_monitor_t &client_monitor_,
-                            int timeout_ms_ = 2000)
+                            int timeout_ms_ = 2000,
+                            zlink::socket_t *server_activity_socket_ = nullptr)
 {
-    return wait_for_socket_monitor_event (
-             server_monitor_, static_cast<uint64_t> (zlink::monitor_event::connection_ready),
-             timeout_ms_)
+    const bool server_connected = server_activity_socket_
+                                    ? wait_for_socket_monitor_event_with_activity (
+                                        server_monitor_, *server_activity_socket_,
+                                        static_cast<uint64_t> (
+                                          zlink::monitor_event::connection_ready),
+                                        timeout_ms_)
+                                    : wait_for_socket_monitor_event (
+                                        server_monitor_, static_cast<uint64_t> (
+                                          zlink::monitor_event::connection_ready),
+                                        timeout_ms_);
+    return server_connected
            && wait_for_socket_monitor_event (
-             client_monitor_, static_cast<uint64_t> (zlink::monitor_event::connection_ready),
-             timeout_ms_);
+                client_monitor_, static_cast<uint64_t> (zlink::monitor_event::connection_ready),
+                timeout_ms_);
 }
 
 inline bool wait_stream_connected (zlink::socket_monitor_t &server_monitor_, int timeout_ms_ = 2000)

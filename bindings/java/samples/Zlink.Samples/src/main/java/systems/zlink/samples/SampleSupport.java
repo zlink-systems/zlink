@@ -6,6 +6,9 @@ import systems.zlink.contracts.eventing.MonitorEventType;
 import systems.zlink.contracts.eventing.SocketMonitor;
 import systems.zlink.contracts.messaging.Received;
 import systems.zlink.contracts.core.Zlink;
+import systems.zlink.contracts.errors.ZlinkRecvException;
+import systems.zlink.contracts.sockets.RecvFlags;
+import systems.zlink.contracts.sockets.RecvResult;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -96,8 +99,38 @@ final class SampleSupport {
 
     static void waitConnected(SocketMonitor... monitors) {
         for (SocketMonitor monitor : monitors) {
-            monitor.recv();
+            waitConnectedMonitor(monitor);
         }
+    }
+
+    private static void waitConnectedMonitor(SocketMonitor monitor) {
+        long deadlineNanos = System.nanoTime() + TIMEOUT.toNanos();
+        while (System.nanoTime() < deadlineNanos) {
+            systems.zlink.contracts.eventing.MonitorEvent event = null;
+            try {
+                event = monitor.recv(RecvFlags.DONT_WAIT);
+            } catch (ZlinkRecvException ex) {
+                if (ex.getResult() != RecvResult.NO_DATA) {
+                    throw ex;
+                }
+            }
+            if (event != null) {
+                if (event.event() == MonitorEventType.CONNECTION_READY) {
+                    return;
+                }
+                throw new IllegalStateException(
+                    "unexpected monitor event: " + event.event());
+            }
+
+            // ROUTER monitor queues can require socket activity before the
+            // connection-ready record becomes readable. Status is the public
+            // readiness snapshot for that case.
+            if (monitor.status().isReady()) {
+                return;
+            }
+            sleepQuietly("waiting for socket connection");
+        }
+        throw new IllegalStateException("socket connection timed out");
     }
 
     static void waitStreamConnected(SocketMonitor monitor) {

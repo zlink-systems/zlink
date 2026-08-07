@@ -139,7 +139,7 @@ public sealed class test_socket_concurrency
         Thread.Sleep(50);
 
         const int requestCount = 32;
-        var start = new Barrier(requestCount);
+        var start = new Barrier(requestCount + 1);
         Task<IReadOnlyList<Message>>[] requests = Enumerable.Range(0, requestCount)
             .Select(requestIndex => Task.Run(async () =>
             {
@@ -168,8 +168,7 @@ public sealed class test_socket_concurrency
                 return reply;
             }))
             .ToArray();
-        start.Dispose();
-
+        start.SignalAndWait();
         var replies = new List<Task>(requestCount);
         for (var requestIndex = 0; requestIndex < requestCount; requestIndex++)
         {
@@ -195,6 +194,7 @@ public sealed class test_socket_concurrency
 
         await Task.WhenAll(replies).WaitAsync(TimeSpan.FromSeconds(10));
         await Task.WhenAll(requests).WaitAsync(TimeSpan.FromSeconds(10));
+        start.Dispose();
     }
 
     [Fact]
@@ -215,7 +215,7 @@ public sealed class test_socket_concurrency
         const int producerCount = 4;
         const int operationsPerProducer = 8;
         const int operationCount = producerCount * operationsPerProducer;
-        var start = new Barrier(producerCount * 2);
+        var start = new Barrier(producerCount * 2 + 1);
         var requests = new List<Task>(operationCount);
         var sends = new List<Task>(operationCount);
 
@@ -265,7 +265,7 @@ public sealed class test_socket_concurrency
                 }
             }));
         }
-        start.Dispose();
+        start.SignalAndWait();
 
         var rawPayloads = new HashSet<string>(StringComparer.Ordinal);
         var replyTasks = new List<Task>(operationCount);
@@ -298,6 +298,7 @@ public sealed class test_socket_concurrency
         await Task.WhenAll(replyTasks).WaitAsync(TimeSpan.FromSeconds(10));
         await Task.WhenAll(sends).WaitAsync(TimeSpan.FromSeconds(10));
         await Task.WhenAll(requests).WaitAsync(TimeSpan.FromSeconds(10));
+        start.Dispose();
         Assert.Equal(operationCount, rawPayloads.Count);
         Assert.All(rawPayloads, payload =>
         {

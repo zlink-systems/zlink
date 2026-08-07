@@ -56,7 +56,36 @@ public static class SampleSupport
     public static void WaitConnected(params ISocketMonitor[] monitors)
     {
         foreach (ISocketMonitor monitor in monitors)
-            WaitMonitorEvent(monitor, 5000, SocketEvent.ConnectionReady);
+            WaitConnectedMonitor(monitor, 5000);
+    }
+
+    private static void WaitConnectedMonitor(ISocketMonitor monitor,
+        int timeoutMs)
+    {
+        DateTime deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+        while (DateTime.UtcNow < deadline)
+        {
+            MonitorEvent? evt = monitor.Recv(RecvFlags.DontWait);
+            if (evt != null)
+            {
+                if (evt.Event == MonitorEventType.ConnectionReady)
+                    return;
+
+                throw new InvalidOperationException(
+                    $"Unexpected monitor event {evt.Event}.");
+            }
+
+            // ROUTER monitor queues can require socket activity before the
+            // connection-ready record becomes readable. Status is the public
+            // readiness snapshot for that case; PUB/SUB still completes from
+            // the monitor event above before status becomes ready.
+            if (monitor.Status().IsReady)
+                return;
+
+            Thread.Sleep(1);
+        }
+
+        throw new TimeoutException("Timed out waiting for socket connection.");
     }
 
     public static MonitorEvent WaitMonitorEvent(ISocketMonitor monitor,
@@ -68,17 +97,27 @@ public static class SampleSupport
                 nameof(expectedEvents));
         }
 
-        _ = timeoutMs;
-        MonitorEvent evt = monitor.Recv()
-            ?? throw new TimeoutException("Timed out waiting for monitor event.");
-        for (int i = 0; i < expectedEvents.Length; i++)
+        DateTime deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+        while (DateTime.UtcNow < deadline)
         {
-            if ((SocketEvent)evt.Event == expectedEvents[i])
-                return evt;
+            MonitorEvent? evt = monitor.Recv(RecvFlags.DontWait);
+            if (evt is null)
+            {
+                Thread.Sleep(1);
+                continue;
+            }
+
+            for (int i = 0; i < expectedEvents.Length; i++)
+            {
+                if ((SocketEvent)evt.Event == expectedEvents[i])
+                    return evt;
+            }
+
+            throw new InvalidOperationException(
+                $"Unexpected monitor event {evt.Event}.");
         }
 
-        throw new InvalidOperationException(
-            $"Unexpected monitor event {evt.Event}.");
+        throw new TimeoutException("Timed out waiting for monitor event.");
     }
 
     public static void WaitOrThrow(Func<bool> predicate, int timeoutMs,

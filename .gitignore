@@ -235,6 +235,7 @@ bindings/go/single
 bindings/go/multi
 bindings/**/.pnp.loader.mjs
 bindings/**/dist/
+bindings/node/dist-tools/dist
 bindings/**/build/
 bindings/**/.next/
 

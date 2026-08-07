@@ -27,5 +27,6 @@ if [[ $show_help -eq 0 ]]; then
 fi
 
 export PYTHONDONTWRITEBYTECODE="${PYTHONDONTWRITEBYTECODE:-1}"
+PYTHON_EXECUTABLE="${PYTHON_EXECUTABLE:-python3}"
 
-exec python -u "$ROOT_DIR/run_benchmarks.py" "$@"
+exec "$PYTHON_EXECUTABLE" -u "$ROOT_DIR/run_benchmarks.py" "$@"

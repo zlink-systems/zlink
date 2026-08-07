@@ -60,8 +60,10 @@ public class CallbackSendContractTest {
                     "request-reply-client".getBytes(StandardCharsets.UTF_8)));
                 router.bind(endpoint);
                 dealer.connect(endpoint);
-                routerMon.recv();
-                dealerMon.recv();
+                TestSupport.awaitMonitorEvent(routerMon,
+                    MonitorEventType.CONNECTION_READY);
+                TestSupport.awaitMonitorEvent(dealerMon,
+                    MonitorEventType.CONNECTION_READY);
             }
             TestSupport.allowTcpRequestReplyCallbackHandshakeToSettle();
 
@@ -103,6 +105,7 @@ public class CallbackSendContractTest {
             assertTrue(replyReceived.await(
                     TestSupport.DEFAULT_TIMEOUT_MS, TimeUnit.MILLISECONDS),
                 "callback+send timed out -- send from callback hung");
+            routerThread.join();
             assertNull(callbackError.get(),
                 "callback raised: " + callbackError.get());
             assertArrayEquals("pong".getBytes(StandardCharsets.UTF_8),
@@ -201,8 +204,10 @@ public class CallbackSendContractTest {
                                 .getBytes(StandardCharsets.UTF_8)));
                         router.bind(endpoint);
                         dealer.connect(endpoint);
-                        routerMon.recv();
-                        dealerMon.recv();
+                        TestSupport.awaitMonitorEvent(routerMon,
+                            MonitorEventType.CONNECTION_READY);
+                        TestSupport.awaitMonitorEvent(dealerMon,
+                            MonitorEventType.CONNECTION_READY);
                     }
                     TestSupport.allowTcpRequestReplyCallbackHandshakeToSettle();
 
@@ -265,6 +270,7 @@ public class CallbackSendContractTest {
                             TestSupport.DEFAULT_TIMEOUT_MS,
                             TimeUnit.MILLISECONDS),
                         "router recv timed out");
+                    routerThread.join();
                 }
             }
         }

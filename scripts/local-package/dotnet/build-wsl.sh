@@ -38,7 +38,25 @@ dotnet pack "$repo_root/bindings/dotnet/src/Zlink/Zlink.csproj" \
 
 package="$out_dir/Systems.Zlink.$version.nupkg"
 [[ -f "$package" ]] || { echo "NuGet package is missing: $package" >&2; exit 1; }
-unzip -Z1 "$package" | grep -Fxq "runtimes/linux-x64/native/libzlink.so.0"
-unzip -Z1 "$package" | grep -Fxq "runtimes/linux-x64/native/libzlink.so.$version"
-unzip -Z1 "$package" | grep -Fxq "provenance/core-package-provenance.json"
+verify_package_entry() {
+  local entry="$1"
+  if command -v unzip >/dev/null 2>&1; then
+    unzip -Z1 "$package" | grep -Fxq "$entry"
+  else
+    PACKAGE="$package" ENTRY="$entry" python3 - <<'PY'
+import os
+import zipfile
+
+package = os.environ["PACKAGE"]
+entry = os.environ["ENTRY"]
+with zipfile.ZipFile(package) as archive:
+    if entry not in archive.namelist():
+        raise SystemExit(f"NuGet package entry is missing: {entry}")
+PY
+  fi
+}
+
+verify_package_entry "runtimes/linux-x64/native/libzlink.so.0"
+verify_package_entry "runtimes/linux-x64/native/libzlink.so.$version"
+verify_package_entry "provenance/core-package-provenance.json"
 echo ".NET local package: $package"

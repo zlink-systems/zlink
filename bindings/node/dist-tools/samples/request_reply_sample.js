@@ -3,7 +3,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const assert = require('node:assert/strict');
 const zlink = require('@zlink-systems/zlink');
-const { tcpEndpoint } = require('./sample_support');
+const { tcpEndpoint, waitForConnectionReady } = require('./sample_support');
 function timeoutPromise(ms, label) {
     return new Promise((_, reject) => {
         setTimeout(() => reject(new Error(`${label} timed out`)), ms);
@@ -23,8 +23,8 @@ async function main() {
             dealerSocket.setRoutingId(clientRoutingId);
             routerSocket.bind(endpoint);
             dealerSocket.connect(endpoint);
-            routerMonitor.recv();
-            dealerMonitor.recv();
+            await waitForConnectionReady(routerMonitor, zlink);
+            await waitForConnectionReady(dealerMonitor, zlink);
         }
         finally {
             routerMonitor.close();

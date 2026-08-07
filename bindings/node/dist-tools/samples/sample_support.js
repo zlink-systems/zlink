@@ -23,6 +23,20 @@ async function waitUntil(predicate, timeoutMs, message) {
     }
     throw new Error(message);
 }
+async function waitForConnectionReady(monitor, zlink, timeoutMs = 5000) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+        const event = monitor.recv(zlink.RecvFlags.DontWait);
+        if (event && event.event === zlink.MonitorEventType.ConnectionReady) {
+            return event;
+        }
+        if (monitor.status().isReady()) {
+            return null;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 1));
+    }
+    throw new Error('connection-ready monitor event timed out');
+}
 function frame(payload) {
     const framed = Buffer.allocUnsafe(payload.length + 6);
     framed.writeUInt16BE(0, 0);
@@ -34,5 +48,6 @@ module.exports = {
     frame,
     reservePort,
     tcpEndpoint,
+    waitForConnectionReady,
     waitUntil
 };

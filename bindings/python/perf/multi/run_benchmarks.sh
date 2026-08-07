@@ -36,7 +36,8 @@ if [[ $show_help -eq 0 ]]; then
     echo "Perf runtime sha256: $(sha256sum "$ZLINK_LIBRARY_PATH" | awk '{print $1}')"
 fi
 export PYTHONDONTWRITEBYTECODE="${PYTHONDONTWRITEBYTECODE:-1}"
+PYTHON_EXECUTABLE="${PYTHON_EXECUTABLE:-python3}"
 
-exec python -u "$SCRIPT_DIR/run_benchmarks.py" \
+exec "$PYTHON_EXECUTABLE" -u "$SCRIPT_DIR/run_benchmarks.py" \
     "${default_args[@]}" \
     "$@"

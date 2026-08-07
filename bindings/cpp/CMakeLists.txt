@@ -257,7 +257,19 @@ if(ZLINK_CPP_STANDALONE AND ZLINK_CPP_REGISTER_CTEST)
 endif()
 
 if(ZLINK_CPP_BUILD_TESTS OR ZLINK_CPP_BUILD_SAMPLES)
-  find_package(Boost CONFIG REQUIRED COMPONENTS asio)
+  set(ZLINK_CPP_BUNDLED_BOOST_DIR "${ZLINK_CORE_DIR}/external/boost")
+  if(EXISTS "${ZLINK_CPP_BUNDLED_BOOST_DIR}/boost/asio.hpp")
+    if(NOT TARGET Boost::asio)
+      add_library(zlink_cpp_bundled_boost_asio INTERFACE)
+      add_library(Boost::asio ALIAS zlink_cpp_bundled_boost_asio)
+      target_include_directories(
+        zlink_cpp_bundled_boost_asio
+        INTERFACE "${ZLINK_CPP_BUNDLED_BOOST_DIR}"
+      )
+    endif()
+  else()
+    find_package(Boost CONFIG REQUIRED COMPONENTS asio)
+  endif()
 
   function(add_cpp_binding_executable target_name source_file)
     add_executable(${target_name} ${source_file})

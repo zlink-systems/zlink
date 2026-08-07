@@ -4,10 +4,14 @@ import systems.zlink.contracts.eventing.MonitorEvent;
 import systems.zlink.contracts.eventing.MonitorEventType;
 import systems.zlink.contracts.eventing.SocketMonitor;
 import systems.zlink.contracts.core.Zlink;
+import systems.zlink.contracts.errors.ZlinkRecvException;
+import systems.zlink.contracts.sockets.RecvFlags;
+import systems.zlink.contracts.sockets.RecvResult;
 import org.junit.jupiter.api.Assertions;
 
 import java.io.IOException;
 import java.net.ServerSocket;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BooleanSupplier;
 
@@ -40,12 +44,37 @@ public final class TestSupport {
 
     public static MonitorEvent awaitMonitorEvent(SocketMonitor monitor,
                                                  MonitorEventType eventType) {
-        while (true) {
-            MonitorEvent event = monitor.recv();
-            if (event.event() == eventType) {
-                return event;
+        long deadline = System.nanoTime() + DEFAULT_TIMEOUT_MS * 1_000_000L;
+        while (System.nanoTime() < deadline) {
+            MonitorEvent event = null;
+            try {
+                event = monitor.recv(RecvFlags.DONT_WAIT);
+            } catch (ZlinkRecvException ex) {
+                if (ex.getResult() != RecvResult.NO_DATA) {
+                    throw ex;
+                }
+            }
+            if (event != null) {
+                if (event.event() == eventType) {
+                    return event;
+                }
+                continue;
+            }
+
+            if (eventType == MonitorEventType.CONNECTION_READY
+                && monitor.status().isReady()) {
+                return new MonitorEvent(eventType, 0L, Optional.empty(),
+                    "", "");
+            }
+
+            try {
+                Thread.sleep(1L);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new RuntimeException(e);
             }
         }
+        throw new AssertionError("monitor event timed out: " + eventType);
     }
 
     public static void awaitCondition(BooleanSupplier condition) {

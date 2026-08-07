@@ -6,6 +6,7 @@ const assert = require('node:assert/strict');
 const { once } = require('node:events');
 const net = require('node:net');
 const zlink = require('@zlink-systems/zlink');
+const { waitForConnectionReady } = require('./sample_support');
 
 async function reservePort() {
   const srv = net.createServer();
@@ -38,8 +39,8 @@ async function main() {
       dealerSocket.setRoutingId(clientRoutingId);
       routerSocket.bind(endpoint);
       dealerSocket.connect(endpoint);
-      routerMonitor.recv();
-      dealerMonitor.recv();
+      await waitForConnectionReady(routerMonitor);
+      await waitForConnectionReady(dealerMonitor);
     } finally {
       routerMonitor.close();
       dealerMonitor.close();

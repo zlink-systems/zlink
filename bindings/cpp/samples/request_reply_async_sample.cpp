@@ -20,7 +20,7 @@ int main ()
     router.bind ("tcp://127.0.0.1:0");
     const std::string endpoint = router.options ().last_endpoint ();
     dealer.connect (endpoint);
-    assert (detail::wait_connected (router_monitor, dealer_monitor));
+    assert (detail::wait_connected (router_monitor, dealer_monitor, 2000, &router));
 
     // 응답이 도착하면 callback이 IO 스레드에서 실행된다. 결과를 main으로 넘기려면
     // 직접 동기화한다 — callback 안에서 소켓을 다시 호출하지 않는다.

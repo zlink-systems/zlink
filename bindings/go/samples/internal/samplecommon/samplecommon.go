@@ -2,6 +2,7 @@ package samplecommon
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -87,8 +88,31 @@ func OpenMonitor(socket zlink.SocketTarget) *zlink.SocketMonitor {
 }
 
 func WaitConnected(serverMon, clientMon *zlink.SocketMonitor) {
-	WaitMonitorEvent(serverMon)
-	WaitMonitorEvent(clientMon)
+	waitConnectedMonitor(serverMon)
+	waitConnectedMonitor(clientMon)
+}
+
+func waitConnectedMonitor(mon *zlink.SocketMonitor) {
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		event, err := mon.Recv(zlink.RecvFlagsDontWait)
+		if err != nil {
+			var recvErr *zlink.RecvError
+			if !errors.As(err, &recvErr) || recvErr.Result != zlink.RecvNoData {
+				Must(err)
+			}
+		} else if event != nil && event.IsConnectionReady() {
+			return
+		}
+
+		status, statusErr := mon.Status()
+		Must(statusErr)
+		if status.IsReady() {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	Must(fmt.Errorf("timed out waiting for socket connection"))
 }
 
 func WaitMonitorEvent(mon *zlink.SocketMonitor) *zlink.MonitorEvent {

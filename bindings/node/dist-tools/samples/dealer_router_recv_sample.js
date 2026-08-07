@@ -3,7 +3,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const assert = require('node:assert/strict');
 const zlink = require('@zlink-systems/zlink');
-const { tcpEndpoint } = require('./sample_support');
+const { tcpEndpoint, waitForConnectionReady } = require('./sample_support');
 async function main() {
     // --8<-- [start:doc]
     const endpoint = await tcpEndpoint();
@@ -16,8 +16,8 @@ async function main() {
         try {
             router.bind(endpoint);
             dealer.connect(endpoint);
-            routerMonitor.recv();
-            dealerMonitor.recv();
+            await waitForConnectionReady(routerMonitor, zlink);
+            await waitForConnectionReady(dealerMonitor, zlink);
         }
         finally {
             routerMonitor.close();

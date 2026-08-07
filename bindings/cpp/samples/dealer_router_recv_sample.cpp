@@ -15,7 +15,7 @@ int main ()
     const std::string endpoint = router.options ().last_endpoint ();
     assert (!endpoint.empty ());
     dealer.connect (endpoint);
-    assert (detail::wait_connected (router_monitor, dealer_monitor));
+    assert (detail::wait_connected (router_monitor, dealer_monitor, 2000, &router));
 
     const std::string sent = detail::k_dealer_router_request;
     zlink::message_t outbound = detail::make_message (sent);

@@ -2,10 +2,12 @@ package systems.zlink.runtime.nativeapi;
 
 import systems.zlink.contracts.errors.ZlinkConfigException;
 import systems.zlink.contracts.errors.ConfigResult;
+import systems.zlink.contracts.errors.ZlinkRecvException;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.eventing.MonitorEvent;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.sockets.SubmitResult;
+import systems.zlink.contracts.sockets.RecvResult;
 import systems.zlink.contracts.errors.ZlinkException;
 import java.lang.foreign.Arena;
 import java.lang.foreign.FunctionDescriptor;
@@ -1083,8 +1085,10 @@ public final class Native {
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment evt = arena.allocate(NativeLayouts.MONITOR_EVENT_LAYOUT);
             int rc = (int) MH_MONITOR_RECV.invokeExact(socket, evt, flags);
-            if (rc != 0)
-                throw InternalAccess.zlinkExceptionFromLastError(systems.zlink.contracts.errors.ErrorCategory.RECV);
+            if (rc != 0) {
+                throw new ZlinkRecvException(RecvResult.fromValue(rc),
+                    Native.errno());
+            }
             long event = evt.get(ValueLayout.JAVA_LONG, NativeLayouts.MONITOR_EVENT_OFFSET);
             long value = evt.get(ValueLayout.JAVA_LONG, NativeLayouts.MONITOR_VALUE_OFFSET);
             int routingSize = evt.get(ValueLayout.JAVA_BYTE,

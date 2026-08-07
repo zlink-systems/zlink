@@ -110,7 +110,7 @@ public sealed class test_pair_tcp
         receiver.Connect(endpoint);
         Thread.Sleep(50);
 
-        var poller = Zlink.CreatePoller();
+        using var poller = Zlink.CreatePoller();
         poller.Add(receiver, PollEventFlags.PollIn, 7);
 
         CoreTestSupport.SendWithRetry(sender, "x"u8, 2000);
