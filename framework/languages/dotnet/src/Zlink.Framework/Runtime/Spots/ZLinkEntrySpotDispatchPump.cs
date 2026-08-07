@@ -1,36 +1,47 @@
 using System.Diagnostics;
-using System.Threading.Channels;
 
 namespace Zlink.Framework.Runtime.Spots;
 
-internal sealed class ZLinkEntrySpotDispatchPump(
-    ZLinkFrameworkRuntime runtime,
-    ZLinkEntrySpotActivation? activation,
-    ZLinkRuntimeTaskRunner taskRunner) : IAsyncDisposable
+internal sealed class ZLinkEntrySpotDispatchPump : IAsyncDisposable
 {
-    private readonly object _activeDispatchGate = new();
-    private readonly object _actorChainGate = new();
-    private readonly Dictionary<string, Task> _actorChains = new(StringComparer.Ordinal);
-    private readonly HashSet<Task> _activeDispatches = [];
-    private readonly ZLinkActorInboundPipeline _actorPipeline = new(
-        runtime,
-        new ZLinkEntrySpotActorInboundEndpoint(runtime));
-    private readonly Channel<ZLinkSpotActorFrameBatch> _actorDispatch =
-        Channel.CreateUnbounded<ZLinkSpotActorFrameBatch>(new UnboundedChannelOptions
-        {
-            SingleReader = true,
-            SingleWriter = false,
-            AllowSynchronousContinuations = false
-        });
-    private Task? _actorDispatchStarter;
+    private readonly ZLinkFrameworkRuntime _runtime;
+    private readonly ZLinkEntrySpotActivation? _activation;
+    private readonly ZLinkRuntimeTaskRunner _taskRunner;
+    private readonly int _actorLaneCapacity;
+    private readonly long _actorLaneByteCapacity;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<
+        string,
+        ActorLane> _actorLanes;
+    private readonly ZLinkBoundedIngressAdmission _actorIngress;
+    private readonly ZLinkActorInboundPipeline _actorPipeline;
+    private int _stopping;
     private IZLinkBackendSpot? _entrySpot;
+
+    public ZLinkEntrySpotDispatchPump(
+        ZLinkFrameworkRuntime runtime,
+        ZLinkEntrySpotActivation? activation,
+        ZLinkRuntimeTaskRunner taskRunner,
+        int actorIngressCapacity = 4096,
+        long actorIngressByteCapacity = 64L * 1024 * 1024,
+        int actorLaneCapacity = 4096,
+        long actorLaneByteCapacity = 64L * 1024 * 1024)
+    {
+        _runtime = runtime;
+        _activation = activation;
+        _taskRunner = taskRunner;
+        _actorLaneCapacity = actorLaneCapacity;
+        _actorLaneByteCapacity = actorLaneByteCapacity;
+        _actorLanes = new(StringComparer.Ordinal);
+        _actorIngress = new(
+            actorIngressCapacity,
+            actorIngressByteCapacity);
+        _actorPipeline = new(
+            runtime,
+            new ZLinkEntrySpotActorInboundEndpoint(runtime));
+    }
 
     public void Attach(IZLinkBackendSpot entrySpot)
     {
-        _actorDispatchStarter ??= taskRunner.Run(
-            "entry-spot-actor-ingress",
-            StartActorDispatchesAsync);
-        if (_actorDispatchStarter.IsCompleted) RequestStop();
         _entrySpot = entrySpot;
         var previous = SynchronizationContext.Current;
         SynchronizationContext.SetSynchronizationContext(null);
@@ -44,30 +55,21 @@ internal sealed class ZLinkEntrySpotDispatchPump(
         }
     }
 
-    public void RequestStop() => _actorDispatch.Writer.TryComplete();
+    public void RequestStop() => Interlocked.Exchange(ref _stopping, 1);
 
     public async ValueTask DisposeAsync()
     {
-        _actorDispatch.Writer.TryComplete();
-        if (_actorDispatchStarter is not null)
-            await _actorDispatchStarter.ConfigureAwait(false);
-        while (_actorDispatch.Reader.TryRead(out var pending)) pending.Dispose();
-        while (true)
-        {
-            Task[] active;
-            lock (_activeDispatchGate)
-            {
-                _activeDispatches.RemoveWhere(static task => task.IsCompleted);
-                if (_activeDispatches.Count == 0) return;
-                active = _activeDispatches.ToArray();
-            }
-            await Task.WhenAll(active).ConfigureAwait(false);
-        }
+        RequestStop();
+        await _actorIngress.CloseAndWaitForEmptyAsync(CancellationToken.None)
+            .ConfigureAwait(false);
+        foreach (var lane in _actorLanes.Values)
+            await lane.DisposeAsync().ConfigureAwait(false);
+        _actorLanes.Clear();
     }
 
     private void OnDispatchEvent(ZLinkBackendSpotDispatchInfo info)
     {
-        if (activation is not null)
+        if (_activation is not null)
             switch (info.Event)
             {
                 case ZLinkBackendSpotDispatchEvent.RouteReadable:
@@ -77,30 +79,30 @@ internal sealed class ZLinkEntrySpotDispatchPump(
                         {
                             if (ZLinkSpotActivationDispatcher.IsInfrastructureRoute(received))
                             {
-                                if (!taskRunner.TryRunDetached(
+                                if (!_taskRunner.TryRunDetached(
                                         "entry-spot-route-dispatch",
-                                        ct => activation.DispatchRouteAsync(received, ct)))
+                                        ct => _activation.DispatchRouteAsync(received, ct)))
                                     received.Dispose();
                                 continue;
                             }
 
-                            if (!runtime.TryEnterInboundOperation(received.CanReply, out var operation))
+                            if (!_runtime.TryEnterInboundOperation(received.CanReply, out var operation))
                             {
                                 ZLinkSpotActivationDispatcher.RejectApplicationRouteForDrain(
                                     received,
-                                    activation.ChannelName,
+                                    _activation.ChannelName,
                                     ZLinkAcceptedWorkAdmission.Closed,
                                     received.SourceNodeRid is null
-                                    || received.SourceNodeRid == activation.NodeRid);
+                                    || received.SourceNodeRid == _activation.NodeRid);
                                 continue;
                             }
 
-                            if (!taskRunner.TryRunDetached(
+                            if (!_taskRunner.TryRunDetached(
                                     "entry-spot-route-dispatch",
                                     async ct =>
                                     {
                                         using (operation)
-                                            await activation.DispatchRouteAsync(received, ct)
+                                            await _activation.DispatchRouteAsync(received, ct)
                                                 .ConfigureAwait(false);
                                     }))
                             {
@@ -111,9 +113,9 @@ internal sealed class ZLinkEntrySpotDispatchPump(
                     }
                     else
                     {
-                        taskRunner.RunDetached(
+                        _taskRunner.RunDetached(
                             "entry-spot-route-dispatch",
-                            ct => activation.DispatchRouteDrainAsync(ct));
+                            ct => _activation.DispatchRouteDrainAsync(ct));
                     }
 
                     return;
@@ -121,30 +123,30 @@ internal sealed class ZLinkEntrySpotDispatchPump(
                     info.DrainChannelReply?.Invoke();
                     return;
                 case ZLinkBackendSpotDispatchEvent.SubscribeReadable:
-                    if (!runtime.TryEnterInboundOperation(
+                    if (!_runtime.TryEnterInboundOperation(
                             countAsRequest: false,
                             out var subscriptionOperation))
                     {
-                        taskRunner.RunDetached(
+                        _taskRunner.RunDetached(
                             "entry-spot-subscription-discard",
-                            ct => activation.DiscardSubscriptionsAsync(ct));
+                            ct => _activation.DiscardSubscriptionsAsync(ct));
                         return;
                     }
-                    taskRunner.RunDetached(
+                    _taskRunner.RunDetached(
                         "entry-spot-subscription-dispatch",
                         async ct =>
                         {
                             using (subscriptionOperation)
-                                await activation.DispatchSubscriptionsAsync(ct).ConfigureAwait(false);
+                                await _activation.DispatchSubscriptionsAsync(ct).ConfigureAwait(false);
                         });
                     return;
                 case ZLinkBackendSpotDispatchEvent.ActorJoinReadable:
-                    taskRunner.RunDetached(
+                    _taskRunner.RunDetached(
                         "entry-spot-actor-join-dispatch",
-                        ct => activation.DispatchActorJoinDrainAsync(ct));
+                        ct => _activation.DispatchActorJoinDrainAsync(ct));
                     return;
                 case ZLinkBackendSpotDispatchEvent.ActorLifecycleReadable:
-                    taskRunner.RunDetached(
+                    _taskRunner.RunDetached(
                         "entry-spot-actor-lifecycle-dispatch",
                         DispatchActorLifecycleDrainAsync);
                     return;
@@ -155,7 +157,7 @@ internal sealed class ZLinkEntrySpotDispatchPump(
             return;
 
         var dispatchable = ZLinkActorHandoffIngress.CaptureMovingFrames(
-            runtime,
+            _runtime,
             actorParts,
             info.ActorDispatchLease);
         if (dispatchable.Count == 0)
@@ -164,90 +166,71 @@ internal sealed class ZLinkEntrySpotDispatchPump(
             return;
         }
 
-        if (!runtime.TryEnterInboundOperation(countAsRequest: false, out var actorOperation))
+        if (!_runtime.TryEnterInboundOperation(countAsRequest: false, out var actorOperation))
         {
             dispatchable.Dispose();
             return;
         }
 
-        if (!_actorDispatch.Writer.TryWrite(dispatchable.WithCompletion(actorOperation.Dispose)))
+        EnqueueActorBatch(dispatchable.WithCompletion(actorOperation.Dispose));
+    }
+
+    private void EnqueueActorBatch(ZLinkSpotActorFrameBatch frames)
+    {
+        var retainedBytes = frames.RetainedBytes;
+        var ingressBytes = checked(
+            retainedBytes + ZLinkSerialExecutionQueue.WorkItemFixedCostBytes);
+        if (Volatile.Read(ref _stopping) != 0
+            || !_actorIngress.TryAcquire(ingressBytes))
         {
-            actorOperation.Dispose();
-            dispatchable.Dispose();
+            RejectActorBatch(frames);
+            return;
+        }
+
+        var actorId = frames.Count > 0
+            ? frames[0].Actor.ActorId
+            : string.Empty;
+        if (string.IsNullOrWhiteSpace(actorId))
+        {
+            _actorIngress.Release(ingressBytes);
+            frames.Dispose();
+            return;
+        }
+
+        while (true)
+        {
+            var lane = _actorLanes.GetOrAdd(
+                actorId,
+                _ => new ActorLane(
+                    this,
+                    actorId,
+                    _actorLaneCapacity,
+                    _actorLaneByteCapacity));
+            var admission = lane.TryEnqueue(frames, retainedBytes, ingressBytes);
+            if (admission == ZLinkSerialPostAdmission.Accepted)
+                return;
+            if (admission == ZLinkSerialPostAdmission.Closed)
+                continue;
+
+            _actorIngress.Release(ingressBytes);
+            RejectActorBatch(frames);
+            return;
         }
     }
 
-    private async ValueTask StartActorDispatchesAsync(CancellationToken cancellationToken)
+    private void RejectActorBatch(ZLinkSpotActorFrameBatch frames)
     {
-        await foreach (var frames in _actorDispatch.Reader.ReadAllAsync(cancellationToken)
-                           .ConfigureAwait(false))
-            StartActorDispatch(frames, cancellationToken);
-    }
-
-    private void StartActorDispatch(
-        ZLinkSpotActorFrameBatch frames,
-        CancellationToken cancellationToken)
-    {
-        // Per-actor FIFO: sibling batches for the same actor must not race —
-        // a later batch overtaking an earlier one breaks the session order
-        // and the handoff backlog's arrival sequence (spec 23 §10.2). Chains
-        // are keyed per actor so one busy actor never stalls the others.
-        var actorId = frames.Count > 0 ? frames[0].Actor.ActorId : string.Empty;
-        Task observed;
-        lock (_actorChainGate)
-        {
-            var prior = _actorChains.TryGetValue(actorId, out var chain)
-                ? chain
-                : Task.CompletedTask;
-            observed = DispatchActorBatchAfterAsync(prior, frames, cancellationToken);
-            _actorChains[actorId] = observed;
-        }
-
-        _ = observed.ContinueWith(
-            (completed, state) =>
-            {
-                var pump = (ZLinkEntrySpotDispatchPump)state!;
-                lock (pump._actorChainGate)
-                {
-                    if (pump._actorChains.TryGetValue(actorId, out var current)
-                        && ReferenceEquals(current, completed))
-                        pump._actorChains.Remove(actorId);
-                }
-            },
-            this,
-            CancellationToken.None,
-            TaskContinuationOptions.ExecuteSynchronously,
-            TaskScheduler.Default);
-        lock (_activeDispatchGate) _activeDispatches.Add(observed);
-        _ = observed.ContinueWith(
-            static (completed, state) =>
-            {
-                var pump = (ZLinkEntrySpotDispatchPump)state!;
-                lock (pump._activeDispatchGate) pump._activeDispatches.Remove(completed);
-            },
-            this,
-            CancellationToken.None,
-            TaskContinuationOptions.ExecuteSynchronously,
-            TaskScheduler.Default);
-    }
-
-    private async Task DispatchActorBatchAfterAsync(
-        Task prior,
-        ZLinkSpotActorFrameBatch frames,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            await prior.ConfigureAwait(false);
-        }
-        catch
-        {
-            // The prior batch reported its own failure; the chain continues.
-        }
-
-        await ObserveActorDispatchAsync(
-                _actorPipeline.DispatchAsync(frames, cancellationToken))
-            .ConfigureAwait(false);
+        var error = new ZLinkFrameworkException(
+            ZLinkFrameworkErrorKind.CapacityExceeded,
+            "Entry Actor ingress reached its count or byte bound.",
+            ZLinkRetryAdvice.RetryAfterBackoff);
+        if (!_taskRunner.TryRunDetached(
+                "entry-spot-actor-reject",
+                cancellationToken => _actorPipeline.RejectAsync(
+                    frames,
+                    error,
+                    cancellationToken)))
+            frames.Dispose();
     }
 
     private async Task ObserveActorDispatchAsync(ValueTask dispatch)
@@ -256,12 +239,90 @@ internal sealed class ZLinkEntrySpotDispatchPump(
         {
             await dispatch.ConfigureAwait(false);
         }
-        catch (OperationCanceledException) when (runtime.ShutdownToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (_runtime.ShutdownToken.IsCancellationRequested)
         {
         }
         catch (Exception exception)
         {
-            runtime.ErrorSink.ReportRuntimeTaskException("entry-spot-actor-dispatch", exception);
+            _runtime.ErrorSink.ReportRuntimeTaskException("entry-spot-actor-dispatch", exception);
+        }
+    }
+
+    private sealed class ActorLane(
+        ZLinkEntrySpotDispatchPump owner,
+        string actorId,
+        int capacity,
+        long byteCapacity) : IAsyncDisposable
+    {
+        private readonly object _lifecycleGate = new();
+        private readonly ZLinkSerialExecutionQueue _queue = new(
+            owner._taskRunner,
+            owner._runtime.ErrorSink,
+            owner._runtime.ShutdownToken,
+            capacity,
+            byteCapacity);
+        private bool _retired;
+        private bool _retirementScheduled;
+
+        internal ZLinkSerialPostAdmission TryEnqueue(
+            ZLinkSpotActorFrameBatch frames,
+            long retainedBytes,
+            long ingressBytes)
+        {
+            lock (_lifecycleGate)
+            {
+                if (_retired) return ZLinkSerialPostAdmission.Closed;
+                var admission = _queue.TryPostApplicationWithAdmission(
+                    retainedBytes,
+                    async cancellationToken =>
+                    {
+                        try
+                        {
+                            await owner.ObserveActorDispatchAsync(
+                                    owner._actorPipeline.DispatchAsync(
+                                        frames,
+                                        cancellationToken))
+                                .ConfigureAwait(false);
+                        }
+                        finally
+                        {
+                            owner._actorIngress.Release(ingressBytes);
+                        }
+                    },
+                    out _);
+                if (admission == ZLinkSerialPostAdmission.Accepted
+                    && !_retirementScheduled)
+                {
+                    _retirementScheduled = true;
+                    _ = RetireWhenDrainedAsync();
+                }
+                return admission;
+            }
+        }
+
+        private async Task RetireWhenDrainedAsync()
+        {
+            while (true)
+            {
+                await _queue.ApplicationDrained.ConfigureAwait(false);
+                lock (_lifecycleGate)
+                {
+                    if (_retired) return;
+                    if (_queue.ApplicationPendingCount != 0)
+                        continue;
+                    _retired = true;
+                    owner._actorLanes.TryRemove(
+                        new KeyValuePair<string, ActorLane>(actorId, this));
+                    break;
+                }
+            }
+            await _queue.DisposeAsync().ConfigureAwait(false);
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            lock (_lifecycleGate) _retired = true;
+            await _queue.DisposeAsync().ConfigureAwait(false);
         }
     }
 
@@ -277,7 +338,7 @@ internal sealed class ZLinkEntrySpotDispatchPump(
             if (ZLinkReceiveBatchBudget.IsExhausted(count, bytes, startedAt))
             {
                 if (!cancellationToken.IsCancellationRequested)
-                    taskRunner.RunDetached(
+                    _taskRunner.RunDetached(
                         "entry-spot-actor-lifecycle-dispatch",
                         DispatchActorLifecycleDrainAsync);
                 return;
@@ -293,9 +354,9 @@ internal sealed class ZLinkEntrySpotDispatchPump(
             var actorId = lifecycle.Value.Info.CurrentActor?.ActorId;
             if (actorId is null) continue;
 
-            if (!await runtime.TryNotifyJoinedSpotActorDisconnectedAsync(actorId, cancellationToken)
+            if (!await _runtime.TryNotifyJoinedSpotActorDisconnectedAsync(actorId, cancellationToken)
                     .ConfigureAwait(false))
-                await runtime.NotifyActorDisconnectedByIdAsync(actorId, cancellationToken)
+                await _runtime.NotifyActorDisconnectedByIdAsync(actorId, cancellationToken)
                     .ConfigureAwait(false);
         }
     }

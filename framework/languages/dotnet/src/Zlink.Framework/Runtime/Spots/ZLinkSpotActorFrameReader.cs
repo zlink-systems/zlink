@@ -94,6 +94,20 @@ internal sealed class ZLinkSpotActorFrameBatch(
 
     public ZLinkSpotActorFrame this[int index] => frames[index];
 
+    public long RetainedBytes
+    {
+        get
+        {
+            long bytes = 0;
+            foreach (var frame in frames)
+                bytes = checked(
+                    bytes
+                    + frame.Body.Size
+                    + frame.ApplicationMetadata.Length);
+            return bytes;
+        }
+    }
+
     public ZLinkSpotActorFrameBatch WithCompletion(Action onCompleted) =>
         new(frames, onCompleted, inboundDispatchLease);
 
