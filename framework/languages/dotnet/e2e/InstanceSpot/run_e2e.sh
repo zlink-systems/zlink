@@ -19,10 +19,20 @@ case "$scenario" in
   IS-E2E-08|idle)
     "$SCRIPT_DIR/../SpotService/run_e2e.sh" instance-idle
     ;;
+  IS-E2E-05|owner-loss)
+    "$SCRIPT_DIR/../SpotService/run_e2e.sh" instance-owner-loss
+    ;;
+  IS-E2E-35|queue-owner-loss)
+    "$SCRIPT_DIR/../SpotService/run_e2e.sh" instance-queue-owner-loss
+    ;;
+  creating-positive)
+    "$SCRIPT_DIR/../SpotService/run_e2e.sh" instance-creating-join
+    ;;
   *)
     cat >&2 <<EOF
 InstanceSpot '${scenario}' is not executable yet.
-The .NET process fixture currently covers IS-E2E-01 through IS-E2E-03 and IS-E2E-08.
+The .NET process fixture currently covers IS-E2E-01 through IS-E2E-03, IS-E2E-05,
+IS-E2E-08 and IS-E2E-35.
 The aggregate runner keeps Config 14 incomplete until the remaining scenarios
 have their own process evidence.
 EOF
