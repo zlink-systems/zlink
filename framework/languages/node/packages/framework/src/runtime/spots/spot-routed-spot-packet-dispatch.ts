@@ -7,7 +7,7 @@ import type {
 } from '../../contracts';
 import type { ZLinkProviderResolver } from '../../contracts/Common/ZLinkProviderResolver';
 import type { ZLinkApplicationWorkClaim } from '../admission';
-import { zlinkMessageMetadata } from '../../contracts';
+import { ZLinkFrameworkException, zlinkMessageMetadata } from '../../contracts';
 import {
   ZLinkRuntimeDispatchErrorAction as ZLinkDispatchErrorAction,
   ZLinkRuntimeDispatchErrorReason as ZLinkDispatchErrorReason,
@@ -16,6 +16,11 @@ import {
 } from '../../contracts/Dispatch/ZLinkDispatchOptions';
 import type { ZLinkDispatchErrorReporter } from '../channels';
 import { ZLinkConfigurationException } from '../configuration';
+import {
+  ZLinkFrameworkInternalErrorKind,
+  createInternalFrameworkException,
+  internalFrameworkErrorKind
+} from '../framework-errors-internal';
 import { resolveLifecycleHandler } from '../handlers/handler-instance-scope';
 import type { ZLinkSpotHandlerRegistration } from './spot-handler-registry';
 import type { ZLinkSpotSerialExecutor } from './spot-serial-executor';
@@ -112,49 +117,88 @@ export class ZLinkRoutedSpotPacketDispatch {
     }
 
     let response: unknown;
+    let detached = false;
+    const applicationClaim = activation.meshName === undefined
+      ? undefined
+      : this.options.claimApplicationWork?.(activation.meshName);
+    const runHandler = async () => {
+      // Decode only after the Spot has acquired both application admission
+      // and its execution authority.
+      const payload = decodePayload();
+      for (const registration of registrations) {
+        const handler = await resolveLifecycleHandler(
+          activation.spot,
+          registration.handlerType as Type<
+            ZLinkSpotPacketHandler<ZLinkSpot, unknown> |
+            ZLinkSpotRequestHandler<ZLinkSpot, unknown, unknown>
+          >,
+          this.options.providerResolver
+        );
+        response = await handler.handle(activation.spot, payload, {
+          channelName: context.channelName,
+          contentType: context.contentType,
+          packetName: packetName!,
+          metadata: zlinkMessageMetadata({})
+        });
+      }
+    };
     try {
-      const applicationClaim = activation.meshName === undefined
-        ? undefined
-        : this.options.claimApplicationWork?.(activation.meshName);
-      try {
-        await activation.serial.execute(async () => {
-          // Decode only after the Spot has acquired both application admission
-          // and its execution authority.
-          const payload = decodePayload();
-          for (const registration of registrations) {
-            const handler = await resolveLifecycleHandler(
-              activation.spot,
-              registration.handlerType as Type<
-                ZLinkSpotPacketHandler<ZLinkSpot, unknown> |
-                ZLinkSpotRequestHandler<ZLinkSpot, unknown, unknown>
-              >,
-              this.options.providerResolver
-            );
-            response = await handler.handle(activation.spot, payload, {
-              channelName: context.channelName,
-              contentType: context.contentType,
-              packetName: packetName!,
-              metadata: zlinkMessageMetadata({})
-            });
-          }
-        }, context.workOptions);
-      } finally {
-        applicationClaim?.close();
+      if (activation.serial.isCurrentTurn) {
+        if (returnResponse) {
+          throw createInternalFrameworkException(
+            ZLinkFrameworkInternalErrorKind.InvalidOperation,
+            `Spot '${spotId}' cannot await a request to its current serial turn.`
+          );
+        }
+        detached = true;
+        try {
+          await activation.serial.postOneWay(
+            async () => {
+              try {
+                await runHandler();
+              } finally {
+                applicationClaim?.close();
+              }
+            },
+            (error) => this.reportFailure(spotId, packetName, context, false, error),
+            context.workOptions
+          );
+        } catch (error) {
+          detached = false;
+          throw error;
+        }
+      } else {
+        await activation.serial.execute(runHandler, context.workOptions);
       }
     } catch (error) {
-      this.options.dispatchErrors?.report({
-        surface: ZLinkDispatchErrorSurface.SpotRoute,
-        messageKind: returnResponse ? ZLinkDispatchMessageKind.Request : ZLinkDispatchMessageKind.Send,
-        reason: ZLinkDispatchErrorReason.HandlerException,
-        action: returnResponse ? ZLinkDispatchErrorAction.FailCaller : ZLinkDispatchErrorAction.Drop,
-        packetName,
-        channelName: context.channelName,
-        spotId: String(spotId),
-        error
-      });
+      this.reportFailure(spotId, packetName, context, returnResponse, error);
       throw error;
+    } finally {
+      if (!detached) applicationClaim?.close();
     }
     return returnResponse ? response : undefined;
+  }
+
+  private reportFailure(
+    spotId: RoutingId,
+    packetName: string | undefined,
+    context: ZLinkRoutedSpotPacketContext,
+    returnResponse: boolean,
+    error: unknown
+  ): void {
+    this.options.dispatchErrors?.report({
+      surface: ZLinkDispatchErrorSurface.SpotRoute,
+      messageKind: returnResponse ? ZLinkDispatchMessageKind.Request : ZLinkDispatchMessageKind.Send,
+      reason: error instanceof ZLinkFrameworkException
+        && internalFrameworkErrorKind(error) === ZLinkFrameworkInternalErrorKind.WorkerQueueFull
+        ? ZLinkDispatchErrorReason.Backpressure
+        : ZLinkDispatchErrorReason.HandlerException,
+      action: returnResponse ? ZLinkDispatchErrorAction.FailCaller : ZLinkDispatchErrorAction.Drop,
+      packetName,
+      channelName: context.channelName,
+      spotId: String(spotId),
+      error
+    });
   }
 
   private reportMissing(

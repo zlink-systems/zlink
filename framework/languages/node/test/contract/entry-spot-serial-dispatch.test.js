@@ -5,6 +5,9 @@ const test = require('node:test');
 
 const zlink = require('@zlink-systems/zlink');
 const framework = require('../../packages/framework/dist/internal');
+const {
+  ZLinkRoutedSpotPacketDispatch
+} = require('../../packages/framework/dist/runtime/spots/spot-routed-spot-packet-dispatch');
 
 class PlayerActor {
   constructor(context) {
@@ -399,6 +402,68 @@ test('same-Spot awaited requests fail before transport while self-send remains F
 
   await outbound.sendToSpot('same-spot', { requestId: 'send', marker: 'self-send' }).submit();
   assert.deepEqual(submissions.map(({ kind }) => kind), ['send']);
+});
+
+test('routed local self-send queues behind the current turn while self-request fails before dispatch', async () => {
+  const events = [];
+  let completeSelf;
+  const selfCompleted = new Promise((resolve) => { completeSelf = resolve; });
+  class SelfPacketHandler {
+    async handle(_spot, message) {
+      events.push(`handler:${message.kind}`);
+      completeSelf();
+      return 'reply';
+    }
+  }
+  const serial = new framework.ZLinkSpotSerialExecutor(true, 'same-spot');
+  const spot = {};
+  const dispatch = new ZLinkRoutedSpotPacketDispatch({
+    resolveActivation: () => ({
+      spotId: 'same-spot',
+      spot,
+      serial,
+      handlers: {
+        snapshot: () => [{
+          kind: 'packet',
+          packetName: 'SelfPacket',
+          handlerType: SelfPacketHandler
+        }]
+      }
+    })
+  });
+  let earlier;
+  await serial.execute(async () => {
+    events.push('turn:start');
+    earlier = serial.post(() => events.push('queued:earlier'));
+    await dispatch.send('same-spot', 'SelfPacket', { kind: 'send' }, {
+      channelName: 'test'
+    });
+    events.push('turn:send-admitted');
+    await assert.rejects(
+      dispatch.request('same-spot', 'SelfPacket', { kind: 'request' }, {
+        channelName: 'test'
+      }),
+      (error) => error instanceof framework.ZLinkFrameworkException
+        && error.kind === framework.ZLinkFrameworkErrorKind.InvalidOperation
+    );
+    events.push('turn:request-rejected');
+  });
+  await earlier;
+  await Promise.race([
+    selfCompleted,
+    new Promise((_, reject) => setTimeout(
+      () => reject(new Error('FIFO self-send was not dispatched.')),
+      1_000
+    ))
+  ]);
+
+  assert.deepEqual(events, [
+    'turn:start',
+    'turn:send-admitted',
+    'turn:request-rejected',
+    'queued:earlier',
+    'handler:send'
+  ]);
 });
 
 test('yield request from an entry turn is rejected because Entry forbids Yield', async () => {

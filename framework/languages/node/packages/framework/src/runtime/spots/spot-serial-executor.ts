@@ -106,6 +106,29 @@ export class ZLinkSpotSerialExecutor {
   }
 
   /**
+   * Admits a one-way turn and returns after the bounded queue owns it. Handler
+   * completion is reported through `onError` and never blocks the sender turn.
+   */
+  async postOneWay(
+    operation: () => Promise<unknown> | unknown,
+    onError: (error: unknown) => void,
+    workOptions: ZLinkSerialWorkOptions = {}
+  ): Promise<void> {
+    this.lastActivityAtMs = Date.now();
+    let barrierClaim: ZLinkExecutionBarrierClaim | undefined;
+    try {
+      barrierClaim = await this.executionBarrier?.enter();
+      this.scheduler.submitDetached(operation, onError, {
+        ...workOptions,
+        lane: workOptions.lane ?? 'application'
+      }, barrierClaim);
+    } catch (error) {
+      barrierClaim?.release();
+      throw error;
+    }
+  }
+
+  /**
    * Enqueues the framework-owned turn that completes a boundary while normal
    * application admission remains sealed. Callers must release the matching
    * barrier seal after this turn finishes.

@@ -108,11 +108,32 @@ export class ZLinkBoundedSerialScheduler {
     options: ZLinkSerialWorkOptions = {},
     context?: unknown
   ): Promise<T> {
+    try {
+      return this.admit(operation, options, context);
+    } catch (error) {
+      return Promise.reject(error);
+    }
+  }
+
+  submitDetached<T>(
+    operation: () => Promise<T> | T,
+    onError: (error: unknown) => void,
+    options: ZLinkSerialWorkOptions = {},
+    context?: unknown
+  ): void {
+    void this.admit(operation, options, context).catch(onError);
+  }
+
+  private admit<T>(
+    operation: () => Promise<T> | T,
+    options: ZLinkSerialWorkOptions,
+    context?: unknown
+  ): Promise<T> {
     const lane = options.lane ?? 'application';
     const byteCost = this.byteCost(options);
     const target = lane === 'application' ? this.application : this.lifecycle;
     if (!reserve(target, byteCost)) {
-      return Promise.reject(this.capacityError(lane));
+      throw this.capacityError(lane);
     }
 
     let settled = false;
