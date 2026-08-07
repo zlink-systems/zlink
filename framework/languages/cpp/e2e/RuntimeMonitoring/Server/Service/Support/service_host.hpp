@@ -128,6 +128,8 @@ inline int run_service_host (int argc, char **argv)
               .map_post<create_spot_handler_t> ("/spot/create")
               .map_post<create_actor_handler_t> ("/actor/create")
               .map_post<delete_actor_handler_t> ("/actor/delete")
+              .map_get<exact_location_object_handler_t> ("/location/object")
+              .map_get<list_location_objects_handler_t> ("/location/objects")
               .map_post<create_subject_handler_t> (
                 "/admin/subject/create")
               .map_post<close_subject_handler_t> (

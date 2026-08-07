@@ -82,6 +82,30 @@ class live_location_reader_t final
         return _store->read_authority (std::move (key));
     }
 
+    task_t<bool> owner_available (const location_owner_token_t &owner)
+    {
+        auto result = _store->read_owner_lease (owner.owner_id).result ();
+        if (!result.has_value ()) {
+            return task_t<bool> (detail::propagate_failure<bool> (
+              result, "owner lease lookup failed"));
+        }
+        const auto *found = std::get_if<owner_lease_found_t> (&result.value ());
+        const auto available = found != nullptr
+                               && found->token.lease_generation
+                                    == owner.lease_generation
+                               && found->lease_expires_at > found->store_now;
+        return completed (available);
+    }
+
+    task_t<authority_scan_result_t>
+    list_authorities (std::string prefix,
+                      std::optional<authority_scan_cursor_t> cursor,
+                      std::size_t limit)
+    {
+        return _store->list_authorities (
+          std::move (prefix), std::move (cursor), limit);
+    }
+
   private:
     template <typename T> static task_t<T> completed (T value)
     {

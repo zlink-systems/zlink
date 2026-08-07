@@ -580,6 +580,77 @@ class store_location_runtime_query_t final : public location_runtime_query_t
         return completed (page_in_memory (std::move (result), page));
     }
 
+    task_t<std::optional<location_object_entry_t>>
+    find_actor_location (actor_id_t actor_id) override
+    {
+        return find_object (
+          actor_authority_key (actor_id.value ()), std::string (actor_id.value ()));
+    }
+
+    task_t<std::optional<location_object_entry_t>>
+    find_spot_location (spot_id_t spot_id) override
+    {
+        zlink::framework::detail::require_spot_id (spot_id);
+        auto key = spot_authority_key (spot_id);
+        return find_object (std::move (key), std::move (spot_id));
+    }
+
+    task_t<location_page_t<location_object_entry_t>>
+    list_object_locations (location_object_filter_t filter,
+                           location_page_request_t page = {}) override
+    {
+        validate_page (page);
+        const auto authority_kind =
+          filter.object_kind == location_object_kind_t::actor ? 'a' : 's';
+        if (filter.object_kind != location_object_kind_t::actor
+            && filter.object_kind != location_object_kind_t::user_spot
+            && filter.object_kind != location_object_kind_t::instance_spot) {
+            throw std::invalid_argument ("location object kind is invalid");
+        }
+        std::optional<authority_scan_cursor_t> cursor;
+        if (page.continuation_token)
+            cursor.emplace (*page.continuation_token);
+        location_page_t<location_object_entry_t> output;
+        output.items.reserve (static_cast<std::size_t> (page.page_size));
+        do {
+            const auto remaining = static_cast<std::size_t> (page.page_size)
+                                   - output.items.size ();
+            auto read = _store
+                          ->list_authorities (
+                            std::string ("zla1:") + authority_kind + ":",
+                            std::move (cursor), remaining)
+                          .result ();
+            if (!read.has_value ())
+                return unavailable<location_page_t<location_object_entry_t>> (
+                  "Location Store object scan failed");
+            const auto *stored_page =
+              std::get_if<authority_page_t> (&read.value ());
+            if (stored_page == nullptr)
+                return unavailable<location_page_t<location_object_entry_t>> (
+                  "Location Store object scan cursor expired");
+            for (const auto &item : stored_page->items) {
+                const auto decoded =
+                  authority_key_codec_detail::decode_authority_key (item.key.value);
+                if (!decoded || decoded->kind != authority_kind
+                    || !matches (item.snapshot, filter))
+                    continue;
+                auto projected = project_object (decoded->object_id, item.snapshot);
+                if (!projected.has_value ())
+                    return unavailable<location_page_t<location_object_entry_t>> (
+                      "Location Store owner lease lookup failed");
+                output.items.push_back (std::move (projected.value ()));
+            }
+            cursor = stored_page->next_cursor;
+        } while (output.items.size () < static_cast<std::size_t> (page.page_size)
+                 && cursor.has_value ());
+        if (cursor)
+            output.continuation_token = std::string (cursor->encoded ());
+        if (encoded_size_upper_bound (output) > 4u * 1024u * 1024u)
+            return unavailable<location_page_t<location_object_entry_t>> (
+              "Location Store encoded object page exceeds 4 MiB");
+        return completed (std::move (output));
+    }
+
   private:
     template <typename T> static task_t<T> completed (T value)
     {
@@ -591,6 +662,104 @@ class store_location_runtime_query_t final : public location_runtime_query_t
     location_runtime_t *_runtime;
     location_options_t _options;
     std::shared_ptr<actor_location_observer_t> _actor_locations;
+
+    task_t<std::optional<location_object_entry_t>>
+    find_object (authority_key_t key, std::string global_id)
+    {
+        auto read = _store->read_authority (std::move (key)).result ();
+        if (!read.has_value ())
+            return unavailable<std::optional<location_object_entry_t>> (
+              "Location Store object lookup failed");
+        const auto *snapshot = std::get_if<authority_snapshot_t> (&read.value ());
+        if (snapshot == nullptr)
+            return completed (std::optional<location_object_entry_t>{});
+        auto projected = project_object (std::move (global_id), *snapshot);
+        if (!projected.has_value ())
+            return unavailable<std::optional<location_object_entry_t>> (
+              "Location Store owner lease lookup failed");
+        return completed (
+          std::optional<location_object_entry_t>{std::move (projected.value ())});
+    }
+
+    std::optional<location_object_entry_t>
+    project_object (std::string global_id,
+                    const authority_snapshot_t &snapshot)
+    {
+        if (snapshot.allocation.state == placement_allocation_state_t::reserved) {
+            return location_object_entry_t{
+              .global_id = std::move (global_id),
+              .object_generation = snapshot.object_generation,
+              .mesh_name = snapshot.allocation.target.mesh_name,
+              .node_rid = zlink::routing_id_t::from (
+                std::string (snapshot.allocation.target.node_rid.value ())),
+              .state = location_object_state_t::creating,
+              .stable_type = snapshot.allocation.stable_type};
+        }
+        auto owner = _store->owner_available (snapshot.owner).result ();
+        if (!owner.has_value ())
+            return std::nullopt;
+        return location_object_entry_t{
+          .global_id = std::move (global_id),
+          .object_generation = snapshot.object_generation,
+          .mesh_name = snapshot.allocation.target.mesh_name,
+          .node_rid = zlink::routing_id_t::from (
+            std::string (snapshot.allocation.target.node_rid.value ())),
+          .state = owner.value () ? location_object_state_t::ready
+                                  : location_object_state_t::unavailable,
+          .stable_type = snapshot.allocation.stable_type};
+    }
+
+    static std::size_t encoded_size_upper_bound (
+      const location_page_t<location_object_entry_t> &page)
+    {
+        constexpr std::size_t fixed_page_bytes = 256;
+        constexpr std::size_t fixed_entry_bytes = 256;
+        auto size = fixed_page_bytes;
+        if (page.continuation_token)
+            size += page.continuation_token->size () * 6;
+        for (const auto &entry : page.items) {
+            size += fixed_entry_bytes;
+            size += entry.global_id.size () * 6;
+            size += entry.mesh_name.size () * 6;
+            size += entry.stable_type.size () * 6;
+            size += entry.node_rid.to_string ().size () * 6;
+        }
+        return size;
+    }
+
+    static bool matches (const authority_snapshot_t &snapshot,
+                         const location_object_filter_t &filter)
+    {
+        const auto expected_kind = [&] {
+            switch (filter.object_kind) {
+                case location_object_kind_t::actor:
+                    return placement_object_kind_t::actor;
+                case location_object_kind_t::user_spot:
+                    return placement_object_kind_t::user_spot;
+                case location_object_kind_t::instance_spot:
+                    return placement_object_kind_t::instance_spot;
+            }
+            return placement_object_kind_t::actor;
+        } ();
+        return snapshot.allocation.object_kind == expected_kind
+               && (!filter.stable_type
+                   || snapshot.allocation.stable_type == *filter.stable_type)
+               && (!filter.mesh_name
+                   || snapshot.allocation.target.mesh_name == *filter.mesh_name);
+    }
+
+    static void validate_page (const location_page_request_t &page)
+    {
+        if (page.page_size < 1 || page.page_size > 1000)
+            throw std::invalid_argument (
+              "location query page size must be between 1 and 1000");
+    }
+
+    template <typename T> static task_t<T> unavailable (std::string message)
+    {
+        return task_t<T> (result_t<T>::failure (
+          framework_error_kind_t::unavailable, std::move (message)));
+    }
 
     static bool matches (const location_topology_entry_t &entry,
                          const location_topology_filter_t &filter)

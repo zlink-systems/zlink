@@ -57,7 +57,9 @@ required_paths=(
     include/zlink/framework/contracts/channels/call.hpp
     include/zlink/framework/contracts/spots/spot.hpp
     include/zlink/framework/contracts/spots/spot_identity.hpp
+    include/zlink/framework/contracts/locations/diagnostics.hpp
     include/zlink/framework/contracts/locations/resolvers.hpp
+    include/zlink/framework/contracts/locations/runtime_query.hpp
     include/zlink/framework/contracts/streams/stream.hpp
     include/zlink/framework/contracts/workers/worker.hpp
     include/zlink/framework/contracts/configuration/endpoint_connections.hpp
@@ -129,6 +131,9 @@ cat > "$CONSUMER_SRC/main.cpp" <<'EOF'
 #include <zlink/stream_connector.hpp>
 
 #include <chrono>
+#include <optional>
+#include <type_traits>
+#include <utility>
 
 using zlink::framework::message_flow_log_mode_t;
 
@@ -139,6 +144,37 @@ static_assert (static_cast<int> (message_flow_log_mode_t::detailed) == 3);
 static_assert (requires (zlink::framework::stream_send_call_t &call) {
     call.timeout (std::chrono::milliseconds{1});
 });
+static_assert (
+  static_cast<int> (zlink::framework::location_object_kind_t::actor) == 0);
+static_assert (
+  static_cast<int> (zlink::framework::location_object_kind_t::user_spot) == 1);
+static_assert (
+  static_cast<int> (zlink::framework::location_object_kind_t::instance_spot) == 2);
+static_assert (
+  static_cast<int> (zlink::framework::location_object_state_t::creating) == 0);
+static_assert (
+  static_cast<int> (zlink::framework::location_object_state_t::ready) == 1);
+static_assert (
+  static_cast<int> (zlink::framework::location_object_state_t::unavailable) == 2);
+static_assert (
+  std::is_same_v<decltype (std::declval<zlink::framework::location_runtime_query_t &> ()
+                             .find_actor_location (
+                               std::declval<zlink::framework::actor_id_t> ())),
+                 zlink::framework::task_t<std::optional<
+                   zlink::framework::location_object_entry_t>>>);
+static_assert (
+  std::is_same_v<decltype (std::declval<zlink::framework::location_runtime_query_t &> ()
+                             .find_spot_location (
+                               std::declval<zlink::framework::spot_id_t> ())),
+                 zlink::framework::task_t<std::optional<
+                   zlink::framework::location_object_entry_t>>>);
+static_assert (
+  std::is_same_v<decltype (std::declval<zlink::framework::location_runtime_query_t &> ()
+                             .list_object_locations (
+                               std::declval<zlink::framework::location_object_filter_t> (),
+                               std::declval<zlink::framework::location_page_request_t> ())),
+                 zlink::framework::task_t<zlink::framework::location_page_t<
+                   zlink::framework::location_object_entry_t>>>);
 
 int main ()
 {
@@ -149,6 +185,9 @@ int main ()
     zlink::framework::serializer_registry_t serializers;
     zlink::framework::service_collection_t services;
     auto provider = services.build_provider ();
+    const zlink::framework::location_object_filter_t actor_filter{
+      .object_kind = zlink::framework::location_object_kind_t::actor};
+    (void) actor_filter;
     struct probe_t
     {
     };

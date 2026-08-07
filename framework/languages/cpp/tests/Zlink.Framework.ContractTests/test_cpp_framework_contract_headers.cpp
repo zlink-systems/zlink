@@ -603,6 +603,25 @@ static_assert (
                  zlink::framework::task_t<
                    zlink::framework::location_page_t<
                      zlink::framework::location_service_summary_t>>>);
+static_assert (
+  std::is_same_v<decltype (std::declval<zlink::framework::location_runtime_query_t &> ()
+                             .find_actor_location (
+                               std::declval<zlink::framework::actor_id_t> ())),
+                 zlink::framework::task_t<
+                   std::optional<zlink::framework::location_object_entry_t>>>);
+static_assert (
+  std::is_same_v<decltype (std::declval<zlink::framework::location_runtime_query_t &> ()
+                             .find_spot_location (
+                               std::declval<zlink::framework::spot_id_t> ())),
+                 zlink::framework::task_t<
+                   std::optional<zlink::framework::location_object_entry_t>>>);
+static_assert (
+  std::is_same_v<decltype (std::declval<zlink::framework::location_runtime_query_t &> ()
+                             .list_object_locations (
+                               std::declval<zlink::framework::location_object_filter_t> (),
+                               std::declval<zlink::framework::location_page_request_t> ())),
+                 zlink::framework::task_t<zlink::framework::location_page_t<
+                   zlink::framework::location_object_entry_t>>>);
 static_assert (has_location_readiness<zlink::framework::location_readiness_t>);
 static_assert (
   std::is_same_v<decltype (std::declval<zlink::framework::location_readiness_t &> ()

@@ -47,6 +47,8 @@ namespace
 using zlink::framework::actor_location_t;
 using zlink::framework::location_kind_t;
 using zlink::framework::location_options_t;
+using zlink::framework::location_object_entry_t;
+using zlink::framework::location_object_filter_t;
 using zlink::framework::location_owner_token_t;
 using zlink::framework::location_page_t;
 using zlink::framework::location_page_request_t;
@@ -137,6 +139,8 @@ void seed_mesh_node (
 class test_location_repository_t : public zlink::framework::location_repository_t
 {
   public:
+    bool fail_authority_queries = false;
+
     void set_authority (std::string key, zlink::framework::authority_snapshot_t snapshot)
     {
         authorities.insert_or_assign (std::move (key), std::move (snapshot));
@@ -266,6 +270,12 @@ class test_location_repository_t : public zlink::framework::location_repository_
     read_authority (zlink::framework::authority_key_t key,
                     std::stop_token cancellation = {}) override
     {
+        if (fail_authority_queries) {
+            return zlink::framework::task_t<zlink::framework::authority_read_result_t> (
+              zlink::framework::result_t<zlink::framework::authority_read_result_t>::failure (
+                zlink::framework::framework_error_kind_t::internal_failure,
+                "injected authority read failure"));
+        }
         if (key.value.starts_with ("zla1:a:"))
             resolve_actor_count.fetch_add (1, std::memory_order_relaxed);
         if (const auto found = authorities.find (key.value); found != authorities.end ()) {
@@ -298,6 +308,12 @@ class test_location_repository_t : public zlink::framework::location_repository_
       std::size_t limit,
       std::stop_token cancellation = {}) override
     {
+        if (fail_authority_queries) {
+            return zlink::framework::task_t<zlink::framework::authority_scan_result_t> (
+              zlink::framework::result_t<zlink::framework::authority_scan_result_t>::failure (
+                zlink::framework::framework_error_kind_t::internal_failure,
+                "injected authority scan failure"));
+        }
         return _inner.list_authorities (
           std::move (prefix), std::move (cursor), limit, cancellation);
     }
@@ -466,6 +482,25 @@ class fake_location_runtime_query_t final : public location_runtime_query_t
           .items = {location_service_summary_t{.mesh_name = "mesh-a",
                                                .total_count = 1,
                                                .ready_count = 1}}});
+    }
+
+    zlink::framework::task_t<std::optional<location_object_entry_t>>
+    find_actor_location (zlink::framework::actor_id_t) override
+    {
+        return completed (std::optional<location_object_entry_t>{});
+    }
+
+    zlink::framework::task_t<std::optional<location_object_entry_t>>
+    find_spot_location (zlink::framework::spot_id_t) override
+    {
+        return completed (std::optional<location_object_entry_t>{});
+    }
+
+    zlink::framework::task_t<location_page_t<location_object_entry_t>>
+    list_object_locations (location_object_filter_t,
+                           location_page_request_t = {}) override
+    {
+        return completed (location_page_t<location_object_entry_t>{});
     }
 
   private:
@@ -1973,6 +2008,179 @@ TEST (ZLinkFrameworkStoreLocationResolvers, RuntimeQueryProjectsMeshNodeDescript
     ASSERT_EQ (1u, summaries.items.size ());
     EXPECT_EQ (2u, summaries.items.front ().total_count);
     EXPECT_EQ (2u, summaries.items.front ().ready_count);
+}
+
+TEST (ZLinkFrameworkStoreLocationResolvers, RuntimeQueryProjectsExactAndPagedObjects)
+{
+    using namespace zlink::framework;
+    in_memory_location_repository_t store;
+    const auto owner = claim_test_owner (store, "owner-objects");
+    const auto unavailable_owner =
+      claim_test_owner (store, "owner-unavailable");
+    const auto publish_node = [&] (const location_owner_token_t &token,
+                                   const std::string &rid) {
+        const auto written = store.update_mesh_node (
+          mesh_node_descriptor_t{
+            .mesh_name = "object-mesh",
+            .rid = zlink::routing_id_t::from (rid),
+            .lifecycle_generation = 1,
+            .descriptor_revision = 1,
+            .endpoint = "tcp://127.0.0.1:7001",
+            .application_version = 1,
+            .object_capabilities = {
+              {placement_object_kind_t::actor, "player",
+               maintenance_policy_kind_t::disabled, false, 0},
+              {placement_object_kind_t::user_spot, "room",
+               maintenance_policy_kind_t::disabled, false, 0},
+              {placement_object_kind_t::instance_spot, "lobby",
+               maintenance_policy_kind_t::disabled, false, 0}},
+            .object_role = object_role_t::server,
+            .capacity = {
+              .actors = {.limit = 8},
+              .spots = {.limit = 8},
+              .spot_types = {
+                {placement_object_kind_t::user_spot, "room", {.limit = 8}},
+                {placement_object_kind_t::instance_spot, "lobby", {.limit = 8}}}},
+            .activation_concurrency = {.limit = 8},
+            .state = framework_runtime_state_t::serving,
+            .security_identity = "test",
+            .owner_id = token.owner_id,
+            .lease_generation = token.lease_generation},
+          location_write_intent_t::new_claim).result ().value ();
+        ASSERT_EQ (location_write_status_t::stored, written.status);
+    };
+    publish_node (owner, "node-objects");
+    publish_node (unavailable_owner, "node-unavailable");
+
+    const auto reserve = [&] (placement_object_kind_t kind,
+                              std::string id,
+                              std::string stable_type,
+                              const location_owner_token_t &token,
+                              std::string rid,
+                              bool commit) {
+        object_reserve_request_t request{
+          .key = {kind, std::move (id)},
+          .intent = {.stable_type = stable_type},
+          .target = {.mesh_name = "object-mesh",
+                     .node_rid = node_rid_t::from_string (std::move (rid)),
+                     .node_lifecycle_generation = 1,
+                     .owner = token},
+          .creating_payload = {std::byte{0x01}},
+          .capacity_bundle = {
+            .actor_slots = kind == placement_object_kind_t::actor ? 1u : 0u,
+            .spot_slots = kind == placement_object_kind_t::actor ? 0u : 1u,
+            .spot_type = kind == placement_object_kind_t::actor
+                           ? std::nullopt
+                           : std::optional<spot_type_capacity_delta_t>{
+                               {kind, std::move (stable_type), 1}}}};
+        const auto reserved = store.reserve (request).result ().value ();
+        const auto *value = std::get_if<object_reserved_t> (&reserved);
+        EXPECT_NE (nullptr, value);
+        if (commit && value != nullptr) {
+            const auto committed =
+              store.commit ({request.key, value->fence, {std::byte{0x02}}})
+                .result ()
+                .value ();
+            EXPECT_NE (nullptr, std::get_if<object_committed_t> (&committed));
+        }
+    };
+    reserve (placement_object_kind_t::actor, "actor-a", "player", owner,
+             "node-objects", true);
+    reserve (placement_object_kind_t::actor, "actor-b", "player", owner,
+             "node-objects", true);
+    reserve (placement_object_kind_t::user_spot, "spot-a", "room", owner,
+             "node-objects", false);
+    reserve (placement_object_kind_t::instance_spot, "instance-a", "lobby",
+             unavailable_owner, "node-unavailable", true);
+
+    location_options_t options;
+    location_runtime_t runtime (store, options, "owner-query");
+    store_location_runtime_query_t query (store, runtime, options);
+
+    const auto actor = query.find_actor_location (actor_id_t ("actor-a"))
+                         .result ()
+                         .value ();
+    ASSERT_TRUE (actor.has_value ());
+    EXPECT_EQ ("actor-a", actor->global_id);
+    EXPECT_EQ ("object-mesh", actor->mesh_name);
+    EXPECT_EQ ("node-objects", actor->node_rid.to_string ());
+    EXPECT_EQ ("player", actor->stable_type);
+    EXPECT_EQ (location_object_state_t::ready, actor->state);
+    EXPECT_FALSE (query.find_actor_location (actor_id_t ("missing"))
+                    .result ()
+                    .value ()
+                    .has_value ());
+
+    const auto spot = query.find_spot_location ("spot-a").result ().value ();
+    ASSERT_TRUE (spot.has_value ());
+    EXPECT_EQ (location_object_state_t::creating, spot->state);
+
+    const auto first = query
+                         .list_object_locations (
+                           {.object_kind = location_object_kind_t::actor},
+                           {.page_size = 1})
+                         .result ()
+                         .value ();
+    ASSERT_EQ (1u, first.items.size ());
+    ASSERT_TRUE (first.continuation_token.has_value ());
+    const auto second = query
+                          .list_object_locations (
+                            {.object_kind = location_object_kind_t::actor},
+                            {.page_size = 1,
+                             .continuation_token = first.continuation_token})
+                          .result ()
+                          .value ();
+    ASSERT_EQ (1u, second.items.size ());
+    EXPECT_FALSE (second.continuation_token.has_value ());
+
+    const auto rooms = query
+                         .list_object_locations (
+                           {.object_kind = location_object_kind_t::user_spot,
+                            .stable_type = "room",
+                            .mesh_name = "object-mesh"},
+                           {.page_size = 1})
+                         .result ()
+                         .value ();
+    ASSERT_EQ (1u, rooms.items.size ());
+    EXPECT_EQ ("spot-a", rooms.items.front ().global_id);
+
+    const auto released =
+      store.release_owner_lease (unavailable_owner).result ().value ();
+    ASSERT_NE (nullptr, std::get_if<owner_lease_released_t> (&released));
+    const auto unavailable =
+      query.find_spot_location ("instance-a").result ().value ();
+    ASSERT_TRUE (unavailable.has_value ());
+    EXPECT_EQ (location_object_state_t::unavailable, unavailable->state);
+
+    EXPECT_THROW (
+      query.list_object_locations (
+        {.object_kind = location_object_kind_t::actor}, {.page_size = 0}),
+      std::invalid_argument);
+}
+
+TEST (ZLinkFrameworkStoreLocationResolvers, RuntimeObjectQueryMapsStoreFailureToUnavailable)
+{
+    test_location_repository_t store;
+    location_options_t options;
+    location_runtime_t runtime (store, options, "owner-query-failure");
+    store_location_runtime_query_t query (store, runtime, options);
+    store.fail_authority_queries = true;
+
+    const auto exact =
+      query.find_actor_location (zlink::framework::actor_id_t ("actor-a"))
+        .result ();
+    ASSERT_FALSE (exact.has_value ());
+    EXPECT_EQ (zlink::framework::framework_error_kind_t::unavailable,
+               exact.error_kind ());
+
+    const auto page = query
+                        .list_object_locations (
+                          {.object_kind =
+                             zlink::framework::location_object_kind_t::actor})
+                        .result ();
+    ASSERT_FALSE (page.has_value ());
+    EXPECT_EQ (zlink::framework::framework_error_kind_t::unavailable,
+               page.error_kind ());
 }
 
 TEST (ZLinkFrameworkStoreLocationResolvers, AutoConnectHostPublishesAndCleansLocalPeers)

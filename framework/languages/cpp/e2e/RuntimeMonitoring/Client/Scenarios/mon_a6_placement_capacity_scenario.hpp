@@ -23,6 +23,20 @@ inline nlohmann::json post_json (const std::string &base_url,
     return nlohmann::json::parse (result.value ().body);
 }
 
+inline nlohmann::json get_json (const std::string &base_url,
+                                const std::string &path,
+                                int &status)
+{
+    auto http = zlink::http_client::client_t::create ()
+                  .base_url (base_url)
+                  .timeout (std::chrono::milliseconds (3000))
+                  .build ();
+    const auto result = http.get (path).submit_raw ().result ();
+    ensure (result.has_value (), "MON-A6 HTTP query did not complete");
+    status = result.value ().status;
+    return nlohmann::json::parse (result.value ().body);
+}
+
 inline void wait_placement (const std::string &base_url,
                             std::size_t actors,
                             std::size_t spots,
@@ -89,6 +103,25 @@ inline void run_mon_a6_placement_capacity_scenario (const client_options_t &opti
             "MON-A6 first Spot creation failed");
     wait_placement (options.service_url, 1, 1, true);
 
+    const auto actor_location = get_json (
+      options.service_url,
+      "/location/object?kind=actor&id=" + actor_one_id,
+      status);
+    ensure (status == 200 && actor_location.value ("globalId", "") == actor_one_id
+              && actor_location.value ("state", "") == "ready"
+              && actor_location.value ("stableType", "") == monitoring_actor_type,
+            "MON-A6 exact Actor location query mismatch: "
+              + actor_location.dump ());
+    const auto spot_location = get_json (
+      options.service_url,
+      "/location/object?kind=spot&id=" + spot_one_id,
+      status);
+    ensure (status == 200 && spot_location.value ("globalId", "") == spot_one_id
+              && spot_location.value ("state", "") == "ready"
+              && spot_location.value ("stableType", "") == spot_channel,
+            "MON-A6 exact Spot location query mismatch: "
+              + spot_location.dump ());
+
     std::string actor_fill_id;
     for (int index = 0; index < 64; ++index) {
         const auto candidate = "mon-a6-fill-actor-" + std::to_string (index);
@@ -122,6 +155,23 @@ inline void run_mon_a6_placement_capacity_scenario (const client_options_t &opti
     }
     ensure (!spot_fill_id.empty (), "MON-A6 could not place the second Spot on svc-a");
     wait_placement (options.service_url, 2, 2, false);
+
+    const auto actor_page_one = get_json (
+      options.service_url,
+      "/location/objects?kind=actor&pageSize=1",
+      status);
+    ensure (status == 200 && actor_page_one.at ("items").size () == 1
+              && actor_page_one.contains ("continuationToken"),
+            "MON-A6 bounded Actor page did not return a continuation token: "
+              + actor_page_one.dump ());
+    const auto actor_page_two = get_json (
+      options.service_url,
+      "/location/objects?kind=actor&pageSize=1&continuationToken="
+        + actor_page_one.at ("continuationToken").get<std::string> (),
+      status);
+    ensure (status == 200 && actor_page_two.at ("items").size () == 1,
+            "MON-A6 Actor continuation page mismatch: "
+              + actor_page_two.dump ());
 
     std::string actor_recovery_id;
     std::string actor_other_id;

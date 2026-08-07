@@ -251,6 +251,10 @@ int main ()
       read_file (include_root / "zlink/framework/contracts/streams/stream.hpp");
     const auto rows_hpp =
       read_file (include_root / "zlink/framework/contracts/locations/rows.hpp");
+    const auto location_diagnostics_hpp =
+      read_file (include_root / "zlink/framework/contracts/locations/diagnostics.hpp");
+    const auto location_runtime_query_hpp =
+      read_file (include_root / "zlink/framework/contracts/locations/runtime_query.hpp");
     const auto location_records_hpp =
       read_file (root / "framework/src/runtime/locations/location_records.hpp");
     const auto error_hpp =
@@ -853,6 +857,25 @@ int main ()
           execution_hpp.find (removed) == std::string::npos,
           "CPP-CONTRACT-DIAG-002",
           "dispatch execution header still exports " + removed);
+    }
+
+    /* CPP-CONTRACT-QUERY-001 — the installed location query surface includes
+     * exact Actor/Spot lookup and bounded object listing. */
+    for (const std::string required : {
+           "location_object_kind_t", "location_object_state_t",
+           "location_object_entry_t", "location_object_filter_t"}) {
+        gate.require (
+          location_diagnostics_hpp.find (required) != std::string::npos,
+          "CPP-CONTRACT-QUERY-001",
+          "location diagnostics header is missing " + required);
+    }
+    for (const std::string required : {
+           "find_actor_location", "find_spot_location",
+           "list_object_locations"}) {
+        gate.require (
+          location_runtime_query_hpp.find (required) != std::string::npos,
+          "CPP-CONTRACT-QUERY-001",
+          "location runtime query header is missing " + required);
     }
     gate.require (
       execution_hpp.find ("std::optional<logger_t<>> diagnostics_logger")

@@ -709,6 +709,122 @@ inline const char *monitoring_error_kind_name (
     return "internal_failure";
 }
 
+inline const char *location_object_state_name (
+  zlink::framework::location_object_state_t state)
+{
+    using state_t = zlink::framework::location_object_state_t;
+    switch (state) {
+        case state_t::creating:
+            return "creating";
+        case state_t::ready:
+            return "ready";
+        case state_t::unavailable:
+            return "unavailable";
+    }
+    return "unavailable";
+}
+
+inline nlohmann::json location_object_json (
+  const zlink::framework::location_object_entry_t &entry)
+{
+    return {{"globalId", entry.global_id},
+            {"objectGeneration", entry.object_generation},
+            {"meshName", entry.mesh_name},
+            {"nodeRid", entry.node_rid.to_string ()},
+            {"state", location_object_state_name (entry.state)},
+            {"stableType", entry.stable_type}};
+}
+
+class exact_location_object_handler_t
+{
+  public:
+    using dependency_types = zlink::framework::dependency_list_t<
+      zlink::framework::location_runtime_query_t>;
+
+    explicit exact_location_object_handler_t (
+      zlink::framework::location_runtime_query_t &query) :
+        _query (query)
+    {
+    }
+
+    zlink::framework::http_response_t
+    handle (const zlink::framework::http_request_t &request)
+    {
+        const auto kind = request.query_values.at ("kind");
+        const auto id = request.query_values.at ("id");
+        auto result = kind == "actor"
+                        ? _query
+                            .find_actor_location (
+                              zlink::framework::actor_id_t (id))
+                            .result ()
+                        : _query.find_spot_location (id).result ();
+        if (!result) {
+            return {.status = 503,
+                    .body = nlohmann::json{
+                      {"error", monitoring_error_kind_name (result.error_kind ())}}
+                              .dump ()};
+        }
+        if (!result.value ())
+            return {.status = 404, .body = R"({"status":"not-found"})"};
+        return {.body = location_object_json (*result.value ()).dump ()};
+    }
+
+  private:
+    zlink::framework::location_runtime_query_t &_query;
+};
+
+class list_location_objects_handler_t
+{
+  public:
+    using dependency_types = zlink::framework::dependency_list_t<
+      zlink::framework::location_runtime_query_t>;
+
+    explicit list_location_objects_handler_t (
+      zlink::framework::location_runtime_query_t &query) :
+        _query (query)
+    {
+    }
+
+    zlink::framework::http_response_t
+    handle (const zlink::framework::http_request_t &request)
+    {
+        const auto kind_name = request.query_values.at ("kind");
+        const auto kind = kind_name == "actor"
+                            ? zlink::framework::location_object_kind_t::actor
+                          : kind_name == "user_spot"
+                            ? zlink::framework::location_object_kind_t::user_spot
+                            : zlink::framework::location_object_kind_t::instance_spot;
+        zlink::framework::location_page_request_t page;
+        if (const auto found = request.query_values.find ("pageSize");
+            found != request.query_values.end ()) {
+            page.page_size = std::stoi (found->second);
+        }
+        if (const auto found = request.query_values.find ("continuationToken");
+            found != request.query_values.end ()) {
+            page.continuation_token = found->second;
+        }
+        auto result = _query
+                        .list_object_locations ({.object_kind = kind}, page)
+                        .result ();
+        if (!result) {
+            return {.status = 503,
+                    .body = nlohmann::json{
+                      {"error", monitoring_error_kind_name (result.error_kind ())}}
+                              .dump ()};
+        }
+        nlohmann::json items = nlohmann::json::array ();
+        for (const auto &entry : result.value ().items)
+            items.push_back (location_object_json (entry));
+        nlohmann::json body{{"items", std::move (items)}};
+        if (result.value ().continuation_token)
+            body["continuationToken"] = *result.value ().continuation_token;
+        return {.body = body.dump ()};
+    }
+
+  private:
+    zlink::framework::location_runtime_query_t &_query;
+};
+
 class create_actor_handler_t
 {
   public:
