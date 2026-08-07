@@ -2693,10 +2693,20 @@ export class ZLinkFrameworkRuntimeHost implements
       ...options,
       inboundDispatchBudget: this.inboundDispatchBudget,
       messageFollowReceiver: (record: ServiceMessageFollowRecord) => {
-        if (record.source.kind !== 'actor') return;
-        this.actorClientLocationResolver?.invalidateActorRouteIfMatches({
-          actorId: record.source.actor.actorId,
-          objectGeneration: record.source.actor.generation,
+        if (record.source.kind === 'actor') {
+          this.actorClientLocationResolver?.invalidateActorRouteIfMatches({
+            actorId: record.source.actor.actorId,
+            objectGeneration: record.source.actor.generation,
+            targetNodeRid: record.source.targetNodeRid,
+            targetNodeGeneration: record.source.targetNodeGeneration,
+            authorityOwnerGeneration: record.source.authorityOwnerGeneration,
+            ownerLeaseGeneration: record.source.ownerLeaseGeneration
+          });
+          return;
+        }
+        this.actorClientLocationResolver?.invalidateSpotRouteIfMatches({
+          spotId: record.source.spot.spotId,
+          objectGeneration: record.source.spot.generation,
           targetNodeRid: record.source.targetNodeRid,
           targetNodeGeneration: record.source.targetNodeGeneration,
           authorityOwnerGeneration: record.source.authorityOwnerGeneration,

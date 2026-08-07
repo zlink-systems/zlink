@@ -1112,6 +1112,88 @@ test('actor resolver rejects a stale membership when the same SPOT RID is recrea
   assert.equal(current.objectGeneration, 6n);
 });
 
+test('Spot Message Follow invalidates only resolver entries for the source owner fence', () => {
+  const resolvers = resolversFor(new internal.ZLinkInMemoryLocationStore());
+  const fence = {
+    spotId: 'spot-follow',
+    objectGeneration: 7n,
+    targetNodeRid: 'node-a',
+    targetNodeGeneration: 3n,
+    authorityOwnerGeneration: 11n,
+    ownerLeaseGeneration: 5n
+  };
+  const spotRow = {
+    meshName: 'play',
+    spotId: fence.spotId,
+    spotGeneration: fence.objectGeneration,
+    spotType: 'game',
+    ownerNodeRid: fence.targetNodeRid,
+    ownerNodeGeneration: fence.targetNodeGeneration,
+    spotKind: framework.ZLinkSpotKind.User,
+    ownerId: 'owner-a',
+    leaseGeneration: fence.ownerLeaseGeneration,
+    updatedAt: new Date(0)
+  };
+  const actorRow = {
+    meshName: 'play',
+    actorId: 'actor-follow',
+    actorType: 'player',
+    actorRef: {
+      nodeRid: fence.targetNodeRid,
+      actorId: 'actor-follow',
+      objectGeneration: 2n,
+      meshName: 'play'
+    },
+    ownerNodeRid: fence.targetNodeRid,
+    ownerNodeGeneration: fence.targetNodeGeneration,
+    spotKind: framework.ZLinkSpotKind.User,
+    spotId: fence.spotId,
+    spotGeneration: fence.objectGeneration,
+    membershipEpoch: 4n,
+    ownerId: 'owner-a',
+    leaseGeneration: fence.ownerLeaseGeneration,
+    updatedAt: new Date(0)
+  };
+  const directActorRoute = {
+    meshName: 'play',
+    actorRef: actorRow.actorRef,
+    actorType: actorRow.actorType,
+    ownerNodeGeneration: fence.targetNodeGeneration,
+    ownerId: 'owner-a',
+    ownerLeaseGeneration: fence.ownerLeaseGeneration,
+    authorityOwnerGeneration: 9n,
+    authorityStoreVersion: 'actor-version',
+    enclosingSpotRoute: {
+      routerChannelId: 'play',
+      targetNodeRid: fence.targetNodeRid,
+      spotId: fence.spotId,
+      spotKind: framework.ZLinkSpotKind.User,
+      targetSpotGeneration: fence.objectGeneration,
+      targetNodeGeneration: fence.targetNodeGeneration,
+      authorityOwnerGeneration: fence.authorityOwnerGeneration,
+      targetOwnerId: 'owner-a',
+      ownerLeaseGeneration: fence.ownerLeaseGeneration,
+      authorityStoreVersion: 'spot-version'
+    }
+  };
+  resolvers.spotRoutes.set('play\0spot-follow', { row: spotRow, expiresAtMs: Infinity });
+  resolvers.actorRoutes.set('play\0actor-follow', { row: actorRow, expiresAtMs: Infinity });
+  resolvers.directActorRoutes.set('actor-follow', { row: directActorRoute, expiresAtMs: Infinity });
+
+  assert.equal(resolvers.invalidateSpotRouteIfMatches({
+    ...fence,
+    objectGeneration: 6n
+  }), false);
+  assert.equal(resolvers.spotRoutes.size, 1);
+  assert.equal(resolvers.actorRoutes.size, 1);
+  assert.equal(resolvers.directActorRoutes.size, 1);
+
+  assert.equal(resolvers.invalidateSpotRouteIfMatches(fence), true);
+  assert.equal(resolvers.spotRoutes.size, 0);
+  assert.equal(resolvers.actorRoutes.size, 0);
+  assert.equal(resolvers.directActorRoutes.size, 0);
+});
+
 test('store location resolver returns a live remote ActorRef', async () => {
   const store = new internal.ZLinkInMemoryLocationStore();
   const runtime = runtimeFor(store, { ownerId: 'owner-a' });
