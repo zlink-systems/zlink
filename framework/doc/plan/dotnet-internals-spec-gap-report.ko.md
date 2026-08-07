@@ -8,7 +8,7 @@ title: ".NET Framework server 스펙 구현 Gap 리포트"
 - **공개 계약 기준**: 현재 worktree의 `framework/doc/framework/common/spec/`와 .NET exact interface
 - **내부 구조 기준**: 현재 worktree의 `framework/doc/framework/common/internals/` 01–12
 - **메시지 크기 계약 보정**: 2026-08-07 사용자 확인에 따라 RouteMesh ServerServer에는 Framework message-size 상한이 없다. 별도의 기본 64 KiB·startup 설정 계약은 외부 Client가 StreamNode의 Core STREAM socket으로 보내는 C→S complete message에만 적용한다. ClientServer Channel은 기존 negotiated complete-message 계약을 유지한다.
-- **구현 기준**: 전체 audit 기준은 `425b9c2a8272`, 종결 구현 checkpoint는 `3f02183cb1`이다. 중간 checkpoint와 검증 증거는 각 상세 항목에 기록한다.
+- **구현 기준**: 전체 audit 기준은 `425b9c2a8272`, 최종 .NET 검증 checkpoint는 `4607d5edc4`이다. 중간 checkpoint와 검증 증거는 각 상세 항목에 기록한다.
 - **판정 방법**: exact public declaration, production 호출 경로, 오류·수명주기·동시성·HWM 의미, service wire codec과 실제 test assertion을 차례로 대조했다. Type이나 method가 존재하는지만으로 완료 판정하지 않았다. 2차 검토는 `gpt-5.6-sol` high 독립 reviewer가 기존 판정을 반증하고 누락을 찾은 뒤, 지적된 경로를 현재 source에서 다시 확인했다.
 
 최초 audit에서 확인한 `.NET Framework server` 구현 gap은 모두 종결했다. Public exact interface와
@@ -655,12 +655,16 @@ push했다.
 |---|---|---|
 | service wire decoder fixture validator | 통과: canonical 2, malformed 6, framework error 26, malformed error 3 | 현재 canonical schema와 generated decoder fixture가 일치한다 |
 | `.NET` contract test | 통과: 76/76 | 최초에 검출한 object-location exact interface 누락을 포함해 현재 public contract가 통과한다 |
-| Framework 전체 unit test | 통과: 1,593/1,593 | timer canonical round-trip 3건을 포함한 종결 시점 전체 suite다 |
+| Framework 전체 unit test | 통과: 1,593/1,593 | timer canonical round-trip 3건과 manual object-client peer assertion 안정화 후의 종결 시점 전체 suite다 |
 | packaged-contract/clean consumer | 통과 | standalone HTTP consumer가 새 package를 사용했고 public API snapshot hash는 `c1987f4b98e4fac7a30b7d038a56ee0d20e1272d00e79bdc88d3271e3c3ab958`다 |
 | 관련 process E2E | 통과 | 각 gap의 상세 항목에 실행 log를 기록했다. 마지막 timer gate는 SpotService `logs/20260807-224140-3373181/`의 `sm-e4`다 |
 
 이 표는 `.NET` gap 종결 gate를 구분해 기록한다. 저장소 전체 언어의 aggregate contract와 전체 process
 suite를 실행했다는 뜻으로 확대하지 않는다.
+
+종결 시점 aggregate 실행은 `4607d5edc4`의 test synchronization을 포함해 1,593건 모두 통과했다. 해당
+변경 전에는 symmetric manual connection의 transient `Connecting` peer와 고정 sleep 때문에 같은 test가
+간헐적으로 실패했으며, 수정 후 해당 test 5회 반복과 `ServiceRuntimeFoundationTests` 46건도 모두 통과했다.
 
 ## 6. 구현 순서
 
