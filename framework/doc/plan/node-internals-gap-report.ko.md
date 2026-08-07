@@ -162,6 +162,7 @@ Gap 하나 또는 서로 강하게 연결된 작은 작업 묶음의 동작과 �
 | `NODE-ROUTE-004` | `a088a08fe1` | `npm run build`, `npm run typecheck`, `location-runtime.test.js` 42/42, `npm run verify:m6b-runtime` 90/90 PASS. Spot Message Follow source fence가 현재 Store resolver cache와 일치할 때 Spot route와 그 Spot에 속한 legacy·direct Actor route cache를 함께 무효화한다. Object·node·lease generation이 다른 늦은 follow는 최신 cache를 보존한다. | packed package와 실제 Spot relocation process에서 stale resolver cache 재주입 부재와 새 owner route 사용 확인 |
 | `NODE-WIRE-004` | `6db4779f23` | `npm run build`, `npm run typecheck`, `npm run verify:m6a-runtime` 38/38, `client-server-location-runtime.test.js` 24/24 PASS. RouteMesh와 ClientServer update는 같은 lifecycle에서 하위 descriptor revision 또는 동일 revision·다른 descriptor를 `ServiceWireProtocolError`로 분류하고 기존 admitted descriptor를 보존한다. 동일 revision·동일 bytes의 다른 physical candidate fencing은 별도 topology 규칙으로 유지한다. | packed package와 실제 reconnect process에서 protocol diagnostic, connection 정리와 current descriptor 보존 확인 |
 | `NODE-WIRE-003` | `c825342eba` | `npm run build`, `npm run typecheck`, `npm run verify:m6a-runtime` 39/39 PASS. Global registration의 optional maintenance wave를 raw Mesh backend descriptor가 소유하고 M6A admission의 정렬된 optional TLV 13으로 encode·decode한다. Descriptor validation은 non-empty·NUL 금지·UTF-8 255-byte 상한을 적용하며 higher-revision update에서 wave 변경을 허용한다. | packed package와 실제 multi-node update에서 wave 전달, 같은 wave placement 제외와 absent 값 상호운용 확인 |
+| `NODE-WIRE-001` | `23c57b6a65` | `npm run build`, `npm run typecheck`, `npm run verify:m6a-runtime` 39/39, 관련 contract 53/53와 public surface·HWM·ClientServer fence focused regression 3/3 PASS. RouteMesh의 public registration·live socket과 M6A descriptor에서 message-size 한도를 제거했고 Application HWM은 RouteMesh 한도에 의존하지 않는다. ClientServer의 pushed update는 admission에서 확정한 message bound가 달라지면 `ServiceWireProtocolError`로 거부하고 기존 descriptor를 보존한다. | packed declaration·clean consumer, 공용 M6A fixture와 다른 언어 RouteMesh admission 상호운용, 실제 ClientServer update process에서 connection 정리와 기존 descriptor 보존 확인 |
 
 ---
 
@@ -177,7 +178,7 @@ Gap 하나 또는 서로 강하게 연결된 작은 작업 묶음의 동작과 �
 | NODE-SESS-001 | 크로스 노드 세션 스왑 시 이전 소유자 tombstone·정리 확인 절차 부재 — 이전 노드의 stale 바인딩이 다음 실패까지 잔존 | 09 §3 |
 | NODE-SESS-002 | STREAM 하트비트 PING/PONG이 애플리케이션 레인에 실림 — 앱 레인이 5초 이상 밀리면 통신 가능한 session을 `heartbeat_timeout`으로 오판 | 09 §1 |
 | NODE-LAYER-001 | 진행 중 relocation과 shutdown 경합 시 스펙(shutdown 승리)과 반대로 **relocation 전체 완료를 대기** | 01 §3 |
-| NODE-WIRE-001 | RouteMesh에 금지된 message-size 설정·admission 필드가 남아 있고, ClientServer는 push된 update로 **협상된 한도를 연결 중 변경 가능** | 12 §2/§4 |
+| NODE-WIRE-001 | Source에서는 RouteMesh message-size 설정·admission 필드를 제거하고 ClientServer 협상 한도를 고정했다. **Packed package·공용 fixture·process 상호운용 증거가 남음** | 12 §2/§4 |
 | NODE-OWN-001 | 수신 content-type 미사용 + 미등록 시 invalid JSON이 **raw 텍스트로 조용히 fallback** — `ProtocolError` 미발생 | 11 §7 |
 | NODE-CONTRACT-DIAG-002 | 제거 대상 public observer·sink·raw DTO와 file·label이 package에 남아 있고 표준 logger provider 대체 증거가 없음 | DEC-01 |
 | NODE-CONTRACT-STREAM-001 | STREAM send별 admission timeout이 없어 같은 session에서 call마다 다른 deadline을 표현할 수 없음 | DEC-09 |
@@ -385,7 +386,7 @@ mesh/actor/spot/stream 수신 계열은 와이어 content-type(및 stream 헤더
 
 | ID | 분류 | 요약 |
 |---|---|---|
-| NODE-WIRE-001 | GAP·상 | §2 참조 — RouteMesh 금지 상한 잔존 + ClientServer 협상값 변경 가능 |
+| NODE-WIRE-001 | PARTIAL·상 | RouteMesh public registration·live socket과 M6A descriptor에서 message-size 한도를 제거했고 Application HWM 검증의 RouteMesh 의존성도 없앴다. ClientServer pushed update가 admission에서 확정한 한도를 바꾸면 protocol error로 거부한다. Packed package·공용 M6A fixture·실제 process evidence가 남아 있다. |
 | NODE-STREAM-SIZE-001 | GAP·중 | StreamNode의 64 KiB 기본값, configurable inbound C→S 검사, handler 미전달과 peer disconnect는 구현됐지만, 초과를 일반 `Error('STREAM frame exceeds MaxMessageSize.')`로 처리하고 server 진단 sink에 `EMSGSIZE`를 기록하지 않는다. `handleMalformedFrame`은 disconnect 실패만 `onError`에 보내며 size rejection 자체를 진단 trace로 남기지 않는다. 증거: common spec `19-stream-session.ko.md:182-188`, Node exact interface `interfaces/06-stream-worker.ko.md:105-111`, `node/runtime/streams/stream-frame-reassembler.ts:72-85,128-140`, `node/runtime/streams/stream-session-runtime.ts:1003-1011,1057-1065`, `framework/languages/node/test/contract/stream-session-runtime.test.js:937-970` |
 | NODE-WIRE-002 | GAP·상 | DEC-05 후 `framework-json-v1`은 internals 권고가 아니라 public codec contract다. 그러나 프로파일 명칭이 Node package에 없고, 중복 속성 last-wins, 64-bit 정수 형식·범위 미검증, `NaN`→`null`, typed byte array의 padded base64 처리 부재가 남아 있다. Golden fixture는 Node를 consumer로 명시하지만 Node test가 이를 실행하지 않는다. 증거: common public spec `04-message-model.ko.md` codec profile, `node/runtime/channels/channel-envelope.ts:363-366, 405-412`, `framework/runtime/protocol/golden/framework-json-v1.json:1-25`; `framework/languages/node/test/`에서 fixture 참조 없음 |
 | NODE-WIRE-003 | PARTIAL·중 | Global registration의 optional maintenance wave가 raw Mesh descriptor와 M6A admission TLV 13을 거쳐 전달되며 higher-revision update로 바뀐다. Packed package와 실제 multi-node update·placement gate가 남아 있다. |
