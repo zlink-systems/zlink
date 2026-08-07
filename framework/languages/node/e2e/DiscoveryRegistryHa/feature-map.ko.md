@@ -22,7 +22,7 @@
 | SF-F1 | 미구현 | 실제 cross-language object/state process fixture가 필요하다. Node-only smoke는 계약 증거가 아니다. |
 | SF-F2 | 미구현 | 장기 capture/restore lease와 독립 Relocation Store 장애를 구성해야 한다. |
 | SF-F3 | 미구현 | Location Store와 Relocation Store를 분리한 장애 fixture가 필요하다. |
-| SF-F4 | 미구현 | object generation과 owner replacement를 public ref로 함께 검증해야 한다. |
+| SF-F4 | 구현 | Actor·User Spot·Instance Spot aggregate를 `api-a`에서 `api-b`로 이동해 owner만 바뀌고 ObjectGeneration은 유지되는지 확인한다. 이후 Actor destroy와 Instance Spot close 뒤 같은 ID를 다시 만들면 ObjectGeneration이 증가하며, 이전 ActorRef의 exact destroy가 새 Actor를 제거하지 않는지 검증한다. |
 | SF-F5 | 미구현 | creating owner crash와 bounded recovery result를 전용 Instance Spot fixture로 검증해야 한다. |
 | SF-F6 | 구현 | 1,001개 Instance Spot을 준비한 뒤 첫 public page를 받은 시점에 새 Spot을 만들고 기존 Spot을 public handler의 close 동작으로 제거한다. 기존 continuation scan의 중복·page cap과 새 scan의 추가·제거 반영을 검증한다. |
 | SF-F7 | 구현 | 64 MiB application state는 Redis stripe root로 저장·복원하고 User Spot과 Actor의 owner, identity, state checksum을 target에서 확인한다. 64 MiB를 1 byte 초과한 state는 `StateIncompatible`로 종료하고 source owner와 state를 유지한다. |
@@ -81,3 +81,6 @@
 - `./e2e/DiscoveryRegistryHa/run_e2e.sh SF-F7`
   - 로그: `log/20260808-035246-3082189`, `log/20260808-035330-3109518`
   - 결과: 64 MiB state는 target으로 이동한 뒤 length와 SHA-256 checksum이 유지됐다. 64 MiB + 1 byte state는 `StateIncompatible`로 종료됐고 source owner와 state가 유지됐으며 두 variant 모두 `scenario SF-F7 variant=... passed`를 확인했다.
+- `./e2e/DiscoveryRegistryHa/run_e2e.sh SF-F4`
+  - 로그: `log/20260808-043955-4058323`
+  - 결과: relocation 뒤 세 object의 owner만 `api-b`로 바뀌고 ObjectGeneration은 유지됐다. Actor와 Instance Spot을 제거하고 같은 ID로 다시 만들었을 때 generation이 증가했으며, 이전 ActorRef의 exact destroy는 새 Actor를 변경하지 않았다. `scenario SF-F4 passed`, `store-failure-recovery scenario result=passed`를 확인했다.
