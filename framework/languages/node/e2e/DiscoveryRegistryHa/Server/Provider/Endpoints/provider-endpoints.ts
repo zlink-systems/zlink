@@ -32,6 +32,7 @@ export function createProviderEndpoints(
   fanout: ZLinkFanoutClient,
   stop: () => void
 ): readonly HttpRoute[] {
+  const actorRefs = new Map<string, NonNullable<Awaited<ReturnType<ZLinkActorManager['find']>>>>();
   return [
     { method: 'GET', path: '/health', handle: () => ({ status: 'ready', role: 'provider', rid: evidence.rid }) },
     { method: 'GET', path: '/evidence', handle: () => evidence.snapshot() },
@@ -62,6 +63,7 @@ export function createProviderEndpoints(
           if (result.status === 'rejected') {
             return { status: result.status, actorId: request.actorId };
           }
+          actorRefs.set(`${result.actor.actorId}:${result.actor.objectGeneration}`, result.actor);
           return {
             status: result.status,
             actorId: result.actor.actorId,
@@ -70,6 +72,15 @@ export function createProviderEndpoints(
         } catch (error) {
           return publicFailure(error);
         }
+      }
+    },
+    {
+      method: 'POST',
+      path: '/capacity/actors/destroy-exact',
+      handle: async (body) => {
+        const request = body as { actorId: string; objectGeneration: string };
+        const actor = actorRefs.get(`${request.actorId}:${request.objectGeneration}`);
+        return { destroyed: actor === undefined ? false : await actors.destroy(actor) };
       }
     },
     {
@@ -172,7 +183,8 @@ export function createProviderEndpoints(
           deadlineMs
         });
         evidence.add(`retire-finished|rid=${evidence.rid}|outcome=${result.outcome}|reason=${result.reason}`);
-        if (result.outcome === ZLinkFrameworkRelocationOutcome.Relocated) stop();
+        if (result.outcome === ZLinkFrameworkRelocationOutcome.Relocated
+          && (body as { stopOnSuccess?: boolean }).stopOnSuccess !== false) stop();
         return result;
       }
     },

@@ -612,6 +612,18 @@ run_sf_f7() {
   echo "scenario SF-F7 passed"
 }
 
+run_sf_f4() {
+  local client_pid
+  start_topology no disabled disabled sf-f4
+  run_client SF-F4 "$LOG_DIR/client.stdout.log" "$LOG_DIR/client.stderr.log" &
+  client_pid="$!"
+  wait_file_contains "$LOG_DIR/client.stdout.log" "scenario-control SF-F4 start-provider-b" \
+    "SF-F4 client did not finish source object setup" "$client_pid" 120
+  start_provider_b
+  wait "$client_pid"
+  cat "$LOG_DIR/client.stdout.log"
+}
+
 run_unimplemented_scenario() {
   echo "$SCENARIO is not implemented by the Config 6 Node fixture; refusing profile-only success." >&2
   exit 3
@@ -694,8 +706,11 @@ case "$SCENARIO" in
     run_sf_c5a
     cat "$LOG_DIR/client.stdout.log"
     ;;
-  SF-F1|SF-F2|SF-F3|SF-F4|SF-F5|SF-F8|SF-F10|SF-F11)
+  SF-F1|SF-F2|SF-F3|SF-F5|SF-F8|SF-F10|SF-F11)
     run_unimplemented_scenario
+    ;;
+  SF-F4)
+    run_sf_f4
     ;;
   SF-F7)
     run_sf_f7

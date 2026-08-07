@@ -195,6 +195,24 @@ implements ServiceRelocationAuthorityCodec {
   }
 }
 
+/** Returns the application authority payload hidden by relocation metadata. */
+export function serviceRelocationAuthorityApplicationPayload(
+  payload: Uint8Array
+): Buffer {
+  return Buffer.from(decodeAuthorityEnvelope(payload)?.base ?? payload);
+}
+
+/** Replaces the application payload without changing relocation metadata. */
+export function replaceServiceRelocationAuthorityApplicationPayload(
+  payload: Uint8Array,
+  applicationPayload: Uint8Array
+): Buffer {
+  const current = decodeAuthorityEnvelope(payload);
+  return current === undefined
+    ? Buffer.from(applicationPayload)
+    : encodeAuthorityEnvelope(Buffer.from(applicationPayload), current.publication);
+}
+
 export interface ServicePublishedRelocation {
   readonly authority: ZLinkAuthoritySnapshot;
   readonly publication: ServiceRelocationPublication;

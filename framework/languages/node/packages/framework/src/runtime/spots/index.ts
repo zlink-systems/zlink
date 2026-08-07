@@ -410,7 +410,8 @@ export class DefaultZLinkSpotManager {
         );
         if (
           activation.objectGeneration !== undefined
-          && currentApplication?.objectGeneration !== activation.objectGeneration
+          && currentApplication !== undefined
+          && currentApplication.objectGeneration !== activation.objectGeneration
         ) {
           // A superseded local application must not release the authority row
           // that now belongs to the newer object generation.

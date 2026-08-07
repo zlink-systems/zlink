@@ -217,20 +217,68 @@ export function rewriteServiceAuthorityOwner(
   payload: Uint8Array,
   owner: ZLinkLocationOwnerToken
 ): Buffer | undefined {
-  if (decodeSpotAuthority(payload) === undefined) return undefined;
-  const bytes = Buffer.from(payload);
-  const bodyLength = bytes.readUInt32BE(7);
-  const bodyStart = 11;
-  const objectLength = bytes.readUInt16BE(bodyStart + 2);
-  const ownerLengthOffset = bodyStart + 4 + objectLength;
-  if (ownerLengthOffset >= bytes.length) return undefined;
-  const ownerLength = bytes[ownerLengthOffset];
-  const leaseOffset = ownerLengthOffset + 1 + ownerLength;
-  if (leaseOffset + 8 > bytes.length) return undefined;
-  bytes.writeBigUInt64BE(owner.leaseGeneration, leaseOffset);
-  const checksumOffset = bodyStart + bodyLength;
-  bytes.writeUInt32BE(crc32c(bytes.subarray(0, checksumOffset)), checksumOffset);
-  return bytes;
+  const decoded = decodeSpotAuthority(payload);
+  if (decoded === undefined) return undefined;
+  return encodeRewrittenServiceAuthority(decoded, owner, {
+    meshName: decoded.ownerMeshName,
+    nodeRid: decoded.ownerNodeRid,
+    nodeGeneration: decoded.ownerNodeGeneration
+  });
+}
+
+export function rewriteServiceAuthorityRoute(
+  payload: Uint8Array,
+  owner: ZLinkLocationOwnerToken,
+  target: {
+    readonly meshName: string;
+    readonly nodeRid: string;
+    readonly nodeGeneration: bigint;
+  }
+): Buffer | undefined {
+  const decoded = decodeSpotAuthority(payload);
+  return decoded === undefined
+    ? undefined
+    : encodeRewrittenServiceAuthority(decoded, owner, target);
+}
+
+function encodeRewrittenServiceAuthority(
+  decoded: NonNullable<ReturnType<typeof decodeSpotAuthority>>,
+  owner: ZLinkLocationOwnerToken,
+  target: {
+    readonly meshName: string;
+    readonly nodeRid: string;
+    readonly nodeGeneration: bigint;
+  }
+): Buffer | undefined {
+  const common = {
+    stableType: decoded.stableType,
+    spotId: decoded.spotId,
+    ownerId: owner.ownerId,
+    ownerLeaseGeneration: owner.leaseGeneration,
+    ownerMeshName: target.meshName,
+    ownerNodeRid: target.nodeRid,
+    ownerNodeGeneration: target.nodeGeneration
+  };
+  if (decoded.kind === 'user_spot') {
+    const state = decoded.operationKind === 0
+      ? 'ready'
+      : decoded.operationKind === 1
+        ? 'creating'
+        : decoded.operationKind === 3
+          ? 'closing'
+          : undefined;
+    return state === undefined
+      ? undefined
+      : encodeServiceUserSpotAuthorityPayload({ ...common, state });
+  }
+  if (decoded.state === 'other') return undefined;
+  return encodeServiceInstanceAuthorityPayload({
+    ...common,
+    state: decoded.state,
+    ...(decoded.activationRecovery === undefined
+      ? {}
+      : { activationRecovery: decoded.activationRecovery })
+  });
 }
 
 function decodeSpotAuthority(

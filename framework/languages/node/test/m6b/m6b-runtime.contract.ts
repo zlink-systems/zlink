@@ -1538,6 +1538,64 @@ test('a new Instance incarnation outranks a reset authority owner generation', (
   runtime.close();
 });
 
+test('a Ready Instance terminal forgets its route after local close releases authority', async () => {
+  const raw = {
+    topology: { peer: () => undefined },
+    setServiceIngress() {},
+    sendService: () => true
+  } as unknown as RawServiceMeshRuntime;
+  const runtime = new ServiceStatefulRuntime(raw, 'node-b', 3n);
+  const route: ServiceInstanceRouteFence = {
+    targetNodeRid: 'node-b',
+    targetNodeGeneration: 3n,
+    targetSpotId: 'tenant:closed-ready',
+    objectGeneration: 2n,
+    ownerId: 'node-b',
+    authorityOwnerGeneration: 4n,
+    leaseGeneration: 1n,
+    storeVersion: 'store-v2'
+  };
+  runtime.activateInstanceSpot(
+    route.targetSpotId,
+    'TenantWorker',
+    route.objectGeneration,
+    route.authorityOwnerGeneration
+  );
+  runtime.registerInstanceIntent('TenantWorker', route);
+  runtime.rememberSpotRoute({
+    spot: { spotId: route.targetSpotId, generation: route.objectGeneration },
+    targetNodeRid: route.targetNodeRid,
+    targetNodeGeneration: route.targetNodeGeneration,
+    authorityOwnerGeneration: route.authorityOwnerGeneration,
+    ownerLeaseGeneration: route.leaseGeneration,
+    storeVersion: route.storeVersion
+  });
+  runtime.registerInstanceApplicationLifecycle({
+    isMaterialized: () => true,
+    materialize: async () => undefined,
+    discard: async () => undefined,
+    beginTerminal: () => undefined,
+    completeTerminal: async () => true
+  });
+
+  const terminal = (runtime as unknown as {
+    instanceApplicationTerminalCompletion(target: {
+      targetSpotId: string;
+      stableType: string;
+      objectGeneration: bigint;
+    }): () => Promise<void>;
+  }).instanceApplicationTerminalCompletion({
+    targetSpotId: route.targetSpotId,
+    stableType: 'TenantWorker',
+    objectGeneration: route.objectGeneration
+  });
+  await terminal();
+
+  assert.equal(runtime.instanceSpotApplicationTarget(route.targetSpotId), undefined);
+  assert.equal(runtime.registry.spot(route.targetSpotId), undefined);
+  runtime.close();
+});
+
 test('direct Spot ingress accepts a prior incarnation route for the current Ready object', () => {
   let ingress:
     ((record: import('../../packages/framework/src/runtime/foundation/raw-service-mesh-runtime')

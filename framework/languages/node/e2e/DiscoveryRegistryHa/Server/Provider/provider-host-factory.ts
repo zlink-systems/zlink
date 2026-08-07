@@ -118,7 +118,9 @@ function createProviderModule(): {
           const unlimitedPopulation = options.capacityProfile === 'sf-g2';
           const atomicCapacity = options.capacityProfile === 'sf-g1';
           const aggregateCapacity = options.capacityProfile.startsWith('sf-g3-');
-          const stateRelocation = aggregateCapacity || options.capacityProfile.startsWith('sf-f7-');
+          const stateRelocation = aggregateCapacity
+            || options.capacityProfile.startsWith('sf-f7-')
+            || options.capacityProfile === 'sf-f4';
           const aggregateTarget = aggregateCapacity && options.rid === 'api-b';
           const actorLimit = aggregateCapacity
             ? aggregateTarget && options.capacityProfile === 'sf-g3-short-actor' ? 1 : 8
@@ -186,7 +188,8 @@ function createProviderModule(): {
             ObjectSpotType,
             Config6InstanceSpot,
             (factory) => {
-              factory.disableRelocation();
+              if (stateRelocation) factory.recreateOnRelocation();
+              else factory.disableRelocation();
               factory.stableTypeLimit(unlimitedPopulation ? 0 : atomicCapacity ? 2 : 2000);
             }
           );

@@ -23,6 +23,10 @@ import {
   decodeServiceInstanceAuthorityPayload,
   encodeServiceInstanceAuthorityPayload
 } from '../foundation/service-authority-payload-codec';
+import {
+  replaceServiceRelocationAuthorityApplicationPayload,
+  serviceRelocationAuthorityApplicationPayload
+} from '../foundation/service-relocation-runtime';
 
 export class ZLinkSpotLocationClaims {
   private readonly spots = new Map<string, TrackedSpot>();
@@ -138,7 +142,9 @@ export class ZLinkSpotLocationClaims {
     if (current.kind !== 'snapshot' || !matchesTrackedAuthority(current, tracked)) {
       return undefined;
     }
-    const decoded = decodeServiceInstanceAuthorityPayload(current.payload);
+    const decoded = decodeServiceInstanceAuthorityPayload(
+      serviceRelocationAuthorityApplicationPayload(current.payload)
+    );
     if (decoded?.state !== 'ready' || decoded.activationRecovery !== undefined) {
       return undefined;
     }
@@ -148,16 +154,19 @@ export class ZLinkSpotLocationClaims {
       {
         kind: 'put',
         generationTransition: 'preserve',
-        payload: encodeServiceInstanceAuthorityPayload({
-          state: 'closing',
-          stableType: decoded.stableType,
-          spotId: decoded.spotId,
-          ownerId: decoded.ownerId,
-          ownerLeaseGeneration: decoded.ownerLeaseGeneration,
-          ownerMeshName: decoded.ownerMeshName,
-          ownerNodeRid: decoded.ownerNodeRid,
-          ownerNodeGeneration: decoded.ownerNodeGeneration
-        })
+        payload: replaceServiceRelocationAuthorityApplicationPayload(
+          current.payload,
+          encodeServiceInstanceAuthorityPayload({
+            state: 'closing',
+            stableType: decoded.stableType,
+            spotId: decoded.spotId,
+            ownerId: decoded.ownerId,
+            ownerLeaseGeneration: decoded.ownerLeaseGeneration,
+            ownerMeshName: decoded.ownerMeshName,
+            ownerNodeRid: decoded.ownerNodeRid,
+            ownerNodeGeneration: decoded.ownerNodeGeneration
+          })
+        )
       }
     );
     if (result.kind !== 'stored') {
@@ -175,16 +184,19 @@ export class ZLinkSpotLocationClaims {
           {
             kind: 'put',
             generationTransition: 'preserve',
-            payload: encodeServiceInstanceAuthorityPayload({
-              state: 'ready',
-              stableType: decoded.stableType,
-              spotId: decoded.spotId,
-              ownerId: decoded.ownerId,
-              ownerLeaseGeneration: decoded.ownerLeaseGeneration,
-              ownerMeshName: decoded.ownerMeshName,
-              ownerNodeRid: decoded.ownerNodeRid,
-              ownerNodeGeneration: decoded.ownerNodeGeneration
-            })
+            payload: replaceServiceRelocationAuthorityApplicationPayload(
+              current.payload,
+              encodeServiceInstanceAuthorityPayload({
+                state: 'ready',
+                stableType: decoded.stableType,
+                spotId: decoded.spotId,
+                ownerId: decoded.ownerId,
+                ownerLeaseGeneration: decoded.ownerLeaseGeneration,
+                ownerMeshName: decoded.ownerMeshName,
+                ownerNodeRid: decoded.ownerNodeRid,
+                ownerNodeGeneration: decoded.ownerNodeGeneration
+              })
+            )
           }
         );
         if (restore.kind !== 'stored') {

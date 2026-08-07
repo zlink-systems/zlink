@@ -26,6 +26,7 @@ import type {
   ZLinkSpotLocationStore
 } from './internal-store-contracts';
 import { decodeServiceReadySpotAuthority } from '../foundation/service-authority-payload-codec';
+import { serviceRelocationAuthorityApplicationPayload } from '../foundation/service-relocation-runtime';
 import { decodeActorAuthorityIdentity } from '../actors/actor-authority-publication';
 import { encodeAuthorityKey } from './authority-key-codec';
 import {
@@ -355,7 +356,9 @@ export class ZLinkStoreLocationResolvers implements
       signal
     );
     if (current.kind !== 'snapshot' || current.allocation.state !== 'active') return undefined;
-    const decoded = decodeActorAuthorityIdentity(current.payload);
+    const decoded = decodeActorAuthorityIdentity(
+      serviceRelocationAuthorityApplicationPayload(current.payload)
+    );
     if (
       decoded === undefined
       || decoded.actor.actorId !== actorId
@@ -846,7 +849,9 @@ export class ZLinkAuthoritySpotRouteResolver implements ZLinkSpotRouteResolver {
         signal
       );
       if (current.kind === 'snapshot' && current.allocation.state === 'active') {
-        const decoded = decodeServiceReadySpotAuthority(current.payload);
+        const decoded = decodeServiceReadySpotAuthority(
+          serviceRelocationAuthorityApplicationPayload(current.payload)
+        );
         if (
           decoded !== undefined
           && decoded.spotId === String(spotId)

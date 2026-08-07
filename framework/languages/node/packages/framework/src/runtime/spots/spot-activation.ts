@@ -235,8 +235,7 @@ export class ZLinkSpotActivationLifecycle {
       providerResolver: this.options.providerResolver,
       runtimeEventPublisher: this.options.runtimeEventPublisher,
       workerRuntime: this.options.workerRuntime,
-      close: (contextSignal?: AbortSignal) =>
-        this.options.closeSpot(meshName, spotId, contextSignal)
+      close: this.contextClose(meshName, spotId, () => activation)
     };
     const context = objectKind === 'user_spot'
       ? createSpotContext({
@@ -364,7 +363,7 @@ export class ZLinkSpotActivationLifecycle {
         providerResolver: this.options.providerResolver,
         runtimeEventPublisher: this.options.runtimeEventPublisher,
         workerRuntime: this.options.workerRuntime,
-        close: (contextSignal) => this.options.closeSpot(meshName, spotId, contextSignal)
+        close: this.contextClose(meshName, spotId, () => activation)
       });
     instance = await createFreshProviderInstance(
       implementation,
@@ -571,19 +570,7 @@ export class ZLinkSpotActivationLifecycle {
       ensureOperationAllowed: () => activation?.ensureContextOperationAllowed(),
       leaveActor: (actor, contextSignal) =>
         this.options.leaveActor(spotId, actor, contextSignal, meshName),
-      close: async (contextSignal) => {
-        // Native callbacks can cross a promise boundary that does not retain
-        // the serial turn context. Queue the close before calling the manager
-        // so the callback never waits for work behind its own serial turn.
-        if (activation?.serial.isExecuting === true && !activation.serial.isCurrentTurn) {
-          activation.requestClose();
-          const retry = activation.serial.post(() => this.options.closeSpot(meshName, spotId, contextSignal));
-          this.options.detachedTaskRunner?.runDetached(`spot close ${String(spotId)}`, async () => { await retry; });
-          if (this.options.detachedTaskRunner === undefined) void retry.catch(() => undefined);
-          return true;
-        }
-        return await this.options.closeSpot(meshName, spotId, contextSignal);
-      }
+      close: this.contextClose(meshName, spotId, () => activation)
     });
     try {
       spot = await createFreshProviderInstance(spotType, this.options.providerResolver, context);
@@ -687,7 +674,7 @@ export class ZLinkSpotActivationLifecycle {
       ensureOperationAllowed: () => activation?.ensureContextOperationAllowed(),
       leaveActor: (actor, contextSignal) =>
         this.options.leaveActor(spotId, actor, contextSignal, meshName),
-      close: (contextSignal) => this.options.closeSpot(meshName, spotId, contextSignal)
+      close: this.contextClose(meshName, spotId, () => activation)
     });
     spot = await createFreshProviderInstance(spotType, this.options.providerResolver, context);
     Object.defineProperty(spot, 'context', { configurable: true, enumerable: false, value: context });
@@ -721,6 +708,34 @@ export class ZLinkSpotActivationLifecycle {
     if (this.options.detachedTaskRunner === undefined) {
       void close().catch(() => undefined);
     }
+  }
+
+  private contextClose(
+    meshName: string,
+    spotId: RoutingId,
+    activationProvider: () => ZLinkSpotActivation | undefined
+  ): (signal?: AbortSignal) => Promise<boolean> {
+    return async (signal) => {
+      const activation = activationProvider();
+      // Native callbacks can cross a promise boundary that does not retain
+      // the serial turn context. Queue the close before calling the manager
+      // so the callback never waits for work behind its own serial turn.
+      if (activation?.serial.isExecuting === true && !activation.serial.isCurrentTurn) {
+        activation.requestClose();
+        const retry = activation.serial.post(() =>
+          this.options.closeSpot(meshName, spotId, signal)
+        );
+        this.options.detachedTaskRunner?.runDetached(
+          `spot close ${String(spotId)}`,
+          async () => { await retry; }
+        );
+        if (this.options.detachedTaskRunner === undefined) {
+          void retry.catch(() => undefined);
+        }
+        return true;
+      }
+      return await this.options.closeSpot(meshName, spotId, signal);
+    };
   }
 
   async close(

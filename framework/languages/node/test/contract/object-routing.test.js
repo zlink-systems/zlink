@@ -8,6 +8,46 @@ const {
 const {
   ZLinkFrameworkInternalErrorKind
 } = require('../../packages/framework/dist/runtime/framework-errors-internal');
+const {
+  ServiceRelocationAuthorityPayloadCodec
+} = require('../../packages/framework/dist/runtime/foundation/service-relocation-runtime');
+
+function relocationAuthorityPayload(payload) {
+  return new ServiceRelocationAuthorityPayloadCodec().publish(payload, {
+    phase: 'sourceCleanupCompleted',
+    reference: 'relocation-root',
+    checksumCrc32c: 7,
+    aggregateId: '11111111-1111-4111-8111-111111111111',
+    aggregateGeneration: 2n,
+    inventoryDigest: 'a'.repeat(64),
+    targetOwnerId: 'owner-a',
+    targetOwnerLeaseGeneration: 13n
+  });
+}
+
+test('service authority relocation rewrite replaces owner and target route', () => {
+  const rewritten = internal.rewriteServiceAuthorityRoute(
+    internal.encodeServiceInstanceAuthorityPayload({
+      state: 'ready',
+      stableType: 'Room',
+      spotId: 'room-rewrite',
+      ownerId: 'a',
+      ownerLeaseGeneration: 2n,
+      ownerMeshName: 'play',
+      ownerNodeRid: 'node-a',
+      ownerNodeGeneration: 3n
+    }),
+    { ownerId: 'target-owner-with-a-longer-id', leaseGeneration: 13n },
+    { meshName: 'play-next', nodeRid: 'node-b', nodeGeneration: 17n }
+  );
+  const decoded = internal.decodeServiceReadySpotAuthority(rewritten);
+  assert.equal(decoded.ownerId, 'target-owner-with-a-longer-id');
+  assert.equal(decoded.ownerLeaseGeneration, 13n);
+  assert.equal(decoded.ownerMeshName, 'play-next');
+  assert.equal(decoded.ownerNodeRid, 'node-b');
+  assert.equal(decoded.ownerNodeGeneration, 17n);
+  assert.equal(decoded.spotId, 'room-rewrite');
+});
 
 function actorRow(actorId, nodeRid = 'node-a') {
   return {
@@ -141,7 +181,7 @@ test('Ready Instance authority with an expired owner remains unavailable instead
       return {
         kind: 'snapshot',
         storeVersion: { value: '1' },
-        payload: internal.encodeServiceInstanceAuthorityPayload({
+        payload: relocationAuthorityPayload(internal.encodeServiceInstanceAuthorityPayload({
           state: 'ready',
           stableType: 'Room',
           spotId: 'room-owner-lost',
@@ -150,7 +190,7 @@ test('Ready Instance authority with an expired owner remains unavailable instead
           ownerMeshName: 'play',
           ownerNodeRid: 'node-a',
           ownerNodeGeneration: 3n
-        }),
+        })),
         objectGeneration: 4n,
         authorityOwnerGeneration: 5n,
         ownerId: 'owner-a',
@@ -262,13 +302,13 @@ test('authority Actor route carries every fence and a changed StoreVersion inval
       return {
         kind: 'snapshot',
         storeVersion: { value: storeVersion },
-        payload: internal.encodeActorAuthorityIdentity({
+        payload: relocationAuthorityPayload(internal.encodeActorAuthorityIdentity({
           actorType: 'Player',
           actor: { actorId: 'actor-1', nodeRid: 'node-a', objectGeneration: 7n },
           meshName: 'play',
           ownerNodeGeneration: 11n,
           owner: { ownerId: 'owner-a', leaseGeneration: 13n }
-        }),
+        })),
         objectGeneration: 7n,
         authorityOwnerGeneration: 17n,
         ownerId: 'owner-a',

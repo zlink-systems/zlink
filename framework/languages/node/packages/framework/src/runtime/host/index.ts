@@ -172,6 +172,10 @@ import {
   encodeServiceUserSpotAuthorityPayload,
   rewriteServiceAuthorityOwner
 } from '../foundation/service-authority-payload-codec';
+import {
+  replaceServiceRelocationAuthorityApplicationPayload,
+  serviceRelocationAuthorityApplicationPayload
+} from '../foundation/service-relocation-runtime';
 import { ZLinkSpotRuntimeOptionsFactory } from './spot-runtime-options-factory';
 import { ZLinkChannelRuntimeOptionsFactory } from './channel-runtime-options-factory';
 import { ZLinkSpotNodeRuntimeOptionsFactory } from './spot-node-runtime-options-factory';
@@ -663,6 +667,8 @@ export class ZLinkFrameworkRuntimeHost implements
       spotNodeRuntime: () => this.spotNodeRuntime,
       actorManager: () => this.actorManager,
       actorTransfer: this.actorTransferRuntime,
+      trackInstanceSpot: (input) =>
+        this.locationOwner.currentLifecycle?.trackInstanceSpot(input),
       runtimeEventPublisher: this.runtimeEventPublisher,
       metrics: this.metrics
     });
@@ -3407,10 +3413,11 @@ function rewriteAuthorityPayloadForOwner(
   payload: Uint8Array,
   owner: ZLinkLocationOwnerToken
 ): Uint8Array {
-  if (decodeActorAuthorityIdentity(payload) !== undefined) {
-    return rewriteActorAuthorityOwner(payload, owner);
-  }
-  return rewriteServiceAuthorityOwner(payload, owner) ?? Buffer.from(payload);
+  const applicationPayload = serviceRelocationAuthorityApplicationPayload(payload);
+  const rewritten = decodeActorAuthorityIdentity(applicationPayload) !== undefined
+    ? rewriteActorAuthorityOwner(applicationPayload, owner)
+    : rewriteServiceAuthorityOwner(applicationPayload, owner) ?? applicationPayload;
+  return replaceServiceRelocationAuthorityApplicationPayload(payload, rewritten);
 }
 
 function validateRelocationOptions(

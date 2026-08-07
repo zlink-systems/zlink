@@ -28,6 +28,7 @@ import {
 } from '../../contracts';
 import { zlinkRuntimeDefaultLocationOptions } from '../../contracts/Locations/Options';
 import type { ZLinkDomainLocationStore as ZLinkLocationStore } from '../locations/domain-store-contract';
+import type { ZLinkTrackedInstanceAuthority } from '../locations/spot-location-claims';
 import {
   putNewRelocationBlob,
   relocationBlobReference
@@ -51,6 +52,7 @@ import {
   decodeServiceRelocationEnvelope,
   encodeServiceRelocationEnvelope,
   inventoryDigest,
+  serviceRelocationAuthorityApplicationPayload,
   type ServiceRelocationEnvelope,
   type ServiceRelocationMembership,
   type ServiceRelocationParticipant,
@@ -99,6 +101,11 @@ import {
   type ZLinkActorHandoffResult
 } from '../actors/actor-handoff';
 import { decodeHandoffBacklog } from '../spots/spot-remote-codec';
+import {
+  decodeActorAuthorityIdentity,
+  rewriteActorAuthorityRoute
+} from '../actors/actor-authority-publication';
+import { rewriteServiceAuthorityRoute } from '../foundation/service-authority-payload-codec';
 import type { ZLinkActorTransferRuntime } from './actor-transfer-runtime';
 import { decodeAuthorityKey, encodeAuthorityKey } from '../locations/authority-key-codec';
 import {
@@ -169,6 +176,7 @@ interface ZLinkHostRelocationOptions {
   readonly spotNodeRuntime: () => ZLinkSpotNodeRuntimeManager | undefined;
   readonly actorManager: () => DefaultZLinkActorManager | undefined;
   readonly actorTransfer: ZLinkActorTransferRuntime;
+  readonly trackInstanceSpot?: (input: ZLinkTrackedInstanceAuthority) => void;
   readonly runtimeEventPublisher?: ZLinkRuntimeEventPublisher;
   readonly metrics?: ZLinkRuntimeMetrics;
 }
@@ -481,6 +489,12 @@ export class ZLinkHostServiceRelocationRuntime {
     if (publication === undefined) return;
     const recoveryId = `${publication.reference}\0${authority.storeVersion.value}`;
     if (this.recoveredPublications.has(recoveryId)) return;
+    if (
+      [...this.targetOffers.values(), ...[...this.targetStages.values()].map(value => value.offer)]
+        .some(value => sameRelocationPublication(value.envelope, publication))
+    ) {
+      return;
+    }
     const currentOwner = this.options.currentOwner();
     if (currentOwner === undefined
       || authority.ownerId !== currentOwner.ownerId
@@ -1430,7 +1444,13 @@ export class ZLinkHostServiceRelocationRuntime {
           ...primary,
           payload: this.authorityPayloadForPublication(
             primary.payload,
-            publication
+            publication,
+            {
+              owner: acceptedTarget,
+              meshName,
+              nodeRid: String(target.rid),
+              nodeGeneration: target.lifecycleGeneration
+            }
           )
         };
         const authority = await authorityCommit.commit(
@@ -1878,7 +1898,7 @@ export class ZLinkHostServiceRelocationRuntime {
       throw error;
     }
     if (request.phase === 'committed') {
-      await this.commitTargetReservation(materialized, reservation, signal);
+      await this.commitTargetReservation(meshName, materialized, reservation, signal);
       offer.reservationCommitted = true;
       if (offer.expiryTimer !== undefined) clearTimeout(offer.expiryTimer);
     }
@@ -1958,6 +1978,12 @@ export class ZLinkHostServiceRelocationRuntime {
       stage.phase = 'normalized';
       await stage.owner.openAdmission(stage.staging, signal);
       stage.phase = 'open';
+      const completedPublication = this.codec.read(authority.payload);
+      if (completedPublication !== undefined) {
+        this.recoveredPublications.add(
+          `${completedPublication.reference}\0${authority.storeVersion.value}`
+        );
+      }
     }
     const response = { ...request, senderRole: 'target' as const };
     this.completedTargets.set(stagingId, {
@@ -2709,7 +2735,16 @@ export class ZLinkHostServiceRelocationRuntime {
         ownerTransition: 'newOwner' as const,
         authorityPayload: this.authorityPayloadForPublication(
           expected.payload,
-          publication
+          publication,
+          {
+            owner: {
+              ownerId: offer.prepare.candidate.ownerId,
+              leaseGeneration: offer.prepare.candidate.ownerLeaseGeneration
+            },
+            meshName,
+            nodeRid: offer.prepare.candidate.nodeRid,
+            nodeGeneration: offer.prepare.candidate.nodeGeneration
+          }
         ),
         membershipMutation: encodeMembershipMutation(offer.envelope.memberships, participant.key)
       };
@@ -2749,10 +2784,21 @@ export class ZLinkHostServiceRelocationRuntime {
 
   private authorityPayloadForPublication(
     payload: Uint8Array,
-    publication: ServiceRelocationPublication
+    publication: ServiceRelocationPublication,
+    target?: {
+      readonly owner: ZLinkLocationOwnerToken;
+      readonly meshName: string;
+      readonly nodeRid: string;
+      readonly nodeGeneration: bigint;
+    }
   ): Uint8Array {
     const existing = this.codec.read(payload);
-    if (existing === undefined) return this.codec.publish(payload, publication);
+    if (existing === undefined) {
+      const applicationPayload = target === undefined
+        ? Buffer.from(payload)
+        : rewriteAuthorityApplicationRoute(payload, target);
+      return this.codec.publish(applicationPayload, publication);
+    }
     if (existing.phase !== publication.phase
       || existing.reference !== publication.reference
       || existing.checksumCrc32c !== publication.checksumCrc32c
@@ -2828,6 +2874,7 @@ export class ZLinkHostServiceRelocationRuntime {
   }
 
   private async commitTargetReservation(
+    meshName: string,
     stage: LocalStage,
     reservation: TargetRelocationReservation,
     signal?: AbortSignal
@@ -2856,7 +2903,16 @@ export class ZLinkHostServiceRelocationRuntime {
       ...current,
       payload: this.authorityPayloadForPublication(
         current.payload,
-        this.relocationPublication(stage.offer)
+        this.relocationPublication(stage.offer),
+        {
+          owner: {
+            ownerId: stage.candidate.ownerId,
+            leaseGeneration: stage.candidate.ownerLeaseGeneration
+          },
+          meshName,
+          nodeRid: stage.candidate.nodeRid,
+          nodeGeneration: stage.candidate.nodeGeneration
+        }
       )
     };
     await durable.commitOwner(
@@ -3436,7 +3492,7 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
         identity,
         participant.stableType,
         participant.objectGeneration,
-        participant.authorityOwnerGeneration,
+        participant.authorityOwnerGeneration + 1n,
         (nativeEntrySpot ? localDescriptor.rid : spotIdentity) as RoutingId,
         nativeEntrySpot ? localDescriptor.lifecycleGeneration : membership.spotObjectGeneration,
         membership.membershipEpoch,
@@ -3461,7 +3517,7 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
       registration.implementation as Type<ZLinkSpot | ZLinkInstanceSpot>,
       identity as RoutingId,
       participant.objectGeneration,
-      participant.authorityOwnerGeneration,
+      participant.authorityOwnerGeneration + 1n,
       signal
     );
     return {
@@ -3536,16 +3592,21 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
     }
   }
 
-  async publish(hidden: LocalHidden): Promise<void> {
+  async publish(
+    hidden: LocalHidden,
+    authority: ZLinkAuthoritySnapshot
+  ): Promise<void> {
     if (hidden.actor !== undefined) {
       const store = this.requireLocationStore();
       const current = await requireAuthority(
         store,
         { value: hidden.authorityKey } as ZLinkAuthorityKey
       );
-      const state = this.requireActorManager().getState(hidden.actor.context.actorId)!;
-      state.setLocationGeneration(current.authorityOwnerGeneration);
-      state.setOwnerLeaseGeneration(current.ownerLeaseGeneration);
+      this.requireActorManager().adoptCreatedAuthority(
+        hidden.actor.context.actorId,
+        current.authorityOwnerGeneration,
+        current.ownerLeaseGeneration
+      );
       hidden.targetAuthorityOwnerGeneration = current.authorityOwnerGeneration;
       this.requireActorManager().publishRelocationActor(hidden.actor.context.actorId);
     } else if (hidden.activation !== undefined) {
@@ -3563,6 +3624,32 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
           ? () => hidden.activation!.notifyRelocatedBoundary()
           : undefined
       );
+      this.options.meshNode(this.meshName)?.rememberSpotRoute?.({
+        spot: {
+          spotId: String(hidden.activation.spotId),
+          generation: authority.objectGeneration
+        },
+        targetNodeRid: String(authority.allocation.descriptor.rid),
+        targetNodeGeneration: authority.allocation.descriptorLifecycleGeneration,
+        authorityOwnerGeneration: authority.authorityOwnerGeneration,
+        ownerLeaseGeneration: authority.ownerLeaseGeneration,
+        storeVersion: authority.storeVersion.value
+      });
+      if (hidden.participant.objectKind === 'instance_spot') {
+        this.options.trackInstanceSpot?.({
+          meshName: this.meshName,
+          spotId: hidden.activation.spotId,
+          stableType: hidden.participant.stableType,
+          nodeRid: authority.allocation.descriptor.rid,
+          nodeGeneration: authority.allocation.descriptorLifecycleGeneration,
+          objectGeneration: authority.objectGeneration,
+          authorityOwnerGeneration: authority.authorityOwnerGeneration,
+          ownerId: authority.ownerId,
+          ownerLeaseGeneration: authority.ownerLeaseGeneration,
+          storeVersion: authority.storeVersion.value,
+          deactivate: () => this.requireSpotManager().abortRelocationSpot(hidden.activation!)
+        });
+      }
     }
     hidden.initialized = true;
   }
@@ -3877,6 +3964,36 @@ async function requireAuthority(
   const current = await store.readAuthority(key, signal);
   if (current.kind !== 'snapshot') throw new Error(`Authority '${key.value}' is missing.`);
   return current;
+}
+
+function rewriteAuthorityApplicationRoute(
+  payload: Uint8Array,
+  target: {
+    readonly owner: ZLinkLocationOwnerToken;
+    readonly meshName: string;
+    readonly nodeRid: string;
+    readonly nodeGeneration: bigint;
+  }
+): Buffer {
+  const applicationPayload = serviceRelocationAuthorityApplicationPayload(payload);
+  const actor = decodeActorAuthorityIdentity(applicationPayload);
+  if (actor !== undefined) {
+    return rewriteActorAuthorityRoute(
+      applicationPayload,
+      {
+        actorId: actor.actor.actorId,
+        objectGeneration: actor.actor.objectGeneration,
+        meshName: target.meshName,
+        nodeRid: target.nodeRid as RoutingId
+      },
+      actor.spotId ?? target.nodeRid,
+      actor.spotGeneration,
+      target.nodeGeneration,
+      target.owner
+    );
+  }
+  return rewriteServiceAuthorityRoute(applicationPayload, target.owner, target)
+    ?? applicationPayload;
 }
 
 function primaryKey(envelope: ServiceRelocationEnvelope): string {
@@ -4218,6 +4335,17 @@ function relocationStagingId(value: {
   readonly targetAttemptGeneration: bigint;
 }): string {
   return `${value.relocation.high}:${value.relocation.low}:${value.targetAttemptGeneration}`;
+}
+
+function sameRelocationPublication(
+  envelope: ServiceRelocationEnvelope,
+  publication: ServiceRelocationPublication
+): boolean {
+  return envelope.aggregateId === publication.aggregateId
+    && (
+      envelope.aggregateGeneration === publication.aggregateGeneration
+      || envelope.aggregateGeneration + 1n === publication.aggregateGeneration
+    );
 }
 
 function coordinatorSource(value: ServiceWireRelocationCoordinatorFence) {

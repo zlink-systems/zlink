@@ -2229,7 +2229,16 @@ export class ServiceStatefulRuntime {
     target: ServiceInstanceApplicationTarget
   ): () => Promise<void> {
     return async () => {
-      await this.instanceApplicationLifecycle?.completeTerminal(target);
+      const authorityReleased = await this.instanceApplicationLifecycle?.completeTerminal(target)
+        ?? false;
+      if (!authorityReleased) return;
+      const current = this.instanceIntents.get(target.targetSpotId);
+      if (
+        current?.instanceType === target.stableType
+        && current.route.objectGeneration === target.objectGeneration
+      ) {
+        this.forgetClosedInstanceRoute(current.route);
+      }
     };
   }
 

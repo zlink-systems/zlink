@@ -751,6 +751,30 @@ test('ZLinkSpotManager establishes the durable Closing fence before explicit Ins
   assert.equal(await manager.find('test.mesh', spotId), null);
 });
 
+test('ZLinkSpotManager releases Instance authority when no newer application is present', async () => {
+  const released = [];
+  class RelocatedInstanceSpot {}
+  const spotId = zlink.RoutingId.from('relocated-instance-close');
+  const manager = new framework.DefaultZLinkSpotManager({
+    spotFactories: [],
+    instanceSpotFactories: new Map([[
+      'test.mesh',
+      new Map([['relocated', RelocatedInstanceSpot]])
+    ]]),
+    instanceSpotApplicationTargetProvider: () => undefined,
+    async beginInstanceClosingAuthority() {
+      return { restoreReady: async () => { throw new Error('unexpected restore'); } };
+    },
+    async releaseInstanceAuthority(meshName, candidateSpotId, objectGeneration) {
+      released.push([meshName, String(candidateSpotId), objectGeneration]);
+    }
+  });
+
+  await manager.materializeInstance('test.mesh', 'relocated', spotId, 7n);
+  assert.equal(await manager.close('test.mesh', spotId), true);
+  assert.deepEqual(released, [['test.mesh', String(spotId), 7n]]);
+});
+
 test('ZLinkSpotManager defers an Instance context close until activation completion', async () => {
   const releaseQuiescence = createDeferred();
   const events = [];
