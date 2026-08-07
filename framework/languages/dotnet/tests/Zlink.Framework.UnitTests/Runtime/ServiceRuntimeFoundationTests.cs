@@ -1659,7 +1659,7 @@ public sealed class ServiceRuntimeFoundationTests
     }
 
     [Fact]
-    public void CompletionTable_OverflowBeyondRetentionIsObservable()
+    public void CompletionTable_OverflowBeyondRetentionFailsLateRegistration()
     {
         var table = new ZLinkMeshCompletionTable(
             earlyCompletionCount: 1,
@@ -1667,11 +1667,50 @@ public sealed class ServiceRuntimeFoundationTests
             tombstoneCount: 1,
             tombstoneBytes: 32);
 
-        table.Complete(Completion(new MeshOperationId(0, 20)), []);
-        table.Complete(Completion(new MeshOperationId(0, 21)), []);
-        table.Complete(Completion(new MeshOperationId(0, 22)), []);
+        var retained = new MeshOperationId(0, 20);
+        var tombstoned = new MeshOperationId(0, 21);
+        var overflow = new MeshOperationId(0, 22);
+        table.Complete(Completion(retained), []);
+        table.Complete(Completion(tombstoned), []);
+        table.Complete(Completion(overflow), []);
 
         Assert.Equal(1, table.OverflowCount);
+
+        RequestResult? result = null;
+        Assert.True(table.RegisterRequest(
+            overflow,
+            (completed, reply) =>
+            {
+                result = completed;
+                Assert.Empty(reply);
+            }));
+        Assert.Equal(RequestResult.Backpressured, result);
+    }
+
+    [Fact]
+    public void CompletionTable_OverflowFailsPendingAndFutureOperations()
+    {
+        var table = new ZLinkMeshCompletionTable(
+            earlyCompletionCount: 1,
+            earlyCompletionBytes: 64,
+            tombstoneCount: 1,
+            tombstoneBytes: 32);
+        var pending = new MeshOperationId(0, 30);
+        var pendingResults = new List<RequestResult>();
+        Assert.True(table.RegisterRequest(
+            pending,
+            (completed, _) => pendingResults.Add(completed)));
+
+        table.Complete(Completion(new MeshOperationId(0, 31)), []);
+        table.Complete(Completion(new MeshOperationId(0, 32)), []);
+        table.Complete(Completion(new MeshOperationId(0, 33)), []);
+
+        Assert.Equal([RequestResult.Backpressured], pendingResults);
+        RequestResult? future = null;
+        Assert.True(table.RegisterRequest(
+            new MeshOperationId(0, 34),
+            (completed, _) => future = completed));
+        Assert.Equal(RequestResult.Backpressured, future);
     }
 
     [Fact]
