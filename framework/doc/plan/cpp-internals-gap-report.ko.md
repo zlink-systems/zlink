@@ -243,7 +243,7 @@ admitted 피어의 애플리케이션 레코드가 대상 owner의 mailbox 예�
 |---|---|---|
 | CPP-SESS-001 | GAP·상 | §2 참조 — 원격 bind 스왑 핸드셰이크 부재 |
 | CPP-SESS-002 | PARTIAL·하 | §2 "종류별 새 직렬 실행 primitive를 만들지 말라": 주 엔진(`serial_execution_queue_t`)으로 통합은 잘 되어 있으나 `service_mailbox_t`가 admission 예산·per-owner FIFO·ready set을 독립 재구현한 제2 primitive로 공존 — 스펙이 명명한 "two-domain mailboxes" 실패 패턴 구조. 증거: `cpp/src/runtime/mesh/service_mailbox.hpp:18-115` |
-| CPP-SESS-003 | PARTIAL·하 | §2 per-spot lane 정책 타입 부재: 정책이 raw bool 플래그 + 산재한 도메인 상태 booleans로 표현되어 무의미한 조합이 구성 가능. 관찰 동작은 정상 — 구조적 일탈. 증거: `cpp/src/runtime/execution/serial_execution_queue.hpp:64-72` |
+| CPP-SESS-003 | PARTIAL·검증 중 | 구현 checkpoint `8a709309bd`에서 공통 `serial_execution_queue_t`에 Spot·session·Actor 전달의 닫힌 lane policy 합 타입을 주입하도록 바꿨다. Spot 정책만 실행 방식과 `active`·반납 대기·이동 봉인 상태를 가지며, session 정책은 연결 열림·닫힘만, Actor 전달 정책은 별도 lifecycle 상태를 갖지 않는다. 기존 raw `allow_yield` 인자와 필드를 제거했고 yield 허용 여부는 Spot-wide 정책에서만 계산한다. Entry Spot, Spot-wide, per-Actor Spot, STREAM session과 Actor 전달 queue 생성 지점은 각각 이름이 있는 정책을 선택한다. 잘못된 lifecycle 타입 조합을 만들 수 없는지 확인하는 회귀를 포함한 전체 `test_cpp_framework_execution`과 `test_cpp_framework_target_contract`가 통과했다. `test_cpp_framework_m6c_runtime`은 변경된 fixture를 포함해 compile은 통과했지만, 실행은 이 변경과 무관한 기존 `relocation providers must be configured once before host start`에서 중단됐다. 설치 package와 process lane 검증이 남아 있어 아직 종결하지 않는다. |
 
 만족 항목(요약): 세션 gate/Actor gate 분리, 연결 identity 쌍, 스왑 시퀀스 필터, 재연결 fresh 구축, 이동 시 연결 유지·라우트만 갱신 등은 충실.
 
