@@ -124,6 +124,10 @@ int main ()
       read_file (root / "framework/src/runtime/mesh/mesh_node_host_service.cpp");
     const auto raw_mesh_node_owner =
       read_file (root / "framework/src/runtime/mesh/raw_mesh_node_owner.cpp");
+    const auto service_wire_codec =
+      read_file (root / "framework/src/runtime/protocol/service_wire_codec.cpp");
+    const auto generated_service_wire_constants = read_file (
+      root / "../../runtime/protocol/generated/cpp/service_wire_constants.hpp");
     const auto public_host_runtime =
       read_file (root / "framework/src/runtime/stateful/public_host_runtime.cpp");
     const auto monitoring_unit =
@@ -1843,6 +1847,28 @@ int main ()
              != std::string::npos,
       "CPP-OBS-002",
       "message-flow diagnostics level is not snapshotted at message entry");
+
+    /* CPP-WIRE-006 — terminal/result integrity and generic wire bounds are
+     * emitted from the common schema instead of being redefined by the C++
+     * codec. */
+    gate.require (
+      generated_service_wire_constants.find (
+        "enum class request_terminal_result")
+          != std::string::npos
+        && generated_service_wire_constants.find (
+             "valid_terminal_failure")
+             != std::string::npos
+        && generated_service_wire_constants.find ("blobBytes")
+             != std::string::npos
+        && service_wire_codec.find (
+             "bool valid_terminal_failure")
+             == std::string::npos
+        && service_wire_codec.find ("maximum_bytes = blobBytes")
+             != std::string::npos
+        && service_wire_codec.find ("offset - start > metadataBytes")
+             != std::string::npos,
+      "CPP-WIRE-006",
+      "C++ service codec still redefines schema terminal or bound knowledge");
 
     /* CPP-CONTRACT-ROLE-001 — a missing local Client role is a local
      * configuration error, distinct from a configured Client with no target. */

@@ -243,9 +243,10 @@ std::vector<std::uint8_t> read_bytes8 (
 
 void append_text16 (std::vector<std::uint8_t> &bytes,
                     const std::string &value,
-                    const char *field)
+                    const char *field,
+                    std::uint64_t maximum_bytes = blobBytes)
 {
-    if (value.empty () || value.size () > 4096
+    if (value.empty () || value.size () > maximum_bytes
         || !valid_utf8 (std::span<const std::uint8_t> (
           reinterpret_cast<const std::uint8_t *> (value.data ()), value.size ()))) {
         throw service_wire_error_t (std::string (field)
@@ -257,10 +258,12 @@ void append_text16 (std::vector<std::uint8_t> &bytes,
 
 std::string read_text16 (std::span<const std::uint8_t> bytes,
                          std::size_t &offset,
-                         const char *field)
+                         const char *field,
+                         std::uint64_t maximum_bytes = blobBytes)
 {
     const auto length = read_u16 (bytes, offset);
-    if (length == 0 || length > 4096 || bytes.size () - offset < length) {
+    if (length == 0 || length > maximum_bytes
+        || bytes.size () - offset < length) {
         throw service_wire_error_t (std::string ("invalid ") + field);
     }
     const auto value_bytes = bytes.subspan (offset, length);
@@ -848,7 +851,8 @@ std::vector<std::uint8_t> encode_session_relocation_route (
     append_u64 (bytes, record.coordinator.node_generation);
     append_text16 (bytes,
                    record.coordinator.expected_authority_store_version,
-                   "expected authority StoreVersion");
+                   "expected authority StoreVersion",
+                   authorityStoreVersionBytes);
     bytes.push_back (static_cast<std::uint8_t> (record.sender_role));
     append_text8 (bytes, record.actor.actor_id, "Actor ID");
     append_u64 (bytes, record.actor.object_generation);
@@ -938,7 +942,8 @@ std::vector<std::uint8_t> encode_session_relocation_seal (
     append_u64 (bytes, record.coordinator.node_generation);
     append_text16 (bytes,
                    record.coordinator.expected_authority_store_version,
-                   "expected authority StoreVersion");
+                   "expected authority StoreVersion",
+                   authorityStoreVersionBytes);
     bytes.push_back (static_cast<std::uint8_t> (record.sender_role));
     append_text8 (bytes, record.actor.actor_id, "Actor ID");
     append_u64 (bytes, record.actor.object_generation);
@@ -976,7 +981,8 @@ session_relocation_seal_t decode_session_relocation_seal (
       read_bytes8 (bytes, offset, "coordinator node RID");
     record.coordinator.node_generation = read_u64 (bytes, offset);
     record.coordinator.expected_authority_store_version =
-      read_text16 (bytes, offset, "expected authority StoreVersion");
+      read_text16 (bytes, offset, "expected authority StoreVersion",
+                   authorityStoreVersionBytes);
     if (offset >= bytes.size ())
         throw service_wire_error_t (
           "Session relocation seal sender role is truncated");
@@ -1033,7 +1039,8 @@ std::vector<std::uint8_t> encode_session_relocation_sealed (
     append_u64 (bytes, record.coordinator.node_generation);
     append_text16 (bytes,
                    record.coordinator.expected_authority_store_version,
-                   "expected authority StoreVersion");
+                   "expected authority StoreVersion",
+                   authorityStoreVersionBytes);
     append_text8 (bytes, record.actor.actor_id, "Actor ID");
     append_u64 (bytes, record.actor.object_generation);
     append_bytes8 (bytes, record.actor.target_node_routing_id,
@@ -1071,7 +1078,8 @@ session_relocation_sealed_t decode_session_relocation_sealed (
       read_bytes8 (bytes, offset, "coordinator node RID");
     record.coordinator.node_generation = read_u64 (bytes, offset);
     record.coordinator.expected_authority_store_version =
-      read_text16 (bytes, offset, "expected authority StoreVersion");
+      read_text16 (bytes, offset, "expected authority StoreVersion",
+                   authorityStoreVersionBytes);
     record.actor.actor_id = read_text8 (bytes, offset, "Actor ID");
     record.actor.object_generation = read_u64 (bytes, offset);
     record.actor.target_node_routing_id =
@@ -1116,7 +1124,8 @@ session_relocation_route_t decode_session_relocation_route (
       read_bytes8 (bytes, offset, "coordinator node RID");
     record.coordinator.node_generation = read_u64 (bytes, offset);
     record.coordinator.expected_authority_store_version =
-      read_text16 (bytes, offset, "expected authority StoreVersion");
+      read_text16 (bytes, offset, "expected authority StoreVersion",
+                   authorityStoreVersionBytes);
     if (offset >= bytes.size ())
         throw service_wire_error_t (
           "Session relocation sender role is truncated");
@@ -1202,7 +1211,8 @@ std::vector<std::uint8_t> encode_session_relocation_routed (
     append_u64 (bytes, record.coordinator.node_generation);
     append_text16 (bytes,
                    record.coordinator.expected_authority_store_version,
-                   "expected authority StoreVersion");
+                   "expected authority StoreVersion",
+                   authorityStoreVersionBytes);
     append_text8 (bytes, record.actor.actor_id, "Actor ID");
     append_u64 (bytes, record.actor.object_generation);
     append_bytes8 (bytes, record.session_owner_node_routing_id,
@@ -1238,7 +1248,8 @@ session_relocation_routed_t decode_session_relocation_routed (
       read_bytes8 (bytes, offset, "coordinator node RID");
     record.coordinator.node_generation = read_u64 (bytes, offset);
     record.coordinator.expected_authority_store_version =
-      read_text16 (bytes, offset, "expected authority StoreVersion");
+      read_text16 (bytes, offset, "expected authority StoreVersion",
+                   authorityStoreVersionBytes);
     record.actor.actor_id = read_text8 (bytes, offset, "Actor ID");
     record.actor.object_generation = read_u64 (bytes, offset);
     record.session_owner_node_routing_id =
@@ -1266,52 +1277,6 @@ session_relocation_routed_t decode_session_relocation_routed (
 
 namespace
 {
-bool valid_terminal_failure (std::uint32_t terminal,
-                             framework_error_code failure) noexcept
-{
-    if (terminal == 0)
-        return failure == framework_error_code::none;
-    if (terminal == 101 || terminal == 103
-        || (terminal >= 108 && terminal <= 113))
-        return failure == framework_error_code::none;
-    if (failure == framework_error_code::none)
-        return false;
-    switch (failure) {
-        case framework_error_code::actorRouteNotFound:
-        case framework_error_code::spotRouteNotFound:
-        case framework_error_code::actorSessionNotBound:
-        case framework_error_code::handlerNotFound:
-        case framework_error_code::routeHandlerNotFound:
-        case framework_error_code::actorDispatchHandlerNotFound:
-        case framework_error_code::requestTargetNotFound:
-            return terminal == 102;
-        case framework_error_code::payloadDecodeFailed:
-        case framework_error_code::requestProtocolError:
-            return terminal == 104;
-        case framework_error_code::actorCreateFailed:
-        case framework_error_code::spotCreateFailed:
-        case framework_error_code::routeNotConnected:
-        case framework_error_code::requestFailed:
-        case framework_error_code::workerTimedOut:
-        case framework_error_code::workerFailed:
-        case framework_error_code::relocationDataLost:
-            return terminal == 105;
-        case framework_error_code::requestRejected:
-        case framework_error_code::workerQueueFull:
-        case framework_error_code::actorCreateRejected:
-            return terminal == 106;
-        case framework_error_code::actorAlreadyExists:
-        case framework_error_code::actorTypeMismatch:
-        case framework_error_code::spotTypeMismatch:
-        case framework_error_code::actorLocationStale:
-        case framework_error_code::spotGenerationStale:
-        case framework_error_code::spotMoving:
-            return terminal == 107;
-        default:
-            return false;
-    }
-}
-
 void append_coordinator (std::vector<std::uint8_t> &bytes,
                          const relocation_coordinator_fence_t &coordinator)
 {
@@ -1326,7 +1291,8 @@ void append_coordinator (std::vector<std::uint8_t> &bytes,
                    "coordinator node RID");
     append_u64 (bytes, coordinator.node_generation);
     append_text16 (bytes, coordinator.expected_authority_store_version,
-                   "expected authority StoreVersion");
+                   "expected authority StoreVersion",
+                   authorityStoreVersionBytes);
 }
 
 relocation_coordinator_fence_t read_coordinator (
@@ -1340,7 +1306,8 @@ relocation_coordinator_fence_t read_coordinator (
       read_bytes8 (bytes, offset, "coordinator node RID");
     result.node_generation = read_u64 (bytes, offset);
     result.expected_authority_store_version =
-      read_text16 (bytes, offset, "expected authority StoreVersion");
+      read_text16 (bytes, offset, "expected authority StoreVersion",
+                   authorityStoreVersionBytes);
     if (result.lease_generation == 0 || result.node_generation == 0)
         throw service_wire_error_t (
           "relocation coordinator contains a zero required fence");
@@ -1663,7 +1630,8 @@ void append_root (std::vector<std::uint8_t> &bytes,
         return;
     }
     std::vector<std::uint8_t> body;
-    append_text16 (body, root->reference, "relocation reference");
+    append_text16 (body, root->reference, "relocation reference",
+                   relocationReferenceBytes);
     append_u32 (body, root->checksum_crc32c);
     bytes.push_back (1);
     append_u16 (bytes, static_cast<std::uint16_t> (body.size ()));
@@ -1690,7 +1658,8 @@ std::optional<relocation_root_t> read_root (
     }
     std::size_t body_offset = 0;
     relocation_root_t result;
-    result.reference = read_text16 (body, body_offset, "relocation reference");
+    result.reference = read_text16 (
+      body, body_offset, "relocation reference", relocationReferenceBytes);
     result.checksum_crc32c = read_u32 (body, body_offset);
     if (body_offset != body.size ())
         throw service_wire_error_t ("relocation root has trailing bytes");
@@ -1967,7 +1936,8 @@ std::vector<std::uint8_t> encode_relocation_control (
             if (value.root) {
                 field.clear ();
                 append_text16 (field, value.root->reference,
-                               "relocation reference");
+                               "relocation reference",
+                               relocationReferenceBytes);
                 append_tlv (extension, 5, field);
                 field.clear ();
                 append_u32 (field, value.root->checksum_crc32c);
@@ -2218,7 +2188,8 @@ relocation_control_t decode_relocation_control (
                 }
                 else if (id == 5) {
                     reference = read_text16 (
-                      field, field_offset, "relocation reference");
+                      field, field_offset, "relocation reference",
+                      relocationReferenceBytes);
                     reference_seen = true;
                 }
                 else if (id == 6) {
@@ -2561,7 +2532,7 @@ void read_metadata_frame (std::span<const std::uint8_t> bytes,
             throw service_wire_error_t ("metadata keys must be unique");
         keys.push_back (std::move (key));
         (void) read_text16 (bytes, offset, "metadata value");
-        if (offset - start > 1024)
+        if (offset - start > metadataBytes)
             throw service_wire_error_t (
               "metadata frame exceeds 1024 encoded bytes");
     }
@@ -2661,7 +2632,8 @@ std::uint8_t read_instance_route (std::span<const std::uint8_t> bytes,
         (void) read_nonzero_u64 (
           body, body_offset, "authority owner generation");
         (void) read_nonzero_u64 (body, body_offset, "lease generation");
-        (void) read_text16 (body, body_offset, "StoreVersion");
+        (void) read_text16 (
+          body, body_offset, "StoreVersion", authorityStoreVersionBytes);
     }
     else {
         (void) read_text8 (body, body_offset, "target Mesh name");
@@ -2875,7 +2847,7 @@ void append_frozen_metadata (
         keys.push_back (entry.key);
         append_text8 (output, entry.key, "metadata key");
         append_text16 (output, entry.value, "metadata value");
-        if (output.size () - start > 1024)
+        if (output.size () - start > metadataBytes)
             throw service_wire_error_t (
               "frozen metadata frame exceeds 1024 encoded bytes");
     }
@@ -3385,7 +3357,7 @@ std::vector<std::uint8_t> encode_user_spot_create_header (
       bytes, record.reservation.reservation_id, "reservation ID");
     append_text16 (
       bytes, record.reservation.expected_store_version,
-      "expected StoreVersion");
+      "expected StoreVersion", authorityStoreVersionBytes);
     append_u64 (bytes, record.reservation.object_generation);
     append_u64 (
       bytes, record.reservation.authority_owner_generation);
@@ -3423,7 +3395,8 @@ user_spot_create_header_t decode_user_spot_create_header (
     record.reservation.reservation_id =
       read_text8 (bytes, offset, "reservation ID");
     record.reservation.expected_store_version =
-      read_text16 (bytes, offset, "expected StoreVersion");
+      read_text16 (bytes, offset, "expected StoreVersion",
+                   authorityStoreVersionBytes);
     record.reservation.object_generation = read_u64 (bytes, offset);
     record.reservation.authority_owner_generation =
       read_u64 (bytes, offset);
@@ -3485,7 +3458,7 @@ std::vector<std::uint8_t> encode_actor_create_header (
     append_text8 (bytes, record.reservation.reservation_id,
                   "reservation ID");
     append_text16 (bytes, record.reservation.expected_store_version,
-                   "expected StoreVersion");
+                   "expected StoreVersion", authorityStoreVersionBytes);
     append_u64 (bytes, record.reservation.object_generation);
     append_u64 (bytes, record.reservation.authority_owner_generation);
     append_bytes8 (bytes, record.reservation.target_node_routing_id,
@@ -3520,7 +3493,8 @@ actor_create_header_t decode_actor_create_header (
     record.reservation.reservation_id =
       read_text8 (bytes, offset, "reservation ID");
     record.reservation.expected_store_version =
-      read_text16 (bytes, offset, "expected StoreVersion");
+      read_text16 (bytes, offset, "expected StoreVersion",
+                   authorityStoreVersionBytes);
     record.reservation.object_generation = read_u64 (bytes, offset);
     record.reservation.authority_owner_generation =
       read_u64 (bytes, offset);
@@ -3573,7 +3547,7 @@ std::vector<std::uint8_t> encode_user_spot_close_header (
     append_u64 (fence, record.target.authority_owner_generation);
     append_text16 (
       fence, record.target.expected_store_version,
-      "expected StoreVersion");
+      "expected StoreVersion", authorityStoreVersionBytes);
     if (fence.size () > std::numeric_limits<std::uint16_t>::max ()) {
         throw service_wire_error_t ("User Spot close fence is too large");
     }
@@ -3621,7 +3595,8 @@ user_spot_close_header_t decode_user_spot_close_header (
     record.target.authority_owner_generation =
       read_u64 (fence_bytes, offset);
     record.target.expected_store_version =
-      read_text16 (fence_bytes, offset, "expected StoreVersion");
+      read_text16 (fence_bytes, offset, "expected StoreVersion",
+                   authorityStoreVersionBytes);
     if (offset != fence_end) {
         throw service_wire_error_t (
           "User Spot close fence has trailing bytes");
@@ -3769,7 +3744,8 @@ std::vector<std::uint8_t> encode_route_mesh_admission (
     append_u32 (route, descriptor.effective_max_message_bytes);
     append_u64 (route, descriptor.lifecycle_generation);
     append_u64 (route, descriptor.descriptor_revision);
-    append_text16 (route, descriptor.advertised_endpoint, "advertised endpoint");
+    append_text16 (route, descriptor.advertised_endpoint,
+                   "advertised endpoint", endpointBytes);
     if (descriptor.channels.size ()
         > std::numeric_limits<std::uint16_t>::max ()) {
         throw service_wire_error_t ("channel vector exceeds u16");
@@ -3859,7 +3835,7 @@ mesh::service_node_descriptor_t decode_route_mesh_admission (
     result.lifecycle_generation = read_u64 (bytes, offset);
     result.descriptor_revision = read_u64 (bytes, offset);
     result.advertised_endpoint =
-      read_text16 (bytes, offset, "advertised endpoint");
+      read_text16 (bytes, offset, "advertised endpoint", endpointBytes);
     const auto channel_count = read_u16 (bytes, offset);
     result.channels.reserve (channel_count);
     for (std::uint16_t index = 0; index < channel_count; ++index) {
@@ -4068,7 +4044,8 @@ std::vector<std::uint8_t> encode_client_server_server_admission (
       body, admission.security_identity, "security identity");
     append_u32 (body, admission.effective_max_message_bytes);
     append_text16 (
-      body, admission.advertised_endpoint, "advertised endpoint");
+      body, admission.advertised_endpoint, "advertised endpoint",
+      endpointBytes);
     if (body.size () > std::numeric_limits<std::uint16_t>::max ()) {
         throw service_wire_error_t (
           "ClientServer server descriptor exceeds u16");
@@ -4127,7 +4104,7 @@ client_server_server_admission_t decode_client_server_server_admission (
       read_text8 (bytes, offset, "security identity");
     result.effective_max_message_bytes = read_u32 (bytes, offset);
     result.advertised_endpoint =
-      read_text16 (bytes, offset, "advertised endpoint");
+      read_text16 (bytes, offset, "advertised endpoint", endpointBytes);
     if (result.lifecycle_generation == 0
         || result.descriptor_revision == 0 || result.weight > 10000
         || result.effective_max_message_bytes == 0
