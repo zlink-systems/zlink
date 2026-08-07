@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { createHash } from 'node:crypto';
 import type {
   ZLinkActor,
   ZLinkActorContext,
@@ -73,14 +74,40 @@ export class Config6EntrySpot implements ZLinkEntrySpot<Config6Actor> {
 export class Config6UserSpot implements ZLinkSpot<Config6Actor> {
   readonly context!: ZLinkSpotContext<Config6Actor>;
   state = '';
+  stateBytes: Uint8Array = new Uint8Array();
+  stateChecksum = createHash('sha256').update(this.stateBytes).digest('hex');
 
   async onCreate(request: ZLinkMessage): Promise<{ accepted: boolean }> {
-    const value = request.decode<{ readonly failFactory?: boolean }>(Object as never);
+    const value = request.decode<{
+      readonly failFactory?: boolean;
+      readonly state?: string;
+      readonly stateLength?: number;
+      readonly fillByte?: number;
+    }>(Object as never);
     if (value.failFactory === true) {
       throw new Error('injected Config 6 User Spot factory failure');
     }
-    this.state = (value as { readonly state?: string }).state ?? '';
+    if (value.stateLength !== undefined) {
+      if (!Number.isSafeInteger(value.stateLength) || value.stateLength < 0) {
+        throw new RangeError('stateLength must be a non-negative safe integer.');
+      }
+      const fillByte = value.fillByte ?? 0x5a;
+      if (!Number.isInteger(fillByte) || fillByte < 0 || fillByte > 255) {
+        throw new RangeError('fillByte must be an integer in 0..255.');
+      }
+      this.setState(Buffer.alloc(value.stateLength, fillByte));
+    } else {
+      this.setState(new TextEncoder().encode(value.state ?? ''));
+    }
     return { accepted: true };
+  }
+
+  setState(payload: Uint8Array): void {
+    this.stateBytes = payload;
+    this.state = payload.byteLength <= 1024
+      ? new TextDecoder().decode(payload)
+      : '';
+    this.stateChecksum = createHash('sha256').update(payload).digest('hex');
   }
 
   async onActorJoin(_actorId: string, _request: ZLinkMessage): Promise<{ accepted: boolean }> {
@@ -96,12 +123,12 @@ export class Config6UserSpot implements ZLinkSpot<Config6Actor> {
 export class Config6UserSpotAdapter implements ZLinkSpotRelocationAdapter<Config6UserSpot> {
   async capture(spot: Config6UserSpot, signal: AbortSignal): Promise<Uint8Array> {
     signal.throwIfAborted();
-    return new TextEncoder().encode(spot.state);
+    return spot.stateBytes;
   }
 
   async restore(spot: Config6UserSpot, payload: Uint8Array, signal: AbortSignal): Promise<void> {
     signal.throwIfAborted();
-    spot.state = new TextDecoder().decode(payload);
+    spot.setState(payload);
   }
 }
 
@@ -118,6 +145,8 @@ export interface Config6ProbeRes {
   readonly actorState: string;
   readonly spotId: string;
   readonly spotState: string;
+  readonly spotStateLength: number;
+  readonly spotStateChecksum: string;
   readonly nodeRid: string;
 }
 
@@ -159,6 +188,8 @@ export class Config6ProbeHandler implements
       actorState: actor.state,
       spotId: String(spot.context.spotId),
       spotState: spot.state,
+      spotStateLength: spot.stateBytes.byteLength,
+      spotStateChecksum: spot.stateChecksum,
       nodeRid: String(spot.context.nodeRid)
     };
   }

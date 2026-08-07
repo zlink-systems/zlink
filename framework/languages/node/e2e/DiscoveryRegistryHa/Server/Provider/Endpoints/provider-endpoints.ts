@@ -111,7 +111,9 @@ export function createProviderEndpoints(
             .inMesh(ChannelNames.profile)
             .request({
               failFactory: request.failFactory === true,
-              state: (request as { state?: string }).state ?? ''
+              state: (request as { state?: string }).state ?? '',
+              stateLength: (request as { stateLength?: number }).stateLength,
+              fillByte: (request as { fillByte?: number }).fillByte
             })
             .timeout(5000)
             .submit();
@@ -158,10 +160,17 @@ export function createProviderEndpoints(
     {
       method: 'POST',
       path: '/drain',
-      handle: async () => {
-        runtimeOptions.channel(ChannelNames.profile).weight = 0;
+      handle: async (body) => {
+        const deadlineMs = (body as { deadlineMs?: number }).deadlineMs ?? 30_000;
+        if (!Number.isInteger(deadlineMs) || deadlineMs <= 0 || deadlineMs > 180_000) {
+          throw new RangeError('Drain deadline must be an integer in 1..180000.');
+        }
+        runtimeOptions.mesh(ChannelNames.profile).placementWeight = 0;
         evidence.add(`drain-started|rid=${evidence.rid}|weight=0`);
-        const result = await frameworkRuntime.relocate({ mode: ZLinkFrameworkRelocationMode.PlannedMaintenance, deadlineMs: 30_000 });
+        const result = await frameworkRuntime.relocate({
+          mode: ZLinkFrameworkRelocationMode.PlannedMaintenance,
+          deadlineMs
+        });
         evidence.add(`retire-finished|rid=${evidence.rid}|outcome=${result.outcome}|reason=${result.reason}`);
         if (result.outcome === ZLinkFrameworkRelocationOutcome.Relocated) stop();
         return result;

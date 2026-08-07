@@ -878,7 +878,9 @@ export class ZLinkFrameworkRuntimeHost implements
           effectiveTargetApplicationVersion,
           stopStartingSignal.aborted
             ? ZLinkFrameworkRelocationReason.ShutdownRequested
-            : relocationReason(drained.reason)
+            : drained.error instanceof ZLinkRelocationStateIncompatibleError
+              ? ZLinkFrameworkRelocationReason.StateIncompatible
+              : relocationReason(drained.reason)
         ));
       }
       await this.publishHostRelocated();

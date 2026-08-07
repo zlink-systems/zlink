@@ -20,6 +20,7 @@ import {
   ZLinkHostServiceRelocationRuntime
 } from '../../packages/framework/src/runtime/host/service-relocation-host-runtime';
 import {
+  encodeServiceRelocationControlRequest,
   type ZLinkServiceRelocationControlRequest,
   type ZLinkServiceRelocationControlResponse
 } from '../../packages/framework/src/runtime/host/service-relocation-control';
@@ -85,6 +86,113 @@ test('relocation identity retries zero and local collisions with all 128 entropy
   assert.equal(id, acceptedId);
   assert.deepEqual(observed, [collisionId, acceptedId]);
   assert.equal(entropy.length, 0);
+});
+
+test('target shares an in-flight operation across exact control retries', async () => {
+  const envelope = relocationEnvelope();
+  const encodedEnvelope = encodeServiceRelocationEnvelope(envelope);
+  const request = relocationPrepare(envelope, {
+    reference: 'shared-retry-root',
+    checksumCrc32c: crc32c(encodedEnvelope)
+  });
+  const response: ZLinkServiceRelocationControlResponse = {
+    kind: 'ready',
+    relocation: request.relocation,
+    targetAttemptGeneration: request.targetAttemptGeneration,
+    round: request.round,
+    coordinator: request.coordinator,
+    candidate: request.candidate,
+    object: request.object,
+    role: 'target',
+    offeredMessages: request.requiredMessages,
+    offeredBytes: request.requiredBytes,
+    participants: [],
+    sourceNodeGeneration: request.sourceNodeGeneration,
+    targetNodeGeneration: request.candidate.nodeGeneration,
+    reservationGeneration: request.targetAttemptGeneration,
+    root: request.root,
+    applicationVersion: request.applicationVersion,
+    participantProgress: envelope.participants.map((participant, index) => ({
+      participantId: BigInt(index + 1),
+      acceptedBoundary: participant.queuedMessages.at(-1)?.sequence ?? participant.replayCursor,
+      replayCursor: participant.replayCursor
+    }))
+  };
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  let handled = 0;
+  let replies = 0;
+  const runtime = new ZLinkHostServiceRelocationRuntime({
+    meshNode: () => ({
+      sendToNode: () => {
+        replies += 1;
+        return SubmitResult.Ok;
+      }
+    })
+  } as never);
+  (runtime as unknown as {
+    handleControl: () => Promise<ZLinkServiceRelocationControlResponse>;
+  }).handleControl = async () => {
+    handled += 1;
+    await held;
+    return response;
+  };
+  const payload = encodeServiceRelocationControlRequest(request);
+  const parts = [Message.from(payload), Message.from(payload)];
+  try {
+    const first = runtime.tryHandleControl('mesh-a', {
+      sourceNodeRid: 'node-source',
+      parts: [parts[0]!]
+    } as never);
+    const second = runtime.tryHandleControl('mesh-a', {
+      sourceNodeRid: 'node-source',
+      parts: [parts[1]!]
+    } as never);
+    assert.equal(handled, 1);
+    release();
+    assert.deepEqual(await Promise.all([first, second]), [true, true]);
+    assert.equal(handled, 1);
+    assert.equal(replies, 2);
+  } finally {
+    parts.forEach(part => part.close());
+    await runtime.dispose();
+  }
+});
+
+test('target reconstructs a striped shared envelope before prepare validation', async () => {
+  const envelope = relocationEnvelope();
+  const encoded = encodeServiceRelocationEnvelope(envelope);
+  const splitAt = Math.floor(encoded.byteLength / 2);
+  const stripes = [encoded.subarray(0, splitAt), encoded.subarray(splitAt)];
+  const store = new MemoryPublicRelocationStore();
+  const stripeRows = await Promise.all(stripes.map(async (bytes, index) => {
+    const reference = `stripe-${index}`;
+    await store.put({ value: reference }, bytes, 60_000);
+    return {
+      reference,
+      checksumCrc32c: crc32c(bytes),
+      byteLength: bytes.byteLength
+    };
+  }));
+  const manifest = Buffer.from(JSON.stringify({
+    kind: 'zlink-relocation-striped-v1',
+    byteLength: encoded.byteLength,
+    checksumCrc32c: crc32c(encoded),
+    stripes: stripeRows
+  }), 'utf8');
+  await store.put({ value: 'striped-root' }, manifest, 60_000);
+  const runtime = new ZLinkHostServiceRelocationRuntime({
+    relocationStore: () => store
+  } as never);
+  const restored = await (runtime as unknown as {
+    readSharedEnvelope: (
+      root: { readonly reference: string; readonly checksumCrc32c: number }
+    ) => Promise<ServiceRelocationEnvelope>;
+  }).readSharedEnvelope({
+    reference: 'striped-root',
+    checksumCrc32c: crc32c(encoded)
+  });
+  assert.ok(encodeServiceRelocationEnvelope(restored).equals(encoded));
 });
 
 test('two host owners exchange canonical relocation reservation publish replay and seal commands', async () => {

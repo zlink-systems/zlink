@@ -25,7 +25,7 @@
 | SF-F4 | 미구현 | object generation과 owner replacement를 public ref로 함께 검증해야 한다. |
 | SF-F5 | 미구현 | creating owner crash와 bounded recovery result를 전용 Instance Spot fixture로 검증해야 한다. |
 | SF-F6 | 구현 | 1,001개 Instance Spot을 준비한 뒤 첫 public page를 받은 시점에 새 Spot을 만들고 기존 Spot을 public handler의 close 동작으로 제거한다. 기존 continuation scan의 중복·page cap과 새 scan의 추가·제거 반영을 검증한다. |
-| SF-F7 | 미구현 | public relocation size limit 안팎의 large state를 capture/restore해야 한다. |
+| SF-F7 | 구현 | 64 MiB application state는 Redis stripe root로 저장·복원하고 User Spot과 Actor의 owner, identity, state checksum을 target에서 확인한다. 64 MiB를 1 byte 초과한 state는 `StateIncompatible`로 종료하고 source owner와 state를 유지한다. |
 | SF-F8 | 미구현 | target owner lease 만료 뒤 source 보존을 relocation fixture로 검증해야 한다. |
 | SF-F9 | 구현 | SF-C3와 동일한 public channel replacement fixture에서 old provider를 pause/resume하고, replacement가 계속 current ready target로 선택되며 old lifecycle 재개 뒤에도 replacement evidence만 증가하는지 SF-F9 marker로 검증한다. |
 | SF-F10 | 미구현 | 다수 accepted request와 relocation completion의 ID별 terminal을 함께 검증해야 한다. |
@@ -78,3 +78,6 @@
 - `./e2e/DiscoveryRegistryHa/run_e2e.sh SF-G3`
   - 로그: `log/20260808-025010-2168471`, `log/20260808-025017-2169110`, `log/20260808-025026-2169781`, `log/20260808-025035-2170420`
   - 결과: Spot·Actor·stable type capacity가 각각 부족한 세 조합은 source aggregate를 유지했고, 충분한 조합은 User Spot과 Actor 두 개를 target으로 함께 이동했다. 네 조합에서 identity와 application state를 확인했으며 `scenario SF-G3 passed`를 확인했다.
+- `./e2e/DiscoveryRegistryHa/run_e2e.sh SF-F7`
+  - 로그: `log/20260808-035246-3082189`, `log/20260808-035330-3109518`
+  - 결과: 64 MiB state는 target으로 이동한 뒤 length와 SHA-256 checksum이 유지됐다. 64 MiB + 1 byte state는 `StateIncompatible`로 종료됐고 source owner와 state가 유지됐으며 두 variant 모두 `scenario SF-F7 variant=... passed`를 확인했다.

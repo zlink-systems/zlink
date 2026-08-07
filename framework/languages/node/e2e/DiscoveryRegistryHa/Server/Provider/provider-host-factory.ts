@@ -118,6 +118,7 @@ function createProviderModule(): {
           const unlimitedPopulation = options.capacityProfile === 'sf-g2';
           const atomicCapacity = options.capacityProfile === 'sf-g1';
           const aggregateCapacity = options.capacityProfile.startsWith('sf-g3-');
+          const stateRelocation = aggregateCapacity || options.capacityProfile.startsWith('sf-f7-');
           const aggregateTarget = aggregateCapacity && options.rid === 'api-b';
           const actorLimit = aggregateCapacity
             ? aggregateTarget && options.capacityProfile === 'sf-g3-short-actor' ? 1 : 8
@@ -168,7 +169,7 @@ function createProviderModule(): {
           objects.addActorFactory(
             Config6ActorType,
             Config6ActorFactory,
-            (factory) => aggregateCapacity
+            (factory) => stateRelocation
               ? factory.preserveStateWith(Config6ActorAdapter)
               : factory.disableRelocation()
           );
@@ -176,7 +177,7 @@ function createProviderModule(): {
             Config6UserSpotType,
             Config6UserSpot,
             (factory) => {
-              if (aggregateCapacity) factory.preserveStateWith(Config6UserSpotAdapter);
+              if (stateRelocation) factory.preserveStateWith(Config6UserSpotAdapter);
               else factory.disableRelocation();
               factory.stableTypeLimit(userSpotTypeLimit);
             }

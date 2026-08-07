@@ -464,9 +464,13 @@ test('Relocate preserves an incompatible participant state as StateIncompatible'
   host.routeMeshCoordinator = {
     async prepareHostRetire() { return 'prepared'; },
     async relocateHost() {
-      throw new internal.ZLinkRelocationStateIncompatibleError(
-        'Relocation application state exceeds the 64 MiB participant limit.'
-      );
+      return {
+        kind: 'forceStopped',
+        reason: 'teardown_failed',
+        error: new internal.ZLinkRelocationStateIncompatibleError(
+          'Relocation application state exceeds the 64 MiB participant limit.'
+        )
+      };
     },
     async restoreHostServing() {}
   };

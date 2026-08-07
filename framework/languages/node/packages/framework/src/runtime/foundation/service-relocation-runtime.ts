@@ -1231,13 +1231,18 @@ function objectKind(value: unknown): ZLinkPlacementObjectKind {
   return value;
 }
 
+const CRC32C_TABLE = Uint32Array.from({ length: 256 }, (_, value) => {
+  let crc = value;
+  for (let bit = 0; bit < 8; bit++) {
+    crc = (crc >>> 1) ^ ((crc & 1) === 0 ? 0 : 0x82f6_3b78);
+  }
+  return crc >>> 0;
+});
+
 export function crc32c(payload: Uint8Array): number {
   let crc = 0xffff_ffff;
   for (const byte of payload) {
-    crc ^= byte;
-    for (let bit = 0; bit < 8; bit++) {
-      crc = (crc >>> 1) ^ ((crc & 1) === 0 ? 0 : 0x82f6_3b78);
-    }
+    crc = CRC32C_TABLE[(crc ^ byte) & 0xff]! ^ (crc >>> 8);
   }
   return (crc ^ 0xffff_ffff) >>> 0;
 }
@@ -1309,8 +1314,25 @@ function canonicalUuid(value: unknown, label: string): string {
 }
 
 function base64(value: unknown, label: string): Buffer {
-  if (typeof value !== 'string' || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(value)) {
+  if (typeof value !== 'string' || value.length % 4 !== 0) {
     throw new TypeError(`${label} must be canonical base64.`);
+  }
+  const padding = value.endsWith('==') ? 2 : value.endsWith('=') ? 1 : 0;
+  const contentLength = value.length - padding;
+  for (let index = 0; index < contentLength; index++) {
+    const code = value.charCodeAt(index);
+    if (!((code >= 0x41 && code <= 0x5a)
+      || (code >= 0x61 && code <= 0x7a)
+      || (code >= 0x30 && code <= 0x39)
+      || code === 0x2b
+      || code === 0x2f)) {
+      throw new TypeError(`${label} must be canonical base64.`);
+    }
+  }
+  for (let index = contentLength; index < value.length; index++) {
+    if (value.charCodeAt(index) !== 0x3d) {
+      throw new TypeError(`${label} must be canonical base64.`);
+    }
   }
   const bytes = Buffer.from(value, 'base64');
   if (bytes.toString('base64') !== value) throw new TypeError(`${label} must be canonical base64.`);
