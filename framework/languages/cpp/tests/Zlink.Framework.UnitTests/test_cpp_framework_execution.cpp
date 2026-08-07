@@ -1004,6 +1004,46 @@ int main ()
         return 45;
     }
 
+    {
+        zlink::framework::runtime::offload_executor_t saturated_executor (
+          1, 1, 1, std::chrono::milliseconds (0));
+        std::mutex state_mutex;
+        std::condition_variable state_changed;
+        bool entered = false;
+        bool release = false;
+        std::atomic_int queued_runs = 0;
+        if (!saturated_executor.try_submit ([&] {
+                std::unique_lock lock (state_mutex);
+                entered = true;
+                state_changed.notify_all ();
+                state_changed.wait (lock, [&] { return release; });
+            })) {
+            return 54;
+        }
+        {
+            std::unique_lock lock (state_mutex);
+            if (!state_changed.wait_for (
+                  lock, std::chrono::seconds (1), [&] { return entered; })) {
+                return 55;
+            }
+        }
+        if (!saturated_executor.try_submit ([&] { ++queued_runs; })) {
+            return 56;
+        }
+        if (saturated_executor.try_submit ([] {})) {
+            return 57;
+        }
+        {
+            std::lock_guard lock (state_mutex);
+            release = true;
+        }
+        state_changed.notify_all ();
+        saturated_executor.drain ();
+        if (queued_runs.load () != 1) {
+            return 58;
+        }
+    }
+
     if (!verify_timer_handler_activation_lifetime ()) {
         return 40;
     }

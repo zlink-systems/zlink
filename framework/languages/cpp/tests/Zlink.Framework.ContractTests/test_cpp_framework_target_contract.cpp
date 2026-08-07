@@ -106,6 +106,8 @@ int main ()
     const auto app_runtime = read_file (root / "framework/src/runtime/host/app.cpp");
     const auto mesh_node_runtime =
       read_file (root / "framework/src/runtime/mesh/mesh_node_runtime.cpp");
+    const auto mesh_node_host_service =
+      read_file (root / "framework/src/runtime/mesh/mesh_node_host_service.cpp");
     const auto monitoring_unit =
       read_file (root / "tests/Zlink.Framework.UnitTests/test_cpp_framework_monitoring.cpp");
     const auto actor_gateway_unit =
@@ -1657,6 +1659,19 @@ int main ()
     gate.require (channel_hpp.find ("pending_count () const") == std::string::npos
                     && channel_hpp.find ("pending_limit () const") == std::string::npos,
                   "IMP-CP-32", "message_bus still exposes its pending request table");
+
+    /* CPP-DISP-001 — application executor saturation is a typed rejection;
+     * it must not throw out of the MeshNode pump thread. */
+    gate.require (
+      mesh_node_host_service.find ("_application_dispatch->submit")
+          == std::string::npos
+        && mesh_node_host_service.find ("_application_dispatch->try_submit")
+             != std::string::npos
+        && mesh_node_host_service.find (
+             "framework_error_kind_t::capacity_exceeded")
+             != std::string::npos,
+      "CPP-DISP-001",
+      "MeshNode application executor saturation is not handled as CapacityExceeded");
 
     /* TH-CP-01 — the C++ connector helper surface has a language contract. */
     const auto connector_contract_path =

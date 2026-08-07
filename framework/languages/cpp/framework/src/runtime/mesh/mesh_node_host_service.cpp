@@ -330,7 +330,9 @@ void trace_mesh_application (std::string_view stage,
 
 void reject_application_request (
   const host::receive_record_t &record,
-                                 std::vector<zlink::message_t> parts)
+  std::vector<zlink::message_t> parts,
+  framework_error_kind_t error_kind,
+  std::string message)
 {
     const bool request = record.kind == host::record_kind_t::node_request
                          || record.kind == host::record_kind_t::channel_request
@@ -347,8 +349,7 @@ void reject_application_request (
     auto reply = replies.reply_raw_envelope (
       replies.create_error_header (
         header.value ().channel_name, header.value (),
-        framework_exception_t (framework_error_kind_t::rejected,
-                               "MeshNode is draining and rejects new application work")),
+        framework_exception_t (error_kind, std::move (message))),
       zlink::message_t::from (""));
     (void) host::reply (record.reply_token, reply.items ());
 }
@@ -2691,7 +2692,10 @@ void mesh_node_host_service_t::start (service_provider_t &services)
                               }
                           }
                           if (!accepted) {
-                              reject_application_request (record, std::move (parts));
+                              reject_application_request (
+                                record, std::move (parts),
+                                framework_error_kind_t::rejected,
+                                "MeshNode is draining and rejects new application work");
                               _inbound_budget->completed (
                                 application_payload_bytes, false);
                               release_mailbox ();
@@ -2702,17 +2706,21 @@ void mesh_node_host_service_t::start (service_provider_t &services)
                           if (retain_mailbox_reservation) {
                               retain_mailbox_reservation ();
                           }
-                          try {
-                              _application_dispatch->submit (
+                          auto dispatch_parts =
+                            std::make_shared<std::vector<zlink::message_t>> (
+                              std::move (parts));
+                          const auto submitted =
+                            _application_dispatch->try_submit (
                                 [this, node, registration, owner, record,
                                  application_payload_bytes,
                                  release_mailbox_reservation,
                                  complete_stateful_dispatch,
-                                 parts = std::move (parts)] () mutable {
+                                 dispatch_parts] () mutable {
                                     terminal_callback_guard_t release_guard (
                                       release_mailbox_reservation);
                                     terminal_callback_guard_t stateful_guard (
                                       complete_stateful_dispatch);
+                                    auto parts = std::move (*dispatch_parts);
                                     trace_mesh_application (
                                       "start", record, parts.size ());
                                     auto completion_permit =
@@ -2800,15 +2808,21 @@ void mesh_node_host_service_t::start (service_provider_t &services)
                                         release_mailbox_reservation ();
                                     }
                                 });
-                          }
-                          catch (...) {
+                          if (!submitted) {
+                              trace_mesh_application (
+                                "reject", record, dispatch_parts->size (),
+                                "application executor capacity exceeded");
+                              reject_application_request (
+                                record, std::move (*dispatch_parts),
+                                framework_error_kind_t::capacity_exceeded,
+                                "MeshNode application executor capacity is exceeded");
                               node->application_work_started ();
                               node->application_work_finished ();
                               _inbound_budget->completed (
                                 application_payload_bytes, false);
                               _dispatch_gate_changed.notify_all ();
                               release_mailbox ();
-                              throw;
+                              return;
                           }
                           stateful_guard.dismiss ();
                           release_guard.dismiss ();
@@ -3094,8 +3108,7 @@ zlink::submit_result_t mesh_node_host_service_t::submit_local_node_send (
         node->application_work_enqueued ();
     }
 
-    try {
-        _application_dispatch->submit (
+    const auto submitted = _application_dispatch->try_submit (
           [this, node, registration, source_rid,
            parts = std::move (parts)] () mutable {
               node->application_work_started ();
@@ -3117,8 +3130,7 @@ zlink::submit_result_t mesh_node_host_service_t::submit_local_node_send (
               node->local_application_work_finished ();
               _dispatch_gate_changed.notify_all ();
           });
-    }
-    catch (...) {
+    if (!submitted) {
         node->application_work_started ();
         node->local_application_work_finished ();
         _dispatch_gate_changed.notify_all ();
