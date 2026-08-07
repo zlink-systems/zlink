@@ -1,15 +1,6 @@
 name: Build libzlink Core Libraries
 
 on:
-  push:
-    branches:
-      - main
-      - develop
-    tags:
-      - 'core/v*'
-  pull_request:
-    branches:
-      - main
   workflow_dispatch:
     inputs:
       libzlink_version:

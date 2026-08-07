@@ -1,9 +1,6 @@
 name: Release Core Conan Package
 
 on:
-  push:
-    tags:
-      - 'core/v*'
   workflow_dispatch:
     inputs:
       version:
