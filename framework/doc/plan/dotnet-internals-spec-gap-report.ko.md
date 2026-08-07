@@ -302,6 +302,26 @@ Spot과 session은 `ZLinkSerialExecutionQueue`를 공통으로 사용한다(`Run
 
 이 항목은 DOTNET-EXEC-001의 payload byte 누락과 다르다. 완료 조건은 공통 engine 하나에 Spot/session/Actor-delivery lane policy를 주입하고, 불가능한 lifecycle 조합을 타입으로 만들 수 없게 하는 것이다. FIFO, barrier, admission close, count·byte bound와 drain race test를 동일 engine contract suite로 실행해야 한다.
 
+구현과 검증을 완료했다. Actor dispatch mailbox는 자체 waiter queue와 busy/drain 선택을 제거하고 공통
+`ZLinkSerialExecutionQueue` 위에 Actor lifecycle 정책만 남겼다. 일반 dispatch와 terminal barrier는
+application lane을 사용하고, 이미 대기 중인 일반 dispatch보다 먼저 실행해야 하는 deferred Join barrier는
+`ZLinkSerialWorkLane.Lifecycle`을 사용한다. Admission close/reopen과 pending request는 Actor aggregate의
+상태로 유지하지만 FIFO, lane 선택, count·byte reservation과 drain은 공통 engine이 소유한다.
+
+Message Follow의 Actor별 `ConcurrentQueue`, drain flag와 별도 count·byte counter도 제거했다. 각 route는
+같은 공통 engine에 encoded payload byte를 넘기며, engine의 application-drained signal이 route queue의
+안전한 retirement를 결정한다. 기존 전역 admission slot은 Message Follow 전체 호출 수를 제한하는 별도
+owner이므로 유지했다. 사용되지 않던 mailbox의 pending-message counter와 인자도 함께 제거했다.
+
+공통 engine, Actor FIFO·cancellation·barrier·terminal close/reopen·handoff와 Message Follow 경로 focused
+test 260건이 통과했다. 전체 .NET unit project는 1,580건이 통과하고
+`LogicalMulticastSubmitsEachPositiveRemoteOnceRegardlessOfWeight` 한 건이 5초 condition timeout으로
+실패했지만, 같은 test의 단독 재실행은 통과했다. 이 간헐 실패는 Actor serial 변경과 별도로 유지한다.
+Packaged contract와 standalone HTTP clean consumer는 통과했고 public API snapshot hash는
+`c1987f4b98e4fac7a30b7d038a56ee0d20e1272d00e79bdc88d3271e3c3ab958`로 유지되었다. 실제 process
+`ToActorMessaging` `TA-A1`은 `logs/20260807-193610-3123003/`에서 통과했다. 이 checkpoint는
+`a05ebdc421`로 `main`에 push했다.
+
 ### DOTNET-EXEC-003 — Entry Actor ingress가 count·byte 상한 없이 적재됨
 
 Internals는 실행 대기열마다 count와 byte reservation을 모두 강제하고 상한 없는 실행 대기열을 금지한다(`common/internals/08-object-lifecycle.ko.md:219-268`). Host-wide payload HWM은 process 수신 byte 회계이며 owner execution queue의 count·byte 한도를 대체하지 않는다.
