@@ -855,6 +855,96 @@ class Driver:
                     "recovery": recovery,
                 },
             )
+        elif scenario == "CPP-DISP-002":
+            caller_url = self.arguments.owner_isolation_caller_url
+            target_url = self.arguments.owner_isolation_target_url
+            request_json("POST", f"{target_url}/gate/close")
+            priming = request_json(
+                "POST", f"{caller_url}/owner-isolation/submit?kind=prime"
+            )
+            assert_submit(priming)
+
+            deadline = time.monotonic() + 5.0
+            while time.monotonic() < deadline:
+                blocked_target = request_json(
+                    "GET", f"{target_url}/owner-isolation/status"
+                )
+                if (
+                    blocked_target.get("entered", 0) >= 1
+                    and blocked_target.get("completed", 0) == 0
+                ):
+                    break
+                time.sleep(0.025)
+            else:
+                raise RuntimeError(
+                    f"slow owner did not block after priming: {blocked_target}"
+                )
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+                slow_future = executor.submit(
+                    request_json,
+                    "POST",
+                    f"{caller_url}/owner-isolation/submit?kind=slow",
+                    None,
+                    8.0,
+                )
+                fast_started = time.monotonic()
+                fast_future = executor.submit(
+                    request_json,
+                    "POST",
+                    f"{caller_url}/owner-isolation/submit?kind=fast",
+                    None,
+                    8.0,
+                )
+                fast = fast_future.result()
+                fast_elapsed_ms = (time.monotonic() - fast_started) * 1000
+                slow = slow_future.result()
+
+            assert_submit(fast, expected="Handled")
+            assert_submit(slow, expected="CapacityExceeded")
+            if fast_elapsed_ms >= 5000:
+                raise RuntimeError(
+                    "independent owner did not complete before the slow owner timeout: "
+                    f"elapsedMs={fast_elapsed_ms:.3f}"
+                )
+            health = request_json("GET", f"{target_url}/health")
+
+            deadline = time.monotonic() + 15.0
+            while time.monotonic() < deadline:
+                drained_target = request_json(
+                    "GET", f"{target_url}/owner-isolation/status"
+                )
+                if (
+                    drained_target.get("entered", 0) >= 2
+                    and drained_target.get("completed")
+                    == drained_target.get("entered")
+                ):
+                    break
+                time.sleep(0.05)
+            else:
+                raise RuntimeError(
+                    f"owner-isolation target did not drain: {drained_target}"
+                )
+
+            recovery = request_json(
+                "POST",
+                f"{caller_url}/owner-isolation/submit?kind=slow",
+                timeout=8.0,
+            )
+            assert_submit(recovery, expected="Handled")
+            self.record(
+                scenario,
+                {
+                    "priming": priming,
+                    "blockedTarget": blocked_target,
+                    "slowOwner": slow,
+                    "fastOwner": fast,
+                    "fastElapsedMs": fast_elapsed_ms,
+                    "targetHealth": health,
+                    "drainedTarget": drained_target,
+                    "recovery": recovery,
+                },
+            )
         else:
             raise RuntimeError(
                 f"{scenario} is not implemented by the C++ Config 13 runner; "
@@ -884,6 +974,8 @@ def main():
     parser.add_argument("--actor-target-rid", required=True)
     parser.add_argument("--saturation-caller-url", action="append", required=True)
     parser.add_argument("--saturation-target-url", required=True)
+    parser.add_argument("--owner-isolation-caller-url", required=True)
+    parser.add_argument("--owner-isolation-target-url", required=True)
     parser.add_argument("--collector-url", required=True)
     parser.add_argument("--socket-buffer-manifest", required=True)
     parser.add_argument("--evidence", required=True)

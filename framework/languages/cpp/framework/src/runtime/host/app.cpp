@@ -2082,7 +2082,9 @@ app_t &app_t::add_zlink_framework (std::function<void (zlink_framework_options_t
                     runtime::messaging::request_failure_mapper_t{}.reply_header_exception (
                       static_cast<std::uint32_t> (
                         completion.value ().record.terminal_result),
-                      0, "MeshNode request"));
+                      static_cast<std::uint32_t> (
+                        completion.value ().record.failure_errno),
+                      "MeshNode request"));
               }
               return result_t<runtime::messaging::message_parts_t>::success (
                 runtime::messaging::message_parts_t (
@@ -2125,7 +2127,9 @@ app_t &app_t::add_zlink_framework (std::function<void (zlink_framework_options_t
                         runtime::messaging::request_failure_mapper_t{}.reply_header_exception (
                           static_cast<std::uint32_t> (
                             completion.value ().record.terminal_result),
-                          0, "RouteMesh channel request"));
+                          static_cast<std::uint32_t> (
+                            completion.value ().record.failure_errno),
+                          "RouteMesh channel request"));
                   }
                   return result_t<runtime::messaging::message_parts_t>::success (
                     runtime::messaging::message_parts_t (

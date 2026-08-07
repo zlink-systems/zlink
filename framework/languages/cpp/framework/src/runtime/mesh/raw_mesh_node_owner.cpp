@@ -794,7 +794,8 @@ bool raw_mesh_node_owner_t::submit_request (
                         "failed request reply cannot carry a payload");
                   }
                   (void) operations->fail (
-                    id, foundation::operation_terminal_t::transport_failed);
+                    id, foundation::operation_terminal_t::transport_failed,
+                    parts.front ());
                   return;
               }
               if (parts.size () != 2) {

@@ -343,10 +343,14 @@ int main ()
           zlink::request_result_t::rejected, "native request");
         const auto native_busy = map_request_result_exception (
           zlink::request_result_t::busy, "native request");
+        const auto worker_queue_full = mapper.reply_header_exception (
+          106, 18, "RouteMesh request");
         if (zlink::framework::detail::boundary_state (native_timeout)
                 != zlink::framework::detail::boundary_error_t::timed_out
             || zlink::framework::detail::boundary_state (native_disconnected)
                  != zlink::framework::detail::boundary_error_t::disconnected
+            || worker_queue_full.kind ()
+                 != framework_error_kind_t::capacity_exceeded
             || native_disconnected.code ()
                  != std::make_error_code (std::errc::not_connected)
             || zlink::framework::detail::boundary_state (native_shutdown)

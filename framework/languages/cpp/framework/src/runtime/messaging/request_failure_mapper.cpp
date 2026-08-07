@@ -215,6 +215,10 @@ request_failure_mapper_t::reply_header_exception (
             return framework_exception_t (
               framework_error_kind_t::internal_failure,
               operation_name + " failed.");
+        case 18:
+            return framework_exception_t (
+              framework_error_kind_t::capacity_exceeded,
+              operation_name + " exceeded worker queue capacity.");
         default:
             break;
     }

@@ -19,12 +19,12 @@ CORE_INSTALL_DIR="$PACKAGE_ROOT/install/zlink-core"
 EVIDENCE_FILE="$LOG_DIR/evidence.jsonl"
 mkdir -p "$LOG_DIR" "$PACKAGE_ROOT/install/zlink-cpp"
 
-IMPLEMENTED_PROCESS=(SA-E2E-01 SA-E2E-08 SA-E2E-09 SA-E2E-14 SA-E2E-20 CPP-CONTRACT-STREAM-001 CPP-DISP-001)
+IMPLEMENTED_PROCESS=(SA-E2E-01 SA-E2E-08 SA-E2E-09 SA-E2E-14 SA-E2E-20 CPP-CONTRACT-STREAM-001 CPP-DISP-001 CPP-DISP-002)
 IMPLEMENTED_REGRESSION=(SA-REG-01 SA-REG-02 SA-REG-03)
 ALL_KNOWN=()
 for number in $(seq 1 20); do ALL_KNOWN+=("$(printf 'SA-E2E-%02d' "$number")"); done
 for number in $(seq 1 4); do ALL_KNOWN+=("$(printf 'SA-REG-%02d' "$number")"); done
-ALL_KNOWN+=(CPP-CONTRACT-STREAM-001 CPP-DISP-001)
+ALL_KNOWN+=(CPP-CONTRACT-STREAM-001 CPP-DISP-001 CPP-DISP-002)
 
 SELECTORS=()
 if [[ "$#" -eq 0 || "$*" == "all" ]]; then
@@ -251,11 +251,13 @@ if [[ "${#PROCESS_SELECTORS[@]}" -gt 0 ]]; then
     CS_TARGET_A_HTTP CS_TARGET_B_HTTP STREAM_GATEWAY_HTTP STREAM_PEER_HTTP ACTOR_TARGET_HTTP \
     SATURATION_CALLER_0_HTTP SATURATION_CALLER_1_HTTP SATURATION_CALLER_2_HTTP \
     SATURATION_CALLER_3_HTTP SATURATION_CALLER_4_HTTP SATURATION_TARGET_HTTP \
+    OWNER_ISOLATION_CALLER_HTTP OWNER_ISOLATION_TARGET_HTTP \
     CALLER_MESH TARGET_MESH OBJECT_CLIENT_MESH \
     MESH_GATE_FRONT FANOUT_ENDPOINT CS_TARGET_A_ENDPOINT CS_TARGET_B_ENDPOINT \
     STREAM_GATEWAY_ENDPOINT STREAM_GATE_FRONT STREAM_GATEWAY_ACTOR_MESH ACTOR_TARGET_MESH \
     SATURATION_CALLER_0_MESH SATURATION_CALLER_1_MESH SATURATION_CALLER_2_MESH \
     SATURATION_CALLER_3_MESH SATURATION_CALLER_4_MESH SATURATION_TARGET_MESH \
+    OWNER_ISOLATION_CALLER_MESH OWNER_ISOLATION_TARGET_MESH \
     GATE_CONTROL COLLECTOR_HTTP \
     STREAM_GATE_CONTROL < <(
     python3 - <<'PY'
@@ -263,14 +265,14 @@ import socket
 sockets = []
 ports = []
 try:
-    for _ in range(36):
+    for _ in range(40):
         value = socket.socket()
         value.bind(("127.0.0.1", 0))
         sockets.append(value)
         ports.append(value.getsockname()[1])
-    print(*(f"http://127.0.0.1:{port}" for port in ports[:16]),
-          *(f"tcp://127.0.0.1:{port}" for port in ports[16:33]),
-          *(f"http://127.0.0.1:{port}" for port in ports[33:]))
+    print(*(f"http://127.0.0.1:{port}" for port in ports[:18]),
+          *(f"tcp://127.0.0.1:{port}" for port in ports[18:37]),
+          *(f"http://127.0.0.1:{port}" for port in ports[37:]))
 finally:
     for value in sockets:
         value.close()
@@ -353,6 +355,14 @@ PY
       "${SATURATION_CALLER_MESHES[$index]}" submit-saturation-target \
       "$SATURATION_TARGET_MESH" '' '' '' ''
   done
+  write_role_config "$CONFIG_DIR/owner-isolation-target.json" \
+    owner-isolation-target submit-owner-isolation-target \
+    "$OWNER_ISOLATION_TARGET_HTTP" "$OWNER_ISOLATION_TARGET_MESH" \
+    submit-owner-isolation-caller "$OWNER_ISOLATION_CALLER_MESH" '' '' '' '' ''
+  write_role_config "$CONFIG_DIR/owner-isolation-caller.json" \
+    owner-isolation-caller submit-owner-isolation-caller \
+    "$OWNER_ISOLATION_CALLER_HTTP" "$OWNER_ISOLATION_CALLER_MESH" \
+    submit-owner-isolation-target "$OWNER_ISOLATION_TARGET_MESH" '' '' '' '' ''
 
   start_role() {
     local name="$1" config="$2"
@@ -465,6 +475,34 @@ PY
       fi
     done
   fi
+  if contains CPP-DISP-002 "${PROCESS_SELECTORS[@]}"; then
+    start_role owner-isolation-target "$CONFIG_DIR/owner-isolation-target.json"
+    wait_health owner-isolation-target "$OWNER_ISOLATION_TARGET_HTTP"
+    start_role owner-isolation-caller "$CONFIG_DIR/owner-isolation-caller.json"
+    wait_health owner-isolation-caller "$OWNER_ISOLATION_CALLER_HTTP"
+    owner_isolation_ready=0
+    for _ in $(seq 1 100); do
+      if curl --connect-timeout 0.2 --max-time 0.2 -sS \
+          "$OWNER_ISOLATION_CALLER_HTTP/ready?targetRid=submit-owner-isolation-target" \
+          >"$LOG_DIR/owner-isolation-ready-last.json" 2>/dev/null \
+          && python3 - "$LOG_DIR/owner-isolation-ready-last.json" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as source:
+    raise SystemExit(0 if json.load(source).get("ready") is True else 1)
+PY
+      then
+        owner_isolation_ready=1
+        break
+      fi
+      sleep 0.1
+    done
+    if [[ "$owner_isolation_ready" != 1 ]]; then
+      cat "$LOG_DIR/owner-isolation-ready-last.json" >&2 || true
+      echo "Owner-isolation target route did not become ready within 10s." >&2
+      exit 1
+    fi
+  fi
   stream_contract_process=0
   if contains SA-E2E-01 "${PROCESS_SELECTORS[@]}" \
       || contains CPP-CONTRACT-STREAM-001 "${PROCESS_SELECTORS[@]}"; then
@@ -574,6 +612,8 @@ PY
     --saturation-caller-url "$SATURATION_CALLER_3_HTTP" \
     --saturation-caller-url "$SATURATION_CALLER_4_HTTP" \
     --saturation-target-url "$SATURATION_TARGET_HTTP" \
+    --owner-isolation-caller-url "$OWNER_ISOLATION_CALLER_HTTP" \
+    --owner-isolation-target-url "$OWNER_ISOLATION_TARGET_HTTP" \
     --stream-gateway-rid submit-stream-gateway --actor-target-rid submit-actor-target \
     --receiver-gate-url "$GATE_CONTROL" --stream-gate-url "$STREAM_GATE_CONTROL" \
     --collector-url "$COLLECTOR_HTTP" \

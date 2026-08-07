@@ -6182,6 +6182,17 @@ void public_host_runtime_t::complete_operation (
                 record.terminal_result = static_cast<int> (
                   zlink::request_result_t::protocol_error);
             }
+        } else if (!payload.empty ()) {
+            try {
+                const auto reply = protocol::decode_reply_header (payload);
+                record.terminal_result = static_cast<int> (reply.terminal_result);
+                record.failure_errno = static_cast<int> (reply.failure_code);
+            }
+            catch (const protocol::service_wire_error_t &) {
+                record.terminal_result = static_cast<int> (
+                  zlink::request_result_t::protocol_error);
+                record.failure_errno = 0;
+            }
         }
         if (!enqueue_completion (
               operation, std::move (record), std::move (parts)))

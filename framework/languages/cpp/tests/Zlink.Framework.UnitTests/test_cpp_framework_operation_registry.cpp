@@ -69,17 +69,20 @@ int main ()
 
     int failed_terminals = 0;
     foundation::operation_registry_t failed_registry (1);
+    std::vector<std::uint8_t> failure_payload;
     assert (failed_registry.register_operation (
       id (4), now + std::chrono::seconds (1),
       [&] (foundation::operation_terminal_t terminal,
            std::vector<std::uint8_t> payload) {
           assert (terminal
                   == foundation::operation_terminal_t::transport_failed);
-          assert (payload.empty ());
+          failure_payload = std::move (payload);
           ++failed_terminals;
       }));
     assert (failed_registry.fail (
-      id (4), foundation::operation_terminal_t::transport_failed));
+      id (4), foundation::operation_terminal_t::transport_failed,
+      {1, 2, 3}));
+    assert (failure_payload == std::vector<std::uint8_t> ({1, 2, 3}));
     assert (!failed_registry.fail (
       id (4), foundation::operation_terminal_t::transport_failed));
     assert (failed_terminals == 1);

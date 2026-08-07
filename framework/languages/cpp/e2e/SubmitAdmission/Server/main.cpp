@@ -106,6 +106,8 @@ std::string terminal_name (const zlink::framework::result_t<void> &result)
             return "RouteNotConnected";
         case error_kind_t::shutting_down:
             return "RuntimeShutdown";
+        case error_kind_t::capacity_exceeded:
+            return "CapacityExceeded";
         default:
             return std::string ("Exceptional:")
                    + (result.error () ? result.error ()->what () : "submit failed");
@@ -407,6 +409,163 @@ class saturation_status_handler_t
 
   private:
     saturation_probe_state_t &_state;
+};
+
+inline constexpr const char *owner_isolation_fast_channel =
+  "submit.admission.owner-isolation.fast";
+
+class owner_isolation_slow_send_handler_t
+{
+  public:
+    using dependency_types =
+      zlink::framework::dependency_list_t<sa::handler_gate_t,
+                                           saturation_probe_state_t>;
+
+    owner_isolation_slow_send_handler_t (sa::handler_gate_t &gate,
+                                         saturation_probe_state_t &state) :
+        _gate (gate), _state (state)
+    {
+    }
+
+    void handle (const sa::saturation_prime_message_t &,
+                 const zlink::framework::route_message_context_t &)
+    {
+        _state.note_entered ();
+        if (!_gate.wait_for (std::chrono::seconds (10))) {
+            _gate.open ();
+        }
+        _state.note_completed ();
+    }
+
+  private:
+    sa::handler_gate_t &_gate;
+    saturation_probe_state_t &_state;
+};
+
+class owner_isolation_slow_request_handler_t
+{
+  public:
+    using dependency_types =
+      zlink::framework::dependency_list_t<sa::handler_gate_t,
+                                           saturation_probe_state_t>;
+
+    owner_isolation_slow_request_handler_t (sa::handler_gate_t &gate,
+                                            saturation_probe_state_t &state) :
+        _gate (gate), _state (state)
+    {
+    }
+
+    sa::submit_response_t handle (
+      const sa::admission_message_t &message,
+      const zlink::framework::route_message_context_t &)
+    {
+        _state.note_entered ();
+        if (!_gate.wait_for (std::chrono::seconds (10))) {
+            _gate.open ();
+        }
+        _state.note_completed ();
+        return {.operation_id = message.operation_id,
+                .status = "Handled",
+                .public_invocation_count = 1,
+                .terminal_count = 1};
+    }
+
+  private:
+    sa::handler_gate_t &_gate;
+    saturation_probe_state_t &_state;
+};
+
+class owner_isolation_fast_request_handler_t
+{
+  public:
+    using dependency_types =
+      zlink::framework::dependency_list_t<saturation_probe_state_t>;
+    explicit owner_isolation_fast_request_handler_t (
+      saturation_probe_state_t &state) :
+        _state (state)
+    {
+    }
+
+    sa::submit_response_t handle (
+      const sa::admission_message_t &message,
+      const zlink::framework::route_message_context_t &)
+    {
+        _state.note_entered ();
+        _state.note_completed ();
+        return {.operation_id = message.operation_id,
+                .status = "Handled",
+                .public_invocation_count = 1,
+                .terminal_count = 1};
+    }
+
+  private:
+    saturation_probe_state_t &_state;
+};
+
+class owner_isolation_submit_handler_t
+{
+  public:
+    using dependency_types =
+      zlink::framework::dependency_list_t<zlink::framework::route_client_t>;
+    explicit owner_isolation_submit_handler_t (
+      zlink::framework::route_client_t &routes) :
+        _routes (routes)
+    {
+    }
+
+    zlink::framework::task_t<zlink::framework::http_response_t> handle (
+      const zlink::framework::http_request_t &request)
+    {
+        const auto found = request.query_values.find ("kind");
+        if (found == request.query_values.end ()) {
+            throw std::invalid_argument ("owner isolation kind is required");
+        }
+        if (found->second == "prime") {
+            const auto response = co_await response_after_submit (
+              "owner-isolation-prime",
+              _routes
+                .send_to_channel (
+                  sa::channel_name,
+                  sa::saturation_prime_message_t{
+                    .operation_id = "owner-isolation-prime",
+                    .sequence = 1,
+                    .payload = "x"})
+                .submit ());
+            co_return zlink::framework::http_response_t{
+              .body = nlohmann::json (response).dump ()};
+        }
+        const auto channel = found->second == "slow"
+          ? std::string (sa::channel_name)
+          : found->second == "fast"
+            ? std::string (owner_isolation_fast_channel)
+            : throw std::invalid_argument (
+                "owner isolation kind must be prime, slow, or fast");
+        const auto operation_id = "owner-isolation-" + found->second;
+        try {
+            const auto response = co_await _routes
+              .request_to_channel (
+                channel,
+                sa::admission_message_t{
+                  .operation_id = operation_id,
+                  .sequence = 1,
+                  .payload = "x"})
+              .timeout (std::chrono::seconds (5))
+              .submit<sa::submit_response_t> ();
+            co_return zlink::framework::http_response_t{
+              .body = nlohmann::json (response).dump ()};
+        }
+        catch (const zlink::framework::framework_exception_t &error) {
+            const auto response = response_from (
+              operation_id,
+              zlink::framework::result_t<void>::failure (
+                error.kind (), error.what ()));
+            co_return zlink::framework::http_response_t{
+              .body = nlohmann::json (response).dump ()};
+        }
+    }
+
+  private:
+    zlink::framework::route_client_t &_routes;
 };
 
 class node_submit_handler_t
@@ -1458,6 +1617,60 @@ void configure_saturation_role (
     }
 }
 
+void configure_owner_isolation_role (
+  zlink::framework::zlink_framework_options_t &framework,
+  const role_options_t &options)
+{
+    framework.add_location_store (
+      std::make_shared<zlink::framework::redis::redis_location_store_t> (
+        zlink::framework::redis::redis_location_options_t{
+          .connection_string = options.redis_endpoint,
+          .key_prefix = options.redis_key_prefix}));
+    framework.services ().add_singleton<sa::handler_gate_t> ();
+    framework.services ().add_singleton<saturation_probe_state_t> (
+      std::make_unique<saturation_probe_state_t> (2));
+
+    auto mesh = framework.add_route_mesh (sa::mesh_name);
+    mesh.configure_router_socket ().mailbox_message_budget = 1;
+    mesh.listen (options.mesh_endpoint)
+      .set_routing_id (zlink::routing_id_t::from (options.rid))
+      .set_object_role (zlink::framework::object_role_t::server);
+    if (!options.peer_endpoint.empty ()) {
+        mesh.peer_connections ().connect (options.peer_endpoint);
+    }
+    if (options.role == "owner-isolation-target") {
+        mesh.channel_name (sa::channel_name)
+          .server ()
+          .set_weight (100)
+          .add_send_handler<owner_isolation_slow_send_handler_t,
+                             sa::saturation_prime_message_t> ()
+          .add_request_handler<owner_isolation_slow_request_handler_t,
+                                sa::admission_message_t,
+                                sa::submit_response_t> ();
+        mesh.channel_name (owner_isolation_fast_channel)
+          .server ()
+          .set_weight (100)
+          .add_request_handler<owner_isolation_fast_request_handler_t,
+                                sa::admission_message_t,
+                                sa::submit_response_t> ();
+    } else {
+        mesh.channel_name (sa::channel_name).client ();
+        mesh.channel_name (owner_isolation_fast_channel).client ();
+    }
+
+    auto &http = framework.http ();
+    http.listen (options.http_endpoint)
+      .map_health ("/health")
+      .map_get<ready_handler_t> ("/ready")
+      .map_get<saturation_status_handler_t> ("/owner-isolation/status");
+    if (options.role == "owner-isolation-target") {
+        http.map_post<gate_close_handler_t> ("/gate/close");
+    } else {
+        http.map_post<owner_isolation_submit_handler_t> (
+          "/owner-isolation/submit");
+    }
+}
+
 void configure_object_client_role (
   zlink::framework::zlink_framework_options_t &framework,
   const role_options_t &options)
@@ -1664,6 +1877,9 @@ int main (int argc, char **argv)
             } else if (options.role == "saturation-caller"
                        || options.role == "saturation-target") {
                 configure_saturation_role (framework, options);
+            } else if (options.role == "owner-isolation-caller"
+                       || options.role == "owner-isolation-target") {
+                configure_owner_isolation_role (framework, options);
             } else if (options.role == "object-client") {
                 configure_object_client_role (framework, options);
             } else if (options.role == "publisher") {
