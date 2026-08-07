@@ -204,6 +204,8 @@ public sealed class LocationContracts
     [Fact]
     [ContractExample(
         typeof(IZLinkLocationRuntimeQuery),
+        typeof(ZLinkLocationObjectEntry),
+        typeof(ZLinkLocationObjectFilter),
         typeof(IZLinkLocationReadiness))]
     public async Task Runtime_query_reads_store_directly_and_change_stamp_is_optional()
     {
@@ -398,6 +400,23 @@ public sealed class LocationContracts
             return ValueTask.FromResult(
                 new ZLinkLocationPage<ZLinkLocationServiceSummary>(items, null));
         }
+
+        public ValueTask<ZLinkLocationObjectEntry?> FindActorLocationAsync(
+            string actorId,
+            CancellationToken cancellationToken = default) =>
+            ValueTask.FromResult<ZLinkLocationObjectEntry?>(null);
+
+        public ValueTask<ZLinkLocationObjectEntry?> FindSpotLocationAsync(
+            string spotId,
+            CancellationToken cancellationToken = default) =>
+            ValueTask.FromResult<ZLinkLocationObjectEntry?>(null);
+
+        public ValueTask<ZLinkLocationPage<ZLinkLocationObjectEntry>>
+            ListObjectLocationsAsync(
+                ZLinkLocationObjectFilter filter,
+                ZLinkPageRequest page = default,
+                CancellationToken cancellationToken = default) =>
+            ValueTask.FromResult(new ZLinkLocationPage<ZLinkLocationObjectEntry>([], null));
     }
 
     private sealed class ExampleLocationReadiness(IZLinkLocationRuntimeQuery query) : IZLinkLocationReadiness

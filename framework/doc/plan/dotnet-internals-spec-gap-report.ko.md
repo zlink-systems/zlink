@@ -60,7 +60,7 @@ Gap 하나 또는 서로 강하게 연결된 작은 작업 묶음의 동작과 �
 | ID | 심각도 | 영역 | 판정 |
 |---|---|---|---|
 | DOTNET-API-001 | 상 | STREAM session send | 완료 — per-call admission timeout을 public surface와 기존 submit admission owner에 연결했다 |
-| DOTNET-API-002 | 상 | Location 운영 query | object location type과 exact/list query 전체가 없다 |
+| DOTNET-API-002 | 상 | Location 운영 query | 완료 — authority Store를 조회해 exact/list object location을 공개 계약으로 투영한다 |
 | DOTNET-API-003 | 상 | StreamNode message-size API | 완료 — fluent `MaxMessageSize(bytes)`와 전용 socket config surface를 제공한다 |
 | DOTNET-ROLE-001 | 상 | ClientServer role error | 완료 — Server role만 등록된 Channel send/request가 `NotConfigured`로 끝난다 |
 | DOTNET-WIRE-001 | 상 | `framework-json-v1` | strict cross-language JSON profile 대신 `JsonSerializerDefaults.Web` 의미를 사용한다 |
@@ -108,9 +108,25 @@ HTTP clean consumer를 모두 통과했다. 고정 public API snapshot과 packag
 
 ### DOTNET-API-002 — object location 운영 query 누락
 
+**판정: 완료**
+
 Exact interface는 object kind/state/entry/filter와 `FindActorLocationAsync`, `FindSpotLocationAsync`, `ListObjectLocationsAsync`를 요구한다(`interfaces/08-location-maintenance.ko.md:106-131,150-178`). 실제 `IZLinkLocationRuntimeQuery`는 status, topology, service summary 세 operation만 제공한다(`Contracts/Locations/RuntimeQuery.cs:8-21`). 구현 service도 MeshNode descriptor만 조회하며 object row를 조회하거나 `Creating`·`Ready`·`Unavailable`로 투영하는 경로가 없다(`Runtime/Locations/ZLinkLocationRuntimeQueryService.cs:63-176`).
 
 이 gap은 정적 추정이 아니라 현재 contract test가 직접 검출했다. `DotNetExactInterfaceDeclarations_Match_Source_And_Package_Exports`와 `DotNetExactInterfaceTypes_Have_A_Single_DocumentOwner`가 `ZLinkLocationObjectEntry` export 부재로 실패했다. Exact lookup의 Missing=`null`, Spot kind 통합, 4 MiB page, Store 실패=`Unavailable`과 partial page 금지까지 production test로 확인해야 완료할 수 있다.
+
+`IZLinkLocationRuntimeQuery`에 exact Actor·Spot 조회와 kind별 list query를 추가했다. 새 내부
+`ZLinkLocationObjectQuery`가 authority key 해석, allocation state와 owner lease를 이용한
+`Creating`·`Ready`·`Unavailable` projection, opaque continuation과 Store 오류 변환을 한 곳에서 소유한다.
+Store key·version과 owner lease generation은 public entry에 노출하지 않는다.
+
+`.NET 8`의 `LocationRuntimeQueryTests` 16건에서 Missing과 세 상태, User Spot·Instance Spot 구분,
+filter·continuation, Store read 실패의 typed `Unavailable`, partial page 미반환과 4 MiB 초과 page 거절을
+검증했다. `LocationContracts`와 exact type owner 검증 8건도 통과했다. 별도 source package를 생성한
+`verify_packaged_contract.sh --generate-snapshot`은 packaged contract와 standalone HTTP clean consumer를
+통과했고, 고정 public API snapshot은 생성 결과와 일치하며 hash는
+`917792ee8f6a4f645f03b1b683041b819d7501bd0ec54807c728c4fd8ab164e1`이다. 전체 exact declaration
+검증에는 이 항목과 무관한 `DOTNET-SIZE-001`의 기존 RouteMesh `MaxMessageSize` property 한 건이 남아 있으며,
+해당 항목에서 제거한다.
 
 ### DOTNET-API-003 — StreamNode message-size fluent API 불일치
 
@@ -149,6 +165,7 @@ Owner-layer regression은 Server-only send/request=`NotConfigured`, 이름 없�
 ready target 없음=`DeadlineExceeded`를 각각 분리해 3건 모두 통과했다. 실제 process scenario
 `CH-E2E-05`도 `logs/20260807-172841-1093480/`에서 통과했으며 Server-only handler evidence가 생성되지
 않고 정상 Client role request만 Server handler에 한 번 도달했다.
+이 checkpoint는 `c873a99aa0`으로 `main`에 push했다.
 
 ### DOTNET-WIRE-001 — `framework-json-v1` strict profile 미구현
 

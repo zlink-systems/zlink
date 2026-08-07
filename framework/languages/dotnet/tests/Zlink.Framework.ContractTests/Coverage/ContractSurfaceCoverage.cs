@@ -1534,6 +1534,9 @@ public sealed class ContractSurfaceCoverage
                 {
                     displayName += $"<{string.Join(",", named.TypeArguments.Select(DisplayName))}>";
                 }
+                if (named.IsReferenceType
+                    && named.NullableAnnotation == NullableAnnotation.Annotated)
+                    displayName += "?";
 
                 return (expected.AssemblyName, displayName);
             }

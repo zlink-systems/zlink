@@ -21,6 +21,7 @@ internal sealed class ZLinkLocationRuntimeQueryService :
     private readonly ZLinkObservedLocationGenerations _observed;
     private readonly ZLinkLiveLocationRows _liveRows;
     private readonly ZLinkLocationStoreHealth? _storeHealth;
+    private readonly ZLinkLocationObjectQuery _objects;
 
     internal ZLinkLocationRuntimeQueryService(
         ZLinkLocationOptions options,
@@ -39,6 +40,10 @@ internal sealed class ZLinkLocationRuntimeQueryService :
         _observed = observed;
         _storeHealth = storeHealth;
         _liveRows = new ZLinkLiveLocationRows(leaseTracker);
+        _objects = new ZLinkLocationObjectQuery(
+            meshNodeStore,
+            leaseTracker,
+            storeHealth);
     }
 
     public ValueTask<ZLinkLocationRuntimeStatus> GetStatusAsync(
@@ -154,6 +159,23 @@ internal sealed class ZLinkLocationRuntimeQueryService :
 
         return PageInMemory(summaries, Normalize(page));
     }
+
+    public ValueTask<ZLinkLocationObjectEntry?> FindActorLocationAsync(
+        string actorId,
+        CancellationToken cancellationToken = default) =>
+        _objects.FindActorAsync(actorId, cancellationToken);
+
+    public ValueTask<ZLinkLocationObjectEntry?> FindSpotLocationAsync(
+        string spotId,
+        CancellationToken cancellationToken = default) =>
+        _objects.FindSpotAsync(spotId, cancellationToken);
+
+    public ValueTask<ZLinkLocationPage<ZLinkLocationObjectEntry>>
+        ListObjectLocationsAsync(
+            ZLinkLocationObjectFilter filter,
+            ZLinkPageRequest page = default,
+            CancellationToken cancellationToken = default) =>
+        _objects.ListAsync(filter, page, cancellationToken);
 
     private IEnumerable<string> MeshNamesOf(string? meshName) =>
         meshName is not null
