@@ -94,7 +94,7 @@ Gap 하나 또는 서로 강하게 연결된 작은 작업 묶음의 동작과 �
 | CPP-TOPO-001 | 수동 설정 피어에 Location Store descriptor의 admission fence(generation/보안 identity)가 설치되지 않음 — 이미 종결된 `JVM-TOPO-001`과 동일 계열 결함의 C++ 판 | 06 §1.1 |
 | CPP-CONTRACT-DIAG-001/002 | diagnostics level과 public export가 C++ exact interface와 다르고, 제거 대상 observer·raw DTO·file/label 설정이 설치 header에 남아 있음 | C++ interface 08 |
 | CPP-CONTRACT-QUERY-001 | Actor·Spot exact lookup과 bounded object page public surface가 없음 | C++ interface 07 |
-| CPP-CONTRACT-STREAM-001 | STREAM one-way send의 호출별 timeout public modifier와 runtime 의미가 없음 | C++ interface 03 |
+| CPP-CONTRACT-STREAM-001 | STREAM one-way send timeout 구현 완료, package·process 검증 진행 중 | C++ interface 03 |
 
 ### CPP-DISP-001 — executor 포화 → `std::terminate`
 mesh 디스패치 스레드는 throwing `submit`으로 애플리케이션 작업을 넘기는데, `offload_executor_t::submit`은 내부 큐(4096) 포화 시 `std::runtime_error`를 던진다. 둘러싼 `catch (...)`는 정리 후 재던지고, pump 스레드 람다에는 try/catch가 없어 `std::thread` 본체를 탈출한 예외가 `std::terminate`를 호출한다. 서로 다른 owner의 in-flight 디스패치가 4096개를 넘는 순간 재현 가능하다. 스펙 03 §6은 "한도 초과를 조용히(또는 파괴적으로) 처리하지 말고 관찰 가능한 거부 결과를 내라"고 결정했다.
@@ -131,7 +131,7 @@ admitted 피어의 애플리케이션 레코드가 대상 owner의 mailbox 예�
 | CPP-CONTRACT-DIAG-001 | GAP·상 | exact interface는 `off/errors/normal/detailed` 네 level을 고정하지만 public header는 `off/errors_only/key_transitions/verbose/diagnostic` 다섯 값을 export한다. 증거: `common/spec/server/languages/cpp/interfaces/08-monitoring.ko.md:200-229`, `cpp/include/zlink/framework/contracts/dispatch/execution.hpp:25-32` |
 | CPP-CONTRACT-DIAG-002 | GAP·상 | exact interface가 제외한 raw flow/error DTO, observer callback, file path와 label 설정을 public header가 계속 export한다. 제거 전에 application logger provider를 통한 structured record와 provider-failure 격리 process E2E를 먼저 확보해야 한다. 증거: `common/spec/server/languages/cpp/interfaces/08-monitoring.ko.md:230-235`, `cpp/include/zlink/framework/contracts/dispatch/execution.hpp:34-185, 187-247` |
 | CPP-CONTRACT-QUERY-001 | GAP·상 | exact interface의 Actor·Spot exact lookup, object state와 bounded object page 타입·method가 public header에 없다. 기존 status/topology/service summary 조회는 이 계약을 대신하지 않는다. 증거: `common/spec/server/languages/cpp/interfaces/07-location-store.ko.md:360-419`, `cpp/include/zlink/framework/contracts/locations/runtime_query.hpp:10-20` |
-| CPP-CONTRACT-STREAM-001 | GAP·상 | exact interface의 `stream_send_call_t::timeout(...)`이 public header와 call state에 없다. Socket timeout과 호출별 timeout 중 짧은 값, `1..INT_MAX` 검증, terminal-once `DeadlineExceeded`, no-replay 동작도 함께 구현해야 한다. 증거: `common/spec/server/languages/cpp/interfaces/03-channel-messaging.ko.md:647-660, 980-990`, `cpp/include/zlink/framework/contracts/channels/call.hpp:495-523` |
+| CPP-CONTRACT-STREAM-001 | GAP·검증 중 | 구현 checkpoint `eefcda189d`에서 `stream_send_call_t::timeout(...)`을 추가하고, Core STREAM writer가 기록한 socket admission timeout을 호출별 값으로 더 짧게 제한하도록 연결했다. `1..INT_MAX` 범위를 벗어난 값은 modifier에서 거부한다. Owner-layer 회귀는 20 ms 제한이 1초 socket 기본값을 줄이는지, 만료 뒤 재시도하지 않는지, send-ready 신호 뒤 거부된 시도만 한 번 재제출하고 성공 뒤 추가 신호로 replay하지 않는지 확인한다. `test_cpp_framework_contract_headers`, `test_cpp_framework_stream_framework`, `test_cpp_framework_target_contract`가 통과했다. 설치 package의 clean-consumer compile과 실제 Core STREAM backpressure process E2E가 남아 있어 아직 종결하지 않는다. |
 | CPP-CONTRACT-ROLE-001 | GAP·검증 중 | 구현 checkpoint `4b741bc692`에서 Client runtime record가 없으면 target 대기 전에 `NotConfigured`를 반환하고, Client role은 있지만 ready target이 없는 경우만 `NotFound`를 유지하도록 분리했다. Server-only host의 public `channel_client_t::send()`가 정확한 오류 kind를 반환하는 회귀와 `test_cpp_framework_target_contract`가 통과했다. Cross-language process E2E의 오류 kind assertion이 남아 있어 아직 종결하지 않는다. |
 | CPP-CONTRACT-HTTP-001 | GAP·검증 중 | 구현 checkpoint `14c5f04f03`에서 `http_options_builder_t::snapshot()`과 `validate()`를 private으로 옮기고 host의 `app_t`와 `zlink_framework_options_t`만 접근하도록 제한했다. Application surface에서 두 method가 보이지 않는 negative compile assertion을 추가했고 `test_cpp_framework_contract_headers`, `test_cpp_framework_app_host`가 통과했다. 설치 package의 clean-consumer compile이 남아 있어 아직 종결하지 않는다. |
 
@@ -346,4 +346,4 @@ RouteMesh에 남은 금지 상한 surface·field, JSON 프로파일에 집중한
 - `test_cpp_framework_location_runtime`
 - `test_cpp_framework_http_integration`
 
-이 결과는 기존 test가 현재 구현을 회귀시키지 않았다는 증거다. 그러나 test가 제거 대상 diagnostics API를 여전히 허용하고, 누락된 object query·STREAM timeout을 요구하지 않으며, Server-only ClientServer role과 HTTP public helper 제외를 검사하지 않으므로 새 exact interface gap을 반증하지 않는다. 이번 재검토에서는 install package의 public export, clean consumer와 cross-language process E2E를 실행하지 않았다.
+이 결과는 기존 test가 현재 구현을 회귀시키지 않았다는 증거다. 그러나 test가 제거 대상 diagnostics API를 여전히 허용하고 누락된 object query를 요구하지 않으므로, 남은 exact interface gap을 반증하지 않는다. 이후 checkpoint의 항목별 source test 결과는 각 행에 기록했다. 이번 재검토에서는 install package의 public export, clean consumer와 cross-language process E2E를 실행하지 않았다.
