@@ -1790,6 +1790,20 @@ int main ()
       "CPP-RELOC-001",
       "blocked relocation results are still retained as terminal state");
 
+    /* CPP-RELOC-002 — a missing descriptor or admitted peer is rechecked
+     * against the shared relocation deadline and Location polling policy. */
+    gate.require (
+      app_runtime.find ("relocation_topology_preflight_until")
+          != std::string::npos
+        && app_runtime.find ("wait_for_relocation_target")
+             != std::string::npos
+        && app_runtime.find ("relocation_topology_poll_interval")
+             != std::string::npos
+        && app_runtime.find ("options ().polling_interval")
+             != std::string::npos,
+      "CPP-RELOC-002",
+      "relocation still treats a one-shot target snapshot as terminal");
+
     /* CPP-LAYER-005 — no new completion can be admitted after the shutdown
      * result becomes visible to a termination waiter. */
     const auto stop_completion_admission =

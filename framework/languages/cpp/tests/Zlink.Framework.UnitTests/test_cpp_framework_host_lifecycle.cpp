@@ -238,27 +238,6 @@ class relocation_source_service_t final
             _sender.join ();
     }
 
-    bool target_ready () const
-    {
-        if (!_runtime)
-            return false;
-        const auto snapshot =
-          _runtime->snapshot ("host-relocation-mesh");
-        return std::any_of (
-          snapshot.peers.begin (), snapshot.peers.end (),
-          [] (const auto &peer) {
-              return peer.state == zlink::framework::peer_state_t::ready
-                     && peer.node_rid
-                          == zlink::routing_id_t::from (
-                            "aa-host-relocation-target");
-          });
-    }
-
-    zlink::framework::mesh_node_snapshot_t snapshot () const
-    {
-        return _runtime->snapshot ("host-relocation-mesh");
-    }
-
     std::atomic_bool created_spot{false};
     std::atomic_bool ready_sent{false};
     std::string error;
@@ -384,7 +363,9 @@ class blocking_stop_service_t final :
 bool verify_relocation_blocker (
   std::string_view label,
   std::function<void (zlink::framework::zlink_framework_options_t &)> configure,
-  zlink::framework::relocation_reason_t expected)
+  zlink::framework::relocation_reason_t expected,
+  std::chrono::milliseconds relocation_deadline = std::chrono::seconds (1),
+  std::chrono::milliseconds minimum_wait = std::chrono::milliseconds::zero ())
 {
     auto app = zlink::framework::app_t::create ();
     app.add_zlink_framework (std::move (configure));
@@ -403,17 +384,21 @@ bool verify_relocation_blocker (
            && std::chrono::steady_clock::now () < serving_deadline)
         std::this_thread::yield ();
 
+    const auto relocation_started_at = std::chrono::steady_clock::now ();
     const auto result =
       app.relocate (
            {.mode =
               zlink::framework::relocation_mode_t::planned_maintenance,
-            .deadline = std::chrono::seconds (1)})
+            .deadline = relocation_deadline})
         .result ()
         .value ();
+    const auto relocation_elapsed =
+      std::chrono::steady_clock::now () - relocation_started_at;
     const bool matched =
       result.outcome == zlink::framework::relocation_outcome_t::blocked
       && result.reason == expected
-      && app.is_ready ();
+      && app.is_ready ()
+      && relocation_elapsed >= minimum_wait;
     if (!matched)
         std::cerr << label
                   << " must block Relocate without changing Serving\n";
@@ -511,39 +496,13 @@ bool verify_application_signaled_relocation ()
     char *target_arguments[] = {target_program, nullptr};
     int target_exit_code = -1;
     std::thread target_thread ([&] {
+        /* Relocate starts before this replacement publishes its descriptor.
+         * The source must keep checking Store and Core peer readiness until
+         * the shared deadline instead of rejecting the first empty snapshot. */
+        std::this_thread::sleep_for (std::chrono::milliseconds (100));
         target_exit_code =
           target.run (1, target_arguments);
     });
-    if (!wait_until (
-          [&] { return target.is_ready (); },
-          std::chrono::seconds (5))) {
-        std::cerr << "target app must reach Serving\n";
-        target.request_stop ();
-        source.request_stop ();
-        target_thread.join ();
-        source_thread.join ();
-        return false;
-    }
-    if (!wait_until (
-          [&] {
-              return source_service_view->target_ready ();
-          },
-          std::chrono::seconds (5))) {
-        std::cerr
-          << "source app must admit the target peer before relocation";
-        const auto snapshot = source_service_view->snapshot ();
-        for (const auto &peer : snapshot.peers)
-            std::cerr << " peer=" << peer.node_rid.to_string ()
-                      << " state=" << static_cast<int> (peer.state)
-                      << " unavailable="
-                      << peer.unavailable_reason.has_value ();
-        std::cerr << '\n';
-        target.request_stop ();
-        source.request_stop ();
-        target_thread.join ();
-        source_thread.join ();
-        return false;
-    }
 
     auto relocation = source.relocate (
       {.mode =
@@ -645,7 +604,9 @@ int main ()
                     zlink::routing_id_t::from ("retire-single-node"))
                 .listen ("inproc://cpp-retire-single-node");
           },
-          zlink::framework::relocation_reason_t::target_unavailable)) {
+          zlink::framework::relocation_reason_t::target_unavailable,
+          std::chrono::milliseconds (75),
+          std::chrono::milliseconds (50))) {
         return EXIT_FAILURE;
     }
 

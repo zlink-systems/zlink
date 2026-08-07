@@ -2682,7 +2682,7 @@ struct relocation_preflight_t
 };
 
 relocation_preflight_t
-relocation_topology_preflight (
+relocation_topology_preflight_once (
   detail::app_state_t &state,
   const relocation_options_t &options)
 {
@@ -2791,6 +2791,84 @@ relocation_topology_preflight (
     }
 }
 
+std::chrono::milliseconds
+relocation_topology_poll_interval (detail::app_state_t &state) noexcept
+{
+    try {
+        auto provider = state.services.build_provider ();
+        if (auto runtime = provider.get<runtime::location_runtime_t> ()) {
+            return std::max (
+              runtime->get ().options ().polling_interval,
+              std::chrono::milliseconds (1));
+        }
+    }
+    catch (...) {
+    }
+    return std::chrono::milliseconds (25);
+}
+
+void wait_for_relocation_topology_poll (
+  std::chrono::steady_clock::time_point deadline_at,
+  std::chrono::milliseconds polling_interval)
+{
+    std::this_thread::sleep_until (
+      std::min (deadline_at,
+                std::chrono::steady_clock::now () + polling_interval));
+}
+
+relocation_preflight_t
+relocation_topology_preflight_until (
+  detail::app_state_t &state,
+  const relocation_options_t &options,
+  std::chrono::steady_clock::time_point deadline_at)
+{
+    const auto polling_interval =
+      relocation_topology_poll_interval (state);
+    for (;;) {
+        auto result = relocation_topology_preflight_once (state, options);
+        if (result.blocker
+              != relocation_reason_t::target_unavailable
+            || std::chrono::steady_clock::now () >= deadline_at) {
+            return result;
+        }
+        wait_for_relocation_topology_poll (
+          deadline_at, polling_interval);
+    }
+}
+
+template <typename Predicate>
+std::optional<mesh_node_descriptor_t>
+wait_for_relocation_target (
+  runtime::store_location_resolvers_t &peers,
+  std::string_view mesh_name,
+  std::chrono::steady_clock::time_point deadline_at,
+  std::chrono::milliseconds polling_interval,
+  const std::function<bool ()> &shutdown_requested,
+  Predicate &&eligible,
+  relocation_reason_t &failure_reason)
+{
+    for (;;) {
+        auto live = peers
+                      .list_live_mesh_nodes (std::string (mesh_name))
+                      .result ()
+                      .value ();
+        const auto target = std::find_if (
+          live.begin (), live.end (), eligible);
+        if (target != live.end ())
+            return *target;
+        if (shutdown_requested ()) {
+            failure_reason = relocation_reason_t::shutdown_requested;
+            return std::nullopt;
+        }
+        if (std::chrono::steady_clock::now () >= deadline_at) {
+            failure_reason = relocation_reason_t::target_unavailable;
+            return std::nullopt;
+        }
+        wait_for_relocation_topology_poll (
+          deadline_at, polling_interval);
+    }
+}
+
 bool publish_mesh_descriptor_state (
   detail::app_state_t &state,
   framework_runtime_state_t desired) noexcept
@@ -2836,6 +2914,8 @@ task_t<relocation_result_t> app_t::relocate (
     if (deadline <= std::chrono::milliseconds::zero ())
         throw std::invalid_argument ("relocation deadline must be greater than zero");
     options.deadline = deadline;
+    const auto preflight_deadline_at =
+      std::chrono::steady_clock::now () + deadline;
 
     auto &operation = _state->relocation_operation;
     std::thread completed_worker;
@@ -2853,7 +2933,8 @@ task_t<relocation_result_t> app_t::relocate (
     if (runtime_state () != framework_runtime_state_t::serving) {
         preflight.blocker = relocation_reason_t::runtime_not_ready;
     } else {
-        preflight = relocation_topology_preflight (*_state, options);
+        preflight = relocation_topology_preflight_until (
+          *_state, options, preflight_deadline_at);
         if (!preflight.blocker
             && (!_state->services.contains (
                   std::type_index (typeid (relocation_repository_t)))
@@ -2903,11 +2984,22 @@ task_t<relocation_result_t> app_t::relocate (
                      relocation_outcome_t::blocked,
                      relocation_reason_t::store_unavailable}));
             }
+            operation.deadline =
+              std::chrono::duration_cast<std::chrono::milliseconds> (
+                preflight_deadline_at
+                - std::chrono::steady_clock::now ());
+            if (operation.deadline <= std::chrono::milliseconds::zero ()) {
+                return task_t<relocation_result_t> (
+                  result_t<relocation_result_t>::success (
+                    {options.mode,
+                     preflight.effective_target_application_version,
+                     relocation_outcome_t::blocked,
+                     relocation_reason_t::target_unavailable}));
+            }
             operation.started = true;
             operation.options = options;
-            operation.deadline = deadline;
             operation.deadline_at =
-              std::chrono::system_clock::now () + deadline;
+              std::chrono::system_clock::now () + operation.deadline;
             operation.result.mode = options.mode;
             operation.result.effective_target_application_version =
               preflight.effective_target_application_version;
@@ -3013,6 +3105,8 @@ void app_t::run_shared_relocation (
             complete (terminal);
             return;
         }
+        const auto topology_poll_interval =
+          relocation_topology_poll_interval (state);
 
         std::vector<std::shared_ptr<detail::mesh_node_runtime_t>> relocation_nodes;
         for (const auto &service : state.hosted_services) {
@@ -3038,10 +3132,6 @@ void app_t::run_shared_relocation (
                     readiness_meshes.push_back (
                       node->mesh_name ());
                 }
-                auto live = peers->get ()
-                              .list_live_mesh_nodes (node->mesh_name ())
-                              .result ()
-                              .value ();
                 const auto local_rid = node->routing_id ();
                 auto application_units =
                   spot_runtime->application_relocation_units ();
@@ -3069,8 +3159,9 @@ void app_t::run_shared_relocation (
 
                 std::set<std::string> aggregate_actor_ids;
                 for (const auto &unit : application_units) {
-                    const auto target = std::find_if (
-                      live.begin (), live.end (),
+                    const auto target = wait_for_relocation_target (
+                      peers->get (), node->mesh_name (), deadline_at,
+                      topology_poll_interval, shutdown_requested,
                       [&] (const auto &peer) {
                           if (peer.state
                                 != framework_runtime_state_t::serving
@@ -3105,10 +3196,8 @@ void app_t::run_shared_relocation (
                                   placement_object_kind_t::actor,
                                   ::zlink::framework::detail::actor_ref_access_t::actor_type (actor));
                             });
-                      });
-                    if (target == live.end ()) {
-                        terminal.reason =
-                          relocation_reason_t::target_unavailable;
+                      }, terminal.reason);
+                    if (!target) {
                         complete (terminal);
                         return;
                     }
@@ -3303,8 +3392,10 @@ void app_t::run_shared_relocation (
                         complete (terminal);
                         return;
                     }
-                    const auto target = std::find_if (
-                      live.begin (), live.end (), [&] (const auto &peer) {
+                    const auto target = wait_for_relocation_target (
+                      peers->get (), node->mesh_name (), deadline_at,
+                      topology_poll_interval, shutdown_requested,
+                      [&] (const auto &peer) {
                           return peer.state
                                    == framework_runtime_state_t::serving
                                  && peer.application_version
@@ -3321,10 +3412,8 @@ void app_t::run_shared_relocation (
                                               && capability.stable_type
                                                    == ::zlink::framework::detail::actor_ref_access_t::actor_type (actor);
                                    });
-                      });
-                    if (target == live.end ()) {
-                        terminal.reason =
-                          relocation_reason_t::target_unavailable;
+                      }, terminal.reason);
+                    if (!target) {
                         complete (terminal);
                         return;
                     }
