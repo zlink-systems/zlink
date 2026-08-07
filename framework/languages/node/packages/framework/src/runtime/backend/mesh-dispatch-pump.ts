@@ -7,6 +7,7 @@ import {
 } from '../foundation/service-runtime-contracts';
 import type { ZLinkBackendMeshNode } from './contracts';
 import type { ZLinkInboundDispatchBudget } from '../dispatch/inbound-dispatch-budget';
+import { runZLinkExecutionArea } from '../execution';
 
 const MESH_DISPATCH_TIMER_YIELD_BATCHES = 16;
 const MESH_DISPATCH_LIFECYCLE_CLAIM_BUDGET = 4;
@@ -186,8 +187,13 @@ export class ZLinkMeshDispatchPump {
                   }
                   applicationBudget?.start(payloadBytes);
                   started = true;
-                  await this.options.dispatch(drained.records[index], record);
-                  await record.onTerminalCompletion?.();
+                  await runZLinkExecutionArea(
+                    domain === ReadyDomain.Infrastructure ? 'infrastructure' : 'application',
+                    async () => {
+                      await this.options.dispatch(drained.records[index], record);
+                      await record.onTerminalCompletion?.();
+                    }
+                  );
                 } finally {
                   releaseCompletion?.();
                   if (started) {

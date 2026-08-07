@@ -57,6 +57,7 @@ import type {
 } from '../backend/contracts';
 import type { ZLinkLocationOwnerToken } from '../../contracts/Locations/Writes';
 import { ZLinkMeshDispatchPump } from '../backend/mesh-dispatch-pump';
+import { requireZLinkInfrastructureExecutionArea } from '../execution';
 import { ZLinkMeshCompletionTable } from '../backend/mesh-completion-table';
 import type { ZLinkDispatchErrorReporter } from '../channels';
 import {
@@ -813,6 +814,7 @@ export class ZLinkSpotNodeRuntimeManager {
     record: ReceiveRecord
   ): Promise<void> {
     if (record.kind === ReceiveKind.Completion) {
+      requireZLinkInfrastructureExecutionArea();
       const completions = this.meshCompletions.get(meshName);
       if (completions === undefined) {
         throw new ZLinkConfigurationException(

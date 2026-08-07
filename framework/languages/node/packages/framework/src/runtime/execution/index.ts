@@ -1,6 +1,10 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { ZLinkConfigurationException } from '../configuration';
 import { isAbortError } from '../abort';
+import {
+  ZLinkFrameworkInternalErrorKind,
+  createInternalFrameworkException
+} from '../framework-errors-internal';
 
 export interface ZLinkRuntimeTaskFailure {
   readonly taskName: string;
@@ -19,6 +23,30 @@ interface ZLinkSpotSerialExecutorLike {
 }
 
 const spotSerialTurnStorage = new AsyncLocalStorage<ZLinkSpotSerialTurnContext>();
+
+export type ZLinkExecutionArea = 'application' | 'infrastructure';
+
+const executionAreaStorage = new AsyncLocalStorage<ZLinkExecutionArea>();
+
+export function runZLinkExecutionArea<T>(
+  area: ZLinkExecutionArea,
+  operation: () => T
+): T {
+  return executionAreaStorage.run(area, operation);
+}
+
+export function currentZLinkExecutionArea(): ZLinkExecutionArea | undefined {
+  return executionAreaStorage.getStore();
+}
+
+export function requireZLinkInfrastructureExecutionArea(): void {
+  if (currentZLinkExecutionArea() !== 'infrastructure') {
+    throw createInternalFrameworkException(
+      ZLinkFrameworkInternalErrorKind.InvalidOperation,
+      'Infrastructure-only work requires the infrastructure execution area.'
+    );
+  }
+}
 
 export class ZLinkSpotSerialTurn {
   private suspendedResolve: (() => void) | undefined;
@@ -114,9 +142,12 @@ export function runZLinkSpotSerialTurn<T>(
   turn: ZLinkSpotSerialTurn,
   operation: () => Promise<T> | T
 ): Promise<T> {
-  return spotSerialTurnStorage.run(
-    { executor, turnId, turn },
-    async () => operation()
+  return runZLinkExecutionArea(
+    'application',
+    () => spotSerialTurnStorage.run(
+      { executor, turnId, turn },
+      async () => operation()
+    )
   );
 }
 

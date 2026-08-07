@@ -425,6 +425,69 @@ test('backend mesh dispatch pump yields between continuous receive batches', asy
   }
 });
 
+test('backend mesh dispatch pump marks application and infrastructure execution areas', async () => {
+  let readyHandler;
+  let currentDomain;
+  const pending = new Set([
+    framework.ReadyDomain.Infrastructure,
+    framework.ReadyDomain.Application
+  ]);
+  const observed = [];
+  let complete;
+  const completed = new Promise((resolve) => { complete = resolve; });
+  const node = {
+    setReadyHandler(handler) { readyHandler = handler; },
+    createReadyBatch() {
+      return {
+        reset() {},
+        takeClaim() {
+          let consumed = false;
+          const domain = currentDomain;
+          return {
+            recvBatch() {
+              if (consumed) return { ok: false, records: [] };
+              consumed = true;
+              return { ok: true, records: [{ domain, parts: [] }] };
+            },
+            release() {}
+          };
+        },
+        close() {}
+      };
+    },
+    createReceiveBatch() {
+      return { reset() {}, close() {} };
+    },
+    drainReady(domain) {
+      currentDomain = domain;
+      if (!pending.delete(domain)) return { ok: false, hasResidue: false, records: [] };
+      return {
+        ok: true,
+        hasResidue: false,
+        records: [{ ownerKind: framework.ReadyOwnerKind.Node, domain }]
+      };
+    }
+  };
+  const pump = new backend.ZLinkMeshDispatchPump(node, {
+    dispatch(_owner, record) {
+      observed.push([record.domain, framework.currentZLinkExecutionArea()]);
+      if (observed.length === 2) complete();
+    }
+  });
+
+  try {
+    pump.start();
+    readyHandler(framework.ReadyDomain.Infrastructure | framework.ReadyDomain.Application);
+    await completed;
+    assert.deepEqual(observed, [
+      [framework.ReadyDomain.Infrastructure, 'infrastructure'],
+      [framework.ReadyDomain.Application, 'application']
+    ]);
+  } finally {
+    await pump.dispose();
+  }
+});
+
 test('backend mesh dispatch pump yields between continuous ready batches without messages', async () => {
   const totalBatches = 32;
   let readyHandler;
@@ -838,9 +901,11 @@ test('backend mesh record dispatcher routes node, spot, actor, and infrastructur
   await dispatcher.dispatch(owner(framework.ReadyOwnerKind.Node), record(framework.ReceiveKind.ChannelRequest));
   await dispatcher.dispatch(owner(framework.ReadyOwnerKind.Spot), record(framework.ReceiveKind.SpotControl));
   await dispatcher.dispatch(owner(framework.ReadyOwnerKind.Actor), record(framework.ReceiveKind.ActorSend));
-  await dispatcher.dispatch(owner(framework.ReadyOwnerKind.Node), record(framework.ReceiveKind.Completion));
-  await dispatcher.dispatch(owner(framework.ReadyOwnerKind.Node), record(framework.ReceiveKind.SendReady));
-  await dispatcher.dispatch(owner(framework.ReadyOwnerKind.Node), record(framework.ReceiveKind.TransferControl));
+  await framework.runZLinkExecutionArea('infrastructure', async () => {
+    await dispatcher.dispatch(owner(framework.ReadyOwnerKind.Node), record(framework.ReceiveKind.Completion));
+    await dispatcher.dispatch(owner(framework.ReadyOwnerKind.Node), record(framework.ReceiveKind.SendReady));
+    await dispatcher.dispatch(owner(framework.ReadyOwnerKind.Node), record(framework.ReceiveKind.TransferControl));
+  });
 
   assert.deepEqual(routed, [
     ['node', framework.ReceiveKind.ChannelRequest],
@@ -853,6 +918,13 @@ test('backend mesh record dispatcher routes node, spot, actor, and infrastructur
   assert.throws(
     () => dispatcher.dispatch(owner(framework.ReadyOwnerKind.Spot), record(framework.ReceiveKind.ChannelSend)),
     /requires owner kind/
+  );
+  assert.throws(
+    () => framework.runZLinkExecutionArea(
+      'application',
+      () => dispatcher.dispatch(owner(framework.ReadyOwnerKind.Node), record(framework.ReceiveKind.Completion))
+    ),
+    (error) => error.kind === framework.ZLinkFrameworkErrorKind.InvalidOperation
   );
 });
 
