@@ -76,37 +76,49 @@ class evidence_store_t
         append (std::move (entry));
     }
 
-    void add_flow (const fw::message_flow_event_t &event)
+    void add_flow (const fw::log_record_t &record)
     {
-        if (!event.packet_name || !event.actor_id || !event.correlation_id
-            || !event.flow_id) {
+        if (record.message != "message flow")
             return;
-        }
+        const auto field = [&record] (std::string_view name) {
+            const auto found = std::find_if (
+              record.fields.begin (), record.fields.end (),
+              [name] (const auto &value) { return value.key == name; });
+            return found == record.fields.end () ? std::string{} : found->value;
+        };
+        const auto packet_name = field ("packet");
+        const auto actor_id = field ("actor");
+        const auto correlation_id = field ("corr");
+        const auto flow_id = field ("flow");
+        if (packet_name.empty () || actor_id.empty ()
+            || correlation_id.empty () || flow_id.empty ())
+            return;
         static const std::set<std::string> transfer_markers{
           "commit_request", "location_committed", "commit_ack", "source_cleanup",
           "pending_admission_expired", "message_follow_registered",
           "message_follow_route_removed", "message_follow_relay", "message_follow_expired",
           "handoff_backlog",
           "backlog_enqueued", "handoff_request_frame", "backlog_request_frame"};
-        if (!transfer_markers.contains (*event.packet_name)) {
+        if (!transfer_markers.contains (packet_name)) {
             return;
         }
-        auto value = *event.correlation_id;
-        if (*event.packet_name == "message_follow_registered" && event.channel_name) {
-            value = *event.channel_name;
-            if (event.spot_id) {
-                value += ":" + *event.spot_id;
+        auto value = correlation_id;
+        const auto channel_name = field ("channel");
+        const auto spot_id = field ("spot");
+        if (packet_name == "message_follow_registered" && !channel_name.empty ()) {
+            value = channel_name;
+            if (!spot_id.empty ()) {
+                value += ":" + spot_id;
             }
         }
-        const bool request_frame = *event.packet_name == "handoff_request_frame"
-                                   || *event.packet_name == "backlog_request_frame";
-        if (request_frame && event.channel_name) {
-            value = *event.channel_name;
+        const bool request_frame = packet_name == "handoff_request_frame"
+                                   || packet_name == "backlog_request_frame";
+        if (request_frame && !channel_name.empty ()) {
+            value = channel_name;
         }
         e2e::actor_evidence_t entry{
-          "message_flow", *event.actor_id, *event.packet_name, std::move (value), _node_rid,
-          request_frame ? *event.flow_id : *event.correlation_id, *event.correlation_id,
-          *event.flow_id};
+          "message_flow", actor_id, packet_name, std::move (value), _node_rid,
+          request_frame ? flow_id : correlation_id, correlation_id, flow_id};
         append (std::move (entry));
     }
 
@@ -1350,6 +1362,9 @@ int run_host_impl (transfer_host_role_t host_role, int argc, char **argv)
     auto *shutdown_flag_ptr = shutdown_flag.get ();
 
     app.logging ().use_file (log_dir + "/" + rid + ".app.log");
+    app.logging ().use_provider (
+      "spot-actor-transfer-evidence",
+      [] (const fw::log_record_t &record) { g_evidence->add_flow (record); });
     app.add_zlink_framework ([&] (fw::zlink_framework_options_t &framework) {
         framework.services ().add_singleton<evidence_store_t> (std::move (evidence));
         framework.services ().add_singleton<domain_state_store_t> (std::move (domain_state));
@@ -1363,9 +1378,7 @@ int run_host_impl (transfer_host_role_t host_role, int argc, char **argv)
         framework.set_default_request_timeout (std::chrono::seconds (3));
 
         framework.configure_dispatch ()
-          .message_flow (fw::message_flow_log_mode_t::normal)
-          .set_message_flow_observer (
-            [] (const fw::message_flow_event_t &event) { g_evidence->add_flow (event); });
+          .message_flow (fw::message_flow_log_mode_t::normal);
 
         framework.set_message_follow_duration (std::chrono::seconds (5));
         framework.add_location_store (

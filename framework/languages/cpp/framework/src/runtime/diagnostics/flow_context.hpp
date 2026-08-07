@@ -4,6 +4,8 @@
 #include <zlink/framework/contracts/dispatch/execution.hpp>
 #include <zlink/framework/contracts/errors/error.hpp>
 
+#include "runtime/diagnostics/dispatch_events.hpp"
+
 #include <cstdint>
 #include <optional>
 #include <string>

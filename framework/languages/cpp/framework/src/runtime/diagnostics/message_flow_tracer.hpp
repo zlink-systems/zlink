@@ -5,6 +5,7 @@
 
 #include "runtime/diagnostics/diagnostic_event_sink.hpp"
 #include "runtime/diagnostics/dispatch_diagnostics_names.hpp"
+#include "runtime/diagnostics/dispatch_options_access.hpp"
 #include "runtime/diagnostics/flow_context.hpp"
 
 #include <atomic>
@@ -115,21 +116,12 @@ class message_flow_tracer_t
     {
         traced_count ().fetch_add (1, std::memory_order_relaxed);
         log_default (event);
-
-        diagnostic_event_sink_t::deliver_observer (
-          _options->message_flow_observer, _options->message_flow_callback, std::move (event),
-          [] (message_flow_observer_t &observer, const message_flow_event_t &event) {
-              observer.on_message_flow (event);
-          },
-          [] (const std::function<void (const message_flow_event_t &)> &callback,
-              const message_flow_event_t &event) { callback (event); },
-          [logger = _options->diagnostics_logger] {
-              observer_failure_count ().fetch_add (1, std::memory_order_relaxed);
-              diagnostic_event_sink_t::log_or_clog (logger, log_level_t::error,
-                                                    "message flow observer failed",
-                                                    "zlink framework observer error:", {});
-          },
-          [] { observer_dropped_count ().fetch_add (1, std::memory_order_relaxed); });
+        try {
+            dispatch_options_access_t::observe (*_options, event);
+        }
+        catch (...) {
+            observer_failure_count ().fetch_add (1, std::memory_order_relaxed);
+        }
     }
 
   public:
@@ -285,7 +277,8 @@ class message_flow_tracer_t
             // Prefer the framework logger with structured fields (so a file/console
             // sink renders them and a collector callback gets record.fields); fall
             // back to a flat clog line when no logger is wired (tests, no-app usage).
-            diagnostic_event_sink_t::log_or_clog (_options->diagnostics_logger, log_level_t::info,
+            diagnostic_event_sink_t::log_or_clog (
+                                                  dispatch_options_access_t::logger (*_options), log_level_t::info,
                                                   "message flow",
                                                   "zlink flow:", std::move (fields));
         }

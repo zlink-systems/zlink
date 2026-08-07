@@ -1101,11 +1101,13 @@ app_t &app_t::add_zlink_framework (std::function<void (zlink_framework_options_t
         diagnostics_log_file) {
         logging_builder_t flow_logging;
         flow_logging.use_file (*diagnostics_log_file);
-        options.configure_dispatch ().diagnostics_logger =
-          flow_logging.factory ().create ("zlink.framework.dispatch");
+        detail::dispatch_options_access_t::set_logger (
+          options.configure_dispatch (),
+          flow_logging.factory ().create ("zlink.framework.dispatch"));
     } else if (_state->logging.has_output_sink ()) {
-        options.configure_dispatch ().diagnostics_logger =
-          _state->logging.factory ().create ("zlink.framework.dispatch");
+        detail::dispatch_options_access_t::set_logger (
+          options.configure_dispatch (),
+          _state->logging.factory ().create ("zlink.framework.dispatch"));
     }
     const auto http_snapshot = options.http ().snapshot ();
     const auto application_hwm_bytes = resolve_application_hwm (

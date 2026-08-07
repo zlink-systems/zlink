@@ -137,6 +137,8 @@ int main ()
     const auto live_location_reader =
       read_file (root / "framework/src/runtime/locations/live_location_reader.hpp");
     const auto app_runtime = read_file (root / "framework/src/runtime/host/app.cpp");
+    const auto dispatch_events = read_file (
+      root / "framework/src/runtime/diagnostics/dispatch_events.hpp");
     const auto mesh_node_runtime =
       read_file (root / "framework/src/runtime/mesh/mesh_node_runtime.cpp");
     const auto actor_transfer_coordinator = read_file (
@@ -820,8 +822,8 @@ int main ()
                   "CPP-G0-ROUTEMESH-001", "route-mesh runtime options surface is missing");
 
     /* CPP-G0-FLOW-001 — flow correlation fields and wire marker. */
-    gate.require (execution_hpp.find ("flow_id") != std::string::npos, "CPP-G0-FLOW-001",
-                  "message_flow_event_t lacks flow_id");
+    gate.require (dispatch_events.find ("flow_id") != std::string::npos, "CPP-G0-FLOW-001",
+                  "internal message flow record lacks flow_id");
     gate.require (execution_hpp.find ("flow_origin_t") != std::string::npos, "CPP-G0-FLOW-001",
                   "flow_origin_t enum is missing");
     gate.require (stream_hpp.find ("has_flow_id") != std::string::npos, "CPP-G0-FLOW-001",
@@ -838,6 +840,22 @@ int main ()
                       "CPP-CONTRACT-DIAG-001",
                       "diagnostics level is missing: " + required);
     }
+
+    /* CPP-CONTRACT-DIAG-002 — application diagnostics leave the runtime's
+     * event representation behind the installed header boundary. */
+    for (const std::string removed : {
+           "message_flow_event_t", "message_dispatch_error_event_t",
+           "message_flow_observer_t", "set_message_flow_observer"}) {
+        gate.require (
+          execution_hpp.find (removed) == std::string::npos,
+          "CPP-CONTRACT-DIAG-002",
+          "dispatch execution header still exports " + removed);
+    }
+    gate.require (
+      execution_hpp.find ("std::optional<logger_t<>> diagnostics_logger")
+        == std::string::npos,
+      "CPP-CONTRACT-DIAG-002",
+      "dispatch execution header still exports a diagnostics logger field");
     for (const std::string forbidden : {
            "\n    errors_only =", "\n    key_transitions =", "\n    verbose =",
            "\n    diagnostic ="}) {

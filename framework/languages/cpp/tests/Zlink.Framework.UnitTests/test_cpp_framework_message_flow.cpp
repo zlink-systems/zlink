@@ -8,6 +8,7 @@
 
 #include "runtime/diagnostics/dispatch_error_reporter.hpp"
 #include "runtime/diagnostics/dispatch_diagnostics_names.hpp"
+#include "runtime/diagnostics/dispatch_options_access.hpp"
 #include "runtime/diagnostics/message_flow_tracer.hpp"
 
 #include <atomic>
@@ -307,17 +308,18 @@ int main ()
         }
     }
 
-    // observer callbacks are delivered asynchronously and see the same event fields.
+    // The internal test observer sees the same event fields as the logger adapter.
     {
         auto options = options_with_mode (message_flow_log_mode_t::normal);
         std::atomic_int observed{0};
         std::atomic_bool saw_packet{false};
-        options.set_message_flow_observer ([&] (const message_flow_event_t &event) {
+        zlink::framework::detail::dispatch_options_access_t::set_observer_for_tests (
+          options, [&] (const message_flow_event_t &event) {
             if (event.packet_name && *event.packet_name == "PlaceOrder") {
                 saw_packet.store (true, std::memory_order_release);
             }
             observed.fetch_add (1, std::memory_order_acq_rel);
-        });
+          });
         (void) capture_clog ([&] {
             message_flow_tracer_t (options).trace (flow_event (message_flow_outcome_t::replied));
         });
@@ -335,7 +337,8 @@ int main ()
     {
         auto options = options_with_mode (message_flow_log_mode_t::normal);
         std::atomic_bool saw_fanout_failure{false};
-        options.set_message_flow_observer ([&] (const message_flow_event_t &event) {
+        zlink::framework::detail::dispatch_options_access_t::set_observer_for_tests (
+          options, [&] (const message_flow_event_t &event) {
             if (event.outcome == message_flow_outcome_t::error
                 && event.surface == dispatch_error_surface_t::channel
                 && event.message_kind == dispatch_message_kind_t::publish
@@ -350,7 +353,7 @@ int main ()
                      dispatch_error_action_t::drop)) {
                 saw_fanout_failure.store (true, std::memory_order_release);
             }
-        });
+          });
         const framework_exception_t missing_handler (
           framework_error_kind_t::not_found, "handler is not registered");
         dispatch_error_reporter_t (options).report (message_dispatch_error_event_t{

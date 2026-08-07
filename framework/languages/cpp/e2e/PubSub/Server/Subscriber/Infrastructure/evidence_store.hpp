@@ -7,6 +7,7 @@
 #include <chrono>
 #include <mutex>
 #include <stdexcept>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -48,31 +49,25 @@ class evidence_store_t
                            + "|value=" + value_copy);
     }
 
-    void record_error (const zlink::framework::message_flow_event_t &error)
+    void record_error (const zlink::framework::log_record_t &record)
     {
-        if (error.outcome != zlink::framework::message_flow_outcome_t::error) {
+        if (record.message != "dispatch error") {
             return;
         }
-        std::string message;
-        if (error.exception) {
-            try {
-                std::rethrow_exception (error.exception);
-            }
-            catch (const std::exception &ex) {
-                message = ex.what ();
-            }
-            catch (...) {
-                message = "unknown";
-            }
-        }
+        const auto field = [&record] (std::string_view name) {
+            const auto found = std::find_if (
+              record.fields.begin (), record.fields.end (),
+              [name] (const auto &value) { return value.key == name; });
+            return found == record.fields.end () ? std::string{} : found->value;
+        };
         std::lock_guard lock (_mutex);
-        const auto message_kind = server::kind_name (error.message_kind);
-        const auto reason = server::reason_name (*error.error_reason);
-        const auto action = server::action_name (*error.error_action);
-        const auto packet_name = error.packet_name.value_or ("");
-        const auto topic = error.topic.value_or ("");
+        const auto message_kind = field ("kind");
+        const auto reason = field ("reason");
+        const auto action = field ("action");
+        const auto packet_name = field ("packet");
+        const auto topic = field ("topic");
         errors.push_back (
-          {message_kind, reason, action, packet_name, topic, std::move (message)});
+          {message_kind, reason, action, packet_name, topic, field ("error")});
         entries.push_back ("error|subscriber=" + subscriber_id + "|kind=" + message_kind
                            + "|reason=" + reason + "|action=" + action + "|packet="
                            + packet_name + "|topic=" + topic);

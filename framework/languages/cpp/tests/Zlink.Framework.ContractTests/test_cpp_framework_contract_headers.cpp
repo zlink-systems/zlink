@@ -1210,18 +1210,6 @@ static_assert (
           std::declval<std::optional<std::uint64_t>> ())),
     zlink::framework::inbound_dispatch_options_t &>);
 
-static_assert (
-  std::is_same_v<
-    decltype (std::declval<zlink::framework::dispatch_options_t &> ().set_message_flow_observer (
-      std::declval<std::shared_ptr<zlink::framework::message_flow_observer_t>> ())),
-    zlink::framework::dispatch_options_t &>);
-
-static_assert (
-  std::is_same_v<
-    decltype (std::declval<zlink::framework::dispatch_options_t &> ().set_message_flow_observer (
-      std::declval<std::function<void (const zlink::framework::message_flow_event_t &)>> ())),
-    zlink::framework::dispatch_options_t &>);
-
 static_assert (std::is_same_v<decltype (std::declval<zlink::framework::http_context_t &> ()
                                           .response_header ("X-Test", "value")),
                               zlink::framework::http_context_t &>);

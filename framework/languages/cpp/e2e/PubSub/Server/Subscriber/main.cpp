@@ -27,16 +27,16 @@ int main (int argc, char **argv)
     auto *state_ptr = state.get ();
     app.logging ()
       .use_file (pubsub.log_dir + "/" + pubsub.subscriber_id + ".log")
+      .use_file (pubsub.log_dir + "/" + pubsub.subscriber_id + "-flow.log")
+      .use_provider (
+        "pubsub-evidence",
+        [state_ptr] (const zlink::framework::log_record_t &record) {
+            state_ptr->record_error (record);
+        })
       .set_min_level (zlink::framework::log_level_t::debug);
     app.add_zlink_framework ([&] (zlink::framework::zlink_framework_options_t &options) {
         options.configure_dispatch ()
-          .message_flow (zlink::framework::message_flow_log_mode_t::normal)
-          .trace_log_file (pubsub.log_dir + "/" + pubsub.subscriber_id + "-flow.log")
-          .trace_label ("cpp-ps-" + pubsub.subscriber_id)
-          .set_message_flow_observer (
-            [state_ptr] (const zlink::framework::message_flow_event_t &error) {
-                state_ptr->record_error (error);
-            });
+          .message_flow (zlink::framework::message_flow_log_mode_t::normal);
         options.services ().add_singleton<ps_subscriber::evidence_store_t> (std::move (state));
         ps_server::configure_codecs (options.codecs ());
         ps_server::add_redis_location_store (options, pubsub.redis_endpoint, pubsub.redis_key_prefix);

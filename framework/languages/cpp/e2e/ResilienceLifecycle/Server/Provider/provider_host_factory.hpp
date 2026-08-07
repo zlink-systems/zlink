@@ -46,17 +46,17 @@ inline std::uint16_t port_from_tcp_endpoint (const std::string &endpoint)
 }
 
 inline void configure_provider_host (zlink::framework::zlink_framework_options_t &framework,
+                                     zlink::framework::logging_builder_t &logging,
                                      const provider_options_t &options)
 {
     framework.configure_dispatch ()
-      .message_flow (zlink::framework::message_flow_log_mode_t::normal)
-      .trace_log_file (options.log_dir + "/" + options.rid + "-flow.log")
-      .trace_label ("cpp-rl-" + options.rid);
+      .message_flow (zlink::framework::message_flow_log_mode_t::normal);
+    logging.use_file (options.log_dir + "/" + options.rid + "-flow.log");
     server::add_redis_location_store (framework, options.redis_endpoint, options.redis_key_prefix);
     auto evidence =
       std::make_shared<evidence_store_t> (options.rid, options.instance_id, options.evidence_file);
     auto fault_state = std::make_shared<fault_state_t> ();
-    configure_evidence_dispatch_error_observer (framework, evidence, fault_state);
+    configure_evidence_dispatch_error_observer (logging, evidence, fault_state);
     framework.services ().add_factory<evidence_store_t> (
       [evidence] (zlink::framework::service_provider_t &) { return evidence; },
       zlink::framework::service_lifetime_t::singleton);

@@ -4,6 +4,7 @@
 #include "runtime/dispatch/inbound_dispatch_budget.hpp"
 #include "runtime/dispatch/receive_batch_budget.hpp"
 #include "runtime/diagnostics/runtime_observation.hpp"
+#include "runtime/diagnostics/dispatch_options_access.hpp"
 #include "runtime/execution/serial_execution_queue.hpp"
 #include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/spots/spot_runtime.hpp"
@@ -1125,7 +1126,8 @@ int main ()
           zlink::framework::detail::spot_node_builder_state_t> (
           "logical-multicast-observation");
         std::atomic_bool observed{false};
-        state->dispatch.set_message_flow_observer (
+        zlink::framework::detail::dispatch_options_access_t::set_observer_for_tests (
+          state->dispatch,
           [&] (const zlink::framework::message_flow_event_t &event) {
               if (event.outcome
                     == zlink::framework::message_flow_outcome_t::error
