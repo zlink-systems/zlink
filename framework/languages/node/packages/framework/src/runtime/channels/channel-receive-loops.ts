@@ -631,7 +631,10 @@ class ZLinkSharedIdleWaiter {
   }
 }
 
-const receiveLoopIdleWaiter = new ZLinkSharedIdleWaiter(5);
+const CHANNEL_RECEIVE_IDLE_POLL_INTERVAL_MS = 5;
+const receiveLoopIdleWaiter = new ZLinkSharedIdleWaiter(
+  CHANNEL_RECEIVE_IDLE_POLL_INTERVAL_MS
+);
 
 function waitReceiveLoopIdle(): Promise<void> {
   return receiveLoopIdleWaiter.wait();

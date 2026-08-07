@@ -46,6 +46,24 @@ Framework operations. `node-raw-binding-port.ts` calls the Node binding public A
 translates `Received`, poll events and Completion callbacks into Framework ownership rules.
 Neither module promotes binding types into the Framework domain contract.
 
+### 1.1 Event-loop wake and polling latency floor
+
+The Node binding's public `Poller` can inspect current readiness without blocking, but it does not
+provide a wake API that invokes a JavaScript callback when a socket becomes readable. The Framework
+therefore schedules the next poll turn with timers that do not block the event loop.
+
+- The RouteMesh backend checks Application receive, Completion progress, monitor events, and
+  liveness every 1 ms. A completion created inside the Framework can wake the pump through its ready
+  callback before that interval expires.
+- Channel ROUTER, subscriber, and route receive loops share one 5 ms idle waiter per process. While
+  records remain available, a loop yields with `setImmediate` at the batch boundary and continues on
+  the next turn instead of waiting 5 ms after every batch.
+
+These values are the **best-case latency floor** when the event loop can run the timer immediately.
+Synchronous application work or a delayed timer phase increases the observed latency. Neither
+interval is public configuration, and the runtime does not add timers in proportion to topology or
+Spot count.
+
 ## 2. Monitor events and transport identity
 
 The Core monitor reports `connectionId` for one physical transport attempt and

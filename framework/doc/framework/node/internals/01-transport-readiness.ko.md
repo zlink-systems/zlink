@@ -32,6 +32,23 @@ Monitor의 `CONNECTION_READY` event는 물리 연결 후보를 식별하는 자�
 Wire admission과 liveness 결과가 Framework topology의 lifecycle 조건을
 만족한 뒤에만 해당 후보를 semantic route로 선택한다.
 
+## Event loop wake와 polling 지연 하한
+
+Node binding의 public `Poller`는 현재 상태를 nonblocking으로 확인할 수 있지만, socket이
+readable로 바뀌는 시점에 JavaScript callback을 호출하는 wake API는 제공하지 않는다. 따라서
+Framework는 event loop를 막지 않는 timer로 다음 poll turn을 예약한다.
+
+- RouteMesh backend는 1 ms마다 Application 수신, Completion 진행, monitor event와 liveness를
+  확인한다. Completion이 Framework 내부에서 직접 만들어진 경우에는 ready callback이 이 주기보다
+  먼저 pump를 깨울 수 있다.
+- Channel ROUTER, subscriber와 route receive loop는 process에서 하나의 5 ms idle waiter를 공유한다.
+  처리할 record가 이어지는 동안에는 batch 예산이 끝날 때 `setImmediate`로 양보하고 바로 다음
+  turn을 진행하므로 5 ms를 매 batch마다 기다리지 않는다.
+
+이 값은 event loop가 즉시 timer를 실행할 수 있을 때의 **최선 지연 하한**이다. 동기 application
+작업이 event loop를 점유하거나 timer phase가 밀리면 실제 지연은 더 길어진다. 두 주기는 public
+설정이 아니며 topology나 Spot 수에 따라 timer를 추가하지 않는다.
+
 ## 수신 경로의 pair identity
 
 Router가 메시지를 수신하면 Core는 payload를 전달한 source pipe에서

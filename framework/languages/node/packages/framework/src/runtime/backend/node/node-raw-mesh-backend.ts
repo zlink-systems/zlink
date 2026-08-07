@@ -99,6 +99,7 @@ const MULTIPART_PACKET_NAME = SERVICE_FRAMEWORK_MULTIPART_PACKET_NAME;
 const MULTIPART_CONTENT_TYPE = SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE;
 const FATAL_UTF8 = new TextDecoder('utf-8', { fatal: true });
 const MAX_DRAIN_RECORDS = 64;
+const MESH_BACKEND_POLL_INTERVAL_MS = 1;
 
 /**
  * M6A MeshNode backend. Stateful Spot/Actor entry points stay explicit until
@@ -1331,7 +1332,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       } finally {
         this.schedulePoll();
       }
-    }, 1);
+    }, MESH_BACKEND_POLL_INTERVAL_MS);
     this.pollTimer.unref();
   }
 
