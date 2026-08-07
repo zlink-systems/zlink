@@ -62,7 +62,7 @@ Gap 하나 또는 서로 강하게 연결된 작은 작업 묶음의 동작과 �
 | DOTNET-API-001 | 상 | STREAM session send | 완료 — per-call admission timeout을 public surface와 기존 submit admission owner에 연결했다 |
 | DOTNET-API-002 | 상 | Location 운영 query | object location type과 exact/list query 전체가 없다 |
 | DOTNET-API-003 | 상 | StreamNode message-size API | 완료 — fluent `MaxMessageSize(bytes)`와 전용 socket config surface를 제공한다 |
-| DOTNET-ROLE-001 | 상 | ClientServer role error | Server role만 등록된 Channel send/request가 `NotConfigured` 대신 RouteMesh fallback 뒤 `NotFound`로 끝난다 |
+| DOTNET-ROLE-001 | 상 | ClientServer role error | 완료 — Server role만 등록된 Channel send/request가 `NotConfigured`로 끝난다 |
 | DOTNET-WIRE-001 | 상 | `framework-json-v1` | strict cross-language JSON profile 대신 `JsonSerializerDefaults.Web` 의미를 사용한다 |
 | DOTNET-SIZE-001 | 상 | RouteMesh SS message size | 제한이 없어야 하지만 public 설정과 runtime이 기본 16 MiB를 receiver·sender에 적용한다 |
 | DOTNET-WIRE-002 | 상 | ClientServer message bound | admission에서 정한 complete-message 상한을 send/request/reply 제출 전에 강제하지 않는다 |
@@ -129,14 +129,26 @@ runtime 경로와 startup validator에는 별도 복제 상태를 만들지 않�
 `.NET 8`의 `TopologyExactSurfaceTests` 4건, 관련 inbound validation 1건과 `BuilderContracts` 5건이
 통과했다. Source package를 사용한 packaged contract와 standalone HTTP clean consumer도 통과했으며, 생성한
 public API snapshot hash는 `68b461cb8de2ff286232a3d17ecc1e30fbd5c540b392dbbc2ba2c5e8b2da680f`다.
+이 checkpoint는 `1e30131ff3`으로 `main`에 push했다.
 
 ### DOTNET-ROLE-001 — Server-only ClientServer Channel의 오류 kind가 틀림
+
+**판정: 완료**
 
 공통 ClientServer 계약은 같은 `ChannelName`의 Server role이 존재하더라도 local Client role이 없으면 send/request를 시작하지 않고 `NotConfigured`로 끝내며, `NotFound`는 ChannelName이나 선택할 target 자체가 없는 경우에만 사용하도록 정한다(`common/spec/09-client-server-channel.ko.md:57-66`).
 
 실제 send는 등록된 channel의 `HasClientServerClient`가 true일 때만 ClientServer 경로에 들어가고, false이면 RouteMesh lookup으로 fallback한다(`Runtime/Host/ZLinkFrameworkRuntimeChannels.cs:21-63`). Request도 같은 분기다(`:65-110`). Server role만 등록된 같은 이름의 Channel은 존재하지만 Client role 조건을 통과하지 못하며, RouteMesh도 없으면 `ResolveRouteMeshNodeForChannel`이 `NotFound`를 던진다(`Runtime/Host/ZLinkFrameworkRuntimeSpots.cs:271-311`). Server-only send/request의 exact error kind를 주장하는 test도 없다.
 
 완료 조건은 Channel 등록은 존재하지만 Client role이 없음을 topology fallback 전에 구분해 두 call 모두 `ZLinkFrameworkErrorKind.NotConfigured`로 끝내는 것이다. Server-only, 이름 자체 없음, Client role은 있으나 ready target 없음을 각각 분리한 회귀 test가 필요하다.
+
+Channel call path가 ClientServer registration을 먼저 분류하고 local Client role이 없으면 RouteMesh lookup을
+시작하지 않도록 바꿨다. 같은 분류를 send와 request가 공유하며, 실패 전에 Framework가 소유한 message parts를
+반납한다.
+
+Owner-layer regression은 Server-only send/request=`NotConfigured`, 이름 없음=`NotFound`, Client role은 있지만
+ready target 없음=`DeadlineExceeded`를 각각 분리해 3건 모두 통과했다. 실제 process scenario
+`CH-E2E-05`도 `logs/20260807-172841-1093480/`에서 통과했으며 Server-only handler evidence가 생성되지
+않고 정상 Client role request만 Server handler에 한 번 도달했다.
 
 ### DOTNET-WIRE-001 — `framework-json-v1` strict profile 미구현
 

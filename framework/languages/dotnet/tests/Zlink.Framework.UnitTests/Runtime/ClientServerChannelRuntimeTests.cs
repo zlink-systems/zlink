@@ -66,17 +66,70 @@ public sealed class ClientServerChannelRuntimeTests
         var parts = new SingleAccessMessageParts();
         try
         {
-            await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+            var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
                 await runtime.SendToChannelAsync(
                     "missing-route-channel",
                     parts,
                     CancellationToken.None));
 
+            Assert.Equal(ZLinkFrameworkErrorKind.NotFound, error.Kind);
             parts.AssertDisposedOnce();
         }
         finally
         {
             parts.DisposeRemaining();
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task ServerOnlyClientServerChannelRejectsSendAndRequestAsNotConfigured()
+    {
+        await using var server = CreateServer(ReservePort());
+        var runtime = server.GetRequiredService<ZLinkFrameworkRuntime>();
+        await runtime.StartAsync(CancellationToken.None);
+        try
+        {
+            var client = server.GetRequiredService<IZLinkRouteClient>();
+            var sendError = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
+                client.SendToChannel("work", new EchoSend("send"))
+                    .Async()
+                    .AsTask());
+            Assert.Equal(ZLinkFrameworkErrorKind.NotConfigured, sendError.Kind);
+
+            var requestError = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
+                client.RequestToChannel("work", new EchoRequest("request"))
+                    .Timeout(TimeSpan.FromMilliseconds(50))
+                    .Async<EchoReply>()
+                    .AsTask());
+            Assert.Equal(ZLinkFrameworkErrorKind.NotConfigured, requestError.Kind);
+            Assert.False(server.GetRequiredService<EchoProbe>().Received.Task.IsCompleted);
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task ClientRoleWithoutReadyTargetUsesAdmissionDeadlineNotConfigurationError()
+    {
+        await using var client = CreateClient(ReservePort());
+        var runtime = client.GetRequiredService<ZLinkFrameworkRuntime>();
+        await runtime.StartAsync(CancellationToken.None);
+        try
+        {
+            var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
+                client.GetRequiredService<IZLinkRouteClient>()
+                    .RequestToChannel("work", new EchoRequest("request"))
+                    .Timeout(TimeSpan.FromMilliseconds(20))
+                    .Async<EchoReply>()
+                    .AsTask());
+
+            Assert.Equal(ZLinkFrameworkErrorKind.DeadlineExceeded, error.Kind);
+        }
+        finally
+        {
             await runtime.StopAsync(CancellationToken.None);
         }
     }

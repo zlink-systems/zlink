@@ -24,8 +24,18 @@ internal sealed partial class ZLinkFrameworkRuntime
         CancellationToken cancellationToken,
         ReadOnlyMemory<byte> metadata = default)
     {
-        if (Registration.Channels.TryGetValue(channelName, out var channel)
-            && channel.HasClientServerClient)
+        bool usesClientServerClientPath;
+        try
+        {
+            usesClientServerClientPath = UsesClientServerClientPath(channelName);
+        }
+        catch
+        {
+            ZLinkMessageParts.DisposeAll(parts);
+            throw;
+        }
+
+        if (usesClientServerClientPath)
         {
             if (!metadata.IsEmpty)
             {
@@ -69,8 +79,18 @@ internal sealed partial class ZLinkFrameworkRuntime
         CancellationToken cancellationToken,
         ReadOnlyMemory<byte> metadata = default)
     {
-        if (Registration.Channels.TryGetValue(channelName, out var channel)
-            && channel.HasClientServerClient)
+        bool usesClientServerClientPath;
+        try
+        {
+            usesClientServerClientPath = UsesClientServerClientPath(channelName);
+        }
+        catch
+        {
+            ZLinkMessageParts.DisposeAll(parts);
+            throw;
+        }
+
+        if (usesClientServerClientPath)
         {
             if (!metadata.IsEmpty)
             {
@@ -108,6 +128,18 @@ internal sealed partial class ZLinkFrameworkRuntime
         return await nodeRuntime.EntryOutbound
             .RequestToChannelAsync(channelName, parts, timeout, cancellationToken, metadata)
             .ConfigureAwait(false);
+    }
+
+    private bool UsesClientServerClientPath(string channelName)
+    {
+        if (!Registration.Channels.TryGetValue(channelName, out var channel)
+            || channel.AutoConnectType != ZLinkLocationAutoConnectType.ClientServer)
+            return false;
+        if (channel.HasClientServerClient) return true;
+
+        throw new ZLinkFrameworkException(
+            ZLinkFrameworkErrorKind.NotConfigured,
+            $"ClientServer channel '{channelName}' has no local Client role.");
     }
 
     private ZLinkRouteMeshTargetClassification ClassifyAutomaticRouteMeshTarget(
