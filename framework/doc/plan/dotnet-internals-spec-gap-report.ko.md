@@ -63,7 +63,7 @@ Gap 하나 또는 서로 강하게 연결된 작은 작업 묶음의 동작과 �
 | DOTNET-API-002 | 상 | Location 운영 query | 완료 — authority Store를 조회해 exact/list object location을 공개 계약으로 투영한다 |
 | DOTNET-API-003 | 상 | StreamNode message-size API | 완료 — fluent `MaxMessageSize(bytes)`와 전용 socket config surface를 제공한다 |
 | DOTNET-ROLE-001 | 상 | ClientServer role error | 완료 — Server role만 등록된 Channel send/request가 `NotConfigured`로 끝난다 |
-| DOTNET-WIRE-001 | 상 | `framework-json-v1` | strict cross-language JSON profile 대신 `JsonSerializerDefaults.Web` 의미를 사용한다 |
+| DOTNET-WIRE-001 | 상 | `framework-json-v1` | 완료 — application payload 전용 strict codec이 canonical golden profile을 강제한다 |
 | DOTNET-SIZE-001 | 상 | RouteMesh SS message size | 제한이 없어야 하지만 public 설정과 runtime이 기본 16 MiB를 receiver·sender에 적용한다 |
 | DOTNET-WIRE-002 | 상 | ClientServer message bound | admission에서 정한 complete-message 상한을 send/request/reply 제출 전에 강제하지 않는다 |
 | DOTNET-COMP-001 | 상 | completion overflow | early result와 tombstone이 모두 차면 caller terminal 없이 payload를 버리고 metric만 올린다 |
@@ -170,11 +170,30 @@ ready target 없음=`DeadlineExceeded`를 각각 분리해 3건 모두 통과했
 
 ### DOTNET-WIRE-001 — `framework-json-v1` strict profile 미구현
 
+**판정: 완료**
+
 공개 message model은 property와 enum name의 대소문자를 구분하고, duplicate·누락 required property를 거부하며, 64-bit integer는 범위를 검사한 정규 decimal **문자열**로 처리하도록 요구한다(`common/spec/04-message-model.ko.md:95-118`). Internals §6도 별도 규칙을 만들지 않고 이 public profile을 runtime validation의 정본으로 위임한다(`common/internals/12-service-wire-protocol.ko.md:272-279`). Golden fixture도 `property-case`, `duplicate-property`, numeric signed64를 invalid로 고정한다(`framework/runtime/protocol/golden/framework-json-v1.json`).
 
 실제 공통 JSON option은 `new JsonSerializerOptions(JsonSerializerDefaults.Web)` 하나뿐이다(`Runtime/Messaging/ZLinkJsonSerializerOptions.cs:6-15`). 이 preset은 스펙 전용 validator가 아니며 property 대소문자, duplicate 탐지, required-field completeness와 64-bit 문자열 정규형을 profile대로 강제하는 단계가 없다. Route/Spot/STREAM typed dispatch는 이 option을 그대로 사용한다(`Runtime/Messaging/ZLinkEnvelopeCodec.cs:368-371`, `Runtime/Streams/ZLinkStreamPacketPayloadCodec.cs:53-54`). Schema self-test 성공은 schema와 golden asset이 유효하다는 뜻일 뿐 이 consumer 동작을 검증하지 않는다.
 
 완료하려면 allocation을 크게 만들기 전에 golden fixture 전체를 검증하는 .NET profile reader를 두고, 네 언어 공통 fixture를 .NET runtime decode 경로에 직접 통과시켜야 한다. 일반 `System.Text.Json` round-trip test는 대체 증거가 아니다.
+
+`ZLinkFrameworkJsonPayloadCodec`을 application typed payload의 단일 JSON 경계로 추가했다. 이 codec은
+deserialize 전에 BOM과 중복 property를 거부하고, case-sensitive property, required·nullable 선언,
+64-bit 정수의 정규 decimal string, exact enum name, padded base64와 유한 number 규칙을 적용한다. UUID처럼
+언어 runtime이 암묵적으로 변환하는 type은 거부하며, 내부 relocation DTO가 UUID를 사용하는 한 곳은
+property-level canonical lowercase `D` string converter로 계약을 명시했다. Envelope header와 runtime control
+payload는 기존 protocol JSON helper로 분리해 application profile 변경이 내부 wire 표현을 바꾸지 않는다.
+
+공통 `framework-json-v1.json`의 valid·invalid vector 전체와 nested duplicate, BOM, non-nullable null,
+비정규 64-bit 문자열, 암묵적 UUID 거절을 `FrameworkJsonProfileTests` 10건에서 실제 envelope decode 경로에
+통과시켰다. Envelope·custom codec·Actor·STREAM 관련 78건과 처음 실패한 내부 relay·relocation 회귀 7건이
+통과했고, 최종 strict number 설정을 포함한 전체 .NET unit suite도 1,572건 모두 통과했다.
+`verify_packaged_contract.sh`의 packaged contract와
+standalone HTTP clean consumer가 통과했으며 public API snapshot hash는
+`917792ee8f6a4f645f03b1b683041b819d7501bd0ec54807c728c4fd8ab164e1`이다. 실제 process `RegistrationCodec`
+`RC-B6`도 `logs/20260807-175928-2425161/`에서 int64·bytes·nullable typed JSON round trip과 handler evidence를
+확인하고 통과했다.
 
 ### DOTNET-SIZE-001 — RouteMesh ServerServer에 없어야 할 16 MiB 상한이 있음
 

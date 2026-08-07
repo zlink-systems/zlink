@@ -552,6 +552,8 @@ byte[]? BoundSessionRid,
 string RelocationContentType,
 string RelocationReference,
 uint RelocationChecksumCrc32c,
+[property: System.Text.Json.Serialization.JsonConverter(
+    typeof(ZLinkCanonicalGuidJsonConverter))]
 Guid RelocationAggregateId,
 ulong RelocationAggregateGeneration,
 byte[] RelocationInventoryDigest,

@@ -73,7 +73,7 @@ internal static class ZLinkRemoteSessionBindingHandler
         ZLinkRemoteSessionBindResponse response) => new(
         ZlinkStreamMessageKind.Response,
         ZlinkStreamCodec.Json,
-        ZLinkEnvelopeCodec.EncodeJsonBytes(response),
+        ZLinkEnvelopeCodec.EncodeProtocolJsonBytes(response),
         ZlinkStreamHeaderFlags.None,
         ZlinkStreamMetadata.Empty);
 }

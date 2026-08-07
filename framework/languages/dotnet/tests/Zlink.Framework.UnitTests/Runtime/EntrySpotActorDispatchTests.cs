@@ -1815,9 +1815,8 @@ public sealed partial class EntrySpotActorDispatchTests
             Assert.Equal(2, node.NodeSendAttempts.Count);
             foreach (var attempt in node.NodeSendAttempts)
             {
-                var relay = JsonSerializer.Deserialize<ZLinkRemoteActorFrameRelay>(
-                    attempt[1],
-                    new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                var relay = ZLinkFrameworkJsonPayloadCodec
+                    .Deserialize<ZLinkRemoteActorFrameRelay>(attempt[1]);
                 Assert.NotNull(relay);
                 Assert.Equal(expectedHeader, relay.Header);
                 Assert.Equal(expectedBody, relay.Body);
@@ -1895,9 +1894,9 @@ public sealed partial class EntrySpotActorDispatchTests
                 binding,
                 CancellationToken.None);
 
-            var relay = JsonSerializer.Deserialize<ZLinkRemoteActorFrameRelay>(
-                node.NodeSendAttempts.Single()[1],
-                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            var relay = ZLinkFrameworkJsonPayloadCodec
+                .Deserialize<ZLinkRemoteActorFrameRelay>(
+                    node.NodeSendAttempts.Single()[1]);
             Assert.NotNull(relay);
             Assert.True(
                 relay.OperationIdHigh != 0 || relay.OperationIdLow != 0);
@@ -5506,12 +5505,9 @@ public sealed partial class EntrySpotActorDispatchTests
             Assert.True(SpinWait.SpinUntil(
                 () => node.NodeSendAttempts.Count == 1,
                 TimeSpan.FromSeconds(5)));
-            var relay = JsonSerializer.Deserialize<ZLinkRemoteActorFrameRelay>(
-                node.NodeSendAttempts.Single()[1],
-                new JsonSerializerOptions
-                {
-                    PropertyNameCaseInsensitive = true
-                });
+            var relay = ZLinkFrameworkJsonPayloadCodec
+                .Deserialize<ZLinkRemoteActorFrameRelay>(
+                    node.NodeSendAttempts.Single()[1]);
             Assert.NotNull(relay);
             Assert.Equal(capturedCapability, relay.ReplyCapability);
             Assert.Equal(frame.RouteContext.OperationId.High, relay.OperationIdHigh);

@@ -1,5 +1,4 @@
 using System.Text;
-using System.Text.Json;
 
 namespace Zlink.Framework.Contracts.Messaging;
 
@@ -119,10 +118,9 @@ public sealed partial class ZLinkMessage
             throw new InvalidOperationException(
                 $"Stream payload uses codec '{codec}', but no matching codec extension is registered.");
 
-        return JsonSerializer.Deserialize(
+        return ZLinkFrameworkJsonPayloadCodec.Deserialize(
             _payload.Span,
-            targetType,
-            ZLinkJsonSerializerOptions.Default);
+            targetType);
     }
 
     private static ZLinkEncodedPayload EncodeValue(
@@ -137,10 +135,7 @@ public sealed partial class ZLinkMessage
             return serializer.Serialize(value, declaredType);
 
         return ZLinkEncodedPayload.From(
-            JsonSerializer.SerializeToUtf8Bytes(
-                value,
-                declaredType,
-                ZLinkJsonSerializerOptions.Default));
+            ZLinkFrameworkJsonPayloadCodec.Serialize(value, declaredType));
     }
 
     private static (string ContentType, IZLinkMessageSerializer? Serializer) ResolvePayloadSerializer(

@@ -140,7 +140,7 @@ internal static class ZLinkEnvelopeCodec
             return Message.From(bytes);
         }
 
-        return EncodeJsonPart(header);
+        return EncodeProtocolPart(header);
     }
 
     public static Message EncodeBody(object? body, Type? bodyType, ZLinkCodecRegistryBuilder? codecs)
@@ -220,7 +220,7 @@ internal static class ZLinkEnvelopeCodec
 
     public static Message EncodePart<T>(T value)
     {
-        return EncodeJsonPart(value);
+        return EncodeProtocolPart(value);
     }
 
     public static ZLinkEnvelopeHeader DecodeHeader(Message message)
@@ -365,10 +365,9 @@ internal static class ZLinkEnvelopeCodec
                 bodyType);
         }
 
-        return JsonSerializer.Deserialize(
+        return ZLinkFrameworkJsonPayloadCodec.Deserialize(
             bodyMessage.AsReadOnlySpan(),
-            bodyType,
-            ZLinkJsonSerializerOptions.Default);
+            bodyType);
     }
 
     public static Message EncodeJsonPart<T>(T value)
@@ -383,13 +382,19 @@ internal static class ZLinkEnvelopeCodec
 
     public static byte[] EncodeJsonBytes<T>(T value)
     {
-        return JsonSerializer.SerializeToUtf8Bytes(value, ZLinkJsonSerializerOptions.Default);
+        return ZLinkFrameworkJsonPayloadCodec.Serialize(value);
     }
 
     public static byte[] EncodeJsonBytes(object? value, Type valueType)
     {
-        return JsonSerializer.SerializeToUtf8Bytes(value, valueType, ZLinkJsonSerializerOptions.Default);
+        return ZLinkFrameworkJsonPayloadCodec.Serialize(value, valueType);
     }
+
+    public static byte[] EncodeProtocolJsonBytes<T>(T value) =>
+        JsonSerializer.SerializeToUtf8Bytes(value, ZLinkJsonSerializerOptions.Default);
+
+    private static Message EncodeProtocolPart<T>(T value) =>
+        Message.From(EncodeProtocolJsonBytes(value));
 
     private static bool TryResolveBodySerializer(
         object? body,
@@ -570,7 +575,7 @@ internal static class ZLinkEnvelopeCodec
     }
 
     private static byte[] EncodeSimpleHeaderBytes(SimpleHeaderKey key) =>
-        EncodeJsonBytes(new ZLinkEnvelopeHeader(
+        EncodeProtocolJsonBytes(new ZLinkEnvelopeHeader(
             key.Kind,
             key.ChannelName,
             key.MessageName,

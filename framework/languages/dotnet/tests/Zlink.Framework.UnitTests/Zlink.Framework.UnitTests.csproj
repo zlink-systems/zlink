@@ -83,6 +83,7 @@
         <Compile Include="Runtime/ExactMessageFlowRuntimeTests.cs"/>
         <Compile Include="Runtime/FlowCorrelationTests.cs"/>
         <Compile Include="Runtime/GeneratedNodeIdentityTests.cs"/>
+        <Compile Include="Runtime/FrameworkJsonProfileTests.cs"/>
         <Compile Include="Runtime/HandlerResultAwaiterTests.cs"/>
         <Compile Include="Runtime/HttpExecutionSchedulerTests.cs"/>
         <Compile Include="Runtime/InMemoryLocationStoreTests.cs"/>
