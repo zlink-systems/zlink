@@ -13,6 +13,7 @@ LOCAL_READINESS_TIMEOUT_SECONDS=3
 LOCAL_READINESS_POLL_SECONDS=0.1
 LOCAL_READINESS_ATTEMPTS=30
 ROUTE_SETTLE_TIMEOUT_SECONDS=5
+REPLACEMENT_ROLE_SETTLE_TIMEOUT_SECONDS=15
 SCENARIO_SETTLE_TIMEOUT_SECONDS=3
 HTTP_PROBE_TIMEOUT_SECONDS=3
 LONG_OUTAGE_SECONDS=4
@@ -306,7 +307,9 @@ wait_for_profile_ready() {
 }
 
 wait_for_c4_ready() {
-  local deadline=$((SECONDS + ROUTE_SETTLE_TIMEOUT_SECONDS))
+  # A SIGKILL replacement may first have to cross the previous owner's
+  # five-second lease expiry, then publish every role on the next Store poll.
+  local deadline=$((SECONDS + REPLACEMENT_ROLE_SETTLE_TIMEOUT_SECONDS))
   while (( SECONDS < deadline )); do
     if node -e "fetch(process.argv[1] + '/c4/status', { signal: AbortSignal.timeout(500) }).then(async (r) => { const s = await r.json(); const routes = s.routes ?? []; process.exit(routes.length === 2 && routes.every((route) => route.isReady === true) && s.clientServer?.isReady === true && s.fanout?.isReady === true && s.fanout.readyPublisherCount >= 1 ? 0 : 1); }).catch(() => process.exit(1));" "$CONSUMER_URL"; then
       return 0
