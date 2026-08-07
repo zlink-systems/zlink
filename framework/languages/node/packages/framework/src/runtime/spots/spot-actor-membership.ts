@@ -57,7 +57,8 @@ export class ZLinkSpotActorMembership {
     request: Message,
     commit: (spot: ZLinkSpot) => Promise<ZLinkActorJoinRollback | void> | ZLinkActorJoinRollback | void,
     signal?: AbortSignal,
-    leaveSource?: () => Promise<void>
+    leaveSource?: () => Promise<void>,
+    contentType = 'application/json'
   ): Promise<ZLinkSpotActorJoinResult> {
     throwIfAborted(signal);
     const activation = this.requireActivation(spotId);
@@ -69,7 +70,7 @@ export class ZLinkSpotActorMembership {
     } = { committed: false };
     let response: ZLinkSpotActorJoinResult;
     try {
-      response = await dispatcher.evaluateActorJoin(actor, request);
+      response = await dispatcher.evaluateActorJoin(actor, request, contentType);
       if (response.accepted) {
         if (leaveSource === undefined) {
           await this.options.entrySpotCallbacks?.onLeaveActor(actor, signal);

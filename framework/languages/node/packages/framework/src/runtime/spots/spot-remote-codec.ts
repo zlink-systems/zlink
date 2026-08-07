@@ -44,6 +44,7 @@ export interface ZLinkDecodedRemoteActorJoinRequest {
   readonly remoteBoundSessionTarget?: ZLinkRemoteBoundSessionTarget;
   readonly actorCreateRequest?: Message;
   readonly request: Message;
+  readonly requestContentType: string;
   readonly phase?: 'admission' | 'commit';
   readonly transferId?: string;
   readonly transferAdapterKey?: string;
@@ -148,7 +149,10 @@ export function decodeRemoteActorJoinPayload(
       payload.boundSessionAcceptedJournalReference,
       payload.boundSessionAcceptedJournalChecksumCrc32c
     ),
-    request
+    request,
+    requestContentType: typeof payload.requestContentType === 'string'
+      ? payload.requestContentType
+      : 'application/json'
   };
 }
 

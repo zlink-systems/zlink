@@ -33,14 +33,14 @@ import type {
 } from '../backend';
 import { closeMeshCompletion } from '../backend';
 import { awaitWithAbort, throwIfAborted } from '../abort';
-import { encodeFrameworkPayloadMessage, decodeFrameworkPayloadMessage } from '../messaging/payload-codec';
+import { encodeFrameworkPayload, decodeFrameworkPayloadMessage } from '../messaging/payload-codec';
 import { resolveFrameworkPacketName } from '../messaging/packet-name';
 import {
   actorRequestDeadlineMetadata,
   decodeStreamHeader,
   encodeStreamHeader,
+  streamCodecForContentType,
   tryDecodeStreamFrame,
-  ZLinkStreamCodec,
   ZLinkStreamHeaderFlags,
   ZLinkStreamMessageKind
 } from '../streams/protocol';
@@ -348,19 +348,25 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
       | (correlationId === undefined
         ? ZLinkStreamHeaderFlags.None
         : ZLinkStreamHeaderFlags.HasCorrelationId);
-    const header = encodeStreamHeader({
-      kind,
-      codec: ZLinkStreamCodec.Json,
-      flags,
-      requestSeq,
-      name: packetName,
-      metadata,
-      correlationId
-    });
-    return [
-      RuntimeMessage.from(Buffer.from(header)) as Message,
-      encodeFrameworkPayloadMessage(message, this.options.messageSerializers)
-    ];
+    const encoded = encodeFrameworkPayload(message, this.options.messageSerializers);
+    try {
+      const header = encodeStreamHeader({
+        kind,
+        codec: streamCodecForContentType(encoded.contentType),
+        flags,
+        requestSeq,
+        name: packetName,
+        metadata,
+        correlationId
+      });
+      return [
+        RuntimeMessage.from(Buffer.from(header)) as Message,
+        encoded.message
+      ];
+    } catch (error) {
+      encoded.message.close();
+      throw error;
+    }
   }
 
   private submitActorSend(

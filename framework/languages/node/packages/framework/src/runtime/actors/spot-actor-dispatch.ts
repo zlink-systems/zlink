@@ -248,10 +248,15 @@ export class ZLinkSpotActorDispatcher {
 
   evaluateActorJoin(
     actor: ZLinkActor,
-    request: Message
+    request: Message,
+    contentType = 'application/json'
   ): Promise<ZLinkSpotActorJoinResult> {
     return this.execute(async () => {
-      const payload = wrapFrameworkPayloadMessage(request, this.options.messageSerializers);
+      const payload = wrapFrameworkPayloadMessage(
+        request,
+        this.options.messageSerializers,
+        contentType
+      );
       const onActorJoin = (this.options.spot as Partial<ZLinkSpot>).onActorJoin;
       return onActorJoin === undefined
         ? { accepted: false }

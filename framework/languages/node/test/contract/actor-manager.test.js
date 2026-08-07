@@ -3954,6 +3954,58 @@ test('spot actor dispatch rejects a missing handler before payload deserializati
   payload.close();
 });
 
+test('spot actor dispatch selects the decoder from the packet codec header', async () => {
+  const received = [];
+  let deserializeCalls = 0;
+  class PlayerActor {
+    constructor(actorId) {
+      this.actorId = actorId;
+    }
+  }
+  class PackedHandler {
+    async handle(_spot, _actor, _context, request) {
+      received.push(request);
+    }
+  }
+  const registry = new framework.ZLinkSpotActorHandlerRegistryRuntime().addPacket({
+    kind: framework.ZLinkActorPacketKind.Send,
+    packetName: 'Packed',
+    actorType: PlayerActor,
+    handlerType: PackedHandler
+  });
+  const dispatch = new ZLinkSpotActorPacketDispatch({
+    spot: { context: { meshName: 'play' } },
+    spotId: () => 'room-1',
+    registry,
+    resolveActor: () => new PlayerActor('alice'),
+    onDisconnectActor: async () => {},
+    messageSerializers: new Map([['application/x-msgpack', {
+      serialize() {
+        throw new Error('serialize must not be called');
+      },
+      deserialize(payload) {
+        deserializeCalls += 1;
+        return { packed: Buffer.from(payload.data()).toString('utf8') };
+      }
+    }]])
+  });
+  const header = zlink.Message.from(Buffer.from(framework.encodeStreamHeader({
+    kind: framework.ZLinkStreamMessageKind.Send,
+    codec: framework.ZLinkStreamCodec.MessagePack,
+    flags: framework.ZLinkStreamHeaderFlags.None,
+    name: 'Packed',
+    metadata: new Map()
+  })));
+  const payload = zlink.Message.from(Buffer.from('not-json'));
+
+  await dispatch.dispatch('alice', [header, payload]);
+
+  assert.equal(deserializeCalls, 1);
+  assert.deepEqual(received, [{ packed: 'not-json' }]);
+  header.close();
+  payload.close();
+});
+
 test('ZLinkSpotActorHandlerRegistryRuntime resolves actor packets registered without actor type', async () => {
   const events = [];
   class PlayerActor {
@@ -4005,12 +4057,12 @@ test('ZLinkSpotActorDispatcher commits actor join only when onActorJoin accepts'
     }
   });
 
-  const acceptedRequest = zlink.Message.from('accept');
+  const acceptedRequest = zlink.Message.from('"accept"');
   const accepted = await dispatcher.admitActorJoin(actor, acceptedRequest, () => {
     events.push('commit:accept');
   });
   accept = false;
-  const rejectedRequest = zlink.Message.from('reject');
+  const rejectedRequest = zlink.Message.from('"reject"');
   const rejected = await dispatcher.admitActorJoin(actor, rejectedRequest, () => {
     events.push('commit:reject');
   });

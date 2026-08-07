@@ -65,7 +65,7 @@ test('selective application serializer leaves framework payload encoding on JSON
   assert.equal(payloadCodec.selectDefaultSerializer(registry), serializer);
 });
 
-test('selective application serializer decodes its wire payload and JSON fallback separately', () => {
+test('wire content type selects the exact serializer without parsing payload bytes', () => {
   let deserializeCalls = 0;
   const serializer = {
     canSerialize(value) {
@@ -89,10 +89,24 @@ test('selective application serializer decodes its wire payload and JSON fallbac
       { kind: 'framework' }
     );
     assert.deepEqual(
-      payloadCodec.decodeFrameworkPayloadMessage(applicationMessage, registry),
+      payloadCodec.decodeFrameworkPayloadMessage(
+        applicationMessage,
+        registry,
+        undefined,
+        'application/x-test'
+      ),
       { kind: 'application', decoded: true }
     );
     assert.equal(deserializeCalls, 1);
+    assert.throws(
+      () => payloadCodec.decodeFrameworkPayloadMessage(
+        applicationMessage,
+        registry,
+        undefined,
+        'application/x-unknown'
+      ),
+      /PayloadDecodeFailed: unsupported framework content type/
+    );
   } finally {
     jsonMessage.close();
     applicationMessage.close();

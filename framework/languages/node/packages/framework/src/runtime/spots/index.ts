@@ -79,6 +79,7 @@ import {
 } from '../actors';
 import type { ZLinkLocationLifecycle } from '../locations';
 import {
+  encodeFrameworkPayload,
   encodeFrameworkPayloadMessage,
   wrapFrameworkPayloadMessage
 } from '../messaging/payload-codec';
@@ -91,7 +92,7 @@ import {
 import {
   decodeStreamHeader,
   encodeStreamHeader,
-  ZLinkStreamCodec,
+  streamCodecForContentType,
   ZLinkStreamHeaderFlags,
   ZLinkStreamMessageKind
 } from '../streams/protocol';
@@ -1234,7 +1235,8 @@ export class DefaultZLinkSpotManager {
     request: Message,
     commit: (spot: ZLinkSpot) => Promise<ZLinkActorJoinRollback | void> | ZLinkActorJoinRollback | void,
     signal?: AbortSignal,
-    leaveSource?: () => Promise<void>
+    leaveSource?: () => Promise<void>,
+    contentType = 'application/json'
   ): Promise<ZLinkSpotActorJoinResult> {
     const meshName = this.activations.resolveUnique(spotId)?.meshName;
     this.options.admission?.requireRequest('Actor join admission', meshName);
@@ -1244,7 +1246,8 @@ export class DefaultZLinkSpotManager {
       request,
       commit,
       signal,
-      leaveSource
+      leaveSource,
+      contentType
     );
   }
 
@@ -1731,6 +1734,7 @@ export class DefaultZLinkSpotManager {
       throw new ZLinkConfigurationException('MeshNode Actor join record is missing its Spot or Actor owner.');
     }
     const entrySpotId = this.options.entryNodeRidProvider?.() ?? this.options.entryNodeRid;
+    const requestContentType = record.contentType ?? 'application/json';
     const targetsEntrySpot = entrySpotId !== undefined
       && String(spotId) === String(entrySpotId);
     const activation = this.activations.resolve(meshName, spotId);
@@ -1849,7 +1853,11 @@ export class DefaultZLinkSpotManager {
               const response: ZLinkSpotActorJoinResult = await activation.serial.execute(async () =>
                 activation.spot.onActorJoin(
                   actorRef.actorId,
-                  wrapFrameworkPayloadMessage(ownedCallbackRequest!, this.options.messageSerializers)
+                  wrapFrameworkPayloadMessage(
+                    ownedCallbackRequest!,
+                    this.options.messageSerializers,
+                    transferRequest.requestContentType
+                  )
                 )
               );
               let encodedReply: Message | undefined;
@@ -1985,7 +1993,11 @@ export class DefaultZLinkSpotManager {
         const response: ZLinkSpotActorJoinResult = await activation.serial.execute(async () =>
           activation.spot.onActorJoin(
             actorRef.actorId,
-            wrapFrameworkPayloadMessage(request, this.options.messageSerializers)
+            wrapFrameworkPayloadMessage(
+              request,
+              this.options.messageSerializers,
+              transferRequest?.requestContentType ?? requestContentType
+            )
           )
         );
         if (!actorJoinIsCurrent()) return;
@@ -2608,22 +2620,22 @@ export class DefaultZLinkSpotManager {
     payload: unknown
   ): readonly Buffer[] {
     const requestHeader = decodeStreamHeader(requestHeaderPart.data());
-    const payloadPart = encodeFrameworkPayloadMessage(payload, this.options.messageSerializers);
+    const encoded = encodeFrameworkPayload(payload, this.options.messageSerializers);
     try {
       return [
         Buffer.from(encodeStreamHeader({
           kind,
-          codec: ZLinkStreamCodec.Json,
+          codec: streamCodecForContentType(encoded.contentType),
           flags: ZLinkStreamHeaderFlags.None,
           requestSeq: requestHeader.requestSeq,
           name: '',
           metadata: new Map(),
           correlationId: requestHeader.correlationId
         })),
-        Buffer.from(payloadPart.data())
+        Buffer.from(encoded.message.data())
       ];
     } finally {
-      payloadPart.close();
+      encoded.message.close();
     }
   }
 
@@ -2729,6 +2741,7 @@ interface ZLinkFormalRemoteTransferRequest {
   readonly transferStateReference?: string;
   readonly transferStateChecksumCrc32c?: number;
   readonly request: string;
+  readonly requestContentType: string;
   readonly actorEntryNodeRid?: RoutingId;
   readonly actorRef?: ActorRef;
   readonly remoteBoundSessionTarget?: ZLinkRemoteBoundSessionTarget;
@@ -2802,6 +2815,9 @@ function decodeFormalRemoteTransferRequestBytes(
       ? payload.transferStateChecksumCrc32c
       : undefined,
     request: payload.request,
+    requestContentType: typeof payload.requestContentType === 'string'
+      ? payload.requestContentType
+      : 'application/json',
     actorEntryNodeRid: typeof payload.actorEntryNodeRid === 'string'
       ? decodeRoutingId(payload.actorEntryNodeRid, payload.actorEntryNodeRidHex)
       : undefined,

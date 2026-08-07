@@ -35,6 +35,7 @@ import type { StreamSessionService } from '../foundation/service-runtime-contrac
 import {
   decodeStreamHeader,
   messageToBytes,
+  streamCodecContentType,
   type ZLinkStreamFrameHeader,
   ZLINK_STREAM_HEARTBEAT_PING,
   ZLINK_STREAM_HEARTBEAT_PONG,
@@ -450,7 +451,11 @@ export class ZLinkStreamSessionRuntime {
         });
         await session.onDispatch?.(
           createDispatchContext(inboundHeader),
-          wrapFrameworkPayloadMessage(dispatchPayload, this.options.messageSerializers)
+          wrapFrameworkPayloadMessage(
+            dispatchPayload,
+            this.options.messageSerializers,
+            streamCodecContentType(inboundHeader.codec)
+          )
         );
         flowIfEnabled(this.options.dispatchErrors?.flow, ZLinkMessageFlowOutcome.Dispatched)?.trace({
           outcome: ZLinkMessageFlowOutcome.Dispatched,

@@ -115,6 +115,39 @@ test('actor client submit completes without exposing an admission result', async
   assert.equal(sends.length, 1);
 });
 
+test('actor client writes the selected serializer into the packet codec header', async () => {
+  const sent = [];
+  const serializer = {
+    canSerialize(value) {
+      return value instanceof ActorNotify;
+    },
+    serialize(value) {
+      return framework.ZLinkEncodedPayload.from(Buffer.from(`packed:${value.value}`));
+    },
+    deserialize(payload) {
+      return Buffer.from(payload.data()).toString('utf8');
+    }
+  };
+  const client = new framework.DefaultZLinkActorClient({
+    nodeProvider: () => ({
+      sendToActor(_actor, parts) {
+        sent.push({
+          header: framework.decodeStreamHeader(parts[0]),
+          payload: Buffer.from(parts[1]).toString('utf8')
+        });
+        return 0;
+      }
+    }),
+    locationResolver: () => createResolver(),
+    messageSerializers: new Map([['application/x-msgpack', serializer]])
+  });
+
+  await client.sendToActor('actor-1', new ActorNotify('ping')).submit();
+
+  assert.equal(sent[0].header.codec, framework.ZLinkStreamCodec.MessagePack);
+  assert.equal(sent[0].payload, 'packed:ping');
+});
+
 test('actor client rejects an incomplete authority fence before transport submission', async () => {
   let sends = 0;
   const client = new framework.DefaultZLinkActorClient({
