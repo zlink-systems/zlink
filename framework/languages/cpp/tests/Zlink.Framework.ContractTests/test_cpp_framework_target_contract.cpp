@@ -130,6 +130,8 @@ int main ()
       read_file (root / "framework/src/runtime/stateful/public_store_adapters.hpp");
     const auto actor_client =
       read_file (root / "framework/src/runtime/actors/actor_client.cpp");
+    const auto relocation_id_generator =
+      read_file (root / "framework/src/runtime/utils/relocation_id_generator.hpp");
     const auto live_location_reader =
       read_file (root / "framework/src/runtime/locations/live_location_reader.hpp");
     const auto app_runtime = read_file (root / "framework/src/runtime/host/app.cpp");
@@ -1902,6 +1904,32 @@ int main ()
           "CPP-WIRE-001",
           std::string (name) + " still contains a legacy numeric authority key");
     }
+
+    /* CPP-WIRE-005 — RelocationId is an opaque random 128-bit identity. The
+     * process retains issued IDs for the relocation-root retention window and
+     * regenerates zero or colliding candidates. */
+    gate.require (
+      relocation_id_generator.find ("getrandom")
+          != std::string::npos
+        && relocation_id_generator.find ("BCryptGenRandom")
+             != std::string::npos
+        && relocation_id_generator.find ("arc4random_buf")
+             != std::string::npos
+        && relocation_id_generator.find ("attempt != 64")
+             != std::string::npos
+        && relocation_id_generator.find ("std::chrono::hours (24)")
+             != std::string::npos
+        && relocation_id_generator.find ("_issued.emplace")
+             != std::string::npos,
+      "CPP-WIRE-005",
+      "Relocation ID generation is not CSPRNG-gated, non-zero, collision-retrying, and retention-bounded");
+    gate.require (
+      mesh_node_runtime.find ("relocation_ids ().issue ()")
+          != std::string::npos
+        && mesh_node_runtime.find ("next_relocation")
+             == std::string::npos,
+      "CPP-WIRE-005",
+      "a relocation path still derives RelocationId from a deterministic counter");
 
     /* CPP-WIRE-006 — terminal/result integrity and generic wire bounds are
      * emitted from the common schema instead of being redefined by the C++

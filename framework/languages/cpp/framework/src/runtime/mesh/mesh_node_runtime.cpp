@@ -14,6 +14,7 @@
 #include "runtime/messaging/request_failure_mapper.hpp"
 #include "runtime/spots/spot_route_packets.hpp"
 #include "runtime/utils/uuid.hpp"
+#include "runtime/utils/relocation_id_generator.hpp"
 
 #include <zlink/framework/contracts/configuration/zlink_builder.hpp>
 #include <zlink/framework/contracts/errors/error.hpp>
@@ -51,6 +52,12 @@ std::uint64_t make_lifecycle_generation ()
       (random ^ time ^ counter.fetch_add (1, std::memory_order_relaxed))
       & static_cast<std::uint64_t> (std::numeric_limits<std::int64_t>::max ());
     return value == 0 ? 1 : value;
+}
+
+runtime::relocation_id_generator_t &relocation_ids ()
+{
+    static runtime::relocation_id_generator_t value;
+    return value;
 }
 
 bool valid_routing_id_prefix (std::string_view value) noexcept
@@ -686,11 +693,13 @@ mesh_node_runtime_t::relocate_application_actor (
              != status.routing_id ().to_string ())
         return blocked ();
 
-    static std::atomic<std::uint64_t> next_relocation{1};
-    const auto sequence =
-      next_relocation.fetch_add (1, std::memory_order_relaxed);
-    const auto relocation = runtime::protocol::relocation_id_t{
-      status.lifecycle_generation (), sequence == 0 ? 1 : sequence};
+    runtime::protocol::relocation_id_t relocation;
+    try {
+        relocation = relocation_ids ().issue ();
+    }
+    catch (...) {
+        return blocked ();
+    }
     const runtime::protocol::relocation_coordinator_fence_t coordinator{
       authority.owner.owner_id,
       static_cast<std::uint64_t> (
@@ -1030,11 +1039,13 @@ mesh_node_runtime_t::relocate_application_unit (
             std::distance (input.begin (), principal))
         : 0u;
 
-    static std::atomic<std::uint64_t> next_relocation{1};
-    const auto sequence =
-      next_relocation.fetch_add (1, std::memory_order_relaxed);
-    const runtime::protocol::relocation_id_t relocation{
-      status.lifecycle_generation (), sequence == 0 ? 1 : sequence};
+    runtime::protocol::relocation_id_t relocation;
+    try {
+        relocation = relocation_ids ().issue ();
+    }
+    catch (...) {
+        return blocked ();
+    }
     const auto &coordinator_authority =
       input[principal_index].authority;
     const runtime::protocol::relocation_coordinator_fence_t coordinator{

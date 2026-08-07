@@ -16,6 +16,7 @@
 #include "runtime/stateful/stateful_object_runtime.hpp"
 #include "runtime/stateful/stream_session_registry.hpp"
 #include "runtime/spots/actor_transfer_coordinator.hpp"
+#include "runtime/utils/relocation_id_generator.hpp"
 
 #include <zlink/Contracts/Core/context.hpp>
 #include <zlink/Contracts/Core/routing_id.hpp>
@@ -4090,6 +4091,20 @@ void verify_remote_user_spot_create_close_terminal_once ()
     target->close ();
 }
 
+void verify_relocation_id_generation_retries_collisions ()
+{
+    const std::vector<protocol::relocation_id_t> candidates{
+      {0, 0}, {0x11, 0x22}, {0x11, 0x22}, {0x33, 0x44}};
+    std::size_t next = 0;
+    zlink::framework::runtime::relocation_id_generator_t generator (
+      [&] { return candidates.at (next++); });
+    assert ((generator.issue ()
+             == protocol::relocation_id_t{0x11, 0x22}));
+    assert ((generator.issue ()
+             == protocol::relocation_id_t{0x33, 0x44}));
+    assert (next == candidates.size ());
+}
+
 } // namespace
 
 int main ()
@@ -4125,5 +4140,6 @@ int main ()
     verify_durable_reply_relay_single_winner ();
     verify_public_host_dispatches_durable_reply_relay ();
     verify_remote_user_spot_create_close_terminal_once ();
+    verify_relocation_id_generation_retries_collisions ();
     return 0;
 }

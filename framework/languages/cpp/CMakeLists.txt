@@ -233,6 +233,9 @@ target_include_directories(zlink_framework PRIVATE
   ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
   ${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/generated/cpp)
 target_link_libraries(zlink_framework PUBLIC zlink::cpp)
+if(WIN32)
+  target_link_libraries(zlink_framework PUBLIC bcrypt)
+endif()
 set(ZLINK_FRAMEWORK_CPP_BOOST_INCLUDE_DIR "" CACHE PATH
   "Boost include directory used by the C++ framework and stream connector")
 if(NOT ZLINK_FRAMEWORK_CPP_BOOST_INCLUDE_DIR
