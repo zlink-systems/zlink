@@ -70,7 +70,7 @@ Gap 하나 또는 서로 강하게 연결된 작은 작업 묶음의 동작과 �
 | DOTNET-EXEC-001 | 상 | STREAM session queue | queue의 byte 축이 payload 크기를 세지 않아 count 한도까지 큰 payload가 쌓일 수 있다 |
 | DOTNET-EXEC-002 | 중 | serial execution engine | Spot/session 공통 queue와 별도로 Actor mailbox·전달 queue가 순서·수락·준비 집합을 다시 구현한다 |
 | DOTNET-EXEC-003 | 상 | Entry Actor ingress HWM | 완료 — process-wide ingress와 Actor별 공통 serial lane이 count·retained byte를 제한한다 |
-| DOTNET-LIFE-001 | 중 | Spot type model | User Spot과 Instance Spot을 별도 runtime type이 아니라 한 activation의 interface/type 검사로 구분한다 |
+| DOTNET-LIFE-001 | 중 | Spot type model | 완료 — 공통 resource base 위에 User와 Instance activation type과 context surface를 분리했다 |
 | DOTNET-LIFE-002 | 중 | Ready Instance owner loss | source·unit은 `KnownUnavailable`로 구분하지만 실제 process에서 takeover와 queue recovery가 없다는 E2E가 없다 |
 | DOTNET-COMP-002 | 중 | completion ordering | 응답 상관 값을 submit 출력으로 받은 뒤 waiter를 등록해 early-result table을 상시 필요로 한다 |
 | DOTNET-LAYER-001 | 중 | binding 경계·POSDDD | 의미를 숨기지 않는 일대일 `IBackend*`/`*Wrapper` 계층이 production hot path에 남아 있다 |
@@ -355,11 +355,36 @@ project는 1,583건 중 1,582건이 통과하고 기존
 
 ### DOTNET-LIFE-001 — User/Instance Spot이 서로 다른 runtime type이 아님
 
+**판정: 완료**
+
 Internals는 Entry, User, Instance Spot의 생성·이동·idle 반환 규칙이 다르므로 세 종류를 서로 다른 타입으로 표현하고, 한 타입의 tag/interface 검사로 구분하지 않도록 정한다(`common/internals/08-object-lifecycle.ko.md:20-38`). 판정 기준은 상속·합성·tagged union 중 어떤 문법을 썼는지가 아니라 불가능한 종류·기능 조합을 만들 수 있는지다.
 
 Entry Spot은 `ZLinkEntrySpotActivation`으로 분리되어 있지만 User와 Instance는 같은 `ZLinkSpotActivation`이 `IZLinkSpotContext`와 `IZLinkInstanceSpotContext`를 동시에 구현한다(`Runtime/Spots/ZLinkSpotActivation.cs:14-19`). 실제 종류는 내부 `Spot` 객체가 `IZLinkInstanceSpot`인지 반복 검사해 가른다(`Runtime/Spots/ZLinkSpotActivationConfiguration.cs:121-166`, `Runtime/Spots/ZLinkSpotActivationExecution.cs:439-448,790`, `Runtime/Spots/ZLinkSpotNodeCatalog.cs:1137-1149,1173-1184`). 공통 타입에는 User 전용 relocation-ready와 Instance 전용 close/handler surface가 함께 존재해 유효 조합을 호출부가 알아야 한다.
 
 완료 조건은 공통 resource ownership을 base/component로 공유하되 User/Instance activation과 허용 lifecycle operation을 타입 경계에서 분리하는 것이다. Instance에 User-only relocation-ready를, User에 Instance-only idle close를 구성할 수 없음을 compile-time 또는 closed-union exhaustive test로 검증해야 한다.
+
+구현과 검증을 완료했다. 공통 socket·scope·timer·serial executor·payload ownership은 abstract
+`ZLinkSpotActivation`이 유지하고, factory는 `ZLinkUserSpotActivation`과
+`ZLinkInstanceSpotActivation`을 각각 만든다. User activation만 `IZLinkSpotContext`와 전체 handler registry,
+Actor leave와 relocation-ready operation을 제공한다. Instance activation은
+`IZLinkInstanceSpotContext`와 packet handler registry, Instance initialize·close lifecycle만 제공한다.
+따라서 하나의 activation에 두 context interface나 두 handler capability를 함께 구성할 수 없다.
+
+Configuration descriptor bind, scanned handler 허용 범위, closing callback과 Instance initialization은 subtype의
+override가 소유한다. Catalog와 retire scheduler가 application `Spot` 객체의 interface를 반복 검사하던 분기도
+activation이 제공하는 kind·placement policy로 바꿨다. Instance evidence wait runner는 첫 번째 node의 10초
+HTTP timeout 때문에 실제 owner인 두 번째 node를 조회하지 못하던 문제를 함께 고쳐, 두 node의 공개 evidence를
+bounded polling한다.
+
+Runtime type·context·handler capability의 상호 배타성과 User/Instance lifecycle을 포함한 focused test 157건이
+통과했다. 전체 .NET unit project는 1,584건 중 1,583건이 통과하고 기존
+`LogicalMulticastSubmitsEachPositiveRemoteOnceRegardlessOfWeight` 한 건이 5초 condition timeout으로
+실패했지만 같은 test의 단독 재실행은 통과했다. Packaged contract와 standalone HTTP clean consumer가
+통과했고 public API snapshot hash는
+`c1987f4b98e4fac7a30b7d038a56ee0d20e1272d00e79bdc88d3271e3c3ab958`로 유지되었다. 실제 process
+`InstanceSpot` `IS-E2E-01`은 `SpotService/logs/20260807-201508-822914/`에서 cold activation,
+initialization 1회와 request handler 1회를 확인하고 통과했다. 이 checkpoint는 `4e4b2a626d`로 `main`에
+push했다.
 
 ### DOTNET-LIFE-002 — Ready Instance owner loss의 process 증거 누락
 
