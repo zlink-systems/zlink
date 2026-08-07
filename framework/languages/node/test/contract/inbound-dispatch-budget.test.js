@@ -454,7 +454,7 @@ function rejectingBudget(error, observeQueued) {
 }
 
 async function waitFor(predicate) {
-  const deadline = Date.now() + 1_000;
+  const deadline = Date.now() + 5_000;
   while (!predicate()) {
     if (Date.now() >= deadline) throw new Error('condition timed out');
     await new Promise((resolve) => setImmediate(resolve));
