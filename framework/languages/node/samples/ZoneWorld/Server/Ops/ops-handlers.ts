@@ -117,14 +117,18 @@ class SetMaintenanceHandler {
           ZoneWorldNames.opsChannel(request.nodeId),
           new ApplyNodeMaintenanceReq(request.nodeId, request.enabled)
         )
-        .timeout(3_000)
+        .timeout(10_000)
         .submit<ApplyNodeMaintenanceRes>();
       await this.fanout.publish(
         ZoneWorldNames.broadcastChannel,
         new NodeMaintenanceChangedEvent(request.nodeId, request.enabled)
       ).submit();
       context.client.reply(new SetMaintenanceRes(applied.nodeId, applied.enabled, applied.zones)).submit();
-    } catch {
+    } catch (error) {
+      console.error(
+        `maintenance apply failed node=${request.nodeId} enabled=${request.enabled}`,
+        error instanceof Error ? error.message : String(error)
+      );
       context.client.reply(new SetMaintenanceRes(request.nodeId, request.enabled, [], ZoneWorldErrors.nodeUnavailable)).submit();
     }
   }
@@ -147,7 +151,7 @@ class NodeDiagnosticsHandler {
           ZoneWorldNames.opsChannel(request.nodeId),
           new GetNodeDiagnosticsReq(request.nodeId)
         )
-        .timeout(3_000)
+        .timeout(10_000)
         .submit<GetNodeDiagnosticsRes>();
       context.client.reply(new NodeDiagnosticsRes(
         result.nodeId,
