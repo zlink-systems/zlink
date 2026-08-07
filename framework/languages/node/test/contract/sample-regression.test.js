@@ -2009,6 +2009,8 @@ test('node shared sample runner isolates Redis and application ports without Doc
   assert.match(runner, /docker'\), \['rm', '-fv', redisContainer\]/);
   assert.match(runner, /reserveBrowserSafePort/);
   assert.match(runner, /30000 \+ Math\.floor\(Math\.random\(\) \* 10000\)/);
+  assert.match(runner, /fs\.openSync\(leasePath, 'wx', 0o600\)/);
+  assert.match(runner, /for \(const leasePath of portLeases\.values\(\)\) fs\.rmSync/);
   assert.match(runner, /printLogs\(\)/);
   assert.doesNotMatch(runner, /127\.0\.0\.1:\d{4,5}/);
 });
