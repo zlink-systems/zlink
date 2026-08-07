@@ -11,6 +11,10 @@ import type { Message } from '../../contracts/Common/Message';
 import { createZLinkMessageFromEncoded } from '../../contracts/Common/ZLinkMessage';
 import { adoptEncodedPayload, borrowEncodedPayload } from '../../contracts/Common/encoded-payload-storage';
 import { ZLinkConfigurationException } from '../configuration';
+import {
+  parseFrameworkJsonV1,
+  stringifyFrameworkJsonV1
+} from './framework-json-v1';
 
 export interface ZLinkSerializerRegistryLike {
   readonly serializers: ReadonlyMap<string, ZLinkMessageSerializer>;
@@ -93,7 +97,7 @@ export function encodeFrameworkPayload(
 
   return {
     message: rememberContentType(
-      RuntimeMessage.from(Buffer.from(JSON.stringify(payload ?? null))),
+      RuntimeMessage.from(Buffer.from(stringifyFrameworkJsonV1(payload))),
       JSON_CONTENT_TYPE
     ),
     contentType: JSON_CONTENT_TYPE
@@ -177,7 +181,7 @@ function decodeFrameworkEncodedPayload<T>(
   if (payload.isEmpty()) return undefined as T;
   const text = payload.getString('utf8');
   try {
-    return JSON.parse(text) as T;
+    return parseFrameworkJsonV1(text) as T;
   } catch (error) {
     throw createInternalFrameworkException(
       ZLinkFrameworkInternalErrorKind.PayloadDecodeFailed,
@@ -324,7 +328,7 @@ function parseJsonPayload(message: Message): {
   readonly error: unknown;
 } {
   try {
-    return { valid: true, value: JSON.parse(message.getString('utf8')) };
+    return { valid: true, value: parseFrameworkJsonV1(message.getString('utf8')) };
   } catch (error) {
     return { valid: false, error };
   }

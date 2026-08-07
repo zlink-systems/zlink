@@ -19,6 +19,10 @@ import {
   contentTypeForSerializer,
   selectSerializer
 } from '../messaging/payload-codec';
+import {
+  parseFrameworkJsonV1,
+  stringifyFrameworkJsonV1
+} from '../messaging/framework-json-v1';
 import { currentOrCreateFlow } from '../diagnostics/flow-context';
 import { codecsForFrameworkPacket } from './channel-framework-packets';
 
@@ -361,9 +365,7 @@ function isMessage(value: unknown): value is Message {
 }
 
 function encodeJsonBytes(value: unknown): Buffer {
-  return Buffer.from(JSON.stringify(value ?? null, (_key, item) =>
-    typeof item === 'bigint' ? item.toString() : item
-  ));
+  return Buffer.from(stringifyFrameworkJsonV1(value));
 }
 
 function encodeChannelHeader(header: ZLinkChannelEnvelopeHeader): Buffer {
@@ -403,11 +405,8 @@ function requireDefaultSerializerContentType(
 }
 
 function parseWireJson(payload: string): unknown {
-  return JSON.parse(payload, (key, value) => {
-    if (isPrototypeKey(key)) {
-      throw new ZLinkConfigurationException(`Channel JSON key '${key}' is not allowed.`);
-    }
-    return value;
+  return parseFrameworkJsonV1(payload, {
+    rejectPropertyName: isPrototypeKey
   });
 }
 

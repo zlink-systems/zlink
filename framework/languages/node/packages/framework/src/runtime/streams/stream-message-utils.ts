@@ -1,4 +1,5 @@
 import type { Message } from '../../contracts/Common/Message';
+import { parseFrameworkJsonV1 } from '../messaging/framework-json-v1';
 import { utf8Decode, utf8Encode } from './protocol';
 
 const EMPTY_MESSAGE_BYTES = new Uint8Array(0);
@@ -63,7 +64,7 @@ function createSimpleMessage(initial: Uint8Array, releaseOnClose: boolean): unkn
       return utf8Decode(current);
     },
     value() {
-      return JSON.parse(utf8Decode(current));
+      return parseFrameworkJsonV1(utf8Decode(current));
     },
     close() {
       if (releaseOnClose) {

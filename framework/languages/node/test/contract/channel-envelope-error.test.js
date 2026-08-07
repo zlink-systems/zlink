@@ -6,9 +6,108 @@ const test = require('node:test');
 const framework = require('../../packages/framework/dist/internal');
 const envelope = require('../../packages/framework/dist/runtime/channels/channel-envelope');
 const payloadCodec = require('../../packages/framework/dist/runtime/messaging/payload-codec');
+const frameworkJson = require('../../packages/framework/dist/runtime/messaging/framework-json-v1');
+const streamProtocol = require('../../packages/framework/dist/runtime/streams/protocol');
+const { ZLinkStreamFrameMessageFactory } = require('../../packages/framework/dist/runtime/streams/stream-frame-factory');
 const encodedPayloadStorage = require('../../packages/framework/dist/contracts/Common/encoded-payload-storage');
 const { ZLinkBufferMessage } = require('../../packages/framework/dist/runtime/backend/runtime-message');
 const { Message } = require('@zlink-systems/zlink');
+
+test('default payload codec enforces schema-independent framework-json-v1 rules', () => {
+  assert.equal(frameworkJson.FRAMEWORK_JSON_V1_PROFILE, 'framework-json-v1');
+
+  const encoded = payloadCodec.encodeFrameworkPayload({
+    signed64: -9223372036854775808n,
+    unsigned64: 18446744073709551615n,
+    bytes: Uint8Array.from([1, 2]),
+    ratio: 1.25
+  });
+  try {
+    assert.equal(
+      encoded.message.getString('utf8'),
+      '{"signed64":"-9223372036854775808","unsigned64":"18446744073709551615","bytes":"AQI=","ratio":1.25}'
+    );
+  } finally {
+    encoded.message.close();
+  }
+
+  assert.throws(
+    () => payloadCodec.encodeFrameworkPayload({ value: -9223372036854775809n }),
+    /outside the supported range/
+  );
+  assert.throws(
+    () => payloadCodec.encodeFrameworkPayload({ value: 18446744073709551616n }),
+    /outside the supported range/
+  );
+  assert.throws(
+    () => payloadCodec.encodeFrameworkPayload({ value: Number.NaN }),
+    /only accepts finite JSON numbers/
+  );
+  assert.throws(
+    () => payloadCodec.encodeFrameworkPayload({ value: new Date(0) }),
+    /does not implicitly encode Date/
+  );
+  assert.throws(
+    () => payloadCodec.encodeFrameworkPayload({ value: { toJSON: () => 'hidden' } }),
+    /does not implicitly invoke custom toJSON/
+  );
+});
+
+test('default payload decode rejects BOM and duplicate properties at every depth', () => {
+  for (const json of [
+    '\ufeff{"value":1}',
+    '{"value":1,"value":2}',
+    '{"nested":{"value":1,"value":2}}'
+  ]) {
+    const message = Message.from(Buffer.from(json));
+    try {
+      assert.throws(
+        () => payloadCodec.decodeFrameworkPayloadMessage(message),
+        /PayloadDecodeFailed: framework payload is not valid JSON/
+      );
+    } finally {
+      message.close();
+    }
+  }
+});
+
+test('STREAM default JSON encoding uses the same framework-json-v1 profile', () => {
+  let wire;
+  const factory = new ZLinkStreamFrameMessageFactory({
+    flowCreationEnabled: () => false,
+    messageFactory: {
+      createTextMessage() { throw new Error('binary frame expected'); },
+      createBinaryMessage(payload) {
+        wire = payload;
+        return {};
+      }
+    }
+  });
+
+  factory.createJsonFrameMessage(
+    streamProtocol.ZLinkStreamMessageKind.Send,
+    'Profile',
+    new Map(),
+    false,
+    undefined,
+    { generation: 18446744073709551615n, bytes: Uint8Array.from([1, 2]) }
+  );
+  assert.equal(
+    Buffer.from(streamProtocol.decodeStreamFrame(wire).payload).toString('utf8'),
+    '{"generation":"18446744073709551615","bytes":"AQI="}'
+  );
+  assert.throws(
+    () => factory.createJsonFrameMessage(
+      streamProtocol.ZLinkStreamMessageKind.Send,
+      'Profile',
+      new Map(),
+      false,
+      undefined,
+      { ratio: Number.POSITIVE_INFINITY }
+    ),
+    /only accepts finite JSON numbers/
+  );
+});
 
 function readable(parts) {
   return parts.map((part) => typeof part.data === 'function'
