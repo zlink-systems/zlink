@@ -256,6 +256,23 @@ Internals는 early completion 보관 자리가 가득 차면 source runtime 소�
 
 현재 test도 caller terminal을 확인하지 않는다. `CompletionTable_OverflowBeyondRetentionIsObservable`은 세 번째 완료 뒤 `OverflowCount == 1`만 주장한다(`UnitTests/Runtime/ServiceRuntimeFoundationTests.cs:1639-1651`). 이는 스펙의 “caller가 관찰 가능한 결과”보다 약한 assertion이다. Bounded 구조를 유지하되 등록 전 overflow operation이 나중에 반드시 `CapacityExceeded`로 끝나는 소유 구조가 필요하다.
 
+구현과 검증을 완료했다. Early payload와 failure tombstone이 모두 포화되면 completion table은 retention
+자원 전체를 fail-closed 상태로 전환한다. 이 전이는 table이 이미 소유한 pending callback을 모두
+`Backpressured` terminal로 완료하고, 보관 중인 payload를 dispose하며, 이후 등록도 같은 terminal로 즉시
+완료한다. 따라서 operation별 marker를 무한히 늘리지 않으면서 overflow terminal이 caller timeout으로
+바뀌는 경로를 제거했다. Public 오류 변환에서는 source runtime의 이 terminal을 `CapacityExceeded`로
+관찰한다.
+
+Completion table focused test 6건은 overflow operation의 늦은 등록, 이미 pending인 operation과 overflow
+이후 등록을 검증하고 통과했다. .NET unit project는 두 번 실행했으며 매번 1,576건이 통과했지만, 첫
+실행에서는 `LogicalMulticastSubmitsEachPositiveRemoteOnceRegardlessOfWeight`, 두 번째 실행에서는
+`RemoteUserSpotTerminalReplaysAfterDeadlineAndExpiresWithoutReexecution`이 각각 한 번 실패했다. 두 test는
+각각 단독 재실행에서 통과했으므로 completion 변경과 별개인 간헐 실패로 분리한다. Packaged contract와
+standalone HTTP clean consumer는 통과했고 public API snapshot hash는
+`c1987f4b98e4fac7a30b7d038a56ee0d20e1272d00e79bdc88d3271e3c3ab958`로 유지되었다. 실제 process
+`ChannelEgressRouting` `CH-REG-06`은 `logs/20260807-190203-1199732/`에서 통과했다. 구현 checkpoint는
+`d91088d688`로 `main`에 push했다.
+
 ### DOTNET-EXEC-001 — STREAM session execution queue가 payload byte를 세지 않음
 
 Internals는 실행 owner의 각 lane이 count와 byte를 모두 예약하고 payload 외에 작업당 고정 비용도 포함하도록 정한다(`common/internals/08-object-lifecycle.ko.md:219-268`). `ZLinkSerialExecutionQueue.TryPostAccepted`는 Spot ingress에서 `payloadLength + 256`을 올바르게 예약한다(`Runtime/Execution/ZLinkSerialExecutionQueue.cs:293-378`).
