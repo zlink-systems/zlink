@@ -224,6 +224,7 @@ provider handler에 도달하지 않고 timeout되어 payload 크기 검증 전 
 Ready였고 17 MiB owner-layer 회귀는 통과하므로 이 log를 SIZE-001 완료 근거로 사용하지 않았다. 이
 multi-provider Channel routing 실패는 SIZE-001에서 제거한 message-size 정책과 구분해 후속 process 회귀
 조사 입력으로 남긴다.
+이 checkpoint는 `ce9b881ae0`으로 `main`에 push했다.
 
 ### DOTNET-WIRE-002 — ClientServer negotiated complete-message 상한 미강제
 
