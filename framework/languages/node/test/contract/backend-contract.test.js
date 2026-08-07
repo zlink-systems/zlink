@@ -921,6 +921,18 @@ test('mesh completion submission registers before a completion can arrive', asyn
   table.dispose();
 });
 
+test('mesh completion submission rejects when submit synchronously disposes the table', async () => {
+  const table = new ZLinkMeshCompletionTable();
+
+  await assert.rejects(
+    table.submit(() => {
+      table.dispose();
+      return { high: 1n, low: 2n };
+    }),
+    /Mesh completion table is disposed/
+  );
+});
+
 test('backend not-connected classification uses typed results instead of error text', () => {
   assert.equal(
     backend.isBackendNotConnectedError({

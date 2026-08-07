@@ -8,6 +8,9 @@ export interface FrameworkJsonParseOptions {
 }
 
 export function stringifyFrameworkJsonV1(value: unknown): string {
+  if (value === undefined || typeof value === 'function' || typeof value === 'symbol') {
+    throw new TypeError('framework-json-v1 payload is not a JSON value.');
+  }
   const root = value;
   const encoded = JSON.stringify(root, function (key, item: unknown) {
     const source = key === '' ? root : (this as Record<string, unknown>)[key];
@@ -35,9 +38,6 @@ export function stringifyFrameworkJsonV1(value: unknown): string {
     }
     return item;
   });
-  if (encoded === undefined) {
-    throw new TypeError('framework-json-v1 payload is not a JSON value.');
-  }
   return encoded;
 }
 
@@ -131,15 +131,15 @@ class JsonPropertyScanner {
   private scanString(): string {
     const start = this.index++;
     for (;;) {
-      const character = this.text[this.index++];
-      if (character === undefined) this.fail('unterminated string');
+      if (this.index >= this.text.length) this.fail('unterminated string');
+      const character = this.text[this.index++]!;
       if (character === '"') {
         return JSON.parse(this.text.slice(start, this.index)) as string;
       }
       if (character === '\\') {
-        const escaped = this.text[this.index++];
+        if (this.index >= this.text.length) this.fail('unterminated escape');
+        const escaped = this.text[this.index++]!;
         if (escaped === 'u') this.index += 4;
-        else if (escaped === undefined) this.fail('unterminated escape');
       }
     }
   }

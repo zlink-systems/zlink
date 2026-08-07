@@ -43,7 +43,7 @@ export class ZLinkMeshCompletionTable {
       );
     }
     const operationId = operation();
-    if (this.disposed) {
+    if (this.isDisposed()) {
       return Promise.reject(new Error('Mesh completion table is disposed.'));
     }
     const key = operationIdentityKey(operationId);
@@ -91,6 +91,10 @@ export class ZLinkMeshCompletionTable {
       pending.reject(reason);
     }
     this.pending.clear();
+  }
+
+  private isDisposed(): boolean {
+    return this.disposed;
   }
 }
 

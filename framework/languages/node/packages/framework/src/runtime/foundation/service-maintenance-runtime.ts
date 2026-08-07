@@ -129,13 +129,13 @@ export class ServiceMaintenanceRuntime {
     const pending = new Set<Promise<void>>();
     while (this.units.length > 0 || pending.size > 0) {
       signal.throwIfAborted();
-      if (stopStartingSignal?.aborted) {
+      if (stopStartingSignal?.aborted === true) {
         await Promise.allSettled(pending);
         stopStartingSignal.throwIfAborted();
       }
       let admitted = false;
       for (let index = 0; index < this.units.length && this.activeOutbound < maxOutbound;) {
-        if (stopStartingSignal?.aborted) break;
+        if (stopStartingSignal?.aborted === true) break;
         const unit = this.units[index]!;
         const oversizedExclusive = unit.allowOversizedExclusive === true
           && unit.encodedUpperBound > maxBytes

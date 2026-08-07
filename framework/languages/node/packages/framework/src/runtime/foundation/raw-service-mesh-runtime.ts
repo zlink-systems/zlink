@@ -668,7 +668,7 @@ export class RawServiceMeshRuntime {
         received.reply(reply);
       } else {
         this.requireStarted().reply(
-          received.sourceRoute ?? received.sourceRid,
+          received.sourceRoute,
           received.requestSeq,
           reply
         );

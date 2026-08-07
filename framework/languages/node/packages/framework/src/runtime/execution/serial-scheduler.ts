@@ -150,7 +150,7 @@ export class ZLinkBoundedSerialScheduler {
     if (!Number.isSafeInteger(wait.timeoutMs) || wait.timeoutMs < 1) {
       return Promise.reject(new RangeError('Serial admission timeout must be a positive safe integer.'));
     }
-    if (wait.signal?.aborted) return Promise.reject(wait.abortError());
+    if (wait.signal?.aborted === true) return Promise.reject(wait.abortError());
     const lane = options.lane ?? 'application';
     const byteCost = this.byteCost(options);
     const target = lane === 'application' ? this.application : this.lifecycle;
@@ -200,7 +200,7 @@ export class ZLinkBoundedSerialScheduler {
       target.waiterCount += 1;
       const timer = setTimeout(() => fail(wait.timeoutError()), wait.timeoutMs);
       wait.signal?.addEventListener('abort', onAbort, { once: true });
-      if (wait.signal?.aborted) onAbort();
+      if (wait.signal?.aborted === true) onAbort();
     });
   }
 
