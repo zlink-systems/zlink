@@ -5,6 +5,18 @@ const framework = require('../../packages/framework/dist');
 const internal = require('../../packages/framework/dist/internal');
 const nestjs = require('../../packages/nestjs/dist');
 
+test('RuntimeEventQueue retains the newest terminal status and reports the discarded oldest one', async () => {
+  const queue = new internal.RuntimeEventQueue(1);
+  queue.seal({ sequence: 1 });
+  queue.complete({ sequence: 2 });
+
+  const terminal = await queue.next();
+  assert.equal(terminal.done, false);
+  assert.equal(terminal.value.status.sequence, 2);
+  assert.equal(terminal.value.loss.discardedTerminalCount, 1n);
+  assert.equal((await queue.next()).done, true);
+});
+
 test('ClientServer runtime projects minimal status and emits complete status changes', async () => {
   let changed;
   const manager = {
