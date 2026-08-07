@@ -1403,21 +1403,24 @@ public sealed class ServiceRuntimeFoundationTests
         right.SetRoutingId(RoutingId.From("orders-client-right"));
         right.SetObjectRole(ZLinkMeshNodeObjectRole.Client);
         right.SetBind(rightEndpoint);
-        right.ConnectPeer(leftEndpoint, RoutingId.From("orders-client-left"));
+        // One manual connection is sufficient to classify both object-client
+        // peers; symmetric intents would create two independent connection
+        // attempts before the NotRequired state is published.
         await using var leftMonitor = left.OpenMonitor();
         await using var rightMonitor = right.OpenMonitor();
         right.Start();
         left.Start();
 
         await WaitUntilAsync(() =>
-            left.Peers().Any(static peer =>
+            left.Peers().Length == 1
+            && right.Peers().Length == 1
+            && left.Peers().All(static peer =>
                 peer.State == MeshPeerState.NotRequired)
-            && right.Peers().Any(static peer =>
+            && right.Peers().All(static peer =>
                 peer.State == MeshPeerState.NotRequired));
 
         Assert.Equal(0u, left.Status().AdmittedPeerCount);
         Assert.Equal(0u, right.Status().AdmittedPeerCount);
-        await Task.Delay(TimeSpan.FromMilliseconds(1100));
         Assert.Single(left.Peers());
         Assert.Single(right.Peers());
         Assert.All(
@@ -1425,10 +1428,16 @@ public sealed class ServiceRuntimeFoundationTests
             static peer => Assert.Equal(MeshPeerState.NotRequired, peer.State));
         Assert.Equal(0UL, leftMonitor.Status().PeerRejected);
         Assert.Equal(0UL, rightMonitor.Status().PeerRejected);
-        Assert.Contains(
-            Drain(leftMonitor).Concat(Drain(rightMonitor)),
-            static meshEvent =>
-                meshEvent.Kind == MeshMonitorEventKind.PeerNotRequired);
+        var observedNotRequired = false;
+        await WaitUntilAsync(() =>
+        {
+            observedNotRequired |= Drain(leftMonitor)
+                .Concat(Drain(rightMonitor))
+                .Any(static meshEvent =>
+                    meshEvent.Kind == MeshMonitorEventKind.PeerNotRequired);
+            return observedNotRequired;
+        });
+        Assert.True(observedNotRequired);
     }
 
     [Fact]
