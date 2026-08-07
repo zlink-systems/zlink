@@ -68,15 +68,15 @@ Gap 하나 또는 서로 강하게 연결된 작은 작업 묶음의 동작과 �
 | 04-completion | 2 | 2 | 문자열 분류, 완료 방식 난립 |
 | 05-relocation-continuity | 1 | 2 | 오류 종류 축약 |
 | 06-routing-and-cache | 1 | 2 | 수동 피어 fence (JVM-TOPO-001의 C++ 판) |
-| 07-dispatch-loop | 2 | 3 | tick 통계 무한 누적, timer 계약 불일치 |
+| 07-dispatch-loop | 0 | 3 | timer history 상한과 overrun 계약 종결 |
 | 08-object-lifecycle | 1 | 2 | generation 필터링과 Ready owner loss 판정 |
 | 09-session-binding | 1 | 2 | 세션 스왑 핸드셰이크 부재 |
 | 10-liveness-and-state | 0 | 1 | `CPP-OBS-002` 종결 |
 | 11-message-ownership | 5 | 3 | 복사/보관 규율 전반 미준수. `CPP-OWN-005` 종결 |
 | 12-service-wire-protocol | 5 | 2 | 스토어 키 포맷, json-v1 프로파일 |
-| **internals 소계** | **23** | **27** | relocation 2건, `CPP-OWN-005`, `CPP-OBS-002` 종결 |
+| **internals 소계** | **21** | **27** | relocation·timer 각 2건, `CPP-OWN-005`, `CPP-OBS-002` 종결 |
 | C++ exact public interface | 0 | 0 | diagnostics 2건, object query, STREAM timeout, Client role 오류와 HTTP builder 종결 |
-| **합계** | **23** | **27** | 종결 10건은 GAP·PARTIAL 집계에서 제외 |
+| **합계** | **21** | **27** | 종결 12건은 GAP·PARTIAL 집계에서 제외 |
 
 ---
 
@@ -218,10 +218,10 @@ admitted 피어의 애플리케이션 레코드가 대상 owner의 mailbox 예�
 
 | ID | 분류 | 요약 |
 |---|---|---|
-| CPP-TIMER-001 | GAP·검증 중 | 구현 checkpoint `80be9877f2`에서 전달 tick과 실패 기록을 각각 최근 256개로 제한했다. 300회 추가 dispatch 뒤 history 크기와 마지막 tick을 확인하는 owner-layer 회귀와 전체 `test_cpp_framework_execution`은 통과했다. Package·process timer 검증이 남아 있어 아직 종결하지 않는다. |
+| CPP-TIMER-001 | CLOSED | 구현 checkpoint `80be9877f2`에서 전달 tick과 실패 기록을 각각 최근 256개로 제한했다. Owner 회귀는 300회 추가 dispatch 뒤 history 크기 256과 마지막 scheduled index 305를 확인한다. Process checkpoint `d16439cd27`의 `SM-E4`는 실제 Spot timer를 세 overrun policy로 실행했고 `scenario SM-E4 evidence passed`로 끝났다. 같은 library를 빈 prefix에 설치한 clean consumer도 실행됐으며 Framework archive SHA-256은 `b3a93af95b7eccd3677032a020111a22758dda7d2a2cc0ec0ab581e416eeefcf`, 설치 header 수는 112개다. |
 | CPP-DISP-005 | PARTIAL·검증 중 | 구현 checkpoint `388d59516b`에서 MeshNode ROUTER poller에 기존 `runtime_wake_timer_t`를 연결하고, local publish·Actor join·Actor message·Spot request enqueue가 같은 activity signal을 사용하도록 통합했다. 5초 poll 대기가 local publish 직후 500 ms 검증 한도 안에 반환되는 owner-layer 회귀를 추가했다. 전체 `test_cpp_framework_m6b_runtime`과 `test_cpp_framework_target_contract`가 통과했다. 실제 host loop의 local request latency 계측과 package process 검증이 남아 있어 아직 종결하지 않는다. |
 | CPP-DISP-006 | PARTIAL·검증 중 | 구현 checkpoint `e401806c6c`에서 세 per-Spot post 경로가 close/idle-eviction admission flag를 확인한 뒤 `callback_mutex`를 유지한 상태로 serial queue enqueue까지 끝내도록 바꿨다. 따라서 sealing은 확인과 enqueue 사이에 들어오지 못하며 handler 실행은 기존처럼 lock 밖에서 진행된다. 전체 `test_cpp_framework_execution`과 `test_cpp_framework_target_contract`가 통과했다. 설치 package와 close·relocation이 실제 ingress와 경합하는 process 검증이 남아 있어 아직 종결하지 않는다. |
-| CPP-TIMER-002 | GAP·검증 중 | 구현 checkpoint `80be9877f2`에서 `catch_up_bounded`가 한 dispatch 안에서 최대 설정 개수까지 연속 tick을 전달하고, 오래된 누락분은 첫 tick의 `skipped_ticks`에 기록하도록 수정했다. `max_catch_up_ticks`는 `1..INT_MAX`만 허용한다. 5개 만료를 상한 3으로 dispatch해 index 3·4·5와 skip 2를 확인하는 회귀와 전체 `test_cpp_framework_execution`은 통과했다. Package·process timer 검증이 남아 있어 아직 종결하지 않는다. |
+| CPP-TIMER-002 | CLOSED | 구현 checkpoint `80be9877f2`에서 `catch_up_bounded`가 한 dispatch 안에서 최대 설정 개수까지 연속 tick을 전달하고, 오래된 누락분은 첫 tick의 `skipped_ticks`에 기록하도록 수정했다. `max_catch_up_ticks`는 `1..INT_MAX`만 허용한다. 5개 만료를 상한 3으로 dispatch해 index 3·4·5와 skip 2를 확인하는 owner 회귀는 통과했다. 첫 process 실행은 native timer의 각 만료가 serial queue에 따로 들어가 production 경로에서는 `fire_count=1`만 전달되는 결함을 확인했다. Checkpoint `d16439cd27`에서 callback 실행 전과 실행 중에 쌓인 만료 수를 하나의 후속 dispatch로 합치고 overflow는 `UINT64_MAX`에서 제한했다. 같은 checkpoint에서 자동 DI 등록이 같은 handler type을 여러 surface에 중복 등록하지 않도록 고쳤고, `SM-E4` fixture에 명시적 RouteMesh role과 fanout routing id를 설정했다. `test_cpp_framework_execution`, DI·contract header 회귀, 실제 `SM-E4` process와 clean package consumer가 통과했다. 최신 process log는 `framework/languages/cpp/e2e/SpotService/logs/20260808-020853-1542739`이다. |
 | CPP-TIMER-003 | PARTIAL·중 | §7 타이머 자원 비비례 위반: 스케줄링은 공유 표준형이나 등록당 `zlink::timer_t`가 signaler(OS fdpair)를 즉시 생성 — 10,000 Spot × 2 타이머 = 약 40,000 fd, 등록 수에 선형인 OS 자원. 증거: `cpp/src/runtime/timers/timer_runtime.cpp:116-121`, `core/src/api/monitoring/timer_api_internal.hpp:26-47`, `core/src/runtime/core/signaler.cpp:90-93` |
 
 만족 항목(요약): ready set 상태화, mailbox 단일 스팬(check+insert), claim serial 배타, 10 ms 시간예산 배칭, 배치 수신 3중 한도, 커넥션 rotation cursor, overrun 3정책 이름 일치 등은 충실.
@@ -321,11 +321,11 @@ RouteMesh에 남은 금지 상한 surface·field, JSON 프로파일에 집중한
 
 ## 5. 권고
 
-1. **이 보고서에서 unique ID 관리** — 정식 spec에 구현 진행 기록을 다시 넣지 않고, 이 plan 문서가 남은 23 GAP과 27 PARTIAL 및 종결 10건의 증거를 소유한다. 특히 CPP-TOPO-001은 종결된 `JVM-TOPO-001`, CPP-COMP-001은 종결된 `NODE-ROUTE-001`과 비교하되 다른 언어의 종결을 C++ 완료 증거로 사용하지 않는다.
+1. **이 보고서에서 unique ID 관리** — 정식 spec에 구현 진행 기록을 다시 넣지 않고, 이 plan 문서가 남은 21 GAP과 27 PARTIAL 및 종결 12건의 증거를 소유한다. 특히 CPP-TOPO-001은 종결된 `JVM-TOPO-001`, CPP-COMP-001은 종결된 `NODE-ROUTE-001`과 비교하되 다른 언어의 종결을 C++ 완료 증거로 사용하지 않는다.
 2. **수정 순서 제안**:
    - 1차 (안정성·정합성): CPP-DISP-001(terminate), CPP-DISP-002(HOL), CPP-SESS-001(이중 소유), CPP-TOPO-001(fence), CPP-ROUTE-001(dead 매처 — 한 줄급 수정), CPP-LIFE-003(Ready owner loss와 Missing 분리)
    - 2차 (public 계약·상호운용): CPP-WIRE-001(키 포맷 — 마이그레이션 계획 필요), CPP-WIRE-002(RouteMesh 금지 상한 surface·wire field 제거), CPP-WIRE-003(json-v1), CPP-OWN-001(content-type 검증), CPP-COMP-001(문자열 분류 → 구조화 오류 코드)
-   - 3차 (자원·성능): CPP-TIMER-001(무한 누적), CPP-COMP-004(고아 엔트리 누수), CPP-TIMER-003(fdpair), CPP-EXEC-001/CPP-OWN-002~004(복사·락 절감), CPP-DISP-005(100 ms wake)
+   - 3차 (자원·성능): CPP-COMP-004(고아 엔트리 누수), CPP-TIMER-003(fdpair), CPP-EXEC-001/CPP-OWN-002~004(복사·락 절감), CPP-DISP-005(100 ms wake)
    - 4차 (구조·명명): 나머지 PARTIAL
 3. **오류 종류 정합은 계약 테스트로 고정** — CPP-EXEC-002와 CPP-FOLLOW-001은 공개 오류 kind가 계약과 달라지는 계열이므로, 수정과 함께 source contract test와 cross-language process E2E에 오류 kind assertion을 추가한다. CPP-CONTRACT-ROLE-001은 같은 방식으로 종결했다. CPP-LIFE-001은 오류 이름 문제가 아니라 일반 message admission fence 자체의 의미 차이다.
 4. **public surface 제거에는 package 증거가 필요하다** — source header 수정만으로 끝내지 않고 install tree에서 제거된 export를 확인하고 clean consumer를 compile한다. Diagnostics observer 제거는 provider 경로와 failure-isolation E2E가 먼저 통과해야 한다.
