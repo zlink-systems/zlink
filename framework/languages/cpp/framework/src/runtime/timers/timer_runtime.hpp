@@ -7,6 +7,7 @@
 #include "runtime/execution/serial_execution_queue.hpp"
 
 #include <functional>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -19,6 +20,7 @@ namespace zlink::framework::detail
 class timer_state_t
 {
   public:
+    static constexpr std::size_t observation_history_limit = 256;
     using handler_invoker_t = std::function<task_t<zlink::message_t> (
       void *, void *, serializer_registry_t &, const timer_tick_t &)>;
 
@@ -37,8 +39,8 @@ class timer_state_t
     mutable std::mutex mutex;
     bool pending_fire = false;
     std::uint64_t pending_fire_count = 0;
-    std::vector<timer_tick_t> delivered_ticks;
-    std::vector<timer_failure_event_t> failure_events;
+    std::deque<timer_tick_t> delivered_ticks;
+    std::deque<timer_failure_event_t> failure_events;
 };
 
 class timer_runtime_t

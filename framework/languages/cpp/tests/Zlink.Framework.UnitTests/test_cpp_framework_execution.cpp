@@ -18,6 +18,7 @@
 #include <exception>
 #include <functional>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <queue>
@@ -207,6 +208,62 @@ bool verify_timer_handler_activation_lifetime ()
             std::cerr << "timer activation dispatch failed: "
                       << static_cast<int> (first_result.error_kind ()) << ", "
                       << static_cast<int> (second_result.error_kind ()) << '\n';
+            return false;
+        }
+        zlink::framework::timer_options_t catch_up_options;
+        catch_up_options.overrun_policy =
+          zlink::framework::timer_overrun_policy_t::catch_up_bounded;
+        catch_up_options.max_catch_up_ticks = 3;
+        auto catch_up =
+          context.add_timer<timer_activation_handler_t> (
+            "catch-up", std::chrono::hours (24), catch_up_options);
+        std::vector<zlink::framework::timer_tick_t> caught_up;
+        const auto catch_up_result = timer_runtime.dispatch_fire_count (
+          catch_up, 5,
+          [&] (const zlink::framework::timer_tick_t &tick) {
+              caught_up.push_back (tick);
+          });
+        if (!catch_up_result || caught_up.size () != 3
+            || caught_up[0].scheduled_index != 3
+            || caught_up[0].skipped_ticks != 2
+            || caught_up[1].scheduled_index != 4
+            || caught_up[2].scheduled_index != 5) {
+            std::cerr << "bounded timer catch-up mismatch\n";
+            return false;
+        }
+        for (int index = 0; index < 300; ++index) {
+            if (!timer_runtime.dispatch_fire_count (catch_up, 1)) {
+                return false;
+            }
+        }
+        const auto tick_history =
+          timer_runtime.delivered_ticks (catch_up);
+        if (tick_history.size ()
+              != zlink::framework::detail::timer_state_t::
+                   observation_history_limit
+            || tick_history.back ().scheduled_index != 305) {
+            std::cerr << "timer observation history must stay bounded\n";
+            return false;
+        }
+
+        bool oversized_catch_up_rejected = false;
+        try {
+            auto invalid_options = catch_up_options;
+            invalid_options.max_catch_up_ticks =
+              static_cast<std::uint64_t> (
+                std::numeric_limits<int>::max ())
+              + 1;
+            (void) context.add_timer<timer_activation_handler_t> (
+              "invalid-catch-up", std::chrono::hours (24),
+              invalid_options);
+        }
+        catch (const zlink::framework::framework_exception_t &error) {
+            oversized_catch_up_rejected =
+              error.kind ()
+              == zlink::framework::framework_error_kind_t::protocol_error;
+        }
+        if (!oversized_catch_up_rejected) {
+            std::cerr << "oversized timer catch-up count must be rejected\n";
             return false;
         }
         const auto reused =

@@ -68,9 +68,12 @@ timer_t spot_context_t::add_timer_erased (std::string name,
                                      "SPOT timer period must be greater than zero");
     }
     if (options.overrun_policy == timer_overrun_policy_t::catch_up_bounded
-        && options.max_catch_up_ticks == 0) {
+        && (options.max_catch_up_ticks == 0
+            || options.max_catch_up_ticks
+                 > static_cast<std::uint64_t> (
+                   std::numeric_limits<int>::max ()))) {
         throw framework_exception_t (framework_error_kind_t::protocol_error,
-                                     "SPOT timer max catch-up ticks must be greater than zero");
+                                     "SPOT timer max catch-up ticks must be between 1 and INT_MAX");
     }
 
     const auto duplicate = std::any_of (_state->timers.begin (), _state->timers.end (),
@@ -170,47 +173,58 @@ void timer_runtime_t::post_fire_count (const std::shared_ptr<spot_context_state_
 namespace
 {
 
-std::uint64_t select_scheduled_index (const timer_state_t &state, std::uint64_t fire_count)
+template <typename T>
+void append_observation (std::deque<T> &history, T value)
 {
-    if (state.options.overrun_policy == timer_overrun_policy_t::delay_next_tick) {
-        return state.last_scheduled_index + 1;
-    }
-
-    const auto due = state.last_scheduled_index + std::max<std::uint64_t> (1, fire_count);
-    if (state.options.overrun_policy == timer_overrun_policy_t::skip_late_ticks) {
-        return due;
-    }
-
-    const auto available = due - state.last_scheduled_index;
-    if (available > state.options.max_catch_up_ticks) {
-        return due - state.options.max_catch_up_ticks + 1;
-    }
-    return state.last_scheduled_index + 1;
+    if (history.size () == timer_state_t::observation_history_limit)
+        history.pop_front ();
+    history.push_back (std::move (value));
 }
 
-timer_tick_t make_tick (timer_state_t &state, std::uint64_t fire_count)
+std::vector<timer_tick_t> make_ticks (timer_state_t &state,
+                                      std::uint64_t fire_count)
 {
-    const auto scheduled_index = select_scheduled_index (state, fire_count);
-    const auto skipped_ticks = scheduled_index - state.last_scheduled_index - 1;
-    state.delivery_index++;
+    const auto previous_index = state.last_scheduled_index;
+    const auto available = std::max<std::uint64_t> (1, fire_count);
+    const auto due_index = previous_index + available;
+    std::uint64_t first_index = due_index;
+    std::uint64_t delivery_count = 1;
+    if (state.options.overrun_policy
+        == timer_overrun_policy_t::delay_next_tick) {
+        first_index = previous_index + 1;
+    } else if (state.options.overrun_policy
+               == timer_overrun_policy_t::catch_up_bounded) {
+        delivery_count = std::min (available,
+                                   state.options.max_catch_up_ticks);
+        first_index = due_index - delivery_count + 1;
+    }
 
-    const auto scheduled_elapsed = state.period * scheduled_index;
+    std::vector<timer_tick_t> ticks;
+    ticks.reserve (static_cast<std::size_t> (delivery_count));
     const auto started_elapsed =
-      state.options.overrun_policy == timer_overrun_policy_t::delay_next_tick
-        ? state.period * state.delivery_index
-        : state.period * (state.last_scheduled_index + std::max<std::uint64_t> (1, fire_count));
-
-    timer_tick_t tick{state.name,
-                      state.delivery_index,
-                      scheduled_index,
-                      state.period,
-                      scheduled_elapsed,
-                      started_elapsed,
-                      started_elapsed - scheduled_elapsed,
-                      skipped_ticks};
-    state.last_scheduled_index = scheduled_index;
-    state.delivered_ticks.push_back (tick);
-    return tick;
+      state.options.overrun_policy
+          == timer_overrun_policy_t::delay_next_tick
+        ? state.period * (state.delivery_index + 1)
+        : state.period * due_index;
+    for (std::uint64_t offset = 0; offset < delivery_count; ++offset) {
+        const auto scheduled_index = first_index + offset;
+        const auto skipped_ticks =
+          offset == 0 ? scheduled_index - previous_index - 1 : 0;
+        ++state.delivery_index;
+        timer_tick_t tick{
+          state.name,
+          state.delivery_index,
+          scheduled_index,
+          state.period,
+          state.period * scheduled_index,
+          started_elapsed,
+          started_elapsed - state.period * scheduled_index,
+          skipped_ticks};
+        append_observation (state.delivered_ticks, tick);
+        ticks.push_back (std::move (tick));
+    }
+    state.last_scheduled_index = ticks.back ().scheduled_index;
+    return ticks;
 }
 
 void record_timer_failure (const std::shared_ptr<spot_context_state_t> &context,
@@ -220,7 +234,7 @@ void record_timer_failure (const std::shared_ptr<spot_context_state_t> &context,
 {
     timer_failure_event_t failure{state->name, state->handler_type, state->delivery_index, stopped,
                                   std::move (message)};
-    state->failure_events.push_back (failure);
+    append_observation (state->failure_events, failure);
     if (context && context->node && context->node->monitoring) {
         monitoring_runtime_t (context->node->monitoring)
           .publish_timer_failure (context->node->snapshot.name, context->spot_id,
@@ -257,12 +271,12 @@ timer_runtime_t::dispatch_fire_count (timer_t &timer,
     };
 
     try {
-        auto tick = make_tick (*timer._state, fire_count);
-        if (handler) {
-            handler (tick);
-        }
+        auto ticks = make_ticks (*timer._state, fire_count);
+        for (const auto &tick : ticks)
+            if (handler)
+                handler (tick);
         reset_running ();
-        return result_t<timer_tick_t>::success (std::move (tick));
+        return result_t<timer_tick_t>::success (std::move (ticks.back ()));
     }
     catch (const std::exception &error) {
         const auto stopped = timer._state->options.stop_on_unhandled_exception;
@@ -340,7 +354,7 @@ task_t<timer_tick_t> timer_runtime_t::dispatch_fire_count_async (timer_t &timer,
     };
 
     try {
-        auto tick = make_tick (*state, fire_count);
+        auto ticks = make_ticks (*state, fire_count);
         auto spot_keep_alive = context->spot_instance;
         /* Timer callbacks have no inbound message: they start a new flow with
          * origin=timer when tracing capture is enabled (flow-correlation §4.2). */
@@ -353,12 +367,15 @@ task_t<timer_tick_t> timer_runtime_t::dispatch_fire_count_async (timer_t &timer,
               framework_error_kind_t::protocol_error,
               "SPOT timer handler activation is no longer available");
         }
-        auto handler_task = state->handler_invoker (spot_keep_alive.get (),
-                                                    handler_instance.get (),
-                                                    *context->channel_runtime->serializers, tick);
-        (void) co_await handler_task;
+        for (const auto &tick : ticks) {
+            auto handler_task = state->handler_invoker (
+              spot_keep_alive.get (), handler_instance.get (),
+              *context->channel_runtime->serializers, tick);
+            (void) co_await handler_task;
+        }
         reset_running ();
-        co_return result_t<timer_tick_t>::success (std::move (tick));
+        co_return result_t<timer_tick_t>::success (
+          std::move (ticks.back ()));
     }
     catch (const framework_exception_t &error) {
         const auto stopped = state->options.stop_on_unhandled_exception;
@@ -422,7 +439,8 @@ std::vector<timer_failure_event_t> timer_runtime_t::failure_events (const timer_
     if (!timer._state) {
         return {};
     }
-    return timer._state->failure_events;
+    return {timer._state->failure_events.begin (),
+            timer._state->failure_events.end ()};
 }
 
 std::vector<timer_tick_t> timer_runtime_t::delivered_ticks (const timer_t &timer) const
@@ -430,7 +448,8 @@ std::vector<timer_tick_t> timer_runtime_t::delivered_ticks (const timer_t &timer
     if (!timer._state) {
         return {};
     }
-    return timer._state->delivered_ticks;
+    return {timer._state->delivered_ticks.begin (),
+            timer._state->delivered_ticks.end ()};
 }
 
 } // namespace zlink::framework::detail
