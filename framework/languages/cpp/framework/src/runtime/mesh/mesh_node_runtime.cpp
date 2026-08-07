@@ -388,7 +388,8 @@ void mesh_node_runtime_t::start ()
           _state->auto_hwm_profile},
         _state->spot_state->snapshot.entry_spot_name.value_or ("entry"),
         std::move (object_stable_types),
-        _route_cache_max_age});
+        _route_cache_max_age,
+        _owner_lease_fencing_margin});
     if (_spot_route_fence_resolver)
         node->configure_spot_route_fence_resolver (
           _spot_route_fence_resolver);
@@ -514,7 +515,8 @@ void mesh_node_runtime_t::configure_user_spot_operations (
 
 void mesh_node_runtime_t::configure_spot_route_fence_resolver (
   host::spot_route_fence_resolver_t resolver,
-  std::chrono::milliseconds route_cache_max_age)
+  std::chrono::milliseconds route_cache_max_age,
+  std::chrono::milliseconds owner_lease_fencing_margin)
 {
     if (_node)
         throw configuration_error (
@@ -522,8 +524,12 @@ void mesh_node_runtime_t::configure_spot_route_fence_resolver (
     if (route_cache_max_age < std::chrono::milliseconds::zero ())
         throw configuration_error (
           "Spot route cache age must not be negative");
+    if (owner_lease_fencing_margin < std::chrono::milliseconds::zero ())
+        throw configuration_error (
+          "Owner lease fencing margin must not be negative");
     _spot_route_fence_resolver = std::move (resolver);
     _route_cache_max_age = route_cache_max_age;
+    _owner_lease_fencing_margin = owner_lease_fencing_margin;
 }
 
 void mesh_node_runtime_t::configure_actor_route_resolver (

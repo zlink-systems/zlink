@@ -42,6 +42,8 @@ using namespace std::chrono_literals;
 namespace
 {
 
+mesh::service_node_descriptor_t descriptor (std::string rid);
+
 void verify_mesh_node_role_is_available_before_local_descriptor_publish ()
 {
     auto state = std::make_shared<
@@ -277,6 +279,100 @@ void verify_spot_route_fence_admission_precedes_body_decode ()
     assert (!state->accepts_route_fence (stale, owner));
     assert (!state->accepts_route_fence (valid,
                                          std::optional<zlink::framework::location_owner_token_t>{}));
+}
+
+void verify_public_host_route_cache_stops_at_owner_admission_deadline ()
+{
+    using namespace zlink::framework;
+    auto store = std::make_shared<runtime::in_memory_location_repository_t> ();
+    const auto owner = std::get<owner_lease_claimed_t> (
+      store->claim_owner_lease ("route-cache-owner", 5s)
+        .result ().value ()).token;
+    mesh_node_descriptor_t location{
+      .mesh_name = "m6b-mesh",
+      .rid = zlink::routing_id_t::from ("route-cache-target"),
+      .lifecycle_generation = 1,
+      .descriptor_revision = 1,
+      .endpoint = "tcp://127.0.0.1:1",
+      .application_version = 1,
+      .object_capabilities =
+        {{.object_kind = placement_object_kind_t::user_spot,
+          .stable_type = "room"}},
+      .object_role = object_role_t::server,
+      .capacity = {.spots = {.limit = 8}},
+      .state = framework_runtime_state_t::serving,
+      .security_identity = "route-cache-test",
+      .owner_id = owner.owner_id,
+      .lease_generation = owner.lease_generation};
+    assert (store->update_mesh_node (
+              location, location_write_intent_t::new_claim)
+              .result ().value ().status
+            == location_write_status_t::stored);
+    const object_reserve_request_t reserve{
+      .key = {placement_object_kind_t::user_spot, "route-cache-spot"},
+      .intent = {.stable_type = "room"},
+      .target = {.mesh_name = location.mesh_name,
+                 .node_rid = node_rid_t::from_string (
+                   location.rid.to_string ()),
+                 .node_lifecycle_generation = location.lifecycle_generation,
+                 .owner = owner},
+      .capacity_bundle = {
+        .spot_slots = 1,
+        .spot_type = spot_type_capacity_delta_t{
+          placement_object_kind_t::user_spot, "room", 1}}};
+    const auto reserved = std::get<object_reserved_t> (
+      store->reserve (reserve).result ().value ());
+    const auto committed = std::get<object_committed_t> (
+      store->commit ({reserve.key, reserved.fence, {std::byte{1}}})
+        .result ().value ());
+
+    host::host_options_t source_options{
+      mesh::raw_mesh_node_options_t{descriptor ("route-cache-source")}};
+    source_options.object_stable_types.insert ("framework.spot");
+    source_options.route_cache_max_age = 10s;
+    source_options.owner_lease_fencing_margin = 4s;
+    auto source = std::make_shared<host::public_host_runtime_t> (
+      std::move (source_options));
+    auto target = std::make_shared<host::public_host_runtime_t> (
+      host::host_options_t{mesh::raw_mesh_node_options_t{
+        descriptor ("route-cache-target")}});
+    source->configure_user_spot_operations (
+      store,
+      [] (const stateful::object_ref_t &, const std::string &,
+          const std::vector<std::byte> &) {
+          return host::user_spot_materialize_result_t{true, std::nullopt};
+      });
+    source->start ();
+    target->start ();
+    assert (source->connect_peer (
+      target->status ().local_endpoint (), target->status ().routing_id ()));
+    const auto noop_dispatch = [] (const host::ready_record_t &,
+                                   const host::receive_record_t &,
+                                   std::vector<zlink::message_t>) {};
+    const auto connect_deadline = std::chrono::steady_clock::now () + 5s;
+    while (!source->transport ().topology ().peer (
+             target->status ().routing_id ().to_bytes ())
+           && std::chrono::steady_clock::now () < connect_deadline) {
+        (void) source->dispatch_ready (noop_dispatch);
+        (void) target->dispatch_ready (noop_dispatch);
+        std::this_thread::sleep_for (1ms);
+    }
+    assert (source->transport ().topology ().peer (
+      target->status ().routing_id ().to_bytes ()));
+
+    auto caller = source->entry_spot ();
+    const auto send = [&] {
+        return caller.send_to_spot (
+          target->status ().routing_id (), reserve.key.global_id,
+          committed.ready.object_generation,
+          {zlink::message_t::from (std::string ("payload"))});
+    };
+    assert (send () == zlink::submit_result_t::ok);
+    std::this_thread::sleep_for (1200ms);
+    assert (send () == zlink::submit_result_t::not_found);
+
+    source->close ();
+    target->close ();
 }
 
 void verify_entry_spot_identity_claim_is_global_and_fenced ()
@@ -3870,6 +3966,7 @@ int main ()
     verify_mesh_node_zero_mailbox_budget_uses_framework_defaults ();
     verify_spot_id_contract ();
     verify_spot_route_fence_admission_precedes_body_decode ();
+    verify_public_host_route_cache_stops_at_owner_admission_deadline ();
     verify_entry_spot_identity_claim_is_global_and_fenced ();
     verify_user_spot_execution_mode_registration ();
     verify_self_actor_request_rejected_before_submission ();

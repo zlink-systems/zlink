@@ -2161,6 +2161,8 @@ void mesh_node_host_service_t::start (service_provider_t &services)
     auto &actor_resolver =
       services.get_required<actor_address_resolver_t> ();
     const auto route_cache_max_age = location_runtime.options ().route_cache_max_age;
+    const auto owner_lease_fencing_margin =
+      location_runtime.options ().owner_lease_fencing_margin;
     for (std::size_t index = 0; index < _nodes.size (); ++index) {
         const auto &node = _nodes[index];
         const auto registration = _registrations[index];
@@ -2194,7 +2196,7 @@ void mesh_node_host_service_t::start (service_provider_t &services)
                   return std::nullopt;
               }
           },
-          route_cache_max_age);
+          route_cache_max_age, owner_lease_fencing_margin);
         node->configure_actor_route_resolver (
           [&actor_resolver] (const actor_ref_t &actor)
             -> std::optional<spot_address_t> {

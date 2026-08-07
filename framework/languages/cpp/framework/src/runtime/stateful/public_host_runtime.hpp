@@ -231,6 +231,7 @@ struct host_options_t
     std::string entry_spot_name = "entry";
     std::set<std::string> object_stable_types;
     std::chrono::milliseconds route_cache_max_age{15'000};
+    std::chrono::milliseconds owner_lease_fencing_margin{5'000};
     std::size_t user_spot_operation_capacity = 65'536;
     std::chrono::milliseconds user_spot_operation_replay_retention =
       std::chrono::minutes (5);

@@ -1715,6 +1715,22 @@ int main ()
       "CPP-DISP-005",
       "local application enqueue does not signal the MeshNode activity poll");
 
+    /* CPP-ROUTE-002 — the direct-store fallback uses the same owner
+     * admission deadline as the shared location resolver and never extends
+     * it while converting store time to a steady-clock cache deadline. */
+    gate.require (
+      public_host_runtime.find (
+        "live.owner_admission_lifetime (snapshot->owner)")
+          != std::string::npos
+        && public_host_runtime.find (
+             "measured_at + *read->admission_lifetime")
+             != std::string::npos
+        && public_host_runtime.find (
+             "measured_at + lifetime")
+             != std::string::npos,
+      "CPP-ROUTE-002",
+      "direct-store Spot route cache outlives owner admission");
+
     /* CPP-OBS-001 — Instance Spot activation must not allocate its trace DTO
      * or correlation strings while message-flow diagnostics are off. */
     gate.require (

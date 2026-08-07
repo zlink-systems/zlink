@@ -114,7 +114,9 @@ class mesh_node_runtime_t
       host::user_spot_materializer_t materializer);
     void configure_spot_route_fence_resolver (
       host::spot_route_fence_resolver_t resolver,
-      std::chrono::milliseconds route_cache_max_age);
+      std::chrono::milliseconds route_cache_max_age,
+      std::chrono::milliseconds owner_lease_fencing_margin =
+        std::chrono::seconds (5));
     void configure_actor_route_resolver (
       std::function<std::optional<runtime::spot_address_t> (
         const actor_ref_t &)> resolver,
@@ -413,6 +415,7 @@ class mesh_node_runtime_t
     std::function<void (const runtime::protocol::actor_route_fence_t &)>
       _actor_route_invalidator;
     std::chrono::milliseconds _route_cache_max_age{15'000};
+    std::chrono::milliseconds _owner_lease_fencing_margin{5'000};
     host::actor_create_operation_target_t _actor_create_target;
     host::instance_spot_activation_materializer_t
       _instance_spot_materializer;

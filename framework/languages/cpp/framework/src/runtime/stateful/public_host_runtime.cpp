@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "runtime/stateful/public_host_runtime.hpp"
+#include "runtime/locations/live_location_reader.hpp"
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/stateful/raw_stateful_dispatch.hpp"
 #include "runtime/locations/pending_creation_projection.hpp"
@@ -175,14 +176,22 @@ std::vector<zlink::message_t> decode_parts (
     return parts;
 }
 
-std::optional<std::pair<std::uint64_t, std::uint64_t>>
+struct route_owner_fence_read_t
+{
+    host::route_fence_t fence;
+    std::optional<std::chrono::steady_clock::duration> admission_lifetime;
+};
+
+std::optional<route_owner_fence_read_t>
 read_route_owner_fence (
   const std::shared_ptr<zlink::framework::location_repository_t> &store,
   char object_kind,
   std::string_view object_id,
   std::uint64_t object_generation,
   std::uint64_t authority_owner_generation = 0,
-  std::uint64_t owner_lease_generation = 0)
+  std::uint64_t owner_lease_generation = 0,
+  std::chrono::milliseconds owner_lease_fencing_margin =
+    std::chrono::seconds (5))
 {
     if (object_id.empty () || object_generation == 0)
         return std::nullopt;
@@ -191,8 +200,8 @@ read_route_owner_fence (
         if (authority_owner_generation == 0
             || owner_lease_generation == 0)
             return std::nullopt;
-        return std::pair{authority_owner_generation,
-                         owner_lease_generation};
+        return route_owner_fence_read_t{
+          {authority_owner_generation, owner_lease_generation}, std::nullopt};
     }
     if (!store)
         return std::nullopt;
@@ -209,9 +218,18 @@ read_route_owner_fence (
             || snapshot->authority_owner_generation == 0
             || snapshot->owner.lease_generation <= 0)
             return std::nullopt;
-        return std::pair{
-          snapshot->authority_owner_generation,
-          static_cast<std::uint64_t> (snapshot->owner.lease_generation)};
+        location_options_t location_options;
+        location_options.owner_lease_fencing_margin =
+          owner_lease_fencing_margin;
+        live_location_reader_t live (*store, std::move (location_options));
+        const auto admission_lifetime =
+          live.owner_admission_lifetime (snapshot->owner);
+        if (!admission_lifetime)
+            return std::nullopt;
+        return route_owner_fence_read_t{
+          {snapshot->authority_owner_generation,
+           static_cast<std::uint64_t> (snapshot->owner.lease_generation)},
+          admission_lifetime};
     }
     catch (...) {
         return std::nullopt;
@@ -2277,19 +2295,29 @@ public_host_runtime_t::resolve_spot_route_fence (
         }
     }
 
-    const auto fence = read_route_owner_fence (
-      store, '2', target_spot_id, target_spot_generation);
-    if (fence && _options.route_cache_max_age
-                     > std::chrono::milliseconds::zero ()) {
+    const auto measured_at = std::chrono::steady_clock::now ();
+    const auto read = read_route_owner_fence (
+      store, '2', target_spot_id, target_spot_generation, 0, 0,
+      _options.owner_lease_fencing_margin);
+    if (read && read->admission_lifetime) {
+        const auto admission_expires_at =
+          measured_at + *read->admission_lifetime;
+        if (std::chrono::steady_clock::now () >= admission_expires_at)
+            return std::nullopt;
+        if (_options.route_cache_max_age
+            <= std::chrono::milliseconds::zero ())
+            return read->fence;
+        const auto lifetime = std::min (
+          std::chrono::duration_cast<std::chrono::steady_clock::duration> (
+            _options.route_cache_max_age),
+          *read->admission_lifetime);
         std::lock_guard lock (_route_cache_mutex);
         _spot_route_fences.insert_or_assign (
           key,
           cached_spot_route_fence_t{
-            *fence,
-            std::chrono::steady_clock::now ()
-              + _options.route_cache_max_age});
+            read->fence, measured_at + lifetime});
     }
-    return fence;
+    return read ? std::optional<route_fence_t> (read->fence) : std::nullopt;
 }
 
 void public_host_runtime_t::invalidate_spot_route_fence (
@@ -2361,7 +2389,7 @@ zlink::submit_result_t public_host_runtime_t::send_to_actor (
     const auto route_fence = read_route_owner_fence (
       _user_spot_store, '1', target.actor_id ().value (), target.object_generation (),
       authority_generation, owner_lease_generation);
-    if (!route_fence || route_fence->first != authority_generation)
+    if (!route_fence || route_fence->fence.first != authority_generation)
         return zlink::submit_result_t::not_found;
     return submitted (_transport->send_to_actor (
       zlink::routing_id_t::from (
@@ -2373,7 +2401,7 @@ zlink::submit_result_t public_host_runtime_t::send_to_actor (
           std::string (target.node_rid ().value ())).to_bytes (),
         node_generation,
         authority_generation,
-        route_fence->second},
+        route_fence->fence.second},
       encode_application (parts, metadata)));
 }
 
@@ -2432,7 +2460,7 @@ zlink::submit_result_t public_host_runtime_t::request_to_actor (
     const auto route_fence = read_route_owner_fence (
       _user_spot_store, '1', target.actor_id ().value (), target.object_generation (),
       authority_generation, owner_lease_generation);
-    if (!route_fence || route_fence->first != authority_generation) {
+    if (!route_fence || route_fence->fence.first != authority_generation) {
         release_completion (operation);
         return zlink::submit_result_t::not_found;
     }
@@ -2447,7 +2475,7 @@ zlink::submit_result_t public_host_runtime_t::request_to_actor (
           std::string (target.node_rid ().value ())).to_bytes (),
         node_generation,
         authority_generation,
-        route_fence->second},
+        route_fence->fence.second},
       encode_application (parts, metadata), timeout,
       [host, operation] (foundation::operation_terminal_t terminal,
                          std::vector<std::uint8_t> payload) mutable {
