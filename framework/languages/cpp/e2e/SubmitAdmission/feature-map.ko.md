@@ -18,10 +18,10 @@ runner는 성공으로 건너뛰지 않고 종료 코드 3을 반환한다.
 
 | 시나리오 | 상태 | 근거 또는 blocker |
 |---|---|---|
-| SA-E2E-01 | 부분 구현 | Ready 상태인 local·remote Node direct와 ChannelName call이 public `submit()` 한 번으로 `Submitted`가 되는지 실제 process에서 확인한다. Scheduler enqueue, transport attempt와 commit observer가 없다. |
+| SA-E2E-01 | 부분 구현 | 필요한 ClientServer·STREAM·Actor 역할과 양방향 Mesh 준비 확인을 runner에 연결했다. 최신 전체 실행에서는 양쪽 peer가 Ready인 뒤 첫 remote Node direct가 `DeadlineExceeded`로 끝났다. Mesh socket HWM과 실제 send-ready 조건을 분리해 고쳐야 하며, Scheduler enqueue, transport attempt와 commit observer도 아직 없다. |
 | SA-E2E-02 | 미구현 | Focused unit fixture는 signal 한 번당 retry 한 번과 operation 사이의 retry credit 격리를 검증한다. Process topology에는 TCP read를 중단하는 `ReceiverGate`와 send-ready signal·retry attempt observer가 아직 없다. 고정 sleep이나 반복 submit으로 대체하지 않는다. |
 | SA-E2E-03 | 미구현 | Focused unit fixture는 ready·in-flight retry 동안에도 pending reservation을 유지하고, capacity 초과 call이 transport를 한 번 시도한 뒤 `Backpressured`가 되는지 검증한다. Process topology에는 pending marker와 transport attempt observer가 아직 없다. |
-| SA-E2E-04 | 미구현 | Focused unit fixture는 timeout terminal 뒤 readiness signal이 late admission을 만들지 않는지 검증하고 MeshNode startup은 `1..INT_MAX` millisecond 범위를 검사한다. Process topology에는 deterministic pending gate, deadline evidence와 validation case matrix가 아직 없다. Timeout을 늘려 통과시키지 않는다. |
+| SA-E2E-04 | 미구현 | Focused unit fixture는 timeout terminal 뒤 readiness signal이 late admission을 만들지 않는지 검증하고 MeshNode startup은 `1..INT_MAX` millisecond 범위를 검사한다. `CPP-CONTRACT-STREAM-001` selector는 STREAM family의 호출별 timeout만 실제 Core backpressure에서 검증한다. 다른 family의 deterministic pending gate, deadline evidence와 validation case matrix가 없어 공통 scenario 전체는 아직 미구현이다. Timeout을 늘려 통과시키지 않는다. |
 | SA-E2E-05 | 부분 구현 | Production Node direct가 Location descriptor를 먼저 조회해 unknown RID와 Object Client RID를 `TargetNotFound`로 분류하고, 알려진 non-client target의 ready connection 부재는 `RouteNotConnected`로 유지한다. Unknown·known-disconnected·Object Client를 실제 process에서 대조하는 runner evidence는 아직 없다. |
 | SA-E2E-06 | 미구현 | Runtime owner epoch는 stop/start 경계를 넘은 pending operation이 새 lifecycle에 waiter를 만들지 못하게 한다. Process topology에는 source admission barrier, drain admission-closed marker와 source 종료 후에도 결과를 보관하는 독립 `EvidenceCollector`가 아직 없다. |
 | SA-E2E-07 | 미구현 | C++ cancellation은 공개 계약상 해당하지 않지만 Logical Multicast의 commit 전·후 shutdown 경계는 검증해야 한다. Executor barrier와 Core call observer가 없다. |
@@ -42,6 +42,7 @@ runner는 성공으로 건너뛰지 않고 종료 코드 3을 반환한다.
 | SA-REG-02 | 구현 | 고정 allowlist verifier와 `test_cpp_framework_messaging`을 실행하여 최초 `DONT_WAIT`, signal별 retry 한 번, timeout 뒤 late admission 0과 shutdown cleanup을 확인한다. |
 | SA-REG-03 | 해당 없음 | Kotlin 전용 result 보존 scenario다. Runner는 C++ public 계약에 따른 N/A evidence를 남긴다. |
 | SA-REG-04 | 미구현 | Focused unit fixture는 timeout·shutdown·retry terminal 뒤 waiter reservation이 0인지 확인한다. Process disposal과 send-ready event를 같은 barrier에서 발생시키고 waiter·reservation·callback 수를 확인할 observer는 아직 없다. |
+| CPP-CONTRACT-STREAM-001 | 구현 | Server STREAM과 connector peer 사이의 TCP gate를 닫아 Core send queue를 포화한다. 32 KiB packet 57건이 수락된 뒤 58번째 호출이 설정한 20 ms에 `DeadlineExceeded`로 끝나며, gate가 닫힌 동안 읽은 byte가 0인지 확인한다. Gate를 다시 연 뒤 byte forwarding과 public submit이 복구되는지도 검증한다. 이 항목은 SA-E2E-04 전체 완료를 뜻하지 않는다. |
 
 ## 실행
 
@@ -51,6 +52,9 @@ runner는 성공으로 건너뛰지 않고 종료 코드 3을 반환한다.
 
 # 하나의 scenario만 실행한다.
 ./framework/languages/cpp/e2e/SubmitAdmission/run_e2e.sh SA-E2E-14
+
+# STREAM 호출별 timeout contract만 실제 Core backpressure에서 검증한다.
+./framework/languages/cpp/e2e/SubmitAdmission/run_e2e.sh CPP-CONTRACT-STREAM-001
 ```
 
 `all`은 위 표에서 실제 assertion과 evidence가 있는 항목만 실행한다. 공통 완료 gate는 `SA-E2E-01~20`과
