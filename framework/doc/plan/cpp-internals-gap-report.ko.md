@@ -89,7 +89,7 @@ Gap 하나 또는 서로 강하게 연결된 작은 작업 묶음의 동작과 �
 | CPP-DISP-001 | 디스패치 executor 포화 시 예외가 pump 스레드를 탈출해 `std::terminate` — 프로세스 강제 종료 | 03 §6 |
 | CPP-DISP-002 | 한 Spot 큐 포화가 노드 전체 애플리케이션 수신을 head-of-line 블로킹, Request가 즉시 실패하지 않고 타임아웃까지 대기 | 03 §5 |
 | CPP-SESS-001 | 원격 세션 bind 시 이전 소유자 통지·정리 확인 절차가 없어 두 노드가 동시에 같은 Actor의 세션을 소유 가능 | 09 §3 |
-| CPP-WIRE-001 | Location Store 권한 키를 스키마 고정 포맷(`zla1:…`)이 아닌 레거시 `1:`/`2:` 포맷으로 기록 — 크로스 런타임 스토어 상호운용 파괴 | 12 §1 |
+| CPP-WIRE-001 | Location Store 권한 키를 `zla1:…` 포맷으로 통합했으며 package와 cross-language Store 검증 진행 중 | 12 §1 |
 | CPP-RELOC-001 | relocation의 blocked/target_unavailable 결과가 terminal로 영구 저장되어, 일시 실패 후 재시도가 프로세스 재시작 전까지 불가능 | 01 §3 |
 | CPP-TOPO-001 | 수동 설정 피어에 Location Store descriptor의 admission fence(generation/보안 identity)가 설치되지 않음 — 이미 종결된 `JVM-TOPO-001`과 동일 계열 결함의 C++ 판 | 06 §1.1 |
 | CPP-CONTRACT-DIAG-001/002 | diagnostics level과 public export가 C++ exact interface와 다르고, 제거 대상 observer·raw DTO·file/label 설정이 설치 header에 남아 있음 | C++ interface 08 |
@@ -276,7 +276,7 @@ admitted 피어의 애플리케이션 레코드가 대상 owner의 mailbox 예�
 
 | ID | 분류 | 요약 |
 |---|---|---|
-| CPP-WIRE-001 | GAP·상 | §2 참조 — 스토어 권한 키 포맷 |
+| CPP-WIRE-001 | PARTIAL·검증 중 | 구현 checkpoint `abaad2368a`에서 RFC 3986 unreserved byte만 보존하고 나머지를 uppercase percent encoding하는 `zla1:<a|s>:<byte-length>:<encoded-id>` codec을 internal owner로 추가했다. In-memory·provider Store의 reserve/commit write, Actor·User Spot·Instance Spot read, resolver, relocation adapter가 모두 이 codec을 사용하며 `1:`/`2:`/`3:`과 `actor:`/`spot:` legacy Location Store fallback을 제거했다. Known key 회귀와 source gate를 포함한 전체 store resolver 34개, in-memory/provider Store, location lifecycle/runtime, app host, execution, cross-process mesh vertical, M6B, M6C, layout·target contract가 통과했다. 설치 package와 다른 언어 runtime이 같은 provider를 사용하는 process 검증이 남아 있어 아직 종결하지 않는다. |
 | CPP-WIRE-002 | GAP·상 | RouteMesh ServerServer에는 Framework-level message-size 제한이 없어야 하지만 public header의 `mesh_node_socket_config_t::max_message_size`(기본 16 MiB), 이를 요구하는 Application HWM startup validation, RouteMesh descriptor/admission의 `effective_max_message_bytes`와 codec 검증이 남아 있다. Production descriptor는 설정값이 양수이면 그 값을 기록하고 `0`일 때만 4 MiB로 fallback한다. ROUTER 소켓·송신 경로에 이 값을 적용하지 않는 현재 동작 자체는 계약과 일치한다. Exact interface에서는 금지된 field와 negotiation 설명을 제거했다. 구현의 public 설정 surface·HWM 의존성과 RouteMesh wire field를 제거해야 한다. 증거: `common/spec/07-channel-topology.ko.md:609-634`, C++ exact interface `interfaces/03-channel-messaging.ko.md:81-89`, `cpp/include/zlink/framework/contracts/configuration/mesh_node.hpp:149-154`, `cpp/src/runtime/host/app.cpp:1303-1310`, `cpp/src/runtime/mesh/mesh_node_runtime.cpp:362-373`, `cpp/src/runtime/mesh/service_topology_registry.hpp:55`, `cpp/src/runtime/protocol/service_wire_codec.cpp:3769,3858,3986-3995,4039-4054` |
 | CPP-WIRE-003 | GAP·상 | public codec 계약인 `framework-json-v1` 프로파일 미구현: BOM 허용(계약: 거부), 중복 속성 last-wins 허용(계약: 거부), 64-bit 정수 문자열·범위 규칙 부재, golden fixture 부재 — 다섯 언어의 동일 decode 결과를 검증할 수 없다. 증거: `common/spec/04-message-model.ko.md:95-118`, `cpp/include/zlink/framework/codecs/json.hpp:13-25` |
 | CPP-WIRE-004 | GAP·검증 중 | 구현 checkpoint `985c7dadb4`에서 multicast frame, relocation state와 backlog, join snapshot, Actor packet과 bound-session payload를 모두 padding을 포함한 RFC 4648 Base64 문자열로 encode/decode하도록 수정했다. `test_cpp_framework_messaging`이 known vector `AAEC/f7/`의 정확한 wire 값과 round-trip, invalid input 거부를 확인했다. 공통 cross-language wire fixture와 C++ package를 사용하는 process E2E가 남아 있어 아직 종결하지 않는다. |
