@@ -36,6 +36,7 @@ import {
   ServiceRelocationSourceAuthorityWriter
 } from '../../packages/framework/src/runtime/foundation/service-relocation-coordinator';
 import {
+  ServiceCapturedObjectRelocation,
   ServiceCapturedRelocationSourceCompletion,
   ServiceRelocationObjectCaptureOwner,
   ServiceRelocationObjectRestoreOwner,
@@ -1094,6 +1095,39 @@ test('shutdown intent lets admitted relocation finish without starting a queued 
   assert.deepEqual(events, ['active:start', 'active:commit', 'stopped']);
 });
 
+test('external maintenance abort cancels an admitted relocation unit', async () => {
+  const abort = new AbortController();
+  let started!: () => void;
+  let observedAbort = false;
+  let forced = 0;
+  const startedPromise = new Promise<void>(resolve => { started = resolve; });
+  const runtime = new ServiceMaintenanceRuntime({
+    preflight: async () => true,
+    publishState: () => undefined,
+    forceStop: () => { forced++; }
+  });
+  runtime.enqueue({
+    id: 'active',
+    encodedUpperBound: 1,
+    ready: () => true,
+    relocate: signal => new Promise<void>((_resolve, reject) => {
+      started();
+      signal.addEventListener('abort', () => {
+        observedAbort = true;
+        reject(signal.reason);
+      }, { once: true });
+    })
+  });
+
+  const operation = runtime.start('retire', 2_000, undefined, abort.signal);
+  await startedPromise;
+  abort.abort(new Error('Relocation deadline exceeded.'));
+  const terminal = await operation;
+  assert.equal(terminal.state, 'forceStopped');
+  assert.equal(observedAbort, true);
+  assert.equal(forced, 1);
+});
+
 test('first maintenance intent wins and blocked preflight keeps admission uncommitted', async () => {
   const runtime = new ServiceMaintenanceRuntime({
     preflight: async () => false,
@@ -1909,6 +1943,28 @@ test('concrete User Spot aggregate restores hidden membership and sealed work be
   assert.ok(events.indexOf('session-route-replace') < events.indexOf('target-admission:spot:room'));
   assert.ok(events.indexOf('target-normalize:actor:a') < events.indexOf('target-admission:actor:a'));
   assert.ok(events.indexOf('target-admission:actor:a') < events.indexOf('recovery-releasable'));
+});
+
+test('source rollback attempts every unit when one cleanup fence is stale', async () => {
+  const events: string[] = [];
+  const units = [
+    {
+      async abortSeal() {
+        events.push('spot-abort');
+        throw new Error('stale Message Follow abort fence');
+      }
+    },
+    {
+      async abortSeal() {
+        events.push('actor-rollback');
+      }
+    }
+  ] as unknown as ServiceRelocationCaptureUnit[];
+  const captured = new ServiceCapturedObjectRelocation(relocationEnvelope(), units);
+  await assert.rejects(captured.abortSource(), AggregateError);
+  assert.deepEqual(events, ['actor-rollback', 'spot-abort']);
+  await captured.abortSource();
+  assert.deepEqual(events, ['actor-rollback', 'spot-abort']);
 });
 
 test('SpotWide Capture and Restore callbacks run eight at a time and preserve participant order', async () => {

@@ -473,7 +473,7 @@ export class ZLinkHostServiceRelocationRuntime {
     const operationSignal = signal ?? new AbortController().signal;
     const deadlineMs = signal === undefined ? 30_000 : 24 * 60 * 60 * 1000;
     const result = await raceAbort(
-      maintenance.start('retire', deadlineMs, stopStartingSignal),
+      maintenance.start('retire', deadlineMs, stopStartingSignal, operationSignal),
       operationSignal
     );
     if (result.state !== 'completed') {
@@ -803,15 +803,35 @@ export class ZLinkHostServiceRelocationRuntime {
         await this.requireSpotManager().completeRelocationSource(activation);
       },
       abortSeal: async () => {
-        if (spotCapture !== undefined) activation.abortRelocation(spotCapture);
-        if (spotMessageFollowSeal !== undefined) {
-          const node = this.requireMeshNode(meshName);
-          const abort = node.abortSpotMessageFollowIngress;
-          if (abort === undefined || !abort.call(node, spotMessageFollowSeal)) {
-            throw new Error('Spot Message Follow abort fence became stale.');
+        const failures: unknown[] = [];
+        if (spotCapture !== undefined) {
+          try {
+            activation.abortRelocation(spotCapture);
+          } catch (error) {
+            failures.push(error);
           }
         }
-        for (const session of [...sessions].reverse()) await session.prepared.rollback();
+        if (spotMessageFollowSeal !== undefined) {
+          try {
+            const node = this.requireMeshNode(meshName);
+            const abort = node.abortSpotMessageFollowIngress;
+            if (abort === undefined || !abort.call(node, spotMessageFollowSeal)) {
+              throw new Error('Spot Message Follow abort fence became stale.');
+            }
+          } catch (error) {
+            failures.push(error);
+          }
+        }
+        for (const session of [...sessions].reverse()) {
+          try {
+            await session.prepared.rollback();
+          } catch (error) {
+            failures.push(error);
+          }
+        }
+        if (failures.length !== 0) {
+          throw new AggregateError(failures, 'Spot relocation source rollback was incomplete.');
+        }
       }
     };
     const actorUnits = actorStates.map(state => this.actorCaptureUnit(
@@ -1400,30 +1420,31 @@ export class ZLinkHostServiceRelocationRuntime {
     let preparedStaging: RemoteStaging | undefined;
     const encoded = encodeServiceRelocationEnvelope(captured.envelope);
     const relocationStore = relocationStorePort(this.requireRelocationStore());
-    const stored = await relocationStore.put(
-      encoded,
-      RELOCATION_OPERATION_RETENTION_MS,
-      signal
-    );
-    if (stored.checksumCrc32c !== crc32c(encoded)
-      || stored.expiresAtMs <= stored.storeNowMs) {
-      await relocationStore.delete(stored.reference, signal).catch(() => undefined);
-      throw new Error('Relocation Store returned an invalid captured payload receipt.');
-    }
-    let publication: ServiceRelocationPublication = {
-      phase: 'sourceCleanupPending',
-      reference: stored.reference,
-      checksumCrc32c: stored.checksumCrc32c,
-      aggregateId: captured.envelope.aggregateId,
-      aggregateGeneration: captured.envelope.aggregateGeneration,
-      inventoryDigest: inventoryDigest(
-        captured.envelope.participants,
-        captured.envelope.memberships
-      ),
-      targetOwnerId: target.ownerId,
-      targetOwnerLeaseGeneration: target.leaseGeneration
-    };
+    let stored: Awaited<ReturnType<typeof relocationStore.put>> | undefined;
+    let publication: ServiceRelocationPublication | undefined;
     try {
+      stored = await relocationStore.put(
+        encoded,
+        RELOCATION_OPERATION_RETENTION_MS,
+        signal
+      );
+      if (stored.checksumCrc32c !== crc32c(encoded)
+        || stored.expiresAtMs <= stored.storeNowMs) {
+        throw new Error('Relocation Store returned an invalid captured payload receipt.');
+      }
+      publication = {
+        phase: 'sourceCleanupPending',
+        reference: stored.reference,
+        checksumCrc32c: stored.checksumCrc32c,
+        aggregateId: captured.envelope.aggregateId,
+        aggregateGeneration: captured.envelope.aggregateGeneration,
+        inventoryDigest: inventoryDigest(
+          captured.envelope.participants,
+          captured.envelope.memberships
+        ),
+        targetOwnerId: target.ownerId,
+        targetOwnerLeaseGeneration: target.leaseGeneration
+      };
       const key = {
         value: remoteOwner.primaryAuthorityKey = primaryKey(captured.envelope)
       } as ZLinkAuthorityKey;
@@ -1449,7 +1470,8 @@ export class ZLinkHostServiceRelocationRuntime {
               owner: acceptedTarget,
               meshName,
               nodeRid: String(target.rid),
-              nodeGeneration: target.lifecycleGeneration
+              nodeGeneration: target.lifecycleGeneration,
+              ...actorMembershipTarget(captured.envelope, primaryKey(captured.envelope))
             }
           )
         };
@@ -1480,7 +1502,9 @@ export class ZLinkHostServiceRelocationRuntime {
         if (preparedStaging !== undefined) {
           await remoteOwner.abort(preparedStaging).catch(() => undefined);
         }
-        await relocationStore.delete(stored.reference).catch(() => undefined);
+        if (stored !== undefined) {
+          await relocationStore.delete(stored.reference).catch(() => undefined);
+        }
         await captured.abortSource().catch(() => undefined);
       }
       if (this.relocationAuthorityKeys.get(relayAuthorityId) === relayAuthorityKey) {
@@ -2743,7 +2767,8 @@ export class ZLinkHostServiceRelocationRuntime {
             },
             meshName,
             nodeRid: offer.prepare.candidate.nodeRid,
-            nodeGeneration: offer.prepare.candidate.nodeGeneration
+            nodeGeneration: offer.prepare.candidate.nodeGeneration,
+            ...actorMembershipTarget(offer.envelope, participant.key)
           }
         ),
         membershipMutation: encodeMembershipMutation(offer.envelope.memberships, participant.key)
@@ -2790,6 +2815,8 @@ export class ZLinkHostServiceRelocationRuntime {
       readonly meshName: string;
       readonly nodeRid: string;
       readonly nodeGeneration: bigint;
+      readonly actorSpotId?: string;
+      readonly actorSpotGeneration?: bigint;
     }
   ): Uint8Array {
     const existing = this.codec.read(payload);
@@ -2911,7 +2938,8 @@ export class ZLinkHostServiceRelocationRuntime {
           },
           meshName,
           nodeRid: stage.candidate.nodeRid,
-          nodeGeneration: stage.candidate.nodeGeneration
+          nodeGeneration: stage.candidate.nodeGeneration,
+          ...actorMembershipTarget(stage.staging.envelope, stage.staging.primaryAuthorityKey.value)
         }
       )
     };
@@ -3973,6 +4001,8 @@ function rewriteAuthorityApplicationRoute(
     readonly meshName: string;
     readonly nodeRid: string;
     readonly nodeGeneration: bigint;
+    readonly actorSpotId?: string;
+    readonly actorSpotGeneration?: bigint;
   }
 ): Buffer {
   const applicationPayload = serviceRelocationAuthorityApplicationPayload(payload);
@@ -3986,14 +4016,26 @@ function rewriteAuthorityApplicationRoute(
         meshName: target.meshName,
         nodeRid: target.nodeRid as RoutingId
       },
-      actor.spotId ?? target.nodeRid,
-      actor.spotGeneration,
+      target.actorSpotId ?? actor.spotId ?? target.nodeRid,
+      target.actorSpotGeneration ?? actor.spotGeneration ?? target.nodeGeneration,
       target.nodeGeneration,
       target.owner
     );
   }
   return rewriteServiceAuthorityRoute(applicationPayload, target.owner, target)
     ?? applicationPayload;
+}
+
+function actorMembershipTarget(
+  envelope: ServiceRelocationEnvelope,
+  actorKey: string
+): { readonly actorSpotId: string; readonly actorSpotGeneration: bigint } | undefined {
+  const membership = envelope.memberships.find(value => value.actorKey === actorKey);
+  if (membership === undefined) return undefined;
+  return {
+    actorSpotId: decodeAuthorityKey({ value: membership.spotKey } as ZLinkAuthorityKey).globalId,
+    actorSpotGeneration: membership.spotObjectGeneration
+  };
 }
 
 function primaryKey(envelope: ServiceRelocationEnvelope): string {

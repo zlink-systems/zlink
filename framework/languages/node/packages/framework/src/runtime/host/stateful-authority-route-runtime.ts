@@ -523,7 +523,6 @@ export class ZLinkStatefulAuthorityRouteRuntime {
         && decodeActorAuthorityIdentity(
           serviceRelocationAuthorityApplicationPayload(current.payload)
         ) !== undefined
-        && relocationCodec.read(current.payload) === undefined
       ) {
         actors.push(current);
       }

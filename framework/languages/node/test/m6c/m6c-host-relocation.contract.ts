@@ -42,6 +42,10 @@ import {
   ownerFence
 } from '../../packages/framework/src/runtime/actors/actor-message-follow-context';
 import {
+  decodeActorAuthorityIdentity,
+  encodeActorAuthorityIdentity
+} from '../../packages/framework/src/runtime/actors/actor-authority-publication';
+import {
   decodeMaintenanceReplyRelayAck,
   encodeMaintenanceReplyRelay,
   encodeMaintenanceReplyRelayAck,
@@ -335,6 +339,7 @@ test('two host owners exchange canonical relocation reservation publish replay a
       dispatchRoutedActorPacket: async () => undefined
     }),
     actorManager: () => ({
+      adoptCreatedAuthority: () => events.push('actor-authority'),
       prepareRelocationActor: async () => {
         events.push('prepare-actor');
         return { context: { actorId: 'actor-a' }, configure() {} };
@@ -622,6 +627,16 @@ test('production source and target runtimes complete standalone Actor relocation
       dispatchRoutedActorPacket: async () => undefined
     }),
     actorManager: () => ({
+      adoptCreatedAuthority: (
+        _actorId: string,
+        authorityOwnerGeneration: bigint,
+        ownerLeaseGeneration: bigint
+      ) => {
+        void authorityOwnerGeneration;
+        void ownerLeaseGeneration;
+        targetState.setLocationGeneration();
+        targetState.setOwnerLeaseGeneration();
+      },
       prepareRelocationActor: async () => {
         events.push('target-prepared');
         return targetActor;
@@ -860,6 +875,16 @@ test('production restart recovery resumes a committed Actor authority and releas
       dispatchRoutedActorPacket: async () => undefined
     }),
     actorManager: () => ({
+      adoptCreatedAuthority: (
+        _actorId: string,
+        authorityOwnerGeneration: bigint,
+        ownerLeaseGeneration: bigint
+      ) => {
+        void authorityOwnerGeneration;
+        void ownerLeaseGeneration;
+        targetState.setLocationGeneration();
+        targetState.setOwnerLeaseGeneration();
+      },
       prepareRelocationActor: async () => {
         events.push('target-prepared');
         return { context: { actorId: 'actor-recovery' }, configure() {} };
@@ -1685,6 +1710,15 @@ test('production host inventory relocates User Spot aggregate Instance Spot and 
       }
     }),
     actorManager: () => ({
+      adoptCreatedAuthority: (
+        actorId: string,
+        authorityOwnerGeneration: bigint,
+        ownerLeaseGeneration: bigint
+      ) => {
+        const state = targetActorStates.get(actorId);
+        state?.setLocationGeneration(authorityOwnerGeneration);
+        state?.setOwnerLeaseGeneration(ownerLeaseGeneration);
+      },
       prepareRelocationActor: async (
         actorId: string,
         _stableType: string
@@ -1813,6 +1847,16 @@ test('production host inventory relocates User Spot aggregate Instance Spot and 
     if (authority.kind !== 'snapshot') continue;
     assert.equal(authority.ownerId, 'owner-target');
     assert.equal(authority.ownerLeaseGeneration, 8n);
+  }
+  const relocatedRoomActor = await location.readAuthority(
+    encodeAuthorityKey('actor', 'room-actor')
+  );
+  assert.equal(relocatedRoomActor.kind, 'snapshot');
+  if (relocatedRoomActor.kind === 'snapshot') {
+    const identity = decodeActorAuthorityIdentity(relocatedRoomActor.payload);
+    assert.equal(identity?.actor.nodeRid, 'node-target');
+    assert.equal(identity?.spotId, 'room-a');
+    assert.equal(identity?.spotGeneration, 1n);
   }
   assert.ok(events.includes('restore:room-a'));
   assert.ok(events.includes('restore:matchmaker-a'));
@@ -2098,6 +2142,18 @@ async function seedProductionAuthority(
   if (reserved.kind !== 'reserved') return;
   if (kind === 'actor') {
     const terminal = Buffer.from(`created:${kind}:${globalId}`);
+    const actorPayload = encodeActorAuthorityIdentity({
+      actorType: stableType,
+      actor: {
+        actorId: globalId,
+        objectGeneration: 1n,
+        meshName: target.meshName,
+        nodeRid: target.nodeRid as never
+      },
+      meshName: target.meshName,
+      ownerNodeGeneration: target.nodeLifecycleGeneration,
+      owner: target.owner
+    });
     const completed = await store.completeCreation({
       key: { kind, globalId },
       reservationId: reserved.reservationId,
@@ -2105,7 +2161,9 @@ async function seedProductionAuthority(
       target: target as never,
       completion: {
         kind: 'created',
-        readyPayload: Buffer.from(`ready:${globalId}`),
+        // The original authority predates the Actor join. Relocation must derive
+        // the target Spot route from the captured aggregate membership.
+        readyPayload: actorPayload,
         terminal: {
           operation: {
             sourceNodeRid: target.nodeRid,

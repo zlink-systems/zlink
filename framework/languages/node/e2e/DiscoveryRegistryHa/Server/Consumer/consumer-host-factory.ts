@@ -112,7 +112,11 @@ function createConsumerModule(): {
     providers: [
       {
         provide: EvidenceStore,
-        useFactory: () => new EvidenceStore('consumer')
+        inject: [DISCOVERY_OPTIONS],
+        useFactory: (value: unknown) => {
+          const options = value as ConsumerOptions;
+          return new EvidenceStore('consumer', options.evidenceFile);
+        }
       },
       ConsumerFanoutEventHandler
     ]

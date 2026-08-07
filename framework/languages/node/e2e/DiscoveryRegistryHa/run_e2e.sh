@@ -52,6 +52,7 @@ mkdir -p "$LOG_DIR"
 
 pids=()
 REDIS_CONTAINER_ID=""
+RELOCATION_REDIS_CONTAINER_ID=""
 LAST_STARTED_PID=""
 API_A_PID=""
 PROVIDER_A_CHANNEL_ENDPOINT=""
@@ -66,6 +67,9 @@ cleanup() {
   [[ -z "$API_A_PID" ]] || kill -CONT "$API_A_PID" 2>/dev/null || true
   stop_live_pids
   wait_all_pids_ignoring_status
+  [[ -z "$RELOCATION_REDIS_CONTAINER_ID" ]] \
+    || docker rm -fv "$RELOCATION_REDIS_CONTAINER_ID" >/dev/null 2>&1 \
+    || true
   remove_redis_container
   [[ -z "$CONFIG_DIR" ]] || rm -rf "$CONFIG_DIR"
   if [[ "$code" -ne 0 ]]; then
@@ -116,6 +120,21 @@ start_empty_redis() {
   wait_tcp redis "tcp://$REDIS_ENDPOINT"
 }
 
+stop_relocation_redis() {
+  [[ -z "$RELOCATION_REDIS_CONTAINER_ID" ]] \
+    || docker rm -fv "$RELOCATION_REDIS_CONTAINER_ID" >/dev/null
+  RELOCATION_REDIS_CONTAINER_ID=""
+}
+
+start_empty_relocation_redis() {
+  local location_container_id="$REDIS_CONTAINER_ID"
+  start_redis_container "zlink-relocation-redis-node-e2e-${RANDOM}-$$" \
+    -p "127.0.0.1:$RELOCATION_REDIS_PORT:6379" "redis:7.2-alpine"
+  RELOCATION_REDIS_CONTAINER_ID="$REDIS_CONTAINER_ID"
+  REDIS_CONTAINER_ID="$location_container_id"
+  wait_tcp relocation-redis "tcp://$RELOCATION_REDIS_ENDPOINT"
+}
+
 echo "log_dir=$LOG_DIR"
 
 if [[ "$SCENARIO" == "all" ]]; then
@@ -139,6 +158,14 @@ REDIS_ENDPOINT="$(redis_container_endpoint "$REDIS_CONTAINER_ID")"
 REDIS_PORT="${REDIS_ENDPOINT##*:}"
 REDIS_KEY_PREFIX="store-failure:node:$RUN_ID"
 wait_tcp redis "tcp://$REDIS_ENDPOINT"
+LOCATION_REDIS_CONTAINER_ID="$REDIS_CONTAINER_ID"
+start_redis_container "zlink-relocation-redis-node-e2e-${RANDOM}-$$" \
+  -p "127.0.0.1::6379" "redis:7.2-alpine"
+RELOCATION_REDIS_CONTAINER_ID="$REDIS_CONTAINER_ID"
+RELOCATION_REDIS_ENDPOINT="$(redis_container_endpoint "$RELOCATION_REDIS_CONTAINER_ID")"
+RELOCATION_REDIS_PORT="${RELOCATION_REDIS_ENDPOINT##*:}"
+REDIS_CONTAINER_ID="$LOCATION_REDIS_CONTAINER_ID"
+wait_tcp relocation-redis "tcp://$RELOCATION_REDIS_ENDPOINT"
 
 LOCATION_PROBE_MAIN="$ROOT_DIR/Server/LocationProbe/dist/Server/LocationProbe/main.js"
 PROVIDER_MAIN="$ROOT_DIR/Server/Provider/dist/Server/Provider/main.js"
@@ -191,6 +218,7 @@ start_topology() {
     --rid api-a \
     --http-url "$PROVIDER_A_URL" \
     --redis-endpoint "$REDIS_ENDPOINT" \
+    --relocation-redis-endpoint "$RELOCATION_REDIS_ENDPOINT" \
     --redis-key-prefix "$REDIS_KEY_PREFIX" \
     --channel-endpoint "tcp://127.0.0.1:$provider_a_channel_port" \
     --fanout-endpoint "$PROVIDER_A_FANOUT_ENDPOINT" \
@@ -213,6 +241,7 @@ start_topology() {
     --store-response-gate "$store_response_gate" \
     --multi-role "$MULTI_ROLE_MODE" \
     --capacity-profile "$CAPACITY_PROFILE" \
+    --evidence-file "$LOG_DIR/consumer.evidence.log" \
     --log-dir "$LOG_DIR"
   wait_health "$CONSUMER_URL" consumer "$LAST_STARTED_PID"
 }
@@ -222,6 +251,7 @@ start_provider_b() {
     --rid api-b \
     --http-url "$PROVIDER_B_URL" \
     --redis-endpoint "$REDIS_ENDPOINT" \
+    --relocation-redis-endpoint "$RELOCATION_REDIS_ENDPOINT" \
     --redis-key-prefix "$REDIS_KEY_PREFIX" \
     --channel-endpoint "tcp://127.0.0.1:$PROVIDER_B_CHANNEL_PORT" \
     --fanout-endpoint "tcp://127.0.0.1:$PROVIDER_B_FANOUT_PORT" \
@@ -245,6 +275,7 @@ start_provider_a_replacement() {
     --rid api-a \
     --http-url "$PROVIDER_A_URL" \
     --redis-endpoint "$REDIS_ENDPOINT" \
+    --relocation-redis-endpoint "$RELOCATION_REDIS_ENDPOINT" \
     --redis-key-prefix "$REDIS_KEY_PREFIX" \
     --channel-endpoint "tcp://127.0.0.1:$provider_a_channel_port" \
     --fanout-endpoint "$PROVIDER_A_FANOUT_ENDPOINT" \
@@ -624,6 +655,143 @@ run_sf_f4() {
   cat "$LOG_DIR/client.stdout.log"
 }
 
+run_sf_f2_case() {
+  local variant="$1" client_pid
+  start_topology no disabled disabled sf-f2
+  SF_F2_VARIANT="$variant" SF_F2_PHASE=setup \
+    run_client SF-F2 "$LOG_DIR/client-setup.stdout.log" "$LOG_DIR/client-setup.stderr.log"
+  start_provider_b
+  if [[ "$variant" == "long" ]]; then
+    SF_F2_VARIANT="$variant" SF_F2_PHASE=relocate \
+      run_client SF-F2 "$LOG_DIR/client.stdout.log" "$LOG_DIR/client.stderr.log" &
+    client_pid="$!"
+    wait_file_contains "$LOG_DIR/api-a.evidence.log" "scenario-gate-held|gate=capture" \
+      "SF-F2 capture did not enter the application gate" "$client_pid" 120
+    sleep 5
+    curl -fsS -X POST -H 'content-type: application/json' \
+      --data '{"name":"capture"}' "$PROVIDER_A_URL/scenario-gate/open" >/dev/null
+    wait "$client_pid"
+  else
+    stop_relocation_redis
+    SF_F2_VARIANT="$variant" SF_F2_PHASE=failure \
+      run_client SF-F2 "$LOG_DIR/client-failure.stdout.log" "$LOG_DIR/client-failure.stderr.log"
+    start_empty_relocation_redis
+    SF_F2_VARIANT="$variant" SF_F2_PHASE=recovery \
+      run_client SF-F2 "$LOG_DIR/client.stdout.log" "$LOG_DIR/client.stderr.log"
+  fi
+  cat "$LOG_DIR/client.stdout.log"
+}
+
+run_sf_f2() {
+  "$0" SF-F2-LONG
+  "$0" SF-F2-FAULT
+  echo "scenario SF-F2 passed"
+}
+
+run_sf_f3() {
+  start_topology no disabled disabled sf-f3
+  SF_F3_PHASE=setup run_client SF-F3 "$LOG_DIR/client-setup.stdout.log" "$LOG_DIR/client-setup.stderr.log"
+  start_provider_b
+  stop_relocation_redis
+  SF_F3_PHASE=failure run_client SF-F3 "$LOG_DIR/client-failure.stdout.log" "$LOG_DIR/client-failure.stderr.log"
+  start_empty_relocation_redis
+  SF_F3_PHASE=recovery run_client SF-F3 "$LOG_DIR/client.stdout.log" "$LOG_DIR/client.stderr.log"
+  cat "$LOG_DIR/client.stdout.log"
+}
+
+run_sf_f5() {
+  local client_pid old_evidence_lines
+  start_topology no disabled disabled sf-f5
+  run_client SF-F5 "$LOG_DIR/client.stdout.log" "$LOG_DIR/client.stderr.log" &
+  client_pid="$!"
+  wait_file_contains "$LOG_DIR/api-a.evidence.log" "scenario-gate-held|gate=initialize" \
+    "SF-F5 Instance factory did not enter the initialize gate" "$client_pid" 120
+  old_evidence_lines="$(wc -l < "$LOG_DIR/api-a.evidence.log")"
+  kill_pid "$API_A_PID"
+  start_provider_b
+  wait "$client_pid"
+  if [[ "$(wc -l < "$LOG_DIR/api-a.evidence.log")" != "$old_evidence_lines" ]]; then
+    echo "SF-F5 old owner evidence changed after process termination" >&2
+    return 1
+  fi
+  if grep -q 'recovery=failure' "$LOG_DIR/client.stdout.log"; then
+    if grep -Eq 'object-(configure|initialized|request)' "$LOG_DIR/api-b.evidence.log"; then
+      echo "SF-F5 failed recovery unexpectedly ran a new target Instance lifecycle" >&2
+      return 1
+    fi
+  elif ! grep -q 'object-request.*operationId=follow-up' "$LOG_DIR/api-b.evidence.log"; then
+    echo "SF-F5 successful recovery has no target follow-up evidence" >&2
+    return 1
+  fi
+  cat "$LOG_DIR/client.stdout.log"
+}
+
+run_sf_f8() {
+  local client_pid
+  start_topology no disabled disabled sf-f8
+  SF_F8_PHASE=setup run_client SF-F8 "$LOG_DIR/client-setup.stdout.log" "$LOG_DIR/client-setup.stderr.log"
+  start_provider_b
+  curl -fsS -X POST -H 'content-type: application/json' \
+    --data '{"name":"restore"}' "$PROVIDER_B_URL/scenario-gate/close" >/dev/null
+  SF_F8_PHASE=relocate run_client SF-F8 "$LOG_DIR/client.stdout.log" "$LOG_DIR/client.stderr.log" &
+  client_pid="$!"
+  wait_file_contains "$LOG_DIR/api-b.evidence.log" "scenario-gate-held|gate=restore" \
+    "SF-F8 target restore did not enter the application gate" "$client_pid" 120
+  kill -STOP "$API_B_PID"
+  sleep 4
+  kill -CONT "$API_B_PID"
+  curl -fsS -X POST -H 'content-type: application/json' \
+    --data '{"name":"restore"}' "$PROVIDER_B_URL/scenario-gate/open" >/dev/null
+  wait "$client_pid"
+  if grep -q 'object-request' "$LOG_DIR/api-b.evidence.log"; then
+    echo "SF-F8 target handler received workload after lease-expired relocation" >&2
+    return 1
+  fi
+  cat "$LOG_DIR/client.stdout.log"
+}
+
+run_sf_f10() {
+  local client_pid deadline count
+  start_topology no disabled disabled sf-f10
+  run_client SF-F10 "$LOG_DIR/client.stdout.log" "$LOG_DIR/client.stderr.log" &
+  client_pid="$!"
+  wait_file_contains "$LOG_DIR/client.stdout.log" "scenario-control SF-F10 start-provider-b" \
+    "SF-F10 requests were not submitted" "$client_pid" 120
+  start_provider_b
+  deadline=$((SECONDS + 30))
+  while (( SECONDS < deadline )); do
+    count="$(grep -c 'object-request-submitted|spotId=sf-f10-instance' "$LOG_DIR/consumer.evidence.log" 2>/dev/null || true)"
+    [[ "$count" -ge 32 ]] && break
+    sleep 0.1
+  done
+  [[ "${count:-0}" -ge 32 ]] || { echo "SF-F10 did not submit all 32 requests" >&2; return 1; }
+  grep -q 'scenario-gate-held|gate=request' "$LOG_DIR/api-a.evidence.log" \
+    || { echo "SF-F10 request gate did not hold the source handler" >&2; return 1; }
+  curl -fsS -X POST -H 'content-type: application/json' \
+    --data '{"name":"request"}' "$PROVIDER_A_URL/scenario-gate/open" >/dev/null
+  wait "$client_pid"
+  cat "$LOG_DIR/client.stdout.log"
+}
+
+run_sf_f11() {
+  local client_pid
+  start_topology no disabled disabled sf-f11
+  SF_F11_PHASE=setup run_client SF-F11 "$LOG_DIR/client-setup.stdout.log" "$LOG_DIR/client-setup.stderr.log"
+  start_provider_b
+  SF_F11_PHASE=failure run_client SF-F11 "$LOG_DIR/client-failure.stdout.log" "$LOG_DIR/client-failure.stderr.log" &
+  client_pid="$!"
+  wait_file_contains "$LOG_DIR/api-a.evidence.log" "scenario-gate-held|gate=capture" \
+    "SF-F11 capture did not enter the application gate" "$client_pid" 120
+  stop_relocation_redis
+  curl -fsS -X POST -H 'content-type: application/json' \
+    --data '{"name":"capture"}' "$PROVIDER_A_URL/scenario-gate/open" >/dev/null
+  wait "$client_pid"
+  SF_F11_PHASE=prepare-b run_client SF-F11 "$LOG_DIR/client-prepare.stdout.log" "$LOG_DIR/client-prepare.stderr.log"
+  start_empty_relocation_redis
+  SF_F11_PHASE=recovery run_client SF-F11 "$LOG_DIR/client.stdout.log" "$LOG_DIR/client.stderr.log"
+  cat "$LOG_DIR/client.stdout.log"
+}
+
 run_unimplemented_scenario() {
   echo "$SCENARIO is not implemented by the Config 6 Node fixture; refusing profile-only success." >&2
   exit 3
@@ -706,8 +874,32 @@ case "$SCENARIO" in
     run_sf_c5a
     cat "$LOG_DIR/client.stdout.log"
     ;;
-  SF-F1|SF-F2|SF-F3|SF-F5|SF-F8|SF-F10|SF-F11)
+  SF-F1)
     run_unimplemented_scenario
+    ;;
+  SF-F2)
+    run_sf_f2
+    ;;
+  SF-F2-LONG)
+    run_sf_f2_case long
+    ;;
+  SF-F2-FAULT)
+    run_sf_f2_case fault
+    ;;
+  SF-F3)
+    run_sf_f3
+    ;;
+  SF-F5)
+    run_sf_f5
+    ;;
+  SF-F8)
+    run_sf_f8
+    ;;
+  SF-F10)
+    run_sf_f10
+    ;;
+  SF-F11)
+    run_sf_f11
     ;;
   SF-F4)
     run_sf_f4

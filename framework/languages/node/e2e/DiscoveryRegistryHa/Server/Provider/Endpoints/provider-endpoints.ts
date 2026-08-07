@@ -13,6 +13,7 @@ import {
 import { ChannelNames, FanoutEvent, type EvidenceWaitReq } from '../../../Shared/messages';
 import {
   Config6ActorType,
+  Config6LeaveReq,
   Config6JoinReq,
   Config6ProbeReq,
   Config6UserSpotType,
@@ -20,6 +21,12 @@ import {
 } from '../Handlers/capacity-objects';
 import { EvidenceStore } from '../Infrastructure/evidence-store';
 import type { HttpRoute } from '../Support/http-server';
+import {
+  closeScenarioGate,
+  openScenarioGate,
+  parseScenarioGate,
+  scenarioGateSnapshot
+} from '../Infrastructure/scenario-gates';
 
 export function createProviderEndpoints(
   evidence: EvidenceStore,
@@ -36,6 +43,24 @@ export function createProviderEndpoints(
   return [
     { method: 'GET', path: '/health', handle: () => ({ status: 'ready', role: 'provider', rid: evidence.rid }) },
     { method: 'GET', path: '/evidence', handle: () => evidence.snapshot() },
+    {
+      method: 'GET',
+      path: '/scenario-gate',
+      handle: (_body, requestUrl) => {
+        const name = new URL(requestUrl ?? '/', 'http://127.0.0.1').searchParams.get('name');
+        return scenarioGateSnapshot(parseScenarioGate(name));
+      }
+    },
+    {
+      method: 'POST',
+      path: '/scenario-gate/close',
+      handle: (body) => closeScenarioGate(parseScenarioGate((body as { name?: unknown }).name))
+    },
+    {
+      method: 'POST',
+      path: '/scenario-gate/open',
+      handle: (body) => openScenarioGate(parseScenarioGate((body as { name?: unknown }).name))
+    },
     { method: 'GET', path: '/location/status', handle: () => locationQuery.getStatus() },
     {
       method: 'POST',
@@ -110,6 +135,16 @@ export function createProviderEndpoints(
         const actorId = (body as { actorId: string }).actorId;
         const actor = await actors.find(actorId);
         return { destroyed: actor === undefined ? false : await actors.destroy(actor) };
+      }
+    },
+    {
+      method: 'POST',
+      path: '/capacity/actors/leave',
+      handle: async (body) => {
+        const request = body as { actorId: string };
+        return await actorClient.requestToActor(request.actorId, new Config6LeaveReq())
+          .timeout(10_000)
+          .submit<{ accepted: true }>();
       }
     },
     {

@@ -43,7 +43,11 @@ export function createConsumerEndpoints(
     { method: 'POST', path: '/profile/request-once', handle: (body) => requestProfileOnce(channel, toProfileReq(body)) },
     { method: 'POST', path: '/c4/secondary', handle: (body) => requestSecondary(channel, body as { value: string; marker?: string }) },
     { method: 'POST', path: '/c4/client-server', handle: (body) => requestClientServer(channelClient, body as { value: string; marker?: string }) },
-    { method: 'POST', path: '/object/request', handle: (body) => requestObject(spotOutbound, body as { spotId: string; operationId: string; payload: string }) },
+    { method: 'POST', path: '/object/request', handle: (body) => requestObject(
+      evidence,
+      spotOutbound,
+      body as { spotId: string; operationId: string; payload: string; instanceSpot?: boolean }
+    ) },
     { method: 'GET', path: '/location/status', handle: () => locationQuery.getStatus() },
     {
       method: 'GET',
@@ -219,13 +223,20 @@ async function requestClientServer(
 }
 
 async function requestObject(
+  evidence: EvidenceStore,
   outbound: ZLinkSpotOutbound,
-  request: { readonly spotId: string; readonly operationId: string; readonly payload: string }
+  request: {
+    readonly spotId: string;
+    readonly operationId: string;
+    readonly payload: string;
+    readonly instanceSpot?: boolean;
+  }
 ): Promise<ObjectRes> {
-  return await outbound
-    .requestToSpot(request.spotId, new ObjectReq(request.spotId, request.operationId, request.payload))
-    .instanceSpot(ObjectSpotType)
-    .inMesh(ChannelNames.profile)
-    .timeout(5000)
-    .submit<ObjectRes>();
+  evidence.add(`object-request-submitted|spotId=${request.spotId}|operationId=${request.operationId}`);
+  const call = outbound
+    .requestToSpot(request.spotId, new ObjectReq(request.spotId, request.operationId, request.payload));
+  if (request.instanceSpot !== false) {
+    call.instanceSpot(ObjectSpotType).inMesh(ChannelNames.profile);
+  }
+  return await call.timeout(5000).submit<ObjectRes>();
 }

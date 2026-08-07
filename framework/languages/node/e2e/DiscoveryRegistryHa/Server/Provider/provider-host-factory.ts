@@ -42,6 +42,7 @@ import {
   Config6EntrySpot,
   Config6UserSpot,
   Config6UserSpotAdapter,
+  Config6LeaveHandler,
   Config6JoinHandler,
   Config6ProbeHandler,
   Config6UserSpotType
@@ -52,6 +53,7 @@ import {
 } from './Handlers/multi-role-handlers';
 import { EvidenceStore } from './Infrastructure/evidence-store';
 import { closeHttpServer, startHttpServer } from './Support/http-server';
+import { configureScenarioGates } from './Infrastructure/scenario-gates';
 
 export async function startProviderHost(): Promise<void> {
   let stopping = false;
@@ -61,6 +63,7 @@ export async function startProviderHost(): Promise<void> {
   const options = app.get(DISCOVERY_OPTIONS, { strict: false }) as ProviderOptions;
   const evidence = app.get(EvidenceStore, { strict: false });
   configureObjectEvidence(evidence);
+  configureScenarioGates(evidence);
   configureObjectActivationDelay(
     options.capacityProfile === 'sf-c5a'
       ? 3_000
@@ -120,7 +123,7 @@ function createProviderModule(): {
           const aggregateCapacity = options.capacityProfile.startsWith('sf-g3-');
           const stateRelocation = aggregateCapacity
             || options.capacityProfile.startsWith('sf-f7-')
-            || options.capacityProfile === 'sf-f4';
+            || options.capacityProfile.startsWith('sf-f');
           const aggregateTarget = aggregateCapacity && options.rid === 'api-b';
           const actorLimit = aggregateCapacity
             ? aggregateTarget && options.capacityProfile === 'sf-g3-short-actor' ? 1 : 8
@@ -139,7 +142,7 @@ function createProviderModule(): {
           locationStore = createRedisLocationStore(options);
           builder.addLocationStore(locationStore);
           relocationStore = new ZLinkRedisRelocationStore({
-            url: `redis://${options.redisEndpoint}`,
+            url: `redis://${options.relocationRedisEndpoint}`,
             keyPrefix: `${options.redisKeyPrefix}:relocation`
           });
           builder.addRelocationStore(relocationStore);
@@ -213,6 +216,7 @@ function createProviderModule(): {
       Config6UserSpot,
       Config6UserSpotAdapter,
       Config6JoinHandler,
+      Config6LeaveHandler,
       Config6ProbeHandler
     ]
   })(ProviderModule);

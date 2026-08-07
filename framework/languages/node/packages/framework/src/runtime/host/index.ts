@@ -1152,7 +1152,9 @@ export class ZLinkFrameworkRuntimeHost implements
     authority: ZLinkAuthoritySnapshot,
     signal?: AbortSignal
   ): Promise<void> {
-    const identity = decodeActorAuthorityIdentity(authority.payload);
+    const identity = decodeActorAuthorityIdentity(
+      serviceRelocationAuthorityApplicationPayload(authority.payload)
+    );
     if (identity === undefined) return;
     if (this.actorManager?.getState(identity.actor.actorId)?.hasActorOrCreation === true) {
       return;

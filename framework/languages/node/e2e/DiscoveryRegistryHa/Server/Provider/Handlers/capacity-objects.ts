@@ -20,6 +20,8 @@ import {
   zlinkEntrySpotActorRequestHandler,
   zlinkSpotActorRequestHandler
 } from '@zlink-systems/nestjs';
+import { waitForScenarioGate } from '../Infrastructure/scenario-gates';
+import { ObjectRequestHandler } from './object-request-handler';
 
 export const Config6ActorType = 'Config6Actor';
 export const Config6UserSpotType = 'Config6UserSpot';
@@ -37,11 +39,13 @@ export class Config6Actor implements ZLinkActor {
 export class Config6ActorAdapter implements ZLinkActorRelocationAdapter<Config6Actor> {
   async capture(actor: Config6Actor, signal: AbortSignal): Promise<Uint8Array> {
     signal.throwIfAborted();
+    await waitForScenarioGate('capture', `object=actor|id=${actor.context.actorId}`, signal);
     return new TextEncoder().encode(actor.state);
   }
 
   async restore(actor: Config6Actor, payload: Uint8Array, signal: AbortSignal): Promise<void> {
     signal.throwIfAborted();
+    await waitForScenarioGate('restore', `object=actor|id=${actor.context.actorId}`, signal);
     actor.state = new TextDecoder().decode(payload);
   }
 }
@@ -76,6 +80,10 @@ export class Config6UserSpot implements ZLinkSpot<Config6Actor> {
   state = '';
   stateBytes: Uint8Array = new Uint8Array();
   stateChecksum = createHash('sha256').update(this.stateBytes).digest('hex');
+
+  configure(): void {
+    this.context.handlers.addPacket(ObjectRequestHandler);
+  }
 
   async onCreate(request: ZLinkMessage): Promise<{ accepted: boolean }> {
     const value = request.decode<{
@@ -123,11 +131,13 @@ export class Config6UserSpot implements ZLinkSpot<Config6Actor> {
 export class Config6UserSpotAdapter implements ZLinkSpotRelocationAdapter<Config6UserSpot> {
   async capture(spot: Config6UserSpot, signal: AbortSignal): Promise<Uint8Array> {
     signal.throwIfAborted();
+    await waitForScenarioGate('capture', `object=user-spot|id=${String(spot.context.spotId)}`, signal);
     return spot.stateBytes;
   }
 
   async restore(spot: Config6UserSpot, payload: Uint8Array, signal: AbortSignal): Promise<void> {
     signal.throwIfAborted();
+    await waitForScenarioGate('restore', `object=user-spot|id=${String(spot.context.spotId)}`, signal);
     spot.setState(payload);
   }
 }
@@ -139,6 +149,9 @@ export class Config6JoinReq {
 
 @ZLinkPacket('Config6ProbeReq')
 export class Config6ProbeReq {}
+
+@ZLinkPacket('Config6LeaveReq')
+export class Config6LeaveReq {}
 
 export interface Config6ProbeRes {
   readonly actorId: string;
@@ -192,5 +205,27 @@ export class Config6ProbeHandler implements
       spotStateChecksum: spot.stateChecksum,
       nodeRid: String(spot.context.nodeRid)
     };
+  }
+}
+
+@Injectable()
+@zlinkSpotActorRequestHandler({
+  actor: () => Config6Actor,
+  spot: () => Config6UserSpot,
+  packetName: 'Config6LeaveReq'
+})
+export class Config6LeaveHandler implements
+  ZLinkSpotActorRequestHandler<Config6UserSpot, Config6Actor, Config6LeaveReq, { accepted: true }> {
+  @ZLinkSpotActorRequest('Config6LeaveReq')
+  async handle(
+    spot: Config6UserSpot,
+    actor: Config6Actor
+  ): Promise<{ accepted: true }> {
+    // Let the current actor request reach its terminal before starting the
+    // leave operation, which uses the same actor route.
+    setImmediate(() => {
+      void spot.context.leaveActor(actor).catch(() => undefined);
+    });
+    return { accepted: true };
   }
 }

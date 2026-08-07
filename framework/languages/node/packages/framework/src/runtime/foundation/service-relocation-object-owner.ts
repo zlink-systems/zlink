@@ -53,8 +53,18 @@ export class ServiceCapturedObjectRelocation {
     if (this.terminal === 'committed') {
       throw new Error('Committed relocation source capture cannot be aborted.');
     }
-    for (const unit of [...this.units].reverse()) await unit.abortSeal();
+    const failures: unknown[] = [];
+    for (const unit of [...this.units].reverse()) {
+      try {
+        await unit.abortSeal();
+      } catch (error) {
+        failures.push(error);
+      }
+    }
     this.terminal = 'aborted';
+    if (failures.length !== 0) {
+      throw new AggregateError(failures, 'Relocation source rollback was incomplete.');
+    }
   }
 }
 
