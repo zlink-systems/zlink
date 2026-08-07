@@ -13,7 +13,9 @@ internal static class ZLinkSessionBindingReplacement
             previous.BindingToken,
             previous.BindingGeneration,
             previous.ObjectGeneration,
-            previous.MeshName,
+            ZLinkMeshName.FromBoundary(
+                previous.MeshName,
+                nameof(previous.MeshName)),
             previous.TargetNodeGeneration,
             previous.AuthorityOwnerGeneration,
             previous.OwnerLeaseGeneration,

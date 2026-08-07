@@ -136,7 +136,7 @@ internal sealed class ZLinkBoundSessionService(
     {
         var route = ResolveSessionRoute(actorId);
         var message = Message.From(frame);
-        return GetSubmitter(route.MeshName).SubmitAsync(
+        return GetSubmitter(route.MeshName.Value).SubmitAsync(
             new[] { message },
             pending => runtime.SendActorBoundSession(
                 actorId,

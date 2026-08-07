@@ -965,7 +965,7 @@ public sealed class ActorHandoffTests
         Assert.Equal(sessionNode, completed.SessionNodeRid);
         Assert.Equal((ulong)7, completed.ObjectGeneration);
         Assert.Equal((ulong)12, completed.AuthorityOwnerGeneration);
-        Assert.Equal("play", completed.MeshName);
+        Assert.Equal("play", completed.MeshName.Value);
         Assert.Equal((ulong)5, completed.TargetNodeGeneration);
         Assert.Equal((ulong)9, completed.OwnerLeaseGeneration);
         Assert.Equal((ulong)10, completed.AcceptedHighWater);

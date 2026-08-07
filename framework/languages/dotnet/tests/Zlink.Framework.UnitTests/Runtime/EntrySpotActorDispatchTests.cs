@@ -3521,8 +3521,11 @@ public sealed partial class EntrySpotActorDispatchTests
             var created = await runtime.CreateAsync<BlockingActorJoinSpot>();
             var state = GetPrivateField<ZLinkFrameworkComponentState>(runtime, "_state");
             var catalog = GetPrivateField<ZLinkSpotNodeCatalog>(state.SpotNodes["entry"], "_spots");
-            var activations = GetPrivateField<Dictionary<string, ZLinkSpotActivation>>(catalog, "_spots");
-            var activation = activations[created.Spot.SpotId];
+            var activations = GetPrivateField<
+                Dictionary<ZLinkSpotId, ZLinkSpotActivation>>(catalog, "_spots");
+            var activation = activations[ZLinkSpotId.FromBoundary(
+                created.Spot.SpotId,
+                "spotId")];
 
             var join = activation.JoinActorAsync(
                     actor,
@@ -3561,10 +3564,13 @@ public sealed partial class EntrySpotActorDispatchTests
             var catalog = GetPrivateField<ZLinkSpotNodeCatalog>(
                 state.SpotNodes["entry"],
                 "_spots");
-            var activations = GetPrivateField<Dictionary<string, ZLinkSpotActivation>>(
+            var activations = GetPrivateField<
+                Dictionary<ZLinkSpotId, ZLinkSpotActivation>>(
                 catalog,
                 "_spots");
-            var activation = activations[created.Spot.SpotId];
+            var activation = activations[ZLinkSpotId.FromBoundary(
+                created.Spot.SpotId,
+                "spotId")];
             var store = runtime.Services.GetRequiredService<ZLinkLocationRuntime>().Store;
             var key = ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorRef.ActorId);
             var current = Assert.IsType<ZLinkAuthorityReadResult.Found>(
@@ -3607,10 +3613,13 @@ public sealed partial class EntrySpotActorDispatchTests
             var catalog = GetPrivateField<ZLinkSpotNodeCatalog>(
                 state.SpotNodes["entry"],
                 "_spots");
-            var activations = GetPrivateField<Dictionary<string, ZLinkSpotActivation>>(
+            var activations = GetPrivateField<
+                Dictionary<ZLinkSpotId, ZLinkSpotActivation>>(
                 catalog,
                 "_spots");
-            var activation = activations[created.Spot.SpotId];
+            var activation = activations[ZLinkSpotId.FromBoundary(
+                created.Spot.SpotId,
+                "spotId")];
 
             var result = await activation.JoinActorAsync(
                     actor,

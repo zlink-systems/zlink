@@ -136,7 +136,7 @@ internal static class ZLinkRemoteActorJoinPackets
             boundSessionIdentity?.ObjectGeneration ?? actorGeneration,
             boundSessionIdentity?.AuthorityOwnerGeneration
                 ?? actorAuthorityOwnerGeneration,
-            boundSessionIdentity?.MeshName,
+            boundSessionIdentity?.MeshName.Value,
             boundSessionIdentity?.TargetNodeGeneration ?? 0,
             boundSessionIdentity?.OwnerLeaseGeneration ?? 0,
             boundSessionIdentity?.SessionOwnerNodeGeneration ?? 0,
@@ -260,7 +260,7 @@ internal static class ZLinkRemoteActorJoinPackets
                 boundSession?.BindingGeneration ?? 0,
                 boundSession?.ObjectGeneration ?? 0,
                 boundSession?.AuthorityOwnerGeneration ?? 0,
-                boundSession?.MeshName,
+                boundSession?.MeshName.Value,
                 boundSession?.TargetNodeGeneration ?? 0,
                 boundSession?.OwnerLeaseGeneration ?? 0,
                 boundSession?.SessionOwnerNodeGeneration ?? 0,

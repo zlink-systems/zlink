@@ -11,6 +11,8 @@ internal sealed class ZLinkActorRuntimeState(
     int maxSessionBindingTombstones = 1_024,
     IServiceProvider? services = null)
 {
+    private readonly ZLinkActorId _actorId =
+        ZLinkActorId.FromBoundary(actorId, nameof(actorId));
     private static readonly IServiceProvider EmptyServices =
         new EmptyServiceProvider();
     private static readonly TimeSpan DefaultSessionBindingTombstoneRetention =
@@ -45,7 +47,9 @@ internal sealed class ZLinkActorRuntimeState(
     private Task? _terminalLifecycleCompletion;
     private int _contextInvalidated;
 
-    public string ActorId { get; } = actorId;
+    public string ActorId => _actorId.Value;
+
+    internal ZLinkActorId RuntimeActorId => _actorId;
 
     public ZLinkActorHandoffState Handoff { get; } = new(
         actorId,
@@ -614,7 +618,7 @@ internal sealed class ZLinkActorRuntimeState(
             bindingGeneration,
             objectGeneration,
             authorityOwnerGeneration,
-            meshName,
+            ZLinkMeshName.FromBoundary(meshName, nameof(meshName)),
             targetNodeGeneration,
             ownerLeaseGeneration,
             sessionOwnerNodeGeneration,
@@ -846,7 +850,9 @@ internal sealed class ZLinkActorRuntimeState(
             {
                 TargetActor = targetActor,
                 TargetAuthorityOwnerGeneration = targetAuthorityOwnerGeneration,
-                TargetMeshName = targetMeshName,
+                TargetMeshName = ZLinkMeshName.FromBoundary(
+                    targetMeshName,
+                    nameof(targetMeshName)),
                 TargetNodeGeneration = targetNodeGeneration,
                 TargetOwnerLeaseGeneration = targetOwnerLeaseGeneration
             };
@@ -1080,7 +1086,9 @@ internal sealed class ZLinkActorRuntimeState(
             route.BindingGeneration,
             target.Generation,
             pending.TargetAuthorityOwnerGeneration,
-            pending.TargetMeshName!,
+            pending.TargetMeshName
+            ?? throw new InvalidOperationException(
+                "A committed session route must have a target mesh."),
             pending.TargetNodeGeneration,
             pending.TargetOwnerLeaseGeneration,
             route.SessionOwnerNodeGeneration,
@@ -1778,7 +1786,7 @@ internal readonly record struct ZLinkActorBoundSession(
     ulong BindingGeneration = 1,
     ulong ObjectGeneration = 0,
     ulong AuthorityOwnerGeneration = 0,
-    string MeshName = "",
+    ZLinkMeshName MeshName = default,
     ulong TargetNodeGeneration = 1,
     ulong OwnerLeaseGeneration = 0,
     ulong SessionOwnerNodeGeneration = 1,
@@ -1798,7 +1806,7 @@ internal readonly record struct ZLinkActorPreviousBindingFence(
     string BindingToken,
     ulong BindingGeneration,
     ulong ObjectGeneration,
-    string MeshName,
+    ZLinkMeshName MeshName,
     ulong TargetNodeGeneration,
     ulong AuthorityOwnerGeneration,
     ulong OwnerLeaseGeneration,
@@ -1814,7 +1822,7 @@ internal readonly record struct ZLinkPendingActorSessionRoute(
     ZLinkRemoteActorBoundSessionRoute Route,
     ZLinkBackendActorRef? TargetActor,
     ulong TargetAuthorityOwnerGeneration,
-    string? TargetMeshName = null,
+    ZLinkMeshName? TargetMeshName = null,
     ulong TargetNodeGeneration = 0,
     ulong TargetOwnerLeaseGeneration = 0);
 

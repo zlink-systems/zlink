@@ -6,7 +6,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
 {
     private static readonly TimeSpan ControlReceivePollInterval =
         TimeSpan.FromMilliseconds(100);
-    private readonly string _channelName;
+    private readonly ZLinkChannelName _channelName;
     private readonly IZLinkMonitoringBackendAdapter _monitoring;
     private readonly IZLinkBackendRuntimeContext _context;
     private readonly IZLinkSocketConfig _socketConfig;
@@ -38,7 +38,9 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         TimeSpan requestTimeout,
         CancellationToken stopToken)
     {
-        _channelName = channelName;
+        _channelName = ZLinkChannelName.FromBoundary(
+            channelName,
+            nameof(channelName));
         _monitoring = monitoring;
         _context = context;
         _socketConfig = socketConfig;
@@ -82,7 +84,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         string endpoint,
         ZLinkClientServerServerIdentity.Snapshot snapshot) =>
         new(
-                _channelName,
+                _channelName.Value,
                 identity.ServerRid,
                 identity.LifecycleGeneration,
                 snapshot.Revision,
@@ -417,7 +419,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             }
             previous = existing;
             created = new Connection(
-                _channelName,
+                _channelName.Value,
                 endpoint,
                 expected,
                 _context.CreateDealerSocket(),

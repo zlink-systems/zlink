@@ -1,3 +1,5 @@
+using Zlink.Framework.Runtime.Identifiers;
+
 namespace Zlink.Framework.UnitTests;
 
 using Zlink.Framework.Runtime.Backend.Contracts;
@@ -463,7 +465,7 @@ public sealed class ActorBoundSessionRelayTests
             token,
             BindingGeneration: 1,
             ObjectGeneration: 7,
-            MeshName: "actors",
+            MeshName: ZLinkMeshName.FromBoundary("actors", "meshName"),
             TargetNodeGeneration: 1,
             AuthorityOwnerGeneration: 1,
             OwnerLeaseGeneration: 1,

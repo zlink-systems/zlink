@@ -750,7 +750,7 @@ internal sealed class ZLinkActorBoundSessionCoordinator
                                      $"Actor '{actorId}' does not have a native Actor ref.",
                                      ZLinkRetryAdvice.DoNotRetry);
             return RequireNodeForMesh(
-                    session.MeshName,
+                    session.MeshName.Value,
                     "Actor bound session send requires its stored Mesh route.")
                 .SendActorBoundSession(nativeActorRef, parts, flags);
         }
@@ -939,7 +939,7 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         {
             return false;
         }
-        if (_getNodeForMesh(session.MeshName) is not { } localNode
+        if (_getNodeForMesh(session.MeshName.Value) is not { } localNode
             || sessionNodeRid.Equals(localNode.RoutingId))
         {
             return false;
@@ -1114,7 +1114,7 @@ internal sealed class ZLinkActorBoundSessionCoordinator
                 $"Actor '{actorId}' does not have a bound session.",
                 ZLinkRetryAdvice.DoNotRetry);
         RequireNodeForMesh(
-                session.MeshName,
+                session.MeshName.Value,
                 "Actor bound session close requires its stored Mesh route.")
             .CloseActorBoundSession(actorRef, _registration.DefaultRequestTimeout, cancellationToken);
         return ValueTask.CompletedTask;

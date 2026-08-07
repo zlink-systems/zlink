@@ -1185,7 +1185,9 @@ internal sealed partial class ZLinkFrameworkRuntime
             route.AuthorityOwnerGeneration,
             pending.TargetAuthorityOwnerGeneration,
             route.MeshName!,
-            pending.TargetMeshName!,
+            pending.TargetMeshName?.Value
+            ?? throw new InvalidOperationException(
+                "Session route commit requires a target mesh."),
             route.TargetNodeGeneration,
             pending.TargetNodeGeneration,
             route.OwnerLeaseGeneration,
@@ -2946,7 +2948,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         // owner tombstone after that lifecycle is no longer admitted, so the
         // replacement must not wait for an unreachable cleanup request. An
         // admitted exact lifecycle still requires the normal tombstone ACK.
-        var meshNode = GetMeshNodeRuntime(previous.MeshName).Node;
+        var meshNode = GetMeshNodeRuntime(previous.MeshName.Value).Node;
         if (!HasExactAdmittedNodeLifecycle(
                 meshNode,
                 sessionNodeRid,
@@ -2957,7 +2959,7 @@ internal sealed partial class ZLinkFrameworkRuntime
             actorId,
             actorNodeRid.ToBytes().ToArray(),
             previous.ObjectGeneration,
-            previous.MeshName,
+            previous.MeshName.Value,
             previous.TargetNodeGeneration,
             previous.AuthorityOwnerGeneration,
             previous.OwnerLeaseGeneration,
@@ -2966,7 +2968,8 @@ internal sealed partial class ZLinkFrameworkRuntime
             previous.BindingGeneration,
             previous.SessionOwnerNodeGeneration);
         ZLinkRemoteSessionOwnerTombstoneResponse response;
-        var localNodeRid = GetMeshNodeRuntime(previous.MeshName).Node.RoutingId;
+        var localNodeRid = GetMeshNodeRuntime(previous.MeshName.Value)
+            .Node.RoutingId;
         try
         {
             if (sessionNodeRid == localNodeRid)
@@ -2980,7 +2983,7 @@ internal sealed partial class ZLinkFrameworkRuntime
             else
             {
                 response = await Services.GetRequiredService<IZLinkRouteClient>()
-                    .RequestToNode(previous.MeshName, sessionNodeRid, request)
+                    .RequestToNode(previous.MeshName.Value, sessionNodeRid, request)
                     .Timeout(Registration.DefaultRequestTimeout)
                     .Async<ZLinkRemoteSessionOwnerTombstoneResponse>(cancellationToken)
                     .ConfigureAwait(false);
@@ -3109,7 +3112,9 @@ internal sealed partial class ZLinkFrameworkRuntime
             request.BindingGeneration,
             request.ObjectGeneration,
             request.AuthorityOwnerGeneration,
-            request.MeshName,
+            ZLinkMeshName.FromBoundary(
+                request.MeshName,
+                nameof(request.MeshName)),
             request.TargetNodeGeneration,
             request.OwnerLeaseGeneration,
             request.SessionOwnerNodeGeneration,
@@ -3771,7 +3776,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                      sourceSessionRid)
                  || session.ObjectGeneration != actorGeneration
                  || !string.Equals(
-                     session.MeshName,
+                     session.MeshName.Value,
                      ResolveSpotNodeMeshName(GetSpotNodeRuntime(targetNodeRid)),
                      StringComparison.Ordinal)
                  || session.TargetNodeGeneration != targetNodeGeneration
@@ -4083,7 +4088,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         ZLinkActorBoundSession session,
         byte[] frame)
     {
-        var nodeRuntime = GetMeshNodeRuntime(session.MeshName);
+        var nodeRuntime = GetMeshNodeRuntime(session.MeshName.Value);
         var actorRef = GetOrCreateActorState(actorId).NativeActorRef
                        ?? throw new ZLinkFrameworkException(
                            ZLinkFrameworkErrorKind.NotFound,
@@ -4099,7 +4104,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         var relayMessage = new ZLinkRemoteSessionPushRelay(
             actorId,
             session.ObjectGeneration,
-            session.MeshName,
+            session.MeshName.Value,
             actorRef.NodeRid.ToHex(),
             session.TargetNodeGeneration,
             session.AuthorityOwnerGeneration,
@@ -4111,7 +4116,7 @@ internal sealed partial class ZLinkFrameworkRuntime
             frame);
         var header = ZLinkClientCallCodec.CreateEnvelope(
             ZLinkMessageKind.Command,
-            session.MeshName,
+            session.MeshName.Value,
             ZLinkRemoteSessionPushProtocol.PacketName);
         var parts = ZLinkEnvelopeCodec.EncodeParts(
             header,

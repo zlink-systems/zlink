@@ -77,6 +77,7 @@
         <Compile Include="Runtime/DeferredActorJoinDurabilityTests.cs"/>
         <Compile Include="Runtime/EntrySpotActorDispatchTests.cs"/>
         <Compile Include="Runtime/EntrySpotIdentityStoreTests.cs"/>
+        <Compile Include="Runtime/RuntimeIdentifierTests.cs"/>
         <Compile Include="Runtime/FanoutAutomaticDiscoveryTests.cs"/>
         <Compile Include="Runtime/EnvelopeCodecTests.cs"/>
         <Compile Include="Runtime/EndpointConnectionsTests.cs"/>

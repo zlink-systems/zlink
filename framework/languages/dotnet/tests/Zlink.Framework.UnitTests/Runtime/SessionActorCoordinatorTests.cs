@@ -5,6 +5,8 @@ using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.Runtime.Actors;
 using Zlink.Framework.Runtime.Streams;
 
+using Zlink.Framework.Runtime.Identifiers;
+
 namespace Zlink.Framework.UnitTests;
 
 public sealed class SessionActorCoordinatorTests
@@ -739,7 +741,7 @@ public sealed class SessionActorCoordinatorTests
             BindingGeneration: 2,
             ObjectGeneration: 7,
             AuthorityOwnerGeneration: 3,
-            MeshName: "actors",
+            MeshName: ZLinkMeshName.FromBoundary("actors", "meshName"),
             TargetNodeGeneration: 4,
             OwnerLeaseGeneration: 5,
             SessionOwnerNodeGeneration: 6,

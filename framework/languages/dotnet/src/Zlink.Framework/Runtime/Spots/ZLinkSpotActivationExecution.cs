@@ -1266,7 +1266,7 @@ internal abstract partial class ZLinkSpotActivation
             ObjectGeneration: session.ObjectGeneration,
             AuthorityOwnerGeneration:
                 session.AuthorityOwnerGeneration,
-            MeshName: session.MeshName,
+            MeshName: session.MeshName.Value,
             TargetNodeGeneration: session.TargetNodeGeneration,
             OwnerLeaseGeneration: session.OwnerLeaseGeneration,
             SessionOwnerNodeGeneration:
