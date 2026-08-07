@@ -22,6 +22,7 @@ import { ZLinkPostCommitActorLocation } from './post-commit-actor-location';
 import { ZLinkLocalNativeActorJoin } from './actor-local-native-join';
 import { ZLinkPostCommitActorBinder } from './post-commit-actor-binder';
 import { routingIdsEqual } from '../routing-id';
+import { operationIdentityKey } from '../foundation/operation-identity';
 
 export interface ZLinkActorNativeJoinCoordinatorOptions {
   readonly node: ZLinkBackendMeshNode | (() => ZLinkBackendMeshNode);
@@ -97,7 +98,7 @@ export class ZLinkActorNativeJoinCoordinator implements ZLinkActorJoinCoordinato
     this.options.sourceTransfer?.beginDeferredActorHandoff?.(
       actor,
       state,
-      deferredOperationKey(operationId)
+      operationIdentityKey(operationId)
     );
   }
 
@@ -109,7 +110,7 @@ export class ZLinkActorNativeJoinCoordinator implements ZLinkActorJoinCoordinato
     await this.options.sourceTransfer?.cancelDeferredActorHandoff?.(
       actor,
       state,
-      deferredOperationKey(operationId)
+      operationIdentityKey(operationId)
     );
   }
 
@@ -206,7 +207,7 @@ export class ZLinkActorNativeJoinCoordinator implements ZLinkActorJoinCoordinato
     operationId: import('../../contracts').ZLinkActorJoinOperationId | undefined
   ): ZLinkActorJoinRuntimeResult<Message> {
     if (operationId === undefined || this.options.sourceTransfer === undefined) return result;
-    const key = deferredOperationKey(operationId);
+    const key = operationIdentityKey(operationId);
     return {
       ...result,
       finalizeDeferredJoin: async () => {
@@ -229,12 +230,6 @@ export class ZLinkActorNativeJoinCoordinator implements ZLinkActorJoinCoordinato
       ? this.options.node()
       : this.options.node;
   }
-}
-
-function deferredOperationKey(
-  operationId: import('../../contracts').ZLinkActorJoinOperationId
-): string {
-  return `${operationId.high.toString(16)}:${operationId.low.toString(16)}`;
 }
 
 function installResolvedSpotRoute(

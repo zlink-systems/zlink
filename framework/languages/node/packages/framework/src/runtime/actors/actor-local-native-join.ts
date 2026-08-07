@@ -36,6 +36,7 @@ import type { ZLinkPostCommitActorBinder } from './post-commit-actor-binder';
 import type { ZLinkPostCommitActorLocation } from './post-commit-actor-location';
 import { toBackendRoutingId as toBackendRoutingId } from '../routing-id';
 import { routingIdsEqual } from '../routing-id';
+import { operationIdentityKey } from '../foundation/operation-identity';
 import type {
   ZLinkActorSourceTransfer,
   ZLinkPreparedActorSource
@@ -184,7 +185,7 @@ export class ZLinkLocalNativeActorJoin {
           'core',
           completionOperationId === undefined
             ? undefined
-            : deferredOperationKey(completionOperationId)
+            : operationIdentityKey(completionOperationId)
         );
         await prepared.reserveTarget(target, signal);
         requestPayload = Buffer.from(JSON.stringify(buildRemoteActorJoinRequestPayload({
@@ -514,7 +515,7 @@ export class ZLinkLocalNativeActorJoin {
           'core',
           completionOperationId === undefined
             ? undefined
-            : deferredOperationKey(completionOperationId)
+            : operationIdentityKey(completionOperationId)
         );
         await prepared.reserveTarget(spotRouteTarget, signal);
         requestPayload = Buffer.from(JSON.stringify(buildRemoteActorJoinRequestPayload({
@@ -931,10 +932,4 @@ function disposeParts(parts: readonly Message[]): void {
   for (const part of parts) {
     part.close();
   }
-}
-
-function deferredOperationKey(
-  operationId: ZLinkActorJoinOperationId
-): string {
-  return `${operationId.high.toString(16)}:${operationId.low.toString(16)}`;
 }

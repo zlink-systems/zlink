@@ -9,6 +9,10 @@ import { ZLinkSpotActivation } from '../../packages/framework/src/runtime/spots/
 import { ZLinkSpotSerialExecutor } from '../../packages/framework/src/runtime/spots/spot-serial-executor';
 import { ZLinkSpotTimerRegistry } from '../../packages/framework/src/runtime/spots/spot-timer';
 import { DefaultZLinkWorkerCall } from '../../packages/framework/src/runtime/workers';
+import {
+  createRandomOperationIdentity,
+  operationIdentityKey
+} from '../../packages/framework/src/runtime/foundation/operation-identity';
 
 interface Deferred<T> {
   readonly promise: Promise<T>;
@@ -39,6 +43,20 @@ function activation(
     handlers: {} as never
   });
 }
+
+test('128-bit operation identity retries zero entropy and has one canonical key', () => {
+  let calls = 0;
+  const operationId = createRandomOperationIdentity(() => {
+    calls += 1;
+    const bytes = Buffer.alloc(16);
+    if (calls === 2) bytes.writeBigUInt64BE(1n, 8);
+    return bytes;
+  });
+
+  assert.equal(calls, 2);
+  assert.deepEqual(operationId, { high: 0n, low: 1n });
+  assert.equal(operationIdentityKey(operationId), '0:1');
+});
 
 test('SpotWide Yield releases the Spot gate but retains the Actor claim', async () => {
   const serial = new ZLinkSpotSerialExecutor(true);

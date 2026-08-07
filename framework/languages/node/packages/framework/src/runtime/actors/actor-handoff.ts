@@ -671,9 +671,6 @@ export class ZLinkActorHandoffCoordinator {
     }
     if (replyRouteId === undefined) {
       this.nextReplyRouteId += 1n;
-      if (this.nextReplyRouteId <= 0n) {
-        throw new Error('Actor handoff ReplyRouteId is exhausted.');
-      }
       replyRouteId = this.nextReplyRouteId.toString();
     }
     return {

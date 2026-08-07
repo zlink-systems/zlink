@@ -4,6 +4,7 @@ import type {
   ReceiveKindData,
   ReceiveRecord
 } from '../foundation/service-runtime-contracts';
+import { operationIdentityKey } from '../foundation/operation-identity';
 
 export interface ZLinkMeshCompletion {
   readonly terminalResult: number;
@@ -45,7 +46,7 @@ export class ZLinkMeshCompletionTable {
     if (this.disposed) {
       return Promise.reject(new Error('Mesh completion table is disposed.'));
     }
-    const key = operationKey(operationId);
+    const key = operationIdentityKey(operationId);
     if (this.pending.has(key)) {
       return Promise.reject(new Error(`Mesh operation '${key}' is already pending.`));
     }
@@ -71,7 +72,7 @@ export class ZLinkMeshCompletionTable {
 
   complete(record: ReceiveRecord): void {
     if (this.disposed) return;
-    const key = operationKey(record.operationId);
+    const key = operationIdentityKey(record.operationId);
     const pending = this.pending.get(key);
     if (pending === undefined) return;
     const completion = copyCompletion(record);
@@ -101,10 +102,6 @@ function copyCompletion(record: ReceiveRecord): ZLinkMeshCompletion {
     kindData: record.kindData,
     parts: record.parts.map((part) => Message.from(Buffer.from(part.data())))
   };
-}
-
-function operationKey(operationId: MeshOperationId): string {
-  return `${operationId.high.toString(16)}:${operationId.low.toString(16)}`;
 }
 
 export function closeMeshCompletion(completion: ZLinkMeshCompletion): void {
