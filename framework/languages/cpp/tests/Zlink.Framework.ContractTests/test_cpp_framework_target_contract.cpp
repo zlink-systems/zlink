@@ -114,6 +114,8 @@ int main ()
       read_file (root / "framework/src/runtime/mesh/mesh_node_runtime.cpp");
     const auto mesh_node_host_service =
       read_file (root / "framework/src/runtime/mesh/mesh_node_host_service.cpp");
+    const auto public_host_runtime =
+      read_file (root / "framework/src/runtime/stateful/public_host_runtime.cpp");
     const auto monitoring_unit =
       read_file (root / "tests/Zlink.Framework.UnitTests/test_cpp_framework_monitoring.cpp");
     const auto actor_gateway_unit =
@@ -1704,6 +1706,14 @@ int main ()
         && stop_completion_admission < complete_termination_waiter,
       "CPP-LAYER-005",
       "shutdown publishes its terminal result before closing completion admission");
+
+    /* CPP-DISP-005 — local application enqueue interrupts the MeshNode
+     * ROUTER poll instead of waiting for its 100 ms safety bound. */
+    gate.require (
+      public_host_runtime.find ("_transport->signal_activity ()")
+          != std::string::npos,
+      "CPP-DISP-005",
+      "local application enqueue does not signal the MeshNode activity poll");
 
     /* CPP-OBS-001 — Instance Spot activation must not allocate its trace DTO
      * or correlation strings while message-flow diagnostics are off. */

@@ -71,6 +71,7 @@ raw_route_port_t::raw_route_port_t (zlink::router_socket_t &socket,
     if (_receive_events != zlink::poll_event_flag_t::none) {
         _poller->add (socket, _receive_events, _poller_slot);
     }
+    _wake_timer.attach (*_poller);
 }
 
 bool raw_route_port_t::send (const raw_bytes_t &target_routing_id,
@@ -176,11 +177,30 @@ zlink::poll_event_flag_t raw_route_port_t::poll (
     std::lock_guard lock (*_socket_mutex);
     if (_socket == nullptr || _receive_events == zlink::poll_event_flag_t::none)
         return zlink::poll_event_flag_t::none;
-    zlink::poll_event_t event;
-    if (_poller->wait (&event, 1, timeout) != 1
-        || event.slot != _poller_slot)
-        return zlink::poll_event_flag_t::none;
-    return event.revents;
+    zlink::poll_event_t events[2];
+    const auto count = _poller->wait (events, 2, timeout);
+    auto readiness = zlink::poll_event_flag_t::none;
+    bool wake = false;
+    for (int index = 0; index < count; ++index) {
+        if (_wake_timer.is_event (events[index])) {
+            _wake_timer.consume ();
+            wake = true;
+        }
+        else if (events[index].slot == _poller_slot) {
+            readiness = static_cast<zlink::poll_event_flag_t> (
+              static_cast<short> (readiness)
+              | static_cast<short> (events[index].revents));
+        }
+    }
+    return readiness != zlink::poll_event_flag_t::none
+             ? readiness
+             : wake ? zlink::poll_event_flag_t::pollin
+                    : zlink::poll_event_flag_t::none;
+}
+
+void raw_route_port_t::signal_activity () noexcept
+{
+    _wake_timer.signal ();
 }
 
 std::optional<raw_received_t> raw_route_port_t::receive_if_ready (
@@ -250,6 +270,7 @@ bool raw_route_port_t::reply (const raw_received_t &request, const raw_message_t
 void raw_route_port_t::close () noexcept
 {
     std::lock_guard lock (*_socket_mutex);
+    _wake_timer.detach ();
     auto *socket = _socket;
     _socket = nullptr;
     if (_receive_events != zlink::poll_event_flag_t::none) {

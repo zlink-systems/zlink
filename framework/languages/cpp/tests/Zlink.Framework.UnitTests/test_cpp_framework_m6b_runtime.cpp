@@ -1254,6 +1254,34 @@ void verify_public_host_dispatches_one_application_record_per_turn ()
             == 0);
 }
 
+void verify_local_application_enqueue_wakes_dispatch_wait ()
+{
+    auto host = std::make_shared<host::public_host_runtime_t> (
+      host::host_options_t{
+        mesh::raw_mesh_node_options_t{
+          descriptor ("local-dispatch-wake")},
+        "entry", {"framework.spot"}});
+    auto entry = host->entry_spot ();
+    host->start ();
+
+    std::promise<void> waiting_started;
+    auto waiting = waiting_started.get_future ();
+    auto awakened = std::async (std::launch::async, [&] {
+        waiting_started.set_value ();
+        return host->wait_for_dispatch_activity (5s, true);
+    });
+    waiting.wait ();
+    std::this_thread::sleep_for (20ms);
+    assert (entry.publish (
+              "local", "wake",
+              {zlink::message_t::from (std::string ("payload"))})
+            == zlink::submit_result_t::ok);
+    assert (awakened.wait_for (500ms) == std::future_status::ready);
+    assert (awakened.get ());
+
+    host->close ();
+}
+
 void verify_remote_session_route_ack_and_atomic_switch ()
 {
     auto session_owner =
@@ -3856,6 +3884,7 @@ int main ()
     verify_bounded_message_follow ();
     verify_bounded_actor_handoff_backlog ();
     verify_public_host_dispatches_one_application_record_per_turn ();
+    verify_local_application_enqueue_wakes_dispatch_wait ();
     verify_remote_session_route_ack_and_atomic_switch ();
     verify_location_store_accepted_record_authority ();
     verify_raw_spot_and_actor_routing ();

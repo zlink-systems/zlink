@@ -2903,6 +2903,17 @@ bool raw_mesh_node_owner_t::wait_for_activity (
     }
 }
 
+void raw_mesh_node_owner_t::signal_activity () noexcept
+{
+    std::shared_ptr<detail::backend::raw_route_port_t> port;
+    {
+        std::lock_guard lock (_lifecycle_mutex);
+        port = _port;
+    }
+    if (port)
+        port->signal_activity ();
+}
+
 std::uint64_t raw_mesh_node_owner_t::next_operation_sequence ()
 {
     std::lock_guard lifecycle_lock (_lifecycle_mutex);

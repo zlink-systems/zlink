@@ -286,6 +286,7 @@ class raw_mesh_node_owner_t
      * turning an idle node into a timed polling loop. */
     bool wait_for_activity (std::chrono::milliseconds timeout,
                             bool accept_application_receive = true) noexcept;
+    void signal_activity () noexcept;
     std::size_t last_pump_bytes () const noexcept
     {
         return _last_pump_bytes;

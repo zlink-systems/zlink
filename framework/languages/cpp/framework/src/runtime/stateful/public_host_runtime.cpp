@@ -797,6 +797,7 @@ zlink::submit_result_t spot_handle_t::publish (
           public_host_runtime_t::local_application_dispatch_t{
             std::move (owner), std::move (local), parts});
     }
+    _host->_transport->signal_activity ();
     for (const auto &target : targets) {
         (void) _host->transport ().send_to_node (
           target.descriptor.node_routing_id,
@@ -5772,6 +5773,7 @@ zlink::submit_result_t public_host_runtime_t::begin_local_actor_join (
           local_application_dispatch_t{
             std::move (owner), std::move (record), parts});
     }
+    _transport->signal_activity ();
     return zlink::submit_result_t::ok;
 }
 
@@ -5862,6 +5864,7 @@ bool public_host_runtime_t::enqueue_local_actor_message (
     _local_application_dispatches.push_back (
       local_application_dispatch_t{
         std::move (owner), std::move (record), parts});
+    _transport->signal_activity ();
     return true;
 }
 
@@ -5959,6 +5962,7 @@ zlink::submit_result_t public_host_runtime_t::enqueue_local_spot_request (
         _local_application_dispatches.push_back (
           local_application_dispatch_t{
             std::move (owner), std::move (record), parts});
+        _transport->signal_activity ();
     }
     catch (...) {
         if (bytes_reserved)
