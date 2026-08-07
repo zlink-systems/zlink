@@ -1967,7 +1967,10 @@ class MailboxClaim implements RawClaim {
       try {
         decoded = decodeMultipartRecord(this.runtime, record);
       } catch (error) {
-        if (error instanceof ServiceWireProtocolError) continue;
+        if (error instanceof ServiceWireProtocolError) {
+          this.runtime.mailbox.releaseClaimedPayload(record);
+          continue;
+        }
         throw error;
       }
       const nextParts = decoded.parts.length;
@@ -1984,6 +1987,7 @@ class MailboxClaim implements RawClaim {
       parts += nextParts;
       bytes += nextBytes;
       records.push(decoded);
+      this.runtime.mailbox.releaseClaimedPayload(record);
     }
     return { ok: records.length > 0, records };
   }

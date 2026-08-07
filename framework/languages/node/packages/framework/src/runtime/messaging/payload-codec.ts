@@ -337,7 +337,10 @@ function toRuntimeMessage(payload: ZLinkEncodedPayload): Message {
     : RuntimeMessage.fromOwned(owned);
 }
 
-function encodedPayloadFromOwned(bytes: Buffer): ZLinkEncodedPayload {
+function encodedPayloadFromOwned(bytes: Uint8Array): ZLinkEncodedPayload {
+  if (!Buffer.isBuffer(bytes)) {
+    return ZLinkEncodedPayload.from(bytes);
+  }
   const payload = ZLinkEncodedPayload.from(Buffer.alloc(0));
   adoptEncodedPayload(payload, bytes);
   return payload;

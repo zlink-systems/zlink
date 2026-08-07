@@ -325,7 +325,7 @@ export class ZLinkManagedStream implements ZLinkStream {
   sendBoundActor(actorId: string, parts: readonly Message[], flags?: ZLinkBackendSendFlags): boolean {
     const binding = this.nativeActorBindings.get(actorId);
     if (binding?.route !== undefined) {
-      const nativeParts = parts.map((part) => NativeMessage.from(Buffer.from(part.data())));
+      const nativeParts = parts.map((part) => NativeMessage.from(part.data()));
       try {
         return binding.route.service.sendToActor(
           this.backendRoutingId(),

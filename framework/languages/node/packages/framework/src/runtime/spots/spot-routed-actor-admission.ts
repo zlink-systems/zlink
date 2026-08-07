@@ -327,7 +327,7 @@ export class ZLinkSpotRoutedActorAdmission {
         }
         return decodeRemoteActorJoinPayload(
           header,
-          RuntimeMessage.from(Buffer.from(parts[1].data())),
+          RuntimeMessage.fromOwned(Buffer.from(parts[1].data())),
           received,
           true
         );

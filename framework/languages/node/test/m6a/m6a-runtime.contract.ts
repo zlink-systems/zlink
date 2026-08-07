@@ -872,6 +872,8 @@ test('mailbox domains remain bounded and infrastructure claims progress independ
 
   const application = mailbox.tryClaim('application', 1, 8)!;
   assert.equal(mailbox.tryClaim('application', 1, 8), undefined);
+  mailbox.releaseClaimedPayload(application.records[0]!);
+  assert.equal(application.records[0]!.parts.length, 0);
   const infrastructure = mailbox.tryClaim('infrastructure', 1, 8)!;
   assert.equal(infrastructure.records.length, 1);
   assert.equal(mailbox.release(infrastructure), true);
