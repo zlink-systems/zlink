@@ -391,7 +391,23 @@ test('Node registration rejects invalid Spot timer options before startup', () =
     })),
     /overrun policy is not supported/
   );
-  assert.throws(
+  for (const maxCatchUpTicks of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 2_147_483_648]) {
+    assert.throws(
+      () => framework.createFrameworkRegistration(registrationWithTimer('spotTimerHandlers', {
+        spotType: GameSpot,
+        handlerType: TimerHandler,
+        name: 'tick',
+        periodMs: 100,
+        options: {
+          overrunPolicy: framework.ZLinkTimerOverrunPolicy.CatchUpBounded,
+          maxCatchUpTicks
+        }
+      })),
+      /MaxCatchUpTicks must be an integer from 1 through 2,147,483,647/
+    );
+  }
+
+  assert.doesNotThrow(
     () => framework.createFrameworkRegistration(registrationWithTimer('spotTimerHandlers', {
       spotType: GameSpot,
       handlerType: TimerHandler,
@@ -399,10 +415,9 @@ test('Node registration rejects invalid Spot timer options before startup', () =
       periodMs: 100,
       options: {
         overrunPolicy: framework.ZLinkTimerOverrunPolicy.CatchUpBounded,
-        maxCatchUpTicks: 0
+        maxCatchUpTicks: 2_147_483_647
       }
-    })),
-    /MaxCatchUpTicks must be greater than zero/
+    }))
   );
 });
 

@@ -23,8 +23,15 @@ export function validateTimerRegistration(
   }
   if (
     options?.overrunPolicy === ZLinkTimerOverrunPolicy.CatchUpBounded
-    && (options.maxCatchUpTicks === undefined || options.maxCatchUpTicks <= 0)
+    && (
+      options.maxCatchUpTicks === undefined
+      || !Number.isInteger(options.maxCatchUpTicks)
+      || options.maxCatchUpTicks < 1
+      || options.maxCatchUpTicks > 2_147_483_647
+    )
   ) {
-    throw new ZLinkConfigurationException('SPOT timer MaxCatchUpTicks must be greater than zero.');
+    throw new ZLinkConfigurationException(
+      'SPOT timer MaxCatchUpTicks must be an integer from 1 through 2,147,483,647.'
+    );
   }
 }
