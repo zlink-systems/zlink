@@ -1,5 +1,4 @@
 import { ZLinkModule, zlinkFramework, zlinkModule } from '@zlink-systems/nestjs';
-import { ZLinkMessageFlowLogMode } from '@zlink-systems/framework';
 import { CreateGameEndpoint } from './Handlers/create-game-http-handler';
 import { SampleNames } from '../Configuration/sample-settings';
 import { TICTACTOE_SAMPLE_CONFIG, createTicTacToeConfigurationModule } from '../Configuration/sample-config';
@@ -21,9 +20,7 @@ function createTicTacToeApiModule() {
         useFactory: (config: TicTacToeSampleConfig) => {
           const builder = zlinkFramework();
           builder.configureDispatch()
-            .messageFlow(ZLinkMessageFlowLogMode.KeyTransitions)
-            .traceLogFile(`${config.logDir}/flow-api-${config.apiIndex}.log`)
-            .traceLabel(`api-${config.apiIndex}`);
+            .messageFlow('normal');
           builder.addLocationStore(createTicTacToeLocationStore(config));
           const mesh = builder.addRouteMesh(SampleNames.playSpotNode)
             .listen(config.apiEndpoints[config.apiIndex])

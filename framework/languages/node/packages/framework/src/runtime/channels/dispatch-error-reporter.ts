@@ -1,13 +1,8 @@
-import type { ZLinkProviderResolver } from '../../contracts/Common/ZLinkProviderResolver';
-import {
-  ZLinkMessageFlowLogMode
-} from '../../contracts';
 import {
   ZLinkRuntimeMessageFlowOutcome as ZLinkMessageFlowOutcome,
   ZLinkRuntimeDispatchErrorAction as ZLinkDispatchErrorAction,
   ZLinkRuntimeDispatchErrorReason as ZLinkDispatchErrorReason,
   ZLinkDispatchErrorSurface,
-  ZLinkDispatchMessageKind,
   type ZLinkDispatchFailure
 } from '../../contracts/Dispatch/ZLinkDispatchOptions';
 import type { ZLinkRuntimeMetrics } from '../diagnostics';
@@ -35,17 +30,16 @@ export class ZLinkDispatchErrorReporter {
 
   constructor(
     _observerType: undefined,
-    providerResolver: ZLinkProviderResolver | undefined,
+    _providerResolver: unknown,
     errorSink: ZLinkDispatchErrorSink,
     ctx?: ZLinkDiagnosticsContext,
     private readonly metrics?: ZLinkRuntimeMetrics
   ) {
     const flowCtx: ZLinkDiagnosticsContext = ctx ?? {
       diagnostics: DEFAULT_ZLINK_DIAGNOSTICS,
-      liveMode: { mode: ZLinkMessageFlowLogMode.ErrorsOnly },
-      providerResolver
+      liveMode: { mode: 'errors' }
     };
-    this.flow = new ZLinkMessageFlowTracer(flowCtx, errorSink, metrics);
+    this.flow = new ZLinkMessageFlowTracer(flowCtx, errorSink);
   }
 
   report(event: ZLinkRuntimeDispatchFailure): void {
@@ -80,15 +74,15 @@ export class ZLinkDispatchErrorReporter {
       errorAction: event.action,
       errorType: errorInfo.errorType,
       errorMessage: errorInfo.errorMessage
-    }, dispatchFailureLogLevel(event));
+    });
   }
 
   get reportedCount(): number {
     return this.reportedEvents;
   }
 
-  get observerFailureCount(): number {
-    return this.flow.observerFailureCount;
+  get providerFailureCount(): number {
+    return this.flow.providerFailureCount;
   }
 }
 
@@ -107,31 +101,6 @@ function channelDropReason(event: ZLinkRuntimeDispatchFailure): string | undefin
     default:
       return undefined;
   }
-}
-
-function dispatchFailureLogLevel(
-  event: ZLinkRuntimeDispatchFailure
-): 'error' | 'warn' | 'debug' {
-  if (event.reason === ZLinkDispatchErrorReason.HandlerException) {
-    return 'error';
-  }
-  if (
-    event.messageKind === ZLinkDispatchMessageKind.Publish
-    && (event.reason === ZLinkDispatchErrorReason.HandlerMissing
-      || event.reason === ZLinkDispatchErrorReason.PayloadDecodeFailed
-      || event.reason === ZLinkDispatchErrorReason.InvalidFrame)
-  ) {
-    return 'debug';
-  }
-  if (
-    event.messageKind === ZLinkDispatchMessageKind.Send
-    && (event.reason === ZLinkDispatchErrorReason.HandlerMissing
-      || event.reason === ZLinkDispatchErrorReason.PayloadDecodeFailed
-      || event.reason === ZLinkDispatchErrorReason.InvalidFrame)
-  ) {
-    return 'warn';
-  }
-  return 'error';
 }
 
 function dispatchErrorInfo(event: ZLinkRuntimeDispatchFailure): { readonly errorType?: string; readonly errorMessage?: string } {

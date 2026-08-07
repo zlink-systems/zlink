@@ -53,18 +53,6 @@ export class ZLinkRequestFailureError extends Error {
   }
 }
 
-export interface ZLinkRuntimeErrorEvent {
-  readonly eventId: 'zlink.runtime_error';
-  readonly timestamp: Date;
-  readonly kind: 'observer_failed';
-  readonly source: 'message_flow_observer';
-  readonly reason: string;
-}
-
-export interface ZLinkRuntimeErrorSink {
-  onRuntimeError(error: ZLinkRuntimeErrorEvent): Promise<void> | void;
-}
-
 export interface ZLinkRouteMeshRuntimeOptions {
   mesh(meshName: string): ZLinkMeshPlacementRuntimeOptions;
   channel(channelName: string): ZLinkMeshChannelRuntimeOptions;

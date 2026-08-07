@@ -1,9 +1,7 @@
-import path from 'node:path';
 import { Injectable, Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import {
   ZLinkFrameworkRelocationMode,
-  ZLinkMessageFlowLogMode,
   type ActorRef,
   type ZLinkFrameworkRelocationResult,
   type ZLinkFrameworkRuntime,
@@ -33,6 +31,7 @@ import { closeHttpServer, startHttpServer } from '../Support/http-server';
 import { createFlowLogRoute } from '../Support/flow-log-route';
 import { EvidenceStore } from '../Support/evidence-store';
 import { MetricEvidenceCollector } from '../Support/metric-evidence-collector';
+import { configureTelemetryLogProvider } from '../Support/telemetry-log-provider';
 import {
   OBSERVABILITY_OPS_OPTIONS,
   createObservabilityOpsConfigurationModule,
@@ -116,6 +115,7 @@ Module({
         if (options.streamEndpoint === undefined) {
           throw new Error("Configuration value 'e2e.streamEndpoint' is required for the session host.");
         }
+        configureTelemetryLogProvider(options.logDir, options.rid);
         evidence = new EvidenceStore(options.rid, options.evidenceFile);
         const builder = zlinkFramework();
         locationStore = new ZLinkRedisLocationStore({
@@ -130,9 +130,7 @@ Module({
           ownerLeaseTtlMs: 3000
         });
         builder.configureDispatch()
-          .messageFlow(options.messageFlowEnabled ? ZLinkMessageFlowLogMode.KeyTransitions : ZLinkMessageFlowLogMode.Off)
-          .traceLogFile(path.join(options.logDir, `${options.rid}-flow.log`))
-          .traceLabel(options.rid);
+          .messageFlow(options.messageFlowEnabled ? 'normal' : 'off');
         const mesh = builder.addRouteMesh(ObservabilityOpsNames.mesh)
           .listen(options.routerEndpoint).routingId(options.rid);
         mesh.objects().client();

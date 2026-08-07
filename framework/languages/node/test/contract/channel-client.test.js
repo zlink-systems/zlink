@@ -9,6 +9,7 @@ const { fork } = require('node:child_process');
 const { Module } = require('@nestjs/common');
 const { NestFactory } = require('@nestjs/core');
 
+const telemetry = require('./helpers/telemetry-log-capture');
 const zlink = require('@zlink-systems/zlink');
 const framework = require('../../packages/framework/dist/internal');
 const { resolveFrameworkPacketName } = require('../../packages/framework/dist/runtime/messaging/packet-name');
@@ -16,9 +17,9 @@ const {
   ZLinkSubmitStatus
 } = require('../../packages/framework/dist/runtime/messaging/submission-result');
 
-function dispatchOptions(observerType) {
+function dispatchOptions() {
   return framework.createFrameworkOptions((options) => {
-    options.configureDispatch().setMessageFlowObserver(observerType);
+    options.configureDispatch().messageFlow('errors');
   }).dispatch;
 }
 const frameworkProtobuf = require('../../packages/framework-codec-protobuf/dist/server/framework.cjs');
@@ -2053,16 +2054,12 @@ test('CH-006 ZLinkFrameworkRuntimeHost dispatches client-server send handlers', 
   }
 });
 
-test('DERR-001 ZLinkFrameworkRuntimeHost replies error and reports observer for missing channel request handler', async () => {
+test('DERR-001 ZLinkFrameworkRuntimeHost replies error and reports provider record for missing channel request handler', async () => {
   const endpoint = `tcp://127.0.0.1:${await reservePort()}`;
-  const dispatchEvents = [];
-  class DispatchObserver {
-    onMessageFlow(event) {
-      dispatchEvents.push(event);
-    }
-  }
+  telemetry.reset();
+  const dispatchEvents = telemetry.records
   const serverRegistration = framework.createFrameworkRegistration({
-    dispatch: dispatchOptions(DispatchObserver),
+    dispatch: dispatchOptions(),
     channels: {
       play: {
         server: { bind: endpoint },
@@ -2122,17 +2119,13 @@ test('DERR-001 ZLinkFrameworkRuntimeHost replies error and reports observer for 
   }
 });
 
-test('DERR-002 ZLinkFrameworkRuntimeHost reports observer for missing channel send handler', async () => {
+test('DERR-002 ZLinkFrameworkRuntimeHost reports provider record for missing channel send handler', async () => {
   const channelName = 'play-missing-send';
   const endpoint = `tcp://127.0.0.1:${await reservePort()}`;
-  const dispatchEvents = [];
-  class DispatchObserver {
-    onMessageFlow(event) {
-      dispatchEvents.push(event);
-    }
-  }
+  telemetry.reset();
+  const dispatchEvents = telemetry.records
   const serverRegistration = framework.createFrameworkRegistration({
-    dispatch: dispatchOptions(DispatchObserver),
+    dispatch: dispatchOptions(),
     channels: {
       [channelName]: {
         server: { bind: endpoint },
@@ -2192,16 +2185,12 @@ test('DERR-002 ZLinkFrameworkRuntimeHost reports observer for missing channel se
 test('REG-003 ZLinkFrameworkRuntimeHost dispatches manual channel handlers and reports missing packets', async () => {
   const endpoint = `tcp://127.0.0.1:${await reservePort()}`;
   const fanoutEndpoint = `tcp://127.0.0.1:${await reservePort()}`;
-  const dispatchEvents = [];
+  telemetry.reset();
+  const dispatchEvents = telemetry.records;
   const sendCalls = [];
   const publishCalls = [];
-  class DispatchObserver {
-    onMessageFlow(event) {
-      dispatchEvents.push(event);
-    }
-  }
   const serverRegistration = framework.createFrameworkRegistration({
-    dispatch: dispatchOptions(DispatchObserver),
+    dispatch: dispatchOptions(),
     channels: {
       'manual-reg': {
         server: { bind: endpoint },
@@ -2241,7 +2230,7 @@ test('REG-003 ZLinkFrameworkRuntimeHost dispatches manual channel handlers and r
     }
   });
   const subscriberRegistration = framework.createFrameworkRegistration({
-    dispatch: dispatchOptions(DispatchObserver),
+    dispatch: dispatchOptions(),
     channels: {
       'manual-events': {
         subscriber: { manualConnections: [fanoutEndpoint] },
@@ -2371,16 +2360,12 @@ test('REG-003 ZLinkFrameworkRuntimeHost dispatches manual channel handlers and r
   }
 });
 
-test('DERR-007 ZLinkFrameworkRuntimeHost replies error and reports observer for handler exception', async () => {
+test('DERR-007 ZLinkFrameworkRuntimeHost replies error and reports provider record for handler exception', async () => {
   const endpoint = `tcp://127.0.0.1:${await reservePort()}`;
-  const dispatchEvents = [];
-  class DispatchObserver {
-    onMessageFlow(event) {
-      dispatchEvents.push(event);
-    }
-  }
+  telemetry.reset();
+  const dispatchEvents = telemetry.records
   const serverRegistration = framework.createFrameworkRegistration({
-    dispatch: dispatchOptions(DispatchObserver),
+    dispatch: dispatchOptions(),
     channels: {
       play: {
         server: { bind: endpoint },
@@ -2435,8 +2420,8 @@ test('DERR-007 ZLinkFrameworkRuntimeHost replies error and reports observer for 
     assert.equal(dispatchEvents[0].action, 'reply_error');
     assert.equal(dispatchEvents[0].packetName, 'ThrowReq');
     assert.equal(dispatchEvents[0].channelName, 'play');
-    assert.equal(dispatchEvents[0].errorType, undefined);
-    assert.equal(dispatchEvents[0].errorMessage, undefined);
+    assert.equal(dispatchEvents[0].errorType, 'Error');
+    assert.equal(dispatchEvents[0].errorMessage, 'DERR-007 handler exception');
 
     const knownAfter = await client
       .requestToChannel('play', typedPacket('KnownReq', { value: 'after-handler-error' }))
@@ -3595,18 +3580,14 @@ test('ZLinkChannelRequestDispatcher preserves source node identity for RouteMesh
   parts.forEach((part) => part.close());
 });
 
-test('ZLinkChannelRequestDispatcher replies error and reports observer for missing request handler', async () => {
-  const events = [];
-  class DispatchObserver {
-    onMessageFlow(event) {
-      events.push(event);
-    }
-  }
+test('ZLinkChannelRequestDispatcher replies error and reports provider record for missing request handler', async () => {
+  telemetry.reset();
+  const events = telemetry.records
   const replies = [];
   const dispatcher = new framework.ZLinkChannelRequestDispatcher({
     channelName: 'api',
     dispatchErrors: dispatchErrorReporter(
-      DispatchObserver,
+      undefined,
       { reportRuntimeTaskException() {} }
     ),
     handlers: new Map(),
@@ -3714,17 +3695,13 @@ test('ZLinkChannelRequestDispatcher rejects filter short circuit without seriali
 });
 
 test('ZLinkChannelRequestDispatcher drops requests without reply sequence without invoking handlers', async () => {
-  const events = [];
+  telemetry.reset();
+  const events = telemetry.records;
   let handlerInvocations = 0;
-  class DispatchObserver {
-    onMessageFlow(event) {
-      events.push(event);
-    }
-  }
   const dispatcher = new framework.ZLinkChannelRequestDispatcher({
     channelName: 'api',
     dispatchErrors: dispatchErrorReporter(
-      DispatchObserver,
+      undefined,
       { reportRuntimeTaskException() {} }
     ),
     handlers: new Map([
@@ -3769,20 +3746,16 @@ test('ZLinkChannelRequestDispatcher drops requests without reply sequence withou
   assert.equal(events[0].correlationId, 'corr-no-seq');
 });
 
-test('DERR-006 ZLinkChannelRequestDispatcher replies error and reports observer for payload decode failure', async () => {
-  const events = [];
+test('DERR-006 ZLinkChannelRequestDispatcher replies error and reports provider record for payload decode failure', async () => {
+  telemetry.reset();
+  const events = telemetry.records;
   const runtimeFailures = [];
   let handlerInvocations = 0;
-  class DispatchObserver {
-    onMessageFlow(event) {
-      events.push(event);
-    }
-  }
   const replies = [];
   const dispatcher = new framework.ZLinkChannelRequestDispatcher({
     channelName: 'api',
     dispatchErrors: dispatchErrorReporter(
-      DispatchObserver,
+      undefined,
       {
         reportRuntimeTaskException(taskName, error) {
           runtimeFailures.push({ taskName, error });
@@ -3849,8 +3822,8 @@ test('DERR-006 ZLinkChannelRequestDispatcher replies error and reports observer 
   assert.equal(events[0].packetName, 'BrokenReq');
   assert.equal(events[0].channelName, 'api');
   assert.equal(events[0].correlationId, 'corr-decode');
-  assert.equal(events[0].errorType, undefined);
-  assert.equal(events[0].errorMessage, undefined);
+  assert.equal(events[0].errorType, 'ZLinkFrameworkException');
+  assert.match(events[0].errorMessage, /PayloadDecodeFailed/);
   assert.equal(runtimeFailures.length, 0);
 
   replies.length = 0;
@@ -4408,32 +4381,13 @@ test('self-RID RouteMesh uses bounded local admission and SEND_READY wakeup with
   assert.equal(host.localMeshRouteInFlight.size, 0);
 });
 
-test('DERR-009 ZLinkChannelRequestDispatcher writes dispatch errors to file log', async () => {
-  const logDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zlink-node-derr-009-'));
-  const logPath = path.join(logDir, 'dispatch-errors.log');
-  const events = [];
-  class DispatchObserver {
-    onMessageFlow(event) {
-      events.push(event);
-      fs.appendFileSync(
-        logPath,
-        [
-          'message-flow-error',
-          `surface=${event.surface}`,
-          `messageKind=${event.messageKind}`,
-          `reason=${event.reason}`,
-          `action=${event.action}`,
-          `packetName=${event.packetName}`,
-          `channelName=${event.channelName}`,
-          `correlationId=${event.correlationId}`
-        ].join(' ') + '\n'
-      );
-    }
-  }
+test('DERR-009 ZLinkChannelRequestDispatcher writes structured dispatch errors to the logger provider', async () => {
+  telemetry.reset();
+  const events = telemetry.records;
   const dispatcher = new framework.ZLinkChannelRequestDispatcher({
     channelName: 'api',
     dispatchErrors: dispatchErrorReporter(
-      DispatchObserver,
+      undefined,
       { reportRuntimeTaskException() {} }
     ),
     handlers: new Map([
@@ -4456,8 +4410,7 @@ test('DERR-009 ZLinkChannelRequestDispatcher writes dispatch errors to file log'
     }
   };
 
-  try {
-    await dispatcher.dispatch({
+  await dispatcher.dispatch({
       parts: encodeDotnetEnvelope({
         kind: 1,
         channelName: 'api',
@@ -4508,40 +4461,28 @@ test('DERR-009 ZLinkChannelRequestDispatcher writes dispatch errors to file log'
       routingId: 'client-1',
       requestSeq: 23n
     }, router);
-    await new Promise((resolve) => setImmediate(resolve));
-
-    assert.equal(events.length, 3);
-    const text = fs.readFileSync(logPath, 'utf8');
-    assert.equal((text.match(/message-flow-error/g) ?? []).length, 3);
-    assert.match(text, /surface=channel/);
-    assert.match(text, /messageKind=request/);
-    assert.match(text, /reason=no_handler/);
-    assert.match(text, /reason=decode_error/);
-    assert.match(text, /reason=handler_exception/);
-    assert.match(text, /action=reply_error/);
-    assert.match(text, /packetName=MissingReq/);
-    assert.match(text, /packetName=DecodeReq/);
-    assert.match(text, /packetName=ThrowReq/);
-    assert.match(text, /channelName=api/);
-    assert.match(text, /correlationId=corr-decode/);
-  } finally {
-    fs.rmSync(logDir, { recursive: true, force: true });
-  }
+  assert.equal(events.length, 3);
+  assert.deepEqual(events.map((event) => event.eventId), [
+    'zlink.dispatch_error',
+    'zlink.dispatch_error',
+    'zlink.dispatch_error'
+  ]);
+  assert.deepEqual(events.map((event) => event.reason), [
+    'no_handler',
+    'decode_error',
+    'handler_exception'
+  ]);
+  assert.deepEqual(events.map((event) => event.packetName), [
+    'MissingReq',
+    'DecodeReq',
+    'ThrowReq'
+  ]);
+  assert.equal(events[1].correlationId, 'corr-decode');
 });
 
-test('channel dispatch failures use contract log levels without duplicate one-way logs', () => {
-  const calls = { error: [], warn: [], debug: [] };
-  const originals = {
-    error: console.error,
-    warn: console.warn,
-    debug: console.debug
-  };
-  console.error = (...args) => calls.error.push(args.join(' '));
-  console.warn = (...args) => calls.warn.push(args.join(' '));
-  console.debug = (...args) => calls.debug.push(args.join(' '));
-
-  try {
-    const reporter = noDispatchErrorReporter();
+test('channel dispatch failures emit one logger-provider record per failure', () => {
+  telemetry.reset();
+  const reporter = noDispatchErrorReporter();
     reporter.report({
       surface: 'channel',
       messageKind: 'send',
@@ -4565,92 +4506,12 @@ test('channel dispatch failures use contract log levels without duplicate one-wa
       error: new Error('application failure')
     });
 
-    assert.equal(calls.warn.length, 1);
-    assert.match(calls.warn[0], /packet=MissingSend/);
-    assert.equal(calls.debug.length, 1);
-    assert.match(calls.debug[0], /packet=BrokenPublish/);
-    assert.equal(calls.error.length, 1);
-    assert.match(calls.error[0], /packet=ThrowingPublish/);
-    assert.match(calls.error[0], /errorReason=handler_exception/);
-  } finally {
-    console.error = originals.error;
-    console.warn = originals.warn;
-    console.debug = originals.debug;
-  }
-});
-
-test('ZLinkDispatchErrorReporter isolates observer failures', async () => {
-  const sinkFailures = [];
-  class ThrowingObserver {
-    onMessageFlow() {
-      throw new Error('observer failed');
-    }
-  }
-  const reporter = dispatchErrorReporter(
-    ThrowingObserver,
-    {
-      reportRuntimeTaskException(source, error) {
-        sinkFailures.push({ source, error });
-      }
-    }
+  assert.equal(telemetry.records.length, 3);
+  assert.deepEqual(
+    telemetry.records.map((event) => event.packetName),
+    ['MissingSend', 'BrokenPublish', 'ThrowingPublish']
   );
-
-  assert.doesNotThrow(() => reporter.report({
-    surface: 'channel',
-    messageKind: 'request',
-    reason: 'no_handler',
-    action: 'reply_error',
-    packetName: 'MissingReq',
-    channelName: 'api',
-    correlationId: 'corr-1'
-  }));
-  assert.equal(reporter.reportedCount, 1);
-  await new Promise((resolve) => setImmediate(resolve));
-
-  assert.equal(sinkFailures.length, 1);
-  assert.equal(sinkFailures[0].source, 'message-flow-observer');
-  assert.equal(reporter.observerFailureCount, 1);
-
-  class FactoryObserver {
-    onMessageFlow() {}
-  }
-  const factoryFailures = [];
-  const factoryReporter = dispatchErrorReporter(
-    FactoryObserver,
-    {
-      create() {
-        throw new Error('factory failed');
-      }
-    },
-    {
-      reportRuntimeTaskException(source, error) {
-        factoryFailures.push({ source, error });
-      }
-    }
-  );
-
-  assert.doesNotThrow(() => factoryReporter.report({
-    surface: 'channel',
-    messageKind: 'request',
-    reason: 'no_handler',
-    action: 'reply_error'
-  }));
-  assert.equal(factoryReporter.reportedCount, 1);
-  await new Promise((resolve) => setImmediate(resolve));
-
-  assert.equal(factoryFailures.length, 1);
-  assert.equal(factoryFailures[0].source, 'message-flow-observer');
-  assert.equal(factoryReporter.observerFailureCount, 1);
-
-  const noObserverReporter = noDispatchErrorReporter();
-  assert.doesNotThrow(() => noObserverReporter.report({
-    surface: 'channel',
-    messageKind: 'send',
-    reason: 'no_handler',
-    action: 'drop'
-  }));
-  assert.equal(noObserverReporter.reportedCount, 1);
-  assert.equal(noObserverReporter.observerFailureCount, 0);
+  assert.equal(telemetry.records[2].reason, 'handler_exception');
 });
 
 async function recvRouterMessage(router) {
@@ -5192,18 +5053,19 @@ function noDispatchErrorReporter() {
   );
 }
 
-function dispatchErrorReporter(observerType, providerResolverOrSink, maybeSink) {
-  const providerResolver = maybeSink === undefined ? undefined : providerResolverOrSink;
+function dispatchErrorReporter(_legacyObserverType, providerResolverOrSink, maybeSink) {
   const sink = maybeSink ?? providerResolverOrSink;
   return new framework.ZLinkDispatchErrorReporter(
     undefined,
-    providerResolver,
+    undefined,
     sink,
     {
-      diagnostics: {},
-      liveMode: { mode: framework.ZLinkMessageFlowLogMode.ErrorsOnly },
-      messageFlowObserverType: observerType,
-      providerResolver
+      diagnostics: {
+        messageFlow: 'errors',
+        sampleRate: 1,
+        includeMessageSizes: false
+      },
+      liveMode: { mode: 'errors' }
     }
   );
 }

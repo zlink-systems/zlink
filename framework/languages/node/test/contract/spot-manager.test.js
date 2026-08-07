@@ -1,6 +1,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
+const telemetry = require('./helpers/telemetry-log-capture');
 const zlink = require('@zlink-systems/zlink');
 const framework = require('../../packages/framework/dist/internal');
 const {
@@ -58,16 +59,12 @@ const {
 } = require('../../packages/framework/dist/runtime/handlers/handler-instance-scope');
 
 test('local SPOT request failure rejects the caller and reports FailCaller', async () => {
-  const events = [];
-  class DispatchObserver {
-    onMessageFlow(event) {
-      events.push(event);
-    }
-  }
+  telemetry.reset();
+  const events = telemetry.records
   const dispatcher = new ZLinkRoutedSpotPacketDispatch({
     resolveActivation: () => undefined,
     dispatchErrors: dispatchErrorReporter(
-      DispatchObserver,
+      undefined,
       { reportRuntimeTaskException() {} }
     )
   });
@@ -1251,19 +1248,15 @@ test('spot handler registry records packet and subscribe registrations from conf
   ]);
 });
 
-test('ZLinkSpotManager reports SPOT subscription dispatch errors to global observer', async () => {
-  const dispatchEvents = [];
-  class DispatchObserver {
-    onMessageFlow(event) {
-      dispatchEvents.push(event);
-    }
-  }
+test('ZLinkSpotManager reports SPOT subscription dispatch errors to the standard logger provider', async () => {
+  telemetry.reset();
+  const dispatchEvents = telemetry.records
   class StageSpot {}
   const manager = new framework.DefaultZLinkSpotManager({
     spotFactories: [StageSpot],
     createNativeSpot: (_meshName, spotId) => formalNativeSpot(spotId),
     dispatchErrors: dispatchErrorReporter(
-      DispatchObserver,
+      undefined,
       { reportRuntimeTaskException() {} }
     )
   });
@@ -1349,12 +1342,8 @@ test('SPOT subscription dispatch runs the handler and never creates a message-fl
   // ZLinkDispatchMessageKind.Publish), so it must stay silent on the happy
   // path the same way ZLinkChannelDispatchPipeline.trace() already skips
   // Publish. This mirrors the BLK-001 precedent for classic fanout publish.
-  const flowEvents = [];
-  class DispatchObserver {
-    onMessageFlow(event) {
-      flowEvents.push(event);
-    }
-  }
+  telemetry.reset();
+  const flowEvents = telemetry.records
   const handled = [];
   class StageSpot {}
   class SubscribeHandler {
@@ -1366,9 +1355,9 @@ test('SPOT subscription dispatch runs the handler and never creates a message-fl
     spotFactories: [StageSpot],
     createNativeSpot: (_meshName, spotId) => formalNativeSpot(spotId),
     dispatchErrors: dispatchErrorReporter(
-      DispatchObserver,
+      undefined,
       { reportRuntimeTaskException() {} },
-      framework.ZLinkMessageFlowLogMode.KeyTransitions
+      'normal'
     ),
     detachedTaskRunner: { runDetached(_name, callback) { void callback(); } },
     spotSubscriptionHandlers: [{
@@ -1397,20 +1386,16 @@ test('SPOT subscription dispatch runs the handler and never creates a message-fl
   }
 });
 
-test('ZLinkSpotManager reports SPOT actor dispatch errors to global observer', async () => {
-  const dispatchEvents = [];
-  class DispatchObserver {
-    onMessageFlow(event) {
-      dispatchEvents.push(event);
-    }
-  }
+test('ZLinkSpotManager reports SPOT actor dispatch errors to the standard logger provider', async () => {
+  telemetry.reset();
+  const dispatchEvents = telemetry.records
   const badPart = zlink.Message.from('bad-frame');
   class StageSpot {}
   const manager = new framework.DefaultZLinkSpotManager({
     spotFactories: [StageSpot],
     createNativeSpot: (_meshName, spotId) => formalNativeSpot(spotId),
     dispatchErrors: dispatchErrorReporter(
-      DispatchObserver,
+      undefined,
       { reportRuntimeTaskException() {} }
     )
   });
@@ -1439,20 +1424,16 @@ test('ZLinkSpotManager reports SPOT actor dispatch errors to global observer', a
 });
 
 test('ZLinkSpotManager replies routed actor request dispatch errors', async () => {
-  const dispatchEvents = [];
+  telemetry.reset();
+  const dispatchEvents = telemetry.records;
   const replyParts = [];
-  class DispatchObserver {
-    onMessageFlow(event) {
-      dispatchEvents.push(event);
-    }
-  }
   const requestParts = createActorRequestParts('MissingActorPacket', { value: 'payload' }, 1n);
   class StageSpot {}
   const manager = new framework.DefaultZLinkSpotManager({
     spotFactories: [StageSpot],
     createNativeSpot: (_meshName, spotId) => formalNativeSpot(spotId),
     dispatchErrors: dispatchErrorReporter(
-      DispatchObserver,
+      undefined,
       { reportRuntimeTaskException() {} }
     )
   });
@@ -1641,15 +1622,11 @@ test('relocation materialization restores inherited User Spot handler registrati
 });
 
 test('ZLinkSpotManager replies formal Mesh actor handler exceptions as HandlerException errors', async () => {
-  const dispatchEvents = [];
+  telemetry.reset();
+  const dispatchEvents = telemetry.records;
   const replies = [];
   const boundSessions = [];
   const parts = createActorRequestParts('ThrowAsk', { value: 'boom' }, 43n, 1);
-  class DispatchObserver {
-    onMessageFlow(event) {
-      dispatchEvents.push(event);
-    }
-  }
   const nativeNode = {
     routingId: zlink.RoutingId.from('node-a'),
     bindRemoteActorSession(actor, sourceNodeRid, sourceSessionRid) {
@@ -1680,7 +1657,7 @@ test('ZLinkSpotManager replies formal Mesh actor handler exceptions as HandlerEx
       packetName: 'ThrowAsk'
     }],
     dispatchErrors: dispatchErrorReporter(
-      DispatchObserver,
+      undefined,
       { reportRuntimeTaskException() {} }
     )
   });
@@ -3750,15 +3727,18 @@ async function waitFor(predicate, timeoutMs = 1000, message) {
   assert.fail(message?.() ?? 'timed out waiting for condition');
 }
 
-function dispatchErrorReporter(observerType, sink, mode = framework.ZLinkMessageFlowLogMode.ErrorsOnly) {
+function dispatchErrorReporter(_legacyObserverType, sink, mode = 'errors') {
   return new framework.ZLinkDispatchErrorReporter(
     undefined,
     undefined,
     sink,
     {
-      diagnostics: { sampleRate: 1 },
-      liveMode: { mode },
-      messageFlowObserverType: observerType
+      diagnostics: {
+        messageFlow: mode,
+        sampleRate: 1,
+        includeMessageSizes: false
+      },
+      liveMode: { mode }
     }
   );
 }

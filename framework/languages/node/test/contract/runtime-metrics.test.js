@@ -262,34 +262,16 @@ test('RMETRIC-009 channel drops use normalized closed labels when tracing is off
   });
 });
 
-test('RMETRIC-015 bounded flow observer queue counts overflow even when tracing is off', async () => {
+test('RMETRIC-015 off diagnostics do not emit flow records or overflow metrics', () => {
   const { provider, records } = collector();
   const metrics = new framework.ZLinkRuntimeMetrics(provider);
-  let release;
-  const blocked = new Promise((resolve) => { release = resolve; });
-  class BlockingObserver {
-    async onMessageFlow() { await blocked; }
-  }
   const tracer = new framework.ZLinkMessageFlowTracer({
     diagnostics: { messageFlow: 'off', sampleRate: 1, includeMessageSizes: false },
-    liveMode: { mode: 'off' },
-    messageFlowObserverType: BlockingObserver
-  }, { reportRuntimeTaskException() {} }, metrics, 1);
-  const event = {
-    outcome: 'received',
-    surface: 'channel',
-    messageKind: 'send',
-    packetName: 'MetricProbe'
-  };
+    liveMode: { mode: 'off' }
+  }, { reportRuntimeTaskException() {} }, metrics);
 
-  framework.flowIfEnabled(tracer, 'received').trace(event);
-  await new Promise((resolve) => setImmediate(resolve));
-  framework.flowIfEnabled(tracer, 'received').trace(event);
-  framework.flowIfEnabled(tracer, 'received').trace(event);
-
-  assert.equal(records.filter((record) => record.name === 'zlink.observability.events.overflow').length, 1);
-  release();
-  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(framework.flowIfEnabled(tracer, 'received'), undefined);
+  assert.equal(records.filter((record) => record.name === 'zlink.observability.events.overflow').length, 0);
 });
 
 test('OBS-B2/B3 observable gauges use bounded labels and isolate snapshot failures', () => {

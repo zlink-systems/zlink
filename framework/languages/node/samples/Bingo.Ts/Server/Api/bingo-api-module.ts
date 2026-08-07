@@ -1,5 +1,4 @@
 import { ZLinkModule, zlinkFramework, zlinkModule } from '@zlink-systems/nestjs';
-import { ZLinkMessageFlowLogMode } from '@zlink-systems/framework';
 import { bingoFrameworkProtobuf } from '../../Shared/Contracts/protobuf-framework-codec';
 import { SampleNames } from '../Configuration/sample-names';
 import { BINGO_SAMPLE_CONFIG, createBingoConfigurationModule } from '../Configuration/sample-config';
@@ -30,9 +29,7 @@ function createBingoApiModule() {
             metrics: { meterProvider: bingoMeterProvider },
           });
           builder.configureDispatch()
-            .messageFlow(ZLinkMessageFlowLogMode.KeyTransitions)
-            .traceLogFile(`${config.logDir}/flow-api.log`)
-            .traceLabel('api');
+            .messageFlow('normal');
           builder.addLocationStore(createBingoLocationStore(config));
           bingoLocationOptions(builder.configureLocations());
           builder.codecs().use(bingoFrameworkProtobuf);

@@ -1,5 +1,4 @@
 import { ZLinkModule, zlinkFramework, zlinkModule } from '@zlink-systems/nestjs';
-import { ZLinkMessageFlowLogMode } from '@zlink-systems/framework';
 import { bingoFrameworkProtobuf } from '../../Shared/Contracts/protobuf-framework-codec';
 import { SessionAuthenticator } from './Sessions/Handlers/authenticate-session-handler';
 import { BingoSessionFactory } from './Sessions/bingo-session';
@@ -33,9 +32,7 @@ function createBingoSessionModule() {
             metrics: { meterProvider: bingoMeterProvider },
           });
           builder.configureDispatch()
-            .messageFlow(ZLinkMessageFlowLogMode.KeyTransitions)
-            .traceLogFile(`${endpoints.logDir}/flow-session.log`)
-            .traceLabel('session');
+            .messageFlow('normal');
           builder.addLocationStore(createBingoLocationStore(endpoints));
           builder.addRelocationStore(createBingoRelocationStore(endpoints));
           bingoLocationOptions(builder.configureLocations());

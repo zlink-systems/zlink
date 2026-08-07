@@ -153,6 +153,39 @@ test('RouteMesh public socket and registration contracts exclude message-size li
   );
 });
 
+test('diagnostics declarations use the exact level names and exclude legacy sinks', () => {
+  const declarations = readTree(declarationsRoot);
+  const publicIndex = fs.readFileSync(
+    path.join(workspaceRoot, 'packages', 'framework', 'dist', 'index.d.ts'),
+    'utf8'
+  );
+  const diagnostics = declarationBody(declarations, 'ZLinkDiagnosticsOptions');
+  const builder = declarationBody(declarations, 'ZLinkDispatchOptionsBuilder');
+
+  assert.match(
+    declarations,
+    /type ZLinkMessageFlowLogMode = 'off' \| 'errors' \| 'normal' \| 'detailed'/
+  );
+  assert.equal(require('../../packages/framework/dist').ZLinkMessageFlowLogMode, undefined);
+  for (const removed of [
+    'setMessageFlowObserver',
+    'setRuntimeErrorSink',
+    'traceLogFile',
+    'traceLabel'
+  ]) {
+    assert.doesNotMatch(builder, new RegExp(`\\b${removed}\\b`));
+  }
+  assert.doesNotMatch(diagnostics, /logFile|label/);
+  for (const removedType of [
+    'ZLinkMessageFlowEvent',
+    'ZLinkMessageFlowObserver',
+    'ZLinkRuntimeErrorSink',
+    'ZLinkRuntimeErrorEvent'
+  ]) {
+    assert.doesNotMatch(publicIndex, new RegExp(`\\b${removedType}\\b`));
+  }
+});
+
 test('Node public contract snapshot pins the binding package version', () => {
   const binding = require('../../node_modules/@zlink-systems/zlink/package.json');
   assert.equal(binding.version, publicContractSnapshot.bindingVersion);
@@ -244,10 +277,7 @@ test('runtime topology and supporting exact names are declared by their producti
   for (const name of runtimeTypes) {
     assert.match(frameworkDeclarations, new RegExp(`\\binterface ${name}\\b`));
   }
-  const runtimeAliases = [
-    'ZLinkClientServerRole',
-    'ZLinkMessageFlowReason'
-  ];
+  const runtimeAliases = ['ZLinkClientServerRole'];
   for (const name of runtimeAliases) {
     assert.match(frameworkDeclarations, new RegExp(`\\btype ${name}\\b`));
   }

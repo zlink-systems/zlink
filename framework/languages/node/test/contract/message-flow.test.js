@@ -1,15 +1,28 @@
 'use strict';
 
 // MFLOW-xxx: message-flow tracing parity (mirrors C++/.NET/Java). Exercises the tracer's
-// mode gating (zero-cost off), structured node-stamped output, file routing, observer
-// offload, the live-mode toggle, and the stream correlation_id wire round-trip
+// mode gating (zero-cost off), OpenTelemetry provider output, the live-mode toggle,
+// and the stream correlation_id wire round-trip
 // (framework <-> connector codecs byte-identical).
 
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const os = require('node:os');
-const path = require('node:path');
 const test = require('node:test');
+const { logs } = require('@opentelemetry/api-logs');
+const { LoggerProvider } = require('@opentelemetry/sdk-logs');
+
+const telemetryRecords = [];
+let failTelemetryProvider = false;
+const loggerProvider = new LoggerProvider({
+  processors: [{
+    onEmit(record) {
+      if (failTelemetryProvider) throw new Error('logger provider failed');
+      telemetryRecords.push(record);
+    },
+    forceFlush() { return Promise.resolve(); },
+    shutdown() { return Promise.resolve(); }
+  }]
+});
+logs.setGlobalLoggerProvider(loggerProvider);
 
 const framework = require('../../packages/framework/dist/internal');
 const streamProtocol = require('../../packages/framework/dist/runtime/streams/protocol');
@@ -22,8 +35,7 @@ const protocolCodecs = require('./helpers/stream-protocol-codecs');
 const {
   ZLinkMessageFlowTracer,
   createDiagnosticsContext,
-  createMessageFlowModeCell,
-  ZLinkMessageFlowLogMode
+  createMessageFlowModeCell
 } = framework;
 
 const ZLinkMessageFlowOutcome = {
@@ -48,15 +60,19 @@ function diagnostics(messageFlow, overrides = {}) {
   };
 }
 
-function makeTracer(diagnosticsOptions, providerResolver, messageFlowObserverType) {
-  const dispatch = { diagnostics: diagnosticsOptions, providerResolver };
+function makeTracer(diagnosticsOptions, sink = silentSink()) {
+  const dispatch = { diagnostics: diagnosticsOptions };
   const cell = createMessageFlowModeCell(dispatch);
-  const ctx = {
-    ...createDiagnosticsContext(dispatch, providerResolver, cell),
-    messageFlowObserverType
-  };
-  return { tracer: new ZLinkMessageFlowTracer(ctx, silentSink()), cell };
+  const ctx = createDiagnosticsContext(dispatch, undefined, cell);
+  return { tracer: new ZLinkMessageFlowTracer(ctx, sink), cell };
 }
+
+test.beforeEach(() => {
+  telemetryRecords.length = 0;
+  failTelemetryProvider = false;
+});
+
+test.after(async () => loggerProvider.shutdown());
 
 function receivedEvent() {
   return {
@@ -70,7 +86,7 @@ function receivedEvent() {
 }
 
 test('MFLOW-001 off mode is zero-cost: enabled() false and trace() is a no-op', () => {
-  const { tracer } = makeTracer(diagnostics(ZLinkMessageFlowLogMode.Off));
+  const { tracer } = makeTracer(diagnostics('off'));
   assert.equal(tracer.enabled(ZLinkMessageFlowOutcome.Received), false);
   assert.equal(tracer.enabled(ZLinkMessageFlowOutcome.Dropped), false);
   tracer.trace(receivedEvent());
@@ -78,144 +94,56 @@ test('MFLOW-001 off mode is zero-cost: enabled() false and trace() is a no-op', 
 });
 
 test('MFLOW-002 mode ladder gates phases by severity', () => {
-  const errorsOnly = makeTracer(diagnostics(ZLinkMessageFlowLogMode.ErrorsOnly)).tracer;
+  const errorsOnly = makeTracer(diagnostics('errors')).tracer;
   assert.equal(errorsOnly.enabled(ZLinkMessageFlowOutcome.Dropped), true);
   assert.equal(errorsOnly.enabled(ZLinkMessageFlowOutcome.Received), false);
 
-  const keyTransitions = makeTracer(diagnostics(ZLinkMessageFlowLogMode.KeyTransitions)).tracer;
+  const keyTransitions = makeTracer(diagnostics('normal')).tracer;
   assert.equal(keyTransitions.enabled(ZLinkMessageFlowOutcome.Received), true);
   assert.equal(keyTransitions.enabled(ZLinkMessageFlowOutcome.Replied), true);
   assert.equal(keyTransitions.enabled(ZLinkMessageFlowOutcome.Dropped), true);
 });
 
-test('MFLOW-003/005 structured key=value line with label= is written to the separated log file', () => {
-  const logDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zlink-mflow-'));
-  const logFile = path.join(logDir, 'flow.log');
-  const { tracer } = makeTracer(diagnostics(ZLinkMessageFlowLogMode.KeyTransitions, {
-    logFile,
-    label: 'api'
-  }));
+test('MFLOW-003/005 standard logger provider receives the structured record', () => {
+  const { tracer } = makeTracer(diagnostics('normal'));
   tracer.trace(receivedEvent());
   assert.equal(tracer.tracedCount, 1);
-  const line = fs.readFileSync(logFile, 'utf8').trim();
-  assert.match(line, /phase=received/);
-  assert.match(line, /surface=channel/);
-  assert.match(line, /label=api/);
-  assert.match(line, /packet=EchoRequest/);
-  assert.match(line, /channel=api/);
-  assert.match(line, /corr=corr-1/);
+  assert.equal(telemetryRecords.length, 1);
+  const record = telemetryRecords[0];
+  assert.equal(record.eventName, 'zlink.message_flow');
+  assert.equal(record.attributes.phase, 'received');
+  assert.equal(record.attributes.surface, 'channel');
+  assert.equal(record.attributes.packet_name, 'EchoRequest');
+  assert.equal(record.attributes.channel_name, 'api');
+  assert.equal(record.attributes.correlation_id, 'corr-1');
 });
 
-test('MFLOW-004 observer offload delivers the event asynchronously', async () => {
-  const events = [];
-  class FlowObserver {
-    onMessageFlow(event) {
-      events.push(event);
-    }
-  }
-  const { tracer } = makeTracer(diagnostics(ZLinkMessageFlowLogMode.KeyTransitions, {
-    logFile: path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'zlink-mflow-obs-')), 'flow.log')
-  }));
-  const observed = makeTracer(
-    diagnostics(ZLinkMessageFlowLogMode.KeyTransitions),
-    undefined,
-    FlowObserver
-  ).tracer;
-  assert.equal(events.length, 0, 'observer must not fire synchronously');
-  observed.trace(receivedEvent());
-  assert.equal(events.length, 0, 'observer is offloaded, not synchronous');
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(events.length, 1);
-  assert.equal(events[0].outcome, 'succeeded');
-  assert.equal(events[0].phase, 'received');
-  assert.equal(events[0].correlationId, 'corr-1');
-  void tracer;
-});
-
-test('MFLOW-004b success-path observer failures use message-flow-observer task', async () => {
+test('MFLOW-004 provider failures do not change the message operation', () => {
   const failures = [];
-  class ThrowingObserver {
-    onMessageFlow() {
-      throw new Error('success observer failed');
-    }
-  }
-  const dispatch = { diagnostics: diagnostics(ZLinkMessageFlowLogMode.KeyTransitions) };
-  const cell = createMessageFlowModeCell(dispatch);
-  const ctx = {
-    ...createDiagnosticsContext(dispatch, undefined, cell),
-    messageFlowObserverType: ThrowingObserver
-  };
-  const tracer = new ZLinkMessageFlowTracer(ctx, {
+  const { tracer } = makeTracer(diagnostics('normal'), {
     reportRuntimeTaskException(taskName, error) {
       failures.push({ taskName, error });
     }
   });
-
-  tracer.trace(receivedEvent());
-  await new Promise((resolve) => setImmediate(resolve));
-
+  failTelemetryProvider = true;
+  assert.doesNotThrow(() => tracer.trace(receivedEvent()));
   assert.equal(failures.length, 1);
-  assert.equal(failures[0].taskName, 'message-flow-observer');
-  assert.equal(failures[0].error.message, 'success observer failed');
-  assert.equal(tracer.observerFailureCount, 1);
-});
-
-test('MFLOW-004c observer failure emits one bounded public runtime error event', async () => {
-  const events = [];
-  class ThrowingObserver {
-    onMessageFlow() {
-      throw new Error('observer failed');
-    }
-  }
-  class RuntimeErrorSink {
-    onRuntimeError(event) {
-      events.push(event);
-    }
-  }
-  const providerResolver = {
-    get(type) {
-      return type === RuntimeErrorSink ? new RuntimeErrorSink() : undefined;
-    }
-  };
-  const dispatch = { diagnostics: diagnostics(ZLinkMessageFlowLogMode.KeyTransitions) };
-  const cell = createMessageFlowModeCell(dispatch);
-  const ctx = {
-    ...createDiagnosticsContext(dispatch, providerResolver, cell),
-    messageFlowObserverType: ThrowingObserver,
-    runtimeErrorSinkType: RuntimeErrorSink
-  };
-  const tracer = new ZLinkMessageFlowTracer(ctx, silentSink());
-
-  tracer.trace(receivedEvent());
-  await new Promise((resolve) => setImmediate(resolve));
-
-  assert.equal(tracer.observerFailureCount, 1);
-  assert.equal(events.length, 1);
-  assert.deepEqual(Object.keys(events[0]).sort(), [
-    'eventId',
-    'kind',
-    'reason',
-    'source',
-    'timestamp'
-  ]);
-  assert.equal(events[0].eventId, 'zlink.runtime_error');
-  assert.equal(events[0].kind, 'observer_failed');
-  assert.equal(events[0].source, 'message_flow_observer');
-  assert.equal(events[0].reason, 'Error: observer failed');
-  assert.equal(events[0].timestamp instanceof Date, true);
+  assert.equal(failures[0].taskName, 'logger-provider');
+  assert.equal(failures[0].error.message, 'logger provider failed');
+  assert.equal(tracer.providerFailureCount, 1);
 });
 
 test('MFLOW-009 live-mode cell toggles every reader without rebuilding the tracer', () => {
-  const { tracer, cell } = makeTracer(diagnostics(ZLinkMessageFlowLogMode.Off));
+  const { tracer, cell } = makeTracer(diagnostics('off'));
   assert.equal(tracer.enabled(ZLinkMessageFlowOutcome.Received), false);
-  cell.mode = ZLinkMessageFlowLogMode.Verbose;
+  cell.mode = 'detailed';
   assert.equal(tracer.enabled(ZLinkMessageFlowOutcome.Received), true);
-  cell.mode = ZLinkMessageFlowLogMode.Off;
+  cell.mode = 'off';
   assert.equal(tracer.enabled(ZLinkMessageFlowOutcome.Received), false);
 });
 
 test('MFLOW-009 snapshots live mode for every transition in one ambient flow', () => {
-  const { tracer, cell } = makeTracer(diagnostics(ZLinkMessageFlowLogMode.KeyTransitions));
+  const { tracer, cell } = makeTracer(diagnostics('normal'));
   const inbound = {
     flowId: '018f2b63-9d4a-7abc-8def-0123456789ab',
     flowOrigin: 'Inbound'
@@ -223,7 +151,7 @@ test('MFLOW-009 snapshots live mode for every transition in one ambient flow', (
 
   flowContext.runWithFlow(inbound, () => {
     tracer.trace(receivedEvent());
-    cell.mode = ZLinkMessageFlowLogMode.Off;
+    cell.mode = 'off';
     assert.equal(tracer.enabled(ZLinkMessageFlowOutcome.Dispatched), true);
     tracer.trace({ ...receivedEvent(), outcome: ZLinkMessageFlowOutcome.Dispatched });
   });
@@ -232,21 +160,8 @@ test('MFLOW-009 snapshots live mode for every transition in one ambient flow', (
   assert.equal(tracer.enabled(ZLinkMessageFlowOutcome.Dispatched), false);
 });
 
-test('MFLOW-EXT flow sampling keeps or drops every event in one flow together', async () => {
-  const events = [];
-  class FlowObserver {
-    onMessageFlow(event) {
-      events.push(event);
-    }
-  }
-  const { tracer } = makeTracer(
-    diagnostics(ZLinkMessageFlowLogMode.KeyTransitions, {
-      sampleRate: 0.5,
-      logFile: path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'zlink-flow-sample-')), 'flow.log')
-    }),
-    undefined,
-    FlowObserver
-  );
+test('MFLOW-EXT flow sampling keeps or drops every event in one flow together', () => {
+  const { tracer } = makeTracer(diagnostics('normal', { sampleRate: 0.5 }));
   const flow = {
     flowId: '018f2b63-9d4a-7abc-8def-0123456789ab',
     flowOrigin: 'Inbound'
@@ -258,9 +173,10 @@ test('MFLOW-EXT flow sampling keeps or drops every event in one flow together', 
     ...flow,
     outcome: ZLinkMessageFlowOutcome.Dispatched
   });
-  await new Promise((resolve) => setImmediate(resolve));
-
-  assert.ok(events.length === 0 || events.length === 2, `sampled ${events.length} of 2 events`);
+  assert.ok(
+    telemetryRecords.length === 0 || telemetryRecords.length === 2,
+    `sampled ${telemetryRecords.length} of 2 events`
+  );
 });
 
 test('MFLOW-EXT create-if-absent keeps one flow across an async continuation', async () => {
@@ -291,24 +207,11 @@ test('MFLOW-EXT channel wire and outbound trace use the same created flow', asyn
       );
       try {
         const header = JSON.parse(Buffer.from(parts[0]).toString());
-        const events = [];
-        class FlowObserver {
-          onMessageFlow(event) {
-            events.push(event);
-          }
-        }
-        const { tracer } = makeTracer(
-          diagnostics(ZLinkMessageFlowLogMode.KeyTransitions, {
-            logFile: path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'zlink-flow-wire-')), 'flow.log')
-          }),
-          undefined,
-          FlowObserver
-        );
+        const { tracer } = makeTracer(diagnostics('normal'));
         tracer.trace(receivedEvent());
-        await new Promise((settled) => setImmediate(settled));
-        assert.equal(events[0].flowId, header.flowId);
+        assert.equal(telemetryRecords[0].attributes.flow_id, header.flowId);
         assert.equal(header.flowOrigin, 3);
-        assert.equal(events[0].flowOrigin, 'Application');
+        assert.equal(telemetryRecords[0].attributes.flow_origin, 'Application');
         resolve();
       } catch (error) {
         reject(error);

@@ -1,5 +1,4 @@
 import { ZLinkModule, zlinkFramework, zlinkModule } from '@zlink-systems/nestjs';
-import { ZLinkMessageFlowLogMode } from '@zlink-systems/framework';
 import { bingoFrameworkProtobuf } from '../../Shared/Contracts/protobuf-framework-codec';
 import { PlayerActorFactory } from './Infrastructure/ZLink/Actors/player-actor-factory';
 import { PendingBingoActorDestroyRegistry } from './Infrastructure/ZLink/Actors/player-actor-lifecycle-handlers';
@@ -36,9 +35,7 @@ function createBingoPlayModule() {
           });
           builder.setApplicationVersion(1n);
           builder.configureDispatch()
-            .messageFlow(ZLinkMessageFlowLogMode.KeyTransitions)
-            .traceLogFile(`${config.logDir}/flow-play.log`)
-            .traceLabel('play');
+            .messageFlow('normal');
           builder.addLocationStore(createBingoLocationStore(config));
           builder.addRelocationStore(createBingoRelocationStore(config));
           bingoLocationOptions(builder.configureLocations());

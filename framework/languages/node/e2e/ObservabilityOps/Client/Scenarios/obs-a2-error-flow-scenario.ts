@@ -5,7 +5,7 @@ import {
   zlinkStreamJsonCodec
 } from '@zlink-systems/stream-connector';
 import { options, require, session } from '../Support/scenario-support.js';
-import { readFlowLog, waitFor } from '../Support/observability-support.js';
+import { readFlowRecords, waitFor } from '../Support/observability-support.js';
 
 export async function runObsA2(): Promise<void> {
   const connector = zlinkStreamConnectorFactory.create({
@@ -25,8 +25,9 @@ export async function runObsA2(): Promise<void> {
     await connector.close();
   }
   require(failed, 'OBS-A2 unknown packet unexpectedly succeeded.');
-  const line = await waitFor(async () => (await readFlowLog(session))
-    .split('\n').find((candidate) => candidate.includes('phase=error') && candidate.includes('flow=')) ?? '',
-  (value) => value.length > 0, 'OBS-A2 dispatch error line did not contain flow');
-  require(/flow=[0-9a-f-]{36}/.test(line), 'OBS-A2 error flow is not a UUID.');
+  const record = await waitFor(async () => (await readFlowRecords(session))
+    .find((candidate) => candidate.eventId === 'zlink.dispatch_error'),
+  (value) => value !== undefined, 'OBS-A2 dispatch error record did not contain flow');
+  require(typeof record?.flow_id === 'string' && /^[0-9a-f-]{36}$/.test(record.flow_id),
+    'OBS-A2 error flow is not a UUID.');
 }

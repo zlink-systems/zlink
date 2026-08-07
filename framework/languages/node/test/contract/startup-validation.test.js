@@ -41,6 +41,30 @@ test('Application HWM does not depend on the removed RouteMesh message bound', (
   }));
 });
 
+test('diagnostics builder accepts only the exact levels and finite sample range', () => {
+  for (const mode of ['off', 'errors', 'normal', 'detailed']) {
+    assert.doesNotThrow(() => framework.createFrameworkOptions((options) => {
+      options.configureDispatch().messageFlow(mode);
+    }));
+  }
+  for (const mode of ['errorsOnly', 'keyTransitions', 'verbose', 'unknown']) {
+    assert.throws(
+      () => framework.createFrameworkOptions((options) => {
+        options.configureDispatch().messageFlow(mode);
+      }),
+      /messageFlow must be one of/
+    );
+  }
+  for (const rate of [-0.1, 1.1, Number.NaN, Number.POSITIVE_INFINITY]) {
+    assert.throws(
+      () => framework.createFrameworkOptions((options) => {
+        options.configureDispatch().traceSampleRate(rate);
+      }),
+      /finite number in 0\.\.1/
+    );
+  }
+});
+
 test('Node registration rejects subscriber capability without matching handlers', () => {
   assert.throws(
     () => framework.createFrameworkRegistration(framework.createFrameworkOptions((builder) => {

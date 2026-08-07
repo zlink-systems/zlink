@@ -161,7 +161,7 @@ test('framework host startup begins a lifecycle flow', async () => {
     registration: framework.createFrameworkRegistration({
       dispatch: {
         diagnostics: {
-          messageFlow: framework.ZLinkMessageFlowLogMode.KeyTransitions,
+          messageFlow: 'normal',
           sampleRate: 1,
           includeMessageSizes: false
         }

@@ -1,4 +1,3 @@
-import { ZLinkMessageFlowLogMode } from '@zlink-systems/framework';
 import { ZLinkModule, zlinkFramework, zlinkModule } from '@zlink-systems/nestjs';
 import { SampleNames } from '../../Shared/Configuration/sample-names';
 import { CourierActorDirectory, CourierActorFactory } from './courier-actor';
@@ -17,7 +16,6 @@ type CourierOptions = {
 function createCourierActorNodeModule(options: CourierOptions) {
   class CourierActorNodeModule {}
   const directory = new CourierActorDirectory();
-  const nodeLabel = options.courierId === 'courier-a' ? 'courier-a' : 'courier-b';
   const spotEndpointKey = options.courierId === 'courier-a'
     ? 'courierActorNode1SpotEndpoint'
     : 'courierActorNode2SpotEndpoint';
@@ -38,9 +36,7 @@ function createCourierActorNodeModule(options: CourierOptions) {
           const spotEndpoint = config[spotEndpointKey];
           const builder = zlinkFramework();
           builder.configureDispatch()
-            .messageFlow(ZLinkMessageFlowLogMode.KeyTransitions)
-            .traceLogFile(`${config.logDir}/flow-${nodeLabel}.log`)
-            .traceLabel(nodeLabel);
+            .messageFlow('normal');
           builder.addLocationStore(createDeliveryDispatchLocationStore(config));
           deliveryDispatchLocationOptions(builder.configureLocations());
           const mesh = builder.addRouteMesh(SampleNames.courierMeshName)

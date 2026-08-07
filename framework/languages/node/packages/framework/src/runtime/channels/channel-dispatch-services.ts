@@ -213,8 +213,7 @@ export class ZLinkChannelDispatchServices {
   private outboundFlow(): ZLinkMessageFlowTracer {
     this.outboundFlowValue ??= new ZLinkMessageFlowTracer(
       this.diagnosticsContext(),
-      { reportRuntimeTaskException() {} },
-      this.metricsValue
+      { reportRuntimeTaskException() {} }
     );
     return this.outboundFlowValue;
   }

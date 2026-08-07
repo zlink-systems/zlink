@@ -1,4 +1,3 @@
-import { ZLinkMessageFlowLogMode } from '@zlink-systems/framework';
 import { ZLinkModule, zlinkFramework, zlinkModule } from '@zlink-systems/nestjs';
 import { SampleNames } from '../Configuration/sample-names';
 import { createSupportChatLocationStore, supportChatLocationOptions } from '../Configuration/location-store';
@@ -25,9 +24,7 @@ function createSupportChatSessionModule() {
           const locationStore = createSupportChatLocationStore(config);
           const builder = zlinkFramework();
           builder.configureDispatch()
-            .messageFlow(ZLinkMessageFlowLogMode.KeyTransitions)
-            .traceLogFile(`${config.logDir}/flow-session.log`)
-            .traceLabel('session');
+            .messageFlow('normal');
           builder.addLocationStore(locationStore);
           supportChatLocationOptions(builder.configureLocations());
           const mesh = builder.addRouteMesh(SampleNames.conversationSpotMesh)

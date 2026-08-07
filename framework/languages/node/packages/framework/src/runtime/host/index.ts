@@ -58,7 +58,6 @@ import {
   ZLinkFrameworkRuntimeState,
   ZLinkFrameworkTerminationOutcome,
   ZLinkFrameworkTerminationReason,
-  ZLinkMessageFlowLogMode,
   ZLinkObjectRole,
   ZLinkPeerState,
   zlinkMessageMetadata,
@@ -71,7 +70,8 @@ import {
   ZLinkDispatchErrorSurface,
   ZLinkDispatchMessageKind
 } from '../../contracts/Dispatch/ZLinkDispatchOptions';
-import type { ZLinkMessageFlowControl } from '../../contracts';
+import type { ZLinkMessageFlowControl, ZLinkMessageFlowLogMode } from '../../contracts';
+import { requireMessageFlowLogMode } from '../../contracts/Configuration/DiagnosticsValidation';
 import {
   DefaultZLinkChannelRuntimeOptions,
   ZLinkDispatchErrorReporter,
@@ -276,7 +276,7 @@ export class ZLinkFrameworkRuntimeHost implements
   // Shared, runtime-mutable message-flow mode cell — installed once so
   // setMessageFlowMode flips every surface live. Seeded from config at start().
   private readonly messageFlowModeCell: ZLinkMessageFlowModeCell = {
-    mode: ZLinkMessageFlowLogMode.ErrorsOnly
+    mode: 'errors'
   };
   private readonly dispatchErrorReporters = new WeakMap<ZLinkDispatchErrorSink, ZLinkDispatchErrorReporter>();
   private readonly runtimeOrPreStartErrorSink: ZLinkDispatchErrorSink = {
@@ -1117,7 +1117,7 @@ export class ZLinkFrameworkRuntimeHost implements
    * surface starts/stops tracing without a restart.
    */
   setMessageFlowMode(mode: ZLinkMessageFlowLogMode): void {
-    this.messageFlowModeCell.mode = mode;
+    this.messageFlowModeCell.mode = requireMessageFlowLogMode(mode);
   }
 
   messageFlowMode(): ZLinkMessageFlowLogMode {
@@ -1338,7 +1338,7 @@ export class ZLinkFrameworkRuntimeHost implements
       // Seed the shared live-mode cell from the configured mode (default errorsOnly).
       this.messageFlowModeCell.mode =
         this.options.registration.dispatch?.diagnostics.messageFlow ??
-        ZLinkMessageFlowLogMode.ErrorsOnly;
+        'errors';
       const dispatchErrors = this.createDispatchErrorReporter(this.executionState.errorSink);
       channelRuntime = new ZLinkChannelRuntimeManager(
         this.options.registration,
@@ -3015,9 +3015,9 @@ export class ZLinkFrameworkRuntimeHost implements
 
   private flowCreationEnabled(): boolean {
     const mode = this.executionState === undefined
-      ? this.options.registration.dispatch?.diagnostics.messageFlow ?? ZLinkMessageFlowLogMode.ErrorsOnly
+      ? this.options.registration.dispatch?.diagnostics.messageFlow ?? 'errors'
       : this.messageFlowModeCell.mode;
-    return mode !== ZLinkMessageFlowLogMode.Off;
+    return mode !== 'off';
   }
 
   private runLifecycle<T>(operation: () => T): T {
