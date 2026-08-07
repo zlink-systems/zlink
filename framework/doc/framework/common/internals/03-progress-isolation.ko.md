@@ -217,16 +217,6 @@ infrastructure 전용 작업을 부르거나 그 반대가 되면, 나눈 의미
 표시할지는 자유다. 관찰 기준은 하나다 — application handler를 인위적으로 대기시킨
 상태에서 호출 timeout·종료 절차·peer 연결 처리가 진행되는지.
 
-### C++ STREAM에서의 경계
-
-C++ STREAM은 session callback을 transport read callback 안에서 직접 실행하지 않고
-runtime의 async dispatch로 제출한다. 연결 해제 시에는 disconnect dispatch를 제출한 뒤
-`drain_async_dispatch`로 pending application dispatch의 완료를 확인하고 transport를
-닫는다. 외부 TCP·TLS·WebSocket write는 connection별 queue로 직렬화하고, write
-completion 또는 cancellation이 확인된 뒤 동기 호출이 반환된다. 이 구조는 application
-handler의 대기가 infrastructure 수신·송신·종료 진행을 막지 않도록 하는 현재 C++ 구현
-경계다.
-
 ## 8. 확인할 결과
 
 - Application handler를 대기시킨 상태에서 그 호출의 timeout이 발동한다.

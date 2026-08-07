@@ -317,16 +317,11 @@ const reply = await client
     .submit<CheckoutReply>();              // receives the terminal reply as CheckoutReply.
 ```
 
-`maxMessageSize` is only set before startup, and a runtime property
-isn't provided. `0` normalizes to the maximum complete message size the
-binding or transport can receive. If transport is unlimited, it uses the
-service wire's `uint32` representation limit minus envelope overhead. A
-positive value can't exceed that representation limit — exceeding it is
-rejected as a startup configuration error. Peers exchange the
-normalized value in the internal handshake, and sender and receiver each
-apply the smaller of the two values as the effective bound before
-complete message allocation. A public option for this negotiation isn't
-provided.
+`ZLinkMeshNodeSocketConfig` doesn't provide a Framework-level message-size
+setting for RouteMesh SS. A sender or receiver doesn't reject a message because
+of a Framework-level complete-message cap. Transport and service-wire
+representation bounds, HWM, and mailbox budgets remain separate resource and
+wire guards.
 
 ## 5. Route Handler And One-Way Submit
 

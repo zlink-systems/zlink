@@ -87,8 +87,6 @@ public interface ZLinkNetworkOptions {
 }
 
 public interface ZLinkMeshNodeSocketConfig {
-    long maxMessageSize();
-    void setMaxMessageSize(long value);
     long sendHighWaterMark();
     void setSendHighWaterMark(long value);
     long receiveHighWaterMark();
@@ -384,16 +382,11 @@ This value isn't exposed as a public option per Channel/handler/peer.
 The Location owner lease option is a separate store contract and doesn't
 substitute for transport liveness.
 
-`maxMessageSize` is only set before startup, and a runtime setter isn't
-provided. `0` normalizes to the maximum complete message size the
-bindings or transport can receive. If transport is unlimited, it uses
-the service wire's `uint32` representation limit minus envelope
-overhead. A positive value can't exceed that representation limit —
-exceeding it is rejected as a startup configuration error. Peers exchange
-the normalized value in the internal handshake, and sender and receiver
-each apply the smaller of the two values as the effective bound before
-complete message allocation. A public option for this negotiation isn't
-provided.
+`ZLinkMeshNodeSocketConfig` doesn't provide a Framework-level message-size
+setting for RouteMesh SS. A sender or receiver doesn't reject a message because
+of a Framework-level complete-message cap. Transport and service-wire
+representation bounds, HWM, and mailbox budgets remain separate resource and
+wire guards.
 
 `mailboxMessageBudget` and `mailboxByteBudget` are the caps on message
 count and byte sum for the per-owner application mailbox. Byte
@@ -501,8 +494,6 @@ public interface systems.zlink.framework.configuration.ZLinkEndpointConnections 
   public abstract java.util.List<java.lang.String> listConnections();
 }
 public interface systems.zlink.framework.configuration.ZLinkMeshNodeSocketConfig {
-  public abstract long maxMessageSize();
-  public abstract void setMaxMessageSize(long);
   public abstract long sendHighWaterMark();
   public abstract void setSendHighWaterMark(long);
   public abstract long receiveHighWaterMark();

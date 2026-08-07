@@ -405,7 +405,7 @@ scenario는 SS transport에 listener 상한을 추가하지 않고, 여러 크�
   request를 한 번 더 보낸다.
 - 검증: 각 payload request는 입력과 같은 길이와 checksum의 reply를 받고 provider handler가 한 번
   실행된다. 마지막 정상 request도 reply를 받으며, payload 일부만 전달된 evidence가 없다.
-- 세부 동작: [RouteMesh SS message 크기](../spec/07-channel-topology.ko.md#8-routemesh-ss-message-크기)의 SS 경계를 확인한다.
+- 세부 동작: [RouteMesh SS message 크기와 mailbox 상한](../spec/07-channel-topology.ko.md#8-routemesh-ss-message-크기와-mailbox-상한)의 SS 경계를 확인한다.
   StreamNode 상한은 [STREAM session — Framework 내부 recv loop와 application 표면](../spec/19-stream-session.ko.md#4-framework-내부-recv-loop와-application-표면)에서
   별도로 정의한다.
 

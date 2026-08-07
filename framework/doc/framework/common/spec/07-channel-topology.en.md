@@ -78,7 +78,6 @@ public interface IZLinkNetworkOptions
 
 public interface IZLinkMeshNodeSocketConfig
 {
-    // RouteMesh SS has no Framework-level message-size setting.
     ulong SendHighWaterMark { get; set; }
     ulong ReceiveHighWaterMark { get; set; }
     ulong MailboxMessageBudget { get; set; }
@@ -680,29 +679,32 @@ and RID direct is defined by
 
 ## 8. RouteMesh SS Message Size And Mailbox Caps
 
-`ConfigureRouterSocket()` sets the complete service-wire message
-`MaxMessageSize` for a RouteMesh MeshNode before startup. It is the maximum
-size of one message accepted by the ROUTER socket; application handlers don't
-replace it by checking the decoded payload themselves. `SendHighWaterMark`
-and `ReceiveHighWaterMark`, and `SendTimeout` and `ReceiveTimeout`, apply to
-separate socket directions.
+A RouteMesh MeshNode has no Framework-level `MaxMessageSize` startup setting.
+The RouteMesh ServerServer (SS) transport doesn't expose a listener
+message-size setter, and the Framework doesn't reject a complete message
+solely because of a Framework-level `MaxMessageSize`.
+
+`ConfigureRouterSocket()` applies `SendHighWaterMark` and
+`ReceiveHighWaterMark`, and `SendTimeout` and `ReceiveTimeout`, to separate
+socket directions.
 
 `MailboxMessageBudget` and `MailboxByteBudget` are separate from socket HWM.
 They cap the message count and total bytes held by each owner's application
 mailbox. The amount a socket can receive and the amount an owner can retain
 for execution are not the same setting. Their byte-accounting rule is defined
-by [Framework API §8.2](06-framework-api.en.md#82-handler-execution-objects-and-dependency-lifetime).
+by [Framework API §8.2](06-framework-api.en.md#82-handler-execution-object-and-dependency-lifetime).
 
-A complete message over the cap isn't partially delivered to a handler, and
-the request ends with the terminal result defined by the [error model](32-framework-error-model.en.md).
-The transport and service-wire representation limits and process-memory limit
-also apply.
+Messages still follow the transport and service-wire representation limits
+and the process-memory limit. If one of those lower-level limits rejects a
+message, the Framework doesn't deliver a partial payload to a handler, and the
+request ends with the terminal result defined by the
+[error model](32-framework-error-model.en.md). An application handler checking
+decoded payload length doesn't replace those lower-level limits.
 
 ClientServer keeps the regular application-listener `MaxMessageSize` contract
 defined by [Framework API §6](06-framework-api.en.md). It doesn't inherit the
-StreamNode's `64 KiB` default or its Core STREAM direction rule. The only
-Framework message-size rule added by this section is that RouteMesh SS has no
-separate listener setting; the StreamNode Core STREAM inbound limit is defined
+StreamNode's `64 KiB` default or its Core STREAM direction rule. RouteMesh SS
+has no separate listener message-size setting; the StreamNode Core STREAM inbound limit is defined
 by [STREAM session §7](19-stream-session.en.md#7-registration-model).
 
 ## 9. The Boundary With Classic Fanout

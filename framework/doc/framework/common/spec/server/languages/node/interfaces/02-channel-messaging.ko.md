@@ -282,12 +282,9 @@ const reply = await client
     .submit<CheckoutReply>();              // terminal reply를 CheckoutReply로 받는다.
 ```
 
-`maxMessageSize`는 startup 전에만 설정하며 실행 중 property를 제공하지 않는다. `0`은 binding 또는
-transport가 수신할 수 있는 최대 complete message 크기로 정규화한다. Transport가 unlimited이면 service
-wire의 `uint32` 표현 한계에서 envelope overhead를 뺀 값을 사용한다. 양수는 그 표현 한계를 넘을 수 없으며
-넘으면 startup 설정 오류로 거부한다. Peer는 정규화한 값을 내부 handshake로 교환하고 sender와 receiver는
-두 값 중 작은 effective bound를 complete message allocation 전에 적용한다. 이 negotiation을 위한 public
-option은 제공하지 않는다.
+`ZLinkMeshNodeSocketConfig`는 RouteMesh SS의 Framework-level message-size 설정을 제공하지 않는다.
+Sender와 receiver는 Framework-level complete-message 상한으로 message를 거부하지 않는다. Transport와
+service-wire 표현 한계, HWM과 mailbox budget은 별도 자원·wire guard로 유지한다.
 
 ## 5. Route handler와 one-way submit
 

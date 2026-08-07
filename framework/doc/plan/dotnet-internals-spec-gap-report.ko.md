@@ -8,7 +8,7 @@ title: ".NET Framework server 스펙 구현 Gap 리포트"
 - **공개 계약 기준**: 현재 worktree의 `framework/doc/framework/common/spec/`와 .NET exact interface
 - **내부 구조 기준**: 현재 worktree의 `framework/doc/framework/common/internals/` 01–12
 - **메시지 크기 계약 보정**: 2026-08-07 사용자 확인에 따라 RouteMesh ServerServer에는 Framework message-size 상한이 없다. 별도의 기본 64 KiB·startup 설정 계약은 외부 Client가 StreamNode의 Core STREAM socket으로 보내는 C→S complete message에만 적용한다. ClientServer Channel은 기존 negotiated complete-message 계약을 유지한다.
-- **구현 기준**: `framework/languages/dotnet/src/` (`main` commit `425b9c2a8272`; 직전 audit 뒤 .NET production source 변경 없음)
+- **구현 기준**: 전체 audit 기준은 `425b9c2a8272`, 복구·머지 뒤 증분 재검토 기준은 현재 `main` commit `e2119caeda`다. 이 commit의 .NET production 변경 중 RouteMesh message-size, ClientServer와 Actor 경로를 다시 대조했으며 기존 gap을 종결할 변경은 확인하지 못했다.
 - **판정 방법**: exact public declaration, production 호출 경로, 오류·수명주기·동시성·HWM 의미, service wire codec과 실제 test assertion을 차례로 대조했다. Type이나 method가 존재하는지만으로 완료 판정하지 않았다. 2차 검토는 `gpt-5.6-sol` high 독립 reviewer가 기존 판정을 반증하고 누락을 찾은 뒤, 지적된 경로를 현재 source에서 다시 확인했다.
 
 현재 `.NET Framework server` 구현은 지정된 스펙을 모두 만족하지 않는다. Public exact interface 3개 영역과 runtime·구조·비용 의미 15개 영역에서 구현 gap을 확인했다. 별도로 timer option은 language exact interface와 canonical wire schema가 서로 충돌하므로 구현 gap으로 확정하지 않고 contract 정본 정리가 필요한 보류 항목으로 분리했다. 특히 현재 worktree에서 추가된 object-location query는 contract test가 실제 누락을 검출했다. 일부 gap에는 스펙보다 약한 assertion이 있고, 나머지는 해당 의미 경계를 직접 검증하는 test가 없다.
@@ -17,6 +17,24 @@ Public API와 사용자에게 보이는 동작은 정식 spec과 exact interface
 gap은 그 계약을 구현하는 internals의 상태 표현, component 책임이나 불변 조건과 다르다는 판정이며,
 internals 자체가 새 공개 계약을 만들지는 않는다. 현재 source만으로 사용자-visible 장애나 성능 저하
 수치까지 측정됐다는 뜻도 아니며, 그런 주장은 별도 benchmark/process evidence가 있어야 한다.
+
+## 병렬 구현 세션 주의 사항
+
+이 보고서는 다른 언어의 gap 작업과 동시에 진행할 수 있지만, 세션끼리 같은 Git checkout과 index를
+공유해서는 안 된다. 각 세션은 이 문서가 포함된 기준 commit에서 별도 `git worktree`와 전용 branch를
+만들고, 시작 SHA를 작업 기록에 남긴다.
+
+- 이 세션은 해당 언어의 production source·test·package 자료와 이 gap 문서만 수정한다. 다른 언어
+  디렉터리, 다른 언어 gap 문서와 공통 spec·internals는 수정하지 않는다.
+- `framework/runtime/protocol/`의 schema·generated 파일, cross-language fixture, 공통 검증 script처럼
+  여러 언어가 함께 소비하는 파일은 통합 담당자 한 명만 수정한다. 변경이 필요하면 이 문서에 요구사항과
+  예상 wire/API 영향을 기록하고 공용 선행 commit을 요청한다.
+- 다른 세션의 변경을 원복하거나 포맷하지 않는다. Stage와 commit은 명시적인 경로 목록으로 제한하고
+  `git add -A`를 사용하지 않는다.
+- Gap 종결은 source 수정만으로 판단하지 않는다. Owner-layer regression, public API/exact snapshot,
+  package 또는 clean-consumer, 관련 process E2E 증거를 각각 기록하고 통과한 항목만 종결한다.
+- 언어별 branch를 합친 뒤 통합 담당자가 cross-language contract, service-wire fixture, 전체 문서 검사와
+  process E2E를 다시 실행한다. 병합 전 개별 성공을 전체 종결로 승격하지 않는다.
 
 ## 1. 판정 요약
 
@@ -89,9 +107,9 @@ Exact interface는 StreamNode builder가 `MaxMessageSize(long bytes)`를 직접 
 
 ### DOTNET-SIZE-001 — RouteMesh ServerServer에 없어야 할 16 MiB 상한이 있음
 
-확인된 계약은 RouteMesh ServerServer transport에 Framework-level `MaxMessageSize`를 두지 않는 것이다. 공통 channel spec도 이 결정을 그대로 적고 있다(`common/spec/07-channel-topology.ko.md:607-617`). Transport·service-wire 표현 한계와 process memory/HWM은 남지만 별도 complete-message 크기 설정이나 그 이유의 거절은 없어야 한다.
+확인된 계약은 RouteMesh ServerServer transport에 Framework-level `MaxMessageSize`를 두지 않는 것이다. 공통 channel spec도 이 결정을 그대로 적고 있다(`common/spec/07-channel-topology.ko.md:609-634`). Transport·service-wire 표현 한계와 process memory/HWM은 남지만 별도 complete-message 크기 설정이나 그 이유의 거절은 없어야 한다.
 
-실제 .NET은 `IZLinkMeshNodeSocketConfig.MaxMessageSize`를 public surface로 노출한다(`Contracts/Configuration/MeshNodeBuilders.cs:23-41`). RouteMesh router registration은 일반 `ZLinkSocketConfig`를 사용해 기본 16 MiB를 받고(`Runtime/Configuration/ZLinkFrameworkRegistration.cs:497-513`, `Runtime/Configuration/ZLinkSocketConfigs.cs:6-21`), initializer가 이를 managed MeshNode에 적용한다(`Runtime/Spots/ZLinkSpotNodeInitializer.cs:28-45`). Managed node는 native router receive option에 이 값을 설정할 뿐 아니라(`Runtime/Service/ZLinkManagedMeshNode.cs:242-255`) peer와 작은 값을 골라 모든 send 전에 complete-message 합계를 검사한다(`:8050-8057,8110-8135`). Unit test도 RouteMesh 기본값을 16 MiB로 고정한다(`UnitTests/Configuration/Registration/InboundDispatchOptionsTests.cs:197-217`).
+실제 .NET은 `IZLinkMeshNodeSocketConfig.MaxMessageSize`를 public surface로 노출한다(`Contracts/Configuration/MeshNodeBuilders.cs:23-41`). RouteMesh router registration은 일반 `ZLinkSocketConfig`를 사용해 기본 16 MiB를 받고(`Runtime/Configuration/ZLinkFrameworkRegistration.cs:497-513`, `Runtime/Configuration/ZLinkSocketConfigs.cs:6-21`), initializer가 이를 managed MeshNode에 적용한다(`Runtime/Spots/ZLinkSpotNodeInitializer.cs:28-45`). Managed node는 native router receive option에 이 값을 설정할 뿐 아니라(`Runtime/Service/ZLinkManagedMeshNode.cs:248-258`) peer와 작은 값을 골라 모든 send 전에 complete-message 합계를 검사한다(`:8048-8079,8132-8144`). Unit test도 RouteMesh 기본값을 16 MiB로 고정한다(`UnitTests/Configuration/Registration/InboundDispatchOptionsTests.cs:197-217`).
 
 완료 조건은 RouteMesh public `MaxMessageSize` 설정과 admission field, native receive cap 및 sender-side complete-message check를 제거하는 것이다. HWM/mailbox byte budget과 protocol 표현 한계는 별도 자원·wire guard로 유지한다. 회귀 검증은 임의의 새 payload 상한을 암시하지 않도록 public API snapshot, admission wire fixture와 일반 payload 무결성 E2E로 구성한다.
 

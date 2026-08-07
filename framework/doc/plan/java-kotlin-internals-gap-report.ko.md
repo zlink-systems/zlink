@@ -32,7 +32,27 @@ session과 Message Follow 항목의 오류 의미도 바로잡았다.
 14. STREAM 상한 초과를 `EMSGSIZE`로 기록하지 않고 segmented oversize 연결 종료를 보장하지 않는다.
 15. 만료된 `Ready` owner authority를 Missing과 구분하지 않아 Instance cold activation 경로에 진입한다.
 
-이 문서는 2026-08-07의 `main` branch, commit `425b9c2a8272`의 구현을 기준으로 작성했다.
+전체 audit은 2026-08-07의 `main` `425b9c2a8272` 구현을 기준으로 작성했다. 복구·머지 뒤 현재
+`main` `e2119caeda`까지 Java/Kotlin Framework production source 변경이 없음을 확인했으므로 기존
+구현 판정을 유지한다.
+
+## 병렬 구현 세션 주의 사항
+
+이 보고서는 다른 언어의 gap 작업과 동시에 진행할 수 있지만, 세션끼리 같은 Git checkout과 index를
+공유해서는 안 된다. 각 세션은 이 문서가 포함된 기준 commit에서 별도 `git worktree`와 전용 branch를
+만들고, 시작 SHA를 작업 기록에 남긴다.
+
+- 이 세션은 해당 언어의 production source·test·package 자료와 이 gap 문서만 수정한다. 다른 언어
+  디렉터리, 다른 언어 gap 문서와 공통 spec·internals는 수정하지 않는다.
+- `framework/runtime/protocol/`의 schema·generated 파일, cross-language fixture, 공통 검증 script처럼
+  여러 언어가 함께 소비하는 파일은 통합 담당자 한 명만 수정한다. 변경이 필요하면 이 문서에 요구사항과
+  예상 wire/API 영향을 기록하고 공용 선행 commit을 요청한다.
+- 다른 세션의 변경을 원복하거나 포맷하지 않는다. Stage와 commit은 명시적인 경로 목록으로 제한하고
+  `git add -A`를 사용하지 않는다.
+- Gap 종결은 source 수정만으로 판단하지 않는다. Owner-layer regression, public API/exact snapshot,
+  package 또는 clean-consumer, 관련 process E2E 증거를 각각 기록하고 통과한 항목만 종결한다.
+- 언어별 branch를 합친 뒤 통합 담당자가 cross-language contract, service-wire fixture, 전체 문서 검사와
+  process E2E를 다시 실행한다. 병합 전 개별 성공을 전체 종결로 승격하지 않는다.
 
 ## 2. 검토 범위와 판정 방법
 
@@ -191,7 +211,7 @@ mapping을 함께 바꾸고 Java/Kotlin snapshot으로 고정해야 한다.
 **판정: GAP**
 
 현재 common contract에서 RouteMesh ServerServer에는 Framework-level message-size 설정·협상·거부가
-없다 (`common/spec/07-channel-topology.ko.md:607-623`,
+없다 (`common/spec/07-channel-topology.ko.md:609-634`,
 `common/internals/12-service-wire-protocol.ko.md:91-110`). 따라서 raw MeshNode가
 `maxMessageSize`를 적용하지 않고 RouteMesh 송수신 경로에 effective bound 검사를 하지 않는 사실은
 gap이 아니다.
@@ -201,10 +221,10 @@ gap이 아니다.
 무관한 `effectiveMaxMessageBytes = 4 MiB`를 기록해 M6A codec으로 송수신한다는 점이다. Kotlin도
 Java public type을 그대로 사용하므로 같은 gap을 공유한다. RouteMesh의 설정·runtime setter와
 descriptor/admission/wire field뿐 아니라 finite MeshNode max를 요구하는 Application HWM startup
-validation도 제거하고, 아직 negotiated bound를 요구하는 Java exact interface와 이를 재사용하는
-Kotlin exact interface도 common contract에 맞춰야 한다.
+validation도 제거해야 한다. Java exact interface와 이를 재사용하는 Kotlin 문서는 common contract에
+맞게 RouteMesh 전용 setter와 negotiated-bound 설명을 제거했으므로 구현을 이 계약에 맞춰야 한다.
 증거: `configuration/ZLinkMeshNodeSocketConfig.java:8-10`,
-Java exact interface `interfaces/configuration-host.ko.md:87-90,124,332-337`,
+Java exact interface `interfaces/configuration-host.ko.md:87-122,326-331`,
 `runtime/mesh/MeshNodeRegistration.java:969-986`,
 `runtime/mesh/MeshNodeRegistration.java:493-507`,
 `runtime/channels/ZLinkRouteMeshRuntimeOptionsRuntime.java:29-43`,

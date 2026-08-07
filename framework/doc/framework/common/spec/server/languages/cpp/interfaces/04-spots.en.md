@@ -429,17 +429,11 @@ doesn't cancel a previously accepted transmission. Spot/Actor
 registration belongs to the
 [owner](../../../../01-glossary.en.md#owner) `mesh_node_builder_t`.
 
-`mesh_node_socket_config_t::max_message_size` is set only before
-startup, and no runtime setter is provided. `0` is normalized to the
-maximum complete message size the binding or transport can receive.
-If the transport is unlimited, it uses the value obtained by
-subtracting envelope overhead from the service wire's `uint32`
-representation limit. A positive value can't exceed that
-representation limit, and exceeding it is rejected as a startup
-configuration error. The peer exchanges the normalized value through
-an internal handshake, and the sender and receiver each apply the
-smaller effective bound of the two before complete-message allocation.
-A public option for this negotiation isn't provided.
+`mesh_node_socket_config_t` doesn't provide a Framework-level message-size
+setting for RouteMesh SS. A sender or receiver doesn't reject a message because
+of a Framework-level complete-message cap. Transport and service-wire
+representation bounds, HWM, and mailbox budgets remain separate resource and
+wire guards.
 If `send_timeout` isn't specified, the framework default of 1 second
 is used. If `receive_timeout` isn't specified, there's no separate
 bound on receive waiting. HWM must be 0 or greater.

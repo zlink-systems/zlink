@@ -77,7 +77,6 @@ public interface IZLinkNetworkOptions
 
 public interface IZLinkMeshNodeSocketConfig
 {
-    long MaxMessageSize { get; set; }
     ulong SendHighWaterMark { get; set; }
     ulong ReceiveHighWaterMark { get; set; }
     ulong MailboxMessageBudget { get; set; }
@@ -610,11 +609,12 @@ target에서 제외한다. 이미 제출한 작업과 RID direct의 종료 규�
 
 ## 8. RouteMesh SS message 크기와 mailbox 상한
 
-RouteMesh MeshNode의 `ConfigureRouterSocket()`은 complete service-wire message의
-`MaxMessageSize`를 startup 전에 설정한다. 이 값은 ROUTER socket이 받아들일 수 있는 한
-message의 상한이며 application handler가 payload를 직접 검사하는 방식으로 대체하지
-않는다. `SendHighWaterMark`와 `ReceiveHighWaterMark`, `SendTimeout`과 `ReceiveTimeout`은
-서로 다른 방향의 socket option으로 적용한다.
+RouteMesh MeshNode의 startup 설정에는 Framework-level `MaxMessageSize`가 없다. RouteMesh의
+ServerServer(SS) transport는 listener message-size setter를 제공하지 않으며, Framework-level
+`MaxMessageSize`를 이유로 complete message를 별도로 거부하지 않는다.
+
+`ConfigureRouterSocket()`의 `SendHighWaterMark`와 `ReceiveHighWaterMark`, `SendTimeout`과
+`ReceiveTimeout`은 서로 다른 방향의 socket option으로 적용한다.
 
 `MailboxMessageBudget`과 `MailboxByteBudget`은 socket HWM과 별개로 owner별 application
 mailbox에 적용하는 message 수와 byte 합계 상한이다. Socket이 수신할 수 있는 양과 owner가
@@ -622,14 +622,15 @@ mailbox에 적용하는 message 수와 byte 합계 상한이다. Socket이 수�
 [Framework API §8.2](06-framework-api.ko.md#82-handler-실행-객체와-dependency-수명)가
 정의한다.
 
-상한을 넘은 complete message는 payload 일부를 handler에 전달하지 않고, request는
-[오류 모델](32-framework-error-model.ko.md)에 정의된 terminal 결과로 끝난다. transport와
-service-wire protocol의 표현 한계, process memory 한계도 함께 적용된다.
+메시지는 transport와 service-wire protocol의 표현 한계, 그리고 process memory 한계를 계속
+따른다. 이 하위 한계에서 message가 거부되면 payload 일부를 handler에 전달하지 않고 request는
+[오류 모델](32-framework-error-model.ko.md)에 정의된 terminal 결과로 끝난다. Application handler가
+payload 크기를 검사하여 이 하위 한계를 대신하지 않는다.
 
 ClientServer는 [Framework API §6](06-framework-api.ko.md)가 정의하는 일반 application
 listener의 `MaxMessageSize` 계약을 유지한다. StreamNode의 `64 KiB` 기본값이나 Core STREAM의
-방향별 규칙을 ClientServer에 적용하지 않는다. 이 절에서 추가하지 않는 것은 RouteMesh SS의
-별도 listener 설정이며, StreamNode의 Core STREAM inbound 상한은 [STREAM session §7](19-stream-session.ko.md#7-등록-모델)가
+방향별 규칙을 ClientServer에 적용하지 않는다. RouteMesh SS에는 별도 listener message-size 설정이
+없으며, StreamNode의 Core STREAM inbound 상한은 [STREAM session §7](19-stream-session.ko.md#7-등록-모델)가
 정의한다.
 
 ## 9. Classic fanout과의 경계

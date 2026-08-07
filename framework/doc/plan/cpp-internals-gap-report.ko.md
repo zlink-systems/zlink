@@ -8,7 +8,7 @@ title: "C++ Framework 계약·내부 구현 Gap 리포트"
 - **공개 계약 기준**: `framework/doc/framework/common/spec/`와 C++ exact interface의 현재 working tree
 - **내부 구조 기준**: `framework/doc/framework/common/internals/` 01–12의 현재 working tree
 - **의사결정 기준**: 승인된 DEC-01–DEC-17의 결과가 반영된 정식 spec
-- **구현 기준**: `framework/languages/cpp/framework/`의 `main` commit `425b9c2a8272`
+- **구현 기준**: 전체 audit 기준은 `425b9c2a8272`다. 복구·머지 뒤 현재 `main` `e2119caeda`까지의 diff에서 C++ Framework production source 변경이 없음을 확인했으므로 기존 구현 판정을 유지한다.
 - **방법**: 정식 spec과 C++ exact interface를 먼저 public contract 기준으로 삼고, 12개 internals 문서의 **Decision** / **Result To Confirm**을 구현 구조 기준으로 사용했다. 해당 C++ public header와 runtime 경로를 직접 읽어 SATISFIED / GAP / PARTIAL / 코드만으로 확인 불가로 분류했다. 언어별 재량은 public 동작이나 관찰 결과가 달라지는 경우에만 gap으로 계상했다.
 - **증거 경로 표기**: `common/` = `framework/doc/framework/common/`, `cpp/` = `framework/languages/cpp/framework/`, `core/` = `core/` 트리(프레임워크 외부).
 
@@ -20,6 +20,24 @@ Public API와 사용자에게 보이는 동작의 gap은 정식 spec과 exact in
 > **기존 기록과의 관계**: Public spec에 있던 구현 진행 기록은 삭제됐다. 이 보고서가 C++ open gap의 작업 기록을 소유하며, 승인된 결정을 반영한 정식 spec과 exact interface를 계약 기준으로 삼는다. Public spec에는 구현 상태나 이 plan 문서의 ID를 다시 넣지 않는다.
 
 ---
+
+## 병렬 구현 세션 주의 사항
+
+이 보고서는 다른 언어의 gap 작업과 동시에 진행할 수 있지만, 세션끼리 같은 Git checkout과 index를
+공유해서는 안 된다. 각 세션은 이 문서가 포함된 기준 commit에서 별도 `git worktree`와 전용 branch를
+만들고, 시작 SHA를 작업 기록에 남긴다.
+
+- 이 세션은 해당 언어의 production source·test·package 자료와 이 gap 문서만 수정한다. 다른 언어
+  디렉터리, 다른 언어 gap 문서와 공통 spec·internals는 수정하지 않는다.
+- `framework/runtime/protocol/`의 schema·generated 파일, cross-language fixture, 공통 검증 script처럼
+  여러 언어가 함께 소비하는 파일은 통합 담당자 한 명만 수정한다. 변경이 필요하면 이 문서에 요구사항과
+  예상 wire/API 영향을 기록하고 공용 선행 commit을 요청한다.
+- 다른 세션의 변경을 원복하거나 포맷하지 않는다. Stage와 commit은 명시적인 경로 목록으로 제한하고
+  `git add -A`를 사용하지 않는다.
+- Gap 종결은 source 수정만으로 판단하지 않는다. Owner-layer regression, public API/exact snapshot,
+  package 또는 clean-consumer, 관련 process E2E 증거를 각각 기록하고 통과한 항목만 종결한다.
+- 언어별 branch를 합친 뒤 통합 담당자가 cross-language contract, service-wire fixture, 전체 문서 검사와
+  process E2E를 다시 실행한다. 병합 전 개별 성공을 전체 종결로 승격하지 않는다.
 
 ## 1. 집계
 
@@ -238,7 +256,7 @@ admitted 피어의 애플리케이션 레코드가 대상 owner의 mailbox 예�
 | ID | 분류 | 요약 |
 |---|---|---|
 | CPP-WIRE-001 | GAP·상 | §2 참조 — 스토어 권한 키 포맷 |
-| CPP-WIRE-002 | GAP·상 | RouteMesh ServerServer에는 Framework-level message-size 제한이 없어야 하지만 C++ exact interface와 public header의 `mesh_node_socket_config_t::max_message_size`(기본 16 MiB), 이를 요구하는 Application HWM startup validation, RouteMesh descriptor/admission의 `effective_max_message_bytes`와 codec 검증이 남아 있다. Production descriptor는 설정값이 양수이면 그 값을 기록하고 `0`일 때만 4 MiB로 fallback한다. ROUTER 소켓·송신 경로에 이 값을 적용하지 않는 현재 동작 자체는 계약과 일치한다. 금지된 exact/public 설정 surface·HWM 의존성과 RouteMesh wire field를 제거해야 한다. 증거: `common/spec/07-channel-topology.ko.md:607-623`, C++ exact interface `interfaces/03-channel-messaging.ko.md:81-90`, `cpp/include/zlink/framework/contracts/configuration/mesh_node.hpp:149-154`, `cpp/src/runtime/host/app.cpp:1303-1310`, `cpp/src/runtime/mesh/mesh_node_runtime.cpp:362-373`, `cpp/src/runtime/mesh/service_topology_registry.hpp:55`, `cpp/src/runtime/protocol/service_wire_codec.cpp:3769,3858,3986-3995,4039-4054` |
+| CPP-WIRE-002 | GAP·상 | RouteMesh ServerServer에는 Framework-level message-size 제한이 없어야 하지만 public header의 `mesh_node_socket_config_t::max_message_size`(기본 16 MiB), 이를 요구하는 Application HWM startup validation, RouteMesh descriptor/admission의 `effective_max_message_bytes`와 codec 검증이 남아 있다. Production descriptor는 설정값이 양수이면 그 값을 기록하고 `0`일 때만 4 MiB로 fallback한다. ROUTER 소켓·송신 경로에 이 값을 적용하지 않는 현재 동작 자체는 계약과 일치한다. Exact interface에서는 금지된 field와 negotiation 설명을 제거했다. 구현의 public 설정 surface·HWM 의존성과 RouteMesh wire field를 제거해야 한다. 증거: `common/spec/07-channel-topology.ko.md:609-634`, C++ exact interface `interfaces/03-channel-messaging.ko.md:81-89`, `cpp/include/zlink/framework/contracts/configuration/mesh_node.hpp:149-154`, `cpp/src/runtime/host/app.cpp:1303-1310`, `cpp/src/runtime/mesh/mesh_node_runtime.cpp:362-373`, `cpp/src/runtime/mesh/service_topology_registry.hpp:55`, `cpp/src/runtime/protocol/service_wire_codec.cpp:3769,3858,3986-3995,4039-4054` |
 | CPP-WIRE-003 | GAP·상 | public codec 계약인 `framework-json-v1` 프로파일 미구현: BOM 허용(계약: 거부), 중복 속성 last-wins 허용(계약: 거부), 64-bit 정수 문자열·범위 규칙 부재, golden fixture 부재 — 다섯 언어의 동일 decode 결과를 검증할 수 없다. 증거: `common/spec/04-message-model.ko.md:95-118`, `cpp/include/zlink/framework/codecs/json.hpp:13-25` |
 | CPP-WIRE-004 | GAP·중 | §6 바이트 시퀀스를 RFC 4648 base64가 아닌 JSON 숫자 배열로 인코딩(와이어를 건너는 내부 라우트 패킷). 증거: `cpp/src/runtime/spots/spot_route_packets.cpp:300-345` |
 | CPP-WIRE-005 | GAP·중 | §10 `RelocationId`를 CSPRNG가 아닌 `{lifecycle_generation, atomic counter}`로 결정적 생성 — 예측 가능, 충돌 재생성 검사 없음. 증거: `cpp/src/runtime/mesh/mesh_node_runtime.cpp:619-623` |

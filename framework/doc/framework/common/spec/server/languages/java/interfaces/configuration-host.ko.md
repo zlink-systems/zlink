@@ -85,8 +85,6 @@ public interface ZLinkNetworkOptions {
 }
 
 public interface ZLinkMeshNodeSocketConfig {
-    long maxMessageSize();
-    void setMaxMessageSize(long value);
     long sendHighWaterMark();
     void setSendHighWaterMark(long value);
     long receiveHighWaterMark();
@@ -329,12 +327,9 @@ JVM service runtime의 고정 liveness profile이다. 다른 inbound frame은 [d
 Channel·handler·peer별 public option으로 노출하지 않는다. Location owner lease option은 별도 store 계약이며
 transport liveness를 대신하지 않는다.
 
-`maxMessageSize`는 startup 전에만 설정하며 runtime setter를 제공하지 않는다. `0`은 bindings 또는 transport가
-수신할 수 있는 최대 complete message 크기로 정규화한다. Transport가 unlimited이면 service wire의 `uint32`
-표현 한계에서 envelope overhead를 뺀 값을 사용한다. 양수는 그 표현 한계를 넘을 수 없으며 넘으면 startup
-설정 오류로 거부한다. Peer는 정규화한 값을 내부 handshake로 교환하고 sender와 receiver는 두 값 중 작은
-effective bound를 complete message allocation 전에 적용한다. 이 negotiation을 위한 public option은 제공하지
-않는다.
+`ZLinkMeshNodeSocketConfig`는 RouteMesh SS의 Framework-level message-size 설정을 제공하지 않는다.
+Sender와 receiver는 Framework-level complete-message 상한으로 message를 거부하지 않는다. Transport와
+service-wire 표현 한계, HWM과 mailbox budget은 별도 자원·wire guard로 유지한다.
 
 `mailboxMessageBudget`와 `mailboxByteBudget`은 owner별 application mailbox의 메시지 수와 byte 합계
 상한이다. Byte 회계는 payload 크기만 세지 않는다 — `payload 크기 + metadata 크기 + 작업당 고정 비용`을
@@ -425,8 +420,6 @@ public interface systems.zlink.framework.configuration.ZLinkEndpointConnections 
   public abstract java.util.List<java.lang.String> listConnections();
 }
 public interface systems.zlink.framework.configuration.ZLinkMeshNodeSocketConfig {
-  public abstract long maxMessageSize();
-  public abstract void setMaxMessageSize(long);
   public abstract long sendHighWaterMark();
   public abstract void setSendHighWaterMark(long);
   public abstract long receiveHighWaterMark();

@@ -9,7 +9,7 @@ title: "Node Framework 스펙 구현 Gap 리포트"
   Node server exact interface
 - **내부 구조 기준**: `framework/doc/framework/common/internals/` 01–12
 - **구현 기준**: `framework/languages/node/packages/framework/src/`, 생성된
-  `packages/framework/dist/` declaration과 `framework/languages/node/test/` (`main` commit `425b9c2a8272`)
+  `packages/framework/dist/` declaration과 `framework/languages/node/test/` (전체 audit `425b9c2a8272`; 복구·머지 뒤 현재 `main` `e2119caeda`까지 production source 변경 없음)
 - **방법**: public exact surface, runtime 의미·error, codec·protocol, lifecycle·HWM·relocation,
   package·test·process E2E 증거를 분리해 비교했다. Internals 12개 문서의 **Decision** /
   **Result To Confirm** 항목도 현재 정식 spec과 충돌하지 않는 범위에서 다시 판정했다.
@@ -25,6 +25,24 @@ Public API와 사용자에게 보이는 동작은 정식 spec과 exact interface
 > `NODE-RELOC-001`, `NODE-SAMPLE-001`은 코드와 일치함을 확인했다.
 
 ---
+
+## 병렬 구현 세션 주의 사항
+
+이 보고서는 다른 언어의 gap 작업과 동시에 진행할 수 있지만, 세션끼리 같은 Git checkout과 index를
+공유해서는 안 된다. 각 세션은 이 문서가 포함된 기준 commit에서 별도 `git worktree`와 전용 branch를
+만들고, 시작 SHA를 작업 기록에 남긴다.
+
+- 이 세션은 해당 언어의 production source·test·package 자료와 이 gap 문서만 수정한다. 다른 언어
+  디렉터리, 다른 언어 gap 문서와 공통 spec·internals는 수정하지 않는다.
+- `framework/runtime/protocol/`의 schema·generated 파일, cross-language fixture, 공통 검증 script처럼
+  여러 언어가 함께 소비하는 파일은 통합 담당자 한 명만 수정한다. 변경이 필요하면 이 문서에 요구사항과
+  예상 wire/API 영향을 기록하고 공용 선행 commit을 요청한다.
+- 다른 세션의 변경을 원복하거나 포맷하지 않는다. Stage와 commit은 명시적인 경로 목록으로 제한하고
+  `git add -A`를 사용하지 않는다.
+- Gap 종결은 source 수정만으로 판단하지 않는다. Owner-layer regression, public API/exact snapshot,
+  package 또는 clean-consumer, 관련 process E2E 증거를 각각 기록하고 통과한 항목만 종결한다.
+- 언어별 branch를 합친 뒤 통합 담당자가 cross-language contract, service-wire fixture, 전체 문서 검사와
+  process E2E를 다시 실행한다. 병합 전 개별 성공을 전체 종결로 승격하지 않는다.
 
 ## 1. 집계
 
@@ -131,13 +149,13 @@ mesh 디스패치 펌프는 최대 32개 ready owner를 한 배치로 claim한 �
 
 ### NODE-WIRE-001 — RouteMesh 금지 상한 잔존·ClientServer 협상값 변경 가능
 현재 common contract에서 RouteMesh ServerServer에는 Framework-level message-size 설정·협상·거부가 없다
-(`common/spec/07-channel-topology.ko.md:607-623`,
+(`common/spec/07-channel-topology.ko.md:609-634`,
 `common/internals/12-service-wire-protocol.ko.md:91-110`). 따라서 RouteMesh 송수신 경로에
 `min(local, remote)` clamp가 없다는 사실은 gap이 아니다. 실제 gap은 public
-`ZLinkMeshNodeSocketConfig.maxMessageSize`와 mutable router socket 설정을 노출하고, RouteMesh
+구현의 `ZLinkMeshNodeSocketConfig.maxMessageSize`와 mutable router socket 설정을 노출하고, RouteMesh
 descriptor에 설정과 무관한 `effectiveMaxMessageBytes = 4 MiB`를 넣어 codec·validation까지
-유지한다는 점이다. Node exact interface의 기존 negotiated-bound 설명도 common contract와
-반대이므로 함께 교정해야 한다. Application HWM validation도 RouteMesh의
+유지한다는 점이다. Node exact interface는 common contract에 맞게 해당 field와 negotiated-bound
+설명을 제거했다. Application HWM validation도 RouteMesh의
 `maxMessageSize`를 bounded-listener 조건으로 사용하므로 이 의존성을 함께 제거해야 한다.
 이 RouteMesh 전용 설정과 admission/wire field를 제거해야 한다.
 
