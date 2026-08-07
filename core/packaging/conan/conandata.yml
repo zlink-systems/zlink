@@ -1,4 +1,7 @@
 sources:
+  "0.11.0":
+    url: "https://github.com/zlink-systems/zlink/archive/f29f055cecd282b226d093ce7562ff1526228f79.tar.gz"
+    sha256: "dd6cea456a73194c967390370da1955ea72b5445ad511b52d0a55b681962357f"
   "10.0.0":
     url: "https://github.com/zlink-systems/zlink/archive/refs/tags/core/v10.0.0.tar.gz"
   "10.0.0-rc.1":

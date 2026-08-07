@@ -928,8 +928,8 @@ test('ZLinkChannelClient request/reply round-trips through public binding socket
     dealerMonitor = dealer.monitorOpen([zlink.MonitorEventType.ConnectionReady]);
     router.bind(endpoint);
     dealer.connect(endpoint);
-    await waitForMonitorConnectionReady(routerMonitor, 'channel client router connection');
-    await waitForMonitorConnectionReady(dealerMonitor, 'channel client dealer connection');
+    await waitForMonitorConnectionReady(routerMonitor, 'channel client router connection', router);
+    await waitForMonitorConnectionReady(dealerMonitor, 'channel client dealer connection', router);
     routerMonitor.close();
     routerMonitor = null;
     dealerMonitor.close();
@@ -3481,8 +3481,8 @@ test('ZLinkChannelRequestDispatcher invokes request handler and replies through 
     dealerMonitor = dealer.monitorOpen([zlink.MonitorEventType.ConnectionReady]);
     router.bind(endpoint);
     dealer.connect(endpoint);
-    await waitForMonitorConnectionReady(routerMonitor, 'channel dispatcher router connection');
-    await waitForMonitorConnectionReady(dealerMonitor, 'channel dispatcher dealer connection');
+    await waitForMonitorConnectionReady(routerMonitor, 'channel dispatcher router connection', router);
+    await waitForMonitorConnectionReady(dealerMonitor, 'channel dispatcher dealer connection', router);
     routerMonitor.close();
     routerMonitor = null;
     dealerMonitor.close();
@@ -4979,20 +4979,28 @@ async function waitFor(predicate, label) {
   assert.fail(`${label} did not complete`);
 }
 
-async function waitForMonitorConnectionReady(monitor, label) {
+async function waitForMonitorConnectionReady(monitor, label, activitySocket) {
+  const poller = zlink.createPoller();
+  const events = zlink.createPollEvents(1);
+  poller.add(activitySocket, [zlink.PollEventFlag.PollIn], 0);
   const deadline = Date.now() + 1000;
-  while (Date.now() < deadline) {
-    try {
-      const event = monitor.recv(zlink.RecvFlags.DontWait);
-      if (event?.event === zlink.MonitorEventType.ConnectionReady) {
-        return;
+  try {
+    while (Date.now() < deadline) {
+      try {
+        const event = monitor.recv(zlink.RecvFlags.DontWait);
+        if (event?.event === zlink.MonitorEventType.ConnectionReady) {
+          return;
+        }
+      } catch (error) {
+        if (!(error instanceof zlink.RecvError && error.result === zlink.RecvResult.NoData)) {
+          throw error;
+        }
       }
-    } catch (error) {
-      if (!(error instanceof zlink.RecvError && error.result === zlink.RecvResult.NoData)) {
-        throw error;
-      }
+      poller.wait(events, Math.min(10, deadline - Date.now()));
     }
-    await new Promise((resolve) => setImmediate(resolve));
+  } finally {
+    events.close();
+    poller.close();
   }
   assert.fail(`${label} did not complete`);
 }
