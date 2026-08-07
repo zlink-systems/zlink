@@ -70,6 +70,7 @@
         <Compile Include="Runtime/ClientServerChannelRuntimeTests.cs"/>
         <Compile Include="Runtime/CapacityMonitoringProjectionTests.cs"/>
         <Compile Include="Runtime/CustomSerializerEnvelopeTests.cs"/>
+        <Compile Include="Runtime/EncodedPayloadOwnershipTests.cs"/>
         <Compile Include="Runtime/DrainCoordinatorTests.cs"/>
         <Compile Include="Runtime/Dispatch/InboundDispatchBudgetTests.cs"/>
         <Compile Include="Runtime/Dispatch/CompletionAdmissionOwnerTests.cs"/>

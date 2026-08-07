@@ -76,7 +76,7 @@ internal sealed class HttpClientCodecRegistry : IZLinkCodecRegistryBuilder, IZLi
 
         if (!string.IsNullOrWhiteSpace(contentType)
             && _serializers.TryGetValue(NormalizeContentType(contentType), out var found))
-            return found.Serializer.Deserialize(ZLinkEncodedPayload.From(body), type);
+            return found.Serializer.Deserialize(ZLinkEncodedPayload.FromOwned(body), type);
 
         if (type == typeof(string)) return DecodeString(body);
 

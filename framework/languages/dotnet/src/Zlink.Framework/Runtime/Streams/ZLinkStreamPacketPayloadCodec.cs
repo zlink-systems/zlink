@@ -55,7 +55,9 @@ internal static class ZLinkStreamPacketPayloadCodec
         if (codecs.TryResolveStreamContentType(header.Codec, out var contentType))
         {
             if (codecs.TryGetSerializer(contentType, out var serializer))
-                return serializer.Deserialize(ZLinkEncodedPayload.From(payload.Span), messageType);
+                return serializer.Deserialize(
+                    ZLinkEncodedPayload.FromOwned(payload),
+                    messageType);
 
             throw new InvalidOperationException(
                 $"Actor packet '{header.Name}' uses codec '{header.Codec}', but no matching codec extension is registered.");
@@ -75,7 +77,7 @@ internal static class ZLinkStreamPacketPayloadCodec
         if ((header.Flags & ZlinkStreamHeaderFlags.PayloadCompressed) != 0)
             payload = ZLinkStreamProtocolDefaults.Decompress(compressionCodec, payload);
 
-        return ZLinkMessage.FromStreamPayload(header.Codec, payload.ToArray(), codecs);
+        return ZLinkMessage.FromStreamPayload(header.Codec, payload, codecs);
     }
 
     public static ZlinkStreamEncodedPayload Encode(

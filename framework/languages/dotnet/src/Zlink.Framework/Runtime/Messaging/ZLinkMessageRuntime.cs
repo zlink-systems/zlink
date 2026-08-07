@@ -39,7 +39,7 @@ public sealed partial class ZLinkMessage
 
         return new EncodedZLinkMessage(
             ContentType ?? DefaultContentType,
-            ZLinkEncodedPayload.From(_payload.Span));
+            ZLinkEncodedPayload.FromOwned(_payload));
     }
 
     internal ZLinkMessage Snapshot(IZLinkMessageCodecRegistry codecs)
@@ -57,7 +57,7 @@ public sealed partial class ZLinkMessage
         ReadOnlyMemory<byte> payload,
         IZLinkMessageCodecRegistry codecs)
     {
-        return new ZLinkMessage(payload.ToArray(), contentType, null, codecs.Snapshot());
+        return new ZLinkMessage(payload, contentType, null, codecs.Snapshot());
     }
 
     internal Message ToRawMessage(IZLinkMessageCodecRegistry codecs)
@@ -111,7 +111,9 @@ public sealed partial class ZLinkMessage
         if (ContentType is not null
             && _codecs is not null
             && _codecs.TryGetSerializer(ContentType, out var serializer))
-            return serializer.Deserialize(ZLinkEncodedPayload.From(_payload.Span), targetType);
+            return serializer.Deserialize(
+                ZLinkEncodedPayload.FromOwned(_payload),
+                targetType);
 
         if (StreamCodec is { } codec
             && codec != ZlinkStreamCodec.Json)
@@ -129,12 +131,12 @@ public sealed partial class ZLinkMessage
         IZLinkMessageSerializer? serializer)
     {
         if (value is null)
-            return ZLinkEncodedPayload.From(ReadOnlySpan<byte>.Empty);
+            return ZLinkEncodedPayload.FromOwned(ReadOnlyMemory<byte>.Empty);
 
         if (serializer is not null)
             return serializer.Serialize(value, declaredType);
 
-        return ZLinkEncodedPayload.From(
+        return ZLinkEncodedPayload.FromOwned(
             ZLinkFrameworkJsonPayloadCodec.Serialize(value, declaredType));
     }
 
