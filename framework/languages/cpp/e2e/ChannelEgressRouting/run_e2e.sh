@@ -49,8 +49,20 @@ zlink_redis_start_scoped_assign REDIS_CONTAINER redis_port \
 REDIS_CONTAINER_OWNED=1
 REDIS_ENDPOINT="127.0.0.1:${redis_port}"
 
-cmake -S "$CPP_DIR" -B "$BUILD_DIR" >/dev/null
-cmake --build "$BUILD_DIR" --target \
+VCPKG_PREFIX="$CPP_DIR/build/linux-ninja-vcpkg-debug/vcpkg_installed/x64-linux"
+if [[ ! -f "$VCPKG_PREFIX/share/protobuf/protobuf-config.cmake" ]]; then
+  echo "C++ framework dependency prefix is missing: $VCPKG_PREFIX" >&2
+  exit 1
+fi
+cmake -S "$CPP_DIR" -B "$BUILD_DIR" \
+  -Dprotobuf_DIR="$VCPKG_PREFIX/share/protobuf" \
+  -Dabsl_DIR="$VCPKG_PREFIX/share/absl" \
+  -Dutf8_range_DIR="$VCPKG_PREFIX/share/utf8_range" \
+  -Dhiredis_DIR="$VCPKG_PREFIX/share/hiredis" \
+  -Dlibuv_DIR="$VCPKG_PREFIX/share/libuv" \
+  -Dredis++_DIR="$VCPKG_PREFIX/share/redis++" \
+  -DCMAKE_PREFIX_PATH="$VCPKG_PREFIX" >/dev/null
+cmake --build "$BUILD_DIR" --parallel 2 --target \
   zlink_cpp_e2e_channel_egress_role \
   zlink_cpp_e2e_channel_egress_client >/dev/null
 
@@ -157,7 +169,7 @@ start_role() {
 }
 
 run_client() {
-  "$CLIENT_BIN" --config="$1" >"$LOG_DIR/client.stdout.log" 2>"$LOG_DIR/client.stderr.log"
+  "$CLIENT_BIN" --config="$1" >>"$LOG_DIR/client.stdout.log" 2>>"$LOG_DIR/client.stderr.log"
 }
 
 run_ch01() {
@@ -327,8 +339,11 @@ run_ch05() {
   write_client_config "$CONFIG_DIR/client.json" CH-E2E-05 "" "" "" "$caller_http" \
     "$workflow_http" "" "$workflow_http" "" "" "" "" "" ""
   run_client "$CONFIG_DIR/client.json"
-  stop_role "$caller_http"
   stop_role "$workflow_http"
+  write_client_config "$CONFIG_DIR/client.json" CPP-CONTRACT-ROLE-001 "" "" "" "$caller_http" \
+    "" "" "" "" "" "" "" "" ""
+  run_client "$CONFIG_DIR/client.json"
+  stop_role "$caller_http"
 }
 
 run_ch06() {

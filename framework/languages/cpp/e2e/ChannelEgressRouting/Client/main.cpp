@@ -22,6 +22,9 @@ namespace http = zlink::http_client;
 namespace
 {
 
+constexpr int not_found_error_kind = 0;
+constexpr int not_configured_error_kind = 3;
+
 struct client_options_t
 {
     std::string scenario;
@@ -254,6 +257,27 @@ void wait_client_server_draining (const std::string &url)
       + last_status.dump ());
 }
 
+void wait_client_server_without_target (const std::string &url)
+{
+    const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (10);
+    nlohmann::json last_status;
+    while (std::chrono::steady_clock::now () < deadline) {
+        try {
+            last_status = get (url, "/client-status?channel="
+                                      + std::string (e2e::workflow_channel));
+            if (!last_status.value ("selectable", true)
+                && last_status.value ("readyServerCount", -1) == 0) {
+                return;
+            }
+        }
+        catch (...) {
+        }
+        std::this_thread::sleep_for (std::chrono::milliseconds (50));
+    }
+    throw std::runtime_error (
+      "timed out waiting for ClientServer target removal: " + last_status.dump ());
+}
+
 void run_ch01 (const client_options_t &options)
 {
     const auto id = "ch-01-" + std::to_string (std::chrono::steady_clock::now ().time_since_epoch ().count ());
@@ -414,9 +438,27 @@ void run_ch05 (const client_options_t &options)
     const auto result = post (options.negative_url, "/request",
                               { {"channel", e2e::workflow_channel}, {"id", "ch-05"} }, false);
     ensure (!result.value ("succeeded", true), "CH-E2E-05 server-only process unexpectedly sent");
+    ensure (result.value ("errorKind", -1) == not_configured_error_kind,
+            "CH-E2E-05 server-only process did not return NotConfigured: " + result.dump ());
     const auto normal = post (options.caller_url, "/request",
                               { {"channel", e2e::workflow_channel}, {"id", "ch-05-normal"} });
     ensure (normal.value ("succeeded", false), "CH-E2E-05 normal client did not send");
+    std::cout << "CH-E2E-05 serverOnly=" << result.dump ()
+              << " normal=" << normal.dump () << "\n";
+}
+
+void run_cpp_contract_role_001 (const client_options_t &options)
+{
+    wait_client_server_without_target (options.caller_url);
+    const auto result = post (
+      options.caller_url, "/request",
+      { {"channel", e2e::workflow_channel}, {"id", "cpp-contract-role-001"} }, false);
+    ensure (!result.value ("succeeded", true),
+            "CPP-CONTRACT-ROLE-001 client without a target unexpectedly sent");
+    ensure (result.value ("errorKind", -1) == not_found_error_kind,
+            "CPP-CONTRACT-ROLE-001 client without a target did not return NotFound: "
+              + result.dump ());
+    std::cout << "CPP-CONTRACT-ROLE-001 noTarget=" << result.dump () << "\n";
 }
 
 void run_ch07a (const client_options_t &options)
@@ -556,6 +598,7 @@ void run_scenario (const client_options_t &options, const std::string &scenario)
     if (scenario == "CH-E2E-04B") return run_ch04b (options);
     if (scenario == "CH-E2E-04C") return run_ch04c (options);
     if (scenario == "CH-E2E-05") return run_ch05 (options);
+    if (scenario == "CPP-CONTRACT-ROLE-001") return run_cpp_contract_role_001 (options);
     if (scenario == "CH-E2E-07A") return run_ch07a (options);
     if (scenario == "CH-E2E-07B") return run_ch07b (options);
     if (scenario == "CH-E2E-07C") return run_ch07c (options);
@@ -580,7 +623,8 @@ int main (int argc, char **argv)
         std::vector<std::string> scenarios;
         if (options.scenario.empty () || options.scenario == "all") {
             scenarios = {"CH-E2E-01", "CH-E2E-02", "CH-E2E-03", "CH-E2E-04A",
-                         "CH-E2E-05", "CH-E2E-07A", "CH-E2E-07B", "CH-E2E-07C",
+                         "CH-E2E-05", "CPP-CONTRACT-ROLE-001", "CH-E2E-07A",
+                         "CH-E2E-07B", "CH-E2E-07C",
                          "CH-E2E-10", "CH-E2E-11", "CH-E2E-12"};
         } else {
             scenarios = {options.scenario};

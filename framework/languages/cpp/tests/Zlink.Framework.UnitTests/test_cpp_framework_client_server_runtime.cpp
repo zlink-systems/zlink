@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <future>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
@@ -216,9 +217,23 @@ void verify_public_listener_status_reports_bound_endpoint ()
       channels.send ("listener-status", network_probe_message_t{})
         .submit ()
         .result ();
-    assert (!server_only_send);
-    assert (server_only_send.error_kind ()
-            == zlink::framework::framework_error_kind_t::not_configured);
+    if (server_only_send
+        || server_only_send.error_kind ()
+             != zlink::framework::framework_error_kind_t::not_configured) {
+        throw std::runtime_error (
+          "server-only ClientServer send did not return NotConfigured");
+    }
+    const auto server_only_request =
+      channels.request_to_channel (
+                "listener-status", network_probe_message_t{})
+        .submit<network_probe_message_t> ()
+        .result ();
+    if (server_only_request
+        || server_only_request.error_kind ()
+             != zlink::framework::framework_error_kind_t::not_configured) {
+        throw std::runtime_error (
+          "server-only ClientServer request did not return NotConfigured");
+    }
 
     app.request_stop ();
     app_thread.join ();
