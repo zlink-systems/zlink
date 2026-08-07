@@ -720,8 +720,15 @@ test('Missing Instance terminal NotFound is not resubmitted after completion', a
       }
     }),
     completions: () => ({
-      async wait() {
-        return { terminalResult: 102, failureErrno: 21, parts: [] };
+      async submit(operation) {
+        operation();
+        return {
+          terminalResult: 102,
+          failureErrno: 21,
+          operationKind: 0,
+          kindData: null,
+          parts: []
+        };
       }
     }),
     defaultRequestTimeoutMs: 1_000
