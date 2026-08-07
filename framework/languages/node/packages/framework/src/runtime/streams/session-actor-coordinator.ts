@@ -313,7 +313,9 @@ export class ZLinkSessionActorCoordinator {
       ) {
         return false;
       }
-      await this.unbindNativeActor(route.context, actorRef.actorId, signal);
+      // Core has already delivered this exact tombstone and owns removal of
+      // the native delivery after our ACK. Reissuing a native unbind here
+      // would wait on the Actor owner that is waiting for this ACK.
       this.routes.unbind(actorRef.actorId, route.context, route.bindingToken);
       return true;
     });

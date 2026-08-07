@@ -130,6 +130,8 @@ export interface ZLinkStreamBindingRuntimeOptions {
   readonly metrics?: import('../diagnostics').ZLinkRuntimeMetrics;
 }
 
+const DEFAULT_ACTOR_BIND_TIMEOUT_MS = 30_000;
+
 export interface ZLinkStreamPayloadCodec {
   encode(payload: unknown): {
     readonly codec: ZLinkStreamCodec;
@@ -348,13 +350,28 @@ export class ZLinkStreamBindingRuntime {
   private readonly boundActorRelay: ZLinkBoundActorRelaySender;
 
   constructor(options: ZLinkStreamBindingRuntimeOptions = {}) {
+    const runtimeOptions = {
+      ...options,
+      actorBindTimeoutMs: options.actorBindTimeoutMs ?? DEFAULT_ACTOR_BIND_TIMEOUT_MS
+    };
     this.routes = new ZLinkActorSessionBindingRegistry<DefaultZLinkSessionContext, DefaultZLinkSessionActor>();
-    this.compressionCodec = resolveStreamCompressionCodec(options.streamCompression);
-    this.frameMessages = new ZLinkStreamFrameMessageFactory(options);
-    this.boundSessions = new ZLinkBoundSessionService(this.routes, this.frameMessages, options);
+    this.compressionCodec = resolveStreamCompressionCodec(runtimeOptions.streamCompression);
+    this.frameMessages = new ZLinkStreamFrameMessageFactory(runtimeOptions);
+    this.boundSessions = new ZLinkBoundSessionService(this.routes, this.frameMessages, runtimeOptions);
     const actorSessionLifecycle = new ZLinkActorSessionLifecycleCoordinator();
-    this.sessionActors = new ZLinkSessionActorCoordinator(this.routes, this.boundSessions, this, options, actorSessionLifecycle);
-    this.boundActorRelay = new ZLinkBoundActorRelaySender(this.routes, this.frameMessages, options, actorSessionLifecycle);
+    this.sessionActors = new ZLinkSessionActorCoordinator(
+      this.routes,
+      this.boundSessions,
+      this,
+      runtimeOptions,
+      actorSessionLifecycle
+    );
+    this.boundActorRelay = new ZLinkBoundActorRelaySender(
+      this.routes,
+      this.frameMessages,
+      runtimeOptions,
+      actorSessionLifecycle
+    );
   }
 
   createSessionContext(

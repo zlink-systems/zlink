@@ -17,7 +17,7 @@ export function encodeFrameworkCreationPayload(
   payload: unknown,
   registry?: ZLinkSerializerRegistryLike | ReadonlyMap<string, ZLinkMessageSerializer>
 ): Buffer {
-  const encoded = encodeFrameworkPayload(payload, registry);
+  const encoded = encodeFrameworkPayload(payload ?? null, registry);
   try {
     return encodeApplicationPayload({
       packetName: CREATION_PACKET_NAME,

@@ -1,6 +1,9 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { zlinkSpotPacketHandler } from '@zlink-systems/nestjs';
-import { ClosePlayerQuestMsg } from '../../../../../../Shared/Contracts/messages';
+import {
+  ClosePlayerQuestReq,
+  type ClosePlayerQuestRes
+} from '../../../../../../Shared/Contracts/messages';
 import { QuestEventStore, QuestReadModelStore } from '../../../../../Shared/Store/quest-progress-store';
 import { QuestEventProcessor } from '../../../../Application/quest-event-processor';
 import { PlayerQuestNotifier } from '../../player-quest-notifier';
@@ -105,10 +108,11 @@ class RebuildQuestProjectionSpotHandler
 }
 
 @Injectable()
-@zlinkSpotPacketHandler({ spot: () => PlayerQuestSpot, packetName: 'ClosePlayerQuestMsg' })
-class ClosePlayerQuestSpotHandler implements ZLinkSpotPacketHandler<PlayerQuestSpot, ClosePlayerQuestMsg> {
-  async handle(spot: PlayerQuestSpot, _message: ClosePlayerQuestMsg): Promise<void> {
-    await spot.context.close();
+@zlinkSpotPacketHandler({ spot: () => PlayerQuestSpot, packetName: 'ClosePlayerQuestReq' })
+class ClosePlayerQuestSpotHandler
+  implements ZLinkSpotRequestHandler<PlayerQuestSpot, ClosePlayerQuestReq, ClosePlayerQuestRes> {
+  async handle(spot: PlayerQuestSpot, _request: ClosePlayerQuestReq): Promise<ClosePlayerQuestRes> {
+    return { closed: await spot.context.close() };
   }
 }
 

@@ -26,6 +26,7 @@ const {
 } = require('../../packages/framework/dist/runtime/host/actor-packet-relay');
 const actorPacketWire = require('../../packages/framework/dist/runtime/actors/actor-packet-relay-wire');
 const channelEnvelope = require('../../packages/framework/dist/runtime/channels/channel-envelope');
+const actorJoinPayloadCodec = require('../../packages/framework/dist/runtime/messaging/actor-join-payload-codec');
 const zlink = require('@zlink-systems/zlink');
 
 test('stream runtime is exported from framework root surface', () => {
@@ -525,6 +526,16 @@ test('managed stream actor bind opens the exact native route before local bindin
   assert.equal(socket.boundActorSends.length, 0);
   assert.equal(context.actors.find('actor-a'), actor);
   assert.equal(runtime.find('actor-a'), actor);
+});
+
+test('managed stream actor bind uses the framework request timeout by default', async () => {
+  const socket = new FakeStreamSocket();
+  const runtime = new framework.ZLinkStreamBindingRuntime();
+  const context = runtime.createSessionContext(new framework.ZLinkManagedStream(socket, 'backend-rid', 'public-session'));
+
+  await context.actors.bind({ nodeRid: 'node-a', actorId: 'actor-default-timeout', generation: 1n });
+
+  assert.equal(socket.boundActors[0].timeoutMs, 30_000);
 });
 
 test('managed stream remote actor bind records the remote actor ref on the stream', async () => {
@@ -2567,12 +2578,14 @@ test('runtime host local spot join uses the formal MeshNode completion contract 
     primaryMeshNode: {
       status: () => ({ routingId: actorRid }),
       joinActorSpot(actorRef, targetNodeRid, targetSpotId, targetGeneration, request) {
+        const decodedRequest = actorJoinPayloadCodec.decodeFrameworkActorJoinPayload(request);
         submitted.push({
           actorRef,
           targetNodeRid,
           targetSpotId,
           targetGeneration,
-          request: Buffer.from(request).toString()
+          request: decodedRequest.payload.toString(),
+          contentType: decodedRequest.contentType
         });
         return operationId;
       }
@@ -2649,6 +2662,7 @@ test('runtime host local spot join uses the formal MeshNode completion contract 
   assert.equal(submitted[0].targetSpotId.toHex(), roomRid.toHex());
   assert.equal(submitted[0].targetGeneration, 9n);
   assert.equal(submitted[0].request, 'hello');
+  assert.equal(submitted[0].contentType, 'application/json');
   assert.equal(state.spotId.toHex(), roomRid.toHex());
   assert.equal(result.actor.nodeRid.toHex(), actorRid.toHex());
   assert.equal(result.actor.actorId, 'actor-local-room');
@@ -3272,6 +3286,7 @@ test('logical actor disconnect waits for one callback and keeps the physical con
     }
   });
   const context = runtime.createSessionContext(stream);
+  const replacement = runtime.createSessionContext(fakeStream('session-logical-replacement', 'logical-replacement-rid'));
   const selected = await context.actors.bind({
     nodeRid: 'node-a',
     actorId: 'actor-selected',
@@ -3289,6 +3304,10 @@ test('logical actor disconnect waits for one callback and keeps the physical con
   const notification = selected.notifyDisconnected().then(() => { completed = true; });
   await selectedDidStart;
   assert.equal(completed, false);
+  const rebound = await replacement.actors.bindOrGet(selected.ref);
+  assert.equal(rebound.actorId, selected.actorId);
+  assert.equal(context.actors.find(selected.actorId), undefined);
+  assert.equal(replacement.actors.find(selected.actorId), rebound);
   assert.equal(context.actors.find(other.actorId), other);
   assert.equal(closeCalls, 0);
 
@@ -3297,7 +3316,7 @@ test('logical actor disconnect waits for one callback and keeps the physical con
 
   assert.equal(completed, true);
   assert.deepEqual(notified, ['actor-selected']);
-  assert.equal(context.actors.find(selected.actorId), undefined);
+  assert.equal(replacement.actors.find(selected.actorId), rebound);
   assert.equal(context.actors.find(other.actorId), other);
   assert.equal(closeCalls, 0);
 });
@@ -3346,6 +3365,35 @@ test('physical disconnect dedupes a racing logical notification and retains acto
   assert.equal(runtime.find('actor-other'), undefined);
   assert.deepEqual([...memberships].sort(), ['actor-other', 'actor-selected']);
   assert.equal(selected.ref.generation, 11n);
+});
+
+test('physical disconnect releases the binding lane before its lifecycle callback completes', async () => {
+  let releaseNotification;
+  const notificationCanFinish = new Promise((resolve) => { releaseNotification = resolve; });
+  let notificationStarted;
+  const notificationDidStart = new Promise((resolve) => { notificationStarted = resolve; });
+  const runtime = new framework.ZLinkStreamBindingRuntime({
+    async notifyDisconnected() {
+      notificationStarted();
+      await notificationCanFinish;
+    }
+  });
+  const previous = runtime.createSessionContext(fakeStream('session-previous', 'previous-rid'));
+  const replacement = runtime.createSessionContext(fakeStream('session-replacement', 'replacement-rid'));
+  const actorRef = { nodeRid: 'node-a', actorId: 'actor-reconnect-during-disconnect', generation: 1n };
+  await previous.actors.bind(actorRef);
+
+  const cleanup = runtime.cleanup(previous);
+  await notificationDidStart;
+  const rebound = await replacement.actors.bindOrGet(actorRef);
+
+  assert.equal(rebound.actorId, actorRef.actorId);
+  assert.equal(previous.actors.find(actorRef.actorId), undefined);
+  assert.equal(replacement.actors.find(actorRef.actorId), rebound);
+
+  releaseNotification();
+  await cleanup;
+  assert.equal(replacement.actors.find(actorRef.actorId), rebound);
 });
 
 test('stream binding runtime can remove actor binding during actor destroy cleanup', async () => {
@@ -3710,7 +3758,7 @@ test('remote binding tombstone removes only the exact native and logical session
   assert.equal(runtime.hasBoundSession('actor-exact-tombstone'), true);
   assert.equal(await runtime.retireRemoteBinding(boundRef, 'session-current', 7n), true);
   assert.equal(runtime.hasBoundSession('actor-exact-tombstone'), false);
-  assert.deepEqual(operations, ['bind:session-current', 'unbind:session-current']);
+  assert.deepEqual(operations, ['bind:session-current']);
 });
 
 test('stream session replacement confirmation failure restores the previous binding', async () => {

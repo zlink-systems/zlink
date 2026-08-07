@@ -38,6 +38,7 @@ export class ZLinkMeshRecordDispatcher {
         return this.ports.spot(owner, record);
       case ReceiveKind.ActorSend:
       case ReceiveKind.ActorRequest:
+      case ReceiveKind.ActorBinding:
         this.requireOwner(owner, ReadyOwnerKind.Actor, record);
         return this.ports.actor(owner, record);
       case ReceiveKind.Completion:

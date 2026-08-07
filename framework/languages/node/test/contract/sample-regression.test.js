@@ -651,7 +651,7 @@ test('GameQuest TypeScript sample uses framework channel topology', () => {
   assert.match(questDomain, /decide\(event: GameplayEventEnvelope/);
   assert.match(messageContracts, /class JoinSessionRes \{[\s\S]*?playerId: string[\s\S]*?activeQuests/);
   assert.match(messageContracts, /class GameplayMsg \{[\s\S]*?payload: GameplayEventPayload/);
-  assert.match(messageContracts, /class ClosePlayerQuestMsg/);
+  assert.match(messageContracts, /class ClosePlayerQuestReq/);
   assert.match(messageContracts, /type StoredQuestEvent = \{[\s\S]*?type: string[\s\S]*?payload: Record<string, unknown>/);
   assert.doesNotMatch(messageContracts, /TextEncoder|TextDecoder|decodeGameplayPayload|payload: number\[\]/);
   assert.match(playerQuestProvisioner, /\.requestToSpot\(questMissionSpotId\(playerId\), request\)/);
@@ -731,6 +731,7 @@ test('ShoppingMall TypeScript sample uses framework channel topology', () => {
     'Server/OrderWorkflow/Infrastructure/ZLink/Spots/OrderWorkflowSpot/Handlers/start-order-workflow-handler.ts'
   );
   const orderEvents = readSample('ShoppingMall.Ts', 'Server/Shared/Domain/order-events.ts');
+  const decimalAmount = readSample('ShoppingMall.Ts', 'Shared/Contracts/decimal-amount.ts');
   const workflowModule = readSample('ShoppingMall.Ts', 'Server/OrderWorkflow/shoppingmall-workflow-module.ts');
   const orderStore = readSample('ShoppingMall.Ts', 'Server/Shared/Store/order-store.ts');
   const serverMain = readSample('ShoppingMall.Ts', 'Server/bootstrap.ts');
@@ -762,6 +763,8 @@ test('ShoppingMall TypeScript sample uses framework channel topology', () => {
   assert.doesNotMatch(workflowRouter, /\.packetName\(/);
   assert.match(messageContracts, /@ZLinkPacket\(PacketNames\.startOrderWorkflowReq\)/);
   assert.match(messageContracts, /class StartOrderWorkflowReq[\s\S]*?sourceCommandId: string/);
+  assert.match(messageContracts, /readonly amount: number/);
+  assert.doesNotMatch(decimalAmount, /toJSON\s*\(/);
   assert.match(messageContracts, /interface StartOrderRes \{[\s\S]*?state: OrderState/);
   assert.match(messageContracts, /class ContinueOrderWorkflowReq[\s\S]*?sourceCommandId: string/);
   assert.match(messageContracts, /class RebuildOrderProjectionReq[\s\S]*?sourceCommandId: string/);
@@ -799,8 +802,8 @@ test('ShoppingMall TypeScript sample uses framework channel topology', () => {
   for (const text of ['workflow-a', 'workflow-b', 'api-a', 'api-b', 'apiAHttpUrl', 'apiBHttpUrl']) {
     assert.match(sampleRunner, new RegExp(text));
   }
-  assert.match(commerceApiModule, /config\.logDir/);
-  assert.match(workflowModule, /config\.logDir/);
+  assert.doesNotMatch(commerceApiModule, /traceLogFile|traceLabel/);
+  assert.doesNotMatch(workflowModule, /traceLogFile|traceLabel/);
   assert.match(sampleRunner, /logDir: ctx\.logDir/);
   assert.doesNotMatch(serverMain, /SAMPLE_ENDPOINT|process\.env|--role/);
 });

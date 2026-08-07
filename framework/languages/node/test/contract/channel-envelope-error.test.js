@@ -242,6 +242,12 @@ test('creation payload preserves the selected serializer across the durable enve
   );
 });
 
+test('creation payload represents an omitted request as JSON null', () => {
+  const encoded = creationPayloadCodec.encodeFrameworkCreationPayload(undefined);
+
+  assert.equal(creationPayloadCodec.decodeFrameworkCreationPayload(encoded), null);
+});
+
 test('channel correlation follows the request versus one-way contract', () => {
   const sendParts = envelope.encodeChannelEnvelopeParts(3, 'api', 'Notice', { value: 'one-way' });
   const requestParts = envelope.encodeChannelEnvelopeParts(1, 'api', 'Lookup', { id: 'a' });

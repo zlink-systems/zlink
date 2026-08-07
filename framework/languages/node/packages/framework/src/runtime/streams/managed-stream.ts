@@ -330,7 +330,9 @@ export class ZLinkManagedStream implements ZLinkStream {
           throw error;
         }
       }
-      this.nativeActorBindings.delete(actorId);
+      if (this.nativeActorBindings.get(actorId) === binding) {
+        this.nativeActorBindings.delete(actorId);
+      }
       return;
     }
     await this.socket.unbindActor(this.backendRoutingId(), actorId, timeoutMs, signal);

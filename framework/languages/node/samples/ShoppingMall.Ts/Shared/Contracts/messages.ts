@@ -22,7 +22,7 @@ interface StartOrderReq {
 
 @ZLinkPacket(PacketNames.startOrderWorkflowReq)
 class StartOrderWorkflowReq {
-  readonly amount: DecimalAmount;
+  readonly amount: number;
 
   constructor(
     readonly orderId: string,
@@ -35,7 +35,7 @@ class StartOrderWorkflowReq {
     amount: DecimalAmountInput,
     readonly currency: string
   ) {
-    this.amount = DecimalAmount.fromWire(amount);
+    this.amount = DecimalAmount.fromWire(amount).toWireNumber();
   }
 }
 
@@ -63,7 +63,7 @@ interface OrderState {
   reservationId?: string;
   paymentId?: string;
   reason?: string;
-  amount?: DecimalAmount;
+  amount?: number;
   currency?: string;
   updatedAtUnixMs: number;
 }

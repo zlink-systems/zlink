@@ -2741,7 +2741,7 @@ export class ZLinkFrameworkRuntimeHost implements
           record.kindData.bindingGeneration,
           signal
         );
-        record.reply([]);
+        record.reply(Buffer.alloc(0));
         return;
       }
       this.actorManager

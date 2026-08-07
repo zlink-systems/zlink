@@ -40,16 +40,8 @@ class DecimalAmount {
     return DecimalAmount.fromWire(value).minorUnits === this.minorUnits;
   }
 
-  toJSON(): unknown {
-    const major = this.minorUnits / DECIMAL_FACTOR;
-    const fraction = (this.minorUnits % DECIMAL_FACTOR).toString().padStart(Number(DECIMAL_SCALE), '0');
-    const normalizedFraction = fraction.replace(/0+$/, '');
-    const decimal = normalizedFraction.length === 0 ? `${major}` : `${major}.${normalizedFraction}`;
-    const rawJSON = (JSON as unknown as { rawJSON(value: string): unknown }).rawJSON;
-    if (typeof rawJSON !== 'function') {
-      throw new Error('The runtime does not support exact JSON number serialization.');
-    }
-    return rawJSON(decimal);
+  toWireNumber(): number {
+    return Number(this.minorUnits) / Number(DECIMAL_FACTOR);
   }
 }
 

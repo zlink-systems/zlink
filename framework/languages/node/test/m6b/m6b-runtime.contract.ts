@@ -2397,7 +2397,7 @@ test('target-owned Instance activation reserves before factory, commits before o
   runtime.close();
 });
 
-test('durable missing Instance authority replaces an unmaterialized local projection', async () => {
+test('durable missing Instance authority discards a materialized orphan before replacing its local projection', async () => {
   let ingress!: (record: {
     readonly command: number;
     readonly flags: number;
@@ -2422,16 +2422,20 @@ test('durable missing Instance authority replaces an unmaterialized local projec
   } as unknown as RawServiceMeshRuntime;
   const runtime = new ServiceStatefulRuntime(raw, 'target', 3n);
   runtime.restoreSpotAuthority('tenant-orphan', 'instance_spot', 'TenantWorker', 1n, 1n);
+  let materialized = true;
   runtime.registerInstanceApplicationLifecycle({
     isMaterialized: target => {
       events.push(`check:${target.targetSpotId}`);
-      return false;
+      return materialized;
     },
     materialize: (target, generation) => {
       events.push(`materialize:${target.targetSpotId}:${String(generation)}`);
       return Promise.resolve();
     },
-    discard: async () => undefined,
+    discard: async target => {
+      events.push(`discard:${target.targetSpotId}`);
+      materialized = false;
+    },
     beginTerminal: () => undefined,
     completeTerminal: async () => false
   });
@@ -2502,6 +2506,8 @@ test('durable missing Instance authority replaces an unmaterialized local projec
   await new Promise<void>(resolve => setImmediate(resolve));
 
   assert.deepEqual(events, [
+    'check:tenant-orphan',
+    'discard:tenant-orphan',
     'check:tenant-orphan',
     'reserve',
     'materialize:tenant-orphan:2',
@@ -3871,15 +3877,9 @@ test('cross-owner session rebind waits for exact previous cleanup and fences a l
     const oldMailbox = nodes.get('session-old')!.mailbox;
     assert.equal(oldMailbox.length, 1);
     const oldBinding = oldSessionRuntime.sessionBindings('old-rid')[0]!;
-    const nativeUnbind = oldSessionRuntime.unbindSession(
-      'old-rid',
-      actor,
-      oldBinding.bindingGeneration,
-      1_000
-    );
-    assert.equal((await nativeUnbind.promise).terminalResult, RequestResult.Ok);
-    assert.equal(oldSessionRuntime.sessionBindings('old-rid').length, 0);
+    assert.equal(oldSessionRuntime.sessionBindings('old-rid').length, 1);
     assert.equal(oldMailbox.shift()!.stateful?.reply(RequestResult.Ok, 0), true);
+    assert.equal(oldSessionRuntime.sessionBindings('old-rid').length, 0);
 
     const newBind = await newBindPromise;
     assert.equal(newBind.terminalResult, RequestResult.Ok);

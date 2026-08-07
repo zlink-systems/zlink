@@ -2645,7 +2645,7 @@ export class ServiceStatefulRuntime {
     if (local !== undefined) {
       const lifecycle = this.instanceApplicationLifecycle;
       const closing = lifecycle?.isClosing?.(target) === true;
-      const materialized = lifecycle === undefined
+      let materialized = lifecycle === undefined
         ? undefined
         : lifecycle.isMaterialized(target);
       const materializing = lifecycle?.isMaterializing?.(target) === true;
@@ -2659,6 +2659,21 @@ export class ServiceStatefulRuntime {
         && local.ref.generation === current.objectGeneration
         && local.authorityOwnerGeneration === current.authorityOwnerGeneration;
       const replacesClosingProjection = current.kind === 'creating' && closing;
+      if (
+        current.kind === 'missing'
+        && !closing
+        && !materializing
+        && materialized === true
+        && lifecycle !== undefined
+      ) {
+        // The durable authority is the ownership source of truth. Its removal
+        // can become visible before the route reconciler has discarded the
+        // previous application projection. Converge that orphan here before
+        // reserving a successor generation; otherwise every activation keeps
+        // returning a stale terminal while no owner can make progress.
+        await lifecycle.discard(target);
+        materialized = lifecycle.isMaterialized(target);
+      }
       // The authority can still be in a Creating reservation after the local
       // registry exposes the activation. Allow the authority reserve operation
       // to join that attempt instead of treating the local projection as stale.
@@ -2667,8 +2682,8 @@ export class ServiceStatefulRuntime {
       // projection. The close gate serializes that replacement; rejecting it
       // here turns a valid next-generation Instance intent into a stale-route
       // failure.
-      // A materialized projection without a close or pending materialization
-      // remains stale when the authority is Missing.
+      // If disposal did not remove an orphaned materialization, keep fencing
+      // it instead of admitting work into two application generations.
       if (
         (!joinsCreating && !replacesClosingProjection && current.kind !== 'missing')
         || (!joinsCreating && !closing && materialized !== false && !materializing)
@@ -3006,7 +3021,10 @@ export class ServiceStatefulRuntime {
     previous: ServiceSessionBinding,
     replacement: ServiceSessionBinding
   ): void {
-    void this.retryPreviousSessionBindingTombstone(previous).then(
+    const retired = previous.sessionOwnerNodeRid === this.nodeRid
+      ? this.retireLocalPreviousSessionBinding(previous)
+      : this.retryPreviousSessionBindingTombstone(previous);
+    void retired.then(
       () => {
         this.replyWire(ingress, correlation, RequestResult.Ok, 0, undefined, {
           kind: 'streamBind',
@@ -3019,6 +3037,38 @@ export class ServiceStatefulRuntime {
         this.replyWire(ingress, correlation, result.terminalResult, result.failureCode);
       }
     );
+  }
+
+  private retireLocalPreviousSessionBinding(previous: ServiceSessionBinding): Promise<void> {
+    const delivery = this.sessionDeliveries.get(actorKey(previous.actor));
+    if (delivery === undefined || !sameSessionBinding(delivery.binding, previous)) {
+      return Promise.resolve();
+    }
+    return new Promise<void>((resolve, reject) => {
+      const accepted = this.enqueueSessionBindingRetirement(
+        delivery,
+        this.nodeRid,
+        (terminalResult, failureCode) => {
+          if (terminalResult === RequestResult.Ok) {
+            resolve();
+          } else {
+            reject(createInternalFrameworkException(
+              ZLinkFrameworkInternalErrorKind.ActorSessionNotBound,
+              `Actor '${previous.actor.actorId}' local previous session binding cleanup failed `
+              + `(terminal=${terminalResult}, failure=${failureCode}).`,
+              true
+            ));
+          }
+          return true;
+        }
+      );
+      if (!accepted) {
+        reject(createInternalFrameworkException(
+          ZLinkFrameworkInternalErrorKind.WorkerQueueFull,
+          `Actor '${previous.actor.actorId}' session binding tombstone queue is full.`
+        ));
+      }
+    });
   }
 
   private async retryPreviousSessionBindingTombstone(
@@ -3098,12 +3148,35 @@ export class ServiceStatefulRuntime {
       this.replyWire(ingress, record.correlation, RequestResult.Ok, 0);
       return;
     }
+    const accepted = this.enqueueSessionBindingRetirement(
+      delivery,
+      ingress.sourceRoutingId,
+      (terminalResult, failureCode) => {
+        this.replyWire(ingress, record.correlation, terminalResult, failureCode);
+        return true;
+      }
+    );
+    if (!accepted) {
+      const actor = delivery.binding.actor;
+      const result = failure(createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.WorkerQueueFull,
+        `Actor '${actor.actorId}' session binding tombstone queue is full.`
+      ));
+      this.replyWire(ingress, record.correlation, result.terminalResult, result.failureCode);
+    }
+  }
+
+  private enqueueSessionBindingRetirement(
+    delivery: ServiceSessionDelivery,
+    sourceRoutingId: string,
+    reply: (terminalResult: number, failureCode: number) => boolean
+  ): boolean {
     const actor = delivery.binding.actor;
-    const accepted = this.raw.mailbox.tryEnqueue({
+    return this.raw.mailbox.tryEnqueue({
       owner: `actor:${actor.actorId}\0${actor.generation}`,
       domain: 'infrastructure',
       parts: [Buffer.from([0x5a, 0x4d, 1, M6bServiceWireCommand.boundSessionBind, 0])],
-      sourceRoutingId: ingress.sourceRoutingId,
+      sourceRoutingId,
       stateful: {
         receiveKind: ReceiveKind.ActorBinding,
         operationKind: OperationKind.StreamUnbind,
@@ -3117,18 +3190,16 @@ export class ServiceStatefulRuntime {
           sessionRid: delivery.binding.sessionRid as never
         },
         reply: (terminalResult, failureCode) => {
-          this.replyWire(ingress, record.correlation, terminalResult, failureCode);
-          return true;
+          if (
+            terminalResult === RequestResult.Ok
+            && this.sessionDeliveries.get(actorKey(actor)) === delivery
+          ) {
+            this.sessionDeliveries.delete(actorKey(actor));
+          }
+          return reply(terminalResult, failureCode);
         }
       } satisfies ServiceStatefulMailboxData
     });
-    if (!accepted) {
-      const result = failure(createInternalFrameworkException(
-        ZLinkFrameworkInternalErrorKind.WorkerQueueFull,
-        `Actor '${actor.actorId}' session binding tombstone queue is full.`
-      ));
-      this.replyWire(ingress, record.correlation, result.terminalResult, result.failureCode);
-    }
   }
 
   private deliverBoundSession(

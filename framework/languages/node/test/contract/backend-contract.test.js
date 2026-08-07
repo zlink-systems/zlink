@@ -970,6 +970,7 @@ test('backend mesh record dispatcher routes node, spot, actor, and infrastructur
   await dispatcher.dispatch(owner(framework.ReadyOwnerKind.Node), record(framework.ReceiveKind.ChannelRequest));
   await dispatcher.dispatch(owner(framework.ReadyOwnerKind.Spot), record(framework.ReceiveKind.SpotControl));
   await dispatcher.dispatch(owner(framework.ReadyOwnerKind.Actor), record(framework.ReceiveKind.ActorSend));
+  await dispatcher.dispatch(owner(framework.ReadyOwnerKind.Actor), record(framework.ReceiveKind.ActorBinding));
   await framework.runZLinkExecutionArea('infrastructure', async () => {
     await dispatcher.dispatch(owner(framework.ReadyOwnerKind.Node), record(framework.ReceiveKind.Completion));
     await dispatcher.dispatch(owner(framework.ReadyOwnerKind.Node), record(framework.ReceiveKind.SendReady));
@@ -980,6 +981,7 @@ test('backend mesh record dispatcher routes node, spot, actor, and infrastructur
     ['node', framework.ReceiveKind.ChannelRequest],
     ['spot', framework.ReadyOwnerKind.Spot, framework.ReceiveKind.SpotControl],
     ['actor', framework.ReadyOwnerKind.Actor, framework.ReceiveKind.ActorSend],
+    ['actor', framework.ReadyOwnerKind.Actor, framework.ReceiveKind.ActorBinding],
     ['completion', framework.ReceiveKind.Completion],
     ['sendReady', framework.ReceiveKind.SendReady],
     ['transferControl', framework.ReceiveKind.TransferControl]

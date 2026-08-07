@@ -13,7 +13,7 @@ class OrderAggregate {
         orderId,
         status: OrderStatuses.Created,
         shippingAddressId: payload.shippingAddressId,
-        amount: DecimalAmount.fromWire(payload.amount),
+        amount: DecimalAmount.fromWire(payload.amount).toWireNumber(),
         currency: payload.currency,
         updatedAtUnixMs: occurredAtUnixMs
       };
