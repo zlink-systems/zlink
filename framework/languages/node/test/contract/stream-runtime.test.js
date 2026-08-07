@@ -3533,7 +3533,7 @@ test('stream session actors bindOrGet preserves a handle only within the same ob
   assert.deepEqual(same.ref, firstRef);
 });
 
-test('stream session actor changed-ref bind failure restores the previous native and logical binding', async () => {
+test('stream session actor changed-ref bind failure preserves the previous native and logical binding', async () => {
   const operations = [];
   let nativeRef;
   const socket = {
@@ -3572,13 +3572,11 @@ test('stream session actor changed-ref bind failure restores the previous native
   assert.equal(nativeRef.generation, 1n);
   assert.deepEqual(operations, [
     'bind:node-a:1',
-    'unbind:actor-rollback',
-    'bind:node-b:2',
-    'bind:node-a:1'
+    'bind:node-b:2'
   ]);
 });
 
-test('stream session cross-context bind failure restores the previous session transaction', async () => {
+test('stream session cross-context bind failure preserves the previous session transaction', async () => {
   const operations = [];
   let boundSessionRid;
   const socket = {
@@ -3610,13 +3608,11 @@ test('stream session cross-context bind failure restores the previous session tr
   assert.equal(runtime.find(actorRef.actorId), actor);
   assert.deepEqual(operations, [
     'bind:session-old',
-    'unbind:session-old',
-    'bind:session-new',
-    'bind:session-old'
+    'bind:session-new'
   ]);
 });
 
-test('stream session actor reconnect unbinds the previous native session before binding the new session', async () => {
+test('stream session actor reconnect atomically replaces the native session binding', async () => {
   const operations = [];
   let boundSessionRid;
   const socket = {
@@ -3625,7 +3621,6 @@ test('stream session actor reconnect unbinds the previous native session before 
     recv() { return undefined; },
     async bindActor(sessionRid) {
       operations.push(`bind:${sessionRid}`);
-      if (boundSessionRid !== undefined) throw new Error('Binding request failed with result 108.');
       boundSessionRid = sessionRid;
     },
     async unbindActor(sessionRid) {
@@ -3640,13 +3635,59 @@ test('stream session actor reconnect unbinds the previous native session before 
   const second = runtime.createSessionContext(new framework.ZLinkManagedStream(socket, 'session-new'));
   const actorRef = { nodeRid: 'node-a', actorId: 'actor-reconnect', generation: 1n };
 
-  const firstActor = await first.actors.bindOrGet(actorRef);
-  await firstActor.notifyDisconnected();
+  await first.actors.bindOrGet(actorRef);
   await second.actors.bindOrGet(actorRef);
 
-  assert.deepEqual(operations, ['bind:session-old', 'unbind:session-old', 'bind:session-new']);
+  assert.deepEqual(operations, ['bind:session-old', 'bind:session-new']);
   assert.equal(first.actors.find(actorRef.actorId), undefined);
   assert.equal(second.actors.find(actorRef.actorId)?.actorId, actorRef.actorId);
+});
+
+test('stream session replacement confirmation failure restores the previous binding', async () => {
+  const operations = [];
+  let boundSessionRid;
+  const socket = {
+    send() { return true; },
+    disconnectPeer() {},
+    recv() { return undefined; },
+    async bindActor(sessionRid) {
+      operations.push(`bind:${sessionRid}`);
+      boundSessionRid = sessionRid;
+    },
+    async unbindActor(sessionRid) {
+      operations.push(`unbind:${sessionRid}`);
+      assert.equal(boundSessionRid, sessionRid);
+      boundSessionRid = undefined;
+    },
+    sendBoundActor() { return true; }
+  };
+  let confirmationCount = 0;
+  const runtime = new framework.ZLinkStreamBindingRuntime({
+    async confirmRemoteActorSessionBinding() {
+      confirmationCount += 1;
+      if (confirmationCount === 2) throw new Error('replacement confirmation failed');
+    }
+  });
+  const previous = runtime.createSessionContext(new framework.ZLinkManagedStream(socket, 'session-old'));
+  const replacement = runtime.createSessionContext(new framework.ZLinkManagedStream(socket, 'session-new'));
+  const actorRef = { nodeRid: 'node-a', actorId: 'actor-confirm-rollback', generation: 1n };
+  const actor = await previous.actors.bindOrGet(actorRef);
+
+  await assert.rejects(
+    () => replacement.actors.bindOrGet(actorRef),
+    /replacement confirmation failed/
+  );
+
+  assert.equal(boundSessionRid, 'session-old');
+  assert.equal(previous.actors.find(actorRef.actorId), actor);
+  assert.equal(replacement.actors.find(actorRef.actorId), undefined);
+  assert.equal(runtime.find(actorRef.actorId), actor);
+  assert.deepEqual(operations, [
+    'bind:session-old',
+    'bind:session-new',
+    'unbind:session-new',
+    'bind:session-old'
+  ]);
 });
 
 test('bound session without binding is a retriable framework error', async () => {
