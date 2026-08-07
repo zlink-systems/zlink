@@ -1,8 +1,43 @@
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const test = require('node:test');
 const zlink = require('@zlink-systems/zlink');
 const framework = require('../../packages/framework/dist');
 const internal = require('../../packages/framework/dist/internal');
+const authorityKeys = require(
+  '../../packages/framework/dist/runtime/locations/authority-key-codec'
+);
+
+test('authority key codec consumes the shared fixture and rejects non-canonical input', () => {
+  const fixture = JSON.parse(fs.readFileSync(path.resolve(
+    __dirname,
+    '../../../../runtime/protocol/golden/authority-key-v1.json'
+  ), 'utf8'));
+  for (const item of fixture.cases) {
+    const globalId = Buffer.from(item.identityHex, 'hex').toString('utf8');
+    const kind = item.objectKind === 'actor' ? 'actor' : 'user_spot';
+    assert.equal(authorityKeys.encodeAuthorityKey(kind, globalId).value, item.encoded);
+    assert.deepEqual(authorityKeys.decodeAuthorityKey({ value: item.encoded }), {
+      kind,
+      globalId
+    });
+  }
+
+  const maximum = authorityKeys.encodeAuthorityKey('actor', '\0'.repeat(255));
+  assert.equal(Buffer.byteLength(maximum.value), 776);
+  assert.equal(authorityKeys.decodeAuthorityKey(maximum).globalId.length, 255);
+  for (const value of [
+    'zla1:a:01:A',
+    'zla1:a:256:' + '%00'.repeat(256),
+    'zla1:a:1:%41',
+    'zla1:a:1:%c3',
+    'zla1:a:1::',
+    'zla1:a:1:%FF'
+  ]) {
+    assert.throws(() => authorityKeys.decodeAuthorityKey({ value }), TypeError);
+  }
+});
 
 test('location runtime renews owner lease, records store failure, and recovers', async () => {
   const store = new internal.ZLinkInMemoryLocationStore(() => new Date(Date.UTC(2026, 6, 3, 0, 0, 0)));

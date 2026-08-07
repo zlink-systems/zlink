@@ -20,27 +20,42 @@ export function encodeAuthorityKey(
 export function decodeAuthorityKey(
   key: ZLinkAuthorityKey
 ): { readonly kind: ZLinkPlacementObjectKind; readonly globalId: string } {
-  const match = /^zla1:([as]):([0-9]+):(.*)$/.exec(key.value);
+  if (Buffer.byteLength(key.value, 'utf8') > 776) {
+    throw new TypeError('Authority key exceeds the encoded byte limit.');
+  }
+  const match = /^zla1:([as]):([1-9][0-9]{0,2}):(.*)$/.exec(key.value);
   if (match === null) throw new TypeError('Authority key is not canonical.');
+  const declaredLength = Number(match[2]);
+  if (declaredLength > 255) throw new TypeError('Authority key identity exceeds the byte limit.');
   const encoded = match[3]!;
   const bytes: number[] = [];
   for (let index = 0; index < encoded.length;) {
     if (encoded[index] === '%') {
       const hex = encoded.slice(index + 1, index + 3);
       if (!/^[0-9A-F]{2}$/.test(hex)) throw new TypeError('Authority key escape is invalid.');
-      bytes.push(Number.parseInt(hex, 16));
+      const byte = Number.parseInt(hex, 16);
+      if (isUnreserved(byte)) throw new TypeError('Authority key escape is not canonical.');
+      bytes.push(byte);
       index += 3;
     } else {
-      bytes.push(encoded.charCodeAt(index));
+      const byte = encoded.charCodeAt(index);
+      if (!isUnreserved(byte)) throw new TypeError('Authority key literal is not canonical.');
+      bytes.push(byte);
       index++;
     }
   }
-  if (bytes.length !== Number(match[2])) {
+  if (bytes.length !== declaredLength) {
     throw new TypeError('Authority key length does not match its identity.');
+  }
+  let globalId: string;
+  try {
+    globalId = new TextDecoder('utf-8', { fatal: true }).decode(Uint8Array.from(bytes));
+  } catch (error) {
+    throw new TypeError('Authority key identity is not valid UTF-8.', { cause: error });
   }
   return {
     kind: match[1] === 'a' ? 'actor' : 'user_spot',
-    globalId: Buffer.from(bytes).toString('utf8')
+    globalId
   };
 }
 
