@@ -1,7 +1,6 @@
 import fs from 'node:fs';
 import { Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
-import { ZLinkMessageFlowLogMode } from '@zlink-systems/framework';
 import { ZLINK_ROUTE_CLIENT, ZLinkModule, zlinkFramework } from '@zlink-systems/nestjs';
 import type { ZLinkRouteClient } from '@zlink-systems/framework';
 import { createRedisLocationStore, locationMessagingOptions } from '../../Shared/location-store';
@@ -10,7 +9,7 @@ import { validateServerOptions } from './Configuration/server-options';
 import type { ServerOptions } from './Configuration/server-options';
 import { REGISTRY_MESSAGING_OPTIONS, createRegistryMessagingConfigurationModule } from '../../configuration';
 import { createWorkflowEndpoints } from './Endpoints/workflow-endpoints';
-import { EvidenceDispatchErrorObserver, WorkflowRequestHandler } from './Handlers/workflow-handlers';
+import { captureDispatchErrors, WorkflowRequestHandler } from './Handlers/workflow-handlers';
 import { EvidenceStore } from './Infrastructure/evidence-store';
 import { closeHttpServer, startHttpServer } from './Support/http-server';
 
@@ -20,6 +19,7 @@ export async function startWorkflowHost(): Promise<void> {
   const app = await NestFactory.createApplicationContext(WorkflowModule, { logger: false, abortOnError: false });
   const options = app.get(REGISTRY_MESSAGING_OPTIONS, { strict: false }) as ServerOptions;
   const evidence = app.get(EvidenceStore, { strict: false });
+  captureDispatchErrors(evidence);
   const channel = app.get(ZLINK_ROUTE_CLIENT, { strict: false }) as ZLinkRouteClient;
   const server = await startHttpServer(options.httpUrl, createWorkflowEndpoints(evidence, channel, () => { stopping = true; }));
 
@@ -44,10 +44,7 @@ function createWorkflowModule(): Function {
           const builder = zlinkFramework();
           builder
             .configureDispatch()
-              .setMessageFlowObserver(EvidenceDispatchErrorObserver)
-              .messageFlow(ZLinkMessageFlowLogMode.KeyTransitions)
-              .traceLogFile(`${options.logDir}/${options.rid}-flow.log`)
-              .traceLabel(options.rid);
+              .messageFlow('normal');
           if (options.redisEndpoint !== undefined && options.redisKeyPrefix !== undefined) {
             builder.addLocationStore(createRedisLocationStore({
               redisEndpoint: options.redisEndpoint,
@@ -69,7 +66,6 @@ function createWorkflowModule(): Function {
       { provide: EvidenceStore, inject: [REGISTRY_MESSAGING_OPTIONS], useFactory: (value: unknown) => {
         const options = value as ServerOptions; return new EvidenceStore(options.rid, options.evidenceFile);
       } },
-      EvidenceDispatchErrorObserver,
       WorkflowRequestHandler
     ]
   })(WorkflowModule);

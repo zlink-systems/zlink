@@ -1,7 +1,6 @@
 import fs from 'node:fs';
 import { Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
-import { ZLinkMessageFlowLogMode } from '@zlink-systems/framework';
 import {
   ZLINK_FRAMEWORK_RUNTIME,
   ZLINK_ROUTE_MESH_RUNTIME_OPTIONS,
@@ -21,7 +20,7 @@ import type { ServerOptions } from './Configuration/server-options';
 import { REGISTRY_MESSAGING_OPTIONS, createRegistryMessagingConfigurationModule } from '../../configuration';
 import { createProviderEndpoints } from './Endpoints/provider-endpoints';
 import {
-  EvidenceDispatchErrorObserver,
+  captureDispatchErrors,
   PayloadRequestHandler,
   ProfileCommandHandler,
   ProfileRequestHandler,
@@ -37,6 +36,7 @@ export async function startProviderHost(): Promise<void> {
   const app = await NestFactory.createApplicationContext(ProviderModule, { logger: false, abortOnError: false });
   const options = app.get(REGISTRY_MESSAGING_OPTIONS, { strict: false }) as ServerOptions;
   const evidence = app.get(EvidenceStore, { strict: false });
+  captureDispatchErrors(evidence);
   const route = app.get(ZLINK_ROUTE_CLIENT, { strict: false }) as ZLinkRouteClient;
   const runtimeOptions = app.get(ZLINK_ROUTE_MESH_RUNTIME_OPTIONS, { strict: false }) as ZLinkRouteMeshRuntimeOptions;
   const frameworkRuntime = app.get(ZLINK_FRAMEWORK_RUNTIME, { strict: false }) as ZLinkFrameworkRuntime;
@@ -67,10 +67,7 @@ function createProviderModule(): Function {
           const builder = zlinkFramework();
           builder
             .configureDispatch()
-              .setMessageFlowObserver(EvidenceDispatchErrorObserver)
-              .messageFlow(ZLinkMessageFlowLogMode.KeyTransitions)
-              .traceLogFile(`${options.logDir}/${options.rid}-flow.log`)
-              .traceLabel(options.rid);
+              .messageFlow('normal');
 
           if (options.redisEndpoint !== undefined && options.redisKeyPrefix !== undefined) {
             builder.addLocationStore(createRedisLocationStore({
@@ -109,7 +106,6 @@ function createProviderModule(): Function {
       { provide: EvidenceStore, inject: [REGISTRY_MESSAGING_OPTIONS], useFactory: (value: unknown) => {
         const options = value as ServerOptions; return new EvidenceStore(options.rid, options.evidenceFile);
       } },
-      EvidenceDispatchErrorObserver,
       PayloadRequestHandler,
       ProfileCommandHandler,
       ProfileRequestHandler,

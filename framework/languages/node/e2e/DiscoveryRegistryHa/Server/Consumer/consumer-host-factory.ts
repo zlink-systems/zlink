@@ -2,7 +2,6 @@ import fs from 'node:fs';
 import { Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import {
-  ZLinkMessageFlowLogMode,
   type ZLinkClientServerRuntime,
   type ZLinkChannelClient,
   type ZLinkFanoutRuntime,
@@ -90,9 +89,7 @@ function createConsumerModule(): {
           const builder = zlinkFramework();
           builder
             .configureDispatch()
-              .messageFlow(ZLinkMessageFlowLogMode.KeyTransitions)
-              .traceLogFile(`${options.logDir}/${options.traceLabel}-flow.log`)
-              .traceLabel(options.traceLabel);
+              .messageFlow('normal');
           responseGate = options.storeResponseGate ? createStoreResponseGate() : undefined;
           builder.addLocationStore(createGatedRedisLocationStore(options, responseGate ?? createStoreResponseGate()));
           configureStoreFailureLocationOptions(builder.configureLocations());

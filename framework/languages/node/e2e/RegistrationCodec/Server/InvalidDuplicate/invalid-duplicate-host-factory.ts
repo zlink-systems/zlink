@@ -1,7 +1,6 @@
 import fs from 'node:fs';
 import { Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
-import { ZLinkMessageFlowLogMode } from '@zlink-systems/framework';
 import { ZLinkModule, zlinkFramework } from '@zlink-systems/nestjs';
 import { PacketNames, RegistrationCodecNames } from '../../Shared/messages';
 import { validateInvalidDuplicateOptions, type InvalidDuplicateOptions } from './Configuration/invalid-duplicate-options';
@@ -29,9 +28,7 @@ function createInvalidDuplicateModule(): Function {
           const builder = zlinkFramework();
           builder
             .configureDispatch()
-              .messageFlow(ZLinkMessageFlowLogMode.KeyTransitions)
-              .traceLogFile(`${options.logDir}/${options.rid}-flow.log`)
-              .traceLabel(options.rid);
+              .messageFlow('normal');
           const mesh = builder.addRouteMesh(RegistrationCodecNames.channel)
             .listen(options.channelEndpoint);
           const channel = mesh.channel(RegistrationCodecNames.channel).server();

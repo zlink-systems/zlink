@@ -1,7 +1,6 @@
 import fs from 'node:fs';
 import { Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
-import { ZLinkMessageFlowLogMode } from '@zlink-systems/framework';
 import type { ZLinkRouteClient, ZLinkSpotManager, ZLinkSpotOutbound } from '@zlink-systems/framework';
 import { ZLinkRedisLocationStore } from '@zlink-systems/framework-locations-redis';
 import { ZLINK_ROUTE_CLIENT, ZLINK_SPOT_MANAGER, ZLINK_SPOT_OUTBOUND, ZLinkModule, zlinkFramework } from '@zlink-systems/nestjs';
@@ -12,7 +11,7 @@ import type { PlayOptions } from './Configuration/play-options';
 import { createPlayEndpoints } from './Endpoints/play-endpoints';
 import { ChannelEchoHandler, ChannelNotifyHandler, NodeEchoHandler } from './Handlers/channel-handlers';
 import { ControlPingHandler, CreateSpotHandler, CrossRoleActorPushHandler, EnsureActorHandler } from './Handlers/control-handlers';
-import { EvidenceDispatchErrorObserver } from './Handlers/dispatch-error-observer';
+import { captureDispatchErrors } from './Handlers/dispatch-error-observer';
 import { SpotMsgHandler, SpotOutboundHandler, SpotOutboundNegativeHandler } from './Handlers/spot-outbound-handlers';
 import { SpotToSpotHandler, SpotToSpotNegativeHandler, SpotToSpotTimeoutHandler } from './Handlers/spot-to-spot-handlers';
 import { StageProbeHandler, StageTimerHandler, StageTimerStartHandler } from './Handlers/stage-handlers';
@@ -83,10 +82,7 @@ export async function startPlayHost(): Promise<void> {
             .routeCacheMaxAgeMs(500);
           builder
             .configureDispatch()
-              .setMessageFlowObserver(EvidenceDispatchErrorObserver)
-              .messageFlow(ZLinkMessageFlowLogMode.KeyTransitions)
-              .traceLogFile(`${options.logDir}/${options.rid}-flow.log`)
-              .traceLabel(options.rid);
+              .messageFlow('normal');
 
           const control = builder.addRouteMesh(SpotServiceNames.controlChannel)
             .listen(options.controlRouterEndpoint)
@@ -155,7 +151,6 @@ export async function startPlayHost(): Promise<void> {
     ],
     providers: [
       { provide: EvidenceStore, inject: [PLAY_OPTIONS], useFactory: createEvidence },
-      EvidenceDispatchErrorObserver,
       ChannelEchoHandler,
       NodeEchoHandler,
       ChannelNotifyHandler,
@@ -199,6 +194,7 @@ export async function startPlayHost(): Promise<void> {
   const app = await NestFactory.createApplicationContext(PlayModule, { logger: false, abortOnError: false });
   const options = app.get(PLAY_OPTIONS) as PlayOptions;
   const evidence = app.get(EvidenceStore);
+  captureDispatchErrors(evidence);
   const spotManager = app.get(ZLINK_SPOT_MANAGER, { strict: false }) as ZLinkSpotManager;
   const spotOutbound = app.get(ZLINK_SPOT_OUTBOUND, { strict: false }) as ZLinkSpotOutbound;
   const routeClient = app.get(ZLINK_ROUTE_CLIENT, { strict: false }) as ZLinkRouteClient;

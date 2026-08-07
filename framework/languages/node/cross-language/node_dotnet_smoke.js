@@ -1,5 +1,6 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
+const fsSync = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const net = require('node:net');
@@ -7,6 +8,8 @@ const { spawn } = require('node:child_process');
 const { createClient } = require('redis');
 const { Injectable, Module } = require('@nestjs/common');
 const { NestFactory } = require('@nestjs/core');
+const { logs } = require('@opentelemetry/api-logs');
+const { LoggerProvider } = require('@opentelemetry/sdk-logs');
 
 const zlink = require('@zlink-systems/zlink');
 const framework = require('../packages/framework/dist');
@@ -473,6 +476,20 @@ async function dotnetConnectorToNodeStreamServer(tempDir) {
   const endpoint = `tcp://127.0.0.1:${port}`;
   const eventFile = path.join(tempDir, 'dotnet-connector-node-stream.events');
   const flowFile = path.join(tempDir, 'dotnet-connector-node-stream.flow');
+  const loggerProvider = new LoggerProvider({
+    processors: [{
+      onEmit(record) {
+        const fields = record.attributes;
+        fsSync.appendFileSync(
+          flowFile,
+          `packet=${fields.packet_name ?? '<null>'} flow=${fields.flow_id ?? '<null>'} origin=${fields.flow_origin ?? '<null>'}\n`
+        );
+      },
+      forceFlush: async () => undefined,
+      shutdown: async () => undefined
+    }]
+  });
+  logs.setGlobalLoggerProvider(loggerProvider);
   const streamEvents = [];
   class NodeStreamSessionFactory {
     async create(sessionContext) {
@@ -495,9 +512,7 @@ async function dotnetConnectorToNodeStreamServer(tempDir) {
       useFactory: () => {
         const builder = nestjs.zlinkFramework();
         builder.configureDispatch()
-          .messageFlow(framework.ZLinkMessageFlowLogMode.KeyTransitions)
-          .traceLogFile(flowFile)
-          .traceLabel('node-test-host');
+          .messageFlow('normal');
         builder.addStreamNode('cross-language-stream')
           .bind(endpoint)
           .registerSession(NodeStreamSessionFactory);

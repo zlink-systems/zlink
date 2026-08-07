@@ -1,7 +1,6 @@
 import fs from 'node:fs';
 import { Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
-import { ZLinkMessageFlowLogMode } from '@zlink-systems/framework';
 import {
   ZLINK_FANOUT_CLIENT,
   ZLINK_ROUTE_CLIENT,
@@ -20,8 +19,7 @@ import type { ServerOptions } from './Configuration/server-options';
 import { RESILIENCE_OPTIONS, createResilienceConfigurationModule } from '../../configuration';
 import { createProviderEndpoints } from './Endpoints/provider-endpoints';
 import {
-  EvidenceDispatchErrorObserver,
-  EvidenceRuntimeErrorSink,
+  captureDispatchErrors,
   PayloadRequestHandler,
   ProfileCommandHandler,
   ProfileRequestHandler,
@@ -39,6 +37,7 @@ export async function startProviderHost(): Promise<void> {
   const options = app.get(RESILIENCE_OPTIONS, { strict: false }) as ServerOptions;
   const evidence = app.get(EvidenceStore, { strict: false });
   const fault = app.get(FaultState, { strict: false });
+  captureDispatchErrors(evidence, fault);
   const channel = app.get(ZLINK_ROUTE_CLIENT, { strict: false }) as ZLinkRouteClient;
   const fanout = app.get(ZLINK_FANOUT_CLIENT, { strict: false }) as ZLinkFanoutClient;
   const runtimeOptions = app.get(
@@ -76,11 +75,7 @@ function createProviderModule(): Function {
           const builder = zlinkFramework();
           builder
             .configureDispatch()
-              .setMessageFlowObserver(EvidenceDispatchErrorObserver)
-              .setRuntimeErrorSink(EvidenceRuntimeErrorSink)
-              .messageFlow(ZLinkMessageFlowLogMode.KeyTransitions)
-              .traceLogFile(`${options.logDir}/${options.rid}-flow.log`)
-              .traceLabel(options.rid);
+              .messageFlow('normal');
 
           if (options.redisEndpoint !== undefined && options.redisKeyPrefix !== undefined) {
             builder.addLocationStore(createRedisLocationStore({
@@ -113,8 +108,6 @@ function createProviderModule(): Function {
         const options = value as ServerOptions; return new EvidenceStore(options.rid, options.evidenceFile);
       } },
       FaultState,
-      EvidenceDispatchErrorObserver,
-      EvidenceRuntimeErrorSink,
       PayloadRequestHandler,
       ProfileCommandHandler,
       ProfileRequestHandler,

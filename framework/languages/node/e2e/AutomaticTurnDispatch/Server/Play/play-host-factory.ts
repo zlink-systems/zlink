@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import { Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
-import { ZLinkMessageFlowLogMode, ZLinkUserSpotExecutionMode, type ZLinkFrameworkRuntime } from '@zlink-systems/framework';
+import { ZLinkUserSpotExecutionMode, type ZLinkFrameworkRuntime } from '@zlink-systems/framework';
 import { ZLinkRedisLocationStore } from '@zlink-systems/framework-locations-redis';
 import { ZLinkHttpClientModule, ZLinkModule, ZLINK_FRAMEWORK_RUNTIME, zlinkFramework } from '@zlink-systems/nestjs';
 import { AutomaticTurnDispatchNames } from '../../Shared/messages';
@@ -66,9 +66,7 @@ export async function startPlayHost(): Promise<void> {
       const builder = zlinkFramework();
       builder
         .configureDispatch()
-          .messageFlow(ZLinkMessageFlowLogMode.KeyTransitions)
-          .traceLogFile(`${options.logDir}/${options.rid}-flow.log`)
-          .traceLabel(options.rid);
+          .messageFlow('normal');
       builder.addLocationStore(locationStore);
       builder.addRouteMesh(AutomaticTurnDispatchNames.controlChannel)
         .listen(options.controlEndpoint)

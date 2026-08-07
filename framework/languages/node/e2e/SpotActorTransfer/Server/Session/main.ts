@@ -2,7 +2,6 @@ import path from 'node:path';
 import { Injectable, Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import {
-  ZLinkMessageFlowLogMode,
   ZLinkPeerState,
   type ActorRef,
   type ZLinkMessage,
@@ -118,9 +117,7 @@ Module({
           .ownerLeaseFencingMarginMs(500)
           .ownerLeaseRenewTimeoutMs(500);
         builder.configureDispatch()
-          .messageFlow(ZLinkMessageFlowLogMode.KeyTransitions)
-          .traceLogFile(path.join(options.logDir, `${options.rid}-flow.log`))
-          .traceLabel(options.rid);
+          .messageFlow('normal');
         const mesh = builder.addRouteMesh(SpotActorTransferNames.mesh)
           .listen(options.routerEndpoint).routingId(options.rid);
         mesh.objects().client();

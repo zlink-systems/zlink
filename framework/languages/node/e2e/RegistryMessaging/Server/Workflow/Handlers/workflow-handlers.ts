@@ -1,11 +1,10 @@
 import { Injectable } from '@nestjs/common';
 import type {
-  ZLinkMessageFlowEvent,
-  ZLinkMessageFlowObserver,
   ZLinkMessageContext,
   ZLinkRequestHandler
 } from '@zlink-systems/framework';
 import type { WorkflowRes, WorkflowReq } from '../../../Shared/messages';
+import { setE2eTelemetryLogReceiver } from '../../../Shared/telemetry-log-provider';
 import { EvidenceStore } from '../Infrastructure/evidence-store';
 
 @Injectable()
@@ -18,22 +17,18 @@ export class WorkflowRequestHandler implements ZLinkRequestHandler<WorkflowReq, 
   }
 }
 
-@Injectable()
-export class EvidenceDispatchErrorObserver implements ZLinkMessageFlowObserver {
-  constructor(private readonly evidence: EvidenceStore) {}
-
-  onMessageFlow(flow: ZLinkMessageFlowEvent): void {
-    if (flow.outcome !== 'failed') {
-      return;
-    }
-    this.evidence.add(
+export function captureDispatchErrors(evidence: EvidenceStore): void {
+  setE2eTelemetryLogReceiver((record) => {
+    if (record.eventId !== 'zlink.dispatch_error') return;
+    const fields = record.attributes;
+    evidence.add(
       'dispatch-error'
-      + `|surface=${flow.surface}`
-      + `|kind=${flow.messageKind}`
-      + `|reason=${flow.reason ?? '<null>'}`
-      + `|action=${flow.action ?? '<null>'}`
-      + `|packet=${flow.packetName ?? '<null>'}`
-      + `|channel=${flow.channelName ?? '<null>'}`
+      + `|surface=${fields.surface}`
+      + `|kind=${fields.message_kind}`
+      + `|reason=${fields.reason ?? '<null>'}`
+      + `|action=${fields.action ?? '<null>'}`
+      + `|packet=${fields.packet_name ?? '<null>'}`
+      + `|channel=${fields.channel_name ?? '<null>'}`
     );
-  }
+  });
 }

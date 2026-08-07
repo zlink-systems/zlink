@@ -1,14 +1,14 @@
 import fs from 'node:fs';
 import { Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
-import { ZLinkMessageFlowLogMode, type ZLinkFanoutClient } from '@zlink-systems/framework';
+import { type ZLinkFanoutClient } from '@zlink-systems/framework';
 import { ZLINK_FANOUT_CLIENT, ZLinkModule, zlinkFramework } from '@zlink-systems/nestjs';
 import { PubSubNames } from '../../Shared/messages';
 import { createRedisLocationStore, locationMessagingOptions } from '../../Shared/location-store';
 import { validatePublisherOptions, type PublisherOptions } from './Configuration/publisher-options';
 import { PUBSUB_OPTIONS, createPubSubConfigurationModule } from '../../configuration';
 import { createPublisherEndpoints } from './Endpoints/publisher-endpoints';
-import { EvidenceDispatchErrorObserver } from './Handlers/evidence-dispatch-error-observer';
+import { captureDispatchErrors } from './Handlers/evidence-dispatch-error-observer';
 import { EvidenceStore } from './Infrastructure/evidence-store';
 import { closeHttpServer, startHttpServer } from './Support/http-server';
 
@@ -29,10 +29,7 @@ export async function startPublisherHost(): Promise<void> {
           const builder = zlinkFramework();
           builder
             .configureDispatch()
-              .setMessageFlowObserver(EvidenceDispatchErrorObserver)
-              .messageFlow(ZLinkMessageFlowLogMode.KeyTransitions)
-              .traceLogFile(`${options.logDir}/${options.rid}-flow.log`)
-              .traceLabel(options.rid);
+              .messageFlow('normal');
           if (options.redisEndpoint !== undefined && options.redisKeyPrefix !== undefined) {
             builder.addLocationStore(createRedisLocationStore({
               redisEndpoint: options.redisEndpoint,
@@ -71,14 +68,14 @@ export async function startPublisherHost(): Promise<void> {
           const options = value as PublisherOptions;
           return new EvidenceStore(options.rid, options.evidenceFile);
         }
-      },
-      EvidenceDispatchErrorObserver
+      }
     ]
   })(PublisherModule);
 
   const app = await NestFactory.createApplicationContext(PublisherModule, { logger: false, abortOnError: false });
   const options = app.get(PUBSUB_OPTIONS, { strict: false }) as PublisherOptions;
   const evidence = app.get(EvidenceStore, { strict: false });
+  captureDispatchErrors(evidence);
   const fanout = app.get(ZLINK_FANOUT_CLIENT, { strict: false }) as ZLinkFanoutClient;
   const server = await startHttpServer(
     options.httpUrl,

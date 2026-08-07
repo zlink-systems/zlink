@@ -2,7 +2,6 @@ import fs from 'node:fs';
 import { Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import {
-  ZLinkMessageFlowLogMode,
   type ZLinkActorClient,
   type ZLinkActorManager,
   type ZLinkLocationRuntimeQuery,
@@ -76,9 +75,7 @@ export async function startMultiNodeHost(): Promise<void> {
           const builder = zlinkFramework();
           builder
             .configureDispatch()
-              .messageFlow(ZLinkMessageFlowLogMode.KeyTransitions)
-              .traceLogFile(`${options.logDir}/${options.rid}-flow.log`)
-              .traceLabel(options.rid);
+              .messageFlow('normal');
           if (options.redisEndpoint !== undefined && options.redisKeyPrefix !== undefined) {
             builder.addLocationStore(new ZLinkRedisLocationStore({
               url: `redis://${options.redisEndpoint}`,

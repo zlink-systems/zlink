@@ -2,7 +2,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
-import { ZLinkMessageFlowLogMode } from '@zlink-systems/framework';
 import type { ZLinkRouteClient, ZLinkRouteMeshRuntime } from '@zlink-systems/framework';
 import {
   ZLINK_ROUTE_CLIENT,
@@ -125,8 +124,7 @@ function buildTriggerFramework(
 ) {
   fs.mkdirSync(options.logDir, { recursive: true });
   const builder = zlinkFramework();
-  builder.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.KeyTransitions)
-    .traceLogFile(`${options.logDir}/${traceLabel}-flow.log`).traceLabel(traceLabel);
+  builder.configureDispatch().messageFlow('normal');
   const serviceMesh = builder.addRouteMesh(channelName)
     .listen('tcp://127.0.0.1:0')
     .routingId(traceLabel);

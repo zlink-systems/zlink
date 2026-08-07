@@ -3,7 +3,6 @@ import path from 'node:path';
 import { Inject, Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import {
-  ZLinkMessageFlowLogMode,
   ZLinkMessage,
   ZLinkFrameworkErrorKind,
   ZLinkFrameworkException,
@@ -186,9 +185,7 @@ Module({
         locationMessagingOptions(builder.configureLocations());
         builder
           .configureDispatch()
-          .messageFlow(ZLinkMessageFlowLogMode.KeyTransitions)
-          .traceLogFile(path.join(options.logDir, 'actor-flow.log'))
-          .traceLabel(options.rid);
+          .messageFlow('normal');
         const mesh = builder
           .addRouteMesh('to-actor')
           .listen(options.routerEndpoint).routingId(options.rid);

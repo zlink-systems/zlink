@@ -1,9 +1,7 @@
 import fs from 'node:fs';
-import path from 'node:path';
 import { Injectable, Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import {
-  ZLinkMessageFlowLogMode,
   type ZLinkMessage,
   type ZLinkSession,
   type ZLinkSessionContext,
@@ -121,9 +119,7 @@ Module({
         locationMessagingOptions(builder.configureLocations());
         builder
           .configureDispatch()
-          .messageFlow(ZLinkMessageFlowLogMode.KeyTransitions)
-          .traceLogFile(path.join(options.logDir, 'session-flow.log'))
-          .traceLabel(options.rid);
+          .messageFlow('normal');
         const mesh = builder
           .addRouteMesh('to-actor')
           .listen(options.routerEndpoint).routingId(options.rid);

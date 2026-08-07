@@ -1,4 +1,4 @@
-// RL-D2: Observer failure를 messaging에서 격리한다 시나리오를 검증한다.
+// RL-D2: Telemetry provider failure를 messaging에서 격리한다 시나리오를 검증한다.
 import type { ProfileRes, RequestFailureRes } from '../../Shared/messages';
 import type { ClientOptions } from '../Support/client-options';
 import { getJson, postJson } from '../../../http-client';
@@ -8,7 +8,7 @@ import { ensure } from '../Support/scenario-assert';
 
 export async function runRlD2(options: ClientOptions): Promise<void> {
   await waitForAnyProviderTraffic(options.consumerUrl, 'rl-d2-ready');
-  const baselineRuntimeErrors = countRuntimeErrors(await readProviderEvidence(options));
+  const baselineProviderFailures = countProviderFailures(await readProviderEvidence(options));
 
   await postJson(options.providerAUrl, '/admin/fault/observer-throws');
   await postJson(options.providerBUrl, '/admin/fault/observer-throws');
@@ -25,14 +25,7 @@ export async function runRlD2(options: ClientOptions): Promise<void> {
   );
 
   await waitForEitherEvidence(options, 'dispatch-error', 'RL-D2 did not record dispatch-error evidence.');
-  const runtimeError = await waitForRuntimeError(options, baselineRuntimeErrors);
-  ensure(
-    runtimeError.includes('event_id=zlink.runtime_error')
-      && runtimeError.includes('kind=observer_failed')
-      && runtimeError.includes('source=message_flow_observer')
-      && runtimeError.includes('fields=eventId,kind,reason,source,timestamp'),
-    `RL-D2 runtime error sink event did not preserve the public contract: ${runtimeError}`
-  );
+  await waitForProviderFailure(options, baselineProviderFailures);
 
   const followUp = await postJson<ProfileRes>(
     options.consumerUrl,
@@ -47,35 +40,35 @@ export async function runRlD2(options: ClientOptions): Promise<void> {
   await waitForEitherEvidence(options, 'marker=rl-d2-after', 'RL-D2 did not record expected follow-up evidence.');
   await new Promise((resolve) => setTimeout(resolve, 500));
   ensure(
-    countRuntimeErrors(await readProviderEvidence(options)) === baselineRuntimeErrors + 1,
-    'RL-D2 runtime error sink did not receive exactly one observer failure event.'
+    countProviderFailures(await readProviderEvidence(options)) === baselineProviderFailures + 1,
+    'RL-D2 logger provider did not report exactly one injected failure.'
   );
 
   console.log('scenario RL-D2 passed');
 }
 
-function countRuntimeErrors(evidence: readonly string[]): number {
-  return evidence.filter((line) => line.startsWith('runtime-error|')).length;
+function countProviderFailures(evidence: readonly string[]): number {
+  return evidence.filter((line) => line.startsWith('telemetry-provider-failure|')).length;
 }
 
-async function waitForRuntimeError(
+async function waitForProviderFailure(
   options: ClientOptions,
   baseline: number
-): Promise<string> {
+): Promise<void> {
   const deadline = Date.now() + 15000;
   while (Date.now() < deadline) {
     const evidence = await readProviderEvidence(options);
-    const runtimeErrors = evidence.filter((line) => line.startsWith('runtime-error|'));
-    if (runtimeErrors.length === baseline + 1) {
-      return runtimeErrors.at(-1)!;
+    const failures = evidence.filter((line) => line.startsWith('telemetry-provider-failure|'));
+    if (failures.length === baseline + 1) {
+      return;
     }
     ensure(
-      runtimeErrors.length <= baseline + 1,
-      'RL-D2 runtime error sink received more than one observer failure event.'
+      failures.length <= baseline + 1,
+      'RL-D2 logger provider received more than one injected failure.'
     );
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
-  ensure(false, 'RL-D2 runtime error sink event timed out.');
+  ensure(false, 'RL-D2 logger provider failure evidence timed out.');
 }
 
 async function waitForEitherEvidence(options: ClientOptions, contains: string, message: string): Promise<void> {

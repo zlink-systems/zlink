@@ -2,7 +2,6 @@ import fs from 'node:fs';
 import { Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import {
-  ZLinkMessageFlowLogMode,
   type ZLinkFanoutClient,
   type ZLinkRouteMeshRuntimeOptions,
   type ZLinkFrameworkRuntime
@@ -89,9 +88,7 @@ function createProviderModule(): {
           const builder = zlinkFramework();
           builder
             .configureDispatch()
-              .messageFlow(ZLinkMessageFlowLogMode.KeyTransitions)
-              .traceLogFile(`${options.logDir}/${options.rid}-flow.log`)
-              .traceLabel(options.rid);
+              .messageFlow('normal');
           locationStore = createRedisLocationStore(options);
           builder.addLocationStore(locationStore);
           relocationStore = new ZLinkRedisRelocationStore({

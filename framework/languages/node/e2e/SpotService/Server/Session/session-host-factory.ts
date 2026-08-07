@@ -1,7 +1,6 @@
 import fs from 'node:fs';
 import { Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
-import { ZLinkMessageFlowLogMode } from '@zlink-systems/framework';
 import type { ZLinkRouteClient } from '@zlink-systems/framework';
 import { ZLinkRedisLocationStore } from '@zlink-systems/framework-locations-redis';
 import { ZLINK_ROUTE_CLIENT, ZLinkModule, zlinkFramework } from '@zlink-systems/nestjs';
@@ -39,9 +38,7 @@ export async function startSessionHost(): Promise<void> {
             keyPrefix: options.redisKeyPrefix
           }));
           builder.configureDispatch()
-            .messageFlow(ZLinkMessageFlowLogMode.KeyTransitions)
-            .traceLogFile(`${options.logDir}/${options.rid}-flow.log`)
-            .traceLabel(options.rid);
+            .messageFlow('normal');
 
           const controlMesh = builder.addRouteMesh(SpotServiceNames.controlChannel)
             .listen(options.controlRouterEndpoint)

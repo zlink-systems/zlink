@@ -2,7 +2,6 @@ import fs from 'node:fs';
 import { Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import type { ZLinkRouteClient } from '@zlink-systems/framework';
-import { ZLinkMessageFlowLogMode } from '@zlink-systems/framework';
 import { zlinkProtobufCodec } from '@zlink-systems/framework-codec-protobuf/framework';
 import { ZLINK_ROUTE_CLIENT, ZLinkModule, zlinkFramework } from '@zlink-systems/nestjs';
 import { RegistrationCodecNames } from '../../Shared/messages';
@@ -46,9 +45,7 @@ function createCodecRequesterModule(): Function {
             .codecs()
               .use(zlinkProtobufCodec())
             .configureDispatch()
-              .messageFlow(ZLinkMessageFlowLogMode.KeyTransitions)
-              .traceLogFile(`${options.logDir}/${options.rid}-flow.log`)
-              .traceLabel(options.rid);
+              .messageFlow('normal');
           const mesh = builder.addRouteMesh(RegistrationCodecNames.channel);
           mesh.peerConnections().connect(options.targetEndpoint);
           mesh.channel(RegistrationCodecNames.channel).client();
