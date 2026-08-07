@@ -248,6 +248,7 @@ standalone HTTP clean consumer도 통과했으며 public API snapshot hash는
 `c1987f4b98e4fac7a30b7d038a56ee0d20e1272d00e79bdc88d3271e3c3ab958`이다. 실제 process
 `ChannelEgressRouting` `CH-REG-06`은 `logs/20260807-184635-466543/`에서 RouteMesh와 ClientServer request가
 application retry 없이 각각 1초 안에 완료되는 것을 확인하고 통과했다.
+이 checkpoint는 `d69e505ad2`로 `main`에 push했다.
 
 ### DOTNET-COMP-001 — completion retention 전체 포화 시 caller terminal 유실
 
