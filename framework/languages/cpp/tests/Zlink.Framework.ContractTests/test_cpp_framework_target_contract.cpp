@@ -1769,6 +1769,15 @@ int main ()
       "CPP-COMP-001",
       "Actor retry or native failure classification still depends on exception text");
 
+    /* CPP-LAYER-003 — Actor handler and deferred join completion ordering are
+     * owned by one serial queue, without a second handler-wide mailbox lock. */
+    gate.require (
+      spot_runtime.find ("actor_execution_queues") != std::string::npos
+        && spot_runtime.find ("actor_mailboxes") == std::string::npos
+        && spot_runtime.find ("actor_mailbox_lock") == std::string::npos,
+      "CPP-LAYER-003",
+      "Actor dispatch still holds a redundant per-Actor mailbox mutex");
+
     /* CPP-ROUTE-002 — the direct-store fallback uses the same owner
      * admission deadline as the shared location resolver and never extends
      * it while converting store time to a steady-clock cache deadline. */

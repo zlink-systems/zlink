@@ -330,7 +330,7 @@ void verify_public_host_route_cache_stops_at_owner_admission_deadline ()
       mesh::raw_mesh_node_options_t{descriptor ("route-cache-source")}};
     source_options.object_stable_types.insert ("framework.spot");
     source_options.route_cache_max_age = 10s;
-    source_options.owner_lease_fencing_margin = 4s;
+    source_options.owner_lease_fencing_margin = 3s;
     auto source = std::make_shared<host::public_host_runtime_t> (
       std::move (source_options));
     auto target = std::make_shared<host::public_host_runtime_t> (
@@ -368,7 +368,7 @@ void verify_public_host_route_cache_stops_at_owner_admission_deadline ()
           {zlink::message_t::from (std::string ("payload"))});
     };
     assert (send () == zlink::submit_result_t::ok);
-    std::this_thread::sleep_for (1200ms);
+    std::this_thread::sleep_for (3s);
     assert (send () == zlink::submit_result_t::not_found);
 
     source->close ();

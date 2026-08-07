@@ -658,7 +658,6 @@ void deactivate_actor_location (std::weak_ptr<detail::spot_node_builder_state_t>
         detail::erase_actor_instance_index_unlocked (
           *state, ::zlink::framework::detail::actor_ref_access_t::actor_type (actor),
           actor.actor_id ().value ());
-        state->actor_mailboxes.erase (key);
         (void) state->dispatched_request_replies.erase_if ([&] (const auto &request_key) {
             return request_key.starts_with (actor_request_dedup_prefix (key));
         });
@@ -2100,7 +2099,6 @@ task_t<void> entry_spot_context_t::destroy_actor_erased (const actor_ref_t &acto
             _state->node->actor_instances.erase (key);
             detail::erase_actor_instance_index_unlocked (*_state->node, ::zlink::framework::detail::actor_ref_access_t::actor_type (actor),
                                                          actor.actor_id ().value ());
-            _state->node->actor_mailboxes.erase (key);
             (void) _state->node->dispatched_request_replies.erase_if (
               [&] (const auto &request_key) {
                   return request_key.starts_with (actor_request_dedup_prefix (key));
@@ -4058,7 +4056,6 @@ std::size_t spot_node_runtime_t::cleanup_expired_actor_admissions_at (
                   ::zlink::framework::detail::actor_ref_access_t::actor_type (
                     found->source_actor),
                   found->source_actor.actor_id ().value ());
-                _state->actor_mailboxes.erase (key);
                 release_actor_location (*_state, found->source_actor);
             }
             cleaned_sources.push_back (std::move (*found));
@@ -4634,7 +4631,6 @@ spot_node_runtime_t::deliver_actor_join_completion (
 
     actor_join_completion_callback_t callback;
     std::shared_ptr<void> actor;
-    std::shared_ptr<std::mutex> mailbox;
     {
         std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
         if (_state->delivered_join_completions.contains (operation)
@@ -4662,10 +4658,6 @@ spot_node_runtime_t::deliver_actor_join_completion (
         }
         callback = factory->second.on_join_completed;
         actor = instance->second;
-        auto &mailbox_slot = _state->actor_mailboxes[key];
-        if (!mailbox_slot)
-            mailbox_slot = std::make_shared<std::mutex> ();
-        mailbox = mailbox_slot;
         _state->delivering_join_completions.insert (operation);
     }
 
@@ -4677,7 +4669,8 @@ spot_node_runtime_t::deliver_actor_join_completion (
     };
 
     try {
-        std::unique_lock actor_mailbox_lock (*mailbox);
+        // The deferred Actor join barrier owns the same Actor serial queue
+        // until this callback returns, so a second per-Actor mutex is not needed.
         if (callback) {
             auto completed = callback (
               actor.get (),
@@ -5462,11 +5455,6 @@ spot_node_runtime_t::relay_actor_packet (const actor_ref_t &actor_ref,
           framework_error_kind_t::not_found, "actor factory is not registered");
     }
 
-    auto &mailbox_slot = _state->actor_mailboxes[key];
-    if (!mailbox_slot) {
-        mailbox_slot = std::make_shared<std::mutex> ();
-    }
-    auto actor_mailbox = mailbox_slot;
     auto found_location = _state->actor_spot_ids.find (key);
     if (found_location == _state->actor_spot_ids.end ()
         && _state->destroyed_actor_keys.contains (key)) {
@@ -5701,7 +5689,6 @@ spot_node_runtime_t::relay_actor_packet (const actor_ref_t &actor_ref,
     report_spot_dispatch_trace (_state, message_flow_outcome_t::received,
                                 dispatch_error_surface_t::spot_actor, dispatch_kind, packet_name,
                                 {}, current_spot_id, actor_ref.actor_id ().value ());
-    std::unique_lock actor_mailbox_lock (*actor_mailbox);
     auto reply =
       spot_handler_registry_t (context->_state)
         .invoke_erased (handler_kind, packet_name, {}, found_factory->second.actor_type,
@@ -6468,7 +6455,6 @@ result_t<bool> spot_node_runtime_t::destroy_actor (const actor_ref_t &actor_ref)
         detail::erase_actor_instance_index_unlocked (
           *_state, ::zlink::framework::detail::actor_ref_access_t::actor_type (actor_ref),
           actor_ref.actor_id ().value ());
-        _state->actor_mailboxes.erase (key);
         _state->actor_execution_queues.erase (key);
         _state->actor_types_by_id.erase (std::string (actor_ref.actor_id ().value ()));
         _state->mesh_runtime_owned_native_actor_ids.erase (

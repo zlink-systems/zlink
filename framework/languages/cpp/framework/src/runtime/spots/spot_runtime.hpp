@@ -203,7 +203,6 @@ class spot_node_builder_state_t
      * a freed instance can at worst leave an entry that no longer resolves
      * to a live registration. */
     std::map<const void *, std::pair<std::string, std::string>> actor_instance_index;
-    std::map<std::string, std::shared_ptr<std::mutex>> actor_mailboxes;
     std::map<std::string,
              std::shared_ptr<runtime::serial_execution_queue_t>>
       actor_execution_queues;
