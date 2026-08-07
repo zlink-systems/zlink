@@ -680,18 +680,6 @@ int main ()
         return 14;
     }
 
-    bool raw_called = false;
-    handlers.send_raw ("game", "raw-topic", "raw",
-                       [&raw_called] (const zlink::framework::payload_view_t &payload) {
-                           raw_called = payload.to_string () == "raw-body";
-                           return zlink::framework::result_t<void>::success ();
-                       });
-    auto raw_result = handlers.invoke ("game", "raw-topic", "raw", provider, serializers,
-                                       zlink::message_t::from (std::string ("raw-body")));
-    if (!raw_result || !raw_called) {
-        return 15;
-    }
-
     zlink::framework::handler_registry_t default_handlers;
     default_handlers.on_send<handler_t, command_t> ("game", "default", &handler_t::on_command);
     if (default_handlers.find ("game", "default", command_t::packet_name) == nullptr) {

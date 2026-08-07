@@ -60,7 +60,6 @@ handler_dispatch_kind_t dispatch_kind_for (handler_kind_t kind)
         case handler_kind_t::event:
             return handler_dispatch_kind_t::classic_fanout;
         case handler_kind_t::send:
-        case handler_kind_t::raw:
             return handler_dispatch_kind_t::channel_send;
     }
     return handler_dispatch_kind_t::channel_send;
@@ -283,37 +282,6 @@ handler_registry_t::~handler_registry_t () = default;
 handler_registry_t::handler_registry_t (handler_registry_t &&) noexcept = default;
 
 handler_registry_t &handler_registry_t::operator= (handler_registry_t &&) noexcept = default;
-
-handler_registry_t &handler_registry_t::send_raw (std::string channel_name,
-                                                  std::string packet_name,
-                                                  raw_handler_t handler,
-                                                  handler_options_t options)
-{
-    return send_raw (std::move (channel_name), "", std::move (packet_name), std::move (handler),
-                     std::move (options));
-}
-
-handler_registry_t &handler_registry_t::send_raw (std::string channel_name,
-                                                  std::string topic,
-                                                  std::string packet_name,
-                                                  raw_handler_t handler,
-                                                  handler_options_t options)
-{
-    const auto packet = options.packet_name.value_or (packet_name);
-    return add_handler (
-      {std::move (channel_name), std::move (topic), packet, handler_kind_t::raw, options.execution,
-       std::type_index (typeid (void)), std::type_index (typeid (zlink::message_t))},
-      [handler = std::move (handler)] (
-        service_provider_t &, serializer_registry_t &, const zlink::message_t &message,
-        const detail::inbound_message_context_t &) -> task_t<zlink::message_t> {
-          const auto result = handler (payload_view_t (detail::encoded_payload_from_raw (message)));
-          if (!result) {
-              return task_t<zlink::message_t> (detail::propagate_failure<zlink::message_t> (result, "raw handler failed"));
-          }
-          return task_t<zlink::message_t> (
-            result_t<zlink::message_t>::success (zlink::message_t{}));
-      });
-}
 
 handler_registry_t &handler_registry_t::observe_failures (failure_observer_t observer)
 {

@@ -91,8 +91,7 @@ int main ()
         return 11;
     }
 
-    zlink::framework::payload_view_t view (encoded);
-    if (view.to_string () != "42") {
+    if (encoded.to_string () != "42") {
         return 4;
     }
 

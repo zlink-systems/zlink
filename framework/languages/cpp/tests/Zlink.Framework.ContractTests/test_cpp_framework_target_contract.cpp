@@ -770,6 +770,12 @@ int main ()
                       "typed call still exposes packet_name override: " + forbidden);
     }
 
+    /* CPP-OWN-005 — application handlers receive typed payloads, not raw bytes. */
+    for (const std::string forbidden : {"send_raw", "payload_view_t", "raw_handler_t"}) {
+        gate.require (!tree_contains (include_root, forbidden), "CPP-OWN-005",
+                      "raw business handler surface is still public: " + forbidden);
+    }
+
     /* CPP-G0-STREAM-001 — typed session handler surface. */
     gate.require (tree_contains (include_root, "typed_session_packet_handler"),
                   "CPP-G0-STREAM-001", "typed stream session handler contract is missing");

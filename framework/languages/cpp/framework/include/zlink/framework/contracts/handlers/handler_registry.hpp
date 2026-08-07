@@ -32,8 +32,7 @@ enum class handler_kind_t
 {
     request = 0,
     send = 1,
-    event = 2,
-    raw = 3
+    event = 2
 };
 
 struct handler_options_t
@@ -60,26 +59,12 @@ struct handler_failure_event_t
     std::string message;
 };
 
-class payload_view_t
-{
-  public:
-    explicit payload_view_t (encoded_payload_t payload) : _payload (std::move (payload)) {}
-
-    std::span<const std::byte> bytes () const noexcept { return _payload.bytes (); }
-    std::vector<std::uint8_t> to_bytes () const { return _payload.to_bytes (); }
-    std::string to_string () const { return _payload.to_string (); }
-
-  private:
-    encoded_payload_t _payload;
-};
-
 /// Continues the current dispatch pipeline. A filter may call it at most once.
 using handler_next_t = std::function<task_t<void> ()>;
 
 class handler_registry_t
 {
   public:
-    using raw_handler_t = std::function<result_t<void> (const payload_view_t &)>;
     using invoker_t =
       std::function<task_t<zlink::message_t> (service_provider_t &,
                                               serializer_registry_t &,
@@ -360,15 +345,6 @@ class handler_registry_t
           std::move (options));
     }
 
-    handler_registry_t &send_raw (std::string channel_name,
-                                  std::string packet_name,
-                                  raw_handler_t handler,
-                                  handler_options_t options = {});
-    handler_registry_t &send_raw (std::string channel_name,
-                                  std::string topic,
-                                  std::string packet_name,
-                                  raw_handler_t handler,
-                                  handler_options_t options = {});
     template <typename TFilter> handler_registry_t &use_filter ()
     {
         return add_filter ([] (service_provider_t &services, serializer_registry_t &,
