@@ -3779,6 +3779,144 @@ test('bound session transition wire format fences the binding generation', () =>
   });
 });
 
+test('cross-owner session rebind waits for exact previous cleanup and fences a late tombstone', async () => {
+  type TestIngress = RawServiceIngressRecord & {
+    readonly resolveReply?: (parts: readonly Buffer[]) => void;
+  };
+  const rejectMailboxOnce = new Set<string>();
+  const nodes = new Map<string, {
+    ingress?: (record: RawServiceIngressRecord) => unknown;
+    readonly mailbox: Array<{
+      readonly stateful?: {
+        reply(terminalResult: number, failureCode: number): boolean;
+      };
+    }>;
+  }>();
+  const createRaw = (nodeRid: string): RawServiceMeshRuntime => {
+    const state = { mailbox: [] as Array<{
+      readonly stateful?: {
+        reply(terminalResult: number, failureCode: number): boolean;
+      };
+    }>, ingress: undefined as ((record: RawServiceIngressRecord) => unknown) | undefined };
+    nodes.set(nodeRid, state);
+    return {
+      topology: {
+        peer: (targetNodeRid: string) => nodes.has(targetNodeRid)
+          ? { descriptor: { lifecycleGeneration: 3n } }
+          : undefined
+      },
+      mailbox: {
+        tryEnqueue(record: unknown) {
+          if (rejectMailboxOnce.delete(nodeRid)) return false;
+          state.mailbox.push(record as typeof state.mailbox[number]);
+          return true;
+        }
+      },
+      setServiceIngress(handler: (record: RawServiceIngressRecord) => unknown) {
+        state.ingress = handler;
+      },
+      async requestService(targetNodeRid: string, parts: readonly Buffer[]) {
+        const target = nodes.get(targetNodeRid);
+        if (target?.ingress === undefined) throw new Error(`Missing test node '${targetNodeRid}'.`);
+        return await new Promise<readonly Buffer[]>((resolve) => {
+          target.ingress?.({
+            command: parts[0]![3]!,
+            flags: parts[0]![4]!,
+            sourceRoutingId: nodeRid,
+            parts,
+            resolveReply: resolve
+          } as TestIngress);
+        });
+      },
+      replyService(record: RawServiceIngressRecord, parts: readonly Buffer[]) {
+        (record as TestIngress).resolveReply?.(parts);
+      }
+    } as unknown as RawServiceMeshRuntime;
+  };
+
+  const actorRuntime = new ServiceStatefulRuntime(createRaw('actor-node'), 'actor-node', 3n);
+  const oldSessionRuntime = new ServiceStatefulRuntime(createRaw('session-old'), 'session-old', 3n);
+  const newSessionRuntime = new ServiceStatefulRuntime(createRaw('session-new'), 'session-new', 3n);
+  const actor = actorRuntime.createActor('actor-rebind').ref;
+  const actorRoute = {
+    actor,
+    targetNodeGeneration: 3n,
+    authorityOwnerGeneration: actorRuntime.actor(actor.actorId)!.authorityOwnerGeneration
+  };
+  oldSessionRuntime.rememberActorRoute(actorRoute);
+  newSessionRuntime.rememberActorRoute(actorRoute);
+  try {
+    const oldBind = await oldSessionRuntime.bindSession(
+      'old-rid',
+      actor,
+      1_000,
+      () => true
+    ).promise;
+    assert.equal(oldBind.terminalResult, RequestResult.Ok);
+
+    rejectMailboxOnce.add('session-old');
+    let newBindSettled = false;
+    const newBindPromise = newSessionRuntime.bindSession(
+      'new-rid',
+      actor,
+      1_000,
+      () => true
+    ).promise.then(result => {
+      newBindSettled = true;
+      return result;
+    });
+    await new Promise(resolve => setTimeout(resolve, 40));
+    assert.equal(newBindSettled, false);
+
+    const oldMailbox = nodes.get('session-old')!.mailbox;
+    assert.equal(oldMailbox.length, 1);
+    const oldBinding = oldSessionRuntime.sessionBindings('old-rid')[0]!;
+    const nativeUnbind = oldSessionRuntime.unbindSession(
+      'old-rid',
+      actor,
+      oldBinding.bindingGeneration,
+      1_000
+    );
+    assert.equal((await nativeUnbind.promise).terminalResult, RequestResult.Ok);
+    assert.equal(oldSessionRuntime.sessionBindings('old-rid').length, 0);
+    assert.equal(oldMailbox.shift()!.stateful?.reply(RequestResult.Ok, 0), true);
+
+    const newBind = await newBindPromise;
+    assert.equal(newBind.terminalResult, RequestResult.Ok);
+    const actorRegistry = (actorRuntime as unknown as {
+      readonly registry: ServiceStatefulRegistry;
+    }).registry;
+    assert.equal(actorRegistry.binding(actor)?.sessionRid, 'new-rid');
+    assert.equal(actorRegistry.binding(actor)?.sessionOwnerNodeRid, 'session-new');
+
+    const lateReplies: Buffer[][] = [];
+    const lateHeader = encodeBoundSessionBindHeader(
+      97n,
+      {
+        actor,
+        targetNodeGeneration: 3n,
+        authorityOwnerGeneration: actorRuntime.actor(actor.actorId)!.authorityOwnerGeneration
+      },
+      'old-rid',
+      { state: 'tombstone', retiredGeneration: oldBinding.bindingGeneration }
+    );
+    const actorIngress = nodes.get('actor-node')!.ingress!;
+    actorIngress({
+      command: M6bServiceWireCommand.boundSessionBind,
+      flags: 0,
+      sourceRoutingId: 'session-old',
+      parts: [lateHeader],
+      resolveReply: parts => lateReplies.push([...parts])
+    } as TestIngress);
+    assert.equal(decodeStatefulReply(lateReplies[0]![0]!, 97n, 'streamUnbind').terminalResult, RequestResult.Ok);
+    assert.equal(actorRegistry.binding(actor)?.sessionRid, 'new-rid');
+  } finally {
+    newSessionRuntime.close();
+    oldSessionRuntime.close();
+    actorRuntime.close();
+  }
+});
+
 test('mailbox saturation reports dropped actor binding control records', () => {
   let ingress: ((record: RawServiceIngressRecord) => string | undefined) | undefined;
   const dropped: Array<{ readonly kind: string; readonly owner: string }> = [];

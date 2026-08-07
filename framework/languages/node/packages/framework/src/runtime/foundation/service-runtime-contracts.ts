@@ -146,6 +146,7 @@ export interface ActorTransferControlPayload {
 
 export interface ActorBindingControlPayload {
   readonly kind: 'actorBinding';
+  readonly transition: 'active' | 'tombstone';
   readonly actor: ServiceActorRef;
   readonly bindingGeneration: bigint;
   readonly sessionNodeRid: RoutingId;

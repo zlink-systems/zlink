@@ -1471,6 +1471,7 @@ export function decodeStatefulReply(
   frame: Uint8Array,
   expectedCorrelation: bigint,
   operationKind: 'spotRequest' | 'actorRequest' | 'actorLookup' | 'actorDestroy' | 'actorJoin' | 'streamBind'
+    | 'streamUnbind'
     | 'instanceSpotRequest' | 'userSpotCreate' | 'userSpotClose' | 'actorCreate',
   hasPayload = false
 ): ServiceStatefulReply {

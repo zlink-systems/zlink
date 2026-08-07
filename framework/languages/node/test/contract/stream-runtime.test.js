@@ -3680,6 +3680,39 @@ test('stream session actor reconnect atomically replaces the native session bind
   assert.equal(second.actors.find(actorRef.actorId)?.actorId, actorRef.actorId);
 });
 
+test('remote binding tombstone removes only the exact native and logical session route', async () => {
+  const operations = [];
+  const socket = {
+    send() { return true; },
+    disconnectPeer() {},
+    recv() { return undefined; },
+    async bindActor(sessionRid) {
+      operations.push(`bind:${sessionRid}`);
+    },
+    async unbindActor(sessionRid) {
+      operations.push(`unbind:${sessionRid}`);
+    },
+    sendBoundActor() { return true; }
+  };
+  const runtime = new framework.ZLinkStreamBindingRuntime();
+  const context = runtime.createSessionContext(new framework.ZLinkManagedStream(socket, 'session-current'));
+  await context.actors.bindOrGet({
+    actorId: 'actor-exact-tombstone',
+    objectGeneration: 3n,
+    meshName: 'mesh-a',
+    nodeRid: 'actor-node',
+    bindingGeneration: 7n
+  });
+  const boundRef = runtime.find('actor-exact-tombstone').ref;
+
+  assert.equal(await runtime.retireRemoteBinding(boundRef, 'other-session', 7n), false);
+  assert.equal(await runtime.retireRemoteBinding(boundRef, 'session-current', 6n), false);
+  assert.equal(runtime.hasBoundSession('actor-exact-tombstone'), true);
+  assert.equal(await runtime.retireRemoteBinding(boundRef, 'session-current', 7n), true);
+  assert.equal(runtime.hasBoundSession('actor-exact-tombstone'), false);
+  assert.deepEqual(operations, ['bind:session-current', 'unbind:session-current']);
+});
+
 test('stream session replacement confirmation failure restores the previous binding', async () => {
   const operations = [];
   let boundSessionRid;

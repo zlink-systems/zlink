@@ -2740,6 +2740,22 @@ export class ZLinkFrameworkRuntimeHost implements
           'MeshNode Actor binding record has no binding generation.'
         );
       }
+      if (record.kindData.transition === 'tombstone') {
+        const actorRef: ActorRef = {
+          actorId: record.kindData.actor.actorId,
+          objectGeneration: record.kindData.actor.generation,
+          meshName,
+          nodeRid: record.kindData.actor.nodeRid
+        };
+        await this.streamBindingRuntime.retireRemoteBinding(
+          actorRef,
+          record.kindData.sessionRid,
+          record.kindData.bindingGeneration,
+          signal
+        );
+        record.reply([]);
+        return;
+      }
       this.actorManager
         ?.getState(record.kindData.actor.actorId)
         ?.setBoundSessionBindingGeneration(record.kindData.bindingGeneration);

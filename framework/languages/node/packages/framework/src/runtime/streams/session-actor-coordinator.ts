@@ -296,6 +296,29 @@ export class ZLinkSessionActorCoordinator {
     });
   }
 
+  async retireRemoteBinding(
+    actorRef: ActorRef,
+    sessionRid: ActorRef['nodeRid'],
+    bindingGeneration: bigint,
+    signal?: AbortSignal
+  ): Promise<boolean> {
+    return await this.lifecycle.run(actorRef.actorId, async () => {
+      throwIfAborted(signal);
+      const route = this.routes.route(actorRef.actorId);
+      if (
+        route === undefined
+        || !sameActorRef(route.actor.ref, actorRef)
+        || !routingIdsEqual(route.context.routingId, sessionRid)
+        || bindingGenerationOf(route.actor.ref) !== bindingGeneration
+      ) {
+        return false;
+      }
+      await this.unbindNativeActor(route.context, actorRef.actorId, signal);
+      this.routes.unbind(actorRef.actorId, route.context, route.bindingToken);
+      return true;
+    });
+  }
+
   authorityFence(actorId: string): {
     readonly authorityOwnerGeneration: bigint;
     readonly ownerLeaseGeneration: bigint;
@@ -393,6 +416,10 @@ function withBindingGeneration(
   preserveInternalActorRefField(result, actorRef, 'ownershipGeneration');
   preserveInternalActorRefField(result, actorRef, 'ownerLeaseGeneration');
   return result;
+}
+
+function bindingGenerationOf(actorRef: ActorRef): bigint | undefined {
+  return (actorRef as ActorRef & { readonly bindingGeneration?: bigint }).bindingGeneration;
 }
 
 function preserveNormalizedActorRefField(

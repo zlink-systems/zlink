@@ -85,6 +85,9 @@ const USER_SPOT_OPERATION_REPLAY_RETENTION_MS = 5 * 60_000;
 const ACTOR_ROUTE_NOT_FOUND = 1;
 const MESSAGE_FOLLOW_MESSAGE_LIMIT = 1024;
 const MESSAGE_FOLLOW_BYTE_LIMIT = 16 * 1024 * 1024;
+const SESSION_BINDING_TOMBSTONE_TIMEOUT_MS = 30_000;
+const SESSION_BINDING_TOMBSTONE_ATTEMPT_TIMEOUT_MS = 1_000;
+const SESSION_BINDING_TOMBSTONE_RETRY_MAX_DELAY_MS = 1_000;
 
 export interface ServiceSpotMessageFollowSeal {
   readonly key: string;
@@ -1609,7 +1612,7 @@ export class ServiceStatefulRuntime {
       sessionRid,
       { state: 'tombstone', retiredGeneration: expectedBindingGeneration }
     );
-    this.submitRequest(pending, actor.nodeRid, [header], timeoutMs, 'streamBind');
+    this.submitRequest(pending, actor.nodeRid, [header], timeoutMs, 'streamUnbind');
     return pending;
   }
 
@@ -2951,8 +2954,9 @@ export class ServiceStatefulRuntime {
     record: Extract<ServiceStatefulWireRecord, { readonly kind: 'boundSessionBind' }>
   ): RawServicePumpResult {
     try {
-      const actor = this.validateActorFence(record.actor);
       if (record.binding.state === 'active') {
+        const actor = this.validateActorFence(record.actor);
+        const previous = this.registry.binding(actor.ref);
         const binding = sessionBindingFromWire(
           actor.ref,
           record.sessionRid,
@@ -2960,27 +2964,171 @@ export class ServiceStatefulRuntime {
           record.binding.generation,
           actor.membershipEpoch
         );
+        if (previous !== undefined && sameSessionBinding(previous, binding)) {
+          this.replyWire(ingress, record.correlation, RequestResult.Ok, 0, undefined, {
+            kind: 'streamBind',
+            bindingGeneration: previous.bindingGeneration,
+            authorityOwnerGeneration: actor.authorityOwnerGeneration
+          });
+          return 'infrastructure';
+        }
         this.registry.installSessionBinding(binding);
         this.enqueueActorBindingControl(binding);
-        this.replyWire(ingress, record.correlation, RequestResult.Ok, 0, undefined, {
-          kind: 'streamBind',
-          bindingGeneration: binding.bindingGeneration,
-          authorityOwnerGeneration: actor.authorityOwnerGeneration
-        });
+        if (previous !== undefined && !sameSessionBinding(previous, binding)) {
+          this.retirePreviousSessionBinding(
+            ingress,
+            record.correlation,
+            actor.authorityOwnerGeneration,
+            previous,
+            binding
+          );
+        } else {
+          this.replyWire(ingress, record.correlation, RequestResult.Ok, 0, undefined, {
+            kind: 'streamBind',
+            bindingGeneration: binding.bindingGeneration,
+            authorityOwnerGeneration: actor.authorityOwnerGeneration
+          });
+        }
       } else {
-        this.registry.unbindSession(
-          actor.ref,
-          record.binding.retiredGeneration,
-          record.sessionRid,
-          ingress.sourceRoutingId
-        );
-        this.replyWire(ingress, record.correlation, RequestResult.Ok, 0);
+        this.enqueueSessionBindingTombstone(ingress, record);
       }
     } catch (error) {
       const result = failure(error);
       this.replyWire(ingress, record.correlation, result.terminalResult, result.failureCode);
     }
     return 'infrastructure';
+  }
+
+  private retirePreviousSessionBinding(
+    ingress: RawServiceIngressRecord,
+    correlation: bigint,
+    authorityOwnerGeneration: bigint,
+    previous: ServiceSessionBinding,
+    replacement: ServiceSessionBinding
+  ): void {
+    void this.retryPreviousSessionBindingTombstone(previous).then(
+      () => {
+        this.replyWire(ingress, correlation, RequestResult.Ok, 0, undefined, {
+          kind: 'streamBind',
+          bindingGeneration: replacement.bindingGeneration,
+          authorityOwnerGeneration
+        });
+      },
+      (error) => {
+        const result = failure(error);
+        this.replyWire(ingress, correlation, result.terminalResult, result.failureCode);
+      }
+    );
+  }
+
+  private async retryPreviousSessionBindingTombstone(
+    previous: ServiceSessionBinding
+  ): Promise<void> {
+    const deadline = Date.now() + SESSION_BINDING_TOMBSTONE_TIMEOUT_MS;
+    let retryDelayMs = 25;
+    let lastFailure: ServiceStatefulResult | undefined;
+    let lastError: unknown;
+    while (Date.now() < deadline) {
+      const timeoutMs = Math.max(
+        1,
+        Math.min(SESSION_BINDING_TOMBSTONE_ATTEMPT_TIMEOUT_MS, deadline - Date.now())
+      );
+      try {
+        const pending = this.operations.reserve(timeoutMs);
+        const header = encodeBoundSessionBindHeader(
+          pending.id,
+          this.actorFence(previous.actor),
+          previous.sessionRid,
+          { state: 'tombstone', retiredGeneration: previous.bindingGeneration }
+        );
+        this.submitRequest(
+          pending,
+          previous.sessionOwnerNodeRid,
+          [header],
+          timeoutMs,
+          'streamUnbind'
+        );
+        const result = await pending.promise;
+        if (result.terminalResult === RequestResult.Ok) return;
+        lastFailure = result;
+      } catch (error) {
+        lastError = error;
+      }
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) break;
+      await delay(Math.min(retryDelayMs, remainingMs));
+      retryDelayMs = Math.min(retryDelayMs * 2, SESSION_BINDING_TOMBSTONE_RETRY_MAX_DELAY_MS);
+    }
+    if (lastError !== undefined) throw lastError;
+    throw createInternalFrameworkException(
+      ZLinkFrameworkInternalErrorKind.ActorSessionNotBound,
+      `Actor '${previous.actor.actorId}' previous session binding tombstone was not acknowledged `
+      + `(terminal=${lastFailure?.terminalResult ?? RequestResult.InternalError}, `
+      + `failure=${lastFailure?.failureCode ?? 0}).`,
+      true
+    );
+  }
+
+  private enqueueSessionBindingTombstone(
+    ingress: RawServiceIngressRecord,
+    record: Extract<ServiceStatefulWireRecord, { readonly kind: 'boundSessionBind' }>
+  ): void {
+    if (record.binding.state !== 'tombstone') return;
+    const delivery = this.sessionDeliveries.get(actorKey(record.actor.actor));
+    if (
+      delivery === undefined
+      || delivery.binding.bindingGeneration !== record.binding.retiredGeneration
+      || delivery.binding.sessionRid !== record.sessionRid
+      || delivery.binding.sessionOwnerNodeRid !== this.nodeRid
+    ) {
+      const current = this.registry.binding(record.actor.actor);
+      if (
+        current !== undefined
+        && current.bindingGeneration === record.binding.retiredGeneration
+        && current.sessionRid === record.sessionRid
+        && current.sessionOwnerNodeRid === ingress.sourceRoutingId
+      ) {
+        this.registry.unbindSession(
+          record.actor.actor,
+          record.binding.retiredGeneration,
+          record.sessionRid,
+          ingress.sourceRoutingId
+        );
+      }
+      this.replyWire(ingress, record.correlation, RequestResult.Ok, 0);
+      return;
+    }
+    const actor = delivery.binding.actor;
+    const accepted = this.raw.mailbox.tryEnqueue({
+      owner: `actor:${actor.actorId}\0${actor.generation}`,
+      domain: 'infrastructure',
+      parts: [Buffer.from([0x5a, 0x4d, 1, M6bServiceWireCommand.boundSessionBind, 0])],
+      sourceRoutingId: ingress.sourceRoutingId,
+      stateful: {
+        receiveKind: ReceiveKind.ActorBinding,
+        operationKind: OperationKind.StreamUnbind,
+        targetActor: actor,
+        kindData: {
+          kind: 'actorBinding',
+          transition: 'tombstone',
+          actor,
+          bindingGeneration: delivery.binding.bindingGeneration,
+          sessionNodeRid: this.nodeRid as never,
+          sessionRid: delivery.binding.sessionRid as never
+        },
+        reply: (terminalResult, failureCode) => {
+          this.replyWire(ingress, record.correlation, terminalResult, failureCode);
+          return true;
+        }
+      } satisfies ServiceStatefulMailboxData
+    });
+    if (!accepted) {
+      const result = failure(createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.WorkerQueueFull,
+        `Actor '${actor.actorId}' session binding tombstone queue is full.`
+      ));
+      this.replyWire(ingress, record.correlation, result.terminalResult, result.failureCode);
+    }
   }
 
   private deliverBoundSession(
@@ -3136,6 +3284,7 @@ export class ServiceStatefulRuntime {
         targetActor: actor,
         kindData: {
           kind: 'actorBinding',
+          transition: 'active',
           actor,
           bindingGeneration: binding.bindingGeneration,
           sessionNodeRid: binding.sessionOwnerNodeRid as never,
@@ -3449,6 +3598,7 @@ export class ServiceStatefulRuntime {
     parts: readonly Buffer[],
     timeoutMs: number,
     operationKind: 'spotRequest' | 'actorRequest' | 'actorLookup' | 'actorDestroy' | 'actorJoin' | 'streamBind'
+      | 'streamUnbind'
       | 'instanceSpotRequest',
     actor?: ServiceActorRef
   ): void {
@@ -3533,6 +3683,7 @@ export class ServiceStatefulRuntime {
     ingress: RawServiceIngressRecord,
     pending: ServiceStatefulPendingOperation,
     operationKind: 'spotRequest' | 'actorRequest' | 'actorLookup' | 'actorDestroy' | 'actorJoin' | 'streamBind'
+      | 'streamUnbind'
       | 'instanceSpotRequest',
     actor?: ServiceActorRef,
     deadlineUnixMs?: bigint
@@ -3744,6 +3895,7 @@ export class ServiceStatefulRuntime {
     pending: ServiceStatefulPendingOperation,
     targetNodeRid: string,
     operationKind: 'spotRequest' | 'actorRequest' | 'actorLookup' | 'actorDestroy' | 'actorJoin' | 'streamBind'
+      | 'streamUnbind'
       | 'instanceSpotRequest',
     actor: ServiceActorRef | undefined,
     reply: readonly Buffer[]
@@ -4449,6 +4601,17 @@ function failure(error: unknown): ServiceStatefulResult {
 
 function actorKey(actor: ServiceActorRef): string {
   return `${actor.actorId}\0${actor.generation}`;
+}
+
+function sameSessionBinding(left: ServiceSessionBinding, right: ServiceSessionBinding): boolean {
+  return sameActorRef(left.actor, right.actor)
+    && left.sessionRid === right.sessionRid
+    && left.sessionOwnerNodeRid === right.sessionOwnerNodeRid
+    && left.bindingGeneration === right.bindingGeneration;
+}
+
+function delay(timeoutMs: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, timeoutMs));
 }
 
 function spotKey(spot: ServiceSpotRef): string {

@@ -430,6 +430,20 @@ export class ZLinkStreamBindingRuntime {
     await this.sessionActors.commitActorRoute(actorRef, signal, options);
   }
 
+  async retireRemoteBinding(
+    actorRef: ActorRef,
+    sessionRid: ActorRef['nodeRid'],
+    bindingGeneration: bigint,
+    signal?: AbortSignal
+  ): Promise<boolean> {
+    return await this.sessionActors.retireRemoteBinding(
+      actorRef,
+      sessionRid,
+      bindingGeneration,
+      signal
+    );
+  }
+
   authorityFence(actorId: string): {
     readonly authorityOwnerGeneration: bigint;
     readonly ownerLeaseGeneration: bigint;
