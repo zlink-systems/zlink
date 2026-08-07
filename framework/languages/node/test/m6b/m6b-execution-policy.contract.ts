@@ -239,7 +239,7 @@ test('Spot execution includes metadata bytes in the same atomic reservation', as
   await first;
 });
 
-test('Spot lifecycle lane is selected before application and scheduler yields at its time budget', async () => {
+test('Spot barrier turns remain in application FIFO order and scheduler yields at its time budget', async () => {
   const serial = new ZLinkSpotSerialExecutor(false, undefined, {
     applicationMessageCapacity: 256,
     applicationByteCapacity: 256 * 256,
@@ -251,9 +251,9 @@ test('Spot lifecycle lane is selected before application and scheduler yields at
   });
   const events: string[] = [];
   const application = serial.execute(() => events.push('application'));
-  const lifecycle = serial.postBarrierTurn(() => events.push('lifecycle'));
-  await Promise.all([application, lifecycle]);
-  assert.deepEqual(events.slice(0, 2), ['lifecycle', 'application']);
+  const barrier = serial.postBarrierTurn(() => events.push('barrier'));
+  await Promise.all([application, barrier]);
+  assert.deepEqual(events.slice(0, 2), ['application', 'barrier']);
 
   let timerRan = false;
   const timer = new Promise<void>((resolve) => {
@@ -266,4 +266,39 @@ test('Spot lifecycle lane is selected before application and scheduler yields at
   await timer;
   await Promise.all(jobs);
   assert.equal(timerRan, true);
+});
+
+test('yield continuation re-enters behind earlier application turns', async () => {
+  const serial = new ZLinkSpotSerialExecutor(true);
+  const response = deferred<void>();
+  const blockerStarted = deferred<void>();
+  const blockerFinished = deferred<void>();
+  const events: string[] = [];
+
+  const yielded = serial.execute(async () => {
+    events.push('yielded:start');
+    await serial.yieldPromise(response.promise);
+    events.push('yielded:complete');
+  });
+  const blocker = serial.execute(async () => {
+    events.push('blocker:start');
+    blockerStarted.resolve();
+    await blockerFinished.promise;
+    events.push('blocker:complete');
+  });
+  await blockerStarted.promise;
+  const queued = serial.execute(() => events.push('queued'));
+
+  response.resolve();
+  await Promise.resolve();
+  blockerFinished.resolve();
+  await Promise.all([yielded, blocker, queued]);
+
+  assert.deepEqual(events, [
+    'yielded:start',
+    'blocker:start',
+    'blocker:complete',
+    'queued',
+    'yielded:complete'
+  ]);
 });
