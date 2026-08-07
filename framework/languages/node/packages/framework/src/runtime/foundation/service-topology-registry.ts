@@ -25,7 +25,6 @@ export interface ServiceNodeDescriptor {
   readonly channels: readonly ServiceChannelDescriptor[];
   readonly state: ServiceNodeState;
   readonly securityIdentity: string;
-  readonly effectiveMaxMessageBytes: number;
   readonly applicationVersion: bigint;
   readonly maintenanceWave?: string;
   readonly protocolCapabilities: readonly string[];
@@ -443,11 +442,9 @@ export function validateDescriptor(descriptor: ServiceNodeDescriptor): void {
     throw new RangeError('Lifecycle generation and descriptor revision must be non-zero.');
   }
   if (
-    !Number.isSafeInteger(descriptor.effectiveMaxMessageBytes)
-    || descriptor.effectiveMaxMessageBytes <= 0
-    || descriptor.applicationVersion < 0n
+    descriptor.applicationVersion < 0n
   ) {
-    throw new RangeError('Descriptor message bound or application version is invalid.');
+    throw new RangeError('Descriptor application version is invalid.');
   }
   if (descriptor.maintenanceWave !== undefined) {
     requireText(descriptor.maintenanceWave, 'maintenanceWave');
@@ -554,7 +551,6 @@ function sameImmutableDescriptor(
 ): boolean {
   return left.advertisedEndpoint === right.advertisedEndpoint
     && left.securityIdentity === right.securityIdentity
-    && left.effectiveMaxMessageBytes === right.effectiveMaxMessageBytes
     && left.applicationVersion === right.applicationVersion
     && arraysEqual(left.protocolCapabilities, right.protocolCapabilities)
     && left.objectRole === right.objectRole

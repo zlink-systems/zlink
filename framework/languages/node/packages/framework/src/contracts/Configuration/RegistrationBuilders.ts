@@ -1612,7 +1612,6 @@ interface MutableSpotRouterCapabilityOptions {
   manualConnections?: string[];
   manualPeerConnections?: ZLinkSpotRouterPeerConnectionOptions[];
   routingId?: string;
-  maxMessageSize?: number;
   sendHighWaterMark?: number;
   receiveHighWaterMark?: number;
   receiveTimeoutMs?: number;

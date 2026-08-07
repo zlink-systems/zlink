@@ -653,6 +653,18 @@ test('ClientServer pushed descriptor updates reject stale and conflicting revisi
     'connection-a',
     connection,
     clientServerWire.decodeClientServerControl(clientServerWire.encodeClientServerUpdate({
+      ...descriptor({ token: { ownerId: 'owner', leaseGeneration: 1n } }),
+      descriptorRevision: 3n,
+      weight: 25,
+      securityIdentity: 'cluster-a'
+    }, 2048)).admission
+  ), error => error.name === 'ServiceWireProtocolError' && /message bound/.test(error.message));
+  assert.equal(sockets.clientServerActiveTargets('orders')[0].weight, 25);
+
+  assert.throws(() => sockets.applyClientServerDescriptorUpdate(
+    'connection-a',
+    connection,
+    clientServerWire.decodeClientServerControl(clientServerWire.encodeClientServerUpdate({
     ...descriptor({ token: { ownerId: 'owner', leaseGeneration: 1n } }),
     descriptorRevision: 1n,
     weight: 100,

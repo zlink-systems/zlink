@@ -1363,7 +1363,6 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       state: 'preparing',
       // Plaintext RouteMesh peers use the shared default admission identity.
       securityIdentity: 'default',
-      effectiveMaxMessageBytes: 4 * 1024 * 1024,
       applicationVersion: 0n,
       ...(this.maintenanceWave === undefined ? {} : { maintenanceWave: this.maintenanceWave }),
       protocolCapabilities: [

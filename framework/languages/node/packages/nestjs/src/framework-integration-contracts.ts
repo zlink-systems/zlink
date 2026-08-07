@@ -204,7 +204,6 @@ export interface ZLinkRouteMeshChannelOptions {
   readonly sendHighWaterMark?: number;
   readonly receiveHighWaterMark?: number;
   readonly sendTimeoutMs?: number;
-  readonly maxMessageSize?: number;
   readonly sendHandlers?: readonly ZLinkRouteChannelSendHandlerRegistration[];
   readonly requestHandlers?: readonly ZLinkRouteChannelRequestHandlerRegistration[];
   readonly handlers?: readonly ZLinkRouteChannelHandlerOptions[];

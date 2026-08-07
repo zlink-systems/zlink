@@ -1324,6 +1324,11 @@ export class ZLinkChannelSocketRegistry {
       );
     }
     const candidate = admissionToDiscoveryDescriptor(admission);
+    if (candidate.effectiveMaxMessageBytes !== current.effectiveMaxMessageBytes) {
+      throw new ServiceWireProtocolError(
+        `ClientServer '${connection.channelName}' descriptor update changed the admitted message bound.`
+      );
+    }
     if (candidate.descriptorRevision < current.descriptorRevision) {
       throw new ServiceWireProtocolError(
         `ClientServer '${connection.channelName}' descriptor revision is stale.`

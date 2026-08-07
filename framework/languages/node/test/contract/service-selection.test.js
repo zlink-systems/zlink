@@ -19,7 +19,6 @@ function serviceNode(nodeRoutingId, weight) {
     channels: [{ name: 'orders', weight }],
     state: 'serving',
     securityIdentity: 'test',
-    effectiveMaxMessageBytes: 1024,
     applicationVersion: 0n,
     protocolCapabilities: ['framework-service-v11'],
     objectRole: 'none',

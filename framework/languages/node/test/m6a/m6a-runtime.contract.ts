@@ -69,7 +69,6 @@ function descriptor(
     ],
     state: 'preparing',
     securityIdentity: 'default',
-    effectiveMaxMessageBytes: 4 * 1024 * 1024,
     applicationVersion: 1n,
     protocolCapabilities: ['framework-service-v11'],
     objectRole: 'server',
@@ -91,7 +90,7 @@ function runtimeStateWireValue(frame: Uint8Array): number {
 
   offset += 1 + bytes[offset]!;
   offset += 1 + bytes[offset]!;
-  offset += 4 + 8 + 8;
+  offset += 8 + 8;
   const endpointLength = bytes.readUInt16BE(offset);
   offset += 2 + endpointLength;
   const channelCount = bytes.readUInt16BE(offset);
@@ -387,11 +386,6 @@ test('topology admission fences expected identity, immutable revisions, duplicat
     objectRole: 'client'
   }, 'pipe-z'), 'invalidDescriptor');
   const immutableRevisions: ServiceNodeDescriptor[] = [
-    {
-      ...peer,
-      descriptorRevision: 2n,
-      effectiveMaxMessageBytes: peer.effectiveMaxMessageBytes + 1
-    },
     {
       ...peer,
       descriptorRevision: 2n,

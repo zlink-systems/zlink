@@ -134,6 +134,25 @@ test('Nest RouteMesh builder keeps the formal scheduler limits in build output',
   assert.equal(built.spotNodes.api.activationConcurrencyLimit, 33);
 });
 
+test('RouteMesh public socket and registration contracts exclude message-size limits', () => {
+  const frameworkDeclarations = readTree(declarationsRoot);
+  const nestDeclarations = readTree(path.join(workspaceRoot, 'packages', 'nestjs', 'dist'));
+
+  for (const name of [
+    'ZLinkMeshNodeSocketConfig',
+    'ZLinkSocketConfig',
+    'ZLinkRouteMeshChannelOptions',
+    'ZLinkRouteChannelOptions',
+    'ZLinkSpotRouterCapabilityOptions'
+  ]) {
+    assert.doesNotMatch(declarationBody(frameworkDeclarations, name), /maxMessageSize/);
+  }
+  assert.doesNotMatch(
+    declarationBody(nestDeclarations, 'ZLinkRouteMeshChannelOptions'),
+    /maxMessageSize/
+  );
+});
+
 test('Node public contract snapshot pins the binding package version', () => {
   const binding = require('../../node_modules/@zlink-systems/zlink/package.json');
   assert.equal(binding.version, publicContractSnapshot.bindingVersion);

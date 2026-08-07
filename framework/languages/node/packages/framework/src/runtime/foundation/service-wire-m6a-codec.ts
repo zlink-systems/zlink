@@ -257,7 +257,6 @@ export function encodeRouteMeshAdmission(
   const routeParts: Buffer[] = [
     encodeText8(descriptor.meshName, 'meshName'),
     encodeText8(descriptor.securityIdentity, 'securityIdentity'),
-    encodeU32(descriptor.effectiveMaxMessageBytes),
     encodeU64(descriptor.lifecycleGeneration),
     encodeU64(descriptor.descriptorRevision),
     encodeText16(descriptor.advertisedEndpoint, 'advertisedEndpoint'),
@@ -301,7 +300,6 @@ export function decodeRouteMeshAdmission(
   if (routeLength !== reader.remaining) fail('RouteMesh admission length mismatch.');
   const meshName = reader.text8('meshName');
   const securityIdentity = reader.text8('securityIdentity');
-  const effectiveMaxMessageBytes = reader.u32('effectiveMaxMessageBytes');
   const lifecycleGeneration = reader.nonZeroU64('lifecycleGeneration');
   const descriptorRevision = reader.nonZeroU64('descriptorRevision');
   const advertisedEndpoint = reader.text16('advertisedEndpoint');
@@ -380,7 +378,6 @@ export function decodeRouteMeshAdmission(
     channels,
     state,
     securityIdentity,
-    effectiveMaxMessageBytes,
     applicationVersion,
     ...(maintenanceWave === undefined ? {} : { maintenanceWave }),
     protocolCapabilities,

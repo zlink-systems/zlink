@@ -27,6 +27,20 @@ test('Application HWM rejects an unbounded Application listener', () => {
   );
 });
 
+test('Application HWM does not depend on the removed RouteMesh message bound', () => {
+  assert.doesNotThrow(() => framework.createFrameworkRegistration({
+    inboundDispatch: { applicationHwmBytes: 1024n },
+    channels: {
+      route: {
+        routeMesh: {
+          bind: 'tcp://127.0.0.1:0',
+          maxMessageSize: 0
+        }
+      }
+    }
+  }));
+});
+
 test('Node registration rejects subscriber capability without matching handlers', () => {
   assert.throws(
     () => framework.createFrameworkRegistration(framework.createFrameworkOptions((builder) => {

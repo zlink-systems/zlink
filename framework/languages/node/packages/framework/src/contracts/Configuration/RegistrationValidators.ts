@@ -64,17 +64,8 @@ function validateInboundDispatchListenerBounds(
   for (const [channelName, channel] of registration.channels) {
     listeners.push(
       [`channel '${channelName}' server`, channel.server?.maxMessageSize],
-      [`channel '${channelName}' subscriber`, channel.subscriber?.maxMessageSize],
-      [`channel '${channelName}' route mesh`, channel.routeMesh?.maxMessageSize]
+      [`channel '${channelName}' subscriber`, channel.subscriber?.maxMessageSize]
     );
-  }
-  for (const [channelName, routeChannel] of registration.routeChannelOptions) {
-    if (hasBind(routeChannel.bind)) {
-      listeners.push([`route channel '${channelName}'`, routeChannel.maxMessageSize]);
-    }
-  }
-  for (const [spotNodeName, spotNode] of registration.spotNodes) {
-    listeners.push([`SpotNode '${spotNodeName}' router`, spotNode.router?.maxMessageSize]);
   }
   for (const [streamNodeName, streamNode] of registration.streamNodes) {
     listeners.push([
@@ -664,7 +655,7 @@ function validateRouteMeshCapability(
     requirePeerSource(capabilityName, routeChannel.manualConnections, peerLocationConfigured);
   }
   requirePeerWeight(`${capabilityName} weight`, routeChannel.weight);
-  requireSocketOptions(capabilityName, routeChannel);
+  requireRouteMeshSocketOptions(capabilityName, routeChannel);
 }
 
 function routeChannelHandlerCount(routeChannel: ZLinkRouteChannelOptions): number {
@@ -698,5 +689,18 @@ function requireSocketOptions(
   requireNonNegativeInteger(`${label} sendHighWaterMark`, options.sendHighWaterMark);
   requireNonNegativeInteger(`${label} receiveHighWaterMark`, options.receiveHighWaterMark);
   requireNonNegativeInteger(`${label} maxMessageSize`, options.maxMessageSize);
+  requireValidSendTimeoutMs(`${label} sendTimeoutMs`, options.sendTimeoutMs);
+}
+
+function requireRouteMeshSocketOptions(
+  label: string,
+  options: {
+    readonly sendHighWaterMark?: number;
+    readonly receiveHighWaterMark?: number;
+    readonly sendTimeoutMs?: number;
+  }
+): void {
+  requireNonNegativeInteger(`${label} sendHighWaterMark`, options.sendHighWaterMark);
+  requireNonNegativeInteger(`${label} receiveHighWaterMark`, options.receiveHighWaterMark);
   requireValidSendTimeoutMs(`${label} sendTimeoutMs`, options.sendTimeoutMs);
 }
