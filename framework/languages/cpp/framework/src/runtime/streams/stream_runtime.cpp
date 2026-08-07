@@ -241,7 +241,9 @@ class stream_session_dispatcher_t
             if (!_stream.dispatch_queue) {
                 _stream.dispatch_queue =
                   std::make_shared<runtime::serial_execution_queue_t> (
-                    *executor, runtime::serial_execution_queue_options_t{});
+                    *executor, runtime::serial_execution_queue_options_t{},
+                    runtime::serial_execution_queue_t::error_handler_t{},
+                    runtime::serial_lane_policy_t::session ());
             }
             queue = _stream.dispatch_queue;
         }

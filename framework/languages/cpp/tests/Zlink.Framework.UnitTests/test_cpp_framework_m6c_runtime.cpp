@@ -502,7 +502,7 @@ void test_relocation_ready_completion_runs_once_on_spot_turn (
       std::make_shared<runtime::serial_execution_queue_t> (
         *state->serial_executor, 64,
         runtime::serial_execution_queue_t::error_handler_t{},
-        true);
+        runtime::serial_lane_policy_t::spot_wide ());
     state->node =
       std::make_shared<detail::spot_node_builder_state_t> (
         "relocation-ready-node");
@@ -674,7 +674,8 @@ void test_actor_leave_after_relocation_defer_runs_lifecycle_callbacks (
         state->serial_queue =
           std::make_shared<runtime::serial_execution_queue_t> (
             *state->serial_executor, 64,
-            runtime::serial_execution_queue_t::error_handler_t{}, true);
+            runtime::serial_execution_queue_t::error_handler_t{},
+            runtime::serial_lane_policy_t::spot_wide ());
         state->spot_instance = std::make_shared<int> (1);
         return state;
     };
@@ -790,7 +791,8 @@ void test_temporary_channel_request_yield_owns_call_state (
       2, 64, "temporary-channel-call");
     state->serial_queue = std::make_shared<runtime::serial_execution_queue_t> (
       *state->serial_executor, 64,
-      runtime::serial_execution_queue_t::error_handler_t{}, true);
+      runtime::serial_execution_queue_t::error_handler_t{},
+      runtime::serial_lane_policy_t::spot_wide ());
 
     auto reply_source =
       std::make_shared<detail::task_completion_source_t<zlink::message_t>> ();

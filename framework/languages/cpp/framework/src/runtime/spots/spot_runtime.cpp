@@ -276,8 +276,11 @@ void configure_spot_execution (const std::shared_ptr<detail::spot_context_state_
       std::make_shared<runtime::serial_execution_queue_t> (
         *state->serial_executor, runtime::serial_execution_queue_options_t{},
         runtime::serial_execution_queue_t::error_handler_t{},
-        !state->is_entry_spot ()
-          && state->execution_mode == user_spot_execution_mode_t::spot_wide);
+        state->is_entry_spot ()
+          ? runtime::serial_lane_policy_t::entry_spot ()
+          : state->execution_mode == user_spot_execution_mode_t::spot_wide
+              ? runtime::serial_lane_policy_t::spot_wide ()
+              : runtime::serial_lane_policy_t::per_actor_spot ());
     state->worker_scheduler = make_spot_worker_scheduler (state);
 }
 
@@ -2564,7 +2567,9 @@ spot_handler_registry_t::invoke_erased (spot_handler_kind_t kind,
                         runtime::serial_execution_queue_t> (
                         *framework_worker_executor (
                           state->node),
-                        runtime::serial_execution_queue_options_t{});
+                        runtime::serial_execution_queue_options_t{},
+                        runtime::serial_execution_queue_t::error_handler_t{},
+                        runtime::serial_lane_policy_t::actor_delivery ());
                 }
                 actor_serial_queue = slot;
                 serial_dispatch = true;
@@ -4600,7 +4605,9 @@ spot_node_runtime_t::reserve_actor_join_barrier (
         if (!slot) {
             slot = std::make_shared<runtime::serial_execution_queue_t> (
               *framework_worker_executor (_state),
-              runtime::serial_execution_queue_options_t{});
+              runtime::serial_execution_queue_options_t{},
+              runtime::serial_execution_queue_t::error_handler_t{},
+              runtime::serial_lane_policy_t::actor_delivery ());
         }
         queue = slot;
     }

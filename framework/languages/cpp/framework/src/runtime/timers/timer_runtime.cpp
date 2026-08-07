@@ -114,7 +114,9 @@ timer_t spot_context_t::add_timer_erased (std::string name,
         && _state->serial_executor) {
         state->lane = std::make_shared<runtime::serial_execution_queue_t> (
           *_state->serial_executor,
-          runtime::serial_execution_queue_options_t{});
+          runtime::serial_execution_queue_options_t{},
+          runtime::serial_execution_queue_t::error_handler_t{},
+          runtime::serial_lane_policy_t::actor_delivery ());
     }
     state->native_timer = std::make_unique<zlink::timer_t> ();
     auto context = _state;

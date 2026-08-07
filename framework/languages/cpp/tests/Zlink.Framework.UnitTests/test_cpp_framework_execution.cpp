@@ -26,6 +26,7 @@
 #include <stop_token>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <vector>
 
 namespace
@@ -442,7 +443,7 @@ bool verify_request_turn_mode (bool release_turn, const std::vector<int> &expect
     zlink::framework::runtime::serial_execution_queue_t queue (
       executor, 4,
       zlink::framework::runtime::serial_execution_queue_t::error_handler_t{},
-      true);
+      zlink::framework::runtime::serial_lane_policy_t::spot_wide ());
     auto reply = std::make_shared<zlink::framework::detail::task_completion_source_t<int>> ();
     auto order = std::make_shared<std::vector<int>> ();
     auto order_gate = std::make_shared<std::mutex> ();
@@ -506,7 +507,8 @@ bool verify_serial_resume_capacity_failure_is_terminal_and_deferred ()
     options.application_byte_capacity = serial_execution_queue_t::fixed_work_byte_cost;
     options.lifecycle_message_capacity = 1;
     options.lifecycle_byte_capacity = serial_execution_queue_t::fixed_work_byte_cost;
-    serial_execution_queue_t queue (executor, options, {}, true);
+    serial_execution_queue_t queue (
+      executor, options, {}, serial_lane_policy_t::spot_wide ());
 
     auto reply = std::make_shared<detail::task_completion_source_t<int>> ();
     auto task_finished = std::make_shared<std::atomic_bool> (false);
@@ -794,6 +796,48 @@ bool verify_common_dispatch_limits ()
                 == dispatch_limits::receive_batch_bytes
            && receive_options.max_elapsed
                 == dispatch_limits::receive_batch_time;
+}
+
+bool verify_serial_lane_policies ()
+{
+    using namespace zlink::framework::runtime;
+    const auto entry = serial_lane_policy_t::entry_spot ();
+    const auto spot_wide = serial_lane_policy_t::spot_wide ();
+    const auto per_actor = serial_lane_policy_t::per_actor_spot ();
+    const auto session = serial_lane_policy_t::session ();
+    const auto actor_delivery = serial_lane_policy_t::actor_delivery ();
+
+    const auto *entry_spot = std::get_if<spot_lane_policy_t> (&entry.value ());
+    const auto *wide_spot = std::get_if<spot_lane_policy_t> (&spot_wide.value ());
+    const auto *actor_spot = std::get_if<spot_lane_policy_t> (&per_actor.value ());
+    return entry_spot
+           && entry_spot->execution == spot_lane_execution_t::entry
+           && entry_spot->lifecycle == spot_lane_lifecycle_t::active
+           && wide_spot
+           && wide_spot->execution == spot_lane_execution_t::spot_wide
+           && wide_spot->lifecycle == spot_lane_lifecycle_t::active
+           && actor_spot
+           && actor_spot->execution == spot_lane_execution_t::per_actor
+           && actor_spot->lifecycle == spot_lane_lifecycle_t::active
+           && std::holds_alternative<session_lane_policy_t> (session.value ())
+           && std::holds_alternative<actor_delivery_lane_policy_t> (
+             actor_delivery.value ())
+           && !entry.allows_turn_yield ()
+           && spot_wide.allows_turn_yield ()
+           && !per_actor.allows_turn_yield ()
+           && !session.allows_turn_yield ()
+           && !actor_delivery.allows_turn_yield ()
+           && std::is_constructible_v<spot_lane_policy_t,
+                                      spot_lane_execution_t,
+                                      spot_lane_lifecycle_t>
+           && std::is_constructible_v<session_lane_policy_t,
+                                      session_lane_lifecycle_t>
+           && !std::is_constructible_v<session_lane_policy_t,
+                                       spot_lane_lifecycle_t>
+           && !std::is_constructible_v<actor_delivery_lane_policy_t,
+                                       spot_lane_lifecycle_t>
+           && !std::is_constructible_v<actor_delivery_lane_policy_t,
+                                       session_lane_lifecycle_t>;
 }
 
 bool verify_runtime_observation_loss_and_terminal_retention ()
@@ -1152,6 +1196,9 @@ int main ()
     }
     if (!verify_common_dispatch_limits ()) {
         return 55;
+    }
+    if (!verify_serial_lane_policies ()) {
+        return 57;
     }
     if (!verify_runtime_observation_loss_and_terminal_retention ()) {
         return 52;

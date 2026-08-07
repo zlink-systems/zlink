@@ -99,6 +99,8 @@ int main ()
       read_file (include_root / "zlink/framework/contracts/channels/call.hpp");
     const auto stream_runtime =
       read_file (root / "framework/src/runtime/streams/stream_runtime.cpp");
+    const auto serial_execution_queue = read_file (
+      root / "framework/src/runtime/execution/serial_execution_queue.hpp");
     const auto async_submit_runtime =
       read_file (root / "framework/src/runtime/messaging/async_submit_runtime.cpp");
     const auto failure_origin_wire =
@@ -1895,6 +1897,39 @@ int main ()
              != std::string::npos,
       "CPP-CONTRACT-STREAM-001",
       "STREAM send does not bound existing socket admission with its per-call timeout");
+
+    /* CPP-SESS-003 — each serial owner selects a closed lane-policy type.
+     * Yield behavior is derived from the Spot alternative; callers cannot
+     * manufacture unrelated lifecycle capabilities with bool flags. */
+    for (const std::string required : {
+           "spot_lane_policy_t", "spot_lane_lifecycle_t",
+           "return_wait", "relocation_sealed", "session_lane_policy_t",
+           "session_lane_lifecycle_t", "connection_closed",
+           "actor_delivery_lane_policy_t", "std::variant<"}) {
+        gate.require (serial_execution_queue.find (required) != std::string::npos,
+                      "CPP-SESS-003",
+                      "serial execution lane policy is missing: " + required);
+    }
+    gate.require (serial_execution_queue.find ("bool allow_yield")
+                    == std::string::npos
+                    && serial_execution_queue.find ("_allow_yield")
+                         == std::string::npos,
+                  "CPP-SESS-003",
+                  "serial execution still accepts a raw yield-policy boolean");
+    for (const std::string required : {
+           "serial_lane_policy_t::entry_spot ()",
+           "serial_lane_policy_t::spot_wide ()",
+           "serial_lane_policy_t::per_actor_spot ()",
+           "serial_lane_policy_t::actor_delivery ()"}) {
+        gate.require (spot_runtime.find (required) != std::string::npos,
+                      "CPP-SESS-003",
+                      "Spot or Actor-delivery queue omits its typed policy: "
+                        + required);
+    }
+    gate.require (
+      stream_runtime.find ("serial_lane_policy_t::session ()")
+        != std::string::npos,
+      "CPP-SESS-003", "STREAM session queue omits its typed policy");
 
     /* TH-CP-01 — the C++ connector helper surface has a language contract. */
     const auto connector_contract_path =
