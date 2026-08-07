@@ -115,6 +115,11 @@ export class ZLinkSpotSerialTurn {
         'yield requires a SpotWide User Spot or Instance Spot application handler.'
       );
     }
+    return await this.yieldFrameworkPromise(pending);
+  }
+
+  /** Suspends a turn only for a Framework-owned lifecycle boundary. */
+  async yieldFrameworkPromise<T>(pending: Promise<T>): Promise<T> {
     this.signalSuspended();
     const result = await pending;
     await this.awaitResumePermit();

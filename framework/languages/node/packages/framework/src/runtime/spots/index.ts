@@ -83,6 +83,7 @@ import {
   encodeFrameworkPayloadMessage,
   wrapFrameworkPayloadMessage
 } from '../messaging/payload-codec';
+import { decodeFrameworkActorJoinPayload } from '../messaging/actor-join-payload-codec';
 import {
   decodeChannelEnvelope,
   decodeChannelPayload,
@@ -1748,7 +1749,7 @@ export class DefaultZLinkSpotManager {
       throw new ZLinkConfigurationException('MeshNode Actor join record is missing its Spot or Actor owner.');
     }
     const entrySpotId = this.options.entryNodeRidProvider?.() ?? this.options.entryNodeRid;
-    const requestContentType = record.contentType ?? 'application/json';
+    let requestContentType = record.contentType ?? 'application/json';
     const targetsEntrySpot = entrySpotId !== undefined
       && String(spotId) === String(entrySpotId);
     const activation = this.activations.resolve(meshName, spotId);
@@ -1821,6 +1822,14 @@ export class DefaultZLinkSpotManager {
           Buffer.from(transferRequest.request, 'base64')
         );
         callbackRequest = ownedCallbackRequest;
+      } else if (callbackRequest !== undefined) {
+        const decodedRequest = decodeFrameworkActorJoinPayload(
+          callbackRequest.data(),
+          requestContentType
+        );
+        ownedCallbackRequest = RuntimeMessage.from(decodedRequest.payload);
+        callbackRequest = ownedCallbackRequest;
+        requestContentType = decodedRequest.contentType;
       }
       if (
         transferRequest !== undefined

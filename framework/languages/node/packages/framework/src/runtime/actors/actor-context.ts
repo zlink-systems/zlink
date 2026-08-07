@@ -233,7 +233,7 @@ class DefaultZLinkActorJoinSpotCall implements ZLinkActorJoinSpotCall {
               undefined,
               operationId
             );
-            if (this.turn?.yieldAllowed !== true) {
+            if (this.turn === undefined) {
               await pendingJoin.catch(() => undefined);
             }
           } catch (error) {
@@ -254,9 +254,9 @@ class DefaultZLinkActorJoinSpotCall implements ZLinkActorJoinSpotCall {
             undefined,
             operationId
           );
-          result = this.turn?.yieldAllowed === true
-            ? await this.turn.yieldPromise(pending)
-            : await pending;
+          result = this.turn === undefined
+            ? await pending
+            : await this.turn.yieldFrameworkPromise(pending);
         } catch (error) {
           this.state.endDeferredJoin();
           await notifyJoinFailure(this.actor, operationId, error);
@@ -354,7 +354,7 @@ class DefaultZLinkActorJoinEntrySpotCall implements ZLinkActorJoinEntrySpotCall 
               undefined,
               operationId
             );
-            if (this.turn?.yieldAllowed !== true) {
+            if (this.turn === undefined) {
               await pendingJoin.catch(() => undefined);
             }
           } catch (error) {
@@ -375,9 +375,9 @@ class DefaultZLinkActorJoinEntrySpotCall implements ZLinkActorJoinEntrySpotCall 
             undefined,
             operationId
           );
-          result = this.turn?.yieldAllowed === true
-            ? await this.turn.yieldPromise(pending)
-            : await pending;
+          result = this.turn === undefined
+            ? await pending
+            : await this.turn.yieldFrameworkPromise(pending);
         } catch (error) {
           this.state.endDeferredJoin();
           await notifyJoinFailure(this.actor, operationId, error);
