@@ -157,7 +157,7 @@ export class ServiceTopologyRegistry {
         current.descriptor.descriptorRevision > descriptor.descriptorRevision
         || (
           current.descriptor.descriptorRevision === descriptor.descriptorRevision
-          && !sameDescriptor(current.descriptor, descriptor)
+          && !sameServiceNodeDescriptor(current.descriptor, descriptor)
         )
       )
     ) {
@@ -167,7 +167,7 @@ export class ServiceTopologyRegistry {
       current !== undefined
       && current.descriptor.lifecycleGeneration === descriptor.lifecycleGeneration
       && current.descriptor.descriptorRevision === descriptor.descriptorRevision
-      && sameDescriptor(current.descriptor, descriptor)
+      && sameServiceNodeDescriptor(current.descriptor, descriptor)
       && current.connectionId !== connectionId
       // A fallback candidate is only a logical placeholder. Once the
       // monitor reports the physical connection, its evidence supersedes
@@ -537,7 +537,7 @@ function clonePeer(peer: AdmittedServicePeer): AdmittedServicePeer {
   };
 }
 
-function sameDescriptor(left: ServiceNodeDescriptor, right: ServiceNodeDescriptor): boolean {
+export function sameServiceNodeDescriptor(left: ServiceNodeDescriptor, right: ServiceNodeDescriptor): boolean {
   return JSON.stringify(toComparable(left)) === JSON.stringify(toComparable(right));
 }
 

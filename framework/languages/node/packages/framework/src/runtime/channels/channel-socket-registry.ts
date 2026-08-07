@@ -34,6 +34,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { ZLinkBufferMessage as RuntimeMessage } from '../backend/runtime-message';
 import type { Message } from '../../contracts/Common/Message';
 import { ServiceDiscoveryRegistry } from '../foundation/service-discovery-registry';
+import { ServiceWireProtocolError } from '../foundation/service-wire-m6a-codec';
 import {
   decodeClientServerControl,
   encodeClientServerAdmit,
@@ -1323,10 +1324,14 @@ export class ZLinkChannelSocketRegistry {
       );
     }
     const candidate = admissionToDiscoveryDescriptor(admission);
-    if (candidate.descriptorRevision < current.descriptorRevision) return;
+    if (candidate.descriptorRevision < current.descriptorRevision) {
+      throw new ServiceWireProtocolError(
+        `ClientServer '${connection.channelName}' descriptor revision is stale.`
+      );
+    }
     if (candidate.descriptorRevision === current.descriptorRevision) {
       if (!sameClientServerDiscoveryDescriptor(candidate, current)) {
-        throw new ZLinkConfigurationException(
+        throw new ServiceWireProtocolError(
           `ClientServer '${connection.channelName}' descriptor revision conflicts.`
         );
       }

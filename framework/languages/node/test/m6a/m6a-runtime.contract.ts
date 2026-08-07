@@ -217,6 +217,38 @@ test('topology snapshots fence reconnect and exclude retiring placement targets'
   assert.equal(topology.selectPlacement(), undefined);
 });
 
+test('RouteMesh admission classifies stale and conflicting descriptor revisions as protocol errors', () => {
+  const runtime = new RawServiceMeshRuntime({ descriptor: descriptor('local') });
+  const current = {
+    ...descriptor('peer'),
+    descriptorRevision: 2n,
+    state: 'serving' as const
+  };
+  assert.equal(runtime.topology.admit(current, 'connection-a'), 'admitted');
+  const processReceived = (runtime as unknown as {
+    processReceived(record: {
+      sourceRid: string;
+      parts: readonly Buffer[];
+    }, nowMs: number, completionControl: boolean): string;
+  }).processReceived.bind(runtime);
+
+  assert.equal(processReceived({
+    sourceRid: current.nodeRoutingId,
+    parts: [encodeRouteMeshAdmission(M6aServiceWireCommand.update, {
+      ...current,
+      descriptorRevision: 1n
+    })]
+  }, performance.now(), false), 'protocolError');
+  assert.equal(processReceived({
+    sourceRid: current.nodeRoutingId,
+    parts: [encodeRouteMeshAdmission(M6aServiceWireCommand.update, {
+      ...current,
+      channels: [{ name: 'alpha', weight: 99 }]
+    })]
+  }, performance.now(), false), 'protocolError');
+  assert.equal(runtime.topology.peer(current.nodeRoutingId)?.descriptor.descriptorRevision, 2n);
+});
+
 test('channel selection excludes admitted peers until the caller confirms readiness', () => {
   const topology = new ServiceTopologyRegistry({
     ...descriptor('local'),

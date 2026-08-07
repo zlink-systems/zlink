@@ -12,6 +12,7 @@ import { ServiceLivenessRegistry, type ServiceLivenessTick } from './service-liv
 import { ServiceMailbox, type ServiceMailboxLimits, type ServiceMailboxRecord } from './service-mailbox';
 import {
   ServiceTopologyRegistry,
+  sameServiceNodeDescriptor,
   type AdmittedServicePeer,
   type PeerAdmissionResult,
   type ServiceNodeDescriptor
@@ -1238,6 +1239,21 @@ export class RawServiceMeshRuntime {
     }
   ): PeerAdmissionResult {
     const previous = this.topology.peer(descriptor.nodeRoutingId);
+    if (
+      previous !== undefined
+      && previous.descriptor.lifecycleGeneration === descriptor.lifecycleGeneration
+      && (
+        descriptor.descriptorRevision < previous.descriptor.descriptorRevision
+        || (
+          descriptor.descriptorRevision === previous.descriptor.descriptorRevision
+          && !sameServiceNodeDescriptor(previous.descriptor, descriptor)
+        )
+      )
+    ) {
+      throw new ServiceWireProtocolError(
+        `RouteMesh peer '${descriptor.nodeRoutingId}' descriptor revision is stale or conflicting.`
+      );
+    }
     const result = this.topology.admit(
       descriptor,
       connection.connectionId,

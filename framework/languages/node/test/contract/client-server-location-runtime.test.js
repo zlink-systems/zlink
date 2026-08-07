@@ -611,7 +611,7 @@ test('ClientServer liveness ACK is fenced to the current probe and application t
   await sockets.dispose();
 });
 
-test('ClientServer pushed descriptor updates accept only current higher revision', async () => {
+test('ClientServer pushed descriptor updates reject stale and conflicting revisions as protocol errors', async () => {
   const registration = internal.createFrameworkRegistration({
     channels: { orders: { client: { manualConnections: [] } } },
     locations: { useInMemoryStores: true }
@@ -648,23 +648,30 @@ test('ClientServer pushed descriptor updates accept only current higher revision
   sockets.tickClientServerLiveness();
   assert.equal(sockets.clientServerActiveTargets('orders')[0].weight, 25);
 
-  inbound.push(receivedControl(clientServerWire.encodeClientServerUpdate({
+  const connection = sockets.clientServerConnections.get('connection-a');
+  assert.throws(() => sockets.applyClientServerDescriptorUpdate(
+    'connection-a',
+    connection,
+    clientServerWire.decodeClientServerControl(clientServerWire.encodeClientServerUpdate({
     ...descriptor({ token: { ownerId: 'owner', leaseGeneration: 1n } }),
     descriptorRevision: 1n,
     weight: 100,
     securityIdentity: 'cluster-a'
-  }, 1024)));
-  sockets.tickClientServerLiveness();
+    }, 1024)).admission
+  ), error => error.name === 'ServiceWireProtocolError' && /stale/.test(error.message));
   assert.equal(sockets.clientServerActiveTargets('orders')[0].weight, 25);
 
-  inbound.push(receivedControl(clientServerWire.encodeClientServerUpdate({
+  assert.throws(() => sockets.applyClientServerDescriptorUpdate(
+    'connection-a',
+    connection,
+    clientServerWire.decodeClientServerControl(clientServerWire.encodeClientServerUpdate({
     ...descriptor({ token: { ownerId: 'owner', leaseGeneration: 1n } }),
     descriptorRevision: 2n,
     weight: 50,
     securityIdentity: 'cluster-a'
-  }, 1024)));
-  sockets.tickClientServerLiveness();
-  assert.equal(sockets.clientDealerForOutbound('orders'), undefined);
+    }, 1024)).admission
+  ), error => error.name === 'ServiceWireProtocolError' && /conflicts/.test(error.message));
+  assert.equal(sockets.clientServerActiveTargets('orders')[0].weight, 25);
   await sockets.dispose();
 });
 
