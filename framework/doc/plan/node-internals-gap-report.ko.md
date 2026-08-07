@@ -162,6 +162,7 @@ Gap 하나 또는 서로 강하게 연결된 작은 작업 묶음의 동작과 �
 | `NODE-COMP-003` | `3ba9ad6e29` | `npm run build`, `npm run verify:m6b-runtime` 87/87 PASS. Source Spot callback의 typed request와 raw request는 공통 `ZLinkDeferredCompletion`이 terminal claim, abort와 late value 소유권을 한 번만 확정한다. `channel-client.test.js`의 abort 뒤 late raw reply close를 포함한 focused 2/2와 재실행 100/100이 통과했다. 첫 전체 실행은 별도 bootstrap route가 `NotFound`여서 99/100이었고 같은 두 항목 focused 및 전체 재실행에서는 재현되지 않았다. | packed package와 실제 callback transport에서 abort·reply 경합을 반복해 exactly-once terminal과 late `Message` 해제를 확인 |
 | `NODE-SESS-002` | `4eb9dad69c`, `570617f5d1` | `npm run build`, `stream-session-runtime.test.js` 53/53과 관련 STREAM test 150/150 PASS. 유효한 PING/PONG은 application claim과 session application FIFO를 거치지 않고 transport callback의 runtime 경로에서 처리한다. Disconnect와 dispose는 먼저 큐에 들어온 lifecycle turn이 끝난 뒤 transport를 닫고, callback 실패 여부와 무관하게 binding cleanup을 실행한다. | packed package와 실제 peer의 handler 지연·heartbeat·disconnect process에서 false timeout 부재, callback 순서와 Actor binding cleanup 확인 |
 | `NODE-SESS-004` | `7508ec2dcf` | `npm run build`, `npm run typecheck`, Actor·STREAM contract test 177/177 PASS. Replacement bind를 먼저 제출하므로 bind가 실패하면 기존 native·logical binding을 그대로 유지한다. Bind가 성공한 뒤 remote confirmation이 실패하면 새 binding을 해제하고 이전 binding과 confirmation을 복원한다. 성공한 replacement의 terminal 뒤에만 logical route owner를 바꾼다. | packed package와 실제 reconnect process에서 replacement 진행 중 기존 route 사용, 성공 뒤 원자 전환과 stale disconnect fencing 확인 |
+| `NODE-SESS-001` | `fe002ce0ea` | `npm run build`, `npm run typecheck`, `npm run verify:m6b-runtime` 91/91와 exact native/logical tombstone focused regression 2/2 PASS. Actor owner는 replacement identity를 먼저 등록하되 이전 session owner에 actor·session RID·binding generation이 고정된 tombstone을 보내고 cleanup ACK 전에는 새 bind terminal을 반환하지 않는다. 이전 owner의 infrastructure mailbox가 한 번 거부한 경우 재제출해 ACK를 받으며, 늦은 이전 tombstone은 현재 replacement identity를 제거하지 않는다. | packed package와 실제 세 process rebind에서 이전 session의 native·logical route 제거, ACK 전 terminal 부재, 재전송과 stale tombstone fencing 확인 |
 | `NODE-ROUTE-004` | `a088a08fe1` | `npm run build`, `npm run typecheck`, `location-runtime.test.js` 42/42, `npm run verify:m6b-runtime` 90/90 PASS. Spot Message Follow source fence가 현재 Store resolver cache와 일치할 때 Spot route와 그 Spot에 속한 legacy·direct Actor route cache를 함께 무효화한다. Object·node·lease generation이 다른 늦은 follow는 최신 cache를 보존한다. | packed package와 실제 Spot relocation process에서 stale resolver cache 재주입 부재와 새 owner route 사용 확인 |
 | `NODE-WIRE-004` | `6db4779f23` | `npm run build`, `npm run typecheck`, `npm run verify:m6a-runtime` 38/38, `client-server-location-runtime.test.js` 24/24 PASS. RouteMesh와 ClientServer update는 같은 lifecycle에서 하위 descriptor revision 또는 동일 revision·다른 descriptor를 `ServiceWireProtocolError`로 분류하고 기존 admitted descriptor를 보존한다. 동일 revision·동일 bytes의 다른 physical candidate fencing은 별도 topology 규칙으로 유지한다. | packed package와 실제 reconnect process에서 protocol diagnostic, connection 정리와 current descriptor 보존 확인 |
 | `NODE-WIRE-003` | `c825342eba` | `npm run build`, `npm run typecheck`, `npm run verify:m6a-runtime` 39/39 PASS. Global registration의 optional maintenance wave를 raw Mesh backend descriptor가 소유하고 M6A admission의 정렬된 optional TLV 13으로 encode·decode한다. Descriptor validation은 non-empty·NUL 금지·UTF-8 255-byte 상한을 적용하며 higher-revision update에서 wave 변경을 허용한다. | packed package와 실제 multi-node update에서 wave 전달, 같은 wave placement 제외와 absent 값 상호운용 확인 |
@@ -208,8 +209,15 @@ mesh 디스패치 펌프는 최대 32개 ready owner를 한 배치로 claim한 �
 - 증거: `node/runtime/backend/mesh-completion-table.ts:24, 40-49, 69-72`
 
 ### NODE-SESS-001 / NODE-SESS-002 — 세션 바인딩
-**NODE-SESS-001**: 다른 노드의 세션에 이미 bind된 Actor에 `boundSessionBind`가 오면 `installSessionBinding`으로 즉시 교체하고 `Ok`를 응답 — 이전 세션 소유 노드에 tombstone을 보내지 않고 정리 확인도 기다리지 않는다(스펙 20 §4 절차 미구현). 이중 전달은 `bindingGeneration` fence의 사후 거부로만 방어되고, 이전 세션은 다음 전송이 실패할 때에야 스왑을 인지한다. C++ CPP-SESS-001과 동일 계열 — **두 런타임 모두 결손이므로 크로스 언어 공통 항목으로 기록 필요**.
-- 증거: `node/runtime/foundation/service-stateful-runtime.ts:2936-2971`, `node/runtime/foundation/service-stateful-registry.ts:340-354`, `node/runtime/host/actor-packet-relay.ts:245-284`
+**NODE-SESS-001**: Source에서 Actor owner는 replacement identity를 등록한 뒤 이전 session owner에 actor,
+session RID와 binding generation을 모두 고정한 tombstone을 보낸다. 이전 owner는 infrastructure lane에서
+일치하는 native·logical route를 제거하고 ACK하며, Actor owner는 이 ACK 전에는 새 bind terminal을 반환하지
+않는다. Queue 거부나 전송 실패가 발생하면 30초의 bounded cleanup 기간에 tombstone을 다시 제출한다.
+동일한 이전 tombstone이 늦게 도착해도 현재 session owner와 identity가 다르면 성공으로 ACK하고 현재
+replacement는 유지한다. Source와 owner-layer regression은 끝났고 packed package와 실제 세 process 증거가
+남아 있으므로 아직 종결하지 않는다.
+- 증거: checkpoint `fe002ce0ea`, `node/runtime/foundation/service-stateful-runtime.ts`,
+  `node/runtime/streams/session-actor-coordinator.ts`, `node/test/m6b/m6b-runtime.contract.ts`
 
 **NODE-SESS-002**: STREAM session의 모든 inbound frame — Control 하트비트 PING/PONG 포함 — 이 `enqueueApplication`으로 애플리케이션 레인에 큐잉되고 admission claim까지 잡는다. PONG 처리(`awaitingPongSince` 해제)가 밀린 비즈니스 dispatch 뒤에서 FIFO로 처리되므로, 앱 레인이 5초(`ZLINK_STREAM_HEARTBEAT_TIMEOUT_MS`) 이상 밀리면 lifecycle 레인의 liveness 검사가 통신 가능한 session을 `heartbeat_timeout`으로 오판한다. Mesh ingress는 inline으로 처리하고 ClientServer는 timer가 직접 drain하므로 이 문제는 STREAM session에만 있다.
 - 증거: `node/runtime/streams/stream-session-runtime.ts:274-326, 401-505, 507-555, 658-687`
@@ -356,7 +364,7 @@ mesh/actor/spot/stream 수신 계열은 와이어 content-type(및 stream 헤더
 
 | ID | 분류 | 요약 |
 |---|---|---|
-| NODE-SESS-001 | GAP·상 | §2 참조 — 크로스 노드 스왑 tombstone 부재 |
+| NODE-SESS-001 | PARTIAL·상 | Source는 replacement identity 등록 뒤 이전 session owner의 exact tombstone cleanup ACK를 기다리고 bounded retry한다. 늦은 이전 tombstone은 새 identity를 제거하지 않는다. Packed package와 실제 세 process rebind 증거가 남아 있다. 증거: checkpoint `fe002ce0ea` |
 | NODE-SESS-002 | GAP·상 | §2 참조 — 하트비트가 애플리케이션 레인에 |
 | NODE-SESS-003 | SATISFIED·하 | 세 primitive는 같은 serial queue의 중복 구현이 아니다. `ServiceMailbox`는 owner claim·relocation seal·byte admission을, `EventLoopWorkQueues`는 process infrastructure/application 진행 분리를, `RouterOperationQueue`는 native request slot release 순서를 소유한다. 공통 base는 세 aggregate의 상태와 시간 규칙을 한 interface에 노출하는 얕은 abstraction이 되므로 추가하지 않는다. |
 | NODE-SESS-004 | PARTIAL·중 | 새 bind가 terminal이 될 때까지 기존 native·logical binding을 유지하고, 성공 뒤 route owner를 원자 교체한다. 새 bind 실패는 기존 binding을 변경하지 않으며, bind 성공 뒤 remote confirmation 실패는 새 binding을 제거하고 이전 binding과 confirmation을 복원한다. Packed package와 실제 reconnect process gate가 남아 있다. |
