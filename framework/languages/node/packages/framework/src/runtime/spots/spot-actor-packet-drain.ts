@@ -227,7 +227,12 @@ export class ZLinkSpotActorPacketDrain {
     payload: unknown
   ): Message {
     const requestHeader = decodeStreamHeader(messageToBytes(requestHeaderPart));
-    const encoded = encodeFrameworkPayload(payload, this.options.messageSerializers);
+    const encoded = encodeFrameworkPayload(
+      payload,
+      this.options.messageSerializers,
+      requestHeader.name,
+      kind === ZLinkStreamMessageKind.Response ? 'reply' : 'payload'
+    );
     try {
       return RuntimeMessage.from(Buffer.from(encodeStreamFrame({
         kind,

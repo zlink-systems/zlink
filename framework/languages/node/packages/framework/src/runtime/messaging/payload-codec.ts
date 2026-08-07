@@ -15,6 +15,12 @@ import {
   parseFrameworkJsonV1,
   stringifyFrameworkJsonV1
 } from './framework-json-v1';
+import type { ZLinkJsonSchema } from '../../contracts/Handlers/JsonContract';
+import { readZLinkPacketJsonContract } from '../../contracts/Handlers/Attributes';
+import {
+  readFrameworkPacketJsonContract,
+  resolveFrameworkPacketJsonContract
+} from './packet-name';
 
 export interface ZLinkSerializerRegistryLike {
   readonly serializers: ReadonlyMap<string, ZLinkMessageSerializer>;
@@ -52,14 +58,18 @@ export interface ZLinkEncodedFrameworkPayload {
 
 export function encodeFrameworkPayloadMessage(
   payload: unknown,
-  registry?: ZLinkSerializerRegistryLike | ReadonlyMap<string, ZLinkMessageSerializer>
+  registry?: ZLinkSerializerRegistryLike | ReadonlyMap<string, ZLinkMessageSerializer>,
+  packetName?: string,
+  contractPart: 'payload' | 'reply' = 'payload'
 ): Message {
-  return encodeFrameworkPayload(payload, registry).message;
+  return encodeFrameworkPayload(payload, registry, packetName, contractPart).message;
 }
 
 export function encodeFrameworkPayload(
   payload: unknown,
-  registry?: ZLinkSerializerRegistryLike | ReadonlyMap<string, ZLinkMessageSerializer>
+  registry?: ZLinkSerializerRegistryLike | ReadonlyMap<string, ZLinkMessageSerializer>,
+  packetName?: string,
+  contractPart: 'payload' | 'reply' = 'payload'
 ): ZLinkEncodedFrameworkPayload {
   if (isZLinkMessage(payload)) {
     if (payload.isEncoded()) {
@@ -68,7 +78,7 @@ export function encodeFrameworkPayload(
         contentType: 'application/octet-stream'
       };
     }
-    return encodeFrameworkPayload(payload.decode(), registry);
+    return encodeFrameworkPayload(payload.decode(), registry, packetName, contractPart);
   }
   if (isMessage(payload)) {
     throw new ZLinkConfigurationException(
@@ -97,7 +107,11 @@ export function encodeFrameworkPayload(
 
   return {
     message: rememberContentType(
-      RuntimeMessage.from(Buffer.from(stringifyFrameworkJsonV1(payload))),
+      RuntimeMessage.from(Buffer.from(stringifyFrameworkJsonV1(
+        payload,
+        (resolveFrameworkPacketJsonContract(payload, packetName)
+          ?? (packetName === undefined ? undefined : readZLinkPacketJsonContract(packetName)))?.[contractPart]
+      ))),
       JSON_CONTENT_TYPE
     ),
     contentType: JSON_CONTENT_TYPE
@@ -112,25 +126,31 @@ export function decodeFrameworkPayloadMessage<T>(
   message: Message,
   registry?: ZLinkSerializerRegistryLike | ReadonlyMap<string, ZLinkMessageSerializer>,
   type?: Type<T>,
-  contentType = JSON_CONTENT_TYPE
+  contentType = JSON_CONTENT_TYPE,
+  packetName?: string,
+  contractPart: 'payload' | 'reply' = 'payload'
 ): T {
-  return decodeFrameworkPayload(message, registry, type, contentType);
+  return decodeFrameworkPayload(message, registry, type, contentType, packetName, contractPart);
 }
 
 export function decodeFrameworkTypedPayloadMessage<T>(
   message: Message,
   registry?: ZLinkSerializerRegistryLike | ReadonlyMap<string, ZLinkMessageSerializer>,
   type?: Type<T>,
-  contentType = JSON_CONTENT_TYPE
+  contentType = JSON_CONTENT_TYPE,
+  packetName?: string,
+  contractPart: 'payload' | 'reply' = 'payload'
 ): T {
-  return decodeFrameworkPayload(message, registry, type, contentType);
+  return decodeFrameworkPayload(message, registry, type, contentType, packetName, contractPart);
 }
 
 function decodeFrameworkPayload<T>(
   message: Message,
   registry: ZLinkSerializerRegistryLike | ReadonlyMap<string, ZLinkMessageSerializer> | undefined,
   type: Type<T> | undefined,
-  contentType: string
+  contentType: string,
+  packetName: string | undefined,
+  contractPart: 'payload' | 'reply'
 ): T {
   if (contentType !== JSON_CONTENT_TYPE) {
     const serializer = serializerMapOf(registry)?.get(contentType);
@@ -144,7 +164,7 @@ function decodeFrameworkPayload<T>(
 
   if (message.isEmpty()) return undefined as T;
 
-  const parsedPayload = parseJsonPayload(message);
+  const parsedPayload = parseJsonPayload(message, schemaForDecode(type, packetName, contractPart));
   if (parsedPayload.valid) {
     return parsedPayload.value as T;
   }
@@ -159,18 +179,22 @@ function decodeFrameworkPayload<T>(
 export function wrapFrameworkPayloadMessage(
   message: Message,
   registry?: ZLinkSerializerRegistryLike | ReadonlyMap<string, ZLinkMessageSerializer>,
-  contentType = JSON_CONTENT_TYPE
+  contentType = JSON_CONTENT_TYPE,
+  packetName?: string,
+  contractPart: 'payload' | 'reply' = 'payload'
 ): ZLinkMessage {
   const payload = encodedPayloadFromOwned(message.data());
   return createZLinkMessageFromEncoded(payload, <T>(type?: Type<T>) =>
-    decodeFrameworkEncodedPayload(payload, registry, type, contentType));
+    decodeFrameworkEncodedPayload(payload, registry, type, contentType, packetName, contractPart));
 }
 
 function decodeFrameworkEncodedPayload<T>(
   payload: ZLinkEncodedPayload,
   registry: ZLinkSerializerRegistryLike | ReadonlyMap<string, ZLinkMessageSerializer> | undefined,
   type: Type<T> | undefined,
-  contentType: string
+  contentType: string,
+  packetName: string | undefined,
+  contractPart: 'payload' | 'reply'
 ): T {
   if (contentType !== JSON_CONTENT_TYPE) {
     const serializer = serializerMapOf(registry)?.get(contentType);
@@ -181,7 +205,11 @@ function decodeFrameworkEncodedPayload<T>(
   if (payload.isEmpty()) return undefined as T;
   const text = payload.getString('utf8');
   try {
-    return parseFrameworkJsonV1(text) as T;
+    return parseFrameworkJsonV1(
+      text,
+      {},
+      schemaForDecode(type, packetName, contractPart)
+    ) as T;
   } catch (error) {
     throw createInternalFrameworkException(
       ZLinkFrameworkInternalErrorKind.PayloadDecodeFailed,
@@ -190,6 +218,17 @@ function decodeFrameworkEncodedPayload<T>(
       error
     );
   }
+}
+
+function schemaForDecode(
+  type: Type<unknown> | undefined,
+  packetName: string | undefined,
+  contractPart: 'payload' | 'reply'
+): ZLinkJsonSchema | undefined {
+  const contract = type === undefined
+    ? undefined
+    : readFrameworkPacketJsonContract(type, packetName);
+  return (contract ?? (packetName === undefined ? undefined : readZLinkPacketJsonContract(packetName)))?.[contractPart];
 }
 
 export function selectDefaultSerializer(
@@ -318,7 +357,7 @@ function unsupportedContentType(contentType: string): Error {
   );
 }
 
-function parseJsonPayload(message: Message): {
+function parseJsonPayload(message: Message, schema?: ZLinkJsonSchema): {
   readonly valid: true;
   readonly value: unknown;
   readonly error?: undefined;
@@ -328,7 +367,7 @@ function parseJsonPayload(message: Message): {
   readonly error: unknown;
 } {
   try {
-    return { valid: true, value: parseFrameworkJsonV1(message.getString('utf8')) };
+    return { valid: true, value: parseFrameworkJsonV1(message.getString('utf8'), {}, schema) };
   } catch (error) {
     return { valid: false, error };
   }

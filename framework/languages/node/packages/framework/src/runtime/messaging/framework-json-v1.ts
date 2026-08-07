@@ -1,3 +1,5 @@
+import type { ZLinkJsonSchema } from '../../contracts/Handlers/JsonContract';
+
 export const FRAMEWORK_JSON_V1_PROFILE = 'framework-json-v1';
 
 const SIGNED_64_MIN = -(1n << 63n);
@@ -7,7 +9,7 @@ export interface FrameworkJsonParseOptions {
   readonly rejectPropertyName?: (name: string) => boolean;
 }
 
-export function stringifyFrameworkJsonV1(value: unknown): string {
+export function stringifyFrameworkJsonV1(value: unknown, schema?: ZLinkJsonSchema): string {
   if (value === undefined || typeof value === 'function' || typeof value === 'symbol') {
     throw new TypeError('framework-json-v1 payload is not a JSON value.');
   }
@@ -38,18 +40,132 @@ export function stringifyFrameworkJsonV1(value: unknown): string {
     }
     return item;
   });
+  if (schema !== undefined) {
+    validateFrameworkJsonV1Value(JSON.parse(encoded), schema, '$', false);
+  }
   return encoded;
 }
 
 export function parseFrameworkJsonV1(
   text: string,
-  options: FrameworkJsonParseOptions = {}
+  options: FrameworkJsonParseOptions = {},
+  schema?: ZLinkJsonSchema
 ): unknown {
   if (text.charCodeAt(0) === 0xfeff) {
     throw new SyntaxError('framework-json-v1 does not allow a UTF-8 BOM.');
   }
   new JsonPropertyScanner(text, options).scan();
-  return JSON.parse(text);
+  const parsed = JSON.parse(text);
+  return schema === undefined
+    ? parsed
+    : validateFrameworkJsonV1Value(parsed, schema, '$', true);
+}
+
+const BASE64_PATTERN = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u;
+const INT32_MIN = -2_147_483_648;
+const INT32_MAX = 2_147_483_647;
+const UINT32_MAX = 4_294_967_295;
+
+function validateFrameworkJsonV1Value(
+  value: unknown,
+  schema: ZLinkJsonSchema,
+  path: string,
+  decode: boolean
+): unknown {
+  switch (schema.type) {
+    case 'boolean':
+      if (typeof value !== 'boolean') schemaFailure(path, 'a boolean');
+      return value;
+    case 'string':
+      if (typeof value !== 'string') schemaFailure(path, 'a string');
+      return value;
+    case 'number':
+      if (typeof value !== 'number' || !Number.isFinite(value)) schemaFailure(path, 'a finite number');
+      return value;
+    case 'int32':
+      if (!Number.isInteger(value) || (value as number) < INT32_MIN || (value as number) > INT32_MAX) {
+        schemaFailure(path, 'an int32 JSON number');
+      }
+      return value;
+    case 'uint32':
+      if (!Number.isInteger(value) || (value as number) < 0 || (value as number) > UINT32_MAX) {
+        schemaFailure(path, 'a uint32 JSON number');
+      }
+      return value;
+    case 'int64':
+      return validateDecimalInteger(value, path, true, decode);
+    case 'uint64':
+      return validateDecimalInteger(value, path, false, decode);
+    case 'bytes': {
+      if (typeof value !== 'string' || !BASE64_PATTERN.test(value)) {
+        schemaFailure(path, 'padded RFC 4648 base64');
+      }
+      const bytes = Buffer.from(value as string, 'base64');
+      if (bytes.toString('base64') !== value) schemaFailure(path, 'canonical padded RFC 4648 base64');
+      return decode ? Uint8Array.from(bytes) : value;
+    }
+    case 'enum':
+      if (typeof value !== 'string' || !schema.names.includes(value)) {
+        schemaFailure(path, `one of ${schema.names.join(', ')}`);
+      }
+      return value;
+    case 'nullable':
+      return value === null
+        ? null
+        : validateFrameworkJsonV1Value(value, schema.value, path, decode);
+    case 'array':
+      if (!Array.isArray(value)) schemaFailure(path, 'an array');
+      return (value as unknown[]).map((item, index) =>
+        validateFrameworkJsonV1Value(item, schema.items, `${path}[${index}]`, decode));
+    case 'record': {
+      if (!isJsonObject(value)) schemaFailure(path, 'an object');
+      const result: Record<string, unknown> = {};
+      for (const [name, item] of Object.entries(value as Record<string, unknown>)) {
+        result[name] = validateFrameworkJsonV1Value(item, schema.values, `${path}.${name}`, decode);
+      }
+      return decode ? result : value;
+    }
+    case 'object': {
+      if (!isJsonObject(value)) schemaFailure(path, 'an object');
+      const input = value as Record<string, unknown>;
+      for (const name of schema.required) {
+        if (!Object.prototype.hasOwnProperty.call(input, name)) {
+          throw new TypeError(`framework-json-v1 required property '${path}.${name}' is missing.`);
+        }
+      }
+      const result: Record<string, unknown> = {};
+      for (const [name, item] of Object.entries(input)) {
+        const propertySchema = schema.properties[name];
+        if (propertySchema === undefined) {
+          if (schema.additionalProperties === false) {
+            throw new TypeError(`framework-json-v1 property '${path}.${name}' is not allowed.`);
+          }
+          continue;
+        }
+        result[name] = validateFrameworkJsonV1Value(item, propertySchema, `${path}.${name}`, decode);
+      }
+      return decode ? result : value;
+    }
+  }
+}
+
+function validateDecimalInteger(value: unknown, path: string, signed: boolean, decode: boolean): unknown {
+  if (typeof value !== 'string' || !/^(?:0|[1-9][0-9]*|-[1-9][0-9]*)$/u.test(value)) {
+    schemaFailure(path, signed ? 'a canonical int64 decimal string' : 'a canonical uint64 decimal string');
+  }
+  const parsed = BigInt(value as string);
+  const minimum = signed ? SIGNED_64_MIN : 0n;
+  const maximum = signed ? (1n << 63n) - 1n : UNSIGNED_64_MAX;
+  if (parsed < minimum || parsed > maximum) schemaFailure(path, signed ? 'an int64 value' : 'a uint64 value');
+  return decode ? parsed : value;
+}
+
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function schemaFailure(path: string, expected: string): never {
+  throw new TypeError(`framework-json-v1 value '${path}' must be ${expected}.`);
 }
 
 class JsonPropertyScanner {

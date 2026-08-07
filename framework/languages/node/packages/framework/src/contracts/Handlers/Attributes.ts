@@ -1,3 +1,9 @@
+import {
+  defineZLinkPacketJsonContract,
+  readZLinkPacketJsonContract as readDefinedZLinkPacketJsonContract,
+  type ZLinkPacketJsonContract
+} from './JsonContract';
+
 export const ZLINK_DECORATOR_METADATA = Symbol.for('@zlink-systems/framework:decorator');
 
 export interface ZLinkDecoratorMetadata {
@@ -8,6 +14,7 @@ export interface ZLinkDecoratorMetadata {
   readonly meshName?: string;
   readonly channelName?: string;
   readonly topic?: string;
+  readonly jsonContract?: ZLinkPacketJsonContract;
 }
 
 export function ZLinkHandlerGroup(groupName: string): ClassDecorator {
@@ -26,8 +33,20 @@ export function ZLinkPublish(packetName?: string): MethodDecorator {
   return methodDecorator({ kind: 'publish', packetName });
 }
 
-export function ZLinkPacket(packetName: string): ClassDecorator {
-  return classDecorator({ kind: 'packet', packetName });
+export function ZLinkPacket(
+  packetName: string,
+  jsonContract?: ZLinkPacketJsonContract
+): ClassDecorator {
+  return (target) => {
+    const normalized = jsonContract === undefined
+      ? undefined
+      : defineZLinkPacketJsonContract(packetName, jsonContract);
+    appendMetadata(target, { kind: 'packet', packetName, jsonContract: normalized });
+  };
+}
+
+export function readZLinkPacketJsonContract(packetName: string): ZLinkPacketJsonContract | undefined {
+  return readDefinedZLinkPacketJsonContract(packetName);
 }
 
 export function ZLinkSpotRequest(packetName?: string): MethodDecorator {

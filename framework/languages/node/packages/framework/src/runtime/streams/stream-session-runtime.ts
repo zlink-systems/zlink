@@ -454,7 +454,8 @@ export class ZLinkStreamSessionRuntime {
           wrapFrameworkPayloadMessage(
             dispatchPayload,
             this.options.messageSerializers,
-            streamCodecContentType(inboundHeader.codec)
+            streamCodecContentType(inboundHeader.codec),
+            inboundHeader.name
           )
         );
         flowIfEnabled(this.options.dispatchErrors?.flow, ZLinkMessageFlowOutcome.Dispatched)?.trace({

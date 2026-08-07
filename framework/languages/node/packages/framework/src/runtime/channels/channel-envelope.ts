@@ -25,6 +25,8 @@ import {
 } from '../messaging/framework-json-v1';
 import { currentOrCreateFlow } from '../diagnostics/flow-context';
 import { codecsForFrameworkPacket } from './channel-framework-packets';
+import { readZLinkPacketJsonContract } from '../../contracts/Handlers/Attributes';
+import type { ZLinkJsonSchema } from '../../contracts/Handlers/JsonContract';
 
 export const ZLINK_CHANNEL_FORMAT_MARKER = 0xf2;
 
@@ -83,7 +85,7 @@ export function encodeChannelEnvelopeParts(
   metadata: ReadonlyMap<string, string> = new Map()
 ): readonly MessageLike[] {
   const messageName = resolveFrameworkPacketName(payload, packetName, 'Channel');
-  const encoded = encodePayload(payload, codecsForFrameworkPacket(messageName, codecs));
+  const encoded = encodePayload(payload, codecsForFrameworkPacket(messageName, codecs), messageName, 'payload');
   const flow = currentOrCreateFlow('Application', createFlow);
   const envelopeCorrelationId = correlationIdForOutboundKind(kind, correlationId);
   const header: ZLinkChannelEnvelopeHeader = {
@@ -125,7 +127,7 @@ export function encodeChannelEnvelopePartsAtDeadline(
     throw new RangeError('deadlineUnixMs must be a positive safe integer.');
   }
   const messageName = resolveFrameworkPacketName(payload, packetName, 'Channel');
-  const encoded = encodePayload(payload, codecsForFrameworkPacket(messageName, codecs));
+  const encoded = encodePayload(payload, codecsForFrameworkPacket(messageName, codecs), messageName, 'payload');
   const flow = currentOrCreateFlow('Application', createFlow);
   const envelopeCorrelationId = correlationIdForOutboundKind(kind, correlationId);
   const header: ZLinkChannelEnvelopeHeader = {
@@ -155,7 +157,7 @@ export function encodeChannelPublishEnvelopeParts(
   metadata: ReadonlyMap<string, string> = new Map()
 ): readonly MessageLike[] {
   const messageName = resolveFrameworkPacketName(payload, packetName, 'Channel');
-  const encoded = encodePayload(payload, codecsForFrameworkPacket(messageName, codecs));
+  const encoded = encodePayload(payload, codecsForFrameworkPacket(messageName, codecs), messageName, 'payload');
   const flow = currentOrCreateFlow('Application', createFlow);
   const header: ZLinkChannelEnvelopeHeader = {
     formatMarker: ZLINK_CHANNEL_FORMAT_MARKER,
@@ -181,7 +183,9 @@ export function encodeChannelReplyParts(
 ): readonly MessageLike[] {
   const encoded = encodePayload(
     payload ?? Buffer.alloc(0),
-    codecsForFrameworkPacket(request.messageName, codecs)
+    codecsForFrameworkPacket(request.messageName, codecs),
+    request.messageName,
+    'reply'
   );
   const header: ZLinkChannelEnvelopeHeader = {
     formatMarker: ZLINK_CHANNEL_FORMAT_MARKER,
@@ -255,7 +259,10 @@ export function decodeChannelReply<TReply>(
   if (serializer !== undefined) {
     return serializer.deserialize<TReply>(ZLinkEncodedPayload.from(parts[1].data()), Object as never);
   }
-  return parseWireJson(parts[1].data().toString()) as TReply;
+  return parseWireJson(
+    parts[1].data().toString(),
+    readZLinkPacketJsonContract(header.messageName)?.reply
+  ) as TReply;
 }
 
 function decodeChannelError(header: ZLinkChannelEnvelopeHeader): Error {
@@ -302,7 +309,10 @@ export function decodeChannelPayload(
       return envelope.payload;
     }
     if (envelope.header.contentType === JSON_CONTENT_TYPE) {
-      return parseWireJson(envelope.payload.toString());
+      return parseWireJson(
+        envelope.payload.toString(),
+        schemaForInboundChannelEnvelope(envelope.header)
+      );
     }
     throw createInternalFrameworkException(
       ZLinkFrameworkInternalErrorKind.PayloadDecodeFailed,
@@ -330,7 +340,9 @@ export function closeMessages(parts: readonly MessageLike[]): void {
 
 function encodePayload(
   value: unknown,
-  codecs: ZLinkChannelEnvelopeCodecRegistry | undefined
+  codecs: ZLinkChannelEnvelopeCodecRegistry | undefined,
+  packetName: string,
+  contractPart: 'payload' | 'reply'
 ): {
   readonly contentType: string;
   readonly message: MessageLike;
@@ -344,14 +356,17 @@ function encodePayload(
       message: borrowEncodedPayload(payload) ?? payload.data()
     };
   }
-  return { contentType: contentTypeOf(value), message: toMessageLike(value) };
+  return {
+    contentType: contentTypeOf(value),
+    message: toMessageLike(value, readZLinkPacketJsonContract(packetName)?.[contractPart])
+  };
 }
 
-function toMessageLike(value: unknown): MessageLike {
+function toMessageLike(value: unknown, schema?: ZLinkJsonSchema): MessageLike {
   if (Buffer.isBuffer(value) || value instanceof Uint8Array || isMessage(value)) {
     return value;
   }
-  return encodeJsonBytes(value);
+  return encodeJsonBytes(value, schema);
 }
 
 function contentTypeOf(value: unknown): string {
@@ -364,8 +379,8 @@ function isMessage(value: unknown): value is Message {
   return typeof value === 'object' && value !== null && typeof (value as { data?: unknown }).data === 'function';
 }
 
-function encodeJsonBytes(value: unknown): Buffer {
-  return Buffer.from(stringifyFrameworkJsonV1(value));
+function encodeJsonBytes(value: unknown, schema?: ZLinkJsonSchema): Buffer {
+  return Buffer.from(stringifyFrameworkJsonV1(value, schema));
 }
 
 function encodeChannelHeader(header: ZLinkChannelEnvelopeHeader): Buffer {
@@ -404,10 +419,15 @@ function requireDefaultSerializerContentType(
   return contentType;
 }
 
-function parseWireJson(payload: string): unknown {
+function parseWireJson(payload: string, schema?: ZLinkJsonSchema): unknown {
   return parseFrameworkJsonV1(payload, {
     rejectPropertyName: isPrototypeKey
-  });
+  }, schema);
+}
+
+function schemaForInboundChannelEnvelope(header: ZLinkChannelEnvelopeHeader): ZLinkJsonSchema | undefined {
+  const contract = readZLinkPacketJsonContract(header.messageName);
+  return header.kind === ZLinkChannelMessageKind.Response ? contract?.reply : contract?.payload;
 }
 
 function validateChannelHeader(value: unknown): ZLinkChannelEnvelopeHeader {

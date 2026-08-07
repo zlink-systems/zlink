@@ -174,8 +174,46 @@ export interface ZLinkOutboundRouteConfig {
     endpoint: string;
 }
 
-export declare function ZLinkPacket(packetName: string): ClassDecorator;
+export type ZLinkJsonSchema =
+    | { readonly type: "boolean" }
+    | { readonly type: "string" }
+    | { readonly type: "number" }
+    | { readonly type: "int32" }
+    | { readonly type: "uint32" }
+    | { readonly type: "int64" }
+    | { readonly type: "uint64" }
+    | { readonly type: "bytes" }
+    | { readonly type: "enum"; readonly names: readonly string[] }
+    | { readonly type: "nullable"; readonly value: ZLinkJsonSchema }
+    | { readonly type: "array"; readonly items: ZLinkJsonSchema }
+    | { readonly type: "record"; readonly values: ZLinkJsonSchema }
+    | {
+        readonly type: "object";
+        readonly properties: Readonly<Record<string, ZLinkJsonSchema>>;
+        readonly required: readonly string[];
+        readonly additionalProperties?: boolean;
+    };
+
+export interface ZLinkPacketJsonContract {
+    readonly payload: ZLinkJsonSchema;
+    readonly reply?: ZLinkJsonSchema;
+}
+
+export declare function ZLinkPacket(
+    packetName: string,
+    jsonContract?: ZLinkPacketJsonContract): ClassDecorator;
 ```
+
+`jsonContract`는 메시지별 codec 등록이 아니라 기본 `framework-json-v1` serializer가 사용하는 packet의
+field 계약이다. `payload`는 Send·Request·Publish의 입력에 적용하고 `reply`는 Request 성공 응답에 적용한다.
+같은 process에서 같은 packet name을 여러 class가 사용하면 JSON contract도 같아야 한다. Framework는 class를
+정의할 때 schema를 복사해 변경할 수 없게 보관하며, 잘못된 schema와 서로 다른 중복 계약은 즉시 거부한다.
+
+`int64`와 `uint64`는 wire의 canonical decimal string을 Node `bigint`로 변환하고 `bytes`는 padded base64를
+`Uint8Array`로 변환한다. Object decode는 `required`를 확인하고 선언하지 않은 property를 기본적으로 무시한다.
+`additionalProperties: false`인 DTO만 선언하지 않은 property를 거부한다. 동적인 key를 보존해야 하는 map은
+`record`를 사용한다. 이 schema는 Channel, Actor·Spot과 STREAM의 기본 JSON 경로에 공통으로 적용되며 별도
+serializer나 handler별 codec을 요구하지 않는다.
 
 Node runtime은 Instance Spot 관측값도 `ZLinkMeter`로 기록한다. 이 언어에서 사용하는 [Instance Spot](../../../../01-glossary.ko.md#entry-spot-user-spot과-instance-spot)
 계기 이름 카탈로그는 다음 여섯 값이며, 이름·종류·단위와 attribute 제한은

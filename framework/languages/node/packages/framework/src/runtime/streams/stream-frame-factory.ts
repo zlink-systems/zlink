@@ -6,6 +6,7 @@ import type { Message } from '../../contracts/Common/Message';
 import { ZLinkBufferMessage as ZLinkBindingMessage } from '../backend/runtime-message';
 import { currentOrCreateFlow } from '../diagnostics/flow-context';
 import { stringifyFrameworkJsonV1 } from '../messaging/framework-json-v1';
+import { readZLinkPacketJsonContract } from '../../contracts/Handlers/Attributes';
 import {
   createStreamReplyHeader,
   encodeStreamFrame,
@@ -140,7 +141,12 @@ export class ZLinkStreamFrameMessageFactory {
     }
     return {
       codec: ZLinkStreamCodec.Json,
-      payload: utf8Encode(stringifyFrameworkJsonV1(payload))
+      payload: utf8Encode(stringifyFrameworkJsonV1(
+        payload,
+        readZLinkPacketJsonContract(packetName)?.[
+          direction === 'Response' ? 'reply' : 'payload'
+        ]
+      ))
     };
   }
 

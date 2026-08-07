@@ -2,6 +2,8 @@
 
 const assert = require('node:assert/strict');
 const test = require('node:test');
+const fs = require('node:fs');
+const path = require('node:path');
 
 const framework = require('../../packages/framework/dist/internal');
 const envelope = require('../../packages/framework/dist/runtime/channels/channel-envelope');
@@ -69,6 +71,178 @@ test('default payload decode rejects BOM and duplicate properties at every depth
     } finally {
       message.close();
     }
+  }
+});
+
+test('typed framework-json-v1 schema consumes every shared golden vector', () => {
+  const fixture = JSON.parse(fs.readFileSync(path.resolve(
+    __dirname,
+    '../../../../runtime/protocol/golden/framework-json-v1.json'
+  ), 'utf8'));
+  const schema = {
+    type: 'object',
+    required: fixture.contract.requiredProperties,
+    properties: {
+      signed64: { type: 'int64' },
+      unsigned64: { type: 'uint64' },
+      int32: { type: 'int32' },
+      ratio: { type: 'number' },
+      state: { type: 'enum', names: fixture.contract.enumNames },
+      bytes: { type: 'bytes' },
+      nullable: { type: 'nullable', value: { type: 'string' } },
+      labels: { type: 'record', values: { type: 'int32' } }
+    }
+  };
+
+  class GoldenPayload {}
+  framework.ZLinkPacket('GoldenPayload', { payload: schema })(GoldenPayload);
+
+  for (const vector of fixture.valid) {
+    const message = Message.from(Buffer.from(vector.jsonUtf8));
+    try {
+      const decoded = payloadCodec.decodeFrameworkTypedPayloadMessage(
+        message,
+        undefined,
+        GoldenPayload
+      );
+      assert.equal(typeof decoded.signed64, 'bigint', vector.name);
+      assert.equal(typeof decoded.unsigned64, 'bigint', vector.name);
+      assert.deepEqual([...decoded.bytes], [1, 2], vector.name);
+      assert.equal(Object.hasOwn(decoded, 'unknownFuture'), false, vector.name);
+    } finally {
+      message.close();
+    }
+  }
+
+  for (const vector of fixture.invalid) {
+    const message = Message.from(Buffer.from(vector.jsonUtf8));
+    try {
+      assert.throws(
+        () => payloadCodec.decodeFrameworkTypedPayloadMessage(message, undefined, GoldenPayload),
+        /PayloadDecodeFailed/,
+        vector.name
+      );
+    } finally {
+      message.close();
+    }
+  }
+});
+
+test('Channel request and reply apply the packet JSON contract without a codec registration', () => {
+  const contract = {
+    payload: {
+      type: 'object',
+      required: ['count'],
+      properties: { count: { type: 'int32' } }
+    },
+    reply: {
+      type: 'object',
+      required: ['generation', 'bytes'],
+      properties: {
+        generation: { type: 'uint64' },
+        bytes: { type: 'bytes' }
+      }
+    }
+  };
+  class ContractRequest {
+    constructor(count) { this.count = count; }
+  }
+  framework.ZLinkPacket('ContractRequest', contract)(ContractRequest);
+
+  const requestParts = envelope.encodeChannelEnvelopeParts(
+    1,
+    'contract',
+    undefined,
+    new ContractRequest(7)
+  );
+  try {
+    assert.deepEqual(
+      envelope.decodeChannelPayload(envelope.decodeChannelEnvelope(readable(requestParts))),
+      { count: 7 }
+    );
+  } finally {
+    envelope.closeMessages(requestParts);
+  }
+
+  const headerParts = envelope.encodeChannelEnvelopeParts(
+      1,
+      'contract',
+      undefined,
+      new ContractRequest(7)
+    );
+  const requestHeader = envelope.decodeChannelHeader(readable(headerParts));
+  envelope.closeMessages(headerParts);
+  const replyParts = envelope.encodeChannelReplyParts(requestHeader, {
+    generation: 9n,
+    bytes: Uint8Array.from([1, 2])
+  });
+  try {
+    const reply = envelope.decodeChannelReply(readable(replyParts));
+    assert.equal(reply.generation, 9n);
+    assert.deepEqual([...reply.bytes], [1, 2]);
+  } finally {
+    envelope.closeMessages(replyParts);
+  }
+
+  const invalidParts = [
+    Buffer.from(JSON.stringify({
+      formatMarker: 0xf2,
+      kind: 1,
+      channelName: 'contract',
+      messageName: 'ContractRequest',
+      contentType: 'application/json',
+      correlationId: 'c',
+      deadline: null,
+      topic: null,
+      metadata: {}
+    })),
+    Buffer.from('{}')
+  ];
+  assert.throws(
+    () => envelope.decodeChannelPayload(envelope.decodeChannelEnvelope(readable(invalidParts))),
+    /PayloadDecodeFailed/
+  );
+});
+
+test('packet JSON contracts are validated and frozen when the packet class is defined', () => {
+  class InvalidPacket {}
+  assert.throws(
+    () => framework.ZLinkPacket('InvalidPacket', {
+      payload: {
+        type: 'object',
+        required: ['missing'],
+        properties: {}
+      }
+    })(InvalidPacket),
+    /required property 'missing' has no property schema/
+  );
+  class InvalidAdditionalProperties {}
+  assert.throws(
+    () => framework.ZLinkPacket('InvalidAdditionalProperties', {
+      payload: {
+        type: 'object',
+        required: [],
+        properties: {},
+        additionalProperties: 'no'
+      }
+    })(InvalidAdditionalProperties),
+    /additionalProperties must be boolean/
+  );
+
+  const mutableNames = ['Open'];
+  class FrozenPacket {}
+  framework.ZLinkPacket('FrozenPacket', {
+    payload: { type: 'enum', names: mutableNames }
+  })(FrozenPacket);
+  mutableNames.push('Closed');
+  const message = Message.from(Buffer.from('"Closed"'));
+  try {
+    assert.throws(
+      () => payloadCodec.decodeFrameworkTypedPayloadMessage(message, undefined, FrozenPacket),
+      /PayloadDecodeFailed/
+    );
+  } finally {
+    message.close();
   }
 });
 
