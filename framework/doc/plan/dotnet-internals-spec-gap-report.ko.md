@@ -69,7 +69,7 @@ Gap 하나 또는 서로 강하게 연결된 작은 작업 묶음의 동작과 �
 | DOTNET-COMP-001 | 상 | completion overflow | early result와 tombstone이 모두 차면 caller terminal 없이 payload를 버리고 metric만 올린다 |
 | DOTNET-EXEC-001 | 상 | STREAM session queue | queue의 byte 축이 payload 크기를 세지 않아 count 한도까지 큰 payload가 쌓일 수 있다 |
 | DOTNET-EXEC-002 | 중 | serial execution engine | Spot/session 공통 queue와 별도로 Actor mailbox·전달 queue가 순서·수락·준비 집합을 다시 구현한다 |
-| DOTNET-EXEC-003 | 상 | Entry Actor ingress HWM | unbounded Channel과 Actor별 Task chain이 count·retained-byte reservation 없이 batch를 계속 보관한다 |
+| DOTNET-EXEC-003 | 상 | Entry Actor ingress HWM | 완료 — process-wide ingress와 Actor별 공통 serial lane이 count·retained byte를 제한한다 |
 | DOTNET-LIFE-001 | 중 | Spot type model | User Spot과 Instance Spot을 별도 runtime type이 아니라 한 activation의 interface/type 검사로 구분한다 |
 | DOTNET-LIFE-002 | 중 | Ready Instance owner loss | source·unit은 `KnownUnavailable`로 구분하지만 실제 process에서 takeover와 queue recovery가 없다는 E2E가 없다 |
 | DOTNET-COMP-002 | 중 | completion ordering | 응답 상관 값을 submit 출력으로 받은 뒤 waiter를 등록해 early-result table을 상시 필요로 한다 |
@@ -324,11 +324,34 @@ Packaged contract와 standalone HTTP clean consumer는 통과했고 public API s
 
 ### DOTNET-EXEC-003 — Entry Actor ingress가 count·byte 상한 없이 적재됨
 
+**판정: 완료**
+
 Internals는 실행 대기열마다 count와 byte reservation을 모두 강제하고 상한 없는 실행 대기열을 금지한다(`common/internals/08-object-lifecycle.ko.md:219-268`). Host-wide payload HWM은 process 수신 byte 회계이며 owner execution queue의 count·byte 한도를 대체하지 않는다.
 
 Entry Spot Actor ingress는 `Channel.CreateUnbounded<ZLinkSpotActorFrameBatch>`를 사용한다(`Runtime/Spots/ZLinkEntrySpotDispatchPump.cs:18-24`). 수신한 batch는 별도 queue reservation 없이 `TryWrite`되고(`:153-177`), reader는 batch를 bounded lane에 넘기는 대신 Actor ID별 선행 `Task` continuation chain으로 계속 전환한다(`:180-203,234-249`). Batch가 가진 `ZLinkInboundDispatchLease`는 payload byte를 host-wide budget에 유지하지만(`Runtime/Spots/ZLinkSpotActorFrameReader.cs:86-117`) batch/task/envelope count와 고정비를 제한하지 않는다. 따라서 빈 payload나 작은 payload가 몰리면 host payload HWM 아래에서도 Channel item과 Task가 무제한 늘 수 있다.
 
 완료 조건은 Entry Actor ingress를 count와 retained byte를 원자적으로 예약하는 공통 bounded lane으로 옮기고, 포화 위치와 call 종류에 맞는 terminal/admission 결과를 내는 것이다. Zero/small-payload count 포화와 large-payload byte 포화, Actor별 FIFO와 sibling Actor progress를 함께 검증해야 한다.
+
+구현과 검증을 완료했다. Entry Actor ingress의 unbounded `Channel`과 Actor별 `Task` continuation chain을
+제거했다. Process-wide ingress admission은 batch 수와 retained body·application metadata byte에 작업당
+고정비 256 byte를 더해 원자적으로 예약한다. 각 Actor는 공통 `ZLinkSerialExecutionQueue`를 사용하므로
+Actor별 count·byte 한도와 FIFO를 같은 execution engine이 소유하며, Actor마다 lane을 분리해 한 Actor의
+handler가 대기해도 다른 Actor의 dispatch를 막지 않는다. Lane이 비면 공통 engine의 drained signal로
+dictionary entry와 queue를 함께 정리한다.
+
+Process-wide 또는 Actor lane admission이 포화되면 request는 `CapacityExceeded`와 retry-after-backoff로
+끝나고, one-way message는 handler를 실행하지 않은 채 Framework가 보유한 payload를 반납한다. 종료 시에는
+새 ingress를 닫고 이미 수락한 batch의 reservation과 dispatch가 모두 끝난 뒤 lane을 해제한다.
+
+`EntrySpotActorDispatchTests` 136건에서 byte 상한 초과의 request terminal과 payload 반납, Actor별 count
+포화, 같은 Actor의 후속 handler 미실행과 sibling Actor progress를 포함해 통과했다. 전체 .NET unit
+project는 1,583건 중 1,582건이 통과하고 기존
+`LogicalMulticastSubmitsEachPositiveRemoteOnceRegardlessOfWeight` 한 건이 5초 condition timeout으로
+실패했지만 같은 test의 단독 재실행은 통과했다. Packaged contract와 standalone HTTP clean consumer가
+통과했고 public API snapshot hash는
+`c1987f4b98e4fac7a30b7d038a56ee0d20e1272d00e79bdc88d3271e3c3ab958`로 유지되었다. 실제 process
+`ToActorMessaging` `TA-A1`은 `logs/20260807-195320-4080230/`에서 통과했다. 이 checkpoint는
+`45a3658fd8`로 `main`에 push했다.
 
 ### DOTNET-LIFE-001 — User/Instance Spot이 서로 다른 runtime type이 아님
 
