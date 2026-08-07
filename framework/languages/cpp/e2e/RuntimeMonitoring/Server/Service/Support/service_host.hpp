@@ -30,9 +30,10 @@ inline int run_service_host (int argc, char **argv)
         framework.services ().add_singleton<server::evidence_store_t> (std::move (evidence));
         framework.services ().add_singleton<runtime_observation_store_t> ();
         auto gate = std::make_unique<application_gate_t> ();
-        auto *gate_ptr = gate.get ();
         framework.services ().add_singleton<application_gate_t> (
           std::move (gate));
+        framework.services ().add_singleton<app_reference_t> (
+          std::make_unique<app_reference_t> (app));
         server::add_redis_location_store (framework, options.redis_endpoint,
                                           options.redis_key_prefix);
         const auto channel_endpoint = parse_tcp_endpoint (options.channel_endpoint);
@@ -143,6 +144,8 @@ inline int run_service_host (int argc, char **argv)
                 "/admin/application-gate/wait")
               .map_post<application_gate_release_handler_t> (
                 "/admin/application-gate/release")
+              .map_post<message_flow_mode_handler_t> (
+                "/admin/message-flow-mode")
               .map_post<mesh_profile_request_handler_t> (
                 "/mesh/profile/request")
               .map_post<mesh_application_gate_request_handler_t> (

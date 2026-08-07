@@ -7,6 +7,7 @@
 
 #include <zlink/http_client.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <future>
@@ -24,6 +25,24 @@ inline std::uint64_t evidence_sequence (const std::string &line)
     if (marker == std::string::npos)
         return 0;
     return std::stoull (line.substr (marker + 10));
+}
+
+inline std::string latest_evidence_field (const std::vector<std::string> &evidence,
+                                          const std::string &marker,
+                                          const std::string &field)
+{
+    const auto prefix = "|" + field + "=";
+    for (auto line = evidence.rbegin (); line != evidence.rend (); ++line) {
+        if (!contains (*line, marker))
+            continue;
+        const auto begin = line->find (prefix);
+        if (begin == std::string::npos)
+            continue;
+        const auto value_begin = begin + prefix.size ();
+        const auto end = line->find ('|', value_begin);
+        return line->substr (value_begin, end - value_begin);
+    }
+    return {};
 }
 
 inline void run_mon_c1_dispatch_failure_scenario (const client_options_t &options)
@@ -81,6 +100,11 @@ inline void run_mon_c1_dispatch_failure_scenario (const client_options_t &option
           options.filtered_service_url,
           "application-gate|state=entered",
           std::chrono::seconds (5));
+        const auto first_gate_correlation = latest_evidence_field (
+          fetch_evidence (options.filtered_service_url),
+          "application-gate|state=entered", "corr");
+        ensure (!first_gate_correlation.empty (),
+                "MON-C1 first gated request has no correlation evidence");
 
         const auto request_reply =
           http.post ("/mesh/profile/request?targetRid=svc-throw")
@@ -118,6 +142,14 @@ inline void run_mon_c1_dispatch_failure_scenario (const client_options_t &option
           gated_request.wait_for (std::chrono::milliseconds (0))
             != std::future_status::ready,
           "MON-C1 gated application request completed before release");
+        ensure (
+          http.post ("/admin/message-flow-mode?mode=off")
+              .submit_raw ()
+              .result ()
+              .value ()
+              .status
+            < 400,
+          "MON-C1 could not disable message-flow recording during a handler");
         release_gate ();
         const auto gate_reply = gated_request.get ();
         ensure (
@@ -128,6 +160,74 @@ inline void run_mon_c1_dispatch_failure_scenario (const client_options_t &option
           options.filtered_service_url,
           "application-gate|state=released",
           std::chrono::seconds (10));
+        wait_evidence_contains (
+          options.filtered_service_url,
+          "phase=replied|surface=route_mesh_channel|corr="
+            + first_gate_correlation,
+          std::chrono::seconds (5));
+
+        ensure (
+          http.post ("/admin/application-gate/arm")
+              .submit_raw ()
+              .result ()
+              .value ()
+              .status
+            < 400,
+          "MON-C1 second application gate was not armed");
+        auto off_gated_request = std::async (
+          std::launch::async, [&options] {
+              auto gate_http = zlink::http_client::client_t::create ()
+                                 .base_url (options.service_url)
+                                 .timeout (std::chrono::seconds (20))
+                                 .build ();
+              return gate_http
+                .post ("/mesh/application-gate/request?targetRid=svc-b")
+                .body (application_gate_req_t{
+                  .marker = "mon-c1-off-entry-gate"})
+                .submit<application_gate_res_t> ()
+                .result ()
+                .value ()
+                .body;
+          });
+        ensure (
+          http.post ("/admin/application-gate/wait")
+              .submit_raw ()
+              .result ()
+              .value ()
+              .status
+            < 400,
+          "MON-C1 off-entry callback did not enter its gate");
+        const auto second_gate_correlation = latest_evidence_field (
+          fetch_evidence (options.filtered_service_url),
+          "application-gate|state=entered", "corr");
+        ensure (!second_gate_correlation.empty ()
+                  && second_gate_correlation != first_gate_correlation,
+                "MON-C1 second gated request has no distinct correlation evidence");
+        ensure (
+          http.post ("/admin/message-flow-mode?mode=normal")
+              .submit_raw ()
+              .result ()
+              .value ()
+              .status
+            < 400,
+          "MON-C1 could not enable message-flow recording during a handler");
+        release_gate ();
+        const auto off_gate_reply = off_gated_request.get ();
+        ensure (off_gate_reply.provider_rid == "svc-b"
+                  && off_gate_reply.marker == "mon-c1-off-entry-gate",
+                "MON-C1 off-entry gated request did not complete after release");
+        std::this_thread::sleep_for (std::chrono::milliseconds (250));
+        const auto snapshot_evidence = fetch_evidence (options.filtered_service_url);
+        ensure (
+          std::none_of (
+            snapshot_evidence.begin (), snapshot_evidence.end (),
+            [&] (const std::string &line) {
+                return contains (
+                         line,
+                         "message-flow-provider|event=zlink.message_flow")
+                       && contains (line, "|corr=" + second_gate_correlation);
+            }),
+          "MON-C1 off-entry request emitted a partial flow after enabling recording");
 
         const auto evidence = fetch_evidence (options.filtered_service_url);
         ensure (any_contains (evidence, "application-gate|state=entered")

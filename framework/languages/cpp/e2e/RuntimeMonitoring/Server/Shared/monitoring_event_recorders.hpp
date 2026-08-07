@@ -40,7 +40,8 @@ inline void record_runtime_log (evidence_store_t &evidence,
         evidence.add ("message-flow-provider|event="
                       + log_field (record, "event_id")
                       + "|phase=" + log_field (record, "phase")
-                      + "|surface=" + log_field (record, "surface"));
+                      + "|surface=" + log_field (record, "surface")
+                      + "|corr=" + log_field (record, "corr"));
     }
 }
 

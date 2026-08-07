@@ -12,6 +12,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <csignal>
+#include <functional>
 #include <stdexcept>
 #include <string>
 #include <set>
@@ -120,6 +121,8 @@ class application_gate_t
     bool _armed = false;
     bool _entered = false;
 };
+
+using app_reference_t = std::reference_wrapper<zlink::framework::app_t>;
 
 class monitoring_spot_t;
 
@@ -307,11 +310,12 @@ class mesh_application_gate_dispatch_handler_t
 
     application_gate_res_t
     handle (const application_gate_req_t &request,
-            const zlink::framework::route_message_context_t &)
+            const zlink::framework::route_message_context_t &context)
     {
-        _evidence.add ("application-gate|state=entered");
+        const auto correlation = context.correlation_id.value_or ("");
+        _evidence.add ("application-gate|state=entered|corr=" + correlation);
         _gate.wait_if_armed ();
-        _evidence.add ("application-gate|state=released");
+        _evidence.add ("application-gate|state=released|corr=" + correlation);
         return {.marker = request.marker, .provider_rid = _evidence.rid ()};
     }
 
@@ -385,6 +389,37 @@ class application_gate_release_handler_t
 
   private:
     application_gate_t &_gate;
+};
+
+class message_flow_mode_handler_t
+{
+  public:
+    using dependency_types =
+      zlink::framework::dependency_list_t<app_reference_t>;
+
+    explicit message_flow_mode_handler_t (app_reference_t &app) : _app (app.get ())
+    {
+    }
+
+    zlink::framework::http_response_t
+    handle (const zlink::framework::http_request_t &request)
+    {
+        const auto found = request.query_values.find ("mode");
+        if (found == request.query_values.end ()) {
+            return {.status = 400, .body = R"({"error":"mode is required"})"};
+        }
+        if (found->second == "off") {
+            _app.set_message_flow_mode (zlink::framework::message_flow_log_mode_t::off);
+        } else if (found->second == "normal") {
+            _app.set_message_flow_mode (zlink::framework::message_flow_log_mode_t::normal);
+        } else {
+            return {.status = 400, .body = R"({"error":"unsupported mode"})"};
+        }
+        return {.body = R"({"status":"updated"})"};
+    }
+
+  private:
+    zlink::framework::app_t &_app;
 };
 
 class mesh_profile_request_handler_t
