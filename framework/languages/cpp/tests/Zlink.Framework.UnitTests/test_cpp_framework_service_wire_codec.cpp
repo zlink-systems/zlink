@@ -6,10 +6,16 @@
 #include <cassert>
 #include <cstdint>
 #include <string_view>
+#include <type_traits>
 #include <vector>
 
 namespace protocol = zlink::framework::runtime::protocol;
 namespace mesh = zlink::framework::runtime::mesh;
+
+static_assert (!std::is_same_v<zlink::framework::runtime::call_id_t,
+                               protocol::wire_operation_id_t>);
+static_assert (!std::is_convertible_v<zlink::framework::runtime::call_id_t,
+                                      protocol::wire_operation_id_t>);
 
 namespace
 {

@@ -2,7 +2,7 @@
 #pragma once
 
 #include "runtime/mesh/service_topology_registry.hpp"
-#include "runtime/operations/operation_id.hpp"
+#include "runtime/operations/call_id.hpp"
 
 #include <service_wire_constants.hpp>
 
@@ -78,7 +78,14 @@ struct actor_route_fence_t
                             const actor_route_fence_t &) = default;
 };
 
-using wire_operation_id_t = operation_id_t;
+struct wire_operation_id_t
+{
+    std::uint64_t high = 0;
+    std::uint64_t low = 0;
+
+    friend bool operator== (const wire_operation_id_t &,
+                            const wire_operation_id_t &) = default;
+};
 
 using message_follow_route_t =
   std::variant<actor_route_fence_t, spot_route_fence_t>;

@@ -200,13 +200,13 @@ class mesh_node_runtime_t
     zlink::submit_result_t request_to_node (
       const zlink::routing_id_t &target,
       const std::vector<zlink::message_t> &parts,
-      host::operation_id_t &operation_id,
+      host::call_id_t &operation_id,
       std::chrono::milliseconds timeout,
       std::vector<std::uint8_t> metadata = {});
     zlink::submit_result_t request_to_node (
       const zlink::routing_id_t &target,
       const std::vector<zlink::message_t> &parts,
-      host::operation_id_t &operation_id,
+      host::call_id_t &operation_id,
       std::chrono::milliseconds timeout,
       const std::map<std::string, std::string> &metadata);
     zlink::submit_result_t send_to_channel (const std::string &channel_name,
@@ -219,13 +219,13 @@ class mesh_node_runtime_t
     zlink::submit_result_t request_to_channel (
       const std::string &channel_name,
       const std::vector<zlink::message_t> &parts,
-      host::operation_id_t &operation_id,
+      host::call_id_t &operation_id,
       std::chrono::milliseconds timeout,
       std::vector<std::uint8_t> metadata = {});
     zlink::submit_result_t request_to_channel (
       const std::string &channel_name,
       const std::vector<zlink::message_t> &parts,
-      host::operation_id_t &operation_id,
+      host::call_id_t &operation_id,
       std::chrono::milliseconds timeout,
       const std::map<std::string, std::string> &metadata);
     host::spot_handle_t get_or_create_spot (std::string spot_id);
@@ -242,7 +242,7 @@ class mesh_node_runtime_t
       const std::string &target_spot_id,
       std::uint64_t target_spot_generation,
       const std::vector<zlink::message_t> &parts,
-      host::operation_id_t &operation_id,
+      host::call_id_t &operation_id,
       std::chrono::milliseconds timeout,
       std::vector<std::uint8_t> metadata = {});
     host::actor_handle_t create_actor (
@@ -259,7 +259,7 @@ class mesh_node_runtime_t
     zlink::submit_result_t request_to_actor (
       const actor_ref_t &target,
       const std::vector<zlink::message_t> &parts,
-      host::operation_id_t &operation_id,
+      host::call_id_t &operation_id,
       std::chrono::milliseconds timeout,
       std::vector<std::uint8_t> metadata = {},
       std::uint64_t authority_owner_generation = 0,
@@ -342,7 +342,7 @@ class mesh_node_runtime_t
       std::chrono::milliseconds timeout);
     std::optional<actor_ref_t> follow_relocated_actor (const actor_ref_t &actor);
     result_t<operation_completion_t> wait_for_completion (
-      const host::operation_id_t &operation,
+      const host::call_id_t &operation,
       std::chrono::milliseconds timeout,
       std::optional<zlink::routing_id_t> target = std::nullopt);
     std::size_t dispatch_ready (
@@ -399,7 +399,7 @@ class mesh_node_runtime_t
       const std::vector<zlink::message_t> &parts,
       const actor_ref_t &actor);
     result_t<actor_join_reply_t> wait_for_join_completion (
-      const host::operation_id_t &operation,
+      const host::call_id_t &operation,
       const actor_ref_t &actor,
       std::chrono::milliseconds timeout);
     std::optional<zlink::submit_result_t>
@@ -451,18 +451,18 @@ class mesh_node_runtime_t
     std::condition_variable _completion_ready;
     std::atomic_bool _stopping{false};
     zlink::framework::runtime::exactly_once_table_t<
-      host::operation_id_t,
+      host::call_id_t,
       operation_completion_t,
-      zlink::framework::runtime::operation_id_hash_t>
+      zlink::framework::runtime::call_id_hash_t>
       _completed_operations;
     struct actor_join_continuation_t
     {
         actor_ref_t actor;
         actor_join_completion_t completion;
     };
-    std::unordered_map<host::operation_id_t,
+    std::unordered_map<host::call_id_t,
                        actor_join_continuation_t,
-                       zlink::framework::runtime::operation_id_hash_t>
+                       zlink::framework::runtime::call_id_hash_t>
       _actor_join_continuations;
 };
 

@@ -3128,11 +3128,11 @@ std::string raw_mesh_node_owner_t::owner_key (
     return stream.str ();
 }
 
-foundation::operation_id_t raw_mesh_node_owner_t::operation_id (
+foundation::call_id_t raw_mesh_node_owner_t::operation_id (
   std::uint64_t lifecycle_generation,
   std::uint64_t correlation)
 {
-    return foundation::operation_id_t{lifecycle_generation, correlation};
+    return foundation::call_id_t{lifecycle_generation, correlation};
 }
 
 } // namespace zlink::framework::runtime::mesh

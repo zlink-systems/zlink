@@ -4088,7 +4088,7 @@ void test_application_relocation_remote_production_path (
     target_descriptor.owner_id = "target-owner";
     target_descriptor.lease_generation = 9;
 
-    zlink::framework::runtime::host::operation_id_t replay_operation;
+    zlink::framework::runtime::host::call_id_t replay_operation;
     test.require (
       target.request_to_actor (
         actor,

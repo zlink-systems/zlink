@@ -1465,7 +1465,7 @@ zlink::submit_result_t mesh_node_runtime_t::request_to_spot (
   const std::string &target_spot_id,
   std::uint64_t target_spot_generation,
   const std::vector<zlink::message_t> &parts,
-  host::operation_id_t &operation_id,
+  host::call_id_t &operation_id,
   std::chrono::milliseconds timeout,
   std::vector<std::uint8_t> metadata)
 {
@@ -1518,7 +1518,7 @@ zlink::submit_result_t mesh_node_runtime_t::send_to_actor (
 zlink::submit_result_t mesh_node_runtime_t::request_to_actor (
   const actor_ref_t &target,
   const std::vector<zlink::message_t> &parts,
-  host::operation_id_t &operation_id,
+  host::call_id_t &operation_id,
   std::chrono::milliseconds timeout,
   std::vector<std::uint8_t> metadata,
   std::uint64_t authority_owner_generation,
@@ -1696,7 +1696,7 @@ result_t<actor_join_reply_t> mesh_node_runtime_t::join_application_actor_to_entr
         return result_t<actor_join_reply_t>::failure (
           framework_error_kind_t::not_found, "local Actor handle was not found");
     }
-    host::operation_id_t operation;
+    host::call_id_t operation;
     const std::vector<zlink::message_t> parts{request};
     const auto submitted = found->second.join_entry_spot (
       zlink::routing_id_t::from (std::string (target_node.value ())), parts, operation, timeout);
@@ -1725,7 +1725,7 @@ result_t<void> mesh_node_runtime_t::submit_application_actor_entry_spot_join (
           framework_error_kind_t::not_found,
           "local Actor handle was not found");
 
-    host::operation_id_t operation;
+    host::call_id_t operation;
     const std::vector<zlink::message_t> parts{request};
     std::unique_lock lock (_completion_mutex);
     const auto submitted = found->second.join_entry_spot (
@@ -1824,7 +1824,7 @@ result_t<actor_join_reply_t> mesh_node_runtime_t::join_application_actor_to_spot
               framework_error_kind_t::not_found,
               "local Actor handle was not found");
         }
-        host::operation_id_t operation;
+        host::call_id_t operation;
         const std::vector<zlink::message_t> parts{request};
         const auto submitted = found->second.join_spot (
           zlink::routing_id_t::from (std::string (target_node.value ())),
@@ -1860,7 +1860,7 @@ result_t<actor_join_reply_t> mesh_node_runtime_t::join_application_actor_to_spot
             codec.encode_envelope_parts (header, route_request, *_serializers);
           auto origin = get_or_create_spot (
             "__zlink-route-origin-" + routing_id ()->to_hex ());
-          host::operation_id_t operation;
+          host::call_id_t operation;
           const auto submitted = origin.request_to_spot (
             zlink::routing_id_t::from (std::string (target_node.value ())),
             target_spot,
@@ -2173,7 +2173,7 @@ result_t<actor_join_reply_t> mesh_node_runtime_t::actor_join_reply_from_completi
 }
 
 result_t<actor_join_reply_t> mesh_node_runtime_t::wait_for_join_completion (
-  const host::operation_id_t &operation,
+  const host::call_id_t &operation,
   const actor_ref_t &actor,
   std::chrono::milliseconds timeout)
 {
@@ -2284,7 +2284,7 @@ mesh_node_runtime_t::relay_application_actor (
             }
             auto origin = get_or_create_spot (
               "__zlink-route-origin-" + routing_id ()->to_hex ());
-            host::operation_id_t operation;
+            host::call_id_t operation;
             const auto submitted = origin.request_to_spot (
               target_node, follow_target->route.spot_id,
               *target_generation, request_parts.items (), operation,
@@ -2453,7 +2453,7 @@ mesh_node_runtime_t::relay_application_actor (
             return result_t<std::optional<zlink::message_t>>::success (std::nullopt);
         }
 
-        host::operation_id_t operation;
+        host::call_id_t operation;
         const auto submitted =
           request_to_actor (
             native_actor, encoded.items (), operation, timeout, {},
@@ -2552,7 +2552,7 @@ result_t<void> mesh_node_runtime_t::bind_application_actor_session (
               framework_error_kind_t::unavailable,
               "Remote Actor session binding target RouteMesh peer is not ready");
         }
-        host::operation_id_t operation;
+        host::call_id_t operation;
         const auto submitted =
           request_to_actor (native_actor, encoded.items (), operation, timeout,
                             {}, authority_owner_generation,
@@ -2622,7 +2622,7 @@ result_t<void> mesh_node_runtime_t::notify_application_actor_disconnected (
           spot_actor_disconnect_route_request_t::packet_name, timeout);
         auto encoded = codec.encode_envelope_parts (
           envelope, make_spot_actor_disconnect_route_request (actor), *_serializers);
-        host::operation_id_t operation;
+        host::call_id_t operation;
         const auto submitted = request_to_node (
           zlink::routing_id_t::from (std::string (target_node.value ())),
           encoded.items (), operation, timeout);
@@ -2680,7 +2680,7 @@ mesh_node_runtime_t::follow_relocated_actor (const actor_ref_t &actor)
 
 result_t<mesh_node_runtime_t::operation_completion_t>
 mesh_node_runtime_t::wait_for_completion (
-  const host::operation_id_t &operation,
+  const host::call_id_t &operation,
   std::chrono::milliseconds timeout,
   std::optional<zlink::routing_id_t> target)
 {
@@ -2779,7 +2779,7 @@ mesh_node_runtime_t::send_to_node (const zlink::routing_id_t &target,
 zlink::submit_result_t mesh_node_runtime_t::request_to_node (
   const zlink::routing_id_t &target,
   const std::vector<zlink::message_t> &parts,
-  host::operation_id_t &operation_id,
+  host::call_id_t &operation_id,
   std::chrono::milliseconds timeout,
   std::vector<std::uint8_t> metadata)
 {
@@ -2798,7 +2798,7 @@ zlink::submit_result_t mesh_node_runtime_t::request_to_node (
 zlink::submit_result_t mesh_node_runtime_t::request_to_node (
   const zlink::routing_id_t &target,
   const std::vector<zlink::message_t> &parts,
-  host::operation_id_t &operation_id,
+  host::call_id_t &operation_id,
   std::chrono::milliseconds timeout,
   const std::map<std::string, std::string> &metadata)
 {
@@ -2834,7 +2834,7 @@ mesh_node_runtime_t::send_to_channel (const std::string &channel_name,
 zlink::submit_result_t mesh_node_runtime_t::request_to_channel (
   const std::string &channel_name,
   const std::vector<zlink::message_t> &parts,
-  host::operation_id_t &operation_id,
+  host::call_id_t &operation_id,
   std::chrono::milliseconds timeout,
   std::vector<std::uint8_t> metadata)
 {
@@ -2849,7 +2849,7 @@ zlink::submit_result_t mesh_node_runtime_t::request_to_channel (
 zlink::submit_result_t mesh_node_runtime_t::request_to_channel (
   const std::string &channel_name,
   const std::vector<zlink::message_t> &parts,
-  host::operation_id_t &operation_id,
+  host::call_id_t &operation_id,
   std::chrono::milliseconds timeout,
   const std::map<std::string, std::string> &metadata)
 {

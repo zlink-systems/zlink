@@ -101,6 +101,8 @@ int main ()
       read_file (root / "framework/src/runtime/streams/stream_runtime.cpp");
     const auto serial_execution_queue = read_file (
       root / "framework/src/runtime/execution/serial_execution_queue.hpp");
+    const auto call_id = read_file (
+      root / "framework/src/runtime/operations/call_id.hpp");
     const auto async_submit_runtime =
       read_file (root / "framework/src/runtime/messaging/async_submit_runtime.cpp");
     const auto failure_origin_wire =
@@ -128,6 +130,8 @@ int main ()
       read_file (root / "framework/src/runtime/mesh/raw_mesh_node_owner.cpp");
     const auto service_wire_codec =
       read_file (root / "framework/src/runtime/protocol/service_wire_codec.cpp");
+    const auto service_wire_codec_header =
+      read_file (root / "framework/src/runtime/protocol/service_wire_codec.hpp");
     const auto generated_service_wire_constants = read_file (
       root / "../../runtime/protocol/generated/cpp/service_wire_constants.hpp");
     const auto public_host_runtime =
@@ -1897,6 +1901,20 @@ int main ()
              != std::string::npos,
       "CPP-CONTRACT-STREAM-001",
       "STREAM send does not bound existing socket admission with its per-call timeout");
+
+    /* CPP-LAYER-002 — in-flight calls do not reuse the public Actor Join
+     * OperationId type or name. */
+    gate.require (call_id.find ("struct call_id_t") != std::string::npos
+                    && call_id.find ("struct operation_id_t")
+                         == std::string::npos,
+                  "CPP-LAYER-002",
+                  "in-flight runtime calls still use the OperationId name");
+    gate.require (service_wire_codec_header.find (
+                    "struct wire_operation_id_t") != std::string::npos
+                    && service_wire_codec_header.find (
+                         "using wire_operation_id_t") == std::string::npos,
+                  "CPP-LAYER-002",
+                  "Actor Join OperationId is not a distinct wire type");
 
     /* CPP-SESS-003 — each serial owner selects a closed lane-policy type.
      * Yield behavior is derived from the Spot alternative; callers cannot

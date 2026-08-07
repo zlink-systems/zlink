@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 #pragma once
 
-#include "runtime/operations/operation_id.hpp"
+#include "runtime/operations/call_id.hpp"
 
 #include <zlink/framework/contracts/dispatch/task.hpp>
 #include <zlink/framework/contracts/locations/diagnostics.hpp>
@@ -201,7 +201,7 @@ struct object_creation_intent_t
     std::uint64_t request_encoded_size = 0;
 };
 
-using creation_operation_id_t = runtime::operation_id_t;
+using creation_operation_id_t = runtime::call_id_t;
 
 struct creation_operation_identity_t
 {

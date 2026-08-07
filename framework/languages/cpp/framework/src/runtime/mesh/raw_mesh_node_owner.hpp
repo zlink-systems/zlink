@@ -316,7 +316,7 @@ class raw_mesh_node_owner_t
     };
 
     static std::string owner_key (const std::vector<std::uint8_t> &routing_id);
-    static foundation::operation_id_t operation_id (
+    static foundation::call_id_t operation_id (
       std::uint64_t lifecycle_generation,
       std::uint64_t correlation);
     std::uint64_t next_operation_sequence ();
@@ -350,7 +350,7 @@ class raw_mesh_node_owner_t
     {
         std::vector<std::uint8_t> target_routing_id;
         detail::backend::raw_message_t wire;
-        foundation::operation_id_t operation;
+        foundation::call_id_t operation;
         std::uint64_t correlation = 0;
     };
     bool submit_request (

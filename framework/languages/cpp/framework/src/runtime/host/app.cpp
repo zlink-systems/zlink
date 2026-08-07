@@ -2004,7 +2004,7 @@ app_t &app_t::add_zlink_framework (std::function<void (zlink_framework_options_t
             std::uint64_t target_spot_generation,
             runtime::messaging::message_parts_t parts,
             std::chrono::milliseconds timeout) {
-              detail::host::operation_id_t operation;
+              detail::host::call_id_t operation;
               const auto submitted = mesh->request_to_spot (
                 source_spot_id, target_node, target_spot, target_spot_generation,
                 parts.items (), operation, timeout);
@@ -2068,7 +2068,7 @@ app_t &app_t::add_zlink_framework (std::function<void (zlink_framework_options_t
           [mesh] (const zlink::routing_id_t &target,
                   runtime::messaging::message_parts_t parts,
                   std::chrono::milliseconds timeout) {
-              detail::host::operation_id_t operation;
+              detail::host::call_id_t operation;
               const auto submitted =
                 mesh->request_to_node (target, parts.items (), operation, timeout);
               if (submitted != zlink::submit_result_t::ok) {
@@ -2116,7 +2116,7 @@ app_t &app_t::add_zlink_framework (std::function<void (zlink_framework_options_t
               },
               [mesh, channel_name] (runtime::messaging::message_parts_t parts,
                                     std::chrono::milliseconds timeout) {
-                  detail::host::operation_id_t operation;
+                  detail::host::call_id_t operation;
                   const auto submitted = mesh->request_to_channel (
                     channel_name, parts.items (), operation, timeout);
                   if (submitted != zlink::submit_result_t::ok) {

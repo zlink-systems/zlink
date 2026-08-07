@@ -437,7 +437,7 @@ bool reply_to_one_request (zlink::framework::detail::mesh_node_runtime_t &node,
 }
 
 bool receive_completion (zlink::framework::detail::mesh_node_runtime_t &node,
-                         const zlink::framework::runtime::host::operation_id_t &operation_id,
+                         const zlink::framework::runtime::host::call_id_t &operation_id,
                          const std::string &expected_text)
 {
     // v11: Core service pull batches are gone. The Framework MeshNode runtime
@@ -1472,7 +1472,7 @@ int run_cross_process_delivery ()
     assert (channel_ack == 1);
     const std::vector<zlink::message_t> request_parts{
       zlink::message_t::from (std::string ("request"))};
-    zlink::framework::runtime::host::operation_id_t operation_id;
+    zlink::framework::runtime::host::call_id_t operation_id;
     assert (node.request_to_node (
               zlink::routing_id_t::from (std::string ("vertical-b")), request_parts,
               operation_id, 5s, metadata)
@@ -1503,7 +1503,7 @@ int run_cross_process_delivery ()
     assert (spot_ack == 1);
     const std::vector<zlink::message_t> spot_request_parts{
       zlink::message_t::from (std::string ("spot-request"))};
-    zlink::framework::runtime::host::operation_id_t spot_operation_id;
+    zlink::framework::runtime::host::call_id_t spot_operation_id;
     assert (node.request_to_spot (
               "source-spot",
               zlink::routing_id_t::from (std::string ("vertical-b")),
@@ -1543,7 +1543,7 @@ int run_cross_process_delivery ()
     const auto local_node_rid = node.status ().routing_id ();
     const auto local_target_generation =
       local_target.status ().lifecycle_generation ();
-    zlink::framework::runtime::host::operation_id_t local_timeout_operation;
+    zlink::framework::runtime::host::call_id_t local_timeout_operation;
     int local_timeout_callbacks = 0;
     assert (local_source.request_to_spot (
               local_node_rid, "local-target", local_target_generation,
@@ -1563,7 +1563,7 @@ int run_cross_process_delivery ()
           std::vector<zlink::message_t>) {});
     assert (local_timeout_callbacks == 1);
 
-    zlink::framework::runtime::host::operation_id_t local_shutdown_operation;
+    zlink::framework::runtime::host::call_id_t local_shutdown_operation;
     int local_shutdown_callbacks = 0;
     assert (local_source.request_to_spot (
               local_node_rid, "local-target", local_target_generation,
@@ -1577,7 +1577,7 @@ int run_cross_process_delivery ()
               })
             == zlink::submit_result_t::ok);
 
-    zlink::framework::runtime::host::operation_id_t callbackless_shutdown_operation;
+    zlink::framework::runtime::host::call_id_t callbackless_shutdown_operation;
     assert (local_source.request_to_spot (
               local_node_rid, "local-target", local_target_generation,
               local_request_parts, callbackless_shutdown_operation,
@@ -1600,7 +1600,7 @@ int run_cross_process_delivery ()
       limited_target.status ().lifecycle_generation ();
     const std::vector<zlink::message_t> limited_parts{
       zlink::message_t::from (std::string ("budget"))};
-    zlink::framework::runtime::host::operation_id_t limited_first_operation;
+    zlink::framework::runtime::host::call_id_t limited_first_operation;
     int limited_callbacks = 0;
     assert (limited_source.request_to_spot (
               limited_node_rid, "budget-target", limited_target_generation,
@@ -1611,7 +1611,7 @@ int run_cross_process_delivery ()
                   ++limited_callbacks;
               })
             == zlink::submit_result_t::ok);
-    zlink::framework::runtime::host::operation_id_t limited_second_operation;
+    zlink::framework::runtime::host::call_id_t limited_second_operation;
     assert (limited_source.request_to_spot (
               limited_node_rid, "budget-target", limited_target_generation,
               limited_parts, limited_second_operation,
@@ -1636,7 +1636,7 @@ int run_cross_process_delivery ()
     const auto byte_limited_node_rid = byte_limited_node.status ().routing_id ();
     const auto byte_limited_target_generation =
       byte_limited_target.status ().lifecycle_generation ();
-    zlink::framework::runtime::host::operation_id_t byte_limited_first_operation;
+    zlink::framework::runtime::host::call_id_t byte_limited_first_operation;
     int byte_limited_callbacks = 0;
     assert (byte_limited_source.request_to_spot (
               byte_limited_node_rid, "byte-budget-target",
@@ -1647,7 +1647,7 @@ int run_cross_process_delivery ()
                   ++byte_limited_callbacks;
               })
             == zlink::submit_result_t::ok);
-    zlink::framework::runtime::host::operation_id_t byte_limited_second_operation;
+    zlink::framework::runtime::host::call_id_t byte_limited_second_operation;
     assert (byte_limited_source.request_to_spot (
               byte_limited_node_rid, "byte-budget-target",
               byte_limited_target_generation, limited_parts,
@@ -1672,7 +1672,7 @@ int run_cross_process_delivery ()
     std::atomic_int terminal_race_callbacks{0};
     std::thread race_submitter ([&] {
         while (submit_race.load (std::memory_order_acquire)) {
-            zlink::framework::runtime::host::operation_id_t operation;
+            zlink::framework::runtime::host::call_id_t operation;
             const auto submitted = race_source.request_to_spot (
               race_node_rid, "race-target", race_target_generation, race_parts,
               operation, zlink::send_flags_t::none, 1s, {},

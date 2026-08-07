@@ -1131,7 +1131,7 @@ void verify_session_binding_and_terminal_once ()
     assert (!sessions.is_current (second_binding));
 
     foundation::operation_registry_t operations (1);
-    foundation::operation_id_t id{};
+    foundation::call_id_t id{};
     id.low = 1;
     std::size_t terminal_count = 0;
     assert (operations.register_operation (
