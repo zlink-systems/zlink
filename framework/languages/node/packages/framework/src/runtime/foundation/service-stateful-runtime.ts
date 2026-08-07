@@ -1,8 +1,8 @@
 import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException,
-  internalFrameworkErrorCode,
-  internalFrameworkErrorKind
+  internalFrameworkErrorKind,
+  internalFrameworkWireReply
 } from '../framework-errors-internal';
 import { RequestResult, SubmitResult } from '../backend/runtime-values';
 import type {
@@ -4568,33 +4568,7 @@ function failure(error: unknown): ServiceStatefulResult {
     return { terminalResult: RequestResult.NotFound, failureCode: ACTOR_ROUTE_STALE };
   }
   if (error instanceof ZLinkFrameworkException) {
-    const kind = internalFrameworkErrorKind(error);
-    if (kind === ZLinkFrameworkInternalErrorKind.DeadlineExceeded) {
-      return { terminalResult: RequestResult.TimedOut, failureCode: 0 };
-    }
-    if (kind === ZLinkFrameworkInternalErrorKind.RequestTargetNotFound) {
-      return {
-        terminalResult: RequestResult.NotFound,
-        failureCode: internalFrameworkErrorCode(error) + 1
-      };
-    }
-    if (kind === ZLinkFrameworkInternalErrorKind.WorkerQueueFull) {
-      return {
-        terminalResult: RequestResult.Rejected,
-        failureCode: internalFrameworkErrorCode(error) + 1
-      };
-    }
-    if (kind === ZLinkFrameworkInternalErrorKind.SpotGenerationStale
-      || kind === ZLinkFrameworkInternalErrorKind.SpotMoving) {
-      return {
-        terminalResult: RequestResult.Conflict,
-        failureCode: internalFrameworkErrorCode(error) + 1
-      };
-    }
-    return {
-      terminalResult: RequestResult.InternalError,
-      failureCode: internalFrameworkErrorCode(error) + 1
-    };
+    return internalFrameworkWireReply(error);
   }
   return { terminalResult: RequestResult.InternalError, failureCode: 17 };
 }
