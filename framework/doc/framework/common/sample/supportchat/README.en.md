@@ -27,6 +27,7 @@ close, and reconnect verification. The following are excluded.
 - A message history store and full-text search
 - A real authentication provider and an external ticket system
 - Automatic crash failover after a Ready owner failure
+- Planned relocation of Actors and the Conversation Spot
 - UI design and agent-assignment optimization
 
 When there's no agent available, the result isn't an error — it returns WaitingForAgent. After the
@@ -122,6 +123,10 @@ An agent has one roster actor at the SupportEntrySpot and a conversation actor p
 Since one actor can only hold membership in one Spot at a time, handling multiple rooms means
 separating the actor per room. The Customer doesn't create a separate conversation actor — it uses
 the customer identity actor as the ConversationSpot participant.
+
+Every identity, roster, and conversation Actor factory registered by Support, and the Conversation
+Spot factory, selects `DisableRelocation`. Planned relocation isn't a completion criterion, so no
+Relocation Store is registered.
 
 ## 5. Framework Elements Used And Why
 

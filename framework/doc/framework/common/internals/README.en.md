@@ -25,12 +25,8 @@ answers what can't be known just by reading the spec.
 
 Content the spec already decided isn't repeated — only a link is put.
 
-The spot where the current implementation deviates from this decision,
-and an item not yet verified, is managed separately in the
-[implementation gap record](../spec/30-implementation-gap.en.md). That
-record isn't the canonical document that replaces this document's design;
-it is a supporting document recording each runtime's confirmation status
-and the next verification condition.
+Current implementation deviations and unverified progress are not recorded in this public
+internals document. This document describes only implementation structure and decisions.
 
 ## Component And Responsible Chapter
 
@@ -118,11 +114,11 @@ connection easy to miss when reading a chapter separately.
 | [3. Application And Infrastructure Execution Separation](03-progress-isolation.en.md) | What must still progress even while a handler is stuck. Why it's a region separation, not a reserved section |
 | [4. Operation Completion Confirmation](04-completion.en.md) | How to make only one win when multiple paths try to finish at once. How not to lose a response |
 | [5. Message Continuity During A Move](05-relocation-continuity.en.md) | Where a message goes while an object is moving |
-| [6. Target Selection And Route Cache](06-routing-and-cache.en.md) | How often location is looked up. What slows down if the cache doesn't die after a move |
+| [6. Target Selection And Route Cache](06-routing-and-cache.en.md) | How often location is looked up. How `Missing` differs from a `Ready` owner that can't be used |
 | [7. Receive And Dispatch Loop](07-dispatch-loop.en.md) | Whether to wake per message or batch-process. What wakes it |
-| [8. Object Kind And Activation](08-object-lifecycle.en.md) | How the three Spot kinds are distinguished. When a missing object is built |
+| [8. Object Kind And Activation](08-object-lifecycle.en.md) | How the three Spot kinds are distinguished. When a missing object is built and how Ready owner failure is handled |
 | [9. Session And Actor Binding](09-session-binding.en.md) | How to keep two places from pointing at the same Actor while a connection is swapped |
-| [10. Liveness And Status Publication](10-liveness-and-state.en.md) | How to judge whether the peer is alive. From when a call is accepted |
+| [10. Liveness And Status Publication](10-liveness-and-state.en.md) | How to judge whether the peer is alive without letting that judgment change authority |
 | [11. Payload Ownership And Copy](11-message-ownership.en.md) | How many times a byte is copied from socket to handler. When deserialization happens |
 | [12. Service Wire Protocol](12-service-wire-protocol.en.md) | The byte format and command exchanged between nodes |
 

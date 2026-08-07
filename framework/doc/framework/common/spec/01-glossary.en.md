@@ -1701,7 +1701,7 @@ error code and observes only the connection closing.
 | Item | Content |
 |---|---|
 | Shape | Byte-size configuration limit |
-| .NET notation | `long MaxMessageSize` for a regular socket, and `ConfigureSocket().MaxMessageSize` for a StreamNode. |
+| .NET notation | `long MaxMessageSize` for a regular socket, and `MaxMessageSize(long bytes)` on a StreamNode builder. |
 | Public composition | Applies to the complete message received by the socket owner. A regular socket's `0` uses its binding or transport default; a StreamNode's `0` maps to Core `-1`. |
 | Creation/management | The application sets it in the listener or StreamNode socket options before startup. |
 | Lifetime | Fixed for the listener lifecycle; the StreamNode value is fixed after startup. Framework doesn't add the StreamNode-specific cap to ClientServer listeners or RouteMesh SS transport; ClientServer keeps its regular application-listener rule. |

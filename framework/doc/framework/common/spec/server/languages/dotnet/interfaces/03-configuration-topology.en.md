@@ -252,7 +252,8 @@ public interface IZLinkStreamNodeBuilder
     IZLinkStreamNodeBuilder Bind(int port = 0);
     IZLinkStreamNodeBuilder SetBindHost(string bindHost);
     IZLinkStreamNodeBuilder SetAdvertiseHost(string advertiseHost);
-    IZLinkSocketConfig ConfigureSocket();
+    IZLinkStreamNodeBuilder MaxMessageSize(long bytes);
+    IZLinkStreamSocketConfig ConfigureSocket();
     IZLinkStreamNodeBuilder EnableActorDispatch();
     IZLinkStreamNodeBuilder SetTlsServer(
         string certificatePath,
@@ -278,7 +279,7 @@ public interface IZLinkMetadataPolicyBuilder
 
 ```
 
-`IZLinkStreamNodeBuilder.ConfigureSocket().MaxMessageSize` defaults to
+`IZLinkStreamNodeBuilder.MaxMessageSize(long bytes)` defaults to
 `64 KiB`. It is used only when a StreamNode's Core STREAM inbound path checks
 a complete client-to-server message, measured as header bytes plus payload
 bytes and excluding the 6-byte prefix. `0` maps to Core `-1`, so Framework
@@ -674,6 +675,22 @@ public interface IZLinkSocketConfig
     int Weight { get; set; }
 }
 
+public interface IZLinkStreamSocketConfig
+{
+    ulong SendHighWaterMark { get; set; }
+    ulong ReceiveHighWaterMark { get; set; }
+    int SendBufferSize { get; set; }
+    int ReceiveBufferSize { get; set; }
+    TimeSpan? Linger { get; set; }
+    TimeSpan? ReceiveTimeout { get; set; }
+    TimeSpan? SendTimeout { get; set; }
+    TimeSpan? ConnectTimeout { get; set; }
+    TimeSpan? HandshakeInterval { get; set; }
+    bool IPv6 { get; set; }
+    bool TcpNoDelay { get; set; }
+    bool Immediate { get; set; }
+}
+
 public interface IZLinkRouteConfig
 {
     bool RequireKnownPeer { get; set; }
@@ -705,7 +722,6 @@ public interface IZLinkMeshChannelRuntimeOptions
 
 public interface IZLinkMeshNodeSocketConfig
 {
-    long MaxMessageSize { get; set; }
     ulong SendHighWaterMark { get; set; }
     ulong ReceiveHighWaterMark { get; set; }
     ulong MailboxMessageBudget { get; set; }
@@ -715,10 +731,11 @@ public interface IZLinkMeshNodeSocketConfig
 }
 ```
 
-The application listener's default `MaxMessageSize` is `16 MiB`.
+The ClientServer application listener's default `MaxMessageSize` is `16 MiB`.
 Specifying `0` while using Application HWM as Auto or a positive value is
 a startup configuration error. `MaxMessageSize = 0` can only be used when
-`ApplicationHwmBytes = 0`.
+`ApplicationHwmBytes = 0`. This setting doesn't apply to RouteMesh
+ServerServer.
 
 `ConfigureSpotPublisher()` doesn't provide a publish-only delivery
 policy option. [Logical Multicast](../../../../01-glossary.en.md#logical-multicast)
@@ -750,13 +767,10 @@ create/relocation target selection. ChannelName uniquely selects a local
 RouteMesh or ClientServer Server registration. HWM and timeout are set
 before startup in `ConfigureRouterSocket()`.
 
-`MaxMessageSize` is only set before startup, and a runtime setter isn't
-provided. `0` uses the maximum complete message size the framework
-supports. A positive value can't exceed the public protocol's
-representation limit — exceeding it fails startup with
-`ZLinkConfigurationException`. The smaller of the two endpoints'
-allowed values applies per peer. The Framework application listener's
-default is `16_777_216` bytes.
+`IZLinkMeshNodeSocketConfig` doesn't provide a RouteMesh ServerServer
+`MaxMessageSize`. An SS sender or receiver doesn't reject a message because
+of a Framework-level complete-message cap. HWM, mailbox byte budgets, and
+service-wire representation bounds remain separate resource and wire guards.
 
 `ConfigureInboundDispatch()` returns one host-wide inbound setting.
 `ApplicationHwmBytes`'s default is `null`, meaning Auto mode. `0` means

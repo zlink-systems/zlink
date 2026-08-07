@@ -390,7 +390,7 @@ Framework는 reply route를 복원할 수 있는 request의 handler·decode fail
 구조화된 error reply로 완료한다. Reply route를 복원할 수 없다고 해서 requester의
 Spot·Actor ID나 새 owner를 Location Store에서 찾아 우회하지 않는다. 해당 failure는
 [상호작용 모델](03-interaction-model.ko.md#10-handler-실패)이 정한 drop과 log,
-metric, observer event 계약을 따른다.
+metric 계약을 따른다.
 
 Route 오류, timeout, cancellation이나 실행 여부가 불명확한 failure 뒤에도 같은
 request를 다른 owner에게 자동으로 재제출하지 않는다. Request는 reply, error,

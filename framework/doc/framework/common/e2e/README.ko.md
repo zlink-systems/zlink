@@ -305,7 +305,7 @@ C++처럼 같은 config를 여러 start order로 반복하는 runner는 config �
 - `AddZLinkFramework` 설정과 Store 등록은 `*HostFactory.cs`에서 바로 보이게 작성한다.
   Location capability는 `AddLocationStore(instance)`, Relocation capability는
   `AddRelocationStore(instance)`로 각각 등록한다. Redis 전용 또는 두 capability를 묶는 등록 함수는
-  사용하지 않는다([05 §10](../spec/06-framework-api.ko.md#10-location-store와-relocation-store)).
+  사용하지 않는다([Framework API — Location Store와 Relocation Store](../spec/06-framework-api.ko.md#10-location-store와-relocation-store)).
   얇은 wrapper/extension 메서드 뒤에 framework 설정을 숨기지 않는다.
 - `Server/Driver`, `Server/TestRunner`, `Server/ScenarioRunner` 같은 별도 실행 프로젝트는 만들지
   않는다. 폴더 이름이 다르더라도 시나리오 실행만 위임받는 server는 같은 금지 대상이다. 테스트
@@ -498,12 +498,12 @@ Redis endpoint를 공유하거나 fallback으로 사용하면 안 된다. key pr
 | [Config 5 — Resilience/lifecycle](config-5-resilience-lifecycle.ko.md) | 다중 node + Location Store | Restart·replacement·disconnect, terminal-once, hidden replay 금지, Relocate·Shutdown, capacity와 lifecycle 경합 |
 | [Config 6 — Store 장애·복구](config-6-store-failure-recovery.ko.md) | Location·Relocation Store + provider 2 + consumer | Store 장애 중 public failure, owner 무효화와 복구, relocation 결과, capacity reservation의 사용자 관찰 결과 |
 | [Config 7 — Monitoring](config-7-monitoring.ko.md) | Location Store + service 2 | Public RouteMesh·host status, topology 변화, Store 장애 반영, 느린 observer 격리와 bounded snapshot |
-| [Config 8 — Execution turn](config-8-execution-turn.ko.md) | Play node 2 + worker service 2 + gateway | Spot·Actor serial execution, Yield·worker, deferred operation, timeout·cancellation·shutdown과 언어별 parity |
+| [Config 8 — Execution turn](config-8-execution-turn.ko.md) | Play node 2 + worker service 2 + gateway | Spot·Actor serial execution, Yield·worker, deferred operation, 공통 timeout·shutdown과 지원 언어의 cancellation |
 | [Config 9 — To-actor messaging](config-9-to-actor-messaging.ko.md) | Actor node 2 + Session gateway 2 + caller | Bind와 독립된 Actor ID send·request, Actor 재생성, stale location과 route failure의 공개 결과 |
 | [Config 10 — Spot actor join/relocation](config-10-spot-actor-relocation.ko.md) | Location·Relocation Store + Actor node 2 + Session gateway 2 + caller | Local·remote Join, state와 이동 중 message 순서, Session binding route 갱신, Message Follow, PerActor·SpotWide relocation |
 | [Config 11 — 관측·운영 배포](config-11-observability-ops.ko.md) | Session + Play 2 + workflow 2 + Stores | Public flow correlation·metrics, maintenance Relocate·Shutdown, patch와 drain의 client·application 결과 |
 | [Config 12 — Channel egress routing](config-12-channel-egress-routing.ko.md) | Session·Play·API + ClientServer service 2 | ChannelName routing, local egress 선택, weight·shutdown·restart와 request·send terminal |
-| [Config 13 — One-way submit admission](config-13-submit-admission.ko.md) | RouteMesh·ClientServer·Spot·Actor·Stream targets | One-way admission completion, timeout·cancellation·shutdown 경합, zero target, ordering과 hidden retry 금지 |
+| [Config 13 — One-way submit admission](config-13-submit-admission.ko.md) | RouteMesh·ClientServer·Spot·Actor·Stream targets | One-way admission completion, 공통 timeout·shutdown과 지원 언어의 cancellation, zero target, ordering과 hidden retry 금지 |
 | [Config 14 — Instance Spot activation](config-14-instance-spot.ko.md) | Location·Relocation Store + caller 2 + owner 2 + User Spot owner | Cold activation, concurrent first call, first-message ordering, crash·deadline·capacity·relocation과 cross-language 결과 |
 
 ## 3.1 구성 축 — config를 관통하는 변형
@@ -618,9 +618,10 @@ Tracing의 `off` 동작과 실행 중 level 변경을 검증하는 시나리오�
 - 프로세스마다 파일을 분리해(예: `provider-a.log`, `play-a.log`, `session-a.log`, `client.log`)
   어느 노드 로그인지 바로 보이게 한다.
 
-### 6.2 메시지 흐름 추적 켜기 (디버깅 1차 도구)
+### 6.2 Diagnostics와 메시지 흐름 기록 켜기 (디버깅 1차 도구)
 
-- e2e 실행 시 message flow 모드를 **최소 `key_transitions`**로 켠다. 그러면 한 메시지의
+- e2e 실행 시 공통 diagnostics level을 **최소 `Normal`**로 켠다. 공통 level은
+  `Off`, `Errors`, `Normal`, `Detailed` 네 단계다. 그러면 한 메시지의
   인바운드(`received`→`dispatched`/`replied`)와 아웃바운드(`sent`→`reply_received`)가 한 줄씩
   찍힌다. 실패(`dropped`/error)는 같은 stream에 같은 `corr=`로 찍혀, 정상·실패가 하나의 흐름으로
   읽힌다.
@@ -631,13 +632,14 @@ Tracing의 `off` 동작과 실행 중 level 변경을 검증하는 시나리오�
   프로세스 전역 단조값이라 노드별 카운터가 독립이다 — 숫자만 같고 다른 메시지일 수 있으니, 노드 간
   연결은 corr이 실제 전파되는 경로에서만 신뢰한다. spot 구독/actor/publish 경로는 corr 대신
   spot/actor id로 키잉된다.)
-- 트레이싱 로그는 앱 로그와 한 파일로 통합하거나(앱 로거 sink) 전용 파일로 분리할 수 있다
-  (C++ `diagnostics.log_file`). 어느 쪽을 쓰든 §6.1대로 **파일로 남긴다**.
+- Diagnostics record는 application logger provider가 application에서 설정한 file backend로 저장한다.
+  Framework가 전용 diagnostics file path나 출력 backend를 제공한다고 가정하지 않는다. §6.1대로
+  **파일로 남긴다**.
 - 실행 중 level 변경은 public runtime control로 수행한다. 일반 e2e 캡처는 최소
-  `key_transitions`로 두고, Config 11 `OBS-A5`는 `off` 전환 뒤 trace 전용 flow 정보와 log message가
+  `Normal`로 두고, Config 11 `OBS-A5`는 `Off` 전환 뒤 trace 전용 flow 정보와 log message가
   생성되지 않는지 확인한 다음 다시 켠다.
-- 트레이싱은 **관측이지 제어가 아니다.** 켜도 기능 동작·성공 기준이 달라지면 안 되고, observer/trace
-  실패가 메시지 처리나 테스트 판정을 바꾸면 안 된다.
+- 트레이싱은 **관측이지 제어가 아니다.** 켜도 기능 동작·성공 기준이 달라지면 안 되고,
+  telemetry/logger provider 실패가 메시지 처리나 테스트 판정을 바꾸면 안 된다.
 
 ### 6.3 실패 evidence에 포함
 

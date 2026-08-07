@@ -17,6 +17,7 @@ source "$SAMPLES_DIR/runner-common.sh"
 SAMPLE_FILTER="${ZLINK_SAMPLE_FILTER:-}"
 SAMPLE_LANGUAGES="${ZLINK_SAMPLE_LANGUAGES:-java kotlin}"
 BIND_RETRY_PATTERN="ZlinkBindException|BindException|Address already in use|EADDRINUSE|errno=98"
+selected_sample_count=0
 
 should_run_language() {
   local language="$1"
@@ -35,6 +36,7 @@ should_run_sample() {
   fi
   local selector
   for selector in "$@"; do
+    [[ "$selector" == "$language" ]] && return 0
     [[ "$selector" == "$sample" || "$selector" == "$language/$sample" ]] && return 0
   done
   return 1
@@ -77,6 +79,7 @@ run_sample_with_retry() {
 if should_run_language java; then
 for sample in $JAVA_SAMPLES; do
   if should_run_sample java "$sample" "$@"; then
+    selected_sample_count=$((selected_sample_count + 1))
     run_sample_with_retry "$SAMPLES_DIR/java/$sample/run_sample.sh"
   fi
 done
@@ -85,9 +88,15 @@ fi
 if should_run_language kotlin; then
 for sample in $KOTLIN_SAMPLES; do
   if should_run_sample kotlin "$sample" "$@"; then
+    selected_sample_count=$((selected_sample_count + 1))
     run_sample_with_retry "$SAMPLES_DIR/kotlin/$sample/run_sample.sh"
   fi
 done
+fi
+
+if [[ "$#" -gt 0 || -n "$SAMPLE_FILTER" ]] && [[ "$selected_sample_count" -eq 0 ]]; then
+  echo "No sample matched the requested selector/filter." >&2
+  exit 1
 fi
 
 if rg -n "$FORBIDDEN_SAMPLE_PATTERN" "$SAMPLES_DIR" -g '*.java' -g '*.kt'; then

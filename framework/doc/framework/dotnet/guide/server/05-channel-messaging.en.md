@@ -1110,8 +1110,8 @@ public sealed class UserCacheRefreshedEventHandler
 - **`ZLink` vs `Zlink`** → every server framework type is `ZLink` (capital L).
 - **Sending to a packet with no handler (at runtime)** → **request fails with an error
   reply** (the client gets it as an exception), while **send is silently dropped.** Dropped
-  means the caller gets no reply -- it doesn't mean there's no observable trace: with
-  message flow logging/observer enabled, the dispatch failure is recorded as a marker
+  means the caller gets no reply -- it doesn't mean there is no observable record. The
+  application-configured logger/telemetry provider receives a structured dispatch-error marker
   (`no_handler` / `reply_error`/`drop`) (chapter `11. Monitoring`).
 
 ## 12. Related Documents

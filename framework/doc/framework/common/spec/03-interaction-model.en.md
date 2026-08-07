@@ -174,8 +174,9 @@ single async submit — it doesn't provide a synchronous terminator that tries o
 immediately. The return isn't confirmation that the destination handler ran — it
 indicates whether the framework accepted the message onto the local outbound
 queue. If the queue is temporarily full, it waits for admission up to a finite
-send timeout. A one-way error occurring after acceptance is reported via the
-runtime error sink and monitoring.
+send timeout. A one-way error occurring after acceptance is reported through the
+standard logger/telemetry provider configured by the application and through monitoring.
+The framework provides no dedicated runtime error sink.
 
 Global Spot/Actor send also uses the same async terminator. The source resolves
 the current Ready authority and completes the submit via local outbound admission.
@@ -459,9 +460,9 @@ A regular server-initiated packet uses `Send(...)`.
 
 A request whose reply route can be restored completes with a structured error
 reply. A message whose reply route can't be restored, and a one-way message, are
-dropped, leaving a log, metric, and observer event matching the cause. An
-application handler exception is also recorded as an error on the one-way path.
-Observer failure doesn't change the original reply or drop result.
+dropped, leaving a structured log and metric matching the cause. An application
+handler exception is also recorded as an error on the one-way path. A logger or
+telemetry-provider failure doesn't change the original reply or drop result.
 
 ## 11. Termination
 

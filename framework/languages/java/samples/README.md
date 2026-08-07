@@ -1,6 +1,6 @@
 # ZLink Java And Kotlin Samples
 
-This directory contains Java and Kotlin samples for the public 10.0.0 framework
+This directory contains Java and Kotlin samples for the public 0.10.0 framework
 contract. Java samples are under `java/`, Kotlin samples are under `kotlin/`,
 and both languages implement the same six sample scenarios defined by the
 [common sample documents](../../../doc/framework/common/sample/README.ko.md).

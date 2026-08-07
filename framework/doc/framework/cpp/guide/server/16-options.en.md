@@ -57,7 +57,7 @@ until the first call — it's **blocked by an exception at startup.**
 | `set_message_follow_duration (...)` | How long a message keeps following a target that's relocating | 30 seconds |
 | `handlers ()` | Handler group registration | — |
 | `metadata ()` | Metadata propagation policy | — |
-| `configure_dispatch ()` | Diagnostics level and message flow (§4) | `errors_only` |
+| `configure_dispatch ()` | Diagnostics level and message flow (§4) | `errors` |
 | `configure_inbound_dispatch ()` | Host-wide receive cap (§3.2) | Auto-calculated |
 | `configure_locations ()` | Location store behavior (§5) | The §5 table |
 | `add_location_store (...)` | The location-resolution store | Single-node configuration if omitted |
@@ -128,13 +128,11 @@ The surface `configure_dispatch ()` returns.
 
 | Option | What it sets | Default |
 | --- | --- | --- |
-| `message_flow (...)` | Recording level | `errors_only` |
+| `message_flow (...)` | Recording level | `errors` |
 | `trace_sample_rate (double)` | Sampling ratio | 1.0 |
 | `include_message_sizes (bool)` | Whether to record payload byte size too | Not recorded |
-| `trace_log_file (path)` | A file written separately from app logs | Not separated |
-| `set_message_flow_observer (...)` | Receiving records in your program | None |
 
-What's recorded per level, and how to use an observer, is covered in
+The recording scope per level and standard provider integration are covered in
 [11. Monitoring](11-monitoring.en.md).
 
 ## 5. Location Options

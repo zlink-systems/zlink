@@ -26,7 +26,7 @@ title: "12. Service wire protocol"
 | [5. Service liveness](#5-service-liveness) | livenessProbe/Ack 주기, Classic fanout beacon, subscriber ready 판정 |
 | [6. Typed application message JSON](#6-typed-application-message-json) | `framework-json-v1` profile 규칙 |
 | [7. Durable authority와 explicit creation](#7-durable-authority와-explicit-creation) | generation 분리, creation record, factory 실패 처리 |
-| [8. Instance Spot reactivation](#8-instance-spot-reactivation) | Missing+Instance intent envelope, target host recovery, User Spot terminal service operation |
+| [8. Instance Spot cold activation recovery](#8-instance-spot-cold-activation-recovery) | Missing+Instance intent envelope, 동일 target의 최초 activation recovery, User Spot terminal service operation |
 | [9. Maintenance capture와 relocation envelope](#9-maintenance-capture와-relocation-envelope) | Retiring seal, byte reservation gate, relocation envelope encode |
 | [10. Relocation, Actor membership과 Ready](#10-relocation-actor-membership과-ready) | authority phase state machine, aggregate relocation commit, Ready 시점 |
 | [11. Request terminal identity](#11-request-terminal-identity) | OperationId·ReplyRouteId, terminal completion 추적, root replacement |
@@ -93,14 +93,16 @@ ROUTER routing identity는 raw binding이 소비하는 transport envelope다. Se
 - Decoder는 allocation 전에 complete record 길이, item count, UTF-8 validity와 모든 bound를 검사한다.
 - Metadata frame은 1,024 byte를 넘을 수 없다.
 - Application payload의 schema 절대 상한은 `applicationPayloadAbsoluteBytes`인 4,294,966,774 byte다.
-- 실제로 허용하는 payload 크기는 이 절대 상한과 `normalizedEffectiveMaxMessageBytes`에서 실제 envelope overhead를 뺀 값 중 작은 값이다.
+- RouteMesh ServerServer에서는 schema·wire 표현 절대 상한만 적용하고 Framework-level message-size 상한은 두지 않는다.
+- ClientServer에서 실제로 허용하는 payload 크기는 schema 절대 상한과 `normalizedEffectiveMaxMessageBytes`에서 실제 envelope overhead를 뺀 값 중 작은 값이다.
 - Application payload에는 별도의 숨은 16 MiB 고정 상한을 적용하지 않는다.
 
-Complete message 상한은 startup admission에서 정한다.
+ClientServer complete-message 상한은 startup admission에서 정한다.
 
 - Sender는 local과 remote의 `normalizedEffectiveMaxMessageBytes` 중 작은 값을 사용하고 receiver는 자신의 admitted 상한을 사용한다.
 - 이 값은 admitted connection lifetime 동안 바꿀 수 없으며, allocation 전에 적용한다.
 - 양쪽 상한이 32 MiB이면 complete message가 32 MiB 이내인 17 MiB payload를 허용한다.
+- RouteMesh admission에는 이 field를 싣지 않으며 SS sender·receiver는 이 값으로 message를 거절하지 않는다. HWM, mailbox byte budget과 protocol 표현 한계는 별도 자원·wire guard로 유지한다.
 
 ### Typed payload envelope
 
@@ -199,10 +201,15 @@ relay 시점의 queue count·byte, 원래 operation ID와 원래 reply route ID�
 
 #### 통지 중복 억제
 
-통지 중복 억제의 구체적인 수명은 아직 정하지 않았다. 현재 공통 후보는 같은 source·object·owner 세대에 대해
-처음 한 번만 통지하고, 전송 중인 같은 통지를 합치는 방식이다. 통지를 받은 source runtime은 현재 cache 항목이
-source route의 object·authority generation과 target node를 가리킬 때만 그 항목을 무효화한다. 이미 더 새로운
-route가 cache에 있으면 지우지 않는다. 이 조건은 command body와 함께 언어별 runtime이 공통으로 검증해야 한다.
+Relay에 성공한 runtime은 source runtime에 `messageFollow`를 보낼 수 있다. Source runtime은 현재 cache
+항목이 source route와 동일한 object identity, object·authority generation과 target node를 가리킬 때만 그
+항목을 무효화한다. 이미 더 새로운 route가 있으면 지우지 않는다. 통지가 유실되어도 cache lifetime이 지난
+stale route는 반드시 만료된다. 중복 통지를 받거나 억제해도 원래 message operation의 terminal 결과는
+바뀌지 않는다.
+
+같은 generation에서 처음 한 번만 보내는 방식, 전송 중인 통지를 합치는 방식과 suppression marker의 저장
+위치는 구현 선택이다. 이 선택은 wire body, 위 invalidation fence, cache 만료와 terminal 결과 불변 조건을
+바꿀 수 없다.
 
 ## 4. Admission과 connection fence
 
@@ -219,6 +226,19 @@ route가 cache에 있으면 지우지 않는다. 이 조건은 command body와 �
 - 같은 revision의 같은 bytes는 idempotent하고, 같은 revision의 다른 bytes나 낮은 revision은 protocol error다.
 - `update`가 바꿀 수 있는 값은 기존 channel weight, runtime state, placement capacity와 maintenance wave뿐이다.
 - RID, topology, security identity, capability, application version과 normalized message 상한은 connection을 다시 admit해야 바뀐다.
+
+### Physical connection replacement
+
+Descriptor admission과 physical transport replacement는 같은 fence를 사용한다.
+완전한 descriptor 기대값이 있으면 generation이 0인 endpoint-only manual intent는
+그 값을 덮어쓰지 못한다. Runtime은 monitor event에서 얻은
+`transportPairId`·`transportPairGeneration`을 사용해 현재 pair의 모든 lane을
+종료 대상으로 지정하고, 해당 pair의 close snapshot 또는 disconnect event를
+받기 전에는 같은 endpoint에 새 connection을 만들지 않는다. Pair identity가
+없는 초기 transport는 endpoint-level disconnect를 fallback으로 사용할 수 있지만,
+호출 성공은 physical close의 관찰을 대신하지 않는다. 늦게 도착한 이전 pair
+event는 pair identity로 fence되어 새 connection의 admission이나 ready 상태를
+바꾸지 못한다.
 
 ### ClientServer 방향
 
@@ -268,20 +288,10 @@ Payload: 5A 46 01 01
 
 ### `framework-json-v1` profile 규칙
 
-Framework의 기본 typed application message는 `framework-json-v1` profile을 사용한다. Runtime은 다음 규칙을
-모든 언어에 같게 적용한 뒤 원본 UTF-8 bytes를 전달한다.
-
-- UTF-8 BOM은 허용하지 않는다.
-- Property name과 enum name은 대소문자를 구분한다.
-- Property 순서와 의미 없는 whitespace는 의미가 없다.
-- 중복 property와 누락된 required property는 거부한다.
-- Reader는 알 수 없는 property를 무시한다.
-- `null`은 contract가 nullable로 선언한 값에만 허용한다.
-- Signed·unsigned 64-bit integer는 범위를 확인한 뒤 앞자리 0 없이 한 가지 형태로만 적는 10진 문자열이다.
-- 32-bit 이하 integer는 fraction이 없는 JSON number다.
-- Floating-point 값은 finite JSON number만 허용한다.
-- Byte sequence는 padding을 포함한 RFC 4648 base64다.
-- Date, decimal, UUID와 언어별 custom type은 암묵적으로 변환하지 않고 contract가 정한 string 또는 DTO로 표현한다.
+Framework의 기본 typed application message가 사용하는 `framework-json-v1`의 공개 encoding·validation
+규칙은 [Message model §2.3](../spec/04-message-model.ko.md#23-framework-json-v1-typed-payload-profile)이 단독으로
+소유한다. Runtime은 그 profile로 payload를 검증하고 typed value로 변환한다. 이 문서는 별도 규칙 집합을
+정의하지 않으며 parser 선택, buffer 재사용과 원본 UTF-8 bytes의 transport 전달 방식만 내부 구현으로 둔다.
 
 ### Relocation adapter state는 profile 밖
 
@@ -322,7 +332,13 @@ Actor와 User Spot manager create와 target-owned Instance activation은 generic
 Object `Client`와 `Server` role은 Location Store를 요구한다. Object `None` role은 authority와 hidden local
 runtime을 만들지 않는다.
 
-## 8. Instance Spot reactivation
+## 8. Instance Spot cold activation recovery
+
+이 절의 recovery는 일반적인 owner-loss reactivation이 아니다. 최초 cold activation이 Ready를
+publish했지만 첫 operation의 terminal completion과 recovery pointer 제거를 끝내지 못한 경우에만,
+authority가 가리키는 동일 target node와 lifecycle generation에서 그 operation을 재개한다. Steady
+`Ready` owner process 종료나 owner lease 만료에는 이 root를 사용하지 않으며, 다른 node를 선택하거나
+factory를 실행하지 않는다.
 
 ### Missing+Instance intent envelope
 
@@ -337,7 +353,7 @@ Command 39 route는 첫 byte와 `u16` body length로 닫힌 union을 이룬다.
 
 | Kind | 용도 | 내용 |
 |---|---|---|
-| `1` | 기존 [Ready](../spec/01-glossary.ko.md#ready) authority 재개 | 새 작업을 받을 수 있는 상태인 object·owner·lease generation과 StoreVersion — 이전 wire와 byte-compatible |
+| `1` | 기존 [Ready](../spec/01-glossary.ko.md#ready) authority로 전달 | 새 작업을 받을 수 있는 상태인 object·owner·lease generation과 StoreVersion — 이전 wire와 byte-compatible |
 | `2` | Missing cold activation 전용 | target Mesh·node RID·lifecycle, Spot RID, stable type, descriptor version, deadline — authority fence는 금지 |
 
 Kind `2` route와 ZLIA의 target Mesh·stable type·descriptor version·deadline, operation identity와
@@ -345,15 +361,15 @@ metadata presence·bytes가 다르면 reservation 전에 protocol error로 거�
 
 ### Target host의 scan과 recovery
 
-- Target host는 startup 첫 scan과 한 번에 도는 양을 제한한 background scan에서 자신이 소유한 Pending 기록 또는 Ready Instance activation recovery root를 재개한다.
+- Target host는 startup 첫 scan과 한 번에 도는 양을 제한한 background scan에서 자신이 소유한 Pending 기록 또는 미완료 최초 operation을 가리키는 Ready Instance activation recovery root를 재개한다. Authority의 target node RID와 lifecycle generation이 현재 host와 정확히 같아야 한다.
 - Scan과 late control record는 object key, object·owner generation과 owner lease로 key를 정한 local barrier 하나로 수렴한다.
 - Ready 전 durable inbox first record를 확정하고 handler는 barrier로 막으며, startup은 queue head를 복원하기 전에 Serving을 게시하지 않는다.
 - 첫 handler terminal completion을 durable하게 기록하고 replay cursor를 inbox sequence까지 갱신한 뒤에만 recovery pointer를 Preserve CAS로 제거한다.
 - Queue admission만으로 pointer를 제거하지 않는다.
 
-### Reactivation 실패 처리
+### Cold activation recovery 실패 처리
 
-- Reactivation 실패는 local barrier를 seal하고 request를 한 번만 terminal 처리한 뒤 one-way drop event를 기록한다.
+- Cold activation recovery 실패는 local barrier를 seal하고 request를 한 번만 terminal 처리한 뒤 one-way drop event를 기록한다.
 - 그 다음 fence 값이 일치할 때만 지우고, 지운 결과를 다시 읽어 맞추는 순서로 진행한다.
 - Delete 전 process가 종료되면 target scan은 retry-safe factory를 다시 실행할 수 있다.
 - `Missing`이 확인되기 전에는 새 activation을 시작하지 않는다.

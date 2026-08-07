@@ -15,8 +15,8 @@ relocation queue는 사용하지 않는다.
 ## 1. 확인 범위
 
 - Server restart, endpoint replacement, reconnect burst와 rolling update
-- Cancellation, in-flight crash, graceful shutdown과 runtime weight 변경
-- Repeated lifecycle, Store 독립, fanout load와 observer failure
+- 공통 timeout·connection loss, 지원 언어의 cancellation, in-flight crash, graceful shutdown과 runtime weight 변경
+- Repeated lifecycle, Store 독립, fanout load와 telemetry/logger provider failure
 - Orderly disconnect, half-open connection과 terminal-once completion
 - Relocation preflight, Session binding fence, temporary handoff ordering과 abort 복원
 
@@ -134,18 +134,20 @@ Provider가 반복 종료·재시작되어도 이전 lifecycle이 ready 목록�
 
 ### Track B — In-flight operation과 신규 admission을 구분
 
-#### RL-B1 Client cancellation 뒤 후속 request를 처리한다
+#### RL-B1 Waiter 종료 뒤 후속 request를 처리한다
 
 우선순위: `P1`
 
-Caller가 pending request await를 취소해도 late server reply가 다음 request를 완료해서는 안 된다.
+Caller의 pending request await가 먼저 끝나도 late server reply가 다음 request를 완료해서는 안 된다.
+Cancellation variant는 exact interface가 waiter cancellation을 제공하는 언어에서만 실행하고, 나머지
+언어는 timeout과 connection loss를 사용한다.
 
-**검증 질문:** Cancelled request 뒤 같은 client의 새 request가 자기 reply만 받는가.
+**검증 질문:** 이전 waiter가 terminal에 도달한 뒤 같은 client의 새 request가 자기 reply만 받는가.
 
 - 시작 조건: Provider handler가 first request reply를 application gate에서 보류한다.
-- 절차: First request가 handler에 도착한 뒤 caller await를 취소한다. 새 operation ID로 request를 보내 reply를
-  받고 first gate를 해제한다.
-- 검증: First awaitable은 cancellation이고 second request는 자기 payload reply를 한 번 받는다. Late first
+- 절차: First request가 handler에 도착한 뒤 지원 언어에서는 caller await를 취소하고, 나머지는 timeout 또는
+  connection loss로 terminal을 만든다. 새 operation ID로 request를 보내 reply를 받고 first gate를 해제한다.
+- 검증: First awaitable은 해당 variant의 terminal이고 second request는 자기 payload reply를 한 번 받는다. Late first
   reply가 second completion을 바꾸지 않는다.
 - 세부 동작: [오류 모델 §5](../spec/32-framework-error-model.ko.md)를 검증한다.
 
@@ -178,7 +180,7 @@ provider에 자동 재제출하지 않는다.
 - 절차: B Shutdown을 시작하고 새 requests를 보낸 뒤 slow handler gate를 해제한다.
 - 검증: Accepted request는 B reply로 한 번 완료한다. Seal 뒤 신규 requests는 A가 처리하고 B terminal 뒤
   public status에는 B가 ready target으로 남지 않는다.
-- 세부 동작: [Host maintenance §10](../spec/28-graceful-drain-handoff.ko.md)을 검증한다.
+- 세부 동작: [Shutdown과 Relocate의 경쟁](../spec/28-graceful-drain-handoff.ko.md#11-shutdown과-relocate의-경쟁)을 검증한다.
 
 #### RL-B4 Runtime weight 0으로 신규 selection에서 제외하고 복원한다
 
@@ -207,7 +209,7 @@ Weight update는 신규 target selection만 바꾸며 이미 B handler가 수락
 - 시작 조건: Slow request가 B handler에 들어가 reply gate에서 대기한다.
 - 절차: B weight를 0으로 변경하고 신규 requests가 A에서 처리되는 것을 확인한 뒤 gate를 해제한다.
 - 검증: Slow request는 B reply를 한 번 받고 신규 requests는 A가 처리한다.
-- 세부 동작: [Channel topology §5.1](../spec/07-channel-topology.ko.md)의
+- 세부 동작: [Weight 변경은 연결을 다시 만들지 않는다](../spec/07-channel-topology.ko.md#52-weight-변경은-연결을-다시-만들지-않는다)의
   connection 유지와 weight update를 검증한다.
 
 #### RL-B6 한 provider의 gray failure를 다른 replies와 격리한다
@@ -242,7 +244,7 @@ Resource cleanup 내부 count는 E2E public contract가 아니다. E2E에서는 
 - 절차: Clients와 server를 public close·Shutdown으로 종료한다. Process exit 뒤 같은 ports로 replacement를
   시작한다.
 - 검증: Pending public operations가 없고 old process가 종료되며 replacement listeners가 ready가 된다.
-- 세부 동작: [Host maintenance §10](../spec/28-graceful-drain-handoff.ko.md)을 검증한다.
+- 세부 동작: [Shutdown과 Relocate의 경쟁](../spec/28-graceful-drain-handoff.ko.md#11-shutdown과-relocate의-경쟁)을 검증한다.
 
 #### RL-C2 Crash한 provider를 owner lease 만료 뒤 제외한다
 
@@ -310,35 +312,39 @@ subscriber를 막지 않는가.
   판정하지 않는다.
 - 세부 동작: [Framework API §11](../spec/06-framework-api.ko.md)을 검증한다.
 
-#### RL-D2 Observer failure를 messaging에서 격리한다
+#### RL-D2 Telemetry provider failure를 messaging에서 격리한다
 
 우선순위: `P1`
 
-Public message-flow observer가 exception을 던져도 handler dispatch는 계속되어야 하고 runtime error sink가
-observer failure를 보고해야 한다.
+Application telemetry provider가 exception을 던져도 handler dispatch는 계속되어야 한다. Provider failure를
+기록하는 구현은 같은 오류의 횟수를 제한하고 실패한 provider 대신 application fallback logger 또는 process
+stderr를 사용한다.
 
-**검증 질문:** Failing observer 뒤 normal requests가 성공하고 error sink event가 한 번 발생하는가.
+**검증 질문:** Failing telemetry provider 뒤 normal requests가 성공하고 failure reporting이 제한된 횟수와
+fallback 경계를 지키는가.
 
-- 시작 조건: Observer와 public runtime error sink를 등록한다.
-- 절차: 첫 observer callback에서 exception을 발생시키고 normal requests 20개를 보낸다.
-- 검증: 20 replies가 모두 성공하고 error sink가 정식 `observer_failed` event를 한 번 제공한다. Event에는
-  payload와 exception object를 넣지 않는다.
+- 시작 조건: Failing telemetry provider와 application fallback logger를 등록하고 stderr를 수집한다.
+- 절차: 첫 telemetry export에서 exception을 발생시키고 normal requests 20개를 보낸다.
+- 검증: 20 replies가 모두 성공한다. Provider failure record가 있으면 구현이 정한 제한 횟수 이내이며
+  fallback logger 또는 stderr에만 기록되고 실패한 provider를 다시 호출하지 않는다. Record에는 payload,
+  exception object, secret과 stack trace를 넣지 않는다. Fallback 기록 실패도 message 결과를 바꾸지 않는다.
 - 세부 동작: [Message flow tracing §5](../spec/26-message-flow-tracing.ko.md)을
   검증한다.
 
-#### RL-D3 Public logging sink에서 dispatch error를 확인한다
+#### RL-D3 Application logger provider에서 dispatch error를 확인한다
 
 우선순위: `P1`
 
 Dispatch error log가 관측 계약이라면 implementation-specific 문자열이 아니라 정식 field로 판정해야 한다.
 
-**검증 질문:** Handler 없는 request가 public logging sink에 정식 error fields를 남기는가.
+**검증 질문:** Handler 없는 request가 application logger provider에 정식 error fields를 남기는가.
 
-- 시작 조건: Logging sink와 normal handler를 등록한다.
+- 시작 조건: Application logger provider와 normal handler를 등록한다.
 - 절차: Missing handler request와 normal request를 각각 한 번 보낸다.
-- 검증: Sink는 negative operation의 `dispatch_error`, `no_handler`, `reply_error` fields를 제공하고 normal
+- 검증: Logger provider는 negative operation의 `zlink.dispatch_error`, `no_handler`, `reply_error` fields를 제공하고 normal
   request는 성공한다.
-- 세부 동작: [Runtime monitoring §5](../spec/24-runtime-monitoring.ko.md)를 검증한다.
+- 세부 동작: [Message-flow tracing의 attribute 포함 조건](../spec/26-message-flow-tracing.ko.md#32-attribute-포함-조건)과
+  [완료, 실패와 수명](../spec/26-message-flow-tracing.ko.md#5-완료-실패와-수명)을 검증한다.
 
 #### RL-D4 Same-version peers가 public error kind를 보존한다
 
@@ -427,13 +433,15 @@ Old physical connection의 delayed reply는 replacement connection의 operation�
 
 우선순위: `P0`
 
-Admission, cancellation, disconnect와 reply가 가까이 발생해도 request completion은 한 번이어야 한다.
+Admission, waiter termination, disconnect와 reply가 가까이 발생해도 request completion은 한 번이어야 한다.
+Cancellation race는 exact interface가 지원하는 언어에서만 실행한다.
 
 **검증 질문:** 세 race variants에서 operation terminal이 하나이고 handler 실행이 최대 한 번인가.
 
 - 시작 조건: Handler entered와 reply release를 application signals로 제어한다.
-- 절차: Admission 전, handler entered 뒤와 reply 직전에 connection loss·cancellation을 각각 경쟁시킨다.
-- 검증: 각 request는 reply, cancellation, `Unavailable` 또는 timeout 중 하나로 한 번 끝난다. Same operation
+- 절차: Admission 전, handler entered 뒤와 reply 직전에 connection loss를 경쟁시키고, 지원 언어에서는
+  cancellation variant도 실행한다.
+- 검증: 각 request는 reply, 지원 언어의 cancellation, `Unavailable` 또는 timeout 중 하나로 한 번 끝난다. Same operation
   ID를 다른 provider가 처리하지 않는다.
 - 세부 동작: [오류 모델 §5](../spec/32-framework-error-model.ko.md)를 검증한다.
 
@@ -469,7 +477,8 @@ Preflight 뒤 target capacity가 부족해지거나 target이 unavailable이면 
   availability variant를 실행한다.
 - 검증: Relocate가 성공한 경우 state는 target에 한 번 존재한다. Blocked variant는 source location과 state를
   유지하고 follow-up request가 성공하며 다른 target으로 자동 전환하지 않는다.
-- 세부 동작: [Host maintenance §6](../spec/28-graceful-drain-handoff.ko.md)을 검증한다.
+- 세부 동작: [Mode에 맞는 target 선택](../spec/28-graceful-drain-handoff.ko.md#5-mode에-맞는-target을-선택한다)과
+  [Relocation unit과 실행량 제한](../spec/28-graceful-drain-handoff.ko.md#7-relocation-unit과-실행량-제한)을 검증한다.
 
 #### RL-F2 Rebind 뒤 이전 Session message를 새 binding에 적용하지 않는다
 
@@ -477,12 +486,15 @@ Preflight 뒤 target capacity가 부족해지거나 target이 unavailable이면 
 
 Actor owner가 A→B→A로 바뀌더라도 이전 Session binding token은 새 binding과 다른 identity다.
 
-**검증 질문:** Old Session의 delayed relay·unbind가 new binding과 Actor state를 바꾸지 않는가.
+**검증 질문:** Old Session의 delayed relay·logical disconnect가 new binding과 Actor state를 바꾸지 않는가.
 
 - 시작 조건: Actor가 Session S1에 bind된 상태에서 target owner로 이동하고 새 Session S2에 rebind한다.
-- 절차: S1 connection의 relay와 unbind를 network gate에서 지연시킨 뒤 S2 binding 완료 후 전달한다. S2에서
-  normal relay와 push를 실행한다.
-- 검증: Old operations는 stale binding result로 끝나고 Actor handler evidence가 없다. S2 relay와 push는
+- 절차: S2 rebind를 완료하여 이전 exact S1 binding의 disconnect callback을 제출한다. Callback 완료와
+  tombstone 기록을 확인한 뒤 network gate에 지연한 S1 relay와 logical disconnect result를 전달한다.
+  Callback failure variant도 실행하고 S2에서 normal relay와 push를 보낸다.
+- 검증: 이전 exact binding의 disconnect callback은 최대 한 번 실행되고 terminal tombstone 뒤에는 반복하지
+  않는다. Callback failure도 S2 binding을 제거하거나 Actor state를 바꾸지 않는다. Tombstone 뒤 old
+  operations는 stale binding result이고 Actor handler evidence가 없다. S2 relay와 push는
   한 번씩 성공하며 current binding은 S2다.
 - 세부 동작: [Session Actor dispatch §4](../spec/20-session-actor-dispatch.ko.md)를
   검증한다.
@@ -507,11 +519,11 @@ Source와 target 언어가 달라도 정식 public ErrorKind와 typed `Rejected`
 
 ClientServer Server role만 등록한 process는 같은 ChannelName의 Client egress를 갖지 않는다.
 
-**검증 질문:** Server-only process의 request는 `NotFound`이고 정상 Client request는 성공하는가.
+**검증 질문:** Server-only process의 request는 `NotConfigured`이고 정상 Client request는 성공하는가.
 
 - 시작 조건: Server-only process와 별도 Client role process가 ready다.
 - 절차: 두 process가 같은 ChannelName request를 각각 시작한다.
-- 검증: Server-only call은 `NotFound`이고 handler가 실행되지 않는다. Client call은 server handler에서 한 번
+- 검증: Server-only call은 `NotConfigured`이고 handler가 실행되지 않는다. Client call은 server handler에서 한 번
   처리된다.
 - 세부 동작: [ClientServer Channel §3](../spec/09-client-server-channel.ko.md)을
   검증한다.
@@ -531,8 +543,8 @@ Target restore가 진행 중이면 incoming messages를 application handler에 �
 - 절차: Relocate를 시작하여 restore-held를 확인하고 H1·H2를 같은 logical IDs로 보낸다. Gate를 해제한다.
 - 검증: Target handler evidence는 `Q1,Q2,H1,H2` 순서이고 각 marker가 한 번만 나타난다. Restore-held
   구간에는 application handler evidence가 없다.
-- 세부 동작: [Location runtime §8](../spec/21-location-runtime.ko.md)과
-  [Graceful drain과 handoff §8](../spec/28-graceful-drain-handoff.ko.md)을 검증한다.
+- 세부 동작: [Target이 새 message를 받기 시작하는 시점](../spec/21-location-runtime.ko.md#74-target이-새-message를-받기-시작하는-시점)과
+  [Unit 하나를 이전하는 순서](../spec/28-graceful-drain-handoff.ko.md#8-unit-하나를-이전하는-순서)를 검증한다.
 
 #### RL-F6 Runtime mutable update와 invalid mutation을 구분한다
 
@@ -560,11 +572,12 @@ Relocation 전에 accepted된 request의 reply가 connection loss와 겹쳐도 c
 **검증 질문:** Accepted request 중 Actor를 이동하고 source connection을 끊어도 request가 terminal 하나인가.
 
 - 시작 조건: Actor handler가 request를 accepted하고 reply gate에서 대기한다.
-- 절차: Actor Relocate를 시작하고 target에서 handler state가 복원된 뒤 caller route를 일시 차단한다. Reply
+- 절차: Public Actor Join으로 target Spot membership 변경을 시작하고 target에서 handler state가 복원된 뒤 caller route를 일시 차단한다. Reply
   gate와 route를 복구한다.
 - 검증: Caller는 reply, timeout 또는 unavailable result 중 하나로 한 번 끝난다. Same operation ID가
   application handler에서 중복 실행되지 않고 follow-up request는 current target에서 성공한다.
-- 세부 동작: [Spot actor §8](../spec/15-spot-actor.ko.md)을 검증한다.
+- 세부 동작: [Actor join과 commit 순서](../spec/15-spot-actor.ko.md#4-actor-join과-commit-순서)와
+  [모든 이동 경로가 공유하는 relocation policy](../spec/15-spot-actor.ko.md#5-모든-이동-경로가-공유하는-relocation-policy)를 검증한다.
 
 #### RL-F8 Manual topology에서는 Host Relocate를 시작하지 않는다
 
@@ -600,7 +613,8 @@ Admission seal 전에 끝난 timeout은 source를 변경하지 않는다. Seal �
 - 검증: First는 `Blocked/DeadlineExceeded`이고 Host는 Serving이다. Second는
   `ForceStopped/DeadlineExceeded` 또는 spec의 post-seal forced outcome이며 source를 다시 Serving으로
   오인하지 않는다.
-- 세부 동작: [Host maintenance §12](../spec/28-graceful-drain-handoff.ko.md)을 검증한다.
+- 세부 동작: [Relocate 완료와 실패](../spec/28-graceful-drain-handoff.ko.md#10-relocate-완료와-실패)와
+  [Shutdown과 Relocate의 경쟁](../spec/28-graceful-drain-handoff.ko.md#11-shutdown과-relocate의-경쟁)을 검증한다.
 
 #### RL-F10 Entry Actor와 SpotWide aggregate를 Host Relocate한다
 
@@ -638,17 +652,17 @@ Actor Join·Leave callbacks를 호출하지 않는다.
 
 우선순위: `P0`
 
-User Spot relocation은 queued messages와 logical timer schedule을 target에서 이어야 한다. Application이 timer를
+SpotWide User Spot 또는 Instance Spot relocation은 queued messages와 logical timer schedule을 target에서 이어야 한다. Application이 timer를
 다시 등록하지 않는다.
 
 **검증 질문:** Frozen messages와 pending timer가 target에서 한 번씩 원래 순서로 처리되는가.
 
-- 시작 조건: Source User Spot handler R0가 gate에서 대기하고 Q1·Q2, Actor A1·A2와 one-shot timer가 accepted된
-  상태다.
+- 시작 조건: Source SpotWide User Spot 또는 Instance Spot handler R0가 gate에서 대기하고 Q1·Q2, Actor
+  A1·A2와 one-shot timer가 accepted된 상태다. Entry Spot이나 PerActor Spot은 fixture로 사용하지 않는다.
 - 절차: Relocate를 시작하고 R0를 해제한다. Completion 뒤 target evidence와 timer callback을 기다린다.
-- 검증: R0 뒤 Q1·Q2와 A1·A2가 각 lane 순서를 유지해 한 번 처리된다. Timer callback도 target에서 한 번
+- 검증: R0 뒤 Q1·Q2와 A1·A2가 각 target queue와 Actor lane 순서를 유지해 한 번 처리된다. Timer callback도 target에서 한 번
   실행되고 Application이 timer registration을 반복하지 않는다.
-- 세부 동작: [Spot actor §8](../spec/15-spot-actor.ko.md)을 검증한다.
+- 세부 동작: [Graceful drain — 대기 중인 message, timer와 session을 옮긴다](../spec/28-graceful-drain-handoff.ko.md#9-대기-중인-message-timer와-session을-옮긴다)를 검증한다.
 
 #### RL-F13 많은 large-state units의 relocation을 bounded terminal로 끝낸다
 
@@ -660,9 +674,11 @@ bounded하게 끝나고 source admission을 너무 일찍 막지 않는지 확�
 **검증 질문:** 80 units와 large-state variants가 success 또는 `StateIncompatible` terminal을 하나씩
 가지는가.
 
-- 시작 조건: 1 MiB state units 80개, 64 MiB boundary units와 oversize unit을 separate fixtures로 만든다.
+- 시작 조건: 1 MiB state units 80개, encoded participant state가 정확히 64 MiB인 unit과 한 byte 초과한
+  unit을 separate fixtures로 만든다.
 - 절차: 각 fixture에서 Host Relocate를 실행하고 current locations와 operation results를 수집한다.
-- 검증: Valid units는 target에서 checksum을 보존하고 oversize unit은 source를 유지한 채
+- 검증: 64 MiB 이하 units는 target에서 checksum과 logical length를 보존하고, 한 byte 초과 unit은 source
+  authority를 유지한 채
   `StateIncompatible`이다. 모든 units와 Host operation은 bounded terminal을 가진다.
 - 세부 동작: [Host maintenance §7](../spec/28-graceful-drain-handoff.ko.md)을
   검증한다.

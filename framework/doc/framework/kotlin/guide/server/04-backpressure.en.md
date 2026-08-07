@@ -501,7 +501,7 @@ is checked separately in [§6](#6-framework-runtime-coverage).
 ```kotlin
 // Kotlin uses the Java surface as-is.
 options.configureDispatch()
-    .messageFlow(ZLinkMessageFlowLogMode.ERRORS_ONLY) // Default — records errors and backpressure.
+    .messageFlow(ZLinkMessageFlowLogMode.ERRORS) // Default — records errors and backpressure.
 ```
 
 If `backpressured` shows up in the message flow record, it means waiting for a send slot

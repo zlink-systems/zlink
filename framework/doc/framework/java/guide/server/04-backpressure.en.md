@@ -503,7 +503,7 @@ is checked separately in [§6](#6-framework-runtime-coverage).
 ```java
 // Java sets the level as a message flow log mode.
 options.configureDispatch()
-    .messageFlow(ZLinkMessageFlowLogMode.ERRORS_ONLY); // Default — records errors and backpressure.
+    .messageFlow(ZLinkMessageFlowLogMode.ERRORS); // Default — records errors and backpressure.
 ```
 
 If `backpressured` shows up in the message flow record, it means waiting for a send slot

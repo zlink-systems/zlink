@@ -55,7 +55,6 @@ failure/completion conditions its implementation and contract tests need.
 - [27 Request correlation and causal flow](27-flow-correlation.en.md) — defines the generation and propagation of the correlation ID and flow ID.
 - [28 Host Relocate and Shutdown](28-graceful-drain-handoff.en.md) — defines the two relocation modes and the shutdown lifecycle.
 - [29 Transport liveness](29-transport-liveness.en.md)
-- [30 Framework implementation gap record](30-implementation-gap.en.md) — records current implementation differences and closure evidence for this review; it is not the formal contract.
 - [31 Failure handling and failover scope](31-failure-failover-policy.en.md) — defines the automatic-recovery boundary for target reselection, reconnect, creation recovery, and stateful relocation.
 - [32 Framework error model](32-framework-error-model.en.md) — defines the shared `ErrorKind`, Send/Request completion conditions, and the boundary of an application's retry decision.
 

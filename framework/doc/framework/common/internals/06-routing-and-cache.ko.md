@@ -37,6 +37,21 @@ title: "6. target 선택과 route cache"
 **긍정 결과가 아니므로 보관하지 않는다.** 이것을 캐시하면 잠깐의 실패가 캐시 수명만큼
 지속되는 장애가 된다.
 
+### 조회 결과의 의미를 보존한다
+
+캐시하지 않는다는 이유로 서로 다른 조회 결과를 하나의 `없음`으로 축약하면 안 된다.
+Authority record가 없는 `Missing`과 `Ready` authority는 남아 있지만 owner lease가 무효인
+`Unavailable` 판정은 다음 동작이 다르다.
+
+| 조회 결과 | caller에게 보이는 결과 | Instance cold activation |
+|---|---|---|
+| `Missing` | 일반 message operation은 `NotFound`; Instance intent는 생성 권한 확보를 시도할 수 있다. | 허용 |
+| `Unavailable` 판정 | `Unavailable` | 금지 |
+
+둘 다 positive route cache에는 넣지 않지만 resolver 결과에는 구분을 유지한다. Explicit `Close`나
+`IdleEvicted` 정리가 authority release까지 끝난 뒤에만 다음 조회가 `Missing`이 된다. Owner process
+종료나 lease 만료만으로 authority를 release하거나 creation reservation을 시작하지 않는다.
+
 ### 수명을 무엇이 정하는가
 
 캐시 수명은 세 값 중 가장 짧은 것을 넘지 않는다.
@@ -104,18 +119,18 @@ flowchart LR
 각 runtime은 source route의 object·authority generation과 target node를 확인하고, 더 새로운
 cache 항목을 지우지 않는 조건까지 구현해야 한다.
 
-**설계 후보 — 판정 전이며 구현을 구속하지 않는다.**
+**중복 억제 구현 예시 — 공통 완료 조건이 아니다.**
 
 - `(보낸 runtime, 객체, owner 세대)` 조합마다 처음 한 번만 보낸다. 이동 직후 트래픽이
   몰리는 객체에서 message마다 통지를 붙이면 통지 record가 업무 message만큼 늘어난다.
 - 같은 통지가 전송 중이면 추가 통지는 합친다.
-- 응답이 있는 호출은 그 응답에 실어 별도 record를 만들지 않는다.
 - 통지는 유실되어도 캐시 수명이 끝나면 만료되므로 재전송을 보장하지 않는다.
 - 중복 억제 표식은 별도 집합이 아니라 기존 캐시 항목에 넣고, 캐시 항목이 사라질 때 함께
   없앤다. 별도 집합을 두면 이동한 객체 수만큼 상태가 계속 늘어난다.
 
-이것이 spec이 캐시 수명을 Message Follow 기간으로 묶어 둔 이유다 — 알림이 유실되어도
-그 기간이 지나면 캐시가 자연히 만료된다.
+구현은 이 예시와 다른 suppression 구조를 사용할 수 있다. 공통 조건은 같은 object·authority generation과
+target node를 가리키는 cache만 무효화하고 더 새로운 route를 지우지 않으며, 알림이 유실되어도 cache
+lifetime 뒤 stale route를 만료시키고, 중복 상태가 원래 operation의 terminal 결과를 바꾸지 않는 것이다.
 
 ## 3. 후보 목록을 호출마다 만들지 않는다
 
@@ -368,9 +383,11 @@ flowchart LR
 
 - 같은 객체로 연속 호출할 때 [Location Store](../spec/01-glossary.ko.md#location-store) 조회가 호출마다 발생하지 않는다.
 - 객체 없음·만드는 중·저장소 실패가 캐시에 남지 않는다.
+- Resolver가 authority 없는 `Missing`과 owner를 사용할 수 없는 `Ready`의 `Unavailable` 판정을 구분한다.
+- `Unavailable` 판정은 Instance creation reservation이나 cold activation을 시작하지 않는다.
 - 캐시 수명이 Message Follow 기간을 넘지 않는다.
-- 이동 후 우회 경로로 넘어간 호출 뒤에는 보낸 쪽 캐시가 갱신되어, 다음 호출이 새
-  owner로 직접 간다.
+- 이동 후 우회 경로에서 유효한 `messageFollow`를 받으면 보낸 쪽 캐시를 즉시 무효화하여 다음 조회가
+  새 owner를 사용한다. 통지가 유실되면 기존 cache lifetime이 끝난 뒤 새 owner를 조회한다.
 - peer 상태가 바뀌지 않는 동안 호출 경로에서 후보 필터링이 실행되지 않는다.
 - 같은 weight를 가진 대상들이 연속 호출에서 번갈아 선택된다.
 - weight 100과 300인 두 후보에 네 번 연속 호출하면 `B, A, B, B` 순서로 선택된다.

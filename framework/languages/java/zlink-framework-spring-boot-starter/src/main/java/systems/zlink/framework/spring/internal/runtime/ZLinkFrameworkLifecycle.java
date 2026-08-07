@@ -4,7 +4,8 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.logging.Logger;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.springframework.context.SmartLifecycle;
 import systems.zlink.framework.actors.ZLinkActorClient;
 import systems.zlink.framework.actors.ZLinkActorDirectory;
@@ -41,13 +42,11 @@ public final class ZLinkFrameworkLifecycle
         systems.zlink.framework.configuration.ZLinkMessageFlowControl {
     public static final int PHASE = 0;
     private static final Duration SPRING_SHUTDOWN_DRAIN_DEADLINE = Duration.ofSeconds(30);
-    private static final Logger LOGGER =
-        Logger.getLogger(ZLinkFrameworkLifecycle.class.getName());
-
     private final DefaultZLinkFrameworkOptions options;
     private final ZLinkBackendAdapterProvider backendAdapterFactory;
     private final ZLinkHandlerActivator handlerFactory;
     private final ZLinkRuntimeEventDispatcher eventDispatcher;
+    private final AtomicBoolean terminationLogged = new AtomicBoolean();
     private final systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime
         routeMeshRuntime = new systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime() {
             @Override
@@ -113,6 +112,7 @@ public final class ZLinkFrameworkLifecycle
         };
     private ZLinkFrameworkRuntime runtime;
     private boolean running;
+    private Thread processShutdownHook;
 
     public ZLinkFrameworkLifecycle(
         DefaultZLinkFrameworkOptions options,
@@ -137,6 +137,8 @@ public final class ZLinkFrameworkLifecycle
             handlerFactory,
             eventDispatcher);
         running = true;
+        terminationLogged.set(false);
+        installProcessShutdownHook();
     }
 
     @Override
@@ -150,12 +152,13 @@ public final class ZLinkFrameworkLifecycle
             return;
         }
         current.shutdown(SPRING_SHUTDOWN_DRAIN_DEADLINE).whenComplete((result, failure) -> {
-            logTermination(result, failure);
+            logTerminationOnce(result, failure);
             synchronized (ZLinkFrameworkLifecycle.this) {
                 if (runtime == current) {
                     runtime = null;
                 }
                 running = false;
+                removeProcessShutdownHook();
             }
         });
     }
@@ -172,25 +175,70 @@ public final class ZLinkFrameworkLifecycle
         }
         // Spring shutdown must not start maintenance relocation.
         current.shutdown(SPRING_SHUTDOWN_DRAIN_DEADLINE).whenComplete((result, failure) -> {
-            logTermination(result, failure);
+            logTerminationOnce(result, failure);
             synchronized (ZLinkFrameworkLifecycle.this) {
                 runtime = null;
                 running = false;
+                removeProcessShutdownHook();
             }
             callback.run();
         });
     }
 
-    private static void logTermination(
+    private void installProcessShutdownHook() {
+        Thread hook = new Thread(this::shutdownFromProcessHook, "zlink-framework-shutdown");
+        processShutdownHook = hook;
+        try {
+            Runtime.getRuntime().addShutdownHook(hook);
+        } catch (IllegalStateException ignored) {
+            processShutdownHook = null;
+        }
+    }
+
+    private void removeProcessShutdownHook() {
+        Thread hook = processShutdownHook;
+        if (hook == null || hook == Thread.currentThread()) {
+            return;
+        }
+        try {
+            Runtime.getRuntime().removeShutdownHook(hook);
+        } catch (IllegalStateException ignored) {
+            // JVM shutdown is already in progress.
+        }
+        processShutdownHook = null;
+    }
+
+    private void shutdownFromProcessHook() {
+        ZLinkFrameworkRuntime current;
+        synchronized (this) {
+            current = running ? runtime : null;
+        }
+        if (current == null) {
+            return;
+        }
+        try {
+            var result = current.shutdown(SPRING_SHUTDOWN_DRAIN_DEADLINE)
+                .toCompletableFuture()
+                .get(SPRING_SHUTDOWN_DRAIN_DEADLINE.toSeconds() + 5, TimeUnit.SECONDS);
+            logTerminationOnce(result, null);
+        } catch (Throwable failure) {
+            logTerminationOnce(null, failure);
+        }
+    }
+
+    private void logTerminationOnce(
         ZLinkFrameworkTerminationResult result,
         Throwable failure) {
+        if (!terminationLogged.compareAndSet(false, true)) {
+            return;
+        }
         if (failure != null || result == null) {
-            LOGGER.warning(
+            System.err.println(
                 "ZLINK_FRAMEWORK_TERMINATION outcome=FORCE_STOPPED "
                     + "reason=TEARDOWN_FAILED");
             return;
         }
-        LOGGER.info(
+        System.err.println(
             "ZLINK_FRAMEWORK_TERMINATION outcome=" + result.outcome()
                 + " reason=" + result.reason());
     }

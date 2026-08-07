@@ -19,6 +19,7 @@ fi
 pids=()
 redis_container_id=""
 log_dir="build/sample-logs"
+ZLINK_SAMPLE_FRAMEWORK_ROLE_LOGS="session-a.log session-b.log matchmaking.log api-a.log api-b.log play-a.log play-b.log"
 flow_log_dir="$(pwd)/logs"
 config_dir="$(mktemp -d)"
 chmod 0700 "${config_dir}"

@@ -247,6 +247,9 @@ Framework가 수락 전 target을 다시 선택하거나 Store 결과를 재확�
 - Actor를 제거한 뒤 같은 ActorId로 다시 만들어도 이전 Session binding을 다시 사용하지 않는다.
 - Instance Spot은 `Missing`일 때만 cold activation을 시작한다. `Ready` owner process 종료나 owner lease
   만료를 `Missing`으로 바꾸거나 cold activation으로 복구하지 않는다.
+- `Ready` authority에 activation recovery pointer가 남아 있더라도 최초 cold activation의 미완료
+  operation을 authority가 지정한 동일 target node·lifecycle에서 재개하는 데만 사용한다. Steady
+  `Ready` owner 장애 뒤 다른 target을 선택하는 근거로 사용하지 않는다.
 - Instance Spot cold activation recovery를 Actor, User Spot, 이미 `Ready`인 Instance Spot이나 host
   relocation에 사용하지 않는다.
 - Relocation commit 전 failure는 source를 유지하고, commit 뒤 failure는 source로 rollback하지 않는다.

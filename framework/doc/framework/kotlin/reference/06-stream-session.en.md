@@ -50,13 +50,15 @@ sessionContext.client().send(ServerTick(tickNumber)).await()
 sessionContext.client().reply(GetPlayerStateResult(state)).await()
 ```
 
-**Options.** `ZLinkKotlinSessionSendCall` provides `.metadata(...)`, `.compress()`, `.await()`,
+**Options.** `ZLinkKotlinSessionSendCall` provides `.metadata(...)`, `.compress()`, `.timeout(Duration)`, `.await()`,
 and `ZLinkKotlinSessionReplyCall` provides `.compress()`, `.await()` (as with Java, `reply` has
 no metadata modifier).
 
 **Completion result.** Same completion kinds as the Java reference's `send`/`reply`. The
 application only waits on local STREAM queue admission via `await(): Unit` and does not use
-Java's `CompletionStage` and submission result type directly.
+Java's `CompletionStage` and submission result type directly. The per-call timeout only shortens the
+STREAM socket admission wait and, rounded up to milliseconds, must be in `1..INT_MAX`. The earlier
+deadline allows no late admission or replay, and this modifier does not apply to a reply.
 
 **When to use.** Same as the `send` (inside Session code)/`reply` entry in the Java reference.
 

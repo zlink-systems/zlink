@@ -36,8 +36,8 @@ boundary of the Framework composition.
   failure
 - Actor relocation and Message Follow
 
-Actor failure and planned relocation are different policies. This sample's Actor factory is
-configured not to use relocation, and the terminal result of a Ready owner failure follows the
+Actor failure and planned relocation are different policies. This sample's Courier and Customer
+Actor factories both select `DisableRelocation`, and the terminal result of a Ready owner failure follows the
 Unavailable boundary of the common failure spec.
 
 ## 2. Requirements
@@ -188,7 +188,7 @@ Tracking looks up the Customer Actor using CustomerId but does not directly sele
 | One-way offer/decision transmission | Actor send | Send admission doesn't guarantee handler execution completion or delivery to the peer. [Send and request §4](../../spec/03-interaction-model.en.md#4-send-and-request) |
 | Owner failure boundary | Failure/failover policy | A Ready owner failure doesn't turn into automatic cold activation or selecting a different owner. [Failure policy §4.4](../../spec/31-failure-failover-policy.en.md#44-distinguishing-instance-spot-cold-activation-from-owner-failure) |
 
-The Courier and Customer Actor factories don't use relocation within this sample's scope. Even if
+The Courier and Customer Actor factories use `DisableRelocation` within this sample's scope. Even if
 planned relocation is added later, the same Actor identity and binding update must be verified, and
 Ready owner crashes must not be interpreted as failover.
 

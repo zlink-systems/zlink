@@ -154,7 +154,8 @@ public interface IZLinkStreamNodeBuilder
     IZLinkStreamNodeBuilder Bind(int port = 0);
     IZLinkStreamNodeBuilder SetBindHost(string bindHost);
     IZLinkStreamNodeBuilder SetAdvertiseHost(string advertiseHost);
-    IZLinkSocketConfig ConfigureSocket();
+    IZLinkStreamNodeBuilder MaxMessageSize(long bytes);
+    IZLinkStreamSocketConfig ConfigureSocket();
     IZLinkStreamNodeBuilder SetTlsServer(
         string certificatePath,
         string keyPath,
@@ -170,7 +171,7 @@ options
     .Bind(7400)
     .SetBindHost("0.0.0.0")
     .SetAdvertiseHost("node-a.example.net")
-    .ConfigureSocket().MaxMessageSize = 64 * 1024; // client에서 server로 받는 complete STREAM message의 기본 상한이다.
+    .MaxMessageSize(64 * 1024) // client에서 server로 받는 complete STREAM message의 기본 상한이다.
     .SetTlsServer(
         "server.crt",
         "server.key",
@@ -178,7 +179,7 @@ options
     .AddSession<GatewaySession>(); // 이 node에서 사용할 session type 하나를 등록한다.
 ```
 
-`ConfigureSocket().MaxMessageSize`는 이 StreamNode의 Core STREAM inbound option이다. 기본값은
+`MaxMessageSize(long bytes)`는 이 StreamNode의 Core STREAM inbound option이다. 기본값은
 `64 KiB`이며 complete message의 크기를 6-byte prefix를 제외한 header byte와 payload byte의 합으로
 계산한다. 이 상한은 client에서 server로 들어오는 message에만 적용하고 server에서 client로 보내는
 message에는 적용하지 않는다. `0`은 별도 Framework 상한을 사용하지 않도록 Core에 `-1`을 전달하며,

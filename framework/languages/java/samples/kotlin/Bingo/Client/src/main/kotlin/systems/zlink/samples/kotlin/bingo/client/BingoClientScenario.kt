@@ -61,6 +61,10 @@ class BingoClientScenario {
             .request(ObserveBingoEventsReq(client1Match.roomId))
             .awaitReply<ObserveBingoEventsRes>()
         ensure(observed.subscribed)
+        // Register the observer wait before the second player can start the draw loop.
+        val rewardAnnounced = observer.waitFor<BingoRewardAnnouncedNotify>()
+            .where { message -> message.payload().roomId == client1Match.roomId }
+            .let { wait -> async(start = CoroutineStart.UNDISPATCHED) { wait.await() } }
 
         val client1SawClient2Join = client1.waitFor<PlayerJoinedNotify>()
             .where { message -> message.payload().actorId == "player-2" }
@@ -99,9 +103,6 @@ class BingoClientScenario {
             .single { player -> player.actorId == client2Auth.actorId }
             .card.size == 9)
 
-        val rewardAnnounced = observer.waitFor<BingoRewardAnnouncedNotify>()
-            .where { message -> message.payload().roomId == client1Match.roomId }
-            .let { wait -> async(start = CoroutineStart.UNDISPATCHED) { wait.await() } }
         val client1Ended = async(start = CoroutineStart.UNDISPATCHED) {
             client1.waitFor<BingoGameEndedNotify>().await()
         }

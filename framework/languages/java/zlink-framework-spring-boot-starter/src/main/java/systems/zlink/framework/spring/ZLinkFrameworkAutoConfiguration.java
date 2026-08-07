@@ -76,7 +76,7 @@ public class ZLinkFrameworkAutoConfiguration {
         return new ZLinkSpringHandlerFactory(beanFactory);
     }
 
-    @Bean
+    @Bean(destroyMethod = "")
     @ConditionalOnBean(DefaultZLinkFrameworkOptions.class)
     @ConditionalOnMissingBean
     public ZLinkFrameworkLifecycle zlinkFrameworkLifecycle(

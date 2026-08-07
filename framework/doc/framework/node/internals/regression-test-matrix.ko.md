@@ -133,14 +133,14 @@ CI workflow 가 만들어 내는 native artifact 조합은 위 여섯 플랫폼 
 one-way send와 publish의 `submit()`은 bounded admission 결과를 비동기로 반환하지만 원격 수신이나
 handler 실행 완료는 기다리지 않는다.
 
-## 4.1 Dispatch Error Observer Regression 항목
+## 4.1 Dispatch Error Structured Record Regression 항목
 
 | ID | 계층 | 테스트 위치 | 통과 기준 |
 |----|------|-------------|-----------|
-| DERR-001, DERR-007, DERR-011, DERR-014 | `unit` | `test/contract/channel-client.test.js` | channel request handler 없음은 error reply와 observer event, channel send handler 없음은 drop과 observer event, observer 예외는 원래 dispatch 결과를 깨지 않음 |
-| DERR-002, DERR-008 | `unit`, `integration-single-process` | `test/contract/channel-client.test.js` | route request handler 없음은 error reply, route send handler 없음은 drop과 observer event로 끝남 |
-| DERR-003, DERR-004, DERR-009, DERR-010, DERR-016 | `unit`, `integration-single-process` | `test/contract/spot-manager.test.js`, `test/contract/actor-manager.test.js` | SPOT route, subscription, actor dispatch 실패가 request면 error reply 또는 caller-visible rejection, one-way면 drop과 observer event로 끝남 |
-| DERR-005, DERR-006, DERR-013, DERR-015 | `unit`, `integration-single-process` | `test/contract/channel-client.test.js`, `test/contract/spot-manager.test.js` | decode 실패와 handler 예외는 error reply 또는 관측 가능한 drop으로 끝나며, observer 미등록 시에도 기본 로그와 counter가 남음 |
+| DERR-001, DERR-007, DERR-011, DERR-014 | `unit` | `test/contract/channel-client.test.js` | Public observer 표면이 없고, channel request handler 없음은 error reply와 `zlink.dispatch_error`, channel send handler 없음은 drop과 `zlink.dispatch_error`로 끝나며 provider 실패는 원래 dispatch 결과를 바꾸지 않음 |
+| DERR-002, DERR-008 | `unit`, `integration-single-process` | `test/contract/channel-client.test.js` | route request handler 없음은 error reply, route send handler 없음은 drop으로 끝나며 application logger/telemetry provider가 structured record를 받음 |
+| DERR-003, DERR-004, DERR-009, DERR-010, DERR-016 | `unit`, `integration-single-process` | `test/contract/spot-manager.test.js`, `test/contract/actor-manager.test.js` | SPOT route, subscription, actor dispatch 실패가 request면 error reply 또는 caller-visible rejection, one-way면 drop과 structured dispatch-error record로 끝남 |
+| DERR-005, DERR-006, DERR-013, DERR-015 | `unit`, `integration-single-process` | `test/contract/channel-client.test.js`, `test/contract/spot-manager.test.js` | Decode 실패와 handler 예외는 error reply 또는 관측 가능한 drop으로 끝나며 application logger/telemetry provider에 기본 record와 counter가 남음 |
 
 ## 4.2 DI Capability Regression 항목
 
@@ -208,7 +208,7 @@ handler 실행 완료는 기다리지 않는다.
 | Entry Spot actor dispatch serialization | `integration-single-process` | Entry Spot actor packet이 actor별 입력 순서를 보존한 뒤 Entry Spot 실행 queue에서 순서대로 처리된다 |
 | local actor mailbox dispatch | `integration-single-process` | user Spot에 들어가지 않은 actor packet도 actor별 mailbox 순서를 따른다 |
 | user Spot actor dispatch serialization | `integration-single-process` | 같은 user Spot 안의 여러 actor packet이 Spot 실행 queue에서 순서대로 처리되어 Spot 상태가 보호된다 |
-| runtime task exception observation | `unit` | detached runtime task와 fire-and-forget handler에서 발생한 예외가 unhandled rejection으로 묻히지 않고 runtime error sink 또는 logger로 관찰된다 |
+| runtime task exception observation | `unit` | detached runtime task와 fire-and-forget handler에서 발생한 예외가 unhandled rejection으로 묻히지 않고 application logger provider에서 관찰된다 |
 | execution queue cancellation semantics | `unit` | queue enqueue/wait cancellation이 이미 queue에 들어간 work item의 순서를 깨거나 중간에 제거하지 않는다 |
 | Spot handle route 경로 | `integration-single-process` | routed Spot 호출은 `SpotHandle`의 MeshName, owner RID, generation을 검증한 뒤 routed message를 보낸다 |
 | actor manager 생성 중복/타입 충돌 | `integration-single-process` | `ZLinkActorManager.create(...)` 중복 생성은 `ActorAlreadyExists`, `getOrCreate(...)` actor type 충돌은 `ActorTypeMismatch` 로 실패한다 |
@@ -445,11 +445,10 @@ dotnet 의 문서 회귀 테스트처럼, Node 에서도 구현 기준 문서가
 | `spot monitoring source publishes status peers and subjects snapshot changes` | Spot의 status·peer·subject snapshot 변경을 typed event로 전달한다. |
 | `spot timer reports handler failure immediately through runtime publisher` | timer handler 예외를 runtime publisher를 통해 즉시 전달한다. |
 | 공통 개념 | Node 타입 / 멤버 |
-| 로그 모드 | `ZLinkMessageFlowLogMode` { `Off`, `ErrorsOnly`(기본), `KeyTransitions`, `Verbose` } |
-| outcome | `ZLinkMessageFlowOutcome` { `succeeded`, `failed`, `backpressured`, `dropped`, `cancelled`, `shutdown` } |
-| event | `ZLinkMessageFlowEvent`: `eventId`, `outcome`, `surface`, `messageKind`, `phase?`, `packetName?`, `meshName?`, `channelName?`, `topic?`, `correlationId?`, `sourceRid?`, `targetRid?`, `spotRid?`, `actorId?`, `messageSizeBytes?` |
-| observer | `ZLinkMessageFlowObserver.onMessageFlow(flow): Promise<void> \| void` |
-| 진단 옵션 | `ZLinkDiagnosticsOptions` { `messageFlow`, `sampleRate`, `includeMessageSizes`, `logFile?`, `label?` } |
+| 로그 모드 | `ZLinkMessageFlowLogMode` { `"off"`, `"errors"`(기본), `"normal"`, `"detailed"` } |
+| outcome | Structured record의 `outcome`: `succeeded`, `failed`, `backpressured`, `dropped`, `cancelled`, `shutdown` |
+| 기록 경로 | Application이 구성한 standard logger/telemetry provider가 `zlink.message_flow`와 `zlink.dispatch_error`를 받는다. |
+| 진단 옵션 | `ZLinkDiagnosticsOptions` { `messageFlow`, `sampleRate`, `includeMessageSizes` } |
 | 런타임 토글 | host `ZLinkMessageFlowControl.setMessageFlowMode(mode)` / `messageFlowMode()` |
 | 공통 개념 | Node.js |
 | meter 이름(상수) | `ZLinkMeters.Framework` = `'zlink.framework'` |
@@ -458,7 +457,7 @@ dotnet 의 문서 회귀 테스트처럼, Node 에서도 구현 기준 문서가
 | 커스텀(선택) | `ZLinkModule.forRoot(zlinkFramework().options({ metrics: { meterProvider } }).build())`로 provider 주입 |
 | 공통 개념 | Node.js |
 | 생성 게이트 | 기존 `configureDispatch().messageFlow(...)` 설정을 그대로 사용한다. 별도 flow id 설정은 없다. |
-| event 필드(추가) | `readonly flowId: string`, `readonly flowOrigin: ZLinkFlowOrigin` — 오류 이벤트에도 동일한 root 값 |
+| record field | `flow_id`, `flow_origin` — dispatch-error record에도 동일한 root 값 |
 | 공통 개념 | Node.js |
 | 자동 종료(기본) | framework가 `onApplicationShutdown()`에서 진행 중인 host 종료에 합류하거나 `Shutdown`을 시작한다 |
 | `Shutdown` 순서 | 신규 application 수락 차단 → 이미 수락한 실행 차례와 request 완료 → 진행 중인 relocation·STREAM barrier 확인 → local object·ownership·peer resource 정리 → 필요하면 제한된 강제 종료 |

@@ -149,8 +149,8 @@ stale owner와 섞이지 않는가.
 
 **검증 질문:** Public Relocate 완료 뒤 후속 request가 target에서 복원된 state를 사용하는가.
 
-- 시작 조건: Spot은 A에서 Ready이고 state version을 조회할 수 있다.
-- 절차: Public host relocation을 B로 시작하고 terminal success를 기다린 뒤 state request를 보낸다.
+- 시작 조건: Spot은 A에서 Ready이고 state version을 조회할 수 있으며 B만 eligible target이다.
+- 절차: Target 인자 없는 public host relocation을 시작하고 terminal success를 기다린 뒤 state request를 보낸다.
 - 검증: 후속 handler는 B에서만 실행되고 Spot identity와 state version이 유지된다. Relocation 전 수락된 operation ID도 전체 evidence에서 한 번만 처리된다.
 - 계약 근거: [Location runtime](../spec/21-location-runtime.ko.md)과
   [Graceful drain과 handoff](../spec/28-graceful-drain-handoff.ko.md)
@@ -296,8 +296,8 @@ bounded terminal을 가지는가.
 - 절차: 서로 다른 Spot ID에 대한 유한한 cold requests를 동시에 시작하고 gate를 한 번에 하나씩 연다.
 - 검증: 동시에 실행 중인 factory·initialize는 application evidence에서 항상 1개 이하이며 각 request는
   reply 또는 정식 failure 하나로 끝난다. Requests의 admission 순서나 내부 waiter 수는 판정하지 않는다.
-- 계약 근거: [Framework API §5](../spec/06-framework-api.ko.md)와
-  [비동기 실행 정책](../spec/05-async-execution-policy.ko.md)
+- 계약 근거: [Framework API의 RouteMesh activation admission](../spec/06-framework-api.ko.md#3-routemesh-등록)과
+  [Object placement와 activation](../spec/05-async-execution-policy.ko.md#object-placement와-activation)
 
 #### IS-E2E-18 Cross-language
 
@@ -464,8 +464,8 @@ Close가 시작된 Spot은 새 업무를 기존 instance queue에 수락해서�
 
 **검증 질문:** Relocate와 concurrent request가 중복 없이 terminal 하나로 끝나는가.
 
-- 시작 조건: Spot은 Mesh A에서 Ready이고 Mesh B가 compatible target을 제공한다.
-- 절차: B로 Relocate를 시작하고 동시에 고유 operation ID request를 보낸다.
+- 시작 조건: Spot은 Mesh A에서 Ready이고 Mesh B만 compatible eligible target이다.
+- 절차: Target 인자 없는 host Relocate를 시작하고 동시에 고유 operation ID request를 보낸다.
 - 검증: Relocate와 request가 각각 terminal 하나로 끝나며 request handler는 A 또는 B 한 곳에서만 한 번 실행된다.
 - 계약 근거: [Location runtime](../spec/21-location-runtime.ko.md)과
   [Graceful drain과 handoff](../spec/28-graceful-drain-handoff.ko.md)
@@ -474,14 +474,19 @@ Close가 시작된 Spot은 새 업무를 기존 instance queue에 수락해서�
 
 우선순위: `P1`
 
-같은 Spot을 서로 다른 target으로 동시에 옮기려는 요청은 owner를 둘로 만들면 안 된다.
+같은 Spot에 대한 concurrent host Relocate 호출은 owner를 둘로 만들면 안 된다.
 
-**검증 질문:** Concurrent Relocate operations 뒤 public 조회가 owner 하나를 반환하는가.
+**검증 질문:** Same-option waiter는 join하고 incompatible concurrent call은
+`Blocked/OperationInProgress`로 끝나며 owner 하나를 유지하는가.
 
-- 시작 조건: Source와 compatible targets 두 개가 Ready다.
-- 절차: 서로 다른 target을 지정한 Relocate operations를 동시에 시작한다.
-- 검증: 각 operation은 terminal 하나를 받고 최종 public 조회는 Ready owner 하나다. 후속 request handler도 그 owner에서만 실행된다.
-- 계약 근거: [Location runtime](../spec/21-location-runtime.ko.md)
+- 시작 조건: Source와 compatible eligible targets가 Ready이며 same effective option과 incompatible option
+  fixtures를 별도로 준비한다.
+- 절차: Fresh variant A에서는 같은 effective option의 target 인자 없는 host Relocate waiter를 동시에
+  시작한다. Fresh variant B에서는 first operation이 pending일 때 incompatible option call을 시작한다.
+- 검증: Variant A callers는 shared operation에 join하여 같은 terminal을 받는다. Variant B의 incompatible
+  call은 `Blocked/OperationInProgress`로 한 번 끝나며 first option을 바꾸지 않는다. 두 variant 모두 최종
+  public 조회는 Ready owner 하나이고 후속 request handler도 그 owner에서만 실행된다.
+- 계약 근거: [Graceful drain — concurrent 호출과 cancellation](../spec/28-graceful-drain-handoff.ko.md#6-concurrent-호출과-cancellation)
 
 #### IS-E2E-31 Remote selection loser
 

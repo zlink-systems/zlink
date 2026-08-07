@@ -9,7 +9,7 @@ One-way send and publish don't return a payload. Normal completion
 means that operation family's source admission accepted the message —
 it doesn't mean remote handler execution finished. If the queue can't
 accept immediately, it waits for capacity within the public send
-deadline, and ends with exactly one of timeout, cancellation, or
+deadline, and ends with exactly one of timeout or
 Shutdown, whichever is confirmed first.
 
 This config verifies the completion and failure of the public one-way
@@ -21,7 +21,7 @@ socket buffer size, and a test-only snapshot barrier aren't used.
 ## 1. Verification Scope
 
 - Immediate admission, and admission after capacity recovers
-- Bounded pending admission, deadline, cancellation, and Shutdown
+- Bounded pending admission, deadline, Shutdown, and cancellation in supporting languages
 - One-way semantics for Node/Channel/Spot/Actor/Session/STREAM/classic
   fanout
 - Logical Multicast's partial delivery and the absence of a per-target
@@ -209,29 +209,29 @@ ShuttingDown get rejected with the formal terminal?
   rejection result, and the Shutdown variant in `ShuttingDown`, with
   no target handler evidence.
 - Detailed behavior: verifies
-  [Graceful Drain §4](../spec/28-graceful-drain-handoff.en.md#4-conditions-checked-before-selecting-a-target)
-  and
-  [§5](../spec/28-graceful-drain-handoff.en.md#5-selecting-a-target-matching-the-mode).
+  [Host State And Completion Results](../spec/28-graceful-drain-handoff.en.md#3-host-state-and-completion-results)
+  and [Admission Per State](../spec/28-graceful-drain-handoff.en.md#12-admission-per-state).
 
-#### SA-E2E-07 Distinguish A Cancellation Winner From A Publish Commit
+#### SA-E2E-07 Distinguish An Admission Terminal From A Publish Commit
 
 Priority: `P1`
 
-If cancellation ends a pending admission first, the handler must not
-run. Once Logical Multicast's public submit has already completed
-normally, a caller cancellation doesn't roll back a fanout already
-started.
+If timeout or Shutdown ends pending admission first, the handler must
+not run. Languages with public admission cancellation also run that
+variant. Once Logical Multicast submit completes normally, ending the
+caller scope does not roll back fanout already started.
 
-**Verification question:** Does a pre-commit cancellation block
-delivery, while a cancellation after a normal publish terminal doesn't
-cancel existing delivery?
+**Verification question:** Do pre-commit timeout/Shutdown and supported-language cancellation block
+delivery, while ending the caller scope after a normal publish terminal does not cancel existing
+delivery?
 
 - Start condition: Configure a normal send to become pending, and a
   multicast target handler to wait at the application gate.
-- Procedure: Cancel the pending send awaitable. Publish a separate
-  multicast, receive a normal terminal, then cancel the caller scope
+- Procedure: End the pending send by timeout or Shutdown; supporting
+  languages run cancellation on a separate fixture. Publish a separate
+  multicast, receive a normal terminal, then end the caller scope
   and open the handler gate.
-- Verification: There's no cancelled send marker. The multicast marker
+- Verification: There's no terminal send marker. The multicast marker
   is processed at most once at the accepted target, and the public
   publish terminal doesn't change.
 - Detailed behavior: verifies
@@ -416,16 +416,17 @@ Actor relay use the same deadline and non-replay rule?
   target evidence appears once each. Pending sends are
   `DeadlineExceeded` and don't replay after a later capacity recovery.
 - Detailed behavior: verifies
-  [Session Actor Dispatch §5](../spec/20-session-actor-dispatch.en.md#5-actor-relocation-route-barrier)
-  and
-  [Error Model §4](../spec/32-framework-error-model.en.md#4-send-completion-and-failure).
+  [One-Way Submit](../spec/05-async-execution-policy.en.md#13-one-way-submit),
+  [Admission Deadline](../spec/05-async-execution-policy.en.md#14-admission-deadline), and
+  [Session Actor Inbound Dispatch](../spec/20-session-actor-dispatch.en.md#3-inbound-dispatch-and-reply).
 
 #### SA-E2E-16 Keep Server Stream Send Order
 
 Priority: `P0`
 
 Server sends accepted on the same Stream Session must keep the
-application submission order. A send that failed by deadline must not
+application submission order. A send that failed through its public
+per-call `Timeout(...)` modifier must not
 later show up at the client.
 
 **Verification question:** Does the Stream client receive only the
@@ -433,8 +434,8 @@ successful sequence in submission order?
 
 - Start condition: The public stream connector is connected to the
   server Session, and the server send HWM is set small. Keep the
-  server send gate closed, and set a long deadline for the success
-  marker and a shorter deadline for the `timeout` marker.
+  server send gate closed, and set a long call timeout for the success
+  marker and a shorter timeout for the `timeout` marker.
 - Procedure: Start server sends in order `1`, `timeout`, `2`, `3`.
   After confirming the `timeout` operation ended by deadline, open the
   gate before the long deadline ends.
@@ -442,15 +443,17 @@ successful sequence in submission order?
   matches the source's successful-terminal order with no duplicates.
   The `timeout` marker doesn't arrive at the client.
 - Detailed behavior: verifies
-  [Stream Session §5](../spec/19-stream-session.en.md#5-codec-layer-separation).
+  [Async Execution — Per-STREAM-Send-Call Timeout](../spec/05-async-execution-policy.en.md#per-stream-send-call-timeout) and
+  [Stream Session Codec-Layer Separation](../spec/19-stream-session.en.md#5-codec-layer-separation).
 
 #### SA-E2E-17 A Stream Reply Token Is Used Only Once
 
 Priority: `P0`
 
 A request reply token is used by whichever valid first reply call
-uses it. Even if the first call ends in timeout or cancellation, the
-same token can't be used again.
+uses it. Even if the first call ends in normal completion, socket send
+timeout, or Shutdown, the same token cannot be reused. Cancellation is
+an additional variant only in supporting languages.
 
 **Verification question:** Of two calls on the same reply token, does
 only one start admission, with the client reply also at most one?
@@ -459,10 +462,11 @@ only one start admission, with the client reply also at most one?
   handler receives the public reply token.
 - Procedure: Build two reply calls with the same token and start them
   at an application barrier simultaneously. Repeat the normal,
-  timeout, and cancellation variants on fresh requests.
+  socket-send-timeout and Shutdown variants on fresh requests, plus
+  cancellation in supporting languages.
 - Verification: For each request, only one call gets a normal or first
   terminal, and the other gets a local invalid-state error. The client
-  reply is at most one, and reusing a timed-out/cancelled token doesn't
+  reply is at most one, and reusing a terminal token doesn't
   produce a reply.
 - Detailed behavior: verifies one-shot state from
   [Error Model §3](../spec/32-framework-error-model.en.md#3-errors-checkable-before-the-call).
@@ -497,8 +501,9 @@ ready member?
 
 Priority: `P0`
 
-An operation that ended in timeout, cancellation, or Shutdown doesn't
-return to a pending state even after the route recovers.
+An operation that ended in timeout, connection loss, or Shutdown does
+not return to pending after route recovery. Languages with public
+admission cancellation also run that variant.
 
 **Verification question:** After route recovery, is the previous
 marker not delivered, with only the new operation processed?

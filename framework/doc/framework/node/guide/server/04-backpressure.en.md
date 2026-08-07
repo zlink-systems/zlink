@@ -501,7 +501,7 @@ is checked separately in [§6](#6-framework-runtime-coverage).
 ```typescript
 // Node sets the level as a message flow log mode.
 builder.configureDispatch()
-  .messageFlow(ZLinkMessageFlowLogMode.ErrorsOnly); // Default — records errors and backpressure.
+  .messageFlow("errors"); // Default — records errors and backpressure.
 ```
 
 If `backpressured` shows up in the message flow record, it means waiting for a send slot

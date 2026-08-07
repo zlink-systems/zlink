@@ -40,6 +40,25 @@ difference, no per-language sample document is created.
 > servers share one TypeScript client with the same wire contract. It verifies `ws`/`wss`,
 > request/reply, push, reconnect, and explicit flow propagation in an actual Chromium.
 
+### Relocation Scope By Sample
+
+Relocation isn't a shared completion criterion for every sample. Each factory selects exactly one
+support policy, and a sample verifies only the scope below.
+
+| Sample | Relocation scope | Factory policy and resources |
+|---|---|---|
+| Bingo | Verifies planned relocation of a room `SpotWide` unit and its member Actors. | The Matchmaker Instance Spot uses `RecreateOnRelocation`; the Room Spot and Player Actor use `PreserveStateWith`. It requires separate Location and Relocation Stores. |
+| ZoneWorld | Verifies cross-node Player Actor relocation when a player crosses a zone boundary. | The Player Actor uses `PreserveStateWith`; Zone Spots that don't move use `DisableRelocation`. It requires separate Location and Relocation Stores. |
+| ShoppingMall | Verifies resuming from the next event-sourced step after planned `OrderWorkflowSpot` relocation. | Uses `RecreateOnRelocation` and a separate Relocation Store. |
+| GameQuest | Verifies cold activation of a Missing Instance Spot and a new generation after explicit close. | `PlayerQuestSpot` uses `DisableRelocation`. A separate Relocation Store is still required for the Instance activation record. |
+| DeliveryDispatch | Doesn't verify planned relocation. | Every Actor and Spot factory uses `DisableRelocation`; no Relocation Store is registered. |
+| SupportChat | Doesn't verify planned relocation. | Conversation Spot and Actor factories use `DisableRelocation`; no Relocation Store is registered. |
+| TicTacToe | Doesn't verify planned relocation. | Room Spot and Player Actor factories use `DisableRelocation`; no Relocation Store is registered. |
+
+The Location and Relocation Stores may use the same Redis deployment, but their providers and key
+prefixes stay separate. They own different contracts: authority lookup and relocation-payload
+retention.
+
 ## Channel Roles And The Physical Topology Standard
 
 A Channel send/request specifies its target with a single ChannelName. The samples don't add an
@@ -164,8 +183,8 @@ The API converts the player level into a bounded bucket and sends a request to t
 `InstanceSpot("bingo.matchmaker")` and `InMesh("bingo.matchmaking")` intent. The Instance Spot
 processes requests of the same bucket turn by turn, selecting or newly creating an open room
 reservation in Redis. Redis owns the actual state, and the Instance Spot uses the
-`RecreateOnRelocation` policy. When the idle timer expires, the Spot internally calls
-`Context.CloseAsync()`.
+`RecreateOnRelocation` policy. When the idle timer expires, the Spot context starts its public
+explicit-close operation. The exact method name belongs to each language's exact interface.
 
 The Redis match reservation owns the stable RoomId and the same RoomSettings. The first request and
 any concurrently arriving requests all receive the same reservation, and the API calls
@@ -194,11 +213,11 @@ Entry Spot and PerActor User Spot don't move Spot application state. The Framewo
 stateless shell of the same SpotId at the target and moves Actors one at a time. The Application
 manages only the Actor adapter's state, and the Spot doesn't restore a list of ActorRefs.
 
-A sample where the SpotWide factory chose the `ApplicationSignaled` boundary registers
-`RelocationReady().Defer()` during a safe business turn. The Framework calls
-`OnRelocationReadyCompletedAsync` regardless of whether relocation actually occurs. The Application
-starts the next round only after this callback finishes. An example that calls `Defer()` on the
-default `AnyTurnBoundary` isn't built.
+A sample that selects an application-signaled boundary for a SpotWide factory registers the public
+operation that defers relocation readiness during a safe business turn. The Framework calls the
+readiness-completed callback regardless of whether relocation actually occurs. The Application
+starts the next round only after this callback finishes. No example defers readiness under the
+default any-turn boundary. Each language's exact interface owns the exact API names.
 
 [Message Follow](../spec/21-location-runtime.en.md#63-delivering-a-message-arriving-at-a-previous-owner-to-the-new-owner)
 is a feature that delivers an Actor/Spot message arriving at the previous node right after an owner

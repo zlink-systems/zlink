@@ -1038,17 +1038,10 @@ public final class ZLinkSpotRuntime
                 var intent =
                     new ZLinkInternalMeshNode.UserSpotCreateIntent(
                         spotId, stableType, fence, deadline);
-                CompletionStage<ZLinkInternalMeshNode.UserSpotCreateResponse> targetCreate;
-                try {
-                    ensureManualObjectPeer(meshName, source, target);
-                    targetCreate = source.requestUserSpotCreate(
-                        target.rid(), intent, timeout);
-                } catch (RuntimeException error) {
-                    return locations.abort(reservation, () -> false)
-                        .thenCompose(ignored ->
-                            CompletableFuture.failedFuture(error));
-                }
-                return targetCreate
+                return ensureManualObjectPeer(
+                        meshName, source, target, deadline)
+                    .thenCompose(ignored -> source.requestUserSpotCreate(
+                        target.rid(), intent, timeout))
                     .exceptionallyCompose(error ->
                         locations.abort(reservation, () -> false)
                             .thenCompose(ignored ->
@@ -1082,14 +1075,15 @@ public final class ZLinkSpotRuntime
             });
     }
 
-    private void ensureManualObjectPeer(
+    private CompletionStage<Void> ensureManualObjectPeer(
         String meshName,
         ZLinkInternalMeshNode source,
         systems.zlink.framework.runtime.internal.locations
-            .ZLinkMeshNodeDescriptor target) {
+            .ZLinkMeshNodeDescriptor target,
+        long deadline) {
         if (source.status().routingId().equals(target.rid())
             || manualRouterPeerNodeRids.contains(target.rid())) {
-            return;
+            return CompletableFuture.completedFuture(null);
         }
         boolean configured = frameworkRegistration.meshNodes().stream()
             .filter(node -> node.meshName().equals(meshName))
@@ -1097,16 +1091,28 @@ public final class ZLinkSpotRuntime
             .anyMatch(peer -> peer.expectedRoutingId() == null
                 && peer.endpoint().equals(target.endpoint()));
         if (!configured) {
-            return;
+            return CompletableFuture.completedFuture(null);
         }
         ManualObjectPeerIntent current = manualObjectPeerIntents.get(target.rid());
-        ManualObjectPeerIntent ensured = ensureManualObjectPeerIntent(
-            source,
-            target,
-            current)
-            .orElseThrow(() -> new IllegalStateException(
-                "previous manual object peer connection is closing"));
-        manualObjectPeerIntents.put(target.rid(), ensured);
+        try {
+            java.util.Optional<ManualObjectPeerIntent> ensured =
+                ensureManualObjectPeerIntent(source, target, current);
+            if (ensured.isPresent()) {
+                manualObjectPeerIntents.put(target.rid(), ensured.orElseThrow());
+                return CompletableFuture.completedFuture(null);
+            }
+        } catch (RuntimeException failure) {
+            return CompletableFuture.failedFuture(failure);
+        }
+        if (System.currentTimeMillis() >= deadline) {
+            return CompletableFuture.failedFuture(new IllegalStateException(
+                "manual object peer did not complete liveness close before the placement deadline"));
+        }
+        return CompletableFuture.supplyAsync(
+                () -> null,
+                CompletableFuture.delayedExecutor(10, TimeUnit.MILLISECONDS))
+            .thenCompose(ignored -> ensureManualObjectPeer(
+                meshName, source, target, deadline));
     }
 
     static java.util.Optional<ManualObjectPeerIntent>
@@ -1117,6 +1123,7 @@ public final class ZLinkSpotRuntime
         ManualObjectPeerIntent current) {
         if (current != null
             && current.matches(target)
+            && !source.isPeerConnectionClosing(current.connectionIntentId())
             && source.peers().stream().anyMatch(peer ->
                 peer.connectionIntentId() == current.connectionIntentId()
                     && (peer.state() == MeshPeerState.ADMITTED

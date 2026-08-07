@@ -172,7 +172,6 @@ then.
 | `route_mesh_runtime_t` | A MeshNode's status snapshot and observation |
 | `route_mesh_runtime_options_t` | Adjusting weight while running |
 | `client_server_runtime_t` · `fanout_runtime_t` | That channel's status |
-| `message_flow_observer_t` | Receiving message flow records |
 | `framework_exception_t` | A failure. `kind ()` · `is_retriable ()` |
 | `logger_t<TOwner>` | The logger received via DI |
 

@@ -534,6 +534,12 @@ public readonly record struct ZLinkTimerTick(
     ulong SkippedTicks);
 ```
 
+When timer options are omitted, `OverrunPolicy` defaults to `SkipLateTicks`
+and `MaxCatchUpTicks` defaults to `1`. `MaxCatchUpTicks` is used and validated
+in `1..Int32.MaxValue` only when `OverrunPolicy == CatchUpBounded`. Other
+policies do not use or validate this value against that range. This prose does
+not change the existing `ZLinkTimerOptions` public surface.
+
 A Framework timer is a logical registration belonging to the owner
 Actor/Spot. On cross-node relocation, the timer name, handler type,
 period, `ZLinkTimerOptions`, scheduling cursor, and the pending tick at
@@ -731,8 +737,11 @@ and hash before reservation.
 The first `InstanceSpot(...)` call against Missing authority records
 kind, stable type, and initial Mesh in the creation intent. A message
 against Ready authority resolves the current owner using only SpotId.
-Reactivation after owner loss uses the intent stored in authority, and a
-Missing call with no marker doesn't create a new intent. A public
+The stored intent is used only to resume the first cold activation on
+the same target node and lifecycle before its terminal completion is
+recorded. Termination or lease expiry of a steady `Ready` owner doesn't
+become Missing or cold activation on another node; it ends as
+`Unavailable`. A Missing call with no marker doesn't create a new intent. A public
 activation driver, address, handle, resolver, and unbounded list aren't
 provided. An operational query is owned by the Location Runtime's paged
 query with page size 1..1000 and encoded page at most 4 MiB.

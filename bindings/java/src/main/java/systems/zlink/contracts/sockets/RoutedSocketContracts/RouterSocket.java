@@ -17,6 +17,12 @@ public interface RouterSocket extends Socket {
     void unbind(String endpoint);
     void disconnect(String endpoint);
     void disconnectRid(RoutingId routingId);
+    /**
+     * Disconnects only the physical transport pair identified by a monitor
+     * event from this router.
+     */
+    void disconnectTransportPair(long transportPairId,
+                                 long transportPairGeneration);
     void setRoutingId(RoutingId rid);
     RoutingId getRoutingId();
     SendOperation send(RoutingId rid);

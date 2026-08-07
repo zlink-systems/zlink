@@ -619,7 +619,7 @@ ServerServer(SS) transport는 listener message-size setter를 제공하지 않�
 ClientServer는 [Framework API §6](06-framework-api.ko.md)가 정의하는 일반 application
 listener의 `MaxMessageSize` 계약을 유지한다. StreamNode의 `64 KiB` 기본값이나 Core STREAM의
 방향별 규칙을 ClientServer에 적용하지 않는다. 이 절에서 추가하지 않는 것은 RouteMesh SS의
-별도 listener 설정이며, StreamNode의 Core STREAM inbound 상한은 [STREAM session §4](19-stream-session.ko.md#4-stream-socket-message-size)가
+별도 listener 설정이며, StreamNode의 Core STREAM inbound 상한은 [STREAM session §7](19-stream-session.ko.md#7-등록-모델)가
 정의한다.
 
 ## 9. Classic fanout과의 경계

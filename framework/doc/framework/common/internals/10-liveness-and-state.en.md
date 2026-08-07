@@ -66,6 +66,22 @@ A STREAM session's keep-alive signal is a **separate signal for a
 different purpose**, and doesn't substitute for mesh peer liveness
 judgment.
 
+### A Liveness Judgment Doesn't Change Authority
+
+Peer liveness and owner-lease checks are inputs for deciding whether
+the current owner can be used. That result alone doesn't delete a
+`Ready` authority from the Location Store or turn it into `Missing`.
+When authority remains but the owner can't be used, the Instance Spot
+resolver classifies it as `Unavailable`, and the caller operation
+ends with `Unavailable`.
+
+Authority release is owned by the application's explicit `Close`,
+`IdleEvicted` cleanup, or another formal lifecycle operation. The
+liveness subsystem doesn't start a creation reservation, cold
+activation, relocation, or owner takeover on another node. Keeping
+this boundary prevents connection-failure detection from leaking into
+object-creation policy.
+
 ## 2. An Unready Target Isn't Blocked From Calls — It's Excluded From Candidates
 
 This is where the four implementations diverged the most.
@@ -270,6 +286,10 @@ message midway. Changing it would leave half a message's record.
   it's judged dropped once the judgment deadline passes.
 - The check signal and its response don't reach the application
   handler.
+- Owner-liveness failure alone doesn't release a `Ready` authority or
+  turn it into `Missing`.
+- The liveness subsystem doesn't start an Instance creation
+  reservation, cold activation, or owner takeover.
 - Even with not a single target ready, the runtime starts and becomes
   `serving`.
 - Calling on a channel with no ready target only fails that call, and

@@ -443,6 +443,9 @@ used is owned by the socket that call uses.
 The last row is an especially easy place to get confused. **A reply doesn't use the request
 timeout the caller specified.** Just because the client decided to wait 5 seconds doesn't
 mean the server's reply submission waits 5 seconds.
+A STREAM one-way send can use a per-call timeout modifier to shorten this wait. It never extends the
+socket timeout; the earlier deadline wins, with no late admission or replay afterward. This modifier
+does not apply to a reply.
 
 If unspecified, each path uses 1 second. The value is rounded up to milliseconds and must be
 `1` or greater — `0`, a negative number, or infinity are **rejected at host startup** —
@@ -664,7 +667,7 @@ is checked separately in [§6](#6-framework-runtime-coverage).
     ```cpp
     // C++ sets the level as a message flow log mode.
     options.configure_dispatch ()
-      .message_flow (message_flow_log_mode_t::errors_only); // Default — records errors and backpressure.
+      .message_flow (message_flow_log_mode_t::errors); // Default — records errors and backpressure.
     ```
 
 === "Java"
@@ -672,7 +675,7 @@ is checked separately in [§6](#6-framework-runtime-coverage).
     ```java
     // Java sets the level as a message flow log mode.
     options.configureDispatch()
-        .messageFlow(ZLinkMessageFlowLogMode.ERRORS_ONLY); // Default — records errors and backpressure.
+        .messageFlow(ZLinkMessageFlowLogMode.ERRORS); // Default — records errors and backpressure.
     ```
 
 === "Kotlin"
@@ -680,7 +683,7 @@ is checked separately in [§6](#6-framework-runtime-coverage).
     ```kotlin
     // Kotlin uses the Java surface as-is.
     options.configureDispatch()
-        .messageFlow(ZLinkMessageFlowLogMode.ERRORS_ONLY) // Default — records errors and backpressure.
+        .messageFlow(ZLinkMessageFlowLogMode.ERRORS) // Default — records errors and backpressure.
     ```
 
 === "Node/TypeScript"
@@ -688,7 +691,7 @@ is checked separately in [§6](#6-framework-runtime-coverage).
     ```typescript
     // Node sets the level as a message flow log mode.
     builder.configureDispatch()
-      .messageFlow(ZLinkMessageFlowLogMode.ErrorsOnly); // Default — records errors and backpressure.
+      .messageFlow("errors"); // Default — records errors and backpressure.
     ```
 
 

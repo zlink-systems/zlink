@@ -98,8 +98,8 @@ Follow these principles so each document's content doesn't overlap.
 - If a new common behavior is needed, first check whether a contract basis already exists
   in the common spec.
 - The framework's target public contract is fixed in the formal spec and the per-language
-  exact interface before it's implemented. The gap against the current implementation is
-  tracked only in `spec/30-implementation-gap.en.md`.
+  exact interface before it is implemented. Current implementation progress is not recorded
+  in public contract documentation.
 - A finished business flow goes into `sample/`; implementation verification requirements
   go into `e2e/`.
 
@@ -204,8 +204,8 @@ following document set.
 | Registry topic document | Explains embedded/standalone, the query surface, and topology queries. |
 
 Even if some axis isn't yet implemented for language reasons, the target contract is never
-dropped from the formal spec. The gap against the current implementation and follow-up
-plans are tracked only in `spec/30-implementation-gap.en.md`.
+dropped from the formal spec. Current implementation progress and follow-up work are outside
+the scope of public contract documentation.
 
 ### 6.3.1 Representative Framework Baseline
 
@@ -279,8 +279,8 @@ brought down to the language surface.
 The framework's target public contract is fixed first in the common spec and the
 per-language exact interface, even before it's implemented. The contract is never reduced
 to the current languages' lowest common denominator just because it isn't implemented yet.
-The gap between the current implementation and the target contract, the reason for any
-omission, and follow-up plans are tracked only in `spec/30-implementation-gap.en.md`.
+Current implementation progress, reasons for omissions, and follow-up work are not recorded
+in public contract documentation.
 
 A new public API candidate with no basis in the common spec or guide isn't added directly
 to the formal contract — it's reviewed in a separate draft first. Once approved as a

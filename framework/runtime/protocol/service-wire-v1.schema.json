@@ -452,7 +452,8 @@
     },
     {
       "kind": "complete-message-bound-integrity",
-      "admissionType": "service-admission",
+      "admissionType": "client-server-admission",
+      "topology": "clientServer",
       "wireField": "normalizedEffectiveMaxMessageBytes",
       "range": "1..4294967295",
       "normalization": {
@@ -467,6 +468,15 @@
       "enforcement": "immediately-after-complete-envelope-length-prefix-before-allocation",
       "payloadLimit": "negotiated-complete-message-bound-minus-actual-envelope-overhead",
       "mismatch": "oversize-protocol-error-and-connection-not-ready"
+    },
+    {
+      "kind": "route-mesh-message-size-integrity",
+      "admissionType": "route-mesh-admission",
+      "topology": "routeMesh",
+      "frameworkMessageSizeSetting": "forbidden",
+      "frameworkMessageSizeLimit": "none",
+      "admissionMessageSizeField": "forbidden",
+      "remainingBounds": ["schema-and-wire-representation", "application-hwm", "mailbox-byte-budget"]
     },
     {
       "kind": "participant-sequence-domain",
@@ -943,7 +953,7 @@
       "connection": "current-admitted-physical-connection-only",
       "immutableExact": [
         "topologyKind", "meshName-or-channelName", "securityIdentity", "endpoint-connection-identity",
-        "rid", "lifecycleGeneration", "normalizedEffectiveMaxMessageBytes", "channelMembershipKeys",
+        "rid", "lifecycleGeneration", "clientServer.normalizedEffectiveMaxMessageBytes", "channelMembershipKeys",
         "protocolCapabilities", "spotTypes", "statefulCapabilities", "applicationVersion"
       ],
       "revision": "strictly-increasing-same-revision-identical-bytes-idempotent-lower-stale-same-revision-different-protocol-error",
@@ -1457,8 +1467,14 @@
       "minimumBytes": 0,
       "maximumBytes": { "$bound": "applicationPayloadAbsoluteBytes" },
       "runtimeMaximumBytes": {
-        "$negotiatedBound": "effectiveCompleteMessageBytesMinusActualEnvelopeOverhead",
-        "absoluteMaximum": { "$bound": "applicationPayloadAbsoluteBytes" }
+        "routeMesh": {
+          "frameworkMessageSizeLimit": "none",
+          "absoluteMaximum": { "$bound": "applicationPayloadAbsoluteBytes" }
+        },
+        "clientServer": {
+          "$negotiatedBound": "effectiveCompleteMessageBytesMinusActualEnvelopeOverhead",
+          "absoluteMaximum": { "$bound": "applicationPayloadAbsoluteBytes" }
+        }
       }
     },
     {
@@ -1468,8 +1484,14 @@
       "length": { "$ref": "u32", "covers": "body" },
       "maximumEncodedBytes": { "$bound": "wireU32CompleteMessageBytes" },
       "runtimeMaximumEncodedBytes": {
-        "$negotiatedBound": "effectiveCompleteMessageBytes",
-        "absoluteMaximum": { "$bound": "wireU32CompleteMessageBytes" }
+        "routeMesh": {
+          "frameworkMessageSizeLimit": "none",
+          "absoluteMaximum": { "$bound": "wireU32CompleteMessageBytes" }
+        },
+        "clientServer": {
+          "$negotiatedBound": "effectiveCompleteMessageBytes",
+          "absoluteMaximum": { "$bound": "wireU32CompleteMessageBytes" }
+        }
       },
       "body": [
         { "name": "packetName", "$ref": "packet-name" },
@@ -2875,7 +2897,6 @@
       "fields": [
         { "name": "meshName", "$ref": "text8" },
         { "name": "securityIdentity", "$ref": "text8" },
-        { "name": "normalizedEffectiveMaxMessageBytes", "$ref": "nonzero-u32" },
         { "name": "lifecycleGeneration", "$ref": "nonzero-u64" },
         { "name": "descriptorRevision", "$ref": "nonzero-u64" },
         { "name": "advertisedEndpoint", "$ref": "endpoint" },

@@ -16,8 +16,8 @@ commands, private connection IDs, Store records, and internal relocation queues 
 ## 1. Verification Scope
 
 - Server restart, endpoint replacement, reconnect bursts, and rolling update
-- Cancellation, in-flight crash, graceful shutdown, and runtime weight changes
-- Repeated lifecycle, Store independence, fanout load, and observer failure
+- Common timeout/connection loss, cancellation in supporting languages, in-flight crash, graceful shutdown, and runtime weight changes
+- Repeated lifecycle, Store independence, fanout load, and telemetry/logger provider failure
 - Orderly disconnect, half-open connections, and terminal-once completion
 - Relocation preflight, Session-binding fencing, in-move handoff ordering, and abort restoration
 
@@ -144,20 +144,22 @@ process requests?
 
 ### Track B — Distinguish In-Flight Operations From New Admission
 
-#### RL-B1 A Follow-Up Request Is Processed After A Client Cancellation
+#### RL-B1 A Follow-Up Request Is Processed After A Waiter Ends
 
 Priority: `P1`
 
-Even if the caller cancels a pending request's await, a late server reply must not complete the next
-request.
+Even if a pending request's await ends first, a late server reply must not complete the next request.
+The cancellation variant runs only where the exact interface supports waiter cancellation; other
+languages use timeout and connection loss.
 
-**Verification question:** After a canceled request, does the same client's new request receive only
+**Verification question:** After the previous waiter reaches a terminal, does the same client's new request receive only
 its own reply?
 
 - Starting condition: The provider handler holds the first request's reply on an application gate.
-- Procedure: After the first request reaches the handler, the caller's await is canceled. A request
+- Procedure: After the first request reaches the handler, supporting languages cancel the await;
+  other languages produce timeout or connection loss. A request
   with a new operation ID is sent and its reply received, then the first gate is released.
-- Verification: The first awaitable is a cancellation, and the second request receives its own
+- Verification: The first awaitable has its variant's terminal, and the second request receives its own
   payload reply exactly once. The late first reply does not change the second's completion.
 - Detailed behavior: verifies [Error Model §5](../spec/32-framework-error-model.en.md).
 
@@ -193,7 +195,7 @@ accepted reply is preserved?
   released.
 - Verification: The accepted request completes exactly once with B's reply. New requests after the
   seal go to A, and after B's terminal, public status no longer keeps B as a ready target.
-- Detailed behavior: verifies [Host Maintenance §10](../spec/28-graceful-drain-handoff.en.md).
+- Detailed behavior: verifies [The Race Between Shutdown And Relocate](../spec/28-graceful-drain-handoff.en.md#11-the-race-between-shutdown-and-relocate).
 
 #### RL-B4 Exclude From New Selection With Runtime Weight 0, Then Restore
 
@@ -228,7 +230,7 @@ with B's reply?
   released.
 - Verification: The slow request receives B's reply exactly once, and new requests are processed by
   A.
-- Detailed behavior: verifies connection retention and weight update in [Channel Topology §5.1](../spec/07-channel-topology.en.md).
+- Detailed behavior: verifies connection retention and weight update in [A Weight Change Doesn't Rebuild The Connection](../spec/07-channel-topology.en.md#52-a-weight-change-doesnt-rebuild-the-connection).
 
 #### RL-B6 Isolate One Provider's Gray Failure From Other Replies
 
@@ -267,7 +269,7 @@ the same listeners?
   a replacement is started on the same ports.
 - Verification: There are no pending public operations, the old process exits, and the replacement's
   listeners become ready.
-- Detailed behavior: verifies [Host Maintenance §10](../spec/28-graceful-drain-handoff.en.md).
+- Detailed behavior: verifies [The Race Between Shutdown And Relocate](../spec/28-graceful-drain-handoff.en.md#11-the-race-between-shutdown-and-relocate).
 
 #### RL-C2 Exclude A Crashed Provider After Its Owner Lease Expires
 
@@ -339,23 +341,27 @@ subscriber's processing not blocking another?
   Event-sequence completeness/order and drop counts are not judged.
 - Detailed behavior: verifies [Framework API §11](../spec/06-framework-api.en.md).
 
-#### RL-D2 Isolate An Observer Failure From Messaging
+#### RL-D2 Isolate A Telemetry Provider Failure From Messaging
 
 Priority: `P1`
 
-Even if the public message-flow observer throws an exception, handler dispatch must keep going, and
-the runtime error sink must report the observer failure.
+Even if an application telemetry provider throws, handler dispatch must continue. An implementation
+that records provider failure limits repeated records and uses the application's fallback logger or
+process stderr instead of the failed provider.
 
-**Verification question:** After a failing observer, do normal requests succeed with exactly one
-error-sink event?
+**Verification question:** After a failing telemetry provider, do normal requests succeed while
+failure reporting remains limited and uses the fallback boundary?
 
-- Starting condition: An observer and the public runtime error sink are registered.
-- Procedure: The first observer callback throws an exception, and 20 normal requests are sent.
-- Verification: All 20 replies succeed, and the error sink provides exactly one formal
-  `observer_failed` event. The event does not include the payload or exception object.
+- Starting condition: A failing telemetry provider and application fallback logger are registered,
+  and process stderr is captured.
+- Procedure: The first telemetry export throws, and 20 normal requests are sent.
+- Verification: All 20 replies succeed. If provider failures are recorded, repeated records stay
+  within the implementation-defined limit, use only the fallback logger or stderr, and do not call
+  the failed provider again. Records contain no payload, exception object, secret, or stack trace.
+  Failure of the fallback record does not change message results.
 - Detailed behavior: verifies [Message Flow Tracing §5](../spec/26-message-flow-tracing.en.md).
 
-#### RL-D3 Confirm A Dispatch Error In A Public Logging Sink
+#### RL-D3 Confirm A Dispatch Error In An Application Logger Provider
 
 Priority: `P1`
 
@@ -363,13 +369,14 @@ If the dispatch-error log is an observation contract, it must be judged by forma
 implementation-specific strings.
 
 **Verification question:** Does a request with no handler leave formal error fields in the public
-logging sink?
+logger provider?
 
-- Starting condition: A logging sink and a normal handler are registered.
+- Starting condition: An application logger provider and a normal handler are registered.
 - Procedure: A missing-handler request and a normal request are each sent once.
-- Verification: The sink provides `dispatch_error`, `no_handler`, and `reply_error` fields for the
+- Verification: The logger provider supplies `zlink.dispatch_error`, `no_handler`, and `reply_error` fields for the
   negative operation, and the normal request succeeds.
-- Detailed behavior: verifies [Runtime Monitoring §5](../spec/24-runtime-monitoring.en.md).
+- Detailed behavior: verifies [Message-Flow Attribute Inclusion Conditions](../spec/26-message-flow-tracing.en.md#32-attribute-inclusion-conditions)
+  and [Completion, Failure, And Lifetime](../spec/26-message-flow-tracing.en.md#5-completion-failure-and-lifetime).
 
 #### RL-D4 Same-Version Peers Preserve The Public Error Kind
 
@@ -463,16 +470,17 @@ request receive only its own reply?
 
 Priority: `P0`
 
-Even if admission, cancellation, disconnect, and reply happen close together, request completion must
-be exactly once.
+Even if admission, waiter termination, disconnect, and reply happen close together, request
+completion must be exactly once. The cancellation race runs only in languages whose exact interface
+supports it.
 
 **Verification question:** In three race variants, is there exactly one operation terminal, with the
 handler running at most once?
 
 - Starting condition: Handler-entered and reply-release are controlled by application signals.
-- Procedure: Connection loss/cancellation are each raced before admission, right after handler entry,
-  and right before the reply.
-- Verification: Each request ends exactly once, in reply, cancellation, `Unavailable`, or timeout. The
+- Procedure: Connection loss is raced before admission, right after handler entry, and right before
+  the reply; supporting languages also run a cancellation variant.
+- Verification: Each request ends exactly once, in reply, supported cancellation, `Unavailable`, or timeout. The
   same operation ID is not processed by a different provider.
 - Detailed behavior: verifies [Error Model §5](../spec/32-framework-error-model.en.md).
 
@@ -512,7 +520,8 @@ target-capacity/availability race?
 - Verification: When Relocate succeeds, state exists exactly once at the target. The blocked variant
   keeps the source location and state, its follow-up request succeeds, and there is no automatic
   switch to a different target.
-- Detailed behavior: verifies [Host Maintenance §6](../spec/28-graceful-drain-handoff.en.md).
+- Detailed behavior: verifies [Selecting A Target Matching The Mode](../spec/28-graceful-drain-handoff.en.md#5-selecting-a-target-matching-the-mode)
+  and [Relocation Units And Concurrency Limits](../spec/28-graceful-drain-handoff.en.md#7-relocation-units-and-concurrency-limits).
 
 #### RL-F2 A Previous Session's Message Does Not Apply To The New Binding After Rebind
 
@@ -521,14 +530,17 @@ Priority: `P0`
 Even if the Actor owner changes A→B→A, the previous Session-binding token has a different identity
 from the new binding.
 
-**Verification question:** Does an old Session's delayed relay/unbind not change the new binding and
+**Verification question:** Does an old Session's delayed relay/logical disconnect not change the new binding and
 Actor state?
 
 - Starting condition: The Actor, bound to Session S1, moves to a target owner and rebinds to a new
   Session S2.
-- Procedure: S1's connection relay and unbind are delayed with a network gate and delivered after S2
-  binding completes. A normal relay and push are then run on S2.
-- Verification: The old operations end in a stale-binding result with no Actor handler evidence. S2's
+- Procedure: Complete the S2 rebind, which submits the disconnect callback for the exact old S1
+  binding. After callback completion and tombstone recording, deliver S1's gated relay and logical
+  disconnect result. Also run callback failure, then send a normal relay and push on S2.
+- Verification: The exact old binding's disconnect callback runs at most once and is not repeated
+  after the terminal tombstone. Callback failure neither removes S2's binding nor changes Actor
+  state. Post-tombstone old operations end stale with no Actor handler evidence. S2's
   relay and push each succeed exactly once, and the current binding is S2.
 - Detailed behavior: verifies [Session Actor Dispatch §4](../spec/20-session-actor-dispatch.en.md).
 
@@ -557,12 +569,12 @@ Priority: `P0`
 A process that registers only the ClientServer Server role has no Client egress for the same
 ChannelName.
 
-**Verification question:** Does a server-only process's request return `NotFound`, while a normal
+**Verification question:** Does a server-only process's request return `NotConfigured`, while a normal
 Client request succeeds?
 
 - Starting condition: A server-only process and a separate Client-role process are ready.
 - Procedure: Both processes each start a request for the same ChannelName.
-- Verification: The server-only call is `NotFound`, and its handler does not run. The Client call is
+- Verification: The server-only call is `NotConfigured`, and its handler does not run. The Client call is
   processed exactly once by the server handler.
 - Detailed behavior: verifies [ClientServer Channel §3](../spec/09-client-server-channel.en.md).
 
@@ -583,8 +595,8 @@ target after relocation completes?
   logical IDs. The gate is released.
 - Verification: The target handler evidence is in the order `Q1, Q2, H1, H2`, and each marker appears
   exactly once. There is no application handler evidence during the restore-held window.
-- Detailed behavior: verifies [Location Runtime §8](../spec/21-location-runtime.en.md) and
-  [Graceful Drain And Handoff §8](../spec/28-graceful-drain-handoff.en.md).
+- Detailed behavior: verifies [When The Target Starts Accepting New Messages](../spec/21-location-runtime.en.md#74-when-the-target-starts-accepting-new-messages)
+  and [The Order For Relocating One Unit](../spec/28-graceful-drain-handoff.en.md#8-the-order-for-relocating-one-unit).
 
 #### RL-F6 Distinguish A Runtime Mutable Update From An Invalid Mutation
 
@@ -615,12 +627,13 @@ completion must be exactly once.
 request, does the request have exactly one terminal?
 
 - Starting condition: The Actor handler has accepted the request and waits on the reply gate.
-- Procedure: The Actor Relocate is started, and after handler state is restored at the target, the
+- Procedure: A public Actor Join starts the target-Spot membership change, and after handler state is restored at the target, the
   caller route is briefly blocked. The reply gate and route are restored.
 - Verification: The caller ends exactly once, in reply, timeout, or an unavailable result. The same
   operation ID does not duplicate-run in the application handler, and the follow-up request succeeds
   at the current target.
-- Detailed behavior: verifies [Spot Actor §8](../spec/15-spot-actor.en.md).
+- Detailed behavior: verifies [Actor Join And Commit Order](../spec/15-spot-actor.en.md#4-actor-join-and-commit-order)
+  and [Relocation Policy Shared By Every Move Path](../spec/15-spot-actor.en.md#5-relocation-policy-shared-by-every-move-path).
 
 #### RL-F8 Host Relocate Does Not Start On A Manual Topology
 
@@ -660,7 +673,8 @@ outcomes/Host states?
 - Verification: The first is `Blocked/DeadlineExceeded`, and the Host is Serving. The second is
   `ForceStopped/DeadlineExceeded` or the spec's post-seal forced outcome, and the source is not
   mistaken as Serving again.
-- Detailed behavior: verifies [Host Maintenance §12](../spec/28-graceful-drain-handoff.en.md).
+- Detailed behavior: verifies [Relocate Completion And Failure](../spec/28-graceful-drain-handoff.en.md#10-relocate-completion-and-failure)
+  and [The Race Between Shutdown And Relocate](../spec/28-graceful-drain-handoff.en.md#11-the-race-between-shutdown-and-relocate).
 
 #### RL-F10 Host-Relocate An Entry Actor And SpotWide Aggregate
 
@@ -701,20 +715,20 @@ handler-held?
 
 Priority: `P0`
 
-User Spot relocation must continue queued messages and the logical timer schedule at the target. The
+SpotWide User Spot or Instance Spot relocation must continue queued messages and the logical timer schedule at the target. The
 Application does not re-register the timer.
 
 **Verification question:** Are frozen messages and a pending timer each processed exactly once, in
 original order, at the target?
 
-- Starting condition: The source User Spot handler R0 waits on a gate, and Q1/Q2, Actors A1/A2, and a
-  one-shot timer have been accepted.
+- Starting condition: The source SpotWide User Spot or Instance Spot handler R0 waits on a gate, and
+  Q1/Q2, Actors A1/A2, and a one-shot timer have been accepted. Entry and PerActor Spots are not fixtures.
 - Procedure: Relocate is started, and R0 is released. After completion, target evidence and the timer
   callback are awaited.
-- Verification: After R0, Q1/Q2 and A1/A2 keep their per-lane order and are each processed once. The
+- Verification: After R0, Q1/Q2 and A1/A2 keep their target-queue and Actor-lane order and are each processed once. The
   timer callback also runs exactly once at the target, and the Application does not repeat timer
   registration.
-- Detailed behavior: verifies [Spot Actor §8](../spec/15-spot-actor.en.md).
+- Detailed behavior: verifies [Graceful Drain — Moving Pending Messages, Timers, And Sessions](../spec/28-graceful-drain-handoff.en.md#9-moving-pending-messages-timers-and-sessions).
 
 #### RL-F13 Finish Relocation Of Many Large-State Units With A Bounded Terminal
 
@@ -726,11 +740,12 @@ within a bound across many units and a size boundary, and do not block source ad
 **Verification question:** Do 80 units and large-state variants each have exactly one success or
 `StateIncompatible` terminal?
 
-- Starting condition: 80 units of 1 MiB state, units at the 64 MiB boundary, and an oversize unit are
-  built as separate fixtures.
+- Starting condition: 80 units of 1 MiB state, a unit with exactly 64 MiB of encoded participant
+  state, and a unit one byte over are built as separate fixtures.
 - Procedure: Host Relocate is run on each fixture, collecting current locations and operation
   results.
-- Verification: Valid units preserve their checksum at the target, and the oversize unit is
+- Verification: Units at or below 64 MiB preserve checksum and logical length at the target. The
+  one-byte-over unit keeps source authority and is
   `StateIncompatible` while keeping the source. Every unit and Host operation has a bounded terminal.
 - Detailed behavior: verifies [Host Maintenance §7](../spec/28-graceful-drain-handoff.en.md).
 

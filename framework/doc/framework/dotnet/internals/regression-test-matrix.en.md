@@ -87,14 +87,14 @@ done. Under the current plan, the platforms that must pass are:
 | channel wire multipart[^wire-multipart] | `integration-single-process` | server-to-server channel send/request/reply sends `header` and `payload` as separate message parts, and handler dispatch selects the packet by looking only at the header part |
 | publish wire multipart | `integration-single-process` | `PUB/SUB` publish also keeps the framework header and payload as separate parts, and only the typed payload is delivered to the subscriber handler |
 
-## 4.1 Dispatch Error Observer Regression Items
+## 4.1 Dispatch Error Structured Record Regression Items
 
 | ID | Layer | Test Location | Pass Criteria |
 |----|------|-------------|-----------|
-| DERR-001, DERR-007, DERR-011, DERR-014 | `unit` | `Zlink.Framework.UnitTests/Runtime/UnhandledDispatchPolicyTests.cs` | A missing channel request handler ends in an error reply plus observer event, a missing channel send handler ends in a drop plus observer event, and an observer exception doesn't break the original dispatch result |
-| DERR-002, DERR-008 | `unit` | `Zlink.Framework.UnitTests/Runtime/UnhandledDispatchPolicyTests.cs` | A missing route request handler ends in an error reply; a missing route send handler ends in a drop, with an observer event left behind |
-| DERR-003, DERR-004, DERR-009, DERR-010, DERR-016 | `unit` | `Zlink.Framework.UnitTests/Runtime/UnhandledDispatchPolicyTests.cs` | A SPOT route, subscription, or actor dispatch failure ends in an error reply or caller-visible error for a request, or a drop plus observer event for one-way |
-| DERR-005, DERR-006, DERR-013, DERR-015 | `unit` | `Zlink.Framework.UnitTests/Runtime/UnhandledDispatchPolicyTests.cs` | Decode failures and handler exceptions end in an error reply or an observable drop, with the default log and metric still recorded even without an observer registered |
+| DERR-001, DERR-007, DERR-011, DERR-014 | `unit` | `Zlink.Framework.UnitTests/Runtime/UnhandledDispatchPolicyTests.cs` | No public observer surface exists; a missing channel request handler ends in an error reply plus `zlink.dispatch_error`, a missing channel send handler ends in a drop plus `zlink.dispatch_error`, and a provider failure doesn't change the original dispatch result |
+| DERR-002, DERR-008 | `unit` | `Zlink.Framework.UnitTests/Runtime/UnhandledDispatchPolicyTests.cs` | A missing route request handler ends in an error reply; a missing route send handler ends in a drop, while the application logger/telemetry provider receives a structured record |
+| DERR-003, DERR-004, DERR-009, DERR-010, DERR-016 | `unit` | `Zlink.Framework.UnitTests/Runtime/UnhandledDispatchPolicyTests.cs` | A SPOT route, subscription, or actor dispatch failure ends in an error reply or caller-visible error for a request, or a drop plus a structured dispatch-error record for one-way |
+| DERR-005, DERR-006, DERR-013, DERR-015 | `unit` | `Zlink.Framework.UnitTests/Runtime/UnhandledDispatchPolicyTests.cs` | Decode failures and handler exceptions end in an error reply or an observable drop, with the default record and metric emitted through the application logger/telemetry provider |
 
 ## 4.2 DI Capability Regression Items
 
@@ -151,7 +151,7 @@ done. Under the current plan, the platforms that must pass are:
 | Entry Spot actor mailbox dispatch | `EntrySpotActorDispatchTests.EntrySpotActorDispatch_ConcurrentActors_StartsOutsideEntrySpotSerialLine_AndKeepsSameActorOrdering` | Entry Spot actor packets preserve per-actor input order, and different actors' handler starts are not blocked by the Entry Spot execution queue |
 | local actor mailbox dispatch | `integration-single-process` | actor packets that didn't enter a user Spot also follow per-actor mailbox order |
 | user Spot actor dispatch serialization | `integration-single-process` | multiple actor packets within the same user Spot are processed in order on the Spot execution queue, protecting Spot state |
-| runtime task exception observation | `unit` | exceptions from a detached runtime task or a fire-and-forget handler are observed by the runtime error sink or logger instead of being buried as an unobserved exception |
+| runtime task exception observation | `unit` | exceptions from a detached runtime task or a fire-and-forget handler are observed by the application logger provider instead of being buried as an unobserved exception |
 | execution queue cancellation semantics | `unit` | queue enqueue/wait cancellation doesn't break the order of, or remove mid-stream, a work item already in the queue |
 | Spot message follow | `integration-multi-process` | during relocation, a Spot/Actor message arriving at the previous owner is relayed to the current owner, without exposing a stale route to the application |
 | actor manager creation duplicate/type conflict | `integration-single-process` | duplicate creation via `IZLinkActorManager.Create(actorId, actorType).Async(...)` and a type conflict in `GetOrCreate(actorId, actorType).Async(...)` respect the public result/typed error contract |

@@ -145,6 +145,19 @@ final class SocketCore {
         }
     }
 
+    void disconnectTransportPair(long transportPairId,
+                                 long transportPairGeneration) {
+        if (transportPairId == 0 || transportPairGeneration == 0) {
+            throw new IllegalArgumentException(
+                "transport pair identity must be non-zero");
+        }
+        int rc = Native.disconnectTransportPair(
+            socket.handle(), transportPairId, transportPairGeneration);
+        if (rc != 0)
+            throw ZlinkException.fromLastError(
+                systems.zlink.contracts.errors.ErrorCategory.CONNECT);
+    }
+
     void setTlsServer(String certPem, String keyPem, boolean requireClientCert) {
         socket.setOption(SocketOptions.TLS_CERT, Objects.requireNonNull(certPem, "certPem"));
         socket.setOption(SocketOptions.TLS_KEY, Objects.requireNonNull(keyPem, "keyPem"));

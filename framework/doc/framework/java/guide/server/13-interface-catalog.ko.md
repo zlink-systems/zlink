@@ -176,7 +176,7 @@ store를 직접 구현할 일은 드물다. `ZLinkStore*` · `ZLinkBlob*` 계열
 | `ZLinkClientServerRuntime` · `ZLinkFanoutRuntime` | 해당 channel의 상태 |
 | `ZLinkMeshNodeSnapshot` · `ZLinkMeshPeerSnapshot` · `ZLinkMeshChannelSnapshot` | snapshot record |
 | `ZLinkDispatchOptions` · `ZLinkDiagnosticsOptions` | 진단 수준 |
-| `ZLinkMessageFlowObserver` · `ZLinkMessageFlowEvent` | 메시지 흐름 기록 |
+| Application logger/telemetry provider | 메시지 흐름과 dispatch error structured record 수신 |
 | `ZLinkMetricsCustomizer` | Micrometer registry 조정 |
 
 ## 8. 실패 타입

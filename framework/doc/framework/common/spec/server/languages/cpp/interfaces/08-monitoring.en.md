@@ -219,95 +219,14 @@ headroom in both Actor or Spot capacity and activation concurrency.
 Activation concurrency's current value and limit aren't exposed as a
 separate snapshot field.
 
-## 2. Message Flow Observation
+## 2. Message Flow Diagnostics
 
 ```cpp
 enum class message_flow_log_mode_t {
     off = 0,
-    errors_only = 1,
-    key_transitions = 2,
-    verbose = 3,
-    diagnostic = 4
-};
-enum class message_flow_outcome_t {
-    received = 0,
-    dispatched = 1,
-    replied = 2,
-    dropped = 3,
-    sent = 4,
-    reply_received = 5,
-    error = 6
-};
-enum class dispatch_error_surface_t {
-    channel = 0,
-    route_mesh_channel = 1,
-    spot_route = 2,
-    spot_subscription = 3,
-    spot_actor = 4,
-    stream_session = 5
-};
-enum class dispatch_message_kind_t {
-    request = 0,
-    send = 1,
-    publish = 2,
-    response = 3,
-    error = 4,
-    actor_request = 5,
-    actor_send = 6
-};
-enum class dispatch_error_reason_t {
-    handler_missing = 0,
-    payload_decode_failed = 1,
-    handler_exception = 2,
-    invalid_frame = 3,
-    reply_path_missing = 4,
-    unexpected_reply = 5
-};
-enum class dispatch_error_action_t {
-    reply_error = 0,
-    drop = 1,
-    fail_caller = 2
-};
-enum class flow_origin_t : std::uint8_t
-{ inbound = 1, timer = 2, application = 3, lifecycle = 4 };
-struct message_dispatch_error_event_t {
-    dispatch_error_surface_t surface;
-    dispatch_message_kind_t message_kind;
-    dispatch_error_reason_t reason;
-    dispatch_error_action_t action;
-    std::optional<std::string> packet_name;
-    std::optional<std::string> channel_name;
-    std::optional<std::string> topic;
-    std::optional<std::string> spot_id;
-    std::optional<std::string> actor_id;
-    std::optional<std::string> source_rid;
-    std::optional<std::string> correlation_id;
-    std::exception_ptr exception;
-    std::optional<std::string> flow_id;
-    std::optional<flow_origin_t> flow_origin;
-};
-struct message_flow_event_t {
-    message_flow_outcome_t outcome;
-    dispatch_error_surface_t surface;
-    dispatch_message_kind_t message_kind;
-    std::optional<std::string> packet_name;
-    std::optional<std::string> channel_name;
-    std::optional<std::string> topic;
-    std::optional<std::string> correlation_id;
-    std::optional<std::string> source_rid;
-    std::optional<std::string> spot_id;
-    std::optional<std::string> actor_id;
-    std::optional<std::size_t> message_size;
-    std::optional<dispatch_error_reason_t> error_reason;
-    std::optional<dispatch_error_action_t> error_action;
-    std::exception_ptr exception;
-    std::optional<std::string> flow_id;
-    std::optional<flow_origin_t> flow_origin;
-};
-class message_flow_observer_t {
-public:
-    virtual ~message_flow_observer_t() = default;
-    virtual void on_message_flow(const message_flow_event_t &event) = 0;
+    errors = 1,
+    normal = 2,
+    detailed = 3
 };
 
 class dispatch_diagnostics_options_t {
@@ -315,34 +234,31 @@ public:
     message_flow_log_mode_t message_flow() const noexcept;
     double sample_rate() const noexcept;
     bool include_message_sizes() const noexcept;
-    const std::optional<std::string> &log_file() const noexcept;
-    const std::optional<std::string> &label() const noexcept;
-    const std::shared_ptr<std::atomic<message_flow_log_mode_t>> &
-      live_mode() const noexcept;
-    message_flow_log_mode_t effective_message_flow() const noexcept;
 };
 
 struct dispatch_options_t {
     dispatch_diagnostics_options_t diagnostics;
-    std::shared_ptr<message_flow_observer_t> message_flow_observer;
-    std::function<void(const message_flow_event_t &)> message_flow_callback;
-    std::optional<logger_t<>> diagnostics_logger;
 
-    dispatch_options_t &set_message_flow_observer(
-      std::shared_ptr<message_flow_observer_t> observer);
-    dispatch_options_t &set_message_flow_observer(
-      std::function<void(const message_flow_event_t &)> observer);
     dispatch_options_t &message_flow(message_flow_log_mode_t mode);
     dispatch_options_t &trace_sample_rate(double rate);
     dispatch_options_t &include_message_sizes(bool include);
-    dispatch_options_t &trace_log_file(std::string path);
-    dispatch_options_t &trace_label(std::string id);
-    dispatch_options_t &message_flow_live(
-      std::shared_ptr<std::atomic<message_flow_log_mode_t>> live);
 };
 ```
 
-The meaning is owned by
+`off`, `errors`, `normal`, and `detailed` respectively mean disabled
+diagnostics, errors only, key transitions, and detailed diagnostics. The
+startup diagnostics level defaults to `errors` when omitted. Startup dispatch
+configuration only provides level, sampling rate, and whether to
+include message size. Atomic runtime read/change of the level is owned by
+`app_t::message_flow_mode()` and `app_t::set_message_flow_mode(...)`. The
+application configures logger/trace/metric providers through the host's
+standard logging and telemetry configuration, and the
+Framework writes structured records to those providers. A message-flow
+dispatch option doesn't take a file path, label, exporter lifecycle, or
+provider sink. A message-flow observer callback, runtime error sink, and raw event DTO aren't the public
+contract. A provider call failure does not change the original message
+operation's terminal result and is isolated as separate diagnostics. The
+remaining meaning is owned by
 [Message Flow Tracing](../../../../26-message-flow-tracing.en.md) and
 [Flow Correlation](../../../../27-flow-correlation.en.md).
 

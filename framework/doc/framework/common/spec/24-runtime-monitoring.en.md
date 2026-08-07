@@ -322,6 +322,10 @@ The fields, page size, and cache contract provided by the
 location information, are set by
 [Location Runtime's Operational Query](21-location-runtime.en.md#64-querying-the-current-location-from-operational-tools).
 
+Exact lookup and paging return `Creating`, `Ready`, and `Unavailable` entries with the same
+meaning. A missing record is empty in exact lookup and absent from a page. A Store query failure
+is an `Unavailable` framework error and never returns part of a page as a successful result.
+
 ## 5. Structured Log
 
 The framework records why a state changed to a standard structured logger. The

@@ -63,7 +63,8 @@ Store 장애 scenario를 판정하려면 먼저 같은 topology가 정상 상태
 - 절차: Consumer의 public RouteMesh status를 읽고 서로 다른 request 20개를 보낸다.
 - 검증: Status는 ready target count 2를 제공하고 20개 request가 reply 하나씩 받는다. Handler count 합계는
   20이다.
-- 세부 동작: [Location runtime §2](../spec/21-location-runtime.ko.md)을 검증한다.
+- 세부 동작: [정상 처리 순서](../spec/21-location-runtime.ko.md#14-정상-처리-순서)와
+  [Read와 CAS](../spec/21-location-runtime.ko.md#51-read와-cas)를 검증한다.
 
 #### SF-A2 Watch 없이 polling으로 provider 변경을 반영한다
 
@@ -132,7 +133,8 @@ Discovery connection을 유지하는 grace와 Actor·Spot owner가 신규 업무
   application evidence를 읽는다.
 - 검증: RouteMesh peer는 transport liveness가 정상일 수 있지만 신규 stateful request는 정식 unavailable
   result로 끝난다. Lease deadline 뒤 timer callback evidence도 증가하지 않는다.
-- 세부 동작: [Failover policy §5](../spec/31-failure-failover-policy.ko.md)을 검증한다.
+- 세부 동작: [Object routing과 생성 recovery](../spec/31-failure-failover-policy.ko.md#4-object-routing과-생성-recovery)와
+  [Store 장애](../spec/31-failure-failover-policy.ko.md#7-store-장애)를 검증한다.
 
 ### Track C — Stale provider와 lifecycle을 구분
 
@@ -150,7 +152,7 @@ Provider가 descriptor를 지우지 못하고 종료되어도 owner lease가 만
   request 20개를 보낸다.
 - 검증: Status의 ready peer·target에는 B가 없고 20개를 A가 처리한다. B endpoint로 반복 timeout을 발생시켜
   성공으로 간주하지 않는다.
-- 세부 동작: [Location runtime §5](../spec/21-location-runtime.ko.md)를
+- 세부 동작: [실행 중인 node와 제공 기능을 찾는다](../spec/21-location-runtime.ko.md#3-실행-중인-node와-제공-기능을-찾는다)를
   검증한다.
 
 #### SF-C2 정상 Shutdown은 lease expiry를 기다리지 않는다
@@ -215,7 +217,26 @@ query는 page size와 continuation token을 사용해야 한다.
 - 절차: 각 page size variant에서 첫 page부터 continuation이 끝날 때까지 public query를 반복한다.
 - 검증: 각 page item 수는 요청 상한을 넘지 않고 전체 logical IDs는 1,001개로 정확하다. Continuation은
   client가 해석하거나 수정하지 않는다.
-- 세부 동작: [Location runtime §7](../spec/21-location-runtime.ko.md)를 검증한다.
+- 세부 동작: [Location runtime — 운영 도구에서 현재 위치를 조회한다](../spec/21-location-runtime.ko.md#64-운영-도구에서-현재-위치를-조회한다)를 검증한다.
+
+#### SF-C5A ID 조회와 page 결과의 object 상태를 구분한다
+
+우선순위: `P0`
+
+Public object query에서 missing exact lookup은 empty이고 page에는 해당 항목이 없다. 존재하는 object만
+`Creating`, `Ready`, `Unavailable` entry를 반환한다. Store 조회 자체가 실패하면 일부 page를 정상 결과처럼
+반환하지 않는다.
+
+**검증 질문:** Missing은 empty/absent이고 세 object 상태는 entry로 일치하며 Store failure는 page 전체 error인가.
+
+- 시작 조건: Missing ID, creation gate에서 대기하는 object, Ready object와 owner loss 뒤 Unavailable object를
+  준비한다.
+- 절차: 각 ID를 개별 조회하고 같은 objects를 포함하는 bounded page를 조회한다. Fresh fixture에서 Store
+  request를 실패시킨 뒤 같은 page를 다시 조회한다.
+- 검증: Missing exact lookup은 empty이고 page에는 missing ID 항목이 없다. `Creating`, `Ready`,
+  `Unavailable` objects는 ID 조회와 page item에서 같은 상태 entry를 반환한다. Store failure variant는
+  items나 continuation을 포함하지 않는 page 전체 error다.
+- 세부 동작: [Location runtime — 운영 도구에서 현재 위치를 조회한다](../spec/21-location-runtime.ko.md#64-운영-도구에서-현재-위치를-조회한다)를 검증한다.
 
 ### Track D — Store 복구 뒤 current topology 수렴
 
@@ -233,7 +254,7 @@ snapshot으로 reconcile할 수 있다.
   유지한다.
 - 검증: 모든 request가 terminal result를 하나씩 받고 current provider set은 A·B로 유지된다. Application
   evidence에 불필요한 re-registration 호출은 없다.
-- 세부 동작: [Location runtime §6](../spec/21-location-runtime.ko.md)을 검증한다.
+- 세부 동작: [Store 연결이 끊기면 이전 owner의 새 작업을 막는다](../spec/21-location-runtime.ko.md#4-store-연결이-끊기면-이전-owner의-새-작업을-막는다)를 검증한다.
 
 #### SF-D2 긴 장애 뒤 재등록한 provider만 유지한다
 
@@ -249,7 +270,8 @@ Store 장애가 lease TTL보다 길면 모든 이전 lease가 만료된다. 복�
   수렴할 때까지 A requests를 보낸다.
 - 검증: A requests는 가능한 구간에서 계속 성공하고 복구 뒤 ready target은 A 하나다. B를 replacement로
   자동 생성하거나 이전 route로 보내지 않는다.
-- 세부 동작: [Location runtime §6](../spec/21-location-runtime.ko.md)을 검증한다.
+- 세부 동작: [Store 연결 fence](../spec/21-location-runtime.ko.md#4-store-연결이-끊기면-이전-owner의-새-작업을-막는다)와
+  [정상 처리 순서](../spec/21-location-runtime.ko.md#14-정상-처리-순서)를 검증한다.
 
 #### SF-D3 Public status가 Ready·Degraded·Ready로 수렴한다
 
@@ -282,7 +304,7 @@ Store I/O가 느리다는 이유로 같은 process의 event loop나 application 
   100개를 보내 모두 완료한 뒤 Store response를 해제한다.
 - 검증: Channel requests는 Store gate 해제 전에 reply를 하나씩 받는다. Store operation도 해제 뒤 정식
   terminal을 반환한다.
-- 세부 동작: [비동기 실행 정책 §2](../spec/05-async-execution-policy.ko.md)의 I/O 격리를
+- 세부 동작: [Worker offload](../spec/05-async-execution-policy.ko.md#12-worker-offload)의 I/O wait 격리를
   검증한다.
 
 ### Track F — Relocation과 owner recovery의 public 결과를 확인
@@ -332,7 +354,7 @@ Relocation Store를 사용할 수 없으면 payload를 보존할 수 없으므�
   복구 뒤 새 Relocate를 호출한다.
 - 검증: 첫 call은 Store unavailable result이고 source request가 성공한다. 두 번째 call은 target에서
   state를 복원하며 첫 operation을 자동 재개하지 않는다.
-- 세부 동작: [Relocation Store §7](../spec/23-relocation-store-redis.ko.md)을 검증한다.
+- 세부 동작: [Relocation Store의 취소, 오류와 결과 재구성](../spec/23-relocation-store-redis.ko.md#5-취소-오류와-결과-재구성)을 검증한다.
 
 #### SF-F4 ObjectGeneration과 owner replacement를 public ref로 구분한다
 
@@ -384,25 +406,23 @@ Paged query 중 object가 추가·제거되어도 한 scan에서 duplicate ID를
   시작한다.
 - 검증: 각 scan 안의 IDs는 중복이 없고 page 상한을 지킨다. 두 번째 scan은 완료된 current mutations를
   반영한다. Client는 continuation token을 수정하지 않는다.
-- 세부 동작: [Location runtime §7](../spec/21-location-runtime.ko.md)를 검증한다.
+- 세부 동작: [Location runtime — 운영 도구에서 현재 위치를 조회한다](../spec/21-location-runtime.ko.md#64-운영-도구에서-현재-위치를-조회한다)를 검증한다.
 
 #### SF-F7 Large state relocation은 public size limit 안에서 복원한다
 
 우선순위: `P0`
 
-Application state가 한 Store record보다 커도 Framework가 정식 relocation limit 안에서 payload를 보존하여
-target에 복원해야 한다.
+Framework는 participant별 encoded state가 64 MiB 이하일 때 payload를 보존하여 target에 복원한다.
 
-**검증 질문:** 64 MiB보다 큰 state를 가진 object가 relocation 뒤 같은 checksum과 logical length를
-반환하는가.
+**검증 질문:** 64 MiB 경계는 복원되고 한 byte 초과는 source authority를 유지하는가.
 
-- 시작 조건: Public application API로 deterministic large state를 만든다. 전체 크기는 spec의 logical
-  relocation maximum보다 작다.
+- 시작 조건: Public application API로 정확히 64 MiB인 deterministic participant state와 한 byte 초과한
+  state를 separate fixtures로 만든다.
 - 절차: Object를 target node로 Relocate하고 public request로 state checksum·length를 조회한다. 별도
   oversize fixture는 maximum을 넘긴다.
-- 검증: 정상 state는 target에서 checksum·length가 같고 request를 처리한다. Oversize operation은 source를
-  유지한 채 `Blocked/StateIncompatible`로 끝난다.
-- 세부 동작: [Relocation Store §4](../spec/23-relocation-store-redis.ko.md)를 검증한다.
+- 검증: 64 MiB state는 target에서 checksum·logical length가 같고 request를 처리한다. 한 byte 초과
+  operation은 source authority를 유지한 채 `Blocked/StateIncompatible` terminal 하나로 끝난다.
+- 세부 동작: [Relocation unit과 실행량 제한](../spec/28-graceful-drain-handoff.ko.md#7-relocation-unit과-실행량-제한)을 검증한다.
 
 #### SF-F8 Target owner lease가 만료되면 source를 유지한다
 
@@ -455,21 +475,24 @@ Accepted request가 많은 object를 이동해도 각 request의 reply와 reloca
 - 세부 동작: [Host maintenance §7](../spec/28-graceful-drain-handoff.ko.md)을
   검증한다.
 
-#### SF-F11 Cancellation과 response loss 뒤 payload 값을 보존한다
+#### SF-F11 Waiter 종료와 response loss 뒤 payload 값을 보존한다
 
 우선순위: `P0`
 
-Store call waiter가 취소되거나 response가 유실되어도 mutable application payload를 다른 operation 값으로
-재사용해서는 안 된다.
+Store response가 유실되거나 지원 언어의 relocation waiter가 취소되어도 mutable application payload를 다른
+operation 값으로 재사용해서는 안 된다. Cancellation variant는 exact interface가 지원하는 언어에서만
+실행한다.
 
-**검증 질문:** Cancelled operation 뒤 새 relocation이 자기 payload checksum만 target에 복원하는가.
+**검증 질문:** 공통 response loss와 지원 언어 cancellation 뒤 새 relocation이 자기 payload checksum만
+target에 복원하는가.
 
 - 시작 조건: 서로 다른 deterministic payload A와 B를 가진 two fresh objects를 준비한다.
-- 절차: A relocation waiter를 Store response가 대기 중일 때 취소한다. Store를 정상화하고 B relocation을
-  실행한다.
-- 검증: A awaitable은 cancellation 결과를 유지한다. B target state checksum은 B와 정확히 같고 A bytes가
+- 절차: 공통 variant에서는 A의 Store response를 유실시키고, 지원 언어에서는 pending waiter cancellation도
+  실행한다. Store를 정상화하고 B relocation을 실행한다.
+- 검증: A awaitable은 response-loss 또는 지원 언어의 cancellation 결과를 유지한다. B target state checksum은 B와 정확히 같고 A bytes가
   섞이지 않는다. 각 operation은 terminal 하나를 가진다.
-- 세부 동작: [Relocation Store §6](../spec/23-relocation-store-redis.ko.md)을 검증한다.
+- 세부 동작: [취소, 오류와 결과 재구성](../spec/23-relocation-store-redis.ko.md#5-취소-오류와-결과-재구성)과
+  [Payload 게시와 정리](../spec/23-relocation-store-redis.ko.md#6-payload-게시와-정리)를 검증한다.
 
 ### Track G — Capacity 결과를 public create·relocation으로 검증
 

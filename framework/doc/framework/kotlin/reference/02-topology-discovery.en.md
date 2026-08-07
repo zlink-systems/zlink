@@ -104,7 +104,7 @@ DSLs that each take `ZLinkDispatchOptions`/`ZLinkStreamCompressionBuilder` as th
 
 ```kotlin
 options.configureDispatch {
-    messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
+    messageFlow(ZLinkMessageFlowLogMode.NORMAL)
 }
 
 options.configureStreamCompression {

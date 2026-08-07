@@ -104,6 +104,7 @@ Object Client는 MeshName과 prefix를 각각 유지하며, API request server�
 | Session | 2 | STREAM 연결, 인증 전 packet 처리, Actor binding과 relay | Connection과 binding 수명을 game logic에서 분리한다. Session owner가 binding route를 보관한다. |
 | Play | 2 | Player Actor, room state, timer, push와 reward publish | `BingoRoom`이 player, card, draw와 winner 상태를 소유한다. |
 | Location Store | 1 logical store | Peer discovery, Actor·Spot authority와 generation | Application이 physical node를 선택하거나 현재 owner를 추측하지 않게 한다. |
+| Relocation Store | 1 logical store | Instance activation envelope와 room·Actor relocation payload | Location Store와 provider·key prefix를 분리한다. 같은 Redis deployment를 사용해도 keyspace를 공유하지 않는다. |
 | Reservation Redis | 1 isolated instance | Waiting room과 reserved Actor ID | Matchmaker process가 바뀌어도 matching 결정을 공유한다. Object owner 정보는 저장하지 않는다. |
 
 Session은 game rule을 해석하지 않는다. Matchmaking은 Play node를 선택하지 않는다. Play는 access
@@ -619,6 +620,12 @@ interface는 이 호출을 결과 값이 없는 비동기 completion으로 표�
 
 ### 7.6 계획된 relocation과 failure
 
+Matchmaker Instance Spot factory는 Redis reservation에서 state를 다시 구성하는
+`RecreateOnRelocation`을 선택한다. Room Spot과 상태를 가진 Player Actor factory는
+`PreserveStateWith`를 선택한다. Room adapter는 card, draw position, winner와 round state를,
+Player adapter는 card mark, reward 적용 ID와 player 진행 state를 보존한다. Framework가 보존하는
+queue, accepted journal, logical timer와 owner fence는 adapter payload에 중복 저장하지 않는다.
+
 Room은 `SpotWide`와 application-signaled readiness를 사용한다. Game 결과와 reward publish가 끝난
 안전한 turn에서 readiness를 알린다. Framework가 선택한 room은 member Actor, 실행하지 않은 message와
 logical timer를 하나의 relocation unit으로 이동한다. Application adapter는 room과 Actor의 domain
@@ -745,7 +752,7 @@ sample README에 기록한다.
 
 1. Server와 client package를 build한다.
 2. 실행별 고유 이름과 port를 사용하는 pinned Redis container를 시작한다.
-3. Location Store와 reservation에 서로 다른 key prefix를 설정한다.
+3. Location Store, Relocation Store와 reservation에 서로 다른 provider 설정과 key prefix를 적용한다.
 4. Matchmaking과 Play process를 시작하고 Framework readiness를 확인한다.
 5. API와 Session process를 시작하고 STREAM endpoint readiness를 확인한다.
 6. Client scenario를 실행해 response, push, state와 marker를 검증한다.

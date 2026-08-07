@@ -55,7 +55,6 @@ contract test에 필요한 입력, 상태, 정상 흐름, 실패와 완료 조�
 - [27 Request correlation과 causal flow](27-flow-correlation.ko.md) — Correlation ID와 flow ID의 생성·전파를 정의한다.
 - [28 Host Relocate와 Shutdown](28-graceful-drain-handoff.ko.md) — 두 relocation mode와 종료 lifecycle을 정의한다.
 - [29 Transport liveness](29-transport-liveness.ko.md)
-- [30 Framework 구현 차이 기록](30-implementation-gap.ko.md) — 정식 계약이 아닌 현재 구현 차이와 이번 검토의 closure evidence를 기록한다.
 - [31 장애 대응과 failover 범위](31-failure-failover-policy.ko.md) — target 재선택, reconnect, 생성 recovery와 stateful relocation의 자동 복구 경계를 정의한다.
 - [32 Framework 오류 모델](32-framework-error-model.ko.md) — 공통 `ErrorKind`, Send·Request 완료 조건과 Application의 재시도 판단 경계를 정의한다.
 

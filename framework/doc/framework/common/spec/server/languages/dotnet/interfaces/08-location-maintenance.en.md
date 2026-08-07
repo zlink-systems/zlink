@@ -111,6 +111,33 @@ public sealed record ZLinkLocationServiceSummary(
     uint StoppedCount,
     DateTimeOffset LastUpdatedAt);
 
+public enum ZLinkLocationObjectKind
+{
+    Actor = 0,
+    UserSpot = 1,
+    InstanceSpot = 2
+}
+
+public enum ZLinkLocationObjectState
+{
+    Creating = 0,
+    Ready = 1,
+    Unavailable = 2
+}
+
+public sealed record ZLinkLocationObjectEntry(
+    string GlobalId,
+    ulong ObjectGeneration,
+    string MeshName,
+    RoutingId NodeRid,
+    ZLinkLocationObjectState State,
+    string StableType);
+
+public sealed record ZLinkLocationObjectFilter(
+    ZLinkLocationObjectKind ObjectKind,
+    string? StableType = null,
+    string? MeshName = null);
+
 public readonly record struct ZLinkPageRequest(
     int PageSize = 100,
     string? ContinuationToken = null);
@@ -143,6 +170,20 @@ public interface IZLinkLocationRuntimeQuery
             ZLinkLocationServiceSummaryFilter filter,
             ZLinkPageRequest page = default,
             CancellationToken cancellationToken = default);
+
+    ValueTask<ZLinkLocationObjectEntry?> FindActorLocationAsync(
+        string actorId,
+        CancellationToken cancellationToken = default);
+
+    ValueTask<ZLinkLocationObjectEntry?> FindSpotLocationAsync(
+        string spotId,
+        CancellationToken cancellationToken = default);
+
+    ValueTask<ZLinkLocationPage<ZLinkLocationObjectEntry>>
+        ListObjectLocationsAsync(
+            ZLinkLocationObjectFilter filter,
+            ZLinkPageRequest page = default,
+            CancellationToken cancellationToken = default);
 }
 
 public enum ZLinkLocationRole : ushort
@@ -157,13 +198,22 @@ public enum ZLinkLocationRole : ushort
 ```
 
 An operational query only returns human-readable health/topology/service
-summary. It doesn't return Store key/version, owner lease generation,
+summary and object location. It doesn't return Store key/version, owner lease generation,
 descriptor payload, or protocol envelope. `NodeRid` is kept as the public
 `RoutingId` since it's the actual transport routing identity.
 
 Page size is `1..1000`, and the continuation token is an opaque value
 issued by that query. The application doesn't interpret the token or use
 it in a different query.
+
+Exact lookup by Actor ID and Spot ID each queries one current object
+location. Missing returns `null`; Creating returns a `Creating` entry;
+Ready returns a `Ready` entry; and an unavailable current owner after
+commit returns an `Unavailable` entry. Spot exact lookup treats User Spot
+and Instance Spot under the same Spot-ID lookup contract. A list requires
+`ObjectKind`, and takes `StableType` and `MeshName` as optional filters.
+The encoded page is at most 4 MiB. A Store query failure is
+`ZLinkFrameworkErrorKind.Unavailable` and does not return a partial page.
 
 ## 4. Host Maintenance
 

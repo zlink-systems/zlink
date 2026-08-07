@@ -54,7 +54,7 @@ isn't deferred until the first call — it's **blocked by an exception at contex
 | `setDefaultRequestTimeout(Duration)` | The cap on waiting for a request reply | 30 seconds |
 | `addHandlersFromPackageOf(Class)` | Handler-discovery starting point | Doesn't scan |
 | `configureMetadata()` | Metadata propagation policy | — |
-| `configureDispatch()` | Diagnostics level and message flow (§4) | `ERRORS_ONLY` |
+| `configureDispatch()` | Diagnostics level and message flow (§4) | `ERRORS` |
 | `configureInboundDispatch()` | Host-wide receive cap (§3.3) | Auto-calculated |
 | `configureLocations()` | Location store behavior (§5) | The §5 table |
 | `configureNetwork()` | Listener bind/advertise host defaults | bind `0.0.0.0` |
@@ -152,10 +152,9 @@ The surface `configureDispatch()` returns.
 
 | Option | What it sets | Default |
 | --- | --- | --- |
-| `messageFlow(ZLinkMessageFlowLogMode)` | Recording level | `ERRORS_ONLY` |
-| `traceLogFile(String)` | A file written separately from app logs | Not separated |
-| `traceLabel(String)` | The instance name attached to records | None |
-| `setMessageFlowObserver(...)` | Receiving records in your program | None |
+| `messageFlow(ZLinkMessageFlowLogMode)` | Recording level | `ERRORS` |
+| `traceSampleRate(double)` | Sampling ratio | 1.0 |
+| `includeMessageSizes(boolean)` | Whether to include payload byte size | Not recorded |
 | `unhandled()` | The behavior for a dispatch with no handler | Below |
 
 `unhandled()` sets the behavior per branch with `setRequest` / `setSend` / `setPublish`, and

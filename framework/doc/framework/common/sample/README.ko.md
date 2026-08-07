@@ -37,6 +37,24 @@ TypeScript 브라우저 client를 공유한다. 지원 언어는 같은 역할 �
 > 같은 TypeScript client 하나를 공유한다. 실제 Chromium에서 `ws`·`wss`, request/reply, push,
 > reconnect와 명시적 flow 전달을 검증한다.
 
+### Sample별 relocation 범위
+
+Relocation은 모든 sample의 공통 완료 조건이 아니다. 각 factory는 지원 여부를 정확히 하나의
+policy로 고정하고, sample은 아래 범위만 검증한다.
+
+| Sample | relocation 범위 | factory policy와 자원 |
+|---|---|---|
+| Bingo | room `SpotWide` unit과 member Actor의 planned relocation을 검증한다. | Matchmaker Instance Spot은 `RecreateOnRelocation`, Room Spot과 Player Actor는 `PreserveStateWith`를 사용한다. Location Store와 별도 Relocation Store가 필요하다. |
+| ZoneWorld | zone 경계를 넘을 때 발생하는 cross-node Player Actor relocation을 검증한다. | Player Actor는 `PreserveStateWith`, 이동하지 않는 Zone Spot은 `DisableRelocation`을 사용한다. Location Store와 별도 Relocation Store가 필요하다. |
+| ShoppingMall | `OrderWorkflowSpot`의 planned relocation 뒤 event replay로 다음 단계부터 재개하는 흐름을 검증한다. | `RecreateOnRelocation`과 별도 Relocation Store를 사용한다. |
+| GameQuest | Missing Instance Spot의 cold activation과 explicit close 뒤 새 generation만 검증한다. | `PlayerQuestSpot`은 `DisableRelocation`을 사용한다. Instance activation record 때문에 별도 Relocation Store는 필요하다. |
+| DeliveryDispatch | planned relocation을 검증하지 않는다. | 모든 Actor·Spot factory가 `DisableRelocation`을 사용하며 Relocation Store를 등록하지 않는다. |
+| SupportChat | planned relocation을 검증하지 않는다. | Conversation Spot과 Actor factory가 `DisableRelocation`을 사용하며 Relocation Store를 등록하지 않는다. |
+| TicTacToe | planned relocation을 검증하지 않는다. | Room Spot과 Player Actor factory가 `DisableRelocation`을 사용하며 Relocation Store를 등록하지 않는다. |
+
+Relocation Store와 Location Store에 같은 Redis deployment를 사용할 수는 있지만 provider와 key prefix는
+분리한다. 두 store는 authority 조회와 relocation payload 보존이라는 서로 다른 계약을 소유한다.
+
 ## Channel 역할과 물리 topology 기준
 
 Channel send/request는 ChannelName 하나로 대상을 지정한다. 샘플은 MeshName을 숨기는 application helper를
@@ -149,7 +167,8 @@ API는 player level을 bounded bucket으로 바꾸고
 `InstanceSpot("bingo.matchmaker")`와 `InMesh("bingo.matchmaking")` intent로 자동 생성한다.
 Instance Spot은 같은 bucket 요청을 turn 단위로 처리하고 Redis의 open room reservation을
 선택하거나 새로 만든다. 실제 state는 Redis가 소유하며 Instance Spot은 `RecreateOnRelocation` policy를
-사용한다. Idle timer가 만료되면 Spot 내부에서 `Context.CloseAsync()`를 호출한다.
+사용한다. Idle timer가 만료되면 Spot context가 제공하는 explicit close operation을 시작한다. 정확한
+method 이름은 언어별 exact interface가 소유한다.
 
 Redis match reservation은 stable RoomId와 같은 RoomSettings를 소유한다. 첫 요청과 동시에 들어온
 요청은 모두 같은 reservation을 받고, API는 모두 `SpotManager.GetOrCreate`를
@@ -177,10 +196,11 @@ Entry Spot과 PerActor User Spot은 Spot application state를 옮기지 않는�
 같은 SpotId의 stateless shell을 준비하고 Actor를 하나씩 옮긴다. Application은 Actor adapter의
 state만 관리하며 Spot에 ActorRef 목록을 복원하지 않는다.
 
-SpotWide factory가 `ApplicationSignaled` boundary를 선택한 샘플은 안전한 업무 turn에서
-`RelocationReady().Defer()`를 등록한다. Framework는 실제 relocation 여부와 관계없이
-`OnRelocationReadyCompletedAsync`를 호출한다. Application은 이 callback이 끝난 뒤 다음 round를
-시작한다. 기본 `AnyTurnBoundary`에서 `Defer()`를 호출하는 예제는 만들지 않는다.
+SpotWide factory가 application-signaled boundary를 선택한 sample은 안전한 업무 turn에서 relocation
+준비를 지연하는 public operation을 등록한다. Framework는 실제 relocation 여부와 관계없이 준비
+완료 callback을 호출한다. Application은 이 callback이 끝난 뒤 다음 round를 시작한다. 기본
+any-turn boundary에서 준비 지연 operation을 호출하는 예제는 만들지 않는다. 정확한 API 이름은
+언어별 exact interface가 소유한다.
 
 [Message Follow](../spec/21-location-runtime.ko.md#63-이전-owner로-도착한-message를-새-owner에게-전달한다)는
 owner 변경 직후 이전 node에 도착한 Actor·Spot message를 current owner에게 전달하는 기능이다.

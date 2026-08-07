@@ -655,6 +655,7 @@ public:
     stream_send_call_t &metadata(std::string key, std::string value);
     stream_send_call_t &packet_name(std::string packet_name);
     stream_send_call_t &compress();
+    stream_send_call_t &timeout(std::chrono::milliseconds timeout);
     task_t<void> submit();
 };
 
@@ -978,8 +979,12 @@ request timeout을 전달받지 않으며 해당 STREAM socket의 send timeout�
 
 RouteMesh node·Channel·[Spot](../../../../01-glossary.ko.md#spot)·Actor는 선택한 MeshNode ROUTER, ClientServer는 client DEALER, [classic fanout](../../../../01-glossary.ko.md#classic-fanout)은
 publisher socket, STREAM send·reply는 해당 STREAM socket의 send timeout을 사용한다. Bound session은
-local·remote Actor route가 바뀌어도 framework socket send timeout 하나를 사용한다. One-way call에는
-per-call `timeout(...)`을 두지 않는다. Socket 또는 MeshNode 설정이 없으면 무한 대기 대신 1초 기본값을
+local·remote Actor route가 바뀌어도 framework socket send timeout 하나를 사용한다. 일반 one-way call에는
+per-call `timeout(...)`을 두지 않지만 `stream_send_call_t`는 admission 대기 시간을 호출별로 더 짧게 제한할
+수 있다. 생략하면 STREAM socket send timeout을 사용하고 지정하면 둘 중 짧은 값을 사용하므로 socket
+timeout을 늘릴 수 없다. 값은 `1..INT_MAX` milliseconds이며 다른 단위에서 변환할 때 남은 fraction은 다음
+millisecond로 올린다. 만료되면 `deadline_exceeded`로 terminal-once 완료하고 이후 admission이나 replay를
+시작하지 않는다. STREAM reply에는 이 modifier를 제공하지 않는다. Socket 또는 MeshNode 설정이 없으면 무한 대기 대신 1초 기본값을
 사용한다. One-way admission에 사용하는 socket·MeshNode `std::chrono::milliseconds` 값은 `1..INT_MAX`
 범위만 허용한다. `0`, 음수와 상한 초과는 설정 시점 또는 늦어도 startup에서 configuration error로
 거부하며 기본값으로 바꾸지 않는다.

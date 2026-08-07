@@ -276,11 +276,13 @@ public interface ZLinkLocationReadiness {
 }
 ```
 
-운영 조회는 bounded page만 반환한다. `findActorLocation`과 `findSpotLocation`은 현재 `Ready`
-위치가 없으면 빈 `Optional`을 반환하고, `Creating` 상태는 해당 상태를 담은 entry로 반환한다.
+운영 조회는 bounded page만 반환한다. `findActorLocation`과 `findSpotLocation`은 Missing이면 빈
+`Optional`, Creating이면 `CREATING`, Ready이면 `READY`, commit 뒤 current owner를 사용할 수 없으면
+`UNAVAILABLE` 상태의 entry를 반환한다.
 `findSpotLocation`은 `USER_SPOT`과 `INSTANCE_SPOT`을 모두 같은 `spotId` 조회 계약으로 다룬다.
 `listObjectLocations`는 object kind와 stable type별로 조회하며 page size는 `1..1000`, encoded page는
-4 MiB 이하로 제한한다. `ZLinkLocationObjectEntry`는 global ID, `ObjectGeneration`, MeshName, Node RID,
+4 MiB 이하로 제한한다. Continuation token은 query가 발급한 opaque 값이다. Store 조회 실패는
+`UNAVAILABLE` Framework error이며 page 일부를 반환하지 않는다. `ZLinkLocationObjectEntry`는 global ID, `ObjectGeneration`, MeshName, Node RID,
 상태와 stable type을 담는다. Raw authority row, Store key, scan cursor와 provider version은 application
 조회 계약에 포함하지 않는다.
 

@@ -47,6 +47,24 @@ created, and store failure are **not positive results, so they aren't
 kept.** Caching them would turn a brief failure into an outage lasting
 as long as the cache lifetime.
 
+### Preserve The Meaning Of A Lookup Result
+
+Not caching a result doesn't permit collapsing distinct lookup results
+into one `absent` value. `Missing`, where no authority record exists,
+and an `Unavailable` resolution, where a `Ready` authority remains but
+its owner lease is invalid, lead to different next actions.
+
+| Lookup Result | Caller-Visible Result | Instance Cold Activation |
+|---|---|---|
+| `Missing` | An ordinary message operation returns `NotFound`; Instance intent may try to claim creation authority. | Allowed |
+| `Unavailable` resolution | `Unavailable` | Forbidden |
+
+Neither result enters the positive route cache, but the resolver keeps
+them distinct. A subsequent lookup becomes `Missing` only after an
+explicit `Close` or `IdleEvicted` cleanup finishes releasing authority.
+Owner process termination or lease expiry alone doesn't release
+authority or start a creation reservation.
+
 ### What Decides The Lifetime
 
 The cache lifetime never exceeds the shortest of three values.
@@ -123,7 +141,7 @@ invalidation. Each runtime must check the source route's
 object/authority generation and target node, down to the condition
 that a newer cache entry isn't cleared.
 
-**Design candidates — undecided, and don't constrain implementation.**
+**Duplicate-suppression implementation examples — not a common completion condition.**
 
 - Send only once per `(sending runtime, object, owner generation)`
   combination. Attaching a notification to every message on an object
@@ -131,8 +149,6 @@ that a newer cache entry isn't cleared.
   notification record count as much as the business message count.
 - If the same notification is already in flight, merge additional
   notifications.
-- For a call that has a response, carry it on that response instead of
-  making a separate record.
 - The notification isn't guaranteed to be resent if lost — it expires
   naturally once the cache lifetime ends.
 - Put the duplicate-suppression marker into the existing cache entry
@@ -140,9 +156,12 @@ that a newer cache entry isn't cleared.
   entry disappears. A separate set would keep growing state
   proportional to the number of moved objects.
 
-This is why the spec ties the cache lifetime to the Message Follow
-period — even if the notification is lost, the cache naturally expires
-once that period passes.
+An implementation can use a different suppression structure. The common
+conditions are to invalidate only a cache entry pointing at the same
+object/authority generation and target node, never erase a newer route,
+expire a stale route after the cache lifetime even if the notification is
+lost, and never let duplicate state change the original operation's terminal
+result.
 
 ## 3. Don't Build The Candidate List Per Call
 
@@ -459,10 +478,14 @@ instead of publish.
   per call.
 - Object-absent, being-created, and store-failure states aren't left
   in the cache.
+- The resolver distinguishes `Missing` with no authority from an
+  `Unavailable` result for a `Ready` owner that can't be used.
+- An `Unavailable` result doesn't start an Instance creation
+  reservation or cold activation.
 - The cache lifetime doesn't exceed the Message Follow period.
-- After a call that went through the detour path following a move, the
-  sending side's cache is refreshed, so the next call goes directly to
-  the new owner.
+- After a move, a valid `messageFollow` received on the detour path immediately invalidates the
+  sending side's cache so the next lookup uses the new owner. If the notification is lost, the
+  runtime looks up the new owner after the existing cache lifetime expires.
 - While peer state doesn't change, candidate filtering doesn't run on
   the call path.
 - Targets with the same weight alternate across consecutive calls.

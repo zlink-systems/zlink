@@ -24,8 +24,8 @@ Sample과 E2E의 설정 파일, 환경 변수 금지와 `@ConfigurationPropertie
 
 ## 2. 공개 계약 spec
 
-정식 spec은 Framework 목표 public contract를 먼저 고정한다. 현재 Java/Kotlin 구현과의 차이는
-`../common/spec/30-implementation-gap.ko.md`에 기록한다. 모든 framework 언어의 공개 계약은
+정식 spec은 Framework 목표 public contract를 먼저 고정한다. 현재 Java/Kotlin 구현의 진행 상태는
+공개 계약 문서에 기록하지 않는다. 모든 framework 언어의 공개 계약은
 `spec/<package>/languages/` 아래에서 함께 관리한다.
 
 | 문서 | 범위 |

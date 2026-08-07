@@ -69,6 +69,7 @@ public interface IZLinkSessionSendCall
     : IZLinkMetadataCall<IZLinkSessionSendCall>
 {
     IZLinkSessionSendCall Compress();
+    IZLinkSessionSendCall Timeout(TimeSpan timeout);
     ValueTask Async(
         CancellationToken cancellationToken = default);
 }
@@ -140,13 +141,29 @@ the wire, it isn't used as the reply
 [deadline](../../../../01-glossary.en.md#deadline), and no late reply is
 sent after a timeout or cancellation.
 
+`IZLinkSessionSendCall.Timeout(...)` only shortens this send's admission
+wait. Omission uses the STREAM socket `SendTimeout`; specifying it uses the
+shorter of the two, so it cannot extend the socket timeout. Only a positive
+value that rounds up into `1..Int32.MaxValue` milliseconds is valid. Expiry
+completes terminal-once as `DeadlineExceeded` and does not start later
+admission or replay. `CancellationToken` keeps the existing .NET cancellation
+contract, and the reply call doesn't provide this modifier.
+
 After bind, `RelayAsync(...)` and `NotifyDisconnectedAsync(...)` use the
 per-Actor binding. A physical disconnect is notified by the framework to
 every current binding, running the Spot callback at most once per exact
 binding identity. `NotifyDisconnectedAsync(...)` is a logical
 notification while the connection is kept, and waits for the callback
-terminal. Relocation keeps the same ObjectGeneration and only updates
-that Actor's binding. A different Actor binding of the same Session and
+terminal. The exact binding callback runs at most once, and after terminal
+the binding is committed as a tombstone and removed. The physical STREAM
+connection and Actor/Spot membership are kept. No new public Unbind API is
+provided. Rebind doesn't reuse an old exact binding identity for another
+Actor or generation: it registers a new identity first, then runs the old
+callback at most once and tombstones the old binding. Callback failure is
+recorded as diagnostics but doesn't remove the new binding or restore the old
+one. Relocation keeps the same ObjectGeneration and only updates that Actor's
+binding route, so it isn't a rebind and doesn't run the disconnect callback.
+A different Actor binding of the same Session and
 the physical STREAM connection aren't changed.
 
 `RelayAsync(...)` is a one-way operation that completes normally once the

@@ -267,34 +267,13 @@ Handler signatures that must fail:
 
 The support scope is typed JSON route and raw HTTP route. `GET`,
 `POST`, `PUT`, `DELETE` must be registrable with the same convention.
+The [C++ configuration and host interface](interfaces/02-configuration-host.en.md#41-http-hosting)
+solely owns the exact `http_options_builder_t` declaration. This
+section defines the route builder's usage semantics and the HTTP
+request/response contract.
 
 ```cpp
 namespace zlink::framework {
-
-class http_options_builder_t {
-public:
-    http_options_builder_t &listen(std::string endpoint);
-    http_options_builder_t &configure_tls(
-      std::function<void(http_tls_options_builder_t &)> configure);
-    http_options_builder_t &configure_server(
-      std::function<void(http_server_options_builder_t &)> configure);
-
-    template <typename THandler>
-    http_options_builder_t &map_get(std::string path);
-    template <typename THandler>
-    http_options_builder_t &map_post(std::string path);
-    template <typename THandler>
-    http_options_builder_t &map_put(std::string path);
-    template <typename THandler>
-    http_options_builder_t &map_delete(std::string path);
-
-    template <typename TMiddleware>
-    http_options_builder_t &use();
-
-    http_options_builder_t &map_health(std::string path);
-    http_options_builder_t &map_readiness(std::string path);
-    http_options_builder_t &map_liveness(std::string path);
-};
 
 struct http_context_t {
     http_method_t method;

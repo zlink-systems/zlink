@@ -47,6 +47,11 @@ final class NativeRouterSocket extends NativeSocketBase implements RouterSocket 
     public void disconnectRid(RoutingId routingId) {
         runtime().disconnectRid(routingId);
     }
+    public void disconnectTransportPair(long transportPairId,
+                                       long transportPairGeneration) {
+        runtime().disconnectTransportPair(
+            transportPairId, transportPairGeneration);
+    }
     public void setRoutingId(RoutingId rid) { runtime().setRoutingId(rid); }
     public RoutingId getRoutingId() { return runtime().getRoutingId(); }
 

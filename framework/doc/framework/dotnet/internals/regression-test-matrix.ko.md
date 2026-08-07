@@ -88,14 +88,14 @@ runtime RID 를 기준으로 한다. framework CI gate[^ci-gate] 도 같은 범�
 | channel wire multipart[^wire-multipart] | `integration-single-process` | 서버 간 channel send/request/reply가 `header`와 `payload`를 별도 message part로 보내고, handler dispatch는 header part만 보고 packet을 고른다 |
 | publish wire multipart | `integration-single-process` | `PUB/SUB` publish도 framework header와 payload를 별도 part로 유지하고, subscriber handler에는 typed payload만 전달된다 |
 
-## 4.1 Dispatch Error Observer Regression 항목
+## 4.1 Dispatch Error Structured Record Regression 항목
 
 | ID | 계층 | 테스트 위치 | 통과 기준 |
 |----|------|-------------|-----------|
-| DERR-001, DERR-007, DERR-011, DERR-014 | `unit` | `Zlink.Framework.UnitTests/Runtime/UnhandledDispatchPolicyTests.cs` | channel request handler 없음은 error reply와 observer event, channel send handler 없음은 drop과 observer event, observer 예외는 원래 dispatch 결과를 깨지 않음 |
-| DERR-002, DERR-008 | `unit` | `Zlink.Framework.UnitTests/Runtime/UnhandledDispatchPolicyTests.cs` | route request handler 없음은 error reply, route send handler 없음은 drop으로 끝나며 observer event가 남음 |
-| DERR-003, DERR-004, DERR-009, DERR-010, DERR-016 | `unit` | `Zlink.Framework.UnitTests/Runtime/UnhandledDispatchPolicyTests.cs` | SPOT route, subscription, actor dispatch 실패가 request면 error reply 또는 caller-visible error, one-way면 drop과 observer event로 끝남 |
-| DERR-005, DERR-006, DERR-013, DERR-015 | `unit` | `Zlink.Framework.UnitTests/Runtime/UnhandledDispatchPolicyTests.cs` | decode 실패와 handler 예외는 error reply 또는 관측 가능한 drop으로 끝나며, observer 미등록 시에도 기본 로그와 metric이 남음 |
+| DERR-001, DERR-007, DERR-011, DERR-014 | `unit` | `Zlink.Framework.UnitTests/Runtime/UnhandledDispatchPolicyTests.cs` | Public observer 표면이 없고, channel request handler 없음은 error reply와 `zlink.dispatch_error`, channel send handler 없음은 drop과 `zlink.dispatch_error`로 끝나며 provider 실패는 원래 dispatch 결과를 바꾸지 않음 |
+| DERR-002, DERR-008 | `unit` | `Zlink.Framework.UnitTests/Runtime/UnhandledDispatchPolicyTests.cs` | route request handler 없음은 error reply, route send handler 없음은 drop으로 끝나며 application logger/telemetry provider가 structured record를 받음 |
+| DERR-003, DERR-004, DERR-009, DERR-010, DERR-016 | `unit` | `Zlink.Framework.UnitTests/Runtime/UnhandledDispatchPolicyTests.cs` | SPOT route, subscription, actor dispatch 실패가 request면 error reply 또는 caller-visible error, one-way면 drop과 structured dispatch-error record로 끝남 |
+| DERR-005, DERR-006, DERR-013, DERR-015 | `unit` | `Zlink.Framework.UnitTests/Runtime/UnhandledDispatchPolicyTests.cs` | Decode 실패와 handler 예외는 error reply 또는 관측 가능한 drop으로 끝나며 application logger/telemetry provider에 기본 record와 metric이 남음 |
 
 ## 4.2 DI Capability Regression 항목
 
@@ -152,7 +152,7 @@ runtime RID 를 기준으로 한다. framework CI gate[^ci-gate] 도 같은 범�
 | Entry Spot actor mailbox dispatch | `EntrySpotActorDispatchTests.EntrySpotActorDispatch_ConcurrentActors_StartsOutsideEntrySpotSerialLine_AndKeepsSameActorOrdering` | Entry Spot actor packet이 actor별 입력 순서를 보존하고, 서로 다른 actor handler 시작은 Entry Spot 실행 queue에 막히지 않는다 |
 | local actor mailbox dispatch | `integration-single-process` | user Spot에 들어가지 않은 actor packet도 actor별 mailbox 순서를 따른다 |
 | user Spot actor dispatch serialization | `integration-single-process` | 같은 user Spot 안의 여러 actor packet이 Spot 실행 queue에서 순서대로 처리되어 Spot 상태가 보호된다 |
-| runtime task exception observation | `unit` | detached runtime task와 fire-and-forget handler에서 발생한 예외가 unobserved exception으로 묻히지 않고 runtime error sink 또는 logger로 관찰된다 |
+| runtime task exception observation | `unit` | detached runtime task와 fire-and-forget handler에서 발생한 예외가 unobserved exception으로 묻히지 않고 application logger provider에서 관찰된다 |
 | execution queue cancellation semantics | `unit` | queue enqueue/wait cancellation이 이미 queue에 들어간 work item의 순서를 깨거나 중간에 제거하지 않는다 |
 | Spot message follow | `integration-multi-process` | relocation 중 이전 owner에 도착한 Spot·Actor message를 current owner로 relay하고 stale route를 application에 노출하지 않는다 |
 | actor manager 생성 중복/타입 충돌 | `integration-single-process` | `IZLinkActorManager.Create(actorId, actorType).Async(...)` 중복 생성과 `GetOrCreate(actorId, actorType).Async(...)` type 충돌이 public result·typed error 계약을 지킨다 |

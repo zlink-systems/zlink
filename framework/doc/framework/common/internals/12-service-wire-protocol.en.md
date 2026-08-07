@@ -27,7 +27,7 @@ title: "12. Service wire protocol"
 | [5. Service liveness](#5-service-liveness) | The livenessProbe/Ack cycle, the Classic fanout beacon, subscriber-ready determination |
 | [6. Typed application message JSON](#6-typed-application-message-json) | The `framework-json-v1` profile rules |
 | [7. Durable authority and explicit creation](#7-durable-authority-and-explicit-creation) | Generation separation, the creation record, factory failure handling |
-| [8. Instance Spot reactivation](#8-instance-spot-reactivation) | The Missing+Instance intent envelope, target-host recovery, User Spot terminal service operations |
+| [8. Instance Spot cold activation recovery](#8-instance-spot-cold-activation-recovery) | The Missing+Instance intent envelope, first-activation recovery on the same target, User Spot terminal service operations |
 | [9. Maintenance capture and relocation envelope](#9-maintenance-capture-and-relocation-envelope) | The Retiring seal, the byte reservation gate, relocation envelope encoding |
 | [10. Relocation, Actor membership, and Ready](#10-relocation-actor-membership-and-ready) | The authority phase state machine, aggregate relocation commit, the moment of Ready |
 | [11. Request terminal identity](#11-request-terminal-identity) | OperationId/ReplyRouteId, terminal completion tracking, root replacement |
@@ -98,14 +98,16 @@ service record is a multipart message in the following order:
 - The decoder checks the complete record length, item count, UTF-8 validity, and every bound before allocating.
 - A metadata frame cannot exceed 1,024 bytes.
 - The application payload's absolute schema limit is `applicationPayloadAbsoluteBytes`, 4,294,966,774 bytes.
-- The actual allowed payload size is whichever is smaller: that absolute limit, or `normalizedEffectiveMaxMessageBytes` minus the real envelope overhead.
+- RouteMesh ServerServer applies only the absolute schema and wire representation bounds; it has no Framework-level message-size cap.
+- On ClientServer, the actual allowed payload size is whichever is smaller: that absolute limit, or `normalizedEffectiveMaxMessageBytes` minus the real envelope overhead.
 - No separate, hidden 16 MiB cap applies to the application payload.
 
-The complete-message limit is fixed at startup admission.
+The ClientServer complete-message limit is fixed at startup admission.
 
 - The sender uses the smaller of the local and remote `normalizedEffectiveMaxMessageBytes`, and the receiver uses its own admitted limit.
 - This value cannot change during the admitted connection's lifetime, and is applied before allocation.
 - If both sides' limits are 32 MiB, a 17 MiB payload is allowed, since the complete message stays within 32 MiB.
+- RouteMesh admission doesn't carry this field, and an SS sender or receiver doesn't reject a message because of this value. HWM, mailbox byte budgets, and protocol representation bounds remain separate resource and wire guards.
 
 ### Typed payload envelope
 
@@ -221,15 +223,18 @@ reply route ID.
 
 #### Suppressing duplicate notifications
 
-The exact lifetime for suppressing duplicate notifications hasn't been
-decided yet. The current common candidate is to notify only once per
-source/object/owner generation, and to merge duplicate notifications that
-are still in flight. A source runtime that receives a notification
-invalidates its current cache entry only if that entry points at the
-source route's object/authority generation and target node. It does not
-erase the entry if a newer route is already in the cache. This condition
-must be verified in common by each language's runtime, together with the
-command body.
+A runtime that completed a relay may send `messageFollow` to the source
+runtime. The source runtime invalidates its current cache entry only if it
+points at the same object identity, object/authority generation, and target
+node as the source route. It does not erase a newer route. Even if the
+notification is lost, the cache lifetime must eventually expire the stale
+route. Receiving or suppressing a duplicate notification does not change the
+original message operation's terminal result.
+
+Sending only once within the same generation, merging an in-flight
+notification, and choosing where to store a suppression marker are
+implementation choices. They cannot change the wire body, the invalidation
+fence above, cache expiry, or the terminal-result invariant.
 
 ## 4. Admission and connection fence
 
@@ -246,6 +251,20 @@ command body.
 - Identical bytes at the same revision are idempotent; different bytes at the same revision, or a lower revision, are a protocol error.
 - `update` can only change the existing channel weight, runtime state, placement capacity, and maintenance wave.
 - RID, topology, security identity, capability, application version, and the normalized message limit only change by re-admitting the connection.
+
+### Physical connection replacement
+
+Descriptor admission and physical transport replacement use the same fence.
+Once descriptor expectations are complete, an endpoint-only manual intent with
+generation 0 cannot overwrite them. The runtime uses the
+`transportPairId`/`transportPairGeneration` from the monitor event to mark all
+lanes in the current pair for termination, and does not create a new
+connection for the same endpoint before observing that pair's close snapshot
+or disconnect event. An endpoint-level disconnect is a fallback for an initial
+transport whose pair identity is unavailable, but a successful call does not
+replace observation of the physical close. A late event from the previous
+pair is fenced by its pair identity and cannot change admission or ready state
+of the new connection.
 
 ### ClientServer direction
 
@@ -297,21 +316,12 @@ Payload: 5A 46 01 01
 
 ### `framework-json-v1` profile rules
 
-The Framework's default typed application message uses the
-`framework-json-v1` profile. The runtime applies the following rules
-identically across every language, then delivers the original UTF-8 bytes.
-
-- A UTF-8 BOM is not allowed.
-- Property names and enum names are case-sensitive.
-- Property order and insignificant whitespace carry no meaning.
-- Duplicate properties and missing required properties are rejected.
-- The reader ignores unknown properties.
-- `null` is allowed only for values the contract declares nullable.
-- A signed/unsigned 64-bit integer is a decimal string, in exactly one form, with no leading zero, after its range is checked.
-- An integer of 32 bits or fewer is a JSON number with no fraction.
-- A floating-point value must be a finite JSON number.
-- A byte sequence is RFC 4648 base64 with padding.
-- Date, decimal, UUID, and language-specific custom types are never implicitly converted — they are represented as the string or DTO the contract specifies.
+The public encoding and validation rules for the `framework-json-v1` profile used by default
+typed application messages are owned exclusively by
+[Message Model §2.3](../spec/04-message-model.en.md#23-the-framework-json-v1-typed-payload-profile). The runtime validates
+the payload and converts it to a typed value under that profile. This document defines no second rule
+set; parser choice, buffer reuse, and transport delivery of the original UTF-8 bytes remain internal
+implementation details.
 
 ### Relocation adapter state is outside the profile
 
@@ -354,7 +364,13 @@ a `Creating` row.
 The `Client` and `Server` object roles require a Location Store. The `None`
 object role creates neither authority nor a hidden local runtime.
 
-## 8. Instance Spot reactivation
+## 8. Instance Spot cold activation recovery
+
+Recovery in this section is not general owner-loss reactivation. It resumes an operation on the
+same target node and lifecycle generation only when the first cold activation published Ready but
+didn't finish recording that operation's terminal completion and removing the recovery pointer. A
+steady `Ready` owner process termination or owner-lease expiry doesn't use this root, select another
+node, or run a factory.
 
 ### Missing+Instance intent envelope
 
@@ -373,7 +389,7 @@ length.
 
 | Kind | Purpose | Contents |
 |---|---|---|
-| `1` | Resumes an existing [Ready](../spec/01-glossary.en.md#ready) authority | The object/owner/lease generation and StoreVersion of a state that can accept new work — byte-compatible with the earlier wire |
+| `1` | Delivers to an existing [Ready](../spec/01-glossary.en.md#ready) authority | The object/owner/lease generation and StoreVersion of a state that can accept new work — byte-compatible with the earlier wire |
 | `2` | Missing cold activation only | The target Mesh/node RID/lifecycle, Spot RID, stable type, descriptor version, and deadline — an authority fence is forbidden |
 
 If a kind `2` route's operation identity or metadata presence/bytes differ
@@ -382,15 +398,15 @@ rejected as a protocol error before reservation.
 
 ### Target host scan and recovery
 
-- The target host resumes any Pending record it owns, or a Ready Instance activation recovery root, during the startup first scan and a rate-limited background scan.
+- During the startup first scan and a rate-limited background scan, the target host resumes any Pending record it owns, or a Ready Instance activation recovery root that points to an incomplete first operation. The authority's target node RID and lifecycle generation must exactly match the current host.
 - The scan and late control records converge on a single local barrier, keyed by object key, object/owner generation, and owner lease.
 - It fixes the durable inbox's first record before Ready, blocks the handler with the barrier, and startup does not publish Serving until the queue head is restored.
 - The recovery pointer is removed via Preserve CAS only after the first handler terminal completion is durably recorded and the replay cursor is advanced to the inbox sequence.
 - Queue admission alone does not remove the pointer.
 
-### Reactivation failure handling
+### Cold activation recovery failure handling
 
-- A reactivation failure seals the local barrier, terminal-processes the request exactly once, and records a one-way drop event.
+- A cold activation recovery failure seals the local barrier, terminal-processes the request exactly once, and records a one-way drop event.
 - It is then deleted only once the fence value matches, in an order that reads the deleted result back to reconcile.
 - If the process ends before the delete, the target scan can safely re-run the retry-safe factory.
 - No new activation starts before `Missing` is confirmed.

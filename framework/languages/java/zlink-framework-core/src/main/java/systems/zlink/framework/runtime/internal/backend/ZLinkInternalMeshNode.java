@@ -122,6 +122,12 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
         // Optional for alternate and test backends that do not retain connection intents.
     }
 
+    default boolean isPeerConnectionClosing(long connectionIntentId) {
+        // Optional for alternate and test backends that do not expose the
+        // connection-intent close state.
+        return false;
+    }
+
     default void markPeerConnectionNotRequired(
         RoutingId peerRid,
         String endpoint,

@@ -21,7 +21,7 @@ location records, and private route info aren't used for judgment.
 - Direct send/request for an Actor bound to a Session versus one not
   bound
 - Independence between a direct message and a later Session bind
-- The result for an Actor kept alive after Session unbind, versus
+- The result for an Actor kept alive after Session logical disconnect, versus
   after Actor removal
 - The distinction between a non-existent Actor's error and an
   unreachable owner's error
@@ -34,7 +34,7 @@ location records, and private route info aren't used for judgment.
 |---|---:|---|
 | Location Store | 1 | Lets two Actor nodes, the Session gateway, and the caller server look up the same global Actor location. Uses a dedicated namespace per run. |
 | Actor node | 2 | Creates the `to-actor.probe` Actor and runs the direct send/request handler. The second node is used to create a condition where the owner route is unavailable. |
-| Session gateway | 2 | Accepts a Stream Session and binds/unbinds the Actor via the public binding API. Delivers a bound-session push sent by the Actor to the client. |
+| Session gateway | 2 | Accepts a Stream Session, binds the Actor, and performs logical disconnect through public APIs. Delivers a bound-session push sent by the Actor to the client. |
 | Caller server | 1 | Receives the client's HTTP request and starts a global `ActorId` send/request via the public Actor client API. Doesn't create a Session or bind an Actor. |
 | E2E client | 1 | Uses only the role server's public application endpoint and Stream endpoint. Doesn't call framework internal APIs directly. |
 
@@ -145,33 +145,33 @@ bound to a Session?
   direct message from
   [Session Actor Dispatch §2](../spec/20-session-actor-dispatch.en.md#2-the-whole-flow-the-application-sees).
 
-#### TA-A4 A Direct Message Continues After Unbind And Fails After Actor Removal
+#### TA-A4 A Direct Message Continues After Logical Disconnect And Fails After Actor Removal
 
 Priority: `P0`
 
-Session binding and Actor lifecycle are separate. If only the binding
-is released, a direct message must keep being processed while the
-Actor is kept alive, and after the Actor is explicitly removed, the
-same call must not succeed.
+The existing public logical-disconnect operation releases the exact
+current binding while preserving Actor lifecycle and Spot membership.
+The physical STREAM connection may remain active. After the Actor is
+explicitly removed, the same direct call must not succeed.
 
-**Verification question:** Does a direct message succeed after unbind
+**Verification question:** Does a direct message succeed after logical disconnect
 and end in `NotFound` after the Actor is removed?
 
 - Start condition: `actor-unbound-lifecycle` is created and bound to a
   Session. This scenario's application lifecycle policy doesn't remove
-  the Actor on unbind.
-- Procedure: The Actor is unbound via the Session gateway's public
-  API, and the absence of a binding is confirmed. The caller server
+  the Actor on logical disconnect.
+- Procedure: The Session gateway's existing logical-disconnect operation
+  is called on the exact binding, and its tombstone is confirmed. The caller server
   sends one send and one request each. After that, the Actor is
   removed via the public Actor lifecycle API and a new request is sent
   with the same `ActorId`.
-- Verification: The two messages after unbind are each processed once
-  by the Actor handler. The request after Actor removal ends in
+- Verification: The disconnect callback runs at most once, and callback failure does not restore the
+  binding. The physical connection and Actor membership remain. The two direct messages are each
+  processed once by the Actor handler. The request after Actor removal ends in
   `NotFound`, and no handler evidence is added.
-- Detailed behavior: verifies lifecycle separation from
-  [Actor Model §2.3](../spec/14-actor-model.en.md#23-spot-membership-and-stream-binding)
-  and
-  [Error Model §2](../spec/32-framework-error-model.en.md#2-the-shared-errorkind).
+- Detailed behavior: verifies
+  [How A Connection Disconnect Is Told To An Actor](../spec/20-session-actor-dispatch.en.md#41-how-a-connection-disconnect-is-told-to-an-actor)
+  and [How A Session Holds An Actor Route](../spec/20-session-actor-dispatch.en.md#4-how-a-session-holds-an-actor-route).
 
 ### Track B — Distinguish Logical Target From Failure Result
 

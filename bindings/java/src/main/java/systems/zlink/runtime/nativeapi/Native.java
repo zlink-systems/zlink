@@ -71,6 +71,10 @@ public final class Native {
             FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
     private static final MethodHandle MH_DISCONNECT_RID = downcall("zlink_disconnect_rid",
             FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
+    private static final MethodHandle MH_DISCONNECT_TRANSPORT_PAIR = downcall(
+            "zlink_disconnect_transport_pair",
+            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
+                    ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG));
     private static final MethodHandle MH_RECV_HANDLER = downcall(
             "zlink_recv_handler",
             FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
@@ -551,6 +555,18 @@ public final class Native {
             return (int) MH_DISCONNECT_RID.invokeExact(socket, peerRid);
         } catch (Throwable t) {
             throw new RuntimeException("zlink_disconnect_rid failed", t);
+        }
+    }
+
+    public static int disconnectTransportPair(MemorySegment socket,
+                                               long transportPairId,
+                                               long transportPairGeneration) {
+        try {
+            return (int) MH_DISCONNECT_TRANSPORT_PAIR.invokeExact(
+                socket, transportPairId, transportPairGeneration);
+        } catch (Throwable t) {
+            throw new RuntimeException(
+                "zlink_disconnect_transport_pair failed", t);
         }
     }
 

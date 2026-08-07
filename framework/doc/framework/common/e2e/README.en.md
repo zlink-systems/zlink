@@ -423,7 +423,7 @@ endpoints a client calls are also decided from this viewpoint.
   capability with `AddRelocationStore(instance)`, each separately.
   Don't use a Redis-only registration function or one that bundles both
   capabilities
-  ([05 §10](../spec/06-framework-api.en.md#10-location-store-and-relocation-store)).
+  ([Framework API — Location Store And Relocation Store](../spec/06-framework-api.en.md#10-location-store-and-relocation-store)).
   Don't hide framework configuration behind a thin wrapper/extension
   method.
 - Don't create separate runnable projects like `Server/Driver`,
@@ -711,12 +711,12 @@ verifies detailed behavior — messaging, connection, spot, codec, etc.
 | [Config 5 — Resilience/lifecycle](config-5-resilience-lifecycle.en.md) | Multiple nodes + Location Store | Restart/replacement/disconnect, terminal-once, hidden-replay prohibition, Relocate/Shutdown, capacity and lifecycle contention |
 | [Config 6 — Store failure/recovery](config-6-store-failure-recovery.en.md) | Location/Relocation Store + 2 providers + consumer | Public failure during store failure, owner invalidation and recovery, relocation result, user-observed result of capacity reservation |
 | [Config 7 — Monitoring](config-7-monitoring.en.md) | Location Store + 2 services | Public RouteMesh/host status, topology change, store-failure reflection, slow-observer isolation, and bounded snapshot |
-| [Config 8 — Execution turn](config-8-execution-turn.en.md) | 2 Play nodes + 2 worker services + gateway | Spot/Actor serial execution, Yield/worker, deferred operation, timeout/cancellation/shutdown, and per-language parity |
+| [Config 8 — Execution turn](config-8-execution-turn.en.md) | 2 Play nodes + 2 worker services + gateway | Spot/Actor serial execution, Yield/worker, deferred operation, common timeout/shutdown, and cancellation in supporting languages |
 | [Config 9 — To-actor messaging](config-9-to-actor-messaging.en.md) | 2 Actor nodes + 2 Session gateways + caller | Actor-ID send/request independent of binding, Actor recreation, public result of stale location and route failure |
 | [Config 10 — Spot actor join/relocation](config-10-spot-actor-relocation.en.md) | Location/Relocation Store + 2 Actor nodes + 2 Session gateways + caller | Local/remote Join, state and message order during a move, Session-binding route refresh, Message Follow, PerActor/SpotWide relocation |
 | [Config 11 — Observability/operational deployment](config-11-observability-ops.en.md) | Session + 2 Play + 2 workflow + Stores | Public flow correlation/metrics, maintenance Relocate/Shutdown, client/application result of patch and drain |
 | [Config 12 — Channel egress routing](config-12-channel-egress-routing.en.md) | Session/Play/API + 2 ClientServer services | ChannelName routing, local-egress selection, weight/shutdown/restart, and request/send terminal |
-| [Config 13 — One-way submit admission](config-13-submit-admission.en.md) | RouteMesh/ClientServer/Spot/Actor/Stream targets | One-way admission completion, timeout/cancellation/shutdown contention, zero target, ordering, and hidden-retry prohibition |
+| [Config 13 — One-way submit admission](config-13-submit-admission.en.md) | RouteMesh/ClientServer/Spot/Actor/Stream targets | One-way admission completion, common timeout/shutdown, cancellation in supporting languages, zero target, ordering, and hidden-retry prohibition |
 | [Config 14 — Instance Spot activation](config-14-instance-spot.en.md) | Location/Relocation Store + 2 callers + 2 owners + User Spot owner | Cold activation, concurrent first call, first-message ordering, crash/deadline/capacity/relocation, and cross-language result |
 
 ## 3.1 Configuration Axes — Variations That Run Across Configs
@@ -877,10 +877,11 @@ level change turns off tracing only for that span.
   `session-a.log`, `client.log`) so which node's log it is is
   immediately visible.
 
-### 6.2 Turning On Message Flow Tracing (Primary Debugging Tool)
+### 6.2 Turning On Diagnostics And Message-Flow Records (Primary Debugging Tool)
 
-- Turn on message flow mode at **at least `key_transitions`** during
-  an e2e run. Then one message's inbound
+- Set the common diagnostics level to **at least `Normal`** during an
+  e2e run. The four common levels are `Off`, `Errors`, `Normal`, and
+  `Detailed`. Then one message's inbound
   (`received`→`dispatched`/`replied`) and outbound
   (`sent`→`reply_received`) are each printed as one line. A failure
   (`dropped`/error) is printed on the same stream with the same
@@ -895,17 +896,17 @@ level change turns off tracing only for that span.
   can be a different message, so trust an inter-node link only on a
   path where `corr` is actually propagated. The spot subscription/
   actor/publish path is keyed by spot/actor id instead of `corr`.)
-- Tracing logs can be merged into one file with app logs (via the app
-  logger sink) or split into a dedicated file (C++
-  `diagnostics.log_file`). Either way, **leave them as a file** per
-  §6.1.
+- The application logger provider writes diagnostics records through a
+  file backend configured by the application. Do not assume a
+  Framework-owned diagnostics file path or output backend. **Leave the
+  records as a file** per §6.1.
 - A runtime level change is performed via public runtime control. A
-  normal e2e capture keeps at least `key_transitions`, and Config 11
+  normal e2e capture keeps at least `Normal`, and Config 11
   `OBS-A5` confirms trace-dedicated flow info and log messages aren't
-  produced after switching to `off`, then turns it back on.
+  produced after switching to `Off`, then turns it back on.
 - Tracing is **observation, not control.** Turning it on must not
   change feature behavior or the success criterion, and an
-  observer/trace failure must not change message processing or test
+  telemetry/logger provider failure must not change message processing or test
   judgment.
 
 ### 6.3 Included In Failure Evidence

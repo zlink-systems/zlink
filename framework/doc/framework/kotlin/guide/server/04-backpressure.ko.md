@@ -449,7 +449,7 @@ Framework는 다음 message의 크기를 미리 알 수 없으므로 **byte를 �
 ```kotlin
 // Kotlin은 Java 표면을 그대로 쓴다.
 options.configureDispatch()
-    .messageFlow(ZLinkMessageFlowLogMode.ERRORS_ONLY) // 기본값 — error와 backpressure를 기록한다.
+    .messageFlow(ZLinkMessageFlowLogMode.ERRORS) // 기본값 — error와 backpressure를 기록한다.
 ```
 
 message flow 기록에 `backpressured`가 남았다면 보낼 자리를 기다리는 일이 실제로 일어났다는

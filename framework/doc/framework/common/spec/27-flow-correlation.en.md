@@ -95,25 +95,25 @@ and builds the values.
 - The first outbound operation started by application code outside a
   framework callback
 
-If the diagnostics level is `off`, every observation-only flow-handling step
+If the diagnostics level is `Off`, every observation-only flow-handling step
 is skipped. A new `flow_id` isn't built, and an inbound message's flow field
 isn't turned into flow context or copied to the next message. The two fields
 also aren't added to an outbound envelope. An outbound request the client
 connector starts follows the same rule.
 
 `correlation_id` is protocol information linking a request and terminal
-reply. Even if the diagnostics level is `off`, it's built per request and
+reply. Even if the diagnostics level is `Off`, it's built per request and
 preserved through the reply. This value can't be removed by turning off
 tracing.
 
 The framework sets the current flow context when starting callback
 execution. It restores the pre-execution context at the callback's terminal
-completion. If tracing is `off`, this context isn't built or put into
+completion. If tracing is `Off`, this context isn't built or put into
 async-local storage.
 
 The rule for changing diagnostics level at runtime follows
 [Message Flow Tracing](26-message-flow-tracing.en.md#41-changing-the-record-level-at-runtime).
-Once each processing point confirms `off`, it doesn't build a flow ID,
+Once each processing point confirms `Off`, it doesn't build a flow ID,
 validate, capture context, add an envelope field, or build an internal
 propagation message. A change isn't retroactively applied to an
 already-built outbound frame.
@@ -122,7 +122,7 @@ already-built outbound frame.
 
 While message-flow tracing is on, the framework delivers `flow_id` and
 `flow_origin` together for as long as cause and effect continue in one piece
-of work. When `off`, the §4 omission rule applies.
+of work. When `Off`, the §4 omission rule applies.
 
 | Processing boundary | Scope where the two flow fields are preserved |
 |---|---|

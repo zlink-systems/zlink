@@ -23,6 +23,7 @@ fi
 RUN_DIR="$(mktemp -d)"
 RUN_ID="$(basename "${RUN_DIR}")-$$-${RANDOM}"
 LOG_DIR="${RUN_DIR}/logs"
+ZLINK_SAMPLE_FRAMEWORK_ROLE_LOGS="support.log api.log session.log"
 SAMPLE_LOG_DIR="${RUN_DIR}/sample-logs"
 BUILD_LOG="${LOG_DIR}/build.log"
 mkdir -p "${LOG_DIR}" "${SAMPLE_LOG_DIR}"

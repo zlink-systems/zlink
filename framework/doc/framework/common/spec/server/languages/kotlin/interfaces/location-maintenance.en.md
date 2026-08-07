@@ -78,8 +78,15 @@ fun ZLinkLocationRuntimeQuery.topology(
 ): Flow<ZLinkLocationTopologyEntry>
 ```
 
-The query projection keeps the bounded page and Java result type. Object queries select one kind and stable type;
-their page size is `1..1000` and the encoded page is at most 4 MiB. Raw Spot/Actor authority rows, Store keys,
+The query projection keeps the bounded page and Java result type. An exact
+lookup returns `null` for Missing, a `CREATING` entry for Creating, a `READY`
+entry for Ready, and an `UNAVAILABLE` entry when the current owner is unavailable
+after commit. Spot exact lookup treats User Spot and Instance Spot under the same
+Spot-ID lookup contract. An object list requires kind, and takes stable type and
+MeshName as optional filters. Its page size is `1..1000`, the encoded page is at
+most 4 MiB, and the continuation token is an opaque value issued by the query. A
+Store query failure is Java `ZLinkFrameworkErrorKind.UNAVAILABLE` and does not
+return a partial page. Raw Spot/Actor authority rows, Store keys,
 provider versions, and scan cursors aren't added to the application query result.
 
 ## Redis Extension

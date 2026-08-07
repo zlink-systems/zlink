@@ -19,7 +19,7 @@ Sets the trace/metric recording level and sampling.
 
 ```ts
 zlinkFramework().configureDispatch()
-  .messageFlow(ZLinkMessageFlowLogMode.KeyTransitions)
+  .messageFlow("normal")
   .traceSampleRate(0.1)
   .includeMessageSizes(true);
 ```
@@ -28,21 +28,19 @@ zlinkFramework().configureDispatch()
 
 | Modifier | Default | Meaning |
 | --- | --- | --- |
-| `.messageFlow(mode)` | Implementation default | The detail level to record: one of `Off`/`ErrorsOnly`/`KeyTransitions`/`Verbose`/`Diagnostic` |
+| `.messageFlow(mode)` | `"errors"` | The detail level to record: one of `"off"`/`"errors"`/`"normal"`/`"detailed"` |
 | `.traceSampleRate(rate)` | Implementation default | `0.0`..`1.0`. Out of range is a configuration error |
 | `.includeMessageSizes(include)` | `false` | Whether to include the payload size distribution in telemetry. The payload content itself is never recorded |
-| `.traceLogFile(path)` | None | The file path to leave diagnostics records in |
-| `.traceLabel(label)` | None | The label to attach to diagnostics records |
-| `.setMessageFlowObserver(observerType: Type<ZLinkMessageFlowObserver>)` | None | Registers an observer that receives message-flow events |
-| `.setRuntimeErrorSink(sinkType: Type<ZLinkRuntimeErrorSink>)` | None | Registers a sink that receives internal runtime callback/observer errors |
 
 Each modifier is a synchronous fluent call returning `ZLinkDispatchOptionsBuilder` — not a
 registration with no return value. The same values can also be specified all at once via
 `zlinkFramework().options({ dispatch: { unhandled, diagnostics } })`.
 
-**Completion result.** Registers synchronously with no return value. `unhandled` (the handling
-policy for a request/send/publish with no handler: `ReplyError`/`LogAndDrop`/`Drop`/`Throw`)
-belongs to the same `ZLinkDispatchOptions`.
+**Completion result.** The Framework writes structured records to the standard logger, trace, and
+metric providers configured by the application. A provider failure is isolated as separate
+diagnostics and does not change the original message operation's terminal result. Dispatch options
+expose no file path, callback observer, runtime error sink, or raw event DTO. `unhandled` belongs to
+the same `ZLinkDispatchOptions`.
 
 **When to use.** Use this to set the default recording level at startup.
 

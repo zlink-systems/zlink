@@ -150,9 +150,9 @@ owner-local binding generation을 함께 사용한다. Binding generation의 대
 owner가 재시작하면 owner-local counter가 이전 값보다 작더라도 새로운 lifecycle
 identity로 등록할 수 있다.
 
-Rebind는 새 identity를 Actor owner와 session owner 양쪽에 등록한 뒤 이전 identity를
-무효화한다. Unbind와 disconnect는 `boundSessionBind(38)`의 tombstone transition으로
-정확히 해당하는 이전 identity만 제거한다. 이전 owner lifecycle에서 늦게 도착한
+Rebind는 새 identity를 Actor owner와 session owner 양쪽에 등록한 뒤 이전 exact binding에 disconnect
+callback을 최대 한 번 전달하고 이전 identity를 무효화한다. Unbind와 disconnect는 callback terminal 뒤
+`boundSessionBind(38)`의 tombstone transition으로 정확히 해당하는 이전 identity만 제거한다. 이전 owner lifecycle에서 늦게 도착한
 push·ingress·close, 이전 Actor `ObjectGeneration`, 이전 authority owner와 재시작 전
 `NodeGeneration`은 current binding이나 connection에 적용하지 않는다. 형식이 잘못된
 control 및 one-way record는 application queue에 넣지 않으며 one-way record에는 별도
@@ -164,8 +164,9 @@ terminal route를 만들지 않는다.
 `ActorRef`를 명시적으로 bind해야 한다.
 
 다른 owner나 다른 Actor generation으로 rebind할 때 새 Actor owner는 새 identity를
-등록한 뒤 이전 exact binding route에 tombstone을 제출한다. 이전 owner가 tombstone을
-확인한 뒤에만 새 owner가 bind terminal reply를 반환한다. Session owner는 이 reply를
+등록한 뒤 이전 exact binding route에 disconnect notification을 제출한다. 이전 callback이 실패하거나
+deadline을 넘으면 제한된 diagnostics를 기록하지만 이전 binding을 복원하거나 새 identity를 제거하지 않고
+tombstone을 계속 제출한다. 이전 owner가 tombstone을 확인한 뒤에만 새 owner가 bind terminal reply를 반환한다. Session owner는 이 reply를
 받기 전까지 기존 binding route를 유지하고, reply를 받은 뒤 새 route로 atomic하게
 교체한다. Tombstone 제출이 실패하거나 취소되면 새 bind는 terminal 성공이 아니며
 Session owner의 기존 binding도 바뀌지 않는다. 같은 owner에서 새 identity가 이전
@@ -244,6 +245,10 @@ Location Store를 조회하지 않는다.
 dedupe하고 current Spot의 callback은 최대 한 번 실행한다. Automatic 통지는 lifecycle
 deadline 안에서 callback terminal을 기다린 뒤 tombstone과 local cleanup을 진행한다.
 Deadline 또는 callback failure가 발생해도 나머지 binding cleanup을 계속한다.
+
+Public logical notification도 해당 callback terminal을 기다린 뒤 exact binding을 tombstone으로 제거한다.
+Callback failure는 diagnostics에 기록하지만 binding을 복원하지 않으며, 같은 identity에 callback을 다시
+실행하지 않는다. Physical connection과 Actor·Spot membership은 유지한다.
 
 Actor가 속한 현재 Entry Spot 또는 User Spot은 이 통지를
 `OnDisconnectActorAsync(...)`로 받는다. Public `NotifyDisconnectedAsync(...)`는

@@ -1379,7 +1379,8 @@ function validateSemanticConstraints(constraints, contexts, fail) {
       readyProjection: "forbidden-while-maintenance-relocation-payload-present-including-aborted",
     }],
     ["complete-message-bound-integrity", {
-      admissionType: "service-admission",
+      admissionType: "client-server-admission",
+      topology: "clientServer",
       wireField: "normalizedEffectiveMaxMessageBytes",
       range: "1..4294967295",
       normalization: {
@@ -1394,6 +1395,14 @@ function validateSemanticConstraints(constraints, contexts, fail) {
       enforcement: "immediately-after-complete-envelope-length-prefix-before-allocation",
       payloadLimit: "negotiated-complete-message-bound-minus-actual-envelope-overhead",
       mismatch: "oversize-protocol-error-and-connection-not-ready",
+    }],
+    ["route-mesh-message-size-integrity", {
+      admissionType: "route-mesh-admission",
+      topology: "routeMesh",
+      frameworkMessageSizeSetting: "forbidden",
+      frameworkMessageSizeLimit: "none",
+      admissionMessageSizeField: "forbidden",
+      remainingBounds: ["schema-and-wire-representation", "application-hwm", "mailbox-byte-budget"],
     }],
     ["participant-sequence-domain", {
       sequenceFields: [
@@ -1867,7 +1876,7 @@ function validateSemanticConstraints(constraints, contexts, fail) {
       connection: "current-admitted-physical-connection-only",
       immutableExact: [
         "topologyKind", "meshName-or-channelName", "securityIdentity", "endpoint-connection-identity",
-        "rid", "lifecycleGeneration", "normalizedEffectiveMaxMessageBytes", "channelMembershipKeys",
+        "rid", "lifecycleGeneration", "clientServer.normalizedEffectiveMaxMessageBytes", "channelMembershipKeys",
         "protocolCapabilities", "spotTypes", "statefulCapabilities", "applicationVersion",
       ],
       revision: "strictly-increasing-same-revision-identical-bytes-idempotent-lower-stale-same-revision-different-protocol-error",
@@ -4405,25 +4414,28 @@ function validateServiceInvariants(schema, types, fail) {
   requireFields(types.get("route-mesh-admission")?.fields, [
     { name: "meshName", $ref: "text8" },
     { name: "securityIdentity", $ref: "text8" },
-    { name: "normalizedEffectiveMaxMessageBytes", $ref: "nonzero-u32" },
     { name: "lifecycleGeneration", $ref: "nonzero-u64" },
     { name: "descriptorRevision", $ref: "nonzero-u64" },
     { name: "advertisedEndpoint", $ref: "endpoint" },
     { name: "channels", $ref: "channel-vector" },
     { name: "extension", $ref: "descriptor-extension" },
-  ], "$.types", "RouteMesh admission must exchange one normalized complete-message bound");
+  ], "$.types", "RouteMesh admission must not exchange a Framework message-size bound");
   const payloadBytes = types.get("application-payload-bytes");
   const payloadRuntimeBound = payloadBytes?.runtimeMaximumBytes;
   const envelope = types.get("application-payload-envelope-v1");
   const envelopeRuntimeBound = envelope?.runtimeMaximumEncodedBytes;
   if (payloadBytes?.maximumBytes?.$bound !== "applicationPayloadAbsoluteBytes"
-      || payloadRuntimeBound?.$negotiatedBound
+      || payloadRuntimeBound?.routeMesh?.frameworkMessageSizeLimit !== "none"
+      || payloadRuntimeBound?.routeMesh?.absoluteMaximum?.$bound !== "applicationPayloadAbsoluteBytes"
+      || payloadRuntimeBound?.clientServer?.$negotiatedBound
         !== "effectiveCompleteMessageBytesMinusActualEnvelopeOverhead"
-      || payloadRuntimeBound?.absoluteMaximum?.$bound !== "applicationPayloadAbsoluteBytes"
+      || payloadRuntimeBound?.clientServer?.absoluteMaximum?.$bound !== "applicationPayloadAbsoluteBytes"
       || envelope?.maximumEncodedBytes?.$bound !== "wireU32CompleteMessageBytes"
-      || envelopeRuntimeBound?.$negotiatedBound !== "effectiveCompleteMessageBytes"
-      || envelopeRuntimeBound?.absoluteMaximum?.$bound !== "wireU32CompleteMessageBytes") {
-    fail("$.types", "application envelope must use negotiated runtime and absolute u32 bounds");
+      || envelopeRuntimeBound?.routeMesh?.frameworkMessageSizeLimit !== "none"
+      || envelopeRuntimeBound?.routeMesh?.absoluteMaximum?.$bound !== "wireU32CompleteMessageBytes"
+      || envelopeRuntimeBound?.clientServer?.$negotiatedBound !== "effectiveCompleteMessageBytes"
+      || envelopeRuntimeBound?.clientServer?.absoluteMaximum?.$bound !== "wireU32CompleteMessageBytes") {
+    fail("$.types", "application envelope must use no RouteMesh Framework cap and the ClientServer negotiated bound");
   }
   const instanceRoute = types.get("instance-route-v1");
   const readyInstanceRoute = instanceRoute?.cases?.find(

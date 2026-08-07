@@ -25,6 +25,6 @@
 | [Actor relocation](05-actor-relocation.ko.md) | 작성 완료 | `ZLinkSuspendingActor`/`ZLinkSuspendingActorFactory`, `ZLinkKotlinActorManager`/`ZLinkKotlinActorClient` |
 | [Stream session](06-stream-session.ko.md) | 작성 완료 | `ZLinkSuspendingSession`, `ZLinkKotlinSessionClient`, `bindOrGetActor(...)` |
 | [Location authority](07-location-authority.ko.md) | 작성 완료 | `suspend fun status()`/`listTopology(...)`, `Flow<T>` projection |
-| [Observability diagnostics](08-observability-diagnostics.ko.md) | 작성 완료 | `onMessageFlow { }`, Java `ZLinkFrameworkErrorKind` 재사용 |
+| [Observability diagnostics](08-observability-diagnostics.ko.md) | 작성 완료 | `configureDispatch { }`, Java `ZLinkFrameworkErrorKind` 재사용 |
 
 ko·en 모두 갖췄다. `mkdocs.yml` nav에 올라가 있다.

@@ -23,7 +23,7 @@ judgment.
 - Failure, fanout, timer, and runtime tracing-level change
 - Stream connection, relocation, request, and owner lease metrics
 - Actor/User Spot handoff, rolling update, and planned maintenance
-- Relocate blocker, concurrent call, cancellation, and Shutdown
+- Relocate blocker, concurrent call, Shutdown, and waiter cancellation only in supporting languages
   contention
 
 ## 2. Deployment Configuration
@@ -74,8 +74,8 @@ room Spot in order, it must be searchable as one flow.
 Actor/Spot traces share the same flow ID?
 
 - Start condition: The client Session is bound to the Player Actor,
-  and the Actor exists on a room Spot. Every role's tracing level is
-  `key_transitions`.
+  and the Actor exists on a room Spot. Every role's diagnostics level is
+  `Normal`.
 - Procedure: The client sends one game action with a unique marker via
   Stream.
 - Verification: The connector outbound, Session inbound, Actor relay,
@@ -115,8 +115,8 @@ message with no flow.
 **Verification question:** On an enabled→off→enabled path, does the
 last node use a new ID different from the earlier flow?
 
-- Start condition: The source and target are `key_transitions`, and
-  the middle node is `off`.
+- Start condition: The source and target are `Normal`, and
+  the middle node is `Off`.
 - Procedure: Send one message with a unique marker crossing three
   nodes.
 - Verification: The source record has a flow, and the off node has no
@@ -125,28 +125,27 @@ last node use a new ID different from the earlier flow?
 - Detailed behavior: verifies
   [Flow Correlation §4](../spec/27-flow-correlation.en.md#4-when-a-flow-is-created).
 
-#### OBS-A4 A Fanout Branch Shares A Flow, And A Timer Builds A New Flow
+#### OBS-A4 Deliver Fanout Payload While A Timer Builds A New Flow
 
 Priority: `P1`
 
-Subscriber records branched from one publish share the original flow.
-Conversely, a timer callback with no existing inbound operation starts
-a new timer-origin flow.
+Normal Classic fanout delivery creates no message-flow trace. Subscribers confirm propagation with
+application payload; only a subscriber-local missing-handler variant uses a formal dispatch-error
+record. A timer callback with no inbound operation starts a new timer-origin flow.
 
-**Verification question:** Do fanout subscribers receive the same
-flow, while a timer callback has a separate timer-origin flow?
+**Verification question:** Is fanout payload delivered while local dispatch error and timer flow
+respect their formal boundaries?
 
-- Start condition: The order workflow and N subscribers are ready, and
-  a room timer is registered.
+- Start condition: The order workflow, a normal-handler subscriber, and a missing-handler subscriber
+  are ready, and a room timer is registered.
 - Procedure: The workflow handler publishes a projection event, and
   separately runs a one-shot room timer.
-- Verification: The N subscriber traces share the publish flow ID. The
-  timer trace has a different flow ID and `origin=timer`, and the
-  timer handler runs once.
-- Detailed behavior: verifies
-  [Flow Correlation §4](../spec/27-flow-correlation.en.md#4-when-a-flow-is-created)
-  and
-  [§5](../spec/27-flow-correlation.en.md#5-propagation-rule).
+- Verification: The normal subscriber processes the application marker once, with no normal fanout
+  message-flow trace. The missing-handler subscriber's local record is a `surface=classic_fanout`
+  `no_handler` dispatch error without `channel_route_kind`. The timer trace has a separate flow ID
+  and `flow_origin=timer`, and its handler runs once.
+- Detailed behavior: verifies [Message Flow Tracing — Attribute Inclusion Conditions](../spec/26-message-flow-tracing.en.md#32-attribute-inclusion-conditions)
+  and [Flow Correlation — When A Flow Is Created](../spec/27-flow-correlation.en.md#4-when-a-flow-is-created).
 
 #### OBS-A5 Apply A Runtime Tracing-Level Change
 
@@ -156,7 +155,7 @@ A tracing-level change must not stop business processing, and must
 apply starting from the message sent after the change completes.
 
 **Verification question:** During the
-`key_transitions→off→errors_only→key_transitions` transition, do all
+`Normal→Off→Errors→Normal` transition, do all
 requests get processed, and does each marker's trace scope match its
 level?
 
@@ -165,10 +164,10 @@ level?
 - Procedure: Right after each level-change awaitable completes, send a
   normal or error request with a different marker.
 - Verification: Every request gets the formal application result. The
-  off marker has no flow trace, errors-only has only error records,
+  Off marker has no flow trace, the Errors marker has only error records,
   and a new flow trace resumes from the last marker.
 - Detailed behavior: verifies
-  [Flow Correlation §8](../spec/27-flow-correlation.en.md#8-observability-and-privacy).
+  [Message-Flow Tracing — Changing The Record Level At Runtime](../spec/26-message-flow-tracing.en.md#41-changing-the-record-level-at-runtime).
 
 ### Track B — Cross-Check Runtime Metric Against Actual Events
 
@@ -216,7 +215,8 @@ once in the relocation-completed/duration/interruption metrics?
   time exceeding its target doesn't turn the completed outcome into a
   failure.
 - Detailed behavior: verifies
-  [Runtime Metrics §5](../spec/25-runtime-metrics.en.md#5-host-relocation-and-shutdown).
+  [Object And STREAM Metrics](../spec/25-runtime-metrics.en.md#4-object-and-stream) and
+  [Host Relocation And Shutdown Metrics](../spec/25-runtime-metrics.en.md#5-host-relocation-and-shutdown).
 
 #### OBS-B3 Confirm The Absence Of A Publish Metric And Owner-Lease Lateness
 
@@ -313,9 +313,8 @@ relay get handled at the new owner with the same Session binding?
   request handler evidence is also at B. The client receives the push
   once, and binding count and Actor identity are kept.
 - Detailed behavior: verifies
-  [Host Maintenance §8.3](../spec/28-graceful-drain-handoff.en.md#83-an-actor-belonging-to-an-entry-spot)
-  and
-  [Session Actor Dispatch §7](../spec/20-session-actor-dispatch.en.md#7-execution-and-lifecycle).
+  [The Common Handoff Order For Every Actor And Spot](../spec/28-graceful-drain-handoff.en.md#82-the-common-order-every-actor-and-spot-follows)
+  and [The Session Actor Relocation Route Barrier](../spec/20-session-actor-dispatch.en.md#5-actor-relocation-route-barrier).
 
 #### OBS-C3 Move A User Spot Aggregate Together With Its Member Actors
 
@@ -362,7 +361,7 @@ and the client close reason observed exactly once during Shutdown?
   Host result is `Stopped/None`. No new object is created on the
   target node.
 - Detailed behavior: verifies
-  [Host Maintenance §10](../spec/28-graceful-drain-handoff.en.md#10-relocate-completion-and-failure).
+  [The Race Between Shutdown And Relocate](../spec/28-graceful-drain-handoff.en.md#11-the-race-between-shutdown-and-relocate).
 
 #### OBS-C5 Keep The Source When There's No Eligible Target
 
@@ -384,7 +383,8 @@ requests?
   generation are kept, and the follow-up request succeeds. It doesn't
   auto-start Shutdown.
 - Detailed behavior: verifies
-  [Host Maintenance §6](../spec/28-graceful-drain-handoff.en.md#6-concurrent-calls-and-cancellation).
+  [Conditions Checked Before Selecting A Target](../spec/28-graceful-drain-handoff.en.md#4-conditions-checked-before-selecting-a-target)
+  and [Selecting A Target Matching The Mode](../spec/28-graceful-drain-handoff.en.md#5-selecting-a-target-matching-the-mode).
 
 #### OBS-C6 Move To The Exact New Version Via Rolling Update
 
@@ -450,7 +450,7 @@ application gate, does Shutdown end in
   and the forced-shutdown metric delta is 1. A late callback
   completion doesn't change the Host terminal.
 - Detailed behavior: verifies
-  [Host Maintenance §10](../spec/28-graceful-drain-handoff.en.md#10-relocate-completion-and-failure).
+  [The Race Between Shutdown And Relocate](../spec/28-graceful-drain-handoff.en.md#11-the-race-between-shutdown-and-relocate).
 
 #### OBS-C9A Automatic Topology Starts Relocation Only After The Target Is Ready
 
@@ -473,7 +473,8 @@ not-ready, and complete relocation once ready?
   the target is ready, Relocate succeeds and follow-up requests are
   processed at the target.
 - Detailed behavior: verifies
-  [Host Maintenance §6](../spec/28-graceful-drain-handoff.en.md#6-concurrent-calls-and-cancellation).
+  [Conditions Checked Before Selecting A Target](../spec/28-graceful-drain-handoff.en.md#4-conditions-checked-before-selecting-a-target)
+  and [Selecting A Target Matching The Mode](../spec/28-graceful-drain-handoff.en.md#5-selecting-a-target-matching-the-mode).
 
 #### OBS-C9B Manual Topology Blocks Relocate At Preflight
 
@@ -494,7 +495,8 @@ in `ManualTopologyUnsupported`, keeping the source?
   Shutdown doesn't use manual topology as a blocker and ends in a
   bounded terminal.
 - Detailed behavior: verifies
-  [Host Maintenance §6](../spec/28-graceful-drain-handoff.en.md#6-concurrent-calls-and-cancellation).
+  [Conditions Checked Before Selecting A Target](../spec/28-graceful-drain-handoff.en.md#4-conditions-checked-before-selecting-a-target)
+  and [Selecting A Target Matching The Mode](../spec/28-graceful-drain-handoff.en.md#5-selecting-a-target-matching-the-mode).
 
 #### OBS-C10 Select Only The Exact Version The Relocation Mode Defines
 
@@ -539,30 +541,28 @@ terminal, while a different-option caller gets
   `Blocked/OperationInProgress`, and don't change the first
   operation's effective version or deadline.
 - Detailed behavior: verifies
-  [Host Maintenance §11](../spec/28-graceful-drain-handoff.en.md#11-the-race-between-shutdown-and-relocate).
+  [Concurrent Calls And Cancellation](../spec/28-graceful-drain-handoff.en.md#6-concurrent-calls-and-cancellation).
 
-#### OBS-C12 Distinguish Relocate Waiter Cancellation From Shutdown Contention
+#### OBS-C12 Distinguish Relocate Waiters From Shutdown Contention
 
 Priority: `P0`
 
-One caller's await cancellation doesn't cancel the shared Host
+In languages supporting waiter cancellation, one caller's await cancellation doesn't cancel the shared Host
 operation. A concurrent Shutdown must get its own terminal result from
 Relocate per the formal contention rule.
 
-**Verification question:** Does only the joined waiter get cancelled,
-while the Relocate and Shutdown operations each return exactly one
-terminal?
+**Verification question:** Do supported joined-waiter cancellation and the common concurrent-call/
+Shutdown variant preserve the shared operation and terminal-once behavior?
 
-- Start condition: A PlannedMaintenance target restore is held at an
-  application gate.
-- Procedure: Start the first Relocate and a second waiter of the same
-  option, and cancel only the second waiter. Start Shutdown, then
-  release the target gate.
-- Verification: Only the second caller is cancelled, and the first
-  Relocate waiter receives the spec's `ShutdownRequested` contention
-  result or the already-confirmed relocation result. Shutdown ends
-  exactly once in `Stopped` or `ForceStopped`, and the terminal value
-  doesn't change on repeated status query either.
+- Start condition: Each variant uses a fresh fixture with PlannedMaintenance target restore held at
+  an application gate.
+- Procedure: The common variant starts same-option concurrent Relocate callers and Shutdown.
+  Languages supporting waiter cancellation use another fixture and cancel only the second joined
+  waiter. Release each target gate.
+- Verification: In the common variant Relocate callers share a result, and Relocate and Shutdown
+  each have one terminal. In supporting languages only the second waiter is cancelled while the
+  shared operation continues; the first receives `ShutdownRequested` or an already-fixed relocation
+  result. Repeated status queries do not change the Shutdown terminal.
 - Detailed behavior: verifies
   [Host Maintenance §11](../spec/28-graceful-drain-handoff.en.md#11-the-race-between-shutdown-and-relocate).
 

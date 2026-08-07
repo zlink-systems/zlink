@@ -315,6 +315,10 @@ by [Framework Error Model](32-framework-error-model.en.md).
 - An Instance Spot only starts cold activation when `Missing`. A `Ready`
   owner process termination or owner lease expiry isn't turned into
   `Missing` or recovered via cold activation.
+- Even if a `Ready` authority still has an activation recovery pointer, it
+  is used only to resume the incomplete first cold-activation operation on
+  the same target node and lifecycle designated by authority. It is never a
+  basis for selecting another target after a steady `Ready` owner failure.
 - Instance Spot cold-activation recovery isn't used for Actor, User Spot,
   an already-`Ready` Instance Spot, or host relocation.
 - A failure before the relocation commit keeps the source; a failure

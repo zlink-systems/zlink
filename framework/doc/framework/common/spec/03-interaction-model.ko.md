@@ -157,8 +157,8 @@ routing과 runtime monitoring에서만 관측한다.
 `send`는 reply가 없는 one-way operation이다. Public call은 비동기 submit 하나만 제공하며, 즉시 한 번만
 시도하는 동기 terminator는 제공하지 않는다. 반환은 destination handler가 실행되었다는 확인이 아니라
 Framework가 message를 local outbound queue에 받아들였는지를 나타낸다. Queue가 일시적으로 가득 차면
-유한한 send timeout까지 admission을 기다린다. 이미 수락한 뒤 발생한 one-way 오류는 runtime error sink와
-monitoring으로 보고한다.
+유한한 send timeout까지 admission을 기다린다. 이미 수락한 뒤 발생한 one-way 오류는 application이 구성한
+standard logger·telemetry provider와 monitoring으로 보고한다. Framework 전용 runtime error sink는 제공하지 않는다.
 
 Global Spot·Actor send도 같은 비동기 terminator를 사용한다. Source는 current Ready authority를 resolve하고
 local outbound admission으로 submit을 완료한다. Cache hit도 같은 public 의미를 유지하므로 cache 상태에 따라
@@ -390,9 +390,9 @@ reply capability를 소비한다. 일반 server-initiated packet은 `Send(...)`�
 ## 10. Handler 실패
 
 reply route를 복원할 수 있는 request는 구조화된 error reply로 완료한다. reply route를 복원할 수 없는
-message와 one-way message는 drop하고 원인에 맞는 log, metric과 observer event를 남긴다. application
-handler 예외는 one-way 경로에서도 error로 기록한다. observer 실패는 원래 reply 또는 drop 결과를
-바꾸지 않는다.
+message와 one-way message는 drop하고 원인에 맞는 structured log와 metric을 남긴다. Application
+handler 예외는 one-way 경로에서도 error로 기록한다. Logger·telemetry provider 실패는 원래 reply 또는
+drop 결과를 바꾸지 않는다.
 
 ## 11. 종료
 

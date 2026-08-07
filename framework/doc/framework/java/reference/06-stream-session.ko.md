@@ -66,11 +66,14 @@ sessionContext.client().send(new ServerTick(tickNumber)).submit();
 | --- | --- | --- |
 | `.metadata(key, value)` | 없음 | client에 전달할 key-value |
 | `.compress()` | 비압축 | 등록된 stream compression codec으로 payload를 압축 |
+| `.timeout(duration)` | STREAM socket send timeout | 이 send의 admission 대기를 더 짧게 제한 |
 | `.submit()` | 필수 terminal | source-local admission까지만 기다린다 |
 
 **완료 결과.** messaging-execution category의 one-way 완료 kind와 같다 — socket send timeout까지
 기다린 뒤 없으면 `DEADLINE_EXCEEDED`, connection 단절은 `UNAVAILABLE`인 `ZLinkFrameworkException`으로
-완료한다.
+완료한다. 호출별 timeout은 socket timeout을 연장하지 않으며 둘 중 먼저 도달하는 deadline을 사용한다.
+값은 millisecond 올림 뒤 `1..INT_MAX`여야 하고 deadline 뒤 late admission이나 replay는 없다. Reply에는
+이 modifier를 적용하지 않는다.
 
 **선택 기준.** Client가 보낸 request가 아닌, server가 먼저 보내는 push 메시지에 쓴다. Client의
 request에 답할 때는 `reply`를 쓴다.
@@ -141,7 +144,10 @@ capability를 즉시 runtime에 이전한다 — submit되면 typed reply가 ori
 terminal-once로 완료하고, admission 실패면 같은 correlation을 typed failure로 완료한다.
 `notifyDisconnected`는 connection이 유지된 상태에서 논리적 단절을 알리는 notification이며 callback
 terminal까지 기다린다. Physical disconnect는 Framework가 자동으로 현재 binding 전체에 통지하므로
-이 호출이 그 대체 경로는 아니다.
+이 호출이 그 대체 경로는 아니다. Exact binding callback은 최대 한 번 실행하고 terminal 뒤 tombstone을
+남긴다. Rebind는 새 binding을 먼저 등록하며 이전 callback failure가 새 binding을 제거하거나 이전 binding을
+복원하지 않는다. 같은 generation의 relocation route 갱신은 rebind가 아니므로 disconnect callback을 실행하지
+않는다.
 
 **선택 기준.** Actor 쪽 코드에서 특정 bound client에 직접 전달할 때 쓴다. Request에 대한 응답은
 Session 쪽 `reply`가 처리한다.

@@ -588,7 +588,9 @@ existing row의 type을 caller가 다시 전달할 필요는 없다.
 
 Cold Instance로 향하는 one-way call은 resolve, reservation, activation과 outbound admission까지 같은 send
 deadline에 포함하고 admission 결과에서 완료한다. Request는 activation, handler와 terminal reply까지 기다린다.
-Owner loss 뒤에는 authority에 저장된 creation intent를 사용해 같은 instance를 reactivation한다.
+저장한 creation intent는 최초 cold activation이 terminal completion을 기록하기 전에 같은 target
+node·lifecycle에서 재개할 때만 사용한다. 이미 steady `Ready`였던 owner의 process 종료나 lease 만료는
+`Missing`으로 바꾸거나 다른 node의 cold activation으로 복구하지 않으며 call은 `unavailable`로 끝난다.
 
 `spot_ref_t`는 global SpotId, `1..9223372036854775807` 범위의 ObjectGeneration과 조회 시점
 MeshName·NodeRid를 담은 immutable location snapshot이다. 일반 message target으로 사용하지 않으며 별도 handle,
@@ -845,6 +847,11 @@ public:
     void cancel() noexcept;
 };
 ```
+
+Timer option을 생략하면 `overrun_policy`는 `skip_late_ticks`, `max_catch_up_ticks`는 `1`이다.
+`max_catch_up_ticks`는 `overrun_policy == catch_up_bounded`일 때만 사용하고 `1..INT_MAX` 범위인지
+검증한다. 다른 policy에서는 이 값을 사용하지 않으며 이 범위로 validation하지 않는다. 이 규칙은 기존
+`timer_options_t` field를 해석하는 계약이며 새 public member를 추가하지 않는다.
 
 timer 등록 검증은 [stage-wrapper §4.1](../../../../17-stage-wrapper-on-spot.ko.md)이 소유한다.
 

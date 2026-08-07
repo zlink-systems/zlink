@@ -13,6 +13,7 @@ fi
 RUN_DIR="$(mktemp -d)"
 chmod 0700 "${RUN_DIR}"
 LOG_DIR="$RUN_DIR/logs"
+ZLINK_SAMPLE_FRAMEWORK_ROLE_LOGS="workflow-a.log workflow-b.log api-a.log api-b.log"
 mkdir -p "$LOG_DIR"
 
 read -r api_a_http_port api_b_http_port workflow_a_http_port workflow_b_http_port \

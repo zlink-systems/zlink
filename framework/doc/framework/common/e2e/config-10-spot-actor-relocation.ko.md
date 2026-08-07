@@ -410,23 +410,25 @@ Actor handler가 `Yield`한 continuation도 같은 Actor turn의 일부다. Relo
 
 **검증 질문:** Capacity가 부족하면 일부 Actor만 이동하지 않고 source가 유지되는가.
 
-- 시작 조건: Spot에 여러 Actor가 있고 target capacity는 전체 이동에 부족하다.
-- 절차: SpotWide Relocate를 호출하고 terminal 뒤 각 Actor에 state request를 보낸다.
+- 시작 조건: Source Host에는 해당 SpotWide unit이 있고, 다른 candidate의 capacity는 aggregate 전체를 받기에
+  부족하여 eligible target이 없다.
+- 절차: Target 인자 없는 public Host Relocate를 호출하고 terminal 뒤 각 Actor에 state request를 보낸다.
 - 검증: Relocate는 capacity failure로 끝나며 모든 Actor request는 source에서 기존 state를 반환한다.
-- 계약 근거: [Spot actor](../spec/15-spot-actor.ko.md)
+- 계약 근거: [Relocation unit과 실행량 제한](../spec/28-graceful-drain-handoff.ko.md#7-relocation-unit과-실행량-제한)
 
-#### ST-G3 PerActor Spot relocation
+#### ST-G3 PerActor Spot의 host relocation
 
 우선순위: `P0`
 
 `PerActor` mode에서는 Spot과 Actor가 서로 다른 current location을 가질 수 있고 각 Actor route가 독립적으로
 갱신되어야 한다.
 
-**검증 질문:** 선택한 Actor만 target으로 이동하고 나머지 Actor는 source에서 처리되는가.
+**검증 질문:** Host relocation 뒤 PerActor Actors가 독립 route 또는 명시적 membership을 유지하는가.
 
-- 시작 조건: 같은 PerActor Spot에 Actor A와 B가 있다.
-- 절차: A만 target으로 Relocate한 뒤 A와 B에 request를 보낸다.
-- 검증: A handler는 target, B handler는 source에서 실행되고 두 Actor의 identity와 state는 유지된다.
+- 시작 조건: 같은 PerActor Spot에 서로 다른 current location 또는 명시적 membership을 가진 Actor A와 B가 있다.
+- 절차: Framework가 target을 선택하는 public host relocation을 실행한 뒤 A와 B에 request를 보낸다.
+- 검증: 각 Actor request는 current route 한 곳에서만 처리되고 identity, state와 membership이 유지된다.
+  Actor-scoped Relocate나 caller-specified target은 사용하지 않는다.
 - 계약 근거: [Spot actor](../spec/15-spot-actor.ko.md)
 
 #### ST-G4 ToActor message during Spot move
@@ -438,9 +440,10 @@ SpotWide relocation 중 Actor ID로 보낸 message도 해당 Actor의 이동 순
 **검증 질문:** Spot 이동 중 ToActor messages가 target에서 중복 없이 serial 처리되는가.
 
 - 시작 조건: SpotWide Spot에 여러 Actor와 sequence handler가 있다.
-- 절차: Spot Relocate 중 각 Actor에 고유 sequence messages를 보낸다.
+- 절차: 해당 source Host의 target 인자 없는 public Host Relocate 중 각 Actor에 고유 sequence messages를 보낸다.
 - 검증: 각 Actor별 성공 sequence 순서가 유지되고 동일 operation ID가 source와 target에 중복되지 않는다.
-- 계약 근거: [Spot actor](../spec/15-spot-actor.ko.md)
+- 계약 근거: [SpotWide User Spot handoff](../spec/28-graceful-drain-handoff.ko.md#85-spotwide-user-spot)과
+  [대기 중인 message 이전](../spec/28-graceful-drain-handoff.ko.md#9-대기-중인-message-timer와-session을-옮긴다)
 
 #### ST-G5 Relocation interruption measurement
 
@@ -465,9 +468,9 @@ SpotWide relocation은 현재 application turn이 끝난 뒤 시작하고 target
 **검증 질문:** Relocation과 겹친 Spot handler가 source와 target에서 동시에 실행되지 않는가.
 
 - 시작 조건: Spot handler가 Application gate에서 대기한다.
-- 절차: Handler 진입 뒤 SpotWide Relocate와 follow-up request를 시작하고 gate를 연다.
+- 절차: Handler 진입 뒤 target 인자 없는 public Host Relocate와 follow-up request를 시작하고 gate를 연다.
 - 검증: 기존 handler는 source에서 끝나고 follow-up은 target에서 한 번 실행된다. 전체 active count는 1을 넘지 않는다.
-- 계약 근거: [Spot actor](../spec/15-spot-actor.ko.md)
+- 계약 근거: [SpotWide User Spot handoff](../spec/28-graceful-drain-handoff.ko.md#85-spotwide-user-spot)
 
 ### Track H — Deferred Join과 handler context
 

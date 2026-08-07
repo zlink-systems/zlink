@@ -347,7 +347,7 @@ a configuration error?
 - Procedure: The runner starts the host and checks the process terminal and health.
 - Verification: The host does not expose a listener or ready status, and exits with a public
   configuration error.
-- Detailed behavior: verifies the prerequisite in [Framework API §7](../spec/06-framework-api.en.md#7-logical-multicast-completion).
+- Detailed behavior: verifies the automatic Store prerequisite in [Framework API — Classic Fanout](../spec/06-framework-api.en.md#11-classic-fanout).
 
 #### PS-E2B Reject Mixing Automatic And Manual Mode In One Registration
 
@@ -470,7 +470,8 @@ disconnected after 15 seconds.
 **Verification question:** Does a publisher stay Ready past the peer deadline even while only an
 unsubscribed topic is being published?
 
-- Starting condition: The subscriber subscribes only to `events.b`, and the publisher is ready.
+- Starting condition: The subscriber is connected to the ChannelName and registers only an
+  `events.b` handler; the publisher is ready.
 - Procedure: The publisher periodically sends `events.a` events for a verification window longer than
   the peer deadline. The verification window is computed as the fixed 15-second deadline plus a
   runner tolerance.
@@ -488,21 +489,23 @@ Priority: `P0`
 If the subscriber has no packet handler, that event cannot be delivered to an Application handler.
 Dispatch of other normal packets must continue.
 
-**Verification question:** Does a packet with no handler appear as `no_handler/drop` in the public
-observer, while the next normal event is still processed?
+**Verification question:** Does a packet with no handler appear as `no_handler/drop` in the
+application logger provider, while the next normal event is still processed?
 
-- Starting condition: The subscriber registers a normal packet handler and a public message-flow
-  observer, and the publisher is ready.
+- Starting condition: The subscriber registers a normal packet handler and an application logger
+  provider, and the publisher is ready.
 - Procedure: A packet name with no handler is published, followed by a normal packet.
-- Verification: The first event has no handler evidence, and the public observer provides
-  `no_handler/drop` exactly once. The normal event is processed exactly once by its handler.
+- Verification: The first event has no handler evidence, and the logger provider supplies one
+  `zlink.dispatch_error` with `surface=classic_fanout`, `message_kind=send`, `outcome=failed`,
+  `reason=no_handler`, and `action=drop`. It omits `channel_route_kind` and is a subscriber-local
+  dispatch result, not a publisher delivery result. The normal event is processed exactly once.
 - Detailed behavior: verifies [Framework API §11](../spec/06-framework-api.en.md#11-classic-fanout)
   and [Message Flow Tracing §2.2](../spec/26-message-flow-tracing.en.md#22-the-public-behavior-recorded).
 
 ## 5. Completion Criteria
 
-- Every scenario uses only public fanout publish, status/observer, and application evidence from the
-  role servers.
+- Every scenario uses only public fanout publish, status/application logger provider, and application
+  evidence from the role servers.
 - Raw frames, private descriptors, socket monitors, and protocol-negative publishers are not used in
   E2E assertions.
 - Ready and reconnect are confirmed by bounded polling of public status, cross-checked against actual

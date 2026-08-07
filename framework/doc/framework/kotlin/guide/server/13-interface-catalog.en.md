@@ -67,7 +67,7 @@ Extension functions fill in the slots where there's no wrapper.
 | `ZLinkMeshNodeBuilder.channelName(name) { ... }` | Channel registration as a block |
 | `ZLinkMeshPeerConnections.connect(...)` | Multiple endpoints at once |
 | `ZLinkFrameworkOptions.configureDispatch { ... }` | Diagnostics configuration as a block |
-| `ZLinkDispatchOptions.onMessageFlow { ... }` | An observer as a lambda |
+| Application logger/telemetry provider | Receives message-flow and dispatch-error structured records |
 | `ZLinkMessage.decode<T>()` · `messageOf(...)` | Reified decode and construction |
 | `ZLinkStreamConnector.kotlin()` · `.messages()` · `.errors()` | The connector as suspend / `Flow` |
 | `ZLinkStreamConnectorOptions.withLz4StreamCompression()` and others | Compression settings |

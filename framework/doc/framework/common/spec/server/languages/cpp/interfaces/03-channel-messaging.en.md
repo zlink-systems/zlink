@@ -761,6 +761,7 @@ public:
     stream_send_call_t &metadata(std::string key, std::string value);
     stream_send_call_t &packet_name(std::string packet_name);
     stream_send_call_t &compress();
+    stream_send_call_t &timeout(std::chrono::milliseconds timeout);
     task_t<void> submit();
 };
 
@@ -1134,8 +1135,15 @@ client DEALER's,
 [classic fanout](../../../../01-glossary.en.md#classic-fanout) uses the
 publisher socket's, and STREAM send/reply uses that STREAM socket's
 send timeout. A bound session uses one framework socket send timeout
-even if the local/remote Actor route changes. A one-way call doesn't
-have a per-call `timeout(...)`. Without socket or MeshNode
+even if the local/remote Actor route changes. An ordinary one-way call
+doesn't have a per-call `timeout(...)`, but `stream_send_call_t` can
+shorten its admission wait per call. Omission uses the STREAM socket send
+timeout; specifying it uses the shorter of the per-call and socket values,
+so it cannot extend the socket timeout. The value is `1..INT_MAX`
+milliseconds, rounding any remaining fraction from another unit up to the
+next millisecond. Expiry completes terminal-once as `deadline_exceeded` and
+does not start later admission or replay. A STREAM reply doesn't provide
+this modifier. Without socket or MeshNode
 configuration, a 1-second default is used instead of an infinite wait.
 The socket/MeshNode `std::chrono::milliseconds` value used for one-way
 admission only allows the `1..INT_MAX` range. `0`, negative, and

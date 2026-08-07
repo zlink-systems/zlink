@@ -179,7 +179,8 @@ public interface IZLinkStreamNodeBuilder
     IZLinkStreamNodeBuilder Bind(int port = 0);
     IZLinkStreamNodeBuilder SetBindHost(string bindHost);
     IZLinkStreamNodeBuilder SetAdvertiseHost(string advertiseHost);
-    IZLinkSocketConfig ConfigureSocket();
+    IZLinkStreamNodeBuilder MaxMessageSize(long bytes);
+    IZLinkStreamSocketConfig ConfigureSocket();
     IZLinkStreamNodeBuilder SetTlsServer(
         string certificatePath,
         string keyPath,
@@ -195,7 +196,7 @@ options
     .Bind(7400)
     .SetBindHost("0.0.0.0")
     .SetAdvertiseHost("node-a.example.net")
-    .ConfigureSocket().MaxMessageSize = 64 * 1024; // default cap for complete STREAM messages received from client to server.
+    .MaxMessageSize(64 * 1024) // default cap for complete STREAM messages received from client to server.
     .SetTlsServer(
         "server.crt",
         "server.key",
@@ -203,7 +204,7 @@ options
     .AddSession<GatewaySession>(); // registers the single session type this node uses.
 ```
 
-`ConfigureSocket().MaxMessageSize` is this StreamNode's Core STREAM inbound option. Its
+`MaxMessageSize(long bytes)` is this StreamNode's Core STREAM inbound option. Its
 default is `64 KiB`; a complete message is measured as header bytes plus payload bytes,
 excluding the 6-byte prefix. The cap applies only to messages received from client to
 server, not to messages sent from server to client. `0` maps to Core `-1`, meaning no

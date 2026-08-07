@@ -197,95 +197,14 @@ Framework 내부 배치 판단 값이다.
 concurrency에 모두 여유가 있을 때만 `true`다. Activation concurrency의 현재 값과
 limit은 snapshot에 별도 field로 노출하지 않는다.
 
-## 2. 메시지 흐름 관측
+## 2. 메시지 흐름 진단
 
 ```cpp
 enum class message_flow_log_mode_t {
     off = 0,
-    errors_only = 1,
-    key_transitions = 2,
-    verbose = 3,
-    diagnostic = 4
-};
-enum class message_flow_outcome_t {
-    received = 0,
-    dispatched = 1,
-    replied = 2,
-    dropped = 3,
-    sent = 4,
-    reply_received = 5,
-    error = 6
-};
-enum class dispatch_error_surface_t {
-    channel = 0,
-    route_mesh_channel = 1,
-    spot_route = 2,
-    spot_subscription = 3,
-    spot_actor = 4,
-    stream_session = 5
-};
-enum class dispatch_message_kind_t {
-    request = 0,
-    send = 1,
-    publish = 2,
-    response = 3,
-    error = 4,
-    actor_request = 5,
-    actor_send = 6
-};
-enum class dispatch_error_reason_t {
-    handler_missing = 0,
-    payload_decode_failed = 1,
-    handler_exception = 2,
-    invalid_frame = 3,
-    reply_path_missing = 4,
-    unexpected_reply = 5
-};
-enum class dispatch_error_action_t {
-    reply_error = 0,
-    drop = 1,
-    fail_caller = 2
-};
-enum class flow_origin_t : std::uint8_t
-{ inbound = 1, timer = 2, application = 3, lifecycle = 4 };
-struct message_dispatch_error_event_t {
-    dispatch_error_surface_t surface;
-    dispatch_message_kind_t message_kind;
-    dispatch_error_reason_t reason;
-    dispatch_error_action_t action;
-    std::optional<std::string> packet_name;
-    std::optional<std::string> channel_name;
-    std::optional<std::string> topic;
-    std::optional<std::string> spot_id;
-    std::optional<std::string> actor_id;
-    std::optional<std::string> source_rid;
-    std::optional<std::string> correlation_id;
-    std::exception_ptr exception;
-    std::optional<std::string> flow_id;
-    std::optional<flow_origin_t> flow_origin;
-};
-struct message_flow_event_t {
-    message_flow_outcome_t outcome;
-    dispatch_error_surface_t surface;
-    dispatch_message_kind_t message_kind;
-    std::optional<std::string> packet_name;
-    std::optional<std::string> channel_name;
-    std::optional<std::string> topic;
-    std::optional<std::string> correlation_id;
-    std::optional<std::string> source_rid;
-    std::optional<std::string> spot_id;
-    std::optional<std::string> actor_id;
-    std::optional<std::size_t> message_size;
-    std::optional<dispatch_error_reason_t> error_reason;
-    std::optional<dispatch_error_action_t> error_action;
-    std::exception_ptr exception;
-    std::optional<std::string> flow_id;
-    std::optional<flow_origin_t> flow_origin;
-};
-class message_flow_observer_t {
-public:
-    virtual ~message_flow_observer_t() = default;
-    virtual void on_message_flow(const message_flow_event_t &event) = 0;
+    errors = 1,
+    normal = 2,
+    detailed = 3
 };
 
 class dispatch_diagnostics_options_t {
@@ -293,34 +212,26 @@ public:
     message_flow_log_mode_t message_flow() const noexcept;
     double sample_rate() const noexcept;
     bool include_message_sizes() const noexcept;
-    const std::optional<std::string> &log_file() const noexcept;
-    const std::optional<std::string> &label() const noexcept;
-    const std::shared_ptr<std::atomic<message_flow_log_mode_t>> &
-      live_mode() const noexcept;
-    message_flow_log_mode_t effective_message_flow() const noexcept;
 };
 
 struct dispatch_options_t {
     dispatch_diagnostics_options_t diagnostics;
-    std::shared_ptr<message_flow_observer_t> message_flow_observer;
-    std::function<void(const message_flow_event_t &)> message_flow_callback;
-    std::optional<logger_t<>> diagnostics_logger;
 
-    dispatch_options_t &set_message_flow_observer(
-      std::shared_ptr<message_flow_observer_t> observer);
-    dispatch_options_t &set_message_flow_observer(
-      std::function<void(const message_flow_event_t &)> observer);
     dispatch_options_t &message_flow(message_flow_log_mode_t mode);
     dispatch_options_t &trace_sample_rate(double rate);
     dispatch_options_t &include_message_sizes(bool include);
-    dispatch_options_t &trace_log_file(std::string path);
-    dispatch_options_t &trace_label(std::string id);
-    dispatch_options_t &message_flow_live(
-      std::shared_ptr<std::atomic<message_flow_log_mode_t>> live);
 };
 ```
 
-의미는 [메시지 흐름 추적](../../../../26-message-flow-tracing.ko.md)과
+`off`, `errors`, `normal`, `detailed`은 각각 진단 비활성화, 오류만 기록, 주요 전이 기록, 상세 진단을
+뜻한다. Startup에서 지정하지 않은 diagnostics level의 기본값은 `errors`다. Startup dispatch 설정은 level,
+sampling rate와 message size 포함 여부만 제공한다. Runtime level의
+원자적 read/change는 `app_t::message_flow_mode()`와 `app_t::set_message_flow_mode(...)`가 소유한다.
+Application은 host의 standard logging·telemetry configuration으로 logger·trace·metric provider를 구성하며
+Framework가 그 provider에 structured record를 기록한다. C++ dispatch option은 file path, label, exporter
+lifecycle 또는 provider sink를 받지 않는다. Message-flow observer callback, runtime error sink와 raw event DTO는 public contract가
+아니다. Provider 호출 실패는 원래 message operation의 terminal 결과를 바꾸지 않으며 Framework가 별도
+진단으로 격리한다. 나머지 의미는 [메시지 흐름 추적](../../../../26-message-flow-tracing.ko.md)과
 [흐름 상관관계](../../../../27-flow-correlation.ko.md)가 소유한다.
 
 ## 3. Health

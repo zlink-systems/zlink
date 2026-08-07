@@ -100,7 +100,7 @@ actor-relocation category와 같다 — Actor factory builder에는 relocation �
 
 ```kotlin
 options.configureDispatch {
-    messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
+    messageFlow(ZLinkMessageFlowLogMode.NORMAL)
 }
 
 options.configureStreamCompression {

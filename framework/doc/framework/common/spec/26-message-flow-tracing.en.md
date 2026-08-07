@@ -121,7 +121,7 @@ match, including case, in every language.
 
 | Attribute | Allowed values |
 |---|---|
-| `surface` | `node`, `channel`, `spot`, `instance_spot`, `actor`, `stream`, `actor_relocation` |
+| `surface` | `node`, `channel`, `spot`, `instance_spot`, `actor`, `stream`, `actor_relocation`, `classic_fanout` |
 | `message_kind` | `send`, `request`, `response`, `error`, `control` |
 | `outcome` | `succeeded`, `failed`, `backpressured`, `dropped`, `cancelled`, `shutdown` |
 | `channel_route_kind` | `route_mesh`, `client_server` |
@@ -165,7 +165,7 @@ following values.
 | `reason` | Included when there's a failure, backpressure, or drop cause. |
 | `action` | Included in `zlink.dispatch_error`. |
 | `channel_name` | Included when a logical Channel address exists. |
-| `channel_route_kind` | Included on a Channel surface. |
+| `channel_route_kind` | Included only when `surface=channel`; not included for `classic_fanout`. |
 | `mesh_name` | Included when there's a Node direct or RouteMesh scope. |
 | `server_rid` | Included when a ClientServer target was selected. |
 | `source_rid`, `target_rid` | Included when a routed hop has that identity. |
@@ -174,7 +174,7 @@ following values.
 | `instance_spot_type`, `activation_state` | Included when Instance Spot processing has that value. |
 | `correlation_id` | Included when linking a request and terminal reply. |
 | `flow_id`, `flow_origin` | Both included together when recording a message flow continuing from the same cause. |
-| `message_size_bytes` | Only included if message size recording is on at `detailed` level. |
+| `message_size_bytes` | Only included if message size recording is on at `Detailed` level. |
 | `duration_seconds` | Included when a terminal record for an operation or handler provides elapsed time. |
 
 `channel_route_kind`, `mesh_name`, and `server_rid` aren't inputs for
@@ -192,18 +192,25 @@ flow:` prefix and the following keys as-is.
 `instance_type`, `activation_state`, `actor`, `corr`, `flow`, `origin`,
 `outcome`, `reason`, `size`.
 
+Normal publish and subscriber delivery for Logical Multicast and Classic fanout do not build a
+`zlink.message_flow` record. If local dispatch at a Classic fanout subscriber has no handler, the
+subscriber process records `zlink.dispatch_error` with `surface=classic_fanout`,
+`message_kind=send`, `outcome=failed`, `reason=no_handler`, and `action=drop` through its logger
+provider. That record has no `channel_route_kind` and is not returned as a per-publisher delivery
+result.
+
 ## 4. How The Application Sets The Recording Scope
 
 The application sets the diagnostics level to one of four values.
 
 | Level | Scope the framework records |
 |---|---|
-| `off` | Doesn't record message flow or dispatch error. |
-| `errors` | Only records dispatch error, backpressure, and drop. |
-| `normal` | Records errors and §2.1's main stages. |
-| `detailed` | Can add message byte size and terminal elapsed time to `normal` records. |
+| `Off` | Doesn't record message flow or dispatch error. |
+| `Errors` | Only records dispatch error, backpressure, and drop. |
+| `Normal` | Records errors and §2.1's main stages. |
+| `Detailed` | Can add message byte size and terminal elapsed time to `Normal` records. |
 
-The default is `errors`. The message size setting only adds byte size, not
+The default is `Errors`. The message size setting only adds byte size, not
 payload content. Diagnostics level doesn't turn off metric recording.
 
 Sampling rate is the ratio of normal flows to record, in range `0.0..1.0`.
@@ -256,7 +263,7 @@ telemetry queue before the change can be delivered or discarded. Turning
 the level back on doesn't later build records for a previous processing
 stage.
 
-At `off`, no trace-only work happens beyond reading and branching on the
+At `Off`, no trace-only work happens beyond reading and branching on the
 current level.
 
 - Doesn't build an event object or attribute collection.
@@ -269,7 +276,7 @@ current level.
 - Doesn't call a logger, observer, exporter, or telemetry provider.
 
 So an implementation that only blocks output at the log provider doesn't
-satisfy the `off` contract. It must exit at the first trace branch on the
+satisfy the `Off` contract. It must exit at the first trace branch on the
 message hot path, not right before the provider call.
 
 ## 5. Completion, Failure, And Lifetime
@@ -291,6 +298,10 @@ same error is recorded. It doesn't call the same provider to build this
 log's trace again. Without a provider, it avoids an allocation made just
 for the trace.
 
+When the provider failure itself is recorded, the implementation uses the application's fallback
+logger or process stderr, not the failed provider. Failure of that fallback record also does not
+change the message-operation result, dispatch, or lifecycle.
+
 A trace attribute only includes the identifier needed for diagnosis, and
 doesn't reference a caller buffer or runtime object after message
 processing ends. The ownership and lifetime of `correlation_id`, `flow_id`,
@@ -302,10 +313,10 @@ used as a metric label.
 
 - Verify that every language uses the same `event_id`, phase, surface,
   message kind, outcome, reason, action, and attribute keys.
-- Verify that changing the level between `off` and a different value at
+- Verify that changing the level between `Off` and a different value at
   runtime applies the new level starting from processing points after the
   change.
-- Verify, via allocation and queue instrumentation, that the `off` path
+- Verify, via allocation and queue instrumentation, that the `Off` path
   ends immediately after the level read and branch, and doesn't build
   event/attribute/log message, timestamp/duration, sampling hash,
   trace-only flow context, or telemetry queue item.
@@ -317,6 +328,9 @@ used as a metric label.
   trace or structured log.
 - Verify that Logical Multicast and Classic fanout don't build a
   message-flow trace.
+- Verify that a missing subscriber-local Classic fanout handler builds a dispatch error with
+  `surface=classic_fanout`, `reason=no_handler`, and `action=drop`, without
+  `channel_route_kind`.
 - Verify that each request surface records the terminal trace exactly
   once.
 - Verify that an Instance Spot's one-way creation failure is recorded

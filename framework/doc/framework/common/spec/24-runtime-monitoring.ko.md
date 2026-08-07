@@ -291,6 +291,10 @@ field, page 크기와 cache 계약은
 [Location runtime의 운영 조회](21-location-runtime.ko.md#64-운영-도구에서-현재-위치를-조회한다)가
 정한다.
 
+ID별 조회와 page는 `Creating`, `Ready`, `Unavailable` entry를 같은 의미로 반환한다. Record가 없으면 ID별
+조회는 empty이고 page에는 항목이 없다. Store 조회 실패는 `Unavailable` Framework error이며 page 일부를
+성공 결과로 반환하지 않는다.
+
 ## 5. Structured log
 
 Framework는 상태가 바뀐 이유를 표준 structured logger에 기록한다. Application은 logger

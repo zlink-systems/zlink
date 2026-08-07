@@ -139,6 +139,13 @@ This diagram only shows the first message that starts
 authority race. The handler's terminal completion or reply, and recovery
 pointer removal, are defined in the later steps of the numbered list.
 
+The stored creation intent is used only to resume the first cold
+activation on the same target node and lifecycle before terminal
+completion is recorded. A steady `Ready` owner process termination or
+lease expiry doesn't become Missing or cold activation on another node;
+the call ends with `Unavailable`. Kotlin shares this behavior with the
+Java runtime.
+
 Kotlin implements Java's `ZLinkSpotRelocationAdapter<TSpot>` unchanged.
 The opaque `byte[]` appears as `ByteArray`, and `capture` and `restore`
 return the same `CompletionStage` as the Java contract. A separate
@@ -308,6 +315,12 @@ inline fun <reified TReply> ZLinkKotlinRouteClient.requestToSpot(
     request: Any,
 ): ZLinkKotlinSpotRequestCall<TReply>
 ```
+
+Kotlin reuses Java's `ZLinkTimerOptions` and `ZLinkTimerOverrunPolicy` as is.
+When timer options are omitted, `overrunPolicy` defaults to `SKIP_LATE_TICKS`
+and `maxCatchUpTicks` defaults to `1`. `maxCatchUpTicks` is used and validated
+in `1..Int.MAX_VALUE` only for `CATCH_UP_BOUNDED`. Other policies do not use or
+validate this value against that range. Kotlin adds no timer-option surface.
 
 In User/Instance Spot relocation, the Java runtime includes the logical
 timer registration, the last completed tick sequence, the next

@@ -9,7 +9,8 @@ title: "8. 객체 종류와 활성화"
 > **이 장이 답하는 것** — Spot 세 종류를 어떻게 구분하고, 없는 객체를 언제 만들며, 낡은 owner로 온 message를 어떻게 거르는가.
 >
 > **계약 소유** — Spot 종류와 종료 사유는 [Spot 모델](../spec/11-spot-model.ko.md)이,
-> generation을 쓰는 자리는 [Spot·Actor routing](../spec/18-object-routing.ko.md)이 소유한다.
+> generation을 쓰는 자리는 [Spot·Actor routing](../spec/18-object-routing.ko.md)이,
+> owner 장애 뒤 결과는 [Failure와 failover policy](../spec/31-failure-failover-policy.ko.md)가 소유한다.
 > 이 장은 그 계약을 만족시키는 **구조**와, 네 구현에서 관찰된 어긋남을 다룬다.
 
 Actor와 handler를 담는 실행 단위인 [Spot](../spec/01-glossary.ko.md#spot) 세 종류를 코드에서
@@ -51,6 +52,21 @@ Actor들은 node가 내려갈 때 사라진다.
 **일반 message는 없는 객체를 만들지 않는다.** 만들겠다는 의사를 명시한 Spot 전용
 호출만 새로 만들 수 있고, 일반 message와 조회 호출은 이미 준비된 객체만 대상으로 한다
 ([Spot·Actor routing 「2.2 최근 Ready route를 사용하는 조건」](../spec/18-object-routing.ko.md#22-최근-ready-route를-사용하는-조건)).
+
+### `Missing`과 owner를 사용할 수 없는 `Ready`를 구분한다
+
+Instance intent가 있다는 사실만으로 생성 경로에 들어가지 않는다. Resolver는 authority와 owner
+availability를 함께 확인하고 아래 의미를 보존한다.
+
+| 관찰한 상태 | 다음 동작 |
+|---|---|
+| Authority record가 없는 `Missing` | Instance intent가 있으면 creation reservation을 시도한다. |
+| Creation이 진행 중임 | 같은 object의 두 번째 factory를 실행하지 않고 진행 중인 attempt를 기다린다. |
+| Owner lease가 유효한 `Ready` | 현재 owner route를 사용한다. |
+| Authority는 `Ready`지만 owner process가 종료되었거나 lease가 무효임 | Authority를 유지하고 call을 `Unavailable`로 끝낸다. 다른 node를 선택하거나 factory를 실행하지 않는다. |
+
+Stored creation intent는 같은 target node·lifecycle에서 끝나지 않은 최초 cold activation operation만
+재개한다. Steady `Ready` owner 장애의 takeover나 queue recovery에 사용하지 않는다.
 
 이 구분이 없으면 오타 하나가 객체를 만든다. 잘못된 ID로 보낸 message가 그 ID의 객체를
 새로 만들어 버리고, 그 객체는 아무도 정리하지 않는다.
@@ -168,16 +184,15 @@ serial quiescence를 다시 확인한 뒤 `IdleEvicted` 사유로 closing callba
 activation을 dispose하며, Location Store의 Spot location을 release한다. 따라서 callback
 실행 중에 새 작업을 받지 않으며, callback이 끝나기 전에 location을 지우지 않는다.
 
-이 과정에서 location row가 아직 release 중인데 Instance intent request가 이전 route를
-사용하면 .NET runtime은 route를 무효화하고 location이 Missing 또는 새 Ready 상태가
-될 때까지 다시 읽는다. 이 동작은 이미 수락된 application request를 재전송하는 retry가
-아니라, cold activation을 결정하기 위한 owner route 갱신이다. 일반 Spot의 stale route
-오류에는 이 동작을 적용하지 않는다.
+이 과정에서 location row가 아직 release 중인데 Instance intent request가 이전 route를 사용하면
+runtime은 route를 무효화하고 close transaction이 authority release를 끝내 `Missing`이 되거나 current
+`Ready` route가 확인될 때까지 다시 읽을 수 있다. 이 동작은 이미 수락된 application request를
+재전송하는 retry가 아니라, explicit idle cleanup 결과를 확인하는 owner route 갱신이다.
 
-Node.js runtime도 같은 경계를 적용한다. `requestToSpotAddress`는 resolver가 admission 전에
-route 부재를 `RequestTargetNotFound`로 확인한 Instance intent만 cold activation 경로로
-보낸다. 이미 Ready 상태였던 route에서 `ActorLocationStale`가 반환되면 해당 application
-request를 다시 제출하지 않고 terminal error로 전달한다.
+Resolver는 idle cleanup으로 authority가 release된 `Missing`과 owner lease만 무효인
+`Unavailable` 판정을 구분해야 한다. 전자만 Instance cold activation 경로로 보내며, 후자는 새 factory나
+handler를 실행하지 않고 `Unavailable`로 끝낸다. 이미 `Ready`였던 route에서 stale 오류가 반환된
+application request 자체도 다른 owner에게 다시 제출하지 않는다.
 
 다른 Framework 언어의 유휴 정리 상태와 공통 process 검증 결과는 이 .NET 구조 설명만으로
 완료로 간주하지 않는다. 각 언어는 같은 종료 조건과 process evidence를 별도로 확인해야
@@ -286,6 +301,9 @@ process 단위 회계가 이미 byte로 되어 있다(§6 첫 문단). 같은 �
 - 여러 caller가 동시에 같은 객체 생성을 요청해도 factory가 한 번만 실행된다.
 - "만드는 중" 상태가 위치 캐시에 남지 않는다.
 - 만들다 실패한 기록이 시작 시점에 정리된다.
+- `Ready` owner process 종료나 lease 만료가 `Missing`으로 바뀌지 않는다.
+- `Ready` owner를 사용할 수 없을 때 다른 node의 factory·handler를 실행하지 않고 `Unavailable`로 끝난다.
+- 미완료 최초 cold activation recovery는 authority가 지정한 같은 target node·lifecycle에서만 실행된다.
 - 객체가 다시 만들어진 직후에도 일반 message가 세대 불일치로 거절되지 않는다.
 - 낡은 owner로 보낸 호출이 자동 재시도 없이 오류로 끝난다.
 - 활성 객체 수가 상한에 도달하면 그 node에서 활성화가 거절된다.

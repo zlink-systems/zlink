@@ -93,6 +93,17 @@ registration, close, or destroy.
 ### 1.2 Worker offload
 
 - CPU work and async I/O work are submitted to a bounded worker scheduler owned by the Framework.
+- A CPU execution slot is occupied only while an application CPU callback is actually running.
+  Async I/O does not occupy a CPU execution slot while waiting for an operating-system,
+  transport, or Store completion.
+- I/O admission and completion bookkeeping also use bounded resources, but a full CPU worker
+  queue does not turn an already-submitted I/O completion into `CapacityExceeded`.
+- More I/O operations than the configured CPU-worker thread count may wait for completion. Their
+  count is bounded by separate internal I/O admission, not by CPU execution slots or CPU queue
+  length.
+- This isolation contract does not require a separate public I/O thread-count or queue setting.
+  A language runtime may implement it with native async I/O, an event loop, or a completion
+  executor.
 - A worker call keeps the type of the application result it computes, and in the permitted `SpotWide`/Instance contexts, that same result can be awaited with `Yield`.
 - Completion is `CapacityExceeded` if the queue is full, `DeadlineExceeded` if the [deadline](01-glossary.en.md#deadline) is exceeded, and `InternalFailure` if the work itself fails.
 - Work that finishes late, after a timeout or cancellation, does not produce a second terminal result.
@@ -189,6 +200,23 @@ The Framework's public send timeout follows these value rules:
 - If no value is specified, that family's 1-second default is chosen.
 - An existing public root fallback, if present, applies with the same meaning, but that does not mean every language must add the same root option.
 - If a runtime setter exists, an invalid value is rejected immediately at the setter call.
+
+#### Per-STREAM-send-call timeout
+
+A STREAM one-way send call provides an optional per-call admission-timeout modifier. This value
+is not reply wait time; it is the maximum time that send can wait for acceptance by the STREAM
+transport queue.
+
+- If omitted, the matching STREAM socket's send timeout is used.
+- If specified, the earlier of the socket timeout and the per-call timeout is used. A per-call
+  value never extends the socket timeout.
+- Validation and millisecond rounding use the same `1..INT_MAX` rules above.
+- If the deadline wins, the call completes once with `DeadlineExceeded`; later capacity does not
+  admit or replay that send.
+- This modifier does not apply to a STREAM reply call. A reply uses the socket send timeout and
+  the one-shot token contract.
+- Where a language separately provides cancellation, timeout and cancellation race to one
+  terminal result.
 
 #### STREAM reply token
 
@@ -323,10 +351,10 @@ Object placement and activation follow these rules:
 
 ### Error handling
 
-When a handler returns an exception, the send handler records it to the
-error observer and metrics. A request handler generates the same request's
-framework error reply. A failure in the error observer does not change the
-original dispatch result.
+When a handler returns an exception, the send handler records it through the application's
+logger/telemetry provider and metrics. A request handler generates the same request's framework
+error reply. Provider failure does not change the original dispatch result, and no separate
+public error observer is provided.
 
 ### 3.1 Actor Join's deferred terminal
 
@@ -458,6 +486,33 @@ collapsed into a single pending record.
 | A queue record from an earlier generation | Does not run its callback |
 | Cancel | Blocks callbacks from that generation onward (an already-started callback is not interrupted) |
 | A repeating timer expires faster than the handler | The same key's callback is never run concurrently; duplicate expirations may merge into one pending record |
+
+A repeating timer uses one of the following three overrun policies. The default is
+`SkipLateTicks`.
+
+| Policy | Next callback when the handler finishes late |
+|---|---|
+| `SkipLateTicks` | Skips nominal ticks that have already passed and delivers only the latest due tick at observation time. |
+| `CatchUpBounded` | Delivers elapsed nominal ticks in order, but at most `MaxCatchUpTicks` in one catch-up interval; older ticks are skipped. |
+| `DelayNextTick` | Schedules the next tick one period after the handler terminal and does not catch up missed ticks. |
+
+`MaxCatchUpTicks` defaults to `1`. Under `CatchUpBounded` it must be in `1..INT_MAX`; under the
+other policies it does not affect behavior. Relocation encoding may normalize an ignored value
+to the valid default instead of turning it into public meaning.
+
+The callback receives the following tick information.
+
+| Field | Meaning |
+|---|---|
+| `DeliveryIndex` | A contiguous, one-based number for callbacks actually started in this timer generation |
+| `ScheduledIndex` | The nominal tick represented by this callback, where the first nominal due time is 1 |
+| `SkippedTicks` | The number of nominal ticks between the previously delivered `ScheduledIndex` and this value for which no callback was built |
+
+`DeliveryIndex` increases by exactly one per callback. `ScheduledIndex` never decreases and
+`ScheduledIndex >= DeliveryIndex`. On the first callback, `SkippedTicks` is
+`ScheduledIndex - 1`; afterward it is
+`current ScheduledIndex - previous ScheduledIndex - 1`. Scheduler wall-clock error and exact
+nanoseconds are not public results.
 
 ### Owner lease and admission
 

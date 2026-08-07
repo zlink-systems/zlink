@@ -25,7 +25,12 @@ Bind 뒤 relay·request relay와 `notifyDisconnected()`는 Actor별 저장 route
 Store를 조회하지 않는다. Physical disconnect는 Framework가 current binding 전체에 automatic all-settled
 통지를 수행하고 exact binding identity마다 Spot callback을 최대 한 번 실행한다.
 `notifyDisconnected()`는 connection이 유지된 상태의 logical notification이며 callback terminal까지
-기다린다. Relocation route update는 같은 ObjectGeneration에만 허용한다. Target Actor가
+기다린다. Exact binding callback은 최대 한 번 실행하고 terminal 뒤 binding을 tombstone으로 확정하여
+제거한다. Physical STREAM connection과 Actor·Spot membership은 유지하며 새 public Unbind API는 제공하지
+않는다. Rebind는 이전 exact binding identity를 다른 Actor나 generation에 재사용하지 않는다. 새 identity를
+먼저 등록한 뒤 이전 callback을 최대 한 번 실행하여 이전 binding을 tombstone으로 만든다. Callback 실패는
+진단으로 기록하지만 새 binding을 제거하거나 이전 binding을 복원하지 않는다. Relocation route update는
+같은 ObjectGeneration에만 허용하며 rebind가 아니므로 disconnect callback을 실행하지 않는다. Target Actor가
 복원되어 message 처리를 시작한 뒤 target runtime이 `sessionActorLocationUpdateReqMsg`를
 send하여 해당 Actor route와 `ZLinkSessionActor.ref()`가 반환하는 current `ActorRef`
 location snapshot을 함께 바꾼다. Snapshot은 같은 ActorId·ObjectGeneration과 target
@@ -89,6 +94,7 @@ public interface systems.zlink.framework.streams.ZLinkSessionReplyCall {
 public interface systems.zlink.framework.streams.ZLinkSessionSendCall {
   public abstract systems.zlink.framework.streams.ZLinkSessionSendCall metadata(java.lang.String, java.lang.String);
   public abstract systems.zlink.framework.streams.ZLinkSessionSendCall compress();
+  public abstract systems.zlink.framework.streams.ZLinkSessionSendCall timeout(java.time.Duration);
   public abstract java.util.concurrent.CompletionStage<java.lang.Void> submit();
 }
 public interface systems.zlink.framework.streams.ZLinkStreamCompressionCodec {
@@ -122,6 +128,12 @@ STREAM correlation을 terminal-once로 완료하고 admission failure면 Framewo
 failure로 완료한다. Caller는 별도 reply·retry를 하지 않는다. One-way dispatch context는 reply
 capability가 없으므로 admission만 반환한다. Handshake failure는 session 생성 전 runtime monitoring에만
 기록되며 `onError(...)`에 전달하지 않는다.
+
+`ZLinkSessionSendCall.timeout(...)`은 이 send의 admission 대기만 줄인다. 생략하면 STREAM socket send
+timeout을 사용하고 지정하면 두 값 중 짧은 값을 사용하므로 socket timeout을 늘릴 수 없다. Duration은
+양수이며 milliseconds로 올림한 값이 `1..Integer.MAX_VALUE` 범위여야 한다. 만료되면
+`DEADLINE_EXCEEDED`로 terminal-once 완료하고 이후 admission이나 replay를 시작하지 않는다. Reply call에는
+이 modifier를 제공하지 않는다.
 
 ## STREAM codec public signature
 

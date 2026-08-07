@@ -163,6 +163,14 @@ export interface ZLinkWorkerOptions {
 }
 ```
 
+When timer options are omitted, `overrunPolicy` defaults to
+`ZLinkTimerOverrunPolicy.SkipLateTicks` and `maxCatchUpTicks` defaults to `1`.
+`maxCatchUpTicks` is used and validated as an integer in
+`1..2_147_483_647` only when
+`overrunPolicy === ZLinkTimerOverrunPolicy.CatchUpBounded`. Other policies do
+not use or validate this value against that range. This prose does not change
+the existing optional-property public surface.
+
 A request's result-bearing `submit()` keeps the current owner turn
 until the terminal reply comes out. Actor Join is registered with a
 separate `defer()` and runs after the current handler finishes

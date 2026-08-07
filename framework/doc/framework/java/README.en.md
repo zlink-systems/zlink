@@ -26,10 +26,9 @@ Usage of the client libraries used separately from the server framework is found
 
 ## 2. Public Contract Spec
 
-The formal spec fixes the framework's target public contract first. The
-`../common/spec/30-implementation-gap.en.md` record captures the current gap against the Java/Kotlin
-implementation. The public contract for every framework language is managed together under
-`spec/<package>/languages/`.
+The formal spec fixes the framework's target public contract first. Current Java/Kotlin
+implementation progress is not recorded in public contract documentation. The public contract
+for every framework language is managed together under `spec/<package>/languages/`.
 
 | Document | Scope |
 |------|------|

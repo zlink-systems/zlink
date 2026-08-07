@@ -64,7 +64,8 @@ Entry Spot은 Host가 시작할 때 준비되는 application 진입점이다. Jo
 - 시작 조건: Counter 0인 User Spot이 ready다.
 - 절차: 고유 operation ID의 increment requests N개를 bounded concurrency로 보낸다.
 - 검증: 모든 requests가 reply 하나를 받고 final state는 N이다. Handler active count는 1을 넘지 않는다.
-- 세부 동작: [Spot messaging §7](../spec/12-spot-messaging.ko.md)을 검증한다.
+- 세부 동작: [Spot application queue에 들어가는 작업](../spec/12-spot-messaging.ko.md#53-spot-application-queue에-들어가는-작업)과
+  [Spot turn과 callback 순서](../spec/12-spot-messaging.ko.md#54-spot-turn과-callback-순서)를 검증한다.
 
 #### SM-A3 Global SpotId가 정확한 Spot에 도달한다
 
@@ -120,7 +121,8 @@ Member Actor가 있는 User Spot은 임의로 닫지 않으며, member가 모두
 - 절차: Current SpotRef로 close하고, Actor를 leave한 뒤 같은 current ref로 다시 close한다.
 - 검증: First close는 false이고 callback·membership이 유지된다. Second는 true이며 closing callback이 한
   번 실행된다.
-- 세부 동작: [Spot actor §7](../spec/15-spot-actor.ko.md)을 검증한다.
+- 세부 동작: [Actor membership](../spec/15-spot-actor.ko.md#3-entry-spot과-user-spot의-actor-membership)과
+  [Spot 종료](../spec/12-spot-messaging.ko.md#62-spot-종료)를 검증한다.
 
 #### SM-A7 같은 SpotId의 stable type 충돌을 거부한다
 
@@ -146,7 +148,8 @@ CPU 계산은 bounded worker pool에서 실행하고 continuation은 Spot execut
 - 시작 조건: Worker completion을 application signal로 보류할 수 있는 Spot이 ready다.
 - 절차: CPU worker call을 Yield로 기다리고 같은 Spot에 probe request를 보낸 뒤 worker를 해제한다.
 - 검증: Probe가 continuation 전에 완료되고 final state는 worker result를 정확히 한 번 반영한다.
-- 세부 동작: [비동기 실행 정책 §6](../spec/05-async-execution-policy.ko.md)을 검증한다.
+- 세부 동작: [Worker offload](../spec/05-async-execution-policy.ko.md#12-worker-offload)와
+  [Handler turn과 claim](../spec/05-async-execution-policy.ko.md#3-handler-turn과-claim)을 검증한다.
 
 #### SM-A9 User Spot은 initialize 완료 뒤 Ready로 공개한다
 
@@ -312,17 +315,18 @@ Caller와 Actor owner가 다른 process여도 global ActorId request는 target m
 - 검증: Play-b handler만 marker를 한 번 기록하고 caller가 matching reply를 받는다.
 - 세부 동작: [Actor model §5](../spec/14-actor-model.ko.md)을 검증한다.
 
-#### SM-B5 Handler 없는 Actor request를 관찰한다
+#### SM-B5 Handler 없는 Actor request를 기록한다
 
 우선순위: `P0`
 
 Actor는 존재하지만 packet handler가 없으면 target missing과 다른 dispatch failure다.
 
-**검증 질문:** Missing handler request가 public error와 `no_handler/reply_error` flow evidence를 남기는가.
+**검증 질문:** Missing handler request가 public error와 `no_handler/reply_error` logger evidence를 남기는가.
 
-- 시작 조건: Actor는 ready이고 public message-flow observer가 등록되어 있다.
+- 시작 조건: Actor는 ready이고 application logger provider가 설정되어 있다.
 - 절차: 등록하지 않은 packet name의 request를 보낸 뒤 normal request를 보낸다.
-- 검증: First는 정식 error terminal이고 observer evidence가 한 번 있다. Normal request는 성공한다.
+- 검증: First는 정식 error terminal이고 `zlink.dispatch_error` logger evidence가 한 번 있다. Normal
+  request는 성공한다.
 - 세부 동작: [Message flow tracing §2.2](../spec/26-message-flow-tracing.ko.md)을
   검증한다.
 
@@ -576,11 +580,13 @@ Actor를 Session B에 rebind하면 Session A의 old binding identity는 더 이�
 
 **검증 질문:** Session A의 late relay·disconnect가 Session B binding과 Actor state를 바꾸지 않는가.
 
-- 시작 조건: Actor X를 A에 bind한 뒤 B에 explicit rebind한다.
-- 절차: A network gate에 보류한 relay와 disconnect를 B bind 완료 뒤 전달하고 B에서 normal relay·push를
-  실행한다.
-- 검증: Old operations는 stale result이고 handler evidence가 없다. B relay·push가 한 번씩 성공하며 current
-  binding은 B다.
+- 시작 조건: Actor X를 A에 bind한다. Normal callback과 callback failure는 fresh fixture로 분리한다.
+- 절차: 각 fixture에서 B에 explicit rebind하여 A의 exact old binding에 logical disconnect를 제출한다.
+  Callback terminal과 tombstone을 확인한 뒤 A network gate에 보류한 relay와 늦은 disconnect 결과를
+  전달하고 B에서 normal relay·push를 실행한다.
+- 검증: 두 fixture 모두 old binding의 disconnect callback은 최대 한 번 실행되고 terminal tombstone 뒤에는
+  반복되지 않는다. Failure fixture도 old binding을 복원하거나 B binding을 제거하지 않는다. 늦은 old
+  operations는 stale result이고 handler evidence가 없다. B relay·push는 한 번씩 성공하며 current binding은 B다.
 - 세부 동작: [Session Actor dispatch §4](../spec/20-session-actor-dispatch.ko.md)를
   검증한다.
 
@@ -588,7 +594,8 @@ Actor를 Session B에 rebind하면 Session A의 old binding identity는 더 이�
 
 우선순위: `P0`
 
-Session binding은 validated route를 저장한다. Actor relocation 뒤 active Message Follow가 있으면 old route의
+Session binding은 validated route를 저장한다. 같은 ObjectGeneration의 Actor relocation은 rebind가 아니므로
+disconnect callback을 실행하지 않는다. Active Message Follow가 있으면 old route의
 relay를 current owner로 한 번 전달하고, mapping이 없으면 `Unavailable`이다.
 
 **검증 질문:** Active follow route variant는 성공하고 expired variant는 `Unavailable`인가.
@@ -596,7 +603,8 @@ relay를 current owner로 한 번 전달하고, mapping이 없으면 `Unavailabl
 - 시작 조건: Actor를 bind한 뒤 remote owner로 relocate한다.
 - 절차: Active follow window에서 relay를 보내고, fresh fixture에서 window expiry 뒤 relay를 보낸다.
 - 검증: Active marker는 target Actor에서 한 번 처리된다. Expired request는 `Unavailable`이고 handler
-  evidence가 없다. Application이 rebind하지 않은 same-incarnation relocation만 대상이다.
+  evidence가 없다. 두 variant 모두 disconnect callback은 `0`건이며 binding identity와 ObjectGeneration은
+  유지된다.
 - 세부 동작: [Session Actor dispatch §5](../spec/20-session-actor-dispatch.ko.md)를
   검증한다.
 
@@ -645,18 +653,19 @@ Actor push는 current binding 하나를 target으로 하며 unbound clients에 b
 - 세부 동작: [Session Actor dispatch §5](../spec/20-session-actor-dispatch.ko.md)를
   검증한다.
 
-#### SM-D7 Stream auth 뒤 packet dispatch를 허용한다
+#### SM-D7 Application session callback이 auth 전 request를 거부한다
 
 우선순위: `P0`
 
-Unauthenticated connection은 업무 packet을 dispatch하지 않고 auth 성공 뒤에만 Session handler를 실행한다.
+Framework는 STREAM application 인증 정책을 소유하지 않는다. Application session callback이 credential을
+검사하고 인증 전 업무 request를 거부하며, 성공 상태를 application session state에 기록한다.
 
 **검증 질문:** Valid auth 뒤 request가 성공하고 invalid auth connection은 정식 close/error인가.
 
 - 시작 조건: Valid와 invalid credentials가 준비되어 있다.
-- 절차: Separate connectors로 auth하고 같은 packet을 보낸다.
-- 검증: Valid connector만 reply를 받고 handler evidence가 있다. Invalid connector는 public auth error 또는
-  close reason을 받고 handler가 실행되지 않는다.
+- 절차: Separate connectors가 credential packet과 같은 업무 packet을 보낸다.
+- 검증: Application callback이 valid credential을 승인한 connector만 reply를 받고 handler evidence가 있다.
+  Invalid connector는 application이 정한 error 또는 close reason을 받고 업무 handler가 실행되지 않는다.
 - 세부 동작: [Stream session §3](../spec/19-stream-session.ko.md)을 검증한다.
 
 #### SM-D8 Stream reconnect는 새 auth·bind를 요구한다
@@ -672,19 +681,20 @@ Reconnect는 새 physical Session이므로 이전 pending request와 binding을 
 - 검증: Old request는 disconnected failure이며 replay되지 않는다. New request만 Actor에서 한 번 처리된다.
 - 세부 동작: [Failover policy §6](../spec/31-failure-failover-policy.ko.md)을 검증한다.
 
-#### SM-D9 Public inbound observer가 Stream packet을 기록한다
+#### SM-D9 Logger provider가 STREAM message-flow 결과를 기록한다
 
 우선순위: `P1`
 
-Inbound observability는 packet kind·name·sequence를 정식 field로 제공하며 payload를 성공 조건으로 복제하지
-않는다.
+Application logger provider는 correlation ID, packet name과 message kind를 정식 field로 받고 payload나
+wire 내부 sequence를 성공 조건으로 복제하지 않는다.
 
-**검증 질문:** Inbound observer evidence와 handler evidence가 같은 packet identity를 가지는가.
+**검증 질문:** Logger evidence와 handler evidence가 같은 correlation ID·packet name·message kind를 가지는가.
 
-- 시작 조건: Public inbound observer와 handler가 등록되어 있다.
+- 시작 조건: Application logger provider와 handler가 등록되어 있다.
 - 절차: Request와 one-way packet을 각각 한 번 보낸다.
-- 검증: Observer가 두 identities를 한 번씩 기록하고 handler results와 일치한다.
-- 세부 동작: [Stream session §8](../spec/19-stream-session.ko.md)을 검증한다.
+- 검증: Logger provider가 두 message의 정식 fields를 한 번씩 기록하고 handler results와 일치한다.
+- 세부 동작: [Message flow tracing — 공통 attribute](../spec/26-message-flow-tracing.ko.md#3-공통-attribute)와
+  [Flow correlation — 전파 규칙](../spec/27-flow-correlation.ko.md#5-전파-규칙)을 검증한다.
 
 #### SM-D10 Stream backpressure를 Session별로 격리한다
 
@@ -701,7 +711,8 @@ Inbound observability는 packet kind·name·sequence를 정식 field로 제공�
   해제한다.
 - 검증: B results는 A gate 해제 전에 완료한다. A operations는 success 또는 deadline terminal 하나씩을
   가지며 Session state가 손상되지 않는다.
-- 세부 동작: [Stream session §7](../spec/19-stream-session.ko.md)을 검증한다.
+- 세부 동작: [STREAM recv loop와 application 표면](../spec/19-stream-session.ko.md#4-framework-내부-recv-loop와-application-표면)과
+  [Admission deadline](../spec/05-async-execution-policy.ko.md#14-admission-deadline)을 검증한다.
 
 #### SM-D11 Stream과 Channel requests를 같은 client에서 분리한다
 
@@ -742,7 +753,8 @@ Heartbeat가 정상인 connection은 유지하고 heartbeat가 중단된 Session
 - 시작 조건: Bound Session이 heartbeat를 정상 교환하고 있다.
 - 절차: Runner가 heartbeat direction을 차단하고 public deadline·tolerance로 disconnect를 기다린다.
 - 검증: Connector는 Disconnected이고 current bound Actors가 disconnect callback을 최대 한 번씩 받는다.
-- 세부 동작: [Stream session §6](../spec/19-stream-session.ko.md)을 검증한다.
+- 세부 동작: [Connection loss와 reconnect](../spec/29-transport-liveness.ko.md#6-connection-loss와-reconnect)와
+  [STREAM 오류 경계](../spec/19-stream-session.ko.md#6-오류-경계)를 검증한다.
 
 #### SM-D14 TLS Stream에서 auth·relay·push를 수행한다
 
@@ -756,7 +768,8 @@ TLS는 transport security를 바꾸지만 Session·binding의 application 의미
 - 절차: TLS connectors로 두 endpoints에 연결한다.
 - 검증: Valid connection은 auth·bind·relay·push를 완료하고 invalid connection은 public TLS error로 끝나며
   Session handler가 실행되지 않는다.
-- 세부 동작: [Stream session §10](../spec/19-stream-session.ko.md)을 검증한다.
+- 세부 동작: [STREAM TLS](../spec/19-stream-session.ko.md#71-tls)와
+  [Session에서 actor로](../spec/19-stream-session.ko.md#8-session에서-actor로)를 검증한다.
 
 #### SM-D15 Channel→Actor→bound Session push 사슬을 완료한다
 
@@ -774,17 +787,17 @@ TLS는 transport security를 바꾸지만 Session·binding의 application 의미
 
 ### Track E — Negative dispatch와 timer를 확인
 
-#### SM-E1 Handler 없는 Spot request를 관찰한다
+#### SM-E1 Handler 없는 Spot request를 기록한다
 
 우선순위: `P0`
 
-Ready Spot에 packet handler가 없으면 dispatch error를 caller와 observer가 확인할 수 있어야 한다.
+Ready Spot에 packet handler가 없으면 dispatch error를 caller와 application logger provider가 확인할 수 있어야 한다.
 
 **검증 질문:** Missing Spot handler가 error reply와 `no_handler/reply_error` evidence를 만드는가.
 
-- 시작 조건: Spot과 public message-flow observer가 ready다.
+- 시작 조건: Spot과 application logger provider가 ready다.
 - 절차: Missing packet request와 normal packet request를 보낸다.
-- 검증: First는 정식 error와 observer evidence, second는 normal reply를 한 번 반환한다.
+- 검증: First는 정식 error와 `zlink.dispatch_error` logger evidence, second는 normal reply를 한 번 반환한다.
 - 세부 동작: [Message flow tracing §2.2](../spec/26-message-flow-tracing.ko.md)을
   검증한다.
 
@@ -799,7 +812,7 @@ Timer callback은 Spot execution lane에서 application state를 바꾸고 publi
 - 시작 조건: Counter 0인 Spot과 bound notification target이 있다.
 - 절차: Public Spot context로 one-shot timer를 등록하고 callback evidence를 bounded polling한다.
 - 검증: Callback count와 counter delta는 1이고 client push도 한 번이다.
-- 세부 동작: [Spot messaging §6](../spec/12-spot-messaging.ko.md)을 검증한다.
+- 세부 동작: [Async execution policy — Spot timer](../spec/05-async-execution-policy.ko.md#5-spot-timer)을 검증한다.
 
 #### SM-E3 Idle timer가 explicit close를 시작한다
 
@@ -814,7 +827,8 @@ Framework가 inactivity를 추측해 자동 close하지 않는다. Application t
 - 절차: Timer callbacks가 각 상태를 확인하도록 하고 public Find·closing evidence를 수집한다.
 - 검증: Idle empty Spot만 close되고 callback reason은 ExplicitClose다. 다른 two Spots는 request를 계속
   처리한다.
-- 세부 동작: [Spot actor §7](../spec/15-spot-actor.ko.md)을 검증한다.
+- 세부 동작: [Spot timer](../spec/05-async-execution-policy.ko.md#5-spot-timer)와
+  [Spot 종료](../spec/12-spot-messaging.ko.md#62-spot-종료)를 검증한다.
 
 #### SM-E4 Timer overrun policy별 observable sequence를 확인한다
 
@@ -823,14 +837,16 @@ Framework가 inactivity를 추측해 자동 close하지 않는다. Application t
 Handler가 interval보다 오래 걸릴 때 `SkipLateTicks`, `CatchUpBounded`와 `DelayNextTick`은 서로 다른 callback
 sequence를 만든다.
 
-**검증 질문:** Application gate로 만든 overrun 뒤 callback count·spacing이 configured policy와 일치하는가.
+**검증 질문:** Application gate로 만든 overrun 뒤 tick fields가 configured policy와 일치하는가.
 
 - 시작 조건: Same interval의 fresh timer를 policy별로 만들고 first callback을 gate에서 보류한다.
-- 절차: 여러 due boundaries를 지난 뒤 gate를 해제하고 bounded observation window의 callback timestamps를
-  수집한다.
-- 검증: 각 policy가 spec의 skip, bounded catch-up 또는 delayed-next 규칙을 지킨다. Exact scheduler
-  nanosecond와 thread timing은 비교하지 않는다.
-- 세부 동작: [Spot messaging §6](../spec/12-spot-messaging.ko.md)을 검증한다.
+- 절차: 여러 due boundaries를 지난 뒤 gate를 해제하고 bounded observation window의 `DeliveryIndex`,
+  `ScheduledIndex`, `SkippedTicks`를 수집한다.
+- 검증: `DeliveryIndex`는 실제 callback 순서대로 증가한다. `SkipLateTicks`는 건너뛴 due 수를
+  `SkippedTicks`로 보고하고, `CatchUpBounded`는 `MaxCatchUpTicks` 이내에서만 연속 delivery하며,
+  `DelayNextTick`은 다음 schedule을 callback 완료 뒤로 미룬다. Exact scheduler nanosecond와 thread timing은
+  비교하지 않는다.
+- 세부 동작: [Spot timer overrun policy와 tick field](../spec/05-async-execution-policy.ko.md#5-spot-timer)를 검증한다.
 
 ### Track F — Channel·Node·Spot routes가 같은 MeshNode transport에서 공존
 
@@ -1011,7 +1027,7 @@ Weight 계산 전에 stable type과 total capacity를 만족하는 candidates만
 
 ## 4. 완료 기준
 
-- 모든 scenario는 public Framework API, public status·observer와 application evidence만 사용한다.
+- 모든 scenario는 public Framework API, public status·application logger provider와 application evidence만 사용한다.
 - Factory와 handler 순서는 application signal로 제어하며 internal CAS·queue·Store row를 읽지 않는다.
 - Stream·Session scenario는 actual client reply·push·close result를 확인하고 server log만으로 통과하지 않는다.
 - Weighted placement는 충분한 sample과 tolerance를 사용하며 target 선택 순서를 고정하지 않는다.

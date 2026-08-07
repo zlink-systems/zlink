@@ -3067,10 +3067,6 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         String spotId,
         systems.zlink.framework.runtime.streams.ZLinkStreamHeader header,
         Message payload) {
-        if (!canRouteRemoteJoinedSpot(spotId)) {
-            return CompletableFuture.failedFuture(new ZLinkConfigurationException(
-                "actor Spot is not routable: " + spotId));
-        }
         ZLinkActorTransferHandoff.MessageFollowSource followSource =
             handoff.messageFollowSource(actorRef.actorId()).orElse(null);
         if (followSource != null) {
@@ -3087,6 +3083,10 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                     payload,
                     followSource.targetAddress(),
                     new byte[0]));
+        }
+        if (!canRouteRemoteJoinedSpot(spotId)) {
+            return CompletableFuture.failedFuture(new ZLinkConfigurationException(
+                "actor Spot is not routable: " + spotId));
         }
         return resolveHandle(spotId)
             .thenCompose(remoteAddressResolver::resolve)

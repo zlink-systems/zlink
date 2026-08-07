@@ -163,59 +163,16 @@ Read request
 
 ## 7. Binding 과 Handler 통합
 
-HTTP server는 handler model을 새로 만들지 않는다. [C++ HTTP Hosting](60-http-hosting.ko.md)의 handler signature를
-그대로 사용한다.
+HTTP server는 handler model을 새로 만들지 않는다. handler declaration과 호출 우선순위의 exact
+계약은 [C++ HTTP Hosting의 Handler signature 형식](60-http-hosting.ko.md#3-handler-signature-형식)이
+단독으로 소유한다. 내장 server는 typed route와 raw route에 같은 네 단계 실행 흐름을 적용한다.
 
-```cpp
-class create_game_http_handler_t {
-  public:
-    using request_type = create_game_http_req_t;
-    using reply_type = create_game_http_res_t;
-    using dependency_types =
-      zlink::framework::dependency_list_t<
-        zlink::framework::request_client_t,
-        zlink::framework::logger_t<create_game_http_handler_t>>;
-
-    task_t<create_game_http_res_t> handle (const create_game_http_req_t &request);
-};
-```
-
-server runtime은 typed route에서 아래 작업을 담당한다.
-
-- route path와 query를 request binding input에 합친다.
-- JSON body를 request DTO로 deserialize한다.
-- request DI scope를 만든다.
-- handler를 framework DI에서 resolve한다.
-- handler 결과 DTO를 JSON body로 serialize한다.
-
-server runtime은 raw route에서 아래 작업을 담당한다.
-
-- `http_request_t`를 만든다.
-- method, path, target, route value, query value, header, body, content type, remote endpoint를
-  public framework type으로 복사한다.
-- handler를 framework DI에서 resolve한다.
-- handler가 반환한 `http_response_t`의 status, header, content type, body를 HTTP response로 쓴다.
-
-지원해야 하는 handler signature:
-
-- `reply_type handle(const request_type &request)`
-- `task_t<reply_type> handle(const request_type &request)`
-- `reply_type handle(const request_type &request, http_context_t &context)`
-- `task_t<reply_type> handle(const request_type &request, http_context_t &context)`
-- `reply_type handle(const request_type &request, const http_request_t &http)`
-- `task_t<reply_type> handle(const request_type &request, const http_request_t &http)`
-- `reply_type handle(const request_type &request, const http_request_t &http, http_context_t &context)`
-- `task_t<reply_type> handle(const request_type &request, const http_request_t &http, http_context_t &context)`
-- `http_response_t handle(const request_type &request)`
-- `http_response_t handle(const request_type &request, http_context_t &context)`
-- `task_t<http_response_t> handle(const request_type &request)`
-- `task_t<http_response_t> handle(const request_type &request, http_context_t &context)`
-- `http_response_t handle(const request_type &request, const http_request_t &http)`
-- `task_t<http_response_t> handle(const request_type &request, const http_request_t &http)`
-- `http_response_t handle(const request_type &request, const http_request_t &http, http_context_t &context)`
-- `task_t<http_response_t> handle(const request_type &request, const http_request_t &http, http_context_t &context)`
-- `http_response_t handle(const http_request_t &request)`
-- `task_t<http_response_t> handle(const http_request_t &request)`
+1. request별 DI scope를 만든다. typed route는 route path, query, JSON body를 request DTO로
+   binding하고, raw route는 HTTP metadata와 body를 `http_request_t`로 만든다.
+2. 그 scope에서 handler와 선언된 의존성을 resolve한다.
+3. C++ HTTP Hosting이 정한 우선순위에 따라 선택한 `handle(...)`을 정확히 한 번 호출한다.
+4. typed DTO 결과는 JSON body로 serialize하고, `http_response_t` 결과는 status, header,
+   content type, body를 그대로 HTTP response로 변환한다.
 
 handler는 socket, HTTP parser, Beast request, TLS stream을 알면 안 된다. HTTP 세부 정보가
 필요하면 `http_request_t`, response 직접 제어가 필요하면 `http_response_t`를 사용한다.
@@ -263,7 +220,9 @@ public option과 기본값은 다음과 같다.
 | `graceful_shutdown_timeout` | 5s | 종료 시 진행 중인 request가 끝나기를 기다리는 시간 |
 | `max_keep_alive_requests` | 100 | connection당 request 수 제한 |
 
-Public builder 이름은 아래처럼 고정한다.
+public TLS/server option builder 이름은 아래처럼 고정한다. `http_options_builder_t`의 exact
+declaration은 [C++ configuration과 host interface](interfaces/02-configuration-host.ko.md#41-http-hosting)가
+단독으로 소유한다.
 
 ```cpp
 namespace zlink::framework {
@@ -291,15 +250,6 @@ public:
       std::chrono::milliseconds value);
     http_server_options_builder_t &set_max_keep_alive_requests(
       std::size_t value);
-};
-
-class http_options_builder_t {
-public:
-    http_options_builder_t &configure_tls(
-      std::function<void(http_tls_options_builder_t &)> configure);
-
-    http_options_builder_t &configure_server(
-      std::function<void(http_server_options_builder_t &)> configure);
 };
 
 } // namespace zlink::framework

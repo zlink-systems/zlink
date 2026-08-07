@@ -39,34 +39,52 @@ zlink_sample_print_logs() {
   fi
 }
 
+zlink_sample_preserve_logs() {
+  local log_dir="$1"
+  local root="${ZLINK_SAMPLE_FAILURE_LOG_ROOT:-}"
+  [[ -n "${root}" && -d "${log_dir}" ]] || return 0
+  local prefix="${ZLINK_SAMPLE_FAILURE_LOG_PREFIX:-sample}"
+  local preserved_dir="${root}/${prefix}-$(date +%Y%m%d-%H%M%S)-$$"
+  mkdir -p "${preserved_dir}"
+  cp -a "${log_dir}/." "${preserved_dir}/"
+  echo "Sample failure logs: ${preserved_dir}" >&2
+}
+
 zlink_sample_verify_framework_termination() {
   local log_dir="$1"
   [[ -n "${log_dir}" ]] || return 0
-  local found_log=0
+  local role_log
+  local ready_count
+  local termination_count
+  local stopped_count
+  local force_stopped_count
   local failed=0
-  for log_file in "${log_dir}"/*.log; do
-    [[ -f "${log_file}" ]] || continue
-    case "$(basename "${log_file}")" in
-      build.log|client.log|*-client.log|api.log|play.log|flow-*.log)
-        continue
-        ;;
-    esac
-    if ! grep -q 'ZLINK_FRAMEWORK_READY' "${log_file}"; then
+  local -a role_logs=()
+  read -r -a role_logs <<< "${ZLINK_SAMPLE_FRAMEWORK_ROLE_LOGS:-}"
+  if (( ${#role_logs[@]} == 0 )); then
+    echo "Framework role logs are not configured for this sample: ${log_dir}" >&2
+    return 1
+  fi
+  for role_log in "${role_logs[@]}"; do
+    local log_file="${log_dir}/${role_log}"
+    if [[ ! -f "${log_file}" ]]; then
+      echo "Framework role log is missing: ${log_file}" >&2
+      failed=1
       continue
     fi
-    found_log=1
-    if ! grep -q \
-        'ZLINK_FRAMEWORK_TERMINATION outcome=STOPPED reason=NONE' \
-        "${log_file}"; then
-      echo "Framework termination did not complete cleanly: ${log_file}" >&2
-      rg 'ZLINK_FRAMEWORK_TERMINATION' "${log_file}" || true
+    ready_count="$(grep -c 'ZLINK_FRAMEWORK_READY' "${log_file}" 2>/dev/null || true)"
+    termination_count="$(grep -c 'ZLINK_FRAMEWORK_TERMINATION outcome=' "${log_file}" 2>/dev/null || true)"
+    stopped_count="$(grep -c 'ZLINK_FRAMEWORK_TERMINATION outcome=STOPPED reason=NONE' "${log_file}" 2>/dev/null || true)"
+    force_stopped_count="$(grep -c 'ZLINK_FRAMEWORK_TERMINATION outcome=FORCE_STOPPED' "${log_file}" 2>/dev/null || true)"
+    if [[ "${ready_count}" != "1" || "${termination_count}" != "1" \
+        || "${stopped_count}" != "1" || "${force_stopped_count}" != "0" ]]; then
+      echo "Framework lifecycle evidence is incomplete: ${log_file}" >&2
+      echo "READY=${ready_count} TERMINATION=${termination_count} \
+STOPPED_NONE=${stopped_count} FORCE_STOPPED=${force_stopped_count}" >&2
+      rg 'ZLINK_FRAMEWORK_(READY|TERMINATION)' "${log_file}" || true
       failed=1
     fi
   done
-  if [[ "${found_log}" == "0" ]]; then
-    echo "No Framework READY log was found; termination marker is missing: ${log_dir}" >&2
-    return 1
-  fi
   if [[ "${failed}" != "0" ]]; then
     return 1
   fi
@@ -151,6 +169,9 @@ cleanup() {
         cleanup_status=1
       fi
     fi
+    if [[ "${status}" != "0" || "${cleanup_status}" != "0" ]]; then
+      zlink_sample_preserve_logs "${log_dir:-}"
+    fi
   fi
   if [[ -n "${redis_container_id:-}" ]]; then
     zlink_redis_remove_by_id "${redis_container_id}" || true
@@ -229,17 +250,21 @@ wait_framework_ready_logs() {
   local log_dir="$1"
   local require_peer_ready="${2:-0}"
   local deadline=$((SECONDS + ${ZLINK_SAMPLE_WAIT_SECONDS:-60}))
+  local -a role_logs=()
+  read -r -a role_logs <<< "${ZLINK_SAMPLE_FRAMEWORK_ROLE_LOGS:-}"
+  if (( ${#role_logs[@]} == 0 )); then
+    echo "Framework role logs are not configured for this sample: ${log_dir}" >&2
+    return 1
+  fi
   while (( SECONDS < deadline )); do
-    local found_log=0
     local all_ready=1
-    for log_file in "${log_dir}"/*.log; do
-      [[ -f "${log_file}" ]] || continue
-      case "$(basename "${log_file}")" in
-        build.log|client.log|*-client.log|api.log|play.log|flow-*.log)
-          continue
-          ;;
-      esac
-      found_log=1
+    local log_file role_log
+    for role_log in "${role_logs[@]}"; do
+      log_file="${log_dir}/${role_log}"
+      if [[ ! -f "${log_file}" ]]; then
+        all_ready=0
+        break
+      fi
       if ! grep -q 'ZLINK_FRAMEWORK_READY' "${log_file}"; then
         all_ready=0
         break
@@ -247,20 +272,19 @@ wait_framework_ready_logs() {
     done
     local peer_ready=1
     if [[ "${require_peer_ready}" == "1" ]]; then
-      for log_file in "${log_dir}"/*.log; do
-        [[ -f "${log_file}" ]] || continue
-        case "$(basename "${log_file}")" in
-        build.log|client.log|*-client.log|api.log|play.log|flow-*.log)
-            continue
-            ;;
-        esac
+      for role_log in "${role_logs[@]}"; do
+        log_file="${log_dir}/${role_log}"
+        if [[ ! -f "${log_file}" ]]; then
+          peer_ready=0
+          break
+        fi
         if ! grep -q 'ZLINK_FRAMEWORK_PEER_READY' "${log_file}"; then
           peer_ready=0
           break
         fi
       done
     fi
-    if [[ "${found_log}" == "1" && "${all_ready}" == "1" \
+    if [[ "${all_ready}" == "1" \
         && "${peer_ready}" == "1" ]]; then
       return 0
     fi

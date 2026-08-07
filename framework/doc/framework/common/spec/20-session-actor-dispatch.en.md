@@ -163,9 +163,10 @@ only valid within the same session owner lifecycle. If a different MeshNode bind
 the session owner restarts, it can register a new lifecycle identity even if the
 owner-local counter is smaller than the previous value.
 
-A rebind registers the new identity with both the Actor owner and session owner, then
-invalidates the previous identity. Unbind and disconnect remove exactly the
-corresponding previous identity via a tombstone transition of `boundSessionBind(38)`. A
+A rebind registers the new identity with both the Actor owner and session owner, delivers a
+disconnect callback at most once to the previous exact binding, then invalidates the previous
+identity. Unbind and disconnect remove exactly the corresponding previous identity via a
+tombstone transition of `boundSessionBind(38)` after the callback terminal. A
 late-arriving push/ingress/close from a previous owner lifecycle, a previous Actor
 `ObjectGeneration`, a previous authority owner, or a pre-restart `NodeGeneration` isn't
 applied to the current binding or connection. A malformed control or one-way record
@@ -178,8 +179,10 @@ A route and current-location-snapshot update for Actor relocation that keeps the
 binding is invalid, so the application must explicitly bind the new `ActorRef`.
 
 When rebinding to a different owner or a different Actor generation, the new Actor
-owner registers the new identity, then submits a tombstone to the previous exact
-binding route. Only after the previous owner confirms the tombstone does the new owner
+owner registers the new identity, then submits a disconnect notification to the previous exact
+binding route. If the previous callback fails or exceeds its deadline, bounded diagnostics are
+recorded, but the previous binding is not restored and the new identity is not removed; tombstone
+submission continues. Only after the previous owner confirms the tombstone does the new owner
 return the bind terminal reply. The session owner keeps the existing binding route
 until it receives this reply, and atomically replaces it with the new route once
 received. If the tombstone submission fails or is canceled, the new bind isn't a
@@ -264,6 +267,11 @@ race, they're deduped by exact binding identity, and the current Spot's callback
 at most once. The automatic notification waits for the callback terminal within the
 lifecycle deadline before proceeding with tombstone and local cleanup. Even on a
 deadline or callback failure, the remaining binding cleanup continues.
+
+A public logical notification also waits for that callback terminal, then removes the exact
+binding with a tombstone. Callback failure is recorded diagnostically, but does not restore the
+binding or run the callback again for the same identity. The physical connection and Actor/Spot
+membership remain unchanged.
 
 The current Entry Spot or User Spot an Actor belongs to receives this notification as
 `OnDisconnectActorAsync(...)`. Public `NotifyDisconnectedAsync(...)` is an operation

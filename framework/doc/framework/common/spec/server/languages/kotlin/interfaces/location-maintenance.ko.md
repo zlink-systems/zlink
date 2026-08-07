@@ -68,8 +68,12 @@ fun ZLinkLocationRuntimeQuery.topology(
 ): Flow<ZLinkLocationTopologyEntry>
 ```
 
-조회 projection은 bounded page와 Java result type을 유지한다. Object query는 kind와 stable type별로
-조회하며 page size는 `1..1000`, encoded page는 4 MiB 이하이다. Raw Spot·Actor authority row, Store key,
+조회 projection은 bounded page와 Java result type을 유지한다. Exact lookup은 Missing이면 `null`,
+Creating이면 `CREATING`, Ready이면 `READY`, commit 뒤 current owner를 사용할 수 없으면 `UNAVAILABLE`
+entry를 반환한다. Spot exact lookup은 User Spot과 Instance Spot을 같은 Spot ID 조회 계약으로 다룬다.
+Object list query는 kind를 필수로 받고 stable type과 MeshName을 선택 filter로 받는다. Page size는
+`1..1000`, encoded page는 4 MiB 이하이며 continuation token은 query가 발급한 opaque 값이다. Store 조회
+실패는 Java `ZLinkFrameworkErrorKind.UNAVAILABLE`이며 page 일부를 반환하지 않는다. Raw Spot·Actor authority row, Store key,
 provider version과 scan cursor를 application 조회 결과에 추가하지 않는다.
 
 ## Redis extension

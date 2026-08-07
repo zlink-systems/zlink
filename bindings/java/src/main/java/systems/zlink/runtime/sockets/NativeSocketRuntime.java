@@ -58,6 +58,12 @@ final class NativeSocketRuntime implements AutoCloseable {
         socketCore.disconnectRid(peerRid);
     }
 
+    public void disconnectTransportPair(long transportPairId,
+                                        long transportPairGeneration) {
+        socketCore.disconnectTransportPair(
+            transportPairId, transportPairGeneration);
+    }
+
     public static boolean inCallbackContext() {
         return SocketCore.inCallback();
     }

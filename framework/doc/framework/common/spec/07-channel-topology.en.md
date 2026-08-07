@@ -78,8 +78,7 @@ public interface IZLinkNetworkOptions
 
 public interface IZLinkMeshNodeSocketConfig
 {
-    // the cap on the size of a complete transport message that can be received.
-    long MaxMessageSize { get; set; }
+    // RouteMesh SS has no Framework-level message-size setting.
     TimeSpan? ReceiveTimeout { get; set; }
     TimeSpan? SendTimeout { get; set; }
 }
@@ -695,7 +694,7 @@ defined by [Framework API §6](06-framework-api.en.md). It doesn't inherit the
 StreamNode's `64 KiB` default or its Core STREAM direction rule. The only
 Framework message-size rule added by this section is that RouteMesh SS has no
 separate listener setting; the StreamNode Core STREAM inbound limit is defined
-by [STREAM session §4](19-stream-session.en.md#4-stream-socket-message-size).
+by [STREAM session §7](19-stream-session.en.md#7-registration-model).
 
 ## 9. The Boundary With Classic Fanout
 

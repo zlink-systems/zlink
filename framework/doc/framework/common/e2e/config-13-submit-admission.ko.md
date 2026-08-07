@@ -7,7 +7,7 @@
 
 One-way send와 publish는 payload를 반환하지 않는다. 정상 완료는 해당 operation family의 source admission이
 message를 수락했다는 뜻이며 원격 handler 실행 완료를 뜻하지 않는다. Queue가 바로
-수락하지 못하면 public send deadline 안에서 capacity를 기다리고, timeout 예외·cancellation·Shutdown 중 먼저
+수락하지 못하면 public send deadline 안에서 capacity를 기다리고, timeout 예외·Shutdown 중 먼저
 확정된 결과 하나로 끝난다.
 
 이 config는 실제 process 사이에서 public one-way API의 완료와 실패를 검증한다. Client는 역할 server의
@@ -17,7 +17,7 @@ Transport attempt count, private queue, socket buffer 크기와 test-only snapsh
 ## 1. 확인 범위
 
 - 즉시 수락과 capacity 회복 뒤 수락
-- Bounded pending admission, deadline, cancellation과 Shutdown
+- Bounded pending admission, deadline, Shutdown과 지원 언어의 cancellation
 - Node·Channel·Spot·Actor·Session·STREAM·classic fanout의 one-way 의미
 - Logical Multicast의 부분 전달과 target별 결과 부재
 - Direct logical target과 select-one Channel의 target 선택 차이
@@ -157,24 +157,25 @@ Host가 신규 작업 수락을 닫은 뒤 시작한 send는 queue에 들어가�
   받지 않는 상태가 된 뒤 send를 한 번 시작한다.
 - 검증: Relocate variant는 해당 operation 계약의 rejection result, Shutdown variant는 `ShuttingDown`으로
   끝나며 target handler evidence가 없다.
-- 세부 동작: [Graceful drain §4](../spec/28-graceful-drain-handoff.ko.md)와
-  [§5](../spec/28-graceful-drain-handoff.ko.md)을 검증한다.
+- 세부 동작: [Host state와 완료 결과](../spec/28-graceful-drain-handoff.ko.md#3-host-state와-완료-결과)와
+  [State별 admission](../spec/28-graceful-drain-handoff.ko.md#12-state별-admission)을 검증한다.
 
-#### SA-E2E-07 Cancellation winner와 publish commit을 구분한다
+#### SA-E2E-07 Admission terminal과 publish commit을 구분한다
 
 우선순위: `P1`
 
-Pending admission을 cancellation이 먼저 끝내면 handler가 실행되지 않아야 한다. Logical Multicast의 public
-submit이 이미 정상 완료된 뒤 caller cancellation은 이미 시작한 fanout을 rollback하지 않는다.
+Pending admission이 timeout 또는 Shutdown으로 먼저 끝나면 handler가 실행되지 않아야 한다. Public admission
+cancellation을 제공하는 언어에서는 cancellation variant도 실행한다. Logical Multicast submit이 정상
+완료된 뒤 caller scope 종료는 이미 시작한 fanout을 rollback하지 않는다.
 
-**검증 질문:** Commit 전 cancellation은 delivery를 막고 정상 publish terminal 뒤 cancellation은 기존
-delivery를 취소하지 않는가.
+**검증 질문:** Commit 전 timeout·Shutdown과 지원 언어의 cancellation은 delivery를 막고, 정상 publish
+terminal 뒤 caller scope 종료는 기존 delivery를 취소하지 않는가.
 
 - 시작 조건: 일반 send는 pending 상태로 만들고, multicast target handler는 application gate에서
   대기하도록 구성한다.
-- 절차: Pending send awaitable을 취소한다. 별도 multicast를 publish하여 정상 terminal을 받은 뒤 caller
-  scope를 취소하고 handler gate를 연다.
-- 검증: Cancelled send marker는 없다. Multicast marker는 수락된 target에서 최대 한 번 처리되고 public
+- 절차: Pending send를 timeout 또는 Shutdown으로 끝낸다. 지원 언어에서는 cancellation도 별도 fixture에서
+  실행한다. 별도 multicast를 publish하여 정상 terminal을 받은 뒤 caller scope를 끝내고 handler gate를 연다.
+- 검증: Terminal send marker는 없다. Multicast marker는 수락된 target에서 최대 한 번 처리되고 public
   publish terminal은 바뀌지 않는다.
 - 세부 동작: [Spot messaging §4](../spec/12-spot-messaging.ko.md)와
   [오류 모델 §4](../spec/32-framework-error-model.ko.md)를 검증한다.
@@ -311,41 +312,44 @@ Session owner와 Actor owner가 local인지 remote인지에 따라 one-way termi
 - 절차: 네 조합에서 정상 send를 한 번 실행하고, 별도 pending send는 deadline까지 capacity를 열지 않는다.
 - 검증: 정상 sends는 결과 payload 없이 완료하고 target evidence가 한 번씩 나타난다. Pending sends는
   `DeadlineExceeded`이며 이후 capacity 복구 뒤 replay되지 않는다.
-- 세부 동작: [Session Actor dispatch §5](../spec/20-session-actor-dispatch.ko.md)와
-  [오류 모델 §4](../spec/32-framework-error-model.ko.md)를 검증한다.
+- 세부 동작: [One-way submit](../spec/05-async-execution-policy.ko.md#13-one-way-submit),
+  [Admission deadline](../spec/05-async-execution-policy.ko.md#14-admission-deadline)과
+  [Session Actor inbound dispatch](../spec/20-session-actor-dispatch.ko.md#3-inbound-dispatch와-reply)를 검증한다.
 
 #### SA-E2E-16 Server Stream send 순서를 유지한다
 
 우선순위: `P0`
 
-같은 Stream Session에서 수락된 server sends는 application 제출 순서를 유지해야 한다. Deadline으로 실패한
+같은 Stream Session에서 수락된 server sends는 application 제출 순서를 유지해야 한다. 각 send call의
+public `Timeout(...)` modifier로 실패한
 send는 나중에 client에게 나타나면 안 된다.
 
 **검증 질문:** Stream client가 성공한 sequence만 제출 순서로 받는가.
 
 - 시작 조건: Public stream connector가 server Session에 연결되어 있고 server send HWM을 작게 설정한다.
-  Server send gate는 닫아 두고 성공 marker에는 긴 deadline, `timeout` marker에는 더 짧은 deadline을
+  Server send gate는 닫아 두고 성공 marker에는 긴 call timeout, `timeout` marker에는 더 짧은 timeout을
   설정한다.
 - 절차: `1`, `timeout`, `2`, `3` 순서로 server send를 시작한다. `timeout` operation이 deadline으로
   끝난 것을 확인한 뒤 긴 deadline이 끝나기 전에 gate를 연다.
 - 검증: Client가 받은 성공 sequence `1,2,3`은 source의 successful terminal 순서와 같고 중복이 없다.
   `timeout` marker는 client에게 도착하지 않는다.
-- 세부 동작: [Stream session §5](../spec/19-stream-session.ko.md)를 검증한다.
+- 세부 동작: [Async execution — STREAM send call별 timeout](../spec/05-async-execution-policy.ko.md#stream-send-call별-timeout)과
+  [Stream session의 codec 계층 분리](../spec/19-stream-session.ko.md#5-codec-계층-분리)를 검증한다.
 
 #### SA-E2E-17 Stream reply token은 한 번만 사용한다
 
 우선순위: `P0`
 
-Request reply token은 유효한 첫 reply call이 사용한다. 첫 call이 timeout 또는 cancellation으로 끝나도 같은
-token을 다시 사용할 수 없다.
+Request reply token은 유효한 첫 reply call이 사용한다. 첫 call이 normal, socket send timeout 또는
+Shutdown으로 끝나도 같은 token을 다시 사용할 수 없다. Cancellation은 지원 언어의 추가 variant다.
 
 **검증 질문:** 같은 reply token의 두 call 중 하나만 admission을 시작하고 client reply도 최대 하나인가.
 
 - 시작 조건: Stream peer가 request를 보내고 server handler가 public reply token을 받는다.
 - 절차: 같은 token으로 reply call 두 개를 만들고 application barrier에서 동시에 시작한다. Normal,
-  timeout과 cancellation variant를 fresh request에서 반복한다.
+  socket send timeout과 Shutdown variant를 fresh request에서 반복하고, 지원 언어에서는 cancellation도 실행한다.
 - 검증: 각 request에서 한 call만 정상 또는 첫 terminal을 얻고 다른 call은 local invalid-state error다.
-  Client reply는 최대 하나이며 timeout·cancelled token을 재사용해도 reply가 생기지 않는다.
+  Client reply는 최대 하나이며 terminal token을 재사용해도 reply가 생기지 않는다.
 - 세부 동작: [오류 모델 §3](../spec/32-framework-error-model.ko.md)의
   one-shot state를 검증한다.
 
@@ -373,8 +377,8 @@ eligible member 중 하나를 선택할 수 있다.
 
 우선순위: `P0`
 
-Timeout, cancellation 또는 Shutdown으로 끝난 operation은 route가 복구되어도 다시 pending 상태로 돌아가지
-않는다.
+Timeout, connection loss 또는 Shutdown으로 끝난 operation은 route가 복구되어도 다시 pending 상태로
+돌아가지 않는다. Public admission cancellation을 지원하는 언어는 cancellation variant도 실행한다.
 
 **검증 질문:** Route 복구 뒤 이전 marker는 전달되지 않고 새 operation만 처리되는가.
 

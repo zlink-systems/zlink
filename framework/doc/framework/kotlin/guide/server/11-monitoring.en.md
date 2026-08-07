@@ -62,29 +62,22 @@ query.topology(ZLinkLocationTopologyFilter("play"), pageSize = 100)
 `pageSize` defaults to 100. **The page boundary still exists** — `Flow` only hides it; it
 doesn't fetch everything at once.
 
-## 3. Registering A Message Flow Observer As A Lambda
+## 3. Configuring Message Flow Diagnostics
 
-Java implements and passes a `ZLinkMessageFlowObserver`. Kotlin gives you a lambda via an
-extension function.
-
-```kotlin
-options.configureDispatch().onMessageFlow { event ->
-    // Runs on the runtime thread -- don't block or call back into a framework surface here.
-    auditSink.append(event)
-}
-```
-
-`onMessageFlow` wraps `setMessageFlowObserver`, so the behavior is the same. **It's not a
-suspend lambda** — if you need to await a coroutine inside it, hand off to a separate scope.
-
-There's also an extension that wraps registration in a block.
+Kotlin configures the same four Java levels with a receiver DSL.
 
 ```kotlin
 options.configureDispatch {
-    messageFlow(ZLinkMessageFlowLogMode.ERRORS_ONLY)
-    traceLabel(settings.instanceName)
+    messageFlow(ZLinkMessageFlowLogMode.ERRORS) // Default: failures and backpressure only.
+    traceSampleRate(1.0)
+    includeMessageSizes(true)
 }
 ```
+
+The levels are `OFF`, `ERRORS`, `NORMAL`, and `DETAILED`. The Framework writes structured records
+to the standard logger, trace, and metric providers configured by the application. There is no
+public Kotlin lambda API for a message-flow observer or runtime error sink. Provider failures are
+isolated from the original operation.
 
 ## 4. Common Problems
 
@@ -93,8 +86,6 @@ options.configureDispatch {
 - **I stopped collecting the `Flow` but the subscription is still around** → the
   subscription ends when the collecting coroutine is cancelled. Check that you didn't just
   stop collecting while keeping the scope alive.
-- **I can't call a suspend function inside `onMessageFlow`** → it's a plain lambda. If you
-  need a coroutine, put the event on a channel and process it in a separate scope.
 - **Other symptoms** → see [Java 11. Monitoring](../../../java/guide/server/11-monitoring.en.md) §6.
 
 ## 5. Related Documents

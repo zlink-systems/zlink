@@ -11,19 +11,19 @@
 | `unit` | Channel, route, dispatch helper, actor/spot runtime units |
 | `integration-single-process` | Host/runtime combinations within one process |
 
-## 2. Dispatch Error Observer Regression
+## 2. Dispatch Error Structured Record Regression
 
 | ID | Layer | Test Location | Pass Criteria |
 |----|------|-------------|-----------|
-| DERR-001, DERR-007, DERR-011, DERR-014 | `contract`, `unit` | `Zlink.Framework.ContractTests/test_cpp_framework_contract_headers.cpp`, `Zlink.Framework.UnitTests/test_cpp_framework_channel_messaging.cpp` | The global observer registration surface exists; a missing channel request handler ends in an error reply plus observer event, a missing channel send handler ends in a drop plus observer event, and an observer exception doesn't break the original dispatch result |
-| DERR-002, DERR-008 | `unit` | `Zlink.Framework.UnitTests/test_cpp_framework_channel_messaging.cpp` | A missing route request handler ends in an error reply; a missing route send handler ends in a drop plus observer event |
-| DERR-003, DERR-004, DERR-009, DERR-010, DERR-016 | `unit`, `integration-single-process` | `Zlink.Framework.UnitTests` SPOT/actor dispatch items | A SPOT route, subscription, or actor dispatch failure ends in an error reply or caller-visible error for a request, or a drop plus observer event for one-way |
-| DERR-005, DERR-006, DERR-013, DERR-015 | `unit`, `integration-single-process` | `Zlink.Framework.UnitTests` channel/SPOT dispatch items | Decode failures and handler exceptions end in an error reply or an observable drop, with the default log and counter still recorded even without an observer registered |
+| DERR-001, DERR-007, DERR-011, DERR-014 | `contract`, `unit` | `Zlink.Framework.ContractTests/test_cpp_framework_contract_headers.cpp`, `Zlink.Framework.UnitTests/test_cpp_framework_channel_messaging.cpp` | No public observer registration surface exists; a missing channel request handler ends in an error reply plus `zlink.dispatch_error`, a missing channel send handler ends in a drop plus `zlink.dispatch_error`, and a provider failure doesn't change the original dispatch result |
+| DERR-002, DERR-008 | `unit` | `Zlink.Framework.UnitTests/test_cpp_framework_channel_messaging.cpp` | A missing route request handler ends in an error reply; a missing route send handler ends in a drop, while the application logger/telemetry provider receives a structured record |
+| DERR-003, DERR-004, DERR-009, DERR-010, DERR-016 | `unit`, `integration-single-process` | `Zlink.Framework.UnitTests` SPOT/actor dispatch items | A SPOT route, subscription, or actor dispatch failure ends in an error reply or caller-visible error for a request, or a drop plus a structured dispatch-error record for one-way |
+| DERR-005, DERR-006, DERR-013, DERR-015 | `unit`, `integration-single-process` | `Zlink.Framework.UnitTests` channel/SPOT dispatch items | Decode failures and handler exceptions end in an error reply or an observable drop, with the default record and counter emitted through the application logger/telemetry provider |
 
 ## 3. Release Gate
 
 C++ framework changes build the relevant targets, then run according to the `ctest` label scheme.
-Dispatch error observer changes must at minimum pass the contract header test and the channel
+Structured dispatch-error record changes must at minimum pass the contract header test and the channel
 messaging unit test.
 
 ## 4. Spot Yield Dispatch Regression

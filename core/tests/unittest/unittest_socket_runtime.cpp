@@ -74,6 +74,33 @@ void test_socket_monitor_runtime_erases_only_matching_ready_connection ()
     TEST_ASSERT_EQUAL_UINT32 (0u, runtime.ready_count ());
 }
 
+void test_socket_monitor_runtime_erases_transport_pair_by_endpoint_when_rid_differs ()
+{
+    zlink::socket_monitor_runtime_t runtime;
+    const zlink::endpoint_uri_pair_t endpoint =
+      make_bind_endpoint ("inproc://ready-pair", "tcp://peer-pair");
+    const unsigned char routing_id_a[] = {'r', 'i', 'd', 'a'};
+    const unsigned char routing_id_b[] = {'r', 'i', 'd', 'b'};
+    const unsigned char stale_routing_id[] = {'s', 't', 'a', 'l', 'e'};
+
+    uint32_t ready_count = 0;
+    TEST_ASSERT_TRUE (runtime.mark_ready_connection (
+      endpoint, routing_id_a, sizeof (routing_id_a), &ready_count, 11, 1));
+    TEST_ASSERT_TRUE (runtime.mark_ready_connection (
+      endpoint, routing_id_b, sizeof (routing_id_b), &ready_count, 12, 1));
+    TEST_ASSERT_EQUAL_UINT32 (2u, runtime.ready_count ());
+
+    TEST_ASSERT_FALSE (runtime.erase_ready_connection (
+      endpoint, stale_routing_id, sizeof (stale_routing_id), &ready_count, 11, 1));
+    TEST_ASSERT_TRUE (runtime.erase_ready_connection_for_endpoint (endpoint, &ready_count, 11, 1));
+    TEST_ASSERT_EQUAL_UINT32 (1u, ready_count);
+    TEST_ASSERT_EQUAL_UINT32 (1u, runtime.ready_count ());
+
+    TEST_ASSERT_TRUE (runtime.erase_ready_connection (
+      endpoint, routing_id_b, sizeof (routing_id_b), &ready_count, 12, 1));
+    TEST_ASSERT_EQUAL_UINT32 (0u, runtime.ready_count ());
+}
+
 void test_socket_monitor_runtime_dequeues_enqueued_worker_event_nowait ()
 {
     zlink::socket_monitor_runtime_t runtime;
@@ -516,6 +543,7 @@ int main (int argc, char **argv)
     UNITY_BEGIN ();
     RUN_TEST (test_socket_monitor_runtime_tracks_ready_connections_once);
     RUN_TEST (test_socket_monitor_runtime_erases_only_matching_ready_connection);
+    RUN_TEST (test_socket_monitor_runtime_erases_transport_pair_by_endpoint_when_rid_differs);
     RUN_TEST (test_socket_monitor_runtime_dequeues_enqueued_worker_event_nowait);
     RUN_TEST (test_socket_monitor_runtime_hwm_drops_lossy_events);
     RUN_TEST (test_socket_monitor_runtime_hwm_backpressures_reliable_events);

@@ -424,6 +424,13 @@ Instance Spot closes when its handler or timer calls its own context's
 `close(...)`. A regular message doesn't create a new intent or directly
 start a factory for a missing RID.
 
+The stored creation intent is used only to resume the first cold
+activation on the same target node and lifecycle before terminal
+completion is recorded. A steady `Ready` owner process termination or
+lease expiry doesn't become Missing or cold activation on another node;
+the call ends with `Unavailable`. A Missing call without the marker
+doesn't create a new intent.
+
 In the following example, `spotClient` is a `ZLinkSpotOutbound`, and
 `cartId` is the global SpotId to call. Since Instance intent is
 specified, the stable type and initial Mesh needed for cold activation

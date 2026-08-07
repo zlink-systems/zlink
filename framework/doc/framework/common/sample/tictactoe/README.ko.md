@@ -24,7 +24,11 @@ LeaveGameMsg를 보내는 시점까지를 범위로 한다. 다음 기능은 제
 - 자동 peer discovery와 service registry
 - spectator가 game state를 변경하는 기능
 - room owner 장애 뒤 자동 crash failover
+- Player Actor와 Room Spot의 planned relocation
 - 여러 room을 가로지르는 global leaderboard
+
+Player Actor와 Room Spot factory는 모두 `DisableRelocation`을 선택한다. Planned relocation은 완료
+조건이 아니므로 Relocation Store를 등록하지 않는다.
 
 수동 endpoint는 object placement를 정하는 값이 아니다. API가 특정 Play process나 NodeRid를
 선택하지 않고, Framework가 Location Store에서 RoomId current owner를 resolve한다.
@@ -422,7 +426,8 @@ win과 board state는 Room Spot이 결정하고 milestone은 이미 결정된 �
 ### 7.4 Disconnect와 destroy
 
 STREAM disconnect는 current binding을 정리하지만 Actor와 Room membership을 즉시 destroy하지
-않는다. client가 최종 GameState를 확인한 뒤 LeaveGameMsg를 보내면 Room Spot은 actor를 Entry
+않는다. Client는 새 STREAM connection으로 다시 연결해 인증하고 existing Actor를 exact ActorRef로
+bind한 뒤 기존 GameState를 확인한다. 그 뒤 `LeaveGameMsg`를 보내면 Room Spot은 Actor를 Entry
 Spot으로 이동시키고 Entry Spot context의 `destroyActor`를 호출한다. 이 호출로 destroy evidence를
 남긴다. `destroyActor`는 `onLeaveActor`나 다른 lifecycle callback을 호출하지 않고 native actor ref, framework registry, bound session binding을 정리한다. destroy는 idempotent하며 이미 다른 generation이면 typed error를 반환한다.
 
@@ -435,6 +440,11 @@ sequenceDiagram
 
     C->>P: STREAM disconnect
     P->>P: framework binding cleanup
+    C->>P: new STREAM connection
+    C->>P: authenticate
+    P->>P: lookup existing Actor
+    P->>P: bind exact ActorRef
+    P-->>C: confirm existing GameState
     C->>P: LeaveGameMsg
     P->>R: leave actor
     R->>E: actor joins Entry Spot
@@ -524,8 +534,9 @@ builder로 같은 handler 집합을 명시 등록한다. 이 차이는 등록 �
 7. host Wins=99에서 승리한 뒤 observer가 WinMilestoneNotify의 Wins=100, RoomId와 ActorId를
    확인한다.
 8. 잘못된 turn, occupied cell과 종료 room 요청이 오류로 끝나는지 확인한다.
-9. stream disconnect 뒤 actor가 즉시 destroy되지 않고 재인증 시 같은 state를 사용하는지 확인한다.
-10. 최종 state 뒤 LeaveGameMsg를 보내 Entry Spot destroy evidence를 확인한다.
+9. stream disconnect 뒤 actor가 즉시 destroy되지 않는지 확인한다.
+10. 새 STREAM connection으로 reconnect·authenticate하고 existing Actor를 exact ActorRef로 bind한 뒤
+    같은 GameState를 확인한다. 이어서 `LeaveGameMsg`를 보내 Entry Spot destroy evidence를 확인한다.
 11. response와 push에 NodeRid, ActorRef, endpoint route가 포함되지 않는지 확인한다.
 12. push 대기는 connector public wait interface와 bounded timeout을 사용한다.
 

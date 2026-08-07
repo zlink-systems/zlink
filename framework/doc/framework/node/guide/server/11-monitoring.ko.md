@@ -92,31 +92,24 @@ source · lifecycle generation은 framework 내부 상태라 공개하지 않는
 
 ```typescript
 builder.configureDispatch()
-  .messageFlow(ZLinkMessageFlowLogMode.ErrorsOnly)   // 기본값 — 실패와 backpressure만.
-  .traceLogFile(`${config.logDir}/flow-${config.instanceName}.log`)
-  .traceLabel(config.instanceName);
+  .messageFlow("errors"); // 기본값 — 실패와 backpressure만 기록한다.
 ```
 
 | 수준 | 남기는 것 |
 | --- | --- |
-| `Off` | 남기지 않는다 |
-| `ErrorsOnly`(기본) | dispatch 실패와 backpressure |
-| `KeyTransitions` | 위 + 수신 · dispatch · 완료 같은 주요 전이 |
-| `Verbose` | 위 + 개별 메시지 단위 기록 |
+| `"off"` | 남기지 않는다 |
+| `"errors"`(기본) | dispatch 실패와 backpressure |
+| `"normal"` | 위 + 수신·dispatch·완료 같은 주요 전이 |
+| `"detailed"` | 위 + 상세 진단 |
 
-**값이 PascalCase다.** 다른 언어 문서의 `ERRORS_ONLY`를 그대로 옮기지 않는다.
+값은 exact interface가 정의한 lowercase string union이다.
 
-**운영에서는 `ErrorsOnly`로 두고 필요할 때만 올린다.** `Verbose`는 메시지마다 기록을
-남기므로 처리량이 많은 구간에서 그 자체가 부하가 된다.
+운영에서는 `"errors"`로 두고 필요할 때만 높인다. `"detailed"`는 더 많은 진단을
+남기므로 처리량이 많은 구간에서는 비용을 확인한다.
 
-기록을 프로그램에서 받으려면 observer를 등록한다.
-
-```typescript
-builder.configureDispatch().setMessageFlowObserver(FlowRecorder);
-```
-
-observer는 provider class로 등록한다 — 함수가 아니라 `ZLinkMessageFlowObserver`를
-구현한 class다.
+Framework는 message-flow callback observer, runtime error sink, file path와 raw event DTO를 공개하지
+않는다. Application이 표준 logger·telemetry provider와 file backend를 구성하면 Framework가 정식
+structured record를 그 provider에 기록한다. Provider failure는 message operation 결과를 바꾸지 않는다.
 
 ## 4. 메트릭
 
@@ -158,8 +151,8 @@ store가 잠시 끊겼을 때 오케스트레이터가 프로세스를 죽인다
 - **상태 전이 일부가 안 보인다** → `observe(...)`의 capacity를 넘겨 건너뛴 것이다.
   capacity를 늘리고 소비를 더 빠르게 한다.
 - **`status()`를 불렀더니 오류가 난다** → property다. 괄호를 뺀다.
-- **enum 값이 안 맞는다** → Node는 PascalCase다(`ErrorsOnly`).
-- **flow 기록이 비어 있다** → 기본 수준이 `ErrorsOnly`라 정상 흐름은 남지 않는다.
+- **level 값이 안 맞는다** → Node는 lowercase string(`"errors"`)을 사용한다.
+- **flow 기록이 비어 있다** → 기본 수준이 `"errors"`라 정상 흐름은 남지 않는다.
 - **메트릭이 하나도 안 보인다** → 정상이다. Node runtime은 아직 계기를 내지 않는다(§4).
 - **store가 잠깐 끊겼는데 프로세스가 재시작된다** → store 상태가 liveness에 들어가 있다.
 

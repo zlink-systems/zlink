@@ -26,6 +26,7 @@ OpenConversationReq부터 agent join, greeting, customer reply, idle close와 re
 - message history 저장소와 full-text search
 - 실제 인증 provider와 외부 ticket system
 - Ready owner 장애 뒤 자동 crash failover
+- Actor와 Conversation Spot의 planned relocation
 - UI 디자인과 상담원 배정 최적화
 
 상담원이 없을 때는 오류가 아니라 WaitingForAgent 상태를 반환한다. idle timeout 뒤에는
@@ -119,6 +120,10 @@ flowchart LR
 가진다. 한 actor는 동시에 한 Spot에만 membership을 가질 수 있으므로, 여러 방을 처리하려면
 방마다 actor를 분리한다. Customer는 별도 conversation actor를 만들지 않고 customer identity
 actor를 ConversationSpot participant로 사용한다.
+
+Support가 등록하는 identity·roster·conversation Actor factory와 Conversation Spot factory는 모두
+`DisableRelocation`을 선택한다. Planned relocation은 완료 조건이 아니므로 Relocation Store를 등록하지
+않는다.
 
 ## 5. 사용하는 Framework 요소와 선택 이유
 

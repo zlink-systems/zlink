@@ -40,8 +40,15 @@ physical disconnect has the framework perform an automatic all-settled
 notification to every current binding, running the Spot callback at most
 once per exact binding identity. `notifyDisconnected()` is a logical
 notification while the connection is kept, and waits for the callback
-terminal. A relocation route update is only allowed on the same
-ObjectGeneration. After the target Actor is restored and starts message
+terminal. The exact binding callback runs at most once, then the binding is
+committed as a tombstone and removed after terminal. The physical STREAM
+connection and Actor/Spot membership are kept, and no new public Unbind API is
+provided. Rebind doesn't reuse an old exact binding identity for another Actor
+or generation. It registers the new identity first, then runs the old callback
+at most once and tombstones the old binding. Callback failure is recorded as
+diagnostics but doesn't remove the new binding or restore the old one. A
+relocation route update is only allowed on the same ObjectGeneration; it isn't
+a rebind and doesn't run the disconnect callback. After the target Actor is restored and starts message
 processing, the target runtime sends `sessionActorLocationUpdateReqMsg`
 and changes that Actor's route and the current `ActorRef` location
 snapshot `ZLinkSessionActor.ref()` returns together. The snapshot
@@ -111,6 +118,7 @@ public interface systems.zlink.framework.streams.ZLinkSessionReplyCall {
 public interface systems.zlink.framework.streams.ZLinkSessionSendCall {
   public abstract systems.zlink.framework.streams.ZLinkSessionSendCall metadata(java.lang.String, java.lang.String);
   public abstract systems.zlink.framework.streams.ZLinkSessionSendCall compress();
+  public abstract systems.zlink.framework.streams.ZLinkSessionSendCall timeout(java.time.Duration);
   public abstract java.util.concurrent.CompletionStage<java.lang.Void> submit();
 }
 public interface systems.zlink.framework.streams.ZLinkStreamCompressionCodec {
@@ -148,6 +156,13 @@ perform a separate reply/retry. The one-way dispatch context has no
 reply capability, so it only returns admission. A handshake failure is
 only recorded in runtime monitoring before session creation, and isn't
 delivered to `onError(...)`.
+
+`ZLinkSessionSendCall.timeout(...)` only shortens this send's admission
+wait. Omission uses the STREAM socket send timeout; specifying it uses the
+shorter of the two, so it cannot extend the socket timeout. The duration is
+positive and must round up into `1..Integer.MAX_VALUE` milliseconds. Expiry
+completes terminal-once as `DEADLINE_EXCEEDED` and does not start later
+admission or replay. The reply call doesn't provide this modifier.
 
 ## STREAM Codec Public Signature
 

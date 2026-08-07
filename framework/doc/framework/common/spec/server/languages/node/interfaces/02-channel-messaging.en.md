@@ -217,16 +217,15 @@ values, and the name/kind/unit and attribute restrictions are owned by
 
 A one-way placement/activation failure is recorded in
 `zlink.mesh_node.messages.dropped` with `surface=instance_spot`
-attached. `ZLinkMessageFlowEvent` also doesn't add a separate event ID —
-it uses `eventId=zlink.message_flow`, the same surface, and
-`outcome=dropped`. Only the bounded type registered at startup is
+attached. The standard structured logger records
+`eventId=zlink.message_flow`, the same surface, and `outcome=dropped`.
+Only the bounded type registered at startup is
 recorded in `instanceSpotType`, and
 [Spot ID](../../../../01-glossary.en.md#spot-id),
 [owner](../../../../01-glossary.en.md#owner) ID, and internal authority
-fields aren't used as metric attributes. `eventId=zlink.message_flow`'s
-reason only uses `ZLinkMessageFlowReason` values, and
-`eventId=zlink.dispatch_error`'s reason only uses
-`ZLinkDispatchErrorReason` values.
+fields aren't used as metric attributes. Reason and action use the closed
+values from the message-flow tracing contract, but aren't exposed as a public
+DTO or callback type.
 
 ## 3. Location Peer And Logical Multicast
 
@@ -483,9 +482,18 @@ export interface ZLinkSessionSendCall {
     metadata(key: string, value: string): this;
     metadata(metadata: ZLinkMessageMetadata): this;
     compress(enabled?: boolean): this;
+    timeout(timeoutMs: number): this;
     submit(signal?: AbortSignal): Promise<void>;
 }
 ```
+
+`ZLinkSessionSendCall.timeout(...)` only shortens this send's admission wait.
+Omission uses the STREAM socket send timeout; specifying it uses the shorter
+of the two, so it cannot extend the socket timeout. The value is an integer
+number of milliseconds in `1..2_147_483_647`. Expiry rejects terminal-once as
+`DeadlineExceeded` and does not start later admission or replay. `AbortSignal`
+keeps the existing Node cancellation meaning, and the reply call doesn't
+provide this modifier.
 
 After bind, relay/request relay and `notifyDisconnected(...)` use the
 per-Actor stored route and don't query the Location Store per message. A
@@ -493,8 +501,15 @@ physical disconnect has the framework perform an automatic all-settled
 notification to every current binding, running the Spot callback at
 most once per exact binding identity. `notifyDisconnected(...)` is a
 logical notification while the connection is kept, and waits for the
-callback terminal. A relocation route update is only allowed on the
-same ObjectGeneration. After the target Actor is restored and starts
+callback terminal. The exact binding callback runs at most once, then the
+binding is committed as a tombstone and removed after terminal. The physical
+STREAM connection and Actor/Spot membership are kept, and no new public Unbind
+API is provided. Rebind doesn't reuse an old exact binding identity for another
+Actor or generation. It registers the new identity first, then runs the old
+callback at most once and tombstones the old binding. Callback failure is
+recorded as diagnostics but doesn't remove the new binding or restore the old
+one. A relocation route update is only allowed on the same ObjectGeneration;
+it isn't a rebind and doesn't run the disconnect callback. After the target Actor is restored and starts
 message processing, the target runtime sends
 `sessionActorLocationUpdateReqMsg` and changes that Actor's route and
 the current location snapshot `ZLinkSessionActor.ref` returns, together.

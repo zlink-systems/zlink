@@ -99,32 +99,25 @@ sets the level.
 
 ```typescript
 builder.configureDispatch()
-  .messageFlow(ZLinkMessageFlowLogMode.ErrorsOnly)   // Default -- failures and backpressure only.
-  .traceLogFile(`${config.logDir}/flow-${config.instanceName}.log`)
-  .traceLabel(config.instanceName);
+  .messageFlow("errors"); // Default -- failures and backpressure only.
 ```
 
 | Level | Recording scope |
 | --- | --- |
-| `Off` | Records nothing |
-| `ErrorsOnly` (default) | Dispatch failures and backpressure |
-| `KeyTransitions` | The above + major transitions like receive/dispatch/complete |
-| `Verbose` | The above + a record for every individual message |
+| `"off"` | Records nothing |
+| `"errors"` (default) | Dispatch failures and backpressure |
+| `"normal"` | The above + major transitions like receive/dispatch/complete |
+| `"detailed"` | The above + detailed diagnostics |
 
-**The values are PascalCase.** Don't copy `ERRORS_ONLY` straight over from another
-language's docs.
+The values are the lowercase string union defined by the exact interface.
 
-**Keep operations at `ErrorsOnly` and raise it only when needed.** `Verbose` records
-something for every message, so on high-throughput paths it becomes a load in itself.
+Keep operations at `"errors"` and raise it only when needed. `"detailed"` records more
+diagnostics, so check its cost on high-throughput paths.
 
-To receive records in your program, register an observer.
-
-```typescript
-builder.configureDispatch().setMessageFlowObserver(FlowRecorder);
-```
-
-Register the observer as a provider class — a class that implements
-`ZLinkMessageFlowObserver`, not a function.
+The Framework exposes no message-flow callback observer, runtime error sink, file path, or raw event
+DTO. Configure a standard logger/telemetry provider and file backend in the application; the Framework
+records the formal structured records through that provider. Provider failure does not change the
+message-operation result.
 
 ## 4. Metrics
 
@@ -169,8 +162,8 @@ blips.
 - **Some state transitions are missing** → `observe(...)`'s capacity was exceeded and they
   got skipped. Raise the capacity and consume faster.
 - **Calling `status()` throws an error** → it's a property. Drop the parentheses.
-- **The enum value doesn't match** → Node uses PascalCase (`ErrorsOnly`).
-- **The flow record is empty** → the default level is `ErrorsOnly`, so normal flow isn't
+- **The level value doesn't match** → Node uses a lowercase string (`"errors"`).
+- **The flow record is empty** → the default level is `"errors"`, so normal flow isn't
   recorded.
 - **No metrics show up at all** → that's expected. The Node runtime doesn't emit
   instruments yet (§4).

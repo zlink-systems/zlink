@@ -59,6 +59,7 @@ fi
 pids=()
 redis_container_id=""
 log_dir="build/sample-logs"
+ZLINK_SAMPLE_FRAMEWORK_ROLE_LOGS="tracking.log customer-gateway.log courier-session.log courier-node1.log courier-node2.log dispatch.log"
 flow_log_dir="$(pwd)/logs"
 config_dir="$(mktemp -d)"
 chmod 0700 "${config_dir}"

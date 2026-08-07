@@ -744,12 +744,31 @@ Operational tools can query the current location by ActorId or SpotId. A list pe
 kind and stable type can also be read by page. This result is for checking operational
 status and isn't used as an application message's target list or placement condition.
 
+- Exact lookup distinguishes Actor and Spot. A missing record returns empty and does not build
+  a `Missing` entry.
+- A paged list requires object kind as a filter, and accepts stable type and MeshName as optional
+  filters.
 - One page returns `1..1000` entries.
-- Stored size is at most 4 MiB.
+- One encoded page is at most 4 MiB. If adding the next entry would cross the limit, that entry
+  begins the next continuation page. Existing field-length limits keep one entry within this
+  bound.
 - Each entry has the global ID, `ObjectGeneration`, `MeshName`, Node RID, state, and
   stable type.
+- The continuation token is opaque and is neither interpreted nor modified by the application.
+  One page cycle does not return a duplicate ID; a change completed during a cycle may first
+  appear in the next cycle.
 - A function returning the whole set at once with no limit isn't provided.
 - `Missing`, `Creating`, and Store errors aren't cached as "the object doesn't exist."
+
+Query results use the following states.
+
+| Stored state | Exact lookup | Paged list |
+|---|---|---|
+| No record | Empty | No entry |
+| `Creating` | A `Creating` entry | Includes a `Creating` entry |
+| `Ready` | A `Ready` entry | Includes a `Ready` entry |
+| Current owner unavailable after commit | An `Unavailable` entry | Includes an `Unavailable` entry |
+| Store query failure | An `Unavailable` framework error | Ends the whole page as an error and returns no partial successful entries |
 
 Topology enumeration only targets MeshNode descriptors. Since ClientServer channel and
 classic fanout channel aren't MeshNodes, they don't appear in this list — their state is

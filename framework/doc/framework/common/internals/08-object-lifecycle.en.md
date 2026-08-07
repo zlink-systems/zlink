@@ -13,7 +13,9 @@ title: "8. Object Kind And Activation"
 > **Contract ownership** — the Spot kinds and shutdown reasons are
 > owned by [the Spot Model](../spec/11-spot-model.en.md), and where
 > generation is used by
-> [Spot · Actor Routing](../spec/18-object-routing.en.md). This
+> [Spot · Actor Routing](../spec/18-object-routing.en.md). The result
+> after owner failure is owned by
+> [Failure And Failover Policy](../spec/31-failure-failover-policy.en.md). This
 > chapter covers the **structure** that satisfies that contract, and
 > the mismatches actually observed across the four implementations.
 
@@ -68,6 +70,23 @@ Spot-dedicated call that explicitly declares intent to create can
 build a new one; an ordinary message and a lookup call only target an
 already-ready object
 ([Spot · Actor Routing 「2.2 The Condition For Using A Recent Ready Route」](../spec/18-object-routing.en.md#22-the-condition-for-using-a-recent-ready-route)).
+
+### Distinguish `Missing` From A `Ready` Owner That Can't Be Used
+
+Instance intent alone doesn't enter the creation path. The resolver
+checks authority and owner availability together and preserves the
+following meanings.
+
+| Observed State | Next Action |
+|---|---|
+| `Missing`, with no authority record | Instance intent may try to claim a creation reservation. |
+| Creation is in progress | Wait for the in-progress attempt without running a second factory for the object. |
+| `Ready` with a valid owner lease | Use the current owner route. |
+| Authority is `Ready`, but the owner process terminated or its lease is invalid | Keep authority and end the call with `Unavailable`. Don't select another node or run a factory. |
+
+Stored creation intent resumes only an incomplete first cold-activation
+operation on the same target node and lifecycle. It isn't used for
+takeover or queue recovery after a steady `Ready` owner failure.
 
 Without this distinction, one typo builds an object. A message sent
 with a wrong ID would create a new object for that ID, and no one
@@ -207,19 +226,20 @@ disposes the activation, and releases the Spot location in the
 Location Store. So no new work is accepted while the callback is
 running, and the location isn't cleared before the callback finishes.
 
-If, during this process, the location row is still being released
-while an Instance intent request uses the previous route, the .NET
-runtime invalidates the route and re-reads until the location becomes
-Missing or newly Ready. This behavior isn't a retry resending an
-already-accepted application request — it's an owner-route refresh to
-decide cold activation. This behavior isn't applied to a normal Spot's
-stale-route error.
+If an Instance-intent request uses the previous route while the
+location row is still being released, the runtime may invalidate the
+route and re-read until the close transaction finishes authority
+release as `Missing`, or until a current `Ready` route is confirmed.
+This isn't a retry that resends an already-accepted application
+request; it's an owner-route refresh that confirms the result of
+explicit idle cleanup.
 
-The Node.js runtime applies the same boundary. `requestToSpotAddress` sends
-only an Instance intent whose resolver reports the route absence as
-`RequestTargetNotFound` before admission through the cold-activation path.
-When an already-Ready route returns `ActorLocationStale`, it does not
-resubmit the application request and instead returns a terminal error.
+The resolver must distinguish `Missing` after idle cleanup released
+authority from an `Unavailable` resolution, where only the owner lease is
+invalid. Only the former enters Instance cold activation. The latter
+ends with `Unavailable` without running a new factory or handler. An
+application request that already received a stale error from a
+previously `Ready` route isn't resubmitted to another owner either.
 
 The idle-cleanup state of other Framework languages, and the common
 process-verification result, aren't treated as complete just from this
@@ -362,6 +382,9 @@ followed as-is
   time, the factory runs only once.
 - The "being created" state doesn't stay in the location cache.
 - A record from a failed creation is cleaned up at startup.
+- `Ready` owner process termination or lease expiry doesn't become `Missing`.
+- When a `Ready` owner can't be used, no factory or handler runs on another node and the call ends with `Unavailable`.
+- Incomplete first cold-activation recovery runs only on the target node and lifecycle named by authority.
 - Even right after an object is recreated, ordinary messages aren't
   rejected for generation mismatch.
 - A call sent to a stale owner ends in an error without automatic

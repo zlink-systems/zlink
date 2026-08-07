@@ -466,6 +466,58 @@ final class ZLinkJavaRawMeshNodeM6ATest {
     }
 
     @Test
+    void replacementDoesNotSkipAConnectionBeforeItsReadyEvent() throws Exception {
+        RoutingId localRid = RoutingId.from("jvm-pre-ready-replace-local");
+        RoutingId peerRid = RoutingId.from("jvm-pre-ready-replace-peer");
+        String localEndpoint = "inproc://jvm-pre-ready-replace-local-"
+            + System.nanoTime();
+        String peerEndpoint = "inproc://jvm-pre-ready-replace-peer-"
+            + System.nanoTime();
+        try (var context = Zlink.createContext();
+             var local = new ZLinkJavaRawMeshNode(context, "mesh");
+             var peer = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            local.setRoutingId(localRid);
+            local.setBind(localEndpoint);
+            peer.setRoutingId(peerRid);
+            peer.setBind(peerEndpoint);
+            local.start();
+            peer.start();
+
+            local.connectPeer(peerEndpoint);
+            assertThrows(
+                IllegalStateException.class,
+                () -> local.replacePeerConnection(
+                    peerEndpoint,
+                    peerRid,
+                    peer.status().lifecycleGeneration(),
+                    peerRid.toString()));
+
+            peer.close();
+            try (var replacementPeer = new ZLinkJavaRawMeshNode(
+                     context, "mesh")) {
+                replacementPeer.setRoutingId(peerRid);
+                replacementPeer.setBind(peerEndpoint);
+                replacementPeer.start();
+                long replacementIntent = awaitReplacement(
+                    local,
+                    peerEndpoint,
+                    peerRid,
+                    replacementPeer.status().lifecycleGeneration(),
+                    peerRid.toString());
+
+                awaitState(local, MeshPeerState.ADMITTED);
+                assertEquals(
+                    replacementIntent,
+                    local.peers().stream()
+                        .filter(entry -> entry.state() == MeshPeerState.ADMITTED)
+                        .findFirst()
+                        .orElseThrow()
+                        .connectionIntentId());
+            }
+        }
+    }
+
+    @Test
     void command44ReceivesCommand45ThroughInfrastructureDispatcher()
         throws Exception {
         String endpoint = "inproc://jvm-m6c-session-route-" + System.nanoTime();

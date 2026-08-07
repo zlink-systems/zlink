@@ -97,6 +97,9 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     private static final Logger LOGGER =
         Logger.getLogger(ZLinkJavaRawMeshNode.class.getName());
     private static final int PREFIX_BYTES = 5;
+    // Core sets this flag only on the CONNECTION_READY edge. A paired
+    // CONNECTION_READY event without it is the physical close snapshot.
+    private static final int CONNECTION_READY_EDGE_FLAG = 1;
     private static final int MAX_COMPLETION_CONTROL_PARTS = 64;
     private static final long MAX_COMPLETION_CONTROL_BYTES = 256L * 1024;
     private static final String RELOCATION_CONTROL_PACKET =
@@ -126,10 +129,14 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         ConcurrentHashMap.newKeySet();
     private final java.util.Set<Long> closedPeerIntents =
         ConcurrentHashMap.newKeySet();
+    private final java.util.Set<Long> closeRequestedPeerIntents =
+        ConcurrentHashMap.newKeySet();
     private final java.util.Set<Long> livePeerIntents =
         ConcurrentHashMap.newKeySet();
     private final Map<Long, RoutingId> peerIntentRoutingIds =
         new ConcurrentHashMap<>();
+    private final Map<Long, java.util.Set<TransportIdentity>>
+        peerIntentTransports = new ConcurrentHashMap<>();
     private final Map<RoutingId, AutomaticNotRequiredPeer>
         automaticNotRequiredPeers = new ConcurrentHashMap<>();
     private final AtomicLong nextIntent = new AtomicLong(1);
@@ -159,6 +166,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         new ZLinkServiceOperationRegistry(deadlines);
     private final java.util.concurrent.ConcurrentLinkedQueue<MonitorEvent>
         monitorEvents = new java.util.concurrent.ConcurrentLinkedQueue<>();
+    private final java.util.concurrent.ConcurrentLinkedQueue<PeerCloseRequest>
+        pendingPeerCloseRequests = new java.util.concurrent.ConcurrentLinkedQueue<>();
     private final Map<RoutingId, String> connectionIds =
         new ConcurrentHashMap<>();
     private final Map<RoutingId, String> admissionControlReadyConnections =
@@ -771,8 +780,10 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 expectedSecurityIdentity,
                 System.currentTimeMillis()));
         closedPeerIntents.remove(intent);
+        closeRequestedPeerIntents.remove(intent);
         livePeerIntents.remove(intent);
         peerIntentRoutingIds.remove(intent);
+        peerIntentTransports.remove(intent);
         if (expectedRoutingId != null) {
             rejectedPeers.remove(expectedRoutingId);
             nextAnnouncementNanos.put(expectedRoutingId, 0L);
@@ -805,7 +816,11 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                     "previous peer connection has not completed liveness close");
             }
         }
-        staleIntentIds.forEach(this::removePeerConnection);
+        // requestPeerIntentClose already terminated the shared endpoint. Do
+        // not issue the same endpoint termination once per stale intent; an
+        // endpoint may have both a startup intent and a descriptor intent.
+        staleIntentIds.forEach(intentId ->
+            removePeerConnection(intentId, false));
         return connectPeer(
             endpoint,
             expectedRoutingId,
@@ -816,8 +831,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     private boolean peerIntentIsClosed(long connectionIntentId) {
         PeerIntent intent = peerIntents.get(connectionIntentId);
         return intent == null
-            || closedPeerIntents.contains(connectionIntentId)
-            || !livePeerIntents.contains(connectionIntentId);
+            || closedPeerIntents.contains(connectionIntentId);
     }
 
     boolean hasLivePeerIntent(String endpoint) {
@@ -826,27 +840,78 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             .anyMatch(entry -> livePeerIntents.contains(entry.getKey()));
     }
 
+    @Override
+    public boolean isPeerConnectionClosing(long connectionIntentId) {
+        return closeRequestedPeerIntents.contains(connectionIntentId);
+    }
+
     private void requestPeerIntentClose(long connectionIntentId) {
         PeerIntent intent = peerIntents.get(connectionIntentId);
-        RouterSocket current = router;
-        if (intent == null || current == null) {
+        if (intent == null || router == null
+            || !closeRequestedPeerIntents.add(connectionIntentId)) {
             return;
         }
-        try {
-            current.disconnect(intent.endpoint());
-            closedPeerIntents.add(connectionIntentId);
-            livePeerIntents.remove(connectionIntentId);
-        } catch (RuntimeException ignored) {
-            // The monitor event remains the authoritative liveness close.
+        java.util.Set<TransportPair> pairs = peerIntentTransports.getOrDefault(
+            connectionIntentId,
+            java.util.Set.of()).stream()
+            .filter(transport -> transport.pairId() != 0
+                && transport.pairGeneration() != 0)
+            .map(transport -> new TransportPair(
+                transport.pairId(), transport.pairGeneration()))
+            .collect(java.util.stream.Collectors.toSet());
+        pendingPeerCloseRequests.add(new PeerCloseRequest(
+            connectionIntentId, intent.endpoint(), java.util.Set.copyOf(pairs)));
+    }
+
+    private void drainPeerCloseRequests() {
+        PeerCloseRequest request;
+        while ((request = pendingPeerCloseRequests.poll()) != null) {
+            PeerIntent intent = peerIntents.get(request.connectionIntentId());
+            RouterSocket current = router;
+            if (intent == null || current == null
+                || !closeRequestedPeerIntents.contains(request.connectionIntentId())) {
+                continue;
+            }
+            try {
+                if (request.transportPairs().isEmpty()) {
+                    current.disconnect(request.endpoint());
+                } else {
+                    for (TransportPair pair : request.transportPairs()) {
+                        current.disconnectTransportPair(
+                            pair.id(), pair.generation());
+                    }
+                }
+                if (request.endpoint().startsWith("inproc://")) {
+                    // Core removes an inproc endpoint and terminates both pipe
+                    // halves synchronously. There is no later monitor event for
+                    // this path, so the successful disconnect is the physical
+                    // liveness close for this transport.
+                    closedPeerIntents.add(request.connectionIntentId());
+                    closeRequestedPeerIntents.remove(request.connectionIntentId());
+                    livePeerIntents.remove(request.connectionIntentId());
+                    peerIntentTransports.remove(request.connectionIntentId());
+                }
+            } catch (RuntimeException failure) {
+                closeRequestedPeerIntents.remove(request.connectionIntentId());
+                // The next descriptor observation may retry the physical close.
+            }
         }
     }
 
     @Override
     public void removePeerConnection(long connectionIntentId) {
+        removePeerConnection(connectionIntentId, true);
+    }
+
+    private void removePeerConnection(
+        long connectionIntentId,
+        boolean disconnectEndpoint) {
         PeerIntent removed = peerIntents.remove(connectionIntentId);
         closedPeerIntents.remove(connectionIntentId);
+        closeRequestedPeerIntents.remove(connectionIntentId);
         livePeerIntents.remove(connectionIntentId);
         peerIntentRoutingIds.remove(connectionIntentId);
+        peerIntentTransports.remove(connectionIntentId);
         if (removed != null && router != null) {
             if (removed.expectedRoutingId() != null) {
                 admittedPeerChannels.remove(removed.expectedRoutingId());
@@ -874,7 +939,9 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 forgetKnownPeerChannelsIfUntracked(
                     removed.expectedRoutingId());
             }
-            router.disconnect(removed.endpoint());
+            if (disconnectEndpoint) {
+                router.disconnect(removed.endpoint());
+            }
         }
     }
 
@@ -2260,14 +2327,16 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         long ownerLeaseGeneration =
             ((ZLinkJavaRawSpotNode) spotNode())
                 .actorAuthorityOwnerLeaseGeneration(actor);
-        if (peer.isEmpty()
-            || actor.generation() <= 0
-            || bindingGeneration <= 0
-            || authorityOwnerGeneration <= 0
-            || ownerLeaseGeneration <= 0) {
+        if (peer.isEmpty() || ownerLeaseGeneration <= 0) {
             return CompletableFuture.failedFuture(
-                new IllegalStateException(
-                    "remote Actor binding route is not connected"));
+                new ZlinkRequestException(RequestResult.NOT_CONNECTED));
+        }
+        if (actor.generation() <= 0
+            || bindingGeneration <= 0
+            || authorityOwnerGeneration <= 0) {
+            return CompletableFuture.failedFuture(
+                new IllegalArgumentException(
+                    "remote Actor binding fence is invalid"));
         }
         long correlation = allocateCorrelation();
         byte[] frame = statefulWire.encodeBoundSessionBindHeader(
@@ -2296,9 +2365,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 if (result
                     != systems.zlink.contracts.sockets.RequestResult.OK) {
                     completion.completeExceptionally(
-                        new IllegalStateException(
-                            "bound session binding transport failed: "
-                                + result));
+                        new ZlinkRequestException(result));
                     return;
                 }
                 try {
@@ -2321,8 +2388,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             });
         if (!submitted && terminal.compareAndSet(false, true)) {
             completion.completeExceptionally(
-                new IllegalStateException(
-                    "bound session binding was not submitted"));
+                new ZlinkRequestException(RequestResult.NOT_CONNECTED));
         }
         return completion;
     }
@@ -3633,6 +3699,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             while (!closed.get()) {
                 long now = System.nanoTime();
                 drainMonitorEvents();
+                drainPeerCloseRequests();
                 drainAdmissionControlRetries();
                 announceExpectedPeers(now);
                 tickLiveness(now);
@@ -5381,19 +5448,17 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             rememberPeerIntentRoutingId(expected, inbound.source());
             PeerAdmissionExpectation observed =
                 peerAdmissionExpectations.get(inbound.source());
-            boolean manualExpectation = expected != null
-                && expected.expectedLifecycleGeneration() == 0;
-            String expectedEndpoint = observed == null || manualExpectation
+            String expectedEndpoint = observed == null
                 ? expected == null ? null : expected.endpoint()
                 : observed.endpoint();
             String expectedSecurityIdentity =
-                observed == null || manualExpectation
+                observed == null
                 ? expected == null
                     ? inbound.source().toString()
                     : expected.expectedSecurityIdentity()
                 : observed.securityIdentity();
             long expectedLifecycleGeneration =
-                observed == null || manualExpectation
+                observed == null
                 ? expected == null
                     ? 0
                     : expected.expectedLifecycleGeneration()
@@ -5752,20 +5817,23 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 if (event.event() == MonitorEventType.DISCONNECTED
                     || event.event() == MonitorEventType.CLOSED) {
                     markPeerIntentsClosed(event, null);
+                } else if (event.event() == MonitorEventType.CONNECTION_READY
+                    && !isConnectionReadyEdge(event)
+                    && event.transportPairId() != 0
+                    && event.transportPairGeneration() != 0) {
+                    markPeerIntentPairClosed(event, null);
                 }
                 continue;
             }
-            streamTrace("transport-event event=" + event.event()
-                + " peer=" + peer.orElseThrow()
-                + " value=" + event.value()
-                + " connectionId=" + event.connectionId()
-                + " pairId=" + event.transportPairId()
-                + " pairGeneration=" + event.transportPairGeneration()
-                + " lane=" + event.transportLane()
-                + " local=" + event.localAddr()
-                + " remote=" + event.remoteAddr());
             if (event.event() == MonitorEventType.CONNECTION_READY) {
                 RoutingId peerRid = peer.orElseThrow();
+                if (!isConnectionReadyEdge(event)) {
+                    if (event.transportPairId() != 0
+                        && event.transportPairGeneration() != 0) {
+                        markPeerIntentPairClosed(event, peerRid);
+                    }
+                    continue;
+                }
                 markPeerIntentsActive(event, peerRid);
                 ZLinkServiceAdmissionGuard.ConnectionDirection direction =
                     monitorConnectionDirection(event, peerRid);
@@ -5801,13 +5869,23 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         }
     }
 
+    private static boolean isConnectionReadyEdge(MonitorEvent event) {
+        return (event.flags() & CONNECTION_READY_EDGE_FLAG) != 0;
+    }
+
     private void markPeerIntentsActive(
         MonitorEvent event,
         RoutingId peerRid) {
         peerIntents.forEach((intentId, intent) -> {
-            if (matchesMonitorPeer(intentId, intent, event, peerRid)) {
+            if (event.value() > 0
+                && !closeRequestedPeerIntents.contains(intentId)
+                && matchesMonitorPeer(intentId, intent, event, peerRid)) {
                 closedPeerIntents.remove(intentId);
                 livePeerIntents.add(intentId);
+                peerIntentTransports.computeIfAbsent(
+                    intentId,
+                    ignored -> ConcurrentHashMap.newKeySet())
+                    .add(TransportIdentity.from(event));
             }
         });
     }
@@ -5816,11 +5894,72 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         MonitorEvent event,
         RoutingId peerRid) {
         peerIntents.forEach((intentId, intent) -> {
-            if (matchesMonitorPeer(intentId, intent, event, peerRid)) {
+            java.util.Set<TransportIdentity> transports =
+                peerIntentTransports.get(intentId);
+            boolean matchedTransport = transports != null
+                && transports.removeIf(transport -> transport.matches(event));
+            boolean closingUntrackedTransport =
+                closeRequestedPeerIntents.contains(intentId)
+                    && (transports == null || transports.isEmpty())
+                    && matchesMonitorPeer(intentId, intent, event, peerRid);
+            if (!matchedTransport && !closingUntrackedTransport) {
+                return;
+            }
+            if (transports == null || transports.isEmpty()) {
                 closedPeerIntents.add(intentId);
+                closeRequestedPeerIntents.remove(intentId);
                 livePeerIntents.remove(intentId);
+                peerIntentTransports.remove(intentId);
+                cleanupClosedPeerEndpoint(intent.endpoint());
             }
         });
+    }
+
+    private void markPeerIntentPairClosed(
+        MonitorEvent event,
+        RoutingId peerRid) {
+        peerIntents.forEach((intentId, intent) -> {
+            if (!closeRequestedPeerIntents.contains(intentId)
+                || !matchesMonitorPeer(intentId, intent, event, peerRid)) {
+                return;
+            }
+            java.util.Set<TransportIdentity> transports =
+                peerIntentTransports.get(intentId);
+            if (transports == null || transports.isEmpty()) {
+                closedPeerIntents.add(intentId);
+                closeRequestedPeerIntents.remove(intentId);
+                livePeerIntents.remove(intentId);
+                peerIntentTransports.remove(intentId);
+                cleanupClosedPeerEndpoint(intent.endpoint());
+                return;
+            }
+            transports.removeIf(transport ->
+                transport.pairId() == event.transportPairId()
+                    && transport.pairGeneration()
+                        == event.transportPairGeneration());
+            if (transports.isEmpty()) {
+                closedPeerIntents.add(intentId);
+                closeRequestedPeerIntents.remove(intentId);
+                livePeerIntents.remove(intentId);
+                cleanupClosedPeerEndpoint(intent.endpoint());
+            }
+        });
+    }
+
+    private void cleanupClosedPeerEndpoint(String endpoint) {
+        RouterSocket current = router;
+        if (current == null || endpoint.startsWith("inproc://")) {
+            return;
+        }
+        try {
+            // Exact-pair termination disables reconnect but intentionally
+            // keeps the endpoint registration. Remove that registration only
+            // after the monitor has confirmed physical pair closure so the
+            // following replacement connect creates a new transport pair.
+            current.disconnect(endpoint);
+        } catch (RuntimeException ignored) {
+            // A concurrent teardown may already have removed the endpoint.
+        }
     }
 
     private void rememberPeerIntentRoutingId(
@@ -5830,7 +5969,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             return;
         }
         peerIntents.forEach((intentId, intent) -> {
-            if (intent == expected) {
+            if (intent == expected
+                && !closeRequestedPeerIntents.contains(intentId)) {
                 peerIntentRoutingIds.put(intentId, peerRid);
                 livePeerIntents.add(intentId);
             }
@@ -6158,6 +6298,41 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     }
 
     private record TransportPair(long id, long generation) {
+    }
+
+    private record PeerCloseRequest(
+        long connectionIntentId,
+        String endpoint,
+        java.util.Set<TransportPair> transportPairs) {
+    }
+
+    private record TransportIdentity(
+        String eventKey,
+        long connectionId,
+        long pairId,
+        long pairGeneration,
+        int lane) {
+
+        static TransportIdentity from(MonitorEvent event) {
+            return new TransportIdentity(
+                transportEventKey(event),
+                event.connectionId(),
+                event.transportPairId(),
+                event.transportPairGeneration(),
+                event.transportLane());
+        }
+
+        boolean matches(MonitorEvent event) {
+            if (pairId != 0
+                && pairGeneration != 0
+                && pairId == event.transportPairId()
+                && pairGeneration == event.transportPairGeneration()) {
+                return lane == event.transportLane();
+            }
+            return connectionId != 0
+                && event.connectionId() != 0
+                && connectionId == event.connectionId();
+        }
     }
 
     private void disconnectNotRequiredTransport(RoutingId peer) {

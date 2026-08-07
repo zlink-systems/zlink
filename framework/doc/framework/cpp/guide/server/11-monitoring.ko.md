@@ -74,43 +74,25 @@ socket 내부 상태는 공개 계약이 아니다.
 
 ```cpp
 options.configure_dispatch ()
-  .message_flow (message_flow_log_mode_t::errors_only) // 기본값 — error와 backpressure만.
-  .trace_sample_rate (1.0)                            // 표본 비율.
-  .include_message_sizes (true)                       // payload byte를 함께 남긴다.
-  .trace_log_file ("logs/flow.jsonl");                // 앱 로그와 분리해 따로 쓴다.
+  .message_flow (message_flow_log_mode_t::errors) // 기본값 — error와 backpressure만.
+  .trace_sample_rate (1.0)                       // 표본 비율.
+  .include_message_sizes (true);                 // payload byte를 함께 남긴다.
 ```
 
 | 수준 | 남기는 것 |
 | --- | --- |
 | `off` | 남기지 않는다 |
-| `errors_only`(기본) | dispatch 실패와 backpressure |
-| `key_transitions` | 위 + 수신·dispatch·완료 같은 주요 전이 |
-| `verbose` | 위 + 개별 메시지 단위 기록 |
+| `errors`(기본) | dispatch 실패와 backpressure |
+| `normal` | 위 + 수신·dispatch·완료 같은 주요 전이 |
+| `detailed` | 위 + 개별 메시지 단위 상세 진단 |
 
-**운영에서는 `errors_only`로 두고 필요할 때만 올린다.** `verbose`는 메시지마다 기록을
+**운영에서는 `errors`로 두고 필요할 때만 올린다.** `detailed`는 메시지마다 기록을
 남기므로 처리량이 많은 구간에서 그 자체가 부하가 된다.
 
-기록을 프로그램에서 받으려면 observer를 등록한다.
-
-```cpp
-class flow_recorder_t : public message_flow_observer_t
-{
-  public:
-    void on_message_flow (const message_flow_event_t &event) override
-    {
-        // outcome · surface · packet_name · flow_id 등을 자기 저장소로 넘긴다.
-        // 이 callback도 runtime 스레드에서 실행된다 — blocking 금지.
-        _sink.append (event.outcome, event.packet_name.value_or ("-"));
-    }
-};
-
-options.configure_dispatch ().set_message_flow_observer (
-  std::make_shared<flow_recorder_t> (sink));
-
-// 짧은 기록이라면 class 대신 함수 하나를 넘겨도 된다.
-options.configure_dispatch ().set_message_flow_observer (
-  [&sink] (const message_flow_event_t &event) { sink.append (event.outcome); });
-```
+Framework는 application이 구성한 standard logger·trace·metric provider에 structured record를
+기록한다. Message-flow callback observer, runtime error sink, raw event DTO나 diagnostics 파일
+경로를 Framework public API로 등록하지 않는다. Provider 호출 실패는 원래 message
+operation의 terminal 결과를 바꾸지 않고 별도 진단으로 격리한다.
 
 `flow_id`와 `flow_origin`은 한 요청이 여러 node를 거칠 때 그 조각들을 하나로 묶는
 식별자다. 상관관계 규칙은
@@ -162,8 +144,8 @@ metric 이름·종류·단위·label은
   표면을 다시 부르거나 blocking 대기를 하지 않는다.
 - **상태 전이 일부가 안 보인다** → `observe(...)`의 capacity를 넘겨 건너뛴 것이다.
   모든 전이가 필요하면 capacity를 늘리고 callback을 더 빨리 반환시킨다.
-- **flow 기록이 비어 있다** → 기본 수준이 `errors_only`라 정상 흐름은 남지 않는다.
-  `key_transitions` 이상으로 올린다.
+- **flow 기록이 비어 있다** → 기본 수준이 `errors`라 정상 흐름은 남지 않는다.
+  `normal` 이상으로 올린다.
 - **store가 잠깐 끊겼는데 프로세스가 재시작된다** → store 의존성이 liveness에 들어가
   있다. readiness로 옮긴다.
 
@@ -171,5 +153,4 @@ metric 이름·종류·단위·label은
 
 - 정식 계약: [C++ monitoring 공개 계약](../../../common/spec/server/languages/cpp/interfaces/08-monitoring.ko.md)
 - 메트릭과 drain·readiness 운영: [12. 운영](12-operations.ko.md)
-- logging provider 구성: [19. Configuration](19-configuration.ko.md)
 - HTTP endpoint 등록: [20. HTTP Hosting](20-http-hosting.ko.md)

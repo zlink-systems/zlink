@@ -309,10 +309,13 @@ public interface ZLinkLocationReadiness {
 ```
 
 Operational queries only return a bounded page. `findActorLocation` and `findSpotLocation` return an empty
-`Optional` when no current `Ready` location exists and return a `Creating` entry while creation is in progress.
+`Optional` for Missing, a `CREATING` entry for Creating, a `READY` entry for Ready, and an `UNAVAILABLE`
+entry when the current owner is unavailable after commit.
 `findSpotLocation` accepts both `USER_SPOT` and `INSTANCE_SPOT` authority rows for the supplied `spotId`.
 `listObjectLocations` queries one object kind and stable type at a time. Its page size is `1..1000` and the
-encoded page is at most 4 MiB. `ZLinkLocationObjectEntry` contains the global ID, `ObjectGeneration`, MeshName,
+encoded page is at most 4 MiB. The continuation token is an opaque value issued by the query. A Store query
+failure is an `UNAVAILABLE` framework error and does not return a partial page. `ZLinkLocationObjectEntry`
+contains the global ID, `ObjectGeneration`, MeshName,
 Node RID, state, and stable type. Raw Spot/Actor authority rows, Store keys, scan cursors, and provider versions
 are not part of the application query contract.
 

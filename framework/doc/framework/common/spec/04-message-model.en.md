@@ -107,6 +107,34 @@ snapshot at the time of lookup. `objectGeneration` is a decimal string with no l
 zero, from `"1"` to `"9223372036854775807"`. Numeric tokens, a sign, a decimal point, and
 an exponent are not allowed.
 
+### 2.3 The `framework-json-v1` Typed-Payload Profile
+
+The framework's default typed application payload uses the `framework-json-v1` profile in
+every language. This profile is the public codec contract that lets an application payload
+cross a language boundary and decode to the same value.
+
+- A UTF-8 BOM is not allowed.
+- Property names and enum names are case-sensitive.
+- Property order and insignificant whitespace carry no meaning.
+- Duplicate properties and missing required properties are rejected.
+- Unknown properties are ignored.
+- `null` is allowed only for values the contract declares nullable.
+- A signed or unsigned 64-bit integer is range-checked and represented as a decimal string
+  with no leading zero.
+- An integer of 32 bits or fewer is represented as a JSON number with no fraction.
+- A floating-point value must be a finite JSON number.
+- A byte sequence is RFC 4648 base64 with padding.
+- Date, decimal, UUID, and language-specific custom types are not converted implicitly; they
+  use the string or DTO specified by the contract.
+
+Where a specific framework DTO defines a stricter property set, that DTO contract takes
+precedence. For example, the global object references in Section 2.2 reject unknown properties.
+
+Changing property or enum names, unknown/required-property handling, nullability, or numeric
+and byte representation is a breaking contract change because it changes cross-language
+decoding of an existing payload. The profile does not apply to opaque state bytes returned by
+an Actor or Spot relocation adapter.
+
 ## 3. Application Metadata
 
 Application metadata is a small key-value snapshot carried separately from the business

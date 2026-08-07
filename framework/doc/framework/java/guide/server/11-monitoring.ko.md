@@ -91,9 +91,9 @@ intent) · discovery source · lifecycle generation은 framework 내부 상태�
 ZLinkFrameworkConfigurer zlink(PlaySettings settings) {
     return options -> {
         options.configureDispatch()
-            .messageFlow(ZLinkMessageFlowLogMode.ERRORS_ONLY) // 기본값 — 실패와 backpressure만.
-            .traceLogFile(settings.logDir() + "/flow.jsonl")  // 앱 로그와 분리해 따로 쓴다.
-            .traceLabel(settings.instanceName());             // 어느 instance의 기록인지 표시한다.
+            .messageFlow(ZLinkMessageFlowLogMode.ERRORS) // 기본값 — 실패와 backpressure만.
+            .traceSampleRate(1.0)
+            .includeMessageSizes(true);
     };
 }
 ```
@@ -101,23 +101,16 @@ ZLinkFrameworkConfigurer zlink(PlaySettings settings) {
 | 수준 | 남기는 것 |
 | --- | --- |
 | `OFF` | 남기지 않는다 |
-| `ERRORS_ONLY`(기본) | dispatch 실패와 backpressure |
-| `KEY_TRANSITIONS` | 위 + 수신 · dispatch · 완료 같은 주요 전이 |
-| `VERBOSE` | 위 + 개별 메시지 단위 기록 |
-| `DIAGNOSTIC` | 위 + 진단용 상세 |
+| `ERRORS`(기본) | dispatch 실패와 backpressure |
+| `NORMAL` | 위 + 수신 · dispatch · 완료 같은 주요 전이 |
+| `DETAILED` | 위 + 개별 메시지 단위 상세 진단 |
 
-**운영에서는 `ERRORS_ONLY`로 두고 필요할 때만 올린다.** `VERBOSE` 이상은 메시지마다
+**운영에서는 `ERRORS`로 두고 필요할 때만 올린다.** `DETAILED`는 메시지마다
 기록을 남기므로 처리량이 많은 구간에서 그 자체가 부하가 된다.
 
-기록을 프로그램에서 받으려면 observer를 등록한다.
-
-```java
-options.configureDispatch().setMessageFlowObserver(error -> {
-    // runtime 스레드에서 실행된다 — 여기서 blocking하거나 framework 표면을 다시 부르지 않는다.
-    auditSink.append(error);
-    return CompletableFuture.completedFuture(null);
-});
-```
+Framework는 application이 구성한 standard logger·trace·metric provider에 structured record를
+기록한다. Message-flow callback observer, runtime error sink, raw event DTO나 diagnostics file path는
+public API가 아니다. Provider 호출 실패는 원래 message operation의 terminal 결과와 격리한다.
 
 처리기가 없는 dispatch의 동작은 `unhandled()`가 정한다 — `setRequest` · `setSend` ·
 `setPublish`로 갈래마다, `setSendLogLevel` · `setPublishLogLevel`로 기록 수준을 정한다.
@@ -170,10 +163,8 @@ store가 잠시 끊겼을 때 오케스트레이터가 프로세스를 죽인다
   `subscribe(...)`를 부르고 `Subscription.request(n)`으로 수요를 알렸는지 본다.
 - **상태 전이 일부가 안 보인다** → `observe(...)`의 capacity를 넘겨 건너뛴 것이다.
   capacity를 늘리고 구독자가 더 빨리 소비하게 한다.
-- **observer 안에서 데드락이 난다** → runtime 스레드에서 실행된다. 안에서 blocking
-  대기를 하거나 framework 표면을 다시 부르지 않는다.
-- **flow 기록이 비어 있다** → 기본 수준이 `ERRORS_ONLY`라 정상 흐름은 남지 않는다.
-  `KEY_TRANSITIONS` 이상으로 올린다.
+- **flow 기록이 비어 있다** → 기본 수준이 `ERRORS`라 정상 흐름은 남지 않는다.
+  `NORMAL` 이상으로 올린다.
 - **메트릭이 안 보인다** → Actuator와 registry가 컨텍스트에 있는지 본다. framework는
   registry에 계기를 올릴 뿐 registry 자체를 만들지 않는다.
 - **store가 잠깐 끊겼는데 프로세스가 재시작된다** → store 상태가 liveness에 들어가 있다.

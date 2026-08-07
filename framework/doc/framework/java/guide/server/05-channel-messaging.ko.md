@@ -994,7 +994,7 @@ public class Program {
 - **`ZLink` vs `Zlink`** → 서버 framework 타입은 전부 `ZLink`(대문자 L)다.
 - **handler 없는 packet으로 보냈을 때(런타임)** → **request는 error reply로 실패**(client는
   예외로 받음), **send는 조용히 drop** 된다. drop 은 호출자에게 reply가 없다는 뜻이고
-  관측 흔적이 없다는 뜻은 아니다 — message flow 로그/observer를 켜 두면 dispatch 실패가
+  관측 흔적이 없다는 뜻은 아니다. Application이 구성한 logger/telemetry provider에는 dispatch 실패가
   marker(`no_handler` / `reply_error`·`drop`)로 남는다([11. Monitoring](11-monitoring.ko.md)).
 
 ## 12. 관련 문서

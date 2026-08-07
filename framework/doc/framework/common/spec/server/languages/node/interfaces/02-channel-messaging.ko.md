@@ -189,11 +189,11 @@ Node runtime은 Instance Spot 관측값도 `ZLinkMeter`로 기록한다. 이 언
 - `zlink.instance_spot.takeovers`
 
 One-way placement·activation 실패는 `zlink.mesh_node.messages.dropped`에
-`surface=instance_spot`을 붙여 기록한다. `ZLinkMessageFlowEvent`도 별도 event ID를 추가하지 않고
-`eventId=zlink.message_flow`, 같은 surface와 `outcome=dropped`를 사용한다. `instanceSpotType`에는 startup에
+`surface=instance_spot`을 붙여 기록한다. 표준 structured logger에는 `eventId=zlink.message_flow`, 같은
+surface와 `outcome=dropped`를 기록한다. `instanceSpotType`에는 startup에
 등록한 bounded type만 기록하며 [Spot ID](../../../../01-glossary.ko.md#spot-id), [owner](../../../../01-glossary.ko.md#owner) ID와 internal authority fields는 metric attribute로 사용하지
-않는다. `eventId=zlink.message_flow`의 reason은 `ZLinkMessageFlowReason`,
-`eventId=zlink.dispatch_error`의 reason은 `ZLinkDispatchErrorReason` 값만 사용한다.
+않는다. Reason과 action은 message-flow tracing 계약의 닫힌 값으로 기록하지만 이를 public DTO나 callback
+type으로 노출하지 않는다.
 
 ## 3. Location peer와 Logical Multicast
 
@@ -424,15 +424,27 @@ export interface ZLinkSessionSendCall {
     metadata(key: string, value: string): this;
     metadata(metadata: ZLinkMessageMetadata): this;
     compress(enabled?: boolean): this;
+    timeout(timeoutMs: number): this;
     submit(signal?: AbortSignal): Promise<void>;
 }
 ```
+
+`ZLinkSessionSendCall.timeout(...)`은 이 send의 admission 대기만 줄인다. 생략하면 STREAM socket send
+timeout을 사용하고 지정하면 두 값 중 짧은 값을 사용하므로 socket timeout을 늘릴 수 없다. 값은
+`1..2_147_483_647` 범위의 정수 milliseconds여야 한다. 만료되면 `DeadlineExceeded`로 terminal-once
+reject하고 이후 admission이나 replay를 시작하지 않는다. `AbortSignal`은 기존 Node cancellation 의미를
+유지하며 reply call에는 이 modifier를 제공하지 않는다.
 
 Bind 뒤 relay·request relay와 `notifyDisconnected(...)`는 Actor별 저장 route를 사용하며 message마다
 Location Store를 조회하지 않는다. Physical disconnect는 Framework가 current binding 전체에 automatic
 all-settled 통지를 수행하고 exact binding identity마다 Spot callback을 최대 한 번 실행한다.
 `notifyDisconnected(...)`는 connection이 유지된 상태의 logical notification이며 callback terminal까지
-기다린다. Relocation route update는 같은 ObjectGeneration에만 허용한다. Target Actor가
+기다린다. Exact binding callback은 최대 한 번 실행하고 terminal 뒤 binding을 tombstone으로 확정하여
+제거한다. Physical STREAM connection과 Actor·Spot membership은 유지하며 새 public Unbind API는 제공하지
+않는다. Rebind는 이전 exact binding identity를 다른 Actor나 generation에 재사용하지 않는다. 새 identity를
+먼저 등록한 뒤 이전 callback을 최대 한 번 실행하여 이전 binding을 tombstone으로 만든다. Callback 실패는
+진단으로 기록하지만 새 binding을 제거하거나 이전 binding을 복원하지 않는다. Relocation route update는
+같은 ObjectGeneration에만 허용하며 rebind가 아니므로 disconnect callback을 실행하지 않는다. Target Actor가
 복원되어 message 처리를 시작한 뒤 target runtime이 `sessionActorLocationUpdateReqMsg`를
 send하여 해당 Actor route와 `ZLinkSessionActor.ref`가 반환하는 current location snapshot을
 함께 바꾼다. Snapshot은 같은 ActorId·ObjectGeneration과 target MeshName·NodeRid를 반영한다.

@@ -691,9 +691,12 @@ distinct type.
 A one-way call heading to a Cold Instance includes resolve,
 reservation, activation, and outbound admission in the same send
 deadline, and completes at the admission result. A request waits
-through activation, handler, and terminal reply. After owner loss, the
-same instance is reactivated using the creation intent stored in
-authority.
+through activation, handler, and terminal reply. A stored creation
+intent is used only to resume the first cold activation on the same
+target node and lifecycle before its terminal completion is recorded.
+Termination or lease expiry of an owner that had reached steady `Ready`
+doesn't become `Missing` or cold activation on another node; the call
+ends as `unavailable`.
 
 `spot_ref_t` is an immutable location snapshot holding the global
 SpotId, an ObjectGeneration in the `1..9223372036854775807` range, and
@@ -1009,6 +1012,13 @@ public:
     void cancel() noexcept;
 };
 ```
+
+When timer options are omitted, `overrun_policy` defaults to
+`skip_late_ticks` and `max_catch_up_ticks` defaults to `1`.
+`max_catch_up_ticks` is used and validated in `1..INT_MAX` only when
+`overrun_policy == catch_up_bounded`. Other policies do not use or validate
+this value against that range. This rule interprets the existing
+`timer_options_t` fields and adds no public member.
 
 Timer registration validation is owned by
 [stage-wrapper §4.1](../../../../17-stage-wrapper-on-spot.en.md).

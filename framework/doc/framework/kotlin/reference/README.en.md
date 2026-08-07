@@ -30,6 +30,6 @@ The exact signatures are owned by the
 | [Actor relocation](05-actor-relocation.en.md) | Drafted | `ZLinkSuspendingActor`/`ZLinkSuspendingActorFactory`, `ZLinkKotlinActorManager`/`ZLinkKotlinActorClient` |
 | [Stream session](06-stream-session.en.md) | Drafted | `ZLinkSuspendingSession`, `ZLinkKotlinSessionClient`, `bindOrGetActor(...)` |
 | [Location authority](07-location-authority.en.md) | Drafted | `suspend fun status()`/`listTopology(...)`, `Flow<T>` projection |
-| [Observability diagnostics](08-observability-diagnostics.en.md) | Drafted | `onMessageFlow { }`, reuses Java `ZLinkFrameworkErrorKind` |
+| [Observability diagnostics](08-observability-diagnostics.en.md) | Drafted | `configureDispatch { }`, reuses Java `ZLinkFrameworkErrorKind` |
 
 ko and en are both complete. This document tree is wired into `mkdocs.yml` nav.

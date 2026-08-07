@@ -608,7 +608,8 @@ Typed socket contract는 해당 socket 타입에 의미 있는 기능만 더한�
 
 - `PairSocket`: send와 recv.
 - `DealerSocket`: send, recv, request.
-- `RouterSocket`: routed send, routed recv, request, reply, SPOT routing.
+- `RouterSocket`: routed send, routed recv, request, reply, SPOT routing와
+  monitor event의 exact transport pair 종료.
 - `PubSocket`: publish.
 - `SubSocket`: subscribe와 subscription event 수신.
 - `XPubSocket`: publish와 subscription event 수신.
@@ -636,6 +637,13 @@ Builder 시작 메서드는 대상 식별자만 받는다:
 - `requestToSpot(nodeRid, spotRid)`
 - `replyToSpot(nodeRid, spotRid, requestSequence)`
 - `sendBoundActor(sessionRid, actorId)`
+
+`RouterSocket.disconnectTransportPair(transportPairId, transportPairGeneration)`은
+같은 monitor event에서 얻은 non-zero pair identity와 generation에 해당하는
+physical transport pair만 종료 대상으로 지정한다. 같은 peer routing id를
+사용하는 다른 pair에는 영향을 주지 않는다. 이 메서드는 transport pair
+identity가 필요한 Framework connection replacement와 같은 runtime 제어에
+사용하며, 임의의 pair identity를 새로 만들어 전달하지 않는다.
 
 payload, flag, timeout, callback, async 동작은 builder 단계다. 대표적인 terminal
 메서드:

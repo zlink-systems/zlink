@@ -714,12 +714,17 @@ void zlink::socket_base_t::pipe_terminated (pipe_t *pipe_)
 
     uint32_t ready_count = 0;
     bool ready_changed = false;
+    bool ready_changed_by_endpoint = false;
     {
         scoped_lock_t lock (monitor_runtime ().sync);
         endpoint_runtime ().detach_pipe (pipe_);
         ready_changed = monitor_runtime ().erase_ready_connection (
           endpoint_pair, routing_id_data, routing_id_size, &ready_count,
           pair_id, pair_generation);
+        if (!ready_changed)
+            ready_changed_by_endpoint = monitor_runtime ().erase_ready_connection_for_endpoint (
+              endpoint_pair, &ready_count, pair_id, pair_generation);
+        ready_changed = ready_changed || ready_changed_by_endpoint;
     }
     if (ready_changed) {
         uint64_t values[1] = {ready_count};

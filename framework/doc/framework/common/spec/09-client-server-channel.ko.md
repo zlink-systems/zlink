@@ -60,6 +60,11 @@ Channel caller가 지정하는 논리 주소와 호출 완료 의미는
 함께 등록할 수 있다. Registration key는 `(ChannelName, Role)`이며 `Client`와
 `Server`는 역할별로 최대 한 번만 등록한다.
 
+ClientServer send와 request는 local process에 해당 `ChannelName`의 Client role이 등록되어 있을 때만
+시작할 수 있다. ChannelName과 Server role이 존재하더라도 Client role이 없으면 local handler를 직접
+호출하지 않고 `NotConfigured`인 Framework error로 끝난다. `NotFound`는 ChannelName 또는 선택할 target
+자체가 존재하지 않는 경우에 사용한다.
+
 ### 3.1 Role 등록 interface와 예시
 
 ```csharp

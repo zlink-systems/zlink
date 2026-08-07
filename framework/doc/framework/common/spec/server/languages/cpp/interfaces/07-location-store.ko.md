@@ -357,6 +357,33 @@ struct location_service_summary_t {
     std::chrono::system_clock::time_point last_updated_at{};
 };
 
+enum class location_object_kind_t {
+    actor = 0,
+    user_spot = 1,
+    instance_spot = 2
+};
+
+enum class location_object_state_t {
+    creating = 0,
+    ready = 1,
+    unavailable = 2
+};
+
+struct location_object_entry_t {
+    std::string global_id;
+    std::uint64_t object_generation = 0;
+    std::string mesh_name;
+    zlink::routing_id_t node_rid;
+    location_object_state_t state = location_object_state_t::creating;
+    std::string stable_type;
+};
+
+struct location_object_filter_t {
+    location_object_kind_t object_kind;
+    std::optional<std::string> stable_type;
+    std::optional<std::string> mesh_name;
+};
+
 class location_runtime_query_t {
 public:
     virtual ~location_runtime_query_t() = default;
@@ -368,6 +395,14 @@ public:
       list_service_summaries(
         location_service_summary_filter_t filter,
         location_page_request_t page = {}) = 0;
+    virtual task_t<std::optional<location_object_entry_t>>
+      find_actor_location(actor_id_t actor_id) = 0;
+    virtual task_t<std::optional<location_object_entry_t>>
+      find_spot_location(spot_id_t spot_id) = 0;
+    virtual task_t<location_page_t<location_object_entry_t>>
+      list_object_locations(
+        location_object_filter_t filter,
+        location_page_request_t page = {}) = 0;
 };
 
 } // namespace zlink::framework
@@ -375,6 +410,13 @@ public:
 
 NodeRid는 transport routing identity이므로 public `zlink::routing_id_t`를 유지한다. Store version,
 private owner token과 provider clock은 운영 query에 노출하지 않는다.
+
+Actor ID와 Spot ID의 exact lookup은 각각 현재 object location 하나를 조회한다. Missing이면 빈
+`std::optional`, Creating이면 `creating`, Ready이면 `ready`, commit 뒤 current owner를 사용할 수 없으면
+`unavailable` entry를 반환한다. Spot exact lookup은 User Spot과 Instance Spot을 같은 Spot ID 조회 계약으로
+다룬다. List query의 `object_kind`는 필수이며 stable type과 MeshName은 선택 filter다. Page size는
+`1..1000`, encoded page는 최대 4 MiB이고 continuation token은 query가 발급한 opaque 값이다. Store 조회가
+실패하면 operation 전체가 `framework_error_kind_t::unavailable`로 실패하며 page 일부를 반환하지 않는다.
 
 ## 6. Redis extension
 

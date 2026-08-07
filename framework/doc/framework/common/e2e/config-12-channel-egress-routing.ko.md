@@ -255,12 +255,12 @@ Server process가 재시작되면 이전 lifecycle의 connection과 reply는 더
 ClientServer에서는 Client role을 등록한 process만 server connection과 송신 경로를 가진다. Server role만
 있는 process가 같은 이름을 호출해 local handler를 직접 실행해서는 안 된다.
 
-**검증 질문:** Server role만 등록한 process의 ClientServer request가 `NotFound`로 끝나는가.
+**검증 질문:** Server role만 등록한 process의 ClientServer request가 `NotConfigured`로 끝나는가.
 
 - 시작 조건: Negative Workflow process에는 `workflow.command` Server role만 등록한다. 별도 정상 caller는
   Client role로 ready다.
 - 절차: Negative process와 정상 caller가 각각 request를 한 번 시작한다.
-- 검증: Negative process의 request는 `NotFound`이며 handler가 실행되지 않는다. 정상 caller의 request는
+- 검증: Negative process의 request는 `NotConfigured`이며 handler가 실행되지 않는다. 정상 caller의 request는
   Workflow handler에서 한 번 처리된다.
 - 세부 동작: [ClientServer Channel §3](../spec/09-client-server-channel.ko.md)의
   role 책임을 검증한다.

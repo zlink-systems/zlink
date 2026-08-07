@@ -145,8 +145,8 @@ Host는 network bind 전에 다음 조건을 검증한다.
 Mesh placement weight와 Channel weight의 public runtime option은
 [Topology configuration §5](03-configuration-topology.ko.md#5-publisher와-runtime-option)가 소유한다. 실행 중에는
 MeshName으로 node placement weight를, ChannelName으로 local Server의 `Weight`를 설정할 수 있다. 두 값은
-서로 다른 selection에 적용한다. `MaxMessageSize`를 포함한 transport
-option은 startup 전에만 설정하며 runtime setter를 제공하지 않는다.
+서로 다른 selection에 적용한다. 각 topology가 제공하는 transport option은 startup 전에만 설정하며 runtime
+setter를 제공하지 않는다. RouteMesh SS에는 Framework-level `MaxMessageSize` option이 없다.
 
 Framework service liveness는 application traffic과 무관하게 5초마다 probe를 보내고 같은 current connection의
 matching ACK를 15초 안에 받아야 하는 profile로 고정한다. 다른 inbound frame은 ACK deadline을 충족하지

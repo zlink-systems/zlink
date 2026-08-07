@@ -80,11 +80,14 @@ await sessionContext.client.send(new ServerTick(tickNumber)).submit();
 | --- | --- | --- |
 | `.metadata(key, value)` | None | Key-value to pass to the client |
 | `.compress(enabled?)` | Uncompressed | Compresses the payload with the registered stream compression codec |
+| `.timeout(timeoutMs)` | STREAM socket send timeout | Shortens this send's admission wait |
 | `.submit(signal?)` | Required terminal | Waits only until source-local admission |
 
 **Completion result.** The same one-way completion kinds as the messaging-execution category —
 waits until the socket send timeout and, if still not admitted, completes with
-`DeadlineExceeded`; a connection disconnect is `Unavailable`.
+`DeadlineExceeded`; a connection disconnect is `Unavailable`. The per-call timeout never extends the
+socket timeout; the earlier deadline wins. The value must be `1..INT_MAX` milliseconds, and there is
+no late admission or replay after the deadline. This modifier does not apply to a reply.
 
 **When to use.** Use this for a server-initiated push message, not a client-sent request. Use
 `reply` to answer a client's request.
@@ -157,7 +160,10 @@ correlation terminal-once, and an admission failure completes the same correlati
 failure. `notifyDisconnected` is a notification that signals a logical disconnect while the
 connection remains open, and waits until the callback's terminal. Because a physical disconnect
 is automatically notified by the Framework to every current binding, this call is not a
-substitute path for that.
+substitute path for that. The exact-binding callback runs at most once and leaves a tombstone after
+terminal. Rebind registers the new binding first; failure of the old callback neither removes the new
+binding nor restores the old one. A same-generation relocation route update is not a rebind and does
+not run the disconnect callback.
 
 **When to use.** Use this from Actor-side code to deliver directly to a specific bound client. A
 reply to a request is handled by `reply` on the Session side.

@@ -125,7 +125,7 @@ other languages.
 | `ZLinkFrameworkRuntime` · `ZLinkFrameworkRuntimeStatus` | Host status |
 | `ZLinkRouteMeshRuntime` · `ZLinkRouteMeshStatus` | MeshNode status |
 | `ZLinkDispatchOptionsBuilder` · `ZLinkMessageFlowLogMode` | Diagnostics level |
-| `ZLinkMessageFlowObserver` | Flow records |
+| Application logger/telemetry provider | Receives message-flow and dispatch-error structured records |
 | `ZLinkFrameworkException` | A failure. `kind` / `isRetriable` |
 | `ZLinkFrameworkErrorKind` | The failure branch |
 

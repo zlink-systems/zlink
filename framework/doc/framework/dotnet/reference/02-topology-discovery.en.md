@@ -215,7 +215,8 @@ options.AddStreamNode("public-gateway")
 | --- | --- | --- |
 | `.Bind(endpoint)` / `.Bind(port)` | `0` if the port is omitted (automatic discovery auto-binds whether the port is omitted or `0`) | this STREAM listener's inbound port. A `Bind(string endpoint)` overload also exists |
 | `.SetBindHost(string)` / `.SetAdvertiseHost(string)` | follows the root `ConfigureNetwork()` default | the bind·advertise host that applies only to this listener |
-| `.ConfigureSocket()` | socket defaults | individual tuning of this listener socket's `MaxMessageSize`·HWM·buffer·timeout etc. (`IZLinkSocketConfig`) |
+| `.MaxMessageSize(bytes)` | `64 KiB` | the complete STREAM message cap from client to server; `0` means no Framework cap |
+| `.ConfigureSocket()` | socket defaults | tuning of this listener socket's remaining HWM·buffer·timeout options (`IZLinkStreamSocketConfig`) |
 | `.EnableActorDispatch()` | disabled | dispatches incoming messages to the Actor bound to the Session |
 | `.SetTlsServer(certPath, keyPath, requireClientCertificate?)` | no TLS | the TLS server certificate/key and whether mutual authentication is required |
 | `.AddSession<TSession>()` | none | registers the Session type to create per connection |

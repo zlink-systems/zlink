@@ -178,7 +178,7 @@ Implementing a store yourself is rare. You'll only look at the `ZLinkStore*` /
 | `ZLinkClientServerRuntime` · `ZLinkFanoutRuntime` | That channel's status |
 | `ZLinkMeshNodeSnapshot` · `ZLinkMeshPeerSnapshot` · `ZLinkMeshChannelSnapshot` | Snapshot records |
 | `ZLinkDispatchOptions` · `ZLinkDiagnosticsOptions` | Diagnostics level |
-| `ZLinkMessageFlowObserver` · `ZLinkMessageFlowEvent` | Message flow records |
+| Application logger/telemetry provider | Receives message-flow and dispatch-error structured records |
 | `ZLinkMetricsCustomizer` | Adjusting the Micrometer registry |
 
 ## 8. Failure Types

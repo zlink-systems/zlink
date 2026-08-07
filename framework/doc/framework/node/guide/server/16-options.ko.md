@@ -58,7 +58,7 @@ ZLinkModule.forRootFactory({
 | `configureNetwork()` | listener의 bind · advertise host 기본값 | bind `0.0.0.0` |
 | `configureWorker(options)` | CPU worker 풀(§3.2) | §3.2 표 |
 | `configureInboundDispatch()` | host 전체 수신 상한(§3.3) | 자동 계산 |
-| `configureDispatch()` | 진단 수준과 message flow(§4) | `ErrorsOnly` |
+| `configureDispatch()` | 진단 수준과 message flow(§4) | `"errors"` |
 | `configureLocations()` | location store 동작(§5) | §5 표 |
 | `configureStreamCompression()` | STREAM 압축 | 압축 없음 |
 | `addLocationStore` · `addRelocationStore` | 위치 결정과 이전 저장소 | 없으면 단일 node 구성 |
@@ -133,13 +133,11 @@ ZLinkModule.forRootFactory({
 
 | 옵션 | 무엇을 정하나 | 기본값 |
 | --- | --- | --- |
-| `messageFlow(ZLinkMessageFlowLogMode)` | 기록 수준 | `ErrorsOnly` |
-| `traceLogFile(path)` | 앱 로그와 분리해 쓸 파일 | 분리하지 않음 |
-| `traceLabel(name)` | 기록에 붙일 instance 이름 | 없음 |
-| `setMessageFlowObserver(...)` | 기록을 프로그램으로 받기 | 없음 |
+| `messageFlow(mode)` | 기록 수준 | `"errors"` |
+| `traceSampleRate(rate)` | 표본 비율 | 1.0 |
+| `includeMessageSizes(include)` | payload byte를 함께 남길지 | 남기지 않음 |
 
-수준은 `Off` · `ErrorsOnly` · `KeyTransitions` · `Verbose` 넷이다. **PascalCase 값**이며
-다른 언어의 SCREAMING_SNAKE와 다르다.
+수준은 `"off"` · `"errors"` · `"normal"` · `"detailed"` 넷인 string union이다.
 
 ## 5. Location 옵션
 
@@ -211,8 +209,7 @@ ZLinkModule.forRootFactory({
   넣으면 3밀리초다.
 - **`setApplicationVersion`에서 타입 오류가 난다** → `bigint`를 받는다. `12n`으로 쓴다.
 - **`0`으로 두었더니 memory가 계속 는다** → high-water mark의 `0`은 무제한이다.
-- **enum 값이 안 맞는다** → Node는 PascalCase다(`ErrorsOnly`). 다른 언어 문서의
-  SCREAMING_SNAKE를 그대로 옮기지 않는다.
+- **level 값이 안 맞는다** → Node는 lowercase string(`"errors"`)을 사용한다.
 - **`registerSession`에 class를 넘겼는데 안 된다** → factory를 받는다.
 - **가중치를 0으로 했는데 기존 연결이 끊긴다고 생각했다** → 가중치는 **새 배정만** 막는다.
 - **여러 언어 node를 섞었더니 owner 판정이 다르다** → lease 기본값이 언어마다 다르다(§5).

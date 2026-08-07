@@ -187,8 +187,9 @@ owned by
 [Topology Configuration §5](03-configuration-topology.en.md#5-publisher-and-runtime-option).
 At runtime, node placement weight can be set by MeshName, and a local
 Server's `Weight` by ChannelName. The two values apply to different
-selections. Transport options including `MaxMessageSize` are only set
-before startup, and a runtime setter isn't provided.
+selections. The transport options exposed by each topology are only set
+before startup, and a runtime setter isn't provided. RouteMesh SS has no
+Framework-level `MaxMessageSize` option.
 
 Framework service liveness is fixed to a profile that sends a probe
 every 5 seconds regardless of application traffic and must receive the

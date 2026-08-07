@@ -50,6 +50,17 @@ message 관측에도 포함하지 않는다.
 STREAM session의 연결 유지 신호는 **목적이 다른 별도 신호**이며, mesh peer 생존 판단을
 대신하지 않는다.
 
+### Liveness 판정은 authority를 변경하지 않는다
+
+Peer liveness와 owner lease 검사는 현재 owner를 사용할 수 있는지 판단하는 입력이다. 이 결과만으로
+Location Store의 `Ready` authority를 삭제하거나 `Missing`으로 바꾸지 않는다. Instance Spot resolver는
+authority가 남아 있고 owner를 사용할 수 없으면 `Unavailable`로 분류하며, caller operation은
+`Unavailable`로 끝난다.
+
+Authority release는 application의 explicit `Close`, `IdleEvicted` cleanup 또는 정식 lifecycle operation이
+소유한다. Liveness subsystem은 creation reservation, cold activation, relocation이나 다른 node의 owner
+takeover를 시작하지 않는다. 이 경계를 지켜야 연결 장애 감지가 객체 생성 정책으로 누출되지 않는다.
+
 ## 2. 준비되지 않은 대상은 호출을 막는 게 아니라 후보에서 뺀다
 
 여기가 네 구현에서 가장 크게 갈린 지점이다.
@@ -212,6 +223,8 @@ channel 이름이나 handler 이름처럼 등록 시점에 정해지는 이름�
 - 업무 message만 계속 수신되고 확인 응답이 오지 않으면 판정 기한이 지나 끊긴 것으로
   판단한다.
 - 확인 신호와 응답이 application handler에 도달하지 않는다.
+- Owner liveness 실패만으로 `Ready` authority를 release하거나 `Missing`으로 바꾸지 않는다.
+- Liveness subsystem이 Instance creation reservation, cold activation이나 owner takeover를 시작하지 않는다.
 - 준비된 대상이 하나도 없어도 runtime이 시작하고 `serving`이 된다.
 - 준비된 대상이 없는 channel로 호출하면 그 호출만 실패하고, 해당 topology가 저하
   상태로 표시된다.

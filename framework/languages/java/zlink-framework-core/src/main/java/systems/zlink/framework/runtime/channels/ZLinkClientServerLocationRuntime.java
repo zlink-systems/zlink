@@ -533,7 +533,7 @@ final class ZLinkClientServerLocationRuntime implements AutoCloseable {
         }
     }
 
-    private void removeConnection(String connectionId) {
+    private synchronized void removeConnection(String connectionId) {
         Connection current = connections.remove(connectionId);
         if (current == null) {
             return;

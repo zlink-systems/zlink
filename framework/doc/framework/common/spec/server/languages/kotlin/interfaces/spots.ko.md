@@ -104,6 +104,11 @@ sequenceDiagram
 authority 경쟁만 보여 준다. Handler의 terminal completion 또는 reply와 recovery pointer 제거는 번호
 목록의 후반 단계에 정의한다.
 
+저장한 creation intent는 최초 cold activation이 terminal completion을 기록하기 전에 같은 target
+node·lifecycle에서 재개할 때만 사용한다. Steady `Ready` owner process 종료나 lease 만료는 `Missing`으로
+바꾸거나 다른 node의 cold activation으로 복구하지 않고 `Unavailable`로 끝낸다. Kotlin은 이 동작도
+Java runtime과 공유한다.
+
 Kotlin은 Java `ZLinkSpotRelocationAdapter<TSpot>`를 그대로 구현한다. Opaque `byte[]`는 `ByteArray`로 보이고
 `capture`와 `restore`는 Java 계약과 같은 `CompletionStage`를 반환한다. 별도 suspending Spot adapter,
 `TState`, `stateContractId`, state class와 `ZLinkMessage` relocation surface는 제공하지 않는다. State 보존 factory는
@@ -259,6 +264,11 @@ inline fun <reified TReply> ZLinkKotlinRouteClient.requestToSpot(
     request: Any,
 ): ZLinkKotlinSpotRequestCall<TReply>
 ```
+
+Kotlin은 Java `ZLinkTimerOptions`와 `ZLinkTimerOverrunPolicy`를 그대로 사용한다. Timer option을 생략하면
+`overrunPolicy`는 `SKIP_LATE_TICKS`, `maxCatchUpTicks`는 `1`이다. `maxCatchUpTicks`는
+`CATCH_UP_BOUNDED`일 때만 사용하고 `1..Int.MAX_VALUE` 범위인지 검증한다. 다른 policy에서는 이 값을
+사용하지 않으며 이 범위로 validation하지 않는다. Kotlin 전용 timer option surface는 추가하지 않는다.
 
 User·Instance Spot relocation에서는 Java runtime이 logical timer registration, 마지막 완료 tick sequence, 다음 예정
 시각과 아직 실행하지 않은 pending tick을 relocation payload에 포함한다. Target은 logical timer registration을

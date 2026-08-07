@@ -9,6 +9,10 @@ public enum ZLinkLocationObjectState {
     CREATING, READY, UNAVAILABLE
 }
 
+public enum ZLinkPlacementObjectKind {
+    ACTOR, USER_SPOT, INSTANCE_SPOT
+}
+
 public record ZLinkLocationObjectEntry(
     String globalId,
     long objectGeneration,
@@ -23,6 +27,13 @@ public record ZLinkLocationObjectFilter(
     String meshName) {}
 ```
 
-`objectKind` is required; `stableType` and `meshName` are optional. `ObjectGeneration` is positive, and
-`globalId` and `stableType` are non-blank. The query does not provide an unbounded list, and its continuation
-token is opaque.
+`objectKind` is required; `stableType` and `meshName` are optional. `objectGeneration` is positive, and
+`globalId` and an entry's `stableType` are non-blank. A filter's `stableType`, when specified, is non-blank.
+The query does not provide an unbounded list. Page size is `1..1000`, the encoded page is at most 4 MiB,
+and the continuation token is an opaque value issued by the query.
+
+Exact lookup by Actor ID and Spot ID each queries one current object location. Missing returns an empty
+`Optional`; Creating returns a `CREATING` entry; Ready returns a `READY` entry; and an unavailable current
+owner after commit returns an `UNAVAILABLE` entry. `findSpotLocation(...)` treats User Spot and Instance
+Spot under the same Spot-ID lookup contract. A Store query failure fails the whole operation with
+`ZLinkFrameworkErrorKind.UNAVAILABLE` and does not return a partial page.

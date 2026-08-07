@@ -115,9 +115,11 @@ socket bind. Not setting a cap at all isn't itself an error. The selected profil
 applies to the Auto HWM profile of the Core context the framework creates, but Application
 HWM bytes aren't copied into a per-connection Core HWM or divided by connection count.
 
-If `ApplicationHwmBytes` is positive, every application listener's `MaxMessageSize` must
-also be a finite positive value. Auto mode applies the same condition. Only an explicit
-`ApplicationHwmBytes = 0` skips this check. It's still valid for HWM to be smaller than
+On an application listener that provides `MaxMessageSize`, a positive
+`ApplicationHwmBytes` requires that value to be finite and positive too. Auto mode applies
+the same condition. Only an explicit `ApplicationHwmBytes = 0` skips this check. RouteMesh
+SS has no `MaxMessageSize` setting, so this combination check doesn't apply to it. It's
+still valid for HWM to be smaller than
 `MaxMessageSize`. A complete message that started while pending bytes were below HWM is
 received to completion, and if that pushes the total over HWM, subsequent receiving stops.
 So an empty host can process one message larger than HWM but no larger than
@@ -273,12 +275,15 @@ smaller than the transport default. A positive value applies as the same byte ca
 negative value is a configuration error. Binding-option representation and conversion are
 owned by each language's internals and aren't exposed in the application public API.
 
-The framework application listener's `MaxMessageSize` default is `16,777,216` bytes
+The ClientServer application listener's `MaxMessageSize` default is `16,777,216` bytes
 (16 MiB). So the default Auto Application HWM configuration has a finite single-message
 cap. If the application explicitly changes this to `0`, it keeps the original meaning of no
 separate cap, but this is rejected at startup validation if Application HWM is Auto or
 positive. Only when both unlimited messages and unlimited pending payload are needed should
 `MaxMessageSize = 0` and `ApplicationHwmBytes = 0` be specified.
+
+This regular application-listener rule applies to ClientServer, not RouteMesh ServerServer.
+RouteMesh SS provides no Framework-level message-size setting or cap.
 
 The StreamNode Core STREAM inbound cap is separate from this regular application-listener
 rule. It defaults to `64 KiB`, checks the complete client-to-server message as header plus
@@ -919,7 +924,7 @@ detected. A one-way send can only return an exceptional completion of the kinds 
 the failure is confirmed before the source's local outbound admission. Once the source
 accepts the record and completes with no return data, a remote activation or admission
 failure confirmed afterward doesn't change the already-completed call. This failure is
-observed via drop metrics and message-flow events, and doesn't build an error reply or
+observed via drop metrics and structured message-flow records, and doesn't build an error reply or
 replay to a different owner.
 
 After request admission, exactly one of a typed reply, typed framework error, timeout,
@@ -931,11 +936,12 @@ after cancellation cleans up correlation but doesn't create a second terminal re
 
 ### 13.2 Dispatch Failure Action Owner
 
-The single owner for how a dispatch-failure observer's reason and action map to the caller's
+The single owner for how a dispatch-failure structured record's reason and action map to the caller's
 result is
 [Message Flow Tracing §3](26-message-flow-tracing.en.md#3-common-attributes).
-Each language's exact interface projects that closed value into that language's enum or
-string, without adding to or reducing the values.
+Each language's logger/telemetry-provider integration records those closed values with the
+same strings, without adding to or reducing the values. No public event DTO or observer enum
+is provided for this value set.
 
 ## 14. Startup Validation
 
