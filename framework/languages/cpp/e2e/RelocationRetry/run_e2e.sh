@@ -104,13 +104,15 @@ ROLE_BIN="$CONSUMER_BUILD/zlink_cpp_e2e_relocation_retry"
 source_pid=$!
 wait_log "$LOG_DIR/source.stdout.log" "first-relocation outcome=1 reason=1" 10
 
+: >"$TRIGGER_FILE"
+wait_log "$LOG_DIR/source.stdout.log" "second-relocation state=waiting-for-target" 5
+
 "$ROLE_BIN" --role=target --redis="$REDIS_ENDPOINT" --key-prefix="$KEY_PREFIX" \
   --trigger-file="$TRIGGER_FILE" --stop-file="$STOP_FILE" \
   >"$LOG_DIR/target.stdout.log" 2>"$LOG_DIR/target.stderr.log" &
 target_pid=$!
 wait_log "$LOG_DIR/target.stdout.log" "role=target state=serving" 10
 
-: >"$TRIGGER_FILE"
 wait_log "$LOG_DIR/source.stdout.log" "second-relocation outcome=0 reason=0" 10
 wait_process "$source_pid" 10
 source_pid=""
@@ -121,4 +123,4 @@ target_pid=""
 
 grep -Fq "role=source result=passed" "$LOG_DIR/source.stdout.log"
 grep -Fq "role=target result=passed" "$LOG_DIR/target.stdout.log"
-echo "CPP-RELOC-001 PASS package=$PACKAGE_ROOT logs=$LOG_DIR"
+echo "CPP-RELOC-001 CPP-RELOC-002 PASS package=$PACKAGE_ROOT logs=$LOG_DIR"

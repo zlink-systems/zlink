@@ -118,6 +118,7 @@ int main (int argc, char **argv)
             if (!wait_until ([&] { return std::filesystem::exists (options.trigger_file); }, 15s)) {
                 throw std::runtime_error ("timed out waiting for retry trigger");
             }
+            std::cout << "second-relocation state=waiting-for-target\n" << std::flush;
             const auto second =
               app.relocate ({.mode = fw::relocation_mode_t::planned_maintenance, .deadline = 5s})
                 .result ()
