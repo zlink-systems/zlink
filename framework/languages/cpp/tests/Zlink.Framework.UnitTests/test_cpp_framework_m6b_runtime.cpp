@@ -483,7 +483,7 @@ void verify_self_actor_request_rejected_before_submission ()
     assert (!result);
     assert (
       result.error_kind ()
-      == framework_error_kind_t::not_configured);
+      == framework_error_kind_t::invalid_operation);
     assert (actor_client.request_submissions.load () == 0);
 }
 
@@ -500,7 +500,7 @@ void verify_same_gate_request_rejected_before_submission ()
       },
       [] (bool) {
           return result_t<void>::failure (
-            framework_error_kind_t::not_configured,
+            framework_error_kind_t::invalid_operation,
             "awaited request requires the current Spot execution gate");
       });
 
@@ -508,7 +508,7 @@ void verify_same_gate_request_rejected_before_submission ()
     assert (!result);
     assert (
       result.error_kind ()
-      == framework_error_kind_t::not_configured);
+      == framework_error_kind_t::invalid_operation);
     assert (submissions.load () == 0);
 }
 

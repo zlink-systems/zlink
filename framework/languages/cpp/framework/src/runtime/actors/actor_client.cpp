@@ -316,7 +316,7 @@ task_t<message_t> actor_request_call_t::start (bool release_turn)
                                             separator + 1);
         if (current_actor_id == _actor_id.value ()) {
             return task_t<message_t> (result_t<message_t>::failure (
-              framework_error_kind_t::not_configured,
+              framework_error_kind_t::invalid_operation,
               "awaited request to the current Actor cannot complete while its FIFO claim is held"));
         }
     }
@@ -476,7 +476,7 @@ class actor_client_impl_t final : public actor_client_t
                 && target.value ().spot_id
                      == runtime::current_actor_execution.spot_id) {
                 co_return result_t<message_t>::failure (
-                  framework_error_kind_t::not_configured,
+                  framework_error_kind_t::invalid_operation,
                   "awaited request requires the current Spot execution gate");
             }
         }

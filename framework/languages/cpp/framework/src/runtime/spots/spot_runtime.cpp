@@ -1619,7 +1619,7 @@ channel_client_t spot_context_t::outbound () const
           const auto locked = state.lock ();
           if (!locked)
               return result_t<void>::failure (
-                framework_error_kind_t::not_configured,
+                framework_error_kind_t::invalid_operation,
                 "Spot execution context is no longer available");
           try {
               locked->ensure_relocation_turn_open ();
