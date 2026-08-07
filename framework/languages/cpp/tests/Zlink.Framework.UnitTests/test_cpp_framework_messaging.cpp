@@ -12,6 +12,8 @@
 
 #include <service_wire_constants.hpp>
 
+#include <nlohmann/json.hpp>
+
 #include <zlink/framework/contracts/detail/call_facade.hpp>
 #include <zlink/framework/contracts/errors/result.hpp>
 #include <zlink/framework/contracts/monitoring/route_mesh_runtime.hpp>
@@ -51,6 +53,31 @@ int main ()
         zlink::framework::serializer_registry_t serializers;
         zlink::framework::detail::
           register_spot_route_packet_serializers (serializers);
+        const auto packet_serializer =
+          serializers.get<zlink::framework::detail::
+                            spot_actor_packet_route_request_t> ();
+        const auto packet_wire = packet_serializer.serialize (
+          zlink::framework::detail::spot_actor_packet_route_request_t{
+            .payload = {0, 1, 2, 253, 254, 255}});
+        const auto packet_json = nlohmann::json::parse (packet_wire.to_string ());
+        if (!packet_json.at ("payload").is_string ()
+            || packet_json.at ("payload").get<std::string> () != "AAEC/f7/"
+            || packet_serializer.deserialize (packet_wire).payload
+                 != std::vector<std::uint8_t> ({0, 1, 2, 253, 254, 255})) {
+            return 154;
+        }
+        for (const auto *invalid_payload : {"AQ=", "A===", "AB==", "AQ=A"}) {
+            auto invalid_json = packet_json;
+            invalid_json["payload"] = invalid_payload;
+            try {
+                (void) packet_serializer.deserialize (
+                  zlink::framework::encoded_payload_t::from_string (
+                    invalid_json.dump ()));
+                return 155;
+            }
+            catch (const std::exception &) {
+            }
+        }
         const auto admission_root =
           serializers
             .get<zlink::framework::detail::

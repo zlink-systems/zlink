@@ -9,6 +9,7 @@
 
 #include <limits>
 #include <stdexcept>
+#include <string_view>
 #include <typeindex>
 #include <utility>
 
@@ -17,6 +18,86 @@ namespace zlink::framework::detail
 
 namespace
 {
+
+constexpr std::string_view base64_alphabet =
+  "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+std::string encode_base64 (const std::vector<std::uint8_t> &bytes)
+{
+    std::string encoded;
+    encoded.reserve (((bytes.size () + 2) / 3) * 4);
+    for (std::size_t offset = 0; offset < bytes.size (); offset += 3) {
+        const auto remaining = bytes.size () - offset;
+        const auto first = bytes[offset];
+        const auto second = remaining > 1 ? bytes[offset + 1] : std::uint8_t{0};
+        const auto third = remaining > 2 ? bytes[offset + 2] : std::uint8_t{0};
+        encoded.push_back (base64_alphabet[first >> 2]);
+        encoded.push_back (
+          base64_alphabet[((first & 0x03U) << 4) | (second >> 4)]);
+        encoded.push_back (remaining > 1
+                             ? base64_alphabet[((second & 0x0fU) << 2)
+                                               | (third >> 6)]
+                             : '=');
+        encoded.push_back (remaining > 2 ? base64_alphabet[third & 0x3fU] : '=');
+    }
+    return encoded;
+}
+
+std::uint8_t decode_base64_symbol (char symbol)
+{
+    const auto position = base64_alphabet.find (symbol);
+    if (position == std::string_view::npos)
+        throw std::invalid_argument ("Byte sequence is not valid RFC 4648 base64");
+    return static_cast<std::uint8_t> (position);
+}
+
+std::vector<std::uint8_t> decode_base64 (std::string_view encoded)
+{
+    if (encoded.size () % 4 != 0)
+        throw std::invalid_argument ("Byte sequence is not valid RFC 4648 base64");
+
+    std::vector<std::uint8_t> bytes;
+    bytes.reserve ((encoded.size () / 4) * 3);
+    for (std::size_t offset = 0; offset < encoded.size (); offset += 4) {
+        const bool final_group = offset + 4 == encoded.size ();
+        const bool pad_two = encoded[offset + 2] == '=';
+        const bool pad_one = encoded[offset + 3] == '=';
+        if (encoded[offset] == '=' || encoded[offset + 1] == '='
+            || (pad_two && (!pad_one || !final_group))
+            || (pad_one && !final_group)) {
+            throw std::invalid_argument ("Byte sequence is not valid RFC 4648 base64");
+        }
+
+        const auto first = decode_base64_symbol (encoded[offset]);
+        const auto second = decode_base64_symbol (encoded[offset + 1]);
+        const auto third = pad_two ? std::uint8_t{0}
+                                   : decode_base64_symbol (encoded[offset + 2]);
+        const auto fourth = pad_one ? std::uint8_t{0}
+                                    : decode_base64_symbol (encoded[offset + 3]);
+        if ((pad_two && (second & 0x0fU) != 0)
+            || (pad_one && !pad_two && (third & 0x03U) != 0)) {
+            throw std::invalid_argument ("Byte sequence is not canonical RFC 4648 base64");
+        }
+
+        bytes.push_back (static_cast<std::uint8_t> ((first << 2) | (second >> 4)));
+        if (!pad_two)
+            bytes.push_back (
+              static_cast<std::uint8_t> ((second << 4) | (third >> 2)));
+        if (!pad_one)
+            bytes.push_back (
+              static_cast<std::uint8_t> ((third << 6) | fourth));
+    }
+    return bytes;
+}
+
+std::vector<std::uint8_t> decode_base64_field (const nlohmann::json &json,
+                                                const char *field)
+{
+    const auto &encoded = json.at (field);
+    if (!encoded.is_string ())
+        throw std::invalid_argument (std::string (field) + " must be a base64 string");
+    return decode_base64 (encoded.get_ref<const std::string &> ());
+}
 
 void validate_handoff_backlog_json (const nlohmann::json &backlog)
 {
@@ -58,11 +139,11 @@ void validate_handoff_backlog_json (const nlohmann::json &backlog)
         }
 
         const auto payload = item.find ("payload");
-        if (payload == item.end () || !payload->is_array ()) {
+        if (payload == item.end () || !payload->is_string ()) {
             throw std::invalid_argument (
               "Actor handoff backlog payload is required");
         }
-        add_bytes (payload->size ());
+        add_bytes (decode_base64 (payload->get_ref<const std::string &> ()).size ());
 
         const auto metadata = item.find ("metadata");
         if (metadata == item.end ())
@@ -87,13 +168,14 @@ void validate_handoff_backlog_json (const nlohmann::json &backlog)
 
 void to_json (nlohmann::json &json, const spot_multicast_route_send_t &value)
 {
-    json = nlohmann::json{{"topic", value.topic}, {"frame", value.frame}};
+    json = nlohmann::json{{"topic", value.topic},
+                          {"frame", encode_base64 (value.frame)}};
 }
 
 void from_json (const nlohmann::json &json, spot_multicast_route_send_t &value)
 {
     value.topic = json.at ("topic").get<std::string> ();
-    value.frame = json.at ("frame").get<std::vector<std::uint8_t>> ();
+    value.frame = decode_base64_field (json, "frame");
 }
 
 result_t<zlink::message_t> encode_actor_bound_session_frame (
@@ -141,7 +223,7 @@ void to_json (nlohmann::json &json, const spot_actor_admission_route_request_t &
                            value.completion_operation_id_low},
                           {"sourceSpotId", value.source_spot_id},
                           {"targetSpotId", value.target_spot_id},
-                          {"payload", value.payload}};
+                          {"payload", encode_base64 (value.payload)}};
 }
 
 void from_json (const nlohmann::json &json, spot_actor_admission_route_request_t &value)
@@ -159,14 +241,14 @@ void from_json (const nlohmann::json &json, spot_actor_admission_route_request_t
       json.value ("completionOperationIdLow", std::uint64_t{0});
     value.source_spot_id = json.at ("sourceSpotId").get<std::string> ();
     value.target_spot_id = json.at ("targetSpotId").get<std::string> ();
-    value.payload = json.at ("payload").get<std::vector<std::uint8_t>> ();
+    value.payload = decode_base64_field (json, "payload");
 }
 
 void to_json (nlohmann::json &json, const spot_actor_admission_route_reply_t &value)
 {
     json = nlohmann::json{
       {"accepted", value.accepted},
-      {"payload", value.payload},
+      {"payload", encode_base64 (value.payload)},
       {"completionRootReference", value.completion_root_reference},
       {"completionRootChecksum", value.completion_root_checksum}};
 }
@@ -174,7 +256,7 @@ void to_json (nlohmann::json &json, const spot_actor_admission_route_reply_t &va
 void from_json (const nlohmann::json &json, spot_actor_admission_route_reply_t &value)
 {
     value.accepted = json.at ("accepted").get<bool> ();
-    value.payload = json.at ("payload").get<std::vector<std::uint8_t>> ();
+    value.payload = decode_base64_field (json, "payload");
     value.completion_root_reference =
       json.value ("completionRootReference", "");
     value.completion_root_checksum =
@@ -184,7 +266,7 @@ void from_json (const nlohmann::json &json, spot_actor_admission_route_reply_t &
 void to_json (nlohmann::json &json, const spot_actor_handoff_packet_t &value)
 {
     json = nlohmann::json{{"packetName", value.packet_name_value},
-                          {"payload", value.payload},
+                          {"payload", encode_base64 (value.payload)},
                           {"contentType", value.content_type},
                           {"metadata", value.metadata},
                           {"isRequest", value.is_request}};
@@ -193,7 +275,7 @@ void to_json (nlohmann::json &json, const spot_actor_handoff_packet_t &value)
 void from_json (const nlohmann::json &json, spot_actor_handoff_packet_t &value)
 {
     value.packet_name_value = json.at ("packetName").get<std::string> ();
-    value.payload = json.at ("payload").get<std::vector<std::uint8_t>> ();
+    value.payload = decode_base64_field (json, "payload");
     value.content_type = json.value ("contentType", "");
     value.metadata = json.value ("metadata", std::map<std::string, std::string>{});
     value.is_request = json.value ("isRequest", false);
@@ -215,7 +297,7 @@ void to_json (nlohmann::json &json, const spot_actor_commit_route_request_t &val
                           {"targetSpotId", value.target_spot_id},
                           {"boundSessionNodeRid", value.bound_session_node_rid},
                           {"boundSessionRid", value.bound_session_rid},
-                          {"transferState", value.transfer_state},
+                          {"transferState", encode_base64 (value.transfer_state)},
                           {"handoffBacklog", value.handoff_backlog},
                           {"coreTransfer", value.core_transfer},
                           {"coreTransferIdHigh", value.core_transfer_id_high},
@@ -244,7 +326,7 @@ void from_json (const nlohmann::json &json, spot_actor_commit_route_request_t &v
     value.target_spot_id = json.at ("targetSpotId").get<std::string> ();
     value.bound_session_node_rid = json.value ("boundSessionNodeRid", "");
     value.bound_session_rid = json.value ("boundSessionRid", "");
-    value.transfer_state = json.at ("transferState").get<std::vector<std::uint8_t>> ();
+    value.transfer_state = decode_base64_field (json, "transferState");
     const auto handoff_backlog = json.find ("handoffBacklog");
     if (handoff_backlog != json.end ()) {
         validate_handoff_backlog_json (*handoff_backlog);
@@ -273,9 +355,9 @@ void to_json (nlohmann::json &json, const spot_actor_join_route_request_t &value
                           {"actorId", value.actor_id},
                           {"actorGeneration", value.actor_generation},
                           {"spotId", value.spot_id},
-                          {"payload", value.payload},
+                          {"payload", encode_base64 (value.payload)},
                           {"actorSnapshotPresent", value.actor_snapshot_present},
-                          {"actorSnapshot", value.actor_snapshot}};
+                          {"actorSnapshot", encode_base64 (value.actor_snapshot)}};
 }
 
 void from_json (const nlohmann::json &json, spot_actor_join_route_request_t &value)
@@ -285,9 +367,11 @@ void from_json (const nlohmann::json &json, spot_actor_join_route_request_t &val
     value.actor_id = json.at ("actorId").get<std::string> ();
     value.actor_generation = json.at ("actorGeneration").get<std::uint64_t> ();
     value.spot_id = json.at ("spotId").get<std::string> ();
-    value.payload = json.at ("payload").get<std::vector<std::uint8_t>> ();
+    value.payload = decode_base64_field (json, "payload");
     value.actor_snapshot_present = json.value ("actorSnapshotPresent", false);
-    value.actor_snapshot = json.value ("actorSnapshot", std::vector<std::uint8_t>{});
+    value.actor_snapshot = json.contains ("actorSnapshot")
+                             ? decode_base64_field (json, "actorSnapshot")
+                             : std::vector<std::uint8_t>{};
 }
 
 void to_json (nlohmann::json &json, const spot_actor_join_route_reply_t &value)
@@ -297,7 +381,7 @@ void to_json (nlohmann::json &json, const spot_actor_join_route_reply_t &value)
                           {"actorType", value.actor_type},
                           {"actorId", value.actor_id},
                           {"actorGeneration", value.actor_generation},
-                          {"payload", value.payload}};
+                          {"payload", encode_base64 (value.payload)}};
 }
 
 void from_json (const nlohmann::json &json, spot_actor_join_route_reply_t &value)
@@ -307,7 +391,7 @@ void from_json (const nlohmann::json &json, spot_actor_join_route_reply_t &value
     value.actor_type = json.at ("actorType").get<std::string> ();
     value.actor_id = json.at ("actorId").get<std::string> ();
     value.actor_generation = json.at ("actorGeneration").get<std::uint64_t> ();
-    value.payload = json.at ("payload").get<std::vector<std::uint8_t>> ();
+    value.payload = decode_base64_field (json, "payload");
 }
 
 void to_json (nlohmann::json &json, const spot_actor_packet_route_request_t &value)
@@ -321,7 +405,7 @@ void to_json (nlohmann::json &json, const spot_actor_packet_route_request_t &val
                           {"contentType", value.content_type},
                           {"messageFollowHopCount", value.message_follow_hop_count},
                           {"metadata", value.metadata},
-                          {"payload", value.payload}};
+                          {"payload", encode_base64 (value.payload)}};
 }
 
 void from_json (const nlohmann::json &json, spot_actor_packet_route_request_t &value)
@@ -339,7 +423,7 @@ void from_json (const nlohmann::json &json, spot_actor_packet_route_request_t &v
         throw std::invalid_argument (
           "Actor packet Message Follow hop count exceeds 8");
     value.metadata = json.value ("metadata", std::map<std::string, std::string>{});
-    value.payload = json.at ("payload").get<std::vector<std::uint8_t>> ();
+    value.payload = decode_base64_field (json, "payload");
 }
 
 void to_json (nlohmann::json &json, const spot_actor_packet_route_reply_t &value)
@@ -350,7 +434,7 @@ void to_json (nlohmann::json &json, const spot_actor_packet_route_reply_t &value
                           {"actorId", value.actor_id},
                           {"actorGeneration", value.actor_generation},
                           {"hasReply", value.has_reply},
-                          {"payload", value.payload}};
+                          {"payload", encode_base64 (value.payload)}};
 }
 
 void from_json (const nlohmann::json &json, spot_actor_packet_route_reply_t &value)
@@ -361,7 +445,7 @@ void from_json (const nlohmann::json &json, spot_actor_packet_route_reply_t &val
     value.actor_id = json.value ("actorId", "");
     value.actor_generation = json.value ("actorGeneration", std::uint64_t{0});
     value.has_reply = json.at ("hasReply").get<bool> ();
-    value.payload = json.at ("payload").get<std::vector<std::uint8_t>> ();
+    value.payload = decode_base64_field (json, "payload");
 }
 
 void to_json (nlohmann::json &json, const spot_actor_disconnect_route_request_t &value)
@@ -398,7 +482,7 @@ void to_json (nlohmann::json &json, const actor_bound_session_route_request_t &v
                           {"actorGeneration", value.actor_generation},
                           {"packetName", value.packet_name_value},
                           {"codec", static_cast<std::uint8_t> (value.codec)},
-                          {"payload", value.payload}};
+                          {"payload", encode_base64 (value.payload)}};
 }
 
 void from_json (const nlohmann::json &json, actor_bound_session_route_request_t &value)
@@ -413,7 +497,7 @@ void from_json (const nlohmann::json &json, actor_bound_session_route_request_t 
         throw std::invalid_argument ("actor bound session route codec is invalid");
     }
     value.codec = static_cast<stream_codec_t> (codec);
-    value.payload = json.at ("payload").get<std::vector<std::uint8_t>> ();
+    value.payload = decode_base64_field (json, "payload");
 }
 
 void to_json (nlohmann::json &json, const actor_bound_session_bind_route_request_t &value)
