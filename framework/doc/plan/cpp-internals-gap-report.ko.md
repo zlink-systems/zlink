@@ -116,6 +116,7 @@ admitted 피어의 애플리케이션 레코드가 대상 owner의 mailbox 예�
 ### CPP-RELOC-001 — relocation 영구 차단
 `run_shared_relocation`의 `complete()`는 `blocked/target_unavailable`을 포함한 **모든** 결과에 `operation.terminal = true`를 설정하고, `relocation_operation`은 어디에서도 리셋되지 않는다. 이후 `relocate()` 호출은 저장된 blocked 결과를 영원히 반환한다. 스펙 01 §3은 "거부된 결과는 저장하지 않으며, 재요청 시 처음부터 다시 검사한다"고 결정했다. 연관 gap: preflight와 worker 모두 대상 조회를 1회만 수행해(스펙이 요구하는 "설정된 시간까지 대상 정보 전파 대기" 없음) 전파 경합 중의 relocation이 스퓨리어스하게 거부되고, 위 문제와 결합되면 영구 거부가 된다(→ CPP-RELOC-002, §3.1).
 - 증거: `cpp/src/runtime/host/app.cpp:2852-2854, 2959-2960` (terminal 저장), `2741-2758, 3072-3077, 3291-3296` (단발 조회)
+- 구현 checkpoint `9fc3179a68`: `relocated` 결과만 terminal로 보존하고, `blocked` 결과는 waiter 완료 뒤 operation을 다시 시작 가능한 상태로 되돌린다. 다음 호출은 이전 worker thread를 join한 뒤 preflight부터 다시 실행한다. `test_cpp_framework_target_contract`와 기본 `test_cpp_framework_host_lifecycle`는 통과했다. 실제 재시도 process 회귀를 추가해 실행하는 과정에서 기존 optional fixture가 readiness payload를 보내기 전에 `No serializer is registered for this payload type`으로 실패했으므로, serializer owner gap을 우회하지 않고 재시도 process 증거를 보류한다.
 
 ### CPP-TOPO-001 — 수동 피어 admission fence 미설치
 자동 연결 루프는 descriptor의 `lifecycle_generation`/`security_identity`를 `expect_peer`/`connect_peer`로 설치하지만, **수동 연결 목록에 있는 엔드포인트의 descriptor는 명시적으로 건너뛴다**. 수동 피어 등록 경로는 endpoint + 선택적 RID만 받으므로 fence가 설치될 길이 없다. 해당 엔드포인트의 스테일/대체 노드가 descriptor fence로 거부되지 않는다. 이는 JVM에서 이미 수정·종결된 `JVM-TOPO-001`과 동일 계열 결함이다.
@@ -151,7 +152,7 @@ admitted 피어의 애플리케이션 레코드가 대상 owner의 mailbox 예�
 
 | ID | 분류 | 요약 |
 |---|---|---|
-| CPP-RELOC-001 | GAP·상 | §2 참조 — blocked 결과 영구 저장 |
+| CPP-RELOC-001 | GAP·검증 중 | §2 참조 — terminal state와 worker 회수는 수정됐고 재시도 process 증거가 남아 있음 |
 | CPP-RELOC-002 | GAP·중 | 대상 정보 전파 대기 없이 단발 조회로 `target_unavailable` 판정 (§2의 CPP-RELOC-001 항목 참조) |
 | CPP-LAYER-001 | PARTIAL·하 | 식별자 타입화가 절반만: `node_rid_t`/`actor_id_t`만 전용 타입이고 `spot_id_t`는 `std::string` alias, mesh/채널 이름은 평문 문자열 — 스펙이 명명한 안티패턴 그대로. 증거: `cpp/include/zlink/framework/contracts/spots/spot_identity.hpp:24` |
 | CPP-LAYER-002 | PARTIAL·하 | 호출 진행 식별자가 `operation_id_t`라는 이름으로 Actor-Join 완료 dedup 값과 이름·값 공간을 공유 — 스펙은 내부 호출 식별자에 다른 이름을 요구. 포맷 자체는 단일이라 개념/명명 충돌에 그침. 증거: `cpp/src/runtime/operations/operation_id.hpp:13`, `cpp/src/runtime/spots/spot_runtime.cpp:4503` |
