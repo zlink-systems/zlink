@@ -135,14 +135,14 @@ function validateFrameworkJsonV1Value(
       }
       const result: Record<string, unknown> = {};
       for (const [name, item] of Object.entries(input)) {
-        const propertySchema = schema.properties[name];
+        const propertySchema: unknown = schema.properties[name];
         if (propertySchema === undefined) {
           if (schema.additionalProperties === false) {
             throw new TypeError(`framework-json-v1 property '${path}.${name}' is not allowed.`);
           }
           continue;
         }
-        result[name] = validateFrameworkJsonV1Value(item, propertySchema, `${path}.${name}`, decode);
+        result[name] = validateFrameworkJsonV1Value(item, propertySchema as ZLinkJsonSchema, `${path}.${name}`, decode);
       }
       return decode ? result : value;
     }

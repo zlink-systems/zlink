@@ -38,14 +38,16 @@ export function defineZLinkPacketJsonContract(
   if (packetName.trim().length === 0) {
     throw new TypeError('ZLink packet name must not be empty.');
   }
-  if (typeof contract !== 'object' || contract === null) {
+  const runtimeContract: unknown = contract;
+  if (typeof runtimeContract !== 'object' || runtimeContract === null) {
     throw new TypeError('ZLink packet JSON contract must be an object.');
   }
+  const normalizedContract = runtimeContract as ZLinkPacketJsonContract;
   const normalized = Object.freeze({
-    payload: normalizeJsonSchema(contract.payload, new Set(), 0),
-    ...(contract.reply === undefined
+    payload: normalizeJsonSchema(normalizedContract.payload, new Set(), 0),
+    ...(normalizedContract.reply === undefined
       ? {}
-      : { reply: normalizeJsonSchema(contract.reply, new Set(), 0) })
+      : { reply: normalizeJsonSchema(normalizedContract.reply, new Set(), 0) })
   });
   const contracts = packetJsonContracts();
   const current = contracts.get(packetName);
@@ -66,12 +68,16 @@ function normalizeJsonSchema(
   parents: Set<object>,
   depth: number
 ): ZLinkJsonSchema {
-  if (typeof schema !== 'object' || schema === null || depth > 64) {
+  // Keep the runtime boundary defensive for JavaScript callers even though
+  // the TypeScript signature describes the accepted shape.
+  const runtimeSchema: unknown = schema;
+  if (typeof runtimeSchema !== 'object' || runtimeSchema === null || depth > 64) {
     throw new TypeError('ZLink packet JSON schema must be an acyclic object with at most 64 levels.');
   }
-  if (parents.has(schema)) throw new TypeError('ZLink packet JSON schema must not contain a cycle.');
-  const nextParents = new Set(parents).add(schema);
-  switch (schema.type) {
+  const normalizedSchema = runtimeSchema as ZLinkJsonSchema;
+  if (parents.has(normalizedSchema)) throw new TypeError('ZLink packet JSON schema must not contain a cycle.');
+  const nextParents = new Set(parents).add(normalizedSchema);
+  switch (normalizedSchema.type) {
     case 'boolean':
     case 'string':
     case 'number':
@@ -80,46 +86,47 @@ function normalizeJsonSchema(
     case 'int64':
     case 'uint64':
     case 'bytes':
-      return Object.freeze({ type: schema.type });
+      return Object.freeze({ type: normalizedSchema.type });
     case 'enum': {
-      if (!Array.isArray(schema.names)
-          || schema.names.length === 0
-          || schema.names.some((name) => typeof name !== 'string' || name.length === 0)) {
+      if (!Array.isArray(normalizedSchema.names)
+          || normalizedSchema.names.length === 0
+          || normalizedSchema.names.some((name) => typeof name !== 'string' || name.length === 0)) {
         throw new TypeError('ZLink packet enum schema requires non-empty string names.');
       }
-      if (new Set(schema.names).size !== schema.names.length) {
+      if (new Set(normalizedSchema.names).size !== normalizedSchema.names.length) {
         throw new TypeError('ZLink packet enum schema names must be unique.');
       }
-      return Object.freeze({ type: 'enum', names: Object.freeze([...schema.names]) });
+      return Object.freeze({ type: 'enum', names: Object.freeze([...normalizedSchema.names]) });
     }
     case 'nullable':
-      return Object.freeze({ type: 'nullable', value: normalizeJsonSchema(schema.value, nextParents, depth + 1) });
+      return Object.freeze({ type: 'nullable', value: normalizeJsonSchema(normalizedSchema.value, nextParents, depth + 1) });
     case 'array':
-      return Object.freeze({ type: 'array', items: normalizeJsonSchema(schema.items, nextParents, depth + 1) });
+      return Object.freeze({ type: 'array', items: normalizeJsonSchema(normalizedSchema.items, nextParents, depth + 1) });
     case 'record':
-      return Object.freeze({ type: 'record', values: normalizeJsonSchema(schema.values, nextParents, depth + 1) });
+      return Object.freeze({ type: 'record', values: normalizeJsonSchema(normalizedSchema.values, nextParents, depth + 1) });
     case 'object': {
-      if (typeof schema.properties !== 'object' || schema.properties === null || Array.isArray(schema.properties)) {
+      const runtimeProperties: unknown = normalizedSchema.properties;
+      if (typeof runtimeProperties !== 'object' || runtimeProperties === null || Array.isArray(runtimeProperties)) {
         throw new TypeError('ZLink packet object schema properties must be an object.');
       }
-      if (!Array.isArray(schema.required)
-          || schema.required.some((name) => typeof name !== 'string' || name.length === 0)) {
+      if (!Array.isArray(normalizedSchema.required)
+          || normalizedSchema.required.some((name) => typeof name !== 'string' || name.length === 0)) {
         throw new TypeError('ZLink packet object schema required must contain property names.');
       }
-      if (schema.additionalProperties !== undefined && typeof schema.additionalProperties !== 'boolean') {
+      if (normalizedSchema.additionalProperties !== undefined && typeof normalizedSchema.additionalProperties !== 'boolean') {
         throw new TypeError('ZLink packet object schema additionalProperties must be boolean.');
       }
       const properties: Record<string, ZLinkJsonSchema> = {};
-      for (const [name, property] of Object.entries(schema.properties)) {
+      for (const [name, property] of Object.entries(runtimeProperties as Record<string, ZLinkJsonSchema>)) {
         if (name === '__proto__' || name === 'prototype' || name === 'constructor') {
           throw new TypeError(`ZLink packet JSON property '${name}' is not allowed.`);
         }
         properties[name] = normalizeJsonSchema(property, nextParents, depth + 1);
       }
-      if (new Set(schema.required).size !== schema.required.length) {
+      if (new Set(normalizedSchema.required).size !== normalizedSchema.required.length) {
         throw new TypeError('ZLink packet JSON required properties must be unique.');
       }
-      for (const name of schema.required) {
+      for (const name of normalizedSchema.required) {
         if (name === '__proto__' || name === 'prototype' || name === 'constructor') {
           throw new TypeError(`ZLink packet JSON property '${name}' is not allowed.`);
         }
@@ -130,14 +137,14 @@ function normalizeJsonSchema(
       return Object.freeze({
         type: 'object',
         properties: Object.freeze(properties),
-        required: Object.freeze([...schema.required]),
-        ...(schema.additionalProperties === undefined
+        required: Object.freeze([...normalizedSchema.required]),
+        ...(normalizedSchema.additionalProperties === undefined
           ? {}
-          : { additionalProperties: schema.additionalProperties })
+          : { additionalProperties: normalizedSchema.additionalProperties })
       });
     }
   }
-  throw new TypeError(`ZLink packet JSON schema type '${String((schema as { type?: unknown }).type)}' is not supported.`);
+  throw new TypeError(`ZLink packet JSON schema type '${String((normalizedSchema as { type?: unknown }).type)}' is not supported.`);
 }
 
 function packetJsonContracts(): Map<string, ZLinkPacketJsonContract> {
