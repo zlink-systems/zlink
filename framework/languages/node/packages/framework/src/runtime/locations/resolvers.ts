@@ -572,6 +572,12 @@ export class ZLinkStoreLocationResolvers implements
       this.directActorRoutes.delete(fence.actorId);
       invalidated = true;
     }
+    for (const [key, cached] of this.actorRoutes) {
+      if (legacyActorRouteMatchesFence(cached.row, fence)) {
+        this.actorRoutes.delete(key);
+        invalidated = true;
+      }
+    }
     return invalidated;
   }
 
@@ -636,6 +642,17 @@ function directActorRouteMatchesFence(
     && route.ownerNodeGeneration === fence.targetNodeGeneration
     && route.authorityOwnerGeneration === fence.authorityOwnerGeneration
     && route.ownerLeaseGeneration === fence.ownerLeaseGeneration;
+}
+
+function legacyActorRouteMatchesFence(
+  route: ZLinkActorLocation,
+  fence: ZLinkActorRouteInvalidationFence
+): boolean {
+  return route.actorId === fence.actorId
+    && route.actorRef.objectGeneration === fence.objectGeneration
+    && routingIdsEqual(route.actorRef.nodeRid, fence.targetNodeRid)
+    && route.ownerNodeGeneration === fence.targetNodeGeneration
+    && route.leaseGeneration === fence.ownerLeaseGeneration;
 }
 
 export class DefaultZLinkLocationReadiness implements ZLinkLocationReadiness {

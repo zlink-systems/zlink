@@ -1124,6 +1124,17 @@ test('Actor Message Follow invalidation preserves a newer cached owner fence', (
     expiresAtMs: Number.MAX_SAFE_INTEGER,
     storeVersion: 'v2'
   });
+  resolver.actorRoutes.set('play\0alice', {
+    row: {
+      ...actor('owner-new', 9n),
+      actorId: 'alice',
+      actorRef: route.actorRef,
+      ownerNodeRid: route.actorRef.nodeRid,
+      ownerNodeGeneration: 11n,
+      leaseGeneration: 13n
+    },
+    expiresAtMs: Number.MAX_SAFE_INTEGER
+  });
 
   assert.equal(resolver.invalidateActorRouteIfMatches({
     actorId: 'alice',
@@ -1134,6 +1145,7 @@ test('Actor Message Follow invalidation preserves a newer cached owner fence', (
     ownerLeaseGeneration: 3n
   }), false);
   assert.equal(resolver.directActorRoutes.has('alice'), true);
+  assert.equal(resolver.actorRoutes.has('play\0alice'), true);
 
   assert.equal(resolver.invalidateActorRouteIfMatches({
     actorId: 'alice',
@@ -1144,6 +1156,7 @@ test('Actor Message Follow invalidation preserves a newer cached owner fence', (
     ownerLeaseGeneration: 13n
   }), true);
   assert.equal(resolver.directActorRoutes.has('alice'), false);
+  assert.equal(resolver.actorRoutes.has('play\0alice'), false);
 });
 
 test('location spot route resolver bridges internal routed transport', async () => {
