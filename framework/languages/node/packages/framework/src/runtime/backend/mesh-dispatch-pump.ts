@@ -125,9 +125,11 @@ export class ZLinkMeshDispatchPump {
       ? this.options.inboundDispatchBudget
       : undefined;
     if (budgetPaused(applicationBudget)) return false;
-    const readyCapacity = claimBudget === undefined
-      ? (this.options.readyCapacity ?? 32)
-      : Math.min(this.options.readyCapacity ?? 32, claimBudget);
+    const readyCapacity = domain === ReadyDomain.Application
+      ? 1
+      : claimBudget === undefined
+        ? (this.options.readyCapacity ?? 32)
+        : Math.min(this.options.readyCapacity ?? 32, claimBudget);
     const readyBatch = this.node.createReadyBatch(readyCapacity);
     const receiveBatch = this.node.createReceiveBatch(
       applicationBudget === undefined ? (this.options.messageCapacity ?? 64) : 1,
@@ -147,6 +149,9 @@ export class ZLinkMeshDispatchPump {
         const drained = this.node.drainReady(domain, readyBatch, ZLINK_BACKEND_RECV_DONT_WAIT);
         if (!drained.ok || drained.records.length === 0) {
           return false;
+        }
+        if (domain === ReadyDomain.Application && drained.hasResidue) {
+          this.pendingDomains |= ReadyDomain.Application;
         }
         for (let index = 0; index < drained.records.length; index += 1) {
           const claim = readyBatch.takeClaim(index);

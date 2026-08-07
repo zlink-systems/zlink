@@ -48,6 +48,7 @@ import {
   decodeRouteMeshAdmission,
   decodeReplyHeader,
   encodeApplicationPayload,
+  encodeNodeRequestHeader,
   encodeReplyHeader,
   encodeRouteMeshAdmission
 } from '../../packages/framework/src/runtime/foundation/service-wire-m6a-codec';
@@ -877,6 +878,58 @@ test('mailbox domains remain bounded and infrastructure claims progress independ
   assert.equal(mailbox.release(infrastructure), false);
   assert.equal(mailbox.release(application), true);
   assert.equal(mailbox.tryClaim('application', 1, 8)?.records.length, 1);
+});
+
+test('remote request receives CapacityExceeded when bounded mailbox admission fails', () => {
+  const runtime = new RawServiceMeshRuntime({
+    descriptor: descriptor('local'),
+    mailbox: { applicationMessages: 1, applicationBytes: 4_096 }
+  });
+  assert.equal(runtime.topology.admit({
+    ...descriptor('peer'),
+    state: 'serving'
+  }, 'peer-connection'), 'admitted');
+  assert.equal(runtime.mailbox.tryEnqueue({
+    owner: 'node:occupied',
+    domain: 'application',
+    parts: [Buffer.from('occupied')]
+  }), true);
+  let reply: readonly Uint8Array[] | undefined;
+  const internals = runtime as unknown as {
+    processReceived(
+      received: {
+        sourceRid: string;
+        requestSeq: bigint;
+        parts: readonly Buffer[];
+        reply(parts: readonly Uint8Array[]): void;
+      },
+      nowMs: number,
+      completionControl: boolean
+    ): string;
+  };
+  const result = internals.processReceived({
+    sourceRid: 'peer',
+    requestSeq: 19n,
+    parts: [
+      encodeNodeRequestHeader(7n),
+      encodeApplicationPayload({
+        packetName: 'Blocked',
+        contentType: 'application/octet-stream',
+        payload: Buffer.from('payload')
+      })
+    ],
+    reply(parts) { reply = parts; }
+  }, 0, false);
+
+  assert.equal(result, 'infrastructure');
+  assert.ok(reply);
+  assert.deepEqual(decodeReplyHeader(reply[0]!), {
+    correlation: 7n,
+    terminalResult: 106,
+    failureCode: 18,
+    tail: Buffer.alloc(0)
+  });
+  runtime.close();
 });
 
 test('liveness uses 5s/15s defaults, reuses outstanding probes, and fences old connections', () => {

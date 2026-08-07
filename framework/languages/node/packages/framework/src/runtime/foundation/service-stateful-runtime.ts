@@ -3014,7 +3014,7 @@ export class ServiceStatefulRuntime {
     payloadFrame: Buffer,
     stateful: ServiceStatefulMailboxData
   ): RawServicePumpResult {
-    return this.raw.mailbox.tryEnqueue({
+    const accepted = this.raw.mailbox.tryEnqueue({
       owner,
       domain,
       parts: [ingress.parts[0]!, payloadFrame],
@@ -3024,9 +3024,17 @@ export class ServiceStatefulRuntime {
       ...(ingress.requestSequence === undefined ? {} : { requestSequence: ingress.requestSequence }),
       ...(stateful.correlation === undefined ? {} : { correlation: stateful.correlation }),
       stateful
-    })
-      ? domain
-      : 'protocolError';
+    });
+    if (accepted) return domain;
+    if (stateful.reply !== undefined) {
+      const result = failure(createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.WorkerQueueFull,
+        `Mailbox owner '${owner}' exhausted its bounded admission capacity.`
+      ));
+      stateful.reply(result.terminalResult, result.failureCode);
+      return 'infrastructure';
+    }
+    return 'protocolError';
   }
 
   private enqueueLogicalMulticast(

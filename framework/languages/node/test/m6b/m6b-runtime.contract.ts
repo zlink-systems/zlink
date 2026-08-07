@@ -1415,6 +1415,55 @@ test('general Actor messages resolve the current incarnation while exact control
   runtime.close();
 });
 
+test('remote Actor request receives CapacityExceeded when mailbox admission fails', () => {
+  let ingress:
+    ((record: import('../../packages/framework/src/runtime/foundation/raw-service-mesh-runtime')
+      .RawServiceIngressRecord) => unknown) | undefined;
+  const replies: Buffer[][] = [];
+  const raw = {
+    mailbox: { tryEnqueue: () => false },
+    topology: {
+      peer: () => ({ descriptor: { lifecycleGeneration: 7n } })
+    },
+    setServiceIngress(handler: typeof ingress) {
+      ingress = handler;
+    },
+    replyService(_record: unknown, parts: readonly Buffer[]) {
+      replies.push([...parts]);
+    }
+  } as unknown as RawServiceMeshRuntime;
+  const runtime = new ServiceStatefulRuntime(raw, 'node-a', 3n);
+  const actor = runtime.createActor('actor-capacity');
+  const payload = encodeApplicationPayload({
+    packetName: 'Blocked',
+    contentType: 'application/octet-stream',
+    payload: Buffer.from('payload')
+  });
+
+  assert.equal(ingress?.({
+    command: M6bServiceWireCommand.actorRequest,
+    flags: 0,
+    sourceRoutingId: 'caller',
+    sourceRoute: Buffer.from('reply-route'),
+    requestSequence: 17n,
+    parts: [
+      encodeActorHeader('actorRequest', {
+        actor: actor.ref,
+        targetNodeGeneration: 3n,
+        authorityOwnerGeneration: actor.authorityOwnerGeneration
+      }, 91n),
+      payload
+    ]
+  }), 'infrastructure');
+  assert.equal(replies.length, 1);
+  assert.deepEqual(decodeStatefulReply(replies[0]![0]!, 91n, 'actorRequest'), {
+    correlation: 91n,
+    terminalResult: RequestResult.Rejected,
+    failureCode: 18
+  });
+  runtime.close();
+});
+
 test('a new Instance incarnation outranks a reset authority owner generation', () => {
   const raw = {
     topology: { peer: () => undefined },

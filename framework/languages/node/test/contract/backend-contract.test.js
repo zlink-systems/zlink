@@ -698,6 +698,73 @@ test('backend mesh dispatch pump drains ready work queued before an async handle
   }
 });
 
+test('backend mesh dispatch pump does not claim unrelated owners behind a slow handler', async () => {
+  let readyHandler;
+  const owners = ['slow-owner', 'fast-owner'];
+  let releaseSlow;
+  const slowReleased = new Promise((resolve) => { releaseSlow = resolve; });
+  let fastDispatched;
+  const fastCompleted = new Promise((resolve) => { fastDispatched = resolve; });
+  const node = {
+    setReadyHandler(handler) { readyHandler = handler; },
+    createReadyBatch(capacity) {
+      assert.equal(capacity, 1);
+      return {
+        records: [],
+        claims: [],
+        reset() {
+          this.records.length = 0;
+          this.claims.length = 0;
+        },
+        takeClaim(index) { return this.claims[index]; },
+        close() {}
+      };
+    },
+    createReceiveBatch() {
+      return { reset() {}, close() {} };
+    },
+    drainReady(_domain, batch) {
+      const owner = owners.shift();
+      if (owner === undefined) return { ok: true, hasResidue: false, records: [] };
+      let received = false;
+      batch.records.push({ ownerKind: framework.ReadyOwnerKind.Spot, owner });
+      batch.claims.push({
+        recvBatch() {
+          if (received) return { ok: false, records: [] };
+          received = true;
+          return { ok: true, records: [{ parts: [], owner }] };
+        },
+        release() {}
+      });
+      return { ok: true, hasResidue: owners.length > 0, records: batch.records };
+    }
+  };
+  const pump = new backend.ZLinkMeshDispatchPump(node, {
+    async dispatch(_owner, record) {
+      if (record.owner === 'slow-owner') {
+        await slowReleased;
+      } else {
+        fastDispatched();
+      }
+    }
+  });
+
+  try {
+    pump.start();
+    readyHandler(framework.ReadyDomain.Application);
+    await Promise.race([
+      fastCompleted,
+      new Promise((_, reject) => setTimeout(
+        () => reject(new Error('Unrelated owner remained blocked behind the slow handler.')),
+        1_000
+      ))
+    ]);
+  } finally {
+    releaseSlow();
+    await pump.dispose();
+  }
+});
+
 test('backend mesh record dispatcher routes node, spot, actor, and infrastructure records', async () => {
   const routed = [];
   const dispatcher = new backend.ZLinkMeshRecordDispatcher({

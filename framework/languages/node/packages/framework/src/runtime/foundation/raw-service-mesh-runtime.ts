@@ -99,6 +99,8 @@ const MONITOR_CONNECTION_READY_EDGE = 1;
 // Framework error code 13 (RequestTargetNotFound) is encoded as 14 on a
 // RequestResult.NotFound reply. Boundary transport results keep failureCode 0.
 const REQUEST_TARGET_NOT_FOUND_FAILURE_CODE = 14;
+// Framework error code 17 (WorkerQueueFull) uses the wire offset convention.
+const WORKER_QUEUE_FULL_FAILURE_CODE = 18;
 const MAX_COMPLETION_CONTROL_BYTES = 64 * 1024;
 const COMPLETION_CONTROL_COMMANDS = new Set<number>([
   M6aServiceWireCommand.hello,
@@ -808,6 +810,21 @@ export class RawServiceMeshRuntime {
         this.onInboundMessageDropped?.('node', 'send', 'backpressure');
       } else if (header.command === M6aServiceWireCommand.channelSend) {
         this.onInboundMessageDropped?.('channel', 'send', 'backpressure');
+      }
+      if (correlation !== undefined && received.requestSeq !== undefined) {
+        this.replyService({
+          sourceRoutingId: received.sourceRid,
+          sourceRoute: received.sourceRoute,
+          requestSequence: received.requestSeq,
+          ...(received.reply === undefined ? {} : { reply: received.reply })
+        }, [
+          encodeReplyHeader(
+            correlation,
+            RequestResult.Rejected,
+            WORKER_QUEUE_FULL_FAILURE_CODE
+          )
+        ]);
+        return 'infrastructure';
       }
       return 'protocolError';
     } catch (error) {
