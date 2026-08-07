@@ -99,6 +99,7 @@ Gap 하나 또는 서로 강하게 연결된 작은 작업 묶음의 동작과 �
 ### CPP-DISP-001 — executor 포화 → `std::terminate`
 mesh 디스패치 스레드는 throwing `submit`으로 애플리케이션 작업을 넘기는데, `offload_executor_t::submit`은 내부 큐(4096) 포화 시 `std::runtime_error`를 던진다. 둘러싼 `catch (...)`는 정리 후 재던지고, pump 스레드 람다에는 try/catch가 없어 `std::thread` 본체를 탈출한 예외가 `std::terminate`를 호출한다. 서로 다른 owner의 in-flight 디스패치가 4096개를 넘는 순간 재현 가능하다. 스펙 03 §6은 "한도 초과를 조용히(또는 파괴적으로) 처리하지 말고 관찰 가능한 거부 결과를 내라"고 결정했다.
 - 증거: `cpp/src/runtime/mesh/mesh_node_host_service.cpp:2706, 2804-2812, 2574-2836`, `cpp/src/runtime/dispatch/offload_executor.cpp:50-55`
+- 구현 checkpoint `1cd08afc2d`: MeshNode pump와 local send가 throwing `submit`을 호출하지 않는다. Queue가 포화되면 원격 Request에는 `CapacityExceeded` envelope를 즉시 reply하고, local send에는 `backpressured`를 반환한다. Admission accounting과 mailbox claim도 같은 분기에서 terminal 처리한다. Executor saturation 회귀, `test_cpp_framework_target_contract`, `test_cpp_framework_host_lifecycle`는 통과했다. `test_cpp_framework_execution` 전체 binary는 새 saturation 회귀를 통과한 뒤 기존 idle-eviction 검사에서 exit 53으로 실패하므로, 실제 pump 포화 process E2E와 함께 이 gate의 별도 복구가 남아 있다.
 
 ### CPP-DISP-002 — 노드 전체 head-of-line 블로킹
 admitted 피어의 애플리케이션 레코드가 대상 owner의 mailbox 예산(1024건/64 MiB)에 들어가지 못하면 레코드를 `_pending_received` 단일 슬롯에 보관하고 `backpressured`를 반환하는데, 이 보관 레코드가 소진될 때까지 `pump_one`은 **노드 전체의 신규 애플리케이션 수신을 중단**한다. 결과적으로 (1) 포화된 Spot을 향한 원격 Request가 `Unavailable`/`CapacityExceeded`로 즉시 실패하지 않고 호출자 타임아웃까지 대기하고, (2) 느린 Spot 하나가 노드의 다른 모든 Spot 인바운드를 막는다. 스펙 03 §5는 Request 계열 즉시 실패를 요구하고, 수신 정지는 프로세스 전역 pending-byte HWM에만 허용한다.
@@ -176,7 +177,7 @@ admitted 피어의 애플리케이션 레코드가 대상 owner의 mailbox 예�
 | ID | 분류 | 요약 |
 |---|---|---|
 | CPP-DISP-002 | GAP·상 | §2 참조 — HOL 블로킹 + Request 즉시 실패 미구현 |
-| CPP-DISP-001 | GAP·상 | §2 참조 — executor 포화 `std::terminate` |
+| CPP-DISP-001 | GAP·검증 중 | §2 참조 — source와 owner-layer saturation 회귀는 수정됐고 실제 pump 포화 process E2E가 남아 있음 |
 | CPP-DISP-003 | PARTIAL·중 | 미admit 피어 보류 큐 포화 시 이미 수신한 메시지를 trace 한 줄만 남기고 폐기 — Request가 조용히 소실되어 송신자는 타임아웃까지 대기. 핸드셰이크 경합 창에 한정되나 관찰 결과가 trace뿐. 증거: `cpp/src/runtime/mesh/raw_mesh_node_owner.cpp:2226-2253` |
 | CPP-DISP-004 | PARTIAL·하 | logical multicast가 완료 후 publish 결과를 `(void)`로 버리고 예외를 빈 catch로 삼킴 — "완료 이후 실패는 관찰로 남긴다"의 관찰이 이 경계엔 없음. 증거: `cpp/src/runtime/messaging/async_submit_runtime.cpp:710-723` |
 
