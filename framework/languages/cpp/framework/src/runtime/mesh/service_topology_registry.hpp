@@ -52,7 +52,6 @@ struct service_node_descriptor_t
     std::vector<service_channel_descriptor_t> channels;
     service_node_state_t state = service_node_state_t::preparing;
     std::string security_identity = "default";
-    std::uint32_t effective_max_message_bytes = 4u * 1024u * 1024u;
     std::int64_t application_version = 0;
     std::vector<std::string> protocol_capabilities{"framework-service-v11"};
     service_object_role_t object_role = service_object_role_t::none;

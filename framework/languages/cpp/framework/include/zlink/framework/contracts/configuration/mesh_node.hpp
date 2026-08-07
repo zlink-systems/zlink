@@ -148,7 +148,6 @@ class mesh_channel_server_builder_t
 
 struct mesh_node_socket_config_t
 {
-    std::int64_t max_message_size = 16 * 1024 * 1024;
     zlink::byte_count_t send_high_water_mark =
       zlink::byte_count_t::bytes (4'096'000);
     zlink::byte_count_t receive_high_water_mark =

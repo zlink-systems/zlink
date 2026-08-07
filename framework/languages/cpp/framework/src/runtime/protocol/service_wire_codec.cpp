@@ -3774,7 +3774,6 @@ std::vector<std::uint8_t> encode_route_mesh_admission (
     std::vector<std::uint8_t> route;
     append_text8 (route, descriptor.mesh_name, "mesh name");
     append_text8 (route, descriptor.security_identity, "security identity");
-    append_u32 (route, descriptor.effective_max_message_bytes);
     append_u64 (route, descriptor.lifecycle_generation);
     append_u64 (route, descriptor.descriptor_revision);
     append_text16 (route, descriptor.advertised_endpoint,
@@ -3864,7 +3863,6 @@ mesh::service_node_descriptor_t decode_route_mesh_admission (
     result.mesh_name = read_text8 (bytes, offset, "mesh name");
     result.security_identity =
       read_text8 (bytes, offset, "security identity");
-    result.effective_max_message_bytes = read_u32 (bytes, offset);
     result.lifecycle_generation = read_u64 (bytes, offset);
     result.descriptor_revision = read_u64 (bytes, offset);
     result.advertised_endpoint =

@@ -98,6 +98,8 @@ int main ()
       read_file (root / "framework/src/runtime/streams/stream_host_service.cpp");
     const auto call_hpp =
       read_file (include_root / "zlink/framework/contracts/channels/call.hpp");
+    const auto mesh_node_hpp = read_file (
+      include_root / "zlink/framework/contracts/configuration/mesh_node.hpp");
     const auto stream_runtime =
       read_file (root / "framework/src/runtime/streams/stream_runtime.cpp");
     const auto serial_execution_queue = read_file (
@@ -149,6 +151,8 @@ int main ()
       read_file (root / "framework/src/runtime/fanout/raw_fanout_owner.cpp");
     const auto raw_mesh_node_owner =
       read_file (root / "framework/src/runtime/mesh/raw_mesh_node_owner.cpp");
+    const auto service_topology_registry = read_file (
+      root / "framework/src/runtime/mesh/service_topology_registry.hpp");
     const auto service_wire_codec =
       read_file (root / "framework/src/runtime/protocol/service_wire_codec.cpp");
     const auto service_wire_codec_header =
@@ -775,6 +779,16 @@ int main ()
         gate.require (!tree_contains (include_root, forbidden), "CPP-OWN-005",
                       "raw business handler surface is still public: " + forbidden);
     }
+
+    /* CPP-WIRE-002 — RouteMesh SS has no framework message-size contract. */
+    gate.require (mesh_node_hpp.find ("max_message_size") == std::string::npos,
+                  "CPP-WIRE-002",
+                  "MeshNode socket config still exposes max_message_size");
+    gate.require (
+      service_topology_registry.find ("effective_max_message_bytes")
+        == std::string::npos,
+      "CPP-WIRE-002",
+      "RouteMesh topology still negotiates a framework message-size limit");
 
     /* CPP-G0-STREAM-001 — typed session handler surface. */
     gate.require (tree_contains (include_root, "typed_session_packet_handler"),

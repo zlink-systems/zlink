@@ -253,6 +253,11 @@ template <typename T> concept has_raw_metrics = requires (T value)
     value.metrics ();
 };
 
+template <typename T> concept has_max_message_size_member = requires (T value)
+{
+    value.max_message_size;
+};
+
 static_assert (has_yield<zlink::framework::request_call_t<int>>);
 
 template <typename T> concept has_framework_use_discovery = requires (T value)
@@ -1085,6 +1090,7 @@ static_assert (
 
 static_assert (!has_raw_monitoring<zlink::framework::app_t>);
 static_assert (!has_raw_metrics<zlink::framework::app_t>);
+static_assert (!has_max_message_size_member<zlink::framework::mesh_node_socket_config_t>);
 static_assert (!has_native_code<zlink::framework::stream_error_t>);
 static_assert (!has_create_scope<zlink::framework::service_provider_t>);
 
@@ -1980,11 +1986,6 @@ int main ()
         || capability_snapshot.max_message_size->bytes () != 16 * 1024 * 1024) {
         return 6;
     }
-    if (zlink::framework::mesh_node_socket_config_t{}.max_message_size
-        != 16 * 1024 * 1024) {
-        return 7;
-    }
-
     return 0;
 }
 

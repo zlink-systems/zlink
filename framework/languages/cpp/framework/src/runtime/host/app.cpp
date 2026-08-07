@@ -1326,13 +1326,6 @@ app_t &app_t::add_zlink_framework (std::function<void (zlink_framework_options_t
       !options.application_hwm_bytes ()
       || *options.application_hwm_bytes () > 0;
     if (application_hwm_is_bounded) {
-        for (const auto &registration : mesh_node_registrations) {
-            if (registration && registration->socket.max_message_size <= 0) {
-                throw framework_exception_t (
-                  framework_error_kind_t::not_configured,
-                  "MeshNode MaxMessageSize must be positive when Application HWM is Auto or positive");
-            }
-        }
         const auto validate_listener =
           [] (const channel_capability_snapshot_t &capability,
               std::string_view capability_name) {

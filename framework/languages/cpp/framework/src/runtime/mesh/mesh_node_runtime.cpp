@@ -438,10 +438,6 @@ void mesh_node_runtime_t::start ()
             .advertised_endpoint = _state->listen_endpoint,
             .channels = std::move (channels),
             .state = runtime::mesh::service_node_state_t::preparing,
-            .effective_max_message_bytes =
-              _state->socket.max_message_size > 0
-                ? static_cast<std::uint32_t> (_state->socket.max_message_size)
-                : 4u * 1024u * 1024u,
             .object_role =
               _state->object_role == object_role_t::client
                 ? runtime::mesh::service_object_role_t::client

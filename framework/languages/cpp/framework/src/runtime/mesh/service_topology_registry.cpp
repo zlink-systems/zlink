@@ -84,8 +84,6 @@ bool immutable_fields_match (
             && current.advertised_endpoint
                  != incoming.advertised_endpoint)
         || current.security_identity != incoming.security_identity
-        || current.effective_max_message_bytes
-             != incoming.effective_max_message_bytes
         || current.application_version
              != incoming.application_version
         || current.protocol_capabilities
@@ -148,7 +146,6 @@ bool service_topology_registry_t::valid_descriptor (
            && !descriptor.advertised_endpoint.empty ()
            && valid_channels (descriptor.channels)
            && !descriptor.security_identity.empty ()
-           && descriptor.effective_max_message_bytes != 0
            && descriptor.application_version >= 0
            && descriptor.placement_weight >= 0
            && descriptor.placement_weight <= 10000
