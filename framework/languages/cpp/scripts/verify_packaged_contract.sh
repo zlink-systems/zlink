@@ -19,20 +19,34 @@ mkdir -p "$PREFIX" "$CONSUMER_SRC" "$CONSUMER_BUILD"
 
 echo "packaged-contract run dir: $RUN_DIR"
 
+fail() {
+    echo "verify_packaged_contract: $1" >&2
+    exit 1
+}
+
 # A package consumer must not discover dependencies through the repository
 # source tree or an ambient global installation.  Reuse only the dependency
 # prefix that configured this build; it is part of the package provenance.
 dependency_prefix_path="$(sed -n 's/^CMAKE_PREFIX_PATH:[^=]*=//p' "$BUILD_DIR/CMakeCache.txt" | head -n 1)"
+if [[ -z "$dependency_prefix_path" ]]; then
+    vcpkg_installed_dir="$(sed -n 's/^VCPKG_INSTALLED_DIR:[^=]*=//p' "$BUILD_DIR/CMakeCache.txt" | head -n 1)"
+    vcpkg_target_triplet="$(sed -n 's/^VCPKG_TARGET_TRIPLET:[^=]*=//p' "$BUILD_DIR/CMakeCache.txt" | head -n 1)"
+    if [[ -n "$vcpkg_installed_dir" && -n "$vcpkg_target_triplet" ]]; then
+        dependency_prefix_path="$vcpkg_installed_dir/$vcpkg_target_triplet"
+    fi
+fi
+[[ -n "$dependency_prefix_path" ]] \
+  || fail "configured dependency prefix is missing from CMakeCache.txt"
+IFS=';' read -r -a dependency_prefixes <<< "$dependency_prefix_path"
+for dependency_prefix in "${dependency_prefixes[@]}"; do
+    [[ -d "$dependency_prefix" ]] \
+      || fail "configured dependency prefix does not exist: $dependency_prefix"
+done
 
 for component in Framework StreamConnector FrameworkDependency; do
     cmake --install "$BUILD_DIR" --component "$component" --prefix "$PREFIX" \
       > "$RUN_DIR/install-$component.log"
 done
-
-fail() {
-    echo "verify_packaged_contract: $1" >&2
-    exit 1
-}
 
 # --- manifest: required targets/headers/libraries -------------------------
 required_paths=(
@@ -80,7 +94,11 @@ for forbidden in \
     include/zlink/framework/contracts/dispatch/cancellation.hpp; do
     [[ -e "$PREFIX/$forbidden" ]] && fail "removed contract header is still installed: $forbidden"
 done
-for forbidden_token in cancellation_token_t dispatch_mode_t spot_handle_t spot_handle_resolver_t; do
+for forbidden_token in \
+    cancellation_token_t dispatch_mode_t spot_handle_t spot_handle_resolver_t \
+    message_flow_event_t message_dispatch_error_event_t message_flow_observer_t \
+    set_message_flow_observer trace_log_file trace_label message_flow_live \
+    send_raw raw_handler_t payload_view_t; do
     grep -rq "$forbidden_token" "$PREFIX/include/zlink/framework" \
       && fail "installed framework headers still expose $forbidden_token"
 done
@@ -109,6 +127,18 @@ EOF
 cat > "$CONSUMER_SRC/main.cpp" <<'EOF'
 #include <zlink/framework.hpp>
 #include <zlink/stream_connector.hpp>
+
+#include <chrono>
+
+using zlink::framework::message_flow_log_mode_t;
+
+static_assert (static_cast<int> (message_flow_log_mode_t::off) == 0);
+static_assert (static_cast<int> (message_flow_log_mode_t::errors) == 1);
+static_assert (static_cast<int> (message_flow_log_mode_t::normal) == 2);
+static_assert (static_cast<int> (message_flow_log_mode_t::detailed) == 3);
+static_assert (requires (zlink::framework::stream_send_call_t &call) {
+    call.timeout (std::chrono::milliseconds{1});
+});
 
 int main ()
 {

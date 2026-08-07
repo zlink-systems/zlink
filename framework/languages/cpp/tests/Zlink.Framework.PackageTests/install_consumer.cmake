@@ -166,6 +166,15 @@ struct login_request_t
   static constexpr const char *packet_name = "LoginRequest";
 };
 
+template <typename T>
+concept exposes_http_snapshot = requires (T &builder) { builder.snapshot (); };
+
+template <typename T>
+concept exposes_http_validation = requires (T &builder) { builder.validate (); };
+
+static_assert (!exposes_http_snapshot<zlink::framework::http_options_builder_t>);
+static_assert (!exposes_http_validation<zlink::framework::http_options_builder_t>);
+
 void
 to_json (nlohmann::json &json, const login_request_t &)
 {
