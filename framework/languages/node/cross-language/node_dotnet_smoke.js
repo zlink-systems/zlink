@@ -315,8 +315,8 @@ async function dotnetClientToNodeChannelServer(tempDir) {
   const eventFile = path.join(tempDir, 'dotnet-client-node-channel.events');
   class TestHostProfileRequestHandler {
     async handle(payload) {
-      const value = payload?.Value ?? payload?.value;
-      return { Value: `${value}|node` };
+      const value = payload?.value;
+      return { value: `${value}|node` };
     }
   }
   Injectable()(TestHostProfileRequestHandler);
@@ -373,7 +373,7 @@ async function nodeRouteClientToDotnetRouteServer(tempDir) {
           .listen('inproc://cross-route-node-client')
           .routingId('node-route-client');
         mesh.channel('cross.route').server();
-        mesh.peerConnections().connect(endpoint);
+        mesh.peerConnections().connect(rid('dotnet-route'), endpoint);
         return builder.build();
       }
     })]
@@ -386,6 +386,12 @@ async function nodeRouteClientToDotnetRouteServer(tempDir) {
     ]);
     await host.ready;
     app = await NestFactory.createApplicationContext(RouteClientModule, { logger: false, abortOnError: false });
+    const routeMeshRuntime = app.get(nestjs.ZLINK_ROUTE_MESH_RUNTIME, { strict: false });
+    await waitForCondition(
+      () => routeMeshRuntime.snapshot('cross.route').readyPeerCount > 0,
+      7000,
+      'Node RouteMesh cross.route peer readiness'
+    );
     const client = app.get(nestjs.ZLINK_ROUTE_CLIENT, { strict: false });
     const reply = await client.requestToNode('cross.route', 'dotnet-route', new TestHostRouteRequest('node-route-to-dotnet'))
       .timeout(5000).submit();
@@ -404,8 +410,8 @@ async function dotnetRouteClientToNodeRouteServer(tempDir) {
   const eventFile = path.join(tempDir, 'dotnet-route-node-route.events');
   class TestHostRouteRequestHandler {
     async handle(payload) {
-      const value = payload?.Value ?? payload?.value;
-      return { Value: `${value}|node` };
+      const value = payload?.value;
+      return { value: `${value}|node` };
     }
   }
   Injectable()(TestHostRouteRequestHandler);

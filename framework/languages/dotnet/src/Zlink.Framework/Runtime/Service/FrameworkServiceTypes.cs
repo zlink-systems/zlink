@@ -3,6 +3,11 @@ using Systems.Zlink.Framework.Runtime.Protocol;
 
 namespace Zlink.Framework.Runtime.Service;
 
+internal static class ZLinkServiceSecurityIdentity
+{
+    internal const string Plaintext = "default";
+}
+
 internal enum MeshNodeState { Created = 1, Started, PartialReady, Ready, Draining, Stopped, Error }
 internal enum MeshPeerSource { Manual = 1, Discovery, Mixed }
 internal enum MeshPeerState
@@ -620,7 +625,7 @@ internal interface IMeshNode : IDisposable, IAsyncDisposable
     ulong ConnectPeer(
         string endpoint,
         RoutingId? expectedRid = null,
-        string expectedSecurityIdentity = "none");
+        string expectedSecurityIdentity = ZLinkServiceSecurityIdentity.Plaintext);
     void SetPeerExpectation(
         RoutingId peerRid,
         string endpoint,

@@ -77,6 +77,6 @@ public sealed class ZLinkMeshPeerAdmissionTests
             intent,
             endpoint,
             expectedRid,
-            "none",
+            ZLinkServiceSecurityIdentity.Plaintext,
             ZLinkServiceConnectionDirection.Outbound);
 }

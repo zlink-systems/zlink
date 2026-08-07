@@ -25,7 +25,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private const long MaxCompletionControlBytes = 256 * 1024;
     private const long MaxCompletionPayloadBytes = 4_294_966_774L;
     private const long DefaultPendingCompletionByteBudget = 16L * 1024 * 1024;
-    private const string DefaultInboundSecurityIdentity = "none";
     private static readonly TimeSpan DefaultInboundOperationShutdownTimeout =
         TimeSpan.FromSeconds(2);
     private static readonly TimeSpan DefaultRemoteUserSpotTerminalRetention =
@@ -321,7 +320,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     public ulong ConnectPeer(
         string endpoint,
         RoutingId? expectedRid = null,
-        string expectedSecurityIdentity = "none")
+        string expectedSecurityIdentity = ZLinkServiceSecurityIdentity.Plaintext)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(endpoint);
         ArgumentException.ThrowIfNullOrWhiteSpace(expectedSecurityIdentity);
@@ -6484,7 +6483,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                            sourceRid,
                            out var expectedInbound)
                            ? expectedInbound.SecurityIdentity
-                           : DefaultInboundSecurityIdentity,
+                           : ZLinkServiceSecurityIdentity.Plaintext,
                        ZLinkServiceConnectionDirection.Inbound,
                        checked(++_nextPeerConnectionGeneration));
             if (peer.ExpectedRid is { } expected && expected != sourceRid)
@@ -6510,7 +6509,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     // the binding exposes no authenticated TLS peer identity
                     // for this socket, so a non-plaintext expectation cannot
                     // be admitted by trusting the descriptor field.
-                    DefaultInboundSecurityIdentity,
+                    ZLinkServiceSecurityIdentity.Plaintext,
                     hasExpectedRoute
                         ? expectedRoute.LifecycleGeneration
                         : 0,
@@ -8335,7 +8334,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             channels,
             (byte)_objectRole,
             runtimeState,
-            DefaultInboundSecurityIdentity);
+            ZLinkServiceSecurityIdentity.Plaintext);
         ZLinkFrameworkDebugLog.SpotDiscovery(
             $"mesh_peer_admission_sent local={_routingId} target={peer.RoutingId} "
             + $"command={command} endpoint={_advertisedEndpoint} "

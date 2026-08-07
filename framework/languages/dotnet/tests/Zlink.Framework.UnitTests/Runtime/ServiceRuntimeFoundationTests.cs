@@ -314,7 +314,7 @@ public sealed class ServiceRuntimeFoundationTests
 
         var lifecycleOffset = 10
             + 1 + "orders"u8.Length
-            + 1 + "none"u8.Length;
+            + 1 + ZLinkServiceSecurityIdentity.Plaintext.Length;
         Assert.Equal(
             17UL,
             BinaryPrimitives.ReadUInt64BigEndian(encoded.AsSpan(lifecycleOffset)));
@@ -332,7 +332,7 @@ public sealed class ServiceRuntimeFoundationTests
         Assert.Equal(23UL, admission.DescriptorRevision);
         Assert.Equal(0U, admission.Channels["admin"]);
         Assert.Equal(75U, admission.Channels["worker"]);
-        Assert.Equal("none", admission.SecurityIdentity);
+        Assert.Equal(ZLinkServiceSecurityIdentity.Plaintext, admission.SecurityIdentity);
         Assert.Equal(1, admission.RuntimeState);
         Assert.Equal(0, admission.ApplicationVersion);
         Assert.Equal(0, admission.ObjectRole);
@@ -466,8 +466,8 @@ public sealed class ServiceRuntimeFoundationTests
             17,
             24,
             channels);
-        var securityOffset = FindSequence(immutableMutationBytes, "none"u8);
-        "evil"u8.CopyTo(immutableMutationBytes.AsSpan(securityOffset));
+        var securityOffset = FindSequence(immutableMutationBytes, "default"u8);
+        "changed"u8.CopyTo(immutableMutationBytes.AsSpan(securityOffset));
         var immutableMutation = DecodeAdmission(immutableMutationBytes);
         Assert.Equal(
             ZLinkServiceAdmissionDecision.Reject,
@@ -477,12 +477,12 @@ public sealed class ServiceRuntimeFoundationTests
                 immutableMutation));
         Assert.True(ZLinkServiceAdmissionGuard.MatchesExpectedRoute(
             "tcp://127.0.0.1:7070",
-            "none",
+            ZLinkServiceSecurityIdentity.Plaintext,
             current.LifecycleGeneration,
             current));
         Assert.False(ZLinkServiceAdmissionGuard.MatchesExpectedRoute(
             "tcp://127.0.0.1:7071",
-            "none",
+            ZLinkServiceSecurityIdentity.Plaintext,
             current.LifecycleGeneration,
             current));
         Assert.False(ZLinkServiceAdmissionGuard.MatchesExpectedRoute(
@@ -492,19 +492,19 @@ public sealed class ServiceRuntimeFoundationTests
             current));
         Assert.False(ZLinkServiceAdmissionGuard.MatchesExpectedRoute(
             "tcp://127.0.0.1:7070",
-            "none",
+            ZLinkServiceSecurityIdentity.Plaintext,
             current.LifecycleGeneration + 1,
             current));
         Assert.True(ZLinkServiceAdmissionGuard.MatchesExpectedTransportRoute(
             "tcp://127.0.0.1:7070",
-            "none",
-            "none",
+            ZLinkServiceSecurityIdentity.Plaintext,
+            ZLinkServiceSecurityIdentity.Plaintext,
             current.LifecycleGeneration,
             current));
         Assert.False(ZLinkServiceAdmissionGuard.MatchesExpectedTransportRoute(
             "tcp://127.0.0.1:7070",
             "tls:configured",
-            "none",
+            ZLinkServiceSecurityIdentity.Plaintext,
             current.LifecycleGeneration,
             current with { SecurityIdentity = "tls:configured" }));
 
@@ -789,7 +789,9 @@ public sealed class ServiceRuntimeFoundationTests
         target.SetPeerExpectation(
             sourceRid,
             mismatchEndpoint ? $"inproc://unexpected-{suffix}" : sourceEndpoint,
-            mismatchSecurityIdentity ? "tls:unexpected" : "none",
+            mismatchSecurityIdentity
+                ? "tls:unexpected"
+                : ZLinkServiceSecurityIdentity.Plaintext,
             mismatchLifecycleGeneration
                 ? sourceLifecycleGeneration == ulong.MaxValue
                     ? sourceLifecycleGeneration - 1
@@ -1200,7 +1202,10 @@ public sealed class ServiceRuntimeFoundationTests
                 remote.Start();
                 remoteEndpoint = remote.Status().LocalEndpoint;
 
-                localBackend.ConnectPeer(remoteRid, remoteEndpoint, "none");
+                localBackend.ConnectPeer(
+                    remoteRid,
+                    remoteEndpoint,
+                    ZLinkServiceSecurityIdentity.Plaintext);
 
                 var expectedRid = remoteRid;
                 await WaitUntilAsync(() =>

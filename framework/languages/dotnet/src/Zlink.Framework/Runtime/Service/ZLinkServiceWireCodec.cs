@@ -1477,7 +1477,7 @@ internal static partial class ZLinkServiceWireCodec
         //  것으로 둔다. 기본값 serving을 유지해야 golden fixture가 바이트
         //  동일하게 남는다.
         byte runtimeState = 1,
-        string securityIdentity = "none")
+        string securityIdentity = ZLinkServiceSecurityIdentity.Plaintext)
     {
         if (command is not (ServiceWireConstants.Command.Hello
             or ServiceWireConstants.Command.Admit
