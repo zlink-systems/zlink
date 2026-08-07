@@ -75,7 +75,7 @@ Gap 하나 또는 서로 강하게 연결된 작은 작업 묶음의 동작과 �
 | DOTNET-COMP-002 | 중 | completion ordering | 완료 — sender가 응답 상관 값을 먼저 할당하고 waiter 등록 뒤 submit한다 |
 | DOTNET-LAYER-001 | 중 | binding 경계·POSDDD | 완료 — 일반 socket은 binding public API를 직접 쓰고 의미 변환 adapter만 유지한다 |
 | DOTNET-LAYER-002 | 상 | runtime/package ownership | 완료 — lifecycle state machine과 resource close 순서를 Core package가 소유한다 |
-| DOTNET-LAYER-003 | 중 | identifier type | mesh·channel·Actor·Spot ID를 내부 경계에서도 모두 `string`으로 섞어 쓴다 |
+| DOTNET-LAYER-003 | 중 | identifier type | 완료 — runtime state와 registry key가 식별자별 value type을 사용한다 |
 | DOTNET-LAYER-004 | 중 | STREAM protocol ownership | client connector와 Framework server가 같은 STREAM codec·pending·lifecycle stack을 별도로 구현한다 |
 | DOTNET-OWN-001 | 중 | payload ownership/copy | 이미 소유한 managed payload를 public copying factory에 다시 통과시켜 full-buffer copy를 추가한다 |
 | SPEC-TIMER-001 | 보류 | timer relocation contract | language spec은 non-catch-up 값을 검증하지 않지만 canonical schema는 `nonzero-u64`만 허용해 정본끼리 충돌한다 |
@@ -518,11 +518,31 @@ restore artifact를 준비한 뒤 ResilienceLifecycle `RL-B4`를
 
 ### DOTNET-LAYER-003 — 수명이 다른 식별자를 내부에서도 `string`으로 혼용
 
+**판정: 완료**
+
 Internals는 mesh 이름, node RID, channel 이름, object ID처럼 범위와 수명이 다른 식별자를 각각 전용 타입으로 두고 문자열 변환은 경계에서 한 번만 하도록 정한다(`common/internals/01-layering.ko.md:317-359`). Public exact API가 application 편의를 위해 `string`을 받는 것과 runtime 내부 표현까지 문자열이어야 한다는 것은 다른 문제다.
 
 현재 node RID만 `RoutingId`로 감싸고, Actor runtime의 `ActorId`는 `string`이며 mesh 이름도 record에서 `string`이다(`Runtime/Actors/ZLinkActorRuntimeState.cs:48,1783-1803`). Spot activation은 `ChannelName`, `MeshName`, `SpotId`를 모두 `string`으로 노출한다(`Runtime/Spots/ZLinkSpotActivation.cs:140-142,223`). ClientServer와 Spot registry도 `Dictionary<string,...>`로 서로 다른 식별자 공간을 표현한다(`Runtime/Channels/ZLinkClientServerClientRuntime.cs:16-17`, `Runtime/Spots/ZLinkSpotNodeCatalog.cs:57-64`). 이는 단순 style 선호가 아니라 문서가 구체적으로 금지한 내부 모델이며 잘못된 ID 교차 대입을 compile time에 막지 못한다.
 
 완료 조건은 public/binding/store 경계에서 한 번 validation·변환하고 runtime key와 method parameter에는 `MeshName`, `ChannelName`, `ActorId`, `SpotId` 등 구분된 value type을 사용하는 것이다. 동일 문자열 값이 서로 다른 identifier domain에 있어도 섞이지 않는 compile/runtime test가 필요하다.
+
+`ZLinkMeshName`, `ZLinkChannelName`, `ZLinkActorId`를 runtime 전용 value type으로 추가했고, Spot ID
+validation helper는 같은 기능을 유지하는 `ZLinkSpotId` value type으로 바꿨다. Actor runtime state와 session
+binding record, ClientServer client runtime, Spot activation은 문자열을 경계에서 변환한 뒤 전용 타입으로
+보관한다. Actor session registry와 Spot catalog의 active·pending·closing key도 각각 `ZLinkActorId`와
+`ZLinkSpotId`를 사용한다. ClientServer의 기존 `_connections` key는 channel ID가 아니라
+`manual/local/auto` connection identity였으므로 channel ID로 잘못 분류하지 않았고, 별도의
+`ZLinkChannelName` field로 channel domain을 고정했다.
+
+네 value type 사이에는 implicit·explicit conversion이 없으며, 같은 문자열을 Actor ID와 Spot ID로
+만들어도 서로 다른 dictionary key type으로만 사용할 수 있음을 `RuntimeIdentifierTests` 3건이 확인한다.
+전체 unit suite 반복 실행에서는 변경 관련 실패가 없었지만 기존 timing-sensitive test가 실행마다 한 건씩
+실패했다. 각 실패 test는 단독 재실행에서 통과했다. Packaged contract와 standalone HTTP clean consumer가
+통과했고 public API snapshot hash는
+`c1987f4b98e4fac7a30b7d038a56ee0d20e1272d00e79bdc88d3271e3c3ab958`로 유지되었다. 실제 process는
+SpotActorTransfer `ST-A1`과 `ST-F1`을
+`SpotActorTransfer/logs/20260807-220338-1275818/`에서 통과해 same-node join과 cross-node handoff 뒤에도
+Actor·Spot·mesh route가 유지됨을 확인했다. 구현 checkpoint는 `95c96217f9`로 `main`에 push했다.
 
 ### DOTNET-LAYER-004 — STREAM client와 server가 같은 protocol stack을 중복 구현
 
