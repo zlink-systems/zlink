@@ -291,8 +291,8 @@ mesh_channel_server_builder_t::add_handler (bool request, std::string packet_nam
           const route_message_context_t &context) -> task_t<zlink::message_t> {
           try {
               auto &owner = services.get_required<THandler> ();
-              auto payload = serializers.get<TMessage> ().deserialize (
-                detail::encoded_payload_from_raw (message));
+              auto payload = detail::deserialize_typed_payload<TMessage> (
+                serializers, message, context.content_type.value_or (""));
               if constexpr (requires {
                                 static_cast<void (THandler::*) (
                                   const TMessage &, const route_message_context_t &)> (
@@ -349,8 +349,8 @@ mesh_channel_server_builder_t::add_handler (bool request, std::string packet_nam
           const route_message_context_t &context) -> task_t<zlink::message_t> {
           try {
               auto &owner = services.get_required<THandler> ();
-              auto payload = serializers.get<TRequest> ().deserialize (
-                detail::encoded_payload_from_raw (message));
+              auto payload = detail::deserialize_typed_payload<TRequest> (
+                serializers, message, context.content_type.value_or (""));
               if constexpr (requires {
                                 static_cast<TReply (THandler::*) (
                                   const TRequest &, const route_message_context_t &)> (

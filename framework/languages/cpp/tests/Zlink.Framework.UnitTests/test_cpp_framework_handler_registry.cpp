@@ -319,7 +319,8 @@ template <typename T> void add_int_serializer (zlink::framework::serializer_regi
       },
       [] (const zlink::framework::encoded_payload_t &payload) {
           return T{std::stoi (payload.to_string ())};
-      });
+      },
+      "application/json");
 }
 
 zlink::framework::task_t<reply_t> delayed_reply_task (int value)
@@ -678,6 +679,20 @@ int main ()
         || last_failure_kind
              != zlink::framework::framework_error_kind_t::not_found) {
         return 14;
+    }
+
+    zlink::framework::detail::inbound_message_context_t mismatched_codec;
+    mismatched_codec.message.content_type = "application/avro";
+    provider.get_required<handler_t> ().last_command = 0;
+    const auto mismatched_result = handlers.invoke (
+      "game", "command", "command", provider, serializers,
+      zlink::message_t::from (std::string ("91")), mismatched_codec);
+    if (mismatched_result
+        || mismatched_result.error_kind ()
+             != zlink::framework::framework_error_kind_t::protocol_error
+        || provider.get_required<handler_t> ().last_command != 0
+        || failure_events != 6) {
+        return 15;
     }
 
     zlink::framework::handler_registry_t default_handlers;

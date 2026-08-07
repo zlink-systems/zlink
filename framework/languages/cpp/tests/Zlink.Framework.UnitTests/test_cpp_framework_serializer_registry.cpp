@@ -73,7 +73,9 @@ int main ()
         return 1;
     }
     if (serializers.content_type (std::type_index (typeid (payload_t)))
-        != "application/octet-stream") {
+          != "application/octet-stream"
+        || serializers.get<payload_t> ().content_type ()
+             != "application/octet-stream") {
         return 10;
     }
 
@@ -88,7 +90,9 @@ int main ()
         return 3;
     }
     if (serializers.content_type (std::type_index (typeid (json_payload_t)))
-        != "application/json") {
+          != "application/json"
+        || serializers.get<json_payload_t> ().content_type ()
+             != "application/json") {
         return 11;
     }
 
@@ -175,6 +179,10 @@ int main ()
     const auto custom_encoded = config_serializers.get<payload_t> ().serialize ({9});
     if (custom_encoded.to_string () != "avro:9") {
         return 8;
+    }
+    if (config_serializers.get<payload_t> ().content_type ()
+        != "application/avro") {
+        return 16;
     }
     if (config_serializers.get<payload_t> ().deserialize (custom_encoded).value != 9) {
         return 9;

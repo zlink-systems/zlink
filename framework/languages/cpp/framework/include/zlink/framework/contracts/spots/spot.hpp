@@ -1556,9 +1556,9 @@ class spot_handler_registry_t
             void *spot, void *, service_provider_t &, serializer_registry_t &serializers,
             const zlink::message_t &message, const spot_inbound_message_t &metadata) {
               auto &typed_spot = *static_cast<spot_type *> (spot);
-              auto payload =
-                std::make_shared<message_type> (serializers.get<message_type> ().deserialize (
-                  detail::encoded_payload_from_raw (message)));
+              auto payload = std::make_shared<message_type> (
+                detail::deserialize_typed_payload<message_type> (
+                  serializers, message, metadata.content_type));
               if constexpr (traits::arg_count == 2) {
                   auto context = std::make_shared<message_context_t> (
                     metadata.to_message_context (registered_packet_name));
@@ -1598,9 +1598,9 @@ class spot_handler_registry_t
             void *spot, void *, service_provider_t &, serializer_registry_t &serializers,
             const zlink::message_t &message, const spot_inbound_message_t &metadata) {
               auto &typed_spot = *static_cast<spot_type *> (spot);
-              auto payload =
-                std::make_shared<event_type> (serializers.get<event_type> ().deserialize (
-                  detail::encoded_payload_from_raw (message)));
+              auto payload = std::make_shared<event_type> (
+                detail::deserialize_typed_payload<event_type> (
+                  serializers, message, metadata.content_type));
               if constexpr (traits::arg_count == 2) {
                   auto context = std::make_shared<publish_message_context_t> (
                     metadata.to_publish_context (registered_packet_name, registered_topic));
@@ -1784,9 +1784,9 @@ class spot_handler_registry_t
             const zlink::message_t &message, const spot_inbound_message_t &metadata) {
               auto &typed_spot = *static_cast<spot_type *> (spot);
               auto &typed_actor = *static_cast<actor_type *> (actor);
-              auto payload =
-                std::make_shared<message_type> (serializers.get<message_type> ().deserialize (
-                  detail::encoded_payload_from_raw (message)));
+              auto payload = std::make_shared<message_type> (
+                detail::deserialize_typed_payload<message_type> (
+                  serializers, message, metadata.content_type));
               auto context = std::make_shared<message_context_t> (
                 metadata.to_message_context (registered_packet_name));
               return detail::invoke_spot_member_keepalive (

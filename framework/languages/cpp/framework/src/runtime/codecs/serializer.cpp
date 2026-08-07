@@ -119,7 +119,8 @@ serializer_registry_t::erased_serializer (std::type_index type) const
     if (found == _state->serializers.end ())
         return std::nullopt;
     return erased_serializer_t{
-      found->second.serialize, found->second.deserialize};
+      found->second.serialize, found->second.deserialize,
+      found->second.content_type};
 }
 
 encoded_payload_t serializer_registry_t::serialize (std::type_index type, const void *value) const

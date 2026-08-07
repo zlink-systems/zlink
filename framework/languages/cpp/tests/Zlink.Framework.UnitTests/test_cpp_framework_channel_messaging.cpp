@@ -696,7 +696,8 @@ template <typename T> void add_int_serializer (zlink::framework::serializer_regi
       },
       [] (const zlink::framework::encoded_payload_t &payload) {
           return T{std::stoi (payload.to_string ())};
-      });
+      },
+      "application/json");
 }
 
 std::string unique_inproc_endpoint (const char *base)
