@@ -8,10 +8,13 @@ title: ".NET Framework server 스펙 구현 Gap 리포트"
 - **공개 계약 기준**: 현재 worktree의 `framework/doc/framework/common/spec/`와 .NET exact interface
 - **내부 구조 기준**: 현재 worktree의 `framework/doc/framework/common/internals/` 01–12
 - **메시지 크기 계약 보정**: 2026-08-07 사용자 확인에 따라 RouteMesh ServerServer에는 Framework message-size 상한이 없다. 별도의 기본 64 KiB·startup 설정 계약은 외부 Client가 StreamNode의 Core STREAM socket으로 보내는 C→S complete message에만 적용한다. ClientServer Channel은 기존 negotiated complete-message 계약을 유지한다.
-- **구현 기준**: 전체 audit 기준은 `425b9c2a8272`, 복구·머지 뒤 증분 재검토 기준은 현재 `main` commit `e2119caeda`다. 이 commit의 .NET production 변경 중 RouteMesh message-size, ClientServer와 Actor 경로를 다시 대조했으며 기존 gap을 종결할 변경은 확인하지 못했다.
+- **구현 기준**: 전체 audit 기준은 `425b9c2a8272`, 종결 구현 checkpoint는 `3f02183cb1`이다. 중간 checkpoint와 검증 증거는 각 상세 항목에 기록한다.
 - **판정 방법**: exact public declaration, production 호출 경로, 오류·수명주기·동시성·HWM 의미, service wire codec과 실제 test assertion을 차례로 대조했다. Type이나 method가 존재하는지만으로 완료 판정하지 않았다. 2차 검토는 `gpt-5.6-sol` high 독립 reviewer가 기존 판정을 반증하고 누락을 찾은 뒤, 지적된 경로를 현재 source에서 다시 확인했다.
 
-현재 `.NET Framework server` 구현은 지정된 스펙을 모두 만족하지 않는다. Public exact interface 3개 영역과 runtime·구조·비용 의미 15개 영역에서 구현 gap을 확인했다. 별도로 timer option은 language exact interface와 canonical wire schema가 서로 충돌하므로 구현 gap으로 확정하지 않고 contract 정본 정리가 필요한 보류 항목으로 분리했다. 특히 현재 worktree에서 추가된 object-location query는 contract test가 실제 누락을 검출했다. 일부 gap에는 스펙보다 약한 assertion이 있고, 나머지는 해당 의미 경계를 직접 검증하는 test가 없다.
+최초 audit에서 확인한 `.NET Framework server` 구현 gap은 모두 종결했다. Public exact interface와
+runtime·구조·비용 의미를 구현하고 각 상세 항목에 owner-layer regression, package와 관련 process 증거를
+기록했다. Timer option은 공통 spec의 normalization 규칙을 재확인해 language exact interface와 canonical
+wire schema가 충돌하지 않는 것으로 판정을 바로잡고 세 policy의 canonical round-trip test를 추가했다.
 
 Public API와 사용자에게 보이는 동작은 정식 spec과 exact interface만 계약 근거로 사용한다. 구조·POSDDD
 gap은 그 계약을 구현하는 internals의 상태 표현, component 책임이나 불변 조건과 다르다는 판정이며,
@@ -78,7 +81,7 @@ Gap 하나 또는 서로 강하게 연결된 작은 작업 묶음의 동작과 �
 | DOTNET-LAYER-003 | 중 | identifier type | 완료 — runtime state와 registry key가 식별자별 value type을 사용한다 |
 | DOTNET-LAYER-004 | 중 | STREAM protocol ownership | 완료 — connector protocol 구현을 client와 Framework server가 함께 사용한다 |
 | DOTNET-OWN-001 | 중 | payload ownership/copy | 완료 — public defensive copy는 유지하고 runtime-owned payload는 내부 ownership 이전 경로를 사용한다 |
-| SPEC-TIMER-001 | 보류 | timer relocation contract | language spec은 non-catch-up 값을 검증하지 않지만 canonical schema는 `nonzero-u64`만 허용해 정본끼리 충돌한다 |
+| SPEC-TIMER-001 | 중 | timer relocation contract | 완료 — non-catch-up의 무시되는 값은 canonical 기본값으로 normalize하고 bounded 값은 보존한다 |
 
 ## 2. 상세 발견 사항
 
@@ -198,6 +201,8 @@ standalone HTTP clean consumer가 통과했으며 public API snapshot hash는
 
 ### DOTNET-SIZE-001 — RouteMesh ServerServer에 없어야 할 16 MiB 상한이 있음
 
+**판정: 완료**
+
 확인된 계약은 RouteMesh ServerServer transport에 Framework-level `MaxMessageSize`를 두지 않는 것이다. 공통 channel spec도 이 결정을 그대로 적고 있다(`common/spec/07-channel-topology.ko.md:609-634`). Transport·service-wire 표현 한계와 process memory/HWM은 남지만 별도 complete-message 크기 설정이나 그 이유의 거절은 없어야 한다.
 
 실제 .NET은 `IZLinkMeshNodeSocketConfig.MaxMessageSize`를 public surface로 노출한다(`Contracts/Configuration/MeshNodeBuilders.cs:23-41`). RouteMesh router registration은 일반 `ZLinkSocketConfig`를 사용해 기본 16 MiB를 받고(`Runtime/Configuration/ZLinkFrameworkRegistration.cs:497-513`, `Runtime/Configuration/ZLinkSocketConfigs.cs:6-21`), initializer가 이를 managed MeshNode에 적용한다(`Runtime/Spots/ZLinkSpotNodeInitializer.cs:28-45`). Managed node는 native router receive option에 이 값을 설정할 뿐 아니라(`Runtime/Service/ZLinkManagedMeshNode.cs:248-258`) peer와 작은 값을 골라 모든 send 전에 complete-message 합계를 검사한다(`:8048-8079,8132-8144`). Unit test도 RouteMesh 기본값을 16 MiB로 고정한다(`UnitTests/Configuration/Registration/InboundDispatchOptionsTests.cs:197-217`).
@@ -228,6 +233,8 @@ multi-provider Channel routing 실패는 SIZE-001에서 제거한 message-size �
 
 ### DOTNET-WIRE-002 — ClientServer negotiated complete-message 상한 미강제
 
+**판정: 완료**
+
 스펙은 sender가 local/remote `normalizedEffectiveMaxMessageBytes`의 작은 값을 admitted connection lifetime 동안 고정해 submit 전에 적용하도록 정한다(`common/internals/12-service-wire-protocol.ko.md:99-110`). ClientServer admission은 이 값을 보존하고 update가 바꾸지 못하게 막는다(`Runtime/Channels/ZLinkClientServerClientRuntime.cs:1454-1493`). 그러나 실제 send는 선택한 socket에 parts를 그대로 넘기고(`:136-151`), request도 같은 방식으로 `ZLinkRawRequestSubmitter`에 넘긴다(`:154-190`). Connection의 `_normalizedEffectiveMaxMessageBytes`는 hello/admit 검증에만 쓰이고 application submit 크기 검사에는 쓰이지 않는다. Server reply도 `Socket.Reply(...)`를 직접 호출한다(`:1511-1523`).
 
 조사 당시 RouteMesh에는 반대로 complete-message 합계 검사가 있었지만 SIZE-001에서 제거했다. ClientServer에는
@@ -252,6 +259,8 @@ application retry 없이 각각 1초 안에 완료되는 것을 확인하고 통
 
 ### DOTNET-COMP-001 — completion retention 전체 포화 시 caller terminal 유실
 
+**판정: 완료**
+
 Internals는 early completion 보관 자리가 가득 차면 source runtime 소유 자원 부족을 caller가 `CapacityExceeded`로 관찰해야 하며, 응답을 버리고 timeout으로 바꾸는 것을 명시적으로 금지한다(`common/internals/04-completion.ko.md:110-127`). 현재 구현은 early payload store와 failure tombstone store 두 단계를 두지만, 둘 다 가득 차면 `OverflowCount`와 metric만 증가시키고 parts를 dispose한다(`Runtime/Backend/DotNet/ZLinkMeshCompletionTable.cs:135-177`). 이후 같은 operation을 등록하면 overflow 사실을 찾을 표식이 없으므로 `_pending`에 들어가 timeout까지 기다린다(`:73-103`).
 
 현재 test도 caller terminal을 확인하지 않는다. `CompletionTable_OverflowBeyondRetentionIsObservable`은 세 번째 완료 뒤 `OverflowCount == 1`만 주장한다(`UnitTests/Runtime/ServiceRuntimeFoundationTests.cs:1639-1651`). 이는 스펙의 “caller가 관찰 가능한 결과”보다 약한 assertion이다. Bounded 구조를 유지하되 등록 전 overflow operation이 나중에 반드시 `CapacityExceeded`로 끝나는 소유 구조가 필요하다.
@@ -275,6 +284,8 @@ standalone HTTP clean consumer는 통과했고 public API snapshot hash는
 
 ### DOTNET-EXEC-001 — STREAM session execution queue가 payload byte를 세지 않음
 
+**판정: 완료**
+
 Internals는 실행 owner의 각 lane이 count와 byte를 모두 예약하고 payload 외에 작업당 고정 비용도 포함하도록 정한다(`common/internals/08-object-lifecycle.ko.md:219-268`). `ZLinkSerialExecutionQueue.TryPostAccepted`는 Spot ingress에서 `payloadLength + 256`을 올바르게 예약한다(`Runtime/Execution/ZLinkSerialExecutionQueue.cs:293-378`).
 
 반면 STREAM session은 application packet의 header/payload를 closure로 capture한 뒤 payload 길이 없이 `EnqueueApplication`을 호출한다(`Runtime/Streams/ZLinkStreamSessionRuntime.cs:249-274`). Executor는 이를 payload-aware overload가 아닌 `TryPostApplicationWithAdmission`으로 넘기고(`Runtime/Streams/ZLinkStreamSessionSerialExecutor.cs:79-83`), queue는 항상 고정 256 byte만 예약한다(`Runtime/Execution/ZLinkSerialExecutionQueue.cs:179-207`). 새 session을 만드는 node-level ingress도 header/payload/lease를 capture하면서 같은 고정비 전용 executor에 넣는다(`Runtime/Streams/ZLinkStreamNodeRuntime.cs:663-742`). Host-wide inbound HWM lease가 payload를 세더라도 session execution queue의 독립 byte 한도를 대신하지 못한다. 큰 packet이 한 session 또는 session-creation ingress에 몰리면 64 MiB lane 상한이 아니라 4,096건 count 한도가 먼저 적용될 수 있다.
@@ -295,6 +306,8 @@ Byte exact-boundary, active work 중 byte 포화, completion 뒤 재수락과 ST
 `logs/20260807-191555-1965910/`에서 통과했다. 이 checkpoint는 `fdca4650c2`로 `main`에 push했다.
 
 ### DOTNET-EXEC-002 — 직렬 실행 engine이 공통 기관 하나로 수렴하지 않음
+
+**판정: 완료**
 
 Internals는 Spot, session과 Actor 전달의 순서·수락·준비 집합을 다루는 실행 engine을 하나만 두고, 자리별 차이는 별도 engine이 아니라 유효 상태만 표현하는 lane policy type으로 모델링하도록 정한다(`common/internals/09-session-binding.ko.md:33-59`). 확인 기준에도 “직렬 실행 원시 타입이 runtime 안에서 하나”라고 명시한다(`:115-124`).
 
@@ -432,6 +445,8 @@ generation이 유지되었다. 실행 log는 `SpotService/logs/20260807-202813-1
 `c797108cce`로 `main`에 push했다.
 
 ### DOTNET-COMP-002 — submit 뒤 waiter 등록 구조 유지
+
+**판정: 완료**
 
 Internals는 응답 상관 값을 sender가 먼저 만들고 waiter를 등록한 다음 submit하도록 정한다. Submit이 operation ID를 출력하면 same-process 응답이 등록보다 먼저 도착해 early-result table이 필요해지므로 이 구조 자체를 제거 대상으로 명시한다(`common/internals/04-completion.ko.md:60-105`).
 
@@ -593,13 +608,25 @@ RegistrationCodec `RC-B1`~`RC-B4`를 `RegistrationCodec/logs/20260807-223341-301
 Protobuf, MessagePack과 codec coexistence 경로를 확인했다. 구현 checkpoint는 `07ab6afcce`로 `main`에
 push했다.
 
-### SPEC-TIMER-001 — non-catch-up timer option 계약 충돌로 판정 보류
+### SPEC-TIMER-001 — non-catch-up timer option canonical normalization
+
+**판정: 완료**
 
 Exact interface는 `MaxCatchUpTicks`를 `CatchUpBounded`에서만 사용하고 `1..Int32.MaxValue`로 검증하며, 다른 overrun policy에서는 이 범위로 검증하지 않는다고 정한다. 또한 relocation은 `ZLinkTimerOptions`를 자동으로 포함한다(`interfaces/05-spots.ko.md:499-509`). 등록 경로는 실제로 `CatchUpBounded`일 때만 양수를 검사하므로 이 부분은 맞다(`Runtime/Spots/ZLinkSpotTimerRegistry.cs:333-352`).
 
-하지만 canonical relocation writer는 policy와 무관하게 `Math.Max(1, timer.Options.MaxCatchUpTicks)`를 기록한다(`Runtime/Spots/ZLinkCanonicalSpotRelocationWriter.cs:128-132`). `SkipLateTicks`나 `DelayNextTick`에 0 또는 음수를 준 timer는 등록에는 성공하지만 재배치하면 값이 1로 바뀐다. Canonical decoder도 policy와 무관하게 0을 거부한다(`Runtime/Spots/ZLinkSpotTimerRelocationCodec.cs:118-131`). 같은 파일의 legacy decoder가 `CatchUpBounded`에서만 검증하는 동작(`:73-82`)과도 불일치한다.
+Canonical relocation writer는 policy와 무관하게 `Math.Max(1, timer.Options.MaxCatchUpTicks)`를 기록하고
+decoder는 0을 거부한다(`Runtime/Spots/ZLinkCanonicalSpotRelocationWriter.cs:128-132`,
+`Runtime/Spots/ZLinkSpotTimerRelocationCodec.cs:118-131`). 최초 판정에서는 이를 exact interface와의 충돌로
+보았지만, 공통 정식 spec은 non-catch-up policy에서 동작에 영향을 주지 않는 값을 relocation encoding이
+유효한 기본값으로 normalize할 수 있다고 명시한다(`common/spec/05-async-execution-policy.ko.md:461-463`).
+따라서 canonical schema의 `nonzero-u64`와 현재 writer·decoder는 이 normalization 계약에 맞는다.
 
-그러나 canonical service-wire schema 자체가 `maxCatchUpTicks`를 `nonzero-u64`로 정의한다(`framework/runtime/protocol/service-wire-v1.schema.json:3897`). 따라서 현재 구현은 language exact 의미와는 어긋나지만 canonical wire에는 맞으며, 구현만 고쳐서는 두 정본을 동시에 만족할 수 없다. 이 항목을 확정 implementation gap 수에 넣지 않는다. 쟁점은 non-catch-up에서 사용하지 않는 값을 relocation이 그대로 보존해야 하는지 canonical 값으로 정규화해도 되는지다. Contract가 이를 하나로 정한 뒤 구현과 세 policy round-trip test를 맞춰야 한다.
+Canonical encode, transport decode와 timer restore를 잇는 theory test를 추가했다. `SkipLateTicks(0)`과
+`DelayNextTick(-3)`은 `1`로 normalize되고 `CatchUpBounded(7)`은 `7`로 보존되며 policy 자체는 세 경우 모두
+유지된다. Focused 3건과 Framework 전체 1,593건이 통과했다. Service-wire decoder fixture validator와
+contract test 76건도 통과했다. 실제 process는 timer overrun 동작을 SpotService
+`logs/20260807-224140-3373181/`의 `sm-e4`에서 확인했다. Regression checkpoint는 `3f02183cb1`로 `main`에
+push했다.
 
 ## 3. 반증 검토와 제외한 후보
 
@@ -622,26 +649,21 @@ Exact interface는 `MaxCatchUpTicks`를 `CatchUpBounded`에서만 사용하고 `
 
 이 항목들은 source와 표시한 unit assertion 범위에서 해당 결정과 일치한다는 판정이다. 실제 multi-process E2E 전체 통과나 package/clean-consumer 종결을 뜻하지 않는다.
 
-## 5. 검증 결과와 남은 gate
+## 5. 종결 검증 결과
 
 | 검증 | 결과 | 해석 |
 |---|---|---|
-| service wire schema validator self-test | 통과: 41 commands, 234 negative self-tests | schema/golden asset 유효성만 확인. .NET JSON consumer parity는 확인하지 않음 |
-| `.NET` contract test | 실패: 74 passed, 2 failed | object-location exact interface export 누락을 직접 검출 |
-| Sol High 독립 반증 리뷰 | 기존 14건 유지, 2건 추가, timer 1건 보류 유지 | `gpt-5.6-sol` high가 기존 판정을 제거할 반례 없이 ROLE-001과 EXEC-003 누락을 검출. 이후 사용자 확정 S→S 계약으로 SIZE-001, StreamNode fluent API 계약으로 API-003을 추가했고 main reviewer가 현재 source에서 재확인 |
-| internals 집중 unit test | build 실패 | 현재 worktree의 `EndpointConnectionsTests.cs:5`가 존재하지 않는 `NativeRuntimeCollection`을 참조해 test 실행 전 `CS0103` 발생 |
-| packaged-contract/clean consumer | 미실행 | exact-interface gate가 먼저 실패했으므로 package 일치가 semantic gap을 바꾸지 않음 |
-| process E2E | 미실행 | 정적·unit 경계에서 확정한 위 gap을 닫은 뒤 별도 실행 필요 |
+| service wire decoder fixture validator | 통과: canonical 2, malformed 6, framework error 26, malformed error 3 | 현재 canonical schema와 generated decoder fixture가 일치한다 |
+| `.NET` contract test | 통과: 76/76 | 최초에 검출한 object-location exact interface 누락을 포함해 현재 public contract가 통과한다 |
+| Framework 전체 unit test | 통과: 1,593/1,593 | timer canonical round-trip 3건을 포함한 종결 시점 전체 suite다 |
+| packaged-contract/clean consumer | 통과 | standalone HTTP consumer가 새 package를 사용했고 public API snapshot hash는 `c1987f4b98e4fac7a30b7d038a56ee0d20e1272d00e79bdc88d3271e3c3ab958`다 |
+| 관련 process E2E | 통과 | 각 gap의 상세 항목에 실행 log를 기록했다. 마지막 timer gate는 SpotService `logs/20260807-224140-3373181/`의 `sm-e4`다 |
 
-Contract test와 unit test를 동시에 build했을 때 shared output assembly copy retry warning도 발생했다. 최종 재검증은 build output을 분리하거나 serial로 실행해야 한다. 이 warning은 위 구현 gap의 근거로 사용하지 않았다.
+이 표는 `.NET` gap 종결 gate를 구분해 기록한다. 저장소 전체 언어의 aggregate contract와 전체 process
+suite를 실행했다는 뜻으로 확대하지 않는다.
 
-## 6. 권장 수정 순서
+## 6. 구현 순서
 
-1. Public exact interface gap 세 건과 Server-only ClientServer role error를 source, fixed API snapshot과 clean consumer까지 맞춘다.
-2. RouteMesh SS public `MaxMessageSize`, admission field, native receive cap과 sender check를 제거하고 API snapshot·wire fixture로 회귀를 고정한다. ClientServer의 기존 negotiated complete-message bound는 send/request/reply submit 전에 강제한다.
-3. `framework-json-v1` golden fixture를 실제 .NET decode path에 연결하고 strict profile을 구현한다. STREAM per-session byte reservation을 production admission 경로에서 강제한다. Entry Actor ingress의 unbounded Channel/task chain을 bounded lane으로 바꾸고 직렬 실행 기관을 공통 engine과 lane policy로 수렴한다.
-4. Correlation ID를 register-before-submit 구조로 옮긴 뒤 completion early store를 제거한다. 전환 중에는 전체 overflow에서도 caller `CapacityExceeded`를 보장한다.
-5. Ready Instance owner loss의 `IS-E2E-05`와 `IS-E2E-35`를 추가해 현재 `KnownUnavailable` source 의미가 실제 process에서도 새 activation이나 queue recovery 없이 유지되는지 검증한다. Timer option 정본 충돌을 먼저 해소하고 그 결정대로 relocation round-trip을 맞춘다. Maintenance runtime은 core package로 옮긴다.
-6. Identifier value type 전환, STREAM shared protocol package와 payload owned-memory 경로를 적용하고 compile-time misuse test, 공통 golden test 및 allocation benchmark를 남긴다.
-7. 의미 없는 socket backend wrapper를 걷어내고 남는 semantic adapter의 POSD/DDD 책임과 성능 근거를 기록한다.
-8. Contract, full unit, packaged contract, clean consumer와 실제 process E2E를 각각 실행한다. 한 gate의 성공으로 다른 gate를 대체하지 않는다.
+위 순서의 public contract, wire·size, completion·execution, lifecycle, layer ownership과 payload ownership
+checkpoint를 모두 구현했다. 마지막으로 timer normalization을 정식 공통 spec에 맞춰 회귀 test로 고정한 뒤
+contract, full unit, package, clean consumer와 관련 process E2E를 각각 확인했다.
