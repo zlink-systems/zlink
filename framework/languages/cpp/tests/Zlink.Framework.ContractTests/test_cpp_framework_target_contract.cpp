@@ -1715,6 +1715,22 @@ int main ()
       "CPP-DISP-005",
       "local application enqueue does not signal the MeshNode activity poll");
 
+    /* CPP-DISP-004 — dequeue remains the public completion boundary, while
+     * every later publisher failure reaches either the Spot structured
+     * observer or the executor fallback observation. */
+    gate.require (
+      async_submit_runtime.find (
+        "job.completion->complete (result_t<void>::success ())")
+          != std::string::npos
+        && async_submit_runtime.find (
+             "observe_logical_multicast_post_completion_failure")
+             != std::string::npos
+        && spot_runtime.find (
+             "detail::report_logical_multicast_failure")
+             != std::string::npos,
+      "CPP-DISP-004",
+      "logical multicast failures after dequeue are not observable");
+
     /* CPP-ROUTE-002 — the direct-store fallback uses the same owner
      * admission deadline as the shared location resolver and never extends
      * it while converting store time to a steady-clock cache deadline. */

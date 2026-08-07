@@ -884,6 +884,20 @@ int main ()
         if (!duplicate_multicast_rejected || multicast_calls.load () != 1) {
             return 80;
         }
+        const auto failures_before =
+          msg::multicast_post_completion_failure_count_for_tests ();
+        zlink::framework::publish_call_t failed_after_completion (
+          [] (const zlink::framework::publish_call_t::metadata_map_t &) {
+              return zlink::framework::result_t<void>::failure (
+                zlink::framework::framework_error_kind_t::capacity_exceeded,
+                "logical multicast observation probe");
+          });
+        failed_after_completion.submit ().result ().value ();
+        msg::wait_for_idle_multicast_executor_for_tests ();
+        if (msg::multicast_post_completion_failure_count_for_tests ()
+            != failures_before + 1) {
+            return 81;
+        }
         /* Logical Multicast uses direct worker handoff. Saturation must not
          * retain an unbounded queue of publish payloads.
          *

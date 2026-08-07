@@ -1003,6 +1003,43 @@ bool verify_idle_instance_spot_eviction_closes_local_context ()
 
 int main ()
 {
+    {
+        auto state = std::make_shared<
+          zlink::framework::detail::spot_node_builder_state_t> (
+          "logical-multicast-observation");
+        std::atomic_bool observed{false};
+        state->dispatch.set_message_flow_observer (
+          [&] (const zlink::framework::message_flow_event_t &event) {
+              if (event.outcome
+                    == zlink::framework::message_flow_outcome_t::error
+                  && event.surface
+                    == zlink::framework::dispatch_error_surface_t::route_mesh_channel
+                  && event.message_kind
+                    == zlink::framework::dispatch_message_kind_t::publish
+                  && event.error_reason
+                    == zlink::framework::dispatch_error_reason_t::handler_exception
+                  && event.error_action
+                    == zlink::framework::dispatch_error_action_t::drop
+                  && event.packet_name
+                  && *event.packet_name == "PlayerMoved"
+                  && event.channel_name
+                  && *event.channel_name == "world"
+                  && event.topic && *event.topic == "players") {
+                  observed.store (true, std::memory_order_release);
+              }
+          });
+        const zlink::framework::framework_exception_t failure (
+          zlink::framework::framework_error_kind_t::capacity_exceeded,
+          "logical multicast source queue is full");
+        zlink::framework::detail::report_logical_multicast_failure (
+          state, "world", "players", "PlayerMoved", failure);
+        if (!wait_until ([&] {
+              return observed.load (std::memory_order_acquire);
+            })) {
+            return 90;
+        }
+    }
+
     zlink::framework::worker_options_t worker_options;
     if (worker_options.min_threads () > worker_options.max_threads ()
         || worker_options.max_threads () == 0

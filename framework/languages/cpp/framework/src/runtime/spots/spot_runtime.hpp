@@ -242,6 +242,13 @@ struct spot_create_call_state_t
 
 void drain_spot_node_executors (spot_node_builder_state_t &node);
 
+void report_logical_multicast_failure (
+  const std::shared_ptr<spot_node_builder_state_t> &state,
+  std::string_view channel_name,
+  std::string_view topic,
+  std::string_view packet_name,
+  const framework_exception_t &error) noexcept;
+
 /* actor_instance_index maintenance (caller holds the node mutex). A record
  * replaces any prior address for the same actor, so a re-registered actor
  * never leaves an older address that would resolve to the live actor. */
