@@ -197,6 +197,9 @@ void test_callback_dispatch_same_direction_reconnect_handover ()
     TEST_ASSERT_SUCCESS_ERRNO (zlink_set_routing_id (client, "C", 1));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (client, ZLINK_OPT_LINGER, &zero, sizeof zero));
     TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (client, ZLINK_OPT_RCVTIMEO, &probe_timeout,
+                        sizeof probe_timeout));
+    TEST_ASSERT_SUCCESS_ERRNO (
       zlink_set_option (client, ZLINK_OPT_RID_DUPLICATE_POLICY, &handover, sizeof handover));
     set_connect_routing_id (client, "S");
     TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (client, endpoint_one));
@@ -232,6 +235,15 @@ void test_callback_dispatch_same_direction_reconnect_handover ()
     }
     TEST_ASSERT_TRUE_MESSAGE (
       handed_over, "same-direction reconnect was not handed over to the new pipe");
+
+    //  A paired Application pipe may still be selected explicitly by its
+    //  transport-pair identity while the owner validates the replacement.
+    //  Preserve the displaced pipe as standby instead of terminating it at
+    //  routing-id handover time.
+    send_string_expect_success (server_one, "C", ZLINK_SNDMORE);
+    send_string_expect_success (server_one, "standby", 0);
+    TEST_ASSERT_GREATER_THAN_INT (0, zlink_recv (client, buffer, sizeof buffer, 0));
+    recv_string_expect_success (client, "standby", 0);
 
     test_context_socket_close_zero_linger (client);
     test_context_socket_close_zero_linger (server_two);
