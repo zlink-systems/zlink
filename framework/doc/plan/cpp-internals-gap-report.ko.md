@@ -8,7 +8,7 @@ title: "C++ Framework 계약·내부 구현 Gap 리포트"
 - **공개 계약 기준**: `framework/doc/framework/common/spec/`와 C++ exact interface의 현재 working tree
 - **내부 구조 기준**: `framework/doc/framework/common/internals/` 01–12의 현재 working tree
 - **의사결정 기준**: 승인된 DEC-01–DEC-17의 결과가 반영된 정식 spec
-- **구현 기준**: 전체 audit 기준은 `425b9c2a8272`다. 복구·머지 뒤 현재 `main` `e2119caeda`까지의 diff에서 C++ Framework production source 변경이 없음을 확인했으므로 기존 구현 판정을 유지한다.
+- **구현 기준**: 전체 audit 기준은 `425b9c2a8272`다. 이후 항목별 구현 checkpoint와 검증 결과는 각 행에 기록한다.
 - **방법**: 정식 spec과 C++ exact interface를 먼저 public contract 기준으로 삼고, 12개 internals 문서의 **Decision** / **Result To Confirm**을 구현 구조 기준으로 사용했다. 해당 C++ public header와 runtime 경로를 직접 읽어 SATISFIED / GAP / PARTIAL / 코드만으로 확인 불가로 분류했다. 언어별 재량은 public 동작이나 관찰 결과가 달라지는 경우에만 gap으로 계상했다.
 - **증거 경로 표기**: `common/` = `framework/doc/framework/common/`, `cpp/` = `framework/languages/cpp/framework/`, `core/` = `core/` 트리(프레임워크 외부).
 
@@ -208,7 +208,7 @@ admitted 피어의 애플리케이션 레코드가 대상 owner의 mailbox 예�
 | ID | 분류 | 요약 |
 |---|---|---|
 | CPP-TOPO-001 | GAP·상 | §2 참조 — 수동 피어 fence 미설치 |
-| CPP-ROUTE-001 | PARTIAL·상 | §2 이동 통지 → 캐시 갱신의 **resolver 캐시 매칭이 dead code**: 와이어 fence 타입에 `owner_id`가 없는데 매처가 `cached.owner.owner_id == expected.owner.owner_id`(빈 값 vs 항상 비어있지 않은 캐시 값)를 요구해 매치가 항상 실패 — `_spot_routes`/`_actor_routes`는 통지로 절대 무효화되지 않고 자연 만료까지 우회 지속. 매처 또는 두 호출 지점의 한 줄급 수정. 유닛 테스트 부재. 증거: `cpp/src/runtime/locations/store_location_resolvers.hpp:157-177, 237-256, 313-317`, `cpp/src/runtime/spots/spot_runtime.cpp:5304-5323`, `cpp/src/runtime/mesh/mesh_node_host_service.cpp:2219-2235` |
+| CPP-ROUTE-001 | PARTIAL·검증 중 | Wire fence가 제공하지 않는 `owner_id`는 빈 값일 때 비교하지 않고, 제공되는 node·object·authority owner generation과 owner lease generation은 계속 정확히 비교하도록 수정했다. Wire fence와 같은 입력으로 actor route cache가 무효화되고 다음 조회가 store를 다시 읽는 owner-layer 회귀 test도 추가했다. 구현 checkpoint `5e31808ad3`; `test_cpp_framework_store_location_resolvers` 33/33 통과. 실제 Message Follow notice가 spot·actor call site를 거쳐 cache를 무효화하는 process E2E가 남아 있어 아직 종결하지 않는다. |
 | CPP-ROUTE-002 | PARTIAL·하 | §1 수명 상한: public-host fence 캐시가 owner lease로 clamp되지 않고 flat `route_cache_max_age`로 저장 — owner 수락 기한을 넘겨 살아남은 fence가 대상에서 거부(불필요한 실패 hop 1회). 증거: `cpp/src/runtime/stateful/public_host_runtime.cpp:2281-2289` |
 
 만족 항목(요약): positive 캐시+전체 fence, 미존재/생성중/스토어 실패 비캐시, 수명 검증, follow 와이어 레코드, smooth WRR+tiebreak, 사전 계산 사이클, 직접 지정 대상 불변, publish 스냅샷 등은 충실.
