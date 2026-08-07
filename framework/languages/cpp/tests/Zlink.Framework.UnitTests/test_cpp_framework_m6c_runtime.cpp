@@ -3138,7 +3138,7 @@ void test_public_authority_store_adapter (test_context_t &test)
         && std::all_of (
           store.observed_keys.begin (), store.observed_keys.end (),
           [] (const auto &key) {
-              return key == "1:actor-public";
+              return key == "zla1:a:12:actor-public";
           }),
       "public authority adapter must pass exact target owner and capacity fence");
     const auto read =

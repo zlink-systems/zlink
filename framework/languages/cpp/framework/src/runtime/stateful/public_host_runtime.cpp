@@ -2,6 +2,7 @@
 
 #include "runtime/stateful/public_host_runtime.hpp"
 #include "runtime/locations/live_location_reader.hpp"
+#include "runtime/locations/authority_key_codec.hpp"
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/stateful/raw_stateful_dispatch.hpp"
 #include "runtime/locations/pending_creation_projection.hpp"
@@ -207,8 +208,8 @@ read_route_owner_fence (
         return std::nullopt;
     try {
         auto read = store->read_authority (
-          authority_key_t{
-            std::string (1, object_kind) + ":" + std::string (object_id)})
+          object_kind == '1' ? actor_authority_key (object_id)
+                             : spot_authority_key (object_id))
           .result ();
         if (!read)
             return std::nullopt;
@@ -1305,9 +1306,7 @@ bool public_host_runtime_t::evict_instance_spot (
         || instance_owner.lease_generation <= 0)
         return false;
 
-    const authority_key_t authority_key{
-      std::to_string (static_cast<int> (placement_object_kind_t::instance_spot))
-      + ":" + spot_id};
+    const auto authority_key = spot_authority_key (spot_id);
     const auto current = store->read_authority (authority_key).result ().value ();
     const auto *snapshot = std::get_if<authority_snapshot_t> (&current);
     if (!snapshot
@@ -1829,8 +1828,7 @@ std::size_t public_host_runtime_t::recover_instance_spot_activations ()
     do {
         const auto scanned = store
           ->list_authorities (
-            std::to_string (static_cast<int> (
-              placement_object_kind_t::instance_spot)) + ":",
+            "zla1:s:",
             cursor, 256)
           .result ().value ();
         const auto *page = std::get_if<authority_page_t> (&scanned);
@@ -3968,10 +3966,8 @@ std::size_t public_host_runtime_t::dispatch_user_spot_operations ()
                           static_cast<std::byte> (value));
                     const auto request_sha256 =
                       runtime::sha256 (recovery_public);
-                    const authority_key_t authority_key{
-                      std::to_string (static_cast<int> (
-                        placement_object_kind_t::instance_spot))
-                      + ":" + request.target.spot_id};
+                    const auto authority_key =
+                      spot_authority_key (request.target.spot_id);
                     const auto join_existing = [&] (
                       authority_read_result_t current) {
                         while (const auto *snapshot =
@@ -4483,11 +4479,7 @@ std::size_t public_host_runtime_t::dispatch_user_spot_operations ()
                     const auto read =
                       store
                         ->read_authority (
-                          {std::to_string (
-                             static_cast<int> (
-                               placement_object_kind_t::
-                                 user_spot))
-                           + ":" + global_id})
+                          spot_authority_key (global_id))
                         .result ()
                         .value ();
                     const auto *snapshot =
@@ -4942,11 +4934,7 @@ std::size_t public_host_runtime_t::dispatch_user_spot_operations ()
                 const auto read =
                   store
                     ->read_authority (
-                      {std::to_string (
-                         static_cast<int> (
-                           placement_object_kind_t::
-                             user_spot))
-                       + ":" + global_id})
+                      spot_authority_key (global_id))
                     .result ()
                     .value ();
                 const auto *snapshot =
@@ -5019,11 +5007,8 @@ std::size_t public_host_runtime_t::dispatch_user_spot_operations ()
                       false);
                     continue;
                 }
-                const authority_key_t authority_key{
-                  std::to_string (
-                    static_cast<int> (
-                      placement_object_kind_t::user_spot))
-                  + ":" + global_id};
+                const auto authority_key =
+                  spot_authority_key (global_id);
                 const auto sealed =
                   store
                     ->compare_exchange_authority (

@@ -4,6 +4,7 @@
 #include <zlink/framework/contracts/configuration/detail/framework_options_state.hpp>
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/locations/sha256.hpp"
+#include "runtime/locations/authority_key_codec.hpp"
 #include "runtime/messaging/async_submit_runtime.hpp"
 
 #include "runtime/channels/channel_runtime.hpp"
@@ -2410,9 +2411,8 @@ mesh_node_runtime_t::relay_application_actor (
             std::optional<authority_snapshot_t> target_snapshot;
             if (_user_spot_store) {
                 const auto authority = _user_spot_store
-                  ->read_authority (authority_key_t{
-                    "1:" + std::string (
-                      follow_target.actor.actor_id ().value ())})
+                  ->read_authority (runtime::actor_authority_key (
+                    follow_target.actor.actor_id ().value ()))
                   .result ();
                 if (authority) {
                     if (const auto *snapshot =
@@ -2498,9 +2498,8 @@ mesh_node_runtime_t::relay_application_actor (
               resolved->owner.lease_generation);
         } else if (_user_spot_store) {
             const auto authority = _user_spot_store
-              ->read_authority (
-                authority_key_t{
-                  "1:" + std::string (target_actor.actor_id ().value ())})
+              ->read_authority (runtime::actor_authority_key (
+                target_actor.actor_id ().value ()))
               .result ();
             if (authority) {
                 if (const auto *snapshot =

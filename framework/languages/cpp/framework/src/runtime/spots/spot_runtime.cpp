@@ -17,6 +17,7 @@
 #include "runtime/execution/actor_execution_context.hpp"
 #include "runtime/execution/serial_execution_queue.hpp"
 #include "runtime/locations/actor_authority_payload.hpp"
+#include "runtime/locations/authority_key_codec.hpp"
 #include "runtime/locations/live_location_reader.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/mesh/mesh_metadata_codec.hpp"
@@ -151,7 +152,7 @@ actor_type_from_authority (runtime::live_location_reader_t &store,
                            std::string_view actor_id)
 {
     const auto read = store
-      .read_authority (authority_key_t{"1:" + std::string (actor_id)})
+      .read_authority (runtime::actor_authority_key (actor_id))
       .result ();
     if (!read)
         return std::nullopt;

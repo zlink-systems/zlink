@@ -5,6 +5,7 @@
 #include "runtime/actors/actor_manager_access.hpp"
 #include "runtime/locations/sha256.hpp"
 #include "runtime/locations/actor_authority_payload.hpp"
+#include "runtime/locations/authority_key_codec.hpp"
 
 #include "runtime/channels/route_handler_registry.hpp"
 #include "runtime/channels/channel_reply_writer.hpp"
@@ -106,7 +107,7 @@ std::optional<std::vector<std::byte>> read_actor_creation_request (
     if (!store)
         return std::nullopt;
     const auto read = store
-      ->read_authority (authority_key_t{"1:" + request.actor_id})
+      ->read_authority (actor_authority_key (request.actor_id))
       .result ()
       .value ();
     const auto *snapshot = std::get_if<authority_snapshot_t> (&read);
@@ -1071,9 +1072,7 @@ mesh_node_host_service_t::find_actor (
             std::nullopt));
     const auto current =
       _location_store
-        ->read_authority (
-          authority_key_t{
-            "1:" + std::string (actor_id.value ())})
+        ->read_authority (actor_authority_key (actor_id.value ()))
         .result ()
         .value ();
     const auto *snapshot =
@@ -1106,7 +1105,7 @@ mesh_node_host_service_t::find_actor_spot (
           result_t<std::optional<spot_ref_t>>::success (
             std::nullopt));
     const auto read = _location_store
-      ->read_authority (authority_key_t{"1:" + std::string (actor_id.value ())})
+      ->read_authority (actor_authority_key (actor_id.value ()))
       .result ()
       .value ();
     const auto *snapshot = std::get_if<authority_snapshot_t> (&read);
@@ -1149,7 +1148,7 @@ result_t<void> mesh_node_host_service_t::finalize_local_actor_destroy (
 
     std::optional<authority_snapshot_t> removed_snapshot;
     if (_location_store) {
-        const authority_key_t key{"1:" + std::string (actor.actor_id ().value ())};
+        const auto key = actor_authority_key (actor.actor_id ().value ());
         const auto current = _location_store->read_authority (key).result ();
         if (!current) {
             return detail::propagate_failure<void> (
@@ -1232,8 +1231,7 @@ task_t<bool> mesh_node_host_service_t::destroy_actor (
               "Actor destroy requires a Location Store and an exact ActorRef"));
         }
 
-        const authority_key_t key{
-          "1:" + std::string (actor.actor_id ().value ())};
+        const auto key = actor_authority_key (actor.actor_id ().value ());
         const auto read = _location_store->read_authority (key).result ().value ();
         const auto *snapshot = std::get_if<authority_snapshot_t> (&read);
         if (!snapshot) {
@@ -1754,9 +1752,7 @@ mesh_node_host_service_t::find_user_spot (spot_id_t spot_id)
             framework_error_kind_t::not_configured,
             "Spot manager requires a Location Store"));
     const auto read = _location_store
-      ->read_authority (
-        authority_key_t{
-          "2:" + std::string (spot_id)})
+      ->read_authority (spot_authority_key (spot_id))
       .result ()
       .value ();
     const auto *snapshot = std::get_if<authority_snapshot_t> (&read);
@@ -1796,9 +1792,7 @@ task_t<bool> mesh_node_host_service_t::close_user_spot (
           "The SpotRef Mesh is not registered in this process"));
     const auto source = *source_node;
     const auto read = _location_store
-      ->read_authority (
-        authority_key_t{
-          "2:" + spot.spot_id ()})
+      ->read_authority (spot_authority_key (spot.spot_id ()))
       .result ()
       .value ();
     const auto *snapshot = std::get_if<authority_snapshot_t> (&read);
@@ -2053,10 +2047,8 @@ void mesh_node_host_service_t::start (service_provider_t &services)
                 [registration, store] (
                   const protocol::instance_spot_activation_header_t &request) {
                     const auto authority = store
-                      ->read_authority (authority_key_t{
-                        std::to_string (static_cast<int> (
-                          placement_object_kind_t::instance_spot))
-                        + ":" + request.target.spot_id})
+                      ->read_authority (
+                        spot_authority_key (request.target.spot_id))
                       .result ().value ();
                     const auto *snapshot =
                       std::get_if<authority_snapshot_t> (&authority);

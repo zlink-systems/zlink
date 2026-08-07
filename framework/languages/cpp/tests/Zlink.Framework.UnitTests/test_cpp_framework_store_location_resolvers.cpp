@@ -2,6 +2,7 @@
 
 #include "runtime/locations/in_memory_location_store.hpp"
 #include "runtime/locations/in_memory_store_providers.hpp"
+#include "runtime/locations/authority_key_codec.hpp"
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/locations/location_auto_connect_host_service.hpp"
 #include "runtime/locations/location_runtime.hpp"
@@ -1498,6 +1499,19 @@ std::uint16_t bindable_loopback_port (std::uint16_t base_port)
     }
     return first;
 #endif
+}
+
+TEST (ZLinkFrameworkStoreLocationResolvers, EncodesCanonicalAuthorityKeys)
+{
+    EXPECT_EQ (
+      "zla1:a:9:tenant%3A42",
+      zlink::framework::runtime::actor_authority_key ("tenant:42").value);
+    EXPECT_EQ (
+      "zla1:s:5:a%2Fb%20%25",
+      zlink::framework::runtime::spot_authority_key ("a/b %").value);
+    EXPECT_EQ (
+      "zla1:s:4:~._-",
+      zlink::framework::runtime::spot_authority_key ("~._-").value);
 }
 
 TEST (ZLinkFrameworkStoreLocationResolvers, ResolvesSpotAddressFromStore)

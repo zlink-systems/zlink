@@ -16,6 +16,7 @@
 #include "runtime/host/application_hwm_resolver.hpp"
 #include "runtime/http/http_host_service.hpp"
 #include "runtime/locations/in_memory_location_store.hpp"
+#include "runtime/locations/authority_key_codec.hpp"
 #include "runtime/locations/live_location_reader.hpp"
 #include "runtime/locations/location_auto_connect_host_service.hpp"
 #include "runtime/locations/location_host_service.hpp"
@@ -96,7 +97,8 @@ class store_actor_directory_t final : public actor_directory_t
 
     task_t<std::optional<actor_ref_t>> find (std::string actor_id) override
     {
-        auto read = _store.read_authority (authority_key_t{"1:" + actor_id}).result ();
+        auto read = _store.read_authority (
+          runtime::actor_authority_key (actor_id)).result ();
         if (!read) {
             return task_t<std::optional<actor_ref_t>> (
               detail::propagate_failure<std::optional<actor_ref_t>> (
@@ -1634,10 +1636,7 @@ app_t &app_t::add_zlink_framework (std::function<void (zlink_framework_options_t
               } while (page.continuation_token);
               const auto authority = location_store
                 .read_authority (
-                  authority_key_t{
-                    std::to_string (static_cast<int> (
-                      placement_object_kind_t::instance_spot))
-                    + ":" + std::string (spot_id)})
+                  runtime::spot_authority_key (spot_id))
                 .result ().value ();
               if (const auto *snapshot =
                     std::get_if<authority_snapshot_t> (&authority);
@@ -3170,14 +3169,11 @@ void app_t::run_shared_relocation (
                     for (std::size_t index = 0;
                          index != sources.size (); ++index) {
                         const auto &source = sources[index];
-                        const authority_key_t authority_key{
-                          std::string (
-                            source.kind
-                                == runtime::stateful::object_kind_t::
-                                     actor
-                              ? "1:"
-                              : "2:")
-                          + source.key};
+                        const auto authority_key =
+                          source.kind
+                              == runtime::stateful::object_kind_t::actor
+                            ? runtime::actor_authority_key (source.key)
+                            : runtime::spot_authority_key (source.key);
                         const auto authority_read =
                           location_store->get ()
                             .read_authority (authority_key)
@@ -3341,8 +3337,8 @@ void app_t::run_shared_relocation (
                     }
 
                     const auto authority_key =
-                      authority_key_t{
-                        "1:" + std::string (actor.actor_id ().value ())};
+                      runtime::actor_authority_key (
+                        actor.actor_id ().value ());
                     const auto authority_read =
                       location_store->get ()
                         .read_authority (authority_key)

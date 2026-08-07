@@ -7,6 +7,7 @@
  * The checks scan installed public headers and e2e wiring textually so the
  * build keeps compiling while target signatures are still missing. */
 
+#include <array>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -119,6 +120,16 @@ int main ()
       read_file (root / "framework/src/runtime/client_server/client_server_location_runtime.cpp");
     const auto store_location_resolvers =
       read_file (root / "framework/src/runtime/locations/store_location_resolvers.hpp");
+    const auto authority_key_codec =
+      read_file (root / "framework/src/runtime/locations/authority_key_codec.hpp");
+    const auto in_memory_location_store =
+      read_file (root / "framework/src/runtime/locations/in_memory_location_store.hpp");
+    const auto provider_location_repository =
+      read_file (root / "framework/src/runtime/locations/provider_location_repository.hpp");
+    const auto public_store_adapters =
+      read_file (root / "framework/src/runtime/stateful/public_store_adapters.hpp");
+    const auto actor_client =
+      read_file (root / "framework/src/runtime/actors/actor_client.cpp");
     const auto live_location_reader =
       read_file (root / "framework/src/runtime/locations/live_location_reader.hpp");
     const auto app_runtime = read_file (root / "framework/src/runtime/host/app.cpp");
@@ -1863,6 +1874,34 @@ int main ()
              != std::string::npos,
       "CPP-OBS-002",
       "message-flow diagnostics level is not snapshotted at message entry");
+
+    /* CPP-WIRE-001 — every authority read and write uses the same canonical
+     * zla1 key codec; legacy numeric keys are not compatibility aliases. */
+    gate.require (
+      authority_key_codec.find ("\"zla1:\"") != std::string::npos
+        && authority_key_codec.find ("0123456789ABCDEF")
+             != std::string::npos
+        && authority_key_codec.find ("object_id.size ()")
+             != std::string::npos,
+      "CPP-WIRE-001",
+      "canonical authority key codec is missing its version, byte length, or uppercase percent encoding");
+    for (const auto &[name, source] : std::array{
+           std::pair{"store resolver", &store_location_resolvers},
+           std::pair{"in-memory store", &in_memory_location_store},
+           std::pair{"provider store", &provider_location_repository},
+           std::pair{"public store adapter", &public_store_adapters},
+           std::pair{"Actor client", &actor_client},
+           std::pair{"host runtime", &app_runtime},
+           std::pair{"MeshNode host", &mesh_node_host_service},
+           std::pair{"stateful host", &public_host_runtime},
+           std::pair{"stateful dispatch", &raw_stateful_dispatch}}) {
+        gate.require (
+          source->find ("\"1:\"") == std::string::npos
+            && source->find ("\"2:\"") == std::string::npos
+            && source->find ("\"3:\"") == std::string::npos,
+          "CPP-WIRE-001",
+          std::string (name) + " still contains a legacy numeric authority key");
+    }
 
     /* CPP-WIRE-006 — terminal/result integrity and generic wire bounds are
      * emitted from the common schema instead of being redefined by the C++

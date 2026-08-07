@@ -1,9 +1,9 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 #pragma once
 
-#include <array>
 #include <runtime/locations/location_repository.hpp>
 
+#include "runtime/locations/authority_key_codec.hpp"
 #include "runtime/locations/location_key_codec.hpp"
 #include "runtime/locations/actor_authority_payload.hpp"
 #include "runtime/locations/live_location_reader.hpp"
@@ -15,7 +15,6 @@
 
 #include <algorithm>
 #include <chrono>
-#include <cctype>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -368,59 +367,29 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
         std::vector<std::byte> payload;
     };
 
-    static std::string authority_key (char kind, std::string_view object_id)
-    {
-        std::string encoded;
-        encoded.reserve (object_id.size ());
-        constexpr char hex[] = "0123456789ABCDEF";
-        for (const auto character : object_id) {
-            const auto value = static_cast<unsigned char> (character);
-            if (std::isalnum (value) || value == '-' || value == '.' || value == '_'
-                || value == '~') {
-                encoded.push_back (static_cast<char> (value));
-            }
-            else {
-                encoded.push_back ('%');
-                encoded.push_back (hex[value >> 4]);
-                encoded.push_back (hex[value & 0x0f]);
-            }
-        }
-        return "zla1:" + std::string (1, kind) + ":"
-               + std::to_string (object_id.size ()) + ":" + encoded;
-    }
-
     std::optional<authority_projection_t>
     read_ready_authority (bool actor, std::string_view object_id)
     {
-        const std::array<std::string, 3> keys = actor
-          ? std::array<std::string, 3>{authority_key ('a', object_id),
-                                       "actor:" + std::string (object_id),
-                                       "1:" + std::string (object_id)}
-          : std::array<std::string, 3>{authority_key ('s', object_id),
-                                       "spot:" + std::string (object_id),
-                                       "2:" + std::string (object_id)};
-        for (const auto &key : keys) {
-            const auto read = _store->read_authority (authority_key_t{key}).result ().value ();
-            const auto *snapshot = std::get_if<authority_snapshot_t> (&read);
-            if (snapshot == nullptr) {
-                continue;
-            }
-            const auto expected_kind = actor ? placement_object_kind_t::actor
-                                             : snapshot->allocation.object_kind;
-            if (snapshot->allocation.state != placement_allocation_state_t::active
-                || (actor && expected_kind != placement_object_kind_t::actor)
-                || (!actor && expected_kind != placement_object_kind_t::user_spot
-                    && expected_kind != placement_object_kind_t::instance_spot)) {
-                return std::nullopt;
-            }
-            return authority_projection_t{snapshot->store_version,
-                                          snapshot->object_generation,
-                                          snapshot->authority_owner_generation,
-                                          snapshot->owner,
-                                          snapshot->allocation,
-                                          snapshot->payload};
+        const auto key = actor ? actor_authority_key (object_id)
+                               : spot_authority_key (object_id);
+        const auto read = _store->read_authority (key).result ().value ();
+        const auto *snapshot = std::get_if<authority_snapshot_t> (&read);
+        if (snapshot == nullptr)
+            return std::nullopt;
+        const auto expected_kind = actor ? placement_object_kind_t::actor
+                                         : snapshot->allocation.object_kind;
+        if (snapshot->allocation.state != placement_allocation_state_t::active
+            || (actor && expected_kind != placement_object_kind_t::actor)
+            || (!actor && expected_kind != placement_object_kind_t::user_spot
+                && expected_kind != placement_object_kind_t::instance_spot)) {
+            return std::nullopt;
         }
-        return std::nullopt;
+        return authority_projection_t{snapshot->store_version,
+                                      snapshot->object_generation,
+                                      snapshot->authority_owner_generation,
+                                      snapshot->owner,
+                                      snapshot->allocation,
+                                      snapshot->payload};
     }
 
     static bool authority_matches (const authority_projection_t &authority,

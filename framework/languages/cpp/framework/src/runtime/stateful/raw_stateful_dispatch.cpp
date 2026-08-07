@@ -4,6 +4,7 @@
 
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/dispatch/dispatch_limits.hpp"
+#include "runtime/locations/authority_key_codec.hpp"
 #include "runtime/locations/sha256.hpp"
 
 #include <algorithm>
@@ -149,14 +150,16 @@ make_location_store_authority_resolver (
                   ? placement_object_kind_t::user_spot
                   : placement_object_kind_t::instance_spot;
             const auto authority = store.read_authority (
-              {std::to_string (static_cast<int> (kind)) + ":"
-               + query.target.key}).result ().value ();
+              query.target.kind == object_kind_t::actor
+                ? actor_authority_key (query.target.key)
+                : spot_authority_key (query.target.key)).result ().value ();
             const auto *snapshot =
               std::get_if<authority_snapshot_t> (&authority);
             const auto target_rid = node_rid_t::from_string (
               zlink::routing_id_t::from (
                 query.target_node_routing_id).to_string ());
             if (!snapshot
+                || snapshot->allocation.object_kind != kind
                 || snapshot->object_generation
                      != query.target.object_generation
                 || snapshot->authority_owner_generation

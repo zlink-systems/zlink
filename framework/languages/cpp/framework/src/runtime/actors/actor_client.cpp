@@ -11,6 +11,7 @@
 #include "runtime/messaging/submit_result_mapper.hpp"
 #include "runtime/locations/store_location_resolvers.hpp"
 #include "runtime/locations/actor_authority_payload.hpp"
+#include "runtime/locations/authority_key_codec.hpp"
 
 #include <zlink/framework/contracts/locations/stores.hpp>
 #include <zlink/framework/contracts/monitoring/route_mesh_runtime.hpp>
@@ -587,7 +588,8 @@ class actor_client_impl_t final : public actor_client_t
                 _route_cache.erase (cached);
             }
         }
-        auto read = _store->read_authority (authority_key_t{"1:" + actor_id}).result ();
+        auto read = _store->read_authority (
+          actor_authority_key (actor_id)).result ();
         if (!read) {
             return detail::propagate_failure<resolved_actor_t> (
               read, "actor authority lookup failed");

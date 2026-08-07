@@ -3,6 +3,7 @@
 
 #include "runtime/stateful/maintenance_runtime.hpp"
 #include <runtime/locations/location_repository.hpp>
+#include "runtime/locations/authority_key_codec.hpp"
 #include "runtime/locations/sha256.hpp"
 
 #include <zlink/framework/contracts/locations/stores.hpp>
@@ -345,9 +346,9 @@ class public_authority_store_adapter_t final :
     static authority_key_t authority_key (
       const object_ref_t &object)
     {
-        const auto prefix =
-          object.kind == object_kind_t::actor ? "1:" : "2:";
-        return {std::string (prefix) + object.key};
+        return object.kind == object_kind_t::actor
+          ? actor_authority_key (object.key)
+          : spot_authority_key (object.key);
     }
 
     static void append_u32 (

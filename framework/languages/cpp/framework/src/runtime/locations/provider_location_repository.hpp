@@ -3,6 +3,7 @@
 
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/locations/aggregate_inventory.hpp"
+#include "runtime/locations/authority_key_codec.hpp"
 #include <zlink/framework/contracts/locations/stores.hpp>
 
 #include "sha256.hpp"
@@ -2435,7 +2436,9 @@ class provider_location_repository_t final : public location_repository_t
 
     static std::string object_key (const object_creation_key_t &key)
     {
-        return std::to_string (static_cast<int> (key.kind)) + ":" + key.global_id;
+        return (key.kind == placement_object_kind_t::actor
+                  ? actor_authority_key (key.global_id)
+                  : spot_authority_key (key.global_id)).value;
     }
 
     template <std::size_t N> static std::string hex (const std::array<std::byte, N> &value)

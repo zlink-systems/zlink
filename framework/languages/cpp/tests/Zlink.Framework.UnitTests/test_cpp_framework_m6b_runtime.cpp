@@ -7,6 +7,7 @@
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/mesh/route_mesh_connection_policy.hpp"
 #include "runtime/locations/in_memory_location_store.hpp"
+#include "runtime/locations/authority_key_codec.hpp"
 #include "runtime/locations/sha256.hpp"
 #include "runtime/locations/source_creation_cleanup.hpp"
 #include "runtime/locations/store_location_resolvers.hpp"
@@ -3399,7 +3400,8 @@ void verify_remote_user_spot_create_close_terminal_once ()
       std::holds_alternative<authority_missing_t> (
         store
           ->read_authority (
-            {"2:" + cleanup_spot_id})
+            zlink::framework::runtime::spot_authority_key (
+              cleanup_spot_id))
           .result ()
           .value ()));
 
@@ -3451,7 +3453,9 @@ void verify_remote_user_spot_create_close_terminal_once ()
             assert (activation.target.stable_type == "quest");
             assert (activation.request);
             assert (std::holds_alternative<authority_snapshot_t> (
-              store->read_authority ({"3:" + activation.target.spot_id})
+              store->read_authority (
+                zlink::framework::runtime::spot_authority_key (
+                  activation.target.spot_id))
                 .result ().value ()));
             assert (metadata
                     == std::optional<std::vector<std::uint8_t>> (
@@ -3842,7 +3846,7 @@ void verify_remote_user_spot_create_close_terminal_once ()
     const auto committed_authority =
       store
         ->read_authority (
-          {"2:" + spot_id})
+          zlink::framework::runtime::spot_authority_key (spot_id))
         .result ()
         .value ();
     const auto *committed_snapshot =
@@ -3936,7 +3940,7 @@ void verify_remote_user_spot_create_close_terminal_once ()
     const auto authority =
       store
         ->read_authority (
-          {"2:" + spot_id})
+          zlink::framework::runtime::spot_authority_key (spot_id))
         .result ()
         .value ();
     const auto *ready =
@@ -4034,7 +4038,8 @@ void verify_remote_user_spot_create_close_terminal_once ()
       && !expired_close_reply->closed);
     const auto after_expired_close =
       store
-        ->read_authority ({"2:" + spot_id})
+        ->read_authority (
+          zlink::framework::runtime::spot_authority_key (spot_id))
         .result ()
         .value ();
     const auto *after_expired_snapshot =
@@ -4078,7 +4083,7 @@ void verify_remote_user_spot_create_close_terminal_once ()
     assert (std::holds_alternative<authority_missing_t> (
       store
         ->read_authority (
-          {"2:" + spot_id})
+          zlink::framework::runtime::spot_authority_key (spot_id))
         .result ()
         .value ()));
     source->close ();
