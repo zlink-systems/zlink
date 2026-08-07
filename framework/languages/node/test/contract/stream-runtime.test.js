@@ -8,7 +8,8 @@ const {
   ZLinkSubmitStatus
 } = require('../../packages/framework/dist/runtime/messaging/submission-result');
 const {
-  RequestResult
+  RequestResult,
+  SubmitResult
 } = require('../../packages/framework/dist/runtime/backend/runtime-values');
 const streamProtocol = require('../../packages/framework/dist/runtime/streams/protocol');
 const {
@@ -40,6 +41,7 @@ test('managed stream binds Session Actors through the Framework service without 
   };
   const operations = new Map();
   const bindings = [];
+  let bindAttempts = 0;
   let nextOperation = 1n;
   const operation = (kind) => {
     const id = { high: 0n, low: nextOperation++ };
@@ -63,6 +65,12 @@ test('managed stream binds Session Actors through the Framework service without 
     },
     lookupActor() { return operation('lookup'); },
     bindActor(sessionRid, value) {
+      bindAttempts += 1;
+      if (bindAttempts === 1) {
+        throw Object.assign(new Error('diagnostic text is not part of classification'), {
+          result: SubmitResult.NotConnected
+        });
+      }
       bindings.push({
         sessionRid,
         actor: value,
@@ -76,10 +84,10 @@ test('managed stream binds Session Actors through the Framework service without 
     sendToActor() { return 0; }
   };
   const completions = {
-    async submit(operation) {
+    submit(operation) {
       const id = operation();
       const kind = operations.get(id.low);
-      return {
+      return Promise.resolve({
         terminalResult: 0,
         failureErrno: 0,
         operationKind: 0,
@@ -87,7 +95,7 @@ test('managed stream binds Session Actors through the Framework service without 
           ? { kind: 'actorLookupCompletion', location: { actor } }
           : null,
         parts: []
-      };
+      });
     }
   };
   const rawStreamSocket = {
@@ -114,6 +122,7 @@ test('managed stream binds Session Actors through the Framework service without 
   }, 1000);
 
   assert.equal(bindings.length, 1);
+  assert.equal(bindAttempts, 2);
   assert.equal(typeof rawStreamSocket.bindActor, 'undefined');
   assert.equal(typeof rawStreamSocket.unbindActor, 'undefined');
   assert.equal(typeof rawStreamSocket.sendBoundActor, 'undefined');

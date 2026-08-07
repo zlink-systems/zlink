@@ -56,6 +56,18 @@ export class ZLinkBackendResultError extends Error {
 export function isZLinkBackendResultError(error: unknown): error is ZLinkBackendResultError {
   return error instanceof ZLinkBackendResultError;
 }
+
+export function isBackendNotConnectedError(error: unknown): boolean {
+  if (isZLinkBackendResultError(error)) {
+    return error.result === SubmitResult.NotConnected
+      || error.result === RequestResult.NotConnected;
+  }
+  if (typeof error !== 'object' || error === null || !('result' in error)) {
+    return false;
+  }
+  const result = error.result;
+  return result === SubmitResult.NotConnected || result === RequestResult.NotConnected;
+}
 export type ZLinkBackendMessageLike = Message | Buffer | Uint8Array | string;
 export type ZLinkBackendRequestCallback = (
   result: RequestResult,

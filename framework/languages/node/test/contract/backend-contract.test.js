@@ -801,6 +801,27 @@ test('mesh completion submission registers before a completion can arrive', asyn
   table.dispose();
 });
 
+test('backend not-connected classification uses typed results instead of error text', () => {
+  assert.equal(
+    backend.isBackendNotConnectedError({
+      result: backend.SubmitResult.NotConnected,
+      message: 'arbitrary localized diagnostic'
+    }),
+    true
+  );
+  assert.equal(
+    backend.isBackendNotConnectedError({
+      result: backend.RequestResult.NotConnected,
+      message: 'another diagnostic'
+    }),
+    true
+  );
+  assert.equal(
+    backend.isBackendNotConnectedError(new Error('Transport endpoint is not connected')),
+    false
+  );
+});
+
 test('backend mesh record dispatcher routes node, spot, actor, and infrastructure records', async () => {
   const routed = [];
   const dispatcher = new backend.ZLinkMeshRecordDispatcher({

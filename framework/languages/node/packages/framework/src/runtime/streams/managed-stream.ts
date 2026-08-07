@@ -23,7 +23,7 @@ import type {
   ZLinkBackendSendFlags,
   ZLinkBackendStreamSocket
 } from '../backend/contracts';
-import { RequestResult } from '../backend/runtime-values';
+import { RequestResult, isBackendNotConnectedError } from '../backend/runtime-values';
 import { ZLinkBufferMessage as NativeMessage } from '../backend/runtime-message';
 import type { StreamSessionService } from '../foundation/service-runtime-contracts';
 import {
@@ -413,10 +413,7 @@ export class ZLinkManagedStream implements ZLinkStream {
           signal
         );
       } catch (error) {
-        if (
-          nativeErrno(error) !== 107
-          && (!(error instanceof Error) || !error.message.includes('Transport endpoint is not connected'))
-        ) {
+        if (!isBackendNotConnectedError(error)) {
           throw error;
         }
         if (Date.now() >= deadline) {
@@ -485,14 +482,6 @@ function toNativeActorRef(actor: ActorRef): ZLinkBackendActorRef {
     actorId: actor.actorId,
     generation: actor.objectGeneration
   };
-}
-
-function nativeErrno(error: unknown): number | undefined {
-  if (typeof error !== 'object' || error === null || !('nativeErrno' in error)) {
-    return undefined;
-  }
-  const value = error.nativeErrno;
-  return typeof value === 'number' ? value : undefined;
 }
 
 function waitForSessionAdmission(signal?: AbortSignal): Promise<void> {
