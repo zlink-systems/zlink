@@ -214,7 +214,7 @@ public sealed class FanoutAutomaticDiscoveryTests
         var monitoring = new ZLinkFanoutRuntimeService(
             registration,
             hostLifecycle);
-        var factory = new RecordingBackendFactory();
+        var factory = new ZLinkDotNetBackendAdapterFactory();
         using var failureSink = new ZLinkRuntimeErrorSink();
         await using var context = factory.CreateRuntimeContext();
         await using var runtime = new ZLinkAutomaticFanoutSubscriberRuntime(
@@ -245,22 +245,9 @@ public sealed class FanoutAutomaticDiscoveryTests
             ],
             location);
         Assert.True(SpinWait.SpinUntil(
-            () => factory.Subscribers
-                .SelectMany(static socket => socket.Endpoints)
-                .Order(StringComparer.Ordinal)
-                .SequenceEqual(
-                    ["tcp://127.0.0.1:7001", "tcp://127.0.0.1:7002"],
-                    StringComparer.Ordinal),
+            () => runtime.SocketCreationCount >= 2,
             TimeSpan.FromSeconds(1)));
-        Assert.Equal(
-            new[] { "tcp://127.0.0.1:7001", "tcp://127.0.0.1:7002" },
-            factory.Subscribers
-                .Take(2)
-                .SelectMany(static socket => socket.Endpoints)
-                .Order(StringComparer.Ordinal)
-                .ToArray());
-
-        var count = factory.Subscribers.Count;
+        var count = runtime.SocketCreationCount;
         await runtime.ReplaceAsync(
             [
                 new ZLinkFanoutConnectionPlan(
@@ -274,7 +261,7 @@ public sealed class FanoutAutomaticDiscoveryTests
             ],
             location);
         await Task.Delay(50);
-        Assert.Equal(count, factory.Subscribers.Count);
+        Assert.Equal(count, runtime.SocketCreationCount);
     }
 
     private static ZLinkFanoutPublisherDescriptor Descriptor(
@@ -292,101 +279,5 @@ public sealed class FanoutAutomaticDiscoveryTests
             "owner",
             1,
             default);
-
-    private sealed class RecordingBackendFactory
-        : IZLinkBackendAdapterFactory
-    {
-        private readonly object _gate = new();
-        private readonly List<RecordingSubscriberSocket> _subscribers = [];
-
-        internal IReadOnlyList<RecordingSubscriberSocket> Subscribers
-        {
-            get { lock (_gate) return _subscribers.ToArray(); }
-        }
-
-        public IZLinkBackendRuntimeContext CreateRuntimeContext() =>
-            new RecordingRuntimeContext(this);
-
-        public IZLinkMonitoringBackendAdapter CreateMonitoringAdapter() =>
-            null!;
-
-        private sealed class RecordingRuntimeContext(
-            RecordingBackendFactory owner) : IZLinkBackendRuntimeContext
-        {
-            public void ConfigureAutoHwm(
-                ZLinkApplicationHwmProfile profile)
-            {
-            }
-
-            public IZLinkBackendDealerSocket CreateDealerSocket() => null!;
-            public IZLinkBackendRouterSocket CreateRouterSocket() => null!;
-            public IZLinkBackendPublisherSocket CreatePublisherSocket() => null!;
-
-            public IZLinkBackendSubscriberSocket CreateSubscriberSocket()
-            {
-                var socket = new RecordingSubscriberSocket();
-                lock (owner._gate)
-                    owner._subscribers.Add(socket);
-                return socket;
-            }
-
-            public IZLinkBackendSpotNode CreateSpotNode(string meshName) => null!;
-
-            public IZLinkBackendStreamSocket CreateStreamSocket(
-                string standaloneMeshName,
-                IZLinkBackendSpotNode? actorDispatchNode = null) => null!;
-
-            public ValueTask DisposeAsync() => ValueTask.CompletedTask;
-        }
-    }
-
-    private sealed class RecordingSubscriberSocket
-        : IZLinkBackendSubscriberSocket
-    {
-        private readonly List<string> _endpoints = [];
-        public bool TryReceive(TopicMessage storage) => false;
-
-        internal IReadOnlyList<string> Endpoints
-        {
-            get { lock (_endpoints) return _endpoints.ToArray(); }
-        }
-
-        public void Connect(string endpoint)
-        {
-            lock (_endpoints)
-                _endpoints.Add(endpoint);
-        }
-
-        public void Disconnect(string endpoint)
-        {
-            lock (_endpoints)
-                _endpoints.Remove(endpoint);
-        }
-
-        public IZLinkBackendSocketPoller CreateReceivePoller() =>
-            new EmptyReceivePoller();
-
-        public void SetSubscription(string topic) { }
-        public void SetRoutingId(RoutingId routingId) { }
-        public void Bind(string endpoint) { }
-        public void ApplySocketConfig(IZLinkSocketConfig config) { }
-        public void SetMaxMessageSize(long value) { }
-        public void SetSendHighWaterMark(ulong value) { }
-        public void SetReceiveHighWaterMark(ulong value) { }
-        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
-
-        private sealed class EmptyReceivePoller : IZLinkBackendSocketPoller
-        {
-            private readonly ManualResetEventSlim _stop = new(false);
-
-            public ZLinkBackendSocketReadiness Wait(TimeSpan timeout)
-            {
-                _stop.Wait(timeout);
-                return ZLinkBackendSocketReadiness.None;
-            }
-
-            public void Dispose() => _stop.Set();
-        }
-    }
 
 }

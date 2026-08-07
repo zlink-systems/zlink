@@ -30,13 +30,13 @@ internal sealed class ZLinkClientServerDiscovery : IAsyncDisposable
             if (registration.HasClientServerServer
                 && state.ClientServerServerBundles.TryGetValue(channelName, out var serverBundle))
             {
-                var router = (IZLinkBackendRouterSocket)serverBundle.Socket;
+                var router = (IRouterSocket)serverBundle.Socket;
                 var server = new LocalServer(
                     serverBundle.ClientServerServer
                     ?? throw new InvalidOperationException(
                         "ClientServer server identity is not initialized."),
                     AdvertisedEndpoint(
-                        router.GetLastEndpoint(),
+                        router.Options.LastEndpoint,
                         registration.Server!.AdvertiseHost),
                     router);
                 server.Identity.SetAdvertisedEndpoint(server.Endpoint);
@@ -224,12 +224,12 @@ internal sealed class ZLinkClientServerDiscovery : IAsyncDisposable
     private sealed class LocalServer(
         ZLinkClientServerServerIdentity identity,
         string endpoint,
-        IZLinkBackendRouterSocket router)
+        IRouterSocket router)
     {
         internal ZLinkClientServerServerIdentity Identity { get; } = identity;
         internal string ChannelName => Identity.ChannelName;
         internal string Endpoint { get; } = endpoint;
-        internal IZLinkBackendRouterSocket Router { get; } = router;
+        internal IRouterSocket Router { get; } = router;
     }
 
     private sealed class ClientLoop(

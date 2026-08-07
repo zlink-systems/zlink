@@ -3,7 +3,7 @@ namespace Zlink.Framework.Runtime.Channels;
 internal static class ZLinkChannelReplyWriter
 {
     public static void ReplyRequest(
-        IZLinkBackendRouterSocket router,
+        IRouterSocket router,
         Received received,
         ZLinkEnvelopeHeader header,
         object? body,
@@ -17,7 +17,7 @@ internal static class ZLinkChannelReplyWriter
     }
 
     public static void ReplyEnvelope(
-        IZLinkBackendRouterSocket router,
+        IRouterSocket router,
         RoutingId routingId,
         ulong? requestSeq,
         ZLinkEnvelopeHeader header,
@@ -30,7 +30,7 @@ internal static class ZLinkChannelReplyWriter
     }
 
     public static void ReplyRawEnvelope(
-        IZLinkBackendRouterSocket router,
+        IRouterSocket router,
         RoutingId routingId,
         ulong? requestSeq,
         ZLinkEnvelopeHeader header,
@@ -41,14 +41,16 @@ internal static class ZLinkChannelReplyWriter
     }
 
     private static void ReplyParts(
-        IZLinkBackendRouterSocket router,
+        IRouterSocket router,
         RoutingId routingId,
         ulong? requestSeq,
         IReadOnlyList<Message> replyParts)
     {
         try
         {
-            router.Reply(routingId, requestSeq ?? 0UL, replyParts);
+            router.Reply(routingId, requestSeq ?? 0UL)
+                .Messages(replyParts)
+                .Submit();
         }
         finally
         {

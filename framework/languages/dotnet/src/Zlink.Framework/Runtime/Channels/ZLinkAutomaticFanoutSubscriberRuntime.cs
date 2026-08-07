@@ -35,6 +35,10 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime
     private ZLinkLocationRuntimeSnapshot _location =
         new("unknown", null, null);
     private int _disposed;
+    private long _socketCreationCount;
+
+    internal long SocketCreationCount =>
+        Volatile.Read(ref _socketCreationCount);
 
     internal ZLinkAutomaticFanoutSubscriberRuntime(
         string channelName,
@@ -260,15 +264,16 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime
 
         private async Task RunAttemptAsync(CancellationToken cancellationToken)
         {
-            IZLinkBackendSubscriberSocket? socket = null;
+            ISubSocket? socket = null;
             using var attempt =
                 CancellationTokenSource.CreateLinkedTokenSource(
                     cancellationToken);
             try
             {
                 socket = owner._context.CreateSubscriberSocket();
+                Interlocked.Increment(ref owner._socketCreationCount);
                 ZLinkChannelBundleFactory.ApplySocketConfig(
-                    socket,
+                    socket.Options,
                     owner._socketConfig);
                 socket.SetSubscription(string.Empty);
                 socket.Connect(Endpoint);

@@ -20,7 +20,7 @@ internal sealed class ZLinkClientServerServerIdentity(
     private ZLinkFrameworkRuntimeState _state =
         ZLinkFrameworkRuntimeState.Serving;
     private string _advertisedEndpoint = advertisedEndpoint;
-    private IZLinkBackendRouterSocket? _router;
+    private IRouterSocket? _router;
     private long _livenessAckCount;
     private long _livenessProbeCount;
     private long _receivedLivenessProbeCount;
@@ -128,12 +128,12 @@ internal sealed class ZLinkClientServerServerIdentity(
         return snapshot;
     }
 
-    internal void AttachRouter(IZLinkBackendRouterSocket router)
+    internal void AttachRouter(IRouterSocket router)
     {
         lock (_gate) _router = router;
     }
 
-    internal void DetachRouter(IZLinkBackendRouterSocket router)
+    internal void DetachRouter(IRouterSocket router)
     {
         lock (_gate)
         {
@@ -193,7 +193,7 @@ internal sealed class ZLinkClientServerServerIdentity(
         Interlocked.Increment(ref _receivedLivenessProbeCount);
     }
 
-    internal void TickLiveness(IZLinkBackendRouterSocket router)
+    internal void TickLiveness(IRouterSocket router)
     {
         List<(RoutingId RoutingId, ulong ProbeId)> probes = [];
         List<RoutingId> expired = [];
@@ -218,7 +218,7 @@ internal sealed class ZLinkClientServerServerIdentity(
         foreach (var routingId in expired)
             try
             {
-                router.DisconnectPeer(routingId);
+                router.DisconnectRid(routingId);
             }
             catch
             {
@@ -234,7 +234,7 @@ internal sealed class ZLinkClientServerServerIdentity(
 
     private void PushUpdate(Snapshot snapshot)
     {
-        IZLinkBackendRouterSocket? router;
+        IRouterSocket? router;
         (RoutingId RoutingId, uint MaximumMessageBytes)[] peers;
         lock (_gate)
         {
@@ -280,13 +280,16 @@ internal sealed class ZLinkClientServerServerIdentity(
     }
 
     private static bool TrySend(
-        IZLinkBackendRouterSocket router,
+        IRouterSocket router,
         RoutingId routingId,
         Message message)
     {
         try
         {
-            if (router.Send(routingId, message, SendFlags.DontWait))
+            if (router.Send(routingId)
+                .Message(message)
+                .Flags(SendFlags.DontWait)
+                .Submit())
                 return true;
         }
         catch

@@ -1203,13 +1203,11 @@ public sealed class ClientServerChannelRuntimeTests
     }
 
     [Fact]
-    public async Task BackendWrappers_DeliverUnsolicitedLivenessProbe()
+    public async Task BindingSockets_DeliverUnsolicitedLivenessProbe()
     {
-        using var context = Systems.Zlink.Zlink.CreateContext();
-        await using var router = new ZLinkBackendRouterSocketWrapper(
-            context.CreateRouterSocket());
-        await using var dealer = new ZLinkBackendDealerSocketWrapper(
-            context.CreateDealerSocket());
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var router = context.CreateRouterSocket();
+        await using var dealer = context.CreateDealerSocket();
         var port = ReservePort();
         var endpoint = $"tcp://127.0.0.1:{port}";
         dealer.SetRoutingId(RoutingId.From("probe-client"));
@@ -1221,10 +1219,10 @@ public sealed class ClientServerChannelRuntimeTests
                 "work",
                 "plaintext",
                 4096));
-        var admissionTask = dealer.RequestAsync(
-            hello,
-            TimeSpan.FromSeconds(2),
-            CancellationToken.None);
+        var admissionTask = dealer.Request()
+            .Message(hello)
+            .Timeout(TimeSpan.FromSeconds(2))
+            .Async(CancellationToken.None);
         using var inbound = await PollReceivedAsync(
             storage => router.Recv(storage, RecvFlags.DontWait),
             TimeSpan.FromSeconds(2));
@@ -1241,12 +1239,12 @@ public sealed class ClientServerChannelRuntimeTests
                 "plaintext",
                 4096,
                 endpoint));
-        router.Reply(sourceRid, requestSeq, admit);
+        router.Reply(sourceRid, requestSeq).Message(admit).Submit();
         ZLinkMessageParts.DisposeAll(await admissionTask);
 
         var probe =
             ZLinkClientServerControlProtocol.EncodeLivenessProbe(17);
-        Assert.True(router.Send(sourceRid, probe, SendFlags.None));
+        Assert.True(router.Send(sourceRid).Message(probe).Submit());
         using var delivered = await PollReceivedAsync(
             storage => dealer.Recv(storage, RecvFlags.DontWait),
             TimeSpan.FromSeconds(2));

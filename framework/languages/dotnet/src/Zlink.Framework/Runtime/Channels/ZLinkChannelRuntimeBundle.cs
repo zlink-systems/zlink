@@ -2,18 +2,19 @@ namespace Zlink.Framework.Runtime.Channels;
 
 internal sealed class ZLinkChannelRuntimeBundle : IAsyncDisposable
 {
-    private readonly HashSet<string> _autoConnections = new(StringComparer.Ordinal);
+    private readonly Action<string>? _connect;
     private readonly SemaphoreSlim _connectionGate = new(1, 1);
+    private readonly Action<string>? _disconnect;
     private readonly object _disposeGate = new();
     private readonly HashSet<string> _manualConnections = new(StringComparer.Ordinal);
     private int _disposed;
-    private long _autoConnectAttemptCount;
-    private long _autoDisconnectAttemptCount;
     private Task? _disposeTask;
     private IDisposable? _manualConnectionAttachment;
 
     public ZLinkChannelRuntimeBundle(
-        IZLinkBackendSocket socket,
+        IAsyncDisposable socket,
+        Action<string>? connect = null,
+        Action<string>? disconnect = null,
         ZLinkAsyncSubmitter? submitter = null,
         RoutingId localRid = default,
         string? socketRole = null,
@@ -21,6 +22,8 @@ internal sealed class ZLinkChannelRuntimeBundle : IAsyncDisposable
         ZLinkFanoutPublisherIdentity? fanoutPublisher = null)
     {
         Socket = socket;
+        _connect = connect;
+        _disconnect = disconnect;
         Submitter = submitter;
         LocalRid = localRid.Size > 0 ? localRid.ToString() : null;
         SocketRole = socketRole;
@@ -28,7 +31,7 @@ internal sealed class ZLinkChannelRuntimeBundle : IAsyncDisposable
         FanoutPublisher = fanoutPublisher;
     }
 
-    public IZLinkBackendSocket Socket { get; }
+    public IAsyncDisposable Socket { get; }
 
     public ZLinkAsyncSubmitter? Submitter { get; }
 
@@ -41,12 +44,6 @@ internal sealed class ZLinkChannelRuntimeBundle : IAsyncDisposable
     internal ZLinkFanoutPublisherIdentity? FanoutPublisher { get; }
 
     public SemaphoreSlim ReceiveGate { get; } = new(1, 1);
-
-    internal long AutoConnectAttemptCount =>
-        Volatile.Read(ref _autoConnectAttemptCount);
-
-    internal long AutoDisconnectAttemptCount =>
-        Volatile.Read(ref _autoDisconnectAttemptCount);
 
     public ValueTask DisposeAsync()
     {
@@ -120,13 +117,23 @@ internal sealed class ZLinkChannelRuntimeBundle : IAsyncDisposable
         attachment?.Dispose();
     }
 
-    public void ConnectManual(IZLinkBackendConnectableSocket socket, string endpoint)
+    public void ConnectManual(string endpoint)
     {
         _connectionGate.Wait();
         try
         {
             ThrowIfDisposed();
-            Acquire(_manualConnections, endpoint, () => socket.Connect(endpoint), true);
+            if (!_manualConnections.Add(endpoint)) return;
+            try
+            {
+                (_connect ?? throw new InvalidOperationException(
+                    "This channel socket does not support connections."))(endpoint);
+            }
+            catch
+            {
+                _manualConnections.Remove(endpoint);
+                throw;
+            }
         }
         finally
         {
@@ -134,103 +141,27 @@ internal sealed class ZLinkChannelRuntimeBundle : IAsyncDisposable
         }
     }
 
-    public void DisconnectManual(IZLinkBackendConnectableSocket socket, string endpoint)
+    public void DisconnectManual(string endpoint)
     {
         _connectionGate.Wait();
         try
         {
             ThrowIfDisposed();
-            Release(_manualConnections, endpoint, () => socket.Disconnect(endpoint), true);
+            if (!_manualConnections.Remove(endpoint)) return;
+            try
+            {
+                (_disconnect ?? throw new InvalidOperationException(
+                    "This channel socket does not support disconnections."))(endpoint);
+            }
+            catch
+            {
+                _manualConnections.Add(endpoint);
+                throw;
+            }
         }
         finally
         {
             _connectionGate.Release();
-        }
-    }
-
-    public bool ConnectAuto(IZLinkBackendConnectableSocket socket, string endpoint)
-    {
-        _connectionGate.Wait();
-        try
-        {
-            if (Volatile.Read(ref _disposed) != 0) return false;
-            return Acquire(
-                _autoConnections,
-                endpoint,
-                () =>
-                {
-                    Interlocked.Increment(ref _autoConnectAttemptCount);
-                    socket.Connect(endpoint);
-                },
-                false);
-        }
-        finally
-        {
-            _connectionGate.Release();
-        }
-    }
-
-    public bool DisconnectAuto(IZLinkBackendConnectableSocket socket, string endpoint)
-    {
-        _connectionGate.Wait();
-        try
-        {
-            if (Volatile.Read(ref _disposed) != 0) return false;
-            return Release(
-                _autoConnections,
-                endpoint,
-                () =>
-                {
-                    Interlocked.Increment(ref _autoDisconnectAttemptCount);
-                    socket.Disconnect(endpoint);
-                },
-                false);
-        }
-        finally
-        {
-            _connectionGate.Release();
-        }
-    }
-
-    private bool Acquire(HashSet<string> source, string endpoint, Action connect, bool throwOnFailure)
-    {
-        var alreadyOwned = _manualConnections.Contains(endpoint) || _autoConnections.Contains(endpoint);
-        if (!source.Add(endpoint) || alreadyOwned) return true;
-        try
-        {
-            connect();
-            return true;
-        }
-        catch when (!throwOnFailure)
-        {
-            source.Remove(endpoint);
-            return false;
-        }
-        catch
-        {
-            source.Remove(endpoint);
-            throw;
-        }
-    }
-
-    private bool Release(HashSet<string> source, string endpoint, Action disconnect, bool throwOnFailure)
-    {
-        if (!source.Remove(endpoint)) return true;
-        if (_manualConnections.Contains(endpoint) || _autoConnections.Contains(endpoint)) return true;
-        try
-        {
-            disconnect();
-            return true;
-        }
-        catch when (!throwOnFailure)
-        {
-            source.Add(endpoint);
-            return false;
-        }
-        catch
-        {
-            source.Add(endpoint);
-            throw;
         }
     }
 

@@ -8947,16 +8947,16 @@ public sealed partial class EntrySpotActorDispatchTests
     {
         public void ConfigureAutoHwm(ZLinkApplicationHwmProfile profile) { }
 
-        public IZLinkBackendDealerSocket CreateDealerSocket() =>
+        public IDealerSocket CreateDealerSocket() =>
             throw new NotSupportedException();
 
-        public IZLinkBackendRouterSocket CreateRouterSocket() =>
+        public IRouterSocket CreateRouterSocket() =>
             throw new NotSupportedException();
 
-        public IZLinkBackendPublisherSocket CreatePublisherSocket() =>
+        public IPubSocket CreatePublisherSocket() =>
             throw new NotSupportedException();
 
-        public IZLinkBackendSubscriberSocket CreateSubscriberSocket() =>
+        public ISubSocket CreateSubscriberSocket() =>
             throw new NotSupportedException();
 
         public IZLinkBackendSpotNode CreateSpotNode(string meshName) => node;

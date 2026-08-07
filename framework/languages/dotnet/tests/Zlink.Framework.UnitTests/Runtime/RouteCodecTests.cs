@@ -11,14 +11,6 @@ namespace Zlink.Framework.UnitTests.Runtime;
 public sealed class RouteCodecTests
 {
     [Fact]
-    public void PublisherBackend_DoesNotExposeUnsupportedRoutingIdOption()
-    {
-        Assert.DoesNotContain(
-            typeof(IZLinkBackendPublisherSocket).GetMethods(),
-            static method => method.Name == "SetRoutingId");
-    }
-
-    [Fact]
     public void MeshMetadataCodec_RoundTrips_The_Last_Value_Snapshot()
     {
         var callMetadata = new ZLinkCallMetadata();
@@ -107,9 +99,10 @@ public sealed class RouteCodecTests
     }
 
     [Fact]
-    public void ChannelBundleFactory_Applies_MaxMessageSize_To_BackendSocket()
+    public async Task ChannelBundleFactory_Applies_MaxMessageSize_To_BindingSocket()
     {
-        var socket = new RecordingSocketOptions();
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var socket = context.CreateRouterSocket();
         var config = new ZLinkSocketConfig
         {
             MaxMessageSize = 4096,
@@ -117,11 +110,11 @@ public sealed class RouteCodecTests
             ReceiveHighWaterMark = 34
         };
 
-        ZLinkChannelBundleFactory.ApplySocketConfig(socket, config);
+        ZLinkChannelBundleFactory.ApplySocketConfig(socket.Options, config);
 
-        Assert.Equal(4096, socket.MaxMessageSize);
-        Assert.Equal(12UL, socket.SendHighWaterMark);
-        Assert.Equal(34UL, socket.ReceiveHighWaterMark);
+        Assert.Equal(4096, socket.Options.MaxMessageSize);
+        Assert.Equal(12UL, socket.Options.SendHighWaterMark);
+        Assert.Equal(34UL, socket.Options.ReceiveHighWaterMark);
     }
 
     [Fact]
@@ -180,11 +173,16 @@ public sealed class RouteCodecTests
     }
 
     [Fact]
-    public void RouteReplyWriter_Uses_Configured_Codec()
+    public async Task RouteReplyWriter_Uses_Configured_Codec_Over_BindingSocket()
     {
         var codecs = new ZLinkCodecRegistryBuilder();
         codecs.AddSerializer("application/route-test", new RouteProbeSerializer());
-        var router = new RecordingRouter();
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var dealer = context.CreateDealerSocket();
+        await using var router = context.CreateRouterSocket();
+        var endpoint = $"inproc://route-reply-codec-{Guid.NewGuid():N}";
+        router.Bind(endpoint);
+        dealer.Connect(endpoint);
         var requestHeader = new ZLinkEnvelopeHeader(
             ZLinkMessageKind.Request,
             "play",
@@ -196,10 +194,16 @@ public sealed class RouteCodecTests
             null,
             null);
 
+        using var request = Message.From("request");
+        var replyTask = dealer.Request()
+            .Message(request)
+            .Timeout(TimeSpan.FromSeconds(2))
+            .Async();
+        using var received = await ReceiveAsync(router, TimeSpan.FromSeconds(2));
         ZLinkChannelReplyWriter.ReplyEnvelope(
             router,
-            RoutingId.From("source-node"),
-            7,
+            Assert.IsType<RoutingId>(received.RoutingId),
+            Assert.IsType<ulong>(received.RequestSeq),
             ZLinkChannelReplyWriter.CreateReplyHeader(
                 ZLinkMessageKind.Response,
                 "play",
@@ -208,9 +212,39 @@ public sealed class RouteCodecTests
             typeof(RouteProbe),
             codecs);
 
-        Assert.Equal("application/route-test", router.ReplyContentType);
-        Assert.Equal("ROUTE:reply", router.ReplyBody);
-        Assert.Equal(string.Empty, router.SentHeader?.MessageName);
+        var parts = await replyTask;
+        try
+        {
+            Assert.Equal(
+                "application/route-test",
+                ZLinkEnvelopeCodec.DecodeHeader(parts).ContentType);
+            Assert.Equal("ROUTE:reply", Encoding.UTF8.GetString(
+                parts[1].AsReadOnlyMemory().Span));
+            Assert.Equal(
+                string.Empty,
+                ZLinkEnvelopeCodec.DecodeHeader(parts).MessageName);
+        }
+        finally
+        {
+            ZLinkMessageParts.DisposeAll(parts);
+        }
+    }
+
+    private static async Task<Received> ReceiveAsync(
+        IRouterSocket router,
+        TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        var received = Received.Create();
+        while (DateTime.UtcNow < deadline)
+        {
+            if (router.Recv(received, RecvFlags.DontWait))
+                return received;
+            await Task.Delay(10);
+        }
+
+        received.Dispose();
+        throw new TimeoutException("Timed out waiting for route request.");
     }
 
     [Fact]
@@ -342,293 +376,5 @@ public sealed class RouteCodecTests
         }
     }
 
-    private sealed class RecordingSocketOptions : IZLinkBackendSocketOptions
-    {
-        public long MaxMessageSize { get; private set; }
-
-        public ulong SendHighWaterMark { get; private set; }
-
-        public ulong ReceiveHighWaterMark { get; private set; }
-
-        public void ApplySocketConfig(IZLinkSocketConfig config)
-        {
-            if (config.MaxMessageSize > 0) SetMaxMessageSize(config.MaxMessageSize);
-            if (config.SendHighWaterMark > 0) SetSendHighWaterMark(config.SendHighWaterMark);
-            if (config.ReceiveHighWaterMark > 0) SetReceiveHighWaterMark(config.ReceiveHighWaterMark);
-        }
-
-        public ValueTask DisposeAsync()
-        {
-            return ValueTask.CompletedTask;
-        }
-
-        public void Bind(string endpoint)
-        {
-            throw new NotSupportedException();
-        }
-
-        public void SetMaxMessageSize(long value)
-        {
-            MaxMessageSize = value;
-        }
-
-        public void SetSendHighWaterMark(ulong value)
-        {
-            SendHighWaterMark = value;
-        }
-
-        public void SetReceiveHighWaterMark(ulong value)
-        {
-            ReceiveHighWaterMark = value;
-        }
-    }
-
-    private sealed class RecordingRoutingDealer : IZLinkBackendDealerSocket
-    {
-        public bool ProbeRouterOnConnect { get; private set; }
-
-        public void ApplySocketConfig(IZLinkSocketConfig config) => throw new NotSupportedException();
-
-        public void SetProbe(bool enabled)
-        {
-            ProbeRouterOnConnect = enabled;
-        }
-
-        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
-
-        public void Bind(string endpoint) => throw new NotSupportedException();
-
-        public void SetMaxMessageSize(long value) => throw new NotSupportedException();
-
-        public void SetSendHighWaterMark(ulong value) => throw new NotSupportedException();
-
-        public void SetReceiveHighWaterMark(ulong value) => throw new NotSupportedException();
-
-        public void Connect(string endpoint) => throw new NotSupportedException();
-
-        public void Disconnect(string endpoint) => throw new NotSupportedException();
-
-        public void SetPeerWeight(int weight) => throw new NotSupportedException();
-
-        public int GetPeerWeight() => throw new NotSupportedException();
-
-        public void SetRoutingId(RoutingId routingId) => throw new NotSupportedException();
-
-        public void OnSendReady(Action handler) => throw new NotSupportedException();
-
-        public bool Send(Message message, SendFlags flags) => throw new NotSupportedException();
-
-        public bool Send(IReadOnlyList<Message> parts, SendFlags flags) => throw new NotSupportedException();
-
-        public bool Request(
-            Message message,
-            RequestCallback callback,
-            SendFlags flags,
-            TimeSpan? timeout) => throw new NotSupportedException();
-
-        public bool Request(
-            IReadOnlyList<Message> parts,
-            RequestCallback callback,
-            SendFlags flags,
-            TimeSpan? timeout) => throw new NotSupportedException();
-
-        public Task<IReadOnlyList<Message>> RequestAsync(
-            Message message,
-            TimeSpan timeout,
-            CancellationToken cancellationToken) =>
-            throw new NotSupportedException();
-
-        public bool Recv(Received storage, RecvFlags flags = RecvFlags.None) =>
-            throw new NotSupportedException();
-
-        public bool Reply(Received received, Message message) =>
-            throw new NotSupportedException();
-    }
-
-    private sealed class RecordingRouter : IZLinkBackendRouterSocket
-    {
-        private int _disposeCount;
-        public bool BlockDispose { get; init; }
-        public Exception? DisposeFailure { get; init; }
-        public TaskCompletionSource DisposeStarted { get; } =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
-        public TaskCompletionSource AllowDispose { get; } =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
-        public int DisposeCount => Volatile.Read(ref _disposeCount);
-        public ZLinkEnvelopeHeader? SentHeader { get; private set; }
-
-        public string? ReplyContentType { get; private set; }
-
-        public string? ReplyBody { get; private set; }
-
-        public bool Mandatory { get; private set; }
-
-        public bool Handover { get; private set; }
-
-        public bool Probe { get; private set; }
-
-        public RoutingId ConnectRoutingId { get; private set; }
-
-        public void ApplySocketConfig(IZLinkSocketConfig config) => throw new NotSupportedException();
-
-        public async ValueTask DisposeAsync()
-        {
-            Interlocked.Increment(ref _disposeCount);
-            DisposeStarted.TrySetResult();
-            if (BlockDispose) await AllowDispose.Task.ConfigureAwait(false);
-            if (DisposeFailure is not null)
-                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(DisposeFailure).Throw();
-        }
-
-        public void Bind(string endpoint)
-        {
-            throw new NotSupportedException();
-        }
-
-        public void SetMaxMessageSize(long value)
-        {
-            throw new NotSupportedException();
-        }
-
-        public void Connect(string endpoint)
-        {
-            throw new NotSupportedException();
-        }
-
-        public void Disconnect(string endpoint)
-        {
-            throw new NotSupportedException();
-        }
-
-        public void SetPeerWeight(int weight)
-        {
-            throw new NotSupportedException();
-        }
-
-        public int GetPeerWeight()
-        {
-            throw new NotSupportedException();
-        }
-
-        public void OnSendReady(Action handler)
-        {
-            _ = handler;
-        }
-
-        public void SetSendHighWaterMark(ulong value)
-        {
-            throw new NotSupportedException();
-        }
-
-        public void SetReceiveHighWaterMark(ulong value)
-        {
-            throw new NotSupportedException();
-        }
-
-        public void SetRoutingId(RoutingId routingId)
-        {
-            throw new NotSupportedException();
-        }
-
-        public void SetConnectRoutingId(RoutingId routingId)
-        {
-            ConnectRoutingId = routingId;
-        }
-
-        public void SetProbe(bool enabled)
-        {
-            Probe = enabled;
-        }
-
-        public void SetMandatory(bool mandatory)
-        {
-            Mandatory = mandatory;
-        }
-
-        public void SetHandover(bool enabled)
-        {
-            Handover = enabled;
-        }
-
-        public void DisconnectPeer(RoutingId routingId)
-        {
-            throw new NotSupportedException();
-        }
-
-        public bool Recv(Received storage, RecvFlags flags = RecvFlags.None)
-        {
-            throw new NotSupportedException();
-        }
-
-        public bool Send(RoutingId routingId, Message message, SendFlags flags)
-        {
-            _ = routingId;
-            _ = flags;
-            SentHeader = ZLinkEnvelopeCodec.DecodeHeader(message);
-            return true;
-        }
-
-        public bool Send(RoutingId routingId, IReadOnlyList<Message> parts, SendFlags flags)
-        {
-            _ = routingId;
-            _ = flags;
-            SentHeader = ZLinkEnvelopeCodec.DecodeHeader(parts);
-            return true;
-        }
-
-        public bool Request(
-            RoutingId routingId,
-            Message message,
-            RequestCallback callback,
-            SendFlags flags,
-            TimeSpan? timeout)
-        {
-            throw new NotSupportedException();
-        }
-
-        public bool Request(
-            RoutingId routingId,
-            IReadOnlyList<Message> parts,
-            RequestCallback callback,
-            SendFlags flags,
-            TimeSpan? timeout)
-        {
-            throw new NotSupportedException();
-        }
-
-        public bool SendToSpot(
-            RoutingId targetNodeRid,
-            string targetSpotId,
-            IReadOnlyList<Message> parts,
-            SendFlags flags)
-        {
-            throw new NotSupportedException();
-        }
-
-        public bool RequestToSpot(
-            RoutingId targetNodeRid,
-            string targetSpotId,
-            IReadOnlyList<Message> parts,
-            RequestCallback callback,
-            SendFlags flags,
-            TimeSpan? timeout)
-        {
-            throw new NotSupportedException();
-        }
-
-        public void Reply(RoutingId routingId, ulong requestSeq, Message message)
-        {
-            throw new NotSupportedException();
-        }
-
-        public void Reply(RoutingId routingId, ulong requestSeq, IReadOnlyList<Message> parts)
-        {
-            _ = routingId;
-            _ = requestSeq;
-            SentHeader = ZLinkEnvelopeCodec.DecodeHeader(parts);
-            ReplyContentType = SentHeader.ContentType;
-            ReplyBody = parts[1].GetString();
-        }
-    }
 
 }

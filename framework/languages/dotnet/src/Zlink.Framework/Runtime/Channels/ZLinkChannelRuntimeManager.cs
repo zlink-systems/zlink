@@ -75,7 +75,7 @@ internal sealed class ZLinkChannelRuntimeManager(
                     $"client-server:{channelName}",
                     ct => new ValueTask(receiveLoop.RunClientServerLoopAsync(
                         channelName,
-                        (IZLinkBackendRouterSocket)bundle.Socket,
+                        (IRouterSocket)bundle.Socket,
                         bundle.ClientServerServer
                         ?? throw new InvalidOperationException(
                             "ClientServer server identity is not initialized."),
@@ -110,7 +110,7 @@ internal sealed class ZLinkChannelRuntimeManager(
                     $"channel-subscriber:{channelName}",
                     ct => new ValueTask(receiveLoop.RunSubscriberLoopAsync(
                         channelName,
-                        (IZLinkBackendSubscriberSocket)bundle.Socket,
+                        (ISubSocket)bundle.Socket,
                         state.ErrorSink,
                         state.InboundDispatchBudget,
                         ct))));
@@ -145,8 +145,7 @@ internal sealed class ZLinkChannelRuntimeManager(
                         out var localServer))
                 {
                     runtime.AddLocal(
-                        ((IZLinkBackendRouterSocket)localServer.Socket)
-                        .GetLastEndpoint(),
+                        ((IRouterSocket)localServer.Socket).Options.LastEndpoint,
                         localServer.ClientServerServer
                         ?? throw new InvalidOperationException(
                             "ClientServer server identity is not initialized."));
@@ -165,13 +164,13 @@ internal sealed class ZLinkChannelRuntimeManager(
             state.ListenerTasks.Add(state.TaskRunner.Run(
                 $"fanout-beacon:{entry.Key}",
                 cancellationToken => RunFanoutBeaconLoopAsync(
-                    (IZLinkBackendPublisherSocket)publisherBundle.Socket,
+                    (IPubSocket)publisherBundle.Socket,
                     cancellationToken)));
         }
     }
 
     private static async ValueTask RunFanoutBeaconLoopAsync(
-        IZLinkBackendPublisherSocket publisher,
+        IPubSocket publisher,
         CancellationToken cancellationToken)
     {
         using var timer = new PeriodicTimer(
@@ -181,14 +180,14 @@ internal sealed class ZLinkChannelRuntimeManager(
         {
             using var payload = Message.From(
                 ZLinkFanoutLivenessProtocol.Payload);
-            _ = publisher.Publish(
-                ZLinkFanoutLivenessProtocol.Topic,
-                payload,
-                SendFlags.DontWait);
+            _ = publisher.Publish(ZLinkFanoutLivenessProtocol.Topic)
+                .Message(payload)
+                .Flags(SendFlags.DontWait)
+                .Submit();
         }
     }
 
-    public IZLinkBackendSocket GetMonitoringSocket(
+    public IAsyncDisposable GetMonitoringSocket(
         ZLinkFrameworkComponentState state,
         string sourceName)
     {

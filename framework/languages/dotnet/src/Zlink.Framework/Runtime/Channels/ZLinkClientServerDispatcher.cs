@@ -7,7 +7,7 @@ internal sealed class ZLinkClientServerDispatcher(
 {
     public async ValueTask DispatchAsync(
         string channelName,
-        IZLinkBackendRouterSocket router,
+        IRouterSocket router,
         Received received,
         ZLinkChannelReplyGate replyGate,
         uint maximumMessageBytes,
@@ -95,7 +95,7 @@ internal sealed class ZLinkClientServerDispatcher(
 
     internal void RejectOverloaded(
         string channelName,
-        IZLinkBackendRouterSocket router,
+        IRouterSocket router,
         Received received,
         ZLinkChannelReplyGate replyGate,
         uint maximumMessageBytes)
@@ -129,7 +129,7 @@ internal sealed class ZLinkClientServerDispatcher(
 
     private void ReplyProtocolError(
         string channelName,
-        IZLinkBackendRouterSocket router,
+        IRouterSocket router,
         Received received,
         ZLinkChannelReplyGate replyGate,
         ZLinkEnvelopeHeader request,
@@ -154,7 +154,7 @@ internal sealed class ZLinkClientServerDispatcher(
 
     internal void RejectMessageTooLarge(
         string channelName,
-        IZLinkBackendRouterSocket router,
+        IRouterSocket router,
         Received received,
         ZLinkChannelReplyGate replyGate,
         uint maximumMessageBytes)
@@ -186,7 +186,7 @@ internal sealed class ZLinkClientServerDispatcher(
 
     private void Reply(
         ZLinkChannelReplyGate replyGate,
-        IZLinkBackendRouterSocket router,
+        IRouterSocket router,
         Received received,
         ZLinkEnvelopeHeader requestHeader,
         ZLinkEnvelopeHeader replyHeader,
@@ -229,7 +229,9 @@ internal sealed class ZLinkClientServerDispatcher(
             }
             try
             {
-                router.Reply(sourceRid, requestSeq, reply);
+                router.Reply(sourceRid, requestSeq)
+                    .Messages(reply)
+                    .Submit();
             }
             finally
             {

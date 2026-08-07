@@ -129,11 +129,11 @@ public sealed class SharedAsyncDisposalTests
     public async Task ChannelBundle_Dispose_Detaches_Manual_Generation_And_Joins_Connect()
     {
         var socket = new BlockingConnectableSocket();
-        var bundle = new ZLinkChannelRuntimeBundle(socket);
+        var bundle = new ZLinkChannelRuntimeBundle(socket, socket.Connect, socket.Disconnect);
         var connections = new ZLinkEndpointConnections();
         bundle.OwnManualConnectionAttachment(connections.Attach(
-            endpoint => bundle.ConnectManual(socket, endpoint),
-            endpoint => bundle.DisconnectManual(socket, endpoint)));
+            bundle.ConnectManual,
+            bundle.DisconnectManual));
         var connect = Task.Run(
             () => connections.Connect("tcp://127.0.0.1:7401"));
         await socket.ConnectStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -335,7 +335,7 @@ public sealed class SharedAsyncDisposalTests
         }
     }
 
-    private sealed class BlockingSocket : IZLinkBackendSocket
+    private sealed class BlockingSocket : IAsyncDisposable
     {
         private int _disposeCount;
         internal TaskCompletionSource Started { get; } =
@@ -352,7 +352,7 @@ public sealed class SharedAsyncDisposalTests
         }
     }
 
-    private sealed class BlockingConnectableSocket : IZLinkBackendConnectableSocket
+    private sealed class BlockingConnectableSocket : IAsyncDisposable
     {
         private int _connectCount;
         private int _disposeCount;
@@ -366,8 +366,6 @@ public sealed class SharedAsyncDisposalTests
         internal int ConnectCount => Volatile.Read(ref _connectCount);
 
         internal int DisposeCount => Volatile.Read(ref _disposeCount);
-
-        public void Bind(string endpoint) { }
 
         public void Connect(string endpoint)
         {
@@ -464,7 +462,7 @@ public sealed class SharedAsyncDisposalTests
 
     private sealed class EmptyMonitoringAdapter : IZLinkMonitoringBackendAdapter
     {
-        public IZLinkBackendSocketMonitor OpenSocketMonitor(IZLinkBackendSocket socket) => null!;
+        public IZLinkBackendSocketMonitor OpenSocketMonitor(IAsyncDisposable socket) => null!;
     }
 
     public sealed class BlockingHandler : IAsyncDisposable

@@ -382,7 +382,7 @@ internal sealed partial class ZLinkFrameworkRuntime
             innerException: innerException);
     }
 
-    internal IZLinkBackendSocket GetMonitoringSocket(string sourceName)
+    internal IAsyncDisposable GetMonitoringSocket(string sourceName)
     {
         return _channels.GetMonitoringSocket(GetOrStartState(), sourceName);
     }

@@ -10,13 +10,13 @@ internal interface IZLinkBackendRuntimeContext : IAsyncDisposable
 {
     void ConfigureAutoHwm(ZLinkApplicationHwmProfile profile);
 
-    IZLinkBackendDealerSocket CreateDealerSocket();
+    IDealerSocket CreateDealerSocket();
 
-    IZLinkBackendRouterSocket CreateRouterSocket();
+    IRouterSocket CreateRouterSocket();
 
-    IZLinkBackendPublisherSocket CreatePublisherSocket();
+    IPubSocket CreatePublisherSocket();
 
-    IZLinkBackendSubscriberSocket CreateSubscriberSocket();
+    ISubSocket CreateSubscriberSocket();
 
     IZLinkBackendSpotNode CreateSpotNode(string meshName);
 

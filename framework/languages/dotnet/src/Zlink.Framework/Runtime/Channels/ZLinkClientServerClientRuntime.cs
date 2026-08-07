@@ -154,7 +154,10 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         }
         return await target.Submitter.SubmitAsync(
                 parts,
-                pending => target.Socket.Send(pending, SendFlags.DontWait),
+                pending => target.Socket.Send()
+                    .Messages(pending)
+                    .Flags(SendFlags.DontWait)
+                    .Submit(),
                 cancellationToken)
             .ConfigureAwait(false);
     }
@@ -201,11 +204,14 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             return await ZLinkRawRequestSubmitter.SubmitAsync(
                     target.Submitter,
                     parts,
-                    (pending, callback, nativeTimeout) => target.Socket.Request(
-                        pending,
-                        callback,
-                        SendFlags.DontWait,
-                        nativeTimeout),
+                    (pending, callback, nativeTimeout) =>
+                    {
+                        var request = target.Socket.Request().Messages(pending)
+                            .Flags(SendFlags.DontWait);
+                        if (nativeTimeout is { } value)
+                            request = request.Timeout(value);
+                        return request.Submit(callback);
+                    },
                     remaining,
                     $"ClientServer request failed for '{_channelName}': {{0}}.",
                     cancellationToken)
@@ -314,7 +320,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         }
     }
 
-    internal IZLinkBackendSocket GetMonitoringSocket()
+    internal IAsyncDisposable GetMonitoringSocket()
     {
         lock (_gate)
             return _connections.Values.FirstOrDefault()?.Socket
@@ -603,7 +609,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             string channelName,
             string endpoint,
             ZLinkClientServerServerDescriptor? expected,
-            IZLinkBackendDealerSocket socket,
+            IDealerSocket socket,
             IZLinkMonitoringBackendAdapter monitoring,
             IZLinkSocketConfig socketConfig,
             TimeSpan requestTimeout,
@@ -626,8 +632,8 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                     socketConfig.MaxMessageSize);
             Socket = socket;
             Socket.SetRoutingId(RoutingId.From($"csc-{Guid.NewGuid():N}"));
-            ZLinkChannelBundleFactory.ApplySocketConfig(Socket, socketConfig);
-            Socket.SetProbe(false);
+            ZLinkChannelBundleFactory.ApplySocketConfig(Socket.Options, socketConfig);
+            Socket.Options.Probe = false;
             Submitter = new ZLinkAsyncSubmitter(
                 Socket.OnSendReady,
                 requestTimeout,
@@ -637,7 +643,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             _monitor.OnEvent(OnMonitorEvent);
         }
 
-        internal IZLinkBackendDealerSocket Socket { get; }
+        internal IDealerSocket Socket { get; }
         internal ZLinkAsyncSubmitter Submitter { get; }
         internal bool Ready { get { lock (_gate) return _ready && !_disposed; } }
         internal uint AdmittedMaximumMessageBytes
@@ -1006,10 +1012,10 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                 IReadOnlyList<Message> reply;
                 try
                 {
-                    reply = await Socket.RequestAsync(
-                            hello,
-                            _admissionTimeout,
-                            cancellationToken)
+                    reply = await Socket.Request()
+                        .Message(hello)
+                        .Timeout(_admissionTimeout)
+                        .Async(cancellationToken)
                         .ConfigureAwait(false);
                 }
                 catch
@@ -1208,7 +1214,9 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         private async Task RunControlLoopAsync()
         {
             var cancellationToken = _admissionStop.Token;
-            using var receivePoller = Socket.CreateReceivePoller();
+            using var receivePoller = ZLinkBackendSocketPoller.Create(
+                Socket,
+                includeRequestCompletion: true);
             using var received = Received.Create();
             while (!cancellationToken.IsCancellationRequested)
             {
@@ -1350,10 +1358,10 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                 IReadOnlyList<Message> reply;
                 try
                 {
-                    reply = await Socket.RequestAsync(
-                            probe,
-                            TimeSpan.FromSeconds(15),
-                            cancellationToken)
+                    reply = await Socket.Request()
+                        .Message(probe)
+                        .Timeout(TimeSpan.FromSeconds(15))
+                        .Async(cancellationToken)
                         .ConfigureAwait(false);
                 }
                 catch (OperationCanceledException)
@@ -1573,7 +1581,10 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         {
             try
             {
-                if (Socket.Send(message, SendFlags.DontWait))
+                if (Socket.Send()
+                    .Message(message)
+                    .Flags(SendFlags.DontWait)
+                    .Submit())
                     return true;
             }
             catch
@@ -1589,7 +1600,9 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         {
             try
             {
-                if (Socket.Reply(received, message))
+                if (received.Send()
+                    .Message(message)
+                    .Submit())
                     return;
             }
             catch

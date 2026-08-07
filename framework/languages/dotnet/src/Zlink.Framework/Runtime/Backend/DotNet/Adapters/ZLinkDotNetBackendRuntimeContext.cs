@@ -42,32 +42,28 @@ internal sealed class ZLinkDotNetBackendRuntimeContext
         _context.Options.AutoHwmEnabled = true;
     }
 
-    public IZLinkBackendDealerSocket CreateDealerSocket()
+    public IDealerSocket CreateDealerSocket()
     {
         ThrowIfDisposed();
-        return new ZLinkBackendDealerSocketWrapper(
-            _context.CreateDealerSocket());
+        return _context.CreateDealerSocket();
     }
 
-    public IZLinkBackendRouterSocket CreateRouterSocket()
+    public IRouterSocket CreateRouterSocket()
     {
         ThrowIfDisposed();
-        return new ZLinkBackendRouterSocketWrapper(
-            _context.CreateRouterSocket());
+        return _context.CreateRouterSocket();
     }
 
-    public IZLinkBackendPublisherSocket CreatePublisherSocket()
+    public IPubSocket CreatePublisherSocket()
     {
         ThrowIfDisposed();
-        return new ZLinkBackendPublisherSocketWrapper(
-            _context.CreatePubSocket());
+        return _context.CreatePubSocket();
     }
 
-    public IZLinkBackendSubscriberSocket CreateSubscriberSocket()
+    public ISubSocket CreateSubscriberSocket()
     {
         ThrowIfDisposed();
-        return new ZLinkBackendSubscriberSocketWrapper(
-            _context.CreateSubSocket());
+        return _context.CreateSubSocket();
     }
 
     public IZLinkBackendSpotNode CreateSpotNode(string meshName)
@@ -119,17 +115,17 @@ internal sealed class ZLinkDotNetMonitoringBackendAdapter
     : IZLinkMonitoringBackendAdapter
 {
     public IZLinkBackendSocketMonitor OpenSocketMonitor(
-        IZLinkBackendSocket socket)
+        IAsyncDisposable socket)
     {
         var nativeMonitor = socket switch
         {
-            ZLinkBackendDealerSocketWrapper dealer => dealer.NativeSocket.MonitorOpen(),
-            ZLinkBackendRouterSocketWrapper router => router.NativeSocket.MonitorOpen(),
-            ZLinkBackendPublisherSocketWrapper publisher => publisher.NativeSocket.MonitorOpen(),
-            ZLinkBackendSubscriberSocketWrapper subscriber => subscriber.NativeSocket.MonitorOpen(),
+            IDealerSocket dealer => dealer.MonitorOpen(),
+            IRouterSocket router => router.MonitorOpen(),
+            IPubSocket publisher => publisher.MonitorOpen(),
+            ISubSocket subscriber => subscriber.MonitorOpen(),
             ZLinkBackendStreamSocketWrapper stream => stream.NativeSocket.MonitorOpen(),
             _ => throw new InvalidOperationException(
-                "Expected a .NET backend socket wrapper.")
+                "Expected a supported .NET binding socket.")
         };
         return new ZLinkBackendSocketMonitorWrapper(nativeMonitor);
     }

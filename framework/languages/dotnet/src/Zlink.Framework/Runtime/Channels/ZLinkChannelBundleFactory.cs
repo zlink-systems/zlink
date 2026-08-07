@@ -10,15 +10,17 @@ internal sealed class ZLinkChannelBundleFactory(
         string channelName,
         ZLinkChannelRegistration channel)
     {
-        IZLinkBackendDealerSocket? dealer = null;
+        IDealerSocket? dealer = null;
         ZLinkChannelRuntimeBundle? bundle = null;
         try
         {
             dealer = state.Context.CreateDealerSocket();
-            ApplySocketConfig(dealer, channel.Client!.SocketConfig);
-            dealer.SetProbe(true);
+            ApplySocketConfig(dealer.Options, channel.Client!.SocketConfig);
+            dealer.Options.Probe = true;
             bundle = new ZLinkChannelRuntimeBundle(
                 dealer,
+                dealer.Connect,
+                dealer.Disconnect,
                 new ZLinkAsyncSubmitter(
                     dealer.OnSendReady,
                     channel.Client.SocketConfig.SendTimeout
@@ -28,8 +30,8 @@ internal sealed class ZLinkChannelBundleFactory(
                 socketRole: "client");
 
             bundle.OwnManualConnectionAttachment(channel.Client.ManualConnections.Attach(
-                endpoint => bundle.ConnectManual(dealer, endpoint),
-                endpoint => bundle.DisconnectManual(dealer, endpoint)));
+                bundle.ConnectManual,
+                bundle.DisconnectManual));
             return bundle;
         }
         catch (Exception initializationFailure)
@@ -44,22 +46,22 @@ internal sealed class ZLinkChannelBundleFactory(
         string channelName,
         ZLinkChannelRegistration channel)
     {
-        IZLinkBackendRouterSocket? router = null;
+        IRouterSocket? router = null;
         ZLinkChannelRuntimeBundle? bundle = null;
         try
         {
             router = state.Context.CreateRouterSocket();
             var serverRid = channel.Server!.ServerRid;
             router.SetRoutingId(serverRid);
-            ApplySocketConfig(router, channel.Server!.SocketConfig);
-            router.SetMandatory(true);
-            router.SetHandover(true);
+            ApplySocketConfig(router.Options, channel.Server!.SocketConfig);
+            router.Options.Mandatory = true;
+            router.Options.Handover = true;
             router.Bind(ZLinkNetworkEndpointResolver.Bind(
                 explicitEndpoint: null,
                 channel.Server.ListenPort,
                 channel.Server.BindHost,
                 registration.NetworkOptions));
-            var actualEndpoint = router.GetLastEndpoint();
+            var actualEndpoint = router.Options.LastEndpoint;
             var identity = new ZLinkClientServerServerIdentity(
                 channelName,
                 serverRid,
@@ -92,12 +94,12 @@ internal sealed class ZLinkChannelBundleFactory(
         string channelName,
         ZLinkChannelRegistration channel)
     {
-        IZLinkBackendSubscriberSocket? subscriber = null;
+        ISubSocket? subscriber = null;
         ZLinkChannelRuntimeBundle? bundle = null;
         try
         {
             subscriber = state.Context.CreateSubscriberSocket();
-            ApplySocketConfig(subscriber, channel.Subscriber!.SocketConfig);
+            ApplySocketConfig(subscriber.Options, channel.Subscriber!.SocketConfig);
             RoutingId localRid = default;
             if (channel.RoutingId.Size > 0)
             {
@@ -108,12 +110,17 @@ internal sealed class ZLinkChannelBundleFactory(
             }
 
             subscriber.SetSubscription(string.Empty);
-            bundle = new ZLinkChannelRuntimeBundle(subscriber, localRid: localRid, socketRole: "sub");
+            bundle = new ZLinkChannelRuntimeBundle(
+                subscriber,
+                subscriber.Connect,
+                subscriber.Disconnect,
+                localRid: localRid,
+                socketRole: "sub");
 
             if (channel.Subscriber.AcquisitionMode == ZLinkPeerAcquisitionMode.Manual)
                 bundle.OwnManualConnectionAttachment(channel.Subscriber.ManualConnections.Attach(
-                    endpoint => bundle.ConnectManual(subscriber, endpoint),
-                    endpoint => bundle.DisconnectManual(subscriber, endpoint)));
+                    bundle.ConnectManual,
+                    bundle.DisconnectManual));
 
             return bundle;
         }
@@ -129,12 +136,12 @@ internal sealed class ZLinkChannelBundleFactory(
         string channelName,
         ZLinkChannelRegistration channel)
     {
-        IZLinkBackendPublisherSocket? publisher = null;
+        IPubSocket? publisher = null;
         ZLinkChannelRuntimeBundle? bundle = null;
         try
         {
             publisher = state.Context.CreatePublisherSocket();
-            ApplySocketConfig(publisher, channel.Publisher!.SocketConfig);
+            ApplySocketConfig(publisher.Options, channel.Publisher!.SocketConfig);
             var localRid = ResolvePublisherRid(channelName, channel.Publisher);
             publisher.Bind(ResolvePublisherBindEndpoint(channel.Publisher));
             var publisherIdentity = new ZLinkFanoutPublisherIdentity(
@@ -142,7 +149,7 @@ internal sealed class ZLinkChannelBundleFactory(
                 localRid,
                 CreateLifecycleGeneration(),
                 ZLinkNetworkEndpointResolver.Advertise(
-                    publisher.GetLastEndpoint(),
+                    publisher.Options.LastEndpoint,
                     channel.Publisher.AdvertiseHost,
                     channel.Publisher.BindHost,
                     registration.NetworkOptions));
@@ -184,10 +191,10 @@ internal sealed class ZLinkChannelBundleFactory(
             registration.NetworkOptions);
 
     internal static void ApplySocketConfig(
-        IZLinkBackendSocketOptions socket,
+        CommonSocketOptions socket,
         IZLinkSocketConfig config)
     {
-        socket.ApplySocketConfig(config);
+        ZLinkBackendSocketOptionsMapper.Apply(socket, config);
     }
 
     private static ulong CreateLifecycleGeneration()
