@@ -80,6 +80,10 @@ export interface ZLinkBackendMeshNode {
     messageKind: 'send',
     reason: 'backpressure'
   ) => void): void;
+  setMailboxRecordDroppedHandler?(handler: (record: {
+    readonly kind: 'spot_multicast' | 'actor_control' | 'actor_binding';
+    readonly owner: string;
+  }) => void): void;
   setMessageFollowHandler?(handler: (
     record: import('../../foundation/service-stateful-wire-codec').ServiceMessageFollowRecord
   ) => void): void;

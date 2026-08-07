@@ -3779,6 +3779,43 @@ test('bound session transition wire format fences the binding generation', () =>
   });
 });
 
+test('mailbox saturation reports dropped actor binding control records', () => {
+  let ingress: ((record: RawServiceIngressRecord) => string | undefined) | undefined;
+  const dropped: Array<{ readonly kind: string; readonly owner: string }> = [];
+  const replies: Buffer[][] = [];
+  const raw = {
+    mailbox: { tryEnqueue: () => false },
+    setServiceIngress(handler: typeof ingress) { ingress = handler; },
+    replyService(_record: RawServiceIngressRecord, parts: readonly Buffer[]) {
+      replies.push([...parts]);
+    }
+  } as unknown as RawServiceMeshRuntime;
+  const runtime = new ServiceStatefulRuntime(raw, 'actor-node', 3n);
+  runtime.setMailboxDropHandler((record) => dropped.push(record));
+  const actor = runtime.createActor('actor-control-drop');
+  const header = encodeBoundSessionBindHeader(
+    41n,
+    {
+      actor: actor.ref,
+      targetNodeGeneration: 3n,
+      authorityOwnerGeneration: actor.authorityOwnerGeneration
+    },
+    'session-a',
+    { state: 'active', generation: 9n }
+  );
+
+  assert.equal(ingress?.({
+    command: M6bServiceWireCommand.boundSessionBind,
+    flags: 0,
+    sourceRoutingId: 'session-node',
+    requestSequence: 7n,
+    parts: [header]
+  }), 'infrastructure');
+  assert.deepEqual(dropped, [{ kind: 'actor_binding', owner: actor.ref.actorId }]);
+  assert.equal(replies.length, 1);
+  runtime.close();
+});
+
 test('authority reconciliation exact-reads complete scans and publishes only Ready mesh-local routes', async () => {
   const readyV1 = instanceAuthoritySnapshot({
     spotId: 'tenant:42',

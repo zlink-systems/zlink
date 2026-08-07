@@ -332,6 +332,10 @@ export class ServiceStatefulRuntime {
   private messageFollowHandler?: (
     record: import('./service-stateful-wire-codec').ServiceMessageFollowRecord
   ) => void;
+  private mailboxDropHandler?: (record: {
+    readonly kind: 'spot_multicast' | 'actor_control' | 'actor_binding';
+    readonly owner: string;
+  }) => void;
   private readonly admittedUserSpotOperations = new Map<string, {
     readonly request: string;
     readonly deadlineUnixMs: bigint;
@@ -352,6 +356,13 @@ export class ServiceStatefulRuntime {
     this.registry = new ServiceStatefulRegistry(nodeRid, nodeGeneration);
     this.registry.createEntrySpot(nodeRid);
     raw.setServiceIngress(record => this.ingress(record));
+  }
+
+  setMailboxDropHandler(handler: (record: {
+    readonly kind: 'spot_multicast' | 'actor_control' | 'actor_binding';
+    readonly owner: string;
+  }) => void): void {
+    this.mailboxDropHandler = handler;
   }
 
   createSpot(routingId?: string, kind: 'user' | 'instance' = 'user', stableType = kind): ServiceSpotState {
@@ -3071,7 +3082,7 @@ export class ServiceStatefulRuntime {
     for (const spotId of targets) {
       const spot = this.registry.spot(spotId);
       if (spot === undefined) continue;
-      this.raw.mailbox.tryEnqueue({
+      const accepted = this.raw.mailbox.tryEnqueue({
         owner: `spot:${spotId}`,
         domain: 'application',
         parts: [
@@ -3088,12 +3099,13 @@ export class ServiceStatefulRuntime {
           targetSpot: spot.ref
         } satisfies ServiceStatefulMailboxData
       });
+      if (!accepted) this.mailboxDropHandler?.({ kind: 'spot_multicast', owner: spotId });
     }
   }
 
   private enqueueActorControl(spotId: string, control: ActorControlPayload): void {
     const header = Buffer.from([0x5a, 0x4d, 1, M6bServiceWireCommand.actorJoined, 0]);
-    this.raw.mailbox.tryEnqueue({
+    const accepted = this.raw.mailbox.tryEnqueue({
       owner: `spot:${spotId}`,
       domain: 'infrastructure',
       parts: [header],
@@ -3105,6 +3117,7 @@ export class ServiceStatefulRuntime {
         kindData: control
       } satisfies ServiceStatefulMailboxData
     });
+    if (!accepted) this.mailboxDropHandler?.({ kind: 'actor_control', owner: spotId });
   }
 
   private enqueueActorBindingControl(
@@ -3112,7 +3125,7 @@ export class ServiceStatefulRuntime {
   ): void {
     const actor = binding.actor;
     const header = Buffer.from([0x5a, 0x4d, 1, M6bServiceWireCommand.boundSessionBind, 0]);
-    this.raw.mailbox.tryEnqueue({
+    const accepted = this.raw.mailbox.tryEnqueue({
       owner: `actor:${actor.actorId}\0${actor.generation}`,
       domain: 'infrastructure',
       parts: [header],
@@ -3130,6 +3143,7 @@ export class ServiceStatefulRuntime {
         }
       } satisfies ServiceStatefulMailboxData
     });
+    if (!accepted) this.mailboxDropHandler?.({ kind: 'actor_binding', owner: actor.actorId });
   }
 
   private replyPort(

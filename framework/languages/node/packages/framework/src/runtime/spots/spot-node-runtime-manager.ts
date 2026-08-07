@@ -271,6 +271,17 @@ export class ZLinkSpotNodeRuntimeManager {
         meshName: spotNodeName,
         routingId
       });
+      node.setMailboxRecordDroppedHandler?.((record) =>
+        this.options.dispatchErrors?.report({
+          surface: ZLinkDispatchErrorSurface.RouteMeshChannel,
+          messageKind: ZLinkDispatchMessageKind.Send,
+          reason: ZLinkDispatchErrorReason.Backpressure,
+          action: ZLinkDispatchErrorAction.Drop,
+          channelName: spotNodeName,
+          error: new Error(
+            `MeshNode '${spotNodeName}' dropped ${record.kind} for '${record.owner}' because its mailbox is full.`
+          )
+        }));
       let pump: ZLinkMeshDispatchPump | undefined;
       const completions = new ZLinkMeshCompletionTable();
       try {

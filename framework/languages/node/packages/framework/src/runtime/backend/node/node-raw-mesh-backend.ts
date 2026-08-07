@@ -136,6 +136,10 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     messageKind: 'send',
     reason: 'backpressure'
   ) => void;
+  private mailboxRecordDropped?: (record: {
+    readonly kind: 'spot_multicast' | 'actor_control' | 'actor_binding';
+    readonly owner: string;
+  }) => void;
   private messageFollowHandler?: (
     record: import('../../foundation/service-stateful-wire-codec').ServiceMessageFollowRecord
   ) => void;
@@ -184,6 +188,14 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     reason: 'backpressure'
   ) => void): void {
     this.inboundMessageDropped = handler;
+  }
+
+  setMailboxRecordDroppedHandler(handler: (record: {
+    readonly kind: 'spot_multicast' | 'actor_control' | 'actor_binding';
+    readonly owner: string;
+  }) => void): void {
+    this.mailboxRecordDropped = handler;
+    this.stateful?.setMailboxDropHandler(handler);
   }
 
   onPeerDisconnected(handler: (endpoint: string) => void): void {
@@ -326,6 +338,9 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       descriptor.nodeRoutingId,
       descriptor.lifecycleGeneration
     );
+    if (this.mailboxRecordDropped !== undefined) {
+      this.stateful.setMailboxDropHandler(this.mailboxRecordDropped);
+    }
     this.stateful.setMessageFollowHandler((record) => this.messageFollowHandler?.(record));
     this.runtime = runtime;
     this.schedulePoll();
