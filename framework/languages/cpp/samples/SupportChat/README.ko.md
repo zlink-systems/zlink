@@ -7,9 +7,10 @@ reconnect 뒤 상태 유지, idle 이후 재활성화, close 전이를 확인한
 실행:
 
 ```bash
-ZLINK_CPP_BUILD_DIR=build-redis-vcpkg ./framework/languages/cpp/samples/SupportChat/run_sample.sh
+ZLINK_CPP_BUILD_DIR=framework/languages/cpp/build/linux-ninja-vcpkg-debug \
+  ./framework/languages/cpp/samples/SupportChat/run_sample.sh
 ```
 
-runner는 Redis location store endpoint를 준비하고 `Api`, `Session`, `Support`,
-`Probe`, `Client` target을 빌드한 뒤 client self-check marker와 role별 message-flow
-로그를 검증한다.
+`ZLINK_CPP_BUILD_DIR`는 CMake configure가 끝난 C++ build directory를 가리켜야 한다.
+runner는 Redis location store endpoint를 준비하고 `Api`, `Session`, `Support`, `Client`
+target을 빌드한 뒤 client self-check marker와 role별 message-flow 로그를 검증한다.

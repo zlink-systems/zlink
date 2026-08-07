@@ -3,11 +3,12 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CPP_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
-BUILD_DIR="${ZLINK_CPP_E2E_BUILD_DIR:-$CPP_DIR/build}"
+BUILD_DIR="${ZLINK_CPP_BUILD_DIR:-$CPP_DIR/build}"
 source "$SCRIPT_DIR/../redis-common.sh"
 
 REDIS_CONTAINER=""
 PIDS=()
+LOG_DIR=""
 REDIS_READINESS_TIMEOUT_SECONDS=30
 cleanup () {
   local code=$?
@@ -17,6 +18,9 @@ cleanup () {
   done
   if [[ -n "$REDIS_CONTAINER" ]]; then
     zlink_redis_stop_scoped "$REDIS_CONTAINER" >/dev/null 2>&1 || true
+  fi
+  if [[ -n "$LOG_DIR" ]]; then
+    rm -rf -- "$LOG_DIR"
   fi
   exit "$code"
 }

@@ -5,8 +5,14 @@
 #include "runtime/http/http_request_pipeline.hpp"
 
 #include <boost/asio/buffer.hpp>
+#include <boost/asio/co_spawn.hpp>
+#include <boost/asio/detached.hpp>
 #include <boost/asio/error.hpp>
 #include <boost/asio/ip/tcp.hpp>
+#include <boost/asio/post.hpp>
+#include <boost/asio/redirect_error.hpp>
+#include <boost/asio/steady_timer.hpp>
+#include <boost/asio/use_awaitable.hpp>
 #include <boost/beast/core.hpp>
 #include <boost/beast/http.hpp>
 
@@ -17,165 +23,20 @@
 
 #include <algorithm>
 #include <atomic>
-#include <cerrno>
 #include <chrono>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <thread>
-#include <unordered_set>
+#include <unordered_map>
 #include <utility>
-
-#include <netdb.h>
-#include <cstring>
-#include <sys/socket.h>
-#include <sys/time.h>
-#include <unistd.h>
+#include <vector>
 
 namespace zlink::framework::runtime
 {
 namespace asio = boost::asio;
 using tcp = asio::ip::tcp;
-
-namespace
-{
-
-bool is_would_block (const beast::error_code &ec) noexcept
-{
-    return ec == asio::error::would_block || ec == asio::error::try_again
-           || ec.value () == EAGAIN;
-}
-
-} // namespace
-
-class fd_stream_t
-{
-  public:
-    using executor_type = asio::system_executor;
-
-    explicit fd_stream_t (int fd) : _fd (fd) {}
-    ~fd_stream_t () { close (); }
-
-    fd_stream_t (const fd_stream_t &) = delete;
-    fd_stream_t &operator= (const fd_stream_t &) = delete;
-
-    fd_stream_t (fd_stream_t &&other) noexcept : _fd (std::exchange (other._fd, -1)) {}
-
-    fd_stream_t &operator= (fd_stream_t &&other) noexcept
-    {
-        if (this != &other) {
-            close ();
-            _fd = std::exchange (other._fd, -1);
-        }
-        return *this;
-    }
-
-    template <typename MutableBufferSequence>
-    std::size_t read_some (const MutableBufferSequence &buffers)
-    {
-        beast::error_code ec;
-        const auto read = read_some (buffers, ec);
-        if (ec) {
-            throw boost::system::system_error (ec);
-        }
-        return read;
-    }
-
-    template <typename MutableBufferSequence>
-    std::size_t read_some (const MutableBufferSequence &buffers, beast::error_code &ec)
-    {
-        ec.clear ();
-        for (auto it = asio::buffer_sequence_begin (buffers);
-             it != asio::buffer_sequence_end (buffers); ++it) {
-            auto buffer = *it;
-            if (asio::buffer_size (buffer) == 0) {
-                continue;
-            }
-            const auto received =
-              //  `asio::buffer_cast`는 Boost 1.87에서 제거됐다. mutable_buffer의
-              //  `data()`가 같은 포인터를 돌려주므로 그것을 쓴다.
-              ::recv (_fd, buffer.data (), asio::buffer_size (buffer), 0);
-            if (received > 0) {
-                return static_cast<std::size_t> (received);
-            }
-            if (received == 0) {
-                ec = asio::error::eof;
-                return 0;
-            }
-            ec = boost::system::error_code (errno, boost::system::generic_category ());
-            return 0;
-        }
-        return 0;
-    }
-
-    template <typename ConstBufferSequence>
-    std::size_t write_some (const ConstBufferSequence &buffers)
-    {
-        beast::error_code ec;
-        const auto written = write_some (buffers, ec);
-        if (ec) {
-            throw boost::system::system_error (ec);
-        }
-        return written;
-    }
-
-    template <typename ConstBufferSequence>
-    std::size_t write_some (const ConstBufferSequence &buffers, beast::error_code &ec)
-    {
-        ec.clear ();
-        for (auto it = asio::buffer_sequence_begin (buffers);
-             it != asio::buffer_sequence_end (buffers); ++it) {
-            auto buffer = *it;
-            if (asio::buffer_size (buffer) == 0) {
-                continue;
-            }
-#ifdef MSG_NOSIGNAL
-            constexpr int send_flags = MSG_NOSIGNAL;
-#else
-            constexpr int send_flags = 0;
-#endif
-            const auto sent = ::send (_fd, buffer.data (),
-                                      asio::buffer_size (buffer), send_flags);
-            if (sent >= 0) {
-                return static_cast<std::size_t> (sent);
-            }
-            ec = boost::system::error_code (errno, boost::system::generic_category ());
-            return 0;
-        }
-        return 0;
-    }
-
-    void expires_after (std::chrono::milliseconds timeout) noexcept
-    {
-        timeval value{};
-        value.tv_sec = static_cast<long> (timeout.count () / 1000);
-        value.tv_usec = static_cast<long> ((timeout.count () % 1000) * 1000);
-        (void) ::setsockopt (_fd, SOL_SOCKET, SO_RCVTIMEO, &value, sizeof (value));
-        (void) ::setsockopt (_fd, SOL_SOCKET, SO_SNDTIMEO, &value, sizeof (value));
-    }
-
-    void shutdown_send () noexcept
-    {
-        if (_fd >= 0) {
-            (void) ::shutdown (_fd, SHUT_WR);
-        }
-    }
-
-    int fd () const noexcept { return _fd; }
-
-    executor_type get_executor () noexcept { return {}; }
-
-  private:
-    void close () noexcept
-    {
-        if (_fd >= 0) {
-            (void) ::close (_fd);
-            _fd = -1;
-        }
-    }
-
-    int _fd = -1;
-};
 
 class http_host_service_t::listener_t
 {
@@ -206,7 +67,9 @@ class http_host_service_t::listener_t
           std::max<std::size_t> (2, std::thread::hardware_concurrency ()),
           1024,
           std::chrono::seconds (30),
-          "zlink-http-conn")
+          "zlink-http-conn"),
+        _acceptor (_io),
+        _accept_retry_timer (_io)
     {
     }
 
@@ -216,7 +79,7 @@ class http_host_service_t::listener_t
     {
         try {
             _parsed = parse_http_endpoint (_endpoint->uri);
-            _listen_fd = open_listener ();
+            open_listener ();
             configure_tls_context ();
         }
         catch (const std::exception &) {
@@ -226,46 +89,19 @@ class http_host_service_t::listener_t
             throw;
         }
 
-        while (!_stop->load (std::memory_order_acquire)) {
-            const int fd = ::accept (_listen_fd, nullptr, nullptr);
-            if (fd < 0) {
-                if (errno == EINTR) {
-                    continue;
-                }
-                continue;
-            }
-            if (_stop->load (std::memory_order_acquire)) {
-                (void) ::close (fd);
-                break;
-            }
-            if (_active_connections.load (std::memory_order_acquire)
-                >= _options->server.max_connections) {
-                reject_overloaded (fd);
-                continue;
-            }
-            _active_connections.fetch_add (1, std::memory_order_acq_rel);
-            _connection_workers.submit ([this, fd] () mutable {
-                auto guard = std::unique_ptr<void, void (*) (void *)> (this, [] (void *listener) {
-                    static_cast<listener_t *> (listener)->_active_connections.fetch_sub (
-                      1, std::memory_order_acq_rel);
-                });
-                if (_parsed.scheme == "https") {
-                    handle_https (fd);
-                } else {
-                    handle_http (fd);
-                }
-            });
-        }
-        if (_listen_fd >= 0) {
-            (void) ::close (_listen_fd);
-            _listen_fd = -1;
-        }
+        start_accept ();
+        _io.run ();
     }
 
     void stop () noexcept
     {
-        wake_acceptor ();
         close_open_connections ();
+        asio::post (_io, [this] {
+            beast::error_code ignored;
+            _acceptor.cancel (ignored);
+            _acceptor.close (ignored);
+            _accept_retry_timer.cancel (ignored);
+        });
     }
 
     void stop_after_accept_loop () noexcept
@@ -276,45 +112,96 @@ class http_host_service_t::listener_t
     }
 
   private:
-    int open_listener ()
+    void open_listener ()
     {
-        addrinfo hints{};
-        hints.ai_socktype = SOCK_STREAM;
-        hints.ai_family = AF_UNSPEC;
-        hints.ai_flags = AI_PASSIVE;
-        addrinfo *addresses = nullptr;
-        const int resolved =
-          ::getaddrinfo (_parsed.host.c_str (), _parsed.port.c_str (), &hints, &addresses);
-        if (resolved != 0) {
-            throw std::runtime_error ("HTTP endpoint address resolution failed");
+        tcp::resolver resolver (_io);
+        beast::error_code error;
+        const auto wildcard = _parsed.host == "*";
+        const auto resolve_host = wildcard ? std::string () : _parsed.host;
+        const auto resolve_flags = wildcard ? tcp::resolver::flags::passive
+                                            : tcp::resolver::flags ();
+        const auto endpoints = resolver.resolve (resolve_host, _parsed.port, resolve_flags, error);
+        if (error || endpoints.begin () == endpoints.end ()) {
+            throw std::runtime_error ("HTTP endpoint address resolution failed: "
+                                      + (error ? error.message () : "no addresses"));
         }
+        for (const auto &candidate : endpoints) {
+            _acceptor.open (candidate.endpoint ().protocol (), error);
+            if (!error) {
+                _acceptor.set_option (tcp::acceptor::reuse_address (true), error);
+            }
+            if (!error) {
+                _acceptor.bind (candidate.endpoint (), error);
+            }
+            if (!error) {
+                _acceptor.listen (asio::socket_base::max_listen_connections, error);
+            }
+            if (!error) {
+                return;
+            }
+            beast::error_code ignored;
+            _acceptor.close (ignored);
+        }
+        throw std::runtime_error ("HTTP listener bind/listen failed: " + error.message ());
+    }
 
-        int listen_fd = -1;
-        int last_errno = 0;
-        for (addrinfo *address = addresses; address != nullptr; address = address->ai_next) {
-            listen_fd =
-              ::socket (address->ai_family, address->ai_socktype, address->ai_protocol);
-            if (listen_fd < 0) {
-                last_errno = errno;
-                continue;
-            }
-            const int reuse = 1;
-            (void) ::setsockopt (listen_fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof (reuse));
-            if (::bind (listen_fd, address->ai_addr, address->ai_addrlen) == 0
-                && ::listen (listen_fd, SOMAXCONN) == 0) {
-                break;
-            }
-            last_errno = errno;
-            (void) ::close (listen_fd);
-            listen_fd = -1;
+    struct connection_t
+    {
+        connection_t () : socket (io) {}
+
+        asio::io_context io;
+        tcp::socket socket;
+    };
+
+    void start_accept ()
+    {
+        if (_stop->load (std::memory_order_acquire)) {
+            return;
         }
-        ::freeaddrinfo (addresses);
-        if (listen_fd < 0) {
-            throw std::runtime_error ("HTTP endpoint bind failed errno="
-                                      + std::to_string (last_errno) + " "
-                                      + std::strerror (last_errno));
-        }
-        return listen_fd;
+        auto connection = std::make_shared<connection_t> ();
+        _acceptor.async_accept (connection->socket,
+                                [this, connection] (beast::error_code error) {
+            if (!error && !_stop->load (std::memory_order_acquire)) {
+                if (_active_connections.load (std::memory_order_acquire)
+                    >= _options->server.max_connections) {
+                    reject_overloaded (std::move (connection->socket));
+                } else {
+                    _active_connections.fetch_add (1, std::memory_order_acq_rel);
+                    try {
+                        _connection_workers.submit ([this, connection] () mutable {
+                            auto guard = std::unique_ptr<void, void (*) (void *)> (
+                              this, [] (void *listener) {
+                                  static_cast<listener_t *> (listener)->_active_connections.fetch_sub (
+                                    1, std::memory_order_acq_rel);
+                              });
+                            if (_parsed.scheme == "https") {
+                                handle_https (std::move (connection));
+                            } else {
+                                handle_http (std::move (connection));
+                            }
+                        });
+                    }
+                    catch (...) {
+                        _active_connections.fetch_sub (1, std::memory_order_acq_rel);
+                        beast::error_code ignored;
+                        connection->socket.close (ignored);
+                    }
+                }
+            }
+            if (!_stop->load (std::memory_order_acquire)
+                && error != asio::error::operation_aborted) {
+                if (error) {
+                    _accept_retry_timer.expires_after (std::chrono::milliseconds (100));
+                    _accept_retry_timer.async_wait ([this] (beast::error_code retry_error) {
+                        if (!retry_error) {
+                            start_accept ();
+                        }
+                    });
+                } else {
+                    start_accept ();
+                }
+            }
+        });
     }
 
     void configure_tls_context ()
@@ -328,32 +215,6 @@ class http_host_service_t::listener_t
         _tls_context->use_private_key_file (_endpoint->tls->private_key_file,
                                             asio::ssl::context::pem);
 #endif
-    }
-
-    void wake_acceptor () noexcept
-    {
-        if (_parsed.host.empty () || _parsed.port.empty ()) {
-            return;
-        }
-        addrinfo hints{};
-        hints.ai_socktype = SOCK_STREAM;
-        hints.ai_family = AF_UNSPEC;
-        addrinfo *addresses = nullptr;
-        if (::getaddrinfo (_parsed.host.c_str (), _parsed.port.c_str (), &hints, &addresses) != 0) {
-            return;
-        }
-        for (addrinfo *address = addresses; address != nullptr; address = address->ai_next) {
-            const int fd = ::socket (address->ai_family, address->ai_socktype, address->ai_protocol);
-            if (fd < 0) {
-                continue;
-            }
-            const int connected = ::connect (fd, address->ai_addr, address->ai_addrlen);
-            ::close (fd);
-            if (connected == 0) {
-                break;
-            }
-        }
-        ::freeaddrinfo (addresses);
     }
 
     void stop_workers () noexcept { stop_and_join_workers (); }
@@ -383,34 +244,64 @@ class http_host_service_t::listener_t
         return _active_requests.load (std::memory_order_acquire) == 0;
     }
 
-    // Keep-alive clients hold connections open between requests, and the
-    // worker's synchronous read cannot be cancelled by a timer. Stop must
-    // shut the open sockets down so blocked workers unblock and join.
+    // Keep-alive clients hold connections open between requests. Closing is
+    // posted to the connection's executor so the stream object is not touched
+    // concurrently by the shutdown thread and its I/O coroutine.
     void close_open_connections () noexcept
     {
-        const std::lock_guard<std::mutex> lock (_sockets_mutex);
-        for (auto fd : _sockets) {
-            (void) ::shutdown (fd, SHUT_RDWR);
+        std::vector<std::function<void ()>> closers;
+        {
+            const std::lock_guard<std::mutex> lock (_sockets_mutex);
+            closers.reserve (_sockets.size ());
+            for (const auto &entry : _sockets) {
+                closers.push_back (entry.second);
+            }
+        }
+        for (auto &close : closers) {
+            close ();
         }
     }
 
     class connection_registration_t
     {
       public:
-        connection_registration_t (listener_t &listener, int fd) :
-            _listener (listener), _fd (fd)
+        connection_registration_t (listener_t &listener,
+                                   const std::shared_ptr<connection_t> &owner,
+                                   beast::tcp_stream &stream,
+                                   std::shared_ptr<void> stream_lifetime) :
+            _listener (listener), _stream (&stream)
         {
-            const std::lock_guard<std::mutex> lock (_listener._sockets_mutex);
-            _listener._sockets.insert (_fd);
-            if (_listener._stop->load (std::memory_order_acquire)) {
-                (void) ::shutdown (_fd, SHUT_RDWR);
+            const std::weak_ptr<connection_t> weak_owner = owner;
+            const std::weak_ptr<void> weak_stream_lifetime = stream_lifetime;
+            const auto close = [weak_owner, weak_stream_lifetime, stream_ptr = _stream] {
+                const auto owner = weak_owner.lock ();
+                if (!owner || weak_stream_lifetime.expired ()) {
+                    return;
+                }
+                asio::post (owner->io, [weak_owner, weak_stream_lifetime, stream_ptr] {
+                    if (weak_owner.expired () || weak_stream_lifetime.expired ()) {
+                        return;
+                    }
+                    beast::error_code ignored;
+                    stream_ptr->socket ().cancel (ignored);
+                    stream_ptr->socket ().close (ignored);
+                });
+            };
+            bool close_now = false;
+            {
+                const std::lock_guard<std::mutex> lock (_listener._sockets_mutex);
+                _listener._sockets.emplace (_stream, close);
+                close_now = _listener._stop->load (std::memory_order_acquire);
+            }
+            if (close_now) {
+                close ();
             }
         }
 
         ~connection_registration_t ()
         {
             const std::lock_guard<std::mutex> lock (_listener._sockets_mutex);
-            _listener._sockets.erase (_fd);
+            _listener._sockets.erase (_stream);
         }
 
         connection_registration_t (const connection_registration_t &) = delete;
@@ -418,25 +309,41 @@ class http_host_service_t::listener_t
 
       private:
         listener_t &_listener;
-        int _fd;
+        beast::tcp_stream *_stream;
     };
 
-    void reject_overloaded (int fd)
+    void close_connection (beast::tcp_stream *stream) noexcept
+    {
+        std::function<void ()> close;
+        {
+            const std::lock_guard<std::mutex> lock (_sockets_mutex);
+            const auto found = _sockets.find (stream);
+            if (found != _sockets.end ()) {
+                close = found->second;
+            }
+        }
+        if (close) {
+            close ();
+        }
+    }
+
+    void reject_overloaded (tcp::socket socket)
     {
         if (_parsed.scheme != "http") {
-            (void) ::shutdown (fd, SHUT_RDWR);
-            (void) ::close (fd);
+            beast::error_code ignored;
+            socket.shutdown (tcp::socket::shutdown_both, ignored);
+            socket.close (ignored);
             return;
         }
-        fd_stream_t stream (fd);
+        beast::tcp_stream stream (std::move (socket));
         beast::error_code ec;
         auto response = make_http_status_response (http::status::service_unavailable, 11,
                                                    R"({"error":"server overloaded"})", false);
         http::write (stream, response, ec);
-        stream.shutdown_send ();
+        stream.socket ().shutdown (tcp::socket::shutdown_send, ec);
     }
 
-    void set_request_timeout (fd_stream_t &stream, std::chrono::milliseconds timeout)
+    void set_request_timeout (beast::tcp_stream &stream, std::chrono::milliseconds timeout)
     {
         stream.expires_after (timeout);
     }
@@ -449,7 +356,7 @@ class http_host_service_t::listener_t
     }
 #endif
 
-    template <typename TStream> bool serve_requests (TStream &stream)
+    template <typename TStream> asio::awaitable<bool> serve_requests_async (TStream &stream)
     {
         beast::flat_buffer buffer;
         std::size_t served = 0;
@@ -461,32 +368,38 @@ class http_host_service_t::listener_t
             beast::error_code ec;
             set_request_timeout (stream, served == 0 ? _options->server.request_headers_timeout
                                                      : _options->server.keep_alive_timeout);
-            http::read_header (stream, buffer, parser, ec);
+            (void) co_await http::async_read_header (
+              stream, buffer, parser,
+              asio::redirect_error (asio::use_awaitable, ec));
             if (ec == http::error::end_of_stream || ec == asio::error::eof) {
-                return true;
-            }
-            if (served > 0 && is_would_block (ec)) {
-                return true;
+                co_return true;
             }
             if (ec) {
                 auto response = make_http_parser_error_response (ec, 11);
-                http::write (stream, response, ec);
-                return false;
+                set_request_timeout (stream, _options->server.write_timeout);
+                (void) co_await http::async_write (
+                  stream, response, asio::redirect_error (asio::use_awaitable, ec));
+                co_return false;
             }
             if (parser.content_length ()
                 && *parser.content_length () > _options->server.max_request_body_size) {
                 auto response =
                   make_http_status_response (http::status::payload_too_large, 11,
                                              R"({"error":"request body too large"})", false);
-                http::write (stream, response, ec);
-                return false;
+                set_request_timeout (stream, _options->server.write_timeout);
+                (void) co_await http::async_write (
+                  stream, response, asio::redirect_error (asio::use_awaitable, ec));
+                co_return false;
             }
             set_request_timeout (stream, _options->server.request_body_timeout);
-            http::read (stream, buffer, parser, ec);
+            (void) co_await http::async_read (
+              stream, buffer, parser, asio::redirect_error (asio::use_awaitable, ec));
             if (ec) {
                 auto response = make_http_parser_error_response (ec, 11);
-                http::write (stream, response, ec);
-                return false;
+                set_request_timeout (stream, _options->server.write_timeout);
+                (void) co_await http::async_write (
+                  stream, response, asio::redirect_error (asio::use_awaitable, ec));
+                co_return false;
             }
             auto request = parser.release ();
             _active_requests.fetch_add (1, std::memory_order_acq_rel);
@@ -502,61 +415,64 @@ class http_host_service_t::listener_t
                                  && served + 1 < _options->server.max_keep_alive_requests
                                  && !_stop->load (std::memory_order_acquire));
             set_request_timeout (stream, _options->server.write_timeout);
-            http::write (stream, response, ec);
+            (void) co_await http::async_write (
+              stream, response, asio::redirect_error (asio::use_awaitable, ec));
             if (ec || !response.keep_alive ()) {
-                return false;
+                co_return false;
             }
             ++served;
         }
-        return true;
+        co_return true;
     }
 
-    void handle_http (int fd)
+    void handle_http (std::shared_ptr<connection_t> connection)
     {
-        fd_stream_t stream (fd);
-        connection_registration_t registration (*this, stream.fd ());
-        beast::error_code ec;
-        serve_requests (stream);
-        stream.shutdown_send ();
+        asio::co_spawn (
+          connection->io,
+          [this, connection] () -> asio::awaitable<void> {
+              auto stream = std::make_shared<beast::tcp_stream> (std::move (connection->socket));
+              connection_registration_t registration (*this, connection, *stream, stream);
+              (void) co_await serve_requests_async (*stream);
+              beast::error_code ignored;
+              stream->socket ().shutdown (tcp::socket::shutdown_send, ignored);
+              co_return;
+          },
+          asio::detached);
+        connection->io.run ();
     }
 
-    void handle_https (int fd)
+    void handle_https (std::shared_ptr<connection_t> connection)
     {
 #ifdef ZLINK_FRAMEWORK_HTTP_WITH_OPENSSL
         if (!_tls_context) {
-            (void) ::shutdown (fd, SHUT_RDWR);
-            (void) ::close (fd);
+            beast::error_code ignored;
+            connection->socket.close (ignored);
             return;
         }
-        sockaddr_storage local_address{};
-        socklen_t local_address_size = sizeof (local_address);
-        const int family =
-          ::getsockname (fd, reinterpret_cast<sockaddr *> (&local_address), &local_address_size)
-              == 0
-            ? local_address.ss_family
-            : AF_INET;
-
-        asio::io_context io;
-        tcp::socket socket (io);
-        beast::error_code ec;
-        socket.assign (family == AF_INET6 ? tcp::v6 () : tcp::v4 (), fd, ec);
-        if (ec) {
-            (void) ::shutdown (fd, SHUT_RDWR);
-            (void) ::close (fd);
-            return;
-        }
-        beast::ssl_stream<beast::tcp_stream> stream (std::move (socket), *_tls_context);
-        connection_registration_t registration (*this, fd);
-        set_request_timeout (stream, _options->server.request_headers_timeout);
-        stream.handshake (asio::ssl::stream_base::server, ec);
-        if (ec) {
-            return;
-        }
-        serve_requests (stream);
-        stream.shutdown (ec);
+        asio::co_spawn (
+          connection->io,
+          [this, connection] () -> asio::awaitable<void> {
+              auto stream = std::make_shared<beast::ssl_stream<beast::tcp_stream>> (
+                std::move (connection->socket), *_tls_context);
+              connection_registration_t registration (*this, connection,
+                                                       stream->next_layer (), stream);
+              beast::error_code ec;
+              set_request_timeout (*stream, _options->server.request_headers_timeout);
+              co_await stream->async_handshake (
+                asio::ssl::stream_base::server,
+                asio::redirect_error (asio::use_awaitable, ec));
+              if (!ec) {
+                  (void) co_await serve_requests_async (*stream);
+              }
+              co_await stream->async_shutdown (
+                asio::redirect_error (asio::use_awaitable, ec));
+              co_return;
+          },
+          asio::detached);
+        connection->io.run ();
 #else
-        (void) ::shutdown (fd, SHUT_RDWR);
-        (void) ::close (fd);
+        beast::error_code ignored;
+        connection->socket.close (ignored);
 #endif
     }
 
@@ -570,16 +486,17 @@ class http_host_service_t::listener_t
     std::atomic_bool _workers_stopped{false};
     std::mutex _worker_stop_mutex;
     std::mutex _sockets_mutex;
-    std::unordered_set<int> _sockets;
+    std::unordered_map<beast::tcp_stream *, std::function<void ()>> _sockets;
     parsed_http_endpoint_t _parsed;
     offload_executor_t _handler_executor;
     offload_executor_t _connection_workers;
-    int _listen_fd = -1;
+    asio::io_context _io;
+    tcp::acceptor _acceptor;
+    asio::steady_timer _accept_retry_timer;
 #ifdef ZLINK_FRAMEWORK_HTTP_WITH_OPENSSL
     std::optional<asio::ssl::context> _tls_context;
 #endif
 };
-
 http_host_service_t::http_host_service_t (http_options_snapshot_t options,
                                           health_builder_t &health,
                                           std::size_t handler_worker_count) :

@@ -39,8 +39,11 @@ Linux 또는 WSL에서 샘플 하나를 실행하려면 해당 runner를 호출�
 ./framework/languages/cpp/samples/Bingo/run_sample.sh
 ```
 
-현재 C++ 지원 범위인 여섯 샘플을 순서대로 실행하려면 통합 runner를 사용한다. 공통 sample의
-ZoneWorld는 현재 .NET과 Node.js만 지원하며 C++ sample 계약에는 포함되지 않는다.
+현재 C++ 구현이 있는 여섯 샘플을 순서대로 실행하려면 통합 runner를 사용한다. 공통 sample의
+ZoneWorld는 공통 sample target이지만 현재 server implementation은 .NET과 Node.js에만 있다.
+C++ source·CMake target·runner가 저장소에 없으므로 C++ sample 목록이나 aggregate 실행 결과에는
+포함하지 않고 implementation gap으로 남긴다. 이 gap을 닫기 전에는 공통 ZoneWorld 계약만으로
+C++ 지원을 주장하지 않는다.
 
 ```bash
 ./framework/languages/cpp/samples/run_samples.sh

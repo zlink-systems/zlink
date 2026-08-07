@@ -6,8 +6,8 @@
 #include "runtime/diagnostics/listener_status_registry.hpp"
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/dispatch/receive_batch_budget.hpp"
-#include "runtime/eventing/runtime_wake_pipe.hpp"
 #include "runtime/fanout/raw_fanout_owner.hpp"
+#include "runtime/eventing/runtime_wake_timer.hpp"
 #include "runtime/locations/location_runtime.hpp"
 
 #include <zlink/framework/contracts/channels/channel.hpp>
@@ -114,7 +114,7 @@ class fanout_location_runtime_t final : public fanout_runtime_t
     serializer_registry_t *_serializers;
     const handler_registry_t *_handlers;
     std::unique_ptr<zlink::poller_t> _subscriber_poller;
-    eventing::runtime_wake_pipe_t _wake_pipe;
+    eventing::runtime_wake_timer_t _wake_timer;
     mutable std::mutex _gate;
     std::map<std::string, std::unique_ptr<publisher_entry_t>>
       _publishers;

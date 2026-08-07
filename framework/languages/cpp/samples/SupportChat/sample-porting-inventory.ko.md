@@ -16,8 +16,8 @@
 | `Server/Session/Program.cs`; `SupportChatSession.cs` | `Server/Session/main.cpp` | done | real packet stream session을 열고, Support channel에서 받은 identity actor ref를 session에 bind한다. agent의 `JoinConversationReq`는 stream metadata의 `ConversationId`로 Support channel에 per-conversation actor 생성을 요청하고, 이후 같은 metadata가 있는 packet은 해당 actor로 relay한다. |
 | `Server/Support/Program.cs`; domain/application flow | `Server/Support/main.cpp`; `Server/Support/Domain/SupportChat/conversation.hpp`; `Server/Support/Application/ConversationAssignment/agent_assignment_service.hpp` | done | Support role이 Support channel, Support-owned actor, Entry Spot command handler, `supportchat.conversation` Conversation Spot, public bound-session publisher를 호스팅한다. `EnsureAgentConversationReq`로 agent roster actor와 conversation마다 분리된 actor id를 연결하고 Conversation Spot에 join한다. HTTP self-check도 실제 domain/application 객체로 one-agent-many-conversations, per-room sequence, typing, reconnect state, explicit close, idle close, no-agent waiting을 검증한다. |
 | `Client/SupportChatClientScenario.cs` | `Client/supportchat_client_scenario.hpp`; `Client/main.cpp` | done | client가 Support role HTTP self-check evidence를 호출한 뒤 Session stream에 customer/agent connector를 연결한다. conversation packet에는 `ConversationId` metadata를 싣고, public wait interface로 `ConversationAssignedNotify`, `ParticipantJoinedNotify`, `ChatMessageNotify`, `TypingChangedNotify`, `ConversationIdleNotify`, `ConversationClosedNotify`를 기다린다. |
-| `run_sample.sh` | `run_sample.sh` | done | 필요한 CMake target을 빌드하고 Redis 준비, role/probe/client 실행, flow trace marker를 검증한다. |
-| `SupportChat.csproj`/role csproj | `framework/languages/cpp/CMakeLists.txt` | done | C++ role/client/probe executable과 `sample_smoke` ctest를 등록한다. |
+| `run_sample.sh` | `run_sample.sh` | done | 필요한 CMake target을 빌드하고 Redis 준비, API/Session/Support/client 실행, flow trace marker를 검증한다. |
+| `SupportChat.csproj`/role csproj | `framework/languages/cpp/CMakeLists.txt` | done | C++ API/Session/Support/client executable과 `sample_smoke` ctest를 등록한다. 별도 Probe process는 없다. |
 
 ## .NET 파일 대응 보강
 
@@ -37,7 +37,7 @@
 
 ## 남은 gap
 
-현재 sample process에서 확인하지 못한 SupportChat runtime gap은 없다. 공통 계약에 없는
+현재 sample process에서 확인하지 못한 SupportChat application gap은 없다. 공통 계약에 없는
 `AuthenticateUser*`, `EnsureSupportUserActor*`, `EnsureAgentConversation*`,
 `ConversationCreate*`는 role 사이의 내부 message이고, `supportchat_server_assertion_*`는
 test/evidence-only HTTP message다. 이 message들은 public client contract에 추가된 것으로
@@ -49,12 +49,22 @@ ledger gate이므로 이 inventory의 sample process 통과만으로 전체 S1 c
 - `timeout 300s framework/languages/cpp/samples/SupportChat/run_sample.sh`
   - 결과: 통과
   - 출력: `PASS SupportChat.Cpp`, `supportchat sample result=passed`
+  - 실행 조건: `ZLINK_CPP_BUILD_DIR=framework/languages/cpp/build/linux-ninja-vcpkg-debug`
   - 의미: client는 HTTP public surface로 Support role domain/application self-check evidence를 확인하고,
     Session role은 stream connector request와 bound-session notification wait까지 실제 TCP stream으로
     검증한다. runner는 `supportchat authentication=verified`,
     `supportchat conversation-assignment=verified`, `supportchat bound-push=verified`,
-    `supportchat reconnect=verified`, `supportchat idle-close=verified`, `supportchat=completed`를
-    확인한다.
+    `supportchat reconnect=verified`, `supportchat idle-resume=verified`,
+    `supportchat idle-close=verified`, `supportchat closed-typing-ignore=verified`,
+    `supportchat=completed`를 확인한다.
+
+## 남은 실행 조건
+
+기본값인 `framework/languages/cpp/build`에 dependency prefix 또는 vcpkg toolchain이
+기록되어 있지 않으면 runner의 configure가 `protobufConfig.cmake`를 찾지 못할 수 있다.
+이는 SupportChat runtime gap이 아니라 clean consumer가 사용할 dependency provenance를
+build directory에 제공해야 하는 packaging/build-environment 조건이다. 위 검증은 기존
+`linux-ninja-vcpkg-debug` build directory의 CMake cache와 local package를 사용했다.
 - 2026-08-03: `framework/languages/cpp/samples/run_samples.sh`와
   `pwsh -NoProfile -File framework/languages/cpp/samples/run_samples.ps1`
   - 결과: 두 aggregate 모두 exit code 0

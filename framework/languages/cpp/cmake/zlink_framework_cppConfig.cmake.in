@@ -13,9 +13,24 @@ find_dependency(nlohmann_json CONFIG)
 
 if(NOT TARGET libzlink)
   if(WIN32)
+    set(ZLINK_FRAMEWORK_CPP_CORE_IMPORT_LIBRARY
+      "${ZLINK_FRAMEWORK_CPP_PACKAGE_PREFIX}/lib/zlink.lib")
+    if(NOT EXISTS "${ZLINK_FRAMEWORK_CPP_CORE_IMPORT_LIBRARY}")
+      set(ZLINK_FRAMEWORK_CPP_CORE_IMPORT_LIBRARY
+        "${ZLINK_FRAMEWORK_CPP_PACKAGE_PREFIX}/lib/libzlink.lib")
+    endif()
+    if(NOT EXISTS "${ZLINK_FRAMEWORK_CPP_CORE_IMPORT_LIBRARY}")
+      set(ZLINK_FRAMEWORK_CPP_CORE_IMPORT_LIBRARY
+        "${ZLINK_FRAMEWORK_CPP_PACKAGE_PREFIX}/lib/libzlink.dll.a")
+    endif()
+    if(NOT EXISTS "${ZLINK_FRAMEWORK_CPP_CORE_IMPORT_LIBRARY}")
+      message(FATAL_ERROR
+        "The installed framework package has no Core import library")
+    endif()
     add_library(libzlink SHARED IMPORTED)
     set_target_properties(libzlink PROPERTIES
-      IMPORTED_LOCATION "${ZLINK_FRAMEWORK_CPP_PACKAGE_PREFIX}/bin/zlink.dll")
+      IMPORTED_LOCATION "${ZLINK_FRAMEWORK_CPP_PACKAGE_PREFIX}/bin/zlink.dll"
+      IMPORTED_IMPLIB "${ZLINK_FRAMEWORK_CPP_CORE_IMPORT_LIBRARY}")
   elseif(APPLE)
     add_library(libzlink SHARED IMPORTED)
     set_target_properties(libzlink PROPERTIES
@@ -30,3 +45,8 @@ if(NOT TARGET zlink::cpp)
   include("${CMAKE_CURRENT_LIST_DIR}/../zlink_cpp/zlink_cppTargets.cmake")
 endif()
 include("${CMAKE_CURRENT_LIST_DIR}/zlink_framework_cppTargets.cmake")
+if(TARGET zlink::framework_cpp_lz4)
+  set_property(TARGET zlink::framework_cpp_lz4 PROPERTY
+    INTERFACE_LINK_LIBRARIES
+    "${ZLINK_FRAMEWORK_CPP_PACKAGE_PREFIX}/@CMAKE_INSTALL_LIBDIR@/@ZLINK_LZ4_LIBRARY_NAME@")
+endif()
