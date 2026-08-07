@@ -233,10 +233,10 @@ internal sealed class ZLinkStreamSessionTable(
     {
         try
         {
-            var payload = ZLinkStreamSessionClosingCodec.EncodeServerDrain();
+            var payload = ZlinkStreamSessionClosingCodec.EncodeServerDrain();
             ZLinkStreamFrameWriter.Write(
                 message => socket.Send(routingId, message, SendFlags.None),
-                ZLinkStreamSessionClosingCodec.CreateHeader(),
+                ZlinkStreamSessionClosingCodec.CreateHeader(),
                 payload,
                 "Could not submit the session-closing control packet.");
         }

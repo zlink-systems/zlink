@@ -318,13 +318,13 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
                 TryScheduleTerminal(
                     "idle_timeout",
                     () => CloseForLivenessTimeoutAsync(
-                        ZLinkStreamSessionClosingCodec.EncodeIdleTimeout()));
+                        ZlinkStreamSessionClosingCodec.EncodeIdleTimeout()));
                 return;
             case ZLinkStreamLivenessDecision.HeartbeatTimeout:
                 TryScheduleTerminal(
                     "heartbeat_timeout",
                     () => CloseForLivenessTimeoutAsync(
-                        ZLinkStreamSessionClosingCodec.EncodeHeartbeatTimeout()));
+                        ZlinkStreamSessionClosingCodec.EncodeHeartbeatTimeout()));
                 return;
             default:
                 throw new InvalidOperationException("Unknown STREAM liveness decision.");
@@ -407,10 +407,10 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         if (Interlocked.Exchange(ref _serverDrainClosingSent, 1) != 0) return;
         try
         {
-            var payload = ZLinkStreamSessionClosingCodec.EncodeServerDrain();
+            var payload = ZlinkStreamSessionClosingCodec.EncodeServerDrain();
             ZLinkStreamFrameWriter.Write(
                 Stream,
-                ZLinkStreamSessionClosingCodec.CreateHeader(),
+                ZlinkStreamSessionClosingCodec.CreateHeader(),
                 payload.AsMemory(),
                 "Could not submit the session-closing control packet.");
         }
@@ -555,8 +555,8 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         {
             ZLinkStreamFrameWriter.Write(
                 Stream,
-                ZLinkStreamSessionClosingCodec.CreateHeader(),
-                ZLinkStreamSessionClosingCodec.EncodeProtocolError().AsMemory(),
+                ZlinkStreamSessionClosingCodec.CreateHeader(),
+                ZlinkStreamSessionClosingCodec.EncodeProtocolError().AsMemory(),
                 "Could not submit the protocol-error session-closing control packet.");
         }
         catch
@@ -577,7 +577,7 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         {
             ZLinkStreamFrameWriter.Write(
                 Stream,
-                ZLinkStreamSessionClosingCodec.CreateHeader(),
+                ZlinkStreamSessionClosingCodec.CreateHeader(),
                 payload.AsMemory(),
                 "Could not submit the liveness session-closing control packet.");
         }

@@ -1,5 +1,6 @@
 global using Systems.Zlink;
 global using Systems.Zlink.Stream.Connector.Contracts;
+global using Systems.Zlink.Stream.Connector.Runtime.Protocol;
 global using Zlink.Framework.Runtime.Codecs;
 global using Zlink.Framework.Runtime.Configuration;
 global using Zlink.Framework.Runtime.Configuration.Builders;
