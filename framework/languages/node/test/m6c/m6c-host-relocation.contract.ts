@@ -1682,6 +1682,10 @@ test('production host inventory relocates User Spot aggregate Instance Spot and 
   assert.ok(events.includes('restore:matchmaker-a'));
   assert.ok(events.includes('restore:room-actor'));
   assert.ok(events.includes('restore:standalone-actor'));
+  assert.ok(
+    events.indexOf('source-spot-sealed:room-a')
+      < events.indexOf('source-session-sealed:room-actor')
+  );
   assert.ok(events.includes('membership-restored:room-actor:room-a'));
   assert.ok(events.includes('queue-replayed:room-actor'));
   assert.ok(events.includes('timer-restored:room-a:1'));

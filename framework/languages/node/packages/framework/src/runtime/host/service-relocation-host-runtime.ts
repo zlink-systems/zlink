@@ -700,15 +700,24 @@ export class ZLinkHostServiceRelocationRuntime {
           spotAuthority,
           activation
         );
-        for (const state of actorStates) {
-          sessions.push({
+        // captureRelocation seals synchronously before its first await. Invoke
+        // it in the same event-loop turn as the wire ingress seal so no
+        // accepted direct message can enter between the two boundaries.
+        const spotCaptureOperation = activation.captureRelocation(captureSignal);
+        const preparedSessions = Promise.all(actorStates.map(async state => ({
             state,
             actor: state.actor!,
             prepared: await this.options.actorTransfer.prepareMaintenanceSession(
               state.actor!, state, captureSignal, false)
-          });
-        }
-        spotCapture = await activation.captureRelocation(captureSignal);
+          })));
+        const preparedSessionsOutcome = preparedSessions.then(
+          value => ({ value }),
+          error => ({ error })
+        );
+        spotCapture = await spotCaptureOperation;
+        const preparation = await preparedSessionsOutcome;
+        if ('error' in preparation) throw preparation.error;
+        sessions.push(...preparation.value);
         return {
           acceptedJournal: Buffer.alloc(0),
           queuedMessages: [],
