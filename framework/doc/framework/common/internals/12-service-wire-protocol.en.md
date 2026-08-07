@@ -366,6 +366,11 @@ object role creates neither authority nor a hidden local runtime.
 
 ## 8. Instance Spot cold activation recovery
 
+The recovery scope and caller-visible result are defined by
+[Failure Handling And Failover Scope §4.4](../spec/31-failure-failover-policy.en.md#44-distinguishing-instance-spot-cold-activation-from-owner-failure).
+This section describes only the wire-record, durable-root, and scan structure
+that implements that scope.
+
 Recovery in this section is not general owner-loss reactivation. It resumes an operation on the
 same target node and lifecycle generation only when the first cold activation published Ready but
 didn't finish recording that operation's terminal completion and removing the recovery pointer. A

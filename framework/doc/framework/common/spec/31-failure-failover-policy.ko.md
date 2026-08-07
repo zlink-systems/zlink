@@ -257,3 +257,17 @@ Framework가 수락 전 target을 다시 선택하거나 Store 결과를 재확�
   않는다.
 - Store 결과가 불분명하면 authority를 다시 읽기 전까지 source admission과 target dispatch를 열지 않는다.
 - Session owner process 종료 뒤 Session과 binding을 다른 process에서 복원하지 않는다.
+
+## 10. 관련 내부 구조
+
+이 문서가 공개 장애 동작의 정본이다. 구현 구조는 다음 internals 문서에서 이어서 설명하며, 해당
+문서는 이 장의 오류 의미나 failover 범위를 다시 정의하지 않는다.
+
+- [6. target 선택과 route cache](../internals/06-routing-and-cache.ko.md)는 `Missing`과
+  `Unavailable`을 resolver 결과 타입에서 보존하는 방법을 설명한다.
+- [8. 객체 종류와 활성화](../internals/08-object-lifecycle.ko.md)는 resolver 결과를 activation state
+  machine의 서로 다른 입력으로 전달하는 방법을 설명한다.
+- [10. Liveness와 상태 공개](../internals/10-liveness-and-state.ko.md)는 availability evidence와
+  authority release의 소유자를 분리한다.
+- [12. Service wire protocol](../internals/12-service-wire-protocol.ko.md#8-instance-spot-cold-activation-recovery)은
+  같은 target의 최초 activation recovery에만 사용하는 durable root와 scan을 설명한다.

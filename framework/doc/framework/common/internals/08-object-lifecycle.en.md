@@ -71,18 +71,24 @@ build a new one; an ordinary message and a lookup call only target an
 already-ready object
 ([Spot · Actor Routing 「2.2 The Condition For Using A Recent Ready Route」](../spec/18-object-routing.en.md#22-the-condition-for-using-a-recent-ready-route)).
 
-### Distinguish `Missing` From A `Ready` Owner That Can't Be Used
+### Pass Spec States Into The Activation State Machine
 
-Instance intent alone doesn't enter the creation path. The resolver
-checks authority and owner availability together and preserves the
-following meanings.
+The public behavior is defined by
+[Failure Handling And Failover Scope §4.4](../spec/31-failure-failover-policy.en.md#44-distinguishing-instance-spot-cold-activation-from-owner-failure).
+The activation state machine receives the resolver result as one of the
+following internal states and passes it once to the responsible component.
 
-| Observed State | Next Action |
-|---|---|
-| `Missing`, with no authority record | Instance intent may try to claim a creation reservation. |
-| Creation is in progress | Wait for the in-progress attempt without running a second factory for the object. |
-| `Ready` with a valid owner lease | Use the current owner route. |
-| Authority is `Ready`, but the owner process terminated or its lease is invalid | Keep authority and end the call with `Unavailable`. Don't select another node or run a factory. |
+| Internal State | Fence Preserved | Next Component |
+|---|---|---|
+| `Missing` | Lookup version proving authority absence | Creation coordinator |
+| `Creating` | Attempt and reservation fence | Waiter for the same attempt |
+| `Ready` | Route and authority/owner-lease fences | Route admission |
+| `Unavailable` | Authority and invalid-owner evidence | Terminal completion adapter |
+
+There is no activation transition from `Unavailable` to `Missing`. An
+explicit `Close`, `IdleEvicted` cleanup, or another formal lifecycle
+operation can complete authority release, after which the resolver can
+produce a new `Missing` input.
 
 Stored creation intent resumes only an incomplete first cold-activation
 operation on the same target node and lifecycle. It isn't used for
@@ -234,12 +240,12 @@ This isn't a retry that resends an already-accepted application
 request; it's an owner-route refresh that confirms the result of
 explicit idle cleanup.
 
-The resolver must distinguish `Missing` after idle cleanup released
-authority from an `Unavailable` resolution, where only the owner lease is
-invalid. Only the former enters Instance cold activation. The latter
-ends with `Unavailable` without running a new factory or handler. An
-application request that already received a stale error from a
-previously `Ready` route isn't resubmitted to another owner either.
+The resolver passes the result of completed idle-cleanup authority release
+and a change in owner-availability evidence as different tags into the
+activation state machine. The creation coordinator receives only the former
+tag, while the latter is wired to the terminal completion adapter. The rule
+against resubmitting an accepted request is defined by
+[Failure Handling And Failover Scope §2](../spec/31-failure-failover-policy.en.md#2-common-judgment-criteria).
 
 The idle-cleanup state of other Framework languages, and the common
 process-verification result, aren't treated as complete just from this
@@ -382,9 +388,9 @@ followed as-is
   time, the factory runs only once.
 - The "being created" state doesn't stay in the location cache.
 - A record from a failed creation is cleaned up at startup.
-- `Ready` owner process termination or lease expiry doesn't become `Missing`.
-- When a `Ready` owner can't be used, no factory or handler runs on another node and the call ends with `Unavailable`.
-- Incomplete first cold-activation recovery runs only on the target node and lifecycle named by authority.
+- A change in owner-availability evidence doesn't invoke the authority-release transition.
+- An `Unavailable` resolver tag is passed only to the terminal completion adapter.
+- The activation-recovery root and scan key contain authority's target node and lifecycle.
 - Even right after an object is recreated, ordinary messages aren't
   rejected for generation mismatch.
 - A call sent to a stale owner ends in an error without automatic

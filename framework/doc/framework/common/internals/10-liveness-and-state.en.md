@@ -68,19 +68,21 @@ judgment.
 
 ### A Liveness Judgment Doesn't Change Authority
 
-Peer liveness and owner-lease checks are inputs for deciding whether
-the current owner can be used. That result alone doesn't delete a
-`Ready` authority from the Location Store or turn it into `Missing`.
-When authority remains but the owner can't be used, the Instance Spot
-resolver classifies it as `Unavailable`, and the caller operation
-ends with `Unavailable`.
+The public behavior is defined by
+[Failure Handling And Failover Scope §4.4](../spec/31-failure-failover-policy.en.md#44-distinguishing-instance-spot-cold-activation-from-owner-failure).
+This section only assigns the responsibilities that produce it.
 
-Authority release is owned by the application's explicit `Close`,
-`IdleEvicted` cleanup, or another formal lifecycle operation. The
-liveness subsystem doesn't start a creation reservation, cold
-activation, relocation, or owner takeover on another node. Keeping
-this boundary prevents connection-failure detection from leaking into
-object-creation policy.
+- The liveness subsystem publishes peer and owner-lease availability
+  evidence only.
+- The location resolver reads the evidence together with authority and
+  produces a closed lookup result.
+- Only the lifecycle component releases authority through an explicit
+  `Close`, `IdleEvicted` cleanup, or another formal lifecycle operation.
+- The activation coordinator doesn't consume a liveness event directly;
+  it receives only a resolver `Missing` result.
+
+This keeps connection-failure detection from leaking into object creation,
+relocation, or owner-takeover policy.
 
 ## 2. An Unready Target Isn't Blocked From Calls — It's Excluded From Candidates
 
@@ -286,10 +288,9 @@ message midway. Changing it would leave half a message's record.
   it's judged dropped once the judgment deadline passes.
 - The check signal and its response don't reach the application
   handler.
-- Owner-liveness failure alone doesn't release a `Ready` authority or
-  turn it into `Missing`.
-- The liveness subsystem doesn't start an Instance creation
-  reservation, cold activation, or owner takeover.
+- The liveness subsystem's output is wired only to availability evidence,
+  not to an authority-release command.
+- The activation coordinator doesn't subscribe directly to liveness events.
 - Even with not a single target ready, the runtime starts and becomes
   `serving`.
 - Calling on a channel with no ready target only fails that call, and

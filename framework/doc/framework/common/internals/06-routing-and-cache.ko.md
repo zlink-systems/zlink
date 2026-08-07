@@ -37,20 +37,22 @@ title: "6. target 선택과 route cache"
 **긍정 결과가 아니므로 보관하지 않는다.** 이것을 캐시하면 잠깐의 실패가 캐시 수명만큼
 지속되는 장애가 된다.
 
-### 조회 결과의 의미를 보존한다
+### Spec 상태를 resolver 결과 타입으로 보존한다
 
-캐시하지 않는다는 이유로 서로 다른 조회 결과를 하나의 `없음`으로 축약하면 안 된다.
-Authority record가 없는 `Missing`과 `Ready` authority는 남아 있지만 owner lease가 무효인
-`Unavailable` 판정은 다음 동작이 다르다.
+공개 동작은 [장애 대응과 failover 범위 §4.4](../spec/31-failure-failover-policy.ko.md#44-instance-spot-cold-activation과-owner-장애를-구분한다)가
+정의한다. Resolver는 그 계약을 terminal mapper나 activation coordinator가 다시 추론하지 않도록
+`ReadyRoute`, `Missing`, `Unavailable`, `StoreFailure`의 닫힌 결과로 전달한다.
 
-| 조회 결과 | caller에게 보이는 결과 | Instance cold activation |
+| Resolver 결과 | 보존하는 정보 | 결과를 받는 component |
 |---|---|---|
-| `Missing` | 일반 message operation은 `NotFound`; Instance intent는 생성 권한 확보를 시도할 수 있다. | 허용 |
-| `Unavailable` 판정 | `Unavailable` | 금지 |
+| `ReadyRoute` | route와 authority·owner lease fence | route admission |
+| `Missing` | authority record가 없음 | creation coordinator |
+| `Unavailable` | authority는 남아 있지만 current owner를 사용할 수 없음 | terminal completion mapper |
+| `StoreFailure` | authority 유무를 판정하지 못함 | Store retry/reconciliation |
 
-둘 다 positive route cache에는 넣지 않지만 resolver 결과에는 구분을 유지한다. Explicit `Close`나
-`IdleEvicted` 정리가 authority release까지 끝난 뒤에만 다음 조회가 `Missing`이 된다. Owner process
-종료나 lease 만료만으로 authority를 release하거나 creation reservation을 시작하지 않는다.
+이 네 결과를 `null`이나 하나의 `없음`으로 축약하지 않는다. Positive route cache에는 `ReadyRoute`만
+저장하고, activation coordinator에는 `Missing`만 전달한다. Authority release를 소유하는 lifecycle
+component가 완료한 뒤에만 resolver가 `Missing`을 반환한다.
 
 ### 수명을 무엇이 정하는가
 
@@ -383,8 +385,8 @@ flowchart LR
 
 - 같은 객체로 연속 호출할 때 [Location Store](../spec/01-glossary.ko.md#location-store) 조회가 호출마다 발생하지 않는다.
 - 객체 없음·만드는 중·저장소 실패가 캐시에 남지 않는다.
-- Resolver가 authority 없는 `Missing`과 owner를 사용할 수 없는 `Ready`의 `Unavailable` 판정을 구분한다.
-- `Unavailable` 판정은 Instance creation reservation이나 cold activation을 시작하지 않는다.
+- Resolver 결과 타입이 `Missing`과 `Unavailable`을 서로 다른 tag로 보존한다.
+- Activation coordinator 입력에는 `Missing`만 연결되고 `Unavailable`은 terminal mapper로 연결된다.
 - 캐시 수명이 Message Follow 기간을 넘지 않는다.
 - 이동 후 우회 경로에서 유효한 `messageFollow`를 받으면 보낸 쪽 캐시를 즉시 무효화하여 다음 조회가
   새 owner를 사용한다. 통지가 유실되면 기존 cache lifetime이 끝난 뒤 새 owner를 조회한다.

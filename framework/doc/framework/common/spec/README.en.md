@@ -4,6 +4,13 @@ The documents in this directory describe the Framework's common public
 contract. Each document self-contains the inputs, state, normal flow, and
 failure/completion conditions its implementation and contract tests need.
 
+This directory and the per-language exact interfaces are the single authority
+for the Framework public contract. [Common internals](../internals/README.en.md)
+describe the state and component structure that implement that contract and
+don't add public behavior. The two document sets link to each other so they can
+be read together, but remain separate so implementation detail isn't mistaken
+for a user guarantee.
+
 ## Authoring Standards And Shared Terms
 
 - [Spec writing guide](../../../../../doc/principal/documentation/spec-writing-guide.ko.md)

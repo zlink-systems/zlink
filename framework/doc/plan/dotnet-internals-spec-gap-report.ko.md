@@ -5,14 +5,18 @@ title: ".NET Framework server 스펙 구현 Gap 리포트"
 # .NET Framework server 스펙 구현 Gap 리포트
 
 - **작성일**: 2026-08-07
-- **스펙 기준**: 현재 worktree의 `framework/doc/framework/common/spec/server/languages/dotnet/`와 `framework/doc/framework/common/internals/` 01–12
+- **공개 계약 기준**: 현재 worktree의 `framework/doc/framework/common/spec/`와 .NET exact interface
+- **내부 구조 기준**: 현재 worktree의 `framework/doc/framework/common/internals/` 01–12
 - **메시지 크기 계약 보정**: 2026-08-07 사용자 확인에 따라 RouteMesh ServerServer에는 Framework message-size 상한이 없다. 별도의 기본 64 KiB·startup 설정 계약은 외부 Client가 StreamNode의 Core STREAM socket으로 보내는 C→S complete message에만 적용한다. ClientServer Channel은 기존 negotiated complete-message 계약을 유지한다.
-- **구현 기준**: `framework/languages/dotnet/src/` (`HEAD` `09d34089c095`, 현재 worktree에는 .NET source 변경 없음)
+- **구현 기준**: `framework/languages/dotnet/src/` (`main` commit `425b9c2a8272`; 직전 audit 뒤 .NET production source 변경 없음)
 - **판정 방법**: exact public declaration, production 호출 경로, 오류·수명주기·동시성·HWM 의미, service wire codec과 실제 test assertion을 차례로 대조했다. Type이나 method가 존재하는지만으로 완료 판정하지 않았다. 2차 검토는 `gpt-5.6-sol` high 독립 reviewer가 기존 판정을 반증하고 누락을 찾은 뒤, 지적된 경로를 현재 source에서 다시 확인했다.
 
 현재 `.NET Framework server` 구현은 지정된 스펙을 모두 만족하지 않는다. Public exact interface 3개 영역과 runtime·구조·비용 의미 15개 영역에서 구현 gap을 확인했다. 별도로 timer option은 language exact interface와 canonical wire schema가 서로 충돌하므로 구현 gap으로 확정하지 않고 contract 정본 정리가 필요한 보류 항목으로 분리했다. 특히 현재 worktree에서 추가된 object-location query는 contract test가 실제 누락을 검출했다. 일부 gap에는 스펙보다 약한 assertion이 있고, 나머지는 해당 의미 경계를 직접 검증하는 test가 없다.
 
-구조·POSDDD gap은 internals의 normative 결정을 위반한다는 판정이다. 현재 source만으로 사용자-visible 장애나 성능 저하 수치까지 측정됐다는 뜻은 아니며, 그런 주장은 별도 benchmark/process evidence가 있어야 한다.
+Public API와 사용자에게 보이는 동작은 정식 spec과 exact interface만 계약 근거로 사용한다. 구조·POSDDD
+gap은 그 계약을 구현하는 internals의 상태 표현, component 책임이나 불변 조건과 다르다는 판정이며,
+internals 자체가 새 공개 계약을 만들지는 않는다. 현재 source만으로 사용자-visible 장애나 성능 저하
+수치까지 측정됐다는 뜻도 아니며, 그런 주장은 별도 benchmark/process evidence가 있어야 한다.
 
 ## 1. 판정 요약
 
@@ -139,11 +143,15 @@ Entry Spot은 `ZLinkEntrySpotActivation`으로 분리되어 있지만 User와 In
 
 **판정: UNVERIFIED**
 
-개정된 failure 계약은 `Ready` authority의 owner process 종료나 lease 만료를 Missing으로 바꾸지 않고,
+공개 계약인 failure spec §4.4는 `Ready` authority의 owner process 종료나 lease 만료를 Missing으로 바꾸지 않고,
 다른 node의 cold activation 없이 call을 bounded `Unavailable`로 끝내도록 요구한다. Relocation Store의
 activation record는 같은 target node와 lifecycle에서 끝나지 않은 initial cold activation만 재개한다
 (`common/spec/31-failure-failover-policy.ko.md`, .NET exact interface
 `server/languages/dotnet/interfaces/05-spots.ko.md`).
+
+Internals 06·08·10은 이 결과를 resolver의 닫힌 결과, activation state와 liveness 책임 분리로 구현하고,
+12는 same-target initial recovery root와 scan을 설명한다. 이 구조 문서들은 공개 오류나 failover 범위를
+추가하지 않는다.
 
 현재 source는 이 의미를 이미 구분한다. Instance address lookup은
 `ResolveSpotRowWithStatusAsync(...)`의 `KnownUnavailable`을 받으면 `Unavailable`을 던지고 cold activation에

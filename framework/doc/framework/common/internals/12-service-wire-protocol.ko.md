@@ -334,6 +334,10 @@ runtime을 만들지 않는다.
 
 ## 8. Instance Spot cold activation recovery
 
+Recovery 적용 범위와 caller에게 보이는 결과는
+[장애 대응과 failover 범위 §4.4](../spec/31-failure-failover-policy.ko.md#44-instance-spot-cold-activation과-owner-장애를-구분한다)가
+정의한다. 이 절은 그 범위를 wire record, durable root와 scan으로 구현하는 구조만 설명한다.
+
 이 절의 recovery는 일반적인 owner-loss reactivation이 아니다. 최초 cold activation이 Ready를
 publish했지만 첫 operation의 terminal completion과 recovery pointer 제거를 끝내지 못한 경우에만,
 authority가 가리키는 동일 target node와 lifecycle generation에서 그 operation을 재개한다. Steady

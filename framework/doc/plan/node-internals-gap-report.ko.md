@@ -5,15 +5,19 @@ title: "Node Framework 스펙 구현 Gap 리포트"
 # Node Framework 스펙 구현 Gap 리포트
 
 - **작성일**: 2026-08-07
-- **스펙 기준**: `framework/doc/framework/common/spec/`, Node server exact interface,
-  `framework/doc/framework/common/internals/` 01–12와
-  [Framework contract·E2E 결정 검토](framework-contract-e2e-decision-review.ko.md)의 승인된 DEC-01–17
+- **공개 계약 기준**: 승인된 DEC-01–17의 결과가 반영된 `framework/doc/framework/common/spec/`와
+  Node server exact interface
+- **내부 구조 기준**: `framework/doc/framework/common/internals/` 01–12
 - **구현 기준**: `framework/languages/node/packages/framework/src/`, 생성된
-  `packages/framework/dist/` declaration과 `framework/languages/node/test/`
+  `packages/framework/dist/` declaration과 `framework/languages/node/test/` (`main` commit `425b9c2a8272`)
 - **방법**: public exact surface, runtime 의미·error, codec·protocol, lifecycle·HWM·relocation,
   package·test·process E2E 증거를 분리해 비교했다. Internals 12개 문서의 **Decision** /
   **Result To Confirm** 항목도 현재 정식 spec과 충돌하지 않는 범위에서 다시 판정했다.
 - **증거 경로 표기**: `node/` = `framework/languages/node/packages/framework/src/` 축약. 형제 패키지는 `packages/…`로 표기.
+
+Public API와 사용자에게 보이는 동작은 정식 spec과 exact interface만 계약 근거로 사용한다. Internals는
+그 계약을 구현하는 상태 표현, component 책임과 불변 조건의 차이를 판정하는 기준이며 공개 동작을
+추가하거나 바꾸지 않는다. Source에서 확인한 gap과 package·process 검증 증거 부족도 분리한다.
 
 > **기존 기록과의 관계**: Public spec에 있던 구현 진행 기록은 삭제됐다.
 > 이 보고서가 Node open gap의 작업 기록을 소유하며, 승인된 결정을 반영한 정식 spec과
@@ -255,7 +259,7 @@ mesh/actor/spot/stream 수신 계열은 와이어 content-type(및 stream 헤더
 | NODE-LIFE-002 | PARTIAL·중 | 후보 조건을 quiescence+경과 시간만으로 판정하고 점유/relocation 배제는 close 트랜잭션 abort로 사후 처리 — durable `Closing` authority row를 **먼저 발행한 뒤** 로컬 abort하며 발행된 row를 되돌리는 경로가 없음(복구가 materialization의 `closing` 대기 경로에 의존). 증거: `node/runtime/spots/index.ts:888-895`, `node/runtime/spots/spot-activation.ts:739-757` |
 | NODE-LIFE-003 | GAP·중 | 일반 Actor message의 `validateActorFence → requireActor`가 `generation !== ref.generation`이면 거부한다. 현재 정식 spec과 Node exact interface는 일반 message의 대상을 `ActorId`로 정하고 current authority를 resolve하며 `ObjectGeneration`을 application message target 조건으로 사용하지 않는다. 따라서 이전의 “spec 판정 필요”는 제거하고 확정 GAP으로 교정한다. Session binding·relocation fence처럼 exact incarnation을 다루는 operation은 이 판정에 포함하지 않는다. 증거: common spec `18-object-routing.ko.md:189-219`, Node exact interface `interfaces/05-actors.ko.md:19-22`, `node/runtime/foundation/service-stateful-runtime.ts:3841-3850`, `node/contracts/Common/ActorRef.ts:3-8` |
 | NODE-LIFE-004 | PARTIAL·하 | 레인 기본값 이탈: 앱 4,096건/**16 MiB**(스펙 참조값 64 MiB), lifecycle **1,024건**/4 MiB(참조값 256건) — 참조값이 계약 고정이 아니므로 문서 정합화 항목. 증거: `node/runtime/execution/serial-scheduler.ts:23-26` |
-| NODE-LIFE-005 | GAP·상 | 개정된 failure 계약은 `Ready` authority의 owner loss를 Missing과 구분하고 다른 node의 cold activation을 금지한다. 현재 resolver는 active authority를 반환할 때 owner lease 만료를 별도 unavailable 결과로 노출하지 않으며, stale route refresh 중 resolver가 `undefined`를 반환하면 곧바로 cold activation으로 전환한다. Authority reserve의 `alreadyExists`가 row가 남아 있는 동안 replacement를 막지만, owner row가 정리되는 시점에도 `Ready owner loss`를 유지하는 별도 판정은 없다. Startup recovery는 같은 target node와 lifecycle의 initial activation으로 제한해야 하며 steady-state owner loss 복구에 사용하면 안 된다. 증거: `common/spec/31-failure-failover-policy.ko.md`, Node exact interface `interfaces/04-spots.ko.md`, `node/runtime/locations/resolvers.ts:744-820`, `node/runtime/host/spot-address-transport.ts:535-556`, `node/runtime/host/instance-activation-authority.ts:117-170` |
+| NODE-LIFE-005 | GAP·상 | 공개 계약인 failure spec §4.4는 `Ready` authority의 owner loss를 Missing과 구분하고 다른 node의 cold activation을 금지한다. Internals 06·08·10은 이를 resolver의 닫힌 결과, activation state와 liveness 책임 분리로 구현하고, 12는 same-target initial recovery root만 허용한다. 현재 resolver는 active authority를 반환할 때 owner lease 만료를 별도 unavailable 결과로 노출하지 않으며, stale route refresh 중 resolver가 `undefined`를 반환하면 곧바로 cold activation으로 전환한다. Authority reserve의 `alreadyExists`가 row가 남아 있는 동안 replacement를 막지만, owner row가 정리되는 시점에도 `Ready owner loss`를 유지하는 별도 판정은 없다. Startup recovery는 같은 target node와 lifecycle의 initial activation으로 제한해야 하며 steady-state owner loss 복구에 사용하면 안 된다. 증거: `common/spec/31-failure-failover-policy.ko.md`, Node exact interface `interfaces/04-spots.ko.md`, `common/internals/06-routing-and-cache.ko.md`, `common/internals/08-object-lifecycle.ko.md`, `common/internals/10-liveness-and-state.ko.md`, `common/internals/12-service-wire-protocol.ko.md`, `node/runtime/locations/resolvers.ts:744-820`, `node/runtime/host/spot-address-transport.ts:535-556`, `node/runtime/host/instance-activation-authority.ts:117-170` |
 
 만족(요약): 폐쇄 kind enum·이종 재등록 거부, Entry Spot 이동 단위 제외(Entry 거주 Actor는 이동), 일반 메시지 비생성, factory 1회(store CAS·패자 대기), 실패 생성 즉시 abort+주기 sweep, `IdleEvicted` 콜백 후 위치 해제(**C++ CPP-LIFE-002와 달리 순서 올바름**), 이중 축 레인·relocation 보류 상수, 양 지점 capacity ceiling.
 

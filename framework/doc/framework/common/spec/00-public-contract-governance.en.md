@@ -22,17 +22,33 @@ error, callback order, ownership, and completion conditions.
 The public contract is split into common semantics and language-specific
 representation.
 
-| Location | Contract owned |
+| Location | Content owned |
 |---|---|
 | This directory and the common spec per package | Language-independent features, states, completion conditions, error semantics |
 | A package's `languages/<lang>/` | Actual public types, method signatures, generic/nullable rules, language-specific async representation |
 | The Core formal spec | context, message, raw socket, transport, poller, and generic monitoring contracts |
-| Framework internals | Wiring for the per-language service runtime, state machines, protocol handling, and thread/executor structure |
+| Framework internals | Per-language service-runtime wiring, state machines, protocol handling, and thread/executor structure that satisfy the public contract. They don't own a new public contract. |
 
 The common spec doesn't take any one language's syntax as the standard.
 Each language expresses the same feature and observable result in its own
 idiom. The exact signature of .NET RouteMesh/MeshNode is owned by
 [.NET RouteMesh/MeshNode Interface](server/languages/dotnet/interfaces/03-configuration-topology.en.md).
+
+### One Public-Contract Authority And Its Internals Pair
+
+User-observable behavior is defined exactly once in this directory's common
+spec and the per-language exact interfaces. Internals link to that spec and
+explain only the state representation, component responsibilities, and
+invariants that produce the behavior. They don't restate the same public
+behavior or extend it into a stronger guarantee.
+
+If the two document sets conflict, the spec prevails for public behavior and
+public APIs. An internals structure decision guides implementation, but can't
+create a public API, error meaning, or failover scope. If an implementation
+constraint requires changing observable behavior, the public-contract
+procedure in this document is followed again instead of changing internals
+alone. A gap report classifies public-contract gaps, internal-structure gaps,
+and missing verification evidence separately.
 
 ### 2.1 Production Source Owner
 
@@ -202,10 +218,11 @@ same public surface and behavior.
 ## 8. The 11.0 Spec-First Authority Rule
 
 11.0's Core service migration and service runtime restructuring first fix
-the formal spec and internals as the authority for the target state.
+the formal spec as the authority for the target public contract and internals
+as the standard for the target implementation structure.
 Planning documents, drafts, the current implementation, and other
 languages' implementations aren't the source of the contract. The
-implementation fills the gap against the approved authority, and if a
+implementation fills the gap against the two approved standards, and if a
 constraint that requires changing the contract is found during
 implementation, the affected spec and internals are re-reviewed and
 changed together, instead of bypassing the source.

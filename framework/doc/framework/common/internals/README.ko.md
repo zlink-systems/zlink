@@ -21,6 +21,12 @@ C++·.NET·JVM·Node.js service runtime이 **서로 다른 언어로 구현되�
 
 spec이 이미 정한 내용은 다시 적지 않고 링크만 둔다.
 
+이 문서 묶음의 `결정`은 공개 계약이 아니라 그 계약을 만족시키는 내부 구조 결정이다. `확인할 결과`는
+spec의 공개 결과와 내부 불변 조건을 구현에서 확인하는 기준이며 새 사용자 보장을 만들지 않는다.
+공개 동작, 오류 의미나 failover 범위가 spec과 다르면 spec이 우선한다. 이 경우 internals를 spec에
+맞추거나, 공개 계약 자체를 바꿔야 하면 [공개 계약 절차](../spec/00-public-contract-governance.ko.md#4-공개-계약-절차)를
+먼저 따른다.
+
 현재 구현이 이 결정과 어긋나는 자리와 아직 검증하지 못한 항목은 이 공개 internals 문서에
 진행 상태로 기록하지 않는다. 이 문서는 구현 구조와 결정만 설명한다.
 
@@ -113,13 +119,14 @@ process가 각각 조회하고 기록한다. 한 묶음 안에 넣으면 그 pro
 위치 캐시, [7](07-dispatch-loop.ko.md)의 모아서 처리하기·깨우는 방식·timer 자원,
 [2](02-serialization.ko.md)의 실행 자원 제약, [8](08-object-lifecycle.ko.md)의 메모리 회계에 모여 있다.
 
-## 정본이 여러 곳에 있는 결정
+## 여러 장이 연결되는 구조 결정
 
-같은 주제를 여러 문서가 다루는 자리가 있다. 어긋나면 아래를 정본으로 삼는다.
+같은 주제를 여러 문서가 다루는 자리가 있다. 공개 동작은 spec을 정본으로 삼고, 내부 구조는 아래
+문서를 기준으로 맞춘다.
 
-| 주제 | 정본 |
+| 주제 | 기준 문서 |
 |---|---|
-| 대기열 포화 시 결과 | [2. Spot·Actor 실행 직렬화 「2. 실행 권한을 만들 때의 함정」](02-serialization.ko.md#2-실행-권한을-만들-때의-함정)의 계열×위치 표 |
+| 대기열 포화 시 공개 결과 | [Spot 메시징 「5.3 Spot application queue에 들어가는 작업」](../spec/12-spot-messaging.ko.md#53-spot-application-queue에-들어가는-작업)의 계열×위치 표 |
 | owner 점유 상한과 lifecycle 연속 실행 상한 | [Actor 모델 「3. Actor queue」](../spec/14-actor-model.ko.md#3-actor-queue) |
 | 대상 선택 절차와 tiebreak | [Channel 메시징 「선택 순서」](../spec/08-channel-messaging.ko.md#선택-순서) |
 | 관찰자 합치기와 유실 | [Runtime 상태와 운영 진단](../spec/24-runtime-monitoring.ko.md) |

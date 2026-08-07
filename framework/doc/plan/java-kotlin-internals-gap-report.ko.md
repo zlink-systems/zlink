@@ -2,7 +2,7 @@
 
 ## 1. 결론
 
-현재 Java/Kotlin Framework는 common internals와 언어별 exact interface를 모두 충족한다고
+현재 Java/Kotlin Framework는 공통 공개 spec, 언어별 exact interface와 common internals를 모두 충족한다고
 판정할 수 없다. 단순한 API 누락이 아니라 package 경계, RouteMesh wire 계약, JSON 상호 운용성,
 session 교체, relocation backlog, startup 상태 공개, 완료 확정 구조와 payload 소유권에서 실제
 동작 차이를 확인했다. 재검토 결과 기존 11개 항목 가운데 근거가 없어 철회할 항목은 없었다.
@@ -13,7 +13,8 @@ session과 Message Follow 항목의 오류 의미도 바로잡았다.
 
 가장 먼저 해결해야 할 문제는 다음과 같다.
 
-1. Framework가 고정한 Java bindings package로 현재 source를 compile할 수 없다.
+1. 현재 cache에서는 Java/Kotlin API snapshot이 통과하지만 고정 bindings package의 clean consumer
+   재현성을 아직 확인하지 않았다.
 2. Java와 Kotlin exact interface가 같은 Java public type의 method 수를 서로 다르게 규정한다.
 3. RouteMesh에 없어야 할 `maxMessageSize` public/runtime surface와 descriptor의 고정 4 MiB
    field가 남아 있다.
@@ -31,17 +32,24 @@ session과 Message Follow 항목의 오류 의미도 바로잡았다.
 14. STREAM 상한 초과를 `EMSGSIZE`로 기록하지 않고 segmented oversize 연결 종료를 보장하지 않는다.
 15. 만료된 `Ready` owner authority를 Missing과 구분하지 않아 Instance cold activation 경로에 진입한다.
 
-이 문서는 2026-08-07의 `main` branch, working tree의 `09d34089c095`를 기준으로 작성했다.
-검토 당시 working tree에는 다른 작업의 미완료 변경이 있었으므로, 이 문서는 commit 상태가
-아니라 현재 working tree의 구현과 문서를 대조한 결과다.
+이 문서는 2026-08-07의 `main` branch, commit `425b9c2a8272`의 구현을 기준으로 작성했다.
 
 ## 2. 검토 범위와 판정 방법
 
-계약 기준은 다음 두 영역이다.
+공개 계약 기준은 다음 문서다.
 
+- `framework/doc/framework/common/spec/`
 - `framework/doc/framework/common/spec/server/languages/java/`
 - `framework/doc/framework/common/spec/server/languages/kotlin/`
+
+내부 구조 기준은 다음 영역이다.
+
 - `framework/doc/framework/common/internals/01`부터 `12`까지
+
+Public API와 사용자에게 보이는 동작은 정식 spec과 exact interface만 계약 근거로 사용한다. Internals는
+그 계약을 구현하는 상태 표현, component 책임과 불변 조건의 차이를 판정하는 기준이며 공개 동작을
+추가하거나 바꾸지 않는다. Package·process 실행이 필요한 항목은 source gap과 별도의 검증 증거로
+관리한다.
 
 구현은 `zlink-framework-core`, `zlink-framework-kotlin`의 public surface, runtime call path,
 관련 unit test와 E2E를 확인했다. 이름이 같은 class나 method의 존재만 확인하지 않고, 설정값이
@@ -52,8 +60,7 @@ queue 상한이 초과 시점에 적용되는지, payload가 hot path에서 다�
 
 - **GAP**: 스펙과 다른 동작 또는 public surface를 source에서 직접 확인했다.
 - **PARTIAL**: 핵심 구성은 있으나 스펙이 요구하는 구조나 실패 의미가 일부 빠져 있다.
-- **UNVERIFIED**: source만으로 충분하지 않고 process 또는 package 검증이 필요하지만 현재
-  build blocker 때문에 실행하지 못했다.
+- **UNVERIFIED**: source만으로 충분하지 않고 process 또는 package 검증이 필요하지만 아직 실행하지 못했다.
 
 ### 2.1 재검토에서 바로잡은 내용
 
@@ -76,24 +83,27 @@ working tree의 source sink를 다시 대조했다. 그 결과 철회할 기존 
 
 ### P0. Build와 exact interface
 
-#### JVM-BUILD-001 — 고정된 bindings package로 Framework source를 compile할 수 없다
+#### JVM-BUILD-001 — 고정된 bindings package의 provenance와 clean consumer가 확인되지 않았다
 
-**판정: GAP**
+**판정: UNVERIFIED**
 
 Framework는 `systems.zlink:zlink:0.10.1`을 사용하도록 고정한다
-(`framework/languages/java/gradle/libs.versions.toml:1-5`). 그러나 raw MeshNode는
+(`framework/languages/java/gradle/libs.versions.toml:1-5`). Raw MeshNode는
 `RouterSocket.disconnectTransportPair(long, long)`을 호출한다
-(`ZLinkJavaRawMeshNode.java:878-885`). 현재 bindings source에는 이 public method가 있지만
-(`bindings/java/src/main/java/systems/zlink/contracts/sockets/RoutedSocketContracts/RouterSocket.java:20-25`),
-Framework가 실제로 resolve한 0.10.1 package에는 없다.
+(`ZLinkJavaRawMeshNode.java:878-885`). 현재 local Maven artifact의 `RouterSocket`에는 이 public method가
+있으며, JAR SHA-256은 `7182a178da52e2402aba187573bfe56d5fbb60215fa34202526dc4d02cb6c0be`다.
 
-Java와 Kotlin용 `./scripts/verify_api_snapshot.sh`를 각각 실행하면
-`ZLinkJavaRawMeshNode.java:883`에서 `cannot find symbol: disconnectTransportPair(long,long)`로
-compile이 중단된다. 따라서 두 API snapshot 모두 비교 단계에 도달하지 못했다. bindings의
-새 source가 repository에 존재한다는 사실은 package consumer 검증을 대신하지 않는다.
+Commit `425b9c2a8272`에서 Java와 Kotlin용 `./scripts/verify_api_snapshot.sh`를 각각 다시 실행한 결과
+두 명령 모두 compile과 snapshot 비교를 통과했다. Java snapshot은 2,912줄과 SHA-256
+`b78f715d054f95f2b69c070938e8d36f5941ec90585ddc459f9815fbe0debb3c`, Kotlin snapshot은 3,421줄과
+SHA-256 `2b1476e8e1c853c5a1fda3f356f0368cbeb388a5468b9f3882e91c1627e64c01`이었다.
 
-**완료 조건**: 필요한 bindings public API를 새 local package로 배포하고 중앙 version을 갱신한
-뒤, clean Gradle cache에서도 Java/Kotlin API snapshot과 package consumer build가 통과해야 한다.
+다만 이 artifact를 만든 candidate manifest와 bindings source revision을 대조하지 않았고, 새 Gradle
+cache와 독립 consumer에서도 같은 package provenance와 compile 결과를 확인하지 않았다. 현재 local
+package의 snapshot 통과만으로 배포 package 재현성까지 완료로 판정하지 않는다.
+
+**완료 조건**: clean Gradle cache에서도 Java/Kotlin API snapshot과 package consumer build가 같은
+고정 version과 package provenance로 통과해야 한다.
 
 #### JVM-CONTRACT-001 — Java와 Kotlin exact interface가 같은 public type을 다르게 규정한다
 
@@ -377,12 +387,16 @@ List query는 한 page를 반환하기 전에 Store cursor 끝까지 전체 matc
 
 **판정: GAP**
 
-개정된 failure 계약은 이미 `Ready`인 Instance Spot의 owner process가 종료되거나 lease가 만료되면
+공개 계약인 failure spec §4.4는 이미 `Ready`인 Instance Spot의 owner process가 종료되거나 lease가 만료되면
 그 authority를 Missing으로 바꾸지 않고 call을 bounded `Unavailable`로 끝내도록 요구한다. Relocation
 Store의 activation record는 같은 target node와 lifecycle에서 끝나지 않은 initial cold activation만
 재개하며, steady-state owner loss의 다른 node takeover나 queue recovery에 사용할 수 없다
 (`common/spec/31-failure-failover-policy.ko.md`, Java exact interface
 `server/languages/java/interfaces/spots.ko.md`, Kotlin은 같은 Java runtime 의미를 사용한다).
+
+Internals 06·08·10은 이를 resolver의 닫힌 결과, activation state와 liveness 책임 분리로 구현하고,
+12는 same-target initial recovery root만 허용한다. 이 구조 문서들은 공개 오류나 failover 범위를
+추가하지 않는다.
 
 현재 store resolver는 owner lease가 만료되면 cache를 무효화하고 `null`을 반환한다
 (`runtime/locations/ZLinkStoreLocationResolvers.java:306-327`). Channel과 Spot outbound는 이 결과 또는
@@ -494,8 +508,8 @@ wire payload로 encode하여 frozen record를 만든다
 
 | 문서 | 판정 | 근거와 남은 검증 |
 |---|---|---|
-| 01 layering | UNVERIFIED | Java runtime과 Kotlin projection 경계는 보이지만 compile blocker 때문에 package 경계를 검증하지 못했다. |
-| 02 serialization | UNVERIFIED | bounded serial queue 구현과 unit test는 있으나 현재 package로 test를 실행하지 못했다. |
+| 01 layering | UNVERIFIED | Java runtime과 Kotlin projection 경계는 보이지만 clean consumer에서 package 경계를 검증하지 못했다. |
+| 02 serialization | UNVERIFIED | bounded serial queue 구현과 unit test는 있으나 module unit test를 다시 실행하지 않았다. |
 | 03 progress isolation | PARTIAL | MeshNode별 executor가 있으나 실제 progress 위반은 process scenario로 확인해야 한다. |
 | 04 completion | PARTIAL | service registry가 있으나 여러 runtime 경로가 독립 terminal flag를 사용한다. |
 | 05 relocation continuity | GAP | pre-commit backlog가 무제한이고 Message Follow error kind가 정식 오류로 수렴하지 않는다. |
@@ -507,12 +521,12 @@ wire payload로 encode하여 frozen record를 만든다
 | 11 payload ownership | GAP | accessor·retry 복사와 정상 message별 relocation record encode·clone이 남아 있다. |
 | 12 service wire | GAP | RouteMesh에 금지된 상한 surface·wire field, STREAM 초과의 EMSGSIZE 진단과 JSON golden profile이 계약과 다르다. |
 
-`UNVERIFIED`는 구현 완료를 뜻하지 않는다. 현재 compile blocker를 제거한 뒤 해당 문서의
-관찰 결과를 실제 process에서 확인해야 판정을 바꿀 수 있다.
+`UNVERIFIED`는 구현 완료를 뜻하지 않는다. 해당 문서의 관찰 결과를 실제 process에서 확인해야
+판정을 바꿀 수 있다.
 
 ## 5. 검증 결과와 실행하지 못한 Gate
 
-Sol high 독립 reviewer가 실행한 명령은 다음과 같다.
+Commit `425b9c2a8272`에서 다시 실행한 명령은 다음과 같다.
 
 ```bash
 cd framework/languages/java
@@ -520,12 +534,12 @@ cd framework/languages/java
 ./scripts/verify_api_snapshot.sh kotlin
 ```
 
-두 명령을 각각 실행했지만 모두 `ZLinkJavaRawMeshNode.java:883`의
-`RouterSocket.disconnectTransportPair(long, long)` 미해결로 compile 단계에서 실패했다. 따라서
-Java와 Kotlin 어느 쪽도 snapshot 비교 단계에 도달하지 못했다. 이 실패 때문에 다음 결과는
-확보하지 못했다.
+두 명령은 모두 통과했다. Java는 2,912줄과 SHA-256
+`b78f715d054f95f2b69c070938e8d36f5941ec90585ddc459f9815fbe0debb3c`, Kotlin은 3,421줄과 SHA-256
+`2b1476e8e1c853c5a1fda3f356f0368cbeb388a5468b9f3882e91c1627e64c01`의 snapshot을 확인했다. Kotlin은
+incremental cache 충돌 뒤 compiler fallback으로 성공했으므로 cache 안정성은 별도 확인 대상이다.
+다음 결과는 아직 확보하지 못했다.
 
-- Java와 Kotlin exact API snapshot 전체 비교
 - JVM module unit test
 - local package를 사용하는 clean consumer build
 - Java/Kotlin common E2E와 cross-runtime process scenario
@@ -536,7 +550,7 @@ class나 test가 있다는 이유만으로 `UNVERIFIED` 항목을 완료로 올�
 
 ## 6. 권장 수정 순서와 완료 조건
 
-1. Java bindings local package와 Framework 중앙 version을 맞춰 clean compile을 복구한다.
+1. 새 Gradle cache와 clean consumer에서 고정 Java bindings package의 provenance와 compile을 재현한다.
 2. `ZLinkRouteMeshRuntimeOptions.meshNode(String)`의 message-size runtime option을 제거하고
    Java/Kotlin exact interface를 동시에 고친다. Placement·channel option은 유지한다. Observer public
    surface를 제거하고 diagnostics enum을 네 정식 값에 맞춘다.

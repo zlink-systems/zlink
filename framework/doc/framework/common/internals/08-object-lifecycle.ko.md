@@ -53,17 +53,22 @@ Actor들은 node가 내려갈 때 사라진다.
 호출만 새로 만들 수 있고, 일반 message와 조회 호출은 이미 준비된 객체만 대상으로 한다
 ([Spot·Actor routing 「2.2 최근 Ready route를 사용하는 조건」](../spec/18-object-routing.ko.md#22-최근-ready-route를-사용하는-조건)).
 
-### `Missing`과 owner를 사용할 수 없는 `Ready`를 구분한다
+### Spec 상태를 activation state machine에 전달한다
 
-Instance intent가 있다는 사실만으로 생성 경로에 들어가지 않는다. Resolver는 authority와 owner
-availability를 함께 확인하고 아래 의미를 보존한다.
+공개 동작은 [장애 대응과 failover 범위 §4.4](../spec/31-failure-failover-policy.ko.md#44-instance-spot-cold-activation과-owner-장애를-구분한다)가
+정의한다. Activation state machine은 resolver 결과를 다음 내부 상태로 받아 각 책임 component에
+한 번만 전달한다.
 
-| 관찰한 상태 | 다음 동작 |
-|---|---|
-| Authority record가 없는 `Missing` | Instance intent가 있으면 creation reservation을 시도한다. |
-| Creation이 진행 중임 | 같은 object의 두 번째 factory를 실행하지 않고 진행 중인 attempt를 기다린다. |
-| Owner lease가 유효한 `Ready` | 현재 owner route를 사용한다. |
-| Authority는 `Ready`지만 owner process가 종료되었거나 lease가 무효임 | Authority를 유지하고 call을 `Unavailable`로 끝낸다. 다른 node를 선택하거나 factory를 실행하지 않는다. |
+| 내부 상태 | 보존하는 fence | 다음 component |
+|---|---|---|
+| `Missing` | authority가 없다는 조회 version | creation coordinator |
+| `Creating` | attempt와 reservation fence | 같은 attempt의 waiter |
+| `Ready` | route와 authority·owner lease fence | route admission |
+| `Unavailable` | authority와 무효 owner evidence | terminal completion adapter |
+
+`Unavailable`에서 `Missing`으로 가는 activation 전이는 두지 않는다. Explicit `Close`, `IdleEvicted`
+cleanup 또는 다른 정식 lifecycle operation이 authority release를 완료한 뒤 resolver가 새 `Missing`
+입력을 만들 수 있다.
 
 Stored creation intent는 같은 target node·lifecycle에서 끝나지 않은 최초 cold activation operation만
 재개한다. Steady `Ready` owner 장애의 takeover나 queue recovery에 사용하지 않는다.
@@ -189,10 +194,10 @@ runtime은 route를 무효화하고 close transaction이 authority release를 �
 `Ready` route가 확인될 때까지 다시 읽을 수 있다. 이 동작은 이미 수락된 application request를
 재전송하는 retry가 아니라, explicit idle cleanup 결과를 확인하는 owner route 갱신이다.
 
-Resolver는 idle cleanup으로 authority가 release된 `Missing`과 owner lease만 무효인
-`Unavailable` 판정을 구분해야 한다. 전자만 Instance cold activation 경로로 보내며, 후자는 새 factory나
-handler를 실행하지 않고 `Unavailable`로 끝낸다. 이미 `Ready`였던 route에서 stale 오류가 반환된
-application request 자체도 다른 owner에게 다시 제출하지 않는다.
+Resolver는 idle cleanup이 authority release를 완료한 결과와 owner availability evidence만 바뀐 결과를
+서로 다른 tag로 activation state machine에 전달한다. Creation coordinator는 전자의 tag만 입력으로
+받고, 후자는 terminal completion adapter에 연결한다. 이미 수락된 request의 재제출 금지는
+[장애 대응과 failover 범위 §2](../spec/31-failure-failover-policy.ko.md#2-공통-판단-기준)가 정의한다.
 
 다른 Framework 언어의 유휴 정리 상태와 공통 process 검증 결과는 이 .NET 구조 설명만으로
 완료로 간주하지 않는다. 각 언어는 같은 종료 조건과 process evidence를 별도로 확인해야
@@ -301,9 +306,9 @@ process 단위 회계가 이미 byte로 되어 있다(§6 첫 문단). 같은 �
 - 여러 caller가 동시에 같은 객체 생성을 요청해도 factory가 한 번만 실행된다.
 - "만드는 중" 상태가 위치 캐시에 남지 않는다.
 - 만들다 실패한 기록이 시작 시점에 정리된다.
-- `Ready` owner process 종료나 lease 만료가 `Missing`으로 바뀌지 않는다.
-- `Ready` owner를 사용할 수 없을 때 다른 node의 factory·handler를 실행하지 않고 `Unavailable`로 끝난다.
-- 미완료 최초 cold activation recovery는 authority가 지정한 같은 target node·lifecycle에서만 실행된다.
+- Owner availability evidence 변경이 authority release transition을 호출하지 않는다.
+- `Unavailable` resolver tag가 terminal completion adapter로만 전달된다.
+- Activation recovery root와 scan key가 authority의 target node·lifecycle을 포함한다.
 - 객체가 다시 만들어진 직후에도 일반 message가 세대 불일치로 거절되지 않는다.
 - 낡은 owner로 보낸 호출이 자동 재시도 없이 오류로 끝난다.
 - 활성 객체 수가 상한에 도달하면 그 node에서 활성화가 거절된다.

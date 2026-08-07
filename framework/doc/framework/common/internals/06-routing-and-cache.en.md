@@ -47,23 +47,25 @@ created, and store failure are **not positive results, so they aren't
 kept.** Caching them would turn a brief failure into an outage lasting
 as long as the cache lifetime.
 
-### Preserve The Meaning Of A Lookup Result
+### Preserve Spec States In The Resolver Result Type
 
-Not caching a result doesn't permit collapsing distinct lookup results
-into one `absent` value. `Missing`, where no authority record exists,
-and an `Unavailable` resolution, where a `Ready` authority remains but
-its owner lease is invalid, lead to different next actions.
+The public behavior is defined by
+[Failure Handling And Failover Scope §4.4](../spec/31-failure-failover-policy.en.md#44-distinguishing-instance-spot-cold-activation-from-owner-failure).
+The resolver passes that contract as a closed `ReadyRoute`, `Missing`,
+`Unavailable`, or `StoreFailure` result so neither the terminal mapper nor
+the activation coordinator has to infer it again.
 
-| Lookup Result | Caller-Visible Result | Instance Cold Activation |
+| Resolver Result | Information Preserved | Receiving Component |
 |---|---|---|
-| `Missing` | An ordinary message operation returns `NotFound`; Instance intent may try to claim creation authority. | Allowed |
-| `Unavailable` resolution | `Unavailable` | Forbidden |
+| `ReadyRoute` | Route and authority/owner-lease fences | Route admission |
+| `Missing` | No authority record exists | Creation coordinator |
+| `Unavailable` | Authority remains but the current owner can't be used | Terminal completion mapper |
+| `StoreFailure` | Authority presence couldn't be determined | Store retry/reconciliation |
 
-Neither result enters the positive route cache, but the resolver keeps
-them distinct. A subsequent lookup becomes `Missing` only after an
-explicit `Close` or `IdleEvicted` cleanup finishes releasing authority.
-Owner process termination or lease expiry alone doesn't release
-authority or start a creation reservation.
+These four results aren't collapsed into `null` or one `absent` value.
+Only `ReadyRoute` enters the positive route cache, and only `Missing` is
+passed to the activation coordinator. The resolver returns `Missing` only
+after the lifecycle component that owns authority release completes it.
 
 ### What Decides The Lifetime
 
@@ -478,10 +480,10 @@ instead of publish.
   per call.
 - Object-absent, being-created, and store-failure states aren't left
   in the cache.
-- The resolver distinguishes `Missing` with no authority from an
-  `Unavailable` result for a `Ready` owner that can't be used.
-- An `Unavailable` result doesn't start an Instance creation
-  reservation or cold activation.
+- The resolver result type preserves `Missing` and `Unavailable` as
+  distinct tags.
+- Only `Missing` is wired to the activation coordinator; `Unavailable`
+  is wired to the terminal mapper.
 - The cache lifetime doesn't exceed the Message Follow period.
 - After a move, a valid `messageFollow` received on the detour path immediately invalidates the
   sending side's cache so the next lookup uses the new owner. If the notification is lost, the

@@ -25,6 +25,15 @@ answers what can't be known just by reading the spec.
 
 Content the spec already decided isn't repeated — only a link is put.
 
+A `Decision` in this document set is not a public contract; it is an internal
+structure decision for satisfying that contract. A `Result To Confirm` checks
+the spec's public result and internal invariants in an implementation and does
+not create a new user guarantee. If public behavior, error meaning, or failover
+scope differs from the spec, the spec prevails. Internals are then aligned to
+the spec, or, if the public contract itself must change, the
+[public-contract procedure](../spec/00-public-contract-governance.en.md#4-public-contract-procedure)
+is followed first.
+
 Current implementation deviations and unverified progress are not recorded in this public
 internals document. This document describes only implementation structure and decisions.
 
@@ -129,14 +138,14 @@ A performance-critical decision is gathered in
 [2](02-serialization.en.md)'s execution resource constraint, and
 [8](08-object-lifecycle.en.md)'s memory accounting.
 
-## A Decision With The Canonical Document In Multiple Places
+## Structure Decisions That Span Chapters
 
-There's a spot where multiple documents cover the same topic. If they
-disagree, the one below is treated as canonical.
+Some topics are covered by multiple documents. The spec is authoritative for
+public behavior; align internal structure to the following documents.
 
-| Topic | Canonical |
+| Topic | Reference Document |
 |---|---|
-| The result when the queue saturates | The family × location table in [2. Spot · Actor Execution Serialization 「2. The Pitfall When Building Execution Authority」](02-serialization.en.md#2-the-pitfall-when-building-execution-authority) |
+| The public result when a queue saturates | The family × location table in [Spot Messaging 「5.3 Work Put On The Spot Application Queue」](../spec/12-spot-messaging.en.md#53-work-put-on-the-spot-application-queue) |
 | The owner-occupancy bound and the lifecycle continuous-execution bound | [Actor Model 「3. Actor Queue」](../spec/14-actor-model.en.md#3-actor-queue) |
 | The target-selection procedure and tiebreak | [Channel Messaging 「Selection Order」](../spec/08-channel-messaging.en.md#selection-order) |
 | Observer merging and loss | [Runtime Status And Operational Diagnostics](../spec/24-runtime-monitoring.en.md) |

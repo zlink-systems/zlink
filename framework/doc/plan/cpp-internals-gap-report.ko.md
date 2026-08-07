@@ -5,11 +5,17 @@ title: "C++ Framework 계약·내부 구현 Gap 리포트"
 # C++ Framework 계약·내부 구현 Gap 리포트
 
 - **작성일 / 재검토일**: 2026-08-07
-- **계약 기준**: `framework/doc/framework/common/spec/`, C++ exact interface와 `framework/doc/framework/common/internals/` 01–12의 현재 working tree
-- **의사결정 기준**: `framework-contract-e2e-decision-review.ko.md`의 승인된 DEC-01–DEC-17과 그 결과가 반영된 정식 spec
-- **구현 기준**: `framework/languages/cpp/framework/`의 현재 working tree (`main`, 기준 commit `09d34089c095`)
+- **공개 계약 기준**: `framework/doc/framework/common/spec/`와 C++ exact interface의 현재 working tree
+- **내부 구조 기준**: `framework/doc/framework/common/internals/` 01–12의 현재 working tree
+- **의사결정 기준**: 승인된 DEC-01–DEC-17의 결과가 반영된 정식 spec
+- **구현 기준**: `framework/languages/cpp/framework/`의 `main` commit `425b9c2a8272`
 - **방법**: 정식 spec과 C++ exact interface를 먼저 public contract 기준으로 삼고, 12개 internals 문서의 **Decision** / **Result To Confirm**을 구현 구조 기준으로 사용했다. 해당 C++ public header와 runtime 경로를 직접 읽어 SATISFIED / GAP / PARTIAL / 코드만으로 확인 불가로 분류했다. 언어별 재량은 public 동작이나 관찰 결과가 달라지는 경우에만 gap으로 계상했다.
 - **증거 경로 표기**: `common/` = `framework/doc/framework/common/`, `cpp/` = `framework/languages/cpp/framework/`, `core/` = `core/` 트리(프레임워크 외부).
+
+Public API와 사용자에게 보이는 동작의 gap은 정식 spec과 exact interface만 근거로 판정한다. Internals는
+그 계약을 구현하는 상태 표현, component 책임과 불변 조건의 차이를 판정하는 기준이며 새 공개 계약을
+만들거나 spec을 덮어쓰지 않는다. Package·process 실행이 필요한 항목은 source gap과 섞지 않고 검증
+증거 부족으로 별도 표시한다.
 
 > **기존 기록과의 관계**: Public spec에 있던 구현 진행 기록은 삭제됐다. 이 보고서가 C++ open gap의 작업 기록을 소유하며, 승인된 결정을 반영한 정식 spec과 exact interface를 계약 기준으로 삼는다. Public spec에는 구현 상태나 이 plan 문서의 ID를 다시 넣지 않는다.
 
@@ -188,7 +194,7 @@ admitted 피어의 애플리케이션 레코드가 대상 owner의 mailbox 예�
 |---|---|---|
 | CPP-LIFE-001 | GAP·중 | §4 "일반 메시지는 owner identity + 유효기간으로 필터링하고 object generation으로 필터링하지 말라" 위반: C++ admission은 모든 일반 spot/actor 메시지에 **object generation 정확 일치**를 요구(`accepts_route_fence`), 불일치를 `generation_stale`/`actorLocationStale`로 거부 — 객체 재생성 직후 이전 라우트를 쥔 송신자의 일반 메시지가 새 incarnation에 전달되지 못하고 거부됨(스펙 다이어그램 노드 G의 함정 그대로). 증거: `cpp/src/runtime/spots/spot_runtime.hpp:460-471`, `cpp/src/runtime/spots/spot_runtime.cpp:7248-7260`, `cpp/src/runtime/stateful/raw_stateful_dispatch.cpp:255-263, 310-320, 371-378` |
 | CPP-LIFE-002 | PARTIAL·중 | §5 idle 정리 순서 역전: `try_close_idle`이 `on_closing` 콜백 실행 **전에** `release_spot`으로 위치를 해제 — 앱이 아직 closing 콜백에서 상태를 저장하는 동안 위치가 Missing이 되어 동시 Instance 호출이 다른 곳에 새 incarnation을 cold-activate하며 경합 가능. 스펙(.NET 소유 표준): 콜백 완료 전 위치를 지우지 않는다. 증거: `cpp/src/runtime/spots/spot_runtime.hpp:473-518` (release :503-506, 콜백 :516→:299-309) |
-| CPP-LIFE-003 | PARTIAL·상 | 개정된 failure 계약은 `Ready` authority의 owner lease가 만료된 상태를 Missing과 구분하고, 다른 node의 cold activation을 시작하지 않은 채 bounded `Unavailable`로 끝내도록 요구한다. 현재 resolver는 active authority를 읽을 때 owner lease availability를 별도 결과로 투영하지 않으며, request는 조회 결과가 비어 있을 때 Instance activation을 시작한다. 전송이 `NotFound`/`Unavailable`이면 route를 무효화하고 현재 call은 다시 제출하지 않지만, owner row 정리와 다음 call이 겹칠 때 Missing과 KnownUnavailable을 구분한다는 보장이 없다. 반면 startup recovery는 같은 target node RID와 lifecycle generation의 미완료 activation만 재개한다. 증거: `common/spec/31-failure-failover-policy.ko.md`, `common/spec/server/languages/cpp/interfaces/04-spots.ko.md`, `cpp/src/runtime/locations/store_location_resolvers.hpp:390-421`, `cpp/src/runtime/channels/channel_runtime.cpp:2151-2187`, `cpp/src/runtime/stateful/public_host_runtime.cpp:1794-1918` |
+| CPP-LIFE-003 | PARTIAL·상 | 공개 계약인 failure spec §4.4는 `Ready` authority의 owner lease가 만료된 상태를 Missing과 구분하고, 다른 node의 cold activation을 시작하지 않은 채 bounded `Unavailable`로 끝내도록 요구한다. Internals 06·08·10은 이를 resolver의 닫힌 결과, activation state와 liveness 책임 분리로 구현하고, 12는 same-target initial recovery root만 허용한다. 현재 resolver는 active authority를 읽을 때 owner lease availability를 별도 결과로 투영하지 않으며, request는 조회 결과가 비어 있을 때 Instance activation을 시작한다. 전송이 `NotFound`/`Unavailable`이면 route를 무효화하고 현재 call은 다시 제출하지 않지만, owner row 정리와 다음 call이 겹칠 때 Missing과 KnownUnavailable을 구분한다는 보장이 없다. 반면 startup recovery는 같은 target node RID와 lifecycle generation의 미완료 activation만 재개한다. 증거: `common/spec/31-failure-failover-policy.ko.md`, `common/spec/server/languages/cpp/interfaces/04-spots.ko.md`, `common/internals/06-routing-and-cache.ko.md`, `common/internals/08-object-lifecycle.ko.md`, `common/internals/10-liveness-and-state.ko.md`, `common/internals/12-service-wire-protocol.ko.md`, `cpp/src/runtime/locations/store_location_resolvers.hpp:390-421`, `cpp/src/runtime/channels/channel_runtime.cpp:2151-2187`, `cpp/src/runtime/stateful/public_host_runtime.cpp:1794-1918` |
 
 만족 항목(요약): 폐쇄 kind 집합, Entry Spot 이동 경계 제외, 생성 경합 단일 factory, 생성중 비캐시, 실패 생성 정리, count+byte 이중 한도, relocation 보류 상수 등은 충실.
 
