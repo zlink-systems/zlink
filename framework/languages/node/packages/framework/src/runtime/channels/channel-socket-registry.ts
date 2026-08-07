@@ -159,9 +159,13 @@ export class ZLinkChannelSocketRegistry {
   ) {}
 
   async dispose(): Promise<void> {
+    const clientServerConnections = [...new Set(this.clientServerConnections.values())];
+    const clientServerPollers = clientServerConnections.map(
+      (connection) => connection.readablePoller
+    );
     const sockets = [
       ...this.clientDealers.values(),
-      ...[...new Set(this.clientServerConnections.values())].map(value => value.dealer),
+      ...clientServerConnections.map(value => value.dealer),
       ...[...this.fanoutConnections.values()].map(value => value.subscriber),
       ...this.channelRouters.values(),
       ...this.publishers.values(),
@@ -192,6 +196,7 @@ export class ZLinkChannelSocketRegistry {
     const monitors = [...this.ownedMonitors];
     this.ownedMonitors.clear();
     const cleanup = await Promise.allSettled([
+      ...clientServerPollers.map((poller) => poller.dispose()),
       ...monitors.map((monitor) => monitor.dispose()),
       ...sockets.map((socket) => socket.dispose())
     ]);
