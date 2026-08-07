@@ -74,7 +74,7 @@ Gap 하나 또는 서로 강하게 연결된 작은 작업 묶음의 동작과 �
 | DOTNET-LIFE-002 | 중 | Ready Instance owner loss | 완료 — 실제 owner crash·restart 뒤 `Unavailable`과 queue replay 부재를 process에서 검증했다 |
 | DOTNET-COMP-002 | 중 | completion ordering | 완료 — sender가 응답 상관 값을 먼저 할당하고 waiter 등록 뒤 submit한다 |
 | DOTNET-LAYER-001 | 중 | binding 경계·POSDDD | 완료 — 일반 socket은 binding public API를 직접 쓰고 의미 변환 adapter만 유지한다 |
-| DOTNET-LAYER-002 | 상 | runtime/package ownership | relocate·shutdown 의미와 public runtime 구현이 ASP.NET Core 통합 package에 있다 |
+| DOTNET-LAYER-002 | 상 | runtime/package ownership | 완료 — lifecycle state machine과 resource close 순서를 Core package가 소유한다 |
 | DOTNET-LAYER-003 | 중 | identifier type | mesh·channel·Actor·Spot ID를 내부 경계에서도 모두 `string`으로 섞어 쓴다 |
 | DOTNET-LAYER-004 | 중 | STREAM protocol ownership | client connector와 Framework server가 같은 STREAM codec·pending·lifecycle stack을 별도로 구현한다 |
 | DOTNET-OWN-001 | 중 | payload ownership/copy | 이미 소유한 managed payload를 public copying factory에 다시 통과시켜 full-buffer copy를 추가한다 |
@@ -491,11 +491,30 @@ PubSub `PS-A1`을 `PubSub/logs/20260807-211921-3611470/`에서, ChannelEgressRou
 
 ### DOTNET-LAYER-002 — runtime 종료 의미가 ASP.NET Core 통합 package에 있음
 
+**판정: 완료**
+
 Internals는 host 통합 계층이 runtime 시작·종료를 host lifecycle에 **연결만** 하고, 수락 중지·drain·relocate·close의 의미와 순서는 runtime이 소유해야 한다고 정한다(`common/internals/01-layering.ko.md:150-173`). .NET package 계약도 `Zlink.Framework`가 location runtime을 소유하고 `Zlink.Framework.AspNetCore`는 DI 등록과 host lifecycle 연결만 담당한다고 구분한다(`interfaces/02-configuration-host.ko.md:12-21`).
 
 실제 public `IZLinkFrameworkRuntime`의 유일한 production 구현은 ASP.NET Core package의 `ZLinkFrameworkMaintenanceRuntime`이다(`Zlink.Framework.AspNetCore/ZLinkFrameworkMaintenanceRuntime.cs:8-44`). 이 타입이 runtime state, relocate/shutdown operation, deadline, observer와 drain coordinator를 직접 소유한다. DI도 이 타입을 `IZLinkFrameworkRuntime`으로 등록한다(`Zlink.Framework.AspNetCore/ZLinkFrameworkServiceRegistrar.cs:145-165`). 반면 core package의 `Runtime/Host/ZLinkFrameworkRuntime`은 Spot manager와 내부 resource를 소유하지만 public maintenance runtime을 구현하지 않는다(`Runtime/Host/ZLinkFrameworkRuntime.cs:31-78`). 따라서 ASP.NET Core 통합 없이 같은 종료·재배치 의미를 조립할 수 없으며 package 책임도 exact 문서와 반대다.
 
 완료 조건은 maintenance state machine과 종료·재배치 순서를 `Zlink.Framework`로 옮기고, ASP.NET Core package에는 hosted-service 연결만 남기는 것이다. Console/test host에서도 같은 runtime API로 동일한 terminal-once와 resource close 순서를 검증해야 한다.
+
+Maintenance runtime, drain coordinator와 executor, auto-connect lifecycle을 `Zlink.Framework`의
+`Runtime.Host`로 옮겼다. 새 `ZLinkFrameworkHostRuntimeCoordinator`가 location 준비, Framework 시작,
+RouteMesh monitoring과 auto-connect 시작, shutdown drain, owner row 정리와 resource close 순서를 소유한다.
+ASP.NET Core의 `ZLinkFrameworkHostedService`는 host의 `StartAsync`와 `StopAsync`를 이 coordinator에 전달하는
+역할만 남겼다. 따라서 relocation·shutdown state와 close 순서는 ASP.NET Core assembly를 참조하지 않고도
+Core runtime test host에서 조립하고 실행할 수 있다.
+
+Core assembly ownership과 ASP.NET Core assembly에서 이전 구현 type이 제거됐음을 확인하고, ASP.NET host
+없이 조립한 maintenance runtime에서 반복 shutdown이 같은 terminal을 반환하며 drain 실행과 shutdown
+요청을 한 번만 수행하는 회귀를 추가했다. Maintenance, drain과 auto-connect focused test 71건과 전체
+.NET unit suite 1,584건이 통과했다. Packaged contract와 standalone HTTP clean consumer도 통과했고
+public API snapshot hash는
+`c1987f4b98e4fac7a30b7d038a56ee0d20e1272d00e79bdc88d3271e3c3ab958`로 유지되었다. 실제 process는
+restore artifact를 준비한 뒤 ResilienceLifecycle `RL-B4`를
+`ResilienceLifecycle/logs/20260807-213609-146114/`에서 통과해 runtime drain terminal과 drain 뒤 신규 요청
+차단을 확인했다. 구현 checkpoint는 `9bdb5a0dc7`로 `main`에 push했다.
 
 ### DOTNET-LAYER-003 — 수명이 다른 식별자를 내부에서도 `string`으로 혼용
 
