@@ -71,7 +71,7 @@ Gap 하나 또는 서로 강하게 연결된 작은 작업 묶음의 동작과 �
 | DOTNET-EXEC-002 | 중 | serial execution engine | Spot/session 공통 queue와 별도로 Actor mailbox·전달 queue가 순서·수락·준비 집합을 다시 구현한다 |
 | DOTNET-EXEC-003 | 상 | Entry Actor ingress HWM | 완료 — process-wide ingress와 Actor별 공통 serial lane이 count·retained byte를 제한한다 |
 | DOTNET-LIFE-001 | 중 | Spot type model | 완료 — 공통 resource base 위에 User와 Instance activation type과 context surface를 분리했다 |
-| DOTNET-LIFE-002 | 중 | Ready Instance owner loss | source·unit은 `KnownUnavailable`로 구분하지만 실제 process에서 takeover와 queue recovery가 없다는 E2E가 없다 |
+| DOTNET-LIFE-002 | 중 | Ready Instance owner loss | 완료 — 실제 owner crash·restart 뒤 `Unavailable`과 queue replay 부재를 process에서 검증했다 |
 | DOTNET-COMP-002 | 중 | completion ordering | 응답 상관 값을 submit 출력으로 받은 뒤 waiter를 등록해 early-result table을 상시 필요로 한다 |
 | DOTNET-LAYER-001 | 중 | binding 경계·POSDDD | 의미를 숨기지 않는 일대일 `IBackend*`/`*Wrapper` 계층이 production hot path에 남아 있다 |
 | DOTNET-LAYER-002 | 상 | runtime/package ownership | relocate·shutdown 의미와 public runtime 구현이 ASP.NET Core 통합 package에 있다 |
@@ -388,7 +388,7 @@ push했다.
 
 ### DOTNET-LIFE-002 — Ready Instance owner loss의 process 증거 누락
 
-**판정: UNVERIFIED**
+**판정: 완료**
 
 공개 계약인 failure spec §4.4는 `Ready` authority의 owner process 종료나 lease 만료를 Missing으로 바꾸지 않고,
 다른 node의 cold activation 없이 call을 bounded `Unavailable`로 끝내도록 요구한다. Relocation Store의
@@ -407,11 +407,29 @@ row가 null이어도 resolution kind가 `KnownUnavailable`인지 확인한다
 (`UnitTests/Runtime/LocationResolverTests.cs:243-263`). 따라서 source 수준의 새 구현 GAP으로 판정하지
 않는다.
 
-남은 조건은 실제 process 증거다. `IS-E2E-05`와 `IS-E2E-35`가 미구현이므로 owner process 종료,
+조사 당시 남은 조건은 실제 process 증거였다. `IS-E2E-05`와 `IS-E2E-35`가 미구현이어서 owner process 종료,
 lease invalidation, bounded `Unavailable`, 새 factory·handler 실행 부재와 자동 queue recovery 부재를
 검증하지 못했다 (`framework/languages/dotnet/e2e/InstanceSpot/feature-map.ko.md:17,47`). 이 두 E2E와
-같은 target node/lifecycle의 미완료 initial cold activation recovery positive scenario가 통과해야
-`DOTNET-LIFE-002`를 종결한다.
+같은 target node/lifecycle의 미완료 initial cold activation recovery positive scenario가 필요했다.
+
+요구한 process 검증을 구현하고 통과했다. `IS-E2E-05`는 public location query로 Ready owner와
+`ObjectGeneration`을 확정한 뒤 실제 owner process를 SIGKILL한다. Owner lease 무효화 뒤 public location은
+같은 generation의 `Unavailable`이 되었고, 후속 Instance intent request도 `Unavailable`로 한 번 끝났다.
+다른 owner의 handler와 추가 factory initialization은 모두 0건이었다. 실행 log는
+`SpotService/logs/20260807-202307-1312454/`다.
+
+`IS-E2E-35`는 Ready Spot의 first handler를 Application gate에서 대기시키고 follow-up request를 같은 queue에
+넣은 뒤 owner를 SIGKILL하고 같은 role을 restart했다. 두 caller는 각각 `ShuttingDown`과
+`DeadlineExceeded` terminal을 받았으며, queued operation의 handler replay는 0건이었다. Restart 뒤 public
+location과 후속 request는 같은 generation의 `Unavailable`이고 factory initialization은 최초 1건뿐이었다.
+실행 log는 `SpotService/logs/20260807-202604-1475569/`다.
+
+Ready owner failover와 구분할 positive control도 추가했다. Initial `OnInitializeAsync`를 gate로 대기시켜
+public location이 `Creating`인 동안 두 번째 request를 보냈고, 같은 target·generation에 합류한 뒤 gate를
+해제했다. Initialization은 한 번, 두 operation handler는 각각 한 번 실행되고 Ready publication까지
+generation이 유지되었다. 실행 log는 `SpotService/logs/20260807-202813-1625005/`다. 기존 Track A도
+`SpotService/logs/20260807-202935-1718197/`에서 다시 통과했다. 이 E2E checkpoint는
+`c797108cce`로 `main`에 push했다.
 
 ### DOTNET-COMP-002 — submit 뒤 waiter 등록 구조 유지
 
