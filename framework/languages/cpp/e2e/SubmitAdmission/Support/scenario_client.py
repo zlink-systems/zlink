@@ -85,8 +85,10 @@ class Driver:
         query = urllib.parse.urlencode({"operationId": operation_id})
         return request_json("GET", f"{base_url}{path}?{query}")
 
-    def wait_evidence(self, base_url, operation_id, predicate, path="/evidence"):
-        deadline = time.monotonic() + 3.0
+    def wait_evidence(
+        self, base_url, operation_id, predicate, path="/evidence", timeout=3.0
+    ):
+        deadline = time.monotonic() + timeout
         last = None
         while time.monotonic() < deadline:
             last = self.evidence(base_url, operation_id, path)
@@ -113,12 +115,13 @@ class Driver:
             time.sleep(0.025)
         raise RuntimeError(f"ClientServer evidence timeout for {operation_id}: {last}")
 
-    def wait_stream_delivery(self, operation_id):
+    def wait_stream_delivery(self, operation_id, timeout=3.0):
         return self.wait_evidence(
             self.arguments.stream_peer_url,
             operation_id,
             lambda value: value.get("receivedCount") == 1,
             path="/evidence/stream",
+            timeout=timeout,
         )
 
     def assert_receiver_gate(self, status):
@@ -140,6 +143,18 @@ class Driver:
                 raise RuntimeError(
                     f"ReceiverGate socket buffer differs from manifest: {connection}"
                 )
+
+    def wait_gate_forwarded_after(self, baseline, timeout=10.0):
+        deadline = time.monotonic() + timeout
+        last = None
+        while time.monotonic() < deadline:
+            last = request_json("GET", f"{self.arguments.stream_gate_url}/status")
+            if last.get("bytesForwarded", 0) > baseline:
+                return last
+            time.sleep(0.025)
+        raise RuntimeError(
+            f"STREAM receiver gate did not forward bytes after {baseline}: {last}"
+        )
 
     def exercise_session_actor_path(self, node_url, node_rid, marker):
         actor_id = f"{marker}-{uuid.uuid4().hex}"
@@ -196,6 +211,67 @@ class Driver:
             "relayEvidence": actor_evidence,
             "boundSession": bound_submit,
             "boundSessionPeerEvidence": bound_delivery,
+        }
+
+    def exercise_stream_timeout(self):
+        stream_gate_closed = request_json(
+            "POST", f"{self.arguments.stream_gate_url}/close"
+        )
+        if stream_gate_closed.get("open") is not False:
+            raise RuntimeError(
+                f"STREAM receiver gate did not close: {stream_gate_closed}"
+            )
+        backpressure_query = urllib.parse.urlencode(
+            {"timeoutMs": 20, "payloadBytes": 32768, "maxAttempts": 4096}
+        )
+        stream_backpressure = request_json(
+            "POST",
+            f"{self.arguments.stream_gateway_url}/submit/stream-backpressure?{backpressure_query}",
+            timeout=15.0,
+        )
+        if stream_backpressure.get("terminal") != "DeadlineExceeded":
+            raise RuntimeError(
+                f"STREAM backpressure did not reach DeadlineExceeded: {stream_backpressure}"
+            )
+        if stream_backpressure.get("acceptedCount", 0) <= 0:
+            raise RuntimeError(
+                f"STREAM backpressure did not fill the Core send queue: {stream_backpressure}"
+            )
+        terminal_elapsed = stream_backpressure.get("terminalElapsedMs")
+        if not isinstance(terminal_elapsed, int) or not 1 <= terminal_elapsed < 500:
+            raise RuntimeError(
+                f"STREAM per-call timeout elapsed outside the evidence bound: {stream_backpressure}"
+            )
+        stream_gate_status_closed = request_json(
+            "GET", f"{self.arguments.stream_gate_url}/status"
+        )
+        self.assert_receiver_gate(stream_gate_status_closed)
+        if stream_gate_status_closed.get("open") is not False:
+            raise RuntimeError(
+                f"STREAM receiver gate reopened before evidence capture: {stream_gate_status_closed}"
+            )
+        stream_gate_reopened = request_json(
+            "POST", f"{self.arguments.stream_gate_url}/open"
+        )
+        if stream_gate_reopened.get("open") is not True:
+            raise RuntimeError(
+                f"STREAM receiver gate did not reopen: {stream_gate_reopened}"
+            )
+        recovery_baseline = stream_gate_reopened.get("bytesForwarded", 0)
+        stream_recovery = message("stream-timeout-recovery")
+        stream_recovery_result = request_json(
+            "POST",
+            f"{self.arguments.stream_gateway_url}/submit/stream",
+            stream_recovery,
+            timeout=4.0,
+        )
+        assert_submit(stream_recovery_result)
+        stream_recovery_gate = self.wait_gate_forwarded_after(recovery_baseline)
+        return {
+            "streamBackpressure": stream_backpressure,
+            "streamReceiverGateClosed": stream_gate_status_closed,
+            "streamRecovery": stream_recovery_result,
+            "streamRecoveryGate": stream_recovery_gate,
         }
 
     def run(self, scenario):
@@ -286,6 +362,7 @@ class Driver:
                 self.arguments.actor_target_rid,
                 "session-actor-remote",
             )
+            stream_timeout = self.exercise_stream_timeout()
             gate_status = request_json("GET", f"{self.arguments.receiver_gate_url}/status")
             stream_gate_status = request_json(
                 "GET", f"{self.arguments.stream_gate_url}/status"
@@ -306,7 +383,37 @@ class Driver:
                     "replyTokenAbsentFixture": no_token_evidence,
                     "sessionActorLocalFastPath": local_session_actor,
                     "sessionActorRemoteFastPath": remote_session_actor,
+                    **stream_timeout,
                     "receiverGate": gate_status,
+                    "streamReceiverGate": stream_gate_status,
+                },
+            )
+        elif scenario == "CPP-CONTRACT-STREAM-001":
+            preflight_gate = request_json(
+                "GET", f"{self.arguments.stream_gate_url}/status"
+            )
+            preflight_baseline = preflight_gate.get("bytesForwarded", 0)
+            preflight = message("stream-timeout-preflight")
+            preflight_result = request_json(
+                "POST",
+                f"{self.arguments.stream_gateway_url}/submit/stream",
+                preflight,
+                timeout=4.0,
+            )
+            assert_submit(preflight_result)
+            preflight_forwarded = self.wait_gate_forwarded_after(preflight_baseline)
+            stream_timeout = self.exercise_stream_timeout()
+            stream_gate_status = request_json(
+                "GET", f"{self.arguments.stream_gate_url}/status"
+            )
+            self.assert_receiver_gate(stream_gate_status)
+            self.record(
+                scenario,
+                {
+                    "streamPreflight": preflight_result,
+                    "streamPreflightGateBefore": preflight_gate,
+                    "streamPreflightGateAfter": preflight_forwarded,
+                    **stream_timeout,
                     "streamReceiverGate": stream_gate_status,
                 },
             )

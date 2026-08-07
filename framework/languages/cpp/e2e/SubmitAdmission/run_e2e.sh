@@ -19,11 +19,12 @@ CORE_INSTALL_DIR="$PACKAGE_ROOT/install/zlink-core"
 EVIDENCE_FILE="$LOG_DIR/evidence.jsonl"
 mkdir -p "$LOG_DIR" "$PACKAGE_ROOT/install/zlink-cpp"
 
-IMPLEMENTED_PROCESS=(SA-E2E-01 SA-E2E-08 SA-E2E-09 SA-E2E-14 SA-E2E-20)
+IMPLEMENTED_PROCESS=(SA-E2E-01 SA-E2E-08 SA-E2E-09 SA-E2E-14 SA-E2E-20 CPP-CONTRACT-STREAM-001)
 IMPLEMENTED_REGRESSION=(SA-REG-01 SA-REG-02 SA-REG-03)
 ALL_KNOWN=()
 for number in $(seq 1 20); do ALL_KNOWN+=("$(printf 'SA-E2E-%02d' "$number")"); done
 for number in $(seq 1 4); do ALL_KNOWN+=("$(printf 'SA-REG-%02d' "$number")"); done
+ALL_KNOWN+=(CPP-CONTRACT-STREAM-001)
 
 SELECTORS=()
 if [[ "$#" -eq 0 || "$*" == "all" ]]; then
@@ -150,6 +151,21 @@ if [[ -d "$VCPKG_PACKAGES/protobuf_x64-linux/share/protobuf" ]]; then
     -Dlibuv_DIR="$VCPKG_PACKAGES/libuv_x64-linux/share/libuv"
     -Dredis++_DIR="$VCPKG_PACKAGES/redis-plus-plus_x64-linux/share/redis++"
     -DCMAKE_PREFIX_PATH="$VCPKG_PACKAGES/redis-plus-plus_x64-linux;$VCPKG_PACKAGES/libuv_x64-linux;$VCPKG_PACKAGES/hiredis_x64-linux"
+  )
+else
+  VCPKG_PREFIX="$CPP_DIR/build/linux-ninja-vcpkg-debug/vcpkg_installed/x64-linux"
+  if [[ ! -f "$VCPKG_PREFIX/share/protobuf/protobuf-config.cmake" ]]; then
+    echo "C++ framework dependency prefix is missing: $VCPKG_PREFIX" >&2
+    exit 1
+  fi
+  CMAKE_ARGUMENTS+=(
+    -Dprotobuf_DIR="$VCPKG_PREFIX/share/protobuf"
+    -Dabsl_DIR="$VCPKG_PREFIX/share/absl"
+    -Dutf8_range_DIR="$VCPKG_PREFIX/share/utf8_range"
+    -Dhiredis_DIR="$VCPKG_PREFIX/share/hiredis"
+    -Dlibuv_DIR="$VCPKG_PREFIX/share/libuv"
+    -Dredis++_DIR="$VCPKG_PREFIX/share/redis++"
+    -DCMAKE_PREFIX_PATH="$VCPKG_PREFIX"
   )
 fi
 
@@ -313,8 +329,7 @@ PY
   write_role_config "$CONFIG_DIR/stream-peer.json" stream-peer \
     submit-stream-peer "$STREAM_PEER_HTTP" '' '' '' '' '' '' "$STREAM_GATE_FRONT"
   write_role_config "$CONFIG_DIR/actor-target.json" actor-target \
-    submit-actor-target "$ACTOR_TARGET_HTTP" "$ACTOR_TARGET_MESH" \
-    submit-stream-gateway "$STREAM_GATEWAY_ACTOR_MESH" '' '' '' ''
+    submit-actor-target "$ACTOR_TARGET_HTTP" "$ACTOR_TARGET_MESH" '' '' '' '' '' ''
 
   start_role() {
     local name="$1" config="$2"
@@ -323,11 +338,11 @@ PY
   }
   wait_health() {
     local name="$1" url="$2"
-    for _ in $(seq 1 30); do
+    for _ in $(seq 1 100); do
       if curl --connect-timeout 0.2 --max-time 0.2 -fsS "$url/health" >/dev/null 2>&1; then return 0; fi
       sleep 0.1
     done
-    echo "Timed out waiting 3s for $name at $url" >&2
+    echo "Timed out waiting 10s for $name at $url" >&2
     return 1
   }
 
@@ -372,6 +387,91 @@ PY
       cat "$LOG_DIR/route-ready-last.json" >&2 || true
       echo "Target route did not become ready within 3s." >&2
       exit 1
+    fi
+    target_ready=0
+    for _ in $(seq 1 30); do
+      if curl --connect-timeout 0.2 --max-time 0.2 -sS \
+          "$TARGET_HTTP/ready?targetRid=$CALLER_RID" \
+          >"$LOG_DIR/target-route-ready-last.json" 2>/dev/null \
+          && python3 - "$LOG_DIR/target-route-ready-last.json" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as source:
+    raise SystemExit(0 if json.load(source).get("ready") is True else 1)
+PY
+      then
+        target_ready=1
+        break
+      fi
+      sleep 0.1
+    done
+    if [[ "$target_ready" != 1 ]]; then
+      cat "$LOG_DIR/target-route-ready-last.json" >&2 || true
+      echo "Caller route did not become ready on the target within 3s." >&2
+      exit 1
+    fi
+  fi
+  stream_contract_process=0
+  if contains SA-E2E-01 "${PROCESS_SELECTORS[@]}" \
+      || contains CPP-CONTRACT-STREAM-001 "${PROCESS_SELECTORS[@]}"; then
+    stream_contract_process=1
+  fi
+  if [[ "$stream_contract_process" == 1 ]]; then
+    if contains SA-E2E-01 "${PROCESS_SELECTORS[@]}"; then
+      start_role client-server-target-a "$CONFIG_DIR/client-server-target-a.json"
+      start_role client-server-target-b "$CONFIG_DIR/client-server-target-b.json"
+      wait_health client-server-target-a "$CS_TARGET_A_HTTP"
+      wait_health client-server-target-b "$CS_TARGET_B_HTTP"
+      start_role client-server-caller "$CONFIG_DIR/client-server-caller.json"
+      wait_health client-server-caller "$CS_CALLER_HTTP"
+    fi
+
+    start_role actor-target "$CONFIG_DIR/actor-target.json"
+    wait_health actor-target "$ACTOR_TARGET_HTTP"
+    start_role stream-gateway "$CONFIG_DIR/stream-gateway.json"
+    wait_health stream-gateway "$STREAM_GATEWAY_HTTP"
+    python3 "$SCRIPT_DIR/Support/receiver_gate.py" \
+      --listen "$STREAM_GATE_FRONT" --backend "$STREAM_GATEWAY_ENDPOINT" \
+      --control "$STREAM_GATE_CONTROL" --blocked-direction backend-to-frontend \
+      >"$LOG_DIR/stream-receiver-gate.stdout.log" \
+      2>"$LOG_DIR/stream-receiver-gate.stderr.log" &
+    PIDS+=("$!")
+    wait_health stream-receiver-gate "$STREAM_GATE_CONTROL"
+    start_role stream-peer "$CONFIG_DIR/stream-peer.json"
+    wait_health stream-peer "$STREAM_PEER_HTTP"
+
+    stream_ready=0
+    for _ in $(seq 1 100); do
+      if curl --connect-timeout 0.2 --max-time 0.2 -fsS \
+          "$STREAM_GATEWAY_HTTP/ready/stream" \
+          >"$LOG_DIR/stream-ready-last.json" 2>/dev/null; then
+        stream_ready=1
+        break
+      fi
+      sleep 0.1
+    done
+    if [[ "$stream_ready" != 1 ]]; then
+      cat "$LOG_DIR/stream-ready-last.json" >&2 || true
+      echo "STREAM session did not become ready within 10s." >&2
+      exit 1
+    fi
+
+    if contains SA-E2E-01 "${PROCESS_SELECTORS[@]}"; then
+      actor_route_ready=0
+      for _ in $(seq 1 100); do
+        if curl --connect-timeout 0.2 --max-time 0.2 -fsS \
+            "$STREAM_GATEWAY_HTTP/ready/actor?targetRid=submit-actor-target" \
+            >"$LOG_DIR/actor-route-ready-last.json" 2>/dev/null; then
+          actor_route_ready=1
+          break
+        fi
+        sleep 0.1
+      done
+      if [[ "$actor_route_ready" != 1 ]]; then
+        cat "$LOG_DIR/actor-route-ready-last.json" >&2 || true
+        echo "Actor target route did not become ready within 10s." >&2
+        exit 1
+      fi
     fi
   fi
   if contains SA-E2E-08 "${PROCESS_SELECTORS[@]}"; then

@@ -441,6 +441,12 @@ class stream_gateway_state_t
         return _stream;
     }
 
+    bool is_connected () const
+    {
+        std::lock_guard lock (_mutex);
+        return _stream.has_value ();
+    }
+
     void record_reply_race (std::string operation_id,
                             std::vector<std::string> terminals)
     {
@@ -786,6 +792,96 @@ class stream_send_handler_t
     stream_gateway_state_t &_state;
 };
 
+class stream_backpressure_handler_t
+{
+  public:
+    using dependency_types = zlink::framework::dependency_list_t<stream_gateway_state_t>;
+
+    explicit stream_backpressure_handler_t (stream_gateway_state_t &state) : _state (state) {}
+
+    zlink::framework::http_response_t
+    handle (const zlink::framework::http_request_t &request)
+    {
+        auto stream = _state.stream ();
+        if (!stream)
+            return {.status = 503, .body = R"({"error":"STREAM peer is not connected"})"};
+        std::chrono::milliseconds timeout;
+        std::size_t payload_bytes;
+        std::size_t max_attempts;
+        try {
+            timeout = std::chrono::milliseconds (
+              std::stoll (request.query_values.at ("timeoutMs")));
+            payload_bytes = static_cast<std::size_t> (
+              std::stoull (request.query_values.at ("payloadBytes")));
+            max_attempts = static_cast<std::size_t> (
+              std::stoull (request.query_values.at ("maxAttempts")));
+        }
+        catch (const std::exception &) {
+            return {.status = 400,
+                    .body = R"({"error":"timeoutMs, payloadBytes, and maxAttempts must be integers"})"};
+        }
+        if (timeout <= std::chrono::milliseconds::zero () || payload_bytes == 0
+            || payload_bytes > 1024 * 1024 || max_attempts == 0
+            || max_attempts > 16384) {
+            return {.status = 400,
+                    .body = R"({"error":"backpressure parameters are out of range"})"};
+        }
+        const auto message = zlink::message_t::from_json (
+          sa::admission_message_t{.operation_id = "stream-timeout-load",
+                                  .sequence = 1,
+                                  .payload = std::string (payload_bytes, 'x')});
+        const auto started = std::chrono::steady_clock::now ();
+        for (std::size_t index = 0; index < max_attempts; ++index) {
+            auto operation = stream->write_packet (message);
+            operation.packet_name ("admission").timeout (timeout);
+            const auto attempt_started = std::chrono::steady_clock::now ();
+            const auto result = operation.submit ().result ();
+            if (!result) {
+                const auto completed = std::chrono::steady_clock::now ();
+                const auto elapsed =
+                  std::chrono::duration_cast<std::chrono::milliseconds> (completed - started)
+                    .count ();
+                const auto terminal_elapsed =
+                  std::chrono::duration_cast<std::chrono::milliseconds> (
+                    completed - attempt_started)
+                    .count ();
+                return {.body = nlohmann::json{{"terminal", terminal_name (result)},
+                                               {"acceptedCount", index},
+                                               {"attemptCount", index + 1},
+                                               {"elapsedMs", elapsed},
+                                               {"terminalElapsedMs", terminal_elapsed}}
+                                  .dump ()};
+            }
+        }
+        return {.status = 500,
+                .body = nlohmann::json{{"error", "STREAM did not reach backpressure"},
+                                       {"attemptCount", max_attempts}}
+                          .dump ()};
+    }
+
+  private:
+    stream_gateway_state_t &_state;
+};
+
+class stream_ready_handler_t
+{
+  public:
+    using dependency_types = zlink::framework::dependency_list_t<stream_gateway_state_t>;
+
+    explicit stream_ready_handler_t (stream_gateway_state_t &state) : _state (state) {}
+
+    zlink::framework::http_response_t
+    handle (const zlink::framework::http_request_t &) const
+    {
+        const auto ready = _state.is_connected ();
+        return {.status = ready ? 200 : 503,
+                .body = nlohmann::json{{"ready", ready}}.dump ()};
+    }
+
+  private:
+    stream_gateway_state_t &_state;
+};
+
 class stream_gateway_evidence_handler_t
 {
   public:
@@ -827,6 +923,12 @@ class stream_peer_state_t
             throw std::runtime_error (
               "STREAM connector could not connect to the SessionGateway");
         }
+        _connector
+          ->send (sa::admission_message_t{.operation_id = "stream-session-init",
+                                          .sequence = 0,
+                                          .payload = "ready"})
+          .packet_name ("admission-init")
+          .submit ();
     }
 
     ~stream_peer_state_t ()
@@ -1044,11 +1146,11 @@ void configure_mesh_role (zlink::framework::zlink_framework_options_t &framework
     auto &http = framework.http ();
     http.listen (options.http_endpoint).map_health ("/health");
     http.map_get<evidence_handler_t> ("/evidence")
+      .map_get<ready_handler_t> ("/ready")
       .map_post<gate_close_handler_t> ("/gate/close")
       .map_post<gate_open_handler_t> ("/gate/open");
     if (options.role == "caller") {
-        http.map_get<ready_handler_t> ("/ready")
-          .map_post<node_submit_handler_t> ("/submit/node")
+        http.map_post<node_submit_handler_t> ("/submit/node")
           .map_post<channel_submit_handler_t> ("/submit/channel");
     }
 }
@@ -1112,9 +1214,6 @@ void configure_client_server_target_role (
 {
     framework.services ().add_singleton<sa::handler_gate_t> ();
     framework.services ().add_singleton<sa::evidence_store_t> ();
-    framework.services ().add_transient<client_server_admission_handler_t,
-                                         sa::handler_gate_t,
-                                         sa::evidence_store_t> ();
     framework.add_client_server_channel (sa::client_server_channel)
       .server ()
       .set_bind_host ("127.0.0.1")
@@ -1148,6 +1247,11 @@ void configure_client_server_caller_role (
 void configure_stream_gateway_role (zlink::framework::zlink_framework_options_t &framework,
                                     const role_options_t &options)
 {
+    framework.add_location_store (
+      std::make_shared<zlink::framework::redis::redis_location_store_t> (
+        zlink::framework::redis::redis_location_options_t{
+          .connection_string = options.redis_endpoint,
+          .key_prefix = options.redis_key_prefix}));
     framework.services ().add_singleton<stream_gateway_state_t> ();
     auto evidence = std::make_unique<sa::evidence_store_t> ();
     auto *evidence_ptr = evidence.get ();
@@ -1155,7 +1259,10 @@ void configure_stream_gateway_role (zlink::framework::zlink_framework_options_t 
     auto mesh = framework.add_route_mesh (sa::mesh_name + std::string (".actors"));
     mesh.listen (options.mesh_endpoint)
       .set_routing_id (zlink::routing_id_t::from (options.rid))
-      .add_entry_spot<admission_actor_spot_t> (
+      .set_object_role (zlink::framework::object_role_t::server)
+      .channel_name (sa::mesh_name + std::string (".actors"))
+      .server ();
+    mesh.add_entry_spot<admission_actor_spot_t> (
         [evidence_ptr] (zlink::framework::entry_spot_context_t context) {
             return std::make_shared<admission_actor_spot_t> (
               std::move (context), *evidence_ptr);
@@ -1165,8 +1272,7 @@ void configure_stream_gateway_role (zlink::framework::zlink_framework_options_t 
         std::make_shared<admission_actor_factory_t> (),
         [] (auto &factory) { factory.disable_relocation (); });
     if (!options.peer_endpoint.empty ()) {
-        mesh.peer_connections ().connect (
-          zlink::routing_id_t::from (options.peer_rid), options.peer_endpoint);
+        mesh.peer_connections ().connect (options.peer_endpoint);
     }
     framework.add_stream_node ("submit-admission-stream")
       .bind (options.stream_endpoint)
@@ -1175,7 +1281,9 @@ void configure_stream_gateway_role (zlink::framework::zlink_framework_options_t 
       .listen (options.http_endpoint)
       .map_health ("/health")
       .map_get<actor_route_ready_handler_t> ("/ready/actor")
+      .map_get<stream_ready_handler_t> ("/ready/stream")
       .map_post<stream_send_handler_t> ("/submit/stream")
+      .map_post<stream_backpressure_handler_t> ("/submit/stream-backpressure")
       .map_post<ensure_actor_handler_t> ("/actors/ensure")
       .map_post<bound_session_submit_handler_t> ("/submit/bound-session")
       .map_get<evidence_handler_t> ("/evidence/actor")
@@ -1185,13 +1293,21 @@ void configure_stream_gateway_role (zlink::framework::zlink_framework_options_t 
 void configure_actor_target_role (zlink::framework::zlink_framework_options_t &framework,
                                   const role_options_t &options)
 {
+    framework.add_location_store (
+      std::make_shared<zlink::framework::redis::redis_location_store_t> (
+        zlink::framework::redis::redis_location_options_t{
+          .connection_string = options.redis_endpoint,
+          .key_prefix = options.redis_key_prefix}));
     auto evidence = std::make_unique<sa::evidence_store_t> ();
     auto *evidence_ptr = evidence.get ();
     framework.services ().add_singleton<sa::evidence_store_t> (std::move (evidence));
     auto mesh = framework.add_route_mesh (sa::mesh_name + std::string (".actors"));
     mesh.listen (options.mesh_endpoint)
       .set_routing_id (zlink::routing_id_t::from (options.rid))
-      .add_entry_spot<admission_actor_spot_t> (
+      .set_object_role (zlink::framework::object_role_t::server)
+      .channel_name (sa::mesh_name + std::string (".actors"))
+      .server ();
+    mesh.add_entry_spot<admission_actor_spot_t> (
         [evidence_ptr] (zlink::framework::entry_spot_context_t context) {
             return std::make_shared<admission_actor_spot_t> (
               std::move (context), *evidence_ptr);
