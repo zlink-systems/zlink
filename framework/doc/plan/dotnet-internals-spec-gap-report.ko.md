@@ -59,7 +59,7 @@ Gap 하나 또는 서로 강하게 연결된 작은 작업 묶음의 동작과 �
 
 | ID | 심각도 | 영역 | 판정 |
 |---|---|---|---|
-| DOTNET-API-001 | 상 | STREAM session send | exact interface의 per-call admission timeout이 public surface와 runtime에 없다 |
+| DOTNET-API-001 | 상 | STREAM session send | 완료 — per-call admission timeout을 public surface와 기존 submit admission owner에 연결했다 |
 | DOTNET-API-002 | 상 | Location 운영 query | object location type과 exact/list query 전체가 없다 |
 | DOTNET-API-003 | 상 | StreamNode message-size API | fluent `MaxMessageSize(bytes)` 대신 `ConfigureSocket().MaxMessageSize` property setter를 노출한다 |
 | DOTNET-ROLE-001 | 상 | ClientServer role error | Server role만 등록된 Channel send/request가 `NotConfigured` 대신 RouteMesh fallback 뒤 `NotFound`로 끝난다 |
@@ -84,6 +84,8 @@ Gap 하나 또는 서로 강하게 연결된 작은 작업 묶음의 동작과 �
 
 ### DOTNET-API-001 — session send의 per-call admission timeout 누락
 
+**판정: 완료**
+
 Exact interface는 `IZLinkSessionSendCall.Timeout(TimeSpan)`을 요구하고, 이 값이 STREAM socket `SendTimeout`을 늘리지 않고 더 짧게만 적용되며 만료 시 `DeadlineExceeded`로 정확히 한 번 끝나야 한다고 정한다(`interfaces/07-stream-session.ko.md:67-73,137-141`). 실제 interface에는 `Compress()`와 `Async(...)`만 있고 `Timeout(...)`이 없다(`Contracts/Streams/IZLinkSession.cs:82-93`). 따라서 application은 계약에 적힌 per-call timeout을 표현할 수 없고, runtime에도 양수 millisecond 범위 검증, socket timeout과의 `min`, 만료 뒤 재admission 차단 경로가 없다.
 
 완료 조건은 public method와 call implementation을 함께 추가하고 다음을 검증하는 contract/runtime test다.
@@ -93,6 +95,16 @@ Exact interface는 `IZLinkSessionSendCall.Timeout(TimeSpan)`을 요구하고, �
 - 0, 음수와 `Int32.MaxValue` millisecond 초과 거부
 - timeout·cancellation·send-ready 경쟁에서 terminal-once
 - 만료 뒤 늦은 send-ready가 제출을 시작하지 않음
+
+`IZLinkSessionSendCall.Timeout(...)`을 추가하고, 양수 millisecond 범위로 올림한 값을 기존
+`ZLinkAsyncSubmitter` admission deadline에 전달한다. Submitter는 STREAM socket timeout과 per-call timeout
+중 짧은 deadline 하나만 만들며, timeout이나 cancellation이 terminal을 먼저 확정하면 이후 send-ready가
+같은 operation을 다시 제출하지 않는다.
+
+검증은 .NET 8에서 `ZLinkAsyncSubmitterTests` 32건과 `StreamContracts` 4건이 통과했다. 별도의 source
+package를 만든 뒤 실행한 `verify_packaged_contract.sh --generate-snapshot`도 packaged contract와 standalone
+HTTP clean consumer를 모두 통과했다. 고정 public API snapshot과 package XML hash를 같은 source 결과로
+갱신했다.
 
 ### DOTNET-API-002 — object location 운영 query 누락
 

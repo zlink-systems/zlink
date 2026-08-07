@@ -330,6 +330,81 @@ public sealed class ZLinkAsyncSubmitterTests : IDisposable
     }
 
     [Fact]
+    public async Task SubmitSingleAsync_PerCallTimeoutShortensSocketAdmissionDeadline()
+    {
+        Action? ready = null;
+        var attempts = 0;
+        await using var submitter = new ZLinkAsyncSubmitter(
+            handler => ready = handler,
+            TimeSpan.FromSeconds(2),
+            CancellationToken.None);
+
+        var pending = submitter.SubmitSingleAsync(
+            Message.From("payload"),
+            _ =>
+            {
+                attempts++;
+                return false;
+            },
+            operationTimeout: TimeSpan.FromMilliseconds(20));
+
+        var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(
+            () => pending.AsTask());
+        Assert.Equal(ZLinkFrameworkErrorKind.DeadlineExceeded, error.Kind);
+
+        Assert.NotNull(ready);
+        ready();
+        Assert.Equal(1, attempts);
+    }
+
+    [Fact]
+    public async Task SubmitSingleAsync_PerCallTimeoutCannotExtendSocketAdmissionDeadline()
+    {
+        await using var submitter = new ZLinkAsyncSubmitter(
+            _ => { },
+            TimeSpan.FromMilliseconds(20),
+            CancellationToken.None);
+
+        var started = Stopwatch.StartNew();
+        var pending = submitter.SubmitSingleAsync(
+            Message.From("payload"),
+            _ => false,
+            operationTimeout: TimeSpan.FromSeconds(2));
+
+        var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(
+            () => pending.AsTask());
+        Assert.Equal(ZLinkFrameworkErrorKind.DeadlineExceeded, error.Kind);
+        Assert.True(started.Elapsed < TimeSpan.FromSeconds(1));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void SessionSendTimeout_RejectsNonPositiveValues(long ticks)
+    {
+        Assert.Throws<ZLinkConfigurationException>(() =>
+            ZLinkSessionSendCall<object>.NormalizeAdmissionTimeout(TimeSpan.FromTicks(ticks)));
+    }
+
+    [Fact]
+    public void SessionSendTimeout_CeilsPositiveSubMillisecondValue()
+    {
+        var timeout = ZLinkSessionSendCall<object>.NormalizeAdmissionTimeout(
+            TimeSpan.FromTicks(1));
+
+        Assert.Equal(TimeSpan.FromMilliseconds(1), timeout);
+    }
+
+    [Fact]
+    public void SessionSendTimeout_RejectsValueAboveIntMaxMilliseconds()
+    {
+        var timeout = TimeSpan.FromMilliseconds((double)int.MaxValue + 1);
+
+        Assert.Throws<ZLinkConfigurationException>(() =>
+            ZLinkSessionSendCall<object>.NormalizeAdmissionTimeout(timeout));
+    }
+
+    [Fact]
     public async Task Async_WaitsUntilSendTimeoutWhenPendingCapacityIsFull()
     {
         await using var submitter = new ZLinkAsyncSubmitter(

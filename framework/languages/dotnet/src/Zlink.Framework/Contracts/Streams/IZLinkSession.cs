@@ -85,6 +85,17 @@ public interface IZLinkSessionSendCall
     IZLinkSessionSendCall Compress();
 
     /// <summary>
+    /// Limits how long this send may wait for local transport admission.
+    /// The effective timeout is the shorter of this value and the STREAM
+    /// socket send timeout.
+    /// </summary>
+    /// <param name="timeout">
+    /// A positive duration that rounds up to at most <see cref="int.MaxValue"/>
+    /// milliseconds.
+    /// </param>
+    IZLinkSessionSendCall Timeout(TimeSpan timeout);
+
+    /// <summary>
     /// Submits the session send. Input validation and local transport
     /// acceptance complete before this method returns. If the transport queue
     /// is full, the call waits up to the configured send timeout.

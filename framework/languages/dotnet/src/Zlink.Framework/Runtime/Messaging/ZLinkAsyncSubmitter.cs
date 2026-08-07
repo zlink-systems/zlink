@@ -189,11 +189,18 @@ internal sealed class ZLinkAsyncSubmitter : IAsyncDisposable
     internal async ValueTask<ZLinkOneWaySubmitResult> SubmitSingleAsync(
         Message message,
         Func<Message, bool> attemptSubmit,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        TimeSpan? operationTimeout = null)
     {
         try
         {
-            await Async(message, attemptSubmit, cancellationToken)
+            ArgumentNullException.ThrowIfNull(message);
+            ArgumentNullException.ThrowIfNull(attemptSubmit);
+            await SubmitCommandAsync(
+                    new SingleMessageParts(message),
+                    parts => attemptSubmit(parts[0]),
+                    cancellationToken,
+                    operationTimeout)
                 .ConfigureAwait(false);
             return new ZLinkOneWaySubmitResult(ZLinkOneWaySubmitStatus.Submitted);
         }
@@ -272,7 +279,8 @@ internal sealed class ZLinkAsyncSubmitter : IAsyncDisposable
     private async ValueTask SubmitCommandAsync(
         IReadOnlyList<Message> parts,
         Func<IReadOnlyList<Message>, bool> trySubmit,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        TimeSpan? operationTimeout = null)
     {
         var operationId = ZLinkTelemetry.CaptureSubmitOperationId();
         var ownsParts = true;
@@ -304,7 +312,11 @@ internal sealed class ZLinkAsyncSubmitter : IAsyncDisposable
                         "ZLink command submit");
                 }
 
-                var pending = _operationFactory.CreateCommand(parts, trySubmit, operationId);
+                var pending = _operationFactory.CreateCommand(
+                    parts,
+                    trySubmit,
+                    operationId,
+                    operationTimeout);
                 if (submitFailure is not null) pending.RecordSubmitFailure(submitFailure);
 
                 ownsParts = false;
