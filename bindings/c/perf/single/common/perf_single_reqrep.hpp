@@ -195,20 +195,9 @@ inline bool poll_completion_once (void *poller_, long timeout_ms_)
     zlink_poller_event_t event;
     std::memset (&event, 0, sizeof (event));
     zlink_config_result_t error = ZLINK_CONFIG_OK;
-#ifdef _WIN32
-    // The Windows poller wait timeout can remain blocked after a completion
-    // notification race. Poll without blocking, then yield briefly so the
-    // completion callback still makes progress without an unbounded wait.
-    const int rc = zlink_poller_wait (poller_, &event, 1, 0, &error);
-#else
     const int rc = zlink_poller_wait (poller_, &event, 1, timeout_ms_, &error);
-#endif
     if (rc < 0)
         return zlink_errno () == EINTR;
-#ifdef _WIN32
-    if (timeout_ms_ > 0)
-        std::this_thread::sleep_for (std::chrono::milliseconds (1));
-#endif
     return true;
 }
 

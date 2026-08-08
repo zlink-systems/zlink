@@ -257,11 +257,7 @@ inline bool run_active_phase (void *sender_,
     // cycling), but the loop only exits on stop-token receipt or error.
     (void) recv_timeout_ms_;
 
-#ifdef _WIN32
-    const int recv_flags = ZLINK_RECV_FLAGS_DONTWAIT;
-#else
     const int recv_flags = 0;
-#endif
 
     std::thread receiver_thread ([&] () {
         while (true) {
@@ -301,9 +297,6 @@ inline bool run_active_phase (void *sender_,
             }
 
             if (recv_rc == recv_result_again) {
-#ifdef _WIN32
-                perf_idle_wait_ms (1);
-#endif
                 continue;
             }
             if (recv_rc == recv_result_stop)

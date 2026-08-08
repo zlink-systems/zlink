@@ -894,13 +894,12 @@ bind_server_endpoint (void *server_, const std::string &transport_, const std::s
         return std::string ();
     }
 
-    // Stream clients may distribute loopback source addresses across 127/8
+    // TCP/WS clients may distribute loopback source addresses across 127/8
     // when the default connection count exceeds one local ephemeral-port
     // range. Bind the multi server to all IPv4 interfaces so those loopback
-    // source addresses reach the same listener. The resolved endpoint is
-    // normalized back to the loopback host before it is advertised.
-    if (transport_ == "tcp" || transport_ == "tls" || transport_ == "ws"
-        || transport_ == "wss") {
+    // source addresses reach the same listener. TLS/WSS remain on their
+    // explicit loopback endpoint because secure listeners reject 0.0.0.0.
+    if (transport_ == "tcp" || transport_ == "ws") {
         const std::string scheme_end = "://";
         const std::string::size_type host_begin = endpoint.find (scheme_end);
         if (host_begin != std::string::npos) {

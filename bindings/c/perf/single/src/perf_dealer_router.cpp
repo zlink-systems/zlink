@@ -332,13 +332,7 @@ bool run_active_phase (void *sender_,
     // Receiver: blocking recv, exit on stop-token receipt. Socket
     // recv_timeout still bounds individual recv calls; phase end is
     // signaled purely by the stop token arriving on the wire.
-#ifdef _WIN32
-      // Avoid the Windows blocking receive timeout path; the nonblocking loop
-      // still drains the socket and observes the wire stop token.
-      const int recv_flags = ZLINK_RECV_FLAGS_DONTWAIT;
-#else
-      const int recv_flags = 0;
-#endif
+    const int recv_flags = 0;
     while (true) {
         perf_single_metric::header_t header;
         bool header_ok = false;
@@ -352,9 +346,6 @@ bool run_active_phase (void *sender_,
             continue;
         }
         if (recv_rc == 0) {
-#ifdef _WIN32
-            perf_idle_wait_ms (1);
-#endif
             continue;
         }
         if (recv_rc == 2)

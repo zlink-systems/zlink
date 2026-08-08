@@ -3,16 +3,47 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
-OFFICIAL_BUILD_DIR="${ROOT_DIR}/bindings/c/build"
-DEFAULT_CORE_BUILD_DIR="${ROOT_DIR}/core/build"
 NORMALIZE_TIMESTAMPS_SH="${ROOT_DIR}/core/tools/normalize_build_timestamps.sh"
-MAKE_BIN="$(command -v gmake || command -v make)"
 PERF_COMPARISON_SCRIPT="${SCRIPT_DIR}/run_comparison.py"
 PATTERNS="DEALER_DEALER,DEALER_ROUTER_SENDSEND,ROUTER_ROUTER_SENDSEND,DEALER_ROUTER_REQREP,ROUTER_ROUTER_REQREP,ROUTER_ROUTER_ONEWAY,PUBSUB,STREAM"
 TRANSPORTS="tcp,tls,ws,wss"
 DEFAULT_MULTI_MSG_SIZES="64,256,1024,4096,65536,131072"
 MSG_SIZES="${PERF_MSG_SIZES:-${DEFAULT_MULTI_MSG_SIZES}}"
 IFS=',' read -r -a PATTERN_LIST <<< "${PATTERNS}"
+
+IS_WINDOWS=0
+PLATFORM="linux"
+CMAKE_GENERATOR="${CMAKE_GENERATOR:-}"
+CMAKE_ARCH="${CMAKE_ARCH:-x64}"
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*)
+    IS_WINDOWS=1
+    PLATFORM="windows"
+    ;;
+  Darwin*)
+    PLATFORM="macos"
+    ;;
+esac
+
+if [[ "${IS_WINDOWS}" -eq 1 ]]; then
+  OFFICIAL_BUILD_DIR="${ROOT_DIR}/bindings/c/build/windows-x64"
+  DEFAULT_CORE_BUILD_DIR="${ROOT_DIR}/core/build/windows-x64"
+  if [[ -z "${CMAKE_GENERATOR}" ]]; then
+    CMAKE_GENERATOR="Visual Studio 17 2022"
+  fi
+else
+  OFFICIAL_BUILD_DIR="${ROOT_DIR}/bindings/c/build"
+  DEFAULT_CORE_BUILD_DIR="${ROOT_DIR}/core/build"
+fi
+
+MAKE_BIN=""
+if [[ "${IS_WINDOWS}" -eq 0 ]]; then
+  MAKE_BIN="$(command -v gmake || command -v make || true)"
+  if [[ -z "${MAKE_BIN}" ]]; then
+    echo "Error: make or gmake is required on non-Windows platforms." >&2
+    exit 1
+  fi
+fi
 
 SECONDS=0
 SHOW_TOTAL_TIME=0
@@ -42,16 +73,39 @@ print_total_time() {
 }
 trap 'print_total_time $?' EXIT
 
-IS_WINDOWS=0
-case "$(uname -s)" in
-  MINGW*|MSYS*|CYGWIN*)
-    IS_WINDOWS=1
-    ;;
-esac
-
 is_uint() {
   local value="${1:-}"
   [[ "${value}" =~ ^[0-9]+$ ]]
+}
+
+normalize_cmake_path() {
+  local path="${1:-}"
+  if [[ -z "${path}" ]]; then
+    return 0
+  fi
+  if [[ "${IS_WINDOWS}" -eq 1 ]] && command -v cygpath >/dev/null 2>&1; then
+    cygpath -m "${path}"
+  else
+    realpath -m "${path}"
+  fi
+}
+
+resolve_openssl_root() {
+  local core_build_dir="${1:-}"
+  local root="${OPENSSL_ROOT_DIR:-}"
+  local cache_path="${core_build_dir}/CMakeCache.txt"
+  local triplet="${VCPKG_DEFAULT_TRIPLET:-x64-windows-static}"
+
+  if [[ -z "${root}" && -f "${cache_path}" ]]; then
+    root="$(sed -n 's/^OPENSSL_ROOT_DIR:[^=]*=//p' "${cache_path}" | tail -n 1)"
+  fi
+  if [[ -z "${root}" && -n "${VCPKG_ROOT:-}" ]]; then
+    root="${VCPKG_ROOT}/installed/${triplet}"
+  fi
+
+  if [[ -n "${root}" && -f "${root}/include/openssl/opensslv.h" ]]; then
+    printf '%s\n' "${root}"
+  fi
 }
 
 is_positive_u64() {
@@ -245,6 +299,8 @@ resolve_core_runtime_library() {
       ;;
     MINGW*|MSYS*|CYGWIN*)
       candidates=(
+        "${core_build_dir}/bin/Release/zlink.dll"
+        "${core_build_dir}/lib/Release/zlink.dll"
         "${core_build_dir}/bin/zlink.dll"
         "${core_build_dir}/lib/zlink.dll"
       )
@@ -272,8 +328,22 @@ build_core_runtime() {
   local core_source_dir="${ROOT_DIR}/core"
   local jobs
   jobs="$(nproc 2>/dev/null || echo 4)"
+  local core_cache="${core_build_dir}/CMakeCache.txt"
+  local cached_generator=""
+
+  if [[ "${IS_WINDOWS}" -eq 1 && -f "${core_cache}" ]]; then
+    cached_generator="$({ sed -n 's/^CMAKE_GENERATOR:INTERNAL=//p' "${core_cache}" | tail -n 1; } || true)"
+    if [[ -n "${cached_generator}" && "${cached_generator}" != "${CMAKE_GENERATOR}" ]]; then
+      echo "Core build generator mismatch detected:"
+      echo "  cache generator: ${cached_generator}"
+      echo "  required generator: ${CMAKE_GENERATOR}"
+      echo "Resetting core build directory: ${core_build_dir}"
+      rm -rf "${core_build_dir}"
+    fi
+  fi
+
   echo "=== Auto-building core runtime (target: ${core_build_dir}) ==="
-  if [[ ! -f "${core_build_dir}/CMakeCache.txt" ]]; then
+  if [[ ! -f "${core_cache}" ]]; then
     mkdir -p "${core_build_dir}"
     local configure_args=(
       -S "${core_source_dir}"
@@ -285,15 +355,29 @@ build_core_runtime() {
       -DBUILD_BENCHMARKS=ON
       -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
     )
-    if [[ -n "${MAKE_BIN}" ]]; then
+    if [[ "${IS_WINDOWS}" -eq 1 ]]; then
+      configure_args+=(-G "${CMAKE_GENERATOR}")
+      if [[ "${CMAKE_GENERATOR}" == Visual\ Studio* ]]; then
+        configure_args+=(-A "${CMAKE_ARCH}")
+      fi
+    else
       configure_args+=(-DCMAKE_MAKE_PROGRAM="${MAKE_BIN}")
+    fi
+    OPENSSL_CONFIG_ROOT="${OPENSSL_CMAKE_ROOT:-${OPENSSL_ROOT_DIR:-}}"
+    if [[ -n "${OPENSSL_CONFIG_ROOT}" ]]; then
+      configure_args+=(-DOPENSSL_ROOT_DIR="${OPENSSL_CONFIG_ROOT}"
+                       -DCMAKE_PREFIX_PATH="${OPENSSL_CONFIG_ROOT}")
     fi
     cmake "${configure_args[@]}"
   fi
-  if [[ -f "${NORMALIZE_TIMESTAMPS_SH}" ]]; then
+  if [[ "${IS_WINDOWS}" -eq 0 && -f "${NORMALIZE_TIMESTAMPS_SH}" ]]; then
     bash "${NORMALIZE_TIMESTAMPS_SH}" "${core_build_dir}" || true
   fi
-  cmake --build "${core_build_dir}" -j"${jobs}"
+  if [[ "${IS_WINDOWS}" -eq 1 ]]; then
+    cmake --build "${core_build_dir}" --config Release
+  else
+    cmake --build "${core_build_dir}" -j"${jobs}"
+  fi
 }
 
 prepare_core_runtime() {
@@ -406,7 +490,7 @@ Options:
   --server-ready-timeout-ms N
                          Override PERF_MULTI_SERVER_READY_TIMEOUT_MS (default: 10000).
   --connect-ready-timeout-ms N
-                         Override PERF_MULTI_CONNECT_READY_TIMEOUT_MS (default: 1000).
+                         Override PERF_MULTI_CONNECT_READY_TIMEOUT_MS (default: 10000).
   --monitor-hwm BYTES    Override PERF_MULTI_MONITOR_HWM (default: 4096000).
   --server-shutdown-timeout-ms N
                          Override PERF_MULTI_SERVER_SHUTDOWN_TIMEOUT_MS (default: 5000).
@@ -577,7 +661,7 @@ RUN_COOLDOWN_MS="${PERF_MULTI_RUN_COOLDOWN_MS:-${PERF_RUN_COOLDOWN_MS:-3000}}"
 TRANSPORT_TRANSITION_MS="${PERF_MULTI_TRANSPORT_TRANSITION_MS:-${PERF_TRANSPORT_TRANSITION_MS:-3000}}"
 PATTERN_TRANSITION_MS="${PERF_MULTI_PATTERN_TRANSITION_MS:-${PERF_PATTERN_TRANSITION_MS:-3000}}"
 SERVER_READY_TIMEOUT_MS="${PERF_MULTI_SERVER_READY_TIMEOUT_MS:-${PERF_SERVER_READY_TIMEOUT_MS:-10000}}"
-CONNECT_READY_TIMEOUT_MS="${PERF_MULTI_CONNECT_READY_TIMEOUT_MS:-${PERF_CONNECT_READY_TIMEOUT_MS:-1000}}"
+CONNECT_READY_TIMEOUT_MS="${PERF_MULTI_CONNECT_READY_TIMEOUT_MS:-${PERF_CONNECT_READY_TIMEOUT_MS:-10000}}"
 MONITOR_HWM="${PERF_MULTI_MONITOR_HWM:-${PERF_MONITOR_HWM:-4096000}}"
 SERVER_SHUTDOWN_TIMEOUT_MS="${PERF_MULTI_SERVER_SHUTDOWN_TIMEOUT_MS:-${PERF_SERVER_SHUTDOWN_TIMEOUT_MS:-5000}}"
 SERVER_BIND_PORT="${PERF_MULTI_SERVER_BIND_PORT:-${PERF_SERVER_BIND_PORT:-0}}"
@@ -1199,7 +1283,9 @@ if [[ "${BUILD_MODE}" != "reuse" && -f "${BUILD_DIR}/CMakeCache.txt" ]]; then
     sed -n 's/^CMAKE_HOME_DIRECTORY:INTERNAL=//p' "${BUILD_DIR}/CMakeCache.txt" \
       | tail -n 1
   )"
-  if [[ -n "${CACHE_CMAKE_SOURCE}" && "${CACHE_CMAKE_SOURCE}" != "${CMAKE_SOURCE_DIR}" ]]; then
+  if [[ -n "${CACHE_CMAKE_SOURCE}" \
+        && "$(normalize_cmake_path "${CACHE_CMAKE_SOURCE}")" \
+           != "$(normalize_cmake_path "${CMAKE_SOURCE_DIR}")" ]]; then
     echo "Build cache source mismatch detected:"
     echo "  cache source: ${CACHE_CMAKE_SOURCE}"
     echo "  required source: ${CMAKE_SOURCE_DIR}"
@@ -1208,29 +1294,58 @@ if [[ "${BUILD_MODE}" != "reuse" && -f "${BUILD_DIR}/CMakeCache.txt" ]]; then
   fi
 fi
 
+if [[ "${BUILD_MODE}" != "reuse" && "${IS_WINDOWS}" -eq 1 && -f "${BUILD_DIR}/CMakeCache.txt" ]]; then
+  CACHE_CMAKE_GENERATOR="$({ sed -n 's/^CMAKE_GENERATOR:INTERNAL=//p' "${BUILD_DIR}/CMakeCache.txt" | tail -n 1; } || true)"
+  if [[ -n "${CACHE_CMAKE_GENERATOR}" && "${CACHE_CMAKE_GENERATOR}" != "${CMAKE_GENERATOR}" ]]; then
+    echo "Build cache generator mismatch detected:"
+    echo "  cache generator: ${CACHE_CMAKE_GENERATOR}"
+    echo "  required generator: ${CMAKE_GENERATOR}"
+    echo "Resetting build directory: ${BUILD_DIR}"
+    rm -rf "${BUILD_DIR}"
+  fi
+fi
+
 echo "Using CMake source directory: ${CMAKE_SOURCE_DIR}"
+CORE_BUILD_DIR="$(resolve_configured_core_build_dir "${BUILD_DIR}")"
+OPENSSL_CMAKE_ROOT=""
+if [[ "${IS_WINDOWS}" -eq 1 ]]; then
+  OPENSSL_CMAKE_ROOT="$(resolve_openssl_root "${CORE_BUILD_DIR}")"
+  if [[ -z "${OPENSSL_CMAKE_ROOT}" ]]; then
+    echo "Error: OpenSSL was not found for Windows. Set OPENSSL_ROOT_DIR or VCPKG_ROOT." >&2
+    exit 1
+  fi
+  echo "Perf OpenSSL root: ${OPENSSL_CMAKE_ROOT}"
+fi
 prepare_core_runtime "${BUILD_DIR}"
 
 if [[ "${BUILD_MODE}" != "reuse" ]]; then
   if [[ "${IS_WINDOWS}" -eq 1 ]]; then
-    CMAKE_GENERATOR="${CMAKE_GENERATOR:-Visual Studio 17 2022}"
-    CMAKE_ARCH="${CMAKE_ARCH:-x64}"
-    cmake -S "${CMAKE_SOURCE_DIR}" -B "${BUILD_DIR}" \
-      -G "${CMAKE_GENERATOR}" \
-      -A "${CMAKE_ARCH}" \
-      -DCMAKE_BUILD_TYPE=Release \
-      -DENABLE_LTO=OFF \
-      -DZLINK_CORE_DIR="${ROOT_DIR}/core" \
-      -DZLINK_C_CORE_BUILD_DIR="${ROOT_DIR}/core/build" \
-      -DZLINK_C_BUILD_BENCHMARKS=ON \
+    CMAKE_ARGS=(
+      -S "${CMAKE_SOURCE_DIR}"
+      -B "${BUILD_DIR}"
+      -G "${CMAKE_GENERATOR}"
+      -DCMAKE_BUILD_TYPE=Release
+      -DENABLE_LTO=OFF
+      -DZLINK_CORE_DIR="${ROOT_DIR}/core"
+      -DZLINK_C_CORE_BUILD_DIR="${CORE_BUILD_DIR}"
+      -DZLINK_C_BUILD_BENCHMARKS=ON
       -DZLINK_C_BUILD_SAMPLES=OFF
+    )
+    if [[ "${CMAKE_GENERATOR}" == Visual\ Studio* ]]; then
+      CMAKE_ARGS+=(-A "${CMAKE_ARCH}")
+    fi
+    if [[ -n "${OPENSSL_CMAKE_ROOT}" ]]; then
+      CMAKE_ARGS+=(-DOPENSSL_ROOT_DIR="${OPENSSL_CMAKE_ROOT}"
+                   -DCMAKE_PREFIX_PATH="${OPENSSL_CMAKE_ROOT}")
+    fi
+    cmake "${CMAKE_ARGS[@]}"
   else
     cmake -S "${CMAKE_SOURCE_DIR}" -B "${BUILD_DIR}" \
       -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_MAKE_PROGRAM="${MAKE_BIN}" \
       -DENABLE_LTO=OFF \
       -DZLINK_CORE_DIR="${ROOT_DIR}/core" \
-      -DZLINK_C_CORE_BUILD_DIR="${ROOT_DIR}/core/build" \
+      -DZLINK_C_CORE_BUILD_DIR="${CORE_BUILD_DIR}" \
       -DZLINK_C_BUILD_BENCHMARKS=ON \
       -DZLINK_C_BUILD_SAMPLES=OFF
   fi

@@ -150,9 +150,8 @@ bool setup_session (void *server_,
     const int ready_timeout_ms = parse_positive_env ("PERF_CONNECT_READY_TIMEOUT_MS", 1000);
     const bool server_ready = wait_for_socket_monitor_event_with_activity (
       server_monitor, server_, ZLINK_EVENT_CONNECTION_READY, ready_timeout_ms);
-    const bool client_ready =
-      wait_for_socket_monitor_event (client_monitor, ZLINK_EVENT_CONNECTION_READY,
-                                     ready_timeout_ms);
+    const bool client_ready = wait_for_socket_monitor_event_with_activity (
+      client_monitor, client_, ZLINK_EVENT_CONNECTION_READY, ready_timeout_ms);
     zlink_monitor_close (&server_monitor);
     zlink_monitor_close (&client_monitor);
     if (!server_ready || !client_ready)

@@ -56,7 +56,7 @@ This script invokes the shared comparison runner directly.
 Options:
   -Pattern NAME                Pattern list (comma-separated) or ALL.
                                Alias: stream/streams => STREAM
-  -BuildDir PATH               Official build directory (default: bindings\c\build).
+  -BuildDir PATH               Official build directory (default: platform-specific bindings\c\build\windows-x64 on Windows).
   -OutputFile PATH             Tee console logs to file.
   -Runs N                      Iterations per configuration (default: 1).
   -Build                       Clean and rebuild benchmark targets (default is incremental).
@@ -129,7 +129,7 @@ if (-not $ServerReadyExplicit) {
     $ServerReadyTimeoutMs = [int](Get-EnvironmentDefault -Primary "PERF_MULTI_SERVER_READY_TIMEOUT_MS" -Fallback "PERF_SERVER_READY_TIMEOUT_MS" -Default "10000")
 }
 if (-not $ConnectReadyExplicit) {
-    $ConnectReadyTimeoutMs = [int](Get-EnvironmentDefault -Primary "PERF_MULTI_CONNECT_READY_TIMEOUT_MS" -Fallback "PERF_CONNECT_READY_TIMEOUT_MS" -Default "1000")
+    $ConnectReadyTimeoutMs = [int](Get-EnvironmentDefault -Primary "PERF_MULTI_CONNECT_READY_TIMEOUT_MS" -Fallback "PERF_CONNECT_READY_TIMEOUT_MS" -Default "10000")
 }
 if (-not $MonitorHwmExplicit) {
     $MonitorHwm = [int](Get-EnvironmentDefault -Primary "PERF_MULTI_MONITOR_HWM" -Fallback "PERF_MONITOR_HWM" -Default "4096000")
@@ -258,7 +258,12 @@ if ($Runs -lt 1) { throw "Runs must be >= 1." }
 $ScriptDir = [System.IO.Path]::GetFullPath($PSScriptRoot)
 $RootDir = [System.IO.Path]::GetFullPath((Join-Path $ScriptDir "..\..\.."))
 $CMakeSourceDir = Join-Path $RootDir "bindings\c"
-$OfficialBuildDir = Join-Path $CMakeSourceDir "build"
+$OnWindows = $env:OS -eq "Windows_NT"
+$OfficialBuildDir = if ($OnWindows) {
+    Join-Path $CMakeSourceDir "build\windows-x64"
+} else {
+    Join-Path $CMakeSourceDir "build"
+}
 if (-not $BuildDir) {
     $BuildDir = $OfficialBuildDir
 }
@@ -271,8 +276,12 @@ $CoreBuildCandidates = @()
 if ($env:ZLINK_C_CORE_BUILD_DIR) {
     $CoreBuildCandidates += [System.IO.Path]::GetFullPath($env:ZLINK_C_CORE_BUILD_DIR)
 }
-$CoreBuildCandidates += Join-Path $RootDir "core\build\windows-x64"
-$CoreBuildCandidates += Join-Path $RootDir "core\build"
+if ($OnWindows) {
+    $CoreBuildCandidates += Join-Path $RootDir "core\build\windows-x64"
+    $CoreBuildCandidates += Join-Path $RootDir "core\build"
+} else {
+    $CoreBuildCandidates += Join-Path $RootDir "core\build"
+}
 $CoreBuildDir = $null
 foreach ($Candidate in $CoreBuildCandidates) {
     if ((Test-Path (Join-Path $Candidate "bin\Release\zlink.dll")) -or
@@ -284,7 +293,7 @@ foreach ($Candidate in $CoreBuildCandidates) {
     }
 }
 if (-not $CoreBuildDir) {
-    $CoreBuildDir = if (Test-Path (Join-Path $RootDir "core\build\windows-x64\CMakeCache.txt")) {
+    $CoreBuildDir = if ($OnWindows -and (Test-Path (Join-Path $RootDir "core\build\windows-x64\CMakeCache.txt"))) {
         Join-Path $RootDir "core\build\windows-x64"
     } else {
         Join-Path $RootDir "core\build"
@@ -388,6 +397,9 @@ function Prepare-CoreRuntime {
             )
             if ($Generator -like "Visual Studio*") {
                 $ConfigureArgs += @("-A", $Architecture)
+            }
+            if ($OpenSslRoot) {
+                $ConfigureArgs += @("-DOPENSSL_ROOT_DIR=$OpenSslRoot", "-DCMAKE_PREFIX_PATH=$OpenSslRoot")
             }
             Write-Host "Configuring core runtime: $CoreRoot"
             & $CMakeExe @ConfigureArgs

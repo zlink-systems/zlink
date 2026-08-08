@@ -96,6 +96,36 @@ if [[ "${IS_WINDOWS}" -eq 0 ]]; then
   fi
 fi
 
+normalize_cmake_path() {
+  local path="${1:-}"
+  if [[ -z "${path}" ]]; then
+    return 0
+  fi
+  if [[ "${IS_WINDOWS}" -eq 1 ]] && command -v cygpath >/dev/null 2>&1; then
+    cygpath -m "${path}"
+  else
+    realpath -m "${path}"
+  fi
+}
+
+resolve_openssl_root() {
+  local core_build_dir="${1:-}"
+  local root="${OPENSSL_ROOT_DIR:-}"
+  local cache_path="${core_build_dir}/CMakeCache.txt"
+  local triplet="${VCPKG_DEFAULT_TRIPLET:-x64-windows-static}"
+
+  if [[ -z "${root}" && -f "${cache_path}" ]]; then
+    root="$(sed -n 's/^OPENSSL_ROOT_DIR:[^=]*=//p' "${cache_path}" | tail -n 1)"
+  fi
+  if [[ -z "${root}" && -n "${VCPKG_ROOT:-}" ]]; then
+    root="${VCPKG_ROOT}/installed/${triplet}"
+  fi
+
+  if [[ -n "${root}" && -f "${root}/include/openssl/opensslv.h" ]]; then
+    printf '%s\n' "${root}"
+  fi
+}
+
 BUILD_DIR="${OFFICIAL_BUILD_DIR}"
 
 STANDARD_PATTERNS="PAIR,PUBSUB,DEALER_DEALER,DEALER_ROUTER,DEALER_ROUTER_REQREP,ROUTER_ROUTER,ROUTER_ROUTER_REQREP"
@@ -284,9 +314,10 @@ build_core_runtime() {
     else
       configure_args+=(-DCMAKE_MAKE_PROGRAM="${MAKE_BIN}")
     fi
-    if [[ -n "${OPENSSL_ROOT_DIR:-}" ]]; then
-      configure_args+=(-DOPENSSL_ROOT_DIR="${OPENSSL_ROOT_DIR}"
-                       -DCMAKE_PREFIX_PATH="${OPENSSL_ROOT_DIR}")
+    OPENSSL_CONFIG_ROOT="${OPENSSL_CMAKE_ROOT:-${OPENSSL_ROOT_DIR:-}}"
+    if [[ -n "${OPENSSL_CONFIG_ROOT}" ]]; then
+      configure_args+=(-DOPENSSL_ROOT_DIR="${OPENSSL_CONFIG_ROOT}"
+                       -DCMAKE_PREFIX_PATH="${OPENSSL_CONFIG_ROOT}")
     fi
     cmake "${configure_args[@]}"
   fi
@@ -681,7 +712,9 @@ if [[ "${BUILD_MODE}" != "reuse" && -f "${BUILD_DIR}/CMakeCache.txt" ]]; then
     sed -n 's/^CMAKE_HOME_DIRECTORY:INTERNAL=//p' "${BUILD_DIR}/CMakeCache.txt" \
       | tail -n 1
   )"
-  if [[ -n "${CACHE_CMAKE_SOURCE}" && "${CACHE_CMAKE_SOURCE}" != "${CMAKE_SOURCE_DIR}" ]]; then
+  if [[ -n "${CACHE_CMAKE_SOURCE}" \
+        && "$(normalize_cmake_path "${CACHE_CMAKE_SOURCE}")" \
+           != "$(normalize_cmake_path "${CMAKE_SOURCE_DIR}")" ]]; then
     echo "Build cache source mismatch detected:"
     echo "  cache source: ${CACHE_CMAKE_SOURCE}"
     echo "  required source: ${CMAKE_SOURCE_DIR}"
@@ -703,7 +736,17 @@ fi
 
 echo "Using CMake source directory: ${CMAKE_SOURCE_DIR}"
 
-CORE_BUILD_DIR="$(resolve_configured_core_build_dir "${BUILD_DIR}")"
+OPENSSL_CMAKE_ROOT=""
+if [[ "${IS_WINDOWS}" -eq 1 ]]; then
+  CORE_BUILD_DIR="$(resolve_configured_core_build_dir "${BUILD_DIR}")"
+  OPENSSL_CMAKE_ROOT="$(resolve_openssl_root "${CORE_BUILD_DIR}")"
+  if [[ -z "${OPENSSL_CMAKE_ROOT}" ]]; then
+    echo "Error: OpenSSL was not found for Windows. Set OPENSSL_ROOT_DIR or VCPKG_ROOT." >&2
+    exit 1
+  fi
+  echo "Perf OpenSSL root: ${OPENSSL_CMAKE_ROOT}"
+fi
+CORE_BUILD_DIR="${CORE_BUILD_DIR:-$(resolve_configured_core_build_dir "${BUILD_DIR}")}"
 if ! prepare_core_runtime "${BUILD_DIR}"; then
   exit 1
 fi
@@ -724,9 +767,9 @@ if [[ "${BUILD_MODE}" != "reuse" ]]; then
     if [[ "${CMAKE_GENERATOR}" == Visual\ Studio* ]]; then
       CMAKE_ARGS+=(-A "${CMAKE_ARCH}")
     fi
-    if [[ -n "${OPENSSL_ROOT_DIR:-}" ]]; then
-      CMAKE_ARGS+=(-DOPENSSL_ROOT_DIR="${OPENSSL_ROOT_DIR}"
-                   -DCMAKE_PREFIX_PATH="${OPENSSL_ROOT_DIR}")
+    if [[ -n "${OPENSSL_CMAKE_ROOT}" ]]; then
+      CMAKE_ARGS+=(-DOPENSSL_ROOT_DIR="${OPENSSL_CMAKE_ROOT}"
+                   -DCMAKE_PREFIX_PATH="${OPENSSL_CMAKE_ROOT}")
     fi
     cmake "${CMAKE_ARGS[@]}"
   else

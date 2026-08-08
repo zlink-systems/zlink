@@ -230,8 +230,8 @@ bool setup_router_router_session (void *receiver_,
     const int ready_timeout_ms = parse_positive_env ("PERF_CONNECT_READY_TIMEOUT_MS", 1000);
     const bool receiver_ready = wait_for_socket_monitor_event_with_activity (
       receiver_monitor, receiver_, ZLINK_EVENT_CONNECTION_READY, ready_timeout_ms);
-    const bool sender_ready = wait_for_socket_monitor_event (
-      sender_monitor, ZLINK_EVENT_CONNECTION_READY, ready_timeout_ms);
+    const bool sender_ready = wait_for_socket_monitor_event_with_activity (
+      sender_monitor, sender_, ZLINK_EVENT_CONNECTION_READY, ready_timeout_ms);
     zlink_monitor_close (&sender_monitor);
     zlink_monitor_close (&receiver_monitor);
     if (!receiver_ready || !sender_ready) {
@@ -381,7 +381,7 @@ bool send_router_samples (void *sender_,
             std::memcpy (zlink_msg_data (&part), payload_->data (), payload_->size ());
 
         if (perf_zlink_send_rid_parts (sender_, &state_->target_rid, &part, 1,
-                                       ZLINK_DONTWAIT)
+                                       ZLINK_SEND_FLAGS_NONE)
             != 0) {
             const int err = zlink_errno ();
             if (bench_debug_enabled ()) {
@@ -518,13 +518,7 @@ bool run_active_phase (void *sender_,
         sender_ok.store (active_ok && stop_ok, std::memory_order_release);
     });
 
-#ifdef _WIN32
-      // Keep the Windows receive path nonblocking so timeout handling does not
-      // leave the receiver stuck after the sender has emitted the stop token.
-      const int recv_flags = ZLINK_RECV_FLAGS_DONTWAIT;
-#else
-      const int recv_flags = 0;
-#endif
+    const int recv_flags = 0;
     while (true) {
         perf_single_metric::header_t header;
         bool header_ok = false;
@@ -538,9 +532,6 @@ bool run_active_phase (void *sender_,
             continue;
         }
         if (recv_rc == 0) {
-#ifdef _WIN32
-            perf_idle_wait_ms (1);
-#endif
             continue;
         }
         if (recv_rc == 2)

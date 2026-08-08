@@ -205,10 +205,8 @@ void run_pubsub (const std::string &transport, size_t msg_size, const std::strin
                                                                   active_state, seq)) {
                   return perf_single_one_way::send_step_fatal;
               }
-              // Windows uses nonblocking send retries so the receiver can make progress
-              // while preserving the one-way workload and HWM backpressure policy.
               if (perf_zlink_publish_parts (publisher, k_pubsub_topic, &part, 1,
-                                            ZLINK_DONTWAIT)
+                                            ZLINK_SEND_FLAGS_NONE)
                   == 0) {
                   return perf_single_one_way::send_step_sent;
               }

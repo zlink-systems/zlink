@@ -162,7 +162,12 @@ if (-not $RootDir) {
 $RootDir = [System.IO.Path]::GetFullPath($RootDir)
 
 $CMakeSourceDir = Join-Path $RootDir "bindings\c"
-$OfficialBuildDir = Join-Path $CMakeSourceDir "build"
+$OnWindows = $env:OS -eq "Windows_NT"
+$OfficialBuildDir = if ($OnWindows) {
+    Join-Path $CMakeSourceDir "build\windows-x64"
+} else {
+    Join-Path $CMakeSourceDir "build"
+}
 if (-not $BuildDir) {
     $BuildDir = $OfficialBuildDir
 }
@@ -280,7 +285,11 @@ function Resolve-ConfiguredCoreBuildDir {
         }
     }
     if (-not $Configured) {
-        $Configured = Join-Path $RootDir "core\build"
+        $Configured = if ($OnWindows) {
+            Join-Path $RootDir "core\build\windows-x64"
+        } else {
+            Join-Path $RootDir "core\build"
+        }
     }
     return [System.IO.Path]::GetFullPath($Configured)
 }
@@ -296,6 +305,38 @@ function Resolve-CoreRuntime {
     )
     foreach ($Candidate in $Candidates) {
         if (Test-Path $Candidate) {
+            return [System.IO.Path]::GetFullPath($Candidate)
+        }
+    }
+    return $null
+}
+
+function Resolve-OpenSslRoot {
+    param([string]$CoreRoot)
+
+    $Candidates = @()
+    if ($env:OPENSSL_ROOT_DIR) {
+        $Candidates += $env:OPENSSL_ROOT_DIR
+    }
+
+    $CacheFile = Join-Path $CoreRoot "CMakeCache.txt"
+    if (Test-Path $CacheFile) {
+        $Line = Get-Content -LiteralPath $CacheFile |
+            Select-String -Pattern '^OPENSSL_ROOT_DIR:[^=]*=' |
+            Select-Object -First 1
+        if ($Line) {
+            $Candidates += $Line.Line.Substring($Line.Line.IndexOf('=') + 1).Trim()
+        }
+    }
+
+    if ($env:VCPKG_ROOT) {
+        $Triplet = if ($env:VCPKG_DEFAULT_TRIPLET) { $env:VCPKG_DEFAULT_TRIPLET } else { "x64-windows-static" }
+        $Candidates += Join-Path $env:VCPKG_ROOT "installed\$Triplet"
+    }
+
+    foreach ($Candidate in $Candidates) {
+        if (-not $Candidate) { continue }
+        if (Test-Path (Join-Path $Candidate "include\openssl\opensslv.h")) {
             return [System.IO.Path]::GetFullPath($Candidate)
         }
     }
@@ -323,6 +364,9 @@ function Invoke-CoreRuntimeBuild {
         )
         if ($CMakeGenerator -like "Visual Studio*") {
             $ConfigureArgs += @("-A", $CMakeArch)
+        }
+        if ($OpenSslRoot) {
+            $ConfigureArgs += @("-DOPENSSL_ROOT_DIR=$OpenSslRoot", "-DCMAKE_PREFIX_PATH=$OpenSslRoot")
         }
         Write-Host "Configuring core runtime: $CoreRoot"
         & cmake @ConfigureArgs
@@ -389,6 +433,13 @@ function Resolve-SingleBuildTargets {
 }
 
 $CoreBuildDir = Resolve-ConfiguredCoreBuildDir -BuildRoot $BuildDir
+$OpenSslRoot = Resolve-OpenSslRoot -CoreRoot $CoreBuildDir
+if ($OnWindows -and -not $OpenSslRoot) {
+    throw "OpenSSL was not found. Set OPENSSL_ROOT_DIR or VCPKG_ROOT."
+}
+if ($OpenSslRoot) {
+    Write-Host "Perf OpenSSL root: $OpenSslRoot"
+}
 Prepare-CoreRuntime -CoreRoot $CoreBuildDir | Out-Null
 
 if ($BuildMode -eq "clean" -and (Test-Path $BuildDir)) {
@@ -427,8 +478,8 @@ if ($BuildMode -ne "reuse") {
         "-DZLINK_C_BUILD_BENCHMARKS=ON",
         "-DZLINK_C_BUILD_SAMPLES=OFF"
     )
-    if ($env:OPENSSL_ROOT_DIR) {
-        $CMakeArgs += @("-DOPENSSL_ROOT_DIR=$env:OPENSSL_ROOT_DIR", "-DCMAKE_PREFIX_PATH=$env:OPENSSL_ROOT_DIR")
+    if ($OpenSslRoot) {
+        $CMakeArgs += @("-DOPENSSL_ROOT_DIR=$OpenSslRoot", "-DCMAKE_PREFIX_PATH=$OpenSslRoot")
     }
     if ($CMakeGenerator -like "Visual Studio*") {
         $CMakeArgs += @("-A", $CMakeArch)
