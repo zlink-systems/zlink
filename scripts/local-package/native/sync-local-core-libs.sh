@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 #
-# sync-local-core-libs.sh — copy locally built core headers and
-# core/build/lib/libzlink.so* into binding workspaces so binding-side perf
-# tests, samples, and contract tests pick up an in-progress core change
-# without waiting for a GitHub release.
+# sync-local-core-libs.sh — copy Core headers and runtime from a verified
+# Core prefix into binding workspaces. When no prefix is supplied, retain the
+# local core/build fallback for in-progress Core development.
 #
 # This is for local development only. The committed contents of
 # bindings/*/native/ are produced by the release CI from a tagged version of
@@ -18,15 +17,32 @@
 # limit the update, for example: cpp dotnet java node.
 #
 # Optional environment overrides:
-#   CORE_LIB_DIR          — directory containing the Core shared library
-#                           (default: core/build/lib).
+#   ZLINK_CORE_PACKAGE_PREFIX — verified Core install prefix. The prefix
+#                                contains include/, lib/, and provenance.
+#   CORE_LIB_DIR          — directory containing the Core shared library.
+#   CORE_INCLUDE_DIR      — directory containing Core public headers.
+#                           Without a package prefix, defaults are core/build/lib
+#                           and core/include.
+#   ZLINK_CORE_VERSION    — Core version (default: core/version.sh).
 #   ZLINK_CORE_ABI_MAJOR — ELF SONAME major (default: 0). This is separate
 #                           from the release version in VERSION.
 #
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
-CORE_LIB_DIR="${CORE_LIB_DIR:-${ROOT_DIR}/core/build/lib}"
+CORE_PREFIX="${ZLINK_CORE_PACKAGE_PREFIX:-}"
+if [[ -n "$CORE_PREFIX" ]]; then
+  [[ "$CORE_PREFIX" = /* ]] || {
+    echo "ZLINK_CORE_PACKAGE_PREFIX must be absolute" >&2
+    exit 2
+  }
+  CORE_PREFIX="$(readlink -f "$CORE_PREFIX")"
+  CORE_LIB_DIR="${CORE_LIB_DIR:-$CORE_PREFIX/lib}"
+  CORE_INCLUDE_DIR="${CORE_INCLUDE_DIR:-$CORE_PREFIX/include}"
+else
+  CORE_LIB_DIR="${CORE_LIB_DIR:-$ROOT_DIR/core/build/lib}"
+  CORE_INCLUDE_DIR="${CORE_INCLUDE_DIR:-$ROOT_DIR/core/include}"
+fi
 
 case "$(uname -s)" in
   Linux) os="linux" ;;
@@ -44,7 +60,7 @@ case "$(uname -m)" in
   *) echo "unsupported architecture: $(uname -m)" >&2; exit 2 ;;
 esac
 
-VERSION="$(bash "${ROOT_DIR}/core/version.sh")"
+VERSION="${ZLINK_CORE_VERSION:-$(bash "${ROOT_DIR}/core/version.sh")}"
 ABI_MAJOR="${ZLINK_CORE_ABI_MAJOR:-0}"
 [[ "${ABI_MAJOR}" =~ ^[0-9]+$ ]] || {
   echo "ZLINK_CORE_ABI_MAJOR must be numeric" >&2
@@ -75,10 +91,39 @@ versioned="${CORE_LIB_DIR}/libzlink.so.${VERSION}"
 for f in "${base}" "${soname}" "${versioned}"; do
   if [[ ! -e "${f}" ]]; then
     echo "missing core artifact: ${f}" >&2
-    echo "build core first (e.g. cmake --build core/build)." >&2
+    if [[ -n "$CORE_PREFIX" ]]; then
+      echo "Core package prefix is incomplete: $CORE_PREFIX" >&2
+    else
+      echo "build core first (e.g. cmake --build core/build)." >&2
+    fi
     exit 1
   fi
 done
+
+if [[ -n "$CORE_PREFIX" ]]; then
+  [[ -f "$CORE_PREFIX/share/zlink/core-package-provenance.json" ]] || {
+    echo "Core package provenance is missing: $CORE_PREFIX/share/zlink/core-package-provenance.json" >&2
+    exit 1
+  }
+fi
+
+copy_header_files() {
+  local source_dir="$1"
+  local target_dir="$2"
+  local source_file target_file mode
+  for source_file in "${source_dir}"/*.h; do
+    [[ -f "${source_file}" ]] || continue
+    target_file="${target_dir}/$(basename "${source_file}")"
+    mode=""
+    if [[ -e "${target_file}" ]]; then
+      mode="$(stat -c '%a' "${target_file}")"
+    fi
+    cp -f "${source_file}" "${target_file}"
+    if [[ -n "${mode}" ]]; then
+      chmod "${mode}" "${target_file}"
+    fi
+  done
+}
 
 copy_public_headers() {
   local dir="$1"
@@ -92,9 +137,9 @@ copy_public_headers() {
   rm -rf "${dir}/zlink/service"
   rm -f "${dir}/zlink.h" "${dir}/zlink_enum.h" "${dir}/zlink_errno.h"
   rm -f "${dir}"/zlink/*.h
-  cp -f "${ROOT_DIR}"/core/include/*.h "${dir}/"
-  cp -f "${ROOT_DIR}"/core/include/zlink/*.h "${dir}/zlink/"
-  for source_group in "${ROOT_DIR}"/core/include/zlink/*/; do
+  copy_header_files "$CORE_INCLUDE_DIR" "${dir}"
+  copy_header_files "$CORE_INCLUDE_DIR/zlink" "${dir}/zlink"
+  for source_group in "$CORE_INCLUDE_DIR"/zlink/*/; do
     [[ -d "${source_group}" ]] || continue
     group="$(basename "${source_group}")"
     rm -rf "${dir}/zlink/${group}"
@@ -173,7 +218,11 @@ for dir in "${dirs[@]}"; do
   copy_libs "${dir}"
 done
 
-echo "synced zlink headers and libzlink ${VERSION} from ${CORE_LIB_DIR} into binding workspaces"
+if [[ -n "$CORE_PREFIX" ]]; then
+  echo "synced zlink headers and libzlink ${VERSION} from Core package $CORE_PREFIX into binding workspaces"
+else
+  echo "synced zlink headers and libzlink ${VERSION} from ${CORE_LIB_DIR} into binding workspaces"
+fi
 echo
 echo "WARNING: bindings/*/native/libzlink.so* and binding package native"
 echo "artifacts are release inputs. Do NOT"

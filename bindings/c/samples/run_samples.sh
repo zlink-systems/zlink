@@ -4,12 +4,17 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 C_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 ROOT_DIR="$(cd "${C_DIR}/../.." && pwd)"
-CORE_BUILD_DIR="${ROOT_DIR}/core/build"
+source "${ROOT_DIR}/bindings/tools/local_core_runtime.sh"
+if [[ "${ZLINK_CORE_RELEASE_MODE}" -eq 1 ]]; then
+  CORE_BUILD_DIR="${ZLINK_CORE_PACKAGE_PREFIX}"
+else
+  CORE_BUILD_DIR="${ROOT_DIR}/core/build"
+fi
 BUILD_DIR="${C_DIR}/build"
 BUILD_JOBS="${ZLINK_BUILD_JOBS:-2}"
 
 CONFIGURE_ARGS=(
-  -DZLINK_CORE_DIR=${ROOT_DIR}/core
+  -DZLINK_CORE_DIR=${ZLINK_CORE_PACKAGE_PREFIX:-${ROOT_DIR}/core}
   -DZLINK_C_CORE_BUILD_DIR=${CORE_BUILD_DIR}
   -DZLINK_C_BUILD_SAMPLES=ON
   -DZLINK_C_BUILD_TESTS=OFF

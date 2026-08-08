@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
+source "${ROOT_DIR}/bindings/tools/local_core_runtime.sh"
 BUILD_DIR="${ROOT_DIR}/bindings/c/build"
 
 LOCK_FILE="/tmp/bench_streamcompare.lock"
@@ -950,7 +951,8 @@ build_core_targets()
     cmake -S "${ROOT_DIR}/bindings/c" -B "${BUILD_DIR}" \
         -DZLINK_C_BUILD_BENCHES=ON \
         -DZLINK_C_BUILD_BENCH_STREAMCOMPARE=ON \
-        -DZLINK_C_CORE_BUILD_DIR="${ROOT_DIR}/core/build" >/dev/null
+        -DZLINK_CORE_DIR="${ZLINK_CORE_PACKAGE_PREFIX:-${ROOT_DIR}/core}" \
+        -DZLINK_C_CORE_BUILD_DIR="${ZLINK_CORE_PACKAGE_PREFIX:-${ROOT_DIR}/core/build}" >/dev/null
 
     if [[ "${needs_zlink_core}" -eq 1 ]]; then
         log "build bench_streamcompare_client + libzlink"

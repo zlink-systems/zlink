@@ -4,7 +4,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 REPO_DIR="$(cd "${PROJECT_DIR}/../.." && pwd)"
-CORE_BUILD_DIR="${REPO_DIR}/core/build"
+source "${REPO_DIR}/bindings/tools/local_core_runtime.sh"
+if [[ "${ZLINK_CORE_RELEASE_MODE}" -eq 1 ]]; then
+    CORE_BUILD_DIR="${ZLINK_CORE_PACKAGE_PREFIX}"
+else
+    CORE_BUILD_DIR="${REPO_DIR}/core/build"
+fi
 CORE_LIB_DIR="${CORE_BUILD_DIR}/lib"
 CORE_LIB="${CORE_LIB_DIR}/libzlink.so"
 PERF_REPORT_PY="${REPO_DIR}/bindings/python/perf/perf_report.py"
@@ -301,6 +306,7 @@ prepare_core_runtime() {
     fi
     local resolved_lib
     resolved_lib="$(readlink -f "${runtime}" 2>/dev/null || echo "${runtime}")"
+    if [[ "${ZLINK_CORE_RELEASE_MODE}" -eq 0 ]]; then
     local newer_source
     newer_source="$(
         find "${REPO_DIR}/core/src" "${REPO_DIR}/core/include" \
@@ -313,7 +319,8 @@ prepare_core_runtime() {
         echo "Rebuild core/build before running run_benchmarks_multi.sh." >&2
         exit 1
     fi
-    echo "Rust perf development runtime: ${resolved_lib}"
+    fi
+    echo "Rust perf runtime: ${resolved_lib}"
     echo "Rust perf runtime sha256: $(sha256sum "${resolved_lib}" | awk '{print $1}')"
     export ZLINK_RUST_NATIVE_DIR="${native_dir}"
     export LD_LIBRARY_PATH="${native_dir}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"

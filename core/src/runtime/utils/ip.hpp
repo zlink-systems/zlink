@@ -53,7 +53,7 @@ void make_socket_noninheritable (fd_t sock_);
 //  - and, if a socket error occurred, it can be recovered from.
 void assert_success_or_recoverable (fd_t s_, int rc_);
 
-#ifdef ZLINK_HAVE_IPC
+#if defined ZLINK_HAVE_IPC || defined ZLINK_HAVE_WINDOWS_AF_UNIX
 // Create an IPC wildcard path address
 int create_ipc_wildcard_address (std::string &path_, std::string &file_);
 #endif

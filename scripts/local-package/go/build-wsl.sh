@@ -26,6 +26,8 @@ done
 [[ "$core_prefix" = /* ]] || { echo "--core-prefix must be absolute" >&2; exit 2; }
 core_prefix="$(readlink -f "$core_prefix")"
 version="$(sed -n 's/^LIBZLINK_VERSION=//p' "$repo_root/VERSION")"
+export ZLINK_CORE_PACKAGE_PREFIX="$core_prefix"
+export ZLINK_CORE_VERSION="$version"
 module_path="$(sed -n 's/^module //p' "$repo_root/bindings/go/go.mod" | head -n1)"
 [[ "$module_path" = "zlink.systems/zlink" ]] || {
   echo "Go module path is not zlink.systems/zlink" >&2

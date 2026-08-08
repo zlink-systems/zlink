@@ -3,12 +3,14 @@
 #ifndef __ZLINK_IPC_ADDRESS_HPP_INCLUDED__
 #define __ZLINK_IPC_ADDRESS_HPP_INCLUDED__
 
-#if defined ZLINK_HAVE_IPC
+#if defined ZLINK_HAVE_IPC || defined ZLINK_HAVE_WINDOWS_AF_UNIX
 
 #include <string>
 
 #if defined _MSC_VER
+#if !defined ZLINK_HAVE_STRUCT_SOCKADDR_UN
 #include <afunix.h>
+#endif
 #else
 #include <sys/socket.h>
 #include <sys/un.h>

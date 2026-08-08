@@ -4,19 +4,22 @@ This directory contains the standalone C benchmark runner and comparison tools.
 
 ## Core Runtime Rule
 
-`run_benchmarks_multi.sh` evaluates the runtime from `core/build`.
-It does not read `build_cpp_release`, so performance results are meaningful only
-after rebuilding `core/build`.
+`run_benchmarks.sh` and `run_benchmarks_multi.sh` download and verify the Core
+release selected by the repository `VERSION` file. On Windows, the matching
+PowerShell runners use the same release prefix. The normalized prefix is
+cached by `scripts/local-package/core/fetch-release.sh` or
+`scripts/local-package/core/fetch-release.ps1`, so a separate worktree does not
+need a Core source build before running binding performance.
 
 ```bash
-cmake --build core/build
+./scripts/local-package/core/fetch-release.sh --version 0.10.1
 ./bindings/c/perf/run_benchmarks_multi.sh --pattern ROUTER_ROUTER_REQREP
 ```
 
 Before running benchmarks, the script prints the resolved `libzlink.so` path.
-If any file under `core/src` or `core/include` is newer than the resolved
-runtime library, the script stops immediately and asks for a `core/build`
-rebuild.
+In the default release mode, source mtime checks and Core auto-build are disabled.
+To benchmark an in-progress Core source tree, set `ZLINK_CORE_SOURCE=local`; that
+mode uses `core/build` and retains the stale-runtime check.
 
 ## Cross-Binding Handshake Reference
 
@@ -119,7 +122,7 @@ The recommended sweep axes are:
 |------|--------|
 | profile | `low_latency`, `balanced`, `throughput` |
 | message sizes | `64`, `1024`, `4096`, `65536` bytes |
-| patterns | `DEALER_ROUTER_SENDSEND`, `DEALER_ROUTER_REQREP`, `ROUTER_ROUTER_SENDSEND`, `ROUTER_ROUTER_REQREP`, `ROUTER_ROUTER_ONEWAY`, `PUBSUB`, `STREAM` |
+| patterns | `DEALER_ROUTER_SENDSEND`, `DEALER_ROUTER_REQREP`, `ROUTER_ROUTER_SENDSEND`, `ROUTER_ROUTER_REQREP`, `PUBSUB`, `STREAM` |
 
 Profile guidance after the auto-HWM message-unit change:
 

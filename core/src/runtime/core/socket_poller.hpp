@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "sockets/common/socket_base.hpp"
+#include "core/signaler.hpp"
 #include "utils/polling_util.hpp"
 
 namespace zlink
@@ -94,6 +95,15 @@ class socket_poller_t
 
     //  Used to check whether the object is a socket_poller.
     uint32_t _tag;
+
+#if defined ZLINK_HAVE_WINDOWS
+    // Windows cannot poll the signaler sockets as cheaply as Linux can poll
+    // eventfd descriptors. Socket-only pollers use one event shared by all
+    // registered mailboxes; pollers containing raw descriptors keep the
+    // WSAPoll path below.
+    signaler_t _windows_signaler;
+    bool _windows_signaler_active;
+#endif
 
     //  List of sockets
     typedef std::vector<item_t> items_t;

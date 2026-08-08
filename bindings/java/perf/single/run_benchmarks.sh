@@ -5,9 +5,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 JAVA_BINDINGS_DIR="$(cd "${ROOT_DIR}/.." && pwd)"
 REPO_DIR="$(cd "${ROOT_DIR}/../../.." && pwd)"
+source "${REPO_DIR}/bindings/tools/local_core_runtime.sh"
 VERSION_FILE="${REPO_DIR}/VERSION"
 CORE_VERSION="$(awk -F= '/^LIBZLINK_VERSION=/{print $2}' "${VERSION_FILE}")"
-CORE_RUNTIME="${REPO_DIR}/core/build/lib/libzlink.so.${CORE_VERSION}"
+CORE_RUNTIME="${ZLINK_LOCAL_CORE_RUNTIME}"
 RESULTS_ROOT="${PERF_RESULTS_DIR:-${ROOT_DIR}/results}"
 PATTERN="ALL"
 TRANSPORTS=""
@@ -278,7 +279,7 @@ if [[ ! -f "${CORE_RUNTIME}" ]]; then
   echo "Build core/build before running Java perf." >&2
   exit 1
 fi
-if find "${REPO_DIR}/core/include" "${REPO_DIR}/core/src" \
+if [[ "${ZLINK_CORE_RELEASE_MODE}" -eq 0 ]] && find "${REPO_DIR}/core/include" "${REPO_DIR}/core/src" \
     -type f \( -name '*.h' -o -name '*.hpp' -o -name '*.c' -o -name '*.cc' -o -name '*.cpp' \) \
     -newer "${CORE_RUNTIME}" -print -quit | grep -q .; then
   echo "core runtime is older than core source: ${CORE_RUNTIME}" >&2

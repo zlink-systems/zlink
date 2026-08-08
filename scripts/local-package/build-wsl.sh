@@ -5,42 +5,93 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(git -C "$script_dir" rev-parse --show-toplevel)"
 artifact_root="${ZLINK_LOCAL_PACKAGE_ROOT:-$repo_root/.artifacts/wsl}"
 version="$(sed -n 's/^LIBZLINK_VERSION=//p' "$repo_root/VERSION")"
-core_prefix="${ZLINK_CORE_PACKAGE_PREFIX:-$artifact_root/install/zlink-core/$version}"
+core_source="${ZLINK_CORE_SOURCE:-release}"
+release_version="${ZLINK_CORE_RELEASE_VERSION:-$version}"
+core_prefix="${ZLINK_CORE_PACKAGE_PREFIX:-}"
+language_args=()
 
 usage() {
   cat <<'EOF'
-Usage: build-wsl.sh [core] [c] [cpp] [dotnet] [go] [java] [node] [python] [rust]
+Usage: build-wsl.sh [options] [c] [cpp] [dotnet] [go] [java] [node] [python] [rust]
 
-With no language arguments, builds Core and all eight first-party bindings at
-version 0.10.1 into .artifacts/wsl. External package registries are not used.
+With no language arguments, builds all eight first-party bindings at version
+0.10.1 into .artifacts/wsl. By default the exact Core release is downloaded
+and verified; set --core-source local when testing an in-progress Core build.
+
+Options:
+  --core-source release|local  Core input mode (default: release)
+  --core-version VERSION       Core release version (default: VERSION)
+  --core-prefix ABSOLUTE_DIR   Use an already verified Core prefix
 EOF
 }
 
-if [[ "$#" -gt 0 && ( "$1" = "-h" || "$1" = "--help" ) ]]; then
-  usage
-  exit 0
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --core-source) core_source="${2:-}"; shift 2 ;;
+    --core-version) release_version="${2:-}"; shift 2 ;;
+    --core-prefix) core_prefix="${2:-}"; shift 2 ;;
+    -h|--help) usage; exit 0 ;;
+    c|cpp|dotnet|go|java|node|python|rust|core)
+      language_args+=("$1"); shift ;;
+    *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+
+if [[ "${#language_args[@]}" -eq 0 ]]; then
+  language_args=(c cpp dotnet go java node python rust)
 fi
 
-if [[ "$#" -eq 0 ]]; then
-  set -- c cpp dotnet go java node python rust
-fi
+case "$core_source" in
+  release|local) ;;
+  *) echo "--core-source must be release or local: $core_source" >&2; exit 2 ;;
+esac
+[[ "$release_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+  echo "--core-version must be MAJOR.MINOR.PATCH: $release_version" >&2
+  exit 2
+}
+[[ "$release_version" = "$version" ]] || {
+  echo "Binding version $version must match Core release version $release_version" >&2
+  exit 1
+}
 
 mkdir -p "$artifact_root"
-if [[ ! -f "$core_prefix/share/zlink/core-package-provenance.json" || "${ZLINK_REBUILD_CORE:-1}" = "1" ]]; then
-  ZLINK_LOCAL_PACKAGE_ROOT="$artifact_root" \
-    "$script_dir/core/build-wsl.sh"
+if [[ -n "$core_prefix" ]]; then
+  [[ "$core_prefix" = /* ]] || {
+    echo "--core-prefix or ZLINK_CORE_PACKAGE_PREFIX must be absolute" >&2
+    exit 2
+  }
+  core_prefix="$(readlink -f "$core_prefix")"
+elif [[ "$core_source" = release ]]; then
+  core_prefix="$(bash "$script_dir/core/fetch-release.sh" --version "$release_version")"
+else
+  core_prefix="$artifact_root/install/zlink-core/$version"
+  if [[ ! -f "$core_prefix/share/zlink/core-package-provenance.json" || "${ZLINK_REBUILD_CORE:-1}" = "1" ]]; then
+    ZLINK_LOCAL_PACKAGE_ROOT="$artifact_root" \
+      bash "$script_dir/core/build-wsl.sh"
+  fi
+  core_prefix="$(readlink -f "$core_prefix")"
 fi
-core_prefix="$(readlink -f "$core_prefix")"
 export ZLINK_LOCAL_PACKAGE_ROOT="$artifact_root"
 export ZLINK_CORE_PACKAGE_PREFIX="$core_prefix"
+export ZLINK_CORE_VERSION="$release_version"
+core_manifest="$core_prefix/share/zlink/core-package-provenance.json"
+[[ -f "$core_manifest" ]] || {
+  echo "Core package provenance is missing: $core_manifest" >&2
+  exit 1
+}
+manifest_version="$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\1/p' "$core_manifest" | head -n1)"
+[[ "$manifest_version" = "$release_version" ]] || {
+  echo "Core package version $manifest_version does not match $release_version" >&2
+  exit 1
+}
 
 "$script_dir/native/sync-local-core-libs.sh" c cpp dotnet go java node python rust
 
-for lang in "$@"; do
+for lang in "${language_args[@]}"; do
   case "$lang" in
     c|cpp|dotnet|go|java|node|python|rust)
-      echo "-- building local $lang package at $version"
-      "$script_dir/$lang/build-wsl.sh" --core-prefix "$core_prefix"
+      echo "-- building local $lang package at $version using Core $release_version ($core_source)"
+      bash "$script_dir/$lang/build-wsl.sh" --core-prefix "$core_prefix"
       ;;
     core)
       ;;

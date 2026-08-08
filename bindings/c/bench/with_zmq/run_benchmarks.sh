@@ -4,6 +4,7 @@ set -o pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
+source "${ROOT_DIR}/bindings/tools/local_core_runtime.sh"
 
 SECONDS=0
 SHOW_TOTAL_TIME=0
@@ -531,7 +532,8 @@ if [[ "${BUILD_MODE}" != "reuse" ]]; then
       -DZLINK_BUILD_WITH_ZMQ_ZLINK_BENCHES=ON \
       -DZLINK_C_BUILD_BENCH_STREAMCOMPARE=OFF \
       -DZLINK_C_BUILD_BENCH_ROUTER_COMPARE=OFF \
-      -DZLINK_C_CORE_BUILD_DIR="${ROOT_DIR}/core/build" \
+      -DZLINK_CORE_DIR="${ZLINK_CORE_PACKAGE_PREFIX:-${ROOT_DIR}/core}" \
+      -DZLINK_C_CORE_BUILD_DIR="${ZLINK_CORE_PACKAGE_PREFIX:-${ROOT_DIR}/core/build}" \
       -DZLINK_CXX_STANDARD=17
     cmake --build "${BUILD_DIR}" --config Release --target "${SELECTED_BUILD_TARGETS[@]}"
   else
@@ -542,7 +544,8 @@ if [[ "${BUILD_MODE}" != "reuse" ]]; then
       -DZLINK_BUILD_WITH_ZMQ_ZLINK_BENCHES=ON \
       -DZLINK_C_BUILD_BENCH_STREAMCOMPARE=OFF \
       -DZLINK_C_BUILD_BENCH_ROUTER_COMPARE=OFF \
-      -DZLINK_C_CORE_BUILD_DIR="${ROOT_DIR}/core/build" \
+      -DZLINK_CORE_DIR="${ZLINK_CORE_PACKAGE_PREFIX:-${ROOT_DIR}/core}" \
+      -DZLINK_C_CORE_BUILD_DIR="${ZLINK_CORE_PACKAGE_PREFIX:-${ROOT_DIR}/core/build}" \
       -DZLINK_CXX_STANDARD=17
     cmake --build "${BUILD_DIR}" --target "${SELECTED_BUILD_TARGETS[@]}"
   fi

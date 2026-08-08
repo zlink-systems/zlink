@@ -172,7 +172,6 @@ $DefaultPatterns = @(
     "ROUTER_ROUTER_SENDSEND",
     "DEALER_ROUTER_REQREP",
     "ROUTER_ROUTER_REQREP",
-    "ROUTER_ROUTER_ONEWAY",
     "PUBSUB",
     "STREAM"
 )
@@ -259,6 +258,42 @@ $ScriptDir = [System.IO.Path]::GetFullPath($PSScriptRoot)
 $RootDir = [System.IO.Path]::GetFullPath((Join-Path $ScriptDir "..\..\.."))
 $CMakeSourceDir = Join-Path $RootDir "bindings\c"
 $OnWindows = $env:OS -eq "Windows_NT"
+$CoreSource = if ($env:ZLINK_CORE_SOURCE) { $env:ZLINK_CORE_SOURCE } else { "release" }
+$CoreVersion = if ($env:ZLINK_CORE_RELEASE_VERSION) {
+    $env:ZLINK_CORE_RELEASE_VERSION
+} else {
+    (Select-String -LiteralPath (Join-Path $RootDir "VERSION") -Pattern "^LIBZLINK_VERSION=(.+)$").Matches.Groups[1].Value
+}
+$CorePackagePrefix = if ($env:ZLINK_CORE_PACKAGE_PREFIX) {
+    [System.IO.Path]::GetFullPath($env:ZLINK_CORE_PACKAGE_PREFIX)
+} else {
+    ""
+}
+if ($CoreSource -eq "release") {
+    if (-not $OnWindows) {
+        throw "Core release mode for the PowerShell perf runner requires Windows."
+    }
+    if (-not $CorePackagePrefix) {
+        $FetchScript = Join-Path $RootDir "scripts\local-package\core\fetch-release.ps1"
+        if (-not (Test-Path -LiteralPath $FetchScript -PathType Leaf)) {
+            throw "Core release fetcher not found: $FetchScript"
+        }
+        $CorePackagePrefix = (& $FetchScript -Version $CoreVersion -Platform "windows-x64" |
+            Select-Object -Last 1).ToString().Trim()
+    }
+    if (-not $CorePackagePrefix -or
+        -not (Test-Path -LiteralPath (Join-Path $CorePackagePrefix "share\zlink\core-package-provenance.json") -PathType Leaf)) {
+        throw "Core release prefix is missing provenance: $CorePackagePrefix"
+    }
+    $CoreManifest = Get-Content -LiteralPath (Join-Path $CorePackagePrefix "share\zlink\core-package-provenance.json") -Raw |
+        ConvertFrom-Json
+    if ($CoreManifest.version -ne $CoreVersion) {
+        throw "Core release prefix version $($CoreManifest.version) does not match $CoreVersion"
+    }
+} elseif ($CoreSource -ne "local") {
+    throw "ZLINK_CORE_SOURCE must be release or local: $CoreSource"
+}
+$CoreDir = if ($CoreSource -eq "release") { $CorePackagePrefix } else { Join-Path $RootDir "core" }
 $OfficialBuildDir = if ($OnWindows) {
     Join-Path $CMakeSourceDir "build\windows-x64"
 } else {
@@ -272,31 +307,35 @@ if (-not $BuildDir.Equals($OfficialBuildDir, [System.StringComparison]::OrdinalI
     throw "Build directory must be exactly: $OfficialBuildDir"
 }
 
-$CoreBuildCandidates = @()
-if ($env:ZLINK_C_CORE_BUILD_DIR) {
-    $CoreBuildCandidates += [System.IO.Path]::GetFullPath($env:ZLINK_C_CORE_BUILD_DIR)
-}
-if ($OnWindows) {
-    $CoreBuildCandidates += Join-Path $RootDir "core\build\windows-x64"
-    $CoreBuildCandidates += Join-Path $RootDir "core\build"
-} else {
-    $CoreBuildCandidates += Join-Path $RootDir "core\build"
-}
 $CoreBuildDir = $null
-foreach ($Candidate in $CoreBuildCandidates) {
-    if ((Test-Path (Join-Path $Candidate "bin\Release\zlink.dll")) -or
-        (Test-Path (Join-Path $Candidate "lib\Release\zlink.dll")) -or
-        (Test-Path (Join-Path $Candidate "bin\zlink.dll")) -or
-        (Test-Path (Join-Path $Candidate "lib\zlink.dll"))) {
-        $CoreBuildDir = $Candidate
-        break
+if ($CoreSource -eq "release") {
+    $CoreBuildDir = $CorePackagePrefix
+} else {
+    $CoreBuildCandidates = @()
+    if ($env:ZLINK_C_CORE_BUILD_DIR) {
+        $CoreBuildCandidates += [System.IO.Path]::GetFullPath($env:ZLINK_C_CORE_BUILD_DIR)
     }
-}
-if (-not $CoreBuildDir) {
-    $CoreBuildDir = if ($OnWindows -and (Test-Path (Join-Path $RootDir "core\build\windows-x64\CMakeCache.txt"))) {
-        Join-Path $RootDir "core\build\windows-x64"
+    if ($OnWindows) {
+        $CoreBuildCandidates += Join-Path $RootDir "core\build\windows-x64"
+        $CoreBuildCandidates += Join-Path $RootDir "core\build"
     } else {
-        Join-Path $RootDir "core\build"
+        $CoreBuildCandidates += Join-Path $RootDir "core\build"
+    }
+    foreach ($Candidate in $CoreBuildCandidates) {
+        if ((Test-Path (Join-Path $Candidate "bin\Release\zlink.dll")) -or
+            (Test-Path (Join-Path $Candidate "lib\Release\zlink.dll")) -or
+            (Test-Path (Join-Path $Candidate "bin\zlink.dll")) -or
+            (Test-Path (Join-Path $Candidate "lib\zlink.dll"))) {
+            $CoreBuildDir = $Candidate
+            break
+        }
+    }
+    if (-not $CoreBuildDir) {
+        $CoreBuildDir = if ($OnWindows -and (Test-Path (Join-Path $RootDir "core\build\windows-x64\CMakeCache.txt"))) {
+            Join-Path $RootDir "core\build\windows-x64"
+        } else {
+            Join-Path $RootDir "core\build"
+        }
     }
 }
 
@@ -367,6 +406,15 @@ function Prepare-CoreRuntime {
     param([string]$CoreRoot)
 
     $Runtime = Resolve-CoreRuntime -CoreRoot $CoreRoot
+    if ($CoreSource -eq "release") {
+        if (-not $Runtime) {
+            throw "Core release runtime zlink.dll was not found: $CoreRoot"
+        }
+        Write-Host "Perf Core release prefix: $CoreRoot"
+        Write-Host "Perf runtime zlink.dll: $Runtime"
+        return
+    }
+
     $NeedsBuild = -not $Runtime
     if ($Runtime) {
         $RuntimeItem = Get-Item -LiteralPath $Runtime
@@ -430,7 +478,6 @@ function Resolve-MultiBuildTargets {
         "ROUTER_ROUTER_SENDSEND" = @("comp_src_router_router_sendsend_server", "comp_src_router_router_sendsend_client")
         "DEALER_ROUTER_REQREP" = @("comp_src_dealer_router_reqrep_server", "comp_src_dealer_router_reqrep_client")
         "ROUTER_ROUTER_REQREP" = @("comp_src_router_router_reqrep_server", "comp_src_router_router_reqrep_client")
-        "ROUTER_ROUTER_ONEWAY" = @("comp_src_router_router_oneway_server", "comp_src_router_router_oneway_client")
         "PUBSUB" = @("comp_src_pubsub_server", "comp_src_pubsub_client")
         "STREAM" = @("comp_src_stream_server", "perf_stream_client")
     }
@@ -484,7 +531,7 @@ function Invoke-MultiBindingBuild {
         "-G", $Generator,
         "-DCMAKE_BUILD_TYPE=Release",
         "-DENABLE_LTO=OFF",
-        "-DZLINK_CORE_DIR=$RootDir\core",
+        "-DZLINK_CORE_DIR=$CoreDir",
         "-DZLINK_C_CORE_BUILD_DIR=$CoreRoot",
         "-DOPENSSL_ROOT_DIR=$OpenSslRoot",
         "-DCMAKE_PREFIX_PATH=$OpenSslRoot",

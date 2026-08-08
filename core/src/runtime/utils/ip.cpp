@@ -22,7 +22,7 @@
 #include <vector>
 #else
 #include "transports/tcp/tcp.hpp"
-#ifdef ZLINK_HAVE_IPC
+#if defined ZLINK_HAVE_IPC || defined ZLINK_HAVE_WINDOWS_AF_UNIX
 #include "transports/ipc/ipc_address.hpp"
 #endif
 
@@ -335,7 +335,7 @@ void zlink::assert_success_or_recoverable (zlink::fd_t s_, int rc_)
 #endif
 }
 
-#ifdef ZLINK_HAVE_IPC
+#if defined ZLINK_HAVE_IPC || defined ZLINK_HAVE_WINDOWS_AF_UNIX
 
 #if defined ZLINK_HAVE_WINDOWS
 char *widechar_to_utf8 (const wchar_t *widestring)

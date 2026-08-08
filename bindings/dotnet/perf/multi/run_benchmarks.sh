@@ -198,7 +198,7 @@ prepare_core_runtime() {
     echo "Build core/build before running dotnet perf." >&2
     exit 1
   fi
-  if find "${REPO_DIR}/core/include" "${REPO_DIR}/core/src" \
+  if [[ "${ZLINK_CORE_RELEASE_MODE}" -eq 0 ]] && find "${REPO_DIR}/core/include" "${REPO_DIR}/core/src" \
       -type f \( -name '*.h' -o -name '*.hpp' -o -name '*.c' -o -name '*.cc' -o -name '*.cpp' \) \
       -newer "${CORE_LIB}" -print -quit | grep -q .; then
     echo "core runtime is older than core source: ${CORE_LIB}" >&2

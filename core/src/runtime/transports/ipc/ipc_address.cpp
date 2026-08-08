@@ -4,7 +4,7 @@
 #include "utils/compat.hpp"
 #include "transports/ipc/ipc_address.hpp"
 
-#if defined ZLINK_HAVE_IPC
+#if defined ZLINK_HAVE_IPC || defined ZLINK_HAVE_WINDOWS_AF_UNIX
 
 #include "utils/err.hpp"
 

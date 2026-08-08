@@ -80,10 +80,6 @@ class MultiRunComparisonPolicyTests(unittest.TestCase):
                 RC.resolve_binary_names("ROUTER_ROUTER_SENDSEND")["client"],
                 "comp_src_router_router_sendsend_matched_client",
             )
-            self.assertEqual(
-                RC.resolve_binary_names("ROUTER_ROUTER_ONEWAY")["client"],
-                "comp_src_router_router_oneway_client",
-            )
         finally:
             if previous is None:
                 os.environ.pop("PERF_MULTI_MATCHED_BASELINE", None)
@@ -195,33 +191,6 @@ class MultiRunComparisonPolicyTests(unittest.TestCase):
             RC.ALLOW_MULTI = old_allow_multi
             os.environ.clear()
             os.environ.update(old_env)
-
-    def test_router_router_oneway_is_direction_matched_one_way_baseline(self):
-        old_allow_multi = RC.ALLOW_MULTI
-        try:
-            RC.ALLOW_MULTI = True
-            self.assertEqual(
-                RC.resolve_binary_names("ROUTER_ROUTER_ONEWAY"),
-                {
-                    "server": "comp_src_router_router_oneway_server",
-                    "client": "comp_src_router_router_oneway_client",
-                },
-            )
-            self.assertFalse(RC.is_echo_pattern("ROUTER_ROUTER_ONEWAY"))
-            self.assertEqual(
-                RC.compute_bandwidth_mb_s("ROUTER_ROUTER_ONEWAY", 64, 1000),
-                0.064,
-            )
-            self.assertEqual(
-                RC.pattern_default_clients("ROUTER_ROUTER_ONEWAY"),
-                100,
-            )
-            self.assertEqual(
-                RC.pattern_default_io_threads("ROUTER_ROUTER_ONEWAY"),
-                1,
-            )
-        finally:
-            RC.ALLOW_MULTI = old_allow_multi
 
     def test_multi_split_runner_isolates_each_size_case(self):
         old_allow_multi = RC.ALLOW_MULTI

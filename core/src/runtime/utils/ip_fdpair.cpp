@@ -16,9 +16,13 @@
 #include <unistd.h>
 #else
 #include "transports/tcp/tcp.hpp"
-#ifdef ZLINK_HAVE_IPC
+#if defined ZLINK_HAVE_IPC || defined ZLINK_HAVE_WINDOWS_AF_UNIX
 #include "transports/ipc/ipc_address.hpp"
 #endif
+#include <direct.h>
+
+#define rmdir _rmdir
+#define unlink _unlink
 #endif
 
 #if defined ZLINK_HAVE_OPENVMS || defined ZLINK_HAVE_VXWORKS
@@ -230,6 +234,64 @@ static int make_fdpair_tcpip (zlink::fd_t *r_, zlink::fd_t *w_)
     errno = zlink::wsa_error_to_errno (saved_errno);
     return -1;
 }
+
+#if defined ZLINK_HAVE_WINDOWS_AF_UNIX
+// AF_UNIX datagram sockets avoid the connection handshake and stream-buffer
+// bookkeeping used by the stream signaler. The signaler only transfers a
+// single wake-up byte, so a connected datagram pair provides the same
+// one-directional notification semantics with less per-signal work.
+static int make_fdpair_unix_dgram (zlink::fd_t *r_, zlink::fd_t *w_)
+{
+    *r_ = INVALID_SOCKET;
+    *w_ = INVALID_SOCKET;
+
+    std::string dirname;
+    std::string filename;
+    zlink::ipc_address_t address;
+    const SOCKET reader = zlink::open_socket (AF_UNIX, SOCK_DGRAM, 0);
+    if (reader == INVALID_SOCKET)
+        return -1;
+
+    if (zlink::create_ipc_wildcard_address (dirname, filename) != 0)
+        goto error;
+    if (address.resolve (filename.c_str ()) != 0)
+        goto error;
+    if (::bind (reader, const_cast<sockaddr *> (address.addr ()), address.addrlen ()) != 0)
+        goto error;
+
+    {
+        const SOCKET writer = zlink::open_socket (AF_UNIX, SOCK_DGRAM, 0);
+        if (writer == INVALID_SOCKET)
+            goto error;
+
+        if (::connect (writer, address.addr (), address.addrlen ()) != 0) {
+            closesocket (writer);
+            goto error;
+        }
+
+        if (!filename.empty ()) {
+            ::unlink (filename.c_str ());
+            if (!dirname.empty ())
+                ::rmdir (dirname.c_str ());
+        }
+
+        zlink::make_socket_noninheritable (reader);
+        zlink::make_socket_noninheritable (writer);
+        *r_ = reader;
+        *w_ = writer;
+        return 0;
+    }
+
+error:
+    if (!filename.empty ()) {
+        ::unlink (filename.c_str ());
+        if (!dirname.empty ())
+            ::rmdir (dirname.c_str ());
+    }
+    closesocket (reader);
+    return -1;
+}
+#endif
 #endif
 
 int zlink::make_fdpair (fd_t *r_, fd_t *w_)
@@ -253,7 +315,10 @@ int zlink::make_fdpair (fd_t *r_, fd_t *w_)
 
 
 #elif defined ZLINK_HAVE_WINDOWS
-#ifdef ZLINK_HAVE_IPC
+#if defined ZLINK_HAVE_IPC || defined ZLINK_HAVE_WINDOWS_AF_UNIX
+    if (make_fdpair_unix_dgram (r_, w_) == 0)
+        return 0;
+
     ipc_address_t address;
     std::string dirname, filename;
     sockaddr_un lcladdr;

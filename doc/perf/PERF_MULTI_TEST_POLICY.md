@@ -874,7 +874,7 @@ run_benchmarks_multi.sh / .ps1                         # 공식 multi entrypoint
 | `--transport-transition-ms N` | transport 전환 cooldown(ms) | 3000 |
 | `--pattern-transition-ms N` | pattern 전환 cooldown(ms) | 3000 |
 | `--server-ready-timeout-ms N` | server READY 대기 타임아웃(ms) | 10000 |
-| `--connect-ready-timeout-ms N` | 연결 준비 대기 타임아웃(ms) | 1000 |
+| `--connect-ready-timeout-ms N` | 연결 준비 대기 타임아웃(ms) | 10000 |
 | `--monitor-hwm N` | 모니터 소켓 HWM | 1000 |
 | `--server-shutdown-timeout-ms N` | server 종료 대기 타임아웃(ms) | 5000 |
 | `--server-bind-port N` | server 바인드 포트 (0=자동 할당) | 0 |
@@ -1135,7 +1135,7 @@ bindings/c/perf/run_benchmarks_multi.sh --duration 10
 | `PERF_MULTI_SNDHWM` | debug 전용 송신 HWM override | 비활성 |
 | `PERF_MULTI_RCVHWM` | debug 전용 수신 HWM override | 비활성 |
 | `PERF_MULTI_CONNECT_CONCURRENCY` | 동시 연결 수 | auto (clients≥10000: 1024, 기타: 128) |
-| `PERF_MULTI_CONNECT_READY_TIMEOUT_MS` | 연결 준비 타임아웃(ms) | 1000 |
+| `PERF_MULTI_CONNECT_READY_TIMEOUT_MS` | 연결 준비 타임아웃(ms) | 10000 |
 | `PERF_MULTI_SERVICE_CLIENTS` | 서비스 클라이언트 수 상한 (0=제한 없음) | 0 |
 | `PERF_MULTI_SPOT_NODE_IO_THREADS` | Spot peer process 하나의 context I/O thread 수 | 1 |
 | `PERF_MULTI_LATENCY_SAMPLE_CAP` | 공통 multi p95/p99 reservoir 상한. `0`이면 sample 미보관 | 65,536 |
@@ -1232,7 +1232,7 @@ pattern별 공식 start contract 를 사용한다.
 | runner-barrier raw start API | `CONNECTION_READY` 확인 뒤 `CLIENT_READY` / `START` runner orchestration 사용 |
 | SPOT_PUBSUB / SPOT_REQREP / SPOT_SENDSEND 연결 확인 API | `zlink_mesh_node_peers()`에서 hub 상태가 `ZLINK_MESH_PEER_ADMITTED`인지 확인하고 node request/reply로 hub Spot generation을 받음 |
 | 대기 방식 | app thread에서 타임아웃 기반 bounded wait — busy-wait/sleep 금지 |
-| 타임아웃 | `PERF_MULTI_CONNECT_READY_TIMEOUT_MS` (기본 1000ms) 초과 시 run 실패 처리 |
+| 타임아웃 | `PERF_MULTI_CONNECT_READY_TIMEOUT_MS` (기본 10000ms) 초과 시 run 실패 처리 |
 | Monitor HWM | raw monitor 사용 시 `PERF_MULTI_MONITOR_HWM` (기본 1,000) |
 
 - raw socket client monitor handle은 pattern 파일 안에서 직접 열고 닫되, ready gate는

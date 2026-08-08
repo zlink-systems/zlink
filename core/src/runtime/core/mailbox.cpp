@@ -18,6 +18,7 @@ zlink::mailbox_t::mailbox_t ()
     _handler_arg = NULL;
     _pre_post = NULL;
     _scheduled.store (false, std::memory_order_release);
+    _primary_signaler_required.store (false, std::memory_order_release);
 }
 
 zlink::mailbox_t::~mailbox_t ()
@@ -33,6 +34,7 @@ zlink::mailbox_t::~mailbox_t ()
 
 zlink::fd_t zlink::mailbox_t::get_fd () const
 {
+    _primary_signaler_required.store (true, std::memory_order_release);
     return _signaler.get_fd ();
 }
 
@@ -41,30 +43,70 @@ void zlink::mailbox_t::send (const command_t &cmd_)
     _sync.lock ();
     _cpipe.write (cmd_, false);
     const bool ok = _cpipe.flush ();
+    bool send_primary_signaler = true;
     if (!ok) {
         // Signal all registered signalers for ZLINK_INTERNAL_OPT_FD support
         for (std::vector<signaler_t *>::iterator it = _signalers.begin (), end = _signalers.end ();
              it != end; ++it) {
             (*it)->send ();
         }
+        send_primary_signaler =
+          _signalers.empty () || _primary_signaler_required.load (std::memory_order_acquire);
+        if (send_primary_signaler)
+            _signaler.send ();
     }
     _sync.unlock ();
 
     if (!ok) {
-        signal ();
         schedule_if_needed ();
     }
 }
 
 void zlink::mailbox_t::signal ()
 {
-    _signaler.send ();
+    _sync.lock ();
+    for (std::vector<signaler_t *>::iterator it = _signalers.begin (), end = _signalers.end ();
+         it != end; ++it) {
+        (*it)->send ();
+    }
+    if (_signalers.empty () || _primary_signaler_required.load (std::memory_order_acquire))
+        _signaler.send ();
+    _sync.unlock ();
 }
 
 int zlink::mailbox_t::recv (command_t *cmd_, int timeout_)
 {
     if (!_active) {
-        if (timeout_ == 0) {
+        signaler_t *shared_signaler = NULL;
+        bool has_shared_command = false;
+        _sync.lock ();
+        if (!_signalers.empty ()
+            && !_primary_signaler_required.load (std::memory_order_acquire)) {
+            shared_signaler = _signalers.front ();
+            has_shared_command = _cpipe.check_read ();
+        }
+        _sync.unlock ();
+
+        if (shared_signaler) {
+            if (!has_shared_command) {
+                if (timeout_ == 0) {
+                    errno = EAGAIN;
+                    return -1;
+                }
+                const int rc = shared_signaler->wait (timeout_);
+                if (rc == -1) {
+                    errno_assert (errno == EAGAIN || errno == EINTR);
+                    return -1;
+                }
+                _sync.lock ();
+                has_shared_command = _cpipe.check_read ();
+                _sync.unlock ();
+                if (!has_shared_command) {
+                    errno = EAGAIN;
+                    return -1;
+                }
+            }
+        } else if (timeout_ == 0) {
             // Avoid poll syscall on non-blocking checks.
             const int rc = _signaler.recv_failable ();
             if (rc == -1) {
@@ -169,18 +211,24 @@ bool zlink::mailbox_t::detach_io_context_if_idle ()
 
 void zlink::mailbox_t::add_signaler (signaler_t *signaler_)
 {
+    _sync.lock ();
     _signalers.push_back (signaler_);
+    _sync.unlock ();
 }
 
 void zlink::mailbox_t::remove_signaler (signaler_t *signaler_)
 {
+    _sync.lock ();
     const std::vector<signaler_t *>::iterator end = _signalers.end ();
     const std::vector<signaler_t *>::iterator it = std::find (_signalers.begin (), end, signaler_);
     if (it != end)
         _signalers.erase (it);
+    _sync.unlock ();
 }
 
 void zlink::mailbox_t::clear_signalers ()
 {
+    _sync.lock ();
     _signalers.clear ();
+    _sync.unlock ();
 }

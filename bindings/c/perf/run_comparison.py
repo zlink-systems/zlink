@@ -53,7 +53,6 @@ PATTERN_SUFFIX = {
     "ROUTER_ROUTER_SENDSEND": "router_router_sendsend",
     "DEALER_ROUTER_REQREP": "dealer_router_reqrep",
     "ROUTER_ROUTER_REQREP": "router_router_reqrep",
-    "ROUTER_ROUTER_ONEWAY": "router_router_oneway",
     "PUBSUB": "pubsub",
     "STREAM": "stream",
 }
@@ -79,7 +78,6 @@ MULTI_COMPARISONS = [
     ("comp_src_router_router_sendsend_client", "ROUTER_ROUTER_SENDSEND"),
     ("comp_src_dealer_router_reqrep_client", "DEALER_ROUTER_REQREP"),
     ("comp_src_router_router_reqrep_client", "ROUTER_ROUTER_REQREP"),
-    ("comp_src_router_router_oneway_client", "ROUTER_ROUTER_ONEWAY"),
     ("comp_src_pubsub_client", "PUBSUB"),
     ("perf_stream_client", "STREAM"),
 ]
@@ -90,7 +88,6 @@ SUPPORTED_MULTI_RECV_MODES = {
     "ROUTER_ROUTER_SENDSEND": ("recv",),
     "DEALER_ROUTER_REQREP": ("recv",),
     "ROUTER_ROUTER_REQREP": ("recv",),
-    "ROUTER_ROUTER_ONEWAY": ("recv",),
     "PUBSUB": ("recv",),
     "STREAM": ("recv",),
 }
@@ -1222,8 +1219,6 @@ def pattern_default_hwm(pattern_name):
 
 
 def pattern_default_io_threads(pattern_name):
-    if pattern_name == "ROUTER_ROUTER_ONEWAY":
-        return 1
     if pattern_name in STREAM_VARIANT_PATTERNS:
         return 4
     return max(1, parse_env_int("PERF_DEFAULT_IO_THREADS", 4))

@@ -25,6 +25,8 @@ done
 [[ "$core_prefix" = /* ]] || { echo "--core-prefix must be absolute" >&2; exit 2; }
 core_prefix="$(readlink -f "$core_prefix")"
 version="$(sed -n 's/^LIBZLINK_VERSION=//p' "$repo_root/VERSION")"
+export ZLINK_CORE_PACKAGE_PREFIX="$core_prefix"
+export ZLINK_CORE_VERSION="$version"
 package_version="$(sed -n 's/^version = "\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)"/\1/p' "$repo_root/bindings/rust/Cargo.toml" | head -n1)"
 [[ "$package_version" = "$version" ]] || {
   echo "Rust package version $package_version does not match Core $version" >&2

@@ -3,9 +3,14 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
+source "${ROOT_DIR}/bindings/tools/local_core_runtime.sh"
 CPP_PERF_DIR="${ROOT_DIR}/bindings/cpp/perf"
 OFFICIAL_BUILD_DIR="${ROOT_DIR}/bindings/cpp/build"
-DEFAULT_CORE_BUILD_DIR="${ROOT_DIR}/core/build"
+if [[ "${ZLINK_CORE_RELEASE_MODE}" -eq 1 ]]; then
+  DEFAULT_CORE_BUILD_DIR="${ZLINK_CORE_PACKAGE_PREFIX}"
+else
+  DEFAULT_CORE_BUILD_DIR="${ROOT_DIR}/core/build"
+fi
 NORMALIZE_TIMESTAMPS_SH="${ROOT_DIR}/core/tools/normalize_build_timestamps.sh"
 MAKE_BIN="$(command -v gmake || command -v make)"
 PERF_COMPARISON_SCRIPT="${ROOT_DIR}/bindings/cpp/perf/multi/run_comparison.py"
@@ -838,8 +843,8 @@ if [[ "${BUILD_MODE}" != "reuse" ]]; then
       -A "${CMAKE_ARCH}" \
       -DCMAKE_BUILD_TYPE=Release \
       -DENABLE_LTO=OFF \
-      -DZLINK_CORE_DIR="${ROOT_DIR}/core" \
-      -DZLINK_CPP_CORE_BUILD_DIR="${ROOT_DIR}/core/build" \
+      -DZLINK_CORE_DIR="${ZLINK_CORE_PACKAGE_PREFIX:-${ROOT_DIR}/core}" \
+      -DZLINK_CPP_CORE_BUILD_DIR="${DEFAULT_CORE_BUILD_DIR}" \
       -DZLINK_CPP_USE_CORE_BUILD_RUNTIME=ON \
       -DZLINK_CPP_BUILD_BENCHMARKS=ON
     cmake --build "${OFFICIAL_BUILD_DIR}" --config Release --target \
@@ -861,8 +866,8 @@ if [[ "${BUILD_MODE}" != "reuse" ]]; then
       -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_MAKE_PROGRAM="${MAKE_BIN}" \
       -DENABLE_LTO=OFF \
-      -DZLINK_CORE_DIR="${ROOT_DIR}/core" \
-      -DZLINK_CPP_CORE_BUILD_DIR="${ROOT_DIR}/core/build" \
+      -DZLINK_CORE_DIR="${ZLINK_CORE_PACKAGE_PREFIX:-${ROOT_DIR}/core}" \
+      -DZLINK_CPP_CORE_BUILD_DIR="${DEFAULT_CORE_BUILD_DIR}" \
       -DZLINK_CPP_USE_CORE_BUILD_RUNTIME=ON \
       -DZLINK_CPP_BUILD_BENCHMARKS=ON
     bash "${NORMALIZE_TIMESTAMPS_SH}" "${OFFICIAL_BUILD_DIR}"

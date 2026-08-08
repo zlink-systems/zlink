@@ -116,8 +116,6 @@ endif()
                            multi/src/perf_multi_router_router_server.cpp)
     add_current_bench_multi(comp_src_router_router_reqrep_server
                            multi/src/perf_multi_router_router_reqrep_server.cpp)
-    add_current_bench_multi(comp_src_router_router_oneway_server
-                           multi/src/perf_multi_router_router_oneway_server.cpp)
     add_current_bench_multi(comp_src_pubsub_server
                            multi/src/perf_multi_pubsub_server.cpp)
     add_current_bench_multi(comp_src_dealer_dealer_client
@@ -139,8 +137,6 @@ endif()
             comp_src_${matched_pattern}_matched_client
             PRIVATE PERF_MATCHED_PATTERN_NAME="MULTI_${matched_pattern_upper}")
     endforeach()
-    add_current_bench_multi(comp_src_router_router_oneway_client
-                           multi/src/perf_multi_router_router_oneway_client.cpp)
     add_current_bench_multi(comp_src_pubsub_client
                            multi/src/perf_multi_pubsub_client.cpp)
     add_current_bench_multi(perf_multi_metrics_test

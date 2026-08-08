@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 REPO_ROOT="$(cd "$ROOT_DIR/../.." && pwd)"
 source "${REPO_ROOT}/bindings/tools/local_core_runtime.sh"
-CORE_RUNTIME="${ZLINK_CORE_VERSIONED_LIB}"
+CORE_RUNTIME="${ZLINK_LOCAL_CORE_RUNTIME}"
 cd "$ROOT_DIR"
 
 REUSE_BUILD=0
@@ -38,7 +38,7 @@ if [ ! -f "$CORE_RUNTIME" ]; then
   exit 1
 fi
 
-if find "$REPO_ROOT/core/include" "$REPO_ROOT/core/src" -type f -newer "$CORE_RUNTIME" | grep -q .; then
+if [[ "${ZLINK_CORE_RELEASE_MODE}" -eq 0 ]] && find "$REPO_ROOT/core/include" "$REPO_ROOT/core/src" -type f -newer "$CORE_RUNTIME" | grep -q .; then
   echo "Error: core runtime is older than core/include or core/src." >&2
   echo "Rebuild it first with: cmake --build core/build" >&2
   echo "Runtime checked: $CORE_RUNTIME" >&2

@@ -115,6 +115,13 @@ endfunction()
 
 zlink_c_ensure_core_target(ZLINK_C_CORE_TARGET ZLINK_C_CORE_RUNTIME_DIR)
 
+option(
+  ENABLE_LTO
+  "Enable Link-Time Optimization (LTO/IPO) for C binding targets"
+  OFF
+)
+set(CMAKE_INTERPROCEDURAL_OPTIMIZATION "${ENABLE_LTO}")
+
 add_library(zlink_c INTERFACE)
 target_include_directories(zlink_c INTERFACE include)
 target_link_libraries(zlink_c INTERFACE ${ZLINK_C_CORE_TARGET})

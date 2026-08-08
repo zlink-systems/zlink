@@ -14,6 +14,11 @@ inline int tune_asio_tcp_socket (fd_t fd_,
                                  bool apply_buffer_options_)
 {
     int rc = tune_tcp_socket (fd_, options_.tcp_nodelay);
+#ifdef ZLINK_HAVE_WINDOWS
+    // The multi-socket benchmark and local applications commonly use TCP
+    // loopback. Enable the Windows loopback fast path when the OS supports it.
+    tcp_tune_loopback_fast_path (fd_);
+#endif
     if (apply_buffer_options_ && options_.sndbuf >= 0)
         rc = rc | set_tcp_send_buffer (fd_, options_.sndbuf);
     if (apply_buffer_options_ && options_.rcvbuf >= 0)

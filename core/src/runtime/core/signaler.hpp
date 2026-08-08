@@ -10,6 +10,8 @@
 #include "utils/fd.hpp"
 #include "utils/macros.hpp"
 
+#include <atomic>
+
 namespace zlink
 {
 //  This is a cross-platform equivalent to signal_fd. However, as opposed
@@ -21,11 +23,16 @@ class signaler_t
 {
   public:
     signaler_t ();
+    explicit signaler_t (bool event_only_);
     ~signaler_t ();
 
     // Returns the socket/file descriptor
     // May return retired_fd if the signaler could not be initialized.
     fd_t get_fd () const;
+#ifdef ZLINK_HAVE_WINDOWS
+    HANDLE get_handle () const;
+    void reset_event ();
+#endif
     void send ();
     int wait (int timeout_) const;
     void recv ();
@@ -45,6 +52,13 @@ class signaler_t
     //  exceeded the number of available handles
     fd_t _w;
     fd_t _r;
+
+#ifdef ZLINK_HAVE_WINDOWS
+    //  Avoid a nonblocking Winsock recv when no wakeup is pending.
+    std::atomic<bool> _signaled;
+    bool _event_only;
+    HANDLE _event;
+#endif
 
 #ifdef HAVE_FORK
     // the process that created this context. Used to detect forking.

@@ -87,10 +87,31 @@ static int close_wait_ms (int fd_, unsigned int max_ms_ = 2000)
 }
 #endif
 
-zlink::signaler_t::signaler_t ()
+zlink::signaler_t::signaler_t () : signaler_t (false)
 {
+}
+
+zlink::signaler_t::signaler_t (bool event_only_)
+{
+    _w = retired_fd;
+    _r = retired_fd;
+#ifdef ZLINK_HAVE_WINDOWS
+    _signaled.store (false, std::memory_order_relaxed);
+    _event_only = event_only_;
+    _event = NULL;
+
+    if (_event_only) {
+        _event = CreateEventW (NULL, FALSE, FALSE, NULL);
+        win_assert (_event != NULL);
+    }
+#endif
+
     //  Create the socketpair for signaling.
-    if (make_fdpair (&_r, &_w) == 0) {
+    if (
+#ifdef ZLINK_HAVE_WINDOWS
+      !_event_only &&
+#endif
+      make_fdpair (&_r, &_w) == 0) {
         unblock_socket (_w);
         unblock_socket (_r);
     }
@@ -109,6 +130,13 @@ zlink::signaler_t::~signaler_t ()
     int rc = close_wait_ms (_r);
     errno_assert (rc == 0);
 #elif defined ZLINK_HAVE_WINDOWS
+    if (_event != NULL) {
+        const BOOL rc = CloseHandle (_event);
+        win_assert (rc != 0);
+        _event = NULL;
+    }
+    if (_event_only)
+        return;
     if (_w != retired_fd) {
         const struct linger so_linger = {1, 0};
         int rc = setsockopt (_w, SOL_SOCKET, SO_LINGER, reinterpret_cast<const char *> (&so_linger),
@@ -141,6 +169,22 @@ zlink::fd_t zlink::signaler_t::get_fd () const
     return _r;
 }
 
+#ifdef ZLINK_HAVE_WINDOWS
+HANDLE zlink::signaler_t::get_handle () const
+{
+    return _event;
+}
+
+void zlink::signaler_t::reset_event ()
+{
+    if (_event != NULL) {
+        _signaled.store (false, std::memory_order_release);
+        const BOOL rc = ResetEvent (_event);
+        win_assert (rc != 0);
+    }
+}
+#endif
+
 void zlink::signaler_t::send ()
 {
 #if defined HAVE_FORK
@@ -156,6 +200,12 @@ void zlink::signaler_t::send ()
     } while (sz == -1 && errno == EINTR);
     errno_assert (sz == sizeof (inc));
 #elif defined ZLINK_HAVE_WINDOWS
+    if (_event_only) {
+        const BOOL rc = SetEvent (_event);
+        win_assert (rc != 0);
+        _signaled.store (true, std::memory_order_release);
+        return;
+    }
     const char dummy = 0;
     int nbytes;
     do {
@@ -165,6 +215,9 @@ void zlink::signaler_t::send ()
     } while (nbytes == SOCKET_ERROR);
     // Given the small size of dummy (should be 1) expect that send was able to send everything.
     zlink_assert (nbytes == sizeof (dummy));
+#ifdef ZLINK_HAVE_WINDOWS
+    _signaled.store (true, std::memory_order_release);
+#endif
 #elif defined ZLINK_HAVE_VXWORKS
     unsigned char dummy = 0;
     while (true) {
@@ -208,6 +261,23 @@ int zlink::signaler_t::wait (int timeout_) const
         errno = EINTR;
         return -1;
     }
+#endif
+
+#ifdef ZLINK_HAVE_WINDOWS
+    if (_event_only) {
+        const DWORD wait_rc = WaitForSingleObject (
+          _event, timeout_ < 0 ? INFINITE : static_cast<DWORD> (timeout_));
+        if (wait_rc == WAIT_OBJECT_0)
+            return 0;
+        if (wait_rc == WAIT_TIMEOUT) {
+            errno = EAGAIN;
+            return -1;
+        }
+        errno = EINTR;
+        return -1;
+    }
+    if (_signaled.load (std::memory_order_acquire))
+        return 0;
 #endif
 
 #ifdef ZLINK_POLL_BASED_ON_POLL
@@ -300,6 +370,13 @@ void zlink::signaler_t::recv ()
 #else
     unsigned char dummy;
 #if defined ZLINK_HAVE_WINDOWS
+    if (_event_only) {
+        _signaled.store (false, std::memory_order_release);
+        const BOOL rc = ResetEvent (_event);
+        win_assert (rc != 0);
+        return;
+    }
+    _signaled.store (false, std::memory_order_release);
     const int nbytes = ::recv (_r, reinterpret_cast<char *> (&dummy), sizeof (dummy), 0);
     wsa_assert (nbytes != SOCKET_ERROR);
 #elif defined ZLINK_HAVE_VXWORKS
@@ -344,10 +421,26 @@ int zlink::signaler_t::recv_failable ()
 #else
     unsigned char dummy;
 #if defined ZLINK_HAVE_WINDOWS
+    if (_event_only) {
+        if (!_signaled.exchange (false, std::memory_order_acq_rel)) {
+            errno = EAGAIN;
+            return -1;
+        }
+        const BOOL rc = ResetEvent (_event);
+        win_assert (rc != 0);
+        if (_signaled.load (std::memory_order_acquire))
+            SetEvent (_event);
+        return 0;
+    }
+    if (!_signaled.exchange (false, std::memory_order_acq_rel)) {
+        errno = EAGAIN;
+        return -1;
+    }
     const int nbytes = ::recv (_r, reinterpret_cast<char *> (&dummy), sizeof (dummy), 0);
     if (nbytes == SOCKET_ERROR) {
         const int last_error = WSAGetLastError ();
         if (last_error == WSAEWOULDBLOCK) {
+            _signaled.store (true, std::memory_order_release);
             errno = EAGAIN;
             return -1;
         }
@@ -380,6 +473,10 @@ int zlink::signaler_t::recv_failable ()
 
 bool zlink::signaler_t::valid () const
 {
+#ifdef ZLINK_HAVE_WINDOWS
+    if (_event_only)
+        return _event != NULL;
+#endif
     return _w != retired_fd;
 }
 

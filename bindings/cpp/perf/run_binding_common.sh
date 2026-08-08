@@ -35,6 +35,10 @@ resolve_configured_core_build_dir() {
   local build_dir="${1:-${OFFICIAL_BUILD_DIR}}"
   local cache_path="${build_dir}/CMakeCache.txt"
   local configured_dir=""
+  if [[ "${ZLINK_CORE_RELEASE_MODE:-0}" -eq 1 ]]; then
+    printf '%s\n' "${ZLINK_CORE_PACKAGE_PREFIX}"
+    return
+  fi
   if [[ -f "${cache_path}" ]]; then
     configured_dir="$(
       sed -n 's/^ZLINK_CPP_CORE_BUILD_DIR:PATH=//p' "${cache_path}" | tail -n 1
@@ -109,6 +113,15 @@ ensure_core_runtime_not_stale() {
   local runtime_lib=""
   local newer_source=""
   core_build_dir="$(resolve_configured_core_build_dir "${build_dir}")"
+  if [[ "${ZLINK_CORE_RELEASE_MODE:-0}" -eq 1 ]]; then
+    if ! runtime_lib="$(resolve_core_runtime_library "${core_build_dir}")"; then
+      echo "Error: Core release runtime not found under ${core_build_dir}." >&2
+      return 1
+    fi
+    echo "Perf Core release prefix: ${core_build_dir}"
+    echo "Perf runtime libzlink: ${runtime_lib}"
+    return 0
+  fi
   if ! runtime_lib="$(resolve_core_runtime_library "${core_build_dir}")"; then
     echo "Error: core runtime library not found under ${core_build_dir}." >&2
     echo "Build core first before running bindings/cpp/perf benchmarks." >&2

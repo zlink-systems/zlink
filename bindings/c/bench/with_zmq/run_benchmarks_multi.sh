@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
+source "${ROOT_DIR}/bindings/tools/local_core_runtime.sh"
 
 IS_WINDOWS=0
 case "$(uname -s)" in
@@ -109,6 +110,10 @@ default_build_dir() {
 }
 
 default_core_build_dir() {
+  if [[ "${ZLINK_CORE_RELEASE_MODE}" -eq 1 ]]; then
+    echo "${ZLINK_CORE_PACKAGE_PREFIX}"
+    return
+  fi
   if [[ "${IS_WINDOWS}" -eq 1 ]]; then
     echo "${ROOT_DIR}/core/build/windows-x64"
   else
@@ -202,6 +207,15 @@ prepare_core_runtime() {
   local runtime_lib=""
   local newer_source=""
 
+  if [[ "${ZLINK_CORE_RELEASE_MODE}" -eq 1 ]]; then
+    runtime_lib="$(resolve_core_runtime_library "${core_build_dir}")" || {
+      echo "Error: Core release runtime is missing under ${core_build_dir}." >&2
+      return 1
+    }
+    echo "Core release runtime: ${runtime_lib}"
+    return 0
+  fi
+
   if ! runtime_lib="$(resolve_core_runtime_library "${core_build_dir}")"; then
     echo "Note: core runtime is missing; building ${core_build_dir}." >&2
     build_core_runtime "${core_build_dir}"
@@ -261,7 +275,7 @@ prepare_benchmark_build() {
     -S "${ROOT_DIR}/bindings/c"
     -B "${build_dir}"
     -DCMAKE_BUILD_TYPE=Release
-    -DZLINK_CORE_DIR="${ROOT_DIR}/core"
+    -DZLINK_CORE_DIR="${ZLINK_CORE_PACKAGE_PREFIX:-${ROOT_DIR}/core}"
     -DZLINK_C_CORE_BUILD_DIR="${core_build_dir}"
     -DZLINK_C_BUILD_BENCHES=ON
     -DZLINK_C_BUILD_BENCH_ZMQ=ON

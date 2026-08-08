@@ -32,6 +32,8 @@ command -v "$python_executable" >/dev/null 2>&1 || {
   exit 1
 }
 version="$(sed -n 's/^LIBZLINK_VERSION=//p' "$repo_root/VERSION")"
+export ZLINK_CORE_PACKAGE_PREFIX="$core_prefix"
+export ZLINK_CORE_VERSION="$version"
 package_version="$(sed -n 's/^version = "\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)"/\1/p' "$repo_root/bindings/python/pyproject.toml" | head -n1)"
 [[ "$package_version" = "$version" ]] || {
   echo "Python package version $package_version does not match Core $version" >&2

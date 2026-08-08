@@ -16,12 +16,16 @@ while [[ $# -gt 0 ]]; do
 done
 
 version="$(sed -n 's/^LIBZLINK_VERSION=//p' "$repo_root/VERSION")"
+[[ "$core_prefix" = /* ]] || { echo "--core-prefix must be absolute" >&2; exit 2; }
+core_prefix="$(readlink -f "$core_prefix")"
+export ZLINK_CORE_PACKAGE_PREFIX="$core_prefix"
+export ZLINK_CORE_VERSION="$version"
 "$repo_root/scripts/local-package/native/sync-local-core-libs.sh" c
 
 build_dir="$artifact_root/build/bindings-c-$version"
 cmake -S "$repo_root/bindings/c" -B "$build_dir" \
   -DCMAKE_BUILD_TYPE="$configuration" \
-  -DZLINK_C_CORE_BUILD_DIR="$repo_root/core/build" \
+  -DZLINK_C_CORE_BUILD_DIR="$core_prefix" \
   -DZLINK_C_BUILD_TESTS=ON -DZLINK_C_REGISTER_CTEST=ON \
   -DZLINK_C_BUILD_SAMPLES=OFF
 cmake --build "$build_dir" --parallel "${ZLINK_BINDING_BUILD_JOBS:-4}"
@@ -33,8 +37,8 @@ archive="$out_dir/zlink-c-$version.tar.gz"
 rm -rf "$stage" "$archive"
 mkdir -p "$stage/include" "$stage/lib" "$stage/provenance"
 cp -a "$repo_root/bindings/c/include/." "$stage/include/"
-cp -a "$repo_root/core/include/." "$stage/include/"
-cp -L "$repo_root/core/build/lib/libzlink.so.$version" "$stage/lib/libzlink.so.$version"
+cp -a "$core_prefix/include/." "$stage/include/"
+cp -L "$core_prefix/lib/libzlink.so.$version" "$stage/lib/libzlink.so.$version"
 ln -s "libzlink.so.$version" "$stage/lib/libzlink.so.0"
 ln -s "libzlink.so.0" "$stage/lib/libzlink.so"
 cp "$core_prefix/share/zlink/core-package-provenance.json" \

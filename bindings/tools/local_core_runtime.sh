@@ -4,18 +4,71 @@ ZLINK_BINDINGS_TOOLS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ZLINK_BINDINGS_ROOT="$(cd "${ZLINK_BINDINGS_TOOLS_DIR}/.." && pwd)"
 ZLINK_REPO_ROOT="$(cd "${ZLINK_BINDINGS_ROOT}/.." && pwd)"
 ZLINK_VERSION_FILE="${ZLINK_REPO_ROOT}/VERSION"
-ZLINK_CORE_LIB_DIR="${ZLINK_REPO_ROOT}/core/build/lib"
-ZLINK_CORE_VERSION="$(awk -F= '/^LIBZLINK_VERSION=/{print $2}' "${ZLINK_VERSION_FILE}")"
+ZLINK_CORE_SOURCE="${ZLINK_CORE_SOURCE:-release}"
+ZLINK_CORE_VERSION="${ZLINK_CORE_RELEASE_VERSION:-$(awk -F= '/^LIBZLINK_VERSION=/{print $2}' "${ZLINK_VERSION_FILE}")}"
 ZLINK_CORE_MAJOR="${ZLINK_CORE_VERSION%%.*}"
+ZLINK_CORE_RELEASE_MODE=0
+ZLINK_CORE_PACKAGE_PREFIX="${ZLINK_CORE_PACKAGE_PREFIX:-}"
+
+case "${ZLINK_CORE_SOURCE}" in
+  release)
+    if [[ -z "${ZLINK_CORE_PACKAGE_PREFIX}" ]]; then
+      release_args=(--version "${ZLINK_CORE_VERSION}")
+      if [[ -n "${ZLINK_CORE_CACHE_DIR:-}" ]]; then
+        release_args+=(--cache-dir "${ZLINK_CORE_CACHE_DIR}")
+      fi
+      ZLINK_CORE_PACKAGE_PREFIX="$(bash "${ZLINK_REPO_ROOT}/scripts/local-package/core/fetch-release.sh" "${release_args[@]}")"
+    fi
+    [[ -d "${ZLINK_CORE_PACKAGE_PREFIX}" ]] || {
+      echo "Core release prefix not found: ${ZLINK_CORE_PACKAGE_PREFIX}" >&2
+      return 1 2>/dev/null || exit 1
+    }
+    core_manifest="${ZLINK_CORE_PACKAGE_PREFIX}/share/zlink/core-package-provenance.json"
+    [[ -f "${core_manifest}" ]] || {
+      echo "Core release provenance not found: ${core_manifest}" >&2
+      return 1 2>/dev/null || exit 1
+    }
+    core_manifest_version="$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\1/p' "${core_manifest}" | head -n1)"
+    [[ "${core_manifest_version}" == "${ZLINK_CORE_VERSION}" ]] || {
+      echo "Core release prefix version ${core_manifest_version} does not match ${ZLINK_CORE_VERSION}" >&2
+      return 1 2>/dev/null || exit 1
+    }
+    ZLINK_CORE_RELEASE_MODE=1
+    ;;
+  local)
+    ;;
+  *)
+    echo "ZLINK_CORE_SOURCE must be release or local: ${ZLINK_CORE_SOURCE}" >&2
+    return 1 2>/dev/null || exit 1
+    ;;
+esac
+
+if [[ "${ZLINK_CORE_RELEASE_MODE}" -eq 1 ]]; then
+  ZLINK_CORE_LIB_DIR="${ZLINK_CORE_PACKAGE_PREFIX}/lib"
+  ZLINK_CORE_INCLUDE_DIR="${ZLINK_CORE_PACKAGE_PREFIX}/include"
+else
+  ZLINK_CORE_LIB_DIR="${ZLINK_REPO_ROOT}/core/build/lib"
+  ZLINK_CORE_INCLUDE_DIR="${ZLINK_REPO_ROOT}/core/include"
+fi
+export ZLINK_CORE_PACKAGE_PREFIX ZLINK_CORE_RELEASE_MODE ZLINK_CORE_SOURCE
+export ZLINK_CORE_VERSION ZLINK_CORE_LIB_DIR ZLINK_CORE_INCLUDE_DIR
 ZLINK_IS_WINDOWS_NATIVE=0
 case "$(uname -s 2>/dev/null || true)" in
   MINGW*|MSYS*|CYGWIN*)
     ZLINK_IS_WINDOWS_NATIVE=1
-    ZLINK_LOCAL_CORE_RUNTIME="${ZLINK_REPO_ROOT}/core/build/windows-x64/install/bin/zlink.dll"
+    if [[ "${ZLINK_CORE_RELEASE_MODE}" -eq 1 ]]; then
+      ZLINK_LOCAL_CORE_RUNTIME="${ZLINK_CORE_PACKAGE_PREFIX}/bin/zlink.dll"
+    else
+      ZLINK_LOCAL_CORE_RUNTIME="${ZLINK_REPO_ROOT}/core/build/windows-x64/install/bin/zlink.dll"
+    fi
     ;;
   *)
     ZLINK_CORE_VERSIONED_LIB="${ZLINK_CORE_LIB_DIR}/libzlink.so.${ZLINK_CORE_VERSION}"
     ZLINK_CORE_UNVERSIONED_LIB="${ZLINK_CORE_LIB_DIR}/libzlink.so"
+    if [[ "$(uname -s 2>/dev/null || true)" == Darwin* ]]; then
+      ZLINK_CORE_VERSIONED_LIB="${ZLINK_CORE_LIB_DIR}/libzlink.dylib"
+      ZLINK_CORE_UNVERSIONED_LIB="${ZLINK_CORE_VERSIONED_LIB}"
+    fi
     ZLINK_LOCAL_CORE_RUNTIME="${ZLINK_CORE_VERSIONED_LIB}"
 
     if [[ ! -f "${ZLINK_LOCAL_CORE_RUNTIME}" && -f "${ZLINK_CORE_UNVERSIONED_LIB}" ]]; then

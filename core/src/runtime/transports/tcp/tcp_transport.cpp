@@ -11,6 +11,7 @@
 #include <atomic>
 #include <algorithm>
 #include <array>
+#include <limits>
 #ifndef ZLINK_HAVE_WINDOWS
 #include <sys/socket.h>
 #include <sys/uio.h>
@@ -354,31 +355,117 @@ void tcp_transport_t::async_writev (const unsigned char *header,
     }
 
 #if defined(ZLINK_HAVE_WINDOWS)
-    if (tcp_stats_on) {
-        const auto stats_handler = [handler, socket] (const boost::system::error_code &ec,
-                                                      std::size_t bytes) {
-            LIBZLINK_UNUSED (socket);
-            if (ec)
+    struct writev_state_t
+    {
+        const unsigned char *header;
+        size_t header_size;
+        size_t header_sent;
+        const unsigned char *body;
+        size_t body_size;
+        size_t body_sent;
+        completion_handler_t handler;
+    };
+
+    const std::shared_ptr<writev_state_t> state (
+      new writev_state_t{header, header_size, 0, body, body_size, 0, handler});
+
+    const std::shared_ptr<std::function<void (const boost::system::error_code &)>> do_write (
+      new std::function<void (const boost::system::error_code &)>);
+
+    *do_write = [socket, state, do_write] (const boost::system::error_code &ec) {
+        if (ec) {
+            if (tcp_stats_on)
                 ++tcp_async_write_errors;
-            else
-                tcp_async_write_bytes += bytes;
-            if (handler)
-                handler (ec, bytes);
-        };
-        std::array<boost::asio::const_buffer, 2> buffers = {
-          boost::asio::buffer (header, header_size), boost::asio::buffer (body, body_size)};
-        boost::asio::async_write (*socket, buffers, stats_handler);
-    } else {
-        const auto wrapped_handler = [handler, socket] (const boost::system::error_code &ec,
-                                                        std::size_t bytes) {
-            LIBZLINK_UNUSED (socket);
-            if (handler)
-                handler (ec, bytes);
-        };
-        std::array<boost::asio::const_buffer, 2> buffers = {
-          boost::asio::buffer (header, header_size), boost::asio::buffer (body, body_size)};
-        boost::asio::async_write (*socket, buffers, wrapped_handler);
-    }
+            if (state->handler)
+                state->handler (ec, state->header_sent + state->body_sent);
+            return;
+        }
+
+        if (!socket || !socket->is_open ()) {
+            if (state->handler)
+                state->handler (boost::asio::error::bad_descriptor,
+                                state->header_sent + state->body_sent);
+            return;
+        }
+
+        for (;;) {
+            const size_t header_left = state->header_size - state->header_sent;
+            const size_t body_left = state->body_size - state->body_sent;
+            if (header_left == 0 && body_left == 0) {
+                if (tcp_stats_on)
+                    tcp_async_write_bytes += state->header_size + state->body_size;
+                if (state->handler)
+                    state->handler (boost::system::error_code (),
+                                    state->header_size + state->body_size);
+                return;
+            }
+
+            WSABUF buffers[2];
+            DWORD buffer_count = 0;
+            if (header_left > 0) {
+                buffers[buffer_count].buf = reinterpret_cast<char *> (
+                  const_cast<unsigned char *> (state->header + state->header_sent));
+                buffers[buffer_count].len = static_cast<ULONG> (
+                  std::min (header_left, static_cast<size_t> (std::numeric_limits<ULONG>::max ())));
+                ++buffer_count;
+            }
+            if (body_left > 0) {
+                buffers[buffer_count].buf = reinterpret_cast<char *> (
+                  const_cast<unsigned char *> (state->body + state->body_sent));
+                buffers[buffer_count].len = static_cast<ULONG> (
+                  std::min (body_left, static_cast<size_t> (std::numeric_limits<ULONG>::max ())));
+                ++buffer_count;
+            }
+
+            DWORD bytes_sent = 0;
+            const int rc = WSASend (socket->native_handle (), buffers, buffer_count, &bytes_sent, 0,
+                                    NULL, NULL);
+            if (rc == 0) {
+                size_t remaining = static_cast<size_t> (bytes_sent);
+                if (header_left > 0) {
+                    const size_t advanced = std::min (header_left, remaining);
+                    state->header_sent += advanced;
+                    remaining -= advanced;
+                }
+                if (remaining > 0 && body_left > 0)
+                    state->body_sent += std::min (body_left, remaining);
+
+                if (bytes_sent == 0) {
+                    socket->async_wait (
+                      boost::asio::socket_base::wait_write,
+                      [do_write, socket] (const boost::system::error_code &wec) {
+                          LIBZLINK_UNUSED (socket);
+                          (*do_write) (wec);
+                      });
+                    return;
+                }
+                continue;
+            }
+
+            const int wsa_error = WSAGetLastError ();
+            if (wsa_error == WSAEINTR)
+                continue;
+            if (wsa_error == WSAEWOULDBLOCK || wsa_error == WSAENOBUFS) {
+                socket->async_wait (
+                  boost::asio::socket_base::wait_write,
+                  [do_write, socket] (const boost::system::error_code &wec) {
+                      LIBZLINK_UNUSED (socket);
+                      (*do_write) (wec);
+                  });
+                return;
+            }
+
+            if (tcp_stats_on)
+                ++tcp_async_write_errors;
+            if (state->handler)
+                state->handler (boost::system::error_code (
+                                  wsa_error, boost::system::system_category ()),
+                                state->header_sent + state->body_sent);
+            return;
+        }
+    };
+
+    (*do_write) (boost::system::error_code ());
 #else
     if (tcp_use_asio_writev_on) {
         if (tcp_stats_on) {

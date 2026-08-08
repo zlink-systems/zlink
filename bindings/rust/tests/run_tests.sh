@@ -4,7 +4,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO_ROOT="$(cd "$PROJECT_DIR/../.." && pwd)"
-CORE_LIB_DIR="$REPO_ROOT/core/build/lib"
+source "${REPO_ROOT}/bindings/tools/local_core_runtime.sh"
+if [[ "${ZLINK_CORE_RELEASE_MODE}" -eq 1 ]]; then
+    CORE_LIB_DIR="${ZLINK_CORE_PACKAGE_PREFIX}/lib"
+else
+    CORE_LIB_DIR="$REPO_ROOT/core/build/lib"
+fi
 
 cd "$PROJECT_DIR"
 

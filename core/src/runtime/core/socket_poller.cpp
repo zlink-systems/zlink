@@ -2,6 +2,7 @@
 
 #include "utils/precompiled.hpp"
 #include "core/socket_poller.hpp"
+#include "core/mailbox.hpp"
 #include "utils/err.hpp"
 #include "utils/polling_util.hpp"
 #include "utils/macros.hpp"
@@ -22,6 +23,11 @@ static It find_if2 (It b_, It e_, const T &value, Pred pred)
 
 zlink::socket_poller_t::socket_poller_t () :
     _tag (0xCAFEBABE)
+#if defined ZLINK_HAVE_WINDOWS
+    ,
+    _windows_signaler (true),
+    _windows_signaler_active (false)
+#endif
 #if defined ZLINK_POLL_BASED_ON_POLL
     ,
     _pollfds (NULL)
@@ -35,6 +41,18 @@ zlink::socket_poller_t::socket_poller_t () :
 
 zlink::socket_poller_t::~socket_poller_t ()
 {
+#if defined ZLINK_HAVE_WINDOWS
+    if (_windows_signaler_active) {
+        for (items_t::iterator it = _items.begin (), end = _items.end (); it != end; ++it) {
+            if (it->socket)
+                static_cast<mailbox_t *> (it->socket->get_mailbox ())->remove_signaler (
+                  &_windows_signaler);
+        }
+        _windows_signaler_active = false;
+    }
+    _windows_signaler.reset_event ();
+#endif
+
     //  Mark the socket_poller as dead
     _tag = 0xdeadbeef;
 
@@ -176,6 +194,12 @@ int zlink::socket_poller_t::remove_item (items_t::iterator it_)
         return -1;
     }
 
+#if defined ZLINK_HAVE_WINDOWS
+    if (_windows_signaler_active && it_->socket)
+        static_cast<mailbox_t *> (it_->socket->get_mailbox ())->remove_signaler (
+          &_windows_signaler);
+#endif
+
     _items.erase (it_);
     _need_rebuild = true;
 
@@ -184,8 +208,44 @@ int zlink::socket_poller_t::remove_item (items_t::iterator it_)
 
 int zlink::socket_poller_t::rebuild ()
 {
+#if defined ZLINK_HAVE_WINDOWS
+    if (_windows_signaler_active) {
+        for (items_t::iterator it = _items.begin (), end = _items.end (); it != end; ++it) {
+            if (it->socket)
+                static_cast<mailbox_t *> (it->socket->get_mailbox ())->remove_signaler (
+                  &_windows_signaler);
+        }
+        _windows_signaler_active = false;
+        _windows_signaler.reset_event ();
+    }
+#endif
+
     _pollset_size = 0;
     _need_rebuild = false;
+
+#if defined ZLINK_HAVE_WINDOWS
+    bool windows_socket_only = true;
+    for (items_t::iterator it = _items.begin (), end = _items.end (); it != end; ++it) {
+        if (!it->events)
+            continue;
+        ++_pollset_size;
+        if (!it->socket)
+            windows_socket_only = false;
+    }
+
+    if (_pollset_size > 0 && windows_socket_only) {
+        for (items_t::iterator it = _items.begin (), end = _items.end (); it != end; ++it) {
+            if (it->events)
+                static_cast<mailbox_t *> (it->socket->get_mailbox ())->add_signaler (
+                  &_windows_signaler);
+        }
+        _windows_signaler_active = true;
+        return 0;
+    }
+
+    // The platform-specific fallback below rebuilds the complete pollset.
+    _pollset_size = 0;
+#endif
 
 #if defined ZLINK_POLL_BASED_ON_POLL
 
@@ -473,6 +533,58 @@ int zlink::socket_poller_t::wait (zlink::socket_poller_t::event_t *events_,
         return -1;
 #endif
     }
+
+#if defined ZLINK_HAVE_WINDOWS
+    if (_windows_signaler_active) {
+        zlink::clock_t clock;
+        uint64_t now = 0;
+        uint64_t end = 0;
+
+        while (true) {
+            const int socket_events = check_socket_events (events_, n_events_);
+            if (socket_events) {
+                if (socket_events > 0)
+                    zero_trail_events (events_, n_events_, socket_events);
+                return socket_events;
+            }
+
+            int timeout;
+            if (timeout_ == 0)
+                timeout = 0;
+            else if (timeout_ < 0)
+                timeout = -1;
+            else {
+                if (end == 0) {
+                    now = clock.now_ms ();
+                    end = now + timeout_;
+                }
+                const uint64_t remaining = end > now ? end - now : 0;
+                timeout = static_cast<int> (std::min<uint64_t> (remaining, INT_MAX));
+            }
+
+            const int rc = _windows_signaler.wait (timeout);
+            if (rc == -1 && errno != EAGAIN)
+                return -1;
+
+            const int found = check_socket_events (events_, n_events_);
+            if (found) {
+                if (found > 0)
+                    zero_trail_events (events_, n_events_, found);
+                return found;
+            }
+
+            if (timeout_ == 0)
+                break;
+            if (timeout_ > 0) {
+                now = clock.now_ms ();
+                if (now >= end)
+                    break;
+            }
+        }
+        errno = EAGAIN;
+        return -1;
+    }
+#endif
 
 #if defined ZLINK_POLL_BASED_ON_POLL
     zlink::clock_t clock;

@@ -85,6 +85,7 @@ class mailbox_t ZLINK_FINAL : public i_mailbox
 
     //  Signalers for ZLINK_INTERNAL_OPT_FD support
     std::vector<signaler_t *> _signalers;
+    mutable std::atomic<bool> _primary_signaler_required;
 
     ZLINK_NON_COPYABLE_NOR_MOVABLE (mailbox_t)
 };

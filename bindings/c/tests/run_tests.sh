@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 C_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 ROOT_DIR="$(cd "${C_DIR}/../.." && pwd)"
+source "${ROOT_DIR}/bindings/tools/local_core_runtime.sh"
 BUILD_DIR="${C_DIR}/build"
 BUILD_JOBS="${ZLINK_BUILD_JOBS:-2}"
 
@@ -16,8 +17,8 @@ if grep -R -n -E 'core/include|ZLINK_CORE_INCLUDE_DIR|PERF_CORE_INCLUDE_DIR' \
 fi
 
 cmake -S "${C_DIR}" -B "${BUILD_DIR}" \
-  -DZLINK_CORE_DIR="${ROOT_DIR}/core" \
-  -DZLINK_C_CORE_BUILD_DIR="${ROOT_DIR}/core/build" \
+  -DZLINK_CORE_DIR="${ZLINK_CORE_PACKAGE_PREFIX:-${ROOT_DIR}/core}" \
+  -DZLINK_C_CORE_BUILD_DIR="${ZLINK_CORE_PACKAGE_PREFIX:-${ROOT_DIR}/core/build}" \
   -DZLINK_C_BUILD_TESTS=ON \
   -DZLINK_C_BUILD_SAMPLES=OFF \
   -DZLINK_C_BUILD_BENCHMARKS=OFF \

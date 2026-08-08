@@ -4,6 +4,7 @@ set -o pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
+source "${ROOT_DIR}/bindings/tools/local_core_runtime.sh"
 NORMALIZE_TIMESTAMPS_SH="${ROOT_DIR}/core/tools/normalize_build_timestamps.sh"
 
 SECONDS=0
@@ -78,13 +79,21 @@ CMAKE_GENERATOR="${CMAKE_GENERATOR:-}"
 CMAKE_ARCH="${CMAKE_ARCH:-x64}"
 if [[ "${IS_WINDOWS}" -eq 1 ]]; then
   OFFICIAL_BUILD_DIR="${ROOT_DIR}/bindings/c/build/windows-x64"
-  DEFAULT_CORE_BUILD_DIR="${ROOT_DIR}/core/build/windows-x64"
+  if [[ "${ZLINK_CORE_RELEASE_MODE}" -eq 1 ]]; then
+    DEFAULT_CORE_BUILD_DIR="${ZLINK_CORE_PACKAGE_PREFIX}"
+  else
+    DEFAULT_CORE_BUILD_DIR="${ROOT_DIR}/core/build/windows-x64"
+  fi
   if [[ -z "${CMAKE_GENERATOR}" ]]; then
     CMAKE_GENERATOR="Visual Studio 17 2022"
   fi
 else
   OFFICIAL_BUILD_DIR="${ROOT_DIR}/bindings/c/build"
-  DEFAULT_CORE_BUILD_DIR="${ROOT_DIR}/core/build"
+  if [[ "${ZLINK_CORE_RELEASE_MODE}" -eq 1 ]]; then
+    DEFAULT_CORE_BUILD_DIR="${ZLINK_CORE_PACKAGE_PREFIX}"
+  else
+    DEFAULT_CORE_BUILD_DIR="${ROOT_DIR}/core/build"
+  fi
 fi
 
 MAKE_BIN=""
@@ -221,6 +230,10 @@ resolve_configured_core_build_dir() {
   local build_dir="${1:-${OFFICIAL_BUILD_DIR}}"
   local cache_path="${build_dir}/CMakeCache.txt"
   local configured_dir=""
+  if [[ "${ZLINK_CORE_RELEASE_MODE}" -eq 1 ]]; then
+    printf '%s\n' "${ZLINK_CORE_PACKAGE_PREFIX}"
+    return
+  fi
   if [[ -f "${cache_path}" ]]; then
     configured_dir="$(
       sed -n 's/^ZLINK_C_CORE_BUILD_DIR:PATH=//p' "${cache_path}" | tail -n 1
@@ -339,6 +352,15 @@ prepare_core_runtime() {
   local need_build=0
   local reason=""
   core_build_dir="$(resolve_configured_core_build_dir "${build_dir}")"
+  if [[ "${ZLINK_CORE_RELEASE_MODE}" -eq 1 ]]; then
+    if ! runtime_lib="$(resolve_core_runtime_library "${core_build_dir}")"; then
+      echo "Error: Core release runtime not found under ${core_build_dir}." >&2
+      return 1
+    fi
+    echo "Perf Core release prefix: ${core_build_dir}"
+    echo "Perf runtime libzlink: ${runtime_lib}"
+    return 0
+  fi
 
   if ! runtime_lib="$(resolve_core_runtime_library "${core_build_dir}")"; then
     need_build=1

@@ -11,7 +11,7 @@ set(ZLINK_CORE_DIR "${ZLINK_REPO_ROOT_DIR}/core" CACHE PATH "Path to zlink core"
 set(ZLINK_CPP_CORE_BUILD_DIR "${ZLINK_REPO_ROOT_DIR}/core/build" CACHE PATH
     "Path to an existing zlink core build directory")
 set(ZLINK_CPP_CORE_PACKAGE_PREFIX "" CACHE PATH
-    "Path to an installed Zlink 11 Core package")
+    "Path to an installed Zlink 0.10.1 Core release prefix")
 option(ZLINK_CPP_USE_CORE_BUILD_RUNTIME
   "Require the targeted core/build runtime instead of an installed Core package"
   OFF)
@@ -99,15 +99,67 @@ function(zlink_cpp_ensure_core_target out_target_var out_runtime_dir_var)
   endif()
 
   if(ZLINK_CPP_CORE_PACKAGE_PREFIX)
-    find_package(zlink 0.9 CONFIG REQUIRED
+    find_package(zlink 0.9 CONFIG QUIET
       PATHS "${ZLINK_CPP_CORE_PACKAGE_PREFIX}"
       NO_DEFAULT_PATH)
-    if(NOT TARGET libzlink)
-      message(FATAL_ERROR "The installed Core package does not export libzlink")
+    if(TARGET libzlink)
+      get_target_property(_package_runtime libzlink IMPORTED_LOCATION)
+      get_filename_component(_package_runtime_dir "${_package_runtime}" DIRECTORY)
+      set(${out_target_var} libzlink PARENT_SCOPE)
+      set(${out_runtime_dir_var} "${_package_runtime_dir}" PARENT_SCOPE)
+      return()
     endif()
-    get_target_property(_package_runtime libzlink IMPORTED_LOCATION)
+
+    # GitHub Core release archives contain the runtime and public headers, but
+    # not a CMake package config. Materialize an imported target for this
+    # normalized release prefix.
+    set(_package_include "${ZLINK_CPP_CORE_PACKAGE_PREFIX}/include")
+    if(NOT IS_DIRECTORY "${_package_include}")
+      message(FATAL_ERROR
+        "Core release prefix is missing its include directory: "
+        "${_package_include}")
+    endif()
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+      set(_package_runtime_names libzlink.so)
+    elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+      set(_package_runtime_names libzlink.dylib)
+    elseif(WIN32)
+      set(_package_runtime_names zlink.dll libzlink.dll)
+    else()
+      set(_package_runtime_names "")
+    endif()
+    find_file(_package_runtime
+      NAMES ${_package_runtime_names}
+      PATHS
+        "${ZLINK_CPP_CORE_PACKAGE_PREFIX}/lib"
+        "${ZLINK_CPP_CORE_PACKAGE_PREFIX}/bin"
+      NO_DEFAULT_PATH)
+    if(NOT _package_runtime)
+      message(FATAL_ERROR
+        "Core release prefix has no runtime for this platform: "
+        "${ZLINK_CPP_CORE_PACKAGE_PREFIX}")
+    endif()
+    if(NOT TARGET zlink-core-package-runtime)
+      add_library(zlink-core-package-runtime SHARED IMPORTED GLOBAL)
+      set_target_properties(zlink-core-package-runtime PROPERTIES
+        IMPORTED_LOCATION "${_package_runtime}"
+        INTERFACE_INCLUDE_DIRECTORIES "${_package_include}")
+      if(WIN32)
+        find_file(_package_implib
+          NAMES zlink.lib libzlink.lib
+          PATHS "${ZLINK_CPP_CORE_PACKAGE_PREFIX}/lib"
+          NO_DEFAULT_PATH)
+        if(NOT _package_implib)
+          message(FATAL_ERROR
+            "Core release prefix is missing the Windows import library: "
+            "${ZLINK_CPP_CORE_PACKAGE_PREFIX}/lib")
+        endif()
+        set_target_properties(zlink-core-package-runtime PROPERTIES
+          IMPORTED_IMPLIB "${_package_implib}")
+      endif()
+    endif()
     get_filename_component(_package_runtime_dir "${_package_runtime}" DIRECTORY)
-    set(${out_target_var} libzlink PARENT_SCOPE)
+    set(${out_target_var} zlink-core-package-runtime PARENT_SCOPE)
     set(${out_runtime_dir_var} "${_package_runtime_dir}" PARENT_SCOPE)
     return()
   endif()

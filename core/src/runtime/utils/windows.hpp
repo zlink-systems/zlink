@@ -51,6 +51,14 @@ struct tcp_keepalive
 #include <process.h>
 #endif
 
+// Windows 10 1709 and later expose AF_UNIX sockets through Winsock.  Keep
+// this capability separate from ZLINK_HAVE_IPC: IPC transport remains a
+// public feature decision, while the internal signaler can use AF_UNIX when
+// the running Windows SDK provides it.
+#if !defined ZLINK_HAVE_WINDOWS_UWP && defined AF_UNIX
+#define ZLINK_HAVE_WINDOWS_AF_UNIX
+#endif
+
 #if defined ZLINK_IOTHREAD_POLLER_USE_POLL || defined ZLINK_POLL_BASED_ON_POLL
 static inline int poll (struct pollfd *pfd, unsigned long nfds, int timeout)
 {
@@ -72,12 +80,14 @@ static inline int poll (struct pollfd *pfd, unsigned long nfds, int timeout)
 
 //  Workaround missing struct sockaddr_un in afunix.h.
 //  Fix #3949.
-#if defined(ZLINK_HAVE_IPC) && !defined(ZLINK_HAVE_STRUCT_SOCKADDR_UN)
+#if (defined(ZLINK_HAVE_IPC) || defined(ZLINK_HAVE_WINDOWS_AF_UNIX))                    \
+  && !defined(ZLINK_HAVE_STRUCT_SOCKADDR_UN)
 struct sockaddr_un
 {
     ADDRESS_FAMILY sun_family; /* AF_UNIX */
     char sun_path[108];        /* pathname */
 };
+#define ZLINK_HAVE_STRUCT_SOCKADDR_UN
 #endif
 
 #endif
