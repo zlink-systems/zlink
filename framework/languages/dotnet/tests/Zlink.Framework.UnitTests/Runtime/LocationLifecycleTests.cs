@@ -1,4 +1,5 @@
 using Zlink.Framework.Runtime.Locations;
+using Zlink.Framework.Runtime.Identifiers;
 
 namespace Zlink.Framework.UnitTests;
 
@@ -8,6 +9,12 @@ public sealed class LocationLifecycleTests
     private const string ActorType = "player";
     private const string ActorId = "actor-1";
     private static readonly string[] RegisteredMeshes = [MeshName, "mesh"];
+
+    private static ZLinkMeshName Mesh(string value) =>
+        ZLinkMeshName.FromBoundary(value, nameof(value));
+
+    private static ZLinkSpotId Spot(string value) =>
+        ZLinkSpotId.FromBoundary(value, nameof(value));
 
     [Fact]
     public async Task Actor_Ready_Authority_Is_Activated_Only_By_Its_Owner()
@@ -269,8 +276,8 @@ public sealed class LocationLifecycleTests
 
         var spot = await PublishReadySpotAsync(fixture, node, spotId, 7);
         var status = await node.SpotLocations.ClaimAsync(
-            "mesh",
-            spotId,
+            Mesh("mesh"),
+            Spot(spotId),
             7,
             "game",
             RoutingId.From("node-a"),
@@ -282,7 +289,7 @@ public sealed class LocationLifecycleTests
         Assert.NotNull(await node.Resolvers.ResolveSpotRowAsync(
             new ZLinkSpotLocationKey(spotId)));
 
-        await node.SpotLocations.ReleaseAsync("mesh", spotId);
+        await node.SpotLocations.ReleaseAsync(Mesh("mesh"), Spot(spotId));
         Assert.Null(await node.Resolvers.ResolveSpotRowAsync(
             new ZLinkSpotLocationKey(spotId)));
     }
@@ -386,8 +393,8 @@ public sealed class LocationLifecycleTests
         var originalSpot = await PublishReadySpotAsync(
             fixture, original, spotId, 7);
         var first = await original.SpotLocations.ClaimAsync(
-            "mesh",
-            spotId,
+            Mesh("mesh"),
+            Spot(spotId),
             7,
             "game",
             RoutingId.From("node-a"),
@@ -402,8 +409,8 @@ public sealed class LocationLifecycleTests
         var restartedSpot = await PublishReadySpotAsync(
             fixture, restarted, spotId, 7, replace: true);
         var takeover = await restarted.SpotLocations.ClaimAsync(
-            "mesh",
-            spotId,
+            Mesh("mesh"),
+            Spot(spotId),
             7,
             "game",
             RoutingId.From("node-a"),
@@ -420,7 +427,7 @@ public sealed class LocationLifecycleTests
         Assert.Equal(restartedSpot.ObjectGeneration, current.SpotGeneration);
 
         var staleRelease = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
-            await original.SpotLocations.ReleaseAsync("mesh", spotId));
+            await original.SpotLocations.ReleaseAsync(Mesh("mesh"), Spot(spotId)));
         Assert.Equal(ZLinkFrameworkErrorKind.InvalidOperation, staleRelease.Kind);
         var afterStaleRelease = await restarted.Resolvers.ResolveSpotRowAsync(key);
         Assert.Equal(restarted.Runtime.OwnerId, afterStaleRelease!.OwnerId);
@@ -437,8 +444,8 @@ public sealed class LocationLifecycleTests
 
         var spot = await PublishReadySpotAsync(fixture, nodeA, spotId, 7);
         var first = await nodeA.SpotLocations.ClaimAsync(
-            "mesh",
-            spotId,
+            Mesh("mesh"),
+            Spot(spotId),
             7,
             "game",
             RoutingId.From("node-a"),
@@ -449,8 +456,8 @@ public sealed class LocationLifecycleTests
         Assert.Equal(ZLinkLocationWriteStatus.Stored, first);
 
         var conflict = await nodeB.SpotLocations.ClaimAsync(
-            "mesh",
-            spotId,
+            Mesh("mesh"),
+            Spot(spotId),
             7,
             "game",
             RoutingId.From("node-b"),
@@ -473,8 +480,8 @@ public sealed class LocationLifecycleTests
         const string entrySpotId = "play-entry-full-width";
 
         var status = await node.SpotLocations.ClaimAsync(
-            MeshName,
-            entrySpotId,
+            Mesh(MeshName),
+            Spot(entrySpotId),
             ulong.MaxValue,
             "entry",
             RoutingId.From("node-a"),
@@ -485,7 +492,7 @@ public sealed class LocationLifecycleTests
 
         Assert.Equal(ZLinkLocationWriteStatus.Stored, status);
         Assert.True(node.SpotLocations.TryGetTrackedGeneration(
-            entrySpotId,
+            Spot(entrySpotId),
             out var trackedGeneration));
         Assert.Equal(ulong.MaxValue, trackedGeneration);
     }
@@ -680,8 +687,8 @@ public sealed class LocationLifecycleTests
 
         var spot = await PublishReadySpotAsync(fixture, node, spotId, 7);
         var status = await node.SpotLocations.ClaimAsync(
-            "mesh",
-            spotId,
+            Mesh("mesh"),
+            Spot(spotId),
             7,
             "game",
             RoutingId.From("node-a"),

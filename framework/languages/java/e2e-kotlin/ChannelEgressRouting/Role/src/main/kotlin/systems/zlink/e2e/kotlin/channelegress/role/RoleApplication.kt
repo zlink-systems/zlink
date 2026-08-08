@@ -12,6 +12,9 @@ import java.util.concurrent.CompletionException
 import java.util.concurrent.CompletionStage
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.logging.Handler
+import java.util.logging.LogRecord
+import java.util.logging.Logger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import org.springframework.beans.factory.ObjectProvider
@@ -145,21 +148,13 @@ class RoleApplication {
         role: RoleOptions,
         evidence: EvidenceState,
     ) {
+        installDispatchEvidence(evidence)
         options.useCoroutineHandlers(Dispatchers.Default)
         options.configureLocations().setOwnerLeaseRenewInterval(Duration.ofMillis(500))
         options.configureLocations().setOwnerLeaseTtl(Duration.ofSeconds(2))
-        options.configureDispatch()
-            .traceLabel("kotlin-ch-${role.rid}")
-            .traceLogFile("${role.logDirectory}/${role.rid}-flow.log")
-            .setMessageFlowObserver { flow ->
-                if (flow.outcome().name == "ERROR") {
-                    evidence.add(
-                        "dispatch-error",
-                        "${flow.errorReason()}/${flow.errorAction()}/${flow.packetName()}",
-                    )
-                }
-                java.util.concurrent.CompletableFuture.completedFuture(null)
-            }
+        options.configureDispatch().messageFlow(
+            systems.zlink.framework.configuration.ZLinkMessageFlowLogMode.NORMAL,
+        )
         options.addHandlersFromPackageOf(ChannelProbeRequestHandler::class.java)
         options.addHandlersFromPackageOf(SpotWorkflowHandler::class.java)
 
@@ -237,6 +232,34 @@ class RoleApplication {
                 .bind(role.streamPort)
                 .registerSession(Config12Session::class.java)
         }
+    }
+
+    private fun installDispatchEvidence(evidence: EvidenceState) {
+        Logger.getLogger("systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer")
+            .addHandler(object : Handler() {
+                override fun publish(record: LogRecord) {
+                    val fields = diagnosticsFields(record.message) ?: return
+                    if (fields["outcome"] == "ERROR") {
+                        evidence.add(
+                            "dispatch-error",
+                            "${fields["reason"]}/${fields["action"]}/${fields["packet"]}",
+                        )
+                    }
+                }
+
+                override fun flush() = Unit
+                override fun close() = Unit
+            })
+    }
+
+    private fun diagnosticsFields(message: String?): Map<String, String>? {
+        if (message?.startsWith("message flow ") != true) return null
+        return message.removePrefix("message flow ")
+            .split(' ')
+            .mapNotNull { field ->
+                field.split('=', limit = 2).takeIf { it.size == 2 }?.let { it[0] to it[1] }
+            }
+            .toMap()
     }
 
     private fun registerRouteChannels(

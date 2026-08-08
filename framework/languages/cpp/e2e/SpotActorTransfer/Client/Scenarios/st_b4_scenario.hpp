@@ -9,13 +9,18 @@ namespace
 /* ST-B4: this file owns the scenario orchestration and its public assertions. */
 inline void scenario_runner_t::run_st_b4_scenario ()
 {
-    const auto actor_id = "actor-empty-state-" + unique_suffix ();
-    const auto spot_id = "spot-empty-state-" + unique_suffix ();
-    create_spot (_nodes.b, spot_id);
-    create_actor (_nodes.a, actor_id, e2e::actor_type_empty_state, 41);
+    const auto spot = create_spot_until_placed_on (
+      _nodes.b, "spot-empty-state-" + unique_suffix (), "actor-b");
+    const auto actor = create_actor_until_placed_on (
+      _nodes.a, "actor-empty-state-" + unique_suffix (),
+      e2e::actor_type_empty_state, 41, "actor-a");
+    const auto &actor_id = actor.actor_id;
+    const auto &spot_id = spot.spot_id;
 
     const auto join = join_actor (_nodes.a, actor_id, {"ST-B4", spot_id});
-    require (join.accepted, "ST-B4 join was rejected.");
+    require (join.accepted, "ST-B4 deferred Join was not submitted.");
+    wait_evidence (
+      _nodes.b, {"ST-B4|" + actor_id + "|join_completion_accepted|"});
 
     const auto probe = probe_actor (_nodes.a, actor_id, {"ST-B4", "after-empty-state-transfer"});
     require (probe.node_rid == "actor-b", "ST-B4 probe expected actor-b, got " + probe.node_rid);

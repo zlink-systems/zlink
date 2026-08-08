@@ -1,8 +1,10 @@
+using Zlink.Framework.Runtime.Identifiers;
+
 namespace Zlink.Framework.Runtime.Spots;
 
 internal abstract partial class ZLinkSpotActivation
 {
-    private readonly HashSet<string> _actorsLeavingForEntrySpot = new(StringComparer.Ordinal);
+    private readonly HashSet<ZLinkActorId> _actorsLeavingForEntrySpot = [];
 
     protected internal ValueTask LeaveActorFromContextAsync(
         IZLinkActor actor,
@@ -42,7 +44,9 @@ internal abstract partial class ZLinkSpotActivation
         string actorId,
         out IZLinkActor? actor)
     {
-        return _actors.TryGetActor(actorId, out actor);
+        return _actors.TryGetActor(
+            ZLinkActorId.FromBoundary(actorId, nameof(actorId)),
+            out actor);
     }
 
     public async ValueTask<ZLinkSpotActorJoinResult> JoinActorAsync(
@@ -432,7 +436,9 @@ internal abstract partial class ZLinkSpotActivation
         await NotifyJoinedActorCoreAsync(actor, cancellationToken).ConfigureAwait(false);
         if (_runtime.LocationLifecycle is { } locations)
         {
-            _ = locations.SpotLocations.TryGetTrackedGeneration(SpotId, out var spotGeneration);
+            _ = locations.SpotLocations.TryGetTrackedGeneration(
+                RuntimeSpotId,
+                out var spotGeneration);
             await locations.ActorOwnership.NotifyActorJoinedSpotAsync(
                     actor.Context.ActorId,
                     SpotId,
@@ -535,7 +541,7 @@ internal abstract partial class ZLinkSpotActivation
                         if (_runtime.LocationLifecycle is not { } locations)
                             return;
                         _ = locations.SpotLocations.TryGetTrackedGeneration(
-                            SpotId,
+                            RuntimeSpotId,
                             out var spotGeneration);
                         await locations.ActorOwnership.NotifyActorJoinedSpotAsync(
                                 actor.Context.ActorId,
@@ -552,7 +558,7 @@ internal abstract partial class ZLinkSpotActivation
                     },
                     () =>
                     {
-                        _actorsLeavingForEntrySpot.Remove(actor.Context.ActorId);
+                        _actorsLeavingForEntrySpot.Remove(RuntimeActorId(actor));
                         _actors.Add(actor);
                     },
                     cancellationToken)
@@ -635,7 +641,7 @@ internal abstract partial class ZLinkSpotActivation
         IZLinkActor actor,
         CancellationToken cancellationToken)
     {
-        _actorsLeavingForEntrySpot.Remove(actor.Context.ActorId);
+        _actorsLeavingForEntrySpot.Remove(RuntimeActorId(actor));
         _actors.Add(actor);
         return await _runtime.JoinActorToSpotAsync(this, actor, cancellationToken)
             .ConfigureAwait(false);
@@ -666,7 +672,7 @@ internal abstract partial class ZLinkSpotActivation
         IZLinkActor actor,
         CancellationToken cancellationToken)
     {
-        _actorsLeavingForEntrySpot.Add(actor.Context.ActorId);
+        _actorsLeavingForEntrySpot.Add(RuntimeActorId(actor));
         try
         {
             await _runtime.JoinActorEntrySpotAsync(NodeRid, actor, ZLinkMessage.Empty, cancellationToken)
@@ -674,7 +680,7 @@ internal abstract partial class ZLinkSpotActivation
         }
         catch
         {
-            _actorsLeavingForEntrySpot.Remove(actor.Context.ActorId);
+            _actorsLeavingForEntrySpot.Remove(RuntimeActorId(actor));
             throw;
         }
     }
@@ -704,8 +710,10 @@ internal abstract partial class ZLinkSpotActivation
                                 ZLinkFrameworkErrorKind.NotFound,
                                 $"MeshNode '{SpotNodeName}' does not have an Entry Spot activation.");
             await locations.ActorOwnership.NotifyActorLeftSpotAsync(
-                    actor.Context.ActorId,
-                    entrySpot.SpotId,
+                    ZLinkActorId.FromBoundary(
+                        actor.Context.ActorId,
+                        nameof(actor.Context.ActorId)),
+                    ZLinkSpotId.FromBoundary(entrySpot.SpotId, nameof(entrySpot.SpotId)),
                     entrySpot.ObjectGeneration,
                     cancellationToken)
                 .ConfigureAwait(false);
@@ -745,7 +753,7 @@ internal abstract partial class ZLinkSpotActivation
         IZLinkActor actor,
         CancellationToken cancellationToken)
     {
-        if (_actorsLeavingForEntrySpot.Remove(actor.Context.ActorId)) return;
+        if (_actorsLeavingForEntrySpot.Remove(RuntimeActorId(actor))) return;
 
         if (_actorHandlers is not null
             && _actorHandlers.TryResolveDisconnected(actor.GetType(), out var descriptor)
@@ -763,6 +771,9 @@ internal abstract partial class ZLinkSpotActivation
         return await HandlerInvoker.InvokeActorJoinAsync(descriptor, actor.Context.ActorId, request, cancellationToken)
             .ConfigureAwait(false);
     }
+
+    private static ZLinkActorId RuntimeActorId(IZLinkActor actor) =>
+        ZLinkActorId.FromBoundary(actor.Context.ActorId, nameof(actor));
 
     private sealed class ActorJoinCallState(
         IZLinkActor actor,

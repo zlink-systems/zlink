@@ -8,7 +8,10 @@ import {
   type ZLinkMessageSerializer
 } from '../../contracts';
 import type { Message } from '../../contracts/Common/Message';
-import { createZLinkMessageFromEncoded } from '../../contracts/Common/ZLinkMessage';
+import {
+  createZLinkMessageFromEncoded,
+  materializeZLinkMessageValue
+} from '../../contracts/Common/ZLinkMessage';
 import { adoptEncodedPayload, borrowEncodedPayload } from '../../contracts/Common/encoded-payload-storage';
 import { ZLinkConfigurationException } from '../configuration';
 import {
@@ -166,7 +169,7 @@ function decodeFrameworkPayload<T>(
 
   const parsedPayload = parseJsonPayload(message, schemaForDecode(type, packetName, contractPart));
   if (parsedPayload.valid) {
-    return parsedPayload.value as T;
+    return materializeZLinkMessageValue(parsedPayload.value as T, type);
   }
   throw createInternalFrameworkException(
     ZLinkFrameworkInternalErrorKind.PayloadDecodeFailed,
@@ -205,11 +208,11 @@ function decodeFrameworkEncodedPayload<T>(
   if (payload.isEmpty()) return undefined as T;
   const text = payload.getString('utf8');
   try {
-    return parseFrameworkJsonV1(
+    return materializeZLinkMessageValue(parseFrameworkJsonV1(
       text,
       {},
       schemaForDecode(type, packetName, contractPart)
-    ) as T;
+    ) as T, type);
   } catch (error) {
     throw createInternalFrameworkException(
       ZLinkFrameworkInternalErrorKind.PayloadDecodeFailed,

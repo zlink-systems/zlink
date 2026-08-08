@@ -3,7 +3,11 @@ package systems.zlink.e2e.channelegress.role;
 import java.net.URI;
 import java.nio.file.Path;
 import java.time.Duration;
-import java.util.concurrent.CompletableFuture;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.logging.Handler;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.builder.SpringApplicationBuilder;
@@ -16,7 +20,6 @@ import systems.zlink.e2e.channelegress.shared.ChannelProbePublishHandler;
 import systems.zlink.e2e.channelegress.shared.Contracts;
 import systems.zlink.e2e.channelegress.shared.EvidenceState;
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
-import systems.zlink.framework.configuration.ZLinkMessageFlowOutcome;
 import systems.zlink.framework.configuration.ZLinkMeshNodeBuilder;
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationOptions;
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore;
@@ -88,20 +91,11 @@ public final class Program {
     @Bean
     ZLinkFrameworkConfigurer roleFramework(RoleOptions role, EvidenceState evidence) {
         return options -> {
+            installDispatchEvidence(evidence);
             options.configureLocations().setOwnerLeaseRenewInterval(Duration.ofMillis(500));
             options.configureLocations().setOwnerLeaseTtl(Duration.ofSeconds(2));
             options.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLabel("java-ch-" + role.rid())
-                .traceLogFile(role.logDirectory() + "/" + role.rid() + "-flow.log")
-                .setMessageFlowObserver(flow -> {
-                    if (flow.outcome() == ZLinkMessageFlowOutcome.ERROR) {
-                        evidence.add(
-                            "dispatch-error",
-                            flow.errorReason() + "/" + flow.errorAction() + "/" + flow.packetName());
-                    }
-                    return CompletableFuture.completedFuture(null);
-                });
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             options.addHandlersFromPackageOf(ChannelProbeRequestHandler.class);
             options.addHandlersFromPackageOf(ChannelProbePublishHandler.class);
             options.addHandlersFromPackageOf(SpotWorkflowHandler.class);
@@ -198,6 +192,38 @@ public final class Program {
                     .registerSession(ChannelProbeSession.class);
             }
         };
+    }
+
+    private static void installDispatchEvidence(EvidenceState evidence) {
+        Logger.getLogger("systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer")
+            .addHandler(new Handler() {
+                @Override
+                public void publish(LogRecord record) {
+                    Map<String, String> fields = diagnosticsFields(record.getMessage());
+                    if (fields != null && "ERROR".equals(fields.get("outcome"))) {
+                        evidence.add(
+                            "dispatch-error",
+                            fields.get("reason") + "/" + fields.get("action") + "/" + fields.get("packet"));
+                    }
+                }
+
+                @Override public void flush() { }
+                @Override public void close() { }
+            });
+    }
+
+    private static Map<String, String> diagnosticsFields(String message) {
+        if (message == null || !message.startsWith("message flow ")) {
+            return null;
+        }
+        Map<String, String> fields = new HashMap<>();
+        for (String field : message.substring("message flow ".length()).split(" ")) {
+            String[] pair = field.split("=", 2);
+            if (pair.length == 2) {
+                fields.put(pair[0], pair[1]);
+            }
+        }
+        return fields;
     }
 
     @Bean

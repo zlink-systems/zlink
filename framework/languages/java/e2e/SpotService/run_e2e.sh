@@ -958,8 +958,8 @@ echo "scenario SM-A6 passed" >>"${log_dir}/client.stdout.log"
 
 cat "${log_dir}/client.stdout.log"
 fetch_default_evidence
-grep -Rq "message flow" "${log_dir}"/*-flow.log
-grep -q "packet=RouteReq" "${log_dir}/gateway-flow.log"
+grep -Rq "message flow" "${log_dir}"/*.stdout.log
+grep -q "packet=RouteReq" "${log_dir}/gateway.stdout.log"
 grep -q '"marker":"RouteReq"' "${log_dir}/play-a-evidence.json"
 grep -q '"value":"route-mesh-normal"' "${log_dir}/play-a-evidence.json"
 grep -q '"marker":"ActorCreated"' "${log_dir}/play-a-evidence.json"

@@ -12,7 +12,7 @@ import systems.zlink.e2e.kotlin.registrymessaging.shared.WorkflowRes
 import systems.zlink.e2e.kotlin.registrymessaging.shared.WorkflowReq
 import systems.zlink.e2e.kotlin.registrymessaging.workflow.Configuration.ServerOptions
 import systems.zlink.e2e.kotlin.registrymessaging.workflow.Endpoints.WorkflowEndpoints
-import systems.zlink.e2e.kotlin.registrymessaging.workflow.Handlers.EvidenceDispatchErrorObserver
+import systems.zlink.e2e.kotlin.registrymessaging.workflow.Handlers.EvidenceDispatchErrorHandler
 import systems.zlink.e2e.kotlin.registrymessaging.workflow.Handlers.WorkflowRequestHandler
 import systems.zlink.e2e.kotlin.registrymessaging.workflow.Infrastructure.EvidenceStore
 import systems.zlink.framework.channels.ZLinkChannelRuntimeOptions
@@ -46,11 +46,11 @@ class WorkflowApplication {
     @Bean
     fun framework(options: ServerOptions, evidence: EvidenceStore): ZLinkFrameworkConfigurer =
         ZLinkFrameworkConfigurer { framework ->
+            EvidenceDispatchErrorHandler(evidence).install()
             framework.configureDispatch()
-                .setMessageFlowObserver(EvidenceDispatchErrorObserver(evidence))
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile("${options.logDir}/${options.rid}-flow.log")
-                .traceLabel(options.rid)
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL)
+
+
             framework.addHandlersFromPackageOf(WorkflowRequestHandler::class.java)
 
             val endpoint = java.net.URI.create(options.workflowEndpoint)

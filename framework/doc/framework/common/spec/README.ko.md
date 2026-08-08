@@ -63,6 +63,10 @@ contract test에 필요한 입력, 상태, 정상 흐름, 실패와 완료 조�
 - [31 장애 대응과 failover 범위](31-failure-failover-policy.ko.md) — target 재선택, reconnect, 생성 recovery와 stateful relocation의 자동 복구 경계를 정의한다.
 - [32 Framework 오류 모델](32-framework-error-model.ko.md) — 공통 `ErrorKind`, Send·Request 완료 조건과 Application의 재시도 판단 경계를 정의한다.
 
+## 구현 차이
+
+- [90 언어별 구현 차이](90-implementation-gap.ko.md) — 목표 계약을 축소하지 않고 현재 언어별 미구현 상태와 종결 조건을 기록한다.
+
 ## Server 언어별 exact interface
 
 공통 server 계약이 각 언어에서 사용하는 정확한 public type, signature와 비동기

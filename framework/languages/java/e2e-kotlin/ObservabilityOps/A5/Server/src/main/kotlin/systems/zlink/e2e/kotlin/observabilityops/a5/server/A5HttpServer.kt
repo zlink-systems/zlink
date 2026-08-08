@@ -6,7 +6,6 @@ import com.sun.net.httpserver.HttpServer
 import org.springframework.context.SmartLifecycle
 import org.springframework.beans.factory.ObjectProvider
 import systems.zlink.framework.channels.ZLinkRouteClient
-import systems.zlink.framework.configuration.ZLinkMessageFlowEvent
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode
 import systems.zlink.framework.errors.ZLinkFrameworkException
 import java.net.InetSocketAddress
@@ -102,5 +101,5 @@ class A5HttpServer(
     override fun isRunning() = running
 
     data class Status(val mode: String, val count: Int)
-    data class FlowSnapshot(val count: Int, val events: List<ZLinkMessageFlowEvent>)
+    data class FlowSnapshot(val count: Int, val events: List<FlowEvidence.FlowEvent>)
 }

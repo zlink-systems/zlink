@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Actors;
+using Zlink.Framework.Runtime.Identifiers;
 using Zlink.Framework.Runtime.Locations;
 using Zlink.Framework.Runtime.Service;
 
@@ -1006,7 +1007,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             normalized.BindingGeneration,
             normalized.ObjectGeneration,
             normalized.AuthorityOwnerGeneration,
-            normalized.MeshName.Value,
+            normalized.MeshName,
             normalized.TargetNodeGeneration,
             normalized.OwnerLeaseGeneration,
             normalized.SessionOwnerNodeGeneration,

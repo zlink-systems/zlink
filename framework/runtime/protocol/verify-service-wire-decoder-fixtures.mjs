@@ -7,6 +7,10 @@ import { fileURLToPath } from "node:url";
 const root = path.dirname(fileURLToPath(import.meta.url));
 const schema = JSON.parse(fs.readFileSync(path.join(root, "service-wire-v1.schema.json"), "utf8"));
 const fixtures = JSON.parse(fs.readFileSync(path.join(root, "golden/service-decoder-fixtures-v1.json"), "utf8"));
+const replacedFixture = JSON.parse(fs.readFileSync(
+  path.join(root, "golden/bound-session-replaced-v1.json"),
+  "utf8",
+));
 const commands = new Map(schema.commands.map((entry) => [entry.id, entry]));
 const frameworkErrorType = schema.types.find((entry) => entry.name === "framework-error-code");
 const frameworkErrors = new Map(frameworkErrorType.values.map((entry) => [entry.value, entry]));
@@ -53,6 +57,58 @@ function decodeFrameworkErrorCode(wireValue) {
   return { name: entry.name, publicValue: wireValue - 1 };
 }
 
+function decodeBoundSessionReplaced(bytes) {
+  let offset = 0;
+  const need = (count) => {
+    if (offset + count > bytes.length) fail("truncated-field");
+  };
+  const byte = () => {
+    need(1);
+    return bytes[offset++];
+  };
+  const sized8 = () => {
+    const length = byte();
+    if (length === 0) fail("invalid-field");
+    need(length);
+    const value = Buffer.from(bytes.slice(offset, offset + length)).toString("utf8");
+    offset += length;
+    if (value.includes("\0")) fail("invalid-field");
+    return value;
+  };
+  const nonzeroU64 = () => {
+    need(8);
+    let value = 0n;
+    for (let index = 0; index < 8; index += 1) value = (value << 8n) | BigInt(bytes[offset++]);
+    if (value === 0n || value > 0x7fff_ffff_ffff_ffffn) fail("invalid-field");
+    return value;
+  };
+  need(5);
+  if (byte() !== schema.protocol.magic[0] || byte() !== schema.protocol.magic[1]) fail("invalid-magic");
+  if (byte() !== schema.protocol.wireMajor) fail("invalid-major");
+  if (byte() !== replacedFixture.commandId) fail("unknown-command");
+  if (byte() !== 0) fail("forbidden-flag");
+  const result = {
+    actorAuthority: {
+      actorId: sized8(),
+      objectGeneration: nonzeroU64().toString(),
+      targetNodeRid: sized8(),
+      targetNodeGeneration: nonzeroU64().toString(),
+      expectedAuthorityOwnerGeneration: nonzeroU64().toString(),
+      expectedOwnerLeaseGeneration: nonzeroU64().toString(),
+    },
+    retiredSession: {
+      sessionOwnerNodeRid: sized8(),
+      sessionOwnerNodeGeneration: nonzeroU64().toString(),
+      sessionOwnerId: sized8(),
+      sessionOwnerLeaseGeneration: nonzeroU64().toString(),
+      sessionRid: sized8(),
+      retiredBindingGeneration: nonzeroU64().toString(),
+    },
+  };
+  if (offset !== bytes.length) fail("trailing-byte");
+  return result;
+}
+
 for (const fixture of fixtures.canonical) {
   const decoded = decode(fixture.bytes);
   if (decoded.command !== fixture.name || decoded.probeId.toString() !== fixtures.probeId) {
@@ -97,9 +153,29 @@ if (relocationDataLost?.wireValue !== 35 || relocationDataLost.publicValue !== 3
   throw new Error("RelocationDataLost must decode from wire 35 to public 34");
 }
 
+const replaced = decodeBoundSessionReplaced(replacedFixture.canonical.bytes);
+if (JSON.stringify(replaced) !== JSON.stringify({
+  actorAuthority: replacedFixture.canonical.actorAuthority,
+  retiredSession: replacedFixture.canonical.retiredSession,
+})) {
+  throw new Error("boundSessionReplaced canonical fixture mismatch");
+}
+for (const fixture of replacedFixture.malformed) {
+  try {
+    decodeBoundSessionReplaced(fixture.bytes);
+    throw new Error(`malformed boundSessionReplaced fixture was accepted: ${fixture.name}`);
+  } catch (error) {
+    if (error.code !== fixture.error) throw error;
+  }
+}
+if (replacedFixture.receiverFenceCases[0]?.result !== "apply"
+    || replacedFixture.receiverFenceCases[1]?.result !== "ignore-stale") {
+  throw new Error("boundSessionReplaced receiver lifecycle fixture is incomplete");
+}
+
 console.log(
   `service wire decoder fixtures valid: canonical=${fixtures.canonical.length} `
     + `malformed=${fixtures.malformed.length} frameworkErrors=${fixtures.frameworkErrors.canonical.length} `
     + `frameworkErrorMalformed=${fixtures.frameworkErrors.malformed.length} probeEcho=pass `
-    + `RelocationDataLost=wire35/public34`,
+    + `RelocationDataLost=wire35/public34 boundSessionReplaced=pass`,
 );

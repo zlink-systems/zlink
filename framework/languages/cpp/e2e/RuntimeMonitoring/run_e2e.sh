@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FRAMEWORK_DIR="$(cd "$ROOT_DIR/../.." && pwd)"
 source "$ROOT_DIR/../redis-common.sh"
-BUILD_DIR="${ZLINK_CPP_E2E_BUILD_DIR:-${ZLINK_CPP_BUILD_DIR:-$FRAMEWORK_DIR/build-redis-vcpkg}}"
+BUILD_DIR="${ZLINK_CPP_BUILD_DIR:-$FRAMEWORK_DIR/build-redis-vcpkg}"
 SCENARIO="${1:-all}"
 SCENARIO_LOWER="$(printf '%s' "$SCENARIO" | tr '[:upper:]' '[:lower:]')"
 case "$SCENARIO_LOWER" in
@@ -51,15 +51,13 @@ for s in sockets:
 PY
 )"
 
-if [[ "${ZLINK_CPP_E2E_SKIP_BUILD:-0}" != "1" ]]; then
-  cmake -S "$FRAMEWORK_DIR" -B "$BUILD_DIR" >/dev/null
-  cmake --build "$BUILD_DIR" --target \
-    zlink_cpp_e2e_runtime_monitoring_service \
-    zlink_cpp_e2e_runtime_monitoring_filtered_service \
-    zlink_cpp_e2e_runtime_monitoring_throwing_service \
-    zlink_cpp_e2e_runtime_monitoring_trigger \
-    zlink_cpp_e2e_runtime_monitoring_client
-fi
+cmake -S "$FRAMEWORK_DIR" -B "$BUILD_DIR" >/dev/null
+cmake --build "$BUILD_DIR" --target \
+  zlink_cpp_e2e_runtime_monitoring_service \
+  zlink_cpp_e2e_runtime_monitoring_filtered_service \
+  zlink_cpp_e2e_runtime_monitoring_throwing_service \
+  zlink_cpp_e2e_runtime_monitoring_trigger \
+  zlink_cpp_e2e_runtime_monitoring_client
 
 SERVICE="$BUILD_DIR/zlink_cpp_e2e_runtime_monitoring_service"
 FILTERED_SERVICE="$BUILD_DIR/zlink_cpp_e2e_runtime_monitoring_filtered_service"

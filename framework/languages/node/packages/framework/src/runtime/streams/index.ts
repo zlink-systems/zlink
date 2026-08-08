@@ -264,6 +264,7 @@ export class ZLinkStreamRuntimeManager {
         metrics: this.options.metrics,
         providerResolver: this.options.providerResolver,
         messageSerializers: this.options.registration.messageSerializers,
+        replacementCallbackTimeoutMs: this.options.registration.requestTimeoutMs ?? 30_000,
         sessionFactory: (context) => createStreamSessionInstance(
           sessionType as Type<ZLinkSession> | Type<ZLinkSessionFactory>,
           this.options.providerResolver,
@@ -361,7 +362,6 @@ export class ZLinkStreamBindingRuntime {
     const actorSessionLifecycle = new ZLinkActorSessionLifecycleCoordinator();
     this.sessionActors = new ZLinkSessionActorCoordinator(
       this.routes,
-      this.boundSessions,
       this,
       runtimeOptions,
       actorSessionLifecycle

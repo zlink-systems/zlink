@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using Systems.Zlink.Framework.Runtime.Protocol;
+using Zlink.Framework.Runtime.Identifiers;
 
 namespace Zlink.Framework.Runtime.Host;
 
@@ -122,13 +123,11 @@ internal sealed partial class ZLinkFrameworkRuntime
 
         var actorStates = new List<ZLinkActorRuntimeState>();
         var actorTargetAuthorityOwnerGenerations =
-            new Dictionary<string, ulong>(StringComparer.Ordinal);
+            new Dictionary<ZLinkActorId, ulong>();
         var boundActorIds =
-            new ConcurrentDictionary<string, byte>(
-                StringComparer.Ordinal);
+            new ConcurrentDictionary<ZLinkActorId, byte>();
         var stagedActorStates =
-            new ConcurrentDictionary<string, ZLinkActorRuntimeState>(
-                StringComparer.Ordinal);
+            new ConcurrentDictionary<ZLinkActorId, ZLinkActorRuntimeState>();
         ZLinkSpotRelocationSeal? targetAdmissionSeal = null;
         try
         {
@@ -212,10 +211,13 @@ internal sealed partial class ZLinkFrameworkRuntime
                                 publishActorRef: false,
                                 cancellationToken)
                             .ConfigureAwait(false);
-                        boundActorIds.TryAdd(authority.ActorId, 0);
+                        var actorKey = ZLinkActorId.FromBoundary(
+                            authority.ActorId,
+                            nameof(authority.ActorId));
+                        boundActorIds.TryAdd(actorKey, 0);
                         var actorState = GetOrCreateActorState(authority.ActorId);
                         stagedActorStates.TryAdd(
-                            authority.ActorId,
+                            actorKey,
                             actorState);
                         actorState.StageRelocationSessionRoute(
                             envelope.AggregateId.ToString("N"),
@@ -251,7 +253,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                          StringComparer.Ordinal))
             {
                 actorTargetAuthorityOwnerGenerations.Add(
-                    restored.State.ActorId,
+                    restored.State.RuntimeActorId,
                     restored.TargetAuthorityOwnerGeneration);
                 actorStates.Add(restored.State);
             }
@@ -312,7 +314,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                             envelope.AggregateId.ToString("N"));
                     }
                     await _actorSessionManager.RollbackTransferredActorAsync(
-                            actorId,
+                            actorId.Value,
                             CancellationToken.None)
                         .ConfigureAwait(false);
                 }
@@ -418,7 +420,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                         handoffId,
                         actorRef,
                         stage.TargetActorAuthorityOwnerGeneration(
-                            actorState.ActorId),
+                            actorState.RuntimeActorId),
                         stage.TargetMeshName,
                         stage.TargetNodeLifecycleGeneration,
                         stage.TargetOwnerLeaseGeneration);

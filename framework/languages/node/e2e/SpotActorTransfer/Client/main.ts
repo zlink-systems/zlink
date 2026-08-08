@@ -46,6 +46,7 @@ import { runSTG5 } from './Scenarios/st-g5-scenario';
 import { runSTG6 } from './Scenarios/st-g6-scenario';
 import { runSTH4A } from './Scenarios/st-h4a-scenario';
 import { runSTH4B } from './Scenarios/st-h4b-scenario';
+import { runNodeSess001Process } from './Process/node-sess-001-process-scenario';
 
 const scenarios: Readonly<Record<string, () => Promise<void>>> = {
   'ST-A1': runStA1, 'ST-A2': runStA2, 'ST-A3': runStA3,
@@ -80,6 +81,7 @@ const scenarios: Readonly<Record<string, () => Promise<void>>> = {
   'ST-G6': runSTG6,
   'ST-H4A': runSTH4A,
   'ST-H4B': runSTH4B,
+  'NODE-SESS-001': runNodeSess001Process,
 };
 
 async function main(): Promise<void> {

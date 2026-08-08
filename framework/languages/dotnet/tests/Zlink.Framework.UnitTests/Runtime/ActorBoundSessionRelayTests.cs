@@ -22,7 +22,7 @@ public sealed class ActorBoundSessionRelayTests
             originalToken,
             objectGeneration: 1,
             authorityOwnerGeneration: 1,
-            meshName: "actors",
+            meshName: ZLinkMeshName.FromBoundary("actors", "meshName"),
             ownerLeaseGeneration: 1);
         Assert.True(state.TryUseBoundSession(originalToken, _ =>
         {
@@ -36,7 +36,7 @@ public sealed class ActorBoundSessionRelayTests
             replacementToken,
             objectGeneration: 1,
             authorityOwnerGeneration: 2,
-            meshName: "actors",
+            meshName: ZLinkMeshName.FromBoundary("actors", "meshName"),
             ownerLeaseGeneration: 1);
         Assert.True(state.TryUseBoundSession(originalToken, _ =>
         {
@@ -378,13 +378,78 @@ public sealed class ActorBoundSessionRelayTests
                 bindingGeneration: 1,
                 objectGeneration: 7,
                 authorityOwnerGeneration: 1,
-                meshName: "actors",
+                meshName: ZLinkMeshName.FromBoundary("actors", "meshName"),
                 targetNodeGeneration: 1,
                 ownerLeaseGeneration: 99,
                 sessionOwnerNodeGeneration: 1,
                 acceptedHighWater: 0));
         Assert.Equal(ZLinkFrameworkErrorKind.InvalidOperation, conflict.Kind);
         Assert.True(pending.OwnsExecution);
+    }
+
+    [Fact]
+    public void Same_Physical_Session_Requires_The_Exact_Owner_Identity()
+    {
+        var nodeRid = RoutingId.From("session-node");
+        var sessionRid = RoutingId.From("session-rid");
+        var binding = new ZLinkActorBoundSession(
+            nodeRid,
+            sessionRid,
+            "binding",
+            SessionOwnerNodeGeneration: 11,
+            SessionOwnerId: "owner-a",
+            SessionOwnerLeaseGeneration: 13);
+
+        Assert.True(binding.IsSamePhysicalSessionOwner(
+            nodeRid,
+            11,
+            sessionRid,
+            "owner-a",
+            13));
+        Assert.False(binding.IsSamePhysicalSessionOwner(
+            RoutingId.From("other-node"),
+            11,
+            sessionRid,
+            "owner-a",
+            13));
+        Assert.False(binding.IsSamePhysicalSessionOwner(
+            nodeRid,
+            12,
+            sessionRid,
+            "owner-a",
+            13));
+        Assert.False(binding.IsSamePhysicalSessionOwner(
+            nodeRid,
+            11,
+            RoutingId.From("other-session"),
+            "owner-a",
+            13));
+        Assert.False(binding.IsSamePhysicalSessionOwner(
+            nodeRid,
+            11,
+            sessionRid,
+            "owner-b",
+            13));
+        Assert.False(binding.IsSamePhysicalSessionOwner(
+            nodeRid,
+            11,
+            sessionRid,
+            "owner-a",
+            14));
+
+        var legacyIdentity = binding with
+        {
+            SessionOwnerId = "",
+            SessionOwnerLeaseGeneration = 0
+        };
+        Assert.True(legacyIdentity.IsSamePhysicalSessionOwner(
+            nodeRid,
+            11,
+            sessionRid,
+            nodeRid.ToHex(),
+            11));
+        Assert.False((binding with { SessionNodeRid = null })
+            .IsSamePhysicalSessionOwner(nodeRid, 11, sessionRid, "owner-a", 13));
     }
 
     [Fact]
@@ -426,7 +491,7 @@ public sealed class ActorBoundSessionRelayTests
             bindingGeneration: 1,
             objectGeneration: 7,
             authorityOwnerGeneration: authorityGeneration,
-            meshName: "actors",
+            meshName: ZLinkMeshName.FromBoundary("actors", "meshName"),
             targetNodeGeneration: 1,
             ownerLeaseGeneration: 1,
             sessionOwnerNodeGeneration: 1,
@@ -447,7 +512,7 @@ public sealed class ActorBoundSessionRelayTests
             bindingGeneration: 1,
             objectGeneration: 7,
             authorityOwnerGeneration: authorityGeneration,
-            meshName: "actors",
+            meshName: ZLinkMeshName.FromBoundary("actors", "meshName"),
             targetNodeGeneration: 1,
             ownerLeaseGeneration: 1,
             sessionOwnerNodeGeneration: 1,

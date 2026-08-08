@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Zlink.Framework.Contracts.Configuration;
 using Zlink.Framework.Runtime.Dispatch;
+using Zlink.Framework.Runtime.Identifiers;
 using Zlink.Framework.Runtime.Timers;
 
 namespace Zlink.Framework.Runtime.Spots;
@@ -1163,8 +1164,10 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
 
         var nodeGeneration = Node.MeshStatus().LifecycleGeneration;
         var status = await _locationLifecycle.SpotLocations.ClaimAsync(
-                Registration.SpotMeshChannelName ?? Registration.SpotNodeName,
-                EntrySpotId,
+                ZLinkMeshName.FromBoundary(
+                    Registration.SpotMeshChannelName ?? Registration.SpotNodeName,
+                    nameof(Registration.SpotMeshChannelName)),
+                ZLinkSpotId.FromBoundary(EntrySpotId, nameof(EntrySpotId)),
                 _entrySpot!.LifecycleGeneration,
                 Registration.EntrySpotType?.FullName,
                 Node.RoutingId,

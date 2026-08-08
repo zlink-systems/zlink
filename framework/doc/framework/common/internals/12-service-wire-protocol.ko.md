@@ -21,7 +21,7 @@ title: "12. Service wire protocol"
 |---|---|
 | [1. Schema와 생성 경계](#1-schema와-생성-경계) | schema 단일 생성 입력, validator, Location Store authority key 형식 |
 | [2. Record framing과 decode](#2-record-framing과-decode) | multipart frame 구성, decode 검증, payload 크기 상한 |
-| [3. Command space](#3-command-space) | 41개 command 목록과 역할, Message Follow notification |
+| [3. Command space](#3-command-space) | 42개 command 목록과 역할, Message Follow와 session 교체 notification |
 | [4. Admission과 connection fence](#4-admission과-connection-fence) | hello/admit/reject 절차, DescriptorRevision ordering, ClientServer 방향 |
 | [5. Service liveness](#5-service-liveness) | livenessProbe/Ack 주기, Classic fanout beacon, subscriber ready 판정 |
 | [6. Typed application message JSON](#6-typed-application-message-json) | `framework-json-v1` profile 규칙 |
@@ -135,7 +135,7 @@ Application HWM 회계에는 이 profile의 count·length와 outer envelope가 �
 
 ## 3. Command space
 
-Wire v1은 다음 41개 command를 사용한다. `7..15`와 `51..255`는 reserved이며 다른 의미로 재사용하지 않는다.
+Wire v1은 다음 42개 command를 사용한다. `7..15`와 `52..255`는 reserved이며 다른 의미로 재사용하지 않는다.
 
 | ID | Command | 역할 |
 |---:|---|---|
@@ -180,6 +180,7 @@ Wire v1은 다음 41개 command를 사용한다. `7..15`와 `51..255`는 reserve
 | 48 | `userSpotClose` | 지정한 세대의 remote User Spot만 닫는다 |
 | 49 | `actorCreate` | 미리 확보한 자리에 remote Actor를 만든다 |
 | 50 | `messageFollow` | relay 성공 뒤 source runtime에 보내는 위치 cache 무효화 통지 |
+| 51 | `boundSessionReplaced` | 새 binding 확정 뒤 이전 exact session에 보내는 교체 통지 |
 
 Command별 body, metadata·payload 허용 여부와 direction은 schema의 closed definition을 따른다. 알 수 없는 command,
 반대 direction의 infrastructure command와 topology에서 허용하지 않은 command는 application queue에 넣지 않는다.
@@ -210,6 +211,16 @@ stale route는 반드시 만료된다. 중복 통지를 받거나 억제해도 �
 같은 generation에서 처음 한 번만 보내는 방식, 전송 중인 통지를 합치는 방식과 suppression marker의 저장
 위치는 구현 선택이다. 이 선택은 wire body, 위 invalidation fence, cache 만료와 terminal 결과 불변 조건을
 바꿀 수 없다.
+
+### 3.2 Bound session 교체 notification
+
+`boundSessionReplaced`는 새 Actor binding을 current로 확정한 뒤 이전 session owner에 보내는 one-way
+infrastructure record다. Actor authority source fence와 이전 session owner의 exact lifecycle·binding identity를
+전달하며 flags, application payload와 ACK를 사용하지 않는다. 보내는 node가 Actor authority target과 일치하는지
+확인하고, 받는 node에서는 이전 session owner identity를 local target fence로 검사한다. 전송과 이전 owner의
+callback·연결 종료는 새 bind terminal을 지연시키거나 되돌리지 않는다. 이전 owner는 exact retired identity와
+일치하는 record만 적용한다. Callback이 성공 또는 실패로 terminal이 되면 Framework가 `100 ms` 뒤 connection을
+닫으며 outbound queue가 먼저 비어도 이 시간을 줄이지 않는다.
 
 ## 4. Admission과 connection fence
 
@@ -417,7 +428,8 @@ metadata presence·bytes가 다르면 reservation 전에 protocol error로 거�
 
 ### Drain 전 조건
 
-- Source lifetime이 `connectionBound`인 accepted send·request와 모든 bound-session request는 `Captured` 전에 terminal state까지 drain한다. 이 work는 frozen journal에 기록하지 않는다.
+- Source lifetime이 `connectionBound`인 accepted send·request는 `Captured` 전에 terminal state까지 drain한다. 이 work는 frozen journal에 기록하지 않는다.
+- Bound-session request는 다른 Actor request와 같은 규칙을 따른다. Seal 전에 수락한 요청은 source fence, operation identity와 reply route를 보존해 frozen journal에 포함하고, seal 뒤에 들어온 요청은 ingress hold에서 target으로 relay한다.
 - 호출이 끝나야 하는 시각을 [Deadline](../spec/01-glossary.ko.md#deadline)이라고 한다. 그 안에 끝나지 않으면 relocation을 pre-Captured에서 abort하고 `Blocked/DeadlineExceeded`로 끝낸 뒤 source admission을 복원한다.
 
 ### Durable frozen record
@@ -451,8 +463,9 @@ record를 relocation envelope에 넣는 것은 protocol error다.
 ### `RelocationId`
 
 `RelocationId`는 runtime이 CSPRNG로 만든 non-zero 128-bit 값이다. Active relocation과 retained relocation root의 ID가
-충돌하면 다시 만들며 application에 노출하지 않는다. 같은 relocation에서 target을 바꿀 때는 stable `RelocationId`와
-relocation root를 유지하고 `TargetAttemptGeneration`만 증가시킨다.
+충돌하면 다시 만들며 application에 노출하지 않는다. 같은 target process에서 준비를 다시 할 때는 stable
+`RelocationId`와 relocation root를 유지하고 target 시도 번호와 준비 정보만 교체한다. `TargetAttemptGeneration`은
+같은 target에 보낸 중복 또는 이전 Restore 요청을 구분하는 값이며 다른 target을 선택하는 데 사용하지 않는다.
 
 ### Authority phase
 
@@ -477,7 +490,7 @@ stateDiagram-v2
 - `Prepared`는 source owner와 exact target attempt·reservation을 함께 보존한다.
 - `Committed`부터 `Completed`까지 main owner는 current target이다.
 - 각 transition은 expected `StoreVersion` CAS다.
-- Target replacement는 target attempt, target owner lease와 reservation만 바꾸며 stable identity와 relocation root를 바꾸지 않는다.
+- 같은 target의 재시도는 target 시도 번호와 준비 정보만 바꾸며 stable identity와 relocation root를 바꾸지 않는다. 현재 version에는 다른 target process로 교체하는 전이가 없다.
 
 ### Aggregate relocation commit
 
@@ -496,9 +509,14 @@ stateDiagram-v2
 
 ### Ready 시점
 
-`Activated`는 Ready가 아니다. Target application admission은 durable source cleanup, `Completed` CAS, bound-session
-route ACK와 steady authority normalization이 모두 끝날 때까지 닫혀 있다. Abort도 source route ACK와 steady source
-normalization이 끝난 뒤 admission을 복원한다.
+`Committed`와 `Activating`은 Ready가 아니다. Target application admission은 owner와 membership 변경, lifecycle callback과 미완료
+작업·timer 복원, 저장된 기존 작업과 temporary queue 작업을 execution queue에 순서대로 넣는 작업, temporary queue
+등록 제거와 기존 dispatch 경로로의 atomic 전환을 모두 마치면 연다. Source ingress hold 원본 제거, 위치 record의
+`Completed` 변경과 Session Actor 위치 갱신 응답은 이 admission을 막지 않으며, 실행 중인 source와 target runtime이
+후속 작업으로 각자 계속한다. Owner를 바꾸기 전 abort에서는 Session route를 바꾸지 않았으므로 route 취소
+message나 그 응답을 기다리지 않는다. Source admission은 `Aborted` 기록, temporary queue 작업 폐기와 원래
+순서의 source queue 복원, 확보한 target 공간과 어떤 위치 record도 가리키지 않는 payload 정리, 이동 진행
+정보 제거를 마친 뒤 복원한다.
 
 ### Session route
 
@@ -547,7 +565,7 @@ lease가 유효한 동안 ACK를 확인하지 못하면 Retire는 relocation roo
 - 최상위 record를 쓰고 검증하는 일이 authority CAS보다 먼저이고, authority가 그 참조를 놓는 일이 record 삭제보다 먼저다.
 - 저장소가 아는 참여 대상 목록과 relocation이 기록한 목록의 digest가 다르면 `RelocationDataLost`로 끝난다.
 - Actor relocation commit이 owner와 target Entry Spot membership을 atomic하게 바꾼다.
-- `Activated`에서 Ready를 publish하지 않는다.
+- Owner commit, restore·replay와 timer 복원, queue 병합과 dispatch 전환을 마치기 전에는 Ready를 publish하지 않는다.
 - Typed application message의 `framework-json-v1` golden fixture가 네 runtime에서 같은 value와 failure를 만든다.
 - Relocation adapter bytes를 JSON이나 typed state contract로 해석하지 않는다.
 - `replyRelayAck` 없이 physical disconnect만으로 pending relay를 완료하지 않는다.

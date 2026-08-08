@@ -50,9 +50,7 @@ class PlayServerApplication {
             options.addHandlersFromPackageOf(PlayServerApplication::class.java)
             options.useCoroutineHandlers(Dispatchers.Default)
             options.configureDispatch {
-                messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                traceLogFile(topology.logDirectory + "/flow-play.log")
-                traceLabel("play")
+                messageFlow(ZLinkMessageFlowLogMode.NORMAL)
             }
             options.codecs().use(ZLinkProtobufCodec.defaultCodec())
             options.configureLocations()

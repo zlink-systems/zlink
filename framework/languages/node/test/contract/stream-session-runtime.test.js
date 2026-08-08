@@ -278,6 +278,137 @@ test('stream session node runtime dispatches framed packets through one session 
   ]);
 });
 
+test('Actor binding replacement callback can send before close and does not block another session lane', async () => {
+  const socket = new FakeStreamSocket();
+  const events = [];
+  const errors = [];
+  const runtime = createStreamRuntime({
+    socket,
+    onError(error) {
+      errors.push(error);
+    },
+    headerDecoder: (header) => ({ name: header.getString() }),
+    sessionFactory(context) {
+      return {
+        context,
+        async onActorBindingReplaced(ctx, actorId) {
+          events.push(['replacement:start', actorId]);
+          await ctx.client.send({ actorId, notice: true }).packetName('ActorReplaced').submit();
+          events.push(['replacement:end', actorId, ctx.sessionId]);
+        },
+        async onDispatch(header) {
+          events.push(['dispatch', context.sessionId, header.packetName]);
+        }
+      };
+    }
+  });
+  runtime.start();
+  runtime.markConnected('session-a');
+  runtime.markConnected('session-b');
+  const sessionA = runtime.findSession('session-a');
+  assert.ok(sessionA);
+  const retired = {
+    sessionOwnerNodeRid: 'session-owner',
+    sessionOwnerNodeGeneration: 1n,
+    sessionOwnerId: 'session-runtime',
+    sessionOwnerLeaseGeneration: 1n,
+    sessionRid: 'session-a',
+    retiredBindingGeneration: 7n
+  };
+  sessionA.enqueueActorBindingReplaced(
+    { nodeRid: 'actor-owner', actorId: 'actor-a', generation: 1n },
+    retired
+  );
+  await waitForCondition(
+    () => events.some((event) => event[0] === 'replacement:start'),
+    'replacement callback start'
+  );
+
+  // The callback is allowed to use the client send surface before the timer
+  // closes the transport, while new application dispatch for that session is
+  // rejected after the closing state is recorded.
+  socket.emitPacket('session-a', fakeHeader({ name: 'RejectedAfterReplacement' }), fakeJsonMessage('a'));
+  socket.emitPacket('session-b', fakeHeader({ name: 'OtherSession' }), fakeJsonMessage('b'));
+  await waitForCondition(
+    () => events.some((event) => event[0] === 'replacement:end')
+      && events.some((event) => event[0] === 'dispatch' && event[1] === 'session-b'),
+    'replacement terminal and independent session dispatch'
+  );
+  assert.equal(events.some((event) => event[0] === 'dispatch' && event[1] === 'session-a'), false);
+  assert.equal(socket.sent.some((entry) => entry.routingId === 'session-a'), true);
+  assert.deepEqual(socket.disconnects, []);
+
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  assert.deepEqual(socket.disconnects, []);
+  await waitForCondition(
+    () => socket.disconnects.includes('session-a'),
+    'fixed replacement close timer',
+    500
+  );
+  assert.equal(errors.some((error) => /closing after its Actor binding was replaced/i.test(String(error))), true);
+  await runtime.dispose();
+});
+
+test('stalled Actor binding replacement callback is force-closed at its lifecycle deadline', async () => {
+  const socket = new FakeStreamSocket();
+  const clock = new FakeLivenessClock();
+  const events = [];
+  let callbackStarted;
+  const callbackDidStart = new Promise((resolve) => {
+    callbackStarted = resolve;
+  });
+  const runtime = createStreamRuntime({
+    socket,
+    livenessClock: clock,
+    replacementCallbackTimeoutMs: 50,
+    sessionFactory(context) {
+      return {
+        context,
+        async onActorBindingReplaced() {
+          callbackStarted();
+          await new Promise(() => {});
+        },
+        async onDispatch(header) {
+          events.push([context.sessionId, header.packetName]);
+        }
+      };
+    }
+  });
+  runtime.start();
+  runtime.markConnected('session-a');
+  runtime.markConnected('session-b');
+  const sessionA = runtime.findSession('session-a');
+  assert.ok(sessionA);
+  sessionA.enqueueActorBindingReplaced(
+    { nodeRid: 'actor-owner', actorId: 'actor-a', generation: 1n },
+    {
+      sessionOwnerNodeRid: 'session-owner',
+      sessionOwnerNodeGeneration: 1n,
+      sessionOwnerId: 'session-runtime',
+      sessionOwnerLeaseGeneration: 1n,
+      sessionRid: 'session-a',
+      retiredBindingGeneration: 7n
+    }
+  );
+  await callbackDidStart;
+
+  socket.emitPacket('session-b', fakeHeader({ name: 'OtherSession' }), fakeJsonMessage('b'));
+  await waitForCondition(
+    () => events.some((event) => event[0] === 'session-b'),
+    'independent session dispatch while callback is pending'
+  );
+  assert.deepEqual(socket.disconnects, []);
+
+  await clock.advance(49);
+  assert.deepEqual(socket.disconnects, []);
+  await clock.advance(1);
+  await waitForCondition(
+    () => socket.disconnects.includes('session-a'),
+    'stalled replacement callback deadline close'
+  );
+  await runtime.dispose();
+});
+
 test('STREAM application claim remains active through async handler terminal cleanup', async () => {
   const socket = new FakeStreamSocket();
   const gate = new framework.ZLinkRuntimeAdmissionGate();

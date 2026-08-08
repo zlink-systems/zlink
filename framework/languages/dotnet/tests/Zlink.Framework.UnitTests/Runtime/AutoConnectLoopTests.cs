@@ -1,10 +1,14 @@
 using Zlink.Framework.Contracts.Locations;
+using Zlink.Framework.Runtime.Identifiers;
 using Zlink.Framework.Runtime.Locations;
 
 namespace Zlink.Framework.UnitTests;
 
 public sealed class AutoConnectLoopTests
 {
+    private static ZLinkMeshName Mesh(string value) =>
+        ZLinkMeshName.FromBoundary(value, nameof(value));
+
     [Fact]
     public async Task Repeated_Dispose_Callers_Share_AutoConnect_Loop_Finalization()
     {
@@ -17,7 +21,7 @@ public sealed class AutoConnectLoopTests
             store, tracker, new ZLinkObservedLocationGenerations());
         var local = new ZLinkAutoConnectLocal(
             ZLinkLocationAutoConnectType.ClientServer,
-            "dispose",
+            Mesh("dispose"),
             ZLinkLocationRole.Dealer,
             NodeRid: null,
             Endpoint: string.Empty);
@@ -54,7 +58,7 @@ public sealed class AutoConnectLoopTests
             store, tracker, new ZLinkObservedLocationGenerations());
         var countingResolver = new CountingPeerResolver(resolvers);
         var local = new ZLinkAutoConnectLocal(
-            ZLinkLocationAutoConnectType.ClientServer, "play", ZLinkLocationRole.Dealer,
+            ZLinkLocationAutoConnectType.ClientServer, Mesh("play"), ZLinkLocationRole.Dealer,
             RoutingId.From("local"), "tcp://l:1");
         var localRow = InMemoryLocationStoreTests.MeshNode("ignored", "tcp://l:1", "local");
         var reconciler = new ZLinkAutoConnectReconciler(
@@ -101,7 +105,7 @@ public sealed class AutoConnectLoopTests
             store, tracker, new ZLinkObservedLocationGenerations());
         var executor = new RecordingExecutor();
         var local = new ZLinkAutoConnectLocal(
-            ZLinkLocationAutoConnectType.ClientServer, "play", ZLinkLocationRole.Dealer,
+            ZLinkLocationAutoConnectType.ClientServer, Mesh("play"), ZLinkLocationRole.Dealer,
             NodeRid: null, Endpoint: string.Empty);
         var reconciler = new ZLinkAutoConnectReconciler(
             local, localRow: null, runtime, resolvers, executor, options, time);
@@ -155,7 +159,7 @@ public sealed class AutoConnectLoopTests
             store, tracker, new ZLinkObservedLocationGenerations());
         var executor = new RetryExecutor();
         var local = new ZLinkAutoConnectLocal(
-            ZLinkLocationAutoConnectType.ClientServer, "play", ZLinkLocationRole.Dealer,
+            ZLinkLocationAutoConnectType.ClientServer, Mesh("play"), ZLinkLocationRole.Dealer,
             NodeRid: null, Endpoint: string.Empty);
         var reconciler = new ZLinkAutoConnectReconciler(
             local, null, runtime, resolvers, executor, options, time);
@@ -186,7 +190,7 @@ public sealed class AutoConnectLoopTests
         var resolver = new SwitchablePeerResolver([peer]);
         var executor = new RecordingExecutor();
         var local = new ZLinkAutoConnectLocal(
-            ZLinkLocationAutoConnectType.ClientServer, "play", ZLinkLocationRole.Dealer,
+            ZLinkLocationAutoConnectType.ClientServer, Mesh("play"), ZLinkLocationRole.Dealer,
             NodeRid: null, Endpoint: string.Empty);
         var reconciler = new ZLinkAutoConnectReconciler(
             local, null, runtime, resolver, executor, options, time);

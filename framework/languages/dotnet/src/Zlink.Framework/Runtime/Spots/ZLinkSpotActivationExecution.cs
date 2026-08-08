@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Zlink.Framework.Runtime.Diagnostics;
+using Zlink.Framework.Runtime.Identifiers;
 
 namespace Zlink.Framework.Runtime.Spots;
 
@@ -9,7 +10,7 @@ internal sealed record ZLinkSpotRelocationSeal(
 
 internal sealed record ZLinkSpotRelocationApplicationState(
     ReadOnlyMemory<byte> SpotState,
-    IReadOnlyDictionary<string, ReadOnlyMemory<byte>> ActorStates);
+    IReadOnlyDictionary<ZLinkActorId, ReadOnlyMemory<byte>> ActorStates);
 
 internal abstract partial class ZLinkSpotActivation
 {
@@ -1120,7 +1121,10 @@ internal abstract partial class ZLinkSpotActivation
             var actorId = lifecycle.Value.Info.CurrentActor?.ActorId;
             if (actorId is null) continue;
 
-            if (_actors.TryGetActor(actorId, out var actor) && actor is not null)
+            if (_actors.TryGetActor(
+                    ZLinkActorId.FromBoundary(actorId, nameof(actorId)),
+                    out var actor)
+                && actor is not null)
             {
                 await NotifyActorDisconnectedCoreAsync(actor, cancellationToken)
                     .ConfigureAwait(false);
@@ -2244,8 +2248,11 @@ internal abstract partial class ZLinkSpotActivation
                                 actors.Skip(first).Take(count).Select(
                                     async actor =>
                                     {
+                                        var actorId = ZLinkActorId.FromBoundary(
+                                            actor.Context.ActorId,
+                                            nameof(actor));
                                         if (!state.ActorStates.TryGetValue(
-                                                actor.Context.ActorId,
+                                                actorId,
                                                 out var actorState))
                                             throw new InvalidDataException(
                                                 $"Relocation state for Actor '{actor.Context.ActorId}' is missing.");
@@ -2263,7 +2270,7 @@ internal abstract partial class ZLinkSpotActivation
             .ConfigureAwait(false);
     }
 
-    private async ValueTask<IReadOnlyDictionary<string, ReadOnlyMemory<byte>>>
+    private async ValueTask<IReadOnlyDictionary<ZLinkActorId, ReadOnlyMemory<byte>>>
         CaptureActorStatesAsync(
             IReadOnlyList<IZLinkActor> actors,
             IReadOnlySet<string>? includedActorIds,
@@ -2274,7 +2281,7 @@ internal abstract partial class ZLinkSpotActivation
                             || includedActorIds.Contains(actor.Context.ActorId))
             .ToArray();
         var captured =
-            new Dictionary<string, ReadOnlyMemory<byte>>(StringComparer.Ordinal);
+            new Dictionary<ZLinkActorId, ReadOnlyMemory<byte>>();
         for (var first = 0;
              first < selected.Length;
              first += MaxConcurrentRelocationAdapterCallbacks)
@@ -2284,8 +2291,10 @@ internal abstract partial class ZLinkSpotActivation
                 selected.Length - first);
             var batch = await Task.WhenAll(
                     selected.Skip(first).Take(count).Select(
-                        async actor => new KeyValuePair<string, ReadOnlyMemory<byte>>(
-                            actor.Context.ActorId,
+                        async actor => new KeyValuePair<ZLinkActorId, ReadOnlyMemory<byte>>(
+                            ZLinkActorId.FromBoundary(
+                                actor.Context.ActorId,
+                                nameof(actor)),
                             await CaptureInstanceAsync(
                                     ResolveActorRelocationRegistration(actor),
                                     actor,
@@ -2406,7 +2415,10 @@ internal abstract partial class ZLinkSpotActivation
     internal ZLinkObjectRelocationRegistration
         ResolveActorRelocationRegistrationForRetire(string actorId)
     {
-        if (!_actors.TryGetActor(actorId, out var actor) || actor is null)
+        if (!_actors.TryGetActor(
+                ZLinkActorId.FromBoundary(actorId, nameof(actorId)),
+                out var actor)
+            || actor is null)
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.NotFound,
                 $"Actor '{actorId}' left SPOT '{SpotId}' before relocation sealed.");

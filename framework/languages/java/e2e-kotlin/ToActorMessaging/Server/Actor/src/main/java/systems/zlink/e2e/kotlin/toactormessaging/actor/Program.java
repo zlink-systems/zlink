@@ -139,9 +139,7 @@ public final class Program {
         return options -> {
             boot("configureDispatch");
             options.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile(Env.get("logDirectory", "logs") + "/actor-flow.log")
-                .traceLabel("kotlin-to-actor-actor");
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             boot("configureDispatch done");
             boot("addLocationStore");
             options.addLocationStore(locationStore);

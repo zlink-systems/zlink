@@ -15,9 +15,7 @@ public final class ApiServer {
         return options -> {
             SampleLogging.configure(settings, "api");
             options.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile(SampleLogging.flowLogPath(settings, "api-" + settings.apiHttpPort()))
-                .traceLabel("api-" + settings.apiHttpPort());
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             options.configureLocations();
             options.addHandlersFromPackageOf(ApiServer.class);
             java.net.URI apiEndpoint = java.net.URI.create(settings.apiChannelEndpoint());

@@ -363,7 +363,7 @@ internal sealed class ZLinkActorDrainCoordinator(
         var localNodeRids = registration.SpotNodes.Values
             .Select(static node => node.EffectiveRoutingId)
             .ToHashSet();
-        var targets = new Dictionary<string, ZLinkActorDrainCandidate>(StringComparer.Ordinal);
+        var targets = new Dictionary<RoutingId, ZLinkActorDrainCandidate>();
         foreach (var descriptor in descriptors)
             if (!localNodeRids.Contains(descriptor.Rid)
                 && descriptor.State == ZLinkFrameworkRuntimeState.Serving
@@ -391,7 +391,7 @@ internal sealed class ZLinkActorDrainCoordinator(
                     && (requiredPolicy
                         != ZLinkObjectMaintenancePolicyKind.Snapshot
                         || capability.HasSnapshotAdapter)))
-                targets[descriptor.Rid.ToHex()] = new ZLinkActorDrainCandidate(
+                targets[descriptor.Rid] = new ZLinkActorDrainCandidate(
                     descriptor,
                     new ZLinkActorDrainTarget(
                         descriptor.Rid,

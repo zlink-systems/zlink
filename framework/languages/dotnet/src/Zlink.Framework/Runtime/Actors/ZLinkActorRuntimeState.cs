@@ -1,9 +1,10 @@
 using Zlink.Framework.Runtime.Handlers;
+using Zlink.Framework.Runtime.Identifiers;
 
 namespace Zlink.Framework.Runtime.Actors;
 
 internal sealed class ZLinkActorRuntimeState(
-    string actorId,
+    ZLinkActorId actorId,
     TimeProvider? timeProvider = null,
     Action<string>? handoffDiagnostic = null,
     ZLinkBoundedIngressAdmission? sourceIngressAdmission = null,
@@ -11,8 +12,7 @@ internal sealed class ZLinkActorRuntimeState(
     int maxSessionBindingTombstones = 1_024,
     IServiceProvider? services = null)
 {
-    private readonly ZLinkActorId _actorId =
-        ZLinkActorId.FromBoundary(actorId, nameof(actorId));
+    private readonly ZLinkActorId _actorId = actorId;
     private static readonly IServiceProvider EmptyServices =
         new EmptyServiceProvider();
     private static readonly TimeSpan DefaultSessionBindingTombstoneRetention =
@@ -47,12 +47,31 @@ internal sealed class ZLinkActorRuntimeState(
     private Task? _terminalLifecycleCompletion;
     private int _contextInvalidated;
 
+    internal ZLinkActorRuntimeState(
+        string actorId,
+        TimeProvider? timeProvider = null,
+        Action<string>? handoffDiagnostic = null,
+        ZLinkBoundedIngressAdmission? sourceIngressAdmission = null,
+        TimeSpan? sessionBindingTombstoneRetention = null,
+        int maxSessionBindingTombstones = 1_024,
+        IServiceProvider? services = null)
+        : this(
+            ZLinkActorId.FromBoundary(actorId, nameof(actorId)),
+            timeProvider,
+            handoffDiagnostic,
+            sourceIngressAdmission,
+            sessionBindingTombstoneRetention,
+            maxSessionBindingTombstones,
+            services)
+    {
+    }
+
     public string ActorId => _actorId.Value;
 
     internal ZLinkActorId RuntimeActorId => _actorId;
 
     public ZLinkActorHandoffState Handoff { get; } = new(
-        actorId,
+        actorId.Value,
         timeProvider ?? TimeProvider.System,
         handoffDiagnostic,
         sourceIngressAdmission);
@@ -388,7 +407,7 @@ internal sealed class ZLinkActorRuntimeState(
         ulong bindingGeneration = 1,
         ulong objectGeneration = 0,
         ulong authorityOwnerGeneration = 0,
-        string meshName = "",
+        ZLinkMeshName meshName = default,
         ulong targetNodeGeneration = 1,
         ulong ownerLeaseGeneration = 0,
         ulong sessionOwnerNodeGeneration = 1,
@@ -437,7 +456,7 @@ internal sealed class ZLinkActorRuntimeState(
         ulong bindingGeneration,
         ulong objectGeneration,
         ulong authorityOwnerGeneration,
-        string meshName,
+        ZLinkMeshName meshName,
         ulong targetNodeGeneration,
         ulong ownerLeaseGeneration,
         ulong sessionOwnerNodeGeneration,
@@ -583,7 +602,7 @@ internal sealed class ZLinkActorRuntimeState(
         ulong bindingGeneration,
         ulong objectGeneration,
         ulong authorityOwnerGeneration,
-        string meshName,
+        ZLinkMeshName meshName,
         ulong targetNodeGeneration,
         ulong ownerLeaseGeneration,
         ulong sessionOwnerNodeGeneration,
@@ -603,7 +622,7 @@ internal sealed class ZLinkActorRuntimeState(
             || bindingGeneration == 0
             || objectGeneration == 0
             || authorityOwnerGeneration == 0
-            || string.IsNullOrWhiteSpace(meshName)
+            || string.IsNullOrWhiteSpace(meshName.Value)
             || targetNodeGeneration == 0
             || ownerLeaseGeneration == 0
             || sessionOwnerNodeGeneration == 0
@@ -621,7 +640,7 @@ internal sealed class ZLinkActorRuntimeState(
             bindingGeneration,
             objectGeneration,
             authorityOwnerGeneration,
-            ZLinkMeshName.FromBoundary(meshName, nameof(meshName)),
+            meshName,
             targetNodeGeneration,
             ownerLeaseGeneration,
             sessionOwnerNodeGeneration,
@@ -833,7 +852,7 @@ internal sealed class ZLinkActorRuntimeState(
         string handoffId,
         ZLinkBackendActorRef targetActor,
         ulong targetAuthorityOwnerGeneration,
-        string targetMeshName,
+        ZLinkMeshName targetMeshName,
         ulong targetNodeGeneration,
         ulong targetOwnerLeaseGeneration)
     {
@@ -843,7 +862,7 @@ internal sealed class ZLinkActorRuntimeState(
                 return;
             if (!string.Equals(pending.HandoffId, handoffId, StringComparison.Ordinal)
                 || pending.Route.ObjectGeneration != targetActor.Generation
-                || string.IsNullOrWhiteSpace(targetMeshName)
+                || targetMeshName.Value.Length == 0
                 || targetNodeGeneration == 0
                 || targetOwnerLeaseGeneration == 0
                 || targetAuthorityOwnerGeneration
@@ -855,14 +874,29 @@ internal sealed class ZLinkActorRuntimeState(
             {
                 TargetActor = targetActor,
                 TargetAuthorityOwnerGeneration = targetAuthorityOwnerGeneration,
-                TargetMeshName = ZLinkMeshName.FromBoundary(
-                    targetMeshName,
-                    nameof(targetMeshName)),
+                TargetMeshName = targetMeshName,
                 TargetNodeGeneration = targetNodeGeneration,
                 TargetOwnerLeaseGeneration = targetOwnerLeaseGeneration
             };
         }
     }
+
+    // String input remains available only for the legacy test/configuration
+    // boundary; the relocation session state stores a typed mesh identity.
+    public void MarkRelocationSessionAuthorityCommitted(
+        string handoffId,
+        ZLinkBackendActorRef targetActor,
+        ulong targetAuthorityOwnerGeneration,
+        string targetMeshName,
+        ulong targetNodeGeneration,
+        ulong targetOwnerLeaseGeneration) =>
+        MarkRelocationSessionAuthorityCommitted(
+            handoffId,
+            targetActor,
+            targetAuthorityOwnerGeneration,
+            ZLinkMeshName.FromBoundary(targetMeshName, nameof(targetMeshName)),
+            targetNodeGeneration,
+            targetOwnerLeaseGeneration);
 
     public bool TryGetCommittedRelocationSessionRoute(
         string handoffId,
@@ -1814,7 +1848,33 @@ internal readonly record struct ZLinkActorBoundSession(
     ulong SessionOwnerNodeGeneration = 1,
     ulong AcceptedHighWater = 0,
     string SessionOwnerId = "",
-    ulong SessionOwnerLeaseGeneration = 0);
+    ulong SessionOwnerLeaseGeneration = 0)
+{
+    internal bool IsSamePhysicalSessionOwner(
+        RoutingId sessionNodeRid,
+        ulong sessionOwnerNodeGeneration,
+        RoutingId sessionRid,
+        string sessionOwnerId,
+        ulong sessionOwnerLeaseGeneration)
+    {
+        if (SessionNodeRid is not { } previousNodeRid)
+            return false;
+        var previousOwnerId = string.IsNullOrWhiteSpace(SessionOwnerId)
+            ? previousNodeRid.ToHex()
+            : SessionOwnerId;
+        var previousOwnerLease = SessionOwnerLeaseGeneration == 0
+            ? SessionOwnerNodeGeneration
+            : SessionOwnerLeaseGeneration;
+        return previousNodeRid == sessionNodeRid
+               && SessionOwnerNodeGeneration == sessionOwnerNodeGeneration
+               && SessionRid == sessionRid
+               && string.Equals(
+                   previousOwnerId,
+                   sessionOwnerId,
+                   StringComparison.Ordinal)
+               && previousOwnerLease == sessionOwnerLeaseGeneration;
+    }
+}
 
 internal readonly record struct ZLinkActorSessionReplacementAttempt(
     ZLinkActorBoundSession Replacement,

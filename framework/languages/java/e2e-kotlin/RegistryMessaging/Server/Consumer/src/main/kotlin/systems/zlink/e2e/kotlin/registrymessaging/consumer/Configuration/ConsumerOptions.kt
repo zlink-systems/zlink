@@ -3,7 +3,6 @@ package systems.zlink.e2e.kotlin.registrymessaging.consumer.Configuration
 data class ConsumerOptions(
     val httpUrl: String,
     val logDir: String,
-    val traceLabel: String,
     val providerEndpoints: List<String>,
     val redisLocationEndpoint: String,
     val locationKeyPrefix: String,
@@ -28,7 +27,6 @@ data class ConsumerOptions(
             return ConsumerOptions(
                 httpUrl = values.last("http-url", "http://127.0.0.1:0"),
                 logDir = values.last("log-dir", "logs"),
-                traceLabel = values.last("trace-label", "consumer"),
                 providerEndpoints = endpoints,
                 redisLocationEndpoint = redisLocationEndpoint,
                 locationKeyPrefix = locationKeyPrefix,

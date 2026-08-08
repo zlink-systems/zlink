@@ -11,6 +11,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
 BUFFER_BYTES = 4096
+BACKEND_CONNECT_ATTEMPTS = 50
+BACKEND_CONNECT_DELAY_SECONDS = 0.1
 
 
 def split_endpoint(endpoint):
@@ -112,12 +114,35 @@ def forward_with_gate(source, destination, state, stopped):
         stopped.set()
 
 
+def connect_backend_with_retry(backend, backend_address):
+    """Allow the target process to finish binding its mesh listener.
+
+    The HTTP health endpoint can become reachable just before the underlying
+    mesh listener accepts connections.  A client connection arriving in that
+    small window must remain a gate connection, not be discarded as a route
+    failure.  The retry is bounded so a genuinely unavailable backend still
+    closes the connection and leaves an observable process failure.
+    """
+    last_error = None
+    for attempt in range(BACKEND_CONNECT_ATTEMPTS):
+        try:
+            backend.connect(backend_address)
+            return
+        except OSError as error:
+            last_error = error
+            if attempt + 1 == BACKEND_CONNECT_ATTEMPTS:
+                break
+            time.sleep(BACKEND_CONNECT_DELAY_SECONDS)
+    if last_error is not None:
+        raise last_error
+
+
 def serve_connection(frontend, backend_address, state, blocked_direction):
     backend = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
         configure_socket(frontend)
         configure_socket(backend)
-        backend.connect(backend_address)
+        connect_backend_with_retry(backend, backend_address)
         state.register_connection(frontend, backend)
         stopped = threading.Event()
         if blocked_direction == "frontend-to-backend":

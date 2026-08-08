@@ -34,7 +34,7 @@
 | 기준 | Java 대응 | 분류 | 상태 | 비고 |
 |------|-----------|------|------|------|
 | `.NET: Server/Configuration/SampleNames.cs` | `Server/Configuration/src/main/java/.../configuration/SampleNames.java` | config | done | OrderWorkflow Instance Spot type, RouteMesh와 runner marker를 모은다. |
-| `.NET: Server/Configuration/SampleFlowLog.cs` | role별 message-flow log 설정 | evidence | done | runner가 `message flow` marker를 확인한다. |
+| `.NET: Server/Configuration/SampleFlowLog.cs` | Framework standard logger | evidence | done | runner가 role stdout의 `message flow` marker를 확인한다. |
 | common: 공유 location store | Redis location store config | runtime-config | done | CommerceApi와 OrderWorkflow가 같은 Redis prefix로 location store를 사용한다. CommerceApi channel client는 workflow endpoint를 받지 않고 framework가 location store에서 발견한다. |
 
 ## CommerceApi Role

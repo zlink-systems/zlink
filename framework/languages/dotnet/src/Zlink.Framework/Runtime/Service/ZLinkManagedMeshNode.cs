@@ -7,6 +7,7 @@ using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Channels;
 using Zlink.Framework.Runtime.Diagnostics;
 using Zlink.Framework.Runtime.Dispatch;
+using Zlink.Framework.Runtime.Identifiers;
 using Zlink.Framework.Runtime.Messaging;
 using Peer = Zlink.Framework.Runtime.Service.ZLinkMeshPeer;
 using OwnedMailbox = Zlink.Framework.Runtime.Service.ZLinkMeshNodeOwnedMailbox;
@@ -51,7 +52,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private readonly object _remoteActorCreateGate = new();
     private readonly object _inboundOperationGate = new();
     private readonly object _disposeGate = new();
-    private readonly Dictionary<string, uint> _channels = new(StringComparer.Ordinal);
+    private readonly Dictionary<ZLinkChannelName, uint> _channels = new();
     private readonly Dictionary<ulong, Peer> _peersByIntent = new();
     private readonly Dictionary<RoutingId, Peer> _peersByRid = new();
     private readonly Dictionary<RoutingId, ZLinkMeshPeerExpectation> _peerExpectations = new();
@@ -69,10 +70,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         _relocationReplyOperations = [];
     private readonly Queue<RelocationReplyTerminalKey>
         _relocationReplyTerminalOrder = [];
-    private readonly ConcurrentDictionary<string, ZLinkManagedSpot> _spots = new();
+    private readonly ConcurrentDictionary<ZLinkSpotId, ZLinkManagedSpot> _spots = new();
     private readonly object _entrySpotGate = new();
-    private readonly ConcurrentDictionary<string, ManagedActor> _actors =
-        new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<ZLinkActorId, ManagedActor> _actors = new();
     private readonly ConcurrentDictionary<RemoteUserSpotOperationKey, RemoteUserSpotInvocation>
         _remoteUserSpotOperations = new();
     private readonly ConcurrentDictionary<RemoteActorCreateOperationKey, RemoteActorCreateInvocation>
@@ -426,11 +426,12 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         ArgumentException.ThrowIfNullOrWhiteSpace(channelName);
         if (Encoding.UTF8.GetByteCount(channelName) > byte.MaxValue)
             throw new ArgumentOutOfRangeException(nameof(channelName));
+        var channelKey = ZLinkChannelName.FromBoundary(channelName, nameof(channelName));
         Peer[] peers;
         lock (_gate)
         {
             ThrowIfDisposed();
-            if (!_channels.TryAdd(channelName, 100))
+            if (!_channels.TryAdd(channelKey, 100))
                 return;
             _descriptorRevision = checked(_descriptorRevision + 1);
             RebuildChannelSelectionPlansUnderLock();
@@ -447,12 +448,13 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     {
         if (weight > ZLinkSocketConfig.MaximumPeerWeight)
             throw new ArgumentOutOfRangeException(nameof(weight));
+        var channelKey = ZLinkChannelName.FromBoundary(channelName, nameof(channelName));
         Peer[] peers;
         lock (_gate)
         {
-            if (!_channels.ContainsKey(channelName))
+            if (!_channels.ContainsKey(channelKey))
                 throw new InvalidOperationException($"Channel '{channelName}' is not registered.");
-            _channels[channelName] = weight;
+            _channels[channelKey] = weight;
             _descriptorRevision = checked(_descriptorRevision + 1);
             RebuildChannelSelectionPlansUnderLock();
             peers = _peersByRid.Values
@@ -1789,11 +1791,12 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     public ISpot CreateSpot()
     {
         var spotId = Guid.NewGuid().ToString("D");
+        var spotKey = ZLinkSpotId.FromBoundary(spotId, nameof(spotId));
         return _spots.GetOrAdd(
-            spotId,
+            spotKey,
             value => new ZLinkManagedSpot(
                 this,
-                value,
+                value.Value,
                 Interlocked.Increment(ref _nextSpotGeneration),
                 NextAuthorityOwnerGeneration()));
     }
@@ -1810,11 +1813,15 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             // object reference so later actor creation and lookup use the same
             // logical owner instead of recreating the placeholder under the
             // node routing id.
+            var entrySpotId = _routingId.ToString();
+            var entrySpotKey = ZLinkSpotId.FromBoundary(
+                entrySpotId,
+                nameof(entrySpotId));
             return _entrySpot ??= _spots.GetOrAdd(
-                _routingId.ToString(),
+                entrySpotKey,
                 value => new ZLinkManagedSpot(
                     this,
-                    value,
+                    value.Value,
                     _lifecycleGeneration,
                     _lifecycleGeneration));
         }
@@ -1822,8 +1829,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
     public ISpot GetOrCreateSpot(string spotId, out bool created)
     {
-        ZLinkSpotId.Require(spotId, nameof(spotId));
-        if (_spots.TryGetValue(spotId, out var existing))
+        var spotKey = ZLinkSpotId.FromBoundary(spotId, nameof(spotId));
+        if (_spots.TryGetValue(spotKey, out var existing))
         {
             created = false;
             return existing;
@@ -1834,7 +1841,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             spotId,
             Interlocked.Increment(ref _nextSpotGeneration),
             NextAuthorityOwnerGeneration());
-        var spot = _spots.GetOrAdd(spotId, candidate);
+        var spot = _spots.GetOrAdd(spotKey, candidate);
         created = ReferenceEquals(spot, candidate);
         if (!created)
             candidate.Dispose();
@@ -1847,12 +1854,12 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         ulong authorityOwnerGeneration,
         out bool created)
     {
-        ZLinkSpotId.Require(spotId, nameof(spotId));
+        var spotKey = ZLinkSpotId.FromBoundary(spotId, nameof(spotId));
         if (objectGeneration == 0 || objectGeneration > long.MaxValue)
             throw new ArgumentOutOfRangeException(nameof(objectGeneration));
         if (authorityOwnerGeneration == 0 || authorityOwnerGeneration > long.MaxValue)
             throw new ArgumentOutOfRangeException(nameof(authorityOwnerGeneration));
-        if (_spots.TryGetValue(spotId, out var existing))
+        if (_spots.TryGetValue(spotKey, out var existing))
         {
             created = false;
             return existing;
@@ -1873,7 +1880,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             spotId,
             objectGeneration,
             authorityOwnerGeneration);
-        var spot = _spots.GetOrAdd(spotId, candidate);
+        var spot = _spots.GetOrAdd(spotKey, candidate);
         created = ReferenceEquals(spot, candidate);
         if (!created)
             candidate.Dispose();
@@ -1947,7 +1954,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             entry.LifecycleGeneration,
             membershipEpoch: 1,
             reservedAuthorityOwnerGeneration ?? NextAuthorityOwnerGeneration());
-        if (!_actors.TryAdd(actorId, actor))
+        var actorKey = ZLinkActorId.FromBoundary(actorId, nameof(actorId));
+        if (!_actors.TryAdd(actorKey, actor))
             throw new InvalidOperationException($"Actor '{actorId}' already exists.");
         entry.AddActor();
         EnqueueActorLifecycle(
@@ -1973,7 +1981,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     public bool ActorLookup(string actorId, out ActorLocation location)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
-        if (_actors.TryGetValue(actorId, out var actor)
+        var actorKey = ZLinkActorId.FromBoundary(actorId, nameof(actorId));
+        if (_actors.TryGetValue(actorKey, out var actor)
             && !actor.Draining)
         {
             location = actor.Location;
@@ -2097,7 +2106,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 out var operation))
             throw new ZlinkSubmitException(
                 ZlinkSubmitException.ErrorCode.Backpressured);
-        if (!_actors.TryGetValue(actor.ActorId, out var current)
+        var actorKey = ZLinkActorId.FromBoundary(actor.ActorId, nameof(actor.ActorId));
+        if (!_actors.TryGetValue(actorKey, out var current)
             || current.Ref.ObjectGeneration != actor.ObjectGeneration
             || current.Ref.NodeRid != actor.NodeRid
             || !current.TryDrain())
@@ -2110,8 +2120,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             return;
         }
 
-        _actors.TryRemove(new KeyValuePair<string, ManagedActor>(actor.ActorId, current));
-        if (_spots.TryGetValue(current.SpotId, out var spot))
+        _actors.TryRemove(new KeyValuePair<ZLinkActorId, ManagedActor>(actorKey, current));
+        if (_spots.TryGetValue(
+                ZLinkSpotId.FromBoundary(current.SpotId, nameof(current.SpotId)),
+                out var spot))
         {
             spot.RemoveActor();
             EnqueueActorLifecycle(
@@ -2893,8 +2905,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         if (spot.ActorCount != 0)
             return;
         _spots.TryRemove(
-            new KeyValuePair<string, ZLinkManagedSpot>(
-                spot.SpotId,
+            new KeyValuePair<ZLinkSpotId, ZLinkManagedSpot>(
+                ZLinkSpotId.FromBoundary(spot.SpotId, nameof(spot.SpotId)),
                 spot));
     }
 
@@ -2903,11 +2915,13 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         string previousSpotId,
         string currentSpotId)
     {
-        if (string.Equals(previousSpotId, currentSpotId, StringComparison.Ordinal))
+        var previousKey = ZLinkSpotId.FromBoundary(previousSpotId, nameof(previousSpotId));
+        var currentKey = ZLinkSpotId.FromBoundary(currentSpotId, nameof(currentSpotId));
+        if (previousKey == currentKey)
             return;
         if (!_spots.TryRemove(
-                new KeyValuePair<string, ZLinkManagedSpot>(previousSpotId, spot))
-            || !_spots.TryAdd(currentSpotId, spot))
+                new KeyValuePair<ZLinkSpotId, ZLinkManagedSpot>(previousKey, spot))
+            || !_spots.TryAdd(currentKey, spot))
             throw new InvalidOperationException(
                 $"Managed Spot ID '{currentSpotId}' is already registered.");
     }
@@ -2934,7 +2948,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     ZlinkSubmitException.ErrorCode.Backpressured);
         if (targetNodeRid != _routingId
             || !TryGetActor(actorRef, out var actor)
-            || !_spots.TryGetValue(targetSpotId, out var targetSpot)
+            || !_spots.TryGetValue(
+                ZLinkSpotId.FromBoundary(targetSpotId, nameof(targetSpotId)),
+                out var targetSpot)
             || (targetSpotGeneration != 0
                 && targetSpot.LifecycleGeneration != targetSpotGeneration))
         {
@@ -3179,7 +3195,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             return SubmitResult.Ok;
         }
 
-        if (_spots.TryGetValue(previous.SpotId, out var oldSpot)
+        if (_spots.TryGetValue(
+                ZLinkSpotId.FromBoundary(previous.SpotId, nameof(previous.SpotId)),
+                out var oldSpot)
             && !ReferenceEquals(oldSpot, targetSpot))
         {
             oldSpot.RemoveActor();
@@ -3290,7 +3308,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 metadata,
                 request ? operation : null);
         }
-        if (!_spots.TryGetValue(targetSpotId, out var spot))
+        if (!_spots.TryGetValue(
+                ZLinkSpotId.FromBoundary(targetSpotId, nameof(targetSpotId)),
+                out var spot))
             return SubmitResult.NotFound;
         if (targetSpotGeneration != 0
             && spot.LifecycleGeneration != targetSpotGeneration)
@@ -4097,7 +4117,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     }
 
     private bool TryGetActor(ActorRef actorRef, out ManagedActor actor) =>
-        _actors.TryGetValue(actorRef.ActorId, out actor!)
+        _actors.TryGetValue(
+            ZLinkActorId.FromBoundary(actorRef.ActorId, nameof(actorRef)),
+            out actor!)
         && actor.Ref.ObjectGeneration == actorRef.ObjectGeneration
         && actor.Ref.NodeRid == actorRef.NodeRid
         && !actor.Draining;
@@ -5479,7 +5501,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         if (stateful.Command is ServiceWireConstants.Command.SpotSend
             or ServiceWireConstants.Command.SpotRequest)
         {
-            var hasTargetSpot = _spots.TryGetValue(stateful.TargetSpotId, out var spot);
+            var hasTargetSpot = _spots.TryGetValue(
+                ZLinkSpotId.FromBoundary(
+                    stateful.TargetSpotId,
+                    nameof(stateful.TargetSpotId)),
+                out var spot);
             var localOwnerLeaseGeneration = checked((ulong)Volatile.Read(
                 ref _localOwnerLeaseGeneration));
             if (!hasTargetSpot
@@ -8408,7 +8434,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         lock (_gate)
         {
             descriptorRevision = _descriptorRevision;
-            channels = new Dictionary<string, uint>(_channels, StringComparer.Ordinal);
+            channels = _channels.ToDictionary(
+                static entry => entry.Key.Value,
+                static entry => entry.Value,
+                StringComparer.Ordinal);
             //  Spec 28 §567: draining node는 그 사실을 descriptor로 알려 새
             //  selection과 placement에서 빠진다. runtime-state.draining = 2.
             runtimeState = _state == MeshNodeState.Draining ? (byte)2 : (byte)1;
@@ -9514,8 +9543,7 @@ internal sealed class ZLinkManagedSpot(
     ulong lifecycleGeneration,
     ulong authorityOwnerGeneration) : ISpot
 {
-    private readonly Dictionary<string, HashSet<string>> _subscriptions =
-        new(StringComparer.Ordinal);
+    private readonly Dictionary<ZLinkChannelName, HashSet<string>> _subscriptions = [];
     private int _disposed;
     private int _actorCount;
 
@@ -9539,18 +9567,24 @@ internal sealed class ZLinkManagedSpot(
 
     public void SetSubscription(string channelName, string topic)
     {
+        var channel = ZLinkChannelName.FromBoundary(channelName, nameof(channelName));
         lock (_subscriptions)
         {
-            if (!_subscriptions.TryGetValue(channelName, out var topics))
+            if (!_subscriptions.TryGetValue(channel, out var topics))
             {
                 topics = new HashSet<string>(StringComparer.Ordinal);
-                _subscriptions.Add(channelName, topics);
+                _subscriptions.Add(channel, topics);
             }
             topics.Add(topic);
         }
     }
 
     internal bool Matches(string channelName, string topic)
+        => Matches(
+            ZLinkChannelName.FromBoundary(channelName, nameof(channelName)),
+            topic);
+
+    internal bool Matches(ZLinkChannelName channelName, string topic)
     {
         lock (_subscriptions)
             return _subscriptions.TryGetValue(channelName, out var topics)
@@ -9687,7 +9721,7 @@ internal sealed class ZLinkManagedStreamSessionService(
 {
     private readonly ConcurrentDictionary<
         RoutingId,
-        ConcurrentDictionary<string, StreamSessionBinding>> _bindings = new();
+        ConcurrentDictionary<ZLinkActorId, StreamSessionBinding>> _bindings = new();
     private int _started;
     private int _disposed;
 
@@ -9775,8 +9809,9 @@ internal sealed class ZLinkManagedStreamSessionService(
         SendFlags flags = SendFlags.None)
     {
         EnsureStarted();
+        var actorId = ZLinkActorId.FromBoundary(actor.ActorId, nameof(actor));
         if (!_bindings.TryGetValue(sessionRid, out var bindings)
-            || !bindings.TryGetValue(actor.ActorId, out var binding)
+            || !bindings.TryGetValue(actorId, out var binding)
             || binding.Actor != actor)
             return SubmitResult.NotFound;
         return node.RelaySessionToActor(this, sessionRid, actor, parts, flags);
@@ -9788,9 +9823,8 @@ internal sealed class ZLinkManagedStreamSessionService(
     {
         var session = _bindings.GetOrAdd(
             sessionRid,
-            static _ => new ConcurrentDictionary<string, StreamSessionBinding>(
-                StringComparer.Ordinal));
-        session[binding.Actor.ActorId] = binding;
+            static _ => new ConcurrentDictionary<ZLinkActorId, StreamSessionBinding>());
+        session[ZLinkActorId.FromBoundary(binding.Actor.ActorId, nameof(binding))] = binding;
     }
 
     internal void RemoveBinding(
@@ -9798,14 +9832,15 @@ internal sealed class ZLinkManagedStreamSessionService(
         string actorId,
         ulong expectedBindingGeneration)
     {
+        var actorKey = ZLinkActorId.FromBoundary(actorId, nameof(actorId));
         if (!_bindings.TryGetValue(sessionRid, out var bindings)
-            || !bindings.TryGetValue(actorId, out var binding)
+            || !bindings.TryGetValue(actorKey, out var binding)
             || (expectedBindingGeneration != 0
                 && binding.BindingGeneration != expectedBindingGeneration))
             return;
         bindings.TryRemove(
-            new KeyValuePair<string, StreamSessionBinding>(
-                actorId,
+            new KeyValuePair<ZLinkActorId, StreamSessionBinding>(
+                actorKey,
                 binding));
         if (bindings.IsEmpty)
             _bindings.TryRemove(sessionRid, out _);

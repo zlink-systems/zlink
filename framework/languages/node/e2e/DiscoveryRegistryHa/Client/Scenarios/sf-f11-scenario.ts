@@ -44,6 +44,7 @@ export async function runSFF11(options: ClientOptions): Promise<void> {
       return actor.found && actor.ownerNodeRid === 'api-a'
         && spot.found && spot.ownerNodeRid === 'api-a';
     }, 'SF-F11 source authority after response loss');
+    await expectAggregate(options.providerAUrl, first, 'api-a');
     console.log('scenario SF-F11 response-loss passed');
     return;
   }

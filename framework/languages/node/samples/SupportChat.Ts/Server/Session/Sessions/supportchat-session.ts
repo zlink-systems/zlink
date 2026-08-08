@@ -3,6 +3,7 @@ import { ZLINK_ACTOR_MANAGER, ZLINK_CHANNEL_CLIENT } from '@zlink-systems/nestjs
 import { ZLinkPacket } from '@zlink-systems/framework';
 import { SampleNames, SampleTimings } from '../../Configuration/sample-names';
 import {
+  AuthenticateReq,
   AuthenticateRes,
   PacketNames,
   SupportChatRoles,
@@ -10,7 +11,6 @@ import {
   SupportUserActorCreateReq
 } from '../../../Shared/Contracts/messages';
 import type {
-  AuthenticateReq,
   AuthenticateUserRes,
   SupportRole
 } from '../../../Shared/Contracts/messages';
@@ -43,7 +43,7 @@ class SupportChatSessionRouter {
   ) {}
 
   async authenticate(context: ZLinkSessionContext, payload: ZLinkMessage): Promise<void> {
-    const request = payload.decode<AuthenticateReq>(Object as never);
+    const request = payload.decode(AuthenticateReq);
     const authenticated = await this.channels
       .requestToChannel(SampleNames.apiChannel, authenticateUser(request.accessToken))
       .timeout(SampleTimings.requestTimeout)

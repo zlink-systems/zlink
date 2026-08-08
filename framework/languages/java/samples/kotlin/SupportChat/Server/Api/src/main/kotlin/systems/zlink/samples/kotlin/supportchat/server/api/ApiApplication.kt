@@ -19,7 +19,6 @@ import systems.zlink.framework.kotlin.useCoroutineHandlers
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore
 import systems.zlink.framework.spring.EnableZLinkFramework
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer
-import systems.zlink.samples.kotlin.supportchat.server.configuration.SampleFlowLog
 import systems.zlink.samples.kotlin.supportchat.server.configuration.SampleLocationStore
 import systems.zlink.samples.kotlin.supportchat.server.configuration.SampleNames
 import systems.zlink.samples.kotlin.supportchat.server.configuration.SampleTopology
@@ -39,9 +38,7 @@ class ApiApplication {
             options.addHandlersFromPackageOf(ApiApplication::class.java)
             options.useCoroutineHandlers(Dispatchers.Default)
             options.configureDispatch {
-                messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                traceLogFile(SampleFlowLog.path(topology, "api"))
-                traceLabel("api")
+                messageFlow(ZLinkMessageFlowLogMode.NORMAL)
             }
             options.addClientServerChannel(SampleNames.ApiChannel)
                 .server()

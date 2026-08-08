@@ -946,8 +946,8 @@ stop_multi_nodes
 cat "${log_dir}/client.stdout.log"
 fetch_evidence play-a "${HTTP_A}"
 fetch_evidence play-b "${HTTP_B}"
-grep -Rq "message flow" "${log_dir}"/*-flow.log
-grep -q "packet=RoutePingReq" "${log_dir}/play-a-flow.log"
+grep -Rq "message flow" "${log_dir}"/*.stdout.log
+grep -q "packet=RoutePingReq" "${log_dir}/play-a.stdout.log"
 grep -q '"marker":"RoutePingReq"' "${log_dir}/play-a-evidence.json"
 grep -q '"value":"route-mesh-normal"' "${log_dir}/play-a-evidence.json"
 grep -q '"marker":"ActorCreated"' "${log_dir}/session-a-evidence.json"

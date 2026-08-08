@@ -1,4 +1,5 @@
 using Zlink.Framework.Runtime.Host;
+using Zlink.Framework.Runtime.Identifiers;
 
 namespace Zlink.Framework.Runtime.Locations;
 
@@ -27,13 +28,13 @@ internal sealed class ZLinkLocationAutoConnectHost : IAsyncDisposable, IZLinkAut
     private readonly SemaphoreSlim _lifecycleGate = new(1, 1);
     private readonly List<ZLinkAutoConnectLoop> _loops = [];
     private readonly List<ZLinkAutoConnectReconciler> _reconcilers = [];
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, ZLinkAutoConnectReconciler>
-        _routeMeshReconcilers = new(StringComparer.Ordinal);
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<ZLinkMeshName, ZLinkAutoConnectReconciler>
+        _routeMeshReconcilers = new();
     private readonly System.Collections.Concurrent.ConcurrentDictionary<
-        (ZLinkLocationAutoConnectType Type, string MeshName, ZLinkLocationRole Role),
+        (ZLinkLocationAutoConnectType Type, ZLinkMeshName MeshName, ZLinkLocationRole Role),
         ZLinkAutoConnectReconciler> _localReconcilers = new();
     private readonly System.Collections.Concurrent.ConcurrentDictionary<
-        (ZLinkLocationAutoConnectType Type, string MeshName, ZLinkLocationRole Role),
+        (ZLinkLocationAutoConnectType Type, ZLinkMeshName MeshName, ZLinkLocationRole Role),
         ZLinkAutoConnectLoop> _localLoops = new();
     private readonly object _disposeGate = new();
     private ZLinkClientServerDiscovery? _clientServerDiscovery;
@@ -101,7 +102,9 @@ internal sealed class ZLinkLocationAutoConnectHost : IAsyncDisposable, IZLinkAut
             if (!state.SpotNodes.TryGetValue(name, out var node) || spot.Router is null) continue;
             if (node.StartupState is not { } startupState) continue;
 
-            var meshName = spot.SpotMeshChannelName ?? spot.SpotNodeName;
+            var meshName = ZLinkMeshName.FromBoundary(
+                spot.SpotMeshChannelName ?? spot.SpotNodeName,
+                nameof(spot.SpotMeshChannelName));
             AddLoop(
                 ZLinkLocationAutoConnectType.SpotMesh,
                 meshName,
@@ -418,7 +421,7 @@ internal sealed class ZLinkLocationAutoConnectHost : IAsyncDisposable, IZLinkAut
 
     private void AddLoop(
         ZLinkLocationAutoConnectType type,
-        string meshName,
+        ZLinkMeshName meshName,
         ZLinkLocationRole role,
         RoutingId? nodeRid,
         string endpoint,
@@ -454,13 +457,13 @@ internal sealed class ZLinkLocationAutoConnectHost : IAsyncDisposable, IZLinkAut
             : lifecycleGeneration;
         var row = startupState?.Descriptor ?? (advertisable
             ? new ZLinkMeshNodeDescriptor(
-                meshName, nodeRid!.Value,
+                meshName.Value, nodeRid!.Value,
                 effectiveLifecycleGeneration, DescriptorRevision: 1,
                 endpoint,
                 channelWeights is null
                     ? new Dictionary<string, int>(StringComparer.Ordinal)
                     {
-                        [meshName] = (int)weight
+                        [meshName.Value] = (int)weight
                     }
                     : new Dictionary<string, int>(
                         channelWeights,
@@ -506,7 +509,8 @@ internal sealed class ZLinkLocationAutoConnectHost : IAsyncDisposable, IZLinkAut
         string meshName,
         RoutingId nodeRid)
     {
-        return _routeMeshReconcilers.TryGetValue(meshName, out var reconciler)
+        var meshKey = ZLinkMeshName.FromBoundary(meshName, nameof(meshName));
+        return _routeMeshReconcilers.TryGetValue(meshKey, out var reconciler)
             ? reconciler.ClassifyTarget(nodeRid)
             : ZLinkRouteMeshTargetClassification.Unknown;
     }
@@ -514,7 +518,8 @@ internal sealed class ZLinkLocationAutoConnectHost : IAsyncDisposable, IZLinkAut
     public IReadOnlyList<ZLinkRouteMeshPeerIdentity>? GetCompleteRouteMeshPeers(
         string meshName)
     {
-        return _routeMeshReconcilers.TryGetValue(meshName, out var reconciler)
+        var meshKey = ZLinkMeshName.FromBoundary(meshName, nameof(meshName));
+        return _routeMeshReconcilers.TryGetValue(meshKey, out var reconciler)
             ? reconciler.CompleteMeshPeers()
             : null;
     }
@@ -525,28 +530,31 @@ internal sealed class ZLinkLocationAutoConnectHost : IAsyncDisposable, IZLinkAut
         ZLinkLocationRole role,
         uint weight)
     {
-        if (_localReconcilers.TryGetValue((type, meshName, role), out var reconciler))
+        var meshKey = ZLinkMeshName.FromBoundary(meshName, nameof(meshName));
+        if (_localReconcilers.TryGetValue((type, meshKey, role), out var reconciler))
             reconciler.SetLocalWeight(weight);
     }
 
     internal void SetLocalPlacementWeight(string meshName, int weight)
     {
+        var meshKey = ZLinkMeshName.FromBoundary(meshName, nameof(meshName));
         if (_localReconcilers.TryGetValue(
-                (ZLinkLocationAutoConnectType.SpotMesh, meshName, ZLinkLocationRole.Spot),
+                (ZLinkLocationAutoConnectType.SpotMesh, meshKey, ZLinkLocationRole.Spot),
                 out var reconciler))
             reconciler.SetLocalPlacementWeight(weight);
     }
 
     internal void SetLocalActivationConcurrency(string meshName, int active)
     {
+        var meshKey = ZLinkMeshName.FromBoundary(meshName, nameof(meshName));
         if (!_localReconcilers.TryGetValue(
-                (ZLinkLocationAutoConnectType.SpotMesh, meshName, ZLinkLocationRole.Spot),
+                (ZLinkLocationAutoConnectType.SpotMesh, meshKey, ZLinkLocationRole.Spot),
                 out var reconciler))
             return;
 
         reconciler.SetLocalActivationConcurrency(active);
         if (_localLoops.TryGetValue(
-                (ZLinkLocationAutoConnectType.SpotMesh, meshName, ZLinkLocationRole.Spot),
+                (ZLinkLocationAutoConnectType.SpotMesh, meshKey, ZLinkLocationRole.Spot),
                 out var loop))
             loop.Wake();
     }
@@ -556,8 +564,9 @@ internal sealed class ZLinkLocationAutoConnectHost : IAsyncDisposable, IZLinkAut
         string channelName,
         int weight)
     {
+        var meshKey = ZLinkMeshName.FromBoundary(meshName, nameof(meshName));
         if (_localReconcilers.TryGetValue(
-                (ZLinkLocationAutoConnectType.SpotMesh, meshName, ZLinkLocationRole.Spot),
+                (ZLinkLocationAutoConnectType.SpotMesh, meshKey, ZLinkLocationRole.Spot),
                 out var reconciler))
             reconciler.SetLocalChannelWeight(channelName, weight);
     }
@@ -574,7 +583,8 @@ internal sealed class ZLinkLocationAutoConnectHost : IAsyncDisposable, IZLinkAut
         uint weight,
         CancellationToken cancellationToken)
     {
-        if (!_localReconcilers.TryGetValue((type, meshName, role), out var reconciler))
+        var meshKey = ZLinkMeshName.FromBoundary(meshName, nameof(meshName));
+        if (!_localReconcilers.TryGetValue((type, meshKey, role), out var reconciler))
             return ValueTask.FromResult(true);
         return type == ZLinkLocationAutoConnectType.SpotMesh
             ? reconciler.SetAllLocalChannelWeightsAsync(weight, cancellationToken)

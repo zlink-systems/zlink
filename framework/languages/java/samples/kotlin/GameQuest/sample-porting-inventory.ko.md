@@ -20,7 +20,7 @@
 | `.NET: Server/Configuration/GameQuest.Server.Configuration.csproj` | `Server/Configuration/build.gradle.kts` | build | done | 서버 공통 설정 project. |
 | `.NET: Server/Configuration/SampleConfiguration.cs` | `Server/Configuration/src/main/kotlin/.../Configuration.kt` | server-config | done | role endpoint, channel, Redis location store, sample state key, marker를 모은다. |
 | `.NET: Server/Configuration/RedisJsonStore.cs` | `Server/Configuration/src/main/kotlin/.../Configuration.kt` | external-adapter | done | Kotlin은 `RedisSampleStore`가 projection, event, gameplay fact를 sample store 뒤에 둔다. |
-| `.NET: Server/Configuration/SampleFlowLog.cs` | `Server/GameApi`, `Server/QuestMission`, `GAMEQUEST_LOG_DIR` | evidence | done | role별 flow log를 남기고 runner가 sample client/server marker를 확인한다. |
+| `.NET: Server/Configuration/SampleFlowLog.cs` | `Server/GameApi`, `Server/QuestMission` role stdout | evidence | done | Framework standard logger가 message flow를 출력하고 runner가 sample client/server marker를 확인한다. |
 | `.NET: Server/GameApi/GameQuest.GameApi.csproj` | `Server/GameApi/build.gradle.kts` | build | done | GameApi role project. |
 | `.NET: Server/GameApi/Program.cs` | `Server/GameApi/src/main/kotlin/.../gameapi/Program.kt` | server-entry | done | GameApi stream role과 self-check HTTP endpoint를 실행한다. |
 | `.NET: Server/GameApi/Session/GameQuestSession.cs` | `Server/GameApi/src/main/kotlin/.../gameapi/Program.kt` | stream-session | done | stream session이 `PlayerId` Session Actor를 만들고 Entry Spot에 배치한 뒤 연결에 bind한다. |

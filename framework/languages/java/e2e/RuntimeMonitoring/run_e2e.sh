@@ -339,6 +339,6 @@ if [[ "${SCENARIO}" == "all" ]]; then
 else
   grep -q "scenario ${SCENARIO} passed" "${log_dir}/client.stdout.log"
 fi
-if compgen -G "${log_dir}/*-flow.log" >/dev/null; then
-  grep -Rq "message flow" "${log_dir}"/*-flow.log
+if compgen -G "${log_dir}/*.stdout.log" >/dev/null; then
+  grep -Rq "message flow" "${log_dir}"/*.stdout.log
 fi

@@ -88,7 +88,6 @@ internal static class ServiceHostFactory
                 .AddSpotFactory<MonitoringSubjectSpot>(
                     options.SubjectSpotType, factory => factory.DisableRelocation());
             var spotRouter = spotMesh.ConfigureRouterSocket();
-            spotRouter.MaxMessageSize = 4096;
             spotRouter.SendHighWaterMark = 4096;
             spotRouter.SendTimeout = TimeSpan.FromMilliseconds(250);
             spotRouter.MailboxMessageBudget = 1;

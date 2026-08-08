@@ -42,6 +42,19 @@ class stream_session_t final : public zlink::framework::packet_stream_session_t
         co_return;
     }
 
+    zlink::framework::task_t<void> on_actor_binding_replaced (
+      zlink::framework::stream_t &stream,
+      std::string actor_id) override
+    {
+        _state.record ("ActorBindingReplacedCallback", actor_id, {}, "started");
+        auto notice = stream.write_packet (
+          zlink::message_t::from_json (
+            e2e::actor_push_notify_t{actor_id, "duplicate-session", 0}));
+        notice.packet_name ("ActorBindingReplaced");
+        co_await notice.submit ();
+        _state.record ("ActorBindingReplacedCallback", actor_id, {}, "completed");
+    }
+
     zlink::framework::task_t<void> on_error (zlink::framework::stream_t &,
                                              const zlink::framework::stream_error_t &error) override
     {

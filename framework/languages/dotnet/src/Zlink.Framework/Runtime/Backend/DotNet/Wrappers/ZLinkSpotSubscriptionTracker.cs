@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using Zlink.Framework.Runtime.Identifiers;
 
 namespace Zlink.Framework.Runtime.Backend.DotNet.Wrappers;
 
@@ -7,17 +8,20 @@ namespace Zlink.Framework.Runtime.Backend.DotNet.Wrappers;
 // node tracks (spot, topic) pairs for the monitoring snapshot (spec 50).
 internal sealed class ZLinkSpotSubscriptionTracker
 {
-    private readonly ConcurrentDictionary<string, ConcurrentDictionary<SubscriptionKey, byte>> _targets = new();
+    private readonly ConcurrentDictionary<ZLinkSpotId, ConcurrentDictionary<SubscriptionKey, byte>> _targets = new();
 
     public void Add(string spotId, string channelName, string topic)
     {
-        _targets.GetOrAdd(spotId, static _ => new ConcurrentDictionary<SubscriptionKey, byte>())
+        var key = ZLinkSpotId.FromBoundary(spotId, nameof(spotId));
+        _targets.GetOrAdd(key, static _ => new ConcurrentDictionary<SubscriptionKey, byte>())
             .TryAdd(new SubscriptionKey(channelName, topic), 0);
     }
 
     public void RemoveSpot(string spotId)
     {
-        _targets.TryRemove(spotId, out _);
+        _targets.TryRemove(
+            ZLinkSpotId.FromBoundary(spotId, nameof(spotId)),
+            out _);
     }
 
     public IReadOnlyList<ZLinkSpotNodeSubjectEntry> Snapshot()

@@ -27,7 +27,6 @@ class ProbeSpot(
     }
 
     override fun configure() {
-        context.handlers().addHandler<ProbeRequestHandler>()
         context.handlers().addHandler<ProbeSendHandler>()
         context.handlers().addHandler<CloseHandler>()
     }

@@ -78,9 +78,9 @@ class MultiNodeApplication {
             Files.createDirectories(Path.of(options.logDir))
             val node = MultiNodeKind.fromRid(options.rid)
             framework.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile("${options.logDir}/${options.rid}-flow.log")
-                .traceLabel(options.rid)
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL)
+
+
             val mesh = framework.addRouteMesh(Contracts.SPOT_MESH)
                 .listen(
                     if (options.spotOnly) {

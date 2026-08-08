@@ -21,7 +21,6 @@ import systems.zlink.framework.locations.redis.ZLinkRedisRelocationOptions;
 import systems.zlink.framework.locations.redis.ZLinkRedisRelocationStore;
 import systems.zlink.framework.spring.EnableZLinkFramework;
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer;
-import systems.zlink.samples.shoppingmall.server.configuration.SampleFlowLog;
 import systems.zlink.samples.shoppingmall.server.configuration.SampleLocationStore;
 import systems.zlink.samples.shoppingmall.server.configuration.SampleNames;
 import systems.zlink.samples.shoppingmall.server.configuration.SampleTopology;
@@ -73,9 +72,7 @@ public final class Program {
                     .setKeyPrefix(topology.location().redisKeyPrefix() + "relocation:")));
             options.addHandlersFromPackageOf(Program.class);
             options.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile(SampleFlowLog.path(workflow.logDirectory(), workflow.instanceName()))
-                .traceLabel(workflow.instanceName());
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             ZLinkMeshNodeBuilder node = options.addRouteMesh(SampleNames.OrderSpotDiscovery);
             node.listen(workflow.spotRouterEndpoint())
                 .setRoutingIdPrefix("shoppingmall-workflow");

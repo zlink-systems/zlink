@@ -60,6 +60,13 @@ async function main() {
 
 function createContext(redisEndpoint) {
   const env = { ...process.env };
+  const generatedSchemaRegistry = process.env.ZLINK_NODE_SCHEMA_REGISTRY_PATH
+    ? path.resolve(process.env.ZLINK_NODE_SCHEMA_REGISTRY_PATH)
+    : path.join(sampleRoot, 'dist', '.zlink-framework-json-schemas.cjs');
+  if (process.env.ZLINK_NODE_PRELOAD_GENERATED_SCHEMAS !== '0' && fs.existsSync(generatedSchemaRegistry)) {
+    const preload = `--require=${generatedSchemaRegistry}`;
+    env.NODE_OPTIONS = `${env.NODE_OPTIONS ?? ''} ${preload}`.trim();
+  }
   return {
     env,
     logDir,

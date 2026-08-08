@@ -177,6 +177,7 @@ interface ZLinkHostRelocationOptions {
   readonly actorManager: () => DefaultZLinkActorManager | undefined;
   readonly actorTransfer: ZLinkActorTransferRuntime;
   readonly trackInstanceSpot?: (input: ZLinkTrackedInstanceAuthority) => void;
+  readonly reconcileStatefulAuthorityRoutes?: (signal?: AbortSignal) => Promise<void>;
   readonly runtimeEventPublisher?: ZLinkRuntimeEventPublisher;
   readonly metrics?: ZLinkRuntimeMetrics;
 }
@@ -1265,6 +1266,13 @@ export class ZLinkHostServiceRelocationRuntime {
           request,
           signal,
           deadlineAtMs
+        ),
+        request => this.sendControl(
+          meshName,
+          target.rid,
+          request,
+          undefined,
+          Date.now() + 5_000
         )
       );
       const encoded = encodeServiceRelocationEnvelope(manifest);
@@ -1339,6 +1347,13 @@ export class ZLinkHostServiceRelocationRuntime {
         request,
         signal,
         controlDeadlineAtMs
+      ),
+      request => this.sendControl(
+        meshName,
+        target.rid,
+        request,
+        undefined,
+        Date.now() + 5_000
       )
     );
     const source = new ServiceCapturedRelocationSourceCompletion<RemoteStaging>(captured, {
@@ -1370,6 +1385,8 @@ export class ZLinkHostServiceRelocationRuntime {
         }
         return completed;
       }
+    }, async (_completed, completionSignal) => {
+      await this.options.reconcileStatefulAuthorityRoutes?.(completionSignal);
     });
     const authorityCommit = this.authorityCommit(remoteOwner);
     const coordinator = new ServiceRelocationCoordinator(
@@ -3208,7 +3225,10 @@ class RemoteRestoreOwner implements ServiceRelocationRestoreOwner<RemoteStaging>
     private readonly applicationVersion: bigint,
     private readonly request: (
       request: ZLinkServiceRelocationControlRequest
-    ) => Promise<ReturnType<typeof decodeServiceRelocationControlResponse>>
+    ) => Promise<ReturnType<typeof decodeServiceRelocationControlResponse>>,
+    private readonly cleanupRequest: (
+      request: ZLinkServiceRelocationControlRequest
+    ) => Promise<ReturnType<typeof decodeServiceRelocationControlResponse>> = request
   ) {}
 
   targetOwner(): ZLinkLocationOwnerToken {
@@ -3286,7 +3306,7 @@ class RemoteRestoreOwner implements ServiceRelocationRestoreOwner<RemoteStaging>
   async abortPreReservation(): Promise<void> {
     const reserved = this.preReserved;
     if (reserved === undefined || this.staging !== undefined) return;
-    await this.request(this.stagingControl(reserved, 'aborted'));
+    await this.cleanupRequest(this.stagingControl(reserved, 'aborted'));
     this.preReserved = undefined;
   }
 
@@ -3413,7 +3433,7 @@ class RemoteRestoreOwner implements ServiceRelocationRestoreOwner<RemoteStaging>
   async openAdmission(): Promise<void> {}
 
   async abort(staging: RemoteStaging): Promise<void> {
-    const response = await this.request(this.stagingControl(staging, 'aborted'));
+    const response = await this.cleanupRequest(this.stagingControl(staging, 'aborted'));
     if (response.kind !== 'ack' || response.participantId !== 1n || response.highWater !== 1n) {
       throw new Error('Relocation target did not acknowledge precommit abort cleanup.');
     }

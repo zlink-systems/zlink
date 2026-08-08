@@ -1,0 +1,8 @@
+{"entry":"spot-initialize|rid=play|spot=ch-03-spot","rid":"play","role":"play"}
+{"entry":"spot-handler-start|spot=ch-03-spot|id=ch-03-104349088893129","rid":"play","role":"play"}
+{"entry":"spot-workflow-reply|spot=ch-03-spot|id=ch-03-104349088893129","rid":"play","role":"play"}
+{"entry":"spot-timer-start|spot=ch-03-spot|id=ch-03-104349088893129|sequence=handler-start,workflow-reply,handler-end,timer-start","rid":"play","role":"play"}
+{"entry":"spot-handler-end|spot=ch-03-spot|id=ch-03-104349088893129","rid":"play","role":"play"}
+{"entry":"spot-timer-workflow-reply|spot=ch-03-spot|timer=ch-03-104349088893129-timer","rid":"play","role":"play"}
+{"entry":"spot-timer-end|spot=ch-03-spot|timer=ch-03-104349088893129-timer|sequence=handler-start,workflow-reply,handler-end,timer-start,workflow-reply,timer-end","rid":"play","role":"play"}
+{"entry":"spot-closing|rid=play|spot=ch-03-spot","rid":"play","role":"play"}

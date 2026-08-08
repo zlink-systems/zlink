@@ -1,3 +1,5 @@
+using Zlink.Framework.Runtime.Identifiers;
+
 namespace Zlink.Framework.Runtime.Host;
 
 internal sealed class ZLinkActorRemoteJoiner(
@@ -627,7 +629,7 @@ internal sealed class ZLinkActorRemoteJoiner(
                 boundSession.BindingGeneration,
                 boundSession.ObjectGeneration,
                 boundSession.AuthorityOwnerGeneration,
-                boundSession.MeshName.Value,
+                boundSession.MeshName,
                 boundSession.TargetNodeGeneration,
                 boundSession.OwnerLeaseGeneration,
                 boundSession.SessionOwnerNodeGeneration,

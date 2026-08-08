@@ -46,6 +46,7 @@ export const ServiceWireCommand = {
   userSpotClose: 48,
   actorCreate: 49,
   messageFollow: 50,
+  boundSessionReplaced: 51,
 } as const;
 export const ServiceWireFlag = {
   metadata: 1,

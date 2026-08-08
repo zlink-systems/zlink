@@ -18,7 +18,9 @@ PIDS=()
 REDIS_CONTAINER=""
 REDIS_PORT=""
 OWNER_A_HTTP=""
+OWNER_A_PID=""
 OWNER_B_HTTP=""
+OWNER_B_PID=""
 CLIENT_A_HTTP=""
 CLIENT_B_HTTP=""
 last_http_pid=""
@@ -108,7 +110,10 @@ EOF
 start_owner() {
   owner_config "$1" "$2" "$3" "$4"
   "$(owner_bin)" --e2e-config "${CONFIG_DIR}/$1.properties" >"${LOG_DIR}/$1.stdout.log" 2>"${LOG_DIR}/$1.stderr.log" &
-  PIDS+=("$!"); health "$1" "$3"
+  local pid="$!"
+  PIDS+=("${pid}")
+  if [[ "$1" == "owner-a" ]]; then OWNER_A_PID="${pid}"; else OWNER_B_PID="${pid}"; fi
+  health "$1" "$3"
 }
 start_client() {
   client_config "$1" "$2" "$3"
@@ -118,7 +123,13 @@ start_client() {
 
 setup() {
   command -v docker >/dev/null 2>&1 || { echo "Docker is required for Redis Location Store" >&2; return 3; }
-  [[ -x "$(owner_bin)" && -x "$(client_bin)" ]] || gradle_run :Owner:installDist :Client:installDist
+  if [[ "${ZLINK_E2E_REBUILD:-0}" == "1" || ! -x "$(owner_bin)" || ! -x "$(client_bin)" ]]; then
+    local -a build_args=(:Owner:installDist :Client:installDist)
+    if [[ "${ZLINK_E2E_REBUILD:-0}" == "1" ]]; then
+      build_args=(--refresh-dependencies clean "${build_args[@]}")
+    fi
+    gradle_run "${build_args[@]}"
+  fi
   zlink_redis_start_scoped_assign REDIS_CONTAINER REDIS_PORT "zlink-redis-kotlin-instance-spot" "redis:7.2-alpine" "127.0.0.1::6379" || return 3
   read -r oh1 om1 oh2 om2 ch1 cm1 ch2 cm2 <<<"$(ports 8)"
   OWNER_A_HTTP="http://127.0.0.1:${oh1}"; OWNER_B_HTTP="http://127.0.0.1:${oh2}"
@@ -351,6 +362,53 @@ scenario_31() {
   echo "PASS IS-E2E-31 process=owner-a+owner-b client=client-a+client-b API=single-selected-owner"
 }
 
+scenario_ready_owner_loss() {
+  local id="$1" spot="ready-owner-loss-${1}-${RUN_ID}"
+  local first="${1}-first-${RUN_ID}" failed="${1}-after-loss-${RUN_ID}"
+  local first_path="${LOG_DIR}/${1}.first.json" failed_path="${LOG_DIR}/${1}.failed.json"
+  post_json "${CLIENT_A_HTTP}/request" \
+    "{\"spotId\":\"${spot}\",\"operationId\":\"${first}\",\"payload\":\"establish-ready-owner\",\"timeoutMilliseconds\":5000}" \
+    "${first_path}"
+  assert_reply "${first_path}" "${spot}" "${first}"
+  snapshot "${id}-before-loss"
+  local owner owner_pid surviving_http
+  owner="$(python3 - "${first_path}" <<'PY'
+import json,sys
+print(json.load(open(sys.argv[1]))["reply"]["ownerRid"])
+PY
+)"
+  case "${owner}" in
+    owner-a) owner_pid="${OWNER_A_PID}"; surviving_http="${OWNER_B_HTTP}";;
+    owner-b) owner_pid="${OWNER_B_PID}"; surviving_http="${OWNER_A_HTTP}";;
+    *) echo "unexpected Ready owner RID: ${owner}" >&2; return 1;;
+  esac
+  kill -9 "${owner_pid}"
+  wait "${owner_pid}" >/dev/null 2>&1 || true
+  sleep 3
+  post_json "${CLIENT_B_HTTP}/request" \
+    "{\"spotId\":\"${spot}\",\"operationId\":\"${failed}\",\"payload\":\"must-not-reactivate\",\"timeoutMilliseconds\":3000}" \
+    "${failed_path}"
+  get_json "${surviving_http}/evidence" "${LOG_DIR}/${id}-surviving-owner.evidence.json"
+  python3 - "${failed_path}" \
+    "${LOG_DIR}/${id}-before-loss-owner-a.evidence.json" \
+    "${LOG_DIR}/${id}-before-loss-owner-b.evidence.json" \
+    "${LOG_DIR}/${id}-surviving-owner.evidence.json" "${spot}" "${failed}" <<'PY'
+import json,sys
+failure,before_a,before_b,after,spot,operation=sys.argv[1:]
+outcome=json.load(open(failure))
+assert not outcome["succeeded"] and outcome["errorKind"]=="UNAVAILABLE", outcome
+events=sum((json.load(open(path))["events"] for path in (before_a,before_b)), [])
+after_events=json.load(open(after))["events"]
+assert len([e for e in events if e["kind"]=="FACTORY" and e["spotId"]==spot])==1
+assert not any(e["kind"] in ("FACTORY","INITIALIZE") and e["spotId"]==spot for e in after_events)
+assert not any(e["kind"]=="HANDLER_ENTER" and e["operationId"]==operation for e in after_events)
+PY
+  echo "PASS ${id} process=ready-owner-SIGKILL client=client-b terminal=UNAVAILABLE recovery=none"
+}
+
+scenario_05() { scenario_ready_owner_loss IS-E2E-05; }
+scenario_35() { scenario_ready_owner_loss IS-E2E-35; }
+
 public_probe() {
   local id="$1" spot="probe-${id}-${RUN_ID}"
   curl --max-time 8 --fail --silent "${CLIENT_A_HTTP}/health" >"${LOG_DIR}/${id}.client-health.json"
@@ -370,7 +428,7 @@ run_scenario() {
   case "$1" in
     IS-E2E-01) scenario_01;; IS-E2E-02) scenario_02;; IS-E2E-03) scenario_03;; IS-E2E-04) scenario_04;;
     IS-E2E-08) scenario_08;; IS-E2E-19) scenario_19;; IS-E2E-26) scenario_26;; IS-E2E-31) scenario_31;;
-    IS-E2E-05) blocked "$1" "fixture has no owner crash/restart control with public liveness evidence";;
+    IS-E2E-05) scenario_05;;
     IS-E2E-06) blocked "$1" "fixture has no factory-entry crash boundary controller";;
     IS-E2E-07) blocked "$1" "fixture explicitly disables relocation and has one Mesh";;
     IS-E2E-09) blocked "$1" "fixture has no ready-owner crash and lease invalidation sequence";;
@@ -396,7 +454,7 @@ run_scenario() {
     IS-E2E-32) blocked "$1" "fixture has no activation crash-boundary orchestration";;
     IS-E2E-33) blocked "$1" "fixture has no factory/initialize failure injection";;
     IS-E2E-34) blocked "$1" "fixture has no target crash control around unpublished activation";;
-    IS-E2E-35) blocked "$1" "fixture has no ready-owner crash and queue recovery sequence";;
+    IS-E2E-35) scenario_35;;
     IS-E2E-36) blocked "$1" "fixture has no before/after-handler crash injection";;
     *) echo "unknown InstanceSpot selector: $1" >&2; return 1;;
   esac

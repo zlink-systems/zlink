@@ -1614,8 +1614,9 @@ public sealed class SessionActorCoordinatorTests
             route.Ref.ActorId,
             sessionRid,
             "binding-tombstone");
+        var actorKey = ZLinkActorId.FromBoundary(route.Ref.ActorId, nameof(route));
         _ = table.Bind(
-            route.Ref.ActorId,
+            actorKey,
             context,
             actor.BindingToken,
             actor,
@@ -1639,7 +1640,7 @@ public sealed class SessionActorCoordinatorTests
         time.Advance(TimeSpan.FromSeconds(2));
         Assert.Equal(0, table.TombstoneCount);
         _ = table.Bind(
-            route.Ref.ActorId,
+            actorKey,
             context,
             actor.BindingToken,
             actor,
@@ -1656,7 +1657,7 @@ public sealed class SessionActorCoordinatorTests
         {
             var error = Assert.Throws<ZLinkFrameworkException>(() =>
                 table.Bind(
-                    route.Ref.ActorId,
+                    actorKey,
                     context,
                     actor.BindingToken,
                     actor,
@@ -1684,8 +1685,9 @@ public sealed class SessionActorCoordinatorTests
             route.Ref.ActorId,
             sessionRid,
             "binding-full-fence");
+        var actorKey = ZLinkActorId.FromBoundary(route.Ref.ActorId, nameof(route));
         _ = table.Bind(
-            route.Ref.ActorId,
+            actorKey,
             context,
             actor.BindingToken,
             actor,
@@ -1795,7 +1797,7 @@ public sealed class SessionActorCoordinatorTests
             bindingGeneration: 1,
             objectGeneration: 1,
             authorityOwnerGeneration: authorityOwnerGeneration,
-            meshName: "actors",
+            meshName: ZLinkMeshName.FromBoundary("actors", "meshName"),
             targetNodeGeneration: 1,
             ownerLeaseGeneration: 1,
             sessionOwnerNodeGeneration: 1,
@@ -1814,7 +1816,7 @@ public sealed class SessionActorCoordinatorTests
                 bindingGeneration: 1,
                 objectGeneration: 1,
                 authorityOwnerGeneration: authorityOwnerGeneration,
-                meshName: "actors",
+                meshName: ZLinkMeshName.FromBoundary("actors", "meshName"),
                 targetNodeGeneration: 1,
                 ownerLeaseGeneration: 1,
                 sessionOwnerNodeGeneration: 1,

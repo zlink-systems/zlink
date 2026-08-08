@@ -19,7 +19,6 @@ import systems.zlink.framework.locations.redis.ZLinkRedisRelocationStore
 import systems.zlink.framework.spots.ZLinkSpotManager
 import systems.zlink.framework.spring.EnableZLinkFramework
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer
-import systems.zlink.samples.kotlin.supportchat.server.configuration.SampleFlowLog
 import systems.zlink.samples.kotlin.supportchat.server.configuration.SampleLocationStore
 import systems.zlink.samples.kotlin.supportchat.server.configuration.SampleNames
 import systems.zlink.samples.kotlin.supportchat.server.configuration.SampleTopology
@@ -59,9 +58,7 @@ class SupportApplication {
                 ),
             )
             options.configureDispatch {
-                messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                traceLogFile(SampleFlowLog.path(topology, "support"))
-                traceLabel("support")
+                messageFlow(ZLinkMessageFlowLogMode.NORMAL)
             }
             options.addClientServerChannel(SampleNames.SupportChannel)
                 .server()

@@ -49,6 +49,7 @@ exports.ServiceWireCommand = {
     userSpotClose: 48,
     actorCreate: 49,
     messageFollow: 50,
+    boundSessionReplaced: 51,
 };
 exports.ServiceWireFlag = {
     metadata: 1,

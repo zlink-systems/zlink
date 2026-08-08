@@ -1,3 +1,5 @@
+using Zlink.Framework.Runtime.Identifiers;
+
 namespace Zlink.Framework.Runtime.Locations;
 
 /// <summary>
@@ -194,8 +196,8 @@ internal sealed class ZLinkFanoutDiscovery : IAsyncDisposable
         ZLinkOwnerLeaseTracker? leases,
         IZLinkRuntimeFailureReporter errorSink) : IAsyncDisposable
     {
-        private readonly Dictionary<string, ulong> _observedRevisions =
-            new(StringComparer.Ordinal);
+        private readonly Dictionary<(RoutingId PublisherRid, ulong LifecycleGeneration), ulong>
+            _observedRevisions = [];
         private CancellationTokenSource? _stop;
         private Task? _loop;
 
@@ -253,8 +255,7 @@ internal sealed class ZLinkFanoutDiscovery : IAsyncDisposable
                             cancellationToken)
                         .ConfigureAwait(false);
 
-                var key =
-                    $"{row.PublisherRid.ToHex()}:{row.LifecycleGeneration}";
+                var key = (row.PublisherRid, row.LifecycleGeneration);
                 if (_observedRevisions.TryGetValue(key, out var observed)
                     && row.DescriptorRevision < observed)
                 {

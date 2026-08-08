@@ -25,7 +25,7 @@ import {
   ObservabilityOpsNames,
   type BindActorSessionReq,
   type BindActorSessionRes,
-  type SessionKeepAlive
+  SessionKeepAlive
 } from '../../Shared/messages';
 import { closeHttpServer, startHttpServer } from '../Support/http-server';
 import { createFlowLogRoute } from '../Support/flow-log-route';
@@ -60,7 +60,7 @@ class GatewaySession implements ZLinkSession {
 
   async onDispatch(dispatch: ZLinkSessionDispatchContext, payload: ZLinkMessage, signal?: AbortSignal): Promise<void> {
     if (dispatch.packetName === ObservabilityOpsNames.packetSessionKeepAlive) {
-      payload.decode<SessionKeepAlive>(Object as never);
+      payload.decode(SessionKeepAlive);
       return;
     }
     if (dispatch.packetName === ObservabilityOpsNames.packetBindActor) {

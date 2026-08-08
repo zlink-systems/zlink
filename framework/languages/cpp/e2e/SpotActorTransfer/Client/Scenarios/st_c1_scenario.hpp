@@ -9,10 +9,14 @@ namespace
 /* ST-C1: this file owns the scenario orchestration and its public assertions. */
 inline void scenario_runner_t::run_st_c1_scenario ()
 {
-    const auto actor_id = "actor-source-down-before-commit-" + unique_suffix ();
-    const auto spot_id = "spot-source-down-before-commit-" + unique_suffix ();
-    create_spot (_nodes.b, spot_id);
-    create_actor (_nodes.a, actor_id, e2e::actor_type_stateful, 62);
+    const auto spot = create_spot_until_placed_on (
+      _nodes.b, "spot-source-down-before-commit-" + unique_suffix (),
+      "actor-b");
+    const auto actor = create_actor_until_placed_on (
+      _nodes.a, "actor-source-down-before-commit-" + unique_suffix (),
+      e2e::actor_type_stateful, 62, "actor-a");
+    const auto &actor_id = actor.actor_id;
+    const auto &spot_id = spot.spot_id;
 
     auto join_task =
       std::async (std::launch::async, [&] () -> std::optional<e2e::join_target_res_t> {

@@ -25,6 +25,7 @@ mkdir -p "$maven_dir" "$consumer_dir/src/main/java/contract"
 artifacts=(
     zlink-framework-provider-abstractions
     zlink-framework-binding-internal
+    zlink-framework-json-internal
     zlink-framework-core
     zlink-framework-spring-boot-starter
     zlink-framework-locations-redis

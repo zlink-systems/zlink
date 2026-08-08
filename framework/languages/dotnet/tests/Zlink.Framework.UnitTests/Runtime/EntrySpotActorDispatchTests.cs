@@ -16,6 +16,7 @@ using Zlink.Framework.Runtime.Actors;
 using Zlink.Framework.Runtime.Backend.Contracts;
 using Zlink.Framework.Runtime.Backend.DotNet;
 using Zlink.Framework.Runtime.Execution;
+using Zlink.Framework.Runtime.Identifiers;
 using Zlink.Framework.Runtime.Locations;
 using Zlink.Framework.Runtime.Service;
 using Zlink.Framework.Runtime.Spots;
@@ -501,7 +502,7 @@ public sealed partial class EntrySpotActorDispatchTests
                     nativeActor,
                     registration.DefaultRequestTimeout,
                     cancellationToken);
-                await lifecycle.ReleaseActorAsync(actorState.ActorId, cancellationToken);
+                await lifecycle.ReleaseActorAsync(actorState.RuntimeActorId, cancellationToken);
                 await actorState.ExecuteLockedAsync(
                     () => actorState.ClearAfterDestroy(),
                     CancellationToken.None);
@@ -3306,7 +3307,7 @@ public sealed partial class EntrySpotActorDispatchTests
         try
         {
             var state = GetPrivateField<ZLinkFrameworkComponentState>(runtime, "_state");
-            var target = state.SpotNodes["entry"];
+            var target = GetSpotNode(state, "entry");
             var catalog = GetPrivateField<ZLinkSpotNodeCatalog>(target, "_spots");
 
             var firstCatalog = catalog.DisposeAsync().AsTask();
@@ -3344,7 +3345,7 @@ public sealed partial class EntrySpotActorDispatchTests
             var creation = runtime.CreateAsync<BlockingCreateSpot>().AsTask();
             await probe.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
             var state = GetPrivateField<ZLinkFrameworkComponentState>(runtime, "_state");
-            var catalog = GetPrivateField<ZLinkSpotNodeCatalog>(state.SpotNodes["entry"], "_spots");
+            var catalog = GetPrivateField<ZLinkSpotNodeCatalog>(GetSpotNode(state, "entry"), "_spots");
 
             var firstDispose = catalog.DisposeAsync().AsTask();
             var secondDispose = catalog.DisposeAsync().AsTask();
@@ -3426,7 +3427,7 @@ public sealed partial class EntrySpotActorDispatchTests
             var state = GetPrivateField<ZLinkFrameworkComponentState>(
                 runtime,
                 "_state");
-            var spotNode = state.SpotNodes["entry"];
+            var spotNode = GetSpotNode(state, "entry");
             var owner = runtime.Services
                 .GetRequiredService<ZLinkLocationRuntime>()
                 .OwnerToken;
@@ -3520,7 +3521,7 @@ public sealed partial class EntrySpotActorDispatchTests
             var actor = RegisterProbeActor(runtime, actorRef);
             var created = await runtime.CreateAsync<BlockingActorJoinSpot>();
             var state = GetPrivateField<ZLinkFrameworkComponentState>(runtime, "_state");
-            var catalog = GetPrivateField<ZLinkSpotNodeCatalog>(state.SpotNodes["entry"], "_spots");
+            var catalog = GetPrivateField<ZLinkSpotNodeCatalog>(GetSpotNode(state, "entry"), "_spots");
             var activations = GetPrivateField<
                 Dictionary<ZLinkSpotId, ZLinkSpotActivation>>(catalog, "_spots");
             var activation = activations[ZLinkSpotId.FromBoundary(
@@ -3562,7 +3563,7 @@ public sealed partial class EntrySpotActorDispatchTests
             var created = await runtime.CreateAsync<JoinTargetSpot>();
             var state = GetPrivateField<ZLinkFrameworkComponentState>(runtime, "_state");
             var catalog = GetPrivateField<ZLinkSpotNodeCatalog>(
-                state.SpotNodes["entry"],
+                GetSpotNode(state, "entry"),
                 "_spots");
             var activations = GetPrivateField<
                 Dictionary<ZLinkSpotId, ZLinkSpotActivation>>(
@@ -3611,7 +3612,7 @@ public sealed partial class EntrySpotActorDispatchTests
             var created = await runtime.CreateAsync<RetryingJoinTargetSpot>();
             var state = GetPrivateField<ZLinkFrameworkComponentState>(runtime, "_state");
             var catalog = GetPrivateField<ZLinkSpotNodeCatalog>(
-                state.SpotNodes["entry"],
+                GetSpotNode(state, "entry"),
                 "_spots");
             var activations = GetPrivateField<
                 Dictionary<ZLinkSpotId, ZLinkSpotActivation>>(
@@ -3659,7 +3660,7 @@ public sealed partial class EntrySpotActorDispatchTests
             var creation = runtime.GetOrCreateAsync<BlockingCreateSpot>("blocked-create").AsTask();
             await probe.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
             var state = GetPrivateField<ZLinkFrameworkComponentState>(runtime, "_state");
-            var catalog = GetPrivateField<ZLinkSpotNodeCatalog>(state.SpotNodes["entry"], "_spots");
+            var catalog = GetPrivateField<ZLinkSpotNodeCatalog>(GetSpotNode(state, "entry"), "_spots");
             var firstDispose = catalog.DisposeAsync().AsTask();
             var secondDispose = catalog.DisposeAsync().AsTask();
             Assert.Same(firstDispose, secondDispose);
@@ -3737,7 +3738,7 @@ public sealed partial class EntrySpotActorDispatchTests
         try
         {
             var state = await runtime.GetStartedStateForRoutingAsync(CancellationToken.None);
-            var activation = Assert.IsType<ZLinkEntrySpotActivation>(state.SpotNodes["entry"].EntrySpotActivation);
+            var activation = Assert.IsType<ZLinkEntrySpotActivation>(GetSpotNode(state, "entry").EntrySpotActivation);
             await activation.Outbound
                 .Publish("entry", "events", new ProbeRouteMessage("published"))
                 .Async();
@@ -4814,7 +4815,7 @@ public sealed partial class EntrySpotActorDispatchTests
         ConfigureNotConnectedEntryJoin(node);
         var (runtime, actorRef) = await CreateStartedRuntimeAsync(node);
         var state = GetPrivateField<ZLinkFrameworkComponentState>(runtime, "_state");
-        var target = state.SpotNodes["entry"];
+        var target = GetSpotNode(state, "entry");
         var activation = GetPrivateField<ZLinkEntrySpotActivation>(target, "_entrySpotActivation");
         SetPrivateField<ZLinkEntrySpotActivation?>(target, "_entrySpotActivation", null);
         try
@@ -5332,7 +5333,7 @@ public sealed partial class EntrySpotActorDispatchTests
 
             // Reproduce the reset window after the old context validation:
             // the registry can publish a successor before the old state is fenced.
-            registry.RemoveIfCurrent(actor.ActorId, sourceState);
+            registry.RemoveIfCurrent(sourceState.RuntimeActorId, sourceState);
             var successor = runtime.GetOrCreateActorState(actor.ActorId);
             successor.BindNativeActorRef(
                 actorRef with { Generation = actorRef.Generation + 1 });
@@ -5398,6 +5399,13 @@ public sealed partial class EntrySpotActorDispatchTests
                     ?? throw new InvalidOperationException($"Private field '{name}' was not found.");
         return Assert.IsType<T>(field.GetValue(instance));
     }
+
+    private static ZLinkSpotNodeRuntime GetSpotNode(
+        ZLinkFrameworkComponentState state,
+        string spotNodeName) =>
+        state.SpotNodes[ZLinkSpotNodeName.FromBoundary(
+            spotNodeName,
+            nameof(spotNodeName))];
 
     private static void SetPrivateField<T>(object instance, string name, T value)
     {
@@ -6050,10 +6058,10 @@ public sealed partial class EntrySpotActorDispatchTests
                 actor.ActorId,
                 requestId: 710,
                 deadlineUnixMs: checked((ulong)DateTimeOffset.UtcNow
-                    .AddMilliseconds(20)
+                    .AddMilliseconds(100)
                     .ToUnixTimeMilliseconds()),
                 static (_, _) => SubmitResult.Ok);
-            await Task.Delay(TimeSpan.FromMilliseconds(60));
+            await Task.Delay(TimeSpan.FromMilliseconds(300));
             using var reply = Message.From("late-reply");
 
             await runtime.ReplyActorNoBindAsync(
@@ -6856,9 +6864,9 @@ public sealed partial class EntrySpotActorDispatchTests
         public Action? BeforeRelease { get; set; }
 
         public async ValueTask<ZLinkActorClaimActivation<TActor>> ExecuteActorClaimThenActivateAsync<TActor>(
-            string meshName,
+            ZLinkMeshName meshName,
             string actorType,
-            string actorId,
+            ZLinkActorId actorId,
             RoutingId nodeRid,
             Func<CancellationToken, ValueTask>? deactivate,
             Func<CancellationToken, ValueTask<TActor>> activate,
@@ -6878,13 +6886,13 @@ public sealed partial class EntrySpotActorDispatchTests
         }
 
         public ValueTask PublishActorRefAsync(
-            string actorId,
+            ZLinkActorId actorId,
             ActorRef actorRef,
             CancellationToken cancellationToken = default)
             => ValueTask.FromException(new InvalidOperationException("publish failed"));
 
         public ValueTask ReleaseActorAsync(
-            string actorId,
+            ZLinkActorId actorId,
             CancellationToken cancellationToken = default)
         {
             BeforeRelease?.Invoke();

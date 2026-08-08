@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { AgentAvailabilityDirectory } from '../../../../Application/ConversationAssignment/agent-availability-directory';
 import { SupportActorDirectory } from '../../Actors/support-actor-directory';
 import { SupportUserActor } from '../../Actors/support-user-actor';
-import type { SupportUserActorCreateReq } from '../../../../../../Shared/Contracts/messages';
+import { SupportUserActorCreateReq } from '../../../../../../Shared/Contracts/messages';
 import type {
   ZLinkActorCreateResponse,
   ZLinkEntrySpot,
@@ -28,7 +28,7 @@ class SupportEntrySpot implements ZLinkEntrySpot<SupportUserActor> {
   }
 
   async onCreateActor(actor: SupportUserActor, request: ZLinkMessage): Promise<ZLinkActorCreateResponse> {
-    const value = request.decode<SupportUserActorCreateReq>(Object as never);
+    const value = request.decode(SupportUserActorCreateReq);
     this.directory.bind(actor.actorId, {
       displayName: value.displayName,
       role: value.role,

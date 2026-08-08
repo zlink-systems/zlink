@@ -258,6 +258,6 @@ else
     exit 1
   fi
 fi
-if compgen -G "${log_dir}/*-flow.log" >/dev/null; then
-  grep -Rq "message flow" "${log_dir}"/*-flow.log
+if compgen -G "${log_dir}/*.stdout.log" >/dev/null; then
+  grep -Rq "message flow" "${log_dir}"/*.stdout.log
 fi

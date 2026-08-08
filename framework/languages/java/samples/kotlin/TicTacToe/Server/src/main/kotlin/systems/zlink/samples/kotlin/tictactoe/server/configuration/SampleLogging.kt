@@ -9,7 +9,4 @@ object SampleLogging {
         Path.of(settings.logDirectory, "$role.log").toFile().createNewFile()
         Files.createDirectories(Path.of(settings.logDirectory))
     }
-
-    fun flowLogPath(settings: SampleSettings, role: String): String =
-        Path.of(settings.logDirectory, "flow-$role.log").toString()
 }

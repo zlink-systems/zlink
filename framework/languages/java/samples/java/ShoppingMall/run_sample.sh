@@ -118,5 +118,5 @@ echo "topology=ready"
 cat "$LOG_DIR/client.log"
 grep -q "shoppingmall-server-evidence=completed" "$LOG_DIR/client.log"
 grep -q "shoppingmall=completed" "$LOG_DIR/client.log"
-grep -Rq "message flow" "$LOG_DIR"
+grep -Eq "message flow" "$LOG_DIR"/{api,workflow}-*.log
 echo "shoppingmall full client/server self-check completed"

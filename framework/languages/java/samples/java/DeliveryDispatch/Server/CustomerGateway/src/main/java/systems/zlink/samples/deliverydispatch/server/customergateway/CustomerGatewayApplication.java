@@ -33,9 +33,7 @@ public final class CustomerGatewayApplication {
         return options -> {
             options.addHandlersFromPackageOf(CustomerGatewayApplication.class);
             options.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile(topology.logDirectory() + "/flow-customer-gateway.log")
-                .traceLabel("customer-gateway");
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             ZLinkMeshNodeBuilder node = options.addRouteMesh(SampleNames.CustomerSpotDiscovery);
             node.listen(topology.customerSpotRouterEndpoint())
                 .setRoutingIdPrefix("delivery-customer");

@@ -78,6 +78,9 @@ internal sealed class ZLinkStreamSessionSerialExecutor : IAsyncDisposable
         return _queue.TryPostNext(_ => work(), out _);
     }
 
+    public void CloseApplicationAdmission() =>
+        _queue.CloseApplicationAdmission();
+
     public ZLinkSerialPostAdmission EnqueueApplication(
         Func<CancellationToken, ValueTask> work)
     {

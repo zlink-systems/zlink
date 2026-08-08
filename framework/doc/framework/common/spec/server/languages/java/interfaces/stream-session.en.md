@@ -43,10 +43,11 @@ notification while the connection is kept, and waits for the callback
 terminal. The exact binding callback runs at most once, then the binding is
 committed as a tombstone and removed after terminal. The physical STREAM
 connection and Actor/Spot membership are kept, and no new public Unbind API is
-provided. Rebind doesn't reuse an old exact binding identity for another Actor
-or generation. It registers the new identity first, then runs the old callback
-at most once and tombstones the old binding. Callback failure is recorded as
-diagnostics but doesn't remove the new binding or restore the old one. A
+provided. Rebind completes as soon as the new identity becomes current and does
+not wait for the previous session. The previous exact session may notify the
+client in `onActorBindingReplaced(...)`. The framework closes the connection `100 ms` after the
+callback reaches a successful or failed terminal; an empty outbound queue does not shorten this delay. Callback or close failure
+doesn't remove the new binding or restore the old one. A
 relocation route update is only allowed on the same ObjectGeneration; it isn't
 a rebind and doesn't run the disconnect callback. After the target Actor is restored and starts message
 processing, the target runtime sends `sessionActorLocationUpdateReqMsg`
@@ -58,6 +59,10 @@ and the same request is resent at a fixed interval. The route and
 physical STREAM connection of a different Actor on the same Session that
 isn't included in the relocation target are kept. The application
 doesn't rebind to learn about relocation.
+
+| Implementation difference | Current state |
+|---|---|
+| Session Actor binding replacement | The JVM runtime does not yet implement command 51, the Java callback, or the non-blocking 100 ms close timer. |
 
 ## STREAM Socket Message Size
 
@@ -79,6 +84,7 @@ public interface systems.zlink.framework.streams.ZLinkSession {
   public abstract systems.zlink.framework.streams.ZLinkSessionContext context();
   public abstract java.util.concurrent.CompletionStage<java.lang.Void> onConnected();
   public abstract java.util.concurrent.CompletionStage<java.lang.Void> onDisconnected();
+  public default java.util.concurrent.CompletionStage<java.lang.Void> onActorBindingReplaced(java.lang.String);
   public abstract java.util.concurrent.CompletionStage<java.lang.Void> onError(systems.zlink.framework.streams.ZLinkStreamError);
   public default java.util.concurrent.CompletionStage<java.lang.Void> onDispatch(systems.zlink.framework.streams.ZLinkSessionDispatchContext, systems.zlink.framework.messaging.ZLinkMessage);
 }

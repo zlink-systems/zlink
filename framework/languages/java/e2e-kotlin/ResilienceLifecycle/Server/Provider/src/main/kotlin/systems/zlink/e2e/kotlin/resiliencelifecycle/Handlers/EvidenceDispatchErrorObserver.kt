@@ -1,25 +1,38 @@
 package systems.zlink.e2e.kotlin.resiliencelifecycle
 
-import java.util.concurrent.CompletableFuture
-import java.util.concurrent.CompletionStage
-import systems.zlink.framework.configuration.ZLinkMessageFlowEvent
-import systems.zlink.framework.configuration.ZLinkMessageFlowObserver
-import systems.zlink.framework.configuration.ZLinkMessageFlowOutcome
+import java.util.logging.Handler
+import java.util.logging.LogRecord
+import java.util.logging.Logger
 
-class EvidenceDispatchErrorObserver(
+class EvidenceDispatchErrorHandler(
     private val state: ScenarioState,
-) : ZLinkMessageFlowObserver {
-    override fun onMessageFlow(flow: ZLinkMessageFlowEvent): CompletionStage<Void> {
-        if (flow.outcome() != ZLinkMessageFlowOutcome.ERROR) {
-            return CompletableFuture.completedFuture(null)
-        }
+) : Handler() {
+    fun install() = Logger.getLogger(LOGGER_NAME).addHandler(this)
+
+    override fun publish(record: LogRecord) {
+        val fields = diagnosticsFields(record.message) ?: return
+        if (fields["outcome"] != "ERROR") return
         state.record(
             "DispatchError",
-            "${flow.errorReason()}/${flow.errorAction()}/${flow.packetName()}",
+            "${fields["reason"]}/${fields["action"]}/${fields["packet"]}",
         )
         if (state.observerThrows()) {
-            throw IllegalStateException("dispatch observer failure")
+            throw IllegalStateException("diagnostics provider failure")
         }
-        return CompletableFuture.completedFuture(null)
+    }
+
+    override fun flush() = Unit
+    override fun close() = Logger.getLogger(LOGGER_NAME).removeHandler(this)
+
+    private fun diagnosticsFields(message: String?): Map<String, String>? {
+        if (message?.startsWith("message flow ") != true) return null
+        return message.split(' ').mapNotNull { token ->
+            val separator = token.indexOf('=')
+            if (separator > 0) token.substring(0, separator) to token.substring(separator + 1) else null
+        }.toMap()
+    }
+
+    companion object {
+        private const val LOGGER_NAME = "systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer"
     }
 }

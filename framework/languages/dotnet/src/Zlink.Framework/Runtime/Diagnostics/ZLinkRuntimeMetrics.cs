@@ -255,7 +255,8 @@ internal static class ZLinkRuntimeMetrics
         ArgumentException.ThrowIfNullOrWhiteSpace(meshName);
         if (!RelocationStarted.Enabled
             && !RelocationCompleted.Enabled
-            && !RelocationDuration.Enabled)
+            && !RelocationDuration.Enabled
+            && !RelocationBytes.Enabled)
             return ZLinkRelocationMetricOperation.Disabled;
 
         return new ZLinkRelocationMetricOperation(

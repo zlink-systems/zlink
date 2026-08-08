@@ -26,12 +26,8 @@ class TrackingServerApplication {
         ZLinkFrameworkConfigurer { options ->
             options.useCoroutineHandlers(Dispatchers.Default)
             options.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile(
-                    SampleTopology.LogDirectory +
-                        "/flow-tracking.log",
-                )
-                .traceLabel("tracking")
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL)
+
             options.addHandlersFromPackageOf(TrackingServerApplication::class.java)
             val trackingSpot = options.addRouteMesh(SampleNames.CustomerSpotMesh)
                 .listen(SampleTopology.TrackingSpotEndpoint)

@@ -11,7 +11,6 @@ export {
   ZLinkStreamPacket,
   ZLinkStreamRaw
 } from './Attributes';
-export type { ZLinkJsonSchema, ZLinkPacketJsonContract } from './JsonContract';
 export * from './Contexts';
 export * from './IZLinkChannelHandlers';
 export * from './IZLinkHandlerFilter';

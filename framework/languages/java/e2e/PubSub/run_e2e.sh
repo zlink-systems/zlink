@@ -384,7 +384,7 @@ case "${SCENARIO}" in
     start_ordered_roles "" publisher sub-1 sub-2 sub-3
     run_client_mode "${SCENARIO}" "${SCENARIO}"
     grep -q "scenario ${SCENARIO} passed" "${log_dir}/client-${SCENARIO}.stdout.log"
-    grep -Rq "message flow" "${log_dir}"/*-flow.log
+    grep -Rq "message flow" "${log_dir}"/*.stdout.log
     exit 0
     ;;
   PS-A3)
@@ -403,21 +403,21 @@ case "${SCENARIO}" in
     wait "${CLIENT_PID}"
     cat "${log_dir}/client-PS-A3.stdout.log"
     grep -q "scenario PS-A3 passed" "${log_dir}/client-PS-A3.stdout.log"
-    grep -Rq "message flow" "${log_dir}"/*-flow.log
+    grep -Rq "message flow" "${log_dir}"/*.stdout.log
     exit 0
     ;;
   PS-A4)
     start_ordered_roles "" publisher sub-2
     run_client_mode "${SCENARIO}" "${SCENARIO}"
     grep -q "scenario ${SCENARIO} passed" "${log_dir}/client-${SCENARIO}.stdout.log"
-    grep -Rq "message flow" "${log_dir}"/*-flow.log
+    grep -Rq "message flow" "${log_dir}"/*.stdout.log
     exit 0
     ;;
   PS-B1)
     start_ordered_roles 750 publisher sub-1 sub-2 sub-3
     run_client_mode "${SCENARIO}" "${SCENARIO}"
     grep -q "scenario ${SCENARIO} passed" "${log_dir}/client-${SCENARIO}.stdout.log"
-    grep -Rq "message flow" "${log_dir}"/*-flow.log
+    grep -Rq "message flow" "${log_dir}"/*.stdout.log
     exit 0
     ;;
   PS-B2)
@@ -428,7 +428,7 @@ case "${SCENARIO}" in
     start_subscriber sub-3 gamma "${SUB3_HTTP}"
     run_client_mode "${SCENARIO}" "${SCENARIO}"
     grep -q "scenario ${SCENARIO} passed" "${log_dir}/client-${SCENARIO}.stdout.log"
-    grep -Rq "message flow" "${log_dir}"/*-flow.log
+    grep -Rq "message flow" "${log_dir}"/*.stdout.log
     exit 0
     ;;
   PS-D1)
@@ -589,6 +589,6 @@ with urllib.request.urlopen(sys.argv[1], timeout=5) as response:
     sys.stdout.write(response.read().decode("utf-8"))
 PY
 
-grep -Rq "message flow" "${log_dir}"/*-flow.log
+grep -Rq "message flow" "${log_dir}"/*.stdout.log
 grep -q "HANDLER_MISSING/DROP/MissingEventMsg" "${log_dir}/sub-2-evidence.json"
 echo "pub-sub e2e result=passed"

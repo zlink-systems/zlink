@@ -56,6 +56,8 @@ import { ZLinkAsyncSubmitter } from '../messaging';
 import { ownedMessage } from './stream-message-utils';
 import { ZLinkStreamFrameReassembler } from './stream-frame-reassembler';
 import { ZLinkStreamDispatchCapacity } from './stream-dispatch-capacity';
+import type { ServiceActorRef } from '../foundation/service-stateful-registry';
+import type { ServiceRetiredBoundSessionRouteFence } from '../foundation/service-stateful-wire-codec';
 
 const ZLINK_SEND_DONT_WAIT = 1;
 const ZLINK_RECV_DONT_WAIT = 1;
@@ -63,6 +65,8 @@ const ZLINK_STREAM_HEARTBEAT_INTERVAL_MS = 1_000;
 const ZLINK_STREAM_HEARTBEAT_TIMEOUT_MS = 5_000;
 const ZLINK_STREAM_APPLICATION_IDLE_TIMEOUT_MS = 30_000;
 const ZLINK_STREAM_RECEIVE_FRAME_BATCH_LIMIT = 64;
+const ZLINK_STREAM_ACTOR_BINDING_REPLACEMENT_CALLBACK_TIMEOUT_MS = 30_000;
+const ZLINK_STREAM_ACTOR_BINDING_REPLACEMENT_CLOSE_DELAY_MS = 100;
 
 interface ZLinkStreamLivenessClock {
   now(): number;
@@ -149,6 +153,8 @@ export interface ZLinkStreamSessionRuntimeOptions {
   readonly metrics?: ZLinkRuntimeMetrics;
   readonly submitter?: ZLinkAsyncSubmitter;
   readonly inboundDispatchBudget?: ZLinkInboundDispatchBudget;
+  /** Internal lifecycle deadline for a stalled replacement callback. */
+  readonly replacementCallbackTimeoutMs?: number;
 }
 
 export interface ZLinkStreamSessionNodeRuntimeOptions extends ZLinkStreamSessionRuntimeOptions {
@@ -207,6 +213,9 @@ export class ZLinkStreamSessionRuntime {
       (signal) => this.close(signal),
       options.providerResolver
     );
+    this.context.setActorBindingReplacementHandler((actor, retiredSession) => {
+      this.enqueueActorBindingReplaced(actor, retiredSession);
+    });
     const sessionOrPromise = options.sessionFactory(this.context);
     this.sessionReady = isPromiseLike(sessionOrPromise)
       ? sessionOrPromise.then(
@@ -356,6 +365,83 @@ export class ZLinkStreamSessionRuntime {
 
   enqueueDisconnected(error?: unknown): void {
     this.queueDisconnect(error);
+  }
+
+  /**
+   * Starts the callback on the session lane and observes its terminal result
+   * without retaining that lane while application code awaits unrelated work.
+   */
+  enqueueActorBindingReplaced(
+    actor: ServiceActorRef,
+    retiredSession: ServiceRetiredBoundSessionRouteFence
+  ): void {
+    this.enqueue(async () => {
+      if (this.disposed || this.disconnected) return;
+      if (!this.context.beginActorBindingReplacement(actor, retiredSession)) return;
+      const session = await this.requireSession();
+      let callbackDeadlineTimer: unknown;
+      let callbackTerminal = false;
+      let forcedClose = false;
+      const scheduleClose = (): void => {
+        if (forcedClose) return;
+        this.livenessClock.setTimer(() => {
+          if (
+            this.disposed
+            || this.disconnected
+            || !this.context.isExactRetiredActorBinding(actor, retiredSession)
+          ) {
+            return;
+          }
+          void this.close().catch(error => this.options.onError?.(error));
+        }, ZLINK_STREAM_ACTOR_BINDING_REPLACEMENT_CLOSE_DELAY_MS);
+      };
+      const completeCallback = (): void => {
+        if (callbackTerminal) return;
+        callbackTerminal = true;
+        if (callbackDeadlineTimer !== undefined) {
+          this.livenessClock.clearTimer(callbackDeadlineTimer);
+          callbackDeadlineTimer = undefined;
+        }
+        scheduleClose();
+      };
+      const reportCallbackFailure = (error: unknown): void => {
+        try {
+          this.options.onError?.(error);
+        } catch {
+          // Diagnostics must not prevent the lifecycle terminal transition.
+        }
+        completeCallback();
+      };
+      callbackDeadlineTimer = this.livenessClock.setTimer(() => {
+        if (
+          this.disposed
+          || this.disconnected
+          || !this.context.isExactRetiredActorBinding(actor, retiredSession)
+        ) {
+          return;
+        }
+        forcedClose = true;
+        void this.close().catch(error => this.options.onError?.(error));
+      }, this.options.replacementCallbackTimeoutMs
+        ?? ZLINK_STREAM_ACTOR_BINDING_REPLACEMENT_CALLBACK_TIMEOUT_MS);
+
+      const callback = session.onActorBindingReplaced;
+      if (callback === undefined) {
+        completeCallback();
+        return;
+      }
+      try {
+        // Start the callback on this lifecycle turn, but do not retain the
+        // serial lane while application code awaits an unrelated operation.
+        const result = callback.call(session, this.context, actor.actorId);
+        void Promise.resolve(result).then(
+          () => completeCallback(),
+          reportCallbackFailure
+        );
+      } catch (error) {
+        reportCallbackFailure(error);
+      }
+    });
   }
 
   async close(signal?: AbortSignal): Promise<void> {

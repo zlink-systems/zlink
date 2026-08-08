@@ -43,6 +43,7 @@ import { streamMetadataMap } from '../actors/bound-session-wire';
 import { normalizeRoutingId, routingIdsEqual } from '../routing-id';
 import { ZLinkSubmitStatus } from '../messaging/submission-result';
 import type { DefaultZLinkSpotManager, ZLinkSpotNodeRuntimeManager } from '../spots';
+import type { ZLinkSpotRouteTarget } from '../spots/spot-routing-internal';
 import type { ZLinkDetachedTaskRunner } from '../spots/spot-actor-join-dispatch';
 import type { ZLinkBoundSessionResponseTarget } from '../streams';
 import type {
@@ -61,6 +62,10 @@ import {
 import type { MeshRouterResolver } from './mesh-router-resolver';
 import { ZLinkRemoteActorPacketTargetStore } from './remote-actor-packet-target-store';
 import type { ZLinkResolvedActorRoute, ZLinkStoreLocationResolvers } from '../locations';
+
+const REMOTE_SESSION_BIND_RETRY_DEADLINE_MS = 30_000;
+const REMOTE_SESSION_BIND_RETRY_INITIAL_DELAY_MS = 25;
+const REMOTE_SESSION_BIND_RETRY_MAX_DELAY_MS = 1_000;
 
 export interface ZLinkActorPacketRelayOptions {
   readonly requestTimeoutMs?: number;
@@ -411,13 +416,12 @@ export class ZLinkActorPacketRelay {
       payload: encodeRemoteActorSessionBinding({ sessionNodeRid, sessionRid })
     });
     if (options?.waitForAcknowledgement === false) {
-      void this.options.routeTransport.sendToSpot(
+      this.retryRemoteSessionBindingSend(
         { ...target, spotKind: target.spotKind ?? ZLinkSpotKind.Entry },
         request,
-        { packetName: ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET, signal }
-      ).catch((error) => {
-        this.options.errorSink().reportRuntimeTaskException('remote session binding send', error);
-      });
+        Date.now() + REMOTE_SESSION_BIND_RETRY_DEADLINE_MS,
+        REMOTE_SESSION_BIND_RETRY_INITIAL_DELAY_MS
+      );
       return;
     }
     const reply = await this.requestRemoteTarget<{
@@ -437,6 +441,35 @@ export class ZLinkActorPacketRelay {
         `Actor '${actor.actorId}' did not acknowledge its remote session binding: ${JSON.stringify(reply)}`
       );
     }
+  }
+
+  private retryRemoteSessionBindingSend(
+    target: ZLinkSpotRouteTarget,
+    request: unknown,
+    deadline: number,
+    delayMs: number
+  ): void {
+    void this.options.routeTransport.sendToSpot(
+      target,
+      request,
+      { packetName: ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET }
+    ).then(
+      () => undefined,
+      error => {
+        if (Date.now() >= deadline) {
+          this.options.errorSink().reportRuntimeTaskException('remote session binding send', error);
+          return;
+        }
+        setTimeout(() => {
+          this.retryRemoteSessionBindingSend(
+            target,
+            request,
+            deadline,
+            Math.min(delayMs * 2, REMOTE_SESSION_BIND_RETRY_MAX_DELAY_MS)
+          );
+        }, delayMs);
+      }
+    );
   }
 
   async relayRemoteActorPacket(

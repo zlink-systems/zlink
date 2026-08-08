@@ -39,14 +39,9 @@ export interface ZLinkSessionActorCoordinatorOptions {
   readonly metrics?: ZLinkRuntimeMetrics;
 }
 
-export interface ZLinkRemoteBoundSessionBindRelay {
-  relayRemoteBoundSessionBind(stream: ZLinkManagedStream, actorRef: ActorRef): void;
-}
-
 export class ZLinkSessionActorCoordinator {
   constructor(
     private readonly routes: ZLinkActorSessionBindingRegistry<DefaultZLinkSessionContext, DefaultZLinkSessionActor>,
-    private readonly remoteBoundSessions: ZLinkRemoteBoundSessionBindRelay,
     private readonly sessionActorRuntime: ConstructorParameters<typeof DefaultZLinkSessionActor>[0],
     private readonly options: ZLinkSessionActorCoordinatorOptions = {},
     private readonly lifecycle = new ZLinkActorSessionLifecycleCoordinator()
@@ -100,71 +95,22 @@ export class ZLinkSessionActorCoordinator {
     const previous = this.routes.route(actorRef.actorId);
     const sameIncarnation =
       previous !== undefined
+      && previous.context === context
       && previous.actor.ref.actorId === actorRef.actorId
       && BigInt(previous.actor.ref.objectGeneration) === BigInt(actorRef.objectGeneration);
+    const samePhysicalBinding = sameIncarnation && sameActorRef(previous!.actor.ref, actorRef);
     const reuseActor =
-      previous?.context === context && sameIncarnation ? previous.actor : undefined;
-    const previousRef = previous?.actor.ref;
-    const replacesSameNativeBinding = previous?.context === context && sameIncarnation;
-    let replacementBound = false;
-    try {
-      await this.bindNativeActor(context, actorRef, signal);
-      replacementBound = true;
-      if (confirmRemoteSessionBinding !== false && this.options.confirmRemoteActorSessionBinding !== undefined) {
-        await this.options.confirmRemoteActorSessionBinding(
-          actorRef,
-          this.actorBindingRoutingId(context),
-          signal,
-          { waitForAcknowledgement: confirmRemoteSessionBinding !== 'send' }
-        );
+      sameIncarnation ? previous!.actor : undefined;
+    if (reuseActor !== undefined) {
+      // A repeated bind from the same physical session is idempotent. A route
+      // refresh for the same actor incarnation still submits the native bind,
+      // then keeps this session's actor handle and lifecycle token stable.
+      if (samePhysicalBinding) {
+        return reuseActor;
       }
-    } catch (error) {
-      const rollbackErrors: unknown[] = [];
-      if (replacementBound && !replacesSameNativeBinding) {
-        await this.unbindNativeActor(context, actorRef.actorId).catch((rollbackError) => {
-          rollbackErrors.push(rollbackError);
-        });
-      }
-      if (
-        replacementBound
-        && previous !== undefined
-        && previousRef !== undefined
-      ) {
-        try {
-          await this.bindNativeActor(previous.context, previousRef);
-          try {
-            if (
-              confirmRemoteSessionBinding !== false
-              && this.options.confirmRemoteActorSessionBinding !== undefined
-              && previous.context.routingId !== undefined
-            ) {
-              await this.options.confirmRemoteActorSessionBinding(
-                previousRef,
-                this.actorBindingRoutingId(previous.context)
-              );
-            } else {
-              this.relayRemoteBoundSessionBind(previous.context, previousRef);
-            }
-          } catch (relayError) {
-            if (!replacesSameNativeBinding) {
-              await this.unbindNativeActor(previous.context, previousRef.actorId).catch((unbindError) => {
-                rollbackErrors.push(unbindError);
-              });
-            }
-            throw relayError;
-          }
-        } catch (rollbackError) {
-          rollbackErrors.push(rollbackError);
-        }
-      }
-      if (rollbackErrors.length > 0) {
-        throw new AggregateError(
-          [error, ...rollbackErrors],
-          `Actor '${actorRef.actorId}' session bind and rollback failed.`
-        );
-      }
-      throw error;
     }
+    const authorityFence = await this.resolveAuthorityFence(actorRef, signal);
+    await this.bindNativeActor(context, actorRef, signal);
 
     const bindingToken = reuseActor?.bindingToken ?? createBindingToken();
     const boundActorRef = withBindingGeneration(
@@ -174,13 +120,26 @@ export class ZLinkSessionActorCoordinator {
         : undefined,
       previous?.actor.ref
     );
-    const authorityFence = await this.resolveAuthorityFence(boundActorRef, signal);
-    const sessionActor = reuseActor ?? new DefaultZLinkSessionActor(this.sessionActorRuntime, boundActorRef, bindingToken);
+    const sessionActor = reuseActor
+      ?? new DefaultZLinkSessionActor(this.sessionActorRuntime, boundActorRef, bindingToken);
     sessionActor.updateRef(boundActorRef);
     if (previous === undefined) {
       this.routes.bind(context, sessionActor, bindingToken, authorityFence);
     } else {
       this.routes.replace(previous, context, sessionActor, bindingToken, authorityFence);
+    }
+    if (confirmRemoteSessionBinding !== false && this.options.confirmRemoteActorSessionBinding !== undefined) {
+      const waitForAcknowledgement = previous === undefined
+        && confirmRemoteSessionBinding !== 'send';
+      void this.options.confirmRemoteActorSessionBinding(
+        actorRef,
+        this.actorBindingRoutingId(context),
+        undefined,
+        { waitForAcknowledgement }
+      ).catch(() => {
+        // Confirmation admission is retried independently by the relay. A
+        // failed notice cannot roll back the already-current binding.
+      });
     }
     return sessionActor;
   }
@@ -313,9 +272,9 @@ export class ZLinkSessionActorCoordinator {
       ) {
         return false;
       }
-      // Core has already delivered this exact tombstone and owns removal of
-      // the native delivery after our ACK. Reissuing a native unbind here
-      // would wait on the Actor owner that is waiting for this ACK.
+      // A late legacy tombstone may remove only the still-current exact route.
+      // A replacement route has a different token or ActorRef, so this path
+      // cannot roll it back or wait on the retired session owner.
       this.routes.unbind(actorRef.actorId, route.context, route.bindingToken);
       return true;
     });
@@ -351,7 +310,12 @@ export class ZLinkSessionActorCoordinator {
       return;
     }
     try {
-      await context.stream.bindActor(actorRef, this.options.actorBindTimeoutMs ?? 2000, signal);
+      await context.stream.bindActor(
+        actorRef,
+        this.options.actorBindTimeoutMs ?? 2000,
+        signal,
+        context.actorBindingReplacedHandler
+      );
     } catch (error) {
       throw new Error(
         `Actor '${actorRef.actorId}' native session bind failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -366,37 +330,6 @@ export class ZLinkSessionActorCoordinator {
       : context.routingId as ActorRef['nodeRid'];
   }
 
-  private async unbindNativeActor(
-    context: DefaultZLinkSessionContext,
-    actorId: string,
-    signal?: AbortSignal
-  ): Promise<void> {
-    if (!(context.stream instanceof ZLinkManagedStream)) {
-      return;
-    }
-    try {
-      await context.stream.unbindActor(actorId, this.options.actorBindTimeoutMs ?? 2000, signal);
-    } catch (error) {
-      throw new Error(
-        `Actor '${actorId}' previous native session unbind failed: ${error instanceof Error ? error.message : String(error)}`,
-        { cause: error }
-      );
-    }
-  }
-
-  private relayRemoteBoundSessionBind(
-    context: DefaultZLinkSessionContext,
-    actorRef: ActorRef
-  ): void {
-    if (!(context.stream instanceof ZLinkManagedStream)) {
-      return;
-    }
-    const localNode = this.options.nativeActorNodeProvider?.();
-    if (localNode !== undefined && routingIdsEqual(String(localNode.status().routingId), actorRef.nodeRid)) {
-      return;
-    }
-    this.remoteBoundSessions.relayRemoteBoundSessionBind(context.stream, actorRef);
-  }
 }
 
 function withBindingGeneration(

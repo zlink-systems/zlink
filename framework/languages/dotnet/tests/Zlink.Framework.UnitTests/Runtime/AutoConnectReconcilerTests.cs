@@ -1,3 +1,4 @@
+using Zlink.Framework.Runtime.Identifiers;
 using Zlink.Framework.Runtime.Locations;
 
 namespace Zlink.Framework.UnitTests;
@@ -367,7 +368,7 @@ public sealed class AutoConnectReconcilerTests
         // endpoint-less member to wait — but nobody can dial it, so it must
         // initiate regardless of the id order.
         var dialOnly = new ZLinkAutoConnectLocal(
-            ZLinkLocationAutoConnectType.RouteMesh, "play", ZLinkLocationRole.Router,
+            ZLinkLocationAutoConnectType.RouteMesh, Mesh("play"), ZLinkLocationRole.Router,
             RoutingId.From("zz"), string.Empty);
         var server = Descriptor("aa", "tcp://a:1");
 
@@ -896,7 +897,7 @@ public sealed class AutoConnectReconcilerTests
         // An EnableClient() dealer has neither a routing id nor an endpoint:
         // it cannot be keyed, so it publishes no row — but it must dial.
         var local = new ZLinkAutoConnectLocal(
-            ZLinkLocationAutoConnectType.ClientServer, "play", ZLinkLocationRole.Dealer,
+            ZLinkLocationAutoConnectType.ClientServer, Mesh("play"), ZLinkLocationRole.Dealer,
             NodeRid: null, Endpoint: string.Empty);
         var reconciler = new ZLinkAutoConnectReconciler(
             local, localRow: null, runtime, resolvers, executor, options, time);
@@ -917,7 +918,10 @@ public sealed class AutoConnectReconcilerTests
         ZLinkLocationRole role,
         string rid,
         string endpoint) =>
-        new(type, "play", role, RoutingId.From(rid), endpoint);
+        new(type, Mesh("play"), role, RoutingId.From(rid), endpoint);
+
+    private static ZLinkMeshName Mesh(string value) =>
+        ZLinkMeshName.FromBoundary(value, nameof(value));
 
     private static ZLinkMeshNodeDescriptor Descriptor(
         string rid,
@@ -956,7 +960,7 @@ public sealed class AutoConnectReconcilerTests
         var failable = new FailablePeerResolver(resolvers);
         var executor = new RecordingExecutor();
         var local = new ZLinkAutoConnectLocal(
-            ZLinkLocationAutoConnectType.ClientServer, "play", ZLinkLocationRole.Dealer,
+            ZLinkLocationAutoConnectType.ClientServer, Mesh("play"), ZLinkLocationRole.Dealer,
             RoutingId.From("local"), "tcp://l:1");
         var localRow = Descriptor("local", "tcp://l:1") with
         {

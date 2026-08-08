@@ -1333,8 +1333,8 @@ test('node samples use the codecs required by the common specs', () => {
     [bingoBrowserCodec, 'createZlinkStreamProtobufEnvelopeCodec'],
     [bingoFrameworkCodec, 'createZlinkProtobufEnvelopeCodec'],
     [bingoCodec, 'BingoGeneratedProtobufCodec.encode'],
-    [bingoAuthenticateHandler, 'payload.decode<AuthenticateReq>'],
-    [bingoRoomSpot, 'request.decode<BingoRoomJoinReq>'],
+    [bingoAuthenticateHandler, 'payload.decode(AuthenticateReq)'],
+    [bingoRoomSpot, 'request.decode(BingoRoomJoinReq)'],
     [bingoProto, 'message AuthenticateReq'],
     [bingoProto, 'message BingoRoomState'],
     [bingoProto, 'message BingoNumberDrawnNotify']

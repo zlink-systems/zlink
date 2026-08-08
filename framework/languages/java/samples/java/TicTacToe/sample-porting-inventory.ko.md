@@ -52,7 +52,7 @@
 | automatic registration gate | `run_sample.sh` | validation | done | Java server source가 `addHandlersFromPackageOf(...)`를 사용하지 않으면 역할을 시작하기 전에 실패한다. |
 | API A/B와 Play A/B scale-out | `run_sample.sh` | validation | done | API 2개, Play 2개를 띄우고 manual channel, Spot route, Spot pub/sub endpoint를 서로 연결한다. |
 | observer milestone | runner grep + client marker | validation | done | observer가 별도 Play stream에 연결하고 `WinMilestoneNotify`의 business payload와 누적 win count를 확인한다. physical owner와 수신 NodeRid는 성공 조건으로 사용하지 않는다. |
-| message flow marker | `TICTACTOE_LOG_DIR` grep | validation | done | runner가 role별 flow log의 `message flow` marker를 확인한다. |
+| message flow marker | role stdout grep | validation | done | runner가 role별 stdout의 `message flow` marker를 확인한다. |
 | final marker | `run_sample.sh` | validation | done | client의 `tictactoe completed` 계열 marker와 `PASS TicTacToe.Java`를 확인한다. |
 
 ## 현재 결론

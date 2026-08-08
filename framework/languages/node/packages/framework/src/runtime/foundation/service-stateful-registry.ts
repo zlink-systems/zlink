@@ -32,6 +32,10 @@ export interface ServiceSessionBinding {
   readonly actor: ServiceActorRef;
   readonly sessionRid: string;
   readonly sessionOwnerNodeRid: string;
+  /** Lifecycle/lease fence of the session owner, when supplied by the owner. */
+  readonly sessionOwnerNodeGeneration?: bigint;
+  readonly sessionOwnerId?: string;
+  readonly sessionOwnerLeaseGeneration?: bigint;
   readonly bindingGeneration: bigint;
   readonly membershipEpoch: bigint;
 }
@@ -321,7 +325,10 @@ export class ServiceStatefulRegistry {
   bindSession(
     actor: ServiceActorRef,
     sessionRid: string,
-    sessionOwnerNodeRid: string
+    sessionOwnerNodeRid: string,
+    sessionOwnerNodeGeneration?: bigint,
+    sessionOwnerId?: string,
+    sessionOwnerLeaseGeneration?: bigint
   ): ServiceSessionBinding {
     const current = this.requireActor(actor);
     requireText(sessionRid, 'sessionRid');
@@ -330,6 +337,9 @@ export class ServiceStatefulRegistry {
       actor: Object.freeze({ ...current.ref }),
       sessionRid,
       sessionOwnerNodeRid,
+      ...(sessionOwnerNodeGeneration === undefined ? {} : { sessionOwnerNodeGeneration }),
+      ...(sessionOwnerId === undefined ? {} : { sessionOwnerId }),
+      ...(sessionOwnerLeaseGeneration === undefined ? {} : { sessionOwnerLeaseGeneration }),
       bindingGeneration: this.nextBindingGeneration++,
       membershipEpoch: current.membershipEpoch
     });

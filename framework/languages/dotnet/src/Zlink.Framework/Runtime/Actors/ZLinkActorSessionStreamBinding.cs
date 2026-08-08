@@ -1,3 +1,5 @@
+using Zlink.Framework.Runtime.Identifiers;
+
 namespace Zlink.Framework.Runtime.Actors;
 
 internal sealed partial class ZLinkActorSessionManager
@@ -7,7 +9,8 @@ internal sealed partial class ZLinkActorSessionManager
         IZLinkStream stream,
         CancellationToken cancellationToken = default)
     {
-        var state = _actorSessions.GetOrCreate(actor.Context.ActorId);
+        var state = _actorSessions.GetOrCreate(
+            ZLinkActorId.FromBoundary(actor.Context.ActorId, nameof(actor)));
         BindActorContext(actor, state);
         await BindStreamAsync(state, stream, cancellationToken).ConfigureAwait(false);
 
@@ -19,7 +22,8 @@ internal sealed partial class ZLinkActorSessionManager
         IZLinkStream stream,
         CancellationToken cancellationToken = default)
     {
-        var state = _actorSessions.GetOrCreate(actor.Context.ActorId);
+        var state = _actorSessions.GetOrCreate(
+            ZLinkActorId.FromBoundary(actor.Context.ActorId, nameof(actor)));
         BindActorContext(actor, state);
 
         var shouldUnbind = await ClearStreamBindingAsync(state, stream, cancellationToken)

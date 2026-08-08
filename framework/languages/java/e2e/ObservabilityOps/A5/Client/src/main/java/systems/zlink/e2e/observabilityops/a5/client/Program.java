@@ -24,15 +24,15 @@ public final class Program {
     }
 
     private void run() throws Exception {
-        setMode("KEY_TRANSITIONS");
+        setMode("NORMAL");
         int keyBefore = snapshot().count();
         RawHttpResponse keyReply = request("key-transition", false);
         ensure(keyReply.status() == 200 && keyReply.body().contains("key-transition"),
-            "KEY_TRANSITIONS request failed: " + keyReply.body());
+            "NORMAL request failed: " + keyReply.body());
         FlowSnapshot keyAfter = waitForEvent(
             keyBefore,
             event -> isProbe(event) && isSuccess(event.path("outcome").asText()),
-            "KEY_TRANSITIONS did not produce success evidence");
+            "NORMAL did not produce success evidence");
 
         setMode("OFF");
         int offBefore = snapshot().count();
@@ -41,32 +41,32 @@ public final class Program {
             "OFF request failed: " + offReply.body());
         waitForCount(offBefore, "OFF produced flow evidence for a success request");
 
-        setMode("ERRORS_ONLY");
+        setMode("ERRORS");
         int errorBefore = snapshot().count();
         RawHttpResponse normalReply = request("errors-only-normal", false);
         ensure(normalReply.status() == 200,
-            "ERRORS_ONLY normal request failed: " + normalReply.body());
-        waitForCount(errorBefore, "ERRORS_ONLY produced success evidence");
+            "ERRORS normal request failed: " + normalReply.body());
+        waitForCount(errorBefore, "ERRORS produced success evidence");
         RawHttpResponse failureReply = request("errors-only-failure", true);
         ensure(failureReply.status() >= 500,
-            "ERRORS_ONLY failure did not fail: " + failureReply.body());
+            "ERRORS failure did not fail: " + failureReply.body());
         FlowSnapshot errorAfter = waitForEvent(
             errorBefore,
             event -> isProbe(event)
                 && "ERROR".equals(event.path("outcome").asText())
                 && (!event.path("errorType").asText().isBlank()
                     || !event.path("errorReason").isMissingNode()),
-            "ERRORS_ONLY did not produce error evidence");
+            "ERRORS did not produce error evidence");
 
-        setMode("KEY_TRANSITIONS");
+        setMode("NORMAL");
         int finalBefore = snapshot().count();
         RawHttpResponse finalReply = request("key-transition-again", false);
         ensure(finalReply.status() == 200,
-            "final KEY_TRANSITIONS request failed: " + finalReply.body());
+            "final NORMAL request failed: " + finalReply.body());
         FlowSnapshot finalAfter = waitForEvent(
             finalBefore,
             event -> isProbe(event) && isSuccess(event.path("outcome").asText()),
-            "KEY_TRANSITIONS did not resume success evidence");
+            "NORMAL did not resume success evidence");
         System.out.println("OBS-A5 evidence key=" + keyAfter.count()
             + " error=" + errorAfter.count()
             + " resumed=" + finalAfter.count());

@@ -103,9 +103,8 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             static row => $"auto:{row.ServerRid.ToHex()}:{row.LifecycleGeneration}",
             StringComparer.Ordinal);
         var successors = descriptors.ToDictionary(
-            static row => row.ServerRid.ToHex(),
-            static row => $"auto:{row.ServerRid.ToHex()}:{row.LifecycleGeneration}",
-            StringComparer.Ordinal);
+            static row => row.ServerRid,
+            static row => $"auto:{row.ServerRid.ToHex()}:{row.LifecycleGeneration}");
         string[] obsolete;
         lock (_gate)
             obsolete = _connections.Keys
@@ -123,7 +122,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             lock (_gate)
             {
                 if (_connections.TryGetValue(key, out var obsoleteConnection)
-                    && obsoleteConnection.ExpectedServerRidHex is { } rid
+                    && obsoleteConnection.ExpectedServerRid is { } rid
                     && successors.TryGetValue(rid, out var successorKey)
                     && _connections.TryGetValue(
                         successorKey,
@@ -683,9 +682,9 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                         + $"current={_currentAdmission is not null}";
             }
         }
-        internal string? ExpectedServerRidHex
+        internal RoutingId? ExpectedServerRid
         {
-            get { lock (_gate) return _expected?.ServerRid.ToHex(); }
+            get { lock (_gate) return _expected?.ServerRid; }
         }
         internal string? AdmittedIdentity
         {

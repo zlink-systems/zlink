@@ -94,9 +94,9 @@ class Program {
             options.useCoroutineHandlers(Dispatchers.Default)
             options.addHandlersFromPackageOf(Program::class.java)
             options.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile("${mission.logDirectory}/flow-${mission.instanceName}.log")
-                .traceLabel(mission.instanceName)
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL)
+
+
             options.addRouteMesh(SampleNames.PlayerQuestMesh)
                 .setRoutingIdPrefix("gamequest-mission-owner")
                 .listen(mission.channelEndpoint)

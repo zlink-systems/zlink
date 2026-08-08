@@ -1,3 +1,5 @@
+using Zlink.Framework.Runtime.Identifiers;
+
 namespace Zlink.Framework.Runtime.Actors;
 
 internal sealed partial class ZLinkActorSessionManager(
@@ -92,7 +94,8 @@ internal sealed partial class ZLinkActorSessionManager(
         bool publishActorRef,
         CancellationToken cancellationToken = default)
     {
-        var state = _actorSessions.GetOrCreate(actorId);
+        var state = _actorSessions.GetOrCreate(
+            ZLinkActorId.FromBoundary(actorId, nameof(actorId)));
         return await ActorCreation.RelocateAndBindActorAsync(
                 state,
                 actorId,
@@ -115,7 +118,8 @@ internal sealed partial class ZLinkActorSessionManager(
         ulong authorityOwnerGeneration,
         CancellationToken cancellationToken)
     {
-        var state = _actorSessions.GetOrCreate(actorId);
+        var state = _actorSessions.GetOrCreate(
+            ZLinkActorId.FromBoundary(actorId, nameof(actorId)));
         // A source that completed a handoff keeps its retired native ref and
         // closed activation until the next local materialization. A new
         // durable object generation on this node must retire that old source
@@ -136,7 +140,9 @@ internal sealed partial class ZLinkActorSessionManager(
 
     internal void PublishReservedActor(string actorId)
     {
-        if (_actorSessions.TryGet(actorId, out var state))
+        if (_actorSessions.TryGet(
+                ZLinkActorId.FromBoundary(actorId, nameof(actorId)),
+                out var state))
             state.PublishReservedCreation();
     }
 
@@ -175,7 +181,9 @@ internal sealed partial class ZLinkActorSessionManager(
     {
         cancellationToken.ThrowIfCancellationRequested();
         return ValueTask.FromResult(
-            _actorSessions.TryGet(actorId, out var state)
+            _actorSessions.TryGet(
+                ZLinkActorId.FromBoundary(actorId, nameof(actorId)),
+                out var state)
                 && !state.IsDispatchBlocked
                 ? state.Actor
                 : null);
@@ -198,7 +206,9 @@ internal sealed partial class ZLinkActorSessionManager(
         out ZLinkActorRuntimeState state)
     {
         state = null!;
-        if (!_actorSessions.TryGet(actorId, out var existingState)
+        if (!_actorSessions.TryGet(
+                ZLinkActorId.FromBoundary(actorId, nameof(actorId)),
+                out var existingState)
             || existingState.IsDispatchBlocked
             || existingState.Actor is null)
             return false;
@@ -213,7 +223,9 @@ internal sealed partial class ZLinkActorSessionManager(
         out ZLinkActorRuntimeState state)
     {
         state = null!;
-        if (!_actorSessions.TryGet(actorId, out var existingState)
+        if (!_actorSessions.TryGet(
+                ZLinkActorId.FromBoundary(actorId, nameof(actorId)),
+                out var existingState)
             || existingState.IsDispatchBlocked
             || existingState.Actor is null)
             return false;
@@ -236,7 +248,8 @@ internal sealed partial class ZLinkActorSessionManager(
         ZLinkActorClaimMode claimMode,
         CancellationToken cancellationToken)
     {
-        var state = _actorSessions.GetOrCreate(actorId);
+        var state = _actorSessions.GetOrCreate(
+            ZLinkActorId.FromBoundary(actorId, nameof(actorId)));
         return await ActorCreation.CreateAndBindActorAsync(
                 state,
                 actorId,
@@ -350,14 +363,17 @@ internal sealed partial class ZLinkActorSessionManager(
 
     public ZLinkActorRuntimeState GetOrCreateState(string actorId)
     {
-        return _actorSessions.GetOrCreate(actorId);
+        return _actorSessions.GetOrCreate(
+            ZLinkActorId.FromBoundary(actorId, nameof(actorId)));
     }
 
     internal bool TryGetState(
         string actorId,
         out ZLinkActorRuntimeState state)
     {
-        return _actorSessions.TryGet(actorId, out state!);
+        return _actorSessions.TryGet(
+            ZLinkActorId.FromBoundary(actorId, nameof(actorId)),
+            out state!);
     }
 
     internal ValueTask ResetGenerationAsync(

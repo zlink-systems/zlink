@@ -19,9 +19,7 @@ object ApiServer {
             options.useCoroutineHandlers(Dispatchers.Default)
             options.addHandlersFromPackageOf(ApiServer::class.java)
             options.configureDispatch {
-                messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                traceLogFile(SampleLogging.flowLogPath(settings, "api-${settings.apiHttpPort}"))
-                traceLabel("api-${settings.apiHttpPort}")
+                messageFlow(ZLinkMessageFlowLogMode.NORMAL)
             }
             options.configureLocations()
             val apiEndpoint = java.net.URI.create(settings.apiChannelEndpoint)

@@ -71,6 +71,22 @@ nlohmann::json post (const std::string &base_url,
     return nlohmann::json::parse (result.value ().body);
 }
 
+http::raw_http_response_t post_raw (const std::string &base_url,
+                                    const std::string &path,
+                                    nlohmann::json body)
+{
+    auto result = make_http (base_url)
+                    .post (path)
+                    .body (std::move (body))
+                    .submit_raw ()
+                    .result ();
+    if (!result) {
+        throw std::runtime_error (
+          result.error () ? result.error ()->what () : "HTTP failed");
+    }
+    return std::move (result.value ());
+}
+
 e2e::operation_evidence_t evidence (const client_options_t &options,
                                     const std::string &operation_id)
 {
@@ -150,6 +166,23 @@ void run_send (const client_options_t &options,
 
 void run_scenario (const client_options_t &options, const std::string &scenario)
 {
+    if (scenario == "IS-E2E-05") {
+        const auto operation_id = scenario + "-after-crash";
+        const auto response = post_raw (
+          options.caller_url, "/instance/request",
+          e2e::probe_request_t{scenario + "-spot", operation_id, scenario});
+        const auto body = nlohmann::json::parse (response.body);
+        if (response.status < 400
+            || body.value ("errorKind", -1)
+                 != static_cast<int> (
+                   zlink::framework::framework_error_kind_t::unavailable)) {
+            throw std::runtime_error (
+              "IS-E2E-05 request did not terminate as Unavailable");
+        }
+        std::cout << "IS-E2E-05 terminal=Unavailable operation="
+                  << operation_id << '\n';
+        return;
+    }
     wait_ready (options);
     if (scenario == "IS-E2E-02") {
         run_send (options, scenario + "-spot", scenario + "-send", scenario);
@@ -185,7 +218,8 @@ void run_scenario (const client_options_t &options, const std::string &scenario)
         }
         return;
     }
-    run_request (options, scenario + "-spot", scenario + "-request", scenario);
+    throw std::runtime_error (
+      "InstanceSpot scenario is registered but not implemented: " + scenario);
 }
 
 } // namespace

@@ -45,8 +45,10 @@ topology_reason=""
 
 OWNER_A_HTTP=""
 OWNER_A_MESH=""
+OWNER_A_PID=""
 OWNER_B_HTTP=""
 OWNER_B_MESH=""
+OWNER_B_PID=""
 CLIENT_A_HTTP=""
 CLIENT_A_MESH=""
 CLIENT_B_HTTP=""
@@ -247,6 +249,11 @@ start_owner() {
     2>"${log_dir}/${rid}.stderr.log" &
   last_pid="$!"
   pids+=("${last_pid}")
+  if [[ "${rid}" == "owner-a" ]]; then
+    OWNER_A_PID="${last_pid}"
+  else
+    OWNER_B_PID="${last_pid}"
+  fi
   wait_http "${rid}" "${http}"
 }
 
@@ -270,8 +277,13 @@ setup_topology() {
     return 3
   fi
 
-  if [[ ! -x "$(owner_bin)" || ! -x "$(client_bin)" ]]; then
-    if ! gradle_run :Owner:installDist :Client:installDist; then
+  if [[ "${ZLINK_E2E_REBUILD:-0}" == "1" \
+      || ! -x "$(owner_bin)" || ! -x "$(client_bin)" ]]; then
+    local -a build_args=(:Owner:installDist :Client:installDist)
+    if [[ "${ZLINK_E2E_REBUILD:-0}" == "1" ]]; then
+      build_args=(--refresh-dependencies clean "${build_args[@]}")
+    fi
+    if ! gradle_run "${build_args[@]}"; then
       topology_reason="Gradle installDist failed; see ${log_dir}/gradle output"
       return 1
     fi
@@ -910,6 +922,198 @@ PY
   echo "PASS IS-E2E-31 process=owner-a/owner-b client=client-a+client-b wire=single-selected-owner"
 }
 
+scenario_ready_owner_loss() {
+  local scenario_id="$1"
+  local spot_id="ready-owner-loss-${scenario_id}-${run_id}"
+  local first_operation="${scenario_id}-first-${run_id}"
+  local failed_operation="${scenario_id}-after-loss-${run_id}"
+  local first_path="${log_dir}/${scenario_id}.first.json"
+  local failed_path="${log_dir}/${scenario_id}.failed.json"
+  post_json "${CLIENT_A_HTTP}/request" \
+    "{\"spotId\":\"${spot_id}\",\"operationId\":\"${first_operation}\",\"payload\":\"establish-ready-owner\",\"timeoutMilliseconds\":5000}" \
+    "${first_path}"
+  assert_request_success "${first_path}" "${spot_id}" "${first_operation}"
+  snapshot_evidence "${scenario_id}-before-loss"
+  local owner_rid owner_pid surviving_http
+  owner_rid="$(python3 - "${first_path}" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as stream:
+    print(json.load(stream)["reply"]["ownerRid"])
+PY
+)"
+  case "${owner_rid}" in
+    owner-a) owner_pid="${OWNER_A_PID}"; surviving_http="${OWNER_B_HTTP}" ;;
+    owner-b) owner_pid="${OWNER_B_PID}"; surviving_http="${OWNER_A_HTTP}" ;;
+    *) echo "unexpected Ready owner RID: ${owner_rid}" >&2; return 1 ;;
+  esac
+  kill -9 "${owner_pid}"
+  wait "${owner_pid}" >/dev/null 2>&1 || true
+  sleep 3
+  post_json "${CLIENT_B_HTTP}/request" \
+    "{\"spotId\":\"${spot_id}\",\"operationId\":\"${failed_operation}\",\"payload\":\"must-not-reactivate\",\"timeoutMilliseconds\":3000}" \
+    "${failed_path}"
+  get_json "${surviving_http}/evidence" \
+    "${log_dir}/${scenario_id}-surviving-owner.evidence.json"
+  python3 - "${failed_path}" \
+    "${log_dir}/${scenario_id}-before-loss-owner-a.evidence.json" \
+    "${log_dir}/${scenario_id}-before-loss-owner-b.evidence.json" \
+    "${log_dir}/${scenario_id}-surviving-owner.evidence.json" \
+    "${spot_id}" "${failed_operation}" <<'PY'
+import json
+import sys
+
+failure_path, before_a, before_b, after, spot_id, operation_id = sys.argv[1:]
+with open(failure_path, encoding="utf-8") as stream:
+    outcome = json.load(stream)
+if outcome.get("succeeded") or outcome.get("errorKind") != "UNAVAILABLE":
+    raise SystemExit(f"Ready owner loss was not bounded Unavailable: {outcome}")
+events = []
+for path in (before_a, before_b):
+    with open(path, encoding="utf-8") as stream:
+        events.extend(json.load(stream)["events"])
+with open(after, encoding="utf-8") as stream:
+    after_events = json.load(stream)["events"]
+if sum(event["kind"] == "FACTORY" and event["spotId"] == spot_id
+       for event in events) != 1:
+    raise SystemExit("the initial Ready identity did not have exactly one factory")
+if any(event["kind"] in ("FACTORY", "INITIALIZE")
+       and event["spotId"] == spot_id for event in after_events):
+    raise SystemExit("the surviving owner started forbidden cold activation")
+if any(event["kind"] == "HANDLER_ENTER"
+       and event["operationId"] == operation_id for event in after_events):
+    raise SystemExit("the failed operation reached an application handler")
+PY
+  echo "PASS ${scenario_id} process=ready-owner-SIGKILL client=client-b terminal=UNAVAILABLE recovery=none"
+}
+
+scenario_05() {
+  scenario_ready_owner_loss IS-E2E-05
+}
+
+scenario_35() {
+  local scenario_id="IS-E2E-35"
+  local spot_id="ready-pending-owner-loss-${run_id}"
+  local ready_operation="${scenario_id}-ready-${run_id}"
+  local pending_operation="${scenario_id}-pending-${run_id}"
+  local queued_operation="${scenario_id}-queued-${run_id}"
+  local failed_operation="${scenario_id}-after-loss-${run_id}"
+  local gate_id="${scenario_id}-gate-${run_id}"
+  local ready_path="${log_dir}/${scenario_id}.ready.json"
+  local pending_path="${log_dir}/${scenario_id}.pending.json"
+  local queued_path="${log_dir}/${scenario_id}.queued.json"
+  local failed_path="${log_dir}/${scenario_id}.failed.json"
+
+  post_json "${CLIENT_A_HTTP}/request" \
+    "{\"spotId\":\"${spot_id}\",\"operationId\":\"${ready_operation}\",\"payload\":\"establish-ready-owner\",\"timeoutMilliseconds\":5000}" \
+    "${ready_path}"
+  assert_request_success "${ready_path}" "${spot_id}" "${ready_operation}"
+
+  local owner_rid owner_pid surviving_http
+  owner_rid="$(python3 - "${ready_path}" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as stream:
+    print(json.load(stream)["reply"]["ownerRid"])
+PY
+)"
+  case "${owner_rid}" in
+    owner-a) owner_pid="${OWNER_A_PID}"; surviving_http="${OWNER_B_HTTP}" ;;
+    owner-b) owner_pid="${OWNER_B_PID}"; surviving_http="${OWNER_A_HTTP}" ;;
+    *) echo "unexpected Ready owner RID: ${owner_rid}" >&2; return 1 ;;
+  esac
+
+  close_gate "${gate_id}"
+  post_json_async "${CLIENT_A_HTTP}/request" \
+    "{\"spotId\":\"${spot_id}\",\"operationId\":\"${pending_operation}\",\"payload\":\"gate:${gate_id}\",\"timeoutMilliseconds\":10000}" \
+    "${pending_path}" "${log_dir}/${scenario_id}.pending.stderr"
+  local pending_pid="${last_http_pid}"
+  wait_event_any HANDLER_ENTER "${pending_operation}" 8 || {
+    open_gate "${gate_id}"
+    wait "${pending_pid}" >/dev/null 2>&1 || true
+    echo "Ready owner did not retain the gated pending request" >&2
+    return 1
+  }
+
+  post_json_async "${CLIENT_B_HTTP}/request" \
+    "{\"spotId\":\"${spot_id}\",\"operationId\":\"${queued_operation}\",\"payload\":\"gate:${gate_id}\",\"timeoutMilliseconds\":10000}" \
+    "${queued_path}" "${log_dir}/${scenario_id}.queued.stderr"
+  local queued_pid="${last_http_pid}"
+  snapshot_evidence "${scenario_id}-before-loss"
+
+  kill -9 "${owner_pid}"
+  wait "${owner_pid}" >/dev/null 2>&1 || true
+  wait_http_result "${pending_pid}" "${pending_path}" 30 || true
+  wait_http_result "${queued_pid}" "${queued_path}" 30 || true
+  wait "${pending_pid}" >/dev/null 2>&1 || true
+  wait "${queued_pid}" >/dev/null 2>&1 || true
+  sleep 3
+  post_json "${CLIENT_B_HTTP}/request" \
+    "{\"spotId\":\"${spot_id}\",\"operationId\":\"${failed_operation}\",\"payload\":\"must-not-reactivate\",\"timeoutMilliseconds\":3000}" \
+    "${failed_path}"
+  get_json "${surviving_http}/evidence" \
+    "${log_dir}/${scenario_id}-surviving-owner.evidence.json"
+
+  python3 - "${ready_path}" "${pending_path}" "${queued_path}" "${failed_path}" \
+    "${log_dir}/${scenario_id}.pending.stderr" \
+    "${log_dir}/${scenario_id}.queued.stderr" \
+    "${log_dir}/${scenario_id}-before-loss-owner-a.evidence.json" \
+    "${log_dir}/${scenario_id}-before-loss-owner-b.evidence.json" \
+    "${log_dir}/${scenario_id}-surviving-owner.evidence.json" \
+    "${spot_id}" "${pending_operation}" "${queued_operation}" "${failed_operation}" <<'PY'
+import json
+import sys
+
+(ready_path, pending_path, queued_path, failed_path, pending_stderr, queued_stderr,
+ before_a, before_b, after, spot_id, pending_operation, queued_operation,
+ failed_operation) = sys.argv[1:]
+
+def load(path):
+    with open(path, encoding="utf-8") as stream:
+        return json.load(stream)
+
+ready = load(ready_path)
+if not ready.get("succeeded"):
+    raise SystemExit(f"Ready request failed: {ready}")
+failed = load(failed_path)
+if failed.get("succeeded") or failed.get("errorKind") != "UNAVAILABLE":
+    raise SystemExit(f"post-loss request was not bounded Unavailable: {failed}")
+for path, error_path in ((pending_path, pending_stderr), (queued_path, queued_stderr)):
+    if not __import__("os").path.getsize(path):
+        with open(error_path, encoding="utf-8") as stream:
+            error = stream.read()
+        if "curl:" not in error:
+            raise SystemExit(f"pending request ended without terminal evidence: {path}")
+        continue
+    outcome = load(path)
+    if outcome.get("succeeded"):
+        raise SystemExit(f"owner-loss request unexpectedly succeeded: {outcome}")
+
+before_events = load(before_a)["events"] + load(before_b)["events"]
+after_events = load(after)["events"]
+if sum(event["kind"] == "FACTORY" and event["spotId"] == spot_id
+       for event in before_events) != 1:
+    raise SystemExit("the Ready owner did not have exactly one factory")
+if sum(event["kind"] == "INITIALIZE" and event["spotId"] == spot_id
+       for event in before_events) != 1:
+    raise SystemExit("the Ready owner did not have exactly one initialize")
+entered = [event for event in before_events
+           if event["kind"] == "HANDLER_ENTER"
+           and event["spotId"] == spot_id
+           and event["operationId"] in (pending_operation, queued_operation)]
+if [event["operationId"] for event in entered] != [pending_operation]:
+    raise SystemExit(f"pending queue was not retained behind the active handler: {entered}")
+if any(event["operationId"] == queued_operation for event in entered):
+    raise SystemExit("queued request entered the handler before owner loss")
+if any(event["spotId"] == spot_id and event["kind"] in ("FACTORY", "INITIALIZE", "HANDLER_ENTER")
+       for event in after_events):
+    raise SystemExit("surviving owner performed forbidden automatic recovery")
+if any(event["operationId"] == failed_operation for event in after_events):
+    raise SystemExit("post-loss request reached an application handler")
+PY
+  echo "PASS ${scenario_id} process=ready-owner-SIGKILL client=client-a+client-b pending=active-handler+queued-request recovery=none"
+}
+
 run_scenario() {
   case "$1" in
     IS-E2E-01) scenario_01 ;;
@@ -920,7 +1124,8 @@ run_scenario() {
     IS-E2E-19) scenario_19 ;;
     IS-E2E-26) scenario_26 ;;
     IS-E2E-31) scenario_31 ;;
-    IS-E2E-05) blocked_scenario "$1" "fixture does not provide a crash/restart control sequence with public owner-liveness evidence" ;;
+    IS-E2E-05) scenario_05 ;;
+    IS-E2E-35) scenario_35 ;;
     IS-E2E-06) blocked_scenario "$1" "fixture does not provide a factory-entry crash boundary and recovery controller" ;;
     IS-E2E-07) blocked_scenario "$1" "owner factory is explicitly configured with disableRelocation() for this fixture" ;;
     IS-E2E-09) blocked_scenario "$1" "fixture does not provide concurrent post-crash requests plus public lease invalidation evidence" ;;
@@ -946,7 +1151,6 @@ run_scenario() {
     IS-E2E-32) blocked_scenario "$1" "fixture has no separate activation crash-boundary orchestration" ;;
     IS-E2E-33) blocked_scenario "$1" "fixture has no factory/initialize failure injection" ;;
     IS-E2E-34) blocked_scenario "$1" "fixture has no target crash/restart control around unpublished activation" ;;
-    IS-E2E-35) blocked_scenario "$1" "fixture has no Ready-owner crash and no-automatic-recovery process sequence" ;;
     IS-E2E-36) blocked_scenario "$1" "fixture has no before/after-handler crash injection" ;;
     *)
       echo "unknown InstanceSpot scenario: $1" >&2

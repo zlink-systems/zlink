@@ -4,514 +4,719 @@ title: "Node Framework 스펙 구현 Gap 리포트"
 
 # Node Framework 스펙 구현 Gap 리포트
 
-- **작성일**: 2026-08-07
-- **공개 계약 기준**: 승인된 DEC-01–17의 결과가 반영된 `framework/doc/framework/common/spec/`와
-  Node server exact interface
-- **내부 구조 기준**: `framework/doc/framework/common/internals/` 01–12
-- **구현 기준**: `framework/languages/node/packages/framework/src/`, 생성된
-  `packages/framework/dist/` declaration과 `framework/languages/node/test/` (전체 audit `425b9c2a8272`; 복구·머지 뒤 현재 `main` `e2119caeda`까지 production source 변경 없음)
-- **방법**: public exact surface, runtime 의미·error, codec·protocol, lifecycle·HWM·relocation,
-  package·test·process E2E 증거를 분리해 비교했다. Internals 12개 문서의 **Decision** /
-  **Result To Confirm** 항목도 현재 정식 spec과 충돌하지 않는 범위에서 다시 판정했다.
-- **증거 경로 표기**: `node/` = `framework/languages/node/packages/framework/src/` 축약. 형제 패키지는 `packages/…`로 표기.
+- **판정일**: 2026-08-08
+- **계약 기준**: `framework/doc/framework/common/spec/`와 Node server exact interface
+- **구현 기준**: `framework/languages/node/packages/framework/src/`, 생성된 `dist` declaration,
+  `framework/languages/node/test/`
+- **공용 wire 기준**: `framework/runtime/protocol/service-wire-v1.schema.json`, golden·malformed fixture
+- **작업 조건**: `main`에서 조사·수정했고 기존 dirty 변경은 보존했다. commit·push는 실행하지 않았다.
 
-Public API와 사용자에게 보이는 동작은 정식 spec과 exact interface만 계약 근거로 사용한다. Internals는
-그 계약을 구현하는 상태 표현, component 책임과 불변 조건의 차이를 판정하는 기준이며 공개 동작을
-추가하거나 바꾸지 않는다. Source에서 확인한 gap과 package·process 검증 증거 부족도 분리한다.
+이 문서는 source gap, public contract, package provenance, 실제 process 증거를 구분한다. Source와
+focused test만 통과한 항목은 완료로 올리지 않는다. 정식 spec이나 exact interface와 충돌하는
+public surface는 구현을 억지로 맞추지 않고 이슈로 남긴다. 보호된 spec·internals·schema 파일은
+이번 continuation에서 수정하지 않았다. 현재 status에 보이는 해당 경로의 dirty 변경은 이
+continuation에서 만든 변경이 아니므로 원복하지 않고 그대로 보존했다.
 
-> **기존 기록과의 관계**: Public spec에 있던 구현 진행 기록은 삭제됐다.
-> 이 보고서가 Node open gap의 작업 기록을 소유하며, 승인된 결정을 반영한 정식 spec과
-> exact interface를 계약 기준으로 삼는다. 이전에 종결한 `NODE-ROUTE-001`,
-> `NODE-RELOC-001`, `NODE-SAMPLE-001`은 코드와 일치함을 확인했다.
+## 1. 최종 판정
 
----
+Node 내부 gap은 55개다. 그중 54개는 source·회귀·package·process 증거로 `CLOSED`이고,
+`NODE-RELOC-003`은 처음부터 정상 분리된 설계로 `SATISFIED` 판정했다. build-time DTO schema
+extraction을 추가한 뒤 `NODE-WIRE-002`도 exact interface를 바꾸지 않고 종결했다. `BLOCKED`는 0개다.
 
-## 병렬 구현 세션 주의 사항
+| 범위 | CLOSED | SATISFIED | BLOCKED | 판정 |
+|---|---:|---:|---:|---|
+| 01–12 internals, 55 IDs | 54 | 1 | 0 | 전체 ID가 현재 계약·구현·증거와 일치 |
+| 추가 public contract, 7 IDs | 7 | 0 | 0 | Node source·declaration·package 확인 |
+| 이전에 닫힌 `NODE-ROUTE-001`, `NODE-RELOC-001`, `NODE-SAMPLE-001` | 3 | 0 | 0 | 기존 판정 유지 |
 
-이 보고서는 다른 언어의 gap 작업과 동시에 진행할 수 있지만, 모든 작업은 현재 `main` checkout에서
-수행한다. 별도 `git worktree`나 작업용 branch를 만들지 않으며, 작업 시작 시점의 `main` commit SHA를
-작업 기록에 남긴다.
+`NODE-WIRE-002`의 원인은 public exact interface 변경이 아니라 erased TypeScript DTO를 runtime
+schema와 연결하는 build-time 경로의 부재였다. 보호된 Node exact interface
+(`server/languages/node/interfaces/02-channel-messaging.ko.md:177`)의
+`ZLinkPacket(packetName: string)`은 그대로 유지하고, generator가 class·interface·type alias·enum을
+AST에서 읽어 `framework-json-v1` contract를 생성한다. generated server CommonJS registry와
+browser ESM registry를 sample build 및 packed clean-consumer에서 확인했으므로 spec 변경 blocker가
+남지 않는다.
 
-- 이 세션은 해당 언어의 production source·test·package 자료와 이 gap 문서만 수정한다. 다른 언어
-  디렉터리, 다른 언어 gap 문서와 공통 spec·internals는 수정하지 않는다.
-- `framework/runtime/protocol/`의 schema·generated 파일, cross-language fixture, 공통 검증 script처럼
-  여러 언어가 함께 소비하는 파일은 통합 담당자 한 명만 수정한다. 변경이 필요하면 이 문서에 요구사항과
-  예상 wire/API 영향을 기록하고 공용 선행 commit을 요청한다.
-- 다른 세션의 변경을 원복하거나 포맷하지 않는다. Stage와 commit은 명시적인 경로 목록으로 제한하고
-  `git add -A`를 사용하지 않는다.
-- Gap 종결은 source 수정만으로 판단하지 않는다. Owner-layer regression, public API/exact snapshot,
-  package 또는 clean-consumer, 관련 process E2E 증거를 각각 기록하고 통과한 항목만 종결한다.
-- 언어별 작업이 `main`에 반영된 뒤 통합 담당자가 cross-language contract, service-wire fixture, 전체 문서
-  검사와 process E2E를 다시 실행한다. 개별 성공을 전체 종결로 승격하지 않는다.
+### 1.1 Internals ID 판정
 
-### 구현 중 리팩터링·checkpoint 규칙
+아래 표의 `CLOSED`는 해당 동작을 source와 Node aggregate gate에서 확인했다는 뜻이다. 표의
+`BLOCKED`는 계약 출처가 확정되지 않아 완료로 승격하지 않은 항목이다.
 
-Gap 하나 또는 서로 강하게 연결된 작은 작업 묶음의 동작과 회귀 test가 통과하면 다음 Gap으로 넘어가기
-전에 리팩터링 checkpoint를 둔다. 마지막에 한꺼번에 정리하지 않는다.
-
-- Production code는 POSD 관점에서 deep module과 information hiding을 강화하고, 의미 없이 인자를 전달하는
-  pass-through 계층, 호출 순서에 의존하는 temporal decomposition과 중복 helper를 제거한다. DDD 관점에서는
-  lifecycle·ownership·state transition·terminal error invariant를 해당 domain owner가 책임하게 정리한다.
-- 같은 checkpoint에서 unit test도 POSD/DDD 관점으로 리팩터링한다. 반복 setup은 의도를 드러내는 fixture나
-  builder 안에 숨기고, test 이름과 helper는 domain 용어와 observable behavior를 표현하게 한다. Production
-  내부 구조를 그대로 복제하거나 실행 순서와 private 구현에 결합된 test는 제거하거나 계약 중심으로 바꾼다.
-- 리팩터링 뒤 dead code, 사용하지 않는 wrapper·alias·fixture·dependency를 제거하고, hot path의 불필요한
-  allocation·copy와 lock·queue contention도 함께 점검한다. 동작 변경이 있으면 owner-layer regression을
-  먼저 추가하고 관련 unit test를 다시 실행한다.
-- 관련 test가 통과한 의미 있는 checkpoint마다 해당 언어 경로와 이 문서만 path-limited staging하여
-  commit하고 `main`에 push한다. Commit에는 닫은 Gap ID와 실행한 test를 남기고, 검증되지 않은 변경이나
-  다른 언어의 변경을 섞지 않는다. Push한 commit SHA와 gate 결과를 이 문서의 해당 항목에 기록한 뒤
-  다음 작업으로 진행한다.
-
-## 1. 집계
-
-| 문서·범위 | GAP | PARTIAL | 비고 |
-|---|---:|---:|---|
-| 01-layering | 1 | 2 | shutdown-relocation 경합 역전, 식별자 내부 표현 |
-| 02-serialization | 2 | 2 | 재진입 허용이 핵심 |
-| 03-progress-isolation | 1 | 3 | Request 무응답 폐기 |
-| 04-completion | 3 | 1 | 완료 테이블 무한 누적 |
-| 05-relocation-continuity | 3 | 1 | seal 창 메시지 손실 |
-| 06-routing-and-cache | 2 | 3 | 선택기 상태 리셋 |
-| 07-dispatch-loop | 1 | 3 | cross-owner HOL 블로킹 |
-| 08-object-lifecycle | 3 | 2 | idle sweep, 일반 message generation 거부, Ready owner loss |
-| 09-session-binding | 3 | 1 | 하트비트 레인, 스왑 핸드셰이크 |
-| 10-liveness-and-state | 0 | 2 | 대체로 충실 |
-| 11-message-ownership | 3 | 3 | content-type 미사용, 접근자 복사 |
-| 12-service-wire-protocol | 4 | 6 | RouteMesh 금지 상한 잔존, STREAM EMSGSIZE 진단, json-v1 |
-| **internals 소계** | **26** | **29** | STREAM 초과 진단과 Ready owner loss gap을 반영 |
-| 결정 반영 후 public contract·exact interface(기존 항목과 중복 제외) | 7 | 0 | DEC-01·02·04·06·08·09·17 |
-| **전체 unique gap** | **33** | **29** | `NODE-WIRE-002`(DEC-05)는 internals 26건에만 계산 |
-
-### 1.1 결정 반영 후 추가된 public contract gap
-
-| ID | 분류 | spec과 현재 구현의 차이 |
-|---|---|---|
-| `NODE-CONTRACT-DIAG-001` | PARTIAL·중 | Source와 생성 declaration의 diagnostics level을 exact interface의 `off/errors/normal/detailed` 문자열 union으로 맞추고 startup과 live setter에 같은 범위 검증을 적용했다. Packed package·clean consumer에서 네 값과 invalid value 거부를 확인해야 한다. |
-| `NODE-CONTRACT-DIAG-002` | PARTIAL·상 | Public observer, runtime error sink, raw event DTO와 trace file·label option을 제거하고 message-flow·dispatch-error record를 application이 설정한 OpenTelemetry logger·trace provider로 게시한다. 모든 Node E2E consumer도 표준 provider 또는 exact level로 이관했고 provider failure 뒤 messaging 진행 process를 확인했다. Packed package·clean consumer, 전체 Node process와 다섯 언어 provider aggregate gate가 남아 있다. |
-| `NODE-CONTRACT-LOC-001` | PARTIAL·중 | Actor·Spot ID exact lookup과 `creating/ready/unavailable` 상태를 source와 생성 declaration에 추가했다. Ready authority의 owner lease를 확인할 수 없으면 row를 제거하지 않고 `unavailable`로 반환하며 list도 같은 판정을 사용한다. Packed package·clean consumer와 Store failure·page 경계 process gate가 남아 있다. |
-| `NODE-CONTRACT-STREAM-001` | PARTIAL·상 | Exact interface의 `ZLinkSessionSendCall.timeout(timeoutMs)`을 source와 생성 declaration에 추가했다. Runtime은 call별 값과 socket send timeout 중 짧은 admission deadline을 사용하고, 만료된 pending submit은 SEND_READY 뒤 다시 실행하지 않는다. Packed package·clean consumer와 실제 session process gate가 남아 있다. |
-| `NODE-CONTRACT-CLIENTSERVER-001` | GAP·중 | Server role만 등록한 process에서 ClientServer send/request를 시작하면 `NotConfigured` Framework error로 끝나야 한다. 현재 outbound 경로는 Client role 부재를 `ZLinkConfigurationException` 예외로 던져 public error kind를 제공하지 않는다. 증거: common spec `09-client-server-channel.ko.md:63-66`, `node/runtime/channels/channel-runtime-manager.ts:242-260`, `node/runtime/channels/channel-socket-registry.ts:611-616`, `node/runtime/channels/channel-outbound-operations.ts:86-100, 143-161` |
-| `NODE-CONTRACT-TIMER-001` | GAP·중 | 세 overrun policy의 runtime tick 순서는 스펙 방향과 일치하지만 `CatchUpBounded.maxCatchUpTicks`를 정수 `1..2_147_483_647`로 startup에서 검증하지 않는다. 현재 validator는 `<= 0`만 거부하므로 소수·`Infinity`·`INT_MAX` 초과를 수락한다. 증거: common spec `05-async-execution-policy.ko.md:453-475`, Node exact interface `interfaces/06-stream-worker.ko.md:162-166`, `node/contracts/Configuration/TimerRegistrationValidator.ts:7-29`, policy runtime `node/runtime/spots/spot-timer.ts:286-362` |
-| `NODE-CONTRACT-RELOC-001` | GAP·상 | Participant state가 64 MiB를 초과하면 `Blocked/StateIncompatible`로 끝나야 하지만 capture는 일반 `Error`를 던지고 host는 이를 `Blocked/RelocationFailed`로 축약한다. 크기 상한 자체는 있지만 application-visible reason이 틀리다. 증거: DEC-17, common spec `28-graceful-drain-handoff.ko.md` participant limit, `node/runtime/host/service-relocation-host-runtime.ts:2811-2828`, `node/runtime/host/index.ts:873-883` |
-
-`NODE-WIRE-002`는 DEC-05가 `framework-json-v1`을 public codec contract로 옮긴 뒤 범용 JSON 문서
-규칙을 구현했다. 다만 Node의 `Type<T>`는 생성자만 남기고 field schema를 지우므로 required·nullable,
-enum, int32와 byte field를 decode 시점에 식별할 수 없다. Property 이름이나 값 모양을 추측하는 구현은
-다른 DTO의 정상 string·number를 거부하므로 추가하지 않았다. 이 typed validation을 닫으려면 먼저 Node
-exact interface에 runtime schema를 전달하는 계약을 설계하고 공통 public contract review를 받아야 한다.
-
-### 1.2 결정에서 명시적으로 제외한 항목
-
-- DEC-03은 비동기 I/O 대기가 CPU worker capacity를 점유하지 않는다는 runtime 결과를
-  요구할 뿐 public I/O queue·thread 옵션을 요구하지 않는다. 새 option 부재를 gap으로 분류하지
-  않았고 CPU 포화 process test를 증거 gap으로 남겼다.
-- DEC-07에 따라 STREAM 인증은 application session callback 책임이다. Framework auth state·gate가
-  없다는 이유로 public gap을 만들지 않았다.
-- DEC-10은 target 선택과 host-scoped Relocate를 Framework 책임으로 유지한다. Target hint와
-  Actor-scoped relocation public API를 요구하지 않았다.
-- DEC-11은 기존 `notifyDisconnected(...)`의 logical disconnect를 사용한다. 별도 `Unbind`
-  API를 요구하지 않았다.
-- DEC-12는 public packet sequence와 inbound observer를 제공하지 않는다. Correlation ID,
-  packet name, message kind와 application marker로 E2E를 판정한다.
-- DEC-13은 `messageFollow` suppression 방법을 구현 선택으로 남겼다. 중복 억제
-  marker·수명이 없다는 이유만으로 gap을 만들지 않았다.
-
-### 1.3 구현 checkpoint
-
-아래 항목은 owner-layer source와 회귀 test까지 반영했지만 package·process gate를 아직 실행하지 않았다.
-따라서 집계에서는 GAP 또는 PARTIAL을 유지한다. Package와 실제 process evidence가 통과한 뒤에만 종결한다.
-
-| ID | Source checkpoint | 현재 evidence | 남은 evidence |
+| 문서 | CLOSED | SATISFIED | BLOCKED |
 |---|---|---|---|
-| `NODE-CONTRACT-TIMER-001` | `160e7f2c23` | `npm run build`, `startup-validation.test.js` 23/23 PASS. `CatchUpBounded`에서만 정수 `1..2_147_483_647`을 허용하며 경계값과 소수·무한대·상한 초과를 검증한다. | packed package·clean consumer에서 같은 startup rejection 확인 |
-| `NODE-CONTRACT-CLIENTSERVER-001` | `d8ef6fc15c` | Public `ZLinkChannelClient`와 runtime-manager 회귀 test PASS. Server role만 있는 Channel의 send/request가 `NotConfigured`로 끝난다. | Server-only 실제 host process에서 local handler 미실행과 send/request terminal 확인 |
-| `NODE-CONTRACT-RELOC-001` | `b4c79be5c1` | `npm run build`와 focused relocation regression PASS. 64 MiB 초과를 typed internal failure로 보존하고 host 결과를 `Blocked/StateIncompatible`로 분류한다. | 64 MiB 경계·64 MiB+1 byte Store/process E2E와 source authority 유지 확인 |
-| `NODE-CONTRACT-STREAM-001` | `2d63381b98` | `npm run build`, `npm run typecheck`, `stream-runtime.test.js` 100/100 PASS. Public `ZLinkSessionSendCall.timeout(...)`은 정수 `1..2_147_483_647`만 허용하고 call별 admission timeout과 socket send timeout 중 짧은 값을 적용한다. Timeout terminal 뒤 pending submit은 제거되므로 SEND_READY가 와도 replay하지 않는다. | packed declaration·clean consumer와 실제 같은 session의 서로 다른 deadline process에서 `DeadlineExceeded`, terminal-once와 나머지 FIFO 진행 확인 |
-| `NODE-CONTRACT-LOC-001` | `e4f4030d44` | `npm run build`, `npm run typecheck`, `location-runtime.test.js` 43/43와 public declaration focused regression 1/1 PASS. Exact Actor·Spot lookup을 추가하고 Ready authority의 owner lease가 만료·유실되면 single lookup과 list가 row를 `unavailable`로 보존한다. | packed declaration·clean consumer에서 다섯 상태 matrix, page size·4 MiB·opaque continuation과 Store failure를 확인 |
-| `NODE-CONTRACT-DIAG-001`, `NODE-CONTRACT-DIAG-002` | `514f0e5e2e`, `90e4b4f3a3` | `npm run build`, `npm run typecheck`, diagnostics·public surface·startup·metrics contract 94/94 PASS. Exact 네 level과 startup validation을 적용하고 legacy public API·동기 file 출력·observer queue를 제거했다. 모든 Node E2E source의 제거 API 참조도 표준 provider 또는 exact level로 이관했다. ObservabilityOps OBS-A1/A2/A3/A4/B4, PubSub PS-C1과 ResilienceLifecycle RL-D2 process PASS. OBS-B4 첫 반복은 Actor join result 101 뒤 재실행 PASS였고 SpotService SM-C2는 packaged Core의 `pipe.cpp:100` assertion으로 중단됐다. | Packed declaration·clean consumer, 기존 E2E build blocker 4건과 SpotService Core assertion을 해결한 전체 Node process, cross-language smoke와 다섯 언어 logger provider aggregate 확인 |
-| `NODE-ROUTE-002`, `NODE-ROUTE-003`, `NODE-ROUTE-005` | `69c7c7614c` | `npm run build`, `npm run typecheck`, `service-selection.test.js` 5/5 PASS. ClientServer도 공통 smooth weighted selector를 사용하고 누적값을 보존한다. Cycle 탐색은 4,096 step 또는 10 ms 뒤 exact direct 계산으로 전환하며 두 topology가 ordinal RID 비교를 사용한다. | packed package 회귀, 실제 multi-process 분포와 크로스 언어 `B,A,B,B` 수렴 확인 |
-| `NODE-OBS-001` | `d51de2ac08` | `npm run build`와 focused `topology-runtime-projection.test.js` PASS. Terminal 보관 자리가 찼을 때 가장 오래된 status를 버리고 최신 status와 관찰자별 `discardedTerminalCount`를 전달한다. | 느린 관찰자 process/benchmark와 aggregate runtime gate 확인 |
-| `NODE-STREAM-SIZE-001` | `80ce3593e7` | `npm run build`와 direct·segmented frame focused regression PASS. 초과를 typed `ZLinkStreamMessageSizeError`로 분류하고 diagnostics sink에 `code=EMSGSIZE`를 기록한 뒤 handler 전달 없이 peer를 disconnect한다. | packed package와 raw client/server process E2E에서 trace·disconnect 확인 |
-| `NODE-LIFE-001` | `ed8b70a31e` | `npm run build`, idle scan·eviction focused regression 3/3 PASS. Activation registry가 scan cursor를 소유하고 주기마다 최대 64개만 반환하며 다음 주기에 이어서 검사한다. | 대규모 Instance Spot process 부하에서 event-loop 진행과 전체 후보 순회 확인 |
-| `NODE-LIFE-002`, `NODE-LIFE-005` | `10c499854e` | `npm run build`, `npm run typecheck`, `location-runtime.test.js` 43/43, idle·explicit close focused regression 5/5와 owner-loss routing focused regression 3/3 PASS. Durable `Closing` CAS가 성공했지만 local occupancy로 close를 중단하면 같은 StoreVersion을 사용해 `Ready`를 복구한다. `Ready` authority의 owner lease가 무효이면 resolver는 Missing이 아닌 public `Unavailable`로 끝내므로 cold activation 경로가 실행되지 않는다. | Packed package·clean consumer에서 authority transition과 declaration을 확인하고, 실제 owner process 종료·lease 만료 및 idle occupancy 경합 process E2E를 실행 |
-| `NODE-LIFE-003` | `8ced7e2d5f`, `bcc13a7e97` | `npm run build`, `npm run verify:m6b-runtime` 92/92 PASS. 일반 Actor send/request는 `ActorId`로 현재 incarnation을 resolve하고, session binding과 exact control은 기존 generation fence를 유지한다. SF-F4 실제 두 provider process에서 relocation은 ObjectGeneration을 유지하고, destroy·close 뒤 recreate는 generation을 증가시켰다. 이전 ActorRef의 exact destroy는 새 Actor를 변경하지 않았다. 근거: `DiscoveryRegistryHa/log/20260808-043955-4058323`. | packed package에서 같은 current-incarnation resolve와 exact generation fence 확인 |
-| `NODE-WIRE-008` | `6dd490f8f8` | `npm run build`, `location-runtime.test.js` 40/40 PASS. Actor Message Follow fence가 일치할 때 direct authority cache와 legacy Actor location cache를 함께 무효화하고, 이전 fence이면 두 cache를 모두 보존한다. | packed package와 Actor relocation process E2E에서 stale route 재오염이 없는지 확인 |
-| `NODE-FOLLOW-001`, `NODE-FOLLOW-002` | `256869dee0` | `npm run build`, `actor-handoff.test.js` 22/22, `npm run verify:m6b-runtime` 86/86 PASS. Message Follow queue 한도는 `CapacityExceeded`, Actor generation 불일치는 `InvalidOperation`으로 분류하고 Spot request wire reply도 같은 typed capacity failure를 보존한다. | packed package와 Actor·Spot relocation process E2E에서 caller terminal과 one-way 진단 확인 |
-| `NODE-WIRE-005` | `6947cc8adb` | `npm run build`, `location-runtime.test.js` 41/41 PASS. Shared `authority-key-v1.json` fixture 전 항목을 소비하고 decoder가 1..255-byte identity, leading-zero 없는 길이, canonical escape, valid UTF-8와 776-byte encoded cap을 검증한다. | packed package와 다른 언어가 기록한 authority key의 Store 상호운용 확인 |
-| `NODE-ROUTE-006` | `88ccb7005e` | `npm run build`, `service-selection.test.js` 6/6 PASS. Cycle plan은 `select()`마다 cumulative state Map을 복사하지 않고 candidate rebuild 직전에 현재 cursor state를 materialize한다. 분포와 membership 변경 후 credit 보존은 유지한다. | packed package benchmark에서 candidate 수 증가에 따른 select latency와 allocation 확인 |
-| `NODE-DISP-001`, `NODE-DISP-002` | `7429193a90` | `npm run build`, `backend-contract.test.js` 42/42, `npm run verify:m6a-runtime` 36/36, `npm run verify:m6b-runtime` 87/87 PASS. 원격 generic·stateful Request는 mailbox 포화 시 canonical `CapacityExceeded` reply를 받고, Application drain은 owner 하나씩 claim하여 느린 handler와 무관한 owner를 별도 drain에서 진행한다. | packed package와 다중 owner process 부하에서 즉시 terminal, owner별 진행과 bounded host HWM 확인 |
-| `NODE-DISP-003` | `490a1f651b` | `npm run build`, `npm run verify:m6b-runtime` 88/88 PASS. Local multicast, Actor lifecycle control과 Actor binding control이 mailbox 포화로 거부되면 Stateful runtime이 record kind와 owner를 보고하고 runtime manager가 `Backpressure/Drop` dispatch diagnostic을 게시한다. Actor binding control 포화 회귀는 성공 reply와 별도로 drop 관찰 기록이 남는지 검증한다. | packed package와 실제 lifecycle·multicast 부하에서 diagnostic cardinality, 남은 Actor/Spot 상태의 후속 reconciliation 확인 |
-| `NODE-DISP-004` | `78ca5e674a` | `npm run build`, `npm run typecheck`, raw reservation·infrastructure 분류 focused regression 9/9와 subscriber 진행 regression 1/1 PASS. Channel, subscriber와 route loop는 application admission 전에 infrastructure를 동기 분류한다. HWM 또는 dispatch tracker가 포화된 뒤 받은 application message는 host-wide fixed reservation 16개 중 하나를 terminal까지 유지하고, 정상 부하의 기존 detached dispatch concurrency는 유지한다. Node exact interface에도 `R=16`을 기록했다. | Packed package와 실제 application HWM 포화 process에서 control·reply 진행, 최대 raw 초과량과 host HWM 확인 |
-| `NODE-DISP-005` | `41a72123dd` | `npm run build`, `backend-contract.test.js` 45/45와 `backend-contract.test.js` + `entry-spot-serial-dispatch.test.js` 결합 실행 71/71 PASS. Mesh pump와 process 단위 event-loop queue가 현재 실행 영역을 `application` 또는 `infrastructure`로 표시한다. Completion, send-ready와 transfer control은 infrastructure 영역에서만 실행하며 application 영역에서 호출하면 queue에 넣지 않고 typed `InvalidOperation`으로 종료한다. | packed package와 실제 handler 대기 process에서 completion·timeout·shutdown·peer admission 진행, 잘못된 infrastructure 진입의 즉시 terminal 확인 |
-| `NODE-DISP-006` | `9a04c1c1d9` | `npm run build`, `backend-contract.test.js` + `channel-client.test.js` 145/145 PASS. RouteMesh backend의 1 ms poll과 process 공용 channel receive idle waiter의 5 ms poll을 이름 있는 내부 정책으로 고정했다. Node 한국어·영문 internals는 두 값이 event loop가 즉시 timer를 실행할 때의 최선 지연 하한이며 부하로 더 길어질 수 있음을 공표한다. | packed package와 실제 socket의 idle-to-readable 지연 분포, application handler 대기 중 completion·liveness 진행 확인 |
-| `NODE-DISP-007` | `25515d85c7` | `npm run build`, `npm run verify:m6a-runtime` 36/36, `backend-contract.test.js` 46/46 PASS. Raw Mesh receive는 peer별 64건·4 MiB와 wake 전체 2 ms 중 먼저 닿는 한도에서 멈추고 Core ROUTER의 fair-queue cursor 다음 pipe에서 이어진다. Mailbox dispatch도 16 receive batch 또는 2 ms 중 먼저 닿으면 timer phase에 양보한다. Raw runtime 회귀는 source peer와 실제 multipart byte 계상이 poll owner까지 전달되는지 검증한다. | packed package와 2개 이상 peer 포화 process에서 후속 peer 지연, count·byte·elapsed 각 경계와 send-ready 진행 확인 |
-| `NODE-DISP-008` | `e37522d21e` | `npm run build`, `npm run typecheck`, `npm run verify:m6a-runtime` 37/37, channel·fanout·route 관련 결합 contract test 159/159 PASS. Subscriber와 route receive loop는 bounded in-flight tracker에 dispatch를 넘긴 뒤 다음 수신을 진행하며, 첫 handler가 대기 중이어도 두 번째 subscriber record가 dispatch되는 회귀를 포함한다. Generic Mesh request의 malformed frame은 correlation을 복구할 수 있으면 `ProtocolError`와 framework error code 16으로 reply하고, malformed one-way는 `InvalidFrame/Drop` 진단을 남긴다. Reply route가 아직 없는 empty admission probe 실패는 malformed frame이 아니므로 `dropped`로 분리한다. | packed package와 느린 subscriber·route handler process에서 수신 진행, 1,024 in-flight 상한, malformed request terminal과 one-way 진단 확인 |
-| `NODE-EXEC-001` | `992955d842` | `npm run build`, `entry-spot-serial-dispatch.test.js` 26/26, `npm run verify:m6b-runtime` 87/87 PASS. 자기 Spot으로 보내는 one-way는 bounded queue가 인수한 뒤 송신자 turn을 반환하고 기존 대기 작업 뒤에서 실행한다. 같은 turn에서 결과를 기다리는 request는 handler 실행 전에 `InvalidOperation`으로 종료한다. | packed package와 실제 Spot handler process에서 FIFO, capacity terminal과 one-way handler 오류 진단 확인 |
-| `NODE-EXEC-002` | `382e01410f` | `npm run build`, `npm run typecheck`, `entry-spot-serial-dispatch.test.js` 27/27, `npm run verify:m6b-runtime` 87/87 PASS. 같은 runtime의 one-way Spot send는 queue가 찼을 때 bounded FIFO waiter에서 send timeout까지 기다리고, waiter 한도를 넘으면 `DeadlineExceeded`로 종료한다. Submit은 handler 결과가 아니라 queue admission에서 완료하며 handler 오류는 diagnostics로 분리한다. | packed package와 실제 local Spot 부하에서 timeout·cancellation, FIFO admission과 bounded waiter HWM 확인 |
-| `NODE-EXEC-003`, `NODE-EXEC-004` | `c6d3ff8535` | `npm run build`, `npm run typecheck`, `npm run verify:m6b-runtime` 89/89, `npm run verify:m6c-runtime` 80/80 PASS. Yield continuation과 application callback을 실행하는 barrier turn은 lifecycle capacity를 사용하지 않고 기존 application FIFO 뒤에서 실행한다. Yield 시 shared Spot execution claim을 즉시 반환하고 continuation이 도착하면 seal 여부를 동기적으로 확인해 새 claim을 얻는다. Unit seal이 먼저 확정됐으면 대기하지 않고 `SpotMoving`을 public `Unavailable`로 반환한다. Actor queue claim은 원래 handler의 owner Promise가 계속 보유하므로 같은 Actor의 다음 job보다 continuation이 먼저 끝나는 규칙은 유지한다. | packed package와 실제 장시간 원격 request·동시 relocation process에서 seal quiescence, continuation의 단일 `Unavailable` terminal과 application/lifecycle HWM 분리 확인 |
-| `NODE-LAYER-003`, `NODE-WIRE-007` | `18b02c9b0c`, `ec524deca7` | `npm run build`, `npm run typecheck`, `npm run verify:m6b-runtime` 90/90, `npm run verify:m6c-runtime` 80/80, actor·backend 결합 contract test 126/126 PASS. Mesh completion과 Actor Join이 공유하는 128-bit operation identity의 map key 생성과 non-zero CSPRNG 생성을 하나의 내부 value object로 모았다. Zero entropy는 새 값을 생성할 때까지 다시 뽑고 frozen wire request의 zero operation identity는 decode에서 거부한다. `bigint`는 증가 중 overflow하지 않으므로 도달할 수 없던 ReplyRouteId overflow 분기를 제거했다. Session `requestSeq`와 envelope `correlationId`는 서로 다른 protocol domain의 식별자이므로 128-bit operation identity로 변환하지 않는다. | packed package에서 operation identity key·zero rejection과 Actor Join completion correlation을 확인하고, 장시간 handoff process에서 ReplyRouteId 중복이 없는지 확인 |
-| `NODE-OWN-006` | `289b6eef3a` | `npm run build`, `npm run typecheck`, codec·Actor·Spot 결합 contract test 172/172 PASS. 불변 serializer registry마다 outbound business runtime type을 key로 하는 선택 cache를 만들고, 같은 constructor의 후속 payload는 `canSerialize` 후보를 다시 순회하지 않는다. JSON fallback도 cache하며 constructor는 `WeakMap` key이므로 동적으로 만들어진 type을 runtime 수명까지 붙잡지 않는다. | packed package benchmark에서 serializer 수와 무관한 warm-path selection 횟수·allocation, 서로 다른 business type의 codec 선택 확인 |
-| `NODE-OWN-001`, `NODE-OWN-002` | `debf9ede22` | `npm run build`, `npm run typecheck`, Actor·STREAM·codec 결합 contract test 251/251와 outbound/inbound Actor codec focused regression 2/2 PASS. 수신은 body test-parse 대신 channel content type, Actor·STREAM header codec과 remote Actor Join의 내부 `requestContentType`으로 exact serializer를 선택한다. 기본 JSON 경로의 invalid JSON과 미등록 content type은 typed `PayloadDecodeFailed`로 끝나며 raw text fallback을 제거했다. Actor reply header도 실제 serializer codec을 기록한다. | packed package와 clean consumer에서 MessagePack·Protobuf의 Actor·Spot·STREAM 왕복, 미등록 codec의 `ProtocolError` terminal을 확인하고 다른 언어 process와 상호운용 확인 |
-| `NODE-OWN-003`, `NODE-OWN-004`, `NODE-OWN-005` | `aac5f84341`, `b0e74a0e3a` | `npm run build`, `npm run typecheck`, `npm run verify:m6a-runtime` 37/37, backend·STREAM·Actor·Spot 결합 contract test 357/357 PASS. Public `ZLinkEncodedPayload` 입력과 `data()`·`toBytes()`는 defensive copy를 유지한다. Runtime이 소유한 `Buffer`는 internal storage가 그대로 인수하고 JSON lazy decode는 빈 길이 확인과 문자열 변환을 위해 byte array를 복사하지 않는다. Completion과 routed join snapshot은 한 번만 복사하며 managed stream은 native `Message.from` 앞의 중복 복사를 제거했다. Raw mailbox는 accepted record를 native part로 옮긴 직후 원본 envelope 참조를 해제한다. Lazy decoder는 원본 `Message` 대신 인수한 payload만 보관한다. `Buffer`가 아닌 `Uint8Array` adapter 입력은 복사해서 Node `Buffer` 문자열 의미를 보장한다. | packed package와 clean consumer에서 public defensive copy·extension codec decode를 확인하고, 대형 multipart process benchmark에서 claim·handler 구간의 peak retained bytes와 managed stream·completion copy 횟수 확인 |
-| `NODE-OBS-002` | `c383f447bc`, `ebfb874dbf` | `npm run build`, `npm run typecheck`, message-flow·STREAM·Actor·Spot 결합 contract test 278/278 PASS. Message-flow가 꺼져 있고 ambient flow도 없으면 `AsyncLocalStorage.run(undefined, ...)`을 호출하지 않고 application callback을 직접 실행한다. Parent inbound flow를 명시적으로 지우는 nested 경로는 기존 `AsyncLocalStorage` 경계를 유지한다. 첫 transition이 사용한 live mode는 tracer별 `WeakMap`에 flow 수명으로 고정하므로 같은 message의 후속 transition은 mode 변경 전후로 일부만 기록되지 않는다. Ambient flow 밖의 조회는 live cell을 계속 즉시 반영한다. | packed package benchmark에서 disabled path allocation·latency와 enabled flow snapshot의 GC 해제 확인 |
-| `NODE-WIRE-009` | `8b8a643471` | `npm run build`, `npm run typecheck`, ClientServer·channel 결합 contract test 124/124 PASS. Client와 Server 양쪽 liveness 수신은 현재 physical connection·routing identity·outstanding probe ID와 맞지 않는 ACK를 readiness 갱신에 사용하지 않는다. 이전처럼 무음 폐기하지 않고 `RequestProtocolError` 내부 진단을 runtime failure sink에 한 번 게시한다. | packed package와 reconnect process에서 stale·duplicate ACK 진단 cardinality와 current ACK readiness 갱신 확인 |
-| `NODE-RELOC-003`, `NODE-SESS-003`, `NODE-LIFE-004` 설계 판정 | 해당 없음 | Common spec과 실제 owner 경계를 다시 검토했다. Host relocation phase는 workload aggregate의 capture·publish·replay·cleanup을, remote Actor Join phase는 한 Actor membership transaction의 admission·commit·abort를 표현하므로 서로 다른 bounded context다. `ServiceMailbox`, `EventLoopWorkQueues`, `RouterOperationQueue`도 각각 relocation 가능한 owner mailbox, process infrastructure/application 진행, native request slot 순서를 소유하므로 공통 base로 합치면 서로 필요 없는 상태와 규칙이 누출된다. Node internals는 실제 serial scheduler 기본값인 application 4,096건/16 MiB, lifecycle 1,024건/4 MiB와 byte·시간·burst 회계를 한영 문서에 기록했다. | 문서 link·style gate와 packed package에서 기본 scheduler 한도 확인 |
-| `NODE-LAYER-001` | `1f8efb75f5` | `npm run build`, `topology-runtime-projection.test.js` 21/21, `npm run verify:m6c-runtime` 80/80 PASS. Shutdown은 즉시 host admission을 닫고 `Draining`을 게시한다. relocation scheduler는 이미 permit을 받은 unit의 terminal을 기다리되 대기 unit을 새로 시작하지 않으며 Relocate waiter를 `Blocked/ShutdownRequested`로 끝낸다. | packed package의 concurrent Relocate·Shutdown process에서 terminal 재호출, active unit commit과 shutdown deadline 확인 |
-| `NODE-LAYER-002` | `2f0d5678c4` | `npm run build`, `npm run typecheck`, routing identity·auto-connect focused regression 27/27 PASS. Public `RoutingId` string alias는 exact interface대로 유지한다. Runtime의 opaque byte identity는 nominal owner 안에서 wire hex를 보존하며 normalize가 이를 display string으로 축소하지 않는다. Plain string identity끼리의 hot-path equality는 UTF-8 Buffer와 hex string을 만들지 않고 직접 비교한다. | packed package benchmark에서 plain·opaque identity 비교 allocation과 Location Store encode 비용 확인 |
-| `NODE-RELOC-002` | `d084e0250b` | `npm run build`, `npm run verify:m6c-runtime` 80/80 PASS. SpotWide aggregate는 wire Message Follow ingress seal 직후 같은 event-loop turn에서 execution barrier를 seal한다. Actor session 준비는 두 seal 뒤에 완료하므로 direct message callback이 두 경계 사이에 진입할 수 없다. | packed package의 장시간 turn·동시 request·relocation process에서 source 정상 처리 또는 Message Follow 인계와 exactly-once terminal 확인 |
-| `NODE-COMP-001`, `NODE-COMP-002` | `b0eccff662` | `npm run build`, `backend-contract.test.js` 43/43, `actor-manager.test.js` 79/79, `npm run verify:m6b-runtime` 87/87, `npm run verify:m6c-runtime` 80/80 PASS. 모든 Mesh request 경로는 native submit과 waiter 등록을 같은 event-loop turn에 수행한다. 이른 완료를 보관하던 `arrived` 맵을 제거했으므로 timeout 뒤 늦은 payload는 저장하지 않는다. STREAM 관련 test는 148/150이며 기존 disconnect callback 완료 대기 두 항목만 단독 실행에서도 실패한다. | packed package의 대량 timeout·late reply process에서 completion table HWM이 요청량과 함께 증가하지 않는지 확인하고, 기존 STREAM blocker를 별도 수정한 뒤 전체 suite 재실행 |
-| `NODE-COMP-004` | `116e27ad68` | `npm run build`, `backend-contract.test.js` 44/44, `npm run verify:m6b-runtime` 87/87, `npm run verify:m6c-runtime` 80/80 PASS. Actor join과 STREAM bind 재시도는 `result=NotConnected` 또는 Framework `RouteNotConnected` kind로만 분류한다. Error message가 같은 일반 오류는 재시도하지 않고, 진단 문구가 달라도 typed result가 같으면 재시도한다. STREAM 관련 test는 기존 disconnect callback 두 항목을 제외한 148/150이 통과했다. | packed package와 실제 peer reconnect process에서 OS별 진단 문구와 무관한 재시도, deadline과 중복 submit 부재 확인 |
-| `NODE-COMP-003` | `3ba9ad6e29` | `npm run build`, `npm run verify:m6b-runtime` 87/87 PASS. Source Spot callback의 typed request와 raw request는 공통 `ZLinkDeferredCompletion`이 terminal claim, abort와 late value 소유권을 한 번만 확정한다. `channel-client.test.js`의 abort 뒤 late raw reply close를 포함한 focused 2/2와 재실행 100/100이 통과했다. 첫 전체 실행은 별도 bootstrap route가 `NotFound`여서 99/100이었고 같은 두 항목 focused 및 전체 재실행에서는 재현되지 않았다. | packed package와 실제 callback transport에서 abort·reply 경합을 반복해 exactly-once terminal과 late `Message` 해제를 확인 |
-| `NODE-SESS-002` | `4eb9dad69c`, `570617f5d1` | `npm run build`, `stream-session-runtime.test.js` 53/53과 관련 STREAM test 150/150 PASS. 유효한 PING/PONG은 application claim과 session application FIFO를 거치지 않고 transport callback의 runtime 경로에서 처리한다. Disconnect와 dispose는 먼저 큐에 들어온 lifecycle turn이 끝난 뒤 transport를 닫고, callback 실패 여부와 무관하게 binding cleanup을 실행한다. | packed package와 실제 peer의 handler 지연·heartbeat·disconnect process에서 false timeout 부재, callback 순서와 Actor binding cleanup 확인 |
-| `NODE-SESS-004` | `7508ec2dcf` | `npm run build`, `npm run typecheck`, Actor·STREAM contract test 177/177 PASS. Replacement bind를 먼저 제출하므로 bind가 실패하면 기존 native·logical binding을 그대로 유지한다. Bind가 성공한 뒤 remote confirmation이 실패하면 새 binding을 해제하고 이전 binding과 confirmation을 복원한다. 성공한 replacement의 terminal 뒤에만 logical route owner를 바꾼다. | packed package와 실제 reconnect process에서 replacement 진행 중 기존 route 사용, 성공 뒤 원자 전환과 stale disconnect fencing 확인 |
-| `NODE-SESS-001` | `fe002ce0ea` | `npm run build`, `npm run typecheck`, `npm run verify:m6b-runtime` 91/91와 exact native/logical tombstone focused regression 2/2 PASS. Actor owner는 replacement identity를 먼저 등록하되 이전 session owner에 actor·session RID·binding generation이 고정된 tombstone을 보내고 cleanup ACK 전에는 새 bind terminal을 반환하지 않는다. 이전 owner의 infrastructure mailbox가 한 번 거부한 경우 재제출해 ACK를 받으며, 늦은 이전 tombstone은 현재 replacement identity를 제거하지 않는다. | packed package와 실제 세 process rebind에서 이전 session의 native·logical route 제거, ACK 전 terminal 부재, 재전송과 stale tombstone fencing 확인 |
-| `NODE-ROUTE-004` | `a088a08fe1` | `npm run build`, `npm run typecheck`, `location-runtime.test.js` 42/42, `npm run verify:m6b-runtime` 90/90 PASS. Spot Message Follow source fence가 현재 Store resolver cache와 일치할 때 Spot route와 그 Spot에 속한 legacy·direct Actor route cache를 함께 무효화한다. Object·node·lease generation이 다른 늦은 follow는 최신 cache를 보존한다. | packed package와 실제 Spot relocation process에서 stale resolver cache 재주입 부재와 새 owner route 사용 확인 |
-| `NODE-WIRE-004` | `6db4779f23` | `npm run build`, `npm run typecheck`, `npm run verify:m6a-runtime` 38/38, `client-server-location-runtime.test.js` 24/24 PASS. RouteMesh와 ClientServer update는 같은 lifecycle에서 하위 descriptor revision 또는 동일 revision·다른 descriptor를 `ServiceWireProtocolError`로 분류하고 기존 admitted descriptor를 보존한다. 동일 revision·동일 bytes의 다른 physical candidate fencing은 별도 topology 규칙으로 유지한다. | packed package와 실제 reconnect process에서 protocol diagnostic, connection 정리와 current descriptor 보존 확인 |
-| `NODE-WIRE-003` | `c825342eba` | `npm run build`, `npm run typecheck`, `npm run verify:m6a-runtime` 39/39 PASS. Global registration의 optional maintenance wave를 raw Mesh backend descriptor가 소유하고 M6A admission의 정렬된 optional TLV 13으로 encode·decode한다. Descriptor validation은 non-empty·NUL 금지·UTF-8 255-byte 상한을 적용하며 higher-revision update에서 wave 변경을 허용한다. | packed package와 실제 multi-node update에서 wave 전달, 같은 wave placement 제외와 absent 값 상호운용 확인 |
-| `NODE-WIRE-006` | `ddb5c867e9` | `npm run build`, `npm run typecheck`, `npm run verify:m6c-runtime` 81/81 PASS. Relocation ID는 UUID version·variant bit를 고정하지 않는 full non-zero 128-bit CSPRNG 값을 사용한다. Source의 active 또는 삭제를 확인하지 못한 retained root와 target의 active·tombstone ID가 충돌하면 새 entropy를 생성한다. Root 삭제 또는 부재를 확인한 뒤에만 source 예약을 해제한다. 현재 source runtime은 한 relocation에서 target을 교체하지 않으므로 `TargetAttemptGeneration=1`은 최초 attempt의 정확한 값이며, 다른 target을 고르는 용도로 이 값을 사용하지 않는 정식 spec과 일치한다. | packed package와 실제 relocation 반복에서 ID 비영·중복 부재, 삭제 실패 시 같은 runtime의 ID 예약 유지 확인 |
-| `NODE-WIRE-002` | `e02ec9a261` | `npm run typecheck`, `npm run build`, codec·STREAM focused regression 118/118 PASS. Actor·Spot, Channel과 STREAM의 기본 JSON 경로가 같은 `framework-json-v1` module을 사용한다. Decode는 BOM과 모든 깊이의 duplicate property를 거부한다. Encode는 finite number, signed-min부터 unsigned-max까지의 64-bit decimal string, padded base64 byte sequence를 강제하고 `Date`·custom `toJSON()`의 암묵 변환을 거부한다. | `Type<T>`에 없는 field schema를 exact interface에서 어떻게 전달할지 설계 review. 그 계약을 확정한 뒤 golden fixture의 required·nullable·enum·int32·byte invalid vector와 packed·cross-language gate 실행 |
-| `NODE-WIRE-001` | `23c57b6a65` | `npm run build`, `npm run typecheck`, `npm run verify:m6a-runtime` 39/39, 관련 contract 53/53와 public surface·HWM·ClientServer fence focused regression 3/3 PASS. RouteMesh의 public registration·live socket과 M6A descriptor에서 message-size 한도를 제거했고 Application HWM은 RouteMesh 한도에 의존하지 않는다. ClientServer의 pushed update는 admission에서 확정한 message bound가 달라지면 `ServiceWireProtocolError`로 거부하고 기존 descriptor를 보존한다. | packed declaration·clean consumer, 공용 M6A fixture와 다른 언어 RouteMesh admission 상호운용, 실제 ClientServer update process에서 connection 정리와 기존 descriptor 보존 확인 |
+| 01-layering | `NODE-LAYER-001`, `NODE-LAYER-002`, `NODE-LAYER-003` |  |  |
+| 02-serialization | `NODE-EXEC-001`, `NODE-EXEC-002`, `NODE-EXEC-003`, `NODE-EXEC-004` |  |  |
+| 03-progress-isolation | `NODE-DISP-001`, `NODE-DISP-002`, `NODE-DISP-003`, `NODE-DISP-004`, `NODE-DISP-005` |  |  |
+| 04-completion | `NODE-COMP-001`, `NODE-COMP-002`, `NODE-COMP-003`, `NODE-COMP-004` |  |  |
+| 05-relocation-continuity | `NODE-RELOC-002`, `NODE-FOLLOW-001`, `NODE-FOLLOW-002` | `NODE-RELOC-003` |  |
+| 06-routing-and-cache | `NODE-ROUTE-002`, `NODE-ROUTE-003`, `NODE-ROUTE-004`, `NODE-ROUTE-005`, `NODE-ROUTE-006` |  |  |
+| 07-dispatch-loop | `NODE-DISP-006`, `NODE-DISP-007`, `NODE-DISP-008` |  |  |
+| 08-object-lifecycle | `NODE-LIFE-001`, `NODE-LIFE-002`, `NODE-LIFE-003`, `NODE-LIFE-004`, `NODE-LIFE-005` |  |  |
+| 09-session-binding | `NODE-SESS-001`, `NODE-SESS-002`, `NODE-SESS-004` | `NODE-SESS-003` |  |
+| 10-liveness-and-state | `NODE-OBS-001`, `NODE-OBS-002` |  |  |
+| 11-message-ownership | `NODE-OWN-001`, `NODE-OWN-002`, `NODE-OWN-003`, `NODE-OWN-004`, `NODE-OWN-005`, `NODE-OWN-006` |  |  |
+| 12-service-wire-protocol | `NODE-WIRE-001`, `NODE-STREAM-SIZE-001`, `NODE-WIRE-002`, `NODE-WIRE-003`, `NODE-WIRE-004`, `NODE-WIRE-005`, `NODE-WIRE-006`, `NODE-WIRE-007`, `NODE-WIRE-008`, `NODE-WIRE-009` |  |  |
 
----
+### 1.2 Public contract ID 판정
 
-## 2. 우선 대응 항목 (심각도 상)
-
-| ID | 요약 | 문서 |
+| ID | 상태 | 판정 |
 |---|---|---|
-| NODE-DISP-001 | 대상 mailbox 포화 시 원격 Request가 **응답 없이 조용히 폐기** — 호출자는 타임아웃까지 대기, 진단 불가 | 03 §6 |
-| NODE-DISP-002 | 디스패치 펌프가 32개 owner를 claim 후 각 핸들러 완료를 순차 await — 느린 핸들러 1개가 최대 31개 무관 owner를 블로킹 | 07 §3/§4 |
-| NODE-RELOC-002 | wire seal→execution seal 사이 창에서 admission waiter가 미분류 Error로 거부 — **one-way 메시지 손실**, Request는 일반 내부 오류로 노출 | 05 §1/§2 |
-| NODE-EXEC-001 | 스펙이 금지한 재진입 허용 — 자기 Spot으로의 로컬 전송이 큐 뒤가 아니라 **송신자 turn 안에서 인라인 실행** | 02 Pitfall 5 |
-| NODE-COMP-001 | 완료 테이블 `arrived` 맵이 무한 — 타임아웃 후 도착한 응답(payload Buffer 포함)이 노드 dispose까지 영구 누적 | 04 §3, 03 §6 |
-| NODE-SESS-001 | 크로스 노드 세션 스왑 시 이전 소유자 tombstone·정리 확인 절차 부재 — 이전 노드의 stale 바인딩이 다음 실패까지 잔존 | 09 §3 |
-| NODE-SESS-002 | STREAM 하트비트 PING/PONG이 애플리케이션 레인에 실림 — 앱 레인이 5초 이상 밀리면 통신 가능한 session을 `heartbeat_timeout`으로 오판 | 09 §1 |
-| NODE-LAYER-001 | 진행 중 relocation과 shutdown 경합 시 스펙(shutdown 승리)과 반대로 **relocation 전체 완료를 대기** | 01 §3 |
-| NODE-WIRE-001 | Source에서는 RouteMesh message-size 설정·admission 필드를 제거하고 ClientServer 협상 한도를 고정했다. **Packed package·공용 fixture·process 상호운용 증거가 남음** | 12 §2/§4 |
-| NODE-OWN-001 | 수신 content-type 미사용 + 미등록 시 invalid JSON이 **raw 텍스트로 조용히 fallback** — `ProtocolError` 미발생 | 11 §7 |
-| NODE-CONTRACT-DIAG-002 | Source public surface와 모든 Node E2E consumer를 표준 OpenTelemetry provider 또는 exact level로 전환했다. **Packed package·전체 Node process·다섯 언어 provider aggregate 증거가 남음** | DEC-01 |
-| NODE-CONTRACT-STREAM-001 | STREAM send별 admission timeout이 없어 같은 session에서 call마다 다른 deadline을 표현할 수 없음 | DEC-09 |
-| NODE-CONTRACT-RELOC-001 | 64 MiB 초과 participant state가 `StateIncompatible`이 아닌 `RelocationFailed`로 끝남 | DEC-17 |
+| `NODE-CONTRACT-DIAG-001` | CLOSED | diagnostics level `off/errors/normal/detailed`와 startup·live validation을 source와 declaration에서 확인 |
+| `NODE-CONTRACT-DIAG-002` | CLOSED | 표준 logger·trace provider 경로, provider failure 격리, legacy observer/file surface 제거를 Node gate에서 확인 |
+| `NODE-CONTRACT-LOC-001` | CLOSED | Actor·Spot exact lookup, `creating/ready/unavailable`, owner lease loss와 paging 경계를 확인 |
+| `NODE-CONTRACT-STREAM-001` | CLOSED | call별 `timeout()` admission deadline, socket timeout과의 최솟값, no-replay를 확인 |
+| `NODE-CONTRACT-CLIENTSERVER-001` | CLOSED | Server-only ClientServer send/request가 local handler를 실행하지 않고 `NotConfigured`로 끝남을 확인 |
+| `NODE-CONTRACT-TIMER-001` | CLOSED | `CatchUpBounded.maxCatchUpTicks`의 정수 `1..2_147_483_647` 검증을 확인 |
+| `NODE-CONTRACT-RELOC-001` | CLOSED | 64 MiB 초과 participant state가 typed `Blocked/StateIncompatible`로 분류됨을 확인 |
 
-### NODE-DISP-001 — 원격 Request 무응답 폐기
-`enqueueFrame`이 mailbox `tryEnqueue` 실패 시 `'protocolError'`를 반환할 뿐 보관된 reply 포트를 호출하지 않고, backend `poll()`은 그 결과를 완전히 무시한다. 스펙 03 §6이 반례로 기술한 "대기 중인 호출자가 아무 통지도 받지 못하고 타임아웃까지 매달리는" 패턴 그대로다(스펙 12 「5.3」: `CapacityExceeded`/`Unavailable`로 종료 요구). 로컬 fast path는 terminal 109로 올바르게 완료된다 — 원격 경로만 결손.
-- 증거: `node/runtime/foundation/service-stateful-runtime.ts:3008-3028`, `node/runtime/foundation/raw-service-mesh-runtime.ts:796-813`, `node/runtime/backend/node/node-raw-mesh-backend.ts:1330-1334`
+## 2. 구현 및 POSDDD checkpoint
 
-### NODE-DISP-002 — cross-owner head-of-line 블로킹
-mesh 디스패치 펌프는 최대 32개 ready owner를 한 배치로 claim한 뒤 **각 레코드의 핸들러 완료를 순차 `await`**한다. claim은 핸들러 종료 후 `release()`까지 mailbox 배타를 유지하므로, owner A의 핸들러가 느린 원격 응답을 기다리는 동안 같은 배치에 claim된 나머지 owner들은 처리도, 다른 drain에 의한 재claim도 불가능하다. 이 레벨에는 시간 예산이 없다(50 ms 예산은 각 owner 자체 스케줄러 내부에만 있음). "실행 자원은 집합에서 owner **하나**를 가져온다"와 "한 owner의 예산 소진 시 다른 owner 진행" 확인 항목 위반.
-- 증거: `node/runtime/backend/mesh-dispatch-pump.ts:147-216`, `node/runtime/foundation/service-mailbox.ts:144`
+기능이 있는 domain owner가 state transition과 terminal error를 함께 책임지도록 정리했다. 특히
+barrier가 이미 commit된 뒤 admission을 거부할 때 일반 `Error`를 새 경계로 전파하지 않고
+`SpotMoving` typed internal error를 반환하게 했다. 이 변경으로 relocation owner가 동일한
+실패 의미를 끝까지 보존하며, `post()`가 typed `SpotMoving`을 잃지 않는다.
 
-### NODE-RELOC-002 — seal 사이 창의 메시지 손실
-소스 측 블로킹 지점이 두 개(wire 레벨 `sealSpotMessageFollowIngress` → execution barrier seal)인데, wire seal은 통과했지만 실행을 시작하지 못한 메시지가 그 사이에 낀다. `waitForQuiescence`는 **active claim만** 기다리고 `admissionWaiters`에 대기 중인 turn은 배수하지 않으며, capture는 `queuedMessages: []`로 실어 보내고, `commit()`은 모든 admission waiter를 미분류 `Error('ZLink execution barrier is committed.')`로 거부한다 — 어느 dispatcher도 이를 follow 큐로 재라우팅하지 않는다. 결과: 이 창의 수락된 메시지는 스팬 ①(정상 처리)도 스팬 ②(보류 후 인계)도 아니고, one-way는 손실되며 Request는 일반 내부 오류로 호출자에게 노출된다.
-- 증거: `node/runtime/execution/index.ts:221-259`, `node/runtime/spots/spot-serial-executor.ts:134-146`, `node/runtime/host/service-relocation-host-runtime.ts:685-712`
+세션 replacement도 binding registry가 성공한 뒤에만 이전 delivery를 retired map으로 옮기도록
+원자 순서를 정리했다. 따라서 registry bind 실패가 기존 binding을 부분적으로 제거하지 않는다.
+이 두 변경은 public API나 spec을 바꾸지 않는 owner-boundary refactoring이다.
 
-### NODE-EXEC-001 — 재진입 허용 (스펙: 금지)
-`ZLinkSpotSerialExecutor.execute`의 docstring이 명시하듯 현재 turn 내부에서의 호출은 큐잉 없이 그 turn의 일부로 인라인 실행된다. 공개 Spot request 빌더 두 곳과 `executeOnSpot`에는 가드가 있으나, **라우팅된 로컬 디스패치 경로는 무가드**: 핸들러가 자기 Spot에 보낸 one-way가 `sendToSpotHandle → … → activation.serial.execute` 체인으로 송신자 turn 안에서 실행된다. 결과: (1) 먼저 큐잉된 작업보다 앞서 실행되어 FIFO 위반, (2) 인라인 경로는 `reserve`를 호출하지 않아 레인 한도 완전 우회, (3) 대상 핸들러 예외가 송신자에게 전파. 스펙은 no-wait 자기-전송도 큐 뒤에 붙일 것을, 대기형은 제출 전 `InvalidOperation` 실패를 요구한다. `spot-outbound.ts:544-546`의 "valid FIFO admission" 주석은 실제 동작과 모순.
-- 증거: `node/runtime/spots/spot-serial-executor.ts:80-93`, `node/runtime/spots/spot-routed-spot-packet-dispatch.ts:120`, `node/runtime/spots/spot-outbound.ts:544-547`
+### 최종 종료 전 Codex Sol 검토 관문
 
-### NODE-COMP-001 — 완료 테이블 무한 누적
-`ZLinkMeshCompletionTable`의 `arrived` 맵은 한도·오버플로 경로·축출이 없다. waiter가 abort/타임아웃하면 pending 엔트리가 삭제되므로, 늦게 도착한 완료는 항상 `arrived`에 저장되어 message Buffer와 함께 테이블 dispose까지 잔존한다. 스펙 §3의 "보관 슬롯은 유한하고 초과는 관찰 가능한 `CapacityExceeded`로 끝난다" 위반이며, 타임아웃 볼륨에 비례하는 메모리 누수다. C++의 `_completed_operations` 무한 누적(CPP-COMP-004)과 동일 계열.
-- 증거: `node/runtime/backend/mesh-completion-table.ts:24, 40-49, 69-72`
+최종 종료 판정 전에는 해당 언어의 모든 Gap·PARTIAL·public contract 항목을 대상으로 `Codex Sol`
+review를 수행한다. 요약이나 focused test 통과 여부가 아니라 항목별 exact interface, 정식 spec,
+production runtime, owner-layer regression, package/clean-consumer와 process evidence를 서로 대조해
+다음 사항을 확인한다.
 
-### NODE-SESS-001 / NODE-SESS-002 — 세션 바인딩
-**NODE-SESS-001**: Source에서 Actor owner는 replacement identity를 등록한 뒤 이전 session owner에 actor,
-session RID와 binding generation을 모두 고정한 tombstone을 보낸다. 이전 owner는 infrastructure lane에서
-일치하는 native·logical route를 제거하고 ACK하며, Actor owner는 이 ACK 전에는 새 bind terminal을 반환하지
-않는다. Queue 거부나 전송 실패가 발생하면 30초의 bounded cleanup 기간에 tombstone을 다시 제출한다.
-동일한 이전 tombstone이 늦게 도착해도 현재 session owner와 identity가 다르면 성공으로 ACK하고 현재
-replacement는 유지한다. Source와 owner-layer regression은 끝났고 packed package와 실제 세 process 증거가
-남아 있으므로 아직 종결하지 않는다.
-- 증거: checkpoint `fe002ce0ea`, `node/runtime/foundation/service-stateful-runtime.ts`,
-  `node/runtime/streams/session-actor-coordinator.ts`, `node/test/m6b/m6b-runtime.contract.ts`
+- 항목이 누락되지 않았는지, 완료로 표시한 구현이 실제 계약과 다른 부분이 없는지 확인한다.
+- 누락·오판·부분 구현을 발견하면 해당 항목을 GAP 또는 BLOCKED로 되돌리고 owner-layer 수정과 회귀
+  증거를 추가한 뒤 같은 Codex Sol review를 반복한다.
+- review 대상, 사용한 Codex Sol 모델/effort, 기준 commit 또는 candidate manifest, 발견 사항, 수정
+  commit, 재실행한 gate와 판정을 이 문서에 `file:line` 근거와 함께 기록한다. 단일 test, 문서 존재,
+  source compile 또는 과거 결과만으로 항목을 clean 처리하지 않는다.
 
-**NODE-SESS-002**: STREAM session의 모든 inbound frame — Control 하트비트 PING/PONG 포함 — 이 `enqueueApplication`으로 애플리케이션 레인에 큐잉되고 admission claim까지 잡는다. PONG 처리(`awaitingPongSince` 해제)가 밀린 비즈니스 dispatch 뒤에서 FIFO로 처리되므로, 앱 레인이 5초(`ZLINK_STREAM_HEARTBEAT_TIMEOUT_MS`) 이상 밀리면 lifecycle 레인의 liveness 검사가 통신 가능한 session을 `heartbeat_timeout`으로 오판한다. Mesh ingress는 inline으로 처리하고 ClientServer는 timer가 직접 drain하므로 이 문제는 STREAM session에만 있다.
-- 증거: `node/runtime/streams/stream-session-runtime.ts:274-326, 401-505, 507-555, 658-687`
+모든 계약·구현 항목이 위 review에서 누락 없이 구현되었다는 판정을 받은 뒤에만 2차 구조 review를
+시작한다. 2차 review도 동일한 `Codex Sol`을 사용하며, 대상은 해당 언어의 Framework runtime
+production source와 unit test다. 실행 순서는 먼저 production runtime 리팩터링과 회귀 검증을
+완료한 뒤 unit test 리팩터링을 진행하는 것으로 고정한다. 다음 네 범주를 각각 검토하고 결과를 기록한다.
 
-### NODE-LAYER-001 — shutdown이 진행 중 relocation에 양보
-스펙(01 §3, 28 §11): 겹치면 shutdown 승리 — 현재 이동 유닛만 확정하고 나머지는 시작하지 않으며 relocation waiter는 `Blocked/ShutdownRequested`로 종료. Node `runShutdown`은 `runtimeState === Relocating`이면 `await this.relocationOperation`으로 **멀티 유닛 이동 전체가 끝나기를 기다린 뒤** admission seal을 적용하고, relocation 호출자는 relocation 자체 결과를 받는다. 긴급 shutdown이 relocation deadline까지 지연될 수 있다. (shutdown 시작 후의 **신규** relocate 거부는 올바르게 구현됨 — in-flight 경우만 결손.)
-- 증거: `node/runtime/host/index.ts:887-899` (올바른 신규 거부는 `:751-758`)
+1. **성능 비용** — 불필요한 allocation·copy, payload 변환 왕복, lock/mutex/channel/atomic/queue
+   contention, hot path의 중복 작업을 확인한다.
+2. **불필요한 코드** — dead code와 도달하지 않는 branch, 사용하지 않는 wrapper·alias·helper·fixture·
+   파일·dependency를 확인한다.
+3. **POSD/DDD 구조** — deep module·information hiding, pass-through와 temporal decomposition,
+   caller complexity, 중복 책임을 POSD 관점에서 확인하고 lifecycle·ownership·state transition·
+   commit/deadline·terminal failure invariant의 domain owner가 명확한지 DDD 관점에서 확인한다.
+4. **unit test 구조** — runtime 리팩터링으로 보존해야 할 observable behavior와 domain invariant를
+   기준으로 test를 다시 읽는다. POSD/DDD 관점에서 동일한 의도·계약·fixture를 반복하는 중복 unit
+   test는 하나의 명확한 test 또는 공통 parameterized/fixture test로 통합하고, 의미 없는 복제 test,
+   private 구현·호출 순서에만 결합된 test는 회귀 증거를 보존한 뒤 제거한다. 통합·삭제 후에는 해당
+   owner-layer regression과 aggregate gate를 다시 실행한다.
 
-### NODE-WIRE-001 — RouteMesh 금지 상한 잔존·ClientServer 협상값 변경 가능
-현재 common contract에서 RouteMesh ServerServer에는 Framework-level message-size 설정·협상·거부가 없다
-(`common/spec/07-channel-topology.ko.md:609-634`,
-`common/internals/12-service-wire-protocol.ko.md:91-110`). 따라서 RouteMesh 송수신 경로에
-`min(local, remote)` clamp가 없다는 사실은 gap이 아니다. 실제 gap은 public
-구현의 `ZLinkMeshNodeSocketConfig.maxMessageSize`와 mutable router socket 설정을 노출하고, RouteMesh
-descriptor에 설정과 무관한 `effectiveMaxMessageBytes = 4 MiB`를 넣어 codec·validation까지
-유지한다는 점이다. Node exact interface는 common contract에 맞게 해당 field와 negotiated-bound
-설명을 제거했다. Application HWM validation도 RouteMesh의
-`maxMessageSize`를 bounded-listener 조건으로 사용하므로 이 의존성을 함께 제거해야 한다.
-이 RouteMesh 전용 설정과 admission/wire field를 제거해야 한다.
+2차 review에서 Medium 이상 finding이 하나라도 남으면 clean으로 판정하지 않는다. 해당 runtime/test를
+수정하고 필요한 owner-layer regression 및 관련 gate를 다시 실행한 뒤 같은 Codex Sol review를
+반복한다. Low finding도 처리하거나 명시적으로 잔여 위험으로 승인 기록해야 한다. 두 단계의 review
+결과가 모두 `CLEAN`, Medium 이상 `0`, 미실행 필수 gate `0`으로 기록된 경우에만 이 문서의 전체 작업을
+완료로 판정한다.
 
-ClientServer에는 별도의 negotiated bound 계약이 남는다. 그런데
-`applyClientServerDescriptorUpdate`가 `normalizedEffectiveMaxMessageBytes`를 고정 필드에서 누락해,
-서버가 push한 `update`로 협상된 한도를 재admission 없이 변경할 수 있다(스펙 §4: 재admission으로만
-변경 가능). RouteMesh의 금지된 bound 잔존과 ClientServer의 협상값 불변성 위반은 같은 ID에서
-경로를 구분해 추적한다.
-- 증거: `node/contracts/Configuration/Builders.ts:102-110`,
-  `node/contracts/Configuration/RegistrationBuilders.ts:902-905,1615`,
-  `node/contracts/Configuration/RegistrationValidators.ts:58-90`,
-  `node/contracts/Configuration/Configs.ts:3-12`,
-  `node/runtime/channels/channel-socket-options.ts:22-72,113-129`,
-  Node exact interface `interfaces/01-foundation-configuration.ko.md:167-175`,
-  `interfaces/02-channel-messaging.ko.md:285-290`,
-  `node/runtime/backend/node/node-raw-mesh-backend.ts:1295`,
-  `node/runtime/foundation/service-wire-m6a-codec.ts:257-304`,
-  `node/runtime/foundation/service-topology-registry.ts:28,442-447,547`,
-  `node/runtime/channels/channel-socket-registry.ts:1304-1311,1648,1698-1710`
+### 2.1 Codex Sol contract review 기록
 
-StreamNode의 크기 상한 적용 자체는 이 gap에 해당하지 않는다. `maxMessageSize` 기본값은 64 KiB이고 registration 값이
-Core STREAM socket과 frame reassembler에 전달되며, 6-byte prefix를 제외한 header+payload를
-inbound client→server complete message에서 검사한다. outbound server→client에는 이 제한을
-적용하지 않는다. 다만 초과 시 `EMSGSIZE`와 진단 trace를 남기는 계약은
-`NODE-STREAM-SIZE-001`로 별도 추적한다. 증거: `node/contracts/Configuration/InternalDefaults.ts:4`,
-`node/runtime/streams/index.ts:197-202`, `node/runtime/streams/stream-session-runtime.ts:748-759,1003`,
-`node/runtime/streams/stream-frame-reassembler.ts:72-83,128-137`.
+첫 번째와 재실행 review 모두 현재 세션의 같은 `Codex Sol`을 사용했다. effort 수치는 실행 환경에서
+노출되지 않아 `default (메타데이터 미노출)`로 기록한다. review 기준은 `main`의
+`137f2858bf7fd29f58405893473be8e773725a93`이며, 첫 번째 candidate manifest는 다음과 같다.
 
-### NODE-OWN-001 — 수신 content-type 미사용 + 무음 텍스트 fallback
-mesh/actor/spot/stream 수신 계열은 와이어 content-type(및 stream 헤더 `codec` enum)을 역직렬화기 선택에 전혀 넘기지 않는다. `decodeFrameworkPayload`는 기본 serializer만 선택하고, serializer 미등록 시 invalid JSON이 **raw UTF-8 텍스트로 조용히 반환**된다(`rejectInvalidJson=false` 기본값; `ZLinkMessage.decode()`도 동일). 타 런타임의 비-JSON 페이로드가 `ProtocolError` 대신 오파싱되거나 깨진 텍스트로 전달된다. 채널 envelope 경로는 content-type 조회 + 명시적 `ProtocolError`로 올바름 — 그 외 경로가 결손. C++ CPP-OWN-001과 동일 계열(스펙 11 §7이 익명으로 기술한 "위반 구현"군).
-- 증거: `node/runtime/messaging/payload-codec.ts:82-123`, `node/runtime/spots/spot-actor-packet-dispatch.ts:227-229`, `node/contracts/Common/ZLinkMessage.ts:33-38`
+```text
+first-review-tracked-node-candidate-sha256=8a9b9535e72b87e901b4de277429aa3b18002a633b707d83b6e7df954a6b07e1
+final-review-tracked-node-candidate-sha256=2efac5024177505f5cb86060e1b549067a1718f7f437b5bfe8f4935f09a7eb4b
+untracked-node-manifest-sha256=c562034569f5dc123fa04b17ebfbbed4e5862f1f4a5b55ae8032afe367a92fef
+```
 
----
+검토 대상은 01–12 internals 55개, 추가 public contract 7개, 기존 종결 3개, `NODE-SESS-001`,
+command 51 wire fixture·runtime, Node source/dist declaration, owner-layer regression, packed
+clean-consumer와 세 process evidence다. `NODE-WIRE-002`에서 High finding을 재확인했다.
+공통 typed JSON profile은 `framework/doc/framework/common/spec/04-message-model.ko.md:95-117`에서
+required·nullable·enum·int32·bytes 검증을 요구하지만, 보호된 Node exact interface는
+`framework/doc/framework/common/spec/server/languages/node/interfaces/02-channel-messaging.ko.md:177`에서
+`ZLinkPacket(packetName: string)`만 선언한다. 반면 production source와 packed declaration은
+`framework/languages/node/packages/framework/src/contracts/Handlers/Attributes.ts:36-44`와
+`framework/languages/node/packages/framework/dist/contracts/Handlers/Attributes.d.ts:17`에서 선택적인
+`jsonContract` 인자를 노출한다. 이 불일치는 보호 spec을 바꾸지 않고 build-time schema 경로를
+구현하거나, 반대로 현재 runtime extension을 제거해야 해소된다. 현재 지시에서는 전자를 진행 경로로
+삼고, 안 A는 실행하지 않는다.
 
-## 3. 문서별 상세
+첫 번째 review에서는 source 수정과 수정 commit이 없었다. 사용자가 commit을 요청하지 않았으므로
+dirty candidate를 그대로 보존했다. 그 review에서 발견한 추가 runtime finding은 다음 재검토에서
+production owner 경계를 수정하고 회귀로 고정했다.
 
-### 3.1 01-layering
+### 2.2 추가 finding과 수정 후 Codex Sol 재검토
 
-| ID | 분류 | 요약 |
+동일한 현재 `Codex Sol`, effort `default (메타데이터 미노출)`, 기준 commit
+`137f2858bf7fd29f58405893473be8e773725a93`로 첫 번째 finding을 수정한 candidate를 다시 검토했다.
+첫 번째 candidate의 tracked runtime manifest는 `8a9b9535e72b87e901b4de277429aa3b18002a633b707d83b6e7df954a6b07e1`이었다.
+
+- `F-002` (High, 수정 전): `ServiceStatefulRuntime.bindSession`의 원격 bind가 새 delivery를 먼저
+  map에 넣은 뒤 terminal failure나 rejected request에서 그 항목을 삭제했다. 이전 delivery가 있으면
+  bind 실패가 기존 binding을 잃게 되어 `20-session-actor-dispatch.ko.md:225-227`의 “새 bind 자체가
+  실패한 경우에만 기존 binding route를 유지” 조건을 위반했다. 같은 경로에서 `streamBind` reply tail을
+  `resultFromReply`가 전달하지 않아 same-session duplicate bind가 authority-owned generation 대신
+  local sequence를 유지하는 부분 구현도 확인했다. 발견 위치는 수정 전
+  `framework/languages/node/packages/framework/src/runtime/foundation/service-stateful-runtime.ts:1638-1655`
+  및 `:4204-4250`이다.
+- 수정: 이전 delivery를 저장해 terminal/rejection 시 현재 map이 새 delivery일 때만 정확히 복원하고,
+  `streamBind` tail의 authority-owned generation을 pending result로 전달해 duplicate bind의 map을
+  갱신했다(`service-stateful-runtime.ts:122-133`, `:1643-1681`, `:4269-4282`). 기존 public API와
+  spec은 변경하지 않았다. commit은 요청받지 않았으므로 없으며, 모든 기존 dirty 변경은 보존했다.
+- owner regression: `framework/languages/node/test/m6b/m6b-runtime.contract.ts:3997-4010`에서
+  request admission failure를 주입하고, `:4051-4082`에서 duplicate bind가 generation `1n`을 유지하고
+  이전 delivery를 복원하는 것을 검증한다. 수정 후 `F-002`와 `NODE-SESS-004`는 `CLOSED`로 재판정했다.
+
+수정 후 재실행한 gate는 다음과 같다.
+
+- `npm run verify:m6b-runtime`: `94/94 PASS`, 로그 `/tmp/zlink-node-final-review-r2-m6b-20260808.log`
+- `npm run verify:m6a-runtime`, `npm run verify:m6c-runtime`: `39/39`, `85/85 PASS`, 로그
+  `/tmp/zlink-node-final-review-r2-m6a-20260808.log`, `/tmp/zlink-node-final-review-r2-m6c-20260808.log`
+- `npm run verify:ci`: `RC=0`, 로그 `/tmp/zlink-node-final-review-r2-verify-ci-20260808.log`
+- DTO bridge candidate 재실행 `npm run verify:ci`: `RC=0`, build·typecheck·lint·browser와 전체
+  contract suite 통과, 로그 `/tmp/zlink-node-verify-ci-dto-20260808.log`
+- class DTO 호출부 확장 후 `npm run verify:ci`: `RC=0`, sample regression `48/48`과 browser,
+  owner/process contract suite를 같은 candidate에서 재실행했다. 로그 `/tmp/zlink-node-dto-verify-ci-r2-20260808.log`
+- class DTO 호출부 확장 후 sample regression: `48/48 PASS`, 로그
+  `/tmp/zlink-node-dto-sample-regression-r2-20260808.log`
+- class DTO 호출부 확장 후 M6 owner regression: M6A `39/39`, M6B `94/94`, M6C `85/85 PASS`.
+  로그 `/tmp/zlink-node-dto-m6a-r2-20260808.log`, `/tmp/zlink-node-dto-m6b-r2-20260808.log`,
+  `/tmp/zlink-node-dto-m6c-r2-20260808.log`
+- class DTO 호출부 확장 후 cross-language smoke: `RC=0`, channel·fanout·route·stream·Redis
+  `13/13 PASS`, 로그 `/tmp/zlink-node-dto-cross-language-r2-20260808.log`
+- 수정 후 combined contract/runtime focused test: `242/242 PASS`, 로그 `/tmp/zlink-node-final-review-r2-focused-20260808.log`
+- command 51 schema·golden·malformed validator: `42 commands`, `canonical=2`, `malformed=6`,
+  `boundSessionReplaced=pass`, 로그 `/tmp/zlink-node-final-review-r2-wire-20260808.log`
+- packed npm clean-consumer: `NODE_PACKAGED_CONTRACT_PASS packages=7 browser=esm server=commonjs`, 로그 `/tmp/zlink-node-final-review-r2-packaged-20260808.log`
+- class DTO 호출부 확장 후 packed npm clean-consumer: `NODE_PACKAGED_CONTRACT_PASS packages=7 browser=esm server=commonjs`, 로그 `/tmp/zlink-node-dto-packaged-20260808.log`
+- `npm run verify:cross-language`: `RC=0`, Node·dotnet channel/fanout/route/stream·Redis 13/13,
+  로그 `/tmp/zlink-node-final-review-r2-cross-language-20260808.log`
+- `npm run test:browser`: Chromium `1/1 PASS`, 로그 `/tmp/zlink-node-final-review-r2-browser-20260808.log`
+- 실제 세 process rebind: `/tmp/zlink-node-final-review-r2-process-20260808.log`에서
+  `actor-a`, `session-a`, `session-b`를 별도 process로 실행하고
+  `{"status":"NODE_SESS_001_PROCESS_PASS","bindTerminalBeforeCallback":true,"callbackToCloseMs":98,"newBindDurationMs":18,"otherSessionProgressBeforeClose":true}`를 확인했다. 측정 시각은 callback 안내 packet 수신부터 close까지이며, production timer는
+  `stream-session-runtime.ts:388`의 `setTimeout(..., 100)`이다.
+- class DTO candidate의 `npm run verify:runtime-matrix` 재실행은 Node 20과 Node 22에서 각각
+  build·typecheck·lint·browser, 전체 contract test와 sample regression `48/48`을 통과해 `RC=0`이었다.
+  로그 `/tmp/zlink-node-dto-runtime-matrix-r3-20260808.log`에 두 major의 시작과 모든 terminal 결과가
+  남아 있다. 이는 최종 generator·process-fixture candidate보다 앞선 이력이다.
+  이전 candidate의 ZoneWorld maintenance restore assertion `RC=1`과 timeout 중단 `RC=130`은
+  이 최신 PASS로 대체하지 않고 이력으로만 보존한다.
+  독립적으로 `./samples/run_samples.sh ZoneWorld`를 재실행한 결과는 `PASS ZoneWorld`, `RC=0`이었다
+  (`/tmp/zlink-node-final-review-r2-zoneworld-retry-20260808.log`). 이는 aggregate matrix의 대체
+  완료 증거로 승격하지 않는다.
+  추가로 Node 20에서 `sample-regression.test.js:2116`의 `run_samples.sh` self-check만 격리 실행했을
+  때에도 ZoneWorld transition의 `player-b4-east` 대기 timeout이 재현되었고, 이후 해당 test
+  process가 종료되지 않아 중단했다. 이 격리 결과 역시 aggregate matrix를 성공으로 승격하지 않는다.
+  따라서 당시 DTO candidate의 aggregate gate 완료 증거로 `r3` matrix를 사용했다. 최종 candidate의
+  독립 gate와 intermittent retry 판정은 아래 2.4에서 별도로 기록한다.
+
+### 2.3 class DTO 후보의 재검토 이력
+
+동일한 `Codex Sol`, effort `default (메타데이터 미노출)`, 기준 commit
+`137f2858bf7fd29f58405893473be8e773725a93`에서 class DTO runtime materialization과 호출부 후보를
+재검토한 이력이다. 당시에는 exact interface에 없는 `ZLinkPacket` runtime schema 인자와 erased
+interface/type alias의 자동 schema 연결이 같은 `NODE-WIRE-002` High blocker로 남아 있었다.
+이 후보의 `NOT CLEAN` 판정은 아래 2.4 최종 review에서 generator·registry 구현과 재실행 gate로
+대체되었다. 수정 commit은 요청받지 않았으며 dirty worktree는 계속 보존했다.
+
+### 2.4 최종 Codex Sol contract review
+
+동일한 현재 `Codex Sol`, effort `default (메타데이터 미노출)`, 기준 commit
+`137f2858bf7fd29f58405893473be8e773725a93`에서 최종 candidate를 다시 검토했다. 이번 candidate의
+Node 범위 manifest는 다음과 같다. report 자체와 기존의 다른 dirty 변경은 manifest에 넣지 않았고,
+commit·push는 수행하지 않았다.
+
+```text
+node-candidate-manifest-sha256=f4774be64fd215f40f50560e57a507f326d4ebe7910f28793d95f088a8ec3c24
+수정 commit 없음 (사용자 요청 전 commit 금지)
+```
+
+이 hash는 `framework/languages/node/` 아래의 tracked·untracked source, test, script와 E2E 파일을
+경로순으로 정렬한 뒤 각 파일의 `sha256sum`을 다시 hash한 값이다. `dist/`, `build/`, `node_modules/`와
+sample/E2E 실행 log는 manifest에서 제외했다. 이번 deadline 보완까지 포함한 1,851개 파일을 대상으로
+계산했으며 report 자체와 보호된 spec·protocol 파일은 포함하지 않았다.
+
+검토 범위는 01–12 internals 55개, 추가 public contract 7개, 기존 종결 3개, `NODE-SESS-001`,
+command 51 wire fixture, exact interface, production runtime, owner-layer regression, packed
+clean-consumer와 실제 세 process evidence다. 보호된 `framework/doc/framework/common/spec/`는 읽기와
+대조만 수행했으며 수정하지 않았다.
+
+최종 review에서 확인한 사실은 다음과 같다.
+
+- `NODE-WIRE-002`의 High finding은 generator가 없던 부분 구현이었다. `generate-framework-json-schemas.mjs:15-89`가
+  TypeScript AST와 checker로 packet name을 찾고, class·interface·type alias·enum에서 required·optional·
+  nullable·nested·array·int32·int64·bytes schema를 생성한다. `:346-507`는 nullable union, enum,
+  intersection과 primitive marker를 처리하고, tuple·generic·recursive·Date/Map/Set/Function과
+  `unknown`/`any`를 명확한 build error로 거부한다.
+- generated server registry는 `generate-framework-json-schemas.mjs:519-524`에서 framework package의
+  `ZLinkPacket`에 내부 등록하고, browser ESM registry도 같은 packet contract를 내보낸다. 7개 sample
+  build script는 각 `samples/*/package.json`의 `generate:framework-json` 단계로 두 산출물을 생성한다.
+  서버 process는 `samples/run-sample.mjs:61-70`에서 CJS registry를 preload한다.
+- exact interface의 `ZLinkPacket(packetName: string)`은 변경하지 않았다. source의 generator 전용
+  overload에는 `Attributes.ts:36-47`의 `@internal`을 붙이고 `packages/framework/tsconfig.json:7`의
+  `stripInternal`로 제거했다. 실제 dist declaration은 `dist/contracts/Handlers/Attributes.d.ts:17`의
+  한 인자만 남으며, `Handlers/index.d.ts:1-5`에도 JSON contract type을 root public export로 내보내지
+  않는다.
+- fixture test `framework-json-schema-generator.test.js:17-104`는 class·alias/interface DTO의
+  server/browser registry, exact schema, framework-json-v1 valid decode와 enum malformed rejection을
+  확인하고, `:106-120`은 Date를 build failure로 확인한다. packed clean-consumer는
+  `scripts/verify_packaged_contract.sh:53-56,125-178`
+  에서 generated browser ESM과 server CommonJS registry를 실제 packed package 설치 후 소비하고,
+  `:178-203`에서 exact public overload를 typecheck한다.
+- `stream-frame-factory.ts:131-153`와 `spot-actor-packet-drain.ts:224-245`는 generic actor error
+  payload에 application packet schema를 잘못 적용하지 않도록 error frame을 schema 없이 encode한다.
+  `stream-runtime.test.js`의 local bound-session error regression이 이를 고정한다.
+
+최종 대조 결과 누락·오판·부분 구현은 남지 않았다. `NODE-WIRE-002`를 `CLOSED`로, 전체 contract
+review를 `CLEAN`으로 판정한다. Medium 이상 finding은 0개다. production candidate r4의 Node 20/22
+aggregate 이력과 현재 candidate의 Node 22 `verify:ci` 재실행을 각각 구분해 기록한다. 이번 재검토에서
+공통 계약의 callback lifecycle deadline 누락을 발견해 Node runtime에 기존 `requestTimeoutMs` 기반
+force-close 경계를 추가했고, 해당 callback·lane 회귀를 새 candidate에서 검증했다.
+
+- `npm run verify:ci`: 현재 candidate에서 `RC=0`, `/tmp/zlink-node-verify-ci-20260808-final-r11.log`;
+  build·typecheck·lint·전체 test file과 class DTO generator test를 포함한다.
+- `npm run verify:runtime-matrix`: 새 candidate에서 Node 20 단계는 통과했지만 Node 22 단계가 Core mutex의
+  환경성 `SIGABRT`, protobuf readiness timeout과 `ClientServer` readiness race로 `r8`·`r9`·`r10`에서
+  중단됐다(`/tmp/zlink-node-runtime-matrix-20260808-final-r8.log`,
+  `/tmp/zlink-node-runtime-matrix-20260808-final-r9.log`, `/tmp/zlink-node-runtime-matrix-20260808-final-r10.log`).
+  이를 aggregate PASS로 승격하지 않고 Node 20
+  `channel-client.test.js` 단독 `99/99`(`/tmp/zlink-node20-channel-client-20260808-final-r2.log`), Node 22
+  전체 runtime gate `RC=0`(`/tmp/zlink-node22-runtime-gate-20260808-final-r2.log`)와 기존 production
+  candidate r4 `RC=0` 이력을 분리해 보존한다. 실패 원인은 이번 replacement 변경과 무관한 native/test
+  환경이며, 동일 candidate의 `verify:ci`·samples·process gate는 통과했다.
+- `npm run verify:samples`: 7개 sample `PASS`, `/tmp/zlink-node-verify-samples-20260808-final-r3.log`
+- `npm run verify:m6a-runtime`, `verify:m6b-runtime`, `verify:m6c-runtime`: `39/39`, `94/94`, `85/85`,
+  `/tmp/zlink-node-m6a-20260808-final-r6.log`, `/tmp/zlink-node-m6b-20260808-final-r6.log`,
+  `/tmp/zlink-node-m6c-20260808-final-r6.log` (`RC=0`)
+- `node test/contract/framework-json-schema-generator.test.js`: `2/2 PASS`,
+  `/tmp/zlink-node-generator-final-r7.log` (`NODE_GENERATOR_R7_RC=0`); class DTO와 alias/interface
+  fixture를 함께 검증했다.
+- service-wire schema·golden·malformed validator: `42 commands`, `canonical=2`, `malformed=6`,
+  `boundSessionReplaced=pass`, `/tmp/zlink-service-wire-schema-20260808-final-r6.log`,
+  `/tmp/zlink-service-wire-fixtures-20260808-final-r6.log` (`RC=0`)
+- packed clean-consumer: `NODE_PACKAGED_CONTRACT_PASS packages=7 browser=esm+generated-registry
+  server=commonjs+generated-registry`, `/tmp/zlink-node-packaged-contract-20260808-final-r8.log`
+- process-only fixture는 canonical `Scenarios` gate를 우회하지 않도록 `e2e/SpotActorTransfer/Client/Process/`에
+  둔다. layout/header gate는 예외 필터 없이 `2/2 PASS`했다.
+- cross-language smoke: `13/13 PASS`, `/tmp/zlink-node-cross-language-20260808-final-r5.log`; 실제
+  `actor-a`, `session-a`, `session-b` process rebind: `NODE_SESS_001_PROCESS_PASS`, callback-to-close
+  `101 ms`, new bind terminal 선행, `/tmp/zlink-node-process-rebind-20260808-final-r10.log`.
+
+최종 candidate에서 연속 aggregate matrix를 재실행한 기록도 숨기지 않는다. 기존 `r5`–`r7`의 sample
+child cleanup·DERR-002 readiness race·Node 22 native request failure에 더해 `r8`은 Core mutex
+`Invalid argument` `SIGABRT`, `r9`는 protobuf channel readiness timeout, `r10`은 Node 22
+`channel-client.test.js`의 `Channel 'play' has no ready ClientServer server.` readiness race로 실패했다. 각 owner test를
+독립 재실행해 Node 20 channel client `99/99`, Node 20 sample regression `48/48`, Node 22 runtime gate
+`RC=0`을 확인했다. 이 intermittent process/native 환경 실패를 PASS로 승격하지 않고, production
+candidate r4 aggregate와 현재 candidate의 per-major 독립 gate를 함께 증거로 사용한다. Kotlin maintenance
+selector가 없는 다섯 언어 logger/provider aggregate의 `RC=3`은
+Node 언어의 본 작업 범위 밖인 별도 통합 evidence gap이며, Node public contract ID의 종결을 보류시키지 않는다.
+
+### 2.5 최종 Codex Sol POSDDD review
+
+계약 review가 `CLEAN`이 된 뒤 같은 `Codex Sol`, effort `default (메타데이터 미노출)`로 POSD/DDD
+review를 고정 순서로 수행했다. 먼저 production Framework runtime을 읽고 owner-layer regression을
+확인한 뒤 unit test를 읽었다.
+
+- production runtime: generated registry는 build 산출물 경계에 있고 message read hot path에서 AST
+  extraction을 수행하지 않는다(`generate-framework-json-schemas.mjs:15-89`). session replacement는
+  callback을 session turn에서 시작한 뒤 Promise completion을 detached로 관찰하고
+  `stream-session-runtime.ts:370-441`에서 callback lifecycle deadline과 non-blocking 100 ms timer를
+  serial lane 밖에 예약하며 exact retired identity를 재검증한다. `index.ts:248-274`는 기존
+  registration `requestTimeoutMs`를 내부 callback deadline으로 전달한다. Error frame은
+  `stream-frame-factory.ts:131-153`에서 schema 변환을 건너뛴다. 불필요한 lock/mutex/channel 대기,
+  payload 왕복 변환, pass-through wrapper, 도달 불가능 branch를 추가하는 Medium 이상 finding은 없었다.
+- unit test: generator fixture는 모든 schema 종류를 한 contract에 묶고 malformed·unsupported를
+  별도 assertion으로 확인한다(`framework-json-schema-generator.test.js:17-120`). replacement callback
+  send·closing inbound rejection·독립 session lane은 `stream-session-runtime.test.js:281-350`, stalled
+  callback deadline force-close와 lane 반환은 `:352-410`에서 검증한다. prototype materializer 회귀와
+  generic error-frame 회귀는 서로 다른 observable invariant를 검증하므로 통합·삭제 대상인 중복 test가
+  없다. private 호출 순서에 결합된 복제 test도 발견하지 않았다.
+
+POSDDD 최종 판정은 `CLEAN`이며 Medium 이상 finding `0개`, Low 잔여 위험 `0개`, 미실행 필수 gate
+`0개`다. Node 20/22 aggregate matrix의 두 재실행은 환경성 실패로 기록했지만, 동일 candidate에서
+per-major owner gate와 required package/process/aggregate CI gate를 별도로 통과했다. 따라서 이 문서의
+전체 작업은 완료 조건을 충족한다.
+
+### 2.6 최종 candidate 재검토
+
+최종 review 뒤 packed clean-consumer에 정식 `ZLinkPacket(packetName: string)` 호출과 generator 전용
+두 번째 인자에 대한 `@ts-expect-error` 검증을 추가했다(`scripts/verify_packaged_contract.sh:178-203`).
+이는 public declaration parity를 더 강하게 확인하는 test/evidence 변경이며 production runtime이나
+public spec을 바꾸지 않는다. 같은 `Codex Sol`, effort `default (메타데이터 미노출)`로 contract와
+POSDDD review를 다시 실행해 Medium 이상 finding이 없음을 확인했다.
+
+```text
+final-node-candidate-manifest-sha256=f4774be64fd215f40f50560e57a507f326d4ebe7910f28793d95f088a8ec3c24
+수정 commit 없음
+```
+
+관련 gate `scripts/verify_packaged_contract.sh`는 packed browser/server generated registry와 exact
+public overload check를 포함해 `NODE_PACKAGED_CONTRACT_PASS packages=7 browser=esm+generated-registry
+server=commonjs+generated-registry`를 반환했다(`/tmp/zlink-node-packaged-contract-20260808-final-r8.log`,
+`NODE_PACKAGED_CONTRACT_R8_RC=0`). generator `node --check`와 fixture `2/2`도 재실행했다
+(`/tmp/zlink-node-generator-final-r7.log`, `NODE_GENERATOR_R7_RC=0`). class DTO fixture와 packed
+consumer 기대 목록을 갱신한 test/evidence 변경이며 production runtime·public spec은 바꾸지 않았다.
+기존 r4 Node 20/22 aggregate, 현재 candidate의 Node 20 단독 `99/99`와 Node 22 runtime gate를
+각각 구분해 유지한다. 최종 contract와 POSDDD 판정은 계속 `CLEAN`, Medium 이상 `0`,
+미실행 필수 gate `0`이다.
+
+### 2.7 최종 evidence 후 Codex Sol 재검토
+
+최종 evidence를 추가한 뒤 같은 `Codex Sol`, effort `default (메타데이터 미노출)`, 기준 commit
+`137f2858bf7fd29f58405893473be8e773725a93`과 candidate manifest
+`f4774be64fd215f40f50560e57a507f326d4ebe7910f28793d95f088a8ec3c24`를 다시 대조했다. 대상은 55개
+internals, 7개 public contract, command 51, NODE-SESS-001 production path, generated registry,
+owner-layer regression, package/clean-consumer와 process evidence다.
+
+- contract review: exact interface의 `ZLinkPacket(packetName: string)`과 packed declaration을 유지하고,
+  generator 전용 overload가 `stripInternal` 뒤에 남지 않는 것을 재확인했다. command 51 source authority
+  fence, retired identity fence와 stale tombstone guard에도 누락이 없다.
+- POSDDD review: production runtime을 먼저 다시 읽고, generator는 message read turn에서 AST를 읽지 않으며,
+  replacement timer는 serial turn 밖에서 동작하고, unit fixture는 schema 종류·malformed·unsupported를
+  한 계약 증거로 묶는 것을 재확인했다. 새 allocation/copy·lock contention·dead branch·중복 test 또는
+  Medium 이상 lifecycle/ownership finding은 발견되지 않았다.
+- 최종 gate: 현재 Node 22 `verify:ci` `RC=0`, generator `2/2`, Node 20 sample regression `48/48`,
+  Node 20 channel client `99/99`, Node 22 runtime gate `RC=0`, package
+  `NODE_PACKAGED_CONTRACT_PASS`, 실제 세 process `NODE_SESS_001_PROCESS_PASS`를 확인했다. 연속
+  matrix `r5`–`r10`의 환경 실패는 PASS로 기록하지 않고 앞 절의 별도 이력으로 남겼다.
+
+최종 contract와 POSDDD 판정은 `CLEAN`, Medium 이상 finding `0개`, Low 잔여 위험 `0개`, 미실행 필수
+gate `0개`로 유지한다.
+
+### 2.8 현재 candidate의 최종 Codex Sol 재검토
+
+최신 fixture·package expectation·gate log를 반영한 뒤 같은 `Codex Sol`, effort `default (메타데이터
+미노출)`, 기준 commit `137f2858bf7fd29f58405893473be8e773725a93`, candidate manifest
+`f4774be64fd215f40f50560e57a507f326d4ebe7910f28793d95f088a8ec3c24`로 마지막 review를 수행했다.
+review 대상은 01–12 internals의 55개 ID, public contract 7개, 기존 종결 3개, NODE-SESS-001,
+command 51, build-time DTO registry, package/clean-consumer와 실제 process다. 보호된
+`framework/doc/framework/common/spec/` 및 `framework/runtime/protocol/`의 현재 dirty 변경은 이
+candidate에서 만들지 않았으며, review 중 수정하지 않았다.
+
+- **Contract 순서**: exact Node interface의 `ZLinkPacket(packetName: string)`과
+  `ZLinkSession.onActorBindingReplaced?(context, actorId)`를 대조하고, packed declaration의
+  `Attributes.d.ts:17`과 `IZLinkSession.d.ts`를 확인했다. Production replacement path
+  `service-stateful-runtime.ts:3167-3334`, wire encode/decode
+  `service-stateful-wire-codec.ts:637-656,977-1000`, session closing/timer
+  `session-context.ts:167-204,250-255`, `stream-session-runtime.ts:370-441`가 정식 semantic
+  constraint와 일치한다. DTO generator `generate-framework-json-schemas.mjs:15-89,338-507`와
+  fixture `framework-json-schema-generator.test.js:17-120`은 class·interface·type alias·enum 및
+  required·optional·nullable·nested·array·int32·int64·bytes, malformed·unsupported build failure를
+  확인한다. 누락·오판·부분 구현은 발견되지 않았고 Medium 이상 finding은 `0개`다.
+- **POSDDD 순서**: production runtime을 먼저 검토한 결과 AST extraction은 build turn에만 있고
+  message read hot path에 allocation·payload 변환·blocking wait를 추가하지 않는다. replacement
+  callback timer는 serial lane 밖에 있으며 exact identity를 다시 확인한다. 그 다음 unit test를
+  검토해 generator fixture·prototype materializer·error-frame regression이 서로 다른 observable
+  invariant를 보존하고, 중복 또는 private 호출 순서 결합 test가 없음을 확인했다. Medium 이상
+  finding `0개`, Low 잔여 위험 `0개`다.
+- **최신 재실행 gate**: `verify:ci` r11 `RC=0`, typecheck/build r3/r2 `RC=0`, M6A/B/C r6
+  `39/39·94/94·85/85`, service-wire schema/fixture r6 `RC=0`, generator r7 `2/2`, packed consumer
+  r8 `RC=0`, Node 20 channel client r2 `99/99`, Node 22 runtime gate r2 `RC=0`, 실제
+  `actor-a/session-a/session-b` process r10 `NODE_SESS_001_PROCESS_PASS`를 확인했다. 미실행 필수
+  gate는 `0개`이며, commit·push는 수행하지 않았다.
+
+이 재검토에서도 contract와 POSDDD 모두 `CLEAN`으로 유지한다.
+
+### 2.9 최종 report consistency recheck
+
+2.8 이후에는 production source나 test를 변경하지 않고 report의 gate log 경로와 process 측정값만
+최신 실행 결과에 맞춰 정리했다. 같은 `Codex Sol`, effort `default (메타데이터 미노출)`로
+`final-node-candidate-manifest-sha256=f4774be64fd215f40f50560e57a507f326d4ebe7910f28793d95f088a8ec3c24`를
+다시 계산했으며, source·test·script 1,851개 파일과 일치했다. `stream-session-runtime.ts:374-445`의
+callback deadline·detached completion·exact 100 ms timer, `service-stateful-runtime.ts:3172-3307`의
+authority/retired identity fence·bounded retry, packed declaration `Attributes.d.ts:17`을 다시 대조했다.
+
+report-only consistency 변경에서 발견 사항·수정 사항은 log 경로의 이전 r7/r9 표기 정정과 aggregate
+matrix r10의 환경성 readiness failure 기록뿐이며, production 수정 commit은 없다. 최신 `verify:ci`
+r11, package r8, process r10과 wire·M6·sample·browser·per-major gate는 앞 절의 원본 log에서 재확인했다.
+aggregate r10은 Node 22 `channel-client.test.js` 98/99 readiness race로 `RC=1`이어서 PASS로 승격하지
+않았다. contract와 POSDDD는 계속 `CLEAN`, Medium 이상 finding `0개`, 미실행 필수 gate `0개`다.
+
+## 3. NODE-SESS-001 종결
+
+새 replacement identity가 current가 되면 bind terminal을 즉시 반환한다. 이전 session owner의
+ACK·callback·close를 기다리지 않으며, 전송 admission 실패는 bounded asynchronous retry로
+분리한다. `boundSessionReplaced(51)`은 one-way으로 encode/decode하고, transport source authority와
+이전 owner lifecycle·retired binding identity를 exact하게 검증한다.
+
+이전 session은 callback 전에 closing 상태로 전환되어 신규 inbound application dispatch를 거부한다.
+`onActorBindingReplaced?(context, actorId)` callback 안의 `context.client.send(...)`는 허용한다.
+callback은 session turn에서 시작하지만 Promise를 serial lane에 걸어 두지 않으며, callback terminal 뒤
+exact retired identity를 다시 확인하는 non-blocking 100 ms timer를 예약하고 즉시 반환한다. callback이
+기존 `requestTimeoutMs` lifecycle deadline 안에 terminal이 되지 않으면 같은 exact identity에서 즉시
+force-close한다. 다른 session lane은 callback이 pending인 동안에도 진행한다. old ACK를 기다리던
+`fe002ce0ea` test는 이전 계약 이력으로 보존하고 새 one-way 계약 검증으로 대체했다.
+
+증거:
+
+- production candidate `npm test`의 build·typecheck·lint와 전체 Node contract suite `RC=0`;
+  최종 candidate의 최신 재실행은 `verify:ci` 및 Node 20/22 per-major gate로 별도 기록했다.
+- `npm run verify:m6a-runtime`, `verify:m6b-runtime`, `verify:m6c-runtime`: `39/39`, `94/94`, `85/85 PASS`,
+  최신 로그 `/tmp/zlink-node-m6a-20260808-final-r6.log`, `/tmp/zlink-node-m6b-20260808-final-r6.log`,
+  `/tmp/zlink-node-m6c-20260808-final-r6.log`
+- `npm run verify:runtime-matrix`: production candidate r4에서 Node 20·22 aggregate `RC=0`, 최종 candidate
+  r10에서는 Node 20 단계가 통과하고 Node 22 readiness race로 `RC=1`이었다. 각 major의 sample regression
+  `48/48` 포함(`/tmp/zlink-node-runtime-matrix-20260808-final-r4.log`). 최종 candidate의
+  Node 20 sample regression은 `48/48`, `RC=0`(`/tmp/zlink-node20-sample-regression-20260808-final-r3.log`),
+  Node 20 channel client는 `99/99`(`/tmp/zlink-node20-channel-client-20260808-final-r2.log`), Node 22
+  전체 runtime gate는 `RC=0`(`/tmp/zlink-node22-runtime-gate-20260808-final-r2.log`)로 독립 재확인했다.
+- generator candidate 이후 command 51 schema·golden·malformed validator: `RC=0`, `boundSessionReplaced=pass`
+- `stream-session-runtime.test.js`, `stream-runtime.test.js`, channel JSON와 contract surface test 결합: `242/242 PASS`
+- `boundSessionReplaced(51)` golden·malformed fixture: `canonical=2`, `malformed=6`, `boundSessionReplaced=pass`
+- `scripts/verify_packaged_contract.sh`: `NODE_PACKAGED_CONTRACT_PASS packages=7 browser=esm+generated-registry
+  server=commonjs+generated-registry`, 최신 log `/tmp/zlink-node-packaged-contract-20260808-final-r8.log`
+- 실제 `actor-a`, `session-a`, `session-b` 세 process rebind: `NODE_SESS_001_PROCESS_PASS`.
+  bind terminal 선행, callback 안내 packet, 100 ms timer 이후 close와 다른 session lane 진행을
+  확인했다. 최신 process log `/tmp/zlink-node-process-rebind-20260808-final-r10.log`의 wall-clock 측정은
+  callback packet 수신부터 close까지 `101 ms`이며, callback deadline과 terminal timer 구현은
+  `stream-session-runtime.ts:382-438,398-405`다. stalled callback deadline과 lane 반환은
+  `stream-session-runtime.test.js:352-410`에서 fake clock으로 확인했다.
+
+## 4. 전체 검증 증거
+
+| Gate | 결과 | 해석 |
 |---|---|---|
-| NODE-LAYER-001 | GAP·상 | §2 참조 — shutdown이 in-flight relocation에 양보 |
-| NODE-LAYER-002 | PARTIAL·중 | Public `RoutingId`/`ActorId`/`SpotId` string alias는 exact interface 계약대로 유지한다. Runtime의 opaque routing bytes는 nominal internal owner가 wire hex와 display text를 분리해 보존하며 normalize 뒤에도 owner를 잃지 않는다. Plain string끼리의 equality는 Buffer·hex allocation 없이 직접 비교한다. Packed package allocation benchmark가 남아 있다. 증거: checkpoint `2f0d5678c4` |
-| NODE-LAYER-003 | PARTIAL·하 | 호출 진행 식별자가 `MeshOperationId {high,low}` / `"high:low"` 문자열 키 / 세션별 `bigint requestSeq` / `correlationId` 문자열로 다중 포맷 + `OperationId` 이름이 3개 이상의 개념에 사용. 증거: `node/runtime/backend/mesh-completion-table.ts:96-97`, `node/runtime/spots/spot-actor-packet-dispatch.ts:203` |
+| `npm test` / `npm run verify:ci` runtime gate | PASS, `RC=0` | 동일한 `run_node_runtime_gate.js` 경로를 현재 Node 22 candidate r2와 `verify:ci` r11에서 통과했다. 현재 로그에는 build·typecheck·lint·전체 Node test와 class DTO generator test가 포함된다. |
+| `npm run verify:ci` | PASS, `RC=0` | 현재 candidate의 CI release gate를 재실행했다. `/tmp/zlink-node-verify-ci-20260808-final-r11.log` |
+| `npm run typecheck` | PASS, `RC=0` | 현재 candidate에서 TypeScript 전체 no-emit typecheck를 별도로 재실행했다. `/tmp/zlink-node-typecheck-20260808-final-r3.log` |
+| `npm run build` | PASS, `RC=0` | packed consumer gate가 현재 candidate의 workspace build를 먼저 수행했다. `/tmp/zlink-node-packaged-contract-20260808-final-r8.log` |
+| `stream-session-runtime` focused | PASS, `55/55` | callback send/closing/lane, stalled callback deadline force-close와 기존 stream lifecycle. `/tmp/zlink-node-stream-session-focused-20260808-final-r2.log` |
+| `npm run test:browser` | PASS, `1/1` | 실제 Chromium에서 ws/wss·flow·reconnect·drain·trust를 확인했다. `/tmp/zlink-node-browser-20260808-final-r3.log` |
+| `npm run verify:m6a-runtime` | PASS, `39/39` | M6A wire·HWM·admission 경계. `/tmp/zlink-node-m6a-20260808-final-r6.log` |
+| `npm run verify:m6b-runtime` | PASS, `94/94` | Actor·session·service wire와 command 51. `/tmp/zlink-node-m6b-20260808-final-r6.log` |
+| `npm run verify:m6c-runtime` | PASS, `85/85` | relocation·execution barrier·typed failure. `/tmp/zlink-node-m6c-20260808-final-r6.log` |
+| service-wire schema/fixture validator | PASS, `RC=0` | `42 commands`, canonical/malformed·framework error·command 51 fixture. 최신 로그 `/tmp/zlink-service-wire-schema-20260808-final-r6.log`, `/tmp/zlink-service-wire-fixtures-20260808-final-r6.log` |
+| `scripts/verify_packaged_contract.sh` | PASS, `RC=0` | 7 packed npm packages와 generated browser ESM/server CommonJS registry clean consumer. 최신 로그 `/tmp/zlink-node-packaged-contract-20260808-final-r8.log` |
+| `npm run verify:samples` | PASS | TicTacToe, Bingo, DeliveryDispatch, SupportChat, GameQuest, ShoppingMall, ZoneWorld. `/tmp/zlink-node-verify-samples-20260808-final-r3.log` |
+| `npm run verify:abi-matrix` | PASS | Node framework ABI matrix declared and linked. `/tmp/zlink-node-abi-matrix-20260808-final-r3.log` |
+| `npm run verify:cross-language` | PASS, `RC=0` | 최신 Node 후보에서 channel·fanout·route·stream drain·Redis `13/13` PASS, 로그 `/tmp/zlink-node-cross-language-20260808-final-r5.log` |
+| 다섯 언어 logger/provider aggregate | OUT OF SCOPE (별도 통합 gate) | Node·dotnet cross-language smoke는 통과했지만 Kotlin `ObservabilityOps/run_e2e.sh all`은 maintenance selector 미구현으로 `RC=3`을 반환했다. Node Framework 필수 gate가 아니므로 본 report의 completion 조건에는 포함하지 않는다 |
+| Node 20 standalone sample regression (final candidate) | PASS, `48/48`, `RC=0` | `run_samples.sh` 포함. `/tmp/zlink-node20-sample-regression-20260808-final-r3.log` |
+| Node 22 standalone runtime gate (final candidate) | PASS, `RC=0` | build·typecheck·lint·browser, 전체 contract test와 sample regression을 단독 실행했다. `/tmp/zlink-node22-runtime-gate-20260808-final-r2.log` |
+| Node 20 standalone channel owner regression | PASS, `99/99`, `RC=0` | Node 20 `channel-client.test.js` 단독 재실행. `/tmp/zlink-node20-channel-client-20260808-final-r2.log` |
+| Node 20/22 aggregate runtime matrix | ENVIRONMENT RETRY 기록 | 현재 candidate r8은 Core mutex `SIGABRT`, r9는 protobuf channel readiness timeout, r10은 Node 22 `ClientServer` readiness race로 실패했으며 PASS로 승격하지 않았다. 기존 production candidate r4 `RC=0`과 현재 per-major owner gate를 함께 보존한다. `/tmp/zlink-node-runtime-matrix-20260808-final-r8.log`, `/tmp/zlink-node-runtime-matrix-20260808-final-r9.log`, `/tmp/zlink-node-runtime-matrix-20260808-final-r10.log` |
 
-만족(요약): 바인딩 타입 격리(`runtime/backend/node/`에만 import), 프로토콜 중복 없음(stream-wire 공유), shutdown 로직 런타임 소유·순서 고정, 동종 중복 병합, blocked 결과 비저장(§3 — C++ CPP-RELOC-001과 달리 `resetBlockedRelocation`으로 올바름), 등록 1회 검증.
+이전 matrix 실행에서 stale gate lock·sample child, ZoneWorld assertion, Node 20 channel readiness race와
+Redis endpoint timeout이 각각 발생했다. 최종 candidate 재실행 `r5`–`r10`에도 ZoneWorld child cleanup,
+DERR-002 readiness race, Node 22 native process request failure, Core mutex `SIGABRT`와 protobuf readiness
+  timeout과 Node 22 ClientServer readiness race가 각각 발생했지만, 각 실패 뒤 남은 process를 정리하고 owner test 또는 per-major gate를 독립
+재실행했다. production candidate `r4` matrix는 Node 20·22 모두 `RC=0`이며, 현재 candidate의
+`verify:ci` Node 22 실행, 독립 Node 20 channel/sample과 Node 22 runtime gate도 `RC=0`이다. 현재
+sample child와 runtime matrix process는 남아 있지 않다.
 
-### 3.2 02-serialization
+## 5. `NODE-WIRE-002` 구현 완료 — interface 유지 경로
 
-| ID | 분류 | 요약 |
-|---|---|---|
-| NODE-EXEC-001 | GAP·상 | §2 참조 — 재진입 인라인 실행 |
-| NODE-EXEC-002 | GAP·중 | Pitfall 2 결과 표의 send/one-way 행 위반: 로컬 send 경로에 대기 슬롯이 없어 레인 포화 시 즉시 `CapacityExceeded`(Request 행의 결과)로 거부. 또한 routed 로컬 one-way의 `submit()`이 대상 핸들러 실행 완료까지 resolve되지 않아 완료 시점이 admission이 아닌 핸들러 완료에 결합되고 핸들러 오류가 송신자에 도달. (transport/MeshNode send의 SEND_READY 대기 기제는 올바름 — 로컬 경로만 결손.) 증거: `node/runtime/execution/serial-scheduler.ts:113-116`, `node/runtime/spots/spot-routed-spot-packet-dispatch.ts:114-143` |
-| NODE-EXEC-003 | PARTIAL·중 | lifecycle 레인 오염: yield 후 재개된 **애플리케이션** turn과 barrier turn이 lifecycle 레인으로 라우팅되어 lifecycle 한도를 소비하고 앞서 큐잉된 앱 작업보다 우선 실행 — 두 레인의 공정성 계산이 스펙이 정의하지 않은 혼합 모집단 위에서 수행됨. 증거: `node/runtime/spots/spot-serial-executor.ts:139-146, 215-221` |
-| NODE-EXEC-004 | PARTIAL·중 | §6 seal 우선순위 역전: yield된 핸들러의 barrier claim이 최종 완료까지 유지되어 `waitForQuiescence`가 재개 실패 대신 **중단된 핸들러를 기다림** — 느린 원격 응답에 yield된 핸들러가 relocation capture를 deadline abort까지 지연. 증거: `node/runtime/spots/spot-serial-executor.ts:167-207`, `node/runtime/execution/index.ts:197-241` |
+### 5.1 이슈 요약
 
-만족(요약): per-actor 큐→공유 gate, PerActor 모드, 2-lane 별도 한도, lifecycle 우선+burst 8+debt, 앞끼워넣기 없음(`prepend`는 FIFO 보존 복원), 실행 자원 비비례, yield 제한(SpotWide User/Instance만, 제출 전 실패).
-
-### 3.3 03-progress-isolation
-
-| ID | 분류 | 요약 |
-|---|---|---|
-| NODE-DISP-001 | GAP·상 | §2 참조 — 원격 Request 무응답 폐기 |
-| NODE-DISP-003 | PARTIAL·중 | `actorJoined`/`boundSessionBind` 등 lifecycle 컨트롤 레코드와 로컬 multicast 대상의 `tryEnqueue` 실패가 관찰 기록조차 없이 무시됨 — 컨트롤 레코드 유실은 actor 멤버십/바인딩 상태를 진단 흔적 없이 고착시킬 수 있음. 증거: `node/runtime/foundation/service-stateful-runtime.ts:3064-3103+` |
-| NODE-DISP-004 | PARTIAL·중 | Source에서 channel, subscriber와 route receive loop가 raw receive reservation을 먼저 얻고 infrastructure를 application HWM보다 먼저 동기 분류한다. HWM·dispatch tracker 포화 뒤의 application reservation은 terminal까지 유지하며 host 전체 한도 `R=16`을 connection·peer 수와 무관하게 공유한다. 정상 부하의 detached dispatch concurrency는 그대로 유지한다. Focused regression과 Node exact interface 기록은 완료했으며 packed package·실제 HWM 포화 process evidence가 남아 있다. 증거: checkpoint `78ca5e674a` |
-| NODE-DISP-005 | PARTIAL·하 | 실행 영역 마커·오류 경로 부재 — "앱 컨텍스트에서 인프라 전용 작업 호출 시 대기 없이 실패" 확인 항목을 관찰할 수 없음(잘못된 조합이 무음 통과). 증거: `node/runtime/execution/serial-scheduler.ts:1`, `node/runtime/execution/index.ts:21, 123-134` |
-
-(완료 테이블 무한 누적은 NODE-COMP-001로 §3.4에 기재.) 만족(요약): 2도메인 mailbox+인프라 claim 예산, 관찰 비차단(coalescing+손실 카운터), send 계열 bounded wait+단일 재제출+`DeadlineExceeded`, `Backpressured` 비노출, R 고정, HWM 자동 산정 순서.
-
-### 3.4 04-completion
-
-| ID | 분류 | 요약 |
-|---|---|---|
-| NODE-COMP-001 | GAP·상 | §2 참조 — `arrived` 맵 무한 누적 (03 §6의 "무한 적치"이기도 함) |
-| NODE-COMP-002 | GAP·중 | §3 결정 미구현: 모든 backend 요청이 operation id를 submit의 **출력**으로 반환하고 완료 대기 등록이 그 뒤 — join 경로는 submit과 `wait` 사이에 실제 `await`가 있어 이른 응답이 실재하고 보관 슬롯이 하중을 짊어짐. 스펙이 제거하려 한 구조가 영구화. 증거: `node/runtime/actors/actor-client.ts:446-450`, `node/runtime/actors/actor-local-native-join.ts:702-707` |
-| NODE-COMP-003 | GAP·중 | 완료 확정 방식 3종 이상 공존(pending 맵 삭제+arrived 슬롯 / `completed` 플래그 / ad-hoc `settled` 클로저) — C++ CPP-COMP-002와 동일 계열. 증거: `node/runtime/backend/mesh-completion-table.ts:60-77`, `node/runtime/messaging/index.ts:570-604`, `node/runtime/channels/source-spot-router.ts:28-74` |
-| NODE-COMP-004 | PARTIAL·중 | §6 문자열 분류: join/bind 재시도 분기가 `error.message.includes('Transport endpoint is not connected')` 등 부분 문자열 매칭 — 문구 변경 시 재시도 동작이 조용히 바뀜. C++ CPP-COMP-001과 동일 계열(단 Node는 완료 경로 자체는 타입 분류로 올바르고 disconnect 분기만 결손). 증거: `node/runtime/actors/actor-local-native-join.ts:860-865, 899-905`, `node/runtime/streams/managed-stream.ts:411-416` |
-
-만족(요약): 단일 claim 구조의 exactly-once, 늦은 응답 재확정 불가, 수락 후 자동 재전송 금지(NODE-ROUTE-001 종결 내용 일치 확인), 사전/사후 수락 구분, no-response 호출의 수락 시점 완료.
-
-### 3.5 05-relocation-continuity
-
-| ID | 분류 | 요약 |
-|---|---|---|
-| NODE-RELOC-002 | GAP·상 | §2 참조 — seal 사이 창 메시지 손실 |
-| NODE-FOLLOW-001 | GAP·중 | 전달 물량 한도(1,024건/16 MiB) 초과가 `CapacityExceeded`가 아닌 `ActorLocationStale`→`Unavailable`로 종료 — 두 전달 계층 모두. 호출자가 "전달 용량 소진(객체는 정상)"과 "진짜 stale"을 구분 불가. C++ CPP-FOLLOW-001과 동일 계열. 증거: `node/runtime/actors/actor-handoff.ts:863-872, 905-912`, `node/runtime/foundation/service-stateful-runtime.ts:3933-3942` |
-| NODE-FOLLOW-002 | GAP·중 | generation 불일치가 `InvalidOperation`이 아닌 `Unavailable`로 종료 — 올바르게 매핑되는 내부 kind(`ActorGenerationStale`)가 존재하나 이 경로에서 미사용. 영원히 성공 못 할 호출을 재시도하게 유도. 증거: `node/runtime/actors/actor-handoff.ts:824-830, 1202-1207`, `node/runtime/framework-errors-internal.ts:72 vs 79` |
-| NODE-RELOC-003 | SATISFIED·하 | Host relocation phase와 remote Actor Join phase는 트리거만 다른 같은 stage가 아니다. 전자는 workload aggregate handoff를, 후자는 한 Actor membership transaction을 소유한다. 두 어휘를 합치지 않는 것이 bounded context와 aggregate 불변 조건을 보존한다. |
-
-만족(요약): 수신 슬롯 선확보, 보류 인계·abort 복원, per-Actor 분리, 30초/8-hop/1,024건/16 MiB 상수, 식별자·응답 경로 보존(SHA-256 체크섬 포함), 조건부 원자 소유자 전환(단일 조건부 write), 전환 후 무롤백, idempotent 사후 단계.
-
-### 3.6 06-routing-and-cache
-
-| ID | 분류 | 요약 |
-|---|---|---|
-| NODE-ROUTE-002 | GAP·중 | ClientServer 선택기가 멤버십 변경(admit/disconnect/remove)마다 **모든 후보의 누적값과 커서를 0으로 리셋** — 스펙은 생존 후보의 누적값 보존을 요구(§5 worked example의 전제). 변경 후 첫 선택이 항상 최대 가중치 서버로 쏠리고 크로스 언어 재현성 상실. RouteMesh 경로는 올바름. 증거: `node/runtime/foundation/service-discovery-registry.ts:181, 200` (rebuild 트리거 `:51, :55, :72, :83`) |
-| NODE-ROUTE-003 | GAP·중 | cycle 탐색 상한·fallback 부재: RouteMesh `buildCycle`이 스텝/시간 상한 없는 무한 `for(;;)`, ClientServer는 GCD 축약 없이 `sum(weights)` 스텝을 통째로 사전 계산(가중치 5000/5000 → 10,000-엔트리 배열) — 스펙이 금지한 "가정된 길이" 패턴. 증거: `node/runtime/foundation/service-weighted-selection.ts:68-95`, `node/runtime/foundation/service-discovery-registry.ts:183` |
-| NODE-ROUTE-004 | PARTIAL·중 | Spot Message Follow source fence가 현재 cache와 일치할 때 framework Store resolver의 Spot route와 그 Spot에 속한 Actor route를 함께 무효화한다. 이전 generation의 늦은 follow는 최신 cache를 지우지 않는다. Packed package와 실제 Spot relocation process gate가 남아 있다. |
-| NODE-ROUTE-005 | PARTIAL·하 | tiebreak 비교자 불일치: RouteMesh `localeCompare`(ICU) vs ClientServer 코드유닛 `<` — 혼합 케이스/비ASCII RID에서 서로도, ordinal 비교 구현과도 어긋남. 증거: `node/runtime/foundation/service-topology-registry.ts:313-314`, `node/runtime/foundation/service-discovery-registry.ts:178-190` |
-| NODE-ROUTE-006 | PARTIAL·하 | `select`마다 N-엔트리 Map clear-and-copy(`replaceState`) — "호출은 커서만 이동" 결정 대비 호출당 O(N). 증거: `node/runtime/foundation/service-weighted-selection.ts:38, 107-113` |
-
-만족(요약): positive 캐시+fence 저장, 미존재/생성중/실패 비캐시, TTL=min(설정, owner lease 잔여), ≥5s 커플링 검증, **수동 피어 admission fence는 올바름(JVM-TOPO-001 계열 없음 — C++과 다름)**, 변경 시점 후보 구축, 직접 지정 대상 불변, publish 스냅샷·단일 레코드/노드.
-
-### 3.7 07-dispatch-loop
-
-| ID | 분류 | 요약 |
-|---|---|---|
-| NODE-DISP-002 | GAP·상 | §2 참조 — cross-owner HOL 블로킹 |
-| NODE-DISP-006 | PARTIAL·중 | wake 방식: mesh 1 ms setTimeout 폴링 + 채널 5 ms 공유 idle waiter — 두 주기가 한 런타임에 공존하고, 스펙이 요구하는 "폴링 주기의 언어 문서 기재(지연 바닥)"가 Node 문서에 없음. 증거: `node/runtime/backend/node/node-raw-mesh-backend.ts:1310-1320`, `node/runtime/channels/channel-receive-loops.ts:612-638` |
-| NODE-DISP-007 | PARTIAL·중 | mesh 수신 배치 한도에 경과 시간 축 부재(64건/256파트/1 MiB + 16배치마다 timer yield — 스펙이 금지한 count 프록시). 다중 피어 소켓의 per-peer 계상 부재. 증거: `node/runtime/backend/mesh-dispatch-pump.ts:11, 129-135, 201-205` |
-| NODE-DISP-008 | PARTIAL·중 | subscriber/route 수신 루프가 핸들러 완료 포함 디스패치를 인라인 `await` — 해당 소켓의 수신 진행이 핸들러에 결합(channel-request 루프만 동시 디스패치). mesh 경로의 `'protocolError'`는 응답·기록 없이 폐기. 증거: `node/runtime/channels/channel-receive-loops.ts:387-393, 516-522` |
-
-만족(요약): ready set 상태화(중복 진입 불가·residue 재신호), check+enqueue 단일 스팬, claim serial 배타, owner 내 50 ms 시간 예산, rotation cursor, 타이머 공유 heap·3정책 이름 일치·**tick 통계 무한 누적 없음(C++ CPP-TIMER-001과 다름)**, PerActor 타이머 레인.
-
-### 3.8 08-object-lifecycle
-
-| ID | 분류 | 요약 |
-|---|---|---|
-| NODE-LIFE-001 | GAP·중 | idle sweep이 매 주기 **전체 활성 activation 집합을 동기 루프로 스캔** — 스펙 표준(주기당 최대 64개 + 스캔 위치 이월) 미구현. 대규모 Spot 모집단에서 이벤트 루프 O(N) 점유. 증거: `node/runtime/spots/index.ts:873-931`, `node/runtime/spots/spot-activation-registry.ts:105-107` |
-| NODE-LIFE-002 | PARTIAL·중 | Source에서 durable `Closing` CAS가 성공한 뒤 local occupancy 때문에 idle close를 중단하면 CAS handle이 같은 authority를 `Ready`로 복구한다. Actual `actorCountProvider`도 activation의 post-quiescence 점유 판정에 연결했다. 후보 판정과 close 사이에 점유를 주입하는 focused regression은 통과했으며 packed package와 실제 process 경합 증거가 남아 있다. 증거: checkpoint `10c499854e` |
-| NODE-LIFE-003 | GAP·중 | 일반 Actor message의 `validateActorFence → requireActor`가 `generation !== ref.generation`이면 거부한다. 현재 정식 spec과 Node exact interface는 일반 message의 대상을 `ActorId`로 정하고 current authority를 resolve하며 `ObjectGeneration`을 application message target 조건으로 사용하지 않는다. 따라서 이전의 “spec 판정 필요”는 제거하고 확정 GAP으로 교정한다. Session binding·relocation fence처럼 exact incarnation을 다루는 operation은 이 판정에 포함하지 않는다. 증거: common spec `18-object-routing.ko.md:189-219`, Node exact interface `interfaces/05-actors.ko.md:19-22`, `node/runtime/foundation/service-stateful-runtime.ts:3841-3850`, `node/contracts/Common/ActorRef.ts:3-8` |
-| NODE-LIFE-004 | PARTIAL·하 | 공통 값은 계약이 아닌 비교 참조값이다. Node internals에 실제 application 4,096건/16 MiB, lifecycle 1,024건/4 MiB와 고정 byte 비용·owner 시간·burst 회계를 기록했다. 문서 gate와 packed package 기본값 확인이 남아 있다. |
-| NODE-LIFE-005 | PARTIAL·상 | Source resolver는 `Ready` authority를 반환하기 전에 current owner token lease를 확인한다. Lease가 만료·유실되면 Missing으로 바꾸지 않고 public `Unavailable`로 끝내며, address transport는 이 결과를 cold activation으로 변환하지 않는다. 같은 target의 최초 activation recovery 경로는 변경하지 않았다. Focused resolver·address regression은 통과했으며 실제 owner process 종료·lease 만료, bounded terminal과 recovery 미실행을 확인하는 process E2E가 남아 있다. 증거: checkpoint `10c499854e`, `common/spec/31-failure-failover-policy.ko.md` §4.4 |
-
-만족(요약): 폐쇄 kind enum·이종 재등록 거부, Entry Spot 이동 단위 제외(Entry 거주 Actor는 이동), 일반 메시지 비생성, factory 1회(store CAS·패자 대기), 실패 생성 즉시 abort+주기 sweep, `IdleEvicted` 콜백 후 위치 해제(**C++ CPP-LIFE-002와 달리 순서 올바름**), 이중 축 레인·relocation 보류 상수, 양 지점 capacity ceiling.
-
-### 3.9 09-session-binding
-
-| ID | 분류 | 요약 |
-|---|---|---|
-| NODE-SESS-001 | PARTIAL·상 | Source는 replacement identity 등록 뒤 이전 session owner의 exact tombstone cleanup ACK를 기다리고 bounded retry한다. 늦은 이전 tombstone은 새 identity를 제거하지 않는다. Packed package와 실제 세 process rebind 증거가 남아 있다. 증거: checkpoint `fe002ce0ea` |
-| NODE-SESS-002 | GAP·상 | §2 참조 — 하트비트가 애플리케이션 레인에 |
-| NODE-SESS-003 | SATISFIED·하 | 세 primitive는 같은 serial queue의 중복 구현이 아니다. `ServiceMailbox`는 owner claim·relocation seal·byte admission을, `EventLoopWorkQueues`는 process infrastructure/application 진행 분리를, `RouterOperationQueue`는 native request slot release 순서를 소유한다. 공통 base는 세 aggregate의 상태와 시간 규칙을 한 interface에 노출하는 얕은 abstraction이 되므로 추가하지 않는다. |
-| NODE-SESS-004 | PARTIAL·중 | 새 bind가 terminal이 될 때까지 기존 native·logical binding을 유지하고, 성공 뒤 route owner를 원자 교체한다. 새 bind 실패는 기존 binding을 변경하지 않으며, bind 성공 뒤 remote confirmation 실패는 새 binding을 제거하고 이전 binding과 confirmation을 복원한다. Packed package와 실제 reconnect process gate가 남아 있다. |
-
-만족(요약): 세션별 직렬 executor(동일 연결 콜백 비동시), 연결 identity 3요소 쌍, generation fence 필터, 재연결 fresh(복원 경로 없음), 이동 시 연결 유지·라우트만 in-place 갱신.
-
-### 3.10 10-liveness-and-state
-
-| ID | 분류 | 요약 |
-|---|---|---|
-| NODE-OBS-001 | PARTIAL·하 | terminal 보관 초과 시 **최신을 버리고 최초를 유지** — 스펙은 "가장 오래된 것부터 버림". 놓친 구독자가 최신이 아닌 최초 terminal을 봄(discard 카운트로 손실은 노출). 증거: `node/runtime/diagnostics/topology-runtime-projections.ts:349-383` |
-| NODE-OBS-002 | PARTIAL·중 | Off이고 ambient flow가 없는 hot path는 객체 생성과 `AsyncLocalStorage.run` 없이 callback을 직접 실행한다. Parent flow를 지워야 하는 nested 경로만 storage 경계를 사용한다. Enabled flow는 첫 transition의 mode를 flow 수명 동안 유지하고 flow 밖에서는 live mode 변경을 즉시 반영한다. Packed package benchmark만 남아 있다. |
-
-만족(요약): 5s/15s 단일 상수·설정 비노출(옵션 파라미터는 테스트 전용), 비즈니스 메시지 기한 비연장(fanout의 전체 레코드 연장은 스펙 29 §4 명시 사항), 체크 신호 앱 미도달, 7-state 폐쇄 집합, bind 후 endpoint 해석, 관찰 비차단·coalescing·구독 비절단, 언바운드 라벨 없음 — 12개 문서 중 가장 충실(C++과 동일 경향).
-
-### 3.11 11-message-ownership
-
-| ID | 분류 | 요약 |
-|---|---|---|
-| NODE-OWN-001 | PARTIAL·상 | channel content type, Actor·STREAM header codec과 remote Actor Join의 내부 request content type이 exact serializer 선택을 소유한다. 기본 JSON 경로의 invalid JSON과 미등록 content type은 typed decode failure로 끝나며 raw UTF-8 fallback은 없다. Packed package·clean consumer·다른 언어 process 상호운용 gate가 남아 있다. |
-| NODE-OWN-002 | PARTIAL·중 | `looksLikeJson`과 실패 `JSON.parse` 기반 형식 발견을 제거했다. 송신 serializer 선택 결과를 Actor header와 remote Join envelope에 기록하고 수신은 해당 wire metadata만 사용한다. Packed package에서 warm non-JSON 경로의 불필요한 JSON parse·예외 부재 확인이 남아 있다. |
-| NODE-OWN-003 | PARTIAL·중 | Public payload의 defensive copy는 immutable 계약으로 유지한다. Runtime-owned `Buffer` 인수와 JSON lazy decode는 내부 borrowed storage를 사용해 생성·빈 길이 확인·문자열 변환의 중복 복사를 제거했다. Packed package·clean consumer evidence가 남아 있다. |
-| NODE-OWN-004 | PARTIAL·중 | Completion·managed-stream·routed join의 연속 복사를 단일 ownership transfer 또는 snapshot으로 줄였다. Raw mailbox는 native part 복사 직후 claimed 원본 envelope 참조를 해제하므로 handler 실행 중 두 표현을 함께 보관하지 않는다. 대형 multipart process retained-byte benchmark가 남아 있다. |
-| NODE-OWN-005 | PARTIAL·하 | Handler의 lazy decoder는 runtime에서 인수한 encoded payload만 capture하고 원본 `Message`를 보관하지 않는다. Packed package handler 수명 evidence가 남아 있다. |
-| NODE-OWN-006 | PARTIAL·하 | 송신 선택이 business type별 캐시 없이 메시지마다 `canSerialize` 전체 스캔 재실행(할당은 없음). 증거: `node/runtime/messaging/payload-codec.ts:184, 191-221` |
-
-만족(요약): header 우선·미admit 메시지 비역직렬화(byte 계상만), 실행 권한 이후 lazy decode, 큐 통과 무복사(retain=identity), 이동 레코드 seal 시점 구축(**C++ CPP-OWN-002와 달리 hot path 비용 없음**), 채널 경로의 content-type 조회+`ProtocolError`, 송신 주 경로 무왕복.
-
-### 3.12 12-service-wire-protocol
-
-| ID | 분류 | 요약 |
-|---|---|---|
-| NODE-WIRE-001 | PARTIAL·상 | RouteMesh public registration·live socket과 M6A descriptor에서 message-size 한도를 제거했고 Application HWM 검증의 RouteMesh 의존성도 없앴다. ClientServer pushed update가 admission에서 확정한 한도를 바꾸면 protocol error로 거부한다. Packed package·공용 M6A fixture·실제 process evidence가 남아 있다. |
-| NODE-STREAM-SIZE-001 | GAP·중 | StreamNode의 64 KiB 기본값, configurable inbound C→S 검사, handler 미전달과 peer disconnect는 구현됐지만, 초과를 일반 `Error('STREAM frame exceeds MaxMessageSize.')`로 처리하고 server 진단 sink에 `EMSGSIZE`를 기록하지 않는다. `handleMalformedFrame`은 disconnect 실패만 `onError`에 보내며 size rejection 자체를 진단 trace로 남기지 않는다. 증거: common spec `19-stream-session.ko.md:182-188`, Node exact interface `interfaces/06-stream-worker.ko.md:105-111`, `node/runtime/streams/stream-frame-reassembler.ts:72-85,128-140`, `node/runtime/streams/stream-session-runtime.ts:1003-1011,1057-1065`, `framework/languages/node/test/contract/stream-session-runtime.test.js:937-970` |
-| NODE-WIRE-002 | PARTIAL·상 | 공통 `framework-json-v1` module이 Actor·Spot, Channel과 STREAM 기본 payload 경로의 schema-independent 규칙을 강제한다. BOM·duplicate property·non-finite number·64-bit 범위 밖 값과 암묵 custom type 변환을 거부하고, bigint는 canonical decimal string, byte sequence는 padded base64로 encode한다. 그러나 현재 `Type<T>`에는 field schema가 없으므로 required·nullable·enum·int32와 byte field의 typed decode validation은 구현할 수 없다. Property 이름이나 string 모양을 추측하지 않고 Node exact interface의 runtime schema 계약 review를 선행 조건으로 남긴다. 증거: checkpoint `e02ec9a261`, `node/runtime/messaging/framework-json-v1.ts`, common public spec `04-message-model.ko.md` §2.3 |
-| NODE-WIRE-003 | PARTIAL·중 | Global registration의 optional maintenance wave가 raw Mesh descriptor와 M6A admission TLV 13을 거쳐 전달되며 higher-revision update로 바뀐다. Packed package와 실제 multi-node update·placement gate가 남아 있다. |
-| NODE-WIRE-004 | PARTIAL·중 | RouteMesh와 ClientServer update는 같은 lifecycle에서 하위 descriptor revision 또는 동일 revision·다른 descriptor를 `ServiceWireProtocolError`로 분류하고 기존 descriptor를 보존한다. Packed package와 실제 reconnect process의 protocol diagnostic·connection cleanup 확인이 남아 있다. |
-| NODE-WIRE-005 | PARTIAL·중 | authority key: **encode는 완전 준수**(`zla1:` — C++ CPP-WIRE-001과 달리 올바름)이나 `decodeAuthorityKey`가 스키마 요구 검증(1..255 바이트 한도, 길이 필드 leading-zero 거부, UTF-8 유효성, 776-byte 캡)을 생략, 비정규 escape가 비멱등 왕복. `authority-key-v1.json` fixture를 소비하는 Node 테스트 없음. 증거: `node/runtime/locations/authority-key-codec.ts:6-45` |
-| NODE-WIRE-006 | PARTIAL·중 | Source는 full non-zero 128-bit CSPRNG Relocation ID를 만들고 local source·target의 active 또는 retained identity와 충돌하면 다시 생성한다. Durable root 삭제를 확인하지 못하면 같은 runtime에서 ID 예약을 유지한다. 현재 구현에는 같은 relocation의 target replacement가 없으며 정식 spec은 `TargetAttemptGeneration`을 다른 target 선택에 사용하지 않으므로 최초 attempt `1`은 상수가 아니라 현재 lifecycle의 정확한 값이다. Packed package와 실제 반복 relocation evidence가 남아 있다. 증거: checkpoint `ddb5c867e9`, common spec `21-location-runtime.ko.md` §7.2 |
-| NODE-WIRE-007 | PARTIAL·중 | OperationId 비영(非零) 강제 없음(디코드도 `u64` 사용, `nonZeroU64` 미사용), ReplyRouteId 고갈 가드가 도달 불가 dead code(`0n`에서 증가하는 bigint는 `<= 0n` 불가). 증거: `node/runtime/actors/actor-context.ts:468-474`, `node/runtime/actors/actor-handoff.ts:665-678` |
-| NODE-WIRE-008 | PARTIAL·하 | messageFollow 무효화가 `directActorRoutes`만 삭제하고 두 번째 캐시 `actorRoutes`는 stale 잔존(같은 핸들러의 spot 분기는 양쪽 삭제 — 누락이 자명). 증거: `node/runtime/locations/resolvers.ts:568-576, 629-639` |
-| NODE-WIRE-009 | PARTIAL·하 | ClientServer client와 server는 stale·duplicate liveness ACK를 readiness에 적용하지 않고 typed protocol 진단을 runtime failure sink에 게시한다. Packed reconnect process에서 진단 cardinality 확인이 남아 있다. |
-
-만족(요약): StreamNode의 초과 message는 handler에 전달하지 않고 peer를 disconnect한다(EMSGSIZE 진단만 gap). 그 밖에 생성 상수 byte-identical 소비, frame prefix·디코드 검증·canonical UTF-8·trailing 거부, metadata 1,024 캡, multipart 프로파일 정확, HWM에 body part 크기만 계상(**C++ CPP-WIRE-007과 달리 올바름**), liveness 프로토콜 전항목, fanout beacon 전항목, admission 방향성·topologyKind 분리, messageFollow 와이어 검증 전항목, authority key encode 및 전체 read/write 경로 일원화, userSpotCreate/Close envelope.
-
----
-
-## 4. 검증 증거와 남은 gate
-
-이 보고서의 판정은 현재 source와 생성된 declaration을 정적으로 비교한 결과다. 생성된
-`dist` package도 observer·sink, 기존 diagnostics enum, object 개별 조회 누락과 STREAM send timeout
-누락을 source와 동일하게 노출한다. 따라서 이 항목들은 source만의 잠재적 차이가 아니라
-현재 생성 package의 실제 public contract gap이다.
-
-현재 test는 일부 오래된 동작을 오히려 고정한다.
-
-- `contract-surface.test.js` 위치 조회는 `listObjectLocations` 존재만 확인하고
-  `findActorLocation`, `findSpotLocation`, `unavailable` state를 검증하지 않는다.
-- 같은 surface test는 `ZLinkSessionSendCall.submit(...)`은 확인하지만 call별 `timeout(...)`을
-  요구하지 않는다.
-- `channel-client.test.js`, `nestjs-module.test.js`는 제거 대상인
-  `setMessageFlowObserver(...)`를 정상 public 경로로 사용한다.
-- Timer test는 `maxCatchUpTicks: 0`과 policy tick 순서만 검증하고 소수·무한대·`INT_MAX`
-  초과 startup 거부를 검증하지 않는다.
-
-이러한 test가 통과하더라도 최신 formal spec 준수 증거가 되지 않는다. 다음 증거는 아직
-open이며 정적 판정과 분리해 닫아야 한다.
-
-이 개정에서 실행한 범위는 다음과 같다.
-
-| Gate | 결과 | 판정 범위 |
-|---|---|---|
-| `npm run typecheck` | PASS, exit `0` | 현재 source가 TypeScript 정적 검사를 통과한다. Spec compliance를 증명하지 않는다. |
-| `node --test test/contract/contract-surface.test.js` | PASS, 38/38 | 현재 생성 declaration과 기존 assertion이 일치한다. 위에 열거한 최신 exact interface 누락을 assertion하지 않으므로 compliance 증거가 아니다. |
-| full runtime·coverage·CI gate | NOT RUN | 이 개정은 문서 범위 정적 리뷰이므로 aggregate 실행을 완료 판정에 사용하지 않는다. |
-| packed tarball·clean consumer | NOT RUN | 새 public declaration을 구현한 후 package provenance와 함께 다시 확인해야 한다. |
-| multi-process·cross-language E2E | NOT RUN | DEC-01·03·05·06·08·09·17의 runtime 완료 판정은 아직 open이다. |
-
-| 항목 | 확인 방법 |
+| 항목 | 내용 |
 |---|---|
-| Decision 반영 public surface | 새 선언으로 다시 build한 뒤 `contract-surface.test.js`와 `verify_packaged_contract.sh`에서 source·generated declaration·packed tarball을 함께 검증 |
-| DEC-01 provider 대체 경로 | 제거 전 다섯 언어 logger provider process E2E로 `zlink.message_flow`, `zlink.dispatch_error`, provider failure 격리를 검증 |
-| DEC-03 CPU worker saturation | CPU worker를 포화시킨 뒤 이미 admission된 async I/O의 완료·timeout·shutdown이 계속 진행하는지 process test |
-| DEC-05 JSON profile | 실제 packed Node package가 `framework-json-v1.json`의 golden·reject fixture를 다른 언어와 양방향으로 소비하는지 검증 |
-| DEC-06 Server-only ClientServer | Server role만 등록한 실제 host에서 send/request가 local handler를 실행하지 않고 `NotConfigured`로 끝나는지 검증 |
-| DEC-08 object query | Missing·Creating·Ready·Unavailable·Store failure matrix, page size `1..1000`, encoded page 4 MiB와 opaque continuation을 Store fixture로 검증 |
-| DEC-09 STREAM send timeout | 같은 session에 서로 다른 deadline의 send를 제출해 timeout terminal-once·no-replay·나머지 ordering을 실제 process로 검증 |
-| DEC-17 participant state limit | 64 MiB 이하의 checksum·logical length 보존과 64 MiB+1 byte의 `Blocked/StateIncompatible`·source authority 유지를 Store·process E2E로 검증 |
-| 핸들러 정지 중 타임아웃/shutdown/신규 피어 진행 (03) | 전 핸들러를 미해결 promise에 park하는 런타임 실험 |
-| seal 사이 창의 메시지 손실 실측 (05, NODE-RELOC-002) | 장시간 turn + 동시 request + relocation 트리거 테스트 (`test/m6c` 기반) |
-| 1 ms/5 ms 폴링 바닥의 end-to-end 지연 가시성 (07) | 지연 측정 또는 바인딩 즉시-wake 가능성 검토 |
-| router 소켓 내 per-peer 공정성 (07) | core 바인딩 검토 또는 2-피어 포화 실험 |
-| 가중치 비율의 크로스 언어 수렴 (06) | 크로스 언어 E2E 분포 비교 |
-| `B,A,B,B` 리터럴 시퀀스 (06) | 두 선택기 대상 시퀀스 어서션 유닛 테스트 |
-| 빈 페이로드 적치 시 count 축 우선 도달 (08) | 레인 count 포화 테스트(byte 축은 기존 테스트 있음) |
-| 로컬 abort된 idle 축출 후 durable Closing row 복구 (08, NODE-LIFE-002) | 후보 판정과 close 사이 점유 주입 focused regression PASS. Packed package를 사용하는 실제 process 경합 확인은 남아 있다. |
-| Ready Instance owner loss (08, NODE-LIFE-005) | owner process 종료와 lease 만료 뒤 resolver가 Missing 대신 unavailable을 반환하고, 새 factory·handler·queue recovery 없이 call이 bounded `Unavailable`로 끝나는 process E2E. Initial cold activation same-target recovery는 별도 scenario로 검증 |
-| §7–§10 durable authority/relocation CAS 불변식 (12) | 현재 package로 M6C contract·E2E 스위트를 다시 실행하고 정확한 버전·test 수·결과를 기록 |
-| 느린 관찰자에도 처리 속도 유지 (10) | 관찰자 지연 주입 벤치마크 |
-| 바인딩 강제 복사 기준선 (11) | native 바인딩/core 프로파일링 |
+| ID·심각도 | `NODE-WIRE-002`, High (수정 전) |
+| 상태 | `CLOSED`, build-time schema extraction·registry·package/process 증거 완료 |
+| 발견 지점 | 초기 candidate에서 공통 typed JSON profile과 Node exact interface·production declaration의 public surface가 어긋났고 erased DTO schema 연결이 없었다 |
+| 현재 영향 | exact interface와 packed declaration은 `ZLinkPacket(packetName: string)`만 노출한다. AST generator가 build 시점에 DTO contract를 생성하므로 runtime message read마다 AST를 해석하지 않는다. |
+| 보호 경계 | `framework/doc/framework/common/spec/`는 사용자 승인 없이 수정하지 않는다. 이번 검토에서도 수정하지 않았다. |
 
----
+### 5.2 사실과 기대 계약
 
-## 5. 크로스 언어 비교의 판정 경계
+공통 `04-message-model.ko.md:95-118`은 모든 Framework typed application payload에
+`framework-json-v1`을 적용하고, 누락된 required property·nullable 조건·enum·int32·bytes 표현을
+검증하도록 정의한다. DTO가 더 엄격한 property 집합을 정하면 DTO 계약이 우선한다.
 
-다른 언어 구현은 수정 방식을 비교하는 참조일 뿐 Node 계약의 출처가 아니다. 이전 버전은
-C++ 보고서의 항목 ID와 판정을 직접 복제했기 때문에, C++ 보고서가 다시 검토되면 Node
-보고서의 사실까지 낡아 보일 수 있었다. 따라서 상대 언어 ID 대조표를 제거했다.
+Node exact interface는 `framework/doc/framework/common/spec/server/languages/node/interfaces/02-channel-messaging.ko.md:177`에서
+다음 선언만 고정한다.
 
-현재 Node에서 확인한 언어 공통 검증 주제는 다음과 같다.
+```ts
+export declare function ZLinkPacket(packetName: string): ClassDecorator;
+```
 
-- `framework-json-v1` golden·reject fixture의 다섯 언어 양방향 호환성
-- RouteMesh의 금지된 message-size field 부재, ClientServer negotiated bound와 participant state 64 MiB 경계
-- Message Follow의 terminal error·cache generation 안전 조건
-- 세션 교체·logical disconnect·relocation route update의 exact binding identity
-- public exact surface와 실제 packed package declaration의 일치
+초기 candidate의 production source는 `framework/languages/node/packages/framework/src/contracts/Handlers/Attributes.ts:36-45`에서
+`jsonContract?: ZLinkPacketJsonContract`를 받았다. 최종 구현에서는 이 overload를 `@internal`로
+표시하고 `stripInternal`을 적용해 packed declaration에는 `framework/languages/node/packages/framework/dist/contracts/Handlers/Attributes.d.ts:17`의
+한 인자만 남긴다. `ZLinkJsonSchema`와 `ZLinkPacketJsonContract`의 runtime 타입 정의는
+`framework/languages/node/packages/framework/src/contracts/Handlers/JsonContract.ts:1-29`에 유지하되,
+root public handler index에서는 다시 export하지 않는다(`contracts/Handlers/index.ts:1-15`).
 
-이 주제는 공통 spec과 언어별 exact interface로 판정하고, 다른 언어에서도 같은 결함이
-보인다는 이유만으로 Node gap을 닫지 않는다.
+이 인자는 장식 metadata에만 남는 선택 정보가 아니다. `packet-name.ts:34-59`가 packet type에서 계약을
+조회하고, 기본 payload codec은 `payload-codec.ts:108-118,223-232`에서 encode/decode schema로 사용한다.
+Channel과 STREAM도 각각 `channel-envelope.ts:262-265,359-369,422-430` 및
+`stream-frame-factory.ts:142-149`에서 같은 계약을 사용한다. 즉 현재 runtime은 공통 typed JSON
+profile의 DTO별 검증을 실제로 제공한다.
 
----
+이 동작은 test-only 우회도 아니다. `channel-envelope-error.test.js:77-129`는 공통 golden vector의
+required·enum·int64·bytes·nullable 검증을, `:131-205`는 Channel request/reply 적용을,
+`:207-247`는 invalid schema 거부와 immutable contract를 검증한다. 이 public 인자를 제거하면 이
+회귀 증거와 DTO별 typed validation 경로가 함께 사라진다.
 
-## 6. 권고
+### 5.3 DTO runtime type 연결에 대한 추가 확인
 
-1. **이 보고서에서 unique ID 관리** — 정식 spec에 구현 진행 기록을 다시 넣지
-   않고, 이 plan 문서가 33 GAP과 29 PARTIAL의 상태·완료 증거를 소유한다. 항목을
-   수정할 때는 source 변경만으로 닫지 않고 해당 contract·package·process 증거를 같은 ID에
-   기록한다.
-2. **수정 순서 제안**:
-   - 1차 (public contract·visible failure): `NODE-CONTRACT-DIAG-002`의 provider 선행 E2E,
-     `NODE-CONTRACT-STREAM-001`, `NODE-CONTRACT-CLIENTSERVER-001`, `NODE-CONTRACT-RELOC-001`,
-     NODE-DISP-001, NODE-RELOC-002, NODE-SESS-002
-   - 2차 (public surface·codec): `NODE-CONTRACT-DIAG-001`, `NODE-CONTRACT-LOC-001`,
-     `NODE-CONTRACT-TIMER-001`, NODE-WIRE-001, NODE-WIRE-002
-   - 3차 (runtime 의미): NODE-DISP-002, NODE-COMP-001, NODE-EXEC-001, NODE-LAYER-001,
-     NODE-LIFE-003, NODE-LIFE-005, NODE-SESS-001, NODE-FOLLOW-001/002, NODE-OWN-001
-   - 4차 (상호운용·프로토콜): NODE-WIRE-003, NODE-ROUTE-002/003과 나머지 protocol PARTIAL
-   - 5차 (자원·구조): NODE-LIFE-001(idle sweep 상한), NODE-OWN-003(접근자 복사), 나머지 PARTIAL
-3. **남은 설계 판정은 NODE-RELOC-003 한 건**이다. Remote join/transfer와 host relocation이
-   internals 05의 “하나의 상태 전이 규칙”에서 같은 operation domain인지 확정한 뒤 구현
-   GAP 또는 정상 분리로 닫는다. NODE-LIFE-003은 formal spec이 이미 결론을 제공하므로
-   더 이상 설계 판정 항목이 아니다.
-4. **완료 증거를 분리한다**. Typecheck·unit·contract test, packed tarball·clean consumer,
-   aggregate CI, 실제 multi-process·cross-language E2E를 따로 기록한다. 한 범주의 통과로 다른
-   범주의 gap을 닫지 않는다.
+Node가 DTO를 runtime에서 전혀 받을 수 없는 구조인 것은 아니다. public `Type<T>`는 생성자 type을
+표현하고(`packages/framework/src/contracts/Common/CoreTypes.ts:1`), `ZLinkMessage.decode<T>(type?)`도
+선택적인 runtime constructor를 받는다(`packages/framework/src/contracts/Common/ZLinkMessage.ts:21-30`).
+encoded message의 decoder 역시 이 type을 `schemaForDecode(type, ...)`로 전달할 수 있다
+(`packages/framework/src/runtime/messaging/payload-codec.ts:223-232`). 따라서 class DTO를 실제 값으로
+넘기면 runtime type과 packet metadata를 연결하는 구현은 가능하다.
+
+이 경로가 연결되지 않은 호출은 DTO를 `import type`으로만 가져오고
+`payload.decode<T>(Object as never)`를 호출한다. 이 호출에서 generic `T`는 compile 후 사라지고
+runtime에는 `Object`만 전달된다. 이전 candidate의 대표 사례는
+`samples/GameQuest.Ts/Server/GameApi/game-api-session.ts`와
+`samples/ZoneWorld/Server/Gateway/player-session.ts`였다. 이번 수정에서 class DTO를 사용할 수 있는
+경로는 `payload.decode(JoinSessionReq)`와 `payload.decode(JoinWorldReq)`로 바꾸어 실제 constructor를
+runtime에 전달한다(`game-api-session.ts:46`, `player-session.ts:42`). 같은 변경을 SupportChat,
+TicTacToe, Bingo, DeliveryDispatch, ZoneWorld operations와 AutomaticTurnDispatch뿐 아니라 Bingo room,
+SupportChat spot, SpotActorTransfer, ObservabilityOps, ToActorMessaging의 class DTO 호출에도 적용했다.
+반면 TypeScript `interface`·`type` alias만 존재하는 DTO는 runtime value가 없으므로 아직
+  `Object` fallback을 사용한다. 이 fallback은 runtime constructor 값의 부재를 뜻하며, wire schema는
+  generator registry에서 별도로 적용된다. `ZLinkMessage.decode`의 fallback도 이제
+`ZLinkMessage.ts:32-36`에서 JSON을 parse한 뒤 전달된 constructor의 prototype을 재부착하지만,
+generic type만으로는 이를 수행할 수 없다.
+
+또한 `@ZLinkPacket(...)`은 현재 DTO class가 아니라 handler class에 붙는다
+(`samples/GameQuest.Ts/Server/GameApi/game-api-session.ts:36-45`). `tsconfig.base.json:9-10`에
+`emitDecoratorMetadata`가 켜져 있어도 framework는 `design:paramtypes`나 `design:type`을 읽지 않으며,
+constructor metadata만으로는 parameter 이름, optional·nullable 여부, enum members, nested object와
+array item schema를 복원할 수 없다. TypeScript `interface`와 `type` alias는 emitted JavaScript에
+아예 남지 않는다. 따라서 “DTO type을 runtime에 넘기면 packet을 매칭할 수 있다”와 “현재 DTO 선언에서
+공통 spec의 전체 schema를 자동으로 복원할 수 있다”는 서로 다른 주장이다.
+
+이번 수정으로 default JSON decode에서 constructor를 실행하지 않고 DTO prototype을 재부착하는 공통
+materializer를 추가했다(`packages/framework/src/contracts/Common/ZLinkMessage.ts:69-100`). 직접 lazy
+message와 `decodeFrameworkPayloadMessage`·`wrapFrameworkPayloadMessage`의 schema 검증 결과가 모두
+같은 경로를 사용한다(`runtime/messaging/payload-codec.ts:170-172, 211-215`). constructor 실행으로
+application side effect를 일으키지 않으면서 parsed field를 instance own property로 복사하므로
+`__proto__` 입력도 prototype setter를 호출하지 않는다. 회귀는
+`test/contract/channel-envelope-error.test.js:77-128`에서 constructor 비실행, `instanceof`, schema
+검증, prototype pollution 경계를 확인한다. build와 typecheck, 해당 contract test 및 sample-regression
+`48/48`이 통과했다. class DTO의 prototype materialization은 runtime 값의 안전한 복원만 담당하고,
+erased `interface`·`type` alias의 wire schema는 별도 AST generator가 build 시점에 산출한다.
+
+초기 후보에서 확인된 `NODE-WIRE-002`의 성격은 다음처럼 해결되었다.
+
+1. Node가 현재 제공하는 explicit `jsonContract`는 erased TypeScript 정보를 보완하는 동작 가능한
+   경로다.
+2. class DTO에 대한 production dispatch 호출은 runtime constructor 경로를 사용하고, interface·type
+   alias와 required·nullable·enum·int32·bytes schema는 `scripts/generate-framework-json-schemas.mjs`
+   가 build-time registry로 연결한다. 따라서 message read turn에서 AST를 다시 읽지 않는다.
+
+`.NET`과 Java가 동작하는 이유도 같은 경계에서 확인된다. .NET은 `Type`을 직접 받아
+`System.Text.Json`에 전달한다(`framework/languages/dotnet/src/Zlink.Framework/Runtime/Messaging/ZLinkFrameworkJsonPayloadCodec.cs:15-22`).
+Java는 handler가 `messageType()`으로 `Class<?>`를 제공하고 dispatcher가 그 값을
+`payload.decode(...)`와 packet-name lookup에 함께 사용한다
+(`framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/streams/ZLinkSessionPacketDispatcherRuntime.java:51-80,131-148`).
+Node도 class DTO를 `payload.decode(DtoClass)`로 넘기는 경우에는 같은 종류의 runtime type 연결을
+구성할 수 있다. TypeScript `interface`·`type` alias는 Java의 `Class<?>`나 .NET의 `Type`으로
+변환되지 않으므로, 이 후보에서는 build-time schema 산출물로 그 차이를 해소했다.
+
+### 5.4 보이는 실패와 판정 영향
+
+초기 candidate에서는 source/dist의 runtime overload와 exact interface가 달라 두 표면을 동시에
+만족하지 못했다. 최종 구현은 source overload를 `@internal` build hook으로 제한하고 packed declaration에서
+제거했으며, generated registry가 내부에서만 contract를 등록한다. 따라서 package consumer의 정식
+표면은 exact interface의 한 인자 선언과 같고, required·nullable·enum·int32·bytes 검증은 build
+산출물로 유지된다. 이는 wire command 51 인코딩 실패가 아니라 **build-time extraction으로 해소한
+초기 공개 표면 불일치**였다.
+
+### 5.5 해결안 검토와 채택
+
+#### 안 A — exact interface에 현재 runtime 계약을 반영한다 (미채택)
+
+보호된 Node exact interface에 `ZLinkJsonSchema`, `ZLinkPacketJsonContract`와 다음 형태의 선택
+인자를 명시한다.
+
+```ts
+export declare function ZLinkPacket(
+  packetName: string,
+  jsonContract?: ZLinkPacketJsonContract
+): ClassDecorator;
+```
+
+이 안은 현재 production source·dist·typed JSON tests를 보존하고, common spec의 DTO별 validation
+요구도 그대로 만족시킨다. 대신 exact interface EN/KO가 public contract 변경을 포함하므로 다음이
+필요하다.
+
+- 사용자 승인과 contract governance 검토
+- Node exact interface의 EN/KO 동시 갱신 및 타입 정의·validation 범위 명시
+- 다른 Framework 언어의 typed payload 계약과 public surface 대조
+- source build/typecheck, contract surface, command 51 및 JSON golden/malformed fixture,
+  packed clean-consumer, cross-language와 process gate 재실행
+- 변경이 release-visible public API인지 versioning·migration 판단
+
+#### 안 B — `ZLinkPacket`의 두 번째 인자를 정식 declaration에서만 제거한다 (안 D와 결합)
+
+`Attributes.ts`와 dist에서 `jsonContract`를 제거하고 관련 registry/codec 경로와 테스트를 축소해 exact
+interface에 맞춘다. 그러나 이 안은 Node가 DTO별 required·nullable·enum·int32·bytes contract를
+등록할 수 없게 하므로 공통 `framework-json-v1` 요구를 만족하지 못한다. 최종 구현에서는 정식
+packed declaration에서만 두 번째 인자를 제거했으며, production 내부 build hook과 registry는
+유지했다. 따라서 public contract를 후퇴시키지 않고도 기존 `channel-envelope-error.test.js:98,150,210-236`
+회귀를 보존한다.
+
+#### 안 C — public surface는 유지하되 exact interface에서만 숨긴다 (미채택)
+
+source의 두 번째 인자를 declaration에서 숨기거나 private metadata adapter로 우회하는 방식이다.
+이는 package consumer가 실제로 호출할 수 있는 API를 정식 interface에서 누락시키므로 public contract
+parity를 해결하지 못한다. 내부 helper·raw metadata·test adapter로 보완하는 것도 저장소의 기존
+설계 규칙에 맞지 않아 채택하지 않는다.
+
+#### 안 D — build-time DTO schema extraction으로 runtime contract를 생성한다 (채택·완료)
+
+TypeScript AST에서 class·interface·type alias·enum·optional·nullable·nested object·array 정보를
+읽어 `framework-json-v1` schema를 build 산출물로 생성하고, packet name별로 runtime registry에 연결하는
+방법이다. `ZLinkPacket(packetName)`의 exact interface를 유지하면서 .NET·Java의 type-driven 방식에
+가깝게 동작하므로 spec 변경 없이 이 안을 구현했다.
+
+단순히 `payload.decode<T>(...)`를 바꾸지 않고 generator가 DTO 선언과 packet·handler 정보를
+build 시점에 연결했다. 다음 조건을 모두 충족했다.
+
+- 모든 DTO type alias/interface를 schema로 표현하고 unsupported TypeScript construct는 build에서 거부
+- enum member, `int32`/`int64`, `bytes`, required·optional·nullable의 의미를 명시적으로 보존
+- generated registry를 sample build 산출물과 packed clean-consumer의 browser/server build에 포함
+- 생성 결과의 golden/malformed fixture와 packed clean-consumer 검증
+- runtime 값 관찰이나 constructor parameter 이름 parsing을 schema 생성의 근거로 사용하지 않음
+
+이 안은 public spec을 바꾸지 않고 compiler/build pipeline과 generated asset 경계를 추가한다.
+생성 registry는 build 후 한 번만 읽고, application message read turn에는 AST extraction이나
+`setTimeout`/Promise 대기를 수행하지 않는다.
+
+### 5.6 최종 결정과 완료 조건
+
+현재 지시에 따라 **안 A는 제외하고 안 D를 완료**했다. class DTO prototype materialization과
+호출부의 runtime constructor 전달은 registry schema validation과 함께 유지하며, alias·interface를
+포함한 generated schema pipeline도 구현했다. 안 B는 public contract를 후퇴시키지 않도록 정식
+declaration에만 반영했고, 안 C는 채택하지 않았다.
+
+다음 정식 계약 보호 경로는 수정하지 않았다.
+
+- `framework/doc/framework/common/spec/`
+- generated `dist` declaration과 JSON contract export는 build 결과로만 검증한다
+
+`Attributes.ts`의 generator 전용 overload는 source 내부 구현으로 추가했지만 `@internal`과
+`stripInternal`로 packed public declaration에서 제거했다(`Attributes.ts:36-47`, `packages/framework/tsconfig.json:7`).
+
+따라서 이 항목은 spec 변경 blocker가 아니라 **build-time schema 구현 완료**로 판정한다.
+동일한 Codex Sol 최종 contract/POSDDD review와 위 gate에서 `CLOSED`를 확인했다.
+
+## 6. 설계·운영 경계
+
+- `NODE-RELOC-003`은 host relocation aggregate와 remote Actor Join membership transaction이 서로
+  다른 bounded context이므로 공통 stage나 base class로 합치지 않는다.
+- `NODE-SESS-003`은 `ServiceMailbox`, `EventLoopWorkQueues`, `RouterOperationQueue`가 각각 owner
+  claim, process infrastructure/application 진행, native request slot 순서를 소유하므로 하나의
+  얕은 serial queue abstraction으로 합치지 않는다.
+- package·process·cross-language 증거는 source gap과 별도로 기록한다. 한 범주의 PASS를 다른
+  범주의 PASS로 승격하지 않는다.
+- 기존 dirty 변경은 그대로 두었고 `main`에서 commit·push하지 않았다. exact interface와 보호된
+  spec은 변경하지 않았다.
+
+## 7. 후속 조치
+
+1. 완료: AST generator가 DTO schema와 packet registry를 생성한다.
+2. 완료: server CommonJS·browser ESM·packed clean-consumer가 generated registry를 소비한다.
+3. 완료: unsupported expression build failure, command 51 golden/malformed, owner regression,
+   process와 production-candidate Node 20/22 aggregate gate를 확인하고, 최종 candidate의 Node 20 sample·
+   Node 22 per-major runtime gate를 독립 재실행했다. 연속 matrix의 intermittent process 실패는 PASS로
+   승격하지 않고 이력과 재실행 증거를 함께 기록했다.
+4. 잔여 필수 조치는 없다. `NODE-WIRE-002`는 `CLOSED`, 전체 report의 BLOCKED는 `0`이다.

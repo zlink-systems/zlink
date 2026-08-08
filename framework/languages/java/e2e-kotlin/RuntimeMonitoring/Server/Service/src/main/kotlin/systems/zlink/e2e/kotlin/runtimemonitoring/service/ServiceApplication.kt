@@ -54,9 +54,9 @@ class ServiceApplication {
             options.configureLocations().setOwnerLeaseTtl(Duration.ofSeconds(3))
             options.configureLocations().setPollingInterval(Duration.ofMillis(250))
             options.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile("$logDir/service-flow.log")
-                .traceLabel("kotlin-mon-service")
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL)
+
+
             options.addHandlersFromPackageOf(WorkRequestHandler::class.java)
             val apiEndpoint = java.net.URI.create(
                 Env.get("e2e.api.endpoint"),

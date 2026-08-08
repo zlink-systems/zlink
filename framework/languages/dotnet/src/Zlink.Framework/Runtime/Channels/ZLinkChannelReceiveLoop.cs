@@ -202,7 +202,7 @@ internal sealed class ZLinkChannelReceiveLoop(
             && hello is not null
             && StringComparer.Ordinal.Equals(
                 hello.ChannelName,
-                identity.ChannelName)
+                identity.ChannelName.Value)
             && StringComparer.Ordinal.Equals(
                 hello.SecurityIdentity,
                 identity.SecurityIdentity);

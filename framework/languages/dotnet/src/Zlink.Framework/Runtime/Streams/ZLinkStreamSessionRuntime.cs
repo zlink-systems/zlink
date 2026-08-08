@@ -27,13 +27,14 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
     private readonly ZLinkStreamSessionSerialExecutor _serial;
     private readonly IZLinkBackendStreamSocket _socket;
     private readonly string _transport;
+    private readonly TimeProvider _timeProvider;
     private readonly object _disposeGate = new();
     private readonly object _terminalGate = new();
     private readonly object _transportCloseGate = new();
     private readonly object _replacementGate = new();
     private readonly HashSet<ActorBindingReplacementIdentity>
         _receivedBindingReplacements = [];
-    private readonly Dictionary<ActorBindingReplacementIdentity, Timer>
+    private readonly Dictionary<ActorBindingReplacementIdentity, ITimer>
         _replacementCloseTimers = [];
     private readonly bool _requireConnectionReady;
     private readonly TaskCompletionSource<(string LocalAddr, string RemoteAddr)>
@@ -118,6 +119,7 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         _scope = scope;
         _socket = socket;
         _transport = transport;
+        _timeProvider = timeProvider;
         _removeSession = removeSession;
         _runtime = scope.ServiceProvider.GetRequiredService<ZLinkFrameworkRuntime>();
         _completionAdmission = completionAdmission;
@@ -309,6 +311,7 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         {
             if (!_receivedBindingReplacements.Add(identity))
                 return true;
+            _serial.CloseApplicationAdmission();
             Interlocked.Exchange(ref _applicationDispatchClosed, 1);
             Interlocked.Exchange(ref _actorBindingReplacementClosing, 1);
         }
@@ -730,11 +733,11 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         ActorBindingReplacementIdentity identity)
     {
         var deadline = false;
+        using var callbackDeadline = CancellationTokenSource
+            .CreateLinkedTokenSource(_terminalCallbackStop.Token);
+        callbackDeadline.CancelAfter(_runtime.Registration.DefaultRequestTimeout);
         try
         {
-            using var callbackDeadline = CancellationTokenSource
-                .CreateLinkedTokenSource(_terminalCallbackStop.Token);
-            callbackDeadline.CancelAfter(_runtime.Registration.DefaultRequestTimeout);
             var operation = _handler.OnActorBindingReplacedAsync(
                 identity.ActorId,
                 callbackDeadline.Token);
@@ -743,11 +746,7 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
                     .ConfigureAwait(false);
         }
         catch (OperationCanceledException)
-            when (_terminalCallbackStop.IsCancellationRequested)
-        {
-            deadline = true;
-        }
-        catch (OperationCanceledException)
+            when (callbackDeadline.IsCancellationRequested)
         {
             deadline = true;
         }
@@ -772,12 +771,12 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
             return;
         }
 
-        Timer timer;
+        ITimer timer;
         lock (_replacementGate)
         {
             if (_replacementCloseTimers.ContainsKey(identity))
                 return;
-            timer = new Timer(
+            timer = _timeProvider.CreateTimer(
                 static state =>
                 {
                     var closure = (ReplacementCloseTimerState)state!;

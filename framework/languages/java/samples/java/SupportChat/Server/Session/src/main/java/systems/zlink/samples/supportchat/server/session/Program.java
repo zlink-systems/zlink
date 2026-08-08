@@ -14,7 +14,6 @@ import systems.zlink.framework.configuration.ZLinkMeshNodeBuilder;
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore;
 import systems.zlink.framework.spring.EnableZLinkFramework;
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer;
-import systems.zlink.samples.supportchat.server.configuration.SampleFlowLog;
 import systems.zlink.samples.supportchat.server.configuration.SampleLocationStore;
 import systems.zlink.samples.supportchat.server.configuration.SampleNames;
 import systems.zlink.samples.supportchat.server.configuration.SampleTopology;
@@ -50,9 +49,7 @@ public final class Program {
         SampleTopology.Session session = topology.session();
         return options -> {
             options.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile(SampleFlowLog.path(topology, "session"))
-                .traceLabel("session");
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             options.configureLocations();
             options.addClientServerChannel(SampleNames.ApiChannel)
                 .client();

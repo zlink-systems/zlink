@@ -14,7 +14,7 @@ import { ZLINK_LOCATION_RUNTIME_QUERY, ZLINK_ROUTE_MESH_RUNTIME, ZLinkModule, zl
 import { createRedisLocationStore, locationMessagingOptions } from '../../Shared/location-store';
 import {
   PacketNames,
-  type ActorPushReq,
+  ActorPushReq,
   type BindActorReq,
   type BindActorRes,
   type SessionBindingSnapshot
@@ -73,7 +73,7 @@ class ToActorSession implements ZLinkSession {
     }
 
     if (dispatch.packetName === PacketNames.actorPush) {
-      const request = payload.decode<ActorPushReq>(Object as never);
+      const request = payload.decode(ActorPushReq);
       const actor = this.context.actors.find(request.actorId);
       if (actor === undefined) {
         throw new Error(`Actor route not found: ${request.actorId}`);

@@ -10,10 +10,8 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
     private readonly ZLinkSerialExecutionQueue _queue;
     private readonly ZLinkUserSpotExecutionMode _executionMode;
     private readonly object _laneGate = new();
-    private readonly Dictionary<string, ZLinkSerialExecutionQueue> _actorLanes =
-        new(StringComparer.Ordinal);
-    private readonly Dictionary<string, ZLinkSerialExecutionQueue> _timerLanes =
-        new(StringComparer.Ordinal);
+    private readonly Dictionary<ZLinkActorId, ZLinkSerialExecutionQueue> _actorLanes = [];
+    private readonly Dictionary<ZLinkTimerName, ZLinkSerialExecutionQueue> _timerLanes = [];
     private readonly IZLinkRuntimeFailureReporter _errorSink;
     private readonly CancellationToken _stopToken;
     private readonly object _executionOwner;
@@ -118,7 +116,9 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         if (Volatile.Read(ref _stopping) != 0 || _isDisposed())
             return ValueTask.CompletedTask;
         var claim = AcquireApplicationClaim(actorLane: true);
-        var lane = GetLane(_actorLanes, actorId);
+        var lane = GetLane(
+            _actorLanes,
+            ZLinkActorId.FromBoundary(actorId, nameof(actorId)));
         return RunClaimedAsync(
             lane,
             ct => _executionMode == ZLinkUserSpotExecutionMode.SpotWide
@@ -146,7 +146,9 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         if (Volatile.Read(ref _stopping) != 0 || _isDisposed())
             return ValueTask.CompletedTask;
         var claim = AcquireRelocationReplayClaim(seal);
-        var lane = GetLane(_actorLanes, actorId);
+        var lane = GetLane(
+            _actorLanes,
+            ZLinkActorId.FromBoundary(actorId, nameof(actorId)));
         return RunClaimedAsync(
             lane,
             ct => _executionMode == ZLinkUserSpotExecutionMode.SpotWide
@@ -187,7 +189,9 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
             // is still pending.
             var lane = _executionMode == ZLinkUserSpotExecutionMode.SpotWide
                 ? _queue
-                : GetLane(_actorLanes, actorId);
+                : GetLane(
+                    _actorLanes,
+                    ZLinkActorId.FromBoundary(actorId, nameof(actorId)));
             var execution = RunClaimedAsync(
                     lane,
                     reservation.RunAsync,
@@ -225,7 +229,9 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
                 cancellationToken);
 
         return RunClaimedAsync(
-            GetLane(_timerLanes, timerName),
+            GetLane(
+                _timerLanes,
+                ZLinkTimerName.FromBoundary(timerName, nameof(timerName))),
             ct => ExecuteTimerOperationAsync(operation, state, ct),
             claim,
             cancellationToken);
@@ -1109,9 +1115,10 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
                 _activation is null ? null : _activation.ContainsActor));
     }
 
-    private ZLinkSerialExecutionQueue GetLane(
-        Dictionary<string, ZLinkSerialExecutionQueue> lanes,
-        string key)
+    private ZLinkSerialExecutionQueue GetLane<TIdentifier>(
+        Dictionary<TIdentifier, ZLinkSerialExecutionQueue> lanes,
+        TIdentifier key)
+        where TIdentifier : notnull
     {
         lock (_laneGate)
         {

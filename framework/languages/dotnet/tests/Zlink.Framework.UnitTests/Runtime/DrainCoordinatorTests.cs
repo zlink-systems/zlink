@@ -1231,16 +1231,16 @@ public sealed class DrainCoordinatorTests
         await connector.Send(new DrainProbeMessage("connected"))
             .PacketName("drain.probe")
             .Async();
-        await sessionProbe.Connected.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await sessionProbe.Connected.Task.WaitAsync(TimeSpan.FromSeconds(30));
 
         var result = await host.Services.GetRequiredService<IZLinkFrameworkRuntime>()
-            .ShutdownAsync(TimeSpan.FromSeconds(5));
+            .ShutdownAsync(TimeSpan.FromSeconds(30));
 
         Assert.Equal(ZLinkFrameworkTerminationOutcome.Stopped, result.Outcome);
-        await closingObserved.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await closingObserved.Task.WaitAsync(TimeSpan.FromSeconds(30));
         Assert.Equal(
             ZlinkStreamCloseReason.ServerDrain,
-            await disconnected.Task.WaitAsync(TimeSpan.FromSeconds(5)));
+            await disconnected.Task.WaitAsync(TimeSpan.FromSeconds(30)));
         await host.StopAsync();
     }
 

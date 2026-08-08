@@ -49,9 +49,7 @@ class OrderWorkflowApplication {
             )
             configurer.useCoroutineHandlers(Dispatchers.Default)
             configurer.configureDispatch {
-                messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                traceLogFile("${role.logDirectory}/flow-${role.instanceId}.log")
-                traceLabel(role.instanceId)
+                messageFlow(ZLinkMessageFlowLogMode.NORMAL)
             }
             configurer.addHandlersFromPackageOf(OrderWorkflowApplication::class.java)
             configurer.addRouteMesh(SampleNames.OrderWorkflowMesh)

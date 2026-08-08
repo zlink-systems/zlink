@@ -1,5 +1,6 @@
 using System.Runtime.ExceptionServices;
 using Zlink.Framework.Runtime.Host;
+using Zlink.Framework.Runtime.Identifiers;
 using Zlink.Framework.Runtime.Locations;
 using Zlink.Framework.Runtime.Diagnostics;
 
@@ -48,14 +49,17 @@ internal interface IZLinkSpotRetireTarget
 
 internal sealed class ZLinkRetirePreflightPlan
 {
-    private readonly Dictionary<string, Usage> _usage = new(StringComparer.Ordinal);
+    private readonly Dictionary<(ZLinkMeshName MeshName, RoutingId NodeRid), Usage>
+        _usage = [];
 
     internal bool TryReserve(
         ZLinkMeshNodeDescriptor descriptor,
         ZLinkCapacityVector capacity,
         int activationCount = 1)
     {
-        var key = $"{descriptor.MeshName}\0{descriptor.Rid.ToHex()}";
+        var key = (
+            ZLinkMeshName.FromBoundary(descriptor.MeshName, nameof(descriptor)),
+            descriptor.Rid);
         _usage.TryGetValue(key, out var used);
         used ??= new Usage();
         if (!ZLinkSpotRetireTargetRuntime.HasHeadroom(
@@ -456,15 +460,13 @@ internal sealed class ZLinkSpotRetireScheduler(
             var sourceCompleted = false;
             var aggregateId = Guid.NewGuid();
             var actorCaptures =
-                new Dictionary<string, SourceActorCapture>(
-                    StringComparer.Ordinal);
+                new Dictionary<ZLinkActorId, SourceActorCapture>();
             var actorMessageFollowBacklog = new List<Task<bool>>();
-            Dictionary<string, SourceActorCapture> activeActorCaptures = actorCaptures;
+            Dictionary<ZLinkActorId, SourceActorCapture> activeActorCaptures = actorCaptures;
             List<Task<bool>> activeActorMessageFollowBacklog = actorMessageFollowBacklog;
             ZLinkSpotRetireInventory activeInventory = inventory;
             var sealedSessionRoutes =
-                new Dictionary<string, ZLinkRemoteActorBoundSessionRoute>(
-                    StringComparer.Ordinal);
+                new Dictionary<ZLinkActorId, ZLinkRemoteActorBoundSessionRoute>();
             try
             {
                 var sealedActorIds = activation.SnapshotActorIds();
@@ -483,8 +485,11 @@ internal sealed class ZLinkSpotRetireScheduler(
                                       ?? throw new ZLinkFrameworkException(
                                           ZLinkFrameworkErrorKind.NotFound,
                                           $"Actor '{actorState.ActorId}' has no source reference.");
-                    actorCaptures.Add(
+                    var actorKey = ZLinkActorId.FromBoundary(
                         actorState.ActorId,
+                        nameof(actorState));
+                    actorCaptures.Add(
+                        actorKey,
                         new SourceActorCapture(actorState, sourceActor));
                 }
                 for (var first = 0;
@@ -503,8 +508,9 @@ internal sealed class ZLinkSpotRetireScheduler(
                                     _ = await state.BeginHandoffCaptureAsync(
                                             cancellationToken)
                                         .ConfigureAwait(false);
-                                    actorCaptures[state.ActorId].CaptureStarted =
-                                        true;
+                                    actorCaptures[ZLinkActorId.FromBoundary(
+                                        state.ActorId,
+                                        nameof(state))].CaptureStarted = true;
                                 }))
                         .ConfigureAwait(false);
                 }
@@ -535,7 +541,9 @@ internal sealed class ZLinkSpotRetireScheduler(
                     var actorId = actorIds[index];
                     var route = sealedRoutes[index];
                     if (route.IsBound)
-                        sealedSessionRoutes.Add(actorId, route);
+                        sealedSessionRoutes.Add(
+                            ZLinkActorId.FromBoundary(actorId, nameof(actorId)),
+                            route);
                 }
                 var application = await activation
                     .CaptureSealedRelocationApplicationStateAsync(
@@ -660,7 +668,7 @@ internal sealed class ZLinkSpotRetireScheduler(
                                 foreach (var (actorId, route) in sealedSessionRoutes)
                                     await activation
                                         .AbortActorBoundSessionRouteSealForRetireAsync(
-                                            actorId,
+                                            actorId.Value,
                                             route,
                                             handoffId,
                                             cleanupDeadline.Token)
@@ -746,7 +754,7 @@ internal sealed class ZLinkSpotRetireScheduler(
                                              in sealedSessionRoutes)
                                         await activation
                                             .AbortActorBoundSessionRouteSealForRetireAsync(
-                                                actorId,
+                                                actorId.Value,
                                                 route,
                                                 handoffId,
                                                 cleanupDeadline.Token)
@@ -848,7 +856,7 @@ internal sealed class ZLinkSpotRetireScheduler(
                             foreach (var (actorId, route) in sealedSessionRoutes)
                                 await activation
                                     .AbortActorBoundSessionRouteSealForRetireAsync(
-                                        actorId,
+                                        actorId.Value,
                                         route,
                                         handoffId,
                                         cleanupDeadline.Token)
@@ -1252,9 +1260,9 @@ internal sealed class ZLinkSpotRetireScheduler(
             ZLinkSpotRelocationApplicationState application,
             IReadOnlyList<string> actorIds,
         Guid aggregateId,
-        IReadOnlyDictionary<string, ZLinkRemoteActorBoundSessionRoute>
+        IReadOnlyDictionary<ZLinkActorId, ZLinkRemoteActorBoundSessionRoute>
             sealedSessionRoutes,
-        IReadOnlyDictionary<string, SourceActorCapture> actorCaptures,
+        IReadOnlyDictionary<ZLinkActorId, SourceActorCapture> actorCaptures,
         IReadOnlyList<ZLinkObjectCapability> requiredCapabilities,
         bool includeSpotTimers,
         CancellationToken cancellationToken)
@@ -1329,10 +1337,11 @@ internal sealed class ZLinkSpotRetireScheduler(
         for (var index = 0; index < actorIds.Count; index++)
         {
             var actorId = actorIds[index];
+            var actorKey = ZLinkActorId.FromBoundary(actorId, nameof(actorId));
             var key = ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId);
             var actor = actorAuthorities[index];
             var boundRoute = sealedSessionRoutes.TryGetValue(
-                actorId,
+                actorKey,
                 out var sealedRoute)
                 ? sealedRoute
                 : default;
@@ -1369,14 +1378,14 @@ internal sealed class ZLinkSpotRetireScheduler(
                     ZLinkPlacementObjectKind.Actor,
                     actor.ObjectGeneration,
                     actor.AuthorityOwnerGeneration,
-                    application.ActorStates[actorId],
+                    application.ActorStates[actorKey],
                     CreateActorAcceptedJobs(
-                        actorCaptures[actorId],
+                        actorCaptures[actorKey],
                         actor.ObjectGeneration),
                     [],
                     RecoveryPayload: actorRecovery)
                 {
-                    AcceptedBoundary = actorCaptures[actorId]
+                    AcceptedBoundary = actorCaptures[actorKey]
                         .CommitBoundary.AcceptedHighWater
                 },
                 actor.StoreVersion,

@@ -52,11 +52,9 @@ open class ProviderApplication {
     open fun providerFramework(state: ScenarioState): ZLinkFrameworkConfigurer =
         ZLinkFrameworkConfigurer { options ->
             val logDir = Env.get("e2e.log.dir", "logs")
+            EvidenceDispatchErrorHandler(state).install()
             options.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile("$logDir/${state.providerRid()}-flow.log")
-                .traceLabel("kotlin-rl-${state.providerRid()}")
-                .setMessageFlowObserver(EvidenceDispatchErrorObserver(state))
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL)
             options.configureLocations().setOwnerLeaseTtl(Duration.ofSeconds(3))
             options.configureLocations().setOwnerLeaseRenewInterval(Duration.ofMillis(500))
             options.configureLocations().setPollingInterval(Duration.ofMillis(200))

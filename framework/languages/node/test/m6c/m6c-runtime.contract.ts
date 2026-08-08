@@ -1906,7 +1906,9 @@ test('concrete User Spot aggregate restores hidden membership and sealed work be
   const coordinator = new ServiceRelocationCoordinator(
     durable,
     restoreOwner,
-    new ServiceCapturedRelocationSourceCompletion(captured, writer),
+    new ServiceCapturedRelocationSourceCompletion(captured, writer, async () => {
+      events.push('source-route-reconcile');
+    }),
     {
       async relayCaptured() {
         events.push('terminal-reply-relay');
@@ -1939,6 +1941,8 @@ test('concrete User Spot aggregate restores hidden membership and sealed work be
   assert.ok(ownerCommit > events.indexOf('target-restore:actor:a:actor-state'));
   assert.ok(events.indexOf('target-queue:spot:room:2') < events.indexOf('source-commit:spot:room'));
   assert.ok(events.indexOf('target-timer:spot:room:idle') < events.indexOf('source-commit:spot:room'));
+  assert.ok(events.indexOf('source-commit:spot:room') < events.indexOf('source-route-reconcile'));
+  assert.ok(events.indexOf('source-route-reconcile') < events.indexOf('terminal-reply-relay'));
   assert.ok(events.indexOf('source-commit:actor:a') < events.indexOf('terminal-reply-relay'));
   assert.ok(events.indexOf('session-route-replace') < events.indexOf('target-admission:spot:room'));
   assert.ok(events.indexOf('target-normalize:actor:a') < events.indexOf('target-admission:actor:a'));

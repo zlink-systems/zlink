@@ -192,6 +192,84 @@ public sealed class ServiceRuntimeFoundationTests
     }
 
     [Fact]
+    public async Task BoundSessionReplaced_Transport_Requires_The_Admitted_Authority_And_Retired_Owner_Lifecycles()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var authority = new ZLinkManagedMeshNode(context, "actors");
+        await using var retiredOwner = new ZLinkManagedMeshNode(context, "actors");
+        await using var monitor = retiredOwner.OpenMonitor();
+        var suffix = Guid.NewGuid().ToString("N");
+        var authorityRid = RoutingId.From($"authority-{suffix}");
+        var retiredOwnerRid = RoutingId.From($"retired-{suffix}");
+        var authorityEndpoint = $"inproc://authority-{suffix}";
+        var retiredOwnerEndpoint = $"inproc://retired-{suffix}";
+        var notifications = 0;
+
+        authority.SetRoutingId(authorityRid);
+        authority.SetBind(authorityEndpoint);
+        authority.ConnectPeer(retiredOwnerEndpoint, retiredOwnerRid);
+        retiredOwner.SetRoutingId(retiredOwnerRid);
+        retiredOwner.SetBind(retiredOwnerEndpoint);
+        retiredOwner.SetBoundSessionReplacedNotificationHandler(
+            (_, _) => Interlocked.Increment(ref notifications));
+        retiredOwner.Start();
+        authority.Start();
+
+        await WaitUntilAsync(() =>
+            authority.Status().AdmittedPeerCount == 1
+            && retiredOwner.Status().AdmittedPeerCount == 1);
+        var authorityGeneration = Assert.Single(retiredOwner.Peers())
+            .LifecycleGeneration;
+        var retiredOwnerGeneration = Assert.Single(authority.Peers())
+            .LifecycleGeneration;
+
+        ZLinkServiceWireCodec.BoundSessionReplacedRecord Record(
+            RoutingId sourceRid,
+            ulong sourceGeneration,
+            ulong ownerGeneration) => new(
+            new ZLinkServiceWireCodec.BoundSessionReplacedActorAuthority(
+                "actor-a",
+                ObjectGeneration: 17,
+                sourceRid,
+                sourceGeneration,
+                ExpectedAuthorityOwnerGeneration: 19,
+                ExpectedOwnerLeaseGeneration: 23),
+            new ZLinkServiceWireCodec.BoundSessionReplacedRetiredSession(
+                retiredOwnerRid,
+                ownerGeneration,
+                "retired-owner",
+                SessionOwnerLeaseGeneration: 29,
+                RoutingId.From("retired-session"),
+                RetiredBindingGeneration: 31));
+
+        Assert.True(authority.TrySendBoundSessionReplacedNotification(
+            retiredOwnerRid,
+            Record(authorityRid, authorityGeneration, retiredOwnerGeneration)));
+        await WaitUntilAsync(() => Volatile.Read(ref notifications) == 1);
+
+        var protocolErrors = monitor.Status().ProtocolErrors;
+        Assert.True(authority.TrySendBoundSessionReplacedNotification(
+            retiredOwnerRid,
+            Record(RoutingId.From("forged-authority"), authorityGeneration, retiredOwnerGeneration)));
+        await WaitUntilAsync(() => monitor.Status().ProtocolErrors > protocolErrors);
+        Assert.Equal(1, Volatile.Read(ref notifications));
+
+        protocolErrors = monitor.Status().ProtocolErrors;
+        Assert.True(authority.TrySendBoundSessionReplacedNotification(
+            retiredOwnerRid,
+            Record(authorityRid, authorityGeneration + 1, retiredOwnerGeneration)));
+        await WaitUntilAsync(() => monitor.Status().ProtocolErrors > protocolErrors);
+        Assert.Equal(1, Volatile.Read(ref notifications));
+
+        protocolErrors = monitor.Status().ProtocolErrors;
+        Assert.True(authority.TrySendBoundSessionReplacedNotification(
+            retiredOwnerRid,
+            Record(authorityRid, authorityGeneration, retiredOwnerGeneration + 1)));
+        await WaitUntilAsync(() => monitor.Status().ProtocolErrors > protocolErrors);
+        Assert.Equal(1, Volatile.Read(ref notifications));
+    }
+
+    [Fact]
     public void GeneratedLivenessFixtures_DecodeWithExactErrors()
     {
         var frameworkRoot = Common.FrameworkTestEnvironment.GetFrameworkRoot();

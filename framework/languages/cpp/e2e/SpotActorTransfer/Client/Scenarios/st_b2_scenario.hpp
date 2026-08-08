@@ -9,10 +9,14 @@ namespace
 /* ST-B2: this file owns the scenario orchestration and its public assertions. */
 inline void scenario_runner_t::run_st_b2_scenario ()
 {
-    const auto actor_id = "actor-cleanup-after-success-" + unique_suffix ();
-    const auto spot_id = "spot-cleanup-after-success-" + unique_suffix ();
-    create_spot (_nodes.b, spot_id);
-    create_actor (_nodes.a, actor_id, e2e::actor_type_stateful, 22);
+    const auto spot = create_spot_until_placed_on (
+      _nodes.b, "spot-cleanup-after-success-" + unique_suffix (),
+      "actor-b");
+    const auto actor = create_actor_until_placed_on (
+      _nodes.a, "actor-cleanup-after-success-" + unique_suffix (),
+      e2e::actor_type_stateful, 22, "actor-a");
+    const auto &actor_id = actor.actor_id;
+    const auto &spot_id = spot.spot_id;
 
     auto join_task = std::async (
       std::launch::async, [&] { return join_actor (_nodes.a, actor_id, {"ST-B2", spot_id}); });

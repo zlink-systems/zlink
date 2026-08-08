@@ -77,14 +77,12 @@ public final class Program {
     @Bean
     ZLinkFrameworkConfigurer framework(Options config, FlowEvidence evidence) {
         return options -> {
+            evidence.install();
             options.configureLocations().setOwnerLeaseRenewInterval(Duration.ofMillis(500));
             options.configureLocations().setOwnerLeaseTtl(Duration.ofSeconds(3));
             options.configureLocations().setPollingInterval(Duration.ofMillis(250));
             options.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .setMessageFlowObserver(evidence)
-                .traceLogFile(config.logDir() + "/a5-flow.log")
-                .traceLabel("java-observability-a5");
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             java.net.URI endpoint = java.net.URI.create(config.routeEndpoint());
             var channel = options.addClientServerChannel(Contracts.CHANNEL);
             channel

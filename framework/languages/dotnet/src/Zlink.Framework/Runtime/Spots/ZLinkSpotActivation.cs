@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Zlink.Framework.Runtime.Handlers;
+using Zlink.Framework.Runtime.Identifiers;
 using Zlink.Framework.Runtime.Timers;
 
 namespace Zlink.Framework.Runtime.Spots;
@@ -145,7 +146,9 @@ internal abstract partial class ZLinkSpotActivation :
     public int JoinedActorCount => _actors.Count;
 
     internal bool ContainsActor(string actorId) =>
-        _actors.TryGetActor(actorId, out _);
+        _actors.TryGetActor(
+            ZLinkActorId.FromBoundary(actorId, nameof(actorId)),
+            out _);
 
     public bool IsDisposed => Volatile.Read(ref _disposed) != 0;
 

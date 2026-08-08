@@ -381,7 +381,11 @@ export class ServiceCapturedRelocationSourceCompletion<
 > implements ServiceRelocationSourceCompletion<TStaging> {
   constructor(
     private readonly captured: ServiceCapturedObjectRelocation,
-    private readonly durable: ServiceRelocationSourceCompletion<TStaging>
+    private readonly durable: ServiceRelocationSourceCompletion<TStaging>,
+    private readonly afterComplete?: (
+      authority: ZLinkAuthoritySnapshot,
+      signal?: AbortSignal
+    ) => Promise<void> | void
   ) {}
 
   async complete(
@@ -390,7 +394,9 @@ export class ServiceCapturedRelocationSourceCompletion<
     signal?: AbortSignal
   ): Promise<ZLinkAuthoritySnapshot> {
     await this.captured.commitSource();
-    return await this.durable.complete(staging, authority, signal);
+    const completed = await this.durable.complete(staging, authority, signal);
+    await this.afterComplete?.(completed, signal);
+    return completed;
   }
 }
 

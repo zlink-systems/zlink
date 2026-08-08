@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Zlink.Framework.Runtime.Identifiers;
 
 namespace Zlink.Framework.Runtime.Actors;
 
@@ -155,11 +156,16 @@ internal sealed class ZLinkActorCreationCoordinator(
                     cancellationToken)
                 .ConfigureAwait(false);
 
+        var meshName =
+            Host.ZLinkActorDrainCoordinator.ResolveMeshName(
+                runtime.Registration,
+                actorType)
+            ?? throw new InvalidOperationException(
+                $"Actor '{actorId}' does not have an owner Mesh.");
         var outcome = await lifecycle.ExecuteActorClaimThenActivateAsync(
-                Host.ZLinkActorDrainCoordinator.ResolveMeshName(runtime.Registration, actorType)
-                    ?? string.Empty,
+                ZLinkMeshName.FromBoundary(meshName, nameof(meshName)),
                 actorType,
-                actorId,
+                ZLinkActorId.FromBoundary(actorId, nameof(actorId)),
                 getActorSpotNode()?.RoutingId ?? default,
                 deactivate: _ => runtime.DeactivateActorOnOwnershipLossAsync(actorId),
                 activate: ct => ActivateRelocatedActorCoreAsync(
@@ -279,11 +285,16 @@ internal sealed class ZLinkActorCreationCoordinator(
         // Claim-then-activate (location resolver store draft, section 17):
         // the actor location claim must succeed before any instance exists.
         // A losing claimer backs off without activating.
+        var meshName =
+            Host.ZLinkActorDrainCoordinator.ResolveMeshName(
+                runtime.Registration,
+                actorType)
+            ?? throw new InvalidOperationException(
+                $"Actor '{actorId}' does not have an owner Mesh.");
         var outcome = await lifecycle.ExecuteActorClaimThenActivateAsync(
-                Host.ZLinkActorDrainCoordinator.ResolveMeshName(runtime.Registration, actorType)
-                    ?? string.Empty,
+                ZLinkMeshName.FromBoundary(meshName, nameof(meshName)),
                 actorType,
-                actorId,
+                ZLinkActorId.FromBoundary(actorId, nameof(actorId)),
                 getActorSpotNode()?.RoutingId ?? default,
                 deactivate: _ => runtime.DeactivateActorOnOwnershipLossAsync(actorId),
                 activate: ct => ActivateActorCoreAsync(
@@ -431,7 +442,7 @@ internal sealed class ZLinkActorCreationCoordinator(
         try
         {
             await lifecycle.PublishActorRefAsync(
-                    actorId,
+                    ZLinkActorId.FromBoundary(actorId, nameof(actorId)),
                     nativeActor.ToNative(
                         Host.ZLinkActorDrainCoordinator.ResolveMeshName(
                             runtime.Registration,

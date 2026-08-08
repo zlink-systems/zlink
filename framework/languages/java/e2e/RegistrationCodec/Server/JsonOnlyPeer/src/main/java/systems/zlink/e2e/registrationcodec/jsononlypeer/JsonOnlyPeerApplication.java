@@ -46,9 +46,7 @@ public final class JsonOnlyPeerApplication {
     ZLinkFrameworkConfigurer serverFramework(ServerOptions options) {
         return framework -> {
             framework.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile(options.logDir() + "/json-only-flow.log")
-                .traceLabel("java-rc-json-only");
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             var endpoint = java.net.URI.create(options.serverEndpoint());
             var channel = framework.addClientServerChannel(Contracts.CHANNEL);
             var server = channel.server()

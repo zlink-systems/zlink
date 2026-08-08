@@ -33,6 +33,8 @@ struct role_options_t
     std::string mesh_endpoint;
     std::string peer_rid;
     std::string peer_endpoint;
+    std::string second_peer_rid;
+    std::string second_peer_endpoint;
     std::string redis_endpoint;
     std::string redis_key_prefix;
     std::string log_dir;
@@ -46,6 +48,8 @@ struct role_options_t
                 .mesh_endpoint = section.require ("meshEndpoint"),
                 .peer_rid = section.get ("peerRid").value_or (""),
                 .peer_endpoint = section.get ("peerEndpoint").value_or (""),
+                .second_peer_rid = section.get ("secondPeerRid").value_or (""),
+                .second_peer_endpoint = section.get ("secondPeerEndpoint").value_or (""),
                 .redis_endpoint = section.require ("redis.endpoint"),
                 .redis_key_prefix = section.require ("redis.keyPrefix"),
                 .log_dir = section.require ("logDir"),
@@ -437,6 +441,12 @@ int main (int argc, char **argv)
                 mesh.channel_name (e2e::mesh_name).client ();
                 mesh.peer_connections ().connect (
                   zlink::routing_id_t::from (options.peer_rid), options.peer_endpoint);
+                if (!options.second_peer_rid.empty ()
+                    && !options.second_peer_endpoint.empty ()) {
+                    mesh.peer_connections ().connect (
+                      zlink::routing_id_t::from (options.second_peer_rid),
+                      options.second_peer_endpoint);
+                }
             }
 
             framework.http ()

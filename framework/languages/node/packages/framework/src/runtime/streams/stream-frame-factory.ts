@@ -143,9 +143,11 @@ export class ZLinkStreamFrameMessageFactory {
       codec: ZLinkStreamCodec.Json,
       payload: utf8Encode(stringifyFrameworkJsonV1(
         payload,
-        readZLinkPacketJsonContract(packetName)?.[
-          direction === 'Response' ? 'reply' : 'payload'
-        ]
+        direction === 'Error'
+          ? undefined
+          : readZLinkPacketJsonContract(packetName)?.[
+              direction === 'Response' ? 'reply' : 'payload'
+            ]
       ))
     };
   }

@@ -669,6 +669,8 @@ export class ZLinkFrameworkRuntimeHost implements
       actorTransfer: this.actorTransferRuntime,
       trackInstanceSpot: (input) =>
         this.locationOwner.currentLifecycle?.trackInstanceSpot(input),
+      reconcileStatefulAuthorityRoutes: (signal) =>
+        this.statefulAuthorityRoutes?.reconcile(signal) ?? Promise.resolve(),
       runtimeEventPublisher: this.runtimeEventPublisher,
       metrics: this.metrics
     });
@@ -1799,6 +1801,12 @@ export class ZLinkFrameworkRuntimeHost implements
       meshName,
       signal
     );
+    // A failed relocation rolls the local object barriers back before the
+    // descriptor is published as Serving. Reconcile the durable authority
+    // routes before returning so the next local request cannot observe the
+    // brief window where the Location row is ready but the route cache still
+    // reflects the failed capture.
+    await this.statefulAuthorityRoutes?.reconcile(signal);
   }
 
   private async publishMeshDraining(

@@ -1,3 +1,5 @@
+using Zlink.Framework.Runtime.Identifiers;
+
 namespace Zlink.Framework.Runtime.Actors;
 
 internal sealed partial class ZLinkActorSessionManager
@@ -9,7 +11,9 @@ internal sealed partial class ZLinkActorSessionManager
     {
         ArgumentNullException.ThrowIfNull(actor);
 
-        if (!_actorSessions.TryGet(actor.Context.ActorId, out var state)) return;
+        if (!_actorSessions.TryGet(
+                ZLinkActorId.FromBoundary(actor.Context.ActorId, nameof(actor)),
+                out var state)) return;
 
         var nativeActor = await state.ExecuteLockedAsync<ZLinkBackendActorRef?>(
             () =>

@@ -15,7 +15,6 @@ import systems.zlink.framework.kotlin.useCoroutineHandlers
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore
 import systems.zlink.framework.spring.EnableZLinkFramework
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer
-import systems.zlink.samples.kotlin.supportchat.server.configuration.SampleFlowLog
 import systems.zlink.samples.kotlin.supportchat.server.configuration.SampleLocationStore
 import systems.zlink.samples.kotlin.supportchat.server.configuration.SampleNames
 import systems.zlink.samples.kotlin.supportchat.server.configuration.SampleTopology
@@ -35,9 +34,7 @@ class SessionApplication {
             options.addHandlersFromPackageOf(SessionApplication::class.java)
             options.useCoroutineHandlers(Dispatchers.Default)
             options.configureDispatch {
-                messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                traceLogFile(SampleFlowLog.path(topology, "session"))
-                traceLabel("session")
+                messageFlow(ZLinkMessageFlowLogMode.NORMAL)
             }
             options.configureLocations()
             options.addClientServerChannel(SampleNames.ApiChannel)

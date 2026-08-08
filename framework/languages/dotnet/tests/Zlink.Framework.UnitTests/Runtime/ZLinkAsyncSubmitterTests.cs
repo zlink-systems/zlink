@@ -582,6 +582,8 @@ public sealed class ZLinkAsyncSubmitterTests : IDisposable
 
         Assert.Same(firstDispose, secondDispose);
         await Task.WhenAll(firstDispose, secondDispose, signal);
+        var readyAfterDispose = Assert.IsType<Action>(ready);
+        Assert.Null(Record.Exception(readyAfterDispose));
         await Assert.ThrowsAsync<ObjectDisposedException>(() => pending.AsTask());
 
         var snapshot = events.ToArray();

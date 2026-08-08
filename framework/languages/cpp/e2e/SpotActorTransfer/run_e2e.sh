@@ -111,6 +111,7 @@ start_role() {
   local router="$4"
   local stream="$5"
   local pub="$6"
+  local router_advertise_host="${7:-}"
   local binary
   if [[ "$role" == "actor" ]]; then
     binary="$ACTOR_NODE_BIN"
@@ -119,21 +120,24 @@ start_role() {
   fi
   local config_path="$CONFIG_DIR/$rid.json"
   python3 - "$config_path" "$rid" "$url" "$router" "$stream" "$pub" \
+    "$router_advertise_host" \
     "$REDIS_ENDPOINT" "$REDIS_KEY_PREFIX" "$LOG_DIR" <<'PY'
 import json
 import os
 import stat
 import sys
 
-(path, rid, http_url, router, stream, pub, redis_endpoint,
+(path, rid, http_url, router, stream, pub, router_advertise_host, redis_endpoint,
  redis_key_prefix, log_dir) = sys.argv[1:]
 with open(path, "w", encoding="utf-8") as file:
-    json.dump({"e2e": {"initialActorNode": "actor-a",
+    section = {"initialActorNode": "actor-a",
         "rid": rid, "httpUrl": http_url, "routerEndpoint": router,
         "streamEndpoint": stream, "pubEndpoint": pub,
         "redis": {"endpoint": redis_endpoint, "keyPrefix": redis_key_prefix},
-        "logDir": log_dir, "evidenceFile": f"{log_dir}/{rid}.evidence.log"}},
-        file, indent=2)
+        "logDir": log_dir, "evidenceFile": f"{log_dir}/{rid}.evidence.log"}
+    if router_advertise_host:
+        section["routerAdvertiseHost"] = router_advertise_host
+    json.dump({"e2e": section}, file, indent=2)
 os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
 PY
   setsid "$binary" --config="$config_path" \
@@ -144,16 +148,18 @@ PY
 run_client() {
   local scenario="$1"
   local config_path="$CONFIG_DIR/client-${scenario//[^a-zA-Z0-9_-]/_}.json"
-  python3 - "$config_path" "$NODE_A_URL" "$NODE_B_URL" "$SESSION_A_STREAM" \
-    "$SESSION_B_STREAM" "$scenario" <<'PY'
+  python3 - "$config_path" "$NODE_A_URL" "$NODE_B_URL" "${NODE_C_URL:-}" \
+    "$SESSION_A_STREAM" "$SESSION_B_STREAM" "${SESSION_PROXY_ADMIN:-}" \
+    "$scenario" <<'PY'
 import json
 import os
 import stat
 import sys
 
-path, node_a_url, node_b_url, node_a_stream, node_b_stream, scenario = sys.argv[1:]
+path, node_a_url, node_b_url, node_c_url, node_a_stream, node_b_stream, proxy_admin, scenario = sys.argv[1:]
 with open(path, "w", encoding="utf-8") as file:
     json.dump({"e2e": {"nodeAUrl": node_a_url, "nodeBUrl": node_b_url,
+        "nodeCUrl": node_c_url, "sessionProxyAdmin": proxy_admin,
         "nodeAStream": node_a_stream, "nodeBStream": node_b_stream,
         "scenario": scenario}}, file, indent=2)
 os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
@@ -173,22 +179,45 @@ read -r NODE_A_HTTP_PORT NODE_B_HTTP_PORT SESSION_A_HTTP_PORT SESSION_B_HTTP_POR
   NODE_A_STREAM_PORT NODE_B_STREAM_PORT SESSION_A_STREAM_PORT SESSION_B_STREAM_PORT \
   NODE_A_PUB_PORT NODE_B_PUB_PORT SESSION_A_PUB_PORT SESSION_B_PUB_PORT \
   < <(pick_ports 16)
+read -r NODE_C_HTTP_PORT NODE_C_ROUTER_PORT NODE_C_STREAM_PORT NODE_C_PUB_PORT \
+  SESSION_PROXY_ADMIN_PORT < <(pick_ports 5)
 NODE_A_PUB="tcp://127.0.0.1:$NODE_A_PUB_PORT"
 NODE_B_PUB="tcp://127.0.0.1:$NODE_B_PUB_PORT"
 SESSION_A_PUB="tcp://127.0.0.1:$SESSION_A_PUB_PORT"
 SESSION_B_PUB="tcp://127.0.0.1:$SESSION_B_PUB_PORT"
 NODE_A_URL="http://127.0.0.1:$NODE_A_HTTP_PORT"
 NODE_B_URL="http://127.0.0.1:$NODE_B_HTTP_PORT"
+NODE_C_URL="http://127.0.0.1:$NODE_C_HTTP_PORT"
 SESSION_A_URL="http://127.0.0.1:$SESSION_A_HTTP_PORT"
 SESSION_B_URL="http://127.0.0.1:$SESSION_B_HTTP_PORT"
 NODE_A_ROUTER="tcp://127.0.0.1:$NODE_A_ROUTER_PORT"
 NODE_B_ROUTER="tcp://127.0.0.1:$NODE_B_ROUTER_PORT"
+NODE_C_ROUTER="tcp://127.0.0.1:$NODE_C_ROUTER_PORT"
 SESSION_A_ROUTER="tcp://127.0.0.1:$SESSION_A_ROUTER_PORT"
 SESSION_B_ROUTER="tcp://127.0.0.1:$SESSION_B_ROUTER_PORT"
 NODE_A_STREAM="tcp://127.0.0.1:$NODE_A_STREAM_PORT"
 NODE_B_STREAM="tcp://127.0.0.1:$NODE_B_STREAM_PORT"
+NODE_C_STREAM="tcp://127.0.0.1:$NODE_C_STREAM_PORT"
 SESSION_A_STREAM="tcp://127.0.0.1:$SESSION_A_STREAM_PORT"
 SESSION_B_STREAM="tcp://127.0.0.1:$SESSION_B_STREAM_PORT"
+NODE_C_PUB="tcp://127.0.0.1:$NODE_C_PUB_PORT"
+SESSION_PROXY_ADMIN=""
+
+if [[ "$SCENARIO" == "ST-F3A" ]]; then
+  SESSION_A_ROUTER_TARGET="tcp://127.0.0.2:$SESSION_A_ROUTER_PORT"
+  SESSION_PROXY_ADMIN="http://127.0.0.1:$SESSION_PROXY_ADMIN_PORT"
+  setsid python3 "$ROOT_DIR/Support/directional_hold_proxy.py" \
+    --listen "127.0.0.1:$SESSION_A_ROUTER_PORT" \
+    --target "127.0.0.2:$SESSION_A_ROUTER_PORT" \
+    --control "127.0.0.1:$SESSION_PROXY_ADMIN_PORT" \
+    --routing-identity actor-b \
+    >"$LOG_DIR/session-route-proxy.stdout.log" \
+    2>"$LOG_DIR/session-route-proxy.stderr.log" &
+  pids+=("$!")
+  wait_health "$SESSION_PROXY_ADMIN" session-route-proxy
+else
+  SESSION_A_ROUTER_TARGET="$SESSION_A_ROUTER"
+fi
 
 echo "log_dir=$LOG_DIR"
 
@@ -198,8 +227,13 @@ if [[ "$SCENARIO" != "ST-A1" && "$SCENARIO" != "all" ]]; then
   start_role actor actor-b "$NODE_B_URL" "$NODE_B_ROUTER" "$NODE_B_STREAM" "$NODE_B_PUB"
   wait_health "$NODE_B_URL" actor-b
 fi
+if [[ "$SCENARIO" == "ST-F3A" ]]; then
+  start_role actor actor-c "$NODE_C_URL" "$NODE_C_ROUTER" "$NODE_C_STREAM" "$NODE_C_PUB"
+  wait_health "$NODE_C_URL" actor-c
+fi
 
-start_role session session-a "$SESSION_A_URL" "$SESSION_A_ROUTER" "$SESSION_A_STREAM" "$SESSION_A_PUB"
+start_role session session-a "$SESSION_A_URL" "$SESSION_A_ROUTER_TARGET" "$SESSION_A_STREAM" "$SESSION_A_PUB" \
+  "$( [[ "$SCENARIO" == "ST-F3A" ]] && echo 127.0.0.1 || true )"
 wait_health "$SESSION_A_URL" session-a
 start_role session session-b "$SESSION_B_URL" "$SESSION_B_ROUTER" "$SESSION_B_STREAM" "$SESSION_B_PUB"
 wait_health "$SESSION_B_URL" session-b

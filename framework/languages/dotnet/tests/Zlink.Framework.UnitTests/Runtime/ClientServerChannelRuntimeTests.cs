@@ -4,6 +4,7 @@ using System.Net.Sockets;
 using Microsoft.Extensions.DependencyInjection;
 using Zlink.Framework.AspNetCore;
 using Zlink.Framework.Runtime.Codecs;
+using Zlink.Framework.Runtime.Identifiers;
 using Zlink.Framework.Runtime.Locations;
 
 namespace Zlink.Framework.UnitTests;
@@ -223,7 +224,7 @@ public sealed class ClientServerChannelRuntimeTests
                 clientTransport.AdmissionDiagnostics);
             var serverState = await serverRuntime.EnsureStartedStateAsync(
                 CancellationToken.None);
-            var serverIdentity = serverState.ClientServerServerBundles["work"]
+            var serverIdentity = GetServerBundle(serverState, "work")
                 .ClientServerServer!;
             try
             {
@@ -374,7 +375,7 @@ public sealed class ClientServerChannelRuntimeTests
                 TimeSpan.FromSeconds(5));
             var serverState = await serverRuntime.EnsureStartedStateAsync(
                 CancellationToken.None);
-            var serverIdentity = serverState.ClientServerServerBundles["work"]
+            var serverIdentity = GetServerBundle(serverState, "work")
                 .ClientServerServer!;
             var request = client.GetRequiredService<IZLinkRouteClient>()
                 .RequestToChannel("work", new BlockingRequest("blocked"))
@@ -467,13 +468,13 @@ public sealed class ClientServerChannelRuntimeTests
                 TimeSpan.FromSeconds(5));
             var serverState = await serverRuntime.EnsureStartedStateAsync(
                 CancellationToken.None);
-            serverState.ClientServerServerBundles["work"]
+            GetServerBundle(serverState, "work")
                 .ClientServerServer!
                 .MarkDraining();
             await WaitUntilAsync(
                 () => transport.ReadyCount == 0,
                 TimeSpan.FromSeconds(8));
-            serverState.ClientServerServerBundles["work"]
+            GetServerBundle(serverState, "work")
                 .ClientServerServer!
                 .MarkServing();
             await WaitUntilAsync(
@@ -510,7 +511,7 @@ public sealed class ClientServerChannelRuntimeTests
 
             var state = await runtime.EnsureStartedStateAsync(
                 CancellationToken.None);
-            state.ClientServerServerBundles["work"]
+            GetServerBundle(state, "work")
                 .ClientServerServer!
                 .MarkDraining();
             await WaitUntilAsync(
@@ -568,7 +569,7 @@ public sealed class ClientServerChannelRuntimeTests
                 .GetAsyncEnumerator(timeout.Token);
             var state = await runtime.EnsureStartedStateAsync(
                 CancellationToken.None);
-            state.ClientServerServerBundles["work"]
+            GetServerBundle(state, "work")
                 .ClientServerServer!
                 .MarkDraining();
 
@@ -915,6 +916,13 @@ public sealed class ClientServerChannelRuntimeTests
             await Task.Delay(10);
         }
     }
+
+    private static ZLinkChannelRuntimeBundle GetServerBundle(
+        ZLinkFrameworkComponentState state,
+        string channelName) =>
+        state.ClientServerServerBundles[ZLinkChannelName.FromBoundary(
+            channelName,
+            nameof(channelName))];
 
     [Fact]
     public void ClientServerRegistration_AllowsEachRoleOnceAndRejectsDuplicateRole()

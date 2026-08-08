@@ -16,9 +16,6 @@ import systems.zlink.e2e.kotlin.registrymessaging.shared.ScenarioRoutePingRes
 import systems.zlink.framework.ZLinkMessageContext
 import systems.zlink.framework.channels.ZLinkRouteMessageContext
 import systems.zlink.framework.handlers.ZLinkHandlerGroup
-import systems.zlink.framework.configuration.ZLinkMessageFlowEvent
-import systems.zlink.framework.configuration.ZLinkMessageFlowObserver
-import systems.zlink.framework.configuration.ZLinkMessageFlowOutcome
 import systems.zlink.framework.kotlin.ZLinkSuspendingRequestHandler
 import systems.zlink.framework.kotlin.ZLinkSuspendingRouteRequestHandler
 import systems.zlink.framework.kotlin.ZLinkSuspendingSendHandler
@@ -93,22 +90,37 @@ class RoutePingHandler(
     }
 }
 
-class EvidenceDispatchErrorObserver(
+class EvidenceDispatchErrorHandler(
     private val evidence: EvidenceStore,
-) : ZLinkMessageFlowObserver {
-    override fun onMessageFlow(flow: ZLinkMessageFlowEvent): CompletionStage<Void> {
-        if (flow.outcome() != ZLinkMessageFlowOutcome.ERROR) {
-            return CompletableFuture.completedFuture(null)
-        }
+) : java.util.logging.Handler() {
+    fun install() = java.util.logging.Logger.getLogger(LOGGER_NAME).addHandler(this)
+
+    override fun publish(record: java.util.logging.LogRecord) {
+        val fields = diagnosticsFields(record.message) ?: return
+        if (fields["outcome"] != "ERROR") return
         evidence.add(
             "dispatch-error" +
-                "|surface=${flow.surface()}" +
-                "|kind=${flow.messageKind()}" +
-                "|reason=${flow.errorReason()}" +
-                "|action=${flow.errorAction()}" +
-                "|packet=${flow.packetName() ?: "<null>"}" +
-                "|channel=${flow.channelName() ?: "<null>"}",
+                "|surface=${fields["surface"]}" +
+                "|kind=${fields["kind"]}" +
+                "|reason=${fields["reason"]}" +
+                "|action=${fields["action"]}" +
+                "|packet=${fields["packet"] ?: "<null>"}" +
+                "|channel=${fields["channel"] ?: "<null>"}",
         )
-        return CompletableFuture.completedFuture(null)
+    }
+
+    override fun flush() = Unit
+    override fun close() = java.util.logging.Logger.getLogger(LOGGER_NAME).removeHandler(this)
+
+    private fun diagnosticsFields(message: String?): Map<String, String>? {
+        if (message?.startsWith("message flow ") != true) return null
+        return message.split(' ').mapNotNull { token ->
+            val separator = token.indexOf('=')
+            if (separator > 0) token.substring(0, separator) to token.substring(separator + 1) else null
+        }.toMap()
+    }
+
+    companion object {
+        private const val LOGGER_NAME = "systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer"
     }
 }

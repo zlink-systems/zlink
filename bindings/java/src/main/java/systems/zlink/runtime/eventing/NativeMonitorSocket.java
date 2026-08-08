@@ -30,6 +30,7 @@ import java.lang.invoke.MethodType;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.RejectedExecutionException;
 
 public final class NativeMonitorSocket implements SocketMonitor {
     private static final Linker LINKER = Linker.nativeLinker();
@@ -197,7 +198,17 @@ public final class NativeMonitorSocket implements SocketMonitor {
                 : Optional.of(InternalAccess.routingIdFromTrusted(routing)),
               local, remote, connectionId, transportPairId,
               transportPairGeneration, transportLane, eventFlags);
-            executor.execute(() -> dispatchEvent(handler, monitorEvent));
+            try {
+                executor.execute(() -> dispatchEvent(handler, monitorEvent));
+            } catch (RejectedExecutionException ex) {
+                // close() may shut down the callback executor after the
+                // initial isShutdown check. Events racing with that close
+                // are no longer observable and must not escape the native
+                // callback as an uncaught exception.
+                if (!executor.isShutdown()) {
+                    callbacks.recordFailure(ex);
+                }
+            }
         } catch (RuntimeException ex) {
             callbacks.recordFailure(ex);
         }

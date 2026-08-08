@@ -12,7 +12,7 @@ internal sealed class ZLinkClientServerServerIdentity(
     private static readonly TimeSpan ProbeInterval = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan PeerDeadline = TimeSpan.FromSeconds(15);
     private readonly object _gate = new();
-    private readonly Dictionary<string, Peer> _peers = new(StringComparer.Ordinal);
+    private readonly Dictionary<RoutingId, Peer> _peers = [];
     private ulong _revision = 1;
     private ulong _nextProbeId = 1;
     private int _weight = weight;
@@ -26,7 +26,8 @@ internal sealed class ZLinkClientServerServerIdentity(
     private long _receivedLivenessProbeCount;
     internal event Action<Snapshot>? SnapshotChanged;
 
-    internal string ChannelName { get; } = channelName;
+    internal ZLinkChannelName ChannelName { get; } =
+        ZLinkChannelName.FromBoundary(channelName, nameof(channelName));
     internal RoutingId ServerRid { get; } = serverRid;
     internal ulong LifecycleGeneration { get; } = lifecycleGeneration;
     internal string SecurityIdentity { get; } = securityIdentity;
@@ -149,7 +150,7 @@ internal sealed class ZLinkClientServerServerIdentity(
     {
         var now = DateTimeOffset.UtcNow;
         lock (_gate)
-            _peers[routingId.ToHex()] = new Peer(
+            _peers[routingId] = new Peer(
                 routingId,
                 normalizedEffectiveMaxMessageBytes,
                 now + ProbeInterval,
@@ -162,7 +163,7 @@ internal sealed class ZLinkClientServerServerIdentity(
     {
         lock (_gate)
         {
-            if (_peers.TryGetValue(routingId.ToHex(), out var peer))
+            if (_peers.TryGetValue(routingId, out var peer))
             {
                 maximumMessageBytes = peer.NormalizedEffectiveMaxMessageBytes;
                 return true;
@@ -178,7 +179,7 @@ internal sealed class ZLinkClientServerServerIdentity(
     {
         lock (_gate)
         {
-            if (!_peers.TryGetValue(routingId.ToHex(), out var peer)
+            if (!_peers.TryGetValue(routingId, out var peer)
                 || peer.OutstandingProbeId != probeId)
                 return;
             peer.OutstandingProbeId = null;
@@ -262,7 +263,7 @@ internal sealed class ZLinkClientServerServerIdentity(
     internal ZLinkClientServerControlProtocol.Admission ToAdmission(
         Snapshot snapshot) =>
         new(
-            ChannelName,
+            ChannelName.Value,
             ServerRid,
             LifecycleGeneration,
             snapshot.Revision,

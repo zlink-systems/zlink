@@ -27,9 +27,10 @@ Store를 조회하지 않는다. Physical disconnect는 Framework가 current bin
 `notifyDisconnected()`는 connection이 유지된 상태의 logical notification이며 callback terminal까지
 기다린다. Exact binding callback은 최대 한 번 실행하고 terminal 뒤 binding을 tombstone으로 확정하여
 제거한다. Physical STREAM connection과 Actor·Spot membership은 유지하며 새 public Unbind API는 제공하지
-않는다. Rebind는 이전 exact binding identity를 다른 Actor나 generation에 재사용하지 않는다. 새 identity를
-먼저 등록한 뒤 이전 callback을 최대 한 번 실행하여 이전 binding을 tombstone으로 만든다. Callback 실패는
-진단으로 기록하지만 새 binding을 제거하거나 이전 binding을 복원하지 않는다. Relocation route update는
+않는다. Rebind는 새 identity를 current로 등록한 즉시 완료되며 이전 session의 처리를 기다리지 않는다.
+이전 exact session의 `onActorBindingReplaced(...)`에서 client 안내를 보낼 수 있다. Callback이 성공 또는
+실패로 terminal이 되면 Framework가 `100 ms` 뒤 connection을 닫는다. Callback이나 close 실패는 새 binding을 제거하거나 이전
+binding을 복원하지 않는다. Relocation route update는
 같은 ObjectGeneration에만 허용하며 rebind가 아니므로 disconnect callback을 실행하지 않는다. Target Actor가
 복원되어 message 처리를 시작한 뒤 target runtime이 `sessionActorLocationUpdateReqMsg`를
 send하여 해당 Actor route와 `ZLinkSessionActor.ref()`가 반환하는 current `ActorRef`
@@ -55,6 +56,7 @@ public interface systems.zlink.framework.streams.ZLinkSession {
   public abstract systems.zlink.framework.streams.ZLinkSessionContext context();
   public abstract java.util.concurrent.CompletionStage<java.lang.Void> onConnected();
   public abstract java.util.concurrent.CompletionStage<java.lang.Void> onDisconnected();
+  public default java.util.concurrent.CompletionStage<java.lang.Void> onActorBindingReplaced(java.lang.String);
   public abstract java.util.concurrent.CompletionStage<java.lang.Void> onError(systems.zlink.framework.streams.ZLinkStreamError);
   public default java.util.concurrent.CompletionStage<java.lang.Void> onDispatch(systems.zlink.framework.streams.ZLinkSessionDispatchContext, systems.zlink.framework.messaging.ZLinkMessage);
 }
@@ -121,6 +123,16 @@ public interface systems.zlink.framework.streams.ZLinkTypedSessionPacketHandler<
   public abstract java.util.concurrent.CompletionStage<java.lang.Void> handle(TSessionContext, systems.zlink.framework.streams.ZLinkSessionDispatchContext, TMessage);
 }
 ```
+
+`onActorBindingReplaced(...)`는 같은 Actor가 새 session에 bind된 경우 이전 session에서 한 번 실행되는
+default callback이다. Application은 이 callback에서 `context().client().send(...)`로 client 안내를 보낼 수
+있지만 `context().close()`를 호출하지 않는다. Callback이 성공 또는 실패로 terminal이 되면 Framework가
+`100 ms` 뒤 connection을 닫는다. Outbound queue가 먼저 비어도 이 시간을 줄이지 않는다. 새 bind는 이
+callback이나 close를 기다리지 않는다.
+
+| 구현 차이 | 현재 상태 |
+|---|---|
+| Session Actor binding 교체 | JVM runtime에는 command 51 송수신, Java callback과 non-blocking 100 ms close timer가 아직 없다. |
 
 Payload만 받는 `relay(...)`는 one-way admission이다. Dispatch context를 받는 overload는 explicit current
 STREAM request reply capability를 호출 즉시 runtime에 이전한다. Submitted면 Actor typed reply가 original

@@ -179,11 +179,10 @@ cat "$LOG_DIR/client.log"
 grep -q "gamequest-server-evidence=completed" "$LOG_DIR/client.log"
 grep -q "gamequest=completed" "$LOG_DIR/client.log"
 grep -q "gamequest-scale-out=completed" "$LOG_DIR/client.log"
-grep -h -q 'surface=SPOT_ROUTE kind=SEND.*packet=GameplayMsg' "$LOG_DIR"/flow-mission-*.log
-grep -h -q 'surface=SPOT_ROUTE kind=SEND.*packet=GameplayMsg' "$LOG_DIR"/flow-mission-*.log
-grep -h -q 'packet=GameplayMsg.*spot=player-scale-a' "$LOG_DIR"/flow-mission-*.log
-grep -h -q 'packet=GameplayMsg.*spot=player-scale-b' "$LOG_DIR"/flow-mission-*.log
-grep -h -q 'packet=QuestProcessingMsg' "$LOG_DIR"/flow-api-*.log
+grep -h -q 'surface=SPOT_ROUTE kind=SEND.*packet=GameplayMsg' "$LOG_DIR"/mission-*.log
+grep -h -q 'packet=GameplayMsg.*spot=player-scale-a' "$LOG_DIR"/mission-*.log
+grep -h -q 'packet=GameplayMsg.*spot=player-scale-b' "$LOG_DIR"/mission-*.log
+grep -h -q 'packet=QuestProcessingMsg' "$LOG_DIR"/api-*.log
 echo "gamequest player owner Spot routing completed"
 
 curl --fail --silent --request POST \

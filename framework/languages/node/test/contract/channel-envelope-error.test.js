@@ -74,6 +74,60 @@ test('default payload decode rejects BOM and duplicate properties at every depth
   }
 });
 
+test('typed decode reattaches a DTO prototype without invoking its constructor', () => {
+  class RequiredDto {
+    constructor(required) {
+      if (required === undefined) throw new Error('constructor must not run during decode');
+      this.required = required;
+    }
+
+    marker() {
+      return 'dto';
+    }
+  }
+
+  const encoded = framework.ZLinkEncodedPayload.from(Buffer.from('{"required":7,"__proto__":{"polluted":true}}'));
+  const message = framework.ZLinkMessage.fromEncoded(encoded);
+  const decoded = message.decode(RequiredDto);
+
+  assert.ok(decoded instanceof RequiredDto);
+  assert.equal(decoded.required, 7);
+  assert.equal(decoded.marker(), 'dto');
+  assert.equal(Object.prototype.hasOwnProperty.call(decoded, '__proto__'), true);
+  assert.equal(({}).polluted, undefined);
+});
+
+test('typed framework payload decode returns the requested DTO type after schema validation', () => {
+  class ContractDto {
+    constructor(required) {
+      if (required === undefined) throw new Error('constructor must not run during decode');
+      this.required = required;
+    }
+  }
+  framework.ZLinkPacket('ContractDto', {
+    payload: {
+      type: 'object',
+      required: ['required'],
+      properties: { required: { type: 'int32' } }
+    }
+  })(ContractDto);
+
+  const message = Message.from(Buffer.from('{"required":7}'));
+  try {
+    const decoded = payloadCodec.decodeFrameworkTypedPayloadMessage(
+      message,
+      undefined,
+      ContractDto,
+      'application/json',
+      'ContractDto'
+    );
+    assert.ok(decoded instanceof ContractDto);
+    assert.equal(decoded.required, 7);
+  } finally {
+    message.close();
+  }
+});
+
 test('typed framework-json-v1 schema consumes every shared golden vector', () => {
   const fixture = JSON.parse(fs.readFileSync(path.resolve(
     __dirname,

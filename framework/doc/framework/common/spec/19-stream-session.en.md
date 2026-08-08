@@ -274,7 +274,7 @@ delivers bind control, Actor ingress, and Actor push as raw ROUTER service
 records between [MeshNode](01-glossary.en.md#meshnode)s. It doesn't expose the
 target Node RID, binding generation (the order in which a binding was replaced
 within the same session [owner](01-glossary.en.md#owner) process lifecycle),
-authority fence, or command 24/36/38's codec to the application. When closing
+authority fence, or command 24/36/38/51's codec to the application. When closing
 a session, a tombstone of the current
 [binding generation](01-glossary.en.md#binding-generation) is submitted, so a
 late-arriving close from a previous bind can't release a new binding. The
@@ -288,6 +288,14 @@ notification and cleanup of other Actors, and the Spot disconnect callback
 runs at most once per exact binding identity. Public `NotifyDisconnected`
 remains a logical notification the application sends while the connection is
 kept.
+
+When the same Actor is bound to a new session, the framework immediately makes the new binding
+current and does not wait for the previous session to finish. It delivers an Actor-binding-
+replaced callback to the previous exact session. The application may send a duplicate-connection
+notice to the client in that callback, but does not close the connection itself. After the callback
+reaches a successful or failed terminal, the framework closes the previous connection `100 ms`
+later. An empty outbound queue does not shorten this delay. The exact ordering and fencing rules are defined
+by [Session-Actor Dispatch §4](20-session-actor-dispatch.en.md#4-how-a-session-holds-an-actor-route).
 
 If a bound Actor relocates, the physical STREAM socket and Session object are
 kept as-is. Once the target Actor is restored and owner/membership commit
@@ -319,4 +327,4 @@ needs an explicit bind.
 | Auth and dispatch | Authentication and packet dispatch complete between the connector and session node |
 | Termination and resumption | A stream termination fails a pending request, and messaging resumes after a new session's auth/bind |
 | Reply correlation | The `Response`/`Error` header has no packet name, and the client matches by sequence alone to complete normally |
-| Cross-node Actor delivery | The physical STREAM stays on the session owner — only command 38/24/36 records are delivered between MeshNodes |
+| Cross-node Actor delivery | The physical STREAM stays on the session owner — only command 38/24/36/51 records are delivered between MeshNodes |

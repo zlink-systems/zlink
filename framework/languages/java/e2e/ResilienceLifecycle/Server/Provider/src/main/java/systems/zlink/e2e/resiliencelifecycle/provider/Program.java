@@ -19,7 +19,6 @@ import systems.zlink.e2e.resiliencelifecycle.provider.infrastructure.ScenarioSta
 import systems.zlink.e2e.resiliencelifecycle.shared.Contracts;
 import systems.zlink.framework.channels.ZLinkRouteMeshRuntimeOptions;
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
-import systems.zlink.framework.configuration.ZLinkMessageFlowOutcome;
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationOptions;
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore;
 import systems.zlink.framework.spring.EnableZLinkFramework;
@@ -78,22 +77,9 @@ public final class Program {
             String logDir = provider.logDir();
             options.configureLocations().setOwnerLeaseRenewInterval(Duration.ofMillis(500));
             options.configureLocations().setOwnerLeaseTtl(Duration.ofSeconds(2));
+            installDispatchErrorHandler(state);
             options.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile(logDir + "/" + state.providerRid() + "-flow.log")
-                .traceLabel("java-rl-" + state.providerRid())
-                .setMessageFlowObserver(error -> {
-                    if (error.outcome() != ZLinkMessageFlowOutcome.ERROR) {
-                        return CompletableFuture.completedFuture(null);
-                    }
-                    state.record(
-                        "DispatchError",
-                        error.errorReason() + "/" + error.errorAction() + "/" + error.packetName());
-                    if (state.observerThrows()) {
-                        throw new IllegalStateException("dispatch observer failure");
-                    }
-                    return CompletableFuture.completedFuture(null);
-                });
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             options.addHandlersFromPackageOf(WorkReqHandler.class);
             var mesh = options.addRouteMesh(Contracts.CHANNEL)
                 .listen(provider.apiEndpoint())
@@ -126,6 +112,43 @@ public final class Program {
             throw new IllegalArgumentException("Usage: resilience-lifecycle-provider --config <path>");
         }
         return args[1];
+    }
+
+    private static void installDispatchErrorHandler(ScenarioState state) {
+        java.util.logging.Logger.getLogger(
+            "systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer")
+            .addHandler(new java.util.logging.Handler() {
+                @Override public void publish(java.util.logging.LogRecord record) {
+                    var fields = diagnosticsFields(record.getMessage());
+                    if (!"ERROR".equals(fields.get("outcome"))) {
+                        return;
+                    }
+                    state.record(
+                        "DispatchError",
+                        fields.get("reason") + "/" + fields.get("action") + "/" + fields.get("packet"));
+                    if (state.observerThrows()) {
+                        throw new IllegalStateException("diagnostics provider failure");
+                    }
+                }
+                @Override public void flush() {
+                }
+                @Override public void close() {
+                }
+            });
+    }
+
+    private static java.util.Map<String, String> diagnosticsFields(String message) {
+        java.util.Map<String, String> fields = new java.util.HashMap<>();
+        if (message == null || !message.startsWith("message flow ")) {
+            return fields;
+        }
+        for (String token : message.split(" ")) {
+            int separator = token.indexOf('=');
+            if (separator > 0) {
+                fields.put(token.substring(0, separator), token.substring(separator + 1));
+            }
+        }
+        return fields;
     }
 
     private static StandardEnvironment isolatedEnvironment() {

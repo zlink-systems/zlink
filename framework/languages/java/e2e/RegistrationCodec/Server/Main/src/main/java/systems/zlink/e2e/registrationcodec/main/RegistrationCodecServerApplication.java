@@ -85,9 +85,7 @@ public final class RegistrationCodecServerApplication {
             framework.useFilter(FirstOrderFilter.class);
             framework.useFilter(SecondOrderFilter.class);
             framework.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile(options.logDir() + "/server-flow.log")
-                .traceLabel("java-rc-server");
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             framework.addHandlersFromPackageOf(AutoRequestHandler.class);
             var endpoint = java.net.URI.create(options.serverEndpoint());
             var channel = framework.addClientServerChannel(Contracts.CHANNEL);

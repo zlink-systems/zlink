@@ -16,17 +16,6 @@ internal static class StE2BoundSessionRebindIsolationScenario
         await context.CreateActorAsync(context.NodeA, actorId, SpotActorTransferNames.ActorTypeStateful, 92);
         var sourceRef = await context.GetActorRefAsync(context.NodeA, actorId);
         await using var oldSession = await context.ConnectAndBindAsync(context.Options.NodeAStreamEndpoint, "ST-E2", sourceRef);
-        var guidanceReceived = 0;
-        var closedBeforeGuidance = 0;
-        var closed = new TaskCompletionSource<ZlinkStreamDisconnected>(
-            TaskCreationOptions.RunContinuationsAsynchronously);
-        oldSession.Disconnected += (message, _) =>
-        {
-            if (Volatile.Read(ref guidanceReceived) == 0)
-                Interlocked.Exchange(ref closedBeforeGuidance, 1);
-            closed.TrySetResult(message);
-            return ValueTask.CompletedTask;
-        };
         var replacementGuidance = oldSession.WaitFor<ActorBindingReplacedNotify>()
             .Where(message =>
                 message.Payload.ActorId == actorId
@@ -34,6 +23,19 @@ internal static class StE2BoundSessionRebindIsolationScenario
             .Timeout(TimeSpan.FromSeconds(10))
             .Async()
             .AsTask();
+        var closedBeforeGuidance = 0;
+        var closed = new TaskCompletionSource<ZlinkStreamDisconnected>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        oldSession.Disconnected += (message, _) =>
+        {
+            // Check the wait task itself at the lifecycle boundary. A flag set
+            // by the awaiting continuation can run after Disconnected even
+            // though the guidance frame was already delivered.
+            if (!replacementGuidance.IsCompletedSuccessfully)
+                Interlocked.Exchange(ref closedBeforeGuidance, 1);
+            closed.TrySetResult(message);
+            return ValueTask.CompletedTask;
+        };
         var beforeTransferPush = oldSession.WaitFor<BoundPushNotify>()
             .Where(message => message.Payload.Marker == "before-rebind-transfer")
             .Timeout(TimeSpan.FromSeconds(10))
@@ -63,7 +65,6 @@ internal static class StE2BoundSessionRebindIsolationScenario
             .Async().AsTask();
         var pushReply = await context.BoundPushAsync(context.NodeB, actorId, new BoundPushReq("ST-E2", "after-rebind"));
         var guidance = await replacementGuidance;
-        Interlocked.Exchange(ref guidanceReceived, 1);
         var disconnected = await closed.Task.WaitAsync(TimeSpan.FromSeconds(10));
         var notify = await newPush;
         ZlinkStreamAssert.Ensure(SpotActorTransferScenarioContext.IsNode(pushReply.NodeRid, "actor-b"), $"ST-E2 bound push reply expected actor-b, got {pushReply.NodeRid}.");

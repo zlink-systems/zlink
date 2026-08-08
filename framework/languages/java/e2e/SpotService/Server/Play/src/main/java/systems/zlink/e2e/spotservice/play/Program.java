@@ -3,6 +3,11 @@ package systems.zlink.e2e.spotservice.play;
 import java.nio.file.Path;
 import java.net.URI;
 import java.time.Duration;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.logging.Handler;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -30,7 +35,6 @@ import systems.zlink.e2e.spotservice.shared.TimerScenarioSpot;
 import systems.zlink.e2e.spotservice.shared.UserSpot;
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.configuration.ClientServerChannelBuilder;
-import systems.zlink.framework.configuration.ZLinkMessageFlowOutcome;
 import systems.zlink.framework.configuration.ZLinkMeshNodeBuilder;
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationOptions;
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore;
@@ -102,6 +106,7 @@ public final class Program {
         return options -> {
             String nodeRid = state.nodeRid();
             String logDir = play.logDir();
+            installDispatchEvidence(state);
             options.addRelocationStore(relocationStore);
             options.configureLocations().setOwnerLeaseRenewInterval(
                 Duration.ofMillis(play.locationHeartbeatMillis()));
@@ -109,19 +114,7 @@ public final class Program {
                 Duration.ofMillis(play.locationLeaseTtlMillis()));
             options.addHandlersFromPackageOf(ActorAuthHandler.class);
             options.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile(logDir + "/" + nodeRid + "-flow.log")
-                .traceLabel("java-sm-" + nodeRid)
-                .setMessageFlowObserver(error -> {
-                    if (error.outcome() != ZLinkMessageFlowOutcome.ERROR) {
-                        return java.util.concurrent.CompletableFuture.completedFuture(null);
-                    }
-                    state.record(
-                        "DispatchError",
-                        error.spotId(),
-                        error.errorReason() + "/" + error.errorAction() + "/" + error.packetName());
-                    return java.util.concurrent.CompletableFuture.completedFuture(null);
-                });
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             ZLinkMeshNodeBuilder node = options.addRouteMesh(Contracts.SPOT_MESH)
                 .listen(play.routeEndpoint())
                 .setRoutingId(RoutingId.from(nodeRid));
@@ -185,6 +178,39 @@ public final class Program {
                 stream.registerSession(ScenarioSession.class);
             }
         };
+    }
+
+    private static void installDispatchEvidence(ScenarioState state) {
+        Logger.getLogger("systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer")
+            .addHandler(new Handler() {
+                @Override
+                public void publish(LogRecord record) {
+                    Map<String, String> fields = diagnosticsFields(record.getMessage());
+                    if (fields != null && "ERROR".equals(fields.get("outcome"))) {
+                        state.record(
+                            "DispatchError",
+                            fields.get("spot"),
+                            fields.get("reason") + "/" + fields.get("action") + "/" + fields.get("packet"));
+                    }
+                }
+
+                @Override public void flush() { }
+                @Override public void close() { }
+            });
+    }
+
+    private static Map<String, String> diagnosticsFields(String message) {
+        if (message == null || !message.startsWith("message flow ")) {
+            return null;
+        }
+        Map<String, String> fields = new HashMap<>();
+        for (String field : message.substring("message flow ".length()).split(" ")) {
+            String[] pair = field.split("=", 2);
+            if (pair.length == 2) {
+                fields.put(pair[0], pair[1]);
+            }
+        }
+        return fields;
     }
 
     @Bean

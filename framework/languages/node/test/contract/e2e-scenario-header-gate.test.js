@@ -51,7 +51,9 @@ function scenarioFiles(e2eRoot) {
     const directory = path.join(e2eRoot, config.name, 'Client', 'Scenarios');
     if (!fs.existsSync(directory)) continue;
     for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-      if (entry.isFile() && entry.name.endsWith('.ts')) files.push(path.join(directory, entry.name));
+      if (entry.isFile() && entry.name.endsWith('.ts')) {
+        files.push(path.join(directory, entry.name));
+      }
     }
   }
   return files.sort();

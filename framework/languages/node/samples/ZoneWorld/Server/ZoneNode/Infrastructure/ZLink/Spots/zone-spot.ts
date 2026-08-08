@@ -6,9 +6,8 @@ import {
 } from '@zlink-systems/nestjs';
 import { ZoneWorldNames, ZoneWorldSpec } from '../../../../../Shared/spec';
 import type { ZoneId } from '../../../../../Shared/spec';
-import { BotTickReq, ZoneChangedNotify, ZoneBorderEvent, ZoneStateNotify } from '../../../../../Shared/contracts';
+import { BotTickReq, EnterZoneMsg, ZoneChangedNotify, ZoneBorderEvent, ZoneStateNotify } from '../../../../../Shared/contracts';
 import type { BotTickRes } from '../../../../../Shared/contracts';
-import type { EnterZoneMsg } from '../../../../../Shared/contracts';
 import type {
   ZLinkActorClient,
   ZLinkMessage,
@@ -77,7 +76,7 @@ class ZoneSpot implements ZLinkSpot<PlayerActor> {
   }
 
   async onActorJoin(actorId: string, request: ZLinkMessage): Promise<ZLinkSpotActorJoinResult> {
-    const enter = request.decode<EnterZoneMsg>(Object as never);
+    const enter = request.decode(EnterZoneMsg);
     if (enter.playerId !== actorId) {
       console.log(`zone admission rejected zone=${String(this.context.spotId)} player=${actorId} reason=player-id`);
       return { accepted: false };

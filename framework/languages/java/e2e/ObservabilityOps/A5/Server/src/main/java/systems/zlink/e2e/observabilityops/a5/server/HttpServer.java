@@ -10,7 +10,6 @@ import java.util.List;
 import org.springframework.context.SmartLifecycle;
 import org.springframework.beans.factory.ObjectProvider;
 import systems.zlink.framework.channels.ZLinkRouteClient;
-import systems.zlink.framework.configuration.ZLinkMessageFlowEvent;
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
@@ -82,7 +81,7 @@ public final class HttpServer implements SmartLifecycle {
 
     private void flowSnapshot(HttpExchange exchange) throws java.io.IOException {
         int after = Integer.parseInt(queryOrDefault(exchange, "after", "0"));
-        List<ZLinkMessageFlowEvent> events = evidence.snapshot();
+        List<FlowEvidence.FlowEvent> events = evidence.snapshot();
         int start = Math.max(0, Math.min(after, events.size()));
         write(exchange, json.writeValueAsString(new FlowSnapshot(
             events.size(), events.subList(start, events.size()))));
@@ -138,7 +137,7 @@ public final class HttpServer implements SmartLifecycle {
     private record Status(String mode, int count) {
     }
 
-    private record FlowSnapshot(int count, List<ZLinkMessageFlowEvent> events) {
+    private record FlowSnapshot(int count, List<FlowEvidence.FlowEvent> events) {
     }
 
     @Override

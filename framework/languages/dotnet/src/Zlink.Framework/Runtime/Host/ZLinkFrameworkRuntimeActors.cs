@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using System.Runtime.ExceptionServices;
+using Zlink.Framework.Runtime.Identifiers;
 
 namespace Zlink.Framework.Runtime.Host;
 
@@ -2109,7 +2110,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                            ?? throw new InvalidOperationException(
                                $"Actor '{actorState.ActorId}' handoff target has no Spot identity.");
         if (!locations.SpotLocations.TryGetTrackedGeneration(
-                targetSpotId,
+                ZLinkSpotId.FromBoundary(targetSpotId, nameof(targetSpotId)),
                 out var targetSpotGeneration)
             || targetSpotGeneration == 0)
             throw new ZLinkFrameworkException(
@@ -2851,9 +2852,9 @@ internal sealed partial class ZLinkFrameworkRuntime
                                                ?? priorBindingForNotification;
                 if (previousForNotification is { } previous
                     && previous.SessionNodeRid is { } previousSessionNodeRid
-                    && !IsSamePhysicalSessionOwner(
-                        previous,
+                    && !previous.IsSamePhysicalSessionOwner(
                         sessionNodeRid,
+                        request.SessionOwnerNodeGeneration,
                         sessionRid,
                         request.SessionOwnerId,
                         request.SessionOwnerLeaseGeneration))
@@ -2950,28 +2951,6 @@ internal sealed partial class ZLinkFrameworkRuntime
                 ZLinkFrameworkErrorKind.Unavailable,
                 $"Actor '{request.ActorId}' changed authority before session binding publication.",
                 ZLinkRetryAdvice.RetryAfterBackoff);
-    }
-
-    private static bool IsSamePhysicalSessionOwner(
-        ZLinkActorBoundSession previous,
-        RoutingId currentSessionNodeRid,
-        RoutingId currentSessionRid,
-        string currentSessionOwnerId,
-        ulong currentSessionOwnerLeaseGeneration)
-    {
-        var previousOwnerId = string.IsNullOrWhiteSpace(previous.SessionOwnerId)
-            ? previous.SessionNodeRid!.Value.ToHex()
-            : previous.SessionOwnerId;
-        var previousOwnerLease = previous.SessionOwnerLeaseGeneration == 0
-            ? previous.SessionOwnerNodeGeneration
-            : previous.SessionOwnerLeaseGeneration;
-        return previous.SessionNodeRid == currentSessionNodeRid
-               && previous.SessionRid == currentSessionRid
-               && string.Equals(
-                   previousOwnerId,
-                   currentSessionOwnerId,
-                   StringComparison.Ordinal)
-               && previousOwnerLease == currentSessionOwnerLeaseGeneration;
     }
 
     private static bool HasExactAdmittedNodeLifecycle(
@@ -3850,10 +3829,11 @@ internal sealed partial class ZLinkFrameworkRuntime
         }
         // Per-actor FIFO across concurrently handled relay records: sibling
         // forwarded frames must not overtake each other (spec 23 §10.2).
+        var actorKey = ZLinkActorId.FromBoundary(actorId, nameof(actorId));
         Task chained;
         lock (_remoteFrameChainGate)
         {
-            var prior = _remoteFrameChains.TryGetValue(actorId, out var chain)
+            var prior = _remoteFrameChains.TryGetValue(actorKey, out var chain)
                 ? chain
                 : Task.CompletedTask;
             chained = DispatchRemoteFrameAfterAsync(
@@ -3861,7 +3841,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                 batch,
                 deadlineUnixMs,
                 cancellationToken);
-            _remoteFrameChains[actorId] = chained;
+            _remoteFrameChains[actorKey] = chained;
         }
 
         try
@@ -3872,9 +3852,9 @@ internal sealed partial class ZLinkFrameworkRuntime
         {
             lock (_remoteFrameChainGate)
             {
-                if (_remoteFrameChains.TryGetValue(actorId, out var current)
+                if (_remoteFrameChains.TryGetValue(actorKey, out var current)
                     && ReferenceEquals(current, chained))
-                    _remoteFrameChains.Remove(actorId);
+                    _remoteFrameChains.Remove(actorKey);
             }
         }
     }
@@ -3922,7 +3902,7 @@ internal sealed partial class ZLinkFrameworkRuntime
     }
 
     private readonly object _remoteFrameChainGate = new();
-    private readonly Dictionary<string, Task> _remoteFrameChains = new(StringComparer.Ordinal);
+    private readonly Dictionary<ZLinkActorId, Task> _remoteFrameChains = new();
 
     /// <summary>Session-node relay for a frame whose bound actor lives on
     /// another node: wraps the stream frame in the internal node-addressed
@@ -4362,7 +4342,7 @@ internal sealed partial class ZLinkFrameworkRuntime
     }
 
     internal ZLinkAsyncSubmitter CreateActorBoundSessionSubmitter(
-        string meshName)
+        ZLinkMeshName meshName)
     {
         return _actorBoundSessionCoordinator.CreateSubmitter(meshName);
     }

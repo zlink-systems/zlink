@@ -38,7 +38,15 @@ class push_bound_session_handler_t
         }
 
         zlink::framework::http_response_t response;
-        response.body = nlohmann::json (reply.value ().parse_json<e2e::actor_push_res_t> ()).dump ();
+        try {
+            response.body = nlohmann::json (reply.value ().parse_json<e2e::actor_push_res_t> ()).dump ();
+        }
+        catch (const std::exception &error) {
+            throw zlink::framework::framework_exception_t (
+              zlink::framework::framework_error_kind_t::protocol_error,
+              std::string ("PushReq reply decode failed: ") + error.what ()
+                + " body=" + reply.value ().to_string ());
+        }
         return response;
     }
 

@@ -40,6 +40,8 @@ import {
   type ZLinkPendingSessionRequest
 } from './session-requests';
 import { ZLinkSessionLocalActorBindings } from './session-local-actors';
+import type { ServiceActorRef } from '../foundation/service-stateful-registry';
+import type { ServiceRetiredBoundSessionRouteFence } from '../foundation/service-stateful-wire-codec';
 
 export interface ZLinkSessionContextStream extends ZLinkStream {
   writeRaw(payload: Message, flags?: number): boolean;
@@ -81,6 +83,11 @@ interface ZLinkSessionContextRuntime {
   notifyDisconnected(actor: DefaultZLinkSessionActor, signal?: AbortSignal): Promise<void>;
 }
 
+export type ZLinkActorBindingReplacementHandler = (
+  actor: ServiceActorRef,
+  retiredSession: ServiceRetiredBoundSessionRouteFence
+) => void;
+
 interface ZLinkBoundSessionRuntime {
   sendBoundSession(
     actorId: string,
@@ -105,6 +112,12 @@ export class DefaultZLinkSessionContext implements ZLinkSessionContext {
   private readonly requests = new ZLinkSessionRequestTracker();
   private currentDispatchHeader: ZLinkStreamFrameHeader | undefined;
   private currentReplyClaimed = false;
+  private actorBindingReplacementHandler?: ZLinkActorBindingReplacementHandler;
+  private closingForActorReplacement = false;
+  private readonly retiredActorBindings = new Map<string, {
+    readonly actorGeneration: bigint;
+    readonly retiredSession: ServiceRetiredBoundSessionRouteFence;
+  }>();
 
   constructor(
     private readonly runtime: ZLinkSessionContextRuntime,
@@ -141,6 +154,53 @@ export class DefaultZLinkSessionContext implements ZLinkSessionContext {
 
   async cleanupBindings(): Promise<void> {
     await this.runtime.cleanup(this);
+  }
+
+  setActorBindingReplacementHandler(handler: ZLinkActorBindingReplacementHandler): void {
+    this.actorBindingReplacementHandler = handler;
+  }
+
+  get actorBindingReplacedHandler(): ZLinkActorBindingReplacementHandler | undefined {
+    return this.actorBindingReplacementHandler;
+  }
+
+  beginActorBindingReplacement(
+    actor: ServiceActorRef,
+    retiredSession: ServiceRetiredBoundSessionRouteFence
+  ): boolean {
+    const previous = this.retiredActorBindings.get(actor.actorId);
+    if (
+      previous !== undefined
+      && previous.actorGeneration === actor.generation
+      && sameRetiredSession(previous.retiredSession, retiredSession)
+    ) {
+      return false;
+    }
+    this.closingForActorReplacement = true;
+    this.retiredActorBindings.set(actor.actorId, {
+      actorGeneration: actor.generation,
+      retiredSession
+    });
+    return true;
+  }
+
+  isExactRetiredActorBinding(
+    actor: ServiceActorRef,
+    retiredSession: ServiceRetiredBoundSessionRouteFence
+  ): boolean {
+    const expected = this.retiredActorBindings.get(actor.actorId);
+    if (
+      expected === undefined
+      || expected.actorGeneration !== actor.generation
+      || !sameRetiredSession(expected.retiredSession, retiredSession)
+    ) {
+      return false;
+    }
+    const current = this.findBoundActor(actor.actorId);
+    if (current === undefined) return true;
+    const currentRef = current.ref as ActorRef & { readonly bindingGeneration?: bigint };
+    return BigInt(currentRef.objectGeneration) === actor.generation
+      && currentRef.bindingGeneration === retiredSession.retiredBindingGeneration;
   }
 
   createTextMessage(payload: string): Message {
@@ -188,6 +248,9 @@ export class DefaultZLinkSessionContext implements ZLinkSessionContext {
   }
 
   enterDispatch(header: ZLinkStreamFrameHeader): void {
+    if (this.closingForActorReplacement) {
+      throw new Error('Session is closing after its Actor binding was replaced.');
+    }
     this.currentDispatchHeader = header;
     this.currentReplyClaimed = false;
   }
@@ -446,4 +509,16 @@ function decodeStreamErrorPayload(payload: Message): Error {
   } catch {
     return new Error('Stream request failed.');
   }
+}
+
+function sameRetiredSession(
+  left: ServiceRetiredBoundSessionRouteFence,
+  right: ServiceRetiredBoundSessionRouteFence
+): boolean {
+  return left.sessionOwnerNodeRid === right.sessionOwnerNodeRid
+    && left.sessionOwnerNodeGeneration === right.sessionOwnerNodeGeneration
+    && left.sessionOwnerId === right.sessionOwnerId
+    && left.sessionOwnerLeaseGeneration === right.sessionOwnerLeaseGeneration
+    && left.sessionRid === right.sessionRid
+    && left.retiredBindingGeneration === right.retiredBindingGeneration;
 }

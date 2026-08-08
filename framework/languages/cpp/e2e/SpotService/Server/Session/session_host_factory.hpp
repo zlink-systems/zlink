@@ -90,6 +90,7 @@ inline int run_session_server (int argc, char **argv)
 
         if (route_mesh_enabled) {
             auto route = options.add_route_mesh (e2e::route_channel);
+            route.channel_name (e2e::route_channel).client ();
             route.listen (route_endpoint)
               .set_routing_id (zlink::routing_id_t::from (node_rid))
               .channel_name (e2e::route_channel);
@@ -97,6 +98,7 @@ inline int run_session_server (int argc, char **argv)
                 route.peer_connections ().connect (peer);
         }
         auto spot = options.add_route_mesh (e2e::spot_mesh);
+        spot.channel_name (e2e::spot_mesh).client ();
         spot.listen (spot_router_endpoint)
           .set_routing_id (zlink::routing_id_t::from (node_rid))
           .channel_name (e2e::spot_mesh);

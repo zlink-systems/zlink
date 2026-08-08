@@ -2,7 +2,7 @@ namespace Zlink.Framework.Runtime.Host;
 
 internal sealed class ZLinkActorBoundSessionRegistry(Action<string, string> unbind)
 {
-    private readonly Dictionary<string, List<Entry>> _entries = new(StringComparer.Ordinal);
+    private readonly Dictionary<RoutingId, List<Entry>> _entries = [];
     private readonly object _gate = new();
 
     public void Register(
@@ -12,13 +12,12 @@ internal sealed class ZLinkActorBoundSessionRegistry(Action<string, string> unbi
     {
         if (!ZLinkActorBoundSessionBindingToken.IsNative(bindingToken)) return;
 
-        var key = sessionRid.ToHex();
         lock (_gate)
         {
-            if (!_entries.TryGetValue(key, out var entries))
+            if (!_entries.TryGetValue(sessionRid, out var entries))
             {
                 entries = [];
-                _entries[key] = entries;
+                _entries[sessionRid] = entries;
             }
 
             entries.RemoveAll(entry => entry.Matches(actorId, bindingToken));
@@ -46,10 +45,9 @@ internal sealed class ZLinkActorBoundSessionRegistry(Action<string, string> unbi
     public void Cleanup(RoutingId sessionRid)
     {
         Entry[] entries;
-        var key = sessionRid.ToHex();
         lock (_gate)
         {
-            if (!_entries.Remove(key, out var registered)) return;
+            if (!_entries.Remove(sessionRid, out var registered)) return;
 
             entries = registered.ToArray();
         }

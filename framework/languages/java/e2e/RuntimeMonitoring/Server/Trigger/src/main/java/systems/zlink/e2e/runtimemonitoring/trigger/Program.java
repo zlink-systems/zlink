@@ -49,9 +49,7 @@ public final class Program {
     ZLinkFrameworkConfigurer triggerFramework(TriggerOptions config) {
         return options -> {
             options.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile(config.logDirectory() + "/trigger-flow.log")
-                .traceLabel("java-mon-trigger");
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             var channel = options.addClientServerChannel(Contracts.CHANNEL)
                 .client()
                 .connect(config.apiEndpoint());

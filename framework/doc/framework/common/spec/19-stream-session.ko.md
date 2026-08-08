@@ -241,7 +241,7 @@ Actor가 다른 MeshNode에 있어도 physical STREAM socket과 session object�
 session owner에 유지된다. Framework는 bind control, Actor ingress와 Actor push만
 [MeshNode](01-glossary.ko.md#meshnode) 사이의 raw ROUTER service record로 전달한다. Application에는 target Node
 RID, binding generation(같은 session [owner](01-glossary.ko.md#owner) process lifecycle 안에서 binding이 교체된 순서),
-authority fence와 command 24·36·38의 codec을 노출하지 않는다. Session을 닫을 때는
+authority fence와 command 24·36·38·51의 codec을 노출하지 않는다. Session을 닫을 때는
 current [binding generation](01-glossary.ko.md#binding-generation)의 tombstone을 제출하므로
 이전 bind에서 늦게 도착한 close가 새 binding을 해제하지 못한다. Command별 정확한
 전달 계약은 [Session–Actor dispatch §4](20-session-actor-dispatch.ko.md#4-session이-actor-route를-보관하는-방법)가
@@ -251,6 +251,14 @@ Physical disconnect 때 Framework는 current binding snapshot의 모든 Actor에
 Application callback은 bound 목록을 순회하지 않는다. 한 Actor의 실패는 다른 Actor 통지와 cleanup을
 막지 않으며 exact binding identity마다 Spot disconnect callback을 최대 한 번 실행한다. Public
 `NotifyDisconnected`는 connection이 유지되는 동안 application이 보내는 논리적 통지로 유지한다.
+
+같은 Actor를 새 session에 bind하면 새 binding을 즉시 current로 확정하고 이전 session의 완료를 기다리지
+않는다. Framework는 이전 exact session에 Actor binding 교체 callback을 전달한다. Application은 이
+callback에서 client에 중복 연결 안내를 보낼 수 있지만 connection을 직접 닫지 않는다. Callback이 성공 또는
+실패로 terminal이 되면 Framework가 `100 ms` 뒤 이전 connection을 닫는다. Outbound queue가 먼저 비어도
+이 시간을 줄이지 않는다.
+자세한 순서와 fencing 규칙은
+[Session–Actor dispatch §4](20-session-actor-dispatch.ko.md#4-session이-actor-route를-보관하는-방법)가 정의한다.
 
 Bound Actor가 relocation되면 physical STREAM socket과 Session object는 그대로
 유지한다. Target Actor를 복원하고 owner·membership commit을 완료하면 Target Actor가
@@ -277,4 +285,5 @@ update는 같은 ObjectGeneration에만 허용하고 application은 relocation�
 | 인증과 dispatch | connector와 session node 사이에서 인증과 packet dispatch가 완료된다 |
 | 종료와 재개 | stream 종료로 pending request가 실패하고, 새 session의 인증·bind 뒤 messaging이 재개된다 |
 | reply 상관관계 | `Response`·`Error` header에 packet name이 없고, client가 sequence 단독으로 매칭해 정상 완료한다 |
-| Cross-node Actor 전달 | Physical STREAM은 session owner에 유지되고 command 38·24·36 record만 MeshNode 사이에서 전달된다 |
+| Cross-node Actor 전달 | Physical STREAM은 session owner에 유지되고 command 38·24·36·51 record만 MeshNode 사이에서 전달된다 |
+| 중복 Actor 연결 | 새 bind는 이전 session 처리를 기다리지 않고 완료되며, 이전 session callback terminal 100 ms 뒤 Framework가 연결을 종료한다 |

@@ -1,3 +1,5 @@
+using Zlink.Framework.Runtime.Identifiers;
+
 namespace Zlink.Framework.Runtime.Actors;
 
 internal sealed partial class ZLinkActorSessionManager
@@ -7,7 +9,8 @@ internal sealed partial class ZLinkActorSessionManager
         IZLinkActor actor,
         CancellationToken cancellationToken = default)
     {
-        var state = _actorSessions.GetOrCreate(actor.Context.ActorId);
+        var state = _actorSessions.GetOrCreate(
+            ZLinkActorId.FromBoundary(actor.Context.ActorId, nameof(actor)));
         BindActorContext(actor, state);
 
         var previousActivation = await state.ExecuteLockedAsync(
@@ -31,7 +34,8 @@ internal sealed partial class ZLinkActorSessionManager
     {
         ArgumentNullException.ThrowIfNull(commitAuthority);
         ArgumentNullException.ThrowIfNull(publishTargetMembership);
-        var state = _actorSessions.GetOrCreate(actor.Context.ActorId);
+        var state = _actorSessions.GetOrCreate(
+            ZLinkActorId.FromBoundary(actor.Context.ActorId, nameof(actor)));
         BindActorContext(actor, state);
 
         return await state.ExecuteLockedAsync(
@@ -58,7 +62,8 @@ internal sealed partial class ZLinkActorSessionManager
         IZLinkActor actor,
         CancellationToken cancellationToken = default)
     {
-        var state = _actorSessions.GetOrCreate(actor.Context.ActorId);
+        var state = _actorSessions.GetOrCreate(
+            ZLinkActorId.FromBoundary(actor.Context.ActorId, nameof(actor)));
         await state.ExecuteLockedAsync(
             () =>
             {

@@ -1,0 +1,3 @@
+{"lifecycle":{"closedInstances":0,"materializedInstances":1}}
+{"evidence":{"completed":0,"entered":1,"instanceCount":1,"ownerRid":"instance-owner-b","spotId":"IS-E2E-05-spot"},"operationId":"IS-E2E-05-prime"}
+{"evidence":{"completed":1,"entered":1,"instanceCount":1,"ownerRid":"instance-owner-b","spotId":"IS-E2E-05-spot"},"operationId":"IS-E2E-05-prime"}

@@ -1,3 +1,5 @@
+using Zlink.Framework.Runtime.Identifiers;
+
 namespace Zlink.Framework.Runtime.Locations;
 
 internal sealed class ZLinkClientServerDiscovery : IAsyncDisposable
@@ -227,7 +229,7 @@ internal sealed class ZLinkClientServerDiscovery : IAsyncDisposable
         IRouterSocket router)
     {
         internal ZLinkClientServerServerIdentity Identity { get; } = identity;
-        internal string ChannelName => Identity.ChannelName;
+        internal string ChannelName => Identity.ChannelName.Value;
         internal string Endpoint { get; } = endpoint;
         internal IRouterSocket Router { get; } = router;
     }
@@ -240,7 +242,8 @@ internal sealed class ZLinkClientServerDiscovery : IAsyncDisposable
         ZLinkOwnerLeaseTracker? leases,
         IZLinkRuntimeFailureReporter errorSink) : IAsyncDisposable
     {
-        private readonly Dictionary<string, ulong> _observedRevisions = new(StringComparer.Ordinal);
+        private readonly Dictionary<(RoutingId ServerRid, ulong LifecycleGeneration), ulong>
+            _observedRevisions = [];
         private CancellationTokenSource? _stop;
         private Task? _loop;
 
@@ -275,7 +278,7 @@ internal sealed class ZLinkClientServerDiscovery : IAsyncDisposable
         private async ValueTask ReconcileAsync(CancellationToken cancellationToken)
         {
             var rows = await ListAllAsync(cancellationToken).ConfigureAwait(false);
-            var desired = new Dictionary<string, Target>(StringComparer.Ordinal);
+            var desired = new Dictionary<(RoutingId ServerRid, ulong LifecycleGeneration), Target>();
             foreach (var row in rows)
             {
                 if (row.ServerRid.Size == 0
@@ -293,14 +296,12 @@ internal sealed class ZLinkClientServerDiscovery : IAsyncDisposable
                         .ConfigureAwait(false))
                     continue;
 
-                var lifecycleKey = $"{row.ServerRid.ToHex()}:{row.LifecycleGeneration}";
-                var revisionKey = lifecycleKey;
+                var revisionKey = (row.ServerRid, row.LifecycleGeneration);
                 if (_observedRevisions.TryGetValue(revisionKey, out var observed)
                     && row.DescriptorRevision < observed)
                     continue;
                 _observedRevisions[revisionKey] = row.DescriptorRevision;
-                desired[lifecycleKey] = new Target(
-                    lifecycleKey,
+                desired[revisionKey] = new Target(
                     row.ServerRid,
                     row.LifecycleGeneration,
                     row.Endpoint,
@@ -311,7 +312,7 @@ internal sealed class ZLinkClientServerDiscovery : IAsyncDisposable
 
             runtime.ReplaceAutomatic(
                 rows.Where(row => desired.ContainsKey(
-                        $"{row.ServerRid.ToHex()}:{row.LifecycleGeneration}"))
+                        (row.ServerRid, row.LifecycleGeneration)))
                     .ToArray());
         }
 
@@ -354,7 +355,6 @@ internal sealed class ZLinkClientServerDiscovery : IAsyncDisposable
         }
 
         private sealed record Target(
-            string Key,
             RoutingId Rid,
             ulong LifecycleGeneration,
             string Endpoint,

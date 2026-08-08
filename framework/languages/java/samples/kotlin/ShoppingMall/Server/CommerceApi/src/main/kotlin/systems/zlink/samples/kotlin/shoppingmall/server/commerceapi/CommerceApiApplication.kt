@@ -39,9 +39,7 @@ class CommerceApiApplication {
             configurer.addLocationStore(SampleLocationStore.create(topology))
             configurer.useCoroutineHandlers(Dispatchers.Default)
             configurer.configureDispatch {
-                messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                traceLogFile("${role.logDirectory}/flow-${role.instanceId}.log")
-                traceLabel(role.instanceId)
+                messageFlow(ZLinkMessageFlowLogMode.NORMAL)
             }
             configurer.addHandlersFromPackageOf(CommerceApiApplication::class.java)
 

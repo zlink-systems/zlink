@@ -3,13 +3,16 @@ import { ZLINK_FANOUT_CLIENT, ZLINK_ROUTE_CLIENT } from '@zlink-systems/nestjs';
 import { zlinkSendHandler } from '@zlink-systems/nestjs';
 import { ZLinkPacket } from '@zlink-systems/framework';
 import {
+  AnnounceWorldReq,
   AnnounceWorldRes,
   ApplyNodeMaintenanceReq,
   GetNodeDiagnosticsReq,
   NodeDiagnosticsRes,
+  NodeDiagnosticsReq,
   NodeAlertNotify,
   NodeMaintenanceChangedEvent,
   SetMaintenanceRes,
+  SetMaintenanceReq,
   WatchNodesRes,
   WorldAnnounceEvent
 } from '../../Shared/contracts';
@@ -19,13 +22,10 @@ import { NodeRegistry } from './node-registry';
 import { OpsConsoleRegistry } from './ops-console-registry';
 import { MaintenanceStore } from '../Configuration/maintenance-store';
 import type {
-  AnnounceWorldReq,
   ApplyNodeMaintenanceRes,
   GetNodeDiagnosticsRes,
-  NodeDiagnosticsReq,
   ReportNodeStatusMsg,
   ReportSpotEventMsg,
-  SetMaintenanceReq
 } from '../../Shared/contracts';
 import type {
   ZLinkFanoutClient,
@@ -86,7 +86,7 @@ class AnnounceWorldHandler {
     _dispatch: ZLinkSessionDispatchContext,
     payload: ZLinkMessage
   ): Promise<void> {
-    const request = payload.decode<AnnounceWorldReq>(Object as never);
+    const request = payload.decode(AnnounceWorldReq);
     const id = `announce-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     await this.fanout
       .publish(ZoneWorldNames.broadcastChannel, new WorldAnnounceEvent(id, request.text))
@@ -109,7 +109,7 @@ class SetMaintenanceHandler {
     _dispatch: ZLinkSessionDispatchContext,
     payload: ZLinkMessage
   ): Promise<void> {
-    const request = payload.decode<SetMaintenanceReq>(Object as never);
+    const request = payload.decode(SetMaintenanceReq);
     await this.maintenance.write(request.nodeId, request.enabled);
     try {
       const applied = await this.channels
@@ -144,7 +144,7 @@ class NodeDiagnosticsHandler {
     _dispatch: ZLinkSessionDispatchContext,
     payload: ZLinkMessage
   ): Promise<void> {
-    const request = payload.decode<NodeDiagnosticsReq>(Object as never);
+    const request = payload.decode(NodeDiagnosticsReq);
     try {
       const result = await this.channels
         .requestToChannel(

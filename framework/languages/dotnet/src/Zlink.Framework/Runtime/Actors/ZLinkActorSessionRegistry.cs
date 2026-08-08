@@ -8,12 +8,11 @@ internal sealed class ZLinkActorSessionRegistry(
     private readonly object _gate = new();
     private readonly Dictionary<ZLinkActorId, ZLinkActorRuntimeState> _states = [];
 
-    public ZLinkActorRuntimeState GetOrCreate(string actorId)
+    public ZLinkActorRuntimeState GetOrCreate(ZLinkActorId actorId)
     {
-        var key = ZLinkActorId.FromBoundary(actorId, nameof(actorId));
         lock (_gate)
         {
-            if (_states.TryGetValue(key, out var existing)) return existing;
+            if (_states.TryGetValue(actorId, out var existing)) return existing;
 
             var created = new ZLinkActorRuntimeState(
                 actorId,
@@ -21,41 +20,38 @@ internal sealed class ZLinkActorSessionRegistry(
                 sessionBindingTombstoneRetention:
                     sessionBindingTombstoneRetention,
                 services: services);
-            _states.Add(key, created);
+            _states.Add(actorId, created);
             return created;
         }
     }
 
-    public bool TryGet(string actorId, out ZLinkActorRuntimeState state)
+    public bool TryGet(ZLinkActorId actorId, out ZLinkActorRuntimeState state)
     {
-        var key = ZLinkActorId.FromBoundary(actorId, nameof(actorId));
         lock (_gate)
         {
-            return _states.TryGetValue(key, out state!);
+            return _states.TryGetValue(actorId, out state!);
         }
     }
 
-    public void TryRemove(string actorId, ZLinkActorRuntimeState state)
+    public void TryRemove(ZLinkActorId actorId, ZLinkActorRuntimeState state)
     {
-        var key = ZLinkActorId.FromBoundary(actorId, nameof(actorId));
         lock (_gate)
         {
-            if (_states.TryGetValue(key, out var existing)
+            if (_states.TryGetValue(actorId, out var existing)
                 && ReferenceEquals(existing, state)
                 && state.SessionId is null
                 && state.Activation is null)
-                _states.Remove(key);
+                _states.Remove(actorId);
         }
     }
 
-    public void RemoveIfCurrent(string actorId, ZLinkActorRuntimeState state)
+    public void RemoveIfCurrent(ZLinkActorId actorId, ZLinkActorRuntimeState state)
     {
-        var key = ZLinkActorId.FromBoundary(actorId, nameof(actorId));
         lock (_gate)
         {
-            if (_states.TryGetValue(key, out var existing)
+            if (_states.TryGetValue(actorId, out var existing)
                 && ReferenceEquals(existing, state))
-                _states.Remove(key);
+                _states.Remove(actorId);
         }
     }
 

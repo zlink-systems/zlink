@@ -71,7 +71,9 @@ for entry in "${owner_entries[@]}"; do
 done
 mapfile -t artifacts < <(printf '%s\n' "${artifacts[@]}" | sort -u)
 
-publish_tasks=()
+publish_tasks=(
+    ":zlink-framework-json-internal:publishAllPublicationsToReleaseRepoRepository"
+)
 for artifact in "${artifacts[@]}"; do
     publish_tasks+=(":$artifact:publishAllPublicationsToReleaseRepoRepository")
 done

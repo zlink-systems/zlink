@@ -51,9 +51,7 @@ public final class Program {
         return options -> {
             String logDir = publisher.logDir();
             options.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile(logDir + "/publisher-flow.log")
-                .traceLabel("java-sm-publisher");
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             var mesh = options.addRouteMesh(Contracts.SPOT_MESH)
                 .listen(publisher.spotPublisherEndpoint())
                 .setRoutingId(RoutingId.from("publisher"));

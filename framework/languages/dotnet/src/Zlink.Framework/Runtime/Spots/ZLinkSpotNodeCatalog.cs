@@ -299,7 +299,7 @@ internal sealed class ZLinkSpotNodeCatalog(
     {
         cancellationToken.ThrowIfCancellationRequested();
         lifecycle?.SpotLocations.ForgetRelocated(
-            activation.SpotId,
+            activation.RuntimeSpotId,
             activation.ObjectGeneration);
         lock (_gate)
         {
@@ -1141,8 +1141,8 @@ internal sealed class ZLinkSpotNodeCatalog(
     {
         var activation = prepared.Activation;
         var status = await lifecycle!.SpotLocations.TrackRelocatedAsync(
-                _spotChannelName.Value,
-                activation.SpotId,
+                ZLinkMeshName.FromBoundary(_spotChannelName.Value, nameof(_spotChannelName)),
+                activation.RuntimeSpotId,
                 objectGeneration,
                 authorityOwnerGeneration,
                 stableType,
@@ -1467,8 +1467,8 @@ internal sealed class ZLinkSpotNodeCatalog(
 
         var spotId = activation.SpotId;
         var status = await lifecycle.SpotLocations.ClaimAsync(
-                _spotChannelName.Value,
-                spotId,
+                ZLinkMeshName.FromBoundary(_spotChannelName.Value, nameof(_spotChannelName)),
+                activation.RuntimeSpotId,
                 objectGeneration,
                 spotType,
                 node.RoutingId,
@@ -1487,11 +1487,11 @@ internal sealed class ZLinkSpotNodeCatalog(
                 : $"SPOT '{spotId}' location claim failed because the location store is unavailable.");
     }
 
-    private async ValueTask ReleaseSpotLocationAsync(string spotId)
+    private async ValueTask ReleaseSpotLocationAsync(ZLinkSpotId spotId)
     {
         if (lifecycle is not null)
             await lifecycle.SpotLocations.ReleaseAsync(
-                    _spotChannelName.Value,
+                    ZLinkMeshName.FromBoundary(_spotChannelName.Value, nameof(_spotChannelName)),
                     spotId)
                 .ConfigureAwait(false);
     }
@@ -1529,7 +1529,9 @@ internal sealed class ZLinkSpotNodeCatalog(
 
             await activation.DisposeAsync().ConfigureAwait(false);
             if (releaseLocation)
-                await ReleaseSpotLocationAsync(spotId).ConfigureAwait(false);
+                await ReleaseSpotLocationAsync(
+                        ZLinkSpotId.FromBoundary(spotId, nameof(spotId)))
+                    .ConfigureAwait(false);
         }
         catch (Exception exception)
         {
@@ -1574,7 +1576,9 @@ internal sealed class ZLinkSpotNodeCatalog(
                     DateTimeOffset.UtcNow + activation.DefaultRequestTimeout,
                     CancellationToken.None))
             .ConfigureAwait(false);
-        await failures.CaptureAsync(() => ReleaseSpotLocationAsync(activation.SpotId)).ConfigureAwait(false);
+        await failures.CaptureAsync(
+                () => ReleaseSpotLocationAsync(activation.RuntimeSpotId))
+            .ConfigureAwait(false);
         await failures.CaptureAsync(activation.DisposeAsync).ConfigureAwait(false);
         lock (_gate)
         {

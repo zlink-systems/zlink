@@ -9,7 +9,7 @@ import org.springframework.context.annotation.Bean
 import systems.zlink.contracts.core.RoutingId
 import systems.zlink.e2e.kotlin.registrymessaging.provider.Configuration.ServerOptions
 import systems.zlink.e2e.kotlin.registrymessaging.provider.Endpoints.ProviderEndpoints
-import systems.zlink.e2e.kotlin.registrymessaging.provider.Handlers.EvidenceDispatchErrorObserver
+import systems.zlink.e2e.kotlin.registrymessaging.provider.Handlers.EvidenceDispatchErrorHandler
 import systems.zlink.e2e.kotlin.registrymessaging.provider.Handlers.PayloadRequestHandler
 import systems.zlink.e2e.kotlin.registrymessaging.provider.Handlers.ProfileCommandHandler
 import systems.zlink.e2e.kotlin.registrymessaging.provider.Handlers.ProfileRequestHandler
@@ -55,11 +55,11 @@ class ProviderApplication {
     @Bean
     fun framework(options: ServerOptions, evidence: EvidenceStore): ZLinkFrameworkConfigurer =
         ZLinkFrameworkConfigurer { framework ->
+            EvidenceDispatchErrorHandler(evidence).install()
             framework.configureDispatch()
-                .setMessageFlowObserver(EvidenceDispatchErrorObserver(evidence))
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile("${options.logDir}/${options.rid}-flow.log")
-                .traceLabel(options.rid)
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL)
+
+
             framework.addHandlersFromPackageOf(ProfileRequestHandler::class.java)
 
             if (!options.channelEndpoint.isNullOrBlank()) {

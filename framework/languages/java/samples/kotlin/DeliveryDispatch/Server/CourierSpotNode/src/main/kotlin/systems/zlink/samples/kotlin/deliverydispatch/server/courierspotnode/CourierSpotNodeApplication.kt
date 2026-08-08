@@ -29,12 +29,8 @@ class CourierSpotNodeApplication {
             val selected = NodeOptions.resolve(node)
             options.addHandlersFromPackageOf(CourierSpotNodeApplication::class.java)
             options.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile(
-                    SampleTopology.LogDirectory +
-                        "/flow-courier-$node.log",
-                )
-                .traceLabel("courier-$node")
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL)
+
             val spotNode = options.addRouteMesh(SampleNames.CourierSpotMesh)
             spotNode.listen(selected.spotEndpoint)
                 .setRoutingIdPrefix("delivery-courier")

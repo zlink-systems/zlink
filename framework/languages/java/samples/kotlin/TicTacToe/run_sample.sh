@@ -35,6 +35,7 @@ cleanup_sample() {
   local status="$?"
   trap - EXIT
   set +e
+  print_logs "${status}"
   cleanup
   local cleanup_status="$?"
   rm -rf "${run_dir}"
@@ -235,5 +236,5 @@ for actor_id in player-x player-o; do
     exit 1
   fi
 done
-grep -Rq "message flow" "${log_dir}"
+grep -Eq "message flow" "${log_dir}"/{api,play}-*.log
 echo "PASS TicTacToe.Kotlin"

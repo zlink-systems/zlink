@@ -29,12 +29,8 @@ class DispatchServerApplication {
             options.useCoroutineHandlers(Dispatchers.Default)
             options.addHandlersFromPackageOf(DispatchServerApplication::class.java)
             options.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile(
-                    SampleTopology.LogDirectory +
-                        "/flow-dispatch.log",
-                )
-                .traceLabel("dispatch")
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL)
+
             options.addClientServerChannel(SampleNames.CourierChannel)
                 .client()
             // The courier's decision comes back here as its own one-way message, so dispatch has

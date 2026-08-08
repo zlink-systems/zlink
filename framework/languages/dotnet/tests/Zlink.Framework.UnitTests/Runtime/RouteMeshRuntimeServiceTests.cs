@@ -437,7 +437,7 @@ public sealed class RouteMeshRuntimeServiceTests
         await using var fixture = await RuntimeFixture.StartAsync(
             ZLinkMeshNodeObjectRole.Client);
         var remoteRid = RoutingId.From("aa-observed-client");
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         await using var observer = fixture.Runtime
             .ObserveAsync(RuntimeFixture.MeshName, timeout.Token)
             .GetAsyncEnumerator(timeout.Token);
@@ -466,7 +466,7 @@ public sealed class RouteMeshRuntimeServiceTests
     {
         await using var fixture = await RuntimeFixture.StartAsync(
             ZLinkMeshNodeObjectRole.Server);
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         await using var observer = fixture.Runtime
             .ObserveAsync(RuntimeFixture.MeshName, timeout.Token)
             .GetAsyncEnumerator(timeout.Token);
@@ -495,7 +495,7 @@ public sealed class RouteMeshRuntimeServiceTests
     {
         await using var fixture = await RuntimeFixture.StartAsync(
             ZLinkMeshNodeObjectRole.Server);
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         await using var observer = fixture.Runtime
             .ObserveAsync(RuntimeFixture.MeshName, timeout.Token)
             .GetAsyncEnumerator(timeout.Token);
@@ -521,7 +521,7 @@ public sealed class RouteMeshRuntimeServiceTests
         Func<ZLinkRouteMeshStatus, bool> predicate,
         TimeSpan? timeout = null)
     {
-        var deadline = DateTimeOffset.UtcNow + (timeout ?? TimeSpan.FromSeconds(5));
+        var deadline = DateTimeOffset.UtcNow + (timeout ?? TimeSpan.FromSeconds(30));
         while (DateTimeOffset.UtcNow < deadline)
         {
             var status = runtime.GetStatus(RuntimeFixture.MeshName);

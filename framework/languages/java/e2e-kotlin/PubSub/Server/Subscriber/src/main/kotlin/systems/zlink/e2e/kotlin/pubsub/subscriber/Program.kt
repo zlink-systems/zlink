@@ -1,7 +1,9 @@
 package systems.zlink.e2e.kotlin.pubsub.subscriber
 
 import com.fasterxml.jackson.databind.ObjectMapper
-import java.util.concurrent.CompletableFuture
+import java.util.logging.Handler
+import java.util.logging.LogRecord
+import java.util.logging.Logger
 import org.springframework.boot.WebApplicationType
 import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.boot.builder.SpringApplicationBuilder
@@ -9,7 +11,6 @@ import org.springframework.beans.factory.ObjectProvider
 import org.springframework.context.annotation.Bean
 import systems.zlink.e2e.kotlin.pubsub.shared.Contracts
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode
-import systems.zlink.framework.configuration.ZLinkMessageFlowOutcome
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationOptions
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore
 import systems.zlink.framework.spring.EnableZLinkFramework
@@ -69,23 +70,9 @@ class SubscriberApplication {
         connections: SubscriberConnections,
     ): ZLinkFrameworkConfigurer =
         ZLinkFrameworkConfigurer { options ->
+            installDispatchEvidence(state)
             options.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile("${parsedOptions.logDir}/${state.subscriberRid}-flow.log")
-                .traceLabel("kotlin-ps-${state.subscriberRid}")
-                .setMessageFlowObserver { error ->
-                    if (error.outcome() != ZLinkMessageFlowOutcome.ERROR) {
-                        return@setMessageFlowObserver CompletableFuture.completedFuture(null)
-                    }
-                    state.record(
-                        "DispatchError",
-                        error.topic(),
-                        "observer",
-                        -1,
-                        "${error.errorReason()}/${error.errorAction()}/${error.packetName()}",
-                    )
-                    CompletableFuture.completedFuture(null)
-                }
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL)
             options.addHandlersFromPackageOf(EventMsgHandler::class.java)
             val channel = options.addFanoutChannel(Contracts.EVENT_CHANNEL)
             if (parsedOptions.mixedMode) {
@@ -100,6 +87,36 @@ class SubscriberApplication {
             connections.install(channel.subscriberConnections())
             channel.addHandlerGroup(Contracts.HANDLER_GROUP)
         }
+
+    private fun installDispatchEvidence(state: EvidenceStore) {
+        Logger.getLogger("systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer")
+            .addHandler(object : Handler() {
+                override fun publish(record: LogRecord) {
+                    val fields = diagnosticsFields(record.message) ?: return
+                    if (fields["outcome"] != "ERROR") return
+                    state.record(
+                        "DispatchError",
+                        fields["topic"] ?: "",
+                        "observer",
+                        -1,
+                        "${fields["reason"]}/${fields["action"]}/${fields["packet"]}",
+                    )
+                }
+
+                override fun flush() = Unit
+                override fun close() = Unit
+            })
+    }
+
+    private fun diagnosticsFields(message: String?): Map<String, String>? {
+        if (message?.startsWith("message flow ") != true) return null
+        return message.removePrefix("message flow ")
+            .split(' ')
+            .mapNotNull { field ->
+                field.split('=', limit = 2).takeIf { it.size == 2 }?.let { it[0] to it[1] }
+            }
+            .toMap()
+    }
 
     @Bean
     fun eventMsgHandler(state: EvidenceStore): EventMsgHandler =

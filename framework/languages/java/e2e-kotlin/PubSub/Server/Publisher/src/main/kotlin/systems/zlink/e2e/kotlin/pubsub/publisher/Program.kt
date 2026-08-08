@@ -49,9 +49,9 @@ class PublisherApplication {
     fun publisherFramework(options: PublisherOptions): ZLinkFrameworkConfigurer =
         ZLinkFrameworkConfigurer { options ->
             options.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile("${parsedOptions.logDir}/publisher-flow.log")
-                .traceLabel("kotlin-ps-publisher")
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL)
+
+
             val channel = options.addFanoutChannel(parsedOptions.channelName)
             parsedOptions.routingId?.let { channel.setRoutingId(RoutingId.from(it)) }
             parsedOptions.routingIdPrefix?.let { channel.setRoutingIdPrefix(it) }

@@ -9,10 +9,13 @@ namespace
 /* ST-E1: this file owns the scenario orchestration and its public assertions. */
 inline void scenario_runner_t::run_st_e1_scenario ()
 {
-    const auto actor_id = "actor-bound-session-" + unique_suffix ();
-    const auto spot_id = "spot-bound-session-" + unique_suffix ();
-    create_spot (_nodes.b, spot_id);
-    create_actor (_nodes.a, actor_id, e2e::actor_type_stateful, 91);
+    const auto spot = create_spot_until_placed_on (
+      _nodes.b, "spot-bound-session-" + unique_suffix (), "actor-b");
+    const auto actor = create_actor_until_placed_on (
+      _nodes.a, "actor-bound-session-" + unique_suffix (),
+      e2e::actor_type_stateful, 91, "actor-a");
+    const auto &actor_id = actor.actor_id;
+    const auto &spot_id = spot.spot_id;
     const auto source_ref = get_actor_ref (_nodes.a, actor_id);
     bound_session_t bound (_nodes.a_stream_endpoint, "ST-E1", source_ref);
     auto before_push = bound.expect_push ("before-transfer");
@@ -20,7 +23,9 @@ inline void scenario_runner_t::run_st_e1_scenario ()
     before_push.get ();
 
     const auto join = join_actor (_nodes.a, actor_id, {"ST-E1", spot_id});
-    require (join.accepted, "ST-E1 join was rejected.");
+    require (join.accepted, "ST-E1 deferred Join was not submitted.");
+    wait_evidence (
+      _nodes.b, {"ST-E1|" + actor_id + "|join_completion_accepted|"});
     auto pushed = bound.expect_push ("after-remote-transfer");
     const auto push_reply = bound_push (_nodes.b, actor_id, {"ST-E1", "after-remote-transfer"});
     const auto notify = pushed.get ();

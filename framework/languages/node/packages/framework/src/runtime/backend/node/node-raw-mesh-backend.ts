@@ -68,6 +68,7 @@ import type {
   ServiceDirectSpotRouteFence,
   ServiceInstanceActivationTarget,
   ServiceInstanceRouteFence,
+  ServiceRetiredBoundSessionRouteFence,
   ServiceSpotRouteFence,
   ServiceUserSpotCloseRecord,
   ServiceUserSpotCreateRecord
@@ -1817,7 +1818,12 @@ class RawStreamSessionService implements StreamSessionService {
   bindActor(
     sessionRid: RoutingId,
     actor: ServiceActorRef,
-    timeoutMs = 30_000
+    timeoutMs = 30_000,
+    onBindingReplaced?: (
+      actorId: string,
+      retiredSession: ServiceRetiredBoundSessionRouteFence,
+      actor: ServiceActorRef
+    ) => void
   ): MeshOperationId {
     this.requireStarted();
     const sessionKey = String(sessionRid);
@@ -1828,7 +1834,8 @@ class RawStreamSessionService implements StreamSessionService {
         sessionKey,
         actor,
         timeoutMs,
-        (targetSessionRid, payloadFrame) => this.deliver(targetSessionRid, payloadFrame)
+        (targetSessionRid, payloadFrame) => this.deliver(targetSessionRid, payloadFrame),
+        onBindingReplaced
       )
     );
   }

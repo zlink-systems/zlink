@@ -9,17 +9,20 @@ namespace
 /* ST-A3: this file owns the scenario orchestration and its public assertions. */
 inline void scenario_runner_t::run_st_a3_scenario ()
 {
-    const auto actor_id = "actor-local-moving-" + unique_suffix ();
-    const auto spot_id = "spot-local-moving-" + unique_suffix ();
-    create_spot (_nodes.a, spot_id, "delay-joined");
-    create_actor (_nodes.a, actor_id, e2e::actor_type_stateful, 13);
+    const auto spot = create_spot_until_placed_on (
+      _nodes.a, "spot-local-moving-" + unique_suffix (),
+      "actor-a", "delay-joined");
+    const auto actor = create_actor_until_placed_on (
+      _nodes.a, "actor-local-moving-" + unique_suffix (),
+      e2e::actor_type_stateful, 13, "actor-a");
+    const auto &actor_id = actor.actor_id;
+    const auto &spot_id = spot.spot_id;
 
     auto join_task = std::async (
       std::launch::async, [&] { return join_actor (_nodes.a, actor_id, {"ST-A3", spot_id}); });
     const auto waiting =
       wait_evidence (_nodes.a, {
                                  "ST-A3|" + actor_id + "|admission|spot=" + spot_id,
-                                 "transfer|" + actor_id + "|leave|13",
                                  "ST-A3|" + actor_id + "|joined_wait|" + spot_id,
                                });
     require_no_contains (waiting, "ST-A3|" + actor_id + "|packet_handler|during-joined-wait",
@@ -43,6 +46,7 @@ inline void scenario_runner_t::run_st_a3_scenario ()
     wait_evidence (_nodes.a, {
                                "ST-A3|" + actor_id + "|joined_released|" + spot_id,
                                "transfer|" + actor_id + "|joined|" + spot_id + ":13",
+                               "transfer|" + actor_id + "|leave|13",
                                "ST-A3|" + actor_id + "|packet_handler|during-joined-wait",
                              });
     wait_evidence (_nodes.a, {"ST-A3|" + actor_id + "|success_reply|" + spot_id});

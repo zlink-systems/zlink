@@ -1,3 +1,5 @@
+using Zlink.Framework.Runtime.Identifiers;
+
 namespace Zlink.Framework.Runtime.Actors;
 
 internal sealed partial class ZLinkActorSessionManager
@@ -7,7 +9,9 @@ internal sealed partial class ZLinkActorSessionManager
         CancellationToken cancellationToken = default,
         bool startTeardownReconciliation = true)
     {
-        if (!_actorSessions.TryGet(actorId, out var state)) return;
+        if (!_actorSessions.TryGet(
+                ZLinkActorId.FromBoundary(actorId, nameof(actorId)),
+                out var state)) return;
 
         var actorRef = state.NativeActorRef;
         if (actorRef is not { } nativeActor)
@@ -110,7 +114,9 @@ internal sealed partial class ZLinkActorSessionManager
         string actorId,
         CancellationToken cancellationToken = default)
     {
-        if (!_actorSessions.TryGet(actorId, out var state)) return;
+        if (!_actorSessions.TryGet(
+                ZLinkActorId.FromBoundary(actorId, nameof(actorId)),
+                out var state)) return;
         if (state.Handoff.IsSourceMigrationInProgress
             || (state.Actor is null && state.Handoff.RetainsSourceTombstone))
             return;
@@ -192,7 +198,7 @@ internal sealed partial class ZLinkActorSessionManager
 
             if (LocationLifecycle is { } lifecycle)
                 await lifecycle.ActorOwnership.ReleaseActorAsync(
-                        state.ActorId,
+                        state.RuntimeActorId,
                         cancellationToken)
                     .ConfigureAwait(false);
 
@@ -217,13 +223,13 @@ internal sealed partial class ZLinkActorSessionManager
             var boundSession = await terminal.Completion.ConfigureAwait(false);
             if (boundSession is { } session)
                 runtime.RemoveActorSessionBinding(state.ActorId, session.BindingToken);
-            _actorSessions.RemoveIfCurrent(state.ActorId, state);
+            _actorSessions.RemoveIfCurrent(state.RuntimeActorId, state);
         }
         catch (Exception failure)
         {
             if (terminalStateCommitted)
             {
-                _actorSessions.RemoveIfCurrent(state.ActorId, state);
+                _actorSessions.RemoveIfCurrent(state.RuntimeActorId, state);
                 throw;
             }
             await state.ExecuteLockedAsync(
@@ -263,14 +269,14 @@ internal sealed partial class ZLinkActorSessionManager
                 runtime.RemoveActorSessionBinding(
                     state.ActorId,
                     session.BindingToken);
-            _actorSessions.RemoveIfCurrent(state.ActorId, state);
+            _actorSessions.RemoveIfCurrent(state.RuntimeActorId, state);
         }
         catch (Exception failure)
         {
             if (transaction.Completion.IsCompletedSuccessfully
                 && transaction.Completion.Result is null)
             {
-                _actorSessions.RemoveIfCurrent(state.ActorId, state);
+            _actorSessions.RemoveIfCurrent(state.RuntimeActorId, state);
                 ZLinkFrameworkDebugLog.SpotDiscovery(
                     $"deferred actor teardown disposal failed for '{state.ActorId}': {failure.Message}");
                 return;
@@ -384,7 +390,7 @@ internal sealed partial class ZLinkActorSessionManager
         if (LocationLifecycle is not { } lifecycle) return;
 
         await lifecycle.ActorOwnership.ReleaseActorAsync(
-                state.ActorId,
+                state.RuntimeActorId,
                 cancellationToken)
             .ConfigureAwait(false);
     }
@@ -397,7 +403,7 @@ internal sealed partial class ZLinkActorSessionManager
         if (LocationLifecycle is not { } lifecycle) return;
 
         await lifecycle.ActorOwnership.ReleaseActorAfterMoveAsync(
-                state.ActorId,
+                state.RuntimeActorId,
                 expectedSourceSnapshot,
                 cancellationToken)
             .ConfigureAwait(false);
@@ -417,7 +423,7 @@ internal sealed partial class ZLinkActorSessionManager
         if (LocationLifecycle is not { } lifecycle) return;
 
         await lifecycle.ActorOwnership.NotifyActorMovedToEntrySpotAsync(
-                state.ActorId,
+                state.RuntimeActorId,
                 targetNodeRid,
                 cancellationToken)
             .ConfigureAwait(false);

@@ -9,10 +9,14 @@ namespace
 /* ST-C2: this file owns the scenario orchestration and its public assertions. */
 inline void scenario_runner_t::run_st_c2_scenario ()
 {
-    const auto actor_id = "actor-source-down-after-commit-" + unique_suffix ();
-    const auto spot_id = "spot-source-down-after-commit-" + unique_suffix ();
-    create_spot (_nodes.b, spot_id);
-    create_actor (_nodes.a, actor_id, e2e::actor_type_stateful, 61);
+    const auto spot = create_spot_until_placed_on (
+      _nodes.b, "spot-source-down-after-commit-" + unique_suffix (),
+      "actor-b");
+    const auto actor = create_actor_until_placed_on (
+      _nodes.a, "actor-source-down-after-commit-" + unique_suffix (),
+      e2e::actor_type_stateful, 61, "actor-a");
+    const auto &actor_id = actor.actor_id;
+    const auto &spot_id = spot.spot_id;
     const auto source_ref = get_actor_ref (_nodes.a, actor_id);
     bound_session_t bound (_nodes.b_stream_endpoint, "ST-C2", source_ref);
     auto before_push = bound.expect_push ("bound-before-transfer");

@@ -22,18 +22,20 @@ Application 공개 API나 공통 native runtime을 제공하지 않는다.
   쓰는 golden fixture
 - `golden/authority-key-v1.json`: MeshName과 독립적인 global ActorId·SpotId를 canonical Store key로 만드는
   정상 encoding fixture
+- `golden/bound-session-replaced-v1.json`: command 51의 Actor authority source fence, 이전 session owner
+  lifecycle·binding identity, malformed record와 재시작 전 lifecycle 거부를 고정하는 golden fixture
 - `golden/framework-multipart-v1.json`: Framework 내부에서 opaque message parts를 보관하는 multipart envelope의
   정상·거부 bytes를 네 runtime이 동일하게 검증하는 golden fixture
 - `golden/contract-amendment-v1.json`: object role·capacity descriptor, durable creation intent, generic
   Reserve·Commit·Abort fence, User Spot aggregate, bounded Message Follow, exact-ref route와 command 47·48 terminal
-  service operation의 공통 golden fixture
+  service operation, command 51 session 교체 통지의 공통 golden fixture
 - `golden/`: service frame의 정상·경계·오류 fixture를 추가하는 위치
 - `generate-service-wire-assets.mjs`: 검증한 schema에서 네 언어 command·flag·Framework wire error·multipart
   profile 상수와 공통 decoder fixture를 생성하고 `--check`로 drift를 차단하는 도구
 - `generated/`: C++·.NET·JVM·Node.js runtime이 복사하지 않고 사용하는 생성 상수
 - `traces/`: schema 승인 뒤 생성하는 normalized behavior trace
 
-Codec table이나 fixture를 생성하기 전에 다음 명령이 성공해야 한다. 현재 gate는 41개 command, 167개 type,
+Codec table이나 fixture를 생성하기 전에 다음 명령이 성공해야 한다. 현재 gate는 42개 command, 168개 type,
 4개 flag, 37개 bound, durable fixture 4개와 logical·JSON·multipart·authority key fixture를 확인한다. `--self-test`는
 contract amendment fixture 1개와 234가지 invalid mutation이 실제로
 거부되는지도 확인한다. 여기에는 integer overflow, length capacity 초과, 잘못된 정렬 field, enum domain 이탈,

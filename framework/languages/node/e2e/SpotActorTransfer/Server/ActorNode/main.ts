@@ -429,7 +429,7 @@ class TransferUserSpot implements ZLinkSpot<TransferActor> {
   }
 
   async onActorJoin(actorId: string, request: ZLinkMessage): Promise<{ accepted: boolean; reply: JoinTargetRes }> {
-    const join = request.decode<JoinTargetReq>(Object as never);
+    const join = request.decode(JoinTargetReq);
     evidence.correlate(actorId, join.transferId);
     this.scenarios.set(actorId, join.scenario);
     actorScenarios.set(actorId, join.scenario);

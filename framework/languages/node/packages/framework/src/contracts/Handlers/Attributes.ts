@@ -33,6 +33,14 @@ export function ZLinkPublish(packetName?: string): MethodDecorator {
   return methodDecorator({ kind: 'publish', packetName });
 }
 
+/** @internal Generated schema registration overload. */
+export function ZLinkPacket(
+  packetName: string,
+  jsonContract?: ZLinkPacketJsonContract
+): ClassDecorator;
+
+export function ZLinkPacket(packetName: string): ClassDecorator;
+
 export function ZLinkPacket(
   packetName: string,
   jsonContract?: ZLinkPacketJsonContract
@@ -45,6 +53,7 @@ export function ZLinkPacket(
   };
 }
 
+/** @internal */
 export function readZLinkPacketJsonContract(packetName: string): ZLinkPacketJsonContract | undefined {
   return readDefinedZLinkPacketJsonContract(packetName);
 }

@@ -163,32 +163,64 @@ only valid within the same session owner lifecycle. If a different MeshNode bind
 the session owner restarts, it can register a new lifecycle identity even if the
 owner-local counter is smaller than the previous value.
 
-A rebind registers the new identity with both the Actor owner and session owner, delivers a
-disconnect callback at most once to the previous exact binding, then invalidates the previous
-identity. Unbind and disconnect remove exactly the corresponding previous identity via a
-tombstone transition of `boundSessionBind(38)` after the callback terminal. A
+A rebind first registers the new identity with the Actor owner, and the new session owner stores
+the new route after receiving the successful reply. From the Actor-owner registration, the Actor
+has exactly one current session binding. Ingress from the previous session is rejected by its
+retired binding generation, and Actor-to-session pushes are delivered only to the new session.
+The new bind terminal is returned once the new session owner stores the route; it does not wait
+for a response, callback, or connection close from the previous session.
+
+The framework applies a `boundSessionReplaced(51)` one-way record at most once to the replaced
+exact binding. The record carries an Actor-authority source fence together with the previous session
+owner's Node RID, lifecycle generation, owner ID, owner lease generation, session RID, and retired
+binding generation. The sending node must match the Actor-authority target. The receiving node runs
+the duplicate-Actor callback only when every previous session-owner value identifies the replaced
+binding exactly. It does not use the Actor-authority source fence to look up a local Actor. This callback is the application's final
+lifecycle turn in which it can send a duplicate-connection notice to the client. The application
+does not request connection close from the callback. Before starting the callback, the previous
+session enters closing state and rejects new inbound application dispatch while still allowing
+outbound sends submitted by the callback. After the callback reaches a successful or
+failed terminal, the framework schedules a non-blocking timer to close the previous connection
+`100 ms` later and immediately releases the callback turn. It must not use sleep, a blocking wait,
+or occupation of a session serial lane or worker for that delay. The timer callback revalidates the
+captured exact session-owner lifecycle, session RID, and retired binding generation before closing.
+An empty outbound
+queue does not shorten this delay. If the callback does not reach a terminal within its lifecycle
+deadline, the framework force-closes the previous connection at that deadline.
+
+Failure to deliver the previous-session notification, callback failure, and delayed connection
+close produce bounded diagnostics, but never restore or remove the new binding. Failed send
+admission starts a bounded asynchronous retry keyed by the exact retired identity without delaying
+the bind terminal. If the previous owner remains unreachable, physical close is left to that owner's
+ordinary connection liveness and shutdown. Even when the
+notification is not delivered, ingress carrying the retired binding generation remains rejected
+at the Actor owner. A late or duplicate `boundSessionReplaced(51)` applies only to the exact
+retired identity and never closes the new session. Unbind and ordinary disconnect remove exactly
+the corresponding previous identity via a tombstone transition of `boundSessionBind(38)` after
+the callback terminal. A
 late-arriving push/ingress/close from a previous owner lifecycle, a previous Actor
 `ObjectGeneration`, a previous authority owner, or a pre-restart `NodeGeneration` isn't
 applied to the current binding or connection. A malformed control or one-way record
 isn't put on the application queue, and a one-way record doesn't get a separate terminal
 route.
 
+Submitting the already-current exact binding from the same physical session is an idempotent success;
+it neither sends `boundSessionReplaced(51)` to itself nor closes the connection. Closing the previous
+connection runs ordinary physical-disconnect cleanup once for every other Actor binding still held by
+that session, and that cleanup must not remove the replaced Actor's new binding identity.
+
 A route and current-location-snapshot update for Actor relocation that keeps the same
 `ObjectGeneration` doesn't create a new binding identity and isn't a rebind. Once a new
 `ObjectGeneration` is created under the same ActorId after Destroy, the previous
 binding is invalid, so the application must explicitly bind the new `ActorRef`.
 
-When rebinding to a different owner or a different Actor generation, the new Actor
-owner registers the new identity, then submits a disconnect notification to the previous exact
-binding route. If the previous callback fails or exceeds its deadline, bounded diagnostics are
-recorded, but the previous binding is not restored and the new identity is not removed; tombstone
-submission continues. Only after the previous owner confirms the tombstone does the new owner
-return the bind terminal reply. The session owner keeps the existing binding route
-until it receives this reply, and atomically replaces it with the new route once
-received. If the tombstone submission fails or is canceled, the new bind isn't a
-terminal success, and the session owner's existing binding doesn't change either. If a
-new identity under the same owner has already atomically replaced the previous
-identity, the previous identity's tombstone doesn't remove the new identity.
+When rebinding to a different owner or a different Actor generation, the new Actor owner also
+registers the new identity atomically and returns the bind terminal reply. It then sends
+`boundSessionReplaced(51)` one-way to the previous exact binding route. No acknowledgment or
+request/reply waits for the previous owner to finish. The session owner switches to the new route
+when it receives the successful reply, and keeps the existing route only when the new bind itself
+fails. If a new identity under the same owner has already replaced the previous identity, a late
+notification or tombstone for the previous identity does not remove the new identity.
 
 If the exact Actor doesn't exist on the target and there's an active committed Message
 Follow route, the original bind control request and reply route are relayed to that

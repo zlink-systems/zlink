@@ -6,7 +6,7 @@ internal sealed class ZLinkSpotNodeBundleRegistry(
     CancellationToken stopToken) : IAsyncDisposable
 {
     private readonly object _gate = new();
-    private readonly Dictionary<string, ZLinkSpotPublisherBundle> _publisherBundles = new(StringComparer.Ordinal);
+    private readonly Dictionary<ZLinkChannelName, ZLinkSpotPublisherBundle> _publisherBundles = [];
     private Task? _disposeTask;
     private bool _closed;
 
@@ -29,14 +29,15 @@ internal sealed class ZLinkSpotNodeBundleRegistry(
 
     public ZLinkSpotPublisherBundle GetOrCreatePublisherBundle(string channelName)
     {
+        var channel = ZLinkChannelName.FromBoundary(channelName, nameof(channelName));
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_closed, this);
-            if (_publisherBundles.TryGetValue(channelName, out var existing)) return existing;
+            if (_publisherBundles.TryGetValue(channel, out var existing)) return existing;
 
             var bundle = CreatePublisherBundle();
 
-            _publisherBundles.Add(channelName, bundle);
+            _publisherBundles.Add(channel, bundle);
             return bundle;
         }
     }

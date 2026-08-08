@@ -38,9 +38,7 @@ public final class Program {
         return options -> {
             String logDir = consumer.logDir();
             options.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile(logDir + "/" + consumer.consumerName() + "-flow.log")
-                .traceLabel("java-rm-" + consumer.consumerName());
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             options.configureLocations()
                 .setPollingInterval(java.time.Duration.ofMillis(250));
 

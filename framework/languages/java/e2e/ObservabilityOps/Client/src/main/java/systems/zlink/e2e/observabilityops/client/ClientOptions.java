@@ -11,7 +11,8 @@ public record ClientOptions(
     String playBHttpEndpoint,
     String sessionHttpEndpoint,
     String scenarioOutput,
-    String drainUrl) {
+    String drainUrl,
+    String relocationReleaseFile) {
     public ClientOptions {
         required(streamEndpoint, "streamEndpoint");
         required(playHttpEndpoint, "playHttpEndpoint");
@@ -19,6 +20,7 @@ public record ClientOptions(
         required(sessionHttpEndpoint, "sessionHttpEndpoint");
         scenarioOutput = optional(scenarioOutput);
         drainUrl = optional(drainUrl);
+        relocationReleaseFile = optional(relocationReleaseFile);
     }
 
     public static ClientOptions load(String path) {
@@ -34,7 +36,8 @@ public record ClientOptions(
             required(values, "playBHttpEndpoint"),
             required(values, "sessionHttpEndpoint"),
             values.getProperty("scenarioOutput", ""),
-            values.getProperty("drainUrl", ""));
+            values.getProperty("drainUrl", ""),
+            values.getProperty("relocationReleaseFile", ""));
     }
 
     public Path requiredScenarioOutput() {

@@ -11,7 +11,7 @@
 | `.NET: Server/Support` | `Server/Support` | server-role | done | conversation domain state와 상담원 availability를 Support channel handler가 소유한다. |
 | common: 공유 location store | `SampleLocationStore` + runner Redis | external-adapter | done | API, Session, Support가 같은 Redis endpoint와 key prefix를 사용하며 Session과 Support router는 이 store로 자동 연결한다. |
 | common: client push wait interface | `SupportChatClientScenario` | validation | done | notification은 stream connector `waitFor(...).submit(...)` 경로로 기다리고, customer와 agent가 서로의 conversation push를 받는지 확인한다. |
-| common: server evidence | `run_sample.sh` flow log and support assertion | validation | done | runner가 client marker, support assertion, message flow log를 확인한다. |
+| common: server evidence | `run_sample.sh` role stdout and support assertion | validation | done | runner가 client marker, support assertion, role stdout의 message-flow marker를 확인한다. |
 | common: Spot actor admission과 bound session push 구조 | `Server/Session`, `Server/Support` | architecture | done | Session은 인증 후 Support actor를 보장하고 stream session을 actor에 bind한다. Support는 `SupportEntrySpot`, `SupportUserActor`, actor request handler로 conversation packet을 처리하고 bound session push를 보낸다. |
 
 ## 남은 확인 사항

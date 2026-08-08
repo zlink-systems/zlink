@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Systems.Zlink.Stream.Connector.Contracts;
 using Systems.Zlink.Stream.Connector.Runtime.Protocol;
 using Zlink.Framework.Contracts.Errors;
+using Zlink.Framework.Runtime.Identifiers;
 
 namespace Zlink.Framework.UnitTests.Runtime;
 
@@ -49,9 +50,11 @@ public sealed class ActorHandlerActivationTests
             .AddScoped<ScopedDependency>()
             .BuildServiceProvider();
         var registry = new ZLinkActorSessionRegistry(services);
-        var first = registry.GetOrCreate("actor-1")
+        var first = registry.GetOrCreate(
+                ZLinkActorId.FromBoundary("actor-1", "actorId"))
             .HandlerInstances.Resolve<ProbeHandler>();
-        var second = registry.GetOrCreate("actor-2")
+        var second = registry.GetOrCreate(
+                ZLinkActorId.FromBoundary("actor-2", "actorId"))
             .HandlerInstances.Resolve<ProbeHandler>();
 
         await registry.ResetGenerationAsync();
@@ -71,8 +74,10 @@ public sealed class ActorHandlerActivationTests
             .AddScoped<ScopedDependency>()
             .BuildServiceProvider();
         var registry = new ZLinkActorSessionRegistry(services);
-        var firstState = registry.GetOrCreate("actor-force-1");
-        var secondState = registry.GetOrCreate("actor-force-2");
+        var firstState = registry.GetOrCreate(
+            ZLinkActorId.FromBoundary("actor-force-1", "actorId"));
+        var secondState = registry.GetOrCreate(
+            ZLinkActorId.FromBoundary("actor-force-2", "actorId"));
         var firstHandler = firstState.HandlerInstances.Resolve<BlockingHandler>();
         var secondHandler = secondState.HandlerInstances.Resolve<BlockingHandler>();
         var header = new ZlinkStreamHeader(
@@ -129,7 +134,8 @@ public sealed class ActorHandlerActivationTests
         await using var services = new ServiceCollection()
             .BuildServiceProvider();
         var registry = new ZLinkActorSessionRegistry(services);
-        var state = registry.GetOrCreate("actor-force-failure");
+        var state = registry.GetOrCreate(
+            ZLinkActorId.FromBoundary("actor-force-failure", "actorId"));
         var handler = state.HandlerInstances.Resolve<FailingBlockingHandler>();
         var header = new ZlinkStreamHeader(
             ZlinkStreamMessageKind.Send,
@@ -242,7 +248,8 @@ public sealed class ActorHandlerActivationTests
             .AddScoped<ScopedDependency>()
             .BuildServiceProvider();
         var registry = new ZLinkActorSessionRegistry(services);
-        var state = registry.GetOrCreate("actor-reset-terminal");
+        var state = registry.GetOrCreate(
+            ZLinkActorId.FromBoundary("actor-reset-terminal", "actorId"));
         var handler = state.HandlerInstances.Resolve<BlockingHandler>();
         var header = new ZlinkStreamHeader(
             ZlinkStreamMessageKind.Send,

@@ -1,7 +1,14 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using SpotActorTransfer.Client.Scenarios;
 using SpotActorTransfer.Client.Support;
 
 var options = ClientOptions.Parse(args);
+ZlinkStreamJsonCodec.Configure(new JsonSerializerOptions(JsonSerializerDefaults.Web)
+{
+    NumberHandling = JsonNumberHandling.AllowReadingFromString
+                     | JsonNumberHandling.WriteAsString
+});
 using var context = new SpotActorTransferScenarioContext(options);
 await context.WaitMeshReadyAsync();
 

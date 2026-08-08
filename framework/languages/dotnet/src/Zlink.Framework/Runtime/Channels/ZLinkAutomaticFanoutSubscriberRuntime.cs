@@ -18,7 +18,7 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime
 {
     private static readonly TimeSpan ReconnectDelay =
         TimeSpan.FromSeconds(1);
-    private readonly string _channelName;
+    private readonly ZLinkChannelName _channelName;
     private readonly IZLinkBackendRuntimeContext _context;
     private readonly IZLinkSocketConfig _socketConfig;
     private readonly ZLinkChannelReceiveLoop _receiveLoop;
@@ -28,8 +28,9 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime
     private readonly CancellationToken _runtimeStopToken;
     private readonly TimeProvider _time;
     private readonly object _gate = new();
-    private readonly Dictionary<string, Connection> _connections =
-        new(StringComparer.Ordinal);
+    private readonly Dictionary<
+        (RoutingId PublisherRid, ulong LifecycleGeneration),
+        Connection> _connections = [];
     private IReadOnlyList<ZLinkFanoutPublisherConnectionSnapshot> _excluded =
         Array.Empty<ZLinkFanoutPublisherConnectionSnapshot>();
     private ZLinkLocationRuntimeSnapshot _location =
@@ -51,7 +52,9 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime
         TimeProvider? timeProvider = null,
         ZLinkInboundDispatchBudget? inboundDispatchBudget = null)
     {
-        _channelName = channelName;
+        _channelName = ZLinkChannelName.FromBoundary(
+            channelName,
+            nameof(channelName));
         _context = context;
         _socketConfig = socketConfig;
         _receiveLoop = receiveLoop;
@@ -73,8 +76,7 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime
         var desired = plans
             .Where(static plan => plan.Connect)
             .ToDictionary(
-                static plan => IdentityKey(plan.Descriptor),
-                StringComparer.Ordinal);
+                static plan => IdentityKey(plan.Descriptor));
         List<Connection> removed = [];
         lock (_gate)
         {
@@ -160,12 +162,13 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime
             .Select(static connection => connection.Read())
             .Concat(_excluded)
             .ToArray();
-        _monitoring.RecordSnapshot(_channelName, publishers, _location);
+        _monitoring.RecordSnapshot(_channelName.Value, publishers, _location);
     }
 
-    private static string IdentityKey(
+    private static (RoutingId PublisherRid, ulong LifecycleGeneration)
+        IdentityKey(
         ZLinkFanoutPublisherDescriptor descriptor) =>
-        $"{descriptor.PublisherRid.ToHex()}:{descriptor.LifecycleGeneration}";
+        (descriptor.PublisherRid, descriptor.LifecycleGeneration);
 
     private static ZLinkFanoutPublisherConnectionSnapshot Snapshot(
         ZLinkFanoutPublisherDescriptor descriptor,
@@ -284,7 +287,7 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime
                 }
 
                 var receive = owner._receiveLoop.RunFanoutConnectionLoopAsync(
-                    owner._channelName,
+                    owner._channelName.Value,
                     socket,
                     OnActivity,
                     () =>

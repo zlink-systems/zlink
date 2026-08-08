@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import './m6b-execution-policy.contract';
 import './m6b-user-spot-terminal-replay.contract';
@@ -46,6 +47,7 @@ import {
   encodeActorCreateHeader,
   encodeActorHeader,
   encodeBoundSessionBindHeader,
+  encodeBoundSessionReplacedHeader,
   encodeInstanceSpotActivationHeader,
   encodeInstanceSpotHeader,
   encodeMessageFollowHeader,
@@ -3138,6 +3140,71 @@ test('Missing Instance activation joins a new reservation while the prior local 
   runtime.close();
 });
 
+test('draining Instance owner rejects stale Missing activation before materialization', async () => {
+  let ingress!: (record: {
+    readonly command: number;
+    readonly flags: number;
+    readonly sourceRoutingId: string;
+    readonly parts: readonly Buffer[];
+  }) => string | undefined;
+  let reserved = false;
+  const raw = {
+    topology: {
+      peer: () => ({ descriptor: { lifecycleGeneration: 7n } }),
+      localDescriptor: () => ({ state: 'retiring', placementWeight: 0 })
+    },
+    mailbox: { tryEnqueue: () => assert.fail('A draining owner must not admit the stale message') },
+    sendService: () => true,
+    setServiceIngress: (handler: typeof ingress) => {
+      ingress = handler;
+    }
+  } as unknown as RawServiceMeshRuntime;
+  const runtime = new ServiceStatefulRuntime(raw, 'target', 3n);
+  runtime.registerAsyncInstanceActivationAuthority({
+    read: async () => ({ kind: 'missing' }),
+    reserve: async () => {
+      reserved = true;
+      throw new Error('draining owner must fence before reserve');
+    },
+    resume: async () => assert.fail('A stale activation must not resume'),
+    commit: async () => assert.fail('A stale activation must not commit'),
+    complete: async () => assert.fail('A stale activation must not complete'),
+    abort: async () => assert.fail('A stale activation must not abort')
+  });
+
+  assert.equal(ingress({
+    command: M6bServiceWireCommand.instanceSpot,
+    flags: 0,
+    sourceRoutingId: 'source',
+    parts: [
+      encodeInstanceSpotActivationHeader(
+        {
+          targetNodeRid: 'target',
+          targetNodeGeneration: 3n,
+          targetSpotId: 'draining-spot',
+          stableType: 'TenantWorker',
+          descriptorVersion: 'descriptor-draining'
+        },
+        7n,
+        'source',
+        undefined,
+        'send',
+        { high: 7n, low: 49n },
+        BigInt(Date.now() + 10_000)
+      ),
+      encodeApplicationPayload({
+        packetName: 'FirstMessage',
+        contentType: 'application/octet-stream',
+        payload: Buffer.from('draining')
+      })
+    ]
+  }), 'infrastructure');
+  await new Promise<void>(resolve => setImmediate(resolve));
+
+  assert.equal(reserved, false);
+  assert.equal(runtime.registry.spot('draining-spot'), undefined);
+});
+
 test('stale local Instance projection redirects to a newer remote Ready authority', async () => {
   let ingress!: (record: {
     readonly command: number;
@@ -3843,11 +3910,48 @@ test('bound session transition wire format fences the binding generation', () =>
   });
 });
 
-test('cross-owner session rebind waits for exact previous cleanup and fences a late tombstone', async () => {
+test('boundSessionReplaced command 51 matches its golden and malformed fixtures', () => {
+  const fixture = JSON.parse(readFileSync(
+    '../../runtime/protocol/golden/bound-session-replaced-v1.json',
+    'utf8'
+  )) as {
+    readonly canonical: {
+      readonly bytes: readonly number[];
+    };
+    readonly malformed: readonly { readonly bytes: readonly number[] }[];
+  };
+  const actorAuthority = {
+    actor: { nodeRid: 'actor-owner', actorId: 'actor-a', generation: 1n },
+    targetNodeGeneration: 2n,
+    authorityOwnerGeneration: 3n,
+    ownerLeaseGeneration: 4n
+  };
+  const retiredSession = {
+    sessionOwnerNodeRid: 'session-owner',
+    sessionOwnerNodeGeneration: 5n,
+    sessionOwnerId: 'session-runtime',
+    sessionOwnerLeaseGeneration: 6n,
+    sessionRid: 'session-a',
+    retiredBindingGeneration: 7n
+  };
+  const encoded = encodeBoundSessionReplacedHeader(actorAuthority, retiredSession);
+  assert.deepEqual([...encoded], fixture.canonical.bytes);
+  assert.deepEqual(decodeStatefulHeader(encoded), {
+    kind: 'boundSessionReplaced',
+    actorAuthority,
+    retiredSession
+  });
+  for (const malformed of fixture.malformed) {
+    assert.throws(() => decodeStatefulHeader(Buffer.from(malformed.bytes)));
+  }
+});
+
+test('bound-session replacement is one-way, retries admission, and fences a late tombstone', async () => {
   type TestIngress = RawServiceIngressRecord & {
     readonly resolveReply?: (parts: readonly Buffer[]) => void;
   };
-  const rejectMailboxOnce = new Set<string>();
+  const rejectSendOnce = new Set<string>();
+  const rejectRequestOnce = new Set<string>();
   const nodes = new Map<string, {
     ingress?: (record: RawServiceIngressRecord) => unknown;
     readonly mailbox: Array<{
@@ -3871,7 +3975,6 @@ test('cross-owner session rebind waits for exact previous cleanup and fences a l
       },
       mailbox: {
         tryEnqueue(record: unknown) {
-          if (rejectMailboxOnce.delete(nodeRid)) return false;
           state.mailbox.push(record as typeof state.mailbox[number]);
           return true;
         }
@@ -3879,7 +3982,22 @@ test('cross-owner session rebind waits for exact previous cleanup and fences a l
       setServiceIngress(handler: (record: RawServiceIngressRecord) => unknown) {
         state.ingress = handler;
       },
+      sendService(targetNodeRid: string, parts: readonly Buffer[]) {
+        if (rejectSendOnce.delete(`${nodeRid}->${targetNodeRid}`)) return false;
+        const target = nodes.get(targetNodeRid);
+        if (target?.ingress === undefined) return false;
+        const result = target.ingress({
+          command: parts[0]![3]!,
+          flags: parts[0]![4]!,
+          sourceRoutingId: nodeRid,
+          parts
+        });
+        return result === 'infrastructure' || result === 'application';
+      },
       async requestService(targetNodeRid: string, parts: readonly Buffer[]) {
+        if (rejectRequestOnce.delete(`${nodeRid}->${targetNodeRid}`)) {
+          throw new Error(`Rejected test request '${nodeRid}->${targetNodeRid}'.`);
+        }
         const target = nodes.get(targetNodeRid);
         if (target?.ingress === undefined) throw new Error(`Missing test node '${targetNodeRid}'.`);
         return await new Promise<readonly Buffer[]>((resolve) => {
@@ -3902,6 +4020,11 @@ test('cross-owner session rebind waits for exact previous cleanup and fences a l
   const oldSessionRuntime = new ServiceStatefulRuntime(createRaw('session-old'), 'session-old', 3n);
   const newSessionRuntime = new ServiceStatefulRuntime(createRaw('session-new'), 'session-new', 3n);
   const actor = actorRuntime.createActor('actor-rebind').ref;
+  const replacementNotices: Array<{
+    readonly actorId: string;
+    readonly sessionRid: string;
+    readonly bindingGeneration: bigint;
+  }> = [];
   const actorRoute = {
     actor,
     targetNodeGeneration: 3n,
@@ -3914,38 +4037,106 @@ test('cross-owner session rebind waits for exact previous cleanup and fences a l
       'old-rid',
       actor,
       1_000,
-      () => true
+      () => true,
+      (actorId, retiredSession) => {
+        replacementNotices.push({
+          actorId,
+          sessionRid: retiredSession.sessionRid,
+          bindingGeneration: retiredSession.retiredBindingGeneration
+        });
+      }
     ).promise;
     assert.equal(oldBind.terminalResult, RequestResult.Ok);
 
-    rejectMailboxOnce.add('session-old');
-    let newBindSettled = false;
+    // A same-session duplicate keeps the authority-owned binding generation,
+    // rather than exposing the local retry sequence to later sends.
+    const duplicateOldBind = await oldSessionRuntime.bindSession(
+      'old-rid',
+      actor,
+      1_000,
+      () => true,
+      (actorId, retiredSession) => {
+        replacementNotices.push({
+          actorId,
+          sessionRid: retiredSession.sessionRid,
+          bindingGeneration: retiredSession.retiredBindingGeneration
+        });
+      }
+    ).promise;
+    assert.equal(duplicateOldBind.terminalResult, RequestResult.Ok);
+    assert.equal(duplicateOldBind.streamBinding?.bindingGeneration, 1n);
+    const oldBindingGeneration = oldSessionRuntime.sessionBindings('old-rid')[0]!.bindingGeneration;
+    assert.equal(oldBindingGeneration, 1n);
+
+    // A failed remote bind must restore the previous delivery instead of
+    // deleting it after the new request has been admitted locally.
+    rejectRequestOnce.add('session-old->actor-node');
+    await assert.rejects(
+      oldSessionRuntime.bindSession('failed-rid', actor, 1_000, () => true).promise,
+      /Rejected test request/
+    );
+    assert.deepEqual(
+      oldSessionRuntime.sessionBindings('old-rid').map(binding => binding.bindingGeneration),
+      [oldBindingGeneration]
+    );
+    assert.equal(oldSessionRuntime.sessionBindings('failed-rid').length, 0);
+
+    rejectSendOnce.add('actor-node->session-old');
     const newBindPromise = newSessionRuntime.bindSession(
       'new-rid',
       actor,
       1_000,
       () => true
-    ).promise.then(result => {
-      newBindSettled = true;
-      return result;
-    });
-    await new Promise(resolve => setTimeout(resolve, 40));
-    assert.equal(newBindSettled, false);
-
-    const oldMailbox = nodes.get('session-old')!.mailbox;
-    assert.equal(oldMailbox.length, 1);
-    const oldBinding = oldSessionRuntime.sessionBindings('old-rid')[0]!;
-    assert.equal(oldSessionRuntime.sessionBindings('old-rid').length, 1);
-    assert.equal(oldMailbox.shift()!.stateful?.reply(RequestResult.Ok, 0), true);
-    assert.equal(oldSessionRuntime.sessionBindings('old-rid').length, 0);
-
+    ).promise;
     const newBind = await newBindPromise;
     assert.equal(newBind.terminalResult, RequestResult.Ok);
+
+    // The replacement is current before the old owner receives any notice.
     const actorRegistry = (actorRuntime as unknown as {
       readonly registry: ServiceStatefulRegistry;
     }).registry;
     assert.equal(actorRegistry.binding(actor)?.sessionRid, 'new-rid');
     assert.equal(actorRegistry.binding(actor)?.sessionOwnerNodeRid, 'session-new');
+    assert.deepEqual(replacementNotices, []);
+
+    const oldBinding = oldSessionRuntime.sessionBindings('old-rid')[0]!;
+    assert.equal(oldSessionRuntime.sessionBindings('old-rid').length, 1);
+    await new Promise(resolve => setTimeout(resolve, 80));
+    assert.deepEqual(replacementNotices, [{
+      actorId: actor.actorId,
+      sessionRid: 'old-rid',
+      bindingGeneration: oldBinding.bindingGeneration
+    }]);
+
+    // A duplicate one-way notice is idempotent at the retired owner.
+    const replacementHeader = encodeBoundSessionReplacedHeader(
+      {
+        actor,
+        targetNodeGeneration: 3n,
+        authorityOwnerGeneration: actorRuntime.actor(actor.actorId)!.authorityOwnerGeneration,
+        ownerLeaseGeneration: 3n
+      },
+      {
+        sessionOwnerNodeRid: 'session-old',
+        sessionOwnerNodeGeneration: 3n,
+        sessionOwnerId: 'session-old',
+        sessionOwnerLeaseGeneration: 3n,
+        sessionRid: 'old-rid',
+        retiredBindingGeneration: oldBinding.bindingGeneration
+      }
+    );
+    const oldIngress = nodes.get('session-old')!.ingress!;
+    assert.equal(oldIngress({
+      command: M6bServiceWireCommand.boundSessionReplaced,
+      flags: 0,
+      sourceRoutingId: 'actor-node',
+      parts: [replacementHeader]
+    }), 'infrastructure');
+    assert.deepEqual(replacementNotices, [{
+      actorId: actor.actorId,
+      sessionRid: 'old-rid',
+      bindingGeneration: oldBinding.bindingGeneration
+    }]);
 
     const lateReplies: Buffer[][] = [];
     const lateHeader = encodeBoundSessionBindHeader(
@@ -3980,6 +4171,9 @@ test('mailbox saturation reports dropped actor binding control records', () => {
   const dropped: Array<{ readonly kind: string; readonly owner: string }> = [];
   const replies: Buffer[][] = [];
   const raw = {
+    topology: {
+      peer: () => ({ descriptor: { lifecycleGeneration: 3n } })
+    },
     mailbox: { tryEnqueue: () => false },
     setServiceIngress(handler: typeof ingress) { ingress = handler; },
     replyService(_record: RawServiceIngressRecord, parts: readonly Buffer[]) {

@@ -21,9 +21,7 @@ public final class PlayServer {
         return options -> {
             SampleLogging.configure(settings, "play");
             options.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.DIAGNOSTIC)
-                .traceLogFile(SampleLogging.flowLogPath(settings, "play-" + settings.playIndex()))
-                .traceLabel("play-" + settings.playIndex());
+                .messageFlow(ZLinkMessageFlowLogMode.DETAILED);
             options.addHandlersFromPackageOf(PlayServer.class);
             options.addClientServerChannel(SampleNames.ApiChannel)
                 .client()

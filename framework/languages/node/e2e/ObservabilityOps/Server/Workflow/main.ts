@@ -79,7 +79,7 @@ class WorkflowSpot implements ZLinkSpot<ZLinkActor> {
   }
 
   async onCreate(request: ZLinkMessage): Promise<{ accepted: boolean }> {
-    const initial = request.decode<WorkflowApplyReq>(Object as never);
+    const initial = request.decode(WorkflowApplyReq);
     const existing = readState(initial.orderId);
     this.replayed = existing !== undefined;
     if (existing === undefined) writeState(initial.orderId, initial.value);

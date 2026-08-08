@@ -18,7 +18,6 @@ import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore;
 import systems.zlink.framework.spring.EnableZLinkFramework;
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer;
-import systems.zlink.samples.supportchat.server.configuration.SampleFlowLog;
 import systems.zlink.samples.supportchat.server.configuration.SampleLocationStore;
 import systems.zlink.samples.supportchat.server.configuration.SampleNames;
 import systems.zlink.samples.supportchat.server.configuration.SampleTopology;
@@ -55,9 +54,7 @@ public final class Program {
         return options -> {
             options.addHandlersFromPackageOf(Program.class);
             options.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile(SampleFlowLog.path(topology, "api"))
-                .traceLabel("api");
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             options.addClientServerChannel(SampleNames.ApiChannel)
                 .server()
                 .setBindHost(channelEndpoint.getHost())

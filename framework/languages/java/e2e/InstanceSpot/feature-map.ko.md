@@ -17,7 +17,7 @@ scenario도 client `/health`, client `/lookup`, owner `/evidence`를 호출한 �
 | `IS-E2E-02` | PASS | owner gate를 닫은 cold send가 handler evidence보다 먼저 반환되는지 확인한 뒤 gate를 열고 one-way handler exactly-once를 확인한다. |
 | `IS-E2E-03` | PASS | 두 client process가 같은 Missing ID에 16개 request를 동시에 보내고 하나의 factory, 모든 operation의 단일 reply/commit, active handler `<= 1`을 확인한다. |
 | `IS-E2E-04` | PASS | Spot A handler를 gate로 대기시키고 다른 ID의 Spot B request reply가 gate 개방 전에 도착하는지 process 간에 확인한다. |
-| `IS-E2E-05` | BLOCKED | Ready owner crash, lease invalidation, bounded `Unavailable`을 제어할 public process-liveness fixture가 없다. 실행 시 public health/lookup/evidence를 `scenario-IS-E2E-05.log`와 같은 run directory에 남긴다. |
+| `IS-E2E-05` | PASS | Ready owner process를 `SIGKILL`한 뒤 lease가 만료된 상태에서 후속 request가 bounded `UNAVAILABLE`로 끝나고, surviving owner에 새 factory·initialize·handler가 없음을 확인한다. 최신 evidence는 `logs/20260807-235210-2024824/`에 남긴다. |
 | `IS-E2E-06` | BLOCKED | factory entry 중 process crash와 same-generation recovery boundary를 제어할 fixture가 없다. |
 | `IS-E2E-07` | BLOCKED | owner factory를 `disableRelocation()`으로 등록했고 public relocation process가 없다. |
 | `IS-E2E-08` | PASS | public close packet completion을 기다린 뒤 같은 ID를 다시 request하고 factory/initialize 2회, 세대 변경, close evidence와 두 handler commit을 확인한다. |
@@ -47,7 +47,7 @@ scenario도 client `/health`, client `/lookup`, owner `/evidence`를 호출한 �
 | `IS-E2E-32` | BLOCKED | activation 중 source/target crash boundary를 분리해 실행할 orchestration이 없다. |
 | `IS-E2E-33` | BLOCKED | factory 또는 initialize failure를 주입하는 fixture control이 없다. |
 | `IS-E2E-34` | BLOCKED | unpublished activation 중 target crash/restart를 제어하는 fixture가 없다. |
-| `IS-E2E-35` | BLOCKED | Ready owner crash 뒤 자동 queue recovery 금지를 확인할 process sequence가 없다. |
+| `IS-E2E-35` | BLOCKED | Ready owner crash 뒤 pending queue를 유지하고 자동 queue recovery가 발생하지 않음을 확인하는 별도 process sequence가 없다. 현재 `IS-E2E-05`와 같은 lease-loss probe만으로 이 scenario를 PASS로 계산하지 않는다. |
 | `IS-E2E-36` | BLOCKED | handler entry 전후 crash injection을 분리할 fixture가 없다. |
 
 이 표의 BLOCKED 항목은 완료로 계산하지 않는다. 해당 public control을 구현하지 않는 한

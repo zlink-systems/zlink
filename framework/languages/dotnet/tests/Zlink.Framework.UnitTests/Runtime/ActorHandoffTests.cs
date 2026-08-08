@@ -8,6 +8,7 @@ using Zlink.Framework.Runtime.Actors;
 using Zlink.Framework.Runtime.Backend.Contracts;
 using Zlink.Framework.Runtime.Codecs;
 using Zlink.Framework.Runtime.Locations;
+using Zlink.Framework.Runtime.Identifiers;
 
 namespace Zlink.Framework.UnitTests.Runtime;
 
@@ -810,7 +811,7 @@ public sealed class ActorHandoffTests
             "binding-1",
             objectGeneration: target.Generation,
             authorityOwnerGeneration: 1,
-            meshName: "mesh-a",
+            meshName: ZLinkMeshName.FromBoundary("mesh-a", "meshName"),
             targetNodeGeneration: 1,
             ownerLeaseGeneration: 1,
             sessionOwnerNodeGeneration: 1);
@@ -914,7 +915,7 @@ public sealed class ActorHandoffTests
             bindingGeneration: 4,
             objectGeneration: 7,
             authorityOwnerGeneration: 11,
-            meshName: "play",
+            meshName: ZLinkMeshName.FromBoundary("play", "meshName"),
             targetNodeGeneration: 4,
             ownerLeaseGeneration: 8,
             sessionOwnerNodeGeneration: 3,
@@ -1077,7 +1078,7 @@ public sealed class ActorHandoffTests
             bindingGeneration: 4,
             objectGeneration: 7,
             authorityOwnerGeneration: 11,
-            meshName: "play",
+            meshName: ZLinkMeshName.FromBoundary("play", "meshName"),
             targetNodeGeneration: 4,
             ownerLeaseGeneration: 8,
             sessionOwnerNodeGeneration: 3,

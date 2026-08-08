@@ -312,4 +312,4 @@ else
       ;;
   esac
 fi
-grep -Rq "message flow" "${log_dir}"/*-flow.log
+grep -Rq "message flow" "${log_dir}"/*.stdout.log
