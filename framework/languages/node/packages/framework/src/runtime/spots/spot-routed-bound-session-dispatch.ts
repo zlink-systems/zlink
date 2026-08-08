@@ -13,6 +13,7 @@ import {
   submitRoutePayloadReply,
   submitRouteReply
 } from './spot-route-replies';
+import { encodeRemoteBoundSessionNack } from '../actors/bound-session-wire';
 import type { ZLinkActorResponseOptions } from './spot-actor-packet-dispatch';
 import { createInboundFlow, runWithFlow } from '../diagnostics/flow-context';
 import type { ZLinkDispatchErrorReporter } from '../channels';
@@ -69,7 +70,16 @@ export class ZLinkSpotRoutedBoundSessionDispatch {
   async dispatch(received: BackendReceived): Promise<boolean> {
     const seal = decodeRemoteBoundSessionSeal(received.parts, this.options.channelCodecs());
     if (seal !== undefined) {
-      const ack = await this.options.routedBoundSessionSealReceiver?.(seal);
+      let ack;
+      try {
+        ack = await this.options.routedBoundSessionSealReceiver?.(seal);
+      } catch (error) {
+        // A fence rejection repeats identically on every retry: nack the
+        // requester with its typed code so the sender terminates its loop.
+        if (!isReplyableRequestSeq(received.requestSeq)) throw error;
+        submitRoutePayloadReply(received, seal.envelope, encodeRemoteBoundSessionNack(error));
+        return true;
+      }
       if (isReplyableRequestSeq(received.requestSeq)) {
         submitRoutePayloadReply(received, seal.envelope, ack ?? { ok: false });
       }
@@ -77,7 +87,14 @@ export class ZLinkSpotRoutedBoundSessionDispatch {
     }
     const ownership = decodeRemoteBoundSessionOwnership(received.parts, this.options.channelCodecs());
     if (ownership !== undefined) {
-      const ack = await this.options.routedBoundSessionOwnershipReceiver?.(ownership);
+      let ack;
+      try {
+        ack = await this.options.routedBoundSessionOwnershipReceiver?.(ownership);
+      } catch (error) {
+        if (!isReplyableRequestSeq(received.requestSeq)) throw error;
+        submitRoutePayloadReply(received, ownership.envelope, encodeRemoteBoundSessionNack(error));
+        return true;
+      }
       if (isReplyableRequestSeq(received.requestSeq)) {
         submitRoutePayloadReply(received, ownership.envelope, ack ?? { ok: false });
       }

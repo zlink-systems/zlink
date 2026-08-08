@@ -127,13 +127,13 @@ final class ZLinkSpotRetireControl {
         }
 
         CompletionStage<byte[]> relayCanonicalReply(
-            RoutingId sourceNodeRid,
+            RoutingId landingNodeRid,
             ZLinkServiceRelocationWireCodec.RequestSourceFence expectedSource,
             byte[] command33,
             List<byte[]> payload,
             Duration timeout) {
             return node.requestRelocationReplyRelay(
-                sourceNodeRid, expectedSource, command33, payload, timeout);
+                landingNodeRid, expectedSource, command33, payload, timeout);
         }
 
         private CompletionStage<Void> invoke(

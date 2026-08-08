@@ -296,6 +296,20 @@ class public_authority_store_adapter_t final :
           exchanged);
     }
 
+    void abort_capacity (
+      const relocation_capacity_fence_t &fence) noexcept override
+    {
+        if (fence.value.empty ())
+            return;
+        try {
+            (void) _store->abort_relocation_capacity (fence)
+              .result ()
+              .value ();
+        }
+        catch (...) {
+        }
+    }
+
   private:
     friend class public_aggregate_authority_adapter_t;
     authority_publish_result_t store_preserving_authority (

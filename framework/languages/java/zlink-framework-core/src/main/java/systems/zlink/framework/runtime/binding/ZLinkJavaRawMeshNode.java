@@ -2680,18 +2680,13 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
 
     @Override
     public CompletionStage<byte[]> requestRelocationReplyRelay(
-        RoutingId sourceNodeRid,
+        RoutingId landingNodeRid,
         ZLinkServiceRelocationWireCodec.RequestSourceFence expectedSource,
         byte[] command33,
         List<byte[]> payload,
         Duration timeout) {
-        java.util.Objects.requireNonNull(sourceNodeRid, "sourceNodeRid");
+        java.util.Objects.requireNonNull(landingNodeRid, "landingNodeRid");
         java.util.Objects.requireNonNull(expectedSource, "expectedSource");
-        if (!expectedSource.nodeRid().equals(sourceNodeRid)) {
-            return CompletableFuture.failedFuture(
-                new IllegalArgumentException(
-                    "expected source fence differs from target RID"));
-        }
         byte[] command = java.util.Objects.requireNonNull(
             command33, "command33").clone();
         List<byte[]> application = java.util.Objects.requireNonNull(
@@ -2699,7 +2694,10 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         java.util.Objects.requireNonNull(timeout, "timeout");
         var relocationWire = new ZLinkServiceRelocationWireCodec();
         var relay = relocationWire.decodeReplyRelay(command);
-        if (sourceNodeRid.equals(routingId)) {
+        //  The landing node owns the reply capability after relocation. It is
+        //  not required to equal the request-source fence: the command 46 ACK
+        //  is validated against the exact expected source below.
+        if (landingNodeRid.equals(routingId)) {
             var handler = relocationReplyRelayHandler;
             if (handler == null) {
                 return CompletableFuture.failedFuture(
@@ -2720,7 +2718,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         frames.addAll(application);
         requireStarted();
         ReplyRelayPendingKey key = ReplyRelayPendingKey.from(
-            sourceNodeRid, relay);
+            landingNodeRid, relay);
         var pending = new ReplyRelayPending(relay, expectedSource);
         if (pendingReplyRelays.putIfAbsent(key, pending) != null) {
             return CompletableFuture.failedFuture(new IllegalStateException(
@@ -2750,7 +2748,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             return pending.completion;
         }
         pendingInfrastructureSends.add(new InfrastructureSend(
-            sourceNodeRid,
+            landingNodeRid,
             frames,
             () -> pendingReplyRelays.get(key) == pending,
             failure -> {
@@ -4437,12 +4435,12 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         ZLinkServiceRelocationWireCodec.ReplyRelayAck ack;
         try {
             ack = relocationWire.decodeReplyRelayAck(encoded);
-            var peer = topology.peer(inbound.source()).orElseThrow();
-            if (!ack.requestSource().nodeRid().equals(inbound.source())
-                || ack.requestSource().nodeGeneration()
-                    != peer.descriptor().lifecycleGeneration()) {
-                return;
-            }
+            //  The ACK is sent by the landing node that owns the relocated
+            //  reply capability, which may differ from the request-source
+            //  fence inside the ACK. The pending key below pins the ACK to
+            //  the exact addressed landing node and validateReplyRelayAck
+            //  pins the full expected request-source fence.
+            topology.peer(inbound.source()).orElseThrow();
         } catch (RuntimeException invalid) {
             return;
         }

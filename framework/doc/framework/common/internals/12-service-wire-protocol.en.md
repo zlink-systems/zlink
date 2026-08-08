@@ -52,7 +52,7 @@ node framework/runtime/protocol/validate-service-wire-schema.mjs \
   --self-test framework/runtime/protocol/service-wire-v1.schema.json
 ```
 
-The wire major is `1` and the required capability is `framework-service-v11`.
+The wire major is `1` and the required capability is `framework-service-v12`.
 The build stops if the schema and golden fixtures diverge, or if the
 validator finds an undefined type, a duplicate ID, or an invalid
 enum/bound/conditional field.
@@ -562,9 +562,10 @@ unfinished work and timers, placing the stored existing work and the
 temporary queue work into the execution queue in order, and removing the
 temporary queue registration to switch atomically to the existing dispatch
 path have all finished. Removing the source ingress hold original, changing
-the location record to `Completed`, and the Session Actor location update
-acknowledgement do not block this admission — the running source and target
-runtimes each continue them as follow-up work. An abort before the owner
+the location record to `Completed`, the Session Actor location update
+acknowledgement, and normalizing the maintenance authority to its steady
+state do not block this admission — the running source and target runtimes
+each continue them as follow-up work. An abort before the owner
 change sent no Session route update, so it waits for no cancellation
 message and no acknowledgement. Source admission is restored after
 recording `Aborted`, discarding the temporary queue work and returning the

@@ -21,7 +21,8 @@ import {
   decodeRemoteBoundSessionResponsePayload,
   decodeRemoteBoundSessionSendPayload,
   encodeRemoteBoundSessionErrorPayload,
-  encodeRemoteBoundSessionResponsePayload
+  encodeRemoteBoundSessionResponsePayload,
+  ZLinkRemoteBoundSessionFenceError
 } from '../actors/bound-session-wire';
 import { encodeRemoteActorPacketTarget } from '../actors/actor-packet-relay-wire';
 import {
@@ -223,7 +224,9 @@ export class ZLinkRemoteBoundSessionRelay {
       && rememberedSeal.acceptedHighWater === acceptedHighWater
       && rememberedSeal.released;
     if (!activeSeal && !releasedSeal) {
-      throw new Error(`Actor '${value.actorId}' command 44 did not match its command 42 Session seal.`);
+      throw new ZLinkRemoteBoundSessionFenceError(
+        `Actor '${value.actorId}' command 44 did not match its command 42 Session seal.`
+      );
     }
     const current = this.options.streamBindingRuntime().find(value.actorId)?.ref;
     const actorRef = {
@@ -271,14 +274,16 @@ export class ZLinkRemoteBoundSessionRelay {
       return encodeRemoteBoundSessionOwnershipAck(value);
     }
     if (!activeSeal) {
-      throw new Error(`Actor '${value.actorId}' released Session seal cannot publish a different route.`);
+      throw new ZLinkRemoteBoundSessionFenceError(
+        `Actor '${value.actorId}' released Session seal cannot publish a different route.`
+      );
     }
     if (
       currentOwnershipGeneration !== previousOwnershipGeneration ||
       currentFence.bindingGeneration !== bindingGeneration ||
       currentOwnerLeaseGeneration !== previousOwnerLeaseGeneration
     ) {
-      throw new Error(
+      throw new ZLinkRemoteBoundSessionFenceError(
         `Actor '${value.actorId}' bound-session ownership update was fenced by its binding identity ` +
         `(ownership=${currentOwnershipGeneration?.toString() ?? 'none'}/${previousOwnershipGeneration.toString()}, ` +
         `binding=${currentFence.bindingGeneration?.toString() ?? 'none'}/${bindingGeneration.toString()}, ` +
@@ -317,7 +322,9 @@ export class ZLinkRemoteBoundSessionRelay {
           released: true
         });
       } else if (remembered?.sealId !== value.sealId || !remembered.released) {
-        throw new Error(`Actor '${value.actorId}' session route seal abort was fenced.`);
+        throw new ZLinkRemoteBoundSessionFenceError(
+          `Actor '${value.actorId}' session route seal abort was fenced.`
+        );
       }
       return { actorId: value.actorId, sealId: value.sealId, acceptedHighWater: '0' };
     }

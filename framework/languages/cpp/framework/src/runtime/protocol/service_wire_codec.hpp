@@ -282,6 +282,7 @@ struct relocation_participant_t
     std::uint64_t session_owner_lease_generation = 0;
     std::vector<std::uint8_t> session_routing_id;
     std::uint64_t binding_generation = 0;
+    std::uint64_t last_accepted_session_sequence = 0;
     std::uint64_t allowance_messages = 0;
     std::uint64_t allowance_bytes = 0;
     friend bool operator== (const relocation_participant_t &,

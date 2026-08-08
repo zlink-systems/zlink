@@ -23,7 +23,7 @@ public record ZLinkServiceNodeDescriptor(
     int pendingCapacityLimit,
     int activeCapacityUsed,
     int pendingCapacityUsed) {
-    public static final String REQUIRED_CAPABILITY = "framework-service-v11";
+    public static final String REQUIRED_CAPABILITY = "framework-service-v12";
 
     public ZLinkServiceNodeDescriptor {
         meshName = requireText(meshName, "meshName");

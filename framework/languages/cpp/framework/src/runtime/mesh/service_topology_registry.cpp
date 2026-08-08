@@ -161,7 +161,7 @@ bool service_topology_registry_t::valid_descriptor (
                 == descriptor.protocol_capabilities.end ()
            && std::find (descriptor.protocol_capabilities.begin (),
                          descriptor.protocol_capabilities.end (),
-                         "framework-service-v11")
+                         "framework-service-v12")
                 != descriptor.protocol_capabilities.end ();
 }
 

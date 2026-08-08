@@ -1373,7 +1373,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       applicationVersion: 0n,
       ...(this.maintenanceWave === undefined ? {} : { maintenanceWave: this.maintenanceWave }),
       protocolCapabilities: [
-        'framework-service-v11',
+        'framework-service-v12',
         ...this.objectCapabilities
       ],
       objectRole: this.objectRole,

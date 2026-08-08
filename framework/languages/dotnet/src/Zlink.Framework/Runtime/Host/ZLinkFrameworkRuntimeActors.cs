@@ -1987,12 +1987,11 @@ internal sealed partial class ZLinkFrameworkRuntime
                             ZLinkFrameworkErrorKind.DataLost,
                             $"Actor authority '{entry.Key.Value}' has an invalid Preparing marker.",
                             retryAdvice: ZLinkRetryAdvice.DoNotRetry);
-                    var takeover =
+                    var recoveryFence =
                         new ZLinkStandaloneActorRelocationTakeoverCoordinator(
                             this,
-                            _actorSessionManager,
                             Registration);
-                    if (await takeover.HasLiveRemoteRecoveryOwnerAsync(
+                    if (await recoveryFence.HasLiveRemoteRecoveryOwnerAsync(
                             preparing,
                             actorPayload.MeshName,
                             token)

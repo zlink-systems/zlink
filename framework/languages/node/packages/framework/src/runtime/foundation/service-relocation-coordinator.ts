@@ -259,13 +259,15 @@ export class ServiceRelocationCoordinator<TStaging extends ServiceRelocationStag
       await this.owner.replayAcceptedJournal(staging, signal);
       // Target objects remain hidden until state, queued work, timers, and
       // Session barriers have been restored. Registry visibility is the last
-      // step before source completion and admission opening.
+      // step before admission opening: admission opens as soon as the target
+      // is durable and normalized. Source cleanup, terminal relay, and
+      // session-route replacement converge afterwards and never gate it.
       await this.owner.publish(staging, authority, signal);
+      await this.owner.normalize(staging, authority, signal);
+      await this.owner.openAdmission(staging, signal);
       authority = await this.source.complete(staging, authority, signal);
       authority = await this.terminalRelay.relayCaptured(staging, authority, signal) ?? authority;
       await this.routes.replace(staging, authority, signal);
-      await this.owner.normalize(staging, authority, signal);
-      await this.owner.openAdmission(staging, signal);
       await this.recovery.waitUntilReleasable(staging, authority, signal);
       authority = await this.durable.release(key, authority, signal);
       return { staging, authority };

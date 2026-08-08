@@ -4,7 +4,7 @@ exports.ServiceWireFrameworkErrorCode = exports.ServiceWireFlag = exports.Servic
 // Generated from service-wire-v1.schema.json. Do not edit.
 exports.SERVICE_WIRE_MAGIC = [90, 77];
 exports.SERVICE_WIRE_MAJOR = 1;
-exports.SERVICE_WIRE_REQUIRED_CAPABILITY = "framework-service-v11";
+exports.SERVICE_WIRE_REQUIRED_CAPABILITY = "framework-service-v12";
 exports.SERVICE_FRAMEWORK_MULTIPART_PACKET_NAME = "ZLinkFrameworkMultipart";
 exports.SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE = "application/x-zlink-multipart";
 exports.ServiceWireCommand = {

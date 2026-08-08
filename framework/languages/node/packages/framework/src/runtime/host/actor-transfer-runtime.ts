@@ -55,6 +55,7 @@ import {
   decodeRemoteBoundSessionSealAck,
   encodeRemoteBoundSessionOwnershipPayload,
   encodeRemoteBoundSessionSealPayload,
+  isRemoteBoundSessionFenceError,
   ZLINK_REMOTE_BOUND_SESSION_ABORT_SEAL_PACKET,
   ZLINK_REMOTE_BOUND_SESSION_SEAL_PACKET
 } from '../actors/bound-session-wire';
@@ -128,6 +129,11 @@ export interface ZLinkActorTransferRuntimeOptions {
     & ZLinkRelocationCapacityStore
   ) | undefined;
   readonly relocationStore: () => ZLinkRelocationStore | undefined;
+  /** Live admitted peers of a mesh; used to stop retries against a gone session owner. */
+  readonly liveDescriptors?: (
+    meshName: string,
+    signal?: AbortSignal
+  ) => Promise<readonly import('../../contracts').ZLinkMeshNodeDescriptor[]>;
   readonly clearRemoteActorPacketTarget: (actorId: string) => void;
   readonly reportPostCommitError?: (error: unknown) => void;
   readonly onSourceDepartureCompleted?: (actorId: string) => void;
@@ -600,7 +606,7 @@ export class ZLinkActorTransferRuntime {
       }
     } finally {
       if (deferredOperationId === undefined) {
-        this.options.actorHandoff.cancel(actor.context.actorId);
+        await this.releaseCanceledHandoff(actor, state);
       } else {
         await this.options.actorHandoff.releaseDeferred(
           actor.context.actorId,
@@ -610,6 +616,21 @@ export class ZLinkActorTransferRuntime {
       }
       state.endMove();
     }
+  }
+
+  private async releaseCanceledHandoff(
+    actor: ZLinkActor,
+    state: ZLinkActorRuntimeState
+  ): Promise<void> {
+    // The seal-era ingress hold returns to the source queue on a precommit
+    // abort. Rejection stays reserved for a source Actor whose dispatch is
+    // gone, because held packets then have no queue left to return to.
+    const replay = this.sourceHandoffReplay(actor, state);
+    if (replay === undefined) {
+      this.options.actorHandoff.cancel(actor.context.actorId);
+      return;
+    }
+    await this.options.actorHandoff.releaseCanceled(actor.context.actorId, replay);
   }
 
   private sourceHandoffReplay(
@@ -660,6 +681,7 @@ export class ZLinkActorTransferRuntime {
         sealId = randomUUID();
         const sealedTarget = await this.sealBoundSessionRoute(actor, state, sealId, signal);
         state.setRemoteBoundSessionTarget(sealedTarget);
+        this.options.actorHandoff.sealConnectionBoundIngress(actor.context.actorId);
       }
       const transfer = await this.options.actorTransferRegistry.transferOut(
         actor,
@@ -877,7 +899,7 @@ export class ZLinkActorTransferRuntime {
           relocationMetric?.complete('aborted');
           this.coreSourceLeaves.delete(actor.context.actorId);
           if (sealId !== undefined) {
-            await this.abortBoundSessionRouteSeal(actor, state, sealId);
+            this.beginBoundSessionSealAbort(actor, state, sealId);
           }
           if (acceptedRoot !== undefined) {
             await this.boundSessionAcceptedJournal()?.delete(acceptedRoot);
@@ -899,7 +921,7 @@ export class ZLinkActorTransferRuntime {
       relocationMetric?.complete('failed');
       try {
         if (sealId !== undefined) {
-          await this.abortBoundSessionRouteSeal(actor, state, sealId);
+          this.beginBoundSessionSealAbort(actor, state, sealId);
         }
         if (acceptedRoot !== undefined) {
           await this.boundSessionAcceptedJournal()?.delete(acceptedRoot);
@@ -961,6 +983,7 @@ export class ZLinkActorTransferRuntime {
         state.setRemoteBoundSessionTarget(
           await this.sealBoundSessionRoute(actor, state, sealId, signal)
         );
+        this.options.actorHandoff.sealConnectionBoundIngress(actor.context.actorId);
       }
       const handoffBacklog = this.options.actorHandoff.snapshot(actor.context.actorId);
       if (sealId !== undefined) {
@@ -1007,7 +1030,7 @@ export class ZLinkActorTransferRuntime {
           if (terminal !== 'prepared') return;
           terminal = 'rolledBack';
           if (sealId !== undefined) {
-            await this.abortBoundSessionRouteSeal(actor, state, sealId);
+            this.beginBoundSessionSealAbort(actor, state, sealId);
           }
           if (acceptedRoot !== undefined) {
             await this.boundSessionAcceptedJournal()?.delete(acceptedRoot);
@@ -1015,14 +1038,17 @@ export class ZLinkActorTransferRuntime {
           if (manageMembership) {
             await this.cancelSourceActorMove(actor, state);
           } else {
-            this.options.actorHandoff.cancel(actor.context.actorId);
-            state.endMove();
+            try {
+              await this.releaseCanceledHandoff(actor, state);
+            } finally {
+              state.endMove();
+            }
           }
         }
       };
     } catch (error) {
       if (sealId !== undefined) {
-        await this.abortBoundSessionRouteSeal(actor, state, sealId).catch(() => undefined);
+        this.beginBoundSessionSealAbort(actor, state, sealId);
       }
       if (acceptedRoot !== undefined) {
         await this.boundSessionAcceptedJournal()?.delete(acceptedRoot).catch(() => undefined);
@@ -1030,7 +1056,7 @@ export class ZLinkActorTransferRuntime {
       if (manageMembership) {
         await this.cancelSourceActorMove(actor, state).catch(() => undefined);
       } else {
-        this.options.actorHandoff.cancel(actor.context.actorId);
+        await this.releaseCanceledHandoff(actor, state).catch(() => undefined);
         state.endMove();
       }
       throw error;
@@ -1129,6 +1155,36 @@ export class ZLinkActorTransferRuntime {
     };
   }
 
+  private beginBoundSessionSealAbort(
+    actor: ZLinkActor,
+    state: ZLinkActorRuntimeState,
+    sealId: string
+  ): void {
+    // Reopening source admission does not wait for the command 42 abort ACK.
+    // The off-wire abort handler is idempotent through its released
+    // tombstone, so this bounded background release can lose the race with a
+    // newer seal and must stop on a permanent fence rejection instead of
+    // retrying forever.
+    const target = preferredRemoteBoundSessionTarget(
+      state.remoteBoundSessionTarget,
+      state.boundSessionTransferTarget
+    );
+    void (async () => {
+      const retry = new ZLinkActorRetryDelay();
+      for (let attempt = 0; attempt < MAX_SEAL_ABORT_RELEASE_ATTEMPTS; attempt++) {
+        if (this.options.shutdownSignal?.()?.aborted === true) return;
+        try {
+          await this.abortBoundSessionRouteSeal(actor, state, sealId, target);
+          return;
+        } catch (error) {
+          this.options.reportPostCommitError?.(error);
+          if (isPermanentSealAbortRejection(error)) return;
+          if (!await retry.wait(this.options.shutdownSignal?.())) return;
+        }
+      }
+    })();
+  }
+
   private async abortBoundSessionRouteSeal(
     actor: ZLinkActor,
     state: ZLinkActorRuntimeState,
@@ -1174,21 +1230,31 @@ export class ZLinkActorTransferRuntime {
     signal?: AbortSignal
   ): Promise<ZLinkBoundSessionAcceptedJournalRoot> {
     const actorRef = state.nativeActorRef;
-    const highWater = preferredRemoteBoundSessionTarget(
+    const target = preferredRemoteBoundSessionTarget(
       state.remoteBoundSessionTarget,
       state.boundSessionTransferTarget
-    )?.acceptedHighWater;
+    );
+    const highWater = target?.acceptedHighWater;
     const journal = this.boundSessionAcceptedJournal();
     if (actorRef === undefined || highWater === undefined || journal === undefined) {
       throw new Error(`Actor '${actor.context.actorId}' accepted Session journal cannot be prepared.`);
     }
+    const sourceOwner = this.options.actorHandoff.activeSourceOwner(actor.context.actorId);
+    const sourceOwnerLeaseGeneration =
+      target?.previousOwnerLeaseGeneration ?? state.ownerLeaseGeneration;
     return await journal.prepare(
       actor.context.actorId,
       actorRef.generation,
       sealId,
       highWater,
       backlog,
-      signal
+      signal,
+      sourceOwner === undefined || sourceOwnerLeaseGeneration === undefined
+        ? undefined
+        : {
+            ownerId: sourceOwner.ownerId,
+            ownerLeaseGeneration: sourceOwnerLeaseGeneration
+          }
     );
   }
 
@@ -1622,6 +1688,9 @@ export class ZLinkActorTransferRuntime {
     const retry = new ZLinkActorRetryDelay();
     let lastError: unknown;
     let immediateRetry = true;
+    // Terminates on shutdown, on a permanent fence rejection, and on a gone
+    // session owner. Termination without the command 42 ACK reports the error
+    // and leaves the accepted-journal root retained for a later converger.
     while (this.options.shutdownSignal?.()?.aborted !== true) {
       try {
         // This update can run after a newer Actor transfer has replaced the
@@ -1634,6 +1703,8 @@ export class ZLinkActorTransferRuntime {
         lastError = error;
         this.options.reportPostCommitError?.(error);
         if (this.options.shutdownSignal?.()?.aborted === true) break;
+        if (isPermanentSealAbortRejection(error)) break;
+        if (await this.sessionOwnerGone(target)) break;
         if (immediateRetry) {
           immediateRetry = false;
           continue;
@@ -1642,9 +1713,28 @@ export class ZLinkActorTransferRuntime {
       }
     }
     throw new Error(
-      `Actor '${actor.context.actorId}' Session route remained sealed while the runtime stopped.`,
+      `Actor '${actor.context.actorId}' Session route seal release stopped before its command 42 ACK.`,
       { cause: lastError }
     );
+  }
+
+  /**
+   * True only when the session owner's mesh reports live peers and the exact
+   * owner node is not among them. An empty or unavailable listing stays
+   * inconclusive so transient store outages never terminate retries.
+   */
+  private async sessionOwnerGone(
+    target: ZLinkRemoteBoundSessionTarget | undefined
+  ): Promise<boolean> {
+    if (target === undefined || this.options.liveDescriptors === undefined) return false;
+    try {
+      const descriptors = await this.options.liveDescriptors(target.routerChannelId);
+      if (descriptors.length === 0) return false;
+      return !descriptors.some(value =>
+        String(value.rid) === String(target.targetNodeRid) && value.state === 1);
+    } catch {
+      return false;
+    }
   }
 
   private async deleteBoundSessionAcceptedJournal(
@@ -1839,6 +1929,10 @@ export class ZLinkActorTransferRuntime {
     const retry = new ZLinkActorRetryDelay();
     let lastError: unknown;
     let immediateRetry = true;
+    // Terminates on shutdown, on a permanent command 44/45 fence rejection
+    // from the session owner, and on a gone session owner. Termination
+    // without the ACK reports the error and leaves the accepted-journal root
+    // retained.
     while (this.options.shutdownSignal?.()?.aborted !== true) {
       try {
         const ack = decodeRemoteBoundSessionOwnershipAck(await this.options.routeTransport.requestToSpot(
@@ -1870,6 +1964,8 @@ export class ZLinkActorTransferRuntime {
         lastError = error;
         this.options.reportPostCommitError?.(error);
         if (this.options.shutdownSignal?.()?.aborted === true) break;
+        if (isRemoteBoundSessionFenceError(error)) break;
+        if (await this.sessionOwnerGone(target)) break;
         if (immediateRetry) {
           immediateRetry = false;
           continue;
@@ -1914,6 +2010,11 @@ export class ZLinkActorTransferRuntime {
       actorGeneration: actorRef.generation,
       sealId: target.relocationSealId,
       acceptedHighWater: target.acceptedHighWater,
+      // The wire target carries the sealed source owner lease but no owner
+      // id, so the recorded owner fence is compared on the fields it has.
+      ...(target.previousOwnerLeaseGeneration === undefined
+        ? {}
+        : { sourceOwnerLeaseGeneration: target.previousOwnerLeaseGeneration }),
       reference: { value: target.acceptedJournalReference } as import('../../contracts').ZLinkBlobReference,
       checksumCrc32c: target.acceptedJournalChecksumCrc32c
     });
@@ -1927,4 +2028,15 @@ function hasAcceptedJournalFence(
     || target.relocationSealId !== undefined
     || target.acceptedJournalReference !== undefined
     || target.acceptedJournalChecksumCrc32c !== undefined;
+}
+
+const MAX_SEAL_ABORT_RELEASE_ATTEMPTS = 5;
+
+function isPermanentSealAbortRejection(error: unknown): boolean {
+  // A fence rejection stays identical on every retry: the seal moved to a
+  // newer incarnation, the exact fence is no longer known locally, or the
+  // remote answered for a different seal.
+  return isRemoteBoundSessionFenceError(error)
+    || error instanceof Error
+    && (error.message.includes('fence') || error.message.includes('ACK does not match'));
 }

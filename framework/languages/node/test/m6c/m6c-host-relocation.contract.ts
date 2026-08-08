@@ -502,6 +502,231 @@ test('two host owners exchange canonical relocation reservation publish replay a
   assert.deepEqual(events.slice(abortStart), ['abort-actor', 'abort-spot', 'abort-capacity']);
 });
 
+test('target opens admission at command 35 pending and converges session routes without command 35 completed', async () => {
+  const events: string[] = [];
+  const envelope = relocationEnvelope();
+  const encodedEnvelope = encodeServiceRelocationEnvelope(envelope);
+  const root = { reference: 'shared-root-open', checksumCrc32c: crc32c(encodedEnvelope) };
+  const publication = {
+    phase: 'sourceCleanupPending' as const,
+    reference: root.reference,
+    checksumCrc32c: root.checksumCrc32c,
+    aggregateId: envelope.aggregateId,
+    aggregateGeneration: envelope.aggregateGeneration,
+    inventoryDigest: inventoryDigest(envelope.participants, envelope.memberships),
+    targetOwnerId: 'owner-target',
+    targetOwnerLeaseGeneration: 8n
+  };
+  const authorities = new Map<string, ZLinkAuthoritySnapshot>([
+    [spotKey, relocationAuthority('user_spot', 'SpotType')],
+    [actorKey, relocationAuthority('actor', 'ActorType')]
+  ]);
+  const publishAuthorities = (phase: 'sourceCleanupPending' | 'sourceCleanupCompleted') => {
+    for (const [key, current] of authorities) {
+      authorities.set(key, {
+        ...current,
+        storeVersion: { value: `committed-${phase}-${key}` } as never,
+        authorityOwnerGeneration: 2n,
+        ownerId: 'owner-target',
+        ownerLeaseGeneration: 8n,
+        payload: new ServiceRelocationAuthorityPayloadCodec().publish(
+          Buffer.from('authority-state'),
+          { ...publication, phase }
+        )
+      });
+    }
+  };
+  let source!: ZLinkHostServiceRelocationRuntime;
+  const deliver = async (
+    runtime: ZLinkHostServiceRelocationRuntime,
+    sourceNodeRid: string,
+    payload: Uint8Array
+  ): Promise<void> => {
+    const part = Message.from(payload);
+    try {
+      assert.equal(await runtime.tryHandleControl('mesh-a', {
+        sourceNodeRid,
+        parts: [part]
+      } as never), true);
+    } finally {
+      part.close();
+    }
+  };
+  const target = new ZLinkHostServiceRelocationRuntime({
+    registration: { spotNodes: new Map([['mesh-a', {
+      spotFactoryRegistrations: {
+        SpotType: { implementation: class {}, relocation: { kind: 'recreate' } }
+      },
+      actorFactoryRegistrations: {
+        ActorType: { implementation: class {}, relocation: { kind: 'recreate' } }
+      }
+    }]]) },
+    locationStore: () => ({
+      readAuthority: async (key: { readonly value: string }) => authorities.get(key.value)!,
+      reserveRelocationCapacity: async (request: { readonly reservationId: string }) => ({
+        kind: 'reserved' as const,
+        fence: { value: request.reservationId }
+      }),
+      abortRelocationCapacity: async () => 'aborted' as const,
+      prepareAggregate: async (request: { readonly aggregateId: { readonly value: string };
+        readonly aggregateGeneration: bigint }) => ({ kind: 'prepared' as const, fence: {
+        aggregateId: request.aggregateId,
+        aggregateGeneration: request.aggregateGeneration
+      } }),
+      commitAggregate: async () => {
+        publishAuthorities('sourceCleanupPending');
+        return { kind: 'committed' as const };
+      },
+      abortAggregate: async () => ({ kind: 'aborted' as const })
+    }),
+    relocationStore: () => ({
+      read: async (reference: { readonly value: string }) =>
+        reference.value === root.reference
+          ? foundBlob(encodedEnvelope)
+          : { kind: 'missing' as const, storeNow: new Date() }
+    }),
+    currentOwner: () => ({ ownerId: 'owner-target', leaseGeneration: 8n }),
+    liveDescriptors: async () => [],
+    meshNode: () => ({
+      status: () => ({ routingId: 'node-target', lifecycleGeneration: 12n }),
+      sendToNode: (nodeRid: string, payload: Uint8Array) => {
+        assert.equal(nodeRid, 'node-source');
+        void deliver(source, 'node-target', payload);
+        return SubmitResult.Ok;
+      }
+    }),
+    completions: () => undefined,
+    spotManager: () => ({
+      prepareRelocationSpot: async () => {
+        events.push('prepare-spot');
+        return { spotId: 'spot-a', spot: {}, timers: { restoreRelocation: () => undefined },
+          commitActorJoin: () => undefined };
+      },
+      publishRelocationSpot: async () => events.push('publish-spot'),
+      abortRelocationSpot: async () => events.push('abort-spot'),
+      dispatchRoutedActorPacket: async () => undefined
+    }),
+    actorManager: () => ({
+      adoptCreatedAuthority: () => undefined,
+      prepareRelocationActor: async () => {
+        events.push('prepare-actor');
+        return { context: { actorId: 'actor-a' }, configure() {} };
+      },
+      getState: () => ({
+        spotId: 'spot-a',
+        setJoinedSpot: () => undefined,
+        setLocationGeneration: () => undefined,
+        setOwnerLeaseGeneration: () => undefined
+      }),
+      publishRelocationActor: () => events.push('publish-actor'),
+      abortRelocationActor: () => events.push('abort-actor')
+    }),
+    actorTransfer: {
+      publishRoutedActorOwnership: async (actor: { context: { actorId: string } }) => {
+        events.push(`cmd44:${actor.context.actorId}`);
+      },
+      openRoutedActorSession: async (actor: { context: { actorId: string } }) => {
+        events.push(`cmd42:${actor.context.actorId}`);
+      }
+    }
+  } as never);
+  source = new ZLinkHostServiceRelocationRuntime({
+    registration: { spotNodes: new Map() },
+    locationStore: () => undefined,
+    relocationStore: () => undefined,
+    currentOwner: () => ({ ownerId: 'owner-source', leaseGeneration: 7n }),
+    liveDescriptors: async () => [],
+    meshNode: () => ({
+      status: () => ({ routingId: 'node-source', lifecycleGeneration: 11n }),
+      sendToNode: (nodeRid: string, payload: Uint8Array) => {
+        assert.equal(nodeRid, 'node-target');
+        void deliver(target, 'node-source', payload);
+        return SubmitResult.Ok;
+      }
+    }),
+    completions: () => undefined,
+    spotManager: () => undefined,
+    actorManager: () => undefined,
+    actorTransfer: {} as never
+  } as never);
+  const roundTrip = async (
+    request: ZLinkServiceRelocationControlRequest
+  ): Promise<ZLinkServiceRelocationControlResponse> => {
+    return await (source as unknown as {
+      sendControl(
+        meshName: string,
+        targetNodeRid: string,
+        value: ZLinkServiceRelocationControlRequest
+      ): Promise<ZLinkServiceRelocationControlResponse>;
+    }).sendControl('mesh-a', 'node-target', request);
+  };
+
+  const prepare = relocationPrepare(envelope, root);
+  const offered = await roundTrip(prepare);
+  assert.equal(offered.kind, 'ready');
+  if (offered.kind !== 'ready') return;
+  await roundTrip({ ...offered, role: 'source', offeredMessages: 0n,
+    offeredBytes: 0n, participants: prepare.participants });
+  const control = (phase: 'prepared' | 'committed') => ({ kind: 'data' as const,
+    relocation: prepare.relocation, targetAttemptGeneration: prepare.targetAttemptGeneration,
+    coordinator: prepare.coordinator, senderRole: 'source' as const, participantId: 1n,
+    sequence: 1n, source: sourceFence(), object: prepare.object, phase });
+  await roundTrip(control('prepared'));
+  await roundTrip(control('committed'));
+  await roundTrip({ kind: 'data', relocation: prepare.relocation,
+    targetAttemptGeneration: prepare.targetAttemptGeneration, coordinator: prepare.coordinator,
+    senderRole: 'source', participantId: 1n, sequence: 1n,
+    frozenRecord: acceptedFrozenRecord(envelope, prepare.coordinator, prepare.candidate) });
+  await roundTrip({ kind: 'seal', relocation: prepare.relocation,
+    targetAttemptGeneration: prepare.targetAttemptGeneration, coordinator: prepare.coordinator,
+    senderRole: 'source', response: true, participants: [
+      { participantId: 1n, highWater: 1n }, { participantId: 2n, highWater: 0n }
+    ] });
+
+  // Command 35 'pending' opens application admission: registry publish and
+  // dispatch switch happen now, while sourceCleanupState is still pending.
+  const published = await roundTrip({ kind: 'complete', relocation: prepare.relocation,
+    targetAttemptGeneration: prepare.targetAttemptGeneration, coordinator: prepare.coordinator,
+    senderRole: 'source', source: sourceFence(), sourceCleanupState: 'pending' });
+  assert.equal(published.kind, 'complete');
+  const internals = target as unknown as {
+    targetStages: Map<string, { phase: string; converged: boolean }>;
+  };
+  const stage = [...internals.targetStages.values()][0]!;
+  assert.equal(stage.phase, 'open');
+  assert.ok(events.includes('publish-spot'));
+  assert.ok(events.includes('publish-actor'));
+
+  // The command 44 -> 42 session-route chain converges in the background and
+  // the command 42 seal release never precedes the command 44 publication.
+  await waitUntil(() => events.includes('cmd42:actor-a'));
+  assert.ok(events.indexOf('cmd44:actor-a') < events.indexOf('cmd42:actor-a'));
+  assert.equal(stage.converged, true);
+
+  // The stage stays resident until command 35 'completed', so the recovery
+  // poller short-circuits instead of restoring the same publication twice.
+  const eventCount = events.length;
+  await target.recoverPublishedAuthority(authorities.get(spotKey)!);
+  assert.equal(events.length, eventCount);
+  assert.equal(internals.targetStages.size, 1);
+
+  // Command 35 'completed' only performs relay and durable bookkeeping.
+  publishAuthorities('sourceCleanupCompleted');
+  const complete = { kind: 'complete' as const, relocation: prepare.relocation,
+    targetAttemptGeneration: prepare.targetAttemptGeneration, coordinator: prepare.coordinator,
+    senderRole: 'source' as const, source: sourceFence(),
+    sourceCleanupState: 'completed' as const };
+  const completed = await roundTrip(complete);
+  assert.equal(completed.kind, 'complete');
+  assert.equal(internals.targetStages.size, 0);
+  assert.deepEqual(events.slice(eventCount), []);
+  // An exact command 35 retry after completion is answered idempotently.
+  assert.deepEqual(await roundTrip(complete), completed);
+  // The completed publication is remembered, so recovery stays a no-op.
+  await target.recoverPublishedAuthority(authorities.get(spotKey)!);
+  assert.deepEqual(events.slice(eventCount), []);
+});
+
 test('production source and target runtimes complete standalone Actor relocation end to end', async () => {
   const events: string[] = [];
   const live = new Set([
@@ -721,6 +946,209 @@ test('production source and target runtimes complete standalone Actor relocation
   assert.ok(events.indexOf('target-published') < events.indexOf('route-published'));
   assert.ok(events.indexOf('route-published') < events.indexOf('target-open'));
   assert.ok(events.includes('source-committed'));
+});
+
+test('standalone relocation refuses to freeze a connection-bound accepted send and rolls back the source', async () => {
+  const events: string[] = [];
+  const live = new Set([
+    'mesh-a:node-source:11:owner-source:7',
+    'mesh-a:node-target:12:owner-target:8'
+  ]);
+  const location = new ZLinkInMemoryAuthorityStore({
+    isTargetLive(descriptor, lifecycle, owner) {
+      return live.has(
+        `${descriptor.meshName}:${descriptor.rid}:${lifecycle}:${owner.ownerId}:${owner.leaseGeneration}`
+      );
+    }
+  }, () => new Date(100));
+  const sourcePlacement = {
+    meshName: 'mesh-a',
+    nodeRid: 'node-source',
+    nodeLifecycleGeneration: 11n,
+    owner: { ownerId: 'owner-source', leaseGeneration: 7n }
+  };
+  const reserved = await location.reserve({
+    key: { kind: 'actor', globalId: 'actor-connection-bound' },
+    intent: {
+      stableType: 'ActorType',
+      requestContentReference: 'create:actor-connection-bound',
+      requestSha256: Buffer.alloc(32, 1),
+      requestEncodedSize: 1n
+    },
+    target: sourcePlacement,
+    creatingPayload: Buffer.from('creating'),
+    capacity: { actors: 1, spots: 0 }
+  });
+  assert.equal(reserved.kind, 'reserved');
+  if (reserved.kind !== 'reserved') return;
+  const creationTerminal = Buffer.from('actor-connection-bound-created');
+  const activated = await location.completeCreation({
+    key: { kind: 'actor', globalId: 'actor-connection-bound' },
+    reservationId: reserved.reservationId,
+    expectedStoreVersion: reserved.creating.storeVersion.value,
+    target: sourcePlacement,
+    completion: {
+      kind: 'created',
+      readyPayload: Buffer.from('ready'),
+      terminal: {
+        operation: {
+          sourceNodeRid: 'node-source',
+          sourceNodeGeneration: 11n,
+          operationId: { high: 0n, low: 1n }
+        },
+        terminalEnvelope: creationTerminal,
+        terminalEnvelopeSha256: createHash('sha256').update(creationTerminal).digest(),
+        operationDeadline: new Date(10_000)
+      }
+    }
+  });
+  assert.equal(activated.kind, 'created');
+  if (activated.kind !== 'created') return;
+
+  const relocation = new MemoryPublicRelocationStore();
+  let source!: ZLinkHostServiceRelocationRuntime;
+  let target!: ZLinkHostServiceRelocationRuntime;
+  const deliver = async (
+    runtime: ZLinkHostServiceRelocationRuntime,
+    sourceNodeRid: string,
+    payload: Uint8Array
+  ): Promise<void> => {
+    const part = Message.from(payload);
+    try {
+      assert.equal(await runtime.tryHandleControl('mesh-a', {
+        sourceNodeRid,
+        parts: [part]
+      } as never), true);
+    } finally {
+      part.close();
+    }
+  };
+  const targetActor = { context: { actorId: 'actor-connection-bound' }, configure() {} };
+  const targetState = {
+    spotId: undefined as string | undefined,
+    setJoinedSpot: (spotId: string) => { targetState.spotId = spotId; },
+    setLocationGeneration: () => undefined,
+    setOwnerLeaseGeneration: () => undefined,
+    setRemoteBoundSessionTarget: () => undefined,
+    setBoundSessionTransferTarget: () => undefined,
+    setBoundSessionBindingGeneration: () => undefined
+  };
+  target = new ZLinkHostServiceRelocationRuntime({
+    registration: { spotNodes: new Map([['mesh-a', {
+      actorFactoryRegistrations: {
+        ActorType: { implementation: class {}, relocation: { kind: 'recreate' } }
+      }
+    }]]) },
+    locationStore: () => location as never,
+    relocationStore: () => relocation as never,
+    currentOwner: () => ({ ownerId: 'owner-target', leaseGeneration: 8n }),
+    liveDescriptors: async () => [],
+    localDescriptor: () => ({ applicationVersion: 7n } as never),
+    meshNode: () => ({
+      status: () => ({ routingId: 'node-target', lifecycleGeneration: 12n }),
+      sendToNode: (_nodeRid: string, payload: Uint8Array) => {
+        void deliver(source, 'node-target', payload);
+        return SubmitResult.Ok;
+      }
+    }),
+    completions: () => undefined,
+    spotManager: () => ({
+      resolveRelocationActivation: () => undefined,
+      dispatchRoutedActorPacket: async () => undefined
+    }),
+    actorManager: () => ({
+      adoptCreatedAuthority: () => undefined,
+      prepareRelocationActor: async () => targetActor,
+      getState: () => targetState,
+      publishRelocationActor: () => events.push('target-published'),
+      abortRelocationActor: async () => events.push('target-aborted')
+    }),
+    actorTransfer: {
+      publishRoutedActorOwnership: async () => events.push('route-published'),
+      openRoutedActorSession: async () => events.push('target-open')
+    }
+  } as never);
+  const sourceActor = { context: { actorId: 'actor-connection-bound' } };
+  source = new ZLinkHostServiceRelocationRuntime({
+    registration: { spotNodes: new Map([['mesh-a', {
+      actorFactoryRegistrations: {
+        ActorType: { implementation: class {}, relocation: { kind: 'recreate' } }
+      }
+    }]]) },
+    locationStore: () => location as never,
+    relocationStore: () => relocation as never,
+    currentOwner: () => ({ ownerId: 'owner-source', leaseGeneration: 7n }),
+    liveDescriptors: async () => [],
+    meshNode: () => ({
+      status: () => ({ routingId: 'node-source', lifecycleGeneration: 11n }),
+      sendToNode: (_nodeRid: string, payload: Uint8Array) => {
+        void deliver(target, 'node-source', payload);
+        return SubmitResult.Ok;
+      }
+    }),
+    completions: () => undefined,
+    spotManager: () => undefined,
+    actorManager: () => ({
+      completeRelocationSource: async () => events.push('source-released')
+    }),
+    actorTransfer: {
+      prepareMaintenanceSession: async () => {
+        events.push('source-sealed');
+        return {
+          target: undefined,
+          handoffBacklog: [{
+            ...productionQueuedPacket(),
+            remoteBoundSessionTarget: {
+              routerChannelId: 'session.route',
+              targetNodeRid: 'session-node',
+              spotId: 'session-entry',
+              bindingGeneration: '3'
+            }
+          }],
+          setReplayResults: () => undefined,
+          commit: async () => events.push('source-committed'),
+          rollback: async () => events.push('source-rollback')
+        };
+      }
+    }
+  } as never);
+  const sourceState = {
+    actorId: 'actor-connection-bound',
+    actor: sourceActor,
+    actorType: 'ActorType',
+    meshName: 'mesh-a',
+    spotMembershipEpoch: 1n
+  };
+
+  await assert.rejects(
+    (source as unknown as {
+      relocateStandaloneActor(
+        meshName: string,
+        state: unknown,
+        target: ZLinkMeshNodeDescriptor,
+        targetApplicationVersion: bigint
+      ): Promise<void>;
+    }).relocateStandaloneActor('mesh-a', sourceState, {
+      rid: 'node-target',
+      lifecycleGeneration: 12n,
+      ownerId: 'owner-target',
+      leaseGeneration: 8n,
+      applicationVersion: 7n,
+      entrySpotId: 'entry-target'
+    } as never, 7n),
+    /connection-bound/
+  );
+
+  assert.ok(events.includes('source-sealed'));
+  assert.ok(events.includes('source-rollback'));
+  assert.equal(events.includes('source-committed'), false);
+  const current = await location.readAuthority(
+    encodeAuthorityKey('actor', 'actor-connection-bound')
+  );
+  assert.equal(current.kind, 'snapshot');
+  if (current.kind !== 'snapshot') return;
+  assert.equal(current.ownerId, 'owner-source');
+  assert.equal(current.ownerLeaseGeneration, 7n);
 });
 
 test('production restart recovery resumes a committed Actor authority and releases its durable root', async () => {
@@ -1869,11 +2297,18 @@ test('production host inventory relocates User Spot aggregate Instance Spot and 
   assert.ok(events.includes('membership-restored:room-actor:room-a'));
   assert.ok(events.includes('queue-replayed:room-actor'));
   assert.ok(events.includes('timer-restored:room-a:1'));
+  // Session-route convergence (command 44 then 42) runs in a background
+  // chain after admission opened and no longer waits for source cleanup.
+  await waitUntil(() => ['room-actor', 'standalone-actor'].every(actorId =>
+    events.includes(`admission-open:${actorId}`)));
   for (const actorId of ['room-actor', 'standalone-actor']) {
+    assert.ok(events.includes(`source-actor-cleanup:${actorId}`));
+    // Target admission (registry publish) never waits for source cleanup.
     assert.ok(
-      events.indexOf(`source-actor-cleanup:${actorId}`)
-        < events.indexOf(`session-route-ack:${actorId}`)
+      events.indexOf(`published-actor:${actorId}`)
+        < events.indexOf(`source-actor-cleanup:${actorId}`)
     );
+    // The command 42 seal release stays ordered after the command 44 ACK.
     assert.ok(
       events.indexOf(`session-route-ack:${actorId}`)
         < events.indexOf(`admission-open:${actorId}`)

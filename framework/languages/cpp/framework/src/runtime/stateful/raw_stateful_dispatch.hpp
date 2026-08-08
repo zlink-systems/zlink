@@ -34,6 +34,9 @@ struct accepted_record_authority_query_t
       protocol::frozen_source_kind_t::node;
     std::optional<std::string> source_spot_id;
     std::optional<std::pair<std::string, std::uint64_t>> source_actor;
+    std::optional<std::vector<std::uint8_t>> source_session_routing_id;
+    std::uint64_t source_binding_generation = 0;
+    std::uint64_t source_session_sequence = 0;
 };
 
 struct accepted_record_authority_t

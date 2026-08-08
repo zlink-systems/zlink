@@ -620,6 +620,63 @@ public sealed class StandaloneActorRelocationRuntimeTests
     }
 
     [Fact]
+    public void Direct_post_admission_ingress_orders_after_replayed_journal_and_held_ingress()
+    {
+        var handoff = new ZLinkActorHandoffState(
+            "actor-1",
+            TimeProvider.System);
+        handoff.BeginCanonicalMaintenanceImport(
+            "handoff",
+            [AcceptedFrame(1)]);
+        handoff.MarkAuthorityCommitted("handoff", 42, 42);
+        _ = handoff.PrepareCanonicalMaintenanceReplay("handoff");
+        // The staged journal replays and acknowledges before the
+        // trailing-reserve-then-open primitive runs from the publish path.
+        handoff.AcknowledgeCanonicalReplayThrough(1);
+        var source = new ZLinkServiceWireCodec.RequestSourceFence(
+            "source-owner",
+            3,
+            RoutingId.From("source"),
+            7);
+        var actor = new ZLinkBackendActorRef(
+            RoutingId.From("target"),
+            "actor-1",
+            42);
+        using var held = ZLinkActorHandoffFrames.Restore(
+            actor,
+            [AcceptedFrame(2, source, messageFollowHopCount: 1)]);
+        using var directBeforeOpen = ZLinkActorHandoffFrames.Restore(
+            actor,
+            [AcceptedFrame(3, source)]);
+
+        Assert.Equal(
+            ZLinkActorHandoffCaptureResult.Captured,
+            handoff.TryCapture(held[0]));
+        Assert.Equal(
+            ZLinkActorHandoffCaptureResult.Captured,
+            handoff.TryCapture(directBeforeOpen[0]));
+
+        // Opening admission reserves the followed held ingress before direct
+        // ingress captured while sealed, both behind the acknowledged
+        // journal. A direct request arriving after admission cannot be
+        // captured any more: it joins the queue strictly behind every
+        // reserved frame.
+        var reserved = new List<ulong>();
+        handoff.ReserveCanonicalMaintenanceTrailingAndOpenAdmission(
+            "handoff",
+            1,
+            frame => reserved.Add(frame.RequestId));
+        Assert.Equal([2UL, 3UL], reserved);
+
+        using var directAfterOpen = ZLinkActorHandoffFrames.Restore(
+            actor,
+            [AcceptedFrame(4, source)]);
+        Assert.Equal(
+            ZLinkActorHandoffCaptureResult.NotSealed,
+            handoff.TryCapture(directAfterOpen[0]));
+    }
+
+    [Fact]
     public void Canonical_trailing_replay_acknowledges_the_completed_frame()
     {
         var handoff = new ZLinkActorHandoffState(
@@ -2116,6 +2173,7 @@ public sealed class StandaloneActorRelocationRuntimeTests
                 _ = Assert.IsType<ZLinkOwnerLeaseReadResult.Found>(
                     await store.ReadOwnerLeaseAsync(source.Owner.OwnerId));
 
+            string? preRecoveryStoreVersion = null;
             if (phase >=
                 (byte)ZLinkStandaloneActorCanonicalPhase.Committed)
             {
@@ -2131,6 +2189,8 @@ public sealed class StandaloneActorRelocationRuntimeTests
                 Assert.Equal(failed.Owner.OwnerId,
                     beforeSourceExpiry.Snapshot.OwnerId);
                 Assert.Equal(0, HostedRecoveryActorFactory.CreatedCount);
+                preRecoveryStoreVersion =
+                    beforeSourceExpiry.Snapshot.StoreVersion;
 
                 _ = await store.ReleaseOwnerLeaseAsync(source.Owner);
                 await runtime.RecoverPublishedRelocationsAsync(
@@ -2144,32 +2204,38 @@ public sealed class StandaloneActorRelocationRuntimeTests
 
             var recovered = Assert.IsType<ZLinkAuthorityReadResult.Found>(
                 await store.ReadAuthorityAsync(key));
-            if (targetRemainsLive)
-            {
-                Assert.Equal(failed.Owner.OwnerId, recovered.Snapshot.OwnerId);
-                Assert.True(ZLinkRelocationAuthorityPayloadCodec.TryDecode(
-                    recovered.Snapshot.Payload.Span, out _));
-                Assert.Equal(0, HostedRecoveryActorFactory.CreatedCount);
-                Assert.Equal(0,
-                    runtime.RelocationPermits.Snapshot().InboundUnits);
-                return;
-            }
+            Assert.Equal(0,
+                runtime.RelocationPermits.Snapshot().InboundUnits);
             if (phase >=
                 (byte)ZLinkStandaloneActorCanonicalPhase.Committed)
             {
-                Assert.Equal(1, HostedRecoveryActorFactory.CreatedCount);
+                // Post-commit the committed target attempt is the only legal
+                // owner: whether that target is live or dead, recovery on this
+                // node performs zero NewOwner CAS and leaves the published
+                // authority parked for the exact target lifecycle.
+                Assert.Equal(failed.Owner.OwnerId, recovered.Snapshot.OwnerId);
+                Assert.Equal(
+                    preRecoveryStoreVersion,
+                    recovered.Snapshot.StoreVersion);
+                Assert.True(ZLinkRelocationAuthorityPayloadCodec.TryDecode(
+                    recovered.Snapshot.Payload.Span, out _));
+                Assert.Equal(0, HostedRecoveryActorFactory.CreatedCount);
+                return;
             }
-            Assert.True(ZLinkActorAuthorityPayloadCodec.TryDecode(
-                recovered.Snapshot.Payload.Span,
-                out var steady));
-            Assert.Equal(replacementRid, steady.NodeRid);
-            Assert.Equal(replacement.LifecycleGeneration, steady.NodeGeneration);
-            Assert.Equal(1, HostedRecoveryActorFactory.CreatedCount);
-            Assert.Equal(0,
-                runtime.RelocationPermits.Snapshot().InboundUnits);
+            // Pre-commit with a dead source restores the exact steady source
+            // authority through the precommit abort; no replacement target
+            // exists in this contract version.
             Assert.False(ZLinkRelocationAuthorityPayloadCodec.TryDecode(
                 recovered.Snapshot.Payload.Span,
                 out _));
+            Assert.True(ZLinkActorAuthorityPayloadCodec.TryDecode(
+                recovered.Snapshot.Payload.Span,
+                out var steady));
+            Assert.Equal(source.Descriptor.Rid, steady.NodeRid);
+            Assert.Equal(
+                source.Descriptor.LifecycleGeneration,
+                steady.NodeGeneration);
+            Assert.Equal(0, HostedRecoveryActorFactory.CreatedCount);
         }
         finally
         {

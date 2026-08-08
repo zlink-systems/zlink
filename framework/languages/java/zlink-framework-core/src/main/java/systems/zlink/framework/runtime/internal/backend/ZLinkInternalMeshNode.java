@@ -320,10 +320,12 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
 
     /**
      * Sends one canonical command 33 record plus its application payload and
-     * returns the exact command 46 closed acknowledgement.
+     * returns the exact command 46 closed acknowledgement. The landing node is
+     * the relocation source that owns the reply capability; it may differ from
+     * the request-source fence carried in {@code expectedSource}.
      */
     default CompletionStage<byte[]> requestRelocationReplyRelay(
-        RoutingId sourceNodeRid,
+        RoutingId landingNodeRid,
         ZLinkServiceRelocationWireCodec.RequestSourceFence expectedSource,
         byte[] command33,
         List<byte[]> payload,

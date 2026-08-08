@@ -99,8 +99,20 @@ export type ServiceWireRelocationObject =
       readonly objectGeneration: bigint;
     };
 
+export interface ServiceWireRelocationBoundSessionIdentity {
+  readonly sessionOwnerNodeRid: string;
+  readonly sessionOwnerNodeGeneration: bigint;
+  readonly sessionOwnerId: string;
+  readonly sessionOwnerLeaseGeneration: bigint;
+  readonly sessionRid: string;
+  readonly bindingGeneration: bigint;
+  readonly lastAcceptedSessionSequence: bigint;
+}
+
 export interface ServiceWireRelocationParticipant {
   readonly participantId: bigint;
+  /** Present for boundSession (kind 2) participants; absent for objectMailbox (kind 1). */
+  readonly boundSession?: ServiceWireRelocationBoundSessionIdentity;
   readonly allowanceMessages: bigint;
   readonly allowanceBytes: bigint;
 }
@@ -1797,11 +1809,27 @@ function relocationParticipants(
     u32(values.length, 'participantCount'),
     ...values.map(value => concat(
       u64(value.participantId),
-      Buffer.of(1), u16(0),
+      relocationParticipantIdentity(value.boundSession),
       u64Any(value.allowanceMessages),
       u64Any(value.allowanceBytes)
     ))
   );
+}
+
+function relocationParticipantIdentity(
+  value: ServiceWireRelocationBoundSessionIdentity | undefined
+): Buffer {
+  if (value === undefined) return concat(Buffer.of(1), u16(0));
+  const body = concat(
+    rid(value.sessionOwnerNodeRid, 'sessionOwnerNodeRid'),
+    u64(value.sessionOwnerNodeGeneration),
+    text8(value.sessionOwnerId, 'sessionOwnerId'),
+    u64(value.sessionOwnerLeaseGeneration),
+    rid(value.sessionRid, 'sessionRid'),
+    u64(value.bindingGeneration),
+    u64Any(value.lastAcceptedSessionSequence)
+  );
+  return concat(Buffer.of(2), u16(body.byteLength), body);
 }
 
 function relocationTerminalParticipants(
@@ -2316,10 +2344,27 @@ class Reader {
       previous = participantId;
       const kind = this.u8('participantKind');
       const identityLength = this.u16('participantIdentityLength');
-      if (kind !== 1 || identityLength !== 0) {
-        fail('Node relocation control supports objectMailbox participants only.');
+      if (kind === 1) {
+        if (identityLength !== 0) fail('objectMailbox participant identity must be empty.');
+        values.push({ participantId,
+          allowanceMessages: this.ordinal('allowanceMessages'),
+          allowanceBytes: this.ordinal('allowanceBytes') });
+        continue;
       }
-      values.push({ participantId,
+      if (kind !== 2) fail('Invalid relocation participant kind.');
+      const end = this.offset + identityLength;
+      if (end > this.bytes.byteLength) fail('Truncated relocation participant identity.');
+      const boundSession: ServiceWireRelocationBoundSessionIdentity = {
+        sessionOwnerNodeRid: this.rid('sessionOwnerNodeRid'),
+        sessionOwnerNodeGeneration: this.nonZeroU64('sessionOwnerNodeGeneration'),
+        sessionOwnerId: this.text8('sessionOwnerId'),
+        sessionOwnerLeaseGeneration: this.nonZeroU64('sessionOwnerLeaseGeneration'),
+        sessionRid: this.rid('sessionRid'),
+        bindingGeneration: this.nonZeroU64('bindingGeneration'),
+        lastAcceptedSessionSequence: this.ordinal('lastAcceptedSessionSequence')
+      };
+      if (this.offset !== end) fail('Invalid relocation participant identity length.');
+      values.push({ participantId, boundSession,
         allowanceMessages: this.ordinal('allowanceMessages'),
         allowanceBytes: this.ordinal('allowanceBytes') });
     }

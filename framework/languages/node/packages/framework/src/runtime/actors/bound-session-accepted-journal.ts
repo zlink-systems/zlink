@@ -10,8 +10,15 @@ export interface ZLinkBoundSessionAcceptedJournalRoot {
   readonly actorId: string;
   readonly actorGeneration: bigint;
   readonly acceptedHighWater: bigint;
+  readonly sourceOwnerId?: string;
+  readonly sourceOwnerLeaseGeneration?: bigint;
   readonly reference: ZLinkBlobReference;
   readonly checksumCrc32c: number;
+}
+
+export interface ZLinkBoundSessionAcceptedSourceOwner {
+  readonly ownerId: string;
+  readonly ownerLeaseGeneration: bigint;
 }
 
 /** Stores the sealed Session ingress snapshot before relocation publication. */
@@ -24,10 +31,15 @@ export class ZLinkBoundSessionAcceptedJournal {
     sealId: string,
     acceptedHighWater: bigint,
     entries: readonly ZLinkActorHandoffPacket[],
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    sourceOwner?: ZLinkBoundSessionAcceptedSourceOwner
   ): Promise<ZLinkBoundSessionAcceptedJournalRoot> {
     requireIdentity(actorId, actorGeneration, sealId, acceptedHighWater);
-    const payload = encodeRoot(actorId, actorGeneration, sealId, acceptedHighWater, entries);
+    if (sourceOwner !== undefined
+      && (sourceOwner.ownerId.length === 0 || sourceOwner.ownerLeaseGeneration <= 0n)) {
+      throw new Error('Bound-session accepted-journal source owner fence is invalid.');
+    }
+    const payload = encodeRoot(actorId, actorGeneration, sealId, acceptedHighWater, entries, sourceOwner);
     const stored = await putNewRelocationBlob(
       this.store,
       payload,
@@ -48,6 +60,10 @@ export class ZLinkBoundSessionAcceptedJournal {
       actorGeneration,
       sealId,
       acceptedHighWater,
+      ...(sourceOwner === undefined ? {} : {
+        sourceOwnerId: sourceOwner.ownerId,
+        sourceOwnerLeaseGeneration: sourceOwner.ownerLeaseGeneration
+      }),
       reference: stored.reference,
       checksumCrc32c
     };
@@ -67,6 +83,8 @@ export class ZLinkBoundSessionAcceptedJournal {
       readonly actorGeneration?: unknown;
       readonly sealId?: unknown;
       readonly acceptedHighWater?: unknown;
+      readonly sourceOwnerId?: unknown;
+      readonly sourceOwnerLeaseGeneration?: unknown;
     };
     if (
       decoded.actorId !== root.actorId ||
@@ -75,6 +93,17 @@ export class ZLinkBoundSessionAcceptedJournal {
       decoded.acceptedHighWater !== root.acceptedHighWater.toString()
     ) {
       throw new Error(`Actor '${root.actorId}' accepted-journal identity does not match its relocation fence.`);
+    }
+    // A root written before the owner fence was recorded stays readable, so
+    // the comparison only fences when both sides carry the field.
+    if (
+      (root.sourceOwnerId !== undefined && decoded.sourceOwnerId !== undefined
+        && decoded.sourceOwnerId !== root.sourceOwnerId)
+      || (root.sourceOwnerLeaseGeneration !== undefined
+        && decoded.sourceOwnerLeaseGeneration !== undefined
+        && decoded.sourceOwnerLeaseGeneration !== root.sourceOwnerLeaseGeneration.toString())
+    ) {
+      throw new Error(`Actor '${root.actorId}' accepted-journal source owner fence does not match its relocation fence.`);
     }
   }
 
@@ -88,7 +117,8 @@ function encodeRoot(
   actorGeneration: bigint,
   sealId: string,
   acceptedHighWater: bigint,
-  entries: readonly ZLinkActorHandoffPacket[]
+  entries: readonly ZLinkActorHandoffPacket[],
+  sourceOwner?: ZLinkBoundSessionAcceptedSourceOwner
 ): Buffer {
   return Buffer.from(JSON.stringify({
     version: 1,
@@ -96,6 +126,10 @@ function encodeRoot(
     actorGeneration: actorGeneration.toString(),
     sealId,
     acceptedHighWater: acceptedHighWater.toString(),
+    ...(sourceOwner === undefined ? {} : {
+      sourceOwnerId: sourceOwner.ownerId,
+      sourceOwnerLeaseGeneration: sourceOwner.ownerLeaseGeneration.toString()
+    }),
     entries
   }));
 }

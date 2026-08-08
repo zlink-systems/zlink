@@ -2817,15 +2817,24 @@ raw_mesh_pump_result_t raw_mesh_node_owner_t::pump_one (
                 else if constexpr (std::is_same_v<
                                      record_t,
                                      protocol::relocation_ready_t>) {
-                    return std::pair{value.candidate.node_routing_id,
-                                     value.candidate.node_generation};
+                    if (value.role
+                        == protocol::relocation_role_t::target)
+                        return std::pair{
+                          value.candidate.node_routing_id,
+                          value.candidate.node_generation};
+                    // The source-role accept carries no source RID on
+                    // the wire; the target attempt validates the exact
+                    // prepare source peer.
+                    return std::nullopt;
                 }
                 else if constexpr (std::is_same_v<
                                      record_t,
                                      protocol::relocation_reserved_t>) {
+                    // The reservation ack travels target-to-source, so
+                    // the sender must be the relocation candidate.
                     return std::pair{
-                      value.coordinator.node_routing_id,
-                      value.coordinator.node_generation};
+                      value.candidate.node_routing_id,
+                      value.candidate.node_generation};
                 }
                 else if constexpr (std::is_same_v<record_t,
                                                   protocol::relocation_data_t>) {

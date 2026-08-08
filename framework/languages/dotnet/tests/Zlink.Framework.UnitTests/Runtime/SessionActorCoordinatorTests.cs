@@ -1750,6 +1750,73 @@ public sealed class SessionActorCoordinatorTests
         }
     }
 
+    [Fact]
+    public async Task Late_Route_Seal_Abort_After_Rebind_Is_A_Fenced_Noop()
+    {
+        var table = new ZLinkSessionActorBindingTable(
+            TimeSpan.FromSeconds(30));
+        var runtime = CreateRuntime();
+        var context = CreateSessionContext(runtime, "session-rebind-first");
+        var route = SessionBindingRoute(
+            "actor-rebind",
+            targetNodeGeneration: 3);
+        var firstActor = new ZLinkSessionActor(
+            context,
+            route.Ref.ActorId,
+            context.RoutingId!.Value,
+            "binding-first");
+        var actorKey = ZLinkActorId.FromBoundary(route.Ref.ActorId, nameof(route));
+        _ = table.Bind(
+            actorKey,
+            context,
+            firstActor.BindingToken,
+            firstActor,
+            bindingGeneration: 5,
+            route,
+            sessionOwnerNodeGeneration: 7);
+        var seal = new ZLinkSessionRouteSeal(
+            route.Ref.ActorId,
+            firstActor.BindingToken,
+            BindingGeneration: 5,
+            route.Ref.ObjectGeneration,
+            route.AuthorityOwnerGeneration,
+            route.MeshName.Value,
+            route.TargetNodeGeneration,
+            route.OwnerLeaseGeneration,
+            SessionOwnerNodeGeneration: 7,
+            "handoff-abort");
+        var sealResult = await table.SealRouteAsync(seal, CancellationToken.None);
+        Assert.True(sealResult.Acknowledged);
+
+        // The session reconnects and rebinds before the (no longer awaited)
+        // relocation abort reaches the session owner.
+        var reboundContext = CreateSessionContext(
+            runtime,
+            "session-rebind-second");
+        var reboundActor = new ZLinkSessionActor(
+            reboundContext,
+            route.Ref.ActorId,
+            reboundContext.RoutingId!.Value,
+            "binding-second");
+        _ = table.Bind(
+            actorKey,
+            reboundContext,
+            reboundActor.BindingToken,
+            reboundActor,
+            bindingGeneration: 6,
+            route,
+            sessionOwnerNodeGeneration: 7);
+
+        // The late abort carries the pre-rebind binding identity and must not
+        // touch the rebound session.
+        Assert.False(table.AbortRouteSeal(seal));
+        Assert.True(table.TryAccept(
+            route.Ref.ActorId,
+            reboundActor.BindingToken,
+            out var acceptedHighWater));
+        Assert.Equal(1UL, acceptedHighWater);
+    }
+
     private static ZLinkSessionBindingRoute SessionBindingRoute(
         string actorId,
         ulong targetNodeGeneration)

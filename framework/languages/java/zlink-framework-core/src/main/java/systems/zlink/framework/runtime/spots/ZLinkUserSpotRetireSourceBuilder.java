@@ -304,8 +304,17 @@ final class ZLinkUserSpotRetireSourceBuilder {
             .thenCompose(sealed -> {
                 if (sealed.isEmpty()) {
                     close(acquired.get());
+                    //  A deadline that elapses while draining toward the seal
+                    //  is a Blocked outcome, not a store failure. Diagnostics
+                    //  only; nothing here reaches the wire.
                     return cancellation.isCancellationRequested()
-                        ? cancelled()
+                        ? failed(new ZLinkUserSpotRetireRuntime
+                            .RelocationBlockedException(
+                                systems.zlink.framework.runtime.host
+                                    .ZLinkFrameworkRelocationReason
+                                    .DEADLINE_EXCEEDED,
+                                "User Spot drain and seal deadline elapsed "
+                                    + "before Capture"))
                         : failed(new IllegalStateException(
                             "User Spot relocation seal or permit was unavailable"));
                 }
@@ -333,6 +342,8 @@ final class ZLinkUserSpotRetireSourceBuilder {
         ZLinkUserSpotRelocationBarrier barrier,
         ZLinkUserSpotRelocationBarrier.Seal seal,
         ZLinkRelocationPermitPool.Lease lease) {
+        AtomicReference<ZLinkAggregateRelocationCoordinator.StagedRoot>
+            staged = new AtomicReference<>();
         return readInventory(
                 admission.inventory().spot().id(),
                 seal.participantActorIds(),
@@ -372,22 +383,29 @@ final class ZLinkUserSpotRetireSourceBuilder {
                     admission.target(),
                     aggregateId);
                 return coordinator.stageRoot(authorityRequest, cancellation)
-                    .thenApply(stagedRoot -> new PreparedSource(
-                        coordinator,
-                        barrier,
-                        seal,
-                        lease,
-                        captured,
-                        authorityRequest,
-                        stagedRoot,
-                        spots,
-                        actors,
-                        relocationReplies,
-                        stageRequest(
-                            captured,
-                            authorityRequest,
-                            stagedRoot.stored(),
-                            admission.target())));
+                    .thenCompose(stagedRoot -> {
+                        staged.set(stagedRoot);
+                        if (cancellation.isCancellationRequested()) {
+                            return cancelled();
+                        }
+                        return CompletableFuture.completedFuture(
+                            new PreparedSource(
+                                coordinator,
+                                barrier,
+                                seal,
+                                lease,
+                                captured,
+                                authorityRequest,
+                                stagedRoot,
+                                spots,
+                                actors,
+                                relocationReplies,
+                                stageRequest(
+                                    captured,
+                                    authorityRequest,
+                                    stagedRoot.stored(),
+                                    admission.target())));
+                    });
             })
             .exceptionallyCompose(failure -> {
                 Throwable cause = unwrap(failure);
@@ -397,7 +415,19 @@ final class ZLinkUserSpotRetireSourceBuilder {
                         admission.inventory().spot().id(), seal, lease));
                     return failed(cause);
                 }
-                return barrier.abortAsync(seal)
+                //  A staged root left by a post-stage failure would leak in
+                //  Relocation Store; discard it before the queues resume.
+                CompletionStage<Void> discard = staged.get() == null
+                    ? CompletableFuture.completedFuture(null)
+                    : coordinator.discardStagedRoot(staged.get());
+                return discard
+                    .handle((ignored, discardFailure) -> {
+                        if (discardFailure != null) {
+                            cause.addSuppressed(discardFailure);
+                        }
+                        return null;
+                    })
+                    .thenCompose(ignored -> barrier.abortAsync(seal))
                     .handle((ignored, abortFailure) -> {
                         if (relocationReplies != null) {
                             admission.inventory().actorIds().forEach(
@@ -1171,23 +1201,27 @@ final class ZLinkUserSpotRetireSourceBuilder {
             CompletionStage<Void> abortAuthority = finalPrepared == null
                 ? CompletableFuture.completedFuture(null)
                 : coordinator.abort(finalPrepared);
+            //  Contract order: Aborted record, staged payload discard, queue
+            //  restore, then terminal progress removal while the lanes are
+            //  still paused. Lane resume is the last observable step.
             return abortAuthority
                 .thenCompose(ignored -> coordinator.discardStagedRoot(
                     stagedRoot))
-                .thenCompose(ignored -> barrier.abortAsync(seal)
+                .thenCompose(ignored -> barrier.abortAsync(seal, () -> {
+                        synchronized (PreparedSource.this) {
+                            terminal = true;
+                            permit.close();
+                        }
+                    })
                     .thenAccept(aborted -> {
                     if (!aborted) {
                         throw new IllegalStateException(
                             "source relocation barrier was lost during abort");
                     }
-                    synchronized (PreparedSource.this) {
-                        if (relocationReplies != null) {
-                            captured.inventory().actorIds().forEach(
-                                relocationReplies
-                                    ::resumeActorTimersAfterRelocationAbort);
-                        }
-                        terminal = true;
-                        permit.close();
+                    if (relocationReplies != null) {
+                        captured.inventory().actorIds().forEach(
+                            relocationReplies
+                                ::resumeActorTimersAfterRelocationAbort);
                     }
                 }));
         }

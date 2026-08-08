@@ -1154,6 +1154,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                     0,
                     default,
                     0,
+                    0,
                     requiredMessages,
                     allowanceBytes)
             ],
@@ -1426,35 +1427,38 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         ZLinkObjectRelocationRegistration relocation;
         if (sourceOwned || !hasCurrentLocalTarget)
         {
-            var takeoverCoordinator =
+            var recoveryFence =
                 new ZLinkStandaloneActorRelocationTakeoverCoordinator(
-                    runtime, actorSessions, registration);
-            if (await takeoverCoordinator.HasLiveRemoteRecoveryOwnerAsync(
+                    runtime, registration);
+            if (await recoveryFence.HasLiveRemoteRecoveryOwnerAsync(
                     canonical,
                     targetAuthority.MeshName,
                     cancellationToken)
                 .ConfigureAwait(false))
                 return;
-            var takeover = await takeoverCoordinator
-                .TakeOverAsync(
-                    authority,
-                    canonical,
-                    candidate.Envelope,
-                    participant,
-                    recovery,
-                    cancellationToken)
-                .ConfigureAwait(false);
-            authority = authority with { Snapshot = takeover.Authority };
-            targetAuthority = takeover.TargetAuthority;
-            actorState = takeover.ActorState;
-            relocation = takeover.Relocation;
-            targetAttemptGeneration = takeover.TargetAttemptGeneration;
-            RetainRecoveryPermit(
-                new AttemptKey(
-                    candidate.Envelope.CanonicalRelocationHigh,
-                    candidate.Envelope.CanonicalRelocationLow,
-                    targetAttemptGeneration),
-                takeover.Permit);
+            if (sourceOwned)
+            {
+                // Pre-commit recovery with a dead source: no different-target
+                // transition exists in this contract version, so restore the
+                // steady source authority through the same precommit abort the
+                // source coordinator uses, closing the Prepared capacity fence
+                // first.
+                await AbortSourceOwnedRecoveryAsync(
+                        candidate,
+                        canonical,
+                        recovery,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                return;
+            }
+            // Post-commit target death: the committed target attempt is the
+            // only legal owner of this journal. Park until the exact target
+            // lifecycle returns; there is no source rollback after commit.
+            Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
+                $"standalone_recovery_parked actor={targetAuthority.ActorId} "
+                + $"relocation={candidate.Envelope.AggregateId:N} "
+                + "reason=committed_target_unavailable");
+            return;
         }
         else
         {
@@ -1741,6 +1745,44 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             throw;
         }
         ReleaseRecoveryPermit(recoveryAttempt);
+    }
+
+    private async ValueTask AbortSourceOwnedRecoveryAsync(
+        ZLinkRelocationRecoveryCandidate candidate,
+        ZLinkCanonicalRelocationAuthorityProjection canonical,
+        ZLinkCanonicalParticipantRecovery recovery,
+        CancellationToken cancellationToken)
+    {
+        var store = registration.Locations.ResolveStore()
+                    ?? throw new ZLinkConfigurationException(
+                        "Location Store is not registered.");
+        if (canonical.Phase == 3)
+        {
+            var fence = ZLinkCanonicalRelocationReservationOwner.CapacityFence(
+                new ZLinkServiceWireCodec.RelocationWireId(
+                    candidate.Envelope.CanonicalRelocationHigh,
+                    candidate.Envelope.CanonicalRelocationLow),
+                canonical.TargetAttemptGeneration);
+            var aborted = await store.AbortRelocationCapacityAsync(
+                    fence,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            if (aborted is not (
+                    ZLinkRelocationCapacityAbortResult.Aborted
+                    or ZLinkRelocationCapacityAbortResult.AlreadyAborted))
+                throw DataLost(
+                    "Standalone Actor precommit recovery could not close the prepared target capacity fence.");
+        }
+        _ = await new ZLinkStandaloneActorRelocationPrecommitCoordinator(store)
+            .AbortSourceAsync(
+                recovery.AuthorityKey,
+                candidate.Envelope.AggregateId,
+                cancellationToken)
+            .ConfigureAwait(false);
+        Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
+            "standalone_recovery_precommit_aborted "
+            + $"relocation={candidate.Envelope.AggregateId:N} "
+            + $"phase={canonical.Phase}");
     }
 
     private void RetainRecoveryPermit(

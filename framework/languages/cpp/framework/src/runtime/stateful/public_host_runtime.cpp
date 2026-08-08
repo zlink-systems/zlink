@@ -1630,7 +1630,10 @@ bool public_host_runtime_t::prepare_relocation_remote (
     {
         std::lock_guard lock (_mutex);
         _relocation_ready_responses.erase (key);
+        _relocation_reservation_responses.erase (key);
     }
+    const auto deadline =
+      std::chrono::steady_clock::now () + timeout;
     if (!_transport->send_relocation_control (
           target_node.to_bytes (), prepare))
         return false;
@@ -1638,8 +1641,8 @@ bool public_host_runtime_t::prepare_relocation_remote (
     protocol::relocation_ready_t ready;
     {
         std::unique_lock lock (_mutex);
-        if (!_relocation_changed.wait_for (
-              lock, timeout, [&] {
+        if (!_relocation_changed.wait_until (
+              lock, deadline, [&] {
                   return _relocation_ready_responses.contains (key)
                          || !_started;
               }))
@@ -1668,16 +1671,65 @@ bool public_host_runtime_t::prepare_relocation_remote (
              < std::max<std::uint64_t> (1, prepare.required_bytes)
         || ready.reservation_generation == 0)
         return false;
-    return _transport->send_relocation_control (
-      target_node.to_bytes (),
-      protocol::relocation_reserved_t{
-        ready.relocation,
-        ready.target_attempt_generation,
-        ready.round,
-        ready.coordinator,
-        ready.candidate,
-        ready.reservation_generation,
-        prepare.participants});
+
+    // Leg 3 of the reservation handshake: echo the offer back as the
+    // source-role acceptance carrying the exact prepare participant set,
+    // then await the target's relocationReserved ack (leg 4). The accept
+    // is retransmitted until the matching ack arrives, the runtime stops,
+    // or the deadline passes.
+    auto accept = ready;
+    accept.role = protocol::relocation_role_t::source;
+    accept.offered_messages = 0;
+    accept.offered_bytes = 0;
+    accept.participants = prepare.participants;
+    {
+        std::lock_guard lock (_mutex);
+        _relocation_reservation_responses.emplace (
+          key,
+          relocation_reservation_wait_t{
+            protocol::relocation_reserved_t{
+              ready.relocation,
+              ready.target_attempt_generation,
+              ready.round,
+              ready.coordinator,
+              ready.candidate,
+              ready.reservation_generation,
+              prepare.participants},
+            false});
+    }
+    bool acknowledged = false;
+    while (true) {
+        if (!_transport->send_relocation_control (
+              target_node.to_bytes (), accept))
+            break;
+        std::unique_lock lock (_mutex);
+        const auto wake_at = std::min (
+          deadline,
+          std::chrono::steady_clock::now ()
+            + relocation_accept_retransmit_interval);
+        (void) _relocation_changed.wait_until (
+          lock, wake_at, [&] {
+              const auto found =
+                _relocation_reservation_responses.find (key);
+              return (found
+                        != _relocation_reservation_responses.end ()
+                      && found->second.accepted)
+                     || !_started;
+          });
+        const auto found =
+          _relocation_reservation_responses.find (key);
+        acknowledged =
+          found != _relocation_reservation_responses.end ()
+          && found->second.accepted;
+        if (acknowledged || !_started
+            || std::chrono::steady_clock::now () >= deadline)
+            break;
+    }
+    {
+        std::lock_guard lock (_mutex);
+        _relocation_reservation_responses.erase (key);
+    }
+    return acknowledged;
 }
 
 bool public_host_runtime_t::complete_relocation_remote (
@@ -2722,6 +2774,23 @@ void public_host_runtime_t::expire_relocation_target_attempts ()
     cleanup_expired_relocation_target_attempts (std::move (expired));
 }
 
+void public_host_runtime_t::poll_relocation_target_attempts ()
+{
+    // A lost relocationComplete must not leave the target recovering
+    // forever: re-poll reserved attempts so admission converges from the
+    // durable authority once every expected record has arrived.
+    std::vector<relocation_attempt_key_t> pending;
+    {
+        std::lock_guard lock (_mutex);
+        for (const auto &[key, attempt] : _relocation_target_attempts)
+            if (!attempt.target_finalized && attempt.reserved
+                && !attempt.completion)
+                pending.push_back (key);
+    }
+    for (const auto &key : pending)
+        (void) try_finalize_relocation_target (key);
+}
+
 bool public_host_runtime_t::relocation_target_authority_committed (
   const relocation_target_attempt_t &attempt) const noexcept
 {
@@ -2741,6 +2810,28 @@ bool public_host_runtime_t::relocation_target_authority_committed (
     catch (...) {
         // An unavailable authority store cannot prove that abort is safe.
         return true;
+    }
+}
+
+bool public_host_runtime_t::relocation_target_authority_committed_strict (
+  const relocation_target_attempt_t &attempt) const noexcept
+{
+    // Admission gate: unlike the abort-safety variant above, an absent or
+    // unreadable authority store must fail closed so admission never opens
+    // before the owner CAS is provably committed to this target.
+    if (!_relocation_authority || attempt.targets.empty ())
+        return false;
+    try {
+        for (const auto &target : attempt.targets) {
+            const auto current = _relocation_authority->read (
+              target.kind, target.key);
+            if (!current || current->target != target)
+                return false;
+        }
+        return true;
+    }
+    catch (...) {
+        return false;
     }
 }
 
@@ -2821,44 +2912,43 @@ bool public_host_runtime_t::try_finalize_relocation_target (
         const auto found = _relocation_target_attempts.find (key);
         if (found == _relocation_target_attempts.end ()
             || (!found->second.target_finalized
-                && (!found->second.completion
-                    || !found->second.reserved)))
+                && !found->second.reserved))
             return false;
         attempt = found->second;
     }
     if (attempt.target_finalized)
         return send_relocation_target_terminal (key);
 
-    const auto &complete = *attempt.completion;
+    const auto &relocation = attempt.prepare.relocation;
+    const auto attempt_generation =
+      attempt.prepare.target_attempt_generation;
     for (const auto &[participant, high_water] :
          attempt.expected_high_water) {
         if (_relocation_wire->target_high_water (
-              complete.relocation,
-              complete.target_attempt_generation,
-              participant)
+              relocation, attempt_generation, participant)
             != high_water)
             return false;
     }
+    // Without relocationComplete the durable authority must prove that the
+    // owner CAS committed to this target; reserved is sent before the CAS,
+    // so reserved + matching high water alone must not open admission.
+    if (!attempt.completion
+        && !relocation_target_authority_committed_strict (attempt))
+        return false;
     for (const auto &[participant, _] :
          attempt.expected_high_water)
         (void) _relocation_wire->seal_target (
-          complete.relocation,
-          complete.target_attempt_generation,
-          participant);
+          relocation, attempt_generation, participant);
     for (const auto &[participant, _] :
          attempt.expected_high_water) {
         if (!_relocation_wire->drain_target (
-              complete.relocation,
-              complete.target_attempt_generation,
-              participant))
+              relocation, attempt_generation, participant))
             return false;
     }
     for (const auto &[participant, high_water] :
          attempt.expected_high_water) {
         if (_relocation_wire->target_high_water (
-              complete.relocation,
-              complete.target_attempt_generation,
-              participant)
+              relocation, attempt_generation, participant)
             != high_water)
             return false;
     }
@@ -2875,9 +2965,7 @@ bool public_host_runtime_t::try_finalize_relocation_target (
     for (const auto &[participant, _] :
          attempt.expected_high_water)
         (void) _relocation_wire->unregister_target (
-          complete.relocation,
-          complete.target_attempt_generation,
-          participant);
+          relocation, attempt_generation, participant);
     {
         std::lock_guard lock (_mutex);
         const auto found = _relocation_target_attempts.find (key);
@@ -2886,7 +2974,10 @@ bool public_host_runtime_t::try_finalize_relocation_target (
         found->second.target_finalized = true;
         found->second.attempt_expires_at = {};
     }
-    return send_relocation_target_terminal (key);
+    // The commit succeeded; the terminal may still be undeliverable when
+    // relocationComplete has not arrived yet, so its result is advisory.
+    (void) send_relocation_target_terminal (key);
+    return true;
 }
 
 void public_host_runtime_t::queue_bound_session_replacement_retry (
@@ -2980,6 +3071,7 @@ std::size_t public_host_runtime_t::dispatch_user_spot_operations ()
         bound_session_operations = _bound_session_operations;
     }
     expire_relocation_target_attempts ();
+    poll_relocation_target_attempts ();
     std::size_t count = 0;
     receive_batch_budget_t infrastructure_budget;
     while (auto claim = _transport->mailbox ().try_claim (
@@ -3107,9 +3199,87 @@ std::size_t public_host_runtime_t::dispatch_user_spot_operations ()
                     const auto *ready =
                       std::get_if<protocol::relocation_ready_t> (
                         &control);
-                    if (!ready
-                        || ready->candidate.node_routing_id
-                             != mailbox_record.source_routing_id
+                    if (!ready)
+                        continue;
+                    if (ready->role
+                        == protocol::relocation_role_t::source) {
+                        // Leg 3 arriving at the target: the source
+                        // accepted the capacity offer with the exact
+                        // prepare participant set. Record the
+                        // reservation and ack it with cmd 41; duplicate
+                        // accepts re-send the same ack.
+                        const relocation_attempt_key_t key{
+                          ready->relocation.high,
+                          ready->relocation.low,
+                          ready->target_attempt_generation};
+                        bool accepted = false;
+                        protocol::relocation_reserved_t ack;
+                        {
+                            std::lock_guard lock (_mutex);
+                            const auto found =
+                              _relocation_target_attempts.find (key);
+                            if (found
+                                  != _relocation_target_attempts.end ()
+                                && found->second.prepare.round
+                                     == ready->round
+                                && found->second.prepare.coordinator
+                                     == ready->coordinator
+                                && found->second.prepare.candidate
+                                     == ready->candidate
+                                && same_relocation_wire_object (
+                                     ready->object,
+                                     found->second.prepare.object)
+                                && found->second.prepare
+                                       .source_node_routing_id
+                                     == mailbox_record.source_routing_id
+                                && found->second.prepare
+                                       .source_node_generation
+                                     == mailbox_record
+                                          .source_node_generation
+                                && ready->source_node_generation
+                                     == found->second.prepare
+                                          .source_node_generation
+                                && ready->offered_messages == 0
+                                && ready->offered_bytes == 0
+                                && ready->participants
+                                     == found->second.prepare
+                                          .participants
+                                && ready->root
+                                     == found->second.prepare.root
+                                && ready->application_version
+                                     == found->second.prepare
+                                          .application_version
+                                && ready->reservation_generation
+                                     == found->second.prepare
+                                          .target_attempt_generation) {
+                                found->second.reserved = true;
+                                found->second.attempt_expires_at =
+                                  std::chrono::steady_clock::now ()
+                                  + relocation_attempt_retention;
+                                accepted = true;
+                                ack = protocol::relocation_reserved_t{
+                                  ready->relocation,
+                                  ready->target_attempt_generation,
+                                  ready->round,
+                                  ready->coordinator,
+                                  ready->candidate,
+                                  ready->reservation_generation,
+                                  ready->participants};
+                            }
+                        }
+                        if (!accepted)
+                            continue;
+                        (void) _transport->send_relocation_control (
+                          mailbox_record.source_routing_id, ack);
+                        // Zero-record relocations receive no
+                        // relocationData; when the authority is already
+                        // committed this is the first moment admission
+                        // can open.
+                        (void) try_finalize_relocation_target (key);
+                        continue;
+                    }
+                    if (ready->candidate.node_routing_id
+                          != mailbox_record.source_routing_id
                         || ready->candidate.node_generation
                              != mailbox_record.source_node_generation)
                         continue;
@@ -3550,31 +3720,37 @@ std::size_t public_host_runtime_t::dispatch_user_spot_operations ()
                       std::get_if<
                         protocol::relocation_reserved_t> (
                         &control);
-                    if (!reserved)
+                    // Leg 4 arriving at the source: the target's
+                    // reservation ack completes the pending accept wait
+                    // when it echoes the accepted participants and the
+                    // offered reservation generation.
+                    if (!reserved
+                        || reserved->candidate.node_routing_id
+                             != mailbox_record.source_routing_id
+                        || reserved->candidate.node_generation
+                             != mailbox_record.source_node_generation
+                        || reserved->reservation_generation == 0)
                         continue;
                     const relocation_attempt_key_t key{
                       reserved->relocation.high,
                       reserved->relocation.low,
                       reserved->target_attempt_generation};
-                    std::lock_guard lock (_mutex);
-                    const auto found =
-                      _relocation_target_attempts.find (key);
-                    if (found
-                          == _relocation_target_attempts.end ()
-                        || found->second.prepare.round
-                             != reserved->round
-                        || found->second.prepare.coordinator
-                             != reserved->coordinator
-                        || found->second.prepare.candidate
-                             != reserved->candidate
-                        || found->second.prepare.participants
-                             != reserved->participants
-                        || reserved->reservation_generation == 0)
-                        continue;
-                    found->second.reserved = true;
-                    found->second.attempt_expires_at =
-                      std::chrono::steady_clock::now ()
-                      + relocation_attempt_retention;
+                    bool accepted = false;
+                    {
+                        std::lock_guard lock (_mutex);
+                        const auto found =
+                          _relocation_reservation_responses.find (
+                            key);
+                        if (found
+                              != _relocation_reservation_responses
+                                   .end ()
+                            && found->second.expected == *reserved) {
+                            found->second.accepted = true;
+                            accepted = true;
+                        }
+                    }
+                    if (accepted)
+                        _relocation_changed.notify_all ();
                     continue;
                 }
                 if (wire.kind
@@ -3678,10 +3854,16 @@ std::size_t public_host_runtime_t::dispatch_user_spot_operations ()
                             const auto found =
                               _relocation_target_attempts.find (key);
                             if (found != _relocation_target_attempts.end ()
-                                && !mailbox_record.source_routing_id.empty ())
+                                && !mailbox_record.source_routing_id.empty ()) {
                                 found->second
                                   .completion_source_routing_id =
                                   mailbox_record.source_routing_id;
+                                // An authority-poll finalize has no stored
+                                // completion yet; adopt this one so the
+                                // terminal response can answer the source.
+                                if (!found->second.completion)
+                                    found->second.completion = *complete;
+                            }
                         }
                         (void) send_relocation_target_terminal (key);
                         continue;
@@ -5573,6 +5755,16 @@ std::size_t public_host_runtime_t::dispatch_ready (
                     frozen.source.node_routing_id);
                 record.operation_id = call_id_t{
                   frozen.operation.high, frozen.operation.low};
+                if (frozen.source_kind
+                      == protocol::frozen_source_kind_t::bound_session
+                    && frozen.source_session_routing_id) {
+                    record.source_session_rid = zlink::routing_id_t::from (
+                      *frozen.source_session_routing_id);
+                    record.source_binding_generation =
+                      frozen.source_binding_generation;
+                    record.source_session_sequence =
+                      frozen.source_session_sequence;
+                }
                 switch (frozen.kind) {
                 case protocol::frozen_record_kind_t::actor_send:
                     owner.owner_kind = owner_kind_t::actor;

@@ -61,7 +61,7 @@ export type ServiceObjectPlacementStatus =
   | 'capacity'
   | 'unavailable';
 
-const REQUIRED_CAPABILITY = 'framework-service-v11';
+const REQUIRED_CAPABILITY = 'framework-service-v12';
 const MAX_CAPACITY = 0x7fff_ffff;
 const MAX_PUBLIC_WEIGHT = 10_000;
 

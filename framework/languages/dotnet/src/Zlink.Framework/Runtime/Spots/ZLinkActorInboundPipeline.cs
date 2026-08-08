@@ -321,11 +321,29 @@ internal sealed class ZLinkActorInboundPipeline(
             runtime.Flow.CaptureEnabled,
             ZLinkFlowOrigin.Inbound);
         var state = runtime.GetOrCreateActorState(frame.Actor.ActorId);
-        var capture = allowCapture
-            ? state.Handoff.TryCapture(
-                frame,
-                () => EnsureRelocationReplyRoute(runtime, frame))
-            : ZLinkActorHandoffCaptureResult.NotSealed;
+        ZLinkActorHandoffCaptureResult capture;
+        try
+        {
+            capture = allowCapture
+                ? state.Handoff.TryCapture(
+                    frame,
+                    () => EnsureRelocationReplyRoute(runtime, frame))
+                : ZLinkActorHandoffCaptureResult.NotSealed;
+        }
+        catch (ZLinkActorHandoffRejectedException)
+        {
+            // A frame lacking its exact fence cannot be made durable while
+            // capture is sealed. The request was never accepted, so it stays
+            // on the pre-Captured deadline contract: the caller receives the
+            // observable moving retry terminal — like the Full boundary —
+            // and its own deadline owns the DeadlineExceeded decision.
+            await CompleteMovingBoundaryAsync(
+                    frame,
+                    acknowledgeHandledFrame,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            return;
+        }
         if (capture == ZLinkActorHandoffCaptureResult.Captured)
             return;
         if (capture == ZLinkActorHandoffCaptureResult.Full)
@@ -453,9 +471,17 @@ internal sealed class ZLinkActorInboundPipeline(
                   && exception.Kind == ZLinkFrameworkErrorKind.NotFound
                   && state.Handoff.BlocksLocalDispatch)
         {
-            var retryCapture = state.Handoff.TryCapture(
-                frame,
-                () => EnsureRelocationReplyRoute(runtime, frame));
+            ZLinkActorHandoffCaptureResult retryCapture;
+            try
+            {
+                retryCapture = state.Handoff.TryCapture(
+                    frame,
+                    () => EnsureRelocationReplyRoute(runtime, frame));
+            }
+            catch (ZLinkActorHandoffRejectedException)
+            {
+                retryCapture = ZLinkActorHandoffCaptureResult.NotSealed;
+            }
             if (retryCapture == ZLinkActorHandoffCaptureResult.Captured)
                 return;
 

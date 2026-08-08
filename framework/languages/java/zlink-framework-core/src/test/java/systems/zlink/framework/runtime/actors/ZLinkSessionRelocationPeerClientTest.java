@@ -1,21 +1,21 @@
 package systems.zlink.framework.runtime.actors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.lang.reflect.Proxy;
 import java.time.Duration;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.errors.ZlinkRequestException;
 import systems.zlink.contracts.sockets.RequestResult;
+import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 
@@ -26,43 +26,10 @@ final class ZLinkSessionRelocationPeerClientTest {
     private static final RoutingId SESSION = RoutingId.from("session");
 
     @Test
-    void opensAdmissionOnlyAfterExactAckAndSteadyNormalization() {
-        var codec = new ZLinkServiceM6BWireCodec();
-        var command = command();
-        List<String> events = new ArrayList<>();
-        AtomicInteger submissions = new AtomicInteger();
-        ZLinkInternalMeshNode node = node((target, encoded) -> {
-            submissions.incrementAndGet();
-            assertEquals(SESSION_OWNER, target);
-            assertEquals(command, codec.decodeSessionRelocationRoute(encoded));
-            events.add("ack");
-            return codec.encodeSessionRelocationRouted(ack(command));
-        });
-        var gate = new Gate(events);
-
-        new ZLinkSessionRelocationPeerClient(node, codec)
-            .switchRouteThenOpenAdmission(
-                command,
-                Duration.ofSeconds(1),
-                (sent, received) -> {
-                    events.add("steady");
-                    return CompletableFuture.completedFuture(null);
-                },
-                gate)
-            .toCompletableFuture().join();
-
-        assertEquals(List.of("closed", "ack", "steady", "open"), events);
-        assertEquals(1, submissions.get());
-        assertTrue(gate.open);
-    }
-
-    @Test
-    void mismatchedAckDoesNotNormalizeOpenOrRetry() {
+    void mismatchedAckFailsTheRouteSwitchWithoutRetry() {
         var codec = new ZLinkServiceM6BWireCodec();
         var command = command();
         AtomicInteger submissions = new AtomicInteger();
-        AtomicInteger normalizations = new AtomicInteger();
-        Gate gate = new Gate(new ArrayList<>());
         ZLinkInternalMeshNode node = node((target, encoded) -> {
             submissions.incrementAndGet();
             var valid = ack(command);
@@ -75,19 +42,10 @@ final class ZLinkSessionRelocationPeerClientTest {
 
         assertThrows(CompletionException.class, () ->
             new ZLinkSessionRelocationPeerClient(node, codec)
-                .switchRouteThenOpenAdmission(
-                    command,
-                    Duration.ofSeconds(1),
-                    (sent, received) -> {
-                        normalizations.incrementAndGet();
-                        return CompletableFuture.completedFuture(null);
-                    },
-                    gate)
+                .switchRoute(command, Duration.ofSeconds(1))
                 .toCompletableFuture().join());
 
         assertEquals(1, submissions.get());
-        assertEquals(0, normalizations.get());
-        assertFalse(gate.open);
     }
 
     @Test
@@ -110,6 +68,91 @@ final class ZLinkSessionRelocationPeerClientTest {
             .toCompletableFuture()
             .join();
 
+        assertEquals(2, submissions.get());
+    }
+
+    @Test
+    void staleBindingRejectionIsATerminalNoOpWithoutRetry()
+        throws InterruptedException {
+        var codec = new ZLinkServiceM6BWireCodec();
+        var command = command();
+        AtomicInteger submissions = new AtomicInteger();
+        AtomicInteger supersededChecks = new AtomicInteger();
+        ZLinkInternalMeshNode node = node((target, encoded) -> {
+            submissions.incrementAndGet();
+            throw new CompletionException(new ZLinkConfigurationException(
+                "Session relocation route command has a stale binding fence"));
+        });
+
+        new ZLinkSessionRelocationPeerClient(node, codec)
+            .switchRouteUntilTerminal(
+                command,
+                Duration.ofSeconds(1),
+                () -> {
+                    supersededChecks.incrementAndGet();
+                    return CompletableFuture.completedFuture(false);
+                })
+            .toCompletableFuture().join();
+
+        Thread.sleep(120);
+        assertEquals(1, submissions.get(),
+            "a superseded binding never retries");
+        assertEquals(0, supersededChecks.get(),
+            "the rejection itself is the terminal proof");
+    }
+
+    @Test
+    void supersededStoreProofStopsTheBackgroundRetry()
+        throws InterruptedException {
+        var codec = new ZLinkServiceM6BWireCodec();
+        var command = command();
+        AtomicInteger submissions = new AtomicInteger();
+        AtomicInteger supersededChecks = new AtomicInteger();
+        ZLinkInternalMeshNode node = node((target, encoded) -> {
+            submissions.incrementAndGet();
+            throw new CompletionException(
+                new IllegalStateException("route switch failed"));
+        });
+
+        new ZLinkSessionRelocationPeerClient(node, codec)
+            .switchRouteUntilTerminal(
+                command,
+                Duration.ofSeconds(1),
+                () -> CompletableFuture.completedFuture(
+                    supersededChecks.incrementAndGet() >= 2))
+            .toCompletableFuture().join();
+
+        Thread.sleep(200);
+        assertEquals(2, submissions.get(),
+            "the retry stops once the store proves supersession");
+        assertEquals(2, supersededChecks.get());
+    }
+
+    @Test
+    void routeFailureSettlesFinalizeAndConvergesInTheBackground()
+        throws InterruptedException {
+        var codec = new ZLinkServiceM6BWireCodec();
+        var command = command();
+        AtomicInteger submissions = new AtomicInteger();
+        CountDownLatch converged = new CountDownLatch(1);
+        ZLinkInternalMeshNode node = node((target, encoded) -> {
+            if (submissions.incrementAndGet() == 1) {
+                throw new CompletionException(
+                    new IllegalStateException("route switch failed"));
+            }
+            converged.countDown();
+            return codec.encodeSessionRelocationRouted(ack(command));
+        });
+
+        new ZLinkSessionRelocationPeerClient(node, codec)
+            .switchRouteUntilTerminal(
+                command,
+                Duration.ofSeconds(1),
+                () -> CompletableFuture.completedFuture(false))
+            .toCompletableFuture().join();
+
+        assertTrue(converged.await(2, TimeUnit.SECONDS),
+            "the failed route keeps retrying after finalize settles");
         assertEquals(2, submissions.get());
     }
 
@@ -147,17 +190,6 @@ final class ZLinkSessionRelocationPeerClientTest {
             command.session(), command.action(),
             command.currentAuthorityOwnerGeneration(),
             command.lastAcceptedSessionSequence());
-    }
-
-    private static final class Gate
-        implements ZLinkSessionRelocationPeerClient.AdmissionGate {
-        private final List<String> events;
-        private boolean open;
-
-        private Gate(List<String> events) { this.events = events; }
-
-        @Override public void close() { open = false; events.add("closed"); }
-        @Override public void open() { open = true; events.add("open"); }
     }
 
     @FunctionalInterface

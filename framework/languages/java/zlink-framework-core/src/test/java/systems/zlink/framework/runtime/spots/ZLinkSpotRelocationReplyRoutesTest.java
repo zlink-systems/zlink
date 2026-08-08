@@ -2,6 +2,8 @@ package systems.zlink.framework.runtime.spots;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
@@ -112,6 +114,70 @@ final class ZLinkSpotRelocationReplyRoutesTest {
 
         assertEquals(ZLinkSpotRelocationReplyRoutes.Ack.NOT_ACKNOWLEDGED, ack);
         assertEquals(0, replies.get());
+    }
+
+    @Test
+    void canonicalLookupHitsOnLandingNodeWhenRequestSourceFenceDiffers() {
+        //  The reply capability lands on the relocation source node while the
+        //  frozen record's request-source fence names another node. The relay
+        //  sent by the relocation target must still resolve the route.
+        byte[] accepted = ZLinkAcceptedJournalTestRecords.spot(
+            "source-spot", "room-1", 41, "room.query", Map.of(),
+            new byte[] {1});
+        AtomicInteger replies = new AtomicInteger();
+        var received = new ZLinkBackendReceived(
+            ZLinkBackendRequestResult.OK,
+            Optional.of(RoutingId.from("journal-node")),
+            Optional.of("room-1"),
+            Optional.of(41L),
+            new byte[0],
+            accepted,
+            List.of(),
+            parts -> {
+                replies.incrementAndGet();
+                parts.forEach(Message::close);
+            },
+            () -> { });
+        var routes = new ZLinkSpotRelocationReplyRoutes();
+        routes.register(accepted, received, "room-1", 1)
+            .releaseForRelocation();
+        RoutingId target = RoutingId.from("target-node");
+        routes.bindCommitted(
+            List.of(accepted),
+            target,
+            7,
+            new ZLinkSpotRelocationReplyRoutes.CommittedFence(
+                "authority-key", 2, 9));
+        var relay = new systems.zlink.framework.runtime.internal.service
+            .ZLinkServiceRelocationWireCodec.ReplyRelay(
+                new systems.zlink.framework.runtime.internal.service
+                    .ZLinkServiceRelocationWireCodec.Operation(1, 2),
+                41,
+                new systems.zlink.framework.runtime.internal.service
+                    .ZLinkServiceRelocationWireCodec.RelocationId(4, 5),
+                9,
+                new systems.zlink.framework.runtime.internal.service
+                    .ZLinkServiceRelocationWireCodec.CoordinatorFence(
+                        "target-owner", 3, target, 7, "store-version"),
+                2,
+                10,
+                0,
+                0);
+
+        var route = routes.lookupCanonical(relay, target);
+
+        assertNotNull(route,
+            "relay from the relocation target must land on this node");
+        assertEquals(RoutingId.from("journal-node"), route.sourceNodeRid(),
+            "the ACK keeps the request-source fence of the frozen record");
+        assertNull(routes.lookupCanonical(
+                relay, RoutingId.from("journal-node")),
+            "a relay that does not arrive from the relocation target misses");
+        assertEquals(
+            ZLinkSpotRelocationReplyRoutes.Ack.TERMINAL_RECEIVED,
+            routes.deliverCanonical(route, List.of(new byte[] {1}))
+                .toCompletableFuture().join());
+        assertEquals(1, replies.get());
     }
 
     @Test

@@ -270,15 +270,46 @@ stateful_error_t raw_stateful_dispatch_t::ingest (
                 if (!matches_application_route (owner, actor.target)) {
                     validation = stateful_error_t::conflict;
                 }
+                else if (const bool bound_session_routed =
+                           actor.bound_session_source.has_value ()
+                           || record.bound_session_source.has_value ();
+                         bound_session_routed
+                         && !(actor.bound_session_source
+                              && !actor.bound_session_source
+                                    ->session_routing_id.empty ()
+                              && actor.bound_session_source
+                                     ->binding_generation
+                                   != 0
+                              && actor.bound_session_source
+                                     ->session_sequence
+                                   != 0)) {
+                    // Cross-language capture contract: a bound-session-routed
+                    // frame that is missing its exact fence (session RID +
+                    // binding generation + session sequence) is pre-Captured.
+                    // Never freeze it under the node/actor fallback identity;
+                    // reject it with the retryable moving terminal so the
+                    // session owner keeps redelivery ownership.
+                    validation = stateful_error_t::moving;
+                }
                 else {
                     query.target_node_routing_id =
                       actor.target.target_node_routing_id;
                     query.target_node_generation =
                       actor.target.target_node_generation;
-                    query.source_kind = actor.source_actor
-                      ? protocol::frozen_source_kind_t::actor
-                      : protocol::frozen_source_kind_t::node;
+                    query.source_kind = actor.bound_session_source
+                      ? protocol::frozen_source_kind_t::bound_session
+                      : actor.source_actor
+                          ? protocol::frozen_source_kind_t::actor
+                          : protocol::frozen_source_kind_t::node;
                     query.source_actor = actor.source_actor;
+                    if (actor.bound_session_source) {
+                        query.source_session_routing_id =
+                          actor.bound_session_source->session_routing_id;
+                        query.source_binding_generation =
+                          actor.bound_session_source->binding_generation;
+                        query.source_session_sequence =
+                          actor.bound_session_source->session_sequence;
+                    }
                     const auto authority = _authority_resolver (query);
                     if (!authority
                         || actor.target.owner_lease_generation
@@ -335,11 +366,27 @@ stateful_error_t raw_stateful_dispatch_t::ingest (
                   == protocol::command::actorRequest
                   ? protocol::frozen_record_kind_t::actor_request
                   : protocol::frozen_record_kind_t::actor_send;
-                frozen.source_kind = actor.source_actor
-                  ? protocol::frozen_source_kind_t::actor
-                  : protocol::frozen_source_kind_t::node;
                 frozen.source = accepted_authority->source;
-                frozen.source_actor = actor.source_actor;
+                if (actor.bound_session_source) {
+                    // The bound-session frozen source identity is the exact
+                    // owning Actor of the current binding record, which is the
+                    // fenced ingest target of a bound-session frame.
+                    frozen.source_kind =
+                      protocol::frozen_source_kind_t::bound_session;
+                    frozen.source_actor = std::make_pair (
+                      owner.key, owner.object_generation);
+                    frozen.source_session_routing_id =
+                      actor.bound_session_source->session_routing_id;
+                    frozen.source_binding_generation =
+                      actor.bound_session_source->binding_generation;
+                    frozen.source_session_sequence =
+                      actor.bound_session_source->session_sequence;
+                } else {
+                    frozen.source_kind = actor.source_actor
+                      ? protocol::frozen_source_kind_t::actor
+                      : protocol::frozen_source_kind_t::node;
+                    frozen.source_actor = actor.source_actor;
+                }
                 frozen.operation = actor.operation;
                 frozen.operation_kind = *application_command
                   == protocol::command::actorRequest ? 4u : 0u;
@@ -374,9 +421,13 @@ stateful_error_t raw_stateful_dispatch_t::ingest (
 
     if (validation != stateful_error_t::none) {
         if (record.request_sequence && record.correlation) {
+            // moving replies with the retryable relocation terminal
+            // (conflict + spotMoving maps to a retryable unavailable on the
+            // requester), so the session owner keeps redelivery ownership.
             (void) _transport->reply_failure (
               record,
               validation == stateful_error_t::generation_stale
+                  || validation == stateful_error_t::moving
                 ? terminal_conflict
                 : validation == stateful_error_t::conflict
                     ? terminal_rejected
@@ -384,6 +435,9 @@ stateful_error_t raw_stateful_dispatch_t::ingest (
               validation == stateful_error_t::generation_stale
                 ? static_cast<std::uint32_t> (
                     protocol::framework_error_code::actorLocationStale)
+                : validation == stateful_error_t::moving
+                    ? static_cast<std::uint32_t> (
+                        protocol::framework_error_code::spotMoving)
                 : validation == stateful_error_t::conflict
                     ? static_cast<std::uint32_t> (
                         protocol::framework_error_code::requestRejected)

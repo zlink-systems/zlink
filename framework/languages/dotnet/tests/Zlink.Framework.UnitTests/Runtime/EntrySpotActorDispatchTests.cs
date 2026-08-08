@@ -1871,6 +1871,165 @@ public sealed partial class EntrySpotActorDispatchTests
     }
 
     [Fact]
+    public async Task RetriedRemoteReplyAfterAckLossDeliversExactlyOnceToTheSession()
+    {
+        var node = new CapturingSpotNode();
+        var (runtime, actor) = await CreateStartedRuntimeAsync(
+            node,
+            includeActorFactory: false);
+        try
+        {
+            var sessionRid = RoutingId.From("reply-once-session");
+            var socket = new CountingStreamSocket();
+            var context = new ZLinkSessionContext(
+                runtime,
+                new ZLinkManagedStream(
+                    socket,
+                    sessionRid,
+                    runtime.Registration.Codecs,
+                    "test"),
+                new RelaySessionHandlerRegistry(),
+                static () => ValueTask.CompletedTask,
+                static _ => ValueTask.CompletedTask);
+            const string bindingToken = "reply-once-binding";
+            var bound = new ZLinkSessionActor(
+                context,
+                actor.ActorId,
+                sessionRid,
+                bindingToken);
+            _ = runtime.BindSessionActor(
+                actor.ActorId,
+                context,
+                bindingToken,
+                bound,
+                bindingGeneration: 1,
+                route: ZLinkSessionBindingRoute.Create(
+                    new ActorRef(
+                        actor.ActorId,
+                        actor.Generation,
+                        "entry",
+                        actor.NodeRid),
+                    "entry",
+                    targetNodeGeneration: 2,
+                    authorityOwnerGeneration: 3,
+                    ownerLeaseGeneration: 4),
+                sessionOwnerNodeGeneration: 5);
+            var capability = runtime.TrackRemoteSessionActorRequest(
+                actor.ActorId,
+                requestId: 907,
+                bindingToken);
+            var responder = RoutingId.From("reply-once-responder");
+            var frame = new byte[] { 9, 0, 7 };
+
+            await runtime.DeliverRemoteActorReplyAsync(
+                actor.ActorId,
+                requestId: 907,
+                ZLinkActorBoundSessionRelay.ActorRecvInfoNoBind,
+                capability,
+                sourceNodeRid: responder,
+                responderNodeRid: responder,
+                frame,
+                CancellationToken.None);
+            Assert.Equal(1, socket.SendCount);
+
+            // The relay ACK to the target can be lost; the target retries the
+            // exact reply. The session-side claim keeps the terminal indexed
+            // so the retry cannot push a duplicate frame to the session.
+            await runtime.DeliverRemoteActorReplyAsync(
+                actor.ActorId,
+                requestId: 907,
+                ZLinkActorBoundSessionRelay.ActorRecvInfoNoBind,
+                capability,
+                sourceNodeRid: responder,
+                responderNodeRid: responder,
+                frame,
+                CancellationToken.None);
+            Assert.Equal(1, socket.SendCount);
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task BoundSessionFrameWithoutFenceGetsTheMovingRetryTerminalAtCapture()
+    {
+        var node = new CapturingSpotNode();
+        var (runtime, actor) = await CreateStartedRuntimeAsync(
+            node,
+            includeActorFactory: false);
+        try
+        {
+            var state = runtime.GetOrCreateActorState(actor.ActorId);
+            state.Handoff.BeginCanonicalMaintenanceImport("capture-fence", []);
+            state.Handoff.MarkAuthorityCommitted(
+                "capture-fence",
+                actor.Generation,
+                actor.Generation);
+            _ = state.Handoff.PrepareCanonicalMaintenanceReplay("capture-fence");
+
+            var directReplies = new List<byte[]>();
+            var frame = new ZLinkSpotActorFrame(
+                actor,
+                actor,
+                RoutingId.From("fence-source-node"),
+                RoutingId.From("fence-session"),
+                911,
+                ZLinkActorBoundSessionRelay.ActorRecvInfoNoBind,
+                new ZLinkBackendActorRouteContext(
+                    new MeshOperationId(19, 911),
+                    MessageFollowHopCount: 0,
+                    TargetNodeGeneration: 2,
+                    AuthorityOwnerGeneration: 3,
+                    OwnerLeaseGeneration: 4,
+                    ReplyRequestId: 911,
+                    ReplyFlags: ZLinkActorBoundSessionRelay.ActorRecvInfoNoBind,
+                    ReplyCapability: "fence-reply",
+                    DeadlineUnixMs: ulong.MaxValue,
+                    IsBoundSessionRoute: true),
+                new ZlinkStreamHeader(
+                    ZlinkStreamMessageKind.Request,
+                    ZlinkStreamCodec.Raw,
+                    ZlinkStreamHeaderFlags.HasRequestSeq,
+                    new ZlinkStreamRequestSeq(911),
+                    "fence-request",
+                    ZlinkStreamMetadata.Empty),
+                Message.From("fence-body"),
+                sourceNodeGeneration: 0,
+                requestSource: null,
+                (parts, _) =>
+                {
+                    directReplies.Add(
+                        parts.Single().AsReadOnlySpan().ToArray());
+                    return SubmitResult.Ok;
+                });
+            var pipeline = new ZLinkActorInboundPipeline(
+                runtime,
+                new ZLinkEntrySpotActorInboundEndpoint(runtime));
+
+            // The bound-session frame lacks its request-source fence, so it
+            // cannot be made durable while capture is sealed. The request was
+            // never accepted: it stays on the pre-Captured deadline contract
+            // and receives the observable moving retry terminal instead of an
+            // escaping handoff rejection.
+            await pipeline.DispatchAsync(
+                new ZLinkSpotActorFrameBatch([frame]),
+                CancellationToken.None);
+
+            var reply = Assert.Single(directReplies);
+            var decoded = DecodeReplyFrame<ZLinkStreamWireError>(reply);
+            Assert.Equal(
+                ZLinkFrameworkErrorKind.Unavailable.ToString(),
+                decoded.Payload.Code);
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
     public async Task Remote_Disconnect_Relay_Allocates_An_Operation_Fence()
     {
         var node = new CapturingSpotNode();
@@ -8066,6 +8225,78 @@ public sealed partial class EntrySpotActorDispatchTests
             ZLinkMessage payload,
             CancellationToken cancellationToken = default) =>
             ValueTask.FromResult(false);
+    }
+
+    private sealed class CountingStreamSocket : IZLinkBackendStreamSocket
+    {
+        private int _sendCount;
+
+        internal int SendCount => Volatile.Read(ref _sendCount);
+
+        public void Bind(string endpoint) { }
+
+        public void SetTlsServer(
+            string certPath,
+            string keyPath,
+            bool requireClientCert) { }
+
+        public void OnSendReady(Action handler) { }
+
+        public bool RecvPart(
+            out RoutingId? sourceRoutingId,
+            out Message? part,
+            out bool hasMore,
+            RecvFlags flags = RecvFlags.None)
+        {
+            sourceRoutingId = null;
+            part = null;
+            hasMore = false;
+            return false;
+        }
+
+        public bool Send(
+            RoutingId routingId,
+            Message payload,
+            SendFlags flags)
+        {
+            Interlocked.Increment(ref _sendCount);
+            return true;
+        }
+
+        public bool Send(
+            RoutingId routingId,
+            IReadOnlyList<Message> parts,
+            SendFlags flags)
+        {
+            Interlocked.Increment(ref _sendCount);
+            return true;
+        }
+
+        public void DisconnectPeer(RoutingId routingId) { }
+
+        public ValueTask BindActorAsync(
+            RoutingId sessionRid,
+            ZLinkBackendActorRef actor,
+            TimeSpan timeout,
+            CancellationToken cancellationToken) => ValueTask.CompletedTask;
+
+        public ValueTask UnbindActorAsync(
+            RoutingId sessionRid,
+            string actorId,
+            TimeSpan timeout,
+            CancellationToken cancellationToken) => ValueTask.CompletedTask;
+
+        public bool SendBoundActor(
+            RoutingId sessionRid,
+            string actorId,
+            IReadOnlyList<Message> parts,
+            SendFlags flags)
+        {
+            Interlocked.Increment(ref _sendCount);
+            return true;
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
     private sealed class RelayStreamSocket : IZLinkBackendStreamSocket

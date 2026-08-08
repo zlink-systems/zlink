@@ -53,7 +53,7 @@ struct service_node_descriptor_t
     service_node_state_t state = service_node_state_t::preparing;
     std::string security_identity = "default";
     std::int64_t application_version = 0;
-    std::vector<std::string> protocol_capabilities{"framework-service-v11"};
+    std::vector<std::string> protocol_capabilities{"framework-service-v12"};
     service_object_role_t object_role = service_object_role_t::none;
     int placement_weight = 100;
     std::uint32_t active_capacity_limit = 10000;

@@ -237,3 +237,42 @@ wire다. 그리고 spec의 route retry ladder(`1,1,2,4,5`→5초)와 네 결과 
 | 10 | Node relocation seal API 3종이 test에서만 호출됨 | `service-mailbox.ts:193-240` | dead API |
 | 11 | Java cross-node bound-session reply relay의 landing site 부재. reply route가 accepting node에만 등록되는데 relay는 `sourceNodeRid`로 주소 지정 | `ZLinkJavaRawMeshNode.java:5398-5406`, `ZLinkUserSpotRetireTargetEndpoint.java:448-450` | cross-node 결함 의심 |
 | 12 | Java에서 `lastAcceptedSessionSequence`가 wire 40·30·41을 건너며 유실되어 target이 0으로 재구성 | `ZLinkCanonicalRelocationStateMachine.java:1106` | fence 약화 |
+
+## 12. 구현 적용 완료 기록 (2026-08-09)
+
+§10의 결정과 §11의 결함을 입력으로 spec·internals·schema·네 언어 runtime의 정합화를 완료했다.
+
+**문서**: A-1~A-4, FRS-07, steady normalization 후속 목록, capability v12 표기. Codex 리뷰 전 섹션 clean.
+
+**Schema**: Ready barrier를 8단계 gating + 비동기 수렴 목록으로 재설계, abort 무대기 6단계 순서,
+drain→journal 전환, replacement/coordinator 권한 제거(enum 값은 decodable-reserved), protocol rev —
+kind==2 participant identity에 `lastAcceptedSessionSequence` 추가, capability `framework-service-v12`
+bump(admission에서 v11/v12 상호 거부 확인). Codex 3회전 지적(High 4, Medium 4)과 문서 리뷰가 찾은 잔여
+2건 + sibling 1건 모두 반영. 공유 golden에 kind==2 frame 2개 추가(왕복 검증).
+
+**Runtime**: 네 언어 모두 (1) admission이 owner CAS + restore/replay + timer + queue 병합 + dispatch
+전환에서 열리고 source cleanup·Completed·route ACK·steady normalization은 비동기 수렴, (2) abort는 route
+ACK를 기다리지 않고 6단계 순서로 복원, (3) bound-session request는 신원을 보존해 journal, (4) fence 없는
+frame은 재시도 가능한 moving/unavailable로 거부(4개 언어 동일 분류), (5) different-target takeover
+제거(.NET), (6) cmd 30 sentinel 강제, (7) capability v12. 결함 목록 §11의 1~9·11·12 해소.
+
+**최종 gate**: Node 1312/1312(+m6a/b/c 39·94·88), Java 894(API snapshot 불변), .NET 1629 unit + 76
+contract, C++ ctest 45/45, protocol gate(negative 234 포함) 전부 green,
+verify-framework-doc-contracts 통과. **E2E**: dotnet SpotActorTransfer 16/16 시나리오 +
+relocation contract 검증 통과(Redis 기동).
+
+**추가 정합 (2026-08-09 후속)**: C++의 3-leg reservation handshake를 schema의 4-leg 계약으로
+정합했다. Source가 offer 검증 뒤 cmd 30 source-accept(sentinel 준수)를 보내고, target이 accept 검증 뒤
+cmd 41 reservation ack(nonzero reservationGeneration = targetAttemptGeneration, Node와 동일한 방식)를
+반환한다. 이전에 반대 방향으로 쓰이던 cmd 41의 발신 주체도 schema대로 target으로 바로잡았다. Accept는
+50 ms 간격으로 41 도착·중단·deadline까지 재전송한다. ctest 45/45 green, Area 1 admission test 5종
+신질서에서 그대로 통과. 이로써 네 언어의 reservation handshake가 같은 wire 계약을 사용한다.
+D-RESERVE의 남은 질문(phase의 durable 표현, FRS-04 왕복 단순화)은 계약 gap이 아니라 향후 최적화
+결정으로 열려 있다.
+
+**남긴 gap (문서화로 종결)**:
+- C++에는 공유 relocation-control fixture를 소비하는 test가 없다(kind==2 byte pin은 Node·Java·.NET
+  세 언어가 담당). C++ codec은 자체 왕복 test로 검증된다.
+- 기존과 무관한 실패: .NET SampleRegressionTests 3건(시나리오 주석 lint), C++
+  `common_e2e_inventory`(문서 계약, 본 변경 이전부터 실패). §11의 결함 10(Node dead API)은 정리 대상으로
+  남아 있다.

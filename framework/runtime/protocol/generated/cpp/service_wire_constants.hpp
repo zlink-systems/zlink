@@ -7,7 +7,7 @@
 namespace zlink::framework::runtime::protocol {
 inline constexpr std::uint8_t magic[] = {90, 77};
 inline constexpr std::uint8_t wire_major = 1;
-inline constexpr const char required_capability[] = "framework-service-v11";
+inline constexpr const char required_capability[] = "framework-service-v12";
 inline constexpr const char framework_multipart_packet_name[] = "ZLinkFrameworkMultipart";
 inline constexpr const char framework_multipart_content_type[] = "application/x-zlink-multipart";
 enum class command : std::uint8_t {

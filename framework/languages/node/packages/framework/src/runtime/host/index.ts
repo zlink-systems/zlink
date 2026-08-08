@@ -641,6 +641,13 @@ export class ZLinkFrameworkRuntimeHost implements
       authorityStore: () => this.locationOwner.currentStores?.locationStore,
       relocationStore: () =>
         this.options.registration.locations.relocationStoreInstance,
+      liveDescriptors: (meshName, signal) => {
+        const runtime = this.locationOwner.currentRuntime;
+        if (runtime === undefined) {
+          throw new Error('Session owner liveness is unavailable without a Location runtime.');
+        }
+        return runtime.listLiveMeshNodes(meshName, signal);
+      },
       clearRemoteActorPacketTarget: (actorId) =>
         this.boundSessionRelay.clearRemoteActorPacketTarget(actorId),
       reportPostCommitError: (error) =>

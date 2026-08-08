@@ -632,8 +632,10 @@ void maintenance_runtime_t::attach_relocation_wire (
 std::optional<std::vector<protocol::relocation_data_t>>
 maintenance_runtime_t::build_replay_records (
   const std::vector<frozen_object_state_t> &participants,
-  const eligible_relocation_unit_t::canonical_wire_context_t &context) const
+  const eligible_relocation_unit_t::canonical_wire_context_t &context,
+  relocation_reason_t &failure_reason) const
 {
+    failure_reason = relocation_reason_t::restore_failed;
     if (!_relocation_wire
         || (context.relocation.high == 0 && context.relocation.low == 0)
         || context.target_attempt_generation == 0
@@ -657,6 +659,28 @@ maintenance_runtime_t::build_replay_records (
             return std::nullopt;
         std::uint64_t sequence = 0;
         for (const auto &pending : participant.pending_application) {
+            if (pending.application_record
+                && pending.application_record->source_kind
+                     == protocol::frozen_source_kind_t::bound_session
+                && (!pending.application_record->source_session_routing_id
+                    || pending.application_record->source_session_routing_id
+                         ->empty ()
+                    || pending.application_record->source_binding_generation
+                         == 0
+                    || pending.application_record->source_session_sequence
+                         == 0
+                    || !pending.application_record->source_actor
+                    || pending.application_record->source_actor->second
+                         == 0)) {
+                // Fail-closed backstop for a captured record that claims a
+                // bound-session source without its exact fence. Ingest
+                // rejects this condition pre-Captured; if a record still
+                // reaches capture, surface the distinct reason instead of
+                // failing the batch silently.
+                failure_reason =
+                  relocation_reason_t::bound_session_fence_incomplete;
+                return std::nullopt;
+            }
             protocol::frozen_record_t frozen;
             try {
                 if (pending.application_record) {
@@ -691,6 +715,23 @@ maintenance_runtime_t::build_replay_records (
                     && (!frozen.reply_route_id
                         || *frozen.reply_route_id == 0)))
                 return std::nullopt;
+            if (frozen.source_kind
+                  == protocol::frozen_source_kind_t::bound_session
+                && (!frozen.source_session_routing_id
+                    || frozen.source_session_routing_id->empty ()
+                    || frozen.source_binding_generation == 0
+                    || frozen.source_session_sequence == 0
+                    || !frozen.source_actor
+                    || frozen.source_actor->second == 0)) {
+                // Fail-closed backstop for a frozen record that claims a
+                // bound-session source without its exact fence. Ingest
+                // rejects this condition pre-Captured; if a record still
+                // reaches capture, surface the distinct reason instead of
+                // failing the batch silently.
+                failure_reason =
+                  relocation_reason_t::bound_session_fence_incomplete;
+                return std::nullopt;
+            }
             protocol::relocation_object_kind_t kind;
             switch (participant.owner.kind) {
             case object_kind_t::actor:
@@ -933,14 +974,25 @@ relocation_result_t maintenance_runtime_t::relocate (
            std::nullopt});
     }
 
+    // Failure paths release the target's reserved relocation capacity before
+    // abort_relocation restores the source admission, so reserved space is
+    // never held across the admission restore.
+    const auto abort_capacity = [&] () noexcept {
+        if (_authority)
+            _authority->abort_capacity (relocation_capacity_fence);
+    };
+
     std::vector<protocol::relocation_data_t> replay_records;
     if (canonical_wire) {
-        const auto built = build_replay_records ({seal.frozen}, *canonical_wire);
+        auto replay_failure = relocation_reason_t::restore_failed;
+        const auto built = build_replay_records (
+          {seal.frozen}, *canonical_wire, replay_failure);
         if (!built) {
+            abort_capacity ();
             (void) _objects.abort_relocation (seal.token);
             return finish (
               {relocation_terminal_t::blocked,
-               relocation_reason_t::restore_failed,
+               replay_failure,
                std::nullopt});
         }
         replay_records = *built;
@@ -950,6 +1002,7 @@ relocation_result_t maintenance_runtime_t::relocate (
     try {
         payload = encode (seal.frozen, inventory_digest);
         if (payload.empty () || payload.size () > encoded_upper_bound) {
+            abort_capacity ();
             (void) _objects.abort_relocation (seal.token);
             return finish (
               {relocation_terminal_t::blocked,
@@ -962,6 +1015,7 @@ relocation_result_t maintenance_runtime_t::relocate (
         }
     }
     catch (...) {
+        abort_capacity ();
         (void) _objects.abort_relocation (seal.token);
         return finish (
           {relocation_terminal_t::store_failed,
@@ -969,6 +1023,7 @@ relocation_result_t maintenance_runtime_t::relocate (
            std::nullopt});
     }
     if (payload.empty ()) {
+        abort_capacity ();
         (void) _objects.abort_relocation (seal.token);
         return finish (
           {relocation_terminal_t::blocked,
@@ -982,6 +1037,7 @@ relocation_result_t maintenance_runtime_t::relocate (
         stored = _relocations->put (payload, relocation_retention);
     }
     catch (...) {
+        abort_capacity ();
         (void) _objects.abort_relocation (seal.token);
         return finish (
           {relocation_terminal_t::store_failed,
@@ -996,6 +1052,7 @@ relocation_result_t maintenance_runtime_t::relocate (
             catch (...) {
             }
         }
+        abort_capacity ();
         (void) _objects.abort_relocation (seal.token);
         return finish (
           {relocation_terminal_t::store_failed,
@@ -1012,6 +1069,7 @@ relocation_result_t maintenance_runtime_t::relocate (
         }
         catch (...) {
         }
+        abort_capacity ();
         (void) _objects.abort_relocation (seal.token);
         return finish (
           {relocation_terminal_t::blocked,
@@ -1024,10 +1082,12 @@ relocation_result_t maintenance_runtime_t::relocate (
         auto target = source;
         target.node_id = std::move (target_node_id);
         ++target.authority_owner_generation;
+        // The fence is passed by copy so a failed publish can still release
+        // the reserved capacity before the source admission is restored.
         published = _authority->publish (
           source, target,
           std::move (target_owner),
-          std::move (relocation_capacity_fence),
+          relocation_capacity_fence,
           stored.reference,
           checksum, inventory_digest);
     }
@@ -1072,6 +1132,7 @@ relocation_result_t maintenance_runtime_t::relocate (
         }
         catch (...) {
         }
+        abort_capacity ();
         (void) _objects.abort_relocation (seal.token);
         return finish (
           {published.status == authority_publish_status_t::conflict
@@ -1546,15 +1607,26 @@ aggregate_relocation_result_t maintenance_runtime_t::relocate_aggregate (
             : relocation_reason_t::restore_failed,
           {}};
     }
+    // Failure paths release the target's reserved relocation capacity before
+    // abort_relocation restores the source admission, so reserved space is
+    // never held across the admission restore.
+    const auto abort_capacity = [&] () noexcept {
+        if (!_authority)
+            return;
+        for (const auto &fence : relocation_capacity_fences)
+            _authority->abort_capacity (fence);
+    };
     std::vector<protocol::relocation_data_t> replay_records;
     if (canonical_wire) {
-        const auto built =
-          build_replay_records (seal.participants, *canonical_wire);
+        auto replay_failure = relocation_reason_t::restore_failed;
+        const auto built = build_replay_records (
+          seal.participants, *canonical_wire, replay_failure);
         if (!built) {
+            abort_capacity ();
             (void) _objects.abort_relocation (seal.token);
             return {
               relocation_terminal_t::blocked,
-              relocation_reason_t::restore_failed,
+              replay_failure,
               {}};
         }
         replay_records = *built;
@@ -1564,6 +1636,7 @@ aggregate_relocation_result_t maintenance_runtime_t::relocate_aggregate (
         payload = encode_aggregate (
           seal.participants, inventory_digest);
         if (payload.empty () || payload.size () > encoded_upper_bound) {
+            abort_capacity ();
             (void) _objects.abort_relocation (seal.token);
             return {
               relocation_terminal_t::blocked,
@@ -1576,6 +1649,7 @@ aggregate_relocation_result_t maintenance_runtime_t::relocate_aggregate (
         }
     }
     catch (...) {
+        abort_capacity ();
         (void) _objects.abort_relocation (seal.token);
         return {
           relocation_terminal_t::store_failed,
@@ -1583,6 +1657,7 @@ aggregate_relocation_result_t maintenance_runtime_t::relocate_aggregate (
           {}};
     }
     if (payload.empty ()) {
+        abort_capacity ();
         (void) _objects.abort_relocation (seal.token);
         return {
           relocation_terminal_t::blocked,
@@ -1595,6 +1670,7 @@ aggregate_relocation_result_t maintenance_runtime_t::relocate_aggregate (
         stored = _relocations->put (payload, relocation_retention);
     }
     catch (...) {
+        abort_capacity ();
         (void) _objects.abort_relocation (seal.token);
         return {
           relocation_terminal_t::store_failed,
@@ -1609,6 +1685,7 @@ aggregate_relocation_result_t maintenance_runtime_t::relocate_aggregate (
             catch (...) {
             }
         }
+        abort_capacity ();
         (void) _objects.abort_relocation (seal.token);
         return {
           relocation_terminal_t::store_failed,
@@ -1626,6 +1703,7 @@ aggregate_relocation_result_t maintenance_runtime_t::relocate_aggregate (
         }
         catch (...) {
         }
+        abort_capacity ();
         (void) _objects.abort_relocation (seal.token);
         return {
           relocation_terminal_t::blocked,

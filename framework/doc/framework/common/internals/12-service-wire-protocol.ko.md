@@ -50,7 +50,7 @@ node framework/runtime/protocol/validate-service-wire-schema.mjs \
   --self-test framework/runtime/protocol/service-wire-v1.schema.json
 ```
 
-Wire major는 `1`이고 required capability는 `framework-service-v11`이다. Schema와 golden fixture가 다르거나
+Wire major는 `1`이고 required capability는 `framework-service-v12`이다. Schema와 golden fixture가 다르거나
 validator가 undefined type, 중복 ID, 잘못된 enum·bound·conditional field를 발견하면 build를 중단한다.
 
 ### Location Store authority key 형식
@@ -512,8 +512,8 @@ stateDiagram-v2
 `Committed`와 `Activating`은 Ready가 아니다. Target application admission은 owner와 membership 변경, lifecycle callback과 미완료
 작업·timer 복원, 저장된 기존 작업과 temporary queue 작업을 execution queue에 순서대로 넣는 작업, temporary queue
 등록 제거와 기존 dispatch 경로로의 atomic 전환을 모두 마치면 연다. Source ingress hold 원본 제거, 위치 record의
-`Completed` 변경과 Session Actor 위치 갱신 응답은 이 admission을 막지 않으며, 실행 중인 source와 target runtime이
-후속 작업으로 각자 계속한다. Owner를 바꾸기 전 abort에서는 Session route를 바꾸지 않았으므로 route 취소
+`Completed` 변경, Session Actor 위치 갱신 응답과 maintenance authority를 steady 상태로 정규화하는 작업은 이
+admission을 막지 않으며, 실행 중인 source와 target runtime이 후속 작업으로 각자 계속한다. Owner를 바꾸기 전 abort에서는 Session route를 바꾸지 않았으므로 route 취소
 message나 그 응답을 기다리지 않는다. Source admission은 `Aborted` 기록, temporary queue 작업 폐기와 원래
 순서의 source queue 복원, 확보한 target 공간과 어떤 위치 record도 가리키지 않는 payload 정리, 이동 진행
 정보 제거를 마친 뒤 복원한다.

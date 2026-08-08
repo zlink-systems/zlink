@@ -1278,7 +1278,7 @@ public sealed class CanonicalRelocationReservationOwnerTests
                 TimeSpan.FromSeconds(5), time);
         target.SetCanonicalRelocationReservationTarget(reservationOwner);
         var participant = new ZLinkServiceWireCodec.RelocationParticipantRecord(
-            1, 1, default, 0, null, 0, default, 0, 1, 64);
+            1, 1, default, 0, null, 0, default, 0, 0, 1, 64);
         var prepare = new ZLinkServiceWireCodec.RelocationPrepareRecord(
             new ZLinkServiceWireCodec.RelocationWireId(
                 envelope.CanonicalRelocationHigh,
@@ -1458,6 +1458,7 @@ public sealed class CanonicalRelocationReservationOwnerTests
                 null,
                 0,
                 default,
+                0,
                 0,
                 0,
                 0);
@@ -2301,7 +2302,7 @@ public sealed class CanonicalRelocationReservationOwnerTests
                         null,
                         null)));
             var participant = new ZLinkServiceWireCodec.RelocationParticipantRecord(
-                1, 1, default, 0, null, 0, default, 0,
+                1, 1, default, 0, null, 0, default, 0, 0,
                 requiredMessages, requiredBytes);
             var coordinator = new ZLinkServiceWireCodec.RelocationCoordinatorFence(
                 coordinatorLease.Token.OwnerId,
@@ -2406,6 +2407,7 @@ public sealed class CanonicalRelocationReservationOwnerTests
                     null,
                     0,
                     default,
+                    0,
                     0,
                     0,
                     0);
@@ -2637,7 +2639,7 @@ public sealed class CanonicalRelocationReservationOwnerTests
             _rejectOffer = rejectOffer;
             var participant =
                 new ZLinkServiceWireCodec.RelocationParticipantRecord(
-                    1, 1, default, 0, null, 0, default, 0,
+                    1, 1, default, 0, null, 0, default, 0, 0,
                     allowanceMessages,
                     allowanceMessages == 0 ? 0UL : 256UL);
             Prepare = new ZLinkServiceWireCodec.RelocationPrepareRecord(

@@ -406,10 +406,6 @@ internal sealed partial class ZLinkFrameworkRuntime
                         cancellationToken)
                     .ConfigureAwait(false);
                 var handoffId = stage.Envelope.AggregateId.ToString("N");
-                var sessionCommits =
-                    new List<(ZLinkActorRuntimeState State,
-                        ZLinkSessionRouteCommitRequest Request,
-                        RoutingId SessionOwnerNode)>();
                 foreach (var actorState in stage.ActorStates)
                 {
                     var actorRef = actorState.NativeActorRef
@@ -424,16 +420,6 @@ internal sealed partial class ZLinkFrameworkRuntime
                         stage.TargetMeshName,
                         stage.TargetNodeLifecycleGeneration,
                         stage.TargetOwnerLeaseGeneration);
-                    var sessionCommit = await CommitCompletedSessionRouteAsync(
-                            actorState,
-                            handoffId,
-                            cancellationToken)
-                        .ConfigureAwait(false);
-                    if (sessionCommit is not null)
-                        sessionCommits.Add((
-                            actorState,
-                            sessionCommit.Value.Request,
-                            sessionCommit.Value.SessionOwnerNode));
                 }
 
                 if (Volatile.Read(
@@ -463,16 +449,6 @@ internal sealed partial class ZLinkFrameworkRuntime
                             ? null
                             : () => normalizeAuthority(cancellationToken))
                     .ConfigureAwait(false);
-                foreach (var (actorState, sessionCommit, sessionOwnerNode)
-                         in sessionCommits)
-                {
-                    await UnsealCompletedSessionRouteAsync(
-                            sessionCommit,
-                            sessionOwnerNode,
-                            cancellationToken)
-                        .ConfigureAwait(false);
-                    actorState.CompleteRelocationSessionRoute(handoffId);
-                }
                 Volatile.Write(ref stage.Published, 1);
             }
             else if (normalizeAuthority is not null)
@@ -481,9 +457,12 @@ internal sealed partial class ZLinkFrameworkRuntime
                     .ConfigureAwait(false);
             }
 
-            // Command 34 publishes authority and the local catalog. Direct
-            // execution stays sealed until command 35 proves that the source
-            // finished its pre-cutover Message Follow drain.
+            // Published means queue publication is complete: restore, replay,
+            // catalog, and the ready callback. Admission opens from the
+            // publish path; session route commit ACKs, source cleanup
+            // (command 35), and steady normalization converge asynchronously
+            // and never gate admission.
+            ScheduleRelocationSessionRouteConvergence(stage);
         }
         finally
         {
@@ -506,6 +485,109 @@ internal sealed partial class ZLinkFrameworkRuntime
             throw new InvalidOperationException(
                 $"Target SPOT '{stage.Spot.Activation.SpotId}' lost its staging admission seal.");
         Volatile.Write(ref stage.AdmissionOpened, 1);
+    }
+
+    private const int SessionRouteConvergenceAttempts = 5;
+
+    private static readonly TimeSpan SessionRouteConvergenceRetryDelay =
+        TimeSpan.FromMilliseconds(50);
+
+    internal void ScheduleRelocationSessionRouteConvergence(TargetStage stage)
+    {
+        if (Volatile.Read(ref stage.Published) == 0
+            || Volatile.Read(ref stage.SessionRoutesConverged) != 0)
+            return;
+        if (stage.ActorStates.Count == 0)
+        {
+            Volatile.Write(ref stage.SessionRoutesConverged, 1);
+            return;
+        }
+        if (!stage.TryBeginSessionRouteConvergence())
+            return;
+        if (!TryRunDetached(
+                $"spot-relocation-session-route:{stage.Envelope.AggregateId:N}",
+                cancellationToken => ConvergeRelocationSessionRoutesAsync(
+                    stage,
+                    cancellationToken)))
+            stage.EndSessionRouteConvergence();
+    }
+
+    internal async ValueTask ConvergeRelocationSessionRoutesAsync(
+        TargetStage stage,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var handoffId = stage.Envelope.AggregateId.ToString("N");
+            foreach (var actorState in stage.ActorStates)
+            {
+                for (var attempt = 1; ; attempt++)
+                {
+                    try
+                    {
+                        await ConvergeRelocationSessionRouteAsync(
+                                actorState,
+                                handoffId,
+                                cancellationToken)
+                            .ConfigureAwait(false);
+                        break;
+                    }
+                    catch (Exception exception)
+                        when (exception is not OperationCanceledException
+                              && attempt < SessionRouteConvergenceAttempts)
+                    {
+                        ZLinkFrameworkDebugLog.SpotDiscovery(
+                            $"relocation_session_route_retry actor={actorState.ActorId} "
+                            + $"handoff={handoffId} attempt={attempt}");
+                        await Task.Delay(
+                                SessionRouteConvergenceRetryDelay * attempt,
+                                cancellationToken)
+                            .ConfigureAwait(false);
+                    }
+                }
+            }
+            Volatile.Write(ref stage.SessionRoutesConverged, 1);
+        }
+        finally
+        {
+            stage.EndSessionRouteConvergence();
+        }
+    }
+
+    private async ValueTask ConvergeRelocationSessionRouteAsync(
+        ZLinkActorRuntimeState actorState,
+        string handoffId,
+        CancellationToken cancellationToken)
+    {
+        (ZLinkSessionRouteCommitRequest Request,
+            RoutingId SessionOwnerNode)? commit;
+        try
+        {
+            commit = await CommitCompletedSessionRouteAsync(
+                    actorState,
+                    handoffId,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (ZLinkFrameworkException exception)
+            when (exception.Kind == ZLinkFrameworkErrorKind.InvalidOperation)
+        {
+            // The session owner fenced this commit against a replaced binding
+            // identity: a late ACK must never commit, so the route is
+            // terminal for this handoff.
+            ZLinkFrameworkDebugLog.SpotDiscovery(
+                $"relocation_session_route_fenced actor={actorState.ActorId} "
+                + $"handoff={handoffId}");
+            return;
+        }
+        if (commit is not { } completedRoute)
+            return;
+        await UnsealCompletedSessionRouteAsync(
+                completedRoute.Request,
+                completedRoute.SessionOwnerNode,
+                cancellationToken)
+            .ConfigureAwait(false);
+        actorState.CompleteRelocationSessionRoute(handoffId);
     }
 
     internal static async ValueTask PublishCatalogBeforeNormalizationAsync(
@@ -806,9 +888,10 @@ internal sealed partial class ZLinkFrameworkRuntime
             await Task.WhenAll(queued).ConfigureAwait(false);
             // Authority publication can make new-owner ingress arrive before
             // the previous owner has delivered its Message Follow backlog.
-            // Keep target capture closed until command 35 confirms source
-            // cleanup; completion then orders followed frames before direct
-            // new-owner ingress and opens admission once.
+            // Capture stays closed only until the publish path finishes the
+            // queue merge; the trailing-reserve-then-open primitive then
+            // orders followed frames before direct new-owner ingress and
+            // opens admission once, without waiting for command 35.
         }
     }
 

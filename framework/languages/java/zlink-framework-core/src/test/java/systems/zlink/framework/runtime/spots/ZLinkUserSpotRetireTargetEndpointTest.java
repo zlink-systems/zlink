@@ -323,8 +323,10 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
         assertEquals(List.of(
             "prepare", "restore", "prepare-actor", "replay-send:1",
             "replay-request:2",
-            "publish-actor", "publish"),
-            recoveredBackend.operations);
+            "publish-actor", "publish", "complete-actor", "timers"),
+            recoveredBackend.operations,
+            "admission (timers, staged terminal) opens at publish with no"
+                + " command 35 delivered");
         assertEquals(2, relays.get(),
             "command 33 is retried until command 46 reports terminal");
         assertThrows(java.util.concurrent.CompletionException.class, () ->
@@ -353,11 +355,163 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
         assertEquals(List.of(
             "prepare", "restore", "prepare-actor", "replay-send:1",
             "replay-request:2",
-            "publish-actor", "publish", "command44", "normalize",
-            "complete-actor", "timers"),
-            recoveredBackend.operations);
+            "publish-actor", "publish", "complete-actor", "timers",
+            "command44", "normalize"),
+            recoveredBackend.operations,
+            "a failed finalize leaves admission open and the retried"
+                + " command 35 converges route switch and normalization");
         assertEquals(0, recoveredEndpoint.activeRecoveryPointerCount(),
             "completed root with no pending relay releases the target slot");
+    }
+
+    @Test
+    void crossNodeReplyRelayIsAddressedToTheRelocationSourceNode() {
+        //  The frozen record's request-source fence names "journal-node"
+        //  while the relocation source (the node that owns the landed reply
+        //  capability) is "source-node". Command 33 must be addressed to the
+        //  relocation source, not to the request-source fence.
+        RoutingId sourceRid = RoutingId.from("source-node");
+        RoutingId journalRid = RoutingId.from("journal-node");
+        RoutingId targetRid = RoutingId.from("target-node");
+        long targetNodeGeneration = 17;
+        String spotId = "room-a";
+        String actorId = "actor-a";
+        String authorityKey = ZLinkAuthorityKeyCodec.spot(spotId);
+        String actorAuthorityKey = ZLinkAuthorityKeyCodec.actor(actorId);
+        AuthorityState authority = new AuthorityState();
+        ZLinkLocationRepository authorityStore = authority.proxy();
+        var coordinator = new ZLinkAggregateRelocationCoordinator(
+            authorityStore,
+            new InMemoryRelocationStore());
+        UUID aggregateId = UUID.randomUUID();
+        var participants = List.of(
+            new ZLinkSpotRetireControl.ParticipantFence(
+                actorAuthorityKey, 1, actorId, "player", false, 4, 7),
+            new ZLinkSpotRetireControl.ParticipantFence(
+                authorityKey, 2, spotId, "room", true, 3, 5));
+        var finalEnvelope = new ZLinkUserSpotAggregateStagingOwner.Request(
+            TestSpot.class,
+            "room",
+            spotId,
+            3,
+            new byte[] {1},
+            true,
+            new byte[0],
+            List.of(new ZLinkUserSpotAggregateStagingOwner.ActorParticipant(
+                actorId,
+                "player",
+                new byte[0],
+                false,
+                new ZLinkBackendActorRef(targetRid, actorId, 4))),
+            Map.of("spot", List.of(
+                new ZLinkAsyncSerialQueue.QueuedRecord(
+                    1, acceptedSpotRequest(spotId, 2)))));
+        var storeParticipants = List.of(
+            new ZLinkAggregateRelocationCoordinator.Participant(
+                actorAuthorityKey,
+                ZLinkPlacementObjectKind.ACTOR,
+                4,
+                7,
+                "actor-version-1",
+                ZLinkAuthorityGenerationTransition.NEW_OWNER,
+                sourceAuthority(actorId, sourceRid),
+                new byte[0]),
+            new ZLinkAggregateRelocationCoordinator.Participant(
+                authorityKey,
+                ZLinkPlacementObjectKind.USER_SPOT,
+                3,
+                5,
+                "version-1",
+                ZLinkAuthorityGenerationTransition.NEW_OWNER,
+                sourceAuthority(spotId, sourceRid),
+                new byte[0]));
+        var storeRequest = new ZLinkAggregateRelocationCoordinator.Request(
+            aggregateId,
+            1,
+            storeParticipants,
+            ZLinkCanonicalUserSpotRelocationEnvelope.encode(
+                finalEnvelope, aggregateId, 5, participants),
+            new ZLinkMeshNodeDescriptorKey("mesh", targetRid),
+            targetNodeGeneration,
+            new ZLinkPlacementCapacityBundle(
+                1,
+                1,
+                Optional.of(new ZLinkSpotTypeCapacityDelta(
+                    ZLinkPlacementObjectKind.USER_SPOT,
+                    "room",
+                    1))),
+            new ZLinkLocationOwnerToken("target-owner", 23));
+        var staged = coordinator.stageRoot(storeRequest, OPEN)
+            .toCompletableFuture().join();
+        var finalPrepared = coordinator.prepare(storeRequest, OPEN)
+            .toCompletableFuture().join();
+        coordinator.commit(finalPrepared, OPEN)
+            .toCompletableFuture().join();
+
+        AtomicInteger relays = new AtomicInteger();
+        List<RoutingId> relayDestinations =
+            new java.util.concurrent.CopyOnWriteArrayList<>();
+        List<systems.zlink.framework.runtime.internal.service
+            .ZLinkServiceRelocationWireCodec.RequestSourceFence>
+            relayExpectedSources =
+                new java.util.concurrent.CopyOnWriteArrayList<>();
+        FakeStagingBackend backend = new FakeStagingBackend();
+        var staging = new ZLinkUserSpotAggregateStagingOwner(backend);
+        var wire = new ZLinkServiceM6BWireCodec();
+        ZLinkInternalMeshNode peer = recoveryNode(
+            wire,
+            backend.operations,
+            relays,
+            relayDestinations,
+            relayExpectedSources);
+        var endpoint = new ZLinkUserSpotRetireTargetEndpoint(
+            targetRid,
+            targetNodeGeneration,
+            coordinator,
+            staging,
+            ignored -> TestSpot.class,
+            (lane, record) -> CompletableFuture.failedFuture(
+                new AssertionError(
+                    "canonical recovery must use the production replayer")),
+            new ZLinkSessionRelocationPeerClient(peer),
+            Duration.ofSeconds(1),
+            ignored -> CompletableFuture.completedFuture(null),
+            null,
+            ZLinkSpotRetireControl.client(peer),
+            authorityStore,
+            null,
+            new ZLinkRelocationPermitPool(new ZLinkLocationOptions()));
+        var request = new ZLinkSpotRetireControl.StageRequest(
+            new ZLinkSpotRetireControl.Fence(aggregateId, 1),
+            sourceRid,
+            11,
+            "source-owner",
+            12,
+            targetRid,
+            targetNodeGeneration,
+            "target-owner",
+            23,
+            "mesh",
+            spotId,
+            "room",
+            false,
+            true,
+            staged.stored().reference(),
+            staged.stored().checksumCrc32c(),
+            participants);
+
+        endpoint.stage(request).toCompletableFuture().join();
+        endpoint.publish(request).toCompletableFuture().join();
+
+        assertEquals(2, relays.get(),
+            "command 33 is retried until command 46 reports terminal");
+        assertEquals(List.of(sourceRid, sourceRid), relayDestinations,
+            "command 33 must be addressed to the relocation source node");
+        assertEquals(2, relayExpectedSources.size());
+        relayExpectedSources.forEach(expected -> assertEquals(
+            journalRid,
+            expected.nodeRid(),
+            "the expected source keeps the request-source lease fence"));
     }
 
     private static byte[] acceptedSpotRecord(String spotId, int value) {
@@ -411,6 +565,22 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
         ZLinkServiceM6BWireCodec wire,
         List<String> operations,
         AtomicInteger relays) {
+        return recoveryNode(
+            wire,
+            operations,
+            relays,
+            new java.util.concurrent.CopyOnWriteArrayList<>(),
+            new java.util.concurrent.CopyOnWriteArrayList<>());
+    }
+
+    private static ZLinkInternalMeshNode recoveryNode(
+        ZLinkServiceM6BWireCodec wire,
+        List<String> operations,
+        AtomicInteger relays,
+        List<RoutingId> relayDestinations,
+        List<systems.zlink.framework.runtime.internal.service
+            .ZLinkServiceRelocationWireCodec.RequestSourceFence>
+            relayExpectedSources) {
         var relocationWire =
             new systems.zlink.framework.runtime.internal.service
                 .ZLinkServiceRelocationWireCodec();
@@ -439,9 +609,11 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                 }
                 if (method.getName().equals(
                     "requestRelocationReplyRelay")) {
+                    relayDestinations.add((RoutingId) arguments[0]);
                     var expected = (systems.zlink.framework.runtime.internal
                         .service.ZLinkServiceRelocationWireCodec
                             .RequestSourceFence) arguments[1];
+                    relayExpectedSources.add(expected);
                     var relay = relocationWire.decodeReplyRelay(
                         (byte[]) arguments[2]);
                     int status = relays.incrementAndGet() == 1 ? 1 : 2;

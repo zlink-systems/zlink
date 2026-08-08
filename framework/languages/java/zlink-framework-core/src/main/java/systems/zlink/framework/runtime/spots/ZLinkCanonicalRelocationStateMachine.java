@@ -342,6 +342,8 @@ final class ZLinkCanonicalRelocationStateMachine
             }
             candidate.request().complete(request);
             long generation = nextReservationGeneration();
+            //  relocationReady sentinel: the target offer carries nonzero
+            //  offered capacity and an EMPTY participant vector.
             ZLinkCanonicalRelocationProtocol.Ready offer =
                 new ZLinkCanonicalRelocationProtocol.Ready(
                     prepare.id(),
@@ -353,7 +355,7 @@ final class ZLinkCanonicalRelocationStateMachine
                     ZLinkCanonicalRelocationProtocol.TARGET,
                     prepare.requiredMessages(),
                     prepare.requiredBytes(),
-                    prepare.participants(),
+                    List.of(),
                     prepare.sourceNodeGeneration(),
                     localNodeGeneration,
                     generation,
@@ -375,6 +377,8 @@ final class ZLinkCanonicalRelocationStateMachine
         if (ready.role() == ZLinkCanonicalRelocationProtocol.TARGET) {
             SourceSlot slot = requireSource(fence, transportSource);
             validateOffer(slot.prepare(), ready, transportSource);
+            //  relocationReady sentinel: the source acceptance zeroes the
+            //  offered capacity and echoes the exact prepare participant set.
             ZLinkCanonicalRelocationProtocol.Ready acceptance =
                 new ZLinkCanonicalRelocationProtocol.Ready(
                     ready.id(),
@@ -384,9 +388,9 @@ final class ZLinkCanonicalRelocationStateMachine
                     ready.candidate(),
                     ready.object(),
                     ZLinkCanonicalRelocationProtocol.SOURCE,
-                    ready.offeredMessages(),
-                    ready.offeredBytes(),
-                    ready.participants(),
+                    0,
+                    0,
+                    slot.prepare().participants(),
                     slot.prepare().sourceNodeGeneration(),
                     ready.targetNodeGeneration(),
                     ready.reservationGeneration(),
@@ -674,9 +678,24 @@ final class ZLinkCanonicalRelocationStateMachine
         CompletionStage<Void> finalized;
         synchronized (slot) {
             if (slot.finalized() == null) {
-                slot.finalized(slot.published().thenCompose(
+                //  Admission is already open at publish. A failed finalize
+                //  (for example RelocationDataLost from the async Completed
+                //  verification) surfaces to the source as the command-35
+                //  failure and never closes admission; the memo is reset so
+                //  the next command 35 retries the convergence steps.
+                CompletionStage<Void> attempt = slot.published().thenCompose(
                     ignored -> slot.request().thenCompose(
-                        target::finalizeAfterCompletion)));
+                        target::finalizeAfterCompletion));
+                slot.finalized(attempt);
+                attempt.whenComplete((ignored, failure) -> {
+                    if (failure != null) {
+                        synchronized (slot) {
+                            if (slot.finalized() == attempt) {
+                                slot.finalized(null);
+                            }
+                        }
+                    }
+                });
             }
             finalized = slot.finalized();
         }
@@ -752,6 +771,7 @@ final class ZLinkCanonicalRelocationStateMachine
                             route.sessionOwnerLeaseGeneration(),
                             route.sessionRid(),
                             route.bindingGeneration(),
+                            route.lastAcceptedSessionSequence(),
                             allowance.allowanceMessages(),
                             allowance.allowanceBytes()));
                 }
@@ -815,6 +835,7 @@ final class ZLinkCanonicalRelocationStateMachine
             new ZLinkActorAuthorityPayloadCodec();
         List<ZLinkSpotRetireControl.ParticipantFence> participants =
             new ArrayList<>(candidate.authorities().size());
+        Map<String, String> actorStoreVersions = new HashMap<>();
         String stableType = null;
         String targetSpotId = entrySpotId;
         boolean restorePrimary = false;
@@ -865,6 +886,7 @@ final class ZLinkCanonicalRelocationStateMachine
                         "published Actor recovery payload is invalid"));
                 objectId = decoded.actorId();
                 participantType = decoded.stableType();
+                actorStoreVersions.put(objectId, snapshot.storeVersion());
                 if (envelope.object().kind() == objectKind
                     && envelope.object().objectId().equals(objectId)) {
                     stableType = participantType;
@@ -908,7 +930,78 @@ final class ZLinkCanonicalRelocationStateMachine
             candidate.reference(),
             candidate.checksumCrc32c(),
             participants,
-            List.of());
+            recoveredSessionRoutes(
+                envelope, participants, actorStoreVersions));
+    }
+
+    /**
+     * Rebuilds bound-Session route fences from the durable envelope journal
+     * so finalize after a target restart re-drives the command 44/45 switch
+     * with {@code lastAccepted = max(sourceSessionSequence)} per session.
+     *
+     * <p>Recovery can restore a route only while an accepted record carrying
+     * the session source fence is still retained in the journal. Sessions
+     * whose records were pruned past the replay cursor (or that produced no
+     * accepted suffix record) cannot be reconstructed here; they are covered
+     * by the {@code lastAcceptedSessionSequence} carried on the boundSession
+     * participants of a re-read Prepare (command 40), which flows through
+     * {@link #stageRequest} instead. The route's source authority store
+     * version is the recovered snapshot version — the only durable stand-in
+     * for the pre-relocation value after a restart.</p>
+     */
+    private static List<ZLinkSpotRetireControl.SessionRouteFence>
+        recoveredSessionRoutes(
+            ZLinkServiceRelocationEnvelopeCodec.Envelope envelope,
+            List<ZLinkSpotRetireControl.ParticipantFence> participants,
+            Map<String, String> actorStoreVersions) {
+        Map<String, ZLinkSpotRetireControl.SessionRouteFence> routes =
+            new HashMap<>();
+        for (var entry : envelope.journal()) {
+            int index = (int) entry.participantId() - 1;
+            if (index < 0 || index >= participants.size()) {
+                continue;
+            }
+            ZLinkSpotRetireControl.ParticipantFence participant =
+                participants.get(index);
+            if (participant.objectKind() != 1) {
+                continue;
+            }
+            ZLinkActorAcceptedJournal.Record record;
+            try {
+                record = ZLinkActorAcceptedJournal.decode(
+                    entry.frozenRecord());
+            } catch (IllegalArgumentException notActorRecord) {
+                continue;
+            }
+            if (record.sourceSessionRid() == null) {
+                continue;
+            }
+            ZLinkSpotRetireControl.SessionRouteFence current =
+                routes.get(participant.objectId());
+            if (current != null && current.lastAcceptedSessionSequence()
+                    >= record.sourceSessionSequence()) {
+                continue;
+            }
+            routes.put(
+                participant.objectId(),
+                new ZLinkSpotRetireControl.SessionRouteFence(
+                    participant.objectId(),
+                    participant.objectGeneration(),
+                    participant.sourceAuthorityOwnerGeneration(),
+                    actorStoreVersions.get(participant.objectId()),
+                    record.sourceNodeRid(),
+                    record.sourceNodeGeneration(),
+                    record.sourceOwnerId(),
+                    record.sourceOwnerLeaseGeneration(),
+                    record.sourceSessionRid(),
+                    record.sourceBindingGeneration(),
+                    record.sourceSessionSequence()));
+        }
+        List<ZLinkSpotRetireControl.SessionRouteFence> ordered =
+            new ArrayList<>(routes.values());
+        ordered.sort((left, right) -> compareUtf8(
+            left.actorId(), right.actorId()));
+        return List.copyOf(ordered);
     }
 
     private CompletionStage<ZLinkSpotRetireControl.StageRequest> reconstruct(
@@ -1103,7 +1196,7 @@ final class ZLinkCanonicalRelocationStateMachine
                             wire.sessionOwnerLeaseGeneration(),
                             wire.sessionRid(),
                             wire.bindingGeneration(),
-                            0));
+                            wire.lastAcceptedSessionSequence()));
                 }
             }
             if (snapshot.allocation().objectKind().value()
@@ -1213,7 +1306,7 @@ final class ZLinkCanonicalRelocationStateMachine
             || !ready.coordinator().equals(prepare.coordinator())
             || !ready.candidate().equals(prepare.candidate())
             || !ready.object().equals(prepare.object())
-            || !ready.participants().equals(prepare.participants())
+            || !ready.participants().isEmpty()
             || !Objects.equals(ready.root(), prepare.root())
             || ready.offeredMessages() < prepare.requiredMessages()
             || ready.offeredBytes() < prepare.requiredBytes()
@@ -1270,8 +1363,21 @@ final class ZLinkCanonicalRelocationStateMachine
         CompletionStage<Void> finalized;
         synchronized (slot) {
             if (slot.finalized() == null) {
-                slot.finalized(target.finalizeAfterCompletion(
-                    slot.request()));
+                //  Reset the memo on failure so the next command 35 or
+                //  recovery pass retries finalize instead of caching a
+                //  failed convergence forever.
+                CompletionStage<Void> attempt =
+                    target.finalizeAfterCompletion(slot.request());
+                slot.finalized(attempt);
+                attempt.whenComplete((ignored, failure) -> {
+                    if (failure != null) {
+                        synchronized (slot) {
+                            if (slot.finalized() == attempt) {
+                                slot.finalized(null);
+                            }
+                        }
+                    }
+                });
             }
             finalized = slot.finalized();
         }
