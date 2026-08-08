@@ -314,7 +314,8 @@ inline bool run_active_phase (void *sender_,
         // wake the receiver out of recv. Bounded retry through transient
         // backpressure so the terminator always reaches the peer.
         const bool stop_ok = send_stop_token_with_retry (sender_, send_stop_fn_);
-        sender_ok.store (active_ok && stop_ok, std::memory_order_release);
+        if (!active_ok || !stop_ok)
+            sender_ok.store (false, std::memory_order_release);
     });
 
     sender_thread.join ();

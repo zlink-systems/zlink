@@ -391,16 +391,23 @@ inline void run_router_replier (void *router_, reply_state_t *state_)
             continue;
         }
 
-        // Zero-copy on the first attempt: the received payload is handed
-        // straight back as the reply. The submit entry consumes the message
-        // either way, so a backpressured retry rebuilds a same-size payload
-        // instead of keeping a copy of every reply on the hot path.
-        const size_t reply_size = zlink_msg_size (&request);
+        // The reply submit consumes its part even when it reports
+        // backpressure. Keep a shared-storage copy so a retry preserves the
+        // request metric payload without copying the bytes on the hot path.
+        zlink_msg_t retry_template;
+        const bool retry_template_initialized = zlink_msg_init (&retry_template) == 0;
+        if (!retry_template_initialized
+            || zlink_msg_copy (&retry_template, &request) != ZLINK_CONFIG_OK) {
+            if (retry_template_initialized)
+                zlink_msg_close (&retry_template);
+            zlink_msg_close (&request);
+            state_->fatal.store (true, std::memory_order_release);
+            return;
+        }
+
         zlink_submit_result_t reply_rc = zlink_router_reply_part (
           router_, &source_rid, request_seq, &request, ZLINK_PART_FINAL);
         if (reply_rc == ZLINK_SUBMIT_BACKPRESSURED) {
-            //  Only a backpressured reply pays for the clock read and the
-            //  rebuilt payload, so the measured path keeps one submit call.
             const auto retry_deadline =
               std::chrono::steady_clock::now ()
               + std::chrono::milliseconds (resolve_completion_drain_timeout_ms ());
@@ -408,7 +415,12 @@ inline void run_router_replier (void *router_, reply_state_t *state_)
                    && std::chrono::steady_clock::now () < retry_deadline
                    && !state_->stop.load (std::memory_order_acquire)) {
                 zlink_msg_t retry;
-                if (zlink_msg_init_size (&retry, reply_size) != 0) {
+                const bool retry_initialized = zlink_msg_init (&retry) == 0;
+                if (!retry_initialized
+                    || zlink_msg_copy (&retry, &retry_template) != ZLINK_CONFIG_OK) {
+                    if (retry_initialized)
+                        zlink_msg_close (&retry);
+                    zlink_msg_close (&retry_template);
                     state_->fatal.store (true, std::memory_order_release);
                     return;
                 }
@@ -417,6 +429,7 @@ inline void run_router_replier (void *router_, reply_state_t *state_)
                   router_, &source_rid, request_seq, &retry, ZLINK_PART_FINAL);
             }
         }
+        zlink_msg_close (&retry_template);
         if (reply_rc != ZLINK_SUBMIT_OK) {
             if (bench_debug_enabled ())
                 std::cerr << "[perf-single-reqrep] router reply failed rc=" << reply_rc

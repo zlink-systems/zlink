@@ -5,6 +5,7 @@
 #include "../../common/streamclient/perf_stream_common.hpp"
 
 #include <atomic>
+#include <condition_variable>
 #include <deque>
 #include <iomanip>
 #include <mutex>
@@ -85,7 +86,8 @@ struct session_t
         auto_hwm_socket_type (ZLINK_SOCKET_ANY),
         auto_hwm_hwm_value (0),
         transport (),
-        pending_queue ()
+        pending_queue (),
+        pending_cv ()
     {
     }
 
@@ -101,6 +103,7 @@ struct session_t
     std::mutex send_mutex;
     std::mutex pending_mutex;
     std::deque<queued_message_t> pending_queue;
+    std::condition_variable pending_cv;
 };
 
 inline bool is_stop_payload (const unsigned char *data, size_t size, const char *stop_token)
@@ -129,6 +132,7 @@ inline void reset_session (session_t *session,
     session->transport = transport;
     std::lock_guard<std::mutex> lock (session->pending_mutex);
     session->pending_queue.clear ();
+    session->pending_cv.notify_all ();
 }
 
 inline void clear_session (session_t *session)
@@ -138,6 +142,7 @@ inline void clear_session (session_t *session)
     session->send_socket = NULL;
     std::lock_guard<std::mutex> lock (session->pending_mutex);
     session->pending_queue.clear ();
+    session->pending_cv.notify_all ();
 }
 
 inline size_t pending_size (session_t *session)
@@ -181,8 +186,11 @@ inline bool enqueue (session_t *session, const zlink_routing_id_t *rid, zlink_ms
         return false;
 
     session->pending_count.fetch_add (1, std::memory_order_relaxed);
-    std::lock_guard<std::mutex> lock (session->pending_mutex);
-    session->pending_queue.push_back (std::move (queued));
+    {
+        std::lock_guard<std::mutex> lock (session->pending_mutex);
+        session->pending_queue.push_back (std::move (queued));
+    }
+    session->pending_cv.notify_one ();
     return true;
 }
 
@@ -366,6 +374,7 @@ inline void stream_packet_handler_callback (void *stream_,
     if (!handle_packet_message (ctx->session, stream_, rid, header_part, body_part,
                                 ctx->stop_token)) {
         perf_stop_requested ().store (true, std::memory_order_release);
+        ctx->session->pending_cv.notify_all ();
     }
 
     (void) zlink_msg_close (header_part);
@@ -394,15 +403,12 @@ inline int run_server_event_loop (session_t *session,
             drain_pending (session);
 
         if (pending_size (session) == 0) {
-            const int idle_rc = perf_socket_poll (NULL, 0, perf_aux_poll_wait_ms ());
-            if (idle_rc < 0 && zlink_errno () != EINTR && zlink_errno () != EAGAIN) {
-                if (bench_debug_enabled ()) {
-                    std::cerr << "[multi-stream-server] idle poll failed err=" << zlink_errno ()
-                              << std::endl;
-                }
-                rc = 1;
-                break;
-            }
+            std::unique_lock<std::mutex> lock (session->pending_mutex);
+            session->pending_cv.wait_for (
+              lock, std::chrono::milliseconds (perf_aux_poll_wait_ms ()), [&] {
+                  return !session->pending_queue.empty ()
+                         || perf_stop_requested ().load (std::memory_order_acquire);
+              });
             continue;
         }
 

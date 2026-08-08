@@ -64,41 +64,59 @@ inline bool publish_once (void *server,
         return false;
     }
 
-    zlink_msg_t payload_part;
-    if (zlink_msg_init_size (&payload_part, send_size) != 0)
-        return false;
-    std::memcpy (zlink_msg_data (&payload_part), payload.data (), send_size);
+    for (;;) {
+        zlink_msg_t payload_part;
+        if (zlink_msg_init_size (&payload_part, send_size) != 0)
+            return false;
+        std::memcpy (zlink_msg_data (&payload_part), payload.data (), send_size);
 
-    if (::perf_zlink_publish_parts (server, k_pubsub_topic, &payload_part, 1, ZLINK_DONTWAIT)
-        == ZLINK_SUBMIT_OK) {
-        if (publish_ok_count)
-            ++(*publish_ok_count);
-        if (bench_debug_enabled ()
-            && g_debug_pub_logs.fetch_add (1, std::memory_order_acq_rel) < 8) {
-            std::cerr << "[multi-pubsub-server] publish ok phase="
-                      << static_cast<unsigned int> (phase) << " size=" << current_msg_size
-                      << " seq=" << (*seq - 1) << std::endl;
+        if (::perf_zlink_publish_parts (server, k_pubsub_topic, &payload_part,
+                                         1, ZLINK_DONTWAIT) == ZLINK_SUBMIT_OK) {
+            if (publish_ok_count)
+                ++(*publish_ok_count);
+            if (bench_debug_enabled ()
+                && g_debug_pub_logs.fetch_add (1, std::memory_order_acq_rel) < 8) {
+                std::cerr << "[multi-pubsub-server] publish ok phase="
+                          << static_cast<unsigned int> (phase) << " size=" << current_msg_size
+                          << " seq=" << (*seq - 1) << std::endl;
+            }
+            return true;
         }
-        return true;
-    }
 
-    const int err = zlink_errno ();
-    if (err == EAGAIN) {
-        if (publish_blocked_count)
-            ++(*publish_blocked_count);
-        if (bench_debug_enabled ()
-            && g_debug_pub_logs.fetch_add (1, std::memory_order_acq_rel) < 8) {
-            std::cerr << "[multi-pubsub-server] publish blocked err=" << err
-                      << " phase=" << static_cast<unsigned int> (phase)
-                      << " size=" << current_msg_size << std::endl;
+        const int err = zlink_errno ();
+        if (err == EAGAIN || err == EWOULDBLOCK) {
+            if (publish_blocked_count)
+                ++(*publish_blocked_count);
+            if (bench_debug_enabled ()
+                && g_debug_pub_logs.fetch_add (1, std::memory_order_acq_rel) < 8) {
+                std::cerr << "[multi-pubsub-server] publish blocked err=" << err
+                          << " phase=" << static_cast<unsigned int> (phase)
+                          << " size=" << current_msg_size << std::endl;
+            }
+            zlink_msg_close (&payload_part);
+
+            zlink_pollitem_t item = {server, 0, ZLINK_POLLOUT, 0};
+            while (!perf_stop_requested ().load (std::memory_order_acquire)) {
+                item.revents = 0;
+                const int poll_rc = perf_socket_poll (&item, 1, perf_aux_poll_wait_ms ());
+                if (poll_rc < 0) {
+                    if (zlink_errno () == EINTR || zlink_errno () == EAGAIN)
+                        continue;
+                    return false;
+                }
+                if (poll_rc > 0 && (item.revents & ZLINK_POLLOUT) != 0) {
+                    if (publish_wait_count)
+                        ++(*publish_wait_count);
+                    break;
+                }
+            }
+            if (perf_stop_requested ().load (std::memory_order_acquire))
+                return true;
+            continue;
         }
-        if (publish_wait_count)
-            ++(*publish_wait_count);
-        zlink_msg_close (&payload_part);
-        return true;
-    }
 
-    return perf_stop_requested ().load (std::memory_order_acquire);
+        return perf_stop_requested ().load (std::memory_order_acquire);
+    }
 }
 
 inline bool publish_stop_token (void *server)

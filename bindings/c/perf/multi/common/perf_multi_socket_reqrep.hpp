@@ -472,6 +472,57 @@ inline int run_client_benchmark (const endpoint_config_t &config,
     return 0;
 }
 
+inline bool submit_router_reply_with_retry (void *server,
+                                            const zlink_routing_id_t *source_rid,
+                                            uint64_t request_seq,
+                                            zlink_msg_t *part)
+{
+    if (!server || !source_rid || request_seq == 0 || !part)
+        return false;
+
+    // Reply submission consumes the supplied part on backpressure. Keep a
+    // shared-storage copy so the retry preserves the received metric payload.
+    zlink_msg_t retry_template;
+    const bool retry_template_initialized = zlink_msg_init (&retry_template) == 0;
+    if (!retry_template_initialized
+        || zlink_msg_copy (&retry_template, part) != ZLINK_CONFIG_OK) {
+        if (retry_template_initialized)
+            zlink_msg_close (&retry_template);
+        zlink_msg_close (part);
+        return false;
+    }
+
+    zlink_submit_result_t reply_rc =
+      zlink_router_reply_part (server, source_rid, request_seq, part, ZLINK_PART_FINAL);
+    while (reply_rc == ZLINK_SUBMIT_BACKPRESSURED
+           && !perf_stop_requested ().load (std::memory_order_acquire)) {
+        zlink_pollitem_t item = {server, 0, ZLINK_POLLOUT, 0};
+        const int poll_rc = perf_socket_poll (&item, 1, perf_aux_poll_wait_ms ());
+        if (poll_rc < 0) {
+            if (zlink_errno () == EINTR || zlink_errno () == EAGAIN)
+                continue;
+            break;
+        }
+        if (poll_rc == 0 || (item.revents & ZLINK_POLLOUT) == 0)
+            continue;
+
+        zlink_msg_t retry;
+        const bool retry_initialized = zlink_msg_init (&retry) == 0;
+        if (!retry_initialized
+            || zlink_msg_copy (&retry, &retry_template) != ZLINK_CONFIG_OK) {
+            if (retry_initialized)
+                zlink_msg_close (&retry);
+            reply_rc = ZLINK_SUBMIT_TERMINATED;
+            break;
+        }
+        reply_rc =
+          zlink_router_reply_part (server, source_rid, request_seq, &retry, ZLINK_PART_FINAL);
+    }
+
+    zlink_msg_close (&retry_template);
+    return reply_rc == ZLINK_SUBMIT_OK;
+}
+
 enum server_recv_step_t
 {
     server_recv_step_replied = 0,
@@ -522,14 +573,12 @@ inline server_recv_step_t reply_one_request (void *server,
                                       socket_type);
     }
 
-    const zlink_submit_result_t reply_rc =
-      zlink_router_reply_part (server, source_rid, request_seq, &part, ZLINK_PART_FINAL);
-    if (reply_rc == ZLINK_SUBMIT_OK)
+    if (submit_router_reply_with_retry (server, source_rid, request_seq, &part))
         return server_recv_step_replied;
 
     if (bench_debug_enabled ()) {
-        std::cerr << "[perf-multi-socket-reqrep] reply failed rc=" << reply_rc
-                  << " err=" << zlink_errno () << std::endl;
+        std::cerr << "[perf-multi-socket-reqrep] reply failed err=" << zlink_errno ()
+                  << std::endl;
     }
     return server_recv_step_error;
 }
