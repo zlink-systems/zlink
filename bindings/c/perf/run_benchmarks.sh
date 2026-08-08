@@ -284,6 +284,10 @@ build_core_runtime() {
     else
       configure_args+=(-DCMAKE_MAKE_PROGRAM="${MAKE_BIN}")
     fi
+    if [[ -n "${OPENSSL_ROOT_DIR:-}" ]]; then
+      configure_args+=(-DOPENSSL_ROOT_DIR="${OPENSSL_ROOT_DIR}"
+                       -DCMAKE_PREFIX_PATH="${OPENSSL_ROOT_DIR}")
+    fi
     cmake "${configure_args[@]}"
   fi
   if [[ "${IS_WINDOWS}" -eq 0 && -f "${NORMALIZE_TIMESTAMPS_SH}" ]]; then
@@ -719,6 +723,10 @@ if [[ "${BUILD_MODE}" != "reuse" ]]; then
     )
     if [[ "${CMAKE_GENERATOR}" == Visual\ Studio* ]]; then
       CMAKE_ARGS+=(-A "${CMAKE_ARCH}")
+    fi
+    if [[ -n "${OPENSSL_ROOT_DIR:-}" ]]; then
+      CMAKE_ARGS+=(-DOPENSSL_ROOT_DIR="${OPENSSL_ROOT_DIR}"
+                   -DCMAKE_PREFIX_PATH="${OPENSSL_ROOT_DIR}")
     fi
     cmake "${CMAKE_ARGS[@]}"
   else

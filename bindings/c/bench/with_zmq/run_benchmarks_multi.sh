@@ -181,6 +181,10 @@ build_core_runtime() {
         configure_args+=(-A "${CMAKE_ARCH}")
       fi
     fi
+    if [[ -n "${OPENSSL_ROOT_DIR:-}" ]]; then
+      configure_args+=(-DOPENSSL_ROOT_DIR="${OPENSSL_ROOT_DIR}"
+                       -DCMAKE_PREFIX_PATH="${OPENSSL_ROOT_DIR}")
+    fi
     echo "=== Configuring core runtime: ${core_build_dir} ==="
     cmake "${configure_args[@]}"
   fi
@@ -270,6 +274,10 @@ prepare_benchmark_build() {
     if [[ "${CMAKE_GENERATOR}" == Visual\ Studio* ]]; then
       configure_args+=(-A "${CMAKE_ARCH}")
     fi
+  fi
+  if [[ -n "${OPENSSL_ROOT_DIR:-}" ]]; then
+    configure_args+=(-DOPENSSL_ROOT_DIR="${OPENSSL_ROOT_DIR}"
+                     -DCMAKE_PREFIX_PATH="${OPENSSL_ROOT_DIR}")
   fi
 
   echo "=== Configuring with_zmq multi build: ${build_dir} ==="
