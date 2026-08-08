@@ -107,6 +107,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private IActorMessageFollowIngressTarget? _actorMessageFollowIngressTarget;
     private Action<RoutingId, ZLinkServiceWireCodec.MessageFollowRecord>?
         _messageFollowNotificationHandler;
+    private Action<RoutingId, ZLinkServiceWireCodec.BoundSessionReplacedRecord>?
+        _boundSessionReplacedNotificationHandler;
     private IInstanceSpotActivationTarget? _instanceSpotActivationTarget;
     private IRelocationReplyRelayTarget? _relocationReplyRelayTarget;
     private ICanonicalRelocationReservationTarget?
@@ -567,6 +569,49 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 handler;
             lock (_gate)
                 handler = _messageFollowNotificationHandler;
+            handler?.Invoke(_routingId, record);
+            return handler is not null;
+        }
+
+        Peer? peer;
+        lock (_gate)
+            _peersByRid.TryGetValue(targetNodeRid, out peer);
+        if (peer is null || !peer.Admitted)
+            return false;
+        return TrySend(
+            peer.PhysicalRoutingId,
+            [encoded],
+            SendFlags.DontWait);
+    }
+
+    internal void SetBoundSessionReplacedNotificationHandler(
+        Action<RoutingId, ZLinkServiceWireCodec.BoundSessionReplacedRecord> handler)
+    {
+        ArgumentNullException.ThrowIfNull(handler);
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            if (_boundSessionReplacedNotificationHandler is not null
+                && !ReferenceEquals(
+                    _boundSessionReplacedNotificationHandler,
+                    handler))
+                throw new InvalidOperationException(
+                    "A bound-session replacement notification handler is already registered.");
+            _boundSessionReplacedNotificationHandler = handler;
+        }
+    }
+
+    internal bool TrySendBoundSessionReplacedNotification(
+        RoutingId targetNodeRid,
+        ZLinkServiceWireCodec.BoundSessionReplacedRecord record)
+    {
+        var encoded = ZLinkServiceWireCodec.EncodeBoundSessionReplaced(record);
+        if (targetNodeRid == _routingId)
+        {
+            Action<RoutingId, ZLinkServiceWireCodec.BoundSessionReplacedRecord>?
+                handler;
+            lock (_gate)
+                handler = _boundSessionReplacedNotificationHandler;
             handler?.Invoke(_routingId, record);
             return handler is not null;
         }
@@ -4266,7 +4311,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             or ServiceWireConstants.Command.RelocationPrepare
             or ServiceWireConstants.Command.RelocationReserved
             or ServiceWireConstants.Command.ReplyRelayAck
-            or ServiceWireConstants.Command.MessageFollow;
+            or ServiceWireConstants.Command.MessageFollow
+            or ServiceWireConstants.Command.BoundSessionReplaced;
 
     private static bool ShouldUseCompletionControl(
         IReadOnlyList<ReadOnlyMemory<byte>> parts)
@@ -4380,6 +4426,27 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         IReadOnlyList<Message> parts,
         byte[] head)
     {
+        if (ZLinkServiceWireCodec.TryDecodeBoundSessionReplaced(
+                head,
+                out var boundSessionReplaced,
+                out _))
+        {
+            if (parts.Count != 1
+                || !IsValidBoundSessionReplacedSource(
+                    sourceRid,
+                    boundSessionReplaced))
+            {
+                Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceRid);
+                return true;
+            }
+
+            Action<RoutingId, ZLinkServiceWireCodec.BoundSessionReplacedRecord>?
+                handler;
+            lock (_gate)
+                handler = _boundSessionReplacedNotificationHandler;
+            handler?.Invoke(sourceRid, boundSessionReplaced);
+            return true;
+        }
         if (ZLinkServiceWireCodec.TryDecodeMessageFollow(
                 head,
                 out var messageFollow,
@@ -4520,6 +4587,27 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                    && targetPeer.LifecycleGeneration
                       == record.Target.TargetNodeGeneration;
         }
+    }
+
+    private bool IsValidBoundSessionReplacedSource(
+        RoutingId sourceRid,
+        ZLinkServiceWireCodec.BoundSessionReplacedRecord record)
+    {
+        if (sourceRid != record.ActorAuthority.TargetNodeRid
+            || record.RetiredSession.SessionOwnerNodeRid != _routingId
+            || record.RetiredSession.SessionOwnerNodeGeneration
+               != _lifecycleGeneration)
+            return false;
+
+        lock (_gate)
+        {
+            if (!_peersByRid.TryGetValue(sourceRid, out var sourcePeer)
+                || !sourcePeer.Admitted
+                || sourcePeer.LifecycleGeneration
+                   != record.ActorAuthority.TargetNodeGeneration)
+                return false;
+        }
+        return true;
     }
 
     private void ProcessReceived(

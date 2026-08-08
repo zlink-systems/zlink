@@ -1010,7 +1010,9 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             normalized.TargetNodeGeneration,
             normalized.OwnerLeaseGeneration,
             normalized.SessionOwnerNodeGeneration,
-            normalized.AcceptedHighWater);
+            normalized.AcceptedHighWater,
+            normalized.SessionOwnerId,
+            normalized.SessionOwnerLeaseGeneration);
         return normalized;
     }
 
@@ -1075,7 +1077,9 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         session.TargetNodeGeneration,
         session.OwnerLeaseGeneration,
         session.SessionOwnerNodeGeneration,
-        session.AcceptedHighWater);
+        session.AcceptedHighWater,
+        session.SessionOwnerId,
+        session.SessionOwnerLeaseGeneration);
 
     internal static ZLinkServiceWireCodec.RelocationPrepareRecord CreatePrepare(
         ZLinkAuthoritySnapshot sourceSnapshot,

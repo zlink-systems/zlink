@@ -8,6 +8,9 @@ internal sealed record ZLinkSessionBindingEntry(
     ZLinkSessionBindingRoute Route,
     ulong SessionOwnerNodeGeneration,
     ulong AcceptedHighWater,
+    RoutingId SessionOwnerNodeRid = default,
+    string SessionOwnerId = "",
+    ulong SessionOwnerLeaseGeneration = 0,
     string? RelocationHandoffId = null,
     string? CompletedRelocationHandoffId = null,
     int ActiveFrames = 0,
@@ -186,7 +189,10 @@ internal sealed class ZLinkSessionActorBindingTable
         ZLinkSessionActor actorRef,
         ulong bindingGeneration,
         ZLinkSessionBindingRoute route,
-        ulong sessionOwnerNodeGeneration)
+        ulong sessionOwnerNodeGeneration,
+        RoutingId sessionOwnerNodeRid = default,
+        string sessionOwnerId = "",
+        ulong sessionOwnerLeaseGeneration = 0)
     {
         if (!string.Equals(actorId, route.Ref.ActorId, StringComparison.Ordinal))
             throw new ZLinkFrameworkException(
@@ -228,7 +234,17 @@ internal sealed class ZLinkSessionActorBindingTable
                 bindingGeneration,
                 route,
                 sessionOwnerNodeGeneration,
-                AcceptedHighWater: 0);
+                AcceptedHighWater: 0,
+                SessionOwnerNodeRid: sessionOwnerNodeRid,
+                SessionOwnerId: string.IsNullOrWhiteSpace(sessionOwnerId)
+                    ? (sessionOwnerNodeRid.IsEmpty
+                        ? actorRef.SessionRid.ToHex()
+                        : sessionOwnerNodeRid.ToHex())
+                    : sessionOwnerId,
+                SessionOwnerLeaseGeneration:
+                    sessionOwnerLeaseGeneration == 0
+                        ? sessionOwnerNodeGeneration
+                        : sessionOwnerLeaseGeneration);
             return replaced;
         }
     }
@@ -876,6 +892,45 @@ internal sealed class ZLinkSessionActorBindingTable
                     entry = candidate.Value;
                     return true;
                 }
+            entry = null!;
+            return false;
+        }
+    }
+
+    public bool TryGetExactRetiredBinding(
+        string actorId,
+        RoutingId sessionOwnerNodeRid,
+        RoutingId sessionRid,
+        ulong sessionOwnerNodeGeneration,
+        string sessionOwnerId,
+        ulong sessionOwnerLeaseGeneration,
+        ulong bindingGeneration,
+        out ZLinkSessionBindingEntry entry)
+    {
+        lock (_entries)
+        {
+            foreach (var candidate in _entries)
+            {
+                var value = candidate.Value;
+                if (!string.Equals(
+                        candidate.Key.ActorId,
+                        actorId,
+                        StringComparison.Ordinal)
+                    || value.ActorRef.SessionRid != sessionRid
+                    || value.BindingGeneration != bindingGeneration
+                    || value.SessionOwnerNodeRid != sessionOwnerNodeRid
+                    || value.SessionOwnerNodeGeneration
+                       != sessionOwnerNodeGeneration
+                    || !string.Equals(
+                        value.SessionOwnerId,
+                        sessionOwnerId,
+                        StringComparison.Ordinal)
+                    || value.SessionOwnerLeaseGeneration
+                       != sessionOwnerLeaseGeneration)
+                    continue;
+                entry = value;
+                return true;
+            }
             entry = null!;
             return false;
         }

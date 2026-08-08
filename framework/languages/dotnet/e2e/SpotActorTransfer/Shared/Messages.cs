@@ -156,6 +156,11 @@ public sealed record BoundPushNotify(
     string Marker,
     int StateVersion);
 
+public sealed record ActorBindingReplacedNotify(
+    string ActorId,
+    string SessionId,
+    string Marker);
+
 public sealed record EvidenceWaitReq(
     string[] ContainsAll,
     int TimeoutMilliseconds = 10000);

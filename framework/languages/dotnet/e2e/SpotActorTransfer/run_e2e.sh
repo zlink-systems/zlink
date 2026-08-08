@@ -527,4 +527,22 @@ if [[ "$SCENARIO" == "all" || "$SCENARIO" == *"ST-F6"* ]]; then
   grep -h -E -q 'request_reply_direct actor=actor-inflight-req-' "$LOG_DIR"/actor-b.*.log
 fi
 
+if [[ "$SCENARIO" == "all" || "$SCENARIO" == *"ST-E2"* ]]; then
+  grep -Fq 'ST-E2|' "$LOG_DIR/session-a.evidence.log" \
+    && grep -Fq '|actor_binding_replaced|' "$LOG_DIR/session-a.evidence.log" || {
+    echo "Missing ST-E2 replacement callback evidence from the previous session owner." >&2
+    exit 1
+  }
+  grep -Fq 'ST-E2|' "$LOG_DIR/session-b.evidence.log" \
+    && grep -Fq '|session_bound|' "$LOG_DIR/session-b.evidence.log" || {
+    echo "Missing ST-E2 new session owner evidence." >&2
+    exit 1
+  }
+  grep -Fq 'ST-E2|' "$LOG_DIR/actor-b.evidence.log" \
+    && grep -Fq '|bound_push|after-rebind|' "$LOG_DIR/actor-b.evidence.log" || {
+    echo "Missing ST-E2 current Actor owner evidence." >&2
+    exit 1
+  }
+fi
+
 cat "$LOG_DIR/client.stdout.log"

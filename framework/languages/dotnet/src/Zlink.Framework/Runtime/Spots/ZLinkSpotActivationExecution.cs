@@ -1271,7 +1271,9 @@ internal abstract partial class ZLinkSpotActivation
             OwnerLeaseGeneration: session.OwnerLeaseGeneration,
             SessionOwnerNodeGeneration:
                 session.SessionOwnerNodeGeneration,
-            AcceptedHighWater: session.AcceptedHighWater);
+            AcceptedHighWater: session.AcceptedHighWater,
+            SessionOwnerId: session.SessionOwnerId,
+            SessionOwnerLeaseGeneration: session.SessionOwnerLeaseGeneration);
     }
 
     internal async ValueTask<ZLinkRemoteActorBoundSessionRoute>

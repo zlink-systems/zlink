@@ -41,6 +41,8 @@ internal sealed class ZLinkSessionContext : IZLinkSessionContext
 
     internal ZLinkSessionActorCoordinator ActorCoordinator { get; }
 
+    internal ZLinkStreamSessionRuntime? SessionRuntime { get; set; }
+
     internal ZLinkCodecRegistryBuilder Codecs => Runtime.Registration.Codecs;
     internal IZlinkStreamCompressionCodec? CompressionCodec => Runtime.Registration.StreamCompressionCodec;
 

@@ -141,6 +141,8 @@ internal static class ZLinkRemoteActorJoinPackets
             boundSessionIdentity?.OwnerLeaseGeneration ?? 0,
             boundSessionIdentity?.SessionOwnerNodeGeneration ?? 0,
             boundSessionIdentity?.AcceptedHighWater ?? 0,
+            boundSessionIdentity?.SessionOwnerId,
+            boundSessionIdentity?.SessionOwnerLeaseGeneration ?? 0,
             reservation?.Token ?? "",
             reservation?.ReservedPayloadBytes ?? 0,
             reservation?.TargetNodeRid.ToBytes().ToArray(),
@@ -264,7 +266,9 @@ internal static class ZLinkRemoteActorJoinPackets
                 boundSession?.TargetNodeGeneration ?? 0,
                 boundSession?.OwnerLeaseGeneration ?? 0,
                 boundSession?.SessionOwnerNodeGeneration ?? 0,
-                boundSession?.AcceptedHighWater ?? 0),
+                boundSession?.AcceptedHighWater ?? 0,
+                boundSession?.SessionOwnerId,
+                boundSession?.SessionOwnerLeaseGeneration ?? 0),
             typeof(ZLinkRemoteActorHandoffCompletionRequest),
             null);
     }
@@ -325,7 +329,9 @@ internal static class ZLinkRemoteActorJoinPackets
             request.BoundSessionTargetNodeGeneration,
             request.BoundSessionOwnerLeaseGeneration,
             request.BoundSessionOwnerNodeGeneration,
-            request.BoundSessionAcceptedHighWater);
+            request.BoundSessionAcceptedHighWater,
+            request.BoundSessionSessionOwnerId,
+            request.BoundSessionSessionOwnerLeaseGeneration);
     }
 
     public static ZLinkRemoteActorBoundSessionRoute DecodeBoundSessionRoute(
@@ -341,7 +347,9 @@ internal static class ZLinkRemoteActorJoinPackets
             request.BoundSessionTargetNodeGeneration,
             request.BoundSessionOwnerLeaseGeneration,
             request.BoundSessionOwnerNodeGeneration,
-            request.BoundSessionAcceptedHighWater);
+            request.BoundSessionAcceptedHighWater,
+            request.BoundSessionSessionOwnerId,
+            request.BoundSessionSessionOwnerLeaseGeneration);
 
     public static ZLinkMessage DecodeJoinRequestPayload(
         ZLinkRemoteActorJoinRequest request,
@@ -493,7 +501,9 @@ internal readonly record struct ZLinkRemoteActorBoundSessionRoute(
     ulong TargetNodeGeneration,
     ulong OwnerLeaseGeneration,
     ulong SessionOwnerNodeGeneration,
-    ulong AcceptedHighWater)
+    ulong AcceptedHighWater,
+    string? SessionOwnerId = null,
+    ulong SessionOwnerLeaseGeneration = 0)
 {
     internal bool HasRouteCoordinates => NodeRid is not null || SessionRid is not null;
 
@@ -570,10 +580,12 @@ ulong BoundSessionObjectGeneration = 0,
 ulong BoundSessionAuthorityOwnerGeneration = 0,
 string? BoundSessionMeshName = null,
 ulong BoundSessionTargetNodeGeneration = 0,
-ulong BoundSessionOwnerLeaseGeneration = 0,
-ulong BoundSessionOwnerNodeGeneration = 0,
-ulong BoundSessionAcceptedHighWater = 0,
-string ReservationToken = "",
+    ulong BoundSessionOwnerLeaseGeneration = 0,
+    ulong BoundSessionOwnerNodeGeneration = 0,
+    ulong BoundSessionAcceptedHighWater = 0,
+    string? BoundSessionSessionOwnerId = null,
+    ulong BoundSessionSessionOwnerLeaseGeneration = 0,
+    string ReservationToken = "",
 long ReservedPayloadBytes = 0,
 byte[]? TargetNodeRid = null,
 ulong TargetNodeGeneration = 0,
@@ -617,4 +629,6 @@ internal sealed record ZLinkRemoteActorHandoffCompletionRequest(
     ulong BoundSessionTargetNodeGeneration = 0,
     ulong BoundSessionOwnerLeaseGeneration = 0,
     ulong BoundSessionOwnerNodeGeneration = 0,
-    ulong BoundSessionAcceptedHighWater = 0);
+    ulong BoundSessionAcceptedHighWater = 0,
+    string? BoundSessionSessionOwnerId = null,
+    ulong BoundSessionSessionOwnerLeaseGeneration = 0);

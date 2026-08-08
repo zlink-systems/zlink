@@ -139,6 +139,59 @@ public sealed class ServiceRuntimeFoundationTests
     }
 
     [Fact]
+    public void BoundSessionReplaced_MatchesCanonicalWireFixture()
+    {
+        var record = new ZLinkServiceWireCodec.BoundSessionReplacedRecord(
+            new ZLinkServiceWireCodec.BoundSessionReplacedActorAuthority(
+                "actor-a",
+                1,
+                RoutingId.From("actor-owner"),
+                2,
+                3,
+                4),
+            new ZLinkServiceWireCodec.BoundSessionReplacedRetiredSession(
+                RoutingId.From("session-owner"),
+                5,
+                "session-runtime",
+                6,
+                RoutingId.From("session-a"),
+                7));
+
+        var expected = new byte[]
+        {
+            90, 77, 1, 51, 0,
+            7, 97, 99, 116, 111, 114, 45, 97,
+            0, 0, 0, 0, 0, 0, 0, 1,
+            11, 97, 99, 116, 111, 114, 45, 111, 119, 110, 101, 114,
+            0, 0, 0, 0, 0, 0, 0, 2,
+            0, 0, 0, 0, 0, 0, 0, 3,
+            0, 0, 0, 0, 0, 0, 0, 4,
+            13, 115, 101, 115, 115, 105, 111, 110, 45, 111, 119, 110, 101, 114,
+            0, 0, 0, 0, 0, 0, 0, 5,
+            15, 115, 101, 115, 115, 105, 111, 110, 45, 114, 117, 110, 116, 105, 109, 101,
+            0, 0, 0, 0, 0, 0, 0, 6,
+            9, 115, 101, 115, 115, 105, 111, 110, 45, 97,
+            0, 0, 0, 0, 0, 0, 0, 7
+        };
+
+        var encoded = ZLinkServiceWireCodec.EncodeBoundSessionReplaced(record);
+        Assert.Equal(expected, encoded);
+        Assert.True(ZLinkServiceWireCodec.TryDecodeBoundSessionReplaced(
+            encoded,
+            out var decoded,
+            out var error));
+        Assert.Equal(ZLinkServiceWireCodec.DecodeError.None, error);
+        Assert.Equal(record, decoded);
+
+        var trailing = encoded.Append((byte)0).ToArray();
+        Assert.False(ZLinkServiceWireCodec.TryDecodeBoundSessionReplaced(
+            trailing,
+            out _,
+            out var trailingError));
+        Assert.Equal(ZLinkServiceWireCodec.DecodeError.TrailingByte, trailingError);
+    }
+
+    [Fact]
     public void GeneratedLivenessFixtures_DecodeWithExactErrors()
     {
         var frameworkRoot = Common.FrameworkTestEnvironment.GetFrameworkRoot();

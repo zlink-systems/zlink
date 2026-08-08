@@ -1228,7 +1228,13 @@ internal sealed class ZLinkActorHandoffAdmissions(
             && left.BoundSessionOwnerNodeGeneration
                 == right.BoundSessionOwnerNodeGeneration
             && left.BoundSessionAcceptedHighWater
-                == right.BoundSessionAcceptedHighWater;
+                == right.BoundSessionAcceptedHighWater
+            && string.Equals(
+                left.BoundSessionSessionOwnerId,
+                right.BoundSessionSessionOwnerId,
+                StringComparison.Ordinal)
+            && left.BoundSessionSessionOwnerLeaseGeneration
+                == right.BoundSessionSessionOwnerLeaseGeneration;
         }
 
         private static bool BoundSessionRouteMatches(
@@ -1257,7 +1263,13 @@ internal sealed class ZLinkActorHandoffAdmissions(
             && left.BoundSessionOwnerNodeGeneration
                 == right.BoundSessionOwnerNodeGeneration
             && left.BoundSessionAcceptedHighWater
-                == right.BoundSessionAcceptedHighWater;
+                == right.BoundSessionAcceptedHighWater
+            && string.Equals(
+                left.BoundSessionSessionOwnerId,
+                right.BoundSessionSessionOwnerId,
+                StringComparison.Ordinal)
+            && left.BoundSessionSessionOwnerLeaseGeneration
+                == right.BoundSessionSessionOwnerLeaseGeneration;
     }
 }
 
@@ -1303,6 +1315,12 @@ internal static class ZLinkActorHandoffRequestIdentity
                == right.BoundSessionOwnerNodeGeneration
                && left.BoundSessionAcceptedHighWater
                == right.BoundSessionAcceptedHighWater
+               && string.Equals(
+                   left.BoundSessionSessionOwnerId,
+                   right.BoundSessionSessionOwnerId,
+                   StringComparison.Ordinal)
+               && left.BoundSessionSessionOwnerLeaseGeneration
+               == right.BoundSessionSessionOwnerLeaseGeneration
                && string.Equals(left.RelocationContentType, right.RelocationContentType, StringComparison.Ordinal)
                && string.Equals(
                    left.RelocationReference,

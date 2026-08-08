@@ -263,7 +263,10 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         ZLinkSessionActor actorRef,
         ulong bindingGeneration,
         ZLinkSessionBindingRoute route,
-        ulong sessionOwnerNodeGeneration)
+        ulong sessionOwnerNodeGeneration,
+        RoutingId sessionOwnerNodeRid = default,
+        string sessionOwnerId = "",
+        ulong sessionOwnerLeaseGeneration = 0)
     {
         var replaced = _sessionBindings.Bind(
             actorId,
@@ -272,7 +275,10 @@ internal sealed class ZLinkActorBoundSessionCoordinator
             actorRef,
             bindingGeneration,
             route,
-            sessionOwnerNodeGeneration);
+            sessionOwnerNodeGeneration,
+            sessionOwnerNodeRid,
+            sessionOwnerId,
+            sessionOwnerLeaseGeneration);
         CompleteReplacedBindingRequests(actorId, replaced);
         return replaced;
     }
@@ -490,6 +496,25 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         out ZLinkSessionBindingEntry entry) =>
         _sessionBindings.TryGetEntryByActorId(actorId, out entry);
 
+    public bool TryGetExactRetiredSessionBinding(
+        string actorId,
+        RoutingId sessionOwnerNodeRid,
+        RoutingId sessionRid,
+        ulong sessionOwnerNodeGeneration,
+        string sessionOwnerId,
+        ulong sessionOwnerLeaseGeneration,
+        ulong bindingGeneration,
+        out ZLinkSessionBindingEntry entry) =>
+        _sessionBindings.TryGetExactRetiredBinding(
+            actorId,
+            sessionOwnerNodeRid,
+            sessionRid,
+            sessionOwnerNodeGeneration,
+            sessionOwnerId,
+            sessionOwnerLeaseGeneration,
+            bindingGeneration,
+            out entry);
+
     public IReadOnlyCollection<IZLinkSessionActor> SnapshotSessionActors(
         ZLinkSessionContext context) =>
         _sessionBindings.SnapshotActors(context);
@@ -522,7 +547,9 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         ulong targetNodeGeneration = 1,
         ulong ownerLeaseGeneration = 0,
         ulong sessionOwnerNodeGeneration = 1,
-        ulong acceptedHighWater = 0)
+        ulong acceptedHighWater = 0,
+        string sessionOwnerId = "",
+        ulong sessionOwnerLeaseGeneration = 0)
     {
         //  Recorded at bind time and read again when a relocation seals the
         //  route; printing both ends shows if they disagree.
@@ -539,7 +566,9 @@ internal sealed class ZLinkActorBoundSessionCoordinator
             targetNodeGeneration,
             ownerLeaseGeneration,
             sessionOwnerNodeGeneration,
-            acceptedHighWater);
+            acceptedHighWater,
+            sessionOwnerId,
+            sessionOwnerLeaseGeneration);
         _boundSessions.Register(actorId, sessionRid, bindingToken);
         return previous;
     }
@@ -557,6 +586,8 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         ulong ownerLeaseGeneration,
         ulong sessionOwnerNodeGeneration,
         ulong acceptedHighWater,
+        string sessionOwnerId = "",
+        ulong sessionOwnerLeaseGeneration = 0,
         ZLinkActorPreviousBindingFence? previousFence = null)
     {
         return _getState(actorId).BeginSessionReplacement(
@@ -571,6 +602,8 @@ internal sealed class ZLinkActorBoundSessionCoordinator
             ownerLeaseGeneration,
             sessionOwnerNodeGeneration,
             acceptedHighWater,
+            sessionOwnerId,
+            sessionOwnerLeaseGeneration,
             previousFence);
     }
 
@@ -590,13 +623,6 @@ internal sealed class ZLinkActorBoundSessionCoordinator
             actorId,
             attempt.Replacement.SessionRid,
             attempt.Replacement.BindingToken);
-    }
-
-    public void MarkPreviousActorSessionBindingTombstoned(
-        string actorId,
-        ZLinkActorSessionReplacementAttempt attempt)
-    {
-        _getState(actorId).MarkPreviousSessionBindingTombstoned(attempt);
     }
 
     public void AbortActorSessionReplacement(

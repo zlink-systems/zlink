@@ -177,7 +177,7 @@ public sealed class ActorBoundSessionRelayTests
     }
 
     [Fact]
-    public async Task Prepared_Replacement_Resumes_After_The_First_Durable_Side_Effect()
+    public async Task Prepared_Replacement_Rolls_Back_Before_Publication()
     {
         var state = new ZLinkActorRuntimeState("actor-prepared-forward-completion");
         _ = Bind(state, "binding-a", "session-a", authorityGeneration: 1);
@@ -187,10 +187,9 @@ public sealed class ActorBoundSessionRelayTests
             "session-b",
             authorityGeneration: 2);
 
-        state.MarkPreviousSessionBindingTombstoned(first);
         var publishFailure = new ZLinkFrameworkException(
             ZLinkFrameworkErrorKind.Unavailable,
-            "authority changed before publish",
+            "authority changed before publication",
             ZLinkRetryAdvice.RetryAfterBackoff);
         state.AbortSessionReplacement(first, publishFailure);
 
@@ -204,7 +203,6 @@ public sealed class ActorBoundSessionRelayTests
             "session-b",
             authorityGeneration: 2);
         Assert.True(retry.OwnsExecution);
-        Assert.True(retry.PreviousBindingTombstoned);
         state.PublishSessionReplacement(retry);
         state.CompleteSessionReplacement(retry);
         Assert.Null(await retry.Completion);

@@ -14,6 +14,21 @@ public interface IZLinkSession
     ValueTask OnDisconnectedAsync(
         CancellationToken cancellationToken);
 
+    /// <summary>
+    ///     Notifies the retired session that an Actor binding was replaced by
+    ///     another session. The Framework has already entered the closing
+    ///     state before this callback runs; the session may send a final
+    ///     application message, but does not need to close itself.
+    /// </summary>
+    ValueTask OnActorBindingReplacedAsync(
+        string actorId,
+        CancellationToken cancellationToken)
+    {
+        _ = actorId;
+        _ = cancellationToken;
+        return ValueTask.CompletedTask;
+    }
+
     ValueTask OnErrorAsync(
         ZLinkStreamError error,
         CancellationToken cancellationToken);

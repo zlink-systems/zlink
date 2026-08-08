@@ -52,6 +52,7 @@ internal static class ServiceWireConstants
         UserSpotClose = 48,
         ActorCreate = 49,
         MessageFollow = 50,
+        BoundSessionReplaced = 51,
     }
     [System.Flags]
     internal enum Flag : byte

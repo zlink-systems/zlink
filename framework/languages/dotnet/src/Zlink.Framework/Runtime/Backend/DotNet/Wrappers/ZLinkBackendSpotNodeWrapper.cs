@@ -18,7 +18,8 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
     IZLinkBackendRequestSourceFenceObserver,
     IZLinkBackendLocalActorAuthorityReader,
     IZLinkBackendActorMessageFollowIngress,
-    IZLinkBackendMessageFollowNotifications
+    IZLinkBackendMessageFollowNotifications,
+    IZLinkBackendBoundSessionReplacementNotifications
 {
     private readonly IMeshNode _node;
     private readonly ZLinkMeshCompletionTable _completions = new();
@@ -85,6 +86,17 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
         RoutingId targetNodeRid,
         ZLinkServiceWireCodec.MessageFollowRecord record) =>
         RequireManagedNode().TrySendMessageFollowNotification(
+            targetNodeRid,
+            record);
+
+    public void SetBoundSessionReplacedNotificationHandler(
+        Action<RoutingId, ZLinkServiceWireCodec.BoundSessionReplacedRecord> handler) =>
+        RequireManagedNode().SetBoundSessionReplacedNotificationHandler(handler);
+
+    public bool TrySendBoundSessionReplacedNotification(
+        RoutingId targetNodeRid,
+        ZLinkServiceWireCodec.BoundSessionReplacedRecord record) =>
+        RequireManagedNode().TrySendBoundSessionReplacedNotification(
             targetNodeRid,
             record);
 

@@ -84,6 +84,23 @@ internal sealed class TransferSession(
         return ValueTask.CompletedTask;
     }
 
+    public async ValueTask OnActorBindingReplacedAsync(
+        string actorId,
+        CancellationToken cancellationToken)
+    {
+        evidence.Add(
+            "ST-E2",
+            actorId,
+            "actor_binding_replaced",
+            Context.SessionId);
+        await Context.Client.Send(new ActorBindingReplacedNotify(
+                actorId,
+                Context.SessionId,
+                "callback-before-close"))
+            .Async(cancellationToken)
+            .ConfigureAwait(false);
+    }
+
     public ValueTask OnErrorAsync(ZLinkStreamError error, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();

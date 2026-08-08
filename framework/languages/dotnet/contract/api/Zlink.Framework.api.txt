@@ -1415,6 +1415,7 @@ assembly Zlink.Framework
   type interface Zlink.Framework.Contracts.Streams.IZLinkSession
     property Zlink.Framework.Contracts.Streams.IZLinkSessionContext Context { get; } [nullability=read:not-null,write:unknown]
     method virtual System.Void Configure() [return=read:not-null,write:not-null]
+    method virtual System.Threading.Tasks.ValueTask OnActorBindingReplacedAsync(System.String actorId [nullability=read:not-null,write:not-null], System.Threading.CancellationToken cancellationToken [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
     method abstract System.Threading.Tasks.ValueTask OnConnectedAsync(System.Threading.CancellationToken cancellationToken [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
     method abstract System.Threading.Tasks.ValueTask OnDisconnectedAsync(System.Threading.CancellationToken cancellationToken [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
     method virtual System.Threading.Tasks.ValueTask OnDispatchAsync(Zlink.Framework.Contracts.Streams.ZLinkSessionDispatchContext dispatch [nullability=read:not-null,write:not-null], Zlink.Framework.Contracts.Messaging.ZLinkMessage payload [nullability=read:not-null,write:not-null], System.Threading.CancellationToken cancellationToken [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]

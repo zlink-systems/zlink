@@ -4,17 +4,19 @@ title: ".NET Framework server 스펙 구현 Gap 리포트"
 
 # .NET Framework server 스펙 구현 Gap 리포트
 
-- **작성일**: 2026-08-07
+- **작성일**: 2026-08-08
 - **공개 계약 기준**: 현재 worktree의 `framework/doc/framework/common/spec/`와 .NET exact interface
 - **내부 구조 기준**: 현재 worktree의 `framework/doc/framework/common/internals/` 01–12
 - **메시지 크기 계약 보정**: 2026-08-07 사용자 확인에 따라 RouteMesh ServerServer에는 Framework message-size 상한이 없다. 별도의 기본 64 KiB·startup 설정 계약은 외부 Client가 StreamNode의 Core STREAM socket으로 보내는 C→S complete message에만 적용한다. ClientServer Channel은 기존 negotiated complete-message 계약을 유지한다.
-- **구현 기준**: 전체 audit 기준은 `425b9c2a8272`, 최종 .NET 검증 checkpoint는 `4607d5edc4`이다. 중간 checkpoint와 검증 증거는 각 상세 항목에 기록한다.
+- **구현 기준**: 전체 audit의 기준 commit은 `425b9c2a8272`이며, 현재 재검토는 `main`의 `16c6ffcddb`와 그 위의 worktree 변경을 함께 기준으로 했다. 중간 checkpoint와 검증 증거는 각 상세 항목에 기록한다.
 - **판정 방법**: exact public declaration, production 호출 경로, 오류·수명주기·동시성·HWM 의미, service wire codec과 실제 test assertion을 차례로 대조했다. Type이나 method가 존재하는지만으로 완료 판정하지 않았다. 2차 검토는 `gpt-5.6-sol` high 독립 reviewer가 기존 판정을 반증하고 누락을 찾은 뒤, 지적된 경로를 현재 source에서 다시 확인했다.
+- **2026-08-08 session 교체 재검토**: `DOTNET-SESS-REPLACE-001`의 구현·package·세 process 증거를 추가로 확인했다. 정식 spec·schema·golden은 이번 session에서 수정하지 않았고, 이 계획서만 현재 구현 상태에 맞춰 갱신한다.
 
-최초 audit에서 확인한 `.NET Framework server` 구현 gap은 모두 종결했다. Public exact interface와
-runtime·구조·비용 의미를 구현하고 각 상세 항목에 owner-layer regression, package와 관련 process 증거를
-기록했다. Timer option은 공통 spec의 normalization 규칙을 재확인해 language exact interface와 canonical
-wire schema가 충돌하지 않는 것으로 판정을 바로잡고 세 policy의 canonical round-trip test를 추가했다.
+최초 audit에서 확인한 `.NET Framework server` 구현 gap은 gap별 public exact interface, runtime·구조·비용
+의미와 owner-layer regression 기준으로 종결했다. 각 상세 항목에 package와 관련 process 증거를 기록했다.
+Timer option은 공통 spec의 normalization 규칙을 재확인해 language exact interface와 canonical wire schema가
+충돌하지 않는 것으로 판정을 바로잡고 세 policy의 canonical round-trip test를 추가했다. 이후 추가된
+session 교체 계약도 현재 source·unit·package·process evidence까지 확인되어 전체 gap 종결 조건을 충족한다.
 
 Public API와 사용자에게 보이는 동작은 정식 spec과 exact interface만 계약 근거로 사용한다. 구조·POSDDD
 gap은 그 계약을 구현하는 internals의 상태 표현, component 책임이나 불변 조건과 다르다는 판정이며,
@@ -82,6 +84,7 @@ Gap 하나 또는 서로 강하게 연결된 작은 작업 묶음의 동작과 �
 | DOTNET-LAYER-004 | 중 | STREAM protocol ownership | 완료 — connector protocol 구현을 client와 Framework server가 함께 사용한다 |
 | DOTNET-OWN-001 | 중 | payload ownership/copy | 완료 — public defensive copy는 유지하고 runtime-owned payload는 내부 ownership 이전 경로를 사용한다 |
 | SPEC-TIMER-001 | 중 | timer relocation contract | 완료 — non-catch-up의 무시되는 값은 canonical 기본값으로 normalize하고 bounded 값은 보존한다 |
+| DOTNET-SESS-REPLACE-001 | 상 | 이전 session replacement callback | 완료 — command 51, exact retired owner fence, callback terminal 100 ms close, package·세 process E2E를 검증했다 |
 
 ## 2. 상세 발견 사항
 
@@ -628,6 +631,45 @@ contract test 76건도 통과했다. 실제 process는 timer overrun 동작을 S
 `logs/20260807-224140-3373181/`의 `sm-e4`에서 확인했다. Regression checkpoint는 `3f02183cb1`로 `main`에
 push했다.
 
+### DOTNET-SESS-REPLACE-001 — 이전 session 통지와 callback terminal 100 ms 뒤 close
+
+**판정: 완료**
+
+승인된 계약은 replacement identity가 current로 등록되면 이전 owner의 ACK·callback·close를 기다리지 않고
+bind terminal을 반환한다. 이후 `boundSessionReplaced(51)`을 이전 exact session에 one-way로 보내고,
+`IZLinkSession.OnActorBindingReplacedAsync(...)` callback에서 application이 client 안내를 보낼 수 있게 한다.
+Callback이 성공 또는 실패로 terminal이 되면 Framework가 non-blocking timer를 예약하고 turn을 즉시 반환한다.
+Timer는 100 ms 뒤 connection을 닫으며 outbound queue가 먼저 비어도 시간을 줄이지 않고 sleep이나 serial
+executor 점유로 기다리지 않는다. 통지·callback·close 실패는 새 binding을 rollback하지 않는다.
+
+초기 gap의 ACK-before-swap 경로와 callback 부재를 제거했다. `IZLinkSession`에는 기존 구현체를 깨뜨리지 않는
+default method를 추가했고(`Contracts/Streams/IZLinkSession.cs:17-30`), Actor owner는 새 binding을 publish·complete한
+뒤 이전 owner에 대한 통지를 detached bounded retry로 제출한다(`Runtime/Host/ZLinkFrameworkRuntimeActors.cs:2727-2914`,
+`Runtime/Host/ZLinkFrameworkRuntimeBoundSessionReplacement.cs:77-129`). Bind terminal은 이전 callback이나
+cleanup ACK를 기다리지 않는다.
+
+`boundSessionReplaced(51)` codec은 canonical record와 malformed/trailing input을 검증한다
+(`Runtime/Service/ZLinkServiceBoundSessionReplacedWireCodec.cs:36-165`). Mesh transport는 Actor authority target
+RID와 admitted source lifecycle을 검증하고, receiving node는 Actor authority fence로 local Actor를 찾지 않고
+retired session owner의 Node RID·lifecycle generation·owner ID·owner lease generation·session RID·binding
+generation·token을 exact-match한 경우에만 callback을 enqueue한다
+(`Runtime/Service/ZLinkManagedMeshNode.cs:4424-4611`, `Runtime/Host/ZLinkFrameworkRuntimeBoundSessionReplacement.cs:7-49`).
+
+Callback을 enqueue하기 전에 session을 closing으로 전이하고 신규 application dispatch를 거부한다
+(`Runtime/Streams/ZLinkStreamSessionRuntime.cs:269-322`). Callback 안의 `Context.Client.Send(...)`는 허용하며
+application이 `Context.CloseAsync()`를 호출하지 않아도 된다. Callback terminal 뒤에는 serial executor 밖의
+100 ms timer를 예약하고, timer callback이 exact identity를 재검증한 뒤 Framework가 transport를 close한다
+(`Runtime/Streams/ZLinkStreamSessionRuntime.cs:729-835`). Callback deadline은 즉시 force-close하고, callback·전송·close
+실패는 새 binding을 rollback하지 않는다. `Task.Delay`는 detached admission retry에만 존재하며 serial lane에서
+100 ms를 기다리는 경로는 없다.
+
+Actor-side replacement test는 publish 후 terminal, cleanup 불가 시 rollback 금지, stale/duplicate command,
+same-session idempotence와 multi-Actor binding fence를 확인하도록 갱신했다. Canonical wire fixture, full unit,
+package/API snapshot과 세 process `ST-E2`가 모두 통과했다. 최신 process evidence는
+`framework/languages/dotnet/e2e/SpotActorTransfer/logs/20260808-083056-3230041/`이며, session-a의
+`actor_binding_replaced`가 `disconnected`보다 먼저 기록되고 actor-b의 `success_reply` 뒤 `bound_push|after-rebind`가
+기록된다. 따라서 이 gap의 source·runtime·package·process 종결 조건을 모두 충족한다.
+
 ## 3. 반증 검토와 제외한 후보
 
 각 발견을 “코드 모양이 다르다”는 이유만으로 gap 처리하지 않고, 반대 근거가 있는 후보는 제외했다.
@@ -644,7 +686,9 @@ push했다.
 - Weighted selection: smooth weighted round-robin과 stable RID tie-break 결정(`common/internals/06-routing-and-cache.ko.md:203-255`)을 공통 selection plan이 구현하고(`Runtime/Channels/ZLinkWeightedSelector.cs`, `Runtime/Channels/ZLinkWeightedSelectionPlan.cs`), exact order·tie-break·candidate replacement assertion이 있다(`UnitTests/Runtime/WeightContractTests.cs:61-230`).
 - Instance Spot idle eviction: bounded scan 결정에 대해 catalog가 64개 batch와 cursor wrap을 사용하고(`Runtime/Spots/ZLinkSpotNodeCatalog.cs:29,580-638`), 연속 batch가 뒤 후보까지 도달하는 assertion이 있다(`UnitTests/Runtime/StatefulServiceRuntimeTests.cs:2402-2455`).
 - Observer queue: intermediate coalescing과 bounded terminal loss 공개 결정에 대해 별도 terminal queue와 loss count를 구현하고(`Runtime/Diagnostics/ZLinkObservationQueue.cs`), terminal 보존·oldest discard·subscriber loss assertion이 있다(`UnitTests/Runtime/ZLinkObservationQueueTests.cs:6-85`).
-- Cross-owner session rebind: 이전 binding 정리 확인 뒤 새 binding을 확정하는 결정(`common/internals/09-session-binding.ko.md:61-100`)에 대해 tombstone/publish 단계가 분리되어 있고(`Runtime/Host/ZLinkActorBoundSessionCoordinator.cs:560-624`), tombstone ACK가 source swap보다 앞서는 assertion이 있다(`UnitTests/Runtime/SessionActorCoordinatorTests.cs:983-1075`).
+- Cross-owner session rebind의 tombstone/publish 분리와 ACK-before-swap assertion은 이전 계약에 대한
+  과거 증거다. 현재는 `DOTNET-SESS-REPLACE-001`의 즉시 bind·one-way 교체 통지·exact owner callback 경로로
+  대체되었고, 이전 binding의 일반 tombstone cleanup은 새 current binding과 분리되어 유지된다.
 - Message Follow: route fence와 cache invalidation 결정(`common/internals/12-service-wire-protocol.ko.md:185-210`)에 대해 admitted-peer handler와 exact route invalidation이 있고(`Runtime/Service/ZLinkManagedMeshNode.cs:543-565`, `Runtime/Locations/ZLinkStoreLocationResolvers.cs:294-350`), generation fence·matching cache-only invalidation assertion이 있다(`UnitTests/Runtime/ActorHandoffTests.cs:627-680`, `UnitTests/Runtime/LocationResolverTests.cs:90-125`).
 
 이 항목들은 source와 표시한 unit assertion 범위에서 해당 결정과 일치한다는 판정이다. 실제 multi-process E2E 전체 통과나 package/clean-consumer 종결을 뜻하지 않는다.
@@ -653,11 +697,11 @@ push했다.
 
 | 검증 | 결과 | 해석 |
 |---|---|---|
-| service wire decoder fixture validator | 통과: canonical 2, malformed 6, framework error 26, malformed error 3 | 현재 canonical schema와 generated decoder fixture가 일치한다 |
-| `.NET` contract test | 통과: 76/76 | 최초에 검출한 object-location exact interface 누락을 포함해 현재 public contract가 통과한다 |
-| Framework 전체 unit test | 통과: 1,593/1,593 | timer canonical round-trip 3건과 manual object-client peer assertion 안정화 후의 종결 시점 전체 suite다 |
-| packaged-contract/clean consumer | 통과 | standalone HTTP consumer가 새 package를 사용했고 public API snapshot hash는 `c1987f4b98e4fac7a30b7d038a56ee0d20e1272d00e79bdc88d3271e3c3ab958`다 |
-| 관련 process E2E | 통과 | 각 gap의 상세 항목에 실행 log를 기록했다. 마지막 timer gate는 SpotService `logs/20260807-224140-3373181/`의 `sm-e4`다 |
+| `.NET` contract/API surface | 통과: API snapshot 및 package contract | `IZLinkSession.OnActorBindingReplacedAsync(...)` default interface method를 포함한 public API snapshot이 package와 일치한다 |
+| Framework 전체 unit test | 통과: 1,594/1,594 | replacement state, exact owner fence, wire fixture와 기존 .NET regression을 포함한 최종 suite다 |
+| packaged-contract/clean consumer | 통과 | 9개 package hash, standalone HTTP clean consumer, public API snapshot hash `d73b00de03585fcbc14e220ce7ae5117b8b3b58f8751f6b05ddff02869453144`를 확인했다 |
+| service wire decoder fixture validator | 통과 | `canonical=2`, `malformed=6`, `frameworkErrors=26`, `frameworkErrorMalformed=3`, `boundSessionReplaced=pass`다 |
+| 관련 process E2E | 통과: `LocationMessaging` 15/15 및 `SpotActorTransfer ST-E2` | ST-E2는 Actor owner, 이전 session owner, 새 session owner 세 process를 실행했고 callback guidance가 close보다 먼저 도착했다 |
 
 이 표는 `.NET` gap 종결 gate를 구분해 기록한다. 저장소 전체 언어의 aggregate contract와 전체 process
 suite를 실행했다는 뜻으로 확대하지 않는다.
@@ -670,4 +714,6 @@ suite를 실행했다는 뜻으로 확대하지 않는다.
 
 위 순서의 public contract, wire·size, completion·execution, lifecycle, layer ownership과 payload ownership
 checkpoint를 모두 구현했다. 마지막으로 timer normalization을 정식 공통 spec에 맞춰 회귀 test로 고정한 뒤
-contract, full unit, package, clean consumer와 관련 process E2E를 각각 확인했다.
+contract, full unit, package, clean consumer와 gap별 관련 process E2E를 각각 확인했다. 최신
+`LocationMessaging` aggregate도 15/15로 통과했고, 새 `DOTNET-SESS-REPLACE-001`도 command 51·owner fence·
+callback lifecycle·package·세 process evidence까지 종결했다. 이 문서의 현재 전체 판정은 모든 항목 완료다.

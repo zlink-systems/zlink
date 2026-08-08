@@ -16,6 +16,24 @@ internal static class StE2BoundSessionRebindIsolationScenario
         await context.CreateActorAsync(context.NodeA, actorId, SpotActorTransferNames.ActorTypeStateful, 92);
         var sourceRef = await context.GetActorRefAsync(context.NodeA, actorId);
         await using var oldSession = await context.ConnectAndBindAsync(context.Options.NodeAStreamEndpoint, "ST-E2", sourceRef);
+        var guidanceReceived = 0;
+        var closedBeforeGuidance = 0;
+        var closed = new TaskCompletionSource<ZlinkStreamDisconnected>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        oldSession.Disconnected += (message, _) =>
+        {
+            if (Volatile.Read(ref guidanceReceived) == 0)
+                Interlocked.Exchange(ref closedBeforeGuidance, 1);
+            closed.TrySetResult(message);
+            return ValueTask.CompletedTask;
+        };
+        var replacementGuidance = oldSession.WaitFor<ActorBindingReplacedNotify>()
+            .Where(message =>
+                message.Payload.ActorId == actorId
+                && message.Payload.Marker == "callback-before-close")
+            .Timeout(TimeSpan.FromSeconds(10))
+            .Async()
+            .AsTask();
         var beforeTransferPush = oldSession.WaitFor<BoundPushNotify>()
             .Where(message => message.Payload.Marker == "before-rebind-transfer")
             .Timeout(TimeSpan.FromSeconds(10))
@@ -44,9 +62,19 @@ internal static class StE2BoundSessionRebindIsolationScenario
             .Timeout(TimeSpan.FromSeconds(10))
             .Async().AsTask();
         var pushReply = await context.BoundPushAsync(context.NodeB, actorId, new BoundPushReq("ST-E2", "after-rebind"));
+        var guidance = await replacementGuidance;
+        Interlocked.Exchange(ref guidanceReceived, 1);
+        var disconnected = await closed.Task.WaitAsync(TimeSpan.FromSeconds(10));
         var notify = await newPush;
         ZlinkStreamAssert.Ensure(SpotActorTransferScenarioContext.IsNode(pushReply.NodeRid, "actor-b"), $"ST-E2 bound push reply expected actor-b, got {pushReply.NodeRid}.");
         ZlinkStreamAssert.Ensure(notify.Payload.Marker == "after-rebind", "ST-E2 new bound session notify marker mismatch.");
+        ZlinkStreamAssert.Ensure(guidance.Payload.ActorId == actorId, "ST-E2 replacement guidance actor mismatch.");
+        ZlinkStreamAssert.Ensure(
+            Volatile.Read(ref closedBeforeGuidance) == 0,
+            "ST-E2 retired session closed before callback guidance reached the client.");
+        Console.WriteLine(
+            $"ST-E2 callback guidance received before close actor={actorId} "
+            + $"close_reason={disconnected.CloseReason}");
         await oldPush;
     }
 }

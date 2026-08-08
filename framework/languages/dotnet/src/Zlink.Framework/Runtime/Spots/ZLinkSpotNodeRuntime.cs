@@ -89,6 +89,17 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
                         ?.InvalidateMessageFollowRoute(record);
                 });
         }
+        if (node is IZLinkBackendBoundSessionReplacementNotifications
+            boundSessionReplacementNotifications)
+        {
+            boundSessionReplacementNotifications
+                .SetBoundSessionReplacedNotificationHandler(
+                    (sourceNodeRid, record) =>
+                        runtime.TryHandleBoundSessionReplacedNotification(
+                            Node.RoutingId,
+                            sourceNodeRid,
+                            record));
+        }
         if (locationLifecycle is not null)
         {
             if (node is not IZLinkBackendAuthorityObserver authorityObserver)
