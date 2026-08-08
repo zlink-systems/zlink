@@ -78,6 +78,64 @@ struct actor_route_fence_t
                             const actor_route_fence_t &) = default;
 };
 
+enum class bound_session_binding_state_t : std::uint8_t
+{
+    active = 1,
+    tombstone = 2
+};
+
+struct bound_session_binding_transition_t
+{
+    bound_session_binding_state_t state =
+      bound_session_binding_state_t::active;
+    std::uint64_t generation = 0;
+
+    friend bool operator== (const bound_session_binding_transition_t &,
+                            const bound_session_binding_transition_t &) = default;
+};
+
+struct bound_session_send_t
+{
+    actor_route_fence_t actor;
+    std::uint64_t expected_binding_generation = 0;
+
+    friend bool operator== (const bound_session_send_t &,
+                            const bound_session_send_t &) = default;
+};
+
+struct bound_session_bind_t
+{
+    std::uint64_t correlation = 0;
+    actor_route_fence_t actor;
+    std::vector<std::uint8_t> session_routing_id;
+    bound_session_binding_transition_t binding;
+
+    friend bool operator== (const bound_session_bind_t &,
+                            const bound_session_bind_t &) = default;
+};
+
+struct retired_bound_session_route_fence_t
+{
+    std::vector<std::uint8_t> session_owner_node_routing_id;
+    std::uint64_t session_owner_node_generation = 0;
+    std::string session_owner_id;
+    std::uint64_t session_owner_lease_generation = 0;
+    std::vector<std::uint8_t> session_routing_id;
+    std::uint64_t retired_binding_generation = 0;
+
+    friend bool operator== (const retired_bound_session_route_fence_t &,
+                            const retired_bound_session_route_fence_t &) = default;
+};
+
+struct bound_session_replaced_t
+{
+    actor_route_fence_t actor_authority;
+    retired_bound_session_route_fence_t retired_session;
+
+    friend bool operator== (const bound_session_replaced_t &,
+                            const bound_session_replaced_t &) = default;
+};
+
 struct wire_operation_id_t
 {
     std::uint64_t high = 0;
@@ -115,11 +173,22 @@ struct spot_message_header_t
 
 struct actor_message_header_t
 {
+    struct bound_session_source_t
+    {
+        std::vector<std::uint8_t> session_routing_id;
+        std::uint64_t binding_generation = 0;
+        std::uint64_t session_sequence = 0;
+
+        friend bool operator== (const bound_session_source_t &,
+                                const bound_session_source_t &) = default;
+    };
+
     wire_operation_id_t operation;
     std::uint8_t message_follow_hop_count = 0;
     std::optional<std::uint64_t> correlation;
     std::optional<std::pair<std::string, std::uint64_t>> source_actor;
     actor_route_fence_t target;
+    std::optional<bound_session_source_t> bound_session_source;
 };
 
 struct relocation_id_t
@@ -386,12 +455,18 @@ struct frozen_spot_application_body_t
     spot_route_fence_t target;
     std::uint64_t expected_owner_lease_generation = 0;
     application_payload_t application;
+
+    friend bool operator== (const frozen_spot_application_body_t &,
+                            const frozen_spot_application_body_t &) = default;
 };
 
 struct frozen_actor_application_body_t
 {
     actor_route_fence_t target;
     application_payload_t application;
+
+    friend bool operator== (const frozen_actor_application_body_t &,
+                            const frozen_actor_application_body_t &) = default;
 };
 
 // Typed capture input for the application records that can be admitted to an
@@ -412,6 +487,9 @@ struct frozen_application_record_t
     std::optional<std::uint64_t> reply_route_id;
     std::variant<frozen_spot_application_body_t,
                  frozen_actor_application_body_t> body;
+
+    friend bool operator== (const frozen_application_record_t &,
+                            const frozen_application_record_t &) = default;
 };
 
 struct relocation_data_t
@@ -837,10 +915,24 @@ std::vector<std::uint8_t> encode_actor_message_header (
   const actor_route_fence_t &target,
   wire_operation_id_t operation,
   std::optional<std::uint64_t> correlation = std::nullopt,
-  std::uint8_t message_follow_hop_count = 0);
+  std::uint8_t message_follow_hop_count = 0,
+  std::optional<actor_message_header_t::bound_session_source_t>
+    bound_session_source = std::nullopt);
 actor_message_header_t decode_actor_message_header (
   std::span<const std::uint8_t> bytes,
   command expected_kind);
+std::vector<std::uint8_t>
+encode_bound_session_send (const bound_session_send_t &record);
+bound_session_send_t
+decode_bound_session_send (std::span<const std::uint8_t> bytes);
+std::vector<std::uint8_t>
+encode_bound_session_bind (const bound_session_bind_t &record);
+bound_session_bind_t
+decode_bound_session_bind (std::span<const std::uint8_t> bytes);
+std::vector<std::uint8_t>
+encode_bound_session_replaced (const bound_session_replaced_t &record);
+bound_session_replaced_t
+decode_bound_session_replaced (std::span<const std::uint8_t> bytes);
 std::vector<std::uint8_t>
 encode_message_follow (const message_follow_notice_t &notice);
 message_follow_notice_t
@@ -875,6 +967,11 @@ std::vector<std::uint8_t> encode_frozen_record (
   const frozen_record_t &record);
 frozen_record_t encode_frozen_application_record (
   const frozen_application_record_t &record);
+// Builds the validated frozen summary without allocating canonical relocation
+// bytes. The relocation owner encodes those bytes only when a snapshot is
+// actually retained or transmitted.
+frozen_record_t summarize_frozen_application_record (
+  const frozen_application_record_t &record);
 frozen_record_t decode_frozen_record (
   std::span<const std::uint8_t> bytes);
 std::vector<std::uint8_t> encode_user_spot_create_header (
@@ -906,6 +1003,11 @@ application_payload_t
 decode_application_payload (std::span<const std::uint8_t> bytes);
 std::size_t
 application_payload_hwm_bytes (const application_payload_t &payload);
+// Validate an encoded application envelope and calculate its HWM charge
+// without allocating the application payload vector. Ingress uses this
+// before mailbox admission so a full queue does not pay the decode cost.
+std::size_t
+application_payload_hwm_bytes (std::span<const std::uint8_t> bytes);
 std::vector<std::uint8_t>
 encode_route_mesh_admission (command kind,
                              const mesh::service_node_descriptor_t &descriptor);

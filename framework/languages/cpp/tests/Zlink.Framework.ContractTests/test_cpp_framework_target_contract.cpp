@@ -382,9 +382,16 @@ int main ()
                     && transfer_runner.find ("start_role session session-b")
                          != std::string::npos
                     && transfer_runner.find ("start_role controller") == std::string::npos
-                    && transfer_runner.find ("CONTROLLER_URL") == std::string::npos
-                    && transfer_runner.find ("actor-c") == std::string::npos,
+                    && transfer_runner.find ("CONTROLLER_URL") == std::string::npos,
                   "E2E-CP-56", "Config 10 still uses a remote actor controller");
+    const auto actor_c_start = transfer_runner.find ("start_role actor actor-c");
+    const auto actor_c_gate =
+      actor_c_start == std::string::npos
+        ? std::string::npos
+        : transfer_runner.rfind ("if [[ \"$SCENARIO\" == \"ST-F3A\" ]]", actor_c_start);
+    gate.require (actor_c_start == std::string::npos || actor_c_gate != std::string::npos,
+                  "E2E-CP-56",
+                  "Config 10 starts the optional third Actor node outside ST-F3A");
     gate.require (transfer_runner.find ("\"nodeAStream\"")
                          != std::string::npos
                     && transfer_runner.find ("\"nodeBStream\"")
@@ -394,15 +401,15 @@ int main ()
                     && transfer_runner.find ("ZLINK_CPP_E2E_NODE_B_STREAM")
                          == std::string::npos,
                   "E2E-CP-56", "Config 10 does not pass the session gateway endpoints");
-    gate.require (transfer_client.find ("create_actor_until_placed_on")
+    gate.require (transfer_client.find ("create_actor (http::client_t &node")
                     != std::string::npos
-                    && transfer_client.find ("create_actor (node, actor_id")
+                    && transfer_client.find ("create_actor_until_placed_on")
+                         != std::string::npos
+                    && transfer_client.find ("join_actor (http::client_t &node")
                          != std::string::npos
                     && transfer_client.find ("join_actor (_nodes.a")
                          != std::string::npos
-                    && transfer_client.find ("join_actor (_nodes.b, actor.actor_id")
-                         != std::string::npos
-                    && transfer_client.find ("placed_spot_a_final.spot_id")
+                    && transfer_client.find ("join_actor (_nodes.b")
                          != std::string::npos
                     && transfer_client.find ("probe_actor (_nodes.a")
                          != std::string::npos,
@@ -412,17 +419,16 @@ int main ()
                   "E2E-CP-56", "Config 10 feature map still promises remote actor control");
     const auto bound_session_registration =
       app_runtime.find ("actor_gateway_runtime.on_bound_session");
-    const auto local_session_route = app_runtime.find (
-      "actor.node_rid ().value ()",
-      bound_session_registration);
-    const auto remote_session_route = app_runtime.find (
-      "bind_application_actor_session", bound_session_registration);
+    const auto local_session_route = stream_host.find (
+      "local_node->to_hex () == actor_route->node_rid.to_hex ()");
+    const auto remote_session_route = stream_host.find (
+      "bind_application_actor_session");
     gate.require (bound_session_registration != std::string::npos
                     && local_session_route != std::string::npos
                     && remote_session_route != std::string::npos
                     && local_session_route < remote_session_route,
                   "E2E-CP-56",
-                  "local actor session binding still depends on a remote mesh route");
+                  "local actor session binding does not have a local path before remote binding");
 
     /* E2E-CP-09 — local E2E waits use the common named defaults. */
     for (const auto *candidate : {&transfer_runner, &observability_runner}) {
@@ -1010,13 +1016,14 @@ int main ()
       "SpotActorTransfer lacks committed Location or accepted completion evidence");
     const auto st_a1 =
       read_file (e2e_root / "SpotActorTransfer/Client/Scenarios/st_a1_scenario.hpp");
-    const auto st_a1_admission = st_a1.find ("|admission|");
-    const auto st_a1_commit = st_a1.find ("|location_committed|");
-    const auto st_a1_completion = st_a1.find ("|join_completion_accepted|");
-    const auto st_a1_leave = st_a1.find ("|leave|");
-    const auto st_a1_joined = st_a1.find ("|joined|");
+    const auto st_a1_sequence = st_a1.find ("assert_evidence_sequence");
+    const auto st_a1_admission = st_a1.find ("|admission|", st_a1_sequence);
+    const auto st_a1_commit = st_a1.find ("|location_committed|", st_a1_sequence);
+    const auto st_a1_completion = st_a1.find ("|join_completion_accepted|", st_a1_sequence);
+    const auto st_a1_leave = st_a1.find ("|leave|", st_a1_sequence);
+    const auto st_a1_joined = st_a1.find ("|joined|", st_a1_sequence);
     gate.require (
-      st_a1.find ("actor.node_rid == spot.node_rid") != std::string::npos,
+      st_a1.find ("probe.node_rid == spot.node_rid") != std::string::npos,
       "CPP-G0-E2E-004",
       "ST-A1 does not require a Framework-selected same-node Actor and Spot");
     gate.require (
@@ -1038,9 +1045,11 @@ int main ()
 
     /* E2E-CP-49 — ST-E2 fails transfer before commit and preserves the source binding. */
     const auto st_e2 =
-      read_file (e2e_root / "SpotActorTransfer/Client/Scenarios/st_e2_scenario.hpp");
+      read_file (e2e_root / "SpotActorTransfer/Client/Scenarios/st_e2_scenario.hpp")
+      + read_file (e2e_root / "SpotActorTransfer/Client/Support/scenario_runner_support.hpp");
     gate.require (st_e2.find ("actor_type_fail_transfer_out") != std::string::npos
-                    && st_e2.find ("ST-E2 failed transfer was accepted")
+                    && st_e2.find ("join_completion_failed") != std::string::npos
+                    && st_e2.find ("deferred Join was not submitted")
                          != std::string::npos,
                   "E2E-CP-49", "ST-E2 does not inject and reject a pre-commit transfer failure");
     gate.require (st_e2.find ("after-failed-transfer") != std::string::npos
@@ -1056,7 +1065,8 @@ int main ()
                     && transfer_client.find ("backlog_enqueued") != std::string::npos
                     && transfer_client.find ("message_follow_route_removed")
                          != std::string::npos
-                    && transfer_client.find ("message_follow_expired") != std::string::npos
+                    && transfer_client.find ("error_kind == \"Unavailable\"")
+                         != std::string::npos
                     && transfer_runner.find ("timing-dependent") == std::string::npos,
                   "E2E-CP-50",
                   "Track-F required markers are not client assertions or remain warnings");
@@ -1119,12 +1129,14 @@ int main ()
                   "ST-C3 joined failure still asserts an actor packet nobody sends");
     const auto st_f5 =
       read_file (e2e_root / "SpotActorTransfer/Client/Scenarios/st_f5_scenario.hpp");
-    gate.require (st_f5.find ("message_follow_route_removed") != std::string::npos
-                    && st_f5.find ("message_follow_entries") != std::string::npos
-                    && st_f5.find ("spot-map-chain-a-final-") != std::string::npos
+    gate.require (st_f5.find ("relocate_for_message_follow") != std::string::npos
+                    && st_f5.find ("message_follow_route_removed") != std::string::npos
+                    && st_f5.find ("chain-to-final") != std::string::npos
+                    && st_f5.find ("current-global-route-after-removal") != std::string::npos
+                    && st_f5.find ("error_kind == \"Unavailable\"") != std::string::npos
                     && st_f5.find ("_nodes.c,") == std::string::npos,
                   "E2E-CP-52",
-                  "ST-F5 does not use the two-node chained topology or observe mapping eviction");
+                  "ST-F5 does not observe single-relocation route cleanup and current-route convergence");
 
     /* E2E-CP-53 — direct and bound-session packets cross the location publish
      * boundary before the join caller observes completion. */
@@ -1136,14 +1148,14 @@ int main ()
     gate.require (st_f2_publish != std::string::npos
                     && st_f2_follow_up > st_f2_publish
                     && st_f2_follow_up < st_f2_join_get
-                    && st_f2.find ("old_ref.generation}") != std::string::npos
+                    && st_f2.find ("send_ref") != std::string::npos
                     && st_f2.find ("old_ref.generation + 1") == std::string::npos,
                   "E2E-CP-53",
                   "ST-F2 sends D1 only after join completion, performs an extra ref lookup, or changes Actor generation");
     const auto st_f3 =
       read_file (e2e_root / "SpotActorTransfer/Client/Scenarios/st_f3_scenario.hpp");
     const auto st_f3_publish = st_f3.find ("location_committed");
-    const auto st_f3_follow_up = st_f3.find ("{\"ST-F3\", \"S3\"}");
+    const auto st_f3_follow_up = st_f3.find ("ST-F3\", \"S3");
     const auto st_f3_join_get = st_f3.find ("join_task.get ()");
     gate.require (st_f3_publish != std::string::npos
                     && st_f3_follow_up > st_f3_publish
@@ -1163,12 +1175,12 @@ int main ()
      * send surface; an explicit stale ref is never silently re-resolved. */
     const auto st_f4 =
       read_file (e2e_root / "SpotActorTransfer/Client/Scenarios/st_f4_scenario.hpp");
-    gate.require (st_f4.find ("send_ref") != std::string::npos
+    gate.require (st_f4.find ("probe_ref") != std::string::npos
                     && st_f4.find ("{\"ST-F4\", \"G2\"}") != std::string::npos
-                    && st_f4.find ("probe_ref") == std::string::npos
-                    && st_f4.find ("message_follow_expired") != std::string::npos,
+                    && st_f4.find ("error_kind == \"Unavailable\"") != std::string::npos
+                    && st_f4.find ("message_follow_route_removed") != std::string::npos,
                   "E2E-CP-54",
-                  "ST-F4 still changes G2 from send to request or omits stale evidence");
+                  "ST-F4 does not use an explicit old-ref request or omit stale evidence");
     const auto actor_client_runtime =
       read_file (root / "framework/src/runtime/actors/actor_client.cpp");
     const auto send_begin = actor_client_runtime.find (
@@ -1310,20 +1322,15 @@ int main ()
                     && stream_auth_block.find ("request_to_node") == std::string::npos,
                   "E2E-CP-14",
                   "SM-D2 stream auth recreates the actor through route mesh instead of binding its snapshot");
-    const auto bound_session_begin =
-      app_runtime.find ("actor_gateway_runtime.on_bound_session");
-    const auto bound_session_end =
-      app_runtime.find ("actor_gateway_runtime.on_relay", bound_session_begin);
-    const auto bound_session_block =
-      bound_session_begin != std::string::npos && bound_session_end != std::string::npos
-        ? app_runtime.substr (bound_session_begin,
-                              bound_session_end - bound_session_begin)
-        : std::string{};
-    gate.require (bound_session_block.find ("bind_application_actor_session")
-                      != std::string::npos
-                    && bound_session_block.find ("request_to_node") == std::string::npos,
+    const auto stream_bind_begin = stream_host.find ("result_t<void> bind_actor_session");
+    const auto stream_remote_bind =
+      stream_host.find ("_mesh_node->bind_application_actor_session", stream_bind_begin);
+    gate.require (stream_bind_begin != std::string::npos
+                    && stream_remote_bind != std::string::npos
+                    && stream_host.find ("request_to_node", stream_bind_begin)
+                         == std::string::npos,
                   "E2E-CP-14",
-                  "remote bound-session registration still depends on route mesh");
+                  "SM-D2 Session binding still depends on a RouteMesh request path");
 
     /* E2E-CP-21 — readiness and the first semantic request are distinct:
      * no scenario retries the request until it happens to succeed. */
@@ -1925,6 +1932,18 @@ int main ()
       "CPP-DISP-006",
       "Spot admission and serial enqueue use separate lock spans");
 
+    /* CPP-EXEC-001 — actor queue lookup is a lifecycle-boundary update, not
+     * a node-mutex acquisition on every inbound Actor packet. The immutable
+     * snapshot keeps queue lifetime shared while creation and removal remain
+     * serialized by the node owner. */
+    gate.require (
+      spot_runtime.find ("actor_execution_queue_snapshot") != std::string::npos
+        && spot_runtime.find ("std::atomic_load_explicit") != std::string::npos
+        && spot_runtime.find ("publish_actor_execution_queue_snapshot_unlocked")
+             != std::string::npos,
+      "CPP-EXEC-001",
+      "Actor delivery still resolves its serial queue through the node map on every packet");
+
     /* CPP-COMP-001 — moving retry state crosses the error envelope as a typed
      * internal origin; exception wording never selects retry or error kind. */
     gate.require (
@@ -1974,9 +1993,11 @@ int main ()
     gate.require (
       app_runtime.find ("make_instance_spot_activation_trace_context")
           != std::string::npos
-        && app_runtime.find ("if (!may_emit)\n        return std::nullopt;")
+        && app_runtime.find ("if (!may_emit)")
              != std::string::npos
-        && app_runtime.find ("message_flow_tracer_t (dispatch).trace (\n      outcome")
+        && app_runtime.find ("return std::nullopt;")
+             != std::string::npos
+        && app_runtime.find ("message_flow_tracer_t (dispatch).trace")
              != std::string::npos,
       "CPP-OBS-001",
       "Instance Spot activation tracing is not gated before event allocation");
@@ -2166,12 +2187,14 @@ int main ()
       "CPP-OWN-008",
       "cached custom serializers still look up erased functions per message");
 
-    /* CPP-OWN-003 — claiming a queued stateful turn transfers the two owned
-     * buffers instead of rebuilding delivery copies. */
+    /* CPP-OWN-003 — claiming a queued stateful turn transfers the already
+     * decoded application payload instead of decoding the canonical queue
+     * bytes again. */
     gate.require (
-      raw_stateful_dispatch.find (
-        "std::move (pending->second.payload)")
+      raw_stateful_dispatch.find ("auto frozen = std::move (pending->second.frozen)")
           != std::string::npos
+        && raw_stateful_dispatch.find ("auto payload = std::move (*frozen.application)")
+             != std::string::npos
         && raw_stateful_dispatch.find ("owner, *turn,")
              == std::string::npos,
       "CPP-OWN-003",
@@ -2221,12 +2244,9 @@ int main ()
       "CPP-LIFE-001",
       "general application admission does not normalize generation or fence the current owner lease");
     gate.require (
-      spot_runtime.find (
-        "const bool admitted =\n              targets_local_actor")
-          != std::string::npos
-        && spot_runtime.find (
-             "const bool targets_exact_incarnation =\n              targets_local_actor")
-             != std::string::npos
+      spot_runtime.find ("const bool admitted =") != std::string::npos
+        && spot_runtime.find ("targets_local_actor") != std::string::npos
+        && spot_runtime.find ("targets_exact_incarnation") != std::string::npos
         && spot_runtime.find ("requires_exact_incarnation")
              != std::string::npos
         && spot_runtime.find (
@@ -2234,6 +2254,42 @@ int main ()
              != std::string::npos,
       "CPP-LIFE-001",
       "Actor dispatch does not separate general-message admission from exact Message Follow and bound-session admission");
+
+    /* CPP-SESS-001 — a STREAM-originated Actor relay creates a fresh
+     * downstream request correlation. Reusing the upstream STREAM correlation
+     * would collide with the target exactly-once table when a replacement
+     * session retries the same packet. */
+    gate.require (
+      mesh_node_runtime.find ("codec.create_envelope (kind") != std::string::npos
+        && mesh_node_runtime.find ("envelope.correlation_id") == std::string::npos,
+      "CPP-SESS-001",
+      "STREAM Actor relay reuses an upstream correlation instead of creating a fresh request id");
+
+    /* CPP-SESS-004 — replacement callback completion must schedule the close
+     * with an asynchronous timer. Sleeping in the callback would hold the
+     * session serial lane and prevent unrelated sessions from progressing. */
+    const auto replacement_begin = stream_host.find (
+      "void begin_actor_binding_replacement");
+    const auto replacement_end = replacement_begin == std::string::npos
+      ? std::string::npos
+      : stream_host.find (
+          "std::shared_ptr<replacement_session_state_t>\n    register_replacement_session",
+          replacement_begin);
+    const auto replacement_source = replacement_begin == std::string::npos
+      || replacement_end == std::string::npos
+      ? std::string{}
+      : stream_host.substr (replacement_begin, replacement_end - replacement_begin);
+    gate.require (
+      replacement_source.find ("asio::steady_timer") != std::string::npos
+        && replacement_source.find (
+             "expires_after (std::chrono::milliseconds (100))")
+             != std::string::npos
+        && replacement_source.find ("async_wait") != std::string::npos
+        && replacement_source.find ("std::this_thread::sleep_for")
+             == std::string::npos
+        && replacement_source.find ("condition_variable") == std::string::npos,
+      "CPP-SESS-004",
+      "replacement callback waits synchronously instead of scheduling a non-blocking close timer");
 
     /* CPP-SESS-003 — each serial owner selects a closed lane-policy type.
      * Yield behavior is derived from the Spot alternative; callers cannot

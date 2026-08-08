@@ -21,6 +21,8 @@ using zlink::framework::location_write_status_t;
 using zlink::framework::owner_lease_found_t;
 using zlink::framework::runtime::in_memory_location_repository_t;
 using zlink::framework::runtime::live_location_reader_t;
+using zlink::framework::runtime::actor_authority_key;
+using zlink::framework::runtime::spot_authority_key;
 
 location_owner_token_t owner_token (std::string owner_id, std::int64_t generation)
 {
@@ -147,8 +149,8 @@ TEST (ZLinkFrameworkInMemoryLocationStore,
     ASSERT_NE (nullptr, committed_value);
     EXPECT_EQ (ready_payload, committed_value->ready.payload);
 
-    const authority_key_t authority_key{
-      "1:actor-authority"};
+    const authority_key_t authority_key =
+      actor_authority_key ("actor-authority");
     const auto preserved =
       store
         .compare_exchange_authority (
@@ -332,13 +334,13 @@ TEST (ZLinkFrameworkInMemoryLocationStore,
 
     store.release_owner_lease (owner).result ().value ();
     const auto wrong_owner = store.compare_exchange_authority (
-      {"1:restore-actor"}, ready->ready.store_version,
+      actor_authority_key ("restore-actor"), ready->ready.store_version,
       authority_restore_t{{std::byte{0x03}}, {"other-owner", 1}})
       .result ().value ();
     EXPECT_NE (nullptr, std::get_if<authority_conflict_t> (&wrong_owner));
 
     const auto restored = store.compare_exchange_authority (
-      {"1:restore-actor"}, ready->ready.store_version,
+      actor_authority_key ("restore-actor"), ready->ready.store_version,
       authority_restore_t{{std::byte{0x04}}, owner})
       .result ().value ();
     const auto *stored = std::get_if<authority_stored_t> (&restored);
@@ -357,7 +359,7 @@ TEST (ZLinkFrameworkInMemoryLocationStore,
                stored->snapshot.allocation.target.node_rid.value ());
 
     const auto stale = store.compare_exchange_authority (
-      {"1:restore-actor"}, ready->ready.store_version,
+      actor_authority_key ("restore-actor"), ready->ready.store_version,
       authority_restore_t{{std::byte{0x05}}, owner})
       .result ().value ();
     EXPECT_NE (nullptr, std::get_if<authority_conflict_t> (&stale));
@@ -405,7 +407,7 @@ TEST (ZLinkFrameworkInMemoryLocationStore,
     const auto result =
       store
         .compare_exchange_authority (
-          { "1:max-revision" },
+          actor_authority_key ("max-revision"),
           committed.ready.store_version,
           authority_put_t{
             {std::byte{0x02}},
@@ -419,7 +421,7 @@ TEST (ZLinkFrameworkInMemoryLocationStore,
     const auto current =
       std::get<authority_snapshot_t> (
         store
-          .read_authority ({"1:max-revision"})
+          .read_authority (actor_authority_key ("max-revision"))
           .result ()
           .value ());
     EXPECT_EQ (committed.ready.store_version,
@@ -546,12 +548,12 @@ TEST (ZLinkFrameworkInMemoryLocationStore,
     request.aggregate_id.value[15] = std::byte{0x21};
     request.aggregate_generation = 1;
     request.participants = {
-      {{ "2:aggregate-room" },
+      {spot_authority_key ("aggregate-room"),
        first.store_version,
        authority_generation_transition_t::new_owner,
        {std::byte{0x31}},
        {}},
-      {{ "1:aggregate-actor" },
+      {actor_authority_key ("aggregate-actor"),
        second.store_version,
        authority_generation_transition_t::new_owner,
        {std::byte{0x32}},
@@ -592,14 +594,14 @@ TEST (ZLinkFrameworkInMemoryLocationStore,
     EXPECT_EQ (
       first.store_version,
       std::get<authority_snapshot_t> (
-        store.read_authority ({"2:aggregate-room"})
+        store.read_authority (spot_authority_key ("aggregate-room"))
           .result ()
           .value ())
         .store_version);
     EXPECT_EQ (
       second.store_version,
       std::get<authority_snapshot_t> (
-        store.read_authority ({"1:aggregate-actor"})
+        store.read_authority (actor_authority_key ("aggregate-actor"))
           .result ()
           .value ())
         .store_version);
@@ -618,14 +620,14 @@ TEST (ZLinkFrameworkInMemoryLocationStore,
     EXPECT_EQ (
       owner_b.lease_generation,
       std::get<authority_snapshot_t> (
-        store.read_authority ({"2:aggregate-room"})
+        store.read_authority (spot_authority_key ("aggregate-room"))
           .result ()
           .value ())
         .owner.lease_generation);
     EXPECT_EQ (
       owner_b.lease_generation,
       std::get<authority_snapshot_t> (
-        store.read_authority ({"1:aggregate-actor"})
+        store.read_authority (actor_authority_key ("aggregate-actor"))
           .result ()
           .value ())
         .owner.lease_generation);
@@ -694,10 +696,9 @@ TEST (ZLinkFrameworkInMemoryLocationStore,
            std::array<std::byte, 16> reservation_id) {
           relocation_capacity_reserve_request_t request;
           request.reservation_id = reservation_id;
-          request.key = {
-            kind == placement_object_kind_t::actor
-              ? "1:fenced-actor"
-              : "2:fenced-room"};
+          request.key = kind == placement_object_kind_t::actor
+                          ? actor_authority_key ("fenced-actor")
+                          : spot_authority_key ("fenced-room");
           request.expected_store_version = snapshot.store_version;
           request.object_kind = kind;
           request.stable_type = std::move (stable_type);
@@ -741,13 +742,13 @@ TEST (ZLinkFrameworkInMemoryLocationStore,
     request.aggregate_id.value[15] = std::byte{3};
     request.aggregate_generation = 1;
     request.participants = {
-      {{"1:fenced-actor"},
+      {actor_authority_key ("fenced-actor"),
        actor.store_version,
        authority_generation_transition_t::new_owner,
        {std::byte{0x21}},
        {},
        actor_capacity},
-      {{"2:fenced-room"},
+      {spot_authority_key ("fenced-room"),
        spot.store_version,
        authority_generation_transition_t::new_owner,
        {std::byte{0x22}},

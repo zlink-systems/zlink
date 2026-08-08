@@ -180,6 +180,8 @@ class serial_execution_queue_t
     bool try_post_deferred (std::string name, std::function<void ()> work);
     result_t<std::shared_ptr<detail::deferred_barrier_t>>
     reserve_barrier_next (std::string name);
+    result_t<std::shared_ptr<detail::deferred_barrier_t>>
+    reserve_handoff_barrier (std::string name);
     void post (std::string name, std::function<void ()> work);
     void post (std::string name,
                std::function<void ()> work,

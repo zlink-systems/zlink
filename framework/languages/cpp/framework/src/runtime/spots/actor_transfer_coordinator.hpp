@@ -22,6 +22,7 @@ namespace zlink::framework::detail
 
 enum class actor_move_phase_t
 {
+    source_reserved,
     local,
     source_remote,
     target_pending,
@@ -130,6 +131,7 @@ enum class handoff_append_result_t
 class actor_transfer_coordinator_t
 {
   public:
+    bool try_reserve_source (const std::string &actor_key);
     bool try_begin_local (const std::string &actor_key);
     bool try_begin_source_remote (const std::string &actor_key, std::string transfer_id = {});
     void cancel_move (const std::string &actor_key);
@@ -199,6 +201,10 @@ class actor_transfer_coordinator_t
       const std::string &transfer_id,
       const actor_ref_t &source_actor,
       const spot_id_t &target_spot_id) const;
+    std::optional<pending_actor_admission_t> completed_commit (
+      const std::string &transfer_id,
+      const actor_ref_t &source_actor,
+      const spot_id_t &target_spot_id) const;
     bool update_completion_root (
       const std::string &transfer_id,
       std::string reference,
@@ -234,6 +240,7 @@ class actor_transfer_coordinator_t
     mutable std::mutex _mutex;
     std::map<std::string, move_state_t> _moves;
     std::map<std::string, pending_actor_admission_t> _admissions;
+    std::map<std::string, pending_actor_admission_t> _completed_admissions;
     std::map<std::string, std::vector<handoff_packet_t>> _backlogs;
     std::map<std::string, std::size_t> _backlog_bytes;
     std::map<std::string, message_follow_route_t> _message_follow_routes;

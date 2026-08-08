@@ -163,7 +163,9 @@ struct receive_record_t
     operation_kind_t operation_kind = operation_kind_t::none;
     zlink::routing_id_t source_node_rid =
       zlink::routing_id_t::from (std::uint32_t{0});
+    std::optional<zlink::routing_id_t> source_session_rid;
     std::uint64_t source_binding_generation = 0;
+    std::uint64_t source_session_sequence = 0;
     /* Preserve the target fence until the Spot owner admits the message.
      * The owner must be able to reject stale work before body deserialization. */
     std::optional<protocol::spot_route_fence_t> spot_route;
@@ -248,6 +250,25 @@ using user_spot_materializer_t = std::function<
     const stateful::object_ref_t &,
     const std::string &,
     const std::vector<std::byte> &)>;
+
+struct bound_session_bind_operation_result_t
+{
+    stateful::stateful_error_t error = stateful::stateful_error_t::none;
+    std::optional<protocol::bound_session_replaced_t> replacement;
+};
+
+struct bound_session_operations_t
+{
+    std::function<bound_session_bind_operation_result_t (
+      const protocol::bound_session_bind_t &,
+      const zlink::routing_id_t &,
+      std::uint64_t)> bind;
+    std::function<stateful::stateful_error_t (
+      const protocol::bound_session_send_t &,
+      std::vector<zlink::message_t>)> send;
+    std::function<void (
+      const protocol::bound_session_replaced_t &)> replaced;
+};
 
 using user_spot_create_completion_t = std::function<void (
   foundation::operation_terminal_t,
@@ -534,6 +555,8 @@ class public_host_runtime_t :
       std::shared_ptr<stateful::relocation_store_port_t> relocations);
     void configure_message_follow_handler (
       std::function<void (const protocol::message_follow_notice_t &)> handler);
+    void configure_bound_session_operations (
+      bound_session_operations_t operations);
     bool seal_session_remote (
       const zlink::routing_id_t &session_owner_node,
       protocol::session_relocation_seal_t seal,
@@ -605,7 +628,16 @@ class public_host_runtime_t :
       const std::vector<zlink::message_t> &parts,
       std::span<const std::uint8_t> metadata = {},
       std::uint64_t authority_owner_generation = 0,
-      std::uint64_t owner_lease_generation = 0);
+      std::uint64_t owner_lease_generation = 0,
+      std::optional<protocol::actor_message_header_t::bound_session_source_t>
+        bound_session_source = std::nullopt);
+    zlink::submit_result_t send_bound_session (
+      const actor_ref_t &actor,
+      const zlink::routing_id_t &session_owner,
+      std::uint64_t expected_binding_generation,
+      std::uint64_t authority_owner_generation,
+      std::uint64_t owner_lease_generation,
+      const std::vector<zlink::message_t> &parts);
     zlink::submit_result_t request_to_actor (
       const actor_ref_t &target,
       const std::vector<zlink::message_t> &parts,
@@ -613,7 +645,9 @@ class public_host_runtime_t :
       std::chrono::milliseconds timeout,
       std::span<const std::uint8_t> metadata = {},
       std::uint64_t authority_owner_generation = 0,
-      std::uint64_t owner_lease_generation = 0);
+      std::uint64_t owner_lease_generation = 0,
+      std::optional<protocol::actor_message_header_t::bound_session_source_t>
+        bound_session_source = std::nullopt);
     zlink::submit_result_t send_to_node (
       const zlink::routing_id_t &target,
       const std::vector<zlink::message_t> &parts);
@@ -691,11 +725,13 @@ class public_host_runtime_t :
       stateful::membership_token_t membership,
       actor_join_result_t result,
       const std::vector<zlink::message_t> &parts);
-    bool enqueue_local_actor_message (
+    zlink::submit_result_t enqueue_local_actor_message (
       const actor_ref_t &target,
       record_kind_t kind,
       const std::vector<zlink::message_t> &parts,
-      std::optional<call_id_t> operation = std::nullopt);
+      std::optional<call_id_t> operation = std::nullopt,
+      std::optional<protocol::actor_message_header_t::bound_session_source_t>
+        bound_session_source = std::nullopt);
     zlink::submit_result_t enqueue_local_spot_request (
       const protocol::spot_route_fence_t &target,
       const std::vector<zlink::message_t> &parts,
@@ -726,6 +762,11 @@ class public_host_runtime_t :
                              foundation::operation_terminal_t terminal,
                              std::vector<std::uint8_t> payload);
     std::size_t dispatch_user_spot_operations ();
+    bool dispatch_bound_session_send (
+      const mesh::service_mailbox_record_t &record);
+    void queue_bound_session_replacement_retry (
+      protocol::bound_session_replaced_t replacement);
+    void retry_bound_session_replacements ();
 
     host_options_t _options;
     std::string _entry_spot_id;
@@ -760,6 +801,7 @@ class public_host_runtime_t :
       _session_route_owner_resolver;
     std::function<void (const protocol::message_follow_notice_t &)>
       _message_follow_handler;
+    bound_session_operations_t _bound_session_operations;
     std::shared_ptr<stateful::relocation_store_port_t>
       _session_relocations;
     struct session_seal_terminal_record_t
@@ -841,6 +883,17 @@ class public_host_runtime_t :
       _user_spot_terminals;
     std::function<void ()> _maintenance_started;
     std::function<void ()> _maintenance_closing;
+    struct pending_bound_session_replacement_t
+    {
+        protocol::bound_session_replaced_t replacement;
+        std::size_t attempts = 1;
+        std::chrono::steady_clock::time_point next_attempt;
+    };
+    std::deque<pending_bound_session_replacement_t>
+      _pending_bound_session_replacements;
+    static constexpr std::size_t bound_session_replacement_retry_capacity =
+      1024;
+    static constexpr std::size_t bound_session_replacement_max_attempts = 4;
     mutable std::mutex _mutex;
     static constexpr std::size_t completion_capacity = 65'536;
     using completion_value_t =

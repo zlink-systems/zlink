@@ -175,6 +175,9 @@ class recording_actor_client_t final : public zlink::framework::actor_client_t
 {
   public:
     std::atomic_int request_submissions{0};
+    std::atomic_bool delay_next_request{false};
+    zlink::framework::detail::task_completion_source_t<zlink::framework::message_t>
+      delayed_request;
 
   protected:
     zlink::framework::task_t<void> send_erased (
@@ -196,6 +199,8 @@ class recording_actor_client_t final : public zlink::framework::actor_client_t
       const zlink::framework::actor_request_call_t::metadata_map_t &) override
     {
         request_submissions.fetch_add (1);
+        if (delay_next_request.exchange (false))
+            return delayed_request.task ();
         return zlink::framework::task_t<zlink::framework::message_t> (
           zlink::framework::result_t<zlink::framework::message_t>::success (
             zlink::framework::message_t{}));
@@ -209,6 +214,28 @@ class recording_actor_client_t final : public zlink::framework::actor_client_t
   private:
     zlink::framework::serializer_registry_t serializers;
 };
+
+zlink::framework::task_t<zlink::framework::message_t>
+request_after_actor_await (recording_actor_client_t &client)
+{
+    using namespace zlink::framework;
+    actor_request_call_t other (
+      client, actor_id_t ("other"), "OtherRequest", message_t{});
+    try {
+        (void) co_await other.submit_message ();
+    }
+    catch (const framework_exception_t &error) {
+        co_return result_t<message_t>::failure (error.kind (), error.what ());
+    }
+    actor_request_call_t self (
+      client, actor_id_t ("actor-1"), "SelfRequest", message_t{});
+    try {
+        co_return co_await self.submit_message ();
+    }
+    catch (const framework_exception_t &error) {
+        co_return result_t<message_t>::failure (error.kind (), error.what ());
+    }
+}
 
 void verify_spot_id_contract ()
 {
@@ -591,6 +618,28 @@ void verify_self_actor_request_rejected_before_submission ()
       result.error_kind ()
       == framework_error_kind_t::invalid_operation);
     assert (actor_client.request_submissions.load () == 0);
+}
+
+void verify_actor_context_survives_coroutine_await ()
+{
+    using namespace zlink::framework;
+
+    runtime::offload_executor_t executor (1);
+    runtime::serial_execution_queue_t queue (executor, 16);
+    recording_actor_client_t actor_client;
+    actor_client.delay_next_request.store (true);
+    std::optional<task_t<message_t>> operation;
+    queue.run ("actor-context-await", [&] {
+        runtime::actor_execution_scope_t scope ("player:actor-1", "spot-1");
+        operation.emplace (request_after_actor_await (actor_client));
+    });
+    assert (operation.has_value ());
+    actor_client.delayed_request.complete (result_t<message_t>::success (message_t{}));
+    const auto &result = operation->result ();
+    assert (!result);
+    assert (result.error_kind () == framework_error_kind_t::invalid_operation);
+    assert (actor_client.request_submissions.load () == 1);
+    queue.close ();
 }
 
 void verify_same_gate_request_rejected_before_submission ()
@@ -1190,6 +1239,31 @@ void verify_displaced_stream_binding_can_be_restored ()
     assert (sessions.current_binding (actor.key) == third_binding);
 }
 
+void verify_verified_remote_stream_binding ()
+{
+    stateful::stream_session_registry_t sessions (
+      [] (const std::string &) {
+          return std::optional<stateful::object_ref_t>{};
+      });
+    const auto connection = sessions.open ("remote-stream");
+    const stateful::object_ref_t remote_actor{
+      stateful::object_kind_t::actor,
+      "remote-actor", 7, 11, "mesh-a", "actor-node"};
+    const auto [error, binding] = sessions.bind_remote (
+      connection, remote_actor, 13, 17);
+    assert (error == stateful::stateful_error_t::none);
+    assert (binding.actor == remote_actor);
+    assert (binding.target_node_generation == 13);
+    assert (binding.owner_lease_generation == 17);
+    assert (sessions.current_binding (remote_actor.key)
+            == binding);
+
+    auto invalid = remote_actor;
+    invalid.authority_owner_generation = 0;
+    assert (sessions.bind_remote (connection, invalid, 13, 17).first
+            == stateful::stateful_error_t::invalid);
+}
+
 void verify_bounded_message_follow ()
 {
     using namespace zlink::framework;
@@ -1249,6 +1323,35 @@ void verify_bounded_message_follow ()
                  == framework_error_kind_t::unavailable);
 }
 
+void verify_actor_commit_terminal_is_replayable_until_deadline ()
+{
+    using namespace zlink::framework;
+    spots::actor_transfer_coordinator_t coordinator;
+    const auto source = detail::actor_ref_access_t::make (
+      node_rid_t::from_string ("node-a"), "player",
+      "actor-commit-replay", 7);
+    detail::pending_actor_admission_t admission{
+      .actor_key = "player:actor-commit-replay",
+      .source_actor = source,
+      .source_spot_id = "spot-a",
+      .target_spot_id = "spot-b",
+      .deadline = std::chrono::steady_clock::now () + 30s,
+      .completion_operation_id_high = 11,
+      .completion_operation_id_low = 12};
+    assert (coordinator.try_add_admission ("transfer-replay", admission));
+    assert (coordinator.begin_commit (
+      "transfer-replay", source, "spot-b"));
+    coordinator.complete_commit ("transfer-replay");
+    assert (!coordinator.pending_commit (
+      "transfer-replay", source, "spot-b"));
+    assert (coordinator.completed_commit (
+      "transfer-replay", source, "spot-b"));
+    assert (!coordinator.completed_commit (
+      "transfer-replay", source, "different-spot"));
+    assert (!coordinator.try_add_admission (
+      "transfer-replay", std::move (admission)));
+}
+
 void verify_bounded_actor_handoff_backlog ()
 {
     using namespace zlink::framework;
@@ -1300,6 +1403,31 @@ void verify_bounded_actor_handoff_backlog ()
     auto late_replay = coordinator.finish_move_replay (replay_key);
     assert (!late_replay.completed && late_replay.backlog.size () == 1);
     assert (coordinator.finish_move_replay (replay_key).completed);
+
+    const std::string reserved_key = "player:actor-handoff-reserved";
+    assert (coordinator.try_reserve_source (reserved_key));
+    assert (!coordinator.try_reserve_source (reserved_key));
+    assert (coordinator.try_append_backlog (reserved_key, packet_with_payload (1))
+            == handoff_append_result_t::appended);
+    assert (coordinator.try_append_backlog (reserved_key, packet_with_payload (2))
+            == handoff_append_result_t::appended);
+    assert (coordinator.try_begin_source_remote (reserved_key, "transfer-reserved"));
+    assert (coordinator.try_append_backlog (reserved_key, packet_with_payload (3))
+            == handoff_append_result_t::appended);
+    const auto reserved_backlog = coordinator.take_backlog (reserved_key);
+    assert (reserved_backlog.size () == 3);
+    assert (reserved_backlog[0].payload.size () == 1);
+    assert (reserved_backlog[1].payload.size () == 2);
+    assert (reserved_backlog[2].payload.size () == 3);
+    assert (coordinator.complete_move (reserved_key).has_value ());
+
+    const std::string cancelled_key = "player:actor-handoff-cancelled";
+    assert (coordinator.try_reserve_source (cancelled_key));
+    assert (coordinator.try_append_backlog (cancelled_key, packet_with_payload (1))
+            == handoff_append_result_t::appended);
+    coordinator.cancel_move (cancelled_key);
+    assert (!coordinator.phase (cancelled_key));
+    assert (coordinator.take_backlog (cancelled_key).empty ());
 }
 
 void verify_public_host_dispatches_one_application_record_per_turn ()
@@ -2080,8 +2208,9 @@ void verify_raw_spot_and_actor_routing ()
     assert (spot_delivery_error == stateful::stateful_error_t::none);
     assert (spot_delivery
             && spot_delivery->payload.payload == bytes ("spot"));
-    const auto frozen_spot = protocol::decode_frozen_record (
-      spot_delivery->turn.payload);
+    const auto &frozen_spot = spot_delivery->frozen;
+    assert (spot_delivery->turn.payload.empty ());
+    assert (spot_delivery->turn.application_record.has_value ());
     assert (frozen_spot.kind
             == protocol::frozen_record_kind_t::spot_send);
     assert (frozen_spot.source.owner_id == "source-owner");
@@ -2153,8 +2282,9 @@ void verify_raw_spot_and_actor_routing ()
     assert (actor_delivery_error == stateful::stateful_error_t::none);
     assert (actor_delivery && actor_delivery->request);
     assert (actor_delivery->payload.payload == bytes ("request"));
-    const auto frozen_actor = protocol::decode_frozen_record (
-      actor_delivery->turn.payload);
+    const auto &frozen_actor = actor_delivery->frozen;
+    assert (actor_delivery->turn.payload.empty ());
+    assert (actor_delivery->turn.application_record.has_value ());
     assert (frozen_actor.kind
             == protocol::frozen_record_kind_t::actor_request);
     assert ((frozen_actor.operation
@@ -2251,8 +2381,9 @@ void verify_raw_spot_and_actor_routing ()
       dispatch.try_claim (actor);
     assert (recreated_delivery_error == stateful::stateful_error_t::none);
     assert (recreated_delivery && recreated_delivery->request);
-    const auto recreated_frozen = protocol::decode_frozen_record (
-      recreated_delivery->turn.payload);
+    const auto &recreated_frozen = recreated_delivery->frozen;
+    assert (recreated_delivery->turn.payload.empty ());
+    assert (recreated_delivery->turn.application_record.has_value ());
     assert (recreated_frozen.target);
     assert (recreated_frozen.target->object_generation
             == actor.object_generation);
@@ -2405,7 +2536,8 @@ void verify_node_request_requires_remote_admission ()
       [&promise] (foundation::operation_terminal_t terminal,
                   std::vector<std::uint8_t> payload) {
           promise.set_value ({terminal, std::move (payload)});
-      }));
+      },
+      4242));
 
     std::optional<mesh::service_mailbox_claim_t> claim;
     while (!claim
@@ -2427,6 +2559,7 @@ void verify_node_request_requires_remote_admission ()
     const auto &request = claim->records.front ();
     assert (protocol::decode_header (request.parts.front ()).kind
             == protocol::command::nodeRequest);
+    assert (request.correlation && *request.correlation == 4242);
     assert (protocol::decode_application_payload (request.parts.at (1)).payload
             == bytes ("request"));
     assert (target.reply (
@@ -4238,7 +4371,9 @@ int main ()
     verify_instance_cold_activation_only_from_intent ();
     verify_session_binding_and_terminal_once ();
     verify_displaced_stream_binding_can_be_restored ();
+    verify_verified_remote_stream_binding ();
     verify_bounded_message_follow ();
+    verify_actor_commit_terminal_is_replayable_until_deadline ();
     verify_bounded_actor_handoff_backlog ();
     verify_public_host_dispatches_one_application_record_per_turn ();
     verify_local_application_enqueue_wakes_dispatch_wait ();

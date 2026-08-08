@@ -21,6 +21,13 @@ enum class service_mailbox_domain_t
     infrastructure
 };
 
+struct service_bound_session_source_t
+{
+    std::vector<std::uint8_t> session_routing_id;
+    std::uint64_t binding_generation = 0;
+    std::uint64_t session_sequence = 0;
+};
+
 struct service_mailbox_record_t
 {
     std::string owner;
@@ -31,6 +38,7 @@ struct service_mailbox_record_t
     std::optional<std::uint64_t> correlation = std::nullopt;
     std::uint64_t source_node_generation = 0;
     std::optional<std::pair<std::uint64_t, std::uint64_t>> operation;
+    std::optional<service_bound_session_source_t> bound_session_source;
 };
 
 struct service_mailbox_claim_t

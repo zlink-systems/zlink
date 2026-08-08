@@ -152,16 +152,21 @@ class raw_mesh_node_owner_t
       service_liveness_registry_t::clock_t::time_point now);
     bool send_to_node (const std::vector<std::uint8_t> &target_routing_id,
                        const protocol::application_payload_t &application_payload);
+    zlink::submit_result_t send_to_node_result (
+      const std::vector<std::uint8_t> &target_routing_id,
+      const protocol::application_payload_t &application_payload);
     bool request_to_node (
       const std::vector<std::uint8_t> &target_routing_id,
       const protocol::application_payload_t &application_payload,
       std::chrono::milliseconds timeout,
-      foundation::operation_registry_t::callback_t callback);
+      foundation::operation_registry_t::callback_t callback,
+      std::optional<std::uint64_t> correlation = std::nullopt);
     bool request_to_channel (
       const std::string &channel_name,
       const protocol::application_payload_t &application_payload,
       std::chrono::milliseconds timeout,
-      foundation::operation_registry_t::callback_t callback);
+      foundation::operation_registry_t::callback_t callback,
+      std::optional<std::uint64_t> correlation = std::nullopt);
     bool reply (const service_mailbox_record_t &request,
                 const protocol::application_payload_t &application_payload);
     bool reply_failure (const service_mailbox_record_t &request,
@@ -171,7 +176,15 @@ class raw_mesh_node_owner_t
       foundation::operation_registry_t::clock_t::time_point now);
     bool send_to_channel (const std::string &channel_name,
                           const protocol::application_payload_t &application_payload);
+    zlink::submit_result_t send_to_channel_result (
+      const std::string &channel_name,
+      const protocol::application_payload_t &application_payload);
     bool send_to_spot (
+      const std::vector<std::uint8_t> &target_routing_id,
+      const std::string &source_spot_id,
+      const protocol::spot_route_fence_t &target,
+      const protocol::application_payload_t &application_payload);
+    zlink::submit_result_t send_to_spot_result (
       const std::vector<std::uint8_t> &target_routing_id,
       const std::string &source_spot_id,
       const protocol::spot_route_fence_t &target,
@@ -183,12 +196,22 @@ class raw_mesh_node_owner_t
       const protocol::application_payload_t &application_payload,
       std::chrono::milliseconds timeout,
       foundation::operation_registry_t::callback_t callback,
-      std::optional<protocol::wire_operation_id_t> operation = std::nullopt);
+      std::optional<protocol::wire_operation_id_t> operation = std::nullopt,
+      std::optional<std::uint64_t> correlation = std::nullopt);
     bool send_to_actor (
       const std::vector<std::uint8_t> &target_routing_id,
       const std::optional<std::pair<std::string, std::uint64_t>> &source_actor,
       const protocol::actor_route_fence_t &target,
-      const protocol::application_payload_t &application_payload);
+      const protocol::application_payload_t &application_payload,
+      std::optional<protocol::actor_message_header_t::bound_session_source_t>
+        bound_session_source = std::nullopt);
+    zlink::submit_result_t send_to_actor_result (
+      const std::vector<std::uint8_t> &target_routing_id,
+      const std::optional<std::pair<std::string, std::uint64_t>> &source_actor,
+      const protocol::actor_route_fence_t &target,
+      const protocol::application_payload_t &application_payload,
+      std::optional<protocol::actor_message_header_t::bound_session_source_t>
+        bound_session_source = std::nullopt);
     bool request_to_actor (
       const std::vector<std::uint8_t> &target_routing_id,
       const std::optional<std::pair<std::string, std::uint64_t>> &source_actor,
@@ -196,7 +219,30 @@ class raw_mesh_node_owner_t
       const protocol::application_payload_t &application_payload,
       std::chrono::milliseconds timeout,
       foundation::operation_registry_t::callback_t callback,
-      std::optional<protocol::wire_operation_id_t> operation = std::nullopt);
+      std::optional<protocol::wire_operation_id_t> operation = std::nullopt,
+      std::optional<protocol::actor_message_header_t::bound_session_source_t>
+        bound_session_source = std::nullopt,
+      std::optional<std::uint64_t> correlation = std::nullopt);
+    bool send_bound_session (
+      const std::vector<std::uint8_t> &session_owner_routing_id,
+      const protocol::bound_session_send_t &record,
+      const protocol::application_payload_t &application_payload);
+    zlink::submit_result_t send_bound_session_result (
+      const std::vector<std::uint8_t> &session_owner_routing_id,
+      const protocol::bound_session_send_t &record,
+      const protocol::application_payload_t &application_payload);
+    bool request_bound_session_bind (
+      const std::vector<std::uint8_t> &actor_owner_routing_id,
+      protocol::bound_session_bind_t record,
+      std::chrono::milliseconds timeout,
+      foundation::operation_registry_t::callback_t callback);
+    bool send_bound_session_replaced (
+      const std::vector<std::uint8_t> &retired_session_owner_routing_id,
+      const protocol::bound_session_replaced_t &record);
+    bool reply_bound_session_bind (
+      const service_mailbox_record_t &request,
+      std::uint32_t terminal_result = 0,
+      std::uint32_t failure_code = 0);
     bool request_user_spot_create (
       const std::vector<std::uint8_t> &target_routing_id,
       protocol::user_spot_create_header_t request,
@@ -325,8 +371,13 @@ class raw_mesh_node_owner_t
       const protocol::application_payload_t &application_payload,
       std::chrono::milliseconds timeout,
       foundation::operation_registry_t::callback_t callback,
-      const std::optional<std::string> &channel_name);
+      const std::optional<std::string> &channel_name,
+      std::optional<std::uint64_t> correlation);
     bool send_with_header (
+      const std::vector<std::uint8_t> &target_routing_id,
+      std::vector<std::uint8_t> header,
+      const protocol::application_payload_t &application_payload);
+    zlink::submit_result_t send_with_header_result (
       const std::vector<std::uint8_t> &target_routing_id,
       std::vector<std::uint8_t> header,
       const protocol::application_payload_t &application_payload);
@@ -338,7 +389,8 @@ class raw_mesh_node_owner_t
       const std::function<std::vector<std::uint8_t> (std::uint64_t)> &header,
       const protocol::application_payload_t &application_payload,
       std::chrono::milliseconds timeout,
-      foundation::operation_registry_t::callback_t callback);
+      foundation::operation_registry_t::callback_t callback,
+      std::optional<std::uint64_t> correlation = std::nullopt);
     bool request_infrastructure (
       const std::vector<std::uint8_t> &target_routing_id,
       const std::function<std::vector<std::uint8_t> (std::uint64_t)> &header,

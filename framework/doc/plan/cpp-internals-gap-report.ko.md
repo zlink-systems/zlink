@@ -58,25 +58,63 @@ Gap 하나 또는 서로 강하게 연결된 작은 작업 묶음의 동작과 �
   다른 언어의 변경을 섞지 않는다. Push한 commit SHA와 gate 결과를 이 문서의 해당 항목에 기록한 뒤
   다음 작업으로 진행한다.
 
+### 최종 종료 전 Codex Sol 검토 관문
+
+최종 종료 판정 전에는 해당 언어의 모든 Gap·PARTIAL·public contract 항목을 대상으로 `Codex Sol`
+review를 수행한다. 요약이나 focused test 통과 여부가 아니라 항목별 exact interface, 정식 spec,
+production runtime, owner-layer regression, package/clean-consumer와 process evidence를 서로 대조해
+다음 사항을 확인한다.
+
+- 항목이 누락되지 않았는지, 완료로 표시한 구현이 실제 계약과 다른 부분이 없는지 확인한다.
+- 누락·오판·부분 구현을 발견하면 해당 항목을 GAP 또는 BLOCKED로 되돌리고 owner-layer 수정과 회귀
+  증거를 추가한 뒤 같은 Codex Sol review를 반복한다.
+- review 대상, 사용한 Codex Sol 모델/effort, 기준 commit 또는 candidate manifest, 발견 사항, 수정
+  commit, 재실행한 gate와 판정을 이 문서에 `file:line` 근거와 함께 기록한다. 단일 test, 문서 존재,
+  source compile 또는 과거 결과만으로 항목을 clean 처리하지 않는다.
+
+모든 계약·구현 항목이 위 review에서 누락 없이 구현되었다는 판정을 받은 뒤에만 2차 구조 review를
+시작한다. 2차 review도 동일한 `Codex Sol`을 사용하며, 대상은 해당 언어의 Framework runtime
+production source와 unit test다. 실행 순서는 먼저 production runtime 리팩터링과 회귀 검증을
+완료한 뒤 unit test 리팩터링을 진행하는 것으로 고정한다. 다음 네 범주를 각각 검토하고 결과를 기록한다.
+
+1. **성능 비용** — 불필요한 allocation·copy, payload 변환 왕복, lock/mutex/channel/atomic/queue
+   contention, hot path의 중복 작업을 확인한다.
+2. **불필요한 코드** — dead code와 도달하지 않는 branch, 사용하지 않는 wrapper·alias·helper·fixture·
+   파일·dependency를 확인한다.
+3. **POSD/DDD 구조** — deep module·information hiding, pass-through와 temporal decomposition,
+   caller complexity, 중복 책임을 POSD 관점에서 확인하고 lifecycle·ownership·state transition·
+   commit/deadline·terminal failure invariant의 domain owner가 명확한지 DDD 관점에서 확인한다.
+4. **unit test 구조** — runtime 리팩터링으로 보존해야 할 observable behavior와 domain invariant를
+   기준으로 test를 다시 읽는다. POSD/DDD 관점에서 동일한 의도·계약·fixture를 반복하는 중복 unit
+   test는 하나의 명확한 test 또는 공통 parameterized/fixture test로 통합하고, 의미 없는 복제 test,
+   private 구현·호출 순서에만 결합된 test는 회귀 증거를 보존한 뒤 제거한다. 통합·삭제 후에는 해당
+   owner-layer regression과 aggregate gate를 다시 실행한다.
+
+2차 review에서 Medium 이상 finding이 하나라도 남으면 clean으로 판정하지 않는다. 해당 runtime/test를
+수정하고 필요한 owner-layer regression 및 관련 gate를 다시 실행한 뒤 같은 Codex Sol review를
+반복한다. Low finding도 처리하거나 명시적으로 잔여 위험으로 승인 기록해야 한다. 두 단계의 review
+결과가 모두 `CLEAN`, Medium 이상 `0`, 미실행 필수 gate `0`으로 기록된 경우에만 이 문서의 전체 작업을
+완료로 판정한다.
+
 ## 1. 집계
 
 | 문서 | GAP | PARTIAL | 비고 |
 |---|---:|---:|---|
-| 01-layering | 1 | 4 | relocation 재시도와 target propagation wait 종결 |
-| 02-serialization | 2 | 2 | 락 횟수, self-wait 오류 종류 |
+| 01-layering | 0 | 5 | relocation 재시도와 target propagation wait 종결 |
+| 02-serialization | 1 | 3 | 락 횟수, self-wait 오류 종류(source 수정 완료·E2E 검증 대기) |
 | 03-progress-isolation | 0 | 2 | owner HOL 블로킹과 executor 포화 process 종료 결함 종결 |
-| 04-completion | 2 | 2 | 문자열 분류, 완료 방식 난립 |
-| 05-relocation-continuity | 1 | 2 | 오류 종류 축약 |
-| 06-routing-and-cache | 1 | 2 | 수동 피어 fence (JVM-TOPO-001의 C++ 판) |
+| 04-completion | 0 | 3 | 완료 방식은 domain owner별 terminal-once 경계를 사용하며 이동 오류 분류의 검증이 남음 |
+| 05-relocation-continuity | 0 | 3 | 오류 종류 축약 |
+| 06-routing-and-cache | 0 | 3 | 수동 피어 fence source 수정 뒤 process 검증 대기 |
 | 07-dispatch-loop | 0 | 3 | timer history 상한과 overrun 계약 종결 |
-| 08-object-lifecycle | 1 | 2 | generation 필터링과 Ready owner loss 판정 |
-| 09-session-binding | 1 | 2 | 세션 스왑 핸드셰이크 부재 |
+| 08-object-lifecycle | 0 | 3 | generation 필터링과 Ready owner loss 판정 |
+| 09-session-binding | 0 | 4 | command 36/38·51 구현과 callback/timer 경로는 있으나 전체 conformance matrix 검증 중 |
 | 10-liveness-and-state | 0 | 1 | `CPP-OBS-002` 종결 |
-| 11-message-ownership | 5 | 3 | 복사/보관 규율 전반 미준수. `CPP-OWN-005` 종결 |
-| 12-service-wire-protocol | 5 | 2 | 스토어 키 포맷, json-v1 프로파일 |
-| **internals 소계** | **19** | **27** | relocation·timer 각 2건, `CPP-DISP-001`, `CPP-DISP-002`, `CPP-OWN-005`, `CPP-OBS-002` 종결 |
+| 11-message-ownership | 0 | 8 | 복사/보관 규율 전반 미준수. `CPP-OWN-005` 종결 |
+| 12-service-wire-protocol | 0 | 7 | 스토어 키 포맷, json-v1 프로파일, Base64 source 구현 완료·cross-language 검증 대기 |
+| **internals 소계** | **1** | **45** | source 수정 완료 항목은 E2E·package 증거 부족이면 PARTIAL로 유지함 |
 | C++ exact public interface | 0 | 0 | diagnostics 2건, object query, STREAM timeout, Client role 오류와 HTTP builder 종결 |
-| **합계** | **19** | **27** | 종결 14건은 GAP·PARTIAL 집계에서 제외 |
+| **합계** | **1** | **45** | 상세 61행. 종결 15건은 GAP·PARTIAL 집계에서 제외 |
 
 ---
 
@@ -86,9 +124,10 @@ Gap 하나 또는 서로 강하게 연결된 작은 작업 묶음의 동작과 �
 
 | ID | 요약 | 문서 |
 |---|---|---|
-| CPP-SESS-001 | 원격 세션 bind 시 이전 소유자 통지·정리 확인 절차가 없어 두 노드가 동시에 같은 Actor의 세션을 소유 가능 | 09 §3 |
+| CPP-SESS-001 | command 36/38 conformance 구현은 완료됐고 full generation·cross-node 검증이 남음 | 09 §3 |
+| CPP-SESS-004 | command 51·callback·non-blocking 100 ms close 구현은 완료됐고 전체 lifecycle matrix 검증이 남음 | 09 §3 |
 | CPP-WIRE-001 | Location Store 권한 키를 `zla1:…` 포맷으로 통합했으며 package와 cross-language Store 검증 진행 중 | 12 §1 |
-| CPP-TOPO-001 | 수동 설정 피어에 Location Store descriptor의 admission fence(generation/보안 identity)가 설치되지 않음 — 이미 종결된 `JVM-TOPO-001`과 동일 계열 결함의 C++ 판 | 06 §1.1 |
+| CPP-TOPO-001 | 수동 설정 피어 admission fence의 source 수정은 끝났고 stale manual peer negative process E2E가 남음 | 06 §1.1 |
 
 ### CPP-DISP-001 — executor 포화 → `std::terminate`
 mesh 디스패치 스레드는 throwing `submit`으로 애플리케이션 작업을 넘기는데, `offload_executor_t::submit`은 내부 큐(4096) 포화 시 `std::runtime_error`를 던진다. 둘러싼 `catch (...)`는 정리 후 재던지고, pump 스레드 람다에는 try/catch가 없어 `std::thread` 본체를 탈출한 예외가 `std::terminate`를 호출한다. 서로 다른 owner의 in-flight 디스패치가 4096개를 넘는 순간 재현 가능하다. 스펙 03 §6은 "한도 초과를 조용히(또는 파괴적으로) 처리하지 말고 관찰 가능한 거부 결과를 내라"고 결정했다.
@@ -102,13 +141,45 @@ admitted 피어의 애플리케이션 레코드가 대상 owner의 mailbox 예�
 - 구현 checkpoint `bc748e9140`: application owner mailbox가 포화되면 record를 process-wide `_pending_received`에 보관하지 않는다. Request는 기존 reply 경로로 `workerQueueFull` terminal을 즉시 반환하고 one-way는 bounded drop으로 끝낸다. Infrastructure record의 bounded 보관은 유지한다. 한 node owner를 채운 뒤 같은 owner의 Request가 timeout 전에 실패하고 다른 ChannelName owner의 Request는 enqueue·reply되는 owner-layer 회귀를 추가했으며, 기존 one-way/liveness 회귀는 drop 뒤 payload가 다시 나타나지 않는 계약으로 갱신했다.
 - public 오류·process checkpoint `bf412d9141`: raw request registry가 실패 reply header를 버리지 않고 public host까지 전달하며, Node·Channel request가 `workerQueueFull`을 `CapacityExceeded`로 복원한다. `test_cpp_framework_operation_registry`, `test_cpp_framework_messaging`, `test_cpp_framework_m6a_runtime`, `test_cpp_framework_m6b_runtime`, `test_cpp_framework_target_contract`, `test_cpp_framework_host_lifecycle`가 통과했다. `SubmitAdmission/run_e2e.sh CPP-DISP-002`는 격리된 C++ binding 0.10.1 candidate에서 slow ChannelName owner를 정지한 뒤 같은 owner의 Request가 `CapacityExceeded`로 끝나는 동안 독립 owner의 Request가 약 301 ms에 `Handled`로 완료되고 target health가 응답함을 확인했다. Gate 자동 해제 뒤 target handler `2/2` drain과 slow owner recovery도 완료됐다. 실행 log는 `framework/languages/cpp/e2e/SubmitAdmission/logs/20260808-040604-3267173/`이고 candidate native SHA-256은 `29a14581e19579fa6f2126ce1f9a797a08fe38d5788d52abb7e87689203f877b`다. 따라서 이 항목은 **CLOSED**다.
 
-### CPP-SESS-001 — 세션 스왑 핸드셰이크 부재
-스펙 09 §3의 결정: 이미 다른 곳에 연결된 Actor를 새 세션에 bind할 때, 새 소유자는 새 연결을 등록하고 → 이전 소유자에게 통지하고 → 이전 소유자의 정리 확인을 기다린 뒤 → bind 완료를 응답한다. C++ 원격 bind 경로는 이 중 아무것도 하지 않는다: `actor_bound_session_bind_route_request_t` 핸들러가 `replace_existing=true`로 게이트웨이 라우트를 덮어쓰고 즉시 `accepted=true`를 응답하며, 이전 세션 소유 노드에는 어떤 메시지도 보내지 않는다. 크로스 노드 스왑 시 이전 노드의 `stream_session_registry_t`에 살아있는 바인딩이 남아 두 세션 소유자가 동시에 같은 Actor로 인바운드를 admit할 수 있다(스테일 트래픽은 generation/fence 검사로 기회적으로만 걸러짐). 로컬 노드 스왑은 레지스트리가 원자적으로 교체하므로 안전하다.
-- 증거: `cpp/src/runtime/spots/spot_route_internal_dispatcher.cpp:199-216`, `cpp/src/runtime/actors/actor_gateway_runtime.cpp:1189-1252`, `cpp/src/runtime/mesh/mesh_node_runtime.cpp:2498-2592`, `cpp/src/runtime/streams/stream_host_service.cpp:1654-1660`
+### CPP-SESS-001 — command 36/38 conformance 검증 중
 
-### CPP-WIRE-001 — 스토어 권한 키 포맷 불일치
-스키마가 고정한 키 포맷 `zla1:<a|s>:<byte-length>:<percent-encoded-id>`는 **읽기 시 3종 probe 중 하나**로만 구현되어 있고, 권한 쓰기/CAS 어댑터는 `"1:" + key` / `"2:" + key` 레거시 포맷으로 기록한다. 다수의 런타임 읽기 지점도 레거시 포맷을 직접 사용한다. C++ 런타임이 기록한 권한 행은 스키마 포맷 아래에 존재하지 않으므로, 같은 스토어를 공유하는 타 언어 런타임과의 상호운용이 깨진다.
-- 증거: `cpp/src/runtime/stateful/public_store_adapters.hpp:345-351` (쓰기), `cpp/src/runtime/locations/store_location_resolvers.hpp:369-397` (3종 probe), `cpp/src/runtime/host/app.cpp:99`, `cpp/src/runtime/mesh/mesh_node_host_service.cpp:109, 1111`, `cpp/src/runtime/actors/actor_client.cpp:589`
+정식 schema는 원격 bind를 `boundSessionBind(38)`의 correlation과 active/tombstone transition으로 표현하고,
+bound-session send에는 `boundSessionSend(36)`의 expected binding generation을 요구한다. C++ codec은 두
+record와 transition을 encode/decode하고, ingress에서 Actor owner·session identity·binding generation을 검증한다.
+별도 JSON route packet이나 버려지는 send fence 경로는 제거됐다. `test_cpp_framework_service_wire_codec`,
+`test_cpp_framework_target_contract`, 전체 focused CTest 7개와 SM-D6 process E2E가 통과했다. 같은 node와
+cross-node 교체, stale·duplicate·pre-restart command, package consumer를 포함한 전체 36/38 conformance
+matrix가 아직 남아 있어 **PARTIAL·검증 중**으로 둔다.
+- 근거: `cpp/framework/src/runtime/protocol/service_wire_codec.hpp:320-370`,
+  `cpp/framework/src/runtime/mesh/mesh_node_runtime.cpp:2479-2540`,
+  `cpp/framework/src/runtime/stateful/public_host_runtime.cpp:2422-2485,5390-5431`,
+  `framework/languages/cpp/e2e/SpotService/logs/20260808-172604-3982434/`.
+
+### CPP-SESS-004 — 이전 session 교체 lifecycle 검증 중
+
+승인된 계약은 새 exact identity를 current로 등록하면 bind를 즉시 성공시키고, 이전 owner의 ACK·callback·close를
+기다리지 않는다. 따라서 현재 C++가 replacement route를 먼저 등록하고 응답하는 순서 자체는 문제가 아니다.
+이전 session에는 `boundSessionReplaced(51)` one-way 통지를 보내고, `packet_stream_session_t::on_actor_binding_replaced(...)`
+callback 뒤 non-blocking timer로 callback terminal 100 ms 뒤 close한다. Callback turn에서 `sleep`, blocking wait,
+session lane·worker 점유를 사용하지 않으며, timeout이면 deadline에서 강제 close한다. 같은 physical session의
+idempotent bind는 self-close하지 않고, retry·stale identity·다중 Actor cleanup은 exact retired identity로 제한한다.
+SM-D6에서 replacement bind가 이전 callback·close를 기다리지 않고 반환되고 duplicate 안내와 새 session push가
+확인됐으며, old session close는 callback 안내 뒤 100 ms 이전에 실행되지 않았다. 전체 lifecycle matrix와
+cross-node/pre-restart retry 증거가 남아 있어 **PARTIAL·검증 중**으로 둔다.
+- 근거: `cpp/framework/src/runtime/streams/stream_host_service.cpp:1036-1089,1693-1987`,
+  `cpp/framework/include/zlink/framework/contracts/streams/stream.hpp:252-265`,
+  `framework/languages/cpp/e2e/SpotService/logs/20260808-172604-3982434/`.
+
+### CPP-WIRE-001 — 권한 키 codec strictness와 golden vector 검증 중
+스키마가 고정한 `zla1:<a|s>:<byte-length>:<percent-encoded-id>`는 encoder와 decoder 모두 raw byte 길이 1..255,
+leading zero 금지, literal unreserved 문자와 uppercase percent escape를 적용해야 한다. C++ encoder는 네 언어와
+유효 입력의 byte 결과가 같고, `framework/runtime/protocol/golden/authority-key-v1.json`을 직접 읽는 C++ 회귀가
+추가됐다. Decoder는 leading zero·비정규 escape·잘못된 UTF-8·길이 0/256을 거부하도록 보강됐으며 authority-key
+focused test와 target contract가 통과했다. 설치 package와 다른 언어 provider를 함께 사용하는 process 검증이
+남아 있어 **PARTIAL·검증 중**으로 둔다.
+- 근거: `cpp/framework/src/runtime/locations/authority_key_codec.hpp:40-120`,
+  `framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_authority_key_codec.cpp`,
+  `framework/runtime/protocol/golden/authority-key-v1.json`.
 
 ### CPP-RELOC-001 — relocation 영구 차단
 초기 audit에서는 `run_shared_relocation`의 `complete()`가 `blocked/target_unavailable`을 포함한 모든 결과에 `operation.terminal = true`를 설정하고, `relocation_operation`을 다시 시작 가능한 상태로 되돌리지 않았다. 이후 `relocate()` 호출은 저장된 blocked 결과를 계속 반환했다. 스펙 01 §3은 "거부된 결과는 저장하지 않으며, 재요청 시 처음부터 다시 검사한다"고 결정한다. 연관 gap으로 preflight와 worker가 대상 조회를 한 번만 수행해, target descriptor와 peer admission 전파 중 relocation이 즉시 거부됐다(→ CPP-RELOC-002, §3.1).
@@ -146,13 +217,95 @@ admitted 피어의 애플리케이션 레코드가 대상 owner의 mailbox 예�
 - C++ HTTP `snapshot()`/`validate()`의 public 노출은 gap이지만, 별도 public snapshot type을 새 계약으로 만드는 방식으로 해결하지 않는다(DEC-14).
 - participant application state는 source에서 64 MiB 상한과 `StateIncompatible` 경로를 확인했다. 다만 경계값 process E2E를 실행하지 않았으므로 완료 증거로 승격하지 않는다(DEC-17).
 
-### 2.3 계약 변경이 필요한 항목 — 승인 전 대기
+### 2.3 승인된 계약 변경과 구현 대기 항목
 
-아래 항목은 C++ production source만 고쳐서 닫을 수 없다. 공용 계약이나 여러 언어가 함께 소비하는 wire/schema를 바꾸어야 하므로, 사용자의 승인과 통합 담당자의 선행 변경 없이 구현하지 않는다.
+Session 교체 정책은 정식 spec과 shared wire schema에 먼저 반영했다. 각 언어 구현과 cross-language 검증이
+끝나기 전에는 gap을 종결하지 않는다. 나머지 항목은 새 계약 판단 없이 기존 schema conformance와 E2E fixture를
+수정한다.
 
-- `CPP-SESS-001`: 원격 Actor session bind 응답 전에 이전 소유자 통지·정리 확인을 전달할 control message와 acknowledgement가 현재 `actor_bound_session_bind_route_request_t`에 없다. 이 작업은 shared service-wire schema, generated decoder, 다섯 언어 exact interface와 cross-language process gate를 함께 바꾸어야 한다.
-- `ST-F4` Message Follow E2E: scenario가 보관한 `old_ref`의 generation/node를 HTTP DTO로 전달하지만, 현재 C++ public `actor_client_t::send()`는 `actor_id_t`만 받아 그 값을 사용하지 않는다. explicit ActorRef send를 추가하거나 raw route packet으로 우회하면 public contract가 바뀌므로, 기존 scenario assertion은 약화하지 않고 이슈로 남긴다. 최신 실행은 `framework/languages/cpp/e2e/SpotActorTransfer/logs/20260808-050927-1037324`에서 G1 relay와 route removal까지 확인했지만, G2는 `send_succeeded` 뒤 expected `send_failed|ActorLocationStale` marker가 없어 assertion을 충족하지 못했다.
-- `CPP-WIRE-001`, `CPP-WIRE-004`, `CPP-WIRE-006`: C++ 내부 codec과 source regression은 준비되어 있으나, 공통 schema/generator 또는 cross-language fixture와 설치 package를 함께 검증해야 한다. 통합 담당자의 선행 commit 없이 shared protocol 파일을 수정하지 않는다.
+- `CPP-SESS-001`: 공용 schema 변경 없이 command 36/38 codec, correlation, active/tombstone transition과
+  expected binding generation 검증을 구현했다. 남은 작업은 같은 node·cross-node·stale·duplicate·pre-restart
+  matrix와 설치 package process 증거이며, spec 승인 대기 항목이 아니다.
+- `CPP-SESS-004`: `boundSessionReplaced(51)` 송수신, 이전 session owner lifecycle과 binding exact identity 검증,
+  callback 성공·실패 terminal 100 ms 뒤 Framework close를 구현했다. Outbound queue가 먼저 비어도 시간을 줄이지
+  않으며 non-blocking timer로 예약하고 callback turn을 즉시 반환한다. sleep·blocking wait·session lane·worker
+  점유, ACK 대기와 bind rollback은 사용하지 않는다. SM-D6는 통과했고 stale·duplicate·pre-restart와 다중
+  Actor cleanup matrix가 남아 있다.
+- `ST-F4/F5` Message Follow E2E: server fixture가 HTTP DTO의 `node_rid`와 generation을 버리고 ActorId를 다시
+  조회하므로 old-ref 의미를 검사하지 않는다. F4의 caller terminal은 G2를 request로 바꿔 `Unavailable`을
+  확인하고, F5도 exact old-ref를 실제 transport에 사용해야 한다. F1/F2는 이동 중 순서와 추월 방지 단계를
+  별도로 audit한 뒤 상태를 결정하며 이 결함만으로 미구현으로 내리지 않는다. Public API는 변경하지 않는다.
+- `CPP-WIRE-001`: decoder 엄격도는 공용 schema에 이미 확정되어 있으므로 별도 계약 결정을 기다리지 않는다.
+  `golden/authority-key-v1.json`의 정상 vector를 C++ test에서 직접 읽고 leading zero·비정규 escape·잘못된
+  UTF-8·1..255 길이 위반을 negative test로 추가한다. `CPP-WIRE-004`, `CPP-WIRE-006`의 cross-language fixture와
+  설치 package 검증은 별도 후속 gate로 유지한다.
+
+정식 spec·shared schema·generated asset의 변경이 필요하다는 판단이 새로 생기면 해당 구현을 임의로
+진행하지 않고 이 보고서에 blocker로 등록한다. blocker가 등록된 뒤에도 계약 변경과 무관한 source test,
+package/clean-consumer, 설치 package process, 다른 E2E gate는 계속 진행한다.
+
+#### OPEN-CPP-SESSION-ROUTE-PROPAGATION — C++ 내부 Session owner route 전달 누락
+
+다른 언어 구현과 정식 wire contract를 대조한 결과, 이 항목은 **spec 변경 blocker가
+아니라 C++ 구현 gap**이다. Java의 직접 Actor Join 경로는 이미 존재하는
+`sessionRelocationRoute(44)`에 Session owner node generation·owner ID·owner lease generation·
+binding generation·relocation ID·high-water를 채워 target으로 전달한다
+(`framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/
+spots/ZLinkActorSpotAdmission.java:597-638`,
+`framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/spots/ZLinkUserSpotRetireTargetEndpoint.java:822-856`). 공용 schema와 C++ codec에도 같은 필드가
+이미 정의되어 있다.
+
+반면 C++의 `spot_actor_commit_route_request_t`
+(`framework/languages/cpp/framework/src/runtime/spots/spot_route_packets.hpp:64-98`)와
+`actor_bound_session_route_t`가 직접 Join commit에서 Session owner fence와 relocation/high-water
+정보를 보존하지 않고, `framework/languages/cpp/framework/src/runtime/spots/
+spot_route_internal_dispatcher.cpp:415-438,538-556`와
+`framework/languages/cpp/framework/src/runtime/actors/actor_gateway_runtime.cpp:1542-1560`에서
+node RID와 Session RID만으로 route를 만든다. 이는 기존 command 42/44/45를 C++ 내부 DTO와 target
+commit까지 연결하는 작업이다. 추정 identity를 넣거나 공용 spec/schema를 바꿀 근거는 없다.
+
+따라서 ST-F3A와 CPP-ROUTE-001은 이 C++ 내부 전달 작업과 이후 E2E 증거가 남아 있어 열린
+상태지만, spec 결정 대기로 막힌 항목은 아니다. 사용자가 보류한 process E2E는 실행하지 않고,
+구현 시에는 이미 정의된 route command의 값을 끝까지 보존하는지 source·owner-layer 회귀부터
+확인한다.
+
+#### OPEN-CPP-SESSION-OWNER-FENCE — 이전 session owner fence 보존 정합성
+
+`boundSessionReplaced(51)`의 네 owner 값은 exact하게 검증해야 하지만, **Node RID와 node
+generation을 ordinary local binding의 Session owner ID·lease generation으로 사용하는 것 자체는
+spec 위반이 아니다.** Node는 local binding을 `sessionOwnerId=nodeRid`,
+`sessionOwnerLeaseGeneration=nodeGeneration`으로 저장하고
+(`framework/languages/node/packages/framework/src/runtime/foundation/service-stateful-runtime.ts:1568-1575`),
+같은 값을 replacement 수신 시 exact하게 비교한다
+(`.../service-stateful-runtime.ts:3197-3204`). .NET도 같은 기본값을 사용하면서 명시적인 owner
+값이 있으면 보존한다
+(`framework/languages/dotnet/src/Zlink.Framework/Runtime/Actors/ZLinkSessionActorBindingTable.cs:249-266`).
+따라서 C++ `app.cpp:2107-2110`의 ordinary local replacement 기본값만으로 별도 spec blocker를
+세울 수 없다. Golden vector의 서로 다른 숫자는 codec field separation을 검사하는 fixture이지,
+모든 local binding에서 값이 달라야 한다는 의미는 아니다.
+
+다만 Java는 relocation/handoff에서 inbound authority의 owner ID·lease generation을 별도로
+보존하고 replacement에 다시 사용한다
+(`framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/
+binding/ZLinkJavaRawMeshNode.java:5520-5536`,
+`framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawSpotNode.java:1940-1966`). C++에도
+`public_host_runtime.cpp:3792-3917`의 route-owner resolver가 있으므로, route에 명시적인 owner
+token이 있는 relocation 경로에서는 그 값을 `command 42/44/51`까지 잃지 않고 전달해야 한다.
+이 요구는 위 C++ 내부 route propagation 작업에 합치며, 공용 wire나 spec 변경을 기다리는
+blocker로 유지하지 않는다. ordinary bind의 default와 relocation의 explicit owner fence를
+구분해 구현·검증한다.
+
+#### OPEN-GATE-CPP-COMMON-E2E-INVENTORY — 공통 E2E 기준과 C++ gate baseline 불일치
+
+공통 E2E heading은 `SF-C5A`를 포함해 375개인데 C++ inventory gate
+`framework/languages/cpp/e2e/verify_common_inventory.sh:141-142`는 374개를 기대한다. 이는
+현재 C++ gate의 baseline drift이며, 다른 언어에 동일한 inventory gate가 없다는 점까지 확인했다.
+공통 E2E 문서와 feature-map은 보호 경로이므로 임의로 고치거나 `blocked` 항목을
+`implemented`로 바꾸지 않는다.
+
+따라서 이 항목도 public spec/schema blocker가 아니다. 사용자가 지시한 대로 추가 E2E 실행은
+보류하고, 375 대 374 불일치와 feature-map/source/status 292개 조건을 열린 E2E gate로 기록한다.
+향후 공통 문서 기준을 반영할 때는 별도 승인된 gate/document 작업으로 처리한다.
 
 ---
 
@@ -166,7 +319,7 @@ admitted 피어의 애플리케이션 레코드가 대상 owner의 mailbox 예�
 | CPP-RELOC-002 | CLOSED | 구현 checkpoint `258a9aefcc`에서 preflight와 unit별 target 조회를 Location polling interval과 shared deadline으로 묶었다. 첫 조회 뒤 replacement가 게시되고 admitted되는 owner 회귀와 deadline 종료 회귀를 포함한 전체 host lifecycle, contract headers, execution, app host, M6B, M6C, target contract가 통과했다. Process checkpoint `dce17f2d44`에서는 설치 package source가 두 번째 relocation을 먼저 시작하고 replacement process를 나중에 시작했으며, descriptor와 peer admission 전파 뒤 shared deadline 안에 `Relocated/None`으로 완료됐다. |
 | CPP-LAYER-001 | PARTIAL·하 | 식별자 타입화가 절반만: `node_rid_t`/`actor_id_t`만 전용 타입이고 `spot_id_t`는 `std::string` alias, mesh/채널 이름은 평문 문자열 — 스펙이 명명한 안티패턴 그대로. 증거: `cpp/include/zlink/framework/contracts/spots/spot_identity.hpp:24` |
 | CPP-LAYER-002 | PARTIAL·검증 중 | 구현 checkpoint `c2bc713c99`에서 진행 중 runtime call 식별자를 `call_id_t`로 바꾸고 내부 파일도 `call_id.hpp`로 옮겼다. 공개 Actor Join `OperationId`를 운반하는 `wire_operation_id_t`는 별도 strong type으로 정의해 같은 128-bit 표현을 쓰더라도 call ID와 암시적으로 대입되지 않는다. Foundation registry, host completion, mesh·ClientServer transport와 creation call site는 call 용어로 통일했고 compile-time assertion과 target source gate로 두 타입의 재결합을 막았다. 전체 `test_cpp_framework_operation_registry`, `test_cpp_framework_service_wire_codec`, `test_cpp_framework_m6a_runtime`, `test_cpp_framework_m6b_runtime`, `test_cpp_framework_m6c_runtime`, `zlink_cpp_framework_mesh_node_vertical_test`, `test_cpp_framework_target_contract`가 통과했다. 설치 package와 cross-process Actor Join completion 검증이 남아 있어 아직 종결하지 않는다. |
-| CPP-LAYER-003 | PARTIAL·중 | 구현 checkpoint `ad335148f0`에서 handler와 deferred Join completion을 이미 직렬화하는 `actor_execution_queues`를 단일 owner로 유지하고, handler 실행 전체를 다시 잠그던 `actor_mailboxes` map·per-Actor mutex·수명 정리 코드를 제거했다. Deferred barrier ordering 회귀를 포함한 전체 `test_cpp_framework_execution`, `test_cpp_framework_m6b_runtime` 2회, `test_cpp_framework_target_contract`가 통과했다. 메시지당 work-name 문자열 연결, turn당 `shared_ptr` 다수와 중첩 `std::function` 캡처는 남아 있으므로 이 항목은 아직 종결하지 않는다. |
+| CPP-LAYER-003 | PARTIAL·중 | 구현 checkpoint `ad335148f0`에서 handler와 deferred Join completion을 이미 직렬화하는 `actor_execution_queues`를 단일 owner로 유지하고, handler 실행 전체를 다시 잠그던 `actor_mailboxes` map·per-Actor mutex·수명 정리 코드를 제거했다. 추가로 Actor queue admission에서 진단 문자열을 매 packet마다 `name + "-actor"`로 이어 붙이지 않고 기존 work name을 이동해 전달하도록 정리했다. Deferred barrier ordering 회귀를 포함한 전체 `test_cpp_framework_execution`, `test_cpp_framework_m6b_runtime` 2회, `test_cpp_framework_target_contract`가 통과했다. turn당 `shared_ptr` 다수와 중첩 `std::function` 캡처는 남으므로 이 항목은 아직 종결하지 않는다. |
 | CPP-LAYER-004 | PARTIAL·중 | 스트림 공개 계약에 core 바인딩 타입 누출: `stream.hpp`의 `compress/decompress/write_packet/reply_packet` 시그니처가 `zlink::message_t`를 노출 — 바인딩 메시지 타입 변경이 곧 공개 API 변경이 됨. 증거: `cpp/include/zlink/framework/contracts/streams/stream.hpp:103-104, 215-216` |
 | CPP-LAYER-005 | PARTIAL·검증 중 | 구현 checkpoint `9ffc2af6ab`에서 teardown 결과를 최종 확정한 직후 `completion_admission->stop()`을 먼저 실행하고, 그 다음 termination state와 waiter 결과를 공개하도록 순서를 바꿨다. 따라서 terminal 결과를 관측한 뒤 새 completion이 admit되는 창이 없다. 순서를 고정하는 `test_cpp_framework_target_contract`와 전체 `test_cpp_framework_app_host`가 통과했다. Package host와 shutdown 중 completion 경합 process 검증이 남아 있어 아직 종결하지 않는다. |
 
@@ -176,10 +329,10 @@ admitted 피어의 애플리케이션 레코드가 대상 owner의 mailbox 예�
 
 | ID | 분류 | 요약 |
 |---|---|---|
-| CPP-EXEC-001 | GAP·중 | §4 "SpotWide 메시지 1건 처리 시 락 2회 미만" 위반: 노드 `recursive_mutex` + actor 큐 mutex(enqueue) + offload executor mutex + spot 큐 mutex + `complete_one` 내 큐 mutex 2회×2큐 + per-actor `actor_mailboxes` mutex — 스펙이 경고한 메시지당 이중 락 처리량 한계의 배수 형태. 증거: `cpp/src/runtime/spots/spot_runtime.cpp:2549, 5646`, `cpp/src/runtime/execution/serial_execution_queue.cpp:393, 793, 841` |
-| CPP-EXEC-002 | GAP·검증 중 | 구현 checkpoint `fdb5173042`에서 Actor self-request와 같은 Spot execution gate를 기다리는 Actor·Spot request의 오류를 모두 `InvalidOperation`으로 통일했다. 제출 횟수가 0인지와 정확한 오류 kind를 확인하는 `test_cpp_framework_m6b_runtime`이 통과했다. Cross-language process E2E의 오류 kind assertion이 남아 있어 아직 종결하지 않는다. |
-| CPP-EXEC-003 | PARTIAL·상 | self-wait 가드가 `thread_local`로 핸들러 turn의 동기 구간에만 성립 — `co_await` 재개 후에는 자기-요청이 탐지되지 않아 거부 대신 타임아웃까지 데드락. 별건으로 `try_create_actor`의 `caller_owns_source_turn` 분기가 소스 Spot과 대상 Spot이 다를 때 대상(Entry) Spot의 gate를 우회한 채 `on_create_actor`를 인라인 실행. 증거: `cpp/src/runtime/execution/serial_execution_queue.cpp:153-166`, `cpp/src/runtime/spots/spot_runtime.cpp:3477-3500` |
-| CPP-EXEC-004 | PARTIAL·중 | Pitfall 2 큐 포화 계열 분리 미완: send/one-way의 "같은 런타임은 send 타임아웃까지 대기 후 `DeadlineExceeded`" 행이 Spot/Actor 대상에 미구현 — `actor_send`가 `actor_request`와 동일하게 즉시 `capacity_exceeded`. 증거: `cpp/src/runtime/spots/spot_runtime.cpp:2663-2673, 2765-2768` |
+| CPP-EXEC-001 | GAP·중 | §4 "SpotWide 메시지 1건 처리 시 락 2회 미만" 위반이 현재 구조에도 남아 있다. Actor 전달은 `actor_execution_queue_snapshot`을 atomic으로 읽어 기존 Actor의 node `recursive_mutex` 조회를 제거했고, queue 생성·삭제 때만 copy-on-write snapshot을 갱신한다. 그러나 SpotWide 경로에서는 여전히 `spot_context_state_t::try_post_serial_async()`의 `callback_mutex`와 Spot queue mutex를 거치며, admission 경로의 중첩 lock과 close와 enqueue를 함께 선형화하는 무경합 gate가 없다. `serial_execution_queue_t::complete_one()`의 인접한 queue lock 두 번은 이번 점검에서 하나로 합쳤지만, 전체 항목은 GAP으로 유지한다. 증거: `cpp/framework/src/runtime/spots/spot_runtime.cpp:2682-2820,1353-1380`, `spot_runtime.hpp:228-242`, `cpp/framework/src/runtime/execution/serial_execution_queue.cpp:796-887`. |
+| CPP-EXEC-002 | PARTIAL·검증 중 | 구현 checkpoint `fdb5173042`에서 Actor self-request와 같은 Spot execution gate를 기다리는 Actor·Spot request의 오류를 모두 `InvalidOperation`으로 통일했다. 제출 횟수가 0인지와 정확한 오류 kind를 확인하는 `test_cpp_framework_m6b_runtime`이 통과했다. Source·owner-layer 회귀는 통과했으며 cross-language process E2E의 오류 kind assertion이 남아 있어 아직 종결하지 않는다. |
+| CPP-EXEC-003 | PARTIAL·검증 중 | coroutine `co_await` 뒤에도 Actor 실행 context가 유지되도록 ambient continuation snapshot에 Actor key와 Spot ID를 함께 보존했다. 따라서 재개 후 같은 Actor request가 `InvalidOperation`으로 종료되고 submission을 만들지 않는다. `try_create_actor`의 source turn inline 실행도 source와 target Spot이 같은 경우에만 허용하고, cross-Spot은 target serial lane으로 보낸다. `test_cpp_framework_m6b_runtime`에 coroutine self-wait와 submission 0/1 회귀를 추가해 통과했다. 설치 package와 cross-process 오류 kind assertion이 남아 있어 아직 종결하지 않는다. 근거: `cpp/framework/src/runtime/diagnostics/flow_context.cpp:25-76`, `cpp/framework/src/runtime/spots/spot_runtime.cpp:3510-3520`, `cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_m6b_runtime.cpp:602-645` |
+| CPP-EXEC-004 | PARTIAL·중 | Pitfall 2 큐 포화 계열의 결과 보존은 보강했다. raw routed send의 `backpressured`·`terminated`·기타 `submit_result_t`를 public host까지 전달하고, local Actor와 local publish dispatch도 application message budget에서 `backpressured`를 반환한다. Spot mesh send·publish와 Actor relay도 결과를 `internal_failure`로 축약하지 않고 기존 Framework error kind로 매핑한다. 따라서 `async_submit_runtime`의 send-timeout 재시도와 `DeadlineExceeded` 변환이 Actor/Spot one-way에도 적용된다. 다만 같은 런타임의 포화→deadline process assertion과 모든 one-way surface의 독립 회귀가 남아 있어 종결하지 않는다. 근거: `cpp/framework/src/runtime/backend/raw_route_port.cpp:77-119`, `cpp/framework/src/runtime/mesh/raw_mesh_node_owner.cpp:934-969,1220-1309`, `cpp/framework/src/runtime/stateful/public_host_runtime.cpp:794-830,2370-2420,6127-6188`, `cpp/framework/src/runtime/spots/spot_runtime.cpp:2323-2435,7428-7435`, `cpp/framework/src/runtime/mesh/mesh_node_runtime.cpp:2405-2425`; 단위/ToActor/ChannelEgress 회귀는 §7.3에 기록한다. |
 
 만족 항목(요약): per-actor 큐→공유 gate 구조, PerActor 모드, 타이머 lane, 2-lane FIFO 이중 한도, lifecycle 우선+burst 8+yield debt, 앞끼워넣기 금지, 실행 자원 비비례 등 핵심 직렬화 구조는 충실.
 
@@ -198,10 +351,10 @@ admitted 피어의 애플리케이션 레코드가 대상 owner의 mailbox 예�
 
 | ID | 분류 | 요약 |
 |---|---|---|
-| CPP-COMP-001 | GAP·검증 중 | 구현 checkpoint `1db9758177`에서 Actor 이동 중 `Unavailable`에 내부 `actor_transfer_in_progress` origin을 부여하고, error envelope metadata를 통해 typed origin을 보존하도록 바꿨다. 재시도는 `what()` 문구 대신 이 origin만 확인한다. Native 예외는 `std::system_error`의 transport `errc`만 `Unavailable`로 분류하고 다른 `std::exception`은 `InternalFailure`로 처리하므로 `not connected`, `stale`, `errno=113` 문자열 검색이 남지 않는다. 실제 `channel_reply_writer_t`를 거친 origin roundtrip, 전체 `test_cpp_framework_messaging`, `test_cpp_framework_execution`, `test_cpp_framework_m6b_runtime`, `test_cpp_framework_target_contract`가 통과했다. 설치 package와 Actor 이동 중 request 재시도 process E2E가 남아 있어 아직 종결하지 않는다. |
-| CPP-COMP-002 | GAP·중 | §1/§7 "런타임 내 완료 확정 방식은 하나" 위반: 최소 4가지 완료 메커니즘(`operation_registry_t` take, `exactly_once_table_t` 2회, `task_shared_state_t` first-write-wins, `pending_operation_state_t` atomic flip + 채널 bool/cv + `submit_once_t`)이 공존하고 mesh request 1건이 3가지를 체이닝. 각각은 claim-once로 올바르나 새 경로가 따를 단일 규칙이 없음 |
-| CPP-COMP-003 | PARTIAL·중 | §3: 완료 상관값을 submit의 **입력**으로 받는 구조가 미구현(전 계층 out-parameter). 응답 소실은 계층별 선등록으로 막혀 있으나, 스펙이 제거하려 한 holding-slot 체인(`_completions` → `_completed_operations` → cv 대기)의 완료당 추가 맵 조회 비용은 그대로. 증거: `cpp/src/runtime/stateful/public_host_runtime.cpp:2474-2495`, `cpp/src/runtime/mesh/mesh_node_runtime.cpp:2675-2708, 2773-2790` |
-| CPP-COMP-004 | PARTIAL·상 | holding-slot 규율 절반 위반: mesh 계층 `_completed_operations`가 **무한**(capacity 0 = 무제한)이고, waiter의 cv 타임아웃 이후 도착한 terminal 레코드가 삽입된 채 노드 정지까지 삭제되지 않음 — 타임아웃된 요청마다 고아 엔트리 누수. 일부 인프라 요청 경로는 capacity성 `backpressured`를 `CapacityExceeded`가 아닌 `internal_failure`로 붕괴. 단순 capacity 제한은 completion 도착과 waiter 등록 사이의 경쟁에서 응답을 잃게 하므로, CPP-COMP-003의 correlation 선등록 전환과 함께 bounded holding slot·`CapacityExceeded` 완료를 구현해야 한다. 증거: `cpp/src/runtime/mesh/mesh_node_runtime.hpp:450-454`, `cpp/src/runtime/mesh/mesh_node_runtime.cpp:2868-2875, 1863-1867, 2286-2289`, `cpp/src/runtime/operations/exactly_once_table.hpp:43` |
+| CPP-COMP-001 | PARTIAL·검증 중 | 구현 checkpoint `1db9758177`에서 Actor 이동 중 `Unavailable`에 내부 `actor_transfer_in_progress` origin을 부여하고, error envelope metadata를 통해 typed origin을 보존하도록 바꿨다. 재시도는 `what()` 문구 대신 이 origin만 확인한다. Native 예외는 `std::system_error`의 transport `errc`만 `Unavailable`로 분류하고 다른 `std::exception`은 `InternalFailure`로 처리하므로 `not connected`, `stale`, `errno=113` 문자열 검색이 남지 않는다. 실제 `channel_reply_writer_t`를 거친 origin roundtrip과 관련 CTest가 통과했다. 설치 package와 Actor 이동 중 request 재시도 process E2E가 남아 있어 아직 종결하지 않는다. |
+| CPP-COMP-002 | CLOSED | 재검토 결과 이 항목은 서로 다른 owner 경계를 하나의 primitive로 합치라는 과잉 판정이었다. `operation_registry_t`는 transport callback·deadline, `exactly_once_table_t`는 replay/dedup terminal, `task_shared_state_t`는 public task continuation, `pending_operation_state_t`·`submit_once_t`는 caller submit/cancellation 경계를 각각 소유한다. 각 경계는 claim-once를 보장하고 mesh request의 단계별 chaining은 중복 terminal ownership이 아니라 transport·public task·dedup 결과의 분리된 전달이다. 공통 spec은 terminal-once와 operation identity를 요구하지만 단일 내부 자료구조를 요구하지 않는다. `test_cpp_framework_operation_registry`, M6B/M6C와 target contract가 통과했다. |
+| CPP-COMP-003 | PARTIAL·중 | public host가 completion operation을 먼저 만들고 `operation.low`를 raw Mesh request의 correlation 입력으로 전달하도록 연결했다(`public_host_runtime.cpp:2558-2642`, `raw_mesh_node_owner.cpp:901-949`). 따라서 transport 응답 등록은 submit보다 앞서고 correlation을 transport가 새로 만드는 경로가 줄었다. 다만 host의 `_completed_operations` holding table과 `wait_for_completion()` 조회·cv 대기는 남아 있고, 모든 infrastructure request가 같은 입력 경로를 사용하는지와 holding-slot 제거는 아직 완료하지 않았다. |
+| CPP-COMP-004 | PARTIAL·검증 중 | timeout 뒤 늦게 도착한 terminal이 `_completed_operations`에 고아 entry로 다시 삽입되지 않도록 bounded tombstone을 유지하고, holding table가 가득 찬 경우에는 `_completion_overflow_operations`에 bounded identity를 보관해 waiter가 `CapacityExceeded`를 관찰하도록 바꿨다(`mesh_node_runtime.cpp:2619-2675,2827-2852`). 65,536개 상한과 stop cleanup은 유지한다. 전체 table saturation process와 overflow 스트레스 회귀가 남아 있어 종결하지 않는다. |
 
 만족 항목(요약): 단일 finalize 경로, 락 밖 콜백, 등록 선행-제출 후행, 수락 후 자동 재전송 금지, fire-and-forget 완료 시점 등은 충실.
 
@@ -219,8 +372,8 @@ admitted 피어의 애플리케이션 레코드가 대상 owner의 mailbox 예�
 
 | ID | 분류 | 요약 |
 |---|---|---|
-| CPP-TOPO-001 | GAP·상 | §2 참조 — 수동 피어 fence 미설치 |
-| CPP-ROUTE-001 | PARTIAL·검증 중 | Wire fence가 제공하지 않는 `owner_id`는 빈 값일 때 비교하지 않고, 제공되는 node·object·authority owner generation과 owner lease generation은 계속 정확히 비교하도록 수정했다. Wire fence와 같은 입력으로 actor route cache가 무효화되고 다음 조회가 store를 다시 읽는 owner-layer 회귀 test도 추가했다. 구현 checkpoint `5e31808ad3`; `test_cpp_framework_store_location_resolvers` 33/33 통과. 소스 checkpoint `2c60654066`에서 Message Follow local native route가 committed source로 남은 동안에도 coordinator relay를 선택하도록 `spot_runtime`을 보강하고, relay evidence에 correlation을 기록하도록 했다. ST-F4 실행에서 G1 `message_follow_relay`와 source route removal은 관측됐지만, G2 old-ref assertion은 현재 public `actor_client_t` surface로 표현할 수 없어 종결하지 않는다. 실제 Message Follow notice가 spot·actor call site를 거쳐 cache를 무효화하는 process E2E가 남아 있어 아직 종결하지 않는다. |
+| CPP-TOPO-001 | PARTIAL·검증 중 | 소스 checkpoint `2c60654066`에서 manual endpoint에 Store descriptor의 lifecycle generation과 security identity fence를 설치하고 제거 시 해제하도록 수정했다. Source gate와 resolver test는 통과했으며 설치 package와 실제 stale manual peer negative process E2E가 남아 있다. |
+| CPP-ROUTE-001 | PARTIAL·상 | Wire fence가 제공하지 않는 `owner_id`는 빈 값일 때 비교하지 않고, 제공되는 node·object·authority owner generation과 owner lease generation은 계속 정확히 비교하도록 수정했다. Wire fence와 같은 입력으로 actor route cache가 무효화되고 다음 조회가 Store를 다시 읽는 owner-layer 회귀 test도 추가했다. 구현 checkpoint `5e31808ad3`; `test_cpp_framework_store_location_resolvers` 33/33 통과. ST-F4/F5 fixture는 exact old Actor ref와 request `Unavailable` terminal을 사용하도록 정정했고, ST-F4·F5와 current global route 수렴을 `framework/languages/cpp/e2e/SpotActorTransfer/logs/20260808-172739-4014158/`에서 모두 확인했다. ST-F5의 기존 실패는 production route 결함이 아니라 A→B→A 절차가 공통 F5 계약과 달랐던 fixture 오류였다. ST-F3A에는 기존 command 42/44 값을 C++ 내부 commit까지 보존하는 구현 gap과 후속 E2E가 남아 있어 **PARTIAL·검증 중**이다. 이는 spec blocker가 아니다. |
 | CPP-ROUTE-002 | PARTIAL·검증 중 | 구현 checkpoint `343a9c831b`에서 direct-store fallback도 공통 `live_location_reader_t`로 authority의 owner lease와 fencing margin을 확인하고, cache 수명을 `route_cache_max_age`와 owner admission lifetime 중 짧은 값으로 제한했다. Store 시각을 읽기 전의 `steady_clock` 시각으로 절대 만료 시각을 고정하므로 변환 과정에서 lease deadline을 연장하지 않는다. 10초 cache를 설정한 두 host 회귀에서 owner admission deadline 전 첫 전송은 `ok`, deadline 뒤 두 번째 전송은 `not_found`인지 확인했고 전체 `test_cpp_framework_m6b_runtime`과 `test_cpp_framework_target_contract`가 통과했다. 설치 package와 실제 Location Store를 사용하는 process 검증이 남아 있어 아직 종결하지 않는다. |
 
 만족 항목(요약): positive 캐시+전체 fence, 미존재/생성중/스토어 실패 비캐시, 수명 검증, follow 와이어 레코드, smooth WRR+tiebreak, 사전 계산 사이클, 직접 지정 대상 불변, publish 스냅샷 등은 충실.
@@ -243,7 +396,7 @@ admitted 피어의 애플리케이션 레코드가 대상 owner의 mailbox 예�
 |---|---|---|
 | CPP-LIFE-001 | PARTIAL·검증 중 | 구현 checkpoint `f27fadae2c`에서 일반 Actor·Spot message admission이 logical object ID, authority owner generation과 current owner lease를 확인하고 `ObjectGeneration`은 비교하지 않도록 수정했다. 승인된 frozen record에는 current incarnation generation을 기록한다. Message Follow와 bound-session control은 exact Actor generation을 계속 요구하며 bound-session 불일치는 `invalid_operation`으로 끝난다. Stale generation 일반 Actor request 전달·reply, current generation 정규화와 stale lease 거부 회귀를 포함한 전체 M6B, execution, cross-process mesh vertical, M6C와 target contract가 통과했다. 첫 M6B 실행은 기존 route-cache deadline timing assertion에서 한 번 실패했고 같은 binary 재실행은 통과했다. 설치 package에서 객체 재생성과 ingress가 겹치는 process E2E가 남아 있어 아직 종결하지 않는다. |
 | CPP-LIFE-002 | PARTIAL·검증 중 | 구현 checkpoint `af11dabeac`에서 explicit close와 idle eviction을 같은 lifecycle operation으로 통합하고, `OnClosing` 완료 뒤 location과 local index를 해제하도록 순서를 고쳤다. Callback이 실패해도 release를 수행한 뒤 예외를 다시 전달한다. Idle-eviction 회귀가 callback 실행 중 location/context가 유지되고 완료 뒤 제거되는지 확인하며 전체 `test_cpp_framework_execution`이 통과했다. 실제 concurrent Instance activation process E2E가 남아 있어 아직 종결하지 않는다. |
-| CPP-LIFE-003 | PARTIAL·상 | 공개 계약인 failure spec §4.4는 `Ready` authority의 owner lease가 만료된 상태를 Missing과 구분하고, 다른 node의 cold activation을 시작하지 않은 채 bounded `Unavailable`로 끝내도록 요구한다. Internals 06·08·10은 이를 resolver의 닫힌 결과, activation state와 liveness 책임 분리로 구현하고, 12는 same-target initial recovery root만 허용한다. 현재 resolver는 active authority를 읽을 때 owner lease availability를 별도 결과로 투영하지 않으며, request는 조회 결과가 비어 있을 때 Instance activation을 시작한다. 전송이 `NotFound`/`Unavailable`이면 route를 무효화하고 현재 call은 다시 제출하지 않지만, owner row 정리와 다음 call이 겹칠 때 Missing과 KnownUnavailable을 구분한다는 보장이 없다. 반면 startup recovery는 같은 target node RID와 lifecycle generation의 미완료 activation만 재개한다. 소스 checkpoint `2c60654066`: active authority를 투영할 때 owner token의 lease generation과 fencing margin을 다시 확인하고, 만료·누락이면 `framework_error_kind_t::unavailable`을 발생시켜 cold activation 분기로 내려가지 않게 했다. `ReadyAuthorityWithExpiredOwnerIsUnavailable` owner-layer regression이 통과했다. `test_cpp_framework_store_location_resolvers`(37/37), `test_cpp_framework_target_contract`, package clean-consumer와 InstanceSpot `IS-E2E-01` 단독 실행이 통과했다. 현재 C++ InstanceSpot runner에는 owner process 종료 뒤 후속 call을 확인하는 `IS-E2E-05` process scenario가 없고, aggregate `all`은 첫 실행에서 `CapacityExceeded`로 종료했으므로 Ready owner loss 종결 증거로 승격하지 않는다. 증거: `common/spec/31-failure-failover-policy.ko.md`, `common/spec/server/languages/cpp/interfaces/04-spots.ko.md`, `common/internals/06-routing-and-cache.ko.md`, `common/internals/08-object-lifecycle.ko.md`, `common/internals/10-liveness-and-state.ko.md`, `common/internals/12-service-wire-protocol.ko.md`, `cpp/src/runtime/locations/store_location_resolvers.hpp:390-421`, `cpp/src/runtime/channels/channel_runtime.cpp:2151-2187`, `cpp/src/runtime/stateful/public_host_runtime.cpp:1794-1918` |
+| CPP-LIFE-003 | PARTIAL·상 | 공개 계약인 failure spec §4.4는 `Ready` authority의 owner lease가 만료된 상태를 Missing과 구분하고, 다른 node의 cold activation을 시작하지 않은 채 bounded `Unavailable`로 끝내도록 요구한다. 소스 checkpoint `2c60654066`의 lease fence와 `ReadyAuthorityWithExpiredOwnerIsUnavailable` owner-layer regression은 통과했다. InstanceSpot runner는 이제 미구현 scenario를 정상 request로 처리하지 않고 fail-closed하며, IS-E2E-05에서 두 owner process 중 Ready owner를 `SIGKILL`한 뒤 lease 만료 후 후속 request가 `Unavailable`로 끝나고 양쪽 handler 미진입·surviving owner 미생성을 확인했다. 실행 log는 `framework/languages/cpp/e2e/InstanceSpot/logs/20260808-172816-4022130/`이다. 나머지 33개 scenario는 feature map에서 `blocked`로 남아 aggregate 전체 완료를 주장하지 않는다. 따라서 owner-loss scenario 자체는 구현됐지만 InstanceSpot 전체 process matrix가 남아 **PARTIAL·검증 중**이다. 증거: `cpp/src/runtime/locations/store_location_resolvers.hpp:390-421`, `cpp/src/runtime/channels/channel_runtime.cpp:2151-2187`, `cpp/src/runtime/stateful/public_host_runtime.cpp:1794-1918`, `framework/languages/cpp/e2e/InstanceSpot/Client/main.cpp:151-222` |
 
 만족 항목(요약): 폐쇄 kind 집합, Entry Spot 이동 경계 제외, 생성 경합 단일 factory, 생성중 비캐시, 실패 생성 정리, count+byte 이중 한도, relocation 보류 상수 등은 충실.
 
@@ -251,7 +404,8 @@ admitted 피어의 애플리케이션 레코드가 대상 owner의 mailbox 예�
 
 | ID | 분류 | 요약 |
 |---|---|---|
-| CPP-SESS-001 | GAP·상 | §2 참조 — 원격 bind 스왑 핸드셰이크 부재 |
+| CPP-SESS-001 | PARTIAL·검증 중 | 정식 command 36/38 codec·transaction과 expected binding generation 검증을 구현했다. Focused CTest·SM-D6·package consumer는 통과했으며 stale·duplicate·pre-restart와 full cross-node matrix가 남아 있다. SupportChat에서 Join 중 `moving` Actor에 도착한 initial bind가 실패하는 lifecycle 경계도 남아 있다. |
+| CPP-SESS-004 | PARTIAL·검증 중 | 즉시 bind 뒤 이전 exact session의 command 51 one-way 통지, callback, callback terminal 100 ms 뒤 non-blocking Framework close를 구현했다. SM-D6는 통과했으며 callback 실패·deadline·retry·다중 Actor cleanup matrix가 남아 있다. ordinary local binding에서 Node RID·lifecycle generation을 Session owner ID·lease generation의 기본값으로 사용하는 것은 Node/.NET과 정합하다. 다만 relocation/handoff route에 명시적인 owner token이 있으면 그 값을 보존해야 하므로 `OPEN-CPP-SESSION-ROUTE-PROPAGATION`과 연계한 C++ conformance가 남아 있다. spec blocker는 아니다. |
 | CPP-SESS-002 | PARTIAL·하 | §2 "종류별 새 직렬 실행 primitive를 만들지 말라": 주 엔진(`serial_execution_queue_t`)으로 통합은 잘 되어 있으나 `service_mailbox_t`가 admission 예산·per-owner FIFO·ready set을 독립 재구현한 제2 primitive로 공존 — 스펙이 명명한 "two-domain mailboxes" 실패 패턴 구조. 증거: `cpp/src/runtime/mesh/service_mailbox.hpp:18-115` |
 | CPP-SESS-003 | PARTIAL·검증 중 | 구현 checkpoint `8a709309bd`에서 공통 `serial_execution_queue_t`에 Spot·session·Actor 전달의 닫힌 lane policy 합 타입을 주입하도록 바꿨다. Spot 정책만 실행 방식과 `active`·반납 대기·이동 봉인 상태를 가지며, session 정책은 연결 열림·닫힘만, Actor 전달 정책은 별도 lifecycle 상태를 갖지 않는다. 기존 raw `allow_yield` 인자와 필드를 제거했고 yield 허용 여부는 Spot-wide 정책에서만 계산한다. Entry Spot, Spot-wide, per-Actor Spot, STREAM session과 Actor 전달 queue 생성 지점은 각각 이름이 있는 정책을 선택한다. 잘못된 lifecycle 타입 조합을 만들 수 없는지 확인하는 회귀를 포함한 전체 `test_cpp_framework_execution`과 `test_cpp_framework_target_contract`가 통과했다. `test_cpp_framework_m6c_runtime`은 변경된 fixture를 포함해 compile은 통과했지만, 실행은 이 변경과 무관한 기존 `relocation providers must be configured once before host start`에서 중단됐다. 설치 package와 process lane 검증이 남아 있어 아직 종결하지 않는다. |
 
@@ -271,12 +425,12 @@ admitted 피어의 애플리케이션 레코드가 대상 owner의 mailbox 예�
 | ID | 분류 | 요약 |
 |---|---|---|
 | CPP-OWN-001 | PARTIAL·검증 중 | 구현 checkpoint `b1053aceda`에서 cached `serializer_t<T>`가 encode/decode 함수와 expected content type을 함께 소유하도록 바꾸고, classic Channel, RouteMesh, MeshNode와 Spot·Actor typed handler가 envelope content type을 비교한 뒤에만 deserialize하도록 통일했다. Mismatch는 `ProtocolError`로 끝나고 handler를 호출하지 않는다. Custom `application/avro`와 기본 `application/json`·`application/octet-stream` cache 회귀, mismatch owner 회귀와 target contract를 추가했다. Serializer registry, handler registry, contract headers, channel messaging, execution, app host, cross-process Mesh vertical, M6A, M6B, M6C와 target contract가 통과했다. 첫 aggregate M6B 실행은 87초 동안 종료되지 않아 중단했으며 같은 binary 단독 재실행은 통과했다. 설치 package와 서로 다른 codec의 process E2E가 남아 있어 아직 종결하지 않는다. |
-| CPP-OWN-002 | GAP·중 | §3 "이동 레코드를 hot path에서 만들지 말라" 위반: `raw_stateful_dispatch_t::ingest`가 **수락되는 모든 메시지**에 대해 frozen record를 canonical 인코딩해 큐에 넣고 claim 시 다시 디코딩 — 메시지당 encode→decode 왕복. 증거: `cpp/src/runtime/stateful/raw_stateful_dispatch.cpp:421-424, 569-572` |
-| CPP-OWN-003 | PARTIAL·검증 중 | 구현 checkpoint `4ba8a08bae`에서 `try_claim()`이 pending map의 decoded application payload와 stateful queue의 canonical turn을 delivery에 값 복사하던 경로를 각각 이동으로 바꿨다. Claim 시 두 full buffer 사본이 추가되지는 않으며 이를 고정하는 source contract와 전체 M6B, M6C, target contract가 통과했다. Ingress에서 transport frame, decoded payload와 canonical frozen record를 동시에 보관하는 구조는 남아 있어 아직 종결하지 않는다. |
+| CPP-OWN-002 | PARTIAL·검증 중 | `raw_stateful_dispatch_t::ingest`는 이제 이미 검증한 typed `frozen_application_record_t`를 queue에 보관하고, `summarize_frozen_application_record()`로 delivery summary만 만든다. canonical frozen bytes는 relocation snapshot/replay 직렬화 경계에서만 `encode_frozen_application_record()`로 만든다(`cpp/framework/src/runtime/stateful/raw_stateful_dispatch.cpp:425-456`, `maintenance_runtime.cpp:659-669,1818-1828`, `service_wire_codec.cpp:3221-3338`). 정상 ingress의 canonical allocation과 claim 재디코드는 제거됐고 M6B/M6C·service-wire·target contract가 통과했다. 설치 package와 실제 process allocation/copy 계측은 E2E 보류로 남아 있어 종결하지 않는다. |
+| CPP-OWN-003 | PARTIAL·검증 중 | 구현 checkpoint `4ba8a08bae`에서 `try_claim()`이 pending map의 decoded application payload와 stateful queue의 canonical turn을 delivery에 값 복사하던 경로를 각각 이동으로 바꿨다. 추가 checkpoint에서 ingress가 이미 검증한 frozen summary를 pending에 보관하고 claim 시 canonical queue bytes를 다시 decode하지 않도록 바꿨다(`raw_stateful_dispatch.hpp:96-103`, `raw_stateful_dispatch.cpp:424-441,523-535`). Claim 회귀와 target contract가 통과했다. Ingress에서 transport frame, decoded payload와 canonical frozen record를 동시에 보관하는 구조와 설치 package process 계측은 남아 있어 아직 종결하지 않는다. |
 | CPP-OWN-004 | PARTIAL·검증 중 | 구현 checkpoint `f663c6250f`에서 기본 JSON serializer가 nlohmann JSON 결과를 `encoded_payload_t`에 직접 기록하고, 수신 시 그 byte span을 직접 parse하도록 바꿨다. 송신의 `message_t::from_json() → encoded_payload_t::from_raw()`과 수신의 `encoded_payload_t::to_raw() → parse_json()` 왕복을 제거했다. 정확한 JSON wire 값과 decode 회귀, source contract를 포함한 전체 serializer registry, messaging, channel messaging, execution, cross-process mesh vertical, M6B, M6C, target contract가 통과했다. 설치 package의 process allocation/copy 계측이 남아 있어 아직 종결하지 않는다. |
 | CPP-OWN-005 | CLOSED | 구현 checkpoint `2fa0a29fc2`에서 application handler가 raw payload를 받던 `send_raw`, `raw_handler_t`, `payload_view_t`와 전용 `handler_kind_t::raw`를 제거했다. Public header에서 세 식별자의 재노출을 막는 target contract를 추가했고 handler registry, serializer registry, contract headers, layout, messaging, execution, app host, channel messaging, cross-process Mesh vertical, M6B, M6C와 target contract가 통과했다. Package checkpoint `113e6a46b0`에서 0.10.1 install header에 세 raw 식별자가 없는지 확인하고 typed public surface를 사용하는 out-of-tree consumer를 compile·실행했다. |
 | CPP-OWN-006 | PARTIAL·검증 중 | 구현 checkpoint `2cb188e1c5`에서 이미 encoded payload를 소유한 `message_t`가 decode와 raw 변환 때 `encoded_payload_t`를 값으로 반환하던 경로를 제거했다. 내부 visitor는 payload를 `const` reference로 읽고 결과 reference를 반환하지 못하도록 compile-time으로 제한한다. Message Follow 크기 계산, fanout beacon 비교와 fanout application decode는 binding의 `bytes()` view를 사용한다. Actor·User Spot 생성 record처럼 새 소유 buffer가 필요한 경계도 `to_bytes()` 임시 vector를 거치지 않고 view에서 목적 buffer로 한 번만 복사한다. 이를 고정하는 target contract와 전체 serializer registry, messaging, cross-process mesh vertical, M6B, M6C runtime 검증이 통과했다. 설치 package를 사용하는 process copy 계측이 남아 있어 아직 종결하지 않는다. |
-| CPP-OWN-007 | PARTIAL·중 | §6 큐 포화 거부 전에 envelope 디코딩+frozen 복사+canonical 인코딩 비용을 이미 지불 — 스펙의 관찰된 안티패턴. 증거: `cpp/src/runtime/stateful/raw_stateful_dispatch.cpp:279-448` |
+| CPP-OWN-007 | PARTIAL·검증 중 | `raw_stateful_dispatch_t::ingest`가 이제 encoded application envelope에서 HWM charge만 검증·계산한 뒤 `application_admission()`을 먼저 호출한다. 포화된 owner는 payload vector 생성, typed frozen body 구성과 canonical encode 전에 거부된다(`service_wire_codec.cpp:4028-4107`, `raw_stateful_dispatch.cpp:231-417`). Header·route fence 해석과 authority 조회는 admission 전에 남아 있어 source 비용이 완전히 0이 되지는 않는다. `verify_packaged_contract.sh`와 clean consumer는 최신 build에서 통과했지만, process allocation 계측은 아직 검증하지 않았다. |
 | CPP-OWN-008 | PARTIAL·검증 중 | 구현 checkpoint `79c7f894d7`에서 custom serializer를 typed cache에 넣을 때 erased encode/decode 함수를 한 번 복사해 serializer state가 소유하도록 바꿨다. Checkpoint `b1053aceda`에서는 content type도 같은 cache가 소유하도록 확장해 typed handler decode가 registry map을 다시 조회하지 않게 했다. Registry object를 move한 뒤에도 기존 serializer가 동작하는 owner 회귀와 전체 serializer registry, messaging, channel messaging, execution, cross-process Mesh vertical, M6B, M6C, target contract가 통과했다. Dynamic outbound `encode_parts`와 `content_type(type)` 선택은 아직 메시지마다 type map을 조회하므로 이 항목은 종결하지 않는다. |
 | CPP-OWN-009 | PARTIAL·검증 중 | 구현 checkpoint `985c7dadb4`에서 Spot 내부 route packet의 모든 byte field를 padding을 포함한 RFC 4648 Base64 문자열로 직렬화하도록 통일했다. 숫자 배열 팽창은 제거했고 strict decoder가 잘못된 길이·문자·padding·non-canonical pad bit를 거부한다. Known vector round-trip과 invalid input 회귀를 포함한 `test_cpp_framework_messaging`은 통과했다. Cross-language wire fixture와 실제 Spot→Actor process 검증이 남아 있어 아직 종결하지 않는다. |
 
@@ -286,10 +440,10 @@ admitted 피어의 애플리케이션 레코드가 대상 owner의 mailbox 예�
 
 | ID | 분류 | 요약 |
 |---|---|---|
-| CPP-WIRE-001 | PARTIAL·검증 중 | 구현 checkpoint `abaad2368a`에서 RFC 3986 unreserved byte만 보존하고 나머지를 uppercase percent encoding하는 `zla1:<a|s>:<byte-length>:<encoded-id>` codec을 internal owner로 추가했다. In-memory·provider Store의 reserve/commit write, Actor·User Spot·Instance Spot read, resolver, relocation adapter가 모두 이 codec을 사용하며 `1:`/`2:`/`3:`과 `actor:`/`spot:` legacy Location Store fallback을 제거했다. Known key 회귀와 source gate를 포함한 전체 store resolver 34개, in-memory/provider Store, location lifecycle/runtime, app host, execution, cross-process mesh vertical, M6B, M6C, layout·target contract가 통과했다. 설치 package와 다른 언어 runtime이 같은 provider를 사용하는 process 검증이 남아 있어 아직 종결하지 않는다. |
+| CPP-WIRE-001 | PARTIAL·검증 중 | 구현 checkpoint `abaad2368a`에서 RFC 3986 unreserved byte만 보존하고 나머지를 uppercase percent encoding하는 `zla1:<a|s>:<byte-length>:<encoded-id>` codec을 internal owner로 추가했다. Encoder는 네 언어와 유효 입력의 byte 결과가 같고, C++ unit test가 `framework/runtime/protocol/golden/authority-key-v1.json`을 직접 읽는다. Decoder는 leading zero·비정규 escape·잘못된 UTF-8·raw byte 길이 0/256을 거부하도록 schema 규칙에 맞췄으며 authority-key focused test, target contract와 전체 focused CTest가 통과했다. 설치 package와 다른 언어 runtime이 같은 provider를 사용하는 process 검증이 남아 있어 아직 종결하지 않는다. |
 | CPP-WIRE-002 | PARTIAL·검증 중 | 구현 checkpoint `a2ef9db6f4`에서 `mesh_node_socket_config_t::max_message_size`, Application HWM의 MeshNode 전용 startup validation, RouteMesh topology descriptor의 `effective_max_message_bytes`와 admission wire field를 제거했다. ClientServer와 STREAM이 소유하는 독립적인 message-size 계약은 유지했다. Public header와 private topology에서 재노출을 막는 target contract, RouteMesh admission의 정확한 wire 길이 회귀를 추가했다. 변경된 public struct의 ABI를 일관되게 적용하도록 전체 `zlink_framework` static library를 다시 만든 뒤 contract headers, layout, service wire codec, app host, execution, cross-process Mesh vertical, M6A, M6B, M6C와 target contract가 통과했다. Package checkpoint `113e6a46b0`에서 0.10.1 Framework와 clean consumer도 통과했다. 다른 언어 RouteMesh peer를 연결하는 process 검증이 남아 있어 아직 종결하지 않는다. |
 | CPP-WIRE-003 | PARTIAL·검증 중 | 구현 checkpoint `6e550851c4`에서 `message_t::parse_json()`과 기본 typed serializer가 공유하는 `framework-json-v1` parser/dumper 경계를 만들었다. UTF-8 BOM, root·nested duplicate property와 non-finite floating-point encode를 `ProtocolError`로 거부하며 이를 고정하는 target contract를 추가했다. Serializer registry, handler registry, contract headers, messaging, channel messaging, app host와 target contract가 통과했다. 임의의 DTO를 `nlohmann::json`으로 변환한 뒤에는 integer의 원래 C++ type width가 남지 않으므로 64-bit integer의 decimal string·범위 규칙은 아직 완전히 강제하지 못한다. 다섯 언어가 함께 사용하는 golden fixture도 남아 있어 아직 종결하지 않는다. |
-| CPP-WIRE-004 | GAP·검증 중 | 구현 checkpoint `985c7dadb4`에서 multicast frame, relocation state와 backlog, join snapshot, Actor packet과 bound-session payload를 모두 padding을 포함한 RFC 4648 Base64 문자열로 encode/decode하도록 수정했다. `test_cpp_framework_messaging`이 known vector `AAEC/f7/`의 정확한 wire 값과 round-trip, invalid input 거부를 확인했다. 공통 cross-language wire fixture와 C++ package를 사용하는 process E2E가 남아 있어 아직 종결하지 않는다. |
+| CPP-WIRE-004 | PARTIAL·검증 중 | 구현 checkpoint `985c7dadb4`에서 multicast frame, relocation state와 backlog, join snapshot, Actor packet과 bound-session payload를 모두 padding을 포함한 RFC 4648 Base64 문자열로 encode/decode하도록 수정했다. `test_cpp_framework_messaging`이 known vector `AAEC/f7/`의 정확한 wire 값과 round-trip, invalid input 거부를 확인했다. Source·owner-layer 회귀는 통과했으며 공통 cross-language wire fixture와 C++ package를 사용하는 process E2E가 남아 있어 아직 종결하지 않는다. |
 | CPP-WIRE-005 | PARTIAL·검증 중 | 구현 checkpoint `fa0179f139`에서 단일 Actor와 aggregate relocation이 공유하는 generator가 Linux `getrandom`, Windows system-preferred BCrypt, Apple·BSD `arc4random_buf`로 non-zero 128-bit `RelocationId`를 만들도록 수정했다. OS CSPRNG가 실패하면 약한 난수로 대체하지 않고 relocation을 시작하지 않는다. 현재 프로세스가 발급한 ID는 relocation root 보존 기간과 같은 24시간 동안 유지하며 zero나 중복 candidate는 최대 64회 다시 만든다. Collision 재생성 owner 회귀와 source gate를 포함한 전체 M6B, M6C, execution, cross-process mesh vertical과 target contract가 통과했다. 첫 M6B 실행은 기존 owner-admission deadline timing assertion에서 한 번 실패했고 같은 binary 재실행은 통과했다. 프로세스 재시작 전에 Store에 남은 retained root ID를 열거하는 SPI가 없어 재시작 뒤 충돌을 직접 조회하지 못하므로 아직 종결하지 않는다. |
 | CPP-WIRE-006 | PARTIAL·검증 중 | 구현 checkpoint `63d014d55c`에서 common schema generator가 C++ `request_terminal_result`와 framework error별 허용 terminal mapping을 생성하도록 확장했다. Codec의 101–113 mapping을 제거하고 generated `valid_terminal_failure`를 사용하며, `text16`·metadata와 endpoint·relocation reference·StoreVersion은 각각 schema가 생성한 `blobBytes`, `metadataBytes`와 전용 bound를 사용한다. Generator freshness와 schema validator, 전체 `test_cpp_framework_service_wire_codec`, `test_cpp_framework_target_contract`가 통과했다. 다른 언어 generated decoder와 C++ 설치 package를 함께 검증하는 aggregate gate가 남아 있어 아직 종결하지 않는다. |
 | CPP-WIRE-007 | PARTIAL·검증 중 | 구현 checkpoint `b464a808af`에서 queue가 보관하는 canonical relocation envelope와 application HWM 예약값을 분리했다. 일반 application payload는 payload 길이를 사용하고, `ZLinkFrameworkMultipart`는 count·length와 header part를 검증만 한 뒤 마지막 application body part 길이만 계산한다. 계산한 immutable byte 값은 ingress record에 보존되며 relocation stage와 maintenance envelope decode에서도 복원되므로 source와 target의 admission 회계가 같다. 잘린 multipart 거부, 128-byte canonical record가 4-byte application payload로 예약되는 경계와 completion 반납 회귀를 추가했다. 전체 `test_cpp_framework_service_wire_codec`, `test_cpp_framework_m6b_runtime` 반복 실행, `test_cpp_framework_m6c_runtime` 반복 실행과 `test_cpp_framework_target_contract`가 통과했다. 설치 package와 실제 multipart process HWM 검증이 남아 있어 아직 종결하지 않는다. |
@@ -323,7 +477,7 @@ RouteMesh에 남은 금지 상한 surface·field, JSON 프로파일에 집중한
 | liveness 토큰 CSPRNG 여부 (`std::random_device` 플랫폼 보증) (12 §5) | 플랫폼 보증 결정 필요 |
 | 느린 관찰자에도 처리 속도 유지 (10) | 관찰자 지연 주입 벤치마크 |
 | participant state 64 MiB 경계 (DEC-17) | 64 MiB 성공과 64 MiB 초과 `StateIncompatible` process E2E |
-| Ready Instance owner loss (08, CPP-LIFE-003) | owner process 종료와 lease 만료 뒤 다른 factory·handler가 실행되지 않고 모든 call이 bounded `Unavailable`로 끝나는지 검증. 미완료 initial cold activation의 same-target recovery와 별도 scenario로 실행 |
+| Ready Instance owner loss (08, CPP-LIFE-003) | IS-E2E-05에서 owner process 종료·lease 만료·bounded `Unavailable`·handler 미진입을 확인했다. 나머지 InstanceSpot scenario는 fail-closed `blocked`이며 aggregate 전체 gate는 남아 있다 |
 | 스키마 validator가 C++ 빌드를 실제 gate하는지 (12 §1) | 빌드 시스템 실행 확인 |
 | public exact interface와 실제 설치 package 일치 | source consumer compile, install 후 clean consumer compile, `verify_packaged_contract.sh` 실행 |
 | fanout 구독자가 앱 페이로드 수신으로도 기한을 연장하는 것의 적합성 (10) | Transport Liveness 스펙 오너 판정 |
@@ -332,17 +486,19 @@ RouteMesh에 남은 금지 상한 surface·field, JSON 프로파일에 집중한
 
 ## 5. 권고
 
-1. **이 보고서에서 unique ID 관리** — 정식 spec에 구현 진행 기록을 다시 넣지 않고, 이 plan 문서가 남은 19 GAP과 27 PARTIAL 및 종결 14건의 증거를 소유한다. 특히 CPP-TOPO-001은 종결된 `JVM-TOPO-001`, CPP-COMP-001은 종결된 `NODE-ROUTE-001`과 비교하되 다른 언어의 종결을 C++ 완료 증거로 사용하지 않는다.
+1. **이 보고서에서 unique ID 관리** — 정식 spec에 구현 진행 기록을 다시 넣지 않고, 이 plan 문서가 남은 2 GAP과 45 PARTIAL 및 종결 14건의 증거를 소유한다. 특히 CPP-TOPO-001은 종결된 `JVM-TOPO-001`, CPP-COMP-001은 종결된 `NODE-ROUTE-001`과 비교하되 다른 언어의 종결을 C++ 완료 증거로 사용하지 않는다.
 2. **수정 순서 제안**:
-   - 1차 (안정성·정합성): CPP-SESS-001(이중 소유), CPP-TOPO-001(fence), CPP-ROUTE-001(dead 매처 — 한 줄급 수정), CPP-LIFE-003(Ready owner loss와 Missing 분리)
-   - 2차 (public 계약·상호운용): CPP-WIRE-001(키 포맷 — 마이그레이션 계획 필요), CPP-WIRE-002(RouteMesh 금지 상한 surface·wire field 제거), CPP-WIRE-003(json-v1), CPP-OWN-001(content-type 검증), CPP-COMP-001(문자열 분류 → 구조화 오류 코드)
-   - 3차 (자원·성능): CPP-COMP-004(고아 엔트리 누수), CPP-TIMER-003(fdpair), CPP-EXEC-001/CPP-OWN-002~004(복사·락 절감), CPP-DISP-005(100 ms wake)
-   - 4차 (구조·명명): 나머지 PARTIAL
+   - 1차 (거짓 성공 차단) 완료: InstanceSpot 미구현 scenario fallback을 차단하고 feature map을 만든 뒤 IS-E2E-05를 두 owner process로 구현했다. 나머지는 `blocked`로 유지한다.
+   - 2차 (session conformance) 진행: CPP-SESS-001/004의 command 36/38·51, callback·non-blocking close 구현과 SM-D6를 확인했다. 전체 lifecycle matrix와 ST-F3A의 C++ 내부 route propagation 작업은 별도 gate로 진행하며, 공용 spec 결정을 기다리지 않는다.
+   - 3차 (fixture·wire) 완료 checkpoint: ST-F4/F5 old-ref request terminal, authority golden vector와 schema negative case를 C++ test에 연결했다.
+   - 4차 (남은 process gate): CPP-TOPO-001, CPP-ROUTE-001, CPP-WIRE-002/003, CPP-OWN-001, CPP-COMP-001의 설치 package와 cross-language/process E2E를 실행한다. ST-F3A는 C++ 내부 route propagation 구현과 사용자가 보류한 후속 E2E가 남아 있어 대기한다. 이는 spec blocker 대기가 아니다.
+   - 5차 (자원·성능): CPP-COMP-004(고아 엔트리 누수), CPP-TIMER-003(fdpair), CPP-EXEC-001/CPP-OWN-002~004(복사·락 절감), CPP-DISP-005(100 ms wake)
+   - 6차 (구조·명명): 나머지 PARTIAL
 3. **오류 종류 정합은 계약 테스트로 고정** — CPP-EXEC-002와 CPP-FOLLOW-001은 공개 오류 kind가 계약과 달라지는 계열이므로, 수정과 함께 source contract test와 cross-language process E2E에 오류 kind assertion을 추가한다. CPP-CONTRACT-ROLE-001은 같은 방식으로 종결했다. CPP-LIFE-001은 오류 이름 문제가 아니라 일반 message admission fence 자체의 의미 차이다.
 4. **public surface 제거에는 package 증거가 필요하다** — source header 수정만으로 끝내지 않고 install tree에서 제거된 export를 확인하고 clean consumer를 compile한다. Diagnostics observer 제거는 provider 경로와 failure-isolation E2E가 먼저 통과해야 한다.
 5. 본 리포트는 정적 코드 읽기 기반이다. §4의 항목은 판정을 유보했다. GAP 항목은 source·exact interface 차이를 확인했지만 runtime semantics를 수정할 때에는 해당 경로의 contract test와 process E2E로 재현과 종결을 각각 증명해야 한다.
 
-## 6. 이번 재검토의 검증 결과
+## 6. 이전 재검토의 검증 결과
 
 현재 source로 관련 C++ target을 다시 빌드한 뒤 다음 8개 CTest를 실행했고 모두 통과했다.
 
@@ -356,3 +512,328 @@ RouteMesh에 남은 금지 상한 surface·field, JSON 프로파일에 집중한
 - `test_cpp_framework_http_integration`
 
 이 결과는 기존 test가 현재 구현을 회귀시키지 않았다는 증거다. 이후 checkpoint의 항목별 source test 결과는 각 행에 기록했다. Package checkpoint `113e6a46b0`에서는 Core와 C++ binding 0.10.1을 사용해 Framework를 clean configure·build하고, `verify_packaged_contract.sh`와 전체 install consumer를 실행했다. Object query checkpoint `3bd461e22b` 뒤 같은 clean package를 다시 만들었으며 Framework archive SHA-256은 `7257d1f3d59a6b99e9bf8e1d0c97286d53cbb6db6f0e8f3695d576496033a61f`, 설치 header 수는 112개였다. Cross-language process E2E가 필요한 항목은 각 행에 계속 남겨 둔다.
+
+## 7. 2026-08-08 Codex Sol 최종 전 점검 기록
+
+### 7.1 검토 범위와 기준
+
+- 검토 대상: C++ Framework gap·partial·public contract 상세 61행, C++ exact interface, 정식
+  common spec/schema, production runtime, owner-layer regression, 설치 package/clean-consumer와
+  실제 process E2E 증거.
+- 모델/effort: 최종 종료 규칙에 지정된 동일 Codex Sol 모델·effort.
+- 기준 commit: `137f2858bf7fd29f58405893473be8e773725a93`.
+- 현재 후보는 commit하지 않은 `main` worktree다. 다른 작업자의 dirty 변경은 되돌리거나 stage하지 않았다.
+- 공통 spec, shared schema, generated asset은 이 점검에서 수정하지 않았다.
+
+### 7.2 이번 점검에서 확인·수정한 finding
+
+1. STREAM에서 Actor relay envelope가 upstream correlation을 재사용해 replacement retry가
+   exactly-once dedup 결과를 잘못 재사용할 수 있었다. `mesh_node_runtime.cpp`는 downstream
+   `create_envelope`가 새 correlation을 만들도록 두고 upstream correlation 대입을 제거했다.
+   `test_cpp_framework_target_contract`에 source regression gate를 추가했고 SM-D6 process에서
+   새 session push와 old session replacement callback을 확인했다.
+2. session replacement는 ACK·callback·close를 기다리지 않고 bind terminal을 반환하며, old
+   session ingress는 즉시 거부하고 callback outbound write는 허용한다. callback terminal 뒤
+   non-blocking timer로 100 ms를 보장하고, sleep·blocking wait·condition-variable wait·session
+   lane/worker 점유를 사용하지 않는 경로를 확인했다. 이 금지를 `test_cpp_framework_target_contract`
+   source gate로 고정했다. callback deadline, stale/duplicate/
+   pre-restart, 다중 Actor cleanup matrix는 아직 실행되지 않았다.
+3. ST-F5의 이전 실패는 production route가 아니라 공통 계약과 다른 A→B→A fixture였다. fixture를
+   단일 A→B relocation과 exact old-ref request `Unavailable`로 고쳤고 ST-F1~F5 combined process
+   log가 통과했다.
+4. InstanceSpot 미구현 scenario가 정상 request로 통과하던 false green을 fail-closed로 바꾸고,
+   IS-E2E-05를 두 owner process·`SIGKILL`·lease expiry·`Unavailable`·handler 미진입 증거로
+   구현했다. 나머지 33개는 폐기하지 않고 `blocked`로 표시했다. `blocked`는 절차와 visible
+   assertion을 추가해야 상태를 바꿀 수 있다는 뜻이다.
+5. authority-key C++ decoder는 schema가 정한 leading zero·비정규 escape·잘못된 UTF-8·raw byte
+   길이 1..255를 적용하고 공용 golden vector를 직접 읽도록 보강했다. focused test는 통과했지만
+   다른 언어 provider를 함께 쓰는 process gate는 남아 있다.
+6. 다른 언어 구현을 대조한 결과 직접 Actor Join의 정식 command 42/44에는 필요한 Session
+   owner generation·owner ID·lease generation·binding generation·relocation ID·high-water를
+   이미 전달하는 경로가 있다. C++는 `spot_actor_commit_route_request_t`와 target bind에서 이
+   값을 버리고 있으므로 `OPEN-CPP-SESSION-ROUTE-PROPAGATION`이라는 C++ 내부 구현 gap으로
+   재분류했다. 공용 spec/schema 변경 blocker로 보지 않으며, 추정값으로 ST-F3A를 통과시키지
+   않는다.
+7. `boundSessionReplaced(51)`의 ordinary local binding 기본값을 Node/.NET과 비교했다. 두
+   언어 모두 Session owner ID를 node RID, lease generation을 node generation으로 기본 설정하고
+   exact하게 검증한다. 따라서 C++ `app.cpp:2107-2110`의 기본값 자체는 spec blocker가 아니다.
+   Java처럼 relocation/handoff에 명시적인 authority owner token이 있는 경우에는 그 값을
+   보존해야 하므로, 이 요구를 `OPEN-CPP-SESSION-ROUTE-PROPAGATION`의 내부 conformance 범위로
+   합쳤다. golden vector의 서로 다른 값은 codec 분리 검증으로 해석한다.
+8. SupportChat에서는 conversation Actor가 `OnJoinedActor` callback과 같은 이동 경계에서
+   `boundSessionBind(38)`을 받는다. `stateful_object_runtime_t::find()`가 `moving` 상태를
+   Ready가 아닌 것으로 거부하는 현재 동작은 기존 `Remote Actor session binding did not
+   complete successfully` 실패를 재현한다. moving Actor를 무조건 bind 허용하면 session
+   process가 종료되는 회귀가 발생해 해당 실험은 원복했다. 현재는 spec/schema 변경 없이
+   이동 중 bind의 owner fence·route 전환 시점을 정하는 런타임 finding으로 남겼다.
+9. 공통 E2E inventory는 현재 문서의 `SF-C5A`를 포함해 375개를 집계하지만 C++ gate는
+   374개를 기대한다. 다른 언어에는 동일한 inventory gate가 없으므로 이를
+   `OPEN-GATE-CPP-COMMON-E2E-INVENTORY`라는 C++ gate baseline drift로 재분류했다. 이는 public
+   spec/schema blocker가 아니다. 공통 문서와 gate를 임의로 맞추지 않고, 292개 feature-map/
+   source/status 조건과 함께 사용자가 보류한 후속 E2E gate로 유지한다.
+10. Actor 삭제 뒤 같은 global ID를 재생성할 때 provider가 authority key의 첫 번째 `:` 뒤 문자열을
+    ID로 잘못 사용해 committed creation reservation을 찾지 못하는 결함을 확인했다. provider는
+    이제 기존 strict authority-key decoder로 object ID를 복원한 뒤 authority 삭제와 reservation 삭제를
+    같은 conditional write에 포함한다(`provider_location_repository.hpp:281-321`).
+    `test_cpp_framework_opaque_store_providers`에 삭제→동일 ID 재예약·commit 회귀를 추가했고 단독
+    CTest가 통과했다. ToActorMessaging 전체 TA-A1~TA-B3도 최신 binary에서 통과했지만 이 결과만으로
+    `CPP-LIFE-002`의 concurrent Instance activation gate나 전체 aggregate를 종결하지 않는다.
+11. `CPP-COMP-004`의 timeout 후 늦은 completion이 holding table에 다시 삽입되어 노드 정지까지
+    남던 경로를 수정했다. `wait_for_completion`은 timeout operation을 bounded tombstone에 기록하고,
+    `dispatch_ready`는 해당 identity의 늦은 completion을 버리며 tombstone을 제거한다. Tombstone과
+    `_completed_operations` 모두 65,536개 상한을 가지며 stop 시 함께 비운다. `zlink_framework`,
+    `test_cpp_framework_operation_registry`, `test_cpp_framework_m6c_runtime`, target contract와
+    ToActor process 회귀가 통과했다. 이 변경은 correlation 선등록(CPP-COMP-003)과 table capacity
+    초과의 caller-visible terminal을 구현하지 않았으므로 `CPP-COMP-004`를 종결하지 않는다.
+12. `CPP-EXEC-004`에서 raw routed one-way send가 `bool` 하나로 backpressure와 disconnected를
+    합치던 경로를 분리했다. `raw_route_port_t::send_result`가 native `submit_error_t::result()`와
+    non-blocking false를 각각 보존하고, raw mesh Actor/Spot result API와 public host가 이를 그대로
+    반환한다. Local Actor dispatch는 application message budget 초과를 `backpressured`로 거부한다.
+    따라서 기존 `async_submit_runtime`의 send-timeout 재시도와 deadline 변환이 실제 backpressure
+    결과를 받을 수 있다. `test_cpp_framework_messaging`, `execution`, `m6b`, `m6c`, target contract,
+    ToActorMessaging 전체와 ChannelEgressRouting CH-E2E-05가 통과했다. 같은 런타임 포화 뒤
+    `DeadlineExceeded`를 caller가 관찰하는 독립 process assertion과 모든 one-way surface matrix가
+    남아 있으므로 `CPP-EXEC-004`는 PARTIAL로 유지한다.
+13. `CPP-EXEC-004`의 남은 직접 결과 손실 지점을 추가로 정리했다. `spot_context_t`의 mesh
+    send와 `spot_node_runtime_t::send_spot_mesh_parts`가 `submit_result_t`를
+    `internal_failure`로 바꾸지 않고 `capacity_exceeded`·`unavailable`·`shutting_down` 등
+    기존 Framework error kind로 전달한다. `spot_context_t::publish_erased`와
+    `spot_handle_t::publish`도 native publish 및 peer 전송 결과를 보존하고 local application
+    budget을 먼저 검사한다. 전체 build, raw-route/operation/execution/messaging/M6C/target
+    contract CTest, ToActorMessaging 전체, ChannelEgressRouting CH-E2E-05, packaged clean
+    consumer가 통과했다. 동일한 런타임 포화 뒤 `DeadlineExceeded`를 관찰하는 독립 process
+    assertion과 모든 one-way surface matrix가 아직 없어 이 변경으로 항목을 종결하지 않는다.
+14. `CPP-EXEC-003`의 coroutine self-wait와 cross-Spot actor-create gate 우회를 보강했다.
+    Ambient continuation snapshot이 Actor execution context를 함께 전달하므로 `co_await` 뒤에도
+    동일 Actor request가 `InvalidOperation`으로 거부된다. Actor create callback은 source와 target
+    Spot이 같은 serial turn을 공유할 때만 inline 실행하고, 서로 다른 Spot이면 target lane을
+    예약한다. `test_cpp_framework_m6b_runtime`의 coroutine 회귀를 포함한 build·CTest가 통과했다.
+    설치 package와 process-level 오류 kind 증거가 남아 있어 `CPP-EXEC-003`은 PARTIAL로 유지한다.
+15. `CPP-OWN-003`의 claim 단계에서 이미 ingress 검증을 통과한 frozen summary를 pending delivery가
+    보관하도록 바꿨다. `try_claim()`은 canonical queue bytes를 다시 `decode_frozen_record()`하지
+    않고 summary의 application payload를 이동해 delivery를 만든다. Queue가 relocation을 위해
+    보관하는 canonical bytes와 claim delivery의 decoded payload를 별도로 소유하는 기존 경계는
+    유지하되, claim마다 발생하던 canonical decode와 그 summary allocation은 제거했다. M6B·M6C·
+    messaging와 target contract가 통과했다. Ingress canonical encode 자체와 transport/process
+    copy 계측은 남아 있어 `CPP-OWN-002/003`을 종결하지 않는다.
+16. `CPP-OWN-002`의 codec 내부에서도 typed application record를 만들자마자 다시
+    `decode_frozen_record()`하던 왕복을 제거했다. `encode_frozen_application_record()`가 typed
+    fields에서 summary를 직접 만들고 canonical bytes만 relocation queue에 넘긴다
+    (`cpp/framework/src/runtime/protocol/service_wire_codec.cpp:3221-3323`). 기존 decoder와
+    summary가 달라지지 않는 service-wire fixture, M6B/M6C와 target contract가 통과했다.
+    이어서 `raw_stateful_dispatch_t::ingest`가 typed record와 summary를 각각 queue와 pending
+    delivery에 이동하고, `maintenance_runtime`만 relocation snapshot/replay 시 canonical bytes를
+    만들도록 바꿨다(`raw_stateful_dispatch.cpp:425-456`, `maintenance_runtime.cpp:659-669,1818-1828`).
+    따라서 정상 ingress의 canonical encode allocation은 제거됐다. 설치 package와 실제 process
+    allocation/copy 계측이 남아 있어 `CPP-OWN-002`는 PARTIAL·검증 중으로 재분류한다.
+17. `CPP-OWN-007`의 포화 경로에서 canonical envelope를 만들기 전에 application mailbox
+    capacity를 advisory preflight하도록 추가했다. `stateful_object_runtime_t::application_admission()`은
+    동일한 message·byte·relocation hold 한도를 확인하고, 실제 `enqueue()`가 mutex 안에서 다시
+    최종 검사한다(`stateful_object_runtime.hpp:270-277`, `stateful_object_runtime.cpp:731-778`,
+    `raw_stateful_dispatch.cpp:426-449`). 따라서 이미 포화된 owner는 canonical encode 전에
+    거부되고, 경합으로 상태가 바뀌면 기존 enqueue 결과가 우선한다. M6B/M6C, messaging와
+    target contract가 통과했다. Header/authority decode와 typed frozen construction은 아직
+    preflight 전에 수행되므로 `CPP-OWN-007`은 PARTIAL·중으로 유지한다.
+18. SubmitAdmission의 `receiver_gate.py`가 HTTP health 이후에도 target mesh listener가 아직
+    bind되지 않은 순간의 backend `ECONNREFUSED`를 즉시 client disconnect로 바꾸던 process-fixture
+    race를 확인했다. bounded 5초 reconnect를 추가하고 Python syntax gate를 통과시켰지만,
+    `SA-E2E-08` 재실행에서도 실제 remote direct submit이 `RouteNotConnected`로 끝났다.
+    따라서 fixture race만으로 production route 실패를 덮지 않고, process evidence는 열린 상태로
+    유지한다. 변경은 C++ E2E support와 plan 문서에만 적용했으며 공통 spec/schema는 수정하지 않았다.
+19. 2026-08-08 다른 언어 구현을 기준으로 위 세 blocker 판정을 재검토했다. Node와 .NET의
+    ordinary local binding은 Session owner ID를 node RID, lease generation을 node generation으로
+    기본 설정하고, Java의 relocation/handoff는 명시적인 authority owner token을 기존 command
+    42/44/51에 보존한다. 이 비교로 `BLOCKER-CPP-SESSION-OWNER-LEASE-SOURCE`는 spec blocker가
+    아닌 기본값·explicit token 보존 conformance로, `BLOCKER-CPP-SESSION-ROUTE-ID`는 공용 wire가
+    이미 표현하는 값을 C++ 내부 DTO가 누락하는 implementation gap으로 재분류했다. 375 대 374
+    inventory 불일치도 C++ gate baseline drift로 재분류했다. 세 항목 모두 common spec/schema/
+    generated asset 변경은 필요하지 않으며, ST-F3A·session lifecycle·inventory는 구현 또는
+    후속 E2E gate가 남아 열린 상태다. 기준 commit은 §7.1의 `137f2858bf7fd29f58405893473be8e773725a93`이며,
+    이번 재검토는 report 문구만 수정하고 source·spec·E2E process는 추가 변경·실행하지 않았다.
+20. 2026-08-08 `CPP-OWN-002` hot path를 다시 확인했다. 정상 application ingress는
+    `frozen_application_record_t`를 queue에 보관하고 summary만 pending delivery에 이동하며,
+    canonical bytes는 `maintenance_runtime`의 relocation snapshot/replay 직렬화에서만 만든다.
+    `test_cpp_framework_service_wire_codec`, `test_cpp_framework_m6b_runtime`,
+    `test_cpp_framework_m6c_runtime`, `test_cpp_framework_target_contract`를 현재 main worktree
+    후보에서 다시 실행해 4/4 통과했다. Unit regression은 delivery의 `turn.payload`가 비어 있고
+    typed record와 summary가 유지되는지 확인한다. 사용자가 보류한 설치 package·process E2E와
+    allocation 계측은 실행하지 않았으므로 이 항목은 PARTIAL·검증 중이다. 이번 후보는 commit하지
+    않은 dirty main이며 다른 작업자의 변경은 stage·원복하지 않았다.
+21. 2026-08-08 `CPP-EXEC-001`의 현재 lock 경로를 다시 대조했다. 제거된
+    `actor_mailboxes`를 근거로 삼지 않고, Actor queue admission·SpotWide shared gate·callback
+    sealing이 각각 별도 mutex를 사용하는 현재 source를 기준으로 판정을 갱신했다. queue completion
+    뒤 인접한 두 queue lock은 하나로 합쳤고 `test_cpp_framework_execution`,
+    `test_cpp_framework_m6b_runtime`, `test_cpp_framework_target_contract`가 통과했다. 그러나
+    SpotWide admission의 중첩 lock과 무경합 atomic gate 부재는 남아 있으므로 source GAP을 유지한다.
+    성능 계측과 process E2E는 사용자가 보류한 범위라 실행하지 않았다.
+22. 2026-08-08 `CPP-OWN-007`의 admission 순서를 다시 대조했다. encoded application
+    envelope에서 HWM charge를 allocation 없이 계산하는 overload를 추가하고, stateful ingress가
+    route validation 뒤 mailbox admission을 먼저 수행하도록 바꿨다. 따라서 full queue에서는
+    application payload vector·typed frozen body·canonical relocation bytes를 만들지 않는다.
+    `test_cpp_framework_service_wire_codec`, `test_cpp_framework_m6b_runtime`,
+    `test_cpp_framework_m6c_runtime`, `test_cpp_framework_target_contract`가 4/4 통과했다.
+    `verify_packaged_contract.sh`도 설치 header 112개와 clean consumer 실행 `OK`로 통과했다.
+    Header·route authority 조회와 process allocation 계측은 남아 있어 이 항목을 PARTIAL·검증
+    중으로 유지한다.
+23. 2026-08-08 `CPP-COMP-003`의 correlation 생성 순서를 다시 대조했다. public host가
+    `call_id_t`를 completion table에 먼저 예약한 뒤 그 low half를 raw Mesh node/channel/Spot/Actor
+    request의 correlation 입력으로 넘기도록 연결했다. raw transport는 입력 correlation을
+    operation registry에 등록한 뒤 submit한다. `test_cpp_framework_m6b_runtime`,
+    `test_cpp_framework_m6c_runtime`, `test_cpp_framework_target_contract`가 3/3 통과했고,
+    설치 package는 clean consumer까지 통과했다. Host holding table 조회와 infrastructure
+    request 전체 전환은 남아 있으므로 CPP-COMP-003은 PARTIAL·중으로 유지한다.
+24. 2026-08-08 `CPP-COMP-004`의 holding table 초과 경로를 다시 대조했다. completion
+    table의 `complete()`가 capacity 때문에 실패하면 해당 operation을 별도 bounded overflow
+    set에 보관하고, `wait_for_completion()`이 이를 `CapacityExceeded`로 반환하도록 수정했다.
+    timeout tombstone과 overflow set은 stop 시 함께 정리한다. M6B/M6C와 target contract가
+    3/3 통과했지만 65,536개 saturation을 직접 채우는 스트레스 gate는 실행하지 않았으므로
+    CPP-COMP-004는 PARTIAL·검증 중으로 유지한다.
+25. 2026-08-08 이번 작업 종료 전 source 변경 후 gate를 다시 실행했다. `test_cpp_framework_service_wire_codec`,
+    `test_cpp_framework_m6b_runtime`, `test_cpp_framework_m6c_runtime`,
+    `test_cpp_framework_target_contract`가 4/4 통과했고, 설치 package 112개 header와 clean
+    consumer를 확인하는 `verify_packaged_contract.sh`도 `PASS`했다. 사용자가 보류한 추가
+    process E2E와 65,536개 completion saturation 스트레스는 실행하지 않았으며, 이 결과만으로
+    관련 PARTIAL을 CLOSED로 올리지 않는다.
+26. 2026-08-08 `CPP-EXEC-001`의 Actor queue lookup을 다시 대조했다. 기존 Actor packet마다
+    node mutex로 queue map을 찾던 경로를 lifecycle 시점에 publish하는 copy-on-write snapshot과
+    atomic load로 바꾸고, queue 생성·삭제 경계에서만 node mutex를 사용한다. `test_cpp_framework_execution`,
+    `test_cpp_framework_m6b_runtime`, `test_cpp_framework_target_contract`가 3/3 통과했다.
+    SpotWide admission의 `callback_mutex`와 queue lock, 무경합 close gate 부재는 남아 있으므로
+    CPP-EXEC-001은 GAP으로 유지한다.
+27. 2026-08-08 `CPP-LAYER-003`의 Actor dispatch 이름 경로를 다시 대조했다. actor queue
+    admission에서 진단 문자열을 다시 연결하지 않고 기존 work name을 이동해 전달하도록 수정했다.
+    `test_cpp_framework_execution`, `test_cpp_framework_m6b_runtime`,
+    `test_cpp_framework_target_contract`가 3/3 통과했으며, per-turn `shared_ptr`와 중첩
+    `std::function` 캡처는 남아 PARTIAL·중으로 유지한다.
+28. 2026-08-08 Actor queue snapshot과 work-name 경로를 반영한 최신 build에서
+    `test_cpp_framework_service_wire_codec`, `test_cpp_framework_m6b_runtime`,
+    `test_cpp_framework_m6c_runtime`, `test_cpp_framework_target_contract`가 4/4 통과했다.
+    이어서
+    `verify_packaged_contract.sh framework/languages/cpp/build`를 실행해 설치 header 112개와
+    clean consumer 실행 `OK`, `verify_packaged_contract: PASS`를 확인했다. 이 package gate는
+    process E2E나 allocation 계측을 대체하지 않으므로 관련 PARTIAL 상태는 유지한다.
+29. 2026-08-08 `CPP-COMP-002`를 common spec의 terminal-once·operation identity 요구와
+    실제 owner 경계에 대조했다. transport deadline, replay dedup, public task continuation,
+    caller submit/cancellation은 서로 다른 결과와 수명을 소유하므로 내부 completion primitive를
+    하나로 합칠 근거가 없었다. `test_cpp_framework_operation_registry`가 통과했고 M6B/M6C와
+    target contract도 terminal 결과를 중복 확정하지 않는 경로를 통과하므로 이 항목을 CLOSED로
+    재분류했다. 이 판정은 public contract나 공용 schema를 변경하지 않는다.
+
+### 7.3 실행한 gate와 결과
+
+통과한 주요 gate는 다음과 같다.
+
+- C++ build: `cmake --build framework/languages/cpp/build --target zlink_framework ... -j2`
+- focused CTest는 service-wire codec, authority-key codec, operation registry, raw-route contract,
+  execution, M6B, M6C, messaging와 target contract를 포함해 최신 8/8 통과.
+- `framework/languages/cpp/e2e/SpotService/run_e2e.sh SM-D6` — 통과. 증거:
+  `framework/languages/cpp/e2e/SpotService/logs/20260808-172604-3982434/`.
+- InstanceSpot IS-E2E-05 — 통과. 증거:
+  `framework/languages/cpp/e2e/InstanceSpot/logs/20260808-172816-4022130/`.
+- SpotActorTransfer ST-F1~F5 combined — 통과. 증거:
+  `framework/languages/cpp/e2e/SpotActorTransfer/logs/20260808-172739-4014158/`.
+- `framework/languages/cpp/scripts/verify_packaged_contract.sh framework/languages/cpp/build` —
+  통과. clean consumer 실행 결과 `OK`, `verify_packaged_contract: PASS`, 설치 header 112개.
+- 최신 isolated package/process 재실행에서 `SubmitAdmission CPP-DISP-001`과
+  `CPP-DISP-002`가 각각 `PASS`했다. 두 runner는 공식 Core runtime SHA-256
+  `29a14581e19579fa6f2126ce1f9a797a08fe38d5788d52abb7e87689203f877b`와 C++ binding
+  candidate의 native SHA-256이 같음을 확인했다. 증거는 각각
+  `framework/languages/cpp/e2e/SubmitAdmission/logs/20260808-200412-303446/`와
+  `framework/languages/cpp/e2e/SubmitAdmission/logs/20260808-200753-450383/`이다.
+- `test_cpp_framework_layout_contract` — `RuntimeMonitoring/run_e2e.sh`가 build directory를
+  허용된 `ZLINK_CPP_BUILD_DIR`로만 선택하고 skip-build 환경변수를 읽지 않도록 고친 뒤 통과.
+- 최종 재실행에서 service-wire codec, authority-key codec, operation registry, M6B, M6C,
+  raw-route contract, target contract, execution, messaging을 포함한 focused CTest 8개가
+  8/8 통과했고, `test_cpp_framework_layout_contract`도 1/1 통과했다. `verify_packaged_contract.sh`도
+  설치 header 112개, clean consumer 실행 `OK`와 함께 다시 `PASS`했다. 결과 파일은
+  `/tmp/cpp_focused_ctest_20260808_final2.out`과 `/tmp/cpp_packaged_contract_20260808_final2.out`에
+  남겼다.
+- provider authority 삭제·재생성 회귀를 포함한 `test_cpp_framework_opaque_store_providers`가
+  1/1 통과했다. ToActorMessaging 전체 시나리오(`--scenario=all`)도 통과했으며 process 증거는
+  `framework/languages/cpp/e2e/ToActorMessaging/logs/20260808-193704-3806278/`에 남겼다.
+- `test_cpp_framework_operation_registry`, `test_cpp_framework_m6c_runtime`,
+  `test_cpp_framework_target_contract`, `test_cpp_framework_execution`,
+  `test_cpp_framework_messaging`, `test_cpp_framework_raw_route_port_contract`가 raw send 결과
+  보존과 timeout tombstone 변경 뒤 통과했다.
+  ToActorMessaging 전체 최신 실행은
+  `framework/languages/cpp/e2e/ToActorMessaging/logs/20260808-202358-874375/`에,
+  ChannelEgressRouting CH-E2E-05 최신 실행은
+  `framework/languages/cpp/e2e/ChannelEgressRouting/logs/20260808-202415-887676/`에 남겼다.
+  그 뒤 `verify_packaged_contract.sh framework/languages/cpp/build`를 다시 실행해 설치 header
+  112개와 clean consumer `OK`를 확인했다. focused 7개 CTest는 첫 aggregate 실행에서
+  `test_cpp_framework_m6b_runtime`의 기존 deadline timing assertion이 1회 실패했지만,
+  동일 binary 단독 재실행은 통과했다. 이 일회성 실패는 별도 안정성 finding으로 남기며
+  변경된 one-way 결과 매핑의 회귀로 판정하지 않는다.
+- frozen application summary와 mailbox admission preflight를 추가한 뒤 service-wire codec,
+  M6B, M6C, messaging와 target contract CTest를 다시 실행해 4/4 통과했다. 설치 package
+  `verify_packaged_contract.sh framework/languages/cpp/build`도 설치 header 112개와 clean
+  consumer `OK`로 통과했고, ToActorMessaging 전체는
+  `framework/languages/cpp/e2e/ToActorMessaging/logs/20260808-205310-1560402/`,
+  ChannelEgressRouting CH-E2E-05는
+  `framework/languages/cpp/e2e/ChannelEgressRouting/logs/20260808-205727-1713266/`,
+  SpotService SM-D6는
+  `framework/languages/cpp/e2e/SpotService/logs/20260808-205741-1713653/`에 증거를 남겼다.
+- session owner fence finding과 독립적인 topology·location regression 3개
+  (`test_cpp_framework_m6a_runtime`, `zlink_cpp_framework_mesh_node_vertical_test`,
+  `test_cpp_framework_store_location_resolvers`)를 2026-08-08 최신 binary로 다시 실행해
+  3/3 통과했다. 이 결과는 아직 남은 C++ route propagation conformance나 공통 E2E inventory
+  baseline drift를 종결하는 증거로 사용하지 않는다.
+- SubmitAdmission의 기존 process selector `SA-E2E-08`, `SA-E2E-09`, `SA-E2E-14`, `SA-E2E-20`을
+  최신 isolated package로 재실행했지만 첫 remote Node direct 호출이 `Submitted` 대신
+  `RouteNotConnected` terminal을 받아 runner가 중단됐다. Candidate Core SHA-256은
+  `29a14581e19579fa6f2126ce1f9a797a08fe38d5788d52abb7e87689203f877b`이고, 증거는
+  `framework/languages/cpp/e2e/SubmitAdmission/logs/20260808-210522-1901318/`이다.
+  이 실행은 SA-E2E-08/09/14/20의 완료 증거가 아니며, C++ process route readiness와 실제
+  submit 사이의 연결 단절 원인을 별도 finding으로 남긴다.
+- 같은 runner에서 Mesh peer가 필요하지 않은 `SA-E2E-14`를 단독 실행해
+  `SA-E2E-14 PASS`와 `shared_version_reference_unchanged=0.10.1`을 확인했다. 증거는
+  `framework/languages/cpp/e2e/SubmitAdmission/logs/20260808-210850-1921854/`이다.
+  이 결과는 publisher one-way admission의 해당 process 경로만 증명하며, 실패한
+  SA-E2E-08/09/20 또는 Config 13 전체 완료로 승격하지 않는다.
+
+최신 source로 sample을 제외한 Framework unit/contract/perf 46개를
+`ctest --test-dir framework/languages/cpp/build --output-on-failure -L framework -E '^sample_' -j1`
+로 serial 실행했으며 45개가 통과하고 1개가 실패했다. 최신 결과는
+`/tmp/cpp_common_inventory_20260808_final4.out`에 남겼다. `test_cpp_framework_layout_contract`는
+`RuntimeMonitoring/run_e2e.sh`의 build 환경변수 사용을 제거한 뒤 재실행해 통과했다. 현재
+남은 non-sample 실패는 다음 하나다.
+
+| 테스트 | 관찰된 실패 |
+|---|---|
+| `test_cpp_framework_common_e2e_inventory` | 최신 serial 재실행에서도 공통 문서 375개와 C++ gate 기대값 374개가 불일치하고, Config 02/03/05/06/08/10/11/13/14의 feature-map/source ID와 292개 조건이 누락됐다. 이는 `OPEN-GATE-CPP-COMMON-E2E-INVENTORY` baseline drift와 후속 E2E 미완료 증거다. `blocked` 항목을 임의로 complete로 바꾸지 않고 사용자가 보류한 gate로 유지한다. 실행 결과는 `/tmp/cpp_common_inventory_20260808_final4.out`에 남겼다. |
+
+sample을 포함한 52개 전체 aggregate는 다른 작업이 이미 실행 중인 C++/Node sample process와
+port를 공유한 상태에서 `DeliveryDispatch` 이후 중단되어 완료 증거로 사용하지 않았다. 독립
+재실행한 sample 중 `SpotService SM-D6`, `InstanceSpot IS-E2E-05`, `SpotActorTransfer ST-F1~F5`는
+각각 위 log로 통과했다. `SupportChat`은 최신 binary에서도 conversation Actor 이동 중 bind가
+`Remote Actor session binding did not complete successfully`로 실패했으며, 이 finding은 §7.2에
+기록했다. 따라서 sample 전체 aggregate와 cross-language process gate는 여전히 미실행 또는
+실패 상태다.
+
+SupportChat은 다른 sample과 분리한 `ctest -R '^sample_smoke_sample_cpp_framework_SupportChat$'`로
+2026-08-08 18:26에 다시 실행해도 같은 결과였다. `JoinConversationReq`가 실패했고 client는
+`Remote Actor session binding did not complete successfully`를 기록했다. Support process에는
+두 Actor의 `actor_joined_begin`·`actor_joined_complete`가 남았지만 session flow에는 해당 request의
+dispatch error가 남았다. 이 결과는 port 충돌이 아니라 moving Actor initial bind lifecycle finding의
+독립 재현이다. 실행 당시 CTest temporary process log는 자동 삭제되었고, persistent flow 증거는
+`framework/languages/cpp/samples/SupportChat/logs/flow-{api,session,support}.log`에 남아 있다.
+
+이 결과는 현재 session replacement focused pass를 무효화하지 않지만, Framework 전체의 필수
+gate가 열려 있으므로 완료 조건을 충족하지 않는다. 다른 작업자의 실행 process와 port 충돌로
+중단된 aggregate는 C++ pass로 승격하지 않았다.
+
+### 7.4 잔여 판정과 다음 순서
+
+현재 판정은 `NOT CLEAN / E2E-DEFERRED`다. 현재 공용 spec·schema 변경 blocker는 없다. CPP-LAYER-003/004,
+CPP-EXEC-001/004, CPP-COMP-003, CPP-FOLLOW-002, CPP-ROUTE-001, CPP-LIFE-003,
+CPP-TIMER-003 등 Medium 이상 finding이 남아 있고, CPP-COMP-004·CPP-OWN-007은 source 수정 뒤
+검증 gate가 남아 있다. CPP-OWN-002는
+source hot-path 수정 뒤 설치 package·process allocation gate가 남아 있으며, 위 aggregate
+실패와 cross-language/package process gate가 미실행 또는 실패 상태다. 따라서 POSDDD 리뷰는 시작하지
+않았다. 먼저 contract/runtime finding과 필수 gate를 닫고, 그 뒤 production runtime → unit test
+순서로 POSDDD 리뷰를 수행하며 owner-layer regression과 aggregate gate를 반복한다. Medium 이상 0개,
+미실행 필수 gate 0개, 최종 Codex Sol 결과 `CLEAN`일 때만 완료로 판정한다.
+
+사용자 지시에 따라 SubmitAdmission·InstanceSpot 등 추가 process E2E 실행은 후속 작업으로
+보류한다. 현재 확보된 process 증거와 실패 로그는 열린 gate로 유지하며, 보류를 완료로 간주하지
+않는다. E2E를 제외한 runtime·unit·package 검토와 남은 C++ 구현 finding 정리는 계속 진행한다.

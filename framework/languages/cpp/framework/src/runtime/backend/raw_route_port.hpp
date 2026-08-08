@@ -11,6 +11,7 @@
 
 #include <zlink/Contracts/Eventing/poller.hpp>
 #include <zlink/Contracts/Messaging/received.hpp>
+#include <zlink/Contracts/Sockets/results.hpp>
 
 #include "runtime/eventing/runtime_wake_timer.hpp"
 
@@ -57,6 +58,9 @@ class raw_route_port_t
       zlink::poller_t *shared_poller = nullptr,
       std::uintptr_t poller_slot = 1);
 
+    zlink::submit_result_t send_result (
+      const raw_bytes_t &target_routing_id,
+      const raw_message_t &parts);
     bool send (const raw_bytes_t &target_routing_id, const raw_message_t &parts);
     bool send_completion_control (
       const raw_bytes_t &target_routing_id,

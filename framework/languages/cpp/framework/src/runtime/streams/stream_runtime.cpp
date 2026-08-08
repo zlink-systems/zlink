@@ -1578,6 +1578,23 @@ result_t<void> stream_runtime_t::dispatch_disconnected_async (
       std::move (completion));
 }
 
+result_t<void> stream_runtime_t::dispatch_actor_binding_replaced_async (
+  packet_stream_session_t &session,
+  stream_t &stream,
+  std::string actor_id,
+  async_dispatch_completion_t completion) const
+{
+    auto dispatch_stream = stream;
+    return dispatch_serial_async (
+      stream, "actor-binding-replaced:" + actor_id,
+      [session = &session, dispatch_stream = std::move (dispatch_stream),
+       actor_id = std::move (actor_id)] () mutable {
+          return session->on_actor_binding_replaced (
+            dispatch_stream, std::move (actor_id));
+      },
+      std::move (completion));
+}
+
 void stream_runtime_t::drain_async_dispatch (stream_t &stream) const
 {
     stream_session_dispatcher_t (*stream._state).drain_async ();

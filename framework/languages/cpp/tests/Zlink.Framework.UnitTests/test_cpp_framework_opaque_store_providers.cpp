@@ -349,14 +349,16 @@ TEST (CppFrameworkOpaqueLocationStore, PrivateRepositoryPersistsAuthorityLifecyc
     EXPECT_EQ (nodes.items.front ().capacity.actors.active, 1u);
 
     provider_location_repository_t reopened (provider);
-    const auto found = reopened.read_authority ({"1:actor-1"}).result ().value ();
+    const auto actor_key = actor_authority_key ("actor-1");
+    const auto spot_key = spot_authority_key ("spot-1");
+    const auto found = reopened.read_authority (actor_key).result ().value ();
     const auto *snapshot = std::get_if<authority_snapshot_t> (&found);
     ASSERT_NE (snapshot, nullptr);
     EXPECT_EQ (snapshot->payload, bytes ("ready"));
 
     const auto restored =
       reopened
-        .compare_exchange_authority ({"1:actor-1"}, snapshot->store_version,
+        .compare_exchange_authority (actor_key, snapshot->store_version,
                                      authority_restore_t{bytes ("restored"), claimed->token})
         .result ()
         .value ();
@@ -366,7 +368,7 @@ TEST (CppFrameworkOpaqueLocationStore, PrivateRepositoryPersistsAuthorityLifecyc
 
     relocation_capacity_reserve_request_t relocation;
     relocation.reservation_id[15] = std::byte{1};
-    relocation.key = {"1:actor-1"};
+    relocation.key = actor_key;
     relocation.expected_store_version = stored->snapshot.store_version;
     relocation.object_kind = placement_object_kind_t::actor;
     relocation.stable_type = "player";
@@ -393,7 +395,7 @@ TEST (CppFrameworkOpaqueLocationStore, PrivateRepositoryPersistsAuthorityLifecyc
     ASSERT_NE (commit_fence, nullptr);
     const auto moved =
       reopened
-        .compare_exchange_authority ({"1:actor-1"}, stored->snapshot.store_version,
+        .compare_exchange_authority (actor_key, stored->snapshot.store_version,
                                      authority_put_t{bytes ("moved"),
                                                      authority_generation_transition_t::new_owner,
                                                      claimed->token, commit_fence->fence})
@@ -426,12 +428,12 @@ TEST (CppFrameworkOpaqueLocationStore, PrivateRepositoryPersistsAuthorityLifecyc
     aggregate_prepare_request_t aggregate;
     aggregate.aggregate_id.value[15] = std::byte{1};
     aggregate.aggregate_generation = 1;
-    aggregate.participants = {{{"1:actor-1"},
+    aggregate.participants = {{actor_key,
                                moved_authority->snapshot.store_version,
                                authority_generation_transition_t::new_owner,
                                bytes ("actor-aggregate"),
                                {}},
-                              {{"2:spot-1"},
+                              {spot_key,
                                spot_ready->ready.store_version,
                                authority_generation_transition_t::new_owner,
                                bytes ("spot-aggregate"),
@@ -448,21 +450,21 @@ TEST (CppFrameworkOpaqueLocationStore, PrivateRepositoryPersistsAuthorityLifecyc
     ASSERT_NE (aggregate_fence, nullptr);
     EXPECT_EQ (reopened.commit_aggregate (aggregate_fence->fence).result ().value (),
                aggregate_commit_result_t::committed);
-    const auto aggregated_actor = reopened.read_authority ({"1:actor-1"}).result ().value ();
+    const auto aggregated_actor = reopened.read_authority (actor_key).result ().value ();
     ASSERT_TRUE (std::holds_alternative<authority_snapshot_t> (aggregated_actor));
     EXPECT_EQ (std::get<authority_snapshot_t> (aggregated_actor).payload,
                bytes ("actor-aggregate"));
 
-    const auto page = reopened.list_authorities ("1:", std::nullopt, 10).result ().value ();
+    const auto page = reopened.list_authorities ("zla1:a:", std::nullopt, 10).result ().value ();
     const auto *items = std::get_if<authority_page_t> (&page);
     ASSERT_NE (items, nullptr);
     ASSERT_EQ (items->items.size (), 1u);
-    EXPECT_EQ (items->items.front ().key.value, "1:actor-1");
+    EXPECT_EQ (items->items.front ().key.value, actor_key.value);
 
     const auto current_actor =
-      std::get<authority_snapshot_t> (reopened.read_authority ({"1:actor-1"}).result ().value ());
+      std::get<authority_snapshot_t> (reopened.read_authority (actor_key).result ().value ());
     const auto current_spot =
-      std::get<authority_snapshot_t> (reopened.read_authority ({"2:spot-1"}).result ().value ());
+      std::get<authority_snapshot_t> (reopened.read_authority (spot_key).result ().value ());
     const auto reserve_move = [&] (std::byte id,
                                    std::string key,
                                    placement_object_kind_t kind,
@@ -485,14 +487,14 @@ TEST (CppFrameworkOpaqueLocationStore, PrivateRepositoryPersistsAuthorityLifecyc
     };
     placement_capacity_bundle_t actor_capacity;
     actor_capacity.actor_slots = 1;
-    const auto actor_fence = reserve_move (std::byte{3}, "1:actor-1",
+    const auto actor_fence = reserve_move (std::byte{3}, actor_key.value,
                                            placement_object_kind_t::actor, "player",
                                            actor_capacity, current_actor.store_version);
     placement_capacity_bundle_t spot_capacity;
     spot_capacity.spot_slots = 1;
     spot_capacity.spot_type =
       spot_type_capacity_delta_t{placement_object_kind_t::user_spot, "room", 1};
-    const auto spot_fence = reserve_move (std::byte{4}, "2:spot-1",
+    const auto spot_fence = reserve_move (std::byte{4}, spot_key.value,
                                           placement_object_kind_t::user_spot, "room",
                                           spot_capacity, current_spot.store_version);
 
@@ -500,10 +502,10 @@ TEST (CppFrameworkOpaqueLocationStore, PrivateRepositoryPersistsAuthorityLifecyc
     fenced_aggregate.aggregate_id.value[15] = std::byte{3};
     fenced_aggregate.aggregate_generation = 1;
     fenced_aggregate.participants = {
-      {{"1:actor-1"}, current_actor.store_version,
+      {actor_key, current_actor.store_version,
        authority_generation_transition_t::new_owner, bytes ("fenced-actor"),
        {}, actor_fence},
-      {{"2:spot-1"}, current_spot.store_version,
+      {spot_key, current_spot.store_version,
        authority_generation_transition_t::new_owner, bytes ("fenced-spot"),
        {}, spot_fence}};
     fenced_aggregate.inventory_digest = {};
@@ -538,13 +540,13 @@ TEST (CppFrameworkOpaqueLocationStore, PrivateRepositoryPersistsAuthorityLifecyc
     EXPECT_EQ (nodes.items.front ().capacity.spots.reserved, 0u);
 
     const auto abort_actor = std::get<authority_snapshot_t> (
-      reopened.read_authority ({"1:actor-1"}).result ().value ());
+      reopened.read_authority (actor_key).result ().value ());
     const auto abort_spot = std::get<authority_snapshot_t> (
-      reopened.read_authority ({"2:spot-1"}).result ().value ());
-    const auto abort_actor_fence = reserve_move (std::byte{5}, "1:actor-1",
+      reopened.read_authority (spot_key).result ().value ());
+    const auto abort_actor_fence = reserve_move (std::byte{5}, actor_key.value,
                                                  placement_object_kind_t::actor, "player",
                                                  actor_capacity, abort_actor.store_version);
-    const auto abort_spot_fence = reserve_move (std::byte{6}, "2:spot-1",
+    const auto abort_spot_fence = reserve_move (std::byte{6}, spot_key.value,
                                                 placement_object_kind_t::user_spot, "room",
                                                 spot_capacity, abort_spot.store_version);
     aggregate_prepare_request_t abort_aggregate = fenced_aggregate;
@@ -568,6 +570,28 @@ TEST (CppFrameworkOpaqueLocationStore, PrivateRepositoryPersistsAuthorityLifecyc
     nodes = reopened.list_mesh_nodes ("play").result ().value ();
     EXPECT_EQ (nodes.items.front ().capacity.actors.reserved, 0u);
     EXPECT_EQ (nodes.items.front ().capacity.spots.reserved, 0u);
+
+    // A committed creation keeps its reservation record until the authority
+    // is deleted. Deletion must derive that record from the encoded authority
+    // key so the same global actor ID can be created again.
+    const auto deleted_actor = reopened.read_authority (actor_key).result ().value ();
+    const auto *deleted_snapshot = std::get_if<authority_snapshot_t> (&deleted_actor);
+    ASSERT_NE (deleted_snapshot, nullptr);
+    const auto deleted = reopened
+                           .compare_exchange_authority (
+                             actor_key, deleted_snapshot->store_version, authority_delete_t{})
+                           .result ()
+                           .value ();
+    ASSERT_TRUE (std::holds_alternative<authority_deleted_t> (deleted));
+    const auto recreated = reopened.reserve (request).result ().value ();
+    const auto *recreated_reservation = std::get_if<object_reserved_t> (&recreated);
+    ASSERT_NE (recreated_reservation, nullptr);
+    const auto recreated_commit = reopened
+                                    .commit ({request.key, recreated_reservation->fence,
+                                              bytes ("recreated")})
+                                    .result ()
+                                    .value ();
+    ASSERT_TRUE (std::holds_alternative<object_committed_t> (recreated_commit));
 
 }
 
@@ -624,7 +648,7 @@ TEST (CppFrameworkOpaqueLocationStore, AggregateCommitUsesBoundedBatches)
                                   .value ();
         const auto *ready = std::get_if<object_committed_t> (&committed);
         ASSERT_NE (ready, nullptr);
-        participants.push_back ({{"1:" + global_id},
+        participants.push_back ({actor_authority_key (global_id),
                                   ready->ready.store_version,
                                   authority_generation_transition_t::new_owner,
                                   bytes ("aggregate-" + suffix),
@@ -648,7 +672,8 @@ TEST (CppFrameworkOpaqueLocationStore, AggregateCommitUsesBoundedBatches)
         .value ();
     const auto *spot_ready = std::get_if<object_committed_t> (&spot_committed);
     ASSERT_NE (spot_ready, nullptr);
-    participants.push_back ({{"2:spot-large"},
+    const auto large_spot_key = spot_authority_key ("spot-large");
+    participants.push_back ({large_spot_key,
                               spot_ready->ready.store_version,
                               authority_generation_transition_t::new_owner,
                               bytes ("aggregate-spot"),
@@ -671,8 +696,11 @@ TEST (CppFrameworkOpaqueLocationStore, AggregateCommitUsesBoundedBatches)
     EXPECT_EQ (repository.commit_aggregate (prepared_fence->fence).result ().value (),
                aggregate_commit_result_t::committed);
 
-    for (const auto &key : {std::string{"1:actor-00000"}, std::string{"1:actor-01024"},
-                            std::string{"1:actor-02048"}, std::string{"2:spot-large"}}) {
+    const auto large_actor_0 = actor_authority_key ("actor-00000").value;
+    const auto large_actor_1 = actor_authority_key ("actor-01024").value;
+    const auto large_actor_2 = actor_authority_key ("actor-02048").value;
+    for (const auto &key : {large_actor_0, large_actor_1, large_actor_2,
+                            large_spot_key.value}) {
         SCOPED_TRACE (key);
         const auto found = repository.read_authority ({key}).result ().value ();
         const auto *snapshot = std::get_if<authority_snapshot_t> (&found);

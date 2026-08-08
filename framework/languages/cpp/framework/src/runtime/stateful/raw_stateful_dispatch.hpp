@@ -54,6 +54,7 @@ struct stateful_delivery_t
 {
     object_ref_t owner;
     turn_record_t turn;
+    protocol::frozen_record_t frozen;
     protocol::application_payload_t payload;
     bool request = false;
 
@@ -106,7 +107,10 @@ class raw_stateful_dispatch_t
     struct pending_delivery_t
     {
         object_ref_t owner;
-        protocol::application_payload_t payload;
+        // The ingress path already decoded and validated this frozen record.
+        // Keep that summary until claim so delivery does not decode the
+        // canonical queue bytes a second time.
+        protocol::frozen_record_t frozen;
         mesh::service_mailbox_record_t transport;
         bool request = false;
         std::function<bool (

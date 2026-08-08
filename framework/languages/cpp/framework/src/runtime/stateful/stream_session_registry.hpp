@@ -77,6 +77,11 @@ class stream_session_registry_t
       const object_ref_t &actor,
       std::uint64_t target_node_generation = 0,
       std::uint64_t owner_lease_generation = 0);
+    std::pair<stateful_error_t, stream_binding_t> bind_remote (
+      const stream_connection_t &connection,
+      const object_ref_t &verified_actor,
+      std::uint64_t target_node_generation,
+      std::uint64_t owner_lease_generation);
     stateful_error_t unbind (const stream_binding_t &binding);
     /* Restores a binding that was displaced by a later bind operation. This
      * is an internal transaction-compensation step for a failed owner-layer
@@ -131,6 +136,11 @@ class stream_session_registry_t
 
     static bool exact_actor (const object_ref_t &left,
                              const object_ref_t &right);
+    std::pair<stateful_error_t, stream_binding_t> bind_verified (
+      const stream_connection_t &connection,
+      const object_ref_t &actor,
+      std::uint64_t target_node_generation,
+      std::uint64_t owner_lease_generation);
 
     authority_resolver_t _resolver;
     mutable std::mutex _mutex;

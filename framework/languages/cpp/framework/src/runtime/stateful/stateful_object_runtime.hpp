@@ -2,6 +2,7 @@
 #pragma once
 
 #include "runtime/dispatch/dispatch_limits.hpp"
+#include "runtime/protocol/service_wire_codec.hpp"
 
 #include <array>
 #include <condition_variable>
@@ -134,6 +135,10 @@ struct turn_record_t
     // Application HWM counts the application payload part, not the canonical
     // relocation envelope retained by this queue.
     std::optional<std::size_t> application_payload_bytes;
+    // Accepted application records retain their already validated typed input.
+    // The canonical relocation bytes are created only when a relocation
+    // snapshot is actually serialized.
+    std::optional<protocol::frozen_application_record_t> application_record;
 
     friend bool operator== (const turn_record_t &, const turn_record_t &) = default;
 };
@@ -261,6 +266,12 @@ class stateful_object_runtime_t
     stateful_error_t enqueue (const object_ref_t &owner,
                               turn_domain_t domain,
                               turn_record_t record);
+    // Check application mailbox capacity before constructing the canonical
+    // relocation envelope. The check is advisory; enqueue() repeats it while
+    // holding the queue mutex.
+    stateful_error_t application_admission (
+      const object_ref_t &owner,
+      std::size_t application_payload_bytes) const;
     std::pair<stateful_error_t, std::optional<turn_record_t>> try_claim (
       const object_ref_t &owner,
       turn_domain_t domain);

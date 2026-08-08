@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
+#include <fstream>
+#include <nlohmann/json.hpp>
 #include <string_view>
 #include <type_traits>
 #include <vector>
@@ -177,6 +179,101 @@ std::vector<std::uint8_t> make_frozen_record (
 
 int main ()
 {
+    const protocol::actor_route_fence_t bound_actor{
+      .actor_id = "actor-a",
+      .object_generation = 1,
+      .target_node_routing_id = {'a', 'c', 't', 'o', 'r', '-', 'o', 'w', 'n', 'e', 'r'},
+      .target_node_generation = 2,
+      .authority_owner_generation = 3,
+      .owner_lease_generation = 4};
+    const protocol::bound_session_send_t bound_send{
+      .actor = bound_actor, .expected_binding_generation = 7};
+    const auto encoded_bound_send =
+      protocol::encode_bound_session_send (bound_send);
+    assert (protocol::decode_bound_session_send (encoded_bound_send)
+            == bound_send);
+
+    for (const auto state : {protocol::bound_session_binding_state_t::active,
+                             protocol::bound_session_binding_state_t::tombstone}) {
+        const protocol::bound_session_bind_t bound_bind{
+          .correlation = 9,
+          .actor = bound_actor,
+          .session_routing_id = {'s', 'e', 's', 's', 'i', 'o', 'n', '-', 'a'},
+          .binding = {.state = state, .generation = 7}};
+        const auto encoded = protocol::encode_bound_session_bind (bound_bind);
+        assert (protocol::decode_bound_session_bind (encoded) == bound_bind);
+    }
+
+    std::ifstream replacement_fixture (
+      ZLINK_BOUND_SESSION_REPLACED_GOLDEN_PATH);
+    assert (replacement_fixture.good ());
+    const auto replacement_vectors =
+      nlohmann::json::parse (replacement_fixture);
+    const auto canonical_replacement =
+      replacement_vectors.at ("canonical").at ("bytes")
+        .get<std::vector<std::uint8_t>> ();
+    const protocol::bound_session_replaced_t replacement{
+      .actor_authority = bound_actor,
+      .retired_session = {
+        .session_owner_node_routing_id =
+          {'s', 'e', 's', 's', 'i', 'o', 'n', '-', 'o', 'w', 'n', 'e', 'r'},
+        .session_owner_node_generation = 5,
+        .session_owner_id = "session-runtime",
+        .session_owner_lease_generation = 6,
+        .session_routing_id =
+          {'s', 'e', 's', 's', 'i', 'o', 'n', '-', 'a'},
+        .retired_binding_generation = 7}};
+    assert (protocol::encode_bound_session_replaced (replacement)
+            == canonical_replacement);
+    assert (protocol::decode_bound_session_replaced (canonical_replacement)
+            == replacement);
+    for (const auto &malformed : replacement_vectors.at ("malformed")) {
+        bool rejected = false;
+        try {
+            static_cast<void> (protocol::decode_bound_session_replaced (
+              malformed.at ("bytes").get<std::vector<std::uint8_t>> ()));
+        }
+        catch (const protocol::service_wire_error_t &) {
+            rejected = true;
+        }
+        assert (rejected);
+    }
+
+    for (auto malformed : std::vector<std::vector<std::uint8_t>>{
+           [&] {
+               auto value = encoded_bound_send;
+               value.back () = 0;
+               return value;
+           } (),
+           [&] {
+               auto value = protocol::encode_bound_session_bind ({
+                 .correlation = 9,
+                 .actor = bound_actor,
+                 .session_routing_id = {'s'},
+                 .binding = {
+                   .state = protocol::bound_session_binding_state_t::active,
+                   .generation = 7}});
+               value[value.size () - 10] = 3;
+               return value;
+           } ()}) {
+        bool rejected = false;
+        try {
+            if (malformed[3]
+                == static_cast<std::uint8_t> (
+                  protocol::command::boundSessionSend)) {
+                static_cast<void> (
+                  protocol::decode_bound_session_send (malformed));
+            } else {
+                static_cast<void> (
+                  protocol::decode_bound_session_bind (malformed));
+            }
+        }
+        catch (const protocol::service_wire_error_t &) {
+            rejected = true;
+        }
+        assert (rejected);
+    }
+
     const auto node_send = protocol::encode_node_send_header ();
     const auto decoded_node_send = protocol::decode_header (node_send);
     assert (decoded_node_send.kind == protocol::command::nodeSend);
@@ -191,6 +288,7 @@ int main ()
     assert (protocol::decode_application_payload (application_wire)
             == application);
     assert (protocol::application_payload_hwm_bytes (application) == 3);
+    assert (protocol::application_payload_hwm_bytes (application_wire) == 3);
     const protocol::application_payload_t multipart_application{
       protocol::framework_multipart_packet_name,
       protocol::framework_multipart_content_type,
@@ -200,6 +298,9 @@ int main ()
     assert (protocol::application_payload_hwm_bytes (
               multipart_application)
             == 4);
+    const auto multipart_wire =
+      protocol::encode_application_payload (multipart_application);
+    assert (protocol::application_payload_hwm_bytes (multipart_wire) == 4);
     auto truncated_multipart = multipart_application;
     truncated_multipart.payload.pop_back ();
     bool truncated_multipart_rejected = false;
@@ -211,6 +312,17 @@ int main ()
         truncated_multipart_rejected = true;
     }
     assert (truncated_multipart_rejected);
+    auto truncated_multipart_wire = multipart_wire;
+    truncated_multipart_wire.pop_back ();
+    bool truncated_multipart_wire_rejected = false;
+    try {
+        (void) protocol::application_payload_hwm_bytes (
+          truncated_multipart_wire);
+    }
+    catch (const protocol::service_wire_error_t &) {
+        truncated_multipart_wire_rejected = true;
+    }
+    assert (truncated_multipart_wire_rejected);
     const protocol::application_payload_t traced_application{
       "Probe", "application/json", {4, 5, 6},
       "019fc5b9-9df3-786b-bb69-d55358f6d48b",
@@ -389,6 +501,42 @@ int main ()
     assert (actor_send.message_follow_hop_count == 0);
     assert (actor_send.source_actor == source_actor);
     assert (actor_send.target == actor_fence);
+    const protocol::actor_message_header_t::bound_session_source_t
+      bound_session_source{{'s', 'e', 's', 's'}, 17, 23};
+    const auto bound_actor_send = protocol::decode_actor_message_header (
+      protocol::encode_actor_message_header (
+        protocol::command::actorSend, source_actor, actor_fence,
+        {9, correlation}, std::nullopt, 0, bound_session_source),
+      protocol::command::actorSend);
+    assert (bound_actor_send.bound_session_source == bound_session_source);
+
+    auto missing_source_spot_flag = protocol::encode_actor_message_header (
+      protocol::command::actorSend, source_actor, actor_fence,
+      {9, correlation}, std::nullopt, 0, bound_session_source);
+    missing_source_spot_flag[4] =
+      static_cast<std::uint8_t> (protocol::flag::boundSession);
+    bool incomplete_bound_session_flags_rejected = false;
+    try {
+        static_cast<void> (protocol::decode_actor_message_header (
+          missing_source_spot_flag, protocol::command::actorSend));
+    }
+    catch (const protocol::service_wire_error_t &) {
+        incomplete_bound_session_flags_rejected = true;
+    }
+    assert (incomplete_bound_session_flags_rejected);
+
+    bool zero_bound_session_sequence_rejected = false;
+    try {
+        static_cast<void> (protocol::encode_actor_message_header (
+          protocol::command::actorSend, source_actor, actor_fence,
+          {9, correlation}, std::nullopt, 0,
+          protocol::actor_message_header_t::bound_session_source_t{
+            {'s', 'e', 's', 's'}, 17, 0}));
+    }
+    catch (const protocol::service_wire_error_t &) {
+        zero_bound_session_sequence_rejected = true;
+    }
+    assert (zero_bound_session_sequence_rejected);
     const protocol::actor_route_fence_t follow_target{
       "actor-1", 11, {'t', 'a', 'r', 'g', 'e', 't'}, 6, 12, 13};
     const protocol::message_follow_notice_t follow_notice{
@@ -1074,6 +1222,12 @@ int main ()
             assert (encoded.kind == kind);
             assert (encoded.canonical_bytes
                     == protocol::encode_frozen_record (encoded));
+            const auto summary =
+              protocol::summarize_frozen_application_record (typed);
+            auto expected_summary = encoded;
+            expected_summary.canonical_bytes.clear ();
+            assert (summary.canonical_bytes.empty ());
+            assert (summary == expected_summary);
         }
 
         typed.body = protocol::frozen_actor_application_body_t{
@@ -1098,6 +1252,12 @@ int main ()
             assert (encoded.kind == kind);
             assert (protocol::decode_frozen_record (encoded.canonical_bytes)
                     == encoded);
+            const auto summary =
+              protocol::summarize_frozen_application_record (typed);
+            auto expected_summary = encoded;
+            expected_summary.canonical_bytes.clear ();
+            assert (summary.canonical_bytes.empty ());
+            assert (summary == expected_summary);
         }
 
         typed.kind = protocol::frozen_record_kind_t::actor_request;

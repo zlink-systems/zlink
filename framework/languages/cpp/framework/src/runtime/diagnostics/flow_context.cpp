@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MPL-2.0 */
 
 #include "runtime/diagnostics/flow_context.hpp"
+#include "runtime/execution/actor_execution_context.hpp"
 
 #include <zlink/framework/contracts/dispatch/task.hpp>
 
@@ -25,19 +26,47 @@ std::uint64_t random_u64 ()
  * the task machinery captures the ambient flow when a continuation or
  * callback registers and re-enters it around the resume. The guard restores
  * the previous value, so the id never leaks into unrelated callbacks. */
+struct ambient_context_snapshot_t
+{
+    std::optional<flow_value_t> flow;
+    std::optional<actor_execution_context_t> actor;
+};
+
+class ambient_context_scope_t
+{
+  public:
+    explicit ambient_context_scope_t (const ambient_context_snapshot_t &snapshot)
+    {
+        if (snapshot.flow)
+            _flow.emplace (snapshot.flow);
+        if (snapshot.actor)
+            _actor.emplace (snapshot.actor->actor_key, snapshot.actor->spot_id);
+    }
+
+  private:
+    std::optional<flow_context_t::scope_t> _flow;
+    std::optional<actor_execution_scope_t> _actor;
+};
+
 std::shared_ptr<void> capture_ambient_flow ()
 {
     const auto &current = flow_context_t::current ();
-    if (!current) {
+    const auto &actor = current_actor_execution;
+    if (!current && actor.actor_key.empty () && actor.spot_id.empty ()) {
         return nullptr;
     }
-    return std::make_shared<flow_value_t> (*current);
+    auto snapshot = std::make_shared<ambient_context_snapshot_t> ();
+    if (current)
+        snapshot->flow = *current;
+    if (!actor.actor_key.empty () || !actor.spot_id.empty ())
+        snapshot->actor = actor;
+    return snapshot;
 }
 
 std::shared_ptr<void> enter_ambient_flow (const std::shared_ptr<void> &snapshot)
 {
-    auto *value = static_cast<flow_value_t *> (snapshot.get ());
-    return std::make_shared<flow_context_t::scope_t> (std::make_optional (*value));
+    auto *value = static_cast<ambient_context_snapshot_t *> (snapshot.get ());
+    return std::make_shared<ambient_context_scope_t> (*value);
 }
 
 constexpr framework::detail::ambient_context_hooks_t ambient_flow_hooks{&capture_ambient_flow,

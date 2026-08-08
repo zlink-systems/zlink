@@ -465,6 +465,25 @@ serial_execution_queue_t::reserve_barrier_next (std::string name)
       std::move (barrier));
 }
 
+result_t<std::shared_ptr<detail::deferred_barrier_t>>
+serial_execution_queue_t::reserve_handoff_barrier (std::string name)
+{
+    auto barrier = std::make_shared<serial_deferred_barrier_t> ();
+    if (!try_post_async (
+          std::move (name),
+          [barrier] (auto complete) mutable {
+              barrier->reached (std::move (complete));
+          },
+          serial_work_options_t{serial_work_lane_t::application,
+                                fixed_work_byte_cost})) {
+        return result_t<std::shared_ptr<detail::deferred_barrier_t>>::failure (
+          framework_error_kind_t::capacity_exceeded,
+          "Deferred Actor handoff barrier queue is full or closed");
+    }
+    return result_t<std::shared_ptr<detail::deferred_barrier_t>>::success (
+      std::move (barrier));
+}
+
 void serial_execution_queue_t::post (std::string name, std::function<void ()> work)
 {
     post (std::move (name), std::move (work), {});
@@ -836,10 +855,7 @@ void serial_execution_queue_t::complete_one (std::string name,
                 report_deferred_error (deferred_name, std::current_exception ());
             }
         }
-    }
 
-    {
-        std::lock_guard<std::mutex> lock (_mutex);
         _active_turns.erase (
           std::remove_if (_active_turns.begin (), _active_turns.end (),
                           [] (const auto &turn) { return !turn || turn->released (); }),

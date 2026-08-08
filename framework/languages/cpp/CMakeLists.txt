@@ -919,12 +919,31 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
     ${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/generated/cpp)
+  target_compile_definitions(test_cpp_framework_service_wire_codec PRIVATE
+    ZLINK_BOUND_SESSION_REPLACED_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/golden/bound-session-replaced-v1.json")
   target_link_libraries(test_cpp_framework_service_wire_codec PRIVATE
     zlink::cpp
     Threads::Threads)
   add_test(NAME test_cpp_framework_service_wire_codec
     COMMAND test_cpp_framework_service_wire_codec)
   set_tests_properties(test_cpp_framework_service_wire_codec PROPERTIES
+    LABELS "framework-unit;framework-foundation;protocol"
+    TIMEOUT 30)
+
+  add_executable(test_cpp_framework_authority_key_codec
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_authority_key_codec.cpp)
+  target_compile_features(test_cpp_framework_authority_key_codec PRIVATE cxx_std_20)
+  target_include_directories(test_cpp_framework_authority_key_codec PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
+  target_compile_definitions(test_cpp_framework_authority_key_codec PRIVATE
+    ZLINK_AUTHORITY_KEY_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/golden/authority-key-v1.json")
+  target_link_libraries(test_cpp_framework_authority_key_codec PRIVATE
+    zlink::cpp
+    nlohmann_json::nlohmann_json)
+  add_test(NAME test_cpp_framework_authority_key_codec
+    COMMAND test_cpp_framework_authority_key_codec)
+  set_tests_properties(test_cpp_framework_authority_key_codec PROPERTIES
     LABELS "framework-unit;framework-foundation;protocol"
     TIMEOUT 30)
 

@@ -256,6 +256,13 @@ class packet_stream_session_t
     virtual task_t<void> on_connected (stream_t &stream) = 0;
     virtual task_t<void> on_disconnected (stream_t &stream) = 0;
     virtual task_t<void> on_error (stream_t &stream, const stream_error_t &error) = 0;
+    virtual task_t<void> on_actor_binding_replaced (stream_t &stream,
+                                                     std::string actor_id)
+    {
+        (void) stream;
+        (void) actor_id;
+        return task_t<void> (result_t<void>::success ());
+    }
     virtual task_t<void> on_packet (stream_t &stream,
                                     const session_message_context_t &context,
                                     const zlink::message_t &payload)

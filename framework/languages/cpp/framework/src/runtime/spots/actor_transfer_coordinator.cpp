@@ -53,9 +53,24 @@ std::size_t handoff_packet_bytes (const handoff_packet_t &packet) noexcept
 
 } // namespace
 
+bool actor_transfer_coordinator_t::try_reserve_source (const std::string &actor_key)
+{
+    std::lock_guard lock (_mutex);
+    return _moves.emplace (
+                   actor_key,
+                   move_state_t{actor_move_phase_t::source_reserved, std::string{}})
+      .second;
+}
+
 bool actor_transfer_coordinator_t::try_begin_local (const std::string &actor_key)
 {
     std::lock_guard lock (_mutex);
+    if (auto found = _moves.find (actor_key); found != _moves.end ()) {
+        if (found->second.phase != actor_move_phase_t::source_reserved)
+            return false;
+        found->second.phase = actor_move_phase_t::local;
+        return true;
+    }
     return _moves.emplace (actor_key, move_state_t{actor_move_phase_t::local, std::string{}})
       .second;
 }
@@ -64,6 +79,14 @@ bool actor_transfer_coordinator_t::try_begin_source_remote (const std::string &a
                                                             std::string transfer_id)
 {
     std::lock_guard lock (_mutex);
+    if (auto found = _moves.find (actor_key); found != _moves.end ()) {
+        if (found->second.phase != actor_move_phase_t::source_reserved)
+            return false;
+        found->second.phase = actor_move_phase_t::source_remote;
+        found->second.transfer_id = std::move (transfer_id);
+        found->second.transfer_started_at = std::chrono::steady_clock::now ();
+        return true;
+    }
     return _moves
       .emplace (actor_key, move_state_t{actor_move_phase_t::source_remote, std::move (transfer_id),
                                         std::chrono::steady_clock::now ()})
@@ -74,6 +97,8 @@ void actor_transfer_coordinator_t::cancel_move (const std::string &actor_key)
 {
     std::lock_guard lock (_mutex);
     _moves.erase (actor_key);
+    _backlogs.erase (actor_key);
+    _backlog_bytes.erase (actor_key);
 }
 
 void actor_transfer_coordinator_t::mark_reconcile (const std::string &actor_key)
@@ -156,10 +181,14 @@ handoff_append_result_t actor_transfer_coordinator_t::try_append_backlog (
     if (moving == _moves.end ()) {
         return handoff_append_result_t::not_moving;
     }
-    // Only the source side of a move preserves packets; the target side keeps
-    // rejecting until the commit installs the actor (§3.4).
-    if (moving->second.phase != actor_move_phase_t::local
+    // The source preserves packets before authority commit. During target
+    // commit, packets admitted through the committed route are also retained
+    // until lifecycle activation and completion delivery establish the final
+    // serial order.
+    if (moving->second.phase != actor_move_phase_t::source_reserved
+        && moving->second.phase != actor_move_phase_t::local
         && moving->second.phase != actor_move_phase_t::source_remote
+        && moving->second.phase != actor_move_phase_t::target_committing
         && moving->second.phase != actor_move_phase_t::reconcile) {
         return handoff_append_result_t::not_moving;
     }
@@ -387,7 +416,9 @@ bool actor_transfer_coordinator_t::try_add_admission (std::string transfer_id,
                                                       pending_actor_admission_t admission)
 {
     std::lock_guard lock (_mutex);
-    if (_admissions.contains (transfer_id) || _moves.contains (admission.actor_key)) {
+    if (_admissions.contains (transfer_id)
+        || _completed_admissions.contains (transfer_id)
+        || _moves.contains (admission.actor_key)) {
         return false;
     }
     const auto actor_key = admission.actor_key;
@@ -463,6 +494,25 @@ actor_transfer_coordinator_t::pending_commit (const std::string &transfer_id,
     return found->second;
 }
 
+std::optional<pending_actor_admission_t>
+actor_transfer_coordinator_t::completed_commit (
+  const std::string &transfer_id,
+  const actor_ref_t &source_actor,
+  const spot_id_t &target_spot_id) const
+{
+    std::lock_guard lock (_mutex);
+    const auto found = _completed_admissions.find (transfer_id);
+    if (found == _completed_admissions.end ()
+        || found->second.deadline <= std::chrono::steady_clock::now ()
+        || !found->second.matches_prepare (
+          source_actor, found->second.source_spot_id,
+          target_spot_id,
+          found->second.completion_operation_id_high,
+          found->second.completion_operation_id_low))
+        return std::nullopt;
+    return found->second;
+}
+
 bool actor_transfer_coordinator_t::update_completion_root (
   const std::string &transfer_id,
   std::string reference,
@@ -504,6 +554,8 @@ void actor_transfer_coordinator_t::complete_commit (const std::string &transfer_
         return;
     }
     _moves.erase (found->second.actor_key);
+    _completed_admissions.insert_or_assign (
+      transfer_id, found->second);
     _admissions.erase (found);
 }
 
@@ -523,6 +575,13 @@ actor_transfer_coordinator_t::cleanup_expired (std::chrono::steady_clock::time_p
         } else {
             ++found;
         }
+    }
+    for (auto found = _completed_admissions.begin ();
+         found != _completed_admissions.end ();) {
+        if (found->second.deadline <= now)
+            found = _completed_admissions.erase (found);
+        else
+            ++found;
     }
     return removed;
 }

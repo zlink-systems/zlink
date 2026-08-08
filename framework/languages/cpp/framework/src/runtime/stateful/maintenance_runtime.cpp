@@ -659,7 +659,16 @@ maintenance_runtime_t::build_replay_records (
         for (const auto &pending : participant.pending_application) {
             protocol::frozen_record_t frozen;
             try {
-                frozen = protocol::decode_frozen_record (pending.payload);
+                if (pending.application_record) {
+                    // Normal application records retain typed input in the
+                    // mailbox. Encode the canonical relocation record only at
+                    // this relocation boundary.
+                    frozen = protocol::encode_frozen_application_record (
+                      *pending.application_record);
+                }
+                else {
+                    frozen = protocol::decode_frozen_record (pending.payload);
+                }
             }
             catch (...) {
                 return std::nullopt;
@@ -1012,8 +1021,11 @@ relocation_result_t maintenance_runtime_t::relocate (
     authority_publish_result_t published;
     bool publish_uncertain = false;
     try {
+        auto target = source;
+        target.node_id = std::move (target_node_id);
+        ++target.authority_owner_generation;
         published = _authority->publish (
-          source, std::move (target_node_id),
+          source, target,
           std::move (target_owner),
           std::move (relocation_capacity_fence),
           stored.reference,
@@ -1804,7 +1816,16 @@ std::vector<std::uint8_t> maintenance_runtime_t::encode (
             return {};
         previous_sequence = record.sequence;
         append_u64 (output, record.sequence);
-        if (!append_bytes (output, record.payload))
+        std::vector<std::uint8_t> canonical;
+        if (record.application_record) {
+            canonical = protocol::encode_frozen_application_record (
+                          *record.application_record)
+                          .canonical_bytes;
+        }
+        else {
+            canonical = record.payload;
+        }
+        if (!append_bytes (output, canonical))
             return {};
     }
     append_u32 (

@@ -74,15 +74,16 @@ raw_route_port_t::raw_route_port_t (zlink::router_socket_t &socket,
     _wake_timer.attach (*_poller);
 }
 
-bool raw_route_port_t::send (const raw_bytes_t &target_routing_id,
-                             const raw_message_t &parts)
+zlink::submit_result_t raw_route_port_t::send_result (
+  const raw_bytes_t &target_routing_id,
+  const raw_message_t &parts)
 {
     if (target_routing_id.empty () || parts.empty ()) {
         throw std::invalid_argument ("raw route send requires a target and message parts");
     }
     std::lock_guard lock (*_socket_mutex);
     if (_socket == nullptr) {
-        return false;
+        return zlink::submit_result_t::terminated;
     }
     auto messages = materialize_parts (parts);
     auto operation = std::move (_socket->send (zlink::routing_id_t::from (target_routing_id)))
@@ -91,13 +92,22 @@ bool raw_route_port_t::send (const raw_bytes_t &target_routing_id,
         operation = std::move (operation).message (messages[index]);
     }
     try {
-        return std::move (operation)
+        const bool accepted = std::move (operation)
           .flags (static_cast<int> (zlink::send_flags_t::dontwait))
           .submit ();
+        return accepted ? zlink::submit_result_t::ok
+                        : zlink::submit_result_t::backpressured;
     }
-    catch (const zlink::submit_error_t &) {
-        return false;
+    catch (const zlink::submit_error_t &error) {
+        return error.result ();
     }
+}
+
+bool raw_route_port_t::send (const raw_bytes_t &target_routing_id,
+                             const raw_message_t &parts)
+{
+    return send_result (target_routing_id, parts)
+           == zlink::submit_result_t::ok;
 }
 
 bool raw_route_port_t::send_completion_control (

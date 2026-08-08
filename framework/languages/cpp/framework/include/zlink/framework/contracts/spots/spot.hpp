@@ -1756,7 +1756,11 @@ class spot_handler_registry_t
                                             spot_inbound_message_t metadata = {},
                                             bool serial_dispatch = true,
                                             std::string actor_execution_key = {},
-                                            std::string actor_execution_spot_id = {}) const;
+                                            std::string actor_execution_spot_id = {},
+                                            std::function<std::optional<result_t<zlink::message_t>> (
+                                              const zlink::message_t &,
+                                              const spot_inbound_message_t &)>
+                                              before_invoke = {}) const;
 
     void register_actor_admission_erased (std::type_index actor_type,
                                           detail::spot_actor_admission_callbacks_t callbacks);
