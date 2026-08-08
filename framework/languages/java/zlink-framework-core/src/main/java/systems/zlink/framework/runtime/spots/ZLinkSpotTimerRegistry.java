@@ -298,23 +298,34 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
             })
                 .whenComplete((ignored, error) -> {
                     boolean stopped = false;
+                    boolean reschedule = false;
+                    boolean stillCurrent;
                     synchronized (ZLinkSpotTimerRegistry.this) {
-                        if (frozen || disposed || pendingTick != selected) {
-                            return;
-                        }
-                        if (error == null) {
-                            schedule.markDelivered(selected);
-                        } else {
-                            stopped = options.stopOnUnhandledException();
-                            if (stopped) {
-                                close();
+                        stillCurrent = !frozen
+                            && !disposed
+                            && pendingTick == selected;
+                        if (stillCurrent) {
+                            if (error == null) {
+                                schedule.markDelivered(selected);
+                                reschedule = true;
+                            } else {
+                                stopped = options.stopOnUnhandledException();
+                                reschedule = !stopped;
                             }
-                            publishFailure(this, tick, error, stopped);
+                            pendingTick = null;
                         }
-                        pendingTick = null;
-                        if (!stopped) {
-                            scheduleAfterDispatch();
+                    }
+                    if (!stillCurrent) {
+                        return;
+                    }
+                    if (error != null) {
+                        if (stopped) {
+                            close();
                         }
+                        publishFailure(this, tick, error, stopped);
+                    }
+                    if (reschedule) {
+                        scheduleAfterDispatch();
                     }
                 });
         }

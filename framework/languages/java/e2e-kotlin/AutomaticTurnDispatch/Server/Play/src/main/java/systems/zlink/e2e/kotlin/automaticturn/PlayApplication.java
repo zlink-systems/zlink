@@ -39,9 +39,7 @@ public final class PlayApplication {
             String nodeRid = Env.get("nodeRid", "play-a");
             String logDir = Env.get("logDirectory", "logs");
             options.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile(logDir + "/" + nodeRid + "-flow.log")
-                .traceLabel("kotlin-atd-" + nodeRid);
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             ZLinkMeshNodeBuilder mesh = options.addRouteMesh(Contracts.SPOT_MESH)
                 .listen(Env.get("playRouteEndpoint"))
                 .setRoutingId(RoutingId.from(nodeRid));

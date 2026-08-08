@@ -683,9 +683,23 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
             relocationRelease);
     }
 
+    CompletionStage<Void> enqueueAcceptedDispatch(
+        Supplier<byte[]> acceptedJournalRecord,
+        long acceptedJournalRecordSizeHint,
+        Supplier<CompletionStage<Void>> operation,
+        Runnable relocationRelease) {
+        return dispatchQueue.enqueueRelocatableLazyRecord(
+            acceptedJournalRecord,
+            acceptedJournalRecordSizeHint,
+            () -> runApplicationExecution(
+                null,
+                sharedSpotGate(),
+                operation),
+            relocationRelease);
+    }
+
     CompletionStage<Void> enqueueLifecycle(
         Supplier<CompletionStage<Void>> operation) {
-        boolean dispatchTurnAlreadyOwned = dispatchQueue.isCurrent();
         CompletionStage<Void> barrier;
         if (sharedSpotGate() || timerQueues.isEmpty()) {
             barrier = java.util.concurrent.CompletableFuture.completedFuture(null);
@@ -704,9 +718,10 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
         // still composing its event. Yield that turn before waiting for the
         // lifecycle entry, otherwise the queued entry cannot acquire the
         // shared gate that the current turn is holding.
-        return dispatchTurnAlreadyOwned
-            ? ZLinkAsyncSerialQueue.yieldCurrent(queued)
-            : queued;
+        // The Kotlin coroutine adapter restores the serial-turn carrier but
+        // not the queue's thread-local owner.  yieldCurrent() handles both
+        // representations and is a no-op when no current turn exists.
+        return ZLinkAsyncSerialQueue.yieldCurrent(queued);
     }
 
     @Override

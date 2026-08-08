@@ -128,6 +128,7 @@ interface ZLinkKotlinSpotManager {
 interface ZLinkKotlinSessionSendCall {
     fun metadata(key: String, value: String): ZLinkKotlinSessionSendCall
     fun compress(): ZLinkKotlinSessionSendCall
+    fun timeout(timeout: Duration): ZLinkKotlinSessionSendCall
     suspend fun await()
 }
 

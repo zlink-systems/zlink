@@ -60,28 +60,10 @@ final class ZLinkRouteMeshRuntimeOptionsRuntimeTest {
             () -> runtime.channel("game", "missing"));
     }
 
-    @Test
-    void maxMessageSizeMutationDoesNotRepublishPlacementDescriptor() {
-        TestMeshNode node = new TestMeshNode("game", Map.of());
-        AtomicInteger revisions = new AtomicInteger();
-        var runtime = new ZLinkRouteMeshRuntimeOptionsRuntime(
-            Map.of("game", node),
-            revisions::incrementAndGet);
-
-        runtime.meshNode("game").maxMessageSize(4096);
-
-        assertEquals(4096, runtime.meshNode("game").maxMessageSize());
-        assertEquals(0, revisions.get());
-        assertThrows(
-            ZLinkConfigurationException.class,
-            () -> runtime.meshNode("game").maxMessageSize(-1));
-    }
-
     private static final class TestMeshNode implements ZLinkInternalMeshNode {
         private final String name;
         private final Map<String, Integer> weights;
         private int placementWeight = 100;
-        private long maxMessageSize;
 
         TestMeshNode(String name, Map<String, Integer> weights) {
             this.name = name;
@@ -120,16 +102,6 @@ final class ZLinkRouteMeshRuntimeOptionsRuntimeTest {
         @Override
         public void setPlacementWeight(int weight) {
             placementWeight = weight;
-        }
-
-        @Override
-        public long maxMessageSize() {
-            return maxMessageSize;
-        }
-
-        @Override
-        public void setMaxMessageSize(long value) {
-            maxMessageSize = value;
         }
 
         @Override

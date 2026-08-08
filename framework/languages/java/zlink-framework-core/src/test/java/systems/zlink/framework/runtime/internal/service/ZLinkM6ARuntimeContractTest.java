@@ -94,7 +94,6 @@ final class ZLinkM6ARuntimeContractTest {
                 "securityIdentity",
                 "channelSet",
                 "objectRole",
-                "effectiveMaxMessageBytes",
                 "applicationVersion",
                 "protocolCapabilities",
                 "activeCapacityLimit",
@@ -413,27 +412,35 @@ final class ZLinkM6ARuntimeContractTest {
 
     @Test
     void mailboxSerializesEachOwnerAndKeepsInfrastructureReserve() {
-        var mailbox = new ZLinkServiceMailbox(2, 8, 1, 8);
+        var mailbox = new ZLinkServiceMailbox(2, 512, 1, 256);
         assertTrue(mailbox.tryEnqueue(record(
             "node:a", ZLinkServiceMailbox.Domain.APPLICATION, 4)));
         assertTrue(mailbox.tryEnqueue(record(
             "node:a", ZLinkServiceMailbox.Domain.APPLICATION, 4)));
         assertFalse(mailbox.tryEnqueue(record(
+            "node:a", ZLinkServiceMailbox.Domain.APPLICATION, 1)));
+        assertTrue(mailbox.tryEnqueue(record(
             "node:b", ZLinkServiceMailbox.Domain.APPLICATION, 1)));
         assertTrue(mailbox.tryEnqueue(record(
             "peer:a", ZLinkServiceMailbox.Domain.INFRASTRUCTURE, 8)));
 
         var first = mailbox.tryClaim(
-            ZLinkServiceMailbox.Domain.APPLICATION, 1, 4).orElseThrow();
+            ZLinkServiceMailbox.Domain.APPLICATION, 1, 256).orElseThrow();
+        assertEquals(3, mailbox.pendingMessages(
+            ZLinkServiceMailbox.Domain.APPLICATION));
+        assertFalse(mailbox.tryEnqueue(record(
+            "node:a", ZLinkServiceMailbox.Domain.APPLICATION, 1)));
         assertTrue(mailbox.tryClaim(
-            ZLinkServiceMailbox.Domain.APPLICATION, 1, 4).isEmpty());
+            ZLinkServiceMailbox.Domain.APPLICATION, 1, 256).isPresent());
         assertTrue(mailbox.release(first));
+        assertEquals(2, mailbox.pendingMessages(
+            ZLinkServiceMailbox.Domain.APPLICATION));
         var second = mailbox.tryClaim(
-            ZLinkServiceMailbox.Domain.APPLICATION, 1, 4).orElseThrow();
+            ZLinkServiceMailbox.Domain.APPLICATION, 1, 256).orElseThrow();
         assertEquals(first.owner(), second.owner());
         assertNotEquals(first.serial(), second.serial());
         assertTrue(mailbox.tryClaim(
-            ZLinkServiceMailbox.Domain.INFRASTRUCTURE, 1, 8).isPresent());
+            ZLinkServiceMailbox.Domain.INFRASTRUCTURE, 1, 256).isPresent());
     }
 
     @Test
@@ -519,7 +526,6 @@ final class ZLinkM6ARuntimeContractTest {
             channels,
             ZLinkServiceNodeDescriptor.State.SERVING,
             "default",
-            4 * 1024 * 1024,
             0,
             List.of(ZLinkServiceNodeDescriptor.REQUIRED_CAPABILITY),
             ZLinkServiceNodeDescriptor.ObjectRole.SERVER,
@@ -546,7 +552,6 @@ final class ZLinkM6ARuntimeContractTest {
             List.of(),
             ZLinkServiceNodeDescriptor.State.SERVING,
             "default",
-            4 * 1024 * 1024,
             0,
             List.of(ZLinkServiceNodeDescriptor.REQUIRED_CAPABILITY),
             ZLinkServiceNodeDescriptor.ObjectRole.SERVER,
@@ -576,9 +581,6 @@ final class ZLinkM6ARuntimeContractTest {
             field.equals("securityIdentity")
                 ? current.securityIdentity() + "-changed"
                 : current.securityIdentity(),
-            field.equals("effectiveMaxMessageBytes")
-                ? current.effectiveMaxMessageBytes() + 1
-                : current.effectiveMaxMessageBytes(),
             field.equals("applicationVersion")
                 ? current.applicationVersion() + 1
                 : current.applicationVersion(),

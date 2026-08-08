@@ -123,6 +123,9 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
             receiveStorage.parts(),
             receiveStorage::close);
     }
+    @Override public synchronized void disconnectPeer(RoutingId routingId) {
+        socket.disconnectRid(routingId);
+    }
     @Override public synchronized void onTransportError(ZLinkBackendStreamErrorHandler handler) {
         closeMonitor();
         monitor = socket.monitorOpen(MonitorEventType.DISCONNECTED);
@@ -341,6 +344,38 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
                 this,
                 requestHeader,
                 prepend(encodedHeader, parts),
+                timeout);
+        } finally {
+            if (encodedHeader != null) {
+                encodedHeader.close();
+            }
+        }
+    }
+
+    @Override public CompletionStage<List<Message>> requestExactActor(
+        ZLinkBackendActorRef actor,
+        ZLinkStreamHeader header,
+        List<Message> parts,
+        Duration timeout) {
+        Message encodedHeader = null;
+        try {
+            long requestSequence = allocateBoundSessionRequestSequence();
+            ZLinkStreamHeader requestHeader = new ZLinkStreamHeader(
+                systems.zlink.framework.streams.ZLinkStreamMessageKind.REQUEST,
+                header.codec(),
+                header.flags(),
+                java.util.Optional.of(requestSequence),
+                header.name(),
+                header.metadata(),
+                header.correlationId(),
+                header.flowId(),
+                header.flowOrigin());
+            encodedHeader = Message.from(
+                ZLinkStreamHeaderCodec.encode(requestHeader));
+            return rawSpotNode().requestToActor(
+                actor,
+                prepend(encodedHeader, parts),
+                SendFlags.DONT_WAIT,
                 timeout);
         } finally {
             if (encodedHeader != null) {

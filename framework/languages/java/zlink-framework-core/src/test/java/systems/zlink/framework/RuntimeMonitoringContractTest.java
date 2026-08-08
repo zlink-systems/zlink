@@ -10,7 +10,6 @@ import java.util.List;
 import java.util.concurrent.Flow;
 import org.junit.jupiter.api.Test;
 import systems.zlink.framework.channels.ZLinkMeshChannelRuntimeOptions;
-import systems.zlink.framework.channels.ZLinkMeshNodeRuntimeOptions;
 import systems.zlink.framework.channels.ZLinkRouteMeshRuntimeOptions;
 import systems.zlink.framework.monitoring.ZLinkMeshChannelSnapshot;
 import systems.zlink.framework.monitoring.ZLinkMeshNodeSnapshot;
@@ -95,11 +94,14 @@ final class RuntimeMonitoringContractTest {
 
     @Test
     void routeMeshRuntimeOptionsMatchExactPublicMethodShape() throws Exception {
-        assertEquals(
-            ZLinkMeshNodeRuntimeOptions.class,
-            ZLinkRouteMeshRuntimeOptions.class
-                .getMethod("meshNode", String.class)
-                .getReturnType());
+        assertThrows(
+            NoSuchMethodException.class,
+            () -> ZLinkRouteMeshRuntimeOptions.class
+                .getMethod("meshNode", String.class));
+        assertThrows(
+            ClassNotFoundException.class,
+            () -> Class.forName(
+                "systems.zlink.framework.channels.ZLinkMeshNodeRuntimeOptions"));
         assertEquals(
             ZLinkMeshChannelRuntimeOptions.class,
             ZLinkRouteMeshRuntimeOptions.class

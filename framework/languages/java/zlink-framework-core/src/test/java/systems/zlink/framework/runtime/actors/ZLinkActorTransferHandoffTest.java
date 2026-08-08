@@ -28,6 +28,8 @@ import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderFlag;
 import systems.zlink.framework.streams.ZLinkStreamCodec;
 import systems.zlink.framework.streams.ZLinkStreamMessageKind;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 
 final class ZLinkActorTransferHandoffTest {
     @Test
@@ -213,22 +215,28 @@ final class ZLinkActorTransferHandoffTest {
             handoff.follow("actor", 7, 1, () -> operation);
         }
 
-        assertThrows(CompletionException.class, () ->
+        CompletionException messageLimit = assertThrows(CompletionException.class, () ->
             handoff.follow(
                     "actor", 7, 1,
                     () -> CompletableFuture.completedFuture(null))
                 .toCompletableFuture().join());
+        assertEquals(
+            ZLinkFrameworkErrorKind.CAPACITY_EXCEEDED,
+            ((ZLinkFrameworkException) messageLimit.getCause()).kind());
         pending.forEach(value -> value.complete(null));
 
         CompletableFuture<Void> bytes = new CompletableFuture<>();
         handoff.follow(
             "actor", 7, ZLinkActorTransferHandoff.MAX_MESSAGE_FOLLOW_BYTES,
             () -> bytes);
-        assertThrows(CompletionException.class, () ->
+        CompletionException byteLimit = assertThrows(CompletionException.class, () ->
             handoff.follow(
                     "actor", 7, 1,
                     () -> CompletableFuture.completedFuture(null))
                 .toCompletableFuture().join());
+        assertEquals(
+            ZLinkFrameworkErrorKind.CAPACITY_EXCEEDED,
+            ((ZLinkFrameworkException) byteLimit.getCause()).kind());
         bytes.complete(null);
         handoff.close();
     }
@@ -240,11 +248,61 @@ final class ZLinkActorTransferHandoffTest {
             "actor", ref("source", 7), ref("target", 7),
             Duration.ofMinutes(1), ignored -> { });
 
-        assertThrows(CompletionException.class, () ->
+        CompletionException failure = assertThrows(CompletionException.class, () ->
             handoff.follow(
                     "actor", 8, 1,
                 () -> CompletableFuture.completedFuture(null))
                 .toCompletableFuture().join());
+        assertEquals(
+            ZLinkFrameworkErrorKind.INVALID_OPERATION,
+            ((ZLinkFrameworkException) failure.getCause()).kind());
+        handoff.close();
+    }
+
+    @Test
+    void missingMessageFollowRouteIsUnavailable() {
+        ZLinkActorTransferHandoff handoff = new ZLinkActorTransferHandoff();
+
+        CompletionException failure = assertThrows(CompletionException.class, () ->
+            handoff.follow(
+                    "actor", 7, 1,
+                    () -> CompletableFuture.completedFuture(null))
+                .toCompletableFuture().join());
+
+        assertEquals(
+            ZLinkFrameworkErrorKind.UNAVAILABLE,
+            ((ZLinkFrameworkException) failure.getCause()).kind());
+        handoff.close();
+    }
+
+    @Test
+    void precommitBacklogRejectsTheMessageAfterItsPerTransferLimit() {
+        ZLinkActorTransferHandoff handoff = new ZLinkActorTransferHandoff();
+        handoff.begin("actor");
+        for (int index = 0;
+             index < ZLinkActorTransferHandoff.MAX_MESSAGE_FOLLOW_MESSAGES;
+             index++) {
+            capture(handoff, "P" + index, Map.of());
+        }
+        ZLinkActorHandoffPacket overflow;
+        try (Message payload = Message.from("overflow")) {
+            overflow = handoff.capture(
+                "actor",
+                new ZLinkStreamHeader("overflow", Map.of(), Optional.empty()),
+                payload,
+                null,
+                new byte[] {1});
+        }
+
+        CompletionException failure = assertThrows(
+            CompletionException.class,
+            () -> overflow.reply().toCompletableFuture().join());
+        assertEquals(
+            ZLinkFrameworkErrorKind.UNAVAILABLE,
+            ((ZLinkFrameworkException) failure.getCause()).kind());
+        assertEquals(
+            ZLinkActorTransferHandoff.MAX_MESSAGE_FOLLOW_MESSAGES,
+            handoff.pendingCount("actor"));
         handoff.close();
     }
 

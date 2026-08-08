@@ -30,9 +30,7 @@ import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.actors.ZLinkActorContext;
 import systems.zlink.framework.actors.ZLinkActorFactory;
 import systems.zlink.framework.runtime.InMemoryRelocationStore;
-import systems.zlink.framework.configuration.ZLinkMessageFlowEvent;
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
-import systems.zlink.framework.configuration.ZLinkMessageFlowObserver;
 import systems.zlink.framework.configuration.ZLinkSpotRelocationReadinessMode;
 import systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode;
 import systems.zlink.framework.configuration.ZLinkUserSpotFactoryBuilder;
@@ -416,7 +414,6 @@ final class NodesAndServicesTest {
         RoutingId roomRid = RoutingId.from("room-" + suffix);
         ClientSpot.reply = new CompletableFuture<>();
         PingHandler.received = new CompletableFuture<>();
-        FlowObserver.events.clear();
         ClientSpot.targetRoomRid = roomRid;
         ClientSpot.targetNodeRid = nodeRid;
         ClientSpot.targetMeshName = "game-" + suffix;
@@ -457,8 +454,7 @@ final class NodesAndServicesTest {
                 assertEquals("ping", PingHandler.received.get(2, TimeUnit.SECONDS));
             } catch (TimeoutException ex) {
                 throw new AssertionError(
-                    "message flow: " + FlowObserver.events
-                        + ", source reply: " + futureState(ClientSpot.reply),
+                    "source reply: " + futureState(ClientSpot.reply),
                     ex);
             }
             assertEquals(
@@ -513,8 +509,7 @@ final class NodesAndServicesTest {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.setDefaultRequestTimeout(Duration.ofSeconds(2));
         options.configureDispatch()
-            .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-            .setMessageFlowObserver(new FlowObserver());
+            .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
         return options;
     }
 
@@ -536,21 +531,6 @@ final class NodesAndServicesTest {
     }
 
     public record Pong(String value) {
-    }
-
-    public static final class FlowObserver implements ZLinkMessageFlowObserver {
-        static final List<String> events = new CopyOnWriteArrayList<>();
-
-        @Override
-        public CompletionStage<Void> onMessageFlow(ZLinkMessageFlowEvent flow) {
-            events.add(flow.outcome() + ":"
-                + flow.surface() + ":"
-                + flow.messageKind() + ":"
-                + flow.packetName() + ":"
-                + flow.channelName() + ":"
-                + flow.errorReason());
-            return CompletableFuture.completedFuture(null);
-        }
     }
 
     public static final class RoomSpot implements ZLinkSpot<ZLinkActor> {

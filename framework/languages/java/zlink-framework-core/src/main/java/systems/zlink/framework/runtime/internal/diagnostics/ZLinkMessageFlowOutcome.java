@@ -1,4 +1,4 @@
-package systems.zlink.framework.configuration;
+package systems.zlink.framework.runtime.internal.diagnostics;
 
 // A transition or dispatch error outcome in a message's lifecycle.
 // RECEIVED/DISPATCHED/REPLIED are inbound (this node receives);

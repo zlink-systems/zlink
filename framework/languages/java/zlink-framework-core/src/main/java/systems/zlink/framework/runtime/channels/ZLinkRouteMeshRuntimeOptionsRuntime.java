@@ -3,7 +3,6 @@ package systems.zlink.framework.runtime.channels;
 import java.util.Map;
 import java.util.Objects;
 import systems.zlink.framework.channels.ZLinkMeshChannelRuntimeOptions;
-import systems.zlink.framework.channels.ZLinkMeshNodeRuntimeOptions;
 import systems.zlink.framework.channels.ZLinkMeshPlacementRuntimeOptions;
 import systems.zlink.framework.channels.ZLinkRouteMeshRuntimeOptions;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
@@ -23,26 +22,6 @@ public final class ZLinkRouteMeshRuntimeOptionsRuntime
         this.nodes = Map.copyOf(Objects.requireNonNull(nodes, "nodes"));
         this.descriptorChanged =
             Objects.requireNonNull(descriptorChanged, "descriptorChanged");
-    }
-
-    @Override
-    public ZLinkMeshNodeRuntimeOptions meshNode(String meshName) {
-        ZLinkInternalMeshNode node = requireNode(meshName);
-        return new ZLinkMeshNodeRuntimeOptions() {
-            @Override
-            public long maxMessageSize() {
-                return node.maxMessageSize();
-            }
-
-            @Override
-            public void maxMessageSize(long value) {
-                if (value < 0) {
-                    throw new ZLinkConfigurationException(
-                        "maxMessageSize must not be negative");
-                }
-                node.setMaxMessageSize(value);
-            }
-        };
     }
 
     @Override

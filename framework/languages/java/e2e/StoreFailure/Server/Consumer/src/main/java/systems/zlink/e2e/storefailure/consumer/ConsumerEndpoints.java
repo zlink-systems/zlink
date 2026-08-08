@@ -3,6 +3,8 @@ package systems.zlink.e2e.storefailure.consumer;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpServer;
 import java.time.Duration;
+import java.net.URLDecoder;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -121,6 +123,12 @@ public final class ConsumerEndpoints implements SmartLifecycle {
                     HttpSupport.readJson(exchange, json, Contracts.ObjectLocationQueryReq.class);
                 HttpSupport.writeJson(exchange, json, objectLocations(request));
             });
+            server.createContext("/location/object", exchange -> HttpSupport.writeJson(
+                exchange,
+                json,
+                exactObjectLocation(
+                    queryParameter(exchange, "kind"),
+                    queryParameter(exchange, "id"))));
             server.createContext("/mesh/peers", exchange -> HttpSupport.writeJson(
                 exchange,
                 json,
@@ -275,6 +283,45 @@ public final class ConsumerEndpoints implements SmartLifecycle {
         return java.util.Map.of(
             "items", items,
             "continuationToken", page.continuationToken() == null ? "" : page.continuationToken());
+    }
+
+    private java.util.Map<String, Object> exactObjectLocation(String kind, String id) {
+        if (!"spot".equals(kind) || id == null || id.isBlank()) {
+            throw new IllegalArgumentException("kind=spot and a non-empty id are required");
+        }
+        var entry = locationQuery.get().findSpotLocation(id)
+            .toCompletableFuture()
+            .join();
+        if (entry.isEmpty()) {
+            return java.util.Map.of("found", false);
+        }
+        return java.util.Map.of(
+            "found", true,
+            "objectId", entry.get().globalId(),
+            "stableType", entry.get().stableType(),
+            "meshName", entry.get().meshName(),
+            "ownerNodeRid", entry.get().nodeRid().toString(),
+            "objectGeneration", entry.get().objectGeneration(),
+            "state", entry.get().state().name().toLowerCase(java.util.Locale.ROOT));
+    }
+
+    private static String queryParameter(
+        com.sun.net.httpserver.HttpExchange exchange,
+        String name) {
+        String query = exchange.getRequestURI().getRawQuery();
+        if (query == null || query.isBlank()) {
+            return "";
+        }
+        for (String pair : query.split("&")) {
+            int separator = pair.indexOf('=');
+            String rawKey = separator < 0 ? pair : pair.substring(0, separator);
+            if (!name.equals(URLDecoder.decode(rawKey, StandardCharsets.UTF_8))) {
+                continue;
+            }
+            String rawValue = separator < 0 ? "" : pair.substring(separator + 1);
+            return URLDecoder.decode(rawValue, StandardCharsets.UTF_8);
+        }
+        return "";
     }
 
     private static java.util.Map<String, Object> objectLocation(ZLinkLocationObjectEntry entry) {

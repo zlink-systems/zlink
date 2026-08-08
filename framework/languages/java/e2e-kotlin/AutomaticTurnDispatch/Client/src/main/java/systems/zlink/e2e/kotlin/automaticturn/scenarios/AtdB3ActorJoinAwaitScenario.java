@@ -11,33 +11,24 @@ public final class AtdB3ActorJoinAwaitScenario {
     private AtdB3ActorJoinAwaitScenario() {
     }
 
-    public static void run(
-        ZLinkStreamConnector joinConnector,
-        String joiningActorId,
-        ZLinkStreamConnector fastConnector,
-        String fastActorId) {
+    public static void run(ZLinkStreamConnector connector) {
         String requestId = "ATD-B3-" + UUID.randomUUID().toString().replace("-", "");
         String actorA = requestId + "-actor-a";
         String actorB = requestId + "-actor-b";
         Contracts.BindActorsRes joinedSession = ClientStreamSupport.bindActors(
-            joinConnector,
+            connector,
             "room-a",
             actorA,
             actorB);
         ScenarioAssert.that(actorA.equals(joinedSession.actorA()), "ATD-B3 actor A bind mismatch");
         ScenarioAssert.that(actorB.equals(joinedSession.actorB()), "ATD-B3 actor B bind mismatch");
-        ClientStreamSupport.bindActors(
-            fastConnector,
-            "room-a",
-            actorA,
-            actorB);
-        CompletionStage<Contracts.ActorRes> join = joinConnector
+        CompletionStage<Contracts.ActorRes> join = connector
             .request(new Contracts.ActorJoinAwaitReq(requestId, "room-a"))
             .metadata("actor-id", actorA)
             .timeout(ClientStreamSupport.REQUEST_TIMEOUT)
             .submit(Contracts.ActorRes.class);
         ClientStreamSupport.sleep(75);
-        CompletionStage<Contracts.ActorRes> fast = fastConnector
+        CompletionStage<Contracts.ActorRes> fast = connector
             .request(new Contracts.ActorFastReq(requestId, "b3-fast"))
             .metadata("actor-id", actorB)
             .timeout(ClientStreamSupport.REQUEST_TIMEOUT)
@@ -46,14 +37,14 @@ public final class AtdB3ActorJoinAwaitScenario {
         Contracts.ActorRes joinReply = join.toCompletableFuture().join();
         ScenarioAssert.that(actorA.equals(joinReply.actorId()), "ATD-B3 join actor mismatch");
         ScenarioAssert.that(actorB.equals(fastReply.actorId()), "ATD-B3 fast actor mismatch");
-        Contracts.EvidenceRes evidence = ClientStreamSupport.evidence(joinConnector, requestId);
+        Contracts.EvidenceRes evidence = ClientStreamSupport.evidence(connector, requestId);
         ScenarioAssert.containsMarkersInOrder(evidence.markers(),
             "actor-join-await-started",
             "actor-join-await-released",
-            "actor-fast-started",
-            "actor-fast-completed",
             "actor-join-await-resumed",
-            "actor-join-await-completed");
+            "actor-join-await-completed",
+            "actor-fast-started",
+            "actor-fast-completed");
         System.out.println("scenario ATD-B3 passed");
     }
 }

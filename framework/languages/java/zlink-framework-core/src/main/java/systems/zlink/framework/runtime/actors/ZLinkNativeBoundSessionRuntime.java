@@ -143,7 +143,8 @@ final class ZLinkNativeBoundSessionRuntime implements ZLinkBoundSession {
                 payload,
                 timeout,
                 options.withPacketName(packetName),
-                metadataPolicy);
+                metadataPolicy,
+                submitGate);
         }
 
         @Override
@@ -157,7 +158,8 @@ final class ZLinkNativeBoundSessionRuntime implements ZLinkBoundSession {
                 payload,
                 timeout,
                 options.withMetadata(key, value),
-                metadataPolicy);
+                metadataPolicy,
+                submitGate);
         }
 
         @Override

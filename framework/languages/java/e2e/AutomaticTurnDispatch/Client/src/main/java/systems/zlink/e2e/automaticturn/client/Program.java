@@ -2,6 +2,7 @@ package systems.zlink.e2e.automaticturn.client;
 
 import java.net.URI;
 import systems.zlink.e2e.automaticturn.client.Support.AutomaticTurnDispatchScenarioSupport;
+import systems.zlink.stream.connector.ZLinkStreamDispatchMode;
 import systems.zlink.stream.connector.ZLinkStreamConnector;
 import systems.zlink.stream.connector.ZLinkStreamConnectorFactory;
 import systems.zlink.stream.connector.ZLinkStreamConnectorOptions;
@@ -17,8 +18,13 @@ public final class Program {
         ClientOptions options = ClientOptions.load(args[1]);
         AutomaticTurnDispatchScenarioSupport support = new AutomaticTurnDispatchScenarioSupport(options);
         String[] operationArgs = java.util.Arrays.copyOfRange(args, 2, args.length);
+        boolean replacementScenario = operationArgs.length > 0
+            && "JVM-SESSION-001".equals(operationArgs[0]);
         ZLinkStreamConnector connector = ZLinkStreamConnectorFactory.create(
-            ZLinkStreamConnectorOptions.createDefault(URI.create(options.streamEndpoint())));
+            replacementScenario
+                ? immediateOptions(URI.create(options.streamEndpoint()))
+                : ZLinkStreamConnectorOptions.createDefault(
+                    URI.create(options.streamEndpoint())));
         try {
             connector.connect().submit().toCompletableFuture().join();
             if (operationArgs.length > 0 && "--readiness".equals(operationArgs[0])) {
@@ -65,11 +71,54 @@ public final class Program {
 
             String scenario = operationArgs.length > 0 ? operationArgs[0] : "all";
             support.setDefaultPlacement();
+            if ("JVM-SESSION-001".equals(scenario)) {
+                ZLinkStreamConnector replacementConnector =
+                    ZLinkStreamConnectorFactory.create(
+                        immediateOptions(URI.create(options.streamEndpoint())));
+                try {
+                    replacementConnector.connect().submit().toCompletableFuture().join();
+                    support.runJvmSessionReplacement(connector, replacementConnector);
+                } finally {
+                    replacementConnector.close().submit().toCompletableFuture().join();
+                }
+                System.out.println("scenario JVM-SESSION-001 passed");
+                System.out.println("automatic-turn-dispatch e2e result=passed");
+                return;
+            }
             runScenario(connector, support, scenario);
             System.out.println("automatic-turn-dispatch e2e result=passed");
         } finally {
             connector.close().submit().toCompletableFuture().join();
         }
+    }
+
+    private static ZLinkStreamConnectorOptions immediateOptions(URI endpoint) {
+        ZLinkStreamConnectorOptions defaults =
+            ZLinkStreamConnectorOptions.createDefault(endpoint);
+        return new ZLinkStreamConnectorOptions(
+            defaults.endpoint(),
+            ZLinkStreamDispatchMode.IMMEDIATE,
+            defaults.requestTimeout(),
+            defaults.waitTimeout(),
+            defaults.maxReconnectAttempts(),
+            defaults.connectTimeout(),
+            defaults.maxSendPayloadSize(),
+            defaults.maxReceivePayloadSize(),
+            defaults.maxReceivedMessages(),
+            defaults.maxInboundObserverNotifications(),
+            defaults.maxInboundObserverPayloadPreviewBytes(),
+            defaults.heartbeatEnabled(),
+            defaults.heartbeatInterval(),
+            defaults.heartbeatTimeout(),
+            defaults.reconnectEnabled(),
+            defaults.reconnectInitialDelay(),
+            defaults.reconnectMaxDelay(),
+            defaults.reconnectBackoffFactor(),
+            defaults.skipServerCertificateValidation(),
+            defaults.compression(),
+            defaults.compressionCodec(),
+            defaults.nameResolver(),
+            defaults.typedCodec());
     }
 
     private static void runScenario(

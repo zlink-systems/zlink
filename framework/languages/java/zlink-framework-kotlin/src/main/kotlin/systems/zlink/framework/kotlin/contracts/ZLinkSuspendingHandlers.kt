@@ -322,6 +322,9 @@ abstract class ZLinkSuspendingSession : ZLinkSession {
         payload: ZLinkMessage,
     ): CompletionStage<Void> = coroutineVoidStage { onDispatchSuspending(dispatch, payload) }
 
+    final override fun onActorBindingReplaced(actorId: String): CompletionStage<Void> =
+        coroutineVoidStage { onActorBindingReplacedSuspending(actorId) }
+
     protected open suspend fun onConnectedSuspending() {
     }
 
@@ -332,6 +335,9 @@ abstract class ZLinkSuspendingSession : ZLinkSession {
     }
 
     protected open suspend fun onDispatchSuspending(dispatch: ZLinkSessionDispatchContext, payload: ZLinkMessage) {
+    }
+
+    protected open suspend fun onActorBindingReplacedSuspending(actorId: String) {
     }
 }
 

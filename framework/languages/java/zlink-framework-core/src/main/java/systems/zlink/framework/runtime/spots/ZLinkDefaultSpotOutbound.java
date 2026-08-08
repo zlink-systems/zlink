@@ -198,8 +198,7 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
 
     private final class DeferredSpotSendCall
         implements systems.zlink.framework.spots.ZLinkSpotSendCall {
-        private final java.util.concurrent.atomic.AtomicBoolean submitGate =
-            new java.util.concurrent.atomic.AtomicBoolean();
+        private final java.util.concurrent.atomic.AtomicBoolean submitGate;
         private final String target;
         private final systems.zlink.contracts.messaging.Message payload;
         private final Optional<String> packetName;
@@ -247,6 +246,21 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
             boolean instanceIntent,
             String stableType,
             String selectedMesh) {
+            this(target, payload, packetName, contentType, metadata, instanceIntent,
+                stableType, selectedMesh, new java.util.concurrent.atomic.AtomicBoolean());
+        }
+
+        private DeferredSpotSendCall(
+            String target,
+            systems.zlink.contracts.messaging.Message payload,
+            Optional<String> packetName,
+            String contentType,
+            ZLinkApplicationMetadata metadata,
+            boolean instanceIntent,
+            String stableType,
+            String selectedMesh,
+            java.util.concurrent.atomic.AtomicBoolean submitGate) {
+            this.submitGate = submitGate;
             this.target = java.util.Objects.requireNonNull(target, "target");
             this.payload = payload;
             this.packetName = packetName;
@@ -273,7 +287,8 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
                 throw new IllegalStateException("instanceSpot was already set");
             }
             return new DeferredSpotSendCall(
-                target, payload, packetName, contentType, metadata, true, value, selectedMesh);
+                target, payload, packetName, contentType, metadata, true, value, selectedMesh,
+                submitGate);
         }
 
         @Override
@@ -284,7 +299,7 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
             }
             return new DeferredSpotSendCall(
                 target, payload, packetName, contentType, metadata, instanceIntent,
-                stableType, requireStableType(value));
+                stableType, requireStableType(value), submitGate);
         }
 
         @Override
@@ -293,7 +308,7 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
             String value) {
             return new DeferredSpotSendCall(
                 target, payload, packetName, contentType, metadata.with(key, value),
-                instanceIntent, stableType, selectedMesh);
+                instanceIntent, stableType, selectedMesh, submitGate);
         }
 
         @Override
@@ -301,7 +316,7 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
             Map<String, String> values) {
             return new DeferredSpotSendCall(
                 target, payload, packetName, contentType, metadata.withAll(values),
-                instanceIntent, stableType, selectedMesh);
+                instanceIntent, stableType, selectedMesh, submitGate);
         }
 
         @Override public CompletionStage<Void> submit() {
@@ -384,6 +399,7 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
 
     private final class DeferredSpotRequestCall
         implements systems.zlink.framework.spots.ZLinkSpotRequestCall {
+        private final java.util.concurrent.atomic.AtomicBoolean submitGate;
         private final String target;
         private final systems.zlink.contracts.messaging.Message payload;
         private final Optional<String> packetName;
@@ -433,6 +449,23 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
             boolean instanceIntent,
             String stableType,
             String selectedMesh) {
+            this(target, payload, packetName, timeout, contentType, metadata,
+                instanceIntent, stableType, selectedMesh,
+                new java.util.concurrent.atomic.AtomicBoolean());
+        }
+
+        private DeferredSpotRequestCall(
+            String target,
+            systems.zlink.contracts.messaging.Message payload,
+            Optional<String> packetName,
+            Duration timeout,
+            String contentType,
+            ZLinkApplicationMetadata metadata,
+            boolean instanceIntent,
+            String stableType,
+            String selectedMesh,
+            java.util.concurrent.atomic.AtomicBoolean submitGate) {
+            this.submitGate = submitGate;
             this.target = java.util.Objects.requireNonNull(target, "target");
             this.payload = payload;
             this.packetName = packetName;
@@ -461,7 +494,7 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
             }
             return new DeferredSpotRequestCall(
                 target, payload, packetName, timeout, contentType, metadata, true, value,
-                selectedMesh);
+                selectedMesh, submitGate);
         }
 
         @Override
@@ -472,7 +505,7 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
             }
             return new DeferredSpotRequestCall(
                 target, payload, packetName, timeout, contentType, metadata, instanceIntent,
-                stableType, requireStableType(value));
+                stableType, requireStableType(value), submitGate);
         }
 
         @Override
@@ -481,7 +514,7 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
             String value) {
             return new DeferredSpotRequestCall(
                 target, payload, packetName, timeout, contentType, metadata.with(key, value),
-                instanceIntent, stableType, selectedMesh);
+                instanceIntent, stableType, selectedMesh, submitGate);
         }
 
         @Override
@@ -489,7 +522,7 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
             Map<String, String> values) {
             return new DeferredSpotRequestCall(
                 target, payload, packetName, timeout, contentType, metadata.withAll(values),
-                instanceIntent, stableType, selectedMesh);
+                instanceIntent, stableType, selectedMesh, submitGate);
         }
 
         @Override
@@ -497,10 +530,15 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
             Duration value) {
             return new DeferredSpotRequestCall(
                 target, payload, packetName, value, contentType, metadata, instanceIntent,
-                stableType, selectedMesh);
+                stableType, selectedMesh, submitGate);
         }
         @Override public <TReply> CompletionStage<TReply> submit(Class<TReply> replyType) {
             rejectAfterRelocationReady("Spot request submit");
+            CompletionStage<TReply> duplicate =
+                ZLinkOneWayCalls.beginOneWay(submitGate);
+            if (duplicate != null) {
+                return duplicate;
+            }
             systems.zlink.framework.runtime.internal.handlers
                 .ZLinkSuspendInvocationContext.rejectSameSpotWait(target);
             CompletionStage<TReply> stage = resolve(target).handle((address, failure) -> {

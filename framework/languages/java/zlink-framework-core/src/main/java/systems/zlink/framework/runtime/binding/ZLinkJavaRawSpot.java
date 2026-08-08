@@ -27,6 +27,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpotDispatch
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpotDispatchInfo;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendTopicMessage;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalAsyncSpotDispatchHandler;
+import systems.zlink.framework.runtime.internal.completion.ZLinkTerminalWinner;
 
 /**
  * Framework-owned local Spot mailbox. Raw bindings provide transport only;
@@ -359,21 +360,21 @@ final class ZLinkJavaRawSpot
 
     static List<Message> copy(List<Message> parts) {
         return parts.stream()
-            .map(part -> Message.from(part.toByteArray()))
+            .map(Message::from)
             .toList();
     }
 
     static final class PendingJoin {
         private final CompletableFuture<JoinReply> completion =
             new CompletableFuture<>();
-        private final AtomicBoolean terminal = new AtomicBoolean();
+        private final ZLinkTerminalWinner terminal = new ZLinkTerminalWinner();
 
         CompletionStage<JoinReply> completion() {
             return completion;
         }
 
         void complete(int resultCode, List<Message> parts) {
-            if (!terminal.compareAndSet(false, true)) {
+            if (!terminal.tryWin(ZLinkTerminalWinner.Cause.RESPONSE)) {
                 parts.forEach(Message::close);
                 throw new IllegalStateException("actor join already completed");
             }
@@ -381,7 +382,7 @@ final class ZLinkJavaRawSpot
         }
 
         void fail(Throwable failure) {
-            if (terminal.compareAndSet(false, true)) {
+            if (terminal.tryWin(ZLinkTerminalWinner.Cause.FAILURE)) {
                 completion.completeExceptionally(failure);
             }
         }

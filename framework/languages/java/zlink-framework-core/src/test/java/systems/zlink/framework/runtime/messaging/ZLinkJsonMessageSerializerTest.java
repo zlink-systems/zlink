@@ -5,6 +5,10 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.nio.charset.StandardCharsets;
+import java.io.InputStream;
+import java.util.List;
+import java.util.Map;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.ZLinkEncodedPayload;
@@ -13,6 +17,40 @@ import systems.zlink.framework.actors.ActorRefSnapshot;
 import systems.zlink.framework.spots.SpotRef;
 
 final class ZLinkJsonMessageSerializerTest {
+    @Test
+    void consumesEveryFrameworkJsonV1GoldenCase() throws Exception {
+        ObjectMapper fixtureMapper = new ObjectMapper();
+        GoldenFixture fixture;
+        try (InputStream input = getClass().getResourceAsStream(
+            "/framework-json-v1.json")) {
+            if (input == null) {
+                throw new AssertionError("framework-json-v1 fixture is missing");
+            }
+            fixture = fixtureMapper.readValue(input, GoldenFixture.class);
+        }
+        assertEquals("framework-json-v1", fixture.format());
+
+        ZLinkJsonMessageSerializer serializer = new ZLinkJsonMessageSerializer();
+        for (GoldenCase valid : fixture.valid()) {
+            GoldenValue decoded = serializer.deserialize(
+                ZLinkEncodedPayload.from(valid.jsonUtf8().getBytes(StandardCharsets.UTF_8)),
+                GoldenValue.class);
+            assertEquals(Long.MIN_VALUE, decoded.signed64());
+            assertEquals("18446744073709551615", decoded.unsigned64());
+            assertEquals(GoldenState.Ready, decoded.state());
+            assertEquals(List.of((byte) 1, (byte) 2),
+                java.util.stream.IntStream.range(0, decoded.bytes().length)
+                    .mapToObj(index -> decoded.bytes()[index])
+                    .toList());
+        }
+        for (GoldenCase invalid : fixture.invalid()) {
+            assertThrows(IllegalArgumentException.class, () -> serializer.deserialize(
+                ZLinkEncodedPayload.from(
+                    invalid.jsonUtf8().getBytes(StandardCharsets.UTF_8)),
+                GoldenValue.class), invalid.name());
+        }
+    }
+
     @Test
     void serializesAndDeserializesRecordContracts() {
         ZLinkJsonMessageSerializer serializer = new ZLinkJsonMessageSerializer();
@@ -122,5 +160,32 @@ final class ZLinkJsonMessageSerializerTest {
     }
 
     record ActorRefWire(String nodeRid, String actorId, long generation) {
+    }
+
+    record GoldenFixture(
+        String format,
+        List<String> consumers,
+        Map<String, Object> contract,
+        List<GoldenCase> valid,
+        List<GoldenCase> invalid) {
+    }
+
+    record GoldenCase(String name, String jsonUtf8, String reason) {
+    }
+
+    record GoldenValue(
+        long signed64,
+        String unsigned64,
+        int int32,
+        double ratio,
+        GoldenState state,
+        byte[] bytes,
+        Object nullable,
+        Map<String, Integer> labels) {
+    }
+
+    enum GoldenState {
+        Ready,
+        Closed
     }
 }

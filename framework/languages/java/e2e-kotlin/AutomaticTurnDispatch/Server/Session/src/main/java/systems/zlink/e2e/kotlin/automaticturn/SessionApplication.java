@@ -34,9 +34,7 @@ public final class SessionApplication {
             String nodeRid = Env.get("nodeRid", "session-a");
             String logDir = Env.get("logDirectory", "logs");
             options.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile(logDir + "/session-flow.log")
-                .traceLabel("kotlin-atd-session");
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             ZLinkMeshNodeBuilder mesh = options.addRouteMesh(Contracts.SPOT_MESH)
                 .listen(Env.get("sessionRouteEndpoint"))
                 .setRoutingId(RoutingId.from(nodeRid))
@@ -62,7 +60,7 @@ public final class SessionApplication {
             options.addStreamNode("gateway")
                 .bind(Env.get("streamEndpoint"))
                 .enableActorDispatch()
-                .registerSession(ProbeSession.class)
+                .registerSession(KotlinProbeSession.class)
                 .addSessionPacketHandler(ActorAuthReqHandler.class)
                 .addSessionPacketHandler(BindActorsReqHandler.class)
                 .addSessionPacketHandler(EnsureSpotReqHandler.class)

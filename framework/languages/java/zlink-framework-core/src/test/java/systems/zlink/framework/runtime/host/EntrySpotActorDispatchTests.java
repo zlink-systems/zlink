@@ -22,12 +22,11 @@ import systems.zlink.framework.ZLinkEncodedPayload;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.actors.ZLinkActorContext;
 import systems.zlink.framework.actors.ZLinkActorFactory;
-import systems.zlink.framework.configuration.ZLinkDispatchErrorAction;
-import systems.zlink.framework.configuration.ZLinkDispatchErrorReason;
-import systems.zlink.framework.configuration.ZLinkDispatchErrorSurface;
-import systems.zlink.framework.configuration.ZLinkDispatchMessageKind;
-import systems.zlink.framework.configuration.ZLinkMessageFlowEvent;
-import systems.zlink.framework.configuration.ZLinkMessageFlowObserver;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorAction;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorReason;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSurface;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorJoinEntrySpotResult;
@@ -155,7 +154,6 @@ final class EntrySpotActorDispatchTests {
 
     @Test
     void entrySpotActorDispatchNoBindHandlerExceptionRepliesNoBindError() throws Exception {
-        CapturingFlowObserver.clear();
         TestBackend backend = startBackend();
         try (ZLinkFrameworkRuntime runtime = startRuntime(backend)) {
             runtime.actorManager().create("actor-a", "probe").submit()
@@ -170,13 +168,6 @@ final class EntrySpotActorDispatchTests {
             assertTrue(backend.node.boundSessionReplies.isEmpty());
             assertEquals(0, backend.node.remoteSessionBinds.size());
 
-            ZLinkMessageFlowEvent event = awaitHandlerExceptionFlow();
-            assertEquals(ZLinkDispatchErrorSurface.SPOT_ACTOR, event.surface());
-            assertEquals(ZLinkDispatchMessageKind.ACTOR_REQUEST, event.messageKind());
-            assertEquals(ZLinkDispatchErrorReason.HANDLER_EXCEPTION, event.errorReason());
-            assertEquals(ZLinkDispatchErrorAction.REPLY_ERROR, event.errorAction());
-            assertEquals("throw", event.packetName());
-            assertEquals("actor-a", event.actorId());
         }
     }
 
@@ -205,7 +196,6 @@ final class EntrySpotActorDispatchTests {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.setDefaultRequestTimeout(Duration.ofSeconds(1));
         options.addHandlersFromPackageOf(EntrySpotActorDispatchTests.class);
-        options.configureDispatch().setMessageFlowObserver(new CapturingFlowObserver());
         var node = systems.zlink.framework.runtime.internal.configuration
             .ZLinkLegacyTopology.addSpotMesh(options, "entry");
         node.setRoutingId(RoutingId.from("entry-node"));
@@ -327,20 +317,6 @@ final class EntrySpotActorDispatchTests {
         return replies.get(0);
     }
 
-    private static ZLinkMessageFlowEvent awaitHandlerExceptionFlow() throws Exception {
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-        while (System.nanoTime() < deadline) {
-            for (ZLinkMessageFlowEvent event : CapturingFlowObserver.events) {
-                if (event.errorReason() == ZLinkDispatchErrorReason.HANDLER_EXCEPTION) {
-                    return event;
-                }
-            }
-            Thread.sleep(10);
-        }
-        assertFalse(CapturingFlowObserver.events.isEmpty());
-        return CapturingFlowObserver.events.get(0);
-    }
-
     private static DecodedFrame decodeFrame(Message message) {
         ZLinkStreamFrameCodec.DecodedFrame frame = ZLinkStreamFrameCodec
             .tryDecode(message.toByteArray())
@@ -437,20 +413,6 @@ final class EntrySpotActorDispatchTests {
         ZLinkBackendActorRef actor,
         RoutingId sourceNodeRid,
         RoutingId sourceSessionRid) {
-    }
-
-    private static final class CapturingFlowObserver implements ZLinkMessageFlowObserver {
-        static final List<ZLinkMessageFlowEvent> events = new CopyOnWriteArrayList<>();
-
-        static void clear() {
-            events.clear();
-        }
-
-        @Override
-        public CompletionStage<Void> onMessageFlow(ZLinkMessageFlowEvent flow) {
-            events.add(flow);
-            return CompletableFuture.completedFuture(null);
-        }
     }
 
     private static final class TestBackend

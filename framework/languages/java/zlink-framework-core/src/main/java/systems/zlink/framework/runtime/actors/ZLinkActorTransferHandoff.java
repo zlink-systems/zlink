@@ -20,6 +20,8 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceMessageFollowWireCodec;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
 import systems.zlink.framework.runtime.internal.spots.SpotTransportAddress;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 
 /** Owns the transfer-only backlog and bounded source-retirement state. */
 final class ZLinkActorTransferHandoff implements AutoCloseable {
@@ -32,7 +34,7 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
             return thread;
         });
 
-    private final Map<String, List<ZLinkActorHandoffPacket>> backlogs =
+    private final Map<String, Backlog> backlogs =
         new ConcurrentHashMap<>();
     private final AtomicLong arrivalIndex = new AtomicLong();
     private final Map<String, MessageFollowSource> messageFollowSources =
@@ -43,7 +45,7 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
 
     synchronized void begin(String actorId) {
         requireOpen();
-        backlogs.put(actorId, Collections.synchronizedList(new ArrayList<>()));
+        backlogs.put(actorId, new Backlog());
     }
 
     ZLinkActorHandoffPacket capture(
@@ -52,7 +54,7 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
         Message payload,
         ZLinkActorReplyRoute replyRoute,
         byte[] acceptedJournalRecord) {
-        List<ZLinkActorHandoffPacket> backlog = backlogs.get(actorId);
+        Backlog backlog = backlogs.get(actorId);
         if (backlog == null) {
             return null;
         }
@@ -65,40 +67,51 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
                 packet.close();
                 return null;
             }
-            backlog.add(packet);
+            long bytes = packet.retainedBytes();
+            if (backlog.packets.size() >= MAX_MESSAGE_FOLLOW_MESSAGES
+                || bytes > MAX_MESSAGE_FOLLOW_BYTES - backlog.bytes) {
+                packet.fail(new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.UNAVAILABLE,
+                    "Actor relocation backlog exceeds 1024 messages or 16 MiB"));
+                packet.close();
+                return packet;
+            }
+            backlog.packets.add(packet);
+            backlog.bytes += bytes;
         }
         return packet;
     }
 
     List<ZLinkActorHandoffPacket> take(String actorId) {
-        List<ZLinkActorHandoffPacket> backlog = backlogs.get(actorId);
+        Backlog backlog = backlogs.get(actorId);
         if (backlog == null) {
             return List.of();
         }
         synchronized (backlog) {
-            List<ZLinkActorHandoffPacket> snapshot = List.copyOf(backlog);
-            backlog.clear();
+            List<ZLinkActorHandoffPacket> snapshot = List.copyOf(backlog.packets);
+            backlog.packets.clear();
+            backlog.bytes = 0;
             return snapshot;
         }
     }
 
     int pendingCount(String actorId) {
-        List<ZLinkActorHandoffPacket> backlog = backlogs.get(actorId);
+        Backlog backlog = backlogs.get(actorId);
         if (backlog == null) {
             return 0;
         }
         synchronized (backlog) {
-            return backlog.size();
+            return backlog.packets.size();
         }
     }
 
     List<ZLinkActorHandoffPacket> finish(String actorId) {
-        List<ZLinkActorHandoffPacket> backlog = backlogs.remove(actorId);
+        Backlog backlog = backlogs.remove(actorId);
         if (backlog == null) {
             return List.of();
         }
         synchronized (backlog) {
-            return List.copyOf(backlog);
+            return List.copyOf(backlog.packets);
         }
     }
 
@@ -111,7 +124,7 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
     List<ZLinkActorHandoffPacket> takeForRestore(
         String actorId,
         List<ZLinkActorHandoffPacket> committed) {
-        List<ZLinkActorHandoffPacket> backlog = backlogs.get(actorId);
+        Backlog backlog = backlogs.get(actorId);
         if (backlog == null) {
             return committed == null || committed.isEmpty()
                 ? List.of()
@@ -119,16 +132,17 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
         }
         synchronized (backlog) {
             List<ZLinkActorHandoffPacket> restored = new ArrayList<>(
-                (committed == null ? 0 : committed.size()) + backlog.size());
+                (committed == null ? 0 : committed.size()) + backlog.packets.size());
             if (committed != null) {
                 restored.addAll(committed);
             }
-            restored.addAll(backlog);
+            restored.addAll(backlog.packets);
             if (!backlogs.remove(actorId, backlog)) {
                 throw new IllegalStateException(
                     "Actor transfer hold changed during source restore: " + actorId);
             }
-            backlog.clear();
+            backlog.packets.clear();
+            backlog.bytes = 0;
             restored.sort(java.util.Comparator.comparingLong(
                 ZLinkActorHandoffPacket::arrivalIndex));
             return List.copyOf(restored);
@@ -136,12 +150,12 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
     }
 
     void fail(String actorId, Throwable error) {
-        List<ZLinkActorHandoffPacket> backlog = backlogs.remove(actorId);
+        Backlog backlog = backlogs.remove(actorId);
         if (backlog == null) {
             return;
         }
         synchronized (backlog) {
-            backlog.forEach(packet -> {
+            backlog.packets.forEach(packet -> {
                 if (packet.fail(error)) {
                     packet.close();
                 }
@@ -244,16 +258,23 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
         long payloadBytes,
         java.util.function.Supplier<CompletionStage<T>> submission) {
         MessageFollowSource source = messageFollowSources.get(actorId);
-        if (source == null
-            || source.sourceActorRef().generation() != objectGeneration
+        if (source == null) {
+            return java.util.concurrent.CompletableFuture.failedFuture(
+                new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.UNAVAILABLE,
+                    "committed Message Follow route is unavailable"));
+        }
+        if (source.sourceActorRef().generation() != objectGeneration
             || source.targetActorRef().generation() != objectGeneration) {
             return java.util.concurrent.CompletableFuture.failedFuture(
-                new IllegalStateException(
-                    "committed Message Follow route is unavailable or stale"));
+                new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                    "committed Message Follow generation does not match"));
         }
         if (!source.tryAcquire(payloadBytes)) {
             return java.util.concurrent.CompletableFuture.failedFuture(
-                new IllegalStateException(
+                new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.CAPACITY_EXCEEDED,
                     "committed Message Follow route queue exceeds 1024 messages or 16 MiB"));
         }
         MessageFollowQueueSnapshot queueSnapshot = source.queueSnapshot();
@@ -340,6 +361,11 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
         void future(ScheduledFuture<?> future) {
             this.future = future;
         }
+    }
+
+    private static final class Backlog {
+        private final List<ZLinkActorHandoffPacket> packets = new ArrayList<>();
+        private long bytes;
     }
 
     static final class MessageFollowSource {

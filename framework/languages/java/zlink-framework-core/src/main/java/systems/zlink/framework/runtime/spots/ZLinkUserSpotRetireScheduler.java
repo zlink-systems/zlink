@@ -10,6 +10,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation;
 import systems.zlink.framework.runtime.internal.locations
     .ZLinkAggregateRelocationCoordinator;
+import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
 
 /**
  * Owns the committed User Spot relocation completion order. Authority commit
@@ -78,7 +79,7 @@ final class ZLinkUserSpotRetireScheduler {
                     activated,
                     request.completedRoot(),
                     cancellation))
-                .thenCompose(completed -> request.client()
+            .thenCompose(completed -> request.client()
                     .finalizeAfterCompletion(
                         stage.targetNodeRid(),
                         stage.fence(),
@@ -87,6 +88,8 @@ final class ZLinkUserSpotRetireScheduler {
                         .discardInitialAfterCommit())
                     .thenApply(ignored -> {
                         request.source().releasePermitAfterCompletion();
+                        recordActorHandoffs(request.source().stagedRoot()
+                            .request().participants());
                         return new Result(activated, completed);
                     })));
         return operation.exceptionallyCompose(failure -> {
@@ -125,7 +128,10 @@ final class ZLinkUserSpotRetireScheduler {
                 cancellation))
             .thenCompose(completed -> request.completionFinalizer()
                 .finalizeAfterCompletion()
-                .thenApply(ignored -> new Result(published, completed)));
+                .thenApply(ignored -> {
+                    recordActorHandoffs(request.staged().actorCount());
+                    return new Result(published, completed);
+                }));
     }
 
     private static CompletionStage<Void> switchBindingRoutes(
@@ -158,6 +164,23 @@ final class ZLinkUserSpotRetireScheduler {
             current = current.getCause();
         }
         return current;
+    }
+
+    private static void recordActorHandoffs(
+        List<ZLinkAggregateRelocationCoordinator.Participant> participants) {
+        recordActorHandoffs((int) participants.stream()
+            .filter(participant -> participant.objectKind()
+                == ZLinkPlacementObjectKind.ACTOR)
+            .count());
+    }
+
+    private static void recordActorHandoffs(int count) {
+        for (int index = 0; index < count; index++) {
+            systems.zlink.framework.runtime.internal.metrics
+                .ZLinkRuntimeMetrics.increment(
+                    "zlink.drain.actors.handed_off",
+                    java.util.Map.of());
+        }
     }
 
     record Request(

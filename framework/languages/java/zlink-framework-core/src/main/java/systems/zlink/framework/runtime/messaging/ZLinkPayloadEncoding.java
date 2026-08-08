@@ -21,9 +21,15 @@ public final class ZLinkPayloadEncoding {
         Object payload,
         String contentType) {
         Objects.requireNonNull(serializer, "serializer");
-        ZLinkEncodedPayload encoded = serializer.serialize(payload);
+        Message message;
+        if (serializer instanceof ZLinkJsonMessageSerializer json) {
+            message = json.serializeOwned(payload);
+        } else {
+            ZLinkEncodedPayload encoded = serializer.serialize(payload);
+            message = Message.from(encoded.bytes());
+        }
         return new EncodedPayload(
-            Message.from(encoded.bytes()),
+            message,
             ZLinkPacketNames.resolve(payload),
             Objects.requireNonNull(contentType, "contentType"));
     }

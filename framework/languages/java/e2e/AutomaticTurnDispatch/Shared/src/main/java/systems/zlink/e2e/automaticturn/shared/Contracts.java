@@ -139,6 +139,12 @@ public final class Contracts {
     public record BindActorsRes(String spotRid, String actorA, String actorB, List<ActorBinding> actors) {
     }
 
+    public record ActorAuthReq(String actorId) {
+    }
+
+    public record ActorAuthRes(String actorId) {
+    }
+
     public record ActorAwaitReq(String requestId, long delayMillis) {
     }
 
@@ -155,6 +161,9 @@ public final class Contracts {
     }
 
     public record ActorPushNotify(String actorId, String requestId, String value, String nodeRid) {
+    }
+
+    public record ActorBindingReplacedNotice(String actorId) {
     }
 
     public record ActorAwaitRes(String scenarioId, String requestId, String actorId, String marker) {

@@ -53,10 +53,10 @@ public final class AtdC3ActorTimerIsolationScenario {
         ScenarioAssert.containsMarkersInOrder(evidence.markers(),
             "actor-await-started",
             "actor-await-released",
-            "timer-fast-started",
-            "timer-fast-completed",
             "actor-await-resumed",
-            "actor-await-completed");
+            "actor-await-completed",
+            "timer-fast-started",
+            "timer-fast-completed");
     }
 
     private static void verifyTimerAwaitAllowsActor(
@@ -86,10 +86,10 @@ public final class AtdC3ActorTimerIsolationScenario {
         ScenarioAssert.containsMarkersInOrder(evidence.markers(),
             "timer-await-started",
             "timer-await-released",
-            "actor-fast-started",
-            "actor-fast-completed",
             "timer-await-resumed",
-            "timer-await-completed");
+            "timer-await-completed",
+            "actor-fast-started",
+            "actor-fast-completed");
         ScenarioAssert.that(
             evidence.markers().stream().anyMatch(entry -> entry.contains("marker=c3-actor-fast")),
             "ATD-C3 actor fast marker missing: " + List.copyOf(evidence.markers()));

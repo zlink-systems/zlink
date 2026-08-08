@@ -300,6 +300,20 @@ wait_port() {
   return 1
 }
 
+wait_for_log_marker() {
+  local file="$1"
+  local marker="$2"
+  local timeout_seconds="$3"
+  for _ in $(seq 1 "$((timeout_seconds * 10))"); do
+    if [[ -f "${file}" ]] && rg -F --quiet -- "${marker}" "${file}"; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  echo "Timed out waiting for marker '${marker}' in ${file}" >&2
+  return 1
+}
+
 gradle_run() {
   ../../gradlew -PzlinkE2eBuildDir="${e2e_build_dir}" \
     --project-cache-dir "${gradle_cache_dir}" --no-daemon --no-parallel \
@@ -570,7 +584,7 @@ should_run() {
   [[ "${SCENARIO}" == "${target}" || ( "${SCENARIO}" == "all" && "${target}" == SF-* ) ]]
 }
 
-if [[ "${SCENARIO}" != "all" && "${SCENARIO}" != "SF-A1" && "${SCENARIO}" != "SF-A2" && "${SCENARIO}" != "SF-B1" && "${SCENARIO}" != "SF-B2" && "${SCENARIO}" != "SF-B3" && "${SCENARIO}" != "SF-C1" && "${SCENARIO}" != "SF-C2" && "${SCENARIO}" != "SF-C3" && "${SCENARIO}" != "SF-C4" && "${SCENARIO}" != "SF-C5" && "${SCENARIO}" != "SF-D1" && "${SCENARIO}" != "SF-D2" && "${SCENARIO}" != "SF-D3" && "${SCENARIO}" != "SF-E1" && "${SCENARIO}" != "SF-F9" ]]; then
+if [[ "${SCENARIO}" != "all" && "${SCENARIO}" != "SF-A1" && "${SCENARIO}" != "SF-A2" && "${SCENARIO}" != "SF-B1" && "${SCENARIO}" != "SF-B2" && "${SCENARIO}" != "SF-B3" && "${SCENARIO}" != "SF-C1" && "${SCENARIO}" != "SF-C2" && "${SCENARIO}" != "SF-C3" && "${SCENARIO}" != "SF-C4" && "${SCENARIO}" != "SF-C5" && "${SCENARIO}" != "SF-C5A" && "${SCENARIO}" != "SF-D1" && "${SCENARIO}" != "SF-D2" && "${SCENARIO}" != "SF-D3" && "${SCENARIO}" != "SF-E1" && "${SCENARIO}" != "SF-F9" ]]; then
   echo "unknown StoreFailure scenario: ${SCENARIO}" >&2
   exit 1
 fi
@@ -582,6 +596,30 @@ if [[ "${SCENARIO}" == "all" ]]; then
 fi
 
 gradle_run installDist
+
+if should_run SF-C5A; then
+start_redis_container
+read -r AH BH CH A B <<<"$(reserve_ports 5)"
+API_A="$(tcp "${A}")"; API_B="$(tcp "${B}")"
+HTTP_A="$(http "${AH}")"; HTTP_B="$(http "${BH}")"; CONSUMER_HTTP="$(http "${CH}")"
+start_provider api-a "${API_A}" api-a "${HTTP_A}"
+API_A_PID="${LAST_PID}"
+start_consumer "consumer-SF-C5A" "${CONSUMER_HTTP}"
+run_client "SF-C5A" "api-a,api-b" "SF-C5A" "" "api-a" "true"
+SF_C5A_CLIENT_PID="${LAST_CLIENT_PID}"
+wait_for_log_marker "${log_dir}/client-SF-C5A.stdout.log" \
+  "scenario-control SF-C5A kill-provider-a" 120
+kill -9 "${API_A_PID}" >/dev/null 2>&1 || true
+wait "${API_A_PID}" >/dev/null 2>&1 || true
+wait_for_log_marker "${log_dir}/client-SF-C5A.stdout.log" \
+  "scenario-control SF-C5A start-provider-b" 120
+start_provider api-b "${API_B}" api-b "${HTTP_B}"
+wait_for_log_marker "${log_dir}/client-SF-C5A.stdout.log" \
+  "scenario-control SF-C5A stop-redis" 120
+stop_redis_container
+wait "${SF_C5A_CLIENT_PID}"
+stop_all
+fi
 
 if should_run SF-C5; then
 start_redis_container
@@ -997,5 +1035,5 @@ if [[ "${SCENARIO}" == "all" ]]; then
 else
   grep -Rq "scenario ${SCENARIO} " "${log_dir}"/client-*.stdout.log
 fi
-grep -Rq "message flow" "${log_dir}"/*-flow.log
+grep -Rq "message flow" "${log_dir}"/*.stdout.log
 echo "store-failure e2e result=passed"

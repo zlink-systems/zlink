@@ -51,13 +51,13 @@ import systems.zlink.framework.channels.ZLinkRequestCall;
 import systems.zlink.framework.channels.ZLinkRouteMessageContext;
 import systems.zlink.framework.channels.ZLinkSendCall;
 import systems.zlink.framework.channels.ZLinkSocketRuntimeOptions;
-import systems.zlink.framework.configuration.ZLinkDispatchErrorAction;
-import systems.zlink.framework.configuration.ZLinkDispatchErrorReason;
-import systems.zlink.framework.configuration.ZLinkDispatchErrorSurface;
-import systems.zlink.framework.configuration.ZLinkDispatchMessageKind;
-import systems.zlink.framework.configuration.ZLinkMessageFlowEvent;
-import systems.zlink.framework.configuration.ZLinkMessageFlowOutcome;
-import systems.zlink.framework.configuration.ZLinkDispatchFailure;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorAction;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorReason;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSurface;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchFailure;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
@@ -88,8 +88,7 @@ import systems.zlink.framework.runtime.messaging.ZLinkMessagePayloads;
 
 final class RouteSpotSendCall
     implements systems.zlink.framework.spots.ZLinkSpotSendCall {
-    private final java.util.concurrent.atomic.AtomicBoolean submitGate =
-        new java.util.concurrent.atomic.AtomicBoolean();
+    private final java.util.concurrent.atomic.AtomicBoolean submitGate;
     private final ZLinkChannelCallRuntime runtime;
     private final String channelName;
     private final SpotTransportAddressResolver resolver;
@@ -129,6 +128,26 @@ final class RouteSpotSendCall
         String stableType,
         String selectedMesh,
         ZLinkApplicationMetadata metadata) {
+        this(runtime, channelName, resolver, instanceSpots, target, payload, packetName,
+            contentType, instanceIntent, stableType, selectedMesh, metadata,
+            new java.util.concurrent.atomic.AtomicBoolean());
+    }
+
+    private RouteSpotSendCall(
+        ZLinkChannelCallRuntime runtime,
+        String channelName,
+        SpotTransportAddressResolver resolver,
+        Supplier<ZLinkInstanceSpotCallRuntime> instanceSpots,
+        String target,
+        Message payload,
+        Optional<String> packetName,
+        String contentType,
+        boolean instanceIntent,
+        String stableType,
+        String selectedMesh,
+        ZLinkApplicationMetadata metadata,
+        java.util.concurrent.atomic.AtomicBoolean submitGate) {
+        this.submitGate = submitGate;
         this.runtime = runtime;
         this.channelName = channelName;
         this.resolver = resolver;
@@ -153,7 +172,7 @@ final class RouteSpotSendCall
             payload,
             Optional.of(packetName),
             contentType,
-            instanceIntent, stableType, selectedMesh, metadata);
+            instanceIntent, stableType, selectedMesh, metadata, submitGate);
     }
 
     @Override public systems.zlink.framework.spots.ZLinkSpotSendCall instanceSpot() {
@@ -165,23 +184,24 @@ final class RouteSpotSendCall
     private RouteSpotSendCall withInstanceType(String value) {
         if (instanceIntent) throw new IllegalStateException("instanceSpot was already set");
         return new RouteSpotSendCall(runtime, channelName, resolver, instanceSpots,
-            target, payload, packetName, contentType, true, value, selectedMesh, metadata);
+            target, payload, packetName, contentType, true, value, selectedMesh, metadata,
+            submitGate);
     }
     @Override public systems.zlink.framework.spots.ZLinkSpotSendCall inMesh(String value) {
         if (selectedMesh != null) throw new IllegalStateException("inMesh was already set");
         return new RouteSpotSendCall(runtime, channelName, resolver, instanceSpots,
             target, payload, packetName, contentType, instanceIntent, stableType,
-            SpotCallAddresses.requireText(value), metadata);
+            SpotCallAddresses.requireText(value), metadata, submitGate);
     }
     @Override public systems.zlink.framework.spots.ZLinkSpotSendCall metadata(String key, String value) {
         return new RouteSpotSendCall(runtime, channelName, resolver, instanceSpots,
             target, payload, packetName, contentType, instanceIntent, stableType, selectedMesh,
-            metadata.with(key, value));
+            metadata.with(key, value), submitGate);
     }
     @Override public systems.zlink.framework.spots.ZLinkSpotSendCall metadata(Map<String, String> values) {
         return new RouteSpotSendCall(runtime, channelName, resolver, instanceSpots,
             target, payload, packetName, contentType, instanceIntent, stableType, selectedMesh,
-            metadata.withAll(values));
+            metadata.withAll(values), submitGate);
     }
 
     @Override
@@ -197,9 +217,11 @@ final class RouteSpotSendCall
             if (failure == null) {
                 return submitExistingOrActivate(address, activation);
             }
-            if (!instanceIntent || activation == null) {
+            RuntimeException error = SpotCallAddresses.unwrap(failure);
+            if (!instanceIntent || activation == null
+                || !SpotCallAddresses.isStaleRoute(error)) {
                 return CompletableFuture.<Void>failedFuture(
-                    SpotCallAddresses.unwrap(failure));
+                    error);
             }
             return activation.send(target, stableType, selectedMesh, payload,
                 packetName, contentType, metadata.values());
@@ -215,12 +237,31 @@ final class RouteSpotSendCall
             }
             RuntimeException error = SpotCallAddresses.unwrap(failure);
             invalidateStaleRoute(error);
+            if (SpotCallAddresses.isStaleRoute(error)) {
+                return refreshAfterStaleRoute(activation);
+            }
             return shouldReactivate(address, error, activation)
                 .thenCompose(reactivate -> reactivate
                     ? activation.send(
                         target, stableType, selectedMesh, payload,
                         packetName, contentType, metadata.values())
                     : CompletableFuture.<Void>failedFuture(error));
+        }).thenCompose(java.util.function.Function.identity());
+    }
+
+    private CompletionStage<Void> refreshAfterStaleRoute(
+        ZLinkInstanceSpotCallRuntime activation) {
+        return SpotCallAddresses.resolve(resolver, target).handle((address, failure) -> {
+            if (failure == null) {
+                return submitExisting(address);
+            }
+            RuntimeException error = SpotCallAddresses.unwrap(failure);
+            return instanceIntent && activation != null
+                && SpotCallAddresses.isStaleRoute(error)
+                    ? activation.send(
+                        target, stableType, selectedMesh, payload,
+                        packetName, contentType, metadata.values())
+                    : CompletableFuture.<Void>failedFuture(error);
         }).thenCompose(java.util.function.Function.identity());
     }
 
@@ -263,6 +304,7 @@ final class RouteSpotSendCall
 
 final class RouteSpotRequestCall
     implements systems.zlink.framework.spots.ZLinkSpotRequestCall {
+    private final java.util.concurrent.atomic.AtomicBoolean submitGate;
     private final ZLinkChannelCallRuntime runtime;
     private final String channelName;
     private final SpotTransportAddressResolver resolver;
@@ -306,6 +348,27 @@ final class RouteSpotRequestCall
         String stableType,
         String selectedMesh,
         ZLinkApplicationMetadata metadata) {
+        this(runtime, channelName, resolver, instanceSpots, target, payload, packetName,
+            timeout, contentType, instanceIntent, stableType, selectedMesh, metadata,
+            new java.util.concurrent.atomic.AtomicBoolean());
+    }
+
+    private RouteSpotRequestCall(
+        ZLinkChannelCallRuntime runtime,
+        String channelName,
+        SpotTransportAddressResolver resolver,
+        Supplier<ZLinkInstanceSpotCallRuntime> instanceSpots,
+        String target,
+        Message payload,
+        Optional<String> packetName,
+        Duration timeout,
+        String contentType,
+        boolean instanceIntent,
+        String stableType,
+        String selectedMesh,
+        ZLinkApplicationMetadata metadata,
+        java.util.concurrent.atomic.AtomicBoolean submitGate) {
+        this.submitGate = submitGate;
         this.runtime = runtime;
         this.channelName = channelName;
         this.resolver = resolver;
@@ -332,7 +395,7 @@ final class RouteSpotRequestCall
             Optional.of(packetName),
             timeout,
             contentType,
-            instanceIntent, stableType, selectedMesh, metadata);
+            instanceIntent, stableType, selectedMesh, metadata, submitGate);
     }
 
     @Override public systems.zlink.framework.spots.ZLinkSpotRequestCall instanceSpot() {
@@ -344,23 +407,24 @@ final class RouteSpotRequestCall
     private RouteSpotRequestCall withInstanceType(String value) {
         if (instanceIntent) throw new IllegalStateException("instanceSpot was already set");
         return new RouteSpotRequestCall(runtime, channelName, resolver, instanceSpots,
-            target, payload, packetName, timeout, contentType, true, value, selectedMesh, metadata);
+            target, payload, packetName, timeout, contentType, true, value, selectedMesh, metadata,
+            submitGate);
     }
     @Override public systems.zlink.framework.spots.ZLinkSpotRequestCall inMesh(String value) {
         if (selectedMesh != null) throw new IllegalStateException("inMesh was already set");
         return new RouteSpotRequestCall(runtime, channelName, resolver, instanceSpots,
             target, payload, packetName, timeout, contentType, instanceIntent, stableType,
-            SpotCallAddresses.requireText(value), metadata);
+            SpotCallAddresses.requireText(value), metadata, submitGate);
     }
     @Override public systems.zlink.framework.spots.ZLinkSpotRequestCall metadata(String key, String value) {
         return new RouteSpotRequestCall(runtime, channelName, resolver, instanceSpots,
             target, payload, packetName, timeout, contentType, instanceIntent, stableType,
-            selectedMesh, metadata.with(key, value));
+            selectedMesh, metadata.with(key, value), submitGate);
     }
     @Override public systems.zlink.framework.spots.ZLinkSpotRequestCall metadata(Map<String, String> values) {
         return new RouteSpotRequestCall(runtime, channelName, resolver, instanceSpots,
             target, payload, packetName, timeout, contentType, instanceIntent, stableType,
-            selectedMesh, metadata.withAll(values));
+            selectedMesh, metadata.withAll(values), submitGate);
     }
 
     @Override
@@ -376,11 +440,16 @@ final class RouteSpotRequestCall
             packetName,
             timeout,
             contentType,
-            instanceIntent, stableType, selectedMesh, metadata);
+            instanceIntent, stableType, selectedMesh, metadata, submitGate);
     }
 
     @Override
     public <TReply> CompletionStage<TReply> submit(Class<TReply> replyType) {
+        CompletionStage<TReply> duplicate =
+            ZLinkOneWayCalls.beginOneWay(submitGate);
+        if (duplicate != null) {
+            return duplicate;
+        }
         systems.zlink.framework.runtime.internal.handlers
             .ZLinkSuspendInvocationContext.rejectSameSpotWait(target);
         ZLinkInstanceSpotCallRuntime activation = instanceSpots == null
@@ -389,9 +458,11 @@ final class RouteSpotRequestCall
             if (failure == null) {
                 return submitExistingOrActivate(address, replyType, activation);
             }
-            if (!instanceIntent || activation == null) {
+            RuntimeException error = SpotCallAddresses.unwrap(failure);
+            if (!instanceIntent || activation == null
+                || !SpotCallAddresses.isStaleRoute(error)) {
                 return CompletableFuture.<TReply>failedFuture(
-                    SpotCallAddresses.unwrap(failure));
+                    error);
             }
             return activateRequest(activation, replyType);
         }).thenCompose(java.util.function.Function.identity());
@@ -408,10 +479,28 @@ final class RouteSpotRequestCall
             }
             RuntimeException error = SpotCallAddresses.unwrap(failure);
             invalidateStaleRoute(error);
+            if (SpotCallAddresses.isStaleRoute(error)) {
+                return refreshAfterStaleRoute(replyType, activation);
+            }
             return shouldReactivate(address, error, activation)
                 .thenCompose(reactivate -> reactivate
                     ? activateRequest(activation, replyType)
                     : CompletableFuture.<TReply>failedFuture(error));
+        }).thenCompose(java.util.function.Function.identity());
+    }
+
+    private <TReply> CompletionStage<TReply> refreshAfterStaleRoute(
+        Class<TReply> replyType,
+        ZLinkInstanceSpotCallRuntime activation) {
+        return SpotCallAddresses.resolve(resolver, target).handle((address, failure) -> {
+            if (failure == null) {
+                return submitExisting(address, replyType);
+            }
+            RuntimeException error = SpotCallAddresses.unwrap(failure);
+            return instanceIntent && activation != null
+                && SpotCallAddresses.isStaleRoute(error)
+                    ? activateRequest(activation, replyType)
+                    : CompletableFuture.<TReply>failedFuture(error);
         }).thenCompose(java.util.function.Function.identity());
     }
 

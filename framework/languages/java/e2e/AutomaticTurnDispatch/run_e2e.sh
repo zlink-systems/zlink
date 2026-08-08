@@ -420,8 +420,18 @@ static_checks() {
 assert_readiness() {
   : >"${log_dir}/readiness.stdout.log"
   : >"${log_dir}/readiness.stderr.log"
-  timeout -k 5s 20s "$(client_bin)" --config "${client_config}" --readiness \
-    >>"${log_dir}/readiness.stdout.log" 2>>"${log_dir}/readiness.stderr.log"
+  # A restarted RouteMesh peer publishes its local READY marker before the
+  # session-side channel admission is usable. Keep the readiness gate
+  # bounded, but retry the real client probe instead of treating that short
+  # reconnect window as a permanent runtime failure.
+  for _ in $(seq 1 20); do
+    if timeout -k 5s 3s "$(client_bin)" --config "${client_config}" --readiness \
+      >>"${log_dir}/readiness.stdout.log" 2>>"${log_dir}/readiness.stderr.log"; then
+      return 0
+    fi
+    sleep 0.5
+  done
+  return 1
 }
 
 gradle_run() {
@@ -668,7 +678,7 @@ else
   grep -q "scenario ${SCENARIO} passed" "${log_dir}/client.stdout.log"
 fi
 grep -q "automatic-turn-dispatch e2e result=passed" "${log_dir}/client.stdout.log"
-grep -Rq "message flow" "${log_dir}"/*-flow.log
+grep -Rq "message flow" "${log_dir}"/*.stdout.log
 
 if [[ "${SCENARIO}" == "all" ]]; then
   SHUTDOWN_ID="atde3-$(date +%s)-$$"

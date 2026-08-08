@@ -21,6 +21,9 @@ sourceSets {
     main {
         java.srcDir("../../../runtime/protocol/generated/jvm")
     }
+    test {
+        resources.srcDir("../../../runtime/protocol/golden")
+    }
 
     val m5Foundation by creating {
         java.setSrcDirs(listOf(
@@ -236,6 +239,7 @@ tasks.named("check") {
 }
 
 dependencies {
+    api(project(":zlink-framework-json-internal"))
     implementation(project(":zlink-framework-binding-internal"))
     api(project(":zlink-framework-provider-abstractions"))
     api(zlinkLibs.zlink.bindings)

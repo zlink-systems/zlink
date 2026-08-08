@@ -16,6 +16,8 @@ public final class ShutdownAwaitSessionHandlers {
     private static final Duration ROUTE_REQUEST_TIMEOUT = Duration.ofSeconds(90);
     private static final Duration RECOVERY_REQUEST_TIMEOUT = Duration.ofSeconds(30);
     private static final Duration RECOVERY_PROBE_ATTEMPT_TIMEOUT = Duration.ofSeconds(5);
+    private static final int RECOVERY_ENSURE_ATTEMPTS = 5;
+    private static final long RECOVERY_RETRY_DELAY_MILLIS = 500;
 
     private ShutdownAwaitSessionHandlers() {
     }
@@ -78,7 +80,8 @@ public final class ShutdownAwaitSessionHandlers {
             Contracts.AwaitShutdownRecoveryReq request) {
             RoutingId playNode = RoutingId.from(Contracts.PLAY_NODE_A);
             RoutingId spotRid = RoutingId.from(request.spotRid());
-            return ensure(routes, playNode, request.spotRid())
+            return ensureWithRetry(routes, playNode, request.spotRid(),
+                    RECOVERY_ENSURE_ATTEMPTS)
                 .thenCompose(ignored -> probe(routes, spots, spotRid, request.requestId(), 5))
                 .thenRun(() -> context.client().reply(new Contracts.AwaitShutdownRes(
                     "atd.e3-shutdown-recovery",
@@ -97,6 +100,28 @@ public final class ShutdownAwaitSessionHandlers {
                 new Contracts.EnsureSpotReq(spotRid))
             .timeout(RECOVERY_REQUEST_TIMEOUT)
             .submit(Contracts.EnsureSpotRes.class);
+    }
+
+    private static CompletionStage<Contracts.EnsureSpotRes> ensureWithRetry(
+        ZLinkRouteClient routes,
+        RoutingId nodeRid,
+        String spotRid,
+        int remainingAttempts) {
+        return ensure(routes, nodeRid, spotRid).handle((reply, failure) -> {
+            if (failure == null) {
+                return CompletableFuture.completedFuture(reply);
+            }
+            if (remainingAttempts <= 1) {
+                return CompletableFuture.<Contracts.EnsureSpotRes>failedFuture(failure);
+            }
+            return CompletableFuture.runAsync(
+                    () -> { },
+                    CompletableFuture.delayedExecutor(
+                        RECOVERY_RETRY_DELAY_MILLIS,
+                        TimeUnit.MILLISECONDS))
+                .thenCompose(ignored -> ensureWithRetry(
+                    routes, nodeRid, spotRid, remainingAttempts - 1));
+        }).thenCompose(stage -> stage);
     }
 
     private static CompletionStage<Void> probe(

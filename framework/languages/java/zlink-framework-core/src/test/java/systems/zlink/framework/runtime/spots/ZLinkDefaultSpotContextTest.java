@@ -273,6 +273,53 @@ final class ZLinkDefaultSpotContextTest {
     }
 
     @Test
+    void spotWideLifecycleYieldsWhenOnlyTheRestoredSerialTurnIsPresent()
+        throws Exception {
+        ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
+        try {
+            TestHost host = new TestHost(executor);
+            DefaultSpotContext context = host.userContext(
+                ZLinkUserSpotExecutionMode.SPOT_WIDE);
+            CompletableFuture<Void> dispatchRelease = new CompletableFuture<>();
+            CompletableFuture<Void> lifecycleStarted = new CompletableFuture<>();
+
+            CompletionStage<Void> dispatch = context.enqueueDispatch(() -> {
+                Object serialTurn = ZLinkSuspendInvocationContext
+                    .currentSerialExecutionTurn();
+                var application = ZLinkSuspendInvocationContext
+                    .currentApplicationExecution();
+                executor.execute(() -> {
+                    try (var serial = ZLinkSuspendInvocationContext
+                             .enterSerialExecutionTurn(serialTurn);
+                         var execution = ZLinkSuspendInvocationContext
+                             .enterApplicationExecution(application)) {
+                        CompletionStage<Void> lifecycle = context.enqueueLifecycle(
+                            () -> {
+                                lifecycleStarted.complete(null);
+                                return CompletableFuture.completedFuture(null);
+                            });
+                        lifecycle.whenComplete((ignored, error) -> {
+                            if (error == null) {
+                                dispatchRelease.complete(null);
+                            } else {
+                                dispatchRelease.completeExceptionally(error);
+                            }
+                        });
+                    } catch (Throwable failure) {
+                        dispatchRelease.completeExceptionally(failure);
+                    }
+                });
+                return dispatchRelease;
+            });
+
+            dispatch.toCompletableFuture().get(2, TimeUnit.SECONDS);
+            assertTrue(lifecycleStarted.isDone());
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
     void lifecycleLaneRunsBeforeAQueuedApplicationTurn() throws Exception {
         ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
         try {

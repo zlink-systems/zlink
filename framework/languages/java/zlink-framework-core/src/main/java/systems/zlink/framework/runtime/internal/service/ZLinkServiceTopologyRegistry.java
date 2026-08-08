@@ -149,8 +149,6 @@ public final class ZLinkServiceTopologyRegistry {
             || !current.advertisedEndpoint().equals(
                 incoming.advertisedEndpoint())
             || !current.securityIdentity().equals(incoming.securityIdentity())
-            || current.effectiveMaxMessageBytes()
-                != incoming.effectiveMaxMessageBytes()
             || current.applicationVersion() != incoming.applicationVersion()
             || !current.protocolCapabilities().equals(
                 incoming.protocolCapabilities())

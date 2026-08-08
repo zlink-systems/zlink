@@ -26,7 +26,6 @@ import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime;
 import systems.zlink.framework.monitoring.ZLinkTopologyReason;
 import systems.zlink.framework.monitoring.ZLinkTopologyState;
 import systems.zlink.framework.channels.ZLinkMeshChannelRuntimeOptions;
-import systems.zlink.framework.channels.ZLinkMeshNodeRuntimeOptions;
 import systems.zlink.framework.channels.ZLinkMeshPlacementRuntimeOptions;
 import systems.zlink.framework.channels.ZLinkRouteMeshRuntimeOptions;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
@@ -183,11 +182,6 @@ final class ZLinkRouteMeshRuntimeView
     @Override
     public boolean isReady(String meshName) {
         return snapshot(meshName).isReady();
-    }
-
-    @Override
-    public ZLinkMeshNodeRuntimeOptions meshNode(String meshName) {
-        return options().meshNode(meshName);
     }
 
     @Override

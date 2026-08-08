@@ -5,10 +5,6 @@ import java.util.Optional;
 import org.jspecify.annotations.Nullable;
 
 public interface ZLinkMeshNodeSocketConfig {
-    long maxMessageSize();
-
-    void setMaxMessageSize(long value);
-
     long sendHighWaterMark();
 
     void setSendHighWaterMark(long value);

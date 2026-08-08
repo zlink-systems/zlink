@@ -347,6 +347,51 @@ public final class ZLinkServiceM6BWireCodec {
             generation);
     }
 
+    public byte[] encodeBoundSessionReplaced(
+        BoundSessionReplaced replacement) {
+        Objects.requireNonNull(replacement, "replacement");
+        Writer writer = prefix(
+            ServiceWireConstants.COMMAND_BOUND_SESSION_REPLACED,
+            0);
+        writeActorRoute(writer, replacement.actorAuthority());
+        RetiredSessionRouteFence retired = replacement.retiredSession();
+        writer.rid(retired.sessionOwnerNodeRid(), "sessionOwnerNodeRid");
+        writer.nonzero(
+            retired.sessionOwnerNodeGeneration(),
+            "sessionOwnerNodeGeneration");
+        writer.text8(retired.sessionOwnerId(), "sessionOwnerId");
+        writer.nonzero(
+            retired.sessionOwnerLeaseGeneration(),
+            "sessionOwnerLeaseGeneration");
+        writer.rid(retired.sessionRid(), "sessionRid");
+        writer.nonzero(
+            retired.retiredBindingGeneration(),
+            "retiredBindingGeneration");
+        return writer.toByteArray();
+    }
+
+    public BoundSessionReplaced decodeBoundSessionReplaced(
+        byte[] frame) {
+        Reader reader = new Reader(frame);
+        Header header = reader.prefix();
+        if (header.command()
+                != ServiceWireConstants.COMMAND_BOUND_SESSION_REPLACED
+            || header.flags() != 0) {
+            throw protocol("command is not boundSessionReplaced");
+        }
+        ActorRouteFence actorAuthority = readActorRoute(reader);
+        RetiredSessionRouteFence retiredSession =
+            new RetiredSessionRouteFence(
+                reader.rid("sessionOwnerNodeRid"),
+                reader.nonzeroU64("sessionOwnerNodeGeneration"),
+                reader.text8("sessionOwnerId"),
+                reader.nonzeroU64("sessionOwnerLeaseGeneration"),
+                reader.rid("sessionRid"),
+                reader.nonzeroU64("retiredBindingGeneration"));
+        reader.end();
+        return new BoundSessionReplaced(actorAuthority, retiredSession);
+    }
+
     public byte[] encodeLogicalMulticastHeader(
         int flags,
         String channelName,
@@ -1466,6 +1511,37 @@ public final class ZLinkServiceM6BWireCodec {
                 throw protocol(
                     "bound session generations must be nonzero");
             }
+        }
+    }
+
+    public record RetiredSessionRouteFence(
+        RoutingId sessionOwnerNodeRid,
+        long sessionOwnerNodeGeneration,
+        String sessionOwnerId,
+        long sessionOwnerLeaseGeneration,
+        RoutingId sessionRid,
+        long retiredBindingGeneration) {
+        public RetiredSessionRouteFence {
+            Objects.requireNonNull(sessionOwnerNodeRid,
+                "sessionOwnerNodeRid");
+            Objects.requireNonNull(sessionOwnerId, "sessionOwnerId");
+            Objects.requireNonNull(sessionRid, "sessionRid");
+            if (sessionOwnerNodeGeneration <= 0
+                || sessionOwnerLeaseGeneration <= 0
+                || retiredBindingGeneration <= 0
+                || sessionOwnerId.isBlank()) {
+                throw protocol(
+                    "retired Session route fence generations must be nonzero");
+            }
+        }
+    }
+
+    public record BoundSessionReplaced(
+        ActorRouteFence actorAuthority,
+        RetiredSessionRouteFence retiredSession) {
+        public BoundSessionReplaced {
+            Objects.requireNonNull(actorAuthority, "actorAuthority");
+            Objects.requireNonNull(retiredSession, "retiredSession");
         }
     }
 

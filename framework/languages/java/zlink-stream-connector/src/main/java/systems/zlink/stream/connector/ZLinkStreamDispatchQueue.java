@@ -20,6 +20,7 @@ final class ZLinkStreamDispatchQueue {
     private final List<Waiter> waiters = new ArrayList<>();
     private final int maxReceivedMessages;
     private final Consumer<ZLinkStreamError> publishError;
+    private long version;
 
     ZLinkStreamDispatchQueue(int maxReceivedMessages) {
         this(maxReceivedMessages, ignored -> { });
@@ -56,6 +57,7 @@ final class ZLinkStreamDispatchQueue {
     void addAsync(String packetName, Supplier<CompletionStage<Void>> item) {
         synchronized (queue) {
             queue.add(new QueuedDispatch(packetName, null, item, () -> true));
+            version++;
         }
     }
 
@@ -64,15 +66,18 @@ final class ZLinkStreamDispatchQueue {
         Supplier<CompletionStage<Void>> dispatch,
         BooleanSupplier dispatchable,
         boolean runImmediately) {
-        Waiter matched = null;
-        Throwable predicateFailure = null;
-        boolean dropped = false;
-        synchronized (queue) {
-            for (Iterator<Waiter> iterator = waiters.iterator(); iterator.hasNext();) {
-                Waiter waiter = iterator.next();
-                if (!waiter.name().equals(message.packetName())) {
-                    continue;
-                }
+        while (true) {
+            long observedVersion;
+            List<Waiter> candidates;
+            synchronized (queue) {
+                observedVersion = version;
+                candidates = waiters.stream()
+                    .filter(waiter -> waiter.name().equals(message.packetName()))
+                    .toList();
+            }
+            Waiter matched = null;
+            Throwable predicateFailure = null;
+            for (Waiter waiter : candidates) {
                 try {
                     if (!waiter.predicate().test(message)) {
                         continue;
@@ -80,47 +85,72 @@ final class ZLinkStreamDispatchQueue {
                 } catch (Throwable error) {
                     predicateFailure = error;
                 }
-                iterator.remove();
-                matched = waiter;
-                break;
-            }
-            if (matched == null && !(runImmediately && dispatchable.getAsBoolean())) {
-                if (receivedMessageCount() >= maxReceivedMessages) {
-                    dropped = true;
-                } else {
-                    queue.add(new QueuedDispatch(
-                        message.packetName(), message, dispatch, dispatchable));
-                    receivedCounts.merge(message.packetName(), 1, Integer::sum);
+                if (claimWaiter(waiter)) {
+                    matched = waiter;
+                    break;
                 }
+                predicateFailure = null;
             }
-        }
-        if (dropped) {
-            closeMessage(message);
-            publishError.accept(new ZLinkStreamError(
-                ZLinkStreamErrorCode.RECEIVED_MESSAGE_DROPPED,
-                "Received message queue is full; dropped packet '"
-                    + message.packetName() + "'."));
-            return;
-        }
-        if (matched != null) {
-            if (predicateFailure != null) {
-                closeMessage(message);
-                matched.result().completeExceptionally(predicateFailure);
-            } else {
-                if (!matched.result().complete(message)) {
+            if (matched != null) {
+                if (predicateFailure != null) {
+                    closeMessage(message);
+                    matched.result().completeExceptionally(predicateFailure);
+                } else if (!matched.result().complete(message)) {
                     closeMessage(message);
                 }
+                return;
+            }
+
+            boolean immediate = false;
+            if (runImmediately) {
+                try {
+                    immediate = dispatchable.getAsBoolean();
+                } catch (Throwable error) {
+                    closeMessage(message);
+                    publishError.accept(new ZLinkStreamError(
+                        ZLinkStreamErrorCode.USER_CALLBACK_FAILED,
+                        "Stream dispatchability check failed.", error));
+                    return;
+                }
+            }
+            boolean dropped = false;
+            synchronized (queue) {
+                if (version != observedVersion) {
+                    continue;
+                }
+                if (!immediate) {
+                    if (receivedMessageCount() >= maxReceivedMessages) {
+                        dropped = true;
+                    } else {
+                        queue.add(new QueuedDispatch(
+                            message.packetName(), message, dispatch, dispatchable));
+                        receivedCounts.merge(message.packetName(), 1, Integer::sum);
+                        version++;
+                    }
+                }
+            }
+            if (dropped) {
+                closeMessage(message);
+                publishError.accept(new ZLinkStreamError(
+                    ZLinkStreamErrorCode.RECEIVED_MESSAGE_DROPPED,
+                    "Received message queue is full; dropped packet '"
+                        + message.packetName() + "'."));
+                return;
+            }
+            if (immediate) {
+                try {
+                    dispatch.get();
+                } catch (Throwable error) {
+                    // The dispatch supplier did not return its completion
+                    // stage, so its normal terminal close callback was never
+                    // installed. Release the outer message here.
+                    closeMessage(message);
+                    publishError.accept(new ZLinkStreamError(
+                        ZLinkStreamErrorCode.USER_CALLBACK_FAILED,
+                        "Stream message handler failed.", error));
+                }
             }
             return;
-        }
-        if (runImmediately && dispatchable.getAsBoolean()) {
-            try {
-                dispatch.get();
-            } catch (Throwable error) {
-                publishError.accept(new ZLinkStreamError(
-                    ZLinkStreamErrorCode.USER_CALLBACK_FAILED,
-                    "Stream message handler failed.", error));
-            }
         }
     }
 
@@ -128,62 +158,73 @@ final class ZLinkStreamDispatchQueue {
         String name,
         Predicate<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> predicate,
         CompletableFuture<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> result) {
-        ZLinkStreamMessage<ZLinkStreamEncodedPayload> found = null;
-        Throwable predicateFailure = null;
-        synchronized (queue) {
-            for (Iterator<QueuedDispatch> iterator = queue.iterator(); iterator.hasNext();) {
-                QueuedDispatch item = iterator.next();
-                if (item.message() == null || !name.equals(item.packetName())) {
-                    continue;
-                }
+        while (true) {
+            long observedVersion;
+            List<QueuedDispatch> candidates;
+            synchronized (queue) {
+                observedVersion = version;
+                candidates = queue.stream()
+                    .filter(item -> item.message() != null
+                        && name.equals(item.packetName()))
+                    .toList();
+            }
+            QueuedDispatch matched = null;
+            Throwable predicateFailure = null;
+            for (QueuedDispatch item : candidates) {
                 try {
                     if (!predicate.test(item.message())) {
                         continue;
                     }
                 } catch (Throwable error) {
                     predicateFailure = error;
-                    iterator.remove();
-                    decrementReceivedCount(item.packetName());
-                    found = item.message();
+                }
+                if (claimQueued(item)) {
+                    matched = item;
                     break;
                 }
-                iterator.remove();
-                decrementReceivedCount(item.packetName());
-                found = item.message();
-                break;
+                predicateFailure = null;
             }
-            if (found == null && predicateFailure == null) {
-                Waiter waiter = new Waiter(name, predicate, result);
-                waiters.add(waiter);
-                result.whenComplete((ignored, error) -> removeWaiter(waiter));
-            }
-        }
-        if (found != null) {
-            if (predicateFailure != null) {
-                closeMessage(found);
-                result.completeExceptionally(predicateFailure);
-            } else {
-                if (!result.complete(found)) {
+            if (matched != null) {
+                ZLinkStreamMessage<ZLinkStreamEncodedPayload> found =
+                    matched.message();
+                if (predicateFailure != null) {
+                    closeMessage(found);
+                    result.completeExceptionally(predicateFailure);
+                } else if (!result.complete(found)) {
                     closeMessage(found);
                 }
+                return;
+            }
+            synchronized (queue) {
+                if (version != observedVersion) {
+                    continue;
+                }
+                Waiter waiter = new Waiter(name, predicate, result);
+                waiters.add(waiter);
+                version++;
+                result.whenComplete((ignored, error) -> removeWaiter(waiter));
+                return;
             }
         }
     }
 
     void clear() {
+        List<QueuedDispatch> queued;
+        List<Waiter> pending;
         synchronized (queue) {
-            List<QueuedDispatch> queued = List.copyOf(queue);
-            List<Waiter> pending = List.copyOf(waiters);
+            queued = List.copyOf(queue);
+            pending = List.copyOf(waiters);
             queue.clear();
             receivedCounts.clear();
             waiters.clear();
-            queued.stream()
-                .map(QueuedDispatch::message)
-                .filter(java.util.Objects::nonNull)
-                .forEach(ZLinkStreamDispatchQueue::closeMessage);
-            pending.forEach(waiter -> waiter.result().completeExceptionally(
-                new IllegalStateException("stream dispatch queue was closed")));
+            version++;
         }
+        queued.stream()
+            .map(QueuedDispatch::message)
+            .filter(java.util.Objects::nonNull)
+            .forEach(ZLinkStreamDispatchQueue::closeMessage);
+        pending.forEach(waiter -> waiter.result().completeExceptionally(
+            new IllegalStateException("stream dispatch queue was closed")));
     }
 
     int receivedCount(String packetName) {
@@ -193,18 +234,43 @@ final class ZLinkStreamDispatchQueue {
     }
 
     CompletionStage<Void> drainAsync() {
-        QueuedDispatch next;
-        synchronized (queue) {
-            next = null;
-            for (Iterator<QueuedDispatch> iterator = queue.iterator(); iterator.hasNext();) {
-                QueuedDispatch candidate = iterator.next();
-                if (!candidate.dispatchable().getAsBoolean()) {
+        QueuedDispatch next = null;
+        while (true) {
+            long observedVersion;
+            List<QueuedDispatch> candidates;
+            synchronized (queue) {
+                observedVersion = version;
+                candidates = List.copyOf(queue);
+            }
+            for (QueuedDispatch candidate : candidates) {
+                boolean dispatchable;
+                try {
+                    dispatchable = candidate.dispatchable().getAsBoolean();
+                } catch (Throwable error) {
+                    return CompletableFuture.failedFuture(error);
+                }
+                if (!dispatchable) {
                     continue;
                 }
-                iterator.remove();
-                next = candidate;
-                decrementReceivedCount(next.packetName());
+                synchronized (queue) {
+                    if (version != observedVersion) {
+                        break;
+                    }
+                    if (removeQueuedLocked(candidate)) {
+                        next = candidate;
+                    }
+                }
+                if (next != null || observedVersion != version) {
+                    break;
+                }
+            }
+            if (next != null) {
                 break;
+            }
+            synchronized (queue) {
+                if (version == observedVersion) {
+                    return CompletableFuture.completedFuture(null);
+                }
             }
         }
         if (next == null) {
@@ -213,6 +279,7 @@ final class ZLinkStreamDispatchQueue {
         try {
             return next.action().get().thenCompose(ignored -> drainAsync());
         } catch (Throwable error) {
+            closeMessage(next.message());
             return CompletableFuture.failedFuture(error);
         }
     }
@@ -227,8 +294,41 @@ final class ZLinkStreamDispatchQueue {
 
     private void removeWaiter(Waiter waiter) {
         synchronized (queue) {
-            waiters.remove(waiter);
+            if (waiters.remove(waiter)) {
+                version++;
+            }
         }
+    }
+
+    private boolean claimWaiter(Waiter waiter) {
+        synchronized (queue) {
+            for (Iterator<Waiter> iterator = waiters.iterator(); iterator.hasNext();) {
+                if (iterator.next() == waiter) {
+                    iterator.remove();
+                    version++;
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
+    private boolean claimQueued(QueuedDispatch candidate) {
+        synchronized (queue) {
+            return removeQueuedLocked(candidate);
+        }
+    }
+
+    private boolean removeQueuedLocked(QueuedDispatch candidate) {
+        for (Iterator<QueuedDispatch> iterator = queue.iterator(); iterator.hasNext();) {
+            if (iterator.next() == candidate) {
+                iterator.remove();
+                decrementReceivedCount(candidate.packetName());
+                version++;
+                return true;
+            }
+        }
+        return false;
     }
 
     private void decrementReceivedCount(String packetName) {

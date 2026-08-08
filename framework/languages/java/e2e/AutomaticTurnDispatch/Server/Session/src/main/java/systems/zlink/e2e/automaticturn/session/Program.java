@@ -105,14 +105,10 @@ public final class Program {
         return options -> {
             options.addRelocationStore(relocationStore);
             options.addHandlersFromPackageOf(ScenarioReqHandler.class);
-            var dispatch = options.configureDispatch()
+            options.configureDispatch()
                 .messageFlow("off".equals(config.messageFlowMode())
                     ? ZLinkMessageFlowLogMode.OFF
-                    : ZLinkMessageFlowLogMode.KEY_TRANSITIONS);
-            if (!"off".equals(config.messageFlowMode())) {
-                dispatch.traceLogFile(config.logDirectory() + "/session-flow.log")
-                    .traceLabel("java-atd-session");
-            }
+                    : ZLinkMessageFlowLogMode.NORMAL);
             ZLinkMeshNodeBuilder mesh = options.addRouteMesh(Contracts.SPOT_MESH)
                 .listen(config.sessionRouteEndpoint())
                 .setRoutingId(RoutingId.from("session-a"))

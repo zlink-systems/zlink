@@ -115,7 +115,9 @@ final class ZLinkChannelRuntimeConfigurator {
         if (channel.routeRoutingId() != null) {
             router.setRoutingId(channel.routeRoutingId());
         }
-        applyServerSocketOptions(channel, router);
+        // RouteMesh does not expose a Framework message-size limit. Core owns
+        // the frame boundary; Framework only applies the routing weight.
+        router.setPeerWeight(channel.serverSocketOptions().weight());
         channel.routeConnections().attach(router);
         for (String endpoint : channel.routeBinds()) {
             router.bind(endpoint);

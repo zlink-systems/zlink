@@ -267,7 +267,12 @@ fun ZLinkStreamConnector.messages(
     packetName: String,
 ): Flow<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> = callbackFlow {
     val registration = on(packetName) { message ->
-        trySend(message).getOrThrow()
+        if (trySend(message).isFailure) {
+            // Cancellation closes the Flow channel before the connector can
+            // remove this callback. Release the message that was handed to us
+            // instead of turning normal cancellation into a callback failure.
+            message.payload().payload().close()
+        }
         java.util.concurrent.CompletableFuture.completedFuture(null)
     }
     awaitClose {
@@ -277,7 +282,7 @@ fun ZLinkStreamConnector.messages(
 
 fun ZLinkStreamConnector.errors(): Flow<ZLinkStreamError> = callbackFlow {
     val registration = onErrorReceived { error ->
-        trySend(error).getOrThrow()
+        trySend(error)
         java.util.concurrent.CompletableFuture.completedFuture(null)
     }
     awaitClose {

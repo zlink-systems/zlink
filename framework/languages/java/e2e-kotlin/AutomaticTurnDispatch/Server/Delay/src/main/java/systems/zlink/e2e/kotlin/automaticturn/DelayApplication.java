@@ -33,9 +33,7 @@ public final class DelayApplication {
             String nodeRid = Env.get("nodeRid", "delay-a");
             String logDir = Env.get("logDirectory", "logs");
             options.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile(logDir + "/delay-flow.log")
-                .traceLabel("kotlin-atd-delay");
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             options.addClientServerChannel(Contracts.DELAY_CHANNEL)
                 .server()
                 .listen(java.net.URI.create(Env.get("delayEndpoint")).getPort())

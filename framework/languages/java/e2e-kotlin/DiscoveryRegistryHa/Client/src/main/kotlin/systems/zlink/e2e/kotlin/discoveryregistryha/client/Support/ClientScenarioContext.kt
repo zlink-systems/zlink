@@ -3,9 +3,11 @@ package systems.zlink.e2e.kotlin.discoveryregistryha.client.Support
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import java.net.URI
+import java.net.URLEncoder
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
+import java.nio.charset.StandardCharsets
 import java.time.Duration
 import java.time.Instant
 import java.util.concurrent.CompletableFuture
@@ -183,6 +185,54 @@ class ClientScenarioContext(
         }
     }
 
+    // SF-C5A: exact ID lookup and bounded pages preserve Missing/Creating/Ready/Unavailable state.
+    fun runStoreFailureObjectState() {
+        val missingId = "sf-c5a-missing"
+        val unavailableId = "sf-c5a-unavailable"
+        val readyId = "sf-c5a-ready"
+        val creatingId = "sf-c5a-creating"
+
+        ScenarioAssert.that(!lookupObject(missingId).found, "SF-C5A missing exact lookup returned an entry")
+        createObjectStateFixture("SF-C5A", unavailableId)
+        waitForObjectState("SF-C5A", unavailableId, "ready")
+
+        println("scenario-control SF-C5A kill-provider-a")
+        waitForObjectState("SF-C5A", unavailableId, "unavailable")
+        println("scenario-control SF-C5A start-provider-b")
+
+        createObjectStateFixture("SF-C5A", readyId)
+        val creating = CompletableFuture.runAsync { createObjectStateFixture("SF-C5A", creatingId) }
+        waitForObjectState("SF-C5A", creatingId, "creating")
+
+        val missing = lookupObject(missingId)
+        val unavailable = lookupObject(unavailableId)
+        val ready = lookupObject(readyId)
+        val pending = lookupObject(creatingId)
+        ScenarioAssert.that(!missing.found, "SF-C5A missing exact lookup changed during the scenario")
+        ScenarioAssert.that(unavailable.state == "unavailable", "SF-C5A exact lookup did not preserve Unavailable: $unavailable")
+        ScenarioAssert.that(ready.state == "ready", "SF-C5A exact lookup did not preserve Ready: $ready")
+        ScenarioAssert.that(pending.state == "creating", "SF-C5A exact lookup did not preserve Creating: $pending")
+
+        val page = waitUntil(Duration.ofSeconds(30), "SF-C5A page did not expose all object states") {
+            try {
+                val values = readObjectLocationStates(1_000, 4)
+                if (values.keys.containsAll(setOf(unavailableId, readyId, creatingId))) values else null
+            } catch (_: RuntimeException) {
+                null
+            }
+        }
+        ScenarioAssert.that(!page.containsKey(missingId), "SF-C5A page included the missing object")
+        ScenarioAssert.that(page[unavailableId] == "unavailable", "SF-C5A page disagreed with Unavailable exact lookup: $page")
+        ScenarioAssert.that(page[readyId] == "ready", "SF-C5A page disagreed with Ready exact lookup: $page")
+        ScenarioAssert.that(page[creatingId] == "creating", "SF-C5A page disagreed with Creating exact lookup: $page")
+        println("scenario-observation SF-C5A exact=unavailable:${unavailable.state},ready:${ready.state},creating:${pending.state} page=$page")
+
+        creating.join()
+        println("scenario-control SF-C5A stop-redis")
+        waitForObjectPageFailure("SF-C5A")
+        println("scenario SF-C5A passed providers=${options.expectedRids()}")
+    }
+
     private fun requestUntilAnyProvider(): Set<String> {
         requireConsumerEndpoint()
         for (index in 0 until 60) {
@@ -271,6 +321,103 @@ class ClientScenarioContext(
         val responseBody = post("$endpoint$path", body)
         return json.readValue(responseBody, Contracts.WorkRes::class.java)
     }
+
+    private fun createObjectStateFixture(scenarioName: String, spotId: String) {
+        var lastError: RuntimeException? = null
+        for (attempt in 0 until 300) {
+            try {
+                val reply = postObjectRequest(spotId)
+                ScenarioAssert.that(reply.spotId == spotId, "$scenarioName object reply changed SpotId for $spotId")
+                ScenarioAssert.that(reply.objectGeneration > 0, "$scenarioName object generation is not positive for $spotId")
+                return
+            } catch (error: RuntimeException) {
+                lastError = error
+            }
+            sleep(100)
+        }
+        throw IllegalStateException("$scenarioName object $spotId was not admitted", lastError)
+    }
+
+    private fun postObjectRequest(spotId: String): Contracts.ObjectRes {
+        val responseBody = post(
+            "${requireConsumerEndpoint()}/object/request",
+            json.writeValueAsString(Contracts.ObjectReq(spotId, "SF-C5A-$spotId")),
+        )
+        val outcome = json.readValue(responseBody, Contracts.ObjectOutcome::class.java)
+        if (!outcome.succeeded) {
+            throw IllegalStateException("${outcome.errorKind}: ${outcome.errorMessage}")
+        }
+        return outcome.reply ?: throw IllegalStateException("object request returned no reply")
+    }
+
+    private fun lookupObject(spotId: String): ObjectLookup {
+        val encoded = URLEncoder.encode(spotId, StandardCharsets.UTF_8)
+        val root = json.readTree(get("${requireConsumerEndpoint()}/location/object?kind=spot&id=$encoded"))
+        return ObjectLookup(
+            root.path("found").asBoolean(false),
+            root.path("state").asText("").lowercase(java.util.Locale.ROOT),
+        )
+    }
+
+    private fun waitForObjectState(scenarioName: String, spotId: String, expected: String) {
+        var last: ObjectLookup? = null
+        for (attempt in 0 until 300) {
+            try {
+                last = lookupObject(spotId)
+                if (last?.state == expected) return
+            } catch (_: RuntimeException) {
+                // The authority row can be transient while a provider changes state.
+            }
+            sleep(100)
+        }
+        throw IllegalStateException("$scenarioName $spotId did not become $expected; last=$last")
+    }
+
+    private fun waitForObjectPageFailure(scenarioName: String) {
+        for (attempt in 0 until 150) {
+            try {
+                readObjectLocationStates(1_000, 4)
+            } catch (_: RuntimeException) {
+                return
+            }
+            sleep(100)
+        }
+        throw IllegalStateException("$scenarioName Store failure returned a partial successful page")
+    }
+
+    private fun readObjectLocationStates(pageSize: Int, expectedCount: Int): Map<String, String> {
+        val observed = linkedMapOf<String, String>()
+        var continuation: String? = null
+        var pages = 0
+        do {
+            val continuationQuery = continuation?.let {
+                "&continuationToken=${URLEncoder.encode(it, StandardCharsets.UTF_8)}"
+            } ?: ""
+            val root = json.readTree(
+                get("${requireConsumerEndpoint()}/locations/objects?kind=spot&pageSize=$pageSize$continuationQuery"),
+            )
+            val items = root.path("items")
+            ScenarioAssert.that(items.isArray, "SF-C5A object query did not return an item array")
+            ScenarioAssert.that(items.size() <= pageSize, "SF-C5A page exceeded requested page size $pageSize")
+            for (item in items) {
+                val globalId = item.path("globalId").asText("")
+                ScenarioAssert.that(globalId.isNotBlank(), "SF-C5A returned an object without globalId")
+                ScenarioAssert.that(item.path("objectGeneration").asLong(0) > 0, "SF-C5A returned a non-positive object generation")
+                ScenarioAssert.that(
+                    Contracts.OBJECT_TYPE == item.path("stableType").asText(),
+                    "SF-C5A returned an object with the wrong stable type",
+                )
+                ScenarioAssert.that(!observed.containsKey(globalId), "SF-C5A returned a duplicate object $globalId")
+                observed[globalId] = item.path("state").asText("").lowercase(java.util.Locale.ROOT)
+            }
+            continuation = root.path("continuationToken").asText("").ifBlank { null }
+            pages++
+            ScenarioAssert.that(pages <= maxOf(expectedCount, 1) * 4, "SF-C5A object query did not terminate")
+        } while (continuation != null)
+        return observed
+    }
+
+    private data class ObjectLookup(val found: Boolean, val state: String)
 
     private fun measureStoreRead(): Long {
         val started = Instant.now()

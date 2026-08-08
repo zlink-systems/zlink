@@ -36,6 +36,15 @@ public final class ZLinkMeshNodesRuntime implements AutoCloseable {
         ZLinkMeshBackendAdapter adapter,
         ZLinkBackendContext context,
         Function<MeshNodeRegistration, Consumer<ZLinkMeshDispatchRecord>> receiverFactory) {
+        return start(registrations, adapter, context, receiverFactory, false);
+    }
+
+    public static ZLinkMeshNodesRuntime start(
+        List<MeshNodeRegistration> registrations,
+        ZLinkMeshBackendAdapter adapter,
+        ZLinkBackendContext context,
+        Function<MeshNodeRegistration, Consumer<ZLinkMeshDispatchRecord>> receiverFactory,
+        boolean deferServiceReadyPublication) {
         List<ZLinkMeshNodeRuntime> started = new ArrayList<>();
         try {
             for (MeshNodeRegistration registration : registrations) {
@@ -49,7 +58,8 @@ public final class ZLinkMeshNodesRuntime implements AutoCloseable {
                     registration,
                     adapter,
                     context,
-                    applicationDispatchBudget);
+                    applicationDispatchBudget,
+                    deferServiceReadyPublication);
                 started.add(runtime);
                 if (receiver != null) {
                     if (receiver instanceof ZLinkMeshApplicationReceiver applicationReceiver) {

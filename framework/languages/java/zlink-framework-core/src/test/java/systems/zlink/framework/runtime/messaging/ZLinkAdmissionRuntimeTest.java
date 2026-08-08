@@ -22,6 +22,37 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendObject;
 
 final class ZLinkAdmissionRuntimeTest {
     @Test
+    void perCallTimeoutShortensConfiguredSocketDeadline() throws Exception {
+        FakeSource source = new FakeSource(Duration.ofSeconds(1));
+        AtomicInteger attempts = new AtomicInteger();
+        AtomicInteger cleanups = new AtomicInteger();
+
+        var result = ZLinkAdmissionRuntime.submit(
+            source,
+            ZLinkBackendAdmissionKey.socket(),
+            () -> {
+                attempts.incrementAndGet();
+                return false;
+            },
+            cleanups::incrementAndGet,
+            ignored -> source,
+            ignored -> source.admissionTimeout(),
+            ignored -> source.admissionPendingCapacity(),
+            (ignored, handler) -> source.setAdmissionReadyHandler(handler),
+            (ignored, handler) -> source.setAdmissionShutdownHandler(handler),
+            Duration.ofMillis(20)).toCompletableFuture();
+
+        assertThrows(
+            java.util.concurrent.ExecutionException.class,
+            () -> result.get(500, TimeUnit.MILLISECONDS));
+        assertEquals(
+            2,
+            systems.zlink.framework.runtime.messaging.OneWayTestStatus.status(result));
+        assertEquals(1, attempts.get());
+        assertEquals(1, cleanups.get());
+    }
+
+    @Test
     void duplicateGuardIsOwnedByOneCallAndReturnsAnExceptionalStage() {
         java.util.concurrent.atomic.AtomicBoolean first = new java.util.concurrent.atomic.AtomicBoolean();
         java.util.concurrent.atomic.AtomicBoolean second = new java.util.concurrent.atomic.AtomicBoolean();

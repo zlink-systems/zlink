@@ -58,13 +58,13 @@ import systems.zlink.framework.execution.ZLinkWorkerPool;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDispatcher;
 import systems.zlink.framework.actors.ZLinkActor;
-import systems.zlink.framework.configuration.ZLinkDispatchErrorAction;
-import systems.zlink.framework.configuration.ZLinkDispatchErrorReason;
-import systems.zlink.framework.configuration.ZLinkDispatchErrorSurface;
-import systems.zlink.framework.configuration.ZLinkDispatchMessageKind;
-import systems.zlink.framework.configuration.ZLinkMessageFlowEvent;
-import systems.zlink.framework.configuration.ZLinkMessageFlowOutcome;
-import systems.zlink.framework.configuration.ZLinkDispatchFailure;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorAction;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorReason;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSurface;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchFailure;
 import systems.zlink.framework.runtime.actors.ZLinkActorSpotRoutePackets;
 import systems.zlink.framework.runtime.actors.ZLinkActorReplyRoute;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
@@ -1647,6 +1647,15 @@ public final class ZLinkSpotRuntime
             acceptedRecord, received, spotId, objectGeneration);
     }
 
+    ZLinkSpotRelocationReplyRoutes.LazyRegistration registerRelocationReplyLazy(
+        java.util.function.Supplier<byte[]> acceptedRecord,
+        ZLinkBackendReceived received,
+        String spotId,
+        long objectGeneration) {
+        return relocationReplyRoutes.registerLazy(
+            acceptedRecord, received, spotId, objectGeneration);
+    }
+
     void bindCommittedRelocationReplies(
         Map<String, List<ZLinkAsyncSerialQueue.QueuedRecord>> journal,
         RoutingId targetNodeRid,
@@ -2804,6 +2813,10 @@ public final class ZLinkSpotRuntime
         String replyFailureMessage,
         ZLinkInboundDispatchBudget.Lease lease) {
         boolean request = handler.kind() == ZLinkScannedHandlerKind.ACTOR_REQUEST;
+        traceActorSession("completion-admission actor="
+            + actor.context().actorId()
+            + " pending=" + inboundDispatchBudget().pendingCompletionSends()
+            + " limit=" + inboundDispatchBudget().completionSendLimit());
         CompletionStage<ZLinkInboundDispatchBudget.CompletionPermit> permitStage =
             request
                 ? inboundDispatchBudget().acquireCompletionPermit()
@@ -2845,12 +2858,11 @@ public final class ZLinkSpotRuntime
         String replyFailureMessage) {
         var actorFlow = systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext.current();
         boolean noBindRequest = isNoBindActorRequest(packetHeader, headerPart);
-        byte[] acceptedRecord = headerPart.acceptedJournalRecord();
-        ZLinkSpotRelocationReplyRoutes.Registration relocationReply =
-            acceptedRecord.length == 0
+        ZLinkSpotRelocationReplyRoutes.LazyRegistration relocationReply =
+            !headerPart.hasAcceptedJournalRecord()
                 ? null
-                : relocationReplyRoutes.registerActor(
-                    acceptedRecord,
+                : relocationReplyRoutes.registerActorLazy(
+                    headerPart::acceptedJournalRecord,
                     actor.context().actorId(),
                     headerPart.actor().generation(),
                     parts -> deliverRelocatedActorReply(
@@ -2895,8 +2907,8 @@ public final class ZLinkSpotRuntime
                 actor,
                 packetHeader.requestSeq().isPresent(),
                 noBindRequest,
-                headerPart,
-                primaryNode,
+                        headerPart,
+                        primaryNode,
                 () -> actorIsRequest
                     ? invokeActorRequestHandler(
                         handler,
@@ -2913,6 +2925,9 @@ public final class ZLinkSpotRuntime
                         headerPart.contentType(),
                         packetHeader.metadata())
                         .thenApply(ignored -> Optional.empty()),
+                relocationReply == null
+                    ? headerPart::acceptedJournalRecord
+                    : relocationReply::record,
                 relocationReply == null
                     ? () -> { }
                     : relocationReply::releaseForRelocation));
@@ -3621,7 +3636,7 @@ public final class ZLinkSpotRuntime
             primaryNodeSourceName,
             (timerName, operation) -> dispatch.enqueue(timerName, () -> {
                 if (!dispatchErrors.flow().enabled(
-                    systems.zlink.framework.configuration.ZLinkMessageFlowOutcome.SENT)) {
+                    systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome.SENT)) {
                     return operation.get();
                 }
                 systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext.State timerFlow =
@@ -4091,8 +4106,27 @@ public final class ZLinkSpotRuntime
             return true;
         }
         if (ZLinkActorSpotRoutePackets.SESSION_DISCONNECTED_PACKET_NAME.equals(packetHeader.packetName())) {
-            closePendingActorHeader(headerPart, pendingHeader);
-            notifySpotActorDisconnected(actor).exceptionally(error -> null);
+            CompletionStage<Void> callback = notifySpotActorDisconnected(actor);
+            callback.whenComplete((ignored, error) -> {
+                try {
+                    if (packetHeader.requestSeq().isPresent()) {
+                        // The acknowledgement marks the exact callback's
+                        // terminal boundary. Callback failure is diagnostic;
+                        // it does not restore the previous binding.
+                        try (Message acknowledgement = Message.from(new byte[0])) {
+                            primaryNode.replyActorNoBind(
+                                headerPart.actor(),
+                                headerPart.sourceNodeRid(),
+                                headerPart.sourceSessionRid(),
+                                headerPart.requestId(),
+                                headerPart.flags(),
+                                List.of(acknowledgement));
+                        }
+                    }
+                } finally {
+                    closePendingActorHeader(headerPart, pendingHeader);
+                }
+            });
             return true;
         }
         return false;
@@ -4284,7 +4318,16 @@ public final class ZLinkSpotRuntime
                 headerCopy,
                 payloadCopy,
                 lease);
-        queued.whenComplete((ignored, error) -> release.run());
+        queued.whenComplete((ignored, error) -> {
+            if (error != null) {
+                if (STREAM_TRACE) {
+                    LOGGER.log(java.util.logging.Level.WARNING,
+                        "[zlink-java-stream-trace] actor-session enqueue-local-failed actor="
+                            + actor.context().actorId(), error);
+                }
+            }
+            release.run();
+        });
         return queued;
     }
 
@@ -4375,6 +4418,20 @@ public final class ZLinkSpotRuntime
 
     static ZLinkBackendActorReceived copyActorReceived(
         ZLinkBackendActorReceived received) {
+        if (received.hasAcceptedJournalRecord()) {
+            return ZLinkBackendActorReceived.lazyJournal(
+                received.actor(),
+                received.sourceNodeRid(),
+                received.sourceSessionRid(),
+                received.requestSeq(),
+                received.requestId(),
+                received.flags(),
+                Message.from(received.message()),
+                received.hasMore(),
+                received::acceptedJournalRecord,
+                received.contentType(),
+                received.inboundDispatchLease());
+        }
         return new ZLinkBackendActorReceived(
             received.actor(),
             received.sourceNodeRid(),
@@ -4384,7 +4441,7 @@ public final class ZLinkSpotRuntime
             received.flags(),
             Message.from(received.message()),
             received.hasMore(),
-            received.acceptedJournalRecord(),
+            new byte[0],
             received.contentType(),
             received.inboundDispatchLease());
     }

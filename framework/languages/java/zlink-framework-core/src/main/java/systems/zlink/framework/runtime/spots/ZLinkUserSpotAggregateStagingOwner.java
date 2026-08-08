@@ -136,9 +136,22 @@ final class ZLinkUserSpotAggregateStagingOwner {
         Staged staged,
         Request finalRequest,
         JournalReplayer replayer) {
+        return publishAndReplayHidden(
+            staged,
+            finalRequest,
+            replayer,
+            Map.of());
+    }
+
+    CompletionStage<Void> publishAndReplayHidden(
+        Staged staged,
+        Request finalRequest,
+        JournalReplayer replayer,
+        Map<String, Long> actorOwnerGenerations) {
         requireActive(staged);
         requireStagingPrefix(staged.request, finalRequest);
         Objects.requireNonNull(replayer, "replayer");
+        Objects.requireNonNull(actorOwnerGenerations, "actorOwnerGenerations");
         // Replay the final authority-selected journal while the prepared
         // objects remain hidden. Local Ready/admission opens only after every
         // captured and held suffix record completes.
@@ -153,8 +166,18 @@ final class ZLinkUserSpotAggregateStagingOwner {
             }
         }
         return replay.thenRun(() -> {
-            for (var actor : staged.actors) {
-                backend.publishActor(actor);
+            for (int index = 0; index < staged.actors.size(); index++) {
+                Object actor = staged.actors.get(index);
+                String actorId = finalRequest.actors().get(index).actorId();
+                Long ownerGeneration = actorOwnerGenerations.get(actorId);
+                if (ownerGeneration == null) {
+                    backend.publishActor(actor);
+                } else {
+                    backend.publishActor(
+                        actor,
+                        finalRequest.spotId(),
+                        ownerGeneration);
+                }
             }
             backend.publishSpot(staged.spot);
             staged.published = true;
@@ -367,6 +390,19 @@ final class ZLinkUserSpotAggregateStagingOwner {
 
         void publishActor(Object preparedActor);
 
+        /**
+         * Publishes a relocated Actor and installs its target Spot route and
+         * authority fence when the target owner generation is available.
+         * Test and non-relocation backends may retain the legacy publication
+         * behavior.
+         */
+        default void publishActor(
+            Object preparedActor,
+            String targetSpotId,
+            long targetOwnerGeneration) {
+            publishActor(preparedActor);
+        }
+
         void completeActor(Object preparedActor);
 
         default void publishActorTimers(
@@ -498,6 +534,10 @@ final class ZLinkUserSpotAggregateStagingOwner {
             this.spot = spot;
             this.actors = List.copyOf(actors);
         }
+
+        int actorCount() {
+            return request.actors().size();
+        }
     }
 
     private static final class ProductionBackend implements StagingBackend {
@@ -595,6 +635,17 @@ final class ZLinkUserSpotAggregateStagingOwner {
         @Override public void publishActor(Object value) {
             actors.publishPreparedTransferredActor(
                 (ZLinkActorRuntime.PreparedTransferredActor) value);
+        }
+
+        @Override
+        public void publishActor(
+            Object value,
+            String targetSpotId,
+            long targetOwnerGeneration) {
+            actors.publishPreparedTransferredActor(
+                (ZLinkActorRuntime.PreparedTransferredActor) value,
+                targetSpotId,
+                targetOwnerGeneration);
         }
 
         @Override public void completeActor(Object value) {

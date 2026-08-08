@@ -26,10 +26,10 @@ public final class AtdA1BasicTerminatorScenario {
         ScenarioAssert.containsMarkersInOrder(
             evidence.markers(),
             "hold-started",
-            "probe-started",
-            "probe-completed",
             "hold-resumed",
-            "hold-completed");
+            "hold-completed",
+            "probe-started",
+            "probe-completed");
         System.out.println("scenario ATD-A1 passed");
         return new Result(actorId);
     }

@@ -69,7 +69,9 @@ final class ZLinkStreamReceiveBufferTest {
         // The length is rejected as soon as the complete prefix is available.
         ZLinkStreamReceiveBuffer delayed = new ZLinkStreamReceiveBuffer(4);
         delayed.append(Arrays.copyOf(frame, 6));
-        assertThrows(IllegalArgumentException.class, delayed::tryTakeFrame);
+        assertThrows(
+            ZLinkStreamMessageTooLargeException.class,
+            delayed::tryTakeFrame);
     }
 
     private static String decodedHeaderName(ZLinkStreamInboundFrame frame) {

@@ -1,20 +1,15 @@
 package systems.zlink.framework.runtime.diagnostics;
 
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
-import java.util.concurrent.CompletionException;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-import systems.zlink.framework.configuration.ZLinkDiagnosticsOptions;
-import systems.zlink.framework.configuration.ZLinkDispatchErrorReason;
-import systems.zlink.framework.configuration.ZLinkDispatchMessageKind;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorReason;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
 import systems.zlink.framework.configuration.ZLinkLogLevel;
-import systems.zlink.framework.configuration.ZLinkMessageFlowEvent;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent;
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
-import systems.zlink.framework.configuration.ZLinkMessageFlowObserver;
-import systems.zlink.framework.configuration.ZLinkMessageFlowOutcome;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome;
 import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDispatcher;
@@ -32,11 +27,9 @@ public final class ZLinkMessageFlowTracer {
         Logger.getLogger(ZLinkMessageFlowTracer.class.getName());
 
     private final ZLinkDispatchOptionsRegistration options;
-    private final ZLinkHandlerActivator handlerFactory;
-    private final Executor executor;
     private final ZLinkRuntimeEventDispatcher eventDispatcher;
     private final AtomicLong tracedCount = new AtomicLong();
-    private final AtomicLong observerFailureCount = new AtomicLong();
+    private final AtomicLong providerFailureCount = new AtomicLong();
     private final AtomicLong sampleCounter = new AtomicLong();
 
     public ZLinkMessageFlowTracer(
@@ -52,8 +45,6 @@ public final class ZLinkMessageFlowTracer {
         Executor executor,
         ZLinkRuntimeEventDispatcher eventDispatcher) {
         this.options = options;
-        this.handlerFactory = handlerFactory;
-        this.executor = executor;
         this.eventDispatcher = eventDispatcher;
     }
 
@@ -77,29 +68,8 @@ public final class ZLinkMessageFlowTracer {
         try {
             logDefault(tracedFlow);
         } catch (Throwable ex) {
-            observerFailureCount.incrementAndGet();
+            reportProviderFailure(ex);
         }
-
-        if (options.messageFlowObserver() == null && options.messageFlowObserverType() == null) {
-            return;
-        }
-        CompletableFuture.runAsync(() -> {
-            try {
-                ZLinkMessageFlowObserver observer = resolveObserver();
-                if (observer == null) {
-                    return;
-                }
-                CompletionStage<Void> result = observer.onMessageFlow(tracedFlow);
-                if (result != null) {
-                    result.exceptionally(error -> {
-                        reportObserverFailure(error);
-                        return null;
-                    });
-                }
-            } catch (Throwable ex) {
-                reportObserverFailure(ex);
-            }
-        }, executor);
     }
 
     private ZLinkMessageFlowEvent attachFlow(ZLinkMessageFlowEvent event) {
@@ -123,15 +93,15 @@ public final class ZLinkMessageFlowTracer {
         return tracedCount.get();
     }
 
-    public long observerFailureCount() {
-        return observerFailureCount.get();
+    public long providerFailureCount() {
+        return providerFailureCount.get();
     }
 
     private static ZLinkMessageFlowLogMode requiredMode(ZLinkMessageFlowOutcome outcome) {
         return outcome == ZLinkMessageFlowOutcome.DROPPED
             || outcome == ZLinkMessageFlowOutcome.ERROR
-            ? ZLinkMessageFlowLogMode.ERRORS_ONLY
-            : ZLinkMessageFlowLogMode.KEY_TRANSITIONS;
+            ? ZLinkMessageFlowLogMode.ERRORS
+            : ZLinkMessageFlowLogMode.NORMAL;
     }
 
     private boolean sample(String flowId) {
@@ -149,53 +119,28 @@ public final class ZLinkMessageFlowTracer {
         return sampleCounter.incrementAndGet() % stride == 0;
     }
 
-    private ZLinkMessageFlowObserver resolveObserver() {
-        if (options.messageFlowObserver() != null) {
-            return options.messageFlowObserver();
-        }
-        if (options.messageFlowObserverType() == null) {
-            return null;
-        }
-        return (ZLinkMessageFlowObserver) handlerFactory.create(options.messageFlowObserverType());
-    }
-
-    private void reportObserverFailure(Throwable error) {
-        observerFailureCount.incrementAndGet();
+    private void reportProviderFailure(Throwable error) {
+        providerFailureCount.incrementAndGet();
         if (eventDispatcher == null) {
             return;
         }
-        Throwable actual = unwrap(error);
         eventDispatcher.publishObserverFailure(
             "message-flow",
-            "message-flow-observer",
-            actual);
-    }
-
-    private static Throwable unwrap(Throwable error) {
-        if (error instanceof CompletionException && error.getCause() != null) {
-            return error.getCause();
-        }
-        return error;
+            "standard-logger",
+            error);
     }
 
     private void logDefault(ZLinkMessageFlowEvent flow) {
-        ZLinkDiagnosticsOptions diagnostics = options.diagnostics();
+        ZLinkDispatchOptionsRegistration.DiagnosticsOptions diagnostics = options.diagnostics();
         Long size = null;
         if (flow.messageSize() != null
-            && diagnostics.effectiveMessageFlow().value() >= ZLinkMessageFlowLogMode.VERBOSE.value()
+            && diagnostics.effectiveMessageFlow().value() >= ZLinkMessageFlowLogMode.DETAILED.value()
             && diagnostics.includeMessageSizes()) {
             size = flow.messageSize();
         }
 
-        String line = ZLinkTraceFormat.flowLine(flow, diagnostics.label(), size);
-        // Separated file (diagnostics.logFile) vs the shared app logger. Both carry
-        // structured key=value tokens (greppable by corr); the observer gets the
-        // typed event for collector ingest.
-        if (diagnostics.logFile() != null) {
-            ZLinkTraceFileWriter.write(diagnostics.logFile(), line);
-        } else {
-            LOGGER.log(logLevel(flow), line);
-        }
+        String line = ZLinkTraceFormat.flowLine(flow, null, size);
+        LOGGER.log(logLevel(flow), line);
     }
 
     Level logLevel(ZLinkMessageFlowEvent flow) {

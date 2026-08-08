@@ -1,6 +1,6 @@
 package systems.zlink.framework.runtime.diagnostics;
 
-import systems.zlink.framework.configuration.ZLinkMessageFlowEvent;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent;
 
 // Shared formatter for the file/JUL key=value lines (present fields only) used by both
 // the flow tracer and the dispatch error reporter. Mirrors the C++/.NET trace format.

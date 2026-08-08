@@ -19,6 +19,19 @@ import systems.zlink.framework.runtime.internal.dispatch.ZLinkInboundDispatchBud
 import systems.zlink.framework.streams.ZLinkStreamCodec;
 
 public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
+    default RoutingId routingId() {
+        return null;
+    }
+
+    default long lifecycleGeneration() {
+        return 0L;
+    }
+
+    default String localAuthorityOwnerId() {
+        RoutingId current = routingId();
+        return current == null ? name() : current.toString();
+    }
+
     void setBind(String endpoint);
 
     default void setAdvertiseHost(String host) {
@@ -78,9 +91,32 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
         // mailbox admission yet.
     }
 
+    default void setMailboxByteBudget(long value) {
+        // Optional for test and alternate backends that do not expose Core
+        // mailbox admission yet.
+    }
+
     void setRoutingId(RoutingId routingId);
 
     void start();
+
+    /**
+     * Defers the local descriptor's serving transition until the host calls
+     * {@link #markServiceReady()} after Framework startup preparation.
+     */
+    default void deferServiceReadyPublication() {
+        // Alternate backends may not publish a separate service descriptor.
+    }
+
+    /**
+     * Publishes the local service descriptor as available for application
+     * selection after the Framework host has finished preparing its handlers,
+     * objects, and peer connections.
+     */
+    default void markServiceReady() {
+        // Alternate backends may publish readiness as part of their own host
+        // lifecycle and do not expose a separate descriptor transition.
+    }
 
     long connectPeer(String endpoint);
 
@@ -315,6 +351,28 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
                 "Session relocation routing is unavailable"));
     }
 
+    /**
+     * Installs the one-way command 51 endpoint. The record is infrastructure
+     * state and must not enter the application mailbox.
+     */
+    default void setBoundSessionReplacedHandler(
+        BoundSessionReplacedHandler handler) {
+        // Alternate backends may not support bound-session replacement.
+    }
+
+    /**
+     * Sends command 51 to the exact retired Session owner. Admission failure
+     * is owned by the sender's bounded asynchronous retry queue; no ACK is
+     * expected for this one-way record.
+     */
+    default CompletionStage<Void> sendBoundSessionReplaced(
+        RoutingId sessionOwnerNodeRid,
+        ZLinkServiceM6BWireCodec.BoundSessionReplaced replacement) {
+        return java.util.concurrent.CompletableFuture.failedFuture(
+            new UnsupportedOperationException(
+                "Bound Session replacement notification is unavailable"));
+    }
+
 
     default CompletionStage<ActorCreateResponse> requestActorCreate(
         RoutingId targetNodeRid,
@@ -498,6 +556,13 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
         CompletionStage<byte[]> handle(
             RoutingId sourceNodeRid,
             byte[] command44);
+    }
+
+    @FunctionalInterface
+    interface BoundSessionReplacedHandler {
+        void handle(
+            RoutingId sourceNodeRid,
+            ZLinkServiceM6BWireCodec.BoundSessionReplaced replacement);
     }
 
     record UserSpotCreateIntent(

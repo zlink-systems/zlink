@@ -2,10 +2,9 @@ package systems.zlink.framework.configuration;
 
 public enum ZLinkMessageFlowLogMode {
     OFF(0),
-    ERRORS_ONLY(1),
-    KEY_TRANSITIONS(2),
-    VERBOSE(3),
-    DIAGNOSTIC(4);
+    ERRORS(1),
+    NORMAL(2),
+    DETAILED(3);
 
     private final int value;
 

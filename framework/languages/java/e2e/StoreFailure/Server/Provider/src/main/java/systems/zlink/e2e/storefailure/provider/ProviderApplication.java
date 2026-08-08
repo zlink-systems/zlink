@@ -34,9 +34,7 @@ public final class ProviderApplication {
         ProviderEvidenceStore evidence) {
         return framework -> {
             framework.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile(options.logDir() + "/" + options.rid() + "-flow.log")
-                .traceLabel(options.rid());
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             framework.addHandlersFromPackageOf(ProfileReqHandler.class);
             framework.configureLocations().setOwnerLeaseRenewInterval(Duration.ofMillis(options.heartbeatMillis()));
             framework.configureLocations().setOwnerLeaseTtl(Duration.ofMillis(options.leaseTtlMillis()));

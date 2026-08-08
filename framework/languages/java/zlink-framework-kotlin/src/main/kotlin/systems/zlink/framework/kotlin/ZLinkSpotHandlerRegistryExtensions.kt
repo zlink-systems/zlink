@@ -6,12 +6,17 @@ import systems.zlink.framework.spots.ZLinkEntrySpotActorSendHandler
 import systems.zlink.framework.spots.ZLinkSpotActorRequestHandler
 import systems.zlink.framework.spots.ZLinkSpotActorSendHandler
 import systems.zlink.framework.spots.ZLinkSpotHandlerRegistry
+import systems.zlink.framework.spots.ZLinkInstanceSpotHandlerRegistry
 import systems.zlink.framework.spots.ZLinkSpotPacketHandler
 import systems.zlink.framework.spots.ZLinkSpotRequestHandler
 import systems.zlink.framework.spots.ZLinkSpotSubscriptionHandler
 
 inline fun <reified THandler : Any> ZLinkSpotHandlerRegistry.addHandler() {
     addTypedHandler(THandler::class.java)
+}
+
+inline fun <reified THandler : Any> ZLinkInstanceSpotHandlerRegistry.addHandler() {
+    addPacket(THandler::class.java)
 }
 
 @PublishedApi

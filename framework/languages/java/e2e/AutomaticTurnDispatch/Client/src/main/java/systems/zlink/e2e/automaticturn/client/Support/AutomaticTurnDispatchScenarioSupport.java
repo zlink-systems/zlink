@@ -9,6 +9,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -19,6 +20,7 @@ import systems.zlink.httpclient.ZLinkHttpClient;
 import systems.zlink.stream.connector.ZLinkStreamConnector;
 import systems.zlink.stream.connector.ZLinkStreamConnectorFactory;
 import systems.zlink.stream.connector.ZLinkStreamConnectorOptions;
+import systems.zlink.stream.connector.ZLinkStreamDisconnected;
 import systems.zlink.stream.connector.ZLinkStreamMessage;
 
 public final class AutomaticTurnDispatchScenarioSupport {
@@ -359,6 +361,76 @@ public final class AutomaticTurnDispatchScenarioSupport {
         assertAllValuesContain(playEvidence, requestId, List.of(
             "actor-fast-started",
             "actor-fast-completed"), "actor=" + actorB);
+    }
+
+    public void runJvmSessionReplacement(
+        ZLinkStreamConnector retiredSession,
+        ZLinkStreamConnector currentSession) throws Exception {
+        String requestId = "jvm-session-" + System.nanoTime();
+        String actorA = requestId + "-actor-a";
+        String actorB = requestId + "-actor-b";
+        Contracts.BindActorsRes bind = retiredSession
+            .request(new Contracts.BindActorsReq(Contracts.TARGET_SPOT, actorA, actorB))
+            .timeout(REQUEST_TIMEOUT)
+            .submit(Contracts.BindActorsRes.class)
+            .toCompletableFuture()
+            .join();
+        ensure(actorA.equals(bind.actorA()), "JVM-SESSION-001 actor A bind mismatch");
+        ensure(actorB.equals(bind.actorB()), "JVM-SESSION-001 actor B bind mismatch");
+
+        CompletionStage<ZLinkStreamMessage<Contracts.ActorBindingReplacedNotice>> notice =
+            retiredSession
+                .waitFor(Contracts.ActorBindingReplacedNotice.class)
+                .timeout(Duration.ofSeconds(5))
+                .submit(Contracts.ActorBindingReplacedNotice.class);
+        CompletableFuture<ZLinkStreamDisconnected> disconnected =
+            new CompletableFuture<>();
+        AutoCloseable disconnectSubscription = retiredSession.onDisconnected(event -> {
+            disconnected.complete(event);
+            return CompletableFuture.completedFuture(null);
+        });
+        try {
+            Contracts.ActorAuthRes authenticated = currentSession
+                .request(new Contracts.ActorAuthReq(actorB))
+                .timeout(REQUEST_TIMEOUT)
+                .submit(Contracts.ActorAuthRes.class)
+                .toCompletableFuture()
+                .join();
+            ensure(actorB.equals(authenticated.actorId()),
+                "JVM-SESSION-001 current session bind mismatch");
+
+            Contracts.ActorBindingReplacedNotice callback =
+                notice.toCompletableFuture().join().payload();
+            ensure(actorB.equals(callback.actorId()),
+                "JVM-SESSION-001 callback actor mismatch");
+            long callbackTerminalNanos = System.nanoTime();
+
+            Contracts.ActorFastRes fast = currentSession
+                .request(new Contracts.ActorFastReq(requestId, "replacement-progress"))
+                .metadata(Contracts.ACTOR_ID_METADATA, actorB)
+                .timeout(REQUEST_TIMEOUT)
+                .submit(Contracts.ActorFastRes.class)
+                .toCompletableFuture()
+                .join();
+            ensure(actorB.equals(fast.actorId()),
+                "JVM-SESSION-001 other session lane did not progress");
+
+            ZLinkStreamDisconnected close = disconnected
+                .orTimeout(REQUEST_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)
+                .join();
+            long closeDelayMillis = TimeUnit.NANOSECONDS.toMillis(
+                System.nanoTime() - callbackTerminalNanos);
+            ensure(close.closeReason() == systems.zlink.stream.connector.ZLinkStreamCloseReason.SERVER_DRAIN,
+                "JVM-SESSION-001 retired session close reason mismatch: " + close.closeReason());
+            ensure(closeDelayMillis >= 80 && closeDelayMillis < 2_000,
+                "JVM-SESSION-001 retired session close was not timer bounded: "
+                    + closeDelayMillis + "ms");
+        } finally {
+            try {
+                disconnectSubscription.close();
+            } catch (Exception ignored) {
+            }
+        }
     }
 
     public void runWorkerAwait(ZLinkStreamConnector connector) throws Exception {

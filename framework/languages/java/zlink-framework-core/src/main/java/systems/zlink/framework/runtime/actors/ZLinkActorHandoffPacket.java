@@ -24,12 +24,13 @@ final class ZLinkActorHandoffPacket implements AutoCloseable {
         this.header = header;
         this.payload = Message.from(payload);
         this.replyRoute = replyRoute;
-        this.acceptedJournalRecord = java.util.Objects.requireNonNull(
-            acceptedJournalRecord, "acceptedJournalRecord").clone();
-        if (this.acceptedJournalRecord.length == 0) {
+        byte[] journal = java.util.Objects.requireNonNull(
+            acceptedJournalRecord, "acceptedJournalRecord");
+        if (journal.length == 0) {
             throw new IllegalArgumentException(
                 "accepted Actor handoff journal record is required");
         }
+        this.acceptedJournalRecord = journal.clone();
     }
 
     long arrivalIndex() {
@@ -50,6 +51,10 @@ final class ZLinkActorHandoffPacket implements AutoCloseable {
 
     byte[] acceptedJournalRecord() {
         return acceptedJournalRecord.clone();
+    }
+
+    long retainedBytes() {
+        return payload.size() + acceptedJournalRecord.length + 128L;
     }
 
     CompletionStage<Optional<Message>> reply() {

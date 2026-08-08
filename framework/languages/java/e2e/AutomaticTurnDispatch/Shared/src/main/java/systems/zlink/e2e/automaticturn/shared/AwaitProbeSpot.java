@@ -57,6 +57,7 @@ public final class AwaitProbeSpot implements ZLinkSpot<AwaitActor> {
         context.handlers().addHandler(AwaitProbeHandlers.SpotActorAwaitHandler.class);
         context.handlers().addHandler(AwaitProbeHandlers.SpotActorFastHandler.class);
         context.handlers().addHandler(AwaitProbeHandlers.SpotActorJoinHandler.class);
+        context.handlers().addHandler(AwaitProbeHandlers.SpotActorPushNotifyAwaitHandler.class);
         context.handlers().addHandler(AwaitProbeHandlers.PersistentRoomStateHandler.class);
         context.handlers().addHandler(AwaitProbeHandlers.CounterResetMsgHandler.class);
         context.handlers().addHandler(AwaitProbeHandlers.CounterAwaitMsgHandler.class);

@@ -15,7 +15,6 @@ public record ZLinkServiceNodeDescriptor(
     List<Channel> channels,
     State state,
     String securityIdentity,
-    int effectiveMaxMessageBytes,
     long applicationVersion,
     List<String> protocolCapabilities,
     ObjectRole objectRole,
@@ -37,9 +36,9 @@ public record ZLinkServiceNodeDescriptor(
             throw new IllegalArgumentException(
                 "lifecycle generation and descriptor revision must be positive");
         }
-        if (effectiveMaxMessageBytes <= 0 || applicationVersion < 0) {
+        if (applicationVersion < 0) {
             throw new IllegalArgumentException(
-                "effective message bound or application version is invalid");
+                "application version is invalid");
         }
         validateWeight(placementWeight, "placementWeight");
         validateCapacity(activeCapacityLimit, false, "activeCapacityLimit");

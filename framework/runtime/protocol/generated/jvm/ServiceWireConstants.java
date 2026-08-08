@@ -49,6 +49,7 @@ public final class ServiceWireConstants {
     public static final int COMMAND_USER_SPOT_CLOSE = 48;
     public static final int COMMAND_ACTOR_CREATE = 49;
     public static final int COMMAND_MESSAGE_FOLLOW = 50;
+    public static final int COMMAND_BOUND_SESSION_REPLACED = 51;
     public static final int FLAG_METADATA = 1;
     public static final int FLAG_BOUND_SESSION = 2;
     public static final int FLAG_SOURCE_SPOT_ID = 4;

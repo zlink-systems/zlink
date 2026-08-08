@@ -110,6 +110,28 @@ final class ZLinkClientServerM6ARuntimeTest {
     }
 
     @Test
+    void stalePhysicalCleanupCannotRemoveReplacementWithSameConnectionId() {
+        ZLinkChannelSocketRegistry sockets =
+            new ZLinkChannelSocketRegistry();
+        ZLinkClientServerServerDescriptor value =
+            descriptor(
+                "orders", RoutingId.from("server"), 7, 1,
+                "tcp://127.0.0.1:7001", 100);
+        ZLinkBackendDealerSocket oldDealer = dealer("old");
+        ZLinkBackendDealerSocket newDealer = dealer("new");
+
+        sockets.addClientServerConnection("same", value, oldDealer);
+        sockets.admitClientServerConnection("same", value);
+        sockets.addClientServerConnection("same", value, newDealer);
+        sockets.admitClientServerConnection("same", value);
+
+        sockets.removeClientServerConnection("same", oldDealer);
+        sockets.reconnectClientServerConnection("same", oldDealer);
+
+        assertSame(newDealer, sockets.clientForOutbound("orders"));
+    }
+
+    @Test
     void clientLivenessAndPushedUpdateAreConnectionFenced() {
         ZLinkChannelSocketRegistry sockets =
             new ZLinkChannelSocketRegistry();

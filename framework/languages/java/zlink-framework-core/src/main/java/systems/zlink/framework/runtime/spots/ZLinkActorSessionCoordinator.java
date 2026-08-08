@@ -364,6 +364,7 @@ final class ZLinkActorSessionCoordinator {
         ZLinkBackendActorReceived headerPart,
         ZLinkInternalSpotNode primaryNode,
         Supplier<CompletionStage<Optional<Message>>> operation,
+        Supplier<byte[]> relocationRecord,
         Runnable relocationRelease) {
         ZLinkActorRuntime runtime = requireActors();
         if (request
@@ -391,12 +392,12 @@ final class ZLinkActorSessionCoordinator {
                 }
                 return null;
             });
-        byte[] acceptedRecord = headerPart.acceptedJournalRecord();
-        CompletionStage<Void> submitted = acceptedRecord.length == 0
+        CompletionStage<Void> submitted = !headerPart.hasAcceptedJournalRecord()
             ? runtime.submitActorDispatch(actorId, turn)
-            : runtime.submitActorDispatch(
+            : runtime.submitActorDispatchLazyRecord(
                 actorId,
-                acceptedRecord,
+                relocationRecord,
+                headerPart.message().size() + 512L,
                 turn,
                 () -> {
                     relocationRelease.run();

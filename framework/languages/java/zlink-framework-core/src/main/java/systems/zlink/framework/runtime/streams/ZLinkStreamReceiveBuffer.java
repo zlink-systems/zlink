@@ -53,7 +53,7 @@ final class ZLinkStreamReceiveBuffer implements AutoCloseable {
             throw new IllegalArgumentException("STREAM frame length overflows", overflow);
         }
         if (maxMessageSize > 0 && messageSize > maxMessageSize) {
-            throw new IllegalArgumentException(
+            throw new ZLinkStreamMessageTooLargeException(
                 "STREAM frame exceeds MaxMessageSize");
         }
         if (totalBytes > Integer.MAX_VALUE) {

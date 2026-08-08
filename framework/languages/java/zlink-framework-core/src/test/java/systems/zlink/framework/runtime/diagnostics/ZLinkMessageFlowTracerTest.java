@@ -4,18 +4,16 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Level;
 import org.junit.jupiter.api.Test;
-import systems.zlink.framework.configuration.ZLinkDispatchErrorAction;
-import systems.zlink.framework.configuration.ZLinkDispatchErrorReason;
-import systems.zlink.framework.configuration.ZLinkDispatchErrorSurface;
-import systems.zlink.framework.configuration.ZLinkDispatchMessageKind;
-import systems.zlink.framework.configuration.ZLinkMessageFlowEvent;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorAction;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorReason;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSurface;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent;
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
-import systems.zlink.framework.configuration.ZLinkMessageFlowOutcome;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome;
 import systems.zlink.framework.runtime.configuration.ZLinkDispatchOptionsRegistration;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 
@@ -48,14 +46,14 @@ class ZLinkMessageFlowTracerTest {
 
     @Test
     void errorsOnlyEmitsDroppedNotReceived() {
-        ZLinkMessageFlowTracer tracer = tracer(options(ZLinkMessageFlowLogMode.ERRORS_ONLY));
+        ZLinkMessageFlowTracer tracer = tracer(options(ZLinkMessageFlowLogMode.ERRORS));
         assertFalse(tracer.enabled(ZLinkMessageFlowOutcome.RECEIVED));
         assertTrue(tracer.enabled(ZLinkMessageFlowOutcome.DROPPED));
     }
 
     @Test
     void keyTransitionsEmitsLifecycle() {
-        ZLinkMessageFlowTracer tracer = tracer(options(ZLinkMessageFlowLogMode.KEY_TRANSITIONS));
+        ZLinkMessageFlowTracer tracer = tracer(options(ZLinkMessageFlowLogMode.NORMAL));
         assertTrue(tracer.enabled(ZLinkMessageFlowOutcome.RECEIVED));
         assertTrue(tracer.enabled(ZLinkMessageFlowOutcome.REPLIED));
     }
@@ -69,35 +67,26 @@ class ZLinkMessageFlowTracerTest {
         ZLinkMessageFlowTracer tracer = tracer(options);
 
         assertFalse(tracer.enabled(ZLinkMessageFlowOutcome.RECEIVED));
-        cell.set(ZLinkMessageFlowLogMode.KEY_TRANSITIONS);
+        cell.set(ZLinkMessageFlowLogMode.NORMAL);
         assertTrue(tracer.enabled(ZLinkMessageFlowOutcome.RECEIVED));
         cell.set(ZLinkMessageFlowLogMode.OFF);
         assertFalse(tracer.enabled(ZLinkMessageFlowOutcome.RECEIVED));
     }
 
     @Test
-    void writesStructuredLineToSeparatedFile() throws Exception {
-        Path file = Files.createTempFile("zlink-flow", ".log");
-        Files.deleteIfExists(file);
-        ZLinkDispatchOptionsRegistration options = options(ZLinkMessageFlowLogMode.KEY_TRANSITIONS);
-        options.traceLogFile(file.toString()).traceLabel("api");
+    void tracesStructuredTransitions() {
+        ZLinkDispatchOptionsRegistration options = options(ZLinkMessageFlowLogMode.NORMAL);
         ZLinkMessageFlowTracer tracer = tracer(options);
 
         tracer.trace(flow(ZLinkMessageFlowOutcome.RECEIVED));
         tracer.trace(flow(ZLinkMessageFlowOutcome.REPLIED));
 
-        String content = Files.readString(file);
-        assertTrue(content.contains("outcome=RECEIVED"), content);
-        assertTrue(content.contains("outcome=REPLIED"), content);
-        assertTrue(content.contains("corr=corr-1"), content);
-        assertTrue(content.contains("label=api"), content);
-        Files.deleteIfExists(file);
         assertEquals(2L, tracer.tracedCount());
     }
 
     @Test
     void dispatchErrorsUseContractLogLevels() {
-        ZLinkMessageFlowTracer tracer = tracer(options(ZLinkMessageFlowLogMode.ERRORS_ONLY));
+        ZLinkMessageFlowTracer tracer = tracer(options(ZLinkMessageFlowLogMode.ERRORS));
 
         assertEquals(Level.SEVERE, tracer.logLevel(error(
             ZLinkDispatchMessageKind.SEND, ZLinkDispatchErrorReason.HANDLER_EXCEPTION)));

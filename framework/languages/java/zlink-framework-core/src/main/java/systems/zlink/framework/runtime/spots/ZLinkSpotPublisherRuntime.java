@@ -345,10 +345,18 @@ final class ZLinkSpotPublisherRuntime implements AutoCloseable {
     }
 
     @Override
-    public synchronized void close() {
-        closed = true;
+    public void close() {
+        List<ZLinkBackendSpot> spots;
+        synchronized (this) {
+            if (closed) {
+                return;
+            }
+            closed = true;
+            spots = List.copyOf(spotsByChannel.values());
+            spotsByChannel.clear();
+        }
         RuntimeException firstFailure = null;
-        for (ZLinkBackendSpot spot : spotsByChannel.values()) {
+        for (ZLinkBackendSpot spot : spots) {
             try {
                 spot.close();
             } catch (ZlinkCloseException ignored) {
@@ -360,7 +368,6 @@ final class ZLinkSpotPublisherRuntime implements AutoCloseable {
                 }
             }
         }
-        spotsByChannel.clear();
         multicastExecutor.shutdownNow();
         multicastHandoffExecutor.shutdownNow();
         if (firstFailure != null) {
@@ -460,8 +467,7 @@ final class ZLinkDefaultSpotPublisherClient implements ZLinkSpotPublisherClient 
 }
 
 final class ZLinkExternalSpotPublishCall implements ZLinkPublishCall {
-    private final java.util.concurrent.atomic.AtomicBoolean submitGate =
-        new java.util.concurrent.atomic.AtomicBoolean();
+    private final java.util.concurrent.atomic.AtomicBoolean submitGate;
     private final ZLinkSpotPublisherRuntime publishers;
     private final String meshName;
     private final String channelName;
@@ -517,6 +523,21 @@ final class ZLinkExternalSpotPublishCall implements ZLinkPublishCall {
         Optional<String> packetName,
         String contentType,
         ZLinkApplicationMetadata metadata) {
+        this(publishers, meshName, channelName, topic, payload, packetName, contentType,
+            metadata, new java.util.concurrent.atomic.AtomicBoolean());
+    }
+
+    private ZLinkExternalSpotPublishCall(
+        ZLinkSpotPublisherRuntime publishers,
+        String meshName,
+        String channelName,
+        String topic,
+        Message payload,
+        Optional<String> packetName,
+        String contentType,
+        ZLinkApplicationMetadata metadata,
+        java.util.concurrent.atomic.AtomicBoolean submitGate) {
+        this.submitGate = submitGate;
         this.publishers = publishers;
         this.meshName = meshName;
         this.channelName = channelName;
@@ -536,7 +557,8 @@ final class ZLinkExternalSpotPublishCall implements ZLinkPublishCall {
             payload,
             Optional.of(packetName),
             contentType,
-            metadata);
+            metadata,
+            submitGate);
     }
 
     @Override
@@ -549,7 +571,8 @@ final class ZLinkExternalSpotPublishCall implements ZLinkPublishCall {
             payload,
             packetName,
             contentType,
-            metadata.with(key, value));
+            metadata.with(key, value),
+            submitGate);
     }
 
     @Override
@@ -562,7 +585,8 @@ final class ZLinkExternalSpotPublishCall implements ZLinkPublishCall {
             payload,
             packetName,
             contentType,
-            metadata.withAll(values));
+            metadata.withAll(values),
+            submitGate);
     }
 
     @Override

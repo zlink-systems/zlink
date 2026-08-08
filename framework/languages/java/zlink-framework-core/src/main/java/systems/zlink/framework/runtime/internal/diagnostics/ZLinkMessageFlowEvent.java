@@ -1,4 +1,4 @@
-package systems.zlink.framework.configuration;
+package systems.zlink.framework.runtime.internal.diagnostics;
 
 import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
 

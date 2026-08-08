@@ -18,7 +18,7 @@ public final class ZLinkMeshNodeRuntime implements AutoCloseable {
         MeshNodeRegistration registration,
         ZLinkMeshBackendAdapter adapter,
         ZLinkBackendContext context) {
-        return start(registration, adapter, context, null);
+        return start(registration, adapter, context, null, false);
     }
 
     static ZLinkMeshNodeRuntime start(
@@ -26,6 +26,20 @@ public final class ZLinkMeshNodeRuntime implements AutoCloseable {
         ZLinkMeshBackendAdapter adapter,
         ZLinkBackendContext context,
         ZLinkInboundDispatchBudget applicationDispatchBudget) {
+        return start(
+            registration,
+            adapter,
+            context,
+            applicationDispatchBudget,
+            false);
+    }
+
+    static ZLinkMeshNodeRuntime start(
+        MeshNodeRegistration registration,
+        ZLinkMeshBackendAdapter adapter,
+        ZLinkBackendContext context,
+        ZLinkInboundDispatchBudget applicationDispatchBudget,
+        boolean deferServiceReadyPublication) {
         ZLinkInternalMeshNode node =
             adapter.createMeshNode(context, registration.meshName());
         boolean started = false;
@@ -59,6 +73,8 @@ public final class ZLinkMeshNodeRuntime implements AutoCloseable {
                     .orElse(Duration.ofSeconds(1)));
             node.setMailboxMessageBudget(
                 registration.configureRouterSocket().mailboxMessageBudget());
+            node.setMailboxByteBudget(
+                registration.configureRouterSocket().mailboxByteBudget());
             if (applicationDispatchBudget != null) {
                 node.setApplicationDispatchBudget(applicationDispatchBudget);
             }
@@ -71,6 +87,9 @@ public final class ZLinkMeshNodeRuntime implements AutoCloseable {
                 || !registration.actorFactories().isEmpty()
                 || !registration.channelNames().isEmpty()) {
                 node.spotNode();
+            }
+            if (deferServiceReadyPublication) {
+                node.deferServiceReadyPublication();
             }
             node.start();
             for (MeshNodeRegistration.Peer peer : registration.peers()) {

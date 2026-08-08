@@ -26,6 +26,7 @@ class ClientScenario(
             "SF-D3-OUTAGE" -> context.runStoreFailureStatusOutage()
             "SF-D3-RECOVERED" -> context.runStoreFailureStatusRecovered()
             "SF-E1" -> context.runStoreFailureStoreDelayNonBlocking()
+            "SF-C5A" -> context.runStoreFailureObjectState()
             else -> error("unknown scenario: ${context.options.scenario()}")
         }
     }

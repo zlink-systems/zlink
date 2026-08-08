@@ -27,9 +27,7 @@ public final class ConsumerApplication {
     ZLinkFrameworkConfigurer consumerFramework(ConsumerOptions options) {
         return framework -> {
             framework.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile(options.logDir() + "/" + options.rid() + "-flow.log")
-                .traceLabel(options.rid());
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             framework.configureLocations().setOwnerLeaseRenewInterval(Duration.ofMillis(options.heartbeatMillis()));
             framework.configureLocations().setOwnerLeaseTtl(Duration.ofMillis(options.leaseTtlMillis()));
             framework.configureLocations().setPollingInterval(Duration.ofMillis(options.pollingMillis()));
@@ -45,14 +43,12 @@ public final class ConsumerApplication {
             if (options.c4Roles()) {
                 var c4RouteA = framework.addRouteMesh(Contracts.C4_ROUTE_A_MESH)
                     .listen("tcp://127.0.0.1:0")
-                    .setRoutingIdPrefix(options.rid() + "-c4-a")
-                    ;
+                    .setRoutingIdPrefix(options.rid() + "-c4-a");
                 c4RouteA.peerConnections().connect(options.c4RouteAEndpoint());
                 c4RouteA.channelName(Contracts.C4_ROUTE_A_CHANNEL).client();
                 var c4RouteB = framework.addRouteMesh(Contracts.C4_ROUTE_B_MESH)
                     .listen("tcp://127.0.0.1:0")
-                    .setRoutingIdPrefix(options.rid() + "-c4-b")
-                    ;
+                    .setRoutingIdPrefix(options.rid() + "-c4-b");
                 c4RouteB.peerConnections().connect(options.c4RouteBEndpoint());
                 c4RouteB.channelName(Contracts.C4_ROUTE_B_CHANNEL).client();
                 framework.addClientServerChannel(Contracts.C4_CLIENT_SERVER_CHANNEL)

@@ -155,6 +155,20 @@ wait_port() {
   return 1
 }
 
+wait_for_log_marker() {
+  local file="$1"
+  local marker="$2"
+  local timeout_seconds="$3"
+  for _ in $(seq 1 $((timeout_seconds * 10))); do
+    if [[ -f "${file}" ]] && grep -Fq "${marker}" "${file}"; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  echo "Timed out waiting for marker '${marker}' in ${file}" >&2
+  return 1
+}
+
 gradle_run() {
   ../../gradlew --project-cache-dir "${ZLINK_KOTLIN_E2E_GRADLE_CACHE}" --no-daemon "$@" --quiet
 }
@@ -314,12 +328,37 @@ should_run() {
   [[ "${SCENARIO}" == "${target}" || "${SCENARIO}" == "all" ]]
 }
 
-if [[ "${SCENARIO}" != "all" && "${SCENARIO}" != "SF-A1" && "${SCENARIO}" != "SF-A2" && "${SCENARIO}" != "SF-B1" && "${SCENARIO}" != "SF-B2" && "${SCENARIO}" != "SF-C1" && "${SCENARIO}" != "SF-C2" && "${SCENARIO}" != "SF-D1" && "${SCENARIO}" != "SF-D2" && "${SCENARIO}" != "SF-D3" && "${SCENARIO}" != "SF-E1" ]]; then
+if [[ "${SCENARIO}" != "all" && "${SCENARIO}" != "SF-A1" && "${SCENARIO}" != "SF-A2" && "${SCENARIO}" != "SF-B1" && "${SCENARIO}" != "SF-B2" && "${SCENARIO}" != "SF-C1" && "${SCENARIO}" != "SF-C2" && "${SCENARIO}" != "SF-C5A" && "${SCENARIO}" != "SF-D1" && "${SCENARIO}" != "SF-D2" && "${SCENARIO}" != "SF-D3" && "${SCENARIO}" != "SF-E1" ]]; then
   echo "unknown scenario ${SCENARIO}" >&2
   exit 1
 fi
 
 gradle_run :Client:installDist :Server:Provider:installDist :Server:Consumer:installDist
+
+if should_run SF-C5A; then
+ZLINK_KOTLIN_E2E_LOCATION_KEY_PREFIX="zlink:e2e:kotlin-store-failure:${run_id}:sf-c5a"
+start_redis_container
+read -r AH BH CH A B <<<"$(reserve_ports 5)"
+API_A="$(tcp "${A}")"; API_B="$(tcp "${B}")"; CONSUMER_HTTP="$(http "${CH}")"
+start_provider api-a "${API_A}" api-a "$(http "${AH}")"
+API_A_PID="${LAST_PID}"
+start_consumer "consumer-SF-C5A" "${CONSUMER_HTTP}"
+run_client SF-C5A "${CONSUMER_HTTP}" "api-a,api-b" SF-C5A api-a &
+SF_C5A_CLIENT_PID="$!"
+wait_for_log_marker "${log_dir}/client-SF-C5A.stdout.log" \
+  "scenario-control SF-C5A kill-provider-a" 120
+kill -9 "${API_A_PID}" >/dev/null 2>&1 || true
+wait "${API_A_PID}" >/dev/null 2>&1 || true
+wait_for_log_marker "${log_dir}/client-SF-C5A.stdout.log" \
+  "scenario-control SF-C5A start-provider-b" 120
+start_provider api-b "${API_B}" api-b
+wait_for_log_marker "${log_dir}/client-SF-C5A.stdout.log" \
+  "scenario-control SF-C5A stop-redis" 120
+stop_redis_container
+wait "${SF_C5A_CLIENT_PID}"
+stop_all
+stop_redis_container
+fi
 
 if should_run SF-A1; then
 ZLINK_KOTLIN_E2E_LOCATION_KEY_PREFIX="zlink:e2e:kotlin-store-failure:${run_id}:sf-a1"
@@ -524,11 +563,11 @@ stop_redis_container
 fi
 
 if [[ "${SCENARIO}" == "all" ]]; then
-  for scenario in SF-A1 SF-A2 SF-B1 SF-B2 SF-C1 SF-C2 SF-D1 SF-D2 SF-D3 SF-E1; do
+  for scenario in SF-A1 SF-A2 SF-B1 SF-B2 SF-C1 SF-C2 SF-C5A SF-D1 SF-D2 SF-D3 SF-E1; do
     grep -Rq "scenario ${scenario} " "${log_dir}"/client-*.stdout.log
   done
 else
   grep -Rq "scenario ${SCENARIO} " "${log_dir}"/client-*.stdout.log
 fi
-grep -Rq "message flow" "${log_dir}"/*-flow.log
+grep -Rq "message flow" "${log_dir}"/*.stdout.log
 echo "discovery-registry-ha kotlin e2e result=passed"

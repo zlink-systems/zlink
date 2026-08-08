@@ -59,13 +59,13 @@ import systems.zlink.framework.channels.ZLinkRequestCall;
 import systems.zlink.framework.channels.ZLinkRouteMessageContext;
 import systems.zlink.framework.channels.ZLinkSendCall;
 import systems.zlink.framework.channels.ZLinkSocketRuntimeOptions;
-import systems.zlink.framework.configuration.ZLinkDispatchErrorAction;
-import systems.zlink.framework.configuration.ZLinkDispatchErrorReason;
-import systems.zlink.framework.configuration.ZLinkDispatchErrorSurface;
-import systems.zlink.framework.configuration.ZLinkDispatchMessageKind;
-import systems.zlink.framework.configuration.ZLinkMessageFlowEvent;
-import systems.zlink.framework.configuration.ZLinkMessageFlowOutcome;
-import systems.zlink.framework.configuration.ZLinkDispatchFailure;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorAction;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorReason;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSurface;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchFailure;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
@@ -191,8 +191,8 @@ public final class ZLinkChannelRuntime
 
     @Override
     public ZLinkRouteMeshChannelRuntimeOptions routeMeshChannel(String channelName) {
-        ChannelRegistration registration = requireChannel(channelName, ChannelKind.ROUTE_MESH);
-        return new DefaultRouteMeshChannelRuntimeOptions(this, registration.name());
+        requireChannel(channelName, ChannelKind.ROUTE_MESH);
+        return new DefaultRouteMeshChannelRuntimeOptions();
     }
 
     public systems.zlink.framework.monitoring.ZLinkClientServerRuntime
@@ -858,7 +858,7 @@ public final class ZLinkChannelRuntime
             });
             dealer.connect(endpoint);
         } catch (RuntimeException failure) {
-            sockets.removeClientServerConnection(connectionId);
+            sockets.removeClientServerConnection(connectionId, dealer);
             throw failure;
         }
     }
@@ -884,7 +884,7 @@ public final class ZLinkChannelRuntime
                 SendFlags.DONT_WAIT,
                 defaultRequestTimeout(channelName));
             if (!submitted) {
-                sockets.reconnectClientServerConnection(connectionId);
+                sockets.reconnectClientServerConnection(connectionId, dealer);
             }
         } catch (ZlinkSubmitException ignored) {
             // A monitor callback may race with draining or socket teardown.
@@ -909,7 +909,8 @@ public final class ZLinkChannelRuntime
         try (reply) {
             if (reply.result() != ZLinkBackendRequestResult.OK
                 || reply.parts().size() != 1) {
-                sockets.reconnectClientServerConnection(connectionId);
+                sockets.reconnectClientServerConnection(
+                    connectionId, fence.dealer());
                 return;
             }
             ZLinkClientServerServiceWire.Control control =
@@ -918,7 +919,8 @@ public final class ZLinkChannelRuntime
             if (!(control instanceof ZLinkClientServerServiceWire.Admit admit)
                 || !admit.admission().channelName().equals(channelName)
                 || !admit.admission().securityIdentity().equals("default")) {
-                sockets.reconnectClientServerConnection(connectionId);
+                sockets.reconnectClientServerConnection(
+                    connectionId, fence.dealer());
                 return;
             }
             ZLinkClientServerServiceWire.Admission value =
@@ -939,7 +941,8 @@ public final class ZLinkChannelRuntime
             sockets.admitClientServerConnection(
                 connectionId, descriptor, fence);
         } catch (RuntimeException failure) {
-            sockets.reconnectClientServerConnection(connectionId);
+            sockets.reconnectClientServerConnection(
+                connectionId, fence.dealer());
         }
     }
 
@@ -984,13 +987,19 @@ public final class ZLinkChannelRuntime
                 ZLinkApplicationMetadata.empty());
         }
         if (sockets.hasClientRegistration(channelName)) {
-            return new SendCall(
-                callRuntime,
-                awaitClientServerTarget(channelName),
-                encoded.payload(),
-                Optional.of(encoded.packetName()),
-                encoded.contentType());
+            try {
+                return new SendCall(
+                    callRuntime,
+                    awaitClientServerTarget(channelName),
+                    encoded.payload(),
+                    Optional.of(encoded.packetName()),
+                    encoded.contentType());
+            } catch (RuntimeException failure) {
+                encoded.payload().close();
+                throw failure;
+            }
         }
+        encoded.payload().close();
         throw new ZLinkConfigurationException(
             ZLinkFrameworkErrorKind.NOT_FOUND,
             "channel has no request route: " + channelName);
@@ -1033,15 +1042,21 @@ public final class ZLinkChannelRuntime
                 ZLinkApplicationMetadata.empty());
         }
         if (sockets.hasClientRegistration(channelName)) {
-            return new RequestCall(
-                callRuntime,
-                awaitClientServerTarget(channelName),
-                encoded.payload(),
-                Optional.of(encoded.packetName()),
-                defaultRequestTimeout(channelName),
-                ZLinkRequestMetricTags.forChannel(channelName),
-                encoded.contentType());
+            try {
+                return new RequestCall(
+                    callRuntime,
+                    awaitClientServerTarget(channelName),
+                    encoded.payload(),
+                    Optional.of(encoded.packetName()),
+                    defaultRequestTimeout(channelName),
+                    ZLinkRequestMetricTags.forChannel(channelName),
+                    encoded.contentType());
+            } catch (RuntimeException failure) {
+                encoded.payload().close();
+                throw failure;
+            }
         }
+        encoded.payload().close();
         throw new ZLinkConfigurationException(
             ZLinkFrameworkErrorKind.NOT_FOUND,
             "channel has no request route: " + channelName);
@@ -1060,21 +1075,20 @@ public final class ZLinkChannelRuntime
         Duration bound = channelTimeout.compareTo(CLIENT_SERVER_READY_WAIT_CAP) < 0
             ? channelTimeout
             : CLIENT_SERVER_READY_WAIT_CAP;
-        ZLinkBackendDealerSocket ready =
-            sockets.awaitClientForOutbound(channelName, bound);
-        if (ready == null) {
-            boolean knownUnavailableTarget = sockets.clientServerTargetSnapshots(channelName)
-                .stream()
-                .anyMatch(snapshot -> !snapshot.connectionReady());
-            throw new ZLinkFrameworkException(
-                knownUnavailableTarget
-                    ? ZLinkFrameworkErrorKind.UNAVAILABLE
-                    : ZLinkFrameworkErrorKind.NOT_FOUND,
-                knownUnavailableTarget
-                    ? "client/server channel target is unavailable: " + channelName
-                    : "client/server channel has no known server: " + channelName);
+        ZLinkBackendDealerSocket ready = sockets.awaitClientForOutbound(channelName, bound);
+        if (ready != null) {
+            return ready;
         }
-        return ready;
+        boolean knownUnavailableTarget = sockets.clientServerTargetSnapshots(channelName)
+            .stream()
+            .anyMatch(snapshot -> !snapshot.connectionReady());
+        throw new ZLinkFrameworkException(
+            knownUnavailableTarget
+                ? ZLinkFrameworkErrorKind.UNAVAILABLE
+                : ZLinkFrameworkErrorKind.NOT_FOUND,
+            knownUnavailableTarget
+                ? "client/server channel target is unavailable: " + channelName
+                : "client/server channel has no known server: " + channelName);
     }
 
     @Override

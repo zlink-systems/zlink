@@ -10,7 +10,6 @@ import systems.zlink.framework.configuration.ZLinkClientServerChannelServerBuild
 import systems.zlink.framework.configuration.ZLinkEndpointConnections;
 import systems.zlink.framework.channels.ZLinkRequestHandler;
 import systems.zlink.framework.channels.ZLinkSendHandler;
-import systems.zlink.framework.channels.ZLinkSocketRuntimeOptions;
 
 public final class ChannelBuilders {
     private ChannelBuilders() {
@@ -311,11 +310,6 @@ public final class ChannelBuilders {
         public RouteMeshChannelBuilder enableServer(String endpoint) {
             registration.addRouteBind(endpoint);
             return this;
-        }
-
-        @Override
-        public ZLinkSocketRuntimeOptions configureServerSocket() {
-            return registration.serverSocketOptions();
         }
 
         @Override

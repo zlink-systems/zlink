@@ -41,6 +41,41 @@ import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderCodec;
 
 final class ZLinkJavaRawSpotNodeM6BTest {
     @Test
+    void serviceDescriptorStaysPreparingUntilHostMarksReady()
+        throws Exception {
+        RoutingId targetRid = RoutingId.from("jvm-ready-target");
+        RoutingId sourceRid = RoutingId.from("jvm-ready-source");
+        String endpoint = "inproc://jvm-service-ready-" + System.nanoTime();
+        try (var context = Zlink.createContext();
+             var target = new ZLinkJavaRawMeshNode(context, "mesh");
+             var source = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            target.setRoutingId(targetRid);
+            target.setBind(endpoint);
+            target.setObjectRole(
+                systems.zlink.framework.locations.ZLinkMeshNodeObjectRole.SERVER);
+            target.deferServiceReadyPublication();
+            source.setRoutingId(sourceRid);
+            source.setBind("inproc://jvm-service-ready-source-"
+                + System.nanoTime());
+
+            target.start();
+            source.start();
+            source.connectPeer(endpoint, targetRid);
+            awaitAdmitted(source);
+            assertTrue(source.selectPlacementTarget().isEmpty());
+
+            target.markServiceReady();
+            long deadline =
+                System.nanoTime() + Duration.ofSeconds(2).toNanos();
+            while (source.selectPlacementTarget().isEmpty()
+                && System.nanoTime() < deadline) {
+                Thread.sleep(1);
+            }
+            assertEquals(targetRid, source.selectPlacementTarget().orElseThrow());
+        }
+    }
+
+    @Test
     void boundSessionSubmissionRetriesTransientBackpressure()
         throws Exception {
         AtomicInteger attempts = new AtomicInteger();
@@ -434,7 +469,11 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                         .ZLinkBackendActorRef(nodeRid, "relay-actor", 1),
                     node.lifecycleGeneration(),
                     1,
-                    1));
+                    1),
+                new ZLinkServiceM6BWireCodec.BoundSessionTail(
+                    RoutingId.from("relay-session"),
+                    3,
+                    7));
             ZLinkInboundDispatchBudget budget =
                 new ZLinkInboundDispatchBudget(64);
             ZLinkInboundDispatchBudget.Lease lease = budget.track(7);

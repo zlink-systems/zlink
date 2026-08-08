@@ -10,6 +10,7 @@ import java.time.Duration
 import systems.zlink.e2e.kotlin.discoveryregistryha.Contracts
 import systems.zlink.e2e.kotlin.discoveryregistryha.consumer.Configuration.ConsumerOptions
 import systems.zlink.framework.channels.ZLinkClient
+import systems.zlink.framework.channels.ZLinkRouteClient
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode
 import systems.zlink.framework.locationprovider.ZLinkLocationStore
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationOptions
@@ -46,9 +47,9 @@ class ConsumerApplication {
     fun consumerFramework(consumerOptions: ConsumerOptions): ZLinkFrameworkConfigurer =
         ZLinkFrameworkConfigurer { options ->
             options.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile("${consumerOptions.logDir}/${consumerOptions.rid}-flow.log")
-                .traceLabel(consumerOptions.rid)
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL)
+
+
             options.configureLocations().setOwnerLeaseRenewInterval(Duration.ofMillis(consumerOptions.heartbeatMillis))
             options.configureLocations().setOwnerLeaseTtl(Duration.ofMillis(consumerOptions.leaseTtlMillis))
             options.configureLocations().setPollingInterval(Duration.ofMillis(consumerOptions.pollingMillis))
@@ -83,6 +84,7 @@ class ConsumerApplication {
     @Bean
     fun consumerHttpServer(
         client: ZLinkClient,
+        routes: ZLinkRouteClient,
         lifecycle: ZLinkFrameworkLifecycle,
         json: ObjectMapper,
         consumerOptions: ConsumerOptions,
@@ -90,6 +92,7 @@ class ConsumerApplication {
     ): ConsumerHttpServer =
         ConsumerHttpServer(
             client,
+            routes,
             lifecycle,
             json,
             consumerOptions,

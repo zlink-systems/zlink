@@ -104,10 +104,10 @@ final class ZLinkClientServerLocationRuntime implements AutoCloseable {
                 monitoring = backendFactory.createMonitoringAdapter(
                     adapterOptions);
             }
-            streamTrace("client-server-location start surfaces=" + surfaces.size()
-                + " owner=" + owner.get().ownerId());
-            initializePublishedServers(surfaces);
         }
+        streamTrace("client-server-location start surfaces=" + surfaces.size()
+            + " owner=" + owner.get().ownerId());
+        initializePublishedServers(surfaces);
         return tick(surfaces).whenComplete((ignored, failure) -> {
             if (failure == null) {
                 schedule(surfaces);
@@ -117,6 +117,7 @@ final class ZLinkClientServerLocationRuntime implements AutoCloseable {
 
     CompletionStage<Void> markDraining() {
         List<CompletionStage<?>> writes = new ArrayList<>();
+        List<ZLinkClientServerServerDescriptor> updates = new ArrayList<>();
         synchronized (this) {
             for (Map.Entry<String, PublishedServer> entry
                 : published.entrySet()) {
@@ -129,11 +130,14 @@ final class ZLinkClientServerLocationRuntime implements AutoCloseable {
                         current.weight(),
                         ZLinkFrameworkRuntimeState.DRAINING);
                 entry.setValue(current.withDescriptor(descriptor));
-                sockets.setClientServerServerDescriptor(
-                    entry.getKey(), descriptor);
-                writes.add(store.updateClientServer(
-                    descriptor, ZLinkLocationWriteIntent.RENEW));
+                updates.add(descriptor);
             }
+        }
+        for (ZLinkClientServerServerDescriptor descriptor : updates) {
+            sockets.setClientServerServerDescriptor(
+                descriptor.channelName(), descriptor);
+            writes.add(store.updateClientServer(
+                descriptor, ZLinkLocationWriteIntent.RENEW));
         }
         return all(writes);
     }
@@ -146,9 +150,13 @@ final class ZLinkClientServerLocationRuntime implements AutoCloseable {
             }
             running = false;
             servers = Map.copyOf(published);
-            for (String connectionId : List.copyOf(connections.keySet())) {
-                removeConnection(connectionId);
-            }
+        }
+        List<String> connectionIds;
+        synchronized (this) {
+            connectionIds = List.copyOf(connections.keySet());
+        }
+        for (String connectionId : connectionIds) {
+            removeConnection(connectionId);
         }
         executor.shutdown();
         if (servers.isEmpty()) {
@@ -173,9 +181,13 @@ final class ZLinkClientServerLocationRuntime implements AutoCloseable {
             if (surface.type()
                     != systems.zlink.framework.runtime.internal.locations.ZLinkAutoConnectType.CLIENT_SERVER
                 || surface.role()
-                    != systems.zlink.framework.locations.ZLinkLocationRole.ROUTER
-                || published.containsKey(surface.meshName())) {
+                    != systems.zlink.framework.locations.ZLinkLocationRole.ROUTER) {
                 continue;
+            }
+            synchronized (this) {
+                if (published.containsKey(surface.meshName())) {
+                    continue;
+                }
             }
             ZLinkClientServerServerDescriptor local =
                 sockets.clientServerServerDescriptor(surface.meshName());
@@ -195,8 +207,13 @@ final class ZLinkClientServerLocationRuntime implements AutoCloseable {
                 server.revision(),
                 server.weight(),
                 ZLinkFrameworkRuntimeState.SERVING);
-            published.put(
-                surface.meshName(), server.withDescriptor(descriptor));
+            synchronized (this) {
+                if (published.containsKey(surface.meshName())) {
+                    continue;
+                }
+                published.put(
+                    surface.meshName(), server.withDescriptor(descriptor));
+            }
             sockets.setClientServerServerDescriptor(
                 surface.meshName(), descriptor);
             streamTrace("client-server-location publish channel="
@@ -209,6 +226,7 @@ final class ZLinkClientServerLocationRuntime implements AutoCloseable {
     private CompletionStage<Void> tick(
         List<ZLinkChannelRuntime.AutoConnectSurface> surfaces) {
         List<CompletionStage<?>> work = new ArrayList<>();
+        List<PublishedUpdate> publishes = new ArrayList<>();
         synchronized (this) {
             if (!running) {
                 return CompletableFuture.completedFuture(null);
@@ -229,42 +247,43 @@ final class ZLinkClientServerLocationRuntime implements AutoCloseable {
                         ZLinkFrameworkRuntimeState.SERVING);
                     current = current.withDescriptor(changed);
                     entry.setValue(current);
-                    sockets.setClientServerServerDescriptor(
-                        entry.getKey(), changed);
                 }
-                String channelName = entry.getKey();
-                PublishedServer publishing = current;
-                work.add(store.updateClientServer(
-                    current.descriptor(),
-                    current.claimed()
-                        ? ZLinkLocationWriteIntent.RENEW
-                        : ZLinkLocationWriteIntent.NEW_CLAIM)
-                    .thenAccept(result -> {
-                        streamTrace("client-server-location publish-result channel="
-                            + channelName
-                            + " serverRid=" + publishing.serverRid()
-                            + " status=" + result.status());
-                        if (result.status()
-                            != ZLinkLocationWriteStatus.STORED) {
-                            throw new IllegalStateException(
-                                "ClientServer descriptor publication was fenced: "
-                                    + channelName + "/"
-                                    + result.status());
-                        }
-                        synchronized (this) {
-                            PublishedServer owned =
-                                published.get(channelName);
-                            if (owned != null
-                                && owned.lifecycleGeneration()
-                                    == publishing.lifecycleGeneration()
-                                && owned.revision()
-                                    == publishing.revision()) {
-                                published.put(
-                                    channelName, owned.withClaimed());
-                            }
-                        }
-                    }));
+                publishes.add(new PublishedUpdate(entry.getKey(), current));
             }
+        }
+        for (PublishedUpdate publishing : publishes) {
+            String channelName = publishing.channelName();
+            PublishedServer server = publishing.server();
+            sockets.setClientServerServerDescriptor(
+                channelName, server.descriptor());
+            work.add(store.updateClientServer(
+                server.descriptor(),
+                server.claimed()
+                    ? ZLinkLocationWriteIntent.RENEW
+                    : ZLinkLocationWriteIntent.NEW_CLAIM)
+                .thenAccept(result -> {
+                    streamTrace("client-server-location publish-result channel="
+                        + channelName
+                        + " serverRid=" + server.serverRid()
+                        + " status=" + result.status());
+                    if (result.status()
+                        != ZLinkLocationWriteStatus.STORED) {
+                        throw new IllegalStateException(
+                            "ClientServer descriptor publication was fenced: "
+                                + channelName + "/"
+                                + result.status());
+                    }
+                    synchronized (this) {
+                        PublishedServer owned = published.get(channelName);
+                        if (owned != null
+                            && owned.lifecycleGeneration()
+                                == server.lifecycleGeneration()
+                            && owned.revision() == server.revision()) {
+                            published.put(
+                                channelName, owned.withClaimed());
+                        }
+                    }
+                }));
         }
         Set<String> clientChannels = clientChannels(surfaces);
         for (String channelName : clientChannels) {
@@ -302,11 +321,15 @@ final class ZLinkClientServerLocationRuntime implements AutoCloseable {
             });
     }
 
-    private synchronized void reconcile(
+    private void reconcile(
         String channelName,
         List<ZLinkClientServerServerDescriptor> descriptors) {
-        if (!running) {
-            return;
+        Map<String, Connection> currentConnections;
+        synchronized (this) {
+            if (!running) {
+                return;
+            }
+            currentConnections = Map.copyOf(connections);
         }
         streamTrace("client-server-location reconcile channel=" + channelName
             + " descriptors=" + descriptors.size());
@@ -323,15 +346,15 @@ final class ZLinkClientServerLocationRuntime implements AutoCloseable {
 
         for (Map.Entry<String, ZLinkClientServerServerDescriptor> entry
             : desired.entrySet()) {
-            Connection current = connections.get(entry.getKey());
+            Connection current = currentConnections.get(entry.getKey());
             if (current == null) {
                 openConnection(entry.getKey(), entry.getValue());
             } else if (entry.getValue().descriptorRevision()
                 > current.expected().descriptorRevision()) {
                 if (!sockets.ownsClientServerPhysical(
                         entry.getKey(), current.dealer())) {
-                    connections.put(
-                        entry.getKey(),
+                    replaceConnectionState(
+                        entry.getKey(), current,
                         current.withExpected(entry.getValue(), true));
                     continue;
                 }
@@ -344,8 +367,8 @@ final class ZLinkClientServerLocationRuntime implements AutoCloseable {
                     // reply. The control update already carries the new
                     // descriptor to this connection, so preserve readiness
                     // and let in-flight work finish on the same transport.
-                    connections.put(
-                        entry.getKey(),
+                    replaceConnectionState(
+                        entry.getKey(), current,
                         current.withExpected(entry.getValue(), true));
                     sockets.updateClientServerConnection(
                         entry.getKey(), entry.getValue(), true);
@@ -353,7 +376,7 @@ final class ZLinkClientServerLocationRuntime implements AutoCloseable {
                 }
                 Connection pending = current.withExpected(
                     entry.getValue(), false);
-                connections.put(entry.getKey(), pending);
+                replaceConnectionState(entry.getKey(), current, pending);
                 sockets.updateClientServerConnection(
                     entry.getKey(), entry.getValue(), false);
                 ZLinkChannelSocketRegistry.AdmissionFence fence =
@@ -364,7 +387,7 @@ final class ZLinkClientServerLocationRuntime implements AutoCloseable {
         }
 
         Set<String> desiredIds = desired.keySet();
-        for (Connection current : List.copyOf(connections.values())) {
+        for (Connection current : currentConnections.values()) {
             if (!current.expected().channelName().equals(channelName)
                 || desiredIds.contains(current.connectionId())) {
                 continue;
@@ -372,10 +395,10 @@ final class ZLinkClientServerLocationRuntime implements AutoCloseable {
             boolean replacementPending = desired.values().stream().anyMatch(
                 descriptor -> descriptor.serverRid().equals(
                     current.expected().serverRid())
-                    && connections.containsKey(connectionId(descriptor))
-                    && !connections.get(connectionId(descriptor)).ready());
+                    && currentConnections.containsKey(connectionId(descriptor))
+                    && !currentConnections.get(connectionId(descriptor)).ready());
             if (!replacementPending) {
-                removeConnection(current.connectionId());
+                removeConnection(current.connectionId(), current);
             }
         }
     }
@@ -383,47 +406,79 @@ final class ZLinkClientServerLocationRuntime implements AutoCloseable {
     private void openConnection(
         String connectionId,
         ZLinkClientServerServerDescriptor descriptor) {
+        ZLinkMonitoringBackendAdapter monitoringAdapter;
+        synchronized (this) {
+            if (!running || connections.containsKey(connectionId)) {
+                return;
+            }
+            monitoringAdapter = monitoring;
+        }
+        if (monitoringAdapter == null) {
+            throw new IllegalStateException("ClientServer monitoring is unavailable");
+        }
         streamTrace("client-server-location connect channel="
             + descriptor.channelName()
             + " serverRid=" + descriptor.serverRid()
             + " endpoint=" + descriptor.endpoint());
-        ZLinkBackendDealerSocket dealer = backend.createDealerSocket(context);
-        dealer.setChannelName(descriptor.channelName());
-        Connection connection =
-            new Connection(connectionId, descriptor, dealer, false);
+        ZLinkBackendDealerSocket dealer = null;
+        ZLinkBackendSocketMonitor monitor = null;
+        Connection connection = null;
         try {
-            sockets.addClientServerConnection(
-                connectionId, descriptor, dealer);
-            connections.put(connectionId, connection);
-            ZLinkBackendSocketMonitor monitor =
-                Objects.requireNonNull(
-                    monitoring, "monitoring")
-                    .openSocketMonitor(dealer);
-            sockets.registerClientServerMonitor(connectionId, monitor);
-            monitor.onEvent(event -> {
-                if (isConnectionReady(event.event())) {
-                    ZLinkChannelSocketRegistry.AdmissionFence fence =
-                        sockets.clientServerTransportReady(
-                            connectionId, dealer);
-                    requestAdmission(connection, fence);
-                } else if (isConnectionTerminated(event.event())) {
-                    sockets.clientServerTransportTerminated(
-                        connectionId, dealer);
-                    synchronized (this) {
-                        Connection current = connections.get(connectionId);
-                        if (current != null) {
-                            connections.put(
-                                connectionId,
-                                current.withExpected(
-                                    current.expected(), false));
-                        }
+            dealer = backend.createDealerSocket(context);
+            dealer.setChannelName(descriptor.channelName());
+            monitor = monitoringAdapter.openSocketMonitor(dealer);
+            connection = new Connection(
+                connectionId, descriptor, dealer, false);
+            synchronized (connection) {
+                boolean accepted;
+                synchronized (this) {
+                    accepted = running
+                        && !connections.containsKey(connectionId);
+                    if (accepted) {
+                        connections.put(connectionId, connection);
                     }
                 }
-            });
-            dealer.connect(descriptor.endpoint());
+                if (!accepted) {
+                    closeUnregistered(dealer, monitor);
+                    return;
+                }
+                // Keep registration and the first connect under the same
+                // per-connection ownership fence. stop/remove waits for this
+                // block, so a removed dealer cannot be connected afterwards.
+                sockets.addClientServerConnection(
+                    connectionId, descriptor, dealer);
+                sockets.registerClientServerMonitor(connectionId, monitor);
+                Connection acceptedConnection = connection;
+                ZLinkBackendDealerSocket acceptedDealer = dealer;
+                monitor.onEvent(event -> {
+                    if (isConnectionReady(event.event())) {
+                        ZLinkChannelSocketRegistry.AdmissionFence fence =
+                            sockets.clientServerTransportReady(
+                                connectionId, acceptedDealer);
+                        requestAdmission(acceptedConnection, fence);
+                    } else if (isConnectionTerminated(event.event())) {
+                        sockets.clientServerTransportTerminated(
+                            connectionId, acceptedDealer);
+                        synchronized (this) {
+                            Connection current = connections.get(connectionId);
+                            if (current != null
+                                && current.dealer() == acceptedDealer) {
+                                connections.put(
+                                    connectionId,
+                                    current.withExpected(
+                                        current.expected(), false));
+                            }
+                        }
+                    }
+                });
+                dealer.connect(descriptor.endpoint());
+            }
         } catch (RuntimeException failure) {
-            connections.remove(connectionId);
-            sockets.removeClientServerConnection(connectionId);
+            if (connection != null) {
+                removeConnection(connectionId, connection);
+            } else {
+                closeUnregistered(dealer, monitor);
+            }
             throw failure;
         }
     }
@@ -442,33 +497,33 @@ final class ZLinkClientServerLocationRuntime implements AutoCloseable {
         try (Message message = Message.from(hello)) {
             boolean submitted = connection.dealer().request(
                 List.of(message),
-                reply -> completeAdmission(
-                    connection.connectionId(), fence, reply),
+                reply -> completeAdmission(connection, fence, reply),
                 SendFlags.DONT_WAIT,
                 adapterOptions.defaultRequestTimeout());
             if (!submitted) {
-                removeConnection(connection.connectionId());
+                removeConnection(connection.connectionId(), connection);
             }
         } catch (RuntimeException failure) {
             // A connection can terminate between the monitor readiness event
             // and the admission request. The monitor callback must not leak
             // that binding exception; removing the stale connection lets the
             // next location refresh establish a fresh admission attempt.
-            synchronized (this) {
-                removeConnection(connection.connectionId());
-            }
+            removeConnection(connection.connectionId(), connection);
         }
     }
 
     private void completeAdmission(
-        String connectionId,
+        Connection connection,
         ZLinkChannelSocketRegistry.AdmissionFence fence,
         systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived reply) {
         try (reply) {
             ZLinkClientServerServerDescriptor expected;
             synchronized (this) {
-                Connection current = connections.get(connectionId);
-                if (current == null) {
+                Connection current = connections.get(connection.connectionId());
+                if (current == null
+                    || current.dealer() != connection.dealer()
+                    || current.expected().descriptorRevision()
+                        != connection.expected().descriptorRevision()) {
                     return;
                 }
                 expected = current.expected();
@@ -477,11 +532,9 @@ final class ZLinkClientServerLocationRuntime implements AutoCloseable {
                     != systems.zlink.framework.runtime.internal.backend
                         .ZLinkBackendRequestResult.OK
                 || reply.parts().size() != 1) {
-                synchronized (this) {
-                    removeConnection(connectionId);
-                }
+                removeConnection(connection.connectionId(), connection);
                 streamTrace("client-server-location admission-failed connection="
-                    + connectionId + " result=" + reply.result()
+                    + connection.connectionId() + " result=" + reply.result()
                     + " parts=" + reply.parts().size());
                 return;
             }
@@ -490,55 +543,120 @@ final class ZLinkClientServerLocationRuntime implements AutoCloseable {
                     reply.parts().get(0).toByteArray());
             if (!(control instanceof ZLinkClientServerServiceWire.Admit admit)
                 || !matches(admit.admission(), expected)) {
-                synchronized (this) {
-                    removeConnection(connectionId);
-                }
+                removeConnection(connection.connectionId(), connection);
                 streamTrace("client-server-location admission-mismatch connection="
-                    + connectionId);
+                    + connection.connectionId());
                 return;
             }
             synchronized (this) {
-                Connection current = connections.get(connectionId);
+                Connection current = connections.get(connection.connectionId());
                 if (current == null
+                    || current.dealer() != connection.dealer()
                     || current.expected().descriptorRevision()
                         != expected.descriptorRevision()) {
                     return;
                 }
                 connections.put(
-                    connectionId, current.withExpected(expected, true));
-                if (!sockets.admitClientServerConnection(
-                    connectionId, expected, fence)) {
-                    streamTrace("client-server-location admission-fence-rejected connection="
-                        + connectionId);
-                    return;
+                    connection.connectionId(), current.withExpected(expected, true));
+            }
+            if (!sockets.admitClientServerConnection(
+                connection.connectionId(), expected, fence)) {
+                synchronized (this) {
+                    Connection current = connections.get(connection.connectionId());
+                    if (current != null
+                        && current.dealer() == connection.dealer()
+                        && current.expected().descriptorRevision()
+                            == expected.descriptorRevision()) {
+                        connections.put(
+                            connection.connectionId(),
+                            current.withExpected(expected, false));
+                    }
                 }
-                streamTrace("client-server-location admission-ready channel="
-                    + expected.channelName()
-                    + " serverRid=" + expected.serverRid());
-                for (Connection other :
-                    List.copyOf(connections.values())) {
-                    if (!other.connectionId().equals(connectionId)
+                streamTrace("client-server-location admission-fence-rejected connection="
+                    + connection.connectionId());
+                removeConnection(connection.connectionId(), connection);
+                return;
+            }
+            streamTrace("client-server-location admission-ready channel="
+                + expected.channelName()
+                + " serverRid=" + expected.serverRid());
+            List<String> superseded = new ArrayList<>();
+            synchronized (this) {
+                for (Connection other : connections.values()) {
+                    if (!other.connectionId().equals(connection.connectionId())
                         && other.expected().channelName().equals(
                             expected.channelName())
                         && other.expected().serverRid().equals(
                             expected.serverRid())) {
-                        removeConnection(other.connectionId());
+                        superseded.add(other.connectionId());
                     }
                 }
             }
+            for (String supersededId : superseded) {
+                removeConnection(supersededId);
+            }
         } catch (RuntimeException failure) {
+            removeConnection(connection.connectionId(), connection);
+        }
+    }
+
+    private void removeConnection(String connectionId) {
+        removeConnection(connectionId, null);
+    }
+
+    private void removeConnection(
+        String connectionId,
+        Connection expectedConnection) {
+        Connection current;
+        synchronized (this) {
+            current = connections.get(connectionId);
+            if (current == null
+                || (expectedConnection != null
+                    && current != expectedConnection)) {
+                return;
+            }
+        }
+        synchronized (current) {
+            // Keep the per-connection fence before the runtime map fence.
+            // openConnection uses the same order while it registers and
+            // connects the dealer; removal must not invert it and deadlock
+            // a concurrent stale cleanup.
             synchronized (this) {
-                removeConnection(connectionId);
+                if (connections.get(connectionId) != current) {
+                    return;
+                }
+                connections.remove(connectionId);
+            }
+            sockets.removeClientServerConnection(connectionId, current.dealer());
+        }
+    }
+
+    private static void closeUnregistered(
+        ZLinkBackendDealerSocket dealer,
+        ZLinkBackendSocketMonitor monitor) {
+        if (monitor != null) {
+            try {
+                monitor.close();
+            } catch (RuntimeException ignored) {
+            }
+        }
+        if (dealer != null) {
+            try {
+                dealer.close();
+            } catch (RuntimeException ignored) {
             }
         }
     }
 
-    private synchronized void removeConnection(String connectionId) {
-        Connection current = connections.remove(connectionId);
-        if (current == null) {
-            return;
+    private void replaceConnectionState(
+        String connectionId,
+        Connection expectedCurrent,
+        Connection replacement) {
+        synchronized (this) {
+            if (connections.get(connectionId) == expectedCurrent) {
+                connections.put(connectionId, replacement);
+            }
         }
-        sockets.removeClientServerConnection(connectionId);
     }
 
     private ZLinkClientServerServerDescriptor descriptor(
@@ -704,5 +822,10 @@ final class ZLinkClientServerLocationRuntime implements AutoCloseable {
             return new Connection(
                 connectionId, value, dealer, nextReady);
         }
+    }
+
+    private record PublishedUpdate(
+        String channelName,
+        PublishedServer server) {
     }
 }

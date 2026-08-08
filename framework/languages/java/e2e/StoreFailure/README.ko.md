@@ -35,7 +35,7 @@ Runner는 실행별 role 설정 파일을 만들어 server에 전달한다. Clie
 ```
 
 인자를 생략하면 baseline인 `SF-A1`을 실행한다. 실패하면 `logs/<run-id>/` 아래 role
-stdout, stderr, flow log를 출력한다.
+role별 stdout과 stderr를 출력한다. Message flow evidence는 stdout에 포함된다.
 
 ## 현재 검증 범위
 

@@ -3,7 +3,6 @@ package systems.zlink.e2e.kotlin.automaticturn;
 import systems.zlink.contracts.core.RoutingId;
 import java.util.concurrent.CompletionStage;
 import systems.zlink.framework.channels.ZLinkRouteClient;
-import systems.zlink.framework.spots.SpotHandleResolver;
 import systems.zlink.framework.streams.ZLinkSessionContext;
 import systems.zlink.framework.streams.ZLinkSessionDispatchContext;
 import systems.zlink.framework.streams.ZLinkTypedSessionPacketHandler;
@@ -11,15 +10,12 @@ import systems.zlink.framework.streams.ZLinkTypedSessionPacketHandler;
 abstract class SpotMsgRouteHandler<TCommand>
     implements ZLinkTypedSessionPacketHandler<ZLinkSessionContext, TCommand> {
     private final ZLinkRouteClient routes;
-    private final SpotHandleResolver spots;
     private final Class<TCommand> messageType;
 
     SpotMsgRouteHandler(
         ZLinkRouteClient routes,
-        SpotHandleResolver spots,
         Class<TCommand> messageType) {
         this.routes = routes;
-        this.spots = spots;
         this.messageType = messageType;
     }
 
@@ -34,9 +30,9 @@ abstract class SpotMsgRouteHandler<TCommand>
         ZLinkSessionDispatchContext dispatch,
         TCommand command) {
         String targetSpotRid = targetSpot(dispatch);
-        return spots.resolveSpotHandle(targetSpotRid).thenCompose(handle -> routes.sendToSpot(
-            handle.orElseThrow(() -> new IllegalStateException("spot not found: " + targetSpotRid)).spotId(),
-            command).submit().thenApply(ignored -> null));
+        return routes.sendToSpot(targetSpotRid, command)
+            .submit()
+            .thenApply(ignored -> null);
     }
 
     static RoutingId targetNode(ZLinkSessionDispatchContext dispatch) {

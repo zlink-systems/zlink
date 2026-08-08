@@ -49,10 +49,10 @@ public final class AtdC1TimerIsolationScenario {
         ScenarioAssert.containsMarkersInOrder(evidence.markers(),
             "timer-await-started",
             "timer-await-released",
-            "timer-fast-started",
-            "timer-fast-completed",
             "timer-await-resumed",
-            "timer-await-completed");
+            "timer-await-completed",
+            "timer-fast-started",
+            "timer-fast-completed");
         ClientStreamSupport.send(
             connector.send(new Contracts.TimerStopMsg(requestId))
                 .metadata(Contracts.TARGET_NODE_RID_METADATA, "play-a")

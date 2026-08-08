@@ -254,6 +254,10 @@ final class HandlerContractTest {
     @Test
     void sessionDispatchContractsUseFrameworkMessages() throws NoSuchMethodException {
         ZLinkSession.class.getMethod("onDispatch", ZLinkSessionDispatchContext.class, ZLinkMessage.class);
+        var replacementCallback = ZLinkSession.class.getMethod(
+            "onActorBindingReplaced", String.class);
+        assertEquals(CompletionStage.class, replacementCallback.getReturnType());
+        assertTrue(replacementCallback.isDefault());
         assertClassMissing("systems.zlink.framework.streams.ZLinkSessionPacketHandler");
         ZLinkTypedSessionPacketHandler.class.getMethod(
             "handle",
