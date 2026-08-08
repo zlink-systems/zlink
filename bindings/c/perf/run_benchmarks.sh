@@ -4,10 +4,7 @@ set -o pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
-OFFICIAL_BUILD_DIR="${ROOT_DIR}/bindings/c/build"
-DEFAULT_CORE_BUILD_DIR="${ROOT_DIR}/core/build"
 NORMALIZE_TIMESTAMPS_SH="${ROOT_DIR}/core/tools/normalize_build_timestamps.sh"
-MAKE_BIN="$(command -v gmake || command -v make)"
 
 SECONDS=0
 SHOW_TOTAL_TIME=0
@@ -77,7 +74,29 @@ case "$(uname -m)" in
     ;;
 esac
 
-BUILD_DIR="${ROOT_DIR}/bindings/c/build"
+CMAKE_GENERATOR="${CMAKE_GENERATOR:-}"
+CMAKE_ARCH="${CMAKE_ARCH:-x64}"
+if [[ "${IS_WINDOWS}" -eq 1 ]]; then
+  OFFICIAL_BUILD_DIR="${ROOT_DIR}/bindings/c/build/windows-x64"
+  DEFAULT_CORE_BUILD_DIR="${ROOT_DIR}/core/build/windows-x64"
+  if [[ -z "${CMAKE_GENERATOR}" ]]; then
+    CMAKE_GENERATOR="Visual Studio 17 2022"
+  fi
+else
+  OFFICIAL_BUILD_DIR="${ROOT_DIR}/bindings/c/build"
+  DEFAULT_CORE_BUILD_DIR="${ROOT_DIR}/core/build"
+fi
+
+MAKE_BIN=""
+if [[ "${IS_WINDOWS}" -eq 0 ]]; then
+  MAKE_BIN="$(command -v gmake || command -v make || true)"
+  if [[ -z "${MAKE_BIN}" ]]; then
+    echo "Error: make or gmake is required on non-Windows platforms." >&2
+    exit 1
+  fi
+fi
+
+BUILD_DIR="${OFFICIAL_BUILD_DIR}"
 
 STANDARD_PATTERNS="PAIR,PUBSUB,DEALER_DEALER,DEALER_ROUTER,DEALER_ROUTER_REQREP,ROUTER_ROUTER,ROUTER_ROUTER_REQREP"
 PATTERN="ALL"
@@ -120,7 +139,7 @@ Measure current zlink single-pattern performance.
 Options:
   -h, --help                  Show this help.
   --pattern NAME              Pattern list (comma-separated) or ALL.
-  --build-dir PATH            Official build directory (must be <repo>/bindings/c/build).
+  --build-dir PATH            Official platform build directory (Linux: <repo>/bindings/c/build; Windows: <repo>/bindings/c/build/windows-x64).
   --reuse-build               Reuse existing build directory as-is (skip configure/build).
   --clean-build               Remove build directory and do a clean build.
   --output PATH               Tee console logs to a file.
@@ -201,6 +220,8 @@ resolve_core_runtime_library() {
       ;;
     MINGW*|MSYS*|CYGWIN*)
       candidates=(
+        "${core_build_dir}/bin/Release/zlink.dll"
+        "${core_build_dir}/lib/Release/zlink.dll"
         "${core_build_dir}/bin/zlink.dll"
         "${core_build_dir}/lib/zlink.dll"
       )
@@ -228,8 +249,22 @@ build_core_runtime() {
   local core_source_dir="${ROOT_DIR}/core"
   local jobs
   jobs="$(nproc 2>/dev/null || echo 4)"
+  local core_cache="${core_build_dir}/CMakeCache.txt"
+  local cached_generator=""
+
+  if [[ "${IS_WINDOWS}" -eq 1 && -f "${core_cache}" ]]; then
+    cached_generator="$({ sed -n 's/^CMAKE_GENERATOR:INTERNAL=//p' "${core_cache}" | tail -n 1; } || true)"
+    if [[ -n "${cached_generator}" && "${cached_generator}" != "${CMAKE_GENERATOR}" ]]; then
+      echo "Core build generator mismatch detected:"
+      echo "  cache generator: ${cached_generator}"
+      echo "  required generator: ${CMAKE_GENERATOR}"
+      echo "Resetting core build directory: ${core_build_dir}"
+      rm -rf "${core_build_dir}"
+    fi
+  fi
+
   echo "=== Auto-building core runtime (target: ${core_build_dir}) ==="
-  if [[ ! -f "${core_build_dir}/CMakeCache.txt" ]]; then
+  if [[ ! -f "${core_cache}" ]]; then
     mkdir -p "${core_build_dir}"
     local configure_args=(
       -S "${core_source_dir}"
@@ -241,15 +276,24 @@ build_core_runtime() {
       -DBUILD_BENCHMARKS=ON
       -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
     )
-    if [[ -n "${MAKE_BIN}" ]]; then
+    if [[ "${IS_WINDOWS}" -eq 1 ]]; then
+      configure_args+=(-G "${CMAKE_GENERATOR}")
+      if [[ "${CMAKE_GENERATOR}" == Visual\ Studio* ]]; then
+        configure_args+=(-A "${CMAKE_ARCH}")
+      fi
+    else
       configure_args+=(-DCMAKE_MAKE_PROGRAM="${MAKE_BIN}")
     fi
     cmake "${configure_args[@]}"
   fi
-  if [[ -f "${NORMALIZE_TIMESTAMPS_SH}" ]]; then
+  if [[ "${IS_WINDOWS}" -eq 0 && -f "${NORMALIZE_TIMESTAMPS_SH}" ]]; then
     bash "${NORMALIZE_TIMESTAMPS_SH}" "${core_build_dir}" || true
   fi
-  cmake --build "${core_build_dir}" -j"${jobs}"
+  if [[ "${IS_WINDOWS}" -eq 1 ]]; then
+    cmake --build "${core_build_dir}" --config Release
+  else
+    cmake --build "${core_build_dir}" -j"${jobs}"
+  fi
 }
 
 prepare_core_runtime() {
@@ -642,28 +686,48 @@ if [[ "${BUILD_MODE}" != "reuse" && -f "${BUILD_DIR}/CMakeCache.txt" ]]; then
   fi
 fi
 
+if [[ "${BUILD_MODE}" != "reuse" && "${IS_WINDOWS}" -eq 1 && -f "${BUILD_DIR}/CMakeCache.txt" ]]; then
+  CACHE_CMAKE_GENERATOR="$({ sed -n 's/^CMAKE_GENERATOR:INTERNAL=//p' "${BUILD_DIR}/CMakeCache.txt" | tail -n 1; } || true)"
+  if [[ -n "${CACHE_CMAKE_GENERATOR}" && "${CACHE_CMAKE_GENERATOR}" != "${CMAKE_GENERATOR}" ]]; then
+    echo "Build cache generator mismatch detected:"
+    echo "  cache generator: ${CACHE_CMAKE_GENERATOR}"
+    echo "  required generator: ${CMAKE_GENERATOR}"
+    echo "Resetting build directory: ${BUILD_DIR}"
+    rm -rf "${BUILD_DIR}"
+  fi
+fi
+
 echo "Using CMake source directory: ${CMAKE_SOURCE_DIR}"
+
+CORE_BUILD_DIR="$(resolve_configured_core_build_dir "${BUILD_DIR}")"
+if ! prepare_core_runtime "${BUILD_DIR}"; then
+  exit 1
+fi
 
 if [[ "${BUILD_MODE}" != "reuse" ]]; then
   if [[ "${IS_WINDOWS}" -eq 1 ]]; then
-    CMAKE_GENERATOR="${CMAKE_GENERATOR:-Visual Studio 17 2022}"
-    CMAKE_ARCH="${CMAKE_ARCH:-x64}"
-    cmake -S "${CMAKE_SOURCE_DIR}" -B "${BUILD_DIR}" \
-      -G "${CMAKE_GENERATOR}" \
-      -A "${CMAKE_ARCH}" \
-      -DCMAKE_BUILD_TYPE=Release \
-      -DENABLE_LTO=OFF \
-      -DZLINK_CORE_DIR="${ROOT_DIR}/core" \
-      -DZLINK_C_CORE_BUILD_DIR="${ROOT_DIR}/core/build" \
-      -DZLINK_C_BUILD_BENCHMARKS=ON \
+    CMAKE_ARGS=(
+      -S "${CMAKE_SOURCE_DIR}"
+      -B "${BUILD_DIR}"
+      -G "${CMAKE_GENERATOR}"
+      -DCMAKE_BUILD_TYPE=Release
+      -DENABLE_LTO=OFF
+      -DZLINK_CORE_DIR="${ROOT_DIR}/core"
+      -DZLINK_C_CORE_BUILD_DIR="${CORE_BUILD_DIR}"
+      -DZLINK_C_BUILD_BENCHMARKS=ON
       -DZLINK_C_BUILD_SAMPLES=OFF
+    )
+    if [[ "${CMAKE_GENERATOR}" == Visual\ Studio* ]]; then
+      CMAKE_ARGS+=(-A "${CMAKE_ARCH}")
+    fi
+    cmake "${CMAKE_ARGS[@]}"
   else
     cmake -S "${CMAKE_SOURCE_DIR}" -B "${BUILD_DIR}" \
       -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_MAKE_PROGRAM="${MAKE_BIN}" \
       -DENABLE_LTO=OFF \
       -DZLINK_CORE_DIR="${ROOT_DIR}/core" \
-      -DZLINK_C_CORE_BUILD_DIR="${ROOT_DIR}/core/build" \
+      -DZLINK_C_CORE_BUILD_DIR="${CORE_BUILD_DIR}" \
       -DZLINK_C_BUILD_BENCHMARKS=ON \
       -DZLINK_C_BUILD_SAMPLES=OFF
   fi
@@ -717,8 +781,6 @@ case "${CTX_AUTO_HWM_PROFILE}" in
     exit 1
     ;;
 esac
-
-prepare_core_runtime "${BUILD_DIR}"
 
 PATTERN_CSV="$(IFS=,; echo "${PATTERN_LIST[*]}")"
 RUN_CMD=("${PYTHON_BIN[@]}" "${PERF_COMPARISON_SCRIPT}" "${PATTERN_CSV}" "--build-dir" "${BUILD_DIR}" "--runs" "${RUNS}")

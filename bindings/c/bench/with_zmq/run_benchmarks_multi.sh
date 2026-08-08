@@ -4,9 +4,26 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
 
+IS_WINDOWS=0
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*)
+    IS_WINDOWS=1
+    ;;
+esac
+
 PATTERNS="DEALER_DEALER,DEALER_ROUTER,ROUTER_ROUTER,PUBSUB,STREAM"
-TRANSPORTS_DEFAULT="tcp,ipc"
+if [[ "${IS_WINDOWS}" -eq 1 ]]; then
+  TRANSPORTS_DEFAULT="tcp"
+else
+  TRANSPORTS_DEFAULT="tcp,ipc"
+fi
 IFS=',' read -r -a PATTERN_LIST <<< "${PATTERNS}"
+
+CMAKE_GENERATOR="${CMAKE_GENERATOR:-}"
+CMAKE_ARCH="${CMAKE_ARCH:-x64}"
+if [[ "${IS_WINDOWS}" -eq 1 && -z "${CMAKE_GENERATOR}" ]]; then
+  CMAKE_GENERATOR="Visual Studio 17 2022"
+fi
 
 SECONDS=0
 SHOW_TOTAL_TIME=0
@@ -91,6 +108,174 @@ default_build_dir() {
   echo "${ROOT_DIR}/bindings/c/build"
 }
 
+default_core_build_dir() {
+  if [[ "${IS_WINDOWS}" -eq 1 ]]; then
+    echo "${ROOT_DIR}/core/build/windows-x64"
+  else
+    echo "${ROOT_DIR}/core/build"
+  fi
+}
+
+resolve_core_runtime_library() {
+  local core_build_dir="${1:-}"
+  local candidate
+  local candidates=()
+  if [[ "${IS_WINDOWS}" -eq 1 ]]; then
+    candidates=(
+      "${core_build_dir}/bin/Release/zlink.dll"
+      "${core_build_dir}/lib/Release/zlink.dll"
+      "${core_build_dir}/bin/zlink.dll"
+      "${core_build_dir}/lib/zlink.dll"
+    )
+  else
+    candidates=(
+      "${core_build_dir}/lib/libzlink.so"
+      "${core_build_dir}/bin/libzlink.so"
+      "${core_build_dir}/lib/libzlink.dylib"
+      "${core_build_dir}/bin/libzlink.dylib"
+    )
+  fi
+
+  for candidate in "${candidates[@]}"; do
+    if [[ -f "${candidate}" ]]; then
+      realpath -e "${candidate}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+build_core_runtime() {
+  local core_build_dir="${1:-}"
+  local core_cache="${core_build_dir}/CMakeCache.txt"
+  local jobs
+  jobs="$(nproc 2>/dev/null || echo 4)"
+
+  if [[ "${IS_WINDOWS}" -eq 1 && -f "${core_cache}" ]]; then
+    local cached_generator
+    cached_generator="$({ sed -n 's/^CMAKE_GENERATOR:INTERNAL=//p' "${core_cache}" | tail -n 1; } || true)"
+    if [[ -n "${cached_generator}" && "${cached_generator}" != "${CMAKE_GENERATOR}" ]]; then
+      echo "Core build generator mismatch detected:"
+      echo "  cache generator: ${cached_generator}"
+      echo "  required generator: ${CMAKE_GENERATOR}"
+      echo "Resetting core build directory: ${core_build_dir}"
+      rm -rf "${core_build_dir}"
+    fi
+  fi
+
+  if [[ ! -f "${core_cache}" ]]; then
+    mkdir -p "${core_build_dir}"
+    local configure_args=(
+      -S "${ROOT_DIR}/core"
+      -B "${core_build_dir}"
+      -DCMAKE_BUILD_TYPE=Release
+      -DBUILD_TESTS=OFF
+      -DWITH_DOCS=OFF
+      -DWITH_TLS=ON
+      -DBUILD_BENCHMARKS=ON
+      -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+    )
+    if [[ "${IS_WINDOWS}" -eq 1 ]]; then
+      configure_args+=(-G "${CMAKE_GENERATOR}")
+      if [[ "${CMAKE_GENERATOR}" == Visual\ Studio* ]]; then
+        configure_args+=(-A "${CMAKE_ARCH}")
+      fi
+    fi
+    echo "=== Configuring core runtime: ${core_build_dir} ==="
+    cmake "${configure_args[@]}"
+  fi
+
+  echo "=== Building core runtime: ${core_build_dir} ==="
+  if [[ "${IS_WINDOWS}" -eq 1 ]]; then
+    cmake --build "${core_build_dir}" --config Release
+  else
+    cmake --build "${core_build_dir}" -j"${jobs}"
+  fi
+}
+
+prepare_core_runtime() {
+  local core_build_dir="${1:-}"
+  local runtime_lib=""
+  local newer_source=""
+
+  if ! runtime_lib="$(resolve_core_runtime_library "${core_build_dir}")"; then
+    echo "Note: core runtime is missing; building ${core_build_dir}." >&2
+    build_core_runtime "${core_build_dir}"
+    runtime_lib="$(resolve_core_runtime_library "${core_build_dir}")" || {
+      echo "Error: core runtime was not produced under ${core_build_dir}." >&2
+      return 1
+    }
+  else
+    newer_source="$({ find "${ROOT_DIR}/core/src" "${ROOT_DIR}/core/include" -type f -newer "${runtime_lib}" -print -quit 2>/dev/null || true; })"
+    if [[ -n "${newer_source}" ]]; then
+      echo "Note: core runtime is older than source; rebuilding ${core_build_dir}." >&2
+      build_core_runtime "${core_build_dir}"
+      runtime_lib="$(resolve_core_runtime_library "${core_build_dir}")" || {
+        echo "Error: core runtime was not produced under ${core_build_dir}." >&2
+        return 1
+      }
+    fi
+  fi
+
+  echo "Core runtime: ${runtime_lib}"
+}
+
+prepare_benchmark_build() {
+  local build_dir="${1:-}"
+  local core_build_dir="${2:-}"
+  local cache_path="${build_dir}/CMakeCache.txt"
+
+  if [[ "${BUILD_MODE}" == "reuse" ]]; then
+    return 0
+  fi
+
+  if [[ -f "${cache_path}" ]]; then
+    local cache_source
+    cache_source="$({ sed -n 's/^CMAKE_HOME_DIRECTORY:INTERNAL=//p' "${cache_path}" | tail -n 1; } || true)"
+    if [[ -n "${cache_source}" && "${cache_source}" != "${ROOT_DIR}/bindings/c" ]]; then
+      echo "Build cache source mismatch detected:"
+      echo "  cache source: ${cache_source}"
+      echo "  required source: ${ROOT_DIR}/bindings/c"
+      echo "Resetting build directory: ${build_dir}"
+      rm -rf "${build_dir}"
+    fi
+  fi
+
+  if [[ "${IS_WINDOWS}" -eq 1 && -f "${cache_path}" ]]; then
+    local cache_generator
+    cache_generator="$({ sed -n 's/^CMAKE_GENERATOR:INTERNAL=//p' "${cache_path}" | tail -n 1; } || true)"
+    if [[ -n "${cache_generator}" && "${cache_generator}" != "${CMAKE_GENERATOR}" ]]; then
+      echo "Build cache generator mismatch detected:"
+      echo "  cache generator: ${cache_generator}"
+      echo "  required generator: ${CMAKE_GENERATOR}"
+      echo "Resetting build directory: ${build_dir}"
+      rm -rf "${build_dir}"
+    fi
+  fi
+
+  local configure_args=(
+    -S "${ROOT_DIR}/bindings/c"
+    -B "${build_dir}"
+    -DCMAKE_BUILD_TYPE=Release
+    -DZLINK_CORE_DIR="${ROOT_DIR}/core"
+    -DZLINK_C_CORE_BUILD_DIR="${core_build_dir}"
+    -DZLINK_C_BUILD_BENCHES=ON
+    -DZLINK_C_BUILD_BENCH_ZMQ=ON
+    -DZLINK_BUILD_WITH_ZMQ_ZLINK_BENCHES=ON
+    -DZLINK_C_BUILD_BENCH_STREAMCOMPARE=OFF
+    -DZLINK_C_BUILD_BENCH_ROUTER_COMPARE=OFF
+  )
+  if [[ "${IS_WINDOWS}" -eq 1 ]]; then
+    configure_args+=(-G "${CMAKE_GENERATOR}")
+    if [[ "${CMAKE_GENERATOR}" == Visual\ Studio* ]]; then
+      configure_args+=(-A "${CMAKE_ARCH}")
+    fi
+  fi
+
+  echo "=== Configuring with_zmq multi build: ${build_dir} ==="
+  cmake "${configure_args[@]}"
+}
+
 usage() {
   cat <<'USAGE'
 Usage: bindings/c/bench/with_zmq/run_benchmarks_multi.sh [options]
@@ -99,7 +284,7 @@ Run multi-socket benchmark patterns with libzmq vs zlink comparison.
 Default PATTERN is:
   DEALER_DEALER,DEALER_ROUTER,ROUTER_ROUTER,PUBSUB,STREAM
 By default, multi-bench keeps warmup at 2s and duration window at 5s.
-By default, multi-bench uses transports: tcp,ipc (can be overridden with --transports).
+By default, multi-bench uses tcp on Windows and tcp,ipc on Linux (override with --transports).
 
 Options:
   --pattern NAME         Benchmark pattern (default: all patterns above).
@@ -107,6 +292,7 @@ Options:
   --help                 Show this help.
   --reuse-build          Reuse existing build directory as-is (skip auto-build).
   --clean-build          Remove build directory and do a clean build.
+  --zlink-only            Measure zlink and use the cached libzmq baseline when available.
   --results-dir PATH     Override results root directory.
   --results-tag NAME     Optional tag appended to the results filename.
   --result-file PATH     Override the consolidated multi result file.
@@ -322,6 +508,7 @@ RESULTS_TAG=""
 BUILD_DIR=""
 OUTPUT_FILE=""
 RESULT_FILE=""
+ZLINK_ONLY=0
 PIN_CPU=0
 
 CLIENTS="${PERF_CLIENTS:-}"
@@ -400,6 +587,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --clean-build)
       set_build_mode "clean"
+      shift
+      ;;
+    --zlink-only)
+      ZLINK_ONLY=1
       shift
       ;;
     --runs)
@@ -663,6 +854,14 @@ if [[ -n "${TRANSPORTS}" && ! "${TRANSPORTS}" =~ ^[a-z]+(,[a-z]+)*$ ]]; then
   echo "Error: --transports must be a comma-separated list of names." >&2
   exit 1
 fi
+if [[ "${TRANSPORTS}" =~ (^|,)inproc(,|$) ]]; then
+  echo "Error: inproc is not supported by the split-process multi runner." >&2
+  exit 1
+fi
+if [[ "${IS_WINDOWS}" -eq 1 && "${TRANSPORTS}" =~ (^|,)ipc(,|$) ]]; then
+  echo "Error: ipc is not supported on Windows by the multi runner; use tcp." >&2
+  exit 1
+fi
 if [[ -n "${MSG_SIZES}" && ! "${MSG_SIZES}" =~ ^[0-9]+(,[0-9]+)*$ ]]; then
   echo "Error: --msg-sizes must be a comma-separated list of integers." >&2
   exit 1
@@ -741,6 +940,22 @@ if [[ "${BUILD_MODE}" == "clean" ]]; then
   rm -rf "${BUILD_DIR}"
 fi
 
+CORE_BUILD_DIR="${ZLINK_C_CORE_BUILD_DIR:-$(default_core_build_dir)}"
+CORE_BUILD_DIR="$(realpath -m "${CORE_BUILD_DIR}")"
+if [[ "${BUILD_MODE}" == "reuse" ]]; then
+  if ! resolve_core_runtime_library "${CORE_BUILD_DIR}" >/dev/null; then
+    echo "Error: --reuse-build requires a core runtime under ${CORE_BUILD_DIR}." >&2
+    exit 1
+  fi
+else
+  if ! prepare_core_runtime "${CORE_BUILD_DIR}"; then
+    exit 1
+  fi
+fi
+if ! prepare_benchmark_build "${BUILD_DIR}" "${CORE_BUILD_DIR}"; then
+  exit 1
+fi
+
 run_all_patterns() {
   local failed=0
 
@@ -775,6 +990,10 @@ run_all_patterns() {
     cmd+=(--io-threads "${pattern_io_threads}")
     cmd+=(--build-dir "${BUILD_DIR}")
     cmd+=(--results-dir "${RESULTS_DIR_OVERRIDE}")
+
+    if [[ "${ZLINK_ONLY}" -eq 1 ]]; then
+      cmd+=(--zlink-only)
+    fi
 
     if [[ -n "${RESULTS_TAG}" ]]; then
       cmd+=(--results-tag "${RESULTS_TAG}")
