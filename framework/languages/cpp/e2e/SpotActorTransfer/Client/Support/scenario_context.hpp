@@ -35,8 +35,10 @@ struct client_options_t
 {
     std::string node_a_url;
     std::string node_b_url;
+    std::string node_c_url;
     std::string node_a_stream;
     std::string node_b_stream;
+    std::string session_proxy_admin;
     std::string scenario;
 };
 
@@ -61,8 +63,10 @@ client_options_t read_options (int argc, char **argv)
     const auto section = nlohmann::json::parse (input).at ("e2e");
     return {.node_a_url = section.at ("nodeAUrl").get<std::string> (),
             .node_b_url = section.at ("nodeBUrl").get<std::string> (),
+            .node_c_url = section.value ("nodeCUrl", ""),
             .node_a_stream = section.at ("nodeAStream").get<std::string> (),
             .node_b_stream = section.at ("nodeBStream").get<std::string> (),
+            .session_proxy_admin = section.value ("sessionProxyAdmin", ""),
             .scenario = section.at ("scenario").get<std::string> ()};
 }
 
@@ -94,8 +98,13 @@ struct nodes_t
 {
     http::client_t a;
     http::client_t b;
+    std::optional<http::client_t> c;
+    std::string a_url;
+    std::string b_url;
+    std::string c_url;
     std::string a_stream_endpoint;
     std::string b_stream_endpoint;
+    std::string session_proxy_admin;
 };
 
 e2e::create_spot_res_t
@@ -104,6 +113,12 @@ create_spot (http::client_t &node, const std::string &spot_id, const std::string
     return node.post ("/spots")
       .body (e2e::create_spot_req_t{spot_id, mode})
       .submit<e2e::create_spot_res_t> ().result ().value ().body;
+}
+
+void close_spot (http::client_t &node, const std::string &spot_id)
+{
+    (void) node.post ("/spots/" + spot_id + "/close")
+      .submit<nlohmann::json> ().result ().value ().body;
 }
 
 e2e::create_spot_res_t create_spot_until_placed_on (
@@ -119,6 +134,7 @@ e2e::create_spot_res_t create_spot_until_placed_on (
         auto created = create_spot (node, spot_id, mode);
         if (created.node_rid == target_node_rid)
             return created;
+        close_spot (node, created.spot_id);
     }
     throw std::runtime_error (
       "could not place Spot on " + target_node_rid + " after 64 attempts");
@@ -161,6 +177,11 @@ e2e::gate_release_res_t release_joined_gate (http::client_t &node, const std::st
 e2e::gate_release_res_t release_transfer_gate (http::client_t &node, const std::string &actor_id)
 {
     return node.post ("/transfer-gates/" + actor_id + "/release").submit<e2e::gate_release_res_t> ().result ().value ().body;
+}
+
+e2e::gate_release_res_t release_handler_gate (http::client_t &node, const std::string &actor_id)
+{
+    return node.post ("/handler-gates/" + actor_id + "/release").submit<e2e::gate_release_res_t> ().result ().value ().body;
 }
 
 e2e::actor_ref_snapshot_res_t get_actor_ref (http::client_t &node, const std::string &actor_id)
@@ -211,7 +232,8 @@ e2e::actor_ref_probe_res_t probe_ref (http::client_t &node,
 {
     return node.post ("/actors/" + actor_id + "/probe-ref")
       .body (e2e::actor_ref_probe_req_t{request.scenario, request.marker, actor.node_rid,
-                                        actor.generation, static_cast<int> (timeout.count ())})
+                                        actor.actor_type, actor.generation,
+                                        static_cast<int> (timeout.count ())})
       .submit<e2e::actor_ref_probe_res_t> ().result ().value ().body;
 }
 
@@ -222,7 +244,16 @@ void send_ref (http::client_t &node,
 {
     (void) node.post ("/actors/" + actor_id + "/send-ref")
       .body (e2e::actor_ref_probe_req_t{packet.scenario, packet.marker, actor.node_rid,
-                                        actor.generation, 5000})
+                                        actor.actor_type, actor.generation, 5000})
+      .submit<nlohmann::json> ().result ().value ().body;
+}
+
+void send_actor (http::client_t &node,
+                 const std::string &actor_id,
+                 const e2e::handoff_packet_msg_t &packet)
+{
+    (void) node.post ("/actors/" + actor_id + "/send")
+      .body (packet)
       .submit<nlohmann::json> ().result ().value ().body;
 }
 
@@ -304,28 +335,27 @@ void assert_correlated_transfer_markers (const std::vector<http::client_t *> &no
                                          const std::string &actor_id,
                                          const std::vector<std::string> &kinds)
 {
-    std::optional<std::string> transfer_id;
-    std::set<std::string> observed;
+    std::map<std::string, std::set<std::string>> observed_by_transfer;
     for (auto *node : nodes) {
         for (const auto &entry : get_evidence (*node)) {
             if (entry.scenario != "message_flow" || entry.actor_id != actor_id
                 || std::find (kinds.begin (), kinds.end (), entry.kind) == kinds.end ()) {
                 continue;
             }
-            require (!entry.transfer_id.empty () && !entry.correlation_id.empty ()
-                       && !entry.flow_id.empty (),
-                     "Transfer marker has no correlation fields: " + entry.kind);
-            if (!transfer_id) {
-                transfer_id = entry.transfer_id;
+            if (entry.transfer_id.empty () || entry.correlation_id.empty ()
+                || entry.flow_id.empty ()
+                || entry.correlation_id != entry.transfer_id
+                || entry.flow_id != entry.transfer_id) {
+                continue;
             }
-            require (entry.transfer_id == *transfer_id && entry.correlation_id == *transfer_id
-                       && entry.flow_id == *transfer_id,
-                     "Transfer marker correlation mismatch: " + entry.kind);
-            observed.insert (entry.kind);
+            observed_by_transfer[entry.transfer_id].insert (entry.kind);
         }
     }
-    require (transfer_id.has_value () && observed.size () == kinds.size (),
-             "Correlated transfer marker set is incomplete.");
+    const auto complete = std::find_if (
+      observed_by_transfer.begin (), observed_by_transfer.end (),
+      [&] (const auto &candidate) { return candidate.second.size () == kinds.size (); });
+    require (complete != observed_by_transfer.end (),
+             "Correlated transfer marker set is incomplete or inconsistent.");
 }
 
 void assert_request_handoff_frame (http::client_t &source,
@@ -437,7 +467,12 @@ class bound_session_t
 
     void send_packet (const e2e::handoff_packet_msg_t &packet)
     {
-        _connector->send (packet).packet_name (e2e::handoff_packet_msg_t::packet_name).submit ();
+        send (packet);
+    }
+
+    template <typename TMessage> void send (const TMessage &message)
+    {
+        _connector->send (message).packet_name (TMessage::packet_name).submit ();
     }
 
     // Issues a request over the bound session stream (mirrors dotnet
@@ -452,6 +487,16 @@ class bound_session_t
         require (static_cast<bool> (reply),
                  "bound session push request failed: code="
                    + std::to_string (static_cast<int> (reply.error_code ())));
+        return reply.value ();
+    }
+
+    e2e::bound_actor_ref_res_t actor_ref ()
+    {
+        auto reply = _connector->request (e2e::bound_actor_ref_req_t{})
+                       .packet_name (e2e::bound_actor_ref_req_t::packet_name)
+                       .template submit<e2e::bound_actor_ref_res_t> ();
+        require (static_cast<bool> (reply),
+                 "bound ActorRef snapshot request failed");
         return reply.value ();
     }
 
@@ -487,6 +532,7 @@ class scenario_runner_t
     void run_st_f1_scenario ();
     void run_st_f2_scenario ();
     void run_st_f3_scenario ();
+    void run_st_f3a_scenario ();
     void run_st_f4_scenario ();
     void run_st_f5_scenario ();
     void run_st_f6_scenario ();
@@ -501,6 +547,9 @@ class scenario_runner_t
     void source_leave_failure ();
     void transfer_in_failure ();
     void joined_failure ();
+    void admission_reject_terminal ();
+    void joined_exception_terminal ();
+    void joined_timeout_terminal ();
     void local_location_commit_timing ();
     void remote_location_commit_timing ();
 

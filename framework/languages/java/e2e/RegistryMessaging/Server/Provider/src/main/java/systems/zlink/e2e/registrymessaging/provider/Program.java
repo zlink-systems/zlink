@@ -21,7 +21,6 @@ import systems.zlink.e2e.registrymessaging.shared.IdentityObjects;
 import systems.zlink.e2e.registrymessaging.shared.Contracts;
 import systems.zlink.framework.channels.ZLinkChannelRuntimeOptions;
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
-import systems.zlink.framework.configuration.ZLinkMessageFlowOutcome;
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationOptions;
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore;
 import systems.zlink.framework.spring.EnableZLinkFramework;
@@ -60,19 +59,9 @@ public final class Program {
     ZLinkFrameworkConfigurer providerFramework(ScenarioState state, ServerOptions server) {
         return options -> {
             String logDir = server.logDir();
+            installDispatchErrorHandler(state);
             options.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile(logDir + "/" + state.providerRid() + "-flow.log")
-                .traceLabel("java-rm-" + state.providerRid())
-                .setMessageFlowObserver(error -> {
-                    if (error.outcome() != ZLinkMessageFlowOutcome.ERROR) {
-                        return CompletableFuture.completedFuture(null);
-                    }
-                    state.record(
-                        "dispatch-error",
-                        error.errorReason() + "/" + error.errorAction() + "/" + error.packetName());
-                    return CompletableFuture.completedFuture(null);
-                });
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             options.configureLocations()
                 .setOwnerLeaseRenewInterval(java.time.Duration.ofMillis(500));
             options.configureLocations().setOwnerLeaseTtl(java.time.Duration.ofSeconds(3));
@@ -199,6 +188,40 @@ public final class Program {
             throw new IllegalArgumentException("Usage: registry-messaging-provider --config <path>");
         }
         return args[1];
+    }
+
+    private static void installDispatchErrorHandler(ScenarioState state) {
+        java.util.logging.Logger.getLogger(
+            "systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer")
+            .addHandler(new java.util.logging.Handler() {
+                @Override public void publish(java.util.logging.LogRecord record) {
+                    var fields = diagnosticsFields(record.getMessage());
+                    if (!"ERROR".equals(fields.get("outcome"))) {
+                        return;
+                    }
+                    state.record(
+                        "dispatch-error",
+                        fields.get("reason") + "/" + fields.get("action") + "/" + fields.get("packet"));
+                }
+                @Override public void flush() {
+                }
+                @Override public void close() {
+                }
+            });
+    }
+
+    private static java.util.Map<String, String> diagnosticsFields(String message) {
+        java.util.Map<String, String> fields = new java.util.HashMap<>();
+        if (message == null || !message.startsWith("message flow ")) {
+            return fields;
+        }
+        for (String token : message.split(" ")) {
+            int separator = token.indexOf('=');
+            if (separator > 0) {
+                fields.put(token.substring(0, separator), token.substring(separator + 1));
+            }
+        }
+        return fields;
     }
 
     private static StandardEnvironment isolatedEnvironment() {

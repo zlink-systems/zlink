@@ -439,6 +439,26 @@ export class RawServiceMeshRuntime {
     };
     this.topology.publishLocal(next);
     this.descriptor = next;
+    // An admitted peer keeps the descriptor it received at admission.  The
+    // placement and channel selectors therefore need the new mutable fields
+    // on that same connection before the next request is selected; waiting for
+    // a reconnect would leave a race where a drained node is selected again.
+    const update = encodeRouteMeshAdmission(
+      M6aServiceWireCommand.update,
+      this.topology.localDescriptor()
+    );
+    for (const peer of this.topology.peers()) {
+      const sent = this.trySend(peer.descriptor.nodeRoutingId, [update]);
+      debugRoute('descriptor-update-send', {
+        meshName: this.descriptor.meshName,
+        localNodeRoutingId: this.descriptor.nodeRoutingId,
+        remoteNodeRoutingId: peer.descriptor.nodeRoutingId,
+        descriptorRevision: next.descriptorRevision.toString(),
+        placementWeight: next.placementWeight,
+        state: next.state,
+        sent
+      });
+    }
     this.announceExpectedPeers();
   }
 
@@ -668,7 +688,7 @@ export class RawServiceMeshRuntime {
         received.reply(reply);
       } else {
         this.requireStarted().reply(
-          received.sourceRoute ?? received.sourceRid,
+          received.sourceRoute,
           received.requestSeq,
           reply
         );
@@ -1264,6 +1284,9 @@ export class RawServiceMeshRuntime {
       meshName: this.descriptor.meshName,
       localNodeRoutingId: this.descriptor.nodeRoutingId,
       remoteNodeRoutingId: descriptor.nodeRoutingId,
+      descriptorRevision: descriptor.descriptorRevision.toString(),
+      placementWeight: descriptor.placementWeight,
+      state: descriptor.state,
       connectionId: connection.connectionId,
       connectionDiscriminator: connection.discriminator,
       direction: connection.direction,

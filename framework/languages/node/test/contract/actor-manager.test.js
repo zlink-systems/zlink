@@ -25,6 +25,11 @@ const {
   runActorHandlerWithDeferredJoins
 } = require('../../packages/framework/dist/runtime/actors/actor-join-deferred-scope');
 const {
+  decodeFrameworkActorJoinPayload,
+  encodeFrameworkActorJoinPayload
+} = require('../../packages/framework/dist/runtime/messaging/actor-join-payload-codec');
+const payloadCodec = require('../../packages/framework/dist/runtime/messaging/payload-codec');
+const {
   resolveLifecycleHandler
 } = require('../../packages/framework/dist/runtime/handlers/handler-instance-scope');
 const msgpack = require('../../packages/framework-codec-msgpack/dist/server/framework.cjs');
@@ -41,6 +46,28 @@ function customTextSerializer(prefix = 'custom:') {
     }
   };
 }
+
+function actorJoinPayloadText(message) {
+  return decodeFrameworkActorJoinPayload(message.data()).payload.toString();
+}
+
+test('local Actor Join envelope preserves content type and accepts legacy JSON payloads', () => {
+  const registry = new Map([['application/x-custom-text', customTextSerializer()]]);
+  const request = payloadCodec.encodeFrameworkPayloadMessage('hello', registry);
+  try {
+    const decoded = decodeFrameworkActorJoinPayload(
+      encodeFrameworkActorJoinPayload(request)
+    );
+    assert.equal(decoded.contentType, 'application/x-custom-text');
+    assert.equal(decoded.payload.toString(), 'custom:hello');
+  } finally {
+    request.close();
+  }
+
+  const legacy = decodeFrameworkActorJoinPayload(Buffer.from('{"legacy":true}'));
+  assert.equal(legacy.contentType, 'application/json');
+  assert.equal(legacy.payload.toString(), '{"legacy":true}');
+});
 
 function encodedMessage(value) {
   return framework.ZLinkMessage.fromEncoded(zlink.Message.from(value));
@@ -362,6 +389,61 @@ test('transferred actor materialization creates a fresh actor before restoring s
   await manager.rollbackTransferredActor(result.actor);
   assert.equal(manager.getState('alice'), undefined);
   assert.deepEqual(lifecycle, ['factory', 'destroy:alice:2', 'cleanup:alice']);
+});
+
+test('relocation Actor materialization bypasses the new-Actor Entry Spot callback', async () => {
+  const events = [];
+  class RelocatedActor {
+    constructor(context) {
+      this.context = context;
+    }
+  }
+  class RelocatedFactory {
+    create(context) {
+      events.push(`factory:${context.actorId}`);
+      return new RelocatedActor(context);
+    }
+  }
+  const node = createMockSpotNode({
+    restoreActorAuthority(actorId, _stableType, generation) {
+      events.push(`native:${actorId}:${generation}`);
+      return { nodeRid: 'target-node', actorId, generation };
+    },
+    discardRelocatedActor(actor) {
+      events.push(`discard:${actor.actorId}`);
+    }
+  });
+  const manager = createActorManager({
+    actorFactories: new Map([['relocated', RelocatedFactory]]),
+    nativeActorNode: node,
+    async actorCreatedNotifier() {
+      events.push('onCreateActor');
+      throw new Error('relocation must not invoke the new-Actor callback');
+    }
+  });
+
+  const actor = await manager.prepareRelocationActor(
+    'relocated-actor',
+    'relocated',
+    7n,
+    11n,
+    'user-spot',
+    5n,
+    3n
+  );
+
+  assert.equal(actor.context.actorId, 'relocated-actor');
+  assert.equal(manager.getState('relocated-actor').spotId, 'user-spot');
+  assert.deepEqual(events, [
+    'native:relocated-actor:7',
+    'factory:relocated-actor'
+  ]);
+  await manager.abortRelocationActor('relocated-actor');
+  assert.deepEqual(events, [
+    'native:relocated-actor:7',
+    'factory:relocated-actor',
+    'discard:relocated-actor'
+  ]);
 });
 
 test('transferred actor rollback keeps a dispatch-disabled tombstone until native destroy retry succeeds', async () => {
@@ -1281,6 +1363,51 @@ test('SpotWide actor join defer yields the current Spot turn while waiting', asy
   assert.deepEqual(events, ['defer:start', 'defer:end', 'defer:next']);
 });
 
+test('Entry Spot deferred join releases its serial turn for the leave boundary', async () => {
+  const events = [];
+  let releaseJoin;
+  const pendingJoin = new Promise((resolve) => { releaseJoin = resolve; });
+  class PlayerFactory {
+    create(context) {
+      return { context };
+    }
+  }
+  const manager = createActorManager({
+    actorFactories: new Map([['player', PlayerFactory]]),
+    joinCoordinator: {
+      async joinSpot() {
+        await pendingJoin;
+        return {
+          accepted: true,
+          actor: { nodeRid: rid('node-a'), actorId: 'alice', generation: 1n }
+        };
+      }
+    }
+  });
+  const actor = await manager.getOrCreateActor('alice', 'player');
+  const entrySerial = new framework.ZLinkSpotSerialExecutor(false);
+
+  const deferred = entrySerial.execute(async () => {
+    events.push('handler');
+    await runActorHandlerWithDeferredJoins(() => {
+      actor.context.joinSpot('room-b').defer();
+    });
+  });
+  const leaveBoundary = entrySerial.execute(() => {
+    events.push('leave');
+    releaseJoin();
+  });
+
+  await Promise.race([
+    Promise.all([deferred, leaveBoundary]),
+    new Promise((_, reject) => setTimeout(
+      () => reject(new Error('Entry Spot deferred join retained the serial turn.')),
+      500
+    ))
+  ]);
+  assert.deepEqual(events, ['handler', 'leave']);
+});
+
 test('actor manager fluent getOrCreate uses global id lookup and returns the exact ActorRef', async () => {
   class PlayerFactory {
     create(context) {
@@ -1415,6 +1542,34 @@ test('actor manager fluent create reports factory failures', async () => {
   );
 });
 
+test('reserved Actor factory failure destroys native staging before capacity is reused', async () => {
+  const destroyed = [];
+  class FailingFactory {
+    create() {
+      throw new Error('injected reserved factory failure');
+    }
+  }
+  const manager = createActorManager({
+    actorFactories: new Map([['player', FailingFactory]]),
+    actorMeshNameProvider: () => 'play-mesh',
+    nativeActorNode: {
+      async destroyActor(actor) {
+        destroyed.push(actor);
+      }
+    }
+  });
+  const nativeRef = { nodeRid: zlink.RoutingId.from('node-a'), actorId: 'failed', generation: 7n };
+
+  await assert.rejects(
+    () => manager.createReservedActorResult('failed', 'player', {}, undefined, nativeRef),
+    (error) => error.kind === framework.ZLinkFrameworkErrorKind.InternalFailure
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(destroyed, [nativeRef]);
+  assert.equal(manager.activeActorCount('play-mesh'), 0);
+});
+
 test('ZLinkActorContext joinSpot uses configured custom serializer without raw request code', async () => {
   const calls = [];
   const replyMessage = zlink.Message.from('custom:joined');
@@ -1540,7 +1695,7 @@ test('ZLinkActorNativeJoinCoordinator creates native actor and updates joined sp
     joinActor(actorRef, targetNodeRid, targetSpotId, payload, callback, timeoutMs) {
       // Deferred Join은 절대 deadline을 유지하므로 남은 시간이 전달된다.
       joinTimeouts.push(timeoutMs);
-      events.push(`join:${actorRef.generation}:${targetNodeRid}:${targetSpotId}:${payload.data().toString()}`);
+      events.push(`join:${actorRef.generation}:${targetNodeRid}:${targetSpotId}:${actorJoinPayloadText(payload)}`);
       callback({
         result: 0,
         joinResultCode: 7,
@@ -1700,7 +1855,7 @@ test('ZLinkActorNativeJoinCoordinator uses the formal Core operation for a remot
     joinActor(actorRef, targetNodeRid, targetSpotId, request, callback, timeoutMs) {
       // Join call은 기본 5초 deadline을 유지하므로 남은 시간이 전달된다.
       coordinatorTimeouts.push(timeoutMs);
-      events.push(`joinActor:${actorRef.generation}:${targetNodeRid}:${targetSpotId}:${request.data().toString()}`);
+      events.push(`joinActor:${actorRef.generation}:${targetNodeRid}:${targetSpotId}:${actorJoinPayloadText(request)}`);
       callback({
         result: 0,
         joinResultCode: 0,
@@ -1796,7 +1951,7 @@ test('ZLinkActorNativeJoinCoordinator keeps remote joins on the formal Core surf
       return { routingId: 'node-b-entry' };
     },
     joinActor(actorRef, targetNodeRid, targetSpotId, request, callback) {
-      events.push(`formalJoin:${targetNodeRid}:${targetSpotId}:${request.data().toString()}`);
+      events.push(`formalJoin:${targetNodeRid}:${targetSpotId}:${actorJoinPayloadText(request)}`);
       callback({
         result: 0,
         joinResultCode: 0,
@@ -2809,7 +2964,7 @@ test('ZLinkActorNativeJoinCoordinator joins entry spot and clears user spot stat
     joinActorEntrySpot(actorRef, nodeRid, request, callback, timeoutMs) {
       // Deferred Join은 절대 deadline을 유지하므로 남은 시간이 전달된다.
       entryTimeouts.push(timeoutMs);
-      events.push(`joinEntry:${actorRef.generation}:${nodeRid}:${request.data().toString()}`);
+      events.push(`joinEntry:${actorRef.generation}:${nodeRid}:${actorJoinPayloadText(request)}`);
       callback({
         result: 0,
         joinResultCode: 0,

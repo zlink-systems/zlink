@@ -517,6 +517,8 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
     private final class RequestCall implements ZLinkActorRequestCall {
         private final String actorId;
         private final Object request;
+        private final java.util.concurrent.atomic.AtomicBoolean submitGate =
+            new java.util.concurrent.atomic.AtomicBoolean();
         private String packetName;
         private final Map<String, String> metadata = new java.util.LinkedHashMap<>();
         private Duration timeout;
@@ -548,6 +550,11 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
 
         @Override
         public <TReply> CompletionStage<TReply> submit(Class<TReply> replyType) {
+            CompletionStage<TReply> duplicate =
+                ZLinkOneWayCalls.beginOneWay(submitGate);
+            if (duplicate != null) {
+                return duplicate;
+            }
             systems.zlink.framework.runtime.internal.handlers
                 .ZLinkSuspendInvocationContext.rejectSameActorWait(
                     actorId);

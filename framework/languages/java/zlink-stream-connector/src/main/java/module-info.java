@@ -1,4 +1,5 @@
 module zlink.stream.connector {
+    requires zlink.framework.json.internal;
     requires transitive systems.zlink;
     requires transitive com.fasterxml.jackson.databind;
     requires com.fasterxml.jackson.datatype.jsr310;

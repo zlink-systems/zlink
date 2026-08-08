@@ -3,12 +3,22 @@ using System.Text.RegularExpressions;
 
 namespace Zlink.Framework.Runtime.Spots;
 
-internal static class ZLinkSpotId
+internal readonly record struct ZLinkSpotId
 {
+    private readonly string? _value;
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
     private static readonly Regex ReservedEntrySpotId = new(
         @"^.+-entry-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
         RegexOptions.CultureInvariant | RegexOptions.Compiled);
+
+    private ZLinkSpotId(string value) => _value = value;
+
+    internal string Value => _value ?? string.Empty;
+
+    internal static ZLinkSpotId FromBoundary(string value, string paramName) =>
+        new(Require(value, paramName));
+
+    public override string ToString() => Value;
 
     internal static bool IsValid(string? value)
     {

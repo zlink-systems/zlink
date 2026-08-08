@@ -21,10 +21,11 @@ import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
 public final class ZLinkCompositeRelocationBarrier {
     private long nextGeneration = 1L;
     private Seal active;
+    private boolean committing;
 
     public synchronized Optional<Seal> trySeal(
         Map<String, ZLinkAsyncSerialQueue> lanes) {
-        if (active != null) {
+        if (active != null || committing) {
             return Optional.empty();
         }
         if (lanes == null || lanes.isEmpty()) {
@@ -129,7 +130,7 @@ public final class ZLinkCompositeRelocationBarrier {
     private synchronized Optional<Seal> trySealAtReservedBoundaries(
         Map<String, ZLinkAsyncSerialQueue> lanes,
         Map<String, ZLinkAsyncSerialQueue.RelocationBoundary> boundaries) {
-        if (active != null) {
+        if (active != null || committing) {
             return Optional.empty();
         }
         if (nextGeneration == Long.MAX_VALUE) {
@@ -165,7 +166,7 @@ public final class ZLinkCompositeRelocationBarrier {
     }
 
     public synchronized boolean abort(Seal seal) {
-        if (seal == null || seal != active) {
+        if (committing || seal == null || seal != active) {
             return false;
         }
         List<String> laneIds =
@@ -184,29 +185,48 @@ public final class ZLinkCompositeRelocationBarrier {
         return true;
     }
 
-    public synchronized Optional<Map<String, List<
-        ZLinkAsyncSerialQueue.QueuedRecord>>> commit(Seal seal) {
-        if (seal == null || seal != active) {
-            return Optional.empty();
+    public Optional<Map<String, List<ZLinkAsyncSerialQueue.QueuedRecord>>>
+        commit(Seal seal) {
+        LinkedHashMap<String, ZLinkAsyncSerialQueue> lanes;
+        synchronized (this) {
+            if (committing || seal == null || seal != active) {
+                return Optional.empty();
+            }
+            committing = true;
+            lanes = new LinkedHashMap<>(seal.lanes);
         }
         LinkedHashMap<String, List<ZLinkAsyncSerialQueue.QueuedRecord>>
             held = new LinkedHashMap<>();
-        for (Map.Entry<String, ZLinkAsyncSerialQueue> lane
-            : seal.lanes.entrySet()) {
-            List<ZLinkAsyncSerialQueue.QueuedRecord> records =
-                lane.getValue().commitRelocation(
-                    seal.seals.get(lane.getKey()))
-                    .orElseThrow(() -> new IllegalStateException(
-                        "composite relocation commit lost a lane fence"));
-            held.put(lane.getKey(), records);
+        try {
+            for (Map.Entry<String, ZLinkAsyncSerialQueue> lane
+                : lanes.entrySet()) {
+                List<ZLinkAsyncSerialQueue.QueuedRecord> records =
+                    lane.getValue().commitRelocation(
+                        seal.seals.get(lane.getKey()))
+                        .orElseThrow(() -> new IllegalStateException(
+                            "composite relocation commit lost a lane fence"));
+                held.put(lane.getKey(), records);
+            }
+        } catch (RuntimeException failure) {
+            synchronized (this) {
+                committing = false;
+            }
+            throw failure;
         }
-        active = null;
+        synchronized (this) {
+            if (active != seal) {
+                committing = false;
+                return Optional.empty();
+            }
+            active = null;
+            committing = false;
+        }
         return Optional.of(Map.copyOf(held));
     }
 
     public synchronized Optional<Map<String, List<
         ZLinkAsyncSerialQueue.QueuedRecord>>> freezeIngress(Seal seal) {
-        if (seal == null || seal != active) {
+        if (committing || seal == null || seal != active) {
             return Optional.empty();
         }
         LinkedHashMap<String, List<ZLinkAsyncSerialQueue.QueuedRecord>> held =
@@ -223,12 +243,14 @@ public final class ZLinkCompositeRelocationBarrier {
         return Optional.of(java.util.Collections.unmodifiableMap(held));
     }
 
-    public synchronized <T> CompletionStage<T> runCapture(
+    public <T> CompletionStage<T> runCapture(
         Seal seal,
         Supplier<CompletionStage<T>> capture) {
-        if (seal == null || seal != active) {
-            throw new IllegalStateException(
-                "capture requires the active relocation barrier generation");
+        synchronized (this) {
+            if (committing || seal == null || seal != active) {
+                throw new IllegalStateException(
+                    "capture requires the active relocation barrier generation");
+            }
         }
         return java.util.Objects.requireNonNull(
             capture.get(), "capture result");

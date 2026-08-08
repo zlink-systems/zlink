@@ -413,6 +413,7 @@ export interface ZLinkSession {
     readonly context: ZLinkSessionContext;
     onConnected?(context: ZLinkSessionContext): Promise<void>;
     onDisconnected?(context: ZLinkSessionContext): Promise<void>;
+    onActorBindingReplaced?(context: ZLinkSessionContext, actorId: ActorId): Promise<void>;
     onError?(context: ZLinkSessionContext, error: ZLinkStreamError): Promise<void>;
     onDispatch?(dispatch: ZLinkSessionDispatchContext, payload: ZLinkMessage): Promise<void>;
 }
@@ -481,6 +482,14 @@ export interface ZLinkSessionSendCall {
     submit(signal?: AbortSignal): Promise<void>;
 }
 ```
+
+`onActorBindingReplaced(...)` is an optional callback run once on the previous session when the same
+Actor is bound to a new session. Before the callback, the framework moves the session to closing and
+rejects new inbound application dispatch. The application may notify the client through
+`context.client.send(...)`, but does not call `context.close()`. After a successful or failed callback
+terminal, the framework schedules a non-blocking timer and releases the turn immediately. The timer
+revalidates the exact retired session identity and closes the connection at 100 ms; it never sleeps
+or occupies a session serial lane or worker. The new bind does not wait for the callback or close.
 
 `ZLinkSessionSendCall.timeout(...)` only shortens this send's admission wait.
 Omission uses the STREAM socket send timeout; specifying it uses the shorter

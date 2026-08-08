@@ -62,14 +62,15 @@ export class ServiceMaintenanceRuntime {
   start(
     kind: ServiceMaintenanceKind,
     deadlineMs: number,
-    stopStartingSignal?: AbortSignal
+    stopStartingSignal?: AbortSignal,
+    abortSignal?: AbortSignal
   ): Promise<ServiceMaintenanceSnapshot> {
     if (this.operation !== undefined) return this.operation;
     if (!Number.isFinite(deadlineMs) || deadlineMs < 0) {
       throw new RangeError('Maintenance deadline must be non-negative and finite.');
     }
     this.kind = kind;
-    this.operation = this.run(kind, deadlineMs, stopStartingSignal);
+    this.operation = this.run(kind, deadlineMs, stopStartingSignal, abortSignal);
     return this.operation;
   }
 
@@ -87,10 +88,17 @@ export class ServiceMaintenanceRuntime {
   private async run(
     kind: ServiceMaintenanceKind,
     deadlineMs: number,
-    stopStartingSignal?: AbortSignal
+    stopStartingSignal?: AbortSignal,
+    abortSignal?: AbortSignal
   ): Promise<ServiceMaintenanceSnapshot> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(new Error('Maintenance deadline exceeded.')), deadlineMs);
+    const abort = () => controller.abort(abortSignal?.reason);
+    if (abortSignal?.aborted === true) {
+      abort();
+    } else {
+      abortSignal?.addEventListener('abort', abort, { once: true });
+    }
     try {
       this.transition('preflight');
       if (!await this.options.preflight(kind, controller.signal)) {
@@ -117,6 +125,7 @@ export class ServiceMaintenanceRuntime {
       return this.snapshot();
     } finally {
       clearTimeout(timer);
+      abortSignal?.removeEventListener('abort', abort);
     }
   }
 
@@ -129,13 +138,13 @@ export class ServiceMaintenanceRuntime {
     const pending = new Set<Promise<void>>();
     while (this.units.length > 0 || pending.size > 0) {
       signal.throwIfAborted();
-      if (stopStartingSignal?.aborted) {
+      if (stopStartingSignal?.aborted === true) {
         await Promise.allSettled(pending);
         stopStartingSignal.throwIfAborted();
       }
       let admitted = false;
       for (let index = 0; index < this.units.length && this.activeOutbound < maxOutbound;) {
-        if (stopStartingSignal?.aborted) break;
+        if (stopStartingSignal?.aborted === true) break;
         const unit = this.units[index]!;
         const oversizedExclusive = unit.allowOversizedExclusive === true
           && unit.encodedUpperBound > maxBytes

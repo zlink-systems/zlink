@@ -7,6 +7,7 @@
  * The checks scan installed public headers and e2e wiring textually so the
  * build keeps compiling while target signatures are still missing. */
 
+#include <array>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -97,6 +98,8 @@ int main ()
       read_file (root / "framework/src/runtime/streams/stream_host_service.cpp");
     const auto call_hpp =
       read_file (include_root / "zlink/framework/contracts/channels/call.hpp");
+    const auto mesh_node_hpp = read_file (
+      include_root / "zlink/framework/contracts/configuration/mesh_node.hpp");
     const auto stream_runtime =
       read_file (root / "framework/src/runtime/streams/stream_runtime.cpp");
     const auto serial_execution_queue = read_file (
@@ -119,19 +122,41 @@ int main ()
       read_file (root / "framework/src/runtime/client_server/client_server_location_runtime.cpp");
     const auto store_location_resolvers =
       read_file (root / "framework/src/runtime/locations/store_location_resolvers.hpp");
+    const auto authority_key_codec =
+      read_file (root / "framework/src/runtime/locations/authority_key_codec.hpp");
+    const auto in_memory_location_store =
+      read_file (root / "framework/src/runtime/locations/in_memory_location_store.hpp");
+    const auto provider_location_repository =
+      read_file (root / "framework/src/runtime/locations/provider_location_repository.hpp");
+    const auto public_store_adapters =
+      read_file (root / "framework/src/runtime/stateful/public_store_adapters.hpp");
+    const auto actor_client =
+      read_file (root / "framework/src/runtime/actors/actor_client.cpp");
+    const auto relocation_id_generator =
+      read_file (root / "framework/src/runtime/utils/relocation_id_generator.hpp");
     const auto live_location_reader =
       read_file (root / "framework/src/runtime/locations/live_location_reader.hpp");
     const auto app_runtime = read_file (root / "framework/src/runtime/host/app.cpp");
+    const auto dispatch_events = read_file (
+      root / "framework/src/runtime/diagnostics/dispatch_events.hpp");
     const auto mesh_node_runtime =
       read_file (root / "framework/src/runtime/mesh/mesh_node_runtime.cpp");
+    const auto actor_transfer_coordinator = read_file (
+      root / "framework/src/runtime/spots/actor_transfer_coordinator.cpp");
     const auto mesh_node_host_service =
       read_file (root / "framework/src/runtime/mesh/mesh_node_host_service.cpp");
     const auto framework_message = read_file (
       include_root / "zlink/framework/contracts/messaging/message.hpp");
+    const auto serializer_header = read_file (
+      include_root / "zlink/framework/contracts/codecs/serializer.hpp");
+    const auto framework_json_header = read_file (
+      include_root / "zlink/framework/codecs/json.hpp");
     const auto raw_fanout_owner =
       read_file (root / "framework/src/runtime/fanout/raw_fanout_owner.cpp");
     const auto raw_mesh_node_owner =
       read_file (root / "framework/src/runtime/mesh/raw_mesh_node_owner.cpp");
+    const auto service_topology_registry = read_file (
+      root / "framework/src/runtime/mesh/service_topology_registry.hpp");
     const auto service_wire_codec =
       read_file (root / "framework/src/runtime/protocol/service_wire_codec.cpp");
     const auto service_wire_codec_header =
@@ -140,6 +165,8 @@ int main ()
       root / "../../runtime/protocol/generated/cpp/service_wire_constants.hpp");
     const auto public_host_runtime =
       read_file (root / "framework/src/runtime/stateful/public_host_runtime.cpp");
+    const auto raw_stateful_dispatch = read_file (
+      root / "framework/src/runtime/stateful/raw_stateful_dispatch.cpp");
     const auto monitoring_unit =
       read_file (root / "tests/Zlink.Framework.UnitTests/test_cpp_framework_monitoring.cpp");
     const auto actor_gateway_unit =
@@ -224,6 +251,10 @@ int main ()
       read_file (include_root / "zlink/framework/contracts/streams/stream.hpp");
     const auto rows_hpp =
       read_file (include_root / "zlink/framework/contracts/locations/rows.hpp");
+    const auto location_diagnostics_hpp =
+      read_file (include_root / "zlink/framework/contracts/locations/diagnostics.hpp");
+    const auto location_runtime_query_hpp =
+      read_file (include_root / "zlink/framework/contracts/locations/runtime_query.hpp");
     const auto location_records_hpp =
       read_file (root / "framework/src/runtime/locations/location_records.hpp");
     const auto error_hpp =
@@ -351,9 +382,16 @@ int main ()
                     && transfer_runner.find ("start_role session session-b")
                          != std::string::npos
                     && transfer_runner.find ("start_role controller") == std::string::npos
-                    && transfer_runner.find ("CONTROLLER_URL") == std::string::npos
-                    && transfer_runner.find ("actor-c") == std::string::npos,
+                    && transfer_runner.find ("CONTROLLER_URL") == std::string::npos,
                   "E2E-CP-56", "Config 10 still uses a remote actor controller");
+    const auto actor_c_start = transfer_runner.find ("start_role actor actor-c");
+    const auto actor_c_gate =
+      actor_c_start == std::string::npos
+        ? std::string::npos
+        : transfer_runner.rfind ("if [[ \"$SCENARIO\" == \"ST-F3A\" ]]", actor_c_start);
+    gate.require (actor_c_start == std::string::npos || actor_c_gate != std::string::npos,
+                  "E2E-CP-56",
+                  "Config 10 starts the optional third Actor node outside ST-F3A");
     gate.require (transfer_runner.find ("\"nodeAStream\"")
                          != std::string::npos
                     && transfer_runner.find ("\"nodeBStream\"")
@@ -363,15 +401,15 @@ int main ()
                     && transfer_runner.find ("ZLINK_CPP_E2E_NODE_B_STREAM")
                          == std::string::npos,
                   "E2E-CP-56", "Config 10 does not pass the session gateway endpoints");
-    gate.require (transfer_client.find ("create_actor_until_placed_on")
+    gate.require (transfer_client.find ("create_actor (http::client_t &node")
                     != std::string::npos
-                    && transfer_client.find ("create_actor (node, actor_id")
+                    && transfer_client.find ("create_actor_until_placed_on")
+                         != std::string::npos
+                    && transfer_client.find ("join_actor (http::client_t &node")
                          != std::string::npos
                     && transfer_client.find ("join_actor (_nodes.a")
                          != std::string::npos
-                    && transfer_client.find ("join_actor (_nodes.b, actor.actor_id")
-                         != std::string::npos
-                    && transfer_client.find ("placed_spot_a_final.spot_id")
+                    && transfer_client.find ("join_actor (_nodes.b")
                          != std::string::npos
                     && transfer_client.find ("probe_actor (_nodes.a")
                          != std::string::npos,
@@ -381,17 +419,16 @@ int main ()
                   "E2E-CP-56", "Config 10 feature map still promises remote actor control");
     const auto bound_session_registration =
       app_runtime.find ("actor_gateway_runtime.on_bound_session");
-    const auto local_session_route = app_runtime.find (
-      "actor.node_rid ().value ()",
-      bound_session_registration);
-    const auto remote_session_route = app_runtime.find (
-      "bind_application_actor_session", bound_session_registration);
+    const auto local_session_route = stream_host.find (
+      "local_node->to_hex () == actor_route->node_rid.to_hex ()");
+    const auto remote_session_route = stream_host.find (
+      "bind_application_actor_session");
     gate.require (bound_session_registration != std::string::npos
                     && local_session_route != std::string::npos
                     && remote_session_route != std::string::npos
                     && local_session_route < remote_session_route,
                   "E2E-CP-56",
-                  "local actor session binding still depends on a remote mesh route");
+                  "local actor session binding does not have a local path before remote binding");
 
     /* E2E-CP-09 — local E2E waits use the common named defaults. */
     for (const auto *candidate : {&transfer_runner, &observability_runner}) {
@@ -565,6 +602,15 @@ int main ()
     gate.require (location_auto_connect.find ("list_peers") == std::string::npos
                     && location_auto_connect.find ("update_peer") == std::string::npos,
                   "IMP-CP-05", "RouteMesh discovery still uses legacy peer rows");
+    gate.require (location_auto_connect.find ("const bool manual_endpoint")
+                    != std::string::npos
+                    && location_auto_connect.find (
+                         "Manual routes still use the discovered descriptor")
+                         != std::string::npos
+                    && location_auto_connect.find ("mesh_node->expect_peer")
+                         != std::string::npos,
+                  "CPP-TOPO-001",
+                  "manual RouteMesh endpoints do not install descriptor admission fences");
 
     /* IMP-CP-04 — incomplete and duplicate STREAM declarations fail validation. */
     for (const std::string required : {"stream_nodes_with_bind", "stream_nodes_with_session"}) {
@@ -751,6 +797,37 @@ int main ()
                       "typed call still exposes packet_name override: " + forbidden);
     }
 
+    /* CPP-OWN-005 — application handlers receive typed payloads, not raw bytes. */
+    for (const std::string forbidden : {"send_raw", "payload_view_t", "raw_handler_t"}) {
+        gate.require (!tree_contains (include_root, forbidden), "CPP-OWN-005",
+                      "raw business handler surface is still public: " + forbidden);
+    }
+
+    /* CPP-WIRE-002 — RouteMesh SS has no framework message-size contract. */
+    gate.require (mesh_node_hpp.find ("max_message_size") == std::string::npos,
+                  "CPP-WIRE-002",
+                  "MeshNode socket config still exposes max_message_size");
+    gate.require (
+      service_topology_registry.find ("effective_max_message_bytes")
+        == std::string::npos,
+      "CPP-WIRE-002",
+      "RouteMesh topology still negotiates a framework message-size limit");
+
+    /* CPP-WIRE-003 — every default typed JSON entry uses the strict profile parser. */
+    for (const std::string required : {
+           "framework-json-v1 rejects a UTF-8 BOM",
+           "framework-json-v1 rejects duplicate properties",
+           "framework-json-v1 rejects non-finite numbers"}) {
+        gate.require (framework_json_header.find (required) != std::string::npos,
+                      "CPP-WIRE-003",
+                      "framework-json-v1 validation is missing: " + required);
+    }
+    for (const std::string required : {"detail::dump_profile", "detail::parse_profile"}) {
+        gate.require (serializer_header.find (required) != std::string::npos,
+                      "CPP-WIRE-003",
+                      "default typed serializer bypasses the JSON profile: " + required);
+    }
+
     /* CPP-G0-STREAM-001 — typed session handler surface. */
     gate.require (tree_contains (include_root, "typed_session_packet_handler"),
                   "CPP-G0-STREAM-001", "typed stream session handler contract is missing");
@@ -764,8 +841,8 @@ int main ()
                   "CPP-G0-ROUTEMESH-001", "route-mesh runtime options surface is missing");
 
     /* CPP-G0-FLOW-001 — flow correlation fields and wire marker. */
-    gate.require (execution_hpp.find ("flow_id") != std::string::npos, "CPP-G0-FLOW-001",
-                  "message_flow_event_t lacks flow_id");
+    gate.require (dispatch_events.find ("flow_id") != std::string::npos, "CPP-G0-FLOW-001",
+                  "internal message flow record lacks flow_id");
     gate.require (execution_hpp.find ("flow_origin_t") != std::string::npos, "CPP-G0-FLOW-001",
                   "flow_origin_t enum is missing");
     gate.require (stream_hpp.find ("has_flow_id") != std::string::npos, "CPP-G0-FLOW-001",
@@ -773,6 +850,60 @@ int main ()
     gate.require (tree_contains (root / "framework/src", "0xF2")
                     || tree_contains (root / "framework/src", "0xf2"),
                   "CPP-G0-FLOW-001", "0xF2 envelope format marker is not encoded");
+
+    /* CPP-CONTRACT-DIAG-001 — diagnostics exports the four exact levels. */
+    for (const std::string required : {
+           "\n    off = 0", "\n    errors = 1", "\n    normal = 2",
+           "\n    detailed = 3"}) {
+        gate.require (execution_hpp.find (required) != std::string::npos,
+                      "CPP-CONTRACT-DIAG-001",
+                      "diagnostics level is missing: " + required);
+    }
+
+    /* CPP-CONTRACT-DIAG-002 — application diagnostics leave the runtime's
+     * event representation behind the installed header boundary. */
+    for (const std::string removed : {
+           "message_flow_event_t", "message_dispatch_error_event_t",
+           "message_flow_observer_t", "set_message_flow_observer",
+           "trace_log_file", "trace_label", "message_flow_live",
+           "effective_message_flow", "live_mode ()", "log_file ()",
+           "label ()"}) {
+        gate.require (
+          execution_hpp.find (removed) == std::string::npos,
+          "CPP-CONTRACT-DIAG-002",
+          "dispatch execution header still exports " + removed);
+    }
+
+    /* CPP-CONTRACT-QUERY-001 — the installed location query surface includes
+     * exact Actor/Spot lookup and bounded object listing. */
+    for (const std::string required : {
+           "location_object_kind_t", "location_object_state_t",
+           "location_object_entry_t", "location_object_filter_t"}) {
+        gate.require (
+          location_diagnostics_hpp.find (required) != std::string::npos,
+          "CPP-CONTRACT-QUERY-001",
+          "location diagnostics header is missing " + required);
+    }
+    for (const std::string required : {
+           "find_actor_location", "find_spot_location",
+           "list_object_locations"}) {
+        gate.require (
+          location_runtime_query_hpp.find (required) != std::string::npos,
+          "CPP-CONTRACT-QUERY-001",
+          "location runtime query header is missing " + required);
+    }
+    gate.require (
+      execution_hpp.find ("std::optional<logger_t<>> diagnostics_logger")
+        == std::string::npos,
+      "CPP-CONTRACT-DIAG-002",
+      "dispatch execution header still exports a diagnostics logger field");
+    for (const std::string forbidden : {
+           "\n    errors_only =", "\n    key_transitions =", "\n    verbose =",
+           "\n    diagnostic ="}) {
+        gate.require (execution_hpp.find (forbidden) == std::string::npos,
+                      "CPP-CONTRACT-DIAG-001",
+                      "legacy diagnostics level remains public: " + forbidden);
+    }
 
     /* CPP-G0-METRIC-001 — raw runtime event and metric DTOs stay private. */
     gate.require (
@@ -885,13 +1016,14 @@ int main ()
       "SpotActorTransfer lacks committed Location or accepted completion evidence");
     const auto st_a1 =
       read_file (e2e_root / "SpotActorTransfer/Client/Scenarios/st_a1_scenario.hpp");
-    const auto st_a1_admission = st_a1.find ("|admission|");
-    const auto st_a1_commit = st_a1.find ("|location_committed|");
-    const auto st_a1_completion = st_a1.find ("|join_completion_accepted|");
-    const auto st_a1_leave = st_a1.find ("|leave|");
-    const auto st_a1_joined = st_a1.find ("|joined|");
+    const auto st_a1_sequence = st_a1.find ("assert_evidence_sequence");
+    const auto st_a1_admission = st_a1.find ("|admission|", st_a1_sequence);
+    const auto st_a1_commit = st_a1.find ("|location_committed|", st_a1_sequence);
+    const auto st_a1_completion = st_a1.find ("|join_completion_accepted|", st_a1_sequence);
+    const auto st_a1_leave = st_a1.find ("|leave|", st_a1_sequence);
+    const auto st_a1_joined = st_a1.find ("|joined|", st_a1_sequence);
     gate.require (
-      st_a1.find ("actor.node_rid == spot.node_rid") != std::string::npos,
+      st_a1.find ("probe.node_rid == spot.node_rid") != std::string::npos,
       "CPP-G0-E2E-004",
       "ST-A1 does not require a Framework-selected same-node Actor and Spot");
     gate.require (
@@ -913,9 +1045,11 @@ int main ()
 
     /* E2E-CP-49 — ST-E2 fails transfer before commit and preserves the source binding. */
     const auto st_e2 =
-      read_file (e2e_root / "SpotActorTransfer/Client/Scenarios/st_e2_scenario.hpp");
+      read_file (e2e_root / "SpotActorTransfer/Client/Scenarios/st_e2_scenario.hpp")
+      + read_file (e2e_root / "SpotActorTransfer/Client/Support/scenario_runner_support.hpp");
     gate.require (st_e2.find ("actor_type_fail_transfer_out") != std::string::npos
-                    && st_e2.find ("ST-E2 failed transfer was accepted")
+                    && st_e2.find ("join_completion_failed") != std::string::npos
+                    && st_e2.find ("deferred Join was not submitted")
                          != std::string::npos,
                   "E2E-CP-49", "ST-E2 does not inject and reject a pre-commit transfer failure");
     gate.require (st_e2.find ("after-failed-transfer") != std::string::npos
@@ -931,7 +1065,8 @@ int main ()
                     && transfer_client.find ("backlog_enqueued") != std::string::npos
                     && transfer_client.find ("message_follow_route_removed")
                          != std::string::npos
-                    && transfer_client.find ("message_follow_expired") != std::string::npos
+                    && transfer_client.find ("error_kind == \"Unavailable\"")
+                         != std::string::npos
                     && transfer_runner.find ("timing-dependent") == std::string::npos,
                   "E2E-CP-50",
                   "Track-F required markers are not client assertions or remain warnings");
@@ -994,12 +1129,14 @@ int main ()
                   "ST-C3 joined failure still asserts an actor packet nobody sends");
     const auto st_f5 =
       read_file (e2e_root / "SpotActorTransfer/Client/Scenarios/st_f5_scenario.hpp");
-    gate.require (st_f5.find ("message_follow_route_removed") != std::string::npos
-                    && st_f5.find ("message_follow_entries") != std::string::npos
-                    && st_f5.find ("spot-map-chain-a-final-") != std::string::npos
+    gate.require (st_f5.find ("relocate_for_message_follow") != std::string::npos
+                    && st_f5.find ("message_follow_route_removed") != std::string::npos
+                    && st_f5.find ("chain-to-final") != std::string::npos
+                    && st_f5.find ("current-global-route-after-removal") != std::string::npos
+                    && st_f5.find ("error_kind == \"Unavailable\"") != std::string::npos
                     && st_f5.find ("_nodes.c,") == std::string::npos,
                   "E2E-CP-52",
-                  "ST-F5 does not use the two-node chained topology or observe mapping eviction");
+                  "ST-F5 does not observe single-relocation route cleanup and current-route convergence");
 
     /* E2E-CP-53 — direct and bound-session packets cross the location publish
      * boundary before the join caller observes completion. */
@@ -1011,14 +1148,14 @@ int main ()
     gate.require (st_f2_publish != std::string::npos
                     && st_f2_follow_up > st_f2_publish
                     && st_f2_follow_up < st_f2_join_get
-                    && st_f2.find ("old_ref.generation}") != std::string::npos
+                    && st_f2.find ("send_ref") != std::string::npos
                     && st_f2.find ("old_ref.generation + 1") == std::string::npos,
                   "E2E-CP-53",
                   "ST-F2 sends D1 only after join completion, performs an extra ref lookup, or changes Actor generation");
     const auto st_f3 =
       read_file (e2e_root / "SpotActorTransfer/Client/Scenarios/st_f3_scenario.hpp");
     const auto st_f3_publish = st_f3.find ("location_committed");
-    const auto st_f3_follow_up = st_f3.find ("{\"ST-F3\", \"S3\"}");
+    const auto st_f3_follow_up = st_f3.find ("ST-F3\", \"S3");
     const auto st_f3_join_get = st_f3.find ("join_task.get ()");
     gate.require (st_f3_publish != std::string::npos
                     && st_f3_follow_up > st_f3_publish
@@ -1038,12 +1175,12 @@ int main ()
      * send surface; an explicit stale ref is never silently re-resolved. */
     const auto st_f4 =
       read_file (e2e_root / "SpotActorTransfer/Client/Scenarios/st_f4_scenario.hpp");
-    gate.require (st_f4.find ("send_ref") != std::string::npos
+    gate.require (st_f4.find ("probe_ref") != std::string::npos
                     && st_f4.find ("{\"ST-F4\", \"G2\"}") != std::string::npos
-                    && st_f4.find ("probe_ref") == std::string::npos
-                    && st_f4.find ("message_follow_expired") != std::string::npos,
+                    && st_f4.find ("error_kind == \"Unavailable\"") != std::string::npos
+                    && st_f4.find ("message_follow_route_removed") != std::string::npos,
                   "E2E-CP-54",
-                  "ST-F4 still changes G2 from send to request or omits stale evidence");
+                  "ST-F4 does not use an explicit old-ref request or omit stale evidence");
     const auto actor_client_runtime =
       read_file (root / "framework/src/runtime/actors/actor_client.cpp");
     const auto send_begin = actor_client_runtime.find (
@@ -1185,20 +1322,15 @@ int main ()
                     && stream_auth_block.find ("request_to_node") == std::string::npos,
                   "E2E-CP-14",
                   "SM-D2 stream auth recreates the actor through route mesh instead of binding its snapshot");
-    const auto bound_session_begin =
-      app_runtime.find ("actor_gateway_runtime.on_bound_session");
-    const auto bound_session_end =
-      app_runtime.find ("actor_gateway_runtime.on_relay", bound_session_begin);
-    const auto bound_session_block =
-      bound_session_begin != std::string::npos && bound_session_end != std::string::npos
-        ? app_runtime.substr (bound_session_begin,
-                              bound_session_end - bound_session_begin)
-        : std::string{};
-    gate.require (bound_session_block.find ("bind_application_actor_session")
-                      != std::string::npos
-                    && bound_session_block.find ("request_to_node") == std::string::npos,
+    const auto stream_bind_begin = stream_host.find ("result_t<void> bind_actor_session");
+    const auto stream_remote_bind =
+      stream_host.find ("_mesh_node->bind_application_actor_session", stream_bind_begin);
+    gate.require (stream_bind_begin != std::string::npos
+                    && stream_remote_bind != std::string::npos
+                    && stream_host.find ("request_to_node", stream_bind_begin)
+                         == std::string::npos,
                   "E2E-CP-14",
-                  "remote bound-session registration still depends on route mesh");
+                  "SM-D2 Session binding still depends on a RouteMesh request path");
 
     /* E2E-CP-21 — readiness and the first semantic request are distinct:
      * no scenario retries the request until it happens to succeed. */
@@ -1718,6 +1850,20 @@ int main ()
       "CPP-RELOC-001",
       "blocked relocation results are still retained as terminal state");
 
+    /* CPP-RELOC-002 — a missing descriptor or admitted peer is rechecked
+     * against the shared relocation deadline and Location polling policy. */
+    gate.require (
+      app_runtime.find ("relocation_topology_preflight_until")
+          != std::string::npos
+        && app_runtime.find ("wait_for_relocation_target")
+             != std::string::npos
+        && app_runtime.find ("relocation_topology_poll_interval")
+             != std::string::npos
+        && app_runtime.find ("options ().polling_interval")
+             != std::string::npos,
+      "CPP-RELOC-002",
+      "relocation still treats a one-shot target snapshot as terminal");
+
     /* CPP-LAYER-005 — no new completion can be admitted after the shutdown
      * result becomes visible to a termination waiter. */
     const auto stop_completion_admission =
@@ -1786,6 +1932,18 @@ int main ()
       "CPP-DISP-006",
       "Spot admission and serial enqueue use separate lock spans");
 
+    /* CPP-EXEC-001 — actor queue lookup is a lifecycle-boundary update, not
+     * a node-mutex acquisition on every inbound Actor packet. The immutable
+     * snapshot keeps queue lifetime shared while creation and removal remain
+     * serialized by the node owner. */
+    gate.require (
+      spot_runtime.find ("actor_execution_queue_snapshot") != std::string::npos
+        && spot_runtime.find ("std::atomic_load_explicit") != std::string::npos
+        && spot_runtime.find ("publish_actor_execution_queue_snapshot_unlocked")
+             != std::string::npos,
+      "CPP-EXEC-001",
+      "Actor delivery still resolves its serial queue through the node map on every packet");
+
     /* CPP-COMP-001 — moving retry state crosses the error envelope as a typed
      * internal origin; exception wording never selects retry or error kind. */
     gate.require (
@@ -1835,9 +1993,11 @@ int main ()
     gate.require (
       app_runtime.find ("make_instance_spot_activation_trace_context")
           != std::string::npos
-        && app_runtime.find ("if (!may_emit)\n        return std::nullopt;")
+        && app_runtime.find ("if (!may_emit)")
              != std::string::npos
-        && app_runtime.find ("message_flow_tracer_t (dispatch).trace (\n      outcome")
+        && app_runtime.find ("return std::nullopt;")
+             != std::string::npos
+        && app_runtime.find ("message_flow_tracer_t (dispatch).trace")
              != std::string::npos,
       "CPP-OBS-001",
       "Instance Spot activation tracing is not gated before event allocation");
@@ -1853,10 +2013,64 @@ int main ()
              "current->diagnostics_mode")
              != std::string::npos
         && message_flow_tracer.find (
-             "effective_message_flow ()")
+             "effective_message_flow (")
              != std::string::npos,
       "CPP-OBS-002",
       "message-flow diagnostics level is not snapshotted at message entry");
+
+    /* CPP-WIRE-001 — every authority read and write uses the same canonical
+     * zla1 key codec; legacy numeric keys are not compatibility aliases. */
+    gate.require (
+      authority_key_codec.find ("\"zla1:\"") != std::string::npos
+        && authority_key_codec.find ("0123456789ABCDEF")
+             != std::string::npos
+        && authority_key_codec.find ("object_id.size ()")
+             != std::string::npos,
+      "CPP-WIRE-001",
+      "canonical authority key codec is missing its version, byte length, or uppercase percent encoding");
+    for (const auto &[name, source] : std::array{
+           std::pair{"store resolver", &store_location_resolvers},
+           std::pair{"in-memory store", &in_memory_location_store},
+           std::pair{"provider store", &provider_location_repository},
+           std::pair{"public store adapter", &public_store_adapters},
+           std::pair{"Actor client", &actor_client},
+           std::pair{"host runtime", &app_runtime},
+           std::pair{"MeshNode host", &mesh_node_host_service},
+           std::pair{"stateful host", &public_host_runtime},
+           std::pair{"stateful dispatch", &raw_stateful_dispatch}}) {
+        gate.require (
+          source->find ("\"1:\"") == std::string::npos
+            && source->find ("\"2:\"") == std::string::npos
+            && source->find ("\"3:\"") == std::string::npos,
+          "CPP-WIRE-001",
+          std::string (name) + " still contains a legacy numeric authority key");
+    }
+
+    /* CPP-WIRE-005 — RelocationId is an opaque random 128-bit identity. The
+     * process retains issued IDs for the relocation-root retention window and
+     * regenerates zero or colliding candidates. */
+    gate.require (
+      relocation_id_generator.find ("getrandom")
+          != std::string::npos
+        && relocation_id_generator.find ("BCryptGenRandom")
+             != std::string::npos
+        && relocation_id_generator.find ("arc4random_buf")
+             != std::string::npos
+        && relocation_id_generator.find ("attempt != 64")
+             != std::string::npos
+        && relocation_id_generator.find ("std::chrono::hours (24)")
+             != std::string::npos
+        && relocation_id_generator.find ("_issued.emplace")
+             != std::string::npos,
+      "CPP-WIRE-005",
+      "Relocation ID generation is not CSPRNG-gated, non-zero, collision-retrying, and retention-bounded");
+    gate.require (
+      mesh_node_runtime.find ("relocation_ids ().issue ()")
+          != std::string::npos
+        && mesh_node_runtime.find ("next_relocation")
+             == std::string::npos,
+      "CPP-WIRE-005",
+      "a relocation path still derives RelocationId from a deterministic counter");
 
     /* CPP-WIRE-006 — terminal/result integrity and generic wire bounds are
      * emitted from the common schema instead of being redefined by the C++
@@ -1935,6 +2149,147 @@ int main ()
              == std::string::npos,
       "CPP-OWN-006",
       "runtime payload inspection still materializes a byte-vector copy");
+
+    /* CPP-OWN-004 — the default JSON serializer writes and reads the encoded
+     * payload directly instead of round-tripping through a binding message. */
+    gate.require (
+      serializer_header.find ("codecs::json::detail::dump_profile (")
+          != std::string::npos
+        && serializer_header.find ("nlohmann::json (value)")
+             != std::string::npos
+        && serializer_header.find (
+             "payload.to_raw ().template parse_json")
+             == std::string::npos
+        && serializer_header.find (
+             "zlink::message_t::from_json (value)")
+             == std::string::npos,
+      "CPP-OWN-004",
+      "default JSON serialization still round-trips through a binding message");
+
+    /* CPP-OWN-001 — the cached typed serializer owns the expected content type,
+     * and handler decode rejects a different envelope value. */
+    gate.require (
+      serializer_header.find ("const std::string &content_type ()")
+          != std::string::npos
+        && tree_contains (
+             include_root,
+             "inbound content type does not match the typed handler codec"),
+      "CPP-OWN-001",
+      "typed handler decode does not validate the cached codec content type");
+
+    /* CPP-OWN-008 — a resolved custom serializer owns its erased functions;
+     * hot-path encode/decode no longer re-enters the registry map. */
+    gate.require (
+      serializer_header.find (
+        "[serialize = std::move (serialize)]")
+          != std::string::npos
+        && serializer_header.find ("[this, type]") == std::string::npos,
+      "CPP-OWN-008",
+      "cached custom serializers still look up erased functions per message");
+
+    /* CPP-OWN-003 — claiming a queued stateful turn transfers the already
+     * decoded application payload instead of decoding the canonical queue
+     * bytes again. */
+    gate.require (
+      raw_stateful_dispatch.find ("auto frozen = std::move (pending->second.frozen)")
+          != std::string::npos
+        && raw_stateful_dispatch.find ("auto payload = std::move (*frozen.application)")
+             != std::string::npos
+        && raw_stateful_dispatch.find ("owner, *turn,")
+             == std::string::npos,
+      "CPP-OWN-003",
+      "stateful claim still copies pending payload or canonical turn buffers");
+
+    /* CPP-FOLLOW-001 — Message Follow admission preserves the contract error
+     * categories and rejects a revisited node before the hop ceiling. */
+    for (const std::string required : {
+           "framework_error_kind_t::invalid_operation",
+           "framework_error_kind_t::capacity_exceeded",
+           "framework_error_kind_t::unavailable"}) {
+        gate.require (
+          actor_transfer_coordinator.find (required) != std::string::npos,
+          "CPP-FOLLOW-001",
+          "Message Follow admission omits typed failure: " + required);
+    }
+    gate.require (
+      mesh_node_runtime.find ("__zlink.messageFollowVisitedNodes")
+          != std::string::npos
+        && mesh_node_runtime.find (
+             "follow_path.value ().visited.contains")
+             != std::string::npos,
+      "CPP-FOLLOW-001",
+      "Message Follow still relies only on the hop ceiling for loop detection");
+    gate.require (
+      actor_transfer_coordinator.find (
+        "found->second.old_generation != generation")
+          != std::string::npos,
+      "CPP-FOLLOW-001",
+      "Message Follow does not preserve its exact Actor generation fence");
+
+    /* CPP-LIFE-001 — a general message addresses the logical Actor or Spot.
+     * Owner authority and lease remain fences, while ObjectGeneration is
+     * normalized to the current incarnation after admission. */
+    gate.require (
+      raw_stateful_dispatch.find ("matches_application_route")
+          != std::string::npos
+        && raw_stateful_dispatch.find (
+             "accepted_target.object_generation =")
+             != std::string::npos
+        && raw_stateful_dispatch.find (
+             "actor.target.owner_lease_generation")
+             != std::string::npos
+        && raw_stateful_dispatch.find (
+             "spot.target.owner_lease_generation")
+             != std::string::npos,
+      "CPP-LIFE-001",
+      "general application admission does not normalize generation or fence the current owner lease");
+    gate.require (
+      spot_runtime.find ("const bool admitted =") != std::string::npos
+        && spot_runtime.find ("targets_local_actor") != std::string::npos
+        && spot_runtime.find ("targets_exact_incarnation") != std::string::npos
+        && spot_runtime.find ("requires_exact_incarnation")
+             != std::string::npos
+        && spot_runtime.find (
+             "framework_error_kind_t::invalid_operation")
+             != std::string::npos,
+      "CPP-LIFE-001",
+      "Actor dispatch does not separate general-message admission from exact Message Follow and bound-session admission");
+
+    /* CPP-SESS-001 — a STREAM-originated Actor relay creates a fresh
+     * downstream request correlation. Reusing the upstream STREAM correlation
+     * would collide with the target exactly-once table when a replacement
+     * session retries the same packet. */
+    gate.require (
+      mesh_node_runtime.find ("codec.create_envelope (kind") != std::string::npos
+        && mesh_node_runtime.find ("envelope.correlation_id") == std::string::npos,
+      "CPP-SESS-001",
+      "STREAM Actor relay reuses an upstream correlation instead of creating a fresh request id");
+
+    /* CPP-SESS-004 — replacement callback completion must schedule the close
+     * with an asynchronous timer. Sleeping in the callback would hold the
+     * session serial lane and prevent unrelated sessions from progressing. */
+    const auto replacement_begin = stream_host.find (
+      "void begin_actor_binding_replacement");
+    const auto replacement_end = replacement_begin == std::string::npos
+      ? std::string::npos
+      : stream_host.find (
+          "std::shared_ptr<replacement_session_state_t>\n    register_replacement_session",
+          replacement_begin);
+    const auto replacement_source = replacement_begin == std::string::npos
+      || replacement_end == std::string::npos
+      ? std::string{}
+      : stream_host.substr (replacement_begin, replacement_end - replacement_begin);
+    gate.require (
+      replacement_source.find ("asio::steady_timer") != std::string::npos
+        && replacement_source.find (
+             "expires_after (std::chrono::milliseconds (100))")
+             != std::string::npos
+        && replacement_source.find ("async_wait") != std::string::npos
+        && replacement_source.find ("std::this_thread::sleep_for")
+             == std::string::npos
+        && replacement_source.find ("condition_variable") == std::string::npos,
+      "CPP-SESS-004",
+      "replacement callback waits synchronously instead of scheduling a non-blocking close timer");
 
     /* CPP-SESS-003 — each serial owner selects a closed lane-policy type.
      * Yield behavior is derived from the Spot alternative; callers cannot

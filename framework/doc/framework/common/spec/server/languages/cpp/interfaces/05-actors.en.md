@@ -355,11 +355,12 @@ the global Actor directory.
 physical connection. It runs the exact binding's Spot callback at most once,
 then commits the binding as a tombstone and removes it after terminal. The
 physical STREAM connection and Actor/Spot membership are kept, and no new
-public unbind API is provided. Rebind doesn't reuse an old exact binding
-identity for another Actor or generation. It registers the new identity first,
-then runs the old callback at most once and tombstones the old binding. Callback
-failure is recorded as diagnostics, but doesn't remove the new binding or
-restore the old one.
+public unbind API is provided. Rebind completes as soon as the new identity
+becomes current and does not wait for the previous session. The previous exact
+session may notify the client in `on_actor_binding_replaced(...)`. The framework closes the
+connection `100 ms` after the callback reaches a successful or failed terminal; an empty outbound
+queue does not shorten this delay.
+Callback or close failure doesn't remove the new binding or restore the old one.
 
 Once Actor relocation commits, `session_actor_t::ref()` returns a
 current location snapshot with the same ActorId/ObjectGeneration and

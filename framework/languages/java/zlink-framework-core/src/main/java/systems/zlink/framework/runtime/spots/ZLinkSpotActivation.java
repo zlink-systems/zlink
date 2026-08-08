@@ -47,13 +47,13 @@ import systems.zlink.framework.execution.ZLinkWorkerPool;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDispatcher;
 import systems.zlink.framework.actors.ZLinkActor;
-import systems.zlink.framework.configuration.ZLinkDispatchErrorAction;
-import systems.zlink.framework.configuration.ZLinkDispatchErrorReason;
-import systems.zlink.framework.configuration.ZLinkDispatchErrorSurface;
-import systems.zlink.framework.configuration.ZLinkDispatchMessageKind;
-import systems.zlink.framework.configuration.ZLinkMessageFlowEvent;
-import systems.zlink.framework.configuration.ZLinkMessageFlowOutcome;
-import systems.zlink.framework.configuration.ZLinkDispatchFailure;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorAction;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorReason;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSurface;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchFailure;
 import systems.zlink.framework.runtime.actors.ZLinkActorSpotRoutePackets;
 import systems.zlink.framework.runtime.actors.ZLinkActorEntryTransferEnvelope;
 import systems.zlink.framework.runtime.configuration.ZLinkFrameworkRegistration;
@@ -239,14 +239,14 @@ final class SpotActivation
         }
         List<CompletableFuture<Void>> completions = new ArrayList<>(routes.size());
         for (ZLinkBackendReceived received : routes) {
-            byte[] acceptedRecord = ZLinkSpotAcceptedJournal.encode(received);
-            var replyRoute = host.registerRelocationReply(
-                acceptedRecord,
+            var replyRoute = host.registerRelocationReplyLazy(
+                () -> ZLinkSpotAcceptedJournal.encode(received),
                 received,
                 context.spotId(),
                 backendSpot.lifecycleGeneration());
             completions.add(context.enqueueAcceptedDispatch(
-                acceptedRecord,
+                replyRoute::record,
+                received.acceptedJournalRecordSize(),
                 () -> dispatchRouteAsync(received)
                     .whenComplete((ignored, failure) ->
                         replyRoute.completeLocal()),

@@ -26,6 +26,7 @@ import type {
   ZLinkSpotLocationStore
 } from './internal-store-contracts';
 import { decodeServiceReadySpotAuthority } from '../foundation/service-authority-payload-codec';
+import { serviceRelocationAuthorityApplicationPayload } from '../foundation/service-relocation-runtime';
 import { decodeActorAuthorityIdentity } from '../actors/actor-authority-publication';
 import { encodeAuthorityKey } from './authority-key-codec';
 import {
@@ -36,7 +37,10 @@ import type {
   ZLinkActorSpotHandleResolver,
   ZLinkSpotHandleResolver
 } from '../spots/spot-handle';
-import { ZLinkFrameworkException } from '../../contracts/Errors';
+import {
+  ZLinkFrameworkErrorKind,
+  ZLinkFrameworkException
+} from '../../contracts/Errors';
 import type {
   ZLinkSpotRouteResolver,
   ZLinkSpotRouteTarget
@@ -352,7 +356,9 @@ export class ZLinkStoreLocationResolvers implements
       signal
     );
     if (current.kind !== 'snapshot' || current.allocation.state !== 'active') return undefined;
-    const decoded = decodeActorAuthorityIdentity(current.payload);
+    const decoded = decodeActorAuthorityIdentity(
+      serviceRelocationAuthorityApplicationPayload(current.payload)
+    );
     if (
       decoded === undefined
       || decoded.actor.actorId !== actorId
@@ -843,13 +849,27 @@ export class ZLinkAuthoritySpotRouteResolver implements ZLinkSpotRouteResolver {
         signal
       );
       if (current.kind === 'snapshot' && current.allocation.state === 'active') {
-        const decoded = decodeServiceReadySpotAuthority(current.payload);
+        const decoded = decodeServiceReadySpotAuthority(
+          serviceRelocationAuthorityApplicationPayload(current.payload)
+        );
         if (
           decoded !== undefined
           && decoded.spotId === String(spotId)
           && decoded.ownerId === current.ownerId
           && decoded.ownerLeaseGeneration === current.ownerLeaseGeneration
         ) {
+          const remainingLeaseMs = this.leaseTracker === undefined
+            ? undefined
+            : await this.leaseTracker.remainingOwnerTokenLeaseMs({
+                ownerId: current.ownerId,
+                leaseGeneration: current.ownerLeaseGeneration
+              }, signal);
+          if (remainingLeaseMs !== undefined && remainingLeaseMs <= 0) {
+            throw new ZLinkFrameworkException(
+              ZLinkFrameworkErrorKind.Unavailable,
+              `SPOT '${spotId}' Ready authority owner lease is unavailable.`
+            );
+          }
           const target: ZLinkSpotRouteTarget = {
             routerChannelId: this.routerChannelIdForMesh(decoded.ownerMeshName),
             targetNodeRid: decoded.ownerNodeRid,
@@ -872,13 +892,7 @@ export class ZLinkAuthoritySpotRouteResolver implements ZLinkSpotRouteResolver {
             )
           };
           if (this.routeCacheMaxAgeMs > 0 && this.currentEpoch(key) === epoch) {
-            const remainingLeaseMs = this.leaseTracker === undefined
-              ? 0
-              : await this.leaseTracker.remainingOwnerTokenLeaseMs({
-                  ownerId: current.ownerId,
-                  leaseGeneration: current.ownerLeaseGeneration
-                }, signal);
-            const lifetimeMs = Math.min(this.routeCacheMaxAgeMs, remainingLeaseMs);
+            const lifetimeMs = Math.min(this.routeCacheMaxAgeMs, remainingLeaseMs ?? 0);
             if (lifetimeMs > 0 && this.currentEpoch(key) === epoch) {
               this.cache.set(key, {
                 row: target,

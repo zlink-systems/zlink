@@ -519,7 +519,7 @@ async function sleep(milliseconds: number, signal?: AbortSignal): Promise<void> 
 }
 
 function decodePacket<T extends object>(payload: ZLinkMessage, type: new () => T): T {
-  return Object.assign(new type(), payload.decode<T>(Object as never));
+  return payload.decode(type);
 }
 
 @Injectable()

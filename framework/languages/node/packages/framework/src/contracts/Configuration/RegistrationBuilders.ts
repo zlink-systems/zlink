@@ -18,7 +18,6 @@ import type {
   ZLinkMeshPeerConnection,
   ZLinkMeshPeerConnections,
   ZLinkLocationOptionValues,
-  ZLinkRuntimeErrorSink,
   ZLinkSpotPublisherConfig,
   ZLinkHandlerFilter,
   ZLinkInstanceSpot,
@@ -50,13 +49,9 @@ import type { ZLinkCodecRegistryBuilder } from '../Codecs';
 import type {
   ZLinkDispatchOptions,
   ZLinkDispatchOptionsBuilder,
-  ZLinkMessageFlowObserver
+  ZLinkMessageFlowLogMode
 } from '../Dispatch';
-import { ZLinkMessageFlowLogMode, ZLinkUnhandledDispatchAction } from '../Dispatch';
-import {
-  setDispatchObserverType,
-  setRuntimeErrorSinkType
-} from './DispatchObserverRegistration';
+import { ZLinkUnhandledDispatchAction } from '../Dispatch';
 import { endpointConnections } from './RuntimeEndpointConnections';
 import type { ZLinkEndpointConnections } from './Connections';
 import type {
@@ -99,6 +94,7 @@ import {
   validateActorTransferTimeout,
   validateMessageFollowDuration
 } from './RegistrationBuilderPolicy';
+import { requireMessageFlowLogMode, requireTraceSampleRate } from './DiagnosticsValidation';
 
 export function createFrameworkOptions(
   configure: (options: ZLinkFrameworkOptions) => void
@@ -305,23 +301,13 @@ implements ZLinkInboundDispatchOptions {
 export class DefaultDispatchOptionsBuilder implements ZLinkDispatchOptionsBuilder {
   constructor(private readonly dispatch: ZLinkDispatchOptions) {}
 
-  setMessageFlowObserver(observerType: Type<ZLinkMessageFlowObserver>): this {
-    setDispatchObserverType(this.dispatch, observerType);
-    return this;
-  }
-
-  setRuntimeErrorSink(sinkType: Type<ZLinkRuntimeErrorSink>): this {
-    setRuntimeErrorSinkType(this.dispatch, sinkType);
-    return this;
-  }
-
   messageFlow(mode: ZLinkMessageFlowLogMode): this {
-    this.dispatch.diagnostics.messageFlow = mode;
+    this.dispatch.diagnostics.messageFlow = requireMessageFlowLogMode(mode);
     return this;
   }
 
   traceSampleRate(rate: number): this {
-    this.dispatch.diagnostics.sampleRate = rate;
+    this.dispatch.diagnostics.sampleRate = requireTraceSampleRate(rate);
     return this;
   }
 
@@ -330,15 +316,6 @@ export class DefaultDispatchOptionsBuilder implements ZLinkDispatchOptionsBuilde
     return this;
   }
 
-  traceLogFile(path: string): this {
-    this.dispatch.diagnostics.logFile = path;
-    return this;
-  }
-
-  traceLabel(id: string): this {
-    this.dispatch.diagnostics.label = id;
-    return this;
-  }
 }
 
 export class DefaultLocationOptionsBuilder implements ZLinkLocationOptions {
@@ -418,7 +395,7 @@ function defaultDispatchOptions(): ZLinkDispatchOptions {
       publish: ZLinkUnhandledDispatchAction.LogAndDrop
     },
     diagnostics: {
-      messageFlow: ZLinkMessageFlowLogMode.ErrorsOnly,
+      messageFlow: 'errors',
       sampleRate: 1,
       includeMessageSizes: false
     }

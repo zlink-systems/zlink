@@ -1,4 +1,3 @@
-import { ZLinkMessageFlowLogMode } from '@zlink-systems/framework';
 import { ZLinkModule, zlinkFramework, zlinkModule } from '@zlink-systems/nestjs';
 import { createShoppingMallLocationStore, shoppingMallLocationOptions } from '../Configuration/location-store';
 import { createShoppingMallRelocationStore } from '../Configuration/relocation-store';
@@ -31,9 +30,7 @@ function createShoppingMallWorkflowModule(role: string): Function {
         useFactory: (config: ShoppingMallServerConfig) => {
           const builder = zlinkFramework();
           builder.configureDispatch()
-            .messageFlow(ZLinkMessageFlowLogMode.KeyTransitions)
-            .traceLogFile(`${config.logDir}/flow-${role}.log`)
-            .traceLabel(role);
+            .messageFlow('normal');
           builder.addLocationStore(createShoppingMallLocationStore(config));
           builder.addRelocationStore(createShoppingMallRelocationStore(config));
           shoppingMallLocationOptions(builder.configureLocations());

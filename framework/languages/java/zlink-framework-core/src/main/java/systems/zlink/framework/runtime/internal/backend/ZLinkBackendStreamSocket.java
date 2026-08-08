@@ -26,6 +26,10 @@ public interface ZLinkBackendStreamSocket
     /** Receives one raw STREAM record, or {@code null} when no record is ready. */
     ZLinkBackendStreamReceived recv();
 
+    default void disconnectPeer(RoutingId routingId) {
+        // Alternate test backends may not own a native STREAM transport.
+    }
+
     void onTransportError(ZLinkBackendStreamErrorHandler handler);
 
     void startSessionService();
@@ -71,5 +75,16 @@ public interface ZLinkBackendStreamSocket
         return CompletableFuture.failedFuture(
             new UnsupportedOperationException(
                 "bound Actor request is unavailable"));
+    }
+
+    /** Sends an internal request to the supplied exact Actor identity. */
+    default CompletionStage<List<Message>> requestExactActor(
+        ZLinkBackendActorRef actor,
+        ZLinkStreamHeader header,
+        List<Message> parts,
+        Duration timeout) {
+        return CompletableFuture.failedFuture(
+            new UnsupportedOperationException(
+                "exact Actor request is unavailable"));
     }
 }

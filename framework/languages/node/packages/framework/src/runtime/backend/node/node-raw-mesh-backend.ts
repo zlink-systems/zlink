@@ -68,6 +68,7 @@ import type {
   ServiceDirectSpotRouteFence,
   ServiceInstanceActivationTarget,
   ServiceInstanceRouteFence,
+  ServiceRetiredBoundSessionRouteFence,
   ServiceSpotRouteFence,
   ServiceUserSpotCloseRecord,
   ServiceUserSpotCreateRecord
@@ -183,6 +184,12 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     this.observedPumpSourceRoutingId = sourceRoutingId;
     this.observedPumpByteCount = byteCount;
   };
+
+  private takePumpObservation(): { readonly sourceRoutingId: string; readonly byteCount: number } | undefined {
+    const sourceRoutingId = this.observedPumpSourceRoutingId;
+    if (sourceRoutingId === undefined) return undefined;
+    return { sourceRoutingId, byteCount: this.observedPumpByteCount };
+  }
 
   constructor(
     private readonly meshName: string,
@@ -1404,14 +1411,14 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       const result = runtime.pumpOne(performance.now(), this.observePump);
       if (result === 'noData') break;
       if (result === 'application') this.readyHandler?.(ReadyDomain.Application);
-      const sourceRoutingId = this.observedPumpSourceRoutingId;
+      const observation = this.takePumpObservation();
       // Core ROUTER advances its fair-queue cursor after each complete
       // multipart message, so the next poll resumes from the following pipe.
       if (
-        sourceRoutingId !== undefined
+        observation !== undefined
         && this.receiveBatchBudget.record(
-          sourceRoutingId,
-          this.observedPumpByteCount,
+          observation.sourceRoutingId,
+          observation.byteCount,
           performance.now()
         )
       ) break;
@@ -1811,7 +1818,12 @@ class RawStreamSessionService implements StreamSessionService {
   bindActor(
     sessionRid: RoutingId,
     actor: ServiceActorRef,
-    timeoutMs = 30_000
+    timeoutMs = 30_000,
+    onBindingReplaced?: (
+      actorId: string,
+      retiredSession: ServiceRetiredBoundSessionRouteFence,
+      actor: ServiceActorRef
+    ) => void
   ): MeshOperationId {
     this.requireStarted();
     const sessionKey = String(sessionRid);
@@ -1822,7 +1834,8 @@ class RawStreamSessionService implements StreamSessionService {
         sessionKey,
         actor,
         timeoutMs,
-        (targetSessionRid, payloadFrame) => this.deliver(targetSessionRid, payloadFrame)
+        (targetSessionRid, payloadFrame) => this.deliver(targetSessionRid, payloadFrame),
+        onBindingReplaced
       )
     );
   }

@@ -1,6 +1,7 @@
 package systems.zlink.stream.connector;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.net.URI;
 import java.time.Duration;
@@ -10,6 +11,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.actors.ActorRefSnapshot;
 
 final class ZLinkStreamJsonTest {
@@ -37,6 +39,32 @@ final class ZLinkStreamJsonTest {
             TimestampedPayload.class);
 
         assertEquals(expected, actual.occurredAt());
+    }
+
+    @Test
+    void frameworkJsonProfileWritesInt64AsCanonicalDecimalString() {
+        ZLinkStreamEncodedPayload encoded = ZLinkStreamJson.encode(
+            "counter", new LongPayload(42L));
+
+        assertEquals(
+            "{\"value\":\"42\"}",
+            new String(encoded.payload().toByteArray(), java.nio.charset.StandardCharsets.UTF_8));
+        assertEquals(
+            42L,
+            ZLinkStreamJson.decode(encoded, LongPayload.class).value());
+    }
+
+    @Test
+    void frameworkJsonProfileRejectsNumericInt64() {
+        ZLinkStreamEncodedPayload numeric = new ZLinkStreamEncodedPayload(
+            "counter",
+            Message.from("{\"value\":42}".getBytes(java.nio.charset.StandardCharsets.UTF_8)),
+            Map.of(),
+            ZLinkStreamCodec.JSON);
+
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> ZLinkStreamJson.decode(numeric, LongPayload.class));
     }
 
     @Test
@@ -191,6 +219,9 @@ final class ZLinkStreamJsonTest {
     }
 
     private record TimestampedPayload(Instant occurredAt) {
+    }
+
+    private record LongPayload(long value) {
     }
 
     private static final class FakeConnector implements ZLinkStreamConnector {

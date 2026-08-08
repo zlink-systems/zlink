@@ -20,6 +20,10 @@ class ZLinkOpaqueRoutingId {
 }
 
 export function normalizeRoutingId(value: RoutingId | string): RoutingId {
+  const candidate = value as unknown;
+  if (candidate instanceof ZLinkOpaqueRoutingId) {
+    return candidate as unknown as RoutingId;
+  }
   return String(value);
 }
 
@@ -115,5 +119,7 @@ export function routingIdsEqual(
   if (left === undefined || right === undefined) {
     return left === right;
   }
+  if (left === right) return true;
+  if (typeof left === 'string' && typeof right === 'string') return false;
   return encodeRoutingIdStorageHex(left) === encodeRoutingIdStorageHex(right);
 }

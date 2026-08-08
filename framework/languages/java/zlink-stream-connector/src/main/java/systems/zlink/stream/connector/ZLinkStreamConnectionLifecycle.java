@@ -90,9 +90,10 @@ final class ZLinkStreamConnectionLifecycle {
                 return connectionAttempt;
             }
             connectStarted = true;
-            transitionTo(ZLinkStreamConnectionState.CONNECTING);
-            return startConnectionAttempt(this::connectOnceStage);
         }
+        return startConnectionAttempt(
+            ZLinkStreamConnectionState.CONNECTING,
+            this::connectOnceStage);
     }
 
     CompletionStage<Void> close() {
@@ -239,6 +240,10 @@ final class ZLinkStreamConnectionLifecycle {
     }
 
     private void activateConnection(ZLinkStreamTransportConnection transport) {
+        if (state == ZLinkStreamConnectionState.CLOSED) {
+            closeQuietly(transport);
+            throw new IllegalStateException("connector is closed");
+        }
         connection = transport;
         lastInboundNanos = System.nanoTime();
         transitionTo(ZLinkStreamConnectionState.CONNECTED);
@@ -286,18 +291,41 @@ final class ZLinkStreamConnectionLifecycle {
     }
 
     private CompletionStage<Void> startConnectionAttempt(
+        ZLinkStreamConnectionState targetState,
         java.util.function.Supplier<CompletionStage<Void>> starter) {
         CompletableFuture<Void> result = new CompletableFuture<>();
-        connectionAttempt = result;
+        boolean notifyState;
+        synchronized (connectionAttemptLock) {
+            if (state == ZLinkStreamConnectionState.CLOSED) {
+                return CompletableFuture.failedFuture(
+                    new IllegalStateException("connector is closed"));
+            }
+            if (connectionAttempt != null
+                && (state == ZLinkStreamConnectionState.CONNECTING
+                    || state == ZLinkStreamConnectionState.RECONNECTING)) {
+                return connectionAttempt;
+            }
+            connectionAttempt = result;
+            notifyState = setStateLocked(targetState);
+        }
+        if (notifyState) {
+            notifyStateHandlers(targetState);
+        }
         try {
             starter.get().whenComplete((ignored, error) -> {
+                boolean transition = false;
                 synchronized (connectionAttemptLock) {
                     if (connectionAttempt == result) {
                         connectionAttempt = null;
                     }
                     if (error != null && state != ZLinkStreamConnectionState.CLOSED) {
-                        transitionTo(ZLinkStreamConnectionState.DISCONNECTED);
+                        transition = setStateLocked(
+                            ZLinkStreamConnectionState.DISCONNECTED);
                     }
+                }
+                if (transition) {
+                    notifyStateHandlers(
+                        ZLinkStreamConnectionState.DISCONNECTED);
                 }
                 if (error == null) {
                     result.complete(null);
@@ -306,31 +334,51 @@ final class ZLinkStreamConnectionLifecycle {
                 }
             });
         } catch (RuntimeException error) {
-            connectionAttempt = null;
-            transitionTo(ZLinkStreamConnectionState.DISCONNECTED);
+            boolean transition;
+            synchronized (connectionAttemptLock) {
+                if (connectionAttempt == result) {
+                    connectionAttempt = null;
+                }
+                transition = state != ZLinkStreamConnectionState.CLOSED
+                    && setStateLocked(
+                        ZLinkStreamConnectionState.DISCONNECTED);
+            }
+            if (transition) {
+                notifyStateHandlers(
+                    ZLinkStreamConnectionState.DISCONNECTED);
+            }
             result.completeExceptionally(error);
         }
         return result;
     }
 
     private void startAutomaticReconnect() {
+        CompletableFuture<Void> currentAttempt;
+        boolean notifyReconnect = false;
         synchronized (connectionAttemptLock) {
             if (state == ZLinkStreamConnectionState.CLOSED) {
                 return;
             }
-            boolean reconnectAlreadyStarted = state == ZLinkStreamConnectionState.RECONNECTING;
-            transitionTo(ZLinkStreamConnectionState.RECONNECTING);
-            CompletableFuture<Void> currentAttempt = connectionAttempt;
+            currentAttempt = connectionAttempt;
             if (currentAttempt != null) {
-                if (!reconnectAlreadyStarted) {
-                    currentAttempt.whenComplete((ignored, error) -> startAutomaticReconnect());
-                }
-                return;
+                notifyReconnect = setStateLocked(
+                    ZLinkStreamConnectionState.RECONNECTING);
             }
-            startConnectionAttempt(() -> reconnectAttemptStage(
+        }
+        if (currentAttempt != null) {
+            if (notifyReconnect) {
+                notifyStateHandlers(
+                    ZLinkStreamConnectionState.RECONNECTING);
+                currentAttempt.whenComplete(
+                    (ignored, error) -> startAutomaticReconnect());
+            }
+            return;
+        }
+        startConnectionAttempt(
+            ZLinkStreamConnectionState.RECONNECTING,
+            () -> reconnectAttemptStage(
                 1,
                 configuration.reconnect().initialDelay()));
-        }
     }
 
     private CompletableFuture<Void> reconnectAttemptStage(int attempt, Duration delay) {
@@ -415,10 +463,25 @@ final class ZLinkStreamConnectionLifecycle {
     }
 
     private void transitionTo(ZLinkStreamConnectionState next) {
-        if (state == next) {
+        boolean changed;
+        synchronized (connectionAttemptLock) {
+            changed = setStateLocked(next);
+        }
+        if (!changed) {
             return;
         }
+        notifyStateHandlers(next);
+    }
+
+    private boolean setStateLocked(ZLinkStreamConnectionState next) {
+        if (state == next) {
+            return false;
+        }
         state = next;
+        return true;
+    }
+
+    private void notifyStateHandlers(ZLinkStreamConnectionState next) {
         for (ZLinkStreamConnectionStateHandler handler : List.copyOf(stateHandlers)) {
             if (configuration.dispatchMode() == ZLinkStreamDispatchMode.IMMEDIATE) {
                 invokeStateCallback(handler, next);

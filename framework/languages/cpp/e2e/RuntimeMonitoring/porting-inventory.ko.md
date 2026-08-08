@@ -66,7 +66,7 @@ store를 공유하고, location runtime monitoring source가 topology/status/ser
 | `MON-A5` | `Client/Scenarios/mon_a5_fixed_kinds_scenario.hpp` | done |
 | `MON-B1` | `Client/Scenarios/mon_b_publish_monitoring_absence_scenario.hpp` | partial — compile-time public member 부재와 zero-target publish 뒤 snapshot·event 부재를 검사한다. 기존 Service API drift를 고친 뒤 process 증거와 막힌 remote target 검증이 필요하다. |
 | `MON-B2` | `Client/Scenarios/mon_b_publish_monitoring_absence_scenario.hpp` | partial — local subscriber가 있는 publish 뒤 snapshot·event 부재를 검사한다. 기존 Service API drift를 고친 뒤 handler 단일 처리와 막힌 local target 검증이 필요하다. |
-| `MON-C1` | `Client/Scenarios/mon_c1_dispatch_failure_scenario.hpp` | done |
+| `MON-C1` | `Client/Scenarios/mon_c1_dispatch_failure_scenario.hpp` | done — logging provider failure isolation과 handler 실행 중 diagnostics level snapshot을 실제 process에서 검증 |
 | `MON-D1` | `Client/Scenarios/mon_d1_failure_recovery_scenario.hpp` | done |
 
 ## 검증

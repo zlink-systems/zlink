@@ -30,9 +30,10 @@ inline int run_service_host (int argc, char **argv)
         framework.services ().add_singleton<server::evidence_store_t> (std::move (evidence));
         framework.services ().add_singleton<runtime_observation_store_t> ();
         auto gate = std::make_unique<application_gate_t> ();
-        auto *gate_ptr = gate.get ();
         framework.services ().add_singleton<application_gate_t> (
           std::move (gate));
+        framework.services ().add_singleton<app_reference_t> (
+          std::make_unique<app_reference_t> (app));
         server::add_redis_location_store (framework, options.redis_endpoint,
                                           options.redis_key_prefix);
         const auto channel_endpoint = parse_tcp_endpoint (options.channel_endpoint);
@@ -42,12 +43,8 @@ inline int run_service_host (int argc, char **argv)
           .set_advertise_host (channel_endpoint.host)
           .listen (channel_endpoint.port)
           .add_handler_group (handler_group);
-        if (!options.log_dir.empty ()) {
-            framework.configure_dispatch ()
-              .message_flow (zlink::framework::message_flow_log_mode_t::key_transitions)
-              .trace_log_file (options.log_dir + "/" + options.rid + "-flow.log")
-              .trace_label ("cpp-mon-" + options.rid);
-        }
+        framework.configure_dispatch ()
+          .message_flow (zlink::framework::message_flow_log_mode_t::normal);
         framework.handlers ().group (handler_group).add<profile_request_handler_t> ();
         auto mesh = framework.add_route_mesh (route_mesh_name);
         mesh.listen (options.mesh_endpoint)
@@ -103,7 +100,8 @@ inline int run_service_host (int argc, char **argv)
           });
         for (const auto &endpoint : options.mesh_peer_endpoints)
             mesh.peer_connections ().connect (endpoint);
-        app.logging ().use_callback_sink (
+        app.logging ().use_provider (
+          "runtime-monitoring-evidence",
           [evidence_ptr, profile = options.monitor_profile] (
             const zlink::framework::log_record_t &record) {
               if (profile == "socket-filter"
@@ -114,7 +112,8 @@ inline int run_service_host (int argc, char **argv)
               server::record_runtime_log (*evidence_ptr, record);
           });
         if (options.monitor_profile == "throwing") {
-            app.logging ().use_callback_sink (
+            app.logging ().use_provider (
+              "runtime-monitoring-throwing",
               [evidence_ptr] (const zlink::framework::log_record_t &record) {
                   record_throwing_runtime_log (*evidence_ptr, record);
               });
@@ -129,6 +128,8 @@ inline int run_service_host (int argc, char **argv)
               .map_post<create_spot_handler_t> ("/spot/create")
               .map_post<create_actor_handler_t> ("/actor/create")
               .map_post<delete_actor_handler_t> ("/actor/delete")
+              .map_get<exact_location_object_handler_t> ("/location/object")
+              .map_get<list_location_objects_handler_t> ("/location/objects")
               .map_post<create_subject_handler_t> (
                 "/admin/subject/create")
               .map_post<close_subject_handler_t> (
@@ -145,6 +146,8 @@ inline int run_service_host (int argc, char **argv)
                 "/admin/application-gate/wait")
               .map_post<application_gate_release_handler_t> (
                 "/admin/application-gate/release")
+              .map_post<message_flow_mode_handler_t> (
+                "/admin/message-flow-mode")
               .map_post<mesh_profile_request_handler_t> (
                 "/mesh/profile/request")
               .map_post<mesh_application_gate_request_handler_t> (

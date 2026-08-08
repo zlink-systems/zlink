@@ -105,6 +105,10 @@ class spot_node_builder_state_t
     std::map<std::string, std::uint64_t> actor_generations;
     std::map<std::string, std::string> actor_types_by_id;
     std::set<std::string> actor_created_keys;
+    /* Destruction requested from an active handler is deferred until the
+     * borrowed instance is no longer in use. Packets are rejected as soon as
+     * that intent is accepted. */
+    std::set<std::string> retiring_actor_keys;
     std::set<std::string> destroying_actors;
     std::set<std::string> destroyed_actor_keys;
     // A request id is reserved before dispatch and receives one terminal
@@ -112,6 +116,22 @@ class spot_node_builder_state_t
     // exactly-once transition.
     runtime::exactly_once_table_t<std::string, zlink::message_t>
       dispatched_request_replies;
+    struct pending_handoff_request_t
+    {
+        actor_ref_t actor;
+        std::uint64_t reply_route_id = 0;
+        service::reply_token_t reply_token;
+        runtime::messaging::envelope_header_t request_header;
+        std::chrono::steady_clock::time_point deadline;
+    };
+    std::map<std::pair<std::uint64_t, std::uint64_t>, pending_handoff_request_t>
+      pending_handoff_requests;
+    std::function<bool (
+      const zlink::routing_id_t &,
+      const runtime::protocol::wire_operation_id_t &,
+      std::uint64_t,
+      const result_t<zlink::message_t> &)>
+      actor_handoff_terminal_sender;
     // Requests currently dispatched to each actor and not yet replied. Sampled
     // once per transfer right at the moving transition (runtime-metrics §4.3
     // pending_requests). Guarded by its own mutex: dispatch runs on the
@@ -203,9 +223,12 @@ class spot_node_builder_state_t
      * a freed instance can at worst leave an entry that no longer resolves
      * to a live registration. */
     std::map<const void *, std::pair<std::string, std::string>> actor_instance_index;
-    std::map<std::string,
-             std::shared_ptr<runtime::serial_execution_queue_t>>
+    using actor_execution_queue_map_t =
+      std::map<std::string, std::shared_ptr<runtime::serial_execution_queue_t>>;
+    std::map<std::string, std::shared_ptr<runtime::serial_execution_queue_t>>
       actor_execution_queues;
+    std::shared_ptr<const actor_execution_queue_map_t> actor_execution_queue_snapshot =
+      std::make_shared<actor_execution_queue_map_t> ();
     std::map<std::string, spot_route_t> actor_routes;
     std::map<std::string, std::unique_ptr<service::actor_t>> native_actors;
     std::unordered_set<std::string> mesh_runtime_owned_native_actor_ids;
@@ -454,7 +477,6 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
       const std::optional<location_owner_token_t> &owner_token) const noexcept
     {
         return target.spot_id == spot_id
-               && target.object_generation == object_generation
                && target.authority_owner_generation
                     == authority_owner_generation
                && owner_token
@@ -556,6 +578,22 @@ inline void record_actor_route_unlocked (spot_node_builder_state_t &state,
     state.actor_generations[key] = generation;
 }
 
+/* Actor delivery reads the queue directory on every inbound packet, while
+ * queue creation/removal is rare and already serialized by the node mutex.
+ * Publish a copy-on-write directory at those lifecycle boundaries so the
+ * normal dispatch path can take a shared_ptr snapshot without reacquiring the
+ * node mutex. */
+inline void publish_actor_execution_queue_snapshot_unlocked (
+  spot_node_builder_state_t &state)
+{
+    auto snapshot = std::make_shared<spot_node_builder_state_t::actor_execution_queue_map_t> (
+      state.actor_execution_queues);
+    std::shared_ptr<const spot_node_builder_state_t::actor_execution_queue_map_t> published =
+      std::move (snapshot);
+    std::atomic_store_explicit (&state.actor_execution_queue_snapshot,
+                                std::move (published), std::memory_order_release);
+}
+
 inline void record_actor_spot_location_unlocked (spot_node_builder_state_t &state,
                                                  const std::string &key,
                                                  spot_id_t spot_id,
@@ -644,7 +682,7 @@ class spot_node_runtime_t
     std::optional<spot_route_t> actor_route (const actor_ref_t &actor_ref) const;
     std::optional<actor_message_follow_target_t>
     actor_message_follow_target (const actor_ref_t &actor_ref) const;
-    std::optional<actor_message_follow_target_t>
+    result_t<std::optional<actor_message_follow_target_t>>
     try_acquire_actor_message_follow (
       const actor_ref_t &actor_ref,
       std::size_t payload_bytes,
@@ -756,6 +794,12 @@ class spot_node_runtime_t
         std::uint8_t,
         const runtime::protocol::wire_operation_id_t &,
         std::uint64_t)> relay);
+    void on_actor_handoff_terminal (
+      std::function<bool (
+        const zlink::routing_id_t &,
+        const runtime::protocol::wire_operation_id_t &,
+        std::uint64_t,
+        const result_t<zlink::message_t> &)> sender);
     void invalidate_message_follow_route (
       const runtime::protocol::message_follow_notice_t &notice);
     spot_manager_t manager () const;
@@ -779,7 +823,8 @@ class spot_node_runtime_t
                                 spot_id_t target_spot_id,
                                 const zlink::message_t &request,
                                 std::uint64_t completion_operation_id_high = 0,
-                                std::uint64_t completion_operation_id_low = 0);
+                                std::uint64_t completion_operation_id_low = 0,
+                                std::uint64_t actor_authority_owner_generation = 0);
     // handoff_backlog holds the in-flight packets the source preserved while the
     // actor was moving (§10.2-2). They are enqueued on the target actor's
     // dispatch queue before the committed location is published (§10.2-3), and
@@ -791,6 +836,22 @@ class spot_node_runtime_t
                                   zlink::message_t transfer_state,
                                   actor_context_t actor_context = {},
                                   bool defer_joined_callback = false);
+    result_t<void> commit_remote_actor_authority (
+      const std::string &transfer_id,
+      const actor_ref_t &actor_ref,
+      const spot_id_t &target_spot_id,
+      std::uint64_t target_spot_generation,
+      std::uint64_t source_authority_owner_generation,
+      std::string source_mesh_name,
+      std::string target_mesh_name,
+      std::uint64_t target_node_lifecycle_generation,
+      location_owner_token_t target_owner,
+      relocation_capacity_fence_t capacity_fence,
+      std::uint64_t *committed_authority_owner_generation = nullptr);
+    std::optional<actor_join_reply_t> completed_remote_actor_commit (
+      const std::string &transfer_id,
+      const actor_ref_t &source_actor,
+      const spot_id_t &target_spot_id) const;
     result_t<actor_join_reply_t>
     commit_remote_actor_to_spot (std::string transfer_id,
                                  const actor_ref_t &actor_ref,
@@ -805,7 +866,11 @@ class spot_node_runtime_t
                                    spot_id_t target_spot_id,
                                    std::vector<handoff_packet_t> handoff_backlog,
                                    service_provider_t &services,
-                                   actor_gateway_runtime_t *actor_gateway = nullptr);
+                                   actor_gateway_runtime_t *actor_gateway = nullptr,
+                                   std::optional<std::chrono::steady_clock::time_point>
+                                     deadline = std::nullopt,
+                                   bool defer_completion = false,
+                                   bool completion_only = false);
     std::size_t cleanup_expired_actor_admissions ();
     std::size_t cleanup_expired_actor_admissions_at (
       std::chrono::steady_clock::time_point now);

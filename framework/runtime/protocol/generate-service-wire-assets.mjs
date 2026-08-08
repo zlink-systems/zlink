@@ -56,6 +56,14 @@ function u64(value) {
   return bytes;
 }
 
+function sized8(value) {
+  const bytes = [...Buffer.from(value, "utf8")];
+  if (bytes.length < 1 || bytes.length > 255 || bytes.includes(0)) {
+    throw new Error("fixture text must be 1..255 UTF-8 bytes without NUL");
+  }
+  return [bytes.length, ...bytes];
+}
+
 const probeId = 0x0102030405060708n;
 const probe = [...head(5), ...u64(probeId)];
 const ack = [...head(6), ...u64(probeId)];
@@ -103,6 +111,73 @@ const fixtures = {
   },
 };
 
+const replacedCanonical = [
+  ...head(51),
+  ...sized8("actor-a"),
+  ...u64(1n),
+  ...sized8("actor-owner"),
+  ...u64(2n),
+  ...u64(3n),
+  ...u64(4n),
+  ...sized8("session-owner"),
+  ...u64(5n),
+  ...sized8("session-runtime"),
+  ...u64(6n),
+  ...sized8("session-a"),
+  ...u64(7n),
+];
+const replacedSessionOwnerGenerationOffset = 5
+  + sized8("actor-a").length + 8
+  + sized8("actor-owner").length + 8 + 8 + 8
+  + sized8("session-owner").length;
+const replacedRetiredGenerationOffset = replacedCanonical.length - 8;
+const replacedFixture = {
+  schema: "zlink-bound-session-replaced-v1",
+  commandId: 51,
+  canonical: {
+    actorAuthority: {
+      actorId: "actor-a",
+      objectGeneration: "1",
+      targetNodeRid: "actor-owner",
+      targetNodeGeneration: "2",
+      expectedAuthorityOwnerGeneration: "3",
+      expectedOwnerLeaseGeneration: "4",
+    },
+    retiredSession: {
+      sessionOwnerNodeRid: "session-owner",
+      sessionOwnerNodeGeneration: "5",
+      sessionOwnerId: "session-runtime",
+      sessionOwnerLeaseGeneration: "6",
+      sessionRid: "session-a",
+      retiredBindingGeneration: "7",
+    },
+    bytes: replacedCanonical,
+  },
+  malformed: [
+    {
+      name: "zeroSessionOwnerNodeGeneration",
+      bytes: replacedCanonical.map((byte, index) => (
+        index >= replacedSessionOwnerGenerationOffset
+          && index < replacedSessionOwnerGenerationOffset + 8 ? 0 : byte
+      )),
+      error: "invalid-field",
+    },
+    {
+      name: "zeroRetiredBindingGeneration",
+      bytes: replacedCanonical.map((byte, index) => (
+        index >= replacedRetiredGenerationOffset ? 0 : byte
+      )),
+      error: "invalid-field",
+    },
+    { name: "truncatedRetiredBindingGeneration", bytes: replacedCanonical.slice(0, -1), error: "truncated-field" },
+    { name: "trailingByte", bytes: [...replacedCanonical, 0], error: "trailing-byte" },
+  ],
+  receiverFenceCases: [
+    { name: "exactCurrentLifecycle", sessionOwnerNodeGeneration: "5", result: "apply" },
+    { name: "preRestartLifecycle", sessionOwnerNodeGeneration: "4", result: "ignore-stale" },
+  ],
+};
+
 const cpp = `// Generated from service-wire-v1.schema.json. Do not edit.\n#pragma once\n\n#include <cstddef>\n#include <cstdint>\n\nnamespace zlink::framework::runtime::protocol {\ninline constexpr std::uint8_t magic[] = {${schema.protocol.magic.join(", ")}};\ninline constexpr std::uint8_t wire_major = ${schema.protocol.wireMajor};\ninline constexpr const char required_capability[] = "${schema.protocol.requiredCapability}";\ninline constexpr const char framework_multipart_packet_name[] = "${frameworkMultipartV1Profile.packetName}";\ninline constexpr const char framework_multipart_content_type[] = "${frameworkMultipartV1Profile.contentType}";\nenum class command : std::uint8_t {\n${commands.map((entry) => `    ${entry.name} = ${entry.id},`).join("\n")}\n};\nenum class flag : std::uint8_t {\n${flags.map((entry) => `    ${entry.name} = ${entry.bit},`).join("\n")}\n};\nenum class framework_error_code : std::uint32_t {\n${frameworkErrors.map((entry) => `    ${entry.name} = ${entry.value},`).join("\n")}\n};\nenum class request_terminal_result : std::uint32_t {\n${requestTerminalResults.map((entry) => `    ${entry.name} = ${entry.value},`).join("\n")}\n};\ninline constexpr bool valid_terminal_failure(\n  std::uint32_t terminal, framework_error_code failure) noexcept\n{\n    const auto result = static_cast<request_terminal_result>(terminal);\n    if (result == request_terminal_result::ok)\n        return failure == framework_error_code::none;\n    switch (result) {\n${cppBoundaryTerminalCases}\n            return failure == framework_error_code::none;\n        default:\n            break;\n    }\n    if (failure == framework_error_code::none)\n        return false;\n    switch (failure) {\n${cppTypedTerminalCases}\n        default:\n            return false;\n    }\n}\n${numericBounds.map((entry) => `inline constexpr std::uint64_t ${entry.name} = ${entry.value}ULL;`).join("\n")}\n} // namespace zlink::framework::runtime::protocol\n`;
 
 const dotnet = `// Generated from service-wire-v1.schema.json. Do not edit.\nnamespace Systems.Zlink.Framework.Runtime.Protocol;\n\ninternal static class ServiceWireConstants\n{\n    internal const byte Magic0 = ${schema.protocol.magic[0]};\n    internal const byte Magic1 = ${schema.protocol.magic[1]};\n    internal const byte WireMajor = ${schema.protocol.wireMajor};\n    internal const string RequiredCapability = "${schema.protocol.requiredCapability}";\n    internal const string FrameworkMultipartPacketName = "${frameworkMultipartV1Profile.packetName}";\n    internal const string FrameworkMultipartContentType = "${frameworkMultipartV1Profile.contentType}";\n    internal enum Command : byte\n    {\n${commands.map((entry) => `        ${pascal(entry.name)} = ${entry.id},`).join("\n")}\n    }\n    [System.Flags]\n    internal enum Flag : byte\n    {\n        None = 0,\n${flags.map((entry) => `        ${pascal(entry.name)} = ${entry.bit},`).join("\n")}\n    }\n    internal enum FrameworkErrorCode : uint\n    {\n${frameworkErrors.map((entry) => `        ${pascal(entry.name)} = ${entry.value},`).join("\n")}\n    }\n}\n`;
@@ -127,6 +202,7 @@ const outputs = new Map([
     "../../languages/node/packages/framework/src/runtime/foundation/service-wire-constants.generated.ts",
   ), node],
   [path.join(root, "golden/service-decoder-fixtures-v1.json"), `${JSON.stringify(fixtures, null, 2)}\n`],
+  [path.join(root, "golden/bound-session-replaced-v1.json"), `${JSON.stringify(replacedFixture, null, 2)}\n`],
 ]);
 
 let failed = false;

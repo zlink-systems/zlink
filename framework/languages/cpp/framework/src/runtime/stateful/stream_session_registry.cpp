@@ -75,6 +75,40 @@ stream_session_registry_t::bind (
                 {}};
     }
 
+    return bind_verified (
+      connection, actor, target_node_generation,
+      owner_lease_generation);
+}
+
+std::pair<stateful_error_t, stream_binding_t>
+stream_session_registry_t::bind_remote (
+  const stream_connection_t &connection,
+  const object_ref_t &verified_actor,
+  std::uint64_t target_node_generation,
+  std::uint64_t owner_lease_generation)
+{
+    if (verified_actor.kind != object_kind_t::actor
+        || verified_actor.key.empty ()
+        || verified_actor.object_generation == 0
+        || verified_actor.authority_owner_generation == 0
+        || verified_actor.node_id.empty ()
+        || target_node_generation == 0
+        || owner_lease_generation == 0) {
+        return {stateful_error_t::invalid, {}};
+    }
+    return bind_verified (
+      connection, verified_actor, target_node_generation,
+      owner_lease_generation);
+}
+
+std::pair<stateful_error_t, stream_binding_t>
+stream_session_registry_t::bind_verified (
+  const stream_connection_t &connection,
+  const object_ref_t &actor,
+  std::uint64_t target_node_generation,
+  std::uint64_t owner_lease_generation)
+{
+
     std::lock_guard lock (_mutex);
     if (_all_sealed)
         return {stateful_error_t::moving, {}};

@@ -15,6 +15,12 @@ public interface IZLinkSession
     void Configure() { }
     ValueTask OnConnectedAsync(CancellationToken cancellationToken);
     ValueTask OnDisconnectedAsync(CancellationToken cancellationToken);
+    ValueTask OnActorBindingReplacedAsync(
+        string actorId,
+        CancellationToken cancellationToken)
+    {
+        return ValueTask.CompletedTask;
+    }
     ValueTask OnErrorAsync(
         ZLinkStreamError error,
         CancellationToken cancellationToken);
@@ -140,14 +146,25 @@ timeout만 admission deadline으로 사용한다. Caller request timeout은 wire
 완료하고 이후 admission이나 replay를 시작하지 않는다. `CancellationToken`은 기존 .NET cancellation
 계약을 유지하며 reply call에는 이 modifier를 제공하지 않는다.
 
+`OnActorBindingReplacedAsync(...)`는 같은 Actor가 새 session에 bind된 경우 이전 session에서 한 번 실행되는
+선택 callback이다. Application은 이 callback에서 `Context.Client.Send(...)`로 client 안내를 보낼 수 있지만
+`Context.CloseAsync()`를 호출하지 않는다. Callback이 성공 또는 실패로 terminal이 되면 Framework가 `100 ms`
+뒤 connection을 닫는다. Outbound queue가 먼저 비어도 이 시간을 줄이지 않는다. 새 bind는 이 callback이나
+close를 기다리지 않는다.
+
+| 구현 차이 | 현재 상태 |
+|---|---|
+| Session Actor binding 교체 | .NET runtime에는 command 51 송수신, 이 callback과 non-blocking 100 ms close timer가 아직 없다. |
+
 Bind 뒤 `RelayAsync(...)`와 `NotifyDisconnectedAsync(...)`는 Actor별 binding을 사용한다. Physical disconnect는
 Framework가 current binding 전체에 통지하고 exact binding identity마다 Spot callback을 최대 한 번 실행한다.
 `NotifyDisconnectedAsync(...)`는 connection이 유지된 상태의 logical notification이며 callback terminal까지
 기다린다. Exact binding callback은 최대 한 번 실행하고 terminal 뒤 해당 binding을 tombstone으로
 확정하여 제거한다. Physical STREAM connection과 Actor·Spot membership은 유지한다. 새 public Unbind API는
-제공하지 않는다. Rebind는 이전 exact binding identity를 다른 Actor나 generation에 재사용하지 않고 새
-identity를 먼저 등록한 뒤 이전 callback을 최대 한 번 실행하여 이전 binding을 tombstone으로 만든다.
-Callback 실패는 진단으로 기록하지만 새 binding을 제거하거나 이전 binding을 복원하지 않는다.
+제공하지 않는다. Rebind는 새 identity를 current로 등록한 즉시 완료되며 이전 session의 처리를 기다리지
+않는다. 이전 exact session의 `OnActorBindingReplacedAsync(...)`에서 client 안내를 보낼 수 있다. Callback이
+성공 또는 실패로 terminal이 되면 Framework가 `100 ms` 뒤 connection을 닫는다. Callback이나 close 실패는 새 binding을
+제거하거나 이전 binding을 복원하지 않는다.
 Relocation은 같은 ObjectGeneration을 유지하며 해당 Actor의 binding route만 갱신하는 동작이므로 rebind가
 아니고 disconnect callback을 실행하지 않는다. 같은 Session의
 다른 Actor binding과 physical STREAM connection은 변경하지 않는다.

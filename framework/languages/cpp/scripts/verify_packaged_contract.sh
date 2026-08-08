@@ -19,20 +19,34 @@ mkdir -p "$PREFIX" "$CONSUMER_SRC" "$CONSUMER_BUILD"
 
 echo "packaged-contract run dir: $RUN_DIR"
 
+fail() {
+    echo "verify_packaged_contract: $1" >&2
+    exit 1
+}
+
 # A package consumer must not discover dependencies through the repository
 # source tree or an ambient global installation.  Reuse only the dependency
 # prefix that configured this build; it is part of the package provenance.
 dependency_prefix_path="$(sed -n 's/^CMAKE_PREFIX_PATH:[^=]*=//p' "$BUILD_DIR/CMakeCache.txt" | head -n 1)"
+if [[ -z "$dependency_prefix_path" ]]; then
+    vcpkg_installed_dir="$(sed -n 's/^VCPKG_INSTALLED_DIR:[^=]*=//p' "$BUILD_DIR/CMakeCache.txt" | head -n 1)"
+    vcpkg_target_triplet="$(sed -n 's/^VCPKG_TARGET_TRIPLET:[^=]*=//p' "$BUILD_DIR/CMakeCache.txt" | head -n 1)"
+    if [[ -n "$vcpkg_installed_dir" && -n "$vcpkg_target_triplet" ]]; then
+        dependency_prefix_path="$vcpkg_installed_dir/$vcpkg_target_triplet"
+    fi
+fi
+[[ -n "$dependency_prefix_path" ]] \
+  || fail "configured dependency prefix is missing from CMakeCache.txt"
+IFS=';' read -r -a dependency_prefixes <<< "$dependency_prefix_path"
+for dependency_prefix in "${dependency_prefixes[@]}"; do
+    [[ -d "$dependency_prefix" ]] \
+      || fail "configured dependency prefix does not exist: $dependency_prefix"
+done
 
 for component in Framework StreamConnector FrameworkDependency; do
     cmake --install "$BUILD_DIR" --component "$component" --prefix "$PREFIX" \
       > "$RUN_DIR/install-$component.log"
 done
-
-fail() {
-    echo "verify_packaged_contract: $1" >&2
-    exit 1
-}
 
 # --- manifest: required targets/headers/libraries -------------------------
 required_paths=(
@@ -43,7 +57,9 @@ required_paths=(
     include/zlink/framework/contracts/channels/call.hpp
     include/zlink/framework/contracts/spots/spot.hpp
     include/zlink/framework/contracts/spots/spot_identity.hpp
+    include/zlink/framework/contracts/locations/diagnostics.hpp
     include/zlink/framework/contracts/locations/resolvers.hpp
+    include/zlink/framework/contracts/locations/runtime_query.hpp
     include/zlink/framework/contracts/streams/stream.hpp
     include/zlink/framework/contracts/workers/worker.hpp
     include/zlink/framework/contracts/configuration/endpoint_connections.hpp
@@ -80,7 +96,11 @@ for forbidden in \
     include/zlink/framework/contracts/dispatch/cancellation.hpp; do
     [[ -e "$PREFIX/$forbidden" ]] && fail "removed contract header is still installed: $forbidden"
 done
-for forbidden_token in cancellation_token_t dispatch_mode_t spot_handle_t spot_handle_resolver_t; do
+for forbidden_token in \
+    cancellation_token_t dispatch_mode_t spot_handle_t spot_handle_resolver_t \
+    message_flow_event_t message_dispatch_error_event_t message_flow_observer_t \
+    set_message_flow_observer trace_log_file trace_label message_flow_live \
+    send_raw raw_handler_t payload_view_t; do
     grep -rq "$forbidden_token" "$PREFIX/include/zlink/framework" \
       && fail "installed framework headers still expose $forbidden_token"
 done
@@ -110,6 +130,52 @@ cat > "$CONSUMER_SRC/main.cpp" <<'EOF'
 #include <zlink/framework.hpp>
 #include <zlink/stream_connector.hpp>
 
+#include <chrono>
+#include <optional>
+#include <type_traits>
+#include <utility>
+
+using zlink::framework::message_flow_log_mode_t;
+
+static_assert (static_cast<int> (message_flow_log_mode_t::off) == 0);
+static_assert (static_cast<int> (message_flow_log_mode_t::errors) == 1);
+static_assert (static_cast<int> (message_flow_log_mode_t::normal) == 2);
+static_assert (static_cast<int> (message_flow_log_mode_t::detailed) == 3);
+static_assert (requires (zlink::framework::stream_send_call_t &call) {
+    call.timeout (std::chrono::milliseconds{1});
+});
+static_assert (
+  static_cast<int> (zlink::framework::location_object_kind_t::actor) == 0);
+static_assert (
+  static_cast<int> (zlink::framework::location_object_kind_t::user_spot) == 1);
+static_assert (
+  static_cast<int> (zlink::framework::location_object_kind_t::instance_spot) == 2);
+static_assert (
+  static_cast<int> (zlink::framework::location_object_state_t::creating) == 0);
+static_assert (
+  static_cast<int> (zlink::framework::location_object_state_t::ready) == 1);
+static_assert (
+  static_cast<int> (zlink::framework::location_object_state_t::unavailable) == 2);
+static_assert (
+  std::is_same_v<decltype (std::declval<zlink::framework::location_runtime_query_t &> ()
+                             .find_actor_location (
+                               std::declval<zlink::framework::actor_id_t> ())),
+                 zlink::framework::task_t<std::optional<
+                   zlink::framework::location_object_entry_t>>>);
+static_assert (
+  std::is_same_v<decltype (std::declval<zlink::framework::location_runtime_query_t &> ()
+                             .find_spot_location (
+                               std::declval<zlink::framework::spot_id_t> ())),
+                 zlink::framework::task_t<std::optional<
+                   zlink::framework::location_object_entry_t>>>);
+static_assert (
+  std::is_same_v<decltype (std::declval<zlink::framework::location_runtime_query_t &> ()
+                             .list_object_locations (
+                               std::declval<zlink::framework::location_object_filter_t> (),
+                               std::declval<zlink::framework::location_page_request_t> ())),
+                 zlink::framework::task_t<zlink::framework::location_page_t<
+                   zlink::framework::location_object_entry_t>>>);
+
 int main ()
 {
     zlink::framework::zlink_builder_t builder;
@@ -119,6 +185,9 @@ int main ()
     zlink::framework::serializer_registry_t serializers;
     zlink::framework::service_collection_t services;
     auto provider = services.build_provider ();
+    const zlink::framework::location_object_filter_t actor_filter{
+      .object_kind = zlink::framework::location_object_kind_t::actor};
+    (void) actor_filter;
     struct probe_t
     {
     };

@@ -30,18 +30,18 @@ public final class AtdA4WorkerAwaitScenario {
             List.of(
                 "worker-await-started",
                 "worker-await-released",
-                "probe-started",
-                "probe-completed",
                 "worker-await-resumed",
-                "worker-await-completed"));
+                "worker-await-completed",
+                "probe-started",
+                "probe-completed"));
         ScenarioAssert.containsMarkersInOrder(
             markers,
             "worker-await-started",
             "worker-await-released",
-            "probe-started",
-            "probe-completed",
             "worker-await-resumed",
-            "worker-await-completed");
+            "worker-await-completed",
+            "probe-started",
+            "probe-completed");
         System.out.println("scenario ATD-A4 passed");
     }
 

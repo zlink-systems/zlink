@@ -23,6 +23,7 @@ test('Node-executed sample clients do not require the browser-only connector pac
   const clientPath = path.join(sampleRoot, 'dist', 'Client', 'main.js');
   const output = fs.readFileSync(clientPath, 'utf8');
   assert.doesNotMatch(output, /require\(["']@zlink-systems\/stream-connector["']\)/);
+  assert.match(output, /globalThis\.WebSocket \?\?= require\(["']undici["']\)\.WebSocket/);
 
   const run = spawnSync(process.execPath, [clientPath], {
     cwd: sampleRoot,

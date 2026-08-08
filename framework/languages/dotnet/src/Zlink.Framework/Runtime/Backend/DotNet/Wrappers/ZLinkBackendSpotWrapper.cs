@@ -4,8 +4,8 @@ namespace Zlink.Framework.Runtime.Backend.DotNet.Wrappers;
 
 // RouteMesh 10.0.0 spot seam over the binding ISpot plus the node dispatch pump.
 // Inbound route/subscribe/actor-join/lifecycle records are pulled from the pump's
-// per-spot queues (fed by the node DrainReady loop); outbound requests register a
-// completion in the node completion table.
+// per-spot queues (fed by the node DrainReady loop); outbound requests register
+// their reply correlation before managed submit.
 internal sealed class ZLinkBackendSpotWrapper :
     IZLinkBackendSpot,
     IZLinkBackendSpotMessageFollower,
@@ -224,11 +224,20 @@ internal sealed class ZLinkBackendSpotWrapper :
         TimeSpan? timeout,
         ReadOnlyMemory<byte> metadata)
     {
-        var submit = _spot.RequestToSpot(
-            targetRid, spotId, spotGeneration, parts, out var operationId,
-            timeout ?? default, flags, metadata);
-        return AcceptRequestSubmit(submit, $"SPOT '{spotId}' on node '{targetRid}'")
-               && _completions.RegisterRequest(operationId, callback);
+        var correlationId = _node.AllocateOperationId();
+        var submit = _completions.RegisterRequestBeforeSubmit(
+            correlationId,
+            callback,
+            id => _spot.RequestToSpot(
+                targetRid,
+                spotId,
+                spotGeneration,
+                parts,
+                id,
+                timeout ?? default,
+                flags,
+                metadata));
+        return AcceptRequestSubmit(submit, $"SPOT '{spotId}' on node '{targetRid}'");
     }
 
     public SubmitResult MessageFollowSendToSpot(
@@ -273,28 +282,29 @@ internal sealed class ZLinkBackendSpotWrapper :
         TimeSpan? timeout,
         ReadOnlyMemory<byte> metadata)
     {
-        var submit = RequireManagedNode().MessageFollowRequestToSpot(
-            SpotId,
-            targetRid,
-            spotId,
-            spotGeneration,
-            operationId,
-            targetNodeGeneration,
-            authorityOwnerGeneration,
-            ownerLeaseGeneration,
-            messageFollowHopCount,
-            deadlineUnixMs,
-            parts,
-            out var transportOperationId,
-            timeout ?? default,
-            flags,
-            metadata);
+        var correlationId = _node.AllocateOperationId();
+        var submit = _completions.RegisterRequestBeforeSubmit(
+            correlationId,
+            callback,
+            id => RequireManagedNode().MessageFollowRequestToSpot(
+                SpotId,
+                targetRid,
+                spotId,
+                spotGeneration,
+                operationId,
+                targetNodeGeneration,
+                authorityOwnerGeneration,
+                ownerLeaseGeneration,
+                messageFollowHopCount,
+                deadlineUnixMs,
+                parts,
+                id,
+                timeout ?? default,
+                flags,
+                metadata));
         return AcceptRequestSubmit(
                    submit,
-                   $"Message Follow for Spot '{spotId}' on node '{targetRid}'")
-               && _completions.RegisterRequest(
-                   transportOperationId,
-                   callback);
+                   $"Message Follow for Spot '{spotId}' on node '{targetRid}'");
     }
 
     // Terminal admission failures (NotFound, InvalidState, ...) surface to the

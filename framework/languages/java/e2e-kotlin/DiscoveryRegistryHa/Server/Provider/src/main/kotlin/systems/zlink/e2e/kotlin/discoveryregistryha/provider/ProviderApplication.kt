@@ -2,6 +2,7 @@ package systems.zlink.e2e.kotlin.discoveryregistryha.provider
 
 import java.time.Duration
 import java.net.URI
+import kotlinx.coroutines.Dispatchers
 import org.springframework.boot.ApplicationArguments
 import org.springframework.boot.WebApplicationType
 import org.springframework.boot.autoconfigure.SpringBootApplication
@@ -12,12 +13,14 @@ import systems.zlink.contracts.core.RoutingId
 import systems.zlink.e2e.kotlin.discoveryregistryha.Contracts
 import systems.zlink.e2e.kotlin.discoveryregistryha.ProviderOptions
 import systems.zlink.e2e.kotlin.discoveryregistryha.provider.Handlers.WorkRequestHandler
+import systems.zlink.e2e.kotlin.discoveryregistryha.provider.ObjectProbeSpot
 import systems.zlink.e2e.kotlin.discoveryregistryha.provider.Support.ProviderEvidenceStore
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationOptions
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore
 import systems.zlink.framework.spring.EnableZLinkFramework
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer
+import systems.zlink.framework.kotlin.useCoroutineHandlers
 
 @EnableZLinkFramework
 @SpringBootApplication(
@@ -53,10 +56,11 @@ class ProviderApplication {
         providerOptions: ProviderOptions,
     ): ZLinkFrameworkConfigurer =
         ZLinkFrameworkConfigurer { options ->
+            options.useCoroutineHandlers(Dispatchers.Default)
             options.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile("${providerOptions.logDir()}/${state.providerRid}-flow.log")
-                .traceLabel("kotlin-dr-${state.providerRid}")
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL)
+
+
             options.addHandlersFromPackageOf(WorkRequestHandler::class.java)
             options.configureLocations().setOwnerLeaseRenewInterval(Duration.ofMillis(providerOptions.heartbeatMillis()))
             options.configureLocations().setOwnerLeaseTtl(Duration.ofMillis(providerOptions.leaseTtlMillis()))
@@ -68,6 +72,10 @@ class ProviderApplication {
             mesh.channelName(Contracts.CHANNEL)
                 .server()
                 .addHandlerGroup(Contracts.HANDLER_GROUP)
+            mesh.objects().server().addInstanceSpotFactory(
+                Contracts.OBJECT_TYPE,
+                ObjectProbeSpot::class.java,
+            ) { factory -> factory.disableRelocation() }
         }
 
     @Bean

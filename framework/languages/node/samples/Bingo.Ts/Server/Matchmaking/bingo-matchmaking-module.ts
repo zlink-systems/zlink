@@ -1,5 +1,4 @@
 import { ZLinkModule, zlinkFramework, zlinkModule } from '@zlink-systems/nestjs';
-import { ZLinkMessageFlowLogMode } from '@zlink-systems/framework';
 import { bingoFrameworkProtobuf } from '../../Shared/Contracts/protobuf-framework-codec';
 import { BINGO_SAMPLE_CONFIG, createBingoConfigurationModule } from '../Configuration/sample-config';
 import { SampleNames } from '../Configuration/sample-names';
@@ -24,9 +23,7 @@ function createBingoMatchmakingModule() {
         useFactory: (config: BingoSampleConfig) => {
           const builder = zlinkFramework();
           builder.configureDispatch()
-            .messageFlow(ZLinkMessageFlowLogMode.KeyTransitions)
-            .traceLogFile(`${config.logDir}/flow-matchmaking.log`)
-            .traceLabel('matchmaking');
+            .messageFlow('normal');
           builder.addLocationStore(createBingoLocationStore(config));
           builder.addRelocationStore(createBingoRelocationStore(config));
           bingoLocationOptions(builder.configureLocations());

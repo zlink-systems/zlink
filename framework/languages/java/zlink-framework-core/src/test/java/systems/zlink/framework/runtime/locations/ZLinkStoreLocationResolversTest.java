@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
@@ -92,8 +93,65 @@ final class ZLinkStoreLocationResolversTest {
             ZLinkRegisteredLocationStores.fromUnified(store),
             new ZLinkLocationOptions());
 
-        assertNull(
-            resolvers.resolveSpot("room-a").toCompletableFuture().join());
+        CompletionException failure = assertThrows(
+            CompletionException.class,
+            () -> resolvers.resolveSpot("room-a").toCompletableFuture().join());
+        assertEquals(
+            systems.zlink.framework.errors.ZLinkFrameworkErrorKind.UNAVAILABLE,
+            assertInstanceOf(
+                systems.zlink.framework.errors.ZLinkFrameworkException.class,
+                failure.getCause()).kind());
+    }
+
+    @Test
+    void exactLookupProjectsExpiredReadyOwnerAsUnavailable() {
+        ZLinkLocationRepository store = repository((method, arguments) -> switch (method) {
+            case "read" -> CompletableFuture.completedFuture(readySpotSnapshot());
+            case "readOwnerLease" -> CompletableFuture.completedFuture(
+                new ZLinkOwnerLeaseMissing());
+            default -> throw new UnsupportedOperationException(method);
+        });
+        ZLinkRegisteredLocationStores stores =
+            ZLinkRegisteredLocationStores.fromUnified(store);
+        ZLinkLocationOptions options = new ZLinkLocationOptions();
+        try (ZLinkLocationRuntime runtime = new ZLinkLocationRuntime(
+            stores, Duration.ofSeconds(30), Duration.ofSeconds(10))) {
+            var query = new ZLinkLocationRuntimeQueryService(
+                stores, runtime, options);
+
+            ZLinkLocationObjectEntry entry = query.findSpotLocation("room-a")
+                .toCompletableFuture().join().orElseThrow();
+
+            assertEquals(ZLinkLocationObjectState.UNAVAILABLE, entry.state());
+        }
+    }
+
+    @Test
+    void exactLookupMapsStoreFailureToUnavailableFrameworkError() {
+        ZLinkLocationRepository store = repository((method, arguments) -> {
+            if (method.equals("read")) {
+                return CompletableFuture.failedFuture(
+                    new IllegalStateException("store unavailable"));
+            }
+            throw new UnsupportedOperationException(method);
+        });
+        ZLinkRegisteredLocationStores stores =
+            ZLinkRegisteredLocationStores.fromUnified(store);
+        try (ZLinkLocationRuntime runtime = new ZLinkLocationRuntime(
+            stores, Duration.ofSeconds(30), Duration.ofSeconds(10))) {
+            var query = new ZLinkLocationRuntimeQueryService(
+                stores, runtime, new ZLinkLocationOptions());
+
+            CompletionException failure = assertThrows(
+                CompletionException.class,
+                () -> query.findSpotLocation("room-a").toCompletableFuture().join());
+
+            assertEquals(
+                systems.zlink.framework.errors.ZLinkFrameworkErrorKind.UNAVAILABLE,
+                assertInstanceOf(
+                    systems.zlink.framework.errors.ZLinkFrameworkException.class,
+                    failure.getCause()).kind());
+        }
     }
 
     @Test
@@ -211,6 +269,15 @@ final class ZLinkStoreLocationResolversTest {
             ownerId,
             1,
             NOW);
+    }
+
+    private static ZLinkLocationRepository repository(
+        java.util.function.BiFunction<String, Object[], Object> invocation) {
+        return (ZLinkLocationRepository) Proxy.newProxyInstance(
+            ZLinkStoreLocationResolversTest.class.getClassLoader(),
+            new Class<?>[] {ZLinkLocationRepository.class},
+            (proxy, method, arguments) -> invocation.apply(
+                method.getName(), arguments == null ? new Object[0] : arguments));
     }
 
     private static ZLinkAuthoritySnapshot readySpotSnapshot() {

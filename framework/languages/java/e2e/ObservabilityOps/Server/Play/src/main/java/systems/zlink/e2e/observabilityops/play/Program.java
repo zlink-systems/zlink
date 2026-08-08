@@ -125,9 +125,7 @@ public final class Program {
             options.addRelocationStore(relocationStore);
             String nodeRid = config.nodeRid();
             options.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile(config.logDir() + "/" + nodeRid + "-flow.log")
-                .traceLabel("java-observability-" + nodeRid);
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             ZLinkMeshNodeBuilder mesh = options.addRouteMesh(Contracts.SPOT_MESH)
                 .listen(config.routeEndpoint())
                 .setRoutingId(RoutingId.from(nodeRid))

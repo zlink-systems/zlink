@@ -332,6 +332,7 @@
         "boundSessionSend",
         "boundSessionBind"
       ],
+      "authoritySourceCommands": ["boundSessionReplaced"],
       "frozenRecordKinds": ["actorSend", "actorRequest"],
       "messageFollowKey": [
         "actorId",
@@ -2182,6 +2183,19 @@
         }
       ],
       "otherwise": "protocol-error",
+      "trailingBytes": "forbidden"
+    },
+    {
+      "name": "retired-bound-session-route-fence",
+      "kind": "struct",
+      "fields": [
+        { "name": "sessionOwnerNodeRid", "$ref": "rid" },
+        { "name": "sessionOwnerNodeGeneration", "$ref": "nonzero-u64" },
+        { "name": "sessionOwnerId", "$ref": "text8" },
+        { "name": "sessionOwnerLeaseGeneration", "$ref": "nonzero-u64" },
+        { "name": "sessionRid", "$ref": "rid" },
+        { "name": "retiredBindingGeneration", "$ref": "nonzero-u64" }
+      ],
       "trailingBytes": "forbidden"
     },
     {
@@ -4722,6 +4736,32 @@
         { "name": "route", "$ref": "message-follow-route-v1" }
       ],
       "payload": "forbidden"
+    },
+    {
+      "id": 51,
+      "name": "boundSessionReplaced",
+      "domain": "infrastructure",
+      "allowedFlags": [],
+      "requiredFlags": [],
+      "body": [
+        { "name": "actorAuthority", "$ref": "actor-route-fence" },
+        { "name": "retiredSession", "$ref": "retired-bound-session-route-fence" }
+      ],
+      "semanticConstraints": [
+        "replacement-binding-installed-before-send",
+        "one-way-does-not-delay-bind-terminal",
+        "transport-source-matches-actor-authority-target",
+        "receiver-applies-only-to-exact-retired-binding",
+        "same-current-physical-session-is-idempotent-and-does-not-self-notify",
+        "receiver-enters-closing-before-callback-and-rejects-new-inbound-application-dispatch",
+        "callback-terminal-then-fixed-100ms-delay-then-framework-close",
+        "delay-uses-nonblocking-timer-never-sleep-or-serial-lane-occupation",
+        "timer-revalidates-exact-retired-session-before-close",
+        "failed-send-admission-retries-asynchronously-by-exact-retired-identity",
+        "physical-close-cleans-other-bindings-without-removing-replacement",
+        "callback-notification-or-close-failure-does-not-rollback-replacement"
+      ],
+      "payload": "forbidden"
     }
   ],
   "relocationStateMachine": {
@@ -4899,6 +4939,6 @@
   },
   "reservedCommandRanges": [
     { "first": 7, "last": 15 },
-    { "first": 51, "last": 255 }
+    { "first": 52, "last": 255 }
   ]
 }

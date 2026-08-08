@@ -21,7 +21,11 @@ type ZLinkDrainForceReason =
 
 type ZLinkMeshDrainResult =
   | { readonly kind: 'drained' }
-  | { readonly kind: 'forceStopped'; readonly reason: ZLinkDrainForceReason };
+  | {
+      readonly kind: 'forceStopped';
+      readonly reason: ZLinkDrainForceReason;
+      readonly error?: unknown;
+    };
 import type { ZLinkBackendMeshNode } from '../backend';
 import type { ZLinkRuntimeAdmissionGate } from '../admission';
 import type { ZLinkSpotNodeOptions } from '../configuration';
@@ -428,7 +432,7 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
         clearTimeout(rollbackTimer);
         this.hostRetiringPrepared = false;
       }
-      return { kind: 'forceStopped', reason };
+      return { kind: 'forceStopped', reason, error };
     } finally {
       clearTimeout(timer);
     }

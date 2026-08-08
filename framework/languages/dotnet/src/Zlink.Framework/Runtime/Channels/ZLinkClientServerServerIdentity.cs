@@ -12,7 +12,7 @@ internal sealed class ZLinkClientServerServerIdentity(
     private static readonly TimeSpan ProbeInterval = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan PeerDeadline = TimeSpan.FromSeconds(15);
     private readonly object _gate = new();
-    private readonly Dictionary<string, Peer> _peers = new(StringComparer.Ordinal);
+    private readonly Dictionary<RoutingId, Peer> _peers = [];
     private ulong _revision = 1;
     private ulong _nextProbeId = 1;
     private int _weight = weight;
@@ -20,13 +20,14 @@ internal sealed class ZLinkClientServerServerIdentity(
     private ZLinkFrameworkRuntimeState _state =
         ZLinkFrameworkRuntimeState.Serving;
     private string _advertisedEndpoint = advertisedEndpoint;
-    private IZLinkBackendRouterSocket? _router;
+    private IRouterSocket? _router;
     private long _livenessAckCount;
     private long _livenessProbeCount;
     private long _receivedLivenessProbeCount;
     internal event Action<Snapshot>? SnapshotChanged;
 
-    internal string ChannelName { get; } = channelName;
+    internal ZLinkChannelName ChannelName { get; } =
+        ZLinkChannelName.FromBoundary(channelName, nameof(channelName));
     internal RoutingId ServerRid { get; } = serverRid;
     internal ulong LifecycleGeneration { get; } = lifecycleGeneration;
     internal string SecurityIdentity { get; } = securityIdentity;
@@ -128,12 +129,12 @@ internal sealed class ZLinkClientServerServerIdentity(
         return snapshot;
     }
 
-    internal void AttachRouter(IZLinkBackendRouterSocket router)
+    internal void AttachRouter(IRouterSocket router)
     {
         lock (_gate) _router = router;
     }
 
-    internal void DetachRouter(IZLinkBackendRouterSocket router)
+    internal void DetachRouter(IRouterSocket router)
     {
         lock (_gate)
         {
@@ -149,7 +150,7 @@ internal sealed class ZLinkClientServerServerIdentity(
     {
         var now = DateTimeOffset.UtcNow;
         lock (_gate)
-            _peers[routingId.ToHex()] = new Peer(
+            _peers[routingId] = new Peer(
                 routingId,
                 normalizedEffectiveMaxMessageBytes,
                 now + ProbeInterval,
@@ -162,7 +163,7 @@ internal sealed class ZLinkClientServerServerIdentity(
     {
         lock (_gate)
         {
-            if (_peers.TryGetValue(routingId.ToHex(), out var peer))
+            if (_peers.TryGetValue(routingId, out var peer))
             {
                 maximumMessageBytes = peer.NormalizedEffectiveMaxMessageBytes;
                 return true;
@@ -178,7 +179,7 @@ internal sealed class ZLinkClientServerServerIdentity(
     {
         lock (_gate)
         {
-            if (!_peers.TryGetValue(routingId.ToHex(), out var peer)
+            if (!_peers.TryGetValue(routingId, out var peer)
                 || peer.OutstandingProbeId != probeId)
                 return;
             peer.OutstandingProbeId = null;
@@ -193,7 +194,7 @@ internal sealed class ZLinkClientServerServerIdentity(
         Interlocked.Increment(ref _receivedLivenessProbeCount);
     }
 
-    internal void TickLiveness(IZLinkBackendRouterSocket router)
+    internal void TickLiveness(IRouterSocket router)
     {
         List<(RoutingId RoutingId, ulong ProbeId)> probes = [];
         List<RoutingId> expired = [];
@@ -218,7 +219,7 @@ internal sealed class ZLinkClientServerServerIdentity(
         foreach (var routingId in expired)
             try
             {
-                router.DisconnectPeer(routingId);
+                router.DisconnectRid(routingId);
             }
             catch
             {
@@ -234,7 +235,7 @@ internal sealed class ZLinkClientServerServerIdentity(
 
     private void PushUpdate(Snapshot snapshot)
     {
-        IZLinkBackendRouterSocket? router;
+        IRouterSocket? router;
         (RoutingId RoutingId, uint MaximumMessageBytes)[] peers;
         lock (_gate)
         {
@@ -262,7 +263,7 @@ internal sealed class ZLinkClientServerServerIdentity(
     internal ZLinkClientServerControlProtocol.Admission ToAdmission(
         Snapshot snapshot) =>
         new(
-            ChannelName,
+            ChannelName.Value,
             ServerRid,
             LifecycleGeneration,
             snapshot.Revision,
@@ -280,13 +281,16 @@ internal sealed class ZLinkClientServerServerIdentity(
     }
 
     private static bool TrySend(
-        IZLinkBackendRouterSocket router,
+        IRouterSocket router,
         RoutingId routingId,
         Message message)
     {
         try
         {
-            if (router.Send(routingId, message, SendFlags.DontWait))
+            if (router.Send(routingId)
+                .Message(message)
+                .Flags(SendFlags.DontWait)
+                .Submit())
                 return true;
         }
         catch

@@ -122,7 +122,6 @@ class ensure_actor_handler_t
               bound.error_kind (),
               bound.error () ? bound.error ()->what () : "ensure actor bind failed");
         }
-        bound.value ().context ().join_entry_spot ().defer ();
         _state.record ("ActorEnsured", request.actor_id, {}, request.display_name);
         return {.actor = from_actor_ref (bound.value ().ref ())};
     }

@@ -1,5 +1,6 @@
 global using Systems.Zlink;
 global using Systems.Zlink.Stream.Connector.Contracts;
+global using Systems.Zlink.Stream.Connector.Runtime.Protocol;
 global using Zlink.Framework.Runtime.Codecs;
 global using Zlink.Framework.Runtime.Configuration;
 global using Zlink.Framework.Runtime.Configuration.Builders;
@@ -31,6 +32,7 @@ global using Zlink.Framework.Runtime.Channels;
 global using Zlink.Framework.Runtime.Diagnostics;
 global using Zlink.Framework.Runtime.Execution;
 global using Zlink.Framework.Runtime.Host;
+global using Zlink.Framework.Runtime.Identifiers;
 global using Zlink.Framework.Runtime.Locations;
 global using Zlink.Framework.Runtime.Spots;
 global using Zlink.Framework.Runtime.Service;

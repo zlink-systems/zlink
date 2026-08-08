@@ -74,6 +74,13 @@ struct spot_actor_commit_route_request_t
     std::string completion_root_reference;
     std::uint32_t completion_root_checksum = 0;
     std::string target_spot_id;
+    std::uint64_t target_spot_generation = 0;
+    std::string source_mesh_name;
+    std::string target_mesh_name;
+    std::uint64_t target_node_lifecycle_generation = 0;
+    std::string target_owner_id;
+    std::uint64_t target_owner_lease_generation = 0;
+    std::string relocation_capacity_fence;
     std::string bound_session_node_rid;
     std::string bound_session_rid;
     std::vector<std::uint8_t> transfer_state;
@@ -85,8 +92,11 @@ struct spot_actor_commit_route_request_t
     std::uint64_t core_final_sequence = 0;
     std::uint64_t core_reserve_message_count = 0;
     std::uint64_t core_reserve_byte_count = 0;
+    std::uint64_t finalize_timeout_ms = 0;
     bool prepare = false;
     bool finalize = false;
+    bool defer_completion = false;
+    bool completion_only = false;
 };
 
 struct spot_actor_join_route_request_t

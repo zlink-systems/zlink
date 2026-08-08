@@ -439,29 +439,25 @@ export class ZLinkRoutePacketDispatcher {
   private readonly spotRouteBridge?: ZLinkBackendSpotRouteBridge;
   private readonly rawBridgeReplyHandler?: ZLinkRoutePacketDispatcherOptions['rawBridgeReplyHandler'];
 
-  async dispatch(received: {
+  dispatchInfrastructure(received: {
     parts: readonly Message[];
     routingId: unknown;
     spotId?: unknown;
     requestSeq: bigint | null;
     send?: () => ZLinkMultipartOperation<ZLinkMultipartSubmitOperation>;
-  }, router: {
-    reply(routingId: unknown, requestSeq: bigint): ZLinkMultipartReplyOperation;
-  }, signal?: AbortSignal, decodedHeader?: ZLinkChannelEnvelopeHeader): Promise<boolean | void> {
-    const channelHeader = decodedHeader ?? tryDecodeChannelHeader(received.parts);
+  }): boolean {
+    const channelHeader = tryDecodeChannelHeader(received.parts);
     if (
-      this.spotRouteBridge !== undefined &&
-      channelHeader === undefined
-    ) {
-      const processed = this.spotRouteBridge.handleRouterReceived(
+      this.spotRouteBridge !== undefined
+      && channelHeader === undefined
+      && this.spotRouteBridge.handleRouterReceived(
         this.routerChannelId,
         received.routingId as RoutingId,
         received.requestSeq ?? 0n,
         received.parts
-      );
-      if (processed) {
-        return true;
-      }
+      )
+    ) {
+      return true;
     }
     if (received.spotId !== null && received.spotId !== undefined) {
       if (received.send === undefined) {
@@ -470,7 +466,20 @@ export class ZLinkRoutePacketDispatcher {
       appendParts(received.send(), received.parts).submit();
       return true;
     }
-    if (this.rawBridgeReplyHandler?.(received) === true) {
+    return this.rawBridgeReplyHandler?.(received) === true;
+  }
+
+  async dispatch(received: {
+    parts: readonly Message[];
+    routingId: unknown;
+    spotId?: unknown;
+    requestSeq: bigint | null;
+    send?: () => ZLinkMultipartOperation<ZLinkMultipartSubmitOperation>;
+  }, router: {
+    reply(routingId: unknown, requestSeq: bigint): ZLinkMultipartReplyOperation;
+  }, signal?: AbortSignal, decodedHeader?: ZLinkChannelEnvelopeHeader, infrastructureChecked = false): Promise<boolean | void> {
+    const channelHeader = decodedHeader ?? tryDecodeChannelHeader(received.parts);
+    if (!infrastructureChecked && this.dispatchInfrastructure(received)) {
       return true;
     }
     if (received.parts.length === 0 || received.parts[0].data().length === 0) {

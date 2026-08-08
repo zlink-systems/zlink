@@ -34,9 +34,7 @@ class ApiServerApplication {
             options.addHandlersFromPackageOf(ApiServerApplication::class.java)
             options.useCoroutineHandlers(Dispatchers.Default)
             options.configureDispatch {
-                messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                traceLogFile(topology.logDirectory + "/flow-api.log")
-                traceLabel("api")
+                messageFlow(ZLinkMessageFlowLogMode.NORMAL)
             }
             options.codecs().use(ZLinkProtobufCodec.defaultCodec())
             options.configureLocations()

@@ -11,6 +11,7 @@
 #include "runtime/messaging/submit_result_mapper.hpp"
 #include "runtime/locations/store_location_resolvers.hpp"
 #include "runtime/locations/actor_authority_payload.hpp"
+#include "runtime/locations/authority_key_codec.hpp"
 
 #include <zlink/framework/contracts/locations/stores.hpp>
 #include <zlink/framework/contracts/monitoring/route_mesh_runtime.hpp>
@@ -356,6 +357,15 @@ result_t<messaging::message_parts_t> wait_for_actor_completion (
 {
     const auto target_is_unavailable = [&] {
         const auto owner_lifetime = locations.owner_admission_lifetime (owner);
+        const auto local_rid = node.routing_id ();
+        if (local_rid && local_rid->to_bytes () == target_rid.to_bytes ()) {
+            // The local RouteMesh node is not listed as its own topology peer.
+            // A relocation can retire the old owner admission while an
+            // already-accepted request is preserved by handoff. That state is
+            // not a transport loss, so the caller's deadline remains a normal
+            // timeout.
+            return false;
+        }
         bool public_route_ready = true;
         if (route_runtime) {
             try {
@@ -439,6 +449,51 @@ class actor_client_impl_t final : public actor_client_t
             if (mesh_node)
                 mesh_node->set_message_follow_invalidation_handler ({});
         }
+    }
+
+    task_t<void> send_to_ref (actor_ref_t actor,
+                              std::string packet_name,
+                              message_t message)
+    {
+        auto resolved = resolve_explicit_actor (actor);
+        if (!resolved) {
+            return task_t<void> (detail::propagate_failure<void> (
+              resolved, "explicit Actor route is unavailable"));
+        }
+        auto relayed = relay_explicit_actor_packet (
+          resolved.value (), runtime::messaging::message_kind_t::command,
+          std::move (packet_name), std::move (message), _default_timeout);
+        return task_t<void> (
+          relayed
+            ? result_t<void>::success ()
+            : detail::propagate_failure<void> (
+                relayed, "explicit Actor route send failed"));
+    }
+
+    task_t<message_t> request_to_ref (actor_ref_t actor,
+                                      std::string packet_name,
+                                      message_t message,
+                                      std::chrono::milliseconds timeout)
+    {
+        auto resolved = resolve_explicit_actor (actor);
+        if (!resolved) {
+            return task_t<message_t> (detail::propagate_failure<message_t> (
+              resolved, "explicit Actor route is unavailable"));
+        }
+        auto relayed = relay_explicit_actor_packet (
+          resolved.value (), runtime::messaging::message_kind_t::request,
+          std::move (packet_name), std::move (message), timeout);
+        if (!relayed) {
+            return task_t<message_t> (detail::propagate_failure<message_t> (
+              relayed, "explicit Actor route request failed"));
+        }
+        if (!relayed.value ()) {
+            return task_t<message_t> (result_t<message_t>::failure (
+              framework_error_kind_t::internal_failure,
+              "explicit Actor route reply body is missing"));
+        }
+        return task_t<message_t> (result_t<message_t>::success (
+          message_t::from_raw (*relayed.value (), _serializers)));
     }
 
   protected:
@@ -533,6 +588,30 @@ class actor_client_impl_t final : public actor_client_t
                   actor.value (), packet_name, request, remaining, request_id,
                   metadata);
                 if (!is_moving_stale (last)) {
+                    /* A destructive lifecycle operation can remove the
+                     * authority while this client still has a positive route
+                     * cache entry.  The owner fence then reports an
+                     * unavailable/stale route, but the public ID-only
+                     * operation must expose the missing target as NotFound.
+                     * Re-read the authority only after that stale terminal;
+                     * transport failures with a live authority retain their
+                     * original Unavailable result. */
+                    if (!last
+                        && (last.error_kind ()
+                              == framework_error_kind_t::unavailable
+                            || last.error_kind ()
+                                 == framework_error_kind_t::not_found)) {
+                        invalidate_cached_route_on_stale (
+                          actor.value (), last.error_kind ());
+                        const auto current = resolve_actor (
+                          actor_id_value, stale_policy_t::route_not_found);
+                        if (!current
+                            && current.error_kind ()
+                                 == framework_error_kind_t::not_found) {
+                            co_return detail::propagate_failure<message_t> (
+                              current, "actor route was not found");
+                        }
+                    }
                     co_return last;
                 }
             } else if (!actor.error ()
@@ -587,7 +666,8 @@ class actor_client_impl_t final : public actor_client_t
                 _route_cache.erase (cached);
             }
         }
-        auto read = _store->read_authority (authority_key_t{"1:" + actor_id}).result ();
+        auto read = _store->read_authority (
+          actor_authority_key (actor_id)).result ();
         if (!read) {
             return detail::propagate_failure<resolved_actor_t> (
               read, "actor authority lookup failed");
@@ -638,11 +718,63 @@ class actor_client_impl_t final : public actor_client_t
         return result_t<resolved_actor_t>::success (std::move (resolved));
     }
 
+    result_t<resolved_actor_t> resolve_explicit_actor (const actor_ref_t &actor)
+    {
+        if (!first_mesh_node ()) {
+            return result_t<resolved_actor_t>::failure (
+              framework_error_kind_t::unavailable,
+              "explicit Actor route requires a running MeshNode");
+        }
+        auto read = _store->read_authority (
+          actor_authority_key (actor.actor_id ().value ())).result ();
+        if (!read) {
+            return detail::propagate_failure<resolved_actor_t> (
+              read, "Actor authority lookup failed");
+        }
+        const auto *snapshot = std::get_if<authority_snapshot_t> (&read.value ());
+        const auto projection = snapshot
+          ? zlink::framework::runtime::decode_actor_authority_payload (snapshot->payload)
+          : std::nullopt;
+        if (!snapshot
+            || snapshot->allocation.state != placement_allocation_state_t::active
+            || snapshot->allocation.object_kind != placement_object_kind_t::actor
+            || !projection
+            || projection->actor.actor_id () != actor.actor_id ()
+            || projection->actor.object_generation () != actor.object_generation ()) {
+            return result_t<resolved_actor_t>::failure (
+              framework_error_kind_t::unavailable,
+              "explicit Actor route no longer identifies the current incarnation");
+        }
+        const auto mesh_name = actor.mesh_name ().empty ()
+          ? snapshot->allocation.target.mesh_name
+          : std::string (actor.mesh_name ());
+        return result_t<resolved_actor_t>::success (
+          resolved_actor_t{actor,
+                           actor,
+                           actor.node_rid (),
+                           projection->spot_id,
+                           mesh_name,
+                           snapshot->authority_owner_generation,
+                           static_cast<std::uint64_t> (
+                             snapshot->owner.lease_generation),
+                           snapshot->owner});
+    }
+
     result_t<void> submit_send (const resolved_actor_t &actor,
                                 std::string packet_name,
                                 message_t message,
                                 const actor_send_call_t::metadata_map_t &metadata)
     {
+        /* A one-way remote send has no owner terminal to repair a route-cache
+         * hit after an exact Actor destroy.  Re-read only the existence bit:
+         * an active or moving authority keeps the normal route/backlog path,
+         * while an actually missing authority is exposed as NotFound before
+         * transport admission. */
+        if (cached_route_target_deleted (actor.framework_ref.actor_id ().value ())) {
+            invalidate_cached_route_on_stale (actor, framework_error_kind_t::not_found);
+            return result_t<void>::failure (
+              framework_error_kind_t::not_found, "actor route was not found");
+        }
         auto runtime = mesh_node (actor.mesh_name);
         if (!runtime) {
             return result_t<void>::failure (framework_error_kind_t::unavailable,
@@ -657,6 +789,51 @@ class actor_client_impl_t final : public actor_client_t
             return detail::propagate_failure<void> (relayed, "actor send failed");
         }
         return result_t<void>::success ();
+    }
+
+    bool cached_route_target_deleted (std::string_view actor_id)
+    {
+        {
+            std::lock_guard lock (_route_cache_gate);
+            if (!_route_cache.contains (std::string (actor_id)))
+                return false;
+        }
+        try {
+            const auto read = _store->read_authority (
+              actor_authority_key (std::string (actor_id))).result ();
+            if (!read)
+                return false;
+            return std::get_if<authority_snapshot_t> (&read.value ()) == nullptr;
+        }
+        catch (...) {
+            return false;
+        }
+    }
+
+    result_t<std::optional<zlink::message_t>> relay_explicit_actor_packet (
+      const resolved_actor_t &actor,
+      runtime::messaging::message_kind_t kind,
+      std::string packet_name,
+      message_t message,
+      std::chrono::milliseconds timeout)
+    {
+        auto route = mesh_node (actor.mesh_name);
+        if (!route) {
+            return result_t<std::optional<zlink::message_t>>::failure (
+              framework_error_kind_t::unavailable,
+              "explicit Actor route requires a running MeshNode");
+        }
+        runtime::messaging::client_call_codec_t codec;
+        auto header = codec.create_envelope (
+          kind, "actor", std::move (packet_name), timeout);
+        header.correlation_id =
+          _request_id_prefix + std::to_string (_request_id_seq.fetch_add (1));
+        return route->relay_application_actor (
+          actor.native_ref, header,
+          detail::message_to_raw (message, *_serializers), timeout,
+          zlink::routing_id_t::from (std::uint32_t{0}),
+          runtime::protocol::actor_route_fence_t{}, 0,
+          runtime::protocol::wire_operation_id_t{}, 0, true);
     }
 
     result_t<message_t> submit_request (const resolved_actor_t &actor,
@@ -719,10 +896,6 @@ class actor_client_impl_t final : public actor_client_t
                   actor.owner_lease_generation);
                 while (submit == zlink::submit_result_t::not_connected
                        && std::chrono::steady_clock::now () < deadline) {
-                    // Actor creation and binding complete before every peer has
-                    // necessarily observed the new route. Keep this transient
-                    // transport state inside the framework so the first public
-                    // send has the same semantics as later sends.
                     std::this_thread::sleep_for (std::chrono::milliseconds (1));
                     submit = runtime.send_to_actor (
                       actor.native_ref, copied, {},
@@ -932,6 +1105,38 @@ make_actor_client (live_location_reader_t &store,
     return std::make_shared<actor_client_impl_t> (
       store, serializers, std::move (mesh_nodes), std::move (actor_locations),
       std::move (options), route_runtime);
+}
+
+task_t<void> send_to_actor_ref (actor_client_t &client,
+                                actor_ref_t actor,
+                                std::string packet_name,
+                                message_t message)
+{
+    auto *implementation = dynamic_cast<actor_client_impl_t *> (&client);
+    if (!implementation) {
+        return task_t<void> (result_t<void>::failure (
+          framework_error_kind_t::invalid_operation,
+          "explicit Actor route requires the framework Actor client"));
+    }
+    return implementation->send_to_ref (
+      std::move (actor), std::move (packet_name), std::move (message));
+}
+
+task_t<message_t> request_to_actor_ref (
+  actor_client_t &client,
+  actor_ref_t actor,
+  std::string packet_name,
+  message_t message,
+  std::chrono::milliseconds timeout)
+{
+    auto *implementation = dynamic_cast<actor_client_impl_t *> (&client);
+    if (!implementation) {
+        return task_t<message_t> (result_t<message_t>::failure (
+          framework_error_kind_t::invalid_operation,
+          "explicit Actor route requires the framework Actor client"));
+    }
+    return implementation->request_to_ref (
+      std::move (actor), std::move (packet_name), std::move (message), timeout);
 }
 
 } // namespace zlink::framework::runtime

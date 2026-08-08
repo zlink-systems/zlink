@@ -361,7 +361,7 @@ internal static class ZLinkEnvelopeCodec
                 return spanDeserializer.Deserialize(bodyMessage.AsReadOnlySpan(), bodyType);
 
             return customSerializer.Deserialize(
-                ZLinkEncodedPayload.From(bodyMessage.AsReadOnlyMemory()),
+                ZLinkEncodedPayload.FromOwned(bodyMessage.AsReadOnlyMemory()),
                 bodyType);
         }
 

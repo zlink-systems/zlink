@@ -65,9 +65,7 @@ public final class Program {
             options.configureLocations().setOwnerLeaseRenewInterval(Duration.ofMillis(500));
             options.configureLocations().setOwnerLeaseTtl(Duration.ofSeconds(2));
             options.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile(logDir + "/consumer-flow.log")
-                .traceLabel("java-rl-consumer");
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             options.addRouteMesh(Contracts.CHANNEL)
                 .listen("tcp://127.0.0.1:0")
                 .setRoutingIdPrefix("resilience-consumer")

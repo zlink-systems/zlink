@@ -1,8 +1,10 @@
+using Zlink.Framework.Runtime.Identifiers;
+
 namespace Zlink.Framework.Runtime.Spots;
 
 internal sealed class ZLinkSpotActorMembership
 {
-    private readonly Dictionary<string, IZLinkActor> _actorsById = new(StringComparer.Ordinal);
+    private readonly Dictionary<ZLinkActorId, IZLinkActor> _actorsById = [];
     private readonly object _gate = new();
 
     public int Count
@@ -18,18 +20,21 @@ internal sealed class ZLinkSpotActorMembership
 
     public void Add(IZLinkActor actor)
     {
+        var actorId = ZLinkActorId.FromBoundary(
+            actor.Context.ActorId,
+            nameof(actor));
         lock (_gate)
         {
-            if (_actorsById.TryGetValue(actor.Context.ActorId, out var existing)
+            if (_actorsById.TryGetValue(actorId, out var existing)
                 && !ReferenceEquals(existing, actor))
                 throw new InvalidOperationException(
                     $"SPOT already has an actor with id '{actor.Context.ActorId}'.");
 
-            _actorsById[actor.Context.ActorId] = actor;
+            _actorsById[actorId] = actor;
         }
     }
 
-    public bool TryGetActor(string actorId, out IZLinkActor? actor)
+    internal bool TryGetActor(ZLinkActorId actorId, out IZLinkActor? actor)
     {
         lock (_gate)
         {
@@ -39,11 +44,14 @@ internal sealed class ZLinkSpotActorMembership
 
     public void RemoveIfCurrent(IZLinkActor actor)
     {
+        var actorId = ZLinkActorId.FromBoundary(
+            actor.Context.ActorId,
+            nameof(actor));
         lock (_gate)
         {
-            if (_actorsById.TryGetValue(actor.Context.ActorId, out var existing)
+            if (_actorsById.TryGetValue(actorId, out var existing)
                 && ReferenceEquals(existing, actor))
-                _actorsById.Remove(actor.Context.ActorId);
+                _actorsById.Remove(actorId);
         }
     }
 

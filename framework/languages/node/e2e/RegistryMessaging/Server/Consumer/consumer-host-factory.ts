@@ -1,7 +1,6 @@
 import fs from 'node:fs';
 import { Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
-import { ZLinkMessageFlowLogMode } from '@zlink-systems/framework';
 import {
   ZLINK_ROUTE_CLIENT,
   ZLINK_ROUTE_MESH_RUNTIME,
@@ -51,9 +50,7 @@ function createConsumerModule(): Function {
           const builder = zlinkFramework();
           builder
             .configureDispatch()
-              .messageFlow(ZLinkMessageFlowLogMode.KeyTransitions)
-              .traceLogFile(`${options.logDir}/${options.traceLabel}-flow.log`)
-              .traceLabel(options.traceLabel);
+              .messageFlow('normal');
 
           const profile = builder.addRouteMesh('profile');
           profile.channel('profile').client();

@@ -33,6 +33,7 @@ fs.mkdirSync(workDir, { recursive: true });
 
 const children = [];
 const reservedPorts = new Set();
+const portLeases = new Map();
 let redisContainer;
 let failed = false;
 let cleaning = false;
@@ -59,6 +60,13 @@ async function main() {
 
 function createContext(redisEndpoint) {
   const env = { ...process.env };
+  const generatedSchemaRegistry = process.env.ZLINK_NODE_SCHEMA_REGISTRY_PATH
+    ? path.resolve(process.env.ZLINK_NODE_SCHEMA_REGISTRY_PATH)
+    : path.join(sampleRoot, 'dist', '.zlink-framework-json-schemas.cjs');
+  if (process.env.ZLINK_NODE_PRELOAD_GENERATED_SCHEMAS !== '0' && fs.existsSync(generatedSchemaRegistry)) {
+    const preload = `--require=${generatedSchemaRegistry}`;
+    env.NODE_OPTIONS = `${env.NODE_OPTIONS ?? ''} ${preload}`.trim();
+  }
   return {
     env,
     logDir,
@@ -126,12 +134,49 @@ async function reserveBrowserSafePort() {
   for (let attempt = 0; attempt < 200; attempt += 1) {
     const port = 30000 + Math.floor(Math.random() * 10000);
     if (reservedPorts.has(port)) continue;
+    const leasePath = acquirePortLease(port);
+    if (leasePath === undefined) continue;
     if (await canBind(port)) {
       reservedPorts.add(port);
+      portLeases.set(port, leasePath);
       return port;
     }
+    fs.rmSync(leasePath, { force: true });
   }
   throw new Error('Unable to reserve a browser-safe loopback port.');
+}
+
+function acquirePortLease(port) {
+  const leasePath = path.join(os.tmpdir(), `zlink-node-sample-port-${port}.lock`);
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const descriptor = fs.openSync(leasePath, 'wx', 0o600);
+      fs.writeFileSync(descriptor, `${process.pid}\n`);
+      fs.closeSync(descriptor);
+      return leasePath;
+    } catch (error) {
+      if (error?.code !== 'EEXIST') throw error;
+      let owner;
+      try {
+        owner = Number.parseInt(fs.readFileSync(leasePath, 'utf8'), 10);
+      } catch (readError) {
+        if (readError?.code === 'ENOENT') continue;
+        throw readError;
+      }
+      if (Number.isInteger(owner) && isProcessRunning(owner)) return undefined;
+      fs.rmSync(leasePath, { force: true });
+    }
+  }
+  return undefined;
+}
+
+function isProcessRunning(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === 'EPERM';
+  }
 }
 
 function canBind(port) {
@@ -293,6 +338,8 @@ async function cleanup() {
   if (redisContainer) {
     spawnSync(platformExecutable('docker'), ['rm', '-fv', redisContainer], { stdio: 'ignore' });
   }
+  for (const leasePath of portLeases.values()) fs.rmSync(leasePath, { force: true });
+  portLeases.clear();
 }
 
 function printLogs() {

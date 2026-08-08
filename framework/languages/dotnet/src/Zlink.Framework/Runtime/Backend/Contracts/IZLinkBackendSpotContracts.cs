@@ -59,7 +59,8 @@ internal interface IZLinkBackendSpotNode : IAsyncDisposable
     void ConnectPeer(
         RoutingId peerRid,
         string endpoint,
-        string expectedSecurityIdentity = "none");
+        string expectedSecurityIdentity =
+            global::Zlink.Framework.Runtime.Service.ZLinkServiceSecurityIdentity.Plaintext);
 
     void SetPeerExpectation(
         RoutingId peerRid,

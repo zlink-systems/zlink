@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Zlink.Framework.Runtime.Handlers;
+using Zlink.Framework.Runtime.Identifiers;
 using Zlink.Framework.Runtime.Timers;
 
 namespace Zlink.Framework.Runtime.Spots;
@@ -32,7 +33,7 @@ internal abstract partial class ZLinkSpotActivation :
     private readonly CancellationTokenSource _stopSource = new();
     private readonly ZLinkSpotSubscriptionRegistry _subscriptions = new();
     private readonly ZLinkSpotTimerRegistry _timers;
-    private readonly string _spotId;
+    private readonly ZLinkSpotId _spotId;
     private readonly object _lifecycleGate = new();
     private readonly SemaphoreSlim _membershipPublicationGate = new(1, 1);
     private ZLinkSpotActorHandlerRegistry? _actorHandlers;
@@ -70,10 +71,15 @@ internal abstract partial class ZLinkSpotActivation :
         _scope = scope;
         _handlerInstances = new ZLinkScopedHandlerInstanceOwner(scope.ServiceProvider);
         NativeSpot = nativeSpot;
-        _spotId = ZLinkSpotId.Require(spotId, nameof(spotId));
+        _spotId = ZLinkSpotId.FromBoundary(spotId, nameof(spotId));
         NodeRid = nodeRid;
         SpotNodeName = spotNodeName;
-        ChannelName = channelName;
+        RuntimeChannelName = ZLinkChannelName.FromBoundary(
+            channelName,
+            nameof(channelName));
+        RuntimeMeshName = ZLinkMeshName.FromBoundary(
+            channelName,
+            nameof(channelName));
         DefaultRequestTimeout = defaultRequestTimeout;
         ExecutionMode = executionMode;
         RelocationReadiness = relocationReadiness;
@@ -96,8 +102,8 @@ internal abstract partial class ZLinkSpotActivation :
         _dispatcher = new ZLinkSpotActivationDispatcher(
             runtime,
             nativeSpot,
-            channelName,
-            _spotId,
+            RuntimeChannelName.Value,
+            _spotId.Value,
             _packets,
             _actorJoins,
             _actors,
@@ -140,13 +146,19 @@ internal abstract partial class ZLinkSpotActivation :
     public int JoinedActorCount => _actors.Count;
 
     internal bool ContainsActor(string actorId) =>
-        _actors.TryGetActor(actorId, out _);
+        _actors.TryGetActor(
+            ZLinkActorId.FromBoundary(actorId, nameof(actorId)),
+            out _);
 
     public bool IsDisposed => Volatile.Read(ref _disposed) != 0;
 
-    public string ChannelName { get; }
+    public string ChannelName => RuntimeChannelName.Value;
 
-    public string MeshName => ChannelName;
+    internal ZLinkChannelName RuntimeChannelName { get; }
+
+    public string MeshName => RuntimeMeshName.Value;
+
+    internal ZLinkMeshName RuntimeMeshName { get; }
 
     public TimeSpan DefaultRequestTimeout { get; }
 
@@ -221,7 +233,9 @@ internal abstract partial class ZLinkSpotActivation :
     void IZLinkCurrentSpotActivation.EnsureOperationAllowed() =>
         EnsureContextOperationAllowed();
 
-    public string SpotId => _spotId;
+    public string SpotId => _spotId.Value;
+
+    internal ZLinkSpotId RuntimeSpotId => _spotId;
 
     public ulong ObjectGeneration => NativeSpot.LifecycleGeneration;
 

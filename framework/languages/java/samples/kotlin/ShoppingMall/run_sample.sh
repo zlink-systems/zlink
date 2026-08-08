@@ -168,5 +168,5 @@ wait_port "${commerce_b_host}" "${commerce_b_port}"
 grep -q "shoppingmall order: started" "${log_dir}/workflow-a.log"
 grep -q "shoppingmall order: started" "${log_dir}/workflow-b.log"
 grep -q "shoppingmall evidence:" "${log_dir}/api-a.log"
-grep -Rq "message flow" "${SHOPPINGMALL_LOG_DIR}"
+grep -Eq "message flow" "${log_dir}"/{api,workflow}-*.log
 echo "shoppingmall-server-evidence=completed"

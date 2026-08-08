@@ -1,11 +1,13 @@
+using Zlink.Framework.Runtime.Identifiers;
+
 namespace Zlink.Framework.Runtime.Locations;
 
 internal interface IZLinkActorLocationLifecycle
 {
     ValueTask<ZLinkActorClaimActivation<TActor>> ExecuteActorClaimThenActivateAsync<TActor>(
-        string meshName,
+        ZLinkMeshName meshName,
         string actorType,
-        string actorId,
+        ZLinkActorId actorId,
         RoutingId nodeRid,
         Func<CancellationToken, ValueTask>? deactivate,
         Func<CancellationToken, ValueTask<TActor>> activate,
@@ -14,11 +16,11 @@ internal interface IZLinkActorLocationLifecycle
         where TActor : class;
 
     ValueTask PublishActorRefAsync(
-        string actorId,
+        ZLinkActorId actorId,
         ActorRef actorRef,
         CancellationToken cancellationToken = default);
 
     ValueTask ReleaseActorAsync(
-        string actorId,
+        ZLinkActorId actorId,
         CancellationToken cancellationToken = default);
 }

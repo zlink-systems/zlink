@@ -75,57 +75,125 @@ final class ZLinkManualFanoutRuntime implements AutoCloseable {
         };
     }
 
-    synchronized void start() {
-        if (running) return;
-        running = true;
-        desired.forEach((channel, endpoints) ->
-            List.copyOf(endpoints).forEach(endpoint -> open(channel, endpoint)));
+    void start() {
+        Map<String, List<String>> initial;
+        synchronized (this) {
+            if (running) return;
+            running = true;
+            initial = desired.entrySet().stream().collect(
+                java.util.stream.Collectors.toMap(
+                    Map.Entry::getKey,
+                    entry -> List.copyOf(entry.getValue()),
+                    (left, right) -> left,
+                    java.util.LinkedHashMap::new));
+        }
+        initial.forEach((channel, endpoints) ->
+            endpoints.forEach(endpoint -> open(channel, endpoint)));
         executor.scheduleAtFixedRate(this::tickSafely, 0, 10, TimeUnit.MILLISECONDS);
     }
 
-    private synchronized void connectEndpoint(String channelName, String endpoint) {
-        desired.computeIfAbsent(channelName, ignored -> new java.util.LinkedHashSet<>())
-            .add(endpoint);
-        if (running) open(channelName, endpoint);
+    private void connectEndpoint(String channelName, String endpoint) {
+        boolean openNow;
+        synchronized (this) {
+            desired.computeIfAbsent(
+                channelName, ignored -> new java.util.LinkedHashSet<>())
+                .add(endpoint);
+            openNow = running;
+        }
+        if (openNow) {
+            open(channelName, endpoint);
+        }
     }
 
-    private synchronized void disconnectEndpoint(String channelName, String endpoint) {
-        Set<String> endpoints = desired.get(channelName);
-        if (endpoints != null) {
-            endpoints.remove(endpoint);
-            if (endpoints.isEmpty()) desired.remove(channelName);
+    private void disconnectEndpoint(String channelName, String endpoint) {
+        synchronized (this) {
+            Set<String> endpoints = desired.get(channelName);
+            if (endpoints != null) {
+                endpoints.remove(endpoint);
+                if (endpoints.isEmpty()) desired.remove(channelName);
+            }
         }
         remove(connectionId(channelName, endpoint));
     }
 
-    private synchronized void open(String channelName, String endpoint) {
+    private void open(String channelName, String endpoint) {
         String id = connectionId(channelName, endpoint);
-        if (!running || connections.containsKey(id)) return;
+        synchronized (this) {
+            if (!running || connections.containsKey(id)) return;
+        }
         RoutingId publisherId = manualPublisherId(channelName, endpoint);
         ZLinkBackendSubscriberSocket subscriber = backend.createSubscriberSocket(context);
-        subscriber.setChannelName(channelName);
-        subscriber.setSubscription("");
-        ZLinkBackendSocketMonitor monitor = monitoring == null
-            ? null
-            : monitoring.openSocketMonitor(subscriber);
-        Connection connection = new Connection(
-            channelName, endpoint, publisherId, id, subscriber, monitor);
-        connections.put(id, connection);
-        connection.liveness.connect(publisherId, id, System.nanoTime());
-        if (monitor != null) {
-            monitor.onEvent(event -> onMonitorEvent(connection, event.event()));
-        }
+        ZLinkBackendSocketMonitor monitor = null;
+        Connection connection = null;
         try {
-            subscriber.connect(endpoint);
+            subscriber.setChannelName(channelName);
+            subscriber.setSubscription("");
+            monitor = monitoring == null
+                ? null
+                : monitoring.openSocketMonitor(subscriber);
+            connection = new Connection(
+                channelName, endpoint, publisherId, id, subscriber, monitor);
+            synchronized (connection) {
+                boolean accepted;
+                synchronized (this) {
+                    Set<String> endpoints = desired.get(channelName);
+                    accepted = running
+                        && endpoints != null
+                        && endpoints.contains(endpoint)
+                        && !connections.containsKey(id);
+                    if (accepted) {
+                        connections.put(id, connection);
+                    }
+                }
+                if (!accepted) {
+                    closeConnection(connection);
+                    return;
+                }
+                connection.liveness.connect(publisherId, id, System.nanoTime());
+                if (monitor != null) {
+                    Connection acceptedConnection = connection;
+                    monitor.onEvent(event -> onMonitorEvent(
+                        acceptedConnection, event.event()));
+                }
+                // remove/closeConnection shares this fence, preventing a
+                // disconnect racing with open from reconnecting a closed socket.
+                subscriber.connect(endpoint);
+            }
         } catch (RuntimeException failure) {
             LOGGER.log(Level.WARNING,
                 "manual fanout subscriber connect failed for " + endpoint, failure);
-            replace(connection);
+            if (connection != null) {
+                replace(connection);
+            } else {
+                if (monitor != null) {
+                    try {
+                        monitor.close();
+                    } catch (RuntimeException ignored) {
+                    }
+                }
+                try {
+                    subscriber.close();
+                } catch (RuntimeException ignored) {
+                }
+            }
         }
     }
 
-    private synchronized void onMonitorEvent(Connection connection, String event) {
-        if (connections.get(connection.connectionId) != connection) return;
+    private static void closeConnection(Connection connection) {
+        synchronized (connection) {
+            connection.liveness.disconnect(
+                connection.publisherId, connection.connectionId);
+            try {
+                connection.subscriber.disconnect(connection.endpoint);
+            } catch (RuntimeException ignored) {
+            }
+            if (connection.monitor != null) connection.monitor.close();
+            connection.subscriber.close();
+        }
+    }
+
+    private void onMonitorEvent(Connection connection, String event) {
+        if (!isCurrent(connection)) return;
         if (isTerminatedEvent(event)) {
             replace(connection);
         }
@@ -143,13 +211,24 @@ final class ZLinkManualFanoutRuntime implements AutoCloseable {
         }
     }
 
-    private synchronized void reconcileDesired() {
-        desired.forEach((channel, endpoints) ->
-            endpoints.forEach(endpoint -> open(channel, endpoint)));
+    private void reconcileDesired() {
+        List<String> endpoints = new ArrayList<>();
+        synchronized (this) {
+            desired.forEach((channel, values) ->
+                values.forEach(endpoint -> endpoints.add(
+                    channel + "\u0000" + endpoint)));
+        }
+        endpoints.forEach(value -> {
+            int separator = value.indexOf('\u0000');
+            open(value.substring(0, separator), value.substring(separator + 1));
+        });
     }
 
-    private synchronized void receiveAvailable() {
-        List<Connection> ordered = new ArrayList<>(connections.values());
+    private void receiveAvailable() {
+        List<Connection> ordered;
+        synchronized (this) {
+            ordered = new ArrayList<>(connections.values());
+        }
         if (ordered.isEmpty()) return;
         int cursor = (int) Math.floorMod(receiveCursor, ordered.size());
         int idle = 0;
@@ -157,13 +236,19 @@ final class ZLinkManualFanoutRuntime implements AutoCloseable {
         while (batch.canReceiveNext() && idle < ordered.size()) {
             Connection connection = ordered.get(cursor);
             cursor = (cursor + 1) % ordered.size();
-            receiveCursor = cursor;
-            if (!connection.subscriber.waitForReadable(Duration.ZERO)) {
-                idle++;
-                continue;
+            synchronized (this) {
+                receiveCursor = cursor;
             }
-            ZLinkBackendTopicMessage received = connection.subscriber.subscribe(
-                ZLinkBackendRecvMode.DONT_WAIT);
+            ZLinkBackendTopicMessage received;
+            synchronized (connection) {
+                if (!isCurrent(connection)
+                    || !connection.subscriber.waitForReadable(Duration.ZERO)) {
+                    received = null;
+                } else {
+                    received = connection.subscriber.subscribe(
+                        ZLinkBackendRecvMode.DONT_WAIT);
+                }
+            }
             if (received == null) {
                 idle++;
                 continue;
@@ -176,11 +261,22 @@ final class ZLinkManualFanoutRuntime implements AutoCloseable {
             frames.add(received.topic().getBytes(StandardCharsets.UTF_8));
             frames.addAll(received.parts().stream().map(Message::toByteArray).toList());
             try {
-                var kind = connection.liveness.receive(
-                    connection.publisherId, connection.connectionId,
-                    frames, System.nanoTime());
-                connection.ready = connection.liveness.isReady(connection.publisherId);
+                ZLinkClassicFanoutLiveness.ReceiveKind kind;
+                synchronized (connection) {
+                    if (!isCurrent(connection)) {
+                        received.parts().forEach(Message::close);
+                        continue;
+                    }
+                    kind = connection.liveness.receive(
+                        connection.publisherId, connection.connectionId,
+                        frames, System.nanoTime());
+                    connection.ready = connection.liveness.isReady(
+                        connection.publisherId);
+                }
                 if (kind == ZLinkClassicFanoutLiveness.ReceiveKind.APPLICATION) {
+                    // Dispatch owns the received message and closes its parts
+                    // after queue admission. Do not invoke it under the
+                    // connection registry monitor.
                     dispatch.accept(connection.channelName, received);
                 } else {
                     received.parts().forEach(Message::close);
@@ -192,26 +288,53 @@ final class ZLinkManualFanoutRuntime implements AutoCloseable {
         }
     }
 
-    private synchronized void expireConnections() {
+    private synchronized boolean isCurrent(Connection connection) {
+        return connections.get(connection.connectionId) == connection;
+    }
+
+    private void expireConnections() {
         long now = System.nanoTime();
-        List.copyOf(connections.values()).stream()
-            .filter(connection -> !connection.liveness.expire(now).isEmpty())
-            .forEach(this::replace);
+        List<Connection> expired = new ArrayList<>();
+        List<Connection> current;
+        synchronized (this) {
+            current = List.copyOf(connections.values());
+        }
+        for (Connection connection : current) {
+            synchronized (connection) {
+                if (!connection.liveness.expire(now).isEmpty()) {
+                    expired.add(connection);
+                }
+            }
+        }
+        expired.forEach(this::replace);
     }
 
-    private synchronized void replace(Connection connection) {
-        if (connections.get(connection.connectionId) != connection) return;
-        remove(connection.connectionId);
+    private void replace(Connection connection) {
+        if (!isCurrent(connection)) return;
+        remove(connection.connectionId, connection);
     }
 
-    private synchronized void remove(String id) {
-        Connection connection = connections.remove(id);
+    private void remove(String id) {
+        Connection connection;
+        synchronized (this) {
+            connection = connections.remove(id);
+        }
         if (connection == null) return;
-        connection.liveness.disconnect(connection.publisherId, connection.connectionId);
-        try { connection.subscriber.disconnect(connection.endpoint); }
-        catch (RuntimeException ignored) { }
-        if (connection.monitor != null) connection.monitor.close();
-        connection.subscriber.close();
+        synchronized (connection) {
+            closeConnection(connection);
+        }
+    }
+
+    private void remove(String id, Connection expected) {
+        synchronized (this) {
+            if (connections.get(id) != expected
+                || connections.remove(id) != expected) {
+                return;
+            }
+        }
+        synchronized (expected) {
+            closeConnection(expected);
+        }
     }
 
     synchronized List<PublisherSnapshot> publisherSnapshots(String channelName) {
@@ -223,9 +346,13 @@ final class ZLinkManualFanoutRuntime implements AutoCloseable {
     }
 
     @Override
-    public synchronized void close() {
-        running = false;
-        List.copyOf(connections.keySet()).forEach(this::remove);
+    public void close() {
+        List<String> ids;
+        synchronized (this) {
+            running = false;
+            ids = List.copyOf(connections.keySet());
+        }
+        ids.forEach(this::remove);
         executor.shutdownNow();
     }
 

@@ -34,9 +34,7 @@ public final class CourierSpotNodeApplication {
             NodeOptions selected = NodeOptions.resolve(node, topology);
             options.addHandlersFromPackageOf(CourierSpotNodeApplication.class);
             options.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile(topology.logDirectory() + "/flow-courier-" + node + ".log")
-                .traceLabel("courier-" + node);
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             ZLinkMeshNodeBuilder spotNode = options.addRouteMesh(SampleNames.CourierSpotDiscovery);
             spotNode.listen(selected.spotEndpoint())
                 .setRoutingIdPrefix("delivery-courier");

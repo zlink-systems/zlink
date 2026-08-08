@@ -15,6 +15,7 @@ dependencies {
     api(project(":zlink-stream-connector"))
     api("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0")
     api("org.jetbrains.kotlinx:kotlinx-coroutines-jdk8:1.9.0")
+    api("com.fasterxml.jackson.module:jackson-module-kotlin:2.17.2")
     testImplementation("systems.zlink:zlink")
     testImplementation(project(":zlink-framework-spring-boot-starter"))
     testImplementation(project(":zlink-framework-testkit"))

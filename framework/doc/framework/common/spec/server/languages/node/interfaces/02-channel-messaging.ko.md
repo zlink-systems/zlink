@@ -357,6 +357,7 @@ export interface ZLinkSession {
     readonly context: ZLinkSessionContext;
     onConnected?(context: ZLinkSessionContext): Promise<void>;
     onDisconnected?(context: ZLinkSessionContext): Promise<void>;
+    onActorBindingReplaced?(context: ZLinkSessionContext, actorId: ActorId): Promise<void>;
     onError?(context: ZLinkSessionContext, error: ZLinkStreamError): Promise<void>;
     onDispatch?(dispatch: ZLinkSessionDispatchContext, payload: ZLinkMessage): Promise<void>;
 }
@@ -425,6 +426,13 @@ export interface ZLinkSessionSendCall {
     submit(signal?: AbortSignal): Promise<void>;
 }
 ```
+
+`onActorBindingReplaced(...)`는 같은 Actor가 새 session에 bind된 경우 이전 session에서 한 번 실행되는 선택
+callback이다. Framework는 callback 전에 session을 closing으로 바꿔 새로운 inbound application dispatch를
+거부한다. Application은 `context.client.send(...)`로 client 안내를 보낼 수 있지만 `context.close()`를 호출하지
+않는다. Callback이 성공 또는 실패로 terminal이 되면 Framework는 non-blocking timer를 예약하고 turn을 즉시
+반환한다. Timer는 exact retired session identity를 다시 확인한 뒤 100 ms에 connection을 닫으며, `sleep`이나
+session serial lane·worker 점유로 기다리지 않는다. 새 bind는 callback이나 close를 기다리지 않는다.
 
 `ZLinkSessionSendCall.timeout(...)`은 이 send의 admission 대기만 줄인다. 생략하면 STREAM socket send
 timeout을 사용하고 지정하면 두 값 중 짧은 값을 사용하므로 socket timeout을 늘릴 수 없다. 값은

@@ -27,17 +27,20 @@ internal sealed class ZLinkPublishCall(
                         "ZLink publish submitter is not initialized."))
                 .SubmitAsync(
                     envelopedMsg,
-                    pending => publisher.Publish(topic, pending, SendFlags.DontWait),
+                    pending => publisher.Publish(topic)
+                        .Messages(pending)
+                        .Flags(SendFlags.DontWait)
+                        .Submit(),
                     cancellationToken)
                 .ConfigureAwait(false);
         ZLinkOneWaySubmitOutcome.EnsureAccepted(result, "Fanout publish");
     }
 
-    private (ZLinkChannelRuntimeBundle Bundle, IZLinkBackendPublisherSocket Publisher,
+    private (ZLinkChannelRuntimeBundle Bundle, IPubSocket Publisher,
         IReadOnlyList<Message> Message) Build()
     {
         var bundle = runtime.GetPublisherBundle(channelName);
-        var publisher = (IZLinkBackendPublisherSocket)bundle.Socket;
+        var publisher = (IPubSocket)bundle.Socket;
         var header = ZLinkClientCallCodec.CreateEnvelope(
             ZLinkMessageKind.Publish,
             channelName,

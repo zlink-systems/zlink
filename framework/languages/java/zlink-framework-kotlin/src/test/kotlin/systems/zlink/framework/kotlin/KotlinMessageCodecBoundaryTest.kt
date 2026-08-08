@@ -7,6 +7,7 @@ import systems.zlink.contracts.messaging.Message
 import systems.zlink.framework.ZLinkEncodedPayload
 import systems.zlink.framework.ZLinkMessageSerializer
 import systems.zlink.framework.messaging.ZLinkMessage
+import systems.zlink.framework.runtime.messaging.ZLinkJsonMessageSerializer
 
 final class KotlinMessageCodecBoundaryTest {
     @Test
@@ -24,9 +25,22 @@ final class KotlinMessageCodecBoundaryTest {
 
         assertEquals(KotlinBoundaryPayload("typed"), message.decode<KotlinBoundaryPayload>())
     }
+
+    @Test
+    fun defaultJsonSerializerDiscoversKotlinConstructorMetadata() {
+        val serializer = ZLinkJsonMessageSerializer()
+        val encoded = serializer.serialize(KotlinAcronymPayload("player-x"))
+
+        assertEquals(
+            KotlinAcronymPayload("player-x"),
+            serializer.deserialize(encoded, KotlinAcronymPayload::class.java),
+        )
+    }
 }
 
 data class KotlinBoundaryPayload(val value: String)
+
+data class KotlinAcronymPayload(val xActorId: String)
 
 private class KotlinBoundarySerializer : ZLinkMessageSerializer {
     override fun <T : Any?> serialize(value: T): ZLinkEncodedPayload =

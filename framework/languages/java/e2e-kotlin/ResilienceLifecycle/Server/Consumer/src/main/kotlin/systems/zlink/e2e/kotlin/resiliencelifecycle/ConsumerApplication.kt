@@ -26,9 +26,9 @@ open class ConsumerApplication {
         ZLinkFrameworkConfigurer { options ->
             val logDir = Env.get("e2e.log.dir", "logs")
             options.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile("$logDir/consumer-flow.log")
-                .traceLabel("kotlin-rl-consumer")
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL)
+
+
             options.configureLocations().setOwnerLeaseTtl(Duration.ofSeconds(3))
             options.configureLocations().setOwnerLeaseRenewInterval(Duration.ofMillis(500))
             options.configureLocations().setPollingInterval(Duration.ofMillis(200))

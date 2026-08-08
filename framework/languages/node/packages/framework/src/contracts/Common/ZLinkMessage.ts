@@ -31,7 +31,7 @@ export class ZLinkMessage<TValue = unknown> {
     }
     const text = this.encoded.getString('utf8');
     try {
-      return JSON.parse(text) as T;
+      return materializeZLinkMessageValue(JSON.parse(text) as T, type);
     } catch {
       return text as T;
     }
@@ -64,4 +64,37 @@ export function createZLinkMessageFromEncoded(
 
 export function isZLinkMessage(value: unknown): value is ZLinkMessage {
   return value instanceof ZLinkMessage;
+}
+
+/**
+ * Reattaches a caller-provided DTO prototype without invoking its constructor.
+ * The wire decoder owns validation and conversion; this helper only preserves
+ * the runtime type requested by `ZLinkMessage.decode(type)`.
+ */
+export function materializeZLinkMessageValue<T>(value: T, type?: Type<T>): T {
+  if (
+    type === undefined
+    || (type as unknown) === Object
+    || value === null
+    || typeof value !== 'object'
+    || Array.isArray(value)
+  ) {
+    return value;
+  }
+
+  const prototype = (type as Type<T> & { readonly prototype?: object }).prototype;
+  if (prototype === undefined || prototype === Object.prototype) {
+    return value;
+  }
+
+  const materialized = Object.create(prototype) as Record<string, unknown>;
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    Object.defineProperty(materialized, key, {
+      configurable: true,
+      enumerable: true,
+      value: item,
+      writable: true
+    });
+  }
+  return materialized as T;
 }

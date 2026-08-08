@@ -9,10 +9,14 @@ namespace
 /* ST-E2: this file owns the scenario orchestration and its public assertions. */
 inline void scenario_runner_t::run_st_e2_scenario ()
 {
-    const auto actor_id = "actor-bound-session-rebind-" + unique_suffix ();
-    const auto spot_id = "spot-bound-session-rebind-" + unique_suffix ();
-    create_spot (_nodes.b, spot_id);
-    create_actor (_nodes.a, actor_id, e2e::actor_type_fail_transfer_out, 92);
+    const auto spot = create_spot_until_placed_on (
+      _nodes.b, "spot-bound-session-rebind-" + unique_suffix (),
+      "actor-b");
+    const auto actor = create_actor_until_placed_on (
+      _nodes.a, "actor-bound-session-rebind-" + unique_suffix (),
+      e2e::actor_type_fail_transfer_out, 92, "actor-a");
+    const auto &actor_id = actor.actor_id;
+    const auto &spot_id = spot.spot_id;
     const auto source_ref = get_actor_ref (_nodes.a, actor_id);
     bound_session_t old_session (_nodes.a_stream_endpoint, "ST-E2", source_ref);
     auto before_push = old_session.expect_push ("before-failed-transfer");
@@ -20,7 +24,10 @@ inline void scenario_runner_t::run_st_e2_scenario ()
     before_push.get ();
 
     const auto join = join_actor (_nodes.a, actor_id, {"ST-E2", spot_id});
-    require (!join.accepted, "ST-E2 failed transfer was accepted.");
+    require (join.accepted, "ST-E2 deferred Join was not submitted.");
+    wait_evidence (
+      _nodes.a,
+      {"deferred-join|" + actor_id + "|join_completion_failed|"});
 
     auto source_push = old_session.expect_push ("after-failed-transfer");
     const auto push_reply = bound_push (_nodes.b, actor_id, {"ST-E2", "after-failed-transfer"});

@@ -5,11 +5,12 @@ import {
   createSpot,
   joinActor,
   nodeA,
+  nodeB,
   probeActor,
   require,
   unique
 } from '../Support/scenario-support.js';
-import { metrics, readFlowLog } from '../Support/observability-support.js';
+import { metrics, readFlowRecords } from '../Support/observability-support.js';
 
 export async function runObsB4(): Promise<void> {
   const actorId = unique('obs-b4-actor');
@@ -21,6 +22,10 @@ export async function runObsB4(): Promise<void> {
   require((await probeActor(nodeA, actorId, 'OBS-B4', 'metrics-off')).marker === 'metrics-off',
     'OBS-B4 messaging changed with metrics disabled.');
   require((await metrics(nodeA)).length === 0, 'OBS-B4 disabled reader retained metric values.');
-  require((await readFlowLog(nodeA)).includes('packet=ProbeReq '),
+  const flowRecords = [
+    ...await readFlowRecords(nodeA),
+    ...await readFlowRecords(nodeB)
+  ];
+  require(flowRecords.some((record) => record.packet_name === 'ProbeReq'),
     'OBS-B4 metrics-off traffic did not traverse the framework.');
 }

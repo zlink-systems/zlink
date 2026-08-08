@@ -2,7 +2,9 @@
 #pragma once
 
 #include <zlink/Contracts/Core/routing_id.hpp>
+#include <zlink/framework/contracts/actors/actor.hpp>
 #include <zlink/framework/contracts/locations/keys.hpp>
+#include <zlink/framework/contracts/spots/spot_identity.hpp>
 
 #include <chrono>
 #include <cstdint>
@@ -79,6 +81,38 @@ struct location_service_summary_t
     std::uint32_t error_count = 0;
     std::uint32_t stopped_count = 0;
     std::chrono::system_clock::time_point last_updated_at{};
+};
+
+enum class location_object_kind_t
+{
+    actor = 0,
+    user_spot = 1,
+    instance_spot = 2
+};
+
+enum class location_object_state_t
+{
+    creating = 0,
+    ready = 1,
+    unavailable = 2
+};
+
+struct location_object_entry_t
+{
+    std::string global_id;
+    std::uint64_t object_generation = 0;
+    std::string mesh_name;
+    zlink::routing_id_t node_rid =
+      zlink::routing_id_t::from (std::uint32_t{0});
+    location_object_state_t state = location_object_state_t::creating;
+    std::string stable_type;
+};
+
+struct location_object_filter_t
+{
+    location_object_kind_t object_kind;
+    std::optional<std::string> stable_type;
+    std::optional<std::string> mesh_name;
 };
 
 } // namespace zlink::framework

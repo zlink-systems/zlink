@@ -21,7 +21,7 @@
 | `.NET: Server/Api/Handlers/AuthenticatePlayerHandler.cs` | `Server/src/main/kotlin/.../api/handlers/AuthenticatePlayerHandler.kt` | handler | done | access token을 player identity로 검증한다. |
 | `.NET: Server/Api/Handlers/CreateGameHttpHandler.cs` | `Server/src/main/kotlin/.../api/handlers/CreateGameHttpHandler.kt` | handler | done | HTTP room 생성 요청을 Play channel request로 연결한다. |
 | `.NET: Server/Configuration/RedisRoomRouteStore.cs` | `Server/src/main/kotlin/.../configuration/SampleLocationStore.kt` | runtime-config | done | framework Redis location store를 Play role에 등록한다. |
-| `.NET: Server/Configuration/SampleFlowLog.cs` | `Server/src/main/kotlin/.../configuration/SampleLogging.kt` | server-evidence | done | role별 flow log를 남기고 runner가 `message flow` marker를 확인한다. |
+| `.NET: Server/Configuration/SampleFlowLog.cs` | Framework standard logger | server-evidence | done | role별 stdout에 message flow를 남기고 runner가 `message flow` marker를 확인한다. |
 | `.NET: Server/Configuration/SampleNames.cs` | `Server/src/main/kotlin/.../configuration/SampleNames.kt` | server-config | done | role, service, packet 이름을 공유한다. |
 | `.NET: Server/Configuration/SampleSettings.cs` | `Server/src/main/kotlin/.../configuration/SampleSettings.kt` | server-config | done | endpoint, Redis, log 설정을 properties와 args에서 읽는다. |
 | `.NET: Server/Play/Application/GameCreation/TicTacToeGameCreator.cs` | `Server/src/main/kotlin/.../play/application/gamecreation/TicTacToeGameCreator.kt` | application-usecase | done | room 응답을 조립하고 game Spot 생성 요청과 분리한다. |
@@ -60,7 +60,7 @@
 | common: Spot pub/sub milestone fan-out | `PlayEntrySpot.kt`, `PlayerWinMilestoneMsgHandler.kt`, `TicTacToeGame.kt` | pubsub | done | winner milestone event를 pub/sub로 전달하고 observer에게 push한다. |
 | common: push 대기는 connector public wait API 사용 | `TicTacToeClientScenario.kt` | validation | done | game start, move, win, milestone notify를 typed wait로 검증한다. |
 | common: inbound observer는 connect 전에 등록 | `TicTacToeClientScenario.kt` | validation | done | stream connector 생성 직후 inbound observation을 등록한다. |
-| common: inbound observer 로그 확인 | `run_sample.sh`, `run_sample.ps1` | runner | done | observer connection, subscription, milestone marker와 flow log를 확인한다. |
+| common: inbound observer 로그 확인 | `run_sample.sh`, `run_sample.ps1` | runner | done | observer connection, subscription, milestone marker와 role stdout을 확인한다. |
 | common: sample-local polling으로 push 대기를 숨기지 않음 | `TicTacToeClientScenario.kt` | validation | done | push 대기는 scenario 코드에 직접 드러난다. |
 | common: Domain에는 board, turn, win/draw 판정만 둠 | `Server/src/main/kotlin/.../play/domain/tictactoe/TicTacToeMatch.kt` | design | done | board, turn, win/draw, timeout state 전환은 domain 객체가 맡고 Spot은 framework lifecycle, actor 목록, push를 맡는다. |
 | common: Application은 room 생성 use case를 조율 | `TicTacToeGameCreator.kt`, `CreateGameHandler.kt` | design | done | room 응답 조립과 Spot 생성 요청을 조율한다. |

@@ -1,4 +1,3 @@
-using Zlink.Framework.AspNetCore;
 using Zlink.Framework.Runtime.Host;
 using Zlink.Framework.Runtime.Locations;
 
@@ -6,6 +5,39 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class MaintenanceRuntimeTests
 {
+    [Fact]
+    public void LifecycleRuntimeTypes_AreOwnedBy_FrameworkCoreAssembly()
+    {
+        var coreAssembly = typeof(ZLinkFrameworkRuntime).Assembly;
+
+        Assert.Equal("Zlink.Framework", coreAssembly.GetName().Name);
+        Assert.Same(coreAssembly, typeof(ZLinkFrameworkMaintenanceRuntime).Assembly);
+        Assert.Same(coreAssembly, typeof(ZLinkDrainCoordinator).Assembly);
+        Assert.Same(coreAssembly, typeof(ZLinkFrameworkDrainExecutor).Assembly);
+        Assert.Null(Type.GetType(
+            "Zlink.Framework.AspNetCore.ZLinkFrameworkMaintenanceRuntime, Zlink.Framework.AspNetCore"));
+        Assert.Null(Type.GetType(
+            "Zlink.Framework.AspNetCore.ZLinkDrainCoordinator, Zlink.Framework.AspNetCore"));
+        Assert.Null(Type.GetType(
+            "Zlink.Framework.AspNetCore.ZLinkFrameworkDrainExecutor, Zlink.Framework.AspNetCore"));
+    }
+
+    [Fact]
+    public async Task CoreLifecycleRuntime_Shutdown_IsTerminalOnce_WithoutAspNetHost()
+    {
+        using var fixture = Create();
+        fixture.Runtime.MarkServing();
+        fixture.Executor.Complete.TrySetResult(null);
+
+        var first = await fixture.Runtime.ShutdownAsync();
+        var replay = await fixture.Runtime.ShutdownAsync();
+
+        Assert.Equal(ZLinkFrameworkTerminationOutcome.Stopped, first.Outcome);
+        Assert.Equal(first, replay);
+        Assert.Equal(1, fixture.Executor.ShutdownRequestCount);
+        Assert.Equal(1, fixture.Executor.ExecuteCount);
+    }
+
     [Fact]
     public async Task Planned_maintenance_relocates_without_stopping_the_host()
     {

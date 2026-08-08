@@ -19,6 +19,8 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkAutoConnectPeerRe
 import systems.zlink.framework.runtime.internal.locations.ZLinkAutoConnectType;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceMessageFollowWireCodec;
 import systems.zlink.framework.spots.ZLinkSpotKind;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 
 /** Resolves public handles from durable authority without legacy location rows. */
 public final class ZLinkStoreLocationResolvers
@@ -311,10 +313,13 @@ public final class ZLinkStoreLocationResolvers
         long ownerLeaseGeneration,
         String storeVersion) {
         return liveRows.ownerLeaseRemaining(ownerId, ownerLeaseGeneration)
-            .thenApply(remaining -> {
+            .thenCompose(remaining -> {
                 if (remaining == null) {
                     invalidateOwnerLease(ownerId, ownerLeaseGeneration);
-                    return null;
+                    return CompletableFuture.failedFuture(
+                        new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.UNAVAILABLE,
+                            "location owner lease is unavailable: " + ownerId));
                 }
                 if (!routeCacheMaxAge.isZero()) {
                     Duration lifetime = remaining.compareTo(routeCacheMaxAge) < 0
@@ -323,7 +328,7 @@ public final class ZLinkStoreLocationResolvers
                         value, storeVersion, ownerId, ownerLeaseGeneration,
                         System.nanoTime(), boundedNanos(lifetime)));
                 }
-                return value;
+                return CompletableFuture.completedFuture(value);
             });
     }
 

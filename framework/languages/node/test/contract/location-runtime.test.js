@@ -891,6 +891,7 @@ test('location lifecycle durably closes an exact Ready Instance before deleting 
     storeNow: new Date(0)
   };
   const mutations = [];
+  let authorityVersion = 1;
   const authorityStore = {
     async readAuthority() {
       return current;
@@ -898,9 +899,10 @@ test('location lifecycle durably closes an exact Ready Instance before deleting 
     async compareExchangeAuthority(_key, expectedVersion, mutation) {
       mutations.push({ expectedVersion: expectedVersion.value, mutation });
       if (mutation.kind === 'put') {
+        authorityVersion++;
         current = {
           ...current,
-          storeVersion: { value: 'authority-v2' },
+          storeVersion: { value: `authority-v${authorityVersion}` },
           payload: mutation.payload
         };
         return {
@@ -909,10 +911,11 @@ test('location lifecycle durably closes an exact Ready Instance before deleting 
           storeNow: new Date(0)
         };
       }
+      authorityVersion++;
       current = { kind: 'missing', storeNow: new Date(0) };
       return {
         kind: 'deleted',
-        storeVersion: { value: 'authority-v3' },
+        storeVersion: { value: `authority-v${authorityVersion}` },
         storeNow: new Date(0)
       };
     }
@@ -939,17 +942,24 @@ test('location lifecycle durably closes an exact Ready Instance before deleting 
     storeVersion: 'authority-v1'
   });
 
-  assert.equal(await lifecycle.beginInstanceSpotClosing('play', 'room-1'), true);
+  const firstClosing = await lifecycle.beginInstanceSpotClosing('play', 'room-1');
+  assert.notEqual(firstClosing, undefined);
   assert.equal(internal.decodeServiceInstanceAuthorityPayload(current.payload).state, 'closing');
   assert.deepEqual(invalidated, ['room-1']);
   assert.equal(mutations[0].expectedVersion, 'authority-v1');
   assert.equal(mutations[0].mutation.generationTransition, 'preserve');
 
-  await lifecycle.releaseSpot('play', 'room-1');
+  await firstClosing.restoreReady();
+  assert.equal(internal.decodeServiceInstanceAuthorityPayload(current.payload).state, 'ready');
   assert.equal(mutations[1].expectedVersion, 'authority-v2');
-  assert.deepEqual(mutations[1].mutation, { kind: 'delete' });
-  assert.equal(current.kind, 'missing');
   assert.deepEqual(invalidated, ['room-1', 'room-1']);
+
+  assert.notEqual(await lifecycle.beginInstanceSpotClosing('play', 'room-1'), undefined);
+  await lifecycle.releaseSpot('play', 'room-1');
+  assert.equal(mutations[3].expectedVersion, 'authority-v4');
+  assert.deepEqual(mutations[3].mutation, { kind: 'delete' });
+  assert.equal(current.kind, 'missing');
+  assert.deepEqual(invalidated, ['room-1', 'room-1', 'room-1', 'room-1']);
 });
 
 test('location lifecycle ignores an old Instance generation release after authority replacement', async () => {

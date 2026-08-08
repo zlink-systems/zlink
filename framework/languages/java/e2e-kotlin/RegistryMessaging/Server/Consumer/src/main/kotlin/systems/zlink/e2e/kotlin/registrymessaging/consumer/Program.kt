@@ -35,9 +35,9 @@ class ConsumerApplication {
     fun framework(options: ConsumerOptions): ZLinkFrameworkConfigurer =
         ZLinkFrameworkConfigurer { framework ->
             framework.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile("${options.logDir}/${options.traceLabel}-flow.log")
-                .traceLabel(options.traceLabel)
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL)
+
+
 
             val profile = framework.addClientServerChannel(Contracts.PROFILE_CHANNEL)
             val client = profile.client()

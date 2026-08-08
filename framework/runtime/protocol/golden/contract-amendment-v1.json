@@ -69,7 +69,8 @@
       "actorCreate": 49,
       "terminalReply": 20,
       "messageFollow": 50,
-      "reservedFirst": 51
+      "boundSessionReplaced": 51,
+      "reservedFirst": 52
     },
     "replyEnvelopeFields": ["correlation", "terminalResult", "failureCode", "tail"],
     "createRequestFields": [

@@ -7,7 +7,9 @@ import systems.zlink.e2e.kotlin.spotservice.play.endpoints.EvidenceHttpServer
 import systems.zlink.e2e.kotlin.spotservice.play.handlers.*
 import systems.zlink.e2e.kotlin.spotservice.play.spots.*
 import com.fasterxml.jackson.databind.ObjectMapper
-import java.util.concurrent.CompletableFuture
+import java.util.logging.Handler
+import java.util.logging.LogRecord
+import java.util.logging.Logger
 import org.springframework.boot.WebApplicationType
 import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.boot.builder.SpringApplicationBuilder
@@ -15,7 +17,6 @@ import org.springframework.context.annotation.Bean
 import systems.zlink.contracts.core.RoutingId
 import systems.zlink.framework.configuration.ClientServerChannelBuilder
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode
-import systems.zlink.framework.configuration.ZLinkMessageFlowOutcome
 import systems.zlink.framework.configuration.ZLinkMeshNodeBuilder
 import systems.zlink.framework.channels.ZLinkRouteClient
 import systems.zlink.framework.channels.ZLinkRouteMeshRuntimeOptions
@@ -64,26 +65,11 @@ class PlayApplication {
         ZLinkFrameworkConfigurer { options ->
             val nodeRid = state.nodeRid()
             val logDir = Env.get("e2e.log.dir", "logs")
+            installDispatchEvidence(state)
             options.addRelocationStore(relocationStore)
             options.addHandlersFromPackageOf(IngressCommandHandler::class.java)
             options.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile("$logDir/$nodeRid-flow.log")
-                .traceLabel("kotlin-sm-$nodeRid")
-                .setMessageFlowObserver { error ->
-                    if (error.outcome() != ZLinkMessageFlowOutcome.ERROR) {
-                        return@setMessageFlowObserver CompletableFuture.completedFuture(null)
-                    }
-                    state.record(
-                        "DispatchError",
-                        error.spotId() ?: "",
-                        error.surface().toString() +
-                            "|" + error.errorReason() +
-                            "/" + error.errorAction() +
-                            "/" + error.packetName()
-                    )
-                    CompletableFuture.completedFuture(null)
-                }
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL)
             val node: ZLinkMeshNodeBuilder = options.addRouteMesh(Contracts.SPOT_MESH)
                 .listen(Env.get("e2e.route.endpoint"))
                 .setRoutingId(RoutingId.from(nodeRid))
@@ -158,6 +144,34 @@ class PlayApplication {
                     .addSessionPacketHandler(ActorAuthHandler::class.java)
             }
         }
+
+    private fun installDispatchEvidence(state: ScenarioState) {
+        Logger.getLogger("systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer")
+            .addHandler(object : Handler() {
+                override fun publish(record: LogRecord) {
+                    val fields = diagnosticsFields(record.message) ?: return
+                    if (fields["outcome"] != "ERROR") return
+                    state.record(
+                        "DispatchError",
+                        fields["spot"] ?: "",
+                        "${fields["surface"]}|${fields["reason"]}/${fields["action"]}/${fields["packet"]}",
+                    )
+                }
+
+                override fun flush() = Unit
+                override fun close() = Unit
+            })
+    }
+
+    private fun diagnosticsFields(message: String?): Map<String, String>? {
+        if (message?.startsWith("message flow ") != true) return null
+        return message.removePrefix("message flow ")
+            .split(' ')
+            .mapNotNull { field ->
+                field.split('=', limit = 2).takeIf { it.size == 2 }?.let { it[0] to it[1] }
+            }
+            .toMap()
+    }
 
     @Bean
     fun locationStore(): ZLinkRedisLocationStore =

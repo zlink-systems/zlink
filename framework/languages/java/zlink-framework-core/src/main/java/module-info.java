@@ -1,4 +1,5 @@
 module systems.zlink.framework {
+    requires zlink.framework.json.internal;
     requires transitive systems.zlink;
     requires transitive zlink.framework.provider.abstractions;
     requires zlink.framework.binding.internal;

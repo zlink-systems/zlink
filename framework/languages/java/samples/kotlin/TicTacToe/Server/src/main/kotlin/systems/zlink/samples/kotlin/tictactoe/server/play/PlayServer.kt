@@ -22,9 +22,7 @@ object PlayServer {
             options.useCoroutineHandlers(Dispatchers.Default)
             options.addHandlersFromPackageOf(PlayServer::class.java)
             options.configureDispatch {
-                messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                traceLogFile(SampleLogging.flowLogPath(settings, "play-${settings.playIndex}"))
-                traceLabel("play-${settings.playIndex}")
+                messageFlow(ZLinkMessageFlowLogMode.NORMAL)
             }
             options.addClientServerChannel(SampleNames.ApiChannel)
                 .client()

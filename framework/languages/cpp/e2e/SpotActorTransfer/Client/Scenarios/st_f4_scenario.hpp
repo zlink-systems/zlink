@@ -16,10 +16,13 @@ inline void scenario_runner_t::run_st_f4_scenario ()
 
     wait_evidence (
       _nodes.a, {"message_flow|" + setup.actor_id + "|message_follow_route_removed|"});
-    send_ref (_nodes.a, setup.actor_id, setup.old_ref, {"ST-F4", "G2"});
-    wait_evidence (_nodes.a, {"message_flow|" + setup.actor_id + "|message_follow_expired|"});
-    require_no_contains (get_evidence (_nodes.b), "ST-F4|" + setup.actor_id + "|handoff_packet|G2",
-                         "ST-F4 stale G2 send was automatically re-resolved and delivered.");
+    const auto expired = probe_ref (
+      _nodes.a, setup.actor_id, setup.old_ref, {"ST-F4", "G2"});
+    require (!expired.succeeded && expired.error_kind == "Unavailable",
+             "ST-F4 expired old-route request did not return Unavailable: '"
+               + expired.error_kind + "'.");
+    require_no_contains (get_evidence (_nodes.b), "ST-F4|" + setup.actor_id + "|packet_handler|G2",
+                         "ST-F4 expired old-route request reached the target handler.");
 }
 
 } // namespace

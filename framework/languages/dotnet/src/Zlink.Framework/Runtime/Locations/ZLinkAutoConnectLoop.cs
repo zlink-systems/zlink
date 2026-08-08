@@ -1,3 +1,5 @@
+using Zlink.Framework.Runtime.Identifiers;
+
 namespace Zlink.Framework.Runtime.Locations;
 
 /// <summary>
@@ -13,7 +15,7 @@ internal sealed class ZLinkAutoConnectLoop : IAsyncDisposable
 {
     private readonly ZLinkAutoConnectReconciler _reconciler;
     private readonly ZLinkLocationOptions _options;
-    private readonly string _meshName;
+    private readonly ZLinkMeshName _meshName;
     private readonly IZLinkLocationRepository _store;
     private readonly IZLinkLocationWatchStore? _watchStore;
     private readonly ZLinkOwnerLeaseTracker? _leaseTracker;
@@ -143,7 +145,7 @@ internal sealed class ZLinkAutoConnectLoop : IAsyncDisposable
             try
             {
                 var stamp = await _store.GetMeshNodeChangeStampAsync(
-                        _meshName,
+                        _meshName.Value,
                         cancellationToken)
                     .ConfigureAwait(false);
                 if (stamp is not null)
@@ -242,7 +244,7 @@ internal sealed class ZLinkAutoConnectLoop : IAsyncDisposable
                 await foreach (var _ in _watchStore!.WatchAsync(
                     new ZLinkLocationWatchFilter(
                         ZLinkLocationKind.MeshNode,
-                        _meshName),
+                        _meshName.Value),
                     cancellationToken).ConfigureAwait(false))
                 {
                     // Wake the loop; the tick re-reads the store, so a lost

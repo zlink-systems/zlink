@@ -115,6 +115,11 @@ export class ZLinkSpotSerialTurn {
         'yield requires a SpotWide User Spot or Instance Spot application handler.'
       );
     }
+    return await this.yieldFrameworkPromise(pending);
+  }
+
+  /** Suspends a turn only for a Framework-owned lifecycle boundary. */
+  async yieldFrameworkPromise<T>(pending: Promise<T>): Promise<T> {
     this.signalSuspended();
     const result = await pending;
     await this.awaitResumePermit();
@@ -241,7 +246,10 @@ export class ZLinkExecutionBarrier {
 
   async enter(): Promise<ZLinkExecutionBarrierClaim> {
     if (this.committed) {
-      throw new Error('ZLink execution barrier is committed.');
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.SpotMoving,
+        'ZLink execution barrier is committed.'
+      );
     }
     if (this.currentSeal !== undefined) {
       return await new Promise<ZLinkExecutionBarrierClaim>((resolve, reject) => {
@@ -265,7 +273,10 @@ export class ZLinkExecutionBarrier {
 
   seal(): ZLinkExecutionBarrierSeal {
     if (this.committed) {
-      throw new Error('ZLink execution barrier is committed.');
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.SpotMoving,
+        'ZLink execution barrier is committed.'
+      );
     }
     if (this.currentSeal !== undefined) {
       throw new Error('ZLink execution barrier is already sealed.');
@@ -309,7 +320,10 @@ export class ZLinkExecutionBarrier {
     if (!this.isCurrent(seal)) return false;
     this.currentSeal = undefined;
     this.committed = true;
-    const error = new Error('ZLink execution barrier is committed.');
+    const error = createInternalFrameworkException(
+      ZLinkFrameworkInternalErrorKind.SpotMoving,
+      'ZLink execution barrier is committed.'
+    );
     for (const waiter of this.admissionWaiters) waiter.reject(error);
     this.admissionWaiters.length = 0;
     return true;

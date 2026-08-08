@@ -79,33 +79,40 @@ combination be constructed.**
 
 ## 3. The Order Of Swapping A Connection
 
-When binding an Actor already connected elsewhere to a new session,
-there must be no span where two places point at that Actor at once. A
-message arriving in that span has no determined destination.
+When an Actor already bound to another session is connected to a new session,
+the two physical connections may briefly remain open. The Actor owner must
+still have exactly one current binding. Once the new binding becomes current
+and ingress from the retired binding generation is rejected, messages have
+only the new session as their destination.
 
-**Decision — the new connection is only confirmed after the previous
-connection confirms cleanup**
+**Decision — confirm the new connection immediately and notify the previous
+exact session one-way**
 ([Session Actor Dispatch 「4. How A Session Holds An Actor Route」](../spec/20-session-actor-dispatch.en.md#4-how-a-session-holds-an-actor-route)).
 
 ```mermaid
 sequenceDiagram
-    participant SO as session owner
-    participant NO as new Actor owner
-    participant PO as previous Actor owner
+    participant SO as Session Owner
+    participant AO as Actor Owner
+    participant PO as Previous Session Owner
 
-    SO->>NO: please bind this Actor to this session
-    NO->>NO: registers the new connection info
-    NO->>PO: notifies that the previous connection is no longer used
-    PO-->>NO: responds with confirmation
-    NO-->>SO: responds that the binding is complete
-    Note over SO: keeps the existing route until this response
-    SO->>SO: switches to the new route all at once
+    SO->>AO: Bind exact Actor to new session
+    AO->>AO: Install new current binding
+    AO-->>SO: Return bind terminal
+    SO->>SO: Switch to new route
+    AO-)PO: Notify exact retired binding
+    PO->>PO: Run replacement callback
+    PO->>PO: Wait 100 ms after callback terminal
+    PO->>PO: Close previous connection
 ```
 
-Only the normal path is drawn. If confirmation from the previous owner
-doesn't come, the completion response isn't returned, so the session
-owner stays on the existing route — the two routes never end up alive
-at the same time.
+The notification carries the Actor-authority source fence and the previous session owner's exact
+lifecycle and binding identity. The previous owner runs the callback only for the exact identity.
+The callback is the application's final turn for sending a duplicate-connection notice to the client;
+the framework closes the connection 100 ms after a successful or failed callback terminal. An empty
+outbound queue does not shorten this delay. The delay uses an infrastructure timer and releases the
+callback turn immediately; it never sleeps or blocks a session lane or worker. The timer revalidates
+the exact retired identity before closing. Notification, callback, or close failure never rolls back
+the new bind.
 
 **Decision — a connection relationship is identified not by a single
 value but by a `(connection identifier, swap sequence number)` pair**
@@ -151,10 +158,10 @@ silently drops.
   callback.
 - A keep-alive signal doesn't get delayed behind business messages.
 - There's one serial-execution primitive type within the runtime.
-- On a connection swap, the completion response isn't returned before
-  confirmation from the previous owner arrives.
-- Until the completion response is received, the session owner sends
-  messages on the existing route.
+- A connection swap completes when the new binding becomes current and
+  doesn't wait for an ACK from the previous owner.
+- The framework closes the previous connection 100 ms after the exact
+  session callback reaches a successful or failed terminal.
 - A late-arriving response on the previous connection is filtered out
   by comparing the swap sequence number.
 - When a client reconnects, the previous connection relationship isn't

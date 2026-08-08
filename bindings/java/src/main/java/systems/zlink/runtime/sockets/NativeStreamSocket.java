@@ -27,6 +27,7 @@ final class NativeStreamSocket extends NativeSocketBase implements StreamSocket 
 
     public void bind(String endpoint) { runtime().bind(endpoint); }
     public void unbind(String endpoint) { runtime().unbind(endpoint); }
+    public void disconnectRid(RoutingId rid) { runtime().disconnectRid(rid); }
     public void setRoutingId(RoutingId rid) { runtime().setRoutingId(rid); }
     public RoutingId getRoutingId() { return runtime().getRoutingId(); }
 

@@ -8,7 +8,10 @@ import type {
 } from '../backend/runtime-values';
 import type { RoutingId } from '../../contracts';
 import type { ServiceActorRef } from './service-stateful-registry';
-import type { ServiceDirectSpotRouteFence } from './service-stateful-wire-codec';
+import type {
+  ServiceDirectSpotRouteFence,
+  ServiceRetiredBoundSessionRouteFence
+} from './service-stateful-wire-codec';
 
 export interface MeshOperationId {
   readonly high: bigint;
@@ -146,6 +149,7 @@ export interface ActorTransferControlPayload {
 
 export interface ActorBindingControlPayload {
   readonly kind: 'actorBinding';
+  readonly transition: 'active' | 'tombstone';
   readonly actor: ServiceActorRef;
   readonly bindingGeneration: bigint;
   readonly sessionNodeRid: RoutingId;
@@ -281,7 +285,16 @@ export interface StreamSessionService {
   close(): void;
   status(): StreamSessionStatus;
   lookupActor(targetNodeRid: RoutingId, actorId: string, timeoutMs?: number): MeshOperationId;
-  bindActor(sessionRid: RoutingId, actor: ServiceActorRef, timeoutMs?: number): MeshOperationId;
+  bindActor(
+    sessionRid: RoutingId,
+    actor: ServiceActorRef,
+    timeoutMs?: number,
+    onBindingReplaced?: (
+      actorId: string,
+      retiredSession: ServiceRetiredBoundSessionRouteFence,
+      actor: ServiceActorRef
+    ) => void
+  ): MeshOperationId;
   unbindActor(
     sessionRid: RoutingId,
     actor: ServiceActorRef,

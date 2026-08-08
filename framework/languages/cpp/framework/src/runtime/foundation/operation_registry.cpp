@@ -84,7 +84,8 @@ bool operation_registry_t::cancel (const call_id_t &id)
 
 bool operation_registry_t::fail (
   const call_id_t &id,
-  operation_terminal_t terminal)
+  operation_terminal_t terminal,
+  std::vector<std::uint8_t> payload)
 {
     if (terminal == operation_terminal_t::completed) {
         throw std::invalid_argument ("failure terminal cannot be completed");
@@ -93,7 +94,7 @@ bool operation_registry_t::fail (
     if (!take (id, callback)) {
         return false;
     }
-    notify (callback, terminal, {});
+    notify (callback, terminal, std::move (payload));
     return true;
 }
 

@@ -19,7 +19,6 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
 import java.time.Duration;
 import java.util.List;
 import java.util.Objects;
@@ -33,8 +32,10 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.logging.Handler;
+import java.util.logging.FileHandler;
 import java.util.logging.LogRecord;
 import java.util.logging.Logger;
+import java.util.logging.SimpleFormatter;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
@@ -45,11 +46,9 @@ import systems.zlink.framework.ZLinkHandlerDispatchKind;
 import systems.zlink.framework.ZLinkHandlerFilterContext;
 import systems.zlink.framework.ZLinkHandlerFilterNext;
 import systems.zlink.framework.ZLinkMessageContext;
-import systems.zlink.framework.configuration.ZLinkDispatchErrorAction;
-import systems.zlink.framework.configuration.ZLinkDispatchErrorReason;
-import systems.zlink.framework.configuration.ZLinkDispatchErrorSurface;
-import systems.zlink.framework.configuration.ZLinkDispatchMessageKind;
-import systems.zlink.framework.configuration.ZLinkMessageFlowEvent;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorAction;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorReason;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.channels.ZLinkPublishMessageContext;
 import systems.zlink.framework.channels.ZLinkFanoutHandler;
@@ -247,12 +246,10 @@ final class ChannelMessagingTest {
     }
 
     @Test
-    @DisplayName("DERR-001 manual client-server missing request handler replies error and reports observer")
-    void manualClientServer_missingRequestHandlerRepliesErrorAndReportsObserver()
+    @DisplayName("DERR-001 manual client-server missing request handler replies error and records diagnostics")
+    void manualClientServer_missingRequestHandlerRepliesErrorAndRecordsDiagnostics()
         throws InterruptedException {
         String endpoint = "inproc://zlink-java-dispatch-error-" + UUID.randomUUID();
-        CountDownLatch errorLatch = new CountDownLatch(1);
-        AtomicReference<ZLinkMessageFlowEvent> observedError = new AtomicReference<>();
         CopyOnWriteArrayList<String> logMessages = new CopyOnWriteArrayList<>();
         Logger logger = Logger.getLogger(ZLinkMessageFlowTracer.class.getName());
         Handler logHandler = new Handler() {
@@ -272,12 +269,6 @@ final class ChannelMessagingTest {
         logger.addHandler(logHandler);
 
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
-        { var dispatch = options.configureDispatch();
-            dispatch.setMessageFlowObserver(error -> {
-                observedError.set(error);
-                errorLatch.countDown();
-                return CompletableFuture.completedFuture(null);
-            }); };
         { var channel = options.addClientServerChannel("profile").server().listen();
             options.addClientServerChannel("profile").client();
             channel.addRequestHandler(EchoHandler.class, EchoRequest.class, String.class); };
@@ -312,15 +303,6 @@ final class ChannelMessagingTest {
             assertTrue(failure.getCause().getMessage().contains(
                 "HANDLER_MISSING for packet 'MissingReq'"));
 
-            assertTrue(errorLatch.await(1, TimeUnit.SECONDS),
-                "dispatch error observer was not called");
-            ZLinkMessageFlowEvent error = observedError.get();
-            assertEquals(ZLinkDispatchErrorSurface.CHANNEL, error.surface());
-            assertEquals(ZLinkDispatchMessageKind.REQUEST, error.messageKind());
-            assertEquals(ZLinkDispatchErrorReason.HANDLER_MISSING, error.errorReason());
-            assertEquals(ZLinkDispatchErrorAction.REPLY_ERROR, error.errorAction());
-            assertEquals("MissingReq", error.packetName());
-            assertEquals("profile", error.channelName());
             assertTrue(logMessages.stream().anyMatch(message ->
                 message.contains("reason=HANDLER_MISSING")
                     && message.contains("action=REPLY_ERROR")
@@ -340,12 +322,10 @@ final class ChannelMessagingTest {
     }
 
     @Test
-    @DisplayName("DERR-002 manual client-server missing send handler reports observer and keeps request path alive")
-    void manualClientServer_missingSendHandlerReportsObserverAndKeepsRequestPathAlive()
+    @DisplayName("DERR-002 manual client-server missing send handler records diagnostics and keeps request path alive")
+    void manualClientServer_missingSendHandlerRecordsDiagnosticsAndKeepsRequestPathAlive()
         throws InterruptedException {
         String endpoint = "inproc://zlink-java-dispatch-send-error-" + UUID.randomUUID();
-        CountDownLatch errorLatch = new CountDownLatch(1);
-        AtomicReference<ZLinkMessageFlowEvent> observedError = new AtomicReference<>();
         CopyOnWriteArrayList<String> logMessages = new CopyOnWriteArrayList<>();
         Logger logger = Logger.getLogger(ZLinkMessageFlowTracer.class.getName());
         Handler logHandler = new Handler() {
@@ -365,12 +345,6 @@ final class ChannelMessagingTest {
         logger.addHandler(logHandler);
 
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
-        { var dispatch = options.configureDispatch();
-            dispatch.setMessageFlowObserver(error -> {
-                observedError.set(error);
-                errorLatch.countDown();
-                return CompletableFuture.completedFuture(null);
-            }); };
         { var channel = options.addClientServerChannel("profile").server().listen();
             options.addClientServerChannel("profile").client();
             channel.addRequestHandler(EchoHandler.class, EchoRequest.class, String.class); };
@@ -388,15 +362,6 @@ final class ChannelMessagingTest {
                 .sendToChannel("profile", new MissingCommand("missing-send"))
                 .submit();
 
-            assertTrue(errorLatch.await(1, TimeUnit.SECONDS),
-                "dispatch error observer was not called");
-            ZLinkMessageFlowEvent error = observedError.get();
-            assertEquals(ZLinkDispatchErrorSurface.CHANNEL, error.surface());
-            assertEquals(ZLinkDispatchMessageKind.SEND, error.messageKind());
-            assertEquals(ZLinkDispatchErrorReason.HANDLER_MISSING, error.errorReason());
-            assertEquals(ZLinkDispatchErrorAction.DROP, error.errorAction());
-            assertEquals("MissingCommand", error.packetName());
-            assertEquals("profile", error.channelName());
             assertTrue(logMessages.stream().anyMatch(message ->
                 message.contains("reason=HANDLER_MISSING")
                     && message.contains("action=DROP")
@@ -416,12 +381,10 @@ final class ChannelMessagingTest {
     }
 
     @Test
-    @DisplayName("DERR-006 manual client-server payload decode failure replies error and reports observer")
-    void manualClientServer_payloadDecodeFailureRepliesErrorAndReportsObserver()
+    @DisplayName("DERR-006 manual client-server payload decode failure replies error and records diagnostics")
+    void manualClientServer_payloadDecodeFailureRepliesErrorAndRecordsDiagnostics()
         throws Exception {
         String endpoint = tcpEndpoint();
-        CountDownLatch errorLatch = new CountDownLatch(1);
-        AtomicReference<ZLinkMessageFlowEvent> observedError = new AtomicReference<>();
         CopyOnWriteArrayList<String> logMessages = new CopyOnWriteArrayList<>();
         Logger logger = Logger.getLogger(ZLinkMessageFlowTracer.class.getName());
         Handler logHandler = new Handler() {
@@ -442,12 +405,6 @@ final class ChannelMessagingTest {
         DecodeProbeHandler.invocations.set(0);
 
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
-        { var dispatch = options.configureDispatch();
-            dispatch.setMessageFlowObserver(error -> {
-                observedError.set(error);
-                errorLatch.countDown();
-                return CompletableFuture.completedFuture(null);
-            }); };
         { var channel = listenClientServer(options, "profile", endpoint);
             options.addClientServerChannel("profile").client().connect(endpoint);
             channel.addRequestHandler(EchoHandler.class, EchoRequest.class, String.class);
@@ -488,17 +445,6 @@ final class ChannelMessagingTest {
             }
 
             assertEquals(0, DecodeProbeHandler.invocations.get());
-            assertTrue(errorLatch.await(1, TimeUnit.SECONDS),
-                "dispatch error observer was not called");
-            ZLinkMessageFlowEvent error = observedError.get();
-            assertEquals(ZLinkDispatchErrorSurface.CHANNEL, error.surface());
-            assertEquals(ZLinkDispatchMessageKind.REQUEST, error.messageKind());
-            assertEquals(ZLinkDispatchErrorReason.PAYLOAD_DECODE_FAILED, error.errorReason());
-            assertEquals(ZLinkDispatchErrorAction.REPLY_ERROR, error.errorAction());
-            assertEquals("DecodeReq", error.packetName());
-            assertEquals("profile", error.channelName());
-            assertEquals("PayloadDecodeDispatchException", error.errorType());
-            assertTrue(error.errorMessage().contains("PayloadDecodeFailed"));
             assertTrue(logMessages.stream().anyMatch(message ->
                 message.contains("reason=PAYLOAD_DECODE_FAILED")
                     && message.contains("action=REPLY_ERROR")
@@ -520,12 +466,10 @@ final class ChannelMessagingTest {
     }
 
     @Test
-    @DisplayName("DERR-007 manual client-server handler exception replies error and reports observer")
-    void manualClientServer_handlerExceptionRepliesErrorAndReportsObserver()
+    @DisplayName("DERR-007 manual client-server handler exception replies error and records diagnostics")
+    void manualClientServer_handlerExceptionRepliesErrorAndRecordsDiagnostics()
         throws InterruptedException {
         String endpoint = tcpEndpoint();
-        CountDownLatch errorLatch = new CountDownLatch(1);
-        AtomicReference<ZLinkMessageFlowEvent> observedError = new AtomicReference<>();
         CopyOnWriteArrayList<String> logMessages = new CopyOnWriteArrayList<>();
         Logger logger = Logger.getLogger(ZLinkMessageFlowTracer.class.getName());
         Handler logHandler = new Handler() {
@@ -545,12 +489,6 @@ final class ChannelMessagingTest {
         logger.addHandler(logHandler);
 
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
-        { var dispatch = options.configureDispatch();
-            dispatch.setMessageFlowObserver(error -> {
-                observedError.set(error);
-                errorLatch.countDown();
-                return CompletableFuture.completedFuture(null);
-            }); };
         { var channel = listenClientServer(options, "profile", endpoint);
             options.addClientServerChannel("profile").client().connect(endpoint);
             channel.addRequestHandler(EchoHandler.class, EchoRequest.class, String.class);
@@ -573,17 +511,6 @@ final class ChannelMessagingTest {
             assertTrue(failure.getCause() instanceof ZLinkFrameworkException);
             assertTrue(failure.getCause().getMessage().contains("DERR-007 handler exception"));
 
-            assertTrue(errorLatch.await(1, TimeUnit.SECONDS),
-                "dispatch error observer was not called");
-            ZLinkMessageFlowEvent error = observedError.get();
-            assertEquals(ZLinkDispatchErrorSurface.CHANNEL, error.surface());
-            assertEquals(ZLinkDispatchMessageKind.REQUEST, error.messageKind());
-            assertEquals(ZLinkDispatchErrorReason.HANDLER_EXCEPTION, error.errorReason());
-            assertEquals(ZLinkDispatchErrorAction.REPLY_ERROR, error.errorAction());
-            assertEquals("ThrowReq", error.packetName());
-            assertEquals("profile", error.channelName());
-            assertEquals("IllegalStateException", error.errorType());
-            assertEquals("DERR-007 handler exception", error.errorMessage());
             assertTrue(logMessages.stream().anyMatch(message ->
                 message.contains("reason=HANDLER_EXCEPTION")
                     && message.contains("action=REPLY_ERROR")
@@ -603,28 +530,16 @@ final class ChannelMessagingTest {
     }
 
     @Test
-    @DisplayName("DERR-009 manual client-server dispatch errors are written to file log")
-    void manualClientServer_dispatchErrorsAreWrittenToFileLog() throws Exception {
+    @DisplayName("DERR-009 application logger provider writes dispatch errors to a file")
+    void manualClientServer_applicationLoggerWritesDispatchErrorsToFile() throws Exception {
         String endpoint = tcpEndpoint();
         Path logPath = Files.createTempFile("zlink-java-derr-009-", ".log");
-        CountDownLatch errors = new CountDownLatch(3);
+        Logger logger = Logger.getLogger(ZLinkMessageFlowTracer.class.getName());
+        FileHandler fileHandler = new FileHandler(logPath.toString(), false);
+        fileHandler.setFormatter(new SimpleFormatter());
+        logger.addHandler(fileHandler);
 
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
-        { var dispatch = options.configureDispatch();
-            dispatch.setMessageFlowObserver(error -> {
-                try {
-                    Files.writeString(
-                        logPath,
-                        dispatchLogLine(error),
-                        StandardCharsets.UTF_8,
-                        StandardOpenOption.CREATE,
-                        StandardOpenOption.APPEND);
-                } catch (IOException ex) {
-                    return CompletableFuture.failedFuture(ex);
-                }
-                errors.countDown();
-                return CompletableFuture.completedFuture(null);
-            }); };
         { var channel = listenClientServer(options, "profile", endpoint);
             options.addClientServerChannel("profile").client().connect(endpoint);
             channel.addRequestHandler(EchoHandler.class, EchoRequest.class, String.class);
@@ -680,21 +595,23 @@ final class ChannelMessagingTest {
                 .join());
             assertTrue(thrown.getCause() instanceof ZLinkFrameworkException);
 
-            assertTrue(errors.await(2, TimeUnit.SECONDS), "dispatch error file log was not written");
-            String logText = waitForFileLog(logPath, "dispatch-error", 3);
+            fileHandler.flush();
+            String logText = waitForFileLog(logPath, "outcome=ERROR", 3);
             assertTrue(logText.contains("surface=CHANNEL"));
-            assertTrue(logText.contains("messageKind=REQUEST"));
+            assertTrue(logText.contains("kind=REQUEST"));
             assertTrue(logText.contains("reason=HANDLER_MISSING"));
             assertTrue(logText.contains("reason=PAYLOAD_DECODE_FAILED"));
             assertTrue(logText.contains("reason=HANDLER_EXCEPTION"));
             assertTrue(logText.contains("action=REPLY_ERROR"));
-            assertTrue(logText.contains("packetName=MissingReq"));
-            assertTrue(logText.contains("packetName=DecodeReq"));
-            assertTrue(logText.contains("packetName=ThrowReq"));
-            assertTrue(logText.contains("channelName=profile"));
-            assertTrue(logText.contains("correlationId="));
+            assertTrue(logText.contains("packet=MissingReq"));
+            assertTrue(logText.contains("packet=DecodeReq"));
+            assertTrue(logText.contains("packet=ThrowReq"));
+            assertTrue(logText.contains("channel=profile"));
+            assertTrue(logText.contains("corr="));
         } finally {
             DecodeProbeHandler.invocations.set(0);
+            logger.removeHandler(fileHandler);
+            fileHandler.close();
             Files.deleteIfExists(logPath);
         }
     }
@@ -744,8 +661,10 @@ final class ChannelMessagingTest {
         String fanoutEndpoint = tcpEndpoint();
         CountDownLatch sendLatch = new CountDownLatch(1);
         CountDownLatch publishLatch = new CountDownLatch(1);
-        CountDownLatch errorLatch = new CountDownLatch(3);
-        CopyOnWriteArrayList<ZLinkMessageFlowEvent> observedErrors = new CopyOnWriteArrayList<>();
+        CopyOnWriteArrayList<String> observedErrors = new CopyOnWriteArrayList<>();
+        Logger diagnosticsLogger = Logger.getLogger(ZLinkMessageFlowTracer.class.getName());
+        Handler diagnosticsHandler = capturingHandler(observedErrors);
+        diagnosticsLogger.addHandler(diagnosticsHandler);
         MANUAL_REG_SEND_LATCH.set(sendLatch);
         MANUAL_REG_SEND_MESSAGE.set(null);
         MANUAL_REG_SEND_PACKET.set(null);
@@ -756,12 +675,6 @@ final class ChannelMessagingTest {
         MANUAL_REG_PUBLISH_CHANNEL.set(null);
 
         DefaultZLinkFrameworkOptions serverOptions = new DefaultZLinkFrameworkOptions();
-        { var dispatch = serverOptions.configureDispatch();
-            dispatch.setMessageFlowObserver(error -> {
-                observedErrors.add(error);
-                errorLatch.countDown();
-                return CompletableFuture.completedFuture(null);
-            }); };
         { var channel = listenClientServer(serverOptions, "manual-reg", endpoint);
             channel.addRequestHandler(
                 ManualRegistrationRequestHandler.class,
@@ -776,12 +689,6 @@ final class ChannelMessagingTest {
         { var channel = publisherOptions.addFanoutChannel("manual-events").enablePublisher(fanoutEndpoint); };
 
         DefaultZLinkFrameworkOptions subscriberOptions = new DefaultZLinkFrameworkOptions();
-        { var dispatch = subscriberOptions.configureDispatch();
-            dispatch.setMessageFlowObserver(error -> {
-                observedErrors.add(error);
-                errorLatch.countDown();
-                return CompletableFuture.completedFuture(null);
-            }); };
         { var channel = subscriberOptions.addFanoutChannel("manual-events");
             channel.connect(fanoutEndpoint);
             channel.addPublishHandler(
@@ -834,7 +741,6 @@ final class ChannelMessagingTest {
                 observedErrors,
                 "ManualMissingEvent");
 
-            assertTrue(errorLatch.await(1, TimeUnit.SECONDS), "manual registration errors were not reported");
             assertTrue(waitForManualRegistrationErrors(observedErrors),
                 "manual registration request, send, and publish errors were not all reported");
             assertTrue(hasDispatchError(
@@ -859,6 +765,7 @@ final class ChannelMessagingTest {
                 "ManualMissingEvent",
                 "manual-events"));
         } finally {
+            diagnosticsLogger.removeHandler(diagnosticsHandler);
             MANUAL_REG_SEND_LATCH.set(null);
             MANUAL_REG_SEND_MESSAGE.set(null);
             MANUAL_REG_SEND_PACKET.set(null);
@@ -1406,13 +1313,13 @@ final class ChannelMessagingTest {
 
     private static void publishManualRegistrationUntilObserved(
         ZLinkFrameworkRuntime publisher,
-        List<ZLinkMessageFlowEvent> observedErrors,
+        List<String> observedErrors,
         String packetName) {
         long deadline = System.nanoTime() + Duration.ofSeconds(3).toNanos();
         while (System.nanoTime() < deadline && observedErrors.stream().noneMatch(error ->
-            error.messageKind() == ZLinkDispatchMessageKind.PUBLISH
-                && error.errorReason() == ZLinkDispatchErrorReason.HANDLER_MISSING
-                && packetName.equals(error.packetName()))) {
+            error.contains("kind=PUBLISH")
+                && error.contains("reason=HANDLER_MISSING")
+                && error.contains("packet=" + packetName))) {
             publisher.fanout()
                 .publish("manual-events", "manual", new ManualMissingEvent("missing-event"))
                 .submit();
@@ -1587,16 +1494,21 @@ final class ChannelMessagingTest {
             .listen(uri.getPort());
     }
 
-    private static String dispatchLogLine(ZLinkMessageFlowEvent error) {
-        return "dispatch-error"
-            + " surface=" + error.surface()
-            + " messageKind=" + error.messageKind()
-            + " reason=" + error.errorReason()
-            + " action=" + error.errorAction()
-            + " packetName=" + error.packetName()
-            + " channelName=" + error.channelName()
-            + " correlationId=" + error.correlationId()
-            + System.lineSeparator();
+    private static Handler capturingHandler(List<String> messages) {
+        return new Handler() {
+            @Override
+            public void publish(LogRecord record) {
+                messages.add(record.getMessage());
+            }
+
+            @Override
+            public void flush() {
+            }
+
+            @Override
+            public void close() {
+            }
+        };
     }
 
     private static String waitForFileLog(Path path, String marker, int expected) throws Exception {
@@ -1612,23 +1524,23 @@ final class ChannelMessagingTest {
     }
 
     private static boolean hasDispatchError(
-        List<ZLinkMessageFlowEvent> errors,
+        List<String> errors,
         ZLinkDispatchMessageKind kind,
         ZLinkDispatchErrorReason reason,
         ZLinkDispatchErrorAction action,
         String packetName,
         String channelName) {
         return errors.stream().anyMatch(error ->
-            error.surface() == ZLinkDispatchErrorSurface.CHANNEL
-                && error.messageKind() == kind
-                && error.errorReason() == reason
-                && error.errorAction() == action
-                && packetName.equals(error.packetName())
-                && channelName.equals(error.channelName()));
+            error.contains("surface=CHANNEL")
+                && error.contains("kind=" + kind)
+                && error.contains("reason=" + reason)
+                && error.contains("action=" + action)
+                && error.contains("packet=" + packetName)
+                && error.contains("channel=" + channelName));
     }
 
     private static boolean waitForManualRegistrationErrors(
-        List<ZLinkMessageFlowEvent> errors)
+        List<String> errors)
         throws InterruptedException {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
         while (System.nanoTime() < deadline) {

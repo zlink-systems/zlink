@@ -1,3 +1,5 @@
+using Zlink.Framework.Runtime.Identifiers;
+
 namespace Zlink.Framework.Runtime.Locations;
 
 internal sealed class ZLinkClientServerDiscovery : IAsyncDisposable
@@ -30,13 +32,13 @@ internal sealed class ZLinkClientServerDiscovery : IAsyncDisposable
             if (registration.HasClientServerServer
                 && state.ClientServerServerBundles.TryGetValue(channelName, out var serverBundle))
             {
-                var router = (IZLinkBackendRouterSocket)serverBundle.Socket;
+                var router = (IRouterSocket)serverBundle.Socket;
                 var server = new LocalServer(
                     serverBundle.ClientServerServer
                     ?? throw new InvalidOperationException(
                         "ClientServer server identity is not initialized."),
                     AdvertisedEndpoint(
-                        router.GetLastEndpoint(),
+                        router.Options.LastEndpoint,
                         registration.Server!.AdvertiseHost),
                     router);
                 server.Identity.SetAdvertisedEndpoint(server.Endpoint);
@@ -224,12 +226,12 @@ internal sealed class ZLinkClientServerDiscovery : IAsyncDisposable
     private sealed class LocalServer(
         ZLinkClientServerServerIdentity identity,
         string endpoint,
-        IZLinkBackendRouterSocket router)
+        IRouterSocket router)
     {
         internal ZLinkClientServerServerIdentity Identity { get; } = identity;
-        internal string ChannelName => Identity.ChannelName;
+        internal string ChannelName => Identity.ChannelName.Value;
         internal string Endpoint { get; } = endpoint;
-        internal IZLinkBackendRouterSocket Router { get; } = router;
+        internal IRouterSocket Router { get; } = router;
     }
 
     private sealed class ClientLoop(
@@ -240,7 +242,8 @@ internal sealed class ZLinkClientServerDiscovery : IAsyncDisposable
         ZLinkOwnerLeaseTracker? leases,
         IZLinkRuntimeFailureReporter errorSink) : IAsyncDisposable
     {
-        private readonly Dictionary<string, ulong> _observedRevisions = new(StringComparer.Ordinal);
+        private readonly Dictionary<(RoutingId ServerRid, ulong LifecycleGeneration), ulong>
+            _observedRevisions = [];
         private CancellationTokenSource? _stop;
         private Task? _loop;
 
@@ -275,7 +278,7 @@ internal sealed class ZLinkClientServerDiscovery : IAsyncDisposable
         private async ValueTask ReconcileAsync(CancellationToken cancellationToken)
         {
             var rows = await ListAllAsync(cancellationToken).ConfigureAwait(false);
-            var desired = new Dictionary<string, Target>(StringComparer.Ordinal);
+            var desired = new Dictionary<(RoutingId ServerRid, ulong LifecycleGeneration), Target>();
             foreach (var row in rows)
             {
                 if (row.ServerRid.Size == 0
@@ -293,14 +296,12 @@ internal sealed class ZLinkClientServerDiscovery : IAsyncDisposable
                         .ConfigureAwait(false))
                     continue;
 
-                var lifecycleKey = $"{row.ServerRid.ToHex()}:{row.LifecycleGeneration}";
-                var revisionKey = lifecycleKey;
+                var revisionKey = (row.ServerRid, row.LifecycleGeneration);
                 if (_observedRevisions.TryGetValue(revisionKey, out var observed)
                     && row.DescriptorRevision < observed)
                     continue;
                 _observedRevisions[revisionKey] = row.DescriptorRevision;
-                desired[lifecycleKey] = new Target(
-                    lifecycleKey,
+                desired[revisionKey] = new Target(
                     row.ServerRid,
                     row.LifecycleGeneration,
                     row.Endpoint,
@@ -311,7 +312,7 @@ internal sealed class ZLinkClientServerDiscovery : IAsyncDisposable
 
             runtime.ReplaceAutomatic(
                 rows.Where(row => desired.ContainsKey(
-                        $"{row.ServerRid.ToHex()}:{row.LifecycleGeneration}"))
+                        (row.ServerRid, row.LifecycleGeneration)))
                     .ToArray());
         }
 
@@ -354,7 +355,6 @@ internal sealed class ZLinkClientServerDiscovery : IAsyncDisposable
         }
 
         private sealed record Target(
-            string Key,
             RoutingId Rid,
             ulong LifecycleGeneration,
             string Endpoint,

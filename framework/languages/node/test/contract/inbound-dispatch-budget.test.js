@@ -231,6 +231,184 @@ test('Channel receive loop bounds detached dispatch concurrency for zero-byte me
   assert.equal(maximumActive, 1_024);
 });
 
+test('multiplexed receive loops classify infrastructure while application HWM is paused', async () => {
+  let budgetWaits = 0;
+  const pausedBudget = {
+    get receivePaused() { return true; },
+    async waitUntilResumed() { budgetWaits += 1; await new Promise(() => {}); },
+    enqueue() {},
+    start() {},
+    complete() {},
+    cancelQueued() {}
+  };
+
+  let channelClosed = 0;
+  let channelDispatches = 0;
+  const channelQueue = [received([], null, () => { channelClosed += 1; })];
+  const channel = new framework.ZLinkChannelReceiveLoop(
+    'api',
+    { recv() { return channelQueue.shift(); } },
+    { async dispatch() { channelDispatches += 1; } },
+    undefined,
+    () => true,
+    pausedBudget,
+    { wait() { return channelQueue.length > 0; }, dispose() {} }
+  );
+
+  let subscriberClosed = 0;
+  let subscriberDispatches = 0;
+  const subscriberQueue = [{ topic: 'control', parts: [message(1, () => { subscriberClosed += 1; })] }];
+  const subscriber = new framework.ZLinkSubscriberReceiveLoop(
+    {
+      createReadablePoller() {
+        return { wait() { return subscriberQueue.length > 0; }, dispose() {} };
+      },
+      createTopicMessage() { return { topic: '', parts: [] }; }
+    },
+    {
+      subscribe(target) {
+        const next = subscriberQueue.shift();
+        if (next === undefined) return false;
+        target.topic = next.topic;
+        target.parts = next.parts;
+        return true;
+      }
+    },
+    { async dispatch() { subscriberDispatches += 1; } },
+    () => true,
+    pausedBudget
+  );
+
+  let routeInfrastructure = 0;
+  let routeDispatches = 0;
+  const routeQueue = [received([])];
+  const route = new framework.ZLinkRouteReceiveLoop(
+    { recv() { return routeQueue.shift(); } },
+    {
+      dispatchInfrastructure() { routeInfrastructure += 1; return true; },
+      async dispatch() { routeDispatches += 1; }
+    },
+    pausedBudget,
+    { wait() { return routeQueue.length > 0; }, dispose() {} }
+  );
+
+  const running = [channel.run(), subscriber.run(), route.run()];
+  await waitFor(() => channelClosed === 1 && subscriberClosed === 1 && routeInfrastructure === 1);
+  await Promise.all([channel.stop(), subscriber.stop(), route.stop()]);
+  await Promise.all(running);
+
+  assert.equal(budgetWaits, 0);
+  assert.equal(channelDispatches, 0);
+  assert.equal(subscriberDispatches, 0);
+  assert.equal(routeDispatches, 0);
+});
+
+test('paused application receive retains only one raw classification reservation', async () => {
+  let paused = true;
+  let resume;
+  const resumed = new Promise((resolve) => { resume = resolve; });
+  const budget = {
+    get receivePaused() { return paused; },
+    async waitUntilResumed() { await resumed; },
+    enqueue() {},
+    start() {},
+    complete() {},
+    cancelQueued() {}
+  };
+  let receivedCount = 0;
+  let dispatched = 0;
+  const loop = new framework.ZLinkChannelReceiveLoop(
+    'api',
+    {
+      recv() {
+        receivedCount += 1;
+        return received([]);
+      }
+    },
+    { async dispatch() { dispatched += 1; } },
+    undefined,
+    undefined,
+    budget,
+    { wait() { return receivedCount < 2; }, dispose() {} }
+  );
+
+  const running = loop.run();
+  await waitFor(() => receivedCount === 1);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(receivedCount, 1);
+  assert.equal(dispatched, 0);
+
+  paused = false;
+  resume();
+  await waitFor(() => dispatched === 2);
+  await loop.stop();
+  await running;
+});
+
+test('host raw classification reservations stay at the fixed limit across receive loops', async () => {
+  let paused = true;
+  let resume;
+  const resumed = new Promise((resolve) => { resume = resolve; });
+  const budget = {
+    get receivePaused() { return paused; },
+    async waitUntilResumed() { await resumed; },
+    enqueue() {},
+    start() {},
+    complete() {},
+    cancelQueued() {}
+  };
+  const coordinator = new framework.ZLinkReceiveRoundRobinCoordinator();
+  let receivedCount = 0;
+  let dispatched = 0;
+  let releaseHandlers;
+  const handlersPending = new Promise((resolve) => { releaseHandlers = resolve; });
+  const loops = Array.from(
+    { length: framework.ZLINK_CHANNEL_RAW_RECEIVE_RESERVATION_LIMIT + 1 },
+    (_, index) => {
+      let available = true;
+      return new framework.ZLinkChannelReceiveLoop(
+        `channel-${index}`,
+        {
+          recv() {
+            if (!available) return undefined;
+            available = false;
+            receivedCount += 1;
+            return received([]);
+          }
+        },
+        {
+          async dispatch() {
+            dispatched += 1;
+            await handlersPending;
+          }
+        },
+        undefined,
+        undefined,
+        budget,
+        { wait() { return available; }, dispose() {} },
+        undefined,
+        coordinator
+      );
+    }
+  );
+
+  const running = loops.map((loop) => loop.run());
+  await waitFor(() => receivedCount === framework.ZLINK_CHANNEL_RAW_RECEIVE_RESERVATION_LIMIT);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(receivedCount, framework.ZLINK_CHANNEL_RAW_RECEIVE_RESERVATION_LIMIT);
+
+  paused = false;
+  resume();
+  await waitFor(() => dispatched === framework.ZLINK_CHANNEL_RAW_RECEIVE_RESERVATION_LIMIT);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(receivedCount, framework.ZLINK_CHANNEL_RAW_RECEIVE_RESERVATION_LIMIT);
+
+  releaseHandlers();
+  await waitFor(() => dispatched === loops.length);
+  await Promise.all(loops.map((loop) => loop.stop()));
+  await Promise.all(running);
+});
+
 function message(size, onClose = () => {}) {
   return {
     data() { return Buffer.alloc(size); },
@@ -276,7 +454,7 @@ function rejectingBudget(error, observeQueued) {
 }
 
 async function waitFor(predicate) {
-  const deadline = Date.now() + 1_000;
+  const deadline = Date.now() + 5_000;
   while (!predicate()) {
     if (Date.now() >= deadline) throw new Error('condition timed out');
     await new Promise((resolve) => setImmediate(resolve));

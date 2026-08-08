@@ -60,31 +60,37 @@ interface 없이 공존한다.
 
 ## 3. 연결을 교체하는 순서
 
-이미 다른 곳에 연결된 Actor를 새 session에 연결할 때, 두 곳이 동시에 그 Actor를
-가리키는 구간이 있으면 안 된다. 그 구간에 도착한 message는 어느 쪽으로 갈지 정해지지
-않는다.
+이미 다른 session에 bind된 Actor를 새 session에 연결하면 physical connection 두 개가 잠시 유지될 수 있다.
+그러나 Actor owner의 current binding은 항상 하나여야 한다. 새 binding을 current로 바꾼 뒤 이전 binding
+generation의 ingress를 거부하면 message의 목적지는 새 session 하나로 정해진다.
 
-**결정 — 이전 연결이 정리를 확인한 뒤에만 새 연결을 확정한다**
+**결정 — 새 연결을 즉시 확정하고 이전 exact session에는 one-way로 교체를 통지한다**
 ([Session Actor dispatch 「4. Session이 Actor route를 보관하는 방법」](../spec/20-session-actor-dispatch.ko.md#4-session이-actor-route를-보관하는-방법)).
 
 ```mermaid
 sequenceDiagram
-    participant SO as session 소유자
-    participant NO as 새 Actor owner
-    participant PO as 이전 Actor owner
+    participant SO as Session Owner
+    participant AO as Actor Owner
+    participant PO as Previous Session Owner
 
-    SO->>NO: 이 Actor를 이 session에 연결해 달라
-    NO->>NO: 새 연결 정보를 등록한다
-    NO->>PO: 이전 연결을 더 이상 쓰지 않는다고 알린다
-    PO-->>NO: 확인했다고 응답한다
-    NO-->>SO: 연결 완료를 응답한다
-    Note over SO: 이 응답 전까지 기존 경로를 유지한다
-    SO->>SO: 새 경로로 한 번에 바꾼다
+    SO->>AO: Bind exact Actor to new session
+    AO->>AO: Install new current binding
+    AO-->>SO: Return bind terminal
+    SO->>SO: Switch to new route
+    AO-)PO: Notify exact retired binding
+    PO->>PO: Run replacement callback
+    PO->>PO: Wait 100 ms after callback terminal
+    PO->>PO: Close previous connection
 ```
 
-정상 경로만 그렸다. 이전 owner의 확인이 오지 않으면 완료 응답을 돌려주지 않으므로,
-session 소유자는 기존 경로를 유지한 채 남는다 — 두 경로가 동시에 살아 있는 상태가
-되지 않는다.
+통지에는 Actor authority source fence와 이전 session owner lifecycle·session RID·retired binding generation을
+함께 넣는다. 이전 owner는 exact identity가 맞을 때만 callback을 실행한다. Callback은 client에 중복 연결 안내를 보내는 마지막 application turn이며 연결은
+Framework가 닫는다. Callback이 성공 또는 실패로 terminal이 되면 100 ms 뒤 connection을 닫으며 outbound
+queue가 먼저 비어도 이 시간을 줄이지 않는다. Callback 전에 session을 closing으로 바꿔 새로운 inbound
+application dispatch는 받지 않고 callback outbound send만 허용한다. 100 ms 지연은 session lane에서 sleep하지
+않고 infrastructure timer를 예약한 뒤 callback turn을 즉시 반환하는 방식으로 구현한다. Timer는 exact retired
+identity를 다시 확인한 뒤 close한다. 통지,
+callback 또는 close가 실패해도 새 bind는 rollback하지 않는다.
 
 **결정 — 연결 관계는 값 하나가 아니라 `(연결 식별자, 교체 순번)` 쌍으로 식별한다**
 ([Session Actor dispatch 「4. Session이 Actor route를 보관하는 방법」](../spec/20-session-actor-dispatch.ko.md#4-session이-actor-route를-보관하는-방법)). 교체 중에
@@ -118,7 +124,8 @@ session 소유자는 기존 경로를 유지한 채 남는다 — 두 경로가 
 - session callback을 실행하는 문맥에서 Actor handler가 실행되지 않는다.
 - 연결 유지 신호가 업무 message 뒤에 밀리지 않는다.
 - 직렬 실행 원시 타입이 runtime 안에서 하나다.
-- 연결 교체에서 이전 owner의 확인이 오기 전에는 완료 응답이 돌아가지 않는다.
+- 연결 교체는 새 binding을 current로 등록하면 완료되며 이전 owner의 ACK를 기다리지 않는다.
+- 이전 exact session callback terminal 100 ms 뒤 Framework가 connection을 닫는다.
 - 완료 응답을 받기 전까지 session 소유자가 기존 경로로 message를 보낸다.
 - 이전 연결로 늦게 도착한 응답이 교체 순번 비교로 걸러진다.
 - client가 재접속하면 이전 연결 관계가 복원되지 않는다.

@@ -9,22 +9,24 @@ namespace
 /* ST-A1: this file owns the scenario orchestration and its public assertions. */
 inline void scenario_runner_t::run_st_a1_scenario ()
 {
-    const auto spot_id = "spot-local-ok-" + unique_suffix ();
+    const auto spot_base = "spot-local-ok-" + unique_suffix ();
     const auto node_a_store_before =
       get_relocation_store_activity (_nodes.a);
-    const auto spot = create_spot (_nodes.a, spot_id);
-    const auto actor_id = "actor-local-ok-" + unique_suffix ();
-    const auto actor =
-      create_actor (_nodes.a, actor_id, e2e::actor_type_stateful, 11);
-    require (
-      actor.node_rid == spot.node_rid,
-      "ST-A1 could not obtain a Framework-selected Actor and Spot on the same owner");
+    const auto spot = create_spot_until_placed_on (
+      _nodes.a, spot_base, "actor-a");
+    const auto actor_base = "actor-local-ok-" + unique_suffix ();
+    const auto actor = create_actor_until_placed_on (
+      _nodes.a, actor_base, e2e::actor_type_stateful, 11,
+      "actor-a");
+    const auto &spot_id = spot.spot_id;
+    const auto &actor_id = actor.actor_id;
     const auto source_ref = get_actor_ref (_nodes.a, actor_id);
-    auto &owner =
-      spot.node_rid == "actor-a" ? _nodes.a : _nodes.b;
+    auto &owner = _nodes.a;
 
     const auto join = join_actor (owner, actor_id, {"ST-A1", spot_id});
-    require (join.accepted, "ST-A1 join was rejected.");
+    require (join.accepted, "ST-A1 deferred Join was not submitted.");
+    wait_evidence (
+      owner, {"ST-A1|" + actor_id + "|join_completion_accepted|"});
 
     const auto probe = probe_actor (owner, actor_id, {"ST-A1", "after-joined"});
     require (probe.node_rid == spot.node_rid,

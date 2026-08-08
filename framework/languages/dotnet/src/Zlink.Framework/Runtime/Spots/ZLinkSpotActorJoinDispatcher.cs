@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Zlink.Framework.Runtime.Identifiers;
 
 namespace Zlink.Framework.Runtime.Spots;
 
@@ -36,7 +37,12 @@ internal sealed class ZLinkSpotActorJoinDispatcher(
             return;
         }
 
-        if (!actors.TryGetActor(joinRequest.TargetActor.ActorId, out var actor) || actor is null)
+        if (!actors.TryGetActor(
+                ZLinkActorId.FromBoundary(
+                    joinRequest.TargetActor.ActorId,
+                    nameof(joinRequest)),
+                out var actor)
+            || actor is null)
             actor = runtime.GetOrCreateActorState(joinRequest.TargetActor.ActorId).Actor;
 
         if (actor is null)

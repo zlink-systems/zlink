@@ -15,7 +15,7 @@ listener와 descriptor를 정리한다.
 | CH-E2E-04A | 구현 | weight `100:300`에서 800개 request의 weight-300 선택 비율을 확인한다. |
 | CH-E2E-04B | 구현 | A의 수락된 hold request를 public evidence로 확인하고 host shutdown을 시작한 뒤, A의 완료와 B만 선택되는 신규 50개를 확인한다. |
 | CH-E2E-04C | 구현 | 같은 endpoint의 server process를 재시작하고 새 lifecycle marker를 포함한 첫 request를 확인한다. |
-| CH-E2E-05 | 구현 | Server-only process의 ClientServer request 거부와 정상 Client process의 성공을 확인한다. |
+| CH-E2E-05 | 구현 | Server-only process의 ClientServer request가 `NotConfigured`로 끝나는지, 정상 Client process의 request가 성공하는지 확인한다. 정상 Client의 마지막 ready target을 제거한 뒤에는 같은 request가 `NotFound`로 끝나는지도 이어서 확인한다. |
 | CH-E2E-06 | 구현 | duplicate Client role 등록 process가 startup configuration error로 종료되는지 확인한다. |
 | CH-E2E-07A | 구현 | 등록하지 않은 ChannelName request가 bounded failure로 끝나는지 확인한다. |
 | CH-E2E-07B | 구현 | RouteMesh API channel의 양방향 peer topology와 request를 확인한다. |
@@ -29,3 +29,6 @@ listener와 descriptor를 정리한다.
 runner는 Redis location store를 scenario별 key prefix로 격리하고, role process의 health와 public
 evidence를 확인한 뒤 client runner를 실행한다. 각 scenario는
 `framework/languages/cpp/e2e/ChannelEgressRouting/run_e2e.sh`에서 독립적으로 실행할 수 있다.
+CH-E2E-05의 오류 종류 회귀는
+`framework/languages/cpp/e2e/ChannelEgressRouting/logs/20260808-013425-618773`에서
+server-only `errorKind=3`, 정상 request 성공, target 제거 후 `errorKind=0`을 기록했다.

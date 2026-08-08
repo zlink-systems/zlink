@@ -89,8 +89,8 @@ public sealed partial class UnhandledDispatchPolicyTests
         subscriberB.Connect(endpoint);
         subscriberA.SetSubscription("events.child");
         subscriberB.SetSubscription("events.child");
-        spotA.SubscribeHandler = subscriberA.TryReceive;
-        spotB.SubscribeHandler = subscriberB.TryReceive;
+        spotA.SubscribeHandler = storage => subscriberA.Subscribe(storage, RecvFlags.DontWait);
+        spotB.SubscribeHandler = storage => subscriberB.Subscribe(storage, RecvFlags.DontWait);
 
         var header = new ZLinkEnvelopeHeader(
             ZLinkMessageKind.Publish,
@@ -120,7 +120,7 @@ public sealed partial class UnhandledDispatchPolicyTests
                     null);
                 try
                 {
-                    publisher.Publish("events.child", parts, SendFlags.None);
+                    publisher.Publish("events.child").Messages(parts).Submit();
                 }
                 finally
                 {
@@ -443,14 +443,14 @@ public sealed partial class UnhandledDispatchPolicyTests
                 null);
             try
             {
-                publisher.Publish("events", parts, SendFlags.None);
+                publisher.Publish("events").Messages(parts).Submit();
             }
             finally
             {
                 ZLinkMessageParts.DisposeAll(parts);
             }
 
-            if (subscriber.TryReceive(topicMessage))
+            if (subscriber.Subscribe(topicMessage, RecvFlags.DontWait))
             {
                 received = true;
                 break;
@@ -639,7 +639,7 @@ public sealed partial class UnhandledDispatchPolicyTests
     }
 
     private static async Task<Received> ReceiveAsync(
-        ZLinkBackendRouterSocketWrapper router,
+        IRouterSocket router,
         TimeSpan timeout)
     {
         var deadline = DateTime.UtcNow + timeout;
@@ -684,7 +684,7 @@ public sealed partial class UnhandledDispatchPolicyTests
         publisher.Bind(endpoint);
         subscriber.Connect(endpoint);
         subscriber.SetSubscription("events");
-        nativeSpot.SubscribeHandler = subscriber.TryReceive;
+        nativeSpot.SubscribeHandler = storage => subscriber.Subscribe(storage, RecvFlags.DontWait);
 
         var header = new ZLinkEnvelopeHeader(
             ZLinkMessageKind.Publish,
@@ -727,7 +727,7 @@ public sealed partial class UnhandledDispatchPolicyTests
                 var parts = CreateParts();
                 try
                 {
-                    publisher.Publish("events.child", parts, SendFlags.None);
+                    publisher.Publish("events.child").Messages(parts).Submit();
                 }
                 finally
                 {

@@ -1,4 +1,5 @@
 using Zlink.Framework.Runtime.Diagnostics;
+using Zlink.Framework.Runtime.Identifiers;
 
 namespace Zlink.Framework.Runtime.Locations;
 
@@ -35,12 +36,12 @@ internal sealed class ZLinkAutoConnectReconciler
     private readonly ZLinkLocationOptions _options;
     private readonly TimeProvider _time;
     private readonly SemaphoreSlim _reconcileGate = new(1, 1);
-    private readonly Dictionary<string, ZLinkAutoConnectTarget> _active = new(StringComparer.Ordinal);
-    private Dictionary<string, ZLinkAutoConnectTarget> _lastDesired = new(StringComparer.Ordinal);
-    private volatile Dictionary<string, ZLinkRouteMeshTargetClassification>?
+    private readonly Dictionary<RoutingId, ZLinkAutoConnectTarget> _active = [];
+    private Dictionary<RoutingId, ZLinkAutoConnectTarget> _lastDesired = [];
+    private volatile Dictionary<RoutingId, ZLinkRouteMeshTargetClassification>?
         _meshTargets;
     private volatile ZLinkRouteMeshPeerIdentity[]? _meshPeers;
-    private volatile HashSet<string> _retainedMemberRids = new(StringComparer.Ordinal);
+    private volatile HashSet<RoutingId> _retainedMemberRids = [];
     private readonly bool _retainRemovedMembers;
     private ulong _localGeneration;
     private ulong _localRevision;
@@ -56,8 +57,8 @@ internal sealed class ZLinkAutoConnectReconciler
     private long _pendingLocalWeight = -1;
     private long _pendingPlacementWeight = -1;
     private long _pendingActivationConcurrency = -1;
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, int>
-        _pendingChannelWeights = new(StringComparer.Ordinal);
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<ZLinkChannelName, int>
+        _pendingChannelWeights = new();
 
     /// <summary>
     /// <paramref name="localRow"/> is null for a dial-only capability that
@@ -104,7 +105,7 @@ internal sealed class ZLinkAutoConnectReconciler
         if (_meshTargets is not { } targets)
             return ZLinkRouteMeshTargetClassification.Unknown;
         return targets.GetValueOrDefault(
-            nodeRid.ToHex(),
+            nodeRid,
             ZLinkRouteMeshTargetClassification.Unknown);
     }
 
@@ -115,7 +116,7 @@ internal sealed class ZLinkAutoConnectReconciler
     }
 
     internal bool HasRetainedPeer(RoutingId nodeRid) =>
-        _retainRemovedMembers && _retainedMemberRids.Contains(nodeRid.ToHex());
+        _retainRemovedMembers && _retainedMemberRids.Contains(nodeRid);
 
     /// <summary>True while the last tick could not read the store. The loop
     /// must not let a change stamp skip ticks in this state.</summary>
@@ -124,7 +125,9 @@ internal sealed class ZLinkAutoConnectReconciler
     internal void SetLocalWeight(uint weight) => Volatile.Write(ref _pendingLocalWeight, weight);
 
     internal void SetLocalChannelWeight(string channelName, int weight) =>
-        _pendingChannelWeights[channelName] = weight;
+        _pendingChannelWeights[ZLinkChannelName.FromBoundary(
+            channelName,
+            nameof(channelName))] = weight;
 
     internal void SetLocalPlacementWeight(int weight) =>
         Volatile.Write(ref _pendingPlacementWeight, weight);
@@ -170,7 +173,7 @@ internal sealed class ZLinkAutoConnectReconciler
                 return true;
             if (_localRow is { } channelRow
                 && _pendingChannelWeights.Any(entry =>
-                    !channelRow.ChannelWeights.TryGetValue(entry.Key, out var current)
+                    !channelRow.ChannelWeights.TryGetValue(entry.Key.Value, out var current)
                     || current != entry.Value))
                 return true;
 
@@ -310,7 +313,7 @@ internal sealed class ZLinkAutoConnectReconciler
         {
             var pendingChannels = _pendingChannelWeights.ToArray();
             if (pendingChannels.Any(entry =>
-                    !channelRow.ChannelWeights.TryGetValue(entry.Key, out var current)
+                    !channelRow.ChannelWeights.TryGetValue(entry.Key.Value, out var current)
                     || current != entry.Value))
             {
                 _localRow = WithChannelWeights(channelRow, pendingChannels)
@@ -358,7 +361,7 @@ internal sealed class ZLinkAutoConnectReconciler
             deadline.CancelAfter(_options.OwnerLeaseRenewTimeout);
             await PublishLocalAsync(deadline.Token).ConfigureAwait(false);
             if (Volatile.Read(ref _ownerCleanupStarted) != 0) return;
-            rows = await _peers.ListLiveMeshNodesAsync(_local.MeshName, deadline.Token)
+            rows = await _peers.ListLiveMeshNodesAsync(_local.MeshName.Value, deadline.Token)
                 .ConfigureAwait(false);
             ZLinkFrameworkDebugLog.SpotDiscovery(
                 $"autoconnect_snapshot local={_local.NodeRid?.ToString() ?? "<unknown>"} "
@@ -431,19 +434,17 @@ internal sealed class ZLinkAutoConnectReconciler
         // peers that dial us out of `desired`, yet they are reachable
         // rid-addressed targets. Fail-static: a store outage keeps the
         // last snapshot because the tick returns before this point.
-        var members = new HashSet<string>(StringComparer.Ordinal);
+        var members = new HashSet<RoutingId>();
         var targets =
-            new Dictionary<string, ZLinkRouteMeshTargetClassification>(
-                StringComparer.Ordinal);
+            new Dictionary<RoutingId, ZLinkRouteMeshTargetClassification>();
         foreach (var row in rows)
         {
             if (row.Rid is not { Size: > 0 } rowRid)
                 continue;
-            var key = rowRid.ToHex();
-            members.Add(key);
+            members.Add(rowRid);
             if (_local.NodeRid is { } localRid && rowRid == localRid)
                 continue;
-            targets[key] =
+            targets[rowRid] =
                 row.ObjectRole == ZLinkMeshNodeObjectRole.Client
                     ? ZLinkRouteMeshTargetClassification.ObjectClientTarget
                     : ZLinkRouteMeshTargetClassification.RequiredNotConnected;
@@ -462,7 +463,7 @@ internal sealed class ZLinkAutoConnectReconciler
             .ToArray();
         if (_retainRemovedMembers)
         {
-            var retained = new HashSet<string>(_retainedMemberRids, StringComparer.Ordinal);
+            var retained = new HashSet<RoutingId>(_retainedMemberRids);
             retained.UnionWith(members);
             _retainedMemberRids = retained;
         }
@@ -558,7 +559,7 @@ internal sealed class ZLinkAutoConnectReconciler
         // managed and does not trigger a second dial.
         var conflicts = _active
             .Where(entry =>
-                !string.Equals(entry.Key, target.TargetKey, StringComparison.Ordinal)
+                entry.Key != target.NodeRid
                 && string.Equals(
                     entry.Value.Endpoint,
                     target.Endpoint,
@@ -584,8 +585,8 @@ internal sealed class ZLinkAutoConnectReconciler
         return true;
     }
 
-    private static Dictionary<string, ZLinkAutoConnectTarget> SelectEndpointWinners(
-        IReadOnlyDictionary<string, ZLinkAutoConnectTarget> desired)
+    private static Dictionary<RoutingId, ZLinkAutoConnectTarget> SelectEndpointWinners(
+        IReadOnlyDictionary<RoutingId, ZLinkAutoConnectTarget> desired)
     {
         var winners = new Dictionary<string, ZLinkAutoConnectTarget>(
             StringComparer.Ordinal);
@@ -609,9 +610,7 @@ internal sealed class ZLinkAutoConnectReconciler
         }
 
         return winners.Values.ToDictionary(
-            static target => target.TargetKey,
-            static target => target,
-            StringComparer.Ordinal);
+            static target => target.NodeRid);
     }
 
     private static bool SupersedesEndpointTarget(
@@ -627,7 +626,9 @@ internal sealed class ZLinkAutoConnectReconciler
         // The store normally supplies UpdatedAt and a lease generation. Keep
         // the tie deterministic for test stores or clocks with coarse
         // resolution instead of allowing two RIDs to oscillate per tick.
-        return string.CompareOrdinal(target.TargetKey, current.TargetKey) > 0;
+        return string.CompareOrdinal(
+                   target.NodeRid.ToHex(),
+                   current.NodeRid.ToHex()) > 0;
     }
 
     private void EnterStoreFailure()
@@ -639,26 +640,26 @@ internal sealed class ZLinkAutoConnectReconciler
     }
 
     private int WeightOf(ZLinkMeshNodeDescriptor row) =>
-        row.ChannelWeights.TryGetValue(_local.MeshName, out var weight) ? weight : -1;
+        row.ChannelWeights.TryGetValue(_local.MeshName.Value, out var weight) ? weight : -1;
 
     private ZLinkMeshNodeDescriptor WithWeight(ZLinkMeshNodeDescriptor row, uint weight)
     {
         var weights = new Dictionary<string, int>(row.ChannelWeights, StringComparer.Ordinal)
         {
-            [_local.MeshName] = (int)weight
+            [_local.MeshName.Value] = (int)weight
         };
         return row with { ChannelWeights = weights };
     }
 
     private static ZLinkMeshNodeDescriptor WithChannelWeights(
         ZLinkMeshNodeDescriptor row,
-        IReadOnlyList<KeyValuePair<string, int>> updates)
+        IReadOnlyList<KeyValuePair<ZLinkChannelName, int>> updates)
     {
         var weights = new Dictionary<string, int>(
             row.ChannelWeights,
             StringComparer.Ordinal);
         foreach (var update in updates)
-            weights[update.Key] = update.Value;
+            weights[update.Key.Value] = update.Value;
         return row with { ChannelWeights = weights };
     }
 

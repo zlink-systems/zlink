@@ -2,6 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import { ZLINK_ACTOR_MANAGER, ZLINK_SPOT_OUTBOUND } from '@zlink-systems/nestjs';
 import { questMissionSpotId, SampleNames } from '../../Shared/Configuration/sample-names';
 import {
+  JoinSessionReq,
   JoinSessionRes,
   PacketNames,
   getQuestProgressReq
@@ -16,9 +17,6 @@ import {
   type ZLinkSessionDispatchContext,
   type ZLinkSessionFactory
 } from '@zlink-systems/framework';
-import type {
-  JoinSessionReq
-} from '../../Shared/Contracts/messages';
 import type { GetQuestProgressRes } from '../../Shared/Contracts/messages';
 
 class GameQuestSession implements ZLinkSession {
@@ -45,7 +43,7 @@ class JoinSessionHandler {
     _dispatch: ZLinkSessionDispatchContext,
     payload: ZLinkMessage
   ): Promise<void> {
-    const request = payload.decode<JoinSessionReq>(Object as never);
+    const request = payload.decode(JoinSessionReq);
     const existing = context.actors.bound.at(0);
     if (existing !== undefined && existing.actorId !== request.playerId) {
       throw new Error(`Session is already bound to player '${existing.actorId}'.`);

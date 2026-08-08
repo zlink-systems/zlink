@@ -16,7 +16,6 @@ import java.util.function.Consumer;
 import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.channels.ZLinkMeshChannelRuntimeOptions;
-import systems.zlink.framework.channels.ZLinkMeshNodeRuntimeOptions;
 import systems.zlink.framework.channels.ZLinkMeshPlacementRuntimeOptions;
 import systems.zlink.framework.channels.ZLinkRouteMeshRuntimeOptions;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshMonitorEvent;
@@ -266,16 +265,6 @@ final class ZLinkRouteMeshRuntimeServiceTest {
 
     @Test
     void runtimeOptionsDelegatesToCoreRuntimeOptions() {
-        var nodeOptions = new ZLinkMeshNodeRuntimeOptions() {
-            @Override
-            public long maxMessageSize() {
-                return 4096;
-            }
-
-            @Override
-            public void maxMessageSize(long value) {
-            }
-        };
         var meshChannelOptions = new ZLinkMeshChannelRuntimeOptions() {
             @Override
             public int weight() {
@@ -298,11 +287,6 @@ final class ZLinkRouteMeshRuntimeServiceTest {
         };
         ZLinkRouteMeshRuntimeOptions delegate = new ZLinkRouteMeshRuntimeOptions() {
             @Override
-            public ZLinkMeshNodeRuntimeOptions meshNode(String meshName) {
-                return nodeOptions;
-            }
-
-            @Override
             public ZLinkMeshChannelRuntimeOptions channel(
                 String meshName,
                 String channelName) {
@@ -321,7 +305,6 @@ final class ZLinkRouteMeshRuntimeServiceTest {
         };
         var options = new ZLinkRouteMeshRuntimeOptionsService(() -> delegate);
 
-        assertSame(nodeOptions, options.meshNode("mesh"));
         assertSame(meshChannelOptions, options.channel("mesh", "channel"));
         assertSame(placementOptions, options.mesh("mesh"));
         assertSame(meshChannelOptions, options.channel("channel"));

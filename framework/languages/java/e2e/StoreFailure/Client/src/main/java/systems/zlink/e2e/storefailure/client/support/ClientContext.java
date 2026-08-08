@@ -4,11 +4,15 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Duration;
 import java.time.Instant;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import systems.zlink.e2e.storefailure.shared.Contracts;
 import systems.zlink.e2e.storefailure.shared.Wait;
 
@@ -232,8 +236,141 @@ public final class ClientContext implements AutoCloseable {
         }
     }
 
+    // SF-C5A: exact ID lookup and bounded page results preserve object state.
+    public void runObjectStateScenario(String scenarioName) {
+        String missingId = "sf-c5a-missing";
+        String unavailableId = "sf-c5a-unavailable";
+        String readyId = "sf-c5a-ready";
+        String creatingId = "sf-c5a-creating";
+
+        ScenarioAssert.that(!lookupObject(missingId).found(),
+            scenarioName + " missing exact lookup returned an entry");
+        createObjectStateFixture(scenarioName, unavailableId);
+        waitForObjectState(scenarioName, unavailableId, "ready");
+
+        System.out.println("scenario-control " + scenarioName + " kill-provider-a");
+        waitForObjectState(scenarioName, unavailableId, "unavailable");
+        System.out.println("scenario-control " + scenarioName + " start-provider-b");
+
+        createObjectStateFixture(scenarioName, readyId);
+        CompletableFuture<Void> creating = CompletableFuture.runAsync(
+            () -> createObjectStateFixture(scenarioName, creatingId));
+        waitForObjectState(scenarioName, creatingId, "creating");
+
+        ObjectLookup missing = lookupObject(missingId);
+        ObjectLookup unavailable = lookupObject(unavailableId);
+        ObjectLookup ready = lookupObject(readyId);
+        ObjectLookup pending = lookupObject(creatingId);
+        ScenarioAssert.that(!missing.found(), scenarioName + " missing exact lookup changed during the scenario");
+        ScenarioAssert.that("unavailable".equals(unavailable.state()),
+            scenarioName + " exact lookup did not preserve Unavailable: " + unavailable);
+        ScenarioAssert.that("ready".equals(ready.state()),
+            scenarioName + " exact lookup did not preserve Ready: " + ready);
+        ScenarioAssert.that("creating".equals(pending.state()),
+            scenarioName + " exact lookup did not preserve Creating: " + pending);
+
+        Map<String, String> page = Wait.until(
+            Duration.ofSeconds(30),
+            scenarioName + " page did not expose all object states",
+            () -> {
+                try {
+                    Map<String, String> values = readObjectLocationStates(1_000, 4);
+                    return values.keySet().containsAll(Set.of(unavailableId, readyId, creatingId))
+                        ? values : null;
+                } catch (RuntimeException error) {
+                    return null;
+                }
+            });
+        ScenarioAssert.that(!page.containsKey(missingId),
+            scenarioName + " page included the missing object");
+        ScenarioAssert.that("unavailable".equals(page.get(unavailableId)),
+            scenarioName + " page disagreed with Unavailable exact lookup: " + page);
+        ScenarioAssert.that("ready".equals(page.get(readyId)),
+            scenarioName + " page disagreed with Ready exact lookup: " + page);
+        ScenarioAssert.that("creating".equals(page.get(creatingId)),
+            scenarioName + " page disagreed with Creating exact lookup: " + page);
+        System.out.println(
+            "scenario-observation " + scenarioName
+                + " exact=unavailable:" + unavailable.state()
+                + ",ready:" + ready.state()
+                + ",creating:" + pending.state()
+                + " page=" + page);
+
+        creating.join();
+        System.out.println("scenario-control " + scenarioName + " stop-redis");
+        waitForObjectPageFailure(scenarioName);
+    }
+
+    private void createObjectStateFixture(String scenarioName, String spotId) {
+        RuntimeException lastError = null;
+        for (int attempt = 0; attempt < 300; attempt++) {
+            try {
+                Contracts.InstanceOutcome outcome = instanceRequest(
+                    new Contracts.InstanceReq(spotId, scenarioName + "-" + spotId));
+                if (outcome.succeeded()) {
+                    ScenarioAssert.that(spotId.equals(outcome.reply().spotId()),
+                        scenarioName + " object reply changed SpotId for " + spotId);
+                    return;
+                }
+                lastError = new IllegalStateException(outcome.errorKind() + ": " + outcome.errorMessage());
+            } catch (RuntimeException error) {
+                lastError = error;
+            }
+            Wait.sleep(Duration.ofMillis(100));
+        }
+        throw new IllegalStateException(
+            scenarioName + " object " + spotId + " was not admitted", lastError);
+    }
+
+    private ObjectLookup lookupObject(String spotId) {
+        try {
+            String encoded = URLEncoder.encode(spotId, StandardCharsets.UTF_8);
+            JsonNode root = JSON.readTree(
+                http.get("/location/object?kind=spot&id=" + encoded));
+            return new ObjectLookup(
+                root.path("found").asBoolean(false),
+                root.path("state").asText("").toLowerCase(java.util.Locale.ROOT));
+        } catch (Exception error) {
+            throw new IllegalStateException("SF-C5A exact object lookup failed for " + spotId, error);
+        }
+    }
+
+    private void waitForObjectState(String scenarioName, String spotId, String expected) {
+        ObjectLookup last = null;
+        for (int attempt = 0; attempt < 300; attempt++) {
+            try {
+                last = lookupObject(spotId);
+                if (expected.equals(last.state())) {
+                    return;
+                }
+            } catch (RuntimeException ignored) {
+                // The authority row can be transient while a provider is changing state.
+            }
+            Wait.sleep(Duration.ofMillis(100));
+        }
+        throw new IllegalStateException(
+            scenarioName + " " + spotId + " did not become " + expected + "; last=" + last);
+    }
+
+    private void waitForObjectPageFailure(String scenarioName) {
+        for (int attempt = 0; attempt < 150; attempt++) {
+            try {
+                readObjectLocationStates(1_000, 4);
+            } catch (RuntimeException expected) {
+                return;
+            }
+            Wait.sleep(Duration.ofMillis(100));
+        }
+        throw new IllegalStateException(
+            scenarioName + " Store failure returned a partial successful page");
+    }
+
     private Set<String> readObjectLocationIds(int pageSize, int expectedCount) {
-        Set<String> observed = new HashSet<>();
+        return readObjectLocationStates(pageSize, expectedCount).keySet();
+    }
+
+    private Map<String, String> readObjectLocationStates(int pageSize, int expectedCount) {
+        Map<String, String> observed = new java.util.LinkedHashMap<>();
         String continuation = null;
         int pages = 0;
         do {
@@ -253,8 +390,11 @@ public final class ClientContext implements AutoCloseable {
                         "SF-C5 returned a non-positive object generation");
                     ScenarioAssert.that(Contracts.LEASE_PROBE_SPOT_TYPE.equals(item.path("stableType").asText()),
                         "SF-C5 returned an object with the wrong stable type");
-                    ScenarioAssert.that(observed.add(globalId),
+                    ScenarioAssert.that(!observed.containsKey(globalId),
                         "SF-C5 returned a duplicate object " + globalId);
+                    observed.put(
+                        globalId,
+                        item.path("state").asText("").toLowerCase(java.util.Locale.ROOT));
                 }
                 continuation = root.path("continuationToken").asText("");
                 continuation = continuation.isBlank() ? null : continuation;
@@ -262,11 +402,13 @@ public final class ClientContext implements AutoCloseable {
                 throw new IllegalStateException("SF-C5 object query response was invalid", error);
             }
             pages++;
-            ScenarioAssert.that(pages <= expectedCount,
+            ScenarioAssert.that(pages <= Math.max(expectedCount, 1) * 4,
                 "SF-C5 object query did not terminate");
         } while (continuation != null);
         return observed;
     }
+
+    private record ObjectLookup(boolean found, String state) { }
 
     public long measureStoreRead() {
         Instant started = Instant.now();

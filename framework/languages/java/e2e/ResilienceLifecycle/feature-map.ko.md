@@ -59,7 +59,7 @@ snapshot을 사용한다. 10.0.0에서는 `ZLinkRouteMeshRuntimeOptions.channel(
   observer failure가 provider process와 messaging 경로를 멈추지 않는지 후속 request와 evidence로
   확인한다. 또한 structured logger가 `zlink.runtime_error`/`observer_failed`/
   `message_flow_observer` event를 한 번 받는지 확인해야 한다.
-- `RL-D3`: 명시 `ZLinkMessageFlowObserver`가 미등록 request의 `outcome=failed`,
+- `RL-D3`: Framework standard logger가 미등록 request의 `outcome=failed`,
   `reason=no_handler`, `action=reply_error`, `packet_name` marker를 evidence에 남기고, 이후
   request가 정상 동작하는지 확인한다.
 - `RL-D4`: 같은 버전 provider/consumer 사이에서 handler 없는 request가 public error reply로

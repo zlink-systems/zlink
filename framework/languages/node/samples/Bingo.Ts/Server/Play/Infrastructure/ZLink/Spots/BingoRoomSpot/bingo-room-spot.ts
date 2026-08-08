@@ -9,6 +9,7 @@ import {
   BingoNumberDrawnNotify,
   BingoRewardAcquiredEvent,
   BingoRewardAnnouncedNotify,
+  BingoRoomJoinReq,
   BingoRoomJoinRes,
   GetPlayerRecordReq,
   ReportBingoResultReq,
@@ -41,7 +42,6 @@ import type {
   BingoRoomSettingsInput
 } from '../../../../Domain/Bingo/bingo-room-models';
 import type {
-  BingoRoomJoinReq,
   GetPlayerRecordRes,
   ReportBingoResultRes,
   SubmitBingoCardReq,
@@ -98,7 +98,7 @@ class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
 
   async onActorJoin(actorId: string, request: ZLinkMessage): Promise<ZLinkSpotActorJoinResult> {
     try {
-      const joinRequest = request.decode<BingoRoomJoinReq>(Object as never);
+      const joinRequest = request.decode(BingoRoomJoinReq);
       const joined = this.admitActor(actorId, joinRequest);
       return {
         accepted: true,

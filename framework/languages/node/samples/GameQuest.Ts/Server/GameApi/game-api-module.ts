@@ -1,4 +1,3 @@
-import { ZLinkMessageFlowLogMode } from '@zlink-systems/framework';
 import { ZLinkModule, zlinkFramework, zlinkModule } from '@zlink-systems/nestjs';
 import { SampleNames } from '../../Shared/Configuration/sample-names';
 import { createGameQuestLocationStore, gameQuestLocationOptions } from '../Configuration/location-store';
@@ -48,9 +47,7 @@ function createGameApiModule(instanceId: 'api-a' | 'api-b') {
         useFactory: (config: GameQuestServerConfig) => {
           const builder = zlinkFramework();
           builder.configureDispatch()
-            .messageFlow(ZLinkMessageFlowLogMode.KeyTransitions)
-            .traceLogFile(`${config.logDir}/flow-${instanceId}.log`)
-            .traceLabel(instanceId);
+            .messageFlow('normal');
           builder.addLocationStore(createGameQuestLocationStore(config));
           builder.addRelocationStore(createGameQuestRelocationStore(config));
           gameQuestLocationOptions(builder.configureLocations());

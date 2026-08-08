@@ -295,6 +295,16 @@ void to_json (nlohmann::json &json, const spot_actor_commit_route_request_t &val
                           {"completionRootChecksum",
                            value.completion_root_checksum},
                           {"targetSpotId", value.target_spot_id},
+                          {"targetSpotGeneration", value.target_spot_generation},
+                          {"sourceMeshName", value.source_mesh_name},
+                          {"targetMeshName", value.target_mesh_name},
+                          {"targetNodeLifecycleGeneration",
+                           value.target_node_lifecycle_generation},
+                          {"targetOwnerId", value.target_owner_id},
+                          {"targetOwnerLeaseGeneration",
+                           value.target_owner_lease_generation},
+                          {"relocationCapacityFence",
+                           value.relocation_capacity_fence},
                           {"boundSessionNodeRid", value.bound_session_node_rid},
                           {"boundSessionRid", value.bound_session_rid},
                           {"transferState", encode_base64 (value.transfer_state)},
@@ -306,8 +316,11 @@ void to_json (nlohmann::json &json, const spot_actor_commit_route_request_t &val
                           {"coreFinalSequence", value.core_final_sequence},
                           {"coreReserveMessageCount", value.core_reserve_message_count},
                           {"coreReserveByteCount", value.core_reserve_byte_count},
+                          {"finalizeTimeoutMs", value.finalize_timeout_ms},
                           {"prepare", value.prepare},
-                          {"finalize", value.finalize}};
+                          {"finalize", value.finalize},
+                          {"deferCompletion", value.defer_completion},
+                          {"completionOnly", value.completion_only}};
 }
 
 void from_json (const nlohmann::json &json, spot_actor_commit_route_request_t &value)
@@ -324,6 +337,17 @@ void from_json (const nlohmann::json &json, spot_actor_commit_route_request_t &v
     value.completion_root_checksum =
       json.value ("completionRootChecksum", std::uint32_t{0});
     value.target_spot_id = json.at ("targetSpotId").get<std::string> ();
+    value.target_spot_generation =
+      json.value ("targetSpotGeneration", std::uint64_t{0});
+    value.source_mesh_name = json.value ("sourceMeshName", "");
+    value.target_mesh_name = json.value ("targetMeshName", "");
+    value.target_node_lifecycle_generation =
+      json.value ("targetNodeLifecycleGeneration", std::uint64_t{0});
+    value.target_owner_id = json.value ("targetOwnerId", "");
+    value.target_owner_lease_generation =
+      json.value ("targetOwnerLeaseGeneration", std::uint64_t{0});
+    value.relocation_capacity_fence =
+      json.value ("relocationCapacityFence", "");
     value.bound_session_node_rid = json.value ("boundSessionNodeRid", "");
     value.bound_session_rid = json.value ("boundSessionRid", "");
     value.transfer_state = decode_base64_field (json, "transferState");
@@ -344,8 +368,12 @@ void from_json (const nlohmann::json &json, spot_actor_commit_route_request_t &v
       json.value ("coreReserveMessageCount", std::uint64_t{0});
     value.core_reserve_byte_count =
       json.value ("coreReserveByteCount", std::uint64_t{0});
+    value.finalize_timeout_ms =
+      json.value ("finalizeTimeoutMs", std::uint64_t{0});
     value.prepare = json.value ("prepare", false);
     value.finalize = json.value ("finalize", false);
+    value.defer_completion = json.value ("deferCompletion", false);
+    value.completion_only = json.value ("completionOnly", false);
 }
 
 void to_json (nlohmann::json &json, const spot_actor_join_route_request_t &value)

@@ -348,7 +348,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
         var published = true;
         foreach (var (name, spotNode) in state.SpotNodes)
         {
-            if (!Registration.SpotNodes.TryGetValue(name, out var registration))
+            if (!Registration.SpotNodes.TryGetValue(name.Value, out var registration))
                 continue;
 
             foreach (var membership in registration.ChannelMemberships)

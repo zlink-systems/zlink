@@ -31,9 +31,10 @@ type DeleteQuestProjectionRes = { deleted: boolean };
 class RebuildQuestProjectionReq {
   constructor(readonly playerId: string, readonly questId: string) {}
 }
-class ClosePlayerQuestMsg {
+class ClosePlayerQuestReq {
   constructor(readonly reason?: string) {}
 }
+type ClosePlayerQuestRes = { closed: boolean };
 type GetGameplaySnapshotReq = { playerId: string };
 type GetGameplaySnapshotRes = {
   playerId: string;
@@ -164,7 +165,7 @@ const PacketNames = {
   deleteQuestProjectionRes: 'DeleteQuestProjectionRes',
   rebuildQuestProjectionReq: 'RebuildQuestProjectionReq',
   gameplayMsg: 'GameplayMsg',
-  closePlayerQuestMsg: 'ClosePlayerQuestMsg',
+  closePlayerQuestReq: 'ClosePlayerQuestReq',
   questProgressNotify: 'QuestProgressNotify',
   questCompletedNotify: 'QuestCompletedNotify'
 } as const;
@@ -227,7 +228,8 @@ export {
   SyncQuestProgressReq,
   DeleteQuestProjectionReq,
   RebuildQuestProjectionReq,
-  ClosePlayerQuestMsg,
+  ClosePlayerQuestReq,
+  type ClosePlayerQuestRes,
   GameplayMsg,
   PacketNames,
   QuestIds,

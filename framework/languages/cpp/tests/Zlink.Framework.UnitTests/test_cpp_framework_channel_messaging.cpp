@@ -19,6 +19,7 @@
 #include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/actors/actor_route_internal_dispatcher.hpp"
 #include "runtime/diagnostics/dispatch_error_reporter.hpp"
+#include "runtime/diagnostics/dispatch_options_access.hpp"
 #include "runtime/messaging/client_call_codec.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
 #include "runtime/spots/spot_route_packets.hpp"
@@ -408,7 +409,7 @@ class reentrant_api_route_handler_t
     zlink::framework::route_client_t _routes;
 };
 
-class recording_dispatch_observer_t : public zlink::framework::message_flow_observer_t
+class recording_dispatch_observer_t
 {
   public:
     explicit recording_dispatch_observer_t (
@@ -419,7 +420,7 @@ class recording_dispatch_observer_t : public zlink::framework::message_flow_obse
     {
     }
 
-    void on_message_flow (const zlink::framework::message_flow_event_t &error) override
+    void on_message_flow (const zlink::framework::message_flow_event_t &error)
     {
         if (error.outcome != zlink::framework::message_flow_outcome_t::error) {
             return;
@@ -696,7 +697,8 @@ template <typename T> void add_int_serializer (zlink::framework::serializer_regi
       },
       [] (const zlink::framework::encoded_payload_t &payload) {
           return T{std::stoi (payload.to_string ())};
-      });
+      },
+      "application/json");
 }
 
 std::string unique_inproc_endpoint (const char *base)
@@ -1102,9 +1104,13 @@ int main ()
          + ".log");
     std::filesystem::remove (dispatch_log_path);
     zlink::framework::dispatch_options_t local_dispatch;
-    local_dispatch.set_message_flow_observer (
-      std::make_shared<recording_dispatch_observer_t> (dispatch_errors, dispatch_errors_mutex,
-                                                       dispatch_log_path));
+    auto dispatch_observer = std::make_shared<recording_dispatch_observer_t> (
+      dispatch_errors, dispatch_errors_mutex, dispatch_log_path);
+    zlink::framework::detail::dispatch_options_access_t::set_observer_for_tests (
+      local_dispatch,
+      [dispatch_observer] (const zlink::framework::message_flow_event_t &event) {
+          dispatch_observer->on_message_flow (event);
+      });
     zlink::framework::detail::apply_dispatch_options (local_server, local_dispatch);
     const auto reported_before_no_observer =
       zlink::framework::detail::dispatch_error_reporter_t::reported ();

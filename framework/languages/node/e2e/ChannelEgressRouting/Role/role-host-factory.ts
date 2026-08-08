@@ -25,7 +25,7 @@ import { ChannelEgressNames, ChannelProbeMsg, ChannelProbeReq, SpotWorkflowReq, 
 import { createChannelEgressConfiguration, CHANNEL_EGRESS_OPTIONS } from './Configuration/module';
 import { validateRoleOptions, type RoleOptions } from './Configuration/options';
 import { ChannelProbeRequestHandler, ChannelProbeSendHandler, publicErrorKind } from './Handlers/route-handlers';
-import { DispatchErrorObserver } from './Handlers/dispatch-error-observer';
+import { captureDispatchErrors } from './Handlers/dispatch-error-observer';
 import { SpotWorkflowHandler, SpotWorkflowTimerHandler } from './Handlers/spot-handlers';
 import { Config12Spot } from './Spots/config12-spot';
 import { EvidenceStore } from './Support/evidence-store';
@@ -38,6 +38,7 @@ export async function startRoleHost(): Promise<void> {
   const app = await NestFactory.createApplicationContext(RoleModule, { logger: false, abortOnError: false });
   const options = app.get(CHANNEL_EGRESS_OPTIONS) as RoleOptions;
   const evidence = app.get(EvidenceStore);
+  captureDispatchErrors(evidence);
   const state = app.get(RoleState);
   const routes = app.get(ZLINK_ROUTE_CLIENT, { strict: false }) as ZLinkRouteClient;
   const channels = app.get(ZLINK_CHANNEL_CLIENT, { strict: false }) as ZLinkChannelClient;
@@ -86,7 +87,6 @@ function createRoleModule(): Function {
         }
       },
       { provide: RoleState, useClass: RoleState },
-      DispatchErrorObserver,
       ChannelProbeRequestHandler,
       ChannelProbeSendHandler,
       SpotWorkflowHandler,
@@ -100,9 +100,7 @@ function createRoleModule(): Function {
 function buildFramework(options: RoleOptions) {
   const builder = zlinkFramework();
   builder.configureDispatch()
-    .setMessageFlowObserver(DispatchErrorObserver)
-    .traceLabel(options.rid)
-    .traceLogFile(`${options.logDir}/${options.rid}-flow.log`);
+    .messageFlow('normal');
   builder.addLocationStore(createRedisLocationStore({
     redisEndpoint: options.redisEndpoint,
     redisKeyPrefix: options.redisKeyPrefix

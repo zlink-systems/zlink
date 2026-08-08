@@ -350,6 +350,43 @@ void validate_kind (command kind)
     }
 }
 
+void append_actor_route_fence (std::vector<std::uint8_t> &bytes,
+                               const actor_route_fence_t &actor,
+                               const char *context)
+{
+    append_text8 (bytes, actor.actor_id, context);
+    append_nonzero_u64 (bytes, actor.object_generation,
+                        "Actor generation");
+    append_bytes8 (bytes, actor.target_node_routing_id,
+                   "Actor owner node RID");
+    append_nonzero_u64 (bytes, actor.target_node_generation,
+                        "Actor owner node generation");
+    append_nonzero_u64 (bytes, actor.authority_owner_generation,
+                        "Actor authority owner generation");
+    append_nonzero_u64 (bytes, actor.owner_lease_generation,
+                        "Actor owner lease generation");
+}
+
+actor_route_fence_t read_actor_route_fence (
+  std::span<const std::uint8_t> bytes,
+  std::size_t &offset,
+  const char *context)
+{
+    actor_route_fence_t actor;
+    actor.actor_id = read_text8 (bytes, offset, context);
+    actor.object_generation = read_nonzero_u64 (
+      bytes, offset, "Actor generation");
+    actor.target_node_routing_id = read_bytes8 (
+      bytes, offset, "Actor owner node RID");
+    actor.target_node_generation = read_nonzero_u64 (
+      bytes, offset, "Actor owner node generation");
+    actor.authority_owner_generation = read_nonzero_u64 (
+      bytes, offset, "Actor authority owner generation");
+    actor.owner_lease_generation = read_nonzero_u64 (
+      bytes, offset, "Actor owner lease generation");
+    return actor;
+}
+
 } // namespace
 
 std::vector<std::uint8_t> encode_node_send_header ()
@@ -527,7 +564,9 @@ std::vector<std::uint8_t> encode_actor_message_header (
   const actor_route_fence_t &target,
   wire_operation_id_t operation,
   std::optional<std::uint64_t> correlation,
-  std::uint8_t message_follow_hop_count)
+  std::uint8_t message_follow_hop_count,
+  std::optional<actor_message_header_t::bound_session_source_t>
+    bound_session_source)
 {
     if (kind != command::actorSend && kind != command::actorRequest) {
         throw service_wire_error_t ("command is not an Actor message");
@@ -539,11 +578,21 @@ std::vector<std::uint8_t> encode_actor_message_header (
         || target.object_generation == 0
         || target.target_node_generation == 0
         || target.authority_owner_generation == 0
-        || target.owner_lease_generation == 0) {
+        || target.owner_lease_generation == 0
+        || (bound_session_source
+            && (bound_session_source->session_routing_id.empty ()
+                || bound_session_source->session_routing_id.size () > 255
+                || bound_session_source->binding_generation == 0
+                || bound_session_source->session_sequence == 0))) {
         throw service_wire_error_t ("invalid Actor route fence");
     }
+    const auto flags = static_cast<std::uint8_t> (
+      bound_session_source
+        ? static_cast<std::uint8_t> (flag::boundSession)
+            | static_cast<std::uint8_t> (flag::sourceSpotId)
+        : 0);
     std::vector<std::uint8_t> result{
-      magic[0], magic[1], wire_major, static_cast<std::uint8_t> (kind), 0};
+      magic[0], magic[1], wire_major, static_cast<std::uint8_t> (kind), flags};
     if (correlation)
         append_u64 (result, *correlation);
     append_u64 (result, operation.high);
@@ -566,6 +615,12 @@ std::vector<std::uint8_t> encode_actor_message_header (
     append_u64 (result, target.target_node_generation);
     append_u64 (result, target.authority_owner_generation);
     append_u64 (result, target.owner_lease_generation);
+    if (bound_session_source) {
+        append_bytes8 (result, bound_session_source->session_routing_id,
+                       "source Session RID");
+        append_u64 (result, bound_session_source->binding_generation);
+        append_u64 (result, bound_session_source->session_sequence);
+    }
     return result;
 }
 
@@ -574,9 +629,17 @@ actor_message_header_t decode_actor_message_header (
   command expected_kind)
 {
     const auto header = decode_header (bytes);
+    const auto metadata_flag = static_cast<std::uint8_t> (flag::metadata);
+    const auto bound_session_flag = static_cast<std::uint8_t> (flag::boundSession);
+    const auto source_spot_flag = static_cast<std::uint8_t> (flag::sourceSpotId);
+    const auto allowed_flags = static_cast<std::uint8_t> (
+      metadata_flag | bound_session_flag | source_spot_flag);
+    const bool has_bound_session = (header.flags & bound_session_flag) != 0;
+    const bool has_source_spot = (header.flags & source_spot_flag) != 0;
     if ((expected_kind != command::actorSend
          && expected_kind != command::actorRequest)
-        || header.kind != expected_kind || header.flags != 0) {
+        || header.kind != expected_kind || (header.flags & ~allowed_flags) != 0
+        || has_bound_session != has_source_spot) {
         throw service_wire_error_t ("invalid Actor message header");
     }
     std::size_t offset = prefix_size;
@@ -620,6 +683,12 @@ actor_message_header_t decode_actor_message_header (
     result.target.target_node_generation = read_u64 (bytes, offset);
     result.target.authority_owner_generation = read_u64 (bytes, offset);
     result.target.owner_lease_generation = read_u64 (bytes, offset);
+    if (has_bound_session) {
+        result.bound_session_source = actor_message_header_t::bound_session_source_t{
+          read_bytes8 (bytes, offset, "source Session RID"),
+          read_nonzero_u64 (bytes, offset, "source binding generation"),
+          read_nonzero_u64 (bytes, offset, "source Session sequence")};
+    }
     if ((result.operation.high == 0 && result.operation.low == 0)
         || result.message_follow_hop_count > 8
         || result.target.object_generation == 0
@@ -630,6 +699,162 @@ actor_message_header_t decode_actor_message_header (
         throw service_wire_error_t (
           "invalid or trailing Actor route fence");
     }
+    return result;
+}
+
+std::vector<std::uint8_t> encode_bound_session_send (
+  const bound_session_send_t &record)
+{
+    std::vector<std::uint8_t> result{
+      magic[0], magic[1], wire_major,
+      static_cast<std::uint8_t> (command::boundSessionSend), 0};
+    append_actor_route_fence (result, record.actor,
+                              "bound session Actor ID");
+    append_nonzero_u64 (result, record.expected_binding_generation,
+                        "expected binding generation");
+    return result;
+}
+
+bound_session_send_t decode_bound_session_send (
+  std::span<const std::uint8_t> bytes)
+{
+    const auto header = decode_header (bytes);
+    if (header.kind != command::boundSessionSend || header.flags != 0)
+        throw service_wire_error_t (
+          "record is not a bound Session send command");
+    std::size_t offset = prefix_size;
+    bound_session_send_t result;
+    result.actor = read_actor_route_fence (
+      bytes, offset, "bound session Actor ID");
+    result.expected_binding_generation = read_nonzero_u64 (
+      bytes, offset, "expected binding generation");
+    if (offset != bytes.size ())
+        throw service_wire_error_t (
+          "bound Session send command has trailing bytes");
+    return result;
+}
+
+std::vector<std::uint8_t> encode_bound_session_bind (
+  const bound_session_bind_t &record)
+{
+    std::vector<std::uint8_t> result{
+      magic[0], magic[1], wire_major,
+      static_cast<std::uint8_t> (command::boundSessionBind), 0};
+    append_nonzero_u64 (result, record.correlation, "correlation");
+    append_actor_route_fence (result, record.actor,
+                              "bound session Actor ID");
+    append_bytes8 (result, record.session_routing_id, "Session RID");
+    const auto state = static_cast<std::uint8_t> (record.binding.state);
+    if (state != static_cast<std::uint8_t> (
+                   bound_session_binding_state_t::active)
+        && state != static_cast<std::uint8_t> (
+                   bound_session_binding_state_t::tombstone)) {
+        throw service_wire_error_t (
+          "bound Session binding state is invalid");
+    }
+    result.push_back (state);
+    append_u16 (result, sizeof (std::uint64_t));
+    append_nonzero_u64 (result, record.binding.generation,
+                        record.binding.state
+                            == bound_session_binding_state_t::active
+                          ? "binding generation"
+                          : "retired binding generation");
+    return result;
+}
+
+bound_session_bind_t decode_bound_session_bind (
+  std::span<const std::uint8_t> bytes)
+{
+    const auto header = decode_header (bytes);
+    if (header.kind != command::boundSessionBind || header.flags != 0)
+        throw service_wire_error_t (
+          "record is not a bound Session bind command");
+    std::size_t offset = prefix_size;
+    bound_session_bind_t result;
+    result.correlation = read_nonzero_u64 (bytes, offset, "correlation");
+    result.actor = read_actor_route_fence (
+      bytes, offset, "bound session Actor ID");
+    result.session_routing_id = read_bytes8 (bytes, offset, "Session RID");
+    if (offset >= bytes.size ())
+        throw service_wire_error_t (
+          "bound Session binding state is truncated");
+    const auto state = bytes[offset++];
+    if (state != static_cast<std::uint8_t> (
+                   bound_session_binding_state_t::active)
+        && state != static_cast<std::uint8_t> (
+                   bound_session_binding_state_t::tombstone)) {
+        throw service_wire_error_t (
+          "bound Session binding state is invalid");
+    }
+    const auto body_length = read_u16 (bytes, offset);
+    if (body_length != sizeof (std::uint64_t)
+        || bytes.size () - offset != body_length) {
+        throw service_wire_error_t (
+          "bound Session binding transition length is invalid");
+    }
+    result.binding.state =
+      static_cast<bound_session_binding_state_t> (state);
+    result.binding.generation = read_nonzero_u64 (
+      bytes, offset,
+      result.binding.state == bound_session_binding_state_t::active
+        ? "binding generation"
+        : "retired binding generation");
+    return result;
+}
+
+std::vector<std::uint8_t> encode_bound_session_replaced (
+  const bound_session_replaced_t &record)
+{
+    std::vector<std::uint8_t> result{
+      magic[0], magic[1], wire_major,
+      static_cast<std::uint8_t> (command::boundSessionReplaced), 0};
+    append_actor_route_fence (result, record.actor_authority,
+                              "replacement Actor ID");
+    append_bytes8 (result,
+                   record.retired_session.session_owner_node_routing_id,
+                   "retired Session owner node RID");
+    append_nonzero_u64 (
+      result, record.retired_session.session_owner_node_generation,
+      "retired Session owner node generation");
+    append_text8 (result, record.retired_session.session_owner_id,
+                  "retired Session owner ID");
+    append_nonzero_u64 (
+      result, record.retired_session.session_owner_lease_generation,
+      "retired Session owner lease generation");
+    append_bytes8 (result, record.retired_session.session_routing_id,
+                   "retired Session RID");
+    append_nonzero_u64 (
+      result, record.retired_session.retired_binding_generation,
+      "retired binding generation");
+    return result;
+}
+
+bound_session_replaced_t decode_bound_session_replaced (
+  std::span<const std::uint8_t> bytes)
+{
+    const auto header = decode_header (bytes);
+    if (header.kind != command::boundSessionReplaced || header.flags != 0)
+        throw service_wire_error_t (
+          "record is not a bound Session replaced command");
+    std::size_t offset = prefix_size;
+    bound_session_replaced_t result;
+    result.actor_authority = read_actor_route_fence (
+      bytes, offset, "replacement Actor ID");
+    result.retired_session.session_owner_node_routing_id = read_bytes8 (
+      bytes, offset, "retired Session owner node RID");
+    result.retired_session.session_owner_node_generation = read_nonzero_u64 (
+      bytes, offset, "retired Session owner node generation");
+    result.retired_session.session_owner_id = read_text8 (
+      bytes, offset, "retired Session owner ID");
+    result.retired_session.session_owner_lease_generation = read_nonzero_u64 (
+      bytes, offset, "retired Session owner lease generation");
+    result.retired_session.session_routing_id = read_bytes8 (
+      bytes, offset, "retired Session RID");
+    result.retired_session.retired_binding_generation = read_nonzero_u64 (
+      bytes, offset, "retired binding generation");
+    if (offset != bytes.size ())
+        throw service_wire_error_t (
+          "bound Session replaced command has trailing bytes");
     return result;
 }
 
@@ -2993,8 +3218,9 @@ std::vector<std::uint8_t> encode_frozen_record (
     return record.canonical_bytes;
 }
 
-frozen_record_t encode_frozen_application_record (
-  const frozen_application_record_t &record)
+frozen_record_t build_frozen_application_record (
+  const frozen_application_record_t &record,
+  bool include_canonical)
 {
     const auto kind = static_cast<std::uint8_t> (record.kind);
     const auto spot = kind == 5 || kind == 6;
@@ -3006,42 +3232,109 @@ frozen_record_t encode_frozen_application_record (
         throw service_wire_error_t (
           "typed frozen application body does not match its record kind");
     }
+    const auto source_kind = static_cast<std::uint8_t> (record.source_kind);
+    if (source_kind < 1 || source_kind > 4)
+        throw service_wire_error_t ("invalid frozen source kind");
     if (!record.metadata.empty () && !metadata_allowed (record.kind))
         throw service_wire_error_t (
           "metadata is forbidden for this frozen record kind");
 
-    std::vector<std::uint8_t> bytes{
-      static_cast<std::uint8_t> (record.kind),
-      static_cast<std::uint8_t> (record.source_kind)};
-    append_frozen_source (bytes, record);
-    append_frozen_metadata (bytes, record.metadata);
-    append_u64 (bytes, record.operation.high);
-    append_u64 (bytes, record.operation.low);
-    append_u32 (bytes, record.operation_kind);
-    if (record.reply_route_id) {
-        if (*record.reply_route_id == 0)
-            throw service_wire_error_t ("frozen reply route ID is zero");
-        append_u16 (bytes, 8);
-        append_u64 (bytes, *record.reply_route_id);
+    std::vector<std::uint8_t> bytes;
+    if (include_canonical) {
+        bytes = {
+          static_cast<std::uint8_t> (record.kind),
+          static_cast<std::uint8_t> (record.source_kind)};
+        append_frozen_source (bytes, record);
+        append_frozen_metadata (bytes, record.metadata);
+        append_u64 (bytes, record.operation.high);
+        append_u64 (bytes, record.operation.low);
+        append_u32 (bytes, record.operation_kind);
+        if (record.reply_route_id) {
+            if (*record.reply_route_id == 0)
+                throw service_wire_error_t ("frozen reply route ID is zero");
+            append_u16 (bytes, 8);
+            append_u64 (bytes, *record.reply_route_id);
+        }
+        else {
+            append_u16 (bytes, 0);
+        }
+        if (spot) {
+            const auto &body = std::get<frozen_spot_application_body_t> (
+              record.body);
+            append_frozen_spot_route (bytes, body);
+            const auto application = encode_application_payload (body.application);
+            bytes.insert (bytes.end (), application.begin (), application.end ());
+        }
+        else {
+            const auto &body = std::get<frozen_actor_application_body_t> (
+              record.body);
+            append_frozen_actor_route (bytes, body);
+            const auto application = encode_application_payload (body.application);
+            bytes.insert (bytes.end (), application.begin (), application.end ());
+        }
     }
-    else {
-        append_u16 (bytes, 0);
-    }
+    /* The typed input has already passed the route and payload checks above.
+     * Build the decoded summary directly instead of parsing the canonical
+     * bytes that this function just produced. This keeps the wire codec's
+     * canonical bytes as the relocation representation while avoiding an
+     * encode/decode round trip on every accepted application message. */
+    frozen_record_t result;
+    result.kind = record.kind;
+    result.source_kind = record.source_kind;
+    result.source = record.source;
+    result.source_spot_id = record.source_spot_id;
+    result.source_actor = record.source_actor;
+    result.source_session_routing_id = record.source_session_routing_id;
+    result.source_binding_generation = record.source_binding_generation;
+    result.source_session_sequence = record.source_session_sequence;
+    result.has_metadata = !record.metadata.empty ();
+    result.operation = record.operation;
+    result.operation_kind = record.operation_kind;
+    result.reply_route_id = record.reply_route_id;
     if (spot) {
         const auto &body = std::get<frozen_spot_application_body_t> (
           record.body);
-        append_frozen_spot_route (bytes, body);
-        const auto application = encode_application_payload (body.application);
-        bytes.insert (bytes.end (), application.begin (), application.end ());
+        result.target = frozen_target_identity_t{
+          relocation_object_kind_t::user_spot,
+          body.target.spot_id,
+          body.target.object_generation,
+          body.target.target_node_routing_id,
+          body.target.target_node_generation,
+          body.target.authority_owner_generation,
+          body.expected_owner_lease_generation};
+        result.application = body.application;
     }
     else {
         const auto &body = std::get<frozen_actor_application_body_t> (
           record.body);
-        append_frozen_actor_route (bytes, body);
-        const auto application = encode_application_payload (body.application);
-        bytes.insert (bytes.end (), application.begin (), application.end ());
+        result.target = frozen_target_identity_t{
+          relocation_object_kind_t::actor,
+          body.target.actor_id,
+          body.target.object_generation,
+          body.target.target_node_routing_id,
+          body.target.target_node_generation,
+          body.target.authority_owner_generation,
+          body.target.owner_lease_generation};
+        result.application = body.application;
     }
-    return decode_frozen_record (bytes);
+    const frozen_body_validation_t body{
+      std::nullopt, result.target, result.application};
+    validate_operation_matrix (result, body);
+    if (include_canonical)
+        result.canonical_bytes = std::move (bytes);
+    return result;
+}
+
+frozen_record_t encode_frozen_application_record (
+  const frozen_application_record_t &record)
+{
+    return build_frozen_application_record (record, true);
+}
+
+frozen_record_t summarize_frozen_application_record (
+  const frozen_application_record_t &record)
+{
+    return build_frozen_application_record (record, false);
 }
 
 std::vector<std::uint8_t> encode_instance_spot_activation_header (
@@ -3758,6 +4051,72 @@ application_payload_hwm_bytes (const application_payload_t &payload)
     return application_bytes;
 }
 
+std::size_t
+application_payload_hwm_bytes (std::span<const std::uint8_t> bytes)
+{
+    if (bytes.size () < 5
+        || (bytes[0] != application_payload_version
+            && bytes[0] != application_payload_flow_version)) {
+        throw service_wire_error_t ("invalid application payload version");
+    }
+    const auto has_flow = bytes[0] == application_payload_flow_version;
+    std::size_t offset = 1;
+    const auto body_length = read_u32 (bytes, offset);
+    if (body_length != bytes.size () - offset) {
+        throw service_wire_error_t (
+          "application payload body length does not match frame");
+    }
+    const auto body = bytes.subspan (offset, body_length);
+    std::size_t body_offset = 0;
+    const auto packet_name = read_text8 (body, body_offset, "packet name");
+    const auto content_type = read_text8 (body, body_offset, "content type");
+    const auto payload_length = read_u32 (body, body_offset);
+    if (payload_length > body.size () - body_offset) {
+        throw service_wire_error_t (
+          "application payload length does not match frame");
+    }
+    const auto application = body.subspan (body_offset, payload_length);
+    body_offset += payload_length;
+    if (has_flow) {
+        const auto flow_id = read_text8 (body, body_offset, "flow id");
+        if (!valid_flow_id (flow_id) || body_offset >= body.size ()
+            || !valid_flow_origin (body[body_offset])) {
+            throw service_wire_error_t ("application payload flow context is invalid");
+        }
+        ++body_offset;
+    }
+    if (body_offset != body.size ()) {
+        throw service_wire_error_t (
+          "application payload has trailing fields");
+    }
+    if (packet_name != framework_multipart_packet_name
+        || content_type != framework_multipart_content_type) {
+        return payload_length;
+    }
+
+    std::size_t multipart_offset = 0;
+    const auto count = read_u32 (application, multipart_offset);
+    if (count == 0
+        || count > (application.size () - multipart_offset) / sizeof (std::uint32_t)) {
+        throw service_wire_error_t ("framework multipart part count is invalid");
+    }
+    std::size_t application_bytes = 0;
+    for (std::uint32_t index = 0; index != count; ++index) {
+        const auto part_bytes = read_u32 (application, multipart_offset);
+        if (part_bytes > application.size () - multipart_offset) {
+            throw service_wire_error_t ("framework multipart part is truncated");
+        }
+        if (index + 1 == count)
+            application_bytes = part_bytes;
+        multipart_offset += part_bytes;
+    }
+    if (multipart_offset != application.size ()) {
+        throw service_wire_error_t (
+          "framework multipart payload has trailing bytes");
+    }
+    return application_bytes;
+}
+
 std::vector<std::uint8_t> encode_route_mesh_admission (
   command kind,
   const mesh::service_node_descriptor_t &descriptor)
@@ -3774,7 +4133,6 @@ std::vector<std::uint8_t> encode_route_mesh_admission (
     std::vector<std::uint8_t> route;
     append_text8 (route, descriptor.mesh_name, "mesh name");
     append_text8 (route, descriptor.security_identity, "security identity");
-    append_u32 (route, descriptor.effective_max_message_bytes);
     append_u64 (route, descriptor.lifecycle_generation);
     append_u64 (route, descriptor.descriptor_revision);
     append_text16 (route, descriptor.advertised_endpoint,
@@ -3864,7 +4222,6 @@ mesh::service_node_descriptor_t decode_route_mesh_admission (
     result.mesh_name = read_text8 (bytes, offset, "mesh name");
     result.security_identity =
       read_text8 (bytes, offset, "security identity");
-    result.effective_max_message_bytes = read_u32 (bytes, offset);
     result.lifecycle_generation = read_u64 (bytes, offset);
     result.descriptor_revision = read_u64 (bytes, offset);
     result.advertised_endpoint =

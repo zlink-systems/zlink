@@ -87,9 +87,9 @@ class ServerApplication {
             options.useFilter(FirstOrderFilter::class.java)
             options.useFilter(SecondOrderFilter::class.java)
             options.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile("${serverOptions.logDir}/server-flow.log")
-                .traceLabel("kotlin-rc-server")
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL)
+
+
             options.addHandlersFromPackageOf(AutoRequestHandler::class.java)
             val endpoint = java.net.URI.create(serverOptions.serverEndpoint)
             val channel = options.addClientServerChannel(Contracts.CHANNEL)

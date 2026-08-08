@@ -120,6 +120,11 @@ class stream_runtime_t
       packet_stream_session_t &session,
       stream_t &stream,
       async_dispatch_completion_t completion = {}) const;
+    result_t<void> dispatch_actor_binding_replaced_async (
+      packet_stream_session_t &session,
+      stream_t &stream,
+      std::string actor_id,
+      async_dispatch_completion_t completion = {}) const;
     void drain_async_dispatch (stream_t &stream) const;
     void attach_transport_writer (
       stream_t &stream,

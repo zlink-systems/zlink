@@ -5,6 +5,7 @@
 #include "runtime/messaging/envelope_codec.hpp"
 
 #include <memory>
+#include <limits>
 #include <stdexcept>
 #include <string>
 
@@ -72,7 +73,9 @@ int main ()
         return 1;
     }
     if (serializers.content_type (std::type_index (typeid (payload_t)))
-        != "application/octet-stream") {
+          != "application/octet-stream"
+        || serializers.get<payload_t> ().content_type ()
+             != "application/octet-stream") {
         return 10;
     }
 
@@ -82,16 +85,18 @@ int main ()
     }
     const auto json_encoded = serializers.get<json_payload_t> ().serialize ({77});
     const auto json_decoded = serializers.get<json_payload_t> ().deserialize (json_encoded);
-    if (json_decoded.value != 77) {
+    if (json_encoded.to_string () != R"({"value":77})"
+        || json_decoded.value != 77) {
         return 3;
     }
     if (serializers.content_type (std::type_index (typeid (json_payload_t)))
-        != "application/json") {
+          != "application/json"
+        || serializers.get<json_payload_t> ().content_type ()
+             != "application/json") {
         return 11;
     }
 
-    zlink::framework::payload_view_t view (encoded);
-    if (view.to_string () != "42") {
+    if (encoded.to_string () != "42") {
         return 4;
     }
 
@@ -134,6 +139,37 @@ int main ()
         return 13;
     }
 
+    for (const auto &invalid_json : {
+           std::string ("\xef\xbb\xbf{\"value\":1}"),
+           std::string (R"({"value":1,"value":2})"),
+           std::string (R"({"nested":{"value":1,"value":2},"value":3})")}) {
+        bool profile_rejected = false;
+        try {
+            (void) serializers.get<json_payload_t> ().deserialize (
+              zlink::framework::encoded_payload_t::from_string (invalid_json));
+        }
+        catch (const zlink::framework::framework_exception_t &error) {
+            profile_rejected =
+              error.kind () == zlink::framework::framework_error_kind_t::protocol_error;
+        }
+        if (!profile_rejected) {
+            return 14;
+        }
+    }
+
+    bool non_finite_rejected = false;
+    try {
+        (void) serializers.get<double> ().serialize (
+          std::numeric_limits<double>::infinity ());
+    }
+    catch (const zlink::framework::framework_exception_t &error) {
+        non_finite_rejected =
+          error.kind () == zlink::framework::framework_error_kind_t::protocol_error;
+    }
+    if (!non_finite_rejected) {
+        return 15;
+    }
+
     // Application codec configuration uses extensions. The extension registrar
     // installs custom serializers into the registry at startup.
     zlink::framework::serializer_registry_t config_serializers;
@@ -143,6 +179,10 @@ int main ()
     const auto custom_encoded = config_serializers.get<payload_t> ().serialize ({9});
     if (custom_encoded.to_string () != "avro:9") {
         return 8;
+    }
+    if (config_serializers.get<payload_t> ().content_type ()
+        != "application/avro") {
+        return 16;
     }
     if (config_serializers.get<payload_t> ().deserialize (custom_encoded).value != 9) {
         return 9;
@@ -159,6 +199,27 @@ int main ()
     const auto custom_header = envelope.decode_header (custom_parts);
     if (!custom_header || custom_header.value ().content_type != "application/avro") {
         return 12;
+    }
+
+    // A resolved serializer owns the erased functions it invokes. Moving the
+    // registry must not leave the cached serializer pointing at the old object.
+    zlink::framework::serializer_registry_t movable_serializers;
+    movable_serializers.add<payload_t> (
+      [] (const payload_t &payload) {
+          return zlink::framework::encoded_payload_t::from_string (
+            std::to_string (payload.value));
+      },
+      [] (const zlink::framework::encoded_payload_t &payload) {
+          return payload_t{std::stoi (payload.to_string ())};
+      });
+    const auto retained_serializer = movable_serializers.get<payload_t> ();
+    auto moved_serializers = std::move (movable_serializers);
+    const auto retained_payload = retained_serializer.serialize ({31});
+    if (retained_payload.to_string () != "31"
+        || retained_serializer.deserialize (retained_payload).value != 31
+        || moved_serializers.get<payload_t> ().deserialize (retained_payload).value
+             != 31) {
+        return 14;
     }
 
     return 0;

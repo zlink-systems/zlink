@@ -1,3 +1,4 @@
+using Zlink.Framework.Runtime.Actors;
 using Zlink.Framework.Runtime.Host;
 
 namespace Zlink.Framework.UnitTests;
@@ -11,16 +12,19 @@ public sealed class RemoteRelayFrameAssemblerTests
             maxTotal: 3,
             maxPerBinding: 2);
 
-        Assert.True(admission.TryAcquire("actor-a", "binding-a"));
-        Assert.True(admission.TryAcquire("actor-a", "binding-a"));
-        Assert.False(admission.TryAcquire("actor-a", "binding-a"));
-        Assert.True(admission.TryAcquire("actor-b", "binding-b"));
-        Assert.False(admission.TryAcquire("actor-c", "binding-c"));
+        Assert.True(admission.TryAcquire(Binding("actor-a", "binding-a")));
+        Assert.True(admission.TryAcquire(Binding("actor-a", "binding-a")));
+        Assert.False(admission.TryAcquire(Binding("actor-a", "binding-a")));
+        Assert.True(admission.TryAcquire(Binding("actor-b", "binding-b")));
+        Assert.False(admission.TryAcquire(Binding("actor-c", "binding-c")));
 
-        admission.Release("actor-a", "binding-a");
-        Assert.True(admission.TryAcquire("actor-c", "binding-c"));
+        admission.Release(Binding("actor-a", "binding-a"));
+        Assert.True(admission.TryAcquire(Binding("actor-c", "binding-c")));
         admission.Clear();
-        Assert.True(admission.TryAcquire("actor-a", "binding-a"));
+        Assert.True(admission.TryAcquire(Binding("actor-a", "binding-a")));
+
+        static ZLinkSessionBindingKey Binding(string actorId, string bindingToken) =>
+            ZLinkSessionBindingKey.FromBoundary(actorId, bindingToken);
     }
 
     [Fact]

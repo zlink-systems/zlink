@@ -5,7 +5,7 @@ namespace Zlink.Framework.UnitTests;
 public sealed class BackendAdapterFactoryTests
 {
     [Fact]
-    public async Task BackendFactory_Creates_Backend_Resources_Through_Runtime_Context()
+    public async Task BackendFactory_Returns_Binding_Sockets_Through_Runtime_Context()
     {
         var factory = new ZLinkDotNetBackendAdapterFactory();
         await using var context = factory.CreateRuntimeContext();
@@ -15,13 +15,32 @@ public sealed class BackendAdapterFactoryTests
         await using var subscriber = context.CreateSubscriberSocket();
 
         Assert.IsAssignableFrom<IZLinkBackendRuntimeContext>(context);
-        Assert.IsType<ZLinkBackendDealerSocketWrapper>(dealer);
-        Assert.IsType<ZLinkBackendRouterSocketWrapper>(router);
-        Assert.IsType<ZLinkBackendPublisherSocketWrapper>(publisher);
-        Assert.IsType<ZLinkBackendSubscriberSocketWrapper>(subscriber);
+        Assert.IsAssignableFrom<IDealerSocket>(dealer);
+        Assert.IsAssignableFrom<IRouterSocket>(router);
+        Assert.IsAssignableFrom<IPubSocket>(publisher);
+        Assert.IsAssignableFrom<ISubSocket>(subscriber);
         await using var monitor = factory.CreateMonitoringAdapter().OpenSocketMonitor(dealer);
         await AssertSpotBackendAsync(context);
         await AssertStreamBackendAsync(context);
+    }
+
+    [Fact]
+    public void BackendAssembly_DoesNotRetain_PassThroughSocketPortsOrWrappers()
+    {
+        var assembly = typeof(ZLinkFrameworkRuntime).Assembly;
+        string[] removedTypes =
+        [
+            "Zlink.Framework.Runtime.Backend.Contracts.IZLinkBackendDealerSocket",
+            "Zlink.Framework.Runtime.Backend.Contracts.IZLinkBackendRouterSocket",
+            "Zlink.Framework.Runtime.Backend.Contracts.IZLinkBackendPublisherSocket",
+            "Zlink.Framework.Runtime.Backend.Contracts.IZLinkBackendSubscriberSocket",
+            "Zlink.Framework.Runtime.Backend.DotNet.Wrappers.ZLinkBackendDealerSocketWrapper",
+            "Zlink.Framework.Runtime.Backend.DotNet.Wrappers.ZLinkBackendRouterSocketWrapper",
+            "Zlink.Framework.Runtime.Backend.DotNet.Wrappers.ZLinkBackendPublisherSocketWrapper",
+            "Zlink.Framework.Runtime.Backend.DotNet.Wrappers.ZLinkBackendSubscriberSocketWrapper"
+        ];
+
+        Assert.All(removedTypes, typeName => Assert.Null(assembly.GetType(typeName)));
     }
 
     [Theory]
@@ -55,35 +74,36 @@ public sealed class BackendAdapterFactoryTests
 
         using (var request = Message.From("request"))
         {
-            Assert.True(dealer.Request(
-                request,
-                (result, parts) =>
-                {
-                    try
+            Assert.True(dealer.Request()
+                .Message(request)
+                .Timeout(TimeSpan.FromSeconds(2))
+                .Submit(
+                    (result, parts) =>
                     {
-                        if (result != RequestResult.Ok)
+                        try
                         {
-                            completion.TrySetException(new InvalidOperationException($"Request failed: {result}."));
-                            return;
-                        }
+                            if (result != RequestResult.Ok)
+                            {
+                                completion.TrySetException(new InvalidOperationException($"Request failed: {result}."));
+                                return;
+                            }
 
-                        completion.TrySetResult(Assert.Single(parts).GetString());
-                    }
-                    finally
-                    {
-                        ZLinkMessageParts.DisposeAll(parts);
-                    }
-                },
-                SendFlags.None,
-                TimeSpan.FromSeconds(2)));
+                            completion.TrySetResult(Assert.Single(parts).GetString());
+                        }
+                        finally
+                        {
+                            ZLinkMessageParts.DisposeAll(parts);
+                        }
+                    }));
         }
 
         using var received = await ReceiveAsync(router, TimeSpan.FromSeconds(2));
         using (var reply = Message.From("reply"))
             router.Reply(
-                Assert.IsType<RoutingId>(received.RoutingId),
-                Assert.IsType<ulong>(received.RequestSeq),
-                reply);
+                    Assert.IsType<RoutingId>(received.RoutingId),
+                    Assert.IsType<ulong>(received.RequestSeq))
+                .Message(reply)
+                .Submit();
 
         Assert.Equal("reply", await completion.Task.WaitAsync(TimeSpan.FromSeconds(2)));
         Assert.Null(typeof(ZLinkFrameworkRuntime).Assembly.GetType(
@@ -141,11 +161,11 @@ public sealed class BackendAdapterFactoryTests
         await using var context = factory.CreateRuntimeContext();
         await using var dealer = context.CreateDealerSocket();
 
-        Assert.Equal(ZLinkSocketConfig.DefaultPeerWeight, dealer.GetPeerWeight());
-        dealer.SetPeerWeight(0);
-        Assert.Equal(0, dealer.GetPeerWeight());
-        dealer.SetPeerWeight(ZLinkSocketConfig.DefaultPeerWeight);
-        Assert.Equal(ZLinkSocketConfig.DefaultPeerWeight, dealer.GetPeerWeight());
+        Assert.Equal(ZLinkSocketConfig.DefaultPeerWeight, dealer.Options.PeerWeight);
+        dealer.Options.PeerWeight = 0;
+        Assert.Equal(0, dealer.Options.PeerWeight);
+        dealer.Options.PeerWeight = ZLinkSocketConfig.DefaultPeerWeight;
+        Assert.Equal(ZLinkSocketConfig.DefaultPeerWeight, dealer.Options.PeerWeight);
     }
 
     [Fact]
@@ -171,7 +191,7 @@ public sealed class BackendAdapterFactoryTests
     }
 
     private static async Task<Received> ReceiveAsync(
-        IZLinkBackendRouterSocket router,
+        IRouterSocket router,
         TimeSpan timeout)
     {
         var deadline = DateTime.UtcNow + timeout;

@@ -116,9 +116,7 @@ public final class Program {
             String nodeRid = config.nodeRid();
             options.addRelocationStore(relocationStore);
             options.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile(config.logDirectory() + "/" + nodeRid + "-flow.log")
-                .traceLabel("java-atd-" + nodeRid);
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             ZLinkMeshNodeBuilder mesh = options.addRouteMesh(Contracts.SPOT_MESH)
                 .listen(config.routeEndpoint())
                 .setRoutingId(RoutingId.from(nodeRid));
@@ -142,6 +140,7 @@ public final class Program {
             if (!fanoutEndpoint.isBlank()) {
                 var fanout = options.addFanoutChannel(Contracts.OBS_FANOUT_CHANNEL);
                 if (Contracts.PLAY_NODE_A.equals(nodeRid)) {
+                    fanout.setRoutingId(RoutingId.from("atd-observability-" + nodeRid));
                     fanout.enablePublisher(fanoutEndpoint);
                 }
                 fanout.connect(fanoutEndpoint)

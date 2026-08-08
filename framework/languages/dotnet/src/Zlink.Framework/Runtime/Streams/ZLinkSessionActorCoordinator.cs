@@ -2,6 +2,7 @@ namespace Zlink.Framework.Runtime.Streams;
 
 using Microsoft.Extensions.DependencyInjection;
 using Zlink.Framework.Runtime.Actors;
+using Zlink.Framework.Runtime.Identifiers;
 
 internal sealed class ZLinkSessionActorCoordinator(
     ZLinkFrameworkRuntime runtime,
@@ -11,8 +12,7 @@ internal sealed class ZLinkSessionActorCoordinator(
     private readonly ZLinkSessionActorBindingRegistry _bindings =
         new(runtime);
     private readonly object _actorOperationGatesLock = new();
-    private readonly Dictionary<string, ActorOperationGate> _actorOperationGates =
-        new(StringComparer.Ordinal);
+    private readonly Dictionary<ZLinkActorId, ActorOperationGate> _actorOperationGates = [];
 
     public IReadOnlyCollection<IZLinkSessionActor> BoundActors => _bindings.BoundActors;
 
@@ -49,13 +49,16 @@ internal sealed class ZLinkSessionActorCoordinator(
         if (!actorDispatchEnabled)
             throw new ZLinkConfigurationException(
                 "STREAM Actor dispatch requires EnableActorDispatch().");
+        var actorId = ZLinkActorId.FromBoundary(
+            actor.ActorId,
+            nameof(actor));
         ActorOperationGate operation;
         lock (_actorOperationGatesLock)
         {
-            if (!_actorOperationGates.TryGetValue(actor.ActorId, out operation!))
+            if (!_actorOperationGates.TryGetValue(actorId, out operation!))
             {
                 operation = new ActorOperationGate();
-                _actorOperationGates.Add(actor.ActorId, operation);
+                _actorOperationGates.Add(actorId, operation);
             }
             operation.Users++;
         }
@@ -79,7 +82,7 @@ internal sealed class ZLinkSessionActorCoordinator(
             {
                 operation.Users--;
                 if (operation.Users == 0
-                    && _actorOperationGates.Remove(actor.ActorId, out var removed)
+                    && _actorOperationGates.Remove(actorId, out var removed)
                     && ReferenceEquals(removed, operation))
                     operation.Gate.Dispose();
             }
@@ -113,20 +116,26 @@ internal sealed class ZLinkSessionActorCoordinator(
                     ZLinkFrameworkErrorKind.InvalidOperation,
                     $"Actor '{existing.ActorId}' replacement lost its previous binding identity.");
             var previousIdentity = new ZLinkActorBoundSession(
-                runtime.IsStarted
-                    ? runtime.GetMeshNodeRuntime(previousEntry.MeshName)
-                        .Node.RoutingId
-                    : null,
+                previousEntry.SessionOwnerNodeRid.IsEmpty
+                    ? (runtime.IsStarted
+                        ? runtime.GetMeshNodeRuntime(previousEntry.MeshName)
+                            .Node.RoutingId
+                        : null)
+                    : previousEntry.SessionOwnerNodeRid,
                 existingActor.SessionRid,
                 previousEntry.BindingToken,
                 previousEntry.BindingGeneration,
                 previousEntry.ObjectGeneration,
                 previousEntry.AuthorityOwnerGeneration,
-                previousEntry.MeshName,
+                ZLinkMeshName.FromBoundary(
+                    previousEntry.MeshName,
+                    nameof(previousEntry.MeshName)),
                 previousEntry.TargetNodeGeneration,
                 previousEntry.OwnerLeaseGeneration,
                 previousEntry.SessionOwnerNodeGeneration,
-                previousEntry.AcceptedHighWater);
+                previousEntry.AcceptedHighWater,
+                previousEntry.SessionOwnerId,
+                previousEntry.SessionOwnerLeaseGeneration);
             IZLinkSessionActor replacement;
             try
             {
@@ -144,12 +153,14 @@ internal sealed class ZLinkSessionActorCoordinator(
                             previousIdentity.BindingToken,
                             previousIdentity.BindingGeneration,
                             previousIdentity.ObjectGeneration,
-                            previousIdentity.MeshName,
+                            previousIdentity.MeshName.Value,
                             previousIdentity.TargetNodeGeneration,
                             previousIdentity.AuthorityOwnerGeneration,
                             previousIdentity.OwnerLeaseGeneration,
                             previousIdentity.SessionOwnerNodeGeneration,
-                            previousIdentity.AcceptedHighWater),
+                            previousIdentity.AcceptedHighWater,
+                            previousIdentity.SessionOwnerId,
+                            previousIdentity.SessionOwnerLeaseGeneration),
                         cancellationToken)
                     .ConfigureAwait(false);
             }
@@ -213,10 +224,13 @@ internal sealed class ZLinkSessionActorCoordinator(
                 identity.BindingToken,
                 identity.BindingGeneration,
                 identity.AuthorityOwnerGeneration,
-                identity.MeshName,
+                identity.MeshName.Value,
                 identity.TargetNodeGeneration,
                 identity.OwnerLeaseGeneration,
                 identity.SessionOwnerNodeGeneration,
+                identity.SessionOwnerNodeRid,
+                identity.SessionOwnerId,
+                identity.SessionOwnerLeaseGeneration,
                 // Remote acknowledgement publishes the Actor owner's
                 // terminal binding. The source table must finish the
                 // matching local commit even if caller cancellation races
@@ -278,15 +292,21 @@ internal sealed class ZLinkSessionActorCoordinator(
                 actor.MeshName,
                 localGeneration,
                 localGeneration,
+                localGeneration,
+                0,
+                localSessionRid.ToHex(),
                 localGeneration);
             return new ZLinkSessionBindingIdentity(
                 localBindingToken,
                 bindingGeneration,
-                actor.MeshName,
+                ZLinkMeshName.FromBoundary(actor.MeshName, nameof(actor.MeshName)),
                 TargetNodeGeneration: localGeneration,
                 OwnerLeaseGeneration: localGeneration,
                 AuthorityOwnerGeneration: localGeneration,
-                SessionOwnerNodeGeneration: localGeneration);
+                SessionOwnerNodeGeneration: localGeneration,
+                SessionOwnerNodeRid: localSessionRid,
+                SessionOwnerId: localSessionRid.ToHex(),
+                SessionOwnerLeaseGeneration: localGeneration);
         }
         if (context.RoutingId is not { } sessionRid)
             throw new InvalidOperationException("Actor session binding requires a stream routing id.");
@@ -298,6 +318,19 @@ internal sealed class ZLinkSessionActorCoordinator(
                 ZLinkFrameworkErrorKind.InvalidOperation,
                 "Session owner lifecycle generation is unavailable.");
         var bindingToken = Guid.NewGuid().ToString("N");
+        string sessionOwnerId;
+        ulong sessionOwnerLeaseGeneration;
+        try
+        {
+            var owner = runtime.GetMeshNodeRuntime(actor.MeshName).LocalRequestSource;
+            sessionOwnerId = owner.OwnerId;
+            sessionOwnerLeaseGeneration = owner.LeaseGeneration;
+        }
+        catch (InvalidOperationException)
+        {
+            sessionOwnerId = sessionNodeRid.ToHex();
+            sessionOwnerLeaseGeneration = sessionOwnerNodeGeneration;
+        }
         var request = new ZLinkRemoteSessionBindRequest(
             actor.ActorId,
             actor.NodeRid.ToBytes().ToArray(),
@@ -309,7 +342,9 @@ internal sealed class ZLinkSessionActorCoordinator(
             actor.MeshName,
             sessionOwnerNodeGeneration,
             AcceptedHighWater: 0,
-            PreviousBinding: previousBinding);
+            PreviousBinding: previousBinding,
+            SessionOwnerId: sessionOwnerId,
+            SessionOwnerLeaseGeneration: sessionOwnerLeaseGeneration);
         // The bind confirm can race auto-discovery admission of the actor's
         // node at startup; retriable route failures retry within the request
         // timeout instead of failing the session's first authenticate.
@@ -359,11 +394,14 @@ internal sealed class ZLinkSessionActorCoordinator(
         return new ZLinkSessionBindingIdentity(
             bindingToken,
             bindingGeneration,
-            response.MeshName,
+            ZLinkMeshName.FromBoundary(response.MeshName, nameof(response.MeshName)),
             response.TargetNodeGeneration,
             response.OwnerLeaseGeneration,
             response.AuthorityOwnerGeneration,
-            sessionOwnerNodeGeneration);
+            sessionOwnerNodeGeneration,
+            sessionNodeRid,
+            sessionOwnerId,
+            sessionOwnerLeaseGeneration);
     }
 
     public IZLinkSessionActor? FindActor(string actorId)
@@ -501,7 +539,7 @@ internal sealed class ZLinkSessionActorCoordinator(
         if (actorRef.Context.RoutingId is not { } sessionRid)
             throw new InvalidOperationException("Actor session relay requires a stream routing id.");
         var route = actorRef.Route;
-        var sessionNode = runtime.GetMeshNodeRuntime(route.MeshName);
+        var sessionNode = runtime.GetMeshNodeRuntime(route.MeshName.Value);
         var sessionNodeRid = sessionNode.Node.RoutingId;
         var headerBytes = ZLinkStreamProtocolDefaults.EncodeHeader(header).ToArray();
         var bodyBytes = payload.ToArray();
@@ -544,7 +582,7 @@ internal sealed class ZLinkSessionActorCoordinator(
                 {
                     using var headerPart = Message.From(headerBytes);
                     if (!runtime.ForwardActorBoundSessionPart(
-                            route.MeshName,
+                            route.MeshName.Value,
                             target,
                             route.TargetNodeGeneration,
                             route.AuthorityOwnerGeneration,
@@ -561,7 +599,7 @@ internal sealed class ZLinkSessionActorCoordinator(
                         return false;
                     using var bodyPart = Message.From(bodyBytes);
                     return runtime.ForwardActorBoundSessionPart(
-                        route.MeshName,
+                        route.MeshName.Value,
                         target,
                         route.TargetNodeGeneration,
                         route.AuthorityOwnerGeneration,
@@ -585,7 +623,7 @@ internal sealed class ZLinkSessionActorCoordinator(
     private bool IsLocalActorRef(ZLinkSessionBindingRoute route)
     {
         if (!runtime.IsStarted) return true;
-        var local = runtime.GetMeshNodeRuntime(route.MeshName).Node;
+        var local = runtime.GetMeshNodeRuntime(route.MeshName.Value).Node;
         return route.Ref.NodeRid == local.RoutingId
                && route.TargetNodeGeneration
                == local.MeshStatus().LifecycleGeneration;
@@ -707,8 +745,11 @@ internal sealed class ZLinkSessionActorCoordinator(
 internal readonly record struct ZLinkSessionBindingIdentity(
     string BindingToken,
     ulong BindingGeneration,
-    string MeshName,
+    ZLinkMeshName MeshName,
     ulong TargetNodeGeneration,
     ulong OwnerLeaseGeneration,
     ulong AuthorityOwnerGeneration,
-    ulong SessionOwnerNodeGeneration);
+    ulong SessionOwnerNodeGeneration,
+    RoutingId SessionOwnerNodeRid = default,
+    string SessionOwnerId = "",
+    ulong SessionOwnerLeaseGeneration = 0);

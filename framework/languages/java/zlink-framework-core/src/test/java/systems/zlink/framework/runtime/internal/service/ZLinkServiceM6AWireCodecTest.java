@@ -236,7 +236,6 @@ final class ZLinkServiceM6AWireCodecTest {
                 new ZLinkServiceNodeDescriptor.Channel("orders", 100)),
             ZLinkServiceNodeDescriptor.State.SERVING,
             "service-a",
-            4 * 1024 * 1024,
             3,
             List.of(
                 ZLinkServiceNodeDescriptor.REQUIRED_CAPABILITY,

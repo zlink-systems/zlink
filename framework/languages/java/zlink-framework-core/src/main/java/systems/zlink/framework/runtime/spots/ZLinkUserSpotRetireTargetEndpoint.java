@@ -26,6 +26,7 @@ import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceRelocationWireCodec;
 import systems.zlink.framework.runtime.internal.locations
     .ZLinkServiceRelocationEnvelopeCodec;
+import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
 import systems.zlink.framework.spots.ZLinkSpot;
 
 /**
@@ -244,10 +245,20 @@ final class ZLinkUserSpotRetireTargetEndpoint
                         new IllegalArgumentException(
                             "published relocation root does not match the target Spot"));
                 }
+                Map<String, Long> actorOwnerGenerations = new java.util.HashMap<>();
+                for (var participant : request.participants()) {
+                    if (participant.objectKind()
+                            == ZLinkPlacementObjectKind.ACTOR.value()) {
+                        actorOwnerGenerations.put(
+                            participant.objectId(),
+                            root.targetOwnerGeneration(participant.authorityKey()));
+                    }
+                }
                 return staging.publishAndReplayHidden(
                     target.staged(),
                     finalRequest,
-                    productionReplayer(target, request))
+                    productionReplayer(target, request),
+                    actorOwnerGenerations)
                     .thenRun(() -> {
                         target.published().set(true);
                     });

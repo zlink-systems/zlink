@@ -13,6 +13,8 @@ import java.util.Set;
 
 /** Bounded owner-serialized mailbox with an independent infrastructure reserve. */
 public final class ZLinkServiceMailbox implements AutoCloseable {
+    private static final long RECORD_FIXED_BYTES = 96;
+    private static final long PART_FIXED_BYTES = 16;
     private final DomainState application;
     private final DomainState infrastructure;
     private long nextClaimSerial = 1;
@@ -36,16 +38,39 @@ public final class ZLinkServiceMailbox implements AutoCloseable {
         }
         DomainState domain = domain(record.domain());
         long bytes = record.retainedBytes();
-        if (domain.messages >= domain.messageBudget
-            || bytes > domain.byteBudget - domain.bytes) {
-            return false;
-        }
         OwnerQueue queue =
             domain.owners.computeIfAbsent(record.owner(), ignored -> new OwnerQueue());
-        queue.records.addLast(record.copy());
-        queue.bytes += bytes;
-        domain.messages++;
-        domain.bytes += bytes;
+        long reservedBytes;
+        long reservedMessages;
+        long nextQueueBytes;
+        long nextDomainMessages;
+        long nextDomainBytes;
+        try {
+            reservedBytes = Math.addExact(queue.bytes, queue.claimedBytes);
+            reservedMessages = Math.addExact(
+                queue.records.size(), queue.claimedMessages);
+            nextQueueBytes = Math.addExact(queue.bytes, bytes);
+            nextDomainMessages = Math.addExact(domain.messages, 1);
+            nextDomainBytes = Math.addExact(domain.bytes, bytes);
+        } catch (ArithmeticException overflow) {
+            removeUnclaimedEmptyOwner(domain, record.owner(), queue);
+            return false;
+        }
+        if (reservedMessages >= domain.messageBudget
+            || reservedBytes > domain.byteBudget
+            || bytes > domain.byteBudget - reservedBytes) {
+            if (queue.records.isEmpty() && !queue.claimed) {
+                domain.owners.remove(record.owner());
+            }
+            return false;
+        }
+        // Record owns immutable copies of all caller-provided byte arrays at
+        // construction time. Retain that owned value instead of cloning the
+        // full payload a second time on every enqueue.
+        queue.records.addLast(record);
+        queue.bytes = nextQueueBytes;
+        domain.messages = nextDomainMessages;
+        domain.bytes = nextDomainBytes;
         if (!queue.claimed && domain.indexed.add(record.owner())) {
             domain.ready.addLast(record.owner());
         }
@@ -79,9 +104,11 @@ public final class ZLinkServiceMailbox implements AutoCloseable {
                 }
                 queue.records.removeFirst();
                 queue.bytes -= nextBytes;
-                domain.messages--;
-                domain.bytes -= nextBytes;
-                bytes += nextBytes;
+                queue.claimedMessages = Math.addExact(
+                    queue.claimedMessages, 1);
+                queue.claimedBytes = Math.addExact(
+                    queue.claimedBytes, nextBytes);
+                bytes = Math.addExact(bytes, nextBytes);
                 records.add(next);
             }
             return Optional.of(new Claim(
@@ -104,6 +131,10 @@ public final class ZLinkServiceMailbox implements AutoCloseable {
         }
         queue.claimed = false;
         queue.claimSerial = 0;
+        domain.messages -= queue.claimedMessages;
+        domain.bytes -= queue.claimedBytes;
+        queue.claimedMessages = 0;
+        queue.claimedBytes = 0;
         if (queue.records.isEmpty()) {
             domain.owners.remove(claim.owner());
         } else if (domain.indexed.add(claim.owner())) {
@@ -135,6 +166,15 @@ public final class ZLinkServiceMailbox implements AutoCloseable {
             throw new IllegalStateException("mailbox claim serial is exhausted");
         }
         return nextClaimSerial++;
+    }
+
+    private static void removeUnclaimedEmptyOwner(
+        DomainState domain,
+        String owner,
+        OwnerQueue queue) {
+        if (queue.records.isEmpty() && !queue.claimed) {
+            domain.owners.remove(owner);
+        }
     }
 
     private DomainState domain(Domain value) {
@@ -177,17 +217,13 @@ public final class ZLinkServiceMailbox implements AutoCloseable {
         }
 
         long retainedBytes() {
-            return parts.stream().mapToLong(part -> part.length).sum();
-        }
-
-        Record copy() {
-            return new Record(
-                owner,
-                domain,
-                parts,
-                sourceRoutingId,
-                requestSequence,
-                correlation);
+            long bytes = RECORD_FIXED_BYTES
+                + (long) owner.length() * Character.BYTES
+                + (sourceRoutingId == null ? 0 : sourceRoutingId.length);
+            for (byte[] part : parts) {
+                bytes = Math.addExact(bytes, PART_FIXED_BYTES + part.length);
+            }
+            return bytes;
         }
 
         private static List<byte[]> copyParts(List<byte[]> values) {
@@ -235,6 +271,8 @@ public final class ZLinkServiceMailbox implements AutoCloseable {
     private static final class OwnerQueue {
         private final Deque<Record> records = new ArrayDeque<>();
         private long bytes;
+        private long claimedMessages;
+        private long claimedBytes;
         private boolean claimed;
         private long claimSerial;
     }

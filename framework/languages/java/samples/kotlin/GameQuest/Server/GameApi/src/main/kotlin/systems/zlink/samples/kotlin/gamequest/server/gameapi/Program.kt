@@ -116,9 +116,9 @@ class Program {
             options.useCoroutineHandlers(Dispatchers.Default)
             options.addHandlersFromPackageOf(Program::class.java)
             options.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile("${api.logDirectory}/flow-${api.instanceName}.log")
-                .traceLabel(api.instanceName)
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL)
+
+
             options.addRouteMesh(SampleNames.PlayerQuestMesh)
                 .setRoutingIdPrefix("gamequest-api")
                 .listen()

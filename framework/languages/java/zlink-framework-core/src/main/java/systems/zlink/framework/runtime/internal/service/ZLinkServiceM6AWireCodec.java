@@ -25,7 +25,6 @@ public final class ZLinkServiceM6AWireCodec {
         Writer route = new Writer();
         route.text8(descriptor.meshName(), "meshName");
         route.text8(descriptor.securityIdentity(), "securityIdentity");
-        route.u32(descriptor.effectiveMaxMessageBytes());
         route.u64(descriptor.lifecycleGeneration());
         route.u64(descriptor.descriptorRevision());
         route.text16(descriptor.advertisedEndpoint(), "advertisedEndpoint");
@@ -85,8 +84,6 @@ public final class ZLinkServiceM6AWireCodec {
         }
         String meshName = reader.text8("meshName");
         String securityIdentity = reader.text8("securityIdentity");
-        int effectiveMaxMessageBytes =
-            reader.positiveU32("effectiveMaxMessageBytes");
         long lifecycleGeneration = reader.nonzeroU64("lifecycleGeneration");
         long descriptorRevision = reader.nonzeroU64("descriptorRevision");
         String endpoint = reader.text16("advertisedEndpoint");
@@ -161,7 +158,6 @@ public final class ZLinkServiceM6AWireCodec {
             channels,
             state,
             securityIdentity,
-            effectiveMaxMessageBytes,
             applicationVersion,
             capabilities,
             role,

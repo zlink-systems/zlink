@@ -103,38 +103,95 @@ final class DefaultZLinkStreamSequenceCall implements ZLinkStreamSequenceCall {
             new CompletableFuture<>();
         List<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> messages = new ArrayList<>();
         Object sequenceLock = new Object();
+        AtomicReference<CompletableFuture<Void>> processingTail =
+            new AtomicReference<>(CompletableFuture.completedFuture(null));
         AutoCloseable subscription = connector.on(name, message -> {
+            CompletableFuture<Void> turn = new CompletableFuture<>();
+            CompletableFuture<Void> predecessor;
             synchronized (sequenceLock) {
-                if (result.isDone()) {
-                    message.payload().payload().close();
-                } else try {
-                    int current = messages.size();
-                    if (!predicates.get(current).test(message)) {
-                        message.payload().payload().close();
-                        result.completeExceptionally(new IllegalStateException(
-                            "Message '" + name + "' arrived out of the expected sequence."));
-                    } else {
-                        messages.add(message);
-                        if (messages.size() == predicates.size()) {
-                            result.complete(List.copyOf(messages));
-                        }
-                    }
-                } catch (RuntimeException error) {
-                    message.payload().payload().close();
-                    result.completeExceptionally(error);
-                }
+                predecessor = processingTail.getAndSet(turn);
             }
-            return CompletableFuture.completedFuture(null);
+            predecessor.whenComplete((ignored, predecessorError) ->
+                processGenericMessage(
+                    message,
+                    result,
+                    messages,
+                    sequenceLock,
+                    turn));
+            return turn;
         });
         result.whenComplete((ignored, error) -> {
             closeQuietly(subscription);
             if (error != null) {
+                List<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> pending;
                 synchronized (sequenceLock) {
-                    messages.forEach(item -> item.payload().payload().close());
+                    pending = List.copyOf(messages);
+                    messages.clear();
                 }
+                closeMessages(pending);
             }
         });
         return result.orTimeout(timeout.toMillis(), TimeUnit.MILLISECONDS);
+    }
+
+    private void processGenericMessage(
+        ZLinkStreamMessage<ZLinkStreamEncodedPayload> message,
+        CompletableFuture<List<ZLinkStreamMessage<ZLinkStreamEncodedPayload>>> result,
+        List<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> messages,
+        Object sequenceLock,
+        CompletableFuture<Void> turn) {
+        Predicate<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> predicate;
+        boolean closeBeforePredicate = false;
+        synchronized (sequenceLock) {
+            if (result.isDone()) {
+                closeBeforePredicate = true;
+                predicate = null;
+            } else {
+                predicate = predicates.get(messages.size());
+            }
+        }
+        if (closeBeforePredicate) {
+            closeMessage(message);
+            turn.complete(null);
+            return;
+        }
+
+        boolean matches;
+        try {
+            matches = predicate.test(message);
+        } catch (RuntimeException error) {
+            closeMessage(message);
+            result.completeExceptionally(error);
+            turn.complete(null);
+            return;
+        }
+
+        List<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> completed = null;
+        Throwable failure = null;
+        boolean closeCurrent = false;
+        synchronized (sequenceLock) {
+            if (result.isDone()) {
+                closeCurrent = true;
+            } else if (!matches) {
+                closeCurrent = true;
+                failure = new IllegalStateException(
+                    "Message '" + name + "' arrived out of the expected sequence.");
+            } else {
+                messages.add(message);
+                if (messages.size() == predicates.size()) {
+                    completed = List.copyOf(messages);
+                }
+            }
+        }
+        if (closeCurrent) {
+            closeMessage(message);
+        }
+        if (failure != null) {
+            result.completeExceptionally(failure);
+        } else if (completed != null) {
+            result.complete(completed);
+        }
+        turn.complete(null);
     }
 
     private void awaitNext(

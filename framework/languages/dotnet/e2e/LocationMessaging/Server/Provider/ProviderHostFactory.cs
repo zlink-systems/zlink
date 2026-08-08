@@ -79,7 +79,11 @@ internal static class ProviderHostFactory
                     .SetRoutingIdPrefix(options.Rid);
                 var profile = profileMesh.Channel("profile").Server().SetWeight(options.Weight);
                 var serverSocket = profileMesh.ConfigureRouterSocket();
-                serverSocket.ReceiveHighWaterMark = 4;
+                // Keep the native receive budget above the largest RM-C8
+                // complete message. Backpressure is exercised through the
+                // Framework application HWM, not by imposing a hidden
+                // four-byte transport limit on ordinary RouteMesh requests.
+                serverSocket.ReceiveHighWaterMark = 4UL * 1024 * 1024;
                 profile.AddRequestHandler<ProfileRequestHandler, ProfileReq, ProfileRes>("ProfileReq");
                 profile.AddRequestHandler<PayloadRequestHandler, PayloadReq, PayloadRes>("PayloadReq");
                 profile.AddSendHandler<ProfileCommandHandler, ProfileMsg>("ProfileMsg");

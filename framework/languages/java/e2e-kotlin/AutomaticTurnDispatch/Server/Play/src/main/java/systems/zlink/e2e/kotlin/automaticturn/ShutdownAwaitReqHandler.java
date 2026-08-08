@@ -23,7 +23,9 @@ public final class ShutdownAwaitReqHandler {
                 Contracts.DELAY_CHANNEL,
                 new Contracts.DelayReq(request.requestId(), request.delayMillis()))
             .timeout(Duration.ofSeconds(10))
-            .submit(Contracts.DelayRes.class)
+            // Release the Spot turn while the long delay is pending so the
+            // route-based evidence query can observe the readiness marker.
+            .yield(Contracts.DelayRes.class)
             .thenApply(reply -> {
                 evidence.record(request.requestId(), "shutdown-await-resumed", value);
                 evidence.record(request.requestId(), "shutdown-await-completed", value);
@@ -34,4 +36,3 @@ public final class ShutdownAwaitReqHandler {
             });
     }
 }
-

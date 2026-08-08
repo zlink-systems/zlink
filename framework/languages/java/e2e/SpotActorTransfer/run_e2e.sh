@@ -241,7 +241,7 @@ fi
 grep -q "spot-actor-transfer e2e result=passed" "${LOG_DIR}/client.stdout.log"
 if [[ "${SCENARIO}" == "ST-F6" ]]; then
   target_flow_found=0
-  for flow_log in "${LOG_DIR}"/actor-*-flow.log; do
+  for flow_log in "${LOG_DIR}"/actor-*.stdout.log; do
     if rg -q "outcome=RECEIVED.*kind=ACTOR_REQUEST.*packet=ProbeReq" \
         "${flow_log}"; then
       target_flow_found=1
@@ -254,7 +254,7 @@ if [[ "${SCENARIO}" == "ST-F6" ]]; then
     exit 1
   fi
   for evidence_log in "${LOG_DIR}"/actor-*.evidence.log; do
-    flow_log="${evidence_log%.evidence.log}-flow.log"
+    flow_log="${evidence_log%.evidence.log}.stdout.log"
     while IFS= read -r actor_id; do
       if rg -q "outcome=RECEIVED.*kind=ACTOR_REQUEST.*packet=ProbeReq.*actor=${actor_id}" \
           "${flow_log}"; then

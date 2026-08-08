@@ -3,6 +3,7 @@ using System.Diagnostics;
 using Zlink.Framework.Contracts.Streams;
 using Zlink.Framework.Runtime.Backend.Contracts;
 using Zlink.Framework.Runtime.Dispatch;
+using Zlink.Framework.Runtime.Identifiers;
 using Zlink.Framework.Runtime.Messaging;
 
 namespace Zlink.Framework.Runtime.Backend.DotNet;
@@ -23,7 +24,7 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
 {
     private readonly IMeshNode _node;
     private readonly ZLinkMeshCompletionTable _completions;
-    private readonly ConcurrentDictionary<string, SpotDispatchState> _spots = new();
+    private readonly ConcurrentDictionary<ZLinkSpotId, SpotDispatchState> _spots = new();
     private readonly ConcurrentDictionary<
         (RoutingId NodeRid, ulong NodeGeneration),
         ZLinkServiceWireCodec.RequestSourceFence> _requestSources = new();
@@ -86,8 +87,12 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
     // spot's dispatch state so the spot wrapper can pull decoded records.
     public SpotDispatchState RegisterSpot(string spotId)
     {
-        return _spots.GetOrAdd(spotId, static _ => new SpotDispatchState());
+        return RegisterSpot(
+            ZLinkSpotId.FromBoundary(spotId, nameof(spotId)));
     }
+
+    private SpotDispatchState RegisterSpot(ZLinkSpotId spotId) =>
+        _spots.GetOrAdd(spotId, static _ => new SpotDispatchState());
 
     internal void RekeySpot(
         string previousSpotId,
@@ -97,26 +102,32 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         ArgumentException.ThrowIfNullOrWhiteSpace(previousSpotId);
         ArgumentException.ThrowIfNullOrWhiteSpace(currentSpotId);
         ArgumentNullException.ThrowIfNull(state);
-        if (string.Equals(previousSpotId, currentSpotId, StringComparison.Ordinal))
+        var previous = ZLinkSpotId.FromBoundary(
+            previousSpotId,
+            nameof(previousSpotId));
+        var current = ZLinkSpotId.FromBoundary(
+            currentSpotId,
+            nameof(currentSpotId));
+        if (previous == current)
             return;
 
-        if (!_spots.TryGetValue(previousSpotId, out var registered)
+        if (!_spots.TryGetValue(previous, out var registered)
             || !ReferenceEquals(registered, state))
             throw new InvalidOperationException(
                 $"Spot dispatch state '{previousSpotId}' is not registered.");
-        if (_spots.TryGetValue(currentSpotId, out var existing)
+        if (_spots.TryGetValue(current, out var existing)
             && !ReferenceEquals(existing, state))
             throw new InvalidOperationException(
                 $"Spot dispatch state '{currentSpotId}' is already registered.");
 
-        if (!((ICollection<KeyValuePair<string, SpotDispatchState>>)_spots)
-                .Remove(new(previousSpotId, state)))
+        if (!((ICollection<KeyValuePair<ZLinkSpotId, SpotDispatchState>>)_spots)
+                .Remove(new(previous, state)))
             throw new InvalidOperationException(
                 $"Spot dispatch state '{previousSpotId}' could not be rekeyed.");
-        if (_spots.TryAdd(currentSpotId, state))
+        if (_spots.TryAdd(current, state))
             return;
 
-        _spots.TryAdd(previousSpotId, state);
+        _spots.TryAdd(previous, state);
         throw new InvalidOperationException(
             $"Spot dispatch state '{currentSpotId}' could not be rekeyed.");
     }
@@ -604,13 +615,14 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
             _nodeSendReadyHandler?.Invoke();
             return;
         }
-        var state = _spots.GetValueOrDefault(ready.TargetSpotId);
+        var state = _spots.GetValueOrDefault(
+            ZLinkSpotId.FromBoundary(ready.TargetSpotId, nameof(ready.TargetSpotId)));
         state?.RaiseSendReady();
     }
 
     private SpotDispatchState ResolveSpotState(string spotId)
     {
-        return _spots.GetOrAdd(spotId, static _ => new SpotDispatchState());
+        return RegisterSpot(spotId);
     }
 
     private static IReadOnlyList<Message> RetainParts(MeshReceiveBatch batch, int index)

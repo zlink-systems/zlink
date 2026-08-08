@@ -209,7 +209,14 @@ test('Spot close invokes lifecycle cleanup only after its execution seal is quie
   ]);
   await assert.rejects(
     () => serial.post(() => undefined),
-    /execution barrier is committed/
+    (error: unknown) => {
+      assert.match((error as Error).message, /execution barrier is committed/);
+      assert.equal(
+        internalFrameworkErrorKind(error as never),
+        ZLinkFrameworkInternalErrorKind.SpotMoving
+      );
+      return true;
+    }
   );
 });
 

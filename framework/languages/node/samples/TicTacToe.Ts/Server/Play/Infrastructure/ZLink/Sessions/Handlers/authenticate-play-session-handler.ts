@@ -2,6 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import { ZLINK_ACTOR_MANAGER, ZLINK_ROUTE_CLIENT } from '@zlink-systems/nestjs';
 import { SampleNames } from '../../../../../Configuration/sample-settings';
 import {
+  AuthenticateReq,
   PacketNames,
   authenticatePlayerReq,
   authenticateRes
@@ -14,7 +15,7 @@ import {
   type ZLinkSessionContext,
   type ZLinkSessionDispatchContext
 } from '@zlink-systems/framework';
-import type { AuthenticatePlayerRes, AuthenticateReq } from '../../../../../../Shared/Contracts/messages';
+import type { AuthenticatePlayerRes } from '../../../../../../Shared/Contracts/messages';
 
 @Injectable()
 @ZLinkPacket(PacketNames.authenticateReq)
@@ -26,7 +27,7 @@ class AuthenticatePlaySessionHandler {
   ) {}
 
   async handle(context: ZLinkSessionContext, _dispatch: ZLinkSessionDispatchContext, payload: ZLinkMessage): Promise<void> {
-    const request = payload.decode<AuthenticateReq>(Object as never);
+    const request = payload.decode(AuthenticateReq);
     const authenticated = await this.api
       .requestToChannel(
         SampleNames.apiChannel,

@@ -21,7 +21,7 @@ timeout 420s ./run_e2e.sh
 
 `run_e2e.sh`는 Gradle `installDist`를 실행한 뒤 role별 binary를 시작한다. Client는 framework runtime으로
 뜨지 않고 `ZLinkHttpClient`로 server role을 구동한다. 실패하면 `logs/<run-id>/` 아래 stdout, stderr,
-message flow log를 출력한다.
+role stdout에 포함된 message-flow evidence를 출력한다.
 
 codec별 content-type은 public handler context인 `ZLinkHandlerContext.contentType()`으로 확인한다.
 server handler가 request/send context의 content-type을 evidence로 남기고, client scenario가 JSON,

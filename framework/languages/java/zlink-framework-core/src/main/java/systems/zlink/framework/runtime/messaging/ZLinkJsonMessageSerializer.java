@@ -8,10 +8,8 @@ import com.fasterxml.jackson.databind.DeserializationContext;
 import com.fasterxml.jackson.databind.JsonDeserializer;
 import com.fasterxml.jackson.databind.JsonMappingException;
 import com.fasterxml.jackson.databind.JsonSerializer;
-import com.fasterxml.jackson.databind.MapperFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializerProvider;
-import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.fasterxml.jackson.databind.module.SimpleModule;
 import java.io.IOException;
 import java.util.HashSet;
@@ -22,19 +20,14 @@ import systems.zlink.framework.ZLinkEncodedPayload;
 import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.actors.ActorRef;
 import systems.zlink.framework.spots.SpotRef;
+import systems.zlink.framework.runtime.internal.json.ZLinkFrameworkJsonProfile;
 
 public final class ZLinkJsonMessageSerializer implements ZLinkMessageSerializer {
     private final ObjectMapper mapper;
 
     public ZLinkJsonMessageSerializer() {
-        this(JsonMapper.builder()
-            .configure(MapperFeature.ACCEPT_CASE_INSENSITIVE_PROPERTIES, true)
-            .configure(MapperFeature.USE_STD_BEAN_NAMING, true)
-            .findAndAddModules()
-            .addModule(routingIdModule())
-            .addModule(actorRefModule())
-            .addModule(spotRefModule())
-            .build());
+        this(ZLinkFrameworkJsonProfile.mapper(
+            routingIdModule(), actorRefModule(), spotRefModule()));
     }
 
     ZLinkJsonMessageSerializer(ObjectMapper mapper) {
@@ -51,6 +44,22 @@ public final class ZLinkJsonMessageSerializer implements ZLinkMessageSerializer 
         }
         try {
             return ZLinkEncodedPayload.from(mapper.writeValueAsBytes(value));
+        } catch (JsonProcessingException ex) {
+            throw new IllegalArgumentException(
+                "failed to serialize message as JSON: " + valueTypeName(value),
+                ex);
+        }
+    }
+
+    Message serializeOwned(Object value) {
+        if (value instanceof Message message) {
+            return Message.from(message);
+        }
+        if (value instanceof byte[] bytes) {
+            return Message.from(bytes);
+        }
+        try {
+            return Message.from(mapper.writeValueAsBytes(value));
         } catch (JsonProcessingException ex) {
             throw new IllegalArgumentException(
                 "failed to serialize message as JSON: " + valueTypeName(value),

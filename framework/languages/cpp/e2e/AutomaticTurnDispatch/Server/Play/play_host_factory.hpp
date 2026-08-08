@@ -30,6 +30,7 @@ inline void configure_play_host (zlink::framework::app_t &app,
         std::make_shared<zlink::http_client::framework_execution_turn_t> ());
     app.logging ()
       .use_file (play_options.log_dir + "/" + play_options.node_rid + ".log")
+      .use_file (play_options.log_dir + "/" + play_options.node_rid + "-flow.log")
       .set_min_level (zlink::framework::log_level_t::debug);
     app.add_zlink_framework ([=] (zlink::framework::zlink_framework_options_t &options) {
         auto evidence =
@@ -38,9 +39,7 @@ inline void configure_play_host (zlink::framework::app_t &app,
             play_options.log_dir + "/" + play_options.node_rid + ".evidence.log");
         auto *evidence_ptr = evidence.get ();
         options.configure_dispatch ()
-          .message_flow (zlink::framework::message_flow_log_mode_t::key_transitions)
-          .trace_log_file (play_options.log_dir + "/" + play_options.node_rid + "-flow.log")
-          .trace_label ("cpp-atd-" + play_options.node_rid);
+          .message_flow (zlink::framework::message_flow_log_mode_t::normal);
         options.services ()
           .add_singleton<evidence_store_t> (std::move (evidence))
           .add_transient<bind_await_actors_handler_t, evidence_store_t,

@@ -12,12 +12,12 @@ internal sealed class ZLinkClientServerRuntimeService(
     ZLinkLocationStoreHealth? storeHealth) : IZLinkClientServerRuntime
 {
     private readonly object _gate = new();
-    private readonly Dictionary<string, SequenceState> _sequences =
-        new(StringComparer.Ordinal);
+    private readonly Dictionary<ZLinkChannelName, SequenceState> _sequences = [];
 
     private ZLinkClientServerChannelSnapshot SnapshotInternal(string channelName)
     {
         ArgumentException.ThrowIfNullOrEmpty(channelName);
+        var channel = ZLinkChannelName.FromBoundary(channelName, nameof(channelName));
         var state = runtime.ClientServerMonitoringState(channelName);
         var servers = state.Client?.SnapshotConnections()
             .Where(static entry => entry.ServerRid is not null)
@@ -87,7 +87,7 @@ internal sealed class ZLinkClientServerRuntimeService(
                     + $"{entry.DescriptorRevision}|{entry.Endpoint}|"
                     + $"{entry.Weight}|{entry.Ready}|{entry.State}|"
                     + $"{entry.DescriptorSource}|{entry.LastFailure}")));
-        var sequence = Sequence(channelName, fingerprint);
+        var sequence = Sequence(channel, fingerprint);
         return new ZLinkClientServerChannelSnapshot(
             channelName,
             role,
@@ -294,7 +294,7 @@ internal sealed class ZLinkClientServerRuntimeService(
             server.State,
             reason);
 
-    private ulong Sequence(string channelName, Fingerprint fingerprint)
+    private ulong Sequence(ZLinkChannelName channelName, Fingerprint fingerprint)
     {
         lock (_gate)
         {

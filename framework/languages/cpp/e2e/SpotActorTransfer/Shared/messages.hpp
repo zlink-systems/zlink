@@ -64,6 +64,13 @@ struct join_target_req_t
     std::string expected_mode = "accept";
 };
 
+struct deferred_join_msg_t
+{
+    static constexpr const char *packet_name = "DeferredJoin";
+    std::string scenario;
+    std::string target_spot_id;
+};
+
 struct join_target_res_t
 {
     std::string scenario;
@@ -104,6 +111,7 @@ struct actor_ref_probe_req_t
     std::string scenario;
     std::string marker;
     std::string node_rid;
+    std::string actor_type;
     std::int64_t generation = 0;
     int timeout_ms = 5000;
 };
@@ -128,6 +136,18 @@ struct bind_actor_session_res_t
 {
     static constexpr const char *packet_name = "BindActorSessionRes";
     std::string scenario;
+    std::string actor_id;
+    std::string node_rid;
+    std::int64_t generation = 0;
+};
+
+struct bound_actor_ref_req_t
+{
+    static constexpr const char *packet_name = "BoundActorRefReq";
+};
+
+struct bound_actor_ref_res_t
+{
     std::string actor_id;
     std::string node_rid;
     std::int64_t generation = 0;
@@ -171,6 +191,7 @@ struct actor_ref_snapshot_res_t
 {
     std::string actor_id;
     std::string node_rid;
+    std::string actor_type;
     std::int64_t generation = 0;
 };
 
@@ -270,6 +291,17 @@ inline void from_json (const nlohmann::json &json, join_target_req_t &value)
     value.expected_mode = json.value ("expectedMode", "accept");
 }
 
+inline void to_json (nlohmann::json &json, const deferred_join_msg_t &value)
+{
+    json = {{"scenario", value.scenario}, {"targetSpotId", value.target_spot_id}};
+}
+
+inline void from_json (const nlohmann::json &json, deferred_join_msg_t &value)
+{
+    value.scenario = json.value ("scenario", "");
+    value.target_spot_id = json.value ("targetSpotId", "");
+}
+
 inline void to_json (nlohmann::json &json, const join_target_res_t &value)
 {
     json = {{"scenario", value.scenario},
@@ -341,6 +373,7 @@ inline void to_json (nlohmann::json &json, const actor_ref_probe_req_t &value)
     json = {{"scenario", value.scenario},
             {"marker", value.marker},
             {"nodeRid", value.node_rid},
+            {"actorType", value.actor_type},
             {"generation", value.generation},
             {"timeoutMs", value.timeout_ms}};
 }
@@ -350,6 +383,7 @@ inline void from_json (const nlohmann::json &json, actor_ref_probe_req_t &value)
     value.scenario = json.value ("scenario", "");
     value.marker = json.value ("marker", "");
     value.node_rid = json.value ("nodeRid", "");
+    value.actor_type = json.value ("actorType", "");
     value.generation = json.value ("generation", std::int64_t{0});
     value.timeout_ms = json.value ("timeoutMs", 5000);
 }
@@ -409,6 +443,27 @@ inline void to_json (nlohmann::json &json, const bind_actor_session_res_t &value
 inline void from_json (const nlohmann::json &json, bind_actor_session_res_t &value)
 {
     value.scenario = json.value ("scenario", "");
+    value.actor_id = json.value ("actorId", "");
+    value.node_rid = json.value ("nodeRid", "");
+    value.generation = json.value ("generation", std::int64_t{0});
+}
+
+inline void to_json (nlohmann::json &json, const bound_actor_ref_req_t &)
+{
+    json = nlohmann::json::object ();
+}
+
+inline void from_json (const nlohmann::json &, bound_actor_ref_req_t &) {}
+
+inline void to_json (nlohmann::json &json, const bound_actor_ref_res_t &value)
+{
+    json = {{"actorId", value.actor_id},
+            {"nodeRid", value.node_rid},
+            {"generation", value.generation}};
+}
+
+inline void from_json (const nlohmann::json &json, bound_actor_ref_res_t &value)
+{
     value.actor_id = json.value ("actorId", "");
     value.node_rid = json.value ("nodeRid", "");
     value.generation = json.value ("generation", std::int64_t{0});
@@ -481,6 +536,7 @@ inline void to_json (nlohmann::json &json, const actor_ref_snapshot_res_t &value
 {
     json = {{"actorId", value.actor_id},
             {"nodeRid", value.node_rid},
+            {"actorType", value.actor_type},
             {"generation", value.generation}};
 }
 
@@ -488,6 +544,7 @@ inline void from_json (const nlohmann::json &json, actor_ref_snapshot_res_t &val
 {
     value.actor_id = json.value ("actorId", "");
     value.node_rid = json.value ("nodeRid", "");
+    value.actor_type = json.value ("actorType", "");
     value.generation = json.value ("generation", std::int64_t{0});
 }
 

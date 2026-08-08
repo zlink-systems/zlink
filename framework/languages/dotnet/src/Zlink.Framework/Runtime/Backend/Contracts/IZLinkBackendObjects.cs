@@ -148,6 +148,16 @@ internal interface IZLinkBackendMessageFollowNotifications
         ZLinkServiceWireCodec.MessageFollowRecord record);
 }
 
+internal interface IZLinkBackendBoundSessionReplacementNotifications
+{
+    void SetBoundSessionReplacedNotificationHandler(
+        Action<RoutingId, ZLinkServiceWireCodec.BoundSessionReplacedRecord> handler);
+
+    bool TrySendBoundSessionReplacedNotification(
+        RoutingId targetNodeRid,
+        ZLinkServiceWireCodec.BoundSessionReplacedRecord record);
+}
+
 internal class ZLinkBackendActorJoinRequest(
     ZLinkBackendActorRef sourceActor,
     ZLinkBackendActorRef targetActor,

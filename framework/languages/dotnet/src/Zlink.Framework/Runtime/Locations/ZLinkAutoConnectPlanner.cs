@@ -1,3 +1,5 @@
+using Zlink.Framework.Runtime.Identifiers;
+
 namespace Zlink.Framework.Runtime.Locations;
 
 /// <summary>
@@ -9,7 +11,7 @@ namespace Zlink.Framework.Runtime.Locations;
 /// </summary>
 internal sealed record ZLinkAutoConnectLocal(
     ZLinkLocationAutoConnectType AutoConnectType,
-    string MeshName,
+    ZLinkMeshName MeshName,
     ZLinkLocationRole Role,
     RoutingId? NodeRid,
     string Endpoint,
@@ -21,7 +23,6 @@ internal sealed record ZLinkAutoConnectLocal(
 /// an endpoint change under the same key is treated as a handover.
 /// </summary>
 internal sealed record ZLinkAutoConnectTarget(
-    string TargetKey,
     RoutingId NodeRid,
     string Endpoint,
     string SecurityIdentity,
@@ -39,14 +40,14 @@ internal sealed record ZLinkAutoConnectTarget(
 /// </summary>
 internal static class ZLinkAutoConnectPlanner
 {
-    internal static IReadOnlyDictionary<string, ZLinkAutoConnectTarget> ComputeDesired(
+    internal static IReadOnlyDictionary<RoutingId, ZLinkAutoConnectTarget> ComputeDesired(
         ZLinkAutoConnectLocal local,
         IReadOnlyList<ZLinkMeshNodeDescriptor> descriptors)
     {
-        var desired = new Dictionary<string, ZLinkAutoConnectTarget>(StringComparer.Ordinal);
+        var desired = new Dictionary<RoutingId, ZLinkAutoConnectTarget>();
         foreach (var descriptor in descriptors)
         {
-            if (!string.Equals(descriptor.MeshName, local.MeshName, StringComparison.Ordinal)
+            if (!string.Equals(descriptor.MeshName, local.MeshName.Value, StringComparison.Ordinal)
                 || string.IsNullOrEmpty(descriptor.Endpoint)
                 || IsSelf(local, descriptor)
                 || !ShouldDial(local, descriptor))
@@ -55,7 +56,6 @@ internal static class ZLinkAutoConnectPlanner
             }
 
             var target = new ZLinkAutoConnectTarget(
-                descriptor.Rid.ToHex(),
                 descriptor.Rid,
                 descriptor.Endpoint,
                 descriptor.SecurityIdentity,
@@ -69,7 +69,7 @@ internal static class ZLinkAutoConnectPlanner
                 descriptor.LifecycleGeneration,
                 descriptor.LeaseGeneration,
                 descriptor.UpdatedAt);
-            desired[target.TargetKey] = target;
+            desired[target.NodeRid] = target;
         }
 
         return desired;
@@ -80,7 +80,7 @@ internal static class ZLinkAutoConnectPlanner
         IReadOnlyList<ZLinkMeshNodeDescriptor> descriptors)
     {
         return descriptors.Count(descriptor =>
-            string.Equals(descriptor.MeshName, local.MeshName, StringComparison.Ordinal)
+            string.Equals(descriptor.MeshName, local.MeshName.Value, StringComparison.Ordinal)
             && !string.IsNullOrEmpty(descriptor.Endpoint)
             && !IsSelf(local, descriptor));
     }

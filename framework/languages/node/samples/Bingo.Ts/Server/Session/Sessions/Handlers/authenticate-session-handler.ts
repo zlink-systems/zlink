@@ -6,6 +6,7 @@ import {
 import { SampleNames } from '../../../Configuration/sample-names';
 import {
   AuthenticatePlayerReq,
+  AuthenticateReq,
   AuthenticateRes,
   EnsurePlayerActorReq
 } from '../../../../Shared/Contracts/bingo-messages.generated';
@@ -18,10 +19,7 @@ import {
   type ZLinkSessionContext,
   type ZLinkSessionDispatchContext
 } from '@zlink-systems/framework';
-import type {
-  AuthenticatePlayerRes,
-  AuthenticateReq,
-} from '../../../../Shared/Contracts/messages';
+import type { AuthenticatePlayerRes } from '../../../../Shared/Contracts/messages';
 
 @Injectable()
 @ZLinkPacket(PacketNames.authenticateReq)
@@ -36,7 +34,7 @@ class SessionAuthenticator {
     _dispatch: ZLinkSessionDispatchContext,
     payload: ZLinkMessage
   ): Promise<void> {
-    const request = payload.decode<AuthenticateReq>(Object as never);
+    const request = payload.decode(AuthenticateReq);
     console.log(`session-auth request api actor=${request.accessToken}`);
     const authenticated = await this.zlinkClient
         .requestToChannel(

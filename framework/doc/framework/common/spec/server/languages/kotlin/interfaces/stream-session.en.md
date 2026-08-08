@@ -32,10 +32,11 @@ update is only allowed on the same ObjectGeneration. A logical notification
 also runs the exact binding callback at most once, then commits the binding as
 a tombstone and removes it after terminal. The physical STREAM connection and
 Actor/Spot membership are kept, and no new public Unbind API is provided.
-Rebind doesn't reuse an old exact binding identity for another Actor or
-generation. It registers the new identity first, then runs the old callback at
-most once and tombstones the old binding. Callback failure is recorded as
-diagnostics but doesn't remove the new binding or restore the old one. A
+Rebind completes as soon as the new identity becomes current and does not wait
+for the previous session. The previous exact session may notify the client in
+`onActorBindingReplacedSuspending(...)`. The framework closes the connection `100 ms` after the
+callback reaches a successful or failed terminal; an empty outbound queue does not shorten this delay. Callback or close failure
+doesn't remove the new binding or restore the old one. A
 same-generation relocation route update isn't a rebind and doesn't run the
 disconnect callback. After the target
 Actor is restored and starts message processing, the target runtime
@@ -48,6 +49,10 @@ request is resent at a fixed interval. The route and physical STREAM
 connection of a different Actor on the same Session that isn't included
 in the relocation target are kept. The application doesn't rebind to
 learn about relocation.
+
+| Implementation difference | Current state |
+|---|---|
+| Session Actor binding replacement | The Kotlin bridge does not yet connect the suspending callback or the non-blocking 100 ms close timer. The JVM runtime owns command 51 codec implementation. |
 
 ## STREAM Socket Message Size
 
@@ -80,6 +85,7 @@ abstract class ZLinkSuspendingSession : ZLinkSession {
     abstract override fun context(): ZLinkSessionContext
     protected open suspend fun onConnectedSuspending()
     protected open suspend fun onDisconnectedSuspending()
+    protected open suspend fun onActorBindingReplacedSuspending(actorId: String)
     protected open suspend fun onErrorSuspending(error: ZLinkStreamError)
     protected open suspend fun onDispatchSuspending(
         dispatch: ZLinkSessionDispatchContext,
@@ -134,6 +140,7 @@ public abstract class systems.zlink.framework.kotlin.ZLinkSuspendingSession impl
   public abstract systems.zlink.framework.streams.ZLinkSessionContext context();
   public final java.util.concurrent.CompletionStage<java.lang.Void> onConnected();
   public final java.util.concurrent.CompletionStage<java.lang.Void> onDisconnected();
+  public final java.util.concurrent.CompletionStage<java.lang.Void> onActorBindingReplaced(java.lang.String);
   public final java.util.concurrent.CompletionStage<java.lang.Void> onError(systems.zlink.framework.streams.ZLinkStreamError);
   public final java.util.concurrent.CompletionStage<java.lang.Void> onDispatch(systems.zlink.framework.streams.ZLinkSessionDispatchContext, systems.zlink.framework.messaging.ZLinkMessage);
 }

@@ -17,11 +17,10 @@ int main (int argc, char **argv)
     auto app = app_t::create ();
     const auto configuration = load_sample_configuration (app, argc, argv);
     const auto &topology = configuration.topology;
+    app.logging ().use_file (configuration.flow_log_path ());
     app.add_zlink_framework ([&] (zlink_framework_options_t &options) {
         options.configure_dispatch ()
-          .message_flow (message_flow_log_mode_t::key_transitions)
-          .trace_log_file (configuration.flow_log_path ())
-          .trace_label ("deliverydispatch-tracking");
+          .message_flow (message_flow_log_mode_t::normal);
         options.services ().add_singleton<evidence_store_t> (std::make_unique<evidence_store_t> (configuration.evidence_path ()));
         add_deliverydispatch_json_codecs (options.codecs ());
         add_deliverydispatch_location_store (options, topology);

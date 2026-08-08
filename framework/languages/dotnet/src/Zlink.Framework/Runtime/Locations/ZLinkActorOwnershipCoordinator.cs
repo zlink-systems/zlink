@@ -1,11 +1,12 @@
 using System.Buffers.Binary;
 using Zlink.Framework.Runtime.Actors;
+using Zlink.Framework.Runtime.Identifiers;
 
 namespace Zlink.Framework.Runtime.Locations;
 
 internal readonly record struct ZLinkCommittedActorAuthority(
     ulong AuthorityOwnerGeneration,
-    string MeshName,
+    ZLinkMeshName MeshName,
     ulong NodeGeneration,
     ulong OwnerLeaseGeneration);
 
@@ -33,7 +34,7 @@ internal sealed class ZLinkActorOwnershipCoordinator(
     private readonly object _gate = new();
     private readonly object _disposeStartGate = new();
     private readonly SemaphoreSlim _backgroundDrainGate = new(1, 1);
-    private readonly Dictionary<string, TrackedActor> _actors = new(StringComparer.Ordinal);
+    private readonly Dictionary<ZLinkActorId, TrackedActor> _actors = [];
     private readonly HashSet<TrackedActor> _trackedActors = [];
     private CancellationTokenSource _reconciliationStop = new();
     private bool _backgroundStopping;
@@ -41,9 +42,9 @@ internal sealed class ZLinkActorOwnershipCoordinator(
     private Task? _disposeTask;
 
     public async ValueTask<ZLinkActorClaimActivation<TActor>> ExecuteActorClaimThenActivateAsync<TActor>(
-        string meshName,
+        ZLinkMeshName meshName,
         string actorType,
-        string actorId,
+        ZLinkActorId actorId,
         RoutingId nodeRid,
         Func<CancellationToken, ValueTask>? deactivate,
         Func<CancellationToken, ValueTask<TActor>> activate,
@@ -96,10 +97,32 @@ internal sealed class ZLinkActorOwnershipCoordinator(
         }
     }
 
-    private async ValueTask<ZLinkActorClaimResult> ClaimActorCoreAsync(
+    // String values are accepted only at the legacy test/configuration boundary;
+    // the ownership domain itself receives typed identifiers.
+    public ValueTask<ZLinkActorClaimActivation<TActor>> ExecuteActorClaimThenActivateAsync<TActor>(
         string meshName,
         string actorType,
         string actorId,
+        RoutingId nodeRid,
+        Func<CancellationToken, ValueTask>? deactivate,
+        Func<CancellationToken, ValueTask<TActor>> activate,
+        CancellationToken cancellationToken,
+        ZLinkActorClaimMode claimMode = ZLinkActorClaimMode.NewOwner)
+        where TActor : class =>
+        ExecuteActorClaimThenActivateAsync(
+            ZLinkMeshName.FromBoundary(meshName, nameof(meshName)),
+            actorType,
+            ZLinkActorId.FromBoundary(actorId, nameof(actorId)),
+            nodeRid,
+            deactivate,
+            activate,
+            cancellationToken,
+            claimMode);
+
+    private async ValueTask<ZLinkActorClaimResult> ClaimActorCoreAsync(
+        ZLinkMeshName meshName,
+        string actorType,
+        ZLinkActorId actorId,
         RoutingId nodeRid,
         Func<CancellationToken, ValueTask>? deactivate,
         ZLinkActorClaimMode claimMode,
@@ -134,7 +157,7 @@ internal sealed class ZLinkActorOwnershipCoordinator(
         try
         {
             read = await runtime.Store.ReadAuthorityAsync(
-                    ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId),
+                    ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId.Value),
                     cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -152,9 +175,9 @@ internal sealed class ZLinkActorOwnershipCoordinator(
                 ? new ZLinkActorClaimResult(ZLinkActorClaimStatus.StoreFailure, null)
                 : new ZLinkActorClaimResult(ZLinkActorClaimStatus.Conflict, null);
 
-        if (!string.Equals(authority.ActorId, actorId, StringComparison.Ordinal)
+        if (!string.Equals(authority.ActorId, actorId.Value, StringComparison.Ordinal)
             || !string.Equals(authority.StableType, actorType, StringComparison.Ordinal)
-            || !string.Equals(authority.MeshName, meshName, StringComparison.Ordinal)
+            || !string.Equals(authority.MeshName, meshName.Value, StringComparison.Ordinal)
             || authority.NodeRid != nodeRid)
             return new ZLinkActorClaimResult(
                 ZLinkActorClaimStatus.Conflict,
@@ -170,7 +193,7 @@ internal sealed class ZLinkActorOwnershipCoordinator(
     }
 
     public async ValueTask PublishActorRefAsync(
-        string actorId,
+        ZLinkActorId actorId,
         ActorRef actorRef,
         CancellationToken cancellationToken = default)
     {
@@ -182,8 +205,17 @@ internal sealed class ZLinkActorOwnershipCoordinator(
             .ConfigureAwait(false);
     }
 
-    internal async ValueTask AdoptCommittedActorAuthorityAsync(
+    public ValueTask PublishActorRefAsync(
         string actorId,
+        ActorRef actorRef,
+        CancellationToken cancellationToken = default) =>
+        PublishActorRefAsync(
+            ZLinkActorId.FromBoundary(actorId, nameof(actorId)),
+            actorRef,
+            cancellationToken);
+
+    internal async ValueTask AdoptCommittedActorAuthorityAsync(
+        ZLinkActorId actorId,
         string actorType,
         ActorRef actorRef,
         Func<CancellationToken, ValueTask>? deactivate,
@@ -196,7 +228,7 @@ internal sealed class ZLinkActorOwnershipCoordinator(
         }
 
         var read = await runtime.Store.ReadAuthorityAsync(
-                ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId),
+                ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId.Value),
                 cancellationToken)
             .ConfigureAwait(false);
         if (read is not ZLinkAuthorityReadResult.Found found)
@@ -213,8 +245,21 @@ internal sealed class ZLinkActorOwnershipCoordinator(
             deactivate);
     }
 
-    internal void AdoptCommittedActorAuthority(
+    internal ValueTask AdoptCommittedActorAuthorityAsync(
         string actorId,
+        string actorType,
+        ActorRef actorRef,
+        Func<CancellationToken, ValueTask>? deactivate,
+        CancellationToken cancellationToken = default) =>
+        AdoptCommittedActorAuthorityAsync(
+            ZLinkActorId.FromBoundary(actorId, nameof(actorId)),
+            actorType,
+            actorRef,
+            deactivate,
+            cancellationToken);
+
+    internal void AdoptCommittedActorAuthority(
+        ZLinkActorId actorId,
         string actorType,
         ActorRef actorRef,
         ZLinkAuthoritySnapshot snapshot,
@@ -244,7 +289,7 @@ internal sealed class ZLinkActorOwnershipCoordinator(
                 snapshot.Payload.Span,
                 out var authority)
             || authority.State != ZLinkActorAuthorityState.Ready
-            || !string.Equals(authority.ActorId, actorId, StringComparison.Ordinal)
+            || !string.Equals(authority.ActorId, actorId.Value, StringComparison.Ordinal)
             || !string.Equals(authority.StableType, actorType, StringComparison.Ordinal)
             || !string.Equals(authority.MeshName, actorRef.MeshName, StringComparison.Ordinal)
             || authority.NodeRid != actorRef.NodeRid
@@ -260,9 +305,22 @@ internal sealed class ZLinkActorOwnershipCoordinator(
         TrackCommittedActorAuthority(actorId, snapshot, authority, deactivate);
     }
 
-    internal async ValueTask NotifyActorJoinedSpotAsync(
+    internal void AdoptCommittedActorAuthority(
         string actorId,
-        string spotId,
+        string actorType,
+        ActorRef actorRef,
+        ZLinkAuthoritySnapshot snapshot,
+        Func<CancellationToken, ValueTask>? deactivate) =>
+        AdoptCommittedActorAuthority(
+            ZLinkActorId.FromBoundary(actorId, nameof(actorId)),
+            actorType,
+            actorRef,
+            snapshot,
+            deactivate);
+
+    internal async ValueTask NotifyActorJoinedSpotAsync(
+        ZLinkActorId actorId,
+        ZLinkSpotId spotId,
         ulong spotGeneration,
         CancellationToken cancellationToken = default)
     {
@@ -271,7 +329,7 @@ internal sealed class ZLinkActorOwnershipCoordinator(
                 payload => payload with
                 {
                     CurrentSpotKind = ZLinkSpotKind.User,
-                    CurrentSpotId = spotId,
+                    CurrentSpotId = spotId.Value,
                     CurrentSpotGeneration = spotGeneration
                 },
                 expectedActorRef: null,
@@ -279,8 +337,19 @@ internal sealed class ZLinkActorOwnershipCoordinator(
             .ConfigureAwait(false);
     }
 
-    internal async ValueTask AdvanceTransferredActorAuthorityPhaseAsync(
+    internal ValueTask NotifyActorJoinedSpotAsync(
         string actorId,
+        string spotId,
+        ulong spotGeneration,
+        CancellationToken cancellationToken = default) =>
+        NotifyActorJoinedSpotAsync(
+            ZLinkActorId.FromBoundary(actorId, nameof(actorId)),
+            ZLinkSpotId.FromBoundary(spotId, nameof(spotId)),
+            spotGeneration,
+            cancellationToken);
+
+    internal async ValueTask AdvanceTransferredActorAuthorityPhaseAsync(
+        ZLinkActorId actorId,
         ActorRef actorRef,
         Guid relocationId,
         ZLinkActorRelocationAuthorityPhase expected,
@@ -291,7 +360,7 @@ internal sealed class ZLinkActorOwnershipCoordinator(
             throw new ArgumentOutOfRangeException(
                 nameof(next),
                 "Actor relocation authority phases must advance one step.");
-        var key = ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId);
+        var key = ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId.Value);
         while (true)
         {
             var read = await runtime.Store.ReadAuthorityAsync(key, cancellationToken)
@@ -337,13 +406,28 @@ internal sealed class ZLinkActorOwnershipCoordinator(
         }
     }
 
-    internal async ValueTask NormalizeTransferredActorAuthorityAsync(
+    internal ValueTask AdvanceTransferredActorAuthorityPhaseAsync(
         string actorId,
+        ActorRef actorRef,
+        Guid relocationId,
+        ZLinkActorRelocationAuthorityPhase expected,
+        ZLinkActorRelocationAuthorityPhase next,
+        CancellationToken cancellationToken = default) =>
+        AdvanceTransferredActorAuthorityPhaseAsync(
+            ZLinkActorId.FromBoundary(actorId, nameof(actorId)),
+            actorRef,
+            relocationId,
+            expected,
+            next,
+            cancellationToken);
+
+    internal async ValueTask NormalizeTransferredActorAuthorityAsync(
+        ZLinkActorId actorId,
         ActorRef actorRef,
         Guid relocationId,
         CancellationToken cancellationToken = default)
     {
-        var key = ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId);
+        var key = ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId.Value);
         while (true)
         {
             var read = await runtime.Store.ReadAuthorityAsync(key, cancellationToken)
@@ -401,16 +485,27 @@ internal sealed class ZLinkActorOwnershipCoordinator(
         }
     }
 
+    internal ValueTask NormalizeTransferredActorAuthorityAsync(
+        string actorId,
+        ActorRef actorRef,
+        Guid relocationId,
+        CancellationToken cancellationToken = default) =>
+        NormalizeTransferredActorAuthorityAsync(
+            ZLinkActorId.FromBoundary(actorId, nameof(actorId)),
+            actorRef,
+            relocationId,
+            cancellationToken);
+
     internal async ValueTask<(
         ZLinkAuthoritySnapshot Authority,
         ZLinkActorRelocationAuthorityPayload Phase)?>
         ReadTransferredActorAuthorityPhaseAsync(
-            string actorId,
+            ZLinkActorId actorId,
             ActorRef actorRef,
             CancellationToken cancellationToken = default)
     {
         var read = await runtime.Store.ReadAuthorityAsync(
-                ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId),
+                ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId.Value),
                 cancellationToken)
             .ConfigureAwait(false);
         return read is ZLinkAuthorityReadResult.Found found
@@ -423,12 +518,24 @@ internal sealed class ZLinkActorOwnershipCoordinator(
             : null;
     }
 
+    internal ValueTask<(
+        ZLinkAuthoritySnapshot Authority,
+        ZLinkActorRelocationAuthorityPayload Phase)?>
+        ReadTransferredActorAuthorityPhaseAsync(
+            string actorId,
+            ActorRef actorRef,
+            CancellationToken cancellationToken = default) =>
+        ReadTransferredActorAuthorityPhaseAsync(
+            ZLinkActorId.FromBoundary(actorId, nameof(actorId)),
+            actorRef,
+            cancellationToken);
+
     internal async ValueTask<ZLinkCommittedActorAuthority>
         CommitTransferredActorAuthorityAsync(
-        string actorId,
+        ZLinkActorId actorId,
         ActorRef actorRef,
-        string meshName,
-        string spotId,
+        ZLinkMeshName meshName,
+        ZLinkSpotId spotId,
         ulong spotGeneration,
         ZLinkSpotKind spotKind,
         Guid relocationId,
@@ -440,7 +547,7 @@ internal sealed class ZLinkActorOwnershipCoordinator(
         Func<CancellationToken, ValueTask>? deactivate,
         CancellationToken cancellationToken = default)
     {
-        var key = ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId);
+        var key = ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId.Value);
         var read = await runtime.Store.ReadAuthorityAsync(key, cancellationToken)
             .ConfigureAwait(false);
         if (read is not ZLinkAuthorityReadResult.Found found
@@ -457,7 +564,7 @@ internal sealed class ZLinkActorOwnershipCoordinator(
                 ZLinkFrameworkErrorKind.InvalidOperation,
                 $"Actor '{actorId}' authority generation changed during handoff.");
         if (authority.NodeRid == actorRef.NodeRid
-            && string.Equals(authority.CurrentSpotId, spotId, StringComparison.Ordinal)
+            && string.Equals(authority.CurrentSpotId, spotId.Value, StringComparison.Ordinal)
             && authority.CurrentSpotGeneration == spotGeneration
             && authority.CurrentSpotKind == spotKind)
         {
@@ -481,13 +588,13 @@ internal sealed class ZLinkActorOwnershipCoordinator(
             TrackCommittedActorAuthority(actorId, snapshot, authority, deactivate);
             return new ZLinkCommittedActorAuthority(
                 snapshot.AuthorityOwnerGeneration,
-                authority.MeshName,
+                ZLinkMeshName.FromBoundary(authority.MeshName, nameof(authority.MeshName)),
                 authority.NodeGeneration,
                 authority.OwnerLeaseGeneration);
         }
 
         var descriptors = await resolver.ListLiveMeshNodesAsync(
-                meshName,
+                meshName.Value,
                 cancellationToken)
             .ConfigureAwait(false);
         var target = descriptors.SingleOrDefault(descriptor =>
@@ -517,12 +624,12 @@ internal sealed class ZLinkActorOwnershipCoordinator(
             authority with
             {
                 State = ZLinkActorAuthorityState.Ready,
-                CurrentSpotId = spotId,
+                CurrentSpotId = spotId.Value,
                 CurrentSpotGeneration = spotGeneration,
                 CurrentSpotKind = spotKind,
                 OwnerId = targetOwner.OwnerId,
                 OwnerLeaseGeneration = checked((ulong)targetOwner.LeaseGeneration),
-                MeshName = meshName,
+                MeshName = meshName.Value,
                 NodeRid = target.Rid,
                 NodeGeneration = target.LifecycleGeneration
             });
@@ -583,12 +690,12 @@ internal sealed class ZLinkActorOwnershipCoordinator(
                         authority with
                         {
                             State = ZLinkActorAuthorityState.Ready,
-                            CurrentSpotId = spotId,
+                            CurrentSpotId = spotId.Value,
                             CurrentSpotGeneration = spotGeneration,
                             CurrentSpotKind = spotKind,
                             OwnerId = targetOwner.OwnerId,
                             OwnerLeaseGeneration = checked((ulong)targetOwner.LeaseGeneration),
-                            MeshName = meshName,
+                            MeshName = meshName.Value,
                             NodeRid = target.Rid,
                             NodeGeneration = target.LifecycleGeneration
                         },
@@ -623,7 +730,9 @@ internal sealed class ZLinkActorOwnershipCoordinator(
                             deactivate);
                         return new ZLinkCommittedActorAuthority(
                             currentSnapshot.AuthorityOwnerGeneration,
-                            currentAuthority.MeshName,
+                            ZLinkMeshName.FromBoundary(
+                                currentAuthority.MeshName,
+                                nameof(currentAuthority.MeshName)),
                             currentAuthority.NodeGeneration,
                             currentAuthority.OwnerLeaseGeneration);
                     }
@@ -659,6 +768,38 @@ internal sealed class ZLinkActorOwnershipCoordinator(
         }
     }
 
+    internal ValueTask<ZLinkCommittedActorAuthority>
+        CommitTransferredActorAuthorityAsync(
+        string actorId,
+        ActorRef actorRef,
+        string meshName,
+        string spotId,
+        ulong spotGeneration,
+        ZLinkSpotKind spotKind,
+        Guid relocationId,
+        ZLinkRemoteActorBoundSessionRoute boundSessionRoute,
+        ZLinkRelocationManifestReference relocationReference,
+        ZLinkRelocationEnvelope relocationRoot,
+        ZLinkRelocationCapacityFence? capacityFence,
+        ulong targetAuthorityOwnerGeneration,
+        Func<CancellationToken, ValueTask>? deactivate,
+        CancellationToken cancellationToken = default) =>
+        CommitTransferredActorAuthorityAsync(
+            ZLinkActorId.FromBoundary(actorId, nameof(actorId)),
+            actorRef,
+            ZLinkMeshName.FromBoundary(meshName, nameof(meshName)),
+            ZLinkSpotId.FromBoundary(spotId, nameof(spotId)),
+            spotGeneration,
+            spotKind,
+            relocationId,
+            boundSessionRoute,
+            relocationReference,
+            relocationRoot,
+            capacityFence,
+            targetAuthorityOwnerGeneration,
+            deactivate,
+            cancellationToken);
+
     //  Renders an authority read for a trace line without assuming it was found.
     private static string DescribeAuthority(ZLinkAuthorityReadResult read)
     {
@@ -673,7 +814,7 @@ internal sealed class ZLinkActorOwnershipCoordinator(
     private static bool TryResolveCommittedAuthority(
         ZLinkAuthorityReadResult current,
         ActorRef actorRef,
-        string spotId,
+        ZLinkSpotId spotId,
         ulong spotGeneration,
         ZLinkSpotKind spotKind,
         Guid relocationId,
@@ -711,7 +852,7 @@ internal sealed class ZLinkActorOwnershipCoordinator(
                 && authority.NodeRid == actorRef.NodeRid
                 && string.Equals(
                     authority.CurrentSpotId,
-                    spotId,
+                    spotId.Value,
                     StringComparison.Ordinal)
                 && authority.CurrentSpotGeneration == spotGeneration
                 && authority.CurrentSpotKind == spotKind)
@@ -741,7 +882,7 @@ internal sealed class ZLinkActorOwnershipCoordinator(
                 found.Snapshot.Payload.Span,
                 out authority)
             && authority.NodeRid == actorRef.NodeRid
-            && string.Equals(authority.CurrentSpotId, spotId, StringComparison.Ordinal)
+            && string.Equals(authority.CurrentSpotId, spotId.Value, StringComparison.Ordinal)
             && authority.CurrentSpotGeneration == spotGeneration
             && authority.CurrentSpotKind == spotKind)
         {
@@ -755,7 +896,7 @@ internal sealed class ZLinkActorOwnershipCoordinator(
     }
 
     private void TrackCommittedActorAuthority(
-        string actorId,
+        ZLinkActorId actorId,
         ZLinkAuthoritySnapshot snapshot,
         ZLinkActorAuthorityPayload payload,
         Func<CancellationToken, ValueTask>? deactivate)
@@ -776,7 +917,7 @@ internal sealed class ZLinkActorOwnershipCoordinator(
     }
 
     internal async ValueTask NotifyActorMovedToEntrySpotAsync(
-        string actorId,
+        ZLinkActorId actorId,
         RoutingId targetNodeRid,
         CancellationToken cancellationToken = default)
     {
@@ -792,8 +933,17 @@ internal sealed class ZLinkActorOwnershipCoordinator(
             .ConfigureAwait(false);
     }
 
-    internal async ValueTask NotifyActorLeftSpotAsync(
+    internal ValueTask NotifyActorMovedToEntrySpotAsync(
         string actorId,
+        RoutingId targetNodeRid,
+        CancellationToken cancellationToken = default) =>
+        NotifyActorMovedToEntrySpotAsync(
+            ZLinkActorId.FromBoundary(actorId, nameof(actorId)),
+            targetNodeRid,
+            cancellationToken);
+
+    internal async ValueTask NotifyActorLeftSpotAsync(
+        ZLinkActorId actorId,
         CancellationToken cancellationToken = default)
     {
         await RenewOwnedActorAsync(
@@ -804,15 +954,19 @@ internal sealed class ZLinkActorOwnershipCoordinator(
             .ConfigureAwait(false);
     }
 
-    internal async ValueTask NotifyActorLeftSpotAsync(
+    internal ValueTask NotifyActorLeftSpotAsync(
         string actorId,
-        string targetEntrySpotId,
+        CancellationToken cancellationToken = default) =>
+        NotifyActorLeftSpotAsync(
+            ZLinkActorId.FromBoundary(actorId, nameof(actorId)),
+            cancellationToken);
+
+    internal async ValueTask NotifyActorLeftSpotAsync(
+        ZLinkActorId actorId,
+        ZLinkSpotId targetEntrySpotId,
         ulong targetEntrySpotGeneration,
         CancellationToken cancellationToken = default)
     {
-        var canonicalEntrySpotId = ZLinkSpotId.Require(
-            targetEntrySpotId,
-            nameof(targetEntrySpotId));
         if (targetEntrySpotGeneration == 0)
             throw new ArgumentOutOfRangeException(
                 nameof(targetEntrySpotGeneration));
@@ -821,7 +975,7 @@ internal sealed class ZLinkActorOwnershipCoordinator(
                 payload => payload with
                 {
                     CurrentSpotKind = ZLinkSpotKind.Entry,
-                    CurrentSpotId = canonicalEntrySpotId,
+                    CurrentSpotId = targetEntrySpotId.Value,
                     CurrentSpotGeneration = targetEntrySpotGeneration
                 },
                 expectedActorRef: null,
@@ -829,8 +983,19 @@ internal sealed class ZLinkActorOwnershipCoordinator(
             .ConfigureAwait(false);
     }
 
-    private ZLinkActorAuthorityPayload RestoreEntrySpot(
+    internal ValueTask NotifyActorLeftSpotAsync(
         string actorId,
+        string targetEntrySpotId,
+        ulong targetEntrySpotGeneration,
+        CancellationToken cancellationToken = default) =>
+        NotifyActorLeftSpotAsync(
+            ZLinkActorId.FromBoundary(actorId, nameof(actorId)),
+            ZLinkSpotId.FromBoundary(targetEntrySpotId, nameof(targetEntrySpotId)),
+            targetEntrySpotGeneration,
+            cancellationToken);
+
+    private ZLinkActorAuthorityPayload RestoreEntrySpot(
+        ZLinkActorId actorId,
         ZLinkActorAuthorityPayload payload)
     {
         lock (_gate)
@@ -850,7 +1015,7 @@ internal sealed class ZLinkActorOwnershipCoordinator(
     }
 
     public async ValueTask ReleaseActorAsync(
-        string actorId,
+        ZLinkActorId actorId,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -895,6 +1060,13 @@ internal sealed class ZLinkActorOwnershipCoordinator(
         await releaseTask.WaitAsync(cancellationToken).ConfigureAwait(false);
     }
 
+    public ValueTask ReleaseActorAsync(
+        string actorId,
+        CancellationToken cancellationToken = default) =>
+        ReleaseActorAsync(
+            ZLinkActorId.FromBoundary(actorId, nameof(actorId)),
+            cancellationToken);
+
     /// <summary>
     /// Releases the source side of a committed actor move with the source
     /// authority snapshot as a fallback fence. Ownership-loss notification
@@ -904,7 +1076,7 @@ internal sealed class ZLinkActorOwnershipCoordinator(
     /// whether the source row may be removed.
     /// </summary>
     internal async ValueTask ReleaseActorAfterMoveAsync(
-        string actorId,
+        ZLinkActorId actorId,
         ZLinkAuthoritySnapshot expectedSourceSnapshot,
         CancellationToken cancellationToken = default)
     {
@@ -915,7 +1087,7 @@ internal sealed class ZLinkActorOwnershipCoordinator(
             return;
         }
 
-        var key = ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId);
+        var key = ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId.Value);
         var result = await runtime.Store.CompareExchangeAuthorityAsync(
                 key,
                 expectedSourceSnapshot.StoreVersion,
@@ -953,7 +1125,16 @@ internal sealed class ZLinkActorOwnershipCoordinator(
         }
     }
 
-    internal bool OwnsActor(string actorId)
+    internal ValueTask ReleaseActorAfterMoveAsync(
+        string actorId,
+        ZLinkAuthoritySnapshot expectedSourceSnapshot,
+        CancellationToken cancellationToken = default) =>
+        ReleaseActorAfterMoveAsync(
+            ZLinkActorId.FromBoundary(actorId, nameof(actorId)),
+            expectedSourceSnapshot,
+            cancellationToken);
+
+    internal bool OwnsActor(ZLinkActorId actorId)
     {
         lock (_gate)
         {
@@ -961,12 +1142,15 @@ internal sealed class ZLinkActorOwnershipCoordinator(
         }
     }
 
+    internal bool OwnsActor(string actorId) =>
+        OwnsActor(ZLinkActorId.FromBoundary(actorId, nameof(actorId)));
+
     internal void ResetGeneration()
     {
         lock (_gate) _actors.Clear();
     }
 
-    private void MarkActivationFailed(string actorId)
+    private void MarkActivationFailed(ZLinkActorId actorId)
     {
         var canonical = actorId;
         lock (_gate)
@@ -976,7 +1160,7 @@ internal sealed class ZLinkActorOwnershipCoordinator(
         }
     }
 
-    private void StartActivationFailureReconciliation(string actorId)
+    private void StartActivationFailureReconciliation(ZLinkActorId actorId)
     {
         var canonical = actorId;
         TrackedActor? tracked;
@@ -999,8 +1183,8 @@ internal sealed class ZLinkActorOwnershipCoordinator(
     }
 
     private async Task ReconcileActivationFailureAsync(
-        string actorId,
-        string canonical,
+        ZLinkActorId actorId,
+        ZLinkActorId canonical,
         TrackedActor tracked,
         CancellationToken stopToken)
     {
@@ -1129,7 +1313,7 @@ internal sealed class ZLinkActorOwnershipCoordinator(
         {
             foreach (var (actorId, actor) in _actors)
             {
-                var encoded = ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId).Value;
+                var encoded = ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId.Value).Value;
                 if (!string.Equals(encoded, canonicalKey, StringComparison.Ordinal)) continue;
                 _actors.Remove(actorId);
                 return actor.Deactivate;
@@ -1140,7 +1324,7 @@ internal sealed class ZLinkActorOwnershipCoordinator(
     }
 
     private async ValueTask RenewOwnedActorAsync(
-        string actorId,
+        ZLinkActorId actorId,
         Func<ZLinkActorAuthorityPayload, ZLinkActorAuthorityPayload> mutate,
         ActorRef? expectedActorRef,
         CancellationToken cancellationToken)
@@ -1196,7 +1380,7 @@ internal sealed class ZLinkActorOwnershipCoordinator(
                     return;
 
                 var authorityKey =
-                    ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId);
+                    ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId.Value);
                 var result = await runtime.Store.CompareExchangeAuthorityAsync(
                         authorityKey,
                         snapshot.StoreVersion,
@@ -1247,7 +1431,7 @@ internal sealed class ZLinkActorOwnershipCoordinator(
                 }
             }
 
-            var lostKey = ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId);
+            var lostKey = ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId.Value);
             runtime.NotifyAuthorityOwnershipLost(
                 ZLinkLocationKind.Actor,
                 lostKey);
@@ -1263,7 +1447,7 @@ internal sealed class ZLinkActorOwnershipCoordinator(
     }
 
     private async Task ReleaseTrackedActorAsync(
-        string canonical,
+        ZLinkActorId canonical,
         TrackedActor tracked)
     {
         await tracked.WriteGate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
@@ -1278,7 +1462,7 @@ internal sealed class ZLinkActorOwnershipCoordinator(
                 snapshot = tracked.Snapshot;
             }
 
-            var key = ZLinkActorAuthorityPayloadCodec.AuthorityKey(canonical);
+            var key = ZLinkActorAuthorityPayloadCodec.AuthorityKey(canonical.Value);
             var result = await runtime.Store.CompareExchangeAuthorityAsync(
                     key,
                     snapshot.StoreVersion,
@@ -1461,7 +1645,7 @@ internal sealed class ZLinkActorOwnershipCoordinator(
     }
 
     internal void UpdateTrackedSnapshot(
-        string actorId,
+        ZLinkActorId actorId,
         ZLinkAuthoritySnapshot snapshot)
     {
         lock (_gate)
@@ -1470,6 +1654,13 @@ internal sealed class ZLinkActorOwnershipCoordinator(
                 tracked.Snapshot = snapshot;
         }
     }
+
+    internal void UpdateTrackedSnapshot(
+        string actorId,
+        ZLinkAuthoritySnapshot snapshot) =>
+        UpdateTrackedSnapshot(
+            ZLinkActorId.FromBoundary(actorId, nameof(actorId)),
+            snapshot);
 
     private static ZLinkActorLocation ToLocation(
         ZLinkAuthoritySnapshot snapshot,

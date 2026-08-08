@@ -36,9 +36,7 @@ public final class OwnerApplication {
         OwnerOptions options) {
         return framework -> {
             framework.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile(options.logDir() + "/" + options.rid() + "-flow.log")
-                .traceLabel(options.rid());
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             framework.addHandlersFromPackageOf(ProbeRequestHandler.class);
             var locations = framework.configureLocations();
             locations.setOwnerLeaseRenewInterval(Duration.ofMillis(options.heartbeatMillis()));

@@ -2,9 +2,6 @@ import fs from 'node:fs';
 import { Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import type { ZLinkRouteMeshRuntime, ZLinkSpotPublisherClient } from '@zlink-systems/framework';
-import {
-  ZLinkMessageFlowLogMode
-} from '@zlink-systems/framework';
 import { ZLinkRedisLocationStore } from '@zlink-systems/framework-locations-redis';
 import {
   ZLINK_ROUTE_MESH_RUNTIME,
@@ -52,9 +49,7 @@ export async function startGatewayHost(): Promise<void> {
           const builder = zlinkFramework();
           builder
             .configureDispatch()
-              .messageFlow(ZLinkMessageFlowLogMode.KeyTransitions)
-              .traceLogFile(`${options.logDir}/${options.rid}-flow.log`)
-              .traceLabel(options.rid);
+              .messageFlow('normal');
           builder.addLocationStore(new ZLinkRedisLocationStore({
             url: `redis://${options.redisEndpoint}`,
             keyPrefix: options.redisKeyPrefix

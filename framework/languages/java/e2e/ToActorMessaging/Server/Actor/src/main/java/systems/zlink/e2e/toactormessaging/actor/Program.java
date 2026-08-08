@@ -142,9 +142,7 @@ public final class Program {
         return options -> {
             boot("configureDispatch");
             options.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile(config.logDirectory() + "/actor-flow.log")
-                .traceLabel("java-to-actor-actor");
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             boot("configureDispatch done");
             boot("addLocationStore");
             options.addLocationStore(new ZLinkRedisLocationStore(new ZLinkRedisLocationOptions()

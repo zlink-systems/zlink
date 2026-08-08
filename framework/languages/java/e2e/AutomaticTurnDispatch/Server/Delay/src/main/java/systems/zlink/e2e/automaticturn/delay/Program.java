@@ -39,9 +39,7 @@ public final class Program {
     ZLinkFrameworkConfigurer framework(DelayOptions config) {
         return options -> {
             options.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile(config.logDirectory() + "/delay-flow.log")
-                .traceLabel("java-atd-delay");
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             options.addClientServerChannel(Contracts.DELAY_CHANNEL)
                 .server()
                 .listen(java.net.URI.create(config.delayEndpoint()).getPort())

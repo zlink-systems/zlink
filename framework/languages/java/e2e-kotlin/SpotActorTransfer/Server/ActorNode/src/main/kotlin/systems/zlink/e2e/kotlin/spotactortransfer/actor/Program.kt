@@ -85,9 +85,9 @@ class Application {
             setMessageFollowDuration(Duration.ofSeconds(2))
         }
         options.configureDispatch()
-            .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-            .traceLogFile("$logDir/$nodeRid-flow.log")
-            .traceLabel("kotlin-spot-transfer-$nodeRid")
+            .messageFlow(ZLinkMessageFlowLogMode.NORMAL)
+
+
         val node = options.addRouteMesh(Contracts.MESH)
         node.listen(config.meshEndpoint)
             .setRoutingId(RoutingId.from(nodeRid))

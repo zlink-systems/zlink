@@ -8,6 +8,9 @@ internal sealed record ZLinkSessionBindingEntry(
     ZLinkSessionBindingRoute Route,
     ulong SessionOwnerNodeGeneration,
     ulong AcceptedHighWater,
+    RoutingId SessionOwnerNodeRid = default,
+    string SessionOwnerId = "",
+    ulong SessionOwnerLeaseGeneration = 0,
     string? RelocationHandoffId = null,
     string? CompletedRelocationHandoffId = null,
     int ActiveFrames = 0,
@@ -16,7 +19,7 @@ internal sealed record ZLinkSessionBindingEntry(
 {
     internal ulong ObjectGeneration => Route.Ref.ObjectGeneration;
     internal ulong AuthorityOwnerGeneration => Route.AuthorityOwnerGeneration;
-    internal string MeshName => Route.MeshName;
+    internal string MeshName => Route.MeshName.Value;
     internal ulong TargetNodeGeneration => Route.TargetNodeGeneration;
     internal ulong OwnerLeaseGeneration => Route.OwnerLeaseGeneration;
 }
@@ -25,7 +28,7 @@ internal readonly record struct ZLinkSessionBindingRoute
 {
     private ZLinkSessionBindingRoute(
         ActorRef actor,
-        string meshName,
+        ZLinkMeshName meshName,
         ulong targetNodeGeneration,
         ulong authorityOwnerGeneration,
         ulong ownerLeaseGeneration)
@@ -38,7 +41,7 @@ internal readonly record struct ZLinkSessionBindingRoute
     }
 
     internal ActorRef Ref { get; }
-    internal string MeshName { get; }
+    internal ZLinkMeshName MeshName { get; }
     internal ulong TargetNodeGeneration { get; }
     internal ulong AuthorityOwnerGeneration { get; }
     internal ulong OwnerLeaseGeneration { get; }
@@ -75,7 +78,6 @@ internal readonly record struct ZLinkSessionBindingRoute
             || actor.ObjectGeneration == 0
             || actor.NodeRid.IsEmpty
             || string.IsNullOrWhiteSpace(meshName)
-            || !string.Equals(actor.MeshName, meshName, StringComparison.Ordinal)
             || targetNodeGeneration == 0
             || authorityOwnerGeneration == 0
             || ownerLeaseGeneration == 0)
@@ -83,9 +85,20 @@ internal readonly record struct ZLinkSessionBindingRoute
             route = default;
             return false;
         }
+        var runtimeMeshName = ZLinkMeshName.FromBoundary(
+            meshName,
+            nameof(meshName));
+        if (!string.Equals(
+                actor.MeshName,
+                runtimeMeshName.Value,
+                StringComparison.Ordinal))
+        {
+            route = default;
+            return false;
+        }
         route = new ZLinkSessionBindingRoute(
             actor,
-            meshName,
+            runtimeMeshName,
             targetNodeGeneration,
             authorityOwnerGeneration,
             ownerLeaseGeneration);
@@ -96,13 +109,13 @@ internal readonly record struct ZLinkSessionBindingRoute
         string actorId,
         ulong objectGeneration,
         ulong authorityOwnerGeneration,
-        string meshName,
+        ZLinkMeshName meshName,
         ulong targetNodeGeneration,
         ulong ownerLeaseGeneration) =>
         string.Equals(Ref.ActorId, actorId, StringComparison.Ordinal)
         && Ref.ObjectGeneration == objectGeneration
         && AuthorityOwnerGeneration == authorityOwnerGeneration
-        && string.Equals(MeshName, meshName, StringComparison.Ordinal)
+        && MeshName == meshName
         && TargetNodeGeneration == targetNodeGeneration
         && OwnerLeaseGeneration == ownerLeaseGeneration;
 }
@@ -146,8 +159,16 @@ internal readonly record struct ZLinkSessionRouteCommitResult(
     ulong AcceptedHighWater);
 
 internal readonly record struct ZLinkSessionBindingKey(
-    string ActorId,
-    string BindingToken);
+    ZLinkActorId ActorId,
+    string BindingToken)
+{
+    internal static ZLinkSessionBindingKey FromBoundary(
+        string actorId,
+        string bindingToken) =>
+        new(
+            ZLinkActorId.FromBoundary(actorId, nameof(actorId)),
+            bindingToken);
+}
 
 internal readonly record struct ZLinkSessionBindingTombstone(
     RoutingId SessionRid,
@@ -180,15 +201,18 @@ internal sealed class ZLinkSessionActorBindingTable
     }
 
     public ZLinkSessionBindingEntry[] Bind(
-        string actorId,
+        ZLinkActorId actorId,
         ZLinkSessionContext context,
         string bindingToken,
         ZLinkSessionActor actorRef,
         ulong bindingGeneration,
         ZLinkSessionBindingRoute route,
-        ulong sessionOwnerNodeGeneration)
+        ulong sessionOwnerNodeGeneration,
+        RoutingId sessionOwnerNodeRid = default,
+        string sessionOwnerId = "",
+        ulong sessionOwnerLeaseGeneration = 0)
     {
-        if (!string.Equals(actorId, route.Ref.ActorId, StringComparison.Ordinal))
+        if (!string.Equals(actorId.Value, route.Ref.ActorId, StringComparison.Ordinal))
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.Unavailable,
                 $"Actor '{actorId}' binding route identifies a different Actor.");
@@ -211,12 +235,13 @@ internal sealed class ZLinkSessionActorBindingTable
                     ZLinkRetryAdvice.DoNotRetry);
             }
             var replaced = _entries
-                .Where(entry => string.Equals(entry.Key.ActorId, actorId, StringComparison.Ordinal))
+                .Where(entry => entry.Key.ActorId == key.ActorId)
                 .Select(entry => entry.Value)
                 .ToArray();
             foreach (var entry in replaced)
             {
-                _entries.Remove(new ZLinkSessionBindingKey(actorId, entry.BindingToken));
+                _entries.Remove(
+                    new ZLinkSessionBindingKey(actorId, entry.BindingToken));
                 entry.DrainSignal?.TrySetResult();
                 entry.RouteAvailableSignal?.TrySetResult();
             }
@@ -228,7 +253,17 @@ internal sealed class ZLinkSessionActorBindingTable
                 bindingGeneration,
                 route,
                 sessionOwnerNodeGeneration,
-                AcceptedHighWater: 0);
+                AcceptedHighWater: 0,
+                SessionOwnerNodeRid: sessionOwnerNodeRid,
+                SessionOwnerId: string.IsNullOrWhiteSpace(sessionOwnerId)
+                    ? (sessionOwnerNodeRid.IsEmpty
+                        ? actorRef.SessionRid.ToHex()
+                        : sessionOwnerNodeRid.ToHex())
+                    : sessionOwnerId,
+                SessionOwnerLeaseGeneration:
+                    sessionOwnerLeaseGeneration == 0
+                        ? sessionOwnerNodeGeneration
+                        : sessionOwnerLeaseGeneration);
             return replaced;
         }
     }
@@ -244,7 +279,7 @@ internal sealed class ZLinkSessionActorBindingTable
         lock (_entries)
         {
             PurgeExpiredTombstones();
-            var key = new ZLinkSessionBindingKey(actorId, bindingToken);
+            var key = ZLinkSessionBindingKey.FromBoundary(actorId, bindingToken);
             if (_entries.TryGetValue(key, out var current)
                 && (current.ActorRef.SessionRid != sessionRid
                     || current.BindingGeneration != bindingGeneration
@@ -319,7 +354,7 @@ internal sealed class ZLinkSessionActorBindingTable
     {
         lock (_entries)
         {
-            var key = new ZLinkSessionBindingKey(actorId, bindingToken);
+            var key = ZLinkSessionBindingKey.FromBoundary(actorId, bindingToken);
             if (!_entries.TryGetValue(key, out var entry))
             {
                 //  두 거절 분기가 같은 문구로 나가면 어느 쪽인지 알 수 없다.
@@ -355,7 +390,7 @@ internal sealed class ZLinkSessionActorBindingTable
         Task? signalTask = null;
         lock (_entries)
         {
-            var key = new ZLinkSessionBindingKey(actorId, bindingToken);
+            var key = ZLinkSessionBindingKey.FromBoundary(actorId, bindingToken);
             if (!_entries.TryGetValue(key, out var entry))
                 return ValueTask.FromResult(false);
             if (entry.RelocationHandoffId is null)
@@ -385,7 +420,7 @@ internal sealed class ZLinkSessionActorBindingTable
     {
         lock (_entries)
         {
-            var key = new ZLinkSessionBindingKey(actorId, bindingToken);
+            var key = ZLinkSessionBindingKey.FromBoundary(actorId, bindingToken);
             if (!_entries.TryGetValue(key, out var entry)
                 || entry.ActiveFrames == 0)
                 return;
@@ -408,7 +443,7 @@ internal sealed class ZLinkSessionActorBindingTable
         ulong acceptedHighWater;
         lock (_entries)
         {
-            var key = new ZLinkSessionBindingKey(
+            var key = ZLinkSessionBindingKey.FromBoundary(
                 request.ActorId,
                 request.BindingToken);
             if (!_entries.TryGetValue(key, out var entry))
@@ -425,7 +460,7 @@ internal sealed class ZLinkSessionActorBindingTable
                 request.ActorId,
                 request.ObjectGeneration,
                 request.AuthorityOwnerGeneration,
-                request.MeshName,
+                ZLinkMeshName.FromBoundary(request.MeshName, nameof(request.MeshName)),
                 request.TargetNodeGeneration,
                 request.OwnerLeaseGeneration);
             var sessionOwnerMatches = entry.SessionOwnerNodeGeneration
@@ -485,7 +520,7 @@ internal sealed class ZLinkSessionActorBindingTable
             await drain.WaitAsync(cancellationToken).ConfigureAwait(false);
         lock (_entries)
         {
-            var key = new ZLinkSessionBindingKey(
+            var key = ZLinkSessionBindingKey.FromBoundary(
                 request.ActorId,
                 request.BindingToken);
             if (!_entries.TryGetValue(key, out var current))
@@ -518,7 +553,7 @@ internal sealed class ZLinkSessionActorBindingTable
         TaskCompletionSource? routeAvailableSignal = null;
         lock (_entries)
         {
-            var key = new ZLinkSessionBindingKey(
+            var key = ZLinkSessionBindingKey.FromBoundary(
                 request.ActorId,
                 request.BindingToken);
             if (!_entries.TryGetValue(key, out var entry)
@@ -527,7 +562,7 @@ internal sealed class ZLinkSessionActorBindingTable
                     request.ActorId,
                     request.ObjectGeneration,
                     request.AuthorityOwnerGeneration,
-                    request.MeshName,
+                    ZLinkMeshName.FromBoundary(request.MeshName, nameof(request.MeshName)),
                     request.TargetNodeGeneration,
                     request.OwnerLeaseGeneration)
                 || entry.SessionOwnerNodeGeneration
@@ -563,7 +598,7 @@ internal sealed class ZLinkSessionActorBindingTable
         TaskCompletionSource? routeAvailableSignal = null;
         lock (_entries)
         {
-            var key = new ZLinkSessionBindingKey(
+            var key = ZLinkSessionBindingKey.FromBoundary(
                 request.ActorId,
                 request.BindingToken);
             if (!_entries.TryGetValue(key, out var entry))
@@ -623,7 +658,7 @@ internal sealed class ZLinkSessionActorBindingTable
     {
         lock (_entries)
         {
-            var key = new ZLinkSessionBindingKey(
+            var key = ZLinkSessionBindingKey.FromBoundary(
                 request.ActorId,
                 request.BindingToken);
             if (!_entries.TryGetValue(key, out var entry))
@@ -734,7 +769,9 @@ internal sealed class ZLinkSessionActorBindingTable
                     request.ActorId,
                     request.ObjectGeneration,
                     request.PreviousAuthorityOwnerGeneration,
-                    request.PreviousMeshName,
+                    ZLinkMeshName.FromBoundary(
+                        request.PreviousMeshName,
+                        nameof(request.PreviousMeshName)),
                     request.PreviousTargetNodeGeneration,
                     request.PreviousOwnerLeaseGeneration);
             var handoffMatches = string.Equals(
@@ -779,7 +816,7 @@ internal sealed class ZLinkSessionActorBindingTable
         lock (_entries)
         {
             return _entries.TryGetValue(
-                new ZLinkSessionBindingKey(actorId, bindingToken),
+                ZLinkSessionBindingKey.FromBoundary(actorId, bindingToken),
                 out entry!);
         }
     }
@@ -793,7 +830,7 @@ internal sealed class ZLinkSessionActorBindingTable
         lock (_entries)
         {
             if (_entries.TryGetValue(
-                    new ZLinkSessionBindingKey(actorId, bindingToken),
+                    ZLinkSessionBindingKey.FromBoundary(actorId, bindingToken),
                     out var entry)
                 && ReferenceEquals(entry.ActorRef, actorRef))
             {
@@ -812,7 +849,7 @@ internal sealed class ZLinkSessionActorBindingTable
     {
         lock (_entries)
         {
-            var key = new ZLinkSessionBindingKey(actorId, bindingToken);
+            var key = ZLinkSessionBindingKey.FromBoundary(actorId, bindingToken);
             if (_entries.TryGetValue(key, out var existing)
                 && ReferenceEquals(existing.Context, context)
                 && string.Equals(existing.BindingToken, bindingToken, StringComparison.Ordinal))
@@ -831,7 +868,7 @@ internal sealed class ZLinkSessionActorBindingTable
     {
         lock (_entries)
         {
-            var key = new ZLinkSessionBindingKey(actorId, bindingToken);
+            var key = ZLinkSessionBindingKey.FromBoundary(actorId, bindingToken);
             if (_entries.TryGetValue(key, out var entry))
             {
                 context = entry.Context;
@@ -849,8 +886,9 @@ internal sealed class ZLinkSessionActorBindingTable
     {
         lock (_entries)
         {
+            var actorKey = ZLinkActorId.FromBoundary(actorId, nameof(actorId));
             foreach (var entry in _entries)
-                if (string.Equals(entry.Key.ActorId, actorId, StringComparison.Ordinal))
+                if (entry.Key.ActorId == actorKey)
                 {
                     context = entry.Value.Context;
                     return true;
@@ -867,15 +905,68 @@ internal sealed class ZLinkSessionActorBindingTable
     {
         lock (_entries)
         {
+            var actorKey = ZLinkActorId.FromBoundary(actorId, nameof(actorId));
             foreach (var candidate in _entries)
-                if (string.Equals(
-                        candidate.Key.ActorId,
-                        actorId,
-                        StringComparison.Ordinal))
+                if (candidate.Key.ActorId == actorKey)
                 {
                     entry = candidate.Value;
                     return true;
                 }
+            entry = null!;
+            return false;
+        }
+    }
+
+    public bool TryGetExactRetiredBinding(
+        string actorId,
+        RoutingId sessionOwnerNodeRid,
+        RoutingId sessionRid,
+        ulong sessionOwnerNodeGeneration,
+        string sessionOwnerId,
+        ulong sessionOwnerLeaseGeneration,
+        ulong bindingGeneration,
+        out ZLinkSessionBindingEntry entry)
+        => TryGetExactRetiredBinding(
+            ZLinkActorId.FromBoundary(actorId, nameof(actorId)),
+            sessionOwnerNodeRid,
+            sessionRid,
+            sessionOwnerNodeGeneration,
+            sessionOwnerId,
+            sessionOwnerLeaseGeneration,
+            bindingGeneration,
+            out entry);
+
+    internal bool TryGetExactRetiredBinding(
+        ZLinkActorId actorId,
+        RoutingId sessionOwnerNodeRid,
+        RoutingId sessionRid,
+        ulong sessionOwnerNodeGeneration,
+        string sessionOwnerId,
+        ulong sessionOwnerLeaseGeneration,
+        ulong bindingGeneration,
+        out ZLinkSessionBindingEntry entry)
+    {
+        lock (_entries)
+        {
+            foreach (var candidate in _entries)
+            {
+                var value = candidate.Value;
+                if (candidate.Key.ActorId != actorId
+                    || value.ActorRef.SessionRid != sessionRid
+                    || value.BindingGeneration != bindingGeneration
+                    || value.SessionOwnerNodeRid != sessionOwnerNodeRid
+                    || value.SessionOwnerNodeGeneration
+                       != sessionOwnerNodeGeneration
+                    || !string.Equals(
+                        value.SessionOwnerId,
+                        sessionOwnerId,
+                        StringComparison.Ordinal)
+                    || value.SessionOwnerLeaseGeneration
+                       != sessionOwnerLeaseGeneration)
+                    continue;
+                entry = value;
+                return true;
+            }
             entry = null!;
             return false;
         }

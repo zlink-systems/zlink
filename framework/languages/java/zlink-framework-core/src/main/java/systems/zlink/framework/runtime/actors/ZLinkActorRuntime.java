@@ -1904,13 +1904,13 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                     + " correlation=" + correlationId);
         }
         if (flow == null
-            || !flow.enabled(systems.zlink.framework.configuration.ZLinkMessageFlowOutcome.DISPATCHED)) {
+            || !flow.enabled(systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome.DISPATCHED)) {
             return;
         }
-        flow.trace(new systems.zlink.framework.configuration.ZLinkMessageFlowEvent(
-            systems.zlink.framework.configuration.ZLinkMessageFlowOutcome.DISPATCHED,
-            systems.zlink.framework.configuration.ZLinkDispatchErrorSurface.SPOT_ACTOR,
-            systems.zlink.framework.configuration.ZLinkDispatchMessageKind.ACTOR_SEND,
+        flow.trace(new systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent(
+            systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome.DISPATCHED,
+            systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSurface.SPOT_ACTOR,
+            systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind.ACTOR_SEND,
             marker,
             null,
             null,
@@ -2426,29 +2426,26 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
     private <T> CompletionStage<T> serializeActorCreation(
         String actorId,
         java.util.function.Supplier<CompletionStage<T>> operation) {
-        CompletableFuture<T> result;
-        CompletableFuture<Void> tail;
+        CompletableFuture<Void> previous;
+        CompletableFuture<Void> reservation = new CompletableFuture<>();
         synchronized (actorCreationGate) {
-            CompletableFuture<Void> previous =
-                actorCreationTails.get(actorId);
-            CompletionStage<Void> ready = previous == null
-                ? CompletableFuture.completedFuture(null)
-                : previous.handle((ignored, error) -> null);
-            result = ready.thenCompose(ignored -> {
+            previous = actorCreationTails.put(actorId, reservation);
+        }
+
+        CompletionStage<T> result = (previous == null
+            ? CompletableFuture.completedFuture(null)
+            : previous.handle((ignored, error) -> null))
+            .thenCompose(ignored -> {
                 try {
                     return operation.get();
                 } catch (RuntimeException error) {
                     return CompletableFuture.failedFuture(error);
                 }
-            }).toCompletableFuture();
-            tail = result.handle((ignored, error) -> (Void) null)
-                .toCompletableFuture();
-            actorCreationTails.put(actorId, tail);
-        }
-        CompletableFuture<Void> expectedTail = tail;
-        tail.whenComplete((ignored, error) -> {
+            });
+        result.whenComplete((ignored, error) -> {
+            reservation.complete(null);
             synchronized (actorCreationGate) {
-                if (actorCreationTails.get(actorId) == expectedTail) {
+                if (actorCreationTails.get(actorId) == reservation) {
                     actorCreationTails.remove(actorId);
                 }
             }
@@ -2872,7 +2869,6 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         if (sourceNodeRid == null
             || sourceNodeGeneration <= 0
             || header == null
-            || header.boundSession() != null
             || parts == null
             || parts.size() != 2
             || messageFollowNoticeSender == null) {
@@ -2913,6 +2909,17 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         java.util.function.Consumer<Throwable> onFailure = failure == null
             ? ignored -> { }
             : failure;
+        if (header.messageFollowHopCount() + 1
+            > ZLinkServiceMessageFollowWireCodec.MAX_HOP_COUNT) {
+            onFailure.accept(new systems.zlink.framework.errors.ZLinkFrameworkException(
+                systems.zlink.framework.errors.ZLinkFrameworkErrorKind.UNAVAILABLE,
+                "Message Follow hop limit exceeded"));
+            payload.close();
+            if (inboundDispatchLease != null) {
+                inboundDispatchLease.close();
+            }
+            return true;
+        }
         boolean resolveTargetFence = followSource.targetRoute() != null
             && !followSource.messageFollowNoticeClaimed();
         if (resolveTargetFence
@@ -3240,6 +3247,35 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             actorId,
             acceptedJournalRecord,
             null,
+            operation,
+            relocationRelease);
+    }
+
+    public CompletionStage<Void> submitActorDispatchLazyRecord(
+        String actorId,
+        Supplier<byte[]> acceptedJournalRecord,
+        long acceptedJournalRecordSizeHint,
+        Supplier<CompletionStage<Void>> operation,
+        Runnable relocationRelease) {
+        if (dispatches.isCurrent(actorId)) {
+            try {
+                return operation.get();
+            } catch (RuntimeException ex) {
+                return CompletableFuture.failedFuture(ex);
+            }
+        }
+        ZLinkActorDispatchSerials.QueuedTurn turn;
+        synchronized (this) {
+            if (!actorRegistry.contains(actorId)) {
+                return CompletableFuture.failedFuture(new ZLinkConfigurationException(
+                    "actor is not managed by this runtime: " + actorId));
+            }
+            turn = dispatches.prepare(actorId);
+        }
+        return dispatches.enqueueLazyRecord(
+            turn,
+            acceptedJournalRecord,
+            acceptedJournalRecordSizeHint,
             operation,
             relocationRelease);
     }

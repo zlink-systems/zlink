@@ -238,31 +238,40 @@ final class ZLinkInstanceSpotActivation
         }
     }
 
-    synchronized CompletionStage<Boolean> closeExplicit() {
+    CompletionStage<Boolean> closeExplicit() {
         return closeWithReason(ZLinkSpotCloseReason.EXPLICIT_CLOSE);
     }
 
-    private synchronized CompletionStage<Boolean> closeWithReason(
+    private CompletionStage<Boolean> closeWithReason(
         ZLinkSpotCloseReason reason) {
-        if (closeFuture != null) {
-            return closeFuture;
+        CompletableFuture<Boolean> result;
+        boolean retryIdle;
+        synchronized (this) {
+            if (closeFuture != null) {
+                return closeFuture;
+            }
+            retryIdle = reason == ZLinkSpotCloseReason.IDLE_EVICTED
+                && (!isIdleCandidate()
+                    || context.hasActiveTimers()
+                    || hasActiveRouteReceives());
+            if (retryIdle) {
+                result = null;
+            } else {
+                closeStarted = true;
+                synchronized (idleLock) {
+                    if (idleCheck != null) {
+                        idleCheck.cancel(false);
+                        idleCheck = null;
+                    }
+                }
+                result = new CompletableFuture<>();
+                closeFuture = result;
+            }
         }
-        if (reason == ZLinkSpotCloseReason.IDLE_EVICTED
-            && (!isIdleCandidate()
-                || context.hasActiveTimers()
-                || hasActiveRouteReceives())) {
+        if (retryIdle) {
             rescheduleIdleCheck();
             return CompletableFuture.completedFuture(false);
         }
-        closeStarted = true;
-        synchronized (idleLock) {
-            if (idleCheck != null) {
-                idleCheck.cancel(false);
-                idleCheck = null;
-            }
-        }
-        CompletableFuture<Boolean> result = new CompletableFuture<>();
-        closeFuture = result;
         CompletionStage<Boolean> seal;
         try {
             seal = host.sealInstanceSpotAuthority(this);

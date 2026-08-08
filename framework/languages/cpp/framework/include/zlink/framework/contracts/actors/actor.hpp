@@ -47,7 +47,7 @@ class actor_id_t final
     }
 
     std::string_view value () const noexcept { return _value; }
-    auto operator<=> (const actor_id_t &) const = default;
+    auto operator<=>(const actor_id_t &) const = default;
 
   private:
     std::string _value;
@@ -161,32 +161,25 @@ struct actor_join_failed_t
 };
 
 using actor_join_completion_t =
-  std::variant<actor_join_accepted_t,
-               actor_join_rejected_t,
-               actor_join_failed_t>;
+  std::variant<actor_join_accepted_t, actor_join_rejected_t, actor_join_failed_t>;
 
 namespace detail
 {
 inline actor_join_completion_t
-actor_join_completion_from_erased (
-  actor_join_completion_outcome_t outcome,
-  std::uint64_t operation_id_high,
-  std::uint64_t operation_id_low,
-  const actor_ref_t *committed,
-  const std::optional<message_t> &reply,
-  framework_error_kind_t error_kind)
+actor_join_completion_from_erased (actor_join_completion_outcome_t outcome,
+                                   std::uint64_t operation_id_high,
+                                   std::uint64_t operation_id_low,
+                                   const actor_ref_t *committed,
+                                   const std::optional<message_t> &reply,
+                                   framework_error_kind_t error_kind)
 {
-    if (outcome == actor_join_completion_outcome_t::accepted
-        && committed != nullptr) {
-        return actor_join_accepted_t{
-          operation_id_high, operation_id_low, *committed, reply};
+    if (outcome == actor_join_completion_outcome_t::accepted && committed != nullptr) {
+        return actor_join_accepted_t{operation_id_high, operation_id_low, *committed, reply};
     }
     if (outcome == actor_join_completion_outcome_t::rejected) {
-        return actor_join_rejected_t{
-          operation_id_high, operation_id_low, reply};
+        return actor_join_rejected_t{operation_id_high, operation_id_low, reply};
     }
-    return actor_join_failed_t{
-      operation_id_high, operation_id_low, error_kind};
+    return actor_join_failed_t{operation_id_high, operation_id_low, error_kind};
 }
 } // namespace detail
 
@@ -197,39 +190,32 @@ class actor_t
     virtual actor_context_t &context () noexcept = 0;
     virtual const actor_context_t &context () const noexcept = 0;
     virtual void configure () {}
-    virtual task_t<void>
-    on_join_completed (const actor_join_completion_t &)
+    virtual task_t<void> on_join_completed (const actor_join_completion_t &)
     {
         return task_t<void> (result_t<void>::success ());
     }
 };
 
-template <typename TActor>
-requires std::derived_from<TActor, actor_t>
-class actor_factory_t
+template <typename TActor> requires std::derived_from<TActor, actor_t> class actor_factory_t
 {
   public:
     virtual ~actor_factory_t () = default;
-    virtual task_t<std::shared_ptr<TActor>>
-    create (actor_context_t context,
-            std::stop_token operation_cancellation) = 0;
+    virtual task_t<std::shared_ptr<TActor>> create (actor_context_t context,
+                                                    std::stop_token operation_cancellation) = 0;
 };
 
-template <typename TActor>
-class actor_relocation_adapter_t
+template <typename TActor> class actor_relocation_adapter_t
 {
   public:
     virtual ~actor_relocation_adapter_t () = default;
-    virtual task_t<std::vector<std::byte>>
-    capture (TActor &actor, std::stop_token operation_cancellation) = 0;
-    virtual task_t<void>
-    restore (TActor &actor,
-             std::vector<std::byte> payload,
-             std::stop_token operation_cancellation) = 0;
+    virtual task_t<std::vector<std::byte>> capture (TActor &actor,
+                                                    std::stop_token operation_cancellation) = 0;
+    virtual task_t<void> restore (TActor &actor,
+                                  std::vector<std::byte> payload,
+                                  std::stop_token operation_cancellation) = 0;
 };
 
-template <typename TActor>
-class actor_factory_builder_t
+template <typename TActor> class actor_factory_builder_t
 {
   public:
     void disable_relocation ()
@@ -245,31 +231,25 @@ class actor_factory_builder_t
     }
 
     template <typename TAdapter>
-    requires std::derived_from<TAdapter, actor_relocation_adapter_t<TActor>>
-    void preserve_state_with ()
+    requires std::derived_from<TAdapter, actor_relocation_adapter_t<TActor>> void
+    preserve_state_with ()
     {
         ensure_mutable ();
-        static_assert (
-          std::is_default_constructible_v<TAdapter>,
-          "C++ Actor relocation adapters must be default constructible");
-        select (detail::factory_relocation_kind_t::preserve_state,
-                typeid (TAdapter));
+        static_assert (std::is_default_constructible_v<TAdapter>,
+                       "C++ Actor relocation adapters must be default constructible");
+        select (detail::factory_relocation_kind_t::preserve_state, typeid (TAdapter));
         _capture = [] (void *actor,
-                       std::stop_token operation_cancellation)
-          -> task_t<std::vector<std::byte>> {
+                       std::stop_token operation_cancellation) -> task_t<std::vector<std::byte>> {
             auto adapter = std::make_shared<TAdapter> ();
-            auto payload = co_await adapter->capture (
-              *static_cast<TActor *> (actor), operation_cancellation);
+            auto payload =
+              co_await adapter->capture (*static_cast<TActor *> (actor), operation_cancellation);
             co_return payload;
         };
-        _restore = [] (void *actor,
-                       std::vector<std::byte> payload,
-                       std::stop_token operation_cancellation)
-          -> task_t<void> {
+        _restore = [] (void *actor, std::vector<std::byte> payload,
+                       std::stop_token operation_cancellation) -> task_t<void> {
             auto adapter = std::make_shared<TAdapter> ();
-            co_await adapter->restore (
-              *static_cast<TActor *> (actor), std::move (payload),
-              operation_cancellation);
+            co_await adapter->restore (*static_cast<TActor *> (actor), std::move (payload),
+                                       operation_cancellation);
         };
     }
 
@@ -289,31 +269,24 @@ class actor_factory_builder_t
 
     void validate () const
     {
-        if (_relocation.kind
-            == detail::factory_relocation_kind_t::unspecified) {
-            throw framework_exception_t (
-              framework_error_kind_t::not_configured,
-              "Actor factory must select exactly one relocation policy");
+        if (_relocation.kind == detail::factory_relocation_kind_t::unspecified) {
+            throw framework_exception_t (framework_error_kind_t::not_configured,
+                                         "Actor factory must select exactly one relocation policy");
         }
     }
 
-    void select (detail::factory_relocation_kind_t kind,
-                 std::type_index adapter_type)
+    void select (detail::factory_relocation_kind_t kind, std::type_index adapter_type)
     {
-        if (_relocation.kind
-            != detail::factory_relocation_kind_t::unspecified) {
-            throw framework_exception_t (
-              framework_error_kind_t::not_configured,
-              "Actor factory must select exactly one relocation policy");
+        if (_relocation.kind != detail::factory_relocation_kind_t::unspecified) {
+            throw framework_exception_t (framework_error_kind_t::not_configured,
+                                         "Actor factory must select exactly one relocation policy");
         }
         _relocation = {kind, adapter_type};
     }
 
     detail::factory_relocation_configuration_t _relocation;
-    std::function<task_t<std::vector<std::byte>> (
-      void *, std::stop_token)> _capture;
-    std::function<task_t<void> (
-      void *, std::vector<std::byte>, std::stop_token)> _restore;
+    std::function<task_t<std::vector<std::byte>> (void *, std::stop_token)> _capture;
+    std::function<task_t<void> (void *, std::vector<std::byte>, std::stop_token)> _restore;
     bool _sealed = false;
 };
 
@@ -336,8 +309,7 @@ class actor_send_call_t
     std::string _packet_name;
     message_t _message;
     metadata_map_t _metadata;
-    std::shared_ptr<detail::submit_once_t> _submission =
-      std::make_shared<detail::submit_once_t> ();
+    std::shared_ptr<detail::submit_once_t> _submission = std::make_shared<detail::submit_once_t> ();
 };
 
 class actor_request_call_t
@@ -385,8 +357,7 @@ class actor_client_t
   public:
     virtual ~actor_client_t () = default;
 
-    template <typename TMessage>
-    actor_send_call_t send (actor_id_t actor_id, TMessage message)
+    template <typename TMessage> actor_send_call_t send (actor_id_t actor_id, TMessage message)
     {
         using message_type = std::remove_cvref_t<TMessage>;
         return actor_send_call_t (*this, std::move (actor_id),
@@ -408,12 +379,12 @@ class actor_client_t
                                       std::string packet_name,
                                       message_t message,
                                       const actor_send_call_t::metadata_map_t &metadata) = 0;
-    virtual task_t<message_t> request_erased (
-      actor_id_t actor_id,
-      std::string packet_name,
-      message_t request,
-      std::optional<std::chrono::milliseconds> timeout,
-      const actor_request_call_t::metadata_map_t &metadata) = 0;
+    virtual task_t<message_t>
+    request_erased (actor_id_t actor_id,
+                    std::string packet_name,
+                    message_t request,
+                    std::optional<std::chrono::milliseconds> timeout,
+                    const actor_request_call_t::metadata_map_t &metadata) = 0;
     virtual serializer_registry_t &actor_client_serializers () = 0;
 
   private:
@@ -445,9 +416,7 @@ struct actor_create_rejected_t
 };
 
 using actor_create_result_t =
-  std::variant<actor_create_existing_t,
-               actor_create_created_t,
-               actor_create_rejected_t>;
+  std::variant<actor_create_existing_t, actor_create_created_t, actor_create_rejected_t>;
 
 class actor_create_call_t
 {
@@ -463,7 +432,7 @@ class actor_create_call_t
     template <typename TCreation>
     requires (!std::is_same_v<std::remove_cvref_t<TCreation>, zlink::message_t>
               && !std::is_same_v<std::remove_cvref_t<TCreation>, message_t>)
-    actor_create_call_t &creation_request (TCreation request)
+      actor_create_call_t &creation_request (TCreation request)
     {
         return creation_request (message_t::from (std::move (request)));
     }
@@ -473,8 +442,7 @@ class actor_create_call_t
 
   private:
     friend class actor_manager_t;
-    explicit actor_create_call_t (
-      std::shared_ptr<detail::actor_create_call_state_t> state);
+    explicit actor_create_call_t (std::shared_ptr<detail::actor_create_call_state_t> state);
     std::shared_ptr<detail::actor_create_call_state_t> _state;
 };
 
@@ -488,18 +456,15 @@ class actor_manager_t
     actor_manager_t (const actor_manager_t &) = default;
     actor_manager_t &operator= (const actor_manager_t &) = default;
 
-    actor_create_call_t create (actor_id_t actor_id,
-                                std::string stable_type);
-    actor_create_call_t get_or_create (actor_id_t actor_id,
-                                       std::string stable_type);
+    actor_create_call_t create (actor_id_t actor_id, std::string stable_type);
+    actor_create_call_t get_or_create (actor_id_t actor_id, std::string stable_type);
     task_t<std::optional<actor_ref_t>> find (actor_id_t actor_id) const;
     task_t<std::optional<spot_ref_t>> find_spot (actor_id_t actor_id) const;
     task_t<bool> destroy (actor_ref_t actor);
 
   private:
     friend class detail::actor_manager_access_t;
-    explicit actor_manager_t (
-      std::shared_ptr<detail::actor_manager_state_t> state);
+    explicit actor_manager_t (std::shared_ptr<detail::actor_manager_state_t> state);
     std::shared_ptr<detail::actor_manager_state_t> _state;
 };
 
@@ -518,9 +483,7 @@ class actor_join_call_t
   public:
     using deferred_fn_t = std::function<void (std::chrono::milliseconds)>;
 
-    explicit actor_join_call_t (deferred_fn_t deferred) :
-        _deferred (std::move (deferred))
-    {}
+    explicit actor_join_call_t (deferred_fn_t deferred) : _deferred (std::move (deferred)) {}
     actor_join_call_t (actor_join_call_t &&) noexcept = default;
     actor_join_call_t &operator= (actor_join_call_t &&) noexcept = default;
     actor_join_call_t (const actor_join_call_t &) = delete;
@@ -540,15 +503,13 @@ class actor_join_call_t
     void defer ()
     {
         if (_deferred_once) {
-            throw framework_exception_t (
-              framework_error_kind_t::invalid_operation,
-              "Actor join call was already deferred");
+            throw framework_exception_t (framework_error_kind_t::invalid_operation,
+                                         "Actor join call was already deferred");
         }
         _deferred_once = true;
         if (!_deferred) {
-            throw framework_exception_t (
-              framework_error_kind_t::not_configured,
-              "Actor join call has no deferred operation");
+            throw framework_exception_t (framework_error_kind_t::not_configured,
+                                         "Actor join call has no deferred operation");
         }
         const auto deadline = std::chrono::steady_clock::now () + _timeout;
         std::shared_ptr<detail::deferred_barrier_t> barrier;
@@ -558,35 +519,28 @@ class actor_join_call_t
                 const auto *error = reserved.error ();
                 throw framework_exception_t (
                   reserved.error_kind (),
-                  error != nullptr ? error->what ()
-                                   : "Actor join barrier reservation failed");
+                  error != nullptr ? error->what () : "Actor join barrier reservation failed");
             }
             barrier = std::move (reserved.value ());
         }
         auto registered = detail::defer_current_serial_turn (
-          [deferred = std::move (_deferred), deadline,
-           barrier] () mutable {
-              auto run = [deferred = std::move (deferred),
-                          deadline] () mutable {
+          [deferred = std::move (_deferred), deadline, barrier] () mutable {
+              auto run = [deferred = std::move (deferred), deadline] () mutable {
                   const auto now = std::chrono::steady_clock::now ();
                   if (now >= deadline) {
                       throw framework_exception_t (
                         framework_error_kind_t::deadline_exceeded,
                         "Deferred Actor join deadline elapsed before activation");
                   }
-                  deferred (
-                    std::chrono::duration_cast<std::chrono::milliseconds> (
-                      deadline - now));
+                  deferred (std::chrono::duration_cast<std::chrono::milliseconds> (deadline - now));
               };
               if (barrier) {
-                  const auto activated = barrier->activate (
-                    std::move (run));
+                  const auto activated = barrier->activate (std::move (run));
                   if (!activated) {
                       const auto *error = activated.error ();
                       throw framework_exception_t (
                         activated.error_kind (),
-                        error != nullptr ? error->what ()
-                                         : "Actor join barrier activation failed");
+                        error != nullptr ? error->what () : "Actor join barrier activation failed");
                   }
                   return;
               }
@@ -600,22 +554,20 @@ class actor_join_call_t
             if (barrier)
                 barrier->cancel ();
             const auto *error = registered.error ();
-            throw framework_exception_t (
-              registered.error_kind (),
-              error != nullptr ? error->what ()
-                               : "Actor join defer registration failed");
+            throw framework_exception_t (registered.error_kind (),
+                                         error != nullptr ? error->what ()
+                                                          : "Actor join defer registration failed");
         }
     }
 
   private:
     friend class actor_context_t;
 
-    actor_join_call_t (
-      deferred_fn_t deferred,
-      detail::deferred_barrier_reserver_t reserve_barrier) :
-        _deferred (std::move (deferred)),
-        _reserve_barrier (std::move (reserve_barrier))
-    {}
+    actor_join_call_t (deferred_fn_t deferred,
+                       detail::deferred_barrier_reserver_t reserve_barrier) :
+        _deferred (std::move (deferred)), _reserve_barrier (std::move (reserve_barrier))
+    {
+    }
 
     deferred_fn_t _deferred;
     detail::deferred_barrier_reserver_t _reserve_barrier;
@@ -682,9 +634,8 @@ class bound_session_t
                 std::function<encoded_payload_t (serializer_registry_t &)> encode_payload);
     bound_session_send_call_t
     send_typed (std::string packet_name, std::type_index message_type, const void *message);
-    bound_session_send_call_t send_erased (std::string packet_name,
-                                           stream_codec_t codec,
-                                           const zlink::message_t &payload);
+    bound_session_send_call_t
+    send_erased (std::string packet_name, stream_codec_t codec, const zlink::message_t &payload);
 
     std::shared_ptr<detail::actor_gateway_state_t> _state;
     std::shared_ptr<actor_ref_t> _actor_ref;
@@ -712,24 +663,20 @@ class actor_context_t
     actor_join_call_t join_spot_payload (spot_id_t spot_id, const zlink::message_t &request)
     {
         auto context = std::shared_ptr<actor_context_t> (
-          new actor_context_t (
-            _state, *_actor_ref, _source_binding_generation, _mesh_name));
+          new actor_context_t (_state, *_actor_ref, _source_binding_generation, _mesh_name));
         context->_actor_ref = _actor_ref;
         return actor_join_call_t (
-          [context, spot_id = std::move (spot_id), request] (
-            std::chrono::milliseconds timeout) mutable {
-              const auto erased =
-                context->join_spot_erased (std::move (spot_id), request, timeout);
+          [context, spot_id = std::move (spot_id),
+           request] (std::chrono::milliseconds timeout) mutable {
+              const auto erased = context->join_spot_erased (std::move (spot_id), request, timeout);
               if (!erased) {
                   const auto *error = erased.error ();
-                  throw framework_exception_t (
-                    erased.error_kind (),
-                    error != nullptr ? error->what () : "actor join spot failed");
+                  throw framework_exception_t (erased.error_kind (), error != nullptr
+                                                                       ? error->what ()
+                                                                       : "actor join spot failed");
               }
           },
-          [context] {
-              return context->reserve_join_barrier ();
-          });
+          [context] { return context->reserve_join_barrier (); });
     }
 
   public:
@@ -737,9 +684,8 @@ class actor_context_t
     {
         auto *serializers = serializer_registry ();
         if (serializers == nullptr) {
-            throw framework_exception_t (
-              framework_error_kind_t::protocol_error,
-              "actor join spot requires a serializer registry");
+            throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                         "actor join spot requires a serializer registry");
         }
         return join_spot_payload (std::move (spot_id), request.to_raw (*serializers));
     }
@@ -750,9 +696,8 @@ class actor_context_t
     {
         auto *serializers = serializer_registry ();
         if (serializers == nullptr) {
-            throw framework_exception_t (
-              framework_error_kind_t::protocol_error,
-              "actor join spot requires a serializer registry");
+            throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                         "actor join spot requires a serializer registry");
         }
         return join_spot_payload (
           std::move (spot_id),
@@ -772,32 +717,26 @@ class actor_context_t
     {
         auto *serializers = serializer_registry ();
         if (serializers == nullptr) {
-            throw framework_exception_t (
-              framework_error_kind_t::protocol_error,
-              "actor join entry spot requires a serializer registry");
+            throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                         "actor join entry spot requires a serializer registry");
         }
         return join_entry_spot_payload (request.to_raw (*serializers));
     }
 
     template <typename TRequest>
-    requires (!std::is_same_v<std::remove_cvref_t<TRequest>, message_t>)
-      actor_join_call_t
+    requires (!std::is_same_v<std::remove_cvref_t<TRequest>, message_t>) actor_join_call_t
       join_entry_spot (const TRequest &request)
     {
         auto *serializers = serializer_registry ();
         if (serializers == nullptr) {
-            throw framework_exception_t (
-              framework_error_kind_t::protocol_error,
-              "actor join entry spot requires a serializer registry");
+            throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                         "actor join entry spot requires a serializer registry");
         }
         return join_entry_spot_payload (
           detail::encoded_payload_to_raw (serializers->get<TRequest> ().serialize (request)));
     }
 
-    actor_join_call_t join_entry_spot ()
-    {
-        return join_entry_spot_payload (zlink::message_t{});
-    }
+    actor_join_call_t join_entry_spot () { return join_entry_spot_payload (zlink::message_t{}); }
 
   private:
     friend class spot_node_builder_t;
@@ -816,8 +755,7 @@ class actor_context_t
     result_t<detail::actor_join_reply_t> join_spot_erased (spot_id_t spot_id,
                                                            const zlink::message_t &request,
                                                            std::chrono::milliseconds timeout);
-    result_t<std::shared_ptr<detail::deferred_barrier_t>>
-    reserve_join_barrier () const;
+    result_t<std::shared_ptr<detail::deferred_barrier_t>> reserve_join_barrier () const;
     serializer_registry_t *serializer_registry () const noexcept;
     std::optional<zlink::message_t> create_payload () const;
 
@@ -854,7 +792,10 @@ class session_actor_t
     explicit session_actor_t (std::shared_ptr<detail::actor_gateway_state_t> state,
                               actor_ref_t ref,
                               std::uint64_t binding_token = 0);
-    task_t<void> relay_internal (const zlink::message_t &payload);
+    result_t<std::uint64_t> reserve_relay_sequence ();
+    task_t<void> relay_internal (detail::stream_header_t header,
+                                 std::uint64_t relay_sequence,
+                                 const zlink::message_t &payload);
 
     std::shared_ptr<detail::actor_gateway_state_t> _state;
     actor_ref_t _ref;
@@ -933,22 +874,18 @@ class session_actor_manager_t
 };
 
 template <typename TActor, typename TActorFactory>
-spot_node_builder_t &
-spot_node_builder_t::add_actor_factory (
+spot_node_builder_t &spot_node_builder_t::add_actor_factory (
   std::string actor_type,
   std::shared_ptr<TActorFactory> factory,
   std::function<void (actor_factory_builder_t<TActor> &)> configure)
 {
     static_assert (std::derived_from<TActor, actor_t>);
-    static_assert (
-      std::derived_from<TActorFactory, actor_factory_t<TActor>>);
+    static_assert (std::derived_from<TActorFactory, actor_factory_t<TActor>>);
     if (!factory || !configure) {
-        throw framework_exception_t (
-          framework_error_kind_t::not_configured,
-          "Actor factory and configure callback must not be empty");
+        throw framework_exception_t (framework_error_kind_t::not_configured,
+                                     "Actor factory and configure callback must not be empty");
     }
-    auto factory_builder =
-      std::make_shared<actor_factory_builder_t<TActor>> ();
+    auto factory_builder = std::make_shared<actor_factory_builder_t<TActor>> ();
     retain_factory_builder (factory_builder);
     try {
         configure (*factory_builder);
@@ -963,40 +900,32 @@ spot_node_builder_t::add_actor_factory (
     auto restore = factory_builder->_restore;
     factory_builder->seal ();
     return add_actor_factory_erased (
-      std::move (actor_type), std::type_index (typeid (TActor)),
-      {},
-      [] (void *actor, const actor_ref_t &,
-          void *actor_context) {
+      std::move (actor_type), std::type_index (typeid (TActor)), {},
+      [] (void *actor, const actor_ref_t &, void *actor_context) {
           if (actor_context == nullptr
-              || !static_cast<TActor *> (actor)->context ()
-                    .has_same_source_fence (
-                      *static_cast<actor_context_t *> (
-                        actor_context))) {
+              || !static_cast<TActor *> (actor)->context ().has_same_source_fence (
+                *static_cast<actor_context_t *> (actor_context))) {
               throw framework_exception_t (
                 framework_error_kind_t::not_configured,
                 "Actor factory must return an Actor that exposes the provided Context");
           }
       },
-      [] (void *, serializer_registry_t &)
-        -> std::optional<zlink::message_t> { return std::nullopt; },
+      [] (void *, serializer_registry_t &) -> std::optional<zlink::message_t> {
+          return std::nullopt;
+      },
       [] (void *, const zlink::message_t &, serializer_registry_t &) {},
-      [factory = std::move (factory)] (
-        actor_context_t context) -> std::shared_ptr<void> {
-          auto expected = actor_context_t (
-            context._state, context.actor_ref (),
-            context._source_binding_generation, context._mesh_name);
+      [factory = std::move (factory)] (actor_context_t context) -> std::shared_ptr<void> {
+          auto expected = actor_context_t (context._state, context.actor_ref (),
+                                           context._source_binding_generation, context._mesh_name);
           auto created = factory->create (std::move (context), {}).result ();
           if (!created) {
               const auto *error = created.error ();
               throw framework_exception_t (
-                created.error_kind (),
-                error != nullptr ? error->what ()
-                                 : "Actor factory failed");
+                created.error_kind (), error != nullptr ? error->what () : "Actor factory failed");
           }
           if (!created.value ()) {
-              throw framework_exception_t (
-                framework_error_kind_t::not_found,
-                "Actor factory returned null");
+              throw framework_exception_t (framework_error_kind_t::not_found,
+                                           "Actor factory returned null");
           }
           if (!created.value ()->context ().has_same_source_fence (expected)) {
               throw framework_exception_t (
@@ -1004,23 +933,15 @@ spot_node_builder_t::add_actor_factory (
                 "Actor factory must return an Actor that exposes the provided Context");
           }
           created.value ()->configure ();
-          return std::static_pointer_cast<void> (
-            std::move (created.value ()));
+          return std::static_pointer_cast<void> (std::move (created.value ()));
       },
-      [] (void *actor,
-          detail::actor_join_completion_outcome_t outcome,
-          std::uint64_t operation_id_high,
-          std::uint64_t operation_id_low,
-          const actor_ref_t *committed,
-          const std::optional<message_t> &reply,
-          framework_error_kind_t error_kind,
-          bool) {
-          const auto completion =
-            detail::actor_join_completion_from_erased (
-              outcome, operation_id_high, operation_id_low, committed,
-              reply, error_kind);
-          return static_cast<TActor *> (actor)
-            ->on_join_completed (completion);
+      [] (void *actor, detail::actor_join_completion_outcome_t outcome,
+          std::uint64_t operation_id_high, std::uint64_t operation_id_low,
+          const actor_ref_t *committed, const std::optional<message_t> &reply,
+          framework_error_kind_t error_kind, bool) {
+          const auto completion = detail::actor_join_completion_from_erased (
+            outcome, operation_id_high, operation_id_low, committed, reply, error_kind);
+          return static_cast<TActor *> (actor)->on_join_completed (completion);
       },
       relocation, std::move (capture), std::move (restore));
 }

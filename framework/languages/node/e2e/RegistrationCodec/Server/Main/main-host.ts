@@ -2,7 +2,6 @@ import fs from 'node:fs';
 import { Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import type { ZLinkRouteClient } from '@zlink-systems/framework';
-import { ZLinkMessageFlowLogMode } from '@zlink-systems/framework';
 import {
   createMessagePackSerializer,
   ZLINK_MESSAGEPACK_CONTENT_TYPE
@@ -105,9 +104,7 @@ function createMainModule(hostOptions: MainHostOptions): Function {
                 }
               })
             .configureDispatch()
-              .messageFlow(ZLinkMessageFlowLogMode.KeyTransitions)
-              .traceLogFile(`${options.logDir}/${options.rid}-flow.log`)
-              .traceLabel(options.rid);
+              .messageFlow('normal');
           builder.options({ filters: [FirstFilter, SecondFilter] });
           const mesh = builder.addRouteMesh(RegistrationCodecNames.channel)
             .listen(options.channelEndpoint);

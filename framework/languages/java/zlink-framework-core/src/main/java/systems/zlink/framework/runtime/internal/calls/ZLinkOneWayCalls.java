@@ -7,6 +7,7 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BiFunction;
 import java.util.function.Supplier;
+import java.time.Duration;
 import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
@@ -15,6 +16,27 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendObject;
 
 /** Shared one-way admission and error mapping for all runtime families. */
 public final class ZLinkOneWayCalls {
+    @FunctionalInterface
+    public interface Admission extends BiFunction<
+        ZLinkBackendObject,
+        ZLinkBackendAdmissionKey,
+        BiFunction<Supplier<Boolean>, Runnable, CompletionStage<Void>>> {
+        CompletionStage<Void> submit(
+            ZLinkBackendObject backend,
+            ZLinkBackendAdmissionKey key,
+            Supplier<Boolean> submission,
+            Runnable cleanup,
+            Duration timeoutOverride);
+
+        @Override
+        default BiFunction<Supplier<Boolean>, Runnable, CompletionStage<Void>> apply(
+            ZLinkBackendObject backend,
+            ZLinkBackendAdmissionKey key) {
+            return (submission, cleanup) ->
+                submit(backend, key, submission, cleanup, null);
+        }
+    }
+
     public static final int SUBMITTED = 0;
     public static final int BACKPRESSURED = 1;
     public static final int TIMED_OUT = 2;
@@ -26,12 +48,29 @@ public final class ZLinkOneWayCalls {
         ZLinkBackendObject,
         ZLinkBackendAdmissionKey,
         BiFunction<Supplier<Boolean>, Runnable, CompletionStage<Void>>> admission;
+    private final Admission timedAdmission;
 
     public ZLinkOneWayCalls(BiFunction<
         ZLinkBackendObject,
         ZLinkBackendAdmissionKey,
         BiFunction<Supplier<Boolean>, Runnable, CompletionStage<Void>>> admission) {
         this.admission = Objects.requireNonNull(admission, "admission");
+        this.timedAdmission = admission instanceof Admission supported
+            ? supported
+            : null;
+    }
+
+    public CompletionStage<Void> submitOneWay(
+        ZLinkBackendObject backend,
+        ZLinkBackendAdmissionKey key,
+        Supplier<Boolean> submission,
+        Runnable cleanup,
+        Duration timeoutOverride) {
+        if (timeoutOverride == null || timedAdmission == null) {
+            return submitOneWay(backend, key, submission, cleanup);
+        }
+        return timedAdmission.submit(
+            backend, key, submission, cleanup, timeoutOverride);
     }
 
     public CompletionStage<Void> submitOneWay(

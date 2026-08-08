@@ -50,7 +50,7 @@ class PlayerActor implements ZLinkActor {
       ? payload.constructor.name
       : typeof payload;
     void this.context.boundSession.send(payload).submit().then(
-      () => console.log(`actor push submitted actor=${this.actorId} packet=${packetName}`),
+      () => undefined,
       (error: unknown) => console.error(
         `actor push failed actor=${this.actorId} packet=${packetName}`,
         error instanceof Error ? error.message : String(error)

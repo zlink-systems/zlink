@@ -13,8 +13,10 @@
 
 #include <zlink/framework.hpp>
 
+#include <algorithm>
 #include <memory>
 #include <string>
+#include <string_view>
 
 namespace e2e = zlink::framework::e2e::registry_messaging;
 namespace rm_provider = zlink::framework::e2e::registry_messaging::provider;
@@ -24,36 +26,6 @@ namespace
 
 void configure_common_codecs (zlink::framework::codec_options_builder_t codecs)
 {
-}
-
-std::string dispatch_reason_name (zlink::framework::dispatch_error_reason_t reason)
-{
-    switch (reason) {
-        case zlink::framework::dispatch_error_reason_t::handler_missing:
-            return "handler_missing";
-        case zlink::framework::dispatch_error_reason_t::payload_decode_failed:
-            return "payload_decode_failed";
-        case zlink::framework::dispatch_error_reason_t::handler_exception:
-            return "handler_exception";
-        case zlink::framework::dispatch_error_reason_t::invalid_frame:
-            return "invalid_frame";
-        case zlink::framework::dispatch_error_reason_t::reply_path_missing:
-            return "reply_path_missing";
-        case zlink::framework::dispatch_error_reason_t::unexpected_reply:
-            return "unexpected_reply";
-    }
-    return "unknown";
-}
-
-std::string dispatch_action_name (zlink::framework::dispatch_error_action_t action)
-{
-    switch (action) {
-        case zlink::framework::dispatch_error_action_t::drop:
-            return "drop";
-        case zlink::framework::dispatch_error_action_t::reply_error:
-            return "reply_error";
-    }
-    return "unknown";
 }
 
 } // namespace
@@ -68,27 +40,30 @@ int main (int argc, char **argv)
     }
     app.config ().load_json (*config_path);
     const auto options = app.config ().bind_required<rm_provider::provider_options_t> ("e2e");
+    auto state =
+      std::make_unique<rm_provider::scenario_state_t> (options.rid, options.instance_id);
+    auto *state_ptr = state.get ();
     app.logging ()
       .use_file (options.log_dir + "/" + options.rid + ".log")
+      .use_file (options.log_dir + "/" + options.rid + "-flow.log")
+      .use_provider (
+        "registry-messaging-evidence",
+        [state_ptr] (const zlink::framework::log_record_t &record) {
+            if (record.message != "dispatch error")
+                return;
+            const auto field = [&record] (std::string_view name) {
+                const auto found = std::find_if (
+                  record.fields.begin (), record.fields.end (),
+                  [name] (const auto &value) { return value.key == name; });
+                return found == record.fields.end () ? std::string{} : found->value;
+            };
+            state_ptr->record (
+              "DispatchError", field ("reason") + ":" + field ("action"));
+        })
       .set_min_level (zlink::framework::log_level_t::debug);
     app.add_zlink_framework ([&] (zlink::framework::zlink_framework_options_t &framework) {
         framework.configure_dispatch ()
-          .message_flow (zlink::framework::message_flow_log_mode_t::key_transitions)
-          .trace_log_file (options.log_dir + "/" + options.rid + "-flow.log")
-          .trace_label ("cpp-rm-" + options.rid);
-        auto state =
-          std::make_unique<rm_provider::scenario_state_t> (options.rid, options.instance_id);
-        auto *state_ptr = state.get ();
-        framework.configure_dispatch ().set_message_flow_observer (
-          [state_ptr] (const zlink::framework::message_flow_event_t &event) {
-              if (event.outcome != zlink::framework::message_flow_outcome_t::error
-                  || !event.error_reason || !event.error_action) {
-                  return;
-              }
-              state_ptr->record ("DispatchError",
-                                 dispatch_reason_name (*event.error_reason) + ":"
-                                   + dispatch_action_name (*event.error_action));
-          });
+          .message_flow (zlink::framework::message_flow_log_mode_t::normal);
         framework.services ().add_singleton<rm_provider::scenario_state_t> (std::move (state));
         framework.services ().add_transient<rm_provider::route_ping_handler_t,
                                             rm_provider::scenario_state_t> ();

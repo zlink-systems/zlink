@@ -8,6 +8,8 @@ trap 'rm -rf "$TEMP_DIR"' EXIT
 PACK_DIR="$TEMP_DIR/npm"
 BROWSER_DIR="$TEMP_DIR/browser-consumer"
 SERVER_DIR="$TEMP_DIR/server-consumer"
+GENERATED_BROWSER="$TEMP_DIR/framework-json-schema-browser.mjs"
+GENERATED_SERVER="$TEMP_DIR/framework-json-schema-server.cjs"
 mkdir -p "$PACK_DIR" "$BROWSER_DIR" "$SERVER_DIR"
 
 packages=(
@@ -47,6 +49,11 @@ npm run build
 for package_dir in "${packages[@]}"; do
   npm pack --silent "./packages/$package_dir" --pack-destination "$PACK_DIR" >/dev/null
 done
+
+node "$ROOT_DIR/scripts/generate-framework-json-schemas.mjs" \
+  --project "$ROOT_DIR/test/contract/fixtures/framework-json-schema-fixture.tsconfig.json" \
+  --out "$GENERATED_SERVER" \
+  --browser-out "$GENERATED_BROWSER" >/dev/null
 
 node - "$PACK_DIR" "${expected[@]}" <<'NODE'
 const fs = require('node:fs');
@@ -115,6 +122,7 @@ JSON
 "$ROOT_DIR/node_modules/.bin/tsc" -p tsconfig.json
 "$ROOT_DIR/node_modules/.bin/esbuild" index.ts --bundle --platform=browser --format=esm \
   --outfile=browser.mjs --metafile=browser-meta.json >/dev/null
+cp "$GENERATED_BROWSER" generated-framework-json-schemas.mjs
 node - <<'NODE'
 const fs = require('node:fs');
 const graph = JSON.parse(fs.readFileSync('browser-meta.json', 'utf8'));
@@ -133,12 +141,19 @@ import('@zlink-systems/stream-connector/browser').then(
     if (error.code !== 'ERR_PACKAGE_PATH_NOT_EXPORTED') throw error;
   }
 );
+import('./generated-framework-json-schemas.mjs').then((registry) => {
+  const packetNames = Object.keys(registry.packetContracts).sort();
+  if (packetNames.join(',') !== 'ClassPacket,FixturePacket') {
+    throw new Error('browser generated schema registry was not consumable');
+  }
+});
 NODE
 
 cd "$SERVER_DIR"
 npm init -y >/dev/null
 npm install --ignore-scripts "$BINDING_TGZ" "$HTTP_CLIENT_TGZ" "$PACK_DIR"/*.tgz >/dev/null
 npm ls --all >/dev/null
+cp "$GENERATED_SERVER" generated-framework-json-schemas.cjs
 cat > index.cjs <<'JS'
 const { zlinkFramework } = require('@zlink-systems/nestjs');
 const { zlinkProtobufCodec } = require('@zlink-systems/framework-codec-protobuf/framework');
@@ -154,6 +169,55 @@ if (options === undefined || wire.ZlinkStreamCodec.Protobuf !== 3) {
 }
 JS
 node index.cjs
+node - <<'NODE'
+const registry = require('./generated-framework-json-schemas.cjs');
+const packetNames = Object.keys(registry.packetContracts).sort();
+if (packetNames.join(',') !== 'ClassPacket,FixturePacket') {
+  throw new Error('server generated schema registry was not consumable from packed packages');
+}
+NODE
+
+cat > contract.ts <<'TS'
+import {
+  ZLinkFrameworkErrorKind,
+  ZLinkPacket,
+  type ZLinkLocationRuntimeQuery,
+  type ZLinkMessageFlowLogMode,
+  type ZLinkSessionSendCall
+} from '@zlink-systems/framework';
+
+const diagnosticsLevels: readonly ZLinkMessageFlowLogMode[] = [
+  'off',
+  'errors',
+  'normal',
+  'detailed'
+];
+declare const locations: ZLinkLocationRuntimeQuery;
+declare const send: ZLinkSessionSendCall;
+
+void diagnosticsLevels;
+void locations.findActorLocation('actor-a');
+void locations.findSpotLocation('spot-a');
+void send.timeout(1);
+void ZLinkFrameworkErrorKind.NotConfigured;
+void ZLinkPacket('FixturePacket');
+// @ts-expect-error generated schema registration is not a public overload.
+void ZLinkPacket('FixturePacket', { payload: { type: 'string' } });
+TS
+cat > tsconfig.json <<'JSON'
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "Node16",
+    "moduleResolution": "Node16",
+    "strict": true,
+    "skipLibCheck": false,
+    "noEmit": true
+  },
+  "include": ["contract.ts"]
+}
+JSON
+"$ROOT_DIR/node_modules/.bin/tsc" -p tsconfig.json
 
 node - "$BROWSER_DIR/node_modules/@zlink-systems/stream-wire" <<'NODE'
 const path = require('node:path');
@@ -180,4 +244,4 @@ import(pathToFileURL(path.join(root, 'dist/esm/index.mjs')).href).then((esm) => 
 });
 NODE
 
-echo "NODE_PACKAGED_CONTRACT_PASS packages=${#expected[@]} browser=esm server=commonjs"
+echo "NODE_PACKAGED_CONTRACT_PASS packages=${#expected[@]} browser=esm+generated-registry server=commonjs+generated-registry"

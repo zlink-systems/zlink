@@ -16,6 +16,12 @@ public interface IZLinkSession
     void Configure() { }
     ValueTask OnConnectedAsync(CancellationToken cancellationToken);
     ValueTask OnDisconnectedAsync(CancellationToken cancellationToken);
+    ValueTask OnActorBindingReplacedAsync(
+        string actorId,
+        CancellationToken cancellationToken)
+    {
+        return ValueTask.CompletedTask;
+    }
     ValueTask OnErrorAsync(
         ZLinkStreamError error,
         CancellationToken cancellationToken);
@@ -149,6 +155,16 @@ completes terminal-once as `DeadlineExceeded` and does not start later
 admission or replay. `CancellationToken` keeps the existing .NET cancellation
 contract, and the reply call doesn't provide this modifier.
 
+`OnActorBindingReplacedAsync(...)` is an optional callback run once on the previous session when
+the same Actor is bound to a new session. The application may use `Context.Client.Send(...)` to
+notify the client, but does not call `Context.CloseAsync()`. The framework closes the connection
+`100 ms` after the callback reaches a successful or failed terminal; an empty outbound queue does not shorten this delay.
+The new bind does not wait for this callback or close.
+
+| Implementation difference | Current state |
+|---|---|
+| Session Actor binding replacement | The .NET runtime does not yet implement command 51, this callback, or the non-blocking 100 ms close timer. |
+
 After bind, `RelayAsync(...)` and `NotifyDisconnectedAsync(...)` use the
 per-Actor binding. A physical disconnect is notified by the framework to
 every current binding, running the Spot callback at most once per exact
@@ -157,11 +173,12 @@ notification while the connection is kept, and waits for the callback
 terminal. The exact binding callback runs at most once, and after terminal
 the binding is committed as a tombstone and removed. The physical STREAM
 connection and Actor/Spot membership are kept. No new public Unbind API is
-provided. Rebind doesn't reuse an old exact binding identity for another
-Actor or generation: it registers a new identity first, then runs the old
-callback at most once and tombstones the old binding. Callback failure is
-recorded as diagnostics but doesn't remove the new binding or restore the old
-one. Relocation keeps the same ObjectGeneration and only updates that Actor's
+provided. Rebind completes as soon as the new identity becomes current and
+does not wait for the previous session. The previous exact session may notify
+the client in `OnActorBindingReplacedAsync(...)`. The framework closes the connection `100 ms`
+after the callback reaches a successful or failed terminal. Callback or close
+failure doesn't remove the new binding or restore the old one. Relocation
+keeps the same ObjectGeneration and only updates that Actor's
 binding route, so it isn't a rebind and doesn't run the disconnect callback.
 A different Actor binding of the same Session and
 the physical STREAM connection aren't changed.

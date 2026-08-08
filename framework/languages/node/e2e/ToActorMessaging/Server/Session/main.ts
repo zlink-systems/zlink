@@ -1,9 +1,7 @@
 import fs from 'node:fs';
-import path from 'node:path';
 import { Injectable, Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import {
-  ZLinkMessageFlowLogMode,
   type ZLinkMessage,
   type ZLinkSession,
   type ZLinkSessionContext,
@@ -16,7 +14,7 @@ import { ZLINK_LOCATION_RUNTIME_QUERY, ZLINK_ROUTE_MESH_RUNTIME, ZLinkModule, zl
 import { createRedisLocationStore, locationMessagingOptions } from '../../Shared/location-store';
 import {
   PacketNames,
-  type ActorPushReq,
+  ActorPushReq,
   type BindActorReq,
   type BindActorRes,
   type SessionBindingSnapshot
@@ -75,7 +73,7 @@ class ToActorSession implements ZLinkSession {
     }
 
     if (dispatch.packetName === PacketNames.actorPush) {
-      const request = payload.decode<ActorPushReq>(Object as never);
+      const request = payload.decode(ActorPushReq);
       const actor = this.context.actors.find(request.actorId);
       if (actor === undefined) {
         throw new Error(`Actor route not found: ${request.actorId}`);
@@ -121,9 +119,7 @@ Module({
         locationMessagingOptions(builder.configureLocations());
         builder
           .configureDispatch()
-          .messageFlow(ZLinkMessageFlowLogMode.KeyTransitions)
-          .traceLogFile(path.join(options.logDir, 'session-flow.log'))
-          .traceLabel(options.rid);
+          .messageFlow('normal');
         const mesh = builder
           .addRouteMesh('to-actor')
           .listen(options.routerEndpoint).routingId(options.rid);

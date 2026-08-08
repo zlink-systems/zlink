@@ -173,15 +173,14 @@ The RouteMesh DSL doesn't change the Java builder's meaning — it only
 provides a receiver and lambda. It configures a per-[ChannelName](../../../../01-glossary.en.md#channelname)
 role on one MeshNode's physical connection.
 
-When the Kotlin runtime directly uses Java's
-`ZLinkRouteMeshRuntimeOptions`, it projects the four public selections
-unchanged. `meshNode(meshName)` and `channel(meshName, channelName)`
-specify the target Mesh, and `mesh(meshName)` and `channel(channelName)`
-use the Mesh of the current runtime context. The Kotlin DSL's
-`routeMesh` and `channel` don't add a new overload to this runtime
-option. So these four methods must be confirmed with the same name,
-arguments, and return type in both the Java exact interface and the
-Kotlin package consumer.
+The Kotlin runtime directly uses Java's `ZLinkRouteMeshRuntimeOptions`.
+`channel(meshName, channelName)` selects a target Mesh and ChannelName,
+while `mesh(meshName)` selects the placement option. `channel(channelName)`
+selects a ChannelName registered on exactly one Mesh. The Kotlin DSL's
+`routeMesh` and `channel` don't add a new overload to this runtime option.
+So these three methods must be confirmed with the same name, arguments,
+and return type in both the Java exact interface and the Kotlin package
+consumer.
 
 RouteMesh Channel Server and ClientServer Server weight use the Java
 builder's signed `int`. The allowed range is `0..10000`, defaulting to

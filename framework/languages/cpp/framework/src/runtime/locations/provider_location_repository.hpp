@@ -3,6 +3,7 @@
 
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/locations/aggregate_inventory.hpp"
+#include "runtime/locations/authority_key_codec.hpp"
 #include <zlink/framework/contracts/locations/stores.hpp>
 
 #include "sha256.hpp"
@@ -289,12 +290,12 @@ class provider_location_repository_t final : public location_repository_t
             if (!advance_store_version (snapshot))
                 return completed (
                   authority_compare_exchange_result_t{authority_generation_exhausted_t{}});
-            const auto separator = key.value.find (':');
+            const auto decoded_key = authority_key_codec_detail::decode_authority_key (
+              key.value);
+            if (!decoded_key)
+                return authority_conflict (std::move (current));
             const object_creation_key_t object_key_value{
-              snapshot.allocation.object_kind,
-              separator == std::string::npos
-                ? key.value
-                : key.value.substr (separator + 1)};
+              snapshot.allocation.object_kind, decoded_key->object_id};
             const auto reservation_key = key_reservation (object_key_value);
             const auto reservation = read (reservation_key);
             const auto *stored_reservation =
@@ -2435,7 +2436,9 @@ class provider_location_repository_t final : public location_repository_t
 
     static std::string object_key (const object_creation_key_t &key)
     {
-        return std::to_string (static_cast<int> (key.kind)) + ":" + key.global_id;
+        return (key.kind == placement_object_kind_t::actor
+                  ? actor_authority_key (key.global_id)
+                  : spot_authority_key (key.global_id)).value;
     }
 
     template <std::size_t N> static std::string hex (const std::array<std::byte, N> &value)

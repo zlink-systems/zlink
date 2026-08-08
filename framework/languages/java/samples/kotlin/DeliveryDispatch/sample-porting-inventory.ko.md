@@ -19,7 +19,7 @@ process, stream runtime client, server evidence self-check를 실행한다.
 | 공통 DeliveryDispatch 문서 | `framework/doc/framework/common/sample/deliverydispatch/README.ko.md` | common-sample | done | 공통 문서가 시나리오, DTO와 검증 기준을 소유하며 Kotlin 전용 계약은 두지 않는다. |
 | `.NET: Server/Configuration/DeliveryDispatch.Server.Configuration.csproj` | `Server/Configuration/build.gradle.kts` | server-config-project | done | shared server configuration project |
 | `.NET: Server/Configuration/EvidenceStore.cs` | `Server/Configuration/src/main/kotlin/.../DeliveryEvidenceStore.kt` | server-evidence | done | Tracking role이 delivery별 status evidence를 파일에 기록한다. |
-| `.NET: Server/Configuration/SampleFlowLog.cs` | `Server/Configuration/src/main/kotlin/.../SampleFlowLog.kt` | logging | done | Dispatch, Tracking, CustomerGateway role log에 flow evidence를 남긴다. |
+| `.NET: Server/Configuration/SampleFlowLog.cs` | Framework standard logger | logging | done | Dispatch, Tracking, CustomerGateway role의 stdout에 message-flow evidence를 남긴다. |
 | `.NET: Server/Configuration/SampleNames.cs` | `Server/Configuration/src/main/kotlin/.../SampleNames.kt` | configuration | done | channel, mesh, role 이름과 검증 marker 상수를 둔다. |
 | `.NET: Server/Configuration/SampleTopology.cs` | `Server/Configuration/src/main/kotlin/.../SampleTopology.kt` + `run_sample.sh` | topology | done | runner가 배정한 role URL을 Kotlin topology 형태와 같은 key로 전달한다. |
 | `.NET: Server/CourierActorNode/ActorDirectory.cs` | `Server/CourierSpotNode/src/main/kotlin/.../ActorDirectory.kt` | courier-actor-directory | done | actor id와 courier actor instance mapping을 관리한다. |

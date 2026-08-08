@@ -1,4 +1,5 @@
 using Zlink.Framework.Runtime.Diagnostics;
+using Zlink.Framework.Runtime.Service;
 
 namespace Zlink.Framework.Runtime.Spots;
 
@@ -29,7 +30,7 @@ internal sealed class ZLinkSpotPeerConnector(
         lock (_gate)
         {
             if (!connections.TryAddPeerManual(endpoint)) return ValueTask.FromResult(false);
-            try { ConnectPeer(peerRid, endpoint, "none"); }
+            try { ConnectPeer(peerRid, endpoint, ZLinkServiceSecurityIdentity.Plaintext); }
             catch { connections.RollbackPeerManual(endpoint); throw; }
             return ValueTask.FromResult(true);
         }

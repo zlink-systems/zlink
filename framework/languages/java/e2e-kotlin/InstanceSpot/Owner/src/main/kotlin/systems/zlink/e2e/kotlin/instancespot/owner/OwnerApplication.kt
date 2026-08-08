@@ -45,9 +45,8 @@ class OwnerApplication {
         ZLinkFrameworkConfigurer { framework ->
             framework.useCoroutineHandlers(Dispatchers.Default)
             framework.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile("${options.logDir}/${options.rid}-flow.log")
-                .traceLabel(options.rid)
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL)
+            framework.addHandlersFromPackageOf(ProbeRequestHandler::class.java)
             val locations = framework.configureLocations()
             locations.setOwnerLeaseRenewInterval(Duration.ofMillis(options.heartbeatMillis))
             locations.setOwnerLeaseTtl(Duration.ofMillis(options.leaseTtlMillis))

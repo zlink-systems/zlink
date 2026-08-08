@@ -158,7 +158,7 @@ final class ZLinkBoundSessionRuntime implements ZLinkBoundSession {
             timeout,
             () -> stream.bindActor(sessionRid, targetActor)
                 .submit(java.time.Duration.ofSeconds(2)),
-            ZLinkActorSubmitFaults::alreadyBound,
+            ignored -> false,
             ZLinkActorSubmitFaults::retryableBoundSessionBindFailure);
     }
 
@@ -224,7 +224,8 @@ final class ZLinkBoundSessionRuntime implements ZLinkBoundSession {
                 payload,
                 options.withPacketName(packetName),
                 metadataPolicy,
-                oneWayCalls);
+                oneWayCalls,
+                submitGate);
         }
 
         @Override
@@ -236,7 +237,8 @@ final class ZLinkBoundSessionRuntime implements ZLinkBoundSession {
                 payload,
                 options.withMetadata(key, value),
                 metadataPolicy,
-                oneWayCalls);
+                oneWayCalls,
+                submitGate);
         }
 
         @Override
@@ -246,14 +248,13 @@ final class ZLinkBoundSessionRuntime implements ZLinkBoundSession {
             if (duplicate != null) {
                 return duplicate;
             }
-            byte[] payloadBytes;
+            ZLinkStreamHeader header = metadataPolicy.actorToSession(options).header();
+            Message payloadPart;
             try {
-                payloadBytes = payload.toByteArray();
+                payloadPart = Message.from(payload);
             } finally {
                 payload.close();
             }
-            ZLinkStreamHeader header = metadataPolicy.actorToSession(options).header();
-            Message payloadPart = Message.from(payloadBytes);
             return oneWayCalls.submitOneWay(
                 stream,
                 ZLinkBackendAdmissionKey.socket(),

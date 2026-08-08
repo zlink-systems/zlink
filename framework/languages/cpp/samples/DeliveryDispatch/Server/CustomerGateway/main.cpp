@@ -264,11 +264,10 @@ int main (int argc, char **argv)
     auto app = app_t::create ();
     const auto configuration = load_sample_configuration (app, argc, argv);
     const auto &topology = configuration.topology;
+    app.logging ().use_file (configuration.flow_log_path ());
     app.add_zlink_framework ([&] (zlink_framework_options_t &options) {
         options.configure_dispatch ()
-          .message_flow (message_flow_log_mode_t::key_transitions)
-          .trace_log_file (configuration.flow_log_path ())
-          .trace_label ("deliverydispatch-customer-gateway");
+          .message_flow (message_flow_log_mode_t::normal);
         auto sessions = std::make_unique<customer_session_directory_t> ();
         auto *sessions_ptr = sessions.get ();
         options.services ().add_singleton<customer_session_directory_t> (std::move (sessions));

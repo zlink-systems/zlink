@@ -31,10 +31,10 @@ public final class AtdA2AwaitTerminatorScenario {
             evidence.markers(),
             "await-started",
             "await-released",
-            "probe-started",
-            "probe-completed",
             "await-resumed",
-            "await-completed");
+            "await-completed",
+            "probe-started",
+            "probe-completed");
         System.out.println("scenario ATD-A2 passed");
     }
 }

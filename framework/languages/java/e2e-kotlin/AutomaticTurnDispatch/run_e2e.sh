@@ -31,6 +31,8 @@ chmod 0700 "${config_dir}"
 LOCAL_READINESS_TIMEOUT_SECONDS=3
 LOCAL_READINESS_POLL_SECONDS=0.1
 LOCAL_READINESS_ATTEMPTS=30
+PEER_READINESS_TIMEOUT_SECONDS=10
+PEER_READINESS_ATTEMPTS=100
 PLAY_B_START_DELAY_SECONDS="${ZLINK_KOTLIN_E2E_PLAY_B_START_DELAY_SECONDS:-0}"
 PROCESS_STOP_ATTEMPTS=600
 
@@ -123,6 +125,51 @@ wait_port() {
     sleep "${LOCAL_READINESS_POLL_SECONDS}"
   done
   echo "Timed out after ${LOCAL_READINESS_TIMEOUT_SECONDS}s waiting for ${name} at ${endpoint}" >&2
+  return 1
+}
+
+wait_log() {
+  local name="$1"
+  local path="$2"
+  local pattern="$3"
+  for _ in $(seq 1 "${LOCAL_READINESS_ATTEMPTS}"); do
+    if [[ -f "${path}" ]] && rg -q -- "${pattern}" "${path}"; then
+      return 0
+    fi
+    sleep "${LOCAL_READINESS_POLL_SECONDS}"
+  done
+  echo "Timed out after ${LOCAL_READINESS_TIMEOUT_SECONDS}s waiting for ${name}" >&2
+  return 1
+}
+
+wait_peer_log() {
+  local name="$1"
+  local path="$2"
+  local pattern="$3"
+  for _ in $(seq 1 "${PEER_READINESS_ATTEMPTS}"); do
+    if [[ -f "${path}" ]] && rg -q -- "${pattern}" "${path}"; then
+      return 0
+    fi
+    sleep "${LOCAL_READINESS_POLL_SECONDS}"
+  done
+  echo "Timed out after ${PEER_READINESS_TIMEOUT_SECONDS}s waiting for ${name}" >&2
+  return 1
+}
+
+wait_peer_log_increment() {
+  local name="$1"
+  local path="$2"
+  local pattern="$3"
+  local baseline="$4"
+  for _ in $(seq 1 "${PEER_READINESS_ATTEMPTS}"); do
+    local count
+    count="$(rg -c -- "${pattern}" "${path}" 2>/dev/null || true)"
+    if [[ -n "${count}" ]] && (( count > baseline )); then
+      return 0
+    fi
+    sleep "${LOCAL_READINESS_POLL_SECONDS}"
+  done
+  echo "Timed out after ${PEER_READINESS_TIMEOUT_SECONDS}s waiting for ${name}" >&2
   return 1
 }
 
@@ -284,6 +331,7 @@ start_session() {
   local config_path="${config_dir}/session.properties"
   write_config "${config_path}" \
     "nodeRid=session-a" \
+    "delayEndpoint=${DELAY}" \
     "playRouteEndpoint=${PLAY_ROUTE}" "playBRouteEndpoint=${PLAY_B_ROUTE}" \
     "sessionRouteEndpoint=${SESSION_ROUTE}" "streamEndpoint=${STREAM}"
   "$(session_bin)" --config "${config_path}" \
@@ -291,6 +339,8 @@ start_session() {
   pids+=("$!")
   wait_port session-route "${SESSION_ROUTE}"
   wait_port stream "${STREAM}"
+  wait_peer_log session-route-peer "${log_dir}/session.stdout.log" \
+    'ZLINK_FRAMEWORK_PEER_READY .*peer=play-a'
 }
 
 run_client() {
@@ -331,8 +381,15 @@ run_e3_client() {
     return 1
   fi
 
+  local peer_pattern='ZLINK_FRAMEWORK_PEER_READY .*peer=play-a'
   stop_recorded_pid "${play_a_pid}"
+  local peer_count=0
+  if [[ -f "${log_dir}/session.stdout.log" ]]; then
+    peer_count="$(rg -c -- "${peer_pattern}" "${log_dir}/session.stdout.log" 2>/dev/null || true)"
+  fi
   start_play play-a "${PLAY_ROUTE}" play-restarted
+  wait_peer_log_increment session-route-restarted "${log_dir}/session.stdout.log" \
+    "${peer_pattern}" "${peer_count}"
   touch "${restarted_file}"
   wait "${client_e3_pid}"
 }
@@ -387,12 +444,18 @@ case "${SCENARIO}" in
   all)
     run_client
     start_play play-b "${PLAY_B_ROUTE}" play-b
+    # Ensure the session has completed the peer admission handshake before
+    # the first direct request targets the newly started spot node.
+    wait_peer_log session-route-play-b "${log_dir}/session.stdout.log" \
+      'ZLINK_FRAMEWORK_PEER_READY .*peer=play-b'
     run_d2_client
     run_e3_client
     ;;
   ATD-D2|ATD-D3|d2)
     sleep "${PLAY_B_START_DELAY_SECONDS}"
     start_play play-b "${PLAY_B_ROUTE}" play-b
+    wait_peer_log session-route-play-b "${log_dir}/session.stdout.log" \
+      'ZLINK_FRAMEWORK_PEER_READY .*peer=play-b'
     run_d2_client
     ;;
   ATD-E3)

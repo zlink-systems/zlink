@@ -439,13 +439,24 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
         spotGeneration,
         membershipEpoch
       );
-      const actor = await this.getOrCreateWithNativeRef(
-        actorId,
+      this.rememberActorMeshFromType(actorId, actorType);
+      const state = this.getOrCreateState(actorId);
+      state.setNativeActorRef(nativeRef);
+      const operation = state.getOrStartCreation(
         actorType,
-        nativeRef,
-        undefined,
-        signal
+        false,
+        () => this.creation.materializeTransferredActor(
+          actorId,
+          actorType,
+          state,
+          undefined
+        )
       );
+      const result = await operation.task;
+      if (result.status !== 'created') {
+        throw new Error(`Actor '${actorId}' relocation materialization was rejected.`);
+      }
+      const actor = result.actor;
       if (transfer !== undefined) {
         const registry = this.options.actorTransferRegistry;
         if (registry === undefined) {
@@ -458,7 +469,6 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
           signal
         );
       }
-      const state = this.states.get(actorId)!;
       state.setLocationGeneration(authorityOwnerGeneration);
       state.setJoinedSpot(spotId, undefined, membershipEpoch);
       return actor;

@@ -2,7 +2,6 @@ import fs from 'node:fs';
 import { Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import {
-  ZLinkMessageFlowLogMode,
   type ZLinkFrameworkRuntime,
   type ZLinkEntrySpot,
   type ZLinkEntrySpotContext,
@@ -57,9 +56,7 @@ export async function startSessionHost(): Promise<void> {
           builder
             .addLocationStore(locationStore)
             .configureDispatch()
-              .messageFlow(ZLinkMessageFlowLogMode.KeyTransitions)
-              .traceLogFile(`${options.logDir}/${options.rid}-flow.log`)
-              .traceLabel(options.rid);
+              .messageFlow('normal');
 
           const controlMesh = builder.addRouteMesh(AutomaticTurnDispatchNames.controlChannel)
             .listen(options.controlRouterEndpoint)

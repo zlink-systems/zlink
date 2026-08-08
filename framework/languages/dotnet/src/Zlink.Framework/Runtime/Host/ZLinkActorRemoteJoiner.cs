@@ -1,3 +1,5 @@
+using Zlink.Framework.Runtime.Identifiers;
+
 namespace Zlink.Framework.Runtime.Host;
 
 internal sealed class ZLinkActorRemoteJoiner(
@@ -1334,13 +1336,13 @@ internal sealed class ZLinkActorRemoteJoiner(
             session.BindingGeneration,
             session.ObjectGeneration,
             session.AuthorityOwnerGeneration,
-            session.MeshName,
+            session.MeshName.Value,
             session.TargetNodeGeneration,
             session.OwnerLeaseGeneration,
             session.SessionOwnerNodeGeneration,
             handoffId);
         var sessionOwnerNode = session.SessionNodeRid!.Value;
-        var meshName = session.MeshName;
+        var meshName = session.MeshName.Value;
         //  Placed before the local/remote branch: putting it inside one arm
         //  made its absence read as "never reached" when it only meant the
         //  other arm ran.
@@ -1425,13 +1427,13 @@ internal sealed class ZLinkActorRemoteJoiner(
             session.BindingGeneration,
             session.ObjectGeneration,
             session.AuthorityOwnerGeneration,
-            session.MeshName,
+            session.MeshName.Value,
             session.TargetNodeGeneration,
             session.OwnerLeaseGeneration,
             session.SessionOwnerNodeGeneration,
             handoffId);
         var sessionOwnerNode = session.SessionNodeRid!.Value;
-        var meshName = session.MeshName;
+        var meshName = session.MeshName.Value;
         if (sessionOwnerNode
             == runtime.GetMeshNodeRuntime(meshName).Node.RoutingId)
         {

@@ -4,7 +4,6 @@ import { Injectable, Module, Scope } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import {
   ZLinkFrameworkRelocationMode,
-  ZLinkMessageFlowLogMode,
   ZLinkPacket,
   type ZLinkFrameworkRelocationResult,
   type ZLinkFrameworkRuntime,
@@ -54,6 +53,7 @@ import { EvidenceStore } from '../Support/evidence-store';
 import { closeHttpServer, startHttpServer } from '../Support/http-server';
 import { createFlowLogRoute } from '../Support/flow-log-route';
 import { MetricEvidenceCollector } from '../Support/metric-evidence-collector';
+import { configureTelemetryLogProvider } from '../Support/telemetry-log-provider';
 
 const WORKFLOW_MESH = 'observability.workflow';
 const WORKFLOW_FANOUT = 'observability.projections';
@@ -79,7 +79,7 @@ class WorkflowSpot implements ZLinkSpot<ZLinkActor> {
   }
 
   async onCreate(request: ZLinkMessage): Promise<{ accepted: boolean }> {
-    const initial = request.decode<WorkflowApplyReq>(Object as never);
+    const initial = request.decode(WorkflowApplyReq);
     const existing = readState(initial.orderId);
     this.replayed = existing !== undefined;
     if (existing === undefined) writeState(initial.orderId, initial.value);
@@ -156,6 +156,7 @@ Module({
           throw new Error('Workflow requires fanoutEndpoint and stateFile.');
         }
         fs.mkdirSync(options.logDir, { recursive: true });
+        configureTelemetryLogProvider(options.logDir, options.rid);
         evidence = new EvidenceStore(options.rid, options.evidenceFile);
         locationStore = new ZLinkRedisLocationStore({
           url: `redis://${options.redisEndpoint}`,
@@ -165,9 +166,7 @@ Module({
         builder.addLocationStore(locationStore);
         if (options.metricsEnabled) builder.options({ metrics: { meterProvider: metrics.provider } });
         builder.configureDispatch()
-          .messageFlow(options.messageFlowEnabled ? ZLinkMessageFlowLogMode.KeyTransitions : ZLinkMessageFlowLogMode.Off)
-          .traceLogFile(path.join(options.logDir, `${options.rid}-flow.log`))
-          .traceLabel(options.rid);
+          .messageFlow(options.messageFlowEnabled ? 'normal' : 'off');
         builder.addFanoutChannel(WORKFLOW_FANOUT)
           .enablePublisher(options.fanoutEndpoint)
           .routingId(options.rid)

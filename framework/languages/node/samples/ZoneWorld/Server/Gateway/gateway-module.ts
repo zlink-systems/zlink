@@ -1,5 +1,4 @@
 import { zlinkFramework, zlinkModule, ZLinkModule } from '@zlink-systems/nestjs';
-import { ZLinkMessageFlowLogMode } from '@zlink-systems/framework';
 import { ZONEWORLD_CONFIG, createZoneWorldConfigurationModule } from '../Configuration/configuration';
 import type { ZoneWorldConfiguration } from '../Configuration/configuration';
 import { createZoneWorldLocationStore, zoneWorldLocationOptions } from '../Configuration/location-store';
@@ -22,9 +21,7 @@ function createGatewayModule() {
         builder.addLocationStore(createZoneWorldLocationStore(config.shared));
         zoneWorldLocationOptions(builder.configureLocations());
         builder.configureDispatch()
-          .messageFlow(ZLinkMessageFlowLogMode.KeyTransitions)
-          .traceLogFile(`${config.shared.logDirectory}/flow-gateway.log`)
-          .traceLabel('gateway');
+          .messageFlow('normal');
         const zoneMesh = builder
           .addRouteMesh(ZoneWorldNames.zoneMesh)
             .setRoutingIdPrefix('gw0')

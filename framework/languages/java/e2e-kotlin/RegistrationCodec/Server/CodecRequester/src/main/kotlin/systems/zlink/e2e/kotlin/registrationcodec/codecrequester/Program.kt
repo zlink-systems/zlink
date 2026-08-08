@@ -44,9 +44,9 @@ class CodecRequesterApplication {
                 },
             )
             framework.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile("${options.logDir}/codec-requester-flow.log")
-                .traceLabel("kotlin-rc-codec-requester")
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL)
+
+
             framework.addClientServerChannel(Contracts.CHANNEL)
                 .client()
                 .connect(options.serverEndpoint)

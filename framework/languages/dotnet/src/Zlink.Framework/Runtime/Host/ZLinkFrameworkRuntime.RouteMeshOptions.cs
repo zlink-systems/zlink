@@ -111,7 +111,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         {
             identity.SetWeight(weight);
             registration.SocketConfig.Weight = weight;
-            _autoConnect?.SetClientServerWeight(identity.ChannelName, weight);
+            _autoConnect?.SetClientServerWeight(identity.ChannelName.Value, weight);
             return true;
         });
     }

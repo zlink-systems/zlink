@@ -26,6 +26,7 @@ const {
 } = require('../../packages/framework/dist/runtime/host/actor-packet-relay');
 const actorPacketWire = require('../../packages/framework/dist/runtime/actors/actor-packet-relay-wire');
 const channelEnvelope = require('../../packages/framework/dist/runtime/channels/channel-envelope');
+const actorJoinPayloadCodec = require('../../packages/framework/dist/runtime/messaging/actor-join-payload-codec');
 const zlink = require('@zlink-systems/zlink');
 
 test('stream runtime is exported from framework root surface', () => {
@@ -527,6 +528,16 @@ test('managed stream actor bind opens the exact native route before local bindin
   assert.equal(runtime.find('actor-a'), actor);
 });
 
+test('managed stream actor bind uses the framework request timeout by default', async () => {
+  const socket = new FakeStreamSocket();
+  const runtime = new framework.ZLinkStreamBindingRuntime();
+  const context = runtime.createSessionContext(new framework.ZLinkManagedStream(socket, 'backend-rid', 'public-session'));
+
+  await context.actors.bind({ nodeRid: 'node-a', actorId: 'actor-default-timeout', generation: 1n });
+
+  assert.equal(socket.boundActors[0].timeoutMs, 30_000);
+});
+
 test('managed stream remote actor bind records the remote actor ref on the stream', async () => {
   const socket = new FakeStreamSocket();
   const node = new FakeSpotNode('node-local');
@@ -738,7 +749,7 @@ test('managed stream actor bind failure does not create stale local binding', as
   assert.equal(runtime.find('actor-a'), undefined);
 });
 
-test('managed stream remote bind confirmation failure rolls back the accepted native binding', async () => {
+test('managed stream remote bind confirmation failure does not roll back the accepted binding', async () => {
   const operations = [];
   let nativeActor;
   const socket = {
@@ -762,15 +773,17 @@ test('managed stream remote bind confirmation failure rolls back the accepted na
   });
   const context = runtime.createSessionContext(new framework.ZLinkManagedStream(socket, 'backend-rid'));
 
-  await assert.rejects(
-    () => context.actors.bind({ nodeRid: 'remote-node', actorId: 'actor-relay-fail', generation: 1n }),
-    /remote bound session bind confirmation failed/
-  );
+  const actor = await context.actors.bind({
+    nodeRid: 'remote-node',
+    actorId: 'actor-relay-fail',
+    generation: 1n
+  });
+  await new Promise((resolve) => setImmediate(resolve));
 
-  assert.equal(nativeActor, undefined);
-  assert.equal(context.actors.find('actor-relay-fail'), undefined);
-  assert.equal(runtime.find('actor-relay-fail'), undefined);
-  assert.deepEqual(operations, ['bind:actor-relay-fail', 'unbind:actor-relay-fail']);
+  assert.equal(nativeActor.actorId, actor.actorId);
+  assert.equal(context.actors.find('actor-relay-fail'), actor);
+  assert.equal(runtime.find('actor-relay-fail'), actor);
+  assert.deepEqual(operations, ['bind:actor-relay-fail']);
 });
 
 test('runtime host bound session uses local stream route before native SessionRelay', async () => {
@@ -2567,12 +2580,14 @@ test('runtime host local spot join uses the formal MeshNode completion contract 
     primaryMeshNode: {
       status: () => ({ routingId: actorRid }),
       joinActorSpot(actorRef, targetNodeRid, targetSpotId, targetGeneration, request) {
+        const decodedRequest = actorJoinPayloadCodec.decodeFrameworkActorJoinPayload(request);
         submitted.push({
           actorRef,
           targetNodeRid,
           targetSpotId,
           targetGeneration,
-          request: Buffer.from(request).toString()
+          request: decodedRequest.payload.toString(),
+          contentType: decodedRequest.contentType
         });
         return operationId;
       }
@@ -2649,6 +2664,7 @@ test('runtime host local spot join uses the formal MeshNode completion contract 
   assert.equal(submitted[0].targetSpotId.toHex(), roomRid.toHex());
   assert.equal(submitted[0].targetGeneration, 9n);
   assert.equal(submitted[0].request, 'hello');
+  assert.equal(submitted[0].contentType, 'application/json');
   assert.equal(state.spotId.toHex(), roomRid.toHex());
   assert.equal(result.actor.nodeRid.toHex(), actorRid.toHex());
   assert.equal(result.actor.actorId, 'actor-local-room');
@@ -3272,6 +3288,7 @@ test('logical actor disconnect waits for one callback and keeps the physical con
     }
   });
   const context = runtime.createSessionContext(stream);
+  const replacement = runtime.createSessionContext(fakeStream('session-logical-replacement', 'logical-replacement-rid'));
   const selected = await context.actors.bind({
     nodeRid: 'node-a',
     actorId: 'actor-selected',
@@ -3289,6 +3306,10 @@ test('logical actor disconnect waits for one callback and keeps the physical con
   const notification = selected.notifyDisconnected().then(() => { completed = true; });
   await selectedDidStart;
   assert.equal(completed, false);
+  const rebound = await replacement.actors.bindOrGet(selected.ref);
+  assert.equal(rebound.actorId, selected.actorId);
+  assert.equal(context.actors.find(selected.actorId), undefined);
+  assert.equal(replacement.actors.find(selected.actorId), rebound);
   assert.equal(context.actors.find(other.actorId), other);
   assert.equal(closeCalls, 0);
 
@@ -3297,7 +3318,7 @@ test('logical actor disconnect waits for one callback and keeps the physical con
 
   assert.equal(completed, true);
   assert.deepEqual(notified, ['actor-selected']);
-  assert.equal(context.actors.find(selected.actorId), undefined);
+  assert.equal(replacement.actors.find(selected.actorId), rebound);
   assert.equal(context.actors.find(other.actorId), other);
   assert.equal(closeCalls, 0);
 });
@@ -3346,6 +3367,35 @@ test('physical disconnect dedupes a racing logical notification and retains acto
   assert.equal(runtime.find('actor-other'), undefined);
   assert.deepEqual([...memberships].sort(), ['actor-other', 'actor-selected']);
   assert.equal(selected.ref.generation, 11n);
+});
+
+test('physical disconnect releases the binding lane before its lifecycle callback completes', async () => {
+  let releaseNotification;
+  const notificationCanFinish = new Promise((resolve) => { releaseNotification = resolve; });
+  let notificationStarted;
+  const notificationDidStart = new Promise((resolve) => { notificationStarted = resolve; });
+  const runtime = new framework.ZLinkStreamBindingRuntime({
+    async notifyDisconnected() {
+      notificationStarted();
+      await notificationCanFinish;
+    }
+  });
+  const previous = runtime.createSessionContext(fakeStream('session-previous', 'previous-rid'));
+  const replacement = runtime.createSessionContext(fakeStream('session-replacement', 'replacement-rid'));
+  const actorRef = { nodeRid: 'node-a', actorId: 'actor-reconnect-during-disconnect', generation: 1n };
+  await previous.actors.bind(actorRef);
+
+  const cleanup = runtime.cleanup(previous);
+  await notificationDidStart;
+  const rebound = await replacement.actors.bindOrGet(actorRef);
+
+  assert.equal(rebound.actorId, actorRef.actorId);
+  assert.equal(previous.actors.find(actorRef.actorId), undefined);
+  assert.equal(replacement.actors.find(actorRef.actorId), rebound);
+
+  releaseNotification();
+  await cleanup;
+  assert.equal(replacement.actors.find(actorRef.actorId), rebound);
 });
 
 test('stream binding runtime can remove actor binding during actor destroy cleanup', async () => {
@@ -3475,10 +3525,17 @@ test('local bound session error response rejects pending actor request', async (
   const context = runtime.createSessionContext(stream);
   await context.actors.bind({ nodeRid: 'node-a', actorId: 'actor-error', generation: 1 });
   const pending = context.startRequest(1000);
+  framework.ZLinkPacket('ErrorContractPacket', {
+    payload: {
+      type: 'object',
+      properties: { requestField: { type: 'string' } },
+      required: ['requestField']
+    }
+  })(class ErrorContractPacket {});
 
   assert.equal(runtime.sendLocalBoundSessionError(
     'actor-error',
-    'Move',
+    'ErrorContractPacket',
     pending.requestSeq,
     new Error('remote actor failed'),
     new Map()
@@ -3486,12 +3543,16 @@ test('local bound session error response rejects pending actor request', async (
 
   const frame = decodeFrame(stream.writes[0].bytes);
   assert.equal(frame.header.kind, connector.ZlinkStreamMessageKind.Error);
+  assert.deepEqual(JSON.parse(new TextDecoder().decode(frame.payload)), {
+    code: 'Error',
+    message: 'remote actor failed',
+  });
   const header = {
     kind: streamProtocol.ZLinkStreamMessageKind.Error,
     codec: streamProtocol.ZLinkStreamCodec.Json,
     flags: streamProtocol.ZLinkStreamHeaderFlags.HasRequestSeq,
     requestSeq: pending.requestSeq,
-    name: 'Move',
+    name: 'ErrorContractPacket',
     metadata: { values: new Map() }
   };
   const payload = {
@@ -3680,7 +3741,40 @@ test('stream session actor reconnect atomically replaces the native session bind
   assert.equal(second.actors.find(actorRef.actorId)?.actorId, actorRef.actorId);
 });
 
-test('stream session replacement confirmation failure restores the previous binding', async () => {
+test('remote binding tombstone removes only the exact native and logical session route', async () => {
+  const operations = [];
+  const socket = {
+    send() { return true; },
+    disconnectPeer() {},
+    recv() { return undefined; },
+    async bindActor(sessionRid) {
+      operations.push(`bind:${sessionRid}`);
+    },
+    async unbindActor(sessionRid) {
+      operations.push(`unbind:${sessionRid}`);
+    },
+    sendBoundActor() { return true; }
+  };
+  const runtime = new framework.ZLinkStreamBindingRuntime();
+  const context = runtime.createSessionContext(new framework.ZLinkManagedStream(socket, 'session-current'));
+  await context.actors.bindOrGet({
+    actorId: 'actor-exact-tombstone',
+    objectGeneration: 3n,
+    meshName: 'mesh-a',
+    nodeRid: 'actor-node',
+    bindingGeneration: 7n
+  });
+  const boundRef = runtime.find('actor-exact-tombstone').ref;
+
+  assert.equal(await runtime.retireRemoteBinding(boundRef, 'other-session', 7n), false);
+  assert.equal(await runtime.retireRemoteBinding(boundRef, 'session-current', 6n), false);
+  assert.equal(runtime.hasBoundSession('actor-exact-tombstone'), true);
+  assert.equal(await runtime.retireRemoteBinding(boundRef, 'session-current', 7n), true);
+  assert.equal(runtime.hasBoundSession('actor-exact-tombstone'), false);
+  assert.deepEqual(operations, ['bind:session-current']);
+});
+
+test('stream session replacement confirmation failure keeps the new binding current', async () => {
   const operations = [];
   let boundSessionRid;
   const socket = {
@@ -3710,20 +3804,16 @@ test('stream session replacement confirmation failure restores the previous bind
   const actorRef = { nodeRid: 'node-a', actorId: 'actor-confirm-rollback', generation: 1n };
   const actor = await previous.actors.bindOrGet(actorRef);
 
-  await assert.rejects(
-    () => replacement.actors.bindOrGet(actorRef),
-    /replacement confirmation failed/
-  );
+  const rebound = await replacement.actors.bindOrGet(actorRef);
+  await new Promise((resolve) => setImmediate(resolve));
 
-  assert.equal(boundSessionRid, 'session-old');
-  assert.equal(previous.actors.find(actorRef.actorId), actor);
-  assert.equal(replacement.actors.find(actorRef.actorId), undefined);
-  assert.equal(runtime.find(actorRef.actorId), actor);
+  assert.equal(boundSessionRid, 'session-new');
+  assert.equal(previous.actors.find(actorRef.actorId), undefined);
+  assert.equal(replacement.actors.find(actorRef.actorId), rebound);
+  assert.equal(runtime.find(actorRef.actorId), rebound);
   assert.deepEqual(operations, [
     'bind:session-old',
-    'bind:session-new',
-    'unbind:session-new',
-    'bind:session-old'
+    'bind:session-new'
   ]);
 });
 

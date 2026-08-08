@@ -763,9 +763,9 @@ class user_spot_t : public zlink::framework::spot_t<scenario_actor_t>
                      const e2e::actor_push_req_t &request)
     {
         ++actor.ping_seen;
-          actor.context ().bound_session ()
-            .send (e2e::actor_push_notify_t{actor.actor_id, request.value, actor.ping_seen})
-            .submit ();
+        co_await actor.context ().bound_session ()
+          .send (e2e::actor_push_notify_t{actor.actor_id, request.value, actor.ping_seen})
+          .submit ();
         _state.record ("ActorPushedSession", actor.actor_id,
                        _context.spot_id (), request.value);
         co_return e2e::actor_push_res_t{true, actor.actor_id, actor.ping_seen};
@@ -1029,9 +1029,9 @@ class entry_spot_t
                      const e2e::actor_push_req_t &request)
     {
         ++actor.ping_seen;
-          actor.context ().bound_session ()
-            .send (e2e::actor_push_notify_t{actor.actor_id, request.value, actor.ping_seen})
-            .submit ();
+        co_await actor.context ().bound_session ()
+          .send (e2e::actor_push_notify_t{actor.actor_id, request.value, actor.ping_seen})
+          .submit ();
         _state.record ("EntryActorPushedSession", actor.actor_id,
                        _context.spot_id (), request.value);
         co_return e2e::actor_push_res_t{true, actor.actor_id, actor.ping_seen};

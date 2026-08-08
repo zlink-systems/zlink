@@ -21,7 +21,7 @@ import type {
 } from '../host/user-spot-creation-coordinator';
 import type { ZLinkSpotRouteResolver } from './spot-routing-internal';
 import type { DefaultZLinkSpotManager } from './index';
-import { encodeFrameworkPayloadMessage } from '../messaging/payload-codec';
+import { encodeFrameworkCreationPayload } from '../messaging/creation-payload-codec';
 import type {
   ServiceUserSpotCloseRecord
 } from '../foundation/service-stateful-wire-codec';
@@ -213,12 +213,10 @@ export class ZLinkPublicSpotManager implements ZLinkSpotManager {
       );
     }
     state.submitted = true;
-    const encodedRequest = encodeFrameworkPayloadMessage(
+    const requestBytes = encodeFrameworkCreationPayload(
       state.request ?? null,
       this.options.messageSerializers
     );
-    const requestBytes = Buffer.from(encodedRequest.data());
-    encodedRequest.close();
     const timeoutMs = state.timeoutMs ?? this.options.defaultTimeoutMs;
     const deadline = Date.now() + timeoutMs;
     const remainingMs = deadline - Date.now();

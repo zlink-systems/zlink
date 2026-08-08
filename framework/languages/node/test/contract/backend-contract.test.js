@@ -921,6 +921,18 @@ test('mesh completion submission registers before a completion can arrive', asyn
   table.dispose();
 });
 
+test('mesh completion submission rejects when submit synchronously disposes the table', async () => {
+  const table = new ZLinkMeshCompletionTable();
+
+  await assert.rejects(
+    table.submit(() => {
+      table.dispose();
+      return { high: 1n, low: 2n };
+    }),
+    /Mesh completion table is disposed/
+  );
+});
+
 test('backend not-connected classification uses typed results instead of error text', () => {
   assert.equal(
     backend.isBackendNotConnectedError({
@@ -958,6 +970,7 @@ test('backend mesh record dispatcher routes node, spot, actor, and infrastructur
   await dispatcher.dispatch(owner(framework.ReadyOwnerKind.Node), record(framework.ReceiveKind.ChannelRequest));
   await dispatcher.dispatch(owner(framework.ReadyOwnerKind.Spot), record(framework.ReceiveKind.SpotControl));
   await dispatcher.dispatch(owner(framework.ReadyOwnerKind.Actor), record(framework.ReceiveKind.ActorSend));
+  await dispatcher.dispatch(owner(framework.ReadyOwnerKind.Actor), record(framework.ReceiveKind.ActorBinding));
   await framework.runZLinkExecutionArea('infrastructure', async () => {
     await dispatcher.dispatch(owner(framework.ReadyOwnerKind.Node), record(framework.ReceiveKind.Completion));
     await dispatcher.dispatch(owner(framework.ReadyOwnerKind.Node), record(framework.ReceiveKind.SendReady));
@@ -968,6 +981,7 @@ test('backend mesh record dispatcher routes node, spot, actor, and infrastructur
     ['node', framework.ReceiveKind.ChannelRequest],
     ['spot', framework.ReadyOwnerKind.Spot, framework.ReceiveKind.SpotControl],
     ['actor', framework.ReadyOwnerKind.Actor, framework.ReceiveKind.ActorSend],
+    ['actor', framework.ReadyOwnerKind.Actor, framework.ReceiveKind.ActorBinding],
     ['completion', framework.ReceiveKind.Completion],
     ['sendReady', framework.ReceiveKind.SendReady],
     ['transferControl', framework.ReceiveKind.TransferControl]

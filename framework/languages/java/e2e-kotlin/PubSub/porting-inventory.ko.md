@@ -64,7 +64,7 @@ store endpoint와 실행별 key prefix를 넘긴다. client scenario는 publishe
 | `Server/Subscriber/OperationalEndpoints.cs` | `Server/Subscriber/src/main/kotlin/systems/zlink/e2e/kotlin/pubsub/subscriber/Endpoints/OperationalEndpoints.kt` | endpoints | done | subscriber `/health`, `/evidence`, bounded `/evidence/wait` endpoint를 제공한다. |
 | `Server/Subscriber/EvidenceStore.cs` | `Server/Subscriber/src/main/kotlin/systems/zlink/e2e/kotlin/pubsub/subscriber/Infrastructure/EvidenceStore.kt` | infrastructure | done | 기존 `ScenarioState.kt`를 subscriber evidence store로 옮겼다. |
 | `Server/Subscriber/Handlers/EventMsgHandler.cs` | `Server/Subscriber/src/main/kotlin/systems/zlink/e2e/kotlin/pubsub/subscriber/Handlers/EventMsgHandler.kt` | handlers | done | 기존 `EventMsgHandler.kt`를 subscriber handler package로 옮겼다. |
-| `Server/Subscriber/Handlers/EvidenceDispatchErrorObserver.cs` | `Server/Subscriber/src/main/kotlin/systems/zlink/e2e/kotlin/pubsub/subscriber/Program.kt` (`setMessageFlowObserver`) | handlers | done | dispatch error evidence 기록은 subscriber role dispatch observer로 둔다. |
+| `Server/Subscriber/Handlers/EvidenceDispatchErrorObserver.cs` | `Server/Subscriber/src/main/kotlin/systems/zlink/e2e/kotlin/pubsub/subscriber/Program.kt` | handlers | done | dispatch error evidence는 framework diagnostics logger의 정식 log record를 subscriber role이 수집한다. |
 
 ## Kotlin 전용 현재 파일 처리
 

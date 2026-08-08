@@ -311,9 +311,10 @@ final class ZLinkUserSpotRetireSourceBuilder {
                 }
                 ZLinkRelocationPermitPool.Lease lease = acquired.get();
                 if (lease == null) {
-                    barrier.abort(sealed.orElseThrow());
-                    return failed(new IllegalStateException(
-                        "User Spot relocation permit was not acquired"));
+                    return barrier.abortAsync(sealed.orElseThrow())
+                        .thenCompose(ignored -> failed(
+                            new IllegalStateException(
+                                "User Spot relocation permit was not acquired")));
                 }
                 return captureSealed(
                     spot,
@@ -396,17 +397,19 @@ final class ZLinkUserSpotRetireSourceBuilder {
                         admission.inventory().spot().id(), seal, lease));
                     return failed(cause);
                 }
-                try {
-                    barrier.abort(seal);
-                    if (relocationReplies != null) {
-                        admission.inventory().actorIds().forEach(
-                            relocationReplies
-                                ::resumeActorTimersAfterRelocationAbort);
-                    }
-                } finally {
-                    lease.close();
-                }
-                return failed(cause);
+                return barrier.abortAsync(seal)
+                    .handle((ignored, abortFailure) -> {
+                        if (relocationReplies != null) {
+                            admission.inventory().actorIds().forEach(
+                                relocationReplies
+                                    ::resumeActorTimersAfterRelocationAbort);
+                        }
+                        lease.close();
+                        if (abortFailure != null) {
+                            throw new CompletionException(abortFailure);
+                        }
+                        throw new CompletionException(cause);
+                    });
             });
     }
 
@@ -1128,25 +1131,31 @@ final class ZLinkUserSpotRetireSourceBuilder {
             return committed;
         }
 
-        synchronized CompletionStage<
+        CompletionStage<
             ZLinkAggregateRelocationCoordinator.Published> commitAuthority(
-                ZLinkStoreCancellation cancellation) {
-            if (sourceCommitted || terminal || finalPrepared == null) {
-                return failed(new IllegalStateException(
-                    "source relocation is not ready for authority commit"));
+            ZLinkStoreCancellation cancellation) {
+            ZLinkAggregateRelocationCoordinator.Prepared authority;
+            synchronized (this) {
+                if (sourceCommitted || terminal || finalPrepared == null) {
+                    return failed(new IllegalStateException(
+                        "source relocation is not ready for authority commit"));
+                }
+                authority = finalPrepared;
             }
-            return coordinator.commit(finalPrepared, cancellation);
+            return coordinator.commit(authority, cancellation);
         }
 
-        synchronized CompletionStage<
+        CompletionStage<
             ZLinkAggregateRelocationCoordinator.Published>
                 completeSourceCleanup(
                     ZLinkAggregateRelocationCoordinator.Published published,
                     byte[] completedRoot,
                     ZLinkStoreCancellation cancellation) {
-            if (!sourceCommitted || terminal) {
-                return failed(new IllegalStateException(
-                    "source relocation is not committed"));
+            synchronized (this) {
+                if (!sourceCommitted || terminal) {
+                    return failed(new IllegalStateException(
+                        "source relocation is not committed"));
+                }
             }
             return coordinator.completeSourceCleanup(
                 published,
@@ -1165,27 +1174,30 @@ final class ZLinkUserSpotRetireSourceBuilder {
             return abortAuthority
                 .thenCompose(ignored -> coordinator.discardStagedRoot(
                     stagedRoot))
-                .thenRun(() -> {
-                synchronized (PreparedSource.this) {
-                    if (!barrier.abort(seal)) {
+                .thenCompose(ignored -> barrier.abortAsync(seal)
+                    .thenAccept(aborted -> {
+                    if (!aborted) {
                         throw new IllegalStateException(
                             "source relocation barrier was lost during abort");
                     }
-                    if (relocationReplies != null) {
-                        captured.inventory().actorIds().forEach(
-                            relocationReplies
-                                ::resumeActorTimersAfterRelocationAbort);
+                    synchronized (PreparedSource.this) {
+                        if (relocationReplies != null) {
+                            captured.inventory().actorIds().forEach(
+                                relocationReplies
+                                    ::resumeActorTimersAfterRelocationAbort);
+                        }
+                        terminal = true;
+                        permit.close();
                     }
-                    terminal = true;
-                    permit.close();
-                }
-            });
+                }));
         }
 
-        synchronized CompletionStage<Void> discardInitialAfterCommit() {
-            if (!sourceCommitted || terminal) {
-                return failed(new IllegalStateException(
-                    "source relocation is not committed"));
+        CompletionStage<Void> discardInitialAfterCommit() {
+            synchronized (this) {
+                if (!sourceCommitted || terminal) {
+                    return failed(new IllegalStateException(
+                        "source relocation is not committed"));
+                }
             }
             return coordinator.discardStagedRoot(stagedRoot);
         }

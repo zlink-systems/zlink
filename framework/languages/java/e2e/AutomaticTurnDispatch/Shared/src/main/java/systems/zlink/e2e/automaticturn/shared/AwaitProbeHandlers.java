@@ -774,6 +774,40 @@ public final class AwaitProbeHandlers {
         }
     }
 
+    public static final class SpotActorPushNotifyAwaitHandler
+        implements ZLinkSpotActorRequestHandler<AwaitProbeSpot, AwaitActor,
+            Contracts.ActorPushAwaitReq, Contracts.ActorPushAwaitRes> {
+        private final EvidenceStore evidence;
+
+        public SpotActorPushNotifyAwaitHandler(EvidenceStore evidence) {
+            this.evidence = evidence;
+        }
+
+        @Override
+        public CompletionStage<Contracts.ActorPushAwaitRes> handle(
+            AwaitProbeSpot spot,
+            AwaitActor actor,
+            ZLinkMessageContext context,
+            Contracts.ActorPushAwaitReq request) {
+            String value = actorValue(spot.context().spotId(), actor) + ";handler=spot";
+            evidence.record("actor-push-await-started", request.requestId(), value);
+            evidence.record("actor-push-await-released", request.requestId(), value);
+            CompletableFuture<Void> delay = new CompletableFuture<>();
+            long delayMillis = Math.max(0L, request.delayMillis());
+            CompletableFuture.delayedExecutor(delayMillis, TimeUnit.MILLISECONDS)
+                .execute(() -> delay.complete(null));
+            return delay.thenApply(ignored -> {
+                    evidence.record("actor-push-await-resumed", request.requestId(), value);
+                    actor.context().boundSession().send(new Contracts.ActorPushNotify(
+                        actor.actorId(), request.requestId(), request.value(),
+                        spot.context().nodeRid().toString())).submit();
+                    evidence.record("actor-push-await-completed", request.requestId(), value);
+                    return new Contracts.ActorPushAwaitRes(
+                        "ATD-D4", request.requestId(), actor.actorId(), "actor-push-await-completed");
+                });
+        }
+    }
+
     public static final class SpotActorJoinHandler
         implements ZLinkSpotActorRequestHandler<AwaitProbeSpot, AwaitActor,
             Contracts.ActorJoinReq, Contracts.ActorJoinRes> {

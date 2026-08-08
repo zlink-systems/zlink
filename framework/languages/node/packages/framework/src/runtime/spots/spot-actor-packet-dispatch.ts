@@ -233,7 +233,8 @@ export class ZLinkSpotActorPacketDispatch {
       message,
       this.options.messageSerializers,
       undefined,
-      streamCodecContentType(header.codec)
+      streamCodecContentType(header.codec),
+      header.name
     );
   }
 

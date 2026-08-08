@@ -3,6 +3,11 @@ package systems.zlink.e2e.spotactortransfer.actor;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Duration;
 import java.nio.file.Path;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.logging.Handler;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.builder.SpringApplicationBuilder;
@@ -95,18 +100,13 @@ public final class Program {
         ZLinkRedisRelocationStore relocationStore) {
         return options -> {
             String nodeRid = evidence.nodeRid();
+            installFlowEvidence(evidence);
             options.addRelocationStore(relocationStore);
             options.addHandlersFromPackageOf(TransferComponents.class);
             options.configureLocations().setRouteCacheMaxAge(Duration.ZERO);
             options.configureLocations().setMessageFollowDuration(Duration.ofSeconds(2));
             options.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .setMessageFlowObserver(flow -> {
-                    evidence.addFlow(flow);
-                    return java.util.concurrent.CompletableFuture.completedFuture(null);
-                })
-                .traceLogFile(config.logDirectory() + "/" + nodeRid + "-flow.log")
-                .traceLabel("java-spot-transfer-" + nodeRid);
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             ZLinkMeshNodeBuilder node = options.addRouteMesh(Contracts.MESH);
             node.listen(config.meshEndpoint())
                 .setRoutingId(RoutingId.from(nodeRid));
@@ -140,6 +140,36 @@ public final class Program {
                 .enableActorDispatch()
                 .registerSession(TransferComponents.TransferSession.class);
         };
+    }
+
+    private static void installFlowEvidence(EvidenceStore evidence) {
+        Logger.getLogger("systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer")
+            .addHandler(new Handler() {
+                @Override
+                public void publish(LogRecord record) {
+                    Map<String, String> fields = diagnosticsFields(record.getMessage());
+                    if (fields != null) {
+                        evidence.addFlow(fields);
+                    }
+                }
+
+                @Override public void flush() { }
+                @Override public void close() { }
+            });
+    }
+
+    private static Map<String, String> diagnosticsFields(String message) {
+        if (message == null || !message.startsWith("message flow ")) {
+            return null;
+        }
+        Map<String, String> fields = new HashMap<>();
+        for (String field : message.substring("message flow ".length()).split(" ")) {
+            String[] pair = field.split("=", 2);
+            if (pair.length == 2) {
+                fields.put(pair[0], pair[1]);
+            }
+        }
+        return fields;
     }
 
     private static void registerActor(

@@ -65,6 +65,10 @@ for a user guarantee.
 - [31 Failure handling and failover scope](31-failure-failover-policy.en.md) — defines the automatic-recovery boundary for target reselection, reconnect, creation recovery, and stateful relocation.
 - [32 Framework error model](32-framework-error-model.en.md) — defines the shared `ErrorKind`, Send/Request completion conditions, and the boundary of an application's retry decision.
 
+## Implementation Differences
+
+- [90 Per-language implementation differences](90-implementation-gap.en.md) — records current missing implementation and closure conditions without narrowing the target contract.
+
 ## Server Exact Interface Per Language
 
 The exact public types, signatures, and async representation each language

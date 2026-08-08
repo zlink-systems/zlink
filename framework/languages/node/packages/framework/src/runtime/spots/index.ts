@@ -83,6 +83,7 @@ import {
   encodeFrameworkPayloadMessage,
   wrapFrameworkPayloadMessage
 } from '../messaging/payload-codec';
+import { decodeFrameworkActorJoinPayload } from '../messaging/actor-join-payload-codec';
 import {
   decodeChannelEnvelope,
   decodeChannelPayload,
@@ -135,7 +136,10 @@ export { ZLinkRuntimeSpotPublisherTransport } from './spot-publisher-transport';
 import {
   ZLinkSpotActivationRegistry
 } from './spot-activation-registry';
-import type { ZLinkSpotActivation } from './spot-activation-state';
+import {
+  ZLinkSpotCloseOccupiedError,
+  type ZLinkSpotActivation
+} from './spot-activation-state';
 import {
   ZLinkSpotActivationLifecycle,
   type ZLinkNativeSpotAuthority
@@ -250,11 +254,11 @@ export interface ZLinkSpotManagerOptions {
   readonly beginInstanceIdleClosingAuthority?: (
     meshName: string,
     spotId: RoutingId
-  ) => Promise<boolean>;
+  ) => Promise<{ restoreReady(): Promise<void> } | undefined>;
   readonly beginInstanceClosingAuthority?: (
     meshName: string,
     spotId: RoutingId
-  ) => Promise<boolean>;
+  ) => Promise<{ restoreReady(): Promise<void> } | undefined>;
   readonly instanceSpotApplicationTargetProvider?: (
     meshName: string,
     spotId: RoutingId
@@ -406,7 +410,8 @@ export class DefaultZLinkSpotManager {
         );
         if (
           activation.objectGeneration !== undefined
-          && currentApplication?.objectGeneration !== activation.objectGeneration
+          && currentApplication !== undefined
+          && currentApplication.objectGeneration !== activation.objectGeneration
         ) {
           // A superseded local application must not release the authority row
           // that now belongs to the newer object generation.
@@ -883,19 +888,19 @@ export class DefaultZLinkSpotManager {
         ) {
           continue;
         }
-        let durableClosing = false;
+        let durableClosing: { restoreReady(): Promise<void> } | undefined;
         try {
           durableClosing = await (
             this.options.beginInstanceIdleClosingAuthority?.(
               activation.meshName,
               activation.spotId
-            ) ?? Promise.resolve(true)
+            ) ?? Promise.resolve({ restoreReady: async () => undefined })
           );
         } catch (error) {
           activation.abortIdleEviction();
           throw error;
         }
-        if (!durableClosing) {
+        if (durableClosing === undefined) {
           activation.abortIdleEviction();
           continue;
         }
@@ -908,8 +913,14 @@ export class DefaultZLinkSpotManager {
         const run = async () => {
           try {
             const closed = await close;
-            if (!closed) activation.abortIdleEviction();
+            if (!closed) {
+              await durableClosing.restoreReady();
+              activation.abortIdleEviction();
+            }
           } catch (error) {
+            if (error instanceof ZLinkSpotCloseOccupiedError) {
+              await durableClosing.restoreReady();
+            }
             activation.abortIdleEviction();
             throw error;
           }
@@ -1116,15 +1127,20 @@ export class DefaultZLinkSpotManager {
         if (waitForApplication !== undefined) {
           await waitForApplication;
         }
-        if (
-          beginAuthorityClose !== undefined
-          && !await beginAuthorityClose(meshName, spotId)
-        ) {
+        const closingAuthority = beginAuthorityClose === undefined
+          ? undefined
+          : await beginAuthorityClose(meshName, spotId);
+        if (beginAuthorityClose !== undefined && closingAuthority === undefined) {
           return false;
         }
         const operation = beginClose();
-        if (operation === undefined) return false;
-        return await operation.ready;
+        if (operation === undefined) {
+          await closingAuthority?.restoreReady();
+          return false;
+        }
+        const closed = await operation.ready;
+        if (!closed) await closingAuthority?.restoreReady();
+        return closed;
       })().finally(() => {
         if (this.pendingInstanceCloses.get(key) === trackedClosePromise) {
           this.pendingInstanceCloses.delete(key);
@@ -1734,7 +1750,7 @@ export class DefaultZLinkSpotManager {
       throw new ZLinkConfigurationException('MeshNode Actor join record is missing its Spot or Actor owner.');
     }
     const entrySpotId = this.options.entryNodeRidProvider?.() ?? this.options.entryNodeRid;
-    const requestContentType = record.contentType ?? 'application/json';
+    let requestContentType = record.contentType ?? 'application/json';
     const targetsEntrySpot = entrySpotId !== undefined
       && String(spotId) === String(entrySpotId);
     const activation = this.activations.resolve(meshName, spotId);
@@ -1807,6 +1823,14 @@ export class DefaultZLinkSpotManager {
           Buffer.from(transferRequest.request, 'base64')
         );
         callbackRequest = ownedCallbackRequest;
+      } else if (callbackRequest !== undefined) {
+        const decodedRequest = decodeFrameworkActorJoinPayload(
+          callbackRequest.data(),
+          requestContentType
+        );
+        ownedCallbackRequest = RuntimeMessage.from(decodedRequest.payload);
+        callbackRequest = ownedCallbackRequest;
+        requestContentType = decodedRequest.contentType;
       }
       if (
         transferRequest !== undefined

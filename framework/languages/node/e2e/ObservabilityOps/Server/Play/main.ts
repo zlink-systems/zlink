@@ -1,11 +1,9 @@
 import fs from 'node:fs';
-import path from 'node:path';
 import { Injectable, Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import {
   ZLinkFrameworkRelocationMode,
   ZLinkMessage,
-  ZLinkMessageFlowLogMode,
   ZLinkSpotActorRequest,
   ZLinkSpotActorSend,
   type ActorRef,
@@ -71,6 +69,7 @@ import { EvidenceStore } from '../Support/evidence-store';
 import { closeHttpServer, startHttpServer } from '../Support/http-server';
 import { createFlowLogRoute } from '../Support/flow-log-route';
 import { MetricEvidenceCollector } from '../Support/metric-evidence-collector';
+import { configureTelemetryLogProvider } from '../Support/telemetry-log-provider';
 import {
   OBSERVABILITY_OPS_OPTIONS,
   createObservabilityOpsConfigurationModule,
@@ -195,7 +194,7 @@ class TransferUserSpot implements ZLinkSpot<TransferActor> {
   }
 
   async onActorJoin(actorId: string, request: ZLinkMessage): Promise<{ accepted: boolean; reply: JoinTargetRes }> {
-    const join = request.decode<JoinTargetReq>(Object as never);
+      const join = request.decode(JoinTargetReq);
     evidence.correlate(actorId, join.transferId);
     this.scenarios.set(actorId, join.scenario);
     actorScenarios.set(actorId, join.scenario);
@@ -422,6 +421,7 @@ Module({
       useFactory: (value: unknown) => {
         options = value as ServerOptions;
         fs.mkdirSync(options.logDir, { recursive: true });
+        configureTelemetryLogProvider(options.logDir, options.rid);
         evidence = new EvidenceStore(options.rid, options.evidenceFile);
         transferGates = new GateStore();
         const builder = zlinkFramework();
@@ -446,9 +446,7 @@ Module({
           messageFollowDurationMs: 6000
         });
         builder.configureDispatch()
-          .messageFlow(options.messageFlowEnabled ? ZLinkMessageFlowLogMode.KeyTransitions : ZLinkMessageFlowLogMode.Off)
-          .traceLogFile(path.join(options.logDir, `${options.rid}-flow.log`))
-          .traceLabel(options.rid);
+          .messageFlow(options.messageFlowEnabled ? 'normal' : 'off');
         builder.setMessageFollowDuration(500);
         const mesh = builder.addRouteMesh(ObservabilityOpsNames.mesh)
           .listen(options.routerEndpoint).routingId(options.rid);

@@ -157,7 +157,7 @@ public sealed class MonitoringTests : RegistrationValidationSupport
 
     private sealed class UnusedMonitoringBackendAdapter : IZLinkMonitoringBackendAdapter
     {
-        public IZLinkBackendSocketMonitor OpenSocketMonitor(IZLinkBackendSocket socket) =>
+        public IZLinkBackendSocketMonitor OpenSocketMonitor(IAsyncDisposable socket) =>
             throw new InvalidOperationException("Static monitoring validation must not open a monitor.");
     }
 }

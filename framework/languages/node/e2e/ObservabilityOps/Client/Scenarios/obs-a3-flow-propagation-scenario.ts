@@ -13,7 +13,7 @@ import {
   session,
   unique
 } from '../Support/scenario-support.js';
-import { readFlowLog, waitFor } from '../Support/observability-support.js';
+import { readFlowRecords, waitFor } from '../Support/observability-support.js';
 import type { ActorRefSnapshotRes } from '../../Shared/messages.js';
 
 export async function runObsA3(): Promise<void> {
@@ -43,9 +43,10 @@ export async function runObsA3(): Promise<void> {
   } finally {
     await connector.close();
   }
-  await waitFor(async () => await readFlowLog(roomNode),
-    (value) => value.includes('packet=BoundPushReq ') && /flow=[0-9a-f-]{36}/.test(value),
+  await waitFor(async () => await readFlowRecords(roomNode),
+    (value) => value.some((record) => record.packet_name === 'BoundPushReq'
+      && typeof record.flow_id === 'string' && /^[0-9a-f-]{36}$/.test(record.flow_id)),
     'OBS-A3 downstream Play did not receive the propagated flow');
-  require(!(await readFlowLog(session)).includes('packet=BoundPushReq '),
+  require(!(await readFlowRecords(session)).some((record) => record.packet_name === 'BoundPushReq'),
     'OBS-A3 tracing-off Session emitted a flow line.');
 }

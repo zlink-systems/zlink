@@ -4,6 +4,7 @@
 
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/dispatch/dispatch_limits.hpp"
+#include "runtime/locations/authority_key_codec.hpp"
 #include "runtime/locations/sha256.hpp"
 
 #include <algorithm>
@@ -149,14 +150,16 @@ make_location_store_authority_resolver (
                   ? placement_object_kind_t::user_spot
                   : placement_object_kind_t::instance_spot;
             const auto authority = store.read_authority (
-              {std::to_string (static_cast<int> (kind)) + ":"
-               + query.target.key}).result ().value ();
+              query.target.kind == object_kind_t::actor
+                ? actor_authority_key (query.target.key)
+                : spot_authority_key (query.target.key)).result ().value ();
             const auto *snapshot =
               std::get_if<authority_snapshot_t> (&authority);
             const auto target_rid = node_rid_t::from_string (
               zlink::routing_id_t::from (
                 query.target_node_routing_id).to_string ());
             if (!snapshot
+                || snapshot->allocation.object_kind != kind
                 || snapshot->object_generation
                      != query.target.object_generation
                 || snapshot->authority_owner_generation
@@ -232,6 +235,11 @@ stateful_error_t raw_stateful_dispatch_t::ingest (
     stateful_error_t validation = stateful_error_t::none;
     protocol::frozen_application_record_t frozen;
     protocol::application_payload_t payload;
+    std::size_t application_payload_bytes = 0;
+    std::optional<protocol::command> application_command;
+    std::optional<protocol::actor_message_header_t> actor_header;
+    std::optional<protocol::spot_message_header_t> spot_header;
+    std::optional<accepted_record_authority_t> accepted_authority;
     try {
         const auto header = protocol::decode_header (
           record.parts.front ());
@@ -239,6 +247,10 @@ stateful_error_t raw_stateful_dispatch_t::ingest (
             || record.source_routing_id.empty ()
             || !record.source_node_generation)
             validation = stateful_error_t::invalid;
+        else {
+            application_payload_bytes =
+              protocol::application_payload_hwm_bytes (record.parts[1]);
+        }
 
         accepted_record_authority_query_t query;
         query.target = owner;
@@ -253,14 +265,10 @@ stateful_error_t raw_stateful_dispatch_t::ingest (
                 validation = stateful_error_t::invalid;
             }
             else {
-                const auto actor = protocol::decode_actor_message_header (
+                auto actor = protocol::decode_actor_message_header (
                   record.parts.front (), header.kind);
-                if (!exact_fence (owner, actor.target)) {
-                    validation =
-                      owner.object_generation
-                          != actor.target.object_generation
-                        ? stateful_error_t::generation_stale
-                        : stateful_error_t::conflict;
+                if (!matches_application_route (owner, actor.target)) {
+                    validation = stateful_error_t::conflict;
                 }
                 else {
                     query.target_node_routing_id =
@@ -272,30 +280,15 @@ stateful_error_t raw_stateful_dispatch_t::ingest (
                       : protocol::frozen_source_kind_t::node;
                     query.source_actor = actor.source_actor;
                     const auto authority = _authority_resolver (query);
-                    if (!authority) {
+                    if (!authority
+                        || actor.target.owner_lease_generation
+                             != authority->target_owner_lease_generation) {
                         validation = stateful_error_t::conflict;
                     }
                     else {
-                        payload = protocol::decode_application_payload (
-                          record.parts[1]);
-                        frozen.kind =
-                          header.kind == protocol::command::actorRequest
-                            ? protocol::frozen_record_kind_t::actor_request
-                            : protocol::frozen_record_kind_t::actor_send;
-                        frozen.source_kind = query.source_kind;
-                        frozen.source = authority->source;
-                        frozen.source_actor = actor.source_actor;
-                        frozen.operation = actor.operation;
-                        frozen.operation_kind =
-                          header.kind == protocol::command::actorRequest
-                            ? 4u : 0u;
-                        frozen.reply_route_id = actor.correlation;
-                        auto accepted_target = actor.target;
-                        accepted_target.owner_lease_generation =
-                          authority->target_owner_lease_generation;
-                        frozen.body =
-                          protocol::frozen_actor_application_body_t{
-                            std::move (accepted_target), payload};
+                        application_command = header.kind;
+                        actor_header = std::move (actor);
+                        accepted_authority = *authority;
                     }
                 }
             }
@@ -306,14 +299,10 @@ stateful_error_t raw_stateful_dispatch_t::ingest (
                 validation = stateful_error_t::invalid;
             }
             else {
-                const auto spot = protocol::decode_spot_message_header (
+                auto spot = protocol::decode_spot_message_header (
                   record.parts.front (), header.kind);
-                if (!exact_fence (owner, spot.target)) {
-                    validation =
-                      owner.object_generation
-                          != spot.target.object_generation
-                        ? stateful_error_t::generation_stale
-                        : stateful_error_t::conflict;
+                if (!matches_application_route (owner, spot.target)) {
+                    validation = stateful_error_t::conflict;
                 }
                 else {
                     query.target_node_routing_id =
@@ -326,36 +315,55 @@ stateful_error_t raw_stateful_dispatch_t::ingest (
                     if (!spot.source_spot_id.empty ())
                         query.source_spot_id = spot.source_spot_id;
                     const auto authority = _authority_resolver (query);
-                    if (!authority) {
+                    if (!authority
+                        || spot.target.owner_lease_generation
+                             != authority->target_owner_lease_generation) {
                         validation = stateful_error_t::conflict;
                     }
                     else {
-                        payload = protocol::decode_application_payload (
-                          record.parts[1]);
-                        frozen.kind =
-                          header.kind == protocol::command::spotRequest
-                            ? protocol::frozen_record_kind_t::spot_request
-                            : protocol::frozen_record_kind_t::spot_send;
-                        frozen.source_kind = query.source_kind;
-                        frozen.source = authority->source;
-                        frozen.source_spot_id = query.source_spot_id;
-                        frozen.operation = spot.operation;
-                        frozen.operation_kind =
-                          header.kind == protocol::command::spotRequest
-                            ? 3u : 0u;
-                        frozen.reply_route_id = spot.correlation;
-                        frozen.body =
-                          protocol::frozen_spot_application_body_t{
-                            spot.target,
-                            authority->target_owner_lease_generation,
-                            payload};
+                        application_command = header.kind;
+                        spot_header = std::move (spot);
+                        accepted_authority = *authority;
                     }
                 }
             }
         }
-        if (validation == stateful_error_t::none
-            && !nonzero (frozen.operation))
-            validation = stateful_error_t::invalid;
+        if (validation == stateful_error_t::none) {
+            if (actor_header) {
+                const auto &actor = *actor_header;
+                frozen.kind = *application_command
+                  == protocol::command::actorRequest
+                  ? protocol::frozen_record_kind_t::actor_request
+                  : protocol::frozen_record_kind_t::actor_send;
+                frozen.source_kind = actor.source_actor
+                  ? protocol::frozen_source_kind_t::actor
+                  : protocol::frozen_source_kind_t::node;
+                frozen.source = accepted_authority->source;
+                frozen.source_actor = actor.source_actor;
+                frozen.operation = actor.operation;
+                frozen.operation_kind = *application_command
+                  == protocol::command::actorRequest ? 4u : 0u;
+                frozen.reply_route_id = actor.correlation;
+            } else if (spot_header) {
+                const auto &spot = *spot_header;
+                frozen.kind = *application_command
+                  == protocol::command::spotRequest
+                  ? protocol::frozen_record_kind_t::spot_request
+                  : protocol::frozen_record_kind_t::spot_send;
+                frozen.source_kind = spot.source_spot_id.empty ()
+                  ? protocol::frozen_source_kind_t::node
+                  : protocol::frozen_source_kind_t::spot;
+                frozen.source = accepted_authority->source;
+                if (!spot.source_spot_id.empty ())
+                    frozen.source_spot_id = spot.source_spot_id;
+                frozen.operation = spot.operation;
+                frozen.operation_kind = *application_command
+                  == protocol::command::spotRequest ? 3u : 0u;
+                frozen.reply_route_id = spot.correlation;
+            }
+            if (!nonzero (frozen.operation))
+                validation = stateful_error_t::invalid;
+        }
     }
     catch (const protocol::service_wire_error_t &) {
         validation = stateful_error_t::invalid;
@@ -383,6 +391,45 @@ stateful_error_t raw_stateful_dispatch_t::ingest (
                         protocol::framework_error_code::requestProtocolError));
         }
         return validation;
+    }
+
+    const auto admission = _objects->application_admission (
+      owner, application_payload_bytes);
+    if (admission != stateful_error_t::none) {
+        if (record.request_sequence && record.correlation) {
+            (void) _transport->reply_failure (
+              record, terminal_rejected,
+              static_cast<std::uint32_t> (
+                protocol::framework_error_code::requestRejected));
+        }
+        return admission;
+    }
+
+    try {
+        payload = protocol::decode_application_payload (record.parts[1]);
+        if (actor_header) {
+            auto accepted_target = actor_header->target;
+            accepted_target.object_generation = owner.object_generation;
+            accepted_target.owner_lease_generation =
+              accepted_authority->target_owner_lease_generation;
+            frozen.body = protocol::frozen_actor_application_body_t{
+              std::move (accepted_target), payload};
+        } else {
+            auto accepted_target = spot_header->target;
+            accepted_target.object_generation = owner.object_generation;
+            frozen.body = protocol::frozen_spot_application_body_t{
+              std::move (accepted_target),
+              accepted_authority->target_owner_lease_generation, payload};
+        }
+    }
+    catch (const protocol::service_wire_error_t &) {
+        if (record.request_sequence && record.correlation) {
+            (void) _transport->reply_failure (
+              record, terminal_protocol_error,
+              static_cast<std::uint32_t> (
+                protocol::framework_error_code::requestProtocolError));
+        }
+        return stateful_error_t::invalid;
     }
 
     std::uint64_t sequence = 0;
@@ -418,13 +465,10 @@ stateful_error_t raw_stateful_dispatch_t::ingest (
         _pending_reservations.erase (pending_key);
         _pending_condition.notify_all ();
     };
-    std::vector<std::uint8_t> canonical;
-    std::size_t application_payload_bytes = 0;
+    protocol::frozen_record_t accepted_frozen;
     try {
-        application_payload_bytes =
-          protocol::application_payload_hwm_bytes (payload);
-        canonical =
-          protocol::encode_frozen_application_record (frozen).canonical_bytes;
+        accepted_frozen =
+          protocol::summarize_frozen_application_record (frozen);
     }
     catch (...) {
         clear_reservation ();
@@ -434,7 +478,8 @@ stateful_error_t raw_stateful_dispatch_t::ingest (
     try {
         enqueued = _objects->enqueue (
           owner, turn_domain_t::application,
-          {sequence, std::move (canonical), application_payload_bytes});
+          turn_record_t{sequence, {}, application_payload_bytes,
+                        std::move (frozen)});
     }
     catch (...) {
         clear_reservation ();
@@ -471,7 +516,7 @@ stateful_error_t raw_stateful_dispatch_t::ingest (
                              pending_key,
                              pending_delivery_t{
                                owner,
-                               std::move (payload),
+                               std::move (accepted_frozen),
                                std::move (record),
                                frozen.reply_route_id.has_value (),
                                {},
@@ -507,17 +552,24 @@ raw_stateful_dispatch_t::try_claim (const object_ref_t &owner)
         return {error, std::nullopt};
     }
     std::lock_guard lock (_mutex);
-    const auto pending =
+    auto pending =
       _pending.find (delivery_key (owner, turn->sequence));
     if (pending == _pending.end ()) {
         (void) _objects->complete_claim (
           owner, turn_domain_t::application);
         return {stateful_error_t::conflict, std::nullopt};
     }
+    if (!pending->second.frozen.application) {
+        (void) _objects->complete_claim (
+          owner, turn_domain_t::application);
+        return {stateful_error_t::conflict, std::nullopt};
+    }
+    auto frozen = std::move (pending->second.frozen);
+    auto payload = std::move (*frozen.application);
     return {
       stateful_error_t::none,
       stateful_delivery_t{
-        owner, *turn, pending->second.payload,
+        owner, std::move (*turn), std::move (frozen), std::move (payload),
         pending->second.request}};
 }
 
@@ -570,14 +622,13 @@ stateful_error_t raw_stateful_dispatch_t::stage_relocated (
     const std::optional<protocol::application_payload_t> &)> terminal)
 {
     protocol::frozen_record_t frozen;
-    protocol::application_payload_t payload;
     try {
         frozen = protocol::decode_frozen_record (turn.payload);
         if (!frozen.application)
             return stateful_error_t::invalid;
-        payload = *frozen.application;
         turn.application_payload_bytes =
-          protocol::application_payload_hwm_bytes (payload);
+          protocol::application_payload_hwm_bytes (*frozen.application);
+        frozen.canonical_bytes.clear ();
     }
     catch (...) {
         return stateful_error_t::invalid;
@@ -630,13 +681,14 @@ stateful_error_t raw_stateful_dispatch_t::stage_relocated (
                 && discarding->second == owner)) {
             discarded = true;
         } else {
+            const auto request = frozen.reply_route_id.has_value ();
             inserted = _pending.emplace (
                          pending_key,
                          pending_delivery_t{
                            owner,
-                           std::move (payload),
+                           std::move (frozen),
                            {},
-                           frozen.reply_route_id.has_value (),
+                           request,
                            std::move (terminal),
                            {}})
                          .second;
@@ -870,26 +922,24 @@ std::string raw_stateful_dispatch_t::mailbox_owner (
     return "spot:" + owner.key;
 }
 
-bool raw_stateful_dispatch_t::exact_fence (
+bool raw_stateful_dispatch_t::matches_application_route (
   const object_ref_t &owner,
-  const protocol::actor_route_fence_t &fence)
+  const protocol::actor_route_fence_t &route)
 {
     return owner.kind == object_kind_t::actor
-           && owner.key == fence.actor_id
-           && owner.object_generation == fence.object_generation
+           && owner.key == route.actor_id
            && owner.authority_owner_generation
-                == fence.authority_owner_generation;
+                == route.authority_owner_generation;
 }
 
-bool raw_stateful_dispatch_t::exact_fence (
+bool raw_stateful_dispatch_t::matches_application_route (
   const object_ref_t &owner,
-  const protocol::spot_route_fence_t &fence)
+  const protocol::spot_route_fence_t &route)
 {
     return owner.kind != object_kind_t::actor
-           && owner.key == fence.spot_id
-           && owner.object_generation == fence.object_generation
+           && owner.key == route.spot_id
            && owner.authority_owner_generation
-                == fence.authority_owner_generation;
+                == route.authority_owner_generation;
 }
 
 raw_stateful_dispatch_t::delivery_key_t

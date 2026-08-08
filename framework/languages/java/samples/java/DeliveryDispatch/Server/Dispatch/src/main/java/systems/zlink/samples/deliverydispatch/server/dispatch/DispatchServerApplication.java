@@ -34,9 +34,7 @@ public final class DispatchServerApplication {
         return options -> {
             options.addHandlersFromPackageOf(DispatchServerApplication.class);
             options.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile(topology.logDirectory() + "/flow-dispatch.log")
-                .traceLabel("dispatch");
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             options.addClientServerChannel(SampleNames.CourierChannel)
                 .client();
             // The courier's decision comes back here as its own one-way message, so dispatch has

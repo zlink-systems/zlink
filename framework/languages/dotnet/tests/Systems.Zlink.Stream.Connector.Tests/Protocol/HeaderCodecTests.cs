@@ -307,6 +307,43 @@ public sealed partial class StreamConnectorTests
     }
 
     [Theory]
+    [InlineData("idle", ZlinkStreamCloseReason.IdleTimeout, 2)]
+    [InlineData("heartbeat", ZlinkStreamCloseReason.HeartbeatTimeout, 3)]
+    [InlineData("drain", ZlinkStreamCloseReason.ServerDrain, 4)]
+    [InlineData("protocol", ZlinkStreamCloseReason.ProtocolError, 5)]
+    public void SessionClosingCodecEncodesAndDecodesServerReasons(
+        string producer,
+        ZlinkStreamCloseReason expectedReason,
+        byte expectedWireReason)
+    {
+        var payload = producer switch
+        {
+            "idle" => ZlinkStreamSessionClosingCodec.EncodeIdleTimeout("done"),
+            "heartbeat" => ZlinkStreamSessionClosingCodec.EncodeHeartbeatTimeout("done"),
+            "drain" => ZlinkStreamSessionClosingCodec.EncodeServerDrain("done"),
+            "protocol" => ZlinkStreamSessionClosingCodec.EncodeProtocolError("done"),
+            _ => throw new ArgumentOutOfRangeException(nameof(producer))
+        };
+
+        Assert.Equal(new byte[] { 1, expectedWireReason, 0, 4 }, payload[..4]);
+        var closing = ZlinkStreamSessionClosingCodec.Decode(payload);
+        Assert.Equal(expectedReason, closing.Reason);
+        Assert.Equal("done", closing.Diagnostic);
+    }
+
+    [Fact]
+    public void SessionClosingCodecRejectsOversizedAndInvalidUtf8Diagnostics()
+    {
+        var oversized = Assert.Throws<ZlinkStreamException>(() =>
+            ZlinkStreamSessionClosingCodec.EncodeServerDrain(new string('x', 513)));
+        var invalidUtf8 = Assert.Throws<ZlinkStreamException>(() =>
+            ZlinkStreamSessionClosingCodec.EncodeProtocolError("\ud800"));
+
+        Assert.Equal(ZlinkStreamErrorCode.ValidationFailed, oversized.Error.Code);
+        Assert.Equal(ZlinkStreamErrorCode.ValidationFailed, invalidUtf8.Error.Code);
+    }
+
+    [Theory]
     [InlineData(new byte[] { 2, 4, 0, 0 })]
     [InlineData(new byte[] { 1, 0, 0, 0 })]
     [InlineData(new byte[] { 1, 4, 0, 1 })]

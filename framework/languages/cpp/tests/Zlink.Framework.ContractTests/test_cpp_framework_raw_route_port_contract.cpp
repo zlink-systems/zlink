@@ -15,6 +15,11 @@ static_assert (std::is_same_v<
                  std::declval<const backend::raw_message_t &> ())),
                bool>);
 static_assert (std::is_same_v<
+               decltype (std::declval<backend::raw_route_port_t &> ().send_result (
+                 std::declval<const backend::raw_bytes_t &> (),
+                 std::declval<const backend::raw_message_t &> ())),
+               zlink::submit_result_t>);
+static_assert (std::is_same_v<
                decltype (std::declval<backend::raw_route_port_t &> ().try_receive ()),
                std::optional<backend::raw_received_t>>);
 static_assert (std::is_same_v<

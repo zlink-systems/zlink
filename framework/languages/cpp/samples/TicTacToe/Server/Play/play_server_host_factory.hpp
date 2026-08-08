@@ -37,11 +37,11 @@ class play_server_host_factory_t
         if (auto_stop) {
             app.add_hosted_service (std::make_unique<stop_after_start_service_t> (app));
         }
+        app.logging ().use_file (
+          flow_log_path (topology.log_dir, "play-" + topology.play_node));
         app.add_zlink_framework ([&] (zlink_framework_options_t &options) {
             options.configure_dispatch ()
-              .message_flow (message_flow_log_mode_t::key_transitions)
-              .trace_log_file (flow_log_path (topology.log_dir, "play-" + topology.play_node))
-              .trace_label ("tictactoe-play-" + topology.play_node);
+              .message_flow (message_flow_log_mode_t::normal);
             options.services ().add_singleton<sample_topology_t> (
               std::make_unique<sample_topology_t> (topology));
             add_sample_location_store (options, topology);

@@ -162,12 +162,13 @@ class authority_relocation_port_t
     virtual ~authority_relocation_port_t () = default;
     virtual authority_publish_result_t publish (
       const object_ref_t &source,
-      std::string target_node_id,
+      const object_ref_t &target,
       location_owner_token_t target_owner,
       relocation_capacity_fence_t relocation_capacity_fence,
       std::string relocation_reference,
       std::uint32_t checksum_crc32c,
-      inventory_digest_t inventory_digest) = 0;
+      inventory_digest_t inventory_digest,
+      std::vector<std::byte> target_application_payload = {}) = 0;
     virtual std::optional<authority_relocation_reference_t>
     read (object_kind_t kind, const std::string &key) = 0;
     virtual authority_publish_result_t publish_completion (

@@ -229,75 +229,99 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
         Admission admission,
         ZLinkStoreCancellation cancellation,
         ZLinkRelocationPermitPool.Lease permit) {
-        Optional<ZLinkAsyncSerialQueue.RelocationSeal> sealed =
-            actors.trySealActorRelocation(admission.owned().actorId());
-        if (sealed.isEmpty()) {
-            permit.close();
-            return failed(new IllegalStateException(
-                "Actor relocation queue cannot be sealed"));
-        }
-        ZLinkAsyncSerialQueue.RelocationSeal seal = sealed.orElseThrow();
-        byte[] timerEnvelope =
-            relocationReplies.freezeActorTimerRelocationEnvelope(
-                admission.owned().actorId());
-        ZLinkRelocationCancellation relocationCancellation =
-            cancellation::isCancellationRequested;
-        CompletionStage<byte[]> captured = admission.owned().snapshotPolicy()
-            ? adapters.captureActor(
-                admission.owned().stableType(),
-                actor,
-                relocationCancellation)
-            : CompletableFuture.completedFuture(new byte[0]);
-        return captured.thenCompose(state -> {
-            byte[] applicationState = Objects.requireNonNull(
-                state, "Actor Capture returned null").clone();
-            UUID relocationId = UUID.randomUUID();
-            byte[] initialRoot =
-                ZLinkCanonicalActorRelocationEnvelope.encode(
-                    relocationId,
-                    admission.owned().actorId(),
-                    admission.owned().snapshot().objectGeneration(),
-                    admission.owned().snapshot()
-                        .authorityOwnerGeneration(),
-                    admission.owned().snapshotPolicy(),
-                    applicationState,
-                    seal.captured(),
-                    timerEnvelope);
-            var request = request(
-                admission.owned(),
-                admission.target(),
-                relocationId,
-                initialRoot);
-            Optional<ZLinkSpotRetireControl.SessionRouteFence> sessionRoute =
-                admission.sessionRoute().or(() ->
-                    capturedSessionRoute(
+        return sealAtTurnBoundary(
+                admission.owned().actorId(), cancellation)
+            .thenCompose(sealed -> {
+                if (sealed.isEmpty()) {
+                    permit.close();
+                    return failed(new IllegalStateException(
+                        "Actor relocation queue cannot be sealed"));
+                }
+                ZLinkAsyncSerialQueue.RelocationSeal seal = sealed.orElseThrow();
+                byte[] timerEnvelope =
+                    relocationReplies.freezeActorTimerRelocationEnvelope(
+                        admission.owned().actorId());
+                ZLinkRelocationCancellation relocationCancellation =
+                    cancellation::isCancellationRequested;
+                CompletionStage<byte[]> captured = admission.owned().snapshotPolicy()
+                    ? adapters.captureActor(
+                        admission.owned().stableType(),
+                        actor,
+                        relocationCancellation)
+                    : CompletableFuture.completedFuture(new byte[0]);
+                return captured.thenCompose(state -> {
+                    byte[] applicationState = Objects.requireNonNull(
+                        state, "Actor Capture returned null").clone();
+                    UUID relocationId = UUID.randomUUID();
+                    byte[] initialRoot =
+                        ZLinkCanonicalActorRelocationEnvelope.encode(
+                            relocationId,
+                            admission.owned().actorId(),
+                            admission.owned().snapshot().objectGeneration(),
+                            admission.owned().snapshot()
+                                .authorityOwnerGeneration(),
+                            admission.owned().snapshotPolicy(),
+                            applicationState,
+                            seal.captured(),
+                            timerEnvelope);
+                    var request = request(
                         admission.owned(),
-                        seal.captured()));
-            return coordinator.stageRoot(request, cancellation)
-                .thenApply(staged -> new PreparedSource(
-                    coordinator,
-                    actors,
-                    relocationReplies,
-                    seal,
-                    permit,
-                    admission.owned(),
-                    admission.target(),
-                    relocationId,
-                    applicationState,
-                    timerEnvelope,
-                    staged,
-                    stageRequest(
-                        admission,
+                        admission.target(),
                         relocationId,
-                        staged,
-                        sessionRoute)));
-        }).exceptionallyCompose(failure -> {
-            relocationReplies.resumeActorTimersAfterRelocationAbort(
-                admission.owned().actorId());
-            actors.abortActorRelocation(
-                admission.owned().actorId(), seal);
-            permit.close();
-            return failed(unwrap(failure));
+                        initialRoot);
+                    Optional<ZLinkSpotRetireControl.SessionRouteFence> sessionRoute =
+                        admission.sessionRoute().or(() ->
+                            capturedSessionRoute(
+                                admission.owned(),
+                                seal.captured()));
+                    return coordinator.stageRoot(request, cancellation)
+                        .thenApply(staged -> new PreparedSource(
+                            coordinator,
+                            actors,
+                            relocationReplies,
+                            seal,
+                            permit,
+                            admission.owned(),
+                            admission.target(),
+                            relocationId,
+                            applicationState,
+                            timerEnvelope,
+                            staged,
+                            stageRequest(
+                                admission,
+                                relocationId,
+                                staged,
+                                sessionRoute)));
+                }).exceptionallyCompose(failure -> {
+                    relocationReplies.resumeActorTimersAfterRelocationAbort(
+                        admission.owned().actorId());
+                    actors.abortActorRelocation(
+                        admission.owned().actorId(), seal);
+                    permit.close();
+                    return failed(unwrap(failure));
+                });
+            });
+    }
+
+    private CompletionStage<Optional<ZLinkAsyncSerialQueue.RelocationSeal>>
+        sealAtTurnBoundary(
+            String actorId,
+            ZLinkStoreCancellation cancellation) {
+        ZLinkAsyncSerialQueue queue = actors.actorRelocationLane(actorId);
+        Optional<ZLinkAsyncSerialQueue.RelocationBoundary> reserved =
+            queue.reserveRelocationTurnBoundary();
+        if (reserved.isEmpty()) {
+            return CompletableFuture.completedFuture(Optional.empty());
+        }
+        ZLinkAsyncSerialQueue.RelocationBoundary boundary =
+            reserved.orElseThrow();
+        return boundary.reached().thenCompose(ignored -> {
+            Optional<ZLinkAsyncSerialQueue.RelocationSeal> sealed =
+                cancellation.isCancellationRequested()
+                    ? Optional.empty()
+                    : queue.trySealRelocation(boundary);
+            boundary.release();
+            return boundary.finished().thenApply(ignoredFinished -> sealed);
         });
     }
 
@@ -727,35 +751,45 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
             committed = true;
         }
 
-        synchronized CompletionStage<
+        CompletionStage<
             ZLinkAggregateRelocationCoordinator.Published> commitAuthority(
-                ZLinkStoreCancellation cancellation) {
-            if (terminal || committed || prepared == null) {
-                return failed(new IllegalStateException(
-                    "Actor relocation source is not ready for authority commit"));
+            ZLinkStoreCancellation cancellation) {
+            ZLinkAggregateRelocationCoordinator.Prepared authority;
+            synchronized (this) {
+                if (terminal || committed || prepared == null) {
+                    return failed(new IllegalStateException(
+                        "Actor relocation source is not ready for authority commit"));
+                }
+                authority = prepared;
             }
-            return coordinator.commit(prepared, cancellation);
+            return coordinator.commit(authority, cancellation);
         }
 
-        synchronized CompletionStage<
+        CompletionStage<
             ZLinkAggregateRelocationCoordinator.Published>
                 completeSourceCleanup(
                     ZLinkAggregateRelocationCoordinator.Published published,
                     ZLinkStoreCancellation cancellation) {
-            if (!committed || terminal || prepared == null) {
-                return failed(new IllegalStateException(
-                    "Actor relocation source is not committed"));
+            ZLinkAggregateRelocationCoordinator.Prepared authority;
+            synchronized (this) {
+                if (!committed || terminal || prepared == null) {
+                    return failed(new IllegalStateException(
+                        "Actor relocation source is not committed"));
+                }
+                authority = prepared;
             }
             return coordinator.completeSourceCleanup(
                 published,
-                prepared.request().root(),
+                authority.request().root(),
                 cancellation);
         }
 
-        synchronized CompletionStage<Void> discardInitialAfterCommit() {
-            if (!committed || terminal) {
-                return failed(new IllegalStateException(
-                    "Actor relocation source is not committed"));
+        CompletionStage<Void> discardInitialAfterCommit() {
+            synchronized (this) {
+                if (!committed || terminal) {
+                    return failed(new IllegalStateException(
+                        "Actor relocation source is not committed"));
+                }
             }
             return coordinator.discardStagedRoot(initial);
         }

@@ -12,7 +12,8 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
-import java.util.concurrent.ConcurrentHashMap;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locations.*;
 import systems.zlink.framework.runtime.internal.locations.*;
 
@@ -29,8 +30,6 @@ public final class ZLinkLocationRuntimeQueryService implements ZLinkLocationRunt
     private final ZLinkLocationOptions options;
     private final List<String> meshNames;
     private final ZLinkLiveLocationRows liveRows;
-    private final ConcurrentHashMap<String, ObjectLocationSnapshot> objectSnapshots =
-        new ConcurrentHashMap<>();
 
     public ZLinkLocationRuntimeQueryService(
         ZLinkRegisteredLocationStores stores,
@@ -86,8 +85,13 @@ public final class ZLinkLocationRuntimeQueryService implements ZLinkLocationRunt
         ZLinkPageRequest page) {
         ZLinkLocationTopologyFilter safe = filter == null
             ? ZLinkLocationTopologyFilter.all() : filter;
-        return meshEntries(safe)
-            .thenApply(items -> pageInMemory(items, page));
+        ZLinkPageRequest safePage = boundedPage(page);
+        return unavailable(
+            loadTopologyPage(
+                safe,
+                safePage,
+                parseOffset(safePage.continuationToken())),
+            "list topology");
     }
 
     @Override
@@ -96,18 +100,14 @@ public final class ZLinkLocationRuntimeQueryService implements ZLinkLocationRunt
         ZLinkPageRequest page) {
         ZLinkLocationServiceSummaryFilter safe = filter == null
             ? ZLinkLocationServiceSummaryFilter.all() : filter;
-        return meshEntries(new ZLinkLocationTopologyFilter(
-            safe.meshName(), null, null)).thenApply(nodes -> {
-            Map<String, MutableSummary> grouped = new LinkedHashMap<>();
-            nodes.forEach(node -> grouped
-                .computeIfAbsent(node.meshName(), ignored -> new MutableSummary())
-                .add(node.updatedAt(), node.state() == ZLinkLocationTopologyState.READY));
+        ZLinkPageRequest safePage = boundedPage(page);
+        return unavailable(loadServiceSummaryPage(safe).thenApply(grouped -> {
             List<ZLinkLocationServiceSummary> summaries = grouped.entrySet().stream()
                 .map(entry -> entry.getValue().toSummary(entry.getKey()))
                 .sorted(Comparator.comparing(ZLinkLocationServiceSummary::meshName))
                 .toList();
-            return pageInMemory(summaries, page);
-        });
+            return pageInMemory(summaries, safePage);
+        }), "list service summaries");
     }
 
     @Override
@@ -132,123 +132,105 @@ public final class ZLinkLocationRuntimeQueryService implements ZLinkLocationRunt
         String prefix = filter.objectKind() == ZLinkPlacementObjectKind.ACTOR
             ? ZLinkAuthorityKeyCodec.actorPrefix()
             : ZLinkAuthorityKeyCodec.spotPrefix();
-        if (safe.continuationToken() == null) {
-            return loadObjectSnapshot(filter, prefix)
-                .thenApply(entries -> createSnapshotPage(entries, pageSize));
-        }
-        SnapshotPosition position = parsePosition(safe.continuationToken());
-        ObjectLocationSnapshot snapshot = objectSnapshots.get(position.snapshotId());
-        if (snapshot == null)
-            return CompletableFuture.failedFuture(
-                new IllegalArgumentException("location continuation token expired"));
-        if (position.index() > snapshot.entries().size())
-            return CompletableFuture.failedFuture(
-                new IllegalArgumentException("invalid location continuation index"));
-        return CompletableFuture.completedFuture(
-            pageSnapshot(position.snapshotId(), snapshot.entries(), position.index(), pageSize));
+        Optional<ZLinkAuthorityScanCursor> cursor = safe.continuationToken() == null
+            ? Optional.empty()
+            : Optional.of(new ZLinkAuthorityScanCursor(
+                parseCursor(safe.continuationToken())));
+        return unavailable(
+            loadObjectPage(
+                filter,
+                prefix,
+                cursor,
+                pageSize,
+                new ArrayList<>(),
+                256),
+            "list object locations");
     }
 
     private CompletionStage<Optional<ZLinkLocationObjectEntry>> findObjectLocation(
         String key,
         ZLinkPlacementObjectKind expectedKind) {
-        return stores.unifiedStore().read(key, OPEN).thenApply(result -> {
+        return unavailable(stores.unifiedStore().read(key, OPEN).thenCompose(result -> {
             if (!(result instanceof ZLinkAuthoritySnapshot snapshot)
                 || (expectedKind != null
                     && snapshot.allocation().objectKind() != expectedKind)
                 || (expectedKind == null
                     && snapshot.allocation().objectKind() != ZLinkPlacementObjectKind.USER_SPOT
                     && snapshot.allocation().objectKind() != ZLinkPlacementObjectKind.INSTANCE_SPOT))
-                return Optional.empty();
-            return Optional.of(toObjectEntry(key, snapshot));
-        });
+                return CompletableFuture.completedFuture(Optional.empty());
+            return toObjectEntry(key, snapshot).thenApply(Optional::of);
+        }), "find object location");
     }
 
-    private CompletionStage<List<ZLinkLocationObjectEntry>> loadObjectSnapshot(
+    private CompletionStage<ZLinkLocationPage<ZLinkLocationObjectEntry>> loadObjectPage(
         ZLinkLocationObjectFilter filter,
         String prefix,
         Optional<ZLinkAuthorityScanCursor> cursor,
-        List<ZLinkLocationObjectEntry> values) {
+        int pageSize,
+        List<ZLinkLocationObjectEntry> values,
+        int encodedBytes) {
         return stores.unifiedStore().list(
             prefix,
             cursor,
-            1000,
+            1,
             OPEN)
             .thenCompose(page -> {
                 if (!(page instanceof ZLinkAuthorityPage authorityPage))
                     return CompletableFuture.failedFuture(
                         new IllegalStateException("location scan cursor expired"));
-                List<ZLinkAuthorityEntry> authorityItems = authorityPage.items();
-                for (ZLinkAuthorityEntry entry : authorityItems) {
-                    ZLinkAuthoritySnapshot snapshot = entry.snapshot();
-                    ZLinkPlacementAllocation allocation = snapshot.allocation();
-                    if (allocation.objectKind() != filter.objectKind()
+                if (authorityPage.items().isEmpty()) {
+                    return CompletableFuture.completedFuture(
+                        new ZLinkLocationPage<>(List.copyOf(values), null));
+                }
+                ZLinkAuthorityEntry entry = authorityPage.items().getFirst();
+                ZLinkAuthoritySnapshot snapshot = entry.snapshot();
+                ZLinkPlacementAllocation allocation = snapshot.allocation();
+                CompletionStage<ZLinkLocationObjectEntry> projection =
+                    allocation.objectKind() != filter.objectKind()
                         || (filter.stableType() != null
                             && !filter.stableType().equals(allocation.stableType()))
                         || (filter.meshName() != null
-                            && !filter.meshName().equals(allocation.descriptor().meshName())))
-                        continue;
-                    values.add(toObjectEntry(entry.key(), snapshot));
-                }
-                return authorityPage.nextCursor().isPresent()
-                    ? loadObjectSnapshot(
-                        filter, prefix, authorityPage.nextCursor(), values)
-                    : CompletableFuture.completedFuture(List.copyOf(values));
+                            && !filter.meshName().equals(
+                                allocation.descriptor().meshName()))
+                        ? CompletableFuture.completedFuture(null)
+                        : toObjectEntry(entry.key(), snapshot);
+                return projection.thenCompose(projected -> {
+                    int nextBytes = encodedBytes;
+                    if (projected != null) {
+                        int entryBytes = encodedObjectBytes(projected) + 1;
+                        if (entryBytes + 256 > MAX_OBJECT_PAGE_BYTES) {
+                            return CompletableFuture.failedFuture(
+                                new IllegalStateException(
+                                    "location object entry exceeds the 4 MiB response limit"));
+                        }
+                        if (!values.isEmpty()
+                            && nextBytes + entryBytes > MAX_OBJECT_PAGE_BYTES - 256) {
+                            return CompletableFuture.completedFuture(
+                                new ZLinkLocationPage<>(
+                                    List.copyOf(values),
+                                    encodeCursor(cursor.orElseThrow().encoded())));
+                        }
+                        values.add(projected);
+                        nextBytes += entryBytes;
+                    }
+                    if (values.size() >= pageSize
+                        || authorityPage.nextCursor().isEmpty()) {
+                        return CompletableFuture.completedFuture(
+                            new ZLinkLocationPage<>(
+                                List.copyOf(values),
+                                authorityPage.nextCursor()
+                                    .map(next -> encodeCursor(next.encoded()))
+                                    .orElse(null)));
+                    }
+                    return loadObjectPage(
+                        filter,
+                        prefix,
+                        authorityPage.nextCursor(),
+                        pageSize,
+                        values,
+                        nextBytes);
+                });
             });
-    }
-
-    private CompletionStage<List<ZLinkLocationObjectEntry>> loadObjectSnapshot(
-        ZLinkLocationObjectFilter filter,
-        String prefix) {
-        return loadObjectSnapshot(filter, prefix, Optional.empty(), new ArrayList<>());
-    }
-
-    private ZLinkLocationPage<ZLinkLocationObjectEntry> createSnapshotPage(
-        List<ZLinkLocationObjectEntry> entries,
-        int pageSize) {
-        if (entries.isEmpty())
-            return new ZLinkLocationPage<>(List.of(), null);
-        String snapshotId = Long.toUnsignedString(System.nanoTime(), 36)
-            + Long.toUnsignedString(System.identityHashCode(entries), 36);
-        objectSnapshots.put(snapshotId, new ObjectLocationSnapshot(entries));
-        trimObjectSnapshots();
-        return pageSnapshot(snapshotId, entries, 0, pageSize);
-    }
-
-    private ZLinkLocationPage<ZLinkLocationObjectEntry> pageSnapshot(
-        String snapshotId,
-        List<ZLinkLocationObjectEntry> entries,
-        int offset,
-        int pageSize) {
-        List<ZLinkLocationObjectEntry> page = new ArrayList<>(Math.min(pageSize, entries.size() - offset));
-        int encodedBytes = 256;
-        int index = offset;
-        while (index < entries.size() && page.size() < pageSize) {
-            ZLinkLocationObjectEntry entry = entries.get(index);
-            int entryBytes = encodedObjectBytes(entry);
-            if (entryBytes + 256 > MAX_OBJECT_PAGE_BYTES)
-                throw new IllegalStateException(
-                    "location object entry exceeds the 4 MiB response limit");
-            if (!page.isEmpty() && encodedBytes + entryBytes > MAX_OBJECT_PAGE_BYTES - 256)
-                break;
-            page.add(entry);
-            encodedBytes += entryBytes + 1;
-            index++;
-        }
-        if (page.isEmpty())
-            throw new IllegalStateException("location object page cannot fit the 4 MiB response limit");
-        String token = index < entries.size()
-            ? encodePosition(snapshotId, index)
-            : null;
-        if (token == null)
-            objectSnapshots.remove(snapshotId);
-        return new ZLinkLocationPage<>(List.copyOf(page), token);
-    }
-
-    private void trimObjectSnapshots() {
-        while (objectSnapshots.size() > 64) {
-            String first = objectSnapshots.keys().nextElement();
-            objectSnapshots.remove(first);
-        }
     }
 
     private static int encodedObjectBytes(ZLinkLocationObjectEntry object) {
@@ -273,110 +255,276 @@ public final class ZLinkLocationRuntimeQueryService implements ZLinkLocationRunt
         return bytes;
     }
 
-    private record ObjectLocationSnapshot(
-        List<ZLinkLocationObjectEntry> entries) { }
-
-    private record SnapshotPosition(
-        String snapshotId,
-        int index) { }
-
-    private static SnapshotPosition parsePosition(String token) {
+    private static String parseCursor(String token) {
         if (token == null || token.isBlank())
             throw new IllegalArgumentException("location continuation token is required");
         if (token.length() > MAX_CONTINUATION_TOKEN_BYTES)
             throw new IllegalArgumentException("location continuation token is too large");
         try {
-            String value = new String(Base64.getUrlDecoder().decode(token), StandardCharsets.UTF_8);
-            int separator = value.lastIndexOf(':');
-            if (separator <= 0)
+            String value = new String(
+                Base64.getUrlDecoder().decode(token),
+                StandardCharsets.UTF_8);
+            if (value.isEmpty())
                 throw new IllegalArgumentException("invalid location continuation token");
-            int index = Integer.parseInt(value.substring(separator + 1));
-            if (index < 0)
-                throw new IllegalArgumentException("invalid location continuation index");
-            return new SnapshotPosition(value.substring(0, separator), index);
+            return value;
         } catch (RuntimeException error) {
             throw new IllegalArgumentException("invalid location continuation token", error);
         }
     }
 
-    private static String encodePosition(
-        String snapshotId,
-        int index) {
-        String value = snapshotId + ':' + index;
+    private static String encodeCursor(String value) {
         return Base64.getUrlEncoder().withoutPadding()
             .encodeToString(value.getBytes(StandardCharsets.UTF_8));
     }
 
-    private static ZLinkLocationObjectEntry toObjectEntry(
+    private CompletionStage<ZLinkLocationObjectEntry> toObjectEntry(
         String authorityKey,
         ZLinkAuthoritySnapshot snapshot) {
         ZLinkPlacementAllocation allocation = snapshot.allocation();
         String globalId = allocation.objectKind() == ZLinkPlacementObjectKind.ACTOR
             ? ZLinkAuthorityKeyCodec.actorId(authorityKey)
             : ZLinkAuthorityKeyCodec.spotId(authorityKey);
-        ZLinkLocationObjectState state = allocation.state()
-            == ZLinkPlacementAllocationState.PENDING
-            ? ZLinkLocationObjectState.CREATING
-            : ZLinkLocationObjectState.READY;
-        return new ZLinkLocationObjectEntry(
-            globalId,
-            snapshot.objectGeneration(),
-            allocation.descriptor().meshName(),
-            allocation.descriptor().rid(),
-            state,
-            allocation.stableType());
-    }
-
-    private CompletionStage<List<ZLinkLocationTopologyEntry>> meshEntries(
-        ZLinkLocationTopologyFilter filter) {
-        return allMeshNodes(filter.meshName()).thenCompose(nodes -> {
-            List<CompletableFuture<ZLinkLocationTopologyEntry>> projections =
-                nodes.stream().map(node -> liveRows.ownerLeaseRemaining(
-                        node.ownerId(), node.leaseGeneration())
-                    .thenApply(remaining -> new ZLinkLocationTopologyEntry(
-                        node.meshName(),
-                        node.rid(),
-                        node.endpoint(),
-                        node.state() == systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState.DRAINING,
-                        remaining == null
-                            ? ZLinkLocationTopologyState.LOST
-                            : ZLinkLocationTopologyState.READY,
-                        node.updatedAt()))
-                    .toCompletableFuture()).toList();
-            return CompletableFuture.allOf(
-                    projections.toArray(CompletableFuture[]::new))
-                .thenApply(ignored -> projections.stream()
-                    .map(CompletableFuture::join)
-                    .filter(entry -> matches(entry, filter))
-                    .toList());
-        });
-    }
-
-    private CompletionStage<List<ZLinkMeshNodeDescriptor>> allMeshNodes(String meshName) {
-        if (meshName == null || meshName.isBlank()) {
-            CompletionStage<List<ZLinkMeshNodeDescriptor>> values =
-                CompletableFuture.completedFuture(List.of());
-            for (String configured : meshNames) {
-                values = values.thenCombine(
-                    allMeshNodes(configured, null, new ArrayList<>()),
-                    ZLinkLocationRuntimeQueryService::concat);
-            }
-            return values;
+        if (allocation.state() == ZLinkPlacementAllocationState.PENDING) {
+            return CompletableFuture.completedFuture(new ZLinkLocationObjectEntry(
+                globalId,
+                snapshot.objectGeneration(),
+                allocation.descriptor().meshName(),
+                allocation.descriptor().rid(),
+                ZLinkLocationObjectState.CREATING,
+                allocation.stableType()));
         }
-        return allMeshNodes(meshName, null, new ArrayList<>());
+        return liveRows.ownerLeaseRemaining(
+            snapshot.ownerId(), snapshot.ownerLeaseGeneration()).thenApply(remaining ->
+                new ZLinkLocationObjectEntry(
+                    globalId,
+                    snapshot.objectGeneration(),
+                    allocation.descriptor().meshName(),
+                    allocation.descriptor().rid(),
+                    remaining == null
+                        ? ZLinkLocationObjectState.UNAVAILABLE
+                        : ZLinkLocationObjectState.READY,
+                    allocation.stableType()));
     }
 
-    private CompletionStage<List<ZLinkMeshNodeDescriptor>> allMeshNodes(
-        String meshName,
-        String continuation,
-        List<ZLinkMeshNodeDescriptor> values) {
+    private static <T> CompletionStage<T> unavailable(
+        CompletionStage<T> operation,
+        String description) {
+        CompletableFuture<T> result = new CompletableFuture<>();
+        operation.whenComplete((value, failure) -> {
+            if (failure == null) {
+                result.complete(value);
+                return;
+            }
+            Throwable cause = failure;
+            while (cause instanceof java.util.concurrent.CompletionException
+                && cause.getCause() != null) {
+                cause = cause.getCause();
+            }
+            if (cause instanceof IllegalArgumentException
+                || cause instanceof ZLinkFrameworkException) {
+                result.completeExceptionally(cause);
+            } else {
+                result.completeExceptionally(new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.UNAVAILABLE,
+                    "location store failed to " + description,
+                    cause));
+            }
+        });
+        return result;
+    }
+
+    private CompletionStage<ZLinkLocationPage<ZLinkLocationTopologyEntry>>
+        loadTopologyPage(
+            ZLinkLocationTopologyFilter filter,
+            ZLinkPageRequest page,
+            int offset) {
+        List<ZLinkLocationTopologyEntry> values = new ArrayList<>();
+        return scanTopologyMesh(
+            queryMeshes(filter.meshName()),
+            0,
+            null,
+            filter,
+            page.pageSize(),
+            offset,
+            new int[] {offset},
+            values);
+    }
+
+    private CompletionStage<ZLinkLocationPage<ZLinkLocationTopologyEntry>>
+        scanTopologyMesh(
+            List<String> meshes,
+            int meshIndex,
+            String continuation,
+            ZLinkLocationTopologyFilter filter,
+            int pageSize,
+            int originalOffset,
+            int[] remainingOffset,
+            List<ZLinkLocationTopologyEntry> values) {
+        if (meshIndex >= meshes.size()) {
+            return CompletableFuture.completedFuture(
+                new ZLinkLocationPage<>(List.copyOf(values), null));
+        }
+        String meshName = meshes.get(meshIndex);
         return stores.unifiedStore().listMeshNodes(
-            meshName, new ZLinkPageRequest(1000, continuation)).thenCompose(page -> {
-                values.addAll(page.items());
-                return page.continuationToken() == null
-                    ? CompletableFuture.completedFuture(List.copyOf(values))
-                    : allMeshNodes(meshName, page.continuationToken(), values);
+            meshName,
+            new ZLinkPageRequest(1000, continuation))
+            .thenCompose(page -> scanTopologyItems(
+                meshes,
+                meshIndex,
+                page,
+                0,
+                filter,
+                pageSize,
+                originalOffset,
+                remainingOffset,
+                values));
+    }
+
+    private CompletionStage<ZLinkLocationPage<ZLinkLocationTopologyEntry>>
+        scanTopologyItems(
+            List<String> meshes,
+            int meshIndex,
+            ZLinkLocationPage<ZLinkMeshNodeDescriptor> page,
+            int itemIndex,
+            ZLinkLocationTopologyFilter filter,
+            int pageSize,
+            int originalOffset,
+            int[] remainingOffset,
+            List<ZLinkLocationTopologyEntry> values) {
+        if (itemIndex >= page.items().size()) {
+            return page.continuationToken() == null
+                ? scanTopologyMesh(
+                    meshes,
+                    meshIndex + 1,
+                    null,
+                    filter,
+                    pageSize,
+                    originalOffset,
+                    remainingOffset,
+                    values)
+                : scanTopologyMesh(
+                    meshes,
+                    meshIndex,
+                    page.continuationToken(),
+                    filter,
+                    pageSize,
+                    originalOffset,
+                    remainingOffset,
+                    values);
+        }
+        ZLinkMeshNodeDescriptor node = page.items().get(itemIndex);
+        return liveRows.ownerLeaseRemaining(
+            node.ownerId(), node.leaseGeneration())
+            .thenCompose(remaining -> {
+                ZLinkLocationTopologyEntry entry = new ZLinkLocationTopologyEntry(
+                    node.meshName(),
+                    node.rid(),
+                    node.endpoint(),
+                    node.state()
+                        == systems.zlink.framework.runtime.host
+                            .ZLinkFrameworkRuntimeState.DRAINING,
+                    remaining == null
+                        ? ZLinkLocationTopologyState.LOST
+                        : ZLinkLocationTopologyState.READY,
+                    node.updatedAt());
+                if (matches(entry, filter)) {
+                    if (remainingOffset[0] > 0) {
+                        remainingOffset[0]--;
+                    } else {
+                        values.add(entry);
+                    }
+                }
+                if (values.size() >= pageSize) {
+                    boolean more = itemIndex + 1 < page.items().size()
+                        || page.continuationToken() != null
+                        || meshIndex + 1 < meshes.size();
+                    return CompletableFuture.completedFuture(
+                        new ZLinkLocationPage<>(
+                            List.copyOf(values),
+                            more
+                                ? Integer.toString(
+                                    originalOffset + values.size())
+                                : null));
+                }
+                return scanTopologyItems(
+                    meshes,
+                    meshIndex,
+                    page,
+                    itemIndex + 1,
+                    filter,
+                    pageSize,
+                    originalOffset,
+                    remainingOffset,
+                    values);
             });
+    }
+
+    private CompletionStage<Map<String, MutableSummary>>
+        loadServiceSummaryPage(
+            ZLinkLocationServiceSummaryFilter filter) {
+        Map<String, MutableSummary> grouped = new LinkedHashMap<>();
+        return scanServiceSummaryMesh(
+            queryMeshes(filter.meshName()),
+            0,
+            null,
+            grouped);
+    }
+
+    private CompletionStage<Map<String, MutableSummary>> scanServiceSummaryMesh(
+        List<String> meshes,
+        int meshIndex,
+        String continuation,
+        Map<String, MutableSummary> grouped) {
+        if (meshIndex >= meshes.size()) {
+            return CompletableFuture.completedFuture(grouped);
+        }
+        String meshName = meshes.get(meshIndex);
+        return stores.unifiedStore().listMeshNodes(
+            meshName,
+            new ZLinkPageRequest(1000, continuation))
+            .thenCompose(page -> scanServiceSummaryItems(
+                meshes,
+                meshIndex,
+                page,
+                0,
+                grouped));
+    }
+
+    private CompletionStage<Map<String, MutableSummary>> scanServiceSummaryItems(
+        List<String> meshes,
+        int meshIndex,
+        ZLinkLocationPage<ZLinkMeshNodeDescriptor> page,
+        int itemIndex,
+        Map<String, MutableSummary> grouped) {
+        if (itemIndex >= page.items().size()) {
+            return page.continuationToken() == null
+                ? scanServiceSummaryMesh(meshes, meshIndex + 1, null, grouped)
+                : scanServiceSummaryMesh(
+                    meshes, meshIndex, page.continuationToken(), grouped);
+        }
+        ZLinkMeshNodeDescriptor node = page.items().get(itemIndex);
+        return liveRows.ownerLeaseRemaining(
+            node.ownerId(), node.leaseGeneration())
+            .thenCompose(remaining -> {
+                grouped.computeIfAbsent(
+                    node.meshName(), ignored -> new MutableSummary())
+                    .add(
+                        node.updatedAt(),
+                        remaining != null);
+                return scanServiceSummaryItems(
+                    meshes,
+                    meshIndex,
+                    page,
+                    itemIndex + 1,
+                    grouped);
+            });
+    }
+
+    private List<String> queryMeshes(String requestedMesh) {
+        if (requestedMesh != null && !requestedMesh.isBlank()) {
+            return List.of(requestedMesh);
+        }
+        return meshNames;
     }
 
     private static boolean matches(
@@ -385,13 +533,6 @@ public final class ZLinkLocationRuntimeQueryService implements ZLinkLocationRunt
         return (filter.meshName() == null || Objects.equals(entry.meshName(), filter.meshName()))
             && (filter.nodeRid() == null || Objects.equals(entry.nodeRid(), filter.nodeRid()))
             && (filter.state() == null || entry.state() == filter.state());
-    }
-
-    private static <T> List<T> concat(List<T> left, List<T> right) {
-        ArrayList<T> result = new ArrayList<>(left.size() + right.size());
-        result.addAll(left);
-        result.addAll(right);
-        return List.copyOf(result);
     }
 
     private <T> ZLinkLocationPage<T> pageInMemory(List<T> rows, ZLinkPageRequest page) {
@@ -406,6 +547,14 @@ public final class ZLinkLocationRuntimeQueryService implements ZLinkLocationRunt
     private ZLinkPageRequest normalize(ZLinkPageRequest page) {
         ZLinkPageRequest safe = page == null ? ZLinkPageRequest.firstPage() : page;
         return safe.pageSize() > 0 ? safe : new ZLinkPageRequest(1000, safe.continuationToken());
+    }
+
+    private ZLinkPageRequest boundedPage(ZLinkPageRequest page) {
+        ZLinkPageRequest safe = normalize(page);
+        if (safe.pageSize() > 1000) {
+            throw new IllegalArgumentException("pageSize must be in 1..1000");
+        }
+        return safe;
     }
 
     private static int parseOffset(String token) {

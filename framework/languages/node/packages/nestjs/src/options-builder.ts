@@ -39,7 +39,6 @@ import type {
   ZLinkUserSpotFactoryConfiguration
 } from './framework-integration-contracts';
 import {
-  ZLinkMessageFlowLogMode,
   ZLinkSpotRelocationReadinessMode,
   ZLinkUserSpotExecutionMode,
   ZLinkUnhandledDispatchAction
@@ -154,7 +153,7 @@ abstract class ZLinkNestOptionsBuilder implements ZLinkNestFrameworkOptionsBuild
           publish: ZLinkUnhandledDispatchAction.LogAndDrop
         },
         diagnostics: {
-          messageFlow: ZLinkMessageFlowLogMode.ErrorsOnly,
+          messageFlow: 'errors',
           sampleRate: 1,
           includeMessageSizes: false
         }

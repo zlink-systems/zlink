@@ -3,6 +3,7 @@
 
 #include "runtime/locations/location_key_codec.hpp"
 #include "runtime/locations/aggregate_inventory.hpp"
+#include "runtime/locations/authority_key_codec.hpp"
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/locations/pending_creation_projection.hpp"
 #include "runtime/locations/sha256.hpp"
@@ -2319,8 +2320,9 @@ class in_memory_location_repository_t : public location_repository_t
     static std::string object_key (
       const object_creation_key_t &key)
     {
-        return std::to_string (static_cast<int> (key.kind))
-               + ":" + key.global_id;
+        return (key.kind == placement_object_kind_t::actor
+                  ? actor_authority_key (key.global_id)
+                  : spot_authority_key (key.global_id)).value;
     }
 
     struct entry_spot_id_claim_t

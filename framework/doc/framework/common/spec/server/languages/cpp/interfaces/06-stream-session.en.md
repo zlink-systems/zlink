@@ -85,6 +85,9 @@ public:
     virtual ~packet_stream_session_t() = default;
     virtual task_t<void> on_connected(stream_t &stream) = 0;
     virtual task_t<void> on_disconnected(stream_t &stream) = 0;
+    virtual task_t<void> on_actor_binding_replaced(
+      stream_t &stream,
+      std::string actor_id);
     virtual task_t<void> on_error(
       stream_t &stream,
       const stream_error_t &error) = 0;
@@ -168,6 +171,16 @@ connection close and doesn't receive a wire error code.
 `stream_error_t` only exposes a provider-neutral error kind and
 description. The native transport error code is runtime-internal
 diagnostic information and isn't included in the public contract.
+
+`on_actor_binding_replaced(...)` is an optional callback run once on the previous session when
+the same Actor is bound to a new session. The application may call `write_packet(...)` to notify
+the client, but does not call `close()`. The framework closes the connection `100 ms` after the
+callback reaches a successful or failed terminal; an empty outbound queue does not shorten this delay. The
+new bind does not wait for this callback or close.
+
+| Implementation difference | Current state |
+|---|---|
+| Session Actor binding replacement | The C++ runtime does not yet implement command 51, this callback, or the non-blocking 100 ms close timer. Commands 36/38 codec conformance is also pending. |
 
 After bind, relay/request relay and `notify_disconnected()` use a
 per-Actor stored route and don't look up Location Store for every

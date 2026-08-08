@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Zlink.Framework.Runtime.Dispatch;
+using Zlink.Framework.Runtime.Identifiers;
 using Zlink.Framework.Runtime.Streams;
 
 namespace Zlink.Framework.Runtime.Spots;
@@ -35,7 +36,7 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
 
     private readonly ZLinkRouteHandlerRegistry _routeHandlers;
     private readonly ZLinkRouteHandlerInvoker _routeInvoker;
-    private readonly string _meshName;
+    private readonly ZLinkMeshName _meshName;
     private readonly ZLinkChannelCommandDispatchPipeline _channelCommandPipeline;
     private readonly ZLinkChannelRequestDispatchPipeline _channelRequestPipeline;
     private readonly ZLinkCodecRegistryBuilder _codecs;
@@ -46,11 +47,10 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
     private readonly ZLinkAsyncSubmitter? _replySubmitter;
     private readonly ILogger _logger;
     private readonly object _orderedActorRelayGate = new();
-    private readonly Dictionary<string, TaskCompletionSource> _orderedActorRelayTails =
-        new(StringComparer.Ordinal);
+    private readonly Dictionary<ZLinkActorId, TaskCompletionSource> _orderedActorRelayTails = [];
 
     private ZLinkMeshNodeRouteDispatcher(
-        string meshName,
+        ZLinkMeshName meshName,
         ZLinkRouteHandlerRegistry routeHandlers,
         ZLinkRouteHandlerInvoker routeInvoker,
         ZLinkChannelCommandDispatchPipeline channelCommandPipeline,
@@ -214,7 +214,7 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
             logger);
 
         return new ZLinkMeshNodeRouteDispatcher(
-            spotNode.SpotNodeName,
+            ZLinkMeshName.FromBoundary(spotNode.SpotNodeName, nameof(spotNode)),
             routeHandlers,
             routeInvoker,
             commandPipeline,
@@ -250,9 +250,9 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
 
     private bool TryGetOrderedActorRelayKey(
         ZLinkBackendRouteReceived received,
-        out string actorId)
+        out ZLinkActorId actorId)
     {
-        actorId = string.Empty;
+        actorId = default;
         if (received.ChannelName is not null || received.Parts.Count < 2)
             return false;
 
@@ -274,7 +274,9 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
             if (string.IsNullOrWhiteSpace(relay?.ActorId))
                 return false;
 
-            actorId = relay.ActorId;
+            actorId = ZLinkActorId.FromBoundary(
+                relay.ActorId,
+                nameof(relay.ActorId));
             return true;
         }
         catch
@@ -285,7 +287,7 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
     }
 
     private bool TryDispatchOrderedActorRelay(
-        string actorId,
+        ZLinkActorId actorId,
         ZLinkBackendRouteReceived received)
     {
         Task prior;
@@ -314,7 +316,7 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
     }
 
     private async ValueTask DispatchOrderedActorRelayAsync(
-        string actorId,
+        ZLinkActorId actorId,
         ZLinkBackendRouteReceived received,
         Task prior,
         TaskCompletionSource completion,
@@ -332,7 +334,7 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
     }
 
     private void CompleteOrderedActorRelay(
-        string actorId,
+        ZLinkActorId actorId,
         TaskCompletionSource completion)
     {
         completion.TrySetResult();
@@ -494,7 +496,7 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
             {
                 await _routeInvoker.InvokeSendAsync(
                         descriptor,
-                        _meshName,
+                        _meshName.Value,
                         sourceRid,
                         header,
                         received.Parts,
@@ -521,7 +523,7 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
         {
             reply = await _routeInvoker.InvokeRequestAsync(
                     descriptor,
-                    _meshName,
+                    _meshName.Value,
                     sourceRid,
                     header,
                     received.Parts,

@@ -1,4 +1,3 @@
-import { ZLinkMessageFlowLogMode } from '@zlink-systems/framework';
 import { ZLinkModule, zlinkFramework, zlinkModule } from '@zlink-systems/nestjs';
 import { SampleNames } from '../../Shared/Configuration/sample-names';
 import { DispatchWorker } from './dispatch-worker';
@@ -30,9 +29,7 @@ function createDispatchCenterModule() {
         useFactory: (config: DeliveryDispatchServerConfig) => {
           const builder = zlinkFramework();
           builder.configureDispatch()
-            .messageFlow(ZLinkMessageFlowLogMode.KeyTransitions)
-            .traceLogFile(`${config.logDir}/flow-dispatch-center.log`)
-            .traceLabel('dispatch-center');
+            .messageFlow('normal');
           builder.addLocationStore(createDeliveryDispatchLocationStore(config));
           deliveryDispatchLocationOptions(builder.configureLocations());
           const mesh = builder.addRouteMesh(SampleNames.courierMeshName)

@@ -3,6 +3,7 @@ import { ZLINK_ACTOR_MANAGER } from '@zlink-systems/nestjs';
 import { SampleNames } from '../../Shared/Configuration/sample-names';
 import {
   PacketNames,
+  SubscribeDeliveryReq,
   SubscribeDeliveryRes
 } from '../../Shared/Contracts/messages';
 import { CustomerActorDirectory } from './customer-actor';
@@ -15,9 +16,6 @@ import {
   type ZLinkSessionDispatchContext,
   type ZLinkSessionFactory
 } from '@zlink-systems/framework';
-import type {
-  SubscribeDeliveryReq
-} from '../../Shared/Contracts/messages';
 
 const CustomerId = 'customer-1';
 
@@ -41,7 +39,7 @@ class SubscribeDeliverySessionHandler {
   ) {}
 
   async handle(context: ZLinkSessionContext, _dispatch: ZLinkSessionDispatchContext, payload: ZLinkMessage): Promise<void> {
-    const request = payload.decode<SubscribeDeliveryReq>(Object as never);
+    const request = payload.decode(SubscribeDeliveryReq);
     console.error(`deliverydispatch session: find customer delivery=${request.deliveryId}`);
     const ensured = await this.actors
       .getOrCreate(CustomerId, SampleNames.customerActorType)

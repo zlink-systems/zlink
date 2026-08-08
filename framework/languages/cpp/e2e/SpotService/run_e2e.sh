@@ -3021,11 +3021,15 @@ def has(snapshot, marker, actor_id, value=None):
                and (value is None or item["value"] == value)
                for item in snapshot["entries"])
 
-assert has(play_a, "ActorPushedSession", actor, "push-bound-only")
+assert has(play_a, "EntryActorPushedSession", actor, "push-bound-only")
+assert has(play_a, "EntryActorPushedSession", actor, "push-replacement-only")
 assert not has(play_b, "ActorPushedSession", actor, "push-bound-only")
 assert not has(play_b, "ActorPushedSession", shadow, "push-bound-only")
 assert has(session_a, "StreamBound", actor)
+assert has(session_a, "ActorBindingReplacedCallback", actor, "started")
+assert has(session_a, "ActorBindingReplacedCallback", actor, "completed")
 assert has(session_b, "StreamBound", shadow)
+assert has(session_b, "StreamBound", actor)
 print("scenario SM-D6 evidence passed")
 PY
   echo "spot-service e2e result=passed"
@@ -3646,7 +3650,7 @@ fi
 
 if [[ "$SCENARIO" == "SM-E4" || "$SCENARIO" == "sm-e4" ]]; then
   ensure_location_store
-  start_play play-a "$ROUTE_A" "$SPOT_A" "$PUB_A" "$HTTP_A"
+  start_play play-a "$ROUTE_A" "$SPOT_A" "$PUB_A" "$HTTP_A" routeMeshEnabled=false
   settle_scenario
   ensure_servers_started_and_ready
   run_client_from_options \

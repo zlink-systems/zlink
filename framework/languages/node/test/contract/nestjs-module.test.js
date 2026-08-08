@@ -259,12 +259,8 @@ test('ZLinkModule.forRoot creates Spot manager before runtime bootstrap', async 
       this.context = context;
     }
   }
-  class DispatchObserver {
-    onMessageFlow() {}
-  }
   const builder = nestjs.zlinkFramework();
   builder.addLocationStore(new framework.ZLinkInMemoryProviderLocationStore());
-  builder.configureDispatch().setMessageFlowObserver(DispatchObserver);
   const module = nestjs.ZLinkModule.forRoot(builder
     .addRouteMesh('game')
       .listen('tcp://127.0.0.1:0')
@@ -341,11 +337,7 @@ test('ZLinkModule.forRoot public DI clients expose callable framework contracts'
 });
 
 test('zlinkFramework builder maps channel and route mesh options', () => {
-  class DispatchObserver {
-    onMessageFlow() {}
-  }
   const builder = nestjs.zlinkFramework();
-  builder.configureDispatch().setMessageFlowObserver(DispatchObserver);
   builder.addRouteMesh('api')
       .listen('tcp://127.0.0.1:7101')
       .routingId('api-a')
@@ -404,7 +396,7 @@ test('zlinkFramework builder maps channel and route mesh options', () => {
   assert.deepEqual(options.spotNodes['zero-weight'].meshChannels, {
     shared: { server: true, weight: 0 }
   });
-  assert.equal(framework.getDispatchObserverType(options.dispatch), DispatchObserver);
+  assert.equal(typeof builder.configureDispatch().setMessageFlowObserver, 'undefined');
 });
 
 test('ZLinkModule.forRoot boots through the real NestJS DI container and lifecycle', async () => {

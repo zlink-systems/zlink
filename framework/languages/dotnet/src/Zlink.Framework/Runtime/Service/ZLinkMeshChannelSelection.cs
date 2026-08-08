@@ -1,4 +1,5 @@
 using Zlink.Framework.Runtime.Channels;
+using Zlink.Framework.Runtime.Identifiers;
 
 namespace Zlink.Framework.Runtime.Service;
 
@@ -12,15 +13,14 @@ namespace Zlink.Framework.Runtime.Service;
 /// </remarks>
 internal sealed class ZLinkMeshChannelSelection
 {
-    private readonly Dictionary<string,
-        ZLinkWeightedSelectionPlan<ZLinkMeshChannelTarget, string>> _plans =
-        new(StringComparer.Ordinal);
-    private readonly HashSet<string> _declaredChannels =
-        new(StringComparer.Ordinal);
+    private readonly Dictionary<ZLinkChannelName,
+        ZLinkWeightedSelectionPlan<ZLinkMeshChannelTarget, string>> _plans = [];
+    private readonly HashSet<ZLinkChannelName> _declaredChannels = [];
 
     internal bool TrySelect(string channelName, out RoutingId targetRid)
     {
-        if (!_plans.TryGetValue(channelName, out var plan)
+        var channel = Channel(channelName);
+        if (!_plans.TryGetValue(channel, out var plan)
             || plan.Count == 0)
         {
             targetRid = default;
@@ -33,12 +33,12 @@ internal sealed class ZLinkMeshChannelSelection
 
     internal IReadOnlyList<ZLinkMeshChannelTarget> Candidates(
         string channelName) =>
-        _plans.TryGetValue(channelName, out var plan)
+        _plans.TryGetValue(Channel(channelName), out var plan)
             ? plan.Candidates
             : Array.Empty<ZLinkMeshChannelTarget>();
 
     internal bool IsDeclared(string channelName) =>
-        _declaredChannels.Contains(channelName);
+        _declaredChannels.Contains(Channel(channelName));
 
     internal void Rebuild(
         IEnumerable<string> channelNames,
@@ -47,9 +47,10 @@ internal sealed class ZLinkMeshChannelSelection
         ArgumentNullException.ThrowIfNull(channelNames);
         ArgumentNullException.ThrowIfNull(targetFactory);
 
-        var names = new HashSet<string>(
-            channelNames,
-            StringComparer.Ordinal);
+        var names = channelNames
+            .Select(static channelName =>
+                ZLinkChannelName.FromBoundary(channelName, nameof(channelNames)))
+            .ToHashSet();
         _declaredChannels.Clear();
         _declaredChannels.UnionWith(names);
 
@@ -65,7 +66,7 @@ internal sealed class ZLinkMeshChannelSelection
                     out var previousPlan)
                 ? previousPlan.CaptureCurrents()
                 : null;
-            var targets = targetFactory(channelName);
+            var targets = targetFactory(channelName.Value);
             _plans[channelName] =
                 new ZLinkWeightedSelectionPlan<ZLinkMeshChannelTarget, string>(
                     targets,
@@ -76,6 +77,9 @@ internal sealed class ZLinkMeshChannelSelection
                     StringComparer.Ordinal);
         }
     }
+
+    private static ZLinkChannelName Channel(string channelName) =>
+        ZLinkChannelName.FromBoundary(channelName, nameof(channelName));
 }
 
 internal sealed class ZLinkMeshChannelTarget

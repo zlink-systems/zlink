@@ -3,6 +3,8 @@
 
 #include <zlink/framework/contracts/dispatch/execution.hpp>
 
+#include "runtime/diagnostics/dispatch_events.hpp"
+
 #include <string_view>
 
 // Human-readable names for the dispatch diagnostics enums. Shared by the error

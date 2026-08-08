@@ -65,9 +65,7 @@ public final class PublisherApplication {
     ZLinkFrameworkConfigurer publisherFramework(PublisherOptions options) {
         return framework -> {
             framework.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile(options.logDir() + "/publisher-flow.log")
-                .traceLabel("java-ps-publisher");
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             var channel = framework.addFanoutChannel(options.channelName());
             if (options.routingId() != null && !options.routingId().isBlank()) {
                 channel.setRoutingId(RoutingId.from(options.routingId()));

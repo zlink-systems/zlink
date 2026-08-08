@@ -83,6 +83,7 @@ class ZLinkMeshNodeRuntimeTest {
         registration.configureRouterSocket().setSendHighWaterMark(7);
         registration.configureRouterSocket().setReceiveHighWaterMark(11);
         registration.configureRouterSocket().setMailboxMessageBudget(13);
+        registration.configureRouterSocket().setMailboxByteBudget(17);
         registration.configureRouterSocket().setSendTimeout(Duration.ofMillis(23));
         registration.configureSpotPublisher().setSendHighWaterMark(91);
 
@@ -94,6 +95,7 @@ class ZLinkMeshNodeRuntimeTest {
             assertEquals(7L, node.routerHighWaterMark);
             assertEquals(11L, node.routerReceiveHighWaterMark);
             assertEquals(13L, node.mailboxMessageBudget);
+            assertEquals(17L, node.mailboxByteBudget);
             assertEquals(7, node.pendingAdmissionCapacity);
             assertEquals(Duration.ofMillis(23), node.routerSendTimeout);
         }
@@ -129,6 +131,7 @@ class ZLinkMeshNodeRuntimeTest {
         private long routerHighWaterMark;
         private long routerReceiveHighWaterMark;
         private long mailboxMessageBudget;
+        private long mailboxByteBudget;
         private int pendingAdmissionCapacity;
         private Duration routerSendTimeout;
         private ZLinkInboundDispatchBudget applicationDispatchBudget;
@@ -152,6 +155,9 @@ class ZLinkMeshNodeRuntimeTest {
         }
         @Override public void setMailboxMessageBudget(long value) {
             mailboxMessageBudget = value;
+        }
+        @Override public void setMailboxByteBudget(long value) {
+            mailboxByteBudget = value;
         }
         @Override public void setRouterPendingAdmissionCapacity(int value) {
             pendingAdmissionCapacity = value;

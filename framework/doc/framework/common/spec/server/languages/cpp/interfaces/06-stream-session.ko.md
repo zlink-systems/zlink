@@ -84,6 +84,9 @@ public:
     virtual ~packet_stream_session_t() = default;
     virtual task_t<void> on_connected(stream_t &stream) = 0;
     virtual task_t<void> on_disconnected(stream_t &stream) = 0;
+    virtual task_t<void> on_actor_binding_replaced(
+      stream_t &stream,
+      std::string actor_id);
     virtual task_t<void> on_error(
       stream_t &stream,
       const stream_error_t &error) = 0;
@@ -163,6 +166,16 @@ client는 wire error code를 받지 않고 연결 종료를 관측한다.
 
 `stream_error_t`는 provider-neutral error 종류와 설명만 공개한다. Native transport error code는
 runtime 내부 진단 정보이며 public contract에 포함하지 않는다.
+
+`on_actor_binding_replaced(...)`는 같은 Actor가 새 session에 bind된 경우 이전 session에서 한 번 실행되는
+선택 callback이다. Application은 이 callback에서 `write_packet(...)`으로 client 안내를 보낼 수 있지만
+`close()`를 호출하지 않는다. Callback이 성공 또는 실패로 terminal이 되면 Framework가 `100 ms` 뒤
+connection을 닫는다. Outbound queue가 먼저 비어도 이 시간을 줄이지 않는다. 새 bind는 이 callback이나
+close를 기다리지 않는다.
+
+| 구현 차이 | 현재 상태 |
+|---|---|
+| Session Actor binding 교체 | C++ runtime에는 command 51 송수신, 이 callback과 non-blocking 100 ms close timer가 아직 없다. Command 36/38 codec conformance도 별도 구현 대상이다. |
 
 Bind 뒤 relay·request relay와 `notify_disconnected()`는 Actor별 저장 route를 사용하며 message마다 Location
 Store를 조회하지 않는다. Physical disconnect는 Framework가 current binding 전체에 automatic all-settled

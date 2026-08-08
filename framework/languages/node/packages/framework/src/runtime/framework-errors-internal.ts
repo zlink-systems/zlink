@@ -141,6 +141,14 @@ const INTERNAL_KIND_BY_WIRE_FAILURE_CODE: ReadonlyMap<number, ZLinkFrameworkInte
     .map(([kind, code]) => [code + 1, kind as ZLinkFrameworkInternalErrorKind])
 );
 
+const WIRE_TERMINAL_RESULT_BY_FAILURE_CODE: ReadonlyMap<number, number> = new Map([
+  ...[1, 6, 8, 9, 10, 11, 14].map(code => [code, 102] as const),
+  ...[2, 5, 13, 17, 19, 20, 35].map(code => [code, 105] as const),
+  ...[3, 4, 7, 21, 33, 34].map(code => [code, 107] as const),
+  ...[12, 16].map(code => [code, 104] as const),
+  ...[15, 18, 22].map(code => [code, 106] as const)
+]);
+
 const INTERNAL_KIND = new WeakMap<ZLinkFrameworkException, ZLinkFrameworkInternalErrorKind>();
 
 export function createInternalFrameworkException(
@@ -169,6 +177,24 @@ export function internalFrameworkErrorCode(error: ZLinkFrameworkException): numb
   return kind === undefined ? error.kind : ZLINK_FRAMEWORK_INTERNAL_ERROR_KIND_VALUES[kind];
 }
 
+/** Produces the canonical stateful wire terminal without leaking internal kinds. */
+export function internalFrameworkWireReply(
+  error: ZLinkFrameworkException
+): { readonly terminalResult: number; readonly failureCode: number } {
+  const kind = INTERNAL_KIND.get(error);
+  if (kind === ZLinkFrameworkInternalErrorKind.DeadlineExceeded) {
+    return { terminalResult: 101, failureCode: 0 };
+  }
+  if (kind === undefined) {
+    return { terminalResult: 105, failureCode: 17 };
+  }
+  const failureCode = ZLINK_FRAMEWORK_INTERNAL_ERROR_KIND_VALUES[kind] + 1;
+  const terminalResult = WIRE_TERMINAL_RESULT_BY_FAILURE_CODE.get(failureCode);
+  return terminalResult === undefined
+    ? { terminalResult: 105, failureCode: 17 }
+    : { terminalResult, failureCode };
+}
+
 /** Decodes the stateful reply failureCode convention without exposing wire offsets to callers. */
 export function internalFrameworkErrorKindFromWireFailureCode(
   failureCode: number
@@ -189,17 +215,7 @@ export function internalFrameworkErrorKindFromWireReply(
   }
   const kind = internalFrameworkErrorKindFromWireFailureCode(failureCode);
   if (kind === undefined) return undefined;
-  const expectedTerminalResult = [1, 6, 8, 9, 10, 11, 14].includes(failureCode)
-    ? 102
-    : [2, 5, 13, 17, 19, 20, 35].includes(failureCode)
-      ? 105
-      : [3, 4, 7, 21, 33, 34].includes(failureCode)
-        ? 107
-        : [12, 16].includes(failureCode)
-          ? 104
-          : [15, 18, 22].includes(failureCode)
-            ? 106
-            : undefined;
+  const expectedTerminalResult = WIRE_TERMINAL_RESULT_BY_FAILURE_CODE.get(failureCode);
   return expectedTerminalResult === terminalResult ? kind : undefined;
 }
 

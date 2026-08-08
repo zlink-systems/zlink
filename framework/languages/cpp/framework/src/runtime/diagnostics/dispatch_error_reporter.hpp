@@ -41,7 +41,7 @@ class dispatch_error_reporter_t
             }
         }
         // off silences the default error log; every other mode keeps reporting
-        // errors (errors_only is the default). A registered observer still fires
+        // errors (errors is the default). A registered observer still fires
         // regardless of mode — it is an explicit, separate subscription.
         if (message_flow_tracer_t (_options).mode ()
             != message_flow_log_mode_t::off) {
@@ -104,9 +104,6 @@ class dispatch_error_reporter_t
             add ("kind", std::string (enum_name (event.message_kind)));
             add ("reason", std::string (enum_name (event.reason)));
             add ("action", std::string (enum_name (event.action)));
-            if (_options.diagnostics.label ()) {
-                add ("label", *_options.diagnostics.label ());
-            }
             if (event.packet_name) {
                 add ("packet", *event.packet_name);
             }
@@ -145,7 +142,7 @@ class dispatch_error_reporter_t
             // Structured fields through the framework logger (collector-friendly);
             // flat clog line when no logger is wired (tests, no-app usage).
             diagnostic_event_sink_t::log_or_clog (
-              _options.diagnostics_logger, default_log_level (event), "dispatch error",
+              dispatch_options_access_t::logger (_options), default_log_level (event), "dispatch error",
               "zlink framework dispatch error:", std::move (fields));
         }
         catch (...) {

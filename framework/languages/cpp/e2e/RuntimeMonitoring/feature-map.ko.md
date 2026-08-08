@@ -20,7 +20,7 @@ trigger-only marker나 message-flow trace로 빈 runtime field를 대신하지 �
 | MON-A6 | 구현 | `20260806-202500-3124751` 실행에서 svc-a의 Actor·Spot placement, provider별 capacity 고갈, typed `CapacityExceeded`, 삭제 후 availability 복구와 재생성을 확인했다. | 없음 |
 | MON-B1 | 부분 구현 | compile-time public member 부재 검사와 zero-target publish 뒤 snapshot·event의 publish 전용 관측값 부재 검사를 runner에 추가했다. | RuntimeMonitoring Service의 기존 SpotId·ClientServer API drift를 고친 뒤 process 실행 증거를 만들고, 막힌 remote target의 rollback·자동 재시도 부재를 추가로 확인한다. |
 | MON-B2 | 부분 구현 | local subscriber를 만든 뒤 publish하고 snapshot·event에 publish 전용 관측값이 없는지 검사하는 runner를 추가했다. | 기존 Service API drift를 고친 뒤 handler 단일 처리, 막힌 local target과 message-flow trace의 target별 결과 부재를 추가로 확인한다. |
-| MON-C1 | 구현 | RouteMesh application gate 중 request completion, claim event, 정상·느린·예외 observer 격리, sequence gap과 snapshot resync를 확인한다. | 없음 |
+| MON-C1 | 구현 | RouteMesh application gate 중 request completion, 정상·느린·예외 logging provider 격리, sequence gap과 snapshot resync를 확인한다. Handler가 대기하는 동안 diagnostics level을 양방향으로 바꾸고, message entry에서 정한 level이 terminal record까지 유지되는지도 correlation별로 검증한다. | 없음 |
 | MON-D1 | 구현 | 잘못된 MeshName snapshot·observer와 0 capacity를 거부하고 세 번의 crash·restart 뒤 event sequence와 최신 ready snapshot을 확인한다. | 없음 |
 | MON-D1A | 구현 | 등록하지 않은 MeshName snapshot·observer와 0 capacity가 public validation error로 거부되는지 확인한다. | 없음 |
 | MON-D1B | 구현 | 반복 crash·restart 뒤 event sequence와 최신 ready snapshot이 유지되는지 확인한다. | 없음 |

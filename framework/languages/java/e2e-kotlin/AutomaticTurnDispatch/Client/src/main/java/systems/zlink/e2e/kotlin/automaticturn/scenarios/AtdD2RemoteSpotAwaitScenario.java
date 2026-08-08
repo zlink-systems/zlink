@@ -40,7 +40,8 @@ public final class AtdD2RemoteSpotAwaitScenario {
             Contracts.ScenarioRes.class);
         ScenarioAssert.that("ATD-D2".equals(reply.scenarioId()), "ATD-D2 reply scenario mismatch");
         ScenarioAssert.that(requestId.equals(reply.requestId()), "ATD-D2 reply request mismatch");
-        ScenarioAssert.that("play-a".equals(reply.result()), "ATD-D2 continuation node mismatch");
+        ScenarioAssert.that("play-a".equals(reply.result()),
+            "ATD-D2 continuation node mismatch: " + reply.result());
 
         Contracts.EvidenceRes ownerEvidence = evidence(connector, requestId, "play-a");
         assertMarkers(ownerEvidence.markers(), List.of(

@@ -490,22 +490,6 @@ public final class MeshNodeRegistration implements ZLinkMeshNodeBuilder {
                 "Actor"));
     }
 
-    /**
-     * Validates the listener limit required by a host-wide application HWM.
-     * This method is called during registration validation; it is not a
-     * runtime socket mutation API.
-     */
-    public void validateApplicationHwm(long applicationHwmBytes) {
-        if (applicationHwmBytes == 0) {
-            return;
-        }
-        if (routerSocket.maxMessageSize() <= 0) {
-            throw new ZLinkConfigurationException(
-                "Application HWM requires a finite positive MaxMessageSize on MeshNode: "
-                    + meshName);
-        }
-    }
-
     private static void validateRelocationPolicy(
         Class<?> objectType,
         RelocationPolicy policy,
@@ -966,7 +950,6 @@ public final class MeshNodeRegistration implements ZLinkMeshNodeBuilder {
     }
 
     private static final class RouterSocketConfig implements ZLinkMeshNodeSocketConfig {
-        private long maxMessageSize = 16_777_216L;
         //  HWM is an accounted byte count, so it has to be 64-bit. The mailbox
         //  budgets default to 0, which leaves the runtime default in place.
         private long sendHighWaterMark = 4_096_000L;
@@ -976,23 +959,26 @@ public final class MeshNodeRegistration implements ZLinkMeshNodeBuilder {
         private Duration receiveTimeout;
         private Duration sendTimeout;
 
-        @Override public long maxMessageSize() { return maxMessageSize; }
-        @Override
-        public void setMaxMessageSize(long value) {
-            if (value < 0) {
-                throw new ZLinkConfigurationException(
-                    "MaxMessageSize must be zero or a positive byte count.");
-            }
-            maxMessageSize = value;
-        }
         @Override public long sendHighWaterMark() { return sendHighWaterMark; }
         @Override public void setSendHighWaterMark(long value) { sendHighWaterMark = value; }
         @Override public long receiveHighWaterMark() { return receiveHighWaterMark; }
         @Override public void setReceiveHighWaterMark(long value) { receiveHighWaterMark = value; }
         @Override public long mailboxMessageBudget() { return mailboxMessageBudget; }
-        @Override public void setMailboxMessageBudget(long value) { mailboxMessageBudget = value; }
+        @Override public void setMailboxMessageBudget(long value) {
+            if (value < 0) {
+                throw new ZLinkConfigurationException(
+                    "mailboxMessageBudget must not be negative");
+            }
+            mailboxMessageBudget = value;
+        }
         @Override public long mailboxByteBudget() { return mailboxByteBudget; }
-        @Override public void setMailboxByteBudget(long value) { mailboxByteBudget = value; }
+        @Override public void setMailboxByteBudget(long value) {
+            if (value < 0) {
+                throw new ZLinkConfigurationException(
+                    "mailboxByteBudget must not be negative");
+            }
+            mailboxByteBudget = value;
+        }
         @Override public Optional<Duration> receiveTimeout() {
             return Optional.ofNullable(receiveTimeout);
         }

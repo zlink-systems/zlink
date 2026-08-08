@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import { Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
-import { ZLinkMessageFlowLogMode, type ZLinkFanoutRuntime, type ZLinkLocationRuntimeQuery } from '@zlink-systems/framework';
+import { type ZLinkFanoutRuntime, type ZLinkLocationRuntimeQuery } from '@zlink-systems/framework';
 import {
   ZLINK_FANOUT_RUNTIME,
   ZLINK_LOCATION_RUNTIME_QUERY,
@@ -13,7 +13,7 @@ import { createRedisLocationStore, locationMessagingOptions } from '../../Shared
 import { validateSubscriberOptions, SUBSCRIBER_OPTIONS, type SubscriberOptions } from './Configuration/subscriber-options';
 import { PUBSUB_OPTIONS, createPubSubConfigurationModule } from '../../configuration';
 import { createSubscriberEndpoints } from './Endpoints/operational-endpoints';
-import { EvidenceDispatchErrorObserver, EventMsgHandler } from './Handlers/event-msg-handler';
+import { captureDispatchErrors, EventMsgHandler } from './Handlers/event-msg-handler';
 import { EvidenceStore } from './Infrastructure/evidence-store';
 import { closeHttpServer, startHttpServer } from './Support/http-server';
 import { FanoutStatusObserverProbe } from './Support/fanout-status-observer';
@@ -25,6 +25,7 @@ export async function startSubscriberHost(): Promise<void> {
   const app = await NestFactory.createApplicationContext(SubscriberModule, { logger: false, abortOnError: false });
   const options = app.get(PUBSUB_OPTIONS, { strict: false }) as SubscriberOptions;
   const evidence = app.get(EvidenceStore, { strict: false });
+  captureDispatchErrors(evidence);
   const fanoutRuntime = app.get(ZLINK_FANOUT_RUNTIME, { strict: false }) as ZLinkFanoutRuntime | undefined;
   const locationRuntimeQuery = app.get(ZLINK_LOCATION_RUNTIME_QUERY, { strict: false }) as
     ZLinkLocationRuntimeQuery | undefined;
@@ -67,10 +68,7 @@ function createSubscriberModule(): Function {
           const builder = zlinkFramework();
           builder
             .configureDispatch()
-              .setMessageFlowObserver(EvidenceDispatchErrorObserver)
-              .messageFlow(ZLinkMessageFlowLogMode.KeyTransitions)
-              .traceLogFile(`${options.logDir}/${options.rid}-flow.log`)
-              .traceLabel(options.rid);
+              .messageFlow('normal');
           if (options.redisEndpoint !== undefined && options.redisKeyPrefix !== undefined) {
             builder.addLocationStore(createRedisLocationStore({
               redisEndpoint: options.redisEndpoint,
@@ -101,8 +99,7 @@ function createSubscriberModule(): Function {
         }
       },
       { provide: SUBSCRIBER_OPTIONS, useExisting: PUBSUB_OPTIONS },
-      EventMsgHandler,
-      EvidenceDispatchErrorObserver
+      EventMsgHandler
     ]
   })(SubscriberModule);
   return SubscriberModule;

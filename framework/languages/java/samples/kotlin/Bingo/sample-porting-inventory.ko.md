@@ -17,7 +17,7 @@
 | `.NET: Client/BingoClientScenario.cs` | `Client/src/main/kotlin/.../client/BingoClientScenario.kt` | client-scenario | done | 인증, matching, observer, card 제출, draw, 종료, reward, stop-observe를 self-check한다. |
 | `.NET: Client/Configuration/SampleNames.cs` | `Client/src/main/kotlin/.../client/configuration/SampleNames.kt` | client-config | done | packet 이름과 sample marker를 client에서 사용한다. |
 | `.NET: Server/Configuration/Bingo.Server.Configuration.csproj` | `Server/Configuration/build.gradle.kts` | build | done | 서버 공통 설정 project. |
-| `.NET: Server/Configuration/SampleFlowLog.cs` | `Server/*` role logs + `BINGO_LOG_DIR` | server-evidence | done | Kotlin은 role별 application에서 flow log를 남기고 runner가 `message flow` marker를 확인한다. |
+| `.NET: Server/Configuration/SampleFlowLog.cs` | `Server/*` role stdout | server-evidence | done | Kotlin role이 표준 logger로 출력한 `message flow` marker를 runner가 확인한다. |
 | `.NET: Server/Configuration/SampleNames.cs` | `Server/Configuration/src/main/kotlin/.../configuration/SampleNames.kt` | server-config | done | role, service, packet 이름을 공유한다. |
 | `.NET: Server/Configuration/SampleTopology.cs` | `Server/Configuration/src/main/kotlin/.../configuration/SampleTopology.kt` | server-config | done | endpoint와 Redis 설정을 system property에서 읽는다. |
 | location store 설정 | `Server/Configuration/src/main/kotlin/.../configuration/SampleLocationStore.kt` | server-config | done | 공식 Redis location store extension을 생성하고 sample Redis prefix 아래에서 위치 정보를 분리한다. |

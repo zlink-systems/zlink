@@ -1,4 +1,4 @@
-// SA-E2E-07: Cancellation winner와 publish commit을 구분한다 시나리오를 검증한다.
+// SA-E2E-07: Admission terminal과 publish commit을 구분한다 시나리오를 검증한다.
 import {
   emit,
   submitFanout,

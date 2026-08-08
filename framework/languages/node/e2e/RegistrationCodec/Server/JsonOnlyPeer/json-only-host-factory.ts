@@ -2,7 +2,6 @@ import fs from 'node:fs';
 import { Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import type { ZLinkRouteClient } from '@zlink-systems/framework';
-import { ZLinkMessageFlowLogMode } from '@zlink-systems/framework';
 import { ZLINK_ROUTE_CLIENT, ZLinkModule, zlinkFramework } from '@zlink-systems/nestjs';
 import { EchoJsonReq, PacketNames, RegistrationCodecNames } from '../../Shared/messages';
 import { validateJsonOnlyOptions, type JsonOnlyOptions } from './Configuration/json-only-options';
@@ -54,9 +53,7 @@ function createJsonOnlyModule(): Function {
           const builder = zlinkFramework();
           builder
             .configureDispatch()
-              .messageFlow(ZLinkMessageFlowLogMode.KeyTransitions)
-              .traceLogFile(`${options.logDir}/${options.rid}-flow.log`)
-              .traceLabel(options.rid);
+              .messageFlow('normal');
           const mesh = builder.addRouteMesh(RegistrationCodecNames.channel)
             .listen(options.channelEndpoint);
           mesh.peerConnections().connect(options.channelEndpoint);

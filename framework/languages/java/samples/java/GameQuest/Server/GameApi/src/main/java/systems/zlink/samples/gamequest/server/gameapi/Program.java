@@ -78,9 +78,7 @@ public class Program {
                     .setKeyPrefix(topology.location().redisKeyPrefix() + "relocation:")));
             options.addHandlersFromPackageOf(Program.class);
             options.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile(api.logDirectory() + "/flow-" + api.instanceName() + ".log")
-                .traceLabel(api.instanceName());
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             options.addRouteMesh(SampleNames.PlayerQuestSpotDiscovery)
                 .setRoutingIdPrefix("gamequest-api")
                 .listen(api.spotRouterEndpoint())

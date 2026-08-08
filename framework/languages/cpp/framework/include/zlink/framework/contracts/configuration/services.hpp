@@ -230,6 +230,9 @@ struct injected_handler_registrar_t<THandler, dependency_list_t<TDependencies...
 {
     static void add (service_collection_t &services)
     {
+        if (services.contains (std::type_index (typeid (THandler)))) {
+            return;
+        }
         if constexpr (sizeof...(TDependencies) == 0) {
             services.add_transient<THandler> ();
         } else {

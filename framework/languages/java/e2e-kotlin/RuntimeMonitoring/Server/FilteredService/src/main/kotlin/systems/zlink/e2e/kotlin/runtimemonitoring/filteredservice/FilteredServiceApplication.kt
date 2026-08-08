@@ -43,9 +43,9 @@ class FilteredServiceApplication {
         return ZLinkFrameworkConfigurer { options ->
             val logDir = Env.get("e2e.log.dir", "logs")
             options.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile("$logDir/filtered-service-flow.log")
-                .traceLabel("kotlin-mon-filtered-service")
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL)
+
+
             options.addHandlersFromPackageOf(WorkRequestHandler::class.java)
             val apiEndpoint = java.net.URI.create(
                 Env.get("e2e.api.endpoint"),

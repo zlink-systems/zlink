@@ -1,5 +1,7 @@
 namespace Zlink.Framework.Runtime.Locations;
 
+using Zlink.Framework.Runtime.Service;
+
 internal static class ZLinkTransportSecurityIdentity
 {
     // No configurable transport authentication is exposed yet. Keep one
@@ -9,6 +11,6 @@ internal static class ZLinkTransportSecurityIdentity
 
     internal static string ToAdmissionIdentity(string descriptorIdentity) =>
         string.Equals(descriptorIdentity, Plaintext, StringComparison.Ordinal)
-            ? "none"
+            ? ZLinkServiceSecurityIdentity.Plaintext
             : descriptorIdentity;
 }

@@ -18,6 +18,7 @@
 #include "Scenarios/st_f1_scenario.hpp"
 #include "Scenarios/st_f2_scenario.hpp"
 #include "Scenarios/st_f3_scenario.hpp"
+#include "Scenarios/st_f3a_scenario.hpp"
 #include "Scenarios/st_f4_scenario.hpp"
 #include "Scenarios/st_f5_scenario.hpp"
 #include "Scenarios/st_f6_scenario.hpp"
@@ -44,8 +45,18 @@ int main (int argc, char **argv)
 {
     try {
         const auto options = read_options (argc, argv);
-        nodes_t nodes{make_http (options.node_a_url), make_http (options.node_b_url),
-                      options.node_a_stream, options.node_b_stream};
+        nodes_t nodes{
+          make_http (options.node_a_url),
+          make_http (options.node_b_url),
+          options.node_c_url.empty ()
+            ? std::optional<http::client_t>{}
+            : std::optional<http::client_t>{make_http (options.node_c_url)},
+          options.node_a_url,
+          options.node_b_url,
+          options.node_c_url,
+          options.node_a_stream,
+          options.node_b_stream,
+          options.session_proxy_admin};
         scenario_runner_t runner (nodes);
         for (const auto &name : selected_scenarios (options.scenario)) {
             if (name == "ST-A1") {
@@ -82,6 +93,8 @@ int main (int argc, char **argv)
                 runner.run_st_f2_scenario ();
             } else if (name == "ST-F3") {
                 runner.run_st_f3_scenario ();
+            } else if (name == "ST-F3A") {
+                runner.run_st_f3a_scenario ();
             } else if (name == "ST-F4") {
                 runner.run_st_f4_scenario ();
             } else if (name == "ST-F5") {

@@ -116,20 +116,20 @@ export class ZLinkActorCreationCoordinator {
       this.options.messageSerializers,
       this.options.actorMeshNameProvider
     ));
-    const actor = await factory.create(context, signal);
-    if (actor.context !== context || actor.context.actorId !== context.actorId) {
-      throw new ZLinkConfigurationException(
-        `Actor factory '${actorType}' must return an Actor bound to the exact supplied context.`
-      );
-    }
     const nativeActorNode = this.options.nativeActorNode ?? this.options.nativeActorNodeProvider?.();
-    const meshName = state.meshName ?? '';
-    if (meshName.length === 0 && state.nativeActorRef === undefined) {
-      throw new ZLinkConfigurationException(
-        `Actor '${actorId}' has no RouteMesh identity.`
-      );
-    }
     try {
+      const actor = await factory.create(context, signal);
+      if (actor.context !== context || actor.context.actorId !== context.actorId) {
+        throw new ZLinkConfigurationException(
+          `Actor factory '${actorType}' must return an Actor bound to the exact supplied context.`
+        );
+      }
+      const meshName = state.meshName ?? '';
+      if (meshName.length === 0 && state.nativeActorRef === undefined) {
+        throw new ZLinkConfigurationException(
+          `Actor '${actorId}' has no RouteMesh identity.`
+        );
+      }
       let nodeRid: RoutingId | undefined;
       if (nativeActorNode !== undefined) {
         const actorRef = state.ensureNativeActorRef(nativeActorNode, createRequest.nativeRequest);

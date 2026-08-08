@@ -100,7 +100,7 @@ const manifest = {
 fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 NODE
 
-"$script_dir/verify-package.sh" --prefix "$prefix"
+bash "$script_dir/verify-package.sh" --prefix "$prefix"
 manifest_sha="$(sha256sum "$manifest" | awk '{print $1}')"
 runtime_sha="$(sha256sum "$prefix/lib/libzlink.so.$version" | awk '{print $1}')"
 cat >"$evidence" <<EOF

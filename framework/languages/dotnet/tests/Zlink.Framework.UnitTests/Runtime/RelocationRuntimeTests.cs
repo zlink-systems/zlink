@@ -12,8 +12,10 @@ using Zlink.Framework.Runtime.Actors;
 using Zlink.Framework.Runtime.Backend.Contracts;
 using Zlink.Framework.Runtime.Configuration;
 using Zlink.Framework.Runtime.Configuration.Builders;
+using Zlink.Framework.Runtime.Identifiers;
 using Zlink.Framework.Runtime.Locations;
 using Zlink.Framework.Runtime.Spots;
+using Zlink.Framework.Runtime.Timers;
 
 namespace Zlink.Framework.UnitTests;
 
@@ -341,10 +343,10 @@ public sealed class RelocationRuntimeTests
         var stage = CreateTargetStageForHeldJournal() with
         {
             ActorTargetAuthorityOwnerGenerations =
-                new Dictionary<string, ulong>(StringComparer.Ordinal)
+                new Dictionary<ZLinkActorId, ulong>
                 {
-                    ["actor-a"] = 41,
-                    ["actor-b"] = 73
+                    [ZLinkActorId.FromBoundary("actor-a", "actorId")] = 41,
+                    [ZLinkActorId.FromBoundary("actor-b", "actorId")] = 73
                 }
         };
 
@@ -468,6 +470,67 @@ public sealed class RelocationRuntimeTests
         Assert.Empty(envelope.Participants[1].AcceptedJobs);
         Assert.Empty(envelope.Participants[1].LogicalTimers);
         Assert.True(envelope.Participants[1].CompletionPayload.IsEmpty);
+    }
+
+    [Theory]
+    [InlineData(ZLinkTimerOverrunPolicy.SkipLateTicks, 0, 1)]
+    [InlineData(ZLinkTimerOverrunPolicy.CatchUpBounded, 7, 7)]
+    [InlineData(ZLinkTimerOverrunPolicy.DelayNextTick, -3, 1)]
+    public void CanonicalRelocationTimerNormalizesOnlyIgnoredCatchUpBounds(
+        ZLinkTimerOverrunPolicy policy,
+        int configuredBound,
+        int expectedBound)
+    {
+        var logicalTimer = ZLinkSpotTimerRelocationCodec.Encode(
+            new ZLinkSpotLogicalTimerSnapshot(
+                typeof(RelocationRuntimeTests),
+                typeof(RelocationRuntimeTests),
+                new ZLinkTimerLogicalSnapshot(
+                    "timer",
+                    TimeSpan.FromSeconds(1),
+                    new ZLinkTimerOptions
+                    {
+                        OverrunPolicy = policy,
+                        MaxCatchUpTicks = configuredBound
+                    },
+                    DateTimeOffset.FromUnixTimeMilliseconds(1_000),
+                    2,
+                    3,
+                    DateTimeOffset.FromUnixTimeMilliseconds(2_000),
+                    null)));
+        var inventory = new ZLinkRelocationEnvelope(
+            Guid.NewGuid(),
+            1,
+            new byte[32],
+            [new ZLinkRelocationParticipantEnvelope(
+                ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey("spot"),
+                ZLinkPlacementObjectKind.UserSpot,
+                1,
+                1,
+                ReadOnlyMemory<byte>.Empty,
+                [],
+                [logicalTimer])]);
+
+        var canonical = ZLinkCanonicalSpotRelocationWriter.CreateInitial(
+            inventory,
+            "spot",
+            nameof(RelocationRuntimeTests),
+            RoutingId.From("target"),
+            1);
+        var transported = ZLinkRelocationEnvelopeCodec.Decode(
+            ZLinkRelocationEnvelopeCodec.Encode(canonical));
+        var transportedTimer = Assert.Single(
+            Assert.Single(transported.Participants).LogicalTimers);
+        var canonicalTimer = Assert.IsType<ZLinkCanonicalLogicalTimer>(
+            transportedTimer.CanonicalTimer);
+        var restored = ZLinkSpotTimerRelocationCodec.Decode(
+            transportedTimer,
+            typeof(RelocationRuntimeTests));
+
+        Assert.Equal((byte)policy, canonicalTimer.OverrunPolicy);
+        Assert.Equal((ulong)expectedBound, canonicalTimer.MaxCatchUpTicks);
+        Assert.Equal(policy, restored.Timer.Options.OverrunPolicy);
+        Assert.Equal(expectedBound, restored.Timer.Options.MaxCatchUpTicks);
     }
 
     [Fact]
@@ -5548,8 +5611,11 @@ public sealed class RelocationRuntimeTests
 
     private static async Task WaitUntilAsync(Func<bool> predicate)
     {
+        // Native context startup can be serialized behind other aggregate
+        // tests. Keep the admission assertion bounded, but use the same
+        // 30-second aggregate startup budget as the other runtime fixtures.
         var deadline = Stopwatch.GetTimestamp()
-                       + (long)(Stopwatch.Frequency * 5);
+                       + (long)(Stopwatch.Frequency * 30);
         while (!predicate())
         {
             if (Stopwatch.GetTimestamp() >= deadline)
@@ -6093,7 +6159,7 @@ public sealed class RelocationRuntimeTests
             null!,
             new NoopDisposable(),
             null,
-            new Dictionary<string, ulong>(StringComparer.Ordinal),
+            new Dictionary<ZLinkActorId, ulong>(),
             1,
             2,
             "mesh",

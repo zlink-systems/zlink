@@ -9,13 +9,18 @@ namespace
 /* ST-D2: this file owns the scenario orchestration and its public assertions. */
 inline void scenario_runner_t::run_st_d2_scenario ()
 {
-    const auto actor_id = "actor-stale-release-" + unique_suffix ();
-    const auto spot_id = "spot-stale-release-" + unique_suffix ();
-    create_spot (_nodes.b, spot_id);
-    create_actor (_nodes.a, actor_id, e2e::actor_type_stateful, 81);
+    const auto spot = create_spot_until_placed_on (
+      _nodes.b, "spot-stale-release-" + unique_suffix (), "actor-b");
+    const auto actor = create_actor_until_placed_on (
+      _nodes.a, "actor-stale-release-" + unique_suffix (),
+      e2e::actor_type_stateful, 81, "actor-a");
+    const auto &actor_id = actor.actor_id;
+    const auto &spot_id = spot.spot_id;
 
     const auto join = join_actor (_nodes.a, actor_id, {"ST-D2", spot_id});
-    require (join.accepted, "ST-D2 join was rejected.");
+    require (join.accepted, "ST-D2 deferred Join was not submitted.");
+    wait_evidence (
+      _nodes.b, {"ST-D2|" + actor_id + "|join_completion_accepted|"});
     const auto before = get_actor_ref (_nodes.b, actor_id);
     require (before.node_rid == "actor-b",
              "ST-D2 target ref expected actor-b, got " + before.node_rid);

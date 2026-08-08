@@ -34,5 +34,5 @@ deliverydispatch=completed
 deliverydispatch full client/server self-check completed
 ```
 
-실패하면 `build/sample-logs/` 아래 role 로그를 출력한다. message flow log는 기본적으로 `logs/`
-아래에 남는다.
+실패하면 `build/sample-logs/` 아래 role stdout과 stderr를 출력한다. Message flow도 role stdout에
+남는다.

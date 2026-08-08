@@ -37,9 +37,7 @@ class SessionServerApplication {
             options.addHandlersFromPackageOf(SessionServerApplication::class.java)
             options.useCoroutineHandlers(Dispatchers.Default)
             options.configureDispatch {
-                messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                traceLogFile(topology.logDirectory + "/flow-session.log")
-                traceLabel("session")
+                messageFlow(ZLinkMessageFlowLogMode.NORMAL)
             }
             options.codecs().use(ZLinkProtobufCodec.defaultCodec())
             options.configureLocations()

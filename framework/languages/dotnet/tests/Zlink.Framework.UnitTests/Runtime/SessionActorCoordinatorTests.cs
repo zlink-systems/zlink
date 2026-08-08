@@ -5,6 +5,8 @@ using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.Runtime.Actors;
 using Zlink.Framework.Runtime.Streams;
 
+using Zlink.Framework.Runtime.Identifiers;
+
 namespace Zlink.Framework.UnitTests;
 
 public sealed class SessionActorCoordinatorTests
@@ -739,7 +741,7 @@ public sealed class SessionActorCoordinatorTests
             BindingGeneration: 2,
             ObjectGeneration: 7,
             AuthorityOwnerGeneration: 3,
-            MeshName: "actors",
+            MeshName: ZLinkMeshName.FromBoundary("actors", "meshName"),
             TargetNodeGeneration: 4,
             OwnerLeaseGeneration: 5,
             SessionOwnerNodeGeneration: 6,
@@ -979,114 +981,92 @@ public sealed class SessionActorCoordinatorTests
     }
 
     [Fact]
-    public async Task Cross_Owner_Rebind_Acknowledges_Tombstone_Before_Source_Swap()
+    public async Task Cross_Owner_Rebind_Completes_After_New_Binding_Is_Published()
     {
-        var events = new List<string> { "new-register" };
-        var previous = PreviousBinding("old-node");
+        var state = new ZLinkActorRuntimeState("actor-order");
+        _ = BindActorSession(state, "old-token", "old-session", 1);
+        var replacement = BeginActorSessionReplacement(
+            state,
+            "new-token",
+            "new-session",
+            2);
+        var cleanupAck = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
 
-        await ZLinkSessionBindingReplacement.CompletePreviousAsync(
-            "actor-order",
-            RoutingId.From("new-node"),
-            previous,
-            (request, _) =>
-            {
-                events.Add("old-tombstone");
-                Assert.Equal(previous.BindingToken, request.BindingToken);
-                Assert.Equal(previous.BindingGeneration, request.BindingGeneration);
-                Assert.Equal(previous.ObjectGeneration, request.ObjectGeneration);
-                Assert.Equal(previous.SessionNodeRid, request.SessionNodeRid);
-                Assert.Equal(previous.SessionRid, request.SessionRid);
-                Assert.Equal(previous.AcceptedHighWater, request.AcceptedHighWater);
-                return ValueTask.FromResult(
-                    new ZLinkRemoteSessionUnbindResponse(true));
-            },
-            CancellationToken.None);
-        events.Add("source-swap");
+        state.PublishSessionReplacement(replacement);
+        state.CompleteSessionReplacement(replacement);
 
-        Assert.Equal(
-            new[] { "new-register", "old-tombstone", "source-swap" },
-            events);
+        Assert.Null(await replacement.Completion);
+        Assert.False(cleanupAck.Task.IsCompleted);
+        Assert.True(state.TryGetBoundSession(out var current));
+        Assert.Equal("new-token", current.BindingToken);
+        Assert.Equal(RoutingId.From("new-session").ToHex(), current.SessionRid.ToHex());
     }
 
     [Fact]
-    public async Task Tombstone_Failure_Or_Cancellation_Leaves_Source_Old_Binding()
+    public async Task Rebind_Does_Not_Roll_Back_When_Retired_Session_Cleanup_Is_Unavailable()
     {
-        var sourceIsOld = true;
-        var previous = PreviousBinding("old-node");
+        var state = new ZLinkActorRuntimeState("actor-cleanup-gap");
+        _ = BindActorSession(state, "old-token", "old-session", 1);
+        var replacement = BeginActorSessionReplacement(
+            state,
+            "new-token",
+            "new-session",
+            2);
 
-        await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
-            ZLinkSessionBindingReplacement.CompletePreviousAsync(
-                    "actor-failure",
-                    RoutingId.From("new-node"),
-                    previous,
-                    static (_, _) => ValueTask.FromResult(
-                        new ZLinkRemoteSessionUnbindResponse(false)),
-                    CancellationToken.None)
-                .AsTask());
-        Assert.True(sourceIsOld);
+        state.PublishSessionReplacement(replacement);
+        state.CompleteSessionReplacement(replacement);
 
-        using var cancellation = new CancellationTokenSource();
-        cancellation.Cancel();
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
-            ZLinkSessionBindingReplacement.CompletePreviousAsync(
-                    "actor-cancel",
-                    RoutingId.From("new-node"),
-                    previous,
-                    static (_, token) =>
-                        ValueTask.FromCanceled<ZLinkRemoteSessionUnbindResponse>(
-                            token),
-                    cancellation.Token)
-                .AsTask());
-        Assert.True(sourceIsOld);
+        Assert.Null(await replacement.Completion);
+        Assert.True(state.TryGetBoundSession(out var current));
+        Assert.Equal("new-token", current.BindingToken);
+        var stale = Assert.Throws<ZLinkFrameworkException>(() =>
+            BeginActorSessionReplacement(
+                state,
+                "old-token",
+                "old-session",
+                1));
+        Assert.Equal(ZLinkRetryAdvice.DoNotRetry, stale.RetryAdvice);
     }
 
     [Fact]
-    public async Task Same_Rebind_Request_Retries_Exact_Tombstone_Until_Acknowledged()
+    public async Task Same_Session_Rebind_Is_Idempotent_Without_A_Replacement_Notification()
     {
-        var previous = PreviousBinding("old-node");
-        var requests = new List<ZLinkRemoteSessionUnbindRequest>();
+        var state = new ZLinkActorRuntimeState("actor-same-session");
+        _ = BindActorSession(state, "same-token", "same-session", 1);
+        var first = BeginActorSessionReplacement(
+            state,
+            "next-token",
+            "next-session",
+            2);
+        state.PublishSessionReplacement(first);
+        state.CompleteSessionReplacement(first);
+        Assert.Null(await first.Completion);
 
-        async ValueTask AttemptAsync()
-        {
-            await ZLinkSessionBindingReplacement.CompletePreviousAsync(
-                "actor-retry",
-                RoutingId.From("new-node"),
-                previous,
-                (request, _) =>
-                {
-                    requests.Add(request);
-                    return ValueTask.FromResult(
-                        new ZLinkRemoteSessionUnbindResponse(
-                            requests.Count > 1));
-                },
-                CancellationToken.None);
-        }
-
-        await Assert.ThrowsAsync<ZLinkFrameworkException>(
-            () => AttemptAsync().AsTask());
-        await AttemptAsync();
-
-        Assert.Equal(2, requests.Count);
-        Assert.Equal(requests[0], requests[1]);
+        var replay = BeginActorSessionReplacement(
+            state,
+            "next-token",
+            "next-session",
+            2);
+        Assert.False(replay.OwnsExecution);
+        Assert.Null(await replay.Completion);
+        Assert.Null(replay.Previous);
     }
 
     [Fact]
-    public async Task Same_Owner_Replacement_Does_Not_Self_Tombstone()
+    public async Task Same_Session_Replacement_Does_Not_Create_A_Previous_Fence()
     {
-        var tombstones = 0;
-        await ZLinkSessionBindingReplacement.CompletePreviousAsync(
-            "actor-same-owner",
-            RoutingId.From("same-node"),
-            PreviousBinding("same-node"),
-            (_, _) =>
-            {
-                tombstones++;
-                return ValueTask.FromResult(
-                    new ZLinkRemoteSessionUnbindResponse(true));
-            },
-            CancellationToken.None);
+        var state = new ZLinkActorRuntimeState("actor-same-owner");
+        _ = BindActorSession(state, "same-token", "same-session", 1);
+        var replacement = BeginActorSessionReplacement(
+            state,
+            "same-token",
+            "same-session",
+            1);
 
-        Assert.Equal(0, tombstones);
+        Assert.False(replacement.OwnsExecution);
+        Assert.Null(replacement.Previous);
+        Assert.Null(await replacement.Completion);
     }
 
     [Fact]
@@ -1634,8 +1614,9 @@ public sealed class SessionActorCoordinatorTests
             route.Ref.ActorId,
             sessionRid,
             "binding-tombstone");
+        var actorKey = ZLinkActorId.FromBoundary(route.Ref.ActorId, nameof(route));
         _ = table.Bind(
-            route.Ref.ActorId,
+            actorKey,
             context,
             actor.BindingToken,
             actor,
@@ -1659,7 +1640,7 @@ public sealed class SessionActorCoordinatorTests
         time.Advance(TimeSpan.FromSeconds(2));
         Assert.Equal(0, table.TombstoneCount);
         _ = table.Bind(
-            route.Ref.ActorId,
+            actorKey,
             context,
             actor.BindingToken,
             actor,
@@ -1676,7 +1657,7 @@ public sealed class SessionActorCoordinatorTests
         {
             var error = Assert.Throws<ZLinkFrameworkException>(() =>
                 table.Bind(
-                    route.Ref.ActorId,
+                    actorKey,
                     context,
                     actor.BindingToken,
                     actor,
@@ -1704,8 +1685,9 @@ public sealed class SessionActorCoordinatorTests
             route.Ref.ActorId,
             sessionRid,
             "binding-full-fence");
+        var actorKey = ZLinkActorId.FromBoundary(route.Ref.ActorId, nameof(route));
         _ = table.Bind(
-            route.Ref.ActorId,
+            actorKey,
             context,
             actor.BindingToken,
             actor,
@@ -1804,20 +1786,43 @@ public sealed class SessionActorCoordinatorTests
             static _ => ValueTask.CompletedTask);
     }
 
-    private static ZLinkRemoteSessionPreviousBinding PreviousBinding(
-        string nodeRid) => new(
-        RoutingId.From(nodeRid).ToBytes().ToArray(),
-        RoutingId.From("session-node").ToBytes().ToArray(),
-        RoutingId.From("session-rid").ToBytes().ToArray(),
-        "old-token",
-        7,
-        11,
-        "actors",
-        13,
-        17,
-        19,
-        23,
-        29);
+    private static ZLinkActorBoundSession? BindActorSession(
+        ZLinkActorRuntimeState state,
+        string bindingToken,
+        string sessionRid,
+        ulong authorityOwnerGeneration) => state.BindSession(
+            RoutingId.From("session-owner"),
+            RoutingId.From(sessionRid),
+            bindingToken,
+            bindingGeneration: 1,
+            objectGeneration: 1,
+            authorityOwnerGeneration: authorityOwnerGeneration,
+            meshName: ZLinkMeshName.FromBoundary("actors", "meshName"),
+            targetNodeGeneration: 1,
+            ownerLeaseGeneration: 1,
+            sessionOwnerNodeGeneration: 1,
+            sessionOwnerId: "session-owner",
+            sessionOwnerLeaseGeneration: 1);
+
+    private static ZLinkActorSessionReplacementAttempt
+        BeginActorSessionReplacement(
+            ZLinkActorRuntimeState state,
+            string bindingToken,
+            string sessionRid,
+            ulong authorityOwnerGeneration) => state.BeginSessionReplacement(
+                RoutingId.From("session-owner"),
+                RoutingId.From(sessionRid),
+                bindingToken,
+                bindingGeneration: 1,
+                objectGeneration: 1,
+                authorityOwnerGeneration: authorityOwnerGeneration,
+                meshName: ZLinkMeshName.FromBoundary("actors", "meshName"),
+                targetNodeGeneration: 1,
+                ownerLeaseGeneration: 1,
+                sessionOwnerNodeGeneration: 1,
+                acceptedHighWater: 0,
+                sessionOwnerId: "session-owner",
+                sessionOwnerLeaseGeneration: 1);
 
     private static ZLinkFrameworkRuntime CreateRuntime(
         IZLinkActorResolver? actorDirectory = null,

@@ -6,26 +6,19 @@ import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.databind.DeserializationContext;
 import com.fasterxml.jackson.databind.JsonDeserializer;
 import com.fasterxml.jackson.databind.JsonSerializer;
-import com.fasterxml.jackson.databind.MapperFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializerProvider;
-import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.fasterxml.jackson.databind.module.SimpleModule;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import java.io.IOException;
 import java.util.Map;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
+import systems.zlink.framework.runtime.internal.json.ZLinkFrameworkJsonProfile;
 
 public final class ZLinkStreamJson {
     public static final String CONTENT_TYPE = "application/json";
-    private static final ObjectMapper MAPPER = JsonMapper.builder()
-        .configure(MapperFeature.ACCEPT_CASE_INSENSITIVE_PROPERTIES, true)
-        .configure(MapperFeature.USE_STD_BEAN_NAMING, true)
-        .findAndAddModules()
-        .addModule(new JavaTimeModule())
-        .addModule(routingIdModule())
-        .build();
+    private static final ObjectMapper MAPPER =
+        ZLinkFrameworkJsonProfile.mapper(routingIdModule());
 
     private ZLinkStreamJson() {
     }

@@ -9,10 +9,9 @@ namespace
 /* ST-C3: this file owns the scenario orchestration and its public assertions. */
 inline void scenario_runner_t::run_st_c3_scenario ()
 {
-    transfer_out_failure ();
-    source_leave_failure ();
-    transfer_in_failure ();
-    joined_failure ();
+    admission_reject_terminal ();
+    joined_exception_terminal ();
+    joined_timeout_terminal ();
 }
 
 } // namespace

@@ -26,9 +26,7 @@ public final class ClientApplication {
     ZLinkFrameworkConfigurer clientFramework(ClientOptions options) {
         return framework -> {
             framework.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile(options.logDir() + "/" + options.rid() + "-flow.log")
-                .traceLabel(options.rid());
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             var locations = framework.configureLocations();
             locations.setOwnerLeaseRenewInterval(Duration.ofMillis(options.heartbeatMillis()));
             locations.setOwnerLeaseTtl(Duration.ofMillis(options.leaseTtlMillis()));

@@ -37,12 +37,11 @@ int main (int argc, char **argv)
     const auto options = app.config ().bind_required<rm_workflow::workflow_options_t> ("e2e");
     app.logging ()
       .use_file (options.log_dir + "/" + options.rid + ".log")
+      .use_file (options.log_dir + "/" + options.rid + "-flow.log")
       .set_min_level (zlink::framework::log_level_t::debug);
     app.add_zlink_framework ([&] (zlink::framework::zlink_framework_options_t &framework) {
         framework.configure_dispatch ()
-          .message_flow (zlink::framework::message_flow_log_mode_t::key_transitions)
-          .trace_log_file (options.log_dir + "/" + options.rid + "-flow.log")
-          .trace_label ("cpp-rm-" + options.rid);
+          .message_flow (zlink::framework::message_flow_log_mode_t::normal);
         framework.services ().add_singleton<rm_workflow::scenario_state_t> (
           std::make_unique<rm_workflow::scenario_state_t> (options.rid, options.instance_id));
         configure_common_codecs (framework.codecs ());

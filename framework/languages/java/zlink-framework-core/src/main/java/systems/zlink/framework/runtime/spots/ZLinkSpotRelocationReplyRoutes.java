@@ -8,6 +8,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.Supplier;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import systems.zlink.contracts.core.RoutingId;
@@ -75,6 +76,16 @@ final class ZLinkSpotRelocationReplyRoutes {
             this, operation, received::close, true);
     }
 
+    LazyRegistration registerLazy(
+        Supplier<byte[]> acceptedRecord,
+        ZLinkBackendReceived received,
+        String spotId,
+        long objectGeneration) {
+        return new LazyRegistration(
+            acceptedRecord,
+            record -> register(record, received, spotId, objectGeneration));
+    }
+
     synchronized Registration registerActor(
         byte[] acceptedRecord,
         String actorId,
@@ -116,6 +127,18 @@ final class ZLinkSpotRelocationReplyRoutes {
         }
         return new Registration(
             this, operation, relocationRelease, true);
+    }
+
+    LazyRegistration registerActorLazy(
+        Supplier<byte[]> acceptedRecord,
+        String actorId,
+        long objectGeneration,
+        Function<List<byte[]>, CompletionStage<Void>> reply,
+        Runnable relocationRelease) {
+        return new LazyRegistration(
+            acceptedRecord,
+            record -> registerActor(
+                record, actorId, objectGeneration, reply, relocationRelease));
     }
 
     synchronized void completeLocal(OperationId operation) {
@@ -547,6 +570,52 @@ final class ZLinkSpotRelocationReplyRoutes {
             // callback has been captured. The callback remains in Route until
             // terminal relay ACK or retention expiry.
             relocationRelease.run();
+        }
+    }
+
+    static final class LazyRegistration {
+        private final Supplier<byte[]> recordSupplier;
+        private final Function<byte[], Registration> registration;
+        private byte[] record;
+        private Registration delegate;
+        private boolean completedLocally;
+
+        private LazyRegistration(
+            Supplier<byte[]> recordSupplier,
+            Function<byte[], Registration> registration) {
+            this.recordSupplier = Objects.requireNonNull(
+                recordSupplier, "recordSupplier");
+            this.registration = Objects.requireNonNull(
+                registration, "registration");
+        }
+
+        synchronized byte[] record() {
+            if (completedLocally) {
+                throw new IllegalStateException(
+                    "completed dispatch cannot enter relocation");
+            }
+            if (record == null) {
+                record = Objects.requireNonNull(
+                    recordSupplier.get(),
+                    "accepted record supplier returned null");
+                delegate = registration.apply(record);
+            }
+            return record;
+        }
+
+        synchronized void completeLocal() {
+            if (delegate != null) {
+                delegate.completeLocal();
+            } else {
+                completedLocally = true;
+            }
+        }
+
+        synchronized void releaseForRelocation() {
+            if (delegate == null) {
+                record();
+            }
+            delegate.releaseForRelocation();
         }
     }
 

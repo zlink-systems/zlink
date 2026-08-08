@@ -22,14 +22,21 @@ public final class AtdE3ShutdownRecoveryScenario {
         String requestId = "ATD-E3-" + UUID.randomUUID();
         Path controlDir = Path.of(Env.get("controlDirectory"));
         CompletableFuture<Contracts.ScenarioRes> pending = connector
-            .request(new Contracts.ShutdownAwaitReq(requestId, 5000))
+            // Keep the public request pending long enough for the runner to
+            // stop the owner process after the readiness marker is written.
+            .request(new Contracts.ShutdownAwaitReq(requestId, 30000))
             .metadata(Contracts.TARGET_NODE_RID_METADATA, "play-a")
             .metadata(Contracts.SPOT_RID_METADATA, "room-a")
             .timeout(Duration.ofSeconds(20))
             .submit(Contracts.ScenarioRes.class)
             .toCompletableFuture();
 
-        ClientStreamSupport.waitForEvidence(connector, requestId, "shutdown-await-released");
+        // Poll evidence through the independent recovery session. The primary
+        // session intentionally remains blocked on the shutdown request.
+        ClientStreamSupport.waitForEvidence(
+            recoveryConnector,
+            requestId,
+            "shutdown-await-released");
         touch(controlDir.resolve("atd-e3-ready-to-stop-play"));
         expectPublicFailure(pending);
         waitForFile(controlDir.resolve("atd-e3-play-restarted"));

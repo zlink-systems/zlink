@@ -1,9 +1,8 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { ZLINK_ACTOR_MANAGER } from '@zlink-systems/nestjs';
 import { ZLinkPacket } from '@zlink-systems/framework';
-import { PacketNames, PlayerActorCreateReq } from '../../Shared/contracts';
+import { JoinWorldReq, PacketNames, PlayerActorCreateReq } from '../../Shared/contracts';
 import { ZoneWorldNames } from '../../Shared/spec';
-import type { JoinWorldReq } from '../../Shared/contracts';
 import type {
   ZLinkActorManager,
   ZLinkMessage,
@@ -40,7 +39,7 @@ class JoinWorldSessionHandler {
     payload: ZLinkMessage
   ): Promise<void> {
     if (context.actors.bound.length !== 0) throw new Error('Session already joined the world.');
-    const request = payload.decode<JoinWorldReq>(Object as never);
+    const request = payload.decode(JoinWorldReq);
     const ensured = await this.actors
       .getOrCreate(request.playerId, ZoneWorldNames.playerActorType)
       .inMesh(ZoneWorldNames.zoneMesh)

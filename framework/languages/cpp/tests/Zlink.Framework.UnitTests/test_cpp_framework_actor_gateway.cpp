@@ -7,10 +7,14 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace
@@ -425,7 +429,8 @@ int route_update_preserves_object_generation ()
       [&] (const actor_ref_t &actor,
            const actor_context_t &,
            const stream_header_t &,
-           const zlink::message_t &) {
+           const zlink::message_t &,
+           std::optional<bound_session_relay_source_t>) {
           relay_routes.push_back (actor);
           return result_t<std::optional<zlink::message_t>>::success (
             std::nullopt);
@@ -554,7 +559,7 @@ int bound_session_route_preserves_private_fences ()
         return 2;
     }
     const auto advanced = gateway.bound_session_route (actor);
-    return advanced && advanced->session_sequence == 30 ? 0 : 3;
+    return advanced && advanced->session_sequence == 29 ? 0 : 3;
 }
 
 int bound_session_ref_normalization_preserves_type_and_rejects_conflicts ()
@@ -631,7 +636,7 @@ int bound_session_ref_normalization_preserves_type_and_rejects_conflicts ()
     const auto route_after_rejections = gateway.bound_session_route (public_ref);
     if (!route_after_rejections
         || route_after_rejections->node_rid.to_string () != "session-node"
-        || route_after_rejections->session_sequence != 1) {
+        || route_after_rejections->session_sequence != 0) {
         return 9;
     }
 
@@ -720,10 +725,179 @@ int bound_session_route_installs_sink_and_fence_together ()
            : 7;
 }
 
+int bound_session_transition_is_atomic_and_idempotent ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+
+    actor_gateway_runtime_t gateway;
+    const auto actor = test_actor_ref (
+      "actor-owner", "game.actor", "actor-a", 1);
+    const auto sink = [] (std::string, stream_codec_t,
+                          const zlink::message_t &) {
+        return task_t<void> (result_t<void>::success ());
+    };
+    if (!gateway.bind_session_sink (actor, sink))
+        return 1;
+
+    const actor_bound_session_route_t first{
+      zlink::routing_id_t::from (std::string ("session-owner-a")),
+      zlink::routing_id_t::from (std::string ("session-a")),
+      1, 2, 3, 4, 5, 0, 9};
+    const auto installed =
+      gateway.record_bound_session_route_transition (actor, first);
+    if (!installed || !installed.value ().changed
+        || installed.value ().previous)
+        return 2;
+
+    auto same_identity = first;
+    same_identity.session_sequence = 0;
+    const auto idempotent =
+      gateway.record_bound_session_route_transition (
+        actor, same_identity);
+    if (!idempotent || idempotent.value ().changed
+        || idempotent.value ().previous)
+        return 3;
+
+    auto second = first;
+    second.session_rid = zlink::routing_id_t::from (
+      std::string ("session-b"));
+    second.binding_generation = 6;
+    const auto replaced =
+      gateway.record_bound_session_route_transition (actor, second);
+    if (!replaced || !replaced.value ().changed
+        || !replaced.value ().previous
+        || replaced.value ().previous->session_rid
+             != first.session_rid
+        || replaced.value ().previous->binding_generation != 5)
+        return 4;
+
+    return 0;
+}
+
+int bound_session_relay_admission_is_exact_and_monotonic ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+
+    actor_gateway_runtime_t gateway;
+    const auto actor = test_actor_ref ("actor-owner", "game.actor", "relay-actor", 3);
+    if (!gateway.bind_session_sink (
+          actor, [] (std::string, stream_codec_t, const zlink::message_t &) {
+              return task_t<void> (result_t<void>::success ());
+          })) {
+        return 1;
+    }
+    const auto session_owner = zlink::routing_id_t::from (std::string ("session-owner"));
+    const auto session_rid = zlink::routing_id_t::from (std::string ("session-rid"));
+    if (!gateway.record_bound_session_route (actor, session_owner, session_rid,
+                                             7, 11, 13, 17, 0, 0)) {
+        return 2;
+    }
+    if (!gateway.admit_session_relay (actor, session_owner, session_rid, 17, 1))
+        return 3;
+    if (gateway.admit_session_relay (actor, session_owner, session_rid, 17, 1)
+        || gateway.admit_session_relay (actor, session_owner, session_rid, 17, 3)
+        || gateway.admit_session_relay (
+          actor, zlink::routing_id_t::from (std::string ("other-owner")),
+          session_rid, 17, 2)) {
+        return 4;
+    }
+    if (!gateway.admit_session_relay (actor, session_owner, session_rid, 17, 2))
+        return 5;
+    const auto route = gateway.bound_session_route (actor);
+    return route && route->session_sequence == 2 ? 0 : 6;
+}
+
+int session_relay_queue_is_ordered_without_blocking_other_actors ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+
+    actor_gateway_runtime_t gateway;
+    auto manager = gateway.manager ();
+    session_actor_manager_access_t::attach (manager, stream_t{});
+    const auto actor_a = test_actor_ref ("actor-owner", "game.actor", "relay-a", 1);
+    const auto actor_b = test_actor_ref ("actor-owner", "game.actor", "relay-b", 1);
+    auto bound_a = manager.bind (actor_a).submit ().result ().value ();
+    auto bound_b = manager.bind (actor_b).submit ().result ().value ();
+    const auto session_rid = zlink::routing_id_t::from (std::string ("relay-session"));
+    if (!gateway.record_session_relay_source (actor_a, session_rid, 31)
+        || !gateway.record_session_relay_source (actor_b, session_rid, 37)) {
+        return 1;
+    }
+
+    std::mutex mutex;
+    std::condition_variable changed;
+    bool release_first = false;
+    std::vector<std::string> started;
+    std::vector<std::pair<std::string, std::uint64_t>> sources;
+    gateway.on_relay (
+      [&] (const actor_ref_t &actor, actor_context_t, const stream_header_t &header,
+           const zlink::message_t &, std::optional<bound_session_relay_source_t> source) {
+          const auto marker = std::string (header.packet_name ());
+          {
+              const std::lock_guard lock (mutex);
+              started.push_back (marker);
+              if (source)
+                  sources.emplace_back (marker, source->session_sequence);
+          }
+          changed.notify_all ();
+          if (actor.actor_id ().value () == "relay-a" && marker == "A1") {
+              std::unique_lock lock (mutex);
+              changed.wait (lock, [&] { return release_first; });
+          }
+          return result_t<std::optional<zlink::message_t>>::success (std::nullopt);
+      });
+
+    auto first = bound_a.relay ("A1", zlink::message_t{});
+    auto second = bound_a.relay ("A2", zlink::message_t{});
+    auto independent = bound_b.relay ("B1", zlink::message_t{});
+    {
+        std::unique_lock lock (mutex);
+        if (!changed.wait_for (lock, std::chrono::seconds (2), [&] {
+                return std::find (started.begin (), started.end (), "A1") != started.end ()
+                       && std::find (started.begin (), started.end (), "B1") != started.end ();
+            })) {
+            return 2;
+        }
+        if (std::find (started.begin (), started.end (), "A2") != started.end ())
+            return 3;
+        release_first = true;
+    }
+    changed.notify_all ();
+    if (!first.result () || !second.result () || !independent.result ())
+        return 4;
+    const auto a1 = std::find (started.begin (), started.end (), "A1");
+    const auto a2 = std::find (started.begin (), started.end (), "A2");
+    if (a1 == started.end () || a2 == started.end () || a1 > a2)
+        return 5;
+    const std::vector<std::pair<std::string, std::uint64_t>> expected_sources{
+      {"A1", 1}, {"B1", 1}, {"A2", 2}};
+    for (const auto &expected : expected_sources) {
+        if (std::find (sources.begin (), sources.end (), expected) == sources.end ())
+            return 6;
+    }
+    return 0;
+}
+
 } // namespace
 
 int main ()
 {
+    if (const auto queue = session_relay_queue_is_ordered_without_blocking_other_actors ();
+        queue != 0) {
+        return 150 + queue;
+    }
+    if (const auto admission = bound_session_relay_admission_is_exact_and_monotonic ();
+        admission != 0) {
+        return 140 + admission;
+    }
+    if (const auto transition =
+          bound_session_transition_is_atomic_and_idempotent ();
+        transition != 0) {
+        return 130 + transition;
+    }
     if (const auto identity = actor_identity_validation_is_bounded_and_utf8_exact ();
         identity != 0) {
         return 120 + identity;

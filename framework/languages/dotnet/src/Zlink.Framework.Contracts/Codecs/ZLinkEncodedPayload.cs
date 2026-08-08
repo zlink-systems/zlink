@@ -30,6 +30,19 @@ public readonly struct ZLinkEncodedPayload : IEquatable<ZLinkEncodedPayload>
         return new ZLinkEncodedPayload(bytes.ToArray());
     }
 
+    internal static ZLinkEncodedPayload FromOwned(ReadOnlyMemory<byte> bytes)
+    {
+        // Framework runtime callers transfer an immutable buffer whose lifetime
+        // is then retained by this value.
+        return new ZLinkEncodedPayload(bytes);
+    }
+
+    internal static ZLinkEncodedPayload FromOwned(byte[] bytes)
+    {
+        ArgumentNullException.ThrowIfNull(bytes);
+        return FromOwned(bytes.AsMemory());
+    }
+
     public byte[] ToArray()
     {
         return Bytes.ToArray();

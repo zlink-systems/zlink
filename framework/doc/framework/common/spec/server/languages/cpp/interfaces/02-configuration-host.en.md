@@ -148,9 +148,10 @@ peer table. This restriction doesn't apply to `shutdown()`.
 `blocked/deadline_exceeded` is the result of the deadline ending before
 every target's `Prepared` completion and host `Relocating` descriptor
 publication. It's also used, instead of `relocation_disabled`, when
-connection-bound work and a bound-session request weren't terminal
-drained within the pre-`Captured`
-[deadline](../../../../01-glossary.en.md#deadline). The Framework
+connection-bound work wasn't terminal drained within the pre-`Captured`
+[deadline](../../../../01-glossary.en.md#deadline). A bound-session
+request is not drained; it follows the same frozen-journal and
+ingress-hold rules as any other Actor request. The Framework
 cleans up the relocation reference and reservation, releases the
 reversible seal, and restores host state and admission. If every
 target is `Prepared` and `Relocating` publication succeeds, it

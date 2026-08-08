@@ -163,6 +163,10 @@ public final class ZLinkAsyncSerialQueue {
     }
 
     public synchronized CompletionStage<Void> enqueue(Supplier<CompletionStage<Void>> operation) {
+        if (relocated) {
+            return CompletableFuture.failedFuture(
+                new IllegalStateException("queue owner has relocated"));
+        }
         return enqueueAccepted(null, 0, operation);
     }
 
@@ -175,6 +179,10 @@ public final class ZLinkAsyncSerialQueue {
         long payloadBytes,
         Supplier<CompletionStage<Void>> operation) {
         validatePayloadBytes(payloadBytes);
+        if (relocated) {
+            return CompletableFuture.failedFuture(
+                new IllegalStateException("queue owner has relocated"));
+        }
         return enqueueAccepted(null, payloadBytes, operation);
     }
 
@@ -207,7 +215,7 @@ public final class ZLinkAsyncSerialQueue {
         reserve(Lane.LIFECYCLE, fixedWorkByteCost);
         Entry entry = new Entry(
             nextSequence++,
-            null,
+            (byte[]) null,
             operation,
             () -> { },
             new CompletableFuture<>(),
@@ -247,7 +255,7 @@ public final class ZLinkAsyncSerialQueue {
         reserve(Lane.LIFECYCLE, fixedWorkByteCost);
         Entry entry = new Entry(
             nextSequence++,
-            null,
+            (byte[]) null,
             operation,
             () -> { },
             new CompletableFuture<>(),
@@ -278,6 +286,47 @@ public final class ZLinkAsyncSerialQueue {
                 new IllegalStateException("queue owner has relocated"));
         }
         return enqueueAccepted(record.clone(), record.length, operation, relocationRelease);
+    }
+
+    /**
+     * Enqueues a relocatable turn without materializing its relocation record
+     * until a relocation seal captures the turn.
+     */
+    public synchronized CompletionStage<Void> enqueueRelocatableLazyRecord(
+        Supplier<byte[]> record,
+        long recordSizeHint,
+        Supplier<CompletionStage<Void>> operation,
+        Runnable relocationRelease) {
+        java.util.Objects.requireNonNull(record, "record");
+        java.util.Objects.requireNonNull(operation, "operation");
+        java.util.Objects.requireNonNull(relocationRelease, "relocationRelease");
+        validatePayloadBytes(recordSizeHint);
+        if (relocated || relocation != null && relocation.frozen) {
+            return CompletableFuture.failedFuture(
+                new IllegalStateException("queue relocation ingress is closed"));
+        }
+        if (nextSequence == Long.MAX_VALUE) {
+            throw new IllegalStateException("queue sequence exhausted");
+        }
+        if (!canRepresentWorkByteCost(recordSizeHint)) {
+            return capacityFailure("application payload exceeds queue byte capacity");
+        }
+        long byteCost = workByteCost(recordSizeHint);
+        if (!canReserve(Lane.APPLICATION, byteCost)) {
+            return capacityFailure("application queue is full");
+        }
+        reserve(Lane.APPLICATION, byteCost);
+        Entry entry = new Entry(
+            nextSequence++, record, operation, relocationRelease,
+            new CompletableFuture<>(), ZLinkFlowContext.current(), null,
+            Lane.APPLICATION, byteCost, false);
+        if (relocation != null) {
+            relocation.held.addLast(entry);
+        } else {
+            applicationPending.addLast(entry);
+            startNext();
+        }
+        return entry.result;
     }
 
     public synchronized boolean tryEnqueue(Supplier<CompletionStage<Void>> operation) {
@@ -344,6 +393,10 @@ public final class ZLinkAsyncSerialQueue {
         Runnable relocationRelease) {
         java.util.Objects.requireNonNull(operation, "operation");
         validatePayloadBytes(payloadBytes);
+        if (relocated) {
+            return CompletableFuture.failedFuture(
+                new IllegalStateException("queue owner has relocated"));
+        }
         if (relocation != null && relocation.frozen) {
             return CompletableFuture.failedFuture(
                 new IllegalStateException(
@@ -530,10 +583,19 @@ public final class ZLinkAsyncSerialQueue {
             quiescent = takeQuiescenceWaitersIfReady();
         }
         if (notify != null) {
-            executor.execute(notify);
+            try {
+                executor.execute(notify);
+            } catch (RuntimeException rejected) {
+                // Capacity notification is advisory. Queue terminal release
+                // has already happened and must not be lost on executor close.
+            }
         }
         if (yieldToExecutor) {
-            executor.execute(this::startNextAsync);
+            try {
+                executor.execute(this::startNextAsync);
+            } catch (RuntimeException rejected) {
+                startNextAsync();
+            }
         }
         if (boundary != null) {
             boundary.finished.complete(null);
@@ -584,7 +646,7 @@ public final class ZLinkAsyncSerialQueue {
         RelocationBoundary boundary = new RelocationBoundary(this);
         Entry entry = new Entry(
             nextSequence++,
-            null,
+            (byte[]) null,
             boundary::reach,
             () -> { },
             new CompletableFuture<>(),
@@ -625,7 +687,8 @@ public final class ZLinkAsyncSerialQueue {
         }
         if (suspendedContinuations != 0
             || !continuationPending.isEmpty()
-            || applicationPending.stream().anyMatch(entry -> entry.record == null)) {
+            || applicationPending.stream().anyMatch(
+                entry -> !entry.hasRelocationRecord())) {
             return Optional.empty();
         }
         if (nextRelocationSerial == Long.MAX_VALUE) {
@@ -671,38 +734,71 @@ public final class ZLinkAsyncSerialQueue {
         }
         relocation.frozen = true;
         return Optional.of(relocation.held.stream()
-            .filter(entry -> entry.record != null)
+            .filter(Entry::hasRelocationRecord)
             .map(Entry::queuedRecord)
             .toList());
     }
 
-    public synchronized Optional<List<QueuedRecord>> commitRelocation(
+    public Optional<List<QueuedRecord>> commitRelocation(
         RelocationSeal seal) {
-        if (!matches(seal)) {
-            return Optional.empty();
+        List<QueuedRecord> held;
+        List<Entry> released;
+        synchronized (this) {
+            if (!matches(seal)) {
+                return Optional.empty();
+            }
+            held = relocation.held.stream()
+                .filter(Entry::hasRelocationRecord)
+                .map(Entry::queuedRecord)
+                .toList();
+            released = new ArrayList<>(
+                relocation.captured.size() + relocation.held.size());
+            released.addAll(relocation.captured);
+            released.addAll(relocation.held);
+            relocation = null;
+            relocated = true;
         }
-        List<QueuedRecord> held = relocation.held.stream()
-            .filter(entry -> entry.record != null)
-            .map(Entry::queuedRecord)
-            .toList();
-        List<Entry> released = new ArrayList<>(
-            relocation.captured.size() + relocation.held.size());
-        released.addAll(relocation.captured);
-        released.addAll(relocation.held);
-        relocation = null;
-        relocated = true;
         for (Entry entry : released) {
+            RuntimeException failure = null;
+            Runnable capacityNotification = null;
             try {
                 entry.relocationRelease.run();
-                entry.result.complete(null);
-            } catch (RuntimeException failure) {
-                entry.result.completeExceptionally(failure);
+            } catch (RuntimeException error) {
+                failure = error;
             } finally {
-                releaseRelocatedCapacity(entry);
+                boolean notify;
+                synchronized (this) {
+                    notify = releaseRelocatedCapacityLocked(entry);
+                    if (notify) {
+                        capacityNotification = capacityAvailable;
+                    }
+                }
+                if (capacityNotification != null) {
+                    executeAdvisory(capacityNotification);
+                }
+            }
+            if (failure == null) {
+                entry.result.complete(null);
+            } else {
+                entry.result.completeExceptionally(failure);
             }
         }
-        completeQuiescenceWaitersIfReady();
+        List<CompletableFuture<Void>> quiescent;
+        synchronized (this) {
+            quiescent = takeQuiescenceWaitersIfReady();
+        }
+        quiescent.forEach(waiter -> waiter.complete(null));
         return Optional.of(held);
+    }
+
+    private void executeAdvisory(Runnable action) {
+        try {
+            executor.execute(action);
+        } catch (RuntimeException rejected) {
+            // Capacity notification is advisory. The terminal result of the
+            // released entry must not be lost when the queue executor is
+            // concurrently shutting down.
+        }
     }
 
     private boolean matches(RelocationSeal seal) {
@@ -712,12 +808,10 @@ public final class ZLinkAsyncSerialQueue {
             && relocation.seal == seal;
     }
 
-    private void releaseRelocatedCapacity(Entry entry) {
+    private boolean releaseRelocatedCapacityLocked(Entry entry) {
         boolean wasFull = !canReserve(Lane.APPLICATION, fixedWorkByteCost);
         release(entry);
-        if (wasFull && canReserve(Lane.APPLICATION, fixedWorkByteCost)) {
-            executor.execute(capacityAvailable);
-        }
+        return wasFull && canReserve(Lane.APPLICATION, fixedWorkByteCost);
     }
 
     private CompletionStage<Void> invoke(
@@ -725,56 +819,61 @@ public final class ZLinkAsyncSerialQueue {
         CompletableFuture<Void> result,
         ZLinkFlowContext.State flow) {
         CompletableFuture<Void> gate = new CompletableFuture<>();
-        executor.execute(() -> {
-            ZLinkAsyncSerialQueue previous = CURRENT.get();
-            CompletableFuture<Void> previousGate = CURRENT_GATE.get();
-            Boolean previousDeferred = CURRENT_RELEASE_DEFERRED.get();
-            CURRENT.set(this);
-            CURRENT_GATE.set(gate);
-            CURRENT_RELEASE_DEFERRED.set(false);
-            try (var serial = systems.zlink.framework.runtime.internal.handlers
-                     .ZLinkSuspendInvocationContext.enterSerialExecutionTurn(
-                         new SerialTurnCarrier(new SerialTurn(this, gate)));
-                 ZLinkFlowContext.Scope ignored = flow == null
-                     ? () -> { }
-                     : ZLinkFlowContext.enter(flow)) {
-                CompletionStage<Void> execution = java.util.Objects.requireNonNull(
-                    operation.get(), "operation result");
-                execution.whenComplete((value, error) -> {
-                    if (error != null) {
-                        result.completeExceptionally(error);
-                    } else {
-                        result.complete(null);
-                    }
-                    if (!releaseOnIncompleteStage) {
+        try {
+            executor.execute(() -> {
+                ZLinkAsyncSerialQueue previous = CURRENT.get();
+                CompletableFuture<Void> previousGate = CURRENT_GATE.get();
+                Boolean previousDeferred = CURRENT_RELEASE_DEFERRED.get();
+                CURRENT.set(this);
+                CURRENT_GATE.set(gate);
+                CURRENT_RELEASE_DEFERRED.set(false);
+                try (var serial = systems.zlink.framework.runtime.internal.handlers
+                         .ZLinkSuspendInvocationContext.enterSerialExecutionTurn(
+                             new SerialTurnCarrier(new SerialTurn(this, gate)));
+                     ZLinkFlowContext.Scope ignored = flow == null
+                         ? () -> { }
+                         : ZLinkFlowContext.enter(flow)) {
+                    CompletionStage<Void> execution = java.util.Objects.requireNonNull(
+                        operation.get(), "operation result");
+                    execution.whenComplete((value, error) -> {
+                        if (error != null) {
+                            result.completeExceptionally(error);
+                        } else {
+                            result.complete(null);
+                        }
+                        if (!releaseOnIncompleteStage) {
+                            gate.complete(null);
+                        }
+                    });
+                    if (releaseOnIncompleteStage
+                        && !Boolean.TRUE.equals(CURRENT_RELEASE_DEFERRED.get())) {
                         gate.complete(null);
                     }
-                });
-                if (releaseOnIncompleteStage
-                    && !Boolean.TRUE.equals(CURRENT_RELEASE_DEFERRED.get())) {
+                } catch (RuntimeException error) {
+                    result.completeExceptionally(error);
                     gate.complete(null);
+                } finally {
+                    if (previous == null) {
+                        CURRENT.remove();
+                    } else {
+                        CURRENT.set(previous);
+                    }
+                    if (previousGate == null) {
+                        CURRENT_GATE.remove();
+                    } else {
+                        CURRENT_GATE.set(previousGate);
+                    }
+                    if (previousDeferred == null) {
+                        CURRENT_RELEASE_DEFERRED.remove();
+                    } else {
+                        CURRENT_RELEASE_DEFERRED.set(previousDeferred);
+                    }
                 }
-            } catch (RuntimeException error) {
-                result.completeExceptionally(error);
-                gate.complete(null);
-            } finally {
-                if (previous == null) {
-                    CURRENT.remove();
-                } else {
-                    CURRENT.set(previous);
-                }
-                if (previousGate == null) {
-                    CURRENT_GATE.remove();
-                } else {
-                    CURRENT_GATE.set(previousGate);
-                }
-                if (previousDeferred == null) {
-                    CURRENT_RELEASE_DEFERRED.remove();
-                } else {
-                    CURRENT_RELEASE_DEFERRED.set(previousDeferred);
-                }
-            }
-        });
+            });
+        } catch (RuntimeException rejected) {
+            result.completeExceptionally(rejected);
+            gate.complete(null);
+        }
         return gate;
     }
 
@@ -800,43 +899,52 @@ public final class ZLinkAsyncSerialQueue {
         });
         if (!queue.releaseOnIncompleteStage) {
             CompletableFuture<Void> gate = turn.gate;
-            stage.whenComplete((value, error) -> queue.executor.execute(() -> {
-                ZLinkAsyncSerialQueue previous = CURRENT.get();
-                CompletableFuture<Void> previousGate = CURRENT_GATE.get();
-                CURRENT.set(queue);
-                if (gate == null) {
-                    CURRENT_GATE.remove();
-                } else {
-                    CURRENT_GATE.set(gate);
+            stage.whenComplete((value, error) -> {
+                try {
+                    queue.executor.execute(() -> {
+                        ZLinkAsyncSerialQueue previous = CURRENT.get();
+                        CompletableFuture<Void> previousGate = CURRENT_GATE.get();
+                        CURRENT.set(queue);
+                        if (gate == null) {
+                            CURRENT_GATE.remove();
+                        } else {
+                            CURRENT_GATE.set(gate);
+                        }
+                        try (var serial = systems.zlink.framework.runtime.internal.handlers
+                                 .ZLinkSuspendInvocationContext.enterSerialExecutionTurn(
+                                     serialContext);
+                             var actor = systems.zlink.framework.runtime.internal.handlers
+                                 .ZLinkSuspendInvocationContext.enterActorDispatch(actorDispatch);
+                             var execution = systems.zlink.framework.runtime.internal.handlers
+                                 .ZLinkSuspendInvocationContext.enterApplicationExecution(application);
+                             ZLinkFlowContext.Scope ignored = flow == null
+                                 ? () -> { }
+                                 : ZLinkFlowContext.enter(flow)) {
+                            if (error != null) {
+                                managed.completeExceptionally(error);
+                            } else {
+                                managed.complete(value);
+                            }
+                        } finally {
+                            if (previous == null) {
+                                CURRENT.remove();
+                            } else {
+                                CURRENT.set(previous);
+                            }
+                            if (previousGate == null) {
+                                CURRENT_GATE.remove();
+                            } else {
+                                CURRENT_GATE.set(previousGate);
+                            }
+                        }
+                    });
+                } catch (RuntimeException rejected) {
+                    managed.completeExceptionally(rejected);
+                    if (gate != null) {
+                        gate.complete(null);
+                    }
                 }
-                try (var serial = systems.zlink.framework.runtime.internal.handlers
-                         .ZLinkSuspendInvocationContext.enterSerialExecutionTurn(
-                             serialContext);
-                     var actor = systems.zlink.framework.runtime.internal.handlers
-                         .ZLinkSuspendInvocationContext.enterActorDispatch(actorDispatch);
-                     var execution = systems.zlink.framework.runtime.internal.handlers
-                         .ZLinkSuspendInvocationContext.enterApplicationExecution(application);
-                     ZLinkFlowContext.Scope ignored = flow == null
-                         ? () -> { }
-                         : ZLinkFlowContext.enter(flow)) {
-                    if (error != null) {
-                        managed.completeExceptionally(error);
-                    } else {
-                        managed.complete(value);
-                    }
-                } finally {
-                    if (previous == null) {
-                        CURRENT.remove();
-                    } else {
-                        CURRENT.set(previous);
-                    }
-                    if (previousGate == null) {
-                        CURRENT_GATE.remove();
-                    } else {
-                        CURRENT_GATE.set(previousGate);
-                    }
-                }
-            }));
+            });
             return managed;
         }
         queue.suspendContinuation();
@@ -865,10 +973,20 @@ public final class ZLinkAsyncSerialQueue {
                 continuation.whenComplete((ignored, continuationFailure) -> {
                     if (continuationFailure != null) {
                         managed.completeExceptionally(continuationFailure);
+                        // A suspended managed turn has no continuation left
+                        // to release its gate after admission failure. Release
+                        // the original turn so the queue cannot remain active
+                        // forever when relocation/capacity closes the lane.
+                        if (turn.gate != null) {
+                            turn.gate.complete(null);
+                        }
                     }
                 });
             } catch (RuntimeException continuationFailure) {
                 managed.completeExceptionally(continuationFailure);
+                if (turn.gate != null) {
+                    turn.gate.complete(null);
+                }
             }
         });
         return managed;
@@ -955,7 +1073,7 @@ public final class ZLinkAsyncSerialQueue {
         reserve(Lane.APPLICATION, fixedWorkByteCost);
         Entry continuation = new Entry(
             nextSequence++,
-            null,
+            (byte[]) null,
             operation,
             () -> { },
             new CompletableFuture<>(),
@@ -1171,7 +1289,8 @@ public final class ZLinkAsyncSerialQueue {
 
     private static final class Entry {
         private final long sequence;
-        private final byte[] record;
+        private byte[] record;
+        private final Supplier<byte[]> lazyRecord;
         private final Supplier<CompletionStage<Void>> operation;
         private final Runnable relocationRelease;
         private final CompletableFuture<Void> result;
@@ -1194,6 +1313,7 @@ public final class ZLinkAsyncSerialQueue {
             boolean continuation) {
             this.sequence = sequence;
             this.record = record;
+            this.lazyRecord = null;
             this.operation = operation;
             this.relocationRelease = relocationRelease;
             this.result = result;
@@ -1204,7 +1324,40 @@ public final class ZLinkAsyncSerialQueue {
             this.continuation = continuation;
         }
 
-        private QueuedRecord queuedRecord() {
+        private Entry(
+            long sequence,
+            Supplier<byte[]> lazyRecord,
+            Supplier<CompletionStage<Void>> operation,
+            Runnable relocationRelease,
+            CompletableFuture<Void> result,
+            ZLinkFlowContext.State flow,
+            RelocationBoundary relocationBoundary,
+            Lane lane,
+            long byteCost,
+            boolean continuation) {
+            this.sequence = sequence;
+            this.record = null;
+            this.lazyRecord = java.util.Objects.requireNonNull(
+                lazyRecord, "lazyRecord");
+            this.operation = operation;
+            this.relocationRelease = relocationRelease;
+            this.result = result;
+            this.flow = flow;
+            this.relocationBoundary = relocationBoundary;
+            this.lane = lane;
+            this.byteCost = byteCost;
+            this.continuation = continuation;
+        }
+
+        private boolean hasRelocationRecord() {
+            return record != null || lazyRecord != null;
+        }
+
+        private synchronized QueuedRecord queuedRecord() {
+            if (record == null) {
+                record = java.util.Objects.requireNonNull(
+                    lazyRecord.get(), "relocation record supplier returned null");
+            }
             return new QueuedRecord(sequence, record);
         }
     }

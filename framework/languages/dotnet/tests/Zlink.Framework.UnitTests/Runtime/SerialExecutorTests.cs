@@ -833,6 +833,32 @@ public sealed class SerialExecutorTests
     }
 
     [Fact]
+    public async Task SerialExecutionQueue_Closes_Only_New_Application_Admission()
+    {
+        await using var queue = CreateQueue(CancellationToken.None);
+
+        queue.CloseApplicationAdmission();
+
+        Assert.Equal(
+            ZLinkSerialPostAdmission.Closed,
+            queue.TryPostApplicationWithAdmission(
+                static _ => ValueTask.CompletedTask,
+                out _));
+        Assert.Equal(
+            ZLinkAcceptedWorkAdmission.Closed,
+            queue.TryPostAccepted(
+                ReadOnlyMemory<byte>.Empty,
+                static _ => ValueTask.CompletedTask,
+                static () => { },
+                out _));
+        Assert.Equal(
+            ZLinkSerialPostAdmission.Accepted,
+            queue.TryPostNextWithAdmission(
+                static _ => ValueTask.CompletedTask,
+                out _));
+    }
+
+    [Fact]
     public async Task SerialExecutionQueue_Reserves_Count_And_Bytes_Per_Lane()
     {
         await using var queue = new ZLinkSerialExecutionQueue(

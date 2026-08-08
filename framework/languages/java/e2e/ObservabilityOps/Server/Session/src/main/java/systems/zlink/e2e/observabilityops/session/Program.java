@@ -97,14 +97,10 @@ public final class Program {
             options.addRelocationStore(relocationStore);
             options.addHandlersFromPackageOf(ScenarioReqHandler.class);
             options.addHandlersFromPackageOf(ForceReconnectSessionHandler.class);
-            var dispatch = options.configureDispatch()
+            options.configureDispatch()
                 .messageFlow("off".equals(config.messageFlow())
                     ? ZLinkMessageFlowLogMode.OFF
-                    : ZLinkMessageFlowLogMode.KEY_TRANSITIONS);
-            if (!"off".equals(config.messageFlow())) {
-                dispatch.traceLogFile(config.logDir() + "/session-flow.log")
-                    .traceLabel("java-observability-session");
-            }
+                    : ZLinkMessageFlowLogMode.NORMAL);
             ZLinkMeshNodeBuilder mesh = options.addRouteMesh(Contracts.SPOT_MESH)
                 .listen(config.sessionRouteEndpoint())
                 .setRoutingId(RoutingId.from("session-a"))

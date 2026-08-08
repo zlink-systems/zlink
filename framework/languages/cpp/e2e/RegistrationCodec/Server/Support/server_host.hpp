@@ -237,9 +237,7 @@ inline void configure_framework (zlink::framework::zlink_framework_options_t &op
                                  const server_options_t &server)
 {
     options.configure_dispatch ()
-      .message_flow (zlink::framework::message_flow_log_mode_t::key_transitions)
-      .trace_log_file (server.log_dir + "/server-flow.log")
-      .trace_label ("cpp-rc-server");
+      .message_flow (zlink::framework::message_flow_log_mode_t::normal);
     if (!server.invalid_mode.empty ()) {
         configure_invalid (options, server.invalid_mode, server.api_endpoint);
         return;

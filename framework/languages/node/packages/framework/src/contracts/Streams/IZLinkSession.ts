@@ -8,6 +8,7 @@ export interface ZLinkSession {
   onConnected?(context: ZLinkSessionContext): Promise<void>;
   onDisconnected?(context: ZLinkSessionContext): Promise<void>;
   onError?(context: ZLinkSessionContext, error: ZLinkStreamError): Promise<void>;
+  onActorBindingReplaced?(context: ZLinkSessionContext, actorId: string): Promise<void>;
   onDispatch?(dispatch: ZLinkSessionDispatchContext, payload: ZLinkMessage): Promise<void>;
 }
 

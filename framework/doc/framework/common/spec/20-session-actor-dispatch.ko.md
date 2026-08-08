@@ -150,28 +150,53 @@ owner-local binding generation을 함께 사용한다. Binding generation의 대
 owner가 재시작하면 owner-local counter가 이전 값보다 작더라도 새로운 lifecycle
 identity로 등록할 수 있다.
 
-Rebind는 새 identity를 Actor owner와 session owner 양쪽에 등록한 뒤 이전 exact binding에 disconnect
-callback을 최대 한 번 전달하고 이전 identity를 무효화한다. Unbind와 disconnect는 callback terminal 뒤
-`boundSessionBind(38)`의 tombstone transition으로 정확히 해당하는 이전 identity만 제거한다. 이전 owner lifecycle에서 늦게 도착한
+Rebind는 새 identity를 Actor owner에 먼저 등록하고, 성공 reply를 받은 새 session owner가 새 route를
+저장한다. Actor owner의 등록이 끝나는 시점부터 Actor에는 새 session 하나만 current binding으로 존재한다.
+이전 session의 ingress는 이전 binding generation이므로 거부하며, Actor에서 session으로 보내는 push는 새
+session으로만 전달한다. 새 bind의 terminal은 새 session owner가 route를 저장하면 반환하며 이전 session의
+응답, callback 또는 연결 종료를 기다리지 않는다.
+
+Framework는 교체된 이전 exact binding에 `boundSessionReplaced(51)` one-way record를 최대 한 번 적용한다.
+Record는 Actor authority source fence와 이전 session owner의 Node RID·lifecycle generation·owner ID·owner lease
+generation·session RID·retired binding generation을 함께 전달한다. 보내는 node는 record의 Actor authority target과
+일치해야 한다. 받는 node는 이전 session owner identity의 모든 값이 현재 교체 대상과 일치할 때만 session의 Actor
+중복 연결 callback을 실행한다. Actor authority source fence는 받는 node가 local Actor를 찾는 용도로 사용하지 않는다. Callback은
+application이 client에 중복 연결 안내를 보낼 수 있는 마지막 lifecycle turn이다. Application은 callback에서
+연결 종료를 직접 요청하지 않는다. 이전 session은 callback을 시작하기 전에 closing 상태로 전이하여 새로운
+inbound application dispatch를 받지 않으며 callback에서 제출하는 outbound send는 허용한다. Callback이 성공 또는 실패로 terminal이 되면 Framework는 `100 ms` 뒤 이전
+connection을 종료하는 non-blocking timer를 예약하고 callback turn을 즉시 반환한다. `sleep`, blocking wait 또는
+session serial lane·worker 점유로 100 ms를 기다리지 않는다. Timer callback은 예약할 때 저장한 exact session
+owner lifecycle·session RID·retired binding generation이 여전히 교체 대상인지 다시 확인한 뒤 close한다.
+Outbound queue가 먼저 비어도 이 시간을 줄이지 않는다. Callback이 lifecycle deadline
+안에 terminal이 되지 않으면 Framework는 deadline에서 이전 connection을 강제로 종료한다.
+
+이전 session 통지의 전송 실패, callback 실패와 연결 종료 지연은 제한된 diagnostics로 기록하지만 새 binding을
+복원하거나 제거하지 않는다. 전송 admission이 실패하면 exact retired identity별 bounded asynchronous retry를
+수행하되 bind terminal을 지연시키지 않는다. 이전 owner에 끝내 도달할 수 없으면 physical close는 해당 owner의
+일반 connection liveness와 shutdown에 맡기며 새 binding을 rollback하지 않는다. 통지가 전달되지 않더라도 이전 binding generation의 ingress는 Actor owner에서
+계속 거부한다. 늦거나 중복된 `boundSessionReplaced(51)`는 exact retired identity에만 적용하며 새 session을
+종료하지 않는다. Unbind와 일반 disconnect는 callback terminal 뒤 `boundSessionBind(38)`의 tombstone
+transition으로 정확히 해당하는 이전 identity만 제거한다. 이전 owner lifecycle에서 늦게 도착한
 push·ingress·close, 이전 Actor `ObjectGeneration`, 이전 authority owner와 재시작 전
 `NodeGeneration`은 current binding이나 connection에 적용하지 않는다. 형식이 잘못된
 control 및 one-way record는 application queue에 넣지 않으며 one-way record에는 별도
 terminal route를 만들지 않는다.
+
+같은 physical session이 이미 current인 exact binding을 다시 제출하면 idempotent 성공으로 끝내고
+`boundSessionReplaced(51)`를 자신에게 보내거나 connection을 닫지 않는다. 이전 session의 connection을 닫을 때는
+그 session에 남은 다른 Actor binding도 일반 physical disconnect 절차로 각각 한 번 정리한다. 이 cleanup이
+교체된 Actor의 새 binding identity를 제거해서는 안 된다.
 
 같은 `ObjectGeneration`을 유지하는 Actor relocation의 route와 current location snapshot
 갱신은 새 binding identity를 만들지 않으며 rebind가 아니다. Destroy 뒤 같은 ActorId로
 새 `ObjectGeneration`이 만들어지면 이전 binding은 유효하지 않으므로 application이 새
 `ActorRef`를 명시적으로 bind해야 한다.
 
-다른 owner나 다른 Actor generation으로 rebind할 때 새 Actor owner는 새 identity를
-등록한 뒤 이전 exact binding route에 disconnect notification을 제출한다. 이전 callback이 실패하거나
-deadline을 넘으면 제한된 diagnostics를 기록하지만 이전 binding을 복원하거나 새 identity를 제거하지 않고
-tombstone을 계속 제출한다. 이전 owner가 tombstone을 확인한 뒤에만 새 owner가 bind terminal reply를 반환한다. Session owner는 이 reply를
-받기 전까지 기존 binding route를 유지하고, reply를 받은 뒤 새 route로 atomic하게
-교체한다. Tombstone 제출이 실패하거나 취소되면 새 bind는 terminal 성공이 아니며
-Session owner의 기존 binding도 바뀌지 않는다. 같은 owner에서 새 identity가 이전
-identity를 이미 atomic하게 대체한 경우에는 이전 identity tombstone이 새 identity를
-제거하지 않는다.
+다른 owner나 다른 Actor generation으로 rebind할 때도 새 Actor owner는 새 identity를 atomic하게 등록하고
+bind terminal reply를 반환한다. 그 뒤 이전 exact binding route에 `boundSessionReplaced(51)`를 one-way로
+보낸다. 이전 owner의 처리 완료를 확인하는 ACK나 request/reply는 만들지 않는다. Session owner는 성공 reply를
+받으면 새 route로 교체하며, 새 bind 자체가 실패한 경우에만 기존 binding route를 유지한다. 같은 owner에서
+새 identity가 이전 identity를 이미 대체한 경우에도 늦은 통지나 tombstone이 새 identity를 제거하지 않는다.
 
 Target에 exact Actor가 없고 active committed Message Follow route가 있으면 original bind control request와 reply
 route를 해당 route의 target으로 relay한다. Message Follow route가 없거나 만료됐으면 `Unavailable`, 같은 ActorId의

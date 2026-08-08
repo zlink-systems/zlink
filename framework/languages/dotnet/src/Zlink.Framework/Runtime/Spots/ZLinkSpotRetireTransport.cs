@@ -4,6 +4,7 @@ using System.Buffers.Binary;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Zlink.Framework.Runtime.Identifiers;
 
 namespace Zlink.Framework.Runtime.Spots;
 
@@ -3444,7 +3445,7 @@ internal sealed record TargetStage(
     ZLinkSpotRelocationSeal TargetAdmissionSeal,
     IDisposable InboundPermit,
     ZLinkPreparedAggregateRelocation? PreparedAggregate,
-    IReadOnlyDictionary<string, ulong>
+    IReadOnlyDictionary<ZLinkActorId, ulong>
         ActorTargetAuthorityOwnerGenerations,
     ulong SourceAuthorityOwnerGeneration,
     ulong TargetAuthorityOwnerGeneration,
@@ -3482,6 +3483,10 @@ internal sealed record TargetStage(
     }
 
     internal ulong TargetActorAuthorityOwnerGeneration(string actorId) =>
+        TargetActorAuthorityOwnerGeneration(
+            ZLinkActorId.FromBoundary(actorId, nameof(actorId)));
+
+    internal ulong TargetActorAuthorityOwnerGeneration(ZLinkActorId actorId) =>
         ActorTargetAuthorityOwnerGenerations.TryGetValue(
             actorId,
             out var generation)
@@ -3497,9 +3502,9 @@ internal sealed record TargetStage(
             return TargetAuthorityOwnerGeneration;
         var actor = ActorTargetAuthorityOwnerGenerations.SingleOrDefault(
             candidate =>
-                ZLinkActorAuthorityPayloadCodec.AuthorityKey(candidate.Key)
+                ZLinkActorAuthorityPayloadCodec.AuthorityKey(candidate.Key.Value)
                 == participant.AuthorityKey);
-        return actor.Key is not null
+        return actor.Key != default
             ? actor.Value
             : throw new ZLinkRelocationDataLostException(
                 $"Actor authority '{participant.AuthorityKey.Value}' does not have a prepared target generation.");

@@ -18,6 +18,7 @@ int main (int argc, char **argv)
     const auto options = sf_consumer::read_consumer_options (app, argc, argv);
     app.logging ()
       .use_file (options.log_dir + "/" + options.rid + ".log")
+      .use_file (options.log_dir + "/" + options.rid + "-flow.log")
       .set_min_level (zlink::framework::log_level_t::debug);
     app.add_zlink_framework ([&] (zlink::framework::zlink_framework_options_t &framework) {
         auto socket_evidence = std::make_unique<sf_consumer::socket_evidence_store_t> ();
@@ -25,9 +26,7 @@ int main (int argc, char **argv)
         framework.services ().add_singleton<sf_consumer::socket_evidence_store_t> (
           std::move (socket_evidence));
         framework.configure_dispatch ()
-          .message_flow (zlink::framework::message_flow_log_mode_t::key_transitions)
-          .trace_log_file (options.log_dir + "/" + options.rid + "-flow.log")
-          .trace_label ("cpp-store-failure-" + options.rid);
+          .message_flow (zlink::framework::message_flow_log_mode_t::normal);
         sf::server::add_redis_location_store (framework, options);
         framework.add_client_server_channel (sf::api_channel).client ();
         app.logging ().use_callback_sink (

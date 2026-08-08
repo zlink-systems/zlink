@@ -48,6 +48,7 @@ import {
   REMOTE_ACTOR_JOIN_COMMIT,
   ZLINK_REMOTE_ACTOR_SOURCE_LEAVE_TERMINAL
 } from './actor-remote-wire';
+import { encodeFrameworkActorJoinPayload } from '../messaging/actor-join-payload-codec';
 
 export interface ZLinkLocalNativeActorJoinOptions {
   readonly postCommitLocation?: ZLinkPostCommitActorLocation;
@@ -94,7 +95,7 @@ export class ZLinkLocalNativeActorJoin {
     let admissionReply: Message | undefined;
     let abortAdmission: (() => Promise<void>) | undefined;
     const commitState = { attempted: false };
-    let requestPayload = Buffer.from(request.data());
+    let requestPayload = encodeFrameworkActorJoinPayload(request);
     const actorType = state.actorType;
     if (remote && (actorType === undefined || this.options.sourceTransfer === undefined)) {
       throw createInternalFrameworkException(
@@ -426,7 +427,7 @@ export class ZLinkLocalNativeActorJoin {
     let admissionReply: Message | undefined;
     let abortAdmission: (() => Promise<void>) | undefined;
     const commitState = { attempted: false };
-    let requestPayload = Buffer.from(request.data());
+    let requestPayload = encodeFrameworkActorJoinPayload(request);
     if (remote) {
       const actorType = state.actorType;
       if (actorType === undefined || this.options.sourceTransfer === undefined) {

@@ -22,7 +22,6 @@ import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore;
 import systems.zlink.framework.spring.EnableZLinkFramework;
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer;
-import systems.zlink.samples.shoppingmall.server.configuration.SampleFlowLog;
 import systems.zlink.samples.shoppingmall.server.configuration.SampleLocationStore;
 import systems.zlink.samples.shoppingmall.server.configuration.SampleNames;
 import systems.zlink.samples.shoppingmall.server.configuration.SampleTopology;
@@ -66,9 +65,7 @@ public final class Program {
             options.configureLocations();
             options.addLocationStore(SampleLocationStore.create(topology));
             options.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile(SampleFlowLog.path(api.logDirectory(), api.instanceName()))
-                .traceLabel(api.instanceName());
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             options.addRouteMesh(SampleNames.OrderSpotDiscovery)
                 .setRoutingIdPrefix("shoppingmall-api")
                 .listen()

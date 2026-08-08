@@ -28,7 +28,6 @@ internal sealed partial class ZLinkFrameworkRuntime
         InstanceSpotIntentAddress address,
         CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(address);
         ZLinkSpotId.RequireCallerProvided(
             address.SpotId,
             nameof(address.SpotId));
@@ -75,7 +74,6 @@ internal sealed partial class ZLinkFrameworkRuntime
             DateTimeOffset deadline,
             CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(address);
         var rows = Services.GetService(typeof(ZLinkStoreLocationResolvers))
             as ZLinkStoreLocationResolvers;
         var store = Registration.Locations.ResolveStore()

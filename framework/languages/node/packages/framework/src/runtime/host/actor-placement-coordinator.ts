@@ -157,7 +157,8 @@ export class ZLinkActorPlacementCoordinator {
         ) {
           throw createInternalFrameworkException(
             ZLinkFrameworkInternalErrorKind.ActorCreateFailed,
-            `Remote Actor '${actorId}' creation failed.`,
+            `Remote Actor '${actorId}' creation failed with result ${remote.terminalResult}, `
+              + `failure code ${remote.failureCode}, and tail ${remote.tail?.kind ?? 'none'}.`,
             remote.terminalResult !== RequestResult.InvalidState
           );
         }
@@ -243,45 +244,59 @@ export class ZLinkActorPlacementCoordinator {
       pending.requestSha256,
       pending.requestEncodedSize
     );
-    const local = await materialize(requestPayload, current, signal);
-    const terminal = encodeActorTerminal(
-      record.correlation,
-      local.result,
-      local.actor
-    );
-    const completion = await this.options.store.completeCreation({
-      key,
-      reservationId: record.reservation.reservationId,
-      expectedStoreVersion: current.storeVersion.value,
-      target: {
-        meshName: current.allocation.descriptor.meshName,
-        nodeRid: current.allocation.descriptor.rid,
-        nodeLifecycleGeneration: current.allocation.descriptorLifecycleGeneration,
-        owner: {
-          ownerId: current.ownerId,
-          leaseGeneration: current.ownerLeaseGeneration
-        }
-      },
-      completion: local.result === 'created'
-        ? {
-            kind: 'created',
-            readyPayload: encodeActorAuthorityIdentity({
-              actorType: record.stableType,
-              actor: local.actor!,
-              meshName: current.allocation.descriptor.meshName,
-              ownerNodeGeneration: current.allocation.descriptorLifecycleGeneration,
-              owner: {
-                ownerId: current.ownerId,
-                leaseGeneration: current.ownerLeaseGeneration
-              }
-            }),
-            terminal: terminalPublication(record, terminal)
-          }
-        : {
-            kind: 'rejected',
-            terminal: terminalPublication(record, terminal)
-          }
-    }, signal);
+    let local: Awaited<ReturnType<typeof materialize>>;
+    let completion: Awaited<ReturnType<ZLinkObjectCreationStore['completeCreation']>>;
+    try {
+      local = await materialize(requestPayload, current, signal);
+      const terminal = encodeActorTerminal(
+        record.correlation,
+        local.result,
+        local.actor
+      );
+      completion = await this.options.store.completeCreation({
+        key,
+        reservationId: record.reservation.reservationId,
+        expectedStoreVersion: current.storeVersion.value,
+        target: creationTarget(current),
+        completion: local.result === 'created'
+          ? {
+              kind: 'created',
+              readyPayload: encodeActorAuthorityIdentity({
+                actorType: record.stableType,
+                actor: local.actor!,
+                meshName: current.allocation.descriptor.meshName,
+                ownerNodeGeneration: current.allocation.descriptorLifecycleGeneration,
+                owner: {
+                  ownerId: current.ownerId,
+                  leaseGeneration: current.ownerLeaseGeneration
+                }
+              }),
+              terminal: terminalPublication(record, terminal)
+            }
+          : {
+              kind: 'rejected',
+              terminal: terminalPublication(record, terminal)
+            }
+      }, signal);
+    } catch (error) {
+      const cleanup = createDeadline(1_000);
+      try {
+        await this.options.store.abort({
+          key,
+          reservationId: record.reservation.reservationId,
+          expectedStoreVersion: current.storeVersion.value,
+          target: creationTarget(current)
+        }, cleanup.signal);
+      } catch (cleanupError) {
+        throw new AggregateError(
+          [error, cleanupError],
+          `Actor '${record.actorId}' creation and reservation rollback both failed.`
+        );
+      } finally {
+        cleanup.close();
+      }
+      throw error;
+    }
     if (
       local.result === 'created'
         ? completion.kind !== 'created' && completion.kind !== 'alreadyCompleted'
@@ -295,6 +310,18 @@ export class ZLinkActorPlacementCoordinator {
     if (local.result === 'created') local.onPublished?.();
     return actorResult(local.result, local.actor, local.reply);
   }
+}
+
+function creationTarget(snapshot: ZLinkAuthoritySnapshot) {
+  return {
+    meshName: snapshot.allocation.descriptor.meshName,
+    nodeRid: snapshot.allocation.descriptor.rid,
+    nodeLifecycleGeneration: snapshot.allocation.descriptorLifecycleGeneration,
+    owner: {
+      ownerId: snapshot.ownerId,
+      leaseGeneration: snapshot.ownerLeaseGeneration
+    }
+  };
 }
 
 function existingActor(

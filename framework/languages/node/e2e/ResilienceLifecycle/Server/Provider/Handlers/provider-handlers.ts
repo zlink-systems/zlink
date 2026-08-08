@@ -1,11 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import type {
-  ZLinkMessageFlowEvent,
-  ZLinkMessageFlowObserver,
   ZLinkMessageContext,
   ZLinkRequestHandler,
-  ZLinkRuntimeErrorEvent,
-  ZLinkRuntimeErrorSink,
   ZLinkSendHandler
 } from '@zlink-systems/framework';
 import type {
@@ -16,6 +12,7 @@ import type {
   ProfileReq
 } from '../../../Shared/messages';
 import { sha256Hex } from '../../../Shared/messages';
+import { setE2eTelemetryLogReceiver } from '../../../Shared/telemetry-log-provider';
 import { EvidenceStore } from '../Infrastructure/evidence-store';
 import { FaultState } from '../Infrastructure/fault-state';
 
@@ -75,47 +72,25 @@ export class PayloadRequestHandler implements ZLinkRequestHandler<PayloadReq, Pa
   }
 }
 
-@Injectable()
-export class EvidenceDispatchErrorObserver implements ZLinkMessageFlowObserver {
-  constructor(
-    private readonly evidence: EvidenceStore,
-    private readonly fault: FaultState
-  ) {}
-
-  onMessageFlow(flow: ZLinkMessageFlowEvent): void {
-    if (flow.outcome !== 'failed') {
-      return;
-    }
-    this.evidence.add(
+export function captureDispatchErrors(evidence: EvidenceStore, fault: FaultState): void {
+  setE2eTelemetryLogReceiver((record) => {
+    if (record.eventId !== 'zlink.dispatch_error') return;
+    const fields = record.attributes;
+    evidence.add(
       'dispatch-error'
       + '|outcome=failed'
-      + `|surface=${flow.surface}`
-      + `|kind=${flow.messageKind}`
-      + `|reason=${flow.reason}`
-      + `|action=${flow.action}`
-      + `|packet_name=${flow.packetName ?? '<null>'}`
-      + `|channel=${flow.channelName ?? '<null>'}`
+      + `|surface=${fields.surface}`
+      + `|kind=${fields.message_kind}`
+      + `|reason=${fields.reason}`
+      + `|action=${fields.action}`
+      + `|packet_name=${fields.packet_name ?? '<null>'}`
+      + `|channel=${fields.channel_name ?? '<null>'}`
     );
-    if (this.fault.mode === 'observer-throws') {
-      throw new Error('dispatch observer failure');
+    if (fault.mode === 'observer-throws') {
+      evidence.add('telemetry-provider-failure|source=logger|event_id=zlink.dispatch_error');
+      throw new Error('telemetry logger provider failure');
     }
-  }
-}
-
-@Injectable()
-export class EvidenceRuntimeErrorSink implements ZLinkRuntimeErrorSink {
-  constructor(private readonly evidence: EvidenceStore) {}
-
-  onRuntimeError(error: ZLinkRuntimeErrorEvent): void {
-    this.evidence.add(
-      'runtime-error'
-      + `|event_id=${error.eventId}`
-      + `|kind=${error.kind}`
-      + `|source=${error.source}`
-      + `|reason=${error.reason}`
-      + `|fields=${Object.keys(error).sort().join(',')}`
-    );
-  }
+  });
 }
 
 function delay(milliseconds: number): Promise<void> {

@@ -30,18 +30,9 @@ import systems.zlink.framework.handlers.ZLinkPacket;
 import systems.zlink.framework.handlers.ZLinkPublish;
 import systems.zlink.framework.ZLinkHandlerFilter;
 import systems.zlink.framework.ZLinkHandlerFilterContext;
-import systems.zlink.framework.runtime.diagnostics.ZLinkDispatchErrorReporter;
-import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.messaging.ZLinkJsonMessageSerializer;
 import systems.zlink.framework.ZLinkHandlerFilterNext;
 import systems.zlink.framework.ZLinkMessageContext;
-import systems.zlink.framework.configuration.ZLinkDispatchErrorAction;
-import systems.zlink.framework.configuration.ZLinkDispatchErrorReason;
-import systems.zlink.framework.configuration.ZLinkDispatchErrorSurface;
-import systems.zlink.framework.configuration.ZLinkDispatchMessageKind;
-import systems.zlink.framework.configuration.ZLinkDispatchFailure;
-import systems.zlink.framework.configuration.ZLinkMessageFlowEvent;
-import systems.zlink.framework.configuration.ZLinkMessageFlowObserver;
 import systems.zlink.framework.configuration.ZLinkUnhandledDispatchAction;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
@@ -305,118 +296,6 @@ final class DefaultZLinkFrameworkOptionsTest {
         { var dispatch = options.configureDispatch(); dispatch.traceSampleRate(1.1d); };
 
         assertThrows(ZLinkConfigurationException.class, options::validate);
-    }
-
-    @Test
-    void configureDispatchRegistersMessageFlowObserver() {
-        DefaultZLinkFrameworkOptions byType = new DefaultZLinkFrameworkOptions();
-        { var dispatch = byType.configureDispatch();
-            dispatch.setMessageFlowObserver(TestMessageFlowObserver.class); };
-
-        assertEquals(
-            TestMessageFlowObserver.class,
-            byType.registration().dispatchOptions().messageFlowObserverType());
-
-        DefaultZLinkFrameworkOptions byInstance = new DefaultZLinkFrameworkOptions();
-        TestMessageFlowObserver observer = new TestMessageFlowObserver();
-        { var dispatch = byInstance.configureDispatch();
-            dispatch.setMessageFlowObserver(observer); };
-
-        assertEquals(
-            observer,
-            byInstance.registration().dispatchOptions().messageFlowObserver());
-    }
-
-    @Test
-    void dispatchErrorReporterIsolatesObserverFailures() {
-        ZLinkDispatchFailure error = new ZLinkDispatchFailure(
-            ZLinkDispatchErrorSurface.CHANNEL,
-            ZLinkDispatchMessageKind.REQUEST,
-            ZLinkDispatchErrorReason.HANDLER_MISSING,
-            ZLinkDispatchErrorAction.REPLY_ERROR,
-            "missing",
-            "profile",
-            null,
-            null,
-            null,
-            null,
-            "corr-1",
-            null,
-            null);
-
-        DefaultZLinkFrameworkOptions callbackFailure = new DefaultZLinkFrameworkOptions();
-        { var dispatch = callbackFailure.configureDispatch();
-            dispatch.setMessageFlowObserver(new ThrowingMessageFlowObserver()); };
-        ZLinkDispatchErrorReporter callbackReporter = new ZLinkDispatchErrorReporter(
-            callbackFailure.registration().dispatchOptions(),
-            ZLinkHandlerActivator.reflection(),
-            Runnable::run);
-
-        assertDoesNotThrow(() -> callbackReporter.report(error));
-        assertEquals(1, callbackReporter.reportedCount());
-        assertEquals(1, callbackReporter.observerFailureCount());
-
-        DefaultZLinkFrameworkOptions factoryFailure = new DefaultZLinkFrameworkOptions();
-        { var dispatch = factoryFailure.configureDispatch();
-            dispatch.setMessageFlowObserver(TestMessageFlowObserver.class); };
-        ZLinkDispatchErrorReporter factoryReporter = new ZLinkDispatchErrorReporter(
-            factoryFailure.registration().dispatchOptions(),
-            ignored -> { throw new IllegalStateException("factory failed"); },
-            Runnable::run);
-
-        assertDoesNotThrow(() -> factoryReporter.report(error));
-        assertEquals(1, factoryReporter.reportedCount());
-        assertEquals(1, factoryReporter.observerFailureCount());
-
-        DefaultZLinkFrameworkOptions noObserver = new DefaultZLinkFrameworkOptions();
-        ZLinkDispatchErrorReporter noObserverReporter = new ZLinkDispatchErrorReporter(
-            noObserver.registration().dispatchOptions(),
-            ZLinkHandlerActivator.reflection(),
-            Runnable::run);
-        assertDoesNotThrow(() -> noObserverReporter.report(error));
-        assertEquals(1, noObserverReporter.reportedCount());
-        assertEquals(0, noObserverReporter.observerFailureCount());
-    }
-
-    @Test
-    void dispatchErrorReporterDefersObserverConstructionToExecutor() {
-        ZLinkDispatchFailure error = new ZLinkDispatchFailure(
-            ZLinkDispatchErrorSurface.CHANNEL,
-            ZLinkDispatchMessageKind.REQUEST,
-            ZLinkDispatchErrorReason.HANDLER_MISSING,
-            ZLinkDispatchErrorAction.REPLY_ERROR,
-            "missing",
-            "profile",
-            null,
-            null,
-            null,
-            null,
-            "corr-1",
-            null,
-            null);
-        DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
-        { var dispatch = options.configureDispatch();
-            dispatch.setMessageFlowObserver(TestMessageFlowObserver.class); };
-        List<Runnable> queued = new ArrayList<>();
-        AtomicBoolean factoryCalled = new AtomicBoolean(false);
-        ZLinkDispatchErrorReporter reporter = new ZLinkDispatchErrorReporter(
-            options.registration().dispatchOptions(),
-            ignored -> {
-                factoryCalled.set(true);
-                throw new IllegalStateException("factory failed");
-            },
-            queued::add);
-
-        assertDoesNotThrow(() -> reporter.report(error));
-        assertEquals(1, reporter.reportedCount());
-        assertEquals(0, reporter.observerFailureCount());
-        assertEquals(1, queued.size());
-        assertEquals(false, factoryCalled.get());
-
-        queued.get(0).run();
-
-        assertTrue(factoryCalled.get());
-        assertEquals(1, reporter.observerFailureCount());
     }
 
     @Test
@@ -1181,22 +1060,6 @@ final class DefaultZLinkFrameworkOptionsTest {
         ZLinkLocationRepository {
     }
 
-
-    public static final class TestMessageFlowObserver
-        implements ZLinkMessageFlowObserver {
-        @Override
-        public CompletionStage<Void> onMessageFlow(ZLinkMessageFlowEvent error) {
-            return CompletableFuture.completedFuture(null);
-        }
-    }
-
-    public static final class ThrowingMessageFlowObserver
-        implements ZLinkMessageFlowObserver {
-        @Override
-        public CompletionStage<Void> onMessageFlow(ZLinkMessageFlowEvent error) {
-            throw new IllegalStateException("observer failed");
-        }
-    }
 
     public static final class GameSession implements ZLinkSession {
         @Override

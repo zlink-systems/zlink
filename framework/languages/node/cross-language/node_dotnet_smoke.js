@@ -1,5 +1,6 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
+const fsSync = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const net = require('node:net');
@@ -7,6 +8,8 @@ const { spawn } = require('node:child_process');
 const { createClient } = require('redis');
 const { Injectable, Module } = require('@nestjs/common');
 const { NestFactory } = require('@nestjs/core');
+const { logs } = require('@opentelemetry/api-logs');
+const { LoggerProvider } = require('@opentelemetry/sdk-logs');
 
 const zlink = require('@zlink-systems/zlink');
 const framework = require('../packages/framework/dist');
@@ -312,8 +315,8 @@ async function dotnetClientToNodeChannelServer(tempDir) {
   const eventFile = path.join(tempDir, 'dotnet-client-node-channel.events');
   class TestHostProfileRequestHandler {
     async handle(payload) {
-      const value = payload?.Value ?? payload?.value;
-      return { Value: `${value}|node` };
+      const value = payload?.value;
+      return { value: `${value}|node` };
     }
   }
   Injectable()(TestHostProfileRequestHandler);
@@ -370,7 +373,7 @@ async function nodeRouteClientToDotnetRouteServer(tempDir) {
           .listen('inproc://cross-route-node-client')
           .routingId('node-route-client');
         mesh.channel('cross.route').server();
-        mesh.peerConnections().connect(endpoint);
+        mesh.peerConnections().connect(rid('dotnet-route'), endpoint);
         return builder.build();
       }
     })]
@@ -383,6 +386,12 @@ async function nodeRouteClientToDotnetRouteServer(tempDir) {
     ]);
     await host.ready;
     app = await NestFactory.createApplicationContext(RouteClientModule, { logger: false, abortOnError: false });
+    const routeMeshRuntime = app.get(nestjs.ZLINK_ROUTE_MESH_RUNTIME, { strict: false });
+    await waitForCondition(
+      () => routeMeshRuntime.snapshot('cross.route').readyPeerCount > 0,
+      7000,
+      'Node RouteMesh cross.route peer readiness'
+    );
     const client = app.get(nestjs.ZLINK_ROUTE_CLIENT, { strict: false });
     const reply = await client.requestToNode('cross.route', 'dotnet-route', new TestHostRouteRequest('node-route-to-dotnet'))
       .timeout(5000).submit();
@@ -401,8 +410,8 @@ async function dotnetRouteClientToNodeRouteServer(tempDir) {
   const eventFile = path.join(tempDir, 'dotnet-route-node-route.events');
   class TestHostRouteRequestHandler {
     async handle(payload) {
-      const value = payload?.Value ?? payload?.value;
-      return { Value: `${value}|node` };
+      const value = payload?.value;
+      return { value: `${value}|node` };
     }
   }
   Injectable()(TestHostRouteRequestHandler);
@@ -473,6 +482,20 @@ async function dotnetConnectorToNodeStreamServer(tempDir) {
   const endpoint = `tcp://127.0.0.1:${port}`;
   const eventFile = path.join(tempDir, 'dotnet-connector-node-stream.events');
   const flowFile = path.join(tempDir, 'dotnet-connector-node-stream.flow');
+  const loggerProvider = new LoggerProvider({
+    processors: [{
+      onEmit(record) {
+        const fields = record.attributes;
+        fsSync.appendFileSync(
+          flowFile,
+          `packet=${fields.packet_name ?? '<null>'} flow=${fields.flow_id ?? '<null>'} origin=${fields.flow_origin ?? '<null>'}\n`
+        );
+      },
+      forceFlush: async () => undefined,
+      shutdown: async () => undefined
+    }]
+  });
+  logs.setGlobalLoggerProvider(loggerProvider);
   const streamEvents = [];
   class NodeStreamSessionFactory {
     async create(sessionContext) {
@@ -495,9 +518,7 @@ async function dotnetConnectorToNodeStreamServer(tempDir) {
       useFactory: () => {
         const builder = nestjs.zlinkFramework();
         builder.configureDispatch()
-          .messageFlow(framework.ZLinkMessageFlowLogMode.KeyTransitions)
-          .traceLogFile(flowFile)
-          .traceLabel('node-test-host');
+          .messageFlow('normal');
         builder.addStreamNode('cross-language-stream')
           .bind(endpoint)
           .registerSession(NodeStreamSessionFactory);

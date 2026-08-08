@@ -21,6 +21,15 @@ export interface DrainStatus {
   readonly actors?: readonly { readonly actorId: string; readonly nodeRid: string; readonly generation: string }[];
 }
 
+export interface FlowLogRecord {
+  readonly eventId?: string;
+  readonly phase?: string;
+  readonly packet_name?: string;
+  readonly flow_id?: string;
+  readonly flow_origin?: string;
+  readonly [name: string]: unknown;
+}
+
 export function retireCompleted(status: DrainStatus): boolean {
   return status.result?.outcome === 0 && status.result.reason === 0;
 }
@@ -80,11 +89,11 @@ export async function waitForFlow(
   const uuid = /flow=([0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})/;
   return await waitFor(async () => {
     const sets = await Promise.all(clients.map(async (client) => {
-      const log = await readFlowLog(client);
-      return new Set(log.split('\n')
-        .filter((line) => line.includes(`packet=${packetName} `))
-        .map((line) => line.match(uuid)?.[1])
-        .filter((value): value is string => value !== undefined));
+      const records = await readFlowRecords(client);
+      return new Set(records
+        .filter((record) => record.packet_name === packetName)
+        .map((record) => record.flow_id)
+        .filter((value): value is string => typeof value === 'string' && uuid.test(`flow=${value}`)));
     }));
     const first = sets[0] ?? new Set<string>();
     return [...first].find((value) => sets.every((set) => set.has(value))) ?? '';
@@ -93,4 +102,10 @@ export async function waitForFlow(
 
 export async function readFlowLog(client: ZLinkHttpClient): Promise<string> {
   return (await client.get('/flow-log').fetch<{ readonly content: string }>()).content;
+}
+
+export async function readFlowRecords(client: ZLinkHttpClient): Promise<readonly FlowLogRecord[]> {
+  return (await readFlowLog(client)).split('\n')
+    .filter((line) => line.length > 0)
+    .map((line) => JSON.parse(line) as FlowLogRecord);
 }

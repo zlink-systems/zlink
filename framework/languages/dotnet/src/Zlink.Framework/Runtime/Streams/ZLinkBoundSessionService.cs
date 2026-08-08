@@ -1,4 +1,5 @@
 using Systems.Zlink.Stream.Connector.Runtime;
+using Zlink.Framework.Runtime.Identifiers;
 using Zlink.Framework.Runtime.Messaging;
 
 namespace Zlink.Framework.Runtime.Streams;
@@ -7,8 +8,7 @@ internal sealed class ZLinkBoundSessionService(
     ZLinkFrameworkRuntime runtime) : IZLinkBoundSessionService
 {
     private readonly object _submitterGate = new();
-    private readonly Dictionary<string, ZLinkAsyncSubmitter> _submitters =
-        new(StringComparer.Ordinal);
+    private readonly Dictionary<ZLinkMeshName, ZLinkAsyncSubmitter> _submitters = [];
 
     public IZLinkBoundSession Create(string actorId)
     {
@@ -145,7 +145,7 @@ internal sealed class ZLinkBoundSessionService(
             cancellationToken);
     }
 
-    private ZLinkAsyncSubmitter GetSubmitter(string meshName)
+    private ZLinkAsyncSubmitter GetSubmitter(ZLinkMeshName meshName)
     {
         lock (_submitterGate)
         {

@@ -10,6 +10,8 @@ import systems.zlink.contracts.messaging.SendOperation;
 public interface StreamSocket extends Socket {
     void bind(String endpoint);
     void unbind(String endpoint);
+    /** Disconnects the peer identified by its STREAM routing id. */
+    void disconnectRid(RoutingId rid);
     void setRoutingId(RoutingId rid);
     RoutingId getRoutingId();
     SendOperation send(RoutingId rid);

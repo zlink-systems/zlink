@@ -1321,6 +1321,11 @@ channel_outbound_exchange_t::submit_send (std::string channel_name,
           {"send", channel_name, "", call_packet_name, timeout, metadata});
     }
     const auto *client = client_capability (*_state, channel_name);
+    if (client == nullptr || !client->enabled) {
+        return result_t<void>::failure (
+          framework_error_kind_t::not_configured,
+          "ClientServer Client role is not registered for this channel");
+    }
     if (!can_wait_for_client_endpoint (_state, client)) {
         return detail::boundary_failure<void> (detail::boundary_error_t::disconnected,
                                         "channel client is not connected");

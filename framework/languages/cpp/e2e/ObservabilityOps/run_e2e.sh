@@ -96,7 +96,7 @@ trap cleanup EXIT
 launch_role() {
   local binary="$1" node_rid="$2" http="$3" route="$4" peer_route="$5" spot_router="$6" spot_pub="$7" stream="$8"
   local log_dir="${9:-$LOG_DIR}"
-  local trace_mode="${10:-key_transitions}"
+  local trace_mode="${10:-normal}"
   local metrics="${11:-on}"
   local room_timer="${12:-off}"
   local config_path="$CONFIG_DIR/$node_rid-$(date +%s%N).json"
@@ -158,11 +158,11 @@ PY
 
 launch_role "$SESSION_SERVER" session "$SESSION_HTTP" "$SESSION_ROUTE" "$PLAY_A_ROUTE" \
   "$SESSION_SPOT_ROUTER" "$SESSION_SPOT_PUB" "$STREAM_ENDPOINT" \
-  "$LOG_DIR" key_transitions on off
+  "$LOG_DIR" normal on off
 wait_health "$SESSION_HTTP"
 launch_role "$PLAY_SERVER" play-a "$PLAY_A_HTTP" "$PLAY_A_ROUTE" "$PLAY_B_ROUTE" \
   "$PLAY_A_SPOT_ROUTER" "$PLAY_A_SPOT_PUB" "" \
-  "$LOG_DIR" key_transitions on on
+  "$LOG_DIR" normal on on
 wait_health "$PLAY_A_HTTP"
 launch_role "$PLAY_SERVER" play-b "$PLAY_B_HTTP" "$PLAY_B_ROUTE" "$PLAY_A_ROUTE" \
   "$PLAY_B_SPOT_ROUTER" "$PLAY_B_SPOT_PUB" ""
@@ -467,15 +467,15 @@ relaunch_topology() {
   PHASE_LOG_DIR="$LOG_DIR/$phase"
   launch_role "$SESSION_SERVER" session "$SESSION_HTTP" "$SESSION_ROUTE" "$PLAY_A_ROUTE" \
     "$SESSION_SPOT_ROUTER" "$SESSION_SPOT_PUB" "$STREAM_ENDPOINT" \
-    "$PHASE_LOG_DIR" key_transitions on
+    "$PHASE_LOG_DIR" normal on
   wait_health "$SESSION_HTTP"
   launch_role "$PLAY_SERVER" play-a "$PLAY_A_HTTP" "$PLAY_A_ROUTE" "$PLAY_B_ROUTE" \
     "$PLAY_A_SPOT_ROUTER" "$PLAY_A_SPOT_PUB" "" \
-    "$PHASE_LOG_DIR" "${trace_a:-key_transitions}" "${metrics_a:-on}"
+    "$PHASE_LOG_DIR" "${trace_a:-normal}" "${metrics_a:-on}"
   wait_health "$PLAY_A_HTTP"
   launch_role "$PLAY_SERVER" play-b "$PLAY_B_HTTP" "$PLAY_B_ROUTE" "$PLAY_A_ROUTE" \
     "$PLAY_B_SPOT_ROUTER" "$PLAY_B_SPOT_PUB" "" \
-    "$PHASE_LOG_DIR" key_transitions on
+    "$PHASE_LOG_DIR" normal on
   wait_health "$PLAY_B_HTTP"
   launch_role "$ORDER_WORKFLOW_SERVER" workflow-a "$WORKFLOW_A_HTTP" "$WORKFLOW_A_ROUTE" \
     "$WORKFLOW_B_ROUTE" "$WORKFLOW_A_SPOT_ROUTER" "$WORKFLOW_A_SPOT_PUB" "" \

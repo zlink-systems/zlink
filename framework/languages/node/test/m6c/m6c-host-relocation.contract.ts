@@ -15,8 +15,12 @@ import {
   ZLinkTimerOverrunPolicy,
   ZLinkUserSpotExecutionMode
 } from '../../packages/framework/src/contracts';
-import { ZLinkHostServiceRelocationRuntime } from '../../packages/framework/src/runtime/host/service-relocation-host-runtime';
 import {
+  createServiceRelocationId,
+  ZLinkHostServiceRelocationRuntime
+} from '../../packages/framework/src/runtime/host/service-relocation-host-runtime';
+import {
+  encodeServiceRelocationControlRequest,
   type ZLinkServiceRelocationControlRequest,
   type ZLinkServiceRelocationControlResponse
 } from '../../packages/framework/src/runtime/host/service-relocation-control';
@@ -38,6 +42,10 @@ import {
   ownerFence
 } from '../../packages/framework/src/runtime/actors/actor-message-follow-context';
 import {
+  decodeActorAuthorityIdentity,
+  encodeActorAuthorityIdentity
+} from '../../packages/framework/src/runtime/actors/actor-authority-publication';
+import {
   decodeMaintenanceReplyRelayAck,
   encodeMaintenanceReplyRelay,
   encodeMaintenanceReplyRelayAck,
@@ -58,6 +66,138 @@ const acceptedOperation = {
   high: 0x1111111111111111n,
   low: 0x1111111111111111n
 };
+
+test('relocation identity retries zero and local collisions with all 128 entropy bits', () => {
+  const zero = Buffer.alloc(16);
+  const collision = Buffer.from('00112233445566778899aabbccddeeff', 'hex');
+  const accepted = Buffer.from('ffeeddccbbaa99887766554433221100', 'hex');
+  const entropy = [zero, collision, accepted];
+  const observed: string[] = [];
+  const collisionId = '00112233-4455-6677-8899-aabbccddeeff';
+  const acceptedId = 'ffeeddcc-bbaa-9988-7766-554433221100';
+
+  const id = createServiceRelocationId(
+    candidate => {
+      observed.push(candidate);
+      return candidate === collisionId;
+    },
+    size => {
+      assert.equal(size, 16);
+      return entropy.shift()!;
+    }
+  );
+
+  assert.equal(id, acceptedId);
+  assert.deepEqual(observed, [collisionId, acceptedId]);
+  assert.equal(entropy.length, 0);
+});
+
+test('target shares an in-flight operation across exact control retries', async () => {
+  const envelope = relocationEnvelope();
+  const encodedEnvelope = encodeServiceRelocationEnvelope(envelope);
+  const request = relocationPrepare(envelope, {
+    reference: 'shared-retry-root',
+    checksumCrc32c: crc32c(encodedEnvelope)
+  });
+  const response: ZLinkServiceRelocationControlResponse = {
+    kind: 'ready',
+    relocation: request.relocation,
+    targetAttemptGeneration: request.targetAttemptGeneration,
+    round: request.round,
+    coordinator: request.coordinator,
+    candidate: request.candidate,
+    object: request.object,
+    role: 'target',
+    offeredMessages: request.requiredMessages,
+    offeredBytes: request.requiredBytes,
+    participants: [],
+    sourceNodeGeneration: request.sourceNodeGeneration,
+    targetNodeGeneration: request.candidate.nodeGeneration,
+    reservationGeneration: request.targetAttemptGeneration,
+    root: request.root,
+    applicationVersion: request.applicationVersion,
+    participantProgress: envelope.participants.map((participant, index) => ({
+      participantId: BigInt(index + 1),
+      acceptedBoundary: participant.queuedMessages.at(-1)?.sequence ?? participant.replayCursor,
+      replayCursor: participant.replayCursor
+    }))
+  };
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  let handled = 0;
+  let replies = 0;
+  const runtime = new ZLinkHostServiceRelocationRuntime({
+    meshNode: () => ({
+      sendToNode: () => {
+        replies += 1;
+        return SubmitResult.Ok;
+      }
+    })
+  } as never);
+  (runtime as unknown as {
+    handleControl: () => Promise<ZLinkServiceRelocationControlResponse>;
+  }).handleControl = async () => {
+    handled += 1;
+    await held;
+    return response;
+  };
+  const payload = encodeServiceRelocationControlRequest(request);
+  const parts = [Message.from(payload), Message.from(payload)];
+  try {
+    const first = runtime.tryHandleControl('mesh-a', {
+      sourceNodeRid: 'node-source',
+      parts: [parts[0]!]
+    } as never);
+    const second = runtime.tryHandleControl('mesh-a', {
+      sourceNodeRid: 'node-source',
+      parts: [parts[1]!]
+    } as never);
+    assert.equal(handled, 1);
+    release();
+    assert.deepEqual(await Promise.all([first, second]), [true, true]);
+    assert.equal(handled, 1);
+    assert.equal(replies, 2);
+  } finally {
+    parts.forEach(part => part.close());
+    await runtime.dispose();
+  }
+});
+
+test('target reconstructs a striped shared envelope before prepare validation', async () => {
+  const envelope = relocationEnvelope();
+  const encoded = encodeServiceRelocationEnvelope(envelope);
+  const splitAt = Math.floor(encoded.byteLength / 2);
+  const stripes = [encoded.subarray(0, splitAt), encoded.subarray(splitAt)];
+  const store = new MemoryPublicRelocationStore();
+  const stripeRows = await Promise.all(stripes.map(async (bytes, index) => {
+    const reference = `stripe-${index}`;
+    await store.put({ value: reference }, bytes, 60_000);
+    return {
+      reference,
+      checksumCrc32c: crc32c(bytes),
+      byteLength: bytes.byteLength
+    };
+  }));
+  const manifest = Buffer.from(JSON.stringify({
+    kind: 'zlink-relocation-striped-v1',
+    byteLength: encoded.byteLength,
+    checksumCrc32c: crc32c(encoded),
+    stripes: stripeRows
+  }), 'utf8');
+  await store.put({ value: 'striped-root' }, manifest, 60_000);
+  const runtime = new ZLinkHostServiceRelocationRuntime({
+    relocationStore: () => store
+  } as never);
+  const restored = await (runtime as unknown as {
+    readSharedEnvelope: (
+      root: { readonly reference: string; readonly checksumCrc32c: number }
+    ) => Promise<ServiceRelocationEnvelope>;
+  }).readSharedEnvelope({
+    reference: 'striped-root',
+    checksumCrc32c: crc32c(encoded)
+  });
+  assert.ok(encodeServiceRelocationEnvelope(restored).equals(encoded));
+});
 
 test('two host owners exchange canonical relocation reservation publish replay and seal commands', async () => {
   const events: string[] = [];
@@ -199,6 +339,7 @@ test('two host owners exchange canonical relocation reservation publish replay a
       dispatchRoutedActorPacket: async () => undefined
     }),
     actorManager: () => ({
+      adoptCreatedAuthority: () => events.push('actor-authority'),
       prepareRelocationActor: async () => {
         events.push('prepare-actor');
         return { context: { actorId: 'actor-a' }, configure() {} };
@@ -486,6 +627,16 @@ test('production source and target runtimes complete standalone Actor relocation
       dispatchRoutedActorPacket: async () => undefined
     }),
     actorManager: () => ({
+      adoptCreatedAuthority: (
+        _actorId: string,
+        authorityOwnerGeneration: bigint,
+        ownerLeaseGeneration: bigint
+      ) => {
+        void authorityOwnerGeneration;
+        void ownerLeaseGeneration;
+        targetState.setLocationGeneration();
+        targetState.setOwnerLeaseGeneration();
+      },
       prepareRelocationActor: async () => {
         events.push('target-prepared');
         return targetActor;
@@ -724,6 +875,16 @@ test('production restart recovery resumes a committed Actor authority and releas
       dispatchRoutedActorPacket: async () => undefined
     }),
     actorManager: () => ({
+      adoptCreatedAuthority: (
+        _actorId: string,
+        authorityOwnerGeneration: bigint,
+        ownerLeaseGeneration: bigint
+      ) => {
+        void authorityOwnerGeneration;
+        void ownerLeaseGeneration;
+        targetState.setLocationGeneration();
+        targetState.setOwnerLeaseGeneration();
+      },
       prepareRelocationActor: async () => {
         events.push('target-prepared');
         return { context: { actorId: 'actor-recovery' }, configure() {} };
@@ -1549,6 +1710,15 @@ test('production host inventory relocates User Spot aggregate Instance Spot and 
       }
     }),
     actorManager: () => ({
+      adoptCreatedAuthority: (
+        actorId: string,
+        authorityOwnerGeneration: bigint,
+        ownerLeaseGeneration: bigint
+      ) => {
+        const state = targetActorStates.get(actorId);
+        state?.setLocationGeneration(authorityOwnerGeneration);
+        state?.setOwnerLeaseGeneration(ownerLeaseGeneration);
+      },
       prepareRelocationActor: async (
         actorId: string,
         _stableType: string
@@ -1677,6 +1847,16 @@ test('production host inventory relocates User Spot aggregate Instance Spot and 
     if (authority.kind !== 'snapshot') continue;
     assert.equal(authority.ownerId, 'owner-target');
     assert.equal(authority.ownerLeaseGeneration, 8n);
+  }
+  const relocatedRoomActor = await location.readAuthority(
+    encodeAuthorityKey('actor', 'room-actor')
+  );
+  assert.equal(relocatedRoomActor.kind, 'snapshot');
+  if (relocatedRoomActor.kind === 'snapshot') {
+    const identity = decodeActorAuthorityIdentity(relocatedRoomActor.payload);
+    assert.equal(identity?.actor.nodeRid, 'node-target');
+    assert.equal(identity?.spotId, 'room-a');
+    assert.equal(identity?.spotGeneration, 1n);
   }
   assert.ok(events.includes('restore:room-a'));
   assert.ok(events.includes('restore:matchmaker-a'));
@@ -1962,6 +2142,18 @@ async function seedProductionAuthority(
   if (reserved.kind !== 'reserved') return;
   if (kind === 'actor') {
     const terminal = Buffer.from(`created:${kind}:${globalId}`);
+    const actorPayload = encodeActorAuthorityIdentity({
+      actorType: stableType,
+      actor: {
+        actorId: globalId,
+        objectGeneration: 1n,
+        meshName: target.meshName,
+        nodeRid: target.nodeRid as never
+      },
+      meshName: target.meshName,
+      ownerNodeGeneration: target.nodeLifecycleGeneration,
+      owner: target.owner
+    });
     const completed = await store.completeCreation({
       key: { kind, globalId },
       reservationId: reserved.reservationId,
@@ -1969,7 +2161,9 @@ async function seedProductionAuthority(
       target: target as never,
       completion: {
         kind: 'created',
-        readyPayload: Buffer.from(`ready:${globalId}`),
+        // The original authority predates the Actor join. Relocation must derive
+        // the target Spot route from the captured aggregate membership.
+        readyPayload: actorPayload,
         terminal: {
           operation: {
             sourceNodeRid: target.nodeRid,

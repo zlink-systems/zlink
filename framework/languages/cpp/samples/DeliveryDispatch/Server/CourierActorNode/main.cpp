@@ -154,11 +154,10 @@ int main (int argc, char **argv)
                                         ? topology.courier_actor_node_1_router_endpoint
                                         : topology.courier_actor_node_2_router_endpoint;
 
+    app.logging ().use_file (configuration.flow_log_path ());
     app.add_zlink_framework ([&] (zlink_framework_options_t &options) {
         options.configure_dispatch ()
-          .message_flow (message_flow_log_mode_t::key_transitions)
-          .trace_log_file (configuration.flow_log_path ())
-          .trace_label ("deliverydispatch-" + instance_name);
+          .message_flow (message_flow_log_mode_t::normal);
         add_deliverydispatch_json_codecs (options.codecs ());
         add_deliverydispatch_location_store (options, topology);
         auto services = options.services ().build_provider ();

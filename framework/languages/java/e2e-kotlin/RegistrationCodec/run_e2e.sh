@@ -191,7 +191,7 @@ import urllib.request
 with urllib.request.urlopen(sys.argv[1], timeout=5) as response:
     sys.stdout.write(response.read().decode("utf-8"))
 PY
-  grep -Rq "message flow" "${log_dir}"/*-flow.log
+  grep -Rq "message flow" "${log_dir}"/*.stdout.log
   if [[ "${SCENARIO}" == "all" ]]; then
     grep -q "EchoAutoReq" "${log_dir}/server-evidence.json"
     grep -q "ProtobufEcho" "${log_dir}/server-evidence.json"

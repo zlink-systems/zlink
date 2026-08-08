@@ -52,9 +52,7 @@ public final class CodecRequesterApplication {
             framework.codecs().use(ZLinkMessagePackCodec.forPayloadTypes(
                 CodecRequesterApplication::isPackedType));
             framework.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile(options.logDir() + "/codec-requester-flow.log")
-                .traceLabel("java-rc-codec-requester");
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             framework.addClientServerChannel(Contracts.CHANNEL)
                 .client()
                 .connect(options.serverEndpoint());

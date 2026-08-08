@@ -37,9 +37,7 @@ public final class SessionServerApplication {
         return options -> {
             options.addHandlersFromPackageOf(SessionServerApplication.class);
             options.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile(topology.logDirectory() + "/flow-session.log")
-                .traceLabel("session");
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             options.codecs().use(ZLinkProtobufCodec.defaultCodec());
             options.configureLocations();
             ZLinkMeshNodeBuilder node = options.addRouteMesh(SampleNames.Mesh);

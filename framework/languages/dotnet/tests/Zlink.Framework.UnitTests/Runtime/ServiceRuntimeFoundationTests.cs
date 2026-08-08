@@ -139,6 +139,137 @@ public sealed class ServiceRuntimeFoundationTests
     }
 
     [Fact]
+    public void BoundSessionReplaced_MatchesCanonicalWireFixture()
+    {
+        var record = new ZLinkServiceWireCodec.BoundSessionReplacedRecord(
+            new ZLinkServiceWireCodec.BoundSessionReplacedActorAuthority(
+                "actor-a",
+                1,
+                RoutingId.From("actor-owner"),
+                2,
+                3,
+                4),
+            new ZLinkServiceWireCodec.BoundSessionReplacedRetiredSession(
+                RoutingId.From("session-owner"),
+                5,
+                "session-runtime",
+                6,
+                RoutingId.From("session-a"),
+                7));
+
+        var expected = new byte[]
+        {
+            90, 77, 1, 51, 0,
+            7, 97, 99, 116, 111, 114, 45, 97,
+            0, 0, 0, 0, 0, 0, 0, 1,
+            11, 97, 99, 116, 111, 114, 45, 111, 119, 110, 101, 114,
+            0, 0, 0, 0, 0, 0, 0, 2,
+            0, 0, 0, 0, 0, 0, 0, 3,
+            0, 0, 0, 0, 0, 0, 0, 4,
+            13, 115, 101, 115, 115, 105, 111, 110, 45, 111, 119, 110, 101, 114,
+            0, 0, 0, 0, 0, 0, 0, 5,
+            15, 115, 101, 115, 115, 105, 111, 110, 45, 114, 117, 110, 116, 105, 109, 101,
+            0, 0, 0, 0, 0, 0, 0, 6,
+            9, 115, 101, 115, 115, 105, 111, 110, 45, 97,
+            0, 0, 0, 0, 0, 0, 0, 7
+        };
+
+        var encoded = ZLinkServiceWireCodec.EncodeBoundSessionReplaced(record);
+        Assert.Equal(expected, encoded);
+        Assert.True(ZLinkServiceWireCodec.TryDecodeBoundSessionReplaced(
+            encoded,
+            out var decoded,
+            out var error));
+        Assert.Equal(ZLinkServiceWireCodec.DecodeError.None, error);
+        Assert.Equal(record, decoded);
+
+        var trailing = encoded.Append((byte)0).ToArray();
+        Assert.False(ZLinkServiceWireCodec.TryDecodeBoundSessionReplaced(
+            trailing,
+            out _,
+            out var trailingError));
+        Assert.Equal(ZLinkServiceWireCodec.DecodeError.TrailingByte, trailingError);
+    }
+
+    [Fact]
+    public async Task BoundSessionReplaced_Transport_Requires_The_Admitted_Authority_And_Retired_Owner_Lifecycles()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var authority = new ZLinkManagedMeshNode(context, "actors");
+        await using var retiredOwner = new ZLinkManagedMeshNode(context, "actors");
+        await using var monitor = retiredOwner.OpenMonitor();
+        var suffix = Guid.NewGuid().ToString("N");
+        var authorityRid = RoutingId.From($"authority-{suffix}");
+        var retiredOwnerRid = RoutingId.From($"retired-{suffix}");
+        var authorityEndpoint = $"inproc://authority-{suffix}";
+        var retiredOwnerEndpoint = $"inproc://retired-{suffix}";
+        var notifications = 0;
+
+        authority.SetRoutingId(authorityRid);
+        authority.SetBind(authorityEndpoint);
+        authority.ConnectPeer(retiredOwnerEndpoint, retiredOwnerRid);
+        retiredOwner.SetRoutingId(retiredOwnerRid);
+        retiredOwner.SetBind(retiredOwnerEndpoint);
+        retiredOwner.SetBoundSessionReplacedNotificationHandler(
+            (_, _) => Interlocked.Increment(ref notifications));
+        retiredOwner.Start();
+        authority.Start();
+
+        await WaitUntilAsync(() =>
+            authority.Status().AdmittedPeerCount == 1
+            && retiredOwner.Status().AdmittedPeerCount == 1);
+        var authorityGeneration = Assert.Single(retiredOwner.Peers())
+            .LifecycleGeneration;
+        var retiredOwnerGeneration = Assert.Single(authority.Peers())
+            .LifecycleGeneration;
+
+        ZLinkServiceWireCodec.BoundSessionReplacedRecord Record(
+            RoutingId sourceRid,
+            ulong sourceGeneration,
+            ulong ownerGeneration) => new(
+            new ZLinkServiceWireCodec.BoundSessionReplacedActorAuthority(
+                "actor-a",
+                ObjectGeneration: 17,
+                sourceRid,
+                sourceGeneration,
+                ExpectedAuthorityOwnerGeneration: 19,
+                ExpectedOwnerLeaseGeneration: 23),
+            new ZLinkServiceWireCodec.BoundSessionReplacedRetiredSession(
+                retiredOwnerRid,
+                ownerGeneration,
+                "retired-owner",
+                SessionOwnerLeaseGeneration: 29,
+                RoutingId.From("retired-session"),
+                RetiredBindingGeneration: 31));
+
+        Assert.True(authority.TrySendBoundSessionReplacedNotification(
+            retiredOwnerRid,
+            Record(authorityRid, authorityGeneration, retiredOwnerGeneration)));
+        await WaitUntilAsync(() => Volatile.Read(ref notifications) == 1);
+
+        var protocolErrors = monitor.Status().ProtocolErrors;
+        Assert.True(authority.TrySendBoundSessionReplacedNotification(
+            retiredOwnerRid,
+            Record(RoutingId.From("forged-authority"), authorityGeneration, retiredOwnerGeneration)));
+        await WaitUntilAsync(() => monitor.Status().ProtocolErrors > protocolErrors);
+        Assert.Equal(1, Volatile.Read(ref notifications));
+
+        protocolErrors = monitor.Status().ProtocolErrors;
+        Assert.True(authority.TrySendBoundSessionReplacedNotification(
+            retiredOwnerRid,
+            Record(authorityRid, authorityGeneration + 1, retiredOwnerGeneration)));
+        await WaitUntilAsync(() => monitor.Status().ProtocolErrors > protocolErrors);
+        Assert.Equal(1, Volatile.Read(ref notifications));
+
+        protocolErrors = monitor.Status().ProtocolErrors;
+        Assert.True(authority.TrySendBoundSessionReplacedNotification(
+            retiredOwnerRid,
+            Record(authorityRid, authorityGeneration, retiredOwnerGeneration + 1)));
+        await WaitUntilAsync(() => monitor.Status().ProtocolErrors > protocolErrors);
+        Assert.Equal(1, Volatile.Read(ref notifications));
+    }
+
+    [Fact]
     public void GeneratedLivenessFixtures_DecodeWithExactErrors()
     {
         var frameworkRoot = Common.FrameworkTestEnvironment.GetFrameworkRoot();
@@ -314,7 +445,7 @@ public sealed class ServiceRuntimeFoundationTests
 
         var lifecycleOffset = 10
             + 1 + "orders"u8.Length
-            + 1 + "none"u8.Length;
+            + 1 + ZLinkServiceSecurityIdentity.Plaintext.Length;
         Assert.Equal(
             17UL,
             BinaryPrimitives.ReadUInt64BigEndian(encoded.AsSpan(lifecycleOffset)));
@@ -332,7 +463,7 @@ public sealed class ServiceRuntimeFoundationTests
         Assert.Equal(23UL, admission.DescriptorRevision);
         Assert.Equal(0U, admission.Channels["admin"]);
         Assert.Equal(75U, admission.Channels["worker"]);
-        Assert.Equal("none", admission.SecurityIdentity);
+        Assert.Equal(ZLinkServiceSecurityIdentity.Plaintext, admission.SecurityIdentity);
         Assert.Equal(1, admission.RuntimeState);
         Assert.Equal(0, admission.ApplicationVersion);
         Assert.Equal(0, admission.ObjectRole);
@@ -466,8 +597,8 @@ public sealed class ServiceRuntimeFoundationTests
             17,
             24,
             channels);
-        var securityOffset = FindSequence(immutableMutationBytes, "none"u8);
-        "evil"u8.CopyTo(immutableMutationBytes.AsSpan(securityOffset));
+        var securityOffset = FindSequence(immutableMutationBytes, "default"u8);
+        "changed"u8.CopyTo(immutableMutationBytes.AsSpan(securityOffset));
         var immutableMutation = DecodeAdmission(immutableMutationBytes);
         Assert.Equal(
             ZLinkServiceAdmissionDecision.Reject,
@@ -477,12 +608,12 @@ public sealed class ServiceRuntimeFoundationTests
                 immutableMutation));
         Assert.True(ZLinkServiceAdmissionGuard.MatchesExpectedRoute(
             "tcp://127.0.0.1:7070",
-            "none",
+            ZLinkServiceSecurityIdentity.Plaintext,
             current.LifecycleGeneration,
             current));
         Assert.False(ZLinkServiceAdmissionGuard.MatchesExpectedRoute(
             "tcp://127.0.0.1:7071",
-            "none",
+            ZLinkServiceSecurityIdentity.Plaintext,
             current.LifecycleGeneration,
             current));
         Assert.False(ZLinkServiceAdmissionGuard.MatchesExpectedRoute(
@@ -492,19 +623,19 @@ public sealed class ServiceRuntimeFoundationTests
             current));
         Assert.False(ZLinkServiceAdmissionGuard.MatchesExpectedRoute(
             "tcp://127.0.0.1:7070",
-            "none",
+            ZLinkServiceSecurityIdentity.Plaintext,
             current.LifecycleGeneration + 1,
             current));
         Assert.True(ZLinkServiceAdmissionGuard.MatchesExpectedTransportRoute(
             "tcp://127.0.0.1:7070",
-            "none",
-            "none",
+            ZLinkServiceSecurityIdentity.Plaintext,
+            ZLinkServiceSecurityIdentity.Plaintext,
             current.LifecycleGeneration,
             current));
         Assert.False(ZLinkServiceAdmissionGuard.MatchesExpectedTransportRoute(
             "tcp://127.0.0.1:7070",
             "tls:configured",
-            "none",
+            ZLinkServiceSecurityIdentity.Plaintext,
             current.LifecycleGeneration,
             current with { SecurityIdentity = "tls:configured" }));
 
@@ -789,7 +920,9 @@ public sealed class ServiceRuntimeFoundationTests
         target.SetPeerExpectation(
             sourceRid,
             mismatchEndpoint ? $"inproc://unexpected-{suffix}" : sourceEndpoint,
-            mismatchSecurityIdentity ? "tls:unexpected" : "none",
+            mismatchSecurityIdentity
+                ? "tls:unexpected"
+                : ZLinkServiceSecurityIdentity.Plaintext,
             mismatchLifecycleGeneration
                 ? sourceLifecycleGeneration == ulong.MaxValue
                     ? sourceLifecycleGeneration - 1
@@ -1200,7 +1333,10 @@ public sealed class ServiceRuntimeFoundationTests
                 remote.Start();
                 remoteEndpoint = remote.Status().LocalEndpoint;
 
-                localBackend.ConnectPeer(remoteRid, remoteEndpoint, "none");
+                localBackend.ConnectPeer(
+                    remoteRid,
+                    remoteEndpoint,
+                    ZLinkServiceSecurityIdentity.Plaintext);
 
                 var expectedRid = remoteRid;
                 await WaitUntilAsync(() =>
@@ -1403,21 +1539,24 @@ public sealed class ServiceRuntimeFoundationTests
         right.SetRoutingId(RoutingId.From("orders-client-right"));
         right.SetObjectRole(ZLinkMeshNodeObjectRole.Client);
         right.SetBind(rightEndpoint);
-        right.ConnectPeer(leftEndpoint, RoutingId.From("orders-client-left"));
+        // One manual connection is sufficient to classify both object-client
+        // peers; symmetric intents would create two independent connection
+        // attempts before the NotRequired state is published.
         await using var leftMonitor = left.OpenMonitor();
         await using var rightMonitor = right.OpenMonitor();
         right.Start();
         left.Start();
 
         await WaitUntilAsync(() =>
-            left.Peers().Any(static peer =>
+            left.Peers().Length == 1
+            && right.Peers().Length == 1
+            && left.Peers().All(static peer =>
                 peer.State == MeshPeerState.NotRequired)
-            && right.Peers().Any(static peer =>
+            && right.Peers().All(static peer =>
                 peer.State == MeshPeerState.NotRequired));
 
         Assert.Equal(0u, left.Status().AdmittedPeerCount);
         Assert.Equal(0u, right.Status().AdmittedPeerCount);
-        await Task.Delay(TimeSpan.FromMilliseconds(1100));
         Assert.Single(left.Peers());
         Assert.Single(right.Peers());
         Assert.All(
@@ -1425,10 +1564,16 @@ public sealed class ServiceRuntimeFoundationTests
             static peer => Assert.Equal(MeshPeerState.NotRequired, peer.State));
         Assert.Equal(0UL, leftMonitor.Status().PeerRejected);
         Assert.Equal(0UL, rightMonitor.Status().PeerRejected);
-        Assert.Contains(
-            Drain(leftMonitor).Concat(Drain(rightMonitor)),
-            static meshEvent =>
-                meshEvent.Kind == MeshMonitorEventKind.PeerNotRequired);
+        var observedNotRequired = false;
+        await WaitUntilAsync(() =>
+        {
+            observedNotRequired |= Drain(leftMonitor)
+                .Concat(Drain(rightMonitor))
+                .Any(static meshEvent =>
+                    meshEvent.Kind == MeshMonitorEventKind.PeerNotRequired);
+            return observedNotRequired;
+        });
+        Assert.True(observedNotRequired);
     }
 
     [Fact]
@@ -1632,98 +1777,50 @@ public sealed class ServiceRuntimeFoundationTests
     }
 
     [Fact]
-    public void CompletionTable_OverflowRetainsFailureTombstoneForLateRegister()
-    {
-        var table = new ZLinkMeshCompletionTable(
-            earlyCompletionCount: 1,
-            earlyCompletionBytes: 64,
-            tombstoneCount: 1,
-            tombstoneBytes: 32);
-        var retained = new MeshOperationId(0, 10);
-        var overflow = new MeshOperationId(0, 11);
-        table.Complete(Completion(retained), Array.Empty<Message>());
-
-        using var parts = Message.From(new byte[] { 1, 2, 3 });
-        table.Complete(Completion(overflow), [parts]);
-        Assert.Throws<ObjectDisposedException>(() => _ = parts.Size);
-
-        RequestResult? result = null;
-        Assert.True(table.RegisterRequest(
-            overflow,
-            (completed, reply) =>
-            {
-                result = completed;
-                Assert.Empty(reply);
-            }));
-        Assert.Equal(RequestResult.Backpressured, result);
-    }
-
-    [Fact]
-    public void CompletionTable_OverflowBeyondRetentionFailsLateRegistration()
-    {
-        var table = new ZLinkMeshCompletionTable(
-            earlyCompletionCount: 1,
-            earlyCompletionBytes: 64,
-            tombstoneCount: 1,
-            tombstoneBytes: 32);
-
-        var retained = new MeshOperationId(0, 20);
-        var tombstoned = new MeshOperationId(0, 21);
-        var overflow = new MeshOperationId(0, 22);
-        table.Complete(Completion(retained), []);
-        table.Complete(Completion(tombstoned), []);
-        table.Complete(Completion(overflow), []);
-
-        Assert.Equal(1, table.OverflowCount);
-
-        RequestResult? result = null;
-        Assert.True(table.RegisterRequest(
-            overflow,
-            (completed, reply) =>
-            {
-                result = completed;
-                Assert.Empty(reply);
-            }));
-        Assert.Equal(RequestResult.Backpressured, result);
-    }
-
-    [Fact]
-    public void CompletionTable_OverflowFailsPendingAndFutureOperations()
-    {
-        var table = new ZLinkMeshCompletionTable(
-            earlyCompletionCount: 1,
-            earlyCompletionBytes: 64,
-            tombstoneCount: 1,
-            tombstoneBytes: 32);
-        var pending = new MeshOperationId(0, 30);
-        var pendingResults = new List<RequestResult>();
-        Assert.True(table.RegisterRequest(
-            pending,
-            (completed, _) => pendingResults.Add(completed)));
-
-        table.Complete(Completion(new MeshOperationId(0, 31)), []);
-        table.Complete(Completion(new MeshOperationId(0, 32)), []);
-        table.Complete(Completion(new MeshOperationId(0, 33)), []);
-
-        Assert.Equal([RequestResult.Backpressured], pendingResults);
-        RequestResult? future = null;
-        Assert.True(table.RegisterRequest(
-            new MeshOperationId(0, 34),
-            (completed, _) => future = completed));
-        Assert.Equal(RequestResult.Backpressured, future);
-    }
-
-    [Fact]
-    public void CompletionTable_RegisterAndCompleteRaceInvokesOneHandler()
+    public void CompletionTable_RegisterBeforeSubmitHandlesSynchronousCompletion()
     {
         var table = new ZLinkMeshCompletionTable();
-        var operation = new MeshOperationId(0, 12);
-        var calls = 0;
-        Parallel.Invoke(
-            () => table.Register(operation, (_, _) => Interlocked.Increment(ref calls)),
-            () => table.Complete(Completion(operation), Array.Empty<Message>()));
+        var correlation = new MeshOperationId(7, 10);
+        var completedDuringSubmit = false;
 
-        Assert.Equal(1, calls);
+        var submit = table.RegisterRequestBeforeSubmit(
+            correlation,
+            (result, reply) =>
+            {
+                Assert.Equal(RequestResult.Ok, result);
+                Assert.Empty(reply);
+                completedDuringSubmit = true;
+            },
+            id =>
+            {
+                Assert.Equal(correlation, id);
+                table.Complete(Completion(id), Array.Empty<Message>());
+                Assert.True(completedDuringSubmit);
+                return SubmitResult.Ok;
+            });
+
+        Assert.Equal(SubmitResult.Ok, submit);
+        Assert.True(completedDuringSubmit);
+    }
+
+    [Fact]
+    public void CompletionTable_SubmitRejectionRemovesWaiter()
+    {
+        var table = new ZLinkMeshCompletionTable();
+        var correlation = new MeshOperationId(7, 11);
+        var calls = 0;
+        Assert.Equal(
+            SubmitResult.Backpressured,
+            table.RegisterBeforeSubmit(
+                correlation,
+                (_, _) => calls++,
+                _ => SubmitResult.Backpressured));
+
+        using var late = Message.From(new byte[] { 1 });
+        table.Complete(Completion(correlation), [late]);
+
+        Assert.Equal(0, calls);
+        Assert.Throws<ObjectDisposedException>(() => _ = late.Size);
     }
 
     [Fact]

@@ -8,8 +8,10 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <typeindex>
 #include <utility>
@@ -128,9 +130,12 @@ template <typename T> class serializer_t
     using serialize_fn_t = std::function<encoded_payload_t (const T &)>;
     using deserialize_fn_t = std::function<T (const encoded_payload_t &)>;
 
-    serializer_t (serialize_fn_t serialize, deserialize_fn_t deserialize) :
+    serializer_t (serialize_fn_t serialize,
+                  deserialize_fn_t deserialize,
+                  std::string content_type) :
         _state (std::make_shared<const state_t> (
-          state_t{std::move (serialize), std::move (deserialize)}))
+          state_t{std::move (serialize), std::move (deserialize),
+                  std::move (content_type)}))
     {
     }
 
@@ -166,11 +171,17 @@ template <typename T> class serializer_t
         }
     }
 
+    const std::string &content_type () const noexcept
+    {
+        return _state->content_type;
+    }
+
   private:
     struct state_t
     {
         serialize_fn_t serialize;
         deserialize_fn_t deserialize;
+        std::string content_type;
     };
 
     std::shared_ptr<const state_t> _state;
@@ -218,15 +229,28 @@ class serializer_registry_t
         }
 
         serializer_t<T> selected = [&] {
-            if (!contains (type)) {
+            auto registered = erased_serializer (type);
+            if (!registered) {
             if constexpr (detail::is_json_serializer_compatible_v<T>) {
                 return serializer_t<T> (
                   [] (const T &value) {
-                      return encoded_payload_t::from_raw (zlink::message_t::from_json (value));
+                      const auto text = codecs::json::detail::dump_profile (
+                        nlohmann::json (value));
+                      return encoded_payload_t::from_bytes (
+                        std::as_bytes (std::span<const char> (
+                          text.data (), text.size ())));
                   },
                   [] (const encoded_payload_t &payload) {
-                      return payload.to_raw ().template parse_json<T> ();
-                  });
+                      const auto bytes = payload.bytes ();
+                      const auto *begin = reinterpret_cast<const char *> (
+                        bytes.data ());
+                      const auto *end = begin == nullptr
+                                          ? begin
+                                          : begin + bytes.size ();
+                      return codecs::json::detail::parse_profile (begin, end)
+                        .template get<T> ();
+                  },
+                  "application/json");
             } else {
                 return serializer_t<T> (
                   [] (const T &) -> encoded_payload_t {
@@ -238,16 +262,23 @@ class serializer_registry_t
                       throw framework_exception_t (
                         framework_error_kind_t::protocol_error,
                       "No serializer is registered for this payload type");
-                  });
+                  },
+                  "application/json");
             }
             }
+            auto serialize = std::move (registered->serialize);
+            auto deserialize = std::move (registered->deserialize);
             return serializer_t<T> (
-              [this, type] (const T &value) { return serialize (type, &value); },
-              [this, type] (const encoded_payload_t &payload) {
+              [serialize = std::move (serialize)] (const T &value) {
+                  return serialize (&value);
+              },
+              [deserialize = std::move (deserialize)] (
+                const encoded_payload_t &payload) {
                   T value{};
-                  deserialize (type, payload, &value);
+                  deserialize (payload, &value);
                   return value;
-              });
+              },
+              std::move (registered->content_type));
         } ();
         auto candidate = std::make_shared<const serializer_t<T>> (
           std::move (selected));
@@ -261,6 +292,15 @@ class serializer_registry_t
     std::string content_type (std::type_index type) const;
 
   private:
+    struct erased_serializer_t
+    {
+        serialize_any_fn_t serialize;
+        deserialize_any_fn_t deserialize;
+        std::string content_type;
+    };
+
+    std::optional<erased_serializer_t>
+    erased_serializer (std::type_index type) const;
     std::shared_ptr<const void>
     cached_serializer (std::type_index type) const noexcept;
     std::shared_ptr<const void>
@@ -275,5 +315,24 @@ class serializer_registry_t
 
     std::unique_ptr<detail::serializer_registry_state_t> _state;
 };
+
+namespace detail
+{
+
+template <typename TPayload>
+TPayload deserialize_typed_payload (serializer_registry_t &serializers,
+                                    const zlink::message_t &message,
+                                    std::string_view content_type)
+{
+    const auto serializer = serializers.get<TPayload> ();
+    if (!content_type.empty () && content_type != serializer.content_type ()) {
+        throw framework_exception_t (
+          framework_error_kind_t::protocol_error,
+          "inbound content type does not match the typed handler codec");
+    }
+    return serializer.deserialize (encoded_payload_from_raw (message));
+}
+
+} // namespace detail
 
 } // namespace zlink::framework

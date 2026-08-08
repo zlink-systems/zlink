@@ -11,13 +11,13 @@ internal sealed class ZLinkChannelReceiveLoop(
 
     public async Task RunClientServerLoopAsync(
         string channelName,
-        IZLinkBackendRouterSocket router,
+        IRouterSocket router,
         ZLinkClientServerServerIdentity identity,
         IZLinkRuntimeFailureReporter errorSink,
         ZLinkInboundDispatchBudget inboundDispatchBudget,
         CancellationToken cancellationToken)
     {
-        using var receivePoller = router.CreateReceivePoller();
+        using var receivePoller = ZLinkBackendSocketPoller.Create(router);
         await using var applicationDispatch =
             new ZLinkChannelApplicationDispatchQueue<ClientServerDispatchWork>(
                 $"client-server-application:{channelName}",
@@ -168,7 +168,7 @@ internal sealed class ZLinkChannelReceiveLoop(
     }
 
     private static void ReplyClientServerControl(
-        IZLinkBackendRouterSocket router,
+        IRouterSocket router,
         Received received,
         ZLinkClientServerServerIdentity identity)
     {
@@ -202,7 +202,7 @@ internal sealed class ZLinkChannelReceiveLoop(
             && hello is not null
             && StringComparer.Ordinal.Equals(
                 hello.ChannelName,
-                identity.ChannelName)
+                identity.ChannelName.Value)
             && StringComparer.Ordinal.Equals(
                 hello.SecurityIdentity,
                 identity.SecurityIdentity);
@@ -224,7 +224,7 @@ internal sealed class ZLinkChannelReceiveLoop(
     }
 
     private static bool ReplyOwned(
-        IZLinkBackendRouterSocket router,
+        IRouterSocket router,
         RoutingId sourceRid,
         ulong? requestSeq,
         Message reply)
@@ -236,7 +236,9 @@ internal sealed class ZLinkChannelReceiveLoop(
         }
         try
         {
-            router.Reply(sourceRid, value, reply);
+            router.Reply(sourceRid, value)
+                .Message(reply)
+                .Submit();
             return true;
         }
         catch
@@ -247,13 +249,16 @@ internal sealed class ZLinkChannelReceiveLoop(
     }
 
     private static bool SendOwned(
-        IZLinkBackendRouterSocket router,
+        IRouterSocket router,
         RoutingId sourceRid,
         Message message)
     {
         try
         {
-            if (router.Send(sourceRid, message, SendFlags.DontWait))
+            if (router.Send(sourceRid)
+                .Message(message)
+                .Flags(SendFlags.DontWait)
+                .Submit())
                 return true;
         }
         catch
@@ -265,12 +270,12 @@ internal sealed class ZLinkChannelReceiveLoop(
 
     public async Task RunSubscriberLoopAsync(
         string channelName,
-        IZLinkBackendSubscriberSocket subscriber,
+        ISubSocket subscriber,
         IZLinkRuntimeFailureReporter errorSink,
         ZLinkInboundDispatchBudget inboundDispatchBudget,
         CancellationToken cancellationToken)
     {
-        using var receivePoller = subscriber.CreateReceivePoller();
+        using var receivePoller = ZLinkBackendSocketPoller.Create(subscriber);
         await using var applicationDispatch =
             new ZLinkChannelApplicationDispatchQueue<FanoutDispatchWork>(
                 $"fanout-application:{channelName}",
@@ -294,7 +299,7 @@ internal sealed class ZLinkChannelReceiveLoop(
                     if (!inboundDispatchBudget.TryAcquireReceive(
                             out receivePermit))
                         continue;
-                    if (!subscriber.TryReceive(topicMessage!))
+                    if (!subscriber.Subscribe(topicMessage!, RecvFlags.DontWait))
                         continue;
 
                     // The beacon shares the publisher's PUB socket, so a manual
@@ -370,14 +375,14 @@ internal sealed class ZLinkChannelReceiveLoop(
 
     public async Task RunFanoutConnectionLoopAsync(
         string channelName,
-        IZLinkBackendSubscriberSocket subscriber,
+        ISubSocket subscriber,
         Action onActivity,
         Action onProtocolError,
         IZLinkRuntimeFailureReporter errorSink,
         ZLinkInboundDispatchBudget inboundDispatchBudget,
         CancellationToken cancellationToken)
     {
-        using var receivePoller = subscriber.CreateReceivePoller();
+        using var receivePoller = ZLinkBackendSocketPoller.Create(subscriber);
         await using var applicationDispatch =
             new ZLinkChannelApplicationDispatchQueue<FanoutDispatchWork>(
                 $"fanout-automatic-application:{channelName}",
@@ -401,7 +406,7 @@ internal sealed class ZLinkChannelReceiveLoop(
                     if (!inboundDispatchBudget.TryAcquireReceive(
                             out receivePermit))
                         continue;
-                    if (!subscriber.TryReceive(topicMessage!))
+                    if (!subscriber.Subscribe(topicMessage!, RecvFlags.DontWait))
                         continue;
 
                     if (ZLinkFanoutLivenessProtocol.IsReservedTopic(
@@ -499,7 +504,7 @@ internal sealed class ZLinkChannelReceiveLoop(
 
     private readonly record struct ClientServerDispatchWork(
         string ChannelName,
-        IZLinkBackendRouterSocket Router,
+        IRouterSocket Router,
         Received Received,
         ZLinkReceivedStoragePool ReceiveStoragePool,
         ZLinkChannelReplyGate ReplyGate,

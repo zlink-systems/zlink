@@ -22,18 +22,6 @@ final class DefaultClientServerChannelRuntimeOptions
 
 final class DefaultRouteMeshChannelRuntimeOptions
     implements ZLinkRouteMeshChannelRuntimeOptions {
-    private final ZLinkChannelRuntime host;
-    private final String channelName;
-
-    DefaultRouteMeshChannelRuntimeOptions(ZLinkChannelRuntime host, String channelName) {
-        this.host = host;
-        this.channelName = channelName;
-    }
-
-    @Override
-    public ZLinkSocketRuntimeOptions configureServerSocket() {
-        return new DefaultChannelSocketRuntimeOptions(host, channelName);
-    }
 }
 
 final class DefaultChannelSocketRuntimeOptions implements ZLinkSocketRuntimeOptions {

@@ -22,9 +22,9 @@ fun main(args: Array<String>) {
 
 private class A5Client(private val endpoint: String) {
     fun run() {
-        setMode("KEY_TRANSITIONS")
+        setMode("NORMAL")
         val keyBefore = snapshot().path("count").asInt()
-        ensure(request("key-transition", false).statusCode() == 200, "KEY_TRANSITIONS request failed")
+        ensure(request("key-transition", false).statusCode() == 200, "NORMAL request failed")
         waitForEvent(keyBefore) { it.path("outcome").asText() in SUCCESS }
 
         setMode("OFF")
@@ -32,16 +32,16 @@ private class A5Client(private val endpoint: String) {
         ensure(request("off", false).statusCode() == 200, "OFF request failed")
         waitForCount(offBefore, "OFF produced flow evidence")
 
-        setMode("ERRORS_ONLY")
+        setMode("ERRORS")
         val errorBefore = snapshot().path("count").asInt()
-        ensure(request("errors-only-normal", false).statusCode() == 200, "ERRORS_ONLY normal request failed")
-        waitForCount(errorBefore, "ERRORS_ONLY produced success evidence")
-        ensure(request("errors-only-failure", true).statusCode() >= 500, "ERRORS_ONLY failure did not fail")
+        ensure(request("errors-only-normal", false).statusCode() == 200, "ERRORS normal request failed")
+        waitForCount(errorBefore, "ERRORS produced success evidence")
+        ensure(request("errors-only-failure", true).statusCode() >= 500, "ERRORS failure did not fail")
         waitForEvent(errorBefore) {
             it.path("outcome").asText() == "ERROR" || it.path("errorType").isTextual
         }
 
-        setMode("KEY_TRANSITIONS")
+        setMode("NORMAL")
         val resumedBefore = snapshot().path("count").asInt()
         ensure(request("key-transition-again", false).statusCode() == 200, "resumed request failed")
         waitForEvent(resumedBefore) { it.path("outcome").asText() in SUCCESS }

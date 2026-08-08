@@ -88,11 +88,9 @@ public final class SubscriberApplication {
         EvidenceDispatchErrorObserver observer,
         SubscriberConnections connections) {
         return framework -> {
+            observer.install();
             framework.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile(options.logDir() + "/" + evidence.subscriberRid() + "-flow.log")
-                .traceLabel("java-ps-" + evidence.subscriberRid())
-                .setMessageFlowObserver(observer::observe);
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             framework.addHandlersFromPackageOf(EventMsgHandler.class);
             var channel = framework.addFanoutChannel(Contracts.EVENT_CHANNEL);
             if (options.mixedMode()) {

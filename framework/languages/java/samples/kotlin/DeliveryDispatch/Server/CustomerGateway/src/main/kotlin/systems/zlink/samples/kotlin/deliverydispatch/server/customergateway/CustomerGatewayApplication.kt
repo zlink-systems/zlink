@@ -28,12 +28,8 @@ class CustomerGatewayApplication {
             options.useCoroutineHandlers(Dispatchers.Default)
             options.addHandlersFromPackageOf(CustomerGatewayApplication::class.java)
             options.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile(
-                    SampleTopology.LogDirectory +
-                        "/flow-customer-gateway.log",
-                )
-                .traceLabel("customer-gateway")
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL)
+
             val node = options.addRouteMesh(SampleNames.CustomerSpotMesh)
             node.listen(SampleTopology.CustomerSpotRouterEndpoint)
                 .setRoutingIdPrefix("delivery-customer")

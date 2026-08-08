@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Duration;
+import java.lang.reflect.Proxy;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -33,11 +34,19 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendStreamErrorH
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendStreamReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendStreamSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkChannelBackendAdapter;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
+import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
+import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkMonitoringBackendAdapter;
 import systems.zlink.framework.runtime.internal.backend.ZLinkSpotBackendAdapter;
 import systems.zlink.framework.runtime.internal.backend.ZLinkStreamBackendAdapter;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.messaging.ZLinkJsonMessageSerializer;
+import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
+import systems.zlink.framework.actors.ActorRef;
+import systems.zlink.framework.actors.ZLinkActor;
+import systems.zlink.framework.actors.ZLinkActorContext;
+import systems.zlink.framework.actors.ZLinkActorFactory;
 import systems.zlink.framework.streams.ZLinkSession;
 import systems.zlink.framework.streams.ZLinkSessionContext;
 import systems.zlink.framework.streams.ZLinkSessionDispatchContext;
@@ -48,6 +57,7 @@ import systems.zlink.framework.streams.ZLinkStreamMessageKind;
 final class ZLinkStreamRuntimeIngressTest {
     private static final RoutingId PEER_A = RoutingId.from("peer-a");
     private static final RoutingId PEER_B = RoutingId.from("peer-b");
+    private static final String MESH = "replacement-mesh";
     private final List<ZLinkStreamRuntime> runtimes = new ArrayList<>();
     private ZLinkFrameworkRegistration lastRegistration;
 
@@ -55,6 +65,7 @@ final class ZLinkStreamRuntimeIngressTest {
     void resetSessionProbe() {
         TestSession.holdFirstDispatch = false;
         TestSession.failNextConstruction = false;
+        TestSession.replacementMode = ReplacementMode.NONE;
         TestSession.createdCount.set(0);
         TestSession.lastSession.set(null);
         runtimes.forEach(runtime -> runtime.closeAsync().toCompletableFuture().join());
@@ -139,6 +150,22 @@ final class ZLinkStreamRuntimeIngressTest {
         assertEquals(PEER_B, session.context.routingId().orElseThrow());
         assertEquals(List.of("good"), session.packetNames);
         assertTrue(stream.sessionClosingSends.get() >= 1);
+    }
+
+    @Test
+    void segmentedOversizeRecordsEmsgsizeAndDisconnectsThePeer() throws Exception {
+        FakeStream stream = new FakeStream();
+        byte[] oversize = frame("oversize", "x".repeat(512));
+        stream.enqueue(PEER_A, java.util.Arrays.copyOf(oversize, 6));
+        stream.enqueue(PEER_B, frame("good", "{}"));
+
+        ZLinkStreamRuntime runtime = start(stream, 0, 256);
+        runtimes.add(runtime);
+
+        TestSession session = awaitSession();
+        assertTrue(session.dispatchLatch.await(5, TimeUnit.SECONDS));
+        assertEquals(List.of("good"), session.packetNames);
+        assertEquals(PEER_A, stream.disconnectedPeer.get());
     }
 
     @Test
@@ -236,11 +263,270 @@ final class ZLinkStreamRuntimeIngressTest {
         assertEquals(1, stream.closeCalls.get());
     }
 
-    private ZLinkStreamRuntime start(FakeStream stream, long hwm) {
+    @Test
+    void boundSessionReplacementRunsCallbackBeforeADeferredCloseAndRejectsInbound() throws Exception {
+        TestSession.replacementMode = ReplacementMode.FAILURE;
+        FakeStream stream = new FakeStream();
+        ReplacementFixture fixture = startReplacement(stream);
+        runtimes.add(fixture.runtime());
+
+        TestSession session = awaitSession();
+        ZLinkActor actor = fixture.actors().getOrCreateLocalActor(
+                "replacement-actor", ZLinkActor.class)
+            .toCompletableFuture()
+            .join()
+            .orElseThrow();
+        ZLinkBackendActorRef actorRef = fixture.actors().currentRef(actor);
+        session.context().actors().bind(new ActorRef(
+                actorRef.actorId(),
+                actorRef.generation(),
+                MESH,
+                actorRef.nodeRid()))
+            .toCompletableFuture()
+            .join();
+
+        long started = System.nanoTime();
+        fixture.runtime().handleBoundSessionReplaced(
+            actorRef.nodeRid(),
+            replacement(actorRef));
+
+        assertTrue(session.replacementEntered.await(5, TimeUnit.SECONDS));
+        assertTrue(stream.sessionClosingSendsLatch.await(2, TimeUnit.SECONDS));
+        long elapsedMillis = TimeUnit.NANOSECONDS.toMillis(
+            System.nanoTime() - started);
+        assertEquals(1, session.replacementCallbacks.get());
+        stream.enqueue(PEER_A, frame("after-replacement", "{}"));
+        Thread.sleep(100);
+        assertFalse(session.packetNames.contains("after-replacement"));
+        assertTrue(elapsedMillis >= 80, "replacement close must be timer driven");
+        assertTrue(elapsedMillis < 2_000, "replacement close exceeded its timer");
+    }
+
+    @Test
+    void boundSessionReplacementIsIdempotentAndFencedByTheRetiredOwner() throws Exception {
+        TestSession.replacementMode = ReplacementMode.SUCCESS;
+        FakeStream stream = new FakeStream();
+        ReplacementFixture fixture = startReplacement(stream);
+        runtimes.add(fixture.runtime());
+
+        TestSession session = awaitSession();
+        ZLinkActor actor = fixture.actors().getOrCreateLocalActor(
+                "replacement-actor", ZLinkActor.class)
+            .toCompletableFuture()
+            .join()
+            .orElseThrow();
+        ZLinkBackendActorRef actorRef = fixture.actors().currentRef(actor);
+        session.context().actors().bind(new ActorRef(
+                actorRef.actorId(), actorRef.generation(), MESH, actorRef.nodeRid()))
+            .toCompletableFuture()
+            .join();
+
+        var command = replacement(actorRef);
+        fixture.runtime().handleBoundSessionReplaced(
+            actorRef.nodeRid(),
+            new systems.zlink.framework.runtime.internal.service
+                .ZLinkServiceM6BWireCodec.BoundSessionReplaced(
+                command.actorAuthority(),
+                new systems.zlink.framework.runtime.internal.service
+                    .ZLinkServiceM6BWireCodec.RetiredSessionRouteFence(
+                    command.retiredSession().sessionOwnerNodeRid(),
+                    command.retiredSession().sessionOwnerNodeGeneration(),
+                    "stale-owner",
+                    command.retiredSession().sessionOwnerLeaseGeneration(),
+                    command.retiredSession().sessionRid(),
+                    command.retiredSession().retiredBindingGeneration())));
+        Thread.sleep(100);
+        assertEquals(0, session.replacementCallbacks.get());
+
+        fixture.runtime().handleBoundSessionReplaced(actorRef.nodeRid(), command);
+        fixture.runtime().handleBoundSessionReplaced(actorRef.nodeRid(), command);
+        fixture.runtime().handleBoundSessionReplaced(
+            actorRef.nodeRid(),
+            new systems.zlink.framework.runtime.internal.service
+                .ZLinkServiceM6BWireCodec.BoundSessionReplaced(
+                command.actorAuthority(),
+                new systems.zlink.framework.runtime.internal.service
+                    .ZLinkServiceM6BWireCodec.RetiredSessionRouteFence(
+                    command.retiredSession().sessionOwnerNodeRid(),
+                    command.retiredSession().sessionOwnerNodeGeneration() + 1,
+                    command.retiredSession().sessionOwnerId(),
+                    command.retiredSession().sessionOwnerLeaseGeneration(),
+                    command.retiredSession().sessionRid(),
+                    command.retiredSession().retiredBindingGeneration())));
+
+        assertTrue(session.replacementEntered.await(5, TimeUnit.SECONDS));
+        assertTrue(stream.sessionClosingSendsLatch.await(2, TimeUnit.SECONDS));
+        assertEquals(1, session.replacementCallbacks.get());
+        assertEquals(1, stream.sessionClosingSends.get());
+    }
+
+    @Test
+    void boundSessionReplacementDeadlineClosesAStalledCallback() throws Exception {
+        TestSession.replacementMode = ReplacementMode.PENDING;
+        FakeStream stream = new FakeStream();
+        ReplacementFixture fixture = startReplacement(stream);
+        runtimes.add(fixture.runtime());
+
+        TestSession session = awaitSession();
+        ZLinkActor actor = fixture.actors().getOrCreateLocalActor(
+                "replacement-actor", ZLinkActor.class)
+            .toCompletableFuture()
+            .join()
+            .orElseThrow();
+        ZLinkBackendActorRef actorRef = fixture.actors().currentRef(actor);
+        session.context().actors().bind(new ActorRef(
+                actorRef.actorId(), actorRef.generation(), MESH, actorRef.nodeRid()))
+            .toCompletableFuture()
+            .join();
+
+        long started = System.nanoTime();
+        fixture.runtime().handleBoundSessionReplaced(
+            actorRef.nodeRid(), replacement(actorRef));
+
+        assertTrue(session.replacementEntered.await(5, TimeUnit.SECONDS));
+        assertTrue(stream.sessionClosingSendsLatch.await(8, TimeUnit.SECONDS));
+        long elapsedMillis = TimeUnit.NANOSECONDS.toMillis(
+            System.nanoTime() - started);
+        assertEquals(1, session.replacementCallbacks.get());
+        assertTrue(elapsedMillis >= 4_800,
+            "a stalled callback must be bounded by the callback deadline");
+        assertTrue(elapsedMillis < 8_000,
+            "callback deadline did not return to the scheduler promptly");
+    }
+
+    private static ReplacementFixture startReplacement(FakeStream stream) {
+        stream.enqueue(PEER_A, frame("initial", "{}"));
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.addStreamNode("stream")
             .bind("tcp://127.0.0.1:18081")
             .registerSession(TestSession.class);
+        options.configureInboundDispatch().setApplicationHwmBytes(0);
+        ZLinkFrameworkRegistration registration = options.registration();
+        ZLinkJsonMessageSerializer serializer = new ZLinkJsonMessageSerializer();
+        ZLinkInternalSpotNode spotNode = (ZLinkInternalSpotNode) Proxy.newProxyInstance(
+            ZLinkInternalSpotNode.class.getClassLoader(),
+            new Class<?>[] {ZLinkInternalSpotNode.class},
+            (proxy, method, arguments) -> switch (method.getName()) {
+                case "routingId" -> RoutingId.from("actor-node");
+                case "createActor" -> {
+                    if (arguments[1] instanceof Message request) {
+                        request.close();
+                    }
+                    yield new ZLinkBackendActorRef(
+                        RoutingId.from("actor-node"),
+                        (String) arguments[0],
+                        7);
+                }
+                case "localAuthorityLeaseGeneration" -> 11L;
+                case "rememberActorAuthority" -> null;
+                default -> defaultValue(method.getReturnType());
+            });
+        ZLinkActorRuntime actors = new ZLinkActorRuntime(
+            spotNode,
+            Map.of("probe", ProbeFactory.class),
+            Duration.ofSeconds(1),
+            serializer,
+            ZLinkHandlerActivator.reflection());
+        actors.setMeshName(MESH);
+        ZLinkInternalMeshNode ownerNode = (ZLinkInternalMeshNode)
+            Proxy.newProxyInstance(
+                ZLinkInternalMeshNode.class.getClassLoader(),
+                new Class<?>[] {ZLinkInternalMeshNode.class},
+                (proxy, method, arguments) -> switch (method.getName()) {
+                    case "routingId" -> RoutingId.from("session-owner-node");
+                    case "lifecycleGeneration" -> 3L;
+                    case "localAuthorityOwnerId" -> "session-owner";
+                    case "localAuthorityLeaseGeneration" -> 5L;
+                    default -> defaultValue(method.getReturnType());
+                });
+        ZLinkStreamRuntime runtime = new ZLinkStreamRuntime(
+            new FakeProvider(stream),
+            new ZLinkBackendAdapterOptions(Duration.ofSeconds(1)),
+            registration,
+            Map.of(),
+            Map.of(MESH, ownerNode),
+            serializer,
+            actors,
+            ZLinkHandlerActivator.reflection(),
+            ignored -> true,
+            null,
+            null,
+            new FakeContext(),
+            false);
+        return new ReplacementFixture(runtime, actors);
+    }
+
+    private static systems.zlink.framework.runtime.internal.service
+        .ZLinkServiceM6BWireCodec.BoundSessionReplaced replacement(
+            ZLinkBackendActorRef actorRef) {
+        return new systems.zlink.framework.runtime.internal.service
+            .ZLinkServiceM6BWireCodec.BoundSessionReplaced(
+            new systems.zlink.framework.runtime.internal.service
+                .ZLinkServiceM6BWireCodec.ActorRouteFence(
+                actorRef, 3, 7, 11),
+            new systems.zlink.framework.runtime.internal.service
+                .ZLinkServiceM6BWireCodec.RetiredSessionRouteFence(
+                RoutingId.from("session-owner-node"),
+                3,
+                "session-owner",
+                5,
+                PEER_A,
+                1));
+    }
+
+    private record ReplacementFixture(
+        ZLinkStreamRuntime runtime,
+        ZLinkActorRuntime actors) {
+    }
+
+    private enum ReplacementMode {
+        NONE,
+        SUCCESS,
+        FAILURE,
+        PENDING
+    }
+
+    private static Object defaultValue(Class<?> type) {
+        if (!type.isPrimitive()) {
+            return null;
+        }
+        if (type == boolean.class) {
+            return false;
+        }
+        if (type == char.class) {
+            return '\0';
+        }
+        if (type == byte.class) {
+            return (byte) 0;
+        }
+        if (type == short.class) {
+            return (short) 0;
+        }
+        if (type == int.class) {
+            return 0;
+        }
+        if (type == long.class) {
+            return 0L;
+        }
+        if (type == float.class) {
+            return 0F;
+        }
+        if (type == double.class) {
+            return 0D;
+        }
+        return null;
+    }
+
+    private ZLinkStreamRuntime start(FakeStream stream, long hwm) {
+        return start(stream, hwm, 64 * 1024);
+    }
+
+    private ZLinkStreamRuntime start(FakeStream stream, long hwm, long maxMessageSize) {
+        DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        var streamNode = options.addStreamNode("stream")
+            .bind("tcp://127.0.0.1:18081")
+            .registerSession(TestSession.class);
+        streamNode.configureSocket().setMaxMessageSize(maxMessageSize);
         options.configureInboundDispatch().setApplicationHwmBytes(hwm);
         ZLinkFrameworkRegistration registration = options.registration();
         lastRegistration = registration;
@@ -308,11 +594,16 @@ final class ZLinkStreamRuntimeIngressTest {
         private static final AtomicInteger createdCount = new AtomicInteger();
         private static volatile boolean holdFirstDispatch;
         private static volatile boolean failNextConstruction;
+        private static volatile ReplacementMode replacementMode = ReplacementMode.NONE;
         private final ZLinkSessionContext context;
         private final CountDownLatch dispatchLatch = new CountDownLatch(1);
         private final CountDownLatch secondDispatchLatch = new CountDownLatch(1);
         private final CompletableFuture<Void> firstDispatch = new CompletableFuture<>();
         private final AtomicInteger dispatchCount = new AtomicInteger();
+        private final AtomicInteger replacementCallbacks = new AtomicInteger();
+        private final CountDownLatch replacementEntered = new CountDownLatch(1);
+        private final CompletableFuture<Void> replacementCompletion =
+            new CompletableFuture<>();
         private final List<String> packetNames =
             java.util.Collections.synchronizedList(new ArrayList<>());
 
@@ -336,6 +627,16 @@ final class ZLinkStreamRuntimeIngressTest {
         @Override public CompletionStage<Void> onError(ZLinkStreamError error) {
             return CompletableFuture.completedFuture(null);
         }
+        @Override public CompletionStage<Void> onActorBindingReplaced(String actorId) {
+            replacementCallbacks.incrementAndGet();
+            replacementEntered.countDown();
+            return switch (replacementMode) {
+                case SUCCESS, NONE -> CompletableFuture.completedFuture(null);
+                case FAILURE -> CompletableFuture.failedFuture(
+                    new IllegalStateException("replacement callback failure"));
+                case PENDING -> replacementCompletion;
+            };
+        }
         @Override public CompletionStage<Void> onDispatch(
             ZLinkSessionDispatchContext dispatch,
             systems.zlink.framework.messaging.ZLinkMessage payload) {
@@ -348,6 +649,16 @@ final class ZLinkStreamRuntimeIngressTest {
             secondDispatchLatch.countDown();
             return CompletableFuture.completedFuture(null);
         }
+    }
+
+    public static final class ProbeFactory implements ZLinkActorFactory {
+        @Override
+        public CompletionStage<ZLinkActor> create(ZLinkActorContext context) {
+            return CompletableFuture.completedFuture(new ProbeActor(context));
+        }
+    }
+
+    private record ProbeActor(ZLinkActorContext context) implements ZLinkActor {
     }
 
     private static final class FakeProvider implements ZLinkBackendAdapterProvider {
@@ -382,6 +693,9 @@ final class ZLinkStreamRuntimeIngressTest {
         private final AtomicInteger readinessWaits = new AtomicInteger();
         private final AtomicBoolean receivePermit = new AtomicBoolean();
         private final AtomicInteger sessionClosingSends = new AtomicInteger();
+        private final CountDownLatch sessionClosingSendsLatch = new CountDownLatch(1);
+        private final AtomicReference<RoutingId> disconnectedPeer =
+            new AtomicReference<>();
         private final CountDownLatch firstReceiveEntered = new CountDownLatch(1);
         private final CountDownLatch firstReceiveRelease = new CountDownLatch(1);
         private volatile boolean blockFirstReceive;
@@ -466,6 +780,9 @@ final class ZLinkStreamRuntimeIngressTest {
             }
             return next;
         }
+        @Override public void disconnectPeer(RoutingId routingId) {
+            disconnectedPeer.set(routingId);
+        }
         @Override public void onTransportError(ZLinkBackendStreamErrorHandler handler) {
             errorHandler = handler;
         }
@@ -484,6 +801,7 @@ final class ZLinkStreamRuntimeIngressTest {
             }
             if ("session-closing".equals(header.packetName())) {
                 sessionClosingSends.incrementAndGet();
+                sessionClosingSendsLatch.countDown();
             }
             return true;
         }

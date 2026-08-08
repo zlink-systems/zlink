@@ -559,4 +559,4 @@ if [[ "${SCENARIO}" == "all" ]]; then
 else
   grep -Rq "scenario ${SCENARIO} passed" "${log_dir}"/client-*.stdout.log
 fi
-grep -Rq "message flow" "${log_dir}"/*-flow.log
+grep -Rq "message flow" "${log_dir}"/*.stdout.log

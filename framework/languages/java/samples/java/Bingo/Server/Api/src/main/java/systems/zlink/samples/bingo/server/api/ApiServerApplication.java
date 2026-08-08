@@ -33,9 +33,7 @@ public final class ApiServerApplication {
     ZLinkFrameworkConfigurer apiFramework(SampleTopology topology) {
         return options -> {
             options.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile(topology.logDirectory() + "/flow-api.log")
-                .traceLabel("api");
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             options.codecs().use(ZLinkProtobufCodec.defaultCodec());
             options.configureLocations();
             options.addHandlersFromPackageOf(ApiServerApplication.class);

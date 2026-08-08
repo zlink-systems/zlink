@@ -259,7 +259,8 @@ public final class ZLinkFrameworkRuntime
                     this.registration,
                     handlerFactory,
                     this.meshDrains,
-                    this.registration.inboundDispatchBudget()));
+                    this.registration.inboundDispatchBudget()),
+                true);
         }
         this.meshNodes.nodesByName().forEach((meshName, node) ->
             this.channels.registerSpotRouterNode(meshName, node.spotNode()));
@@ -391,6 +392,9 @@ public final class ZLinkFrameworkRuntime
             this.meshNodes.nodesByName().values().forEach(node ->
                 node.setSessionRelocationRouteHandler(
                     this.streams::handleSessionRelocationRoute));
+            this.meshNodes.nodesByName().values().forEach(node ->
+                node.setBoundSessionReplacedHandler(
+                    this.streams::handleBoundSessionReplaced));
         }
         this.spotRetire = this.spots != null
             && this.actors != null
@@ -421,10 +425,7 @@ public final class ZLinkFrameworkRuntime
                     ? java.util.concurrent.CompletableFuture
                         .completedFuture(null)
                     : this.objectDescriptors.publish(
-                        this.spotRetire != null
-                            && this.spotRetire.requiresStartupRecovery()
-                            ? ZLinkFrameworkRuntimeState.PREPARING
-                            : ZLinkFrameworkRuntimeState.SERVING))
+                        ZLinkFrameworkRuntimeState.PREPARING))
             .thenCompose(ignored ->
                 this.locationStores == null
                     || this.locationStores.unifiedStore() == null
@@ -445,14 +446,6 @@ public final class ZLinkFrameworkRuntime
                         .completedFuture(null)
                     : this.spotRetire.startup())
             .thenCompose(ignored ->
-                this.objectDescriptors == null
-                    || this.spotRetire == null
-                    || !this.spotRetire.requiresStartupRecovery()
-                    ? java.util.concurrent.CompletableFuture
-                        .completedFuture(null)
-                    : this.objectDescriptors.publish(
-                        ZLinkFrameworkRuntimeState.SERVING))
-            .thenCompose(ignored ->
                 this.authorityRouteRuntime == null
                     ? java.util.concurrent.CompletableFuture
                         .completedFuture(null)
@@ -463,6 +456,14 @@ public final class ZLinkFrameworkRuntime
                 this.channels,
                 this.meshNodes,
                 this.spots))
+            .thenCompose(ignored ->
+                this.objectDescriptors == null
+                    ? java.util.concurrent.CompletableFuture
+                        .completedFuture(null)
+                    : this.objectDescriptors.publish(
+                        ZLinkFrameworkRuntimeState.SERVING))
+            .thenRun(() -> this.meshNodes.nodesByName().values().forEach(
+                ZLinkInternalMeshNode::markServiceReady))
             .whenComplete((ignored, failure) -> {
                 if (failure == null && !drainStarted.get()) {
                     ready.set(true);

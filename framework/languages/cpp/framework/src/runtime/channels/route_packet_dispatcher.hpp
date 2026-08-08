@@ -7,6 +7,8 @@
 
 #include <zlink/framework/contracts/dispatch/execution.hpp>
 
+#include "runtime/diagnostics/dispatch_events.hpp"
+
 #include <optional>
 #include <string>
 

@@ -78,19 +78,19 @@ inline int run_session_server (int argc, char **argv)
 
     app.logging ()
       .use_file (log_dir + "/" + node_rid + ".log")
+      .use_file (log_dir + "/" + node_rid + "-flow.log")
       .set_min_level (zlink::framework::log_level_t::debug);
     app.add_zlink_framework ([&] (zlink::framework::zlink_framework_options_t &options) {
         auto state = std::make_unique<scenario_state_t> (node_rid);
         options.configure_dispatch ()
-          .message_flow (zlink::framework::message_flow_log_mode_t::key_transitions)
-          .trace_log_file (log_dir + "/" + node_rid + "-flow.log")
-          .trace_label ("cpp-sm-" + node_rid);
+          .message_flow (zlink::framework::message_flow_log_mode_t::normal);
         options.services ().add_singleton<scenario_state_t> (std::move (state));
         configure_codecs (options.codecs ());
         add_redis_location_store (options, redis_endpoint, redis_key_prefix);
 
         if (route_mesh_enabled) {
             auto route = options.add_route_mesh (e2e::route_channel);
+            route.channel_name (e2e::route_channel).client ();
             route.listen (route_endpoint)
               .set_routing_id (zlink::routing_id_t::from (node_rid))
               .channel_name (e2e::route_channel);
@@ -98,6 +98,7 @@ inline int run_session_server (int argc, char **argv)
                 route.peer_connections ().connect (peer);
         }
         auto spot = options.add_route_mesh (e2e::spot_mesh);
+        spot.channel_name (e2e::spot_mesh).client ();
         spot.listen (spot_router_endpoint)
           .set_routing_id (zlink::routing_id_t::from (node_rid))
           .channel_name (e2e::spot_mesh);

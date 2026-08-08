@@ -332,7 +332,8 @@ export class ZLinkSpotActivation {
   }
 
   canClose(): boolean {
-    return this.joinedActors.size === 0 && (this.closeRequested || this.externalActorCount() === 0);
+    const forceClose = this.closeRequested && !this.idleEvictionRequested;
+    return this.joinedActors.size === 0 && (forceClose || this.externalActorCount() === 0);
   }
 
   requestClose(): void {

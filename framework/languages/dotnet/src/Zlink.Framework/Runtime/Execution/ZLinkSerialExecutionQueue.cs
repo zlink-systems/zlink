@@ -34,6 +34,7 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
     private readonly ZLinkRuntimeTaskRunner _taskRunner;
     private ZLinkSerialWorkItem? _active;
     private int _completed;
+    private bool _applicationAdmissionClosed;
     private int _disposed;
     private Task? _disposeTask;
     private int _drainScheduled;
@@ -159,6 +160,12 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         TrySignalDrained();
     }
 
+    internal void CloseApplicationAdmission()
+    {
+        lock (_admissionGate)
+            _applicationAdmissionClosed = true;
+    }
+
     public ValueTask<ZLinkSerialWorkItem> PostAsync(
         Func<CancellationToken, ValueTask> callback,
         CancellationToken cancellationToken)
@@ -178,6 +185,7 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         lock (_admissionGate)
         {
             if (Volatile.Read(ref _completed) != 0
+                || _applicationAdmissionClosed
                 || !TryReserveSlot(
                     ZLinkSerialWorkLane.Application,
                     WorkItemFixedCostBytes,
@@ -220,7 +228,8 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         var accountingBytes = checked(WorkItemFixedCostBytes + retainedBytes);
         lock (_admissionGate)
         {
-            if (Volatile.Read(ref _completed) != 0)
+            if (Volatile.Read(ref _completed) != 0
+                || _applicationAdmissionClosed)
             {
                 item = null!;
                 return ZLinkSerialPostAdmission.Closed;
@@ -344,7 +353,8 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
 
         lock (_admissionGate)
         {
-            if (Volatile.Read(ref _completed) != 0)
+            if (Volatile.Read(ref _completed) != 0
+                || _applicationAdmissionClosed)
             {
                 item = null!;
                 return ZLinkAcceptedWorkAdmission.Closed;

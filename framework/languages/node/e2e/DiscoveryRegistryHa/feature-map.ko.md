@@ -17,21 +17,22 @@
 | SF-B3 | 구현 | Instance Spot에 public `addTimer`를 등록하고 provider의 public location status에서 owner lease 만료를 확인한 뒤, 같은 Spot request가 실패하고 만료 시점 이후 timer evidence가 증가하지 않는지 검증한다. |
 | SF-C3 | 구현 | 동일 RID replacement와 old lifecycle pause를 구성한다. Core의 same-side duplicate RID connection은 기존 current pipe를 유지하고 새 연결을 standby로 둔다. old process 재개 뒤에도 replacement가 current ready peer와 request 처리 주체로 유지되며 old evidence가 증가하지 않는지 검증한다. |
 | SF-C4 | 구현 | SF-C4에서만 multi-role profile을 활성화해 한 host의 RouteMesh 2개, ClientServer와 fanout을 구성한다. host replacement 뒤 public readiness를 확인하고, 각 역할의 marker가 replacement provider 또는 consumer subscriber에서 정확히 한 번 처리되며 old provider evidence가 증가하지 않는지 검증한다. |
-| SF-C5 | 미구현 | page size와 누락·중복은 검증하지만, 현재 fixture는 만료된 owner lease record를 만들지 않아 owner lease filtering을 실제로 판정하지 못한다. stale owner fixture와 public query exclusion assertion이 필요하다. |
+| SF-C5 | 구현 | 1,001개 Instance Spot을 대상으로 page size 1/100/1,000, continuation scan의 누락·중복 방지와 만료된 owner lease 제외를 public object query로 검증한다. |
+| SF-C5A | 구현 | ID 조회와 page 조회에서 `Ready`, `Creating`, `Unavailable`을 구분하고 `Missing`을 성공 응답에 포함하지 않는지 검증한다. Redis 중단 뒤 page 조회 전체가 오류로 끝나는지도 확인한다. |
 | SF-F1 | 미구현 | 실제 cross-language object/state process fixture가 필요하다. Node-only smoke는 계약 증거가 아니다. |
 | SF-F2 | 미구현 | 장기 capture/restore lease와 독립 Relocation Store 장애를 구성해야 한다. |
 | SF-F3 | 미구현 | Location Store와 Relocation Store를 분리한 장애 fixture가 필요하다. |
-| SF-F4 | 미구현 | object generation과 owner replacement를 public ref로 함께 검증해야 한다. |
+| SF-F4 | 구현 | Actor·User Spot·Instance Spot aggregate를 `api-a`에서 `api-b`로 이동해 owner만 바뀌고 ObjectGeneration은 유지되는지 확인한다. 이후 Actor destroy와 Instance Spot close 뒤 같은 ID를 다시 만들면 ObjectGeneration이 증가하며, 이전 ActorRef의 exact destroy가 새 Actor를 제거하지 않는지 검증한다. |
 | SF-F5 | 미구현 | creating owner crash와 bounded recovery result를 전용 Instance Spot fixture로 검증해야 한다. |
 | SF-F6 | 구현 | 1,001개 Instance Spot을 준비한 뒤 첫 public page를 받은 시점에 새 Spot을 만들고 기존 Spot을 public handler의 close 동작으로 제거한다. 기존 continuation scan의 중복·page cap과 새 scan의 추가·제거 반영을 검증한다. |
-| SF-F7 | 미구현 | public relocation size limit 안팎의 large state를 capture/restore해야 한다. |
+| SF-F7 | 구현 | 64 MiB application state는 Redis stripe root로 저장·복원하고 User Spot과 Actor의 owner, identity, state checksum을 target에서 확인한다. 64 MiB를 1 byte 초과한 state는 `StateIncompatible`로 종료하고 source owner와 state를 유지한다. |
 | SF-F8 | 미구현 | target owner lease 만료 뒤 source 보존을 relocation fixture로 검증해야 한다. |
 | SF-F9 | 구현 | SF-C3와 동일한 public channel replacement fixture에서 old provider를 pause/resume하고, replacement가 계속 current ready target로 선택되며 old lifecycle 재개 뒤에도 replacement evidence만 증가하는지 SF-F9 marker로 검증한다. |
 | SF-F10 | 미구현 | 다수 accepted request와 relocation completion의 ID별 terminal을 함께 검증해야 한다. |
 | SF-F11 | 미구현 | cancellation/response loss 뒤 payload isolation과 단일 terminal을 검증해야 한다. |
-| SF-G1 | 미구현 | Actor·Spot·stable type의 양수 capacity, CapacityExceeded 결과, factory failure rollback과 cleanup 후 slot 재사용을 같은 fixture에서 검증해야 한다. |
+| SF-G1 | 구현 | Actor 총량 3, Spot 총량 4, User Spot stable type 3을 함께 설정한다. Actor와 User Spot factory failure 뒤 reservation이 반환되는지, 동시 create 초과가 `CapacityExceeded`인지, destroy·close 뒤 slot을 다시 사용하는지를 public create terminal과 MeshNode descriptor count로 검증한다. 실제 process 증거: `log/20260808-022838-1932368`. |
 | SF-G2 | 구현됨 | activation concurrency gate가 Instance factory 실행을 제한하고 public descriptor의 active projection을 갱신한다. 32개 valid create의 최종 성공과 관찰된 active 상한을 검증한다. |
-| SF-G3 | 미구현 | User Spot aggregate capacity의 all-or-none 결과를 검증해야 한다. |
+| SF-G3 | 구현 | User Spot 하나와 Actor 두 개를 source aggregate로 구성한다. target의 Spot 총량, Actor 총량, User Spot stable type 총량을 각각 부족하게 만든 세 조합에서는 source ownership과 application state가 유지되는지 확인한다. 세 capacity가 모두 충분한 조합에서는 aggregate 전체가 target으로 이동하고 identity와 state가 보존되는지 검증한다. |
 
 ## 검증
 
@@ -71,3 +72,15 @@
 - `./e2e/DiscoveryRegistryHa/run_e2e.sh SF-C5`
   - 로그: `log/20260806-141516-386731`
   - 결과: 1,001개 Instance Spot과 page size 1/100/1,000의 public object query, owner lease filtering을 확인했으며 `scenario SF-C5 passed`, `store-failure-recovery scenario result=passed`
+- `./e2e/DiscoveryRegistryHa/run_e2e.sh SF-C5A`
+  - 로그: `log/20260807-222447-2593297`
+  - 결과: 이전 owner 종료 후 `Unavailable`, 새 owner의 `Ready`와 초기화 중 `Creating`을 ID 조회와 page 조회에서 확인했다. `Missing`은 성공 page에 나타나지 않았고 Redis 중단 뒤 page 조회는 전체 오류로 끝났다. `scenario SF-C5A passed`, `store-failure-recovery scenario result=passed`
+- `./e2e/DiscoveryRegistryHa/run_e2e.sh SF-G3`
+  - 로그: `log/20260808-025010-2168471`, `log/20260808-025017-2169110`, `log/20260808-025026-2169781`, `log/20260808-025035-2170420`
+  - 결과: Spot·Actor·stable type capacity가 각각 부족한 세 조합은 source aggregate를 유지했고, 충분한 조합은 User Spot과 Actor 두 개를 target으로 함께 이동했다. 네 조합에서 identity와 application state를 확인했으며 `scenario SF-G3 passed`를 확인했다.
+- `./e2e/DiscoveryRegistryHa/run_e2e.sh SF-F7`
+  - 로그: `log/20260808-035246-3082189`, `log/20260808-035330-3109518`
+  - 결과: 64 MiB state는 target으로 이동한 뒤 length와 SHA-256 checksum이 유지됐다. 64 MiB + 1 byte state는 `StateIncompatible`로 종료됐고 source owner와 state가 유지됐으며 두 variant 모두 `scenario SF-F7 variant=... passed`를 확인했다.
+- `./e2e/DiscoveryRegistryHa/run_e2e.sh SF-F4`
+  - 로그: `log/20260808-043955-4058323`
+  - 결과: relocation 뒤 세 object의 owner만 `api-b`로 바뀌고 ObjectGeneration은 유지됐다. Actor와 Instance Spot을 제거하고 같은 ID로 다시 만들었을 때 generation이 증가했으며, 이전 ActorRef의 exact destroy는 새 Actor를 변경하지 않았다. `scenario SF-F4 passed`, `store-failure-recovery scenario result=passed`를 확인했다.

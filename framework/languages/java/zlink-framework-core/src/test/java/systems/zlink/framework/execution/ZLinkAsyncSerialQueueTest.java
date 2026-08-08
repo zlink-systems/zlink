@@ -14,6 +14,7 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.time.Duration;
 import org.junit.jupiter.api.Test;
@@ -23,6 +24,67 @@ import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 
 final class ZLinkAsyncSerialQueueTest {
+    @Test
+    void lazyRelocationRecordIsNotMaterializedDuringNormalDispatch()
+        throws Exception {
+        ZLinkAsyncSerialQueue queue = new ZLinkAsyncSerialQueue();
+        CompletableFuture<Void> active = new CompletableFuture<>();
+        CompletableFuture<Void> started = new CompletableFuture<>();
+        AtomicInteger materializations = new AtomicInteger();
+        queue.enqueue(() -> {
+            started.complete(null);
+            return active;
+        });
+        started.get(3, TimeUnit.SECONDS);
+        CompletableFuture<Void> queued = queue.enqueueRelocatableLazyRecord(
+            () -> {
+                materializations.incrementAndGet();
+                return new byte[] {1};
+            },
+            1,
+            () -> CompletableFuture.completedFuture(null),
+            () -> { }).toCompletableFuture();
+
+        active.complete(null);
+        queued.get(3, TimeUnit.SECONDS);
+
+        assertEquals(0, materializations.get());
+    }
+
+    @Test
+    void relocationSealMaterializesLazyRecordExactlyOnce() throws Exception {
+        ZLinkAsyncSerialQueue queue = new ZLinkAsyncSerialQueue();
+        CompletableFuture<Void> sealNow = new CompletableFuture<>();
+        CompletableFuture<Void> activeStarted = new CompletableFuture<>();
+        CompletableFuture<ZLinkAsyncSerialQueue.RelocationSeal> sealed =
+            new CompletableFuture<>();
+        AtomicInteger materializations = new AtomicInteger();
+        queue.enqueue(() -> {
+            activeStarted.complete(null);
+            sealNow.join();
+            sealed.complete(queue.trySealRelocation().orElseThrow());
+            return CompletableFuture.completedFuture(null);
+        });
+        activeStarted.get(3, TimeUnit.SECONDS);
+        queue.enqueueRelocatableLazyRecord(
+            () -> {
+                materializations.incrementAndGet();
+                return new byte[] {4, 2};
+            },
+            2,
+            () -> CompletableFuture.completedFuture(null),
+            () -> { });
+
+        sealNow.complete(null);
+        ZLinkAsyncSerialQueue.RelocationSeal seal =
+            sealed.get(3, TimeUnit.SECONDS);
+
+        assertEquals(1, materializations.get());
+        assertArrayEquals(new byte[] {4, 2}, seal.captured().getFirst().payload());
+        assertTrue(queue.abortRelocation(seal));
+        assertEquals(1, materializations.get());
+    }
+
     @Test
     void lifecycleBarrierRunsAfterActiveTurnAndBeforeQueuedApplicationTurns()
         throws Exception {
@@ -587,6 +649,10 @@ final class ZLinkAsyncSerialQueueTest {
         assertArrayEquals(new byte[] {2}, relay.getFirst().payload());
         assertTrue(queue.enqueueRelocatable(
             new byte[] {3},
+            () -> CompletableFuture.completedFuture(null))
+            .toCompletableFuture()
+            .isCompletedExceptionally());
+        assertTrue(queue.enqueue(
             () -> CompletableFuture.completedFuture(null))
             .toCompletableFuture()
             .isCompletedExceptionally());

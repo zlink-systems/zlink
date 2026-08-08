@@ -1,23 +1,69 @@
 package systems.zlink.e2e.observabilityops.a5.server;
 
 import java.util.List;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
+import java.util.Map;
+import java.util.HashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
-import systems.zlink.framework.configuration.ZLinkMessageFlowEvent;
-import systems.zlink.framework.configuration.ZLinkMessageFlowObserver;
+import java.util.logging.Handler;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 
-public final class FlowEvidence implements ZLinkMessageFlowObserver {
-    private final CopyOnWriteArrayList<ZLinkMessageFlowEvent> events =
+public final class FlowEvidence extends Handler {
+    private static final String LOGGER_NAME =
+        "systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer";
+    private final CopyOnWriteArrayList<FlowEvent> events =
         new CopyOnWriteArrayList<>();
 
-    @Override
-    public CompletionStage<Void> onMessageFlow(ZLinkMessageFlowEvent flow) {
-        events.add(flow);
-        return CompletableFuture.completedFuture(null);
+    public void install() {
+        Logger.getLogger(LOGGER_NAME).addHandler(this);
     }
 
-    public List<ZLinkMessageFlowEvent> snapshot() {
+    @Override
+    public void publish(LogRecord record) {
+        FlowEvent event = FlowEvent.parse(record.getMessage());
+        if (event != null) {
+            events.add(event);
+        }
+    }
+
+    @Override public void flush() {
+    }
+
+    @Override public void close() {
+        Logger.getLogger(LOGGER_NAME).removeHandler(this);
+    }
+
+    public List<FlowEvent> snapshot() {
         return List.copyOf(events);
+    }
+
+    public record FlowEvent(
+        String outcome,
+        String surface,
+        String messageKind,
+        String packetName,
+        String channelName,
+        String errorReason,
+        String errorType) {
+        static FlowEvent parse(String message) {
+            if (message == null || !message.startsWith("message flow ")) {
+                return null;
+            }
+            Map<String, String> fields = new HashMap<>();
+            for (String token : message.split(" ")) {
+                int separator = token.indexOf('=');
+                if (separator > 0) {
+                    fields.put(token.substring(0, separator), token.substring(separator + 1));
+                }
+            }
+            return new FlowEvent(
+                fields.get("outcome"),
+                fields.get("surface"),
+                fields.get("kind"),
+                fields.get("packet"),
+                fields.get("channel"),
+                fields.get("reason"),
+                fields.get("errorType"));
+        }
     }
 }

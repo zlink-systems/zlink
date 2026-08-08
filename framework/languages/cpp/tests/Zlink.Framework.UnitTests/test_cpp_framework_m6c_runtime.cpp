@@ -1248,12 +1248,13 @@ class memory_authority_store_t final : public authority_relocation_port_t
   public:
     authority_publish_result_t publish (
       const object_ref_t &source,
-      std::string target_node_id,
+      const object_ref_t &target,
       zlink::framework::location_owner_token_t target_owner,
       zlink::framework::relocation_capacity_fence_t,
       std::string relocation_reference,
       std::uint32_t checksum_crc32c,
-      inventory_digest_t inventory_digest) override
+      inventory_digest_t inventory_digest,
+      std::vector<std::byte> target_application_payload = {}) override
     {
         std::lock_guard lock (mutex);
         log.push_back ("publish");
@@ -1263,16 +1264,14 @@ class memory_authority_store_t final : public authority_relocation_port_t
                 && publish_count == conflict_on_publish))
             return {authority_publish_status_t::conflict, read_locked (
                       source.kind, source.key)};
-        auto target = source;
-        target.node_id = std::move (target_node_id);
-        ++target.authority_owner_generation;
         authority_relocation_reference_t reference{
           .source = source,
           .target = target,
           .relocation_reference = std::move (relocation_reference),
           .checksum_crc32c = checksum_crc32c,
           .inventory_digest = inventory_digest,
-          .target_owner = std::move (target_owner)};
+          .target_owner = std::move (target_owner),
+          .application_payload = std::move (target_application_payload)};
         rows[authority_key (source.kind, source.key)] = reference;
         if (throw_after_publish)
             throw std::runtime_error ("response lost after authority commit");
@@ -3116,15 +3115,25 @@ void test_public_authority_store_adapter (test_context_t &test)
       "node-a"};
     const zlink::framework::location_owner_token_t target_owner{
       "owner-b", 5};
+    auto target = source;
+    target.mesh_name = "mesh-b";
+    target.node_id = "node-b";
+    ++target.authority_owner_generation;
+    const std::vector<std::byte> relocated_application_payload{
+      std::byte{0x21}, std::byte{0x22}};
     const auto published = adapter.publish (
-      source, "node-b", target_owner, {"capacity-public"},
+      source, target, target_owner, {"capacity-public"},
       "root-public", 42,
-      digest_with (9));
+      digest_with (9), relocated_application_payload);
     test.require (
       published.status == authority_publish_status_t::published
         && published.current
+        && published.current->source.mesh_name == "mesh"
+        && published.current->target.mesh_name == "mesh-b"
         && published.current->target.node_id == "node-b"
-        && published.current->target.authority_owner_generation == 12,
+        && published.current->target.authority_owner_generation == 12
+        && published.current->application_payload
+             == relocated_application_payload,
       "public authority adapter must publish exact NewOwner generation");
     test.require (
       store.observed_target_owner
@@ -3138,7 +3147,7 @@ void test_public_authority_store_adapter (test_context_t &test)
         && std::all_of (
           store.observed_keys.begin (), store.observed_keys.end (),
           [] (const auto &key) {
-              return key == "1:actor-public";
+              return key == "zla1:a:12:actor-public";
           }),
       "public authority adapter must pass exact target owner and capacity fence");
     const auto read =

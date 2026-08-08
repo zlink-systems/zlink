@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Zlink.Framework.Runtime.Identifiers;
 
 namespace Zlink.Framework.Runtime.Actors;
 
@@ -24,7 +25,8 @@ internal sealed class ZLinkActorDispatchRouter(
         Message payload,
         CancellationToken cancellationToken = default)
     {
-        var state = actorSessions.GetOrCreate(actorId);
+        var state = actorSessions.GetOrCreate(
+            ZLinkActorId.FromBoundary(actorId, nameof(actorId)));
         var actor = state.Actor
                     ?? throw new ZLinkFrameworkException(
                         ZLinkFrameworkErrorKind.NotFound,
@@ -46,7 +48,8 @@ internal sealed class ZLinkActorDispatchRouter(
         bool relocationReplay,
         CancellationToken cancellationToken = default)
     {
-        var state = actorSessions.GetOrCreate(actorId);
+        var state = actorSessions.GetOrCreate(
+            ZLinkActorId.FromBoundary(actorId, nameof(actorId)));
         var actor = state.Actor
                     ?? throw new ZLinkFrameworkException(
                         ZLinkFrameworkErrorKind.NotFound,
@@ -75,7 +78,8 @@ internal sealed class ZLinkActorDispatchRouter(
             _dispatchErrors.Flow.CaptureEnabled,
             ZLinkFlowOrigin.Inbound);
         var actorId = actor.Context.ActorId;
-        var state = actorSessions.GetOrCreate(actor.Context.ActorId);
+        var state = actorSessions.GetOrCreate(
+            ZLinkActorId.FromBoundary(actor.Context.ActorId, nameof(actor)));
         var shouldPrune = false;
         ensureActorContext(actor, state);
 
@@ -97,7 +101,7 @@ internal sealed class ZLinkActorDispatchRouter(
         }
         finally
         {
-            if (shouldPrune) actorSessions.TryRemove(actorId, state);
+            if (shouldPrune) actorSessions.TryRemove(state.RuntimeActorId, state);
         }
     }
 
@@ -110,7 +114,8 @@ internal sealed class ZLinkActorDispatchRouter(
             null,
             _dispatchErrors.Flow.CaptureEnabled,
             ZLinkFlowOrigin.Lifecycle);
-        var state = actorSessions.GetOrCreate(actorId);
+        var state = actorSessions.GetOrCreate(
+            ZLinkActorId.FromBoundary(actorId, nameof(actorId)));
         var actor = state.Actor
                     ?? throw new ZLinkFrameworkException(
                         ZLinkFrameworkErrorKind.NotFound,

@@ -42,13 +42,12 @@ class A5Application {
     @Bean
     fun frameworkConfigurer(evidence: FlowEvidence): ZLinkFrameworkConfigurer =
         ZLinkFrameworkConfigurer { options ->
+            evidence.install()
             options.configureLocations()
                 .setOwnerLeaseRenewInterval(Duration.ofMillis(500))
             options.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .setMessageFlowObserver(evidence)
-                .traceLogFile("${Env.get("e2e.log.dir")}/a5-flow.log")
-                .traceLabel("kotlin-observability-a5")
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL)
+
             val endpoint = java.net.URI.create(Env.get("e2e.route.endpoint"))
             val channel = options.addClientServerChannel(Contracts.CHANNEL)
             channel

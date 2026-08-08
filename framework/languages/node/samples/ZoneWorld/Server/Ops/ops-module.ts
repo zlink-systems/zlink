@@ -1,5 +1,4 @@
 import { zlinkFramework, zlinkModule, ZLinkModule } from '@zlink-systems/nestjs';
-import { ZLinkMessageFlowLogMode } from '@zlink-systems/framework';
 import { ZONEWORLD_CONFIG, createZoneWorldConfigurationModule } from '../Configuration/configuration';
 import type { ZoneWorldConfiguration } from '../Configuration/configuration';
 import { createZoneWorldLocationStore, zoneWorldLocationOptions } from '../Configuration/location-store';
@@ -25,9 +24,7 @@ function createOpsModule() {
         builder.addLocationStore(createZoneWorldLocationStore(config.shared));
         zoneWorldLocationOptions(builder.configureLocations());
         builder.configureDispatch()
-          .messageFlow(ZLinkMessageFlowLogMode.KeyTransitions)
-          .traceLogFile(`${config.shared.logDirectory}/flow-ops.log`)
-          .traceLabel('ops');
+          .messageFlow('normal');
         builder.addStreamNode(ZoneWorldNames.opsStreamNode)
           .bind(ops.streamEndpoint)
           .registerSession(OpsSessionFactory);

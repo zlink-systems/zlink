@@ -8,6 +8,85 @@ namespace Zlink.Framework.UnitTests;
 public sealed class FrameworkJsonProfileTests
 {
     [Fact]
+    public void Global_object_reference_json_round_trips_with_canonical_wire_types()
+    {
+        var actor = new ActorRef(
+            "actor-1",
+            7,
+            "mesh",
+            RoutingId.From("node"));
+        var spot = new SpotRef(
+            "spot-1",
+            9,
+            "mesh",
+            RoutingId.From("node"));
+
+        Assert.Equal(
+            "{\"actorId\":\"actor-1\",\"objectGeneration\":\"7\",\"meshName\":\"mesh\",\"nodeRid\":\"6e6f6465\"}",
+            JsonSerializer.Serialize(actor));
+        Assert.Equal(
+            "{\"spotId\":\"spot-1\",\"objectGeneration\":\"9\",\"meshName\":\"mesh\",\"nodeRid\":\"6e6f6465\"}",
+            JsonSerializer.Serialize(spot));
+        Assert.Equal(
+            actor,
+            JsonSerializer.Deserialize<ActorRef>(
+                "{\"actorId\":\"actor-1\",\"objectGeneration\":\"7\",\"meshName\":\"mesh\",\"nodeRid\":\"6e6f6465\"}"));
+        Assert.Equal(
+            spot,
+            JsonSerializer.Deserialize<SpotRef>(
+                "{\"spotId\":\"spot-1\",\"objectGeneration\":\"9\",\"meshName\":\"mesh\",\"nodeRid\":\"6e6f6465\"}"));
+    }
+
+    [Theory]
+    [InlineData("{\"actorId\":\"actor-1\",\"objectGeneration\":7,\"meshName\":\"mesh\",\"nodeRid\":\"6e6f6465\"}")]
+    [InlineData("{\"actorId\":\"actor-1\",\"objectGeneration\":\"07\",\"meshName\":\"mesh\",\"nodeRid\":\"6e6f6465\"}")]
+    [InlineData("{\"actorId\":\"actor-1\",\"objectGeneration\":\"7\",\"meshName\":\"mesh\",\"nodeRid\":\"6e6f6465\",\"extra\":true}")]
+    [InlineData("{\"actorId\":\"actor-1\",\"objectGeneration\":\"7\",\"meshName\":\"mesh\",\"nodeRid\":\"6e6f6465\",\"actorId\":\"other\"}")]
+    public void Global_object_reference_json_rejects_noncontract_input(string json)
+    {
+        Assert.ThrowsAny<JsonException>(() => JsonSerializer.Deserialize<ActorRef>(json));
+    }
+
+    [Theory]
+    [InlineData("{\"actorId\":\"\",\"objectGeneration\":\"1\",\"meshName\":\"mesh\",\"nodeRid\":\"6e6f6465\"}")]
+    [InlineData("{\"actorId\":\"\\u0000\",\"objectGeneration\":\"1\",\"meshName\":\"mesh\",\"nodeRid\":\"6e6f6465\"}")]
+    [InlineData("{\"actorId\":\"actor-1\",\"objectGeneration\":\"9223372036854775808\",\"meshName\":\"mesh\",\"nodeRid\":\"6e6f6465\"}")]
+    [InlineData("{\"actorId\":\"actor-1\",\"objectGeneration\":\"1\",\"meshName\":\"\",\"nodeRid\":\"6e6f6465\"}")]
+    [InlineData("{\"actorId\":\"actor-1\",\"objectGeneration\":\"1\",\"meshName\":\"mesh\",\"nodeRid\":\"\"}")]
+    public void Actor_reference_json_rejects_invalid_identity_values(string json)
+    {
+        Assert.ThrowsAny<JsonException>(() => JsonSerializer.Deserialize<ActorRef>(json));
+    }
+
+    [Theory]
+    [InlineData("{\"spotId\":\"\",\"objectGeneration\":\"1\",\"meshName\":\"mesh\",\"nodeRid\":\"6e6f6465\"}")]
+    [InlineData("{\"spotId\":\"\\u0000\",\"objectGeneration\":\"1\",\"meshName\":\"mesh\",\"nodeRid\":\"6e6f6465\"}")]
+    [InlineData("{\"spotId\":\"spot-1\",\"objectGeneration\":\"0\",\"meshName\":\"mesh\",\"nodeRid\":\"6e6f6465\"}")]
+    [InlineData("{\"spotId\":\"spot-1\",\"objectGeneration\":\"9223372036854775808\",\"meshName\":\"mesh\",\"nodeRid\":\"6e6f6465\"}")]
+    [InlineData("{\"spotId\":\"spot-1\",\"objectGeneration\":\"1\",\"meshName\":\"\",\"nodeRid\":\"6e6f6465\"}")]
+    [InlineData("{\"spotId\":\"spot-1\",\"objectGeneration\":\"1\",\"meshName\":\"mesh\",\"nodeRid\":\"\"}")]
+    public void Spot_reference_json_rejects_invalid_identity_values(string json)
+    {
+        Assert.ThrowsAny<JsonException>(() => JsonSerializer.Deserialize<SpotRef>(json));
+    }
+
+    [Fact]
+    public void Global_object_reference_json_rejects_invalid_default_values_on_encode()
+    {
+        Assert.ThrowsAny<ArgumentException>(() => JsonSerializer.Serialize(default(ActorRef)));
+        Assert.ThrowsAny<ArgumentException>(() => JsonSerializer.Serialize(default(SpotRef)));
+
+        var oversizedSpotId = new string('s', 256);
+        var json = "{\"spotId\":\"" + oversizedSpotId
+                   + "\",\"objectGeneration\":\"1\",\"meshName\":\"mesh\",\"nodeRid\":\"6e6f6465\"}";
+        Assert.ThrowsAny<JsonException>(() => JsonSerializer.Deserialize<SpotRef>(json));
+
+        var actorJson = "{\"actorId\":\"" + oversizedSpotId
+                        + "\",\"objectGeneration\":\"1\",\"meshName\":\"mesh\",\"nodeRid\":\"6e6f6465\"}";
+        Assert.ThrowsAny<JsonException>(() => JsonSerializer.Deserialize<ActorRef>(actorJson));
+    }
+
+    [Fact]
     public void Shared_Golden_Fixture_Is_Enforced_By_The_Application_Decode_Path()
     {
         using var fixture = ReadFixture();

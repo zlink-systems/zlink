@@ -254,6 +254,29 @@ export interface ServiceActorRouteFence {
   readonly actor: ServiceActorRef;
   readonly targetNodeGeneration: bigint;
   readonly authorityOwnerGeneration: bigint;
+  readonly ownerLeaseGeneration?: bigint;
+}
+
+/**
+ * The authority fence carried by a bound-session replacement notice.  This
+ * command is deliberately separate from the legacy Actor message fence: the
+ * receiver validates the transport source against this authority target and
+ * must not resolve a local Actor object for the retired session.
+ */
+export interface ServiceBoundSessionActorAuthority {
+  readonly actor: ServiceActorRef;
+  readonly targetNodeGeneration: bigint;
+  readonly authorityOwnerGeneration: bigint;
+  readonly ownerLeaseGeneration: bigint;
+}
+
+export interface ServiceRetiredBoundSessionRouteFence {
+  readonly sessionOwnerNodeRid: string;
+  readonly sessionOwnerNodeGeneration: bigint;
+  readonly sessionOwnerId: string;
+  readonly sessionOwnerLeaseGeneration: bigint;
+  readonly sessionRid: string;
+  readonly retiredBindingGeneration: bigint;
 }
 
 export interface ServiceBoundSessionSource {
@@ -415,6 +438,11 @@ export type ServiceStatefulWireRecord =
       readonly actor: ServiceActorRouteFence;
       readonly sessionRid: string;
       readonly binding: ServiceBoundSessionTransition;
+    }
+  | {
+      readonly kind: 'boundSessionReplaced';
+      readonly actorAuthority: ServiceBoundSessionActorAuthority;
+      readonly retiredSession: ServiceRetiredBoundSessionRouteFence;
     }
   | {
       readonly kind: 'instanceSpot';
@@ -603,6 +631,22 @@ export function encodeBoundSessionBindHeader(
     Buffer.of(binding.state === 'active' ? 1 : 2),
     u16(body.byteLength),
     body
+  );
+}
+
+export function encodeBoundSessionReplacedHeader(
+  actorAuthority: ServiceBoundSessionActorAuthority,
+  retiredSession: ServiceRetiredBoundSessionRouteFence
+): Buffer {
+  return concat(
+    prefix(M6bServiceWireCommand.boundSessionReplaced),
+    actorAuthorityFence(actorAuthority),
+    rid(retiredSession.sessionOwnerNodeRid, 'sessionOwnerNodeRid'),
+    u64(retiredSession.sessionOwnerNodeGeneration),
+    text8(retiredSession.sessionOwnerId, 'sessionOwnerId'),
+    u64(retiredSession.sessionOwnerLeaseGeneration),
+    rid(retiredSession.sessionRid, 'sessionRid'),
+    u64(retiredSession.retiredBindingGeneration)
   );
 }
 
@@ -929,6 +973,31 @@ export function decodeStatefulHeader(frame: Uint8Array): ServiceStatefulWireReco
           ? { state: 'active', generation }
           : { state: 'tombstone', retiredGeneration: generation }
       };
+    }
+    case M6bServiceWireCommand.boundSessionReplaced: {
+      requireFlags(command.flags, 0);
+      const actor = reader.actorRef('actorAuthority.actor');
+      const targetNodeRid = reader.rid('actorAuthority.targetNodeRid');
+      const actorAuthority = {
+        actor: { ...actor, nodeRid: targetNodeRid },
+        targetNodeGeneration: reader.nonZeroU64('actorAuthority.targetNodeGeneration'),
+        authorityOwnerGeneration: reader.nonZeroU64(
+          'actorAuthority.expectedAuthorityOwnerGeneration'
+        ),
+        ownerLeaseGeneration: reader.nonZeroU64(
+          'actorAuthority.expectedOwnerLeaseGeneration'
+        )
+      };
+      const retiredSession = {
+        sessionOwnerNodeRid: reader.rid('sessionOwnerNodeRid'),
+        sessionOwnerNodeGeneration: reader.nonZeroU64('sessionOwnerNodeGeneration'),
+        sessionOwnerId: reader.text8('sessionOwnerId'),
+        sessionOwnerLeaseGeneration: reader.nonZeroU64('sessionOwnerLeaseGeneration'),
+        sessionRid: reader.rid('sessionRid'),
+        retiredBindingGeneration: reader.nonZeroU64('retiredBindingGeneration')
+      };
+      reader.end();
+      return { kind: 'boundSessionReplaced', actorAuthority, retiredSession };
     }
     case M6bServiceWireCommand.instanceSpot: {
       if ((command.flags & ~M6bServiceWireFlag.metadata) !== 0) {
@@ -1471,6 +1540,7 @@ export function decodeStatefulReply(
   frame: Uint8Array,
   expectedCorrelation: bigint,
   operationKind: 'spotRequest' | 'actorRequest' | 'actorLookup' | 'actorDestroy' | 'actorJoin' | 'streamBind'
+    | 'streamUnbind'
     | 'instanceSpotRequest' | 'userSpotCreate' | 'userSpotClose' | 'actorCreate',
   hasPayload = false
 ): ServiceStatefulReply {
@@ -1571,12 +1641,18 @@ export function sessionBindingFromWire(
   sessionRid: string,
   sessionOwnerNodeRid: string,
   generation: bigint,
-  membershipEpoch: bigint
+  membershipEpoch: bigint,
+  sessionOwnerNodeGeneration?: bigint,
+  sessionOwnerId?: string,
+  sessionOwnerLeaseGeneration?: bigint
 ): ServiceSessionBinding {
   return {
     actor,
     sessionRid,
     sessionOwnerNodeRid,
+    ...(sessionOwnerNodeGeneration === undefined ? {} : { sessionOwnerNodeGeneration }),
+    ...(sessionOwnerId === undefined ? {} : { sessionOwnerId }),
+    ...(sessionOwnerLeaseGeneration === undefined ? {} : { sessionOwnerLeaseGeneration }),
     bindingGeneration: generation,
     membershipEpoch
   };
@@ -1886,6 +1962,16 @@ function actorFence(value: ServiceActorRouteFence): Buffer {
     rid(value.actor.nodeRid, 'targetNodeRid'),
     u64(value.targetNodeGeneration),
     u64(value.authorityOwnerGeneration)
+  );
+}
+
+function actorAuthorityFence(value: ServiceBoundSessionActorAuthority): Buffer {
+  return concat(
+    actorRef(value.actor),
+    rid(value.actor.nodeRid, 'targetNodeRid'),
+    u64(value.targetNodeGeneration),
+    u64(value.authorityOwnerGeneration),
+    u64(value.ownerLeaseGeneration)
   );
 }
 

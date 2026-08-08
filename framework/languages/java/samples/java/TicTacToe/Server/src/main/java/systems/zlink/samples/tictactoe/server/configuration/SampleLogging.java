@@ -18,7 +18,4 @@ public final class SampleLogging {
         }
     }
 
-    public static String flowLogPath(SampleLogSettings settings, String role) {
-        return Path.of(settings.logDirectory(), "flow-" + role + ".log").toString();
-    }
 }

@@ -3,6 +3,11 @@ using Systems.Zlink.Framework.Runtime.Protocol;
 
 namespace Zlink.Framework.Runtime.Service;
 
+internal static class ZLinkServiceSecurityIdentity
+{
+    internal const string Plaintext = "default";
+}
+
 internal enum MeshNodeState { Created = 1, Started, PartialReady, Ready, Draining, Stopped, Error }
 internal enum MeshPeerSource { Manual = 1, Discovery, Mixed }
 internal enum MeshPeerState
@@ -620,7 +625,7 @@ internal interface IMeshNode : IDisposable, IAsyncDisposable
     ulong ConnectPeer(
         string endpoint,
         RoutingId? expectedRid = null,
-        string expectedSecurityIdentity = "none");
+        string expectedSecurityIdentity = ZLinkServiceSecurityIdentity.Plaintext);
     void SetPeerExpectation(
         RoutingId peerRid,
         string endpoint,
@@ -777,6 +782,10 @@ internal interface ISpot : IDisposable, IAsyncDisposable
         ulong targetSpotGeneration, IReadOnlyList<Message> parts,
         out MeshOperationId operationId, TimeSpan timeout = default,
         SendFlags flags = SendFlags.None, ReadOnlyMemory<byte> metadata = default);
+    SubmitResult RequestToSpot(RoutingId targetNodeRid, string targetSpotId,
+        ulong targetSpotGeneration, IReadOnlyList<Message> parts,
+        MeshOperationId correlationId, TimeSpan timeout = default,
+        SendFlags flags = SendFlags.None, ReadOnlyMemory<byte> metadata = default);
 }
 
 internal readonly record struct SpotStatus(ulong LifecycleGeneration);
@@ -790,8 +799,13 @@ internal interface IStreamSessionService : IDisposable, IAsyncDisposable
     void Start();
     SubmitResult BindActor(RoutingId sessionRid, ActorRef actor,
         out MeshOperationId operationId, TimeSpan timeout = default);
+    SubmitResult BindActor(RoutingId sessionRid, ActorRef actor,
+        MeshOperationId correlationId, TimeSpan timeout = default);
     SubmitResult UnbindActor(RoutingId sessionRid, ActorRef actor,
         ulong expectedBindingGeneration, out MeshOperationId operationId,
+        TimeSpan timeout = default);
+    SubmitResult UnbindActor(RoutingId sessionRid, ActorRef actor,
+        ulong expectedBindingGeneration, MeshOperationId correlationId,
         TimeSpan timeout = default);
     StreamSessionBinding[] Bindings(RoutingId sessionRid);
     SubmitResult SendToActor(RoutingId sessionRid, ActorRef actor,

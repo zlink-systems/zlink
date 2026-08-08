@@ -10,6 +10,26 @@ internal static class ZlinkStreamSessionClosingCodec
     private const int MaximumDiagnosticBytes = 512;
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
 
+    public static byte[] EncodeServerDrain(string? diagnostic = null) =>
+        Encode(ZlinkStreamCloseReason.ServerDrain, diagnostic);
+
+    public static byte[] EncodeIdleTimeout(string? diagnostic = null) =>
+        Encode(ZlinkStreamCloseReason.IdleTimeout, diagnostic);
+
+    public static byte[] EncodeHeartbeatTimeout(string? diagnostic = null) =>
+        Encode(ZlinkStreamCloseReason.HeartbeatTimeout, diagnostic);
+
+    public static byte[] EncodeProtocolError(string? diagnostic = null) =>
+        Encode(ZlinkStreamCloseReason.ProtocolError, diagnostic);
+
+    public static ZlinkStreamHeader CreateHeader() => new(
+        ZlinkStreamMessageKind.Control,
+        ZlinkStreamCodec.Raw,
+        ZlinkStreamHeaderFlags.None,
+        null,
+        ControlName,
+        ZlinkStreamMetadata.Empty);
+
     public static ZlinkStreamSessionClosing Decode(ReadOnlySpan<byte> payload)
     {
         if (payload.Length < 4)
@@ -44,6 +64,40 @@ internal static class ZlinkStreamSessionClosingCodec
         {
             throw Error("Session-closing diagnostic is not valid UTF-8.", exception);
         }
+    }
+
+    private static byte[] Encode(
+        ZlinkStreamCloseReason reason,
+        string? diagnostic)
+    {
+        int diagnosticLength;
+        try
+        {
+            diagnosticLength = diagnostic is null
+                ? 0
+                : StrictUtf8.GetByteCount(diagnostic);
+        }
+        catch (EncoderFallbackException exception)
+        {
+            throw ZlinkStreamConnector.Error(
+                ZlinkStreamErrorCode.ValidationFailed,
+                "Session-closing diagnostic is not valid UTF-8.",
+                exception);
+        }
+        if (diagnosticLength > MaximumDiagnosticBytes)
+            throw ZlinkStreamConnector.Error(
+                ZlinkStreamErrorCode.ValidationFailed,
+                "Session-closing diagnostic must not exceed 512 UTF-8 bytes.");
+
+        var payload = new byte[4 + diagnosticLength];
+        payload[0] = Version;
+        payload[1] = checked((byte)((byte)reason + 1));
+        BinaryPrimitives.WriteUInt16BigEndian(
+            payload.AsSpan(2, 2),
+            checked((ushort)diagnosticLength));
+        if (diagnosticLength > 0)
+            StrictUtf8.GetBytes(diagnostic!, payload.AsSpan(4));
+        return payload;
     }
 
     private static ZlinkStreamException Error(string message, Exception? exception = null) =>

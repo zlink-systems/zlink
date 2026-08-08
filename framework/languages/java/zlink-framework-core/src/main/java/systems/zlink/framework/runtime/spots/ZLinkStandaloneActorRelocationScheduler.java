@@ -47,7 +47,13 @@ final class ZLinkStandaloneActorRelocationScheduler {
                         request.targetNodeRid(), request.fence(), timeout))
                     .thenCompose(ignored ->
                         source.discardInitialAfterCommit())
-                    .thenRun(source::releasePermitAfterCompletion);
+                    .thenRun(() -> {
+                        source.releasePermitAfterCompletion();
+                        systems.zlink.framework.runtime.internal.metrics
+                            .ZLinkRuntimeMetrics.increment(
+                                "zlink.drain.actors.handed_off",
+                                java.util.Map.of());
+                    });
             });
         return operation.exceptionallyCompose(failure -> {
             Throwable original = unwrap(failure);

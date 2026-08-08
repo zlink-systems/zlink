@@ -20,7 +20,10 @@ export {
 } from './actor-location-claims';
 import { ZLinkActorSessionRouteClaims } from './actor-session-route-claims';
 import { ZLinkSpotLocationClaims } from './spot-location-claims';
-import type { ZLinkTrackedInstanceAuthority } from './spot-location-claims';
+import type {
+  ZLinkInstanceClosingAuthority,
+  ZLinkTrackedInstanceAuthority
+} from './spot-location-claims';
 import type { ZLinkAuthorityStore } from './internal-store-contracts';
 import type {
   IZLinkLocationLifecycleRuntime,
@@ -220,7 +223,10 @@ export class ZLinkLocationLifecycle {
     await this.spotClaims.release(meshName, spotId, expectedObjectGeneration);
   }
 
-  async beginInstanceSpotClosing(meshName: string, spotId: RoutingId): Promise<boolean> {
+  async beginInstanceSpotClosing(
+    meshName: string,
+    spotId: RoutingId
+  ): Promise<ZLinkInstanceClosingAuthority | undefined> {
     return await this.spotClaims.beginInstanceClosing(meshName, spotId);
   }
 

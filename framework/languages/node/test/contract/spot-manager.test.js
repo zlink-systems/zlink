@@ -1,6 +1,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
+const telemetry = require('./helpers/telemetry-log-capture');
 const zlink = require('@zlink-systems/zlink');
 const framework = require('../../packages/framework/dist/internal');
 const {
@@ -58,16 +59,12 @@ const {
 } = require('../../packages/framework/dist/runtime/handlers/handler-instance-scope');
 
 test('local SPOT request failure rejects the caller and reports FailCaller', async () => {
-  const events = [];
-  class DispatchObserver {
-    onMessageFlow(event) {
-      events.push(event);
-    }
-  }
+  telemetry.reset();
+  const events = telemetry.records
   const dispatcher = new ZLinkRoutedSpotPacketDispatch({
     resolveActivation: () => undefined,
     dispatchErrors: dispatchErrorReporter(
-      DispatchObserver,
+      undefined,
       { reportRuntimeTaskException() {} }
     )
   });
@@ -94,6 +91,22 @@ function customTextSerializer(prefix = 'custom:') {
     deserialize(message) {
       const text = message.getString('utf8');
       return { text: text.startsWith(prefix) ? text.slice(prefix.length) : text };
+    }
+  };
+}
+
+function customBinarySerializer() {
+  return {
+    serialize(value) {
+      return zlink.Message.from(Buffer.concat([
+        Buffer.from([0]),
+        Buffer.from(value.text, 'utf8')
+      ]));
+    },
+    deserialize(message) {
+      const bytes = Buffer.from(message.toBytes());
+      assert.equal(bytes[0], 0);
+      return { text: bytes.subarray(1).toString('utf8') };
     }
   };
 }
@@ -177,8 +190,8 @@ test('spot runtime owner resolver converts backend actor generation to objectGen
     }),
     locationLifecycle: () => undefined,
     releaseInstanceAuthority: async () => {},
-    beginInstanceIdleClosingAuthority: async () => false,
-    beginInstanceClosingAuthority: async () => false,
+    beginInstanceIdleClosingAuthority: async () => undefined,
+    beginInstanceClosingAuthority: async () => undefined,
     createLocationSpotRouteResolver: () => undefined,
     boundSessionRelay: { boundSessions: {} },
     actorHandoff: {},
@@ -727,7 +740,7 @@ test('ZLinkSpotManager establishes the durable Closing fence before explicit Ins
       assert.equal(meshName, 'test.mesh');
       assert.equal(String(candidateSpotId), String(spotId));
       order.push('durable-closing');
-      return true;
+      return { restoreReady: async () => { throw new Error('unexpected restore'); } };
     }
   });
 
@@ -736,6 +749,30 @@ test('ZLinkSpotManager establishes the durable Closing fence before explicit Ins
   assert.deepEqual(order, ['durable-closing', 'local-close']);
   assert.equal(closingCalls, 1);
   assert.equal(await manager.find('test.mesh', spotId), null);
+});
+
+test('ZLinkSpotManager releases Instance authority when no newer application is present', async () => {
+  const released = [];
+  class RelocatedInstanceSpot {}
+  const spotId = zlink.RoutingId.from('relocated-instance-close');
+  const manager = new framework.DefaultZLinkSpotManager({
+    spotFactories: [],
+    instanceSpotFactories: new Map([[
+      'test.mesh',
+      new Map([['relocated', RelocatedInstanceSpot]])
+    ]]),
+    instanceSpotApplicationTargetProvider: () => undefined,
+    async beginInstanceClosingAuthority() {
+      return { restoreReady: async () => { throw new Error('unexpected restore'); } };
+    },
+    async releaseInstanceAuthority(meshName, candidateSpotId, objectGeneration) {
+      released.push([meshName, String(candidateSpotId), objectGeneration]);
+    }
+  });
+
+  await manager.materializeInstance('test.mesh', 'relocated', spotId, 7n);
+  assert.equal(await manager.close('test.mesh', spotId), true);
+  assert.deepEqual(released, [['test.mesh', String(spotId), 7n]]);
 });
 
 test('ZLinkSpotManager defers an Instance context close until activation completion', async () => {
@@ -757,7 +794,7 @@ test('ZLinkSpotManager defers an Instance context close until activation complet
     async beginInstanceClosingAuthority() {
       durableCloseCalls++;
       events.push('durable-closing');
-      return true;
+      return { restoreReady: async () => { throw new Error('unexpected restore'); } };
     }
   });
 
@@ -798,7 +835,7 @@ test('ZLinkSpotManager leaves an explicit Instance intact when the durable Closi
       'test.mesh',
       new Map([['explicit', CasLosingInstanceSpot]])
     ]]),
-    beginInstanceClosingAuthority: async () => false
+    beginInstanceClosingAuthority: async () => undefined
   });
 
   await manager.materializeInstance('test.mesh', 'explicit', spotId, 1n);
@@ -833,7 +870,9 @@ test('ZLinkSpotManager blocks Instance rematerialization while durable close CAS
   await Promise.resolve();
   assert.equal(initialized, 1);
   assert.equal(manager.isInstanceClosing('test.mesh', spotId), true);
-  releaseClosing.resolve(true);
+  releaseClosing.resolve({
+    restoreReady: async () => { throw new Error('unexpected restore'); }
+  });
   assert.equal(await close, true);
   await rematerialize;
   assert.equal(initialized, 2);
@@ -886,7 +925,7 @@ test('ZLinkSpotManager cancels idle eviction when the durable Closing fence lose
       new Map([['idle', IdleInstanceSpot]])
     ]]),
     instanceSpotIdleTimeoutMs: new Map([['test.mesh', 5]]),
-    beginInstanceIdleClosingAuthority: async () => false
+    beginInstanceIdleClosingAuthority: async () => undefined
   });
 
   await manager.materializeInstance('test.mesh', 'idle', spotId, 1n);
@@ -894,6 +933,41 @@ test('ZLinkSpotManager cancels idle eviction when the durable Closing fence lose
 
   assert.equal(closingCalls, 0);
   assert.notEqual(await manager.find('test.mesh', spotId), null);
+  await manager.close('test.mesh', spotId);
+});
+
+test('ZLinkSpotManager restores Ready authority when idle eviction loses local occupancy', async () => {
+  let actorCount = 0;
+  let restoreCalls = 0;
+  let authorityCalls = 0;
+  let quiescenceCalls = 0;
+  class OccupiedIdleInstanceSpot {}
+  const spotId = zlink.RoutingId.from('idle-instance-occupied');
+  const manager = new framework.DefaultZLinkSpotManager({
+    spotFactories: [],
+    instanceSpotFactories: new Map([[
+      'test.mesh',
+      new Map([['idle', OccupiedIdleInstanceSpot]])
+    ]]),
+    instanceSpotIdleTimeoutMs: new Map([['test.mesh', 5]]),
+    actorCountProvider: () => actorCount,
+    instanceSpotApplicationQuiescenceProvider: async () => {
+      quiescenceCalls++;
+      actorCount = 1;
+    },
+    async beginInstanceIdleClosingAuthority() {
+      authorityCalls++;
+      return { restoreReady: async () => { restoreCalls++; } };
+    }
+  });
+
+  await manager.materializeInstance('test.mesh', 'idle', spotId, 1n);
+  await waitFor(() => restoreCalls === 1);
+
+  assert.equal(authorityCalls, 1);
+  assert.equal(quiescenceCalls, 1);
+  assert.notEqual(await manager.find('test.mesh', spotId), null);
+  actorCount = 0;
   await manager.close('test.mesh', spotId);
 });
 
@@ -1197,6 +1271,26 @@ test('ZLinkSpotManager create request uses configured custom serializer without 
   assert.deepEqual(created.reply, { text: 'created' });
 });
 
+test('ZLinkSpotManager preserves binary serializer content type through onCreate', async () => {
+  const decoded = [];
+  class CodecSpot {
+    async onCreate(request) {
+      decoded.push(request.decode());
+      return { accepted: true };
+    }
+  }
+
+  const manager = new framework.DefaultZLinkSpotManager({
+    spotFactories: [CodecSpot],
+    messageSerializers: new Map([['application/x-custom-binary', customBinarySerializer()]])
+  });
+
+  const created = await manager.create('test.mesh', CodecSpot, { text: 'open' });
+
+  assert.equal(created.state, framework.ZLinkSpotCreateState.Created);
+  assert.deepEqual(decoded, [{ text: 'open' }]);
+});
+
 test('ZLinkSpotManager create request uses binary codec extensions without raw request code', async () => {
   const cases = [
     ['messagepack', msgpack.createMessagePackSerializer()],
@@ -1251,19 +1345,15 @@ test('spot handler registry records packet and subscribe registrations from conf
   ]);
 });
 
-test('ZLinkSpotManager reports SPOT subscription dispatch errors to global observer', async () => {
-  const dispatchEvents = [];
-  class DispatchObserver {
-    onMessageFlow(event) {
-      dispatchEvents.push(event);
-    }
-  }
+test('ZLinkSpotManager reports SPOT subscription dispatch errors to the standard logger provider', async () => {
+  telemetry.reset();
+  const dispatchEvents = telemetry.records
   class StageSpot {}
   const manager = new framework.DefaultZLinkSpotManager({
     spotFactories: [StageSpot],
     createNativeSpot: (_meshName, spotId) => formalNativeSpot(spotId),
     dispatchErrors: dispatchErrorReporter(
-      DispatchObserver,
+      undefined,
       { reportRuntimeTaskException() {} }
     )
   });
@@ -1349,12 +1439,8 @@ test('SPOT subscription dispatch runs the handler and never creates a message-fl
   // ZLinkDispatchMessageKind.Publish), so it must stay silent on the happy
   // path the same way ZLinkChannelDispatchPipeline.trace() already skips
   // Publish. This mirrors the BLK-001 precedent for classic fanout publish.
-  const flowEvents = [];
-  class DispatchObserver {
-    onMessageFlow(event) {
-      flowEvents.push(event);
-    }
-  }
+  telemetry.reset();
+  const flowEvents = telemetry.records
   const handled = [];
   class StageSpot {}
   class SubscribeHandler {
@@ -1366,9 +1452,9 @@ test('SPOT subscription dispatch runs the handler and never creates a message-fl
     spotFactories: [StageSpot],
     createNativeSpot: (_meshName, spotId) => formalNativeSpot(spotId),
     dispatchErrors: dispatchErrorReporter(
-      DispatchObserver,
+      undefined,
       { reportRuntimeTaskException() {} },
-      framework.ZLinkMessageFlowLogMode.KeyTransitions
+      'normal'
     ),
     detachedTaskRunner: { runDetached(_name, callback) { void callback(); } },
     spotSubscriptionHandlers: [{
@@ -1397,20 +1483,16 @@ test('SPOT subscription dispatch runs the handler and never creates a message-fl
   }
 });
 
-test('ZLinkSpotManager reports SPOT actor dispatch errors to global observer', async () => {
-  const dispatchEvents = [];
-  class DispatchObserver {
-    onMessageFlow(event) {
-      dispatchEvents.push(event);
-    }
-  }
+test('ZLinkSpotManager reports SPOT actor dispatch errors to the standard logger provider', async () => {
+  telemetry.reset();
+  const dispatchEvents = telemetry.records
   const badPart = zlink.Message.from('bad-frame');
   class StageSpot {}
   const manager = new framework.DefaultZLinkSpotManager({
     spotFactories: [StageSpot],
     createNativeSpot: (_meshName, spotId) => formalNativeSpot(spotId),
     dispatchErrors: dispatchErrorReporter(
-      DispatchObserver,
+      undefined,
       { reportRuntimeTaskException() {} }
     )
   });
@@ -1439,20 +1521,16 @@ test('ZLinkSpotManager reports SPOT actor dispatch errors to global observer', a
 });
 
 test('ZLinkSpotManager replies routed actor request dispatch errors', async () => {
-  const dispatchEvents = [];
+  telemetry.reset();
+  const dispatchEvents = telemetry.records;
   const replyParts = [];
-  class DispatchObserver {
-    onMessageFlow(event) {
-      dispatchEvents.push(event);
-    }
-  }
   const requestParts = createActorRequestParts('MissingActorPacket', { value: 'payload' }, 1n);
   class StageSpot {}
   const manager = new framework.DefaultZLinkSpotManager({
     spotFactories: [StageSpot],
     createNativeSpot: (_meshName, spotId) => formalNativeSpot(spotId),
     dispatchErrors: dispatchErrorReporter(
-      DispatchObserver,
+      undefined,
       { reportRuntimeTaskException() {} }
     )
   });
@@ -1641,15 +1719,11 @@ test('relocation materialization restores inherited User Spot handler registrati
 });
 
 test('ZLinkSpotManager replies formal Mesh actor handler exceptions as HandlerException errors', async () => {
-  const dispatchEvents = [];
+  telemetry.reset();
+  const dispatchEvents = telemetry.records;
   const replies = [];
   const boundSessions = [];
   const parts = createActorRequestParts('ThrowAsk', { value: 'boom' }, 43n, 1);
-  class DispatchObserver {
-    onMessageFlow(event) {
-      dispatchEvents.push(event);
-    }
-  }
   const nativeNode = {
     routingId: zlink.RoutingId.from('node-a'),
     bindRemoteActorSession(actor, sourceNodeRid, sourceSessionRid) {
@@ -1680,7 +1754,7 @@ test('ZLinkSpotManager replies formal Mesh actor handler exceptions as HandlerEx
       packetName: 'ThrowAsk'
     }],
     dispatchErrors: dispatchErrorReporter(
-      DispatchObserver,
+      undefined,
       { reportRuntimeTaskException() {} }
     )
   });
@@ -2106,7 +2180,7 @@ test('spot manager local actor join awaits entry leave before commit and joined 
       }
     }
   };
-  const request = zlink.Message.from('hello');
+  const request = zlink.Message.from(JSON.stringify('hello'));
   const pending = manager.admitActorJoin('stage-1', actor, request, () => {
     events.push('commit');
   });
@@ -3750,15 +3824,18 @@ async function waitFor(predicate, timeoutMs = 1000, message) {
   assert.fail(message?.() ?? 'timed out waiting for condition');
 }
 
-function dispatchErrorReporter(observerType, sink, mode = framework.ZLinkMessageFlowLogMode.ErrorsOnly) {
+function dispatchErrorReporter(_legacyObserverType, sink, mode = 'errors') {
   return new framework.ZLinkDispatchErrorReporter(
     undefined,
     undefined,
     sink,
     {
-      diagnostics: { sampleRate: 1 },
-      liveMode: { mode },
-      messageFlowObserverType: observerType
+      diagnostics: {
+        messageFlow: mode,
+        sampleRate: 1,
+        includeMessageSizes: false
+      },
+      liveMode: { mode }
     }
   );
 }

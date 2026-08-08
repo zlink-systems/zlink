@@ -3,6 +3,7 @@
 #include <zlink/framework.hpp>
 
 #include "runtime/channels/channel_runtime.hpp"
+#include "runtime/diagnostics/dispatch_options_access.hpp"
 #include "runtime/locations/spot_address_resolvers.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
 #include "runtime/spots/spot_runtime.hpp"
@@ -350,8 +351,9 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
     std::condition_variable events_changed;
     std::vector<zlink::framework::message_flow_event_t> events;
     zlink::framework::dispatch_options_t dispatch;
-    dispatch.message_flow (zlink::framework::message_flow_log_mode_t::key_transitions)
-      .set_message_flow_observer (
+    dispatch.message_flow (zlink::framework::message_flow_log_mode_t::normal);
+    zlink::framework::detail::dispatch_options_access_t::set_observer_for_tests (
+      dispatch,
         [&] (const zlink::framework::message_flow_event_t &event) {
             {
                 const std::lock_guard lock (events_mutex);
@@ -388,7 +390,7 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
       serializers.get<traced_event_t> ().serialize (traced_event_t{7}));
     const auto event_result = runtime->dispatch_instance_activation (
       zlink::framework::spot_id_t ("traced-player-1"), traced_event_t::packet_name,
-      "application/json", event_payload.to_bytes (), {}, false, "operation-send", provider,
+      "application/octet-stream", event_payload.to_bytes (), {}, false, "operation-send", provider,
       serializers, activation_flow_id, zlink::framework::flow_origin_t::application)
                                  .result ();
     ASSERT_TRUE (event_result);
@@ -397,7 +399,7 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
       serializers.get<traced_request_t> ().serialize (traced_request_t{9}));
     const auto request_result = runtime->dispatch_instance_activation (
       zlink::framework::spot_id_t ("traced-player-1"), traced_request_t::packet_name,
-      "application/json", request_payload.to_bytes (), {}, true, "operation-request", provider,
+      "application/octet-stream", request_payload.to_bytes (), {}, true, "operation-request", provider,
       serializers, activation_flow_id, zlink::framework::flow_origin_t::application)
                                    .result ();
     ASSERT_TRUE (request_result);

@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FRAMEWORK_DIR="$(cd "$ROOT_DIR/../.." && pwd)"
 source "$ROOT_DIR/../redis-common.sh"
-BUILD_DIR="${ZLINK_CPP_E2E_BUILD_DIR:-${ZLINK_CPP_BUILD_DIR:-$FRAMEWORK_DIR/build-redis-vcpkg}}"
+BUILD_DIR="${ZLINK_CPP_BUILD_DIR:-$FRAMEWORK_DIR/build-redis-vcpkg}"
 SCENARIO="${1:-all}"
 SCENARIO_LOWER="$(printf '%s' "$SCENARIO" | tr '[:upper:]' '[:lower:]')"
 case "$SCENARIO_LOWER" in
@@ -77,6 +77,23 @@ cleanup() {
   for pid in "${PIDS[@]}"; do
     if kill -0 "$pid" >/dev/null 2>&1; then
       kill "$pid" >/dev/null 2>&1 || true
+    fi
+  done
+  for _ in $(seq 1 20); do
+    running=0
+    for pid in "${PIDS[@]}"; do
+      if kill -0 "$pid" >/dev/null 2>&1; then
+        running=1
+      fi
+    done
+    if [[ "$running" == "0" ]]; then
+      break
+    fi
+    sleep 0.1
+  done
+  for pid in "${PIDS[@]}"; do
+    if kill -0 "$pid" >/dev/null 2>&1; then
+      kill -KILL "$pid" >/dev/null 2>&1 || true
     fi
   done
   for pid in "${PIDS[@]}"; do

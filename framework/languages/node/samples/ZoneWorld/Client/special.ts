@@ -313,12 +313,12 @@ async function diagnose(ops: ZlinkStreamConnector, nodeId: string): Promise<Node
 }
 
 async function setMaintenance(ops: ZlinkStreamConnector, nodeId: string, enabled: boolean): Promise<SetMaintenanceRes> {
-  const observed = ops.waitFor<NodeStatusNotify>(PacketNames.nodeStatusNotify)
-    .where((message) => message.payload.nodeId === nodeId && message.payload.maintenance === enabled)
-    .timeout(20_000).submit();
   const response = await ops.request(new SetMaintenanceReq(nodeId, enabled))
     .packetName(PacketNames.setMaintenanceReq).submit<SetMaintenanceRes>();
   zlinkStreamAssert.ensure(response.error === null, `Maintenance request for '${nodeId}' failed.`);
+  const observed = ops.waitFor<NodeStatusNotify>(PacketNames.nodeStatusNotify)
+    .where((message) => message.payload.nodeId === nodeId && message.payload.maintenance === enabled)
+    .timeout(20_000).submit();
   await withScenarioContext(`maintenance status ${nodeId}=${enabled}`, observed);
   return response;
 }

@@ -195,6 +195,24 @@ implements ServiceRelocationAuthorityCodec {
   }
 }
 
+/** Returns the application authority payload hidden by relocation metadata. */
+export function serviceRelocationAuthorityApplicationPayload(
+  payload: Uint8Array
+): Buffer {
+  return Buffer.from(decodeAuthorityEnvelope(payload)?.base ?? payload);
+}
+
+/** Replaces the application payload without changing relocation metadata. */
+export function replaceServiceRelocationAuthorityApplicationPayload(
+  payload: Uint8Array,
+  applicationPayload: Uint8Array
+): Buffer {
+  const current = decodeAuthorityEnvelope(payload);
+  return current === undefined
+    ? Buffer.from(applicationPayload)
+    : encodeAuthorityEnvelope(Buffer.from(applicationPayload), current.publication);
+}
+
 export interface ServicePublishedRelocation {
   readonly authority: ZLinkAuthoritySnapshot;
   readonly publication: ServiceRelocationPublication;
@@ -1231,13 +1249,18 @@ function objectKind(value: unknown): ZLinkPlacementObjectKind {
   return value;
 }
 
+const CRC32C_TABLE = Uint32Array.from({ length: 256 }, (_, value) => {
+  let crc = value;
+  for (let bit = 0; bit < 8; bit++) {
+    crc = (crc >>> 1) ^ ((crc & 1) === 0 ? 0 : 0x82f6_3b78);
+  }
+  return crc >>> 0;
+});
+
 export function crc32c(payload: Uint8Array): number {
   let crc = 0xffff_ffff;
   for (const byte of payload) {
-    crc ^= byte;
-    for (let bit = 0; bit < 8; bit++) {
-      crc = (crc >>> 1) ^ ((crc & 1) === 0 ? 0 : 0x82f6_3b78);
-    }
+    crc = CRC32C_TABLE[(crc ^ byte) & 0xff]! ^ (crc >>> 8);
   }
   return (crc ^ 0xffff_ffff) >>> 0;
 }
@@ -1301,15 +1324,33 @@ function requireText(value: unknown, label: string): string {
 
 function canonicalUuid(value: unknown, label: string): string {
   const text = requireText(value, label);
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(text)) {
-    throw new TypeError(`${label} must be a lowercase canonical UUID.`);
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(text)
+    || /^0{8}-0{4}-0{4}-0{4}-0{12}$/u.test(text)) {
+    throw new TypeError(`${label} must be a lowercase non-zero 128-bit identity.`);
   }
   return text;
 }
 
 function base64(value: unknown, label: string): Buffer {
-  if (typeof value !== 'string' || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(value)) {
+  if (typeof value !== 'string' || value.length % 4 !== 0) {
     throw new TypeError(`${label} must be canonical base64.`);
+  }
+  const padding = value.endsWith('==') ? 2 : value.endsWith('=') ? 1 : 0;
+  const contentLength = value.length - padding;
+  for (let index = 0; index < contentLength; index++) {
+    const code = value.charCodeAt(index);
+    if (!((code >= 0x41 && code <= 0x5a)
+      || (code >= 0x61 && code <= 0x7a)
+      || (code >= 0x30 && code <= 0x39)
+      || code === 0x2b
+      || code === 0x2f)) {
+      throw new TypeError(`${label} must be canonical base64.`);
+    }
+  }
+  for (let index = contentLength; index < value.length; index++) {
+    if (value.charCodeAt(index) !== 0x3d) {
+      throw new TypeError(`${label} must be canonical base64.`);
+    }
   }
   const bytes = Buffer.from(value, 'base64');
   if (bytes.toString('base64') !== value) throw new TypeError(`${label} must be canonical base64.`);

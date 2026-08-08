@@ -112,10 +112,10 @@ public sealed class StreamWireInteropTests
     public void SessionClosingServerDrainPayload_DecodesInConnector()
     {
         var header = ZLinkStreamProtocolDefaults.EncodeHeader(
-            ZLinkStreamSessionClosingCodec.CreateHeader());
+            ConnectorClosingCodec.CreateHeader());
         var decodedHeader = new ConnectorHeaderCodec().Decode(header);
         var closing = ConnectorClosingCodec.Decode(
-            ZLinkStreamSessionClosingCodec.EncodeServerDrain("rolling drain"));
+            ConnectorClosingCodec.EncodeServerDrain("rolling drain"));
 
         Assert.Equal(ConnectorClosingCodec.ControlName, decodedHeader.Name);
         Assert.Equal(ZlinkStreamMessageKind.Control, decodedHeader.Kind);
@@ -134,10 +134,10 @@ public sealed class StreamWireInteropTests
     {
         var payload = producer switch
         {
-            "idle" => ZLinkStreamSessionClosingCodec.EncodeIdleTimeout(),
-            "heartbeat" => ZLinkStreamSessionClosingCodec.EncodeHeartbeatTimeout(),
-            "drain" => ZLinkStreamSessionClosingCodec.EncodeServerDrain(),
-            "protocol" => ZLinkStreamSessionClosingCodec.EncodeProtocolError(),
+            "idle" => ConnectorClosingCodec.EncodeIdleTimeout(),
+            "heartbeat" => ConnectorClosingCodec.EncodeHeartbeatTimeout(),
+            "drain" => ConnectorClosingCodec.EncodeServerDrain(),
+            "protocol" => ConnectorClosingCodec.EncodeProtocolError(),
             _ => throw new ArgumentOutOfRangeException(nameof(producer))
         };
 

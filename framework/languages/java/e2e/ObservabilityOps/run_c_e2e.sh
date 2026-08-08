@@ -173,6 +173,29 @@ PY
   return 1
 }
 
+wait_peer() {
+  local node="$1" peer="$2"
+  local peer_log="${log_dir}/${node}.stdout.log"
+  for _ in $(seq 1 300); do
+    if python3 - "${MAINTENANCE_ENDPOINT[${node}]}/maintenance/status" "${peer}" 2>/dev/null <<'PY'
+import json, sys, urllib.request
+with urllib.request.urlopen(sys.argv[1], timeout=1) as response:
+    status=json.loads(response.read())
+ready=any(row.get("nodeRid") == sys.argv[2] and row.get("state") == "READY"
+          for row in status.get("topology", []))
+raise SystemExit(0 if ready else 1)
+PY
+    then
+      if rg -q "ZLINK_FRAMEWORK_PEER_READY .*peer=${peer}" "${peer_log}" 2>/dev/null; then
+        return 0
+      fi
+    fi
+    sleep 0.1
+  done
+  echo "Timed out waiting for ${peer} admission at ${node}" >&2
+  return 1
+}
+
 wait_pending() {
   local node="$1"
   for _ in $(seq 1 100); do
@@ -271,7 +294,7 @@ start_session() {
 }
 
 run_client() {
-  local selector="$1" stdout="$2" timeout_value="$3"
+  local selector="$1" stdout="$2" timeout_value="$3" release_file="${4:-}"
   local config="${config_dir}/client-${selector}.properties"
   write_config "${config}" \
     "streamEndpoint=${STREAM_ENDPOINT}" \
@@ -279,16 +302,17 @@ run_client() {
     "playBHttpEndpoint=${HTTP_ENDPOINT[play-b]}" \
     "sessionHttpEndpoint=${SESSION_HTTP}" \
     "scenarioOutput=" \
-    "drainUrl="
+    "drainUrl=" \
+    "relocationReleaseFile=${release_file}"
   timeout -k 5s "${timeout_value}" "${client_bin}" \
     --config "${config}" --scenario "${selector}" \
     >"${stdout}" 2>&1
 }
 
 start_client_background() {
-  local selector="$1"
+  local selector="$1" release_file="${2:-}"
   local stdout="${log_dir}/${selector}.stdout.log"
-  run_client "${selector}" "${stdout}" 70s &
+  run_client "${selector}" "${stdout}" 70s "${release_file}" &
   client_pid="$!"
   pids+=("${client_pid}")
 }
@@ -324,10 +348,14 @@ start_common() {
   fi
   start_session "${route_b_value:-}"
   wait_http session "${SESSION_HTTP}/evidence"
+  wait_peer play-a session-a
+  if [[ "${route_b}" != absent ]]; then
+    wait_peer play-b session-a
+  fi
 }
 
 scenario_spot() {
-  echo "obs-${SELECTOR,,}-room" | tr -c 'a-z0-9-' '-'
+  printf '%s' "obs-${SELECTOR,,}-room" | tr -c 'a-z0-9-' '-'
 }
 
 compose_evidence() {
@@ -412,8 +440,11 @@ route_b_value=""
 case "${SELECTOR}" in
   OBS-C6|OBS-C7)
     route_b_value="${ROUTE_ENDPOINT[play-b]}"
-    start_common true "present" 2 100
-    start_client_background "${SELECTOR}-PREPARE"
+    # Keep the workload on the explicit source node; the lower target weight
+    # prevents initial placement on play-b before relocation begins.
+    start_common true "present" 2 1
+    release_file="${log_dir}/${SELECTOR}.release"
+    start_client_background "${SELECTOR}-PREPARE" "${release_file}"
     wait_prepared "${SELECTOR}"
     fetch_json "${MAINTENANCE_ENDPOINT[play-a]}/maintenance/objects?spotId=$(scenario_spot)&actorId=obs-${SELECTOR,,}-actor" "${log_dir}/source-before.json"
     if [[ "${SELECTOR}" == OBS-C6 ]]; then
@@ -424,7 +455,9 @@ case "${SELECTOR}" in
     wait "${relocation_pid}"
     fetch_json "${MAINTENANCE_ENDPOINT[play-a]}/maintenance/status" "${log_dir}/source-status.json"
     fetch_json "${MAINTENANCE_ENDPOINT[play-b]}/maintenance/objects?spotId=$(scenario_spot)&actorId=obs-${SELECTOR,,}-actor" "${log_dir}/target-after.json"
-    run_client "${SELECTOR}-AFTER" "${log_dir}/${SELECTOR}-AFTER.stdout.log" 30s
+    touch "${release_file}"
+    wait "${client_pid}"
+    cp "${log_dir}/${SELECTOR}-PREPARE.stdout.log" "${log_dir}/${SELECTOR}-AFTER.stdout.log"
     post_json "${MAINTENANCE_ENDPOINT[play-a]}/maintenance/shutdown?deadlineMs=10000" "${log_dir}/shutdown.json"
     compose_evidence
     ;;
@@ -444,7 +477,8 @@ case "${SELECTOR}" in
     ;;
   OBS-C9A)
     start_common true absent 0 0
-    start_client_background "OBS-C9A-PREPARE"
+    release_file="${log_dir}/${SELECTOR}.release"
+    start_client_background "OBS-C9A-PREPARE" "${release_file}"
     wait_prepared OBS-C9A
     fetch_json "${MAINTENANCE_ENDPOINT[play-a]}/maintenance/objects?spotId=$(scenario_spot)&actorId=obs-obs-c9a-actor" "${log_dir}/source-during.json"
     post_background "${MAINTENANCE_ENDPOINT[play-a]}/maintenance/relocate?mode=rolling-update&targetApplicationVersion=2&deadlineMs=30000" "${log_dir}/relocation.json" & relocation_pid="$!"
@@ -456,7 +490,9 @@ case "${SELECTOR}" in
     wait "${relocation_pid}"
     fetch_json "${MAINTENANCE_ENDPOINT[play-b]}/maintenance/status" "${log_dir}/target-status.json"
     fetch_json "${MAINTENANCE_ENDPOINT[play-b]}/maintenance/objects?spotId=$(scenario_spot)&actorId=obs-obs-c9a-actor" "${log_dir}/target-after.json"
-    run_client OBS-C9A-AFTER "${log_dir}/OBS-C9A-AFTER.stdout.log" 30s
+    touch "${release_file}"
+    wait "${client_pid}"
+    cp "${log_dir}/OBS-C9A-PREPARE.stdout.log" "${log_dir}/OBS-C9A-AFTER.stdout.log"
     compose_evidence
     ;;
   OBS-C9B)
@@ -483,19 +519,25 @@ case "${SELECTOR}" in
     route_b_value="${ROUTE_ENDPOINT[play-b]}"
     start_session "${route_b_value}"
     wait_http session "${SESSION_HTTP}/evidence"
-    start_client_background OBS-C10-PREPARE
+    wait_peer play-a session-a
+    wait_peer play-b session-a
+    release_file="${log_dir}/${SELECTOR}.release"
+    start_client_background OBS-C10-PREPARE "${release_file}"
     wait_prepared OBS-C10
     fetch_json "${MAINTENANCE_ENDPOINT[play-a]}/maintenance/objects?spotId=$(scenario_spot)&actorId=obs-obs-c10-actor" "${log_dir}/source-before.json"
     post_json "${MAINTENANCE_ENDPOINT[play-a]}/maintenance/relocate?mode=planned-maintenance&deadlineMs=30000" "${log_dir}/relocation-one.json"
     fetch_json "${MAINTENANCE_ENDPOINT[play-b]}/maintenance/objects?spotId=$(scenario_spot)&actorId=obs-obs-c10-actor" "${log_dir}/target-one.json"
     post_json "${MAINTENANCE_ENDPOINT[play-b]}/maintenance/relocate?mode=rolling-update&targetApplicationVersion=2&deadlineMs=30000" "${log_dir}/relocation-two.json"
     fetch_json "${MAINTENANCE_ENDPOINT[play-c]}/maintenance/objects?spotId=$(scenario_spot)&actorId=obs-obs-c10-actor" "${log_dir}/target-two.json"
-    run_client OBS-C10-AFTER "${log_dir}/OBS-C10-AFTER.stdout.log" 30s
+    touch "${release_file}"
+    wait "${client_pid}"
+    cp "${log_dir}/OBS-C10-PREPARE.stdout.log" "${log_dir}/OBS-C10-AFTER.stdout.log"
     compose_evidence
     ;;
   OBS-C11)
     start_common true absent 0 0
-    start_client_background OBS-C11-PREPARE
+    release_file="${log_dir}/${SELECTOR}.release"
+    start_client_background OBS-C11-PREPARE "${release_file}"
     wait_prepared OBS-C11
     post_background "${MAINTENANCE_ENDPOINT[play-a]}/maintenance/relocate?mode=rolling-update&targetApplicationVersion=2&deadlineMs=30000" "${log_dir}/relocation.json" & relocation_pid="$!"
     wait_pending play-a
@@ -508,7 +550,9 @@ case "${SELECTOR}" in
     wait "${relocation_pid}"; wait "${joined_pid}"
     fetch_json "${MAINTENANCE_ENDPOINT[play-a]}/maintenance/status" "${log_dir}/source-status.json"
     fetch_json "${MAINTENANCE_ENDPOINT[play-b]}/maintenance/objects?spotId=$(scenario_spot)&actorId=obs-obs-c11-actor" "${log_dir}/target-after.json"
-    run_client OBS-C11-AFTER "${log_dir}/OBS-C11-AFTER.stdout.log" 30s
+    touch "${release_file}"
+    wait "${client_pid}"
+    cp "${log_dir}/OBS-C11-PREPARE.stdout.log" "${log_dir}/OBS-C11-AFTER.stdout.log"
     compose_evidence
     ;;
   OBS-C12)

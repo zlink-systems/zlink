@@ -210,7 +210,10 @@ bool router_t::adopt_peer_routing_id (pipe_t *pipe_, blob_t routing_id_, bool lo
         const bool paired_application =
           pipe_->get_transport_pair_id () != 0
           && pipe_->get_transport_lane () == transport_lane_application;
-        if (!_handover && !same_local_endpoint_reconnect && !paired_application)
+        const bool reciprocal_duplicate =
+          existing_outpipe->locally_initiated != locally_initiated_;
+        if (!_handover && !same_local_endpoint_reconnect
+            && !(paired_application && reciprocal_duplicate))
             return false;
 
         if (!duplicate_pipe_should_replace (*existing_outpipe, routing_id_, locally_initiated_)) {
@@ -247,13 +250,13 @@ bool router_t::adopt_peer_routing_id (pipe_t *pipe_, blob_t routing_id_, bool lo
 
         pipe_t *const old_pipe = existing_outpipe->pipe;
         const bool old_locally_initiated = existing_outpipe->locally_initiated;
-        const bool reciprocal_duplicate =
-          old_locally_initiated != locally_initiated_;
-
         erase_out_pipe (old_pipe);
         old_pipe->set_router_socket_routing_id (new_routing_id);
         add_out_pipe (ZLINK_MOVE (new_routing_id), old_pipe, old_locally_initiated);
-        if (reciprocal_duplicate) {
+        const bool paired_same_direction_reconnect =
+          _handover && paired_application
+          && old_locally_initiated == locally_initiated_;
+        if (paired_same_direction_reconnect || reciprocal_duplicate) {
             blob_t original_routing_id (
               routing_id_.data (), routing_id_.size ());
             _standby_pipes.ZLINK_MAP_INSERT_OR_EMPLACE (

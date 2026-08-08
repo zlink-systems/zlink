@@ -52,6 +52,7 @@ enum class command : std::uint8_t {
     userSpotClose = 48,
     actorCreate = 49,
     messageFollow = 50,
+    boundSessionReplaced = 51,
 };
 enum class flag : std::uint8_t {
     metadata = 1,

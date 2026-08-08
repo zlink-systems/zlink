@@ -14,6 +14,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.CompletionStage;
 import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.errors.ZlinkSubmitException;
@@ -118,6 +119,8 @@ final class ZLinkSessionActorBindingContractTest {
 
         oldBinding.notifyDisconnected().toCompletableFuture().join();
         assertTrue(stream.unbinds.isEmpty());
+        assertEquals(0, stream.disconnectNotifications,
+            "retired binding cleanup is not part of replacement completion");
         assertEquals(NODE_B, replacement.ref().nodeRid());
         assertEquals(7, replacement.ref().objectGeneration());
 
@@ -125,8 +128,51 @@ final class ZLinkSessionActorBindingContractTest {
             new ActorRef("actor-1", 8, MESH, NODE_A)).toCompletableFuture().join();
         replacement.notifyDisconnected().toCompletableFuture().join();
         assertTrue(stream.unbinds.isEmpty());
+        assertEquals(0, stream.disconnectNotifications);
         assertEquals(8, newIncarnation.ref().objectGeneration());
         assertEquals(List.of(newIncarnation), runtime.bound());
+    }
+
+    @Test
+    void rebindCompletesAfterInstallingCurrentBindingWithoutWaitingForRetiredCleanup() {
+        FakeStream stream = new FakeStream();
+        ZLinkSessionActorsRuntime runtime = runtime(stream);
+        runtime.bind(new ActorRef("actor-1", 7, MESH, NODE_A))
+            .toCompletableFuture().join();
+        CompletableFuture<List<Message>> previousCallback =
+            new CompletableFuture<>();
+        stream.pendingDisconnectNotification = previousCallback;
+
+        CompletionStage<ZLinkSessionActor> replacement = runtime.bind(
+            new ActorRef("actor-1", 7, MESH, NODE_B));
+
+        assertTrue(replacement.toCompletableFuture().isDone());
+        assertEquals(0, stream.disconnectNotifications);
+        assertEquals(2, stream.binds.size(),
+            "the new exact identity is installed before retired cleanup");
+        previousCallback.complete(
+            List.of(Message.from(new byte[0])));
+        assertEquals(NODE_B,
+            replacement.toCompletableFuture().join().ref().nodeRid());
+        assertEquals(1, runtime.bound().size());
+    }
+
+    @Test
+    void physicalDisconnectUsesTheLifecycleCallbackDeadline() {
+        FakeStream stream = new FakeStream();
+        ZLinkSessionActorsRuntime runtime = runtime(stream);
+        runtime.bind(new ActorRef("actor-1", 7, MESH, NODE_A))
+            .toCompletableFuture().join();
+        stream.pendingDisconnectNotification = new CompletableFuture<>();
+
+        CompletionStage<Void> disconnected = runtime.notifyDisconnectedAll(
+            Duration.ofMillis(25));
+
+        assertThrows(
+            CompletionException.class,
+            () -> disconnected.toCompletableFuture().join());
+        assertEquals(1, stream.disconnectNotifications);
+        assertTrue(runtime.bound().isEmpty());
     }
 
     @Test
@@ -298,6 +344,8 @@ final class ZLinkSessionActorBindingContractTest {
         private boolean deferUnbind;
         private SubmitResult relayFailure;
         private CompletableFuture<List<Message>> pendingBoundRequest;
+        private CompletableFuture<List<Message>> pendingDisconnectNotification;
+        private int disconnectNotifications;
         private boolean closed;
 
         @Override public String name() { return "session-contract"; }
@@ -372,8 +420,36 @@ final class ZLinkSessionActorBindingContractTest {
                 ZLinkStreamHeader header,
                 List<Message> parts,
                 Duration timeout) {
-            if (pendingBoundRequest != null) {
+            if (ZLinkActorSpotRoutePackets.SESSION_DISCONNECTED_PACKET_NAME.equals(
+                    header.packetName())) {
+                disconnectNotifications++;
+                if (pendingDisconnectNotification != null) {
+                    CompletableFuture<List<Message>> pending =
+                        pendingDisconnectNotification;
+                    pendingDisconnectNotification = null;
+                    return pending;
+                }
+            } else if (pendingBoundRequest != null) {
                 return pendingBoundRequest;
+            }
+            return CompletableFuture.completedFuture(
+                List.of(Message.from(new byte[0])));
+        }
+        @Override public java.util.concurrent.CompletionStage<List<Message>>
+            requestExactActor(
+                ZLinkBackendActorRef actor,
+                ZLinkStreamHeader header,
+                List<Message> parts,
+                Duration timeout) {
+            if (ZLinkActorSpotRoutePackets.SESSION_DISCONNECTED_PACKET_NAME.equals(
+                    header.packetName())) {
+                disconnectNotifications++;
+                if (pendingDisconnectNotification != null) {
+                    CompletableFuture<List<Message>> pending =
+                        pendingDisconnectNotification;
+                    pendingDisconnectNotification = null;
+                    return pending;
+                }
             }
             return CompletableFuture.completedFuture(
                 List.of(Message.from(new byte[0])));

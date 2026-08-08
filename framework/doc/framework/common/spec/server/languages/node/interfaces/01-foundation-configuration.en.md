@@ -89,6 +89,12 @@ export type RoutingId = string;
 export type Type<T = unknown> = new (...args: never[]) => T;
 ```
 
+Before classifying a multiplexed channel receive as an application or infrastructure message,
+the Node runtime acquires a host-wide raw receive reservation. The reservation count `R` is 16
+and is shared by channel, subscriber, and route receive loops. It does not grow with connections,
+peers, or queued messages, so at most 16 raw messages per host may be received beyond the
+application HWM.
+
 ## 2. Registration, Topology, And Relocation Builder
 
 ```ts

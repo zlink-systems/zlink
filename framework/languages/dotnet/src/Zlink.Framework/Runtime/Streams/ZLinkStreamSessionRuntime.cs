@@ -27,9 +27,15 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
     private readonly ZLinkStreamSessionSerialExecutor _serial;
     private readonly IZLinkBackendStreamSocket _socket;
     private readonly string _transport;
+    private readonly TimeProvider _timeProvider;
     private readonly object _disposeGate = new();
     private readonly object _terminalGate = new();
     private readonly object _transportCloseGate = new();
+    private readonly object _replacementGate = new();
+    private readonly HashSet<ActorBindingReplacementIdentity>
+        _receivedBindingReplacements = [];
+    private readonly Dictionary<ActorBindingReplacementIdentity, ITimer>
+        _replacementCloseTimers = [];
     private readonly bool _requireConnectionReady;
     private readonly TaskCompletionSource<(string LocalAddr, string RemoteAddr)>
         _connectionReady = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -49,6 +55,8 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
     private int _terminalSucceeded = 1;
     private int _suppressTerminalCallbacks;
     private int _serverDrainClosingSent;
+    private int _applicationDispatchClosed;
+    private int _actorBindingReplacementClosing;
 
     public static async ValueTask<ZLinkStreamSessionRuntime> CreateAsync(
         IServiceProvider services,
@@ -111,6 +119,7 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         _scope = scope;
         _socket = socket;
         _transport = transport;
+        _timeProvider = timeProvider;
         _removeSession = removeSession;
         _runtime = scope.ServiceProvider.GetRequiredService<ZLinkFrameworkRuntime>();
         _completionAdmission = completionAdmission;
@@ -132,6 +141,7 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
             CloseByProxyAsync,
             actorDispatchEnabled,
             sendSubmitter);
+        _context.SessionRuntime = this;
         Handlers = handlers;
         _serial = new ZLinkStreamSessionSerialExecutor(_runtime.ExecutionOwner, _runtime.ErrorSink);
     }
@@ -187,6 +197,7 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
 
     private async Task DisposeCoreAsync()
     {
+        DisposeReplacementCloseTimers();
         var disposeOwnsDisconnect = ClaimCloseForDisposal();
         var failures = new List<Exception>();
         await CaptureAsync(_serial.DisposeAsync).ConfigureAwait(false);
@@ -262,6 +273,8 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         Message payload,
         ZLinkInboundDispatchLease? inboundDispatchLease = null)
     {
+        if (Volatile.Read(ref _applicationDispatchClosed) != 0)
+            return ZLinkSerialPostAdmission.Closed;
         var signal = ClassifyInboundLiveness(header, payload);
         var admission = _serial.EnqueueApplication(
             RetainedPacketBytes(header, payload),
@@ -273,6 +286,42 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         if (admission == ZLinkSerialPostAdmission.Accepted)
             ApplyInboundLiveness(signal);
         return admission;
+    }
+
+    internal bool TryEnqueueActorBindingReplaced(
+        string actorId,
+        RoutingId sessionOwnerNodeRid,
+        ulong sessionOwnerNodeGeneration,
+        string sessionOwnerId,
+        ulong sessionOwnerLeaseGeneration,
+        RoutingId sessionRid,
+        ulong retiredBindingGeneration,
+        string bindingToken)
+    {
+        var identity = new ActorBindingReplacementIdentity(
+            actorId,
+            sessionOwnerNodeRid,
+            sessionOwnerNodeGeneration,
+            sessionOwnerId,
+            sessionOwnerLeaseGeneration,
+            sessionRid,
+            retiredBindingGeneration,
+            bindingToken);
+        lock (_replacementGate)
+        {
+            if (!_receivedBindingReplacements.Add(identity))
+                return true;
+            _serial.CloseApplicationAdmission();
+            Interlocked.Exchange(ref _applicationDispatchClosed, 1);
+            Interlocked.Exchange(ref _actorBindingReplacementClosing, 1);
+        }
+
+        if (_serial.EnqueueInfrastructure(
+                () => InvokeActorBindingReplacedAsync(identity)))
+            return true;
+
+        ScheduleRetiredSessionClose(identity, force: true);
+        return false;
     }
 
     internal static long RetainedPacketBytes(Message header, Message payload) =>
@@ -318,13 +367,13 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
                 TryScheduleTerminal(
                     "idle_timeout",
                     () => CloseForLivenessTimeoutAsync(
-                        ZLinkStreamSessionClosingCodec.EncodeIdleTimeout()));
+                        ZlinkStreamSessionClosingCodec.EncodeIdleTimeout()));
                 return;
             case ZLinkStreamLivenessDecision.HeartbeatTimeout:
                 TryScheduleTerminal(
                     "heartbeat_timeout",
                     () => CloseForLivenessTimeoutAsync(
-                        ZLinkStreamSessionClosingCodec.EncodeHeartbeatTimeout()));
+                        ZlinkStreamSessionClosingCodec.EncodeHeartbeatTimeout()));
                 return;
             default:
                 throw new InvalidOperationException("Unknown STREAM liveness decision.");
@@ -407,10 +456,10 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         if (Interlocked.Exchange(ref _serverDrainClosingSent, 1) != 0) return;
         try
         {
-            var payload = ZLinkStreamSessionClosingCodec.EncodeServerDrain();
+            var payload = ZlinkStreamSessionClosingCodec.EncodeServerDrain();
             ZLinkStreamFrameWriter.Write(
                 Stream,
-                ZLinkStreamSessionClosingCodec.CreateHeader(),
+                ZlinkStreamSessionClosingCodec.CreateHeader(),
                 payload.AsMemory(),
                 "Could not submit the session-closing control packet.");
         }
@@ -555,8 +604,8 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         {
             ZLinkStreamFrameWriter.Write(
                 Stream,
-                ZLinkStreamSessionClosingCodec.CreateHeader(),
-                ZLinkStreamSessionClosingCodec.EncodeProtocolError().AsMemory(),
+                ZlinkStreamSessionClosingCodec.CreateHeader(),
+                ZlinkStreamSessionClosingCodec.EncodeProtocolError().AsMemory(),
                 "Could not submit the protocol-error session-closing control packet.");
         }
         catch
@@ -577,7 +626,7 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         {
             ZLinkStreamFrameWriter.Write(
                 Stream,
-                ZLinkStreamSessionClosingCodec.CreateHeader(),
+                ZlinkStreamSessionClosingCodec.CreateHeader(),
                 payload.AsMemory(),
                 "Could not submit the liveness session-closing control packet.");
         }
@@ -676,7 +725,123 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         }
     }
 
-    private bool IsClosing => Volatile.Read(ref _terminalClose) is not null;
+    private bool IsClosing => Volatile.Read(ref _terminalClose) is not null
+                              || Volatile.Read(
+                                  ref _actorBindingReplacementClosing) != 0;
+
+    private async ValueTask InvokeActorBindingReplacedAsync(
+        ActorBindingReplacementIdentity identity)
+    {
+        var deadline = false;
+        using var callbackDeadline = CancellationTokenSource
+            .CreateLinkedTokenSource(_terminalCallbackStop.Token);
+        callbackDeadline.CancelAfter(_runtime.Registration.DefaultRequestTimeout);
+        try
+        {
+            var operation = _handler.OnActorBindingReplacedAsync(
+                identity.ActorId,
+                callbackDeadline.Token);
+            if (!operation.IsCompletedSuccessfully)
+                await operation.AsTask().WaitAsync(callbackDeadline.Token)
+                    .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+            when (callbackDeadline.IsCancellationRequested)
+        {
+            deadline = true;
+        }
+        catch (Exception failure)
+        {
+            _runtime.TryReportUnhandledCallbackException(failure);
+        }
+
+        // A callback failure still has a terminal callback boundary. A
+        // callback deadline is a force-close boundary and does not extend the
+        // fixed grace window.
+        ScheduleRetiredSessionClose(identity, force: deadline);
+    }
+
+    private void ScheduleRetiredSessionClose(
+        ActorBindingReplacementIdentity identity,
+        bool force)
+    {
+        if (force)
+        {
+            _ = CloseRetiredSessionIfExactAsync(identity);
+            return;
+        }
+
+        ITimer timer;
+        lock (_replacementGate)
+        {
+            if (_replacementCloseTimers.ContainsKey(identity))
+                return;
+            timer = _timeProvider.CreateTimer(
+                static state =>
+                {
+                    var closure = (ReplacementCloseTimerState)state!;
+                    closure.Owner.OnReplacementCloseTimer(closure.Identity);
+                },
+                new ReplacementCloseTimerState(this, identity),
+                TimeSpan.FromMilliseconds(100),
+                Timeout.InfiniteTimeSpan);
+            _replacementCloseTimers.Add(identity, timer);
+        }
+    }
+
+    private void OnReplacementCloseTimer(ActorBindingReplacementIdentity identity)
+    {
+        lock (_replacementGate)
+        {
+            if (_replacementCloseTimers.Remove(identity, out var timer))
+                timer.Dispose();
+        }
+        _ = CloseRetiredSessionIfExactAsync(identity);
+    }
+
+    private ValueTask CloseRetiredSessionIfExactAsync(
+        ActorBindingReplacementIdentity identity)
+    {
+        if (!_context.Runtime.TryGetSessionActorBinding(
+                identity.ActorId,
+                identity.BindingToken,
+                out var current)
+            || !ReferenceEquals(current.Context, _context)
+            || current.ActorRef.SessionRid != identity.SessionRid
+            || current.BindingGeneration != identity.RetiredBindingGeneration
+            || current.SessionOwnerNodeRid != identity.SessionOwnerNodeRid
+            || current.SessionOwnerNodeGeneration
+               != identity.SessionOwnerNodeGeneration
+            || !string.Equals(
+                current.SessionOwnerId,
+                identity.SessionOwnerId,
+                StringComparison.Ordinal)
+            || current.SessionOwnerLeaseGeneration
+               != identity.SessionOwnerLeaseGeneration)
+            return ValueTask.CompletedTask;
+
+        if (!TryScheduleTerminal(
+                "actor_binding_replaced",
+                () => CompleteAfterTransportClosedAsync(
+                    notifyDisconnected: true)))
+            return ValueTask.CompletedTask;
+
+        // The close starts outside the serial executor. The fixed timer above
+        // is therefore independent of queued application work and never
+        // occupies a serial turn while waiting.
+        _ = CloseTransportAsync();
+        return ValueTask.CompletedTask;
+    }
+
+    private void DisposeReplacementCloseTimers()
+    {
+        lock (_replacementGate)
+        {
+            foreach (var timer in _replacementCloseTimers.Values)
+                timer.Dispose();
+            _replacementCloseTimers.Clear();
+        }
+    }
 
     private bool TryScheduleTerminal(string reason, Func<ValueTask> finalWork)
     {
@@ -963,4 +1128,18 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
     }
 
     private sealed record TerminalClose(string Reason, bool DisposeOwnsClose);
+
+    private readonly record struct ActorBindingReplacementIdentity(
+        string ActorId,
+        RoutingId SessionOwnerNodeRid,
+        ulong SessionOwnerNodeGeneration,
+        string SessionOwnerId,
+        ulong SessionOwnerLeaseGeneration,
+        RoutingId SessionRid,
+        ulong RetiredBindingGeneration,
+        string BindingToken);
+
+    private sealed record ReplacementCloseTimerState(
+        ZLinkStreamSessionRuntime Owner,
+        ActorBindingReplacementIdentity Identity);
 }

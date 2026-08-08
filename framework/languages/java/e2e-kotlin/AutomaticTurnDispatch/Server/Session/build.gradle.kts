@@ -7,6 +7,7 @@ plugins {
 dependencies {
     implementation(project(":Shared"))
     implementation("systems.zlink:zlink-framework-core:0.10.0")
+    implementation("systems.zlink:zlink-framework-kotlin:0.10.0")
     implementation("systems.zlink:zlink-framework-locations-redis:0.10.0")
     implementation("systems.zlink:zlink-framework-spring-boot-starter:0.10.0")
     implementation("systems.zlink:zlink-stream-connector:0.10.0")

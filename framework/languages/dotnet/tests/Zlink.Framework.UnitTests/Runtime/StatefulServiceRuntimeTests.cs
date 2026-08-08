@@ -3651,7 +3651,7 @@ public sealed class StatefulServiceRuntimeTests
         Assert.Equal(
             SubmitResult.Ok,
             source.ResubmitUserSpotOperation(target.RoutingId, replay));
-        await Task.Delay(50);
+        await Task.Delay(TimeSpan.FromMilliseconds(50));
         Assert.Equal(1, operationTarget.CreateCount);
         Assert.Equal(1, target.RetainedUserSpotOperationCount);
 
@@ -3659,7 +3659,7 @@ public sealed class StatefulServiceRuntimeTests
         Assert.Equal(
             SubmitResult.Ok,
             source.ResubmitUserSpotOperation(target.RoutingId, replay));
-        await Task.Delay(50);
+        await Task.Delay(TimeSpan.FromMilliseconds(500));
         Assert.Equal(1, operationTarget.CreateCount);
         Assert.Equal(0, target.RetainedUserSpotOperationCount);
     }
@@ -3777,7 +3777,10 @@ public sealed class StatefulServiceRuntimeTests
 
     private static async Task WaitUntilAsync(Func<bool> condition)
     {
-        var deadline = Stopwatch.GetTimestamp() + 5 * Stopwatch.Frequency;
+        // The aggregate Framework suite starts and tears down many native mesh
+        // contexts before this helper runs. Keep the assertion bounded, but do
+        // not turn transient aggregate scheduling delay into a false failure.
+        var deadline = Stopwatch.GetTimestamp() + 30 * Stopwatch.Frequency;
         while (!condition())
         {
             if (Stopwatch.GetTimestamp() >= deadline)

@@ -1,5 +1,4 @@
 import { zlinkFramework, zlinkModule, ZLinkModule } from '@zlink-systems/nestjs';
-import { ZLinkMessageFlowLogMode } from '@zlink-systems/framework';
 import {
   ZONEWORLD_CONFIG,
   createZoneWorldConfigurationModule
@@ -49,9 +48,7 @@ function createZoneNodeModule(includeZoneRuntime = true) {
           builder.addRelocationStore(createZoneWorldRelocationStore(config.shared));
           zoneWorldLocationOptions(builder.configureLocations());
           builder.configureDispatch()
-            .messageFlow(ZLinkMessageFlowLogMode.KeyTransitions)
-            .traceLogFile(`${config.shared.logDirectory}/flow-${node.nodeId}.log`)
-            .traceLabel(node.nodeId);
+            .messageFlow('normal');
 
           if (zonesOf(node.nodeId).length === 0) {
             builder.addFanoutChannel(ZoneWorldNames.broadcastChannel)

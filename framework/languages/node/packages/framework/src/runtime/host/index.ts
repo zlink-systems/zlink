@@ -58,7 +58,6 @@ import {
   ZLinkFrameworkRuntimeState,
   ZLinkFrameworkTerminationOutcome,
   ZLinkFrameworkTerminationReason,
-  ZLinkMessageFlowLogMode,
   ZLinkObjectRole,
   ZLinkPeerState,
   zlinkMessageMetadata,
@@ -71,7 +70,8 @@ import {
   ZLinkDispatchErrorSurface,
   ZLinkDispatchMessageKind
 } from '../../contracts/Dispatch/ZLinkDispatchOptions';
-import type { ZLinkMessageFlowControl } from '../../contracts';
+import type { ZLinkMessageFlowControl, ZLinkMessageFlowLogMode } from '../../contracts';
+import { requireMessageFlowLogMode } from '../../contracts/Configuration/DiagnosticsValidation';
 import {
   DefaultZLinkChannelRuntimeOptions,
   ZLinkDispatchErrorReporter,
@@ -172,6 +172,10 @@ import {
   encodeServiceUserSpotAuthorityPayload,
   rewriteServiceAuthorityOwner
 } from '../foundation/service-authority-payload-codec';
+import {
+  replaceServiceRelocationAuthorityApplicationPayload,
+  serviceRelocationAuthorityApplicationPayload
+} from '../foundation/service-relocation-runtime';
 import { ZLinkSpotRuntimeOptionsFactory } from './spot-runtime-options-factory';
 import { ZLinkChannelRuntimeOptionsFactory } from './channel-runtime-options-factory';
 import { ZLinkSpotNodeRuntimeOptionsFactory } from './spot-node-runtime-options-factory';
@@ -199,6 +203,10 @@ import {
   decodeFrameworkPayloadMessage,
   encodeFrameworkPayloadMessage
 } from '../messaging/payload-codec';
+import {
+  decodeFrameworkCreationPayload,
+  encodeFrameworkCreationPayload
+} from '../messaging/creation-payload-codec';
 import { DefaultZLinkRouteMeshRuntimeOptions } from './route-mesh-runtime-options';
 import {
   ZLinkHostServiceRelocationRuntime,
@@ -276,7 +284,7 @@ export class ZLinkFrameworkRuntimeHost implements
   // Shared, runtime-mutable message-flow mode cell — installed once so
   // setMessageFlowMode flips every surface live. Seeded from config at start().
   private readonly messageFlowModeCell: ZLinkMessageFlowModeCell = {
-    mode: ZLinkMessageFlowLogMode.ErrorsOnly
+    mode: 'errors'
   };
   private readonly dispatchErrorReporters = new WeakMap<ZLinkDispatchErrorSink, ZLinkDispatchErrorReporter>();
   private readonly runtimeOrPreStartErrorSink: ZLinkDispatchErrorSink = {
@@ -659,6 +667,10 @@ export class ZLinkFrameworkRuntimeHost implements
       spotNodeRuntime: () => this.spotNodeRuntime,
       actorManager: () => this.actorManager,
       actorTransfer: this.actorTransferRuntime,
+      trackInstanceSpot: (input) =>
+        this.locationOwner.currentLifecycle?.trackInstanceSpot(input),
+      reconcileStatefulAuthorityRoutes: (signal) =>
+        this.statefulAuthorityRoutes?.reconcile(signal) ?? Promise.resolve(),
       runtimeEventPublisher: this.runtimeEventPublisher,
       metrics: this.metrics
     });
@@ -874,7 +886,9 @@ export class ZLinkFrameworkRuntimeHost implements
           effectiveTargetApplicationVersion,
           stopStartingSignal.aborted
             ? ZLinkFrameworkRelocationReason.ShutdownRequested
-            : relocationReason(drained.reason)
+            : drained.error instanceof ZLinkRelocationStateIncompatibleError
+              ? ZLinkFrameworkRelocationReason.StateIncompatible
+              : relocationReason(drained.reason)
         ));
       }
       await this.publishHostRelocated();
@@ -1117,7 +1131,7 @@ export class ZLinkFrameworkRuntimeHost implements
    * surface starts/stops tracing without a restart.
    */
   setMessageFlowMode(mode: ZLinkMessageFlowLogMode): void {
-    this.messageFlowModeCell.mode = mode;
+    this.messageFlowModeCell.mode = requireMessageFlowLogMode(mode);
   }
 
   messageFlowMode(): ZLinkMessageFlowLogMode {
@@ -1140,7 +1154,9 @@ export class ZLinkFrameworkRuntimeHost implements
     authority: ZLinkAuthoritySnapshot,
     signal?: AbortSignal
   ): Promise<void> {
-    const identity = decodeActorAuthorityIdentity(authority.payload);
+    const identity = decodeActorAuthorityIdentity(
+      serviceRelocationAuthorityApplicationPayload(authority.payload)
+    );
     if (identity === undefined) return;
     if (this.actorManager?.getState(identity.actor.actorId)?.hasActorOrCreation === true) {
       return;
@@ -1338,7 +1354,7 @@ export class ZLinkFrameworkRuntimeHost implements
       // Seed the shared live-mode cell from the configured mode (default errorsOnly).
       this.messageFlowModeCell.mode =
         this.options.registration.dispatch?.diagnostics.messageFlow ??
-        ZLinkMessageFlowLogMode.ErrorsOnly;
+        'errors';
       const dispatchErrors = this.createDispatchErrorReporter(this.executionState.errorSink);
       channelRuntime = new ZLinkChannelRuntimeManager(
         this.options.registration,
@@ -1785,6 +1801,12 @@ export class ZLinkFrameworkRuntimeHost implements
       meshName,
       signal
     );
+    // A failed relocation rolls the local object barriers back before the
+    // descriptor is published as Serving. Reconcile the durable authority
+    // routes before returning so the next local request cannot observe the
+    // brief window where the Location row is ready but the route cache still
+    // reflects the failed capture.
+    await this.statefulAuthorityRoutes?.reconcile(signal);
   }
 
   private async publishMeshDraining(
@@ -2034,23 +2056,19 @@ export class ZLinkFrameworkRuntimeHost implements
             'Actor placement runtime is not initialized.'
           );
         }
-        const message = encodeFrameworkPayloadMessage(
+        const requestPayload = encodeFrameworkCreationPayload(
           call.request,
           this.options.registration.messageSerializers
         );
-        try {
-          return await placement.create(
-            actorId,
-            actorType,
-            createOnly,
-            call.meshName,
-            Buffer.from(message.data()),
-            call.timeoutMs,
-            signal
-          );
-        } finally {
-          message.close();
-        }
+        return await placement.create(
+          actorId,
+          actorType,
+          createOnly,
+          call.meshName,
+          requestPayload,
+          call.timeoutMs,
+          signal
+        );
       }
     };
   }
@@ -2089,10 +2107,10 @@ export class ZLinkFrameworkRuntimeHost implements
         ?? Promise.resolve(),
       beginInstanceIdleClosingAuthority: (meshName, spotId) =>
         this.locationOwner.currentLifecycle?.beginInstanceSpotClosing(meshName, spotId)
-        ?? Promise.resolve(false),
+        ?? Promise.resolve(undefined),
       beginInstanceClosingAuthority: (meshName, spotId) =>
         this.locationOwner.currentLifecycle?.beginInstanceSpotClosing(meshName, spotId)
-        ?? Promise.resolve(false),
+        ?? Promise.resolve(undefined),
       createLocationSpotRouteResolver: () => this.createLocationSpotRouteResolver(),
       boundSessionRelay: this.boundSessionRelay,
       actorHandoff: this.actorHandoff,
@@ -2340,16 +2358,10 @@ export class ZLinkFrameworkRuntimeHost implements
                   `User Spot factory '${record.stableType}' is not registered on RouteMesh '${meshName}'.`
                 );
               }
-              const message = RuntimeMessage.from(requestPayload);
-              let request: unknown;
-              try {
-                request = decodeFrameworkPayloadMessage(
-                  message,
-                  this.options.registration.messageSerializers
-                );
-              } finally {
-                message.close();
-              }
+              const request = decodeFrameworkCreationPayload(
+                requestPayload,
+                this.options.registration.messageSerializers
+              );
               local.beginUserSpotPublication(meshName, record.spotId as never);
               try {
                 const result = await local.getOrCreateWithAuthority(
@@ -2428,16 +2440,10 @@ export class ZLinkFrameworkRuntimeHost implements
           return await actorPlacement.handleRemoteCreate(
             record,
             async (requestPayload, authority, createSignal) => {
-              const message = RuntimeMessage.from(requestPayload);
-              let request: unknown;
-              try {
-                request = decodeFrameworkPayloadMessage(
-                  message,
-                  this.options.registration.messageSerializers
-                );
-              } finally {
-                message.close();
-              }
+              const request = decodeFrameworkCreationPayload(
+                requestPayload,
+                this.options.registration.messageSerializers
+              );
               const entrySpot = node.entrySpot().status();
               const nativeActorRef = node.restoreActorAuthority?.(
                 record.actorId,
@@ -2740,6 +2746,22 @@ export class ZLinkFrameworkRuntimeHost implements
           'MeshNode Actor binding record has no binding generation.'
         );
       }
+      if (record.kindData.transition === 'tombstone') {
+        const actorRef: ActorRef = {
+          actorId: record.kindData.actor.actorId,
+          objectGeneration: record.kindData.actor.generation,
+          meshName,
+          nodeRid: record.kindData.actor.nodeRid
+        };
+        await this.streamBindingRuntime.retireRemoteBinding(
+          actorRef,
+          record.kindData.sessionRid,
+          record.kindData.bindingGeneration,
+          signal
+        );
+        record.reply(Buffer.alloc(0));
+        return;
+      }
       this.actorManager
         ?.getState(record.kindData.actor.actorId)
         ?.setBoundSessionBindingGeneration(record.kindData.bindingGeneration);
@@ -3015,9 +3037,9 @@ export class ZLinkFrameworkRuntimeHost implements
 
   private flowCreationEnabled(): boolean {
     const mode = this.executionState === undefined
-      ? this.options.registration.dispatch?.diagnostics.messageFlow ?? ZLinkMessageFlowLogMode.ErrorsOnly
+      ? this.options.registration.dispatch?.diagnostics.messageFlow ?? 'errors'
       : this.messageFlowModeCell.mode;
-    return mode !== ZLinkMessageFlowLogMode.Off;
+    return mode !== 'off';
   }
 
   private runLifecycle<T>(operation: () => T): T {
@@ -3401,10 +3423,11 @@ function rewriteAuthorityPayloadForOwner(
   payload: Uint8Array,
   owner: ZLinkLocationOwnerToken
 ): Uint8Array {
-  if (decodeActorAuthorityIdentity(payload) !== undefined) {
-    return rewriteActorAuthorityOwner(payload, owner);
-  }
-  return rewriteServiceAuthorityOwner(payload, owner) ?? Buffer.from(payload);
+  const applicationPayload = serviceRelocationAuthorityApplicationPayload(payload);
+  const rewritten = decodeActorAuthorityIdentity(applicationPayload) !== undefined
+    ? rewriteActorAuthorityOwner(applicationPayload, owner)
+    : rewriteServiceAuthorityOwner(applicationPayload, owner) ?? applicationPayload;
+  return replaceServiceRelocationAuthorityApplicationPayload(payload, rewritten);
 }
 
 function validateRelocationOptions(

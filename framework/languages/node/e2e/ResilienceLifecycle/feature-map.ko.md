@@ -24,7 +24,7 @@
 | RL-C3 | 구현 | provider B shutdown으로 단절을 모사하고, down 중 `api-a` 처리와 provider B 재시작 뒤 restored traffic/evidence를 검증했다. 로그: `logs/20260703-211853-78546` |
 | RL-C4 | 구현 | Redis location store outage 중 기존 channel request가 계속 성공하는지 확인하고, store 복구 뒤 topology 재조회와 follow-up evidence를 검증했다. 로그: `logs/20260703-211853-78546` |
 | RL-D1 | 구현 | Redis location row로 연결한 subscriber 8개에 fanout event 120개를 발행하고, 각 subscriber가 같은 순서를 누락·중복 없이 수신하는지 검증했다. 로그: `logs/20260715-075646-2279409` |
-| RL-D2 | 구현 | observer 예외 뒤 messaging이 계속되고, public `ZLinkRuntimeErrorSink`가 `zlink.runtime_error`/`observer_failed`/`message_flow_observer` event를 정확히 한 번 받으며 허용된 필드만 포함하는지 검증했다. 로그: `log/20260729-162800-3166911` |
+| RL-D2 | 구현 | 애플리케이션이 설정한 OpenTelemetry logger provider가 예외를 던져도 missing-handler terminal과 후속 messaging이 계속되는지 검증한다. Provider가 받은 `zlink.dispatch_error` record와 주입한 provider failure evidence도 각각 한 번인지 확인한다. |
 | RL-D3 | 구현 | provider observer와 client assertion이 `outcome=failed`, `reason=no_handler`, `action=reply_error`, `packet_name`을 검증한다. Dynamic port의 실제 endpoint를 descriptor에 게시한 뒤 actual run이 통과했다. 로그: `log/20260729-162011-2856469` |
 | RL-D4 | 구현 | normal client는 error message 예외를 확인하고, server observer는 wire에 포함되지 않는 `no_handler`/`reply_error`를 확인한다. 정상 follow-up Response도 통과했다. 로그: `log/20260729-162134-2885402` |
 | RL-D5 | 구현 | 8개 client가 request/send를 120초 동안 지속하고, 25,748쌍 전부 성공·tail send evidence·short-lived client 정리 후 follow-up을 확인했다. 전반/후반 p95는 모두 25ms였다. 로그: `logs/20260715-082358-2399471` |

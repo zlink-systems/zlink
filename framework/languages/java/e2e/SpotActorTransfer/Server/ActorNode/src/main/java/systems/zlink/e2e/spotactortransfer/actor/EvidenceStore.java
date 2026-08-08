@@ -5,11 +5,11 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import systems.zlink.e2e.spotactortransfer.shared.Contracts;
-import systems.zlink.framework.configuration.ZLinkMessageFlowEvent;
 
 public final class EvidenceStore {
     private static final Set<String> TRANSFER_MARKERS = Set.of(
@@ -60,24 +60,27 @@ public final class EvidenceStore {
             null);
     }
 
-    public void addFlow(ZLinkMessageFlowEvent flow) {
-        if (flow.actorId() == null || flow.packetName() == null) {
+    public void addFlow(Map<String, String> flow) {
+        String actorId = flow.get("actor");
+        String packetName = flow.get("packet");
+        String correlationId = flow.get("corr");
+        if (actorId == null || packetName == null) {
             return;
         }
-        if (TRANSFER_ID_MARKERS.contains(flow.packetName()) && flow.correlationId() != null) {
-            transferIds.put(flow.actorId(), flow.correlationId());
+        if (TRANSFER_ID_MARKERS.contains(packetName) && correlationId != null) {
+            transferIds.put(actorId, correlationId);
         }
-        if (!TRANSFER_MARKERS.contains(flow.packetName())) {
+        if (!TRANSFER_MARKERS.contains(packetName)) {
             return;
         }
         add(
             "message_flow",
-            flow.actorId(),
-            flow.packetName(),
-            flow.correlationId(),
-            transferIds.get(flow.actorId()),
-            flow.correlationId(),
-            flow.flowId());
+            actorId,
+            packetName,
+            correlationId,
+            transferIds.get(actorId),
+            correlationId,
+            flow.get("flow"));
     }
 
     private void add(

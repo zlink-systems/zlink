@@ -1,5 +1,4 @@
 import { ZLinkModule, zlinkFramework, zlinkModule } from '@zlink-systems/nestjs';
-import { ZLinkMessageFlowLogMode } from '@zlink-systems/framework';
 import { SampleNames } from '../Configuration/sample-settings';
 import { PlayActorFactory } from './Infrastructure/ZLink/Actors/play-actor-factory';
 import { PlayActorRelocationAdapter } from './Infrastructure/ZLink/Actors/play-actor-relocation-adapter';
@@ -40,9 +39,7 @@ function createTicTacToePlayModule() {
         useFactory: (config: TicTacToeSampleConfig) => {
           const builder = zlinkFramework();
           builder.configureDispatch()
-            .messageFlow(ZLinkMessageFlowLogMode.KeyTransitions)
-            .traceLogFile(`${config.logDir}/flow-${config.instanceName}.log`)
-            .traceLabel(config.instanceName);
+            .messageFlow('normal');
           builder.addLocationStore(createTicTacToeLocationStore(config));
           builder.addRelocationStore(createTicTacToeRelocationStore(config));
           builder.addStreamNode(SampleNames.playStream)

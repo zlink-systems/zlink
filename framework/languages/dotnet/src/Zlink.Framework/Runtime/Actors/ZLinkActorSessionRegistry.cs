@@ -6,9 +6,9 @@ internal sealed class ZLinkActorSessionRegistry(
     TimeSpan? sessionBindingTombstoneRetention = null)
 {
     private readonly object _gate = new();
-    private readonly Dictionary<string, ZLinkActorRuntimeState> _states = new(StringComparer.Ordinal);
+    private readonly Dictionary<ZLinkActorId, ZLinkActorRuntimeState> _states = [];
 
-    public ZLinkActorRuntimeState GetOrCreate(string actorId)
+    public ZLinkActorRuntimeState GetOrCreate(ZLinkActorId actorId)
     {
         lock (_gate)
         {
@@ -25,7 +25,7 @@ internal sealed class ZLinkActorSessionRegistry(
         }
     }
 
-    public bool TryGet(string actorId, out ZLinkActorRuntimeState state)
+    public bool TryGet(ZLinkActorId actorId, out ZLinkActorRuntimeState state)
     {
         lock (_gate)
         {
@@ -33,7 +33,7 @@ internal sealed class ZLinkActorSessionRegistry(
         }
     }
 
-    public void TryRemove(string actorId, ZLinkActorRuntimeState state)
+    public void TryRemove(ZLinkActorId actorId, ZLinkActorRuntimeState state)
     {
         lock (_gate)
         {
@@ -45,7 +45,7 @@ internal sealed class ZLinkActorSessionRegistry(
         }
     }
 
-    public void RemoveIfCurrent(string actorId, ZLinkActorRuntimeState state)
+    public void RemoveIfCurrent(ZLinkActorId actorId, ZLinkActorRuntimeState state)
     {
         lock (_gate)
         {

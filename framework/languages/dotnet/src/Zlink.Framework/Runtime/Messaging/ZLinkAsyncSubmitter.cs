@@ -600,10 +600,14 @@ internal sealed class ZLinkAsyncSubmitter : IAsyncDisposable
                 Trace(item.OperationId, "retry-attempt", retry: true);
                 Trace(item.OperationId, "transport-attempt", retry: true);
 
-                if (!TrySubmitNow(
+                bool accepted;
+                ZlinkException? retryableFailure;
+                try
+                {
+                    accepted = TrySubmitNow(
                         item.Parts,
                         item.TrySubmit,
-                        out var retryableFailure,
+                        out retryableFailure,
                         item,
                         item.CompleteOnAccepted
                             ? () =>
@@ -611,7 +615,21 @@ internal sealed class ZLinkAsyncSubmitter : IAsyncDisposable
                                 Trace(item.OperationId, "commit", retry: true);
                                 item.TryComplete(null);
                             }
-                            : () => Trace(item.OperationId, "commit", retry: true)))
+                            : () => Trace(item.OperationId, "commit", retry: true));
+                }
+                catch (ObjectDisposedException disposed)
+                {
+                    // Dispose can close admission after Drain observed a ready
+                    // credit but before it acquires the submission gate. The
+                    // callback path must turn that race into the pending
+                    // operation's terminal state instead of leaking an
+                    // exception from the native ready callback.
+                    item.TryFail(disposed);
+                    Dequeue(item);
+                    return;
+                }
+
+                if (!accepted)
                 {
                     if (item.IsCompleted)
                     {

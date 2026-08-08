@@ -12,10 +12,10 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.channels.ZLinkSendCall;
 import systems.zlink.framework.channels.ZLinkRequestCall;
-import systems.zlink.framework.configuration.ZLinkDispatchErrorSurface;
-import systems.zlink.framework.configuration.ZLinkDispatchMessageKind;
-import systems.zlink.framework.configuration.ZLinkMessageFlowEvent;
-import systems.zlink.framework.configuration.ZLinkMessageFlowOutcome;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSurface;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.channels.ZLinkChannelRuntime;
 import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
@@ -257,8 +257,7 @@ final class ZLinkSpotRoutedOutbound {
 }
 
 final class ZLinkSpotRoutedSendCall implements ZLinkSendCall {
-    private final java.util.concurrent.atomic.AtomicBoolean submitGate =
-        new java.util.concurrent.atomic.AtomicBoolean();
+    private final java.util.concurrent.atomic.AtomicBoolean submitGate;
     private final ZLinkSpotRoutedOutbound outbound;
     private final String routerChannelId;
     private final RoutingId targetNodeRid;
@@ -320,6 +319,22 @@ final class ZLinkSpotRoutedSendCall implements ZLinkSendCall {
         Optional<String> packetName,
         String contentType,
         ZLinkApplicationMetadata metadata) {
+        this(outbound, routerChannelId, targetNodeRid, spotId, spotGeneration, payload,
+            packetName, contentType, metadata, new java.util.concurrent.atomic.AtomicBoolean());
+    }
+
+    private ZLinkSpotRoutedSendCall(
+        ZLinkSpotRoutedOutbound outbound,
+        String routerChannelId,
+        RoutingId targetNodeRid,
+        String spotId,
+        long spotGeneration,
+        Message payload,
+        Optional<String> packetName,
+        String contentType,
+        ZLinkApplicationMetadata metadata,
+        java.util.concurrent.atomic.AtomicBoolean submitGate) {
+        this.submitGate = submitGate;
         this.outbound = outbound;
         this.routerChannelId = routerChannelId;
         this.targetNodeRid = targetNodeRid;
@@ -341,7 +356,8 @@ final class ZLinkSpotRoutedSendCall implements ZLinkSendCall {
             payload,
             Optional.of(packetName),
             contentType,
-            metadata);
+            metadata,
+            submitGate);
     }
 
     @Override
@@ -355,7 +371,8 @@ final class ZLinkSpotRoutedSendCall implements ZLinkSendCall {
             payload,
             packetName,
             contentType,
-            metadata.with(key, value));
+            metadata.with(key, value),
+            submitGate);
     }
 
     @Override
@@ -369,7 +386,8 @@ final class ZLinkSpotRoutedSendCall implements ZLinkSendCall {
             payload,
             packetName,
             contentType,
-            metadata.withAll(values));
+            metadata.withAll(values),
+            submitGate);
     }
 
     @Override
@@ -392,6 +410,7 @@ final class ZLinkSpotRoutedSendCall implements ZLinkSendCall {
 }
 
 final class ZLinkSpotRoutedRequestCall implements ZLinkRequestCall {
+    private final java.util.concurrent.atomic.AtomicBoolean submitGate;
     private final ZLinkSpotRoutedOutbound outbound;
     private final String routerChannelId;
     private final RoutingId targetNodeRid;
@@ -459,6 +478,24 @@ final class ZLinkSpotRoutedRequestCall implements ZLinkRequestCall {
         String contentType,
         Duration timeout,
         ZLinkApplicationMetadata metadata) {
+        this(outbound, routerChannelId, targetNodeRid, spotId, spotGeneration, payload,
+            packetName, contentType, timeout, metadata,
+            new java.util.concurrent.atomic.AtomicBoolean());
+    }
+
+    private ZLinkSpotRoutedRequestCall(
+        ZLinkSpotRoutedOutbound outbound,
+        String routerChannelId,
+        RoutingId targetNodeRid,
+        String spotId,
+        long spotGeneration,
+        Message payload,
+        Optional<String> packetName,
+        String contentType,
+        Duration timeout,
+        ZLinkApplicationMetadata metadata,
+        java.util.concurrent.atomic.AtomicBoolean submitGate) {
+        this.submitGate = submitGate;
         this.outbound = outbound;
         this.routerChannelId = routerChannelId;
         this.targetNodeRid = targetNodeRid;
@@ -482,7 +519,8 @@ final class ZLinkSpotRoutedRequestCall implements ZLinkRequestCall {
             Optional.of(packetName),
             contentType,
             timeout,
-            metadata);
+            metadata,
+            submitGate);
     }
 
     @Override
@@ -497,7 +535,8 @@ final class ZLinkSpotRoutedRequestCall implements ZLinkRequestCall {
             packetName,
             contentType,
             timeout,
-            metadata.with(key, value));
+            metadata.with(key, value),
+            submitGate);
     }
 
     @Override
@@ -512,7 +551,8 @@ final class ZLinkSpotRoutedRequestCall implements ZLinkRequestCall {
             packetName,
             contentType,
             timeout,
-            metadata.withAll(values));
+            metadata.withAll(values),
+            submitGate);
     }
 
     @Override
@@ -527,11 +567,17 @@ final class ZLinkSpotRoutedRequestCall implements ZLinkRequestCall {
             packetName,
             contentType,
             timeout,
-            metadata);
+            metadata,
+            submitGate);
     }
 
     @Override
     public <TReply> CompletionStage<TReply> submit(Class<TReply> replyType) {
+        CompletionStage<TReply> duplicate =
+            ZLinkOneWayCalls.beginOneWay(submitGate);
+        if (duplicate != null) {
+            return duplicate;
+        }
         systems.zlink.framework.runtime.internal.handlers
             .ZLinkSuspendInvocationContext.rejectSameSpotWait(spotId);
         return systems.zlink.framework.execution.ZLinkAsyncSerialQueue.manageCurrent(

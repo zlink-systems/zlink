@@ -23,6 +23,9 @@ internal sealed class ZLinkSessionActorBindingRegistry(ZLinkFrameworkRuntime run
         ulong targetNodeGeneration,
         ulong ownerLeaseGeneration,
         ulong sessionOwnerNodeGeneration,
+        RoutingId sessionOwnerNodeRid,
+        string sessionOwnerId,
+        ulong sessionOwnerLeaseGeneration,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -58,7 +61,10 @@ internal sealed class ZLinkSessionActorBindingRegistry(ZLinkFrameworkRuntime run
             actorRef,
             bindingGeneration,
             route,
-            sessionOwnerNodeGeneration);
+            sessionOwnerNodeGeneration,
+            sessionOwnerNodeRid,
+            sessionOwnerId,
+            sessionOwnerLeaseGeneration);
 
         return ValueTask.FromResult<IZLinkSessionActor>(actorRef);
     }

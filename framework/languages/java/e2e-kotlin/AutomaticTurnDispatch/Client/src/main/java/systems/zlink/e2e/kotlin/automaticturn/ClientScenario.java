@@ -20,6 +20,7 @@ import systems.zlink.e2e.kotlin.automaticturn.scenarios.AtdD4SessionRelayActorAw
 import systems.zlink.e2e.kotlin.automaticturn.scenarios.AtdE1TimeoutScenario;
 import systems.zlink.e2e.kotlin.automaticturn.scenarios.AtdE2CancellationScenario;
 import systems.zlink.e2e.kotlin.automaticturn.scenarios.AtdE3ShutdownRecoveryScenario;
+import systems.zlink.e2e.kotlin.automaticturn.scenarios.JvmSessionReplacementScenario;
 import systems.zlink.e2e.kotlin.automaticturn.scenarios.TdEJoinScenario;
 import systems.zlink.e2e.kotlin.automaticturn.scenarios.TdBasicTurnScenario;
 import systems.zlink.e2e.kotlin.automaticturn.support.ClientStreamSupport;
@@ -41,8 +42,12 @@ public final class ClientScenario {
         try {
             ClientStreamSupport.awaitLifecycle(() -> roomA.connect().submit().toCompletableFuture().join());
             ClientStreamSupport.awaitLifecycle(() -> roomB.connect().submit().toCompletableFuture().join());
+            if ("JVM-SESSION-001".equals(scenario)) {
+                JvmSessionReplacementScenario.run(roomA, roomB);
+                return;
+            }
             AtdB1OtherActorProgressScenario.JoinedActors actors =
-                AtdB1OtherActorProgressScenario.run(roomA, roomB);
+                AtdB1OtherActorProgressScenario.run(roomA);
             if ("ATD-B1".equals(scenario)) {
                 return;
             }
@@ -85,7 +90,7 @@ public final class ClientScenario {
             case "ATD-A3" -> AtdA3ContinuationContextScenario.run(roomA, actors.actorA(), roomB, actors.actorB());
             case "ATD-A4" -> AtdA4WorkerAwaitScenario.run(roomA, actors.actorA());
             case "ATD-B2" -> AtdB2SameActorReentryScenario.run(roomA, actors.actorA());
-            case "ATD-B3" -> AtdB3ActorJoinAwaitScenario.run(roomA, actors.actorA(), roomB, actors.actorB());
+            case "ATD-B3" -> AtdB3ActorJoinAwaitScenario.run(roomA);
             case "ATD-C1" -> AtdC1TimerIsolationScenario.run(roomA);
             case "ATD-C2" -> AtdC2TimerReentryScenario.run(roomA);
             case "ATD-C3" -> AtdC3ActorTimerIsolationScenario.run(roomA);
@@ -131,7 +136,7 @@ public final class ClientScenario {
         completed.add("ATD-A4");
         AtdB2SameActorReentryScenario.run(roomA, actors.actorA());
         completed.add("ATD-B2");
-        AtdB3ActorJoinAwaitScenario.run(roomA, actors.actorA(), roomB, actors.actorB());
+        AtdB3ActorJoinAwaitScenario.run(roomA);
         completed.add("ATD-B3");
         AtdC1TimerIsolationScenario.run(roomA);
         completed.add("ATD-C1");

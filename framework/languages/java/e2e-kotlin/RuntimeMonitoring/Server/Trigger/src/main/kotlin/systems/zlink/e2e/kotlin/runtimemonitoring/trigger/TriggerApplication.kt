@@ -47,9 +47,9 @@ class TriggerApplication {
         return ZLinkFrameworkConfigurer { options ->
             val logDir = Env.get("e2e.log.dir", "logs")
             options.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile("$logDir/trigger-flow.log")
-                .traceLabel("kotlin-mon-trigger")
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL)
+
+
             options.addClientServerChannel(Contracts.CHANNEL)
                 .client()
                 .connect(Env.get("e2e.service.api.endpoint"))

@@ -77,6 +77,58 @@ final class ZLinkServiceM6BBoundSessionWireCodecTest {
     }
 
     @Test
+    void command51RoundTripsTheExactRetiredSessionFence() {
+        var replacement = new ZLinkServiceM6BWireCodec.BoundSessionReplaced(
+            new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                new ZLinkBackendActorRef(
+                    RoutingId.from("actor-owner"), "actor-a", 1),
+                2,
+                3,
+                4),
+            new ZLinkServiceM6BWireCodec.RetiredSessionRouteFence(
+                RoutingId.from("session-owner"),
+                5,
+                "session-runtime",
+                6,
+                RoutingId.from("session-a"),
+                7));
+
+        byte[] encoded = codec.encodeBoundSessionReplaced(replacement);
+        assertEquals(
+            systems.zlink.framework.runtime.protocol.ServiceWireConstants
+                .COMMAND_BOUND_SESSION_REPLACED,
+            Byte.toUnsignedInt(encoded[3]));
+        assertEquals(replacement, codec.decodeBoundSessionReplaced(encoded));
+        assertArrayEquals(
+            encoded,
+            codec.encodeBoundSessionReplaced(
+                codec.decodeBoundSessionReplaced(encoded)));
+
+        byte[] zeroOwnerGeneration = encoded.clone();
+        int retiredOwnerGeneration = 5
+            + (1 + "actor-a".length())
+            + Long.BYTES
+            + (1 + "actor-owner".length())
+            + Long.BYTES * 3
+            + (1 + "session-owner".length());
+        zeroOwnerGeneration[retiredOwnerGeneration + 1] = 0;
+        zeroOwnerGeneration[retiredOwnerGeneration + 2] = 0;
+        zeroOwnerGeneration[retiredOwnerGeneration + 3] = 0;
+        zeroOwnerGeneration[retiredOwnerGeneration + 4] = 0;
+        zeroOwnerGeneration[retiredOwnerGeneration + 5] = 0;
+        zeroOwnerGeneration[retiredOwnerGeneration + 6] = 0;
+        zeroOwnerGeneration[retiredOwnerGeneration + 7] = 0;
+        assertThrows(
+            ZLinkServiceWireException.class,
+            () -> codec.decodeBoundSessionReplaced(zeroOwnerGeneration));
+
+        byte[] trailing = Arrays.copyOf(encoded, encoded.length + 1);
+        assertThrows(
+            ZLinkServiceWireException.class,
+            () -> codec.decodeBoundSessionReplaced(trailing));
+    }
+
+    @Test
     void boundActorTailRequiresPairedFlagsAndRejectsMalformedFrames() {
         int flags =
             systems.zlink.framework.runtime.protocol.ServiceWireConstants

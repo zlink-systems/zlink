@@ -348,7 +348,12 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
       | (correlationId === undefined
         ? ZLinkStreamHeaderFlags.None
         : ZLinkStreamHeaderFlags.HasCorrelationId);
-    const encoded = encodeFrameworkPayload(message, this.options.messageSerializers);
+    const encoded = encodeFrameworkPayload(
+      message,
+      this.options.messageSerializers,
+      packetName,
+      'payload'
+    );
     try {
       const header = encodeStreamHeader({
         kind,
@@ -460,7 +465,11 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
       closeMeshCompletion(completion);
       throw mapRequestResult(completion.terminalResult, 'Actor request');
     }
-    return decodeActorReply<TReply>(completion.parts, this.options.messageSerializers);
+    return decodeActorReply<TReply>(
+      completion.parts,
+      this.options.messageSerializers,
+      decodeStreamHeader(parts[0].data()).name
+    );
   }
 
   private requireNode(meshName: string): ZLinkBackendMeshNode {
@@ -588,6 +597,7 @@ export async function forwardEncodedActorPacket(
 ): Promise<unknown> {
   const target = toBackendActorRef(actor);
   const parts = [header, payload];
+  const packetName = decodeStreamHeader(header).name;
   if (!returnResponse) {
     if (node.sendToActor(target, parts, { flags: ZLINK_BACKEND_SEND_NONE }) !== SubmitResult.Ok) {
       throw routeNotConnected('Actor handoff send submit was not accepted.');
@@ -602,7 +612,7 @@ export async function forwardEncodedActorPacket(
     closeMeshCompletion(completion);
     throw mapRequestResult(completion.terminalResult, 'Actor handoff request');
   }
-  return decodeActorReply(completion.parts, serializers);
+  return decodeActorReply(completion.parts, serializers, packetName);
 }
 
 function toBackendActorRef(actor: ActorRef): ZLinkBackendActorRef {
@@ -715,7 +725,8 @@ class DefaultZLinkActorRequestCall implements ZLinkActorRequestCall {
 
 function decodeActorReply<TReply>(
   reply: readonly Message[],
-  serializers?: ReadonlyMap<string, ZLinkMessageSerializer>
+  serializers?: ReadonlyMap<string, ZLinkMessageSerializer>,
+  packetName?: string
 ): TReply {
   try {
     if (reply.length === 1) {
@@ -724,7 +735,7 @@ function decodeActorReply<TReply>(
         const header = decodeStreamHeader(frame.header);
         const payload = RuntimeMessage.from(frame.payload) as Message;
         try {
-          return decodeActorReplyPayload<TReply>(header.kind, payload, serializers);
+          return decodeActorReplyPayload<TReply>(header.kind, payload, serializers, packetName);
         } finally {
           payload.close();
         }
@@ -732,7 +743,7 @@ function decodeActorReply<TReply>(
     }
     if (reply.length >= 2) {
       const header = decodeStreamHeader(reply[0].data());
-      return decodeActorReplyPayload<TReply>(header.kind, reply[1], serializers);
+      return decodeActorReplyPayload<TReply>(header.kind, reply[1], serializers, packetName);
     }
     throw createInternalFrameworkException(
       ZLinkFrameworkInternalErrorKind.RequestProtocolError,
@@ -750,7 +761,8 @@ function closeMessages(parts: readonly Message[]): void {
 function decodeActorReplyPayload<TReply>(
   kind: ZLinkStreamMessageKind,
   payload: Message,
-  serializers?: ReadonlyMap<string, ZLinkMessageSerializer>
+  serializers?: ReadonlyMap<string, ZLinkMessageSerializer>,
+  packetName?: string
 ): TReply {
   if (kind === ZLinkStreamMessageKind.Error) {
     const error = decodeFrameworkPayloadMessage<{
@@ -766,7 +778,14 @@ function decodeActorReplyPayload<TReply>(
       : ZLinkFrameworkErrorKind.InternalFailure;
     throw new ZLinkFrameworkException(publicKind, error.message ?? 'Actor request failed.');
   }
-  return decodeFrameworkPayloadMessage<TReply>(payload, serializers);
+  return decodeFrameworkPayloadMessage<TReply>(
+    payload,
+    serializers,
+    undefined,
+    'application/json',
+    packetName,
+    'reply'
+  );
 }
 
 function mapSubmitError(error: unknown, operationName: string): Error {

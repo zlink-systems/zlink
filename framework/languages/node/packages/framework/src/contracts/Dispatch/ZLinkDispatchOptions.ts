@@ -1,10 +1,4 @@
-import type { RoutingId, SpotId, Type } from '../Common';
 import type { ZLinkFlowOrigin } from './ZLinkFlowOrigin';
-import type {
-  ZLinkMessageKind,
-  ZLinkMessageSurface,
-  ZLinkRuntimeErrorSink
-} from '../RouteMesh';
 
 export interface ZLinkDispatchOptions {
   readonly unhandled: ZLinkUnhandledDispatchOptions;
@@ -12,21 +6,9 @@ export interface ZLinkDispatchOptions {
 }
 
 export interface ZLinkDispatchOptionsBuilder {
-  setMessageFlowObserver(observerType: Type<ZLinkMessageFlowObserver>): this;
-  setRuntimeErrorSink(sinkType: Type<ZLinkRuntimeErrorSink>): this;
-
-  /** Fluent diagnostics/tracing config (builder-chain only). */
   messageFlow(mode: ZLinkMessageFlowLogMode): this;
-
   traceSampleRate(rate: number): this;
-
   includeMessageSizes(include: boolean): this;
-
-  /** Send tracing/error logs to a dedicated file (separated from app logs). */
-  traceLogFile(path: string): this;
-
-  /** Human-readable label stamped on every trace line (label=) for aggregation. */
-  traceLabel(label: string): this;
 }
 
 /**
@@ -42,61 +24,6 @@ export enum ZLinkRuntimeMessageFlowOutcome {
   ReplyReceived = 'replyReceived',
   Error = 'error'
 }
-
-export enum ZLinkMessageFlowPhase {
-  Received = 'received',
-  Admitted = 'admitted',
-  Dispatched = 'dispatched',
-  Completed = 'completed',
-  Replied = 'replied',
-  Sent = 'sent',
-  ReplyReceived = 'reply_received',
-  Backpressured = 'backpressured',
-  Dropped = 'dropped'
-}
-
-export interface ZLinkMessageFlowEvent {
-  readonly eventId: 'zlink.message_flow' | 'zlink.dispatch_error';
-  readonly timestamp: Date;
-  readonly phase?: ZLinkMessageFlowPhase;
-  readonly outcome: ZLinkMessageFlowOutcome;
-  readonly surface: ZLinkMessageSurface;
-  readonly messageKind: ZLinkMessageKind;
-  readonly reason?: ZLinkDispatchErrorReason;
-  readonly action?: ZLinkDispatchErrorAction;
-  readonly packetName?: string;
-  readonly channelName?: string;
-  readonly meshName?: string;
-  readonly topic?: string;
-  readonly correlationId?: string;
-  readonly sourceRid?: RoutingId;
-  readonly targetRid?: RoutingId;
-  readonly flowId?: string;
-  readonly flowOrigin?: ZLinkFlowOrigin;
-  readonly spotId?: SpotId;
-  readonly instanceSpotType?: string;
-  readonly activationState?: 'activating' | 'ready' | 'closing';
-  readonly actorId?: string;
-  readonly messageSizeBytes?: number;
-  readonly durationSeconds?: number;
-}
-
-export type ZLinkMessageFlowOutcome =
-  | 'succeeded'
-  | 'failed'
-  | 'backpressured'
-  | 'dropped'
-  | 'cancelled'
-  | 'shutdown';
-
-export type ZLinkMessageFlowReason =
-  | 'backpressure'
-  | 'stale_target'
-  | 'target_closed'
-  | 'shutdown'
-  | 'location_unavailable'
-  | 'activation_rejected'
-  | 'activation_timeout';
 
 export interface ZLinkRuntimeMessageFlowEvent {
   readonly outcome: ZLinkRuntimeMessageFlowOutcome;
@@ -123,10 +50,6 @@ export interface ZLinkRuntimeMessageFlowEvent {
   readonly errorAction?: ZLinkDispatchErrorAction;
   readonly errorType?: string;
   readonly errorMessage?: string;
-}
-
-export interface ZLinkMessageFlowObserver {
-  onMessageFlow(flow: ZLinkMessageFlowEvent): Promise<void> | void;
 }
 
 /**
@@ -170,10 +93,6 @@ export interface ZLinkDiagnosticsOptions {
   messageFlow: ZLinkMessageFlowLogMode;
   sampleRate: number;
   includeMessageSizes: boolean;
-  /** When set, tracing/error logs go to this dedicated file (separated from app logs). */
-  logFile?: string;
-  /** Human-readable runtime label stamped on each trace line. */
-  label?: string;
 }
 
 export enum ZLinkUnhandledDispatchAction {
@@ -183,19 +102,13 @@ export enum ZLinkUnhandledDispatchAction {
   Throw = 'throw'
 }
 
-export enum ZLinkMessageFlowLogMode {
-  Off = 'off',
-  ErrorsOnly = 'errorsOnly',
-  KeyTransitions = 'keyTransitions',
-  Verbose = 'verbose'
-}
+export type ZLinkMessageFlowLogMode = 'off' | 'errors' | 'normal' | 'detailed';
 
-/** Severity rank for the mode ladder (off < errorsOnly < keyTransitions < verbose < diagnostic). */
 export const MESSAGE_FLOW_MODE_RANK: Record<ZLinkMessageFlowLogMode, number> = {
-  [ZLinkMessageFlowLogMode.Off]: 0,
-  [ZLinkMessageFlowLogMode.ErrorsOnly]: 1,
-  [ZLinkMessageFlowLogMode.KeyTransitions]: 2,
-  [ZLinkMessageFlowLogMode.Verbose]: 3
+  off: 0,
+  errors: 1,
+  normal: 2,
+  detailed: 3
 };
 
 export enum ZLinkDispatchErrorSurface {

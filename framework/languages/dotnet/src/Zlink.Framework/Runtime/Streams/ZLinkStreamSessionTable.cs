@@ -15,8 +15,8 @@ internal sealed class ZLinkStreamSessionTable(
     ZLinkCompletionAdmissionOwner? completionAdmission)
 {
     private readonly object _gate = new();
-    private readonly Dictionary<string, ZLinkStreamSessionRuntime> _sessions = [];
-    private readonly Dictionary<string, TaskCompletionSource<ZLinkStreamSessionRuntime?>>
+    private readonly Dictionary<RoutingId, ZLinkStreamSessionRuntime> _sessions = [];
+    private readonly Dictionary<RoutingId, TaskCompletionSource<ZLinkStreamSessionRuntime?>>
         _sessionCreations = [];
     private bool _rejectNewSessions;
     private bool _stopping;
@@ -65,7 +65,6 @@ internal sealed class ZLinkStreamSessionTable(
 
     public async ValueTask<ZLinkStreamSessionRuntime?> GetOrCreateAsync(RoutingId routingId)
     {
-        var sessionId = routingId.ToHex();
         var reject = false;
         var creator = false;
         TaskCompletionSource<ZLinkStreamSessionRuntime?>? creation = null;
@@ -73,16 +72,16 @@ internal sealed class ZLinkStreamSessionTable(
         {
             if (_stopping) return null;
 
-            if (_sessions.TryGetValue(sessionId, out var existing))
+            if (_sessions.TryGetValue(routingId, out var existing))
                 return existing;
             reject = _rejectNewSessions || drainAdmission.IsDraining;
             if (!reject)
             {
-                if (!_sessionCreations.TryGetValue(sessionId, out creation))
+                if (!_sessionCreations.TryGetValue(routingId, out creation))
                 {
                     creation = new TaskCompletionSource<ZLinkStreamSessionRuntime?>(
                         TaskCreationOptions.RunContinuationsAsynchronously);
-                    _sessionCreations.Add(sessionId, creation);
+                    _sessionCreations.Add(routingId, creation);
                     creator = true;
                 }
             }
@@ -115,13 +114,13 @@ internal sealed class ZLinkStreamSessionTable(
                 var rejectCreated = false;
                 lock (_gate)
                 {
-                    _sessionCreations.Remove(sessionId);
+                    _sessionCreations.Remove(routingId);
                     if (_stopping)
                     {
                         result = null;
                         disposeCreated = true;
                     }
-                    else if (_sessions.TryGetValue(sessionId, out var existing))
+                    else if (_sessions.TryGetValue(routingId, out var existing))
                     {
                         result = existing;
                         disposeCreated = true;
@@ -133,7 +132,7 @@ internal sealed class ZLinkStreamSessionTable(
                         rejectCreated = true;
                     }
                     else
-                        _sessions.Add(sessionId, created);
+                        _sessions.Add(routingId, created);
                 }
 
                 if (disposeCreated)
@@ -143,7 +142,7 @@ internal sealed class ZLinkStreamSessionTable(
             }
             catch (Exception exception)
             {
-                lock (_gate) _sessionCreations.Remove(sessionId);
+                lock (_gate) _sessionCreations.Remove(routingId);
                 creation!.TrySetException(exception);
             }
         }
@@ -155,7 +154,7 @@ internal sealed class ZLinkStreamSessionTable(
     {
         lock (_gate)
         {
-            if (_sessions.TryGetValue(routingId.ToHex(), out var existing))
+            if (_sessions.TryGetValue(routingId, out var existing))
             {
                 session = existing;
                 return true;
@@ -210,7 +209,7 @@ internal sealed class ZLinkStreamSessionTable(
         lock (_gate)
         {
             if (routingId is RoutingId streamRoutingId
-                && _sessions.TryGetValue(streamRoutingId.ToHex(), out var existing))
+                && _sessions.TryGetValue(streamRoutingId, out var existing))
             {
                 session = existing;
                 return true;
@@ -223,9 +222,10 @@ internal sealed class ZLinkStreamSessionTable(
 
     private void Remove(string sessionId)
     {
+        var routingId = RoutingId.FromHex(sessionId);
         lock (_gate)
         {
-            _sessions.Remove(sessionId);
+            _sessions.Remove(routingId);
         }
     }
 
@@ -233,10 +233,10 @@ internal sealed class ZLinkStreamSessionTable(
     {
         try
         {
-            var payload = ZLinkStreamSessionClosingCodec.EncodeServerDrain();
+            var payload = ZlinkStreamSessionClosingCodec.EncodeServerDrain();
             ZLinkStreamFrameWriter.Write(
                 message => socket.Send(routingId, message, SendFlags.None),
-                ZLinkStreamSessionClosingCodec.CreateHeader(),
+                ZlinkStreamSessionClosingCodec.CreateHeader(),
                 payload,
                 "Could not submit the session-closing control packet.");
         }

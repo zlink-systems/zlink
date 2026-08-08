@@ -1805,7 +1805,11 @@ int main ()
     ok &= file_contains (root / "framework/include/zlink/framework/contracts/actors/actor.hpp",
                          "actor_request_call_t request (actor_id_t actor_id");
     ok &= file_contains (root / "framework/src/runtime/actors/actor_client.cpp",
-                         "authority_key_t{\"1:\" + actor_id}");
+                         "actor_authority_key (actor_id)");
+    ok &= file_does_not_contain (
+      root / "framework/src/runtime/locations/store_location_resolvers.hpp",
+      "\"1:\" + std::string (object_id)",
+      "Location reads must not fall back to legacy Actor authority keys");
     ok &= file_contains (root / "CMakeLists.txt",
                          "framework/src/runtime/actors/actor_client.cpp");
 

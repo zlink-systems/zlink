@@ -1,7 +1,6 @@
 import fs from 'node:fs';
 import { Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
-import { ZLinkMessageFlowLogMode } from '@zlink-systems/framework';
 import { ZLINK_LOCATION_RUNTIME_QUERY, ZLINK_ROUTE_CLIENT, ZLinkModule, zlinkFramework } from '@zlink-systems/nestjs';
 import type { ZLinkLocationRuntimeQuery, ZLinkRouteClient } from '@zlink-systems/framework';
 import type { ProfileRes, ProfileReq } from '../../Shared/messages';
@@ -44,7 +43,7 @@ function createConfiguredConsumerModule(): Function {
       ZLinkModule.forRootFactory({
         imports: [configuration],
         inject: [RESILIENCE_OPTIONS],
-        useFactory: (value: unknown) => buildFramework(value as ConsumerOptions, undefined, true)
+        useFactory: (value: unknown) => buildFramework(value as ConsumerOptions, true)
       })
     ],
     providers: [
@@ -63,8 +62,7 @@ function createConfiguredConsumerModule(): Function {
 }
 
 async function requestWithNewClient(options: ConsumerOptions, request: ProfileReq): Promise<ProfileRes> {
-  const traceLabel = `storm-${request.marker ?? 'request'}`;
-  const ConsumerModule = createConsumerModule(options, traceLabel);
+  const ConsumerModule = createConsumerModule(options);
   const app = await NestFactory.createApplicationContext(ConsumerModule, { logger: false, abortOnError: false });
   try {
     const channel = app.get(ZLINK_ROUTE_CLIENT, { strict: false }) as ZLinkRouteClient;
@@ -76,25 +74,23 @@ async function requestWithNewClient(options: ConsumerOptions, request: ProfileRe
   }
 }
 
-function createConsumerModule(options: ConsumerOptions, traceLabel = options.traceLabel): Function {
+function createConsumerModule(options: ConsumerOptions): Function {
   class ConsumerModule {}
   Module({
     imports: [
       ZLinkModule.forRootFactory({
-        useFactory: () => buildFramework(options, traceLabel)
+        useFactory: () => buildFramework(options)
       })
     ]
   })(ConsumerModule);
   return ConsumerModule;
 }
 
-function buildFramework(options: ConsumerOptions, traceLabel = options.traceLabel, includeFanout = false) {
+function buildFramework(options: ConsumerOptions, includeFanout = false) {
   fs.mkdirSync(options.logDir, { recursive: true });
   const builder = zlinkFramework();
   builder.configureDispatch()
-    .messageFlow(ZLinkMessageFlowLogMode.KeyTransitions)
-    .traceLogFile(`${options.logDir}/${traceLabel}-flow.log`)
-    .traceLabel(traceLabel);
+    .messageFlow('normal');
   const profile = builder.addRouteMesh('profile')
     .listen('tcp://127.0.0.1:0')
     .routingId(options.rid);

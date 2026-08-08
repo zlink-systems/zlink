@@ -49,9 +49,7 @@ public final class PlayServerApplication {
     ZLinkFrameworkConfigurer playFramework(SampleTopology topology) {
         return options -> {
             options.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile(topology.logDirectory() + "/flow-play.log")
-                .traceLabel("play");
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             options.codecs().use(ZLinkProtobufCodec.defaultCodec());
             options.configureLocations();
             options.addRelocationStore(new ZLinkRedisRelocationStore(

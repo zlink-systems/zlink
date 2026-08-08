@@ -32,12 +32,11 @@ inline void configure_delay_host (zlink::framework::app_t &app,
 {
     app.logging ()
       .use_file (delay_options.log_dir + "/" + delay_options.node_rid + ".log")
+      .use_file (delay_options.log_dir + "/" + delay_options.node_rid + "-flow.log")
       .set_min_level (zlink::framework::log_level_t::debug);
     app.add_zlink_framework ([=] (zlink::framework::zlink_framework_options_t &options) {
         options.configure_dispatch ()
-          .message_flow (zlink::framework::message_flow_log_mode_t::key_transitions)
-          .trace_log_file (delay_options.log_dir + "/" + delay_options.node_rid + "-flow.log")
-          .trace_label ("cpp-atd-" + delay_options.node_rid);
+          .message_flow (zlink::framework::message_flow_log_mode_t::normal);
         auto state = std::make_unique<delay_state_t> (
           delay_options.node_rid,
           delay_options.log_dir + "/" + delay_options.node_rid + ".evidence.log");

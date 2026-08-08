@@ -252,7 +252,6 @@ public final class ZLinkFrameworkRegistration {
         boolean relocationStoreRequired = false;
         for (MeshNodeRegistration meshNode : meshNodes) {
             meshNode.validate();
-            meshNode.validateApplicationHwm(applicationHwmBytes);
             for (String channelName : meshNode.channelNames()) {
                 if (clientServerChannelNames.contains(channelName)) {
                     throw new ZLinkConfigurationException(

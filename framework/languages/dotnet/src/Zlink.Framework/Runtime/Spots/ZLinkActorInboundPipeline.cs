@@ -1,3 +1,5 @@
+using Zlink.Framework.Runtime.Identifiers;
+
 namespace Zlink.Framework.Runtime.Spots;
 
 internal interface IZLinkActorInboundEndpoint
@@ -921,7 +923,10 @@ internal sealed class ZLinkUserSpotActorInboundEndpoint(
 {
     public IZLinkActor? ResolveActor(ZLinkActorRuntimeState state)
     {
-        return actors.TryGetActor(state.ActorId, out var actor) && actor is not null
+        return actors.TryGetActor(
+                   ZLinkActorId.FromBoundary(state.ActorId, nameof(state)),
+                   out var actor)
+               && actor is not null
             ? actor
             : state.Actor;
     }

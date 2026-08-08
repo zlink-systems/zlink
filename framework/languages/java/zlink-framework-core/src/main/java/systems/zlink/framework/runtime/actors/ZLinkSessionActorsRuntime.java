@@ -15,6 +15,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.TimeoutException;
 import java.util.function.Predicate;
+import java.util.function.Supplier;
 import java.util.logging.Logger;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
@@ -49,6 +50,8 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
     private final List<ZLinkSessionActor> bound = new CopyOnWriteArrayList<>();
     private final java.util.concurrent.ConcurrentHashMap<String, StoredBindingRoute>
         bindingRoutes = new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.concurrent.ConcurrentHashMap<String, CompletableFuture<Void>>
+        bindingTransitions = new java.util.concurrent.ConcurrentHashMap<>();
     private final AtomicLong bindingGenerations = new AtomicLong();
     private ZLinkRelayMetadataPolicy metadataPolicy = ZLinkRelayMetadataPolicy.EMPTY;
 
@@ -214,18 +217,26 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
     }
 
     public CompletionStage<Void> notifyDisconnectedAll() {
+        return notifyDisconnectedAll(RELAY_SUBMIT_TIMEOUT);
+    }
+
+    public CompletionStage<Void> notifyDisconnectedAll(Duration timeout) {
+        java.util.Objects.requireNonNull(timeout, "timeout");
         List<ZLinkSessionActor> current = List.copyOf(bound);
         return CompletableFuture.allOf(current.stream()
-            .map(ZLinkSessionActorsRuntime::notifyDisconnectedSafely)
+            .map(actor -> notifyDisconnectedSafely(actor, timeout))
             .toArray(CompletableFuture[]::new))
             .whenComplete((ignored, error) -> current.forEach(
                 this::removeBinding));
     }
 
     private static CompletableFuture<Void> notifyDisconnectedSafely(
-        ZLinkSessionActor actor) {
+        ZLinkSessionActor actor,
+        Duration timeout) {
         try {
-            return actor.notifyDisconnected().toCompletableFuture();
+            return actor instanceof ZLinkBoundActor boundActor
+                ? boundActor.notifyDisconnected(timeout).toCompletableFuture()
+                : actor.notifyDisconnected().toCompletableFuture();
         } catch (RuntimeException error) {
             return CompletableFuture.failedFuture(error);
         }
@@ -256,9 +267,9 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
         CompletionStage<Void> authorityReady = actors == null
             ? CompletableFuture.completedFuture(null)
             : actors.prepareRemoteSessionBinding(ref);
-        return authorityReady
-            .thenCompose(ignored -> awaitRouteReady(ref))
-            .thenCompose(ignored -> {
+        return authorityReady.thenCompose(ignored -> replaceBinding(
+            ref.actorId(),
+            () -> awaitRouteReady(ref).thenCompose(routeReadyIgnored -> {
                 trace("session-actor bind-native-submit sessionRid=" + sessionRid
                     + " actorNode=" + ref.nodeRid()
                     + " actorId=" + ref.actorId()
@@ -266,7 +277,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                 return ZLinkBoundSessionRuntime.bindActorWithRetry(
                     stream, sessionRid, ref, RELAY_SUBMIT_TIMEOUT);
             })
-            .thenApply(ignored -> {
+            .thenApply(bindIgnored -> {
                 trace("session-actor bind-native-ok sessionRid=" + sessionRid
                     + " actorNode=" + ref.nodeRid()
                     + " actorId=" + ref.actorId()
@@ -291,17 +302,14 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                     metadataPolicy);
                 binding.set(actor);
                 actor.setUnbindListener(() -> removeBinding(actor));
-                replaceBinding(actor);
                 return actor;
-            })
+            })))
             .thenCompose(actor -> actor.notifyRemoteBoundSession()
-                .thenApply(ignored -> (ZLinkSessionActor) actor))
+                .thenApply(notificationIgnored -> actor))
             .whenComplete((actor, error) -> {
-                if (error != null && actor instanceof ZLinkBoundActor boundActor) {
-                    removeBinding(boundActor);
+                if (error != null && actor != null) {
+                    removeBinding(actor);
                 }
-            })
-            .whenComplete((ignored, error) -> {
                 if (error != null) {
                     trace("session-actor bind-native-error sessionRid=" + sessionRid
                         + " actorNode=" + ref.nodeRid()
@@ -309,7 +317,8 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                         + " generation=" + ref.generation()
                         + " error=" + errorSummary(error));
                 }
-            });
+            })
+            .thenApply(actor -> (ZLinkSessionActor) actor);
     }
 
     private static boolean sameRef(ActorRef left, ActorRef right) {
@@ -327,13 +336,13 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                 "managed actor binding requires an actor runtime"));
         }
         ZLinkBackendActorRef ref = actors.refFor(actor);
-        CompletionStage<Void> nativeBinding = nativeSessionRelayAttached
-            ? awaitRouteReady(ref)
-                .thenCompose(ignored -> ZLinkBoundSessionRuntime.bindActorWithRetry(
-                    stream, sessionRid, ref, RELAY_SUBMIT_TIMEOUT))
-            : CompletableFuture.completedFuture(null);
-        return nativeBinding
-            .thenApply(ignored -> {
+        return replaceBinding(actor.context().actorId(), () -> {
+            CompletionStage<Void> nativeBinding = nativeSessionRelayAttached
+                ? awaitRouteReady(ref)
+                    .thenCompose(ignored -> ZLinkBoundSessionRuntime.bindActorWithRetry(
+                        stream, sessionRid, ref, RELAY_SUBMIT_TIMEOUT))
+                : CompletableFuture.completedFuture(null);
+            return nativeBinding.thenApply(ignored -> {
                 ZLinkBoundSessionRuntime boundSession =
                     new ZLinkBoundSessionRuntime(
                         stream,
@@ -379,9 +388,10 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                 boundActor.setUnbindListener(() -> removeBinding(boundActor));
                 boundSession.setRebindListener(target ->
                     recordNativeRebind(boundActor, target));
-                replaceBinding(boundActor);
                 return boundActor;
             });
+        })
+            .thenApply(value -> (ZLinkSessionActor) value);
     }
 
     void recordNativeRebind(
@@ -393,8 +403,56 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
             (ignored, current) -> current.toNativeTarget(targetActor));
     }
 
-    private void replaceBinding(ZLinkBoundActor actor) {
-        bound.removeIf(existing -> existing.actorId().equals(actor.actorId()));
+    private CompletionStage<ZLinkBoundActor> replaceBinding(
+        String actorId,
+        Supplier<CompletionStage<ZLinkBoundActor>> createBinding) {
+        CompletableFuture<Void> previousTransition;
+        CompletableFuture<Void> tail = new CompletableFuture<>();
+        synchronized (this) {
+            previousTransition = bindingTransitions.get(actorId);
+            bindingTransitions.put(actorId, tail);
+        }
+        CompletionStage<Void> ready = previousTransition == null
+            ? CompletableFuture.completedFuture(null)
+            : previousTransition.handle((ignored, failure) -> null);
+        CompletionStage<ZLinkBoundActor> installation = ready
+            .thenCompose(ignored -> installReplacement(
+                actorId, createBinding));
+        installation.whenComplete((ignored, failure) -> {
+            tail.complete(null);
+            synchronized (this) {
+                bindingTransitions.remove(actorId, tail);
+            }
+        });
+        return installation;
+    }
+
+    private CompletionStage<ZLinkBoundActor> installReplacement(
+        String actorId,
+        Supplier<CompletionStage<ZLinkBoundActor>> createBinding) {
+        List<ZLinkBoundActor> previous = bound.stream()
+            .filter(existing -> existing.actorId().equals(actorId))
+            .map(ZLinkBoundActor.class::cast)
+            .toList();
+        CompletionStage<ZLinkBoundActor> created;
+        try {
+            created = createBinding.get();
+        } catch (RuntimeException failure) {
+            throw failure;
+        }
+        return created.thenCompose(actor -> {
+            installBinding(actor);
+            if (!previous.isEmpty()) {
+                previous.forEach(bound::remove);
+            }
+            // The old binding cleanup is deliberately not part of bind
+            // completion. The session owner receives command 51 and owns the
+            // callback/close lifecycle for the retired physical session.
+            return CompletableFuture.completedFuture(actor);
+        });
+    }
+
+    private ZLinkBoundActor installBinding(ZLinkBoundActor actor) {
         bound.add(actor);
         ActorRef current = actor.ref();
         bindingRoutes.put(actor.actorId(), new StoredBindingRoute(
@@ -407,6 +465,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
             0,
             bindingGenerations.incrementAndGet(),
             0));
+        return actor;
     }
 
     private void removeBinding(ZLinkSessionActor actor) {

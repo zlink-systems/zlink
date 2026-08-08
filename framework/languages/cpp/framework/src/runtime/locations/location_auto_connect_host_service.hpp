@@ -158,41 +158,46 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
               route.bind_endpoint (),
               local_object_role, local_has_server_channel,
               [this, &route, manual] (const target_t &target) {
-                  if (std::find (manual.begin (), manual.end (), target.endpoint)
-                      != manual.end ())
-                      return;
+                  const bool manual_endpoint =
+                    std::find (manual.begin (), manual.end (), target.endpoint)
+                    != manual.end ();
                   for (const auto &mesh_node : _mesh_nodes) {
                       if (mesh_node
                           && mesh_node->mesh_name () == route.router_channel_id ()) {
+                          /* Manual routes still use the discovered descriptor
+                           * as their admission fence. Only the physical pipe
+                           * remains owned by the route registration. */
                           mesh_node->expect_peer (
                             target.node_rid, target.endpoint,
                             target.lifecycle_generation,
                             target.security_identity);
-                          if (target.initiates_connection)
+                          if (target.initiates_connection && !manual_endpoint)
                               mesh_node->connect_peer (
                                 target.node_rid, target.endpoint,
                                 target.lifecycle_generation,
                                 target.security_identity);
                       }
                   }
-                  if (target.initiates_connection)
+                  if (target.initiates_connection && !manual_endpoint)
                       (void) route.connect (target.node_rid, target.endpoint);
               },
               [this, &route, manual] (const target_t &target) {
-                  if (std::find (manual.begin (), manual.end (), target.endpoint)
-                      != manual.end ())
-                      return;
+                  const bool manual_endpoint =
+                    std::find (manual.begin (), manual.end (), target.endpoint)
+                    != manual.end ();
                   for (const auto &mesh_node : _mesh_nodes) {
                       if (mesh_node
                           && mesh_node->mesh_name () == route.router_channel_id ()) {
+                          /* A removed manual descriptor must not leave an old
+                           * identity accepted while Core tears down its pipe. */
                           mesh_node->forget_peer (
                             target.node_rid, target.endpoint);
-                          if (target.initiates_connection)
+                          if (target.initiates_connection && !manual_endpoint)
                               mesh_node->disconnect_peer (
                                 target.node_rid, target.endpoint);
                       }
                   }
-                  if (target.initiates_connection)
+                  if (target.initiates_connection && !manual_endpoint)
                       (void) route.disconnect (target.endpoint);
               });
         }

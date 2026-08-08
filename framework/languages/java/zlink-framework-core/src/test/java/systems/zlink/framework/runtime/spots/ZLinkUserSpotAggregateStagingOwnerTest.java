@@ -129,6 +129,27 @@ final class ZLinkUserSpotAggregateStagingOwnerTest {
             < backend.operations.indexOf("prepare:actor-b"));
     }
 
+    @Test
+    void targetPublicationInstallsActorRouteFence() {
+        FakeBackend backend = new FakeBackend();
+        ZLinkUserSpotAggregateStagingOwner owner =
+            new ZLinkUserSpotAggregateStagingOwner(backend);
+        var staged = owner.stage(request(), () -> false)
+            .toCompletableFuture().join();
+
+        owner.publishAndReplayHidden(
+                staged,
+                request(),
+                (lane, record) -> CompletableFuture.completedFuture(null),
+                Map.of("actor-a", 11L, "actor-b", 12L))
+            .toCompletableFuture().join();
+
+        assertTrue(backend.operations.contains(
+            "publish-target:actor-a:room-a:11"));
+        assertTrue(backend.operations.contains(
+            "publish-target:actor-b:room-a:12"));
+    }
+
     private static ZLinkUserSpotAggregateStagingOwner.Request request() {
         LinkedHashMap<String, List<ZLinkAsyncSerialQueue.QueuedRecord>> journal =
             new LinkedHashMap<>();
@@ -218,6 +239,16 @@ final class ZLinkUserSpotAggregateStagingOwnerTest {
         @Override public void publishActor(Object value) {
             live.add((String) value);
             operations.add("publish:" + value);
+        }
+
+        @Override
+        public void publishActor(
+            Object value,
+            String targetSpotId,
+            long targetOwnerGeneration) {
+            live.add((String) value);
+            operations.add("publish-target:" + value + ":"
+                + targetSpotId + ":" + targetOwnerGeneration);
         }
 
         @Override public void completeActor(Object value) {

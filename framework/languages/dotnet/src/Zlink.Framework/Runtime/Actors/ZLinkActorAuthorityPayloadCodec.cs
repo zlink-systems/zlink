@@ -42,7 +42,7 @@ internal sealed record ZLinkActorRelocationAuthorityPayload(
 internal static class ZLinkActorRelocationAuthorityPayloadCodec
 {
     private const uint Magic = 0x50414c5a; // ZLAP
-    private const ushort Version = 3;
+    private const ushort Version = 4;
     private const int MaximumBytes = 1024 * 1024;
 
     internal static byte[] Encode(ZLinkActorRelocationAuthorityPayload value)
@@ -56,8 +56,14 @@ internal static class ZLinkActorRelocationAuthorityPayloadCodec
 
         using var stream = new MemoryStream();
         using var writer = new BinaryWriter(stream, Encoding.UTF8, leaveOpen: true);
+        var hasSessionOwnerFence = value.BoundSessionRoute.IsBound
+                                   && !string.IsNullOrWhiteSpace(
+                                       value.BoundSessionRoute.SessionOwnerId)
+                                   && value.BoundSessionRoute
+                                          .SessionOwnerLeaseGeneration > 0;
+        var wireVersion = hasSessionOwnerFence ? Version : (ushort)3;
         writer.Write(Magic);
-        writer.Write(Version);
+        writer.Write(wireVersion);
         writer.Write(value.RelocationId.ToByteArray());
         writer.Write((byte)value.Phase);
         writer.Write(value.BoundSessionRoute.IsBound);
@@ -74,6 +80,11 @@ internal static class ZLinkActorRelocationAuthorityPayloadCodec
             writer.Write(value.BoundSessionRoute.OwnerLeaseGeneration);
             writer.Write(value.BoundSessionRoute.SessionOwnerNodeGeneration);
             writer.Write(value.BoundSessionRoute.AcceptedHighWater);
+            if (hasSessionOwnerFence)
+            {
+                WriteString(writer, value.BoundSessionRoute.SessionOwnerId!);
+                writer.Write(value.BoundSessionRoute.SessionOwnerLeaseGeneration);
+            }
         }
         writer.Write(value.ApplicationPayload.Length);
         writer.Write(value.ApplicationPayload.Span);
@@ -110,24 +121,41 @@ internal static class ZLinkActorRelocationAuthorityPayloadCodec
             if (reader.ReadUInt32() != Magic)
                 return false;
             var version = reader.ReadUInt16();
-            if (version is not (2 or Version)) return false;
+            if (version is not (2 or 3 or Version)) return false;
             var relocationId = new Guid(ReadExact(reader, 16));
             var phase = (ZLinkActorRelocationAuthorityPhase)reader.ReadByte();
             ZLinkRemoteActorBoundSessionRoute route = default;
             if (reader.ReadBoolean())
             {
+                var nodeRid = RoutingId.From(ReadBytes(reader));
+                var sessionRid = RoutingId.From(ReadBytes(reader));
+                var bindingToken = ReadString(reader);
+                var bindingGeneration = reader.ReadUInt64();
+                var objectGeneration = reader.ReadUInt64();
+                var authorityOwnerGeneration = reader.ReadUInt64();
+                var meshName = ReadString(reader);
+                var targetNodeGeneration = reader.ReadUInt64();
+                var ownerLeaseGeneration = reader.ReadUInt64();
+                var sessionOwnerNodeGeneration = reader.ReadUInt64();
+                var acceptedHighWater = reader.ReadUInt64();
+                var sessionOwnerId = version >= 4 ? ReadString(reader) : null;
+                var sessionOwnerLeaseGeneration = version >= 4
+                    ? reader.ReadUInt64()
+                    : 0;
                 route = new ZLinkRemoteActorBoundSessionRoute(
-                    RoutingId.From(ReadBytes(reader)),
-                    RoutingId.From(ReadBytes(reader)),
-                    ReadString(reader),
-                    reader.ReadUInt64(),
-                    reader.ReadUInt64(),
-                    reader.ReadUInt64(),
-                    ReadString(reader),
-                    reader.ReadUInt64(),
-                    reader.ReadUInt64(),
-                    reader.ReadUInt64(),
-                    reader.ReadUInt64());
+                    nodeRid,
+                    sessionRid,
+                    bindingToken,
+                    bindingGeneration,
+                    objectGeneration,
+                    authorityOwnerGeneration,
+                    meshName,
+                    targetNodeGeneration,
+                    ownerLeaseGeneration,
+                    sessionOwnerNodeGeneration,
+                    acceptedHighWater,
+                    sessionOwnerId,
+                    sessionOwnerLeaseGeneration);
                 if (!route.IsBound)
                     return false;
             }

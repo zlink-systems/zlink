@@ -155,14 +155,17 @@ internal static class ZLinkFrameworkServiceRegistrar
             provider.GetRequiredService<ZLinkFrameworkMaintenanceRuntime>());
         services.TryAddSingleton<IZLinkRuntimeTerminalFailureSink>(static provider =>
             provider.GetRequiredService<ZLinkFrameworkMaintenanceRuntime>());
-        services.AddSingleton<IHostedService>(static provider =>
-            new ZLinkFrameworkHostedService(
+        services.TryAddSingleton<ZLinkFrameworkHostRuntimeCoordinator>(static provider =>
+            new ZLinkFrameworkHostRuntimeCoordinator(
                 provider.GetRequiredService<ZLinkFrameworkRuntime>(),
                 provider.GetRequiredService<ZLinkRouteMeshRuntimeService>(),
                 provider.GetService<ZLinkLocationRuntime>(),
                 provider.GetRequiredService<ZLinkAutoConnectLifecycleCoordinator>(),
                 provider.GetService<ZLinkLocationLifecycle>(),
                 provider.GetRequiredService<ZLinkFrameworkMaintenanceRuntime>()));
+        services.AddSingleton<IHostedService>(static provider =>
+            new ZLinkFrameworkHostedService(
+                provider.GetRequiredService<ZLinkFrameworkHostRuntimeCoordinator>()));
 
         return services;
     }

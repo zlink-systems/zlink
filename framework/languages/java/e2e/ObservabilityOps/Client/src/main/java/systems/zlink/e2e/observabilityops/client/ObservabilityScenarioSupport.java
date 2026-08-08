@@ -3,6 +3,8 @@ package systems.zlink.e2e.observabilityops.client;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.net.URI;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -268,12 +270,20 @@ public final class ObservabilityScenarioSupport {
 
     public void runRelocationWorkloadPrepare(
         ZLinkStreamConnector connector,
-        String scenarioId) {
+        String scenarioId) throws Exception {
         String normalized = scenarioId.toLowerCase().replaceAll("[^a-z0-9]+", "-");
         String spotRid = "obs-" + normalized + "-room";
         String actorId = "obs-" + normalized + "-actor";
+        Contracts.EnsureSpotRes ensured = connector
+            .request(new Contracts.EnsureSpotReq(spotRid))
+            .metadata(Contracts.TARGET_NODE_RID_METADATA, Contracts.PLAY_NODE_A)
+            .timeout(REQUEST_TIMEOUT)
+            .submit(Contracts.EnsureSpotRes.class)
+            .toCompletableFuture().join();
+        ensure(Contracts.PLAY_NODE_A.equals(ensured.nodeRid()),
+            scenarioId + " source spot placement mismatch: " + ensured.nodeRid());
         Contracts.BindActorsRes bound = connector
-            .request(new Contracts.BindActorsReq(spotRid, actorId, actorId + "-peer"))
+            .request(new Contracts.BindActorsReq(spotRid, actorId, actorId))
             .timeout(REQUEST_TIMEOUT)
             .submit(Contracts.BindActorsRes.class)
             .toCompletableFuture().join();
@@ -285,6 +295,10 @@ public final class ObservabilityScenarioSupport {
             .submit(Contracts.ActorJoinRes.class)
             .toCompletableFuture().join();
         ensure(actorId.equals(joined.actorId()), scenarioId + " actor join mismatch");
+        // ActorJoin is accepted before the asynchronous target route update
+        // completes. Give that public route transition time to settle before
+        // probing the target handler.
+        Thread.sleep(2_000L);
         System.out.println(scenarioId + " prepared spot=" + spotRid
             + " actor=" + actorId + " generation=" + bound.actors().getFirst().generation());
         System.out.flush();
@@ -294,7 +308,7 @@ public final class ObservabilityScenarioSupport {
             .submit(Contracts.ActorPushNotify.class);
         try {
             connector.request(new Contracts.ActorPushAwaitReq(
-                    scenarioId, 15_000, scenarioId + "-pending"))
+                    scenarioId, 3_000, scenarioId + "-pending"))
                 .metadata(Contracts.ACTOR_ID_METADATA, actorId)
                 .timeout(Duration.ofSeconds(45))
                 .submit(Contracts.ActorPushAwaitRes.class)
@@ -304,6 +318,18 @@ public final class ObservabilityScenarioSupport {
             System.out.println(scenarioId + " pending-completed node=" + notify.nodeRid());
         } catch (RuntimeException error) {
             System.out.println(scenarioId + " pending-terminal=" + error.getClass().getSimpleName());
+        }
+        if (!options.relocationReleaseFile().isBlank()) {
+            Path release = Path.of(options.relocationReleaseFile());
+            long deadline = System.nanoTime() + Duration.ofSeconds(90).toNanos();
+            while (!Files.exists(release) && System.nanoTime() < deadline) {
+                Thread.sleep(50L);
+            }
+            if (!Files.exists(release)) {
+                throw new IllegalStateException(
+                    "relocation release file was not created: " + release);
+            }
+            runRelocationWorkloadAfter(connector, scenarioId);
         }
     }
 

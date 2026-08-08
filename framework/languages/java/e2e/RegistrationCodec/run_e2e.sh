@@ -274,7 +274,7 @@ with urllib.request.urlopen(sys.argv[1], timeout=5) as response:
     sys.stdout.write(response.read().decode("utf-8"))
 PY
   if [[ "${SCENARIO}" == "RC-B5" ]]; then
-    grep -q "reason=PAYLOAD_DECODE_FAILED" "${log_dir}/json-only-flow.log"
+    grep -q "reason=PAYLOAD_DECODE_FAILED" "${log_dir}/mismatch-server.stdout.log"
     if grep -q "UnexpectedHandler" "${log_dir}/mismatch-server-evidence.json"; then
       echo "RC-B5 unsupported codec reached the receiver handler" >&2
       exit 1
@@ -289,7 +289,7 @@ with urllib.request.urlopen(sys.argv[1], timeout=5) as response:
     sys.stdout.write(response.read().decode("utf-8"))
 PY
 
-  grep -Rq "message flow" "${log_dir}"/*-flow.log
+  grep -Rq "message flow" "${log_dir}"/*.stdout.log
 fi
 if [[ "${SCENARIO}" == "all" ]]; then
   grep -q "EchoAuto" "${log_dir}/server-evidence.json"

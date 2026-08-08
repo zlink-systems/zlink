@@ -5,7 +5,7 @@ import type {
   ZLinkSpotActorJoinResult,
   ZLinkSpotContext
 } from '@zlink-systems/framework';
-import type { DelayReq } from '../../../Shared/messages';
+import { DelayReq } from '../../../Shared/messages';
 import { EvidenceStore } from '../Support/evidence-store';
 import { HoldCommandHandler, ProbeCommandHandler, ProbeRequestHandler, WorkerAwaitCommandHandler, AwaitCommandHandler, AwaitRequestHandler } from '../Handlers/basic-spot-handlers';
 import {
@@ -60,7 +60,7 @@ export class AwaitProbeSpot implements ZLinkSpot<AwaitActor> {
   }
 
   async onActorJoin(actorId: string, request: ZLinkMessage): Promise<ZLinkSpotActorJoinResult> {
-    const delay = request.decode<DelayReq>(Object as never);
+    const delay = request.decode(DelayReq);
     if (delay.delayMs > 0) {
       await new Promise<void>((resolve, reject) => {
         const timeout = setTimeout(resolve, delay.delayMs);

@@ -4,7 +4,6 @@ import systems.zlink.framework.configuration.ZLinkDiagnosticsOptions;
 import systems.zlink.framework.configuration.ZLinkDispatchOptions;
 import systems.zlink.framework.configuration.ZLinkLogLevel;
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
-import systems.zlink.framework.configuration.ZLinkMessageFlowObserver;
 import systems.zlink.framework.configuration.ZLinkUnhandledDispatchAction;
 import systems.zlink.framework.configuration.ZLinkUnhandledDispatchOptions;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
@@ -12,8 +11,6 @@ import systems.zlink.framework.errors.ZLinkConfigurationException;
 public final class ZLinkDispatchOptionsRegistration implements ZLinkDispatchOptions {
     private final UnhandledDispatchOptions unhandled = new UnhandledDispatchOptions();
     private final DiagnosticsOptions diagnostics = new DiagnosticsOptions();
-    private Class<? extends ZLinkMessageFlowObserver> messageFlowObserverType;
-    private ZLinkMessageFlowObserver messageFlowObserver;
 
     @Override
     public UnhandledDispatchOptions unhandled() {
@@ -23,28 +20,6 @@ public final class ZLinkDispatchOptionsRegistration implements ZLinkDispatchOpti
     @Override
     public DiagnosticsOptions diagnostics() {
         return diagnostics;
-    }
-
-    public Class<? extends ZLinkMessageFlowObserver> messageFlowObserverType() {
-        return messageFlowObserverType;
-    }
-
-    public ZLinkMessageFlowObserver messageFlowObserver() {
-        return messageFlowObserver;
-    }
-
-    public ZLinkDispatchOptions setMessageFlowObserver(
-        Class<? extends ZLinkMessageFlowObserver> observerType) {
-        messageFlowObserverType = requireNonNull(observerType, "messageFlowObserverType");
-        messageFlowObserver = null;
-        return this;
-    }
-
-    @Override
-    public ZLinkDispatchOptions setMessageFlowObserver(ZLinkMessageFlowObserver observer) {
-        messageFlowObserver = requireNonNull(observer, "messageFlowObserver");
-        messageFlowObserverType = null;
-        return this;
     }
 
     @Override
@@ -62,18 +37,6 @@ public final class ZLinkDispatchOptionsRegistration implements ZLinkDispatchOpti
     @Override
     public ZLinkDispatchOptions includeMessageSizes(boolean include) {
         diagnostics.setIncludeMessageSizes(include);
-        return this;
-    }
-
-    @Override
-    public ZLinkDispatchOptions traceLogFile(String path) {
-        diagnostics.setLogFile(path);
-        return this;
-    }
-
-    @Override
-    public ZLinkDispatchOptions traceLabel(String label) {
-        diagnostics.setLabel(label);
         return this;
     }
 
@@ -154,12 +117,9 @@ public final class ZLinkDispatchOptionsRegistration implements ZLinkDispatchOpti
     }
 
     public static final class DiagnosticsOptions implements ZLinkDiagnosticsOptions {
-        private ZLinkMessageFlowLogMode messageFlow = ZLinkMessageFlowLogMode.ERRORS_ONLY;
+        private ZLinkMessageFlowLogMode messageFlow = ZLinkMessageFlowLogMode.ERRORS;
         private double sampleRate = 1.0d;
         private boolean includeMessageSizes = true;
-        private boolean includeNativeDiagnostics;
-        private String logFile;
-        private String label;
         // Shared, runtime-mutable mode cell installed by the host at start; shared
         // across surfaces so setMessageFlowMode flips it live. Null before install.
         private volatile java.util.concurrent.atomic.AtomicReference<ZLinkMessageFlowLogMode> liveMode;
@@ -176,18 +136,8 @@ public final class ZLinkDispatchOptionsRegistration implements ZLinkDispatchOpti
             return includeMessageSizes;
         }
 
-        public boolean includeNativeDiagnostics() {
-            return includeNativeDiagnostics;
-        }
-
-        public String logFile() {
-            return logFile;
-        }
-
-        public String label() {
-            return label;
-        }
-
+        // Runtime code reads the live override through the registration owner. It is
+        // not part of the application-facing diagnostics view.
         public ZLinkMessageFlowLogMode effectiveMessageFlow() {
             java.util.concurrent.atomic.AtomicReference<ZLinkMessageFlowLogMode> cell = liveMode;
             return cell != null ? cell.get() : messageFlow;
@@ -215,16 +165,5 @@ public final class ZLinkDispatchOptionsRegistration implements ZLinkDispatchOpti
             includeMessageSizes = enabled;
         }
 
-        public void setIncludeNativeDiagnostics(boolean enabled) {
-            includeNativeDiagnostics = enabled;
-        }
-
-        public void setLogFile(String path) {
-            logFile = path == null || path.isBlank() ? null : path;
-        }
-
-        public void setLabel(String label) {
-            this.label = label == null || label.isBlank() ? null : label;
-        }
     }
 }

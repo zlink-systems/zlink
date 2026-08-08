@@ -101,9 +101,7 @@ public final class Program {
             options.configureLocations().setOwnerLeaseTtl(Duration.ofSeconds(3));
             options.configureLocations().setPollingInterval(Duration.ofMillis(250));
             options.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile(config.logDirectory() + "/service-flow.log")
-                .traceLabel("java-mon-service");
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             java.net.URI apiEndpoint = java.net.URI.create(config.apiEndpoint());
             options.addClientServerChannel(Contracts.CHANNEL)
                 .server()

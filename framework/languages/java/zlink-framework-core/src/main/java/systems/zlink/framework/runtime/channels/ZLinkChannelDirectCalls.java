@@ -54,13 +54,13 @@ import systems.zlink.framework.channels.ZLinkRequestCall;
 import systems.zlink.framework.channels.ZLinkRouteMessageContext;
 import systems.zlink.framework.channels.ZLinkSendCall;
 import systems.zlink.framework.channels.ZLinkSocketRuntimeOptions;
-import systems.zlink.framework.configuration.ZLinkDispatchErrorAction;
-import systems.zlink.framework.configuration.ZLinkDispatchErrorReason;
-import systems.zlink.framework.configuration.ZLinkDispatchErrorSurface;
-import systems.zlink.framework.configuration.ZLinkDispatchMessageKind;
-import systems.zlink.framework.configuration.ZLinkMessageFlowEvent;
-import systems.zlink.framework.configuration.ZLinkMessageFlowOutcome;
-import systems.zlink.framework.configuration.ZLinkDispatchFailure;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorAction;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorReason;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSurface;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchFailure;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
@@ -85,8 +85,7 @@ import systems.zlink.framework.runtime.messaging.ZLinkMessagePayloads;
 
 
 final class PublishCall implements ZLinkFanoutPublishCall {
-    private final java.util.concurrent.atomic.AtomicBoolean submitGate =
-        new java.util.concurrent.atomic.AtomicBoolean();
+    private final java.util.concurrent.atomic.AtomicBoolean submitGate;
     private final ZLinkChannelCallRuntime runtime;
     private final ZLinkBackendPublisherSocket publisher;
     private final String topic;
@@ -111,6 +110,19 @@ final class PublishCall implements ZLinkFanoutPublishCall {
         Message payload,
         Optional<String> packetName,
         String contentType) {
+        this(runtime, publisher, topic, payload, packetName, contentType,
+            new java.util.concurrent.atomic.AtomicBoolean());
+    }
+
+    private PublishCall(
+        ZLinkChannelCallRuntime runtime,
+        ZLinkBackendPublisherSocket publisher,
+        String topic,
+        Message payload,
+        Optional<String> packetName,
+        String contentType,
+        java.util.concurrent.atomic.AtomicBoolean submitGate) {
+        this.submitGate = submitGate;
         this.runtime = runtime;
         this.publisher = publisher;
         this.topic = topic;
@@ -129,7 +141,8 @@ final class PublishCall implements ZLinkFanoutPublishCall {
 
     public ZLinkFanoutPublishCall packetName(String packetName) {
         return new PublishCall(
-            runtime, publisher, topic, payload, Optional.of(packetName), contentType);
+            runtime, publisher, topic, payload, Optional.of(packetName), contentType,
+            submitGate);
     }
 
     @Override
@@ -150,8 +163,7 @@ final class PublishCall implements ZLinkFanoutPublishCall {
 }
 
 final class SendCall implements ZLinkSendCall {
-    private final java.util.concurrent.atomic.AtomicBoolean submitGate =
-        new java.util.concurrent.atomic.AtomicBoolean();
+    private final java.util.concurrent.atomic.AtomicBoolean submitGate;
     private final ZLinkChannelCallRuntime runtime;
     private final ZLinkBackendDealerSocket client;
     private final Message payload;
@@ -173,6 +185,18 @@ final class SendCall implements ZLinkSendCall {
         Message payload,
         Optional<String> packetName,
         String contentType) {
+        this(runtime, client, payload, packetName, contentType,
+            new java.util.concurrent.atomic.AtomicBoolean());
+    }
+
+    private SendCall(
+        ZLinkChannelCallRuntime runtime,
+        ZLinkBackendDealerSocket client,
+        Message payload,
+        Optional<String> packetName,
+        String contentType,
+        java.util.concurrent.atomic.AtomicBoolean submitGate) {
+        this.submitGate = submitGate;
         this.runtime = runtime;
         this.client = client;
         this.payload = payload;
@@ -185,7 +209,8 @@ final class SendCall implements ZLinkSendCall {
     }
 
     public ZLinkSendCall packetName(String packetName) {
-        return new SendCall(runtime, client, payload, Optional.of(packetName), contentType);
+        return new SendCall(
+            runtime, client, payload, Optional.of(packetName), contentType, submitGate);
     }
 
     @Override
@@ -213,6 +238,7 @@ final class SendCall implements ZLinkSendCall {
 }
 
 final class RequestCall implements ZLinkRequestCall {
+    private final java.util.concurrent.atomic.AtomicBoolean submitGate;
     private final ZLinkChannelCallRuntime runtime;
     private final ZLinkBackendDealerSocket client;
     private final Message payload;
@@ -244,6 +270,20 @@ final class RequestCall implements ZLinkRequestCall {
         Duration timeout,
         ZLinkRequestMetricTags metricTags,
         String contentType) {
+        this(runtime, client, payload, packetName, timeout, metricTags,
+            contentType, new java.util.concurrent.atomic.AtomicBoolean());
+    }
+
+    private RequestCall(
+        ZLinkChannelCallRuntime runtime,
+        ZLinkBackendDealerSocket client,
+        Message payload,
+        Optional<String> packetName,
+        Duration timeout,
+        ZLinkRequestMetricTags metricTags,
+        String contentType,
+        java.util.concurrent.atomic.AtomicBoolean submitGate) {
+        this.submitGate = submitGate;
         this.metricTags = metricTags;
         this.runtime = runtime;
         this.client = client;
@@ -255,17 +295,23 @@ final class RequestCall implements ZLinkRequestCall {
 
     public ZLinkRequestCall packetName(String packetName) {
         return new RequestCall(
-            runtime, client, payload, Optional.of(packetName), timeout, metricTags, contentType);
+            runtime, client, payload, Optional.of(packetName), timeout, metricTags, contentType,
+            submitGate);
     }
 
     @Override
     public ZLinkRequestCall timeout(Duration timeout) {
         return new RequestCall(
-            runtime, client, payload, packetName, timeout, metricTags, contentType);
+            runtime, client, payload, packetName, timeout, metricTags, contentType, submitGate);
     }
 
     @Override
     public <TReply> CompletionStage<TReply> submit(Class<TReply> replyType) {
+        CompletionStage<TReply> duplicate =
+            ZLinkOneWayCalls.beginOneWay(submitGate);
+        if (duplicate != null) {
+            return duplicate;
+        }
         CompletableFuture<TReply> result = new CompletableFuture<>();
         //  Nothing on this path allocates while metrics are off: no label map is
         //  built and no completion callback is registered.

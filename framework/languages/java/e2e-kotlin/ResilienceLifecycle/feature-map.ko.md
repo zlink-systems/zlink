@@ -38,7 +38,7 @@ evidence/admin endpoint, state, dispatch-error observer, request/send handler를
 - `RL-C4`: runner-owned Redis location store를 pause/unpause해 store outage를 만들고, 이미 연결된 channel request가 계속 성공하는지, public topology read가 outage 중 infrastructure error로 실패하는지, store 복구 뒤 topology read와 follow-up request가 정상화되는지 확인한다.
 - `RL-D1`: 다수 client 프로세스가 동시에 request를 보내는 high fanout burst에서 정상 reply를 유지하는지 확인한다.
 - `RL-D2`: provider dispatch-error observer가 실패해도 후속 request가 정상 처리되는지 확인한다. Observer 오류는 application callback이 아니라 structured log로 기록한다.
-- `RL-D3`: 명시 `ZLinkMessageFlowObserver`가 미등록 request의 `outcome=failed`, `reason=no_handler`, `action=reply_error`, `packet_name` marker를 evidence에 남기고, 이후 request가 정상 동작하는지 확인한다.
+- `RL-D3`: Framework standard logger가 미등록 request의 `outcome=failed`, `reason=no_handler`, `action=reply_error`, `packet_name` marker를 stdout evidence에 남기고, 이후 request가 정상 동작하는지 확인한다.
 - `RL-D4`: 미등록 request handler가 public HTTP 실패로 노출되고, provider dispatch-error evidence에 `no_handler`/`reply_error`가 남으며, 이후 request가 정상 동작하는지 확인한다. 공통 문서의 code round-trip 검증은 server-side dispatch evidence 경로로 닫는다.
 - `RL-D5`: 같은 실행 안에서 request와 send를 섞어 여러 window로 지속 주입하고, 처리 성공과 단순 latency drift 한계를 관측한다.
 

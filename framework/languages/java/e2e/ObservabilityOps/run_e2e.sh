@@ -123,7 +123,8 @@ if [[ "${LOCAL_READINESS_TIMEOUT_SECONDS:-}" != 3 \
   echo "ObservabilityOps must use a 3s readiness limit" >&2
   exit 1
 fi
-if rg -n 'java\.net\.http\.HttpClient|HttpClient\.new' Trigger/src/main/java --glob '*.java'; then
+if rg -n 'java\.net\.http\.HttpClient|HttpClient\.new' \
+    "${SCRIPT_DIR}/Trigger/src/main/java" --glob '*.java'; then
   echo "ObservabilityOps trigger must use ZLinkHttpClient" >&2
   exit 1
 fi
@@ -133,7 +134,7 @@ reserve_ports() {
 import socket
 socks=[]
 try:
-    for _ in range(11):
+    for _ in range(13):
         sock=socket.socket(); sock.bind(("127.0.0.1", 0)); socks.append(sock)
     print(" ".join(str(sock.getsockname()[1]) for sock in socks))
 finally:
@@ -209,6 +210,26 @@ with urllib.request.urlopen(sys.argv[1], timeout=5) as response:
     pathlib.Path(sys.argv[2]).write_bytes(response.read())
 PY
 }
+post_background() {
+  python3 - "$1" "$2" <<'PY'
+import pathlib, sys, urllib.request
+request = urllib.request.Request(sys.argv[1], method="POST")
+with urllib.request.urlopen(request, timeout=40) as response:
+    pathlib.Path(sys.argv[2]).write_bytes(response.read())
+PY
+}
+wait_maintenance() {
+  local name="$1" endpoint="$2"
+  for _ in $(seq 1 300); do
+    python3 - "${endpoint}/maintenance/health" >/dev/null 2>&1 <<'PY' && return 0
+import sys, urllib.request
+with urllib.request.urlopen(sys.argv[1], timeout=1) as response: response.read()
+PY
+    sleep 0.1
+  done
+  echo "Timed out waiting for ${name} at ${endpoint}" >&2
+  return 1
+}
 wait_metric_value_on_either_node() {
   local endpoint_a="$1" endpoint_b="$2" name="$3" tag_key="$4" tag_value="$5" minimum="$6" output="$7"
   local output_a="${output}.a" output_b="${output}.b"
@@ -238,7 +259,7 @@ PY
   return 1
 }
 
-read -r DELAY_PORT ROUTE_A_PORT SPOT_A_PORT ROUTE_B_PORT SPOT_B_PORT STREAM_PORT PLAY_A_HTTP_PORT PLAY_B_HTTP_PORT SESSION_HTTP_PORT SESSION_ROUTE_PORT FANOUT_PORT <<<"$(reserve_ports)"
+read -r DELAY_PORT ROUTE_A_PORT SPOT_A_PORT ROUTE_B_PORT SPOT_B_PORT STREAM_PORT PLAY_A_HTTP_PORT PLAY_B_HTTP_PORT PLAY_A_MAINT_PORT PLAY_B_MAINT_PORT SESSION_HTTP_PORT SESSION_ROUTE_PORT FANOUT_PORT <<<"$(reserve_ports)"
 DELAY_ENDPOINT="$(tcp "${DELAY_PORT}")"
 ROUTE_A_ENDPOINT="$(tcp "${ROUTE_A_PORT}")"
 SPOT_A_ENDPOINT="$(tcp "${SPOT_A_PORT}")"
@@ -247,6 +268,8 @@ SPOT_B_ENDPOINT="$(tcp "${SPOT_B_PORT}")"
 STREAM_ENDPOINT="$(tcp "${STREAM_PORT}")"
 PLAY_A_HTTP="$(http "${PLAY_A_HTTP_PORT}")"
 PLAY_B_HTTP="$(http "${PLAY_B_HTTP_PORT}")"
+PLAY_A_MAINTENANCE="$(http "${PLAY_A_MAINT_PORT}")"
+PLAY_B_MAINTENANCE="$(http "${PLAY_B_MAINT_PORT}")"
 SESSION_HTTP="$(http "${SESSION_HTTP_PORT}")"
 SESSION_ROUTE_ENDPOINT="$(tcp "${SESSION_ROUTE_PORT}")"
 FANOUT_ENDPOINT="$(tcp "${FANOUT_PORT}")"
@@ -284,13 +307,20 @@ start_delay() {
 }
 start_play() {
   local node="$1" stdout="$2" stderr="$3"
-  local route_endpoint route_peer_endpoint spot_endpoint http_endpoint
+  local route_endpoint route_peer_endpoint spot_endpoint http_endpoint maintenance_endpoint fanout_endpoint
   if [[ "${node}" == play-a ]]; then
     route_endpoint="${ROUTE_A_ENDPOINT}"; route_peer_endpoint="${ROUTE_B_ENDPOINT}"
-    spot_endpoint="${SPOT_A_ENDPOINT}"; http_endpoint="${PLAY_A_HTTP}"
+    spot_endpoint="${SPOT_A_ENDPOINT}"; http_endpoint="${PLAY_A_HTTP}"; maintenance_endpoint="${PLAY_A_MAINTENANCE}"
   else
     route_endpoint="${ROUTE_B_ENDPOINT}"; route_peer_endpoint="${ROUTE_A_ENDPOINT}"
-    spot_endpoint="${SPOT_B_ENDPOINT}"; http_endpoint="${PLAY_B_HTTP}"
+    spot_endpoint="${SPOT_B_ENDPOINT}"; http_endpoint="${PLAY_B_HTTP}"; maintenance_endpoint="${PLAY_B_MAINTENANCE}"
+  fi
+  fanout_endpoint="${FANOUT_ENDPOINT}"
+  if [[ "${SELECTOR}" == OBS-C2 ]]; then
+    fanout_endpoint=""
+  fi
+  if [[ "${node}" == play-a ]]; then
+    play_a_stdout_log="${stdout}"
   fi
   local config="${config_dir}/${node}.properties"
   write_config "${config}" \
@@ -299,9 +329,11 @@ start_play() {
     "e2e.route-peer-endpoint=${route_peer_endpoint}" \
     "e2e.spot-endpoint=${spot_endpoint}" \
     "e2e.delay-endpoint=${DELAY_ENDPOINT}" \
-    "e2e.fanout-endpoint=${FANOUT_ENDPOINT}" \
+    "e2e.fanout-endpoint=${fanout_endpoint}" \
     "e2e.http-endpoint=${http_endpoint}" \
+    "e2e.maintenance-endpoint=${maintenance_endpoint}" \
     "e2e.placement-weight=100" \
+    "e2e.automatic-topology=$([[ "${SELECTOR}" == OBS-C2 ]] && echo true || echo false)" \
     "e2e.redis-location-endpoint=${redis_location_endpoint}" \
     "e2e.location-key-prefix=${location_key_prefix}" \
     "e2e.log-dir=${log_dir}"
@@ -374,8 +406,14 @@ done
 wait_port delay "${DELAY_ENDPOINT}"
 wait_port play-a-route "${ROUTE_A_ENDPOINT}"
 wait_http play-a-http "${PLAY_A_HTTP}"
+if [[ "${SELECTOR}" == OBS-C2 ]]; then
+  wait_maintenance play-a-maintenance "${PLAY_A_MAINTENANCE}"
+fi
 wait_port play-b-route "${ROUTE_B_ENDPOINT}"
 wait_http play-b-http "${PLAY_B_HTTP}"
+if [[ "${SELECTOR}" == OBS-C2 ]]; then
+  wait_maintenance play-b-maintenance "${PLAY_B_MAINTENANCE}"
+fi
 wait_port session-route "${SESSION_ROUTE_ENDPOINT}"
 wait_port session-stream "${STREAM_ENDPOINT}"
 wait_http session-http "${SESSION_HTTP}"
@@ -457,7 +495,6 @@ PY
   done
   kill -TERM "${play_a_pid}" >/dev/null 2>&1 || true
   wait "${play_a_pid}" || true
-  truncate -s 0 "${log_dir}/play-a-flow.log"
   start_play play-a "${log_dir}/play-a-c1-restart.stdout.log" "${log_dir}/play-a-c1-restart.stderr.log"; pids+=("$!")
   play_a_pid="$!"
   wait_port play-a-restart-route "${ROUTE_A_ENDPOINT}"; wait_http play-a-restart-http "${PLAY_A_HTTP}"
@@ -473,28 +510,18 @@ if [[ "${SELECTOR}" == all || "${SELECTOR}" == OBS-C2 ]]; then
   done
   grep -q "OBS-C2 pending-started" "${log_dir}/c2-client.stdout.log"
   for _ in $(seq 1 300); do
-    grep -q "outcome=RECEIVED.*packet=ActorPushAwaitReq" "${log_dir}/play-a-flow.log" && break
+    grep -q "outcome=RECEIVED.*packet=ActorPushAwaitReq" "${play_a_stdout_log}" && break
     kill -0 "${c2_client_pid}" >/dev/null 2>&1 || { echo "OBS-C2 client exited before Play-A received pending request" >&2; exit 1; }
     sleep 0.1
   done
-  grep -q "outcome=RECEIVED.*packet=ActorPushAwaitReq" "${log_dir}/play-a-flow.log"
-  fetch_url "${PLAY_A_HTTP}/drain/start?deadlineMs=9000" "${log_dir}/c2-start.json"
+  grep -q "outcome=RECEIVED.*packet=ActorPushAwaitReq" "${play_a_stdout_log}"
+  post_background "${PLAY_A_MAINTENANCE}/maintenance/relocate?mode=planned-maintenance&deadlineMs=30000" "${log_dir}/c2-relocate.json" &
+  c2_relocate_pid="$!"
+  wait "${c2_relocate_pid}"
+  cp "${log_dir}/c2-relocate.json" "${log_dir}/c2-start.json"
   wait "${c2_client_pid}"
-  fetch_url "${PLAY_A_HTTP}/drain/status" "${log_dir}/c2-drain-status.json"
+  fetch_url "${PLAY_A_MAINTENANCE}/maintenance/status" "${log_dir}/c2-source-status.json"
   fetch_url "${PLAY_A_HTTP}/metrics" "${log_dir}/c2-metrics.json"
-  for _ in $(seq 1 100); do
-    fetch_url "${PLAY_A_HTTP}/drain/status" "${log_dir}/c2-terminal.json"
-    python3 - "${log_dir}/c2-terminal.json" <<'PY' && break
-import json,sys
-raise SystemExit(0 if json.load(open(sys.argv[1])).get('result') else 1)
-PY
-    sleep 0.1
-  done
-  kill -TERM "${play_a_pid}" >/dev/null 2>&1 || true
-  wait "${play_a_pid}" || true
-  start_play play-a "${log_dir}/play-a-c2-restart.stdout.log" "${log_dir}/play-a-c2-restart.stderr.log"; pids+=("$!")
-  play_a_pid="$!"
-  wait_port play-a-c2-restart-route "${ROUTE_A_ENDPOINT}"; wait_http play-a-c2-restart-http "${PLAY_A_HTTP}"
 fi
 if [[ "${SELECTOR}" == all || "${SELECTOR}" == OBS-C3 ]]; then
   run_client OBS-C3-WRITE "" "" 60s "${log_dir}/c3-write.stdout.log" "${log_dir}/c3-write.stderr.log"
@@ -537,7 +564,6 @@ if [[ "${SELECTOR}" == all || "${SELECTOR}" == OBS-C5 ]]; then
     session_pid="$!"
     wait_port c5-serving-session-route "${SESSION_ROUTE_ENDPOINT}"; wait_port c5-serving-session-stream "${STREAM_ENDPOINT}"; wait_http c5-serving-session-http "${SESSION_HTTP}"; wait_metrics_state "${SESSION_HTTP}" true
   fi
-  truncate -s 0 "${log_dir}/play-a-flow.log"
   run_client OBS-C5-PROBE "" "" 60s "${log_dir}/c5-serving-probe.stdout.log" "${log_dir}/c5-serving-probe.stderr.log"
   fetch_url "${PLAY_A_HTTP}/drain/status" "${log_dir}/c5-serving-source-before-probe.json"
   fetch_url "${PLAY_A_HTTP}/route-probe" "${log_dir}/c5-serving-source-probe.json"

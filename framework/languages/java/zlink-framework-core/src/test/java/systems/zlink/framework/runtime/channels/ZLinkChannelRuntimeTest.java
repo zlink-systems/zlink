@@ -354,6 +354,24 @@ final class ZLinkChannelRuntimeTest {
     }
 
     @Test
+    void routeMeshDoesNotApplyClientServerMessageSizeOption() {
+        DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology
+            .addRouteMeshChannel(options, "play.route")
+            .enableServer("inproc://play-route");
+        FakeChannelBackendAdapter backend = new FakeChannelBackendAdapter();
+
+        try (ZLinkChannelRuntime ignored = new ZLinkChannelRuntime(
+            backend,
+            options.registration(),
+            new ZLinkJsonMessageSerializer(),
+            handlers())) {
+            assertEquals(0, backend.router.maxMessageSize());
+            assertEquals(100, backend.router.peerWeight);
+        }
+    }
+
+    @Test
     void channelRequestRetriesRetriableSubmitFailure() throws Exception {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.setDefaultRequestTimeout(Duration.ofMillis(300));
@@ -514,6 +532,33 @@ final class ZLinkChannelRuntimeTest {
                 Map.of("tenant", "green"),
                 ZLinkApplicationMetadata.decode(
                     backend.spotNode.lastMetadata));
+        }
+    }
+
+    @Test
+    void immutableMeshNodeSendOptionsShareTheSingleUseTerminal() {
+        DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        FakeChannelBackendAdapter backend = new FakeChannelBackendAdapter();
+        try (ZLinkChannelRuntime runtime = new ZLinkChannelRuntime(
+                 backend,
+                 options.registration(),
+                 new ZLinkJsonMessageSerializer(),
+                 handlers(),
+                 systems.zlink.framework.runtime.host
+                     .ZLinkTestAdmissionFactory.create())) {
+            runtime.registerSpotRouterNode("mesh", backend.spotNode);
+
+            var base = runtime.sendToNode(
+                "mesh", RoutingId.from("peer"), new TestRequest("once"));
+            var configured = base.metadata("trace-id", "once");
+            configured.submit().toCompletableFuture().join();
+
+            CompletionException duplicate = assertThrows(
+                CompletionException.class,
+                () -> base.submit().toCompletableFuture().join());
+            assertEquals(
+                ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                ((ZLinkFrameworkException) duplicate.getCause()).kind());
         }
     }
 
@@ -688,7 +733,7 @@ final class ZLinkChannelRuntimeTest {
     }
 
     @Test
-    void staleSpotReplyInvalidatesRouteBeforeTheNextSpotRequest() {
+    void staleSpotReplyRefreshesAuthorityBeforeRetryingTheRequest() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.setDefaultRequestTimeout(Duration.ofMillis(300));
         FakeChannelBackendAdapter backend = new FakeChannelBackendAdapter();
@@ -726,23 +771,9 @@ final class ZLinkChannelRuntimeTest {
             handlers(resolver))) {
             runtime.registerSpotRouterNode("play.route", backend.spotNode);
 
-            CompletionException failure = assertThrows(
-                CompletionException.class,
-                () -> runtime.requestToSpot(
-                        "room-spot",
-                        new TestRequest("stale"))
-                    .timeout(Duration.ofMillis(300))
-                    .submit(TestReply.class)
-                    .toCompletableFuture()
-                    .join());
-            assertEquals(
-                ZLinkFrameworkErrorKind.NOT_FOUND,
-                assertInstanceOf(ZLinkFrameworkException.class, failure.getCause())
-                    .kind());
-
             TestReply reply = runtime.requestToSpot(
                     "room-spot",
-                    new TestRequest("fresh"))
+                    new TestRequest("stale"))
                 .timeout(Duration.ofMillis(300))
                 .submit(TestReply.class)
                 .toCompletableFuture()
@@ -756,15 +787,19 @@ final class ZLinkChannelRuntimeTest {
     }
 
     @Test
-    void instanceSpotRequestReactivatesAfterStaleOwnerNotFound() {
+    void instanceSpotRequestDoesNotActivateWhenReadyOwnerIsUnavailable() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.setDefaultRequestTimeout(Duration.ofMillis(300));
         FakeChannelBackendAdapter backend = new FakeChannelBackendAdapter();
-        backend.spotNode.entrySpot.requestResult = ZLinkBackendRequestResult.NOT_FOUND;
+        AtomicInteger activationAttempts = new AtomicInteger();
+        SpotTransportAddressResolver resolver = spotId ->
+            CompletableFuture.failedFuture(new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.UNAVAILABLE,
+                "ready owner lease expired"));
         try (ZLinkChannelRuntime runtime = new ZLinkChannelRuntime(
             backend,
             options.registration(),
-            new ZLinkJsonMessageSerializer(), handlers())) {
+            new ZLinkJsonMessageSerializer(), handlers(resolver))) {
             runtime.registerSpotRouterNode("play.route", backend.spotNode);
             runtime.registerInstanceSpotCallRuntime(new ZLinkInstanceSpotCallRuntime() {
                 @Override
@@ -789,6 +824,7 @@ final class ZLinkChannelRuntimeTest {
                     String contentType,
                     Map<String, String> metadata,
                     Duration timeout) {
+                    activationAttempts.incrementAndGet();
                     byte[] reply = new ZLinkJsonMessageSerializer()
                         .serialize(new TestReply("reactivated"))
                         .bytes();
@@ -796,17 +832,22 @@ final class ZLinkChannelRuntimeTest {
                 }
             });
 
-            TestReply reply = runtime.requestToSpot(
-                    "room-spot",
-                    new TestRequest("hello"))
-                .instanceSpot("room")
-                .inMesh("play.route")
-                .submit(TestReply.class)
-                .toCompletableFuture()
-                .join();
+            CompletionException failure = assertThrows(
+                CompletionException.class,
+                () -> runtime.requestToSpot(
+                        "room-spot",
+                        new TestRequest("hello"))
+                    .instanceSpot("room")
+                    .inMesh("play.route")
+                    .submit(TestReply.class)
+                    .toCompletableFuture()
+                    .join());
 
-            assertEquals("reactivated", reply.value());
-            assertEquals(1, backend.spotNode.entrySpot.requestAttempts);
+            assertEquals(
+                ZLinkFrameworkErrorKind.UNAVAILABLE,
+                assertInstanceOf(ZLinkFrameworkException.class, failure.getCause()).kind());
+            assertEquals(0, activationAttempts.get());
+            assertEquals(0, backend.spotNode.entrySpot.requestAttempts);
         }
     }
 

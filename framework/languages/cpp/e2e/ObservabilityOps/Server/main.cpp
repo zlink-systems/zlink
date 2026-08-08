@@ -59,7 +59,7 @@ struct server_options_t
                 .spot_pub_endpoint = section.get ("spotPubEndpoint").value_or (""),
                 .stream_endpoint = section.get ("streamEndpoint").value_or (""),
                 .log_dir = section.require ("logDir"),
-                .trace_mode = section.get ("traceMode").value_or ("key_transitions"),
+                .trace_mode = section.get ("traceMode").value_or ("normal"),
                 .metrics_enabled = section.get ("metrics").value_or ("on") != "off",
                 .room_timer_enabled = section.get ("roomTimer").value_or ("off") == "on"};
     }
@@ -691,6 +691,8 @@ int zlink::framework::e2e::observability_ops::server::run_host (host_role_t role
                                          / "workflow-events",
                                        options.node_rid)
                                    : std::shared_ptr<workflow_event_store_t>{};
+    app.logging ().use_file (
+      options.log_dir + "/" + options.node_rid + "-flow.log");
 
     app.add_zlink_framework ([&] (fw::zlink_framework_options_t &framework) {
         framework.services ().add_singleton<server_options_t> (
@@ -715,9 +717,7 @@ int zlink::framework::e2e::observability_ops::server::run_host (host_role_t role
          * the received pair to the next hop. */
         framework.configure_dispatch ()
           .message_flow (options.trace_mode == "off" ? fw::message_flow_log_mode_t::off
-                                                     : fw::message_flow_log_mode_t::key_transitions)
-          .trace_log_file (options.log_dir + "/" + options.node_rid + "-flow.log")
-          .trace_label ("cpp-obs-" + options.node_rid);
+                                                     : fw::message_flow_log_mode_t::normal);
 
         if (role == host_role_t::session) {
             auto spot = framework.add_route_mesh (obs::spot_mesh);

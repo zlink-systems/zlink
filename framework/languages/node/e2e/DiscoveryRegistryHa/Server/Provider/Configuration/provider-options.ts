@@ -5,6 +5,7 @@ export interface ProviderOptions {
   readonly httpUrl: string;
   readonly logDir: string;
   readonly redisEndpoint: string;
+  readonly relocationRedisEndpoint: string;
   readonly redisKeyPrefix: string;
   readonly channelEndpoint: string;
   readonly fanoutEndpoint?: string;
@@ -20,6 +21,8 @@ export function validateProviderOptions(value: unknown): ProviderOptions {
     httpUrl: optionalString(values, 'httpUrl') ?? 'http://127.0.0.1:0',
     logDir: optionalString(values, 'logDir') ?? 'logs',
     redisEndpoint: requiredString(values, 'redisEndpoint'),
+    relocationRedisEndpoint: optionalString(values, 'relocationRedisEndpoint')
+      ?? requiredString(values, 'redisEndpoint'),
     redisKeyPrefix: requiredString(values, 'redisKeyPrefix'),
     channelEndpoint: requiredString(values, 'channelEndpoint'),
     fanoutEndpoint: optionalString(values, 'fanoutEndpoint'),

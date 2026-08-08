@@ -4,9 +4,13 @@
 #include "runtime/dispatch/inbound_dispatch_budget.hpp"
 #include "runtime/dispatch/receive_batch_budget.hpp"
 #include "runtime/diagnostics/runtime_observation.hpp"
+#include "runtime/diagnostics/dispatch_options_access.hpp"
 #include "runtime/execution/serial_execution_queue.hpp"
 #include "runtime/actors/actor_gateway_runtime.hpp"
+#include "runtime/locations/in_memory_store_providers.hpp"
+#include "runtime/locations/provider_relocation_repository.hpp"
 #include "runtime/spots/spot_runtime.hpp"
+#include "runtime/stateful/public_store_adapters.hpp"
 #include "runtime/timers/timer_runtime.hpp"
 
 #include <zlink/framework/contracts/spots/spot.hpp>
@@ -1089,19 +1093,27 @@ bool verify_remote_actor_prepare_is_idempotent ()
       std::type_index (typeid (int)), std::move (callbacks));
 
     spot_node_runtime_t owner (node);
+    const auto relocation_store =
+      std::make_shared<runtime::in_memory_relocation_store_t> ();
+    const auto relocation_repository =
+      std::make_shared<runtime::provider_relocation_repository_t> (
+        *relocation_store);
+    owner.bind_relocation_store (
+      std::make_shared<runtime::stateful::public_relocation_store_adapter_t> (
+        relocation_repository));
     const auto actor = actor_ref_access_t::make (
       node_rid_t::from_string ("source-node"),
       "player", "actor-1", 7);
     const auto request = zlink::message_t::from (std::string ("prepare"));
     const auto first = owner.admit_remote_actor_to_spot (
       "transfer-1", actor, spot_id_t ("source-spot"),
-      target->spot_id, request, 11, 13);
+      target->spot_id, request, 11, 13, 19);
     const auto repeated = owner.admit_remote_actor_to_spot (
       "transfer-1", actor, spot_id_t ("source-spot"),
-      target->spot_id, request, 11, 13);
+      target->spot_id, request, 11, 13, 19);
     const auto conflicting = owner.admit_remote_actor_to_spot (
       "transfer-1", actor, spot_id_t ("source-spot"),
-      target->spot_id, request, 11, 17);
+      target->spot_id, request, 11, 17, 19);
 
     target->serial_queue->close ();
     target->serial_queue->drain ();
@@ -1125,7 +1137,8 @@ int main ()
           zlink::framework::detail::spot_node_builder_state_t> (
           "logical-multicast-observation");
         std::atomic_bool observed{false};
-        state->dispatch.set_message_flow_observer (
+        zlink::framework::detail::dispatch_options_access_t::set_observer_for_tests (
+          state->dispatch,
           [&] (const zlink::framework::message_flow_event_t &event) {
               if (event.outcome
                     == zlink::framework::message_flow_outcome_t::error
@@ -1820,6 +1833,35 @@ int main ()
             if (barrier_events
                 != std::vector<std::string>{"after-cancel"}) {
                 return 36;
+            }
+            barrier_events.clear ();
+        }
+
+        target_queue.run ("handoff-barrier-source-turn", [&] {
+            if (!target_queue.try_post (
+                  "accepted-before-handoff",
+                  [&] { record_barrier_event ("accepted-before-handoff"); })) {
+                throw std::runtime_error (
+                  "Actor turn before handoff was not queued");
+            }
+            auto reserved = target_queue.reserve_handoff_barrier (
+              "handoff-after-accepted-turns");
+            if (!reserved)
+                throw std::runtime_error ("handoff barrier was not reserved");
+            const auto activated = reserved.value ()->activate (
+              [&] { record_barrier_event ("handoff"); });
+            if (!activated)
+                throw std::runtime_error ("handoff barrier was not activated");
+            record_barrier_event ("source-turn");
+        });
+        target_queue.drain ();
+        {
+            std::lock_guard lock (barrier_events_mutex);
+            if (barrier_events
+                != std::vector<std::string>{"source-turn",
+                                            "accepted-before-handoff",
+                                            "handoff"}) {
+                return 73;
             }
             barrier_events.clear ();
         }

@@ -1500,9 +1500,9 @@ void verify_raw_owner_node_send_and_liveness ()
     assert (retained_pump
             == mesh::raw_mesh_pump_result_t::backpressured);
 
-    // A full application mailbox retains the second payload and pauses
-    // application Recv. Liveness still crosses the existing Completion
-    // connection and must be processed before that retained payload.
+    // A full owner mailbox drops the second one-way payload. Liveness still
+    // crosses the existing Completion connection while application admission
+    // for that owner is unavailable.
     const auto paused_liveness_base =
       mesh::service_liveness_registry_t::clock_t::now ();
     const auto paused_probe =
@@ -1556,18 +1556,19 @@ void verify_raw_owner_node_send_and_liveness ()
             == expected_payload);
     assert (second.mailbox ().release (*claim));
 
-    assert (second.pump_one (
-              mesh::service_liveness_registry_t::clock_t::now ())
-            == mesh::raw_mesh_pump_result_t::application);
-    auto retained_claim = second.mailbox ().try_claim (
+    for (std::size_t attempt = 0; attempt < 10; ++attempt) {
+        const auto after_release = second.pump_one (
+          mesh::service_liveness_registry_t::clock_t::now ());
+        assert (after_release
+                != mesh::raw_mesh_pump_result_t::protocol_error);
+        assert (after_release
+                != mesh::raw_mesh_pump_result_t::application);
+        if (after_release == mesh::raw_mesh_pump_result_t::no_data)
+            break;
+    }
+    auto dropped_claim = second.mailbox ().try_claim (
       mesh::service_mailbox_domain_t::application, 1, 1024);
-    assert (retained_claim && retained_claim->records.size () == 1);
-    const protocol::application_payload_t retained_payload{
-      "Probe", "application/json", bytes ("retained")};
-    assert (protocol::decode_application_payload (
-              retained_claim->records.front ().parts.at (1))
-            == retained_payload);
-    assert (second.mailbox ().release (*retained_claim));
+    assert (!dropped_claim);
 
     bool channel_submitted = false;
     while (!channel_submitted

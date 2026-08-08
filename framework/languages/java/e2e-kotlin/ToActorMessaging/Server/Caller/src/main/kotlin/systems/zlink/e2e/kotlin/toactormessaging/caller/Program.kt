@@ -91,9 +91,9 @@ class Program {
         return ZLinkFrameworkConfigurer { options ->
             boot("configureDispatch")
             options.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile(Env.get("logDirectory", "logs") + "/caller-flow.log")
-                .traceLabel("kotlin-to-actor-caller")
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL)
+
+
             boot("configureDispatch done")
             boot("addLocationStore")
             options.addLocationStore(

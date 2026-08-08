@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Actors;
+using Zlink.Framework.Runtime.Identifiers;
 using Zlink.Framework.Runtime.Locations;
 using Zlink.Framework.Runtime.Service;
 
@@ -958,13 +959,13 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             normalized.BindingGeneration,
             normalized.ObjectGeneration,
             normalized.AuthorityOwnerGeneration,
-            normalized.MeshName,
+            normalized.MeshName.Value,
             normalized.TargetNodeGeneration,
             normalized.OwnerLeaseGeneration,
             normalized.SessionOwnerNodeGeneration,
             handoffId);
         ZLinkSessionRouteSealReply reply;
-        if (sessionNode == runtime.GetMeshNodeRuntime(normalized.MeshName)
+        if (sessionNode == runtime.GetMeshNodeRuntime(normalized.MeshName.Value)
                 .Node.RoutingId)
         {
             var result = await runtime.SealSessionActorRouteAsync(
@@ -988,7 +989,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         else
         {
             reply = await runtime.RequestSessionRouteSealAsync(
-                    normalized.MeshName,
+                    normalized.MeshName.Value,
                     sessionNode,
                     request,
                     cancellationToken)
@@ -1010,7 +1011,9 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             normalized.TargetNodeGeneration,
             normalized.OwnerLeaseGeneration,
             normalized.SessionOwnerNodeGeneration,
-            normalized.AcceptedHighWater);
+            normalized.AcceptedHighWater,
+            normalized.SessionOwnerId,
+            normalized.SessionOwnerLeaseGeneration);
         return normalized;
     }
 
@@ -1028,20 +1031,20 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                 session.BindingGeneration,
                 session.ObjectGeneration,
                 session.AuthorityOwnerGeneration,
-                session.MeshName,
+                session.MeshName.Value,
                 session.TargetNodeGeneration,
                 session.OwnerLeaseGeneration,
                 session.SessionOwnerNodeGeneration,
                 handoffId);
             var sessionNode = session.SessionNodeRid!.Value;
-            if (sessionNode == runtime.GetMeshNodeRuntime(session.MeshName)
+            if (sessionNode == runtime.GetMeshNodeRuntime(session.MeshName.Value)
                     .Node.RoutingId)
             {
                 _ = runtime.AbortSessionActorRouteSeal(seal);
                 return;
             }
             _ = await runtime.RequestSessionRouteAbortAsync(
-                    session.MeshName,
+                    session.MeshName.Value,
                     sessionNode,
                     new ZLinkSessionRouteAbortRequest(
                         actorId,
@@ -1049,7 +1052,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                         session.BindingGeneration,
                         session.ObjectGeneration,
                         session.AuthorityOwnerGeneration,
-                        session.MeshName,
+                        session.MeshName.Value,
                         session.TargetNodeGeneration,
                         session.OwnerLeaseGeneration,
                         session.SessionOwnerNodeGeneration,
@@ -1071,11 +1074,13 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         session.BindingGeneration,
         session.ObjectGeneration,
         session.AuthorityOwnerGeneration,
-        session.MeshName,
+        session.MeshName.Value,
         session.TargetNodeGeneration,
         session.OwnerLeaseGeneration,
         session.SessionOwnerNodeGeneration,
-        session.AcceptedHighWater);
+        session.AcceptedHighWater,
+        session.SessionOwnerId,
+        session.SessionOwnerLeaseGeneration);
 
     internal static ZLinkServiceWireCodec.RelocationPrepareRecord CreatePrepare(
         ZLinkAuthoritySnapshot sourceSnapshot,

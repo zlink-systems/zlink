@@ -86,9 +86,7 @@ public final class Program {
             String logDir = multi.logDir();
             options.addRelocationStore(relocationStore);
             options.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile(logDir + "/" + nodeRid + "-flow.log")
-                .traceLabel("java-sm-" + nodeRid);
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             ZLinkMeshNodeBuilder node = options.addRouteMesh(Contracts.SPOT_MESH)
                 .listen(multi.spotOnly() ? multi.spotEndpoint() : multi.routeEndpoint())
                 .setRoutingId(RoutingId.from(nodeRid));

@@ -57,9 +57,7 @@ public final class Program {
             String logDir = gateway.logDir();
             String gatewayRid = gateway.gatewayRid();
             options.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile(logDir + "/gateway-flow.log")
-                .traceLabel("java-sm-gateway");
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             boolean spotOnly = gateway.spotOnly();
             ZLinkMeshNodeBuilder node = options.addRouteMesh(Contracts.SPOT_MESH)
                 .listen(spotOnly ? gateway.spotEndpoint() : gateway.routeEndpoint())

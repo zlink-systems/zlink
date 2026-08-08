@@ -739,4 +739,4 @@ if [[ "${SCENARIO}" == "all" ]]; then
   run_rm_a3
 fi
 
-grep -Rq "message flow" "${log_dir}"/*-flow.log
+grep -Rq "message flow" "${log_dir}"/*.stdout.log

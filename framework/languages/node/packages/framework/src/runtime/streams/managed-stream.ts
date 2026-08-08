@@ -26,6 +26,8 @@ import type {
 import { RequestResult, isBackendNotConnectedError } from '../backend/runtime-values';
 import { ZLinkBufferMessage as NativeMessage } from '../backend/runtime-message';
 import type { StreamSessionService } from '../foundation/service-runtime-contracts';
+import type { ServiceRetiredBoundSessionRouteFence } from '../foundation/service-stateful-wire-codec';
+import type { ServiceActorRef } from '../foundation/service-stateful-registry';
 import {
   closeMeshCompletion,
   type ZLinkMeshCompletion,
@@ -209,7 +211,15 @@ export class ZLinkManagedStream implements ZLinkStream {
     this.socket.disconnectPeer(this.backendRoutingId());
   }
 
-  async bindActor(actor: ActorRef, timeoutMs: number, signal?: AbortSignal): Promise<void> {
+  async bindActor(
+    actor: ActorRef,
+    timeoutMs: number,
+    signal?: AbortSignal,
+    onBindingReplaced?: (
+      actor: ServiceActorRef,
+      retiredSession: ServiceRetiredBoundSessionRouteFence
+    ) => void
+  ): Promise<void> {
     throwIfAborted(signal);
     if (this.transportClosed) {
       throw createInternalFrameworkException(
@@ -230,7 +240,12 @@ export class ZLinkManagedStream implements ZLinkStream {
           route.completions,
           nativeActor,
           timeoutMs,
-          signal
+          signal,
+          onBindingReplaced === undefined
+            ? undefined
+            : (_actorId, retiredSession, replacedActor) => {
+                onBindingReplaced(replacedActor, retiredSession);
+              }
         ),
         `Actor '${actor.actorId}' native session bind`,
       );
@@ -330,7 +345,9 @@ export class ZLinkManagedStream implements ZLinkStream {
           throw error;
         }
       }
-      this.nativeActorBindings.delete(actorId);
+      if (this.nativeActorBindings.get(actorId) === binding) {
+        this.nativeActorBindings.delete(actorId);
+      }
       return;
     }
     await this.socket.unbindActor(this.backendRoutingId(), actorId, timeoutMs, signal);
@@ -412,7 +429,12 @@ export class ZLinkManagedStream implements ZLinkStream {
     completions: ZLinkMeshCompletionTable,
     actor: ZLinkBackendActorRef,
     timeoutMs: number,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    onBindingReplaced?: (
+      actor: string,
+      retiredSession: ServiceRetiredBoundSessionRouteFence,
+      replacedActor: ServiceActorRef
+    ) => void
   ): Promise<ZLinkMeshCompletion> {
     const deadline = Date.now() + timeoutMs;
     for (;;) {
@@ -422,7 +444,8 @@ export class ZLinkManagedStream implements ZLinkStream {
           () => service.bindActor(
             this.backendRoutingId(),
             actor,
-            Math.max(0, deadline - Date.now())
+            Math.max(0, deadline - Date.now()),
+            onBindingReplaced
           ),
           signal
         );

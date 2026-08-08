@@ -32,9 +32,7 @@ public final class TrackingServerApplication {
     ZLinkFrameworkConfigurer trackingFramework(SampleTopology topology) {
         return options -> {
             options.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile(topology.logDirectory() + "/flow-tracking.log")
-                .traceLabel("tracking");
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             options.addHandlersFromPackageOf(TrackingServerApplication.class);
             ZLinkMeshNodeBuilder trackingSpot = options.addRouteMesh(SampleNames.CustomerSpotDiscovery);
             trackingSpot.listen(topology.trackingSpotEndpoint())

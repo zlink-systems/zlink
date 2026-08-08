@@ -5,6 +5,7 @@
   "main": "dist/Client/main.js",
   "scripts": {
     "generate:protobuf": "node scripts/generate-protobuf-types.js",
-    "build": "npm run generate:protobuf && node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && node ../../node_modules/typescript/bin/tsc -p tsconfig.json && node ../../node_modules/typescript/bin/tsc -p tsconfig.browser.json && ../../node_modules/.bin/esbuild Client/main.ts --bundle --format=esm --platform=browser --target=es2022 --outfile=dist/browser/client.mjs"
+    "generate:framework-json": "node ../../scripts/generate-framework-json-schemas.mjs --project tsconfig.json --source Shared/Contracts --out dist/.zlink-framework-json-schemas.cjs --browser-out dist/browser/.zlink-framework-json-schemas.mjs",
+    "build": "npm run generate:protobuf && node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && node ../../node_modules/typescript/bin/tsc -p tsconfig.json && node ../../node_modules/typescript/bin/tsc -p tsconfig.browser.json && npm run generate:framework-json && ../../node_modules/.bin/esbuild Client/main.ts --bundle --format=esm --platform=browser --target=es2022 --outfile=dist/browser/client.mjs"
   }
 }

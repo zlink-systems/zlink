@@ -23,7 +23,9 @@ internal sealed record ZLinkRemoteSessionBindRequest(
     string MeshName,
     ulong SessionOwnerNodeGeneration,
     ulong AcceptedHighWater,
-    ZLinkRemoteSessionPreviousBinding? PreviousBinding = null);
+    ZLinkRemoteSessionPreviousBinding? PreviousBinding = null,
+    string SessionOwnerId = "",
+    ulong SessionOwnerLeaseGeneration = 0);
 
 internal sealed record ZLinkRemoteSessionPreviousBinding(
     byte[] TargetNodeRid,
@@ -37,7 +39,9 @@ internal sealed record ZLinkRemoteSessionPreviousBinding(
     ulong AuthorityOwnerGeneration,
     ulong OwnerLeaseGeneration,
     ulong SessionOwnerNodeGeneration,
-    ulong AcceptedHighWater);
+    ulong AcceptedHighWater,
+    string SessionOwnerId = "",
+    ulong SessionOwnerLeaseGeneration = 0);
 
 internal sealed record ZLinkRemoteSessionBindResponse(
     bool Acknowledged,

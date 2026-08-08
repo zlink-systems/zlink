@@ -1,5 +1,6 @@
 package systems.zlink.framework.runtime.streams;
 
+import java.time.Duration;
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 
 import java.util.List;
@@ -186,9 +187,9 @@ final class ZLinkStreamSessionContextState implements ZLinkSessionContext {
         return actors;
     }
 
-    CompletionStage<Void> notifyBoundActorsDisconnected() {
+    CompletionStage<Void> notifyBoundActorsDisconnected(Duration timeout) {
         if (actors instanceof ZLinkSessionActorsRuntime runtime) {
-            return runtime.notifyDisconnectedAll();
+            return runtime.notifyDisconnectedAll(timeout);
         }
         return CompletableFuture.completedFuture(null);
     }
@@ -260,11 +261,11 @@ final class ZLinkStreamSessionContextState implements ZLinkSessionContext {
     }
 
     void traceStreamReplied(ZLinkStreamHeader requestHeader) {
-        if (flow.enabled(systems.zlink.framework.configuration.ZLinkMessageFlowOutcome.REPLIED)) {
-            flow.trace(new systems.zlink.framework.configuration.ZLinkMessageFlowEvent(
-                systems.zlink.framework.configuration.ZLinkMessageFlowOutcome.REPLIED,
-                systems.zlink.framework.configuration.ZLinkDispatchErrorSurface.STREAM_SESSION,
-                systems.zlink.framework.configuration.ZLinkDispatchMessageKind.REQUEST,
+        if (flow.enabled(systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome.REPLIED)) {
+            flow.trace(new systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent(
+                systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome.REPLIED,
+                systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSurface.STREAM_SESSION,
+                systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind.REQUEST,
                 requestHeader.packetName(),
                 null,
                 null,
@@ -308,11 +309,11 @@ final class ZLinkStreamSessionContextState implements ZLinkSessionContext {
             return;
         }
         if (header.requestSequence().isEmpty()
-            && flow.enabled(systems.zlink.framework.configuration.ZLinkMessageFlowOutcome.DISPATCHED)) {
-            flow.trace(new systems.zlink.framework.configuration.ZLinkMessageFlowEvent(
-                systems.zlink.framework.configuration.ZLinkMessageFlowOutcome.DISPATCHED,
-                systems.zlink.framework.configuration.ZLinkDispatchErrorSurface.STREAM_SESSION,
-                systems.zlink.framework.configuration.ZLinkDispatchMessageKind.SEND,
+            && flow.enabled(systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome.DISPATCHED)) {
+            flow.trace(new systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent(
+                systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome.DISPATCHED,
+                systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSurface.STREAM_SESSION,
+                systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind.SEND,
                 header.packetName(),
                 null,
                 null,
@@ -347,16 +348,16 @@ final class ZLinkStreamSessionContextState implements ZLinkSessionContext {
     }
 
     private void traceDispatchError(ZLinkStreamHeader header, Throwable error) {
-        if (!flow.enabled(systems.zlink.framework.configuration.ZLinkMessageFlowOutcome.ERROR)) {
+        if (!flow.enabled(systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome.ERROR)) {
             return;
         }
         Throwable actual = unwrap(error);
-        flow.trace(new systems.zlink.framework.configuration.ZLinkMessageFlowEvent(
-            systems.zlink.framework.configuration.ZLinkMessageFlowOutcome.ERROR,
-            systems.zlink.framework.configuration.ZLinkDispatchErrorSurface.STREAM_SESSION,
+        flow.trace(new systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent(
+            systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome.ERROR,
+            systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSurface.STREAM_SESSION,
             header.requestSequence().isPresent()
-                ? systems.zlink.framework.configuration.ZLinkDispatchMessageKind.REQUEST
-                : systems.zlink.framework.configuration.ZLinkDispatchMessageKind.SEND,
+                ? systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind.REQUEST
+                : systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind.SEND,
             header.packetName(),
             null,
             null,
@@ -365,10 +366,10 @@ final class ZLinkStreamSessionContextState implements ZLinkSessionContext {
             null,
             null,
             null,
-            systems.zlink.framework.configuration.ZLinkDispatchErrorReason.HANDLER_EXCEPTION,
+            systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorReason.HANDLER_EXCEPTION,
             header.requestSequence().isPresent()
-                ? systems.zlink.framework.configuration.ZLinkDispatchErrorAction.REPLY_ERROR
-                : systems.zlink.framework.configuration.ZLinkDispatchErrorAction.DROP,
+                ? systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorAction.REPLY_ERROR
+                : systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorAction.DROP,
             actual.getClass().getName(),
             actual.getMessage(),
             header.flowId().orElse(null),
@@ -402,7 +403,9 @@ final class ZLinkStreamSessionContextState implements ZLinkSessionContext {
         private final byte[] payloadBytes;
         private final long deadlineNanos;
         private final CompletableFuture<Void> completion = new CompletableFuture<>();
-        private final AtomicBoolean terminal = new AtomicBoolean();
+        private final systems.zlink.framework.runtime.internal.completion
+            .ZLinkTerminalWinner terminal = new systems.zlink.framework.runtime
+                .internal.completion.ZLinkTerminalWinner();
         private volatile ScheduledFuture<?> retry;
 
         private ReplyAttempt(
@@ -416,7 +419,7 @@ final class ZLinkStreamSessionContextState implements ZLinkSessionContext {
 
         @Override
         public void run() {
-            if (terminal.get()) {
+            if (terminal.isTerminal()) {
                 return;
             }
             if (replyRetriesClosed.get()) {
@@ -468,7 +471,8 @@ final class ZLinkStreamSessionContextState implements ZLinkSessionContext {
         }
 
         private void complete() {
-            if (!terminal.compareAndSet(false, true)) {
+            if (!terminal.tryWin(systems.zlink.framework.runtime.internal
+                    .completion.ZLinkTerminalWinner.Cause.RESPONSE)) {
                 return;
             }
             cancelRetry();
@@ -477,12 +481,28 @@ final class ZLinkStreamSessionContextState implements ZLinkSessionContext {
         }
 
         private void completeExceptionally(Throwable failure) {
-            if (!terminal.compareAndSet(false, true)) {
+            if (!terminal.tryWin(terminalCause(failure))) {
                 return;
             }
             cancelRetry();
             replyAttempts.remove(this);
             completion.completeExceptionally(failure);
+        }
+
+        private systems.zlink.framework.runtime.internal.completion
+            .ZLinkTerminalWinner.Cause terminalCause(Throwable failure) {
+            if (failure instanceof CancellationException) {
+                return systems.zlink.framework.runtime.internal.completion
+                    .ZLinkTerminalWinner.Cause.CANCELLATION;
+            }
+            if (failure instanceof ZLinkFrameworkException frameworkFailure
+                && frameworkFailure.kind()
+                    == ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED) {
+                return systems.zlink.framework.runtime.internal.completion
+                    .ZLinkTerminalWinner.Cause.TIMEOUT;
+            }
+            return systems.zlink.framework.runtime.internal.completion
+                .ZLinkTerminalWinner.Cause.FAILURE;
         }
 
         private void cancelRetry() {

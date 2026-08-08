@@ -62,6 +62,7 @@
         <Compile Include="Runtime/ActorHandlerActivationTests.cs"/>
         <Compile Include="Runtime/ActorClientTests.cs"/>
         <Compile Include="Runtime/ActorBoundSessionRelayTests.cs"/>
+        <Compile Include="Runtime/BoundSessionReplacementLifecycleTests.cs"/>
         <Compile Include="Runtime/TransportFailFastTests.cs"/>
         <Compile Include="Runtime/BackendAdapterFactoryTests.cs"/>
         <Compile Include="Runtime/BackendStreamSocketConcurrencyTests.cs"/>
@@ -70,6 +71,7 @@
         <Compile Include="Runtime/ClientServerChannelRuntimeTests.cs"/>
         <Compile Include="Runtime/CapacityMonitoringProjectionTests.cs"/>
         <Compile Include="Runtime/CustomSerializerEnvelopeTests.cs"/>
+        <Compile Include="Runtime/EncodedPayloadOwnershipTests.cs"/>
         <Compile Include="Runtime/DrainCoordinatorTests.cs"/>
         <Compile Include="Runtime/Dispatch/InboundDispatchBudgetTests.cs"/>
         <Compile Include="Runtime/Dispatch/CompletionAdmissionOwnerTests.cs"/>
@@ -77,6 +79,7 @@
         <Compile Include="Runtime/DeferredActorJoinDurabilityTests.cs"/>
         <Compile Include="Runtime/EntrySpotActorDispatchTests.cs"/>
         <Compile Include="Runtime/EntrySpotIdentityStoreTests.cs"/>
+        <Compile Include="Runtime/RuntimeIdentifierTests.cs"/>
         <Compile Include="Runtime/FanoutAutomaticDiscoveryTests.cs"/>
         <Compile Include="Runtime/EnvelopeCodecTests.cs"/>
         <Compile Include="Runtime/EndpointConnectionsTests.cs"/>

@@ -60,32 +60,29 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
     public void FenceOperations() =>
         Interlocked.Exchange(ref _operationFenced, 1);
 
-    public Dictionary<string, ZLinkChannelRuntimeBundle> SubscriberBundles { get; } = new(StringComparer.Ordinal);
+    public Dictionary<ZLinkChannelName, ZLinkChannelRuntimeBundle> SubscriberBundles { get; } = [];
 
-    public Dictionary<string, ZLinkChannelRuntimeBundle> PublisherBundles { get; } = new(StringComparer.Ordinal);
+    public Dictionary<ZLinkChannelName, ZLinkChannelRuntimeBundle> PublisherBundles { get; } = [];
 
-    public Dictionary<string, ZLinkAutomaticFanoutSubscriberRuntime>
+    public Dictionary<ZLinkChannelName, ZLinkAutomaticFanoutSubscriberRuntime>
         AutomaticFanoutSubscriberRuntimes { get; } =
-        new(StringComparer.Ordinal);
+        [];
 
-    public Dictionary<string, ZLinkChannelRuntimeBundle> ClientServerClientBundles { get; } =
-        new(StringComparer.Ordinal);
+    public Dictionary<ZLinkChannelName, ZLinkChannelRuntimeBundle> ClientServerClientBundles { get; } = [];
 
-    public Dictionary<string, ZLinkClientServerClientRuntime>
-        ClientServerClientRuntimes { get; } = new(StringComparer.Ordinal);
+    public Dictionary<ZLinkChannelName, ZLinkClientServerClientRuntime>
+        ClientServerClientRuntimes { get; } = [];
 
-    public Dictionary<string, ZLinkChannelRuntimeBundle> ClientServerServerBundles { get; } =
-        new(StringComparer.Ordinal);
+    public Dictionary<ZLinkChannelName, ZLinkChannelRuntimeBundle> ClientServerServerBundles { get; } = [];
 
-    public Dictionary<string, ZLinkSpotNodeRuntime> SpotNodes { get; } = new(StringComparer.Ordinal);
+    public Dictionary<ZLinkSpotNodeName, ZLinkSpotNodeRuntime> SpotNodes { get; } = [];
 
     // Channel routing is fixed after startup. Keeping the resolved runtime in
     // the state avoids scanning every SpotNode and taking SyncRoot on each
     // application send.
-    public Dictionary<string, ZLinkSpotNodeRuntime> RouteMeshNodesByChannel { get; } =
-        new(StringComparer.Ordinal);
+    public Dictionary<ZLinkChannelName, ZLinkSpotNodeRuntime> RouteMeshNodesByChannel { get; } = [];
 
-    public Dictionary<string, ZLinkStreamNodeRuntime> StreamNodes { get; } = new(StringComparer.Ordinal);
+    public Dictionary<ZLinkStreamNodeName, ZLinkStreamNodeRuntime> StreamNodes { get; } = [];
 
     internal void BuildRouteMeshChannelIndex()
     {

@@ -9,7 +9,6 @@ import {
   ZLinkFrameworkException,
   ZLinkFrameworkRelocationMode,
   ZLinkFrameworkRelocationOutcome,
-  ZLinkMessageFlowLogMode,
   ZLinkPeerState,
   ZLinkSpotActorRequest,
   ZLinkSpotActorSend,
@@ -430,7 +429,7 @@ class TransferUserSpot implements ZLinkSpot<TransferActor> {
   }
 
   async onActorJoin(actorId: string, request: ZLinkMessage): Promise<{ accepted: boolean; reply: JoinTargetRes }> {
-    const join = request.decode<JoinTargetReq>(Object as never);
+    const join = request.decode(JoinTargetReq);
     evidence.correlate(actorId, join.transferId);
     this.scenarios.set(actorId, join.scenario);
     actorScenarios.set(actorId, join.scenario);
@@ -832,9 +831,7 @@ Module({
           .routeCacheMaxAgeMs(500)
           .messageFollowDurationMs(6000);
         builder.configureDispatch()
-          .messageFlow(ZLinkMessageFlowLogMode.KeyTransitions)
-          .traceLogFile(path.join(options.logDir, `${options.rid}-flow.log`))
-          .traceLabel(options.rid);
+          .messageFlow('normal');
         const mesh = builder.addRouteMesh(SpotActorTransferNames.mesh)
           .listen(options.routerEndpoint).routingId(options.rid);
         const objects = mesh.objects().server();

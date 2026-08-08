@@ -32,9 +32,13 @@ internal sealed class ZLinkSpotNodeCatalog(
     private readonly CancellationTokenSource _idleEvictionStop = new();
     private readonly TimeSpan _instanceSpotIdleTimeout =
         registration.InstanceSpotIdleTimeout;
+    private readonly ZLinkChannelName _spotChannelName =
+        ZLinkChannelName.FromBoundary(
+            spotChannelName,
+            nameof(spotChannelName));
     private Task? _disposeTask;
     private Task? _idleEvictionTask;
-    private string? _idleEvictionCursor;
+    private ZLinkSpotId? _idleEvictionCursor;
     private int _idleEvictionStopped;
     private readonly ZLinkSpotActivationFactory _activationFactory = new(
         services,
@@ -42,7 +46,9 @@ internal sealed class ZLinkSpotNodeCatalog(
         frameworkRegistration,
         registration,
         node,
-        spotChannelName,
+        ZLinkChannelName.FromBoundary(
+            spotChannelName,
+            nameof(spotChannelName)).Value,
         completionAdmission,
         timerScheduler);
     private readonly ZLinkActivationConcurrencyAdmission _activationAdmission =
@@ -54,14 +60,15 @@ internal sealed class ZLinkSpotNodeCatalog(
             frameworkRegistration);
 
     private readonly object _gate = new();
-    private readonly Dictionary<string, TaskCompletionSource<bool>> _closing = [];
-    private readonly Dictionary<string, string> _instanceSpotTypes =
-        new(StringComparer.Ordinal);
-    private readonly Dictionary<string, Type> _preparedSpotTypes =
-        new(StringComparer.Ordinal);
+    private readonly Dictionary<ZLinkSpotId, TaskCompletionSource<bool>>
+        _closing = [];
+    private readonly Dictionary<ZLinkSpotId, string> _instanceSpotTypes = [];
+    private readonly Dictionary<ZLinkSpotId, Type> _preparedSpotTypes = [];
     private readonly Dictionary<Type, int> _generatedSpotCreations = [];
-    private readonly Dictionary<string, PendingSpotCreation> _pending = [];
-    private readonly Dictionary<string, ZLinkSpotActivation> _spots = [];
+    private readonly Dictionary<ZLinkSpotId, PendingSpotCreation>
+        _pending = [];
+    private readonly Dictionary<ZLinkSpotId, ZLinkSpotActivation>
+        _spots = [];
     private TaskCompletionSource? _creationsDrained;
     private int _activeCreations;
     private bool _closed;
@@ -292,7 +299,7 @@ internal sealed class ZLinkSpotNodeCatalog(
     {
         cancellationToken.ThrowIfCancellationRequested();
         lifecycle?.SpotLocations.ForgetRelocated(
-            activation.SpotId,
+            activation.RuntimeSpotId,
             activation.ObjectGeneration);
         lock (_gate)
         {
@@ -591,15 +598,15 @@ internal sealed class ZLinkSpotNodeCatalog(
             var candidates = new List<ZLinkSpotActivation>(
                 Math.Min(_spots.Count, IdleEvictionBatchSize));
             var cursor = _idleEvictionCursor;
-            var cursorPresent = cursor is not null
-                                && _spots.ContainsKey(cursor);
+            var cursorPresent = cursor is { } cursorValue
+                                && _spots.ContainsKey(cursorValue);
             var collecting = cursor is null || !cursorPresent;
 
             foreach (var (spotId, activation) in _spots)
             {
                 if (!collecting)
                 {
-                    if (StringComparer.Ordinal.Equals(spotId, cursor))
+                    if (spotId == cursor)
                         collecting = true;
                     continue;
                 }
@@ -615,7 +622,7 @@ internal sealed class ZLinkSpotNodeCatalog(
             {
                 foreach (var (spotId, activation) in _spots)
                 {
-                    if (StringComparer.Ordinal.Equals(spotId, cursor))
+                    if (spotId == cursor)
                     {
                         // Include the cursor itself only after all entries
                         // before it have been visited. This closes the cycle
@@ -633,7 +640,7 @@ internal sealed class ZLinkSpotNodeCatalog(
 
             _idleEvictionCursor = candidates.Count == 0
                 ? cursor
-                : candidates[^1].SpotId;
+                : candidates[^1].RuntimeSpotId;
             return candidates.ToArray();
         }
     }
@@ -1134,8 +1141,8 @@ internal sealed class ZLinkSpotNodeCatalog(
     {
         var activation = prepared.Activation;
         var status = await lifecycle!.SpotLocations.TrackRelocatedAsync(
-                spotChannelName,
-                activation.SpotId,
+                ZLinkMeshName.FromBoundary(_spotChannelName.Value, nameof(_spotChannelName)),
+                activation.RuntimeSpotId,
                 objectGeneration,
                 authorityOwnerGeneration,
                 stableType,
@@ -1460,8 +1467,8 @@ internal sealed class ZLinkSpotNodeCatalog(
 
         var spotId = activation.SpotId;
         var status = await lifecycle.SpotLocations.ClaimAsync(
-                spotChannelName,
-                spotId,
+                ZLinkMeshName.FromBoundary(_spotChannelName.Value, nameof(_spotChannelName)),
+                activation.RuntimeSpotId,
                 objectGeneration,
                 spotType,
                 node.RoutingId,
@@ -1476,14 +1483,17 @@ internal sealed class ZLinkSpotNodeCatalog(
         throw new ZLinkFrameworkException(
             ZLinkFrameworkErrorKind.InternalFailure,
             status == ZLinkLocationWriteStatus.RejectedConflict
-                ? $"SPOT '{spotId}' location in mesh '{spotChannelName}' is owned by another node."
+                ? $"SPOT '{spotId}' location in mesh '{_spotChannelName}' is owned by another node."
                 : $"SPOT '{spotId}' location claim failed because the location store is unavailable.");
     }
 
-    private async ValueTask ReleaseSpotLocationAsync(string spotId)
+    private async ValueTask ReleaseSpotLocationAsync(ZLinkSpotId spotId)
     {
         if (lifecycle is not null)
-            await lifecycle.SpotLocations.ReleaseAsync(spotChannelName, spotId).ConfigureAwait(false);
+            await lifecycle.SpotLocations.ReleaseAsync(
+                    ZLinkMeshName.FromBoundary(_spotChannelName.Value, nameof(_spotChannelName)),
+                    spotId)
+                .ConfigureAwait(false);
     }
 
     private IReadOnlyCollection<ZLinkSpotActivation> SnapshotActivations()
@@ -1519,7 +1529,9 @@ internal sealed class ZLinkSpotNodeCatalog(
 
             await activation.DisposeAsync().ConfigureAwait(false);
             if (releaseLocation)
-                await ReleaseSpotLocationAsync(spotId).ConfigureAwait(false);
+                await ReleaseSpotLocationAsync(
+                        ZLinkSpotId.FromBoundary(spotId, nameof(spotId)))
+                    .ConfigureAwait(false);
         }
         catch (Exception exception)
         {
@@ -1564,7 +1576,9 @@ internal sealed class ZLinkSpotNodeCatalog(
                     DateTimeOffset.UtcNow + activation.DefaultRequestTimeout,
                     CancellationToken.None))
             .ConfigureAwait(false);
-        await failures.CaptureAsync(() => ReleaseSpotLocationAsync(activation.SpotId)).ConfigureAwait(false);
+        await failures.CaptureAsync(
+                () => ReleaseSpotLocationAsync(activation.RuntimeSpotId))
+            .ConfigureAwait(false);
         await failures.CaptureAsync(activation.DisposeAsync).ConfigureAwait(false);
         lock (_gate)
         {

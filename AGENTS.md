@@ -54,6 +54,33 @@ commit, push 작업은 `main` branch에서 수행한다.
 - **internals에 사용법을 넣지 않는다.** internals는 유지보수자를 위한 구조 설명이다.
 - guide에서 내부 동작을 참고해야 하면 internals 문서를 링크한다.
 
+## 보호 문서 경로 — 사용자 명시 지시 없는 수정 금지
+
+다음 정식 문서 경로는 사용자의 **명시적인 수정 지시 없이는 절대로 변경하지 않는다**.
+
+- `core/doc/internals/`
+- `core/doc/spec/`
+- `bindings/doc/spec/`
+- `framework/doc/framework/common/sample/`
+- `framework/doc/framework/common/e2e/`
+- `framework/doc/framework/common/spec/`
+- `framework/doc/framework/common/internals/`
+
+이 규칙은 agent, 자동화 script, formatter, link checker, 문서 동기화 작업과 생성 단계에 모두
+적용한다. 다음 행위도 수정으로 간주하므로 사용자 승인 없이 수행하지 않는다.
+
+- 파일과 디렉터리의 생성·수정·삭제·이동·이름 변경
+- 오탈자·문체·번역·목차·링크·anchor·front matter만 고치는 변경
+- 구현 gap, test 실패, cross-language parity, release 준비, stale 내용 또는 CI 결과를 이유로 한
+  임의의 계약·internals·sample·E2E 문서 갱신
+- 자동 포맷팅, 줄바꿈 정규화, generated 문서 재생성 또는 다른 문서와의 내용 동기화
+
+해당 경로는 검색·열람·비교·렌더링·검증만 허용한다. 구현이나 검토 중 수정 필요성을 발견하면
+파일을 먼저 고치지 말고 정확한 `file:line`, 변경 이유와 제안 내용을 보고한 뒤 대기한다. 계획서,
+ledger, test 결과, 다른 언어 구현 또는 일반적인 "문서 정리"·"스펙에 맞춰"·"모두 완료" 지시는
+이 보호 경로에 대한 명시적 수정 승인을 대신하지 않는다. 사용자가 보호 대상 경로와 허용할
+변경 범위를 분명히 지정한 경우에만 그 범위 안에서 수정하고, 범위를 넓히지 않는다.
+
 ### Framework 언어별 문서 위치
 
 `framework` 아래 언어별 문서는 모두 `framework/doc/` 아래에서 작성하고 수정한다.

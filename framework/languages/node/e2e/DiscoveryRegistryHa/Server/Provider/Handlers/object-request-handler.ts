@@ -2,6 +2,7 @@ import {
   ZLinkPacket,
   type ZLinkInstanceSpot,
   type ZLinkInstanceSpotContext,
+  type ZLinkSpot,
   type ZLinkSpotTimerHandler,
   type ZLinkTimerTick,
   type ZLinkSpotRequestHandler
@@ -9,6 +10,7 @@ import {
 import { Injectable, Scope } from '@nestjs/common';
 import { ObjectReq, type ObjectRes } from '../../../Shared/messages';
 import { EvidenceStore } from '../Infrastructure/evidence-store';
+import { waitForScenarioGate } from '../Infrastructure/scenario-gates';
 
 let objectEvidence: EvidenceStore | undefined;
 let objectActivationDelayMs = 0;
@@ -40,6 +42,7 @@ export class Config6InstanceSpot implements ZLinkInstanceSpot {
     // The handler evidence records activation before dispatch so a failed
     // request distinguishes placement failure from packet registration.
     objectEvidence?.add(`object-initialized|rid=${objectEvidence.rid}`);
+    await waitForScenarioGate('initialize', `rid=${objectEvidence?.rid ?? 'unknown'}`);
     if (objectActivationDelayMs > 0) {
       await new Promise((resolve) => setTimeout(resolve, objectActivationDelayMs));
     }
@@ -56,10 +59,11 @@ export class Config6InstanceTimer implements ZLinkSpotTimerHandler<Config6Instan
 
 @Injectable()
 @ZLinkPacket('ObjectReq')
-export class ObjectRequestHandler implements ZLinkSpotRequestHandler<ZLinkInstanceSpot, ObjectReq, ObjectRes> {
-  async handle(spot: ZLinkInstanceSpot, request: ObjectReq, _context: import('@zlink-systems/framework').ZLinkMessageContext): Promise<ObjectRes> {
+export class ObjectRequestHandler implements ZLinkSpotRequestHandler<ZLinkSpot, ObjectReq, ObjectRes> {
+  async handle(spot: ZLinkSpot, request: ObjectReq, _context: import('@zlink-systems/framework').ZLinkMessageContext): Promise<ObjectRes> {
     const providerRid = objectEvidence?.rid ?? 'unknown';
     objectEvidence?.add(`object-request|rid=${providerRid}|spotId=${request.spotId}|operationId=${request.operationId}`);
+    await waitForScenarioGate('request', `spotId=${request.spotId}|operationId=${request.operationId}`);
     if (request.operationId === '__close__') {
       await spot.context.close();
     }

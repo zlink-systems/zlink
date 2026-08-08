@@ -20,7 +20,7 @@ timeout 420s ./run_e2e.sh
 `run_e2e.sh`는 Gradle `installDist`를 실행한 뒤 publisher, subscriber, client binary를 각각 시작한다.
 publisher와 subscriber는 같은 Redis location store endpoint와 실행별 key prefix를 등록한다.
 PS-A4 subscriber reconnect와 PS-B2 publisher restart의 lifecycle 제어는 Client support가 맡는다.
-실패하면 `logs/<run-id>/` 아래 role별 stdout, stderr, message flow log를 출력한다.
+실패하면 `logs/<run-id>/` 아래 role별 stdout과 stderr를 출력한다. Message-flow evidence는 stdout에 포함된다.
 
 subscriber가 받은 fanout delivery는 subscriber 역할 server의 bounded `/evidence/wait` endpoint로
 확인한다. client는 publisher endpoint로 publish를 트리거한 뒤 반복 snapshot polling 대신 각

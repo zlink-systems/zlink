@@ -39,7 +39,9 @@ class operation_registry_t
                              callback_t callback);
     bool complete (const call_id_t &id, std::vector<std::uint8_t> payload);
     bool cancel (const call_id_t &id);
-    bool fail (const call_id_t &id, operation_terminal_t terminal);
+    bool fail (const call_id_t &id,
+               operation_terminal_t terminal,
+               std::vector<std::uint8_t> payload = {});
     std::size_t expire (clock_t::time_point now);
     std::size_t shutdown ();
     std::size_t size () const;

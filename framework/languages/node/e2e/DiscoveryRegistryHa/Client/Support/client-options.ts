@@ -4,6 +4,8 @@ export interface ClientOptions {
   readonly providerAUrl: string;
   readonly providerBUrl?: string;
   readonly scenario: string;
+  readonly phase?: string;
+  readonly variant?: string;
 }
 
 export function parseClientOptions(args: readonly string[]): ClientOptions {
@@ -13,7 +15,9 @@ export function parseClientOptions(args: readonly string[]): ClientOptions {
     consumerUrl: required(values, 'consumerUrl'),
     providerAUrl: required(values, 'providerAUrl'),
     providerBUrl: optional(values, 'providerBUrl'),
-    scenario: optional(values, 'scenario') ?? 'all'
+    scenario: optional(values, 'scenario') ?? 'all',
+    phase: optional(values, 'phase'),
+    variant: optional(values, 'variant')
   };
 }
 

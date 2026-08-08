@@ -17,8 +17,10 @@
 
 #include <zlink/framework.hpp>
 
+#include <algorithm>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 struct play_options_t
@@ -93,29 +95,34 @@ inline int run_play_server (int argc, char **argv)
     app.add_zlink_framework ([&] (zlink::framework::zlink_framework_options_t &options) {
         auto state = std::make_unique<scenario_state_t> (node_rid);
         auto *state_ptr = state.get ();
-        options.configure_dispatch ()
-          .message_flow (zlink::framework::message_flow_log_mode_t::key_transitions)
-          .trace_log_file (log_dir + "/" + node_rid + "-flow.log")
-          .trace_label ("cpp-sm-" + node_rid)
-          .set_message_flow_observer (
-            [state_ptr] (const zlink::framework::message_flow_event_t &event) {
-                if (event.outcome != zlink::framework::message_flow_outcome_t::error
-                    || event.surface != zlink::framework::dispatch_error_surface_t::spot_route
-                    || event.error_reason
-                         != zlink::framework::dispatch_error_reason_t::handler_missing
-                    || !event.error_action || !event.packet_name) {
+        app.logging ()
+          .use_file (log_dir + "/" + node_rid + "-flow.log")
+          .use_provider (
+            "spot-service-evidence",
+            [state_ptr] (const zlink::framework::log_record_t &record) {
+                if (record.message != "dispatch error")
+                    return;
+                const auto field = [&record] (std::string_view name) {
+                    const auto found = std::find_if (
+                      record.fields.begin (), record.fields.end (),
+                      [name] (const auto &value) { return value.key == name; });
+                    return found == record.fields.end ()
+                      ? std::string{}
+                      : found->value;
+                };
+                if (field ("surface") != "spot_route"
+                    || field ("reason") != "handler_missing"
+                    || field ("action").empty ()
+                    || field ("packet").empty ()) {
                     return;
                 }
-                const auto action =
-                  *event.error_action == zlink::framework::dispatch_error_action_t::reply_error
-                    ? "reply_error"
-                    : (*event.error_action == zlink::framework::dispatch_error_action_t::drop
-                         ? "drop"
-                         : "fail_caller");
-                state_ptr->record ("SpotRouteDispatchFailure", *event.packet_name,
-                                   event.spot_id.value_or (""),
-                                   std::string ("handler_missing:") + action);
+                state_ptr->record (
+                  "SpotRouteDispatchFailure", field ("packet"),
+                  field ("spot"),
+                  "handler_missing:" + field ("action"));
             });
+        options.configure_dispatch ()
+          .message_flow (zlink::framework::message_flow_log_mode_t::normal);
         auto http_execution_turn =
           std::make_shared<zlink::http_client::framework_execution_turn_t> ();
         auto play_a_http = zlink::http_client::client_t::create (config.play_a_http_endpoint)
@@ -217,6 +224,7 @@ inline int run_play_server (int argc, char **argv)
 
         if (route_mesh_enabled) {
             auto route = options.add_route_mesh (e2e::route_channel);
+            route.channel_name (e2e::route_channel).server ();
             route.listen (route_endpoint)
               .set_routing_id (zlink::routing_id_t::from (node_rid))
               .channel_name (e2e::route_channel);
@@ -250,9 +258,12 @@ inline int run_play_server (int argc, char **argv)
         }
         if (!publisher_endpoint.empty ()) {
             options.add_fanout_channel (e2e::publisher_channel)
+              .set_routing_id (zlink::routing_id_t::from (
+                node_rid + "-publisher"))
               .enable_publisher (publisher_endpoint);
         }
         auto spot = options.add_route_mesh (e2e::spot_mesh);
+        spot.channel_name (e2e::spot_mesh).server ();
         spot.listen (spot_router_endpoint)
           .set_routing_id (zlink::routing_id_t::from (node_rid))
           .channel_name (e2e::spot_mesh);

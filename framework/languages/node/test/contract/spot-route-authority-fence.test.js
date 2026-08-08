@@ -30,7 +30,12 @@ function capturingTransport(capture, submissionError = new Error('captured')) {
     undefined,
     () => ({
       meshNode: () => node,
-      meshCompletionTable: () => undefined
+      meshCompletionTable: () => ({
+        submit(operation) {
+          operation();
+          throw new Error('The capturing submission must throw before completion registration.');
+        }
+      })
     })
   );
 }

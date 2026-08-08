@@ -102,7 +102,6 @@ final class ZLinkJavaRawMeshNodeM6ATest {
             List.of(),
             ZLinkServiceNodeDescriptor.State.SERVING,
             "test-security",
-            1024,
             1,
             List.of(ZLinkServiceNodeDescriptor.REQUIRED_CAPABILITY),
             ZLinkServiceNodeDescriptor.ObjectRole.NONE,

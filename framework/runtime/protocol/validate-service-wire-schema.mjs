@@ -1264,6 +1264,7 @@ function validateSemanticConstraints(constraints, contexts, fail) {
         "boundSessionSend",
         "boundSessionBind",
       ],
+      authoritySourceCommands: ["boundSessionReplaced"],
       frozenRecordKinds: ["actorSend", "actorRequest"],
       messageFollowKey: [
         "actorId",
@@ -4911,6 +4912,36 @@ function validateServiceInvariants(schema, types, fail) {
     { name: "sessionRid", $ref: "rid" },
     { name: "binding", $ref: "bound-session-binding-transition" },
   ], "$.commands", "boundSessionBind must carry exactly one active generation or tombstone fence");
+  requireFields(types.get("retired-bound-session-route-fence")?.fields, [
+    { name: "sessionOwnerNodeRid", $ref: "rid" },
+    { name: "sessionOwnerNodeGeneration", $ref: "nonzero-u64" },
+    { name: "sessionOwnerId", $ref: "text8" },
+    { name: "sessionOwnerLeaseGeneration", $ref: "nonzero-u64" },
+    { name: "sessionRid", $ref: "rid" },
+    { name: "retiredBindingGeneration", $ref: "nonzero-u64" },
+  ], "$.types", "retired bound session route must carry one exact owner lifecycle and binding");
+  requireFields(commands.get("boundSessionReplaced")?.body, [
+    { name: "actorAuthority", $ref: "actor-route-fence" },
+    { name: "retiredSession", $ref: "retired-bound-session-route-fence" },
+  ], "$.commands", "boundSessionReplaced must target one exact retired session binding");
+  const boundSessionReplaced = commands.get("boundSessionReplaced");
+  if (boundSessionReplaced?.id !== 51
+      || JSON.stringify(boundSessionReplaced.semanticConstraints) !== JSON.stringify([
+        "replacement-binding-installed-before-send",
+        "one-way-does-not-delay-bind-terminal",
+        "transport-source-matches-actor-authority-target",
+        "receiver-applies-only-to-exact-retired-binding",
+        "same-current-physical-session-is-idempotent-and-does-not-self-notify",
+        "receiver-enters-closing-before-callback-and-rejects-new-inbound-application-dispatch",
+        "callback-terminal-then-fixed-100ms-delay-then-framework-close",
+        "delay-uses-nonblocking-timer-never-sleep-or-serial-lane-occupation",
+        "timer-revalidates-exact-retired-session-before-close",
+        "failed-send-admission-retries-asynchronously-by-exact-retired-identity",
+        "physical-close-cleans-other-bindings-without-removing-replacement",
+        "callback-notification-or-close-failure-does-not-rollback-replacement",
+      ])) {
+    fail("$.commands", "boundSessionReplaced must keep command 51 and the fixed replacement lifecycle");
+  }
   requireFields(commands.get("actorLeft")?.body, [
     { name: "actor", $ref: "actor-ref" },
     { name: "previousMembership", $ref: "spot-membership" },
@@ -7350,7 +7381,8 @@ function validateContractAmendmentFixtureData(fixture, location, fail) {
         actorCreate: 49,
         terminalReply: 20,
         messageFollow: 50,
-        reservedFirst: 51,
+        boundSessionReplaced: 51,
+        reservedFirst: 52,
       },
       replyEnvelopeFields: ["correlation", "terminalResult", "failureCode", "tail"],
       createRequestFields: [
@@ -7385,7 +7417,7 @@ function validateContractAmendmentFixtureData(fixture, location, fail) {
     },
   };
   if (JSON.stringify(fixture) !== JSON.stringify(expected)) {
-    fail(location, "must match the exact CA-D01..D56 amendment fixture");
+    fail(location, "must match the exact CA-D01..D57 amendment fixture");
   }
 }
 

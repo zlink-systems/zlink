@@ -95,6 +95,15 @@
 struct contract_actor_t;
 struct contract_http_client_name_t;
 
+static_assert (
+  static_cast<int> (zlink::framework::message_flow_log_mode_t::off) == 0);
+static_assert (
+  static_cast<int> (zlink::framework::message_flow_log_mode_t::errors) == 1);
+static_assert (
+  static_cast<int> (zlink::framework::message_flow_log_mode_t::normal) == 2);
+static_assert (
+  static_cast<int> (zlink::framework::message_flow_log_mode_t::detailed) == 3);
+
 template <typename TContext>
 concept has_destroy_actor = requires (TContext & context, contract_actor_t &actor)
 {
@@ -251,6 +260,11 @@ template <typename T> concept has_raw_monitoring = requires (T value)
 template <typename T> concept has_raw_metrics = requires (T value)
 {
     value.metrics ();
+};
+
+template <typename T> concept has_max_message_size_member = requires (T value)
+{
+    value.max_message_size;
 };
 
 static_assert (has_yield<zlink::framework::request_call_t<int>>);
@@ -589,6 +603,25 @@ static_assert (
                  zlink::framework::task_t<
                    zlink::framework::location_page_t<
                      zlink::framework::location_service_summary_t>>>);
+static_assert (
+  std::is_same_v<decltype (std::declval<zlink::framework::location_runtime_query_t &> ()
+                             .find_actor_location (
+                               std::declval<zlink::framework::actor_id_t> ())),
+                 zlink::framework::task_t<
+                   std::optional<zlink::framework::location_object_entry_t>>>);
+static_assert (
+  std::is_same_v<decltype (std::declval<zlink::framework::location_runtime_query_t &> ()
+                             .find_spot_location (
+                               std::declval<zlink::framework::spot_id_t> ())),
+                 zlink::framework::task_t<
+                   std::optional<zlink::framework::location_object_entry_t>>>);
+static_assert (
+  std::is_same_v<decltype (std::declval<zlink::framework::location_runtime_query_t &> ()
+                             .list_object_locations (
+                               std::declval<zlink::framework::location_object_filter_t> (),
+                               std::declval<zlink::framework::location_page_request_t> ())),
+                 zlink::framework::task_t<zlink::framework::location_page_t<
+                   zlink::framework::location_object_entry_t>>>);
 static_assert (has_location_readiness<zlink::framework::location_readiness_t>);
 static_assert (
   std::is_same_v<decltype (std::declval<zlink::framework::location_readiness_t &> ()
@@ -1085,6 +1118,7 @@ static_assert (
 
 static_assert (!has_raw_monitoring<zlink::framework::app_t>);
 static_assert (!has_raw_metrics<zlink::framework::app_t>);
+static_assert (!has_max_message_size_member<zlink::framework::mesh_node_socket_config_t>);
 static_assert (!has_native_code<zlink::framework::stream_error_t>);
 static_assert (!has_create_scope<zlink::framework::service_provider_t>);
 
@@ -1194,18 +1228,6 @@ static_assert (
         .set_process_memory_limit_bytes (
           std::declval<std::optional<std::uint64_t>> ())),
     zlink::framework::inbound_dispatch_options_t &>);
-
-static_assert (
-  std::is_same_v<
-    decltype (std::declval<zlink::framework::dispatch_options_t &> ().set_message_flow_observer (
-      std::declval<std::shared_ptr<zlink::framework::message_flow_observer_t>> ())),
-    zlink::framework::dispatch_options_t &>);
-
-static_assert (
-  std::is_same_v<
-    decltype (std::declval<zlink::framework::dispatch_options_t &> ().set_message_flow_observer (
-      std::declval<std::function<void (const zlink::framework::message_flow_event_t &)>> ())),
-    zlink::framework::dispatch_options_t &>);
 
 static_assert (std::is_same_v<decltype (std::declval<zlink::framework::http_context_t &> ()
                                           .response_header ("X-Test", "value")),
@@ -1962,6 +1984,7 @@ int main ()
     }
     options.use_filter<named_filter_t> ();
     options.handlers ().group ("sample").add<alias_registered_handler_t> ();
+    options.handlers ().group ("sample-reuse").add<alias_registered_handler_t> ();
     options.apply ();
     bool sealed = false;
     try {
@@ -1980,11 +2003,6 @@ int main ()
         || capability_snapshot.max_message_size->bytes () != 16 * 1024 * 1024) {
         return 6;
     }
-    if (zlink::framework::mesh_node_socket_config_t{}.max_message_size
-        != 16 * 1024 * 1024) {
-        return 7;
-    }
-
     return 0;
 }
 

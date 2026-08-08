@@ -92,7 +92,6 @@ public class SubmitAdmissionRole {
                     .listen(config.meshEndpoint())
                     .setRoutingId(RoutingId.from(config.rid()))
                     .setDefaultRequestTimeout(Duration.ofSeconds(1));
-                mesh.configureRouterSocket().setMaxMessageSize(4096);
                 mesh.addRouteSendHandler(RouteHandler.class, Probe.class);
                 mesh.channelName(CHANNEL)
                     .server()

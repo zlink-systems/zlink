@@ -2,7 +2,6 @@ import path from 'node:path';
 import { Injectable, Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import {
-  ZLinkMessageFlowLogMode,
   ZLinkPeerState,
   type ActorRef,
   type ZLinkMessage,
@@ -21,6 +20,7 @@ import {
   zlinkFramework
 } from '@zlink-systems/nestjs';
 import {
+  BoundPushNotify,
   SpotActorTransferNames,
   type BindActorSessionReq,
   type BindActorSessionRes
@@ -42,6 +42,17 @@ process.once('SIGTERM', () => { stopping = true; });
 
 class GatewaySession implements ZLinkSession {
   constructor(readonly context: ZLinkSessionContext) {}
+
+  async onActorBindingReplaced(context: ZLinkSessionContext, actorId: string): Promise<void> {
+    await context.client.send(new BoundPushNotify(
+      'NODE-SESS-001',
+      actorId,
+      '',
+      String(context.routingId ?? ''),
+      0,
+      'actor-binding-replaced'
+    )).submit();
+  }
 
   async onDispatch(dispatch: ZLinkSessionDispatchContext, payload: ZLinkMessage, signal?: AbortSignal): Promise<void> {
     if (dispatch.packetName === SpotActorTransferNames.packetBindActor) {
@@ -118,9 +129,7 @@ Module({
           .ownerLeaseFencingMarginMs(500)
           .ownerLeaseRenewTimeoutMs(500);
         builder.configureDispatch()
-          .messageFlow(ZLinkMessageFlowLogMode.KeyTransitions)
-          .traceLogFile(path.join(options.logDir, `${options.rid}-flow.log`))
-          .traceLabel(options.rid);
+          .messageFlow('normal');
         const mesh = builder.addRouteMesh(SpotActorTransferNames.mesh)
           .listen(options.routerEndpoint).routingId(options.rid);
         mesh.objects().client();

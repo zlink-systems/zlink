@@ -1,5 +1,6 @@
 package systems.zlink.framework.runtime.actors;
 
+import java.time.Duration;
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 
 import java.util.EnumSet;
@@ -211,15 +212,15 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
 
     private void traceRelay(ZLinkStreamHeader header) {
         if (flow == null
-            || !flow.enabled(systems.zlink.framework.configuration.ZLinkMessageFlowOutcome.SENT)) {
+            || !flow.enabled(systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome.SENT)) {
             return;
         }
-        flow.trace(new systems.zlink.framework.configuration.ZLinkMessageFlowEvent(
-            systems.zlink.framework.configuration.ZLinkMessageFlowOutcome.SENT,
-            systems.zlink.framework.configuration.ZLinkDispatchErrorSurface.SPOT_ACTOR,
+        flow.trace(new systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent(
+            systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome.SENT,
+            systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSurface.SPOT_ACTOR,
             header.requestSequence().isPresent()
-                ? systems.zlink.framework.configuration.ZLinkDispatchMessageKind.ACTOR_REQUEST
-                : systems.zlink.framework.configuration.ZLinkDispatchMessageKind.ACTOR_SEND,
+                ? systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind.ACTOR_REQUEST
+                : systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind.ACTOR_SEND,
             header.packetName(),
             null,
             null,
@@ -314,14 +315,30 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
     }
 
     @Override
-    public synchronized CompletionStage<Void> notifyDisconnected() {
-        if (disconnect != null) {
-            return disconnect;
+    public CompletionStage<Void> notifyDisconnected() {
+        return notifyDisconnected(ZLinkSessionActorsRuntime.RELAY_SUBMIT_TIMEOUT);
+    }
+
+    CompletionStage<Void> notifyDisconnected(Duration timeout) {
+        java.util.Objects.requireNonNull(timeout, "timeout");
+        CompletableFuture<Void> result;
+        boolean bindingCurrent;
+        synchronized (this) {
+            if (disconnect != null) {
+                return disconnect;
+            }
+            result = new CompletableFuture<>();
+            disconnect = result;
         }
-        disconnect = new CompletableFuture<>();
-        if (!currentBinding.getAsBoolean()) {
-            disconnect.complete(null);
-            return disconnect;
+        try {
+            bindingCurrent = currentBinding.getAsBoolean();
+        } catch (RuntimeException failure) {
+            result.completeExceptionally(failure);
+            return result;
+        }
+        if (!bindingCurrent) {
+            result.complete(null);
+            return result;
         }
         CompletionStage<Void> notification = managedActor.isPresent() && !nativeRebound
             ? (actors.clearSessionBinding(managedActor.get(), bindingToken)
@@ -330,11 +347,11 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
             : notifyRemoteDisconnected();
         notification.toCompletableFuture()
             .orTimeout(
-                ZLinkSessionActorsRuntime.RELAY_SUBMIT_TIMEOUT.toMillis(),
+                timeout.toMillis(),
                 TimeUnit.MILLISECONDS)
             .handle((ignored, notifyError) -> notifyError)
             .thenCompose(notifyError -> stream.unbindActor(sessionRid, ref.actorId())
-                .submit(ZLinkSessionActorsRuntime.RELAY_SUBMIT_TIMEOUT)
+                .submit(timeout)
                 .handle((ignored, unbindError) -> {
                     if (notifyError != null) {
                         throw new CompletionException(notifyError);
@@ -345,14 +362,23 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
                     return null;
                 }))
             .whenComplete((ignored, error) -> {
-                unbindListener.run();
-                if (error == null) {
-                    disconnect.complete(null);
+                Throwable terminal = error;
+                try {
+                    unbindListener.run();
+                } catch (RuntimeException listenerFailure) {
+                    if (terminal == null) {
+                        terminal = listenerFailure;
+                    } else {
+                        terminal.addSuppressed(listenerFailure);
+                    }
+                }
+                if (terminal == null) {
+                    result.complete(null);
                 } else {
-                    disconnect.completeExceptionally(error);
+                    result.completeExceptionally(terminal);
                 }
             });
-        return disconnect;
+        return result;
     }
 
     private CompletionStage<Void> notifyRemoteDisconnected() {
@@ -366,7 +392,14 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
             Optional.empty(),
             ZLinkActorSpotRoutePackets.SESSION_DISCONNECTED_PACKET_NAME,
             Map.of());
-        return relayUsingStoredBinding(header, new byte[0]);
+        try (Message payloadPart = Message.from(new byte[0])) {
+            return stream.requestExactActor(
+                    ref,
+                    header,
+                    List.of(payloadPart),
+                    ZLinkSessionActorsRuntime.RELAY_SUBMIT_TIMEOUT)
+                .thenAccept(reply -> reply.forEach(Message::close));
+        }
     }
 
     CompletionStage<Void> notifyRemoteBoundSession() {

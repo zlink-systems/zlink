@@ -161,10 +161,42 @@ file(WRITE "${consumer_source_dir}/main.cpp" [=[
 
 #include <nlohmann/json.hpp>
 
+#include <optional>
+#include <type_traits>
+#include <utility>
+
 struct login_request_t
 {
   static constexpr const char *packet_name = "LoginRequest";
 };
+
+template <typename T>
+concept exposes_http_snapshot = requires (T &builder) { builder.snapshot (); };
+
+template <typename T>
+concept exposes_http_validation = requires (T &builder) { builder.validate (); };
+
+static_assert (!exposes_http_snapshot<zlink::framework::http_options_builder_t>);
+static_assert (!exposes_http_validation<zlink::framework::http_options_builder_t>);
+static_assert (
+  std::is_same_v<decltype (std::declval<zlink::framework::location_runtime_query_t &> ()
+                             .find_actor_location (
+                               std::declval<zlink::framework::actor_id_t> ())),
+                 zlink::framework::task_t<std::optional<
+                   zlink::framework::location_object_entry_t>>>);
+static_assert (
+  std::is_same_v<decltype (std::declval<zlink::framework::location_runtime_query_t &> ()
+                             .find_spot_location (
+                               std::declval<zlink::framework::spot_id_t> ())),
+                 zlink::framework::task_t<std::optional<
+                   zlink::framework::location_object_entry_t>>>);
+static_assert (
+  std::is_same_v<decltype (std::declval<zlink::framework::location_runtime_query_t &> ()
+                             .list_object_locations (
+                               std::declval<zlink::framework::location_object_filter_t> (),
+                               std::declval<zlink::framework::location_page_request_t> ())),
+                 zlink::framework::task_t<zlink::framework::location_page_t<
+                   zlink::framework::location_object_entry_t>>>);
 
 void
 to_json (nlohmann::json &json, const login_request_t &)

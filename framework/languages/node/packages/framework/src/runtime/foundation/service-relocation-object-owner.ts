@@ -53,8 +53,18 @@ export class ServiceCapturedObjectRelocation {
     if (this.terminal === 'committed') {
       throw new Error('Committed relocation source capture cannot be aborted.');
     }
-    for (const unit of [...this.units].reverse()) await unit.abortSeal();
+    const failures: unknown[] = [];
+    for (const unit of [...this.units].reverse()) {
+      try {
+        await unit.abortSeal();
+      } catch (error) {
+        failures.push(error);
+      }
+    }
     this.terminal = 'aborted';
+    if (failures.length !== 0) {
+      throw new AggregateError(failures, 'Relocation source rollback was incomplete.');
+    }
   }
 }
 
@@ -371,7 +381,11 @@ export class ServiceCapturedRelocationSourceCompletion<
 > implements ServiceRelocationSourceCompletion<TStaging> {
   constructor(
     private readonly captured: ServiceCapturedObjectRelocation,
-    private readonly durable: ServiceRelocationSourceCompletion<TStaging>
+    private readonly durable: ServiceRelocationSourceCompletion<TStaging>,
+    private readonly afterComplete?: (
+      authority: ZLinkAuthoritySnapshot,
+      signal?: AbortSignal
+    ) => Promise<void> | void
   ) {}
 
   async complete(
@@ -380,7 +394,9 @@ export class ServiceCapturedRelocationSourceCompletion<
     signal?: AbortSignal
   ): Promise<ZLinkAuthoritySnapshot> {
     await this.captured.commitSource();
-    return await this.durable.complete(staging, authority, signal);
+    const completed = await this.durable.complete(staging, authority, signal);
+    await this.afterComplete?.(completed, signal);
+    return completed;
   }
 }
 

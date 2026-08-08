@@ -38,10 +38,10 @@ public final class AtdD3RouteBridgeAwaitScenario {
         List<String> markers = waitForMarkers(connector, requestId, "play-b", List.of(
             "await-started",
             "await-released",
-            "probe-started",
-            "probe-completed",
             "await-resumed",
-            "await-completed"));
+            "await-completed",
+            "probe-started",
+            "probe-completed"));
         ScenarioAssert.that(
             markers.stream()
                 .filter(marker -> marker.startsWith("await-started|"))

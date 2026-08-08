@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using Zlink.Framework.Runtime.Diagnostics;
+using Zlink.Framework.Runtime.Identifiers;
 using Zlink.Framework.Runtime.Locations;
 using Zlink.Framework.Runtime.Spots;
 
@@ -22,10 +23,9 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IDi
     private readonly ZLinkLocationStoreHealth? _storeHealth;
     private readonly IZLinkLocationDescriptorQuery? _locationQuery;
     private readonly object _sequenceGate = new();
-    private readonly Dictionary<string, ulong> _sequences = new(StringComparer.Ordinal);
+    private readonly Dictionary<ZLinkMeshName, ulong> _sequences = [];
     private readonly object _monitorGate = new();
-    private readonly Dictionary<string, MonitorHub> _monitorHubs =
-        new(StringComparer.Ordinal);
+    private readonly Dictionary<ZLinkMeshName, MonitorHub> _monitorHubs = [];
     private IDisposable? _metricRegistration;
     private bool _stopped;
 
@@ -280,14 +280,15 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IDi
         string meshName,
         ZLinkSpotNodeRuntime nodeRuntime)
     {
+        var meshKey = ZLinkMeshName.FromBoundary(meshName, nameof(meshName));
         lock (_monitorGate)
         {
-            if (_monitorHubs.TryGetValue(meshName, out var hub))
+            if (_monitorHubs.TryGetValue(meshKey, out var hub))
                 return hub;
             if (_stopped)
                 throw new ObjectDisposedException(nameof(ZLinkRouteMeshRuntimeService));
-            hub = new MonitorHub(this, meshName, nodeRuntime);
-            _monitorHubs.Add(meshName, hub);
+            hub = new MonitorHub(this, meshKey, nodeRuntime);
+            _monitorHubs.Add(meshKey, hub);
             hub.Start();
             return hub;
         }
@@ -441,7 +442,10 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IDi
         return [mapped];
     }
 
-    private ulong NextSequence(string meshName)
+    private ulong NextSequence(string meshName) =>
+        NextSequence(ZLinkMeshName.FromBoundary(meshName, nameof(meshName)));
+
+    private ulong NextSequence(ZLinkMeshName meshName)
     {
         lock (_sequenceGate)
         {
@@ -696,7 +700,7 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IDi
     private sealed class MonitorHub
     {
         private readonly ZLinkRouteMeshRuntimeService _owner;
-        private readonly string _meshName;
+        private readonly ZLinkMeshName _meshName;
         private readonly ZLinkSpotNodeRuntime _nodeRuntime;
         private readonly IMeshNodeMonitor _monitor;
         private readonly CancellationTokenSource _stop = new();
@@ -710,7 +714,7 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IDi
 
         public MonitorHub(
             ZLinkRouteMeshRuntimeService owner,
-            string meshName,
+            ZLinkMeshName meshName,
             ZLinkSpotNodeRuntime nodeRuntime)
         {
             _owner = owner;
@@ -743,7 +747,7 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IDi
                 capacity,
                 static status => status.Sequence,
                 "route_mesh");
-            var status = _owner.GetStatus(_meshName);
+            var status = _owner.GetStatus(_meshName.Value);
             lock (_gate)
             {
                 _lastStatus = status;
@@ -801,7 +805,7 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IDi
         public void PublishHostStateChanged(ZLinkFrameworkRuntimeState state)
         {
             _ = state;
-            var projected = _owner.GetStatus(_meshName);
+            var projected = _owner.GetStatus(_meshName.Value);
             ZLinkObservationQueue<ZLinkRouteMeshStatus>[] observers;
             lock (_gate)
             {
@@ -844,7 +848,7 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IDi
 
                     var sourceRid = _nodeRuntime.Node.MeshStatus().RoutingId;
                     var mapped = _owner.MapMonitorEvents(
-                        _meshName, sourceRid, nativeEvent);
+                        _meshName.Value, sourceRid, nativeEvent);
                     foreach (var runtimeEvent in mapped)
                         Publish(runtimeEvent);
                 }
@@ -872,7 +876,7 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IDi
             _nextDescriptorPoll = DateTimeOffset.UtcNow.AddMilliseconds(100);
 
             var current = await _owner._locationQuery.ListMeshNodeDescriptorsAsync(
-                    _meshName,
+                    _meshName.Value,
                     default,
                     cancellationToken)
                 .ConfigureAwait(false);
@@ -947,7 +951,7 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IDi
                         continue;
                     Publish(_owner.Event(
                         "zlink.runtime.mesh_node.channel_changed",
-                        _meshName,
+                        _meshName.Value,
                         sourceRid,
                         peerRid: descriptor.Rid,
                         descriptorRevision: descriptor.DescriptorRevision,
@@ -972,7 +976,7 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IDi
                 if (removed != sourceRid)
                     Publish(_owner.Event(
                         "zlink.runtime.mesh_node.peer_changed",
-                        _meshName,
+                        _meshName.Value,
                         sourceRid,
                         peerRid: removed,
                         reason: "removed"));
@@ -992,7 +996,7 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IDi
                 descriptor.ChannelWeights.Count != 0);
             Publish(_owner.Event(
                 "zlink.runtime.mesh_node.peer_changed",
-                _meshName,
+                _meshName.Value,
                 sourceRid,
                 peerRid: descriptor.Rid,
                 descriptorRevision: descriptor.DescriptorRevision,
@@ -1006,7 +1010,7 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IDi
             ZLinkMeshNodeDescriptor descriptor) =>
             Publish(_owner.Event(
                 "zlink.runtime.object.placement_changed",
-                _meshName,
+                _meshName.Value,
                 sourceRid,
                 peerRid: descriptor.Rid,
                 descriptorRevision: descriptor.DescriptorRevision,
@@ -1037,7 +1041,7 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IDi
             var sourceRid = _nodeRuntime.Node.MeshStatus().RoutingId;
             Publish(_owner.Event(
                 "zlink.runtime.location.store_changed",
-                _meshName,
+                _meshName.Value,
                 sourceRid,
                 reason: state));
         }
@@ -1045,7 +1049,7 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IDi
         private void Publish(ZLinkMeshRuntimeEvent runtimeEvent)
         {
             _ = runtimeEvent;
-            var status = _owner.GetStatus(_meshName);
+            var status = _owner.GetStatus(_meshName.Value);
             ZLinkObservationQueue<ZLinkRouteMeshStatus>[] observers;
             lock (_gate)
             {

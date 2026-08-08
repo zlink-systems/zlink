@@ -29,13 +29,7 @@ final class ZLinkAdmissionRuntime {
     private ZLinkAdmissionRuntime() {
     }
 
-    static java.util.function.BiFunction<
-        systems.zlink.framework.runtime.internal.backend.ZLinkBackendObject,
-        systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdmissionKey,
-        java.util.function.BiFunction<
-            java.util.function.Supplier<Boolean>,
-            Runnable,
-            java.util.concurrent.CompletionStage<Void>>> factory(
+    static systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls.Admission factory(
         systems.zlink.framework.runtime.internal.backend
             .ZLinkBackendAdapterProvider provider) {
         var source = provider.admissionSource();
@@ -47,13 +41,7 @@ final class ZLinkAdmissionRuntime {
             source, timeout, capacity, readyRegistrar, shutdownRegistrar);
     }
 
-    static java.util.function.BiFunction<
-        systems.zlink.framework.runtime.internal.backend.ZLinkBackendObject,
-        systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdmissionKey,
-        java.util.function.BiFunction<
-            java.util.function.Supplier<Boolean>,
-            Runnable,
-            java.util.concurrent.CompletionStage<Void>>> factory(
+    static systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls.Admission factory(
         java.util.function.Function<ZLinkBackendObject, ZLinkBackendObject> source,
         java.util.function.Function<ZLinkBackendObject, Duration> timeout,
         java.util.function.ToIntFunction<ZLinkBackendObject> capacity,
@@ -62,7 +50,7 @@ final class ZLinkAdmissionRuntime {
             java.util.function.Consumer<ZLinkBackendAdmissionKey>> readyRegistrar,
         java.util.function.BiConsumer<ZLinkBackendObject, Runnable>
             shutdownRegistrar) {
-        return (backend, key) -> (submission, cleanup) ->
+        return (backend, key, submission, cleanup, timeoutOverride) ->
             submit(
                 backend,
                 key,
@@ -72,7 +60,8 @@ final class ZLinkAdmissionRuntime {
                 timeout,
                 capacity,
                 readyRegistrar,
-                shutdownRegistrar);
+                shutdownRegistrar,
+                timeoutOverride);
     }
 
     static CompletionStage<Void> submit(
@@ -89,7 +78,40 @@ final class ZLinkAdmissionRuntime {
             java.util.function.Consumer<ZLinkBackendAdmissionKey>> readyRegistrar,
         java.util.function.BiConsumer<ZLinkBackendObject, Runnable>
             shutdownRegistrar) {
+        return submit(
+            backend,
+            key,
+            attempt,
+            cleanup,
+            sourceResolver,
+            timeoutResolver,
+            capacityResolver,
+            readyRegistrar,
+            shutdownRegistrar,
+            null);
+    }
+
+    static CompletionStage<Void> submit(
+        ZLinkBackendObject backend,
+        ZLinkBackendAdmissionKey key,
+        Supplier<Boolean> attempt,
+        Runnable cleanup,
+        java.util.function.Function<ZLinkBackendObject, ZLinkBackendObject>
+            sourceResolver,
+        java.util.function.Function<ZLinkBackendObject, Duration> timeoutResolver,
+        java.util.function.ToIntFunction<ZLinkBackendObject> capacityResolver,
+        java.util.function.BiConsumer<
+            ZLinkBackendObject,
+            java.util.function.Consumer<ZLinkBackendAdmissionKey>> readyRegistrar,
+        java.util.function.BiConsumer<ZLinkBackendObject, Runnable>
+            shutdownRegistrar,
+        Duration timeoutOverride) {
         ZLinkBackendObject admissionSource = sourceResolver.apply(backend);
+        Duration configuredTimeout = timeoutResolver.apply(admissionSource);
+        Duration effectiveTimeout = timeoutOverride == null
+            || configuredTimeout.compareTo(timeoutOverride) <= 0
+                ? configuredTimeout
+                : timeoutOverride;
         return source(
             admissionSource,
             capacityResolver.applyAsInt(admissionSource),
@@ -98,7 +120,7 @@ final class ZLinkAdmissionRuntime {
             key,
             attempt,
             cleanup,
-            normalizedTimeoutMillis(timeoutResolver.apply(admissionSource)));
+            normalizedTimeoutMillis(effectiveTimeout));
     }
 
     static int normalizedTimeoutMillis(Duration timeout) {

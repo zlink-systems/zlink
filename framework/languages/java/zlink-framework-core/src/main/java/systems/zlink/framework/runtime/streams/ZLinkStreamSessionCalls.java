@@ -6,6 +6,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import systems.zlink.contracts.core.RoutingId;
@@ -91,6 +92,7 @@ record ZLinkStreamSessionSendCall(
     ZLinkStreamCodec codec,
     ZLinkStreamCompressionCodec compressionCodec,
     ZLinkOneWayCalls oneWayCalls,
+    Duration timeout,
     java.util.concurrent.atomic.AtomicBoolean submitGate)
     implements ZLinkSessionSendCall {
     ZLinkStreamSessionSendCall(
@@ -104,7 +106,7 @@ record ZLinkStreamSessionSendCall(
         ZLinkStreamCompressionCodec compressionCodec,
         ZLinkOneWayCalls oneWayCalls) {
         this(stream, routingId, payload, packetName, metadata, compressed, codec,
-            compressionCodec, oneWayCalls,
+            compressionCodec, oneWayCalls, null,
             new java.util.concurrent.atomic.AtomicBoolean());
     }
     @Override
@@ -120,7 +122,9 @@ record ZLinkStreamSessionSendCall(
             compressed,
             codec,
             compressionCodec,
-            oneWayCalls);
+            oneWayCalls,
+            timeout,
+            submitGate);
     }
 
     public ZLinkSessionSendCall packetName(String messageName) {
@@ -136,7 +140,9 @@ record ZLinkStreamSessionSendCall(
             compressed,
             codec,
             compressionCodec,
-            oneWayCalls);
+            oneWayCalls,
+            timeout,
+            submitGate);
     }
 
     @Override
@@ -150,7 +156,28 @@ record ZLinkStreamSessionSendCall(
             true,
             codec,
             compressionCodec,
-            oneWayCalls);
+            oneWayCalls,
+            timeout,
+            submitGate);
+    }
+
+    @Override
+    public ZLinkSessionSendCall timeout(Duration value) {
+        if (value == null || value.isZero() || value.isNegative()) {
+            throw new IllegalArgumentException("timeout must be positive");
+        }
+        return new ZLinkStreamSessionSendCall(
+            stream,
+            routingId,
+            payload,
+            packetName,
+            metadata,
+            compressed,
+            codec,
+            compressionCodec,
+            oneWayCalls,
+            value,
+            submitGate);
     }
 
     @Override
@@ -180,7 +207,8 @@ record ZLinkStreamSessionSendCall(
             () -> {
                 parts.forEach(Message::close);
                 payload.close();
-            });
+            },
+            timeout);
     }
 }
 
@@ -214,7 +242,8 @@ record ZLinkStreamSessionReplyCall(
             context,
             packetName,
             true,
-            compressionCodec);
+            compressionCodec,
+            submitGate);
     }
 
     @Override

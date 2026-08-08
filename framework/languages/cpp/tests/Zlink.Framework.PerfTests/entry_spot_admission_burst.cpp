@@ -18,6 +18,7 @@
 #include <numeric>
 #include <string>
 #include <thread>
+#include <typeindex>
 #include <utility>
 #include <vector>
 
@@ -164,9 +165,12 @@ benchmark_result_t run_burst (fixture_t &fixture, std::size_t packets_per_actor_
             auto &actor = fixture.actors[actor_index];
             for (std::size_t packet = 0; packet < packets_per_actor_for_run; ++packet) {
                 const auto packet_started = std::chrono::steady_clock::now ();
+                zlink::framework::spot_inbound_message_t metadata;
+                metadata.content_type = fixture.serializers.content_type (
+                  std::type_index (typeid (admission_request_t)));
                 auto result = fixture.context.handlers ().invoke_actor_packet (
                   "admission.move", fixture.spot, actor, fixture.services, fixture.serializers,
-                  zlink::message_t::from (std::to_string (packet)));
+                  zlink::message_t::from (std::to_string (packet)), std::move (metadata));
                 if (!result) {
                     std::cerr << "dispatch failed: " << result.error ()->what () << '\n';
                     std::abort ();

@@ -58,6 +58,14 @@ public final class AwaitSession implements ZLinkSession {
                 : requireActor(dispatch).relay(dispatch, payload).thenApply(ignored -> null));
     }
 
+    @Override
+    public CompletionStage<Void> onActorBindingReplaced(String actorId) {
+        evidence.record("actor-binding-replaced", actorId, context.sessionId());
+        return context.client()
+            .send(new Contracts.ActorBindingReplacedNotice(actorId))
+            .submit();
+    }
+
     private ZLinkSessionActor requireActor(ZLinkSessionDispatchContext dispatch) {
         String actorId = dispatch.metadata().get(Contracts.ACTOR_ID_METADATA);
         if (actorId != null && !actorId.isBlank()) {

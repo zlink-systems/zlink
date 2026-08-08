@@ -16,9 +16,12 @@ test('node binding exposes the raw public API required by the framework runtime'
   }
   for (const name of [
     'createMeshNode',
+    'createSpotNode',
     'createDiscovery',
     'createRegistry',
-    'createRegistryQueryClient'
+    'createRegistryQueryClient',
+    'SpotDispatchEvent',
+    'SpotNodeMode'
   ]) {
     assert.equal(zlink[name], undefined, `${name} must not be public`);
   }

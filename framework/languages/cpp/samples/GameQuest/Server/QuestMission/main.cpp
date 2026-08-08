@@ -388,11 +388,10 @@ int main (int argc, char **argv)
     const auto &topology = configuration.topology;
     auto quest_store = std::make_unique<quest_event_store_t> ();
     auto *quest_store_ptr = quest_store.get ();
+    app.logging ().use_file (configuration.flow_log_path ());
     app.add_zlink_framework ([&] (zlink_framework_options_t &options) {
         options.configure_dispatch ()
-          .message_flow (message_flow_log_mode_t::key_transitions)
-          .trace_log_file (configuration.flow_log_path ())
-          .trace_label (topology.mission_name);
+          .message_flow (message_flow_log_mode_t::normal);
         options.services ().add_singleton<quest_event_store_t> (std::move (quest_store));
         options.services ().add_singleton<sample_topology_t> (
           std::make_unique<sample_topology_t> (topology));

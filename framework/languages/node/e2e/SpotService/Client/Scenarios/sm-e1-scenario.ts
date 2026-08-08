@@ -1,4 +1,4 @@
-// SM-E1: Handler 없는 Spot request를 관찰한다 시나리오를 검증한다.
+// SM-E1: Handler 없는 Spot request를 기록한다 시나리오를 검증한다.
 import type {
   CreateSpotRes,
   CreateSpotReq,

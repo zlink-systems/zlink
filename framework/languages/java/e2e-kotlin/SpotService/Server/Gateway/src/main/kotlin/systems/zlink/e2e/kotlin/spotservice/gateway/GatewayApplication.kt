@@ -59,9 +59,9 @@ class GatewayApplication {
         ZLinkFrameworkConfigurer { framework ->
             Files.createDirectories(Path.of(options.logDir))
             framework.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile("${options.logDir}/${options.rid}-flow.log")
-                .traceLabel(options.rid)
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL)
+
+
             val mesh = framework.addRouteMesh(Contracts.SPOT_MESH)
                 .listen(requireOption(options.spotPubEndpoint, "--spot-pub-endpoint"))
                 .setRoutingId(RoutingId.from(options.rid))

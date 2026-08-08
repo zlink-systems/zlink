@@ -22,7 +22,7 @@ title: "12. Service wire protocol"
 |---|---|
 | [1. Schema and generation boundary](#1-schema-and-generation-boundary) | The schema as single source of generation, the validator, the Location Store authority key format |
 | [2. Record framing and decode](#2-record-framing-and-decode) | Multipart frame layout, decode validation, payload size limits |
-| [3. Command space](#3-command-space) | The list of 41 commands and their roles, the Message Follow notification |
+| [3. Command space](#3-command-space) | The list of 42 commands and their roles, Message Follow and session-replacement notifications |
 | [4. Admission and connection fence](#4-admission-and-connection-fence) | The hello/admit/reject procedure, DescriptorRevision ordering, ClientServer direction |
 | [5. Service liveness](#5-service-liveness) | The livenessProbe/Ack cycle, the Classic fanout beacon, subscriber-ready determination |
 | [6. Typed application message JSON](#6-typed-application-message-json) | The `framework-json-v1` profile rules |
@@ -151,7 +151,7 @@ payload byte total.
 
 ## 3. Command space
 
-Wire v1 uses the following 41 commands. `7..15` and `51..255` are reserved
+Wire v1 uses the following 42 commands. `7..15` and `52..255` are reserved
 and never reused for a different meaning.
 
 | ID | Command | Role |
@@ -197,6 +197,7 @@ and never reused for a different meaning.
 | 48 | `userSpotClose` | Closes only the specified generation's remote User Spot |
 | 49 | `actorCreate` | Creates a remote Actor in an already-reserved slot |
 | 50 | `messageFollow` | The location-cache invalidation notice sent to the source runtime after a successful relay |
+| 51 | `boundSessionReplaced` | Notifies the previous exact session after the new binding becomes current |
 
 Each command's body, whether it allows metadata/payload, and its direction
 follow the schema's closed definition. An unknown command, an
@@ -235,6 +236,18 @@ Sending only once within the same generation, merging an in-flight
 notification, and choosing where to store a suppression marker are
 implementation choices. They cannot change the wire body, the invalidation
 fence above, cache expiry, or the terminal-result invariant.
+
+### 3.2 Bound Session Replacement Notification
+
+`boundSessionReplaced` is a one-way infrastructure record sent to the previous session owner after
+the new Actor binding becomes current. It carries an Actor-authority source fence and the previous
+session owner's exact lifecycle and binding identity, and uses no flags, application payload, or
+acknowledgment. The receiver verifies that the sending node matches the Actor-authority target and
+uses the previous session-owner identity as the local target fence. Delivery and the previous owner's
+callback or connection close neither delay nor roll back the new bind terminal. The previous owner
+applies only a record matching the exact retired identity. The framework closes the connection
+`100 ms` after the callback reaches a successful or failed terminal; an empty outbound queue does
+not shorten this delay.
 
 ## 4. Admission and connection fence
 
@@ -455,7 +468,8 @@ Both operations reuse the existing command 20 reply envelope as-is.
 
 ### Preconditions before drain
 
-- Accepted send/request with `connectionBound` source lifetime, and every bound-session request, drain to a terminal state before `Captured`. This work is not recorded in the frozen journal.
+- Accepted send/request with `connectionBound` source lifetime drain to a terminal state before `Captured`. This work is not recorded in the frozen journal.
+- A bound-session request follows the same rule as any other Actor request. A request accepted before the seal is stored in the frozen journal preserving its source fence, operation identity, and reply route; a request arriving after the seal is relayed from the ingress hold to the target.
 - The moment by which a call must finish is called the [Deadline](../spec/01-glossary.en.md#deadline). If it doesn't finish in time, relocation is aborted pre-Captured, ends as `Blocked`/`DeadlineExceeded`, and source admission is restored.
 
 ### Durable frozen record
@@ -493,9 +507,11 @@ into a relocation envelope is a protocol error.
 `RelocationId` is a non-zero 128-bit value the runtime generates with a
 CSPRNG. If it collides with an active relocation or a retained relocation
 root's ID, it is regenerated, and is never exposed to the application. When
-the target changes within the same relocation, the stable `RelocationId`
-and relocation root are kept, and only `TargetAttemptGeneration` is
-incremented.
+the same target process prepares again, the stable `RelocationId` and
+relocation root are kept, and only the target attempt number and the
+preparation information are replaced. `TargetAttemptGeneration` distinguishes
+duplicate or earlier Restore requests sent to the same target; it is not used
+to select a different target.
 
 ### Authority phase
 
@@ -520,7 +536,7 @@ stateDiagram-v2
 - `Prepared` preserves the source owner together with the exact target attempt/reservation.
 - From `Committed` through `Completed`, the main owner is the current target.
 - Each transition is an expected-`StoreVersion` CAS.
-- Target replacement changes only the target attempt, target owner lease, and reservation — it never changes the stable identity or the relocation root.
+- A retry on the same target changes only the target attempt number and the preparation information — it never changes the stable identity or the relocation root. This version has no transition that swaps in a different target process.
 
 ### Aggregate relocation commit
 
@@ -539,11 +555,22 @@ stateDiagram-v2
 
 ### The moment of Ready
 
-`Activated` is not Ready. Target application admission stays closed until
-durable source cleanup, the `Completed` CAS, the bound-session route ACK,
-and steady authority normalization have all finished. An abort likewise
-restores admission only after the source route ACK and steady source
-normalization finish.
+`Committed` and `Activating` are not Ready. Target application admission
+opens once the owner
+and membership change, the lifecycle callbacks together with the restore of
+unfinished work and timers, placing the stored existing work and the
+temporary queue work into the execution queue in order, and removing the
+temporary queue registration to switch atomically to the existing dispatch
+path have all finished. Removing the source ingress hold original, changing
+the location record to `Completed`, and the Session Actor location update
+acknowledgement do not block this admission — the running source and target
+runtimes each continue them as follow-up work. An abort before the owner
+change sent no Session route update, so it waits for no cancellation
+message and no acknowledgement. Source admission is restored after
+recording `Aborted`, discarding the temporary queue work and returning the
+stored work to the source queue in its original order, cleaning up the
+reserved target space and any payload no location record points to, and
+removing the relocation progress information.
 
 ### Session route
 
@@ -594,7 +621,7 @@ retention period.
 - Writing and verifying the top-level record happens before the authority CAS, and the authority releasing that reference happens before the record is deleted.
 - If the digest of the participant list the store knows about differs from the list relocation recorded, it ends as `RelocationDataLost`.
 - Actor relocation commit changes the owner and the target Entry Spot membership atomically.
-- Ready is never published while in `Activated`.
+- Ready is never published before the owner commit, the restore/replay and timer restoration, the queue merge, and the dispatch switch have finished.
 - The `framework-json-v1` golden fixture for typed application messages produces the same value and failure across all four runtimes.
 - Relocation adapter bytes are never interpreted as JSON or as a typed state contract.
 - Pending relay is never completed by a physical disconnect alone, without a `replyRelayAck`.

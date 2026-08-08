@@ -2,9 +2,9 @@ package systems.zlink.framework.runtime.diagnostics;
 
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicLong;
-import systems.zlink.framework.configuration.ZLinkDispatchFailure;
-import systems.zlink.framework.configuration.ZLinkMessageFlowEvent;
-import systems.zlink.framework.configuration.ZLinkMessageFlowOutcome;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchFailure;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome;
 import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDispatcher;
 import systems.zlink.framework.runtime.configuration.ZLinkDispatchOptionsRegistration;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
@@ -37,6 +37,9 @@ public final class ZLinkDispatchErrorReporter {
 
     public void report(ZLinkDispatchFailure error) {
         reportedCount.incrementAndGet();
+        if (!flow.enabled(ZLinkMessageFlowOutcome.ERROR)) {
+            return;
+        }
         flow.trace(new ZLinkMessageFlowEvent(
             ZLinkMessageFlowOutcome.ERROR,
             error.surface(),
@@ -59,7 +62,4 @@ public final class ZLinkDispatchErrorReporter {
         return reportedCount.get();
     }
 
-    public long observerFailureCount() {
-        return flow.observerFailureCount();
-    }
 }

@@ -6,7 +6,7 @@ entry _rels/.rels
 entry lib/net8.0/Zlink.Framework.AspNetCore.dll
 entry lib/net8.0/Zlink.Framework.AspNetCore.xml
 entry package/services/metadata/core-properties/{CORE_PROPERTIES}.psmdcp
-content-sha256 lib/net8.0/Zlink.Framework.AspNetCore.xml=35b7e89a453d602632a26a8c9bd26009bb7b48dec1851019c35addc47d716a92
+content-sha256 lib/net8.0/Zlink.Framework.AspNetCore.xml=fe83b2a45161057af74af93324dc4869c86aef5469f60ebd476ccb0c3c84bae5
 metadata authors=Zlink.Framework.AspNetCore
 metadata description=ASP.NET Core integration layer for ZLink framework.
 metadata id=Zlink.Framework.AspNetCore

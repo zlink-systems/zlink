@@ -111,51 +111,6 @@ final class ZLinkMeshApplicationDispatcherTest {
     }
 
     @Test
-    void routeMeshApplicationDispatchWritesMessageFlowFile() throws Exception {
-        Path flowFile = Files.createTempFile("zlink-route-mesh-flow", ".log");
-        Files.deleteIfExists(flowFile);
-        MeshNodeRegistration mesh = new MeshNodeRegistration("game");
-        mesh.listen("inproc://mesh-dispatch-flow");
-        mesh.addRouteSendHandler(NodeHandler.class, String.class);
-        ZLinkFrameworkRegistration framework = new ZLinkFrameworkRegistration();
-        framework.dispatchOptions()
-            .messageFlow(systems.zlink.framework.configuration.ZLinkMessageFlowLogMode
-                .KEY_TRANSITIONS)
-            .traceLogFile(flowFile.toString())
-            .traceLabel("mesh");
-        ZLinkMeshApplicationDispatcher dispatcher =
-            new ZLinkMeshApplicationDispatcher(
-                mesh,
-                new ZLinkStringMessageSerializer(),
-                framework,
-                ZLinkHandlerActivator.reflection(),
-                (token, parts) -> {
-                    throw new AssertionError("send dispatch must not reply");
-                });
-
-        dispatcher.accept(record(RecordKind.NODE_SEND, null, "flow-value"));
-
-        assertEquals(
-            "flow-value@source-node",
-            NodeHandler.received.get(2, TimeUnit.SECONDS));
-        String content = "";
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
-        while (System.nanoTime() < deadline) {
-            if (Files.exists(flowFile)) {
-                content = Files.readString(flowFile);
-                if (content.contains("outcome=DISPATCHED")) {
-                    break;
-                }
-            }
-            Thread.sleep(1);
-        }
-        assertTrue(content.contains("outcome=RECEIVED"), content);
-        assertTrue(content.contains("outcome=DISPATCHED"), content);
-        assertTrue(content.contains("label=mesh"), content);
-        Files.deleteIfExists(flowFile);
-    }
-
-    @Test
     void rejectsUnknownIncomingContentTypeBeforeRequestHandler() throws Exception {
         MeshNodeRegistration mesh = new MeshNodeRegistration("game");
         mesh.listen("inproc://mesh-dispatch-unknown-content-type");

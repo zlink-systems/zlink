@@ -5,6 +5,7 @@ const zlink = require('@zlink-systems/zlink');
 const {
   decodeRoutingId,
   encodeRoutingIdStorageHex,
+  normalizeRoutingId,
   routingIdsEqual,
   routingIdWireHex
 } = require('../../packages/framework/dist/runtime/routing-id');
@@ -35,4 +36,12 @@ test('routing id wire decoding preserves opaque bytes that cannot round-trip thr
   assert.equal(decoded.toHex(), '00000001');
   assert.equal(routingIdsEqual(decoded, zlink.RoutingId.fromHex('00000001')), true);
   assert.equal(routingIdsEqual(decoded, '1'), false);
+});
+
+test('routing id normalization retains the internal opaque byte owner', () => {
+  const opaque = decodeRoutingId('display-only', '00000001');
+  const normalized = normalizeRoutingId(opaque);
+
+  assert.equal(normalized, opaque);
+  assert.equal(encodeRoutingIdStorageHex(normalized), '00000001');
 });

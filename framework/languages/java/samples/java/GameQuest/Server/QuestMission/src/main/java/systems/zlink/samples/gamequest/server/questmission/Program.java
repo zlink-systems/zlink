@@ -77,9 +77,7 @@ public class Program {
                     .setKeyPrefix(topology.location().redisKeyPrefix() + "relocation:")));
             options.addHandlersFromPackageOf(Program.class);
             options.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile(mission.logDirectory() + "/flow-" + mission.instanceName() + ".log")
-                .traceLabel(mission.instanceName());
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             ZLinkMeshNodeBuilder node = options.addRouteMesh(SampleNames.PlayerQuestSpotDiscovery);
             node.listen(mission.spotRouterEndpoint())
                 .setRoutingIdPrefix("gamequest-mission-owner");

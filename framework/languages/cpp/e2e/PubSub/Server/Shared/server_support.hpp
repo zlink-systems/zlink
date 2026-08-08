@@ -26,47 +26,10 @@ inline void configure_codecs (zlink::framework::codec_options_builder_t codecs)
 {
 }
 
-inline std::string kind_name (zlink::framework::dispatch_message_kind_t value)
-{
-    switch (value) {
-        case zlink::framework::dispatch_message_kind_t::publish:
-            return "publish";
-        case zlink::framework::dispatch_message_kind_t::send:
-            return "send";
-        case zlink::framework::dispatch_message_kind_t::request:
-            return "request";
-        default:
-            return "other";
-    }
-}
-
-inline std::string reason_name (zlink::framework::dispatch_error_reason_t value)
-{
-    switch (value) {
-        case zlink::framework::dispatch_error_reason_t::handler_missing:
-            return "handlerMissing";
-        case zlink::framework::dispatch_error_reason_t::payload_decode_failed:
-            return "payloadDecodeFailed";
-        case zlink::framework::dispatch_error_reason_t::handler_exception:
-            return "handlerException";
-        default:
-            return "other";
-    }
-}
-
-inline std::string action_name (zlink::framework::dispatch_error_action_t value)
-{
-    return value == zlink::framework::dispatch_error_action_t::drop ? "drop" : "replyError";
-}
-
-inline void configure_flow (zlink::framework::zlink_framework_options_t &options,
-                            const std::string &log_dir,
-                            const std::string &label)
+inline void configure_flow (zlink::framework::zlink_framework_options_t &options)
 {
     options.configure_dispatch ()
-      .message_flow (zlink::framework::message_flow_log_mode_t::key_transitions)
-      .trace_log_file (log_dir + "/" + label + "-flow.log")
-      .trace_label ("cpp-ps-" + label);
+      .message_flow (zlink::framework::message_flow_log_mode_t::normal);
 }
 
 class operational_evidence_store_t

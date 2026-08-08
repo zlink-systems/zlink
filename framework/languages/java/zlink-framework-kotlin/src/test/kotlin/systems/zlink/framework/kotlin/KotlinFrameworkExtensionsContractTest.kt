@@ -43,6 +43,7 @@ import systems.zlink.framework.spots.ZLinkSpotCreateState
 import systems.zlink.framework.spots.ZLinkSpotGetOrCreateCall
 import systems.zlink.framework.spots.ZLinkSpotManager
 import systems.zlink.framework.streams.ZLinkSessionActor
+import systems.zlink.framework.streams.ZLinkSessionContext
 
 class KotlinFrameworkExtensionsContractTest {
     @Test
@@ -209,6 +210,17 @@ class KotlinFrameworkExtensionsContractTest {
         assertEquals(8, newIncarnation.ref().objectGeneration())
     }
 
+    @Test
+    fun `suspending session replacement callback bridges to a completion stage`() {
+        val session = RecordingReplacementSession()
+
+        session.onActorBindingReplaced("actor-a")
+            .toCompletableFuture()
+            .join()
+
+        assertEquals(listOf("actor-a"), session.replacements)
+    }
+
     private data class CreateActor(val value: String)
 
     private data class ActorMessage(val value: String)
@@ -352,6 +364,17 @@ class KotlinFrameworkExtensionsContractTest {
             return CompletableFuture.completedFuture<Void>(null).also {
                 disconnect = it
             }
+        }
+    }
+
+    private class RecordingReplacementSession : ZLinkSuspendingSession() {
+        val replacements = mutableListOf<String>()
+
+        override fun context(): ZLinkSessionContext =
+            error("test session has no runtime context")
+
+        override suspend fun onActorBindingReplacedSuspending(actorId: String) {
+            replacements += actorId
         }
     }
 

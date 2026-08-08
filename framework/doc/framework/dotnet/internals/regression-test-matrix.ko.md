@@ -77,9 +77,12 @@ source/package public API, clean package consumer와 standalone HTTP package con
 Linux에서 `run_samples.sh`를 순차 실행했을 때 TicTacToe, Bingo, SupportChat, ShoppingMall,
 DeliveryDispatch, GameQuest의 build·process evidence와 ZoneWorld의 모든 client/runner phase가
 통과했다. ZoneWorld에서도 `ZW-F1`의 resident bot 판정과 `ZW-F1-population`, `ZW-F2`, `ZW-F3`,
-`ZW-F4`를 포함해 `zoneworld=completed` marker가 기록됐다. 따라서 Linux source, package와
-실제 process aggregate gap은 닫혔다. PowerShell script는 요청한 검증 환경이 Windows이므로 Linux에서
-실행하지 않았으며, Windows PowerShell runner 결과는 별도 플랫폼 evidence로 남는다.
+`ZW-F4`를 포함해 `zoneworld=completed` marker가 기록됐다. 이 결과는 sample aggregate와 해당
+sample process의 evidence를 닫지만, 공통 E2E Config 1~14 전체의 process gap을 닫는 결과는 아니다.
+Config 14는 fixture 부재로 aggregate runner가 exit 2를 반환하고, 다른 process suite에도
+feature-map의 미구현·부분 구현 항목이 남아 있으므로 full process aggregate gate는 별도로 유지한다.
+PowerShell script는 요청한 검증 환경이 Windows이므로 Linux에서 실행하지 않았으며, Windows PowerShell
+runner 결과는 별도 플랫폼 evidence로 남는다.
 
 ## 3.2 UnitTest 실행 경계
 
@@ -90,7 +93,7 @@ socket·context·message handle, process-wide diagnostics, static runtime state,
 없으므로 isolation 기준으로 사용하지 않는다.
 
 이 정책은 테스트를 삭제해 실행 시간을 줄이는 방식이 아니다. 모든 test case를 유지하며, 현재
-안정성 기준선은 전체 1,548개 test가 통과하는 직렬 실행이다. 병렬 실행 변경은 짧은 1회 실행이
+안정성 기준선은 전체 1,605개 test가 통과하는 직렬 실행이다. 병렬 실행 변경은 짧은 1회 실행이
 빠르다는 이유만으로 적용하지 않고, 반복된 전체 실행에서 test order 의존과 테스트 간섭이
 없다는 증거를 얻은 뒤에만 검토한다.
 
@@ -104,7 +107,7 @@ socket·context·message handle, process-wide diagnostics, static runtime state,
 | location store가 있는 subscriber에 manual endpoint 명시 | `unit` | 해당 subscriber는 manual 연결을 사용하고 다른 역할의 자동 연결에는 영향을 주지 않는다 |
 | publisher 역할에 bind endpoint 없음 | `unit` | startup validation 예외 |
 | publisher 전용 channel | `integration-single-process` | publish submit 성공 |
-| MeshNode ROUTER directional socket options | `unit`, `integration-single-process` | `ConfigureRouterSocket()`의 MaxMessageSize, send·receive HWM, mailbox budget과 send·receive timeout이 managed ROUTER에 방향을 유지해 전달된다. .NET targeted unit 10/10 통과 |
+| MeshNode ROUTER directional socket options | `unit`, `integration-single-process` | `ConfigureRouterSocket()`의 send·receive HWM, mailbox budget과 send·receive timeout이 managed ROUTER에 방향을 유지해 전달된다. Framework-level RouteMesh message-size cap은 이 항목에 포함하지 않는다. .NET targeted unit 10/10 통과 |
 | subscriber location-store attach | `integration-multi-process` | 원격 publish 수신 |
 | handler group mapping | `unit` | `AddZLinkHandlers...()`만으로는 전역 dispatch 대상이 되지 않고, `channel.AddHandlerGroup("...")`로 매핑한 그룹의 handler만 해당 채널에서 dispatch된다 |
 | empty fanout subscriber validation | `unit` | publish handler exposure 없는 fanout subscriber 는 빈 수신자로 허용하지 않고 startup validation 오류다 |
@@ -494,7 +497,7 @@ backend gate 와 별도로 유지한다.
 | `RegressionTests.EveryCommonE2EConfigHasAnExplicitAggregateRunnerEntry` | 공통 E2E Config 1~14가 `.NET` feature-map, process runner와 aggregate runner entry를 모두 갖는다. 구현되지 않은 구성은 runner가 성공으로 세지 않는다. |
 | `RegressionTests.CommonE2EConfigsHaveCompleteDotNetFeatureMapInventories` | Config 1~14의 공통 scenario ID와 `.NET` feature-map ID가 누락·중복·unknown 없이 대응한다. |
 | `E2E:RM-A2` | `LocationMessaging`의 실제 process selector가 client-visible 결과와 role server evidence를 남긴다. |
-| `SCRIPT:e2e/ChannelEgressRouting/run_e2e.sh` | Config 12의 미완료 `all` selector가 exit 2로 닫히며 누락 selector를 출력한다. |
+| `SCRIPT:e2e/ChannelEgressRouting/run_e2e.sh` | Config 12의 `all` selector가 현재 26개 scenario를 순서대로 실행하고 모두 통과하면 exit 0으로 끝난다. 개별 feature-map의 partial scenario는 별도 process evidence 분모로 유지한다. |
 | `SCRIPT:e2e/InstanceSpot/run_e2e.sh` | Config 14의 process fixture 부재가 exit 2로 닫히며 aggregate 성공으로 집계되지 않는다. |
 
 ### Location

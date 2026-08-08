@@ -32,9 +32,7 @@ public final class CourierSessionApplication {
         return options -> {
             options.addHandlersFromPackageOf(CourierSessionApplication.class);
             options.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile(topology.logDirectory() + "/flow-courier-session.log")
-                .traceLabel("courier-session");
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             options.addClientServerChannel(SampleNames.CourierChannel)
                 .client();
             ZLinkMeshNodeBuilder node = options.addRouteMesh(SampleNames.CourierSpotDiscovery);

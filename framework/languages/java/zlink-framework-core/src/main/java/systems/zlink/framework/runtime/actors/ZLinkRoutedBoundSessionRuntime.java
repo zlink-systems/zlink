@@ -181,7 +181,8 @@ final class ZLinkRoutedBoundSessionRuntime implements ZLinkBoundSession {
                 payload,
                 timeout,
                 options.withPacketName(packetName),
-                metadataPolicy);
+                metadataPolicy,
+                submitGate);
         }
 
         @Override
@@ -196,7 +197,8 @@ final class ZLinkRoutedBoundSessionRuntime implements ZLinkBoundSession {
                 payload,
                 timeout,
                 options.withMetadata(key, value),
-                metadataPolicy);
+                metadataPolicy,
+                submitGate);
         }
 
         @Override

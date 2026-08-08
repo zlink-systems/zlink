@@ -30,7 +30,8 @@ import {
 } from '../foundation/service-instance-activation-recovery-codec';
 import {
   decodePreparingAuthorityEnvelope,
-  ServiceRelocationAuthorityPayloadCodec
+  ServiceRelocationAuthorityPayloadCodec,
+  serviceRelocationAuthorityApplicationPayload
 } from '../foundation/service-relocation-runtime';
 import { decodeActorAuthorityIdentity } from '../actors';
 
@@ -519,8 +520,9 @@ export class ZLinkStatefulAuthorityRouteRuntime {
       if (
         current.allocation.state === 'active'
         && current.allocation.objectKind === 'actor'
-        && decodeActorAuthorityIdentity(current.payload) !== undefined
-        && relocationCodec.read(current.payload) === undefined
+        && decodeActorAuthorityIdentity(
+          serviceRelocationAuthorityApplicationPayload(current.payload)
+        ) !== undefined
       ) {
         actors.push(current);
       }
@@ -541,7 +543,9 @@ function authorityNeedsExactRead(
   if (decodePreparingAuthorityEnvelope(snapshot.payload) !== undefined) return true;
   if (pendingInstanceActivation(snapshot) !== undefined) return true;
   if (relocationCodec.read(snapshot.payload) !== undefined) return true;
-  if (decodeServiceReadySpotAuthority(snapshot.payload)?.activationRecovery !== undefined) {
+  if (decodeServiceReadySpotAuthority(
+    serviceRelocationAuthorityApplicationPayload(snapshot.payload)
+  )?.activationRecovery !== undefined) {
     return true;
   }
   return snapshot.allocation.state === 'active'
@@ -594,7 +598,9 @@ function pendingInstanceActivation(
 
 function authorityRoute(snapshot: ZLinkAuthoritySnapshot): AppliedAuthorityRoute | undefined {
   const allocation = snapshot.allocation;
-  const decoded = decodeServiceReadySpotAuthority(snapshot.payload);
+  const decoded = decodeServiceReadySpotAuthority(
+    serviceRelocationAuthorityApplicationPayload(snapshot.payload)
+  );
   if (
     allocation.state !== 'active'
     || allocation.objectKind === 'actor'

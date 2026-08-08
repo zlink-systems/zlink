@@ -3,6 +3,7 @@
 
 #include "runtime/stateful/maintenance_runtime.hpp"
 #include <runtime/locations/location_repository.hpp>
+#include "runtime/locations/authority_key_codec.hpp"
 #include "runtime/locations/sha256.hpp"
 
 #include <zlink/framework/contracts/locations/stores.hpp>
@@ -93,13 +94,20 @@ class public_authority_store_adapter_t final :
 
     authority_publish_result_t publish (
       const object_ref_t &source,
-      std::string target_node_id,
+      const object_ref_t &target,
       location_owner_token_t target_owner,
       relocation_capacity_fence_t relocation_capacity_fence,
       std::string relocation_reference,
       std::uint32_t checksum_crc32c,
-      inventory_digest_t inventory_digest) override
+      inventory_digest_t inventory_digest,
+      std::vector<std::byte> target_application_payload = {}) override
     {
+        if (target.kind != source.kind || target.key != source.key
+            || target.object_generation != source.object_generation
+            || target.authority_owner_generation
+                 != source.authority_owner_generation + 1
+            || target.mesh_name.empty () || target.node_id.empty ())
+            return {authority_publish_status_t::failed, std::nullopt};
         const auto key = authority_key (source);
         const auto read =
           _store->read_authority (key).result ().value ();
@@ -120,10 +128,10 @@ class public_authority_store_adapter_t final :
           checksum_crc32c,
           inventory_digest,
           target_owner,
-          snapshot->payload};
-        reference.target.node_id = std::move (target_node_id);
-        reference.target.authority_owner_generation =
-          source.authority_owner_generation + 1;
+          target_application_payload.empty ()
+            ? snapshot->payload
+            : std::move (target_application_payload)};
+        reference.target = target;
         const auto exchanged =
           _store
             ->compare_exchange_authority (
@@ -345,9 +353,9 @@ class public_authority_store_adapter_t final :
     static authority_key_t authority_key (
       const object_ref_t &object)
     {
-        const auto prefix =
-          object.kind == object_kind_t::actor ? "1:" : "2:";
-        return {std::string (prefix) + object.key};
+        return object.kind == object_kind_t::actor
+          ? actor_authority_key (object.key)
+          : spot_authority_key (object.key);
     }
 
     static void append_u32 (
@@ -386,7 +394,7 @@ class public_authority_store_adapter_t final :
       const authority_relocation_reference_t &reference)
     {
         std::vector<std::byte> output;
-        for (const auto value : std::string_view ("ZLRA2"))
+        for (const auto value : std::string_view ("ZLRA3"))
             output.push_back (
               static_cast<std::byte> (
                 static_cast<unsigned char> (value)));
@@ -399,6 +407,7 @@ class public_authority_store_adapter_t final :
         append_u64 (
           output,
           reference.source.authority_owner_generation);
+        append_text (output, reference.target.mesh_name);
         append_text (output, reference.target.node_id);
         append_text (output, reference.relocation_reference);
         append_u32 (output, reference.checksum_crc32c);
@@ -424,17 +433,22 @@ class public_authority_store_adapter_t final :
         {
         }
 
-        bool consume_magic ()
+        std::optional<std::uint8_t> consume_version ()
         {
-            constexpr std::string_view magic = "ZLRA2";
-            if (_input.size () < magic.size ())
-                return false;
-            for (const auto value : magic) {
+            constexpr std::string_view prefix = "ZLRA";
+            if (_input.size () < prefix.size () + 1)
+                return std::nullopt;
+            for (const auto value : prefix) {
                 if (read_byte ()
                     != static_cast<std::uint8_t> (value))
-                    return false;
+                    return std::nullopt;
             }
-            return true;
+            const auto version = read_byte ();
+            return version == static_cast<std::uint8_t> ('2')
+                     ? std::optional<std::uint8_t>{2}
+                     : (version == static_cast<std::uint8_t> ('3')
+                          ? std::optional<std::uint8_t>{3}
+                          : std::nullopt);
         }
 
         std::optional<std::uint8_t> byte ()
@@ -501,7 +515,8 @@ class public_authority_store_adapter_t final :
     decode (const authority_snapshot_t &snapshot)
     {
         reader_t reader (snapshot.payload);
-        if (!reader.consume_magic ())
+        const auto version = reader.consume_version ();
+        if (!version)
             return std::nullopt;
         const auto kind = reader.byte ();
         const auto key = reader.text ();
@@ -509,11 +524,14 @@ class public_authority_store_adapter_t final :
         const auto source_node = reader.text ();
         const auto object_generation = reader.u64 ();
         const auto source_owner_generation = reader.u64 ();
+        const auto target_mesh = *version >= 3
+          ? reader.text ()
+          : std::optional<std::string>{mesh};
         const auto target_node = reader.text ();
         const auto relocation_reference = reader.text ();
         const auto checksum = reader.u32 ();
         if (!kind || !key || !mesh || !source_node
-            || !object_generation || !source_owner_generation
+            || !object_generation || !source_owner_generation || !target_mesh
             || !target_node || !relocation_reference || !checksum)
             return std::nullopt;
         inventory_digest_t digest{};
@@ -554,6 +572,7 @@ class public_authority_store_adapter_t final :
           std::move (*mesh),
           std::move (*source_node)};
         auto target = source;
+        target.mesh_name = std::move (*target_mesh);
         target.node_id = std::move (*target_node);
         target.authority_owner_generation =
           snapshot.authority_owner_generation;

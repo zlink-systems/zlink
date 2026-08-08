@@ -27,11 +27,12 @@ context는 HTTP·connector 연결과 반복되는 evidence 조회만 제공한�
 | ST-E1 | `implemented` | transfer 전후 같은 connector의 bound push 수신을 검사한다. |
 | ST-E1A | `runtime partial; E2E blocked` | Public `actor_t`·`actor_factory_t<TActor>`·`actor_join_completion_t`와 source-generated operation ID를 사용하는 User Spot remote callback 경로는 구현했다. Target은 location commit 뒤 callback을 실행하고 성공 전에는 backlog를 열지 않으며, 실패한 callback은 같은 operation ID로 재시도하고 성공한 operation은 중복 실행하지 않는다. Relocation Store root에 reply와 cursor를 기록하고 target replacement에서 복구하는 경로는 아직 없다. |
 | ST-E2 | `implemented` | transfer-out adapter 실패로 commit 전 transfer를 거절하고, source의 기존 bound session이 follow-up notify를 받으며 target에는 `bound_push`·`joined` evidence가 없는지 검사한다. |
-| ST-F1 | `implemented` | source `handoff_backlog`와 target `backlog_enqueued`를 같은 transfer correlation으로 검사한다. target은 prepare 뒤 받은 전체 backlog를 queue에 넣은 다음 location을 공개하며 P1→P2→P3 처리 순서도 확인한다. |
+| ST-F1 | `implemented` | `old-1` handler를 gate에서 대기시킨 상태에서 `old-2`와 Join, `moving-1`, `moving-2`를 같은 bound Session stream으로 제출한다. gate를 연 뒤 `new-1`을 보내고, source와 target의 handler evidence를 합쳐 `old-1`→`old-2`→`moving-1`→`moving-2`→`new-1` 순서와 각 ID의 단일 처리를 확인한다. |
 | ST-F2 | `implemented` | moving 중 B1/B2를 보내고 target의 `backlog_enqueued`가 `location_committed`보다 앞서는지 검사한다. location 공개 직후 D1을 보내 join caller가 완료를 읽기 전에 B1→B2→D1 순서가 유지되는지도 확인한다. |
 | ST-F3 | `implemented` | moving 중 S1/S2를 보내고 target의 구조화된 location commit evidence 직후 기존 bound session으로 S3/S4를 보내 join caller가 완료를 읽기 전에 전체 순서를 검사한다. |
-| ST-F4 | `partial` | explicit old Actor ref로 one-way G1/G2를 보낸다. G1의 `message_follow_relay`와 target 처리, route 제거 뒤 G2의 `message_follow_expired`와 target 미처리는 검사한다. 그러나 public global Actor ID로 제출한 message의 이전 route delivery를 transport fixture에서 지연하는 절차와 operation ID·reply route 보존 검증은 없다. |
-| ST-F5 | `partial` | actor-a→actor-b→actor-a의 다른 Spot으로 연속 이동하고, source node별 Message Follow route가 하나인지 검사한다. Route 제거 뒤 old ref가 실패하는지도 검사한다. 그러나 public caller에서 route를 숨기는 transport fixture, 세 node multi-hop, process recovery와 queued byte 정리는 검증하지 않는다. |
+| ST-F3A | `blocked` | actor-c와 actor-b→Session owner 한 방향의 raw byte hold proxy, bound Session의 public `ActorRef` snapshot 검증을 runner에 등록했다. Proxy가 actor-b의 transport handshake는 통과시키고 이후 bytes를 보관한 상태에서 A→B를 실행하면 target commit과 reply 생성은 완료되지만 Session owner의 ActorRef snapshot은 갱신되지 않는다. 정식 command 42/44가 요구하는 Session owner node generation·owner ID·owner lease generation·binding generation·relocation ID·high-water가 현재 C++ 직접 Join 전달 구조에 없어, 추정값으로 우회하지 않고 `BLOCKER-CPP-SESSION-ROUTE-ID`로 보류한다. `blocked`는 시나리오 폐기가 아니라 전달 구조 결정 및 구현이 필요하다는 뜻이며, 공통 spec은 수정하지 않았다. |
+| ST-F4 | `implemented` | internal transport fixture가 Actor type·ID·node RID·generation을 포함한 exact old Actor ref를 사용한다. Follow 기간 안의 G1은 source의 `message_follow_relay`와 target의 단일 처리를 확인하고, route 제거 뒤 G2 request는 target handler에 들어가지 않으며 caller가 `Unavailable`을 받는지 확인한다. Public Actor API는 변경하지 않았다. |
+| ST-F5 | `implemented` | 단일 A→B relocation과 Message Follow route 제거를 확인한다. 제거 뒤 exact old route request는 `Unavailable`로 끝나고 target handler에 들어가지 않으며, global Actor ID로 보낸 current request는 bounded convergence 안에 target B에서 한 번 처리되는지 확인한다. |
 | ST-F6 | `implemented` | source와 target의 구조화 evidence에서 같은 request id와 request flag가 보존되는지 비교한다. 같은 request id의 재시도는 backlog와 target handler에 한 번만 남고, 긴 timeout은 원래 caller reply로, 짧은 timeout은 일반 timeout과 late reply로 끝나는지 검사한다. |
 | ST-G1 | `미구현` | yielded continuation과 모든 실행 lane을 포함한 relocation barrier process E2E가 없다. |
 | ST-G2 | `미구현` | 큰 participant inventory와 typed capacity aggregate all-or-none E2E가 없다. |
@@ -64,10 +65,11 @@ Track I는 아직 시작하지 않았다. Spot Message Follow route, Actor·Spot
 
 ## 실행 범위
 
-`run_e2e.sh all`은 ST-A1부터 ST-F6까지 기존 A~F 시나리오를 선택한다. source process 중단이 필요한
+`run_e2e.sh all`은 ST-A1부터 ST-F6까지 기존 A~F 시나리오를 선택한다. ST-F3A는 개별 scenario로
+등록했지만 위 production GAP 때문에 아직 aggregate 목록에는 넣지 않았다. source process 중단이 필요한
 ST-B2, ST-C1, ST-C2는 다른 시나리오와 분리해 실행하며, 그 사이에 actor-a를 다시 시작한다. 모든
 시나리오는 client가 역할별 evidence와 응답을 직접 판정하고, runner는 process 수명과 실행 순서만
-관리한다. `ST-F3A`, `ST-G1~G6`, `ST-H1~H5`, `ST-I1~I6`이 모두 process E2E로 등록되기 전에는 Config 10 전체
+관리한다. ST-F3A가 통과하고 `ST-G1~G6`, `ST-H1~H5`, `ST-I1~I6`이 모두 process E2E로 등록되기 전에는 Config 10 전체
 완료로 판정하지 않는다.
 
 ## 설계 재검토

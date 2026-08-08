@@ -1,6 +1,6 @@
 import { Injectable, Scope } from '@nestjs/common';
 import { SampleTimings } from '../../../../../Configuration/sample-names';
-import { SupportChatRoles } from '../../../../../../Shared/Contracts/messages';
+import { JoinConversationReq, SupportChatRoles } from '../../../../../../Shared/Contracts/messages';
 import { Conversation } from '../../../../Domain/SupportChat/conversation';
 import { ConversationIdleTimerHandler } from './Handlers/conversation-idle-timer-handler';
 import { SupportNotificationPublisher } from './Notifications/support-notification-publisher';
@@ -17,7 +17,6 @@ import type {
 import type {
   ChatMessage,
   ConversationState,
-  JoinConversationReq,
   SupportRole
 } from '../../../../../../Shared/Contracts/messages';
 import type { ConversationCreateRequest } from './conversation-create-request';
@@ -70,7 +69,7 @@ class ConversationSpot implements ZLinkSpot<SupportUserActor> {
     actorId: string,
     request: ZLinkMessage
   ): Promise<ZLinkSpotActorJoinResult> {
-    const join = request.decode<JoinConversationReq>(Object as never);
+    const join = request.decode(JoinConversationReq);
     this.pendingJoins.set(actorId, {
       actorId,
       participantId: join.participantId,

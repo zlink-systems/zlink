@@ -3,7 +3,6 @@ package systems.zlink.framework.spring.internal.runtime;
 import java.util.Objects;
 import java.util.function.Supplier;
 import systems.zlink.framework.channels.ZLinkMeshChannelRuntimeOptions;
-import systems.zlink.framework.channels.ZLinkMeshNodeRuntimeOptions;
 import systems.zlink.framework.channels.ZLinkMeshPlacementRuntimeOptions;
 import systems.zlink.framework.channels.ZLinkRouteMeshRuntimeOptions;
 
@@ -21,11 +20,6 @@ public final class ZLinkRouteMeshRuntimeOptionsService
     ZLinkRouteMeshRuntimeOptionsService(
         Supplier<ZLinkRouteMeshRuntimeOptions> delegate) {
         this.delegate = Objects.requireNonNull(delegate, "delegate");
-    }
-
-    @Override
-    public ZLinkMeshNodeRuntimeOptions meshNode(String meshName) {
-        return delegate.get().meshNode(meshName);
     }
 
     @Override

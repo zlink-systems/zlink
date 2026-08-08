@@ -42,9 +42,9 @@ class ClientApplication {
     fun clientFramework(options: ClientOptions): ZLinkFrameworkConfigurer =
         ZLinkFrameworkConfigurer { framework ->
             framework.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.KEY_TRANSITIONS)
-                .traceLogFile("${options.logDir}/${options.rid}-flow.log")
-                .traceLabel(options.rid)
+                .messageFlow(ZLinkMessageFlowLogMode.NORMAL)
+
+
             val locations = framework.configureLocations()
             locations.setOwnerLeaseRenewInterval(Duration.ofMillis(options.heartbeatMillis))
             locations.setOwnerLeaseTtl(Duration.ofMillis(options.leaseTtlMillis))

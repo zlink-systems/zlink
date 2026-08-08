@@ -1,6 +1,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const framework = require('../../packages/framework/dist/internal');
+const { forwardEncodedActorPacket } = require('../../packages/framework/dist/runtime/actors/actor-client');
 const {
   ZLinkSubmitStatus
 } = require('../../packages/framework/dist/runtime/messaging/submission-result');
@@ -70,7 +71,8 @@ const operationId = Object.freeze({ high: 1n, low: 2n });
 
 function completionTable(terminalResult, parts = []) {
   return {
-    async wait(actualOperationId) {
+    async submit(operation) {
+      const actualOperationId = operation();
       assert.deepEqual(actualOperationId, operationId);
       return {
         terminalResult,
@@ -188,7 +190,8 @@ test('actor client selects the MeshNode and completion table from the current Ac
   ]);
   const completions = new Map([
     ['mesh-a', {
-      async wait() {
+      async submit(operation) {
+        assert.deepEqual(operation(), operationId);
         selected.push('completion:mesh-a');
         return {
           terminalResult: RequestResult.Ok,
@@ -200,7 +203,8 @@ test('actor client selects the MeshNode and completion table from the current Ac
       }
     }],
     ['mesh-b', {
-      async wait() {
+      async submit(operation) {
+        assert.deepEqual(operation(), operationId);
         selected.push('completion:mesh-b');
         return {
           terminalResult: RequestResult.Ok,
@@ -294,6 +298,37 @@ test('actor client request decodes a single framed handler reply through stream 
     .submit();
 
   assert.deepEqual(reply, { value: 'framed-pong' });
+});
+
+test('actor handoff reply uses the original packet JSON reply contract', async () => {
+  class HandoffRequest {}
+  framework.ZLinkPacket('HandoffRequest', {
+    payload: { type: 'object', required: [], properties: {} },
+    reply: {
+      type: 'object',
+      required: ['generation'],
+      properties: { generation: { type: 'uint64' } }
+    }
+  })(HandoffRequest);
+  const header = Buffer.from(framework.encodeStreamHeader({
+    kind: framework.ZLinkStreamMessageKind.Request,
+    codec: framework.ZLinkStreamCodec.Json,
+    flags: framework.ZLinkStreamHeaderFlags.None,
+    name: 'HandoffRequest',
+    metadata: new Map()
+  }));
+  const replyParts = createReplyParts({ generation: '18446744073709551615' });
+  const reply = await forwardEncodedActorPacket(
+    { requestToActor: () => operationId },
+    completionTable(RequestResult.Ok, replyParts),
+    actorRef(),
+    header,
+    Buffer.from('{}'),
+    true,
+    100
+  );
+
+  assert.equal(reply.generation, 18446744073709551615n);
 });
 
 test('actor client invalidates a stale resolved route without retrying the operation', async () => {

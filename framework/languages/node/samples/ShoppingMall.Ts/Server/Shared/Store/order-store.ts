@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { DecimalAmount, StartOrderWorkflowReq } from '../../../Shared/Contracts/messages';
 import type {
+  DecimalWireNumber,
   OrderLineInput,
   OrderState,
   ServerAssertionReq,
@@ -14,7 +15,7 @@ import { OrderAggregate } from '../../OrderWorkflow/Domain/ShoppingMall/order-do
 
 type MappingStatus = 'pending' | 'started';
 
-interface CartSeed { lines: readonly OrderLineInput[]; amount: DecimalAmount; currency: string; }
+interface CartSeed { lines: readonly OrderLineInput[]; amount: DecimalWireNumber; currency: string; }
 interface PaymentSeed { shouldAuthorize: boolean; failureReason?: string; }
 interface EffectResult { accepted: boolean; reason?: string; attempts: number; }
 
@@ -56,9 +57,9 @@ class OrderStore {
 
   seedSelfCheck(): { seeded: boolean } {
     return this.updateCommerce((data) => {
-      data.carts['cart-success'] = { lines: [{ sku: 'sku-normal', quantity: 2 }], amount: DecimalAmount.fromMinorUnits(12_000n), currency: 'USD' };
-      data.carts['cart-inventory-fail'] = { lines: [{ sku: 'sku-limited', quantity: 3 }], amount: DecimalAmount.fromMinorUnits(7_500n), currency: 'USD' };
-      data.carts['cart-payment-fail'] = { lines: [{ sku: 'sku-normal', quantity: 1 }], amount: DecimalAmount.fromMinorUnits(6_000n), currency: 'USD' };
+      data.carts['cart-success'] = { lines: [{ sku: 'sku-normal', quantity: 2 }], amount: DecimalAmount.fromMinorUnits(12_000n).toWireNumber(), currency: 'USD' };
+      data.carts['cart-inventory-fail'] = { lines: [{ sku: 'sku-limited', quantity: 3 }], amount: DecimalAmount.fromMinorUnits(7_500n).toWireNumber(), currency: 'USD' };
+      data.carts['cart-payment-fail'] = { lines: [{ sku: 'sku-normal', quantity: 1 }], amount: DecimalAmount.fromMinorUnits(6_000n).toWireNumber(), currency: 'USD' };
       data.addresses['addr-home'] = true;
       data.addresses['addr-office'] = true;
       data.inventory['sku-normal'] = 100;
@@ -474,7 +475,7 @@ class OrderStore {
   private rehydrateCommerce(data: CommerceData): CommerceData {
     for (const cart of Object.values(data.carts)) {
       if (cart !== undefined) {
-        cart.amount = DecimalAmount.fromWire(cart.amount);
+        cart.amount = DecimalAmount.fromWire(cart.amount).toWireNumber();
       }
     }
     return data;
@@ -491,7 +492,7 @@ class OrderStore {
     if (data.projection?.amount !== undefined) {
       data.projection = {
         ...data.projection,
-        amount: DecimalAmount.fromWire(data.projection.amount)
+        amount: DecimalAmount.fromWire(data.projection.amount).toWireNumber()
       };
     }
     return data;
