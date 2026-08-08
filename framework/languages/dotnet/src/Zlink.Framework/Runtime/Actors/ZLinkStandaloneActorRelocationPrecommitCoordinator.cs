@@ -274,6 +274,21 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
                         null),
                     cancellationToken)
                 .ConfigureAwait(false);
+            // A dead source cannot renew its owner lease, so the plain Put is
+            // rejected once recovery runs the abort on another node. Restore
+            // is fenced by the exact recorded owner identity and the same
+            // StoreVersion CAS instead of lease liveness.
+            if (result is ZLinkAuthorityCompareExchangeResult.Conflict)
+                result = await store.CompareExchangeAuthorityAsync(
+                        key,
+                        found.Snapshot.StoreVersion,
+                        new ZLinkAuthorityMutation.Restore(
+                            projection.SteadyAuthorityPayload,
+                            new ZLinkLocationOwnerToken(
+                                found.Snapshot.OwnerId,
+                                found.Snapshot.OwnerLeaseGeneration)),
+                        cancellationToken)
+                    .ConfigureAwait(false);
             if (result is ZLinkAuthorityCompareExchangeResult.Stored stored)
                 return stored.Snapshot;
             if (result is not ZLinkAuthorityCompareExchangeResult.Conflict)

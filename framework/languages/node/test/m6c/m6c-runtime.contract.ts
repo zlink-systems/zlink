@@ -110,6 +110,25 @@ const relocationControlFixtureValues = (): readonly ServiceMaintenanceRelocation
     { participantId: 2n, allowanceMessages: 0n, allowanceBytes: 0n }
   ] as const;
   const root = { reference: 'relocation-root', checksumCrc32c: 0x12345678 } as const;
+  const boundSessionJournalParticipants = [
+    { participantId: 1n, allowanceMessages: 2n, allowanceBytes: 128n },
+    { participantId: 2n, allowanceMessages: 0n, allowanceBytes: 0n },
+    { participantId: 3n, allowanceMessages: 0n, allowanceBytes: 0n },
+    { participantId: 4n, allowanceMessages: 1n, allowanceBytes: 64n,
+      boundSession: {
+        sessionOwnerNodeRid: 'session-owner', sessionOwnerNodeGeneration: 5n,
+        sessionOwnerId: 'session-runtime', sessionOwnerLeaseGeneration: 6n,
+        sessionRid: 'session-a', bindingGeneration: 7n,
+        lastAcceptedSessionSequence: 9n
+      } },
+    { participantId: 5n, allowanceMessages: 0n, allowanceBytes: 0n,
+      boundSession: {
+        sessionOwnerNodeRid: 'session-owner', sessionOwnerNodeGeneration: 5n,
+        sessionOwnerId: 'session-runtime', sessionOwnerLeaseGeneration: 6n,
+        sessionRid: 'session-b', bindingGeneration: 8n,
+        lastAcceptedSessionSequence: 0n
+      } }
+  ] as const;
   return [
     { kind: 'ready', ...base, round: 'initial', candidate, object, role: 'target',
       offeredMessages: 2n, offeredBytes: 128n, participants: [],
@@ -131,7 +150,13 @@ const relocationControlFixtureValues = (): readonly ServiceMaintenanceRelocation
       sourceNodeRid: 'node-a', sourceNodeGeneration: 11n,
       requiredMessages: 2n, requiredBytes: 128n, participants, root, applicationVersion: 1n },
     { kind: 'reserved', ...base, round: 'initial', candidate,
-      reservationGeneration: 13n, participants }
+      reservationGeneration: 13n, participants },
+    { kind: 'prepare', ...base, round: 'initial', candidate, initiatorRole: 'source', object,
+      sourceNodeRid: 'node-a', sourceNodeGeneration: 11n,
+      requiredMessages: 3n, requiredBytes: 192n,
+      participants: boundSessionJournalParticipants, root, applicationVersion: 1n },
+    { kind: 'reserved', ...base, round: 'initial', candidate,
+      reservationGeneration: 13n, participants: boundSessionJournalParticipants }
   ];
 };
 
@@ -371,6 +396,68 @@ test('canonical commands 30..35 and 40..41 match the shared relocation-control f
       { participantId: 1n, allowanceMessages: 0n, allowanceBytes: 0n }
     ]
   }), /sorted and unique/);
+});
+
+test('canonical commands 40, 30, and 41 round-trip boundSession participant identities', () => {
+  const values = relocationControlFixtureValues();
+  const boundSessionParticipants = [
+    { participantId: 1n, allowanceMessages: 2n, allowanceBytes: 128n,
+      boundSession: {
+        sessionOwnerNodeRid: 'node-session', sessionOwnerNodeGeneration: 21n,
+        sessionOwnerId: 'session-owner', sessionOwnerLeaseGeneration: 22n,
+        sessionRid: 'session-1', bindingGeneration: 23n,
+        lastAcceptedSessionSequence: 41n
+      } },
+    { participantId: 2n, allowanceMessages: 0n, allowanceBytes: 0n,
+      boundSession: {
+        sessionOwnerNodeRid: 'node-session', sessionOwnerNodeGeneration: 21n,
+        sessionOwnerId: 'session-owner', sessionOwnerLeaseGeneration: 22n,
+        sessionRid: 'session-2', bindingGeneration: 1n,
+        lastAcceptedSessionSequence: 0n
+      } },
+    { participantId: 3n, allowanceMessages: 1n, allowanceBytes: 64n }
+  ] as const;
+  const ready = {
+    ...values[0] as Extract<ServiceMaintenanceRelocationControl, { kind: 'ready' }>,
+    role: 'source' as const, offeredMessages: 0n, offeredBytes: 0n,
+    participants: boundSessionParticipants
+  };
+  const prepare = {
+    ...values[5] as Extract<ServiceMaintenanceRelocationControl, { kind: 'prepare' }>,
+    participants: boundSessionParticipants
+  };
+  const reserved = {
+    ...values[6] as Extract<ServiceMaintenanceRelocationControl, { kind: 'reserved' }>,
+    participants: boundSessionParticipants
+  };
+  for (const value of [ready, prepare, reserved]) {
+    const encoded = encodeMaintenanceRelocationControl(value);
+    assert.deepEqual(decodeMaintenanceRelocationControl(encoded), value);
+    assert.throws(() => decodeMaintenanceRelocationControl(encoded.subarray(0, -1)));
+  }
+  const encodedPrepare = encodeMaintenanceRelocationControl(prepare);
+  const plainPrepare = encodeMaintenanceRelocationControl(
+    values[5] as Extract<ServiceMaintenanceRelocationControl, { kind: 'prepare' }>
+  );
+  assert.notDeepEqual(encodedPrepare, plainPrepare);
+  const kindOffset = encodedPrepare.indexOf(Buffer.from('node-session')) - 4;
+  assert.equal(encodedPrepare[kindOffset], 2);
+  const unknownKind = Buffer.from(encodedPrepare);
+  unknownKind[kindOffset] = 3;
+  assert.throws(
+    () => decodeMaintenanceRelocationControl(unknownKind),
+    /participant kind/
+  );
+  assert.throws(() => encodeMaintenanceRelocationControl({
+    ...prepare,
+    participants: [{
+      ...boundSessionParticipants[0],
+      boundSession: {
+        ...boundSessionParticipants[0].boundSession,
+        bindingGeneration: 0n
+      }
+    }]
+  }));
 });
 
 test('canonical relocation data preserves every exact relocation phase and rejects unknown phase 10', () => {
@@ -1944,7 +2031,10 @@ test('concrete User Spot aggregate restores hidden membership and sealed work be
   assert.ok(events.indexOf('source-commit:spot:room') < events.indexOf('source-route-reconcile'));
   assert.ok(events.indexOf('source-route-reconcile') < events.indexOf('terminal-reply-relay'));
   assert.ok(events.indexOf('source-commit:actor:a') < events.indexOf('terminal-reply-relay'));
-  assert.ok(events.indexOf('session-route-replace') < events.indexOf('target-admission:spot:room'));
+  // Ready decoupling: admission opens before session-route replacement,
+  // which converges after source completion and never gates admission.
+  assert.ok(events.indexOf('target-admission:spot:room') < events.indexOf('session-route-replace'));
+  assert.ok(events.indexOf('target-admission:spot:room') < events.indexOf('source-commit:spot:room'));
   assert.ok(events.indexOf('target-normalize:actor:a') < events.indexOf('target-admission:actor:a'));
   assert.ok(events.indexOf('target-admission:actor:a') < events.indexOf('recovery-releasable'));
 });
@@ -2241,7 +2331,7 @@ test('concrete target Restore failure leaves authority and Relocation Store unpu
   }
 });
 
-test('target restore replays and completes before route replacement normalization and admission', async () => {
+test('target restore replays publishes normalizes and opens admission before source completion and route replacement', async () => {
   const events: string[] = [];
   let releaseRecovery!: () => void;
   const recoveryGate = new Promise<void>(resolve => {
@@ -2328,11 +2418,11 @@ test('target restore replays and completes before route replacement normalizatio
     'authority-cas',
     'accepted-journal-replay',
     'target-publish',
+    'steady-normalize',
+    'target-admission-open',
     'source-cleanup-completed',
     'terminal-reply-relay',
     'session-route-replace',
-    'steady-normalize',
-    'target-admission-open',
     'recovery-wait',
     'recovery-releasable',
     'authority-cas',
@@ -2415,7 +2505,9 @@ test('post-commit route replacement failure preserves committed owner and reloca
     }
   );
   assert.equal(aborted, 0);
-  assert.equal(admissionOpened, 0);
+  // Admission already opened before the failed route replacement: session
+  // route convergence never gates admission.
+  assert.equal(admissionOpened, 1);
   const current = await authority.readAuthority(key);
   assert.equal(current.kind, 'snapshot');
   if (current.kind !== 'snapshot') return;
@@ -2434,7 +2526,7 @@ test('post-commit route replacement failure preserves committed owner and reloca
   assert.equal(publishAttempts, 2);
   assert.equal(replayAttempts, 2);
   assert.equal(cleanupAttempts, 2);
-  assert.equal(admissionOpened, 1);
+  assert.equal(admissionOpened, 2);
   assert.equal((await store.get(publication.reference)).kind, 'missing');
 });
 

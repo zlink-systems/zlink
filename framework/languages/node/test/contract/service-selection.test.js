@@ -20,7 +20,7 @@ function serviceNode(nodeRoutingId, weight) {
     state: 'serving',
     securityIdentity: 'test',
     applicationVersion: 0n,
-    protocolCapabilities: ['framework-service-v11'],
+    protocolCapabilities: ['framework-service-v12'],
     objectRole: 'none',
     placementWeight: weight,
     activeCapacityLimit: 10,

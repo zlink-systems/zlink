@@ -250,6 +250,16 @@ final class ZLinkUserSpotRelocationBarrier {
     }
 
     CompletionStage<Boolean> abortAsync(Seal seal) {
+        return abortAsync(seal, null);
+    }
+
+    /**
+     * Aborts the sealed relocation. The optional {@code beforeLaneResume}
+     * step runs after the abort is guaranteed to proceed and before the
+     * captured queues are restored and the lanes resume, so terminal
+     * bookkeeping can finish while every lane is still paused.
+     */
+    CompletionStage<Boolean> abortAsync(Seal seal, Runnable beforeLaneResume) {
         boolean completionRequired;
         synchronized (this) {
             if (committing || seal == null || seal != active
@@ -284,6 +294,9 @@ final class ZLinkUserSpotRelocationBarrier {
                     return false;
                 }
                 shouldResume = true;
+            }
+            if (beforeLaneResume != null) {
+                beforeLaneResume.run();
             }
             if (!barrier.abort(seal.composite)) {
                 throw new IllegalStateException(

@@ -552,6 +552,55 @@ test('bound-session packets keep one sequence across snapshot and Message Follow
   assert.equal(backlog[0].remoteBoundSessionTarget.routerChannelId, 'session-mesh');
 });
 
+test('precommit abort returns the seal-era ingress hold to the source queue in order', async () => {
+  const { coordinator } = harness();
+  const replayed = [];
+  coordinator.begin('actor-1', 1n);
+  for (const value of ['H1', 'H2', 'H3']) {
+    const parts = frame(value);
+    await coordinator.capture('actor-1', parts, false, undefined, actorRef());
+    parts.forEach((part) => part.close());
+  }
+
+  await coordinator.releaseCanceled('actor-1', async (parts) => {
+    replayed.push(parts[1].data().toString());
+  });
+  assert.deepEqual(replayed, ['H1', 'H2', 'H3']);
+  assert.equal(coordinator.isActive('actor-1'), false);
+});
+
+test('a sealed Session route refuses a connection-bound send at capture and keeps it out of the backlog', async () => {
+  const { coordinator } = harness();
+  const sessionTarget = {
+    routerChannelId: 'session-mesh',
+    targetNodeRid: zlink.RoutingId.from('session-node'),
+    spotId: zlink.RoutingId.from('session-spot')
+  };
+  coordinator.begin('actor-1', 1n);
+  const preSeal = frame('S1');
+  await coordinator.capture('actor-1', preSeal, false, sessionTarget, actorRef());
+  preSeal.forEach((part) => part.close());
+
+  coordinator.sealConnectionBoundIngress('actor-1');
+  const postSeal = frame('S2');
+  await assert.rejects(
+    coordinator.capture('actor-1', postSeal, false, sessionTarget, actorRef()),
+    (error) => error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
+  );
+  postSeal.forEach((part) => part.close());
+
+  const direct = frame('D1');
+  await coordinator.capture('actor-1', direct, false, undefined, actorRef());
+  direct.forEach((part) => part.close());
+
+  const backlog = coordinator.snapshot('actor-1');
+  assert.deepEqual(
+    backlog.map((packet) => Buffer.from(packet.payload, 'base64').toString()),
+    ['S1', 'D1']
+  );
+  coordinator.cancel('actor-1');
+});
+
 test('Message Follow relays before duration expiry and rejects after route removal', async () => {
   const { coordinator, followed, markers } = harness(10);
   coordinator.begin('actor-1', 1n);

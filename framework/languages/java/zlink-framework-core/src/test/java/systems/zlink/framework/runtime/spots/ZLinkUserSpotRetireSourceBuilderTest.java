@@ -266,6 +266,281 @@ final class ZLinkUserSpotRetireSourceBuilderTest {
         }
     }
 
+    @Test
+    void abortPrecommitRestoresQueueOrderAndResumesLanesLast()
+        throws Exception {
+        ZLinkInMemoryLocationStore locations = new ZLinkInMemoryLocationStore();
+        ZLinkLocationRepository repository =
+            new ZLinkProviderLocationRepository(locations);
+        InMemoryRelocationStore relocations = new InMemoryRelocationStore();
+        DefaultZLinkFrameworkOptions options = options(locations, relocations);
+        var registration = options.registration();
+        var nodeRegistration = registration.meshNodes().getFirst();
+        try (ZLinkFrameworkRuntime host =
+                ZLinkFrameworkRuntimeTestAccess.start(options)) {
+            ZLinkSpotRuntime runtime = (ZLinkSpotRuntime) host.spotManager();
+            ZLinkMeshNodeDescriptor source = repository.listMeshNodes(
+                    MESH,
+                    ZLinkPageRequest.firstPage())
+                .toCompletableFuture().get().items().stream()
+                .filter(value -> value.rid().equals(
+                    nodeRegistration.routingId()))
+                .findFirst().orElseThrow();
+            ZLinkLocationOwnerToken targetOwner = assertInstanceOf(
+                ZLinkOwnerLeaseClaimed.class,
+                repository.claimOwnerLease(
+                    "target-owner", Duration.ofSeconds(30))
+                    .toCompletableFuture().get()).token();
+            host.spotManager().getOrCreate(SPOT_ID, STABLE_TYPE)
+                .submit().toCompletableFuture().get();
+            repository.updateMeshNode(
+                    descriptor(TARGET_RID, 9, targetOwner,
+                        "inproc://retire-target"),
+                    ZLinkLocationWriteIntent.NEW_CLAIM)
+                .toCompletableFuture().get();
+
+            List<String> events =
+                new java.util.concurrent.CopyOnWriteArrayList<>();
+            ZLinkAggregateRelocationCoordinator coordinator =
+                new ZLinkAggregateRelocationCoordinator(
+                    repository,
+                    trackingStore(relocations, events, null, null, null));
+            ZLinkRelocationPermitPool permits =
+                new ZLinkRelocationPermitPool(new ZLinkLocationOptions());
+            ZLinkUserSpotRetireSourceBuilder builder =
+                new ZLinkUserSpotRetireSourceBuilder(
+                    MESH,
+                    nodeRegistration.routingId(),
+                    source.lifecycleGeneration(),
+                    repository,
+                    coordinator,
+                    permits,
+                    runtime.spotLifecycle(),
+                    runtime.actorSessions(),
+                    new ZLinkRelocationAdapterRegistry(
+                        registration,
+                        ZLinkHandlerActivator.reflection()),
+                    nodeRegistration.relocatableSpotFactories(),
+                    nodeRegistration.relocatableActorFactories());
+
+            ZLinkUserSpotRetireSourceBuilder.PreparedSource prepared =
+                builder.prepare(
+                    SPOT_ID,
+                    rollingToVersionOne(),
+                    NEVER).toCompletableFuture().get();
+            assertEquals(1, permits.snapshot().outboundUnits());
+
+            DefaultSpotContext context =
+                (DefaultSpotContext) LiveSpot.last.get().context();
+            CompletionStage<Void> second = context.enqueueAcceptedDispatch(
+                new byte[] {2},
+                () -> {
+                    events.add("resumed:second:outbound="
+                        + permits.snapshot().outboundUnits());
+                    return CompletableFuture.completedFuture(null);
+                },
+                () -> { });
+            CompletionStage<Void> third = context.enqueueAcceptedDispatch(
+                new byte[] {3},
+                () -> {
+                    events.add("resumed:third");
+                    return CompletableFuture.completedFuture(null);
+                },
+                () -> { });
+            assertTrue(
+                events.stream().noneMatch(
+                    event -> event.startsWith("resumed:")),
+                "records admitted after the seal must stay held");
+
+            prepared.abortPrecommit().toCompletableFuture().get();
+
+            CompletionStage<Void> fourth = context.enqueueAcceptedDispatch(
+                new byte[] {4},
+                () -> {
+                    events.add("resumed:fourth");
+                    return CompletableFuture.completedFuture(null);
+                },
+                () -> { });
+            CompletableFuture.allOf(
+                second.toCompletableFuture(),
+                third.toCompletableFuture(),
+                fourth.toCompletableFuture()).get();
+
+            List<String> observed = List.copyOf(events);
+            int discard = observed.lastIndexOf("staged-root-discard");
+            int resumed = observed.indexOf("resumed:second:outbound=0");
+            assertTrue(discard >= 0,
+                "abort must discard the staged root: " + observed);
+            assertTrue(resumed >= 0,
+                "the permit must be restored before the lanes resume: "
+                    + observed);
+            assertTrue(discard < resumed,
+                "staged root discard must precede lane resume: " + observed);
+            assertEquals(
+                List.of(
+                    "resumed:second:outbound=0",
+                    "resumed:third",
+                    "resumed:fourth"),
+                observed.subList(resumed, observed.size()),
+                "restored records keep the original queue order");
+            assertEquals(0, permits.snapshot().outboundUnits());
+            assertSame(LiveSpot.last.get(), runtime.spotFor(SPOT_ID));
+        }
+    }
+
+    @Test
+    void captureFailureAfterStagedRootDiscardsTheStagedRoot()
+        throws Exception {
+        ZLinkInMemoryLocationStore locations = new ZLinkInMemoryLocationStore();
+        ZLinkLocationRepository repository =
+            new ZLinkProviderLocationRepository(locations);
+        InMemoryRelocationStore relocations = new InMemoryRelocationStore();
+        DefaultZLinkFrameworkOptions options = options(locations, relocations);
+        var registration = options.registration();
+        var nodeRegistration = registration.meshNodes().getFirst();
+        try (ZLinkFrameworkRuntime host =
+                ZLinkFrameworkRuntimeTestAccess.start(options)) {
+            ZLinkSpotRuntime runtime = (ZLinkSpotRuntime) host.spotManager();
+            ZLinkMeshNodeDescriptor source = repository.listMeshNodes(
+                    MESH,
+                    ZLinkPageRequest.firstPage())
+                .toCompletableFuture().get().items().stream()
+                .filter(value -> value.rid().equals(
+                    nodeRegistration.routingId()))
+                .findFirst().orElseThrow();
+            ZLinkLocationOwnerToken targetOwner = assertInstanceOf(
+                ZLinkOwnerLeaseClaimed.class,
+                repository.claimOwnerLease(
+                    "target-owner", Duration.ofSeconds(30))
+                    .toCompletableFuture().get()).token();
+            host.spotManager().getOrCreate(SPOT_ID, STABLE_TYPE)
+                .submit().toCompletableFuture().get();
+            repository.updateMeshNode(
+                    descriptor(TARGET_RID, 9, targetOwner,
+                        "inproc://retire-target"),
+                    ZLinkLocationWriteIntent.NEW_CLAIM)
+                .toCompletableFuture().get();
+
+            List<String> events =
+                new java.util.concurrent.CopyOnWriteArrayList<>();
+            List<String> putReferences =
+                new java.util.concurrent.CopyOnWriteArrayList<>();
+            List<String> deleteReferences =
+                new java.util.concurrent.CopyOnWriteArrayList<>();
+            //  The in-memory store ignores cancellation, so a flag raised on
+            //  the first staged read-back deterministically fails the first
+            //  step after coordinator.stageRoot succeeded.
+            java.util.concurrent.atomic.AtomicBoolean lateCancel =
+                new java.util.concurrent.atomic.AtomicBoolean();
+            ZLinkAggregateRelocationCoordinator coordinator =
+                new ZLinkAggregateRelocationCoordinator(
+                    repository,
+                    trackingStore(
+                        relocations,
+                        events,
+                        putReferences,
+                        deleteReferences,
+                        () -> lateCancel.set(true)));
+            ZLinkRelocationPermitPool permits =
+                new ZLinkRelocationPermitPool(new ZLinkLocationOptions());
+            ZLinkUserSpotRetireSourceBuilder builder =
+                new ZLinkUserSpotRetireSourceBuilder(
+                    MESH,
+                    nodeRegistration.routingId(),
+                    source.lifecycleGeneration(),
+                    repository,
+                    coordinator,
+                    permits,
+                    runtime.spotLifecycle(),
+                    runtime.actorSessions(),
+                    new ZLinkRelocationAdapterRegistry(
+                        registration,
+                        ZLinkHandlerActivator.reflection()),
+                    nodeRegistration.relocatableSpotFactories(),
+                    nodeRegistration.relocatableActorFactories());
+
+            var prepare = builder.prepare(
+                    SPOT_ID,
+                    rollingToVersionOne(),
+                    lateCancel::get)
+                .toCompletableFuture();
+            Throwable failure = assertThrows(
+                Exception.class,
+                () -> prepare.get(
+                    30, java.util.concurrent.TimeUnit.SECONDS));
+            while (failure.getCause() != null
+                && !(failure
+                    instanceof java.util.concurrent.CancellationException)) {
+                failure = failure.getCause();
+            }
+            assertInstanceOf(
+                java.util.concurrent.CancellationException.class, failure);
+
+            assertFalse(putReferences.isEmpty(),
+                "the relocation root must have been staged before failing");
+            assertTrue(
+                deleteReferences.contains(putReferences.getLast()),
+                "the staged root manifest must be discarded: puts="
+                    + putReferences + " deletes=" + deleteReferences);
+            assertEquals(0, permits.snapshot().outboundUnits(),
+                "the outbound permit must be released after the abort");
+            assertEquals(0, builder.unresolvedPreparationCount());
+            assertSame(LiveSpot.last.get(), runtime.spotFor(SPOT_ID));
+        }
+    }
+
+    private static ZLinkRelocationStore trackingStore(
+        InMemoryRelocationStore delegate,
+        List<String> events,
+        List<String> putReferences,
+        List<String> deleteReferences,
+        Runnable afterRead) {
+        return new ZLinkRelocationStore() {
+            @Override public CompletionStage<ZLinkRelocationStored> put(
+                byte[] payload,
+                Duration retention,
+                ZLinkStoreCancellation cancellation) {
+                return delegate.put(payload, retention, cancellation)
+                    .thenApply(stored -> {
+                        if (putReferences != null) {
+                            putReferences.add(stored.reference());
+                        }
+                        return stored;
+                    });
+            }
+
+            @Override public CompletionStage<ZLinkRelocationReadResult> get(
+                String reference,
+                ZLinkStoreCancellation cancellation) {
+                return delegate.get(reference, cancellation)
+                    .thenApply(read -> {
+                        if (afterRead != null) {
+                            afterRead.run();
+                        }
+                        return read;
+                    });
+            }
+
+            @Override public CompletionStage<ZLinkRelocationRenewResult> renew(
+                String reference,
+                Duration retention,
+                ZLinkStoreCancellation cancellation) {
+                return delegate.renew(reference, retention, cancellation);
+            }
+
+            @Override public CompletionStage<ZLinkRelocationDeleteResult>
+                delete(
+                    String reference,
+                    ZLinkStoreCancellation cancellation) {
+                events.add("staged-root-discard");
+                if (deleteReferences != null) {
+                    deleteReferences.add(reference);
+                }
+                return delegate.delete(reference, cancellation);
+            }
+        };
+    }
+
     private static DefaultZLinkFrameworkOptions options(
         systems.zlink.framework.runtime.locations
             .ZLinkInMemoryLocationStore locations,

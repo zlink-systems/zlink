@@ -228,8 +228,19 @@ interface LocalStage {
     ServiceWireRelocationCoordinatorFence
   >;
   readonly candidate: ServiceWireRelocationCandidate;
-  phase: 'prepared' | 'published' | 'replayed' | 'sealed' | 'routed' | 'normalized' | 'open';
+  /**
+   * Admission-gating target phases only. 'open' means application admission
+   * is accepting traffic; session-route and terminal-relay convergence are
+   * tracked as flags because they never gate admission.
+   */
+  phase: 'prepared' | 'replayed' | 'sealed' | 'published' | 'open';
   terminalRelayed: boolean;
+  /** Set when the command 44 -> 42 session-route convergence chain finished. */
+  converged: boolean;
+  /** Single-flight background session-route convergence chain per stage. */
+  convergence?: Promise<void>;
+  /** Single-flight command 35 completion so retries join the same work. */
+  completion?: Promise<ZLinkServiceRelocationControlResponse>;
 }
 
 type TargetRelocationReservation =
@@ -535,7 +546,8 @@ export class ZLinkHostServiceRelocationRuntime {
       coordinator: undefined as never,
       candidate: undefined as never,
       phase: 'prepared',
-      terminalRelayed: false
+      terminalRelayed: false,
+      converged: false
     } satisfies LocalStage;
     const coordinator = new ServiceRelocationCoordinator(
       durable,
@@ -595,7 +607,12 @@ export class ZLinkHostServiceRelocationRuntime {
         }
       },
       {
-        replace: async () => this.publishSessionRoutes(staging)
+        replace: async () => {
+          // Session-route convergence never gates recovery completion. On a
+          // terminated chain the transfer runtime already reported the error
+          // and the accepted-journal root stays retained for a later pass.
+          await this.kickSessionRouteConvergence(recoveryStage).catch(() => undefined);
+        }
       },
       {
         waitUntilReleasable: async (_staging, _authority, recoverySignal) =>
@@ -1666,17 +1683,7 @@ export class ZLinkHostServiceRelocationRuntime {
     signal?: AbortSignal
   ): Promise<ZLinkServiceRelocationControlResponse> {
     if (request.kind === 'complete' && request.sourceCleanupState === 'pending') {
-      if (relocationPhaseRank(stage.phase) >= relocationPhaseRank('published')) {
-        return { ...request, senderRole: 'target' };
-      }
-      requireRelocationPhase(stage, 'sealed');
-      const authority = await requireAuthority(
-        this.requireLocationStore(),
-        { value: primaryKey(stage.staging.envelope) } as ZLinkAuthorityKey,
-        signal
-      );
-      await stage.owner.publish(stage.staging, authority, signal);
-      stage.phase = 'published';
+      await this.openTargetAdmission(stage, signal);
       return { ...request, senderRole: 'target' };
     }
     if (request.kind === 'data') {
@@ -1946,6 +1953,57 @@ export class ZLinkHostServiceRelocationRuntime {
     return relocationControlAck(request);
   }
 
+  /**
+   * Ready decoupling: application admission opens once the owner+membership
+   * CAS (committed staging control), createHidden/restoreApplicationState/
+   * restoreMemberships, accepted-journal + queued-message replay + timer
+   * restore, the seal ACK, and the registry publish/dispatch switch are done.
+   * Command 35, the sourceCleanupCompleted CAS, command 44/45 session-route
+   * ACKs, the command 42 seal release, steady normalization, and
+   * retained-root cleanup converge asynchronously and never gate admission.
+   */
+  private async openTargetAdmission(stage: LocalStage, signal?: AbortSignal): Promise<void> {
+    if (stage.phase !== 'open') {
+      requireRelocationPhase(stage, 'sealed');
+      const authority = await requireAuthority(
+        this.requireLocationStore(),
+        { value: primaryKey(stage.staging.envelope) } as ZLinkAuthorityKey,
+        signal
+      );
+      if (relocationPhaseRank(stage.phase) < relocationPhaseRank('published')) {
+        await stage.owner.publish(stage.staging, authority, signal);
+        stage.phase = 'published';
+      }
+      await stage.owner.normalize(stage.staging, authority, signal);
+      stage.phase = 'open';
+    }
+    this.kickSessionRouteConvergence(stage).catch(() => undefined);
+  }
+
+  /**
+   * Single-flight per stage: command 35 retries and the recovery poller join
+   * the same chain instead of publishing session routes twice. Invariant: the
+   * command 44 route publication must land before the command 42 seal release
+   * reopens the retired session route.
+   */
+  private kickSessionRouteConvergence(stage: LocalStage): Promise<void> {
+    if (stage.convergence === undefined) {
+      const chain = (async () => {
+        await this.publishSessionRoutes(stage.staging);
+        await this.releaseSessionRouteSeals(stage.staging);
+        stage.converged = true;
+      })();
+      stage.convergence = chain;
+      chain.catch(() => {
+        // Terminated without an ACK: the transfer runtime reported the
+        // failure and the accepted-journal root stays retained. A later
+        // command 35 or recovery pass may kick the chain again.
+        if (stage.convergence === chain) stage.convergence = undefined;
+      });
+    }
+    return stage.convergence;
+  }
+
   private async completeTargetStage(
     meshName: string,
     stagingId: string,
@@ -1953,78 +2011,92 @@ export class ZLinkHostServiceRelocationRuntime {
     request: ServiceMaintenanceRelocationComplete,
     signal?: AbortSignal
   ): Promise<ZLinkServiceRelocationControlResponse> {
-    if (stage.phase !== 'open') {
-      requireRelocationPhase(stage, 'sealed');
-      await this.publishSessionRoutes(stage.staging);
-      stage.phase = 'routed';
-      let authority = await requireAuthority(
-        this.requireLocationStore(),
+    // Command 35 retries racing the background convergence chain join the
+    // in-flight completion exactly once and are answered idempotently.
+    const completion = stage.completion
+      ??= this.finishCompletedTargetStage(meshName, stagingId, stage, request, signal);
+    try {
+      return await completion;
+    } catch (error) {
+      if (stage.completion === completion) stage.completion = undefined;
+      throw error;
+    }
+  }
+
+  private async finishCompletedTargetStage(
+    meshName: string,
+    stagingId: string,
+    stage: LocalStage,
+    request: ServiceMaintenanceRelocationComplete,
+    signal?: AbortSignal
+  ): Promise<ZLinkServiceRelocationControlResponse> {
+    await this.openTargetAdmission(stage, signal);
+    // Durable progress advance and terminal-reply relay stay keyed to command
+    // 35: they require the sourceCleanupCompleted root but no longer gate
+    // admission, which opened at command 35 'pending'.
+    let authority = await requireAuthority(
+      this.requireLocationStore(),
+      { value: primaryKey(stage.staging.envelope) } as ZLinkAuthorityKey,
+      signal
+    );
+    const durable = new ServiceDurableRelocationRuntime(
+      this.requireLocationStore(), relocationStorePort(this.requireRelocationStore()), this.codec);
+    const pendingProgress = localSuccessorProgress(stage);
+    if ([...pendingProgress.values()].some(value => value.terminalReplies.byteLength !== 0)) {
+      const previous = this.codec.read(authority.payload);
+      authority = await durable.advanceCompletedProgress(
         { value: primaryKey(stage.staging.envelope) } as ZLinkAuthorityKey,
+        authority,
+        pendingProgress,
+        signal,
+        { retainPreviousRoot: stage.staging.envelope.participants.length > 1 }
+      );
+      await this.completeParticipantAuthorities(
+        stage.staging.envelope,
+        primaryKey(stage.staging.envelope),
+        authority,
         signal
       );
-      const durable = new ServiceDurableRelocationRuntime(
-        this.requireLocationStore(), relocationStorePort(this.requireRelocationStore()), this.codec);
-      const pendingProgress = localSuccessorProgress(stage);
-      if ([...pendingProgress.values()].some(value => value.terminalReplies.byteLength !== 0)) {
-        const previous = this.codec.read(authority.payload);
-        authority = await durable.advanceCompletedProgress(
-          { value: primaryKey(stage.staging.envelope) } as ZLinkAuthorityKey,
-          authority,
-          pendingProgress,
-          signal,
-          { retainPreviousRoot: stage.staging.envelope.participants.length > 1 }
-        );
-        await this.completeParticipantAuthorities(
-          stage.staging.envelope,
-          primaryKey(stage.staging.envelope),
-          authority,
-          signal
-        );
-        if (stage.staging.envelope.participants.length > 1 && previous !== undefined) {
-          await durable.deleteRetainedRoot(previous.reference, signal);
-        }
+      if (stage.staging.envelope.participants.length > 1 && previous !== undefined) {
+        await durable.deleteRetainedRoot(previous.reference, signal);
       }
-      if (!stage.terminalRelayed) {
-        const completions = await this.readDurableTerminalCompletions(stage, authority, signal);
-        await this.relayTerminalReplies(
-          meshName,
-          stage,
-          this.targetReplyRelayCoordinator(meshName, stage, authority),
-          completions,
-          signal
-        );
-        stage.terminalRelayed = true;
+    }
+    if (!stage.terminalRelayed) {
+      const completions = await this.readDurableTerminalCompletions(stage, authority, signal);
+      await this.relayTerminalReplies(
+        meshName,
+        stage,
+        this.targetReplyRelayCoordinator(meshName, stage, authority),
+        completions,
+        signal
+      );
+      stage.terminalRelayed = true;
+    }
+    const progress = localSuccessorProgress(stage);
+    if ([...progress.values()].some(value => value.terminalReplies.byteLength !== 0)) {
+      const previous = this.codec.read(authority.payload);
+      authority = await durable.advanceCompletedProgress(
+        { value: primaryKey(stage.staging.envelope) } as ZLinkAuthorityKey,
+        authority,
+        progress,
+        signal,
+        { retainPreviousRoot: stage.staging.envelope.participants.length > 1 }
+      );
+      await this.completeParticipantAuthorities(
+        stage.staging.envelope,
+        primaryKey(stage.staging.envelope),
+        authority,
+        signal
+      );
+      if (stage.staging.envelope.participants.length > 1 && previous !== undefined) {
+        await durable.deleteRetainedRoot(previous.reference, signal);
       }
-      const progress = localSuccessorProgress(stage);
-      if ([...progress.values()].some(value => value.terminalReplies.byteLength !== 0)) {
-        const previous = this.codec.read(authority.payload);
-        authority = await durable.advanceCompletedProgress(
-          { value: primaryKey(stage.staging.envelope) } as ZLinkAuthorityKey,
-          authority,
-          progress,
-          signal,
-          { retainPreviousRoot: stage.staging.envelope.participants.length > 1 }
-        );
-        await this.completeParticipantAuthorities(
-          stage.staging.envelope,
-          primaryKey(stage.staging.envelope),
-          authority,
-          signal
-        );
-        if (stage.staging.envelope.participants.length > 1 && previous !== undefined) {
-          await durable.deleteRetainedRoot(previous.reference, signal);
-        }
-      }
-      await stage.owner.normalize(stage.staging, authority, signal);
-      stage.phase = 'normalized';
-      await stage.owner.openAdmission(stage.staging, signal);
-      stage.phase = 'open';
-      const completedPublication = this.codec.read(authority.payload);
-      if (completedPublication !== undefined) {
-        this.recoveredPublications.add(
-          `${completedPublication.reference}\0${authority.storeVersion.value}`
-        );
-      }
+    }
+    const completedPublication = this.codec.read(authority.payload);
+    if (completedPublication !== undefined) {
+      this.recoveredPublications.add(
+        `${completedPublication.reference}\0${authority.storeVersion.value}`
+      );
     }
     const response = { ...request, senderRole: 'target' as const };
     this.completedTargets.set(stagingId, {
@@ -2363,6 +2435,17 @@ export class ZLinkHostServiceRelocationRuntime {
     for (const hidden of staging.hidden.values()) {
       if (hidden.actor !== undefined) {
         await this.options.actorTransfer.publishRoutedActorOwnership(hidden.actor);
+      }
+    }
+  }
+
+  /** Command 42 seal release + accepted-journal delete, always after cmd 44. */
+  private async releaseSessionRouteSeals(
+    staging: ServiceObjectRelocationStaging<LocalHidden>
+  ): Promise<void> {
+    for (const hidden of staging.hidden.values()) {
+      if (hidden.actor !== undefined) {
+        await this.options.actorTransfer.openRoutedActorSession(hidden.actor);
       }
     }
   }
@@ -2996,7 +3079,8 @@ export class ZLinkHostServiceRelocationRuntime {
       coordinator: offer.prepare.coordinator,
       candidate: offer.prepare.candidate,
       phase: 'prepared',
-      terminalRelayed: false
+      terminalRelayed: false,
+      converged: false
     };
     this.targetStages.set(stagingId, stage);
     this.targetOffers.delete(stagingId);
@@ -3772,10 +3856,11 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
 
   async normalize(_hidden: LocalHidden): Promise<void> {}
 
-  async openAdmission(hidden: LocalHidden): Promise<void> {
-    if (hidden.actor !== undefined) {
-      await this.options.actorTransfer.openRoutedActorSession(hidden.actor);
-    }
+  async openAdmission(_hidden: LocalHidden): Promise<void> {
+    // Admission opens with the registry dispatch switch in publish(). The
+    // command 42 seal release must stay ordered after the command 44 route
+    // publication, so it runs in the host session-route convergence chain
+    // instead of gating admission here.
   }
 
   async abort(hidden: LocalHidden): Promise<void> {
@@ -4140,7 +4225,7 @@ function selectWeightedRelocationTarget(
 }
 
 function relocationPhaseRank(phase: LocalStage['phase']): number {
-  return ['prepared', 'replayed', 'sealed', 'published', 'routed', 'normalized', 'open'].indexOf(phase);
+  return ['prepared', 'replayed', 'sealed', 'published', 'open'].indexOf(phase);
 }
 
 function requireRelocationPhase(stage: LocalStage, minimum: LocalStage['phase']): void {
@@ -4592,6 +4677,13 @@ function canonicalQueuedFrozenRecord(
   );
   if (packet.returnResponse && packet.source === undefined) {
     throw new Error('Captured Actor request has no exact request-source fence.');
+  }
+  if (!packet.returnResponse && packet.source === undefined
+    && packet.remoteBoundSessionTarget !== undefined) {
+    // A durable frozen record is permitted only for a lease-backed source.
+    // Work tied to a Session connection's lifetime drains before Captured,
+    // so freezing it under the coordinator's fence is a protocol error.
+    throw new Error('Captured connection-bound Actor send cannot enter a relocation envelope.');
   }
   return encodeServiceWireFrozenActorApplicationRecord({
     source,

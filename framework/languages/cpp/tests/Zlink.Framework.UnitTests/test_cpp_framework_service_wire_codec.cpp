@@ -1065,6 +1065,46 @@ int main ()
         }
         assert (rejected);
     }
+    {
+        // Bound-session participant identities round-trip the trailing
+        // lastAcceptedSessionSequence introduced by framework-service-v12,
+        // both as the zero ordinal and as a resumed nonzero cursor.
+        auto reserved = std::get<protocol::relocation_reserved_t> (
+          decoded_controls.back ());
+        protocol::relocation_participant_t bound;
+        bound.participant_id = 1;
+        bound.kind = protocol::relocation_participant_kind_t::bound_session;
+        bound.session_owner_node_routing_id = {'n', 'o', 'd', 'e'};
+        bound.session_owner_node_generation = 7;
+        bound.session_owner_id = "session-owner";
+        bound.session_owner_lease_generation = 9;
+        bound.session_routing_id = {'s', 'e', 's', 's'};
+        bound.binding_generation = 11;
+        bound.last_accepted_session_sequence = 0;
+        bound.allowance_messages = 2;
+        bound.allowance_bytes = 128;
+        auto resumed = bound;
+        resumed.participant_id = 2;
+        resumed.last_accepted_session_sequence = 42;
+        reserved.participants = {bound, resumed};
+        const auto encoded = protocol::encode_relocation_control (reserved);
+        assert (std::get<protocol::relocation_reserved_t> (
+                  protocol::decode_relocation_control (encoded))
+                == reserved);
+        // The identity blob honours the u16 length discipline: trailing bytes
+        // after the sequence are rejected.
+        auto truncated = encoded;
+        truncated.pop_back ();
+        bool rejected = false;
+        try {
+            static_cast<void> (
+              protocol::decode_relocation_control (truncated));
+        }
+        catch (const protocol::service_wire_error_t &) {
+            rejected = true;
+        }
+        assert (rejected);
+    }
 
     std::vector<std::vector<std::uint8_t>> frozen_records;
     frozen_records.push_back (make_frozen_record (

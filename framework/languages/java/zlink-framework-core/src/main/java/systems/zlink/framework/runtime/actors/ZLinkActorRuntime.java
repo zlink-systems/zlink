@@ -1542,9 +1542,14 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         byte[] acceptedJournalRecord = encodeLocalSessionActorAccepted(
             actor, header, payload);
         if (acceptedJournalRecord.length == 0) {
-            throw new ZLinkConfigurationException(
-                "bound-session Actor send cannot cross relocation without "
-                    + "an exact accepted journal fence");
+            // Pre-Captured boundary: the frame was never accepted, so the
+            // session owner keeps redelivery ownership. Surface the retryable
+            // moving/unavailable terminal instead of a configuration failure.
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.UNAVAILABLE,
+                "Actor '" + actor.context().actorId() + "' is moving:"
+                    + " bound-session Actor send cannot cross relocation without"
+                    + " an exact accepted journal fence");
         }
         if (replyRoute == null && header.requestSequence().isPresent()) {
             DefaultActorContext context = requireContext(actor);

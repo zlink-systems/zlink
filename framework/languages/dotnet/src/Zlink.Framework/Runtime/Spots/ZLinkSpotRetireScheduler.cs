@@ -1,4 +1,3 @@
-using System.Runtime.ExceptionServices;
 using Zlink.Framework.Runtime.Host;
 using Zlink.Framework.Runtime.Identifiers;
 using Zlink.Framework.Runtime.Locations;
@@ -642,9 +641,10 @@ internal sealed class ZLinkSpotRetireScheduler(
                 ZLinkFrameworkDebugLog.SpotDiscovery(
                     $"relocation_stage_end spot={activation.SpotId} aggregate={aggregateId:N}");
                 // Command 34 is acknowledged only after the target has
-                // restored the complete staged journal and published
-                // authority. Target execution remains bounded and sealed
-                // until command 35 closes the source cutover.
+                // restored the complete staged journal, published authority,
+                // and opened application admission. Command 35 only proves
+                // source cleanup so the target can converge on Completed and
+                // steady normalization; it no longer gates target execution.
                 interruption.Complete();
                 // StageAsync returns only after the source sends command 34
                 // response=true. That response authorizes the target commit,
@@ -662,21 +662,10 @@ internal sealed class ZLinkSpotRetireScheduler(
                 {
                     await ExecutePrecommitAbortAsync(
                             null,
-                            async () =>
-                            {
-                                var handoffId = aggregateId.ToString("N");
-                                foreach (var (actorId, route) in sealedSessionRoutes)
-                                    await activation
-                                        .AbortActorBoundSessionRouteSealForRetireAsync(
-                                            actorId.Value,
-                                            route,
-                                            handoffId,
-                                            cleanupDeadline.Token)
-                                        .ConfigureAwait(false);
-                            },
                             () => target.AbortAsync(
                                 reservation,
                                 new ZLinkAggregateFence(aggregateId, 1)),
+                            DiscardStagingAsync,
                             async () =>
                             {
                                 if (seal is not null)
@@ -692,9 +681,20 @@ internal sealed class ZLinkSpotRetireScheduler(
                                 }
                                 await RestoreSourceActorsAsync()
                                     .ConfigureAwait(false);
+                            },
+                            async () =>
+                            {
+                                var handoffId = aggregateId.ToString("N");
+                                foreach (var (actorId, route) in sealedSessionRoutes)
+                                    await activation
+                                        .AbortActorBoundSessionRouteSealForRetireAsync(
+                                            actorId.Value,
+                                            route,
+                                            handoffId,
+                                            cleanupDeadline.Token)
+                                        .ConfigureAwait(false);
                             })
                         .ConfigureAwait(false);
-                    await DiscardStagingAsync().ConfigureAwait(false);
                     return ZLinkRelocationUnitResult.Terminal(
                         ZLinkFrameworkRelocationReason.RelocationFailed,
                         ZLinkRelocationCommitKnowledge.NotCommitted,
@@ -747,22 +747,10 @@ internal sealed class ZLinkSpotRetireScheduler(
                     {
                         await ExecutePrecommitAbortAsync(
                                 null,
-                                async () =>
-                                {
-                                    var handoffId = aggregateId.ToString("N");
-                                    foreach (var (actorId, route)
-                                             in sealedSessionRoutes)
-                                        await activation
-                                            .AbortActorBoundSessionRouteSealForRetireAsync(
-                                                actorId.Value,
-                                                route,
-                                                handoffId,
-                                                cleanupDeadline.Token)
-                                            .ConfigureAwait(false);
-                                },
                                 () => target.AbortAsync(
                                     reservation,
                                     new ZLinkAggregateFence(aggregateId, 1)),
+                                DiscardStagingAsync,
                                 async () =>
                                 {
                                     if (seal is not null)
@@ -778,9 +766,21 @@ internal sealed class ZLinkSpotRetireScheduler(
                                     }
                                     await RestoreSourceActorsAsync()
                                         .ConfigureAwait(false);
+                                },
+                                async () =>
+                                {
+                                    var handoffId = aggregateId.ToString("N");
+                                    foreach (var (actorId, route)
+                                             in sealedSessionRoutes)
+                                        await activation
+                                            .AbortActorBoundSessionRouteSealForRetireAsync(
+                                                actorId.Value,
+                                                route,
+                                                handoffId,
+                                                cleanupDeadline.Token)
+                                            .ConfigureAwait(false);
                                 })
                             .ConfigureAwait(false);
-                        await DiscardStagingAsync().ConfigureAwait(false);
                         return ZLinkRelocationUnitResult.Terminal(
                             MapFailureReason(exception, committed: false),
                             ZLinkRelocationCommitKnowledge.NotCommitted,
@@ -850,21 +850,10 @@ internal sealed class ZLinkSpotRetireScheduler(
             {
                 await ExecutePrecommitAbortAsync(
                         null,
-                        async () =>
-                        {
-                            var handoffId = aggregateId.ToString("N");
-                            foreach (var (actorId, route) in sealedSessionRoutes)
-                                await activation
-                                    .AbortActorBoundSessionRouteSealForRetireAsync(
-                                        actorId.Value,
-                                        route,
-                                        handoffId,
-                                        cleanupDeadline.Token)
-                                    .ConfigureAwait(false);
-                        },
                         () => target.AbortAsync(
                             reservation,
                             new ZLinkAggregateFence(aggregateId, 1)),
+                        DiscardStagingAsync,
                         async () =>
                         {
                             if (seal is not null)
@@ -880,9 +869,20 @@ internal sealed class ZLinkSpotRetireScheduler(
                             }
                             await RestoreSourceActorsAsync()
                                 .ConfigureAwait(false);
+                        },
+                        async () =>
+                        {
+                            var handoffId = aggregateId.ToString("N");
+                            foreach (var (actorId, route) in sealedSessionRoutes)
+                                await activation
+                                    .AbortActorBoundSessionRouteSealForRetireAsync(
+                                        actorId.Value,
+                                        route,
+                                        handoffId,
+                                        cleanupDeadline.Token)
+                                    .ConfigureAwait(false);
                         })
                     .ConfigureAwait(false);
-                await DiscardStagingAsync().ConfigureAwait(false);
             }
 
             async ValueTask CompleteCommittedAsync(
@@ -1125,39 +1125,50 @@ internal sealed class ZLinkSpotRetireScheduler(
         }
     }
 
+    private const int MaxSessionRouteUnsealAttempts = 3;
+
     internal static async ValueTask ExecutePrecommitAbortAsync(
         Func<ValueTask>? abortDurableAggregate,
-        Func<ValueTask> restoreSessionRoutes,
         Func<ValueTask> cleanupTarget,
-        Func<ValueTask> resumeSource)
+        Func<ValueTask> discardStaging,
+        Func<ValueTask> resumeSource,
+        Func<ValueTask> unsealSessionRoutes)
     {
-        ArgumentNullException.ThrowIfNull(restoreSessionRoutes);
         ArgumentNullException.ThrowIfNull(cleanupTarget);
+        ArgumentNullException.ThrowIfNull(discardStaging);
         ArgumentNullException.ThrowIfNull(resumeSource);
+        ArgumentNullException.ThrowIfNull(unsealSessionRoutes);
         if (abortDurableAggregate is not null)
             await abortDurableAggregate().ConfigureAwait(false);
-        Exception? routeRestoreFailure = null;
-        try
-        {
-            await restoreSessionRoutes().ConfigureAwait(false);
-        }
-        catch (Exception exception)
-        {
-            routeRestoreFailure = exception;
-        }
-        try
-        {
-            await cleanupTarget().ConfigureAwait(false);
-        }
-        catch when (routeRestoreFailure is not null)
-        {
-            // Restoring the source route remains the primary correctness
-            // failure. Target cleanup is still attempted so source-side wire
-            // retries and target reservations do not remain active.
-        }
-        if (routeRestoreFailure is not null)
-            ExceptionDispatchInfo.Capture(routeRestoreFailure).Throw();
+        await cleanupTarget().ConfigureAwait(false);
+        await discardStaging().ConfigureAwait(false);
         await resumeSource().ConfigureAwait(false);
+        // The wire contract forbids waiting on session route-cancel replies
+        // before source admission is restored, so the unseal runs last and is
+        // best-effort. The session-owner seal is fenced by the exact binding
+        // identity but does not expire on its own; a lost abort is re-sent a
+        // bounded number of times and anything left over clears with the
+        // session lifecycle (disconnect or rebind).
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                await unsealSessionRoutes().ConfigureAwait(false);
+                return;
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+            catch (Exception exception)
+            {
+                ZLinkFrameworkDebugLog.SpotDiscovery(
+                    $"precommit_abort_route_unseal_failed attempt={attempt}"
+                    + $" error={exception.GetType().Name}: {exception.Message}");
+                if (attempt >= MaxSessionRouteUnsealAttempts)
+                    return;
+            }
+        }
     }
 
     private static int CountSnapshotParticipants(

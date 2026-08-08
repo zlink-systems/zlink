@@ -7,7 +7,7 @@
     "wireMajor": 1,
     "byteOrder": "big-endian",
     "headPrefixBytes": 5,
-    "requiredCapability": "framework-service-v11"
+    "requiredCapability": "framework-service-v12"
   },
   "bounds": [
     { "name": "ridBytes", "value": 255 },
@@ -444,12 +444,12 @@
         "preparingAndCaptured": "main-owner-is-immutable-source-target-attempt-token-and-reservation-absent",
         "prepared": "main-owner-is-source-exact-nonzero-target-attempt-owner-lease-node-reservation-and-relocation-present",
         "committedThroughCompleted": "main-owner-is-exact-current-target-and-same-attempt-reservation-relocation-present",
-        "aborted": "main-owner-is-source-until-session-abort-ack-relocation-orphan-cleanup-and-steady-source-normalization"
+        "aborted": "main-owner-is-source-no-route-abort-or-routed-ack-wait-orphan-cleanup-and-relocation-progress-removal-then-reopen-admission"
       },
       "preparedToCommitted": "one-newOwner-cas",
       "sourceFence": "source-owner-id-lease-generation-node-rid-and-generation-immutable-through-terminal",
-      "replacementMutation": "target-attempt-target-owner-lease-node-and-reservation-only-postcommit-reenters-committed",
-      "readyProjection": "forbidden-while-maintenance-relocation-payload-present-including-aborted"
+      "replacementMutation": "target-attempt-target-owner-lease-node-and-reservation-only-same-target-retry-never-reenters-committed",
+      "readyProjection": "ready-derives-from-target-admission-open-retained-relocation-payload-or-maintenance-metadata-does-not-block"
     },
     {
       "kind": "complete-message-bound-integrity",
@@ -683,15 +683,11 @@
         },
         "preparedReplacement": {
           "phase": "prepared",
-          "initiatorRoles": ["source", "coordinator"],
-          "proposedTargetAttemptGeneration": "current-target-attempt-generation-plus-one"
-        },
-        "postCommitReplacement": {
-          "phases": ["committed", "activating", "activated", "cleaning"],
-          "initiatorRoles": ["coordinator"],
+          "initiatorRoles": ["source"],
           "proposedTargetAttemptGeneration": "current-target-attempt-generation-plus-one"
         }
       },
+      "reservedRounds": "postCommitReplacement-wire-value-3-reserved-never-sent-or-accepted-in-this-version",
       "requirementsSource": "exact-current-relocation-participant-inventory",
       "sequence": [
         "initiator-relocationPrepare",
@@ -700,30 +696,23 @@
         "candidate-relocationReserved-ack",
         "expected-version-authority-cas"
       ],
-      "replacementCas": "after-ack-atomically-replace-target-attempt-generation-target-and-reservation-prepared-stays-prepared-post-commit-resets-to-committed",
+      "replacementCas": "after-ack-atomically-replace-target-attempt-generation-and-reservation-same-target-only-prepared-stays-prepared",
       "oldTargetFence": "old-target-attempt-generation-or-authority-store-version-rejected",
-      "relocationIdentity": "stable-relocation-id-relocation-root-and-journal-never-rewritten-only-for-target-replacement",
+      "relocationIdentity": "stable-relocation-id-relocation-root-and-journal-never-rewritten-same-target-retry-only-no-target-process-replacement-in-this-version",
       "targetActivationRetry": "factory-and-restore-are-at-least-once-across-attempts-and-stale-attempts-may-overlap",
       "targetCommitFence": "only-current-exact-owner-and-target-attempt-may-commit-completion-or-open-admission",
       "callbackContract": "retry-safe-no-exactly-once-external-side-effect-guarantee-and-no-public-relocation-id",
       "crossCandidateReplay": "candidate-node-rid-and-generation-must-match-admitted-peer",
       "ackBeforeCasCrash": "retry-identical-round-or-release-orphan-reservation-before-new-candidate",
-      "casBeforeReplyCrash": "read-current-authority-and-continue-new-target-without-second-cas"
+      "casBeforeReplyCrash": "read-current-authority-and-continue-current-target-attempt-without-second-cas"
     },
     {
       "kind": "relocation-coordinator-authorization-integrity",
       "authorityType": "authority-payload-v1",
       "fenceType": "relocation-coordinator-fence",
-      "receiverValidation": [
-        "exact-read-current-authority-by-object-key",
-        "compare-relocation-id-target-attempt-generation-when-present-phase-and-expected-store-version",
-        "compare-coordinator-owner-id-lease-generation-node-rid-and-node-generation",
-        "read-current-owner-lease-token",
-        "match-authenticated-admitted-peer-rid-and-generation-to-declared-sender-role"
-      ],
-      "coordinatorSender": "allowed-only-when-authenticated-peer-matches-current-coordinator-node-and-lease-token",
-      "coordinatorTakeover": "expected-version-cas-updates-only-coordinator-fence-unless-object-owner-also-changes",
-      "staleTakeover": "protocol-error-no-mutation",
+      "coordinatorRole": "wire-value-3-reserved-decodable-never-a-valid-sender-in-this-version",
+      "coordinatorSender": "protocol-error-no-mutation",
+      "coordinatorFence": "encoded-fence-fields-carry-initiating-source-owner-identity-and-are-validated-for-fencing-only-never-grant-sender-rights",
       "aba": "global-lease-generation-prevents-owner-id-reuse-from-revalidating-old-control"
     },
     {
@@ -736,13 +725,16 @@
         "source-captured-relocation",
         "target-restores-and-replays-through-high-water",
         "target-stage-bound-session-route-without-switch-or-unseal",
+        "target-open-application-admission-and-publish-ready-after-owner-membership-cas-lifecycle-callbacks-pending-work-and-timer-restore-ordered-queue-merge-temporary-queue-registration-removal-and-atomic-dispatch-switch"
+      ],
+      "asyncConvergence": [
         "durable-source-cleanup-state-cas",
         "completed-authority-cas",
         "target-sessionRelocationRoute-commit",
         "session-owner-atomic-route-switch-after-completed",
         "session-owner-sessionRelocationRouted-ack",
         "maintenance-authority-normalized-to-steady",
-        "target-open-application-admission-and-publish-ready"
+        "source-ingress-hold-origin-removal"
       ],
       "participantIdentity": "session-owner-node-rid-generation-owner-id-lease-generation-session-rid-binding-generation",
       "recordSequence": "bound-session-actorSend-or-actorRequest-sourceSessionSequence",
@@ -752,8 +744,8 @@
       "senderAdmissionDeadline": "local-monotonic-deadline-derived-from-last-successful-host-lease-read",
       "staleSessionOwnerLease": "protocol-error-no-seal-or-route-switch",
       "commitPhase": "completed-only",
-      "targetAdmission": "sealed-through-activated-cleaning-completed-and-route-ack-open-only-after-steady-normalization",
-      "abort": "source-remains-sealed-aborted-authority-cas-first-then-abort-route-and-routed-ack-cleanup-steady-source-normalization-then-reopen",
+      "targetAdmission": "sealed-until-owner-membership-cas-lifecycle-callbacks-pending-work-and-timer-restore-ordered-queue-merge-temporary-queue-registration-removal-and-atomic-dispatch-switch-then-open-source-cleanup-completed-cas-route-ack-and-steady-normalization-never-gate",
+      "abort": "aborted-authority-cas-first-no-route-abort-or-routed-ack-wait-discard-temporary-queue-and-restore-source-queue-in-original-order-cleanup-reserved-target-space-and-orphan-payload-remove-relocation-progress-then-reopen-admission",
       "duplicate": "idempotent-if-identical-else-protocol-error",
       "missingSequence": "do-not-capture-or-commit",
       "sessionOwnerRestart": "stale-node-generation-protocol-error-no-route-switch"
@@ -761,21 +753,21 @@
     {
       "kind": "relocation-complete-integrity",
       "command": "relocationComplete",
-      "direction": "source-or-current-coordinator-to-current-target",
+      "direction": "source-to-current-target",
       "preconditions": [
         "all-negotiated-participants-sealed",
         "target-activation-succeeded",
         "durable-source-cleanup-state-is-completed-or-sourceLeaseExpired",
         "authority-phase-activated-or-cleaning-or-completed"
       ],
-      "sourceProof": "completed-requires-authenticated-exact-stored-source-token-sourceLeaseExpired-requires-current-coordinator-exact-read-of-that-token-as-missing-or-stale",
+      "sourceProof": "completed-requires-authenticated-exact-stored-source-token-sourceLeaseExpired-requires-target-exact-read-of-that-token-as-missing-or-stale",
       "targetEffect": "validate-durable-source-cleanup-state-and-notify-finalization-once",
       "cleanupGate": "target-activation-complete-and-durable-source-cleanup-state-terminal",
-      "servingGate": "completed-authority-cas-then-bound-session-route-acks-before-application-admission-or-ready-publish",
-      "replacementWindow": "all-nonterminal-phases-before-completed-from-immutable-relocation",
+      "servingGate": "owner-membership-cas-lifecycle-callbacks-pending-work-and-timer-restore-ordered-queue-merge-temporary-queue-registration-removal-and-atomic-dispatch-switch-before-application-admission-or-ready-publish-completed-cas-and-route-acks-converge-async",
+      "retryWindow": "same-target-reprepare-before-committed-from-immutable-relocation-no-target-replacement",
       "afterCompletedFailure": "ordinary-owner-loss-never-replays-retired-relocation",
-      "finalization": "after-completed-and-bound-session-route-acks-cas-maintenance-authority-to-steady-without-relocation-before-ready-projection",
-      "resolverProjection": "maintenance-relocation-authority-is-never-ready-even-when-target-owner-is-recorded",
+      "finalization": "after-completed-and-bound-session-route-acks-cas-maintenance-authority-to-steady-without-relocation-as-async-convergence-never-gating-admission-or-ready",
+      "resolverProjection": "maintenance-relocation-authority-projects-ready-from-target-admission-open-not-from-steady-normalization",
       "duplicate": "idempotent-by-stable-relocation-id-and-durable-source-cleanup-state-target-attempt-is-only-a-peer-fence",
       "reorder": "hold-until-preconditions",
       "wrongDirection": "protocol-error"
@@ -848,8 +840,9 @@
         "remoteUseFence": "source-node-generation-must-exactly-match-current-admitted-descriptor-and-connection-without-numeric-comparison",
         "runtimeLifetimeUnion": "leaseBacked-owner-id-and-lease-generation-or-connectionBound-current-physical-connection-lifetime",
         "durableRecord": "leaseBacked-only-all-frozen-sources-carry-exact-owner-id-and-lease-generation",
-        "preCapturedDrain": "all-connectionBound-accepted-work-and-all-boundSession-requests-must-reach-terminal-before-captured-cas",
-        "drainFailure": "pre-captured-abort-and-retire-blocked-relocationDisabled-then-restore-admission",
+        "preCapturedDrain": "all-connectionBound-accepted-work-must-reach-terminal-before-captured-cas-boundSession-requests-are-not-drained",
+        "boundSessionJournal": "pre-seal-accepted-requests-frozen-with-source-fence-operation-identity-and-reply-route-post-seal-requests-relay-from-ingress-hold-after-commit",
+        "drainFailure": "pre-captured-abort-and-retire-blocked-deadlineExceeded-then-restore-admission",
         "connectionBoundFrozenRecord": "forbidden"
       },
       "sourceIdentityMismatch": "protocol-error-before-replay-or-relocation-admission"
@@ -907,11 +900,11 @@
       "userSpotMember": "preflight-blocked-relocationDisabled-state-and-admission-unchanged",
       "targetOffer": "compatible-initialized-target-entry-spot-id-object-generation-and-kind",
       "commit": "newOwner-cas-atomically-updates-owner-authority-owner-generation-and-current-target-entry-spot",
-      "callbackOrder": "factory-restore-and-staging-then-owner-entry-membership-commit-then-target-entry-onActorRelocated-then-source-entry-onLeaveActor-and-old-entry-membership-durable-cleanup-or-source-crash-durable-cleanup-terminal-then-journal-replay",
+      "callbackOrder": "factory-restore-and-staging-then-owner-entry-membership-commit-then-target-entry-onActorRelocated-then-journal-replay-then-source-entry-onLeaveActor-and-old-entry-membership-durable-cleanup-or-source-crash-durable-cleanup-terminal",
       "targetCallback": "target-entry-onActorRelocated-after-commit-never-onJoinedActor",
-      "sourceCleanup": "source-entry-onLeaveActor-and-old-entry-membership-removal-durable-before-replay-or-source-crash-durable-cleanup-terminal-substitutes",
+      "sourceCleanup": "source-entry-onLeaveActor-and-old-entry-membership-removal-durable-after-replay-as-async-convergence-or-source-crash-durable-cleanup-terminal-substitutes",
       "userSpotAggregateCallbacks": "onActorJoin-onJoinedActor-onActorRelocated-onLeaveActor-all-forbidden",
-      "targetAdmission": "sealed-through-completed-route-acks-and-steady-normalization",
+      "targetAdmission": "sealed-until-owner-membership-cas-restore-replay-queue-merge-and-dispatch-switch-then-open-route-acks-and-steady-normalization-converge-async",
       "callbacks": "retry-safe-at-least-once-failure-never-rolls-back-committed-authority"
     },
     {
@@ -1186,8 +1179,8 @@
     "byteReservation": "before-seal-participant-64MiB-plus-deterministic-framework-owned-upper-bound",
     "byteReconciliation": "after-capture-shrink-to-actual-encoded-size-never-increase",
     "oversizedUnit": "single-unit-only-when-byte-window-empty-exclusive-until-byte-permit-release",
-    "requestDrainBeforeCaptured": "all-connectionBound-accepted-work-and-boundSession-requests-must-be-terminal-and-are-never-journaled",
-    "requestDrainFailure": "abort-before-captured-retire-blocked-relocationDisabled-and-restore-admission",
+    "requestDrainBeforeCaptured": "all-connectionBound-accepted-work-must-be-terminal-and-is-never-journaled-boundSession-requests-journal-with-source-fence-operation-identity-and-reply-route",
+    "requestDrainFailure": "abort-before-captured-retire-blocked-deadlineExceeded-and-restore-admission",
     "phaseOrder": [
       "preparing-cas",
       "relocation-put",
@@ -2996,7 +2989,8 @@
             { "name": "sessionOwnerId", "$ref": "text8" },
             { "name": "sessionOwnerLeaseGeneration", "$ref": "nonzero-u64" },
             { "name": "sessionRid", "$ref": "rid" },
-            { "name": "bindingGeneration", "$ref": "nonzero-u64" }
+            { "name": "bindingGeneration", "$ref": "nonzero-u64" },
+            { "name": "lastAcceptedSessionSequence", "$ref": "ordinal-or-zero" }
           ]
         }
       ],
@@ -4796,11 +4790,8 @@
       { "from": "captured", "to": "prepared" },
       { "from": "prepared", "to": "committed" },
       { "from": "committed", "to": "activating" },
-      { "from": "activating", "to": "committed", "only": "postCommitReplacementAckedCas" },
       { "from": "activating", "to": "activated" },
-      { "from": "activated", "to": "committed", "only": "postCommitReplacementAckedCas" },
       { "from": "activated", "to": "cleaning" },
-      { "from": "cleaning", "to": "committed", "only": "postCommitReplacementAckedCas" },
       { "from": "cleaning", "to": "completed" },
       { "from": "preparing", "to": "aborted" },
       { "from": "captured", "to": "aborted" },
@@ -4809,7 +4800,7 @@
     "commandRules": [
       {
         "command": "sessionRelocationSeal",
-        "senderRoles": ["source", "coordinator"],
+        "senderRoles": ["source"],
         "phases": ["preparing"],
         "duplicate": "idempotent-if-identical-else-protocol-error",
         "reorder": "hold-until-preparing-authority",
@@ -4825,55 +4816,53 @@
       },
       {
         "command": "sessionRelocationRoute",
-        "senderRoles": ["source", "target", "coordinator"],
-        "phases": ["aborted", "completed"],
+        "senderRoles": ["target"],
+        "phases": ["completed"],
         "actionRules": {
-          "abort": { "senderRoles": ["source", "coordinator"], "phases": ["aborted"] },
-          "commit": { "senderRoles": ["target", "coordinator"], "phases": ["completed"] }
+          "commit": { "senderRoles": ["target"], "phases": ["completed"] }
         },
         "duplicate": "idempotent-if-identical-else-protocol-error",
-        "reorder": "commit-after-replay-or-abort-after-authority-decision",
+        "reorder": "commit-after-replay",
         "loss": "retransmit-until-routed-ack"
       },
       {
         "command": "sessionRelocationRouted",
         "senderKind": "sessionOwner",
-        "phases": ["aborted", "completed"],
+        "phases": ["completed"],
         "actionRules": {
-          "abort": { "phases": ["aborted"] },
           "commit": { "phases": ["completed"] }
         },
         "duplicate": "idempotent-if-identical-else-protocol-error",
         "reorder": "hold-until-matching-route-action",
-        "loss": "retransmit-until-source-reopen-or-target-ready"
+        "loss": "retransmit-until-target-ready"
       },
       {
         "command": "relocationPrepare",
-        "senderRoles": ["source", "coordinator"],
-        "phases": ["captured", "prepared", "committed", "activating", "activated", "cleaning"],
+        "senderRoles": ["source"],
+        "phases": ["captured", "prepared"],
         "duplicate": "idempotent-if-identical-else-protocol-error",
         "reorder": "hold-until-captured-authority",
-        "loss": "retransmit-until-deadline"
+        "loss": "retransmit-until-matching-ready-or-phase-advance-or-deadline"
       },
       {
         "command": "relocationReady",
-        "senderRoles": ["source", "target", "coordinator"],
-        "phases": ["captured", "prepared", "committed", "activating", "activated", "cleaning"],
+        "senderRoles": ["source", "target"],
+        "phases": ["captured", "prepared"],
         "duplicate": "idempotent-if-identical-else-protocol-error",
         "reorder": "hold-until-matching-relocationPrepare-or-target-offer",
-        "loss": "retransmit-until-deadline"
+        "loss": "retransmit-until-matching-handshake-response-or-phase-advance-or-deadline"
       },
       {
         "command": "relocationReserved",
         "senderRoles": ["target"],
-        "phases": ["captured", "prepared", "committed", "activating", "activated", "cleaning"],
+        "phases": ["captured", "prepared"],
         "duplicate": "idempotent-if-identical-else-protocol-error",
         "reorder": "hold-until-matching-source-accept",
         "loss": "retransmit-until-prepared-or-deadline"
       },
       {
         "command": "relocationData",
-        "senderRoles": ["source", "coordinator"],
+        "senderRoles": ["source"],
         "phases": ["prepared", "committed", "activating"],
         "duplicate": "idempotent-by-stable-relocation-id-target-attempt-generation-participant-sequence",
         "reorder": "stage-by-participant-sequence",
@@ -4921,7 +4910,7 @@
       },
       {
         "command": "relocationSeal",
-        "senderRoles": ["source", "target", "coordinator"],
+        "senderRoles": ["source", "target"],
         "phases": ["prepared", "committed", "activating"],
         "duplicate": "idempotent-if-identical-else-protocol-error",
         "reorder": "hold-until-participant-boundary-reached",
@@ -4929,7 +4918,7 @@
       },
       {
         "command": "relocationComplete",
-        "senderRoles": ["source", "coordinator"],
+        "senderRoles": ["source"],
         "phases": ["activated", "cleaning", "completed"],
         "duplicate": "idempotent-by-stable-relocation-id-target-attempt-generation-and-source-cleanup-state",
         "reorder": "hold-until-activated-sealed-and-durable-source-cleanup-terminal",

@@ -832,6 +832,8 @@ class public_host_runtime_t :
       const relocation_attempt_key_t &key);
     bool relocation_target_authority_committed (
       const relocation_target_attempt_t &attempt) const noexcept;
+    bool relocation_target_authority_committed_strict (
+      const relocation_target_attempt_t &attempt) const noexcept;
     struct relocation_target_attempt_t
     {
         protocol::relocation_prepare_t prepare;
@@ -849,6 +851,7 @@ class public_host_runtime_t :
     take_expired_relocation_target_attempts_locked (
       std::chrono::steady_clock::time_point now);
     void expire_relocation_target_attempts ();
+    void poll_relocation_target_attempts ();
     void cleanup_expired_relocation_target_attempts (
       std::vector<relocation_target_attempt_t> attempts) noexcept;
     struct relocation_completion_wait_t
@@ -859,8 +862,15 @@ class public_host_runtime_t :
           protocol::source_cleanup_state_t::pending;
         bool accepted = false;
     };
+    struct relocation_reservation_wait_t
+    {
+        protocol::relocation_reserved_t expected;
+        bool accepted = false;
+    };
     std::map<relocation_attempt_key_t, protocol::relocation_ready_t>
       _relocation_ready_responses;
+    std::map<relocation_attempt_key_t, relocation_reservation_wait_t>
+      _relocation_reservation_responses;
     std::map<relocation_attempt_key_t, relocation_completion_wait_t>
       _relocation_complete_responses;
     std::map<relocation_attempt_key_t, relocation_target_attempt_t>
@@ -870,6 +880,8 @@ class public_host_runtime_t :
     static constexpr std::size_t relocation_terminal_capacity = 65'536;
     static constexpr auto relocation_attempt_retention =
       std::chrono::minutes (5);
+    static constexpr auto relocation_accept_retransmit_interval =
+      std::chrono::milliseconds (50);
     std::condition_variable _relocation_changed;
     struct user_spot_terminal_record_t
     {

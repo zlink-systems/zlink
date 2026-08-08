@@ -67,6 +67,11 @@ final class ZLinkCanonicalRelocationProtocol {
     }
 
     static byte[] encodeReady(Ready value) {
+        validateReadyShape(
+            value.role(),
+            value.offeredMessages(),
+            value.offeredBytes(),
+            value.participants());
         Writer writer = body(ServiceWireConstants.COMMAND_RELOCATION_READY,
             ServiceWireConstants.FLAG_EXTENSION);
         common(writer, value.id(), value.attempt(), value.round(),
@@ -116,6 +121,7 @@ final class ZLinkCanonicalRelocationProtocol {
         long offeredMessages = reader.u64();
         long offeredBytes = reader.u64();
         List<Participant> participants = participants(reader);
+        validateReadyShape(role, offeredMessages, offeredBytes, participants);
         Reader extension = reader.slice(reader.u32());
         long sourceGeneration = 0;
         long targetGeneration = 0;
@@ -472,6 +478,7 @@ final class ZLinkCanonicalRelocationProtocol {
                 identity.u64(value.sessionOwnerLeaseGeneration());
                 identity.rid(value.sessionRid());
                 identity.u64(value.bindingGeneration());
+                identity.u64(value.lastAcceptedSessionSequence());
             }
             writer.u8(value.kind());
             writer.u16(identity.size());
@@ -494,6 +501,7 @@ final class ZLinkCanonicalRelocationProtocol {
             long ownerLease = 0;
             RoutingId sessionRid = null;
             long bindingGeneration = 0;
+            long lastAcceptedSessionSequence = 0;
             if (kind == 2) {
                 ownerRid = identity.rid();
                 ownerGeneration = identity.nonzero();
@@ -501,13 +509,15 @@ final class ZLinkCanonicalRelocationProtocol {
                 ownerLease = identity.nonzero();
                 sessionRid = identity.rid();
                 bindingGeneration = identity.nonzero();
+                lastAcceptedSessionSequence = identity.u64();
             } else if (kind != 1) {
                 throw invalid("participant kind");
             }
             identity.end();
             values.add(new Participant(
                 id, kind, ownerRid, ownerGeneration, ownerId, ownerLease,
-                sessionRid, bindingGeneration, reader.u64(), reader.u64()));
+                sessionRid, bindingGeneration, lastAcceptedSessionSequence,
+                reader.u64(), reader.u64()));
         }
         return List.copyOf(values);
     }
@@ -531,6 +541,28 @@ final class ZLinkCanonicalRelocationProtocol {
             : null;
         body.end();
         return value;
+    }
+
+    /**
+     * Shared-schema relocationReady sentinel: the target offer carries
+     * nonzero offered capacity and an EMPTY participant vector; the source
+     * acceptance carries zero offered capacity and the exact prepare set.
+     */
+    private static void validateReadyShape(
+        int role,
+        long offeredMessages,
+        long offeredBytes,
+        List<Participant> participants) {
+        boolean valid = switch (role) {
+            case ROLE_TARGET -> offeredMessages != 0 && offeredBytes != 0
+                && participants.isEmpty();
+            case ROLE_SOURCE -> offeredMessages == 0 && offeredBytes == 0
+                && !participants.isEmpty();
+            default -> false;
+        };
+        if (!valid) {
+            throw invalid("ready offer or accept shape");
+        }
     }
 
     private static IllegalArgumentException invalid(String field) {
@@ -570,12 +602,13 @@ final class ZLinkCanonicalRelocationProtocol {
         long sessionOwnerLeaseGeneration,
         RoutingId sessionRid,
         long bindingGeneration,
+        long lastAcceptedSessionSequence,
         long allowanceMessages,
         long allowanceBytes) {
         static Participant plain(
             long id, long messages, long bytes) {
             return new Participant(
-                id, 1, null, 0, null, 0, null, 0, messages, bytes);
+                id, 1, null, 0, null, 0, null, 0, 0, messages, bytes);
         }
     }
 

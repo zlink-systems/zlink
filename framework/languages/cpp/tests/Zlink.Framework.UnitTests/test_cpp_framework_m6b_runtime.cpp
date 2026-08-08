@@ -2035,6 +2035,32 @@ void verify_location_store_accepted_record_authority ()
             == static_cast<std::uint64_t> (
                  target_owner.lease_generation));
 
+    // A bound-session query carries the session triple next to the owning
+    // Actor identity so resolvers can fence-check the binding.
+    const auto resolved_bound = resolver ({
+      .target = {stateful::object_kind_t::actor,
+                 "actor-authority",
+                 committed.ready.object_generation,
+                 committed.ready.authority_owner_generation,
+                 "m6b-mesh",
+                 "raw-target"},
+      .source_node_routing_id = bytes ("raw-source"),
+      .source_node_generation = 1,
+      .target_node_routing_id = bytes ("raw-target"),
+      .target_node_generation = 1,
+      .source_kind = protocol::frozen_source_kind_t::bound_session,
+      .source_actor = std::make_pair (
+        std::string ("actor-authority"),
+        committed.ready.object_generation),
+      .source_session_routing_id = bytes ("sess-1"),
+      .source_binding_generation = 5,
+      .source_session_sequence = 9});
+    assert (resolved_bound);
+    assert (resolved_bound->source.owner_id == source_owner.owner_id);
+    assert (resolved_bound->target_owner_lease_generation
+            == static_cast<std::uint64_t> (
+                 target_owner.lease_generation));
+
     auto stale = stateful::accepted_record_authority_query_t{
       .target = {stateful::object_kind_t::actor,
                  "actor-authority",
@@ -2312,6 +2338,140 @@ void verify_raw_spot_and_actor_routing ()
             == foundation::operation_terminal_t::completed);
     assert (protocol::decode_application_payload (result.second).payload
             == bytes ("reply"));
+
+    // A bound-session actorRequest journals the frozen source with the
+    // session triple and the owning Actor identity of the current binding
+    // (the fenced ingest target), instead of stripping the identity down to
+    // a plain node source.
+    const protocol::actor_message_header_t::bound_session_source_t
+      bound_session_tail{{'s', 'e', 's', 's', '-', '1'}, 5, 9};
+    const protocol::wire_operation_id_t bound_operation{0xa1, 0xa2};
+    assert (target.mailbox ().try_enqueue (
+      mesh::service_mailbox_record_t{
+       "actor:actor-1",
+       mesh::service_mailbox_domain_t::application,
+       {protocol::encode_actor_message_header (
+          protocol::command::actorRequest, std::nullopt, actor_fence,
+          bound_operation, 91, 0, bound_session_tail),
+        protocol::encode_application_payload (
+          {"ActorPacket", "application/json", bytes ("bound")})},
+       source_descriptor.node_routing_id,
+       91,
+       91,
+       source_descriptor.lifecycle_generation,
+       std::make_pair (bound_operation.high, bound_operation.low)}));
+    assert (dispatch.ingest (actor)
+            == stateful::stateful_error_t::none);
+    const auto [bound_delivery_error, bound_delivery] =
+      dispatch.try_claim (actor);
+    assert (bound_delivery_error == stateful::stateful_error_t::none);
+    assert (bound_delivery && bound_delivery->request);
+    const auto &frozen_bound = bound_delivery->frozen;
+    assert (frozen_bound.kind
+            == protocol::frozen_record_kind_t::actor_request);
+    assert (frozen_bound.source_kind
+            == protocol::frozen_source_kind_t::bound_session);
+    assert (frozen_bound.source_session_routing_id
+            && *frozen_bound.source_session_routing_id
+                 == bound_session_tail.session_routing_id);
+    assert (frozen_bound.source_binding_generation
+            == bound_session_tail.binding_generation);
+    assert (frozen_bound.source_session_sequence
+            == bound_session_tail.session_sequence);
+    assert (frozen_bound.source_actor
+            && frozen_bound.source_actor->first == "actor-1"
+            && frozen_bound.source_actor->second == actor.object_generation);
+    assert (frozen_bound.reply_route_id
+            && *frozen_bound.reply_route_id != 0);
+    // The canonical journal bytes decode back to the same bound-session
+    // identity, so replay after relocation keeps the fence intact.
+    {
+        assert (bound_delivery->turn.application_record.has_value ());
+        const auto encoded_bound =
+          protocol::encode_frozen_application_record (
+            *bound_delivery->turn.application_record);
+        assert (!encoded_bound.canonical_bytes.empty ());
+        const auto canonical = protocol::decode_frozen_record (
+          encoded_bound.canonical_bytes);
+        assert (canonical.source_kind
+                == protocol::frozen_source_kind_t::bound_session);
+        assert (canonical.source_session_routing_id
+                && *canonical.source_session_routing_id
+                     == bound_session_tail.session_routing_id);
+        assert (canonical.source_binding_generation
+                == bound_session_tail.binding_generation);
+        assert (canonical.source_session_sequence
+                == bound_session_tail.session_sequence);
+        assert (canonical.source_actor
+                && canonical.source_actor->first == "actor-1"
+                && canonical.source_actor->second
+                     == actor.object_generation);
+    }
+    assert (dispatch.complete (
+              *bound_delivery,
+              protocol::application_payload_t{
+                "ActorReply", "application/json", bytes ("bound-reply")})
+            == stateful::stateful_error_t::none);
+
+    // A bound-session-routed actorRequest that is missing its exact fence
+    // (here: zero binding generation and session sequence) is pre-Captured.
+    // Ingest answers with the retryable moving rejection and never freezes
+    // the frame under a fallback node/actor identity.
+    const protocol::wire_operation_id_t unfenced_operation{0xb1, 0xb2};
+    assert (target.mailbox ().try_enqueue (
+      mesh::service_mailbox_record_t{
+       "actor:actor-1",
+       mesh::service_mailbox_domain_t::application,
+       {protocol::encode_actor_message_header (
+          protocol::command::actorRequest, std::nullopt, actor_fence,
+          unfenced_operation, 92, 0),
+        protocol::encode_application_payload (
+          {"ActorPacket", "application/json", bytes ("unfenced")})},
+       source_descriptor.node_routing_id,
+       92,
+       92,
+       source_descriptor.lifecycle_generation,
+       std::make_pair (unfenced_operation.high, unfenced_operation.low),
+       mesh::service_bound_session_source_t{
+         bound_session_tail.session_routing_id, 0, 0}}));
+    assert (dispatch.ingest (actor)
+            == stateful::stateful_error_t::moving);
+    {
+        const auto [unfenced_error, unfenced_delivery] =
+          dispatch.try_claim (actor);
+        (void) unfenced_error;
+        assert (!unfenced_delivery);
+    }
+
+    // A binding that requires the fence while the frame carries no
+    // bound-session tail at all is the same pre-Captured condition.
+    const protocol::wire_operation_id_t tailless_operation{0xb3, 0xb4};
+    assert (target.mailbox ().try_enqueue (
+      mesh::service_mailbox_record_t{
+       "actor:actor-1",
+       mesh::service_mailbox_domain_t::application,
+       {protocol::encode_actor_message_header (
+          protocol::command::actorRequest, std::nullopt, actor_fence,
+          tailless_operation, 93, 0),
+        protocol::encode_application_payload (
+          {"ActorPacket", "application/json", bytes ("tailless")})},
+       source_descriptor.node_routing_id,
+       93,
+       93,
+       source_descriptor.lifecycle_generation,
+       std::make_pair (tailless_operation.high, tailless_operation.low),
+       mesh::service_bound_session_source_t{
+         bound_session_tail.session_routing_id,
+         bound_session_tail.binding_generation,
+         bound_session_tail.session_sequence}}));
+    assert (dispatch.ingest (actor)
+            == stateful::stateful_error_t::moving);
+    {
+        const auto [tailless_error, tailless_delivery] =
+          dispatch.try_claim (actor);
+        (void) tailless_error;
+        assert (!tailless_delivery);
+    }
 
     authority_live = false;
     assert (source.send_to_actor (
@@ -3126,7 +3286,7 @@ void verify_raw_reply_relay_and_exact_source_ack ()
       2,
       128,
       {{1, protocol::relocation_participant_kind_t::object_mailbox,
-        {}, 0, {}, 0, {}, 0, 2, 128}},
+        {}, 0, {}, 0, {}, 0, 0, 2, 128}},
       protocol::relocation_root_t{"relocation-root", 0x12345678},
       1};
     assert (source.send_relocation_control (

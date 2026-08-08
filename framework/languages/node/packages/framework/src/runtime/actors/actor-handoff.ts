@@ -132,6 +132,7 @@ interface ActiveHandoff {
   phase: 'provisional' | 'relocating';
   readonly operationId?: string;
   replay?: ZLinkActorHandoffDispatch;
+  connectionBoundSealed: boolean;
   readonly pending: PendingPacket[];
   nextIndex: number;
   snapshotIndex: number;
@@ -236,6 +237,7 @@ export class ZLinkActorHandoffCoordinator {
       oldNodeRid,
       sourceOwner,
       phase: 'relocating',
+      connectionBoundSealed: false,
       pending: [],
       nextIndex: 0,
       snapshotIndex: -1,
@@ -270,6 +272,7 @@ export class ZLinkActorHandoffCoordinator {
       sourceOwner,
       phase: 'provisional',
       operationId,
+      connectionBoundSealed: false,
       pending: [],
       nextIndex: 0,
       snapshotIndex: -1,
@@ -296,6 +299,15 @@ export class ZLinkActorHandoffCoordinator {
     handoff.phase = 'relocating';
   }
 
+  sealConnectionBoundIngress(actorId: string): void {
+    const handoff = this.active.get(actorId);
+    if (handoff !== undefined) handoff.connectionBoundSealed = true;
+  }
+
+  activeSourceOwner(actorId: string): ZLinkActorMessageFollowOwnerFence | undefined {
+    return this.active.get(actorId)?.sourceOwner;
+  }
+
   async releaseDeferred(
     actorId: string,
     operationId: string,
@@ -307,7 +319,21 @@ export class ZLinkActorHandoffCoordinator {
       throw new Error(`Actor '${actorId}' packet handoff belongs to another operation.`);
     }
     this.active.delete(actorId);
-    const replay = dispatch ?? handoff.replay;
+    await this.replayReleasedBacklog(actorId, handoff, dispatch ?? handoff.replay);
+  }
+
+  async releaseCanceled(actorId: string, dispatch: ZLinkActorHandoffDispatch): Promise<void> {
+    const handoff = this.active.get(actorId);
+    if (handoff === undefined) return;
+    this.active.delete(actorId);
+    await this.replayReleasedBacklog(actorId, handoff, dispatch);
+  }
+
+  private async replayReleasedBacklog(
+    actorId: string,
+    handoff: ActiveHandoff,
+    replay: ZLinkActorHandoffDispatch | undefined
+  ): Promise<void> {
     if (handoff.pending.length === 0) return;
     if (replay === undefined) {
       const error = new Error(`Actor '${actorId}' provisional packet handoff has no replay target.`);
@@ -367,6 +393,13 @@ export class ZLinkActorHandoffCoordinator {
     const handoff = this.active.get(actorId);
     if (handoff !== undefined) {
       if (parts.length < 2) return Promise.resolve(undefined);
+      if (handoff.connectionBoundSealed && !returnResponse && remoteBoundSessionTarget !== undefined) {
+        // The Session route seal already fixed the accepted high water. A
+        // send whose lifetime is only the Session connection can no longer
+        // drain here and must never enter the durable frozen journal, so the
+        // Session owner keeps redelivery ownership of it.
+        return Promise.reject(actorMoving(actorId));
+      }
       if (handoff.phase === 'provisional' && handoff.replay === undefined) {
         handoff.replay = provisionalReplay;
       }
@@ -1222,6 +1255,14 @@ function actorDeadlineExceeded(actorId: string): ZLinkFrameworkException {
   return createInternalFrameworkException(
     ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
     `Actor request '${actorId}' exceeded its original deadline during Message Follow.`
+  );
+}
+
+function actorMoving(actorId: string): ZLinkFrameworkException {
+  return createInternalFrameworkException(
+    ZLinkFrameworkInternalErrorKind.ActorMoving,
+    `Actor '${actorId}' bound-session send arrived after its Session route seal.`,
+    true
   );
 }
 

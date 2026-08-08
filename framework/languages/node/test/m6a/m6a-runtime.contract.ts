@@ -70,7 +70,7 @@ function descriptor(
     state: 'preparing',
     securityIdentity: 'default',
     applicationVersion: 1n,
-    protocolCapabilities: ['framework-service-v11'],
+    protocolCapabilities: ['framework-service-v12'],
     objectRole: 'server',
     placementWeight: 100,
     activeCapacityLimit: 10_000,
@@ -310,7 +310,7 @@ test('object placement excludes admitted peers until the caller confirms readine
   const peer = {
     ...descriptor('peer'),
     state: 'serving' as const,
-    protocolCapabilities: ['framework-service-v11', 'object-type:quest']
+    protocolCapabilities: ['framework-service-v12', 'object-type:quest']
   };
   assert.equal(topology.admit(peer, 'connection-a'), 'admitted');
   assert.equal(topology.selectObjectPlacement('quest', () => false), undefined);
@@ -326,7 +326,7 @@ test('object placement checks capacity before applying a zero placement weight',
     ...descriptor('zero-weight-exhausted'),
     state: 'serving',
     placementWeight: 0,
-    protocolCapabilities: ['framework-service-v11', 'object-type:quest'],
+    protocolCapabilities: ['framework-service-v12', 'object-type:quest'],
     activeCapacityLimit: 1,
     activeCapacityUsed: 1
   });
@@ -336,7 +336,7 @@ test('object placement checks capacity before applying a zero placement weight',
     ...descriptor('zero-weight-available'),
     state: 'serving',
     placementWeight: 0,
-    protocolCapabilities: ['framework-service-v11', 'object-type:quest']
+    protocolCapabilities: ['framework-service-v12', 'object-type:quest']
   });
   assert.equal(filtered.objectPlacementStatus('quest'), 'unsupported');
 });
@@ -394,7 +394,7 @@ test('topology admission fences expected identity, immutable revisions, duplicat
     {
       ...peer,
       descriptorRevision: 2n,
-      protocolCapabilities: ['framework-service-v11', 'object-type:other']
+      protocolCapabilities: ['framework-service-v12', 'object-type:other']
     },
     {
       ...peer,

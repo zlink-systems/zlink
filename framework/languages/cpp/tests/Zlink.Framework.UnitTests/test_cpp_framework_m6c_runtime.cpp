@@ -1282,6 +1282,8 @@ class memory_authority_store_t final : public authority_relocation_port_t
     read (object_kind_t kind, const std::string &key) override
     {
         std::lock_guard lock (mutex);
+        if (throw_on_read)
+            throw std::runtime_error ("authority store unavailable");
         return read_locked (kind, key);
     }
 
@@ -1299,6 +1301,7 @@ class memory_authority_store_t final : public authority_relocation_port_t
     std::vector<std::string> log;
     bool force_conflict = false;
     bool throw_after_publish = false;
+    bool throw_on_read = false;
     int publish_count = 0;
     int conflict_on_publish = 0;
 };
@@ -2758,6 +2761,113 @@ void test_restart_reconstructs_relocation_replay (
       "terminal relay identity from the stored root");
 }
 
+void test_bound_session_capture_without_fence_reports_distinct_reason (
+  test_context_t &test)
+{
+    namespace mesh = zlink::framework::runtime::mesh;
+    namespace protocol = zlink::framework::runtime::protocol;
+
+    const auto bytes = [] (const std::string &value) {
+        return std::vector<std::uint8_t> (
+          value.begin (), value.end ());
+    };
+
+    stateful_object_runtime_t source;
+    const auto actor = create_actor (
+      source, "actor-unfenced-bound-session", "unfenced-source");
+    protocol::frozen_application_record_t accepted;
+    accepted.kind = protocol::frozen_record_kind_t::actor_request;
+    accepted.source_kind = protocol::frozen_source_kind_t::bound_session;
+    accepted.source = {
+      "request-owner", 7, bytes ("request-source"), 9};
+    accepted.source_actor =
+      std::make_pair (actor.key, actor.object_generation);
+    // The wire codec rejects an incomplete fence at encode/decode, so the
+    // reachable backstop input is a captured in-memory application record
+    // that claims bound_session without its exact fence.
+    accepted.source_session_routing_id = std::vector<std::uint8_t>{};
+    accepted.source_binding_generation = 5;
+    accepted.source_session_sequence = 9;
+    accepted.operation = {0x101, 0x202};
+    accepted.operation_kind = 4;
+    accepted.reply_route_id = 11;
+    accepted.body = protocol::frozen_actor_application_body_t{
+      {actor.key, actor.object_generation, bytes ("unfenced-source"),
+       1, actor.authority_owner_generation, 13},
+      {"ActorPacket", "application/json", bytes ("request")}};
+    test.require (
+      source.enqueue (
+        actor, turn_domain_t::application, {1, {}, 0, accepted})
+        == stateful_error_t::none,
+      "unfenced bound-session capture test requires one accepted request");
+
+    auto roots = std::make_shared<memory_relocation_repository_t> ();
+    auto authority = std::make_shared<memory_authority_store_t> ();
+    mesh::raw_mesh_node_owner_t transport (
+      {mesh::service_node_descriptor_t{
+        "mesh", bytes ("unfenced-source"), 1, 1, "tcp://127.0.0.1:0", {},
+        mesh::service_node_state_t::preparing}});
+    raw_relocation_replay_coordinator_t wire (transport);
+    std::vector<relocation_reason_t> observed_reasons;
+    maintenance_runtime_t runtime (
+      source, authority, roots, {},
+      [&] (const relocation_result_t &result) {
+          observed_reasons.push_back (result.reason);
+      });
+    runtime.attach_relocation_wire (wire);
+    int prepare_calls = 0;
+    eligible_relocation_unit_t::canonical_wire_context_t context{
+      .relocation = {0x505, 0x606},
+      .target_attempt_generation = 23,
+      .coordinator =
+        {"coordinator-owner", 17, bytes ("coordinator-node"), 19,
+         "authority-version"},
+      .target_node_routing_id = bytes ("unfenced-target"),
+      .target_node_generation = 29,
+      .participant_ids = {31},
+      .prepare_target =
+        [&] (const std::vector<frozen_object_state_t> &,
+             const std::vector<protocol::relocation_data_t> &,
+             const relocation_stored_t &) {
+            ++prepare_calls;
+            return true;
+        },
+      .acknowledged = [] (std::uint64_t, std::uint64_t) {},
+      .complete_source_terminal =
+        [] (std::uint64_t, std::uint64_t,
+            const protocol::reply_relay_t &,
+            const std::optional<protocol::application_payload_t> &) {
+            return true;
+        },
+      .complete_target = [] { return true; },
+      .abort_target = [] {}};
+    const auto result = runtime.relocate (
+      actor, "unfenced-target", {"target-owner", 37},
+      {"unfenced-capacity"}, 1024 * 1024, digest_with (0x61), context);
+    test.require (
+      result.terminal == relocation_terminal_t::blocked
+        && result.reason
+             == relocation_reason_t::bound_session_fence_incomplete,
+      "a frozen bound-session record without its exact fence must fail the "
+      "capture batch with the distinct bound_session_fence_incomplete "
+      "reason instead of a silent restore_failed");
+    test.require (
+      observed_reasons.size () == 1
+        && observed_reasons.front ()
+             == relocation_reason_t::bound_session_fence_incomplete,
+      "the maintenance observer must see the distinct trace reason for the "
+      "fenceless bound-session capture failure");
+    test.require (
+      prepare_calls == 0 && roots->roots.empty ()
+        && authority->rows.empty (),
+      "the fenceless capture failure must stay pre-store and pre-restore");
+    test.require (
+      source.enqueue (
+        actor, turn_domain_t::application, {2, {}, 0, accepted})
+        == stateful_error_t::none,
+      "the source admission must be restored after the rejected capture");
+}
+
 void test_permit_precedes_seal (test_context_t &test)
 {
     stateful_object_runtime_t source;
@@ -3977,6 +4087,795 @@ void test_application_relocation_uses_maintenance_and_fails_closed (
     node.stop ();
 }
 
+// Drives a full public host runtime as the relocation target from a raw
+// source node so individual relocation control commands can be withheld.
+class relocation_admission_harness_t
+{
+    static constexpr std::uint64_t participant_id = 7;
+
+    static std::vector<std::uint8_t> bytes (const std::string &value)
+    {
+        return {value.begin (), value.end ()};
+    }
+
+    static std::shared_ptr<zlink::framework::detail::mesh_node_builder_state_t>
+    make_target_state (const std::string &mesh_name, const std::string &rid)
+    {
+        auto state = std::make_shared<
+          zlink::framework::detail::mesh_node_builder_state_t> (mesh_name);
+        state->listen_endpoint = "tcp://127.0.0.1:0";
+        state->routing_id = zlink::routing_id_t::from (rid);
+        state->spot_state->snapshot.actor_types.push_back (
+          "admission.actor");
+        return state;
+    }
+
+  public:
+    relocation_admission_harness_t (
+      test_context_t &test_context,
+      const std::string &tag,
+      std::uint64_t pending_records,
+      bool bound_session = false) :
+        test (test_context),
+        pending_records (pending_records),
+        source_rid (bytes (tag + "-source")),
+        target (make_target_state (tag + "-mesh", tag + "-target")),
+        source (
+          zlink::framework::runtime::mesh::raw_mesh_node_options_t{
+            zlink::framework::runtime::mesh::service_node_descriptor_t{
+              tag + "-mesh", source_rid, 1, 1, "tcp://127.0.0.1:0", {},
+              zlink::framework::runtime::mesh::service_node_state_t::
+                preparing}})
+    {
+        namespace mesh = zlink::framework::runtime::mesh;
+        namespace protocol = zlink::framework::runtime::protocol;
+        using namespace std::chrono_literals;
+
+        target.configure_relocation_runtime (authority, roots);
+        target.configure_stateful_dispatch (
+          [] (const accepted_record_authority_query_t &query)
+            -> std::optional<accepted_record_authority_t> {
+              return accepted_record_authority_t{
+                {"source-owner", 1,
+                 query.source_node_routing_id,
+                 query.source_node_generation},
+                9};
+          });
+        target.configure_session_route_owner (
+          [] {
+              return std::optional<
+                zlink::framework::location_owner_token_t>{
+                {"target-owner", 9}};
+          });
+        target.start ();
+        source.start ();
+        target_rid = target.status ().routing_id ().to_bytes ();
+
+        const auto target_descriptor =
+          target.native_node ().transport ().topology ().local_descriptor ();
+        test.require (
+          source.connect_peer (
+            target.native_node ().transport ().endpoint (),
+            target_descriptor),
+          "relocation admission harness must connect to the target");
+        test.require (
+          pump_until ([&] {
+              return source.topology ().peer (target_rid).has_value ()
+                     && target.native_node ()
+                          .transport ()
+                          .topology ()
+                          .peer (source_rid)
+                          .has_value ();
+          }),
+          "relocation admission harness requires admitted peers");
+
+        source_actor = object_ref_t{
+          object_kind_t::actor, tag + "-actor", 5, 1,
+          tag + "-mesh", tag + "-source"};
+        expected_target = source_actor;
+        expected_target.node_id =
+          target.status ().routing_id ().to_string ();
+        ++expected_target.authority_owner_generation;
+        coordinator = {
+          "coordinator-owner", 23, source_rid, 1, "authority-v1"};
+
+        const auto multipart = [] (const std::vector<std::uint8_t> &part) {
+            std::vector<std::uint8_t> encoded;
+            const auto append_u32 = [&] (std::uint32_t value) {
+                encoded.push_back ((value >> 24u) & 0xffu);
+                encoded.push_back ((value >> 16u) & 0xffu);
+                encoded.push_back ((value >> 8u) & 0xffu);
+                encoded.push_back (value & 0xffu);
+            };
+            append_u32 (1);
+            append_u32 (static_cast<std::uint32_t> (part.size ()));
+            encoded.insert (encoded.end (), part.begin (), part.end ());
+            return encoded;
+        };
+        protocol::frozen_application_record_t accepted;
+        accepted.kind = protocol::frozen_record_kind_t::actor_request;
+        accepted.source_kind = protocol::frozen_source_kind_t::node;
+        accepted.source = {"request-owner", 7, source_rid, 1};
+        if (bound_session) {
+            // The journaled bound-session identity carries the session
+            // triple and the exact owning Actor of the current binding.
+            accepted.source_kind =
+              protocol::frozen_source_kind_t::bound_session;
+            accepted.source_actor = std::make_pair (
+              source_actor.key, source_actor.object_generation);
+            accepted.source_session_routing_id = bytes (tag + "-session");
+            accepted.source_binding_generation = 5;
+            accepted.source_session_sequence = 9;
+        }
+        accepted.operation = {0x777, 0x888};
+        accepted.operation_kind = 4;
+        accepted.reply_route_id = 61;
+        accepted.body = protocol::frozen_actor_application_body_t{
+          {source_actor.key, source_actor.object_generation, source_rid,
+           1, source_actor.authority_owner_generation, 19},
+          {protocol::framework_multipart_packet_name,
+           protocol::framework_multipart_content_type,
+           multipart (bytes ("accepted"))}};
+        canonical = protocol::encode_frozen_application_record (accepted);
+
+        frozen_object_state_t frozen;
+        frozen.owner = source_actor;
+        frozen.stable_type = "admission.actor";
+        for (std::uint64_t sequence = 1; sequence <= pending_records;
+             ++sequence)
+            frozen.pending_application.push_back (
+              {sequence, protocol::encode_frozen_record (canonical)});
+        const auto payload =
+          maintenance_runtime_t::encode (frozen, digest_with (0x51));
+        const auto root = roots->put (payload, std::chrono::hours (24));
+
+        prepare = {
+          relocation,
+          attempt_generation,
+          protocol::relocation_round_t::initial,
+          coordinator,
+          {target_rid, target.status ().lifecycle_generation (),
+           "target-owner", 9},
+          protocol::relocation_role_t::source,
+          {protocol::relocation_object_kind_t::actor, "admission.actor",
+           source_actor.key, source_actor.object_generation,
+           source_actor.authority_owner_generation},
+          source_rid,
+          1,
+          std::max<std::uint64_t> (1, pending_records),
+          1024,
+          {{participant_id,
+            protocol::relocation_participant_kind_t::object_mailbox,
+            {}, 0, {}, 0, {}, 0, 0,
+            std::max<std::uint64_t> (1, pending_records), 1024}},
+          protocol::relocation_root_t{
+            root.reference, root.checksum_crc32c},
+          1};
+    }
+
+    ~relocation_admission_harness_t ()
+    {
+        target.stop ();
+        source.close ();
+    }
+
+    // prepare -> target offer -> source accept -> target reserved ack ->
+    // (relocationData acked); command 35 is deliberately never sent here.
+    bool negotiate ()
+    {
+        namespace protocol = zlink::framework::runtime::protocol;
+        if (!source.send_relocation_control (target_rid, prepare))
+            return false;
+        if (!pump_until ([&] { return offer.has_value (); }))
+            return false;
+        if (!send_accept ())
+            return false;
+        if (!pump_until ([&] { return reserved_acks >= 1; }))
+            return false;
+        if (!last_reserved
+            || last_reserved->participants != prepare.participants
+            || last_reserved->reservation_generation == 0)
+            return false;
+        for (std::uint64_t sequence = 1; sequence <= pending_records;
+             ++sequence) {
+            if (!source.send_relocation_control (
+                  target_rid,
+                  protocol::relocation_data_t{
+                    relocation, attempt_generation, coordinator,
+                    protocol::relocation_role_t::source, participant_id,
+                    sequence, canonical.source, prepare.object,
+                    protocol::relocation_phase_t::prepared, 0,
+                    protocol::framework_error_code::none, canonical}))
+                return false;
+        }
+        return pending_records == 0
+               || pump_until (
+                 [&] { return ack_high_water >= pending_records; });
+    }
+
+    // Leg 3 of the handshake: the source echoes the offer with role
+    // source, zeroed capacity, and the exact prepare participant set.
+    bool send_accept (
+      std::optional<
+        std::vector<
+          zlink::framework::runtime::protocol::relocation_participant_t>>
+        participants = std::nullopt)
+    {
+        namespace protocol = zlink::framework::runtime::protocol;
+        if (!offer)
+            return false;
+        auto accept = *offer;
+        accept.role = protocol::relocation_role_t::source;
+        accept.offered_messages = 0;
+        accept.offered_bytes = 0;
+        accept.participants =
+          participants ? *participants : prepare.participants;
+        return source.send_relocation_control (target_rid, accept);
+    }
+
+    void publish_authority ()
+    {
+        (void) authority->publish (
+          source_actor, expected_target, {"target-owner", 9},
+          {"admission-capacity"}, prepare.root->reference,
+          prepare.root->checksum_crc32c, digest_with (0x51));
+    }
+
+    bool send_complete (
+      zlink::framework::runtime::protocol::source_cleanup_state_t state)
+    {
+        namespace protocol = zlink::framework::runtime::protocol;
+        return source.send_relocation_control (
+          target_rid,
+          protocol::relocation_complete_t{
+            relocation, attempt_generation, coordinator,
+            protocol::relocation_role_t::source,
+            {coordinator.owner_id, coordinator.lease_generation,
+             coordinator.node_routing_id, coordinator.node_generation},
+            state});
+    }
+
+    bool pump_until (
+      const std::function<bool ()> &done,
+      std::chrono::milliseconds timeout = std::chrono::seconds (5))
+    {
+        const auto stop_at = std::chrono::steady_clock::now () + timeout;
+        while (!done () && std::chrono::steady_clock::now () < stop_at) {
+            pump_once ();
+            std::this_thread::sleep_for (std::chrono::milliseconds (1));
+        }
+        return done ();
+    }
+
+    void settle (std::chrono::milliseconds duration)
+    {
+        (void) pump_until ([] { return false; }, duration);
+    }
+
+    std::optional<object_ref_t> find_target ()
+    {
+        return target.native_node ().objects ().find (
+          object_kind_t::actor, source_actor.key);
+    }
+
+    std::size_t target_pending ()
+    {
+        return target.native_node ().objects ().pending (
+          expected_target, turn_domain_t::application);
+    }
+
+    test_context_t &test;
+    std::uint64_t pending_records = 0;
+    std::shared_ptr<memory_relocation_repository_t> roots =
+      std::make_shared<memory_relocation_repository_t> ();
+    std::shared_ptr<memory_authority_store_t> authority =
+      std::make_shared<memory_authority_store_t> ();
+    std::vector<std::uint8_t> source_rid;
+    zlink::framework::detail::mesh_node_runtime_t target;
+    zlink::framework::runtime::mesh::raw_mesh_node_owner_t source;
+    std::vector<std::uint8_t> target_rid;
+    zlink::framework::runtime::protocol::relocation_id_t relocation{
+      0x611, 0x612};
+    std::uint64_t attempt_generation = 51;
+    zlink::framework::runtime::protocol::relocation_coordinator_fence_t
+      coordinator;
+    zlink::framework::runtime::protocol::relocation_prepare_t prepare;
+    zlink::framework::runtime::protocol::frozen_record_t canonical;
+    object_ref_t source_actor;
+    object_ref_t expected_target;
+    std::optional<zlink::framework::runtime::protocol::relocation_ready_t>
+      offer;
+    int reserved_acks = 0;
+    std::optional<
+      zlink::framework::runtime::protocol::relocation_reserved_t>
+      last_reserved;
+    std::optional<
+      zlink::framework::runtime::protocol::relocation_prepare_t>
+      inbound_prepare;
+    int inbound_accepts = 0;
+    std::optional<zlink::framework::runtime::protocol::relocation_ready_t>
+      last_accept;
+    std::uint64_t ack_high_water = 0;
+    int completions = 0;
+    int dispatched_actor_requests = 0;
+    std::optional<zlink::routing_id_t> dispatched_session_rid;
+    std::uint64_t dispatched_binding_generation = 0;
+    std::uint64_t dispatched_session_sequence = 0;
+
+  private:
+    void pump_once ()
+    {
+        namespace mesh = zlink::framework::runtime::mesh;
+        const auto now = mesh::service_liveness_registry_t::clock_t::now ();
+        (void) source.drain_monitor_events (now);
+        (void) source.pump_one (now);
+        drain_source_mailbox ();
+        (void) target.dispatch_ready (
+          [this] (const auto &owner, const auto &record, auto) {
+              if (owner.owner_kind
+                    == zlink::framework::runtime::host::owner_kind_t::actor
+                  && record.kind
+                       == zlink::framework::runtime::host::record_kind_t::
+                         actor_request) {
+                  ++dispatched_actor_requests;
+                  if (record.source_session_rid) {
+                      dispatched_session_rid = record.source_session_rid;
+                      dispatched_binding_generation =
+                        record.source_binding_generation;
+                      dispatched_session_sequence =
+                        record.source_session_sequence;
+                  }
+              }
+          });
+    }
+
+    void drain_source_mailbox ()
+    {
+        namespace mesh = zlink::framework::runtime::mesh;
+        namespace protocol = zlink::framework::runtime::protocol;
+        while (auto claim = source.mailbox ().try_claim (
+                 mesh::service_mailbox_domain_t::infrastructure, 16,
+                 64 * 1024)) {
+            for (const auto &record : claim->records) {
+                if (record.parts.empty ())
+                    continue;
+                const auto kind =
+                  protocol::decode_header (record.parts.front ()).kind;
+                if (kind == protocol::command::relocationReady) {
+                    const auto control =
+                      protocol::decode_relocation_control (
+                        record.parts.front ());
+                    const auto *ready =
+                      std::get_if<protocol::relocation_ready_t> (
+                        &control);
+                    if (!ready)
+                        continue;
+                    if (ready->relocation == this->relocation
+                        && ready->role
+                             == protocol::relocation_role_t::target)
+                        offer = *ready;
+                    else if (ready->role
+                             == protocol::relocation_role_t::source) {
+                        ++inbound_accepts;
+                        last_accept = *ready;
+                    }
+                    continue;
+                }
+                if (kind == protocol::command::relocationPrepare) {
+                    const auto control =
+                      protocol::decode_relocation_control (
+                        record.parts.front ());
+                    if (const auto *received =
+                          std::get_if<protocol::relocation_prepare_t> (
+                            &control))
+                        inbound_prepare = *received;
+                    continue;
+                }
+                if (kind == protocol::command::relocationReserved) {
+                    const auto control =
+                      protocol::decode_relocation_control (
+                        record.parts.front ());
+                    if (const auto *reserved =
+                          std::get_if<protocol::relocation_reserved_t> (
+                            &control);
+                        reserved
+                        && reserved->relocation == this->relocation) {
+                        ++reserved_acks;
+                        last_reserved = *reserved;
+                    }
+                    continue;
+                }
+                if (kind != protocol::command::relocationAck
+                    && kind != protocol::command::relocationComplete)
+                    continue;
+                const auto control =
+                  protocol::decode_relocation_control (
+                    record.parts.front ());
+                if (const auto *ack =
+                      std::get_if<protocol::relocation_ack_t> (&control);
+                    ack && ack->relocation == relocation
+                    && ack->participant_id == participant_id)
+                    ack_high_water =
+                      std::max (ack_high_water, ack->high_water);
+                if (const auto *complete =
+                      std::get_if<protocol::relocation_complete_t> (
+                        &control);
+                    complete && complete->relocation == relocation
+                    && complete->sender_role
+                         == protocol::relocation_role_t::target)
+                    ++completions;
+            }
+            (void) source.mailbox ().release (*claim);
+        }
+    }
+};
+
+void test_relocation_target_admission_survives_lost_completion (
+  test_context_t &test)
+{
+    namespace protocol = zlink::framework::runtime::protocol;
+    using namespace std::chrono_literals;
+
+    relocation_admission_harness_t harness (test, "lost-complete", 1);
+    test.require (
+      harness.negotiate (),
+      "lost-completion relocation must ack every replay record");
+
+    harness.settle (100ms);
+    test.require (
+      !harness.find_target (),
+      "admission must stay closed before the authority commit is visible");
+    test.require (
+      harness.target_pending () == 1,
+      "the staged record must stay held while admission is closed");
+
+    harness.publish_authority ();
+    test.require (
+      harness.pump_until (
+        [&] {
+            return harness.find_target ()
+                   == std::optional<object_ref_t>{
+                     harness.expected_target};
+        }),
+      "admission must open from the committed authority without command 35");
+    test.require (
+      harness.pump_until (
+        [&] { return harness.dispatched_actor_requests >= 1; })
+        && harness.target_pending () == 0,
+      "the replayed record must drain once the authority-poll finalizes");
+    test.require (
+      harness.completions == 0,
+      "no terminal response may be sent before command 35 arrives");
+
+    test.require (
+      harness.send_complete (
+        protocol::source_cleanup_state_t::completed),
+      "the late command 35 must be admitted");
+    test.require (
+      harness.pump_until ([&] { return harness.completions >= 1; }),
+      "the late command 35 must trigger the target terminal");
+    harness.settle (50ms);
+    test.require (
+      harness.completions == 1,
+      "the late command 35 must produce exactly one terminal response");
+}
+
+void test_zero_record_relocation_admission_opens_via_authority_poll (
+  test_context_t &test)
+{
+    using namespace std::chrono_literals;
+
+    relocation_admission_harness_t harness (test, "zero-record", 0);
+    test.require (
+      harness.negotiate (),
+      "zero-record relocation must negotiate prepare and reserved");
+
+    harness.settle (100ms);
+    test.require (
+      !harness.find_target (),
+      "reserved alone must not open admission before the owner CAS");
+
+    harness.publish_authority ();
+    test.require (
+      harness.pump_until (
+        [&] {
+            return harness.find_target ()
+                   == std::optional<object_ref_t>{
+                     harness.expected_target};
+        }),
+      "zero-record admission must open via the authority poll without data");
+    test.require (
+      harness.target_pending () == 0,
+      "zero-record relocation must finalize with an empty journal");
+}
+
+void test_pending_completion_after_self_finalize_keeps_target (
+  test_context_t &test)
+{
+    namespace protocol = zlink::framework::runtime::protocol;
+    using namespace std::chrono_literals;
+
+    relocation_admission_harness_t harness (test, "pending-probe", 1);
+    test.require (
+      harness.negotiate (),
+      "pending-probe relocation must ack every replay record");
+    harness.publish_authority ();
+    test.require (
+      harness.pump_until (
+        [&] {
+            return harness.find_target ()
+                   == std::optional<object_ref_t>{
+                     harness.expected_target};
+        }),
+      "pending-probe target must self-finalize from the authority");
+
+    test.require (
+      harness.send_complete (protocol::source_cleanup_state_t::pending),
+      "the pending command 35 probe must be admitted");
+    test.require (
+      harness.pump_until ([&] { return harness.completions >= 1; }),
+      "a pending command 35 after finalize must answer with a terminal");
+    test.require (
+      harness.find_target ()
+          == std::optional<object_ref_t>{harness.expected_target}
+        && harness.pump_until (
+          [&] { return harness.dispatched_actor_requests >= 1; }),
+      "a pending command 35 after finalize must not abort the target");
+}
+
+void test_relocated_bound_session_request_replays_with_session_fence (
+  test_context_t &test)
+{
+    using namespace std::chrono_literals;
+
+    relocation_admission_harness_t harness (
+      test, "bound-session", 1, true);
+    test.require (
+      harness.negotiate (),
+      "bound-session relocation must ack every replay record");
+    harness.publish_authority ();
+    test.require (
+      harness.pump_until (
+        [&] {
+            return harness.find_target ()
+                   == std::optional<object_ref_t>{
+                     harness.expected_target};
+        }),
+      "bound-session admission must open from the committed authority");
+    test.require (
+      harness.pump_until (
+        [&] { return harness.dispatched_actor_requests >= 1; })
+        && harness.target_pending () == 0,
+      "the journaled bound-session request must drain on the target");
+    test.require (
+      harness.dispatched_session_rid.has_value ()
+        && harness.canonical.source_session_routing_id.has_value ()
+        && harness.dispatched_session_rid->to_bytes ()
+             == *harness.canonical.source_session_routing_id
+        && harness.dispatched_binding_generation == 5
+        && harness.dispatched_session_sequence == 9,
+      "the replayed bound-session request must carry the session fence so "
+      "the Spot-side admit_session_relay guard runs before the body");
+}
+
+void test_relocation_admission_fails_closed_without_authority_reads (
+  test_context_t &test)
+{
+    using namespace std::chrono_literals;
+
+    relocation_admission_harness_t harness (test, "authority-down", 1);
+    harness.authority->throw_on_read = true;
+    test.require (
+      harness.negotiate (),
+      "authority-down relocation must ack every replay record");
+    harness.publish_authority ();
+
+    harness.settle (150ms);
+    test.require (
+      !harness.find_target (),
+      "an unreadable authority store must keep admission closed");
+
+    harness.authority->throw_on_read = false;
+    test.require (
+      harness.pump_until (
+        [&] {
+            return harness.find_target ()
+                   == std::optional<object_ref_t>{
+                     harness.expected_target};
+        }),
+      "admission must converge once the authority store recovers");
+}
+
+void test_mismatched_accept_participants_reject_reservation (
+  test_context_t &test)
+{
+    namespace protocol = zlink::framework::runtime::protocol;
+    using namespace std::chrono_literals;
+
+    relocation_admission_harness_t harness (test, "mismatch-accept", 0);
+    test.require (
+      harness.source.send_relocation_control (
+        harness.target_rid, harness.prepare),
+      "the mismatch-accept prepare must be sent");
+    test.require (
+      harness.pump_until ([&] { return harness.offer.has_value (); }),
+      "the mismatch-accept prepare must produce a capacity offer");
+
+    auto mismatched = harness.prepare.participants;
+    mismatched.front ().participant_id += 1;
+    test.require (
+      harness.send_accept (mismatched),
+      "the mismatched acceptance must be sent");
+    harness.publish_authority ();
+    harness.settle (150ms);
+    test.require (
+      harness.reserved_acks == 0,
+      "a mismatched acceptance must not be acknowledged with a "
+      "reservation");
+    test.require (
+      !harness.find_target (),
+      "a mismatched acceptance must keep admission closed");
+
+    test.require (
+      harness.send_accept (),
+      "the exact acceptance must be sent after the mismatch");
+    test.require (
+      harness.pump_until ([&] { return harness.reserved_acks >= 1; }),
+      "the exact acceptance must be acknowledged with the reserved ack");
+    test.require (
+      harness.last_reserved
+        && harness.last_reserved->participants
+             == harness.prepare.participants
+        && harness.last_reserved->reservation_generation != 0,
+      "the reserved ack must echo the accepted participants with a "
+      "nonzero reservation generation");
+    test.require (
+      harness.pump_until (
+        [&] {
+            return harness.find_target ()
+                   == std::optional<object_ref_t>{
+                     harness.expected_target};
+        }),
+      "admission must open once the exact acceptance is reserved");
+}
+
+void test_duplicate_accept_resends_single_reservation_ack (
+  test_context_t &test)
+{
+    using namespace std::chrono_literals;
+
+    relocation_admission_harness_t harness (test, "duplicate-accept", 1);
+    test.require (
+      harness.negotiate (),
+      "duplicate-accept relocation must negotiate the 4-leg handshake");
+    const auto first = harness.last_reserved;
+    test.require (
+      harness.send_accept (),
+      "the duplicate acceptance must be sent");
+    test.require (
+      harness.pump_until ([&] { return harness.reserved_acks >= 2; }),
+      "a duplicate acceptance must re-send the reserved ack");
+    test.require (
+      first && harness.last_reserved
+        && *harness.last_reserved == *first,
+      "the duplicate reserved ack must be identical to the first");
+
+    harness.publish_authority ();
+    test.require (
+      harness.pump_until (
+        [&] {
+            return harness.find_target ()
+                   == std::optional<object_ref_t>{
+                     harness.expected_target};
+        }),
+      "admission must open exactly once after a duplicate acceptance");
+    test.require (
+      harness.pump_until (
+        [&] { return harness.dispatched_actor_requests >= 1; })
+        && harness.target_pending () == 0,
+      "the replayed record must drain once despite the duplicate "
+      "acceptance");
+}
+
+void test_source_accept_retransmits_until_reserved_ack (
+  test_context_t &test)
+{
+    namespace protocol = zlink::framework::runtime::protocol;
+    using namespace std::chrono_literals;
+
+    // The harness runtime plays the relocation SOURCE here; the raw node
+    // is the candidate target so the reserved ack can be withheld.
+    relocation_admission_harness_t harness (test, "accept-retry", 0);
+    const auto source_generation =
+      harness.target.status ().lifecycle_generation ();
+    const protocol::relocation_prepare_t prepare{
+      {0x711, 0x712},
+      61,
+      protocol::relocation_round_t::initial,
+      {"retry-owner", 29, harness.target_rid, source_generation,
+       "authority-v1"},
+      {harness.source_rid, 1, "raw-owner", 3},
+      protocol::relocation_role_t::source,
+      {protocol::relocation_object_kind_t::actor, "admission.actor",
+       "retry-actor", 5, 1},
+      harness.target_rid,
+      source_generation,
+      1,
+      1024,
+      {{1, protocol::relocation_participant_kind_t::object_mailbox,
+        {}, 0, {}, 0, {}, 0, 0, 1, 1024}},
+      protocol::relocation_root_t{"retry-root", 7},
+      1};
+
+    std::atomic<bool> done{false};
+    bool prepared = false;
+    std::thread initiator ([&] {
+        prepared =
+          harness.target.native_node ().prepare_relocation_remote (
+            zlink::routing_id_t::from ("accept-retry-source"), prepare,
+            3s);
+        done.store (true, std::memory_order_release);
+    });
+
+    test.require (
+      harness.pump_until (
+        [&] { return harness.inbound_prepare.has_value (); }),
+      "the source runtime must send relocationPrepare to the raw "
+      "candidate");
+    const protocol::relocation_ready_t offer{
+      prepare.relocation,
+      prepare.target_attempt_generation,
+      prepare.round,
+      prepare.coordinator,
+      prepare.candidate,
+      prepare.object,
+      protocol::relocation_role_t::target,
+      1,
+      1024,
+      {},
+      prepare.source_node_generation,
+      1,
+      prepare.target_attempt_generation,
+      prepare.root,
+      prepare.application_version,
+      {}};
+    test.require (
+      harness.source.send_relocation_control (
+        harness.target_rid, offer),
+      "the raw candidate must send the capacity offer");
+    test.require (
+      harness.pump_until ([&] { return harness.inbound_accepts >= 2; }),
+      "the source must retransmit the acceptance while the reserved ack "
+      "is withheld");
+    test.require (
+      harness.last_accept
+        && harness.last_accept->participants == prepare.participants
+        && harness.last_accept->offered_messages == 0
+        && harness.last_accept->offered_bytes == 0,
+      "the retransmitted acceptance must keep the exact prepare "
+      "participant set with zeroed capacity");
+    test.require (
+      !done.load (std::memory_order_acquire),
+      "the source must keep waiting until the reserved ack arrives");
+    test.require (
+      harness.source.send_relocation_control (
+        harness.target_rid,
+        protocol::relocation_reserved_t{
+          prepare.relocation, prepare.target_attempt_generation,
+          prepare.round, prepare.coordinator, prepare.candidate,
+          prepare.target_attempt_generation, prepare.participants}),
+      "the raw candidate must send the reserved ack");
+    test.require (
+      harness.pump_until (
+        [&] { return done.load (std::memory_order_acquire); }),
+      "the reserved ack must complete the source handshake");
+    initiator.join ();
+    test.require (
+      prepared,
+      "prepare_relocation_remote must succeed once the reserved ack "
+      "arrives");
+}
+
 void test_application_relocation_remote_production_path (
   test_context_t &test)
 {
@@ -4704,6 +5603,47 @@ void test_relocation_hold_restores_and_enforces_limits (
   test_context_t &test)
 {
     namespace limits = zlink::framework::runtime::dispatch_limits;
+    namespace protocol = zlink::framework::runtime::protocol;
+
+    // A bound-session request that arrives while the object is sealed for
+    // relocation enters the ingress hold. When the hold merges back, the
+    // record must travel with its canonical bytes unmodified so the session
+    // fence survives the post-seal relay.
+    const auto bound_session_bytes = [] {
+        const std::vector<std::uint8_t> session_rid{'h', 'e', 'l', 'd'};
+        const std::vector<std::uint8_t> node_rid{'s', 'r', 'c'};
+        const auto multipart = [] (const std::vector<std::uint8_t> &part) {
+            std::vector<std::uint8_t> encoded;
+            const auto append_u32 = [&] (std::uint32_t value) {
+                encoded.push_back ((value >> 24u) & 0xffu);
+                encoded.push_back ((value >> 16u) & 0xffu);
+                encoded.push_back ((value >> 8u) & 0xffu);
+                encoded.push_back (value & 0xffu);
+            };
+            append_u32 (1);
+            append_u32 (static_cast<std::uint32_t> (part.size ()));
+            encoded.insert (encoded.end (), part.begin (), part.end ());
+            return encoded;
+        };
+        protocol::frozen_application_record_t held;
+        held.kind = protocol::frozen_record_kind_t::actor_request;
+        held.source_kind = protocol::frozen_source_kind_t::bound_session;
+        held.source = {"request-owner", 7, node_rid, 1};
+        held.source_actor = std::make_pair (std::string ("held-actor"), 5u);
+        held.source_session_routing_id = session_rid;
+        held.source_binding_generation = 5;
+        held.source_session_sequence = 9;
+        held.operation = {0x991, 0x992};
+        held.operation_kind = 4;
+        held.reply_route_id = 61;
+        held.body = protocol::frozen_actor_application_body_t{
+          {"held-actor", 5, node_rid, 1, 1, 19},
+          {protocol::framework_multipart_packet_name,
+           protocol::framework_multipart_content_type,
+           multipart ({'h', 'e', 'l', 'd'})}};
+        return protocol::encode_frozen_record (
+          protocol::encode_frozen_application_record (held));
+    } ();
     stateful_object_runtime_t failed_capture (
       2048, 8, 64u * 1024u * 1024u, limits::control_mailbox_bytes);
     const auto failed_spot = create_spot (
@@ -4754,7 +5694,8 @@ void test_relocation_hold_restores_and_enforces_limits (
       "capture failure test must enqueue while the source is moving");
     test.require (
       failed_capture.enqueue (
-        failed_spot, turn_domain_t::application, {3, {3}})
+        failed_spot, turn_domain_t::application,
+        {3, bound_session_bytes})
         == stateful_error_t::none,
       "application ingress must enter the relocation hold before capture");
     if (active) {
@@ -4785,6 +5726,28 @@ void test_relocation_hold_restores_and_enforces_limits (
       second_error == stateful_error_t::none && second
         && second->sequence == 3,
       "capture failure must not strand or reorder held work");
+    {
+        bool tail_intact = false;
+        if (second && second->payload == bound_session_bytes) {
+            const auto decoded =
+              protocol::decode_frozen_record (second->payload);
+            tail_intact =
+              decoded.source_kind
+                == protocol::frozen_source_kind_t::bound_session
+              && decoded.source_session_routing_id
+              && *decoded.source_session_routing_id
+                   == std::vector<std::uint8_t>{'h', 'e', 'l', 'd'}
+              && decoded.source_binding_generation == 5
+              && decoded.source_session_sequence == 9
+              && decoded.source_actor
+              && decoded.source_actor->first == "held-actor"
+              && decoded.source_actor->second == 5;
+        }
+        test.require (
+          tail_intact,
+          "held bound-session records must merge with the session tail "
+          "intact");
+    }
     (void) failed_capture.complete_claim (
       failed_spot, turn_domain_t::application);
 
@@ -4979,6 +5942,7 @@ int main ()
     test_conflict_aborts_without_losing_ingress (test);
     test_recovery_and_data_loss (test);
     test_restart_reconstructs_relocation_replay (test);
+    test_bound_session_capture_without_fence_reports_distinct_reason (test);
     test_permit_precedes_seal (test);
     test_host_preflight_is_all_or_none (test);
     test_user_spot_aggregate_and_stream_barrier (test);
@@ -4990,6 +5954,14 @@ int main ()
     test_production_relocation_restore_and_replay_vertical (test);
     test_target_replay_limits_are_relocation_scoped (test);
     test_application_relocation_uses_maintenance_and_fails_closed (test);
+    test_relocation_target_admission_survives_lost_completion (test);
+    test_zero_record_relocation_admission_opens_via_authority_poll (test);
+    test_pending_completion_after_self_finalize_keeps_target (test);
+    test_relocated_bound_session_request_replays_with_session_fence (test);
+    test_relocation_admission_fails_closed_without_authority_reads (test);
+    test_mismatched_accept_participants_reject_reservation (test);
+    test_duplicate_accept_resends_single_reservation_ack (test);
+    test_source_accept_retransmits_until_reserved_ack (test);
     test_application_relocation_remote_production_path (test);
     test_application_user_spot_aggregate_remote_production_path (
       test);

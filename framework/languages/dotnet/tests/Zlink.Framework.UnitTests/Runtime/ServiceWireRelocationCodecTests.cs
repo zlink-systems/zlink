@@ -207,6 +207,97 @@ public sealed class ServiceWireRelocationCodecTests
                 }));
     }
 
+    [Theory]
+    [InlineData(0UL)]
+    [InlineData(742UL)]
+    public void Bound_session_participants_round_trip_the_last_accepted_session_sequence(
+        ulong lastAcceptedSessionSequence)
+    {
+        var participants = new[]
+        {
+            new ZLinkServiceWireCodec.RelocationParticipantRecord(
+                1, 1, default, 0, null, 0, default, 0, 0, 2, 128),
+            new ZLinkServiceWireCodec.RelocationParticipantRecord(
+                2, 2, RoutingId.From("session-owner"), 5, "owner-1", 6,
+                RoutingId.From("session-rid"), 7, lastAcceptedSessionSequence,
+                3, 256)
+        };
+        var prepare = new ZLinkServiceWireCodec.RelocationPrepareRecord(
+            new ZLinkServiceWireCodec.RelocationWireId(4, 5), 6, 1,
+            Coordinator(), Candidate(), 1, Object(),
+            RoutingId.From("node-a"), 11, 5, 384, participants,
+            new ZLinkServiceWireCodec.RelocationRootRecord(
+                "relocation-root", 0x12345678),
+            1);
+
+        var encoded = ZLinkServiceWireCodec.EncodeRelocationPrepare(prepare);
+        Assert.True(ZLinkServiceWireCodec.TryDecodeRelocationPrepare(
+            encoded, out var decoded, out var error));
+        Assert.Equal(ZLinkServiceWireCodec.DecodeError.None, error);
+        Assert.Equal(participants, decoded.Participants);
+        Assert.Equal(
+            lastAcceptedSessionSequence,
+            decoded.Participants[1].LastAcceptedSessionSequence);
+        Assert.Equal(encoded, ZLinkServiceWireCodec.EncodeRelocationPrepare(decoded));
+
+        var reserved = new ZLinkServiceWireCodec.RelocationReservedRecord(
+            prepare.RelocationId, 6, 1, prepare.Coordinator,
+            prepare.Candidate, 13, participants);
+        var encodedReserved =
+            ZLinkServiceWireCodec.EncodeRelocationReserved(reserved);
+        Assert.True(ZLinkServiceWireCodec.TryDecodeRelocationReserved(
+            encodedReserved, out var decodedReserved, out error));
+        Assert.Equal(ZLinkServiceWireCodec.DecodeError.None, error);
+        Assert.Equal(participants, decodedReserved.Participants);
+    }
+
+    [Fact]
+    public void Bound_session_journal_commands_match_the_shared_golden_vectors()
+    {
+        var relocation = new ZLinkServiceWireCodec.RelocationWireId(4, 5);
+        var coordinator = Coordinator();
+        var candidate = Candidate();
+        var participants = BoundSessionJournalParticipants();
+
+        var prepare = new ZLinkServiceWireCodec.RelocationPrepareRecord(
+            relocation, 6, 1, coordinator, candidate, 1, Object(),
+            RoutingId.From("node-a"), 11, 3, 192, participants,
+            new ZLinkServiceWireCodec.RelocationRootRecord(
+                "relocation-root", 0x12345678),
+            1);
+        AssertGoldenRoundTrip<ZLinkServiceWireCodec.RelocationPrepareRecord>(
+            "relocationPrepareBoundSessionJournal",
+            ZLinkServiceWireCodec.EncodeRelocationPrepare(prepare),
+            ZLinkServiceWireCodec.TryDecodeRelocationPrepare,
+            ZLinkServiceWireCodec.EncodeRelocationPrepare);
+
+        var reserved = new ZLinkServiceWireCodec.RelocationReservedRecord(
+            relocation, 6, 1, coordinator, candidate, 13, participants);
+        AssertGoldenRoundTrip<ZLinkServiceWireCodec.RelocationReservedRecord>(
+            "relocationReservedBoundSessionAck",
+            ZLinkServiceWireCodec.EncodeRelocationReserved(reserved),
+            ZLinkServiceWireCodec.TryDecodeRelocationReserved,
+            ZLinkServiceWireCodec.EncodeRelocationReserved);
+
+        Assert.True(ZLinkServiceWireCodec.TryDecodeRelocationPrepare(
+            ReadRelocationControlGolden("relocationPrepareBoundSessionJournal"),
+            out var decodedPrepare, out var error));
+        Assert.Equal(ZLinkServiceWireCodec.DecodeError.None, error);
+        Assert.Equal(1, decodedPrepare.InitiatorRole);
+        Assert.Equal(3UL, decodedPrepare.RequiredMessages);
+        Assert.Equal(192UL, decodedPrepare.RequiredBytes);
+        Assert.Equal(participants, decodedPrepare.Participants);
+        AssertBoundSessionJournalParticipants(decodedPrepare.Participants);
+
+        Assert.True(ZLinkServiceWireCodec.TryDecodeRelocationReserved(
+            ReadRelocationControlGolden("relocationReservedBoundSessionAck"),
+            out var decodedReserved, out error));
+        Assert.Equal(ZLinkServiceWireCodec.DecodeError.None, error);
+        Assert.Equal(13UL, decodedReserved.ReservationGeneration);
+        Assert.Equal(participants, decodedReserved.Participants);
+        AssertBoundSessionJournalParticipants(decodedReserved.Participants);
+    }
+
     [Fact]
     public void Relocation_data_accepts_every_closed_phase_and_rejects_unknown_phase()
     {
@@ -398,9 +489,48 @@ public sealed class ServiceWireRelocationCodecTests
         Participants()
         =>
         [
-            new(1, 1, default, 0, null, 0, default, 0, 2, 128),
-            new(2, 1, default, 0, null, 0, default, 0, 0, 0)
+            new(1, 1, default, 0, null, 0, default, 0, 0, 2, 128),
+            new(2, 1, default, 0, null, 0, default, 0, 0, 0, 0)
         ];
+
+    private static IReadOnlyList<ZLinkServiceWireCodec.RelocationParticipantRecord>
+        BoundSessionJournalParticipants()
+        =>
+        [
+            new(1, 1, default, 0, null, 0, default, 0, 0, 2, 128),
+            new(2, 1, default, 0, null, 0, default, 0, 0, 0, 0),
+            new(3, 1, default, 0, null, 0, default, 0, 0, 0, 0),
+            new(4, 2, RoutingId.From("session-owner"), 5, "session-runtime", 6,
+                RoutingId.From("session-a"), 7, 9, 1, 64),
+            new(5, 2, RoutingId.From("session-owner"), 5, "session-runtime", 6,
+                RoutingId.From("session-b"), 8, 0, 0, 0)
+        ];
+
+    private static void AssertBoundSessionJournalParticipants(
+        IReadOnlyList<ZLinkServiceWireCodec.RelocationParticipantRecord> participants)
+    {
+        Assert.Equal(5, participants.Count);
+        var journal = participants[3];
+        Assert.Equal(4UL, journal.ParticipantId);
+        Assert.Equal(2, journal.Kind);
+        Assert.Equal(RoutingId.From("session-owner"), journal.SessionOwnerNodeRid);
+        Assert.Equal(5UL, journal.SessionOwnerNodeGeneration);
+        Assert.Equal("session-runtime", journal.SessionOwnerId);
+        Assert.Equal(6UL, journal.SessionOwnerLeaseGeneration);
+        Assert.Equal(RoutingId.From("session-a"), journal.SessionRid);
+        Assert.Equal(7UL, journal.BindingGeneration);
+        Assert.Equal(9UL, journal.LastAcceptedSessionSequence);
+        var replacement = participants[4];
+        Assert.Equal(5UL, replacement.ParticipantId);
+        Assert.Equal(2, replacement.Kind);
+        Assert.Equal(RoutingId.From("session-owner"), replacement.SessionOwnerNodeRid);
+        Assert.Equal(5UL, replacement.SessionOwnerNodeGeneration);
+        Assert.Equal("session-runtime", replacement.SessionOwnerId);
+        Assert.Equal(6UL, replacement.SessionOwnerLeaseGeneration);
+        Assert.Equal(RoutingId.From("session-b"), replacement.SessionRid);
+        Assert.Equal(8UL, replacement.BindingGeneration);
+        Assert.Equal(0UL, replacement.LastAcceptedSessionSequence);
+    }
 
     private static byte[] ReadRelocationControlGolden(string name)
     {

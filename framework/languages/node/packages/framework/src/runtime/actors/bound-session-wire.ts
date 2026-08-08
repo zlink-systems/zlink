@@ -1,3 +1,55 @@
+export const ZLINK_REMOTE_BOUND_SESSION_FENCE_NACK_CODE = 'zlink.bound_session.fence';
+
+/**
+ * Permanent command 42/44/45 fence rejection from the session owner. The
+ * rejection repeats identically on every retry, so senders must terminate
+ * instead of spinning against the fence.
+ */
+export class ZLinkRemoteBoundSessionFenceError extends Error {
+  readonly code = ZLINK_REMOTE_BOUND_SESSION_FENCE_NACK_CODE;
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'ZLinkRemoteBoundSessionFenceError';
+  }
+}
+
+export function isRemoteBoundSessionFenceError(error: unknown): boolean {
+  if (error instanceof ZLinkRemoteBoundSessionFenceError) return true;
+  if (!(error instanceof Error)) return false;
+  if ((error as { code?: unknown }).code === ZLINK_REMOTE_BOUND_SESSION_FENCE_NACK_CODE) return true;
+  // Fallback for transports that only surface the session owner's message.
+  return error.message.includes('did not match its command 42 Session seal')
+    || error.message.includes('released Session seal cannot publish a different route')
+    || error.message.includes('was fenced by its binding identity')
+    || error.message.includes('session route seal abort was fenced');
+}
+
+/** Encodes a request/reply nack for the command 42/44/45 packet family. */
+export function encodeRemoteBoundSessionNack(error: unknown): Record<string, unknown> {
+  return {
+    ok: false,
+    ...(isRemoteBoundSessionFenceError(error)
+      ? { code: ZLINK_REMOTE_BOUND_SESSION_FENCE_NACK_CODE }
+      : {}),
+    message: error instanceof Error ? error.message : String(error)
+  };
+}
+
+function throwRemoteBoundSessionNack(payload: unknown): void {
+  if (typeof payload !== 'object' || payload === null
+    || (payload as { ok?: unknown }).ok !== false) {
+    return;
+  }
+  const message = typeof (payload as { message?: unknown }).message === 'string'
+    ? (payload as { message: string }).message
+    : 'Remote bound session request was nacked.';
+  if ((payload as { code?: unknown }).code === ZLINK_REMOTE_BOUND_SESSION_FENCE_NACK_CODE) {
+    throw new ZLinkRemoteBoundSessionFenceError(message);
+  }
+  throw new Error(message);
+}
+
 export const ZLINK_REMOTE_BOUND_SESSION_SEND_PACKET = '__zlink.actor.bound_session.send';
 export const ZLINK_REMOTE_BOUND_SESSION_RESPONSE_PACKET = '__zlink.actor.bound_session.response';
 export const ZLINK_REMOTE_BOUND_SESSION_ERROR_PACKET = '__zlink.actor.bound_session.error';
@@ -61,6 +113,7 @@ export function decodeRemoteBoundSessionSealPayload(
 }
 
 export function decodeRemoteBoundSessionSealAck(payload: unknown): ZLinkRemoteBoundSessionSealAck {
+  throwRemoteBoundSessionNack(payload);
   if (
     typeof payload !== 'object' || payload === null ||
     typeof (payload as { actorId?: unknown }).actorId !== 'string' ||
@@ -171,6 +224,7 @@ export function encodeRemoteBoundSessionOwnershipAck(
 export function decodeRemoteBoundSessionOwnershipAck(
   payload: unknown
 ): ZLinkRemoteBoundSessionOwnershipAck {
+  throwRemoteBoundSessionNack(payload);
   if (
     typeof payload !== 'object' ||
     payload === null ||

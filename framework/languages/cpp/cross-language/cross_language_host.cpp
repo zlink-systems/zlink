@@ -239,7 +239,7 @@ int run_message_follow_host ()
     options.descriptor.advertised_endpoint = require ("bind-endpoint");
     options.descriptor.state = service_node_state_t::preparing;
     options.descriptor.security_identity = "default";
-    options.descriptor.protocol_capabilities = {"framework-service-v11"};
+    options.descriptor.protocol_capabilities = {"framework-service-v12"};
 
     raw_mesh_node_owner_t owner (std::move (options));
     owner.start ();

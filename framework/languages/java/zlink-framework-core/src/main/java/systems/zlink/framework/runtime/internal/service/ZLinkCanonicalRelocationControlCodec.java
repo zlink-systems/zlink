@@ -179,6 +179,7 @@ final class ZLinkCanonicalRelocationControlCodec {
             if (kind == 2) {
                 identity.bytes8(); identity.nonzero64(); identity.text8();
                 identity.nonzero64(); identity.bytes8(); identity.nonzero64();
+                identity.ordinal();
             } else if (kind != 1 || identity.remaining() != 0) {
                 throw invalid("participant identity");
             }

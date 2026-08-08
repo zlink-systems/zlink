@@ -1391,9 +1391,14 @@ internal abstract partial class ZLinkSpotActivation
                 .ConfigureAwait(false);
             acknowledged = reply.Acknowledged;
         }
+        // Best-effort: source admission restore no longer waits on the session
+        // owner (wire contract, Ready boundary). A missing or negative ack
+        // means the seal is already gone or fenced by a newer binding
+        // identity; either way the abort must not gate the source abort path.
         if (!acknowledged)
-            throw new ZLinkRelocationDataLostException(
-                $"Actor '{actorId}' source session route seal was not restored.");
+            ZLinkFrameworkDebugLog.SpotDiscovery(
+                $"session_route_abort_unacknowledged actor={actorId}"
+                + $" handoff={handoffId}");
     }
 
     internal void BeginMessageFollow(

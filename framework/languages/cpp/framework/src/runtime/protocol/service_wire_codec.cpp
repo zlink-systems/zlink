@@ -1768,6 +1768,8 @@ void append_participants (std::vector<std::uint8_t> &bytes,
             append_bytes8 (identity, value.session_routing_id, "Session RID");
             append_nonzero_u64 (identity, value.binding_generation,
                                 "binding generation");
+            append_ordinal (identity, value.last_accepted_session_sequence,
+                            "last accepted session sequence");
         }
         else if (value.kind != relocation_participant_kind_t::object_mailbox) {
             throw service_wire_error_t ("invalid relocation participant kind");
@@ -1830,6 +1832,8 @@ std::vector<relocation_participant_t> read_participants (
               identity, identity_offset, "Session RID");
             value.binding_generation = read_nonzero_u64 (
               identity, identity_offset, "binding generation");
+            value.last_accepted_session_sequence = read_ordinal (
+              identity, identity_offset, "last accepted session sequence");
         }
         else if (value.kind != relocation_participant_kind_t::object_mailbox
                  || !identity.empty ()) {

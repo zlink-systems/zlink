@@ -201,6 +201,12 @@ class authority_relocation_port_t
     {
         return false;
     }
+    // Best-effort local release of a reserved relocation capacity fence. The
+    // relocation failure paths call this before the source admission is
+    // restored so the target's reserved space is freed first.
+    virtual void abort_capacity (const relocation_capacity_fence_t &) noexcept
+    {
+    }
 };
 
 struct aggregate_relocation_fence_t
@@ -365,7 +371,8 @@ enum class relocation_reason_t
     authority_publish_failed,
     payload_missing,
     inventory_mismatch,
-    restore_failed
+    restore_failed,
+    bound_session_fence_incomplete
 };
 
 struct relocation_result_t
@@ -507,8 +514,8 @@ class maintenance_runtime_t
     std::optional<std::vector<protocol::relocation_data_t>>
     build_replay_records (
       const std::vector<frozen_object_state_t> &participants,
-      const eligible_relocation_unit_t::canonical_wire_context_t &context)
-      const;
+      const eligible_relocation_unit_t::canonical_wire_context_t &context,
+      relocation_reason_t &failure_reason) const;
     bool prepare_replay_source (
       const eligible_relocation_unit_t::canonical_wire_context_t &context,
       const std::vector<frozen_object_state_t> &participants,

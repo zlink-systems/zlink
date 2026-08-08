@@ -29,6 +29,7 @@ internal static partial class ZLinkServiceWireCodec
         ulong SessionOwnerLeaseGeneration,
         RoutingId SessionRid,
         ulong BindingGeneration,
+        ulong LastAcceptedSessionSequence,
         ulong AllowanceMessages,
         ulong AllowanceBytes);
 
@@ -581,6 +582,7 @@ internal static partial class ZLinkServiceWireCodec
                 identity.U64(participant.SessionOwnerLeaseGeneration);
                 identity.Rid(participant.SessionRid);
                 identity.U64(participant.BindingGeneration);
+                identity.U64(participant.LastAcceptedSessionSequence);
             }
             else if (participant.Kind != 1)
                 throw new ArgumentOutOfRangeException(nameof(participants));
@@ -610,19 +612,21 @@ internal static partial class ZLinkServiceWireCodec
             var identity = new WireReader(bytes);
             RoutingId ownerRid = default, sessionRid = default;
             ulong ownerGeneration = 0, ownerLease = 0, binding = 0;
+            ulong lastAccepted = 0;
             string? ownerId = null;
             if (kind == 2 && (!identity.TryRid(out ownerRid)
                 || !identity.TryU64(out ownerGeneration) || ownerGeneration == 0
                 || !identity.TryText8(out ownerId)
                 || !identity.TryU64(out ownerLease) || ownerLease == 0
                 || !identity.TryRid(out sessionRid)
-                || !identity.TryU64(out binding) || binding == 0)) return false;
+                || !identity.TryU64(out binding) || binding == 0
+                || !identity.TryU64(out lastAccepted))) return false;
             if (identity.Remaining != 0
                 || !reader.TryU64(out var messages)
                 || !reader.TryU64(out var bytesAllowance)) return false;
             result.Add(new RelocationParticipantRecord(id, kind, ownerRid,
                 ownerGeneration, ownerId, ownerLease, sessionRid, binding,
-                messages, bytesAllowance));
+                lastAccepted, messages, bytesAllowance));
         }
         participants = result;
         return true;

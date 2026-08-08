@@ -12,6 +12,7 @@ import java.util.function.Function;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.actors.ZLinkRelocationCancellation;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateFence;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationOwnerToken;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
 import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseFound;
@@ -260,7 +261,13 @@ final class ZLinkUserSpotRetireTargetEndpoint
                     productionReplayer(target, request),
                     actorOwnerGenerations)
                     .thenRun(() -> {
+                        //  Admission opens at publish: owner and membership
+                        //  CAS, restore/replay, timer publication, queue
+                        //  merge and dispatch switch are complete. Completed
+                        //  verification, route switch and normalization
+                        //  converge after Ready and never gate admission.
                         target.published().set(true);
+                        staging.openAdmission(target.staged());
                     });
             });
     }
@@ -445,8 +452,11 @@ final class ZLinkUserSpotRetireTargetEndpoint
                 completion.sourceOwnerLeaseGeneration(),
                 RoutingId.from(completion.sourceNodeRid()),
                 completion.sourceNodeGeneration());
+        //  The reply capability landed on the relocation source node, which
+        //  differs from the request-source fence for cross-node accepted
+        //  requests. The ACK still closes the exact request-source fence.
         return relocationClient.relayCanonicalReply(
-                RoutingId.from(completion.sourceNodeRid()),
+                request.sourceNodeRid(),
                 expectedSource,
                 command,
                 completion.payload() == null
@@ -541,29 +551,86 @@ final class ZLinkUserSpotRetireTargetEndpoint
                                 != completion.sourceOwnerLeaseGeneration()
                             || !found.leaseExpiresAt().isAfter(
                                 found.storeNow()));
-                if (!expired) {
-                    return CompletableFuture.failedFuture(
-                        new IllegalStateException(
-                            "reply has no ACK and exact source lease is active"));
+                if (expired) {
+                    return completeReplyRouteLost(
+                        request, participants, owner, completion);
                 }
-                return coordinator.updateCanonicalReplay(
-                        participants,
-                        new ZLinkAggregateFence(
-                            request.fence().aggregateId(),
-                            request.fence().aggregateGeneration()),
-                        owner,
-                        current -> ZLinkServiceRelocationEnvelopeCodec
-                            .completeDelivery(
-                                current,
-                                completion.operationHigh(),
-                                completion.operationLow(),
-                                completion.sourceOwnerId(),
-                                completion.sourceOwnerLeaseGeneration(),
-                                RoutingId.from(completion.sourceNodeRid()),
-                                completion.sourceNodeGeneration(),
-                                3),
-                        OPEN)
-                    .thenApply(ignored -> null);
+                //  The landing node holds the relocated reply capability. A
+                //  superseded landing lifecycle generation is a store-level
+                //  proof that the capability is destroyed; a physical
+                //  disconnect alone is never terminal.
+                return landingLifecycleSuperseded(request, null)
+                    .thenCompose(superseded -> {
+                        if (!superseded) {
+                            return CompletableFuture.failedFuture(
+                                new IllegalStateException(
+                                    "reply has no ACK and exact source lease is active"));
+                        }
+                        return completeReplyRouteLost(
+                            request, participants, owner, completion);
+                    });
+            });
+    }
+
+    private CompletionStage<Void> completeReplyRouteLost(
+        ZLinkSpotRetireControl.StageRequest request,
+        List<ZLinkAggregateRelocationCoordinator.ExpectedParticipant>
+            participants,
+        ZLinkLocationOwnerToken owner,
+        ZLinkServiceRelocationEnvelopeCodec.Completion completion) {
+        return coordinator.updateCanonicalReplay(
+                participants,
+                new ZLinkAggregateFence(
+                    request.fence().aggregateId(),
+                    request.fence().aggregateGeneration()),
+                owner,
+                current -> ZLinkServiceRelocationEnvelopeCodec
+                    .completeDelivery(
+                        current,
+                        completion.operationHigh(),
+                        completion.operationLow(),
+                        completion.sourceOwnerId(),
+                        completion.sourceOwnerLeaseGeneration(),
+                        RoutingId.from(completion.sourceNodeRid()),
+                        completion.sourceNodeGeneration(),
+                        3),
+                OPEN)
+            .thenApply(ignored -> null);
+    }
+
+    private CompletionStage<Boolean> landingLifecycleSuperseded(
+        ZLinkSpotRetireControl.StageRequest request,
+        String cursor) {
+        return nodeLifecycleSuperseded(
+            request.meshName(),
+            request.sourceNodeRid(),
+            request.sourceNodeGeneration(),
+            cursor);
+    }
+
+    private CompletionStage<Boolean> nodeLifecycleSuperseded(
+        String meshName,
+        RoutingId nodeRid,
+        long nodeGeneration,
+        String cursor) {
+        return locations.listMeshNodes(
+                meshName,
+                new systems.zlink.framework.locations.ZLinkPageRequest(
+                    1000, cursor))
+            .thenCompose(page -> {
+                for (var descriptor : page.items()) {
+                    if (descriptor.rid().equals(nodeRid)) {
+                        return CompletableFuture.completedFuture(
+                            descriptor.lifecycleGeneration()
+                                > nodeGeneration);
+                    }
+                }
+                String next = page.continuationToken();
+                if (next == null || next.isBlank() || next.equals(cursor)) {
+                    return CompletableFuture.completedFuture(false);
+                }
+                return nodeLifecycleSuperseded(
+                    meshName, nodeRid, nodeGeneration, next);
             });
     }
 
@@ -761,7 +828,6 @@ final class ZLinkUserSpotRetireTargetEndpoint
             .thenCompose(ignored -> switchSessionRoutes(request))
             .thenCompose(ignored -> normalizer.normalize(request))
             .thenRun(() -> {
-                staging.openAdmission(target.staged());
                 target.finalized().set(true);
                 if (!stages.remove(request.fence(), target)) {
                     throw new IllegalStateException(
@@ -811,12 +877,73 @@ final class ZLinkUserSpotRetireTargetEndpoint
                         request,
                         route,
                         targetOwnerGeneration);
+                    //  A failing route never fails finalize: the peer client
+                    //  retries it as background convergence bounded by the
+                    //  superseded termination conditions, and finalize
+                    //  completes for the other routes.
                     chain = chain.thenCompose(ignored ->
-                        sessionRoutes.switchRoute(command, routeTimeout)
-                            .thenApply(ack -> null));
+                        sessionRoutes.switchRouteUntilTerminal(
+                            command,
+                            routeTimeout,
+                            () -> routeSwitchSuperseded(
+                                request,
+                                route,
+                                authorityKey,
+                                targetOwnerGeneration)));
                 }
                 return chain;
             });
+    }
+
+    /**
+     * Store-proof termination conditions for the background route retry:
+     * the session-owner lease expired, the session-owner node lifecycle
+     * generation advanced, or the Actor authority object/owner generations
+     * advanced past this relocation.
+     */
+    private CompletionStage<Boolean> routeSwitchSuperseded(
+        ZLinkSpotRetireControl.StageRequest request,
+        ZLinkSpotRetireControl.SessionRouteFence route,
+        String authorityKey,
+        long targetOwnerGeneration) {
+        if (locations == null) {
+            return CompletableFuture.completedFuture(false);
+        }
+        return locations.readOwnerLease(route.sessionOwnerId())
+            .thenCompose(lease -> {
+                boolean expired = lease instanceof ZLinkOwnerLeaseMissing
+                    || lease instanceof ZLinkOwnerLeaseFound found
+                        && (!found.token().ownerId().equals(
+                                route.sessionOwnerId())
+                            || found.token().leaseGeneration()
+                                != route.sessionOwnerLeaseGeneration()
+                            || !found.leaseExpiresAt().isAfter(
+                                found.storeNow()));
+                if (expired) {
+                    return CompletableFuture.completedFuture(true);
+                }
+                return nodeLifecycleSuperseded(
+                        request.meshName(),
+                        route.sessionOwnerNodeRid(),
+                        route.sessionOwnerNodeGeneration(),
+                        null)
+                    .thenCompose(superseded -> superseded
+                        ? CompletableFuture.completedFuture(true)
+                        : actorAuthorityAdvanced(
+                            route, authorityKey, targetOwnerGeneration));
+            });
+    }
+
+    private CompletionStage<Boolean> actorAuthorityAdvanced(
+        ZLinkSpotRetireControl.SessionRouteFence route,
+        String authorityKey,
+        long targetOwnerGeneration) {
+        return locations.read(authorityKey, OPEN).thenApply(read ->
+            read instanceof ZLinkAuthoritySnapshot snapshot
+                && (snapshot.objectGeneration()
+                        > route.actorObjectGeneration()
+                    || snapshot.authorityOwnerGeneration()
+                        > targetOwnerGeneration));
     }
 
     private static ZLinkServiceM6BWireCodec.SessionRelocationRoute
@@ -927,7 +1054,10 @@ final class ZLinkUserSpotRetireTargetEndpoint
                 root.payload(),
                 root.targetOwnerGeneration(participant.authorityKey()),
                 productionActorReplayer(target, request)))
-            .thenRun(() -> target.published().set(true));
+            .thenRun(() -> {
+                target.published().set(true);
+                actorStaging.openAdmission(target.staged());
+            });
     }
 
     private ZLinkUserSpotAggregateStagingOwner.JournalReplayer
@@ -1003,7 +1133,6 @@ final class ZLinkUserSpotRetireTargetEndpoint
             .thenCompose(ignored -> switchSessionRoutes(request))
             .thenCompose(ignored -> normalizer.normalize(request))
             .thenRun(() -> {
-                actorStaging.openAdmission(target.staged());
                 if (actorStages.remove(request.fence(), target)) {
                     close(target.permit());
                 }

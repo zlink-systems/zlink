@@ -16,7 +16,7 @@ final class ZLinkCanonicalRelocationControlCodecTest {
     void sharedCanonicalControlsRoundTripByteForByte() throws Exception {
         var fixture = new ObjectMapper().readTree(Files.readString(fixture()));
         var codec = new ZLinkCanonicalRelocationControlCodec();
-        assertEquals(7, fixture.path("canonical").size());
+        assertEquals(9, fixture.path("canonical").size());
         for (JsonNode entry : fixture.path("canonical")) {
             byte[] bytes = HexFormat.of().parseHex(entry.path("hex").asText());
             ZLinkCanonicalRelocationControlCodec.Control decoded;

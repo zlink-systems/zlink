@@ -5,12 +5,18 @@ import static org.junit.jupiter.api.Assertions.*;
 import java.lang.reflect.Proxy;
 import java.time.Duration;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.actors.*;
+import systems.zlink.framework.errors.ZLinkConfigurationException;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
@@ -222,6 +228,30 @@ final class ZLinkActorRelocationStagingTest {
             cleanup.toCompletableFuture()).join();
         assertEquals(1, closes.get());
         assertEquals(1, destroys.get());
+    }
+
+    @Test
+    void boundSessionSendWithoutFenceAtMovingBoundaryIsRetryableUnavailable() {
+        ZLinkActorRuntime runtime = runtime(new AtomicInteger());
+        var prepared = publishedActor(runtime, "actor-moving-fence");
+        runtime.beginRemoteMove(prepared.actor()).toCompletableFuture().join();
+        assertTrue(runtime.isMoving(prepared.actor()));
+        try (Message payload = Message.from(new byte[] {1})) {
+            ZLinkFrameworkException failure = assertThrows(
+                ZLinkFrameworkException.class,
+                () -> runtime.captureMovingPacket(
+                    prepared.actor(),
+                    new ZLinkStreamHeader("probe-send", Map.of(), Optional.empty()),
+                    payload));
+            // Pre-Captured boundary: the frame was never accepted, so the
+            // caller must observe the retryable moving/unavailable terminal
+            // (matching the .NET/Node contract), not a configuration failure.
+            assertEquals(ZLinkFrameworkErrorKind.UNAVAILABLE, failure.kind());
+            assertFalse(failure instanceof ZLinkConfigurationException);
+            assertTrue(failure.getMessage().contains("is moving"));
+            assertTrue(failure.getMessage().contains(
+                "an exact accepted journal fence"));
+        }
     }
 
     private static ZLinkActorRuntime.PreparedTransferredActor publishedActor(
