@@ -88,6 +88,13 @@ const bool tcp_use_async_write_some_on = env::flag_enabled ("ZLINK_ASIO_TCP_ASYN
 const bool tcp_use_asio_writev_on = env::flag_enabled ("ZLINK_ASIO_WRITEV_USE_ASIO");
 
 const bool tcp_writev_single_shot_on = env::flag_enabled ("ZLINK_ASIO_WRITEV_SINGLE_SHOT");
+
+#if defined ZLINK_HAVE_WINDOWS
+const bool tcp_use_native_send_on =
+  !env::flag_enabled ("ZLINK_ASIO_TCP_DISABLE_NATIVE_SEND");
+#else
+const bool tcp_use_native_send_on = false;
+#endif
 }
 
 tcp_transport_t::tcp_transport_t ()
@@ -628,6 +635,49 @@ std::size_t tcp_transport_t::write_some (const std::uint8_t *data, std::size_t l
         tcp_stats_maybe_register ();
         ++tcp_write_some_calls;
     }
+
+#if defined ZLINK_HAVE_WINDOWS
+    // Keep Windows STREAM speculative writes on the native send path so the
+    // hot loop does not pay the Boost.Asio synchronous-write wrapper cost.
+    if (tcp_use_native_send_on) {
+        const std::size_t send_size =
+          std::min (len, static_cast<std::size_t> (std::numeric_limits<int>::max ()));
+        int rc;
+        int wsa_error = 0;
+        do {
+            rc = ::send (_socket->native_handle (), reinterpret_cast<const char *> (data),
+                         static_cast<int> (send_size), 0);
+            if (rc == SOCKET_ERROR)
+                wsa_error = WSAGetLastError ();
+        } while (rc == SOCKET_ERROR && wsa_error == WSAEINTR);
+        if (rc == SOCKET_ERROR) {
+            if (wsa_error == WSAEWOULDBLOCK || wsa_error == WSAENOBUFS) {
+                errno = EAGAIN;
+                if (tcp_stats_on)
+                    ++tcp_write_some_eagain;
+                return 0;
+            }
+            if (wsa_error == WSAECONNRESET || wsa_error == WSAECONNABORTED
+                || wsa_error == WSAESHUTDOWN) {
+                errno = EPIPE;
+            } else if (wsa_error == WSAENOTSOCK) {
+                errno = EBADF;
+            } else if (wsa_error == WSAENOTCONN) {
+                errno = ENOTCONN;
+            } else {
+                errno = EIO;
+            }
+            if (tcp_stats_on)
+                ++tcp_write_some_errors;
+            return 0;
+        }
+
+        errno = 0;
+        if (tcp_stats_on)
+            tcp_write_some_bytes += static_cast<std::size_t> (rc);
+        return static_cast<std::size_t> (rc);
+    }
+#endif
 
     //  Perform synchronous write_some on TCP socket
     bytes_written = _socket->write_some (boost::asio::buffer (data, len), ec);
