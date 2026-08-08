@@ -184,8 +184,10 @@ void zlink::socket_base_t::release_poller_registration ()
 
 void zlink::socket_base_t::notify_request_completion ()
 {
-    _request_completion_pending.store (true, std::memory_order_release);
-    static_cast<mailbox_t *> (_mailbox)->signal ();
+    // One pending notification is sufficient until the poller consumes it.
+    // Coalescing avoids one Windows loopback-socket send for every reply.
+    if (!_request_completion_pending.exchange (true, std::memory_order_acq_rel))
+        static_cast<mailbox_t *> (_mailbox)->signal ();
 }
 
 int zlink::socket_base_t::socket_msg_dispatch_stop ()
