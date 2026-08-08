@@ -5,11 +5,13 @@
 #include "../common/perf_multi_metric_header.hpp"
 #include "../common/perf_multi_weighted_latency.hpp"
 
+#include <algorithm>
 #include <cerrno>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <cstdint>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -373,6 +375,334 @@ int run_client (const std::string &lib_name,
 
 #endif
 
+#if defined(_WIN32)
+
+class windows_fixed_reservoir_t
+{
+  public:
+    windows_fixed_reservoir_t () : _seen (0), _rng (0xA341316Cu) {}
+
+    void add (double value)
+    {
+        ++_seen;
+        if (_samples.size () < k_child_sample_cap) {
+            _samples.push_back (value);
+            return;
+        }
+        const uint64_t slot = next_random () % _seen;
+        if (slot < _samples.size ())
+            _samples[static_cast<size_t> (slot)] = value;
+    }
+
+    const std::vector<double> &samples () const { return _samples; }
+
+  private:
+    uint64_t _seen;
+    uint32_t _rng;
+    std::vector<double> _samples;
+
+    uint32_t next_random ()
+    {
+        _rng = (_rng * 1664525u) + 1013904223u;
+        return _rng;
+    }
+};
+
+struct windows_case_result_t
+{
+    bool ok;
+    uint64_t received;
+    double latency_sum_ns;
+    std::vector<perf_multi_latency::weighted_sample_t> samples;
+};
+
+bool create_windows_router_clients (ctx_guard_t &ctx,
+                                    const std::string &transport,
+                                    const std::string &endpoint,
+                                    const multi_bench_settings_t &settings,
+                                    size_t msg_size,
+                                    std::vector<void *> *sockets_out,
+                                    std::vector<ready_monitor_t> *monitors_out)
+{
+    if (!sockets_out || !monitors_out)
+        return false;
+
+    sockets_out->assign (settings.clients, NULL);
+    monitors_out->assign (settings.clients, ready_monitor_t ());
+    static const char k_server_connect_id[] = "SERVER";
+
+    const uint64_t monitor_events =
+      ZLINK_EVENT_CONNECTION_READY | ZLINK_EVENT_BIND_FAILED | ZLINK_EVENT_ACCEPT_FAILED
+      | ZLINK_EVENT_CLOSE_FAILED | ZLINK_EVENT_HANDSHAKE_FAILED_NO_DETAIL
+      | ZLINK_EVENT_HANDSHAKE_FAILED_PROTOCOL | ZLINK_EVENT_HANDSHAKE_FAILED_AUTH;
+
+    for (size_t i = 0; i < sockets_out->size (); ++i) {
+        void *socket = zlink_socket (ctx.get (), ZLINK_SOCKET_ROUTER);
+        if (!socket)
+            break;
+
+        apply_benchmark_socket_options (socket, settings.hwm, transport,
+                                        ZLINK_SOCKET_ROUTER, msg_size, false);
+
+        char routing_id[32];
+        const int routing_id_size =
+          std::snprintf (routing_id, sizeof (routing_id), "peer-%zu", i);
+        const bool configured =
+          routing_id_size > 0
+          && zlink_set_routing_id (socket, routing_id, static_cast<size_t> (routing_id_size))
+               == ZLINK_CONFIG_OK
+          && zlink_set_router_option (socket, ZLINK_ROUTER_OPT_CONNECT_ROUTING_ID,
+                                      k_server_connect_id, sizeof (k_server_connect_id) - 1)
+               == ZLINK_CONFIG_OK
+          && setup_tls_client (socket, transport)
+          && open_configured_socket_monitor (socket, monitor_events, &(*monitors_out)[i])
+          && zlink_connect (socket, endpoint.c_str ()) == ZLINK_CONNECT_OK;
+        if (!configured) {
+            if (monitors_out)
+                close_ready_monitor ((*monitors_out)[i]);
+            zlink_close (socket);
+            break;
+        }
+        (*sockets_out)[i] = socket;
+    }
+
+    for (size_t i = 0; i < sockets_out->size (); ++i) {
+        if (!(*sockets_out)[i]) {
+            perf_multi_client::close_client_monitors (monitors_out);
+            perf_multi_client::close_client_sockets (sockets_out);
+            return false;
+        }
+    }
+    return true;
+}
+
+bool create_windows_router_poller (const std::vector<void *> &sockets, void **poller_out)
+{
+    if (!poller_out || sockets.empty ())
+        return false;
+
+    *poller_out = zlink_poller_new ();
+    if (!*poller_out)
+        return false;
+
+    for (size_t i = 0; i < sockets.size (); ++i) {
+        if (!sockets[i]
+            || zlink_poller_add (*poller_out, sockets[i], sockets[i], ZLINK_POLLIN)
+                 != ZLINK_CONFIG_OK) {
+            zlink_poller_destroy (poller_out);
+            return false;
+        }
+    }
+    return true;
+}
+
+bool receive_windows_case (const std::vector<void *> &sockets,
+                           void *poller,
+                           size_t msg_size,
+                           uint32_t run_id,
+                           windows_case_result_t *result_out)
+{
+    if (sockets.empty () || !poller || !result_out)
+        return false;
+
+    result_out->ok = false;
+    result_out->received = 0;
+    result_out->latency_sum_ns = 0.0;
+    result_out->samples.clear ();
+
+    windows_fixed_reservoir_t reservoir;
+    std::vector<bool> cooldown_received (sockets.size (), false);
+    size_t cooldown_count = 0;
+    std::vector<zlink_poller_event_t> events (sockets.size ());
+    const auto deadline =
+      std::chrono::steady_clock::now () + std::chrono::seconds (30);
+
+    while (cooldown_count < sockets.size ()
+           && std::chrono::steady_clock::now () < deadline) {
+        const int timeout_ms = std::max (1, perf_multi_client::remaining_poll_timeout_ms (deadline));
+        const int poll_rc = zlink_poller_wait (poller, &events[0],
+                                               static_cast<int> (events.size ()),
+                                               std::min (timeout_ms, 100), NULL);
+        if (poll_rc < 0) {
+            const int err = zlink_errno ();
+            if (err == EINTR || err == EAGAIN)
+                continue;
+            return false;
+        }
+        if (poll_rc == 0)
+            continue;
+
+        for (int i = 0; i < poll_rc && cooldown_count < sockets.size (); ++i) {
+            if ((events[i].events & ZLINK_POLLIN) == 0)
+                continue;
+
+            void *socket = events[i].socket;
+            size_t socket_index = sockets.size ();
+            for (size_t si = 0; si < sockets.size (); ++si) {
+                if (sockets[si] == socket) {
+                    socket_index = si;
+                    break;
+                }
+            }
+            if (socket_index >= sockets.size () || cooldown_received[socket_index])
+                continue;
+
+            for (;;) {
+                const zlink_routing_id_t *source = NULL;
+                uint64_t request_seq = 0;
+                zlink_msg_t part;
+                zlink_part_flag_t more = ZLINK_PART_FINAL;
+                if (zlink_msg_init (&part) != 0)
+                    return false;
+
+                const zlink_recv_result_t recv_rc =
+                  zlink_router_recv_part (socket, &source, &request_seq, &part, &more,
+                                          ZLINK_RECV_FLAGS_DONTWAIT);
+                if (recv_rc != ZLINK_RECV_OK) {
+                    const int err = zlink_errno ();
+                    zlink_msg_close (&part);
+                    if (err == EAGAIN || err == EINTR)
+                        break;
+                    return false;
+                }
+
+                perf_multi_metric::header_t header;
+                std::memset (&header, 0, sizeof (header));
+                const bool from_server =
+                  source && source->size == std::strlen (k_server_routing_id)
+                  && std::memcmp (source->data, k_server_routing_id, source->size) == 0;
+                const bool decoded =
+                  from_server && request_seq == 0 && more == ZLINK_PART_FINAL
+                  && perf_multi_metric::decode_payload_header (
+                    zlink_msg_data (&part), zlink_msg_size (&part), &header);
+                zlink_msg_close (&part);
+                if (!decoded || header.run_id != run_id
+                    || header.msg_size != static_cast<uint32_t> (msg_size))
+                    continue;
+
+                if (header.phase == static_cast<uint8_t> (perf_multi_metric::phase_cooldown)) {
+                    cooldown_received[socket_index] = true;
+                    ++cooldown_count;
+                    break;
+                }
+                if (header.phase != static_cast<uint8_t> (perf_multi_metric::phase_active)
+                    || header.sent_ts_ns == 0)
+                    continue;
+
+                const uint64_t now_ns = perf_multi_metric::now_ns ();
+                const uint64_t sent_ts_ns = static_cast<uint64_t> (header.sent_ts_ns);
+                if (now_ns < sent_ts_ns)
+                    continue;
+                ++result_out->received;
+                const double sample_ns =
+                  static_cast<double> (now_ns - sent_ts_ns);
+                result_out->latency_sum_ns += sample_ns;
+                reservoir.add (sample_ns);
+            }
+        }
+    }
+
+    const std::vector<double> &sample_values = reservoir.samples ();
+    const double sample_weight =
+      sample_values.empty ()
+        ? 0.0
+        : static_cast<double> (result_out->received)
+            / static_cast<double> (sample_values.size ());
+    result_out->samples.clear ();
+    for (size_t i = 0; i < sample_values.size (); ++i) {
+        perf_multi_latency::weighted_sample_t sample;
+        sample.value = sample_values[i];
+        sample.weight = sample_weight;
+        result_out->samples.push_back (sample);
+    }
+    result_out->ok = cooldown_count == sockets.size () && result_out->received > 0;
+    return result_out->ok;
+}
+
+int run_client_windows (const std::string &lib_name,
+                        const std::string &transport,
+                        const std::string &endpoint,
+                        size_t fallback_size)
+{
+    set_perf_multi_pattern_env (k_pattern);
+    if (!perf_multi_client::is_supported_transport (transport)
+        || !transport_available (transport)) {
+        std::cout << "UNSUPPORTED," << lib_name << "," << k_pattern << "," << transport
+                  << std::endl;
+        return 0;
+    }
+
+    const multi_bench_settings_t settings = resolve_multi_bench_settings ();
+    const std::vector<size_t> sizes = perf_multi_client::resolve_case_msg_sizes (fallback_size);
+    size_t max_size = fallback_size > 0 ? fallback_size : 64;
+    for (size_t i = 0; i < sizes.size (); ++i)
+        max_size = std::max (max_size, sizes[i]);
+
+    ctx_guard_t ctx;
+    if (!ctx.valid ())
+        return 1;
+
+    std::vector<void *> sockets;
+    std::vector<ready_monitor_t> monitors;
+    if (!create_windows_router_clients (ctx, transport, endpoint, settings, max_size, &sockets,
+                                        &monitors)
+        || !perf_multi_client::wait_client_connect_ready_all (
+          monitors, settings.connect_ready_timeout_ms)) {
+        perf_multi_client::close_client_monitors (&monitors);
+        perf_multi_client::close_client_sockets (&sockets);
+        return 1;
+    }
+    perf_multi_client::close_client_monitors (&monitors);
+
+    void *poller = NULL;
+    if (!create_windows_router_poller (sockets, &poller)) {
+        perf_multi_client::close_client_sockets (&sockets);
+        return 1;
+    }
+
+    bool ok = true;
+    for (size_t si = 0; si < sizes.size () && ok; ++si) {
+        const size_t msg_size = sizes[si];
+        std::cout << "CLIENT_READY," << msg_size << std::endl;
+        if (!perf_multi_handshake::wait_for_start_from_stdin (msg_size)) {
+            ok = false;
+            break;
+        }
+        if (!apply_benchmark_context_auto_hwm_msg_unit (ctx.get (), msg_size)) {
+            ok = false;
+            break;
+        }
+        for (size_t i = 0; i < sockets.size (); ++i)
+            apply_benchmark_hwm (sockets[i], settings.hwm);
+        if (zlink_ctx_auto_hwm_recalculate (ctx.get ()) != ZLINK_CONFIG_OK) {
+            ok = false;
+            break;
+        }
+        perf_print_auto_hwm_snapshot (sockets[0], false, "client", transport, false, msg_size,
+                                      ZLINK_SOCKET_ROUTER);
+
+        windows_case_result_t result;
+        if (!receive_windows_case (sockets, poller, msg_size, static_cast<uint32_t> (si + 1),
+                                   &result)) {
+            ok = false;
+            break;
+        }
+        const bench_latency_stats_t latency = perf_multi_latency::aggregate (
+          result.received, result.latency_sum_ns, &result.samples);
+        print_result (lib_name, k_pattern, transport, msg_size,
+                      throughput_per_second (
+                        result.received, static_cast<double> (std::max (1, settings.duration_seconds))),
+                      latency.mean_ns, latency.p95_ns, latency.p99_ns);
+        std::cout << "CLIENT_DONE," << msg_size << std::endl;
+    }
+
+    zlink_poller_destroy (&poller);
+    perf_multi_client::close_client_sockets (&sockets);
+    return ok ? 0 : 1;
+}
+
+#endif
+
 } // namespace
 
 int main (int argc, char **argv)
@@ -388,10 +718,14 @@ int main (int argc, char **argv)
     return run_client (argv[1], argv[2], endpoint,
                        static_cast<size_t> (std::strtoull (argv[3], NULL, 10)));
 #else
-    if (argc < 3)
+    if (argc < 4)
         return 1;
-    std::cout << "UNSUPPORTED," << argv[1] << "," << k_pattern << "," << argv[2]
-              << ",peer_process_topology_requires_posix" << std::endl;
-    return 0;
+    if (!multi_perf_validate_recv_mode_for_pattern (k_pattern))
+        return 1;
+    std::string endpoint;
+    if (!perf_multi_client::parse_endpoint_arg (argc, argv, &endpoint))
+        return 1;
+    return run_client_windows (argv[1], argv[2], endpoint,
+                               static_cast<size_t> (std::strtoull (argv[3], NULL, 10)));
 #endif
 }
