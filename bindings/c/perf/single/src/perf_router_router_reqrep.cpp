@@ -214,7 +214,8 @@ void run_router_router_reqrep (const std::string &transport,
       requester.get (), &request_state, &payload, duration_s,
       [&] (zlink_msg_t *part_, uint32_t timeout_ms_, zlink_reply_handler_fn handler_,
            void *userdata_) {
-          return zlink_router_request_part (requester.get (), &server_rid, part_, ZLINK_DONTWAIT,
+          return zlink_router_request_part (requester.get (), &server_rid, part_,
+                                            ZLINK_SEND_FLAGS_NONE,
                                             ZLINK_PART_FINAL, timeout_ms_, handler_, userdata_);
       },
       &completion_poller, &completed, &latency);

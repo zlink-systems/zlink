@@ -204,10 +204,11 @@ inline bool submit_request (const endpoint_config_t &config,
             errno = EINVAL;
             return false;
         }
-        rc = zlink_router_request_part (slot->socket, target_rid, &part, ZLINK_DONTWAIT,
+        rc = zlink_router_request_part (slot->socket, target_rid, &part, ZLINK_SEND_FLAGS_NONE,
                                         ZLINK_PART_FINAL, timeout_ms, on_request_reply, slot);
     } else {
-        rc = zlink_dealer_request_part (slot->socket, &part, ZLINK_DONTWAIT, ZLINK_PART_FINAL,
+        rc = zlink_dealer_request_part (slot->socket, &part, ZLINK_SEND_FLAGS_NONE,
+                                        ZLINK_PART_FINAL,
                                         timeout_ms, on_request_reply, slot);
     }
 
