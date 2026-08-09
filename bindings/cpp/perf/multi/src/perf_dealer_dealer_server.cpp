@@ -204,8 +204,6 @@ bool perf_dealer_dealer_server (const std::string &lib_name,
                 if (perf::multi::is_stop_token (part.data (), part.size ())) {
                     part.close ();
                     ++stop_count;
-                    if (stop_count >= settings.clients)
-                        break;
                     if (std::chrono::steady_clock::now () >= deadline)
                         break;
                     continue;
@@ -227,8 +225,6 @@ bool perf_dealer_dealer_server (const std::string &lib_name,
                 part.close ();
             }
             if (failed)
-                break;
-            if (stop_count >= settings.clients)
                 break;
             if (std::chrono::steady_clock::now () >= deadline)
                 break;
