@@ -2071,7 +2071,9 @@ def run_sizes_test_split(
     set_env_pair(env, "PERF_SERVER_READY_TIMEOUT_MS", ready_timeout_ms)
     set_env_pair(env, "PERF_SERVER_SHUTDOWN_TIMEOUT_MS", shutdown_timeout_ms)
     set_env_pair(env, "PERF_SERVER_BIND_PORT", bind_port)
-    server_cmd = build_bench_cmd(server_binary_path, [lib_name, transport])
+    server_cmd = build_bench_cmd(
+        server_binary_path, [lib_name, transport, str(fallback_size)]
+    )
     client_cmd = build_bench_cmd(
         client_binary_path, [lib_name, transport, str(fallback_size)]
     )

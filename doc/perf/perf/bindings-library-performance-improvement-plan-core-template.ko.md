@@ -416,7 +416,7 @@ C와 binding의 pattern별 smoke가 모두 `status: complete`여야 본 측정�
 | smoke | 1초, 1회 | 실행 경로와 종료 상태 확인 |
 | 탐색 | 기본 duration, 1회 | 병목 후보 선별 |
 | 후보 판정 | 기본 duration, 3회 | before/after와 C 대비 비율 판정 |
-| 최종·경계 판정 | 기본 duration, 5회, CPU pin 없음 | 목표 기준 ±5%p, secure transport, 고변동 셀, 최종 근거 |
+| 최종·경계 판정 | 기본 duration, 5회, CPU pin 없음 | 필요할 때 반복값을 추가 기록하는 진단용 근거 |
 
 반복 횟수는 perf 정책의 실행 조건을 따른다. `runs=1`이면 해당 측정값을 사용하고,
 `runs>1`이면 metric별 median을 대표값으로 사용한다. 반복값의 변동 폭은 원시값과 함께
@@ -440,7 +440,8 @@ C와 binding의 pattern별 smoke가 모두 `status: complete`여야 본 측정�
   C를 다시 측정한다.
 - 개선 작업이 길어졌거나 host 부하가 달라졌으면 후보 최종 판정 직전에 같은 C pattern을 다시
   측정한다.
-- 목표 기준 ±5%p 셀은 이전 측정값 하나만으로 판정하지 않는다.
+- 목표 기준 ±5%p 셀은 필요하면 추가 반복값을 참고로 기록하지만, 단일 측정값을 무효화하지
+  않는다.
 - paired report 중 하나라도 `status: complete`가 아니면 표를 갱신하지 않는다.
 
 ### 7.4 작업 순서
@@ -463,10 +464,11 @@ C와 binding의 pattern별 smoke가 모두 `status: complete`여야 본 측정�
 10. 의미를 보존하는 개선안을 두 가지 이상 설계하고, 예상 영향 셀과 폐기 기준을 적은 뒤
    public interface가 더 단순하고 책임 경계가 분명한 방안을 선택한다. 두 방안이 모두
    계약과 POSD gate를 만족하면 예상 성능 효과가 큰 방안을 우선한다.
-11. 제한 사전 점검을 통과한 뒤 현재 transport의 후보 after를 3회 측정한다. 비교 환경이
-    달라졌으면 같은 C pattern과 transport도 다시 3회 측정한다.
-12. 목표 경계나 변동이 큰 셀은 같은 pattern과 transport의 C와 binding을 5회, CPU pin 없이
-    다시 측정한다.
+11. 제한 사전 점검을 통과한 뒤 현재 transport의 후보 after를 3회 측정할 수 있다. 비교
+    환경이 달라졌을 때의 추가 C 측정은 before/after 근거가 필요할 경우에만 수행한다.
+12. 변동이 크다는 이유만으로 추가 측정하거나 다음 대상 진행을 막지 않는다. 추가 반복이
+    필요하면 같은 pattern과 transport의 C와 binding을 CPU pin 없이 진단용으로 측정하고,
+    그 결과는 기존 measured result를 대체하지 않는다.
 13. 기능 테스트와 같은 pattern 안의 대상이 아닌 대표 셀에 대한 회귀 gate를 통과시킨다.
 14. 현재 transport의 모든 message size가 목표를 만족하면 transport 완료를 기록한다.
     성능 개선 코드를 채택했다면 검증된 변경과 측정 근거만 커밋하고 원격에 푸시한 뒤 다음
@@ -506,6 +508,13 @@ pattern을 남겨 둔 채 다른 pattern이나 다음 언어로 이동하지 않
 완료로 보지 않는다.
 
 ### 7.6 개선 코드 커밋과 푸시
+
+public/runtime 경계, ownership, callback 수명, allocator, pool, queue 또는 thread model을
+바꾸는 구조 변경은 구현·측정 전에 Sol 에이전트에 read-only review를 요청한다. 리뷰에는
+변경 범위, 계약과 수명 영향, 예상 비용, A/B 측정 방법을 함께 전달한다. 리뷰 결과와
+before/after 측정으로 이득이 분리되지 않거나 cleanup·thread 이동·예외 경로 위험이 남으면
+후보를 채택하지 않고 제거한다. C harness parity 수정과 binding source 개선은 별도 후보로
+분리해 각각의 효과와 책임을 기록한다.
 
 성능 개선 후보가 pattern 목표와 회귀 gate를 통과해 최종 코드로 채택되면 다음 pattern을
 시작하기 전에 커밋하고 원격 저장소에 푸시한다. 커밋에는 현재 개선과 직접 관련된 binding,
@@ -556,11 +565,21 @@ transport 세부 정보, perf 전용 option을 노출하지 않는다. 새 helpe
 - `미달(비율%)`: 유효한 결과가 있지만 목표에 도달하지 못했고 내부 개선이 필요하다.
 - `보류(비율%)`: 내부 개선 후보를 검증했지만 목표에 도달하지 못했으며, 필요한 계약
   변경과 근거를 별도 항목으로 기록했다.
+- `측정값 기준 평가`: 반복 측정 차이를 이유로 결과를 보류하지 않고, 같은 행의 throughput
+  ratio와 latency를 현재 기준으로 평가하는 정정 상태다. 최소 기준과 중앙값 목표를
+  충족하면 통과로, 충족하지 않으면 미달로 해석하며 다음 대상 진행을 막지 않는다.
 - `해당 없음`: 공식 C runner와 binding 정책 모두 측정하지 않는 조합이다.
 
-반복 변동이나 하향 drift만으로 `보류` 또는 별도 stability blocker를 만들지 않는다.
+반복 변동이나 하향 drift는 참고 기록으로만 남기며, 이것만으로 `보류` 또는 별도 판정 상태를
+만들지 않는다. 측정값이 있으면 throughput ratio와 latency ratio로 즉시 평가하고 다음
+대상으로 진행한다.
 `보류`는 측정값만으로 계약 변경 여부를 결정할 수 없어 설계 검토가 필요한 경우에만
 사용한다.
+
+이전 문서나 로그에 남은 반복값 관련 보류 표기는 이력으로만 보존한다. C와 binding report가
+모두 `status: complete`이고 ratio가 기록되어 있으면 그 ratio와 평균 latency를 그대로 사용해
+`통과` 또는 `미달`로 평가한다. 반복값의 변동 폭은 함께 기록하지만 추가 반복이나 다음 대상
+이동을 막는 조건으로 사용하지 않는다. `미측정`은 paired report 자체가 없을 때만 사용한다.
 
 timeout, no result, runtime mismatch, message size 불일치, client 수 불일치는 통과나
 보류가 아니다. 원인을 수정해 수치가 생성될 때까지 `미달` 또는 `미측정`으로
@@ -577,7 +596,7 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 - Effective Options 일치 여부
 - auto-HWM의 `MsgUnit(B)` 일치 여부
 - 실제 client 수, STREAM client 수, memory guard cap 발생 여부
-- 안정성 gate 결과와 최종 판정
+- 반복 측정값과 최종 판정
 - 필요한 경우 판정에 사용하지 않은 진단값과 제외 이유
 
 ## 9. 언어별 성능 확인 표

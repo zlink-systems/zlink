@@ -29,5 +29,9 @@ int main (int argc, char **argv)
 
     const std::string lib_name = argv[1];
     const std::string transport = argv[2];
-    return perf_multi_socket_reqrep::run_server_benchmark (config, lib_name, transport);
+    const size_t fallback_size = argc >= 4
+                                   ? static_cast<size_t> (std::strtoull (argv[3], NULL, 10))
+                                   : 64;
+    return perf_multi_socket_reqrep::run_server_benchmark (config, lib_name, transport,
+                                                           fallback_size);
 }

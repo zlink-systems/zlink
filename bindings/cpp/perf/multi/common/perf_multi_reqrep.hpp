@@ -288,6 +288,37 @@ inline void server_signal_handler (int)
     server_stop_flag ().store (true, std::memory_order_release);
 }
 
+inline bool submit_router_reply_with_retry (zlink::received_t &received_,
+                                            zlink::message_t &part_,
+                                            zlink::poller_t &writable_poller_,
+                                            zlink::poll_event_t &event_)
+{
+    // zlink_router_reply_part consumes the supplied part on every result.
+    // Keep an O(1) shared-storage copy so backpressure retries preserve the
+    // same received payload as the C reference harness.
+    const zlink::message_t retry_template = part_;
+    while (!server_stop_flag ().load (std::memory_order_acquire)) {
+        try {
+            std::move (received_.reply ().message (part_)).submit ();
+            return true;
+        }
+        catch (const zlink::submit_error_t &err) {
+            if (!transient (err.internal_errno ()))
+                return false;
+            part_ = retry_template;
+            try {
+                (void) writable_poller_.wait (&event_, 1, std::chrono::milliseconds (100));
+            }
+            catch (const zlink::binding_error_t &poll_err) {
+                if (poll_err.internal_errno () == EINTR)
+                    continue;
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 inline bool run_server (const config_t &config_,
                         const std::string &lib_name_,
                         const std::string &transport_,
@@ -330,10 +361,13 @@ inline bool run_server (const config_t &config_,
 
     zlink::poller_t poller;
     poller.add (server, zlink::poll_event_flag_t::pollin, 0);
+    zlink::poller_t writable_poller;
+    writable_poller.add (server, zlink::poll_event_flag_t::pollout, 0);
     zlink::poll_event_t event;
+    zlink::poll_event_t writable_event;
     while (!server_stop_flag ().load (std::memory_order_acquire)) {
         try {
-            if (poller.wait (&event, 1, std::chrono::milliseconds (200)) == 0)
+            if (poller.wait (&event, 1, std::chrono::milliseconds (100)) == 0)
                 continue;
         }
         catch (const zlink::binding_error_t &err) {
@@ -355,15 +389,10 @@ inline bool run_server (const config_t &config_,
             // does not add vector materialization that is absent from C.
             if (!received.is_single_part () || !received.request_seq ().has_value ())
                 continue;
-            try {
-                zlink::message_t &part = received.first_part ();
-                std::move (received.reply ().message (part)).submit ();
-            }
-            catch (const zlink::submit_error_t &err) {
-                if (transient (err.internal_errno ()))
-                    continue;
+            zlink::message_t &part = received.first_part ();
+            if (!submit_router_reply_with_retry (received, part, writable_poller,
+                                                 writable_event))
                 return false;
-            }
         }
     }
     return true;

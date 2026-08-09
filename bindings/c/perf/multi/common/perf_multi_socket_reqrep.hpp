@@ -619,7 +619,8 @@ inline bool run_server_loop (void *server,
 
 inline int run_server_benchmark (const endpoint_config_t &config,
                                  const std::string &lib_name,
-                                 const std::string &transport)
+                                 const std::string &transport,
+                                 size_t initial_msg_size)
 {
     set_perf_multi_pattern_env (config.pattern_name);
 
@@ -642,6 +643,11 @@ inline int run_server_benchmark (const endpoint_config_t &config,
         return 1;
 
     const multi_bench_settings_t settings = resolve_multi_bench_settings ();
+    if (initial_msg_size == 0
+        || !apply_benchmark_context_auto_hwm_msg_unit (ctx.get (), initial_msg_size)) {
+        zlink_close (server);
+        return 1;
+    }
     const int linger_ms = 0;
     const int send_timeout_ms =
       bench_timeout_ms_from_env ("PERF_MULTI_SNDTIMEO_MS", bench_timeout_ms_from_env (
