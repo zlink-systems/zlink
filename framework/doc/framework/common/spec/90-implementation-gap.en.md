@@ -23,3 +23,24 @@ a blocking wait, or occupation of a session serial lane or worker.
 Every language must produce the same result for the canonical and malformed bytes and the pre-restart
 session-owner lifecycle rejection in `runtime/protocol/golden/bound-session-replaced-v1.json`. An
 idempotent bind from the same physical session neither self-notifies nor closes that connection.
+
+## Session relocation route high-water verification
+
+Spec 20 §5 step 7 requires the session owner to verify, alongside the ObjectGeneration, the previous
+and target AuthorityOwnerGeneration, the binding generation, and the session owner lease, that the
+high-water in command 44 **equals** the value recorded on the current binding. That equality holds
+because the `sessionRelocationSeal(42)` / `sessionRelocationSealed(43)` handshake freezes the
+source's captured high-water and the owner's recorded high-water to the same number. Delivery of
+messages that arrive on the previous route after the owner change is guaranteed by Message Follow,
+not by this verification.
+
+| Language | Current implementation difference | Closing condition |
+|---|---|---|
+| C++ | None. | Closed |
+| Node.js | None. Implements the seal semantics in its in-process binding registry and correlates a route publish with its seal. | Closed |
+| .NET | None. Implements the seal semantics over an internal relay and separates an exact-fence commit from an idempotent retransmit. | Closed |
+| Java/Kotlin | Commands 42/43 are not implemented. The owner keeps no accepted-sequence counter, so the stored value is the last applied route update's high-water while the command carries the source Actor owner's ingress count. The two are counted against different baselines, so the equality cannot hold and the gate stays monotonic — a high-water that regressed below an already applied one is a superseded relocation and is rejected. | Implement commands 42/43 and a per-binding accepted-sequence counter, then switch to the equality comparison |
+
+The Java/Kotlin monotonic gate applies only to requests that already passed the ObjectGeneration,
+AuthorityOwnerGeneration, and binding generation checks that precede it. A late-arriving route
+request from an earlier relocation is rejected by those fences and by the monotonic gate.
