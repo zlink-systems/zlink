@@ -58,6 +58,18 @@ bool run_pattern_dealer_dealer (const std::string &transport,
     const auto active_deadline =
       std::chrono::steady_clock::now () + std::chrono::seconds (duration_s);
 
+    // PERF_SINGLE_TEST_POLICY § 1.4: match the C reference runner by
+    // waiting for receiver readiness through the public poller and then
+    // draining available messages with DONTWAIT. A blocking receive with a
+    // timeout is not equivalent to the canonical C harness.
+    zlink::poller_t recv_poller;
+    try {
+        bind_socket.sock ().poller_add (recv_poller, zlink::poll_event_flag_t::pollin, 0);
+    }
+    catch (const zlink::config_error_t &) {
+        return false;
+    }
+
     std::thread sender_thread ([&] () {
         uint64_t seq = 1;
         // C-faithful send model (bindings/c/perf single
@@ -92,15 +104,10 @@ bool run_pattern_dealer_dealer (const std::string &transport,
     });
 
     // C-faithful receiver (bindings/c/perf single
-    // perf_single_one_way.hpp run_active_phase): dedicated thread doing a
-    // blocking recv (flags=0, bounded by rcvtimeo so it returns EAGAIN on
-    // idle and keeps cycling) followed by a tight DONTWAIT inner
-    // burst-drain until EAGAIN. This paces the receiver to the wire one
-    // message at a time instead of poller.wait()+drain-everything, which
-    // let the busy-spinning DONTWAIT sender build an unbounded queue under
-    // TLS/WS CPU pressure and inflated tail latency 30-300x. A single
-    // reused message_t (no per-message std::vector<message_t>
-    // materialization) matches C's single zlink_msg_t recv buffer.
+    // perf_single_one_way.hpp run_active_phase): wait through the public
+    // poller, receive the first ready part with DONTWAIT, and drain the
+    // remaining ready parts until EAGAIN. The stop token is the only phase
+    // terminator, matching the C harness.
     std::thread receiver_thread ([&] () {
         auto handle_part = [&] (zlink::message_t &part_, bool *stop_out_) -> bool {
             *stop_out_ = false;
@@ -126,10 +133,21 @@ bool run_pattern_dealer_dealer (const std::string &transport,
         };
 
         while (true) {
+            try {
+                zlink::poll_event_t event;
+                if (recv_poller.wait (&event, 1, std::chrono::milliseconds (-1)) == 0)
+                    continue;
+            }
+            catch (const zlink::recv_error_t &) {
+                sender_ok.store (false, std::memory_order_release);
+                return;
+            }
+
             zlink::message_t part;
-            const int recv_rc = bind_socket.sock ().recv (part, 0);
+            const int recv_rc = bind_socket.sock ().recv (
+              part, static_cast<int> (zlink::recv_flags_t::dontwait));
             if (recv_rc != 0) {
-                if (errno == EAGAIN || errno == EINTR)
+                if (errno == EAGAIN || errno == EINTR || errno == EWOULDBLOCK)
                     continue;
                 sender_ok.store (false, std::memory_order_release);
                 return;
@@ -147,7 +165,7 @@ bool run_pattern_dealer_dealer (const std::string &transport,
                 const int burst_rc = bind_socket.sock ().recv (
                   burst, static_cast<int> (zlink::recv_flags_t::dontwait));
                 if (burst_rc != 0) {
-                    if (errno == EAGAIN || errno == EINTR)
+                    if (errno == EAGAIN || errno == EINTR || errno == EWOULDBLOCK)
                         break;
                     sender_ok.store (false, std::memory_order_release);
                     return;
