@@ -71,6 +71,17 @@ public final class Program {
             ensure("OutOfRange".equals(rejected.toCompletableFuture().join().payload().reason()),
                 "rejection order reports OutOfRange first");
 
+            CompletionStage<ZLinkStreamMessage<Messages.MoveRejectedNotify>> tooFar = game
+                .waitFor(Messages.MoveRejectedNotify.class)
+                .timeout(REQUEST_TIMEOUT)
+                .submit(Messages.MoveRejectedNotify.class);
+            game.send(new Messages.MoveMsg(
+                    movedX + ZoneWorldSpec.MAX_STEP_PER_AXIS + 1, movedY)).submit()
+                .toCompletableFuture().join();
+            ensure("TooFar".equals(tooFar.toCompletableFuture().join().payload().reason()),
+                "an in-range oversized step reports TooFar");
+            System.out.println("scenario ZW-A2 passed");
+
             for (int x = movedX + 5; x <= 48; x += 5) {
                 int target = Math.min(x, 48);
                 CompletionStage<ZLinkStreamMessage<Messages.ZoneStateNotify>> position =
@@ -87,8 +98,39 @@ public final class Program {
                 .submit(Messages.ZoneChangedNotify.class);
             game.send(new Messages.MoveMsg(52, movedY)).submit()
                 .toCompletableFuture().join();
-            changed.toCompletableFuture().join();
+            ensure("java-zone-player".equals(
+                    changed.toCompletableFuture().join().payload().playerId()),
+                "outbound relocation keeps the same player id");
             waitForZone(game, "zone-ne");
+
+            CompletionStage<ZLinkStreamMessage<Messages.ZoneChangedNotify>> returned = game
+                .waitFor(Messages.ZoneChangedNotify.class)
+                .where(Messages.ZoneChangedNotify.class,
+                    message -> "zone-nw".equals(message.payload().zoneId()))
+                .timeout(REQUEST_TIMEOUT)
+                .submit(Messages.ZoneChangedNotify.class);
+            game.send(new Messages.MoveMsg(48, movedY)).submit()
+                .toCompletableFuture().join();
+            ensure("java-zone-player".equals(
+                    returned.toCompletableFuture().join().payload().playerId()),
+                "return relocation keeps the same player id on the same session");
+            // Settle on a coordinate no earlier walk has ever produced, so the matching
+            // ZoneStateNotify provably postdates the return leg (binding continuity).
+            int settleX = 44;
+            int settleY = movedY + 2;
+            CompletionStage<ZLinkStreamMessage<Messages.ZoneStateNotify>> settled = game
+                .waitFor(Messages.ZoneStateNotify.class)
+                .where(Messages.ZoneStateNotify.class,
+                    state -> "zone-nw".equals(state.payload().zoneId())
+                        && state.payload().players().stream()
+                            .anyMatch(player -> player.playerId().equals("java-zone-player")
+                                && player.x() == settleX && player.y() == settleY))
+                .timeout(REQUEST_TIMEOUT)
+                .submit(Messages.ZoneStateNotify.class);
+            game.send(new Messages.MoveMsg(settleX, settleY)).submit()
+                .toCompletableFuture().join();
+            settled.toCompletableFuture().join();
+            System.out.println("scenario ZW-B7 passed");
 
             CompletionStage<ZLinkStreamMessage<Messages.ZoneChangedNotify>> secondReady = secondGame
                 .waitFor(Messages.ZoneChangedNotify.class)
@@ -136,14 +178,32 @@ public final class Program {
             ensure(!announcement.toCompletableFuture().join().payload().text().isBlank(),
                 "fanout announcement reaches the bound actor");
 
-            ops.request(new Messages.SetMaintenanceReq("zone-node-2", true))
+            Messages.SetMaintenanceRes maintenanceOn = ops
+                .request(new Messages.SetMaintenanceReq("zone-node-2", true))
                 .timeout(REQUEST_TIMEOUT)
                 .submit(Messages.SetMaintenanceRes.class)
                 .toCompletableFuture().join();
-            ops.request(new Messages.SetMaintenanceReq("zone-node-2", false))
+            ensure(maintenanceOn.error() == null && maintenanceOn.enabled(),
+                "Ops enables node maintenance");
+            Messages.NodeDiagnosticsRes duringMaintenance = awaitMaintenance(
+                ops, "zone-node-2", true, System.nanoTime() + REQUEST_TIMEOUT.toNanos())
+                .toCompletableFuture()
+                .join();
+            ensure(duringMaintenance.error() == null && duringMaintenance.maintenance(),
+                "Ops diagnostics reflects maintenance=true on zone-node-2");
+            Messages.SetMaintenanceRes maintenanceOff = ops
+                .request(new Messages.SetMaintenanceReq("zone-node-2", false))
                 .timeout(REQUEST_TIMEOUT)
                 .submit(Messages.SetMaintenanceRes.class)
                 .toCompletableFuture().join();
+            ensure(maintenanceOff.error() == null && !maintenanceOff.enabled(),
+                "Ops disables node maintenance");
+            Messages.NodeDiagnosticsRes afterMaintenance = awaitMaintenance(
+                ops, "zone-node-2", false, System.nanoTime() + REQUEST_TIMEOUT.toNanos())
+                .toCompletableFuture()
+                .join();
+            ensure(afterMaintenance.error() == null && !afterMaintenance.maintenance(),
+                "Ops diagnostics reflects maintenance=false on zone-node-2");
             Messages.NodeDiagnosticsRes diagnostics = ops
                 .request(new Messages.NodeDiagnosticsReq("zone-node-1"))
                 .timeout(REQUEST_TIMEOUT)
@@ -204,6 +264,31 @@ public final class Program {
                         () -> {},
                         CompletableFuture.delayedExecutor(100, TimeUnit.MILLISECONDS))
                     .thenCompose(ignored -> awaitNodes(connector, deadlineNanos));
+            });
+    }
+
+    private static CompletionStage<Messages.NodeDiagnosticsRes> awaitMaintenance(
+        ZLinkStreamConnector connector,
+        String nodeId,
+        boolean expected,
+        long deadlineNanos) {
+        return connector.request(new Messages.NodeDiagnosticsReq(nodeId))
+            .timeout(REQUEST_TIMEOUT)
+            .submit(Messages.NodeDiagnosticsRes.class)
+            .thenCompose(diagnostics -> {
+                if (diagnostics.error() == null && diagnostics.maintenance() == expected) {
+                    return CompletableFuture.completedFuture(diagnostics);
+                }
+                if (System.nanoTime() >= deadlineNanos) {
+                    return CompletableFuture.failedFuture(new IllegalStateException(
+                        "Ops diagnostics did not converge to maintenance=" + expected
+                            + " for " + nodeId));
+                }
+                return CompletableFuture.runAsync(
+                        () -> {},
+                        CompletableFuture.delayedExecutor(100, TimeUnit.MILLISECONDS))
+                    .thenCompose(ignored ->
+                        awaitMaintenance(connector, nodeId, expected, deadlineNanos));
             });
     }
 

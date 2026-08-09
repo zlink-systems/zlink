@@ -44,6 +44,7 @@ class OpsSession(
         val zones = ZoneWorldSpec.zonesOf(request.nodeId)
         if (zones.isEmpty()) return reply(Messages.SetMaintenanceRes(request.nodeId, false, emptyList(), "UnknownNode"))
         maintenance.set(request.nodeId, request.enabled)
+        registry.setMaintenance(request.nodeId, request.enabled)
         return fanout.publish(ZoneWorldNames.BROADCAST_CHANNEL, ZoneWorldNames.MAINTENANCE_TOPIC,
             Messages.NodeMaintenanceChangedEvent(request.nodeId, request.enabled)).submit()
             .thenCompose { reply(Messages.SetMaintenanceRes(request.nodeId, request.enabled, zones)) }

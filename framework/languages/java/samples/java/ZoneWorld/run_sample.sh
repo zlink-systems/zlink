@@ -119,6 +119,8 @@ cat "$LOG_DIR/client.log"
 
 grep -q 'zoneworld=completed' "$LOG_DIR/client.log"
 grep -q 'zoneworld server evidence=completed' "$LOG_DIR/client.log"
+grep -q 'scenario ZW-A2 passed' "$LOG_DIR/client.log"
+grep -q 'scenario ZW-B7 passed' "$LOG_DIR/client.log"
 grep -q 'topology=ready node=zone-node-1' "$LOG_DIR/zone-a.log"
 grep -q 'topology=ready node=zone-node-2' "$LOG_DIR/zone-b.log"
 grep -q 'runtime event mesh=zoneworld.mesh' "$LOG_DIR/zone-a.log"

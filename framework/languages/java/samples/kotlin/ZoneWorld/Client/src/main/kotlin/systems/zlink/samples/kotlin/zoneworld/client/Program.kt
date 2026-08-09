@@ -61,6 +61,16 @@ suspend fun main(args: Array<String>) = coroutineScope {
         game.send(Messages.MoveMsg(-40, movedY)).await()
         ensure(rejected.await().payload().reason == "OutOfRange",
             "rejection order reports OutOfRange first")
+
+        val tooFar = async(start = CoroutineStart.UNDISPATCHED) {
+            game.waitFor<Messages.MoveRejectedNotify>()
+                .timeout(REQUEST_TIMEOUT)
+                .await()
+        }
+        game.send(Messages.MoveMsg(movedX + ZoneWorldSpec.MAX_STEP_PER_AXIS + 1, movedY)).await()
+        ensure(tooFar.await().payload().reason == "TooFar",
+            "an in-range oversized step reports TooFar")
+        println("scenario ZW-A2 passed")
         println("zoneworld-step=rejected-move")
 
         for (x in (movedX + 5)..48 step 5) {
@@ -78,9 +88,39 @@ suspend fun main(args: Array<String>) = coroutineScope {
                 .await()
         }
         game.send(Messages.MoveMsg(52, movedY)).await()
-        changed.await()
+        ensure(changed.await().payload().playerId == "kotlin-zone-player",
+            "outbound relocation keeps the same player id")
         waitForZone(game, "zone-ne")
         println("zoneworld-step=relocation")
+
+        val returned = async(start = CoroutineStart.UNDISPATCHED) {
+            game.waitFor<Messages.ZoneChangedNotify>()
+                .where { it.payload().zoneId == "zone-nw" }
+                .timeout(REQUEST_TIMEOUT)
+                .await()
+        }
+        game.send(Messages.MoveMsg(48, movedY)).await()
+        ensure(returned.await().payload().playerId == "kotlin-zone-player",
+            "return relocation keeps the same player id on the same session")
+        // Settle on a coordinate no earlier walk has ever produced, so the matching
+        // ZoneStateNotify provably postdates the return leg (binding continuity).
+        val settleX = 44
+        val settleY = movedY + 2
+        val settled = async(start = CoroutineStart.UNDISPATCHED) {
+            game.waitFor<Messages.ZoneStateNotify>()
+                .where { state ->
+                    state.payload().zoneId == "zone-nw" && state.payload().players.any { player ->
+                        player.playerId == "kotlin-zone-player" &&
+                            player.x == settleX && player.y == settleY
+                    }
+                }
+                .timeout(REQUEST_TIMEOUT)
+                .await()
+        }
+        game.send(Messages.MoveMsg(settleX, settleY)).await()
+        settled.await()
+        println("scenario ZW-B7 passed")
+        println("zoneworld-step=return-relocation")
 
         val secondReady = async(start = CoroutineStart.UNDISPATCHED) {
             secondGame.waitFor<Messages.ZoneChangedNotify>()
@@ -119,11 +159,20 @@ suspend fun main(args: Array<String>) = coroutineScope {
         val maintenanceOn = ops.request(Messages.SetMaintenanceReq("zone-node-2", true))
             .timeout(REQUEST_TIMEOUT)
             .awaitReply<Messages.SetMaintenanceRes>()
-        ensure(maintenanceOn.enabled, "Ops enables node maintenance")
+        ensure(maintenanceOn.error == null && maintenanceOn.enabled,
+            "Ops enables node maintenance")
+        val duringMaintenance = awaitMaintenance(ops, "zone-node-2", expected = true)
+        ensure(duringMaintenance.error == null && duringMaintenance.maintenance,
+            "Ops diagnostics reflects maintenance=true on zone-node-2")
         val maintenanceOff = ops.request(Messages.SetMaintenanceReq("zone-node-2", false))
             .timeout(REQUEST_TIMEOUT)
             .awaitReply<Messages.SetMaintenanceRes>()
-        ensure(!maintenanceOff.enabled, "Ops disables node maintenance")
+        ensure(maintenanceOff.error == null && !maintenanceOff.enabled,
+            "Ops disables node maintenance")
+        val afterMaintenance = awaitMaintenance(ops, "zone-node-2", expected = false)
+        ensure(afterMaintenance.error == null && !afterMaintenance.maintenance,
+            "Ops diagnostics reflects maintenance=false on zone-node-2")
+        println("zoneworld-step=maintenance-diagnostics")
 
         val diagnostics = ops.request(Messages.NodeDiagnosticsReq("zone-node-1"))
             .timeout(REQUEST_TIMEOUT)
@@ -157,6 +206,26 @@ private suspend fun waitForZone(connector: ZLinkKotlinStreamConnector, zoneId: S
         .where { it.payload().zoneId == zoneId }
         .timeout(REQUEST_TIMEOUT)
         .await()
+}
+
+private suspend fun awaitMaintenance(
+    connector: ZLinkKotlinStreamConnector,
+    nodeId: String,
+    expected: Boolean,
+): Messages.NodeDiagnosticsRes {
+    val deadline = System.nanoTime() + REQUEST_TIMEOUT.toNanos()
+    while (true) {
+        val diagnostics = connector.request(Messages.NodeDiagnosticsReq(nodeId))
+            .timeout(REQUEST_TIMEOUT)
+            .awaitReply<Messages.NodeDiagnosticsRes>()
+        if (diagnostics.error == null && diagnostics.maintenance == expected) {
+            return diagnostics
+        }
+        check(System.nanoTime() < deadline) {
+            "Ops diagnostics did not converge to maintenance=$expected for $nodeId"
+        }
+        delay(100)
+    }
 }
 
 private suspend fun awaitNodes(connector: ZLinkKotlinStreamConnector): Messages.WatchNodesRes {
