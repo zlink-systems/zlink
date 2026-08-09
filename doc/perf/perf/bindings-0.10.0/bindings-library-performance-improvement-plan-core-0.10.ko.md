@@ -742,6 +742,12 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
   수집하지 못했으며, Sol은 payload copy·message lifetime을 우회하는 변경과 typed
   dispatch 제거를 binding-only 개선 근거로 인정하지 않았다. 추가 source 변경은 하지 않고
   다음 선택 대상은 `DEALER_DEALER / ipc`로 둔다.
+  `DEALER_DEALER / ipc`는 ratio 93.81%, 93.87%, 92.19%, 83.87%, 87.83%, 92.72%와
+  size 중앙값 92.45%로 미달한다. 1024B·256KiB·64KiB의 안정적인 셀도 목표에 미달했고,
+  이전 IPC profile에서 확인한 encoder·decoder·queue·poller 공통 비용 외에 안전한
+  binding-only hotspot은 확인되지 않았다. Sol review는 source optimization을 no-go로
+  판정했으며, `DEALER_DEALER`의 다음 transport는 모두 측정했으므로 다음 pattern은
+  `DEALER_ROUTER / tcp`다.
 
 #### 9.1.1 Single suite
 
@@ -784,7 +790,7 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | `inproc` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ipc` | `PAIR` | 통과 (86.62%) | 통과 (96.75%) | 통과 (94.41%) | 통과 (87.76%) | 통과 (91.42%) | 통과 (97.95%) | full sweep size 중앙값 92.91%로 transport 목표 95%에 미달한다. C/C++ throughput 변동 폭은 64B 20.66%/8.71%, 256B 12.46%/12.87%, 1024B 9.56%/9.53%, 65536B 8.28%/16.75%, 131072B 3.44%/6.60%, 262144B 2.53%/7.48%다. 65536B profile과 `sol` review에서 `message_t::from(span)` 및 raw builder는 일반 binding 최적화 근거가 되지 않아 no-go로 판정했다. |
 | `ipc` | `PUBSUB` | 통과 (87.53%) | 통과 (98.12%) | 통과 (100.53%) | 통과 (90.90%) | 통과 (95.94%) | 통과 (95.92%) | C++ PUBSUB poller parity 후 full sweep size 중앙값은 95.93%로 통과한다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_171901_pubsub-ipc-poller-parity-c.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_172410_pubsub-ipc-poller-parity-cpp.txt` |
-| `ipc` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `ipc` | `DEALER_DEALER` | 통과 (93.81%) | 통과 (93.87%) | 통과 (92.19%) | 미달 (83.87%) | 통과 (87.83%) | 통과 (92.72%) | size 중앙값 92.45%로 transport 목표 95%에 미달한다. 1024B와 262144B ratio는 각각 92.19%, 92.72%이고 C/C++ 변동 폭은 약 8.9%/7.6%, 5.4%/7.8%로 안정적이다. 65536B ratio 83.87%도 C/C++ 변동 폭 약 5.5%/4.2%로 안정적이다. WSL `perf` 부재로 새 profile은 수집하지 못했고, 기존 IPC profile과 Sol review에서 encoder·decoder·queue·poller 공통 비용이 확인되어 binding-only source optimization은 no-go다. C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_192125_dealer-dealer-ipc-poller-parity-c1.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_192404_dealer-dealer-ipc-poller-parity-c1.txt`; Sol review: `745976ff-1405-41af-9f73-c083204a026a` |
 | `ipc` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ipc` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ipc` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
@@ -1297,16 +1303,16 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | 구분 | 상태 | 결과 파일 / 메모 |
 |------|------|------------------|
 | 현재 언어 | C++ |  |
-| 현재 pattern | 진행 중 | C++ PUBSUB harness를 C 기준의 public poller `wait(-1) → DONTWAIT drain`으로 정렬한 뒤 `tcp`, `ws`, `wss`, `tls`, `inproc`, `ipc`를 C → C++ 순서로 다시 측정했다. 유효한 size 중앙값은 각각 94.56%, 94.71%, 98.43%, 93.89%, 81.64%, 95.93%이며, poller 불일치 상태의 이전 PUBSUB 결과는 공식 비교에서 제외한다. `DEALER_DEALER / tcp`, `/ ws`, `/ wss`, `/ tls`, `/ inproc`도 각각 측정했고 중앙값은 90.65%, 92.08%, 88.07%, 93.89%, 78.97%다. 전체 pattern·transport 완료는 아니다. |
-| paired C | 완료 | `status: complete`, 정책 정렬 `PUBSUB`의 각 transport와 `DEALER_DEALER / tcp`, `/ ws`, `/ wss`, `/ tls`, `/ inproc`을 C → C++ 순서로 측정했다. 최신 `tcp` boundary C median은 1,258,575.6 / 843,344.2 / 510,660.6 / 36,366.6 / 23,655.6 / 14,342.6 msg/s이며, `ws` adapter C median은 1,655,769.0 / 965,342.4 / 415,227.6 / 21,190.8 / 14,742.2 / 8,408.8 msg/s다. `wss` C median은 1,550,339.8 / 694,983.8 / 222,141.2 / 8,841.6 / 5,310.6 / 2,926.2 msg/s이고, `tls` C median은 1,691,184.8 / 893,410.8 / 298,857.6 / 11,667.2 / 6,876.0 / 3,750.8 msg/s다. `inproc` C median은 2,447,895.4 / 1,731,511.6 / 1,684,860.0 / 437,531.0 / 173,851.0 / 77,716.6 msg/s다. 모든 report는 Core v0.10.1 release, auto-HWM, I/O thread 1, timeout 200ms 조건을 사용했다. |
-| binding paired 결과 | 유효 결과·미달 포함 | `status: complete`. 정책 정렬 `PUBSUB` 결과 중 `tcp`, `ws`, `tls`, `inproc`은 각각 94.56%, 94.71%, 93.89%, 81.64%로 size 중앙값 목표에 미달하고, `wss`, `ipc`는 각각 98.43%, 95.93%로 통과한다. `DEALER_DEALER / tcp`, `/ ws`, `/ wss`, `/ tls`, `/ inproc`은 각각 90.65%, 92.08%, 88.07%, 93.89%, 78.97%로 미달한다. `inproc / 65536B` 재검증은 C++ 변동 폭 317.8%로 안정성 gate를 넘었고, WSL `perf` 부재로 profile도 수집하지 못했다. |
+| 현재 pattern | 진행 중 | C++ PUBSUB harness를 C 기준의 public poller `wait(-1) → DONTWAIT drain`으로 정렬한 뒤 `tcp`, `ws`, `wss`, `tls`, `inproc`, `ipc`를 C → C++ 순서로 다시 측정했다. 유효한 size 중앙값은 각각 94.56%, 94.71%, 98.43%, 93.89%, 81.64%, 95.93%이며, poller 불일치 상태의 이전 PUBSUB 결과는 공식 비교에서 제외한다. `DEALER_DEALER / tcp`, `/ ws`, `/ wss`, `/ tls`, `/ inproc`, `/ ipc`도 각각 측정했고 중앙값은 90.65%, 92.08%, 88.07%, 93.89%, 78.97%, 92.45%다. `DEALER_DEALER`의 공식 transport sweep는 끝났지만 전체 pattern·언어 완료는 아니다. 다음 pattern은 `DEALER_ROUTER / tcp`다. |
+| paired C | 완료 | `status: complete`, 정책 정렬 `PUBSUB`의 각 transport와 `DEALER_DEALER / tcp`, `/ ws`, `/ wss`, `/ tls`, `/ inproc`, `/ ipc`를 C → C++ 순서로 측정했다. 최신 `tcp` boundary C median은 1,258,575.6 / 843,344.2 / 510,660.6 / 36,366.6 / 23,655.6 / 14,342.6 msg/s이며, `ws` adapter C median은 1,655,769.0 / 965,342.4 / 415,227.6 / 21,190.8 / 14,742.2 / 8,408.8 msg/s다. `wss` C median은 1,550,339.8 / 694,983.8 / 222,141.2 / 8,841.6 / 5,310.6 / 2,926.2 msg/s이고, `tls` C median은 1,691,184.8 / 893,410.8 / 298,857.6 / 11,667.2 / 6,876.0 / 3,750.8 msg/s다. `inproc` C median은 2,447,895.4 / 1,731,511.6 / 1,684,860.0 / 437,531.0 / 173,851.0 / 77,716.6 msg/s이고, `ipc` C median은 2,024,945.4 / 1,152,525.8 / 749,747.6 / 37,623.6 / 24,666.4 / 14,713.6 msg/s다. 모든 report는 Core v0.10.1 release, auto-HWM, I/O thread 1, timeout 200ms 조건을 사용했다. |
+| binding paired 결과 | 유효 결과·미달 포함 | `status: complete`. 정책 정렬 `PUBSUB` 결과 중 `tcp`, `ws`, `tls`, `inproc`은 각각 94.56%, 94.71%, 93.89%, 81.64%로 size 중앙값 목표에 미달하고, `wss`, `ipc`는 각각 98.43%, 95.93%로 통과한다. `DEALER_DEALER / tcp`, `/ ws`, `/ wss`, `/ tls`, `/ inproc`, `/ ipc`는 각각 90.65%, 92.08%, 88.07%, 93.89%, 78.97%, 92.45%로 미달한다. `inproc / 65536B` 재검증은 C++ 변동 폭 317.8%로 안정성 gate를 넘었고, IPC의 안정적인 1024B·65536B·262144B 셀도 95% 목표에 미달한다. WSL `perf` 부재로 새 profile은 수집하지 못했다. |
 | 개선 결과 | 기록 | C 기준과 의미가 다른 harness 결과는 공식 판정에서 제외했고, 정책 정렬 후의 C → C++ 결과만 9.1.1과 11절에 기록했다. 현재 선택 범위의 추가 binding source 최적화 후보는 profile과 paired 결과에서 목표 효과를 설명하지 못해 no-go로 판정했다. 구현·후보·profile·commit 과정은 `log/`에 기록한다. |
 
 ### 10.3 언어 진행 상태
 
 | 순서 | 언어 | Single 상태 | Multi 상태 | 다음 작업 |
 |------|------|-------------|------------|-----------|
-| 1 | C++ | 진행 중 | 미측정 | `PUBSUB / ipc`는 ratio 중앙값 95.93%로 통과했다. `ws` 64B boundary는 88.74%로 개별 기준을 통과했지만 size 중앙값 94.71%, `tcp` boundary도 93.93%로 transport 목표에 미달한다. `DEALER_DEALER / tcp`, `/ ws`, `/ wss`, `/ tls`, `/ inproc`은 각각 90.65%, 92.08%, 88.07%, 93.89%, 78.97%로 미달한다. WSS Sol review와 inproc paired 결과는 binding-only source optimization no-go로 판정했고, inproc 65536B 재검증은 변동성 gate를 넘었다. 다음 선택 대상은 `DEALER_DEALER / ipc`이다. |
+| 1 | C++ | 진행 중 | 미측정 | `PUBSUB / ipc`는 ratio 중앙값 95.93%로 통과했다. `ws` 64B boundary는 88.74%로 개별 기준을 통과했지만 size 중앙값 94.71%, `tcp` boundary도 93.93%로 transport 목표에 미달한다. `DEALER_DEALER / tcp`, `/ ws`, `/ wss`, `/ tls`, `/ inproc`, `/ ipc`는 각각 90.65%, 92.08%, 88.07%, 93.89%, 78.97%, 92.45%로 미달한다. WSS, inproc, IPC 결과의 Sol review는 binding-only source optimization no-go로 판정했고, inproc 65536B 재검증은 변동성 gate를 넘었다. `DEALER_DEALER` transport sweep는 끝났으며 다음 선택 대상은 `DEALER_ROUTER / tcp`이다. |
 | 2 | .NET | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
 | 3 | Java | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
 | 4 | Node | 미측정 | 미측정 | inventory gate와 paired 기준 측정을 시작한다. |
@@ -1332,6 +1338,7 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | 2026-08-09 | C++ | Single / DEALER_DEALER / tls | `dealer-dealer-tls-poller-parity-c1` | 94.19%, 95.85%, 98.68%, 93.59%, 90.37%, 85.33% | 93.89% | 미달 | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_185534_dealer-dealer-tls-poller-parity-c1.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_185812_dealer-dealer-tls-poller-parity-c1.txt` |
 | 2026-08-09 | C++ | Single / DEALER_DEALER / inproc | `dealer-dealer-inproc-poller-parity-c1` | 89.15%, 102.63%, 100.59%, 23.90%, 64.94%, 68.80% | 78.97% | 미달·변동성 확인 | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_190701_dealer-dealer-inproc-poller-parity-c1.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_190940_dealer-dealer-inproc-poller-parity-c1.txt` |
 | 2026-08-09 | C++ | Single / DEALER_DEALER / inproc / 65536B 재검증 | `dealer-dealer-inproc-65536-variability-c1` | 21.03% | 21.03% | 변동성 gate 초과 | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_191656_dealer-dealer-inproc-65536-variability-c1.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_191733_dealer-dealer-inproc-65536-variability-c1.txt` |
+| 2026-08-09 | C++ | Single / DEALER_DEALER / ipc | `dealer-dealer-ipc-poller-parity-c1` | 93.81%, 93.87%, 92.19%, 83.87%, 87.83%, 92.72% | 92.45% | 미달 | C: `/home/hep7hep7/project/zlink/bindings/c/perf/results/single/report/perf_c_single_linux_20260809_192125_dealer-dealer-ipc-poller-parity-c1.txt`; C++: `/home/hep7hep7/project/zlink/bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260809_192404_dealer-dealer-ipc-poller-parity-c1.txt` |
 
 ## 12. 완료 기준
 
