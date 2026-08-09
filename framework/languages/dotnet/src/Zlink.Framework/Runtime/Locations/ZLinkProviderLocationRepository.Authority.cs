@@ -663,11 +663,22 @@ internal sealed partial class ZLinkProviderLocationRepository
         // A relocation record has its own recovery protocol. GetOrCreate may
         // reclaim only a steady authority or an unfinished creation whose
         // owner lease ended.
-        if (current.Meta.AggregateFence is not null
-            || ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
+        if (current.Meta.AggregateFence is not null)
+            return StaleAuthorityReclaimResult.RecoveryRequired;
+        if (ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
+                current.Snapshot.Payload.Span,
+                out _)
+            && ZLinkRelocationAuthorityPayloadCodec.TryDecode(
                 current.Snapshot.Payload.Span,
                 out _))
             return StaleAuthorityReclaimResult.RecoveryRequired;
+        // Canonical relocation residue without a published manifest pointer:
+        // startup recovery only scans rows whose payload decodes as a
+        // published manifest, so no recovery path can ever see this row. A
+        // committed relocation whose target owner died before the deferred
+        // reconciliation normalized the payload would otherwise stay
+        // permanently unjoinable and unreclaimable. With the owner lease
+        // confirmed dead it is reclaimed exactly like a steady row.
 
         var conditions = new List<ZLinkStoreCondition>
         {

@@ -1614,6 +1614,19 @@ internal sealed partial class ZLinkFrameworkRuntime
                                  out var handoffId)
                              && handoffId
                              == candidate.Envelope.AggregateId;
+        //  A canonical authority row persists no inventory digest: decoding it
+        //  synthesizes the all-zero placeholder (see
+        //  ZLinkRelocationAuthorityPayloadCodec.TryDecode), while the immutable
+        //  root's envelope carries the real digest. Requiring byte equality here
+        //  failed every canonical remote Join recovery as DataLost, which
+        //  permanently killed the aggregate's recovery watch. The row already
+        //  pins the root through its reference and CRC32C (checked when the
+        //  root is read back), so the digest comparison applies only when the
+        //  reference actually carries one — mirroring ValidateRoot and the Spot
+        //  retire normalizer, which skip the digest for canonical publications.
+        var referenceDigestIsSentinel =
+            !candidate.Reference.InventoryDigest.Span.ContainsAnyExcept(
+                (byte)0);
         RoutingId sourceNodeRid;
         try
         {
@@ -1647,6 +1660,7 @@ internal sealed partial class ZLinkFrameworkRuntime
             + $"env_ref_id={candidate.Envelope.AggregateId == candidate.Reference.AggregateId} "
             + $"env_ref_gen={candidate.Envelope.AggregateGeneration == candidate.Reference.AggregateGeneration} "
             + $"env_ref_digest={candidate.Envelope.InventoryDigest.Span.SequenceEqual(candidate.Reference.InventoryDigest.Span)} "
+            + $"ref_digest_sentinel={referenceDigestIsSentinel} "
             + $"env_digest={Convert.ToHexString(candidate.Envelope.InventoryDigest.Span)[..16]} "
             + $"ref_digest={Convert.ToHexString(candidate.Reference.InventoryDigest.Span)[..16]} "
             + $"env_len={candidate.Envelope.InventoryDigest.Length} ref_len={candidate.Reference.InventoryDigest.Length}");
@@ -1681,8 +1695,9 @@ internal sealed partial class ZLinkFrameworkRuntime
                != candidate.Reference.AggregateId
             || candidate.Envelope.AggregateGeneration
                != candidate.Reference.AggregateGeneration
-            || !candidate.Envelope.InventoryDigest.Span.SequenceEqual(
-                candidate.Reference.InventoryDigest.Span))
+            || !referenceDigestIsSentinel
+               && !candidate.Envelope.InventoryDigest.Span.SequenceEqual(
+                   candidate.Reference.InventoryDigest.Span))
             throw RemoteJoinRecoveryMismatch(
                 wire.ActorId,
                 "participant or aggregate identity");

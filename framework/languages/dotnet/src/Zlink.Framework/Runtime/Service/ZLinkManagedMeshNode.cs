@@ -6978,7 +6978,19 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     // An inbound transport has no local retry intent. Once
                     // its physical pipe closes, remove the peer instead of
                     // converting it into a locally reconnecting candidate.
-                    RemovePeer(peer, disconnect: false);
+                    //
+                    // Admitted peers are exempt: the queued event carries only
+                    // a routing id, so it cannot tell WHICH pipe closed.
+                    // During a same-endpoint handover the retired pipe's
+                    // Disconnected lands after the replacement connection was
+                    // admitted and used to evict the live peer for ~15s until
+                    // its re-Hello. Liveness probes the actual current pipe
+                    // and removes a genuinely dead admitted peer on expiry.
+                    if (!peer.Admitted)
+                    {
+                        RemovePeer(peer, disconnect: false);
+                        continue;
+                    }
                     continue;
                 }
 

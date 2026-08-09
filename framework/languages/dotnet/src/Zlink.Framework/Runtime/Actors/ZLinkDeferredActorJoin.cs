@@ -168,6 +168,23 @@ internal sealed class ZLinkDeferredActorJoin(
         using var spot = _spotActivation is null
             ? null
             : ZLinkSpotAmbientContext.Push(_spotActivation);
+        //  Ledger §2.3 fixes WHERE the deferred join starts — the submitting
+        //  queue, in registration order — not that the queue stays occupied
+        //  for the join's whole cross-node round trip. Running the join
+        //  without yielding held the Spot's serial queue while the routed
+        //  join awaited its remote commit, freezing every timer, push and
+        //  admission on the submitting Spot for up to the join deadline; two
+        //  Spots deferring joins into each other could not process the
+        //  counterpart's commit until a deadline broke the cycle. Yield the
+        //  executing turn exactly like every other framework call submitted
+        //  from a Spot handler, so the queue resumes as soon as the join
+        //  actually suspends.
+        if (ZLinkSerialTurn.Current is { } turn)
+        {
+            await turn.YieldFrameworkCallAsync(RunAsync, cancellationToken)
+                .ConfigureAwait(false);
+            return;
+        }
         await RunAsync(cancellationToken).ConfigureAwait(false);
     }
 
